@@ -122,7 +122,9 @@ fn observing_transaction_expiry_releases_aggregate_history_capacity() {
             &fireemu_adapter_grpc::rules::allow_all_reads,
         )
         .unwrap_err();
-    assert_eq!(expired.code(), tonic::Code::Aborted);
+    // An hour past its begin the token is long forgotten (production remembers an expired token until about
+    // 300 s of its age), so the read finds no such transaction.
+    assert_eq!(expired.code(), tonic::Code::InvalidArgument);
 
     backend
         .commit_with(
@@ -2680,12 +2682,11 @@ async fn commit_late_precondition_failure_is_atomic() {
     handle.abort();
 }
 
-/// The local adapter keeps a failed transactional commit available for rollback. Rollback
-/// releases its read locks so the same document can then be written by another request. This
-/// records local behavior; production parity is unobserved here.
+/// A transactional commit a precondition refused ends its transaction and releases its read locks (production,
+/// P08), so the same document can be written by another request at once; a Rollback is still accepted.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[allow(clippy::too_many_lines)]
-async fn failed_transaction_commit_can_be_rolled_back_and_releases_ownership() {
+async fn refused_transaction_commit_releases_ownership_and_still_accepts_a_rollback() {
     let (mut client, handle) = start_with_contention_wait(std::time::Duration::ZERO).await;
     client
         .commit(pb::CommitRequest {
@@ -2736,7 +2737,7 @@ async fn failed_transaction_commit_can_be_rolled_back_and_releases_ownership() {
         .unwrap_err();
     assert_eq!(failed.code(), tonic::Code::NotFound);
 
-    // The failed transaction published neither staged write before rollback.
+    // The failed transaction published neither staged write.
     let unchanged = client
         .get_document(pb::GetDocumentRequest {
             name: format!("{DOCS}/txn-failure/doc"),
@@ -2758,28 +2759,20 @@ async fn failed_transaction_commit_can_be_rolled_back_and_releases_ownership() {
         tonic::Code::NotFound
     );
 
-    let blocked = client
+    // The refused commit ended the transaction and released its lock (production, P08): a writer
+    // outside it goes through at once, and the explicit Rollback is still accepted.
+    client
         .commit(pb::CommitRequest {
             database: DB.to_owned(),
             writes: vec![update_write("txn-failure/doc", &[("value", i(3))])],
-            ..Default::default()
-        })
-        .await
-        .unwrap_err();
-    assert_eq!(blocked.code(), tonic::Code::Aborted);
-
-    client
-        .rollback(pb::RollbackRequest {
-            database: DB.to_owned(),
-            transaction,
             ..Default::default()
         })
         .await
         .unwrap();
     client
-        .commit(pb::CommitRequest {
+        .rollback(pb::RollbackRequest {
             database: DB.to_owned(),
-            writes: vec![update_write("txn-failure/doc", &[("value", i(3))])],
+            transaction,
             ..Default::default()
         })
         .await
@@ -8218,6 +8211,19 @@ async fn start_with_profile(
     FirestoreClient<tonic::transport::Channel>,
     tokio::task::JoinHandle<()>,
 ) {
+    let (client, _clock, _backend, handle) = start_profile_with_state(strict, None).await;
+    (client, handle)
+}
+
+async fn start_profile_with_state(
+    strict: bool,
+    contention_wait: Option<std::time::Duration>,
+) -> (
+    FirestoreClient<tonic::transport::Channel>,
+    Arc<Mutex<VirtualClock>>,
+    Arc<LocalBackend>,
+    tokio::task::JoinHandle<()>,
+) {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     let gateway = Gateway {
@@ -8236,8 +8242,12 @@ async fn start_with_profile(
     let clock = Arc::new(Mutex::new(VirtualClock::new(
         LogicalInstant::from_unix_seconds(1_788_004_860),
     )));
-    let backend = Arc::new(LocalBackend::new(gateway.clone(), clock, 7));
-    let svc = FirestoreServer::new(GatewayService::local(gateway, backend));
+    let mut backend = LocalBackend::new(gateway.clone(), clock.clone(), 7);
+    if let Some(wait) = contention_wait {
+        backend = backend.with_contention_wait(wait);
+    }
+    let backend = Arc::new(backend);
+    let svc = FirestoreServer::new(GatewayService::local(gateway, backend.clone()));
     let handle = tokio::spawn(async move {
         tonic::transport::Server::builder()
             .add_service(svc)
@@ -8250,7 +8260,413 @@ async fn start_with_profile(
         .connect()
         .await
         .unwrap();
-    (FirestoreClient::new(channel), handle)
+    (FirestoreClient::new(channel), clock, backend, handle)
+}
+
+fn assert_native_profile_scope(backend: &LocalBackend, strict: bool) {
+    use fireemu_core_firestore::store::LimitScope;
+    let parent = fireemu_adapter_grpc::decode::parse_parent(DOCS).unwrap();
+    let scope = backend
+        .database_handle(&parent)
+        .unwrap()
+        .with(|state| Ok(state.limit_scope()))
+        .unwrap();
+    assert_eq!(
+        scope,
+        if strict {
+            LimitScope::Production
+        } else {
+            LimitScope::OfficialEmulator
+        }
+    );
+}
+
+async fn native_transaction_document(
+    client: &mut FirestoreClient<tonic::transport::Channel>,
+    path: &str,
+    transaction: Option<Vec<u8>>,
+) -> pb::Document {
+    client
+        .get_document(pb::GetDocumentRequest {
+            name: format!("{DOCS}/{path}"),
+            consistency_selector: transaction
+                .map(pb::get_document_request::ConsistencySelector::Transaction),
+            ..Default::default()
+        })
+        .await
+        .unwrap()
+        .into_inner()
+}
+
+/// The empty commit of a transaction over native gRPC. Production answers the time of the
+/// transaction's first read and no `commit_time` when it has not read (P01 gRPC read-write without
+/// a read; P02 read-only after a read); the emulator profile keeps a time for every empty commit.
+/// A gRPC read-write empty commit after a read, and a read-only one without a read, are not
+/// recorded: they follow the same rule.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn native_empty_commit_time_follows_whether_the_transaction_has_read_in_production() {
+    for strict in [true, false] {
+        let (mut client, _clock, _backend, handle) =
+            start_profile_with_state(strict, Some(std::time::Duration::ZERO)).await;
+        client
+            .commit(pb::CommitRequest {
+                database: DB.to_owned(),
+                writes: vec![update_write("empty-time/doc", &[("value", i(1))])],
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        for read_only in [false, true] {
+            for has_read in [false, true] {
+                let options = read_only.then(|| pb::TransactionOptions {
+                    mode: Some(pb::transaction_options::Mode::ReadOnly(
+                        pb::transaction_options::ReadOnly::default(),
+                    )),
+                });
+                let transaction = client
+                    .begin_transaction(pb::BeginTransactionRequest {
+                        database: DB.to_owned(),
+                        options,
+                        ..Default::default()
+                    })
+                    .await
+                    .unwrap()
+                    .into_inner()
+                    .transaction;
+                if has_read {
+                    native_transaction_document(
+                        &mut client,
+                        "empty-time/doc",
+                        Some(transaction.clone()),
+                    )
+                    .await;
+                }
+                let response = client
+                    .commit(pb::CommitRequest {
+                        database: DB.to_owned(),
+                        transaction,
+                        ..Default::default()
+                    })
+                    .await
+                    .unwrap()
+                    .into_inner();
+                assert!(response.write_results.is_empty());
+                assert_eq!(
+                    response.commit_time.is_some(),
+                    !strict || has_read,
+                    "strict={strict} read_only={read_only} has_read={has_read}"
+                );
+            }
+        }
+        handle.abort();
+    }
+}
+
+/// A commit refused by a precondition ends its transaction, as production answers it (P08, recorded on REST and on
+/// native gRPC): the same token then reads and commits as `INVALID_ARGUMENT` in strict (`ABORTED` in the emulator
+/// profile, as the official emulator does), a Rollback is accepted again and again, and the locks the transaction held
+/// are gone at once, so a writer outside it is not refused.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[allow(clippy::too_many_lines)]
+async fn native_precondition_refusal_ends_the_transaction_as_production_does() {
+    const GONE: &str = "The referenced transaction has expired or is no longer valid.";
+    for strict in [true, false] {
+        let gone_code = if strict {
+            tonic::Code::InvalidArgument
+        } else {
+            tonic::Code::Aborted
+        };
+        let (mut client, _clock, backend, handle) =
+            start_profile_with_state(strict, Some(std::time::Duration::ZERO)).await;
+        assert_native_profile_scope(&backend, strict);
+        client
+            .commit(pb::CommitRequest {
+                database: DB.to_owned(),
+                writes: vec![update_write("p08-native/existing", &[("value", i(1))])],
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        let original = native_transaction_document(&mut client, "p08-native/existing", None).await;
+        let transaction = client
+            .begin_transaction(pb::BeginTransactionRequest {
+                database: DB.to_owned(),
+                ..Default::default()
+            })
+            .await
+            .unwrap()
+            .into_inner()
+            .transaction;
+        assert_eq!(
+            native_transaction_document(
+                &mut client,
+                "p08-native/existing",
+                Some(transaction.clone()),
+            )
+            .await,
+            original
+        );
+        let mut missing = update_write("p08-native/missing", &[("value", i(2))]);
+        missing.current_document = Some(pb::Precondition {
+            condition_type: Some(pb::precondition::ConditionType::Exists(true)),
+        });
+        let failed_request = pb::CommitRequest {
+            database: DB.to_owned(),
+            transaction: transaction.clone(),
+            writes: vec![
+                update_write("p08-native/existing", &[("value", i(9))]),
+                missing,
+            ],
+            ..Default::default()
+        };
+        let refused = client.commit(failed_request.clone()).await.unwrap_err();
+        assert_eq!(refused.code(), tonic::Code::NotFound, "strict={strict}");
+        assert_eq!(
+            native_transaction_document(&mut client, "p08-native/existing", None).await,
+            original,
+            "the first staged write was not published"
+        );
+        let read = client
+            .get_document(pb::GetDocumentRequest {
+                name: format!("{DOCS}/p08-native/existing"),
+                consistency_selector: Some(
+                    pb::get_document_request::ConsistencySelector::Transaction(transaction.clone()),
+                ),
+                ..Default::default()
+            })
+            .await
+            .unwrap_err();
+        assert_eq!(
+            (read.code(), read.message()),
+            (gone_code, GONE),
+            "strict={strict}"
+        );
+        let again = client.commit(failed_request.clone()).await.unwrap_err();
+        assert_eq!(
+            (again.code(), again.message()),
+            (gone_code, GONE),
+            "strict={strict}"
+        );
+        // The lock is gone at once: a writer outside the transaction is not refused.
+        client
+            .commit(pb::CommitRequest {
+                database: DB.to_owned(),
+                writes: vec![update_write("p08-native/existing", &[("value", i(3))])],
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        for _ in 0..2 {
+            client
+                .rollback(pb::RollbackRequest {
+                    database: DB.to_owned(),
+                    transaction: transaction.clone(),
+                    ..Default::default()
+                })
+                .await
+                .unwrap();
+        }
+        assert_eq!(
+            native_transaction_document(&mut client, "p08-native/existing", None)
+                .await
+                .fields
+                .get("value"),
+            Some(&i(3)),
+            "nothing of the refused commit or of the rollbacks was published"
+        );
+        handle.abort();
+        assert!(handle.await.unwrap_err().is_cancelled());
+    }
+}
+
+/// The same token cannot correct a refused commit: production answers the corrected commit `INVALID_ARGUMENT` with the
+/// same text (P08); a new transaction is the way forward, and the refused commit's writes stay unpublished.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn native_corrected_commit_on_the_refused_token_is_refused() {
+    const GONE: &str = "The referenced transaction has expired or is no longer valid.";
+    for strict in [true, false] {
+        let gone_code = if strict {
+            tonic::Code::InvalidArgument
+        } else {
+            tonic::Code::Aborted
+        };
+        let (mut client, _clock, backend, handle) =
+            start_profile_with_state(strict, Some(std::time::Duration::ZERO)).await;
+        assert_native_profile_scope(&backend, strict);
+        client
+            .commit(pb::CommitRequest {
+                database: DB.to_owned(),
+                writes: vec![update_write("p08-native/existing", &[("value", i(1))])],
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        let transaction = client
+            .begin_transaction(pb::BeginTransactionRequest {
+                database: DB.to_owned(),
+                ..Default::default()
+            })
+            .await
+            .unwrap()
+            .into_inner()
+            .transaction;
+        let mut missing = update_write("p08-native/missing", &[("value", i(2))]);
+        missing.current_document = Some(pb::Precondition {
+            condition_type: Some(pb::precondition::ConditionType::Exists(true)),
+        });
+        let mut request = pb::CommitRequest {
+            database: DB.to_owned(),
+            transaction,
+            writes: vec![
+                update_write("p08-native/existing", &[("value", i(9))]),
+                missing,
+            ],
+            ..Default::default()
+        };
+        assert_eq!(
+            client.commit(request.clone()).await.unwrap_err().code(),
+            tonic::Code::NotFound
+        );
+        request.writes[1].current_document = Some(pb::Precondition {
+            condition_type: Some(pb::precondition::ConditionType::Exists(false)),
+        });
+        let corrected = client.commit(request).await.unwrap_err();
+        assert_eq!(
+            (corrected.code(), corrected.message()),
+            (gone_code, GONE),
+            "strict={strict}"
+        );
+        assert_eq!(
+            native_transaction_document(&mut client, "p08-native/existing", None)
+                .await
+                .fields
+                .get("value"),
+            Some(&i(1))
+        );
+        assert_eq!(
+            client
+                .get_document(pb::GetDocumentRequest {
+                    name: format!("{DOCS}/p08-native/missing"),
+                    ..Default::default()
+                })
+                .await
+                .unwrap_err()
+                .code(),
+            tonic::Code::NotFound
+        );
+        handle.abort();
+        assert!(handle.await.unwrap_err().is_cancelled());
+    }
+}
+
+/// Native keepalive reads protect idle lifetime while Commit still uses the original total age; these controlled-clock traces are local coverage only.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[allow(clippy::too_many_lines)]
+async fn native_keepalive_commits_at_269_total_seconds_and_refuses_at_271() {
+    for strict in [true, false] {
+        for elapsed in [269, 271] {
+            let (mut client, clock, backend, handle) = start_profile_with_state(strict, None).await;
+            assert_native_profile_scope(&backend, strict);
+            client
+                .commit(pb::CommitRequest {
+                    database: DB.to_owned(),
+                    writes: vec![update_write("p11-native/doc", &[("value", i(0))])],
+                    ..Default::default()
+                })
+                .await
+                .unwrap();
+            let original = native_transaction_document(&mut client, "p11-native/doc", None).await;
+            let transaction = client
+                .begin_transaction(pb::BeginTransactionRequest {
+                    database: DB.to_owned(),
+                    ..Default::default()
+                })
+                .await
+                .unwrap()
+                .into_inner()
+                .transaction;
+            let mut previous = 0;
+            for current in [0, 59, 118, 177, 236] {
+                clock
+                    .lock()
+                    .unwrap()
+                    .advance(LogicalDuration::from_seconds(current - previous))
+                    .unwrap();
+                assert_eq!(
+                    native_transaction_document(
+                        &mut client,
+                        "p11-native/doc",
+                        Some(transaction.clone()),
+                    )
+                    .await,
+                    original,
+                    "strict={strict}, keepalive={current}"
+                );
+                previous = current;
+            }
+            clock
+                .lock()
+                .unwrap()
+                .advance(LogicalDuration::from_seconds(elapsed - previous))
+                .unwrap();
+            let result = client
+                .commit(pb::CommitRequest {
+                    database: DB.to_owned(),
+                    transaction,
+                    writes: vec![update_write("p11-native/doc", &[("value", i(1))])],
+                    ..Default::default()
+                })
+                .await;
+            if elapsed == 269 {
+                result.unwrap();
+                assert_eq!(
+                    native_transaction_document(&mut client, "p11-native/doc", None)
+                        .await
+                        .fields
+                        .get("value"),
+                    Some(&i(1))
+                );
+            } else {
+                let refused = result.unwrap_err();
+                assert_eq!(refused.code(), tonic::Code::Aborted);
+                assert_eq!(
+                    refused.message(),
+                    "The referenced transaction has expired or is no longer valid."
+                );
+                assert_eq!(
+                    native_transaction_document(&mut client, "p11-native/doc", None).await,
+                    original,
+                    "the total-expired Commit published no document or version"
+                );
+            }
+            let parent = fireemu_adapter_grpc::decode::parse_parent(DOCS).unwrap();
+            assert_eq!(
+                backend
+                    .database_handle(&parent)
+                    .unwrap()
+                    .with(|state| Ok(state.transaction_bookkeeping_stats().active))
+                    .unwrap(),
+                0
+            );
+            client
+                .commit(pb::CommitRequest {
+                    database: DB.to_owned(),
+                    writes: vec![update_write("p11-native/doc", &[("value", i(2))])],
+                    ..Default::default()
+                })
+                .await
+                .unwrap();
+            assert_eq!(
+                native_transaction_document(&mut client, "p11-native/doc", None)
+                    .await
+                    .fields
+                    .get("value"),
+                Some(&i(2))
+            );
+            handle.abort();
+            assert!(handle.await.unwrap_err().is_cancelled());
+        }
+    }
 }
 
 /// Production's refusal of a `BatchWrite` that names one document twice
@@ -9279,4 +9695,362 @@ async fn transaction_pages_without_order_values_continue_after_the_named_documen
         .await
         .unwrap();
     handle.abort();
+}
+
+/// P02b (native gRPC, two recordings): after a read-only transaction's write commit is refused, a
+/// read and an empty commit on the same token, in either order, answer `INVALID_ARGUMENT` with the
+/// expired text and a Rollback answers OK. The emulator profile keeps the token open, as the
+/// official emulator does: the read and the empty commit succeed.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[allow(clippy::too_many_lines)]
+async fn native_read_only_write_refusal_ends_the_token_in_production_only() {
+    const GONE: &str = "The referenced transaction has expired or is no longer valid.";
+    for strict in [true, false] {
+        for read_first in [true, false] {
+            let (mut client, _clock, backend, handle) =
+                start_profile_with_state(strict, Some(std::time::Duration::ZERO)).await;
+            assert_native_profile_scope(&backend, strict);
+            client
+                .commit(pb::CommitRequest {
+                    database: DB.to_owned(),
+                    writes: vec![update_write("p02b-native/doc", &[("v", i(1))])],
+                    ..Default::default()
+                })
+                .await
+                .unwrap();
+            let transaction = client
+                .begin_transaction(pb::BeginTransactionRequest {
+                    database: DB.to_owned(),
+                    options: Some(pb::TransactionOptions {
+                        mode: Some(pb::transaction_options::Mode::ReadOnly(
+                            pb::transaction_options::ReadOnly::default(),
+                        )),
+                    }),
+                    ..Default::default()
+                })
+                .await
+                .unwrap()
+                .into_inner()
+                .transaction;
+            native_transaction_document(&mut client, "p02b-native/doc", Some(transaction.clone()))
+                .await;
+            let refused = client
+                .commit(pb::CommitRequest {
+                    database: DB.to_owned(),
+                    transaction: transaction.clone(),
+                    writes: vec![update_write("p02b-native/doc", &[("v", i(2))])],
+                    ..Default::default()
+                })
+                .await
+                .unwrap_err();
+            assert_eq!(refused.code(), tonic::Code::InvalidArgument);
+            assert_eq!(
+                refused.message(),
+                "Cannot modify entities in a read-only transaction."
+            );
+            let read = |mut client: FirestoreClient<tonic::transport::Channel>,
+                        transaction: Vec<u8>| async move {
+                client
+                    .get_document(pb::GetDocumentRequest {
+                        name: format!("{DOCS}/p02b-native/doc"),
+                        consistency_selector: Some(
+                            pb::get_document_request::ConsistencySelector::Transaction(transaction),
+                        ),
+                        ..Default::default()
+                    })
+                    .await
+            };
+            let empty = |mut client: FirestoreClient<tonic::transport::Channel>,
+                         transaction: Vec<u8>| async move {
+                client
+                    .commit(pb::CommitRequest {
+                        database: DB.to_owned(),
+                        transaction,
+                        ..Default::default()
+                    })
+                    .await
+            };
+            let (read_answer, empty_answer) = if read_first {
+                let read_answer = read(client.clone(), transaction.clone()).await.map(|_| ());
+                let empty_answer = empty(client.clone(), transaction.clone()).await.map(|_| ());
+                (read_answer, empty_answer)
+            } else {
+                let empty_answer = empty(client.clone(), transaction.clone()).await.map(|_| ());
+                let read_answer = read(client.clone(), transaction.clone()).await.map(|_| ());
+                (read_answer, empty_answer)
+            };
+            if strict {
+                for answer in [read_answer, empty_answer] {
+                    let status = answer.unwrap_err();
+                    assert_eq!(
+                        (status.code(), status.message()),
+                        (tonic::Code::InvalidArgument, GONE),
+                        "read_first={read_first}"
+                    );
+                }
+            } else {
+                // The empty commit succeeds and finishes the token, so a read after it is refused
+                // as the official emulator refuses every finished transaction: ABORTED.
+                empty_answer.unwrap();
+                if read_first {
+                    read_answer.unwrap();
+                } else {
+                    let status = read_answer.unwrap_err();
+                    assert_eq!(
+                        (status.code(), status.message()),
+                        (tonic::Code::Aborted, GONE)
+                    );
+                }
+            }
+            if strict {
+                client
+                    .rollback(pb::RollbackRequest {
+                        database: DB.to_owned(),
+                        transaction,
+                        ..Default::default()
+                    })
+                    .await
+                    .unwrap();
+            }
+            handle.abort();
+        }
+    }
+}
+
+/// P02b chain Z (native gRPC, two recordings): an outside writer that commits between a read-write
+/// begin and its first read is shown by that read, and the transaction's commit then answers OK, in
+/// both profiles.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn native_read_write_transaction_reads_at_its_first_use_in_both_profiles() {
+    for strict in [true, false] {
+        let (mut client, _clock, backend, handle) =
+            start_profile_with_state(strict, Some(std::time::Duration::ZERO)).await;
+        assert_native_profile_scope(&backend, strict);
+        client
+            .commit(pb::CommitRequest {
+                database: DB.to_owned(),
+                writes: vec![update_write("p02b-native/z", &[("v", i(1))])],
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        let transaction = client
+            .begin_transaction(pb::BeginTransactionRequest {
+                database: DB.to_owned(),
+                ..Default::default()
+            })
+            .await
+            .unwrap()
+            .into_inner()
+            .transaction;
+        client
+            .commit(pb::CommitRequest {
+                database: DB.to_owned(),
+                writes: vec![update_write("p02b-native/z", &[("v", i(2))])],
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        let shown =
+            native_transaction_document(&mut client, "p02b-native/z", Some(transaction.clone()))
+                .await;
+        assert_eq!(shown.fields.get("v"), Some(&i(2)), "strict={strict}");
+        client
+            .commit(pb::CommitRequest {
+                database: DB.to_owned(),
+                transaction,
+                writes: vec![update_write("p02b-native/z", &[("v", i(3))])],
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        handle.abort();
+    }
+}
+
+/// P11 (native gRPC, P11 v4, two recordings): a transaction kept alive past its 270 s total lifetime answers a
+/// read, a Commit and a Rollback `ABORTED` "no longer valid" while it is remembered, and holds no lock (an outside
+/// writer succeeds); once it is forgotten, at about 300 s of its age, each answers `INVALID_ARGUMENT` "Invalid
+/// transaction.". The emulator profile follows the official emulator instead (a read `INVALID_ARGUMENT`, a Commit
+/// `ABORTED`, a Rollback accepted).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[allow(clippy::too_many_lines)]
+async fn native_expired_transaction_is_remembered_until_about_300_seconds_in_production() {
+    const GONE: &str = "The referenced transaction has expired or is no longer valid.";
+    let (mut client, clock, backend, handle) = start_profile_with_state(true, None).await;
+    assert_native_profile_scope(&backend, true);
+    client
+        .commit(pb::CommitRequest {
+            database: DB.to_owned(),
+            writes: vec![update_write("p11-native/remembered", &[("value", i(0))])],
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    let transaction = client
+        .begin_transaction(pb::BeginTransactionRequest {
+            database: DB.to_owned(),
+            ..Default::default()
+        })
+        .await
+        .unwrap()
+        .into_inner()
+        .transaction;
+    let mut previous = 0;
+    for current in [0, 59, 118, 177, 236] {
+        clock
+            .lock()
+            .unwrap()
+            .advance(LogicalDuration::from_seconds(current - previous))
+            .unwrap();
+        native_transaction_document(
+            &mut client,
+            "p11-native/remembered",
+            Some(transaction.clone()),
+        )
+        .await;
+        previous = current;
+    }
+    let advance_to = |target: i64, previous: &mut i64| {
+        clock
+            .lock()
+            .unwrap()
+            .advance(LogicalDuration::from_seconds(target - *previous))
+            .unwrap();
+        *previous = target;
+    };
+    advance_to(283, &mut previous);
+    let read = |mut client: FirestoreClient<tonic::transport::Channel>, transaction: Vec<u8>| async move {
+        client
+            .get_document(pb::GetDocumentRequest {
+                name: format!("{DOCS}/p11-native/remembered"),
+                consistency_selector: Some(
+                    pb::get_document_request::ConsistencySelector::Transaction(transaction),
+                ),
+                ..Default::default()
+            })
+            .await
+            .unwrap_err()
+    };
+    let commit = |mut client: FirestoreClient<tonic::transport::Channel>, transaction: Vec<u8>| async move {
+        client
+            .commit(pb::CommitRequest {
+                database: DB.to_owned(),
+                transaction,
+                writes: vec![update_write("p11-native/remembered", &[("value", i(1))])],
+                ..Default::default()
+            })
+            .await
+            .unwrap_err()
+    };
+    let rollback = |mut client: FirestoreClient<tonic::transport::Channel>,
+                    transaction: Vec<u8>| async move {
+        client
+            .rollback(pb::RollbackRequest {
+                database: DB.to_owned(),
+                transaction,
+                ..Default::default()
+            })
+            .await
+            .unwrap_err()
+    };
+    for status in [
+        read(client.clone(), transaction.clone()).await,
+        commit(client.clone(), transaction.clone()).await,
+        rollback(client.clone(), transaction.clone()).await,
+    ] {
+        assert_eq!(
+            (status.code(), status.message()),
+            (tonic::Code::Aborted, GONE)
+        );
+    }
+    client
+        .commit(pb::CommitRequest {
+            database: DB.to_owned(),
+            writes: vec![update_write("p11-native/remembered", &[("value", i(2))])],
+            ..Default::default()
+        })
+        .await
+        .expect("an expired token holds no lock");
+    advance_to(301, &mut previous);
+    for status in [
+        read(client.clone(), transaction.clone()).await,
+        commit(client.clone(), transaction.clone()).await,
+        rollback(client.clone(), transaction.clone()).await,
+    ] {
+        assert_eq!(
+            (status.code(), status.message()),
+            (tonic::Code::InvalidArgument, "Invalid transaction.")
+        );
+    }
+    handle.abort();
+}
+
+/// A Rollback as the very first request after the 270 s total lifetime, over native gRPC: production answers `ABORTED`
+/// "no longer valid" (INFERRED for a first request; P11 v4 recorded the Rollback after a read), the emulator profile
+/// accepts it.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn native_rollback_as_the_first_request_after_the_total_lifetime_is_answered_per_profile() {
+    const GONE: &str = "The referenced transaction has expired or is no longer valid.";
+    for strict in [true, false] {
+        let (mut client, clock, backend, handle) = start_profile_with_state(strict, None).await;
+        assert_native_profile_scope(&backend, strict);
+        client
+            .commit(pb::CommitRequest {
+                database: DB.to_owned(),
+                writes: vec![update_write(
+                    "p11-native/first-rollback",
+                    &[("value", i(0))],
+                )],
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        let transaction = client
+            .begin_transaction(pb::BeginTransactionRequest {
+                database: DB.to_owned(),
+                ..Default::default()
+            })
+            .await
+            .unwrap()
+            .into_inner()
+            .transaction;
+        let mut previous = 0;
+        for current in [0, 59, 118, 177, 236] {
+            clock
+                .lock()
+                .unwrap()
+                .advance(LogicalDuration::from_seconds(current - previous))
+                .unwrap();
+            native_transaction_document(
+                &mut client,
+                "p11-native/first-rollback",
+                Some(transaction.clone()),
+            )
+            .await;
+            previous = current;
+        }
+        clock
+            .lock()
+            .unwrap()
+            .advance(LogicalDuration::from_seconds(283 - previous))
+            .unwrap();
+        let rolled = client
+            .rollback(pb::RollbackRequest {
+                database: DB.to_owned(),
+                transaction,
+                ..Default::default()
+            })
+            .await;
+        if strict {
+            let status = rolled.unwrap_err();
+            assert_eq!(
+                (status.code(), status.message()),
+                (tonic::Code::Aborted, GONE)
+            );
+        } else {
+            rolled.unwrap();
+        }
+        handle.abort();
+    }
 }

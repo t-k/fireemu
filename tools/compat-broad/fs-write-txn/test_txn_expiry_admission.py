@@ -35,15 +35,15 @@ commit_baseline = campaign.commit_baseline
 
 NONCE = "b" * 32
 CAMPAIGN_ID = "FS-TRANSACTION-EXPIRY-RETRY-04"
-PROJECT_BODY = {"projectId": "fireemu-35fe6", "projectNumber": "592603257417"}
+PROJECT_BODY = {"projectId": "fireemu-oracle-sbx", "projectNumber": "111111111111"}
 DATABASE_BODY = {
-    "name": "projects/fireemu-35fe6/databases/(default)",
+    "name": "projects/fireemu-oracle-sbx/databases/(default)",
     "uid": "fixture-uid",
     "type": "FIRESTORE_NATIVE",
     "databaseEdition": "STANDARD",
     "locationId": "us-central1",
 }
-AUTH_BODY = {"name": "projects/592603257417/config", "mfa": {"state": "DISABLED"}}
+AUTH_BODY = {"name": "projects/111111111111/config", "mfa": {"state": "DISABLED"}}
 TOKEN = "offline-fixture-token"
 
 
@@ -83,7 +83,7 @@ def test_the_lock_scopes_are_one_exclusive_and_five_read():
     assert [lock["mode"] for lock in locks].count("READ") == 5
     exclusive = next(lock for lock in locks if lock["mode"] == "EXCLUSIVE")
     assert exclusive["key"] == (
-        f"project/fireemu-35fe6/firestore/(default)/documents/oracle/{NONCE}/txn-expiry-04/*"
+        f"project/fireemu-oracle-sbx/firestore/(default)/documents/oracle/{NONCE}/txn-expiry-04/*"
     )
     # The Ledger grammar accepts every key, and every owned document is
     # covered by the exclusive scope.
@@ -153,7 +153,7 @@ def owner_permission(plan, commit, artifact_digest, inputs):
         for key, route in commit_baseline.ROUTES.items()
     }
     return {
-        **campaign.permission_bindings(plan, commit, artifact_digest, inputs),
+        **campaign.permission_bindings(plan, commit, artifact_digest, inputs, project_number=PROJECT_BODY["projectNumber"]),
         "ownerIdentity": "offline-fixture-not-permission",
         "permissionReference": "offline-fixture",
         "recoveryOwner": "offline-recovery",

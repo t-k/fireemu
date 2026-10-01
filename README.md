@@ -141,6 +141,8 @@ On Windows, `emulators:export` and `--export-on-exit` are not currently availabl
 
 On Unix-like systems, the destination and its ancestor directories are subject to ownership and permission restrictions. Use a dedicated, non-shared directory rather than `/tmp` or a shared directory. 
 
+On macOS, an ancestor directory with an ACL is refused when the ACL has an `allow` entry for anyone but the owner, root or the user running the export, whatever permissions the entry shows (the kernel grants rights that `ls -le` does not list). `deny` entries are accepted, so a standard home directory (which carries `group:everyone deny delete`) and the folders below it work. When an export is refused for an ACL, the message names the entry; remove it (`chmod -a`) or export to another directory, for example one under `$TMPDIR`. Check an ancestor with `/bin/ls -led <directory>`.
+
 ### Troubleshooting
 
 For startup or installation problems, inspect the environment and bundled files with:
@@ -176,6 +178,8 @@ An existing `fireemu.json` is not overwritten unless `--force` is supplied.
 
 Use `strict` when testing against production Firebase behavior. Add `emulator` to your test targets when you also need to check alignment with the official emulator.
 
+Under the `emulator` profile, a request that names a tenant the project does not have creates that tenant, and the number of tenants is not limited, as in the official emulator. The `strict` profile refuses such a request, as production does. A request that Fireemu refuses (a wrong credential, a browser page without the control token on the emulator routes, App Check, an unknown API key) creates nothing. As in the official emulator, a plain `GET` without an `Origin` header to a tenant route of `127.0.0.1` creates the tenant, so any web page you visit while the emulator runs can add tenants to it (not read them); use the `strict` profile where that matters.
+
 ### Basic configuration
 
 The initial configuration selects Standard edition Firestore with the Native API.
@@ -208,17 +212,29 @@ The `auth` section of `fireemu.json` lets you configure sign-in methods, passwor
 |---|---|
 | Enable or disable email/password, anonymous, and phone sign-in | `auth.signIn` |
 | Test phone numbers and verification codes | `auth.signIn.phoneNumber.testPhoneNumbers` |
+| Initial authorized domains for action-link continue URLs | `auth.authorizedDomains` |
 | Handling of accounts that share an email address | `auth.signIn.allowDuplicateEmails` |
 | Password length and character requirements, and policy enforcement at sign-in | `auth.passwordPolicy` |
 | TOTP-based multi-factor authentication | `auth.totp` |
+| Initial multi-factor authentication (MFA) configuration of a project, such as enabling TOTP under the `strict` profile | `auth.mfa` |
+| Tenants that exist when the daemon starts, and the multi-tenancy switch | `auth.tenants`, `auth.multiTenant` |
 | Restrictions on end-user account creation and deletion | `auth.client.permissions` |
 | Email enumeration protection | `auth.improvedEmailPrivacy` |
 | Project- and tenant-specific password policies and account permissions | `auth.passwordPolicyOverrides`, `auth.configOverrides` |
 | Blocking functions before account creation or sign-in, and credential forwarding to those functions | `auth.blockingFunctions` |
+| Initial custom OIDC and SAML provider resources | `auth.providers.oidc`, `auth.providers.saml` |
 | Public keys for verifying custom tokens and OIDC ID tokens | `auth.customTokenSigners`, `auth.idpSigners` |
 | Sign-up quota configuration and local quota-exceeded simulation | `auth.quota`, `auth.quotaSimulation` |
 
 See the [configuration schema](spec/config/fireemu.schema.json) for the format and accepted values of each setting.  
+
+Declare `auth.authorizedDomains`, for example `["localhost", "app.test"]`, to set the initial project-wide list in either profile. The list replaces the defaults, so include `localhost` if your tests use it. An empty list authorizes no host under `strict`; an absent or `null` setting keeps the existing defaults (`localhost` and the project's `firebaseapp.com` and `web.app` domains). Validation uses the Admin API's rules for the selected profile, including its conversion of numeric and boolean entries to strings and omission of `null` entries; use strings when writing the list. Fireemu intentionally keeps `localhost` in its defaults for development. The [recorded production sandbox baseline](conformance/auth-action-production.json) does not include it; new production projects may also omit it. This default is a Fireemu-only convenience, and declaring the list replaces it. Tenant-scoped strict action links currently check the tenant's default domains rather than this project declaration; support for the parent project's live list is pending.
+
+An Admin update changes the live list. A session reset restores the declared list, when present, and preserves an Admin-written list when no initial list was declared. Projects created later receive the declaration word for word, independently of the default project's live list; listing a particular project's `firebaseapp.com` or `web.app` domain therefore gives later projects that same domain. Clearing accounts leaves the live list alone. Auth export/import carries accounts without the domain list or its declaration. The `emulator` profile accepts the setting and exposes the list, while continuing to allow action-link continue URLs outside it.
+
+Declare project OIDC and SAML resources with `auth.providers.oidc` and `auth.providers.saml`, using the Admin v2 resource fields and an ID-only `name` such as `oidc.fixture` or `saml.fixture`. Full resource names are refused. For example, `"providers": {"oidc": [{"name": "oidc.fixture", "enabled": true, "clientId": "local-client", "issuer": "https://issuer.test", "responseType": {"idToken": true}}]}` initializes that provider in both profiles. Strict OIDC sign-in also needs matching public issuer keys in `auth.idpSigners`; no key is fetched. Strict SAML uses the declared provider certificates and retains its existing assertion checks.
+
+Each declared array replaces that provider kind; `[]` explicitly starts it empty, while an absent or `null` kind declares no initial resources. Admin operations change live resources until a session reset restores the declared kinds. Later session and routed projects inherit the declaration independently of the default project's live changes. Tenant resources and built-in providers remain separate. Clearing accounts preserves live resources; snapshots and Auth export/import transfer no provider resources or declarations. The emulator profile continues to accept its unsigned fixture credentials without requiring configured or enabled provider resources. These declarations require a canonical document with `"schemaVersion": 1`; a Firebase deployment `auth.providers` section without that version remains deployment data and installs no provider seeds.
 
 #### Example configuration
 
@@ -277,11 +293,64 @@ For an existing `fireemu.json`, add the settings you need to its `auth` section.
 
 Use `auth.passwordPolicyOverrides` to specify different password policies for individual projects or tenants. Use `auth.configOverrides` to customize account creation and deletion permissions and email enumeration protection.
 
-These settings are separate from creating the project or tenant. Naming a tenant in the configuration does not create it.  
+These settings are separate from creating the project or tenant. Naming a tenant in `auth.configOverrides` or `auth.passwordPolicyOverrides` does not create it (declare it in `auth.tenants` to have it created).  
+
+#### Enable multi-factor authentication at start
+
+Under the `strict` profile, TOTP is enabled only through the project's MFA configuration, as in production, so `auth.totp` alone enables nothing there. Use `auth.mfa` to declare that configuration in the file instead of calling the Admin API in every session. It has the shape Identity Platform uses (`state`, `enabledProviders`, and `providerConfigs` with `totpProviderConfig.adjacentIntervals`):
+
+```json
+{
+  "schemaVersion": 1,
+  "profile": "strict",
+  "auth": {
+    "mfa": {
+      "state": "ENABLED",
+      "providerConfigs": [
+        { "state": "ENABLED", "totpProviderConfig": { "adjacentIntervals": 1 } }
+      ]
+    }
+  }
+}
+```
+
+- The configuration applies when the daemon starts, in both profiles, and to every project created afterward (not the default project's current value). It is validated as the Admin API validates an update of `mfa`, and a value production would refuse stops the daemon at startup.
+- Nothing else changes. An Admin API update replaces the current configuration, and disabling MFA refuses TOTP as production does. A tenant follows its own `mfaConfig`, not this setting.
+- `POST /v1/sessions/{session}/reset` returns the project to the declared configuration. Without `auth.mfa`, a reset leaves a configuration set through the Admin API alone, as it does the rest of the project configuration. `DELETE /emulator/v1/projects/{project}/accounts` clears accounts only.
+- An export does not carry the project's `mfa` configuration, so an imported project keeps its own `auth.mfa` or Admin-set configuration.
+- The `emulator` profile keeps `auth.totp` working. Under `strict`, `auth.totp` without an `auth.mfa` that enables TOTP prints a startup warning naming `auth.mfa`.
 
 #### Enable multi-tenancy
 
-Under the `strict` profile, enable `multiTenant.allowTenants` through the Admin API before using multi-tenancy. See the [compatibility documentation](docs/compatibility-contract.md) for the supported Admin API scope. 
+Under the `strict` profile, enable `multiTenant.allowTenants` before using multi-tenancy: through the Admin API, or with `auth.multiTenant` in the file (see "Start with tenants" below). See the [compatibility documentation](docs/compatibility-contract.md) for the supported Admin API scope. 
+
+#### Start with tenants
+
+Instead of creating tenants through the Admin API in every session, declare the default project's tenants and the multi-tenancy switch in the file. Each entry of `auth.tenants` is an Admin v2 `Tenant` document plus its `tenantId`, which has the form production generates, the display name, a hyphen, and five characters of `a-z0-9`:
+
+```json
+{
+  "schemaVersion": 1,
+  "profile": "strict",
+  "auth": {
+    "multiTenant": { "allowTenants": true },
+    "tenants": [
+      {
+        "tenantId": "acme-x7k2q",
+        "displayName": "acme",
+        "allowPasswordSignup": true,
+        "mfaConfig": { "state": "ENABLED", "enabledProviders": ["PHONE_SMS"] }
+      }
+    ]
+  }
+}
+```
+
+- A document is read by the code the Admin tenant create route reads one with, so a value production refuses stops the daemon at startup. The tenants are created empty, in file order, and settings such as `mfaConfig` and `passwordPolicyConfig` come from the document. The file is stricter than the route in the `emulator` profile: it also refuses an unknown member and a missing or invalid `displayName`, as production does.
+- A declared tenant has what an Admin create with that document gives: an omitted `allowPasswordSignup`, `enableEmailLinkSignin` or `enableAnonymousUser` is off and multi-factor is off. A tenant the `emulator` profile creates on the way for a request that names an unknown id gets the official emulator's defaults instead (all three on, `PHONE_SMS` multi-factor), so declare what your test needs.
+- Under the `strict` profile tenants are created only in a project that allows them, as in production, so `auth.tenants` needs `auth.multiTenant.allowTenants: true` (the daemon refuses to start otherwise). The `emulator` profile takes tenants without the switch.
+- The default project and every session project (`POST /v1/sessions`) start with the declared switch and tenants. `POST /v1/sessions/{session}/reset` (the default session's included) creates them again, empty, and returns the switch to the declared value; without these keys a reset leaves an Admin-set switch alone. A namespace the `emulator` profile creates for an unknown project id (as the official emulator does) starts with the declared switch and tenants too: it is created by the requests that already created one (a user, a provider or a project setting written there) and by a request that writes a tenant there (creating one, or naming one that does not exist yet), not by a read alone. A session created for that project id (`POST /v1/sessions`) replaces the namespace, tenants included, and starts with the declared ones.
+- With `--import`, an imported tenant is authoritative for its id, and a declared tenant the import did not carry is still created. If you keep re-importing your own export (`--import dir --export-on-exit dir`), an edit to a declared tenant is therefore ignored once its exported copy exists: the daemon prints a warning naming the tenant when the imported tenant's document differs from the declared one (every setting the file can declare is compared). The switch is the other way round: a declared `allowTenants` wins over the import. After a reset the declared version of a tenant comes back, not the imported one.
 
 #### Test quota-exceeded behavior
 
@@ -321,6 +390,10 @@ Fireemu is compatible with the listed Local Emulator Suite products as shipped b
 The `strict` and `emulator` profiles differ in some behaviors to serve their respective purposes. Where the official emulator and production Firebase disagree, Fireemu also adopts production behavior in some cases and records the difference.
 
 Check support for the specific APIs and conditions your application uses, rather than relying on product names alone. The [compatibility contract](spec/compatibility/contract.json) records scope and known differences. The [compatibility documentation](docs/compatibility-contract.md) explains the verification process and how to interpret its records. 
+
+### Network exposure of the Storage port
+
+Like the official emulator, the Storage port reflects the requested object name in the HTML body of its 404 for a missing media read (`text/html`, as production answers). A web page opened on the developer's machine could therefore run script on that origin. Keep the emulator bound to localhost, which is the default, and do not expose the Storage port to other hosts or networks.
 
 ### Changes between versions
 

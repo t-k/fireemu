@@ -38,7 +38,8 @@ function watchHandle(t, target, hooks = {}) {
     const read = handle.read.bind(handle);
     const readFile = handle.readFile.bind(handle);
     const close = handle.close.bind(handle);
-    let statCalls = 0, readCalls = 0;
+    let statCalls = 0,
+      readCalls = 0;
     const wrappedStat = async (...args) => {
       const value = await stat(...args);
       if (++statCalls === 1) await hooks.afterFirstStat?.();
@@ -63,7 +64,10 @@ function watchHandle(t, target, hooks = {}) {
       await hooks.afterFirstRead?.();
       return value;
     };
-    const wrappedClose = async () => { state.closes++; return close(); };
+    const wrappedClose = async () => {
+      state.closes++;
+      return close();
+    };
     const wrapped = {
       fd: handle.fd,
       stat: wrappedStat,
@@ -74,7 +78,9 @@ function watchHandle(t, target, hooks = {}) {
     await hooks.afterOpen?.(wrapped);
     return wrapped;
   };
-  t.after(() => { fs.open = previousOpen; });
+  t.after(() => {
+    fs.open = previousOpen;
+  });
   return state;
 }
 
@@ -100,7 +106,18 @@ test("default cap refuses one extra byte before open", async (t) => {
   assert.equal(watched.opens, 0);
 });
 
-for (const limit of [-1, 1.5, NaN, Infinity, -Infinity, true, null, "20", 20n, Number.MAX_SAFE_INTEGER + 1]) {
+for (const limit of [
+  -1,
+  1.5,
+  NaN,
+  Infinity,
+  -Infinity,
+  true,
+  null,
+  "20",
+  20n,
+  Number.MAX_SAFE_INTEGER + 1,
+]) {
   test(`invalid byte cap ${String(limit)} (${typeof limit}) is refused before open`, async (t) => {
     const { root, target } = await fixture(t);
     const watched = watchHandle(t, target);
@@ -172,18 +189,22 @@ test("truncation after the first chunk is refused", async (t) => {
 
 test("same-size overwrite after a read is refused", async (t) => {
   const { root, target, bytes } = await fixture(t, Buffer.alloc(2 * CHUNK, 65));
-  const watched = watchHandle(t, target, { afterFirstRead: async () => {
-    await fs.writeFile(target, Buffer.alloc(bytes.length, 66));
-    await fs.utimes(target, new Date(1_500_000_000_000), new Date(1_500_000_000_000));
-  } });
+  const watched = watchHandle(t, target, {
+    afterFirstRead: async () => {
+      await fs.writeFile(target, Buffer.alloc(bytes.length, 66));
+      await fs.utimes(target, new Date(1_500_000_000_000), new Date(1_500_000_000_000));
+    },
+  });
   await assert.rejects(readSource(root, "saved.json"), /source-changed/);
   assert.equal(watched.closes, 1);
 });
 
 test("metadata-only change is detected conservatively", async (t) => {
   const { root, target } = await fixture(t);
-  const watched = watchHandle(t, target, { afterFirstRead: () =>
-    fs.utimes(target, new Date(1_400_000_000_000), new Date(1_400_000_000_000)) });
+  const watched = watchHandle(t, target, {
+    afterFirstRead: () =>
+      fs.utimes(target, new Date(1_400_000_000_000), new Date(1_400_000_000_000)),
+  });
   await assert.rejects(readSource(root, "saved.json"), /source-changed/);
   assert.equal(watched.closes, 1);
 });
@@ -228,7 +249,15 @@ test("I/O failure rejects and closes the owned descriptor", async (t) => {
   assert.equal(watched.handle.fd, -1);
 });
 
-for (const path of ["../saved.json", "/saved.json", "a/../saved.json", "a//b", "./saved.json", "", "a\\b"]) {
+for (const path of [
+  "../saved.json",
+  "/saved.json",
+  "a/../saved.json",
+  "a//b",
+  "./saved.json",
+  "",
+  "a\\b",
+]) {
   test(`unsafe path ${JSON.stringify(path)} stays refused`, async (t) => {
     const { root } = await fixture(t);
     await assert.rejects(readSource(root, path), /unsafe-source-path/);
@@ -240,7 +269,10 @@ for (const mode of ["leaf", "directory"]) {
     const { root, target } = await fixture(t);
     if (mode === "leaf") await fs.symlink(target, join(root, "alias.json"));
     else await fs.symlink(root, join(root, "alias"));
-    await assert.rejects(readSource(root, mode === "leaf" ? "alias.json" : "alias/saved.json"), /source-symlink/);
+    await assert.rejects(
+      readSource(root, mode === "leaf" ? "alias.json" : "alias/saved.json"),
+      /source-symlink/,
+    );
   });
 }
 
@@ -257,7 +289,7 @@ test("spaces and multibyte names preserve exact binary bytes", async (t) => {
   const { root } = await fixture(t);
   const directory = join(root, "保存 資料");
   await fs.mkdir(directory);
-  const content = Buffer.from("{\"name\":\"日本語・🙂\",\"x\":null}\r\n\u0000", "utf8");
+  const content = Buffer.from('{"name":"日本語・🙂","x":null}\r\n\u0000', "utf8");
   await fs.writeFile(join(directory, "原文.json"), content);
   assert.deepEqual(await readSource(root, "保存 資料/原文.json", content.length), content);
 });
@@ -294,22 +326,39 @@ async function fifoProbe(root, race) {
   `;
   return await new Promise((resolveResult, reject) => {
     const child = spawn(process.execPath, ["--input-type=module", "-e", source], {
-      stdio: ["ignore", "pipe", "pipe"], env: { PATH: process.env.PATH },
+      stdio: ["ignore", "pipe", "pipe"],
+      env: { PATH: process.env.PATH },
     });
-    let output = "", errors = "", timedOut = false, timer;
+    let output = "",
+      errors = "",
+      timedOut = false,
+      timer;
     const started = Date.now();
-    const startup = setTimeout(() => { timedOut = true; child.kill("SIGKILL"); }, 5000);
+    const startup = setTimeout(() => {
+      timedOut = true;
+      child.kill("SIGKILL");
+    }, 5000);
     child.stdout.on("data", (data) => {
       output += data;
       if (output.includes("READY") && !timer) {
         clearTimeout(startup);
-        timer = setTimeout(() => { timedOut = true; child.kill("SIGKILL"); }, 750);
+        timer = setTimeout(() => {
+          timedOut = true;
+          child.kill("SIGKILL");
+        }, 750);
       }
     });
-    child.stderr.on("data", (data) => { errors += data; });
-    child.on("error", (error) => { clearTimeout(timer); clearTimeout(startup); reject(error); });
+    child.stderr.on("data", (data) => {
+      errors += data;
+    });
+    child.on("error", (error) => {
+      clearTimeout(timer);
+      clearTimeout(startup);
+      reject(error);
+    });
     child.on("close", (code, signal) => {
-      clearTimeout(timer); clearTimeout(startup);
+      clearTimeout(timer);
+      clearTimeout(startup);
       resolveResult({ code, signal, timedOut, output, errors, elapsedMs: Date.now() - started });
     });
   });
@@ -318,7 +367,10 @@ async function fifoProbe(root, race) {
 for (const race of [false, true]) {
   test(`FIFO ${race ? "substituted after lstat" : "present at entry"} cannot hang the reader`, async (t) => {
     const { root, target } = await fixture(t);
-    if (!race) { await fs.unlink(target); execFileSync("mkfifo", [target]); }
+    if (!race) {
+      await fs.unlink(target);
+      execFileSync("mkfifo", [target]);
+    }
     const observed = await fifoProbe(root, race);
     assert.equal(observed.timedOut, false, JSON.stringify(observed));
     assert.equal(observed.code, 0, JSON.stringify(observed));

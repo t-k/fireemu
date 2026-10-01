@@ -90,8 +90,26 @@ pub(super) fn missing_display_name() -> JsonResponse {
     refusal(MISSING_DISPLAY_NAME)
 }
 
+/// Installs the multi-factor config of a tenant the official emulator made on the way
+/// (`getTenantProject`): enabled, for `PHONE_SMS`. It is the tenant's own config, read back as
+/// written like an `mfaConfig` a create wrote.
+pub(super) fn install_default_mfa(store: &mut AuthStore) {
+    let config = MfaProjectConfig {
+        state: fireemu_core_auth::mfa_config::MfaConfigState::Enabled,
+        phone_sms: true,
+        totp: None,
+    };
+    let mut members: StoredConfigMembers = store.stored_config_members().clone();
+    members.set(
+        "mfaConfig",
+        Some(super::project_mfa::mfa_config_json(&config).to_string()),
+    );
+    store.set_mfa_config(config);
+    store.set_stored_config_members(members);
+}
+
 /// The written members an update sets or clears, parsed and checked before anything changes.
-#[derive(Debug, Default)]
+#[derive(Debug, Clone, Default)]
 pub(super) struct WrittenMembers {
     /// `(member, Some(value))` writes, `(member, None)` clears.
     members: Vec<(&'static str, Option<Value>)>,
@@ -110,7 +128,7 @@ pub(super) struct WrittenMembers {
 
 /// A change to the `emailPrivacyConfig` the emulator profile answers: the update's paths,
 /// applied to its body as the official emulator's `updateTenant` applies a mask (`applyMask`).
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub(super) struct EmulatorPrivacyWrite {
     pub(super) paths: Vec<String>,
     pub(super) body: Value,

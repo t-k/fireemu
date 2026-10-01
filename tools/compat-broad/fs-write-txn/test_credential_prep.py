@@ -109,13 +109,15 @@ def test_authorized_user_digest_covers_exactly_four_canonical_fields():
 def oauth_server():
     import http.server
     import threading
-    import time
     from urllib.parse import urlsplit
 
     state = {"requests": [], "scenario": "success"}
+    stop = threading.Event()
+    handlers = []
 
     class Handler(http.server.BaseHTTPRequestHandler):
         def do_POST(self):
+            handlers.append(threading.current_thread())
             path = urlsplit(self.path).path
             state["requests"].append(("POST", path))
             if "before_response" in state:
@@ -141,6 +143,9 @@ def oauth_server():
                 self.send_header("Location", state["origin"] + "/unexpected")
             else:
                 self.send_response(200)
+            if state["scenario"] == "trickle":
+                # Keep both valid JSON bodies slower than the normal worker budget.
+                raw += b" " * 256
             if state["scenario"] == "oversize":
                 raw = b"x" * 16385
             elif state["scenario"] == "malformed-json":
@@ -152,7 +157,8 @@ def oauth_server():
                     for byte in raw:
                         self.wfile.write(bytes([byte]))
                         self.wfile.flush()
-                        time.sleep(0.1)
+                        if stop.wait(0.1):
+                            break
                 elif state["scenario"] == "truncated":
                     # Declares the full length but only ever writes half the
                     # body, then returns; the handler's default HTTP/1.0
@@ -166,7 +172,7 @@ def oauth_server():
                     # Declares the full length, writes nothing at all, and
                     # blocks well past any test-side socket timeout so the
                     # client's own read times out instead of hitting EOF.
-                    time.sleep(2.0)
+                    stop.wait(20.0)
                 else:
                     self.wfile.write(raw)
             except (BrokenPipeError, ConnectionResetError):
@@ -183,10 +189,14 @@ def oauth_server():
     try:
         yield state
     finally:
+        stop.set()
         server.shutdown()
         server.server_close()
         thread.join(timeout=2)
         assert not thread.is_alive()
+        for handler in handlers:
+            handler.join(timeout=2)
+            assert not handler.is_alive()
 
 
 SCOPE = PRINCIPAL["requiredScopes"][0]
@@ -216,14 +226,15 @@ def test_private_worker_is_bounded_and_never_retries(oauth_server, scenario):
     module = prep()
     assert hasattr(module, "_private_request")
     oauth_server["scenario"] = scenario
+    # This integration includes interpreter setup; the short body bound is separate.
     started = time.monotonic()
     result = module._private_request(
         "refresh",
         ADC,
         fixture_origin=oauth_server["origin"],
-        deadline=0.5 if scenario == "trickle" else 3,
+        deadline=module.REQUEST_SECONDS if scenario == "trickle" else 3,
     )
-    assert time.monotonic() - started < 4
+    assert time.monotonic() - started < (module.REQUEST_SECONDS + 2 if scenario == "trickle" else 4)
     assert oauth_server["requests"] == [("POST", "/token")]
     assert result["workerReaped"] is True
     if scenario == "success":
@@ -246,14 +257,15 @@ def test_private_worker_tokeninfo_slot_is_bounded_and_never_retries(
 
     module = prep()
     oauth_server["scenario"] = scenario
+    # This integration includes interpreter setup; the short body bound is separate.
     started = time.monotonic()
     result = module._private_request(
         "tokeninfo",
         "synthetic-access-secret",
         fixture_origin=oauth_server["origin"],
-        deadline=0.5 if scenario == "trickle" else 3,
+        deadline=module.REQUEST_SECONDS if scenario == "trickle" else 3,
     )
-    assert time.monotonic() - started < 4
+    assert time.monotonic() - started < (module.REQUEST_SECONDS + 2 if scenario == "trickle" else 4)
     assert oauth_server["requests"] == [("POST", "/oauth2/v1/tokeninfo")]
     assert result["workerReaped"] is True
     if scenario == "success":
@@ -359,30 +371,42 @@ def test_bounded_socket_timeout_stays_below_kill_deadline_with_a_floor():
     assert module._bounded_socket_timeout(0.1, 0.025) == 1.0
 
 
-def test_private_worker_tokeninfo_stall_times_out_before_kill(oauth_server):
-    """The socket-level timeout used to be a hardcoded REQUEST_SECONDS (12s)
-    regardless of the deadline handed to `_private_request`, and that
-    deadline can never exceed REQUEST_SECONDS -- so the coordinator's own
-    SIGKILL always won the race and the worker's graceful, labeled
-    read-timeout path was unreachable in production. This proves the fixed
-    per-call socket timeout now fires first."""
+def test_tokeninfo_body_stall_is_bounded_without_interpreter_setup(oauth_server):
+    """The real HTTP body budget reports its own diagnostic independently of child setup."""
     module = prep()
     oauth_server["scenario"] = "stall"
+    budget = module._bounded_socket_timeout(2, .25)
+    result = module._http_request(
+        "tokeninfo", "synthetic-access-secret", fixture_origin=oauth_server["origin"], timeout=budget,
+    )
+    observation = {"result": result, "requests": oauth_server["requests"]}
+    assert oauth_server["requests"] == [("POST", "/oauth2/v1/tokeninfo")], observation
+    assert result["complete"] is False and result["status"] == 200, observation
+    assert result["failure"] == "read-timeout" and result["phase"] == "body", observation
+    assert result["declaredLength"] > 0 and result["receivedBytes"] == 0, observation
+    assert result["socketTimeoutSeconds"] == pytest.approx(budget), observation
+    assert budget - module.PHASE_MARGIN_SECONDS - .1 <= result["elapsedSeconds"] < budget + .5, observation
+    assert "synthetic" not in json.dumps({key: value for key, value in result.items() if key != "body"})
+
+
+def test_real_worker_stall_records_its_actual_failure_and_reap(oauth_server, record_property):
+    module = prep()
+    oauth_server["scenario"] = "stall"
+    started = time.monotonic()
     result = module._private_request(
-        "tokeninfo",
-        "synthetic-access-secret",
-        fixture_origin=oauth_server["origin"],
-        deadline=2.0,
+        "tokeninfo", "synthetic-access-secret", fixture_origin=oauth_server["origin"],
+        deadline=module.REQUEST_SECONDS,
     )
-    assert result["workerReaped"] is True
-    assert result["complete"] is False
-    assert result["failure"] == "read-timeout"
-    expected = module._bounded_socket_timeout(2.0, min(0.25, 2.0 / 4))
-    assert result["socketTimeoutSeconds"] == pytest.approx(expected)
-    assert result["elapsedSeconds"] < 2.0
-    assert "synthetic" not in json.dumps(
-        {k: v for k, v in result.items() if k != "body"}
-    )
+    observation = {"result": result, "requests": oauth_server["requests"],
+                   "callerElapsedSeconds": time.monotonic() - started}
+    record_property("workerObservation", json.dumps(observation))
+    assert oauth_server["requests"] == [("POST", "/oauth2/v1/tokeninfo")], observation
+    assert result["complete"] is False and result["workerReaped"] is True, observation
+    assert result["failure"] in {"read-timeout", "deadline"}, observation
+    assert observation["callerElapsedSeconds"] < module.REQUEST_SECONDS + 2, observation
+    if result["failure"] == "read-timeout":
+        assert result["status"] == 200 and result["phase"] == "body", observation
+    assert "synthetic" not in json.dumps({key: value for key, value in result.items() if key != "body"})
 
 
 # --- Owner review a54c5abc8 regression coverage -----------------------------
@@ -400,11 +424,18 @@ def test_private_worker_tokeninfo_stall_times_out_before_kill(oauth_server):
 def _boundary_server(scenario: str):
     state = {"requests": 0, "sentBodyBytes": 0, "scenario": scenario}
     stop = threading.Event()
+    handlers = []
 
     class Handler(http.server.BaseHTTPRequestHandler):
         protocol_version = "HTTP/1.1"
 
         def do_POST(self):
+            try:
+                self.respond()
+            except (BrokenPipeError, ConnectionResetError):
+                pass
+
+        def respond(self):
             state["requests"] += 1
             self.rfile.read(int(self.headers.get("Content-Length", "0")))
             self.close_connection = True
@@ -448,7 +479,14 @@ def _boundary_server(scenario: str):
         def log_message(self, *_args):
             pass
 
-    httpd = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    class FixtureServer(http.server.ThreadingHTTPServer):
+        def process_request(self, request, client_address):
+            handler = threading.Thread(target=self.process_request_thread,
+                                       args=(request, client_address), daemon=True)
+            handlers.append(handler)
+            handler.start()
+
+    httpd = FixtureServer(("127.0.0.1", 0), Handler)
     httpd.daemon_threads = True
     thread = threading.Thread(
         target=httpd.serve_forever, kwargs={"poll_interval": 0.02}
@@ -462,9 +500,12 @@ def _boundary_server(scenario: str):
         httpd.server_close()
         thread.join(timeout=2)
         assert not thread.is_alive()
+        for handler in handlers:
+            handler.join(timeout=2)
+            assert not handler.is_alive()
 
 
-def _observe(module, scenario: str, *, private: bool, deadline: float = 2.0):
+def _observe(module, scenario: str, *, private: bool, deadline: float = 2.0, timeout: float = .3):
     with _boundary_server(scenario) as (origin, state):
         start = time.monotonic()
         if private:
@@ -479,7 +520,7 @@ def _observe(module, scenario: str, *, private: bool, deadline: float = 2.0):
                 "tokeninfo",
                 "synthetic-review-token",
                 fixture_origin=origin,
-                timeout=0.3,
+                timeout=timeout,
             )
         elapsed = time.monotonic() - start
     observation = {
@@ -495,31 +536,27 @@ def _observe(module, scenario: str, *, private: bool, deadline: float = 2.0):
 
 def test_immediate_body_stall_has_a_diagnostic():
     module = prep()
-    observation = _observe(module, "immediate_stall", private=True)
+    budget = module._bounded_socket_timeout(2, .25)
+    observation = _observe(module, "immediate_stall", private=False, timeout=budget)
     result = observation["result"]
     assert result["complete"] is False
-    assert result["workerReaped"] is True
-    assert result["failure"] == "read-timeout", observation
-    assert result["status"] == 200
+    assert result["failure"] == "read-timeout" and result["phase"] == "body", observation
+    assert result["status"] == 200 and result["declaredLength"] == 32, observation
+    assert budget - module.PHASE_MARGIN_SECONDS - .1 <= result["elapsedSeconds"] < budget + .5, observation
 
 
 @pytest.mark.parametrize("deadline", [2.0, 12.0])
 def test_header_delay_must_not_consume_the_body_diagnostic_margin(deadline):
-    """Regression for owner review a54c5abc8 item 1: a fixed per-op socket
-    timeout let a 0.9s header delay plus a fresh full-length body timeout
-    exceed the coordinator's own kill deadline, so the worker was reaped
-    before it could return its own labeled diagnostic. With an absolute
-    per-call deadline, time spent waiting on headers comes out of the same
-    budget as the body read, so the worker always reports before the kill."""
+    """Earlier header time consumes the same HTTP deadline as body reads (owner review a54c5abc8 item1)."""
     module = prep()
-    observation = _observe(
-        module, "delayed_headers_stall", private=True, deadline=deadline
-    )
+    budget = module._bounded_socket_timeout(deadline, min(.25, deadline / 4))
+    observation = _observe(module, "delayed_headers_stall", private=False, timeout=budget)
     result = observation["result"]
     assert result["complete"] is False
-    assert result["workerReaped"] is True
-    assert result["failure"] == "read-timeout", observation
-    assert result["status"] == 200, observation
+    assert result["failure"] == "read-timeout" and result["phase"] == "body", observation
+    assert result["status"] == 200 and result["declaredLength"] == 32, observation
+    assert result["socketTimeoutSeconds"] == pytest.approx(budget), observation
+    assert budget - module.PHASE_MARGIN_SECONDS - .1 <= result["elapsedSeconds"] < budget + .5, observation
 
 
 def test_partial_body_timeout_retains_received_byte_count():
@@ -813,3 +850,266 @@ def test_private_worker_uses_isolated_stdlib_interpreter(oauth_server, monkeypat
     assert set(calls[0][1]) == {"PATH", "LANG"}
     assert result["complete"] is True and result["workerReaped"] is True
     assert oauth_server["requests"] == [("POST", "/token")]
+
+
+def test_trickle_worker_reaches_post_after_separate_interpreter_setup(oauth_server, monkeypatch):
+    import subprocess
+
+    processes = []
+    launch = subprocess.Popen
+
+    def delayed_launch(*args, **kwargs):
+        process = launch(*args, **kwargs)
+        processes.append(process)
+        time.sleep(1)
+        return process
+
+    monkeypatch.setattr(subprocess, "Popen", delayed_launch)
+    oauth_server["scenario"] = "trickle"
+    try:
+        started = time.monotonic()
+        result = prep()._private_request(
+            "tokeninfo", "synthetic-access-secret",
+            fixture_origin=oauth_server["origin"],
+        )
+        assert time.monotonic() - started < prep().REQUEST_SECONDS + 2
+        assert oauth_server["requests"] == [("POST", "/oauth2/v1/tokeninfo")]
+        assert result["complete"] is False and result["workerReaped"] is True
+    finally:
+        for process in processes:
+            if process.poll() is None:
+                process.kill()
+            process.wait(timeout=2)
+            for stream in (process.stdin, process.stdout):
+                if stream is not None and not stream.closed:
+                    stream.close()
+
+
+@pytest.mark.parametrize("slot", ["refresh", "tokeninfo"])
+def test_trickle_body_deadline_reaches_response_without_interpreter_setup(oauth_server, slot):
+    oauth_server["scenario"] = "trickle"
+    result = prep()._http_request(
+        slot, ADC if slot == "refresh" else "synthetic-access-secret",
+        oauth_server["origin"], timeout=.5,
+    )
+    path = "/token" if slot == "refresh" else "/oauth2/v1/tokeninfo"
+    assert oauth_server["requests"] == [("POST", path)]
+    assert result["complete"] is False
+    assert result["status"] == 200 and result["phase"] == "body"
+    assert result["failure"] == "read-timeout"
+    assert 0 < result["receivedBytes"] < result["declaredLength"]
+    assert result["socketTimeoutSeconds"] == .5
+    assert result["elapsedSeconds"] < 1.5
+    assert "synthetic" not in json.dumps(result)
+
+
+def _patch_test_thread_clock(monkeypatch, clock):
+    owner = threading.current_thread()
+    started_threads = []
+    original_start = threading.Thread.start
+    real_monotonic = time.monotonic
+
+    def start(thread, *args, **kwargs):
+        if threading.current_thread() is owner:
+            started_threads.append(thread)
+        return original_start(thread, *args, **kwargs)
+
+    def monotonic():
+        return clock.now if threading.current_thread() is owner else real_monotonic()
+
+    monkeypatch.setattr(time, "monotonic", monotonic)
+    monkeypatch.setattr(threading.Thread, "start", start)
+    return started_threads
+
+
+def _assert_no_started_threads(started_threads):
+    lingering = [thread for thread in started_threads if thread.is_alive()]
+    assert not lingering, [(thread.name, thread.ident) for thread in lingering]
+
+
+@pytest.mark.parametrize("reaped", [True, False])
+@pytest.mark.parametrize("launch_seconds", [0, .6])
+def test_short_parent_deadline_kills_once_and_preserves_unconfirmed_reap(
+    monkeypatch, reaped, launch_seconds
+):
+    import subprocess
+    from types import SimpleNamespace
+
+    clock = SimpleNamespace(now=0.0)
+    initial_threads = _patch_test_thread_clock(monkeypatch, clock)
+    owner = threading.current_thread()
+    original_launch = subprocess.Popen
+
+    class Worker:
+        pid = 123456
+        returncode = None
+
+        def __init__(self):
+            self.calls = []
+            self.kills = 0
+
+        def communicate(self, raw=None, *, timeout):
+            self.calls.append((raw, timeout))
+            clock.now += timeout
+            if len(self.calls) == 1 or not reaped:
+                raise subprocess.TimeoutExpired("synthetic-worker", timeout)
+            self.returncode = -9
+            return b"", b""
+
+        def kill(self):
+            self.kills += 1
+
+        def poll(self):
+            return self.returncode
+
+    worker = Worker()
+    launches = []
+
+    def launch(*args, **kwargs):
+        if threading.current_thread() is not owner:
+            return original_launch(*args, **kwargs)
+        launches.append((args, kwargs))
+        clock.now += launch_seconds
+        return worker
+
+    monkeypatch.setattr(subprocess, "Popen", launch)
+    result = prep()._private_request(
+        "tokeninfo", "synthetic-access-secret", deadline=.5,
+        fixture_origin="http://127.0.0.1:65535",
+    )
+    assert len(launches) == 1 and len(worker.calls) == 2
+    assert worker.calls[0][1] == pytest.approx(.375 if launch_seconds == 0 else 0)
+    assert worker.calls[1][1] == pytest.approx(.125 if launch_seconds == 0 else 0)
+    assert worker.calls[0][0] is not None and worker.calls[1][0] is None
+    assert result["complete"] is False and result["failure"] == "deadline"
+    assert result["workerReaped"] is reaped
+    assert worker.kills == (1 if reaped else 2)
+    assert ("workerPid" in result) is not reaped
+    if not reaped:
+        assert result["workerPid"] == worker.pid
+    _assert_no_started_threads(initial_threads)
+
+
+@pytest.mark.parametrize("deadline,socket_budget,parent_budget", [(2, 1.25, 1.75), (12, 11.25, 11.75)])
+@pytest.mark.parametrize("complete", [True, False])
+def test_parent_accepts_serialized_worker_receipt_with_its_bounded_payload(
+    monkeypatch, deadline, socket_budget, parent_budget, complete
+):
+    import subprocess
+    from types import SimpleNamespace
+
+    clock = SimpleNamespace(now=0.0)
+    initial_threads = _patch_test_thread_clock(monkeypatch, clock)
+    owner = threading.current_thread()
+    original_launch = subprocess.Popen
+    receipt = {"complete": complete, "status": 200, "receivedBytes": 2 if complete else 0,
+               "declaredLength": 2, "phase": "body", "socketTimeoutSeconds": socket_budget,
+               "elapsedSeconds": socket_budget}
+    if complete:
+        receipt["body"] = {}
+    else:
+        receipt["failure"] = "read-timeout"
+    calls = []
+
+    class Worker:
+        returncode = None
+
+        def communicate(self, raw, *, timeout):
+            payload = json.loads(raw)
+            calls.append((payload, timeout))
+            assert payload == {"slot": "tokeninfo", "secret": "synthetic-access-secret",
+                               "socketTimeoutSeconds": socket_budget,
+                               "fixtureOrigin": "http://127.0.0.1:65535"}
+            assert timeout == pytest.approx(parent_budget - .1)
+            assert socket_budget < timeout
+            clock.now += socket_budget
+            self.returncode = 0
+            return json.dumps(receipt).encode(), b""
+
+        def poll(self):
+            return self.returncode
+
+        def kill(self):
+            pytest.fail("a serialized receipt within the parent budget must not be killed")
+
+    launches = []
+
+    def launch(*args, **kwargs):
+        if threading.current_thread() is not owner:
+            return original_launch(*args, **kwargs)
+        launches.append((args, kwargs))
+        clock.now += .1
+        return Worker()
+
+    monkeypatch.setattr(subprocess, "Popen", launch)
+    result = prep()._private_request(
+        "tokeninfo", "synthetic-access-secret", deadline=deadline,
+        fixture_origin="http://127.0.0.1:65535",
+    )
+    assert len(launches) == len(calls) == 1
+    assert result == {**receipt, "workerReaped": True}
+    assert "synthetic-access-secret" not in json.dumps(result)
+    _assert_no_started_threads(initial_threads)
+
+
+@pytest.mark.parametrize("scenario", ["tokeninfo-stall", "immediate-body", "delayed-headers"])
+def test_body_diagnostic_does_not_depend_on_interpreter_setup(request, monkeypatch, scenario):
+    """Exact HTTP diagnostics use the prepared direct path and launch no interpreter."""
+    import subprocess
+
+    launch = subprocess.Popen
+    launches = []
+
+    def delayed_launch(*args, **kwargs):
+        launches.append((args, kwargs))
+        # Delay launch after the parent deadline starts, before child stdin and the actual HTTP phase.
+        time.sleep(.8)
+        return launch(*args, **kwargs)
+
+    monkeypatch.setattr(subprocess, "Popen", delayed_launch)
+    if scenario == "tokeninfo-stall":
+        test_tokeninfo_body_stall_is_bounded_without_interpreter_setup(
+            request.getfixturevalue("oauth_server")
+        )
+    elif scenario == "immediate-body":
+        test_immediate_body_stall_has_a_diagnostic()
+    else:
+        test_header_delay_must_not_consume_the_body_diagnostic_margin(2.0)
+    assert launches == []
+
+
+@pytest.mark.parametrize("kind", ["deadline", "serialized"])
+def test_fake_parent_clock_preserves_a_foreign_threads_real_clock(monkeypatch, kind):
+    import subprocess
+
+    release = threading.Event()
+    entered = threading.Event()
+    observations = []
+    real_started = time.monotonic()
+
+    def foreign():
+        entered.set()
+        release.wait(5)
+        try:
+            observed_clock = time.monotonic()
+            code = subprocess.run(["ps", "-A", "-o", "pid="], capture_output=True, text=True, check=True).returncode
+            observations.append({"clock": observed_clock, "returncode": code})
+        except BaseException as error:
+            observations.append(error)
+
+    thread = threading.Thread(target=foreign, name="foreign-clock-control", daemon=True)
+    thread.start()
+    assert entered.wait(2)
+    try:
+        if kind == "deadline":
+            test_short_parent_deadline_kills_once_and_preserves_unconfirmed_reap(monkeypatch, True, .6)
+        else:
+            test_parent_accepts_serialized_worker_receipt_with_its_bounded_payload(
+                monkeypatch, 12, 11.25, 11.75, False,
+            )
+    finally:
+        release.set()
+        thread.join(timeout=2)
+    assert not thread.is_alive()
+    assert len(observations) == 1 and isinstance(observations[0], dict), observations
+    assert observations[0]["clock"] >= real_started and observations[0]["returncode"] == 0, observations

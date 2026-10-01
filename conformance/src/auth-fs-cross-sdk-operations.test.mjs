@@ -212,7 +212,9 @@ test("a sign-in whose token change never comes answers after the wait, saying so
     signInWithEmailAndPassword: async () => ({ user: { uid: "u1" } }),
   });
   await sdk.run({ id: "a", op: "signIn", email: "e@example.com", password: "p" });
-  assert.deepEqual(sdk.events, [{ event: "result", id: "a", ok: true, uid: "u1", authReported: false }]);
+  assert.deepEqual(sdk.events, [
+    { event: "result", id: "a", ok: true, uid: "u1", authReported: false },
+  ]);
 });
 
 test("listeners report snapshots and errors by name, and a query carries its filters", async () => {
@@ -241,7 +243,9 @@ test("listeners report snapshots and errors by name, and a query carries its fil
     ],
   });
   sdk.state.snapshotError({ code: "permission-denied", message: "no" });
-  assert.deepEqual(sdk.events.slice(0, 1), [{ event: "result", id: "a", ok: true, first: "timeout" }]);
+  assert.deepEqual(sdk.events.slice(0, 1), [
+    { event: "result", id: "a", ok: true, first: "timeout" },
+  ]);
   assert.deepEqual(sdk.events.slice(1), [
     {
       event: "snapshot",

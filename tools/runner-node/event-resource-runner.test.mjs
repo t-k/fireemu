@@ -168,7 +168,43 @@ for (const form of ['endpoint', 'legacy']) {
     const data = { oldValue: { fields: { x: { integerValue: '1' } } }, value: { fields: { x: { integerValue: '2' } } } };
     const event = { id: 'evt', type: 'google.cloud.firestore.document.v1.updated', time: '2026-01-01T00:00:00Z', source, params: { id: '日本語' }, data };
     assert.equal((await f.invoke('onDocument', 'firestore', event)).ok, true);
-    assert.deepEqual(await f.calls(), [{ name: 'onDocument', data, context: { eventId: 'evt', timestamp: event.time, eventType: 'providers/cloud.firestore/eventTypes/document.update', resource: source, params: event.params } }]);
+    assert.deepEqual(await f.calls(), [{ name: 'onDocument', data, context: { eventId: 'evt-0', timestamp: event.time, eventType: 'providers/cloud.firestore/eventTypes/document.update', resource: source, params: event.params } }]);
+  });
+
+  test(`v1 ${form}: a Firestore legacy event id is the event id plus the trigger index suffix`, { timeout: 10000 }, async t => {
+    // Production (observed 2026-09-30): a Gen1 Firestore handler's context.eventId is `<uuid>-0`.
+    const kinds = { created: 'create', updated: 'update', deleted: 'delete', written: 'write' };
+    const f = await start(t, Object.values(kinds).map(kind => fsEntry(`on_${kind}`, 'projects/demo/databases/(default)/documents/orders/{id}', form, kind)));
+    for (const [type, kind] of Object.entries(kinds)) {
+      const event = { id: 'dc880941-8bb2-410f-9b10-51c47560a33a', type: `google.cloud.firestore.document.v1.${type}`, time: '2026-09-30T12:03:18.846431Z', source: 'projects/demo/databases/(default)/documents/orders/1', params: { id: '1' }, data: {} };
+      assert.equal((await f.invoke(`on_${kind}`, 'firestore', event)).ok, true);
+    }
+    const calls = await f.calls();
+    assert.deepEqual(calls.map(call => call.context.eventId), Object.values(kinds).map(() => 'dc880941-8bb2-410f-9b10-51c47560a33a-0'));
+    assert.deepEqual(calls.map(call => call.context.timestamp), Object.values(kinds).map(() => '2026-09-30T12:03:18.846431Z'));
+  });
+
+  test(`v1 ${form}: the other legacy products keep the event id as it is`, { timeout: 10000 }, async t => {
+    // Only Firestore was recorded with the `-0` suffix; nothing else changes.
+    const id = 'dc880941-8bb2-410f-9b10-51c47560a33a';
+    const time = '2026-09-30T12:03:18.846431Z';
+    const f = await start(t, [
+      stEntry('onFinalize', 'projects/_/buckets/assets.example', form),
+      entry('onPublish', 'google.pubsub.topic.publish', 'projects/demo/topics/t', form),
+      entry('onUserCreate', 'providers/firebase.auth/eventTypes/user.create', 'projects/demo', form),
+    ]);
+    const events = [
+      ['onFinalize', 'storage', { id, type: 'google.cloud.storage.object.v1.finalized', time, source: '//storage.googleapis.com/projects/_/buckets/assets.example', data: { bucket: 'assets.example', name: 'a.txt' } }],
+      ['onPublish', 'pubsub', { id, type: 'google.cloud.pubsub.topic.v1.messagePublished', time, source: '//pubsub.googleapis.com/projects/demo/topics/t', data: { message: { data: '', attributes: {}, messageId: 'm1' } } }],
+      ['onUserCreate', 'auth', { id, type: 'google.firebase.auth.user.v1.created', time, source: '//firebaseauth.googleapis.com/projects/demo', data: { uid: 'u1' } }],
+    ];
+    for (const [name, trigger, event] of events) {
+      assert.equal((await f.invoke(name, trigger, event)).ok, true, name);
+    }
+    const calls = await f.calls();
+    assert.deepEqual(calls.map(call => call.name), events.map(([name]) => name));
+    assert.deepEqual(calls.map(call => call.context.eventId), events.map(() => id));
+    assert.deepEqual(calls.map(call => call.context.timestamp), events.map(() => time));
   });
 
   test(`v1 ${form}: Storage bucket selection does not consume the project named buckets`, { timeout: 10000 }, async t => {

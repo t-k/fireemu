@@ -15,12 +15,12 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parents[1]))
 
 import txn_expiry_cases as cases
-from batch_contract import NUMBER, PROJECT
 from broad_contract import digest
 
 ROOT = Path(__file__).resolve().parents[3]
 HERE = Path(__file__).resolve().parent
 
+PROJECT = "fireemu-oracle-sbx"
 CONTRACT = "txn-expiry-retry-plan-v1"
 DATABASE = "(default)"
 
@@ -74,6 +74,7 @@ NETWORK_RESERVE_MIB = 32
 NETWORK_RATE_MICROUSD_PER_GIB = 230_000
 
 SOURCE_FILES = (
+    "txn_sandbox_runtime.py",
     "txn_expiry_cases.py",
     "txn_expiry_plan.py",
     "txn_expiry_collector.py",
@@ -189,7 +190,6 @@ def _operations():
         ("a", "locked-a"),
         ("b", "locked-b"),
         ("c", "locked-c"),
-        ("d", "locked-d"),
     )
     for tag, role in holders:
         steps.append(
@@ -213,6 +213,15 @@ def _operations():
             role="locked-c",
             timeout=CONTENDED_REQUEST_TIMEOUT_SECONDS,
             detail="out-of-band commit while transaction c still holds the lock",
+        )
+    )
+    steps.append(
+        _op("idle/begin/d", "idle-expiry", "BeginTransaction", opens="d")
+    )
+    steps.append(
+        _op(
+            "idle/read/d", "idle-expiry", "GetDocument", role="locked-d",
+            detail="transactional read after contention so the short-idle control stays fresh",
         )
     )
     steps.append(
@@ -429,7 +438,6 @@ def compile_plan(nonce, owner_id, *, project=PROJECT, database=DATABASE):
         "campaign": cases.CAMPAIGN,
         "casesDigest": cases.cases_digest(),
         "projectId": project,
-        "projectNumber": NUMBER,
         "database": database,
         "nonce": nonce,
         "ownerId": owner_id,
@@ -530,6 +538,7 @@ def manifest(nonce, owner_id):
 
 
 OWNER_FIELDS_REQUIRED = (
+    "projectNumber",
     "issuedAt",
     "expiresAt",
     "ownerIdentity",
@@ -553,7 +562,6 @@ def required_permission(plan, manifest_digest=None):
         "nonce": plan["nonce"],
         "ownerId": plan["ownerId"],
         "project": plan["projectId"],
-        "projectNumber": plan["projectNumber"],
         "database": plan["database"],
         "casesDigest": plan["casesDigest"],
         "collectorSourceDigest": source_digest(),

@@ -5243,8 +5243,95 @@ mod tests {
         assert!(!restored.config().allow_duplicate_emails);
     }
 
+    /// The project's multi-factor configuration is not account data: an export carries the
+    /// accounts and their factors, and an import leaves the importing project's configuration and
+    /// its declared initial one alone (`auth.mfa`).
+    #[test]
+    fn importing_accounts_leaves_the_multi_factor_config_and_its_seed_alone() {
+        use fireemu_core_auth::mfa_config::{MfaConfigState, MfaProjectConfig, TotpProviderConfig};
+        use fireemu_core_auth::{mfa::TotpPolicy, store::AuthStore};
+        use fireemu_core_export::auth::UserRecord;
+        use fireemu_core_types::determinism::SplitMix64;
+        let path = std::path::Path::new("offline.json");
+        let totp_on = MfaProjectConfig {
+            state: MfaConfigState::Enabled,
+            phone_sms: false,
+            totp: Some(TotpProviderConfig {
+                state: MfaConfigState::Enabled,
+                adjacent_intervals: Some(1),
+            }),
+        };
+        let mut source = AuthStore::new("demo-app", SplitMix64::new(1), TotpPolicy::default());
+        source.set_mfa_seed(totp_on.clone());
+        let record = UserRecord {
+            local_id: "u".to_owned(),
+            email: Some("mfa@example.com".to_owned()),
+            created_at: Some("100000".to_owned()),
+            ..UserRecord::default()
+        };
+        source
+            .import_user(super::imported_user(&record, path).unwrap())
+            .unwrap();
+        let exported = super::exported_account(&source, source.user_by_id("u").unwrap(), None);
+        for declared in [Some(totp_on.clone()), None] {
+            let mut target = AuthStore::new("demo-app", SplitMix64::new(2), TotpPolicy::default());
+            if let Some(seed) = &declared {
+                target.set_mfa_seed(seed.clone());
+            }
+            let before = target.mfa_config().clone();
+            target
+                .import_user_trusted(super::imported_user(&exported, path).unwrap())
+                .unwrap();
+            assert!(target.user_by_id("u").is_some());
+            assert_eq!(*target.mfa_config(), before);
+            assert_eq!(target.mfa_seed(), declared.as_ref());
+        }
+    }
+
     /// A foreign hash imported through `accounts:batchCreate` survives an export and restore
     /// instead of being dropped (external review 2026-09-24).
+    #[test]
+    fn auth_authorized_domains_account_export_import_transfers_neither_live_list_nor_seed() {
+        use fireemu_core_auth::store::AuthStore;
+        use fireemu_core_export::auth::UserRecord;
+        let path = std::path::Path::new("offline.json");
+        let mut source = AuthStore::new(
+            "demo-app",
+            fireemu_core_types::determinism::SplitMix64::new(1),
+            fireemu_core_auth::mfa::TotpPolicy::default(),
+        );
+        source
+            .set_authorized_domains_seed(vec!["source.test".to_owned()])
+            .unwrap();
+        let record = UserRecord {
+            local_id: "u".to_owned(),
+            email: Some("seed@example.com".to_owned()),
+            created_at: Some("100000".to_owned()),
+            ..UserRecord::default()
+        };
+        source
+            .import_user(super::imported_user(&record, path).unwrap())
+            .unwrap();
+        let exported = super::exported_account(&source, source.user_by_id("u").unwrap(), None);
+        for declared in [Some(vec!["target.test".to_owned()]), None] {
+            let mut target = AuthStore::new(
+                "demo-app",
+                fireemu_core_types::determinism::SplitMix64::new(2),
+                fireemu_core_auth::mfa::TotpPolicy::default(),
+            );
+            if let Some(seed) = &declared {
+                target.set_authorized_domains_seed(seed.clone()).unwrap();
+            }
+            let before = target.authorized_domains();
+            target
+                .import_user_trusted(super::imported_user(&exported, path).unwrap())
+                .unwrap();
+            assert!(target.user_by_id("u").is_some());
+            assert_eq!(target.authorized_domains(), before);
+            assert_eq!(target.authorized_domains_seed(), declared.as_ref());
+        }
+    }
+
     #[test]
     fn an_imported_foreign_hash_round_trips_through_export() {
         use fireemu_core_auth::{
@@ -5844,5 +5931,50 @@ mod tests {
         let text = r#"{"version":1,"databases":[{"project":"demo-app","database":"(default)","ttlFields":[{"collectionGroup":"sessions","field":"a"},{"collectionGroup":"sessions","field":"b"}]}]}"#;
         let error = parse_field_config(text).expect_err("refusal");
         assert!(error.contains("at most one TTL field"), "{error}");
+    }
+}
+
+#[cfg(test)]
+mod provider_seed_account_boundary_tests {
+    use fireemu_core_auth::{mfa::TotpPolicy, store::AuthStore};
+    use fireemu_core_export::auth::UserRecord;
+    use fireemu_core_types::determinism::SplitMix64;
+    use serde_json::json;
+    #[test]
+    fn auth_provider_seeds_account_roundtrip_transfers_neither_resources_nor_declarations() {
+        let path = std::path::Path::new("offline.json");
+        let mut source = AuthStore::new("demo-app", SplitMix64::new(1), TotpPolicy::default());
+        let seed=fireemu_adapter_http::identity_toolkit::provider_config_seeds(&json!({"oidc":[{"name":"oidc.source","clientId":"client","issuer":"https://issuer.test","clientSecret":"private-control-plane-secret"}]}),true).unwrap();
+        source.set_provider_config_seeds(seed).unwrap();
+        let record = UserRecord {
+            local_id: "u".into(),
+            email: Some("import@example.test".into()),
+            created_at: Some("100000".into()),
+            ..UserRecord::default()
+        };
+        source
+            .import_user(super::imported_user(&record, path).unwrap())
+            .unwrap();
+        let exported = super::exported_account(&source, source.user_by_id("u").unwrap(), None);
+        for value in [
+            json!({}),
+            json!({"oidc":[{"name":"oidc.destination","clientId":"destination","issuer":"https://destination.test"}]}),
+        ] {
+            let declaration =
+                fireemu_adapter_http::identity_toolkit::provider_config_seeds(&value, true)
+                    .unwrap();
+            let mut target = AuthStore::new("demo-app", SplitMix64::new(2), TotpPolicy::default());
+            target
+                .set_provider_config_seeds(declaration.clone())
+                .unwrap();
+            target
+                .import_user_trusted(super::imported_user(&exported, path).unwrap())
+                .unwrap();
+            assert!(target.user_by_id("u").is_some());
+            assert_eq!(target.provider_config_seeds(), &declaration);
+            assert!(target.oidc_config("oidc.source").is_none());
+            target.restore_provider_config_seeds();
+            assert!(target.oidc_config("oidc.source").is_none());
+        }
     }
 }

@@ -16,11 +16,15 @@ export function compileFrozenG0Plan(repo = ROOT, nonce) {
   ].join("; ");
   let output;
   try {
-    output = execFileSync("uv", ["run", "python", "-c", script, `${repo}/tools/compat-broad`, nonce], {
-      cwd: repo,
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "pipe"],
-    });
+    output = execFileSync(
+      "uv",
+      ["run", "python", "-c", script, `${repo}/tools/compat-broad`, nonce],
+      {
+        cwd: repo,
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "pipe"],
+      },
+    );
   } catch {
     throw new Error("g0-frozen-plan-unavailable");
   }

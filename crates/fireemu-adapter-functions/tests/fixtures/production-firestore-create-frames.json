@@ -1,0 +1,90 @@
+{
+  "_comment": "Frames a production 1st and 2nd gen Firestore onCreate handler printed for one document create, recorded 2026-09-30 through Cloud Logging (stdout of the handler; each was delivered exactly once, about 2 s after the commit). The project id is replaced. The event ids are the recorded production UUIDs. `frame.event` is what the canary handler printed: for 1st gen the callback context plus the snapshot, for 2nd gen the CloudEvent as the SDK hands it over.",
+  "commitTimeNanos": 1790769798846431000,
+  "gen1": {
+    "context": {
+      "authId": null,
+      "authType": null,
+      "eventId": "4e141130-b7ae-47a0-9009-d11bc411baf5-0",
+      "eventType": "google.firestore.document.create",
+      "params": {
+        "documentId": "fe011probe0001"
+      },
+      "resource": {
+        "name": "projects/demo-project/databases/(default)/documents/fe_events_primary/fe011probe0001",
+        "service": "firestore.googleapis.com"
+      },
+      "timestamp": "2026-09-30T12:03:18.846431Z"
+    },
+    "data": {
+      "createTime": {
+        "_nanoseconds": 846431000,
+        "_seconds": 1790769798
+      },
+      "data": {
+        "at": {
+          "_nanoseconds": 0,
+          "_seconds": 1790726400
+        },
+        "count": 1,
+        "flag": true,
+        "items": [
+          "a"
+        ],
+        "nested": {
+          "nothing": null
+        },
+        "probe": "fe-011-delivery-probe"
+      },
+      "exists": true,
+      "id": "fe011probe0001",
+      "path": "fe_events_primary/fe011probe0001",
+      "updateTime": {
+        "_nanoseconds": 846431000,
+        "_seconds": 1790769798
+      }
+    }
+  },
+  "gen2": {
+    "authId": null,
+    "authType": null,
+    "data": {
+      "createTime": {
+        "_nanoseconds": 846431000,
+        "_seconds": 1790769798
+      },
+      "data": {
+        "at": {
+          "_nanoseconds": 0,
+          "_seconds": 1790726400
+        },
+        "count": 1,
+        "flag": true,
+        "items": [
+          "a"
+        ],
+        "nested": {
+          "nothing": null
+        },
+        "probe": "fe-011-delivery-probe"
+      },
+      "exists": true,
+      "id": "fe011probe0001",
+      "path": "fe_events_primary/fe011probe0001",
+      "updateTime": {
+        "_nanoseconds": 846431000,
+        "_seconds": 1790769798
+      }
+    },
+    "datacontenttype": null,
+    "id": "dc880941-8bb2-410f-9b10-51c47560a33a",
+    "params": {
+      "documentId": "fe011probe0001"
+    },
+    "source": "//firestore.googleapis.com/projects/demo-project/databases/(default)",
+    "specversion": "1.0",
+    "subject": "documents/fe_events_primary/fe011probe0001",
+    "time": "2026-09-30T12:03:18.846431Z",
+    "type": "google.cloud.firestore.document.v1.created"
+  }
+}

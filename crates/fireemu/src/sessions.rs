@@ -27,6 +27,9 @@ pub struct Projects {
     pub registry: Arc<AuthRegistry>,
     /// Session seed (each project's generator derives from it and the project name).
     pub seed: u64,
+    /// The default project's declared multi-tenancy switch and tenants (`auth.multiTenant`,
+    /// `auth.tenants[]`), which a default-scope reset applies again to the wiped project.
+    pub tenant_seeding: fireemu_adapter_http::identity_toolkit::TenantSeeding,
     /// The App Check registry, when App Check is enabled. Creating, resetting and deleting a
     /// project replaces its session epoch, so every token issued before the transition fails
     /// with `WrongEpoch` at its next verification (`AC-LIFE-001`, specification section 14).
@@ -115,6 +118,13 @@ impl ProjectHooks for Projects {
             seed = (seed ^ u64::from(b)).wrapping_mul(0x0100_0000_01b3);
         }
         let mut store = AuthStore::new(project, SplitMix64::new(seed), TotpPolicy::default());
+        // The declared initial multi-factor configuration, not the default project's live one.
+        if let Some(mfa) = self.registry.new_project_mfa_seed() {
+            store.set_mfa_seed(mfa);
+        }
+        store
+            .set_provider_config_seeds(self.registry.new_project_provider_config_seeds())
+            .map_err(|error| format!("auth.providers: {error}"))?;
         if let Ok(default) = self.registry.default_store().lock() {
             store.set_config(default.config());
             store
@@ -127,9 +137,17 @@ impl ProjectHooks for Projects {
                 store.set_signer(signer);
             }
         }
+        if let Some(seed) = self.registry.new_project_authorized_domains_seed() {
+            store
+                .set_authorized_domains_seed(seed)
+                .map_err(|error| format!("cannot seed authorized domains: {error:?}"))?;
+        }
         if !self.registry.register_session(project, store) {
             return Err(format!("project {project:?} already has an Auth store"));
         }
+        // The declared switch and tenants are not seeded here: the control plane resets the new
+        // session straight after creating it, which seeds them once the session is committed (a
+        // seed made here would be wiped and redone, and would outlive a failed creation).
         Ok(())
     }
 
@@ -200,6 +218,21 @@ impl ProjectHooks for Projects {
                     "the provisional Auth store changed during session creation",
                 ));
             }
+        }
+        // The declared tenants and switch return to the wiped project. This is the last step, so
+        // a failure to seed leaves a session whose epochs and stores are consistent.
+        let seeded = match scope {
+            Scope::AllExcept(_) => Some(self.registry.default_project().to_owned()),
+            Scope::Project(project) => self
+                .registry
+                .store_for(project)
+                .is_some()
+                .then(|| project.clone()),
+        };
+        if let Some(project) = seeded {
+            self.tenant_seeding
+                .apply(&self.registry, &project)
+                .map_err(|reason| TransitionFailure::new("auth", reason))?;
         }
         Ok(())
     }
@@ -400,6 +433,7 @@ pub(crate) mod tests {
                 ),
             ),
             seed: 1,
+            tenant_seeding: fireemu_adapter_http::identity_toolkit::TenantSeeding::default(),
             app_check: Some(gate.clone()),
             pubsub,
             pubsub_handle,
@@ -469,6 +503,67 @@ pub(crate) mod tests {
             .unwrap();
         drop(pubsub);
         (topic, snapshot)
+    }
+
+    #[test]
+    fn auth_authorized_domains_session_reset_and_creation_use_only_declared_seed() {
+        let gate = gate();
+        let hooks = projects(&gate);
+        let default = hooks.registry.default_store();
+        let patch = |store: &mut AuthStore| {
+            let mut config = store.sign_in_config().clone();
+            config.authorized_domains = Some(vec!["live.test".to_owned()]);
+            config.email_enabled = false;
+            store.set_sign_in_config(config).unwrap();
+        };
+        patch(&mut default.lock().unwrap());
+        hooks
+            .reset_scope(&Scope::AllExcept(BTreeSet::new()))
+            .unwrap();
+        assert_eq!(
+            default.lock().unwrap().authorized_domains(),
+            vec!["live.test"]
+        );
+        hooks.create(SECOND_PROJECT).unwrap();
+        assert_eq!(
+            hooks
+                .registry
+                .store_for(SECOND_PROJECT)
+                .unwrap()
+                .lock()
+                .unwrap()
+                .authorized_domains(),
+            vec![
+                "localhost",
+                "demo-second.firebaseapp.com",
+                "demo-second.web.app"
+            ]
+        );
+        hooks.remove(SECOND_PROJECT).unwrap();
+        let seed = vec!["seed.test".to_owned()];
+        default
+            .lock()
+            .unwrap()
+            .set_authorized_domains_seed(seed.clone())
+            .unwrap();
+        hooks
+            .registry
+            .set_new_project_authorized_domains_seed(Some(seed.clone()));
+        patch(&mut default.lock().unwrap());
+        hooks
+            .reset_scope(&Scope::AllExcept(BTreeSet::new()))
+            .unwrap();
+        assert_eq!(default.lock().unwrap().authorized_domains(), seed);
+        assert!(!default.lock().unwrap().sign_in_config().email_enabled);
+        hooks.create(SECOND_PROJECT).unwrap();
+        let created = hooks.registry.store_for(SECOND_PROJECT).unwrap();
+        assert_eq!(created.lock().unwrap().authorized_domains(), seed);
+        patch(&mut created.lock().unwrap());
+        hooks
+            .reset_scope(&Scope::Project(SECOND_PROJECT.to_owned()))
+            .unwrap();
+        assert_eq!(created.lock().unwrap().authorized_domains(), seed);
+        assert!(!created.lock().unwrap().sign_in_config().email_enabled);
     }
 
     #[test]
@@ -702,6 +797,210 @@ pub(crate) mod tests {
         let after = token(&gate);
         assert!(admits(&gate, &after), "a token of the new epoch verifies");
         assert_ne!(before, after);
+    }
+
+    fn totp_seed() -> fireemu_core_auth::mfa_config::MfaProjectConfig {
+        use fireemu_core_auth::mfa_config::{MfaConfigState, MfaProjectConfig, TotpProviderConfig};
+        MfaProjectConfig {
+            state: MfaConfigState::Enabled,
+            phone_sms: false,
+            totp: Some(TotpProviderConfig {
+                state: MfaConfigState::Enabled,
+                adjacent_intervals: Some(1),
+            }),
+        }
+    }
+
+    fn sms_config() -> fireemu_core_auth::mfa_config::MfaProjectConfig {
+        use fireemu_core_auth::mfa_config::{MfaConfigState, MfaProjectConfig};
+        MfaProjectConfig {
+            state: MfaConfigState::Enabled,
+            phone_sms: true,
+            totp: None,
+        }
+    }
+
+    #[test]
+    fn a_default_scope_reset_returns_a_declared_mfa_seed_and_keeps_an_undeclared_config() {
+        let gate = gate();
+        let hooks = projects(&gate);
+        let default = hooks.registry.default_store();
+        // No seed declared: an Admin-set configuration survives the reset, as the rest of the
+        // project configuration does.
+        default.lock().unwrap().set_mfa_config(sms_config());
+        hooks
+            .reset_scope(&Scope::AllExcept(BTreeSet::new()))
+            .expect("the reset succeeds");
+        assert_eq!(*default.lock().unwrap().mfa_config(), sms_config());
+        // A declared seed is what the reset returns to, after any Admin change.
+        default.lock().unwrap().set_mfa_seed(totp_seed());
+        default.lock().unwrap().set_mfa_config(sms_config());
+        hooks
+            .reset_scope(&Scope::AllExcept(BTreeSet::new()))
+            .expect("the reset succeeds");
+        assert_eq!(*default.lock().unwrap().mfa_config(), totp_seed());
+    }
+
+    #[test]
+    fn a_created_project_starts_with_the_seed_and_a_project_reset_returns_to_it() {
+        let gate = gate();
+        let hooks = projects(&gate);
+        hooks.registry.set_new_project_mfa_seed(Some(totp_seed()));
+        // The default project's live value is not what a new project inherits.
+        hooks
+            .registry
+            .default_store()
+            .lock()
+            .unwrap()
+            .set_mfa_config(sms_config());
+        hooks
+            .create(SECOND_PROJECT)
+            .expect("the project is created");
+        let store = hooks.registry.store_for(SECOND_PROJECT).expect("its store");
+        assert_eq!(*store.lock().unwrap().mfa_config(), totp_seed());
+        store
+            .lock()
+            .unwrap()
+            .set_mfa_config(fireemu_core_auth::mfa_config::MfaProjectConfig::default());
+        hooks
+            .reset_scope(&Scope::Project(SECOND_PROJECT.to_owned()))
+            .expect("the reset succeeds");
+        assert_eq!(*store.lock().unwrap().mfa_config(), totp_seed());
+    }
+
+    #[test]
+    fn a_created_project_without_a_declared_seed_starts_with_mfa_off() {
+        let gate = gate();
+        let hooks = projects(&gate);
+        hooks
+            .registry
+            .default_store()
+            .lock()
+            .unwrap()
+            .set_mfa_config(sms_config());
+        hooks
+            .create(SECOND_PROJECT)
+            .expect("the project is created");
+        let store = hooks.registry.store_for(SECOND_PROJECT).expect("its store");
+        assert_eq!(
+            *store.lock().unwrap().mfa_config(),
+            fireemu_core_auth::mfa_config::MfaProjectConfig::default()
+        );
+        assert_eq!(store.lock().unwrap().mfa_seed(), None);
+    }
+
+    fn acme_seed() -> fireemu_adapter_http::identity_toolkit::TenantSeeding {
+        let documents = [serde_json::json!({
+            "tenantId": "acme-x7k2q",
+            "displayName": "acme",
+            "mfaConfig": {"state": "ENABLED", "enabledProviders": ["PHONE_SMS"]}
+        })];
+        fireemu_adapter_http::identity_toolkit::TenantSeeding::new(
+            Some(true),
+            fireemu_adapter_http::identity_toolkit::prepare_tenant_seeds(&documents, true, None)
+                .expect("the document is valid"),
+        )
+    }
+
+    #[test]
+    fn a_default_scope_reset_creates_the_seeded_tenants_again_empty_and_restores_the_switch() {
+        let gate = gate();
+        let mut hooks = projects(&gate);
+        hooks.tenant_seeding = acme_seed();
+        let registry = hooks.registry.clone();
+        hooks.tenant_seeding.apply(&registry, "demo-app").unwrap();
+        let store = registry.default_store();
+        // An Admin write turns the switch off; a tenant the run created is not in the seed.
+        assert!(store.lock().unwrap().allows_tenants());
+        fireemu_adapter_http::identity_toolkit::seed_multi_tenancy(&registry, "demo-app", false)
+            .unwrap();
+        assert_eq!(registry.tenants("demo-app"), ["acme-x7k2q"]);
+        hooks
+            .reset_scope(&Scope::AllExcept(BTreeSet::new()))
+            .expect("the reset succeeds");
+        assert_eq!(registry.tenants("demo-app"), ["acme-x7k2q"]);
+        assert!(
+            store.lock().unwrap().allows_tenants(),
+            "the declared switch returns"
+        );
+        let tenant = registry.tenant_store("demo-app", "acme-x7k2q").unwrap();
+        assert!(tenant.lock().unwrap().mfa_config().sms_enabled());
+    }
+
+    #[test]
+    fn a_default_scope_reset_without_a_declared_seed_leaves_the_switch_and_drops_the_tenants() {
+        let gate = gate();
+        let hooks = projects(&gate);
+        let registry = hooks.registry.clone();
+        fireemu_adapter_http::identity_toolkit::seed_multi_tenancy(&registry, "demo-app", true)
+            .unwrap();
+        fireemu_adapter_http::identity_toolkit::prepare_tenant_seeds(
+            &[serde_json::json!({"tenantId": "acme-x7k2q", "displayName": "acme"})],
+            true,
+            None,
+        )
+        .unwrap()[0]
+            .apply(&registry, "demo-app")
+            .unwrap();
+        assert_eq!(registry.tenants("demo-app"), ["acme-x7k2q"]);
+        hooks
+            .reset_scope(&Scope::AllExcept(BTreeSet::new()))
+            .expect("the reset succeeds");
+        assert!(registry.tenants("demo-app").is_empty());
+        assert!(registry.default_store().lock().unwrap().allows_tenants());
+    }
+
+    #[test]
+    fn a_created_session_project_starts_with_the_declared_tenants_and_a_session_reset_returns_to_them(
+    ) {
+        let gate = gate();
+        let mut hooks = projects(&gate);
+        hooks.tenant_seeding = acme_seed();
+        let registry = hooks.registry.clone();
+        // The control plane creates a session and resets it straight away (control.rs), which
+        // is what seeds it once the session is committed.
+        hooks
+            .create(SECOND_PROJECT)
+            .expect("the project is created");
+        assert!(registry.tenants(SECOND_PROJECT).is_empty());
+        hooks
+            .reset_scope(&Scope::Project(SECOND_PROJECT.to_owned()))
+            .expect("the reset succeeds");
+        assert_eq!(registry.tenants(SECOND_PROJECT), ["acme-x7k2q"]);
+        assert!(registry
+            .store_for(SECOND_PROJECT)
+            .unwrap()
+            .lock()
+            .unwrap()
+            .allows_tenants());
+        // The default project is not touched by creating another.
+        assert!(registry.tenants("demo-app").is_empty());
+        // The session's reset wipes what the run made and returns to the declaration.
+        assert!(registry
+            .create_tenant(
+                SECOND_PROJECT,
+                fireemu_core_auth::store::TenantMetadata::default(),
+            )
+            .is_some());
+        assert_eq!(registry.tenants(SECOND_PROJECT).len(), 2);
+        fireemu_adapter_http::identity_toolkit::seed_multi_tenancy(
+            &registry,
+            SECOND_PROJECT,
+            false,
+        )
+        .unwrap();
+        hooks
+            .reset_scope(&Scope::Project(SECOND_PROJECT.to_owned()))
+            .expect("the reset succeeds");
+        assert_eq!(registry.tenants(SECOND_PROJECT), ["acme-x7k2q"]);
+        assert!(registry
+            .store_for(SECOND_PROJECT)
+            .unwrap()
+            .lock()
+            .unwrap()
+            .allows_tenants());
+        // A session project that does not exist seeds nothing and is not an error of the reset.
+        assert!(registry.tenants("demo-app").is_empty());
     }
 
     #[test]

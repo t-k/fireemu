@@ -449,3 +449,86 @@ fn strict_leaves_a_disabled_oidc_config_without_enabled() {
         })
     );
 }
+
+#[test]
+fn canonical_provider_seeds_have_the_same_acceptance_and_errors_as_admin_create() {
+    use fireemu_adapter_http::identity_toolkit::provider_config_seeds;
+    for strict in [false, true] {
+        let oidc = json!({"clientId":"client", "issuer":"https://issuer.test"});
+        let mut cases = vec![
+            ("oidc", "oidc.fixture", oidc.clone()),
+            ("saml", "saml.fixture", saml_body(Some(true))),
+        ];
+        for patch in [
+            json!({"issuer":"http://issuer.test"}),
+            json!({"clientId":""}),
+            json!({"enabled":null}),
+            json!({"responseType":{"idToken":true,"code":true}}),
+            json!({"responseType":{"code":true}}),
+            json!({"responseType":{"code":true},"clientSecret":"test-secret"}),
+            json!({"responseType":{"token":true}}),
+        ] {
+            let mut body = oidc.clone();
+            for (key, value) in patch.as_object().unwrap() {
+                body[key] = value.clone();
+            }
+            cases.push(("oidc", "oidc.fixture", body));
+        }
+        cases.extend([
+            (
+                "oidc",
+                "oidc.x&oauthIdpConfigId=oidc.injected",
+                oidc.clone(),
+            ),
+            ("oidc", "wrong.fixture", oidc),
+            (
+                "saml",
+                "saml.fixture",
+                json!({"idpConfig":{},"spConfig":{}}),
+            ),
+        ]);
+        for (kind, id, mut body) in cases {
+            let s = state(strict);
+            let (collection, query) = if kind == "oidc" {
+                ("oauthIdpConfigs", "oauthIdpConfigId")
+            } else {
+                ("inboundSamlConfigs", "inboundSamlConfigId")
+            };
+            let safe_id = id.replace('&', "%26").replace('=', "%3D");
+            let (status, answer) = admin(
+                &s,
+                "POST",
+                &format!("{collection}?{query}={safe_id}"),
+                &body,
+            );
+            body["name"] = json!(id);
+            let input = if kind == "oidc" {
+                json!({"oidc":[body]})
+            } else {
+                json!({"saml":[body]})
+            };
+            let parsed = provider_config_seeds(&input, strict);
+            if status == 200 {
+                let declaration = parsed.unwrap();
+                let store = s.store.lock().unwrap();
+                if kind == "oidc" {
+                    assert_eq!(
+                        declaration.oidc,
+                        Some(store.oidc_configs().cloned().collect())
+                    );
+                } else {
+                    assert_eq!(
+                        declaration.saml,
+                        Some(store.saml_configs().cloned().collect())
+                    );
+                }
+            } else {
+                let error = parsed.unwrap_err();
+                assert!(
+                    error.contains(answer["error"]["message"].as_str().unwrap()),
+                    "profile={strict} id={id}: {error} versus {answer}"
+                );
+            }
+        }
+    }
+}

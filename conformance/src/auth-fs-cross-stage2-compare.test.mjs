@@ -188,7 +188,10 @@ test("a resume row is compared by its frames and how each resume ended", () => {
     id: "resume/open",
     conditions: ["C"],
     first: [boundary],
-    resumes: { same: { frames, end: null }, switch: { frames, end: { reason: "error", code: 16 } } },
+    resumes: {
+      same: { frames, end: null },
+      switch: { frames, end: { reason: "error", code: 16 } },
+    },
   });
   assert.deepEqual(comparable(row([boundary])), {
     first: [boundary],
@@ -340,10 +343,7 @@ test("the deleted tenant's SDK row may vary only inside its allowed set", () => 
     classifyStage2({ row, production: form([]), alternative: form([]), fireemu: form([]) }),
     "MATCH_NONDETERMINISTIC",
   );
-  assert.equal(
-    classifyStage2({ row, production: form([]), fireemu: form(error) }),
-    "MISMATCH",
-  );
+  assert.equal(classifyStage2({ row, production: form([]), fireemu: form(error) }), "MISMATCH");
   assert.equal(
     classifyStage2({ row, production: form(error), alternative: form([]), fireemu: form([]) }),
     "MISMATCH",
@@ -415,7 +415,12 @@ test("stage-2 comparison evidence binds the recording harness and the fireemu ar
   ]);
   // A summary that the rows do not add up to, or a non-passing row, is refused.
   assert.throws(
-    () => stage2Evidence({ comparison: { ...comparison, summary: { MATCH: 2 } }, fixtureText, ...bindings }),
+    () =>
+      stage2Evidence({
+        comparison: { ...comparison, summary: { MATCH: 2 } },
+        fixtureText,
+        ...bindings,
+      }),
     /summary does not match the rows/,
   );
   assert.throws(

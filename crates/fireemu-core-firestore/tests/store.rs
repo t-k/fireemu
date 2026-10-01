@@ -5,9 +5,9 @@ use std::collections::BTreeMap;
 use fireemu_core_firestore::field_path::FieldPath;
 use fireemu_core_firestore::path::DocumentPath;
 use fireemu_core_firestore::store::{
-    CommitVersion, FieldTransform, FirestoreError, FirestoreState, Precondition, TransformKind,
-    Write, WriteOp, MAX_TRANSACTION_CONFLICT_LEDGER_BYTES, MAX_TRANSACTION_QUERY_RECORDS,
-    TOO_MUCH_CONTENTION,
+    CommitVersion, FieldTransform, FirestoreError, FirestoreState, LimitScope, Precondition,
+    TransactionId, TransformKind, Write, WriteOp, MAX_TRANSACTION_CONFLICT_LEDGER_BYTES,
+    MAX_TRANSACTION_QUERY_RECORDS, TOO_MUCH_CONTENTION,
 };
 use fireemu_core_firestore::value::Value;
 use fireemu_core_types::ids::{DatabaseId, ProjectId};
@@ -459,8 +459,9 @@ fn event_admission_refusal_does_not_extend_a_transaction_lease() {
         ),
         Err(FirestoreError::EventAdmission(_))
     ));
+    // The refusal at t(59) did not renew the lease: it still ends 120 s after t(0).
     assert!(matches!(
-        state.touch_transaction(&transaction, t(60)),
+        state.touch_transaction(&transaction, t(125)),
         Err(FirestoreError::Aborted(_))
     ));
     assert!(state.get(&path("events/refused-transaction")).is_none());
@@ -817,7 +818,7 @@ fn a_read_write_transaction_locks_what_it_read_until_it_finishes() {
         Err(FirestoreError::InvalidArgument(_))
     ));
     s.rollback(&ro).unwrap();
-    assert!(s.rollback(&ro).is_err());
+    s.rollback(&ro).unwrap();
 }
 
 #[test]
@@ -901,10 +902,10 @@ fn an_expired_transaction_releases_its_locks() {
         s.commit(&[set("held/doc", &[])], None, t(30)),
         Err(FirestoreError::Aborted(_))
     ));
-    // Past the idle deadline the transaction is gone and the write goes through.
-    s.commit(&[set("held/doc", &[])], None, t(61)).unwrap();
+    // Past the idle deadline (strict: 120 s) the transaction is gone and the write goes through.
+    s.commit(&[set("held/doc", &[])], None, t(125)).unwrap();
     assert!(matches!(
-        s.commit(&[set("held/doc", &[])], Some(&txn), t(62)),
+        s.commit(&[set("held/doc", &[])], Some(&txn), t(126)),
         Err(FirestoreError::Aborted(_))
     ));
 }
@@ -921,6 +922,149 @@ fn a_rolled_back_read_write_transaction_can_seed_one_retry() {
         state.retry_transaction(&original, t(2)),
         Err(FirestoreError::InvalidArgument(_))
     ));
+}
+
+#[test]
+fn sandbox_recorded_rollback_after_rollback_is_idempotent() {
+    let mut state = FirestoreState::new();
+    let transaction = state.begin_transaction(false, t(0)).unwrap();
+    state
+        .get_in_transaction(&transaction, &path("rollback/locked"))
+        .unwrap();
+    let before = state.transaction_releases();
+    state.rollback(&transaction).unwrap();
+    let released = state.transaction_releases();
+    assert_eq!(released, before + 1);
+
+    state.rollback(&transaction).unwrap();
+    assert_eq!(state.transaction_releases(), released);
+    assert!(!state.transaction_is_active(&transaction));
+    state
+        .commit(&[set("rollback/locked", &[])], None, t(1))
+        .unwrap();
+    assert!(state.retry_transaction(&transaction, t(2)).is_ok());
+}
+
+#[test]
+fn locally_expired_transaction_rollback_does_not_revive_finished_lineage() {
+    // This later-expiry sample is a local lifecycle contract, not a recorded native production threshold. The recorded 65-second Get-first recipe remains usable.
+    let mut state = FirestoreState::new();
+    let transaction = state.begin_transaction(false, t(0)).unwrap();
+    state
+        .get_in_transaction(&transaction, &path("expired/locked"))
+        .unwrap();
+    assert!(matches!(
+        state.touch_transaction(&transaction, t(125)),
+        Err(FirestoreError::Aborted(_))
+    ));
+    let released = state.transaction_releases();
+
+    state.rollback(&transaction).unwrap();
+    assert_eq!(state.transaction_releases(), released);
+    assert!(matches!(
+        state.retry_transaction(&transaction, t(126)),
+        Err(FirestoreError::InvalidArgument(message)) if message == "Invalid retry transaction."
+    ));
+    assert!(matches!(
+        state.commit(&[], Some(&transaction), t(127)),
+        Err(FirestoreError::Aborted(_))
+    ));
+    state
+        .commit(&[set("expired/locked", &[])], None, t(128))
+        .unwrap();
+}
+
+#[test]
+fn sandbox_recorded_committed_transaction_can_seed_one_retry() {
+    let mut state = FirestoreState::new();
+    let transaction = state.begin_transaction(false, t(0)).unwrap();
+    state
+        .commit(
+            &[set("retry/document", &[("value", Value::Integer(1))])],
+            Some(&transaction),
+            t(1),
+        )
+        .unwrap();
+    assert!(matches!(
+        state.rollback(&transaction),
+        Err(FirestoreError::Aborted(message))
+            if message == "The referenced transaction has expired or is no longer valid."
+    ));
+    state
+        .commit(
+            &[set("retry/document", &[("value", Value::Integer(2))])],
+            None,
+            t(2),
+        )
+        .unwrap();
+
+    let retry = state.retry_transaction(&transaction, t(3)).unwrap();
+    assert_ne!(transaction, retry);
+    let document = state
+        .get_in_transaction(&retry, &path("retry/document"))
+        .unwrap()
+        .unwrap();
+    assert_eq!(document.fields["value"], Value::Integer(2));
+    assert!(matches!(
+        state.retry_transaction(&transaction, t(4)),
+        Err(FirestoreError::InvalidArgument(_))
+    ));
+    assert!(matches!(
+        state.rollback(&transaction),
+        Err(FirestoreError::Aborted(_))
+    ));
+    state.rollback(&retry).unwrap();
+}
+
+#[test]
+fn sandbox_recorded_read_only_retry_keeps_its_diagnostic_and_snapshot() {
+    let mut state = FirestoreState::new();
+    state
+        .commit(
+            &[set("readonly/document", &[("value", Value::Integer(1))])],
+            None,
+            t(0),
+        )
+        .unwrap();
+    let transaction = state.begin_transaction(true, t(1)).unwrap();
+    state
+        .commit(
+            &[set("readonly/document", &[("value", Value::Integer(2))])],
+            None,
+            t(2),
+        )
+        .unwrap();
+
+    assert!(matches!(
+        state.retry_transaction(&transaction, t(3)),
+        Err(FirestoreError::InvalidArgument(message)) if message == "Cannot retry a read-only transaction"
+    ));
+    let document = state
+        .get_in_transaction(&transaction, &path("readonly/document"))
+        .unwrap()
+        .unwrap();
+    assert_eq!(document.fields["value"], Value::Integer(1));
+    state.rollback(&transaction).unwrap();
+    assert!(matches!(
+        state.retry_transaction(&transaction, t(4)),
+        Err(FirestoreError::InvalidArgument(message)) if message == "Cannot retry a read-only transaction"
+    ));
+}
+
+#[test]
+fn committed_retry_lineage_expires_at_the_original_total_deadline() {
+    for elapsed in [269, 270] {
+        let mut state = FirestoreState::new();
+        let original = state.begin_transaction(false, t(0)).unwrap();
+        state.commit(&[], Some(&original), t(1)).unwrap();
+        let result = state.retry_transaction(&original, t(elapsed));
+        if elapsed == 269 {
+            let retry = result.unwrap();
+            state.rollback(&retry).unwrap();
+        } else {
+            assert!(matches!(result, Err(FirestoreError::InvalidArgument(_))));
+        }
+    }
 }
 
 #[test]
@@ -1942,12 +2086,275 @@ fn read_only_query_descriptors_still_have_count_and_byte_limits() {
     }
 }
 
+// These are controlled-clock counterparts of the recorded native 65-second recipes. They do not establish an exact production timeout or equate maintenance with wall time.
+#[test]
+fn recorded_native_idle_candidate_commit_survives_maintenance() {
+    for maintenance in [false, true] {
+        let mut state = FirestoreState::new();
+        let transaction = state.begin_transaction(false, t(0)).unwrap();
+        state
+            .get_in_transaction(&transaction, &path("idle/doc"))
+            .unwrap();
+        if maintenance {
+            for second in 0..=65 {
+                state.compact(t(second));
+            }
+        }
+        assert_eq!(state.transaction_bookkeeping_stats().active, 1);
+        assert_eq!(state.transaction_bookkeeping_stats().deadlines, 1);
+        state
+            .commit(
+                &[set("idle/doc", &[("value", Value::Integer(1))])],
+                Some(&transaction),
+                t(65),
+            )
+            .unwrap();
+        assert_eq!(
+            state.get(&path("idle/doc")).unwrap().fields.get("value"),
+            Some(&Value::Integer(1))
+        );
+    }
+}
+
+#[test]
+fn recorded_native_idle_candidate_rollback_first_preserves_retry() {
+    for maintenance in [false, true] {
+        let mut state = FirestoreState::new();
+        let transaction = state.begin_transaction(false, t(0)).unwrap();
+        state
+            .get_in_transaction(&transaction, &path("idle/doc"))
+            .unwrap();
+        if maintenance {
+            for second in 0..=65 {
+                state.compact(t(second));
+            }
+        }
+        assert_eq!(state.transaction_bookkeeping_stats().active, 1);
+        assert_eq!(state.transaction_bookkeeping_stats().deadlines, 1);
+        state.rollback(&transaction).unwrap();
+        state
+            .commit(
+                &[set("idle/doc", &[("value", Value::Integer(2))])],
+                None,
+                t(65),
+            )
+            .unwrap();
+        let retry = state.retry_transaction(&transaction, t(66)).unwrap();
+        assert_ne!(retry, transaction);
+        assert_eq!(
+            state
+                .get_in_transaction(&retry, &path("idle/doc"))
+                .unwrap()
+                .unwrap()
+                .fields
+                .get("value"),
+            Some(&Value::Integer(2))
+        );
+        assert!(matches!(
+            state.retry_transaction(&transaction, t(67)),
+            Err(FirestoreError::InvalidArgument(_))
+        ));
+    }
+}
+
+#[test]
+fn recorded_native_idle_candidate_get_first_refreshes_activity() {
+    for maintenance in [false, true] {
+        let mut state = FirestoreState::new();
+        state
+            .commit(
+                &[set("idle/doc", &[("value", Value::Integer(1))])],
+                None,
+                t(0),
+            )
+            .unwrap();
+        let transaction = state.begin_transaction(false, t(0)).unwrap();
+        state
+            .get_in_transaction(&transaction, &path("idle/doc"))
+            .unwrap();
+        if maintenance {
+            for second in 0..=65 {
+                state.compact(t(second));
+            }
+        }
+        assert_eq!(state.transaction_bookkeeping_stats().active, 1);
+        assert_eq!(state.transaction_bookkeeping_stats().deadlines, 1);
+        state.touch_transaction(&transaction, t(65)).unwrap();
+        assert_eq!(
+            state
+                .get_in_transaction(&transaction, &path("idle/doc"))
+                .unwrap()
+                .unwrap()
+                .fields
+                .get("value"),
+            Some(&Value::Integer(1))
+        );
+        state.compact(t(120));
+        state.touch_transaction(&transaction, t(120)).unwrap();
+    }
+}
+
+#[test]
+fn recorded_native_idle_candidate_get_then_rollback_preserves_retry() {
+    for maintenance in [false, true] {
+        let mut state = FirestoreState::new();
+        let transaction = state.begin_transaction(false, t(0)).unwrap();
+        state
+            .get_in_transaction(&transaction, &path("idle/doc"))
+            .unwrap();
+        if maintenance {
+            for second in 0..=65 {
+                state.compact(t(second));
+            }
+        }
+        assert_eq!(state.transaction_bookkeeping_stats().active, 1);
+        assert_eq!(state.transaction_bookkeeping_stats().deadlines, 1);
+        state.touch_transaction(&transaction, t(65)).unwrap();
+        assert!(state
+            .get_in_transaction(&transaction, &path("idle/doc"))
+            .unwrap()
+            .is_none());
+        state.rollback(&transaction).unwrap();
+        state
+            .commit(
+                &[set("idle/doc", &[("value", Value::Integer(2))])],
+                None,
+                t(65),
+            )
+            .unwrap();
+        let retry = state.retry_transaction(&transaction, t(66)).unwrap();
+        assert_eq!(
+            state
+                .get_in_transaction(&retry, &path("idle/doc"))
+                .unwrap()
+                .unwrap()
+                .fields
+                .get("value"),
+            Some(&Value::Integer(2))
+        );
+    }
+}
+
+#[test]
+fn idle_candidate_allowance_is_strict_only() {
+    for (scope, accepted) in [
+        (LimitScope::Production, true),
+        (LimitScope::OfficialEmulator, false),
+    ] {
+        for maintenance in [false, true] {
+            for commit_first in [false, true] {
+                let mut state = FirestoreState::with_limit_scope(scope);
+                let transaction = state.begin_transaction(false, t(0)).unwrap();
+                if maintenance {
+                    for second in 0..=65 {
+                        state.compact(t(second));
+                    }
+                }
+                let result = if commit_first {
+                    state.commit(&[], Some(&transaction), t(65)).map(|_| ())
+                } else {
+                    state.touch_transaction(&transaction, t(65))
+                };
+                if accepted {
+                    result.unwrap();
+                } else {
+                    assert!(matches!(result, Err(FirestoreError::Aborted(_))));
+                }
+            }
+        }
+    }
+}
+
+/// An instant `ms` milliseconds after `t(0)`.
+fn t_ms(ms: i64) -> LogicalInstant {
+    LogicalInstant::from_nanos((1_788_000_000_i128 * 1_000 + i128::from(ms)) * 1_000_000)
+}
+
+#[test]
+fn strict_idle_limit_follows_the_p10c_bracket() {
+    // Production accepted a native Commit after a nominal 110 s idle (its measured idle lay in
+    // [110.58, 113.12] s, P10-C, twice) and refused one after 120 s ([120.54, 122.97] s, twice); the
+    // REST refusal sat at about 121 s. Strict takes the limit at 120 s: it must not refuse what
+    // production accepted (113.12 s and the earlier 65 to 70 s samples, the latest at 72.9 s) and
+    // must refuse what production refused (120.54 s). The gap 113.12 to 120 s is unobserved and
+    // accepted. This is a provisional bracket, not an exact production threshold.
+    let cases: [(i64, bool); 9] = [
+        (60_100, true),
+        (72_900, true),
+        (113_120, true),
+        (113_200, true),
+        (119_000, true),
+        (119_900, true),
+        (120_000, false),
+        (120_540, false),
+        (120_600, false),
+    ];
+    for (millis, accepted) in cases {
+        for maintenance in [false, true] {
+            for commit_first in [false, true] {
+                let mut state = FirestoreState::new();
+                let transaction = state.begin_transaction(false, t(0)).unwrap();
+                if maintenance {
+                    state.compact(t_ms(millis));
+                    let expected = usize::from(accepted);
+                    assert_eq!(state.transaction_bookkeeping_stats().active, expected);
+                    assert_eq!(state.transaction_bookkeeping_stats().deadlines, expected);
+                }
+                let result = if commit_first {
+                    state
+                        .commit(&[], Some(&transaction), t_ms(millis))
+                        .map(|_| ())
+                } else {
+                    state.touch_transaction(&transaction, t_ms(millis))
+                };
+                if accepted {
+                    result.unwrap_or_else(|error| panic!("{millis} ms refused: {error:?}"));
+                } else {
+                    assert!(
+                        matches!(result, Err(FirestoreError::Aborted(_))),
+                        "{millis} ms accepted"
+                    );
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn the_official_emulator_profile_keeps_the_nominal_idle_budget() {
+    // The pinned official emulator has no allowance: 60.1 s idle is refused, 59.9 s is not.
+    for (millis, accepted) in [
+        (59_900, true),
+        (60_100, false),
+        (72_900, false),
+        (120_600, false),
+    ] {
+        for commit_first in [false, true] {
+            let mut state = FirestoreState::with_limit_scope(LimitScope::OfficialEmulator);
+            let transaction = state.begin_transaction(false, t(0)).unwrap();
+            let result = if commit_first {
+                state
+                    .commit(&[], Some(&transaction), t_ms(millis))
+                    .map(|_| ())
+            } else {
+                state.touch_transaction(&transaction, t_ms(millis))
+            };
+            if accepted {
+                result.unwrap();
+            } else {
+                assert!(
+                    matches!(result, Err(FirestoreError::Aborted(_))),
+                    "{millis} ms"
+                );
+            }
+        }
+    }
+}
+
 #[test]
 fn transactions_expire_on_idle_and_total_time() {
-    // Expiry is inclusive at the deadline (`now >= deadline`): a transaction is alive strictly
-    // inside its 60 s idle window and 270 s total budget, and gone once a deadline is reached.
-    // This is the transaction-validity boundary, so the attempt becomes retryably ABORTED at
-    // exactly the instant its own commit would be refused.
+    // Strict adds a provisional allowance to the nominal idle quota. A safely later local sample checks irreversible expiry; it does not measure an exact production boundary.
+    // The independent 270 s total budget remains unchanged.
     let mut s = FirestoreState::new();
     let txn = s.begin_transaction(false, t(0)).unwrap();
     assert!(s.touch_transaction(&txn, t(59)).is_ok());
@@ -1955,14 +2362,13 @@ fn transactions_expire_on_idle_and_total_time() {
         s.touch_transaction(&txn, t(118)).is_ok(),
         "idle window restarts"
     );
-    // 60 s after the last activity (t(118)) the idle budget is spent. An expired transaction
-    // is ABORTED (the code the SDKs retry), the same as a finished one.
+    // More than 120 s after the last activity (t(118)) the local idle budget is spent. An expired transaction is ABORTED (the code the SDKs retry), the same as a finished one.
     assert!(matches!(
-        s.touch_transaction(&txn, t(178)),
+        s.touch_transaction(&txn, t(240)),
         Err(FirestoreError::Aborted(_))
     ));
     assert!(
-        s.touch_transaction(&txn, t(180)).is_err(),
+        s.touch_transaction(&txn, t(242)).is_err(),
         "expired stays expired"
     );
 
@@ -2434,8 +2840,13 @@ fn verify_observes_staged_writes_and_preserves_atomic_validation() {
 /// `ABORTED` and the expiry wording, its write unpublished and its lock released.
 #[test]
 fn a_transaction_commits_at_269_s_total_and_is_refused_at_271_s_total() {
-    for (elapsed, commits) in [(269, true), (271, false)] {
-        let mut s = FirestoreState::new();
+    for (scope, elapsed, commits) in [
+        (LimitScope::Production, 269, true),
+        (LimitScope::Production, 271, false),
+        (LimitScope::OfficialEmulator, 269, true),
+        (LimitScope::OfficialEmulator, 271, false),
+    ] {
+        let mut s = FirestoreState::with_limit_scope(scope);
         s.commit(&[set("total/doc", &[("v", Value::Integer(0))])], None, t(0))
             .unwrap();
         let txn = s.begin_transaction(false, t(0)).unwrap();
@@ -2443,8 +2854,7 @@ fn a_transaction_commits_at_269_s_total_and_is_refused_at_271_s_total() {
             .get_in_transaction(&txn, &path("total/doc"))
             .unwrap()
             .is_some());
-        // Activity every 59 s keeps the 60 s idle window open up to t(236); both commit
-        // instants are then inside the idle window, so only the total budget decides.
+        // Activity every 59 s keeps either profile's idle window open up to t(236); both commit instants are then inside the idle window, so only the total budget decides.
         for step in 1..=4 {
             s.touch_transaction(&txn, t(step * 59)).unwrap();
         }
@@ -2571,4 +2981,884 @@ fn a_transactional_query_currently_locks_documents_its_filter_excluded() {
         s.get(&path("qf/excluded")).unwrap().fields.get("v"),
         Some(&Value::Integer(3))
     );
+}
+
+// A commit refused by a precondition ends its transaction, as production does (P08, both
+// transports, both recordings): the same token then answers INVALID_ARGUMENT in strict (the
+// official emulator answers ABORTED, measured at v1.22.0), a Rollback is accepted any number of
+// times, the transaction's read locks are gone at once, and the token may still be retried.
+// Observed: only the `exists: true` refusal (code 5, "No document to update"). The refusals by
+// `exists: false` and by `update_time` are inferred to end the transaction the same way, not
+// observed; the rows below stay until a production recording settles them.
+const NO_LONGER_VALID: &str = "The referenced transaction has expired or is no longer valid.";
+
+fn precondition_write(p: &str, precondition: Precondition) -> Write {
+    Write {
+        op: WriteOp::Set {
+            path: path(p),
+            fields: fields(&[("v", Value::Integer(9))]),
+            update_mask: None,
+        },
+        precondition: Some(precondition),
+        transforms: vec![],
+    }
+}
+
+fn refused_commit_state(scope: LimitScope) -> (FirestoreState, TransactionId) {
+    let mut state = FirestoreState::with_limit_scope(scope);
+    state
+        .commit(&[set("p08/held", &[("v", Value::Integer(1))])], None, t(0))
+        .unwrap();
+    let transaction = state.begin_transaction(false, t(1)).unwrap();
+    state
+        .get_in_transaction(&transaction, &path("p08/held"))
+        .unwrap();
+    (state, transaction)
+}
+
+#[test]
+fn a_precondition_refused_commit_ends_its_transaction_with_each_profiles_code() {
+    let refusals = [
+        (
+            precondition_write("p08/missing", Precondition::Exists(true)),
+            "not found",
+        ),
+        // Inferred, not observed: `exists: false` and `update_time` refusals.
+        (
+            precondition_write("p08/held", Precondition::Exists(false)),
+            "already exists",
+        ),
+        (
+            precondition_write("p08/held", Precondition::UpdateTime(t(500))),
+            "failed precondition",
+        ),
+    ];
+    for (scope, strict) in [
+        (LimitScope::Production, true),
+        (LimitScope::OfficialEmulator, false),
+    ] {
+        for (refusing, label) in &refusals {
+            let (mut state, transaction) = refused_commit_state(scope);
+            let commit = [
+                set("p08/held", &[("v", Value::Integer(9))]),
+                refusing.clone(),
+            ];
+            let refused = state.commit(&commit, Some(&transaction), t(2)).unwrap_err();
+            assert!(
+                matches!(
+                    refused,
+                    FirestoreError::NotFound(_)
+                        | FirestoreError::AlreadyExists(_)
+                        | FirestoreError::FailedPrecondition(_)
+                ),
+                "{label}: the refusal itself keeps its code"
+            );
+            // The transaction is finished in the bookkeeping too, not only marked: a state that
+            // was set without `finish_transaction` would leave it counted as active.
+            let bookkeeping = state.transaction_bookkeeping_stats();
+            assert_eq!(
+                (
+                    bookkeeping.active,
+                    bookkeeping.finished,
+                    bookkeeping.deadlines,
+                    bookkeeping.conflict_ledger_bytes,
+                ),
+                (0, 1, 0, 0),
+                "{label}: the refused transaction is finished"
+            );
+            let gone = |result: Result<(), FirestoreError>| match result {
+                Err(FirestoreError::InvalidArgument(message)) if strict => message,
+                Err(FirestoreError::Aborted(message)) if !strict => message,
+                other => panic!("{label} strict={strict}: {other:?}"),
+            };
+            assert_eq!(
+                gone(
+                    state
+                        .get_in_transaction(&transaction, &path("p08/held"))
+                        .map(|_| ())
+                ),
+                NO_LONGER_VALID
+            );
+            assert_eq!(
+                gone(state.commit(&commit, Some(&transaction), t(3)).map(|_| ())),
+                NO_LONGER_VALID
+            );
+            for _ in 0..2 {
+                state.rollback(&transaction).unwrap();
+            }
+            assert_eq!(
+                state
+                    .get(&path("p08/held"))
+                    .unwrap()
+                    .fields
+                    .get("v")
+                    .cloned(),
+                Some(Value::Integer(1)),
+                "{label}: nothing of the refused commit is published"
+            );
+        }
+    }
+}
+
+#[test]
+fn a_precondition_refused_commit_releases_the_transactions_locks_at_once() {
+    for scope in [LimitScope::Production, LimitScope::OfficialEmulator] {
+        let (mut state, transaction) = refused_commit_state(scope);
+        // While the transaction is active its read of `held` locks a writer out.
+        let writer = [set("p08/held", &[("v", Value::Integer(5))])];
+        assert!(matches!(
+            state.commit(&writer, None, t(2)),
+            Err(FirestoreError::Aborted(message)) if message == TOO_MUCH_CONTENTION
+        ));
+        let missing = precondition_write("p08/missing", Precondition::Exists(true));
+        assert!(state.commit(&[missing], Some(&transaction), t(3)).is_err());
+        state.commit(&writer, None, t(4)).unwrap();
+    }
+}
+
+// P02 (both transports): the empty commit of a fresh read-only transaction succeeds and finishes
+// it; a write commit of one is refused "Cannot modify entities in a read-only transaction." and
+// the Rollback that follows answers 0. The 2026-09-07 matrix row (conformance/firestore-production-
+// matrix.json, transactions/lifecycle#read-only-commit-without-writes, REST) recorded a refused write
+// commit followed by an empty commit on the same token answering INVALID_ARGUMENT "no longer valid":
+// a refused write commit ends the read-only transaction. P02b (REST and gRPC, two recordings): after
+// the refusal a GetDocument and an empty commit, in either order, answer 3 with the expired text, and
+// a Rollback answers 0.
+#[test]
+fn a_read_only_transaction_commits_empty_and_ends_when_a_write_commit_is_refused() {
+    let mut state = FirestoreState::with_limit_scope(LimitScope::Production);
+    state
+        .commit(&[set("p02/doc", &[("v", Value::Integer(1))])], None, t(0))
+        .unwrap();
+    let empty = state.begin_transaction(true, t(1)).unwrap();
+    state.get_in_transaction(&empty, &path("p02/doc")).unwrap();
+    state.commit(&[], Some(&empty), t(2)).unwrap();
+    assert!(matches!(
+        state.commit(&[], Some(&empty), t(3)),
+        Err(FirestoreError::Aborted(message)) if message == NO_LONGER_VALID
+    ));
+
+    let refused = state.begin_transaction(true, t(4)).unwrap();
+    let write = [set("p02/doc", &[("v", Value::Integer(2))])];
+    assert!(matches!(
+        state.commit(&write, Some(&refused), t(5)),
+        Err(FirestoreError::InvalidArgument(message))
+            if message == "Cannot modify entities in a read-only transaction."
+    ));
+    assert_eq!(state.transaction_bookkeeping_stats().active, 0);
+    assert!(matches!(
+        state.commit(&[], Some(&refused), t(6)),
+        Err(FirestoreError::InvalidArgument(message)) if message == NO_LONGER_VALID
+    ));
+    state.rollback(&refused).unwrap();
+
+    // P02b: a read on the ended token answers 3 with the expired text too, in either order with the
+    // empty commit, and the Rollback still answers 0.
+    for read_first in [true, false] {
+        let ended = state.begin_read_only_transaction(t(7)).unwrap();
+        assert!(state.commit(&write, Some(&ended), t(8)).is_err());
+        let read = |state: &mut FirestoreState| state.touch_transaction(&ended, t(9));
+        if read_first {
+            assert!(matches!(
+                read(&mut state),
+                Err(FirestoreError::InvalidArgument(message)) if message == NO_LONGER_VALID
+            ));
+        }
+        assert!(matches!(
+            state.commit(&[], Some(&ended), t(10)),
+            Err(FirestoreError::InvalidArgument(message)) if message == NO_LONGER_VALID
+        ));
+        if !read_first {
+            assert!(matches!(
+                read(&mut state),
+                Err(FirestoreError::InvalidArgument(message)) if message == NO_LONGER_VALID
+            ));
+        }
+        state.rollback(&ended).unwrap();
+    }
+
+    // The official emulator (v1.22.0) keeps the transaction open after that refusal: a later
+    // empty commit answers 200 and a read still works. The emulator profile refuses nothing more.
+    let mut emulator = FirestoreState::with_limit_scope(LimitScope::OfficialEmulator);
+    emulator
+        .commit(&[set("p02/doc", &[("v", Value::Integer(1))])], None, t(0))
+        .unwrap();
+    let kept = emulator.begin_read_only_transaction(t(1)).unwrap();
+    assert!(matches!(
+        emulator.commit(&write, Some(&kept), t(2)),
+        Err(FirestoreError::InvalidArgument(message))
+            if message == "Cannot modify entities in a read-only transaction."
+    ));
+    assert_eq!(emulator.transaction_bookkeeping_stats().active, 1);
+    emulator
+        .get_in_transaction(&kept, &path("p02/doc"))
+        .unwrap();
+    emulator.commit(&[], Some(&kept), t(3)).unwrap();
+}
+
+// P02 (both transports): the empty commit of a read-only transaction answers the snapshot time and
+// consumes no commit time; production's `commitTime` lies before an outside writer's commit that
+// was acknowledged between the snapshot and the empty commit.
+#[test]
+fn an_empty_read_only_commit_answers_the_snapshot_time_and_consumes_no_commit_time() {
+    let mut state = FirestoreState::with_limit_scope(LimitScope::Production);
+    state
+        .commit(&[set("p02/doc", &[("v", Value::Integer(1))])], None, t(0))
+        .unwrap();
+    let transaction = state.begin_read_only_transaction(t(1)).unwrap();
+    state.touch_transaction(&transaction, t(2)).unwrap();
+    let snapshot = state.transaction_read_time(&transaction).unwrap();
+    let writer = state
+        .commit(&[set("p02/doc", &[("v", Value::Integer(2))])], None, t(3))
+        .unwrap();
+    // At the writer's own instant the next commit time is one microsecond later; an empty commit that
+    // wrote the older snapshot time into the commit clock would take that back.
+    let next = state.next_commit_time(t(3));
+    assert!(next > writer.commit_time);
+    let empty = state.commit(&[], Some(&transaction), t(4)).unwrap();
+    assert_eq!(empty.commit_time, snapshot);
+    assert!(empty.commit_time < writer.commit_time);
+    assert_eq!(
+        state.next_commit_time(t(3)),
+        next,
+        "no commit time is used up or moved back"
+    );
+    // A commit outside a transaction, and a read-write empty commit, still take a new time.
+    let plain = state.commit(&[], None, t(5)).unwrap();
+    assert!(plain.commit_time > writer.commit_time);
+}
+
+// The empty commit of a transaction answers the time of its first read, and none when it has not
+// read (P01 REST and gRPC read-write, P02 read-only, matrix `#empty-commit`); it uses up no commit
+// time. Not recorded, and inferred from those rows: a read-write one after a read over gRPC, one
+// without a read over REST, a read-only one without a read, and the time of a later read.
+#[test]
+fn an_empty_commit_answers_the_first_read_time_of_its_transaction_or_none() {
+    for read_only in [false, true] {
+        let mut state = FirestoreState::with_limit_scope(LimitScope::Production);
+        state
+            .commit(&[set("p01/doc", &[("v", Value::Integer(1))])], None, t(0))
+            .unwrap();
+        let transaction = if read_only {
+            state.begin_read_only_transaction(t(1))
+        } else {
+            state.begin_read_write_transaction(t(1))
+        }
+        .unwrap();
+        state.touch_transaction(&transaction, t(2)).unwrap();
+        state.touch_transaction(&transaction, t(3)).unwrap();
+        let writer = state
+            .commit(&[set("p01/other", &[("v", Value::Integer(2))])], None, t(4))
+            .unwrap();
+        let next = state.next_commit_time(t(4));
+        let empty = state.commit(&[], Some(&transaction), t(5)).unwrap();
+        assert!(empty.stamped, "read_only={read_only}");
+        assert_eq!(
+            empty.commit_time,
+            t(2),
+            "the first read's time, read_only={read_only}"
+        );
+        assert!(empty.commit_time < writer.commit_time);
+        assert_eq!(
+            state.next_commit_time(t(4)),
+            next,
+            "no commit time is used up"
+        );
+
+        // Without a read the answer carries no time, and it consumes one as before.
+        let unread = if read_only {
+            state.begin_read_only_transaction(t(6))
+        } else {
+            state.begin_read_write_transaction(t(6))
+        }
+        .unwrap();
+        let bare = state.commit(&[], Some(&unread), t(7)).unwrap();
+        assert!(!bare.stamped, "read_only={read_only}");
+        assert!(bare.commit_time > writer.commit_time);
+    }
+    let mut state = FirestoreState::with_limit_scope(LimitScope::Production);
+    assert!(
+        !state.commit(&[], None, t(0)).unwrap().stamped,
+        "outside a transaction"
+    );
+    let written = state
+        .commit(&[set("p01/doc", &[("v", Value::Integer(1))])], None, t(1))
+        .unwrap();
+    assert!(
+        written.stamped,
+        "a commit with writes always carries its time"
+    );
+    // The emulator profile stamps every commit.
+    let mut emulator = FirestoreState::with_limit_scope(LimitScope::OfficialEmulator);
+    assert!(emulator.commit(&[], None, t(0)).unwrap().stamped);
+    let bare = emulator.begin_transaction(false, t(1)).unwrap();
+    assert!(emulator.commit(&[], Some(&bare), t(2)).unwrap().stamped);
+}
+
+// A read-only transaction begun at a `readTime` has the read time as its snapshot time; its empty
+// commit answering that time is unrecorded and follows the read-only rule (P02).
+#[test]
+fn an_empty_commit_of_a_read_time_transaction_answers_that_read_time() {
+    let mut state = FirestoreState::with_limit_scope(LimitScope::Production);
+    state
+        .commit(&[set("p03/doc", &[("v", Value::Integer(1))])], None, t(1))
+        .unwrap();
+    let transaction = state.begin_transaction_at(t(2), t(5)).unwrap();
+    state.touch_transaction(&transaction, t(6)).unwrap();
+    let empty = state.commit(&[], Some(&transaction), t(7)).unwrap();
+    assert!(empty.stamped);
+    assert_eq!(empty.commit_time, t(2));
+}
+
+// A `readTime` begin and a retry attempt have not read either: their empty commits carry no time in
+// production until they read (inferred from the rule; only explicit begins are recorded).
+#[test]
+fn a_read_time_begin_and_a_retry_attempt_answer_no_time_until_they_read() {
+    let mut state = FirestoreState::with_limit_scope(LimitScope::Production);
+    state
+        .commit(&[set("p03/doc", &[("v", Value::Integer(1))])], None, t(1))
+        .unwrap();
+    let at = state.begin_transaction_at(t(1), t(5)).unwrap();
+    assert!(!state.commit(&[], Some(&at), t(6)).unwrap().stamped);
+
+    let first = state.begin_read_write_transaction(t(7)).unwrap();
+    state.rollback(&first).unwrap();
+    let retried = state.retry_transaction(&first, t(8)).unwrap();
+    assert!(!state.commit(&[], Some(&retried), t(9)).unwrap().stamped);
+}
+
+// The official emulator (v1.22.0, REST measured) reads a retried read-write transaction at its first
+// use, like a plain begin, and its commit succeeds; the emulator profile matches it.
+#[test]
+fn the_emulator_profile_reads_a_retried_transaction_at_its_first_use() {
+    let mut state = FirestoreState::with_limit_scope(LimitScope::OfficialEmulator);
+    state
+        .commit(&[set("p02/doc", &[("v", Value::Integer(1))])], None, t(0))
+        .unwrap();
+    let first = state.begin_read_write_transaction(t(1)).unwrap();
+    state.rollback(&first).unwrap();
+    let retried = state.retry_transaction(&first, t(2)).unwrap();
+    state
+        .commit(&[set("p02/doc", &[("v", Value::Integer(2))])], None, t(3))
+        .unwrap();
+    state.touch_transaction(&retried, t(4)).unwrap();
+    let shown = state
+        .get_in_transaction(&retried, &path("p02/doc"))
+        .unwrap()
+        .and_then(|document| document.fields.get("v").cloned());
+    assert_eq!(
+        shown,
+        Some(Value::Integer(2)),
+        "the first read shows the writer"
+    );
+    state
+        .commit(
+            &[set("p02/doc", &[("v", Value::Integer(3))])],
+            Some(&retried),
+            t(5),
+        )
+        .unwrap();
+
+    // Production keeps the begin-time snapshot (unobserved).
+    let mut strict = FirestoreState::with_limit_scope(LimitScope::Production);
+    strict
+        .commit(&[set("p02/doc", &[("v", Value::Integer(1))])], None, t(0))
+        .unwrap();
+    let first = strict.begin_read_write_transaction(t(1)).unwrap();
+    strict.rollback(&first).unwrap();
+    let retried = strict.retry_transaction(&first, t(2)).unwrap();
+    strict
+        .commit(&[set("p02/doc", &[("v", Value::Integer(2))])], None, t(3))
+        .unwrap();
+    strict.touch_transaction(&retried, t(4)).unwrap();
+    let shown = strict
+        .get_in_transaction(&retried, &path("p02/doc"))
+        .unwrap()
+        .and_then(|document| document.fields.get("v").cloned());
+    assert_eq!(shown, Some(Value::Integer(1)));
+}
+
+// An embedded `newTransaction` reads in the request that begins it, so its empty commit already
+// answers that time.
+#[test]
+fn an_empty_commit_of_an_embedded_transaction_answers_its_begin_time() {
+    let mut state = FirestoreState::with_limit_scope(LimitScope::Production);
+    let transaction = state.begin_transaction(false, t(1)).unwrap();
+    let empty = state.commit(&[], Some(&transaction), t(5)).unwrap();
+    assert!(empty.stamped);
+    assert_eq!(empty.commit_time, t(1));
+}
+
+// An idle expiry found by maintenance keeps its lineage (E003: the first request ABORTED, a later
+// read ABORTED, a Rollback 0); only a total-lifetime expiry is forgotten after a refused request.
+#[test]
+fn an_idle_expiry_found_by_maintenance_still_answers_aborted_and_accepts_a_rollback() {
+    let mut state = FirestoreState::with_limit_scope(LimitScope::Production);
+    let transaction = state.begin_transaction(false, t(0)).unwrap();
+    let _other = state.begin_transaction(true, t(130)).unwrap();
+    aborted_no_longer_valid(state.touch_transaction(&transaction, t(131)));
+    aborted_no_longer_valid(state.touch_transaction(&transaction, t(132)));
+    state.rollback(&transaction).unwrap();
+}
+
+// Evicting finished lineage removes the deadline key an expired token was filed under. The emulator
+// profile keeps an expired token for 600 s, long enough for three waves to overflow the bounded lineage
+// (production remembers for 30 s and holds at most 4 096 active transactions, so it cannot overflow it).
+#[test]
+fn evicting_expired_tokens_leaves_no_stale_deadline_entries() {
+    let mut state = FirestoreState::with_limit_scope(LimitScope::OfficialEmulator);
+    // Three waves of 4 000 transactions, each kept alive by reads until its total lifetime ends and
+    // found by the next wave's begin, overflow the bounded finished lineage (8 192) inside that
+    // retention.
+    for wave in 0..3 {
+        let base = wave * 271;
+        let ids: Vec<_> = (0..4_000)
+            .map(|_| state.begin_transaction(false, t(base)).unwrap())
+            .collect();
+        for second in (24..=264).step_by(24) {
+            for id in &ids {
+                state.touch_transaction(id, t(base + second)).unwrap();
+            }
+        }
+    }
+    let _late = state.begin_transaction(true, t(3 * 271)).unwrap();
+    let bookkeeping = state.transaction_bookkeeping_stats();
+    assert_eq!(bookkeeping.finished, 8_192);
+    assert_eq!(bookkeeping.finished, bookkeeping.finished_deadlines);
+}
+
+// A read-write transaction reads at its first use in both profiles: an outside write between the
+// begin and the first read is shown, and the transaction's commit then succeeds (P02b chain Z, REST
+// and gRPC, two recordings, for production; the official emulator v1.22.0, measured on both
+// transports, for the emulator profile).
+#[test]
+fn a_read_write_transaction_reads_at_its_first_use_in_both_profiles() {
+    for scope in [LimitScope::Production, LimitScope::OfficialEmulator] {
+        read_write_reads_at_its_first_use(scope);
+    }
+}
+
+fn read_write_reads_at_its_first_use(scope: LimitScope) {
+    let mut state = FirestoreState::with_limit_scope(scope);
+    state
+        .commit(&[set("p02/doc", &[("v", Value::Integer(1))])], None, t(0))
+        .unwrap();
+    let transaction = state.begin_read_write_transaction(t(1)).unwrap();
+    state
+        .commit(&[set("p02/doc", &[("v", Value::Integer(2))])], None, t(2))
+        .unwrap();
+    state.touch_transaction(&transaction, t(3)).unwrap();
+    let shown = state
+        .get_in_transaction(&transaction, &path("p02/doc"))
+        .unwrap()
+        .and_then(|document| document.fields.get("v").cloned());
+    assert_eq!(
+        shown,
+        Some(Value::Integer(2)),
+        "the first read shows the writer"
+    );
+    state
+        .commit(
+            &[set("p02/doc", &[("v", Value::Integer(3))])],
+            Some(&transaction),
+            t(4),
+        )
+        .unwrap();
+
+    // A transaction that began with a read is not moved by a later use.
+    let eager = state.begin_transaction(false, t(5)).unwrap();
+    state
+        .commit(&[set("p02/doc", &[("v", Value::Integer(4))])], None, t(6))
+        .unwrap();
+    state.touch_transaction(&eager, t(7)).unwrap();
+    assert_eq!(
+        state
+            .get_in_transaction(&eager, &path("p02/doc"))
+            .unwrap()
+            .and_then(|document| document.fields.get("v").cloned()),
+        Some(Value::Integer(3))
+    );
+}
+
+// P02 (both transports): a read-only transaction takes its snapshot at its first use, not at its
+// begin. A write acknowledged between the two is shown by the first read (S1), and a write after
+// the first read is not shown by the second (S2). A read-only transaction begun through a read's
+// `newTransaction` (the eager begin) and one begun at a `readTime` keep their begin-time snapshot.
+#[test]
+fn a_read_only_transaction_takes_its_snapshot_at_its_first_use() {
+    let value = |state: &FirestoreState, transaction: &TransactionId| {
+        state
+            .transaction_read_version(transaction)
+            .map(|version| {
+                state
+                    .get_at(&path("p02/doc"), version)
+                    .and_then(|d| d.fields.get("v").cloned())
+            })
+            .unwrap()
+    };
+    let mut state = FirestoreState::with_limit_scope(LimitScope::Production);
+    state
+        .commit(&[set("p02/doc", &[("v", Value::Integer(1))])], None, t(0))
+        .unwrap();
+
+    let lazy = state.begin_read_only_transaction(t(1)).unwrap();
+    state
+        .commit(&[set("p02/doc", &[("v", Value::Integer(2))])], None, t(2))
+        .unwrap();
+    state.touch_transaction(&lazy, t(3)).unwrap();
+    assert_eq!(
+        value(&state, &lazy),
+        Some(Value::Integer(2)),
+        "the first use pins the snapshot"
+    );
+    assert!(state.transaction_read_time(&lazy).unwrap() >= t(3));
+    state
+        .commit(&[set("p02/doc", &[("v", Value::Integer(3))])], None, t(4))
+        .unwrap();
+    state.touch_transaction(&lazy, t(5)).unwrap();
+    assert_eq!(
+        value(&state, &lazy),
+        Some(Value::Integer(2)),
+        "later reads keep the first snapshot"
+    );
+
+    let eager = state.begin_transaction(true, t(6)).unwrap();
+    state
+        .commit(&[set("p02/doc", &[("v", Value::Integer(4))])], None, t(7))
+        .unwrap();
+    state.touch_transaction(&eager, t(8)).unwrap();
+    assert_eq!(
+        value(&state, &eager),
+        Some(Value::Integer(3)),
+        "a begun-with-a-read transaction keeps its begin"
+    );
+
+    // The official emulator (v1.22.0, measured, REST and gRPC) takes the snapshot at the begin.
+    let mut emulator = FirestoreState::with_limit_scope(LimitScope::OfficialEmulator);
+    emulator
+        .commit(&[set("p02/doc", &[("v", Value::Integer(1))])], None, t(0))
+        .unwrap();
+    let pinned = emulator.begin_read_only_transaction(t(1)).unwrap();
+    emulator
+        .commit(&[set("p02/doc", &[("v", Value::Integer(2))])], None, t(2))
+        .unwrap();
+    emulator.touch_transaction(&pinned, t(3)).unwrap();
+    assert_eq!(value(&emulator, &pinned), Some(Value::Integer(1)));
+
+    let unused = state.begin_read_only_transaction(t(9)).unwrap();
+    state.rollback(&unused).unwrap();
+    assert_eq!(state.transaction_bookkeeping_stats().active, 2);
+
+    // Pinning moves the transaction's hold on history from its begin to its snapshot: once every
+    // transaction is finished and the one-hour window has passed, only the newest version and the
+    // one at the floor remain.
+    state.rollback(&lazy).unwrap();
+    state.rollback(&eager).unwrap();
+    assert_eq!(state.transaction_bookkeeping_stats().active, 0);
+    state
+        .commit(
+            &[set("p02/doc", &[("v", Value::Integer(5))])],
+            None,
+            t(10_000),
+        )
+        .unwrap();
+    assert_eq!(state.retained_versions(), 2);
+}
+
+// P11 (REST and gRPC, P11 v4 two recordings and REST recording 1): a transaction kept alive by reads past its 270 s total
+// lifetime. Recorded: at token ages of 283 to 288 s a read, a Commit and a Rollback each answer ABORTED
+// "no longer valid" (10) and a writer outside the transaction is not held; at 298.7 to 301.0 s a read
+// still answers 10 and the Commit about a second later answers INVALID_ARGUMENT "Invalid transaction."
+// (3), as does a Rollback after it: the token is forgotten at about 300 s. An idle expiry keeps the
+// lineage until the total lifetime, so its later requests still answer ABORTED (E003).
+fn invalid_transaction(result: Result<(), FirestoreError>) {
+    match result {
+        Err(FirestoreError::InvalidArgument(message)) if message == "Invalid transaction." => {}
+        other => panic!("expected Invalid transaction., got {other:?}"),
+    }
+}
+
+fn aborted_no_longer_valid(result: Result<(), FirestoreError>) {
+    match result {
+        Err(FirestoreError::Aborted(message)) if message == NO_LONGER_VALID => {}
+        other => panic!("expected ABORTED no longer valid, got {other:?}"),
+    }
+}
+
+fn aged_transaction() -> (FirestoreState, TransactionId) {
+    let mut state = FirestoreState::with_limit_scope(LimitScope::Production);
+    state
+        .commit(&[set("p11/doc", &[("v", Value::Integer(1))])], None, t(0))
+        .unwrap();
+    let transaction = state.begin_transaction(false, t(0)).unwrap();
+    for second in (24..=264).step_by(24) {
+        state.touch_transaction(&transaction, t(second)).unwrap();
+    }
+    (state, transaction)
+}
+
+#[test]
+fn after_the_total_lifetime_every_request_is_aborted_until_the_token_is_forgotten_at_300_s() {
+    let (mut state, transaction) = aged_transaction();
+    let write = [set("p11/doc", &[("v", Value::Integer(2))])];
+    aborted_no_longer_valid(state.touch_transaction(&transaction, t(271)));
+    aborted_no_longer_valid(state.commit(&write, Some(&transaction), t(272)).map(|_| ()));
+    aborted_no_longer_valid(state.rollback(&transaction));
+    aborted_no_longer_valid(state.touch_transaction(&transaction, t(299)));
+    assert_eq!(state.transaction_bookkeeping_stats().active, 0);
+    // forgotten by 301 s of token age: every request now answers "Invalid transaction."
+    invalid_transaction(state.touch_transaction(&transaction, t(301)));
+    invalid_transaction(state.commit(&write, Some(&transaction), t(302)).map(|_| ()));
+    invalid_transaction(state.rollback(&transaction));
+}
+
+#[test]
+fn an_expired_token_that_no_request_asked_about_is_still_aborted_until_300_s_and_then_invalid() {
+    let (mut state, transaction) = aged_transaction();
+    // Maintenance at the deadline (here another begin) must not forget it before its 300 s.
+    let other = state.begin_transaction(true, t(271)).unwrap();
+    aborted_no_longer_valid(state.touch_transaction(&transaction, t(272)));
+    let bookkeeping = state.transaction_bookkeeping_stats();
+    assert_eq!(bookkeeping.finished, bookkeeping.finished_deadlines);
+    state.rollback(&other).unwrap();
+
+    let (mut late, transaction) = aged_transaction();
+    let _other = late.begin_transaction(true, t(301)).unwrap();
+    invalid_transaction(late.touch_transaction(&transaction, t(302)));
+}
+
+// P12 (REST, two recordings): at a token age of about 325 s every request answers "Invalid transaction.", the first
+// request (a Commit or a Rollback, or a read) included.
+#[test]
+fn every_first_request_past_the_forgetting_age_answers_invalid_transaction() {
+    let write = [set("p11/doc", &[("v", Value::Integer(2))])];
+    let (mut state, transaction) = aged_transaction();
+    invalid_transaction(state.commit(&write, Some(&transaction), t(325)).map(|_| ()));
+    invalid_transaction(state.touch_transaction(&transaction, t(326)));
+    invalid_transaction(state.rollback_at(&transaction, t(327)));
+
+    let (mut state, transaction) = aged_transaction();
+    invalid_transaction(state.rollback_at(&transaction, t(325)));
+    invalid_transaction(state.touch_transaction(&transaction, t(326)));
+    invalid_transaction(state.commit(&write, Some(&transaction), t(327)).map(|_| ()));
+
+    let (mut state, transaction) = aged_transaction();
+    invalid_transaction(state.touch_transaction(&transaction, t(325)));
+}
+
+#[test]
+fn a_commit_or_a_rollback_as_the_first_request_after_the_lifetime_is_aborted_like_a_read() {
+    let write = [set("p11/doc", &[("v", Value::Integer(2))])];
+    let (mut state, transaction) = aged_transaction();
+    aborted_no_longer_valid(state.commit(&write, Some(&transaction), t(271)).map(|_| ()));
+    aborted_no_longer_valid(state.commit(&write, Some(&transaction), t(272)).map(|_| ()));
+    aborted_no_longer_valid(state.touch_transaction(&transaction, t(273)));
+    aborted_no_longer_valid(state.rollback(&transaction));
+
+    // With no maintenance in between, the Rollback itself finds the lifetime over.
+    let (mut state, transaction) = aged_transaction();
+    aborted_no_longer_valid(state.rollback_at(&transaction, t(271)));
+    aborted_no_longer_valid(state.touch_transaction(&transaction, t(272)));
+
+    // An idle expiry keeps its retry lineage when the Rollback comes first (rolled back, not finished).
+    let mut idle = FirestoreState::with_limit_scope(LimitScope::Production);
+    let transaction = idle.begin_transaction(false, t(0)).unwrap();
+    idle.rollback_at(&transaction, t(200)).unwrap();
+    idle.retry_transaction(&transaction, t(201)).unwrap();
+
+    let (mut state, transaction) = aged_transaction();
+    let other = state.begin_transaction(true, t(271)).unwrap();
+    aborted_no_longer_valid(state.rollback(&transaction));
+    aborted_no_longer_valid(state.rollback(&transaction));
+    state.rollback(&other).unwrap();
+}
+
+#[test]
+fn a_rollback_after_the_token_is_forgotten_answers_invalid_transaction() {
+    // A read at 271 s finds the lifetime over (10); the Rollback that follows at 301 s finds the token forgotten (3).
+    let (mut state, transaction) = aged_transaction();
+    aborted_no_longer_valid(state.touch_transaction(&transaction, t(271)));
+    invalid_transaction(state.rollback_at(&transaction, t(301)));
+}
+
+// INFERRED, not recorded: a transaction that an idle expiry finished before its 270 s lifetime answers a Rollback after
+// 270 s with 0, because the idle expiry (not the lifetime) finished it.
+#[test]
+fn a_rollback_of_an_idle_expired_token_after_270_s_is_accepted() {
+    let mut state = FirestoreState::with_limit_scope(LimitScope::Production);
+    let transaction = state.begin_transaction(false, t(0)).unwrap();
+    state.rollback_at(&transaction, t(290)).unwrap();
+}
+
+// Production remembers an expired token for 30 s even when more than 8 192 finished transactions pile up in the
+// meantime: eviction takes the oldest finished lineage first, but never a token still remembered as expired.
+#[test]
+fn a_flood_of_finished_transactions_does_not_make_production_forget_an_expired_token_early() {
+    let (mut state, transaction) = aged_transaction();
+    aborted_no_longer_valid(state.touch_transaction(&transaction, t(271)));
+    for _ in 0..9_000 {
+        let other = state.begin_transaction(false, t(272)).unwrap();
+        state.rollback_at(&other, t(272)).unwrap();
+    }
+    let bookkeeping = state.transaction_bookkeeping_stats();
+    assert_eq!(bookkeeping.finished, 8_192);
+    assert_eq!(bookkeeping.finished, bookkeeping.finished_deadlines);
+    aborted_no_longer_valid(state.touch_transaction(&transaction, t(280)));
+    invalid_transaction(state.touch_transaction(&transaction, t(301)));
+}
+
+// The emulator profile is exactly as before: a bare Rollback past 270 s finishes the transaction, and a later read
+// answers ABORTED (not INVALID_ARGUMENT), as it did before production began to prune first.
+#[test]
+fn the_emulator_profiles_bare_rollback_past_the_lifetime_is_unchanged() {
+    let (mut state, transaction) = emulator_aged_transaction();
+    state.rollback_at(&transaction, t(275)).unwrap();
+    aborted_no_longer_valid(state.touch_transaction(&transaction, t(276)));
+}
+
+#[test]
+fn a_writer_outside_an_expired_transaction_is_not_held_by_its_locks() {
+    // P11 v4: the outside writer after the expiry answered 0 at normal pace.
+    let (mut state, transaction) = aged_transaction();
+    aborted_no_longer_valid(state.touch_transaction(&transaction, t(271)));
+    state
+        .commit(&[set("p11/doc", &[("v", Value::Integer(3))])], None, t(272))
+        .unwrap();
+}
+
+#[test]
+fn an_idle_expiry_keeps_answering_aborted_until_the_total_lifetime() {
+    let mut state = FirestoreState::with_limit_scope(LimitScope::Production);
+    let transaction = state.begin_transaction(false, t(0)).unwrap();
+    aborted_no_longer_valid(state.touch_transaction(&transaction, t(130)));
+    aborted_no_longer_valid(state.touch_transaction(&transaction, t(131)));
+}
+
+fn invalid_argument_expired(result: Result<(), FirestoreError>) {
+    match result {
+        Err(FirestoreError::InvalidArgument(message)) if message == NO_LONGER_VALID => {}
+        other => panic!("expected INVALID_ARGUMENT no longer valid, got {other:?}"),
+    }
+}
+
+fn emulator_aged_transaction() -> (FirestoreState, TransactionId) {
+    let mut state = FirestoreState::with_limit_scope(LimitScope::OfficialEmulator);
+    state
+        .commit(&[set("p11/doc", &[("v", Value::Integer(1))])], None, t(0))
+        .unwrap();
+    let transaction = state.begin_transaction(false, t(0)).unwrap();
+    for second in (30..=240).step_by(30) {
+        state.touch_transaction(&transaction, t(second)).unwrap();
+    }
+    (state, transaction)
+}
+
+// The official emulator (v1.22.0, REST, real time, measured): a transaction kept alive by reads answers a
+// read at 270.3 s HTTP 400 INVALID_ARGUMENT "no longer valid", a Commit right after HTTP 409 ABORTED with the
+// same text, and a Rollback 200. The emulator profile matches it in each order below; only read, Commit,
+// Rollback was measured, the rest keeps the same answers by request kind. gRPC's wire form is unmeasured.
+#[test]
+fn the_emulator_profile_answers_a_read_after_the_total_lifetime_invalid_argument() {
+    let (mut state, transaction) = emulator_aged_transaction();
+    invalid_argument_expired(state.touch_transaction(&transaction, t(271)));
+    // Maintenance at the deadline (another begin) keeps the transaction for the first request that asks.
+    let (mut state, transaction) = emulator_aged_transaction();
+    let _other = state.begin_transaction(true, t(271)).unwrap();
+    invalid_argument_expired(state.touch_transaction(&transaction, t(272)));
+}
+
+#[test]
+fn the_emulator_profile_answers_a_commit_after_the_total_lifetime_aborted_also_after_a_read() {
+    let write = [set("p11/doc", &[("v", Value::Integer(2))])];
+    let (mut state, transaction) = emulator_aged_transaction();
+    aborted_no_longer_valid(state.commit(&write, Some(&transaction), t(271)).map(|_| ()));
+    let (mut state, transaction) = emulator_aged_transaction();
+    invalid_argument_expired(state.touch_transaction(&transaction, t(271)));
+    aborted_no_longer_valid(state.commit(&write, Some(&transaction), t(272)).map(|_| ()));
+    let (mut state, transaction) = emulator_aged_transaction();
+    let _other = state.begin_transaction(true, t(271)).unwrap();
+    aborted_no_longer_valid(state.commit(&write, Some(&transaction), t(272)).map(|_| ()));
+}
+
+#[test]
+fn the_emulator_profile_accepts_a_rollback_after_the_total_lifetime() {
+    let write = [set("p11/doc", &[("v", Value::Integer(2))])];
+    let (mut state, transaction) = emulator_aged_transaction();
+    invalid_argument_expired(state.touch_transaction(&transaction, t(271)));
+    aborted_no_longer_valid(state.commit(&write, Some(&transaction), t(272)).map(|_| ()));
+    state.rollback(&transaction).unwrap();
+    // As the first request, whether the request or maintenance found the expiry.
+    let (mut state, transaction) = emulator_aged_transaction();
+    state.rollback(&transaction).unwrap();
+    let (mut state, transaction) = emulator_aged_transaction();
+    let _other = state.begin_transaction(true, t(271)).unwrap();
+    state.rollback(&transaction).unwrap();
+}
+
+// Bounded, like the production profile's: an expiry nobody asked about is forgotten after the retention bound.
+#[test]
+fn the_emulator_profile_forgets_an_unasked_lifetime_expiry_after_the_retention_bound() {
+    let (mut state, transaction) = emulator_aged_transaction();
+    let _other = state.begin_transaction(true, t(271 + 601)).unwrap();
+    invalid_transaction(state.touch_transaction(&transaction, t(271 + 602)));
+}
+
+#[test]
+fn a_transaction_with_no_preconditions_refused_is_not_ended_by_other_refusals() {
+    // Only the precondition refusal is measured; a commit that fails for another reason (here a
+    // document that is too large to store) keeps its transaction as before.
+    let (mut state, transaction) = refused_commit_state(LimitScope::Production);
+    let huge = Value::String("x".repeat(1_100_000));
+    let failing = set("p08/held", &[("v", huge)]);
+    assert!(state.commit(&[failing], Some(&transaction), t(2)).is_err());
+    assert!(state
+        .get_in_transaction(&transaction, &path("p08/held"))
+        .is_ok());
+}
+
+#[test]
+fn a_transaction_ended_by_a_refused_commit_may_be_retried_like_a_rolled_back_one() {
+    for scope in [LimitScope::Production, LimitScope::OfficialEmulator] {
+        let (mut state, transaction) = refused_commit_state(scope);
+        let missing = precondition_write("p08/missing", Precondition::Exists(true));
+        assert!(state.commit(&[missing], Some(&transaction), t(2)).is_err());
+        let retried = state.retry_transaction(&transaction, t(3)).unwrap();
+        state.touch_transaction(&retried, t(3)).unwrap();
+        state
+            .get_in_transaction(&retried, &path("p08/held"))
+            .unwrap();
+        state
+            .commit(
+                &[set("p08/held", &[("v", Value::Integer(2))])],
+                Some(&retried),
+                t(4),
+            )
+            .unwrap();
+    }
+}
+
+#[test]
+fn a_precondition_refused_commit_outside_a_transaction_leaves_every_transaction_alone() {
+    for scope in [LimitScope::Production, LimitScope::OfficialEmulator] {
+        let (mut state, transaction) = refused_commit_state(scope);
+        let missing = precondition_write("p08/missing", Precondition::Exists(true));
+        assert!(matches!(
+            state.commit(&[missing], None, t(2)),
+            Err(FirestoreError::NotFound(_))
+        ));
+        state
+            .get_in_transaction(&transaction, &path("p08/held"))
+            .unwrap();
+        state
+            .commit(
+                &[set("p08/held", &[("v", Value::Integer(4))])],
+                Some(&transaction),
+                t(3),
+            )
+            .unwrap();
+        let fresh = state.begin_transaction(false, t(4)).unwrap();
+        assert!(state
+            .get_in_transaction(&fresh, &path("p08/missing"))
+            .is_ok());
+    }
 }

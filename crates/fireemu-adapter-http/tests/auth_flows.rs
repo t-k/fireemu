@@ -927,6 +927,7 @@ fn rejected_email_change_preserves_oob_code_and_account_state() {
 }
 
 #[test]
+#[allow(clippy::too_many_lines)]
 fn rejected_email_change_preserves_code_for_an_inactive_duplicate_owner() {
     let s = state();
     let config_path = format!("{EMU}/config");
@@ -941,15 +942,26 @@ fn rejected_email_change_preserves_code_for_an_inactive_duplicate_owner() {
 
     let owner_user = sign_up(&s, "oob-inactive-owner@example.com");
     let target_a = sign_up(&s, "oob-inactive-target@example.com");
-    // A second owner of the address can only be imported: production refuses a second
-    // password account even in duplicate-email mode.
+    // The emulator checks the raw address before storing it in lowercase, so a case
+    // variant creates duplicate owners without relying on importing a taken lowercase
+    // address. Keep this email-action regression under the emulator profile.
     let (status, imported) = admin(
         &s,
         &format!("{V1}/projects/demo-app/accounts:batchCreate"),
-        &json!({"users": [{"localId": "oob-inactive-target-b", "email": "oob-inactive-target@example.com"}]}),
+        &json!({"users": [{"localId": "oob-inactive-target-b", "email": "Oob-Inactive-Target@Example.com"}]}),
     );
     assert_eq!(status, 200, "{imported}");
     assert!(imported.get("error").is_none(), "{imported}");
+    assert_eq!(
+        s.store
+            .lock()
+            .unwrap()
+            .user_by_id("oob-inactive-target-b")
+            .unwrap()
+            .email
+            .as_deref(),
+        Some("oob-inactive-target@example.com")
+    );
     let target_b = json!({"localId": "oob-inactive-target-b"});
     let (status, verified) = admin(
         &s,
@@ -3434,34 +3446,44 @@ fn tenant_manager_crud_lists_and_removes_explicit_tenants() {
     let listed = handle_with(&s, "GET", &collection, &owner(), &json!({}));
     // Production answers an empty list as `{}` (AUTH-TENANT-BLOCKING recording 2026-09-27).
     assert!(listed.body.get("tenants").is_none(), "{}", listed.body);
+    // The official emulator makes a tenant it has not seen when a request names it, and answers
+    // it with the defaults (`getTenantProject`).
     let implicit = handle_with(&s, "GET", &item, &owner(), &json!({}));
-    assert_eq!(implicit.status, 404, "{}", implicit.body);
-    assert_eq!(implicit.body["error"]["message"], "TENANT_NOT_FOUND");
+    assert_eq!(implicit.status, 200, "{}", implicit.body);
+    assert_eq!(implicit.body["allowPasswordSignup"], true);
+    assert_eq!(implicit.body["enableAnonymousUser"], true);
+    assert_eq!(implicit.body["enableEmailLinkSignin"], true);
 }
 
+/// The emulator profile makes an unknown tenant on the way, as the official emulator does, for a
+/// client request and an Admin request alike (`getProjectStateById`).
 #[test]
-fn untrusted_requests_cannot_create_or_use_an_unknown_tenant() {
+fn requests_naming_an_unknown_tenant_make_it_on_the_way() {
     use fireemu_core_auth::store::AuthRegistry;
 
     let mut s = state();
     let registry = Arc::new(AuthRegistry::new("demo-app", s.store.clone()));
     s.registry = Some(registry.clone());
 
-    let (status, refused) = post(
+    let (status, made) = post(
         &s,
         &format!("{V1}/accounts:signUp"),
-        &json!({"tenantId": "attacker", "email": "a@example.com", "password": "hunter22"}),
+        &json!({"tenantId": "made-one", "email": "a@example.com", "password": "hunter22"}),
     );
-    assert_eq!(status, 400, "{refused}");
-    assert!(registry.tenant_store("demo-app", "attacker").is_none());
+    assert_eq!(status, 200, "{made}");
+    assert!(registry.tenant_store("demo-app", "made-one").is_some());
 
-    let (status, refused) = admin(
+    let (status, made) = admin(
         &s,
-        &format!("{V1}/projects/demo-app/tenants/attacker/accounts"),
-        &json!({"localId": "u1", "email": "a@example.com"}),
+        &format!("{V1}/projects/demo-app/tenants/made-two/accounts"),
+        &json!({"localId": "u1", "email": "b@example.com"}),
     );
-    assert_eq!(status, 404, "{refused}");
-    assert!(registry.tenant_store("demo-app", "attacker").is_none());
+    assert_eq!(status, 200, "{made}");
+    assert!(registry.tenant_store("demo-app", "made-two").is_some());
+    // The tenants are separate namespaces: the project holds neither user.
+    let store = s.store.lock().unwrap();
+    assert!(store.user_by_email("a@example.com").is_none());
+    assert!(store.user_by_email("b@example.com").is_none());
 }
 
 #[test]

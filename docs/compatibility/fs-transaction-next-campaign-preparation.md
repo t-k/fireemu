@@ -2,15 +2,19 @@
 
 ## Status
 
-`WAITING_ORACLE`. This is preparation only. No production request was sent, no
-credential was read or bound, and no parent group is promoted. The number of
-production-unobserved FS-TRANSACTION conditions is unchanged by this work.
+`IMPLEMENTING`, with recorded partial REST evidence. The preparation tables below retain the predictions made before production recording; they are historical expectations, not the current runtime's answers. The original case table, collector sources and earlier local-shadow records remain unchanged.
 
 The package is credential-free by contract: nothing here discovers, reads or
 stores an access token, a refresh token or an API key, and the comparator
 refuses a receipt that carries credential material.
 
-## What the FS-TRANSACTION row still needs
+## Recorded partial comparison (2026-09-28)
+
+Two independent sandbox recordings completed all 13 cases with 75 external requests each, confirmed absence of all five owned documents, and left no open transaction or unresolved resource. The [recorded comparison](../../spec/compatibility/broad-runs/fs-transaction-expiry-retry-04-recorded-comparison-v1.json) binds those receipts, the source build and both local profiles. It records normalized codes, diagnostics and post-state, retaining the historical preparation's four disagreements.
+
+The repaired source is `6fc6da362aab0123096d46994c542a157a8064dd`. A clean build produced artifact SHA-256 `22d98b730e6daaadefee3e10a392ab7e0f7b12e3fcf10922f866b583bcbec65d`; identical artifact bytes were copied into each profile's owned local run. Both strict and emulator agree with both production receipts on all 13 cases. Production used measured wall time; local runs used the control clock. These controls establish success before the observed expiry and failure sufficiently afterward; they do not identify the exact idle-expiry threshold. The five results that differ from the historical expectations are tabulated in the last section of this document.
+
+## Historical preparation scope
 
 The compatibility inventory records the remaining boundary as "production
 conflict/error/retention behavior and SDK retry semantics need bounded
@@ -26,10 +30,7 @@ because a large part of it is already observed:
   the happy `readWrite.retryTransaction` path, and a `read_time` before database
   creation.
 
-What no recorded production observation covers is the behavior of a transaction
-that ran out of time rather than being finished by the client, the state of a
-token after a rollback rather than a commit, and every refusal path of the retry
-token. That is this campaign's scope.
+At preparation time, the missing observations concerned a transaction that ran out of time, a token after rollback rather than commit, and the remaining retry-token refusal paths. The recorded-results section above describes the subsequent observations within this campaign's bounded scope.
 
 ## Observation cases
 
@@ -41,7 +42,7 @@ and must name the evidence it repeats. A test enforces each of those rules.
 
 ### Idle expiry
 
-| Case | Kind | Expected local result |
+| Case | Kind | Historical expected local result |
 | --- | --- | --- |
 | `idle-expiry/commit-before-idle` | control | `OK` after 20 seconds idle |
 | `idle-expiry/commit-after-idle` | observation | `ABORTED`, the referenced transaction has expired or is no longer valid |
@@ -58,18 +59,17 @@ control that cannot fail proves nothing.
 
 ### Finished tokens
 
-| Case | Kind | Expected local result |
+| Case | Kind | Historical expected local result |
 | --- | --- | --- |
 | `finished-token/rollback-after-begin` | control | `OK` |
 | `finished-token/rollback-after-commit` | observation | `ABORTED`, expired or no longer valid |
 | `finished-token/rollback-after-rollback` | observation | `ABORTED`, expired or no longer valid |
 
-Production has been observed committing a finished transaction again. It has not
-been observed rolling one back.
+At preparation time, the saved references covered committing a finished transaction again; this campaign proposed the missing rollback observations. Their subsequent results are retained above.
 
 ### Retry tokens
 
-| Case | Kind | Expected local result |
+| Case | Kind | Historical expected local result |
 | --- | --- | --- |
 | `retry-token/retry-with-rolled-back-previous` | control | `OK`, a rolled-back attempt can seed one retry |
 | `retry-token/retry-with-committed-previous` | observation | `INVALID_ARGUMENT`, invalid retry transaction |
@@ -538,3 +538,28 @@ document:
   profile.
 - Independent O7 admission review and an owner-minted approval outside the
   package.
+
+## Recorded partial comparison: results
+
+The table and the scope statement that belong to the recorded partial comparison above.
+
+| Case | Actual recorded result in both production recordings |
+| --- | --- |
+| `idle-expiry/rollback-after-idle` | `OK` |
+| `finished-token/rollback-after-rollback` | `OK` |
+| `retry-token/retry-with-committed-previous` | `OK` |
+| `retry-token/retry-with-read-only-previous` | `INVALID_ARGUMENT`, `Cannot retry a read-only transaction` |
+| `finished-token/rollback-after-commit` | `ABORTED`, `The referenced transaction has expired or is no longer valid.` |
+
+This is partial evidence for idle-expiry, retry-token-lifecycle and the finished-token subset of failed-commit-and-rollback. Separate [native idle-candidate evidence](fs-transaction-idle-candidates.md) now covers representative P10 recipes and their provisional strict repair; it does not establish exact expiry or the remaining failed-commit chain. The other 15 frozen conditions receive no observation from this REST corpus; the [18-condition closure](../../spec/compatibility/closure/FS-TRANSACTION.json), final regression, independent closure review and official emulator profile gate remain open. No condition or parent is promoted and this comparison grants no further production permission.
+
+## Strict answers that go beyond the recordings
+
+The strict profile answers the following from a rule that fits the recordings in hand; none of these answers is itself recorded, and each remains open until a later recording decides it.
+
+- **The commit time of an empty commit.** Recorded: an empty commit of a transaction that has read answers the time of its first read (read-write over REST, P01; read-only over both transports, P02), and consumes no commit time. An empty commit of a read-write transaction that has not read answers no time over gRPC (P01), and an empty commit outside a transaction answers `{}` over REST (matrix `writes/preconditions-and-masks#empty-commit`). The rule strict follows, "a time if and only if the transaction has read, and it is the first read's time", also fits the recordings better than a rule that splits by transport. Not recorded: a REST read-write empty commit without a read, a gRPC read-write one after a read, a read-only one without a read, and the time of a later read.
+- **A read-only transaction after a refused write.** Recorded (P02b, REST and gRPC, two recordings that agree): the write commit answers 3 "Cannot modify entities in a read-only transaction."; after that a read and an empty commit on the same token, in either order, answer 3 with the expired text, and a Rollback answers 0. Strict answers all of these (a refused write ends the token, `CommitRefused`). Not recorded: a batch read or a query on that token, which strict answers the same way. The emulator profile keeps the token open, as the official emulator does (a divergence, `transactions/lifecycle#read-only-commit-without-writes`).
+- **After the total lifetime.** Recorded (P11 REST recording 1, and P11 v4 on REST and gRPC, two recordings that agree): at token ages of about 283 to 288 s a read and then a Commit each answer 10 with the expired text, the chain-end Rollback answers 10 with it, and an outside writer is not held (0); a read at 298.7 to 301.0 s still answers 10 and the Commit about a second after it, and a Rollback, answer 3 "Invalid transaction.". Strict follows that: every request answers 10 while the token is remembered, and 3 once it is forgotten at 300 s of token age (the bracket is (298.7, 302.2]). Not recorded: a Commit or Rollback as the very first request at 270 to 300 s (strict answers 10, as for a read), a retry naming an expired token (strict refuses it unless a Rollback reached the token first, an order dependence the local contract pins), a Rollback of a token that idled out before 270 s, asked after 270 s (strict answers 0), the exact forgetting age inside the bracket, and whether a token that idled out is remembered to the same age (strict remembers it). P12 (REST, two agreeing recordings) recorded the first requests past the forgetting age, at token age about 325 to 330 s: a Commit or a Rollback as the first request, and the reads, Commits and Rollbacks after it, all answered 3 "Invalid transaction.", so a token nobody asked about is forgotten by then.
+- **A read-write transaction's first read.** Recorded (P02b chain Z, REST and gRPC, two recordings): an outside writer that commits between the begin and the first read is shown by that read, and the transaction's commit then answers 0; the Rollback after that commit answers 10 with the expired text. Both profiles read at the first use (strict changed from the begin-time snapshot with the P02b findings). The emulator profile already did, because the official emulator does: the Cloud Firestore Emulator v1.22.0 that the pinned firebase-tools 15.28.2 downloads (jar sha256 9b6498b7f62714d67f48f59b3818883cd682dbcd46b9f59511de81c97bb5166c), measured on 2026-09-30 over gRPC and REST, shows the writer at the first read of a read-write transaction and answers its commit 0 (a writer after the first read is refused code 10 "Transaction lock timeout." after about 2.4 s), so neither profile refuses more than the official emulator. Not recorded: a retried read-write transaction (`retryTransaction`), which strict still reads at its begin.
+- **Three REST idle-expiry cases, replayed against strict (2026-09-30).** The 2026-09-28 statement that both profiles matched both production receipts on all 13 cases stays as history: it held for the idle policy of that date. P10-C superseded the 60 + 30 second policy (strict now expires an idle transaction above 120 seconds), and the REST rows of `idle-expiry/commit-after-idle`, `idle-expiry/lock-released-after-idle` and `idle-expiry/rollback-after-idle` record only a response-to-response idle (120.345 to 121.150 seconds for the commit) whose interval, one request round trip either side, contains 120 seconds. No wait chosen for a replay would decide strict's answer by evidence, so the recorded comparison declares these three cases superseded for the strict profile (`supersededForStrict`) and compares the other ten; the emulator profile still matches all 13. The native P10-B and P10-C recordings, which carry dispatch and response bounds for each request, decide strict's idle limit. A later re-recording of idle cases must keep per-request dispatch and response times.
+

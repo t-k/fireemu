@@ -241,13 +241,37 @@ fn open_cache_directory(root: &Path) -> Result<std::fs::File, ()> {
     Ok(directory)
 }
 
+/// Answers whether the ACL of an opened directory or file has entries.
+#[cfg(target_os = "macos")]
+type AclReader = fn(std::os::fd::BorrowedFd<'_>) -> std::io::Result<bool>;
+
+/// Accepts an opened cache directory or entry only when its ACL is known to have no entries.
+///
+/// The cache holds session signing keys, so an ACL entry, which can grant other users
+/// access that the owner-only mode does not show, keeps the cache unused. A read that fails
+/// refuses the file too, and the caller then generates the key in memory.
+///
+/// The ACL is read through the opened descriptor (`acl_get_fd_np`), never by path. Reading
+/// `/dev/fd/N` by path does not work: Darwin answers `ENOENT` for every descriptor, even when
+/// the file has ACL entries, and a reader that takes that for an empty ACL never detects an
+/// entry.
 #[cfg(target_os = "macos")]
 fn reject_extended_acl(file: &std::fs::File) -> Result<(), ()> {
-    use std::os::fd::AsRawFd as _;
+    use std::os::fd::AsFd as _;
 
-    let path = format!("/dev/fd/{}", file.as_raw_fd());
-    let entries = exacl::getfacl(path, None).map_err(|_| ())?;
-    entries.is_empty().then_some(()).ok_or(())
+    match acl_reader()(file.as_fd()) {
+        Ok(false) => Ok(()),
+        Ok(true) | Err(_) => Err(()),
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn acl_reader() -> AclReader {
+    #[cfg(test)]
+    if let Some(reader) = tests::ACL_READER.with(std::cell::Cell::get) {
+        return reader;
+    }
+    fireemu_fd_acl::fd_has_extended_acl
 }
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
@@ -385,6 +409,44 @@ mod tests {
     use super::{cache_entry_path, entry_name, load_entry, open_cache_directory, EntryLoad};
     #[cfg(unix)]
     use crate::import_export::trusted_temp::TrustedTempDir;
+
+    #[cfg(target_os = "macos")]
+    thread_local! {
+        /// A test's replacement for the descriptor ACL reader, on the calling thread only.
+        pub(super) static ACL_READER: std::cell::Cell<Option<super::AclReader>> =
+            const { std::cell::Cell::new(None) };
+    }
+
+    /// Runs `body` with `reader` in place of the descriptor ACL reader on this thread.
+    #[cfg(target_os = "macos")]
+    fn with_acl_reader<T>(reader: super::AclReader, body: impl FnOnce() -> T) -> T {
+        struct Restore;
+        impl Drop for Restore {
+            fn drop(&mut self) {
+                ACL_READER.with(|slot| slot.set(None));
+            }
+        }
+        ACL_READER.with(|slot| slot.set(Some(reader)));
+        let _restore = Restore;
+        body()
+    }
+
+    /// A reader that fails for every descriptor.
+    #[cfg(target_os = "macos")]
+    fn unreadable_acl(_: std::os::fd::BorrowedFd<'_>) -> std::io::Result<bool> {
+        Err(std::io::Error::other("ACL read failed"))
+    }
+
+    /// A reader that fails for regular files and reports no entries for directories.
+    #[cfg(target_os = "macos")]
+    fn unreadable_file_acl(descriptor: std::os::fd::BorrowedFd<'_>) -> std::io::Result<bool> {
+        let stat = rustix::fs::fstat(descriptor)?;
+        if rustix::fs::FileType::from_raw_mode(stat.st_mode) == rustix::fs::FileType::RegularFile {
+            Err(std::io::Error::other("ACL read failed"))
+        } else {
+            Ok(false)
+        }
+    }
 
     #[cfg(unix)]
     fn scratch(name: &str) -> TrustedTempDir {
@@ -674,6 +736,260 @@ mod tests {
             .unwrap();
         assert_eq!(entries.len(), 1);
         let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// Adds one ACL entry to `path` with the system `chmod`.
+    #[cfg(target_os = "macos")]
+    fn add_acl_entry(path: &std::path::Path, entry: &str) {
+        let status = std::process::Command::new("/bin/chmod")
+            .arg("+a")
+            .arg(entry)
+            .arg(path)
+            .status()
+            .unwrap();
+        assert!(status.success(), "chmod +a {entry:?} {}", path.display());
+    }
+
+    /// Removes every ACL entry below and including `path`.
+    #[cfg(target_os = "macos")]
+    fn clear_acl_entries(path: &std::path::Path) {
+        let status = std::process::Command::new("/bin/chmod")
+            .arg("-RN")
+            .arg(path)
+            .status()
+            .unwrap();
+        assert!(status.success(), "chmod -RN {}", path.display());
+    }
+
+    /// The `ls -led` listing of `path`, which names its ACL entries.
+    #[cfg(target_os = "macos")]
+    fn acl_listing(path: &std::path::Path) -> String {
+        let output = std::process::Command::new("/bin/ls")
+            .arg("-led")
+            .arg(path)
+            .output()
+            .unwrap();
+        assert!(output.status.success());
+        String::from_utf8(output.stdout).unwrap()
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn a_managed_directory_with_an_acl_entry_is_refused() {
+        for depth in 1..=super::MANAGED_DIRECTORIES.len() {
+            let root = scratch("acl-directory");
+            let seed = 20 + depth as u64;
+            assert!(!load_or_generate_at(&root, seed).unwrap().hit);
+            assert!(load_or_generate_at(&root, seed).unwrap().hit);
+            let entry = cache_entry_path(&root, seed);
+            let original = std::fs::read(&entry).unwrap();
+            let managed = super::MANAGED_DIRECTORIES[..depth]
+                .iter()
+                .fold(root.to_path_buf(), |path, component| path.join(component));
+            add_acl_entry(&managed, "everyone allow read");
+            assert!(acl_listing(&managed).contains("everyone allow"));
+
+            assert!(
+                open_cache_directory(&root).is_err(),
+                "{} carries an ACL entry",
+                managed.display()
+            );
+            let uncached = load_or_generate_at(&root, seed).unwrap();
+            assert!(!uncached.hit, "{} carries an ACL entry", managed.display());
+            assert_eq!(std::fs::read(&entry).unwrap(), original);
+
+            clear_acl_entries(&root);
+            assert!(load_or_generate_at(&root, seed).unwrap().hit);
+            let _ = std::fs::remove_dir_all(root);
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn an_entry_file_with_an_acl_entry_is_refused_and_left_untouched() {
+        let root = scratch("acl-entry");
+        let first = load_or_generate_at(&root, 24).unwrap();
+        assert!(!first.hit);
+        assert!(load_or_generate_at(&root, 24).unwrap().hit);
+        let entry = cache_entry_path(&root, 24);
+        let original = std::fs::read(&entry).unwrap();
+        add_acl_entry(&entry, "everyone allow read");
+
+        let directory = open_cache_directory(&root).unwrap();
+        assert!(matches!(
+            load_entry(&directory, &entry_name(24), 24),
+            EntryLoad::UnsafeOrInvalid
+        ));
+        let uncached = load_or_generate_at(&root, 24).unwrap();
+        assert!(!uncached.hit);
+        assert_eq!(first.signer.kid(), uncached.signer.kid());
+        assert_eq!(std::fs::read(&entry).unwrap(), original);
+        assert!(acl_listing(&entry).contains("everyone allow read"));
+
+        clear_acl_entries(&root);
+        assert!(load_or_generate_at(&root, 24).unwrap().hit);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn inheritable_acl_entries_on_the_cache_base_keep_the_cache_unused() {
+        let root = scratch("acl-inherited");
+        add_acl_entry(
+            &root,
+            "everyone allow list,search,add_file,add_subdirectory,read,write,file_inherit,directory_inherit",
+        );
+
+        let first = load_or_generate_at(&root, 25).unwrap();
+        assert!(!first.hit);
+        let second = load_or_generate_at(&root, 25).unwrap();
+        assert!(!second.hit);
+        assert_eq!(first.signer.kid(), second.signer.kid());
+        assert!(!cache_entry_path(&root, 25).exists());
+
+        clear_acl_entries(&root);
+        assert!(!load_or_generate_at(&root, 25).unwrap().hit);
+        assert!(load_or_generate_at(&root, 25).unwrap().hit);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn an_unreadable_directory_acl_keeps_the_cache_unused() {
+        let root = scratch("acl-unreadable-directory");
+        with_acl_reader(unreadable_acl, || {
+            assert!(open_cache_directory(&root).is_err());
+            let first = load_or_generate_at(&root, 26).unwrap();
+            assert!(!first.hit);
+            let second = load_or_generate_at(&root, 26).unwrap();
+            assert!(!second.hit);
+            assert_eq!(first.signer.kid(), second.signer.kid());
+        });
+        assert!(!cache_entry_path(&root, 26).exists());
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn an_unreadable_entry_acl_refuses_the_entry_without_touching_it() {
+        let root = scratch("acl-unreadable-entry");
+        let first = load_or_generate_at(&root, 27).unwrap();
+        assert!(load_or_generate_at(&root, 27).unwrap().hit);
+        let entry = cache_entry_path(&root, 27);
+        let original = std::fs::read(&entry).unwrap();
+
+        with_acl_reader(unreadable_file_acl, || {
+            let directory = open_cache_directory(&root).unwrap();
+            assert!(matches!(
+                load_entry(&directory, &entry_name(27), 27),
+                EntryLoad::UnsafeOrInvalid
+            ));
+            let uncached = load_or_generate_at(&root, 27).unwrap();
+            assert!(!uncached.hit);
+            assert_eq!(first.signer.kid(), uncached.signer.kid());
+        });
+        assert_eq!(std::fs::read(&entry).unwrap(), original);
+        assert!(load_or_generate_at(&root, 27).unwrap().hit);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// Runs `chmod -RN` on a path when dropped, so that a failing test leaves no ACL entry.
+    #[cfg(target_os = "macos")]
+    struct AclCleanup(std::path::PathBuf);
+
+    #[cfg(target_os = "macos")]
+    impl Drop for AclCleanup {
+        fn drop(&mut self) {
+            let _ = std::process::Command::new("/bin/chmod")
+                .arg("-RN")
+                .arg(&self.0)
+                .status();
+        }
+    }
+
+    /// Gives `path` the allow entry `allow` behind `everyone deny readsecurity`.
+    ///
+    /// The deny applies to the owner too, so the owner can no longer read the ACL, while
+    /// `fstat` still succeeds: the owner-only metadata check passes and only the ACL read
+    /// stands between the cache and a key that another user may read. The allow entry is
+    /// added first, because once the deny is in place `chmod +a` cannot read the ACL it
+    /// extends and replaces it with the new entry alone. The owner may still run `chmod -N`.
+    #[cfg(target_os = "macos")]
+    fn add_acl_entry_behind_unreadable_security(path: &std::path::Path, allow: &str) {
+        add_acl_entry(path, allow);
+        assert!(acl_listing(path).contains(allow));
+        add_acl_entry(path, "everyone deny readsecurity");
+
+        assert!(std::fs::File::open(path).unwrap().metadata().is_ok());
+        let listing = std::process::Command::new("/bin/ls")
+            .arg("-led")
+            .arg(path)
+            .output()
+            .unwrap();
+        assert!(
+            !listing.status.success(),
+            "{} ACL is readable",
+            path.display()
+        );
+        assert!(String::from_utf8_lossy(&listing.stderr).contains("Permission denied"));
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn an_entry_file_whose_acl_the_owner_cannot_read_is_refused() {
+        let root = scratch("acl-eacces-entry");
+        let _cleanup = AclCleanup(root.to_path_buf());
+        let first = load_or_generate_at(&root, 28).unwrap();
+        assert!(!first.hit);
+        assert!(load_or_generate_at(&root, 28).unwrap().hit);
+        let entry = cache_entry_path(&root, 28);
+        let original = std::fs::read(&entry).unwrap();
+        add_acl_entry_behind_unreadable_security(&entry, "user:nobody allow read");
+
+        let directory = open_cache_directory(&root).unwrap();
+        assert!(matches!(
+            load_entry(&directory, &entry_name(28), 28),
+            EntryLoad::UnsafeOrInvalid
+        ));
+        let uncached = load_or_generate_at(&root, 28).unwrap();
+        assert!(!uncached.hit);
+        assert_eq!(first.signer.kid(), uncached.signer.kid());
+        assert_eq!(std::fs::read(&entry).unwrap(), original);
+
+        clear_acl_entries(&root);
+        assert!(load_or_generate_at(&root, 28).unwrap().hit);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn a_managed_directory_whose_acl_the_owner_cannot_read_is_refused() {
+        for depth in 1..=super::MANAGED_DIRECTORIES.len() {
+            let root = scratch("acl-eacces-directory");
+            let _cleanup = AclCleanup(root.to_path_buf());
+            let seed = 30 + depth as u64;
+            let first = load_or_generate_at(&root, seed).unwrap();
+            assert!(!first.hit);
+            assert!(load_or_generate_at(&root, seed).unwrap().hit);
+            let entry = cache_entry_path(&root, seed);
+            let original = std::fs::read(&entry).unwrap();
+            let managed = super::MANAGED_DIRECTORIES[..depth]
+                .iter()
+                .fold(root.to_path_buf(), |path, component| path.join(component));
+            add_acl_entry_behind_unreadable_security(&managed, "user:nobody allow list,search");
+
+            assert!(
+                open_cache_directory(&root).is_err(),
+                "{} has an unreadable ACL",
+                managed.display()
+            );
+            let uncached = load_or_generate_at(&root, seed).unwrap();
+            assert!(!uncached.hit, "{} has an unreadable ACL", managed.display());
+            assert_eq!(first.signer.kid(), uncached.signer.kid());
+            assert_eq!(std::fs::read(&entry).unwrap(), original);
+
+            clear_acl_entries(&root);
+            assert!(load_or_generate_at(&root, seed).unwrap().hit);
+        }
     }
 
     #[test]

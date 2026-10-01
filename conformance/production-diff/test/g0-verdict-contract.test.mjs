@@ -40,14 +40,16 @@ function withComparatorReply(reply, run) {
   const replacement = mock.method(childProcess, "execFileSync", () => JSON.stringify(reply));
   syncBuiltinESMExports();
   try {
-    return run(() => compareG0({
-      repo: process.cwd(),
-      entry,
-      program,
-      actual: { fixture: true },
-      execution,
-      build: { artifactSha256: artifactHash },
-    }));
+    return run(() =>
+      compareG0({
+        repo: process.cwd(),
+        entry,
+        program,
+        actual: { fixture: true },
+        execution,
+        build: { artifactSha256: artifactHash },
+      }),
+    );
   } finally {
     replacement.mock.restore();
     syncBuiltinESMExports();
@@ -79,14 +81,16 @@ function withPythonComparatorReply(reply, run) {
   });
   syncBuiltinESMExports();
   try {
-    return run((fixtureReply) => compareG0({
-      repo,
-      entry,
-      program,
-      actual: { fixtureReply },
-      execution,
-      build: { artifactSha256: artifactHash },
-    }));
+    return run((fixtureReply) =>
+      compareG0({
+        repo,
+        entry,
+        program,
+        actual: { fixtureReply },
+        execution,
+        build: { artifactSha256: artifactHash },
+      }),
+    );
   } finally {
     replacement.mock.restore();
     syncBuiltinESMExports();
@@ -152,7 +156,10 @@ test("an indeterminate reply retains reported rows as diagnostics only", () => {
       assert.deepEqual(comparison.counts, { match: 0, mismatch: 0, indeterminate: 12 });
       assert.equal(comparison.rows[4].reportedComparison, "MISMATCH");
       assert.equal(comparison.rows[5].comparisonReported, false);
-      assert.equal(gateExitCode(resultEnvelope({ entry, comparison, execution, provenance: {} })), 2);
+      assert.equal(
+        gateExitCode(resultEnvelope({ entry, comparison, execution, provenance: {} })),
+        2,
+      );
     },
   );
 });
@@ -160,8 +167,20 @@ test("an indeterminate reply retains reported rows as diagnostics only", () => {
 for (const [name, mutate, error] of [
   ["duplicate row", (rows) => rows.splice(1, 1, { ...rows[0] }), /g0-comparator-row-shape/],
   ["extra row", (rows) => rows.push({ ...rows[0] }), /g0-comparator-result-shape/],
-  ["foreign job", (rows) => { rows[0].job = "foreign"; }, /g0-comparator-row-shape/],
-  ["unknown verdict", (rows) => { rows[0].verdict = "cancelled"; }, /g0-comparator-row-shape/],
+  [
+    "foreign job",
+    (rows) => {
+      rows[0].job = "foreign";
+    },
+    /g0-comparator-row-shape/,
+  ],
+  [
+    "unknown verdict",
+    (rows) => {
+      rows[0].verdict = "cancelled";
+    },
+    /g0-comparator-row-shape/,
+  ],
 ]) {
   test(`rejects ${name} before producing a verdict`, () => {
     const rows = completeRows();
@@ -174,16 +193,19 @@ for (const [name, mutate, error] of [
 
 for (const phase of ["execution", "cleanup", "process"]) {
   test(`an exact match cannot override unconfirmed ${phase}`, () => {
-    withComparatorReply({ compatibility: "match", rows: completeRows(), reason: null }, (compare) => {
-      const changed = structuredClone(execution);
-      if (phase === "execution") changed.state = "failed";
-      else changed[phase] = { state: "unconfirmed" };
-      const comparison = compare();
-      const result = resultEnvelope({ entry, comparison, execution: changed, provenance: {} });
-      assert.equal(result.complete, false);
-      assert.equal(result.gatePassed, false);
-      assert.equal(gateExitCode(result), 2);
-    });
+    withComparatorReply(
+      { compatibility: "match", rows: completeRows(), reason: null },
+      (compare) => {
+        const changed = structuredClone(execution);
+        if (phase === "execution") changed.state = "failed";
+        else changed[phase] = { state: "unconfirmed" };
+        const comparison = compare();
+        const result = resultEnvelope({ entry, comparison, execution: changed, provenance: {} });
+        assert.equal(result.complete, false);
+        assert.equal(result.gatePassed, false);
+        assert.equal(gateExitCode(result), 2);
+      },
+    );
   });
 }
 
@@ -191,10 +213,17 @@ test("the producer's Python IPC preserves indeterminate without native or produc
   withPythonComparatorReply(
     { compatibility: "indeterminate", rows: [], reason: "fixture cleanup incomplete" },
     (compare) => {
-      const comparison = compare({ compatibility: "indeterminate", rows: [], reason: "fixture cleanup incomplete" });
+      const comparison = compare({
+        compatibility: "indeterminate",
+        rows: [],
+        reason: "fixture cleanup incomplete",
+      });
       assert.equal(comparison.verdict, "INDETERMINATE");
       assert.deepEqual(comparison.counts, { match: 0, mismatch: 0, indeterminate: 12 });
-      assert.equal(gateExitCode(resultEnvelope({ entry, comparison, execution, provenance: {} })), 2);
+      assert.equal(
+        gateExitCode(resultEnvelope({ entry, comparison, execution, provenance: {} })),
+        2,
+      );
     },
   );
 });

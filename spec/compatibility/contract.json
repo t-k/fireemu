@@ -138,10 +138,9 @@
     "documents": [
       "README.md"
     ],
-    "rule": "The claim is version-qualified and product-enumerated. It may not be widened to a complete-suite or unqualified superset claim while any surface in this contract has scope deferred or not-planned. The documents under scopedDocuments (what a release ships as its description) are held to the same scope rule as the README: a deferred or not-planned product may be named there only with its scope disclaimer.",
+    "rule": "The claim is version-qualified and product-enumerated. It may not be widened to a complete-suite or unqualified superset claim while any surface in this contract has scope deferred or not-planned. The npm package page is generated from README.md at pack time (npm/scripts/prepare-launcher.mjs), so the README rule covers it. The documents under scopedDocuments (what a release ships as its description) are held to the same scope rule as the README: a deferred or not-planned product may be named there only with its scope disclaimer.",
     "scopedDocuments": [
-      "npm/fireemu/package.json",
-      "npm/README.md"
+      "npm/fireemu/package.json"
     ]
   },
   "profiles": {
@@ -224,7 +223,7 @@
         },
         {
           "key": "rules.idTokenVerification",
-          "profileValue": "unsigned mock tokens are admitted, with the audience still bound to the routed Firestore resource project or Storage bucket project and a signed token still verified",
+          "profileValue": "unsigned mock tokens are admitted, with the audience bound to the routed Firestore resource project (Storage admits a token of another project, as the official emulator does); a token that fails verification is never admitted as its claimed user (Firestore refuses it, Storage treats the caller as anonymous)",
           "emulatorValue": "no verification at all: the token is decoded and request.auth is built from whatever it carries",
           "authority": {
             "kind": "intentional-local-policy",
@@ -237,9 +236,9 @@
               "package": "firebase-tools",
               "version": "15.28.2"
             },
-            "approvalRecord": "README.md#security-rules"
+            "approvalRecord": "docs.local/instructions/owner-decisions.md (2026-10-01, \"Rules emulator-profile signed-token verification\"); README.md#comparison-with-the-official-emulator"
           },
-          "note": "Measured against the pinned suite on 2026-08-31 with an unsigned token whose sub names no user: the Firestore emulator admitted it, admitted an exp of 3600 seconds after the epoch, admitted a token with no exp and no iss, admitted one whose aud named another project, and admitted one whose RS256 signature was garbage; the Storage emulator behaves the same way by construction (firebase-tools/lib/emulator/storage/rules/runtime.js calls jwt.decode). The emulator profile reproduces the part @firebase/rules-unit-testing depends on -- an unsigned token for an unknown subject with an expiry nobody reads -- and keeps two checks the official emulators skip: the audience must name the routed Firestore resource project or Storage bucket project, so a token cannot cross a session or project boundary, and a signed token must still verify, so a forged RS256 token never becomes an identity. An unregistered Firestore project owned by the default session is a valid routed namespace and is not replaced by the configured Auth project for this comparison. Both checks are refusals of requests the official emulator admits, which is why they are recorded here rather than left implicit."
+          "note": "Measured against the pinned suite on 2026-08-31 with an unsigned token whose sub names no user: the Firestore emulator admitted it, admitted an exp of 3600 seconds after the epoch, admitted a token with no exp and no iss, admitted one whose aud named another project, and admitted one whose RS256 signature was garbage; the Storage emulator behaves the same way by construction (firebase-tools/lib/emulator/storage/rules/runtime.js calls jwt.decode). The emulator profile reproduces the part @firebase/rules-unit-testing depends on -- an unsigned token for an unknown subject with an expiry nobody reads -- and keeps two differences from the official emulators: on Firestore the audience must name the routed resource project, so a token cannot cross a session or project boundary, and a token that fails verification is never admitted as its claimed user, so a forged RS256 token never becomes an identity (Firestore refuses it; Storage treats the caller as anonymous). On Storage the audience is not bound in the emulator profile: a token of another project is admitted, as the official emulator admits it. An unregistered Firestore project owned by the default session is a valid routed namespace and is not replaced by the configured Auth project for this comparison. Both differences refuse (or downgrade to anonymous) requests the official emulator admits, which is why they are recorded here rather than left implicit."
         },
         {
           "key": "auth.transientCredentialLifecycle",
@@ -385,24 +384,6 @@
             "reads/read-time#count-at-the-first-update-time"
           ],
           "note": "Measured against the pinned suite over the REST surface both emulators serve (authority checked 2026-09-06). The pinned divergence rows fall into five families, each backed by a production observation in conformance/firestore-production-matrix.json where production could serve the row: (1) production's REST wire shape -- no `done` marker on the last runQuery or runAggregationQuery element, a leading readTime/skippedResults element for an offset, no nextPageToken on a page that holds the last results, batchGet answered found-first in name order -- where the official emulator differs; (2) production's validation codes -- a second array-contains filter, a read_time before database creation, committing a read-only transaction and more than 500 field transforms on one document are INVALID_ARGUMENT -- where the official emulator answers FAILED_PRECONDITION or accepts; (3) official REST-adapter defects fireemu does not reproduce -- a bytes-typed query parameter (?transaction=) hangs the connection without a response, ?readTime= misparses (a read at the latest commit time included), a malformed page token and a fileless :securityRules body answer HTTP 500; (4) an official leniency fireemu refuses -- a write addressed to another database than the route; (5) capabilities fireemu serves that the official emulator refuses -- orderBy(__name__, desc) and PartitionQuery. Transactions lock what they read on both emulators and in production, so the transaction-concurrency rows are parity. Everything else in the matrix is parity, gated on status, canonical code and normalized body."
-        },
-        {
-          "key": "auth.missingTenantCreation",
-          "profileValue": "an account call whose target tenant (the path's, else the body's tenantId, else the ID token's) does not exist, or was deleted, answers USER_NOT_FOUND and creates no tenant",
-          "emulatorValue": "the same USER_NOT_FOUND, after the missing tenant is created on the way with the emulator's defaults (firebase-tools/lib/emulator/auth/server.js getProjectStateById, state.js getTenantProject), so the tenant exists afterwards",
-          "authority": {
-            "kind": "intentional-local-policy",
-            "sourceUrls": [
-              "https://github.com/firebase/firebase-tools/tree/v15.28.2"
-            ],
-            "checkedOn": "2026-09-29",
-            "officialBaseline": {
-              "package": "firebase-tools",
-              "version": "15.28.2"
-            },
-            "decidedBy": "project coordinator (delegated by the owner), 2026-09-29"
-          },
-          "note": "Read from the pinned source. The emulator profile answers as the official emulator does (the tenant check in crates/fireemu-adapter-http/src/identity_toolkit.rs emulator_named_tenant) but does not reproduce the side effect: a refused request never adds a tenant, so a deleted tenant stays deleted and the tenant list does not grow with each mistyped or stale tenant id. crates/fireemu-adapter-http/tests/auth_tenant_sdk_id_token.rs a_missing_tenant_is_not_created_by_its_refusal checks it in both profiles."
         }
       ]
     },
@@ -1210,7 +1191,13 @@
             "integration": [
               "crates/fireemu-adapter-http/tests/auth_flows.rs",
               "crates/fireemu-adapter-http/tests/identity_toolkit.rs",
-              "tools/sdk-smoke/auth.mjs"
+              "tools/sdk-smoke/auth.mjs",
+              "crates/fireemu/tests/auth_authorized_domains.rs",
+              "crates/fireemu-core-auth/tests/authorized_domains_seed.rs",
+              "crates/fireemu-adapter-http/tests/auth_emulator_official_answers.rs",
+              "crates/fireemu-adapter-http/tests/auth_tenant_seed.rs",
+              "crates/fireemu-core-auth/tests/tenant_seed.rs",
+              "crates/fireemu/tests/auth_tenants_config.rs"
             ],
             "conformance": [
               "auth/sign-up-and-sign-in-errors",
@@ -1228,6 +1215,10 @@
             "the official Auth emulator distinguishes EMAIL_NOT_FOUND from INVALID_PASSWORD unless emailPrivacyConfig.enableImprovedEmailPrivacy is set through its config route, which production no longer does by default"
           ],
           "fireemuOnly": [
+            {
+              "behaviour": "the emulator profile's accounts:batchCreate treats a null localId as unset under fireemu's ProtoJSON-null convention: repeated null/missing/empty IDs without allowOverwrite answer DUPLICATE_LOCAL_ID : (with a trailing space), while a single null ID is a per-row localId is missing error. The official emulator HTTP validator (firebase-tools 15.28.2) instead refuses a null localId before import with INVALID_ARGUMENT and Invalid JSON payload received. /users/0/localId must be string (the index follows the row). This is a documented message/validation-order difference; strict behavior and missing or empty string IDs are unchanged",
+              "precision": "documented-divergence"
+            },
             {
               "behaviour": "normal daemon starts re-key generated credential handles from a CSPRNG lifecycle incarnation so restart or namespace recreation cannot replay them; tests may inject a fixed incarnation for reproducibility",
               "precision": "exact-for-local-semantics"
@@ -1277,6 +1268,10 @@
               "precision": "documented-divergence"
             },
             {
+              "behaviour": "auth.authorizedDomains declares the initial project-wide domain list in both profiles using the Admin PATCH validation and normalization; a declared list replaces defaults, initializes future session and routed projects, and is restored on session reset. An Admin update changes only the live list; absent or null declarations preserve the existing defaults and unseeded reset behavior. Account clearing does not restore the declaration; Auth export/import transfers neither it nor the live list. Strict continues to enforce the live domains and emulator continues to allow external continue-URL hosts. Fireemu intentionally retains localhost in the default for development, unlike the recorded sandbox baseline (conformance/auth-action-production.json); new production project defaults may also omit localhost. An explicit declaration replaces this Fireemu-only default. Tenant-scoped strict action links currently check the tenant's default domains rather than this project declaration; support for the parent project's live list is pending.",
+              "precision": "exact-for-local-semantics"
+            },
+            {
               "behaviour": "the Admin project config carries authorizedDomains (localhost and the project's Hosting domains by default) in both profiles, and the strict profile refuses an action-code continueUrl outside them with UNAUTHORIZED_DOMAIN as production does (AUTH-ACTION sandbox recording 2026-09-24); the official emulator's config has no authorizedDomains and checks no domain",
               "precision": "documented-divergence"
             },
@@ -1309,6 +1304,22 @@
               "precision": "documented-divergence"
             },
             {
+              "behaviour": "the emulator profile makes a tenant a request names when the project has none by that name, as the official emulator does (firebase-tools 15.28.2 getProjectStateById, state.js getTenantProject; multi-factor enabled for PHONE_SMS, password sign-up, anonymous users and email-link sign-in on): the target is the path's, else the body's tenantId (a number is read as its string), else the ID token's, else the body's refresh token's (an undecodable refresh token is INVALID_REFRESH_TOKEN and one of another tenant TENANT_ID_MISMATCH, both before a tenant is made), and the query's for accounts:batchGet and the action link. Only a request this daemon would serve makes a tenant: a request the owner-credential or control-token guard, App Check or an unknown API key refuses gets that refusal and makes nothing, in any project; a request the daemon serves from another project's store than the one it names (the store selection decides: a keyless request whose verified ID token is of a project this daemon has a store for, or whose refresh token that project issued, or a compatibility custom-token match) makes nothing and is admitted by App Check for the project it is served from, by the pipeline. The emulator profile makes any project id's tenants on demand as the official emulator does: a compatibility-routed project is created when a request writes a tenant there (tenants:create, or a request naming a tenant that does not exist yet, after the request's guards and App Check admitted it), holds tenants and is dropped with the default session's reset. The emulator profile reads the tenant a request names as the official emulator does: an empty body tenantId is no tenant (falsy), a number is its string, the query's tenantId is read only by accounts:batchGet (operations.js:435-437, when the path names no tenant; with no mismatch) and by the action link (handlers.js:10,27), those two GET routes read no body (a body tenant selects nothing and makes nothing), and every other route of the official emulator ignores it, the getProjects, recaptchaParams, config and tenant-management routes included, and a malformed query tenant with it (every reader of the query reads it only where the route does, so a malformed tenant on such a route neither hides the request's API key, which would serve it from another project or make a tenant for a refused key); on batchGet and the action link an empty or bare tenantId is no tenant, as the official emulator's falsy checks read it, while a repeated or percent-malformed one is still refused (the official emulator answers 400 for a repeated one; for a percent-malformed one it answers 500 on batchGet, and on the action link reads it literally, makes a tenant named %ZZ and answers 400, where fireemu answers 400 and makes nothing); a null, boolean, object or array tenantId, which the official schema refuses (/tenantId must be string), is read as no tenant here (a divergence that accepts more and makes nothing); routes the official emulator does not serve (passwordPolicy, recaptchaConfig, the provider routes, the JWKS) keep their query reading. A query that does not parse makes no tenant for the request it refuses, wherever the request is served from. Fireemu refuses a bare, empty, repeated or percent-malformed API key where the official emulator ignores it (the owner's batchGet) or reads it literally (signUp), and it answers 400 where the official emulator answers 403 for a repeated, empty or bare key; both refuse and make nothing there. Differences from the official emulator: a tenant name with a slash or a backslash is not made; the tenant IdP-config routes (which the official emulator stubs with 501, and Fireemu serves as an extension) and tenants:create (whose body tenantId the official emulator makes and then refuses) make none; a token of another project, which the emulator profile refuses by its audience, or one this daemon cannot verify (another key or algorithm), is never the target, but its tenant is read without verification, as the official emulator reads it, and must agree with the path's or the body's or the request is TENANT_ID_MISMATCH (after the guards) and makes nothing (a tenant the path or the body names, and the token agrees with, is made); the widget page /emulator/auth/handler makes none, ignores tid and tenantId and lists the project's accounts, not the tenant's; and these make more: a request whose body the official schema check would reject still makes the tenant it names (Fireemu validates in each handler, after the tenant is made); a client request without an API key, which the emulator profile keeps serving and the official emulator refuses with 403, can make a tenant; and a hand-crafted ID token makes the body's tenant where the official emulator does not: one with no firebase claim (the official emulator crashes with 500), one whose tenant claim is not a string (the official emulator asserts it against the body's tenant and answers TENANT_ID_MISMATCH), one whose payload is not an object (500 officially), a header the official decoder accepts but Fireemu does not (not an object, or base64 the official decoder reads leniently), and a payload that is not UTF-8 (Node decodes it with replacement characters, so a tenant with invalid bytes is still asserted there and names none here); a signature segment outside base64url makes the token unreadable, as in the official decoder (its JWS pattern); an empty tenant claim names no tenant, as in the official emulator, where it is falsy. A refresh token's tenant and its mismatch are read only when the target tenant is missing. The strict profile never makes a tenant, as production refuses",
+              "precision": "documented-divergence"
+            },
+            {
+              "behaviour": "the emulator profile looks for a request's user in the tenant of its ID token only in the operations that parse the token, as the official emulator does (firebase-tools 15.28.2 parseIdToken, operations.js:1715): signUp (an anonymous upgrade, and the Admin create, operations.js:181), lookup, update (and the Admin update unless it carries an oobCode, operations.js:832), delete, createSessionCookie, signInWithEmailLink, signInWithIdp, signInWithPhoneNumber, and sendOobCode for VERIFY_EMAIL and VERIFY_AND_CHANGE_EMAIL. The token's expiry is not looked at (parseIdToken does not), so an expired token of a tenant made on the way finds no user there too. A lookup, update or delete on an end-user route that carries the owner credential is privileged as in the official emulator (operations.js:753 sets privileged): a lookup is served by the body's selectors (localId, email, ...) and a delete by its localId, as the Admin operations are, and neither reads an ID token (operations.js:225, 546-551), so a token of a tenant made on the way is no reason to refuse them (a lookup whose selectors match nothing is 200, a delete without a localId is MISSING_LOCAL_ID). The privileged update, the Admin update included, asserts its localId first (MISSING_LOCAL_ID, before an oobCode is looked at, operations.js:769) and then, without an oobCode, updates the user of the ID token when it carries one, over the localId (operations.js:831-838); the token's expiry is not looked at (parseIdToken does not), and a token of a user the store lacks is USER_NOT_FOUND. The signature, issuer, audience, session epoch and future iat/auth_time are still checked there, where parseIdToken only decodes and checks the tenant, the user, validSince and disabled, so a hand-crafted token of a foreign issuer is refused (a recorded difference). A request to createAuthUri, resetPassword, signInWithCustomToken or sendOobCode for PASSWORD_RESET or EMAIL_SIGNIN that carries a token of a tenant that was made on the way is served, where it answered USER_NOT_FOUND; the token's tenant must still agree with the path's or the body's tenant for every operation (TENANT_ID_MISMATCH, nothing made), as the official emulator asserts it before any operation runs (server.js:399-403). Differences that remain, pinned in crates/fireemu-adapter-http/tests/auth_emulator_official_answers.rs and filed as issues: the tenant phone operations (the official emulator answers UNSUPPORTED_TENANT_OPERATION), signInWithIdp with a token, signInWithPassword with an idToken (the official emulator answers 501), the v2 MFA enrollment routes with a tenant's token (which read the token there and are not pre-checked here), accounts:update with an oobCode and an idToken (the official emulator answers INVALID_OOB_CODE, it does not parse the token; fireemu answers USER_NOT_FOUND), an end-user update with an oobCode and an idToken (the official emulator does not read the token), the owner credential forms below, and an Admin create whose idToken names a user the tenant lacks (the official emulator answers USER_NOT_FOUND; fireemu ignores the token's user and creates the user, in the token's tenant). The strict profile is unchanged. The owner credential is the exact Authorization: Bearer owner in both profiles, on the Admin routes and on the end-user routes; the official emulator also takes bearer owner in any case and any unverified ya29. token as the owner of the default project (server.js:135-146), a divergence the owner decided to keep (owner ledger 2026-09-30, Auth emulator owner credential forms; docs.local/issues/open/emulator-owner-credential-case-and-ya29-tokens.md)",
+              "precision": "documented-divergence"
+            },
+            {
+              "behaviour": "in the emulator profile an Admin account request on a project path (accounts, accounts:lookup, :update, :delete, :batchCreate, :batchDelete, :query, :sendOobCode and :createSessionCookie) with a tenantId in its body runs in that tenant of the path's project, as the official emulator runs it (server.js:395-414 has no Admin special case), or, when the body names none, in the tenant of its ID token when that is a token of this project with a tenant claim (the third target source, server.js:398-406; a token of another project is ignored, the request runs in the project's store, where the official emulator takes such a token's tenant claim as the target with no audience check; and an empty claim names no tenant), for the default project and for a compatibility-routed project alike; it answered TENANT_ID_MISMATCH after making the tenant. The body's tenant selects a store only for a request the owner-credential or control-token guard admitted (a caller without the credential is refused as it is for a tenant path), App Check is decided for the project served, and a client request keeps the tenant rules it had. The strict profile is unchanged: only the project-level lookup takes a body tenant as its scope there",
+              "precision": "documented-divergence"
+            },
+            {
+              "behaviour": "auth.multiTenant.allowTenants and auth.tenants[] in the canonical configuration are a config seed of the default project's multi-tenancy switch and tenants: each entry is an Admin v2 Tenant document with its tenantId, read by the code the Admin tenant create route reads a document with (the strict profile exactly as the route reads it; the emulator profile the route's reading plus production's checks, so an unknown member, a missing or invalid displayName and an id without production's displayName-xxxxx shape are refused in both profiles), and created empty with that id when the daemon starts, in every session project created later, and again by a control-plane session reset (the default session's included), which also returns the switch to the declared value; an --import is applied first and is authoritative for a tenant of the same id (a startup warning names a declared tenant it replaced with other settings), and a declared tenant it did not carry is created as declared. The runtime gates are unchanged: the strict profile creates tenants only in a project that allows them, so declaring tenants there without allowTenants: true stops the daemon at start, and the emulator profile takes tenants without the switch. Without the keys nothing is created and a reset leaves an Admin-set switch alone, as it does the rest of the project configuration. A namespace the emulator profile creates for an unknown project id is seeded when it is created, by a request that writes a tenant there or by the requests that already created one (an Admin user create, a provider write, a project setting write), before the request's own tenant is made (a request that names a tenant waits for every seed in flight, whichever request installed the project), so a declared tenant a request names first has its declared settings; the install, the seed and the tenant the request names are one admitted step, so a reset or a session creation never sees half of it, and a tenant made while a session registration is pending does not outlive a rollback of it; the tenant list of an unknown project answers empty and creates nothing (a divergence from the official emulator, which creates the project on a read too); a session created for that project id displaces the namespace with its tenants; a declared tenant has the Admin create defaults, not the on-the-way ones; a tenant's own settings (mfaConfig, passwordPolicyConfig, ...) come from its document",
+              "precision": "boundary-conformance"
+            },
+            {
               "behaviour": "an ID token of a tenant of another registered project, sent with an API key a session registered for a different project, is refused with INVALID_ID_TOKEN in both profiles, the emulator profile included; fireemu resolves the project from the API key, and the official emulator has no key-based project resolution to compare with (owner decision 2026-09-29, AUTH-FS-CROSS; crates/fireemu-adapter-http/tests/auth_tenant_sdk_id_token.rs a_tenant_token_of_another_project_is_refused_under_a_foreign_key)",
               "precision": "explicit-extension"
             }
@@ -1330,14 +1341,23 @@
           "evidence": {
             "tests": [],
             "integration": [
-              "crates/fireemu-adapter-http/tests/identity_toolkit.rs"
+              "crates/fireemu-adapter-http/tests/identity_toolkit.rs",
+              "crates/fireemu-core-auth/tests/provider_config_seeds.rs",
+              "crates/fireemu-adapter-http/tests/provider_config_seeds.rs",
+              "crates/fireemu-adapter-http/tests/auth_federation_provider_config.rs",
+              "crates/fireemu/tests/auth_provider_seeds.rs"
             ],
             "conformance": []
           },
           "officialLimitations": [
             "the pinned official Auth emulator does not serve project or tenant OAuth IdP and inbound SAML configuration resources"
           ],
-          "fireemuOnly": [],
+          "fireemuOnly": [
+            {
+              "behaviour": "auth.providers.oidc and auth.providers.saml declare ID-named project resources through the selected profile's complete existing Admin create validation. Declared kinds replace defaults, initialize future session/routed projects and return on session reset; missing/null kinds remain undeclared. Admin changes affect live state only. Tenant and built-in resources remain separate; snapshots and Auth export/import never transfer declarations or provider credentials. Strict keeps existing enabled-resource, issuer, audience, signature and SAML certificate checks. Emulator signInWithIdp still requires no provider resource or enabled flag, as firebase-tools 15.28.2 operations.js signInWithIdp (1128-1286) parses fixture credentials without reading provider configs; declaration affects Admin readback only.",
+              "precision": "exact-for-local-semantics"
+            }
+          ],
           "productionOnly": [
             "live provider discovery, redirects, assertion exchange and production configuration parity"
           ],
@@ -1459,7 +1479,9 @@
             "tests": [],
             "integration": [
               "crates/fireemu-core-auth/tests/totp.rs",
-              "crates/fireemu-core-auth/tests/mfa.rs"
+              "crates/fireemu-core-auth/tests/mfa.rs",
+              "crates/fireemu-core-auth/tests/mfa_seed.rs",
+              "crates/fireemu/tests/auth_mfa_config.rs"
             ],
             "conformance": [
               "auth/mfa-error-shapes",
@@ -1473,6 +1495,10 @@
           "fireemuOnly": [
             {
               "behaviour": "declaring auth.totp enables local TOTP enrollment and sign-in in the emulator profile; its acceptance window and enrolment session TTL are policies driven by the virtual clock, while an absent auth.totp preserves the official emulator's INVALID_ARGUMENT refusal. In the strict profile only the project mfa config enables TOTP, as in production, and an account with a TOTP factor is asked for it even while that config is off (fail closed; production was seen to skip only a phone factor then)",
+              "precision": "boundary-conformance"
+            },
+            {
+              "behaviour": "auth.mfa in the canonical configuration is a config seed of the project's mfa member, in the Identity Platform Config.mfa shape and validated by the validator the Admin config update uses: it is the project's mfa config when the daemon starts, in both profiles, and that of every project created later, a session project or a namespace routed by its first Admin request (the declared seed, not the default project's live value), and a control-plane session reset returns to it only when one is declared (without one an Admin-set config survives a reset, as the rest of the project configuration does; DELETE /emulator/v1/projects/{p}/accounts clears accounts only). The runtime gate stays production-exact: only the project's mfa config enables a second factor under the strict profile, an Admin update replaces the live config (the seed is kept, and a declared-seed reset returns to it) and disabling refuses as production does, auth.totp alone enables nothing there (a start-up warning names auth.mfa), and a tenant follows its own mfaConfig, never the project's seed. Without auth.mfa a project starts with multi-factor off, as a new production project does. Export and import carry accounts and their factors, not this config",
               "precision": "boundary-conformance"
             },
             {
@@ -1548,16 +1574,29 @@
             "the official Storage emulator implements no object versioning, no ACLs (its POST acl stub answers success without effect), no signed URLs, no compose and no notifications",
             "the official Storage emulator parses no generation or metageneration precondition and verifies no declared checksum: it was measured to overwrite an object guarded by ifGenerationMatch=0, delete through a stale guard, and store a payload whose declared md5 did not match the bytes",
             "the official Storage emulator ignores resumable offsets and the JSON API Content-Range chunk protocol: it appends whatever arrives and finalizes every PUT, so a two-chunk upload was measured to commit its first chunk as the whole object",
-            "the official Storage emulator registers JSON API object update (PATCH) and copy only on the short /b/... spelling: the /storage/v1/... spelling of those answers its 501 catch-all, and a bucket GET answers the 404 missing-object envelope; fireemu reproduces that route table exactly",
+            "the official Storage emulator registers JSON API object update (PATCH) and copy only on the short /b/... spelling: the /storage/v1/... spelling of those answers its 501 catch-all, and a bucket GET answers the 404 missing-object envelope",
+            "the official Storage emulator pages items alone and repeats every folded prefix on every page; fireemu uses the combined items-and-prefixes maxResults budget documented by the Firebase and Cloud Storage list APIs",
             "a JSON API media insert without a name crashes the pinned official CLI outright (an unhandled TypeError after its own 400 exits firebase emulators:exec with code 2); fireemu answers a plain 400, and the row is recorded here because no fixture can record a crash"
           ],
           "fireemuOnly": [
             {
-              "behaviour": "a 256 MiB object cap, a 260 MiB body cap and a process-wide 1 GiB buffered-body budget answered with 503 and Retry-After",
+              "behaviour": "STORAGE-OBJECT S6 known limitation: fireemu has a 256 MiB object cap, a 260 MiB body cap and a process-wide 1 GiB buffered-body budget answered with 503 and Retry-After. The STORAGE-OBJECT production closure does not claim parity for objects larger than 256 MiB; the cap is tracked as a separate issue.",
               "precision": "conservative"
             },
             {
               "behaviour": "generation / metageneration preconditions, declared checksums, resumable offsets and the Content-Range chunk protocol are honoured as production honours them, refusing requests the official emulator admits (and corrupts state on); every such step is pinned as a documented divergence in conformance/storage-matrix.json",
+              "precision": "conservative"
+            },
+            {
+              "behaviour": "both Storage dialects count items and folded prefixes together toward maxResults, return each prefix on one page only and cap the page at 1000; conformance/storage-matrix.json pins the official emulator's different pagination",
+              "precision": "conservative"
+            },
+            {
+              "behaviour": "both profiles accept the production /storage/v1 object PATCH, copyTo and rewriteTo routes that the official emulator answers with 501; https://cloud.google.com/storage/docs/json_api/v1/objects/patch, https://cloud.google.com/storage/docs/json_api/v1/objects/copy, https://cloud.google.com/storage/docs/json_api/v1/objects/rewrite",
+              "precision": "documented-divergence"
+            },
+            {
+              "behaviour": "the strict profile refuses list filters it cannot apply (matchGlob, startOffset, endOffset and includeTrailingDelimiter=true) with 400, returns current generations for versions=true because archived generations are unavailable, and refuses unsatisfiable media ranges with 416 and Content-Range; a nonzero suffix on an empty object is accepted as RFC 9110 section 14.1.1 specifies; the emulator profile retains the official emulator's behavior; https://cloud.google.com/storage/docs/json_api/v1/objects/list, https://cloud.google.com/storage/docs/json_api/v1/status-codes, https://www.rfc-editor.org/rfc/rfc9110.html#section-14.1.1",
               "precision": "conservative"
             }
           ],
@@ -1741,10 +1780,15 @@
             {
               "behaviour": "the local runtime adds a process-wide ceiling of 10000 outstanding tasks and 64 MiB of retained task data, with completed duplicate-history queue and task names kept inside that byte budget and bounded to 65536 entries and 8 MiB of identifier text across all queues; the official emulator only bounds each pending FIFO to 10000 and otherwise retains completed names for the process lifetime",
               "precision": "conservative"
+            },
+            {
+              "behaviour": "a 2nd gen Firestore event's `source` is the document resource name (projects/P/databases/D/documents/C/ID) where production's is the database resource name (//firestore.googleapis.com/projects/P/databases/D), observed on a create on 2026-09-30. With firebase-functions 7.3.2 the JSON path reads `source` only for a snapshot side the data does not carry (the `written` event of a create or a delete) and the 1st gen resource the runner builds reads it too, so created, updated and deleted 2nd gen deliveries could carry production's value today; only `written` deliveries of a create or a delete need protobuf binary-mode delivery, which this runtime does not offer. A handler that reads `event.source` sees the difference, one that reads `event.document`, `event.params` or the snapshot does not",
+              "precision": "conservative"
             }
           ],
           "productionOnly": [
-            "Cloud Tasks applies maxDispatchesPerSecond to every first or retry attempt; fireemu follows that production contract while the pinned Tasks emulator only consumes a token for the first attempt"
+            "Cloud Tasks applies maxDispatchesPerSecond to every first or retry attempt; fireemu follows that production contract while the pinned Tasks emulator only consumes a token for the first attempt",
+            "Observed in one production Firestore create delivery on 2026-09-30: a 2nd gen event's id is a UUID, its time carries a six-digit fraction (the microsecond commit time), and a 1st gen handler's context.eventId is that id followed by -0. Inferred, not observed: the zero, three and nine digit fractions (the protobuf JSON Timestamp mapping prints the shortest of 0, 3, 6 or 9 digits) and the same id, time and -0 forms for updated, deleted and written events. fireemu follows both, with the UUID derived from the session and the event counter so that a run replays"
           ],
           "preview": []
         },

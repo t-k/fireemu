@@ -26,7 +26,9 @@ async function harness(t, adapter, options = {}) {
     assert.deepEqual(await fs.readFile(join(modules, name)), bytes);
   }
   await fs.writeFile(join(modules, "fixture-options.json"), JSON.stringify(options));
-  await fs.writeFile(join(modules, "fixture.mjs"), `
+  await fs.writeFile(
+    join(modules, "fixture.mjs"),
+    `
 import { promises as fs } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -67,22 +69,34 @@ export async function prepare(repo, registered) {
   };
 }
 export async function unchanged() { return !options.sourceChanged; }
-`);
-  await fs.writeFile(join(modules, "legacy.mjs"), `
+`,
+  );
+  await fs.writeFile(
+    join(modules, "legacy.mjs"),
+    `
 export { prepare, unchanged as sourceUnchanged } from "./fixture.mjs";
 import { promises as fs } from "node:fs";
 export async function stageLegacy(_prepared, directory) { await fs.mkdir(directory); }
-`);
-  await fs.writeFile(join(modules, "commit-transform.mjs"), `
+`,
+  );
+  await fs.writeFile(
+    join(modules, "commit-transform.mjs"),
+    `
 export { prepare as prepareCommitTransform, unchanged as commitTransformSourceUnchanged, compare as compareCommitTransform } from "./fixture.mjs";
-`);
-  await fs.writeFile(join(modules, "g0.mjs"), `
+`,
+  );
+  await fs.writeFile(
+    join(modules, "g0.mjs"),
+    `
 export { prepare as prepareG0, unchanged as g0SourceUnchanged, compare as compareG0 } from "./fixture.mjs";
-`);
+`,
+  );
   // The wrapper changes only the native executable to a scripted session fixture.
   // The real supervisor owns/reaps the actual Node child and invokes onSpawn.
   const realIo = new URL("io.mjs", source).href;
-  await fs.writeFile(join(modules, "io.mjs"), `
+  await fs.writeFile(
+    join(modules, "io.mjs"),
+    `
 export * from ${JSON.stringify(realIo)};
 import * as io from ${JSON.stringify(realIo)};
 import { promises as fs } from "node:fs";
@@ -97,8 +111,11 @@ export async function runProcess(command, args, options) {
   await fs.appendFile(new URL("spawns.jsonl", import.meta.url), JSON.stringify({ hasOnSpawn: typeof options.onSpawn === "function" }) + "\\n");
   return io.runProcess(process.execPath, [fileURLToPath(new URL("fixture-session.mjs", import.meta.url))], options);
 }
-`);
-  await fs.writeFile(join(modules, "fixture-session.mjs"), `
+`,
+  );
+  await fs.writeFile(
+    join(modules, "fixture-session.mjs"),
+    `
 import net from "node:net";
 import { promises as fs } from "node:fs";
 import { join } from "node:path";
@@ -142,111 +159,145 @@ if (options.symlinkReceipt) {
   await fs.symlink(join(directory, "local.json"), receiptPath);
 }
 process.exitCode = options.processExit ?? 0;
-`);
+`,
+  );
   const { main } = await import(pathToFileURL(join(modules, "pilot.mjs")));
-  const entry = CASES.find(c => c.adapter === adapter);
+  const entry = CASES.find((c) => c.adapter === adapter);
   assert.ok(entry, adapter);
   const runDir = join(root, "run");
-  const invoke = (mode, out, extra) => main([mode, "--repo", repo, "--case", entry.id, "--out", out, ...extra]);
+  const invoke = (mode, out, extra) =>
+    main([mode, "--repo", repo, "--case", entry.id, "--out", out, ...extra]);
   const code = await invoke("replay", runDir, ["--binary", process.execPath, "--timeout", "10"]);
-  const read = async name => JSON.parse(await fs.readFile(join(runDir, name)));
-  const exists = async name => fs.lstat(join(runDir, name)).then(() => true, error => {
-    if (error.code !== "ENOENT") throw error;
-    return false;
-  });
+  const read = async (name) => JSON.parse(await fs.readFile(join(runDir, name)));
+  const exists = async (name) =>
+    fs.lstat(join(runDir, name)).then(
+      () => true,
+      (error) => {
+        if (error.code !== "ENOENT") throw error;
+        return false;
+      },
+    );
   return {
-    code, entry, read, exists, runDir,
+    code,
+    entry,
+    read,
+    exists,
+    runDir,
     async recompare() {
       const out = join(root, "recompare");
       const code = await invoke("compare", out, ["--run-dir", runDir]);
       return { code, result: JSON.parse(await fs.readFile(join(out, "result.json"))) };
     },
-    async spawns() { return (await fs.readFile(join(modules, "spawns.jsonl"), "utf8")).trim().split("\n").map(JSON.parse); },
+    async spawns() {
+      return (await fs.readFile(join(modules, "spawns.jsonl"), "utf8"))
+        .trim()
+        .split("\n")
+        .map(JSON.parse);
+    },
   };
 }
 
 for (const adapter of ["batch-write", "commit-transform"]) {
-  test(`${adapter}: replay and stored comparison need no G0 launch receipt`, { timeout: 15000 }, async t => {
-    const h = await harness(t, adapter);
-    assert.equal(h.code, 0);
-    assert.equal(await h.exists("launch-receipt.json"), false);
-    const recording = await h.read("recording.json");
-    const result = await h.read("result.json");
-    assert.equal(Object.hasOwn(recording.execution, "launchReceiptSha256"), false);
-    assert.equal(result.gatePassed, true);
-    assert.equal(result.productionExecuted, false);
-    assert.equal(result.parentPromotion, false);
-    assert.equal(result.evidenceKind, h.entry.evidenceKind);
-    assert.equal(result.execution.process.state, "stopped");
-    assert.equal(result.execution.sourceUnchanged, true);
-    assert.equal(result.execution.artifact.sourceBinding, "synthetic-test-double");
-    const repeated = await h.recompare();
-    assert.equal(repeated.code, 0);
-    assert.equal(repeated.result.execution.freshLocalExecution, false);
-    assert.deepEqual(await h.spawns(), [{ hasOnSpawn: false }]);
-  });
+  test(
+    `${adapter}: replay and stored comparison need no G0 launch receipt`,
+    { timeout: 15000 },
+    async (t) => {
+      const h = await harness(t, adapter);
+      assert.equal(h.code, 0);
+      assert.equal(await h.exists("launch-receipt.json"), false);
+      const recording = await h.read("recording.json");
+      const result = await h.read("result.json");
+      assert.equal(Object.hasOwn(recording.execution, "launchReceiptSha256"), false);
+      assert.equal(result.gatePassed, true);
+      assert.equal(result.productionExecuted, false);
+      assert.equal(result.parentPromotion, false);
+      assert.equal(result.evidenceKind, h.entry.evidenceKind);
+      assert.equal(result.execution.process.state, "stopped");
+      assert.equal(result.execution.sourceUnchanged, true);
+      assert.equal(result.execution.artifact.sourceBinding, "synthetic-test-double");
+      const repeated = await h.recompare();
+      assert.equal(repeated.code, 0);
+      assert.equal(repeated.result.execution.freshLocalExecution, false);
+      assert.deepEqual(await h.spawns(), [{ hasOnSpawn: false }]);
+    },
+  );
 
-  test(`${adapter}: complete semantic mismatch is saved, not masked by a missing G0 receipt`, { timeout: 15000 }, async t => {
-    const h = await harness(t, adapter, { mismatch: true });
-    assert.equal(h.code, 1);
-    const result = await h.read("result.json");
-    assert.equal(result.comparison.verdict, "MISMATCH");
-    assert.equal(result.complete, true);
-    assert.equal(result.gatePassed, false);
-    assert.equal(await h.exists("failure.json"), false);
-  });
+  test(
+    `${adapter}: complete semantic mismatch is saved, not masked by a missing G0 receipt`,
+    { timeout: 15000 },
+    async (t) => {
+      const h = await harness(t, adapter, { mismatch: true });
+      assert.equal(h.code, 1);
+      const result = await h.read("result.json");
+      assert.equal(result.comparison.verdict, "MISMATCH");
+      assert.equal(result.complete, true);
+      assert.equal(result.gatePassed, false);
+      assert.equal(await h.exists("failure.json"), false);
+    },
+  );
 
   for (const [name, options] of [
     ["unknown cleanup", { cleanupUnknown: true }],
     ["failed process", { processExit: 3 }],
     ["source changed", { sourceChanged: true }],
     ["failed session", { sessionFailure: true }],
-  ]) test(`${adapter}: ${name} stays INDETERMINATE and records the actual failure`, { timeout: 15000 }, async t => {
-    const h = await harness(t, adapter, options);
-    assert.equal(h.code, 2);
-    const result = await h.read("result.json");
-    assert.equal(result.comparison.verdict, "INDETERMINATE");
-    assert.equal(result.complete, false);
-    assert.equal(result.gatePassed, false);
-    assert.equal(await h.exists("recording.json"), true);
-    assert.equal(Object.hasOwn(result.execution, "launchReceiptSha256"), false);
-    if (options.processExit) assert.equal(result.execution.process.exitCode, 3);
-    if (options.sourceChanged) assert.equal(result.execution.failure, "source-changed");
-  });
+  ])
+    test(
+      `${adapter}: ${name} stays INDETERMINATE and records the actual failure`,
+      { timeout: 15000 },
+      async (t) => {
+        const h = await harness(t, adapter, options);
+        assert.equal(h.code, 2);
+        const result = await h.read("result.json");
+        assert.equal(result.comparison.verdict, "INDETERMINATE");
+        assert.equal(result.complete, false);
+        assert.equal(result.gatePassed, false);
+        assert.equal(await h.exists("recording.json"), true);
+        assert.equal(Object.hasOwn(result.execution, "launchReceiptSha256"), false);
+        if (options.processExit) assert.equal(result.execution.process.exitCode, 3);
+        if (options.sourceChanged) assert.equal(result.execution.failure, "source-changed");
+      },
+    );
 
   for (const [name, options] of [
     ["wrong local hash", { badHash: true }],
     ["unexpected production count", { productionCount: 1 }],
-  ]) test(`${adapter}: ${name} still fails the session binding`, { timeout: 15000 }, async t => {
-    const h = await harness(t, adapter, options);
-    assert.equal(h.code, 2);
-    assert.equal((await h.read("failure.json")).code, "local-execution-incomplete");
-    assert.equal(await h.exists("recording.json"), false);
-  });
+  ])
+    test(`${adapter}: ${name} still fails the session binding`, { timeout: 15000 }, async (t) => {
+      const h = await harness(t, adapter, options);
+      assert.equal(h.code, 2);
+      assert.equal((await h.read("failure.json")).code, "local-execution-incomplete");
+      assert.equal(await h.exists("recording.json"), false);
+    });
 }
 
-test("G0: the real onSpawn callback publishes a receipt whose exact bytes are hashed", { timeout: 15000 }, async t => {
-  const h = await harness(t, "g0");
-  assert.equal(h.code, 0);
-  const bytes = await fs.readFile(join(h.runDir, "launch-receipt.json"));
-  const receipt = JSON.parse(bytes);
-  const recording = await h.read("recording.json");
-  assert.equal(receipt.schema, "fireemu-g0-launch-v1");
-  assert.ok(receipt.pid > 0);
-  assert.equal(await fs.realpath(receipt.runDirectory.path), await fs.realpath(h.runDir));
-  assert.equal(recording.execution.launchReceiptSha256, sha256(bytes));
-  assert.equal((await h.read("result.json")).execution.launchReceiptSha256, sha256(bytes));
-  assert.deepEqual(await h.spawns(), [{ hasOnSpawn: true }]);
-});
+test(
+  "G0: the real onSpawn callback publishes a receipt whose exact bytes are hashed",
+  { timeout: 15000 },
+  async (t) => {
+    const h = await harness(t, "g0");
+    assert.equal(h.code, 0);
+    const bytes = await fs.readFile(join(h.runDir, "launch-receipt.json"));
+    const receipt = JSON.parse(bytes);
+    const recording = await h.read("recording.json");
+    assert.equal(receipt.schema, "fireemu-g0-launch-v1");
+    assert.ok(receipt.pid > 0);
+    assert.equal(await fs.realpath(receipt.runDirectory.path), await fs.realpath(h.runDir));
+    assert.equal(recording.execution.launchReceiptSha256, sha256(bytes));
+    assert.equal((await h.read("result.json")).execution.launchReceiptSha256, sha256(bytes));
+    assert.deepEqual(await h.spawns(), [{ hasOnSpawn: true }]);
+  },
+);
 
 for (const [name, options] of [
   ["missing", { removeReceipt: true }],
   ["symlink", { symlinkReceipt: true }],
   ["oversized", { oversizeReceipt: true }],
-]) test(`G0: ${name} launch receipt still refuses publication`, { timeout: 15000 }, async t => {
-  const h = await harness(t, "g0", options);
-  assert.equal(h.code, 2);
-  assert.equal((await h.read("failure.json")).gatePassed, false);
-  assert.equal(await h.exists("recording.json"), false);
-  assert.equal(await h.exists("result.json"), false);
-});
+])
+  test(`G0: ${name} launch receipt still refuses publication`, { timeout: 15000 }, async (t) => {
+    const h = await harness(t, "g0", options);
+    assert.equal(h.code, 2);
+    assert.equal((await h.read("failure.json")).gatePassed, false);
+    assert.equal(await h.exists("recording.json"), false);
+    assert.equal(await h.exists("result.json"), false);
+  });

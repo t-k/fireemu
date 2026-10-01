@@ -1071,7 +1071,9 @@ function v1Context(msg) {
           "providers/cloud.firestore/eventTypes/document.write",
       }[event.type];
       return {
-        eventId: event.id,
+        // Production hands a 1st gen Firestore handler `<uuid>-0` (observed 2026-09-30): the
+        // CloudEvent id plus the delivery's trigger index.
+        eventId: `${event.id}-0`,
         timestamp: event.time,
         eventType: legacy,
         // A string: firebase-functions rewrites a legacy event type's resource into

@@ -236,10 +236,22 @@ test("operation ids are numbered per database; a link's index id is a symbol too
   const normalized = (body) =>
     normalizeRestResponse(200, JSON.stringify(body), ctx, two, symbols).body;
   // Steps only production runs (an export in a) must not shift the numbers in b.
-  assert.equal(normalized({ name: name(a, "OpA1") }).name.endsWith("<db:a>/operations/<op1>"), true);
-  assert.equal(normalized({ name: name(a, "OpA2") }).name.endsWith("<db:a>/operations/<op2>"), true);
-  assert.equal(normalized({ name: name(b, "OpB1") }).name.endsWith("<db:b>/operations/<op1>"), true);
-  assert.equal(normalized({ name: name(a, "OpA1") }).name.endsWith("<db:a>/operations/<op1>"), true);
+  assert.equal(
+    normalized({ name: name(a, "OpA1") }).name.endsWith("<db:a>/operations/<op1>"),
+    true,
+  );
+  assert.equal(
+    normalized({ name: name(a, "OpA2") }).name.endsWith("<db:a>/operations/<op2>"),
+    true,
+  );
+  assert.equal(
+    normalized({ name: name(b, "OpB1") }).name.endsWith("<db:b>/operations/<op1>"),
+    true,
+  );
+  assert.equal(
+    normalized({ name: name(a, "OpA1") }).name.endsWith("<db:a>/operations/<op1>"),
+    true,
+  );
   // The console link to an index carries its id inside base64url protobuf.
   const index = `projects/fireemu-oracle-query/databases/${a}/collectionGroups/items/indexes/CICAgOjXh4EK`;
   const link = (id) => {

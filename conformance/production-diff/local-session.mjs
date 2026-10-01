@@ -118,7 +118,11 @@ globalThis.fetch = async (url, init = {}) => {
   // Store only fully read replies, before the recorder normalizes server times.
   if (op.phase !== "reset" && op.phase !== "seed") {
     let raw = null;
-    try { raw = JSON.parse(text); } catch { /* The pinned recorder emits non-json. */ }
+    try {
+      raw = JSON.parse(text);
+    } catch {
+      /* The pinned recorder emits non-json. */
+    }
     rawReplies.set(op.phase, raw);
     if (Object.hasOwn(entry.generatedDocumentSteps ?? {}, op.phase) && response.ok) {
       row.generatedDocument = raw?.name;

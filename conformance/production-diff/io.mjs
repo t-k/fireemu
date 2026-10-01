@@ -64,7 +64,10 @@ export async function readSource(root, name, maxBytes = 16 * 1024 * 1024) {
     let total = 0;
     while (total < budget) {
       const { bytesRead } = await handle.read(
-        buffer, 0, Math.min(buffer.length, budget - total), total,
+        buffer,
+        0,
+        Math.min(buffer.length, budget - total),
+        total,
       );
       if (bytesRead === 0) break;
       total += bytesRead;

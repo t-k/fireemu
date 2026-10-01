@@ -5,6 +5,12 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
+use fireemu_adapter_grpc::{gateway::Gateway, local::LocalBackend};
+use fireemu_core_firestore::index::{IndexSet, IndexValidationPolicy, PlanningContext};
+use fireemu_core_session::clock::VirtualClock;
+use fireemu_core_types::edition::{FirestoreApiMode, FirestoreEdition};
+use fireemu_core_types::time::LogicalInstant;
+use fireemu_proto_firestore::google::firestore::v1 as pb;
 use fireemu_verification_quint::transaction_conditional_lock::{
     ProjectionFault, TransactionConditionalLockConnectDriver, TransactionConditionalLockDriver,
     TransactionConditionalLockState, GENERATED_TRACE_SEEDS, MODELED_ACTIONS,
@@ -43,6 +49,103 @@ fn reject_loser(driver: &mut TransactionConditionalLockDriver, loser: &str) {
     driver
         .reject_locked(loser)
         .expect("retry observes committed lock");
+}
+
+// The read guard closure returns tonic::Status, which clippy calls a large error.
+#[allow(clippy::result_large_err)]
+#[test]
+fn local_contract_idle_rollback_before_expiry_touch_retains_retry_lineage() {
+    // This pins existing local handler ordering, not a production observation.
+    // P10 must observe first-expired Rollback followed by retry before changing it.
+    for touch_before_rollback in [false, true] {
+        let start = 1_788_004_860;
+        let clock = Arc::new(Mutex::new(VirtualClock::new(
+            LogicalInstant::from_unix_seconds(start),
+        )));
+        let backend = LocalBackend::new(
+            Gateway {
+                enforce_limits: true,
+                ctx: PlanningContext {
+                    edition: FirestoreEdition::Standard,
+                    api_mode: FirestoreApiMode::Native,
+                    policy: IndexValidationPolicy::Production,
+                },
+                indexes: IndexSet::default(),
+            },
+            Arc::clone(&clock),
+            7,
+        );
+        let database = "projects/demo-local-contract/databases/(default)";
+        let transaction = backend
+            .begin_transaction(&pb::BeginTransactionRequest {
+                database: database.to_owned(),
+                options: None,
+                ..Default::default()
+            })
+            .expect("begin local read-write transaction");
+        // Advance directly: no compaction or other RPC precedes the first expired call.
+        clock
+            .lock()
+            .expect("clock lock")
+            .advance_to(LogicalInstant::from_unix_seconds(start + 125))
+            .expect("advance beyond the 120 s strict idle deadline");
+        if touch_before_rollback {
+            let error = backend
+                .get_document(
+                    &pb::GetDocumentRequest {
+                        name: format!("{database}/documents/controls/missing"),
+                        consistency_selector: Some(
+                            pb::get_document_request::ConsistencySelector::Transaction(
+                                transaction.clone(),
+                            ),
+                        ),
+                        ..Default::default()
+                    },
+                    &|_, _, _| Ok(()),
+                )
+                .expect_err("transaction use first expires its lineage");
+            assert_eq!(error.code(), tonic::Code::Aborted);
+            assert_eq!(
+                error.message(),
+                "The referenced transaction has expired or is no longer valid."
+            );
+        }
+        backend
+            .rollback(&pb::RollbackRequest {
+                database: database.to_owned(),
+                transaction: transaction.clone(),
+                ..Default::default()
+            })
+            .expect("idle rollback is an idempotent local success");
+        let retry = backend.begin_transaction(&pb::BeginTransactionRequest {
+            database: database.to_owned(),
+            options: Some(pb::TransactionOptions {
+                mode: Some(pb::transaction_options::Mode::ReadWrite(
+                    pb::transaction_options::ReadWrite {
+                        retry_transaction: transaction.clone(),
+                        ..Default::default()
+                    },
+                )),
+            }),
+            ..Default::default()
+        });
+        if touch_before_rollback {
+            let error = retry.expect_err("expired lineage cannot retry");
+            assert_eq!(error.code(), tonic::Code::InvalidArgument);
+            assert_eq!(error.message(), "Invalid retry transaction.");
+        } else {
+            let next = retry.expect("rollback precedes compaction and retains retry lineage");
+            assert!(!next.is_empty());
+            assert_ne!(next, transaction);
+            backend
+                .rollback(&pb::RollbackRequest {
+                    database: database.to_owned(),
+                    transaction: next,
+                    ..Default::default()
+                })
+                .expect("release local retry transaction");
+        }
+    }
 }
 
 #[test]

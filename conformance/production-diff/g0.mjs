@@ -7,8 +7,7 @@ import { gitState, readSource } from "./io.mjs";
 import { compileFrozenG0Plan } from "./g0-plan.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
-const G0_PRODUCTION_SHA256 =
-  "47672f4e3162b4a0ddfb7baaab622007602aeed6c1fa3d6e5e84034bcbb87772";
+const G0_PRODUCTION_SHA256 = "47672f4e3162b4a0ddfb7baaab622007602aeed6c1fa3d6e5e84034bcbb87772";
 
 export function validateG0Origins(env) {
   const values = {
@@ -21,7 +20,9 @@ export function validateG0Origins(env) {
 }
 
 export function canonicalG0Origins(env) {
-  return Object.fromEntries(Object.entries(validateG0Origins(env)).map(([service, host]) => [service, `http://${host}`]));
+  return Object.fromEntries(
+    Object.entries(validateG0Origins(env)).map(([service, host]) => [service, `http://${host}`]),
+  );
 }
 
 // Local probe limits, not OS/Firebase limits. G0 launches far fewer arguments.
@@ -54,7 +55,10 @@ export function decodeProcessArgv(raw, platform) {
   const pathBytes = execEnd - 4 + 1;
   let offset = 4 + Math.ceil(pathBytes / 8) * 8;
   requireThat(offset < raw.length, "g0-process-argv-invalid");
-  requireThat(raw.subarray(execEnd + 1, offset).every((b) => b === 0), "g0-process-argv-invalid");
+  requireThat(
+    raw.subarray(execEnd + 1, offset).every((b) => b === 0),
+    "g0-process-argv-invalid",
+  );
   const args = [];
   for (let i = 0; i < argc; i++) {
     const end = raw.indexOf(0, offset);
@@ -101,7 +105,9 @@ export function readOwnedProcessArgv(pid) {
       ].join("\n");
       // Isolated Python; no shell, no stderr/body logging, bounded helper lifetime.
       const raw = execFileSync("python3", ["-I", "-c", source, String(pid)], {
-        timeout: 5000, killSignal: "SIGKILL", maxBuffer: PROCESS_ARGV_MAX_BYTES,
+        timeout: 5000,
+        killSignal: "SIGKILL",
+        maxBuffer: PROCESS_ARGV_MAX_BYTES,
         stdio: ["ignore", "pipe", "ignore"],
       });
       return decodeProcessArgv(raw, "darwin");
@@ -148,9 +154,18 @@ async function sourceDigests() {
 export function validateBuildBinding(repo, artifact) {
   const manifest = process.env.G0_BUILD_MANIFEST;
   const profile = process.env.G0_ARTIFACT_PROFILE;
-  requireThat(typeof artifact === "string" && artifact.startsWith("/"), "g0-build-provenance-unavailable");
-  requireThat(typeof manifest === "string" && manifest.startsWith("/"), "g0-build-provenance-unavailable");
-  requireThat(typeof profile === "string" && /^[a-z0-9][a-z0-9-]{1,80}$/.test(profile), "g0-build-provenance-unavailable");
+  requireThat(
+    typeof artifact === "string" && artifact.startsWith("/"),
+    "g0-build-provenance-unavailable",
+  );
+  requireThat(
+    typeof manifest === "string" && manifest.startsWith("/"),
+    "g0-build-provenance-unavailable",
+  );
+  requireThat(
+    typeof profile === "string" && /^[a-z0-9][a-z0-9-]{1,80}$/.test(profile),
+    "g0-build-provenance-unavailable",
+  );
   const script = [
     "import json,sys",
     "from pathlib import Path",
@@ -162,7 +177,17 @@ export function validateBuildBinding(repo, artifact) {
   try {
     const output = execFileSync(
       "uv",
-      ["run", "python", "-c", script, `${repo}/tools/compat-broad/fs-commit-transform-limits`, artifact, manifest, profile, repo],
+      [
+        "run",
+        "python",
+        "-c",
+        script,
+        `${repo}/tools/compat-broad/fs-commit-transform-limits`,
+        artifact,
+        manifest,
+        profile,
+        repo,
+      ],
       { cwd: repo, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] },
     );
     return JSON.parse(output);
@@ -174,8 +199,15 @@ export function validateBuildBinding(repo, artifact) {
 export async function prepareG0(repo, entry, artifact = null, requireBuild = false) {
   const state = gitState(repo);
   const productionPath = process.env[entry.productionResultPath];
-  requireThat(typeof productionPath === "string" && productionPath.startsWith("/"), "g0-production-input-unavailable");
-  const bytes = await readSource(dirname(productionPath), basename(productionPath), 4 * 1024 * 1024).catch(() => null);
+  requireThat(
+    typeof productionPath === "string" && productionPath.startsWith("/"),
+    "g0-production-input-unavailable",
+  );
+  const bytes = await readSource(
+    dirname(productionPath),
+    basename(productionPath),
+    4 * 1024 * 1024,
+  ).catch(() => null);
   requireThat(bytes && sha256(bytes) === G0_PRODUCTION_SHA256, "g0-production-input-unavailable");
   const program = compileFrozenG0Plan(repo, entry.nonce);
   requireThat(
@@ -204,7 +236,8 @@ export async function prepareG0(repo, entry, artifact = null, requireBuild = fal
       },
       implementation: {
         adapterSha256: await sourceDigests(),
-        comparator: "tools/compat-broad/shared_production_pair.py:compare_g0_current_runtime_recompare",
+        comparator:
+          "tools/compat-broad/shared_production_pair.py:compare_g0_current_runtime_recompare",
         frozenRecipe: "tools/compat-broad/shared_production_pair.py:frozen_g0_manifest",
         build: retainedArtifact ? validateBuildBinding(repo, retainedArtifact) : null,
       },
@@ -225,8 +258,22 @@ function invokeComparator(repo, productionPath, local, runtime) {
   try {
     output = execFileSync(
       "uv",
-      ["run", "python", "-c", script, `${repo}/tools/compat-broad`, productionPath, repo, JSON.stringify(runtime)],
-      { cwd: repo, input: JSON.stringify(local), encoding: "utf8", stdio: ["pipe", "pipe", "pipe"] },
+      [
+        "run",
+        "python",
+        "-c",
+        script,
+        `${repo}/tools/compat-broad`,
+        productionPath,
+        repo,
+        JSON.stringify(runtime),
+      ],
+      {
+        cwd: repo,
+        input: JSON.stringify(local),
+        encoding: "utf8",
+        stdio: ["pipe", "pipe", "pipe"],
+      },
     );
   } catch {
     throw new Error("g0-comparator-refused");
@@ -253,14 +300,14 @@ function expectedG0Rows(program) {
 
 export function compareG0({ repo, entry, program, actual, execution, build }) {
   requireThat(actual && typeof actual === "object", "g0-local-record-shape");
-  requireThat(build?.artifactSha256 === execution?.artifact?.sha256, "g0-artifact-receipt-mismatch");
-  const expected = expectedG0Rows(program);
-  const result = invokeComparator(
-    repo,
-    process.env[entry.productionResultPath],
-    actual,
-    { artifactSha256: execution?.artifact?.sha256 },
+  requireThat(
+    build?.artifactSha256 === execution?.artifact?.sha256,
+    "g0-artifact-receipt-mismatch",
   );
+  const expected = expectedG0Rows(program);
+  const result = invokeComparator(repo, process.env[entry.productionResultPath], actual, {
+    artifactSha256: execution?.artifact?.sha256,
+  });
   requireThat(
     object(result) &&
       ["match", "mismatch", "indeterminate"].includes(result.compatibility) &&
@@ -289,7 +336,8 @@ export function compareG0({ repo, entry, program, actual, execution, build }) {
     requireThat(
       received.size === expected.length &&
         result.rows.every((row) => row.verdict !== "indeterminate") &&
-        result.compatibility === (result.rows.some((row) => row.verdict === "mismatch") ? "mismatch" : "match") &&
+        result.compatibility ===
+          (result.rows.some((row) => row.verdict === "mismatch") ? "mismatch" : "match") &&
         !result.reason,
       "g0-comparator-result-contradiction",
     );
@@ -302,10 +350,12 @@ export function compareG0({ repo, entry, program, actual, execution, build }) {
     return {
       stepId: `${identity.job}:${identity.index}`,
       comparison: indeterminate ? "INDETERMINATE" : row.verdict.toUpperCase(),
-      ...(indeterminate ? {
-        comparisonReported: row !== undefined,
-        ...(row ? { reportedComparison: row.verdict.toUpperCase() } : {}),
-      } : {}),
+      ...(indeterminate
+        ? {
+            comparisonReported: row !== undefined,
+            ...(row ? { reportedComparison: row.verdict.toUpperCase() } : {}),
+          }
+        : {}),
       production: { redacted: true },
       local: { redacted: true },
     };
@@ -331,7 +381,11 @@ export function g0ProgramDigest(program) {
 export async function g0SourceUnchanged(repo, before, adapterBefore) {
   try {
     const after = gitState(repo);
-    return after.head === before.head && !after.dirty && digestJson(await sourceDigests()) === digestJson(adapterBefore);
+    return (
+      after.head === before.head &&
+      !after.dirty &&
+      digestJson(await sourceDigests()) === digestJson(adapterBefore)
+    );
   } catch {
     return false;
   }

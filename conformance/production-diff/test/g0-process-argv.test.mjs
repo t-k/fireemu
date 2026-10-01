@@ -22,7 +22,7 @@ test("Darwin argv decoding separates executable path from argv zero", () => {
   const executable = Buffer.from("/tmp/fireemu\0", "utf8");
   const prefix = Buffer.alloc(4);
   prefix.writeInt32LE(args.length);
-  const padding = Buffer.alloc((8 - executable.length % 8) % 8);
+  const padding = Buffer.alloc((8 - (executable.length % 8)) % 8);
   const raw = Buffer.concat([prefix, executable, padding, linuxBytes(args)]);
   assert.deepEqual(g0.decodeProcessArgv(raw, "darwin"), args);
 });
@@ -36,7 +36,13 @@ test("Linux process observation preserves an actual empty argument", async () =>
     stdio: "ignore",
   });
   try {
-    assert.deepEqual(g0.readOwnedProcessArgv(child.pid), [process.execPath, "-e", "setTimeout(() => {}, 1000)", "", "tail"]);
+    assert.deepEqual(g0.readOwnedProcessArgv(child.pid), [
+      process.execPath,
+      "-e",
+      "setTimeout(() => {}, 1000)",
+      "",
+      "tail",
+    ]);
   } finally {
     child.kill("SIGKILL");
     await once(child, "close");

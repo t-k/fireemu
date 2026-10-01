@@ -35,15 +35,15 @@ TOKEN = "offline-fixture-token"
 CLIENT_ID = "offline-client"
 SUBJECT = "offline-subject"
 SCOPE = "https://www.googleapis.com/auth/cloud-platform"
-PROJECT_BODY = {"projectId": "fireemu-35fe6", "projectNumber": "592603257417"}
+PROJECT_BODY = {"projectId": "fireemu-oracle-sbx", "projectNumber": "111111111111"}
 DATABASE_BODY = {
-    "name": "projects/fireemu-35fe6/databases/(default)",
+    "name": "projects/fireemu-oracle-sbx/databases/(default)",
     "uid": "fixture-uid",
     "type": "FIRESTORE_NATIVE",
     "databaseEdition": "STANDARD",
     "locationId": "us-central1",
 }
-AUTH_BODY = {"name": "projects/592603257417/config", "mfa": {"state": "DISABLED"}}
+AUTH_BODY = {"name": "projects/111111111111/config", "mfa": {"state": "DISABLED"}}
 VERSION = "2026-09-21T00:00:00.000001Z"
 HTTP = {0: 200, 3: 400, 5: 404, 10: 409}
 MODES = (

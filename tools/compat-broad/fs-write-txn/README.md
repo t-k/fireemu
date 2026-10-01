@@ -89,6 +89,16 @@ time of the transaction it uses. A wall-clock wait is served in five-second
 checkpointed steps; it blocks, and records progress, but does not make a killed
 run resumable.
 
+### Private local responsibility journal
+
+The local transaction-expiry shadow also writes `responsibility/000001.json` and subsequent immutable snapshots inside its private output directory. Every Firestore dispatch has a preceding intent snapshot. A pending creation or transaction acquisition remains visible if the child exits before interpreting the response. An intent does not prove that a request was sent: a crash between publication and transport invocation leaves that outcome unknown. Request counts cover this collector's Firestore dispatches; they do not include clock-control requests or authorize a production budget.
+
+Snapshots retain source and case digests, the run prefix, resource responsibility states, transaction tags and token SHA-256 digests, and separately proven typed absence. They omit raw tokens, request and response bodies, queries and exception messages. Unknown creation followed by `NOT_FOUND` remains unresolved. Transaction digests are identifiers for diagnostics and cannot be used to roll back a transaction.
+
+The journal is limited to 1024 snapshots of at most 64 KiB each. It uses a private directory and 0600 files, file synchronization, non-overwriting publication and directory synchronization. These measures preserve complete published files after process interruption; they are not a guarantee against every power failure or a hostile filesystem. Publication failure permanently blocks every subsequent Firestore send, including cleanup, and prevents a complete receipt. The remaining responsibility must be assessed using the retained records. A terminal snapshot, typed absence, or a receipt never grants permission to resume or clean up another run.
+
+This journal is connected only to the local shadow. Production launchers and their approval contracts are unchanged. Collector sources are digest-bound inputs, so prior preparation evidence must be regenerated before it can cover this version. Runs without a responsibility observer retain their existing collector and wait-checkpoint behavior.
+
 `txn_expiry_comparison.py` is the credential-free comparator. It reports
 `MATCH`, `EXPECTED_NONDETERMINISM`, `SEMANTIC_MISMATCH` or `INDETERMINATE`, and
 refuses a production receipt whose elapsed time was simulated.
@@ -191,3 +201,28 @@ with the shortened real sleeper, a stop before any create retired through
 are rolled back and whose five documents are recovered and closed through
 `close_after_abandon`. No test uses a credential, a network origin, a production
 project or the canonical Ledger.
+
+### Transaction expiry sandbox target and evidence migration
+
+The expiry campaign fixes its production project to `fireemu-oracle-sbx` and its database to `(default)`. Its management routes, data routes, quota headers, document namespace and reservation locks use that same project. The local plan compiler can still name a local test project; the production dispatcher always uses the fixed sandbox target.
+
+The public plan does not embed a project number. Preparation must obtain that private value from the owner and pass it explicitly as `project_number` to `permission_bindings`. Admission validates its shape, and the charged project readback must match both the fixed project ID and that permission-bound number. `txn_expiry_baseline.baseline_from_record(..., project_number=...)` verifies the recorded project identity, database name, routes, journal hashes and originating run before deriving a baseline. A baseline from another project or number cannot be substituted even when its other fields match. The shared Commit baseline API retains its existing default target; the explicit policy changes only callers that request it.
+
+This migration invalidates the old expiry source-bound preparation and local shadow. Before integration, regenerate the nonauthorizing proposal and record a genuine local shadow against the revised source, retain historical evidence unchanged, and rerun evidence/admission checks. A shared baseline source change also requires new source bindings for its other consumers. Neither local synthetic tests nor this source change authorize a production run; a new fixed packet and owner approval remain necessary.
+
+### Reviewed sandbox runtime and response evidence
+
+The sandbox recording and recovery entry points require Python 3.12 or newer before reading admission inputs or acquiring credentials. Every new packet also pins `pythonVersion` to the reviewed patch version `3.12.13`; admission and the credential boundary require the executing interpreter to match that version exactly. Receipts, failure receipts and ledger rows record `pythonVersion`, the actual `sys.version` as `pythonSysVersion`, and the actual `sys.executable` as `pythonExecutable`. The source pin includes the runtime guard and launcher. Historical packets and reviewed launchers remain evidence for their original source and cannot admit this revision. The next recording packet uses envelope `FS-TRANSACTION-expiry-retry-04-003` and requires its own review and approval.
+
+Use the source-bound launcher for the fixed interpreter flow. It invokes `uv run --python 3.12.13 python` and has no system-Python fallback. The data worker inherits that admitted executable and retains its isolated `-I -S -B` process flags.
+
+```sh
+uv run --python 3.12.13 python tools/compat-broad/fs-write-txn/txn_sandbox_launcher.py record plan-local
+uv run --python 3.12 --with pytest python -m pytest tools/compat-broad/fs-write-txn
+```
+
+The `record record-production` and `recover` commands accept the corresponding entry point's packet, review and baseline arguments. Running `plan-local` or the test suite does not authorize a production request.
+
+Successful Commit validation checks the number of `writeResults` before pairing writes and results, accepts an empty result object for a delete, and requires a valid update timestamp for an update. UTC instants accept zero through nine fractional digits with calendar range validation. A completed HTTP exchange whose normalization raises becomes an incomplete response carrying its actual HTTP status. Recording rows preserve that status in `observed.httpStatus`; recovery failures preserve `httpStatus` and `failureSite`. An unconfirmed create retains `sent-unknown` responsibility until an owned readback and typed absence complete recovery. Observation exceptions also record their actual failure site.
+
+The canonical delegated coordinator actor is accepted only with the exact owner delegation row dated 2026-09-28, including its approved scope, US$10 observation-task limit and exclusions. Admission binds that authority text by SHA-256 and applies the existing, narrower request and cost bounds. Missing, modified, duplicate or revoked delegation authority is refused. Recovery revocations are scoped to the packet SHA-256; historical `REVOKED packetSha256=...` rows are recognized, while malformed or ambiguous scopes fail closed.

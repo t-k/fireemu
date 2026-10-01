@@ -209,6 +209,220 @@
             }
           }
         },
+        "providers": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": false,
+          "description": "Initial project custom provider resources, validated through the selected profile's existing Admin create operation. Each name is a provider ID (oidc.<id> or saml.<id>), never a full resource name. Missing/null collections are undeclared; [] declares an empty replacement. Admin changes affect live resources until reset restores only declared kinds. Later projects inherit the declaration, while tenant and built-in providers remain separate. Account clearing preserves live resources; snapshots and Auth export/import do not transfer declarations or provider credentials. Strict OIDC still requires matching auth.idpSigners and all current signature/trust checks; emulator fixture sign-in continues without provider resources.",
+          "properties": {
+            "oidc": {
+              "type": [
+                "array",
+                "null"
+              ],
+              "items": {
+                "type": "object",
+                "required": [
+                  "name",
+                  "clientId",
+                  "issuer"
+                ],
+                "properties": {
+                  "displayName": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "enabled": {
+                    "type": "boolean"
+                  },
+                  "name": {
+                    "type": "string",
+                    "minLength": 6,
+                    "maxLength": 128,
+                    "pattern": "^oidc\\.[A-Za-z0-9._-]+$"
+                  },
+                  "clientId": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "issuer": {
+                    "type": "string",
+                    "pattern": "^https?://[^\\s\\u0000-\\u001f\\u007f-\\u009f]+$"
+                  },
+                  "clientSecret": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "responseType": {
+                    "type": "object",
+                    "properties": {
+                      "idToken": {
+                        "type": "boolean"
+                      },
+                      "code": {
+                        "type": "boolean"
+                      },
+                      "token": {
+                        "const": false
+                      }
+                    },
+                    "oneOf": [
+                      {
+                        "required": [
+                          "idToken"
+                        ],
+                        "properties": {
+                          "idToken": {
+                            "const": true
+                          },
+                          "code": {
+                            "const": false
+                          }
+                        }
+                      },
+                      {
+                        "required": [
+                          "code"
+                        ],
+                        "properties": {
+                          "code": {
+                            "const": true
+                          },
+                          "idToken": {
+                            "const": false
+                          }
+                        }
+                      }
+                    ]
+                  }
+                },
+                "allOf": [
+                  {
+                    "if": {
+                      "required": [
+                        "responseType"
+                      ],
+                      "properties": {
+                        "responseType": {
+                          "required": [
+                            "code"
+                          ],
+                          "properties": {
+                            "code": {
+                              "const": true
+                            }
+                          }
+                        }
+                      }
+                    },
+                    "then": {
+                      "required": [
+                        "clientSecret"
+                      ],
+                      "properties": {
+                        "clientSecret": {
+                          "type": "string",
+                          "minLength": 1
+                        }
+                      }
+                    }
+                  }
+                ]
+              }
+            },
+            "saml": {
+              "type": [
+                "array",
+                "null"
+              ],
+              "items": {
+                "type": "object",
+                "required": [
+                  "name",
+                  "idpConfig",
+                  "spConfig"
+                ],
+                "properties": {
+                  "displayName": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "enabled": {
+                    "type": "boolean"
+                  },
+                  "name": {
+                    "type": "string",
+                    "minLength": 6,
+                    "maxLength": 128,
+                    "pattern": "^saml\\.[A-Za-z0-9._-]+$"
+                  },
+                  "idpConfig": {
+                    "type": "object",
+                    "required": [
+                      "idpEntityId",
+                      "ssoUrl",
+                      "idpCertificates"
+                    ],
+                    "properties": {
+                      "idpEntityId": {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "ssoUrl": {
+                        "type": "string",
+                        "pattern": "^https?://[^\\s\\u0000-\\u001f\\u007f-\\u009f]+$"
+                      },
+                      "idpCertificates": {
+                        "type": "array",
+                        "minItems": 1,
+                        "items": {
+                          "type": "object",
+                          "required": [
+                            "x509Certificate"
+                          ],
+                          "properties": {
+                            "x509Certificate": {
+                              "type": "string",
+                              "minLength": 1
+                            }
+                          }
+                        }
+                      },
+                      "signRequest": {
+                        "type": "boolean"
+                      }
+                    }
+                  },
+                  "spConfig": {
+                    "type": "object",
+                    "required": [
+                      "spEntityId",
+                      "callbackUri"
+                    ],
+                    "properties": {
+                      "spEntityId": {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "callbackUri": {
+                        "type": "string",
+                        "pattern": "^https?://[^\\s\\u0000-\\u001f\\u007f-\\u009f]+$"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
         "idpSigners": {
           "type": "object",
           "description": "OIDC issuers whose signed ID tokens the strict profile verifies, each mapped to its public JWK set. No key is fetched from an issuer. Under the strict profile, signInWithIdp accepts only an ID token of an enabled oidc.* provider whose issuer is listed here and whose key (selected by the token's kid) verifies it; the unsigned fixture IdP and other providers are refused. The emulator profile ignores this setting.",
@@ -249,6 +463,12 @@
             }
           }
         },
+        "authorizedDomains": {
+          "type": ["array", "null"],
+          "description": "The project's initial authorized domains, replacing the whole default list (include localhost if needed). Empty means no authorized host under strict; absent or null declares no seed and keeps localhost plus the project's Firebase Hosting domains. Validated with the selected profile's Admin PATCH rules: empty strings are refused in both profiles, strict also checks hostname syntax, numeric and boolean entries become strings, and null entries are omitted. Prefer string entries. Admin updates change the live list without changing this declaration; session reset restores only declared domains. Later projects inherit the declaration rather than the default project's live list. Account clearing does not restore it; Auth export/import carries neither the live list nor the declaration. The emulator profile still does not enforce the continue-URL allowlist. Tenant-scoped strict action links currently check the tenant's default domains rather than this project declaration; support for the parent project's live list is pending.",
+          "items": { "type": ["string", "number", "boolean", "null"], "minLength": 1 },
+          "examples": [["localhost", "app.test"], [], null]
+        },
         "totp": {
           "type": "object",
           "description": "Explicitly enables fireemu's TOTP extension. When absent, TOTP enrollment matches the official Auth emulator and is rejected.",
@@ -258,6 +478,55 @@
             "digits": { "type": "integer", "minimum": 6, "maximum": 8 },
             "windowSteps": { "type": "integer", "minimum": 0, "maximum": 10 },
             "enrollmentSessionTtlSeconds": { "type": "integer", "minimum": 1 }
+          }
+        },
+        "mfa": {
+          "type": ["object", "null"],
+          "description": "The project's initial multi-factor configuration, in the Identity Platform Config.mfa shape: it is the project's configuration when the daemon starts and for every project it creates later, and a control-plane reset (POST /v1/sessions/{s}/reset) returns to it. It is validated as the Admin API validates an update of the mfa member. Under the strict profile TOTP is enabled only by this configuration (auth.totp alone enables nothing, as in production); an Admin API update replaces the live configuration (the seed is kept, and a reset returns to it), and disabling refuses TOTP as production does. Absent or null, a project starts with multi-factor off, as a new production project does, and a reset leaves an Admin-set configuration alone.",
+          "additionalProperties": false,
+          "properties": {
+            "state": { "enum": ["STATE_UNSPECIFIED", "DISABLED", "ENABLED", "MANDATORY"] },
+            "enabledProviders": {
+              "type": ["array", "null"],
+              "items": { "enum": ["PROVIDER_UNSPECIFIED", "PHONE_SMS"] }
+            },
+            "providerConfigs": {
+              "type": ["array", "null"],
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "state": { "enum": ["STATE_UNSPECIFIED", "DISABLED", "ENABLED", "MANDATORY"] },
+                  "totpProviderConfig": {
+                    "type": ["object", "null"],
+                    "additionalProperties": false,
+                    "properties": {
+                      "adjacentIntervals": { "type": ["integer", "null"], "minimum": 0, "maximum": 10 }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "multiTenant": {
+          "type": ["object", "null"],
+          "description": "The default project's multi-tenancy switch, as the Admin API's multiTenant.allowTenants: it is set when the daemon starts, for every session project created later, and after a control-plane reset (POST /v1/sessions/{s}/reset). Under the strict profile tenants are created only in a project that allows them, as in production, so declaring auth.tenants there requires allowTenants: true. Absent or null, the project starts with the switch unset, as a new production project does, and a reset leaves an Admin-set value alone.",
+          "additionalProperties": false,
+          "properties": {
+            "allowTenants": { "type": "boolean" }
+          }
+        },
+        "tenants": {
+          "type": ["array", "null"],
+          "description": "The default project's tenants, each an Admin v2 Tenant document with its tenantId (a display name, a hyphen and five characters of [a-z0-9], as production generates it). A document is read by the code the Admin tenant create route reads one with, so a value production refuses stops the daemon at startup. The tenants are created empty in the default project when the daemon starts, in every session project created later, and again after a control-plane reset of a session (the default session's included); an --import is authoritative for a tenant of the same id. A namespace the emulator profile creates for an unknown project id is seeded when it is created (by a request that writes a tenant there, or by an Admin user, provider or project-setting write). Absent or null, no tenant is created.",
+          "items": {
+            "type": "object",
+            "required": ["tenantId", "displayName"],
+            "properties": {
+              "tenantId": { "type": "string", "pattern": "^[A-Za-z][A-Za-z0-9-]{3,19}-[a-z0-9]{5}$" },
+              "displayName": { "type": "string", "pattern": "^[A-Za-z][A-Za-z0-9-]{3,19}$" }
+            }
           }
         },
         "secretMaterialization": { "enum": ["redact", "allow"] },
@@ -619,5 +888,71 @@
         }
       }
     }
-  }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "profile": {
+            "not": {
+              "const": "emulator"
+            }
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "auth": {
+            "properties": {
+              "providers": {
+                "properties": {
+                  "oidc": {
+                    "items": {
+                      "properties": {
+                        "issuer": {
+                          "pattern": "^https://[^\\s\\u0000-\\u001f\\u007f-\\u009f]+$"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "not": {
+          "required": [
+            "profile"
+          ],
+          "properties": {
+            "profile": {
+              "const": "emulator"
+            }
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "auth": {
+            "properties": {
+              "authorizedDomains": {
+                "items": {
+                  "if": {
+                    "type": "string"
+                  },
+                  "then": {
+                    "pattern": "^[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?(?:\\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*$"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  ]
 }

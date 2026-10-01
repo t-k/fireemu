@@ -1,0 +1,26 @@
+{
+  "schemaVersion": 1,
+  "profile": "strict",
+  "limits": {
+    "catalog": "firestore-standard-2026-08-25",
+    "queryCatalog": "firestore-standard-query-2026-08-25",
+    "rulesCatalog": "firebase-rules-2026-08-25"
+  },
+  "firestore": {
+    "edition": "standard",
+    "apiMode": "native"
+  },
+  "rules": {
+    "executionMode": "admin-bypass"
+  },
+  "auth": {
+    "providers": {
+      "oidc": [
+        {
+          "name": "oidc.fixture",
+          "issuer": "https://issuer.test"
+        }
+      ]
+    }
+  }
+}

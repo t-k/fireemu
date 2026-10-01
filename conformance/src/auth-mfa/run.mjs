@@ -593,7 +593,14 @@ async function sessionLocal() {
  * fraction). A fresh session starts at the wall clock, as a production recording does.
  */
 async function runLocal(programs) {
-  const merged = { results: {}, failures: [], timings: [], secrets: [], requests: 0, harnessRequests: 0 };
+  const merged = {
+    results: {},
+    failures: [],
+    timings: [],
+    secrets: [],
+    requests: 0,
+    harnessRequests: 0,
+  };
   let binary;
   for (const program of programs) {
     const local = await runLocalSession([program]);
@@ -729,7 +736,8 @@ export const REOBSERVED = {
 export function reobservedStatus({ row, status, fireemu }, rowsByName) {
   const again = rowsByName.get(REOBSERVED[row]);
   if (status !== "INDETERMINATE" || again === undefined) return status;
-  const same = again.status === "MATCH" && !isTransient(fireemu) && sameRecording(again.production, fireemu);
+  const same =
+    again.status === "MATCH" && !isTransient(fireemu) && sameRecording(again.production, fireemu);
   return same ? "REOBSERVED_MATCH" : status;
 }
 
@@ -780,7 +788,9 @@ async function check() {
       });
     }
   }
-  const rowsByName = new Map(rows.map((r) => [r.row, { status: r.status, production: r.production }]));
+  const rowsByName = new Map(
+    rows.map((r) => [r.row, { status: r.status, production: r.production }]),
+  );
   for (const row of rows) row.status = reobservedStatus(row, rowsByName);
   const known = new Set(PROGRAMS.map((p) => p.id));
   const orphans = Object.keys(fixture.programs).filter((id) => !known.has(id));

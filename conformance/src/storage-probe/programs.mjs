@@ -1638,7 +1638,8 @@ const gcsUpdateAndList = {
   async run(ctx) {
     const name = "open/gcsu/doc.txt";
     // The official emulator registers PATCH only on the short `/b/...` spelling; the
-    // `/storage/v1/...` spelling falls through to its 501 catch-all (pinned below).
+    // `/storage/v1/...` spelling falls through to its 501 catch-all, while fireemu serves it as
+    // production does (a documented divergence, pinned below).
     const shortObject = (n) => `/b/${ctx.bucket}/o/${ctx.enc(n)}`;
     await gcsMedia(ctx, name, text("doc"));
     await ctx.step("patch", () =>

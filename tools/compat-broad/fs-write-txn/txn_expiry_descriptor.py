@@ -39,6 +39,7 @@ sys.path.insert(0, str(ROOT / "tools/compat-broad"))
 sys.path.insert(0, str(ROOT / "tools/compat-broad/o8-core"))
 sys.path.insert(0, str(HERE))
 
+import txn_expiry_baseline as commit_baseline
 import txn_expiry_cases as cases
 import txn_expiry_collector as collector
 import txn_expiry_comparison as comparison
@@ -46,28 +47,16 @@ import txn_expiry_gate as gate_module
 import txn_expiry_plan as plan_module
 import txn_expiry_preflight as preflight
 import txn_expiry_remote_transport as remote
-from batch_contract import NUMBER, PROJECT
 from broad_contract import digest
 from o8_admission import authorize_transport
 from o8_campaign import CAMPAIGN_APPROVAL_FIELDS, CampaignDescriptor
+from txn_expiry_plan import PROJECT
 
 
-def _load(name: str, path: Path):
-    """Load one reviewed module by exact path, without touching sys.path."""
-    import importlib.util
-
-    spec = importlib.util.spec_from_file_location(name, path)
-    if spec is None or spec.loader is None:
-        raise ValueError(f"reviewed module unavailable: {name}")
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
-
-
-# The baseline derivation and provenance check are the Commit lane's reviewed
-# implementation, reused rather than reimplemented.
+# The fixed sandbox wrapper uses the shared, pure baseline verification core.
 BASELINE_MODULE = "tools/compat-broad/fs-commit-transform-limits/commit_baseline.py"
-commit_baseline = _load("_txn_expiry_commit_baseline", ROOT / BASELINE_MODULE)
+
+validate_project_number = preflight.preflight.validate_project_number
 
 CAMPAIGN = cases.CAMPAIGN
 DATABASE = plan_module.DATABASE
@@ -201,7 +190,6 @@ def plan_compiler(nonce: str) -> dict:
         "campaignId": plan["campaign"],
         "casesDigest": plan["casesDigest"],
         "project": plan["projectId"],
-        "projectNumber": plan["projectNumber"],
         "database": plan["database"],
         "nonce": nonce,
         "ownerId": plan["ownerId"],
@@ -894,8 +882,9 @@ def comparator(result, shadow=None):
     }
 
 
-def permission_bindings(plan, source_commit, artifact_digest, inputs, baseline=None):
+def permission_bindings(plan, source_commit, artifact_digest, inputs, baseline=None, *, project_number=None):
     """Required non-authorizing fields for an independently supplied permission."""
+    project_number = validate_project_number(project_number)
     canonical = plan_compiler(plan["nonce"])
     if digest(plan) != digest(canonical):
         raise ValueError("fixed production project/database required")
@@ -904,7 +893,7 @@ def permission_bindings(plan, source_commit, artifact_digest, inputs, baseline=N
         "kind": PERMISSION_KIND,
         "campaignId": CAMPAIGN,
         "project": PROJECT,
-        "projectNumber": NUMBER,
+        "projectNumber": project_number,
         "quotaProject": PROJECT,
         "database": DATABASE,
         "nonce": plan["nonce"],
@@ -960,6 +949,7 @@ def permission_bindings(plan, source_commit, artifact_digest, inputs, baseline=N
         "allowedReobservations": 0,
     }
     if baseline is not None:
+        commit_baseline.validate_identity(baseline, project_number)
         required.update(commit_baseline.permission_baseline(baseline))
         required["baselineProvenance"] = baseline["provenance"]
     return required

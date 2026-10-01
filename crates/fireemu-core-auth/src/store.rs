@@ -912,7 +912,7 @@ impl fmt::Debug for OidcProviderConfig {
 }
 
 /// A project or tenant inbound SAML provider configuration.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct InboundSamlProviderConfig {
     /// Provider configuration ID.
     pub id: String,
@@ -932,6 +932,31 @@ pub struct InboundSamlProviderConfig {
     pub sp_entity_id: String,
     /// SAML assertion callback URI.
     pub callback_uri: String,
+}
+
+impl fmt::Debug for InboundSamlProviderConfig {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("InboundSamlProviderConfig")
+            .field("id", &self.id)
+            .field("display_name", &self.display_name)
+            .field("enabled", &self.enabled)
+            .field("idp_entity_id", &self.idp_entity_id)
+            .field("sso_url", &self.sso_url)
+            .field("idp_certificates", &"<redacted>")
+            .field("sign_request", &self.sign_request)
+            .field("sp_entity_id", &self.sp_entity_id)
+            .field("callback_uri", &self.callback_uri)
+            .finish()
+    }
+}
+
+/// Startup declarations for custom provider resources. None leaves a kind undeclared; an empty vector explicitly replaces that kind with no resources.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ProviderConfigSeeds {
+    /// OIDC resources in declared creation order; client secrets are redacted in Debug.
+    pub oidc: Option<Vec<OidcProviderConfig>>,
+    /// SAML resources in declared creation order; certificate bodies are redacted in Debug.
+    pub saml: Option<Vec<InboundSamlProviderConfig>>,
 }
 
 /// A project or tenant configuration of a default supported identity provider (Identity Platform
@@ -1292,13 +1317,20 @@ pub struct AuthStore {
     config: ProjectAuthConfig,
     /// The project's sign-in providers and test phone numbers.
     sign_in: SignInConfig,
+    /// The declared startup domains; session reset restores only this sign-in field.
+    authorized_domains_seed: Option<Vec<String>>,
     /// The project's multi-factor configuration (Admin v2 `Config.mfa`).
     mfa_config: crate::mfa_config::MfaProjectConfig,
+    /// The multi-factor configuration the daemon declared as the project's initial one
+    /// (`auth.mfa`), if it declared one. A control-plane reset returns `mfa_config` to it.
+    mfa_seed: Option<crate::mfa_config::MfaProjectConfig>,
     /// Written config members read back as written ([`crate::config_members`]).
     stored_members: crate::config_members::StoredConfigMembers,
     /// Deterministic, local-only sign-up quota state. Admin/import paths do not use it unless
     /// their caller explicitly requests a reservation through the typed API.
     signup_quota: SignupQuota,
+    /// Explicit startup declarations, independent of live Admin changes.
+    provider_config_seeds: ProviderConfigSeeds,
     /// OAuth/OIDC provider configurations in this namespace.
     oidc_configs: BTreeMap<String, OidcProviderConfig>,
     /// OAuth/OIDC configuration IDs in creation order.
@@ -1635,9 +1667,12 @@ impl AuthStore {
             credential_notices: Vec::new(),
             config: ProjectAuthConfig::default(),
             sign_in: SignInConfig::default(),
+            authorized_domains_seed: None,
             mfa_config: crate::mfa_config::MfaProjectConfig::default(),
+            mfa_seed: None,
             stored_members: crate::config_members::StoredConfigMembers::default(),
             signup_quota: SignupQuota::default(),
+            provider_config_seeds: ProviderConfigSeeds::default(),
             oidc_configs: BTreeMap::new(),
             oidc_order: Vec::new(),
             saml_configs: BTreeMap::new(),
@@ -2178,6 +2213,32 @@ impl AuthStore {
         self.mfa_config = config;
     }
 
+    /// The initial multi-factor configuration the daemon declared, if any.
+    #[must_use]
+    pub const fn mfa_seed(&self) -> Option<&crate::mfa_config::MfaProjectConfig> {
+        self.mfa_seed.as_ref()
+    }
+
+    /// Declares the project's initial multi-factor configuration (the caller validated it): it
+    /// is the live configuration now, and what [`Self::restore_mfa_seed`] returns to.
+    pub fn set_mfa_seed(&mut self, config: crate::mfa_config::MfaProjectConfig) {
+        self.mfa_config = config.clone();
+        self.mfa_seed = Some(config);
+    }
+
+    /// Returns the live multi-factor configuration to the declared initial one. Without a
+    /// declared one nothing changes (the other project configuration survives a reset the same
+    /// way). Reports whether a seed was restored.
+    pub fn restore_mfa_seed(&mut self) -> bool {
+        match &self.mfa_seed {
+            Some(seed) => {
+                self.mfa_config = seed.clone();
+                true
+            }
+            None => false,
+        }
+    }
+
     /// The project's authorized domains: the configured list, or the one a new Firebase
     /// project starts with (`localhost` and the project's two Firebase Hosting domains).
     #[must_use]
@@ -2189,6 +2250,33 @@ impl AuthStore {
                 format!("{}.web.app", self.project_id),
             ]
         })
+    }
+
+    /// The startup domain declaration, independently of the live Admin configuration.
+    #[must_use]
+    pub const fn authorized_domains_seed(&self) -> Option<&Vec<String>> {
+        self.authorized_domains_seed.as_ref()
+    }
+
+    /// Validates and installs a startup declaration, replacing the live domain list.
+    pub fn set_authorized_domains_seed(&mut self, domains: Vec<String>) -> Result<(), AuthError> {
+        let config = SignInConfig {
+            authorized_domains: Some(domains.clone()),
+            ..self.sign_in.clone()
+        };
+        self.set_sign_in_config(config)?;
+        self.authorized_domains_seed = Some(domains);
+        Ok(())
+    }
+
+    /// Restores declared domains only. Without a declaration the live list is retained.
+    pub fn restore_authorized_domains_seed(&mut self) -> bool {
+        if let Some(seed) = &self.authorized_domains_seed {
+            self.sign_in.authorized_domains = Some(seed.clone());
+            true
+        } else {
+            false
+        }
     }
 
     /// Replaces the sign-in providers and test phone numbers; an invalid configuration is
@@ -2363,6 +2451,57 @@ impl AuthStore {
         self.oidc_order
             .iter()
             .filter_map(|id| self.oidc_configs.get(id))
+    }
+
+    /// The declared provider resources, independent of current Admin changes.
+    #[must_use]
+    pub const fn provider_config_seeds(&self) -> &ProviderConfigSeeds {
+        &self.provider_config_seeds
+    }
+
+    /// Installs a validated declaration and replaces only its declared kinds. Duplicate IDs are checked across both collections before anything changes; field acceptance belongs to the shared Admin adapter.
+    pub fn set_provider_config_seeds(
+        &mut self,
+        seeds: ProviderConfigSeeds,
+    ) -> Result<(), &'static str> {
+        if seeds.oidc.as_ref().is_some_and(|configs| {
+            configs
+                .iter()
+                .map(|config| &config.id)
+                .collect::<BTreeSet<_>>()
+                .len()
+                != configs.len()
+        }) || seeds.saml.as_ref().is_some_and(|configs| {
+            configs
+                .iter()
+                .map(|config| &config.id)
+                .collect::<BTreeSet<_>>()
+                .len()
+                != configs.len()
+        }) {
+            return Err("duplicate provider ID");
+        }
+        self.provider_config_seeds = seeds;
+        self.restore_provider_config_seeds();
+        Ok(())
+    }
+
+    /// Restores declared collections in their original order, preserving undeclared kinds and built-in providers.
+    pub fn restore_provider_config_seeds(&mut self) {
+        if let Some(configs) = &self.provider_config_seeds.oidc {
+            self.oidc_order = configs.iter().map(|config| config.id.clone()).collect();
+            self.oidc_configs = configs
+                .iter()
+                .map(|config| (config.id.clone(), config.clone()))
+                .collect();
+        }
+        if let Some(configs) = &self.provider_config_seeds.saml {
+            self.saml_order = configs.iter().map(|config| config.id.clone()).collect();
+            self.saml_configs = configs
+                .iter()
+                .map(|config| (config.id.clone(), config.clone()))
+                .collect();
+        }
     }
 
     /// Gets one OAuth/OIDC configuration by ID.
@@ -5507,6 +5646,7 @@ impl AuthSnapshot {
         copy.pending_idp = PendingIdpCache::default();
         // Provider configurations are process-local control-plane state. In particular,
         // OIDC client secrets must never become transferable snapshot material.
+        copy.provider_config_seeds = ProviderConfigSeeds::default();
         copy.oidc_configs.clear();
         copy.oidc_order.clear();
         copy.saml_configs.clear();
@@ -5573,6 +5713,14 @@ impl AuthSnapshot {
             live.generated_local_id_reservation_ticket.clone();
         // A snapshot intentionally has no provider configurations. Preserve the destination's
         // control-plane state instead of allowing a cross-project restore to transfer it.
+        // The declared initial multi-factor configuration is the daemon's, not captured data.
+        restored.mfa_seed.clone_from(&live.mfa_seed);
+        restored
+            .authorized_domains_seed
+            .clone_from(&live.authorized_domains_seed);
+        restored
+            .provider_config_seeds
+            .clone_from(&live.provider_config_seeds);
         restored.oidc_configs = live.oidc_configs.clone();
         restored.oidc_order.clone_from(&live.oidc_order);
         restored.saml_configs = live.saml_configs.clone();
@@ -5768,6 +5916,19 @@ enum TenantPublication {
 /// Maximum compatibility-routed Auth project namespaces retained by one daemon.
 pub const MAX_ROUTED_AUTH_PROJECTS: usize = 1_024;
 
+/// A declaration applied to every compatibility-routed project when it is installed (the
+/// configuration file's tenants). It is held by the registry as data and applied by
+/// [`AuthRegistry::apply_pending_project_seeds`], a step of its own that runs with no registry
+/// lock and no project gate held: an installing request still holds the routed project's gate,
+/// and a seed creates tenants under that same gate.
+pub trait NewProjectSeed: Send + Sync + std::fmt::Debug {
+    /// Applies the declaration to `project`, idempotently (what is there already is kept).
+    ///
+    /// # Errors
+    /// The message of the refusal.
+    fn apply(&self, registry: &AuthRegistry, project: &str) -> Result<(), String>;
+}
+
 #[derive(Debug, Default)]
 struct ProjectStores {
     registered: BTreeMap<String, SharedAuthStore>,
@@ -5775,10 +5936,32 @@ struct ProjectStores {
     pending_sessions: BTreeMap<String, PendingSessionRegistration>,
 }
 
+impl ProjectStores {
+    /// The store a tenant of `project` is a child of: a registered project's, else a
+    /// compatibility-routed project's.
+    fn tenant_parent(&self, project: &str) -> Option<&SharedAuthStore> {
+        self.registered
+            .get(project)
+            .or_else(|| self.routed.get(project))
+    }
+}
+
 #[derive(Debug)]
 struct PendingSessionRegistration {
     registered: SharedAuthStore,
     displaced: Option<SharedAuthStore>,
+    /// The tenants of the displaced routed namespace, restored with it if the registration rolls
+    /// back and dropped when it commits.
+    displaced_tenants: Vec<DisplacedTenant>,
+}
+
+/// A tenant of a routed namespace a session registration displaced.
+#[derive(Debug)]
+struct DisplacedTenant {
+    key: TenantKey,
+    store: SharedAuthStore,
+    metadata: Option<TenantMetadata>,
+    runtime_override: Option<AuthNamespaceConfigPatch>,
 }
 
 /// Outcome of rolling back a session registration that has not completed its initial reset.
@@ -5871,10 +6054,21 @@ fn generated_tenant_id(display_name: Option<&str>, sequence: u64) -> String {
 #[derive(Debug)]
 pub struct AuthRegistry {
     default_project: String,
+    new_project_provider_config_seeds: Mutex<ProviderConfigSeeds>,
     project_numbers: BTreeMap<String, u64>,
     default: SharedAuthStore,
     scoped_refresh_routing: bool,
     projects: Mutex<ProjectStores>,
+    /// The declaration applied to a routed project when it is installed.
+    new_project_tenant_seed: Mutex<Option<Arc<dyn NewProjectSeed>>>,
+    /// Routed projects installed and not yet seeded, with the store that was installed (a
+    /// project a session displaced or a reset re-created meanwhile is another incarnation).
+    pending_project_seeds: Mutex<BTreeMap<String, SharedAuthStore>>,
+    /// Held from taking the pending list until its seeds are applied, so a caller that gets
+    /// through [`Self::apply_pending_project_seeds`] knows every seed drained before its call has
+    /// been applied (a request naming a declared tenant would otherwise make it with the
+    /// on-the-way defaults while its project's seed is in flight, and the seed would keep that).
+    seed_drain: Mutex<()>,
     /// Explicit project policies configured before a project session is registered. An entry
     /// does not create or route the project; it is applied to the matching namespace when it
     /// later appears.
@@ -5899,6 +6093,12 @@ pub struct AuthRegistry {
     operation_gates: Mutex<BTreeMap<TenantKey, Weak<Mutex<()>>>>,
     /// The session epochs of deleted tenants (see [`RemovedTenantEpochs`]).
     removed_tenant_epochs: Mutex<BTreeMap<TenantKey, RemovedTenantEpochs>>,
+    /// The multi-factor configuration the daemon declared as a project's initial one (`auth.mfa`),
+    /// which every project created after start begins with (a session project, or a namespace
+    /// routed by its first Admin request), in place of the default project's live value.
+    new_project_mfa_seed: Mutex<Option<crate::mfa_config::MfaProjectConfig>>,
+    /// The daemon declaration inherited by new projects, independently of live domains.
+    new_project_authorized_domains_seed: Mutex<Option<Vec<String>>>,
     membership_generation: AtomicU64,
     lifecycle_incarnation: Option<u128>,
     next_lifecycle_serial: AtomicU64,
@@ -6102,10 +6302,14 @@ impl AuthRegistry {
         });
         Self {
             default_project: default_project.to_owned(),
+            new_project_provider_config_seeds: Mutex::new(ProviderConfigSeeds::default()),
             project_numbers: BTreeMap::new(),
             default,
             scoped_refresh_routing,
             projects: Mutex::new(ProjectStores::default()),
+            new_project_tenant_seed: Mutex::new(None),
+            pending_project_seeds: Mutex::new(BTreeMap::new()),
+            seed_drain: Mutex::new(()),
             project_password_policy_overrides: Mutex::new(BTreeMap::new()),
             project_config_overrides: Mutex::new(BTreeMap::new()),
             tenants: Mutex::new(BTreeMap::new()),
@@ -6113,9 +6317,11 @@ impl AuthRegistry {
             password_policy_overrides: Mutex::new(BTreeMap::new()),
             tenant_config_overrides: Mutex::new(BTreeMap::new()),
             tenant_runtime_config_overrides: Mutex::new(BTreeMap::new()),
+            new_project_mfa_seed: Mutex::new(None),
             deleted_tenants: Mutex::new(BTreeSet::new()),
             operation_gates: Mutex::new(BTreeMap::new()),
             removed_tenant_epochs: Mutex::new(BTreeMap::new()),
+            new_project_authorized_domains_seed: Mutex::new(None),
             membership_generation: AtomicU64::new(0),
             lifecycle_incarnation: None,
             next_lifecycle_serial: AtomicU64::new(1),
@@ -6123,6 +6329,22 @@ impl AuthRegistry {
             #[cfg(test)]
             refresh_token_scans: AtomicU64::new(0),
         }
+    }
+
+    /// Records the daemon declaration for future projects, independently of the default store's live resources.
+    pub fn set_new_project_provider_config_seeds(&self, seeds: ProviderConfigSeeds) {
+        if let Ok(mut declared) = self.new_project_provider_config_seeds.lock() {
+            *declared = seeds;
+        }
+    }
+
+    /// Returns the declaration future projects inherit.
+    #[must_use]
+    pub fn new_project_provider_config_seeds(&self) -> ProviderConfigSeeds {
+        self.new_project_provider_config_seeds
+            .lock()
+            .map(|seeds| seeds.clone())
+            .unwrap_or_default()
     }
 
     /// The default project.
@@ -6153,6 +6375,36 @@ impl AuthRegistry {
         self.projects.lock().ok()?.routed.get(project).cloned()
     }
 
+    /// Declares the multi-factor configuration every project created from now on begins with
+    /// (`None`: multi-factor off, as a new production project has it).
+    pub fn set_new_project_mfa_seed(&self, seed: Option<crate::mfa_config::MfaProjectConfig>) {
+        if let Ok(mut current) = self.new_project_mfa_seed.lock() {
+            *current = seed;
+        }
+    }
+
+    /// Sets the validated startup domain declaration inherited by future projects.
+    pub fn set_new_project_authorized_domains_seed(&self, seed: Option<Vec<String>>) {
+        if let Ok(mut current) = self.new_project_authorized_domains_seed.lock() {
+            *current = seed;
+        }
+    }
+
+    /// The multi-factor configuration a project created now begins with, if one was declared.
+    #[must_use]
+    pub fn new_project_mfa_seed(&self) -> Option<crate::mfa_config::MfaProjectConfig> {
+        self.new_project_mfa_seed.lock().ok()?.clone()
+    }
+
+    /// The startup domain declaration for a project created now.
+    #[must_use]
+    pub fn new_project_authorized_domains_seed(&self) -> Option<Vec<String>> {
+        self.new_project_authorized_domains_seed
+            .lock()
+            .ok()?
+            .clone()
+    }
+
     /// Builds an isolated compatibility store without registering it. A rejected request can
     /// use and drop this candidate without growing the registry.
     pub fn routed_candidate(&self, project: &str) -> Option<AuthStore> {
@@ -6179,6 +6431,7 @@ impl AuthRegistry {
             .ok()?
             .get(project)
             .copied();
+        let provider_seeds = self.new_project_provider_config_seeds.lock().ok()?.clone();
         let (policy, config, quota, signer) = {
             let default = self.default.lock().ok()?;
             (
@@ -6206,11 +6459,18 @@ impl AuthRegistry {
         if let Some(epoch) = lifecycle_epoch {
             store.set_lifecycle_epoch(epoch);
         }
+        store.set_provider_config_seeds(provider_seeds).ok()?;
         store.set_config(explicit_config.map_or(config, |patch| patch.apply_to(config)));
         store.set_signup_quota_config(quota).ok()?;
         store.set_project_number(self.project_numbers.get(project).copied());
         if let Some(signer) = signer {
             store.set_signer(signer);
+        }
+        if let Some(seed) = self.new_project_mfa_seed() {
+            store.set_mfa_seed(seed);
+        }
+        if let Some(seed) = self.new_project_authorized_domains_seed() {
+            store.set_authorized_domains_seed(seed).ok()?;
         }
         Some(store)
     }
@@ -6274,7 +6534,77 @@ impl AuthRegistry {
         }
         projects.routed.insert(project.to_owned(), store.clone());
         self.membership_generation.fetch_add(1, Ordering::Release);
+        if self
+            .new_project_tenant_seed
+            .lock()
+            .is_ok_and(|seed| seed.is_some())
+        {
+            if let Ok(mut pending) = self.pending_project_seeds.lock() {
+                pending.insert(project.to_owned(), store.clone());
+            }
+        }
         RoutedStoreInstall::Installed(store)
+    }
+
+    /// Stores the declaration applied to every compatibility-routed project when it is installed
+    /// (see [`NewProjectSeed`]).
+    pub fn set_new_project_tenant_seed(&self, seed: Arc<dyn NewProjectSeed>) {
+        if let Ok(mut current) = self.new_project_tenant_seed.lock() {
+            *current = Some(seed);
+        }
+    }
+
+    /// Whether a routed project was installed and not yet seeded. A cheap check, so a request that
+    /// installed nothing does not go on to take the admission barrier for a seed.
+    #[must_use]
+    pub fn has_pending_project_seeds(&self) -> bool {
+        self.pending_project_seeds
+            .lock()
+            .is_ok_and(|pending| !pending.is_empty())
+    }
+
+    /// Applies the stored declaration to each routed project installed since the last call, once.
+    /// Call it with no registry lock and no project gate held (a request's own gate is released
+    /// first). A project a default-scope reset dropped meanwhile is skipped. Returns the first
+    /// refusal, after trying every project.
+    ///
+    /// # Errors
+    /// The message of the first project the declaration could not be applied to.
+    pub fn apply_pending_project_seeds(&self) -> Result<(), String> {
+        // One drain at a time: a second caller waits until the first has applied its seeds. The
+        // drain mutex is the outermost lock here and nothing that holds a gate or a registry lock
+        // takes it (the seeds themselves run under it, with no gate held).
+        let _draining = self
+            .seed_drain
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let pending = match self.pending_project_seeds.lock() {
+            Ok(mut pending) if !pending.is_empty() => std::mem::take(&mut *pending),
+            _ => return Ok(()),
+        };
+        let Some(seed) = self
+            .new_project_tenant_seed
+            .lock()
+            .ok()
+            .and_then(|seed| seed.clone())
+        else {
+            return Ok(());
+        };
+        let mut first_error = None;
+        for (project, installed) in pending {
+            // Only the incarnation that was installed is seeded: a project a session displaced,
+            // or a reset dropped and a later request re-created, is not this one.
+            if !self
+                .routed_store_for(&project)
+                .is_some_and(|current| Arc::ptr_eq(&current, &installed))
+            {
+                continue;
+            }
+            if let Err(error) = seed.apply(self, &project) {
+                first_error.get_or_insert(error);
+            }
+        }
+        first_error.map_or(Ok(()), Err)
     }
 
     /// Clears every compatibility namespace owned by the default session.
@@ -6484,6 +6814,11 @@ impl AuthRegistry {
             );
         }
         default.clear();
+        // A control-plane reset returns the project to its declared initial multi-factor
+        // configuration (a no-op without one, as for the rest of the project configuration).
+        default.restore_mfa_seed();
+        default.restore_authorized_domains_seed();
+        default.restore_provider_config_seeds();
         for store in &mut routed_guards {
             store.clear();
         }
@@ -6616,6 +6951,9 @@ impl AuthRegistry {
             );
         }
         parent.clear();
+        parent.restore_mfa_seed();
+        parent.restore_authorized_domains_seed();
+        parent.restore_provider_config_seeds();
         for store in &mut tenant_guards {
             store.clear();
         }
@@ -6752,13 +7090,19 @@ impl AuthRegistry {
         let Ok(metadata) = self.tenant_metadata.lock() else {
             return false;
         };
+        // Tenants the project owns belong to the routed namespace the session displaces (they
+        // move with it); tenants of any other project of that name are stray and refuse it.
+        let owns_tenants = tenants.keys().any(|(candidate, _)| candidate == project)
+            || metadata.keys().any(|(candidate, _)| candidate == project);
         if projects.registered.contains_key(project)
             || projects.pending_sessions.contains_key(project)
-            || tenants.keys().any(|(candidate, _)| candidate == project)
-            || metadata.keys().any(|(candidate, _)| candidate == project)
+            || (owns_tenants && !projects.routed.contains_key(project))
         {
             return false;
         }
+        let Ok(runtime_overrides) = self.tenant_runtime_config_overrides.lock() else {
+            return false;
+        };
         if self.lifecycle_incarnation.is_some() {
             let Some(epoch) = self.next_lifecycle_epoch() else {
                 return false;
@@ -6784,6 +7128,29 @@ impl AuthRegistry {
         }
         store.set_project_number(self.project_numbers.get(project).copied());
         let displaced = projects.routed.remove(project);
+        let (mut tenants, mut metadata, mut runtime_overrides) =
+            (tenants, metadata, runtime_overrides);
+        let displaced_tenants = if displaced.is_some() {
+            let keys = tenants
+                .keys()
+                .filter(|(candidate, _)| candidate == project)
+                .cloned()
+                .collect::<Vec<_>>();
+            keys.into_iter()
+                .filter_map(|key| {
+                    let store = tenants.remove(&key)?;
+                    Some(DisplacedTenant {
+                        metadata: metadata.remove(&key),
+                        runtime_override: runtime_overrides.remove(&key),
+                        key,
+                        store,
+                    })
+                })
+                .collect()
+        } else {
+            Vec::new()
+        };
+        drop(runtime_overrides);
         drop(metadata);
         drop(tenants);
         let registered = Arc::new(Mutex::new(store));
@@ -6795,6 +7162,7 @@ impl AuthRegistry {
             PendingSessionRegistration {
                 registered,
                 displaced,
+                displaced_tenants,
             },
         );
         self.membership_generation.fetch_add(1, Ordering::Release);
@@ -6846,6 +7214,27 @@ impl AuthRegistry {
         projects.registered.remove(project);
         if let Some(displaced) = pending.displaced {
             projects.routed.insert(project.to_owned(), displaced);
+        }
+        if let (Ok(mut tenants), Ok(mut metadata), Ok(mut runtime_overrides)) = (
+            self.tenants.lock(),
+            self.tenant_metadata.lock(),
+            self.tenant_runtime_config_overrides.lock(),
+        ) {
+            // A tenant made while the registration was pending belongs to the session that is
+            // going away: it must not outlive it (a stray tenant refuses every later session
+            // for the project). Only the displaced routed namespace's tenants come back.
+            tenants.retain(|(candidate, _), _| candidate != project);
+            metadata.retain(|(candidate, _), _| candidate != project);
+            runtime_overrides.retain(|(candidate, _), _| candidate != project);
+            for tenant in pending.displaced_tenants {
+                if let Some(published) = tenant.metadata {
+                    metadata.insert(tenant.key.clone(), published);
+                }
+                if let Some(patch) = tenant.runtime_override {
+                    runtime_overrides.insert(tenant.key.clone(), patch);
+                }
+                tenants.insert(tenant.key, tenant.store);
+            }
         }
         self.membership_generation.fetch_add(1, Ordering::Release);
         SessionRegistrationRollback::Restored
@@ -6932,7 +7321,7 @@ impl AuthRegistry {
         let parent = if project == self.default_project {
             &self.default
         } else {
-            projects.registered.get(project)?
+            projects.tenant_parent(project)?
         };
         self.build_tenant_import_candidate(project, tenant, parent)
     }
@@ -7745,6 +8134,18 @@ impl AuthRegistry {
 
     /// Returns a tenant store, creating its isolated namespace on first use.
     pub fn ensure_tenant(&self, project: &str, tenant: &str) -> Option<Arc<Mutex<AuthStore>>> {
+        self.ensure_tenant_with(project, tenant, |_| {})
+    }
+
+    /// Returns a tenant store, creating its isolated namespace on first use. `init` sets up a
+    /// store that is created here before it is published, under the project's gate, so no request
+    /// sees the tenant without it; it does not run for a tenant that already exists.
+    pub fn ensure_tenant_with(
+        &self,
+        project: &str,
+        tenant: &str,
+        init: impl FnOnce(&mut AuthStore),
+    ) -> Option<Arc<Mutex<AuthStore>>> {
         if tenant.is_empty() || tenant.contains(['/', '\\']) {
             return None;
         }
@@ -7754,13 +8155,14 @@ impl AuthRegistry {
         let parent = if project == self.default_project {
             &self.default
         } else {
-            projects.registered.get(project)?
+            projects.tenant_parent(project)?
         };
         let key = (project.to_owned(), tenant.to_owned());
         if let Some(store) = self.existing_tenant_with_metadata(&key) {
             return Some(store);
         }
         let store = self.build_tenant_store(project, tenant, parent)?;
+        init(&mut *store.lock().ok()?);
         let mut tenant_metadata = TenantMetadata {
             allow_password_signup: true,
             enable_email_link_signin: true,
@@ -7809,11 +8211,36 @@ impl AuthRegistry {
     ) -> Option<(String, TenantMetadata, PasswordPolicy)> {
         self.create_tenant_with_password_policy_inner(
             project,
+            None,
             metadata,
             patch,
             password_policy,
             false,
         )
+    }
+
+    /// Creates a tenant with an id its caller chose (a tenant declared in the configuration
+    /// file), published as [`Self::create_tenant_with_password_policy`] publishes a generated one.
+    /// `None` when the id is in use, cannot address a tenant, or the project is unknown. A name
+    /// that was deleted, or wiped by a reset, is free again and stops reading as deleted.
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn create_tenant_with_id(
+        &self,
+        project: &str,
+        tenant: &str,
+        metadata: TenantMetadata,
+        patch: TenantMetadataPatch,
+        password_policy: Option<PasswordPolicy>,
+    ) -> Option<(TenantMetadata, PasswordPolicy)> {
+        self.create_tenant_with_password_policy_inner(
+            project,
+            Some(tenant),
+            metadata,
+            patch,
+            password_policy,
+            false,
+        )
+        .map(|(_, metadata, policy)| (metadata, policy))
     }
 
     /// Creates a tenant only if its parent config enables tenant operations at the project gate.
@@ -7827,6 +8254,7 @@ impl AuthRegistry {
     ) -> Option<(String, TenantMetadata, PasswordPolicy)> {
         self.create_tenant_with_password_policy_inner(
             project,
+            None,
             metadata,
             patch,
             password_policy,
@@ -7838,6 +8266,7 @@ impl AuthRegistry {
     fn create_tenant_with_password_policy_inner(
         &self,
         project: &str,
+        chosen_id: Option<&str>,
         metadata: TenantMetadata,
         patch: TenantMetadataPatch,
         password_policy: Option<PasswordPolicy>,
@@ -7846,13 +8275,16 @@ impl AuthRegistry {
         if project.is_empty() || project.contains(['/', '\\']) {
             return None;
         }
+        if chosen_id.is_some_and(|id| id.is_empty() || id.contains(['/', '\\'])) {
+            return None;
+        }
         let gate = self.operation_gate(project, None)?;
         let _operation = gate.lock().ok()?;
         let projects = self.projects.lock().ok()?;
         let parent = if project == self.default_project {
             &self.default
         } else {
-            projects.registered.get(project)?
+            projects.tenant_parent(project)?
         };
         if require_enabled && !parent.lock().ok()?.allows_tenants() {
             return None;
@@ -7864,8 +8296,13 @@ impl AuthRegistry {
             .flatten()
             .or_else(|| metadata.display_name.clone());
         loop {
-            let sequence = self.next_tenant_id.fetch_add(1, Ordering::Relaxed);
-            let tenant = generated_tenant_id(display_name.as_deref(), sequence);
+            let tenant = chosen_id.map_or_else(
+                || {
+                    let sequence = self.next_tenant_id.fetch_add(1, Ordering::Relaxed);
+                    generated_tenant_id(display_name.as_deref(), sequence)
+                },
+                str::to_owned,
+            );
             let store = self.build_tenant_store(project, &tenant, parent)?;
             if let Some(patch) =
                 self.effective_tenant_config_override(&(project.to_owned(), tenant.clone()))
@@ -7901,8 +8338,21 @@ impl AuthRegistry {
                         let previous = overrides.get(&key).copied().unwrap_or_default();
                         overrides.insert(key, previous.merge(config_override));
                     }
+                    if chosen_id.is_some() {
+                        // A name in use again is neither deleted nor carries the epochs of the
+                        // tenant that held it.
+                        let key = (project.to_owned(), tenant.clone());
+                        if let Ok(mut deleted) = self.deleted_tenants.lock() {
+                            deleted.remove(&key);
+                        }
+                        if let Ok(mut removed) = self.removed_tenant_epochs.lock() {
+                            removed.remove(&key);
+                        }
+                    }
                     return Some((tenant, next_metadata, next_policy));
                 }
+                // A chosen id that is taken is refused; a generated one tries the next.
+                TenantPublication::Existing { .. } if chosen_id.is_some() => return None,
                 TenantPublication::Existing {
                     unpublished_metadata,
                     ..
@@ -8778,6 +9228,14 @@ impl AuthRegistry {
     pub fn refresh_token_tenant(token: &str) -> Option<(String, String)> {
         let (project, tenant) = refresh_token_namespace(token)?;
         Some((project.to_owned(), tenant?.to_owned()))
+    }
+
+    /// What a refresh token this version issued says about its tenant: `None` when the token does
+    /// not decode, `Some(None)` when it names no tenant, and `Some(Some(tenant))` otherwise.
+    #[must_use]
+    pub fn decode_refresh_token_tenant(token: &str) -> Option<Option<String>> {
+        let (_, tenant) = refresh_token_namespace(token)?;
+        Some(tenant.map(str::to_owned))
     }
 
     /// The session epochs `tenant` of `project` had when it was deleted, if it was.
@@ -12602,5 +13060,43 @@ mod quota_snapshot_tests {
             (0, 0),
             "tenant quota usage must remain isolated across tenant restore"
         );
+    }
+}
+
+#[cfg(test)]
+mod provider_seed_snapshot_tests {
+    use super::{AuthSnapshot, AuthStore};
+    use crate::mfa::TotpPolicy;
+    use fireemu_core_types::determinism::SplitMix64;
+    #[test]
+    fn provider_seed_snapshot_capture_contains_neither_declaration_nor_credentials() {
+        let mut source = AuthStore::new("demo-app", SplitMix64::new(1), TotpPolicy::default());
+        source
+            .set_provider_config_seeds(super::ProviderConfigSeeds {
+                oidc: Some(vec![super::OidcProviderConfig {
+                    id: "oidc.seed".into(),
+                    display_name: None,
+                    enabled: true,
+                    client_id: "client".into(),
+                    issuer: "https://issuer.test".into(),
+                    client_secret: Some("secret-only-in-live-store".into()),
+                    response_type: super::OAuthResponseType {
+                        id_token: true,
+                        code: false,
+                        token: false,
+                    },
+                }]),
+                saml: Some(vec![]),
+            })
+            .unwrap();
+        let snapshot = AuthSnapshot::capture(&source);
+        assert_eq!(
+            snapshot.0.provider_config_seeds,
+            super::ProviderConfigSeeds::default()
+        );
+        assert!(snapshot.0.oidc_configs.is_empty());
+        assert!(source.provider_config_seeds.oidc.as_ref().unwrap()[0]
+            .client_secret
+            .is_some());
     }
 }

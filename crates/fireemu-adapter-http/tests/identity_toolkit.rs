@@ -4977,6 +4977,8 @@ fn oidc_provider_config_crud_is_namespaced_and_refusals_do_not_mutate() {
             &json!({})
         )
         .status,
+        // The official emulator stubs the tenant IdP-config routes (501) and makes no tenant on
+        // them; Fireemu serves them as an extension, and a tenant that does not exist is refused.
         404
     );
 }
@@ -5849,7 +5851,7 @@ fn batch_import_treats_null_optional_fields_as_unset() {
 
 #[test]
 fn batch_import_reports_each_missing_local_id_without_blocking_neighbors() {
-    let s = state();
+    let s = strict_state();
     let (status, response) = admin(
         &s,
         "POST",
@@ -6591,8 +6593,10 @@ fn lookup_authorization_separates_end_user_identity_from_admin_selectors() {
                     }
                 }
             }
-            // Even the emulator owner header cannot change an end-user handler's role: the
-            // session's subject is the only account answered.
+            // The owner header cannot change an end-user handler's role in the strict profile:
+            // the session's subject is the only account answered. The emulator profile serves a
+            // request with the owner credential as the official emulator's `Oauth2` branch does
+            // (`operations.js:225`): by the selectors, with no ID token read.
             query["idToken"] = signed[0]["idToken"].clone();
             let response = handle_with(
                 &s,
@@ -6603,7 +6607,12 @@ fn lookup_authorization_separates_end_user_identity_from_admin_selectors() {
             );
             assert_eq!(response.status, 200, "{}", response.body);
             assert_eq!(response.body["users"].as_array().unwrap().len(), 1);
-            assert_eq!(response.body["users"][0]["localId"], signed[0]["localId"]);
+            let answered = if s.stateless_refresh_tokens {
+                &signed[1]
+            } else {
+                &signed[0]
+            };
+            assert_eq!(response.body["users"][0]["localId"], answered["localId"]);
         }
         assert_eq!(
             post(
@@ -9243,6 +9252,13 @@ fn assert_custom_session_cookie_handoff(state: &AuthState, tenant: &str, token: 
             &other,
             &json!({"idToken": token, "validDuration": "300"}),
         );
+        // The emulator profile takes the token's tenant as the target of a project-path cookie
+        // request when the path and the body name none, as the official emulator does
+        // (`server.js:398-406`); a tenant path of another tenant is still refused.
+        if state.stateless_refresh_tokens && !other.contains("/tenants/") {
+            assert_eq!(status, 200, "{refused}");
+            continue;
+        }
         assert_eq!(status, 400);
         assert!(refused.get("sessionCookie").is_none());
     }
@@ -11529,7 +11545,7 @@ fn custom_attributes_read_back_as_set() {
 /// `auth-account/config/duplicate-email`).
 #[test]
 fn duplicate_email_mode_keeps_password_accounts_unique() {
-    let s = state();
+    let s = strict_state();
     let (status, body) = admin(
         &s,
         "PATCH",
@@ -12584,7 +12600,7 @@ fn an_admin_update_takes_a_short_password_and_a_client_update_does_not() {
 /// auth-config-sdk/duplicate-email).
 #[test]
 fn a_password_sign_in_of_a_duplicate_address_reaches_its_earliest_owner() {
-    let s = state();
+    let s = strict_state();
     let (status, config) = patch_sign_in(
         &s,
         "signIn.allowDuplicateEmails",
@@ -14544,8 +14560,16 @@ fn client_namespace_selectors_fail_closed_without_default_fallback() {
             "password": "password1"
         }),
     );
-    assert_eq!(status, 404, "{refused}");
-    assert_eq!(refused["error"]["message"], "TENANT_NOT_FOUND");
+    // The named tenant is made on the way in the key's project (the official emulator's
+    // `getProjectStateById`), and the user lands in it: the request never falls back to the
+    // project namespace, in the key's project or in the default one.
+    assert_eq!(status, 200, "{refused}");
+    assert!(registry
+        .tenant_store("worker-auth", "missing-tenant")
+        .is_some());
+    assert!(registry
+        .tenant_store("demo-app", "missing-tenant")
+        .is_none());
     assert!(registry
         .store_for("worker-auth")
         .unwrap()
@@ -14553,19 +14577,30 @@ fn client_namespace_selectors_fail_closed_without_default_fallback() {
         .unwrap()
         .user_by_email("missing-tenant@example.com")
         .is_none());
+    assert!(s
+        .store
+        .lock()
+        .unwrap()
+        .user_by_email("missing-tenant@example.com")
+        .is_none());
 
-    let (status, refused) = post(
+    // The query's tenant is ignored on a client route, as the official emulator ignores it
+    // (`server.js` reads the target tenant from the path, the body and the tokens): a project
+    // sign-up in the default project, and no tenant is made.
+    let (status, created) = post(
         &s,
         &format!("{V1}/accounts:signUp?tenantId=missing-tenant"),
         &json!({"email": "missing-query-tenant@example.com", "password": "password1"}),
     );
-    assert_eq!(status, 404, "{refused}");
-    assert_eq!(refused["error"]["message"], "TENANT_NOT_FOUND");
+    assert_eq!(status, 200, "{created}");
     assert!(s
         .store
         .lock()
         .unwrap()
         .user_by_email("missing-query-tenant@example.com")
+        .is_some());
+    assert!(registry
+        .tenant_store("demo-app", "missing-tenant")
         .is_none());
 
     let (status, worker) = post(
@@ -14627,8 +14662,9 @@ fn explicit_tenant_never_falls_back_when_tenancy_selector_is_unavailable() {
 
         let (status, created) = post(
             &s,
-            &format!("{V1}/accounts:signUp?key=fake-api-key&tenantId=tenant-a"),
+            &format!("{V1}/accounts:signUp?key=fake-api-key"),
             &json!({
+                "tenantId": "tenant-a",
                 "email": format!("explicit-{label}@example.com"),
                 "password": "password1",
             }),
@@ -14652,14 +14688,16 @@ fn explicit_tenant_never_falls_back_when_tenancy_selector_is_unavailable() {
 
         let (status, refused) = post(
             &s,
-            &format!("{V1}/accounts:signUp?key=fake-api-key&tenantId=missing-tenant"),
+            &format!("{V1}/accounts:signUp?key=fake-api-key"),
             &json!({
+                "tenantId": "missing-tenant",
                 "email": format!("missing-{label}@example.com"),
                 "password": "password1",
             }),
         );
-        assert_eq!(status, 404, "{label}: {refused}");
-        assert_eq!(refused["error"]["message"], "TENANT_NOT_FOUND");
+        // The named tenant is made on the way and the user lands in it, never in the default
+        // project.
+        assert_eq!(status, 200, "{label}: {refused}");
         assert!(
             s.store
                 .lock()
@@ -14668,6 +14706,9 @@ fn explicit_tenant_never_falls_back_when_tenancy_selector_is_unavailable() {
                 .is_none(),
             "{label}: unknown tenant must not mutate default store"
         );
+        assert!(registry
+            .tenant_store("demo-app", "missing-tenant")
+            .is_some());
 
         let (status, refused) = post(
             &s,
@@ -14678,8 +14719,19 @@ fn explicit_tenant_never_falls_back_when_tenancy_selector_is_unavailable() {
                 "password": "password1",
             }),
         );
-        assert_eq!(status, 400, "{label}: {refused}");
-        assert_eq!(refused["error"]["message"], "TENANT_ID_MISMATCH");
+        // The query is ignored and the body's tenant is the target: no mismatch, and nothing is
+        // written to tenant-a.
+        assert_eq!(status, 200, "{label}: {refused}");
+        assert!(
+            registry
+                .tenant_store("demo-app", "tenant-b")
+                .unwrap()
+                .lock()
+                .unwrap()
+                .user_by_email(format!("mismatch-{label}@example.com").as_str())
+                .is_some(),
+            "{label}: the account landed in the body's tenant"
+        );
         assert!(registry
             .tenant_store("demo-app", "tenant-a")
             .unwrap()
@@ -14782,20 +14834,25 @@ fn scoped_tenant_selectors_must_match_body_and_query_before_auth_work() {
         &format!("{path}?tenantId=tenant-b"),
         &Value::Null,
     );
-    assert_eq!(query_mismatch.0, 400, "{}", query_mismatch.1);
-    assert_eq!(query_mismatch.1["error"]["message"], "TENANT_ID_MISMATCH");
+    // Tenant management ignores the query's tenant, as the official emulator does
+    // (`operations.js:15-86`): the path's tenant is read.
+    assert_eq!(query_mismatch.0, 200, "{}", query_mismatch.1);
+    assert_eq!(
+        query_mismatch.1["name"],
+        "projects/demo-app/tenants/tenant-a"
+    );
 
-    let patch_query_mismatch = admin(
+    let patch_query_ignored = admin(
         &s,
         "PATCH",
         &format!("{path}?tenantId=tenant-b&updateMask=displayName"),
-        &json!({"displayName": "must-not-commit"}),
+        &json!({"displayName": "via-query"}),
     );
-    assert_eq!(patch_query_mismatch.0, 400, "{}", patch_query_mismatch.1);
-    assert_eq!(
-        patch_query_mismatch.1["error"]["message"],
-        "TENANT_ID_MISMATCH"
-    );
+    assert_eq!(patch_query_ignored.0, 200, "{}", patch_query_ignored.1);
+    assert_eq!(patch_query_ignored.1["displayName"], "via-query");
+    assert!(registry
+        .tenant_metadata("demo-app", "tenant-b")
+        .is_some_and(|metadata| metadata.display_name.as_deref() != Some("via-query")));
 
     let patch_body_mismatch = admin(
         &s,
@@ -14820,9 +14877,15 @@ fn scoped_tenant_selectors_must_match_body_and_query_before_auth_work() {
         "{}",
         account_query_mismatch.1
     );
-    assert_eq!(
-        account_query_mismatch.1["error"]["message"],
-        "TENANT_ID_MISMATCH"
+    // The query's tenant is ignored on an account route (the official emulator reads only the
+    // path's): the request runs in tenant-a, whose policy (12 characters) refuses the password,
+    // not as a mismatch with tenant-b.
+    assert!(
+        account_query_mismatch.1["error"]["message"]
+            .as_str()
+            .is_some_and(|m| m.starts_with("PASSWORD_DOES_NOT_MEET_REQUIREMENTS")),
+        "{}",
+        account_query_mismatch.1
     );
     assert!(tenant_a
         .lock()
@@ -14900,7 +14963,7 @@ fn body_tenant_mismatch_is_refused_as_the_official_emulator_refuses_it() {
 
 #[test]
 #[allow(clippy::too_many_lines)]
-fn query_tenant_binds_custom_token_namespace_before_auth_work() {
+fn a_named_tenant_binds_custom_token_namespace_before_auth_work() {
     use fireemu_core_auth::store::AuthRegistry;
     use fireemu_core_session::tenancy::Tenancy;
 
@@ -14940,8 +15003,8 @@ fn query_tenant_binds_custom_token_namespace_before_auth_work() {
 
     let (status, refused) = post(
         &s,
-        &format!("{V1}/accounts:signInWithCustomToken?key=worker-key&tenantId=customer-b"),
-        &json!({"token": token}),
+        &format!("{V1}/accounts:signInWithCustomToken?key=worker-key"),
+        &json!({"token": token, "tenantId": "customer-b"}),
     );
     assert_eq!(status, 400, "{refused}");
     assert_eq!(refused["error"]["message"], "TENANT_ID_MISMATCH");
@@ -14965,15 +15028,15 @@ fn query_tenant_binds_custom_token_namespace_before_auth_work() {
     );
 
     // A project-scoped custom token has no tenant claim and cannot be rebound to a tenant by
-    // an explicit query selector.
+    // an explicit selector (the query's tenant is no selector in the emulator profile).
     let project_token = custom_token_from_payload(&json!({
         "aud": fireemu_adapter_http::identity_toolkit::CUSTOM_TOKEN_AUDIENCE,
         "uid": "project-scoped-custom-user",
     }));
     let (status, refused) = post(
         &s,
-        &format!("{V1}/accounts:signInWithCustomToken?key=worker-key&tenantId=customer-b"),
-        &json!({"token": project_token}),
+        &format!("{V1}/accounts:signInWithCustomToken?key=worker-key"),
+        &json!({"token": project_token, "tenantId": "customer-b"}),
     );
     assert_eq!(status, 400, "{refused}");
     assert_eq!(refused["error"]["message"], "TENANT_ID_MISMATCH");
@@ -14998,8 +15061,9 @@ fn query_tenant_binds_custom_token_namespace_before_auth_work() {
 
     let (status, accepted) = post(
         &s,
-        &format!("{V1}/accounts:signInWithCustomToken?key=worker-key&tenantId=customer-a"),
+        &format!("{V1}/accounts:signInWithCustomToken?key=worker-key"),
         &json!({
+            "tenantId": "customer-a",
             "token": custom_token_from_payload(&json!({
                 "aud": fireemu_adapter_http::identity_toolkit::CUSTOM_TOKEN_AUDIENCE,
                 "uid": "query-custom-user",
@@ -15095,7 +15159,7 @@ fn body_tenant_rejects_project_custom_token_before_routing_or_mutation() {
 }
 
 #[test]
-fn query_tenant_binds_refresh_token_namespace_before_auth_work() {
+fn the_query_tenant_does_not_bind_a_refresh_token_namespace_in_the_emulator_profile() {
     use fireemu_core_auth::store::AuthRegistry;
     use fireemu_core_session::tenancy::Tenancy;
 
@@ -15158,8 +15222,9 @@ fn query_tenant_binds_refresh_token_namespace_before_auth_work() {
             "refresh_token": project_created["refreshToken"],
         }),
     );
-    assert_eq!(status, 400, "{refused_project}");
-    assert_eq!(refused_project["error"]["message"], "TENANT_ID_MISMATCH");
+    // The query's tenant is ignored (the official emulator reads the refresh token's own
+    // namespace), so the project's session is renewed as it would be without it.
+    assert_eq!(status, 200, "{refused_project}");
     assert_eq!(project_store.lock().unwrap().user_count(), project_before);
 
     let (status, refused) = post(
@@ -15167,8 +15232,9 @@ fn query_tenant_binds_refresh_token_namespace_before_auth_work() {
         "/securetoken.googleapis.com/v1/token?key=worker-key&tenantId=customer-b",
         &json!({"grant_type": "refresh_token", "refresh_token": refresh}),
     );
-    assert_eq!(status, 400, "{refused}");
-    assert_eq!(refused["error"]["message"], "TENANT_ID_MISMATCH");
+    // The tenant token is renewed in its own tenant, whatever tenant the query names.
+    assert_eq!(status, 200, "{refused}");
+    assert_eq!(refused["user_id"], created["localId"]);
     assert_eq!(
         registry
             .tenant_store("worker-alpha", "customer-a")
@@ -15198,7 +15264,8 @@ fn query_tenant_binds_refresh_token_namespace_before_auth_work() {
 }
 
 #[test]
-fn query_tenant_selector_must_match_id_token_before_auth_work() {
+#[allow(clippy::too_many_lines)]
+fn a_named_tenant_must_match_id_token_before_auth_work() {
     let mut s = state();
     let registry = Arc::new(fireemu_core_auth::store::AuthRegistry::new(
         "demo-app",
@@ -15250,15 +15317,23 @@ fn query_tenant_selector_must_match_id_token_before_auth_work() {
 
     let (status, project_refused) = post(
         &s,
-        &format!("{V1}/accounts:update?key=fake-api-key&tenantId=tenant-a"),
+        &format!("{V1}/accounts:update?key=fake-api-key"),
         &json!({
+            "tenantId": "tenant-a",
             "idToken": project_id_token,
             "displayName": "must-not-apply",
             "returnSecureToken": true
         }),
     );
+    // A project user's token does not serve in a tenant the body names. Fireemu answers
+    // `INVALID_ID_TOKEN`, the official emulator `USER_NOT_FOUND` (`operations.js:1721-1726`); both
+    // are 400 refusals that apply nothing, so the emulator does not refuse more. Filed in
+    // docs.local/issues/open/emulator-project-token-with-a-body-tenant-answers-invalid-id-token.md.
     assert_eq!(status, 400, "{project_refused}");
-    assert_eq!(project_refused["error"]["message"], "TENANT_ID_MISMATCH");
+    assert_eq!(
+        project_refused["error"]["message"], "INVALID_ID_TOKEN",
+        "{project_refused}"
+    );
     assert!(project_refused.get("idToken").is_none());
     assert!(project_refused.get("refreshToken").is_none());
 
@@ -15273,8 +15348,9 @@ fn query_tenant_selector_must_match_id_token_before_auth_work() {
 
     let (status, refused) = post(
         &s,
-        &format!("{V1}/accounts:update?tenantId=tenant-b"),
+        &format!("{V1}/accounts:update"),
         &json!({
+            "tenantId": "tenant-b",
             "idToken": id_token,
             "displayName": "must-not-apply",
             "returnSecureToken": true
@@ -15303,15 +15379,15 @@ fn query_tenant_selector_must_match_id_token_before_auth_work() {
 
     let (status, same_tenant) = post(
         &s,
-        &format!("{V1}/accounts:lookup?tenantId=tenant-a"),
-        &json!({"idToken": id_token}),
+        &format!("{V1}/accounts:lookup"),
+        &json!({"idToken": id_token, "tenantId": "tenant-a"}),
     );
     assert_eq!(status, 200, "{same_tenant}");
     assert_eq!(same_tenant["users"][0]["localId"], created["localId"]);
 }
 
 #[test]
-fn conflicting_body_and_query_tenants_fail_without_mutation() {
+fn a_query_tenant_beside_a_body_tenant_is_ignored_in_the_emulator_profile() {
     let mut s = state();
     let registry = Arc::new(fireemu_core_auth::store::AuthRegistry::new(
         "demo-app",
@@ -15330,20 +15406,24 @@ fn conflicting_body_and_query_tenants_fail_without_mutation() {
             "password": "password1"
         }),
     );
-    assert_eq!(status, 400, "{refused}");
-    assert_eq!(refused["error"]["message"], "TENANT_ID_MISMATCH");
-    for store in [
-        s.store.clone(),
-        registry.tenant_store("demo-app", "tenant-a").unwrap(),
-        registry.tenant_store("demo-app", "tenant-b").unwrap(),
+    // The body's tenant is the target and the query's is ignored, as the official emulator reads
+    // them: no mismatch, and the account lands in tenant-a only.
+    assert_eq!(status, 200, "{refused}");
+    for (store, expected) in [
+        (s.store.clone(), false),
+        (registry.tenant_store("demo-app", "tenant-a").unwrap(), true),
+        (
+            registry.tenant_store("demo-app", "tenant-b").unwrap(),
+            false,
+        ),
     ] {
-        assert!(
+        assert_eq!(
             store
                 .lock()
                 .unwrap()
                 .user_by_email("conflicting-tenant@example.com")
-                .is_none(),
-            "conflicting tenant selector must not mutate any namespace"
+                .is_some(),
+            expected
         );
     }
 }
@@ -15359,32 +15439,25 @@ fn duplicate_query_selectors_fail_closed_without_mutation() {
     let tenant = registry.tenant_store("demo-app", "tenant-a").unwrap();
     s.registry = Some(registry.clone());
 
-    for query in [
+    // The query's tenant is ignored on this route (the official emulator does not read it), so
+    // a repeated one is no refusal either: a project sign-up.
+    for (index, query) in [
         "tenantId=tenant-a&tenantId=tenant-a",
         "tenantId=tenant-a&tenantId=tenant-b",
         "tenantId=tenant-b&tenantId=tenant-a",
-    ] {
-        let (status, refused) = post(
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let email = format!("duplicate-query-tenant-{index}@example.com");
+        let (status, created) = post(
             &s,
             &format!("{V1}/accounts:signUp?{query}"),
-            &json!({
-                "email": "duplicate-query-tenant@example.com",
-                "password": "password1",
-            }),
+            &json!({"email": email, "password": "password1"}),
         );
-        assert_eq!(status, 400, "{query}: {refused}");
-        assert_eq!(refused["error"]["message"], "INVALID_ARGUMENT", "{query}");
-        assert!(s
-            .store
-            .lock()
-            .unwrap()
-            .user_by_email("duplicate-query-tenant@example.com")
-            .is_none());
-        assert!(tenant
-            .lock()
-            .unwrap()
-            .user_by_email("duplicate-query-tenant@example.com")
-            .is_none());
+        assert_eq!(status, 200, "{query}: {created}");
+        assert!(s.store.lock().unwrap().user_by_email(&email).is_some());
+        assert!(tenant.lock().unwrap().user_by_email(&email).is_none());
     }
 
     for (index, query) in [
@@ -15431,20 +15504,39 @@ fn malformed_query_selectors_fail_closed_without_mutation() {
     let tenant = registry.tenant_store("demo-app", "tenant-a").unwrap();
     s.registry = Some(registry);
 
+    // A malformed tenant in the query is ignored where the query's tenant is (the official emulator
+    // does not look at it): a project sign-up.
     for (index, query) in [
         "tenantId",
         "%74enantId",
-        "key",
-        "apiKey",
         "key=valid-key&tenantId",
         "tenantId&key=valid-key",
         "tenantId=",
         "%74enantId=",
+        "tenantId=%ZZ",
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let email = format!("ignored-tenant-selector-{index}@example.com");
+        let (status, created) = post(
+            &s,
+            &format!("{V1}/accounts:signUp?{query}"),
+            &json!({"email": email, "password": "password1"}),
+        );
+        assert_eq!(status, 200, "{query}: {created}");
+        assert!(tenant.lock().unwrap().user_by_email(&email).is_none());
+        assert!(s.store.lock().unwrap().user_by_email(&email).is_some());
+    }
+
+    // A malformed API key is refused as before.
+    for (index, query) in [
+        "key",
+        "apiKey",
         "key=",
         "apiKey=",
         "%6bey=",
         "%61piKey=%ZZ",
-        "tenantId=%ZZ",
         "key=valid%ZZ",
         "apiKey=%A",
     ]
@@ -15476,8 +15568,10 @@ fn malformed_query_selectors_fail_closed_without_mutation() {
             &format!("{V1}/accounts:signUp?{query}"),
             &json!({"email": email, "password": "password1"}),
         );
+        // The query's tenant (well formed) is ignored on a client route: a project sign-up.
         assert_eq!(status, 200, "{query}: {created}");
-        assert!(tenant.lock().unwrap().user_by_email(&email).is_some());
+        assert!(tenant.lock().unwrap().user_by_email(&email).is_none());
+        assert!(s.store.lock().unwrap().user_by_email(&email).is_some());
     }
 }
 
@@ -17406,8 +17500,8 @@ fn emulator_batch_create_looks_addresses_up_as_spelled() {
 }
 
 /// Without sanityCheck an address repeated inside the request is refused row by row under the
-/// emulator profile (the official emulator imports the first row and refuses the next), and
-/// under allowDuplicateEmails fireemu keeps importing a shared address, sanityCheck or not.
+/// emulator profile (the official emulator imports the first row and refuses the next).
+/// allowDuplicateEmails skips request-level email checks, but not the row-level refusal.
 #[test]
 fn emulator_batch_create_checks_repeated_addresses_row_by_row() {
     let s = state();
@@ -17437,9 +17531,373 @@ fn emulator_batch_create_checks_repeated_addresses_row_by_row() {
         &s,
         &json!({"sanityCheck": true, "users": [{"localId": "r3", "email": "r@example.com"}, {"localId": "r4", "email": "r@example.com"}]}),
     );
-    assert_eq!((status, body.get("error").is_none()), (200, true), "{body}");
-    assert_eq!(looked_up(&s, "r3")["email"], "r@example.com");
-    assert_eq!(looked_up(&s, "r4")["email"], "r@example.com");
+    assert_eq!(status, 200, "{body}");
+    assert_eq!(
+        row_errors(&body),
+        [
+            json!({"index": 0, "message": "((Auth Emulator does not support importing duplicate email: r@example.com))"}),
+            json!({"index": 1, "message": "((Auth Emulator does not support importing duplicate email: r@example.com))"}),
+        ],
+        "{body}"
+    );
+    assert!(looked_up(&s, "r3").is_null());
+    assert!(looked_up(&s, "r4").is_null());
+}
+
+/// Official emulator source: operations.js:278-290,382-407 (firebase-tools 15.28.2).
+#[test]
+fn emulator_batch_import_missing_ids_refuse_the_request_before_writes() {
+    // Null follows fireemu's ProtoJSON-null-as-unset convention. The official HTTP validator
+    // refuses it first with INVALID_ARGUMENT: /users/0/localId must be string.
+    for first in [json!({}), json!({"localId": null}), json!({"localId": ""})] {
+        for second in [json!({}), json!({"localId": null}), json!({"localId": ""})] {
+            for flag in [json!({}), json!({"allowOverwrite": false})] {
+                let s = state();
+                let (_, seeded) = batch_import(
+                    &s,
+                    &json!({"users": [{"localId": "kept", "displayName": "Original"}]}),
+                );
+                assert!(row_errors(&seeded).is_empty(), "{seeded}");
+                let before = looked_up(&s, "kept");
+                let mut request = flag;
+                request["users"] = json!([
+                    {"localId": "new-before", "displayName": "Must not import"},
+                    first, second,
+                    {"localId": "kept", "displayName": "Must not replace"},
+                ]);
+                let (status, body) = batch_import(&s, &request);
+                assert_eq!(status, 400, "{request}: {body}");
+                assert_eq!(
+                    body["error"]["message"], "DUPLICATE_LOCAL_ID : ",
+                    "{request}: {body}"
+                );
+                assert_eq!(
+                    body["error"]["errors"][0]["message"],
+                    "DUPLICATE_LOCAL_ID : "
+                );
+                assert!(looked_up(&s, "new-before").is_null());
+                assert_eq!(looked_up(&s, "kept"), before);
+            }
+        }
+    }
+}
+
+#[test]
+fn emulator_batch_import_missing_ids_remain_row_errors_when_not_repeated_or_overwriting() {
+    // Null is a fireemu convention, not the official HTTP validator's answer (see above).
+    for missing in [json!({}), json!({"localId": null}), json!({"localId": ""})] {
+        for allow_overwrite in [false, true] {
+            let s = state();
+            let mut rows = vec![json!({"localId": "before"}), missing.clone()];
+            if allow_overwrite {
+                rows.push(missing.clone());
+            }
+            rows.push(json!({"localId": "after"}));
+            let (status, body) = batch_import(
+                &s,
+                &json!({"allowOverwrite": allow_overwrite, "users": rows}),
+            );
+            assert_eq!(status, 200, "{body}");
+            let expected: Vec<_> = (1..=if allow_overwrite { 2 } else { 1 })
+                .map(|index| json!({"index": index, "message": "localId is missing"}))
+                .collect();
+            assert_eq!(row_errors(&body), expected);
+            assert!(!looked_up(&s, "before").is_null());
+            assert!(!looked_up(&s, "after").is_null());
+        }
+    }
+}
+
+/// Request preflight precedes field decoding and hash-option validation, with no writes.
+#[test]
+fn emulator_batch_import_request_refusal_precedes_row_decode() {
+    for malformed in [
+        json!({"createdAt": "abc"}),
+        json!({"passwordHash": "%%%"}),
+        json!({}),
+    ] {
+        let s = state();
+        let (_, seeded) = batch_import(&s, &json!({"users": [{"localId": "kept"}]}));
+        assert!(row_errors(&seeded).is_empty());
+        let before = looked_up(&s, "kept");
+        let mut request = json!({"users": [
+            {"localId": "new-before"}, malformed, {},
+            {"localId": "kept", "displayName": "Must not replace"},
+        ]});
+        if request["users"][1] == json!({}) {
+            request["hashAlgorithm"] = json!("INVALID_HASH_ALGORITHM");
+        }
+        let (status, body) = batch_import(&s, &request);
+        assert_eq!(status, 400, "{body}");
+        assert_eq!(body["error"]["message"], "DUPLICATE_LOCAL_ID : ", "{body}");
+        assert_eq!(
+            body["error"]["errors"][0]["message"],
+            "DUPLICATE_LOCAL_ID : "
+        );
+        assert!(looked_up(&s, "new-before").is_null());
+        assert_eq!(looked_up(&s, "kept"), before);
+    }
+}
+
+/// The preflight uses string concatenation and includes password/phone and within-row entries.
+#[test]
+fn emulator_batch_import_sanity_checks_all_repeated_provider_keys_before_writes() {
+    for (left, right) in [
+        (
+            json!({"providerId": "google.com", "rawId": "subject"}),
+            json!({"providerId": "google.com", "rawId": "subject"}),
+        ),
+        (
+            json!({"providerId": "password", "rawId": "subject"}),
+            json!({"providerId": "password", "rawId": "subject"}),
+        ),
+        (
+            json!({"providerId": "phone", "rawId": "subject"}),
+            json!({"providerId": "phone", "rawId": "subject"}),
+        ),
+        (
+            json!({"providerId": "", "rawId": ""}),
+            json!({"providerId": "", "rawId": ""}),
+        ),
+        (
+            json!({"providerId": "a:b", "rawId": "c"}),
+            json!({"providerId": "a", "rawId": "b:c"}),
+        ),
+    ] {
+        for within_row in [false, true] {
+            for allow_overwrite in [false, true] {
+                for allow_duplicate_emails in [false, true] {
+                    let s = state();
+                    let (status, config) = patch_sign_in(
+                        &s,
+                        "signIn.allowDuplicateEmails",
+                        &json!({"signIn": {"allowDuplicateEmails": allow_duplicate_emails}}),
+                    );
+                    assert_eq!(status, 200, "{config}");
+                    let (_, seeded) = batch_import(
+                        &s,
+                        &json!({"users": [{"localId": "kept", "displayName": "Original"}]}),
+                    );
+                    assert!(row_errors(&seeded).is_empty(), "{seeded}");
+                    let before = looked_up(&s, "kept");
+                    let mut rows = vec![json!({"localId": "new-before"})];
+                    if within_row {
+                        rows.push(
+                            json!({"localId": "provider-a", "providerUserInfo": [left, right]}),
+                        );
+                    } else {
+                        rows.push(json!({"localId": "provider-a", "providerUserInfo": [left]}));
+                        rows.push(json!({"localId": "provider-b", "providerUserInfo": [right]}));
+                    }
+                    let (status, body) = batch_import(
+                        &s,
+                        &json!({"sanityCheck": true, "allowOverwrite": allow_overwrite, "users": rows}),
+                    );
+                    let message = format!(
+                        "DUPLICATE_RAW_ID : Provider id({}), Raw id({})",
+                        right["providerId"].as_str().unwrap(),
+                        right["rawId"].as_str().unwrap()
+                    );
+                    assert_eq!(status, 400, "{left} {right}: {body}");
+                    assert_eq!(body["error"]["message"], message);
+                    assert_eq!(body["error"]["errors"][0]["message"], message);
+                    for id in ["new-before", "provider-a", "provider-b"] {
+                        assert!(looked_up(&s, id).is_null());
+                    }
+                    assert_eq!(looked_up(&s, "kept"), before);
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn emulator_batch_import_provider_sanity_has_no_strict_or_disabled_preflight() {
+    for strict in [false, true] {
+        for sanity_check in [false, true] {
+            if !strict && sanity_check {
+                continue;
+            }
+            let s = if strict { strict_state() } else { state() };
+            let (status, body) = batch_import(
+                &s,
+                &json!({"sanityCheck": sanity_check, "users": [
+                    {"localId": "before"},
+                    {"localId": "one", "providerUserInfo": [{"providerId": "google.com", "rawId": "shared"}]},
+                    {"localId": "two", "providerUserInfo": [{"providerId": "google.com", "rawId": "shared"}]},
+                    {"localId": "after"},
+                ]}),
+            );
+            assert_eq!(status, 200, "strict={strict} sanity={sanity_check}: {body}");
+            // Preserve the current non-preflight path; its cross-row provider ownership
+            // behavior is a separate compatibility issue from sanityCheck's request check.
+            assert!(row_errors(&body).is_empty(), "{body}");
+            for id in ["before", "one", "two", "after"] {
+                assert!(!looked_up(&s, id).is_null());
+            }
+        }
+    }
+    for providers in [
+        json!([{"providerId": "google.com", "rawId": "one"}, {"providerId": "google.com", "rawId": "two"}]),
+        json!([{"providerId": "google.com", "rawId": "one"}, {"providerId": "github.com", "rawId": "one"}]),
+    ] {
+        let s = state();
+        let (status, body) = batch_import(
+            &s,
+            &json!({"sanityCheck": true, "users": [{"localId": "distinct", "providerUserInfo": providers}]}),
+        );
+        assert_eq!(status, 200, "{body}");
+        assert!(row_errors(&body).is_empty(), "{body}");
+        assert!(!looked_up(&s, "distinct").is_null());
+    }
+}
+
+#[test]
+fn emulator_batch_import_request_checks_follow_email_provider_local_id_order() {
+    for (sanity_check, allow_duplicate_emails, expected) in [
+        (true, false, "DUPLICATE_EMAIL : shared@example.com"),
+        (
+            true,
+            true,
+            "DUPLICATE_RAW_ID : Provider id(google.com), Raw id(shared)",
+        ),
+        (false, false, "DUPLICATE_LOCAL_ID : "),
+        (false, true, "DUPLICATE_LOCAL_ID : "),
+    ] {
+        let s = state();
+        let (status, config) = patch_sign_in(
+            &s,
+            "signIn.allowDuplicateEmails",
+            &json!({"signIn": {"allowDuplicateEmails": allow_duplicate_emails}}),
+        );
+        assert_eq!(status, 200, "{config}");
+        let (status, body) = batch_import(
+            &s,
+            &json!({"sanityCheck": sanity_check, "users": [
+                {"localId": "before"},
+                {"email": "shared@example.com", "providerUserInfo": [{"providerId": "google.com", "rawId": "shared"}]},
+                {"email": "shared@example.com", "providerUserInfo": [{"providerId": "google.com", "rawId": "shared"}]},
+            ]}),
+        );
+        assert_eq!(status, 400, "{body}");
+        assert_eq!(body["error"]["message"], expected);
+        assert!(looked_up(&s, "before").is_null());
+    }
+}
+
+#[test]
+fn emulator_batch_import_shared_email_refusals_ignore_duplicate_and_overwrite_flags() {
+    for sanity_check in [false, true] {
+        for allow_duplicate_emails in [false, true] {
+            for allow_overwrite in [false, true] {
+                let s = state();
+                let (status, config) = patch_sign_in(
+                    &s,
+                    "signIn.allowDuplicateEmails",
+                    &json!({"signIn": {"allowDuplicateEmails": allow_duplicate_emails}}),
+                );
+                assert_eq!(status, 200, "{config}");
+                let (_, seeded) = batch_import(
+                    &s,
+                    &json!({"users": [
+                        {"localId": "owner", "email": "shared@example.com"},
+                        {"localId": "target", "email": "target@example.com", "displayName": "Original"},
+                    ]}),
+                );
+                assert!(row_errors(&seeded).is_empty(), "{seeded}");
+                let before = looked_up(&s, "target");
+                let (status, body) = batch_import(
+                    &s,
+                    &json!({"sanityCheck": sanity_check, "allowOverwrite": allow_overwrite, "users": [
+                        {"localId": "before"},
+                        {"localId": "target", "email": "shared@example.com", "displayName": "Must not replace"},
+                        {"localId": "after"},
+                    ]}),
+                );
+                assert_eq!(status, 200, "{body}");
+                let message = if sanity_check && !allow_duplicate_emails {
+                    "email exists in other account in database"
+                } else {
+                    "((Auth Emulator does not support importing duplicate email: shared@example.com))"
+                };
+                assert_eq!(
+                    row_errors(&body),
+                    [json!({"index": 1, "message": message})],
+                    "{body}"
+                );
+                assert_eq!(looked_up(&s, "target"), before);
+                for id in ["before", "after"] {
+                    assert!(!looked_up(&s, id).is_null());
+                }
+            }
+        }
+    }
+}
+
+/// The emulator email index has one active owner, and deleting any owner removes that index.
+#[test]
+fn emulator_batch_import_uses_the_current_email_owner_and_preserves_raw_casing() {
+    for allow_duplicate_emails in [false, true] {
+        for sanity_check in [false, true] {
+            let s = state();
+            let (status, config) = patch_sign_in(
+                &s,
+                "signIn.allowDuplicateEmails",
+                &json!({"signIn": {"allowDuplicateEmails": allow_duplicate_emails}}),
+            );
+            assert_eq!(status, 200, "{config}");
+            for (id, email) in [
+                ("old", "shared@example.com"),
+                ("current", "Shared@Example.com"),
+            ] {
+                let (status, body) = batch_import(
+                    &s,
+                    &json!({"sanityCheck": sanity_check, "users": [{"localId": id, "email": email}]}),
+                );
+                assert_eq!(status, 200, "{body}");
+                assert!(row_errors(&body).is_empty(), "{body}");
+            }
+            let (status, body) = batch_import(
+                &s,
+                &json!({"allowOverwrite": true, "sanityCheck": sanity_check, "users": [{"localId": "current", "email": "shared@example.com", "displayName": "Current"}]}),
+            );
+            assert_eq!(status, 200, "{body}");
+            assert!(row_errors(&body).is_empty(), "{body}");
+            let (status, updated) = admin(
+                &s,
+                "POST",
+                &format!("{ADMIN}/accounts:update"),
+                &json!({"localId": "old", "displayName": "Activated"}),
+            );
+            assert_eq!(status, 200, "{updated}");
+            let (status, body) = batch_import(
+                &s,
+                &json!({"allowOverwrite": true, "sanityCheck": sanity_check, "users": [{"localId": "old", "email": "shared@example.com", "displayName": "Owner"}]}),
+            );
+            assert_eq!(status, 200, "{body}");
+            assert!(row_errors(&body).is_empty(), "{body}");
+            let (_, body) = batch_import(
+                &s,
+                &json!({"sanityCheck": sanity_check, "users": [{"localId": "refused", "email": "shared@example.com"}]}),
+            );
+            assert_eq!(row_errors(&body).len(), 1, "{body}");
+            let (status, deleted) = admin(
+                &s,
+                "POST",
+                &format!("{ADMIN}/accounts:delete"),
+                &json!({"localId": "current"}),
+            );
+            assert_eq!(status, 200, "{deleted}");
+            let (status, body) = batch_import(
+                &s,
+                &json!({"sanityCheck": sanity_check, "users": [{"localId": "after-delete", "email": "shared@example.com"}]}),
+            );
+            assert_eq!(status, 200, "{body}");
+            assert!(row_errors(&body).is_empty(), "{body}");
+            assert!(!looked_up(&s, "old").is_null());
+            assert!(!looked_up(&s, "after-delete").is_null());
+        }
+    }
 }
 
 /// The project config carries its authorized domains: the domains a new Firebase project
@@ -19157,6 +19615,74 @@ fn set_project_mfa(s: &AuthState, mfa: &Value) {
         &json!({ "mfa": mfa }),
     );
     assert_eq!(status, 200, "{body}");
+}
+
+/// The Admin config update refuses an `mfa` value with production's whole body, not only its
+/// message (the refusal wording moved into `MfaConfigRefusal::message`, shared with the config file
+/// `auth.mfa`): the enum parse error with its field violation, the interval range, and the shape.
+#[test]
+fn the_admin_mfa_refusals_keep_their_full_bodies() {
+    let s = strict_state();
+    let refusal = |mfa: Value| {
+        let (status, body) = admin(
+            &s,
+            "PATCH",
+            &format!("{PROJECT_CONFIG}?updateMask=mfa"),
+            &json!({ "mfa": mfa }),
+        );
+        assert_eq!(status, 400, "{body}");
+        body
+    };
+    let enum_message = |field: &str, type_name: &str, value: &str| {
+        format!("Invalid value at '{field}' (type.googleapis.com/google.cloud.identitytoolkit.admin.v2.{type_name}), \"{value}\"")
+    };
+    let state = enum_message(
+        "config.mfa.state",
+        "MultiFactorAuthConfig.State",
+        "NOT_A_STATE",
+    );
+    assert_eq!(
+        refusal(json!({"state": "NOT_A_STATE"})),
+        json!({"error": {
+            "code": 400,
+            "message": state,
+            "status": "INVALID_ARGUMENT",
+            "details": [{
+                "@type": "type.googleapis.com/google.rpc.BadRequest",
+                "fieldViolations": [{"field": "config.mfa.state", "description": state}],
+            }],
+        }})
+    );
+    let provider = enum_message(
+        "config.mfa.enabled_providers[0]",
+        "MultiFactorAuthConfig.Provider",
+        "SMS_TEXT",
+    );
+    assert_eq!(
+        refusal(json!({"state": "ENABLED", "enabledProviders": ["SMS_TEXT"]})),
+        json!({"error": {
+            "code": 400,
+            "message": provider,
+            "status": "INVALID_ARGUMENT",
+            "details": [{
+                "@type": "type.googleapis.com/google.rpc.BadRequest",
+                "fieldViolations": [{"field": "config.mfa.enabled_providers[0]", "description": provider}],
+            }],
+        }})
+    );
+    assert_eq!(
+        refusal(json!({"state": "ENABLED", "providerConfigs": [
+            {"state": "ENABLED", "totpProviderConfig": {"adjacentIntervals": 11}}
+        ]})),
+        json!({"error": {
+            "code": 400,
+            "message": "INVALID_ADJACENT_INTERVAL_RANGE : Allowed number of adjacent intervals must be between 0 and 10, inclusive",
+            "status": "INVALID_ARGUMENT",
+        }})
+    );
+    let shape = refusal(json!({"state": "ENABLED", "unknown": true}));
+    assert_eq!(shape["error"]["code"], 400, "{shape}");
+    assert_eq!(shape["error"]["message"], "INVALID_ARGUMENT", "{shape}");
 }
 
 /// A verified password account's ID token.
@@ -21785,7 +22311,7 @@ fn the_emulator_profile_checks_a_custom_token_tenant_claim_only_where_the_offici
     };
     let tenant_of =
         |body: &Value| second_factor_claims(body["idToken"].as_str().unwrap())["tenant"].clone();
-    // A JSON token signs in to the tenant the body or the query names, whatever its claim.
+    // A JSON token signs in to the tenant the body names, whatever its claim.
     for (uid, claim) in [("json-none", None), ("json-other", Some("tenant-b"))] {
         let (status, body) = post(
             &s,
@@ -21794,13 +22320,14 @@ fn the_emulator_profile_checks_a_custom_token_tenant_claim_only_where_the_offici
         );
         assert_eq!(status, 200, "{uid}: {body}");
         assert_eq!(tenant_of(&body), "tenant-a", "{uid}");
+        // The query names no tenant on this route: a project sign-in.
         let (status, body) = post(
             &s,
             &format!("{V1}/accounts:signInWithCustomToken?tenantId=tenant-a"),
             &json!({"token": json_token(&format!("{uid}-query"), claim), "returnSecureToken": true}),
         );
         assert_eq!(status, 200, "{uid} by query: {body}");
-        assert_eq!(tenant_of(&body), "tenant-a", "{uid} by query");
+        assert!(tenant_of(&body).is_null(), "{uid} by query");
     }
     // In the project, neither token's claim is checked.
     for (label, token) in [

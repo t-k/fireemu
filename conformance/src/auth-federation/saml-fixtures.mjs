@@ -138,12 +138,22 @@ function main() {
     files["no-name-id.xml"] = serializeDocument(signEnveloped(responseNoName, key).signed);
     // An assertion below the response's direct children (in samlp:Extensions), with and
     // without a direct assertion beside it; the response is signed over both.
-    const nested = samlResponse({ ...FIELDS, assertionId: "_nested", nameId: "nested@example.com" }).assertion;
+    const nested = samlResponse({
+      ...FIELDS,
+      assertionId: "_nested",
+      nameId: "nested@example.com",
+    }).assertion;
     const direct = samlResponse(FIELDS).response;
     const extensions = el("samlp:Extensions", {}, [nested]);
-    const onlyNested = { ...direct, children: [direct.children[0], extensions, direct.children[1]] };
+    const onlyNested = {
+      ...direct,
+      children: [direct.children[0], extensions, direct.children[1]],
+    };
     files["nested-assertion.xml"] = serializeDocument(signEnveloped(onlyNested, key).signed);
-    const besideDirect = { ...direct, children: [direct.children[0], extensions, ...direct.children.slice(1)] };
+    const besideDirect = {
+      ...direct,
+      children: [direct.children[0], extensions, ...direct.children.slice(1)],
+    };
     files["nested-beside-direct.xml"] = serializeDocument(signEnveloped(besideDirect, key).signed);
     for (const [name, text] of Object.entries(files)) writeFileSync(join(OUT, name), text);
     console.log(`wrote ${Object.keys(files).length} files to ${OUT}`);

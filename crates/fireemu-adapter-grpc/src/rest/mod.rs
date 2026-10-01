@@ -1528,7 +1528,10 @@ impl RestState {
         };
         let guard = self.write_guard(principal);
         let response = self.local.commit_with(&req, &*guard)?;
-        Ok(ok(commit_to_json(&response)))
+        Ok(ok(commit_to_json(
+            &response,
+            self.gateway.production_refusals(),
+        )))
     }
 
     fn batch_write(

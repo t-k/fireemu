@@ -1,0 +1,1119 @@
+{
+  "schemaVersion": 1,
+  "kind": "fs-transaction-recorded-partial-comparison-v1",
+  "parent": "FS-TRANSACTION",
+  "campaign": "FS-TRANSACTION-EXPIRY-RETRY-04",
+  "coverage": "PARTIAL",
+  "authorizesProduction": false,
+  "acquisitionValidated": false,
+  "promotionReady": false,
+  "transport": "rest",
+  "caseCount": 13,
+  "casesDigest": "c0731c5add47c487a520817d094fc0208d1e135dc31ea45885da5d5d861856fe",
+  "sourceDigest": "87e8ecd63c57c215104cbffd2e91379c8362d669e919c4630ec756d6e1dc7ed4",
+  "freeze": {
+    "path": "docs.local/runs/fs-transaction-e823778053197a8d/freeze.json",
+    "sha256": "a4801fde69a49e83df74e8ff9e3ab429acfb76cfb9366ab95d9b81901425fa84"
+  },
+  "recordings": [
+    {
+      "recording": 1,
+      "reference": {
+        "path": "docs.local/runs/fs-transaction-e823778053197a8d/recording-1.json",
+        "sha256": "c3b64980550f9818475f8094202a3b31c3625d02f22b3bf7fb1266ea6aa35fe0"
+      },
+      "complete": true,
+      "target": "production",
+      "timing": "wall-clock",
+      "pythonVersion": "3.12.13",
+      "startedAt": "2026-09-28T02:54:16.443684Z",
+      "finishedAt": "2026-09-28T02:57:14.466393Z",
+      "dataRequests": 67,
+      "sandboxRequests": 75,
+      "ownedDocumentsAbsent": 5,
+      "openTransactions": 0,
+      "unconfirmedTransactionStarts": 0,
+      "unrecovered": 0,
+      "projectionDigest": "48904d5db505be87efcf3c9fc8faf537d49e6b995ca67c0d62fe012ba035cea2",
+      "postStateDigest": "c99f0ee1ad872287f6673daa3bc8989df86badd3c78e44a9655d0f5cda7bff17",
+      "idleSeconds": {
+        "idle-expiry/commit-before-idle": 21.30321566713974,
+        "idle-expiry/commit-after-idle": 121.14975954219699,
+        "idle-expiry/rollback-after-idle": 121.06405525002629,
+        "idle-expiry/lock-released-after-idle": 125.22070904215798
+      }
+    },
+    {
+      "recording": 2,
+      "reference": {
+        "path": "docs.local/runs/fs-transaction-e823778053197a8d/recording-2.json",
+        "sha256": "d19becdca8890a9c5e46d1b4959eb35e8104d76717e2a83d3f7f356d1102f1b7"
+      },
+      "complete": true,
+      "target": "production",
+      "timing": "wall-clock",
+      "pythonVersion": "3.12.13",
+      "startedAt": "2026-09-28T02:57:25.220710Z",
+      "finishedAt": "2026-09-28T03:00:18.949715Z",
+      "dataRequests": 67,
+      "sandboxRequests": 75,
+      "ownedDocumentsAbsent": 5,
+      "openTransactions": 0,
+      "unconfirmedTransactionStarts": 0,
+      "unrecovered": 0,
+      "projectionDigest": "48904d5db505be87efcf3c9fc8faf537d49e6b995ca67c0d62fe012ba035cea2",
+      "postStateDigest": "c99f0ee1ad872287f6673daa3bc8989df86badd3c78e44a9655d0f5cda7bff17",
+      "idleSeconds": {
+        "idle-expiry/commit-before-idle": 21.009864083956927,
+        "idle-expiry/commit-after-idle": 120.34524599974975,
+        "idle-expiry/rollback-after-idle": 120.59877708321437,
+        "idle-expiry/lock-released-after-idle": 124.67749016685411
+      }
+    }
+  ],
+  "cases": [
+    {
+      "caseId": "finished-token/rollback-after-begin",
+      "code": 0,
+      "status": "OK",
+      "message": null,
+      "rpc": "Rollback",
+      "role": null
+    },
+    {
+      "caseId": "finished-token/rollback-after-commit",
+      "code": 10,
+      "status": "ABORTED",
+      "message": "The referenced transaction has expired or is no longer valid.",
+      "rpc": "Rollback",
+      "role": null
+    },
+    {
+      "caseId": "finished-token/rollback-after-rollback",
+      "code": 0,
+      "status": "OK",
+      "message": null,
+      "rpc": "Rollback",
+      "role": null
+    },
+    {
+      "caseId": "idle-expiry/commit-after-idle",
+      "code": 10,
+      "status": "ABORTED",
+      "message": "The referenced transaction has expired or is no longer valid.",
+      "rpc": "Commit",
+      "role": "locked-a"
+    },
+    {
+      "caseId": "idle-expiry/commit-before-idle",
+      "code": 0,
+      "status": "OK",
+      "message": null,
+      "rpc": "Commit",
+      "role": "locked-d"
+    },
+    {
+      "caseId": "idle-expiry/lock-held-before-idle",
+      "code": 10,
+      "status": "ABORTED",
+      "message": "Too much contention on these documents. Please try again.",
+      "rpc": "Commit",
+      "role": "locked-c"
+    },
+    {
+      "caseId": "idle-expiry/lock-released-after-idle",
+      "code": 0,
+      "status": "OK",
+      "message": null,
+      "rpc": "Commit",
+      "role": "locked-a"
+    },
+    {
+      "caseId": "idle-expiry/rollback-after-idle",
+      "code": 0,
+      "status": "OK",
+      "message": null,
+      "rpc": "Rollback",
+      "role": "locked-b"
+    },
+    {
+      "caseId": "retry-token/retry-with-committed-previous",
+      "code": 0,
+      "status": "OK",
+      "message": null,
+      "rpc": "BeginTransaction",
+      "role": null
+    },
+    {
+      "caseId": "retry-token/retry-with-malformed-previous",
+      "code": 3,
+      "status": "INVALID_ARGUMENT",
+      "message": "Invalid value at 'options.read_write.retry_transaction' (TYPE_BYTES), Base64 decoding failed for \"not base64!\"",
+      "rpc": "BeginTransaction",
+      "role": null
+    },
+    {
+      "caseId": "retry-token/retry-with-read-only-previous",
+      "code": 3,
+      "status": "INVALID_ARGUMENT",
+      "message": "Cannot retry a read-only transaction",
+      "rpc": "BeginTransaction",
+      "role": null
+    },
+    {
+      "caseId": "retry-token/retry-with-rolled-back-previous",
+      "code": 0,
+      "status": "OK",
+      "message": null,
+      "rpc": "BeginTransaction",
+      "role": null
+    },
+    {
+      "caseId": "retry-token/retry-with-unissued-previous",
+      "code": 3,
+      "status": "INVALID_ARGUMENT",
+      "message": "Invalid transaction.",
+      "rpc": "BeginTransaction",
+      "role": null
+    }
+  ],
+  "postStates": {
+    "idle-expiry/lock-held-before-idle": {
+      "role": "locked-c",
+      "document": {
+        "code": 0,
+        "exists": true,
+        "fields": {
+          "nonce": {
+            "stringValue": "<fireemu:o3-txn-expiry:token>"
+          },
+          "owner": {
+            "stringValue": "<fireemu:o3-txn-expiry:owner>"
+          },
+          "role": {
+            "stringValue": "locked-c"
+          },
+          "state": {
+            "stringValue": "created"
+          }
+        },
+        "name": "<fireemu:o3-txn-expiry:resource>",
+        "updateTime": "<fireemu:o3-txn-expiry:token>",
+        "updateTimeOrdinal": 0
+      }
+    },
+    "idle-expiry/commit-before-idle": {
+      "role": "locked-d",
+      "document": {
+        "code": 0,
+        "exists": true,
+        "fields": {
+          "nonce": {
+            "stringValue": "<fireemu:o3-txn-expiry:token>"
+          },
+          "owner": {
+            "stringValue": "<fireemu:o3-txn-expiry:owner>"
+          },
+          "role": {
+            "stringValue": "locked-d"
+          },
+          "state": {
+            "stringValue": "committed-before-idle"
+          }
+        },
+        "name": "<fireemu:o3-txn-expiry:resource>",
+        "updateTime": "<fireemu:o3-txn-expiry:token>",
+        "updateTimeOrdinal": 1
+      }
+    },
+    "idle-expiry/commit-after-idle": {
+      "role": "locked-a",
+      "document": {
+        "code": 0,
+        "exists": true,
+        "fields": {
+          "nonce": {
+            "stringValue": "<fireemu:o3-txn-expiry:token>"
+          },
+          "owner": {
+            "stringValue": "<fireemu:o3-txn-expiry:owner>"
+          },
+          "role": {
+            "stringValue": "locked-a"
+          },
+          "state": {
+            "stringValue": "created"
+          }
+        },
+        "name": "<fireemu:o3-txn-expiry:resource>",
+        "updateTime": "<fireemu:o3-txn-expiry:token>",
+        "updateTimeOrdinal": 0
+      }
+    },
+    "idle-expiry/rollback-after-idle": {
+      "role": "locked-b",
+      "document": {
+        "code": 0,
+        "exists": true,
+        "fields": {
+          "nonce": {
+            "stringValue": "<fireemu:o3-txn-expiry:token>"
+          },
+          "owner": {
+            "stringValue": "<fireemu:o3-txn-expiry:owner>"
+          },
+          "role": {
+            "stringValue": "locked-b"
+          },
+          "state": {
+            "stringValue": "created"
+          }
+        },
+        "name": "<fireemu:o3-txn-expiry:resource>",
+        "updateTime": "<fireemu:o3-txn-expiry:token>",
+        "updateTimeOrdinal": 0
+      }
+    },
+    "idle-expiry/lock-released-after-idle": {
+      "role": "locked-a",
+      "document": {
+        "code": 0,
+        "exists": true,
+        "fields": {
+          "nonce": {
+            "stringValue": "<fireemu:o3-txn-expiry:token>"
+          },
+          "owner": {
+            "stringValue": "<fireemu:o3-txn-expiry:owner>"
+          },
+          "role": {
+            "stringValue": "locked-a"
+          },
+          "state": {
+            "stringValue": "written-after-expiry"
+          }
+        },
+        "name": "<fireemu:o3-txn-expiry:resource>",
+        "updateTime": "<fireemu:o3-txn-expiry:token>",
+        "updateTimeOrdinal": 1
+      }
+    }
+  },
+  "conditionMap": {
+    "FS-TRANSACTION/idle-expiry": [
+      "idle-expiry/commit-after-idle",
+      "idle-expiry/commit-before-idle",
+      "idle-expiry/lock-held-before-idle",
+      "idle-expiry/lock-released-after-idle",
+      "idle-expiry/rollback-after-idle"
+    ],
+    "FS-TRANSACTION/failed-commit-and-rollback": [
+      "finished-token/rollback-after-begin",
+      "finished-token/rollback-after-commit",
+      "finished-token/rollback-after-rollback"
+    ],
+    "FS-TRANSACTION/retry-token-lifecycle": [
+      "retry-token/retry-with-committed-previous",
+      "retry-token/retry-with-malformed-previous",
+      "retry-token/retry-with-read-only-previous",
+      "retry-token/retry-with-rolled-back-previous",
+      "retry-token/retry-with-unissued-previous"
+    ]
+  },
+  "artifact": {
+    "sourceCommit": "e00aa486c44a2f524378c1f380a3446f3c83697d",
+    "runtimeInputsDigest": "182ccd3f63ae77e451bd51a38af65c772fa5e157b80131e5cfe874da2a02304f",
+    "runtimeInputCount": 540,
+    "artifactSha256": "26fcfa803381b64db70c0cd5dd09b2610c98d9bf58814da4e342d4c7be24d90e",
+    "buildCommand": [
+      "cargo",
+      "build",
+      "--locked",
+      "-p",
+      "fireemu",
+      "--bin",
+      "fireemu"
+    ],
+    "buildLogSha256": "6385bd1c683cc9ba7740d589d0954c6c07ee4b1a12644e0011e9b6b2dc385841",
+    "sourceUnchanged": true,
+    "exitCode": 0
+  },
+  "buildReceipt": {
+    "path": "docs.local/runs/fs-transaction-postproduction-build-r12/build-receipt.json",
+    "sha256": "a55667e0c0627b9ac50e6252c39c995154483cdc1fd872935a8d978780be9eb2"
+  },
+  "profiles": {
+    "strict": {
+      "acquisitionComplete": true,
+      "sourceCommit": "e00aa486c44a2f524378c1f380a3446f3c83697d",
+      "artifactSha256": "26fcfa803381b64db70c0cd5dd09b2610c98d9bf58814da4e342d4c7be24d90e",
+      "runtimeInputsDigest": "182ccd3f63ae77e451bd51a38af65c772fa5e157b80131e5cfe874da2a02304f",
+      "runtimeInputCount": 540,
+      "runtimeInputsClean": true,
+      "pythonRuntime": {
+        "pythonExecutableSha256": "80832da5c8b59015babb813a4939e8537de700a13ee4ad5be00279c4e7b32ce0",
+        "pythonSysVersion": "3.12.13 (main, Mar 10 2026, 18:18:07) [Clang 21.1.4 ]",
+        "pythonVersion": "3.12.13"
+      },
+      "productionRequests": 0,
+      "localDataRequests": 66,
+      "ownedDocumentsAbsent": 5,
+      "openTransactions": 0,
+      "unconfirmedTransactionStarts": 0,
+      "child": {
+        "exitCode": 0,
+        "signal": null,
+        "stopped": true
+      },
+      "historicalLocalSelfContract": "SEMANTIC_MISMATCH",
+      "historicalLocalSelfContractNote": "Frozen preproduction expectations are retained; parity is decided against both actual production receipts.",
+      "beforeRepair": {
+        "reference": {
+          "path": "docs.local/runs/fs-transaction-recorded-local-before-strict/production-comparison.json",
+          "sha256": "489733991a1a7fdfc7e7bf330bea5f3d423a66f893137bfc5050f73e73b46d54"
+        },
+        "classification": "SEMANTIC_MISMATCH",
+        "differenceCaseIds": [
+          "finished-token/rollback-after-rollback",
+          "idle-expiry/rollback-after-idle",
+          "retry-token/retry-with-committed-previous",
+          "retry-token/retry-with-read-only-previous"
+        ]
+      },
+      "receipt": {
+        "path": "docs.local/runs/fs-transaction-recorded-local-r12-after-strict/receipt.json",
+        "sha256": "4728bf10dca3eb4b8f79ca66ca9a69bdf7abebceda26b9aa30809e2636a63fe2"
+      },
+      "comparison": {
+        "path": "docs.local/runs/fs-transaction-recorded-local-r12-after-strict/production-comparison.json",
+        "sha256": "e88ff93954a13112a4ae778606f9c59e07cb14762a2806da64973e33f5cc2b18"
+      },
+      "results": [
+        {
+          "acquisitionValidated": false,
+          "bindings": {
+            "casesDigest": "c0731c5add47c487a520817d094fc0208d1e135dc31ea45885da5d5d861856fe",
+            "localPostStateDigest": "9ee261b875609bf1629e3541f547b3e267d4b65c09c3c9a58de7ab050e44bdac",
+            "localProjectionDigest": "e74cc0922e90619df33afebbf80f2519631f3c9f7f2072270deae957a6f9459e",
+            "localSourceDigest": "87e8ecd63c57c215104cbffd2e91379c8362d669e919c4630ec756d6e1dc7ed4",
+            "productionPostStateDigest": "c99f0ee1ad872287f6673daa3bc8989df86badd3c78e44a9655d0f5cda7bff17",
+            "productionProjectionDigest": "48904d5db505be87efcf3c9fc8faf537d49e6b995ca67c0d62fe012ba035cea2",
+            "productionSourceDigest": "87e8ecd63c57c215104cbffd2e91379c8362d669e919c4630ec756d6e1dc7ed4"
+          },
+          "campaign": "FS-TRANSACTION-EXPIRY-RETRY-04",
+          "kind": "txn-expiry-comparison-v1",
+          "promotionReady": false,
+          "timing": {
+            "local": {
+              "finished-token/rollback-after-begin": null,
+              "finished-token/rollback-after-commit": null,
+              "finished-token/rollback-after-rollback": null,
+              "idle-expiry/commit-after-idle": {
+                "checkpoints": 1,
+                "endedAt": "2026-10-01T03:05:53.326289Z",
+                "measuredSeconds": 70.0,
+                "mode": "control-clock",
+                "requestedSeconds": 70,
+                "startedAt": "2026-10-01T03:05:53.197720Z",
+                "wallSeconds": 0.1285719871520996
+              },
+              "idle-expiry/commit-before-idle": {
+                "checkpoints": 1,
+                "endedAt": "2026-10-01T03:05:53.056629Z",
+                "measuredSeconds": 20.0,
+                "mode": "control-clock",
+                "requestedSeconds": 20,
+                "startedAt": "2026-10-01T03:05:52.929524Z",
+                "wallSeconds": 0.12710809707641602
+              },
+              "idle-expiry/lock-held-before-idle": null,
+              "idle-expiry/lock-released-after-idle": null,
+              "idle-expiry/rollback-after-idle": null,
+              "retry-token/retry-with-committed-previous": null,
+              "retry-token/retry-with-malformed-previous": null,
+              "retry-token/retry-with-read-only-previous": null,
+              "retry-token/retry-with-rolled-back-previous": null,
+              "retry-token/retry-with-unissued-previous": null
+            },
+            "mechanismDiffers": true,
+            "note": "The elapsed-time mechanism is allowed to differ. Production waits real seconds; the local emulator advances its virtual clock. Only the observed codes, diagnostics and post-state are compared.",
+            "production": {
+              "finished-token/rollback-after-begin": null,
+              "finished-token/rollback-after-commit": null,
+              "finished-token/rollback-after-rollback": null,
+              "idle-expiry/commit-after-idle": {
+                "checkpoints": 14,
+                "endedAt": "2026-09-28T02:56:28.794701Z",
+                "measuredSeconds": 70.00125249987468,
+                "mode": "wall-clock",
+                "requestedSeconds": 70,
+                "startedAt": "2026-09-28T02:55:18.792962Z",
+                "wallSeconds": 70.0017409324646
+              },
+              "idle-expiry/commit-before-idle": {
+                "checkpoints": 4,
+                "endedAt": "2026-09-28T02:55:16.458942Z",
+                "measuredSeconds": 20.00526854209602,
+                "mode": "wall-clock",
+                "requestedSeconds": 20,
+                "startedAt": "2026-09-28T02:54:56.453535Z",
+                "wallSeconds": 20.00540781021118
+              },
+              "idle-expiry/lock-held-before-idle": null,
+              "idle-expiry/lock-released-after-idle": null,
+              "idle-expiry/rollback-after-idle": null,
+              "retry-token/retry-with-committed-previous": null,
+              "retry-token/retry-with-malformed-previous": null,
+              "retry-token/retry-with-read-only-previous": null,
+              "retry-token/retry-with-rolled-back-previous": null,
+              "retry-token/retry-with-unissued-previous": null
+            }
+          },
+          "classification": "EXPECTED_NONDETERMINISM_EXCEPT_SUPERSEDED_CASES",
+          "casesCompared": [
+            "finished-token/rollback-after-begin",
+            "finished-token/rollback-after-commit",
+            "finished-token/rollback-after-rollback",
+            "idle-expiry/commit-before-idle",
+            "idle-expiry/lock-held-before-idle",
+            "retry-token/retry-with-committed-previous",
+            "retry-token/retry-with-malformed-previous",
+            "retry-token/retry-with-read-only-previous",
+            "retry-token/retry-with-rolled-back-previous",
+            "retry-token/retry-with-unissued-previous"
+          ],
+          "supersededCases": [
+            "idle-expiry/commit-after-idle",
+            "idle-expiry/lock-released-after-idle",
+            "idle-expiry/rollback-after-idle"
+          ],
+          "supersededDifferences": {
+            "idle-expiry/commit-after-idle": {
+              "local": {
+                "code": 0,
+                "message": null,
+                "role": "locked-a",
+                "rpc": "Commit",
+                "status": "OK"
+              },
+              "production": {
+                "code": 10,
+                "message": "The referenced transaction has expired or is no longer valid.",
+                "role": "locked-a",
+                "rpc": "Commit",
+                "status": "ABORTED"
+              }
+            },
+            "idle-expiry/commit-after-idle#postState": {
+              "local": {
+                "document": {
+                  "code": 0,
+                  "exists": true,
+                  "fields": {
+                    "nonce": {
+                      "stringValue": "<fireemu:o3-txn-expiry:token>"
+                    },
+                    "owner": {
+                      "stringValue": "<fireemu:o3-txn-expiry:owner>"
+                    },
+                    "role": {
+                      "stringValue": "locked-a"
+                    },
+                    "state": {
+                      "stringValue": "committed-after-idle"
+                    }
+                  },
+                  "name": "<fireemu:o3-txn-expiry:resource>",
+                  "updateTime": "<fireemu:o3-txn-expiry:token>",
+                  "updateTimeOrdinal": 1
+                },
+                "role": "locked-a"
+              },
+              "production": {
+                "document": {
+                  "code": 0,
+                  "exists": true,
+                  "fields": {
+                    "nonce": {
+                      "stringValue": "<fireemu:o3-txn-expiry:token>"
+                    },
+                    "owner": {
+                      "stringValue": "<fireemu:o3-txn-expiry:owner>"
+                    },
+                    "role": {
+                      "stringValue": "locked-a"
+                    },
+                    "state": {
+                      "stringValue": "created"
+                    }
+                  },
+                  "name": "<fireemu:o3-txn-expiry:resource>",
+                  "updateTime": "<fireemu:o3-txn-expiry:token>",
+                  "updateTimeOrdinal": 0
+                },
+                "role": "locked-a"
+              }
+            },
+            "idle-expiry/lock-released-after-idle#postState": {
+              "local": {
+                "document": {
+                  "code": 0,
+                  "exists": true,
+                  "fields": {
+                    "nonce": {
+                      "stringValue": "<fireemu:o3-txn-expiry:token>"
+                    },
+                    "owner": {
+                      "stringValue": "<fireemu:o3-txn-expiry:owner>"
+                    },
+                    "role": {
+                      "stringValue": "locked-a"
+                    },
+                    "state": {
+                      "stringValue": "written-after-expiry"
+                    }
+                  },
+                  "name": "<fireemu:o3-txn-expiry:resource>",
+                  "updateTime": "<fireemu:o3-txn-expiry:token>",
+                  "updateTimeOrdinal": 2
+                },
+                "role": "locked-a"
+              },
+              "production": {
+                "document": {
+                  "code": 0,
+                  "exists": true,
+                  "fields": {
+                    "nonce": {
+                      "stringValue": "<fireemu:o3-txn-expiry:token>"
+                    },
+                    "owner": {
+                      "stringValue": "<fireemu:o3-txn-expiry:owner>"
+                    },
+                    "role": {
+                      "stringValue": "locked-a"
+                    },
+                    "state": {
+                      "stringValue": "written-after-expiry"
+                    }
+                  },
+                  "name": "<fireemu:o3-txn-expiry:resource>",
+                  "updateTime": "<fireemu:o3-txn-expiry:token>",
+                  "updateTimeOrdinal": 1
+                },
+                "role": "locked-a"
+              }
+            }
+          }
+        },
+        {
+          "acquisitionValidated": false,
+          "bindings": {
+            "casesDigest": "c0731c5add47c487a520817d094fc0208d1e135dc31ea45885da5d5d861856fe",
+            "localPostStateDigest": "9ee261b875609bf1629e3541f547b3e267d4b65c09c3c9a58de7ab050e44bdac",
+            "localProjectionDigest": "e74cc0922e90619df33afebbf80f2519631f3c9f7f2072270deae957a6f9459e",
+            "localSourceDigest": "87e8ecd63c57c215104cbffd2e91379c8362d669e919c4630ec756d6e1dc7ed4",
+            "productionPostStateDigest": "c99f0ee1ad872287f6673daa3bc8989df86badd3c78e44a9655d0f5cda7bff17",
+            "productionProjectionDigest": "48904d5db505be87efcf3c9fc8faf537d49e6b995ca67c0d62fe012ba035cea2",
+            "productionSourceDigest": "87e8ecd63c57c215104cbffd2e91379c8362d669e919c4630ec756d6e1dc7ed4"
+          },
+          "campaign": "FS-TRANSACTION-EXPIRY-RETRY-04",
+          "kind": "txn-expiry-comparison-v1",
+          "promotionReady": false,
+          "timing": {
+            "local": {
+              "finished-token/rollback-after-begin": null,
+              "finished-token/rollback-after-commit": null,
+              "finished-token/rollback-after-rollback": null,
+              "idle-expiry/commit-after-idle": {
+                "checkpoints": 1,
+                "endedAt": "2026-10-01T03:05:53.326289Z",
+                "measuredSeconds": 70.0,
+                "mode": "control-clock",
+                "requestedSeconds": 70,
+                "startedAt": "2026-10-01T03:05:53.197720Z",
+                "wallSeconds": 0.1285719871520996
+              },
+              "idle-expiry/commit-before-idle": {
+                "checkpoints": 1,
+                "endedAt": "2026-10-01T03:05:53.056629Z",
+                "measuredSeconds": 20.0,
+                "mode": "control-clock",
+                "requestedSeconds": 20,
+                "startedAt": "2026-10-01T03:05:52.929524Z",
+                "wallSeconds": 0.12710809707641602
+              },
+              "idle-expiry/lock-held-before-idle": null,
+              "idle-expiry/lock-released-after-idle": null,
+              "idle-expiry/rollback-after-idle": null,
+              "retry-token/retry-with-committed-previous": null,
+              "retry-token/retry-with-malformed-previous": null,
+              "retry-token/retry-with-read-only-previous": null,
+              "retry-token/retry-with-rolled-back-previous": null,
+              "retry-token/retry-with-unissued-previous": null
+            },
+            "mechanismDiffers": true,
+            "note": "The elapsed-time mechanism is allowed to differ. Production waits real seconds; the local emulator advances its virtual clock. Only the observed codes, diagnostics and post-state are compared.",
+            "production": {
+              "finished-token/rollback-after-begin": null,
+              "finished-token/rollback-after-commit": null,
+              "finished-token/rollback-after-rollback": null,
+              "idle-expiry/commit-after-idle": {
+                "checkpoints": 14,
+                "endedAt": "2026-09-28T02:59:35.681146Z",
+                "measuredSeconds": 70.01005975017324,
+                "mode": "wall-clock",
+                "requestedSeconds": 70,
+                "startedAt": "2026-09-28T02:58:25.670609Z",
+                "wallSeconds": 70.01053786277771
+              },
+              "idle-expiry/commit-before-idle": {
+                "checkpoints": 4,
+                "endedAt": "2026-09-28T02:58:23.700972Z",
+                "measuredSeconds": 20.009574750438333,
+                "mode": "wall-clock",
+                "requestedSeconds": 20,
+                "startedAt": "2026-09-28T02:58:03.691259Z",
+                "wallSeconds": 20.009714126586914
+              },
+              "idle-expiry/lock-held-before-idle": null,
+              "idle-expiry/lock-released-after-idle": null,
+              "idle-expiry/rollback-after-idle": null,
+              "retry-token/retry-with-committed-previous": null,
+              "retry-token/retry-with-malformed-previous": null,
+              "retry-token/retry-with-read-only-previous": null,
+              "retry-token/retry-with-rolled-back-previous": null,
+              "retry-token/retry-with-unissued-previous": null
+            }
+          },
+          "classification": "EXPECTED_NONDETERMINISM_EXCEPT_SUPERSEDED_CASES",
+          "casesCompared": [
+            "finished-token/rollback-after-begin",
+            "finished-token/rollback-after-commit",
+            "finished-token/rollback-after-rollback",
+            "idle-expiry/commit-before-idle",
+            "idle-expiry/lock-held-before-idle",
+            "retry-token/retry-with-committed-previous",
+            "retry-token/retry-with-malformed-previous",
+            "retry-token/retry-with-read-only-previous",
+            "retry-token/retry-with-rolled-back-previous",
+            "retry-token/retry-with-unissued-previous"
+          ],
+          "supersededCases": [
+            "idle-expiry/commit-after-idle",
+            "idle-expiry/lock-released-after-idle",
+            "idle-expiry/rollback-after-idle"
+          ],
+          "supersededDifferences": {
+            "idle-expiry/commit-after-idle": {
+              "local": {
+                "code": 0,
+                "message": null,
+                "role": "locked-a",
+                "rpc": "Commit",
+                "status": "OK"
+              },
+              "production": {
+                "code": 10,
+                "message": "The referenced transaction has expired or is no longer valid.",
+                "role": "locked-a",
+                "rpc": "Commit",
+                "status": "ABORTED"
+              }
+            },
+            "idle-expiry/commit-after-idle#postState": {
+              "local": {
+                "document": {
+                  "code": 0,
+                  "exists": true,
+                  "fields": {
+                    "nonce": {
+                      "stringValue": "<fireemu:o3-txn-expiry:token>"
+                    },
+                    "owner": {
+                      "stringValue": "<fireemu:o3-txn-expiry:owner>"
+                    },
+                    "role": {
+                      "stringValue": "locked-a"
+                    },
+                    "state": {
+                      "stringValue": "committed-after-idle"
+                    }
+                  },
+                  "name": "<fireemu:o3-txn-expiry:resource>",
+                  "updateTime": "<fireemu:o3-txn-expiry:token>",
+                  "updateTimeOrdinal": 1
+                },
+                "role": "locked-a"
+              },
+              "production": {
+                "document": {
+                  "code": 0,
+                  "exists": true,
+                  "fields": {
+                    "nonce": {
+                      "stringValue": "<fireemu:o3-txn-expiry:token>"
+                    },
+                    "owner": {
+                      "stringValue": "<fireemu:o3-txn-expiry:owner>"
+                    },
+                    "role": {
+                      "stringValue": "locked-a"
+                    },
+                    "state": {
+                      "stringValue": "created"
+                    }
+                  },
+                  "name": "<fireemu:o3-txn-expiry:resource>",
+                  "updateTime": "<fireemu:o3-txn-expiry:token>",
+                  "updateTimeOrdinal": 0
+                },
+                "role": "locked-a"
+              }
+            },
+            "idle-expiry/lock-released-after-idle#postState": {
+              "local": {
+                "document": {
+                  "code": 0,
+                  "exists": true,
+                  "fields": {
+                    "nonce": {
+                      "stringValue": "<fireemu:o3-txn-expiry:token>"
+                    },
+                    "owner": {
+                      "stringValue": "<fireemu:o3-txn-expiry:owner>"
+                    },
+                    "role": {
+                      "stringValue": "locked-a"
+                    },
+                    "state": {
+                      "stringValue": "written-after-expiry"
+                    }
+                  },
+                  "name": "<fireemu:o3-txn-expiry:resource>",
+                  "updateTime": "<fireemu:o3-txn-expiry:token>",
+                  "updateTimeOrdinal": 2
+                },
+                "role": "locked-a"
+              },
+              "production": {
+                "document": {
+                  "code": 0,
+                  "exists": true,
+                  "fields": {
+                    "nonce": {
+                      "stringValue": "<fireemu:o3-txn-expiry:token>"
+                    },
+                    "owner": {
+                      "stringValue": "<fireemu:o3-txn-expiry:owner>"
+                    },
+                    "role": {
+                      "stringValue": "locked-a"
+                    },
+                    "state": {
+                      "stringValue": "written-after-expiry"
+                    }
+                  },
+                  "name": "<fireemu:o3-txn-expiry:resource>",
+                  "updateTime": "<fireemu:o3-txn-expiry:token>",
+                  "updateTimeOrdinal": 1
+                },
+                "role": "locked-a"
+              }
+            }
+          }
+        }
+      ]
+    },
+    "emulator": {
+      "acquisitionComplete": true,
+      "sourceCommit": "e00aa486c44a2f524378c1f380a3446f3c83697d",
+      "artifactSha256": "26fcfa803381b64db70c0cd5dd09b2610c98d9bf58814da4e342d4c7be24d90e",
+      "runtimeInputsDigest": "182ccd3f63ae77e451bd51a38af65c772fa5e157b80131e5cfe874da2a02304f",
+      "runtimeInputCount": 540,
+      "runtimeInputsClean": true,
+      "pythonRuntime": {
+        "pythonExecutableSha256": "80832da5c8b59015babb813a4939e8537de700a13ee4ad5be00279c4e7b32ce0",
+        "pythonSysVersion": "3.12.13 (main, Mar 10 2026, 18:18:07) [Clang 21.1.4 ]",
+        "pythonVersion": "3.12.13"
+      },
+      "productionRequests": 0,
+      "localDataRequests": 67,
+      "ownedDocumentsAbsent": 5,
+      "openTransactions": 0,
+      "unconfirmedTransactionStarts": 0,
+      "child": {
+        "exitCode": 0,
+        "signal": null,
+        "stopped": true
+      },
+      "historicalLocalSelfContract": "SEMANTIC_MISMATCH",
+      "historicalLocalSelfContractNote": "Frozen preproduction expectations are retained; parity is decided against both actual production receipts.",
+      "beforeRepair": {
+        "reference": {
+          "path": "docs.local/runs/fs-transaction-recorded-local-before-emulator/production-comparison.json",
+          "sha256": "2815677e87cb5ac805d94622e1a5f17922508991003afd295c3f2280baa901bb"
+        },
+        "classification": "SEMANTIC_MISMATCH",
+        "differenceCaseIds": [
+          "finished-token/rollback-after-rollback",
+          "idle-expiry/rollback-after-idle",
+          "retry-token/retry-with-committed-previous",
+          "retry-token/retry-with-read-only-previous"
+        ]
+      },
+      "receipt": {
+        "path": "docs.local/runs/fs-transaction-recorded-local-r12-after-emulator/receipt.json",
+        "sha256": "7162d67145b66e7604312cb37556bc4a0fc81c64e15afe7aae867ee16c2a5beb"
+      },
+      "comparison": {
+        "path": "docs.local/runs/fs-transaction-recorded-local-r12-after-emulator/production-comparison.json",
+        "sha256": "bd8505da20e4f2f9218103ba4209e12af482d7e29e574f49111b94f59185111f"
+      },
+      "results": [
+        {
+          "acquisitionValidated": false,
+          "bindings": {
+            "casesDigest": "c0731c5add47c487a520817d094fc0208d1e135dc31ea45885da5d5d861856fe",
+            "localPostStateDigest": "c99f0ee1ad872287f6673daa3bc8989df86badd3c78e44a9655d0f5cda7bff17",
+            "localProjectionDigest": "48904d5db505be87efcf3c9fc8faf537d49e6b995ca67c0d62fe012ba035cea2",
+            "localSourceDigest": "87e8ecd63c57c215104cbffd2e91379c8362d669e919c4630ec756d6e1dc7ed4",
+            "productionPostStateDigest": "c99f0ee1ad872287f6673daa3bc8989df86badd3c78e44a9655d0f5cda7bff17",
+            "productionProjectionDigest": "48904d5db505be87efcf3c9fc8faf537d49e6b995ca67c0d62fe012ba035cea2",
+            "productionSourceDigest": "87e8ecd63c57c215104cbffd2e91379c8362d669e919c4630ec756d6e1dc7ed4"
+          },
+          "campaign": "FS-TRANSACTION-EXPIRY-RETRY-04",
+          "casesCompared": [
+            "finished-token/rollback-after-begin",
+            "finished-token/rollback-after-commit",
+            "finished-token/rollback-after-rollback",
+            "idle-expiry/commit-after-idle",
+            "idle-expiry/commit-before-idle",
+            "idle-expiry/lock-held-before-idle",
+            "idle-expiry/lock-released-after-idle",
+            "idle-expiry/rollback-after-idle",
+            "retry-token/retry-with-committed-previous",
+            "retry-token/retry-with-malformed-previous",
+            "retry-token/retry-with-read-only-previous",
+            "retry-token/retry-with-rolled-back-previous",
+            "retry-token/retry-with-unissued-previous"
+          ],
+          "classification": "EXPECTED_NONDETERMINISM",
+          "kind": "txn-expiry-comparison-v1",
+          "promotionReady": false,
+          "timing": {
+            "local": {
+              "finished-token/rollback-after-begin": null,
+              "finished-token/rollback-after-commit": null,
+              "finished-token/rollback-after-rollback": null,
+              "idle-expiry/commit-after-idle": {
+                "checkpoints": 1,
+                "endedAt": "2026-10-01T03:06:14.397256Z",
+                "measuredSeconds": 70.0,
+                "mode": "control-clock",
+                "requestedSeconds": 70,
+                "startedAt": "2026-10-01T03:06:14.258473Z",
+                "wallSeconds": 0.13878512382507324
+              },
+              "idle-expiry/commit-before-idle": {
+                "checkpoints": 1,
+                "endedAt": "2026-10-01T03:06:14.101110Z",
+                "measuredSeconds": 20.0,
+                "mode": "control-clock",
+                "requestedSeconds": 20,
+                "startedAt": "2026-10-01T03:06:13.962511Z",
+                "wallSeconds": 0.13860297203063965
+              },
+              "idle-expiry/lock-held-before-idle": null,
+              "idle-expiry/lock-released-after-idle": null,
+              "idle-expiry/rollback-after-idle": null,
+              "retry-token/retry-with-committed-previous": null,
+              "retry-token/retry-with-malformed-previous": null,
+              "retry-token/retry-with-read-only-previous": null,
+              "retry-token/retry-with-rolled-back-previous": null,
+              "retry-token/retry-with-unissued-previous": null
+            },
+            "mechanismDiffers": true,
+            "note": "The elapsed-time mechanism is allowed to differ. Production waits real seconds; the local emulator advances its virtual clock. Only the observed codes, diagnostics and post-state are compared.",
+            "production": {
+              "finished-token/rollback-after-begin": null,
+              "finished-token/rollback-after-commit": null,
+              "finished-token/rollback-after-rollback": null,
+              "idle-expiry/commit-after-idle": {
+                "checkpoints": 14,
+                "endedAt": "2026-09-28T02:56:28.794701Z",
+                "measuredSeconds": 70.00125249987468,
+                "mode": "wall-clock",
+                "requestedSeconds": 70,
+                "startedAt": "2026-09-28T02:55:18.792962Z",
+                "wallSeconds": 70.0017409324646
+              },
+              "idle-expiry/commit-before-idle": {
+                "checkpoints": 4,
+                "endedAt": "2026-09-28T02:55:16.458942Z",
+                "measuredSeconds": 20.00526854209602,
+                "mode": "wall-clock",
+                "requestedSeconds": 20,
+                "startedAt": "2026-09-28T02:54:56.453535Z",
+                "wallSeconds": 20.00540781021118
+              },
+              "idle-expiry/lock-held-before-idle": null,
+              "idle-expiry/lock-released-after-idle": null,
+              "idle-expiry/rollback-after-idle": null,
+              "retry-token/retry-with-committed-previous": null,
+              "retry-token/retry-with-malformed-previous": null,
+              "retry-token/retry-with-read-only-previous": null,
+              "retry-token/retry-with-rolled-back-previous": null,
+              "retry-token/retry-with-unissued-previous": null
+            }
+          }
+        },
+        {
+          "acquisitionValidated": false,
+          "bindings": {
+            "casesDigest": "c0731c5add47c487a520817d094fc0208d1e135dc31ea45885da5d5d861856fe",
+            "localPostStateDigest": "c99f0ee1ad872287f6673daa3bc8989df86badd3c78e44a9655d0f5cda7bff17",
+            "localProjectionDigest": "48904d5db505be87efcf3c9fc8faf537d49e6b995ca67c0d62fe012ba035cea2",
+            "localSourceDigest": "87e8ecd63c57c215104cbffd2e91379c8362d669e919c4630ec756d6e1dc7ed4",
+            "productionPostStateDigest": "c99f0ee1ad872287f6673daa3bc8989df86badd3c78e44a9655d0f5cda7bff17",
+            "productionProjectionDigest": "48904d5db505be87efcf3c9fc8faf537d49e6b995ca67c0d62fe012ba035cea2",
+            "productionSourceDigest": "87e8ecd63c57c215104cbffd2e91379c8362d669e919c4630ec756d6e1dc7ed4"
+          },
+          "campaign": "FS-TRANSACTION-EXPIRY-RETRY-04",
+          "casesCompared": [
+            "finished-token/rollback-after-begin",
+            "finished-token/rollback-after-commit",
+            "finished-token/rollback-after-rollback",
+            "idle-expiry/commit-after-idle",
+            "idle-expiry/commit-before-idle",
+            "idle-expiry/lock-held-before-idle",
+            "idle-expiry/lock-released-after-idle",
+            "idle-expiry/rollback-after-idle",
+            "retry-token/retry-with-committed-previous",
+            "retry-token/retry-with-malformed-previous",
+            "retry-token/retry-with-read-only-previous",
+            "retry-token/retry-with-rolled-back-previous",
+            "retry-token/retry-with-unissued-previous"
+          ],
+          "classification": "EXPECTED_NONDETERMINISM",
+          "kind": "txn-expiry-comparison-v1",
+          "promotionReady": false,
+          "timing": {
+            "local": {
+              "finished-token/rollback-after-begin": null,
+              "finished-token/rollback-after-commit": null,
+              "finished-token/rollback-after-rollback": null,
+              "idle-expiry/commit-after-idle": {
+                "checkpoints": 1,
+                "endedAt": "2026-10-01T03:06:14.397256Z",
+                "measuredSeconds": 70.0,
+                "mode": "control-clock",
+                "requestedSeconds": 70,
+                "startedAt": "2026-10-01T03:06:14.258473Z",
+                "wallSeconds": 0.13878512382507324
+              },
+              "idle-expiry/commit-before-idle": {
+                "checkpoints": 1,
+                "endedAt": "2026-10-01T03:06:14.101110Z",
+                "measuredSeconds": 20.0,
+                "mode": "control-clock",
+                "requestedSeconds": 20,
+                "startedAt": "2026-10-01T03:06:13.962511Z",
+                "wallSeconds": 0.13860297203063965
+              },
+              "idle-expiry/lock-held-before-idle": null,
+              "idle-expiry/lock-released-after-idle": null,
+              "idle-expiry/rollback-after-idle": null,
+              "retry-token/retry-with-committed-previous": null,
+              "retry-token/retry-with-malformed-previous": null,
+              "retry-token/retry-with-read-only-previous": null,
+              "retry-token/retry-with-rolled-back-previous": null,
+              "retry-token/retry-with-unissued-previous": null
+            },
+            "mechanismDiffers": true,
+            "note": "The elapsed-time mechanism is allowed to differ. Production waits real seconds; the local emulator advances its virtual clock. Only the observed codes, diagnostics and post-state are compared.",
+            "production": {
+              "finished-token/rollback-after-begin": null,
+              "finished-token/rollback-after-commit": null,
+              "finished-token/rollback-after-rollback": null,
+              "idle-expiry/commit-after-idle": {
+                "checkpoints": 14,
+                "endedAt": "2026-09-28T02:59:35.681146Z",
+                "measuredSeconds": 70.01005975017324,
+                "mode": "wall-clock",
+                "requestedSeconds": 70,
+                "startedAt": "2026-09-28T02:58:25.670609Z",
+                "wallSeconds": 70.01053786277771
+              },
+              "idle-expiry/commit-before-idle": {
+                "checkpoints": 4,
+                "endedAt": "2026-09-28T02:58:23.700972Z",
+                "measuredSeconds": 20.009574750438333,
+                "mode": "wall-clock",
+                "requestedSeconds": 20,
+                "startedAt": "2026-09-28T02:58:03.691259Z",
+                "wallSeconds": 20.009714126586914
+              },
+              "idle-expiry/lock-held-before-idle": null,
+              "idle-expiry/lock-released-after-idle": null,
+              "idle-expiry/rollback-after-idle": null,
+              "retry-token/retry-with-committed-previous": null,
+              "retry-token/retry-with-malformed-previous": null,
+              "retry-token/retry-with-read-only-previous": null,
+              "retry-token/retry-with-rolled-back-previous": null,
+              "retry-token/retry-with-unissued-previous": null
+            }
+          }
+        }
+      ]
+    }
+  },
+  "remainingBoundaries": [
+    "Representative gRPC for idle-expiry and retry-token-lifecycle.",
+    "Refused commit, token reuse, explicit rollback, lock release and representative gRPC for failed-commit-and-rollback.",
+    "The other 15 frozen conditions remain unobserved by this corpus, including final-artifact-regression and closure-review.",
+    "Official emulator profile observations remain pending; fireemu's emulator profile is not the official emulator.",
+    "The wall-clock controls do not identify the exact idle-expiry threshold.",
+    "The strict profile is not replayed against three REST idle-expiry cases (superseded, see supersededForStrict)."
+  ],
+  "supersededForStrict": {
+    "declaredOn": "2026-09-30",
+    "cases": [
+      "idle-expiry/commit-after-idle",
+      "idle-expiry/lock-released-after-idle",
+      "idle-expiry/rollback-after-idle"
+    ],
+    "reason": "P10-C superseded the 60 + 30 second idle policy these cases were replayed for (strict now expires an idle transaction above 120 seconds). The REST rows record only a response-to-response idle (120.345 to 121.150 seconds for commit-after-idle), so the server-side idle they observed lies within about one request round trip (1.2 to 2 seconds in recent REST recordings) of that value and its interval contains 120 seconds: no wait chosen for a replay would decide strict's answer by evidence. The P10-B and P10-C native recordings carry dispatch and response bounds for every request and decide strict's limit.",
+    "supersededBy": [
+      {
+        "reference": {
+          "path": "docs.local/runs/fs-transaction-p10-b6d7f14a3148649c/recording-1.json",
+          "sha256": "b51b7eef2f013d6e9acd427ed6973a0ba52e3e262c75a5a66a655c9aeaeb5e43"
+        }
+      },
+      {
+        "reference": {
+          "path": "docs.local/runs/fs-transaction-p10-b6d7f14a3148649c/recording-2.json",
+          "sha256": "e010620ee5504f26085786e98282a27cd4ff08979ea5d8792672570f932d4569"
+        }
+      },
+      {
+        "reference": {
+          "path": "docs.local/runs/fs-transaction-p10b-2eae6448f3388382/recording-1.json",
+          "sha256": "3ff2787a3c2fca1e185ad3568449b1f6fdbc4ce1550373863216e3d88bc5a49e"
+        }
+      },
+      {
+        "reference": {
+          "path": "docs.local/runs/fs-transaction-p10b-2eae6448f3388382/recording-2.json",
+          "sha256": "5e2fd291a3c26ddbb695189ed36e7fcc27c4ba0d03c8571c919e0b08600cdb61"
+        }
+      }
+    ],
+    "history": "The 2026-09-28 statement that both profiles matched both production receipts on all 13 cases is kept as history: it held for the policy of that date. A later re-recording of idle cases must keep per-request dispatch and response times (see the P12 design)."
+  },
+  "historicalEvidence": {
+    "preproductionExpectationsRetained": true,
+    "note": "The frozen expectedLocal table and earlier local-shadow bytes are historical preparation evidence. Actual production receipts decide this comparison."
+  }
+}

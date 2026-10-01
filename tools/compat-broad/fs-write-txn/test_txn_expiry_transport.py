@@ -25,7 +25,7 @@ import txn_expiry_remote_transport as remote
 from broad_contract import digest
 
 NONCE = "d" * 32
-PROJECT = "fireemu-35fe6"
+PROJECT = "fireemu-oracle-sbx"
 NAME = f"projects/{PROJECT}/databases/(default)/documents/oracle/{NONCE}/txn-expiry-04/control"
 
 
@@ -376,5 +376,5 @@ def test_collector_requests_from_the_rehearsal_are_all_buildable():
     for call in endpoint.calls:
         method, path, _payload = remote.build(call)
         assert method in ("GET", "POST") and path.startswith(
-            "/v1/projects/fireemu-35fe6/"
+            "/v1/projects/fireemu-oracle-sbx/"
         )

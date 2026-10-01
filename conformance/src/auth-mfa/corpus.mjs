@@ -500,7 +500,10 @@ const quotaFreeAccount = (n, check, code) => [
   adminCreate(`create-${n}`, n),
   signIn(`sign-in-${n}`, n),
   totpStart(`start-${n}`, `sign-in-${n}`),
-  { ...totpFinalize(`finalize-${n}`, `sign-in-${n}`, `start-${n}`, totp(`start-${n}`, 0)), align: true },
+  {
+    ...totpFinalize(`finalize-${n}`, `sign-in-${n}`, `start-${n}`, totp(`start-${n}`, 0)),
+    align: true,
+  },
   signIn(`pending-${n}`, n),
   {
     ...totpSignIn(`plus-4-${n}`, `pending-${n}`, listed(`pending-${n}`), totp(`start-${n}`, 4)),
@@ -939,7 +942,12 @@ function shortLifetimeSteps() {
       age,
       steps: [
         aged(
-          totpSignIn(`aged-pending-${n}`, `pending-${n}`, listed(`pending-${n}`), totp(`start-${n}`, 0)),
+          totpSignIn(
+            `aged-pending-${n}`,
+            `pending-${n}`,
+            listed(`pending-${n}`),
+            totp(`start-${n}`, 0),
+          ),
           `pending-${n}`,
           age,
         ),
@@ -970,7 +978,12 @@ function shortLifetimeSteps() {
           `pending-${n}`,
           age,
         ),
-        smsSignIn(`aged-pending-${n}`, `pending-${n}`, listed(`pending-${n}`), `sms-start-aged-${n}`),
+        smsSignIn(
+          `aged-pending-${n}`,
+          `pending-${n}`,
+          listed(`pending-${n}`),
+          `sms-start-aged-${n}`,
+        ),
         signIn(`control-pending-${n}`, n),
         smsStart(`control-start-${n}`, `control-pending-${n}`, listed(`control-pending-${n}`)),
         smsSignIn(
@@ -1034,7 +1047,12 @@ function smsLifetimeSteps() {
           `pending-${n}`,
           age,
         ),
-        smsSignIn(`aged-pending-${n}`, `pending-${n}`, listed(`pending-${n}`), `sms-start-aged-${n}`),
+        smsSignIn(
+          `aged-pending-${n}`,
+          `pending-${n}`,
+          listed(`pending-${n}`),
+          `sms-start-aged-${n}`,
+        ),
         signIn(`control-pending-${n}`, n),
         smsStart(`control-start-${n}`, `control-pending-${n}`, listed(`control-pending-${n}`)),
         smsSignIn(

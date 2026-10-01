@@ -114,6 +114,426 @@ fn sign_up_body(email: &str) -> Value {
 }
 
 // ------------------------------------------------------------------------------------------
+// A denied request makes no tenant on the way (the emulator profile makes one a request names)
+// ------------------------------------------------------------------------------------------
+
+#[test]
+fn an_enforced_request_naming_a_missing_tenant_makes_no_tenant_when_denied() {
+    let mut h = harness(BaselineMode::Enforced);
+    let registry = Arc::new(fireemu_core_auth::store::AuthRegistry::new(
+        "demo-app",
+        h.auth.store.clone(),
+    ));
+    Arc::get_mut(&mut h.auth)
+        .expect("the harness is the sole AuthState owner")
+        .registry = Some(registry.clone());
+    let denied = h.post(
+        &format!("{V1}/accounts:signUp"),
+        &json!({"email": "a@example.com", "password": "hunter22", "tenantId": "denied-tenant"}),
+        &[],
+    );
+    assert_eq!(denied.status, 403, "{}", denied.body);
+    assert!(
+        registry.tenant_store("demo-app", "denied-tenant").is_none(),
+        "a denied request leaves no tenant behind"
+    );
+    let admitted = h.post(
+        &format!("{V1}/accounts:signUp"),
+        &json!({"email": "a@example.com", "password": "hunter22", "tenantId": "admitted-tenant"}),
+        &[&h.valid_token()],
+    );
+    assert_eq!(admitted.status, 200, "{}", admitted.body);
+    assert!(registry
+        .tenant_store("demo-app", "admitted-tenant")
+        .is_some());
+    // The denied request and the admitted one are each observed once, the admitted one although
+    // it made a tenant on the way.
+    let observed = h
+        .app_check
+        .registry
+        .read()
+        .expect("readable")
+        .observations("demo-app");
+    assert_eq!(observed.len(), 2, "{observed:?}");
+    assert_eq!(observed.iter().filter(|o| o.admitted).count(), 1);
+}
+
+/// Two projects under one daemon, `demo-other` with a tenant `tB` holding the user `u1`, and a
+/// request without an API key: the project it is admitted for is the default project's, but the
+/// store it is served from can be another project's, which App Check has to admit it for too.
+fn two_projects() -> (Harness, Arc<fireemu_core_auth::store::AuthRegistry>, String) {
+    use fireemu_core_auth::jwt::base64url_encode;
+    let mut h = harness(BaselineMode::Enforced);
+    let registry = Arc::new(fireemu_core_auth::store::AuthRegistry::new(
+        "demo-app",
+        h.auth.store.clone(),
+    ));
+    assert!(registry.register(
+        "demo-other",
+        AuthStore::new("demo-other", SplitMix64::new(7), TotpPolicy::default())
+    ));
+    assert!(registry
+        .ensure_tenant_with("demo-other", "tB", |_| {})
+        .is_some());
+    Arc::get_mut(&mut h.auth)
+        .expect("the harness is the sole AuthState owner")
+        .registry = Some(registry.clone());
+    let owner = RequestHeaders {
+        authorization: Some("Bearer owner".to_owned()),
+        ..RequestHeaders::default()
+    };
+    let made = handle_with(
+        &h.auth,
+        "POST",
+        "/identitytoolkit.googleapis.com/v1/projects/demo-other/tenants/tB/accounts",
+        &owner,
+        &json!({"localId": "u1", "email": "victim@example.com"}),
+    );
+    assert_eq!(made.status, 200, "{}", made.body);
+    let id_token = format!(
+        "{}.{}.",
+        base64url_encode(br#"{"alg":"none","typ":"JWT"}"#),
+        base64url_encode(
+            json!({"aud": "demo-other", "iss": "https://securetoken.google.com/demo-other",
+                   "sub": "u1", "user_id": "u1", "iat": 1_788_004_860, "exp": 1_788_008_400,
+                   "auth_time": 1_788_004_860,
+                   "firebase": {"tenant": "tB", "sign_in_provider": "password", "identities": {}}})
+            .to_string()
+            .as_bytes()
+        )
+    );
+    (h, registry, id_token)
+}
+
+fn observed_count(h: &Harness, project: &str) -> usize {
+    h.app_check
+        .registry
+        .read()
+        .expect("readable")
+        .observations(project)
+        .len()
+}
+
+#[test]
+fn an_admission_for_one_project_does_not_serve_another_projects_store() {
+    let (h, registry, id_token) = two_projects();
+    let body = json!({"idToken": id_token, "tenantId": "tB"});
+    let before = observed_count(&h, "demo-other");
+    // A valid demo-app credential, and no credential for demo-other, whose tenant the token names.
+    let first = h.post(&format!("{V1}/accounts:lookup"), &body, &[&h.valid_token()]);
+    assert_eq!(first.status, 403, "{}", first.body);
+    assert!(
+        first.body.to_string().contains("APP_CHECK"),
+        "{}",
+        first.body
+    );
+    assert!(!first.body.to_string().contains("victim@example.com"));
+    assert_eq!(observed_count(&h, "demo-other"), before + 1);
+    // The refused request made nothing in the default project, and asked App Check nothing for it.
+    assert!(registry.tenant_store("demo-app", "tB").is_none());
+    assert_eq!(observed_count(&h, "demo-app"), 0);
+    // Refused again the same way.
+    let second = h.post(&format!("{V1}/accounts:lookup"), &body, &[&h.valid_token()]);
+    assert_eq!(second.status, 403, "{}", second.body);
+    assert!(registry.tenant_store("demo-app", "tB").is_none());
+}
+
+/// The credential of the project the request is served from admits it, on a fresh daemon, and the
+/// default project gets no tenant.
+#[test]
+fn the_credential_of_the_served_project_admits_a_keyless_request() {
+    let (h, registry, id_token) = two_projects();
+    let body = json!({"idToken": id_token, "tenantId": "tB"});
+    let other = fixture::token(&h.app_check, "demo-other", fixture::OTHER_APP_ID);
+    let before = observed_count(&h, "demo-other");
+    let served = h.post(&format!("{V1}/accounts:lookup"), &body, &[&other]);
+    assert_eq!(served.status, 200, "{}", served.body);
+    assert_eq!(observed_count(&h, "demo-other"), before + 1);
+    assert!(registry.tenant_store("demo-app", "tB").is_none());
+}
+
+fn refresh_token_of_the_other_tenant(registry: &fireemu_core_auth::store::AuthRegistry) -> String {
+    let tenant_store = registry.tenant_store("demo-other", "tB").expect("tenant");
+    let mut store = tenant_store.lock().unwrap();
+    let uid = store
+        .user_by_id("u1")
+        .expect("the user exists")
+        .local_id
+        .clone();
+    store
+        .issue_refresh_token(&uid, LogicalInstant::from_unix_seconds(fixture::START))
+        .expect("the user exists")
+}
+
+#[test]
+fn an_admission_for_one_project_does_not_refresh_another_projects_session() {
+    let (h, registry, _) = two_projects();
+    let refresh_token = refresh_token_of_the_other_tenant(&registry);
+    let body = json!({"grant_type": "refresh_token", "refresh_token": refresh_token});
+    let denied = h.post(REFRESH, &body, &[&h.valid_token()]);
+    assert_eq!(denied.status, 403, "{}", denied.body);
+    assert!(
+        denied.body.to_string().contains("APP_CHECK"),
+        "{}",
+        denied.body
+    );
+    assert!(denied.body.get("id_token").is_none());
+    assert!(registry.tenant_store("demo-app", "tB").is_none());
+    let other = fixture::token(&h.app_check, "demo-other", fixture::OTHER_APP_ID);
+    let served = h.post(REFRESH, &body, &[&other]);
+    assert_eq!(served.status, 200, "{}", served.body);
+    assert!(registry.tenant_store("demo-app", "tB").is_none());
+}
+
+fn alg_none(claims: &Value) -> String {
+    use fireemu_core_auth::jwt::base64url_encode;
+    format!(
+        "{}.{}.",
+        base64url_encode(br#"{"alg":"none","typ":"JWT"}"#),
+        base64url_encode(claims.to_string().as_bytes())
+    )
+}
+
+fn claims_of(audience: &str, subject: &str, tenant: Option<&str>) -> Value {
+    let mut firebase = json!({"sign_in_provider": "password", "identities": {}});
+    if let Some(tenant) = tenant {
+        firebase["tenant"] = json!(tenant);
+    }
+    json!({"aud": audience, "iss": format!("https://securetoken.google.com/{audience}"),
+           "sub": subject, "user_id": subject, "iat": 1_788_004_860, "exp": 1_788_008_400,
+           "auth_time": 1_788_004_860, "firebase": firebase})
+}
+
+fn owner_with(h: &Harness) -> RequestHeaders {
+    RequestHeaders {
+        authorization: Some("Bearer owner".to_owned()),
+        app_check: vec![h.valid_token()],
+        ..RequestHeaders::default()
+    }
+}
+
+fn auth_uri_body(extra: &Value) -> Value {
+    let mut body = json!({"identifier": "x@example.com", "continueUri": "http://localhost"});
+    for (k, v) in extra.as_object().unwrap() {
+        body[k] = v.clone();
+    }
+    body
+}
+
+/// Whether the daemon serves a request from another project is decided by the store selection
+/// itself, not by a copy of its rules: a verified token of a project with no store, a
+/// `refreshToken` in camelCase (which the selection does not read) and a refresh token beside an
+/// ID token of the request's own project are all served from the default project, so the tenant
+/// they name is made there, as before. Asked with an App Check token, or with the owner
+/// credential (the form the official emulator serves without a key).
+#[test]
+fn a_request_the_selection_serves_from_the_default_project_still_makes_its_tenant() {
+    for as_owner in [false, true] {
+        let (h, registry, _) = two_projects();
+        let send = |body: Value| {
+            if as_owner {
+                handle_with(
+                    &h.auth,
+                    "POST",
+                    &format!("{V1}/accounts:createAuthUri"),
+                    &owner_with(&h),
+                    &body,
+                )
+            } else {
+                h.post(
+                    &format!("{V1}/accounts:createAuthUri"),
+                    &body,
+                    &[&h.valid_token()],
+                )
+            }
+        };
+        // Q1: a token whose project this daemon has no store for.
+        let ghost = alg_none(&claims_of("demo-ghost", "g1", Some("tG")));
+        let (app_before, other_before) = (
+            observed_count(&h, "demo-app"),
+            observed_count(&h, "demo-other"),
+        );
+        let r = send(auth_uri_body(&json!({"tenantId": "tG", "idToken": ghost})));
+        assert_eq!(r.status, 200, "{as_owner}: {}", r.body);
+        if !as_owner {
+            // Admitted by App Check once, for the project the request is served from.
+            assert_eq!(observed_count(&h, "demo-app"), app_before + 1);
+            assert_eq!(observed_count(&h, "demo-other"), other_before);
+        }
+        assert!(
+            registry.tenant_store("demo-app", "tG").is_some(),
+            "{as_owner}"
+        );
+        // Q2: the camelCase refresh token, which the store selection does not read.
+        let refresh = refresh_token_of_the_other_tenant(&registry);
+        let (app_before, other_before) = (
+            observed_count(&h, "demo-app"),
+            observed_count(&h, "demo-other"),
+        );
+        let r = send(auth_uri_body(
+            &json!({"tenantId": "tB", "refreshToken": refresh}),
+        ));
+        assert_eq!(r.status, 200, "{as_owner}: {}", r.body);
+        if !as_owner {
+            assert_eq!(observed_count(&h, "demo-app"), app_before + 1);
+            assert_eq!(observed_count(&h, "demo-other"), other_before);
+        }
+        assert!(
+            registry.tenant_store("demo-app", "tB").is_some(),
+            "{as_owner}"
+        );
+        // Q5: an ID token of the request's own project decides the store; the refresh token of a
+        // user of another project beside it does not stop the tenant the token names being made.
+        let made = handle_with(
+            &h.auth,
+            "POST",
+            "/identitytoolkit.googleapis.com/v1/projects/demo-other/accounts",
+            &RequestHeaders {
+                authorization: Some("Bearer owner".to_owned()),
+                ..RequestHeaders::default()
+            },
+            &json!({"localId": "p1"}),
+        );
+        assert_eq!(made.status, 200, "{}", made.body);
+        let project_refresh = {
+            let store = registry.store_for("demo-other").expect("the project store");
+            let mut store = store.lock().unwrap();
+            let uid = store.user_by_id("p1").expect("the user").local_id.clone();
+            store
+                .issue_refresh_token(&uid, LogicalInstant::from_unix_seconds(fixture::START))
+                .expect("the user exists")
+        };
+        let own = alg_none(&claims_of("demo-app", "z1", Some("tZ")));
+        // The tenant the token names is made, and the request is served as the official emulator
+        // serves it (`createAuthUri` does not parse the ID token).
+        let r = send(auth_uri_body(
+            &json!({"idToken": own, "refresh_token": project_refresh}),
+        ));
+        assert_eq!(r.status, 200, "{as_owner}: {}", r.body);
+        assert!(
+            registry.tenant_store("demo-app", "tZ").is_some(),
+            "{as_owner}"
+        );
+    }
+}
+
+/// The compatibility route for a custom token (a routed project's user, matched by uid) serves the
+/// request from that project: nothing is made in the default project on its way.
+#[test]
+fn a_compatibility_custom_token_routed_to_another_project_makes_no_tenant() {
+    let (mut h, registry, _) = two_projects();
+    Arc::get_mut(&mut h.auth)
+        .expect("the harness is the sole AuthState owner")
+        .allow_routed_projects = true;
+    let made = handle_with(
+        &h.auth,
+        "POST",
+        "/identitytoolkit.googleapis.com/v1/projects/demo-routed/accounts",
+        &RequestHeaders {
+            authorization: Some("Bearer owner".to_owned()),
+            ..RequestHeaders::default()
+        },
+        &json!({"localId": "u9", "email": "r@example.com"}),
+    );
+    assert_eq!(made.status, 200, "{}", made.body);
+    let app_before = observed_count(&h, "demo-app");
+    let body = json!({"token": "{\"uid\":\"u9\"}", "tenantId": "tQ", "returnSecureToken": true});
+    let r = h.post(
+        &format!("{V1}/accounts:signInWithCustomToken"),
+        &body,
+        &[&h.valid_token()],
+    );
+    // Served from the routed project's store, which refuses the body tenant (the open issue
+    // emulator-compat-custom-token-routing-ignores-the-body-tenant: a fix updates this test).
+    assert_eq!(r.status, 400, "{}", r.body);
+    assert_eq!(r.body["error"]["message"], "TENANT_ID_MISMATCH");
+    assert!(registry.tenant_store("demo-app", "tQ").is_none());
+    // Nothing was admitted for the default project, and the routed project is not observed by
+    // the creation (the pipeline decides App Check for the store it serves).
+    assert_eq!(observed_count(&h, "demo-app"), app_before);
+}
+
+/// A request App Check denies installs no routed project, and one it admits installs the project
+/// and is observed once.
+#[test]
+fn an_app_check_denial_installs_no_routed_project() {
+    let (mut h, registry, _) = two_projects();
+    Arc::get_mut(&mut h.auth)
+        .expect("the harness is the sole AuthState owner")
+        .allow_routed_projects = true;
+    let admin_read = |h: &Harness, app_check: Vec<String>| {
+        handle_with(
+            &h.auth,
+            "GET",
+            "/identitytoolkit.googleapis.com/v2/projects/demo-routed/tenants/named",
+            &RequestHeaders {
+                authorization: Some("Bearer owner".to_owned()),
+                app_check,
+                ..RequestHeaders::default()
+            },
+            &json!({}),
+        )
+    };
+    // The owner credential is the explicit App Check bypass for Admin routes; a client-shaped
+    // credential is not. Without the bypass (an ordinary end-user request to the same path) the
+    // request is denied and nothing is installed.
+    let denied = handle_with(
+        &h.auth,
+        "GET",
+        "/identitytoolkit.googleapis.com/v2/projects/demo-routed/tenants/named",
+        &RequestHeaders {
+            authorization: Some("Bearer not-the-owner".to_owned()),
+            ..RequestHeaders::default()
+        },
+        &json!({}),
+    );
+    assert_eq!(denied.status, 403, "{}", denied.body);
+    assert!(registry.routed_store_for("demo-routed").is_none());
+    assert!(registry.tenants("demo-routed").is_empty());
+    // The owner's request is served, installs the project and makes the tenant.
+    let served = admin_read(&h, vec![]);
+    assert_eq!(served.status, 200, "{}", served.body);
+    assert!(registry.routed_store_for("demo-routed").is_some());
+    assert_eq!(registry.tenants("demo-routed"), ["named"]);
+}
+
+/// A non-default project that is admitted and served from its own store is observed once.
+#[test]
+fn a_request_for_a_non_default_project_is_observed_once() {
+    let (h, registry, _) = two_projects();
+    let before = observed_count(&h, "demo-other");
+    let listed = handle_with(
+        &h.auth,
+        "GET",
+        "/emulator/v1/projects/demo-other/tenants/tNew/oobCodes",
+        &RequestHeaders {
+            authorization: Some(format!("Bearer {}", fixture::CONTROL_TOKEN)),
+            ..RequestHeaders::default()
+        },
+        &json!({}),
+    );
+    assert_eq!(listed.status, 200, "{}", listed.body);
+    assert!(registry.tenant_store("demo-other", "tNew").is_some());
+    assert_eq!(observed_count(&h, "demo-other"), before + 1);
+    assert_eq!(observed_count(&h, "demo-app"), 0);
+}
+
+/// A request the admission lets through for the project it is served from is observed once, not
+/// once for the admission and once for the pipeline.
+#[test]
+fn a_request_served_from_the_admitted_project_is_observed_once() {
+    let (h, _, _) = two_projects();
+    let before = observed_count(&h, "demo-app");
+    let made = h.post(
+        &format!("{V1}/accounts:signUp"),
+        &json!({"email": "once@example.com", "password": "hunter22", "tenantId": "once-tenant"}),
+        &[&h.valid_token()],
+    );
+    assert_eq!(made.status, 200, "{}", made.body);
+    assert_eq!(observed_count(&h, "demo-app"), before + 1);
+}
+
+// ------------------------------------------------------------------------------------------
 // Scenario 1: an enforced sign-up without App Check creates no user
 // ------------------------------------------------------------------------------------------
 

@@ -1,0 +1,342 @@
+{
+  "schemaVersion": 1,
+  "normalizationVersion": 1,
+  "normalizations": [
+    {
+      "id": "RUN",
+      "mask": "<RUN>",
+      "reason": "the run's 20-hex ID is chosen at random for each run and is in every object name"
+    },
+    {
+      "id": "BUCKET",
+      "mask": "<BUCKET>",
+      "reason": "the bucket differs between the production project and a local run"
+    },
+    {
+      "id": "PROJECT",
+      "mask": "<PROJECT>",
+      "reason": "the project differs between the production project and a local run"
+    },
+    {
+      "id": "GEN",
+      "mask": "<GEN:n>",
+      "reason": "a generation in production is a 16-digit time in microseconds, which differs for each run; n is the order of first appearance in the recipe, so equal and different generations stay distinguishable. A local value that is not 16 digits (a counter) is not masked and is a difference"
+    },
+    {
+      "id": "TIME",
+      "mask": "<TIME:d>",
+      "reason": "timestamps (RFC 3339) are the time of the run; d is the number of fractional digits, which is part of the format and is compared"
+    },
+    {
+      "id": "HTTPDATE",
+      "mask": "<HTTPDATE>",
+      "reason": "HTTP dates (Last-Modified, Expires when relative to now) are the time of the run"
+    },
+    {
+      "id": "ETAG",
+      "mask": "<ETAG:n>",
+      "reason": "an opaque etag (base64 shape) is derived from the generation and the metageneration; n is the order of first appearance in the recipe, so a changed etag stays visible. A quoted md5 etag is content-derived and is kept; any other form is not masked"
+    },
+    {
+      "id": "TOKEN",
+      "mask": "<TOKEN:n>",
+      "reason": "download tokens (UUIDs) are random; n is the order of first appearance in the recipe, so reuse and replacement stay distinguishable"
+    },
+    {
+      "id": "UPLOAD_ID",
+      "mask": "<UPLOAD_ID>",
+      "reason": "resumable session IDs are opaque and random"
+    },
+    {
+      "id": "ORIGIN",
+      "mask": "<ORIGIN>",
+      "reason": "the selfLink and mediaLink members and the x-goog-upload-control-url header point at the server that answered: production at www.googleapis.com (selfLink), storage.googleapis.com (mediaLink) and firebasestorage.googleapis.com (the header), a local run at its own loopback address, by design. Only those expected origins are masked, so a swap of the two production hosts still shows; the path and the query are compared exactly"
+    },
+    {
+      "id": "PAGE_TOKEN",
+      "mask": "<PAGE_TOKEN>",
+      "reason": "a page token is opaque by contract (production's is the base64 of the last entry's name, which carries the run ID)"
+    },
+    {
+      "id": "JWT",
+      "mask": "<JWT>",
+      "reason": "ID tokens are credentials and carry times and identifiers"
+    },
+    {
+      "id": "API_KEY",
+      "mask": "<API_KEY>",
+      "reason": "an API key is a credential"
+    },
+    {
+      "id": "UID",
+      "mask": "<UID>",
+      "reason": "identity ids and refresh tokens are random credentials"
+    },
+    {
+      "id": "METADATA_ORDER",
+      "mask": "(keys sorted)",
+      "reason": "the order of the members of a user metadata map is not stable in production (the two recordings sent the same keys in opposite orders), so that map's keys are sorted; the order of every other object's members is kept"
+    },
+    {
+      "id": "OWNER",
+      "mask": "<OWNER>",
+      "reason": "a copied object's owner.entity names the requesting principal (an account email)"
+    },
+    {
+      "id": "EPOCH",
+      "mask": "<EPOCH:type:digits>",
+      "reason": "account creation, sign-in and validity times given as epoch numbers (createdAt, lastLoginAt, validSince and the like) are the time of the run; the JSON type (string or number) and the number of digits are part of the format and are compared"
+    },
+    {
+      "id": "DIGEST",
+      "mask": "<DIGEST>",
+      "reason": "md5Hash, crc32c and the headers that repeat them, in a recipe whose objects' bytes carry the run ID: the digest of bytes that differ for each run differs for each run"
+    }
+  ],
+  "source": "STORAGE-OBJECT production recordings (private run directories, not committed)",
+  "runIds": [
+    "056c7ca3a8c6daa38e0a",
+    "202dd40ac90863add783"
+  ],
+  "recipes": [
+    {
+      "recipeId": "storage-object/firebase/simple-upload",
+      "file": "firebase--simple-upload.json",
+      "rows": 12,
+      "digests": {
+        "056c7ca3a8c6daa38e0a": "5ad4d0d9d11428e8c359a23d7caa0d07945cb4c9438d8c9012ccd24e2806a658",
+        "202dd40ac90863add783": "5ad4d0d9d11428e8c359a23d7caa0d07945cb4c9438d8c9012ccd24e2806a658"
+      }
+    },
+    {
+      "recipeId": "storage-object/cross-dialect/state",
+      "file": "cross-dialect--state.json",
+      "rows": 17,
+      "digests": {
+        "056c7ca3a8c6daa38e0a": "6e719b2aeb87124d9993a7181416420f3c0ab4c31493b14ec1a6d2e81443e405",
+        "202dd40ac90863add783": "6e719b2aeb87124d9993a7181416420f3c0ab4c31493b14ec1a6d2e81443e405"
+      }
+    },
+    {
+      "recipeId": "storage-object/firebase/download",
+      "file": "firebase--download.json",
+      "rows": 17,
+      "digests": {
+        "056c7ca3a8c6daa38e0a": "1f48cf9125202c7ff0b4a3a121c9404d4cdb1e7dfe0fa451be894095e6324420",
+        "202dd40ac90863add783": "1f48cf9125202c7ff0b4a3a121c9404d4cdb1e7dfe0fa451be894095e6324420"
+      }
+    },
+    {
+      "recipeId": "storage-object/firebase/metadata",
+      "file": "firebase--metadata.json",
+      "rows": 18,
+      "digests": {
+        "056c7ca3a8c6daa38e0a": "46d546cfe4b2a901b301e05dfbdf462d875571a71f78cf0a65b7b7578a5fbede",
+        "202dd40ac90863add783": "46d546cfe4b2a901b301e05dfbdf462d875571a71f78cf0a65b7b7578a5fbede"
+      }
+    },
+    {
+      "recipeId": "storage-object/firebase/delete",
+      "file": "firebase--delete.json",
+      "rows": 17,
+      "digests": {
+        "056c7ca3a8c6daa38e0a": "9f802a285a73536e0acff4a85d5a950272daef2032418df9153cb6b72f3134c2",
+        "202dd40ac90863add783": "9f802a285a73536e0acff4a85d5a950272daef2032418df9153cb6b72f3134c2"
+      }
+    },
+    {
+      "recipeId": "storage-object/firebase/overwrite",
+      "file": "firebase--overwrite.json",
+      "rows": 18,
+      "digests": {
+        "056c7ca3a8c6daa38e0a": "903c1cd09fab7ecfc383381ff7565845c2fb028958514540bab7faaee1a49fd6",
+        "202dd40ac90863add783": "903c1cd09fab7ecfc383381ff7565845c2fb028958514540bab7faaee1a49fd6"
+      }
+    },
+    {
+      "recipeId": "storage-object/gcs/download",
+      "file": "gcs--download.json",
+      "rows": 26,
+      "digests": {
+        "056c7ca3a8c6daa38e0a": "184693b90e45032e61fe45f60867ef8d7c335a1bf80bbc8801c139bbb65b34f0",
+        "202dd40ac90863add783": "184693b90e45032e61fe45f60867ef8d7c335a1bf80bbc8801c139bbb65b34f0"
+      }
+    },
+    {
+      "recipeId": "storage-object/gcs/metadata",
+      "file": "gcs--metadata.json",
+      "rows": 18,
+      "digests": {
+        "056c7ca3a8c6daa38e0a": "aafbd129f2ec809efd707fa0e066ec2e59843b07590143720d84009b476f9068",
+        "202dd40ac90863add783": "aafbd129f2ec809efd707fa0e066ec2e59843b07590143720d84009b476f9068"
+      }
+    },
+    {
+      "recipeId": "storage-object/gcs/delete",
+      "file": "gcs--delete.json",
+      "rows": 17,
+      "digests": {
+        "056c7ca3a8c6daa38e0a": "834752dd259952acad61fbd1e17e596f2dfed9fe0186ac14b68ca03f218b2067",
+        "202dd40ac90863add783": "834752dd259952acad61fbd1e17e596f2dfed9fe0186ac14b68ca03f218b2067"
+      }
+    },
+    {
+      "recipeId": "storage-object/errors/missing",
+      "file": "errors--missing.json",
+      "rows": 26,
+      "digests": {
+        "056c7ca3a8c6daa38e0a": "8771934a530cba311e8031833eecedfa5ccd2e31cd84b5ccbed16d63ba275faf",
+        "202dd40ac90863add783": "8771934a530cba311e8031833eecedfa5ccd2e31cd84b5ccbed16d63ba275faf"
+      }
+    },
+    {
+      "recipeId": "storage-object/errors/object-name",
+      "file": "errors--object-name.json",
+      "rows": 60,
+      "digests": {
+        "056c7ca3a8c6daa38e0a": "602e4a9f26d131a468c3152ccb68dc62bb840d8eee886da0a6b3beacf7bb5150",
+        "202dd40ac90863add783": "602e4a9f26d131a468c3152ccb68dc62bb840d8eee886da0a6b3beacf7bb5150"
+      }
+    },
+    {
+      "recipeId": "storage-object/errors/range",
+      "file": "errors--range.json",
+      "rows": 57,
+      "digests": {
+        "056c7ca3a8c6daa38e0a": "1e6da0996b366c7acdda048bfa8978a2280f05c8908d7b5e9225cf11206bd36b",
+        "202dd40ac90863add783": "1e6da0996b366c7acdda048bfa8978a2280f05c8908d7b5e9225cf11206bd36b"
+      }
+    },
+    {
+      "recipeId": "storage-object/firebase/multipart-upload",
+      "file": "firebase--multipart-upload.json",
+      "rows": 34,
+      "digests": {
+        "056c7ca3a8c6daa38e0a": "d1ae7034a2780c97c3dfbd33edee3ee9c0d43821331045a679f98f7dda8e5d08",
+        "202dd40ac90863add783": "d1ae7034a2780c97c3dfbd33edee3ee9c0d43821331045a679f98f7dda8e5d08"
+      }
+    },
+    {
+      "recipeId": "storage-object/gcs/simple-multipart-upload",
+      "file": "gcs--simple-multipart-upload.json",
+      "rows": 46,
+      "digests": {
+        "056c7ca3a8c6daa38e0a": "d5289727263bd0af3cbfbf11b1a62d0a097166259df35865751f2f99e1dca0ff",
+        "202dd40ac90863add783": "d5289727263bd0af3cbfbf11b1a62d0a097166259df35865751f2f99e1dca0ff"
+      }
+    },
+    {
+      "recipeId": "storage-object/gcs/checksums",
+      "file": "gcs--checksums.json",
+      "rows": 78,
+      "digests": {
+        "056c7ca3a8c6daa38e0a": "21da93ba48ac80c5955b48a02032dbeba135b3a68082758db18ce3f372b374d9",
+        "202dd40ac90863add783": "21da93ba48ac80c5955b48a02032dbeba135b3a68082758db18ce3f372b374d9"
+      }
+    },
+    {
+      "recipeId": "storage-object/gcs/generation-preconditions",
+      "file": "gcs--generation-preconditions.json",
+      "rows": 598,
+      "digests": {
+        "056c7ca3a8c6daa38e0a": "3c363507cbbd3ca769902710c8f3e4b2e2585d247b7877469ffdac8c5eb4110e",
+        "202dd40ac90863add783": "3c363507cbbd3ca769902710c8f3e4b2e2585d247b7877469ffdac8c5eb4110e"
+      }
+    },
+    {
+      "recipeId": "storage-object/gcs/metageneration-preconditions",
+      "file": "gcs--metageneration-preconditions.json",
+      "rows": 704,
+      "digests": {
+        "056c7ca3a8c6daa38e0a": "840ab1e2c3cf93471b371c99304c5d87411c9ee5abb02e0d12df30568b3003e4",
+        "202dd40ac90863add783": "840ab1e2c3cf93471b371c99304c5d87411c9ee5abb02e0d12df30568b3003e4"
+      }
+    },
+    {
+      "recipeId": "storage-object/firebase/list",
+      "file": "firebase--list.json",
+      "rows": 72,
+      "digests": {
+        "056c7ca3a8c6daa38e0a": "873b23a4d3b7b35f1a1ddfcbac3b5d2c8d336b39dfbef4f69efe03160987c2d2",
+        "202dd40ac90863add783": "873b23a4d3b7b35f1a1ddfcbac3b5d2c8d336b39dfbef4f69efe03160987c2d2"
+      }
+    },
+    {
+      "recipeId": "storage-object/gcs/list",
+      "file": "gcs--list.json",
+      "rows": 73,
+      "digests": {
+        "056c7ca3a8c6daa38e0a": "352c845a0f098347ad55e2dbe529962369a1cd3b63a453278f5f4040c4e567bd",
+        "202dd40ac90863add783": "352c845a0f098347ad55e2dbe529962369a1cd3b63a453278f5f4040c4e567bd"
+      }
+    },
+    {
+      "recipeId": "storage-object/gcs/copy-rewrite",
+      "file": "gcs--copy-rewrite.json",
+      "rows": 144,
+      "digests": {
+        "056c7ca3a8c6daa38e0a": "5ccdfb93b22f2239944bdfcc92c86190948f47b8adb3420e9d172d7da5c8c1f7",
+        "202dd40ac90863add783": "5ccdfb93b22f2239944bdfcc92c86190948f47b8adb3420e9d172d7da5c8c1f7"
+      }
+    },
+    {
+      "recipeId": "storage-object/auth/admin",
+      "file": "auth--admin.json",
+      "rows": 32,
+      "digests": {
+        "056c7ca3a8c6daa38e0a": "c9bc6ef2a5317850d4fecfd9539b34f71082b72fbefa634e912c91fb05633758",
+        "202dd40ac90863add783": "c9bc6ef2a5317850d4fecfd9539b34f71082b72fbefa634e912c91fb05633758"
+      }
+    },
+    {
+      "recipeId": "storage-object/firebase/download-tokens",
+      "file": "firebase--download-tokens.json",
+      "rows": 26,
+      "digests": {
+        "056c7ca3a8c6daa38e0a": "5fe9d189a325fd2f8e18044ec746e109a0dd36d349b0bbe0f2b0aa8eb469b595",
+        "202dd40ac90863add783": "5fe9d189a325fd2f8e18044ec746e109a0dd36d349b0bbe0f2b0aa8eb469b595"
+      }
+    },
+    {
+      "recipeId": "storage-object/firebase/resumable-upload",
+      "file": "firebase--resumable-upload.json",
+      "rows": 51,
+      "digests": {
+        "056c7ca3a8c6daa38e0a": "805c1a6219cd096e37f854400ad0fb56e0d15654429ced1cd909fb71269c0e9b",
+        "202dd40ac90863add783": "805c1a6219cd096e37f854400ad0fb56e0d15654429ced1cd909fb71269c0e9b"
+      }
+    },
+    {
+      "recipeId": "storage-object/gcs/resumable-upload",
+      "file": "gcs--resumable-upload.json",
+      "rows": 19,
+      "digests": {
+        "056c7ca3a8c6daa38e0a": "ee414cc8f27d900d863641756a4d92434b12ed21f9c9dba5ba170e9bd48866e7",
+        "202dd40ac90863add783": "ee414cc8f27d900d863641756a4d92434b12ed21f9c9dba5ba170e9bd48866e7"
+      }
+    },
+    {
+      "recipeId": "storage-object/errors/authorization",
+      "file": "errors--authorization.json",
+      "rows": 165,
+      "digests": {
+        "056c7ca3a8c6daa38e0a": "bcb0cdcca051881c397e385d254d3783965fc9e17dc1c0e5363ad6e276b03247",
+        "202dd40ac90863add783": "bcb0cdcca051881c397e385d254d3783965fc9e17dc1c0e5363ad6e276b03247"
+      }
+    },
+    {
+      "recipeId": "storage-object/auth/firebase-id-token",
+      "file": "auth--firebase-id-token.json",
+      "rows": 91,
+      "digests": {
+        "056c7ca3a8c6daa38e0a": "2423fbc5622d8b315b6a75d768d77af77aa404829a02b14ede7e496e66823e85",
+        "202dd40ac90863add783": "2423fbc5622d8b315b6a75d768d77af77aa404829a02b14ede7e496e66823e85"
+      }
+    }
+  ],
+  "equivalentRecordings": true,
+  "scan": {
+    "forbiddenFileUsed": true,
+    "forbiddenEntries": 11
+  }
+}

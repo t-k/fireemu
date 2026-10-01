@@ -367,9 +367,9 @@
       "id": "config.firestoreIndexes",
       "local": {
         "citations": [
-          "crates/fireemu/src/control.rs:48",
-          "crates/fireemu/src/control.rs:88",
-          "crates/fireemu/src/control.rs:148"
+          "crates/fireemu/src/control.rs:189",
+          "crates/fireemu/src/control.rs:81",
+          "crates/fireemu/src/control.rs:209"
         ],
         "status": "implemented"
       },
@@ -381,8 +381,8 @@
       "id": "config.singleFieldExemption",
       "local": {
         "citations": [
-          "crates/fireemu/src/control.rs:148",
-          "crates/fireemu/src/control.rs:215",
+          "crates/fireemu/src/control.rs:209",
+          "crates/fireemu/src/control.rs:277",
           "crates/fireemu-core-firestore/src/index.rs:134",
           "crates/fireemu-core-firestore/src/index.rs:153"
         ],
@@ -424,7 +424,7 @@
       "id": "runtime.lazyDatabaseCreation",
       "local": {
         "citations": [
-          "crates/fireemu-adapter-grpc/src/local.rs:1688",
+          "crates/fireemu-adapter-grpc/src/local.rs:1884",
           "crates/fireemu-core-types/src/ids.rs:183"
         ],
         "status": "implemented"
@@ -595,7 +595,7 @@
           "crates/fireemu-adapter-grpc/src/rest/admin_fields.rs:536",
           "crates/fireemu-adapter-grpc/src/admin/fields.rs:72",
           "crates/fireemu-core-firestore/src/ttl.rs:242",
-          "crates/fireemu-adapter-grpc/src/local.rs:3150"
+          "crates/fireemu-adapter-grpc/src/local.rs:3389"
         ],
         "status": "implemented"
       },
@@ -647,7 +647,7 @@
       "local": {
         "citations": [
           "crates/fireemu-adapter-grpc/src/admin/indexes.rs:323",
-          "crates/fireemu-adapter-grpc/src/local.rs:2579"
+          "crates/fireemu-adapter-grpc/src/local.rs:2775"
         ],
         "status": "implemented"
       },
@@ -756,8 +756,8 @@
       "local": {
         "citations": [
           "crates/fireemu-adapter-grpc/src/rest/admin_fields.rs:809",
-          "crates/fireemu-adapter-grpc/src/local.rs:2986",
-          "crates/fireemu-adapter-grpc/src/local.rs:3028"
+          "crates/fireemu-adapter-grpc/src/local.rs:3225",
+          "crates/fireemu-adapter-grpc/src/local.rs:3267"
         ],
         "status": "partial"
       },
@@ -770,7 +770,7 @@
       "local": {
         "citations": [
           "crates/fireemu-adapter-grpc/src/rest/admin_fields.rs:809",
-          "crates/fireemu-adapter-grpc/src/local.rs:3040"
+          "crates/fireemu-adapter-grpc/src/local.rs:3279"
         ],
         "status": "partial"
       },
@@ -922,8 +922,8 @@
   "repairTickets": [
     {
       "citations": [
-        "crates/fireemu-adapter-grpc/src/local.rs:1688",
-        "crates/fireemu-adapter-grpc/src/local.rs:1445",
+        "crates/fireemu-adapter-grpc/src/local.rs:1884",
+        "crates/fireemu-adapter-grpc/src/local.rs:1453",
         "crates/fireemu-core-types/src/ids.rs:183"
       ],
       "class": "local-safety-extension",
@@ -971,7 +971,7 @@
     {
       "citations": [
         "crates/fireemu-adapter-grpc/src/rest/admin_fields.rs:536",
-        "crates/fireemu/src/control.rs:148",
+        "crates/fireemu/src/control.rs:209",
         "crates/fireemu-core-firestore/src/index.rs:235"
       ],
       "class": "data-plane-contract",

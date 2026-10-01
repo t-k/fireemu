@@ -8,6 +8,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use fireemu_core_auth::jwt::TokenAcceptance;
 use fireemu_core_auth::mfa::TotpPolicy;
+use fireemu_core_auth::mfa_config::MfaProjectConfig;
 use fireemu_core_firestore::index::IndexValidationPolicy;
 use fireemu_core_pubsub::subscription::MAX_PUSH_MINIMUM_REDELIVERY_INTERVAL_MILLIS;
 use fireemu_core_types::edition::{FirestoreApiMode, FirestoreEdition};
@@ -1027,6 +1028,19 @@ pub struct RuntimeConfig {
     /// fireemu-only TOTP policy. Absence preserves the official Auth emulator's rejection
     /// of TOTP enrollment; declaring `auth.totp` explicitly enables the extension.
     pub auth_totp: Option<TotpPolicy>,
+    /// The project's initial multi-factor configuration (`auth.mfa`, the Identity Platform
+    /// `Config.mfa` shape), when the file declares one. It is the project's configuration at
+    /// start, and a control-plane reset returns to it. Absent, a project starts with multi-factor
+    /// off, as a new production project does.
+    pub auth_mfa: Option<MfaProjectConfig>,
+    /// The initial authorized domains; a declared list replaces defaults and is restored on reset.
+    pub auth_authorized_domains: Option<Vec<String>>,
+    /// `auth.multiTenant.allowTenants`: the default project's multi-tenancy switch when the file
+    /// declares one. Absent, the project starts with it unset, as a new production project does.
+    pub auth_multi_tenant_allow_tenants: Option<bool>,
+    /// `auth.tenants[]`: the default project's tenants, each an Admin v2 Tenant document with its
+    /// `tenantId`, already validated by the code the Admin create route reads a document with.
+    pub auth_tenants: Vec<Value>,
     /// Whether the Functions blocking Auth bridge may receive raw inbound `IdP` credentials.
     /// This is disabled by default because those values are sensitive and are not needed by
     /// ordinary blocking handlers.
@@ -1041,6 +1055,8 @@ pub struct RuntimeConfig {
     pub auth_improved_email_privacy_explicit: bool,
     /// `auth.signIn`'s providers.
     pub auth_sign_in: AuthSignInSettings,
+    /// Declared custom provider resources, validated by the existing Admin create path.
+    pub auth_provider_seeds: fireemu_core_auth::store::ProviderConfigSeeds,
     /// `auth.logActionCodes`: print every email action link and SMS code to the daemon's
     /// standard output as the official Auth emulator does, on by default. `false` keeps the
     /// codes off the console; they stay readable from the emulator inspection routes.
@@ -1350,10 +1366,15 @@ impl Default for RuntimeConfig {
             auth_project: "demo-app".to_owned(),
             auth_project_numbers: BTreeMap::new(),
             auth_totp: None,
+            auth_mfa: None,
+            auth_authorized_domains: None,
+            auth_multi_tenant_allow_tenants: None,
+            auth_tenants: Vec::new(),
             auth_forward_inbound_credentials: false,
             auth_improved_email_privacy: true,
             auth_improved_email_privacy_explicit: false,
             auth_sign_in: AuthSignInSettings::default(),
+            auth_provider_seeds: fireemu_core_auth::store::ProviderConfigSeeds::default(),
             auth_log_action_codes: true,
             auth_password_policy: None,
             auth_password_policy_overrides: Vec::new(),
@@ -1421,14 +1442,19 @@ impl Default for RuntimeConfig {
 }
 
 /// The keys of the `auth` section (spec/config/fireemu.schema.json).
-pub(crate) const AUTH_KEYS: [&str; 19] = [
+pub(crate) const AUTH_KEYS: [&str; 24] = [
     "enabled",
     "apiKeys",
     "projectIssuer",
     "idTokenSigning",
     "customTokenSigners",
     "idpSigners",
+    "providers",
     "totp",
+    "mfa",
+    "authorizedDomains",
+    "multiTenant",
+    "tenants",
     "secretMaterialization",
     "forwardInboundCredentials",
     "improvedEmailPrivacy",
@@ -1775,6 +1801,102 @@ fn emulator_addr(entry: &Value, name: &str, current: &str) -> Result<String, Con
         }
     };
     Ok(format!("{host}:{port}"))
+}
+
+impl RuntimeConfig {
+    /// The warning a strict configuration earns when `auth.totp` is declared and the project's
+    /// multi-factor configuration does not enable TOTP: production enables TOTP only through
+    /// that configuration, so `auth.totp` alone enables nothing under the strict profile.
+    #[must_use]
+    pub fn auth_totp_warning(&self) -> Option<&'static str> {
+        (self.profile == CompatibilityProfile::Strict
+            && self.auth_totp.is_some()
+            && !self
+                .auth_mfa
+                .as_ref()
+                .is_some_and(MfaProjectConfig::totp_enabled))
+        .then_some(
+            "auth.totp does not enable TOTP under the strict profile (production enables it only through the project's MFA config); declare it with auth.mfa, for example {\"state\": \"ENABLED\", \"providerConfigs\": [{\"state\": \"ENABLED\", \"totpProviderConfig\": {}}]}",
+        )
+    }
+
+    /// The default project's declared multi-tenancy switch and tenants, ready to apply: at start,
+    /// and again after a default-scope reset. Each tenant is stamped with the clock's start.
+    ///
+    /// # Errors
+    /// The message of the refusal; none for a configuration that was read, which validated it.
+    pub fn tenant_seeding(
+        &self,
+    ) -> Result<fireemu_adapter_http::identity_toolkit::TenantSeeding, String> {
+        let seeds = fireemu_adapter_http::identity_toolkit::prepare_tenant_seeds(
+            &self.auth_tenants,
+            self.profile == CompatibilityProfile::Emulator,
+            self.clock_start.to_rfc3339().ok().as_deref(),
+        )?;
+        Ok(fireemu_adapter_http::identity_toolkit::TenantSeeding::new(
+            self.auth_multi_tenant_allow_tenants,
+            seeds,
+        ))
+    }
+}
+
+impl RuntimeConfig {
+    /// `auth.multiTenant` and `auth.tenants`: the multi-tenancy switch and the tenants of the
+    /// default project and of every session project. A tenant document is read by the code the
+    /// Admin create route reads one with, under this file's profile: exactly as the route reads it
+    /// under the strict profile, and under the emulator profile with production's checks added
+    /// (an unknown member, a missing or invalid display name and the id shape are refused there
+    /// too). The strict profile creates tenants only in a project that allows them, so declaring
+    /// tenants there without `auth.multiTenant.allowTenants: true` is refused at load.
+    fn parse_auth_tenants(
+        auth: &serde_json::Map<String, Value>,
+        cfg: &mut Self,
+    ) -> Result<(), ConfigError> {
+        match auth.get("multiTenant") {
+            None | Some(Value::Null) => {}
+            Some(Value::Object(members)) => {
+                for (key, value) in members {
+                    if key != "allowTenants" {
+                        return Err(ConfigError(format!(
+                            "auth.multiTenant: unknown key {key:?}"
+                        )));
+                    }
+                    cfg.auth_multi_tenant_allow_tenants =
+                        Some(value.as_bool().ok_or_else(|| {
+                            ConfigError(
+                                "auth.multiTenant.allowTenants must be a boolean".to_owned(),
+                            )
+                        })?);
+                }
+            }
+            Some(_) => {
+                return Err(ConfigError("auth.multiTenant must be an object".to_owned()));
+            }
+        }
+        match auth.get("tenants") {
+            None | Some(Value::Null) => {}
+            Some(Value::Array(documents)) => {
+                let emulator = cfg.profile == CompatibilityProfile::Emulator;
+                fireemu_adapter_http::identity_toolkit::prepare_tenant_seeds(
+                    documents, emulator, None,
+                )
+                .map_err(ConfigError)?;
+                if !emulator
+                    && !documents.is_empty()
+                    && cfg.auth_multi_tenant_allow_tenants != Some(true)
+                {
+                    return Err(ConfigError(
+                        "auth.tenants needs auth.multiTenant.allowTenants: true under the strict \
+                         profile: production creates tenants only in a project that allows them"
+                            .to_owned(),
+                    ));
+                }
+                cfg.auth_tenants.clone_from(documents);
+            }
+            Some(_) => return Err(ConfigError("auth.tenants must be an array".to_owned())),
+        }
+        Ok(())
+    }
 }
 
 impl RuntimeConfig {
@@ -3479,6 +3601,14 @@ impl RuntimeConfig {
                     .map_err(|e| ConfigError(format!("auth.idpSigners: {e}")))?;
                 cfg.auth_idp_signers = Some(signers.clone());
             }
+            if let Some(providers) = auth.get("providers") {
+                cfg.auth_provider_seeds =
+                    fireemu_adapter_http::identity_toolkit::provider_config_seeds(
+                        providers,
+                        cfg.profile == CompatibilityProfile::Strict,
+                    )
+                    .map_err(ConfigError)?;
+            }
             if let Some(forward) = auth.get("forwardInboundCredentials") {
                 cfg.auth_forward_inbound_credentials = forward.as_bool().ok_or_else(|| {
                     ConfigError("auth.forwardInboundCredentials must be a boolean".to_owned())
@@ -3698,6 +3828,39 @@ impl RuntimeConfig {
                     ..defaults
                 });
             }
+            // The project's initial multi-factor configuration is validated by the one validator
+            // the Admin API's config update uses, so a file accepts and refuses what production does.
+            if let Some(mfa) = auth.get("mfa") {
+                cfg.auth_mfa = match mfa {
+                    Value::Null => None,
+                    value => Some(
+                        fireemu_adapter_http::identity_toolkit::mfa_config_from_json(value)
+                            .map_err(|refusal| {
+                                ConfigError(format!("auth.mfa: {}", refusal.message()))
+                            })?,
+                    ),
+                };
+            }
+            if let Some(value) = auth
+                .get("authorizedDomains")
+                .filter(|value| !value.is_null())
+            {
+                cfg.auth_authorized_domains = Some(
+                    fireemu_adapter_http::identity_toolkit::authorized_domains_from_json(
+                        value,
+                        cfg.profile == CompatibilityProfile::Strict,
+                    )
+                    .map_err(|refusal| {
+                        ConfigError(format!(
+                            "auth.authorizedDomains: {}",
+                            refusal.body["error"]["message"]
+                                .as_str()
+                                .unwrap_or("INVALID_ARGUMENT"),
+                        ))
+                    })?,
+                );
+            }
+            Self::parse_auth_tenants(auth, &mut cfg)?;
         }
         if let Some(app_check) = obj.get("appCheck") {
             let app_check = app_check
@@ -4319,6 +4482,32 @@ mod tests {
         }))
         .unwrap();
         assert_eq!(parsed.app_check, AppCheckConfig::disabled());
+    }
+
+    #[test]
+    fn every_canonical_example_loads_and_the_tenants_example_declares_its_tenants() {
+        let dir =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../spec/config/examples");
+        let mut loaded = 0;
+        for entry in std::fs::read_dir(&dir).expect("the examples are readable") {
+            let path = entry.unwrap().path();
+            if path.extension().is_none_or(|e| e != "json") {
+                continue;
+            }
+            let json: Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap())
+                .unwrap_or_else(|e| panic!("{}: {e}", path.display()));
+            RuntimeConfig::from_json(&json)
+                .unwrap_or_else(|e| panic!("{} must load: {e:?}", path.display()));
+            loaded += 1;
+        }
+        assert!(loaded >= 7, "the corpus must not silently shrink");
+        let json: Value =
+            serde_json::from_str(&std::fs::read_to_string(dir.join("auth-tenants.json")).unwrap())
+                .unwrap();
+        let cfg = RuntimeConfig::from_json(&json).unwrap();
+        assert_eq!(cfg.auth_multi_tenant_allow_tenants, Some(true));
+        assert_eq!(cfg.auth_tenants.len(), 2);
+        assert!(!cfg.tenant_seeding().unwrap().is_empty());
     }
 
     #[test]
@@ -5297,6 +5486,109 @@ mod tests {
     }
 
     #[test]
+    fn auth_authorized_domains_normalizes_as_admin_and_uses_the_selected_profile() {
+        assert_eq!(parse(&json!({})).unwrap().auth_authorized_domains, None);
+        assert_eq!(
+            parse(&json!({"authorizedDomains": null}))
+                .unwrap()
+                .auth_authorized_domains,
+            None
+        );
+        assert_eq!(
+            parse(&json!({"authorizedDomains": []}))
+                .unwrap()
+                .auth_authorized_domains,
+            Some(vec![])
+        );
+        assert_eq!(
+            parse(&json!({"authorizedDomains": [1, true, null, "UPPER.test", "UPPER.test"]}))
+                .unwrap()
+                .auth_authorized_domains,
+            Some(vec![
+                "1".to_owned(),
+                "true".to_owned(),
+                "UPPER.test".to_owned(),
+                "UPPER.test".to_owned()
+            ])
+        );
+        for profile in ["strict", "emulator"] {
+            let build = |domains: Value| {
+                RuntimeConfig::from_json(
+                    &json!({"schemaVersion": 1, "profile": profile, "auth": {"authorizedDomains": domains}}),
+                )
+            };
+            let result = build(json!(["https://app.test", "*.test"]));
+            if profile == "strict" {
+                assert!(result
+                    .unwrap_err()
+                    .0
+                    .contains("auth.authorizedDomains: INVALID_AUTHORIZED_DOMAIN"));
+            } else {
+                assert_eq!(
+                    result.unwrap().auth_authorized_domains,
+                    Some(vec!["https://app.test".to_owned(), "*.test".to_owned()])
+                );
+            }
+            assert_eq!(build(json!([""])).unwrap_err().0, "auth.authorizedDomains: INVALID_AUTHORIZED_DOMAIN : An authorized domain is empty.");
+            assert!(build(json!([{}]))
+                .unwrap_err()
+                .0
+                .contains("config.authorized_domains[0]"));
+        }
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../spec/config");
+        for directory in ["examples", "invalid-examples"] {
+            for entry in std::fs::read_dir(root.join(directory)).unwrap() {
+                let path = entry.unwrap().path();
+                if path
+                    .file_name()
+                    .unwrap()
+                    .to_string_lossy()
+                    .starts_with("auth-authorized-domains")
+                {
+                    let config: Value =
+                        serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+                    assert_eq!(
+                        RuntimeConfig::from_json(&config).is_ok(),
+                        directory == "examples",
+                        "{}",
+                        path.display()
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn auth_authorized_domains_accepts_replacement_lists_and_rejects_bad_shapes() {
+        for domains in [
+            json!(null),
+            json!([]),
+            json!(["localhost", "app.test"]),
+            json!(["UPPER.test", "UPPER.test", 1, true, null]),
+        ] {
+            assert!(
+                parse(&json!({"authorizedDomains": domains})).is_ok(),
+                "{domains}"
+            );
+        }
+        for domains in [
+            json!(false),
+            json!("app.test"),
+            json!({}),
+            json!([{}]),
+            json!([[]]),
+            json!([""]),
+            json!(["https://app.test"]),
+        ] {
+            let error = parse(&json!({"authorizedDomains": domains})).unwrap_err();
+            assert!(
+                error.0.starts_with("auth.authorizedDomains"),
+                "{domains}: {error:?}"
+            );
+        }
+    }
+
+    #[test]
     fn totp_is_an_explicit_auth_extension_with_strict_bounds() {
         assert!(parse(&json!({})).unwrap().auth_totp.is_none());
 
@@ -5331,6 +5623,303 @@ mod tests {
             );
         }
     }
+    fn acme_tenant() -> Value {
+        json!({
+            "tenantId": "acme-x7k2q",
+            "displayName": "acme",
+            "mfaConfig": {"state": "ENABLED", "enabledProviders": ["PHONE_SMS"]}
+        })
+    }
+
+    #[test]
+    fn auth_tenants_declare_the_default_projects_tenants_and_the_multi_tenancy_switch() {
+        let none = parse(&json!({})).unwrap();
+        assert_eq!(none.auth_multi_tenant_allow_tenants, None);
+        assert!(none.auth_tenants.is_empty());
+        // `null` declares nothing, as an absent key does.
+        let nulls = parse(&json!({"multiTenant": null, "tenants": null})).unwrap();
+        assert_eq!(nulls.auth_multi_tenant_allow_tenants, None);
+        assert!(nulls.auth_tenants.is_empty());
+        let configured = parse(&json!({
+            "multiTenant": {"allowTenants": true},
+            "tenants": [acme_tenant()]
+        }))
+        .unwrap();
+        assert_eq!(configured.auth_multi_tenant_allow_tenants, Some(true));
+        assert_eq!(configured.auth_tenants, [acme_tenant()]);
+        // A declared "off" is a declaration; an empty object declares nothing.
+        assert_eq!(
+            parse(&json!({"multiTenant": {"allowTenants": false}}))
+                .unwrap()
+                .auth_multi_tenant_allow_tenants,
+            Some(false)
+        );
+        assert_eq!(
+            parse(&json!({"multiTenant": {}}))
+                .unwrap()
+                .auth_multi_tenant_allow_tenants,
+            None
+        );
+    }
+
+    #[test]
+    fn the_emulator_profile_takes_tenants_without_the_switch_and_strict_needs_it() {
+        let file = |profile: &str, auth: &Value| {
+            RuntimeConfig::from_json(&json!({"schemaVersion": 1, "profile": profile, "auth": auth}))
+        };
+        let tenants = json!({"tenants": [acme_tenant()]});
+        let error = file("strict", &tenants).unwrap_err();
+        assert!(
+            error.0.contains("auth.multiTenant.allowTenants"),
+            "{error:?}"
+        );
+        assert!(error.0.contains("auth.tenants"), "{error:?}");
+        for refused in [
+            json!({"multiTenant": {"allowTenants": false}, "tenants": [acme_tenant()]}),
+            json!({"multiTenant": {}, "tenants": [acme_tenant()]}),
+        ] {
+            assert!(file("strict", &refused).is_err(), "{refused}");
+        }
+        assert!(file("emulator", &tenants).is_ok());
+        assert!(file(
+            "strict",
+            &json!({"multiTenant": {"allowTenants": true}, "tenants": [acme_tenant()]})
+        )
+        .is_ok());
+        // No tenants declared: nothing to require.
+        assert!(file("strict", &json!({"tenants": []})).is_ok());
+    }
+
+    #[test]
+    fn a_declared_tenant_follows_the_files_profile_for_the_projects_settings() {
+        use fireemu_core_auth::mfa::TotpPolicy;
+        use fireemu_core_auth::store::{AuthRegistry, AuthStore};
+        use fireemu_core_types::determinism::SplitMix64;
+        use std::sync::{Arc, Mutex};
+
+        // The emulator profile's tenant reads the project's duplicate-email setting, as the
+        // official emulator's does; the strict profile's tenant has its own, off, as production's.
+        for (profile, follows_the_project) in [("emulator", true), ("strict", false)] {
+            let cfg = RuntimeConfig::from_json(&json!({
+                "schemaVersion": 1,
+                "profile": profile,
+                "auth": {"multiTenant": {"allowTenants": true}, "tenants": [acme_tenant()]}
+            }))
+            .unwrap();
+            let project = Arc::new(Mutex::new(AuthStore::new(
+                "demo-app",
+                SplitMix64::new(1),
+                TotpPolicy::default(),
+            )));
+            {
+                let mut store = project.lock().unwrap();
+                let mut config = store.config();
+                config.allow_duplicate_emails = true;
+                store.set_config(config);
+            }
+            let registry = AuthRegistry::new("demo-app", project);
+            cfg.tenant_seeding()
+                .unwrap()
+                .apply(&registry, "demo-app")
+                .unwrap();
+            let tenant = registry.tenant_store("demo-app", "acme-x7k2q").unwrap();
+            assert_eq!(
+                tenant.lock().unwrap().config().allow_duplicate_emails,
+                follows_the_project,
+                "{profile}"
+            );
+        }
+    }
+
+    #[test]
+    fn auth_tenants_are_refused_as_the_admin_create_refuses_them_naming_the_key() {
+        let with = |member: &str, value: Value| {
+            let mut doc = acme_tenant();
+            doc[member] = value;
+            doc
+        };
+        for (invalid, expected) in [
+            (json!({"tenants": {}}), "auth.tenants must be an array"),
+            (json!({"tenants": "acme"}), "auth.tenants must be an array"),
+            (
+                json!({"multiTenant": true}),
+                "auth.multiTenant must be an object",
+            ),
+            (
+                json!({"multiTenant": {"allowTenants": "yes"}}),
+                "auth.multiTenant.allowTenants",
+            ),
+            (json!({"multiTenant": {"other": true}}), "other"),
+            (json!({"tenants": ["acme-x7k2q"]}), "auth.tenants[0]:"),
+            (
+                json!({"tenants": [with("mfaConfig", json!({"state": "ON"}))]}),
+                "config.mfa.state",
+            ),
+            (
+                json!({"tenants": [with("tenantId", json!("wrong"))]}),
+                "tenantId",
+            ),
+            (
+                json!({"tenants": [acme_tenant(), acme_tenant()]}),
+                "auth.tenants[1]:",
+            ),
+        ] {
+            for profile in ["strict", "emulator"] {
+                let mut auth = invalid.clone();
+                if profile == "strict" && auth.get("tenants").is_some() {
+                    auth["multiTenant"] = json!({"allowTenants": true});
+                }
+                let error = RuntimeConfig::from_json(
+                    &json!({"schemaVersion": 1, "profile": profile, "auth": auth}),
+                )
+                .expect_err(&format!("accepted {invalid}"));
+                assert!(error.0.starts_with("auth."), "{invalid}: {error:?}");
+                assert!(error.0.contains(expected), "{invalid}: {error:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn auth_mfa_declares_the_projects_initial_multi_factor_config() {
+        use fireemu_core_auth::mfa_config::{MfaConfigState, MfaProjectConfig, TotpProviderConfig};
+
+        assert_eq!(parse(&json!({})).unwrap().auth_mfa, None);
+        // `null` declares nothing, as an absent key does.
+        assert_eq!(parse(&json!({"mfa": null})).unwrap().auth_mfa, None);
+        let configured = parse(&json!({
+            "mfa": {
+                "state": "ENABLED",
+                "enabledProviders": ["PHONE_SMS"],
+                "providerConfigs": [{
+                    "state": "ENABLED",
+                    "totpProviderConfig": {"adjacentIntervals": 3}
+                }]
+            }
+        }))
+        .unwrap()
+        .auth_mfa;
+        assert_eq!(
+            configured,
+            Some(MfaProjectConfig {
+                state: MfaConfigState::Enabled,
+                phone_sms: true,
+                totp: Some(TotpProviderConfig {
+                    state: MfaConfigState::Enabled,
+                    adjacent_intervals: Some(3),
+                }),
+            })
+        );
+        // A declared "off" is a declaration: a reset returns to it.
+        assert_eq!(
+            parse(&json!({"mfa": {"state": "DISABLED"}}))
+                .unwrap()
+                .auth_mfa,
+            Some(MfaProjectConfig::default())
+        );
+        // The Admin API's own rules: MANDATORY is accepted, an entry without totpProviderConfig
+        // is dropped, and 0 is a window.
+        let mandatory = parse(&json!({"mfa": {
+            "state": "MANDATORY",
+            "providerConfigs": [{"state": "ENABLED"}, {"state": "ENABLED", "totpProviderConfig": {}}]
+        }}))
+        .unwrap()
+        .auth_mfa
+        .unwrap();
+        assert_eq!(mandatory.state, MfaConfigState::Mandatory);
+        assert!(mandatory.totp_enabled());
+        assert_eq!(mandatory.totp_window(), Some(0));
+    }
+
+    #[test]
+    fn strict_auth_totp_without_an_enabling_mfa_config_earns_a_warning_naming_the_key() {
+        let build = |profile: &str, auth: &Value| {
+            RuntimeConfig::from_json(&json!({
+                "schemaVersion": 1,
+                "profile": profile,
+                "auth": auth,
+            }))
+            .unwrap()
+        };
+        let totp_on = json!({"state": "ENABLED", "providerConfigs": [{"state": "ENABLED", "totpProviderConfig": {}}]});
+        for (profile, auth, warns) in [
+            ("strict", json!({"totp": {}}), true),
+            // Enabled through the project config: nothing to warn about.
+            ("strict", json!({"totp": {}, "mfa": totp_on}), false),
+            // A declared config that leaves TOTP off does not enable it.
+            (
+                "strict",
+                json!({"totp": {}, "mfa": {"state": "DISABLED"}}),
+                true,
+            ),
+            (
+                "strict",
+                json!({"totp": {}, "mfa": {"state": "ENABLED", "enabledProviders": ["PHONE_SMS"]}}),
+                true,
+            ),
+            (
+                "strict",
+                json!({"totp": {}, "mfa": {"state": "DISABLED", "providerConfigs": [{"state": "ENABLED", "totpProviderConfig": {}}]}}),
+                true,
+            ),
+            (
+                "strict",
+                json!({"totp": {}, "mfa": {"state": "ENABLED", "providerConfigs": [{"state": "DISABLED", "totpProviderConfig": {}}]}}),
+                true,
+            ),
+            // No auth.totp: nothing was asked for. The emulator profile keeps auth.totp working.
+            ("strict", json!({}), false),
+            ("strict", json!({"mfa": totp_on}), false),
+            ("emulator", json!({"totp": {}}), false),
+        ] {
+            let warning = build(profile, &auth).auth_totp_warning();
+            assert_eq!(warning.is_some(), warns, "{profile} {auth}: {warning:?}");
+            if let Some(text) = warning {
+                assert!(text.starts_with("auth.totp does not enable TOTP under the strict profile"));
+                assert!(text.contains("auth.mfa"));
+            }
+        }
+    }
+
+    #[test]
+    fn auth_mfa_is_refused_as_the_admin_api_refuses_it_naming_the_key() {
+        for (invalid, expected) in [
+            (json!({"mfa": true}), "auth.mfa:"),
+            (json!({"mfa": "ENABLED"}), "auth.mfa:"),
+            (json!({"mfa": {"state": "ON"}}), "config.mfa.state"),
+            (json!({"mfa": {"state": 1}}), "auth.mfa:"),
+            (json!({"mfa": {"unknown": 1}}), "auth.mfa:"),
+            (
+                json!({"mfa": {"enabledProviders": ["SMS_TEXT"]}}),
+                "config.mfa.enabled_providers[0]",
+            ),
+            (
+                json!({"mfa": {"enabledProviders": "PHONE_SMS"}}),
+                "auth.mfa:",
+            ),
+            (json!({"mfa": {"providerConfigs": {}}}), "auth.mfa:"),
+            (
+                json!({"mfa": {"providerConfigs": [{"state": "ENABLED", "totpProviderConfig": {"adjacentIntervals": 11}}]}}),
+                "between 0 and 10",
+            ),
+            (
+                json!({"mfa": {"providerConfigs": [{"state": "ENABLED", "totpProviderConfig": {"adjacentIntervals": -1}}]}}),
+                "between 0 and 10",
+            ),
+            (
+                json!({"mfa": {"providerConfigs": [{"state": "ENABLED", "totpProviderConfig": {"other": 1}}]}}),
+                "auth.mfa:",
+            ),
+            (
+                json!({"mfa": {"providerConfigs": [{"state": "ENABLED", "extra": 1}]}}),
+                "auth.mfa:",
+            ),
+        ] {
+            let error = parse(&invalid).expect_err(&format!("accepted {invalid}"));
+            assert!(error.0.starts_with("auth.mfa:"), "{invalid}: {error:?}");
+            assert!(error.0.contains(expected), "{invalid}: {error:?}");
+        }
+    }
+
     #[test]
     fn auth_project_numbers_are_explicit_validated_namespace_mappings() {
         let cfg = RuntimeConfig::from_json(&json!({"schemaVersion":1,"daemon":{"authProjectNumbers":{"demo-one":"111111111111","demo-two":"222222222222","demo-max":"18446744073709551615"}}})).unwrap();
@@ -5640,5 +6229,52 @@ mod tests {
             .unwrap()
             .auth_signup_quota
             .is_none());
+    }
+}
+
+#[cfg(test)]
+mod provider_seed_tests {
+    use super::RuntimeConfig;
+    use serde_json::{json, Value};
+    #[test]
+    fn auth_provider_seeds_canonical_null_empty_and_strict_refusals() {
+        for value in [Value::Null, json!({}), json!({"oidc":null})] {
+            let cfg =
+                RuntimeConfig::from_json(&json!({"schemaVersion":1,"auth":{"providers":value}}))
+                    .unwrap();
+            assert!(cfg.auth_provider_seeds.oidc.is_none());
+        }
+        let cfg =
+            RuntimeConfig::from_json(&json!({"schemaVersion":1,"auth":{"providers":{"oidc":[]}}}))
+                .unwrap();
+        assert_eq!(cfg.auth_provider_seeds.oidc, Some(vec![]));
+        let error=RuntimeConfig::from_json(&json!({"schemaVersion":1,"profile":"strict","auth":{"providers":{"oidc":[{"name":"oidc.test","issuer":"https://issuer.test","clientSecret":"NO-LOG"}]}}})).unwrap_err().to_string();
+        assert!(error.contains("auth.providers.oidc[0]"));
+        assert!(error.contains("MISSING_OAUTH_CLIENT_ID"));
+        assert!(!error.contains("NO-LOG"));
+    }
+    #[test]
+    fn auth_provider_seeds_schema_examples_match_canonical_loader() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../spec/config");
+        for (directory, valid) in [("examples", true), ("invalid-examples", false)] {
+            for path in std::fs::read_dir(root.join(directory))
+                .unwrap()
+                .map(|entry| entry.unwrap().path())
+                .filter(|path| {
+                    path.file_name()
+                        .unwrap()
+                        .to_string_lossy()
+                        .starts_with("auth-providers-")
+                })
+            {
+                let value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+                assert_eq!(
+                    RuntimeConfig::from_json(&value).is_ok(),
+                    valid,
+                    "{}",
+                    path.display()
+                );
+            }
+        }
     }
 }

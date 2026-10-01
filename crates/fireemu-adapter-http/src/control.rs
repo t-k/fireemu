@@ -723,11 +723,11 @@ fn storage_rules_route(
             };
             match registry.replace_source(source) {
                 Ok(()) => ok(json!({"loaded": true})),
-                Err(reason) if reason.contains("line ") || reason.contains("column ") => error(
+                Err(crate::storage::StorageRulesSourceError::Invalid(reason)) => error(
                     400,
                     &format!("INVALID_ARGUMENT : rules do not parse: {reason}"),
                 ),
-                Err(_) => error(500, "INTERNAL"),
+                Err(crate::storage::StorageRulesSourceError::Internal(_)) => error(500, "INTERNAL"),
             }
         }
         _ => match registry.clear() {

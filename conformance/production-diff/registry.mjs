@@ -155,8 +155,7 @@ export const G0_CASE = Object.freeze({
   title: "Shared G0 BatchWrite runtime recomparison",
   referenceCommit: "a35f85b464743d62344a3a58763d382b5b3838ce",
   productionResultPath: "G0_PRIVATE_PRODUCTION_RESULT",
-  productionResultSha256:
-    "47672f4e3162b4a0ddfb7baaab622007602aeed6c1fa3d6e5e84034bcbb87772",
+  productionResultSha256: "47672f4e3162b4a0ddfb7baaab622007602aeed6c1fa3d6e5e84034bcbb87772",
   nonce: "68012694f81df504600f8e67301410c6",
   project: "fireemu-35fe6",
   profile: "strict",
@@ -189,9 +188,13 @@ export const TRANSFORMS_CASE = Object.freeze({
   // Raw responses for REQUEST_TIME precision/readback diagnostics only. The
   // historical normalized comparison and its evidence claims are unchanged.
   rawTimestampResponseSteps: Object.freeze([
-    "server-timestamp-and-increments", "read-after-increments", "read-after-max-min",
-    "read-after-array-transforms", "transform-only-write-creates",
-    "read-transform-created", "read-set-and-transform",
+    "server-timestamp-and-increments",
+    "read-after-increments",
+    "read-after-max-min",
+    "read-after-array-transforms",
+    "transform-only-write-creates",
+    "read-transform-created",
+    "read-set-and-transform",
   ]),
   stepIds: Object.freeze([
     "server-timestamp-and-increments",
@@ -213,9 +216,7 @@ export const TRANSFORMS_CASE = Object.freeze({
     "two-transforms-on-one-field-in-one-write",
     "read-dup",
   ]),
-  ownedDocuments: Object.freeze([
-    "tf/doc", "tf/created", "tf/none", "tf/sat", "tf/nan", "tf/dup",
-  ]),
+  ownedDocuments: Object.freeze(["tf/doc", "tf/created", "tf/none", "tf/sat", "tf/nan", "tf/dup"]),
   compared: Object.freeze([
     "HTTP status and canonical error code for all 18 historical steps",
     "Normalized successful response bodies, including ordered transformResults",
@@ -277,11 +278,17 @@ export const PRECONDITIONS_CASE = Object.freeze({
     "create-document-with-generated-id",
     "delete-document",
     "delete-document-again",
-    "delete-with-exists-precondition"
-]),
+    "delete-with-exists-precondition",
+  ]),
   ownedDocuments: Object.freeze([
-    "wr/existing", "wr/new", "wr/none", "wr/masked-new",
-    "wr/atomic-1", "wr/twice", "wr/patched", "wr/created",
+    "wr/existing",
+    "wr/new",
+    "wr/none",
+    "wr/masked-new",
+    "wr/atomic-1",
+    "wr/twice",
+    "wr/patched",
+    "wr/created",
   ]),
   generatedDocumentSteps: Object.freeze({ "create-document-with-generated-id": "wr" }),
   compared: Object.freeze([
@@ -334,7 +341,11 @@ export const PROJECTION_CASE = Object.freeze({
     "batch-get-mixed",
   ]),
   ownedDocuments: Object.freeze([
-    "prj/a", "prj/b", "prj/missing-parent/sub/x", "prj/missing-parent", "prj/none",
+    "prj/a",
+    "prj/b",
+    "prj/missing-parent/sub/x",
+    "prj/missing-parent",
+    "prj/none",
   ]),
   compared: Object.freeze([
     "All 18 original status/canonical-code/normalized-success-body decisions",
@@ -394,8 +405,8 @@ export const AGGREGATIONS_CASE = Object.freeze({
     "count-beside-an-avg-over-a-missing-field",
     "duplicate-alias",
     "no-aggregations",
-    "sum-on-name"
-]),
+    "sum-on-name",
+  ]),
   ownedDocuments: Object.freeze(["agg/a", "agg/b", "agg/c", "agg/d", "agg/e", "agg/f"]),
   compared: Object.freeze([
     "All 23 original HTTP-status/canonical-code/normalized-response-body decisions",
@@ -414,7 +425,15 @@ export const AGGREGATIONS_CASE = Object.freeze({
   ]),
 });
 
-export const CASES = Object.freeze([CASE, COMMIT_TRANSFORM_CASE, G0_CASE, TRANSFORMS_CASE, PRECONDITIONS_CASE, PROJECTION_CASE, AGGREGATIONS_CASE]);
+export const CASES = Object.freeze([
+  CASE,
+  COMMIT_TRANSFORM_CASE,
+  G0_CASE,
+  TRANSFORMS_CASE,
+  PRECONDITIONS_CASE,
+  PROJECTION_CASE,
+  AGGREGATIONS_CASE,
+]);
 
 export function selectCase(id = CASE.id) {
   const entry = CASES.find((c) => c.id === id);

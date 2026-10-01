@@ -2585,6 +2585,110 @@ fn manifest_json_requires_generation_for_second_generation_capacity_options() {
     assert_eq!(second.functions[1].effective_concurrency(), 1);
 }
 
+/// Production's Firestore create event, recorded 2026-09-30 by an exploratory probe of a Gen1 and
+/// a Gen2 handler on one document (`fe_events_primary/<id>`): a UUID `id`, the document's
+/// `createTime` as the event `time` with a six-digit fraction, the document under `subject`,
+/// and the Gen2 type. Only the identity and time forms are asserted here; the JSON keeps the
+/// document resource name as `source` (see the divergence recorded in the contract).
+#[test]
+fn firestore_events_carry_the_production_id_and_time_forms() {
+    let after = doc("fe_events_primary/fe011probe0001", 1);
+    let time = LogicalInstant::from_nanos(1_790_769_798_846_431_000);
+    let event = |seed: &str| {
+        firestore_event(
+            seed,
+            "demo-project",
+            fireemu_core_types::ids::DatabaseId::DEFAULT,
+            "us-central1",
+            "fe_events_primary/fe011probe0001",
+            DocumentEvent::Created,
+            None,
+            Some(&after),
+            time,
+            None,
+        )
+    };
+    let first = event("42-1");
+    assert_eq!(first["time"], "2026-09-30T12:03:18.846431Z");
+    assert_eq!(
+        first["subject"],
+        "documents/fe_events_primary/fe011probe0001"
+    );
+    assert_eq!(first["type"], "google.cloud.firestore.document.v1.created");
+    let id = first["id"].as_str().unwrap();
+    let parts: Vec<&str> = id.split('-').collect();
+    assert_eq!(
+        parts.iter().map(|part| part.len()).collect::<Vec<_>>(),
+        [8, 4, 4, 4, 12],
+        "{id}"
+    );
+    assert!(id
+        .chars()
+        .all(|c| c == '-' || c.is_ascii_digit() || ('a'..='f').contains(&c)));
+    assert_eq!(&id[14..15], "4", "{id}");
+    assert_eq!(event("42-1")["id"], first["id"], "replay keeps the id");
+    assert_ne!(event("42-2")["id"], first["id"]);
+}
+
+/// The frames a production 1st and 2nd gen Firestore onCreate handler printed for one document
+/// create (recorded 2026-09-30). Each field of the `CloudEvent` the runtime builds for the same
+/// commit is compared with the recorded one; the `source` difference is a known divergence.
+#[test]
+fn a_firestore_create_event_matches_the_recorded_production_delivery() {
+    let fixture: serde_json::Value = serde_json::from_str(include_str!(
+        "fixtures/production-firestore-create-frames.json"
+    ))
+    .unwrap();
+    let gen1 = &fixture["gen1"];
+    let gen2 = &fixture["gen2"];
+    let time = LogicalInstant::from_nanos(i128::from(fixture["commitTimeNanos"].as_i64().unwrap()));
+    let mut after = doc("fe_events_primary/fe011probe0001", 1);
+    (after.create_time, after.update_time) = (time, time);
+    let event = firestore_event(
+        "42-1",
+        "demo-project",
+        fireemu_core_types::ids::DatabaseId::DEFAULT,
+        "us-central1",
+        "fe_events_primary/fe011probe0001",
+        DocumentEvent::Created,
+        None,
+        Some(&after),
+        time,
+        None,
+    );
+    // The fields production and the runtime agree on.
+    for key in ["type", "subject", "time", "specversion"] {
+        assert_eq!(event[key], gen2[key], "{key}");
+    }
+    assert_eq!(event["time"], gen1["context"]["timestamp"]);
+    assert_eq!(
+        event["subject"],
+        format!("documents/{}", gen1["data"]["path"].as_str().unwrap())
+    );
+    // The production create and update times are the commit time, printed as the event time is.
+    assert_eq!(event["data"]["value"]["createTime"], gen2["time"]);
+    assert_eq!(event["data"]["value"]["updateTime"], gen2["time"]);
+    // Production ids are random UUIDs; the recorded 1st gen id is the 2nd gen form plus `-0`.
+    let production_id = gen2["id"].as_str().unwrap();
+    let gen1_id = gen1["context"]["eventId"].as_str().unwrap();
+    assert!(gen1_id.ends_with("-0"), "{gen1_id}");
+    assert_eq!(gen1_id.split('-').count(), 6, "{gen1_id}");
+    let shape = |id: &str| -> Vec<usize> { id.split('-').map(str::len).collect() };
+    assert_eq!(shape(event["id"].as_str().unwrap()), shape(production_id));
+    let local_id = event["id"].as_str().unwrap();
+    assert_eq!(&local_id[14..15], &production_id[14..15], "version nibble");
+    // Known divergence (FN-CLAIM-EVENTS): production's `source` names the database, the local
+    // one the document, because the JSON path of firebase-functions reads the name from it.
+    assert_eq!(
+        gen2["source"],
+        "//firestore.googleapis.com/projects/demo-project/databases/(default)"
+    );
+    assert_eq!(
+        event["source"],
+        "projects/demo-project/databases/(default)/documents/fe_events_primary/fe011probe0001"
+    );
+}
+
 #[test]
 fn cloudevents_carry_the_shapes_the_sdk_decodes() {
     let before = doc("todos/t1", 1);

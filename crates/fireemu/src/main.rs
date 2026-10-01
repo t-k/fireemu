@@ -771,7 +771,8 @@ fn read_config_file(path: &Path) -> Result<(serde_json::Value, bool), CliError> 
                 let auth = json.get("auth")?;
                 config::AUTH_KEYS
                     .iter()
-                    .find(|key| auth.get(**key).is_some())
+                    // Firebase deployment configuration also uses auth.providers. Without schemaVersion it remains deployment data, never a Fireemu seed.
+                    .find(|key| **key != "providers" && auth.get(**key).is_some())
                     .map(|key| format!("auth.{key}"))
             });
         if let Some(key) = key {
@@ -1749,9 +1750,10 @@ fn start_index_reload_supervisor(path: String, database: String, backend: &Arc<L
                     continue;
                 }
             };
-            match control::parse_indexes(&path, &text) {
-                Ok(indexes) => {
+            match control::parse_index_file(&path, &text) {
+                Ok((indexes, ttl_policies)) => {
                     if backend.replace_database_indexes(&database, indexes) {
+                        backend.replace_shared_ttl_catalog(&database, ttl_policies);
                         observed_stamp = Some(stable_stamp);
                         observed_signature = Some(stable_signature);
                         eprintln!("note: reloaded Firestore indexes for {database} from {path}");
@@ -2096,11 +2098,22 @@ fn print_banner(
                 "  storage (HTTP):   {a}   FIREBASE_STORAGE_EMULATOR_HOST={a}   STORAGE_EMULATOR_HOST=http://{a}"
             );
             // A run with no ruleset denies every end-user request, as production's default
-            // rules do; say so, because the configuration that reaches it is an omission.
+            // rules do, except that the emulator profile gives a `demo-*` project the official
+            // emulator's default open rules; say so, because the configuration that reaches it
+            // is an omission. The banner names the default project's state: a bucket owned by
+            // another registered project is decided per request by that project's name.
             if cfg.storage_rules_file.is_none() && cfg.storage_rules_by_target.is_empty() {
-                println!(
-                    "  storage rules:    none loaded, so every end-user request is denied; set storage.rules in firebase.json (the owner credential and the JSON API are unaffected)"
-                );
+                if cfg.profile == config::CompatibilityProfile::Emulator
+                    && cfg.auth_project.starts_with("demo-")
+                {
+                    println!(
+                        "  storage rules:    none loaded, so the official emulator's open rules apply to this demo project and every request is allowed; set storage.rules in firebase.json to enforce rules"
+                    );
+                } else {
+                    println!(
+                        "  storage rules:    none loaded, so every end-user request is denied; set storage.rules in firebase.json (the owner credential and the JSON API are unaffected)"
+                    );
+                }
             }
         }
         None => println!("  storage:          not selected by --only (nothing is bound)"),
@@ -2566,6 +2579,9 @@ fn control_state(
             storage: storage.clone(),
             registry: registry.clone(),
             seed: cfg.seed,
+            tenant_seeding: cfg
+                .tenant_seeding()
+                .expect("the tenants were validated when the configuration was read"),
             app_check: app_check.clone(),
             pubsub: pubsub.clone(),
             pubsub_handle: pubsub_handle.clone(),
@@ -2786,34 +2802,56 @@ mod config_reload_tests {
         let dir = scratch("firebase-schema-compatibility");
         // Format detection is based on content, even when the filename says fireemu.
         let source = dir.join("fireemu.json");
+        let canonical = dir.join("canonical.json");
         std::fs::write(
-            &source,
-            serde_json::json!({
-                "$schema":"https://example.com/firebase.schema.json",
-                "emulators":{"auth":{"port":9199}},
-                "firestore":{"rules":"firestore.rules"},
-                "storage":{"rules":"storage.rules"},
-                "functions":{"source":"functions"},
-                "hosting":{"public":"dist"},
-                "auth":{"providers":{}},
-                "customMetadata":{"profile":"strict","auth":{"totp":{}}}
-            })
-            .to_string(),
+            &canonical,
+            r#"{"schemaVersion":1,"firebaseJson":"fireemu.json"}"#,
         )
         .unwrap();
-        for raw in [
-            RawOptions {
-                config_path: Some(source.clone()),
-                ..RawOptions::default()
-            },
-            RawOptions {
-                firebase_json: Some(source.clone()),
-                ..RawOptions::default()
-            },
+        for providers in [
+            serde_json::json!({"oidc":[{"name":"oidc.firebase-deploy","clientId":"deploy-client","issuer":"https://issuer.test"}]}),
+            // firebase-tools 15.28.2 lib/deploy/auth/deploy.js reads these deployment fields.
+            serde_json::json!({"anonymous":true,"emailPassword":true,"googleSignIn":{"oAuthBrandDisplayName":"Fixture","supportEmail":"support@example.test","authorizedRedirectUris":["https://fixture.test/__/auth/handler"]}}),
+            serde_json::Value::Null,
+            serde_json::json!("deployment-extension"),
         ] {
-            let (cfg, _) = load_project_config(&raw, &Selection::default())
-                .unwrap_or_else(|e| panic!("{}", e.message));
-            assert!(cfg.http_addr.ends_with(":9199"));
+            std::fs::write(
+                &source,
+                serde_json::json!({
+                    "$schema":"https://example.com/firebase.schema.json",
+                    "emulators":{"auth":{"port":9199}},
+                    "firestore":{"rules":"firestore.rules"},
+                    "storage":{"rules":"storage.rules"},
+                    "functions":{"source":"functions"},
+                    "hosting":{"public":"dist"},
+                    "auth":{"providers":providers},
+                    "customMetadata":{"profile":"strict","auth":{"totp":{}}}
+                })
+                .to_string(),
+            )
+            .unwrap();
+            for raw in [
+                RawOptions {
+                    config_path: Some(source.clone()),
+                    ..RawOptions::default()
+                },
+                RawOptions {
+                    firebase_json: Some(source.clone()),
+                    ..RawOptions::default()
+                },
+                RawOptions {
+                    config_path: Some(canonical.clone()),
+                    ..RawOptions::default()
+                },
+            ] {
+                let (cfg, _) = load_project_config(&raw, &Selection::default())
+                    .unwrap_or_else(|e| panic!("{}", e.message));
+                assert!(cfg.http_addr.ends_with(":9199"));
+                assert_eq!(
+                    cfg.auth_provider_seeds,
+                    fireemu_core_auth::store::ProviderConfigSeeds::default()
+                );
+            }
         }
         std::fs::remove_dir_all(dir).unwrap();
     }
@@ -3425,6 +3463,66 @@ mod config_reload_tests {
 
         std::fs::write(&path, INDEXES_TWO).unwrap();
         wait_for_index_collection(&backend, "other").await;
+        drop(backend);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    async fn wait_for_ttl(backend: &Arc<LocalBackend>, collection: &str, present: bool) {
+        let collection = fireemu_core_types::ids::CollectionId::try_new(collection).unwrap();
+        tokio::time::timeout(std::time::Duration::from_secs(4), async {
+            loop {
+                if backend
+                    .ttl_policy("demo-app", "staging", &collection)
+                    .is_some()
+                    == present
+                {
+                    break;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+            }
+        })
+        .await
+        .expect("the index generation should reload its TTL policies");
+    }
+
+    #[tokio::test]
+    async fn index_reload_follows_the_declared_ttl_policies_and_keeps_the_last_good_ones() {
+        let dir = scratch("indexes-ttl");
+        let path = dir.join("firestore.indexes.json");
+        let declared = |ttl: &str| {
+            format!(
+                r#"{{"indexes":[],"fieldOverrides":[{{"collectionGroup":"sessions","fieldPath":"expireAt","ttl":{ttl},"indexes":[]}}]}}"#
+            )
+        };
+        std::fs::write(&path, declared("false")).unwrap();
+        let backend = index_backend(&declared("false"));
+        start_index_reload_supervisor(path.display().to_string(), "staging".to_owned(), &backend);
+        wait_for_ttl(&backend, "sessions", false).await;
+
+        std::fs::write(&path, declared("true")).unwrap();
+        wait_for_ttl(&backend, "sessions", true).await;
+
+        // A generation that names two TTL fields of one collection group is refused as a
+        // whole, and the last good policies stay in force.
+        std::fs::write(
+            &path,
+            r#"{"indexes":[],"fieldOverrides":[{"collectionGroup":"sessions","fieldPath":"a","ttl":true,"indexes":[]},{"collectionGroup":"sessions","fieldPath":"b","ttl":true,"indexes":[]}]}"#,
+        )
+        .unwrap();
+        tokio::time::sleep(std::time::Duration::from_millis(1_300)).await;
+        let sessions = fireemu_core_types::ids::CollectionId::try_new("sessions").unwrap();
+        assert_eq!(
+            backend
+                .ttl_policy("demo-app", "staging", &sessions)
+                .unwrap()
+                .field
+                .canonical(),
+            "expireAt"
+        );
+
+        // Removing the declaration removes the policy for a project that never patched.
+        std::fs::write(&path, declared("false")).unwrap();
+        wait_for_ttl(&backend, "sessions", false).await;
         drop(backend);
         let _ = std::fs::remove_dir_all(dir);
     }

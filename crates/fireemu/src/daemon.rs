@@ -20,7 +20,7 @@ use fireemu_core_auth::signup_quota::{
 use fireemu_core_auth::store::{
     AuthNamespaceConfigPatch, AuthStore, ProjectAuthConfig, ProjectAuthConfigPatch,
 };
-use fireemu_core_firestore::index::{IndexSet, PlanningContext};
+use fireemu_core_firestore::index::PlanningContext;
 use fireemu_core_rules::runtime::{LoadedRules, RulesetSlot};
 use fireemu_core_session::clock::VirtualClock;
 use fireemu_core_types::determinism::SplitMix64;
@@ -907,6 +907,23 @@ fn assemble_suite(assembly: ServiceAssembly, exec_mode: bool) -> Result<ReadySui
     reapply_explicit_auth_password_policies(&cfg, &registry)?;
     reapply_explicit_auth_config(&cfg, &registry)?;
     reapply_explicit_auth_quota(&cfg, &registry)?;
+    // The declared switch and tenants come last: an imported tenant is authoritative for its id,
+    // and a tenant the import did not carry is created as declared.
+    let seeding = cfg.tenant_seeding()?;
+    if !quiet {
+        for id in seeding.shadowed_by_existing(&registry, &cfg.auth_project) {
+            eprintln!(
+                "warning: auth.tenants: the imported tenant {id:?} is used and its declared settings are ignored (an --import is authoritative for a tenant of the same id)"
+            );
+        }
+    }
+    seeding
+        .apply(&registry, &cfg.auth_project)
+        .map_err(|error| format!("auth.tenants: {error}"))?;
+    // A compatibility-routed project (emulator profile) gets the declaration when it is installed.
+    if !seeding.is_empty() {
+        registry.set_new_project_tenant_seed(Arc::new(seeding));
+    }
     let hub_state = Arc::new(hub::HubState {
         project: cfg.auth_project.clone(),
         addr: hub_addr.unwrap_or(http_addr),
@@ -1465,6 +1482,11 @@ pub(super) fn run(options: Options, exec: Option<ExecPlan>) -> ExitCode {
                 cfg.clock_start.to_rfc3339().unwrap_or_default()
             ));
         }
+        // The index file declares the query-planning indexes and the TTL policies together.
+        let (default_indexes, default_ttl_policies) = match &cfg.index_file {
+            Some(path) => control::load_index_file(path)?,
+            None => Default::default(),
+        };
         let gateway = Gateway {
             enforce_limits: cfg.enforce_limits,
             ctx: PlanningContext {
@@ -1472,10 +1494,7 @@ pub(super) fn run(options: Options, exec: Option<ExecPlan>) -> ExitCode {
                 api_mode: cfg.api_mode,
                 policy: cfg.index_policy,
             },
-            indexes: match &cfg.index_file {
-                Some(path) => control::load_indexes(path)?,
-                None => IndexSet::default(),
-            },
+            indexes: default_indexes,
         };
         let backend = if cfg.clock_start_pinned {
             LocalBackend::new(gateway.clone(), clock.clone(), cfg.seed)
@@ -1506,10 +1525,16 @@ pub(super) fn run(options: Options, exec: Option<ExecPlan>) -> ExitCode {
                 backend
             },
         );
+        backend.replace_shared_ttl_catalog(
+            fireemu_core_types::ids::DatabaseId::DEFAULT,
+            default_ttl_policies,
+        );
         for (database, files) in &cfg.firestore_databases {
             if database != fireemu_core_types::ids::DatabaseId::DEFAULT {
                 if let Some(path) = &files.indexes {
-                    backend.replace_database_indexes(database, control::load_indexes(path)?);
+                    let (indexes, ttl_policies) = control::load_index_file(path)?;
+                    backend.replace_database_indexes(database, indexes);
+                    backend.replace_shared_ttl_catalog(database, ttl_policies);
                 }
             }
         }
@@ -1537,12 +1562,26 @@ pub(super) fn run(options: Options, exec: Option<ExecPlan>) -> ExitCode {
             store
                 .set_sign_in_config(auth_sign_in_config(&cfg))
                 .map_err(|error| format!("auth.signIn: {error:?}"))?;
+            // The declared initial multi-factor configuration is the project's configuration
+            // now, and what a control-plane reset returns to.
+            if let Some(mfa) = &cfg.auth_mfa {
+                store.set_mfa_seed(mfa.clone());
+            }
+            if let Some(domains) = &cfg.auth_authorized_domains {
+                store.set_authorized_domains_seed(domains.clone())
+                    .map_err(|error| format!("auth.authorizedDomains: {error:?}"))?;
+            }
+            store.set_provider_config_seeds(cfg.auth_provider_seeds.clone())
+                .map_err(|error| format!("auth.providers: {error}"))?;
             if let Some(policy) = &cfg.auth_password_policy {
                 store.set_password_policy(policy.to_auth_policy());
             }
             store
                 .set_signup_quota_config(auth_signup_quota_config(&cfg)?)
                 .map_err(|error| format!("auth.quotaSimulation: {error:?}"))?;
+        }
+        if let (Some(warning), false) = (cfg.auth_totp_warning(), quiet) {
+            eprintln!("warning: {warning}");
         }
         // Both keys are 2048-bit RSA and slow to generate in a debug build; when both are
         // wanted they are generated concurrently on blocking tasks. They are always separate
@@ -1579,6 +1618,10 @@ pub(super) fn run(options: Options, exec: Option<ExecPlan>) -> ExitCode {
                 crate::random_u128()?,
             ),
         );
+        // A project created after start begins with the declared multi-factor configuration.
+        registry.set_new_project_mfa_seed(cfg.auth_mfa.clone());
+        registry.set_new_project_authorized_domains_seed(cfg.auth_authorized_domains.clone());
+        registry.set_new_project_provider_config_seeds(cfg.auth_provider_seeds.clone());
         apply_auth_password_policy_overrides(&cfg, &registry)?;
         apply_auth_config_overrides(&cfg, &registry)?;
         let rules = Arc::new(RulesetSlot::new(load_rules(&cfg)?));

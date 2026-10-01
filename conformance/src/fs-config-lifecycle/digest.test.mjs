@@ -17,5 +17,8 @@ test("a program's rows depend on the captures it uploads from elsewhere, not its
   // The recording that writes p:all is the recording its rows come from.
   assert.equal(programDigest(program, { ...base, "p:all": { files: { a: "2" } } }), digest);
   // A capture another program or fireemu wrote is an input: changing it makes the rows stale.
-  assert.notEqual(programDigest(program, { ...base, "fireemu:all": { files: { a: "2" } } }), digest);
+  assert.notEqual(
+    programDigest(program, { ...base, "fireemu:all": { files: { a: "2" } } }),
+    digest,
+  );
 });

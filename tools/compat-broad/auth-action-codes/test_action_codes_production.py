@@ -27,7 +27,7 @@ import reservations
 from action_codes_remote_transport import _tokeninfo_valid
 
 from broad_contract import digest
-from test_action_codes_admission import FIXTURE_PRINCIPAL, _artifacts
+from test_action_codes_admission import FIXTURE_PRINCIPAL, _artifacts, admission_clock  # noqa: F401
 
 
 NONCE = "b" * 32
@@ -219,8 +219,8 @@ def fixture_origin():
         thread.join(timeout=5)
 
 
-def test_full_action_bridge_runs_26_plus_6_through_o8_ledger_gate_and_worker(tmp_path, fixture_origin):
-    descriptor_, inputs, permission, manifest, manifest_bytes, manifest_path, artifact, launcher, approval = _artifacts(tmp_path)
+def test_full_action_bridge_runs_26_plus_6_through_o8_ledger_gate_and_worker(tmp_path, fixture_origin, admission_clock):
+    descriptor_, inputs, permission, manifest, manifest_bytes, manifest_path, artifact, launcher, approval = _artifacts(tmp_path, now=admission_clock.now)
     ledger_root = tmp_path / "ledger"
     reservations.Ledger.create(ledger_root)
     worker = (ROOT / descriptor.WORKER_ENTRY).read_bytes()
@@ -289,10 +289,10 @@ def test_full_action_bridge_runs_26_plus_6_through_o8_ledger_gate_and_worker(tmp
     ("status", "body"),
     [(400, {"error": {"message": "bad"}}), (200, {"unexpected": True})],
 )
-def test_recovery_error_is_not_typed_absence(tmp_path, fixture_origin, status, body):
+def test_recovery_error_is_not_typed_absence(tmp_path, fixture_origin, status, body, admission_clock):
     _ActionFixture.recovery_status = status
     _ActionFixture.recovery_body = body
-    descriptor_, inputs, permission, manifest, manifest_bytes, manifest_path, artifact, launcher, approval = _artifacts(tmp_path)
+    descriptor_, inputs, permission, manifest, manifest_bytes, manifest_path, artifact, launcher, approval = _artifacts(tmp_path, now=admission_clock.now)
     ledger_root = tmp_path / "ledger"
     reservations.Ledger.create(ledger_root)
     worker = (ROOT / descriptor.WORKER_ENTRY).read_bytes()
@@ -316,10 +316,10 @@ def test_recovery_error_is_not_typed_absence(tmp_path, fixture_origin, status, b
 
 
 def test_observation_failure_attempts_all_known_cleanup_and_holds_unknown_signup(
-    tmp_path, fixture_origin
+    tmp_path, fixture_origin, admission_clock
 ):
     _ActionFixture.fail_first_response = True
-    descriptor_, inputs, permission, manifest, manifest_bytes, manifest_path, artifact, launcher, approval = _artifacts(tmp_path)
+    descriptor_, inputs, permission, manifest, manifest_bytes, manifest_path, artifact, launcher, approval = _artifacts(tmp_path, now=admission_clock.now)
     ledger_root = tmp_path / "ledger"
     reservations.Ledger.create(ledger_root)
     worker = (ROOT / descriptor.WORKER_ENTRY).read_bytes()
@@ -628,3 +628,45 @@ def test_f4_terminal_receipt_retains_primary_failure_and_held_reservation(
             expected_phase != "gate-setup" and "transport-forget" not in failure
         )
         assert case.transport_open is ("transport-forget" in failure)
+
+
+@pytest.mark.parametrize("stage", ["issue", "consume"])
+@pytest.mark.parametrize("expiry", ["remaining-window", "absolute"])
+def test_expired_o7_refuses_before_ledger_or_execution_mutation(
+    tmp_path, fixture_origin, admission_clock, stage, expiry
+):
+    descriptor_, inputs, permission, manifest, manifest_bytes, manifest_path, artifact, launcher, approval = _artifacts(tmp_path, now=admission_clock.now)
+    ledger_root = tmp_path / "ledger"
+    reservations.Ledger.create(ledger_root)
+    before = (ledger_root / "state.json").read_bytes()
+    worker = (ROOT / descriptor.WORKER_ENTRY).read_bytes()
+    bindings = dict(
+        inputs=inputs, approval=approval, manifest=manifest,
+        manifest_bytes=manifest_bytes, manifest_path=manifest_path,
+        permission=permission, ledger_root=ledger_root,
+        artifact_path=artifact, launcher_path=launcher,
+        binding=worker, binding_digest=hashlib.sha256(worker).hexdigest(),
+    )
+    capability = None
+    try:
+        if stage == "consume":
+            capability = admission.issue_production_capability(**bindings)
+        admission_clock.now = approval["windowExpiresAt"] + 1
+        if expiry == "remaining-window":
+            admission_clock.now -= descriptor_.window_seconds
+        with pytest.raises(ValueError, match="O7 execution window expired"):
+            if stage == "issue":
+                admission.issue_production_capability(**bindings)
+            else:
+                production.execute(
+                    capability=capability, inputs=inputs, permission=permission,
+                    ledger_root=ledger_root, output=tmp_path / "output",
+                    bindings=_bindings(), credential_handoff=_handoff(permission),
+                    verify_handoff=_verify_handoff, fixture_origin=fixture_origin,
+                )
+        assert (ledger_root / "state.json").read_bytes() == before
+        assert not (tmp_path / "output").exists()
+        assert _ActionFixture.calls == []
+    finally:
+        if capability is not None:
+            admission.o8_admission.revoke_production_capability(capability)

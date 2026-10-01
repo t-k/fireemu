@@ -212,10 +212,7 @@ test("AUTH-CREDENTIAL closure inventory cannot silently omit a declared conditio
         condition.evidence.execution.runtimeInputMapSha256,
         "dbe45128dc806dc439c70f1f09d7bd669868ce737e5272445bdc2df03c605e4",
       );
-      assert.equal(
-        condition.evidence.execution.artifactSha256,
-        currentComparison.artifactSha256,
-      );
+      assert.equal(condition.evidence.execution.artifactSha256, currentComparison.artifactSha256);
       assert.equal(credentialComparison.artifactSha256, condition.evidence.finalArtifactSha256);
       assert.deepEqual(credentialComparison.summary, { MATCH: 222 });
       assertBoundToFixture(credentialComparison, label);
@@ -251,7 +248,10 @@ test("AUTH-CREDENTIAL closure inventory cannot silently omit a declared conditio
         condition.evidence.credentialExecution.sanitizedExportSha256,
         credentialComparison.execution.sanitizedExportSha256,
       );
-      assert.equal(condition.evidence.credentialExecution.runId, credentialComparison.execution.runId);
+      assert.equal(
+        condition.evidence.credentialExecution.runId,
+        credentialComparison.execution.runId,
+      );
       assert.equal(
         condition.evidence.credentialExecution.receiptSha256,
         credentialComparison.execution.receiptSha256,
@@ -330,9 +330,8 @@ test("AUTH-CREDENTIAL final regression requires current 631-row and 222-row comp
     assert.equal(condition.evidence.sourceCommit, regression.evidence.sourceCommit);
   }
   assert.equal(
-    closure.conditions.find(
-      ({ conditionId }) => conditionId === "AUTH-CREDENTIAL/closure-review",
-    ).status,
+    closure.conditions.find(({ conditionId }) => conditionId === "AUTH-CREDENTIAL/closure-review")
+      .status,
     "VERIFIED",
   );
 });

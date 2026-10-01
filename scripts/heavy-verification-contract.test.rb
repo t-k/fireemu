@@ -131,4 +131,35 @@ class HeavyVerificationContractTest < Minitest::Test
   def test_a_nextest_job_without_the_locked_fetch_is_refused
     assert_violation(REAL.sub("        run: cargo fetch --locked\n", "        run: \"true\"\n"), "must fetch the locked graph")
   end
+
+  def test_a_summary_upload_that_skips_a_failed_merge_is_refused
+    source = REAL.sub("        if: always()\n        with:\n          name: mutants-summary", "        with:\n          name: mutants-summary")
+    assert_violation(source, "even when the merge failed")
+  end
+
+  def test_a_summary_merge_that_loses_the_scripts_status_is_refused
+    assert_violation(REAL.sub("          exit \"$code\"\n", ""), "keep the script's status")
+    assert_violation(REAL.sub(" || code=$?", ""), "keep the script's status")
+  end
+
+  def test_a_summary_merge_that_does_not_show_the_summary_is_refused
+    assert_violation(REAL.sub("cat summary/summary.md >> \"$GITHUB_STEP_SUMMARY\"", "true"), "append summary/summary.md")
+  end
+
+  def test_a_summary_merge_that_does_not_pass_the_shard_job_result_is_refused
+    assert_violation(REAL.sub(" --mutants-result \"$MUTANTS_RESULT\"", ""), "shard job's result")
+    assert_violation(REAL.sub("MUTANTS_RESULT: ${{ needs.mutants.result }}", "MUTANTS_RESULT: success"), "shard job's result")
+  end
+
+  def test_an_expression_of_another_job_in_the_merge_step_is_refused
+    assert_violation(REAL.sub("MUTANTS_RESULT: ${{ needs.mutants.result }}", "MUTANTS_RESULT: ${{ needs.mutants.outputs.anything }}"), "unknown context")
+  end
+
+  def test_a_summary_upload_that_may_find_nothing_is_refused
+    assert_violation(REAL.sub("          if-no-files-found: error\n", ""), "no summary")
+  end
+
+  def test_a_sharding_option_is_refused
+    assert_violation(REAL.sub("--shard \"$SHARD/$TOTAL\"", "--shard \"$SHARD/$TOTAL\" --sharding round-robin"), "no --sharding")
+  end
 end

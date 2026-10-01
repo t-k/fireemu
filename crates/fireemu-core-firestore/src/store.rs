@@ -2468,15 +2468,16 @@ impl FirestoreState {
         self.evict_finished_transactions();
     }
 
-    /// Whether production still remembers this transaction as one that ran out of its total lifetime. Eviction never takes
-    /// such a token before its memory ends: at most as many tokens as were active together (4 096) are held this way.
-    /// While the lineage is full, each eviction scans past those held tokens, so a finish costs up to 4 096 steps; the bound
-    /// is deliberate and small, and nothing else grows.
+    /// Whether production still remembers this transaction as one that a timeout finished (its total lifetime, or an idle expiry: P13a recorded
+    /// both remembered until about 300 s). Eviction never takes such a token before its memory ends. The tokens held this way are the ones that
+    /// timed out within the last 300 s, at most those that were active together (4 096) per 120 s of idle limit, about 10 000 in the worst case. While
+    /// the lineage is full, each eviction scans past them, so a finish costs up to that many steps; the bound is deliberate and nothing else grows.
     fn remembered_as_expired(&self, id: &TransactionId) -> bool {
         self.limit_scope == LimitScope::Production
-            && self.transactions.get(id).is_some_and(|transaction| {
-                transaction.lifetime_expired && transaction.state == TransactionState::Finished
-            })
+            && self
+                .transactions
+                .get(id)
+                .is_some_and(|transaction| transaction.state == TransactionState::Finished)
     }
 
     fn evict_finished_transactions(&mut self) {
@@ -3579,6 +3580,15 @@ impl FirestoreState {
                 self.prune_transactions(now);
             } else {
                 self.forget_elapsed_finished_transactions(now);
+            }
+            // Past the total lifetime a remembered token answers a Rollback 10, whatever finished it: P13a (REST, two recordings) an
+            // idle-expired token whose reads had answered 10 answered a Rollback at 286 to 289 s with 10. Before the lifetime an
+            // idle-expired token's first request, a Rollback at about 121 s, answered 0 (E003), and rollback() keeps that.
+            if self.transactions.get(id).is_some_and(|transaction| {
+                transaction.state == TransactionState::Finished
+                    && now >= transaction_lineage_deadline(transaction)
+            }) {
+                return Err(FirestoreError::Aborted(TRANSACTION_NO_LONGER_VALID.into()));
             }
         }
         self.rollback(id)

@@ -14,6 +14,14 @@ import re
 from pathlib import Path
 
 PROJECT = "fireemu-oracle-sbx"
+# The sandbox projects a table may target: the shared one, and the one FS-TRANSACTION owns alone (free tier: no billing account, so no spend).
+PROJECTS = (PROJECT, "fireemu-oracle-txn")
+FREE_TIER_PROJECTS = ("fireemu-oracle-txn",)
+
+
+def budget_for(project):
+    """(estimated US$ per recording, reserve US$) an envelope for this project carries: the free-tier project spends nothing."""
+    return (0.0, 0.0) if project in FREE_TIER_PROJECTS else (0.01, 0.04)
 DATABASE = "(default)"
 TRANSPORTS = ("rest", "grpc")
 RPCS = ("GetDocument", "BatchGetDocuments", "BeginTransaction", "Commit", "Rollback")
@@ -29,7 +37,7 @@ MAX_DOCUMENTS = 8
 MAX_WAIT_SECONDS = 600
 MAX_STATES = 32
 _STEP_KEYS = ("id", "transport", "rpc", "document", "tokenInput", "tokenOutput", "writes", "caseId", "role", "allow")
-_OPTIONAL_STEP_KEYS = ("deadlineMs", "documents", "mode", "readAt", "newTransaction", "waitSeconds", "sinceBegin", "concurrentWith")
+_OPTIONAL_STEP_KEYS = ("deadlineMs", "documents", "mode", "readAt", "newTransaction", "waitSeconds", "sinceBegin", "concurrentWith", "retryOf")
 
 
 def outcome_class(code):
@@ -72,6 +80,10 @@ def _step(row):
         # A read-write transaction's first read may show any state acknowledged since its begin (the snapshot may be taken
         # at the begin or at the read); only present on that read.
         step["sinceBegin"] = row["sinceBegin"]
+    if "retryOf" in row:
+        # A read-write begin that names an earlier token of the same table as the attempt it retries (REST `retryTransaction`);
+        # only present on that begin. The named token is released after this begin, not before it.
+        step["retryOf"] = row["retryOf"]
     if "concurrentWith" in row:
         # An outside writer sent while the step before it (its anchor: a holder's Commit or Rollback, after the anchor's wait) is
         # still to be sent: the writer may be held by the holder's locks, and its answer is collected after the anchor's.
@@ -92,6 +104,8 @@ def _validate_table(table):
         _bad("name, program or slug is malformed")
     if not isinstance(table.get("envelopeId"), str) or not re.fullmatch(rf"FS-TRANSACTION-{re.escape(table['name'])}-[0-9]{{3}}", table["envelopeId"]):
         _bad("the envelope id is not this program's next numbered one")
+    if "project" in table and (not isinstance(table["project"], str) or table["project"] not in PROJECTS):
+        _bad("the table names a project that is not one of the sandbox projects")
     documents, states = tuple(table["documents"]), tuple(table["states"])
     if not documents or len(documents) > MAX_DOCUMENTS or len(set(documents)) != len(documents) or any(not isinstance(role, str) or not _LABEL.fullmatch(role) for role in documents):
         _bad("owned document roles are malformed")
@@ -120,6 +134,11 @@ def _validate_table(table):
     for index, step in enumerate(steps):
         if isinstance(step["tokenInput"], str):
             last_use[step["tokenInput"]] = index
+        if isinstance(step.get("retryOf"), str):
+            # The retry is the named token's last use, and the new token is released right after the retry that issued it.
+            last_use[step["retryOf"]] = index
+            if isinstance(step["tokenOutput"], str):
+                last_use[step["tokenOutput"]] = max(last_use.get(step["tokenOutput"], -1), index)
     for index, step in enumerate(steps):
         if not isinstance(step["id"], str) or not step["id"] or step["id"] in ids:
             _bad("step ids are missing or repeat")
@@ -135,8 +154,8 @@ def _validate_table(table):
         if "waitSeconds" in step:
             if type(step["waitSeconds"]) is not int or not 1 <= step["waitSeconds"] <= MAX_WAIT_SECONDS or index == 0:
                 _bad(f"{step['id']} has a wait that is not a whole number of seconds up to {MAX_WAIT_SECONDS}, or nothing to follow")
-            if step["tokenInput"] is None and step["role"] != "outside-writer":
-                _bad(f"{step['id']} waits outside a transaction and is not an outside writer")
+            if step["tokenInput"] is None and step["role"] != "outside-writer" and "retryOf" not in step:
+                _bad(f"{step['id']} waits outside a transaction and is not an outside writer or a retry")
         if step["caseId"] is not None:
             if step["role"] not in ("observation", "outside-writer") or not isinstance(step["caseId"], str) or step["caseId"] in cases:
                 _bad(f"{step['id']} has a case id that is misplaced or repeats")
@@ -146,6 +165,12 @@ def _validate_table(table):
             _bad(f"{step['id']} is a control step that may be refused")
         if step["role"] == "post-state" and step["allow"] != [0]:
             _bad(f"{step['id']} is a post-state read that may be refused")
+        if "retryOf" in step:
+            retried = step["retryOf"]
+            if rpc != "BeginTransaction" or step.get("mode", "readWrite") != "readWrite" or step["transport"] != "rest" or "readAt" in step:
+                _bad(f"{step['id']} retries on something other than a REST read-write begin")
+            if not isinstance(retried, str) or issued.get(retried) != "rest" or modes.get(retried) != "readWrite" or retried == step["tokenOutput"]:
+                _bad(f"{step['id']} retries a token that is not an earlier read-write token of this table over REST")
         if rpc != "BeginTransaction" and "mode" in step:
             _bad(f"{step['id']} names a transaction mode on a request that does not begin one")
         if rpc == "BeginTransaction" and step.get("mode", "readWrite") not in ("readWrite", "readOnly"):
@@ -249,6 +274,8 @@ def corpus_digest(table):
     }
     if table.get("thresholds"):
         body["thresholds"] = dict(table["thresholds"])
+    if table.get("project", PROJECT) != PROJECT:
+        body["project"] = table["project"]   # bound only when it differs, so every table that targets the shared project keeps its digest
     return hashlib.sha256(_canonical(body).encode()).hexdigest()
 
 
@@ -256,13 +283,14 @@ def compile_plan(table, nonce, owner_id):
     _identity(nonce, "nonce")
     _identity(owner_id, "owner")
     steps = _validate_table(table)
-    database = f"projects/{PROJECT}/databases/{DATABASE}"
+    project = table.get("project", PROJECT)
+    database = f"projects/{project}/databases/{DATABASE}"
     caps = dict(table["caps"])
     plan = {
         "kind": "txn-program-plan-v1",
         "program": table["program"],
         "packetName": table["name"],
-        "project": PROJECT,
+        "project": project,
         "database": database,
         "nonce": nonce,
         "ownerId": owner_id,
@@ -342,6 +370,10 @@ def request_for_step(value, step, tokens, table, times=None):
         return {"database": value["database"], "transaction": token}
     if rpc == "BeginTransaction":
         mode = step.get("mode", "readWrite")
+        if "retryOf" in step:
+            if step["retryOf"] not in tokens:
+                raise ValueError("step retries a token that was never issued")
+            return {"database": value["database"], "options": {"readWrite": {"retryTransaction": canonical_token(tokens[step["retryOf"]])}}}
         return {"database": value["database"], "options": {mode: {"readTime": read_time} if read_time else {}}}
     writes = [{"update": {"name": value["documents"][write["document"]], "fields": marker_fields(value, write["document"], write["state"])}, "currentDocument": {"exists": write["exists"]}} for write in step["writes"]]
     return {"database": value["database"], "writes": writes, **({"transaction": token} if token else {})}

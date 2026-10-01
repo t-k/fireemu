@@ -3681,13 +3681,64 @@ fn a_rollback_after_the_token_is_forgotten_answers_invalid_transaction() {
     invalid_transaction(state.rollback_at(&transaction, t(301)));
 }
 
-// INFERRED, not recorded: a transaction that an idle expiry finished before its 270 s lifetime answers a Rollback after
-// 270 s with 0, because the idle expiry (not the lifetime) finished it.
+// P13a (REST, two recordings): an idle-expired token is remembered like a lifetime-expired one. Reads at about 132 s and 232 s answered
+// 10, a Rollback at about 287 s answered 10 as well, and a read at about 310 s answered 3 "Invalid transaction.".
 #[test]
-fn a_rollback_of_an_idle_expired_token_after_270_s_is_accepted() {
+fn an_idle_expired_token_answers_everything_10_until_it_is_forgotten() {
+    let write = [set("p11/doc", &[("v", Value::Integer(2))])];
+    let mut state = FirestoreState::with_limit_scope(LimitScope::Production);
+    state
+        .commit(&[set("p11/doc", &[("v", Value::Integer(1))])], None, t(0))
+        .unwrap();
+    let transaction = state.begin_transaction(false, t(0)).unwrap();
+    aborted_no_longer_valid(state.touch_transaction(&transaction, t(132)));
+    aborted_no_longer_valid(state.touch_transaction(&transaction, t(232)));
+    aborted_no_longer_valid(state.commit(&write, Some(&transaction), t(260)).map(|_| ()));
+    aborted_no_longer_valid(state.rollback_at(&transaction, t(287)));
+    aborted_no_longer_valid(state.touch_transaction(&transaction, t(288)));
+    invalid_transaction(state.touch_transaction(&transaction, t(310)));
+    invalid_transaction(state.rollback_at(&transaction, t(311)));
+
+    // a token whose only request after the idle expiry came late is forgotten too
+    let mut late = FirestoreState::with_limit_scope(LimitScope::Production);
+    let transaction = late.begin_transaction(false, t(0)).unwrap();
+    aborted_no_longer_valid(late.touch_transaction(&transaction, t(132)));
+    invalid_transaction(late.touch_transaction(&transaction, t(310)));
+}
+
+// E003 (REST): the first request after an idle expiry, a Rollback at about 121 s, answered 0. A Rollback before the total lifetime keeps
+// being accepted for an idle-expired token (P13a refuted the same answer only past 270 s).
+#[test]
+fn a_rollback_of_an_idle_expired_token_before_the_lifetime_is_accepted() {
     let mut state = FirestoreState::with_limit_scope(LimitScope::Production);
     let transaction = state.begin_transaction(false, t(0)).unwrap();
-    state.rollback_at(&transaction, t(290)).unwrap();
+    state.rollback_at(&transaction, t(125)).unwrap();
+    let mut noticed = FirestoreState::with_limit_scope(LimitScope::Production);
+    let transaction = noticed.begin_transaction(false, t(0)).unwrap();
+    aborted_no_longer_valid(noticed.touch_transaction(&transaction, t(131)));
+    noticed.rollback_at(&transaction, t(132)).unwrap();
+}
+
+// The 270 s edge of that rule: an idle-expired token's Rollback is accepted up to 269 s and answered 10 from 270 s (the total lifetime).
+#[test]
+fn the_past_lifetime_rollback_rule_starts_exactly_at_270_s() {
+    let mut finished = FirestoreState::with_limit_scope(LimitScope::Production);
+    let transaction = finished.begin_transaction(false, t(0)).unwrap();
+    aborted_no_longer_valid(finished.touch_transaction(&transaction, t(131)));
+    finished.rollback_at(&transaction, t(269)).unwrap();
+    let mut at_edge = FirestoreState::with_limit_scope(LimitScope::Production);
+    let transaction = at_edge.begin_transaction(false, t(0)).unwrap();
+    aborted_no_longer_valid(at_edge.touch_transaction(&transaction, t(131)));
+    aborted_no_longer_valid(at_edge.rollback_at(&transaction, t(270)));
+}
+
+// INFERRED, not recorded: an idle-expired token that no request noticed also answers a Rollback past 270 s with 10 (P13a recorded it only
+// after reads that answered 10), and a lifetime-expired token does so as its first request (P12, P13a).
+#[test]
+fn a_rollback_of_an_unnoticed_idle_expired_token_after_270_s_answers_expired() {
+    let mut state = FirestoreState::with_limit_scope(LimitScope::Production);
+    let transaction = state.begin_transaction(false, t(0)).unwrap();
+    aborted_no_longer_valid(state.rollback_at(&transaction, t(290)));
 }
 
 // Production remembers an expired token for 30 s even when more than 8 192 finished transactions pile up in the
@@ -3705,6 +3756,21 @@ fn a_flood_of_finished_transactions_does_not_make_production_forget_an_expired_t
     assert_eq!(bookkeeping.finished, bookkeeping.finished_deadlines);
     aborted_no_longer_valid(state.touch_transaction(&transaction, t(280)));
     invalid_transaction(state.touch_transaction(&transaction, t(301)));
+}
+
+// The same holds for a token an idle expiry finished (P13a: remembered until about 300 s too). Found by a property test with 8 300 finished
+// transactions and a probe at 271 s (proptest-regressions keeps the seed; this is the fixed form).
+#[test]
+fn a_flood_of_finished_transactions_does_not_make_production_forget_an_idle_expired_token_early() {
+    let mut state = FirestoreState::with_limit_scope(LimitScope::Production);
+    let transaction = state.begin_transaction(false, t(0)).unwrap();
+    aborted_no_longer_valid(state.touch_transaction(&transaction, t(271)));
+    for _ in 0..9_000 {
+        let other = state.begin_transaction(false, t(272)).unwrap();
+        state.rollback_at(&other, t(272)).unwrap();
+    }
+    aborted_no_longer_valid(state.touch_transaction(&transaction, t(280)));
+    invalid_transaction(state.touch_transaction(&transaction, t(300)));
 }
 
 // The emulator profile is exactly as before: a bare Rollback past 270 s finishes the transaction, and a later read

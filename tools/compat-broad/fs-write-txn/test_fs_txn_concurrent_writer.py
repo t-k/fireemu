@@ -2,6 +2,7 @@
 its own row after the anchor's, and replayed by the projection in the order the ledger took the two on."""
 
 import copy
+import datetime as dt
 import threading
 import time
 
@@ -52,6 +53,15 @@ def test_the_anchor_must_be_a_holders_release_with_a_wait_inside_the_writers_dea
     index = next(i for i, step in enumerate(steps) if step["id"] == "rest/c/commit")
     steps[index] = {**steps[index], "rpc": "GetDocument", "document": "a", "writes": ()}
     refused({**TABLE, "steps": tuple(steps)})
+
+
+def test_the_anchor_must_carry_the_holders_token_not_be_another_outside_writer_with_a_wait():
+    # an outside writer may wait and carries no token, so a writer concurrent with one is not beside a holder's release
+    steps = list(TABLE["steps"])
+    index = next(i for i, step in enumerate(steps) if step["id"] == "rest/c/commit")
+    steps[index] = {**steps[index], "tokenInput": None, "role": "outside-writer", "deadlineMs": 30000, "allow": [0, 10], "caseId": "rest/c-commit"}
+    with pytest.raises(ValueError, match="anchor that is not a holder release"):
+        compile_plan({**TABLE, "steps": tuple(steps)}, NONCE, OWNER)
 
 
 def test_a_writer_cannot_be_concurrent_with_a_step_that_is_itself_concurrent():
@@ -111,6 +121,44 @@ def test_the_projection_replays_the_pair_and_refuses_a_tampered_one():
     row["timing"] = {**row["timing"], "dispatchMonotonic": before["timing"]["responseMonotonic"] - 5.0}
     with pytest.raises(ValueError):
         projection(early, TABLE)
+
+
+def tamper_consistently(receipt, site, change):
+    """Change one row and its copy in `observations` the same way, so the final comparison of the two cannot be what refuses it: only the check
+    under test can."""
+    changed = copy.deepcopy(receipt)
+    for row in changed["steps"]:
+        if row["site"] == site:
+            change(row)
+    for row in changed["observations"]:
+        if row["site"] == site:
+            change(row)
+    return changed
+
+
+@pytest.mark.parametrize("label,change", [
+    ("the writer's request carries a changed precondition", lambda row: row["request"]["writes"][0].update(currentDocument={"exists": False})),
+    ("the writer's request carries an extra field", lambda row: row["request"].update(extra=1)),
+    ("the writer's case id differs", lambda row: row.update(caseId="rest/c-elsewhere")),
+    ("the writer's transport differs", lambda row: row.update(transport="grpc")),
+    ("the writer's rpc differs", lambda row: row.update(rpc="Rollback")),
+])
+def test_the_projection_refuses_a_writer_row_that_differs_from_the_graph_even_when_its_copy_agrees(label, change):
+    receipt = recorded()
+    projection(receipt, TABLE)
+    with pytest.raises(ValueError, match="concurrent request graph differs"):
+        projection(tamper_consistently(receipt, "rest/c/writer-a", change), TABLE)
+
+
+def test_the_projection_refuses_a_writer_that_started_before_the_request_that_precedes_its_anchor_even_when_its_copy_agrees():
+    receipt = recorded()
+    before = next(row for row in receipt["steps"] if row["site"] == "rest/c/read-a")
+    early_utc = (dt.datetime.fromisoformat(before["timing"]["responseUtc"]) - dt.timedelta(seconds=5)).isoformat().replace("+00:00", "Z")
+    def early(row):
+        # both clocks move together, so the timing itself stays well formed and only the order against the earlier answer is wrong
+        row["timing"] = {**row["timing"], "dispatchMonotonic": before["timing"]["responseMonotonic"] - 5.0, "dispatchUtc": early_utc}
+    with pytest.raises(ValueError, match="starts before the request that precedes its anchor"):
+        projection(tamper_consistently(receipt, "rest/c/writer-a", early), TABLE)
 
 
 def test_the_concurrent_order_check_needs_a_start_after_the_earlier_answer_and_an_end_after_the_start():
@@ -229,3 +277,43 @@ def test_a_refused_holder_commit_that_keeps_its_lock_is_released_before_the_writ
     assert order[commit + 1].startswith("cleanup/token/"), "the holder is released right after its anchor"
     assert order.index("rest/c/writer-a") > commit + 1
     projection(receipt, TABLE)
+
+
+@pytest.mark.parametrize("holder_code, writer_code, states", [(0, 0, {"a": "grpc-r-after", "b": "grpc-c-unrelated"}), (10, 0, {"a": "grpc-r-after", "b": "grpc-c-unrelated"}),
+                                                              (0, 10, {"a": "grpc-c-commit", "b": "created"}), (10, 10, {"a": "created", "b": "created"})])
+def test_the_projection_derives_the_states_whether_the_holder_commit_and_the_writer_are_accepted_or_refused(holder_code, writer_code, states):
+    # The projection takes the writer on before its anchor, as the collector did: a refused writer then returns the state the anchor left, and the
+    # completion claims derive from the native rows. (Dropping that step made every refused-writer recording unprojectable: Codex M3, 2026-10-01.)
+    clock = Clock()
+    value = compile_plan(TABLE, NONCE, OWNER)
+    service = Service(clock, locks=True, hold_writers=True, rw_commit_code=holder_code, writer_code=writer_code)
+    receipt = Collector(value, TABLE, RequestBudget(value, TABLE), service, "owner", save=lambda _state: None, monotonic=clock.now, utc=clock.utc, sleep=clock.sleep).run()
+    assert receipt["complete"] is True, receipt.get("failureType")
+    assert projection(receipt, TABLE)["expectedStates"] == states
+
+
+def test_the_projection_refuses_a_receipt_whose_step_list_is_not_in_sequence_order_at_the_writer():
+    # The writer row is compared with the next row of the receipt's own step list, not only by its site: a list whose order differs from the
+    # native sequence is refused wherever the writer's row has been moved to (Codex M3 follow-up, 2026-10-01).
+    receipt = recorded()
+    sites = [row["site"] for row in receipt["steps"]]
+    position = sites.index("rest/c/writer-a")
+    for other in range(len(sites)):
+        if other == position:
+            continue
+        moved = copy.deepcopy(receipt)
+        moved["steps"][position], moved["steps"][other] = moved["steps"][other], moved["steps"][position]
+        with pytest.raises(ValueError):
+            projection(moved, TABLE)
+
+
+def test_the_projection_refuses_a_writer_row_moved_into_the_cleanup_rows():
+    # The writer row and a cleanup row change places between the two lists with their sequence numbers kept: the replay reads the observation
+    # list by position (`wait_entry` and the graph comparison), so the receipt is refused.
+    receipt = recorded()
+    assert receipt["cleanupSteps"], "the recording releases its tokens in the cleanup rows"
+    position = [row["site"] for row in receipt["steps"]].index("rest/c/writer-a")
+    moved = copy.deepcopy(receipt)
+    moved["steps"][position], moved["cleanupSteps"][0] = moved["cleanupSteps"][0], moved["steps"][position]
+    with pytest.raises(ValueError):
+        projection(moved, TABLE)

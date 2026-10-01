@@ -21,7 +21,7 @@ ROOT = HERE.parents[2]
 sys.path.insert(0, str(HERE))
 
 from txn_program_authority import authorize, envelope_scope, remaining_task_budget
-from txn_program_program import compile_plan, corpus_digest, source_digest
+from txn_program_program import budget_for, compile_plan, corpus_digest, source_digest
 from txn_program_runner import record_twice, run_once
 from txn_program_wire import verify_runtime
 from txn_sandbox_admission import read_ledger
@@ -29,7 +29,7 @@ from txn_sandbox_runtime import require_packet_runtime
 
 CLOSURE = ROOT / 'spec/compatibility/closure/FS-TRANSACTION.json'
 # Program name -> the module holding its TABLE; the registry is closed and bound by the runner manifest.
-TABLES = {'p01-lifecycle': 'fs_txn_table_p01', 'p02-readonly': 'fs_txn_table_p02', 'p02b-readonly-refused': 'fs_txn_table_p02b', 'p03-readtime': 'fs_txn_table_p03', 'p05-readlock': 'fs_txn_table_p05', 'p06-multiwrite': 'fs_txn_table_p06', 'p08-failed-commit': 'fs_txn_table_p08', 'p11-lifetime': 'fs_txn_table_p11', 'p12-first-request': 'fs_txn_table_p12'}
+TABLES = {'p01-lifecycle': 'fs_txn_table_p01', 'p02-readonly': 'fs_txn_table_p02', 'p02b-readonly-refused': 'fs_txn_table_p02b', 'p03-readtime': 'fs_txn_table_p03', 'p05-readlock': 'fs_txn_table_p05', 'p06-multiwrite': 'fs_txn_table_p06', 'p08-failed-commit': 'fs_txn_table_p08', 'p11-lifetime': 'fs_txn_table_p11', 'p12-first-request': 'fs_txn_table_p12', 'p13a-inferred-answers': 'fs_txn_table_p13a', 'p13b-retry-answers': 'fs_txn_table_p13b'}
 FIELDS = {'schemaVersion', 'program', 'packetName', 'packetId', 'project', 'database', 'recordings', 'requestsPerRecording', 'estimatedUsdPerRecording', 'sourceCommit', 'runnerSha256', 'closureSha256', 'corpusDigest', 'planSourceDigest', 'baselineSha256', 'envelopeId', 'envelopePath', 'envelopeSha256', 'runtime', 'iamConfig', 'retries', 'onStop', 'observationSeconds', 'recoverySeconds', 'maxTokens', 'timing', 'timingSource', 'reserveUsd', 'maxUnresolvedTokens', 'releasePolicy', 'caps', 'cases', 'scope'}
 
 
@@ -107,7 +107,7 @@ def refuse_virtualenv(runtime):
 def packet_value(*, table, source_commit, runtime, baseline_sha256, envelope_sha256, packet_id, envelope_relative):
     refuse_virtualenv(runtime)
     plan = compile_plan(table, 'a' * 32, 'b' * 32)
-    return {'schemaVersion': 1, 'program': table['program'], 'packetName': table['name'], 'packetId': packet_id, 'project': 'fireemu-oracle-sbx', 'database': '(default)', 'recordings': 2, 'requestsPerRecording': requests_per_recording(table), 'estimatedUsdPerRecording': 0.01, 'sourceCommit': source_commit, 'runnerSha256': runner_sha256(table['name']), 'closureSha256': sha(CLOSURE.read_bytes()), 'corpusDigest': corpus_digest(table), 'planSourceDigest': source_digest(table), 'baselineSha256': baseline_sha256, 'envelopeId': table['envelopeId'], 'envelopePath': envelope_relative, 'envelopeSha256': envelope_sha256, 'runtime': runtime, 'iamConfig': 'none', 'retries': 'none', 'onStop': 'needs-recovery-lock-held', 'observationSeconds': plan['observationSeconds'], 'recoverySeconds': plan['recoverySeconds'], 'maxTokens': plan['maxTokens'], 'timing': 'wall-clock', 'timingSource': 'parent-wire-envelope', 'reserveUsd': 0.04, 'maxUnresolvedTokens': plan['maxUnresolvedTokens'], 'releasePolicy': plan['releasePolicy'], 'caps': plan['caps'], 'cases': plan['cases'], 'scope': envelope_scope(table)}
+    return {'schemaVersion': 1, 'program': table['program'], 'packetName': table['name'], 'packetId': packet_id, 'project': plan['project'], 'database': '(default)', 'recordings': 2, 'requestsPerRecording': requests_per_recording(table), 'estimatedUsdPerRecording': budget_for(plan['project'])[0], 'sourceCommit': source_commit, 'runnerSha256': runner_sha256(table['name']), 'closureSha256': sha(CLOSURE.read_bytes()), 'corpusDigest': corpus_digest(table), 'planSourceDigest': source_digest(table), 'baselineSha256': baseline_sha256, 'envelopeId': table['envelopeId'], 'envelopePath': envelope_relative, 'envelopeSha256': envelope_sha256, 'runtime': runtime, 'iamConfig': 'none', 'retries': 'none', 'onStop': 'needs-recovery-lock-held', 'observationSeconds': plan['observationSeconds'], 'recoverySeconds': plan['recoverySeconds'], 'maxTokens': plan['maxTokens'], 'timing': 'wall-clock', 'timingSource': 'parent-wire-envelope', 'reserveUsd': budget_for(plan['project'])[1], 'maxUnresolvedTokens': plan['maxUnresolvedTokens'], 'releasePolicy': plan['releasePolicy'], 'caps': plan['caps'], 'cases': plan['cases'], 'scope': envelope_scope(table)}
 
 
 def _read_packet(path, digest, *, label='packet'):
@@ -127,7 +127,7 @@ def load_packet(path, digest, baseline_path, envelope_path, *, table, source_com
     if json.dumps(value, sort_keys=True, allow_nan=False) != json.dumps(expected, sort_keys=True, allow_nan=False):
         raise ValueError('program source, scope, baseline or envelope differs')
     verify_runtime(value['runtime'])
-    return {key: value[key] for key in ['packetId', 'packetName', 'sourceCommit', 'runnerSha256', 'requestsPerRecording', 'estimatedUsdPerRecording', 'envelopeId', 'envelopePath', 'scope']} | {'packetSha256': digest, 'packetPath': packet_relative}
+    return {key: value[key] for key in ['packetId', 'packetName', 'sourceCommit', 'runnerSha256', 'requestsPerRecording', 'estimatedUsdPerRecording', 'reserveUsd', 'project', 'envelopeId', 'envelopePath', 'scope']} | {'packetSha256': digest, 'packetPath': packet_relative}
 
 
 def review_template(pins):

@@ -134,6 +134,10 @@ def violations(source, toolchain_channel: nil)
   errors << "the summary upload must overwrite an artifact of its name" unless upload && upload.dig("with", "overwrite") == true
   checkout = summary.find { |step| step["uses"].to_s.start_with?("actions/checkout@") }
   errors << "the summary job must check out the workflow's own commit, not the verified ref" if checkout && checkout.dig("with", "ref")
+  nextest_runs = (workflow.dig("jobs", "nextest", "steps") || []).map { |step| step["run"].to_s }
+  fetched = nextest_runs.index { |run| run.include?("cargo fetch --locked") }
+  suite = nextest_runs.index { |run| run.include?("cargo nextest run") }
+  errors << "nextest must fetch the locked graph before the suite (offline authority checks)" unless fetched && suite && fetched < suite
   # Inputs are validated where they enter, and everything downstream takes the validated outputs.
   plan = workflow.dig("jobs", "plan", "steps") || []
   validate = plan.find { |step| step["id"] == "validate" }

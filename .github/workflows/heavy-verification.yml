@@ -274,6 +274,10 @@ jobs:
         with:
           key: heavy-nextest-${{ matrix.os }}
           save-if: "false"
+      # Cargo authority resolves the locked Linux projection with `--offline`. A host build does not
+      # populate another target's registry sources, so fetch the whole locked graph first (as ci.yml does).
+      - name: fetch locked dependency graph for offline authority checks
+        run: cargo fetch --locked
       - name: the whole suite (profile pr)
         run: cargo nextest run --workspace --profile pr --locked
 

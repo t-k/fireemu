@@ -5624,6 +5624,15 @@ mod schedule_capacity_tests {
         let refused = runtime.run_schedule("tick").unwrap_err();
         assert!(refused.contains("capacity"), "{refused}");
         assert!(admitted(&runtime).is_empty());
+        // The refusal is counted (the resource report lists it as `admission.capacity`).
+        let refusals = runtime
+            .inner
+            .lock()
+            .unwrap()
+            .admission_refusals
+            .get("capacity")
+            .copied();
+        assert_eq!(refusals, Some(1));
         set_room(&runtime, 1);
         runtime.run_schedule("tick").unwrap();
         assert_eq!(

@@ -161,7 +161,7 @@ parity: 17 &middot; documented-divergence: 16
 
 ## json-api
 
-parity: 33 &middot; documented-divergence: 42
+parity: 32 &middot; documented-divergence: 43
 
 | program | step | status |
 | --- | --- | --- |
@@ -194,7 +194,7 @@ parity: 33 &middot; documented-divergence: 42
 | `gcs-update-list-delete` | `patch-remove-custom-key` | documented-divergence |
 | `gcs-update-list-delete` | `patch-missing` | parity |
 | `gcs-update-list-delete` | `patch-storage-v1-spelling` | documented-divergence |
-| `gcs-update-list-delete` | `put-update` | parity |
+| `gcs-update-list-delete` | `put-update` | documented-divergence |
 | `gcs-update-list-delete` | `list-delimited` | documented-divergence |
 | `gcs-update-list-delete` | `list-flat-names` | parity |
 | `gcs-update-list-delete` | `list-empty` | parity |

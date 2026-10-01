@@ -1106,8 +1106,37 @@ fn core_err(e: StorageError) -> (u16, String, &'static str) {
 }
 
 fn gcs_core_err(e: StorageError) -> StorageResponse {
-    let (status, message, reason) = core_err(e);
-    gcs_json_error(status, &message, reason)
+    match e {
+        // A not-match guard that names the current value is a 304 without a body (recorded,
+        // probe-v4 and lean-v4/v5: PATCH, PUT, upload and DELETE).
+        StorageError::NotModified(_) => {
+            StorageResponse::empty(304).with_header("content-type", "application/json")
+        }
+        StorageError::PreconditionFailed(_) => production_precondition_failed(),
+        other => {
+            let (status, message, reason) = core_err(other);
+            gcs_json_error(status, &message, reason)
+        }
+    }
+}
+
+/// The JSON API's refusal of a match guard that did not hold (recorded, lean-v4 and lean-v5: the
+/// same 412 body on PATCH, PUT, DELETE, upload and a metadata read; Google-fronted layout with a
+/// final line feed). The official emulator reads no preconditions, so there is no answer of its
+/// own to follow.
+fn production_precondition_failed() -> StorageResponse {
+    const MESSAGE: &str = "At least one of the pre-conditions you specified did not hold.";
+    let body = format!(
+        "{{\n  \"error\": {{\n    \"code\": 412,\n    \"message\": \"{MESSAGE}\",\n    \"errors\": [\n      {{\n        \"message\": \"{MESSAGE}\",\n        \"domain\": \"global\",\n        \"reason\": \"conditionNotMet\",\n        \"locationType\": \"header\",\n        \"location\": \"If-Match\"\n      }}\n    ]\n  }}\n}}\n"
+    );
+    StorageResponse {
+        status: 412,
+        headers: vec![(
+            "content-type".into(),
+            "application/json; charset=UTF-8".into(),
+        )],
+        body: bytes::Bytes::from(body),
+    }
 }
 
 fn fb_core_err(e: StorageError) -> StorageResponse {
@@ -1849,6 +1878,12 @@ impl StorageState {
         }
     }
 
+    /// The way an unsatisfiable range is answered: production's under strict, the official
+    /// emulator's whole object (`None`) otherwise.
+    fn strict_range_style(&self, style: RangeStyle) -> Option<RangeStyle> {
+        self.is_strict().then_some(style)
+    }
+
     /// Whether this is the strict profile, which answers as production does.
     fn is_strict(&self) -> bool {
         self.token_acceptance != TokenAcceptance::EmulatorMock
@@ -2143,7 +2178,10 @@ fn route(method: &str, path: &str) -> Result<Route, String> {
         }
         // PATCH is served on `/storage/v1` as production serves it; the official emulator
         // registers it on the short spelling only. The download spelling is GET only.
-        ("GET" | "PATCH" | "DELETE", ["b", b, "o", n] | ["storage", "v1", "b", b, "o", n])
+        (
+            "GET" | "PATCH" | "PUT" | "DELETE",
+            ["b", b, "o", n] | ["storage", "v1", "b", b, "o", n],
+        )
         | ("GET", ["download", "storage", "v1", "b", b, "o", n]) => Ok(Route::GcsObject {
             bucket: d(b)?,
             name: d(n)?,
@@ -2203,11 +2241,24 @@ fn precondition_named(
     params: &BTreeMap<String, String>,
     prefix: &str,
 ) -> Result<Precondition, StorageResponse> {
+    // Production reads a match guard whose value is not a generation number as one that does not
+    // hold (412) and a not-match guard like that as one that holds, so the request goes ahead
+    // (recorded, lean-v4: `ifMetagenerationMatch=-1` 412, `ifMetagenerationNotMatch=-1` 200/204).
+    let match_value = |key: &str| -> Result<Option<u64>, StorageResponse> {
+        match params.get(key) {
+            None => Ok(None),
+            Some(v) => v
+                .parse::<u64>()
+                .map(Some)
+                .map_err(|_| production_precondition_failed()),
+        }
+    };
+    let not_match_value = |key: &str| params.get(key).and_then(|v| v.parse::<u64>().ok());
     let pre = Precondition {
-        if_generation_match: u64_param(params, &format!("{prefix}GenerationMatch"))?,
-        if_metageneration_match: u64_param(params, &format!("{prefix}MetagenerationMatch"))?,
-        if_generation_not_match: u64_param(params, &format!("{prefix}GenerationNotMatch"))?,
-        if_metageneration_not_match: u64_param(params, &format!("{prefix}MetagenerationNotMatch"))?,
+        if_generation_match: match_value(&format!("{prefix}GenerationMatch"))?,
+        if_metageneration_match: match_value(&format!("{prefix}MetagenerationMatch"))?,
+        if_generation_not_match: not_match_value(&format!("{prefix}GenerationNotMatch")),
+        if_metageneration_not_match: not_match_value(&format!("{prefix}MetagenerationNotMatch")),
     };
     if (pre.if_generation_match.is_some() && pre.if_generation_not_match.is_some())
         || (pre.if_metageneration_match.is_some() && pre.if_metageneration_not_match.is_some())
@@ -2939,6 +2990,11 @@ fn fb_get(
     params: &BTreeMap<String, String>,
 ) -> Outcome {
     let b = bucket_name(bucket)?;
+    // A name with a line feed cannot be an object here; production answers a read of it as it
+    // answers a missing object (recorded, lean-v5: 404 on the metadata and the media read).
+    if name.contains('\n') {
+        return Ok(fb_object_not_found());
+    }
     let n = object_name(name)?;
     let now = state.now();
     let mut store = state.store()?;
@@ -2967,7 +3023,7 @@ fn fb_get(
             bytes,
             &meta,
             req,
-            state.token_acceptance == TokenAcceptance::Verified,
+            state.strict_range_style(RangeStyle::Firebase),
         ))
     } else {
         // Production mints a download token the first time the Firebase dialect reads the
@@ -2994,7 +3050,7 @@ fn send_file_bytes(
     shared: Arc<Vec<u8>>,
     meta: &ObjectMetadata,
     req: &StorageRequest,
-    strict_range: bool,
+    strict_range: Option<RangeStyle>,
 ) -> StorageResponse {
     let bytes = bytes::Bytes::from_owner(SharedBlob(shared));
     let filename = meta
@@ -3044,10 +3100,43 @@ fn send_file_bytes(
     let len = bytes.len() as u64;
     // https://cloud.google.com/storage/docs/json_api/v1/status-codes
     // https://www.rfc-editor.org/rfc/rfc9110.html#section-14.4
-    // Emulator mode preserves the official emulator's whole-object fallback.
+    // Emulator mode preserves the official emulator's whole-object fallback; strict answers as
+    // production does (recorded, lean-v4 and lean-v5, both dialects).
     let range = parse_range(req.header("range"), len);
-    if strict_range && matches!(&range, ParsedRange::Unsatisfiable) {
-        return StorageResponse::empty(416).with_header("content-range", format!("bytes */{len}"));
+    match (strict_range, &range) {
+        // The JSON API: the sentence as `text/html` and the unsatisfied range of the object.
+        (Some(RangeStyle::Gcs), ParsedRange::Unsatisfiable) => {
+            return html_text(416, "Request range not satisfiable")
+                .with_header("content-range", format!("bytes */{len}"));
+        }
+        // The Firebase dialect: an XML error naming the range that was asked for.
+        (Some(RangeStyle::Firebase), ParsedRange::Unsatisfiable) => {
+            let asked = xml_escape(req.header("range").unwrap_or_default().trim());
+            return StorageResponse {
+                status: 416,
+                headers: vec![
+                    ("accept-ranges".into(), "bytes".into()),
+                    (
+                        "content-type".into(),
+                        "application/xml; charset=UTF-8".into(),
+                    ),
+                    ("x-goog-generation".into(), meta.generation.to_string()),
+                ],
+                body: bytes::Bytes::from(format!(
+                    "<?xml version='1.0' encoding='UTF-8'?><Error><Code>InvalidRange</Code><Message>The requested range cannot be satisfied.</Message><Details>{asked}</Details></Error>"
+                )),
+            };
+        }
+        // A nonzero suffix of an empty object is satisfied by an empty 206 (JSON API only).
+        (Some(RangeStyle::Gcs), ParsedRange::EmptySuffix) => {
+            headers.push(("content-range".to_owned(), "bytes 0-0/0".to_owned()));
+            return StorageResponse {
+                status: 206,
+                headers,
+                body: bytes::Bytes::new(),
+            };
+        }
+        _ => {}
     }
     if let ParsedRange::Satisfiable(start, end) = range {
         headers.push((
@@ -3078,7 +3167,24 @@ fn send_file_bytes(
 enum ParsedRange {
     Ignored,
     Unsatisfiable,
+    /// A nonzero suffix (`bytes=-N`) of an empty object.
+    EmptySuffix,
     Satisfiable(u64, u64),
+}
+
+/// How the strict profile words an unsatisfiable range: the JSON API and the Firebase dialect
+/// answer differently (see `send_file_bytes`).
+#[derive(Clone, Copy)]
+enum RangeStyle {
+    Gcs,
+    Firebase,
+}
+
+/// The characters XML text cannot carry as they are.
+fn xml_escape(text: &str) -> String {
+    text.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
 }
 
 fn parse_range(header: Option<&str>, len: u64) -> ParsedRange {
@@ -3101,10 +3207,11 @@ fn parse_range(header: Option<&str>, len: u64) -> ParsedRange {
             return ParsedRange::Unsatisfiable;
         }
         // RFC 9110 section 14.1.1 calls a nonzero suffix satisfiable even for an empty
-        // representation. Serving its empty body as 200 avoids an invalid 206 Content-Range.
+        // representation. The emulator profile serves the empty body as 200; strict answers
+        // what production answered on the JSON API (an empty 206).
         // https://www.rfc-editor.org/rfc/rfc9110.html#section-14.1.1
         if len == 0 {
-            return ParsedRange::Ignored;
+            return ParsedRange::EmptySuffix;
         }
         return ParsedRange::Satisfiable(len.saturating_sub(suffix), len);
     }
@@ -3696,6 +3803,12 @@ fn gcs_object(
     host: &str,
 ) -> Outcome {
     let b = bucket_name(bucket)?;
+    // As on the Firebase dialect, a read of a name with a line feed is a missing object
+    // (recorded, lean-v5).
+    if method == "GET" && name.contains('\n') {
+        let media = params.get("alt").map(String::as_str) == Some("media");
+        return Ok(gcs_no_such_object(bucket, name, media));
+    }
     let n = object_name(name)?;
     let now = state.now();
     match method {
@@ -3710,8 +3823,25 @@ fn gcs_object(
             // (production semantics; the official emulator reads no preconditions at all).
             match precondition(params)?.check(Some(&meta)) {
                 Ok(()) => {}
+                // The 304 has no body and the content type of the answer it stands for (recorded,
+                // lean-v4: `application/json` for a metadata read, `application/octet-stream` for
+                // a media read); a media read that fails a match guard answers the bare sentence
+                // as `text/html`, a metadata read the JSON 412.
                 Err(StorageError::NotModified(_)) => {
-                    return Ok(StorageResponse::empty(304).with_header("etag", meta.etag()))
+                    return Ok(StorageResponse::empty(304).with_header(
+                        "content-type",
+                        if media {
+                            "application/octet-stream"
+                        } else {
+                            "application/json"
+                        },
+                    ))
+                }
+                Err(StorageError::PreconditionFailed(_)) if media => {
+                    return Ok(html_text(
+                        412,
+                        "At least one of the pre-conditions you specified did not hold.",
+                    ))
                 }
                 Err(e) => return Ok(gcs_core_err(e)),
             }
@@ -3722,13 +3852,17 @@ fn gcs_object(
                     bytes,
                     &meta,
                     req,
-                    state.token_acceptance == TokenAcceptance::Verified,
+                    state.strict_range_style(RangeStyle::Gcs),
                 ))
             } else {
                 Ok(StorageResponse::json(200, &gcs_json(&meta, host)))
             }
         }
-        "PATCH" => {
+        // `PUT` updates the object's metadata like `PATCH` (recorded, probe-v4: an accepted
+        // `PUT` with `contentType` and `metadata` answers 200 with the object resource, the
+        // metageneration one higher). What a `PUT` that omits a field does to it was not
+        // recorded, so only the fields given are applied.
+        "PATCH" | "PUT" => {
             let body: Value = if req.body.is_empty() {
                 Value::Object(Map::new())
             } else {
@@ -4351,7 +4485,7 @@ fn xml_style_get(
         bytes,
         &meta,
         req,
-        state.token_acceptance == TokenAcceptance::Verified,
+        state.strict_range_style(RangeStyle::Gcs),
     ))
 }
 

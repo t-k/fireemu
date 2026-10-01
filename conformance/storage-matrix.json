@@ -6,8 +6,8 @@
   },
   "project": "demo-storage-probe",
   "summary": {
-    "parity": 108,
-    "documented-divergence": 111,
+    "parity": 107,
+    "documented-divergence": 112,
     "debt": 0
   },
   "programs": [
@@ -5201,14 +5201,48 @@
         },
         {
           "id": "put-update",
-          "status": "parity",
-          "value": {
+          "status": "documented-divergence",
+          "oracle": {
             "body": "Not Implemented",
             "headers": {
               "content-type": "text/plain; charset=utf-8"
             },
             "status": 501
-          }
+          },
+          "fireemu": {
+            "body": {
+              "bucket": "demo-storage-probe.appspot.com",
+              "cacheControl": "no-store",
+              "contentEncoding": "identity",
+              "contentLanguage": "de",
+              "contentType": "text/x-put",
+              "crc32c": "zegzwA==",
+              "etag": "<etag>",
+              "generation": "<generation>",
+              "id": "demo-storage-probe.appspot.com/open/gcsu/doc.txt/<generation>",
+              "kind": "storage#object",
+              "md5Hash": "mgm039qC4+Zl4xCS0cPsjQ==",
+              "mediaLink": "http://<host>/download/storage/v1/b/demo-storage-probe.appspot.com/o/open%2Fgcsu%2Fdoc.txt?generation=<generation>&alt=media",
+              "metadata": {
+                "b": "2"
+              },
+              "metageneration": "5",
+              "name": "open/gcsu/doc.txt",
+              "selfLink": "http://<host>/storage/v1/b/demo-storage-probe.appspot.com/o/open%2Fgcsu%2Fdoc.txt",
+              "size": "3",
+              "storageClass": "STANDARD",
+              "timeCreated": "<timestamp>",
+              "timeFinalized": "<timestamp>",
+              "timeStorageClassUpdated": "<timestamp>",
+              "updated": "<timestamp>"
+            },
+            "headers": {
+              "content-type": "application/json; charset=utf-8"
+            },
+            "status": 200
+          },
+          "documents": "README.md, \"Storage\"; capability manifest ST-OBJ-1 (crates/fireemu/src/capabilities.json)",
+          "reason": "PUT on the JSON API object (update) updates the object's metadata in fireemu and answers the object resource with the metageneration one higher, as production does (recorded, STORAGE-OBJECT probe-v4, 2026-09-30); the official emulator registers no PUT route and answers 501. What a PUT that omits a field does to it was not recorded, so only the fields given are applied."
         },
         {
           "id": "list-delimited",
@@ -6487,15 +6521,17 @@
                 "errors": [
                   {
                     "domain": "global",
-                    "message": "ifGenerationMatch 0 but the current generation is 61",
+                    "location": "If-Match",
+                    "locationType": "header",
+                    "message": "At least one of the pre-conditions you specified did not hold.",
                     "reason": "conditionNotMet"
                   }
                 ],
-                "message": "ifGenerationMatch 0 but the current generation is 61"
+                "message": "At least one of the pre-conditions you specified did not hold."
               }
             },
             "headers": {
-              "content-type": "application/json; charset=utf-8"
+              "content-type": "application/json; charset=UTF-8"
             },
             "status": 412
           },
@@ -6576,15 +6612,17 @@
                 "errors": [
                   {
                     "domain": "global",
-                    "message": "ifMetagenerationMatch 999 but the current metageneration is 1",
+                    "location": "If-Match",
+                    "locationType": "header",
+                    "message": "At least one of the pre-conditions you specified did not hold.",
                     "reason": "conditionNotMet"
                   }
                 ],
-                "message": "ifMetagenerationMatch 999 but the current metageneration is 1"
+                "message": "At least one of the pre-conditions you specified did not hold."
               }
             },
             "headers": {
-              "content-type": "application/json; charset=utf-8"
+              "content-type": "application/json; charset=UTF-8"
             },
             "status": 412
           },
@@ -6620,8 +6658,12 @@
             "status": 200
           },
           "fireemu": {
-            "body": "",
-            "headers": {},
+            "body": {
+              "unparsableJson": ""
+            },
+            "headers": {
+              "content-type": "application/json"
+            },
             "status": 304
           },
           "documents": "README.md, \"Storage\"; capability manifest ST-OBJ-1 (crates/fireemu/src/capabilities.json)",
@@ -6642,15 +6684,17 @@
                 "errors": [
                   {
                     "domain": "global",
-                    "message": "ifGenerationMatch 1 but the current generation is 62",
+                    "location": "If-Match",
+                    "locationType": "header",
+                    "message": "At least one of the pre-conditions you specified did not hold.",
                     "reason": "conditionNotMet"
                   }
                 ],
-                "message": "ifGenerationMatch 1 but the current generation is 62"
+                "message": "At least one of the pre-conditions you specified did not hold."
               }
             },
             "headers": {
-              "content-type": "application/json; charset=utf-8"
+              "content-type": "application/json; charset=UTF-8"
             },
             "status": 412
           },
@@ -6682,21 +6726,23 @@
           "fireemu": {
             "body": {
               "error": {
-                "code": 400,
+                "code": 412,
                 "errors": [
                   {
                     "domain": "global",
-                    "message": "invalid ifGenerationMatch: \"abc\"",
-                    "reason": "invalid"
+                    "location": "If-Match",
+                    "locationType": "header",
+                    "message": "At least one of the pre-conditions you specified did not hold.",
+                    "reason": "conditionNotMet"
                   }
                 ],
-                "message": "invalid ifGenerationMatch: \"abc\""
+                "message": "At least one of the pre-conditions you specified did not hold."
               }
             },
             "headers": {
-              "content-type": "application/json; charset=utf-8"
+              "content-type": "application/json; charset=UTF-8"
             },
-            "status": 400
+            "status": 412
           },
           "documents": "README.md, \"Storage\"; capability manifest ST-OBJ-1 (crates/fireemu/src/capabilities.json)",
           "reason": "A malformed precondition value is 400 under fireemu; the official emulator does not read the parameter (and, this late in the program, had already deleted the object the guarded delete should have kept)."

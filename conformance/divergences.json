@@ -2268,6 +2268,24 @@
         "approvalRecord": "README.md, \"Storage\"; capability manifest STORAGE-RULES-1 (crates/fireemu/src/capabilities.json)"
       }
     },
+    "storage-probe/gcs-update-list-delete#put-update": {
+      "documents": "README.md, \"Storage\"; capability manifest ST-OBJ-1 (crates/fireemu/src/capabilities.json)",
+      "reason": "PUT on the JSON API object (update) updates the object's metadata in fireemu and answers the object resource with the metageneration one higher, as production does (recorded, STORAGE-OBJECT probe-v4, 2026-09-30); the official emulator registers no PUT route and answers 501. What a PUT that omits a field does to it was not recorded, so only the fields given are applied.",
+      "authority": {
+        "kind": "production-spec",
+        "sourceUrls": [
+          "https://cloud.google.com/storage/docs/json_api/v1/objects/update",
+          "https://github.com/firebase/firebase-tools/tree/v15.28.2"
+        ],
+        "checkedOn": "2026-10-01",
+        "officialBaseline": {
+          "package": "firebase-tools",
+          "version": "15.28.2"
+        },
+        "fixture": "conformance/storage-matrix.json#gcs-update-list-delete#put-update",
+        "approvalRecord": "README.md, \"Storage\"; capability manifest ST-OBJ-1 (crates/fireemu/src/capabilities.json)"
+      }
+    },
     "storage-probe/rules-request-model#cache-control-visible-to-rules": {
       "documents": "README.md, \"Storage\"; capability manifest STORAGE-RULES-1 (crates/fireemu/src/capabilities.json)",
       "reason": "resource.cacheControl is a production rules field. fireemu passes it; the official emulator's rules resource omits it, so reading it raises and the read was measured to deny.",

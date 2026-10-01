@@ -5,6 +5,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
 use bytes::Bytes;
+use fireemu_adapter_support::connection::{DrainBounds, GracefulClose};
 use http_body_util::{BodyExt, Full};
 use hyper::body::Incoming;
 use hyper::server::conn::http1;
@@ -496,7 +497,10 @@ pub async fn serve_storage_with_budget(
         let (stream, _) = listener.accept().await?;
         let state = state.clone();
         tokio::spawn(async move {
-            let io = TokioIo::new(stream);
+            let io = TokioIo::new(GracefulClose::new(
+                stream,
+                DrainBounds::for_largest_body(MAX_STORAGE_BODY_BYTES),
+            ));
             let svc = service_fn(move |req| respond(state.clone(), budget, req));
             let _ = http1::Builder::new().serve_connection(io, svc).await;
         });

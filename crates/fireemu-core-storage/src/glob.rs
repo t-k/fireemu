@@ -81,7 +81,12 @@ fn parse(chars: &[char], at: &mut usize, in_braces: bool) -> Vec<Token> {
                 let start = *at;
                 *at += 1;
                 let mut alternatives = vec![parse(chars, at, true)];
-                while chars.get(*at) == Some(&',') {
+                // One alternative per comma at most: the bound keeps a cursor that stopped
+                // advancing from collecting alternatives without end.
+                for _ in 0..chars.len() {
+                    if chars.get(*at) != Some(&',') {
+                        break;
+                    }
                     *at += 1;
                     alternatives.push(parse(chars, at, true));
                 }

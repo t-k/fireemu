@@ -2197,8 +2197,8 @@ impl FirestoreState {
     /// gRPC, two recordings: the first read showed the writer and the commit answered 0), and so
     /// does the official emulator (v1.22.0, measured on both transports), so both profiles do. A
     /// transaction that begins with a read (`newTransaction` on a read) uses
-    /// [`Self::begin_transaction`]; a retry attempt ([`Self::retry_transaction`]) is not recorded
-    /// in production.
+    /// [`Self::begin_transaction`]; a retry attempt ([`Self::retry_transaction`]) reads at its first use
+    /// too (P13b).
     pub fn begin_read_write_transaction(
         &mut self,
         now: LogicalInstant,
@@ -2242,28 +2242,38 @@ impl FirestoreState {
                 "Invalid retry transaction.".into(),
             ));
         };
-        if !matches!(
-            previous_attempt.state,
-            TransactionState::RetryableAborted
-                | TransactionState::RolledBack
-                | TransactionState::Committed
-                | TransactionState::CommitRefused
-        ) {
+        // Production accepts a retry that names a token it has expired and still remembers, an idle-expired one and a lifetime-expired one alike (FS-TRANSACTION
+        // P13b, REST, two recordings: accepted at 132 s and at 280 to 283 s of token age). The emulator profile keeps refusing it: the official emulator is
+        // not recorded for that shape.
+        let expired = self.limit_scope == LimitScope::Production
+            && previous_attempt.state == TransactionState::Finished;
+        if !expired
+            && !matches!(
+                previous_attempt.state,
+                TransactionState::RetryableAborted
+                    | TransactionState::RolledBack
+                    | TransactionState::Committed
+                    | TransactionState::CommitRefused
+            )
+        {
             return Err(FirestoreError::InvalidArgument(
                 "Invalid retry transaction.".into(),
             ));
         }
         self.ensure_transaction_capacity()?;
-        if let Some(previous_attempt) = self.transactions.get_mut(previous) {
-            previous_attempt.state = TransactionState::Retried;
+        if !expired {
+            if let Some(previous_attempt) = self.transactions.get_mut(previous) {
+                previous_attempt.state = TransactionState::Retried;
+            }
         }
+        // An expired token that was retried keeps answering as an expired one: P13b's chain-end Rollback of it answered 0 for an idle-expired token and 10
+        // with the expired text for a lifetime-expired one, as without the retry.
         let read_time = self.read_time(now);
         let id = self.insert_transaction(false, self.version, read_time, now)?;
-        // The official emulator (v1.22.0, REST measured) reads a retried read-write transaction at
-        // its first use, like a plain begin (`begin_read_write_transaction`); production is
-        // unobserved, so strict keeps the begin-time snapshot.
+        // A retry attempt reads at its first use, like a plain read-write begin (`begin_read_write_transaction`): production showed the writer that committed
+        // after the retry's begin to the attempt's first read (P13b, REST, two recordings), and so did the official emulator (v1.22.0, REST measured).
         if let Some(transaction) = self.transactions.get_mut(&id) {
-            transaction.snapshot_pending = self.limit_scope == LimitScope::OfficialEmulator;
+            transaction.snapshot_pending = true;
         }
         Ok(id)
     }

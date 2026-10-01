@@ -867,6 +867,7 @@ fn two_transactions_contending_for_one_document_resolve_like_a_deadlock() {
     s.commit(std::slice::from_ref(&take), Some(&first), t(4))
         .unwrap();
     let retry = s.retry_transaction(&second, t(5)).unwrap();
+    s.touch_transaction(&retry, t(5)).unwrap();
     let seen = s
         .get_in_transaction(&retry, &path("locks/l"))
         .unwrap()
@@ -961,10 +962,9 @@ fn locally_expired_transaction_rollback_does_not_revive_finished_lineage() {
 
     state.rollback(&transaction).unwrap();
     assert_eq!(state.transaction_releases(), released);
-    assert!(matches!(
-        state.retry_transaction(&transaction, t(126)),
-        Err(FirestoreError::InvalidArgument(message)) if message == "Invalid retry transaction."
-    ));
+    // Production accepts a retry that names an idle-expired token, whether or not it was rolled back first (P13b, REST, two recordings: 132 s of token age).
+    let retry = state.retry_transaction(&transaction, t(126)).unwrap();
+    state.touch_transaction(&retry, t(126)).unwrap();
     assert!(matches!(
         state.commit(&[], Some(&transaction), t(127)),
         Err(FirestoreError::Aborted(_))
@@ -999,6 +999,7 @@ fn sandbox_recorded_committed_transaction_can_seed_one_retry() {
         .unwrap();
 
     let retry = state.retry_transaction(&transaction, t(3)).unwrap();
+    state.touch_transaction(&retry, t(3)).unwrap();
     assert_ne!(transaction, retry);
     let document = state
         .get_in_transaction(&retry, &path("retry/document"))
@@ -1338,6 +1339,7 @@ fn a_transaction_nearest_query_replays_with_vector_semantics_after_conflict() {
         .commit(std::slice::from_ref(&replacement), Some(&first), t(4))
         .unwrap();
     let retry = state.retry_transaction(&second, t(5)).unwrap();
+    state.touch_transaction(&retry, t(5)).unwrap();
     let nearest = state.run_query_in_transaction(&retry, &query).unwrap();
     assert_eq!(nearest.len(), 1);
     assert_eq!(
@@ -2140,6 +2142,7 @@ fn recorded_native_idle_candidate_rollback_first_preserves_retry() {
             )
             .unwrap();
         let retry = state.retry_transaction(&transaction, t(66)).unwrap();
+        state.touch_transaction(&retry, t(66)).unwrap();
         assert_ne!(retry, transaction);
         assert_eq!(
             state
@@ -2223,6 +2226,7 @@ fn recorded_native_idle_candidate_get_then_rollback_preserves_retry() {
             )
             .unwrap();
         let retry = state.retry_transaction(&transaction, t(66)).unwrap();
+        state.touch_transaction(&retry, t(66)).unwrap();
         assert_eq!(
             state
                 .get_in_transaction(&retry, &path("idle/doc"))
@@ -3330,7 +3334,7 @@ fn a_read_time_begin_and_a_retry_attempt_answer_no_time_until_they_read() {
 // The official emulator (v1.22.0, REST measured) reads a retried read-write transaction at its first
 // use, like a plain begin, and its commit succeeds; the emulator profile matches it.
 #[test]
-fn the_emulator_profile_reads_a_retried_transaction_at_its_first_use() {
+fn both_profiles_read_a_retried_transaction_at_its_first_use() {
     let mut state = FirestoreState::with_limit_scope(LimitScope::OfficialEmulator);
     state
         .commit(&[set("p02/doc", &[("v", Value::Integer(1))])], None, t(0))
@@ -3359,7 +3363,7 @@ fn the_emulator_profile_reads_a_retried_transaction_at_its_first_use() {
         )
         .unwrap();
 
-    // Production keeps the begin-time snapshot (unobserved).
+    // Production reads a retry attempt at its first use too (P13b: the first read showed the writer committed after the retry's begin).
     let mut strict = FirestoreState::with_limit_scope(LimitScope::Production);
     strict
         .commit(&[set("p02/doc", &[("v", Value::Integer(1))])], None, t(0))
@@ -3375,7 +3379,7 @@ fn the_emulator_profile_reads_a_retried_transaction_at_its_first_use() {
         .get_in_transaction(&retried, &path("p02/doc"))
         .unwrap()
         .and_then(|document| document.fields.get("v").cloned());
-    assert_eq!(shown, Some(Value::Integer(1)));
+    assert_eq!(shown, Some(Value::Integer(2)));
 }
 
 // An embedded `newTransaction` reads in the request that begins it, so its empty commit already

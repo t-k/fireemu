@@ -4325,6 +4325,178 @@ fn a_rest_rollback_as_the_first_request_after_the_total_lifetime_is_answered_per
     }
 }
 
+/// P13b (REST, two recordings, strict, `fireemu-oracle-txn`): a retry that names an expired token is accepted and mints a token of its own, for an
+/// idle-expired token (132 s of age, no Rollback first) and for a lifetime-expired one (280 to 283 s); the named token then answers as it would
+/// without the retry (a Rollback of the idle-expired one 0, of the lifetime-expired one 409 `ABORTED` "no longer valid"). The emulator profile
+/// keeps refusing a retry of an expired token (the official emulator is not recorded for it).
+#[test]
+fn a_rest_retry_that_names_an_expired_token_is_answered_per_profile() {
+    const GONE: &str = "The referenced transaction has expired or is no longer valid.";
+    for strict in [true, false] {
+        for lifetime in [false, true] {
+            let gateway = Gateway {
+                enforce_limits: strict,
+                ctx: PlanningContext {
+                    edition: FirestoreEdition::Standard,
+                    api_mode: FirestoreApiMode::Native,
+                    policy: if strict {
+                        IndexValidationPolicy::Production
+                    } else {
+                        IndexValidationPolicy::Emulator
+                    },
+                },
+                indexes: IndexSet::default(),
+            };
+            let (s, clock) = state_with_gateway(gateway, None, TokenAcceptance::Verified);
+            let advance = |seconds: i64| {
+                let _ = clock.lock().unwrap().advance(
+                    fireemu_core_types::time::LogicalDuration::from_seconds(seconds),
+                );
+            };
+            let (status, seeded) = call(
+                &s,
+                "PATCH",
+                &format!("{DOCS}/retry-expired/a"),
+                json!({"fields": {"v": {"integerValue": "1"}}}),
+            );
+            assert_eq!(status, 200, "{seeded}");
+            let (status, begun) = call(
+                &s,
+                "POST",
+                &format!("{DOCS}:beginTransaction"),
+                json!({"options": {"readWrite": {}}}),
+            );
+            assert_eq!(status, 200, "{begun}");
+            let named = begun["transaction"].as_str().unwrap().to_owned();
+            let read = |transaction: &str| {
+                call(
+                    &s,
+                    "GET",
+                    &format!("{DOCS}/retry-expired/a?transaction={transaction}"),
+                    Value::Null,
+                )
+            };
+            assert_eq!(read(&named).0, 200);
+            if lifetime {
+                // a read every 24 s keeps it alive past its idle limit; the lifetime ends at 270 s
+                for _ in 0..9 {
+                    advance(24);
+                    assert_eq!(read(&named).0, 200);
+                }
+                advance(12);
+                assert_eq!(read(&named).0, 200);
+                // 228 s so far, plus the 20 s the recorded requests took: the retry meets a token 280 s old
+                advance(52);
+            } else {
+                advance(130);
+            }
+            let (status, retried) = call(
+                &s,
+                "POST",
+                &format!("{DOCS}:beginTransaction"),
+                json!({"options": {"readWrite": {"retryTransaction": named}}}),
+            );
+            let label = format!("strict={strict} lifetime={lifetime}: {retried}");
+            if strict {
+                assert_eq!(status, 200, "{label}");
+                let fresh = retried["transaction"].as_str().unwrap().to_owned();
+                assert_ne!(fresh, named, "{label}");
+                assert_eq!(read(&fresh).0, 200, "{label}");
+                let (status, rolled) = call(
+                    &s,
+                    "POST",
+                    &format!("{DOCS}:rollback"),
+                    json!({"transaction": named}),
+                );
+                if lifetime {
+                    assert_eq!(status, 409, "{label}: {rolled}");
+                    assert_eq!(rolled["error"]["message"], GONE, "{label}: {rolled}");
+                } else {
+                    assert_eq!(status, 200, "{label}: {rolled}");
+                }
+                let (status, released) = call(
+                    &s,
+                    "POST",
+                    &format!("{DOCS}:rollback"),
+                    json!({"transaction": fresh}),
+                );
+                assert_eq!(status, 200, "{label}: {released}");
+            } else {
+                assert_eq!(status, 400, "{label}");
+                assert_eq!(
+                    retried["error"]["message"], "Invalid retry transaction.",
+                    "{label}"
+                );
+            }
+        }
+    }
+}
+
+/// P13b (REST, strict): the first read of a retry attempt shows an outside write committed after the retry's begin, and the attempt's Commit is
+/// accepted.
+#[test]
+fn a_rest_retry_attempt_reads_at_its_first_use_in_strict() {
+    let s = state_with_profile(true);
+    let (status, seeded) = call(
+        &s,
+        "PATCH",
+        &format!("{DOCS}/retry-snapshot/a"),
+        json!({"fields": {"v": {"integerValue": "1"}}}),
+    );
+    assert_eq!(status, 200, "{seeded}");
+    let (_, begun) = call(
+        &s,
+        "POST",
+        &format!("{DOCS}:beginTransaction"),
+        json!({"options": {"readWrite": {}}}),
+    );
+    let first = begun["transaction"].as_str().unwrap().to_owned();
+    let (status, _) = call(
+        &s,
+        "GET",
+        &format!("{DOCS}/retry-snapshot/a?transaction={first}"),
+        Value::Null,
+    );
+    assert_eq!(status, 200);
+    let (status, rolled) = call(
+        &s,
+        "POST",
+        &format!("{DOCS}:rollback"),
+        json!({"transaction": first}),
+    );
+    assert_eq!(status, 200, "{rolled}");
+    let (status, retried) = call(
+        &s,
+        "POST",
+        &format!("{DOCS}:beginTransaction"),
+        json!({"options": {"readWrite": {"retryTransaction": first}}}),
+    );
+    assert_eq!(status, 200, "{retried}");
+    let retry = retried["transaction"].as_str().unwrap().to_owned();
+    let (status, written) = call(
+        &s,
+        "PATCH",
+        &format!("{DOCS}/retry-snapshot/a"),
+        json!({"fields": {"v": {"integerValue": "2"}}}),
+    );
+    assert_eq!(status, 200, "{written}");
+    let (status, shown) = call(
+        &s,
+        "GET",
+        &format!("{DOCS}/retry-snapshot/a?transaction={retry}"),
+        Value::Null,
+    );
+    assert_eq!(status, 200, "{shown}");
+    assert_eq!(shown["fields"]["v"]["integerValue"], "2");
+    let (status, committed) = call(
+        &s,
+        "POST",
+        &format!("{DOCS}:commit"),
+        json!({"transaction": retry, "writes": []}),
+    );
+    assert_eq!(status, 200, "{committed}");
+}
+
 /// P13a (REST, two recordings, strict): an idle-expired token is remembered like a lifetime-expired one. Reads at about 132 s and 232 s
 /// answer 409 `ABORTED` "no longer valid", and so does a Rollback at about 287 s; a read at about 310 s on another such token answers 400
 /// `INVALID_ARGUMENT` "Invalid transaction." (forgotten at about 300 s).

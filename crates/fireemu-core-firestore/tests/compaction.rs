@@ -689,3 +689,31 @@ fn the_deadline_index_has_one_entry_for_each_active_transaction() {
         assert_eq!(state.transaction_bookkeeping_stats().active, 0);
     }
 }
+
+/// The deadline is exclusive for the pin: a transaction whose idle limit ends at the commit's own time no longer holds
+/// the version it read, one a second earlier still does (the default profile is the strict one).
+#[test]
+fn a_transaction_at_its_exact_deadline_no_longer_pins_its_version() {
+    for (commit_second, pinned) in [(READ_TIME_RETENTION_SECONDS + 118, true), (READ_TIME_RETENTION_SECONDS + 119, false)] {
+        let mut state = FirestoreState::with_history_limits(HistoryLimits {
+            max_bytes: u64::MAX,
+            max_versions: 2,
+        });
+        state
+            .commit(&[set("docs/a", &[("v", Value::Integer(1))])], None, t(0))
+            .unwrap();
+        state
+            .commit(&[set("docs/a", &[("v", Value::Integer(2))])], None, t(1))
+            .unwrap();
+        // Begun at second 3599: the 60 s idle limit plus the strict allowance end it at second 3719.
+        let _transaction = state
+            .begin_transaction_at(t(0), t(READ_TIME_RETENTION_SECONDS - 1))
+            .unwrap();
+        let result = state.commit(&[set("docs/b", &[])], None, t(commit_second));
+        if pinned {
+            assert!(matches!(result, Err(FirestoreError::HistoryCapacity(_))), "{result:?}");
+        } else {
+            result.expect("the transaction ended at the commit's own time");
+        }
+    }
+}

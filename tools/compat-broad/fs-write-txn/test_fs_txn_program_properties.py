@@ -14,7 +14,7 @@ from pathlib import Path
 
 import pytest
 
-from txn_program_collector import Collector
+from txn_program_collector import Collector, projection
 from txn_program_program import RequestBudget, compile_plan
 from test_txn_program_collector import Clock, Service
 
@@ -25,7 +25,7 @@ REGRESSION_SEEDS = (0, 1, 2, 3, 7, 11, 23, 42, 97, 128)   # kept: the first gene
 RESOLVED = ("committed", "rolled-back", "released-refused", "released-expired")
 
 
-def step(step_id, rpc, role, *, transport="rest", document=None, token_in=None, token_out=None, writes=(), case=None, allow=(0,), wait=None, retry_of=None):
+def step(step_id, rpc, role, *, transport="rest", document=None, token_in=None, token_out=None, writes=(), case=None, allow=(0,), wait=None, retry_of=None, concurrent_with=None):
     row = {"id": step_id, "transport": transport, "rpc": rpc, "document": document, "tokenInput": token_in, "tokenOutput": token_out,
            "writes": tuple({"document": name, "state": state, "exists": exists} for name, state, exists in writes),
            "caseId": case, "role": role, "allow": allow}
@@ -33,16 +33,20 @@ def step(step_id, rpc, role, *, transport="rest", document=None, token_in=None, 
         row["waitSeconds"] = wait
     if retry_of:
         row["retryOf"] = retry_of
+    if concurrent_with:
+        row["concurrentWith"] = concurrent_with
+        row["deadlineMs"] = 30000   # an outside writer held by a lock may wait for the holder's release
     return row
 
 
 def generate(rng):
-    """One random table: a setup and one to four chains, each plain, retried after a Rollback, or ending in a retry of an idle or aged token."""
+    """One random table: a setup and one to four chains, each plain, retried after a Rollback, ending in a retry of an idle or aged token, or released by a
+    commit or rollback while a concurrent outside writer is pending."""
     steps = [step("setup/absence-a", "GetDocument", "control", transport="grpc", document="a", allow=(5,)),
              step("setup/create-a", "Commit", "control", transport="grpc", writes=(("a", "created", False),))]
     tokens, cases = [], 0
     for chain in range(rng.randint(1, 4)):
-        kind = rng.choice(["plain", "plain", "retry-after-rollback", "idle-retry"])
+        kind = rng.choice(["plain", "plain", "retry-after-rollback", "idle-retry", "concurrent"])
         name = f"c{chain}"
         token = f"{name}t"
         tokens.append(token)
@@ -71,6 +75,14 @@ def generate(rng):
             if rng.random() < 0.7:
                 steps.append(step(f"rest/{name}/retry-read", "GetDocument", "observation", document="a", token_in=retried, case=f"rest/{name}-retry-read", allow=ANY))
                 cases += 1
+        elif kind == "concurrent":
+            # the holder's release is the anchor; an outside writer of the document is sent beside it (P05's shape): held by the read lock, or refused
+            anchor = rng.choice(["Commit", "Rollback"])
+            anchor_id = f"rest/{name}/{anchor.lower()}"
+            steps.append(step(anchor_id, anchor, "observation", token_in=token, case=f"rest/{name}-{anchor.lower()}", allow=ANY,
+                              writes=(("a", "written", True),) if anchor == "Commit" else (), wait=rng.choice([5, 10, 20])))
+            steps.append(step(f"rest/{name}/writer", "Commit", "outside-writer", writes=(("a", "written", True),), case=f"rest/{name}-writer", allow=(0, 10), concurrent_with=anchor_id))
+            cases += 2
         else:
             # an idle (or aged) token, then a retry that ends the chain
             tokens.append(f"{name}r")
@@ -116,9 +128,10 @@ def corrupt(table, rng):
     return {**table, "steps": tuple(steps)}, how
 
 
-def service_for(rng, clock):
+def service_for(rng, clock, concurrent=False):
+    extra = {"locks": True, "hold_writers": True, "writer_code": rng.choice([0, 0, 10])} if concurrent else {}
     return Service(clock, expiry=rng.random() < 0.7, lifetime=270, idle=120, rpc_seconds=rng.choice([0.5, 1.0, 2.0]), rw_commit_code=rng.choice([0, 0, 10]),
-                   fail_at=rng.choice([None, None, None, rng.randint(4, 30)]))
+                   fail_at=rng.choice([None, None, None, rng.randint(4, 30)]), **extra)
 
 
 def resolving_rows(receipt):
@@ -172,9 +185,12 @@ def run(seed):
     table = generate(rng)
     plan = compile_plan(table, NONCE, OWNER)
     clock = Clock()
-    service = service_for(rng, clock)
+    service = service_for(rng, clock, concurrent=any("concurrentWith" in row for row in table["steps"]))
     receipt = Collector(plan, table, RequestBudget(plan, table), service, "owner", save=lambda _state: None, monotonic=clock.now, utc=clock.utc, sleep=clock.sleep).run()
     check_invariants(table, plan, receipt)
+    if receipt["complete"]:
+        # a complete recording always replays: the projection derives the same graph, tokens and states from the native rows alone
+        projection(receipt, table)
     return receipt
 
 
@@ -203,7 +219,9 @@ def test_the_generator_covers_every_chain_shape_and_the_recordings_both_complete
         for row in table["steps"]:
             if "retryOf" in row:
                 shapes.add("control-retry" if row["role"] == "control" else "observation-retry")
+            if "concurrentWith" in row:
+                shapes.add("concurrent-" + next(prior["rpc"] for prior in table["steps"] if prior["id"] == row["concurrentWith"]).lower())
         completed += bool(receipt["complete"])
         stopped += not receipt["complete"]
-    assert shapes == {"control-retry", "observation-retry"}
+    assert shapes == {"control-retry", "observation-retry", "concurrent-commit", "concurrent-rollback"}
     assert completed > 10 and stopped > 5, (completed, stopped)

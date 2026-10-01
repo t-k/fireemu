@@ -105,8 +105,9 @@ pub fn storage_event_id(seed: &str) -> String {
         .rsplit_once('-')
         .and_then(|(session, n)| Some((session, n.parse::<u64>().ok()?)));
     let offset_and_count = |session: &str, n: u64| {
-        let offset = u128::from(seeded_stream(session)() % ID_SPAN);
-        (offset + u128::from(n % ID_SPAN) * u128::from(ID_STEP)) % u128::from(ID_SPAN)
+        // The whole 64-bit hash is the offset: only the position modulo the span matters.
+        let offset = u128::from(seeded_stream(session)());
+        (offset + u128::from(n) * u128::from(ID_STEP)) % u128::from(ID_SPAN)
     };
     let position = match counted {
         Some((session, n)) => offset_and_count(session, n),

@@ -12,11 +12,12 @@ from test_txn_program_collector import Clock, Service
 TABLE = p13a.TABLE
 NONCE, OWNER = "a" * 32, "b" * 32
 GONE = "The referenced transaction has expired or is no longer valid."
-RECORDED_PACE = 2.0   # seconds per step in the stand-in; P11 v4 recorded the keepalive chain at about 2.26 to 2.6 s a step including the wait overhead
-# P11 v4 (REST) token ages of the expiry read: 284.8 to 287.9 s after waits that total 260 s over 11 steps (about 2.26 to 2.6 s of overhead a step);
-# P11 REST recording 1: a request refused at 298.7 to 301.0 s and the Commit after it forgotten at about 302.2 s; P10-C: idle 110 s accepted, 120 s refused.
-STEP_OVERHEAD = (2.26, 2.6)
-REMEMBERED_UNTIL, FORGOTTEN_BY, IDLE_REFUSED = 298.7, 302.2, 120.54
+RECORDED_PACE = 2.0   # seconds per step in the stand-in
+# P13a itself (REST, two recordings): the first request after waits of 260 s over 11 requests landed at a token age of 280.4 to 284.5 s, so each request
+# cost 1.85 to 2.23 s beyond its wait. P11 REST recording 1: a request was still answered 10 at 298.7 s and the Commit after it was forgotten at about
+# 302.2 s; an idle of 130 s is past the idle limit (refused from 122.97 s).
+STEP_OVERHEAD = (1.85, 2.23)
+REMEMBERED_UNTIL, FORGOTTEN_BY, IDLE_REFUSED = 298.7, 302.2, 122.97
 
 
 def plan():
@@ -40,11 +41,12 @@ def record(**knobs):
 
 
 def age_bounds(chain, step_name):
-    """The token age at a step's dispatch at the recorded overhead per step: the waits up to and including it plus the steps before it."""
+    """The token age at a step's dispatch at the recorded overhead per request: the waits up to and including it plus one overhead for each request between
+    the begin (whose answer starts the age) and it."""
     chain_steps = [step for step in plan()["steps"] if step["id"].startswith(f"rest/{chain}/")]
     index = next(i for i, step in enumerate(chain_steps) if step["id"].endswith("/" + step_name))
     waits = sum(step.get("waitSeconds", 0) for step in chain_steps[: index + 1])
-    return tuple(waits + index * overhead for overhead in STEP_OVERHEAD)
+    return tuple(waits + (index - 1) * overhead for overhead in STEP_OVERHEAD)
 
 
 def test_the_table_is_registered_and_bound():

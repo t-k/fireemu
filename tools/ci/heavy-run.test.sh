@@ -6,6 +6,8 @@ here=$(cd "$(dirname "$0")" && pwd)
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
 mkdir "$work/bin"
+# Relative --out values (and anything a mutated script would write) land in the scratch directory.
+cd "$work" || exit 1
 export GH_LOG="$work/gh.log"
 
 cat > "$work/bin/gh" <<'STUB'

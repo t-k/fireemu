@@ -282,8 +282,17 @@ export function createDeployer({
   async function metered(file, args, { cwd, timeout, allowance, charged = () => {} }) {
     charge(allowance);
     charged();
-    const directory = (meterDir ??= await mkdtemp(join(tmpdir(), "atb-cli-meter-")));
+    // Calls that start together share one directory: the promise is cached before any await.
     metering += 1;
+    const pending = (meterDir ??= mkdtemp(join(tmpdir(), "atb-cli-meter-")));
+    let directory;
+    try {
+      directory = await pending;
+    } catch (error) {
+      metering -= 1;
+      if (meterDir === pending) meterDir = undefined;
+      throw error;
+    }
     const counter = join(directory, `${cliCalls.length}`);
     const entry = { call: args[0], allowance, used: 0, stopped: false };
     cliCalls.push(entry);
@@ -308,7 +317,7 @@ export function createDeployer({
       // so a deployer leaves nothing in the temp directory.
       metering -= 1;
       if (metering === 0) {
-        if (meterDir === directory) meterDir = undefined;
+        if (meterDir === pending) meterDir = undefined;
         await rm(directory, { recursive: true, force: true });
       }
     }

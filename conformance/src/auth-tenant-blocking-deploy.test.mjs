@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
-import { existsSync } from "node:fs";
+import { existsSync, readdirSync } from "node:fs";
 import { appendFile } from "node:fs/promises";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { test } from "node:test";
 
 import { BLOCKING_PROGRAMS } from "./auth-tenant-blocking/blocking-corpus.mjs";
@@ -769,4 +769,67 @@ test("the pinned CLI starts without sending anything (allowance zero)", async ()
   assert.deepEqual(deployer.cliRequests(), [
     { call: "--version", allowance: 0, used: 0, stopped: false },
   ]);
+});
+
+test("the CLI meter directory exists only while metered calls are in flight", async () => {
+  const scratch = tempDir("atb-meter-lifecycle-");
+  const meterDirs = () => readdirSync(scratch).filter((name) => name.startsWith("atb-cli-meter-"));
+  const until = async (condition) => {
+    for (let i = 0; i < 500 && !condition(); i += 1) await new Promise((r) => setTimeout(r, 2));
+    assert.ok(condition());
+  };
+  const saved = process.env.TMPDIR;
+  process.env.TMPDIR = scratch;
+  try {
+    const seen = [];
+    const releases = [];
+    const run = async (_file, _args, { env }) => {
+      seen.push(dirname(env.FIREEMU_CLI_METER_FILE));
+      // The meter appends a byte per request; each call makes one.
+      await appendFile(env.FIREEMU_CLI_METER_FILE, "x");
+      await new Promise((resolve) => releases.push(resolve));
+      return { stdout: "15.0.0", stderr: "" };
+    };
+    const deployer = createDeployer({
+      project: PROJECT,
+      number: NUMBER,
+      token: async () => "token",
+      run,
+      charge: () => {},
+    });
+
+    const first = deployer.cliVersion();
+    await until(() => releases.length === 1);
+    assert.equal(meterDirs().length, 1);
+    releases.shift()();
+    assert.equal(await first, "15.0.0");
+    assert.deepEqual(meterDirs(), [], "a finished call leaves no meter directory");
+
+    // Two calls started together, before either has its directory: one directory, kept until the
+    // second finishes.
+    const a = deployer.cliVersion();
+    const b = deployer.cliVersion();
+    await until(() => releases.length === 2);
+    assert.equal(new Set(seen.slice(1)).size, 1, "overlapping calls share one directory");
+    assert.equal(meterDirs().length, 1);
+    // Either call may have reached the CLI first; release one, wait for whichever finished.
+    releases.shift()();
+    await Promise.race([a, b]);
+    assert.equal(meterDirs().length, 1, "kept while a call is still in flight");
+    releases.shift()();
+    await Promise.all([a, b]);
+    assert.deepEqual(meterDirs(), []);
+    assert.deepEqual(
+      deployer.cliRequests().map(({ call, used, stopped }) => [call, used, stopped]),
+      [
+        ["--version", 0, true],
+        ["--version", 0, true],
+        ["--version", 0, true],
+      ],
+      "each call is still counted on its own (one request over a zero allowance)",
+    );
+  } finally {
+    if (saved === undefined) delete process.env.TMPDIR;
+    else process.env.TMPDIR = saved;
+  }
 });

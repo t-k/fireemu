@@ -344,7 +344,6 @@ fn a_configured_database_creation_time_bounds_read_times() {
     );
 }
 
-/// The resident memory of a process in KiB, from `ps`.
 /// `firestore.history.maxVersionsPerPath` bounds a document's retained versions on the
 /// wall clock, where the default keeps every version of the last hour as production does.
 #[test]
@@ -445,6 +444,7 @@ fn a_configured_history_byte_limit_refuses_growth() {
     daemon.stop();
 }
 
+/// The resident memory of a process in KiB, from `ps`.
 fn resident_kib(pid: u32) -> u64 {
     sampled_resident_kib(pid).unwrap()
 }

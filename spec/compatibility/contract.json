@@ -564,6 +564,7 @@
               "crates/fireemu-core-firestore/tests/compaction.rs",
               "crates/fireemu-adapter-grpc/tests/history_limits.rs",
               "crates/fireemu/tests/profiles.rs",
+              "crates/fireemu/tests/import_export.rs",
               "conformance/firestore-matrix.json",
               "tools/sdk-smoke/server-timestamp-transaction-query.mjs",
               "tools/sdk-smoke/listener-replacement.firebase.json",
@@ -585,7 +586,7 @@
               "precision": "exact-for-local-semantics"
             },
             {
-              "behaviour": "Retained MVCC history has local bounds production does not have, in both profiles: each database retains at most 1 GiB of logical history bytes and 1,000,000 versions, a session 1 GiB and 1,000,000 versions, and the daemon 4 GiB and 4,000,000 versions; a commit that would cross one is refused whole with RESOURCE_EXHAUSTED (Firestore retained history capacity is exhausted). On the wall clock a document keeps every version of the last hour; on a pinned clock (daemon.clockStart) at most 1,024. firestore.history.maxVersionsPerPath (1 to 1,000,000) caps the versions of one document on either clock, and a read_time read or transaction older than the oldest version the cap keeps is refused with FAILED_PRECONDITION (The requested 'read_time' is no longer retained by this database.) while a Listen resume from there is answered with RESET and a full replay; firestore.history.maxBytes (1 MiB to 1 GiB) lowers the per-database byte limit. Unset, both keep the defaults. Logical bytes follow Firestore's storage size model plus fixed metadata charges; they are not the process's memory.",
+              "behaviour": "Retained MVCC history has local bounds production does not have, in both profiles: each database retains at most 1 GiB of logical history bytes and 1,000,000 versions, a session 1 GiB and 1,000,000 versions, and the daemon 4 GiB and 4,000,000 versions; a commit that would cross one is refused whole with RESOURCE_EXHAUSTED (Firestore retained history capacity is exhausted). On the wall clock a document keeps every version of the last hour; on a pinned clock (daemon.clockStart) at most 1,024. firestore.history.maxVersionsPerPath (1 to 1,000,000) sets that cap on either clock. A cap reaches the whole database: once any document has more versions than the cap, no snapshot older than that document's oldest kept version is retained for any document, so a read_time read older than that is refused with FAILED_PRECONDITION (The requested 'read_time' is no longer retained by this database.), a new read-only transaction at such a read_time with FAILED_PRECONDITION (read_time is no longer retained by this database), a transaction already open on an older snapshot with ABORTED on its next read or commit (The referenced transaction has expired or is no longer valid.), and a Listen resume from there is answered with RESET and a full replay; firestore.history.maxBytes (1 MiB to 1 GiB) lowers the per-database byte limit; an import is not checked against it, so a larger import starts and later growth is refused. Unset, both keep the defaults. Logical bytes follow Firestore's storage size model plus fixed metadata charges; they are not the process's memory.",
               "precision": "resource-safety-divergence"
             },
             {

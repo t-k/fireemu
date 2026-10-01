@@ -157,6 +157,134 @@ fn a_per_path_cap_bounds_wall_clock_history() {
     }
 }
 
+const NO_LONGER_RETAINED: &str =
+    "The requested 'read_time' is no longer retained by this database.";
+const TRANSACTION_GONE: &str = "The referenced transaction has expired or is no longer valid.";
+
+fn begin(
+    backend: &LocalBackend,
+    read_only_at: Option<prost_types::Timestamp>,
+) -> Result<Vec<u8>, (tonic::Code, String)> {
+    backend
+        .begin_transaction(&pb::BeginTransactionRequest {
+            database: DATABASE.to_owned(),
+            options: read_only_at.map(|read_time| pb::TransactionOptions {
+                mode: Some(pb::transaction_options::Mode::ReadOnly(
+                    pb::transaction_options::ReadOnly {
+                        consistency_selector: Some(
+                            pb::transaction_options::read_only::ConsistencySelector::ReadTime(
+                                read_time,
+                            ),
+                        ),
+                    },
+                )),
+            }),
+            ..Default::default()
+        })
+        .map_err(|status| (status.code(), status.message().to_owned()))
+}
+
+fn read_in(
+    backend: &LocalBackend,
+    document: &str,
+    transaction: &[u8],
+) -> Result<pb::Document, (tonic::Code, String)> {
+    backend
+        .get_document(
+            &pb::GetDocumentRequest {
+                name: format!("{DATABASE}/documents/items/{document}"),
+                consistency_selector: Some(
+                    pb::get_document_request::ConsistencySelector::Transaction(
+                        transaction.to_vec(),
+                    ),
+                ),
+                ..Default::default()
+            },
+            &fireemu_adapter_grpc::rules::allow_all_reads,
+        )
+        .map_err(|status| (status.code(), status.message().to_owned()))
+}
+
+/// The cap is not a per-document bound: one document past it moves the oldest retained
+/// version of the whole database, so a document written once loses its `read_time` reach too.
+#[test]
+fn a_busy_document_past_the_cap_moves_the_retention_point_for_every_document() {
+    for cap in [None, Some(2)] {
+        let (backend, clock) = backend();
+        let backend = match cap {
+            Some(cap) => backend.with_history_version_limit(cap),
+            None => backend.with_history_version_limit(usize::MAX),
+        };
+        let cold = commit(&backend, "cold", "written once");
+        for round in 0..5 {
+            advance(&clock, 1);
+            commit(&backend, "hot", &format!("round {round}"));
+        }
+        let at_cold = read(&backend, "cold", cold.commit_time);
+        let read_only = begin(&backend, cold.commit_time);
+        if cap.is_none() {
+            assert_eq!(payload_of(&at_cold.unwrap()), "written once");
+            assert!(read_only.is_ok(), "{read_only:?}");
+        } else {
+            assert_eq!(
+                at_cold.unwrap_err(),
+                (
+                    tonic::Code::FailedPrecondition,
+                    NO_LONGER_RETAINED.to_owned()
+                )
+            );
+            assert_eq!(
+                read_only.unwrap_err(),
+                (
+                    tonic::Code::FailedPrecondition,
+                    "read_time is no longer retained by this database".to_owned()
+                )
+            );
+        }
+        assert_eq!(
+            payload_of(&read(&backend, "cold", None).unwrap()),
+            "written once"
+        );
+    }
+}
+
+/// A transaction already open on a snapshot below the moved retention point is aborted, even
+/// when it only touches a document nobody else writes. SDKs retry ABORTED.
+#[test]
+fn a_transaction_below_the_capped_retention_point_is_aborted() {
+    for cap in [None, Some(2)] {
+        let (backend, clock) = backend();
+        let backend = match cap {
+            Some(cap) => backend.with_history_version_limit(cap),
+            None => backend.with_history_version_limit(usize::MAX),
+        };
+        commit(&backend, "cold", "written once");
+        let transaction = begin(&backend, None).unwrap();
+        assert_eq!(
+            payload_of(&read_in(&backend, "cold", &transaction).unwrap()),
+            "written once"
+        );
+        for round in 0..5 {
+            advance(&clock, 1);
+            commit(&backend, "hot", &format!("round {round}"));
+        }
+        let again = read_in(&backend, "cold", &transaction);
+        let mut write = update("cold", "from the transaction");
+        write.transaction.clone_from(&transaction);
+        let committed = backend
+            .commit_with(&write, &fireemu_adapter_grpc::rules::allow_all)
+            .map_err(|status| (status.code(), status.message().to_owned()));
+        if cap.is_none() {
+            assert!(again.is_ok(), "{again:?}");
+            assert!(committed.is_ok(), "{committed:?}");
+        } else {
+            let gone = (tonic::Code::Aborted, TRANSACTION_GONE.to_owned());
+            assert_eq!(again.unwrap_err(), gone);
+            assert_eq!(committed.unwrap_err(), gone);
+        }
+    }
+}
+
 #[test]
 fn a_lowered_byte_limit_refuses_history_growth_whole() {
     let payload = "x".repeat(64 * 1024);

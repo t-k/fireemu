@@ -811,13 +811,14 @@ function modelReceipts(
     },
     flush() {
       while (queued.length && !state.blocked) {
-        if (queued[0].index === hungAt) {
-          state.blocked = true;
-          break;
-        }
+        // A halted chain never calls persist again, so a hung row behind the failure cannot hang.
         if (state.halted) {
           queued.shift();
           continue;
+        }
+        if (queued[0].index === hungAt) {
+          state.blocked = true;
+          break;
         }
         if (queued[0].index === failAt) {
           queued.shift();
@@ -845,8 +846,10 @@ test(
         maxHeaderPairs: r.int(1, 3),
         maxEvents: r.int(1, 10),
       };
-      const hungAt = r.chance(0.25) ? r.int(0, 8) : -1;
-      const failAt = r.chance(0.25) ? r.int(0, 8) : -1;
+      const failAt = r.chance(0.3) ? r.int(0, 4) : -1;
+      // Some hung rows are drawn right behind the failing row, where they must never be persisted.
+      const hungAt =
+        failAt >= 0 && r.chance(0.5) ? failAt + r.int(1, 2) : r.chance(0.25) ? r.int(0, 8) : -1;
       const model = modelReceipts(bounds, hungAt, failAt);
       const order = [],
         persisted = [],
@@ -941,6 +944,9 @@ test(
           ...(model.state.halted && model.state.kinds.length > failAt + 1
             ? ["queued-after-failure"]
             : []),
+          ...(model.state.halted && hungAt > failAt && model.state.kinds.length > hungAt
+            ? ["hung-behind-failure"]
+            : []),
         ];
       } finally {
         mock.timers.reset();
@@ -958,6 +964,7 @@ test(
       "frame-delivered",
       "persistence",
       "queued-after-failure",
+      "hung-behind-failure",
       "late",
       "hung-late",
       "hung-waiting",

@@ -161,7 +161,7 @@ parity: 17 &middot; documented-divergence: 16
 
 ## json-api
 
-parity: 32 &middot; documented-divergence: 43
+parity: 33 &middot; documented-divergence: 42
 
 | program | step | status |
 | --- | --- | --- |
@@ -204,7 +204,7 @@ parity: 32 &middot; documented-divergence: 43
 | `gcs-update-list-delete` | `delete` | parity |
 | `gcs-update-list-delete` | `delete-again` | parity |
 | `gcs-update-list-delete` | `get-missing-metadata` | parity |
-| `gcs-update-list-delete` | `get-missing-media` | documented-divergence |
+| `gcs-update-list-delete` | `get-missing-media` | parity |
 | `gcs-update-list-delete` | `delete-short-route-missing` | parity |
 | `gcs-copy-rewrite` | `source` | documented-divergence |
 | `gcs-copy-rewrite` | `copy-to` | documented-divergence |

@@ -2100,7 +2100,8 @@ fn print_banner(
             // A run with no ruleset denies every end-user request, as production's default
             // rules do, except that the emulator profile gives a `demo-*` project the official
             // emulator's default open rules; say so, because the configuration that reaches it
-            // is an omission.
+            // is an omission. The banner names the default project's state: a bucket owned by
+            // another registered project is decided per request by that project's name.
             if cfg.storage_rules_file.is_none() && cfg.storage_rules_by_target.is_empty() {
                 if cfg.profile == config::CompatibilityProfile::Emulator
                     && cfg.auth_project.starts_with("demo-")

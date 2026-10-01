@@ -1026,27 +1026,25 @@ fn gcs_json_error(status: u16, message: &str, reason: &str) -> StorageResponse {
     )
 }
 
-/// The JSON API's missing-object answer: a plain sentence for a media request, the JSON
-/// envelope otherwise.
+/// The JSON API's missing-object answer: a plain sentence typed `text/html` for a media request
+/// (as production and the official emulator both answer, measured on the four routes that reach
+/// it), the JSON envelope otherwise.
 ///
-/// The media branch is a **documented divergence** from the official emulator, which types
-/// this body `text/html`: the message reflects the decoded object name, and the route is a
-/// top-level `GET` reachable with no `Origin` (so the loopback CORS guard never fires), so a
-/// `text/html` reflection is a stored-data-stealing reflected-XSS vector on the emulator's
-/// own origin (the JSON API dialect is unauthenticated and rules-free). fireemu answers the
-/// identical status and body bytes as `text/plain`, which no browser executes. The
-/// divergence is pinned in `conformance/storage-matrix.json`.
+/// fireemu once typed the media body `text/plain` because the message reflects the decoded
+/// object name, which a browser would run as HTML on the emulator's own origin. The owner ruled
+/// (ledger "STORAGE-RULES media 404 content type", 2026-10-01) that matching production takes
+/// priority for a tool that runs locally, so both profiles now answer `text/html`; strict adds
+/// production's uppercase charset in `production_framing`.
 fn gcs_no_such_object(bucket: &str, name: &str, media: bool) -> StorageResponse {
     let message = format!("No such object: {bucket}/{name}");
     if media {
-        plain_text(404, &message)
+        html_text(404, &message)
     } else {
         gcs_json_error(404, &message, "notFound")
     }
 }
 
-/// A `text/plain; charset=utf-8` body of arbitrary text (used where the official emulator
-/// reflects caller-influenced text that must never be typed as HTML).
+/// A `text/plain; charset=utf-8` body of arbitrary text (the resumable start and cancel answers).
 fn plain_text(status: u16, text: &str) -> StorageResponse {
     StorageResponse {
         status,
@@ -1917,12 +1915,12 @@ impl StorageState {
         // says so, instead of failing as an unknown user of this one.
         let decoded = fireemu_core_auth::jwt::decode_token(token, parent.signer());
         // Under strict only the recorded shape is an anonymous caller: `Firebase ` followed by a
-        // value without a dot (stage 3 v9, `token-malformed`: the recorded value is 32 base64url
-        // characters, answered exactly as no credential is, 403 from the rules and the body
-        // parser's 400 first on a malformed PATCH body). Every other value that fails to decode
-        // is refused with 401: a two- or four-segment value, a `Bearer` value on the Firebase
-        // dialect, a three-segment value with a tampered signature, an unknown `kid` or an
-        // unsupported algorithm. The emulator profile keeps its earlier mapping of every decode
+        // non-empty value without a dot (stage 3 v9, `token-malformed`: the recorded value is 32
+        // base64url characters, answered exactly as no credential is, 403 from the rules and the
+        // body parser's 400 first on a malformed PATCH body). Every other value that fails to
+        // decode is refused with 401: an empty value (not recorded), a two- or four-segment
+        // value, a `Bearer` value on the Firebase dialect, a three-segment value with a tampered
+        // signature, an unknown `kid` or an unsupported algorithm. The emulator profile keeps its earlier mapping of every decode
         // failure to an anonymous caller (the official emulator's `jwt.decode` treats a value
         // without a dot, with two or with four segments as unauthenticated, but admits a
         // decodable three-segment value as its user, which this profile has never done; a
@@ -1930,7 +1928,7 @@ impl StorageState {
         let decoded_token = match decoded {
             Ok(decoded_token) => decoded_token,
             Err(error) => {
-                let recorded_shape = firebase_scheme && !token.contains('.');
+                let recorded_shape = firebase_scheme && !token.is_empty() && !token.contains('.');
                 if !recorded_shape && self.token_acceptance != TokenAcceptance::EmulatorMock {
                     return Err(format!("invalid ID token: {error}").into());
                 }
@@ -2784,14 +2782,14 @@ pub fn handle(state: &StorageState, req: StorageRequest) -> StorageResponse {
     }
 }
 
-/// The strict profile's framing of a JSON answer, compared with production's headers and bytes
+/// The strict profile's framing of a JSON or HTML answer, compared with production's headers and bytes
 /// (stage 3 v9, both dialects): `application/json; charset=UTF-8` where the official emulator
 /// writes a lowercase charset, the Google-fronted JSON API's error bodies in its pretty layout
 /// (key order code, message, errors[message, domain, reason]; a final line feed), and a bare
 /// `application/json` content type on the JSON API's 204. The emulator profile keeps the
-/// official emulator's framing. The JSON API's media 404 stays `text/plain`, not production's
-/// `text/html`: the message reflects the object name, a reflected-XSS vector on the emulator's
-/// own origin (see `gcs_no_such_object`).
+/// official emulator's framing. The JSON API's media 404 is `text/html` in both profiles, as
+/// production and the official emulator answer it (see `gcs_no_such_object`); strict only
+/// upper-cases its charset.
 fn production_framing(dialect: Dialect, mut response: StorageResponse) -> StorageResponse {
     const JSON_LOWER: &str = "application/json; charset=utf-8";
     const JSON_UPPER: &str = "application/json; charset=UTF-8";
@@ -2803,6 +2801,8 @@ fn production_framing(dialect: Dialect, mut response: StorageResponse) -> Storag
     if let Some((_, value)) = content_type {
         if value.as_str() == JSON_LOWER {
             JSON_UPPER.clone_into(value);
+        } else if value.as_str() == "text/html; charset=utf-8" {
+            "text/html; charset=UTF-8".clone_into(value);
         }
     }
     if dialect != Dialect::Gcs {

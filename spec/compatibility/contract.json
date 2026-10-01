@@ -237,7 +237,7 @@
               "package": "firebase-tools",
               "version": "15.28.2"
             },
-            "approvalRecord": "README.md#comparison-with-the-official-emulator"
+            "approvalRecord": "docs.local/instructions/owner-decisions.md (2026-10-01, \"Rules emulator-profile signed-token verification\"); README.md#comparison-with-the-official-emulator"
           },
           "note": "Measured against the pinned suite on 2026-08-31 with an unsigned token whose sub names no user: the Firestore emulator admitted it, admitted an exp of 3600 seconds after the epoch, admitted a token with no exp and no iss, admitted one whose aud named another project, and admitted one whose RS256 signature was garbage; the Storage emulator behaves the same way by construction (firebase-tools/lib/emulator/storage/rules/runtime.js calls jwt.decode). The emulator profile reproduces the part @firebase/rules-unit-testing depends on -- an unsigned token for an unknown subject with an expiry nobody reads -- and keeps two checks the official emulators skip: the audience must name the routed Firestore resource project or Storage bucket project, so a token cannot cross a session or project boundary, and a signed token must still verify, so a forged RS256 token never becomes an identity. An unregistered Firestore project owned by the default session is a valid routed namespace and is not replaced by the configured Auth project for this comparison. Both checks are refusals of requests the official emulator admits, which is why they are recorded here rather than left implicit."
         },

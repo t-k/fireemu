@@ -2764,6 +2764,8 @@ fn strict_makes_only_the_recorded_shape_anonymous() {
     let values: Vec<(String, bool)> = vec![
         (format!("Firebase {dot_free}"), true),
         ("Firebase x".to_owned(), true),
+        // Not recorded, so not loosened: `Firebase ` with nothing after it.
+        ("Firebase ".to_owned(), false),
         (format!("Bearer {dot_free}"), false),
         (format!("Firebase {none}.{payload}"), false),
         (format!("Firebase {none}.{payload}..x"), false),
@@ -4709,45 +4711,49 @@ fn worker_project_resumable_uploads_reverify_the_same_mock_audience() {
 
 // ---- Security regressions (storage parity review) ------------------------------------
 
-/// M-1: a missing object served through a media route must never be typed `text/html`, or
-/// the reflected object name is a stored-data-stealing reflected-XSS vector on the emulator
-/// origin (a top-level GET carries no Origin, so the loopback guard never fires). The body
-/// still reflects the name, as the official emulator's does -- only the content-type differs.
+/// A missing object served through a media route answers `text/html` with the plain sentence
+/// naming it, as production and the official emulator do (measured with firebase-tools 15.28.2 on
+/// the short, `/storage/v1`, `/download/storage/v1` and XML-style routes; recorded in production,
+/// stage 3 v9: 994 rows). Strict writes production's uppercase charset, the emulator profile the
+/// official emulator's lowercase one. The owner ruled (ledger "STORAGE-RULES media 404 content
+/// type", 2026-10-01) that matching production takes priority over the reflected-HTML concern of a
+/// tool that runs locally, which had made fireemu type this body `text/plain` until then.
 #[test]
-fn a_missing_media_object_never_answers_with_html() {
-    let s = state(None);
-    let evil = "a%3Cscript%3Ealert(1)%3C%2Fscript%3E.txt";
-    // JSON API media read of a missing object.
-    let r = handle(
-        &s,
-        req(
-            "GET",
-            &format!("/b/{BUCKET}/o/{evil}?alt=media"),
-            &[("authorization", "Bearer owner")],
-            b"",
-        ),
-    );
-    assert_eq!(r.status, 404);
-    assert!(
-        !header(&r, "content-type")
-            .unwrap_or("")
-            .contains("text/html"),
-        "media 404 must not be text/html: {:?}",
-        header(&r, "content-type")
-    );
-    // The XML-style GET fallback reaches the same answer.
-    let r = handle(
-        &s,
-        req("GET", &format!("/{BUCKET}/{evil}?alt=media"), &[], b""),
-    );
-    assert_eq!(r.status, 404);
-    assert!(
-        !header(&r, "content-type")
-            .unwrap_or("")
-            .contains("text/html"),
-        "xml-style 404 must not be text/html: {:?}",
-        header(&r, "content-type")
-    );
+fn a_missing_media_object_answers_text_html_as_production_does() {
+    for (acceptance, charset) in [
+        (TokenAcceptance::Verified, "text/html; charset=UTF-8"),
+        (TokenAcceptance::EmulatorMock, "text/html; charset=utf-8"),
+    ] {
+        let s = state_with(None, acceptance);
+        for (path, headers) in [
+            (format!("/b/{BUCKET}/o/absent.txt?alt=media"), true),
+            (
+                format!("/storage/v1/b/{BUCKET}/o/absent.txt?alt=media"),
+                true,
+            ),
+            (
+                format!("/download/storage/v1/b/{BUCKET}/o/absent.txt?alt=media"),
+                true,
+            ),
+            (format!("/{BUCKET}/absent.txt?alt=media"), false),
+        ] {
+            let owner = [("authorization", "Bearer owner")];
+            let r = handle(
+                &s,
+                req("GET", &path, if headers { &owner } else { &[] }, b""),
+            );
+            assert_eq!(r.status, 404, "{acceptance:?} {path}");
+            assert_eq!(
+                header(&r, "content-type"),
+                Some(charset),
+                "{acceptance:?} {path}"
+            );
+            assert_eq!(
+                String::from_utf8_lossy(&r.body),
+                format!("No such object: {BUCKET}/absent.txt")
+            );
+        }
+    }
 }
 
 /// S-4: metadata strings that carry a control character are refused at the input boundary,

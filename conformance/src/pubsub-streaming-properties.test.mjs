@@ -310,7 +310,7 @@ function modelGate({ maxFrames, maxFrameBytes, maxOutgoingBytes, maxActions }) {
     direction: "NEW",
     origin: undefined,
     contractBroken: false,
-    issueFailed: false,
+    issueEntered: false,
     seen: new Set(),
   };
   const stop = (origin) => {
@@ -355,7 +355,7 @@ function modelGate({ maxFrames, maxFrameBytes, maxOutgoingBytes, maxActions }) {
       // issue was invoked: a throw may follow sent bytes, so like a Promise return it leaves the
       // outcome to supervised termination.
       if (failure === "issue-throws") {
-        state.issueFailed = true;
+        state.issueEntered = true;
         stop("uncertain");
         return "rejects";
       }
@@ -372,7 +372,10 @@ function modelGate({ maxFrames, maxFrameBytes, maxOutgoingBytes, maxActions }) {
       state.issued++;
       if (kind === "open") state.direction = "OPEN";
       if (kind === "half-close") state.direction = "HALF_CLOSED";
+      // The bytes were handed over; a lost issued acknowledgement leaves them to supervised
+      // termination too.
       if (failure === "persist-issued") {
+        state.issueEntered = true;
         stop("uncertain");
         return "rejects";
       }
@@ -490,7 +493,7 @@ test(
           direction: state.direction,
           stopOrigin: state.origin,
           pendingCallbacks: [],
-          terminationRequired: state.contractBroken || state.issueFailed || containmentFails,
+          terminationRequired: state.contractBroken || state.issueEntered || containmentFails,
         },
       );
       assert.equal(contained, 1);

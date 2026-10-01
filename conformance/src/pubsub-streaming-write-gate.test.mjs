@@ -903,3 +903,45 @@ test("a synchronous throw from issue may follow sent bytes, so it requires termi
   assert.equal(result.stopOrigin, "revocation");
   assert.equal(result.terminationRequired, false);
 });
+test("once issue is entered, any later unknown outcome requires termination, even after clean containment", async () => {
+  for (const kind of ["open", "frame", "half-close", "client-cancel"]) {
+    // The issue callback hands bytes to the transport and returns normally; only the acknowledgement
+    // of the issued row is lost.
+    let loseIssuedOf;
+    const { g, issued } = await gate({
+      persist: async (row) => {
+        if (row.state === "issued" && row.kind === loseIssuedOf)
+          throw new Error("issued acknowledgement lost");
+      },
+    });
+    if (kind !== "open") await g.open();
+    loseIssuedOf = kind;
+    const action = {
+      open: () => g.open(),
+      frame: () => g.write(Buffer.from("x")),
+      "half-close": () => g.halfClose(),
+      "client-cancel": () => g.cancel(),
+    }[kind];
+    await assert.rejects(action(), /stopped/);
+    const result = await g.done();
+    assert.equal(issued.at(-1)[0], kind, kind);
+    assert.equal(result.issuedActions, kind === "open" ? 1 : 2, kind);
+    assert.equal(result.unknownActions, 1, kind);
+    assert.equal(result.stopOrigin, "uncertain", kind);
+    assert.deepEqual(result.pendingCallbacks, [], kind);
+    assert.equal(result.terminationRequired, true, kind);
+  }
+  // The send-before-throw form: bytes were handed over, then the callback threw.
+  const { g, issued } = await gate({
+    issue: (intent, bytes) => {
+      issued.push([intent.kind, bytes]);
+      throw new Error("bookkeeping failed after the native write");
+    },
+  });
+  await assert.rejects(g.open(), /stopped/);
+  const result = await g.done();
+  assert.equal(issued.length, 1);
+  assert.equal(result.issuedActions, 0);
+  assert.equal(result.unknownActions, 1);
+  assert.equal(result.terminationRequired, true);
+});

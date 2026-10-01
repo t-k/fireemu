@@ -53,7 +53,7 @@ export function createStreamingWriteGate({
     containmentFailed = false,
     unsettledObserved = false,
     synchronousContractFailed = false,
-    issueFailed = false;
+    issueEntered = false;
   const origins = new Set([
     "peer-terminal",
     "client-cancel",
@@ -189,6 +189,7 @@ export function createStreamingWriteGate({
     }
     active = true;
     return (async () => {
+      let entered = false;
       try {
         await bounded(`${intent.index}:guard-before`, () =>
           guard(intent, { signal: controller.signal }),
@@ -209,14 +210,8 @@ export function createStreamingWriteGate({
           check();
         }
         check();
-        let result;
-        try {
-          result = issue(intent, wire ? Buffer.from(wire) : undefined);
-        } catch (error) {
-          // A native write can throw after some bytes left; nothing proves otherwise.
-          issueFailed = true;
-          throw error;
-        }
+        entered = true;
+        const result = issue(intent, wire ? Buffer.from(wire) : undefined);
         rejectAsync(`${intent.index}:async-issue`, result);
         issuedActions++;
         if (kind === "open") direction = "OPEN";
@@ -227,6 +222,9 @@ export function createStreamingWriteGate({
         completedActions++;
         if (kind === "client-cancel") stop("client-cancel");
       } catch {
+        // Once issue is entered, bytes may have left: a throw, a Promise or a lost issued
+        // acknowledgement all leave the outcome to supervised termination.
+        if (entered) issueEntered = true;
         stop("uncertain");
         throw new Error("streaming admission stopped");
       } finally {
@@ -263,7 +261,7 @@ export function createStreamingWriteGate({
       terminationRequired:
         unsettledObserved ||
         synchronousContractFailed ||
-        issueFailed ||
+        issueEntered ||
         containmentFailed ||
         !containmentSettled,
     };

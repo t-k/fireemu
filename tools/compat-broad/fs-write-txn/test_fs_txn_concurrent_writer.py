@@ -122,6 +122,42 @@ def test_the_projection_replays_the_pair_and_refuses_a_tampered_one():
         projection(early, TABLE)
 
 
+def tamper_consistently(receipt, site, change):
+    """Change one row and its copy in `observations` the same way, so the final comparison of the two cannot be what refuses it: only the check
+    under test can."""
+    changed = copy.deepcopy(receipt)
+    for row in changed["steps"]:
+        if row["site"] == site:
+            change(row)
+    for row in changed["observations"]:
+        if row["site"] == site:
+            change(row)
+    return changed
+
+
+@pytest.mark.parametrize("label,change", [
+    ("the writer's request carries a changed precondition", lambda row: row["request"]["writes"][0].update(currentDocument={"exists": False})),
+    ("the writer's request carries an extra field", lambda row: row["request"].update(extra=1)),
+    ("the writer's case id differs", lambda row: row.update(caseId="rest/c-elsewhere")),
+    ("the writer's transport differs", lambda row: row.update(transport="grpc")),
+    ("the writer's rpc differs", lambda row: row.update(rpc="Rollback")),
+])
+def test_the_projection_refuses_a_writer_row_that_differs_from_the_graph_even_when_its_copy_agrees(label, change):
+    receipt = recorded()
+    projection(receipt, TABLE)
+    with pytest.raises(ValueError, match="concurrent request graph differs"):
+        projection(tamper_consistently(receipt, "rest/c/writer-a", change), TABLE)
+
+
+def test_the_projection_refuses_a_writer_that_started_before_the_request_that_precedes_its_anchor_even_when_its_copy_agrees():
+    receipt = recorded()
+    before = next(row for row in receipt["steps"] if row["site"] == "rest/c/read-a")
+    def early(row):
+        row["timing"] = {**row["timing"], "dispatchMonotonic": before["timing"]["responseMonotonic"] - 5.0}
+    with pytest.raises(ValueError):
+        projection(tamper_consistently(receipt, "rest/c/writer-a", early), TABLE)
+
+
 def test_the_concurrent_order_check_needs_a_start_after_the_earlier_answer_and_an_end_after_the_start():
     before = {"responseMonotonic": 10.0, "responseUtc": "2026-09-30T00:00:10.000000Z"}
     good = {"dispatchMonotonic": 10.0, "responseMonotonic": 12.0, "dispatchUtc": "2026-09-30T00:00:10.000000Z", "responseUtc": "2026-09-30T00:00:12.000000Z"}

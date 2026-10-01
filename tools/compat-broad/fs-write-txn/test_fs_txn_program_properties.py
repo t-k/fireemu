@@ -109,7 +109,8 @@ def corrupt(table, rng):
     elif how == "unissued-token" and reads:
         steps[rng.choice(reads)]["tokenInput"] = "never-issued"
     elif how == "bad-allow":
-        steps[2]["allow"] = (0, 0)
+        observed = [i for i, row in enumerate(steps) if row["role"] == "observation"]
+        steps[observed[0] if observed else 2]["allow"] = (3, 3) if observed else (0, 0)   # a repeated code on an observation (or a control as the fallback)
     else:
         table = {**table, "maxTokens": table["maxTokens"] + 1}
     return {**table, "steps": tuple(steps)}, how

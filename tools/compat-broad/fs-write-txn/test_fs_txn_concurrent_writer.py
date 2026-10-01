@@ -54,6 +54,15 @@ def test_the_anchor_must_be_a_holders_release_with_a_wait_inside_the_writers_dea
     refused({**TABLE, "steps": tuple(steps)})
 
 
+def test_the_anchor_must_carry_the_holders_token_not_be_another_outside_writer_with_a_wait():
+    # an outside writer may wait and carries no token, so a writer concurrent with one is not beside a holder's release
+    steps = list(TABLE["steps"])
+    index = next(i for i, step in enumerate(steps) if step["id"] == "rest/c/commit")
+    steps[index] = {**steps[index], "tokenInput": None, "role": "outside-writer", "deadlineMs": 30000, "allow": [0, 10], "caseId": "rest/c-commit"}
+    with pytest.raises(ValueError, match="anchor that is not a holder release"):
+        compile_plan({**TABLE, "steps": tuple(steps)}, NONCE, OWNER)
+
+
 def test_a_writer_cannot_be_concurrent_with_a_step_that_is_itself_concurrent():
     steps = list(TABLE["steps"])
     index = next(i for i, step in enumerate(steps) if step["id"] == "rest/c/writer-a")

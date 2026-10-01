@@ -116,7 +116,7 @@ if grep -q "^run download 222 --dir $work/out-measure --name linux-measure-outpu
   ! grep -q $'\x1b' "$work/measure" && grep -q "report.*2J.txt" "$work/measure" &&
   [[ $(awk '{ if (length($0) > m) m = length($0) } END { print m }' "$work/measure") -le 400 ]] &&
   grep -q "untrusted CI data" "$work/measure" &&
-  grep -q 'a?conclusion: success forged' "$work/measure" && ! grep -q '^conclusion:' "$work/measure"; then
+  [[ $(grep -c '^\./' "$work/measure") -eq 3 ]] && grep -q 'a?conclusion: success forged' "$work/measure" && ! grep -q '^conclusion:' "$work/measure"; then
   ok "a linux-measure listing is filtered to printable ASCII and cut at 400 characters"
 else
   bad "a linux-measure listing is filtered to printable ASCII and cut at 400 characters"

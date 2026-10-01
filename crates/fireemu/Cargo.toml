@@ -43,6 +43,9 @@ libc = "0.2"
 rustix = { version = "1", features = ["fs", "process"] }
 zeroize = "1"
 
+[dev-dependencies]
+proptest.workspace = true
+
 [target.'cfg(target_os = "macos")'.dependencies]
 fireemu-fd-acl = { path = "../fireemu-fd-acl" }
 

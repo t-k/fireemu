@@ -2,6 +2,7 @@
 
 mod scratch;
 
+use proptest::prelude::*;
 use scratch::{hub_locator, locator_names_pid, remove_killed_daemon_locator, remove_tree, Scratch};
 
 #[test]
@@ -135,4 +136,31 @@ fn a_symbolic_link_named_like_the_locator_is_not_the_daemons() {
     let link = dir.join("hub-demo.json");
     std::os::unix::fs::symlink(&real, &link).unwrap();
     assert!(!locator_names_pid(&link, 7));
+}
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(64))]
+
+    /// Whatever `pid` a locator records, it names the daemon exactly when it is that pid.
+    #[test]
+    fn a_locator_names_a_daemon_exactly_when_the_pids_are_equal(written in any::<u64>(), asked in any::<u32>(), same in any::<bool>()) {
+        let written = if same { u64::from(asked) } else { written };
+        let dir = Scratch::new("scratch-support", "locator-property");
+        let path = dir.join("hub-demo.json");
+        std::fs::write(&path, format!(r#"{{"version":"x","pid":{written}}}"#)).unwrap();
+        prop_assert_eq!(locator_names_pid(&path, asked), written == u64::from(asked));
+    }
+
+    /// Bytes that are not a locator document never count as one, and reading them never panics.
+    #[test]
+    fn arbitrary_bytes_name_a_daemon_only_as_a_document_with_that_pid(body in proptest::collection::vec(any::<u8>(), 0..64), asked in any::<u32>()) {
+        let dir = Scratch::new("scratch-support", "locator-bytes");
+        let path = dir.join("hub-demo.json");
+        std::fs::write(&path, &body).unwrap();
+        let expected = serde_json::from_slice::<serde_json::Value>(&body)
+            .ok()
+            .and_then(|value| value.get("pid").and_then(serde_json::Value::as_u64))
+            == Some(u64::from(asked));
+        prop_assert_eq!(locator_names_pid(&path, asked), expected);
+    }
 }

@@ -4405,3 +4405,54 @@ service cloud.firestore {{
     );
     h.handle.abort();
 }
+
+/// Ledger 781 on Firestore: a signed (session-RSA) ID token whose `iat` and `auth_time` are in
+/// the future is not admitted as its user in strict (`Verified`), and is evaluated as its user
+/// in the emulator profile (`EmulatorMock`), as the official emulator reads no time claim.
+#[tokio::test]
+async fn a_future_dated_signed_token_follows_the_profile_on_firestore() {
+    for acceptance in [TokenAcceptance::Verified, TokenAcceptance::EmulatorMock] {
+        let mut h = start_with(acceptance).await;
+        h.rules
+            .replace_source(
+                "rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /mine/{uid} { allow read: if request.auth != null && request.auth.uid == uid; }
+  }
+}",
+            )
+            .unwrap();
+        let (uid, future) = {
+            let mut store = h.auth.lock().unwrap();
+            store.set_signer(Arc::new(ReversingSigner));
+            let uid = store
+                .create_user(NewUser::email("future@example.com"), START)
+                .unwrap();
+            let mut claims = store.id_token_claims(&uid, None, START).unwrap();
+            claims.iat += 600;
+            claims.auth_time += 600;
+            (
+                uid.as_str().to_owned(),
+                fireemu_core_auth::jwt::encode_with(&claims, store.signer()),
+            )
+        };
+        let answer = h
+            .client
+            .get_document(with_bearer(get(&format!("mine/{uid}")), &future))
+            .await;
+        match acceptance {
+            TokenAcceptance::Verified => {
+                // Not admitted as its user: the rule sees no `request.auth` and denies.
+                let err = answer.unwrap_err();
+                assert_eq!(err.code(), tonic::Code::PermissionDenied, "{err}");
+            }
+            TokenAcceptance::EmulatorMock => {
+                // Allowed by the rule as the token's user; the document does not exist.
+                let err = answer.unwrap_err();
+                assert_eq!(err.code(), tonic::Code::NotFound, "{err}");
+            }
+        }
+        h.handle.abort();
+    }
+}

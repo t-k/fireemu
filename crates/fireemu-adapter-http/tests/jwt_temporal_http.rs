@@ -1,15 +1,16 @@
 //! Time-claim validation through the Auth adapter using the existing public test RSA key.
 //! These tests invoke the real HTTP handler in-process, not a listening server or Google.
 
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock, RwLock};
 
+use fireemu_adapter_http::control::{self, ControlState};
 use fireemu_adapter_http::identity_toolkit::{
     handle, handle_with, AuthState, RequestHeaders, OWNER_CREDENTIAL,
 };
 use fireemu_adapter_http::signing::RsaSigner;
 use fireemu_core_auth::jwt::{
     base64url_decode, base64url_encode, decode_token, encode_payload_with, verify_rules_token,
-    JwtError, TokenAcceptance,
+    JwtError, TokenAcceptance, IDENTITY_TOOLKIT_EXPIRY_LEEWAY_SECONDS,
 };
 use fireemu_core_auth::mfa::TotpPolicy;
 use fireemu_core_auth::store::AuthStore;
@@ -40,10 +41,28 @@ fn signer() -> Arc<RsaSigner> {
     }))
 }
 
+/// The compatibility profile an [`AuthState`] is wired for, as the daemon wires it: the
+/// emulator profile keeps refresh tokens stateless, strict keeps refresh sessions.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Profile {
+    Strict,
+    Emulator,
+}
+
+/// The strict profile with session-RSA signing, which the existing refusal tests assume.
 fn setup() -> (AuthState, Arc<RsaSigner>, String, String) {
+    setup_with(Profile::Strict, true)
+}
+
+/// A session of `profile` with one signed-up account. `rsa` installs the RSA signer
+/// (`auth.idTokenSigning: session-rsa`); otherwise tokens are unsigned, as with the emulator
+/// profile's default `unsigned-emulator`.
+fn setup_with(profile: Profile, rsa: bool) -> (AuthState, Arc<RsaSigner>, String, String) {
     let signer = signer();
     let mut store = AuthStore::new("demo-app", SplitMix64::new(11), TotpPolicy::default());
-    store.set_signer(signer.clone());
+    if rsa {
+        store.set_signer(signer.clone());
+    }
     let state = AuthState {
         store: Arc::new(Mutex::new(store)),
         clock: Arc::new(Mutex::new(VirtualClock::new(AT))),
@@ -57,7 +76,7 @@ fn setup() -> (AuthState, Arc<RsaSigner>, String, String) {
         control_token: None,
         registry: None,
         allow_routed_projects: false,
-        stateless_refresh_tokens: true,
+        stateless_refresh_tokens: profile == Profile::Emulator,
         idp_continuations: fireemu_adapter_http::identity_toolkit::IdpContinuationPolicy::Disabled,
         query_limits: fireemu_adapter_http::identity_toolkit::AuthQueryLimits::EmulatorUnbounded,
         client_api_key: fireemu_adapter_http::identity_toolkit::ClientApiKeyPolicy::Optional,
@@ -163,18 +182,38 @@ fn a_current_second_signed_token_can_update_and_refresh() {
     assert!(decode_token(id_token, Some(signer.as_ref())).is_ok());
 }
 
+/// Security Rules follow the profile's token acceptance (ledger 781): strict (`Verified`)
+/// refuses a signed token whose `iat` or `auth_time` is in the future; the emulator profile
+/// (`EmulatorMock`) accepts it on the verified path, with its signature still checked, as the
+/// official emulators read no time claim. A tampered signature never reaches the mock fallback.
 #[test]
-fn a_signed_temporal_failure_never_enters_the_unsigned_mock_fallback() {
+fn a_signed_future_dated_token_follows_the_rules_profile_and_never_the_mock_fallback() {
     let (state, signer, original, _) = setup();
     for key in ["iat", "auth_time"] {
-        let bad = revised_token(&original, signer.as_ref(), key, Some(json!(NOW + 600)));
+        let future = revised_token(&original, signer.as_ref(), key, Some(json!(NOW + 600)));
         let store = state.store.lock().unwrap();
-        for acceptance in [TokenAcceptance::Verified, TokenAcceptance::EmulatorMock] {
-            assert_eq!(
-                verify_rules_token(&bad, &store, AT, acceptance),
-                Err(JwtError::Malformed)
-            );
-        }
+        assert_eq!(
+            verify_rules_token(&future, &store, AT, TokenAcceptance::Verified),
+            Err(JwtError::Malformed),
+            "{key}"
+        );
+        let accepted = verify_rules_token(&future, &store, AT, TokenAcceptance::EmulatorMock)
+            .unwrap_or_else(|e| panic!("{key}: {e:?}"));
+        assert_eq!(
+            accepted.sub(),
+            decode_token(&original, Some(signer.as_ref()))
+                .unwrap()
+                .sub()
+        );
+        let mut parts: Vec<String> = future.split('.').map(str::to_owned).collect();
+        let mut signature = base64url_decode(&parts[2]).unwrap();
+        signature[0] ^= 1;
+        parts[2] = base64url_encode(&signature);
+        assert_eq!(
+            verify_rules_token(&parts.join("."), &store, AT, TokenAcceptance::EmulatorMock),
+            Err(JwtError::BadSignature),
+            "{key}"
+        );
     }
 }
 
@@ -228,5 +267,360 @@ fn session_cookie_creation_refuses_future_time_claims_and_accepts_the_original()
         );
         assert_eq!(rejected.status, 400);
         assert!(rejected.body.get("sessionCookie").is_none());
+    }
+}
+
+/// The control API over the Auth adapter's clock, as the daemon shares one clock between them.
+fn control_over(clock: Arc<Mutex<VirtualClock>>) -> ControlState {
+    ControlState {
+        clock,
+        require_demo_prefix: true,
+        edition: fireemu_core_types::edition::FirestoreEdition::Standard,
+        capabilities: json!({"schemaVersion": 1}).into(),
+        rules: Arc::new(fireemu_core_rules::runtime::RulesetSlot::default()),
+        storage_rules: Arc::new(fireemu_adapter_http::storage::StorageRulesRegistry::default()),
+        reset_hooks: Vec::new(),
+        functions: None,
+        control_token: "test-token".to_owned(),
+        app_check: None,
+        barrier: None,
+        snapshot_hooks: Vec::new(),
+        snapshots: Mutex::new(std::collections::BTreeMap::new()),
+        faults: None,
+        text_indexes: Arc::new(Mutex::new(
+            fireemu_core_firestore::text_index::TextIndexCatalog::default(),
+        )),
+        default_project: "demo-app".to_owned(),
+        tenancy: Arc::new(RwLock::new(fireemu_core_session::tenancy::Tenancy::new(
+            "demo-app",
+        ))),
+        sessions: Mutex::new(std::collections::BTreeMap::from([(
+            "default".to_owned(),
+            "demo-app".to_owned(),
+        )])),
+        project_hooks: None,
+        resource_hooks: Vec::new(),
+    }
+}
+
+/// `POST clock:set` on the default session; returns the control API's status.
+fn set_clock(control: &ControlState, at: LogicalInstant, allow_backwards: bool) -> u16 {
+    let instant = at.to_rfc3339().unwrap();
+    let body = if allow_backwards {
+        json!({"instant": instant, "allowBackwards": true})
+    } else {
+        json!({"instant": instant})
+    };
+    control::handle(control, "POST", "/v1/sessions/default/clock:set", &body).status
+}
+
+fn lookup_status(state: &AuthState, token: &str) -> u16 {
+    handle(state, "POST", LOOKUP, &json!({"idToken": token})).status
+}
+
+/// Strict: `clock:set {"allowBackwards": true}` below a held token's `iat`/`auth_time` makes
+/// Identity Toolkit refuse the token with `INVALID_ID_TOKEN` (its claims are now in the
+/// future) until the clock reaches them again. The refusal is inferred from the Firebase
+/// ID-token contract, not recorded (ledger 781). A rewind inside the issuance second, and a
+/// forward-only `clock:set`, keep the token usable.
+#[test]
+fn a_clock_rewind_below_issuance_refuses_a_held_token_in_strict_until_the_clock_catches_up() {
+    let (state, _, token, _) = setup();
+    let control = control_over(state.clock.clone());
+    assert_eq!(set_clock(&control, at_offset(30_000_000_000), false), 200);
+    assert_eq!(lookup_status(&state, &token), 200, "positive control");
+    // A plain clock:set never moves backwards: it is refused and the token stays usable.
+    assert_eq!(set_clock(&control, at_offset(-1), false), 400);
+    assert_eq!(lookup_status(&state, &token), 200);
+    // Back into the issuance second: the whole-second claims are not in the future.
+    assert_eq!(set_clock(&control, AT, true), 200);
+    assert_eq!(lookup_status(&state, &token), 200);
+    // One nanosecond before the issuance second: refused, and the account cannot change.
+    assert_eq!(set_clock(&control, at_offset(-1), true), 200);
+    let refused = handle(&state, "POST", LOOKUP, &json!({"idToken": token}));
+    assert_eq!(refused.status, 400);
+    assert_eq!(refused.body["error"]["message"], "INVALID_ID_TOKEN");
+    let update = handle(
+        &state,
+        "POST",
+        UPDATE,
+        &json!({"idToken": token, "displayName": "must-not-be-committed"}),
+    );
+    assert_eq!(update.status, 400);
+    // The clock catching up again restores the token: nothing was revoked.
+    assert_eq!(set_clock(&control, AT, false), 200);
+    let restored = handle(&state, "POST", LOOKUP, &json!({"idToken": token}));
+    assert_eq!(restored.status, 200);
+    assert!(restored.body["users"][0].get("displayName").is_none());
+}
+
+/// Emulator profile (ledger 781): the same rewind leaves the held token usable, as
+/// firebase-tools 15.28.2 reads no time claim of an ID token, with unsigned and session-RSA
+/// tokens alike. `exp` still applies (ledger 22).
+#[test]
+fn a_clock_rewind_below_issuance_keeps_a_held_token_usable_in_the_emulator_profile() {
+    for signed in [false, true] {
+        let (state, _, token, _) = setup_with(Profile::Emulator, signed);
+        let control = control_over(state.clock.clone());
+        assert_eq!(set_clock(&control, at_offset(30_000_000_000), false), 200);
+        assert_eq!(
+            set_clock(&control, at_offset(-3_600_000_000_000), true),
+            200
+        );
+        assert_eq!(lookup_status(&state, &token), 200, "signed={signed}");
+        let update = handle(
+            &state,
+            "POST",
+            UPDATE,
+            &json!({"idToken": token, "displayName": "after-rewind"}),
+        );
+        assert_eq!(update.status, 200, "signed={signed}: {}", update.body);
+        // Past `exp` and the 300 s allowance the token is refused, as before.
+        assert_eq!(
+            set_clock(&control, at_offset(3_901_000_000_000), false),
+            200
+        );
+        assert_eq!(lookup_status(&state, &token), 400, "signed={signed}");
+    }
+}
+
+fn at_offset(nanos: i128) -> LogicalInstant {
+    LogicalInstant::from_nanos(AT.as_nanos() + nanos)
+}
+
+proptest::proptest! {
+    #![proptest_config(proptest::test_runner::Config {
+        cases: 48,
+        ..proptest::test_runner::Config::default()
+    })]
+
+    /// Model: after any opt-in rewind (or forward set) to `AT + offset`, a token issued at
+    /// `AT` with a one-hour lifetime verifies in strict exactly when
+    /// `0 <= offset < 3600 s + leeway`: whole-second claims make the issuance second usable,
+    /// earlier instants put `iat` and `auth_time` in the future, and `exp` plus Identity
+    /// Toolkit's recorded allowance closes the window. The emulator profile has no lower
+    /// bound (ledger 781); `exp` still closes it.
+    #[test]
+    fn a_held_token_verifies_exactly_inside_its_issuance_window_after_any_clock_set(
+        offset in proptest::prop_oneof![
+            -7_200_000_000_000i128..=7_200_000_000_000i128,
+            -2_000_000_000i128..=2_000_000_000i128,
+            3_898_000_000_000i128..=3_902_000_000_000i128,
+        ],
+        detour in 0i128..=7_200_000_000_000i128,
+        emulator in proptest::bool::ANY,
+    ) {
+        let profile = if emulator { Profile::Emulator } else { Profile::Strict };
+        let (state, _, token, _) = setup_with(profile, true);
+        let control = control_over(state.clock.clone());
+        // Reach the target from a later instant, as a rewind in a replayed scenario would.
+        proptest::prop_assert_eq!(set_clock(&control, at_offset(detour), false), 200);
+        proptest::prop_assert_eq!(set_clock(&control, at_offset(offset), true), 200);
+        let lifetime = i128::from(3_600 + IDENTITY_TOOLKIT_EXPIRY_LEEWAY_SECONDS) * 1_000_000_000;
+        let expected = if emulator { offset < lifetime } else { (0..lifetime).contains(&offset) };
+        proptest::prop_assert_eq!(lookup_status(&state, &token) == 200, expected);
+    }
+}
+
+/// `original` with its `iat` and `auth_time` moved to `NOW + ahead`, signed by `signer` when
+/// the session signs its tokens, otherwise unsigned (a client can make such a token by hand).
+fn future_dated(original: &str, signer: Option<&RsaSigner>, ahead: i64) -> String {
+    let verifier = signer.map(|s| s as &dyn fireemu_core_auth::jwt::IdTokenSigner);
+    let decoded = decode_token(original, verifier).unwrap();
+    let mut payload: Value = serde_json::from_str(&decoded.payload_json).unwrap();
+    payload["iat"] = json!(NOW + ahead);
+    payload["auth_time"] = json!(NOW + ahead);
+    let token = encode_payload_with(&payload.to_string(), verifier);
+    assert!(decode_token(&token, verifier).is_ok());
+    token
+}
+
+fn owner() -> RequestHeaders {
+    RequestHeaders {
+        authorization: Some(OWNER_CREDENTIAL.to_owned()),
+        ..RequestHeaders::default()
+    }
+}
+
+/// Every Identity Toolkit route that verifies an ID token, with a body that reaches the
+/// verification, and whether a verified token succeeds outright on it. `delete` goes last.
+fn id_token_routes(token: &str) -> Vec<(&'static str, Value, bool)> {
+    vec![
+        (LOOKUP, json!({"idToken": token}), true),
+        (
+            UPDATE,
+            json!({"idToken": token, "displayName": "future"}),
+            true,
+        ),
+        (
+            "/identitytoolkit.googleapis.com/v1/accounts:sendOobCode?key=k",
+            json!({"requestType": "VERIFY_EMAIL", "idToken": token}),
+            true,
+        ),
+        (
+            "/identitytoolkit.googleapis.com/v1/projects/demo-app:createSessionCookie",
+            json!({"idToken": token, "validDuration": "3600"}),
+            true,
+        ),
+        (
+            SIGN_UP,
+            json!({"idToken": token, "email": "linked@example.invalid", "password": "password1"}),
+            false,
+        ),
+        (
+            "/identitytoolkit.googleapis.com/v2/accounts/mfaEnrollment:start?key=k",
+            json!({"idToken": token, "phoneEnrollmentInfo": {"phoneNumber": "+15555550100"}}),
+            false,
+        ),
+        (
+            "/identitytoolkit.googleapis.com/v2/accounts/mfaEnrollment:withdraw?key=k",
+            json!({"idToken": token, "mfaEnrollmentId": "absent"}),
+            false,
+        ),
+        (
+            "/identitytoolkit.googleapis.com/v1/accounts:delete?key=k",
+            json!({"idToken": token}),
+            true,
+        ),
+    ]
+}
+
+/// Ledger 781: the emulator profile accepts an ID token whose `iat` and `auth_time` are in
+/// the future, as firebase-tools 15.28.2 does (its `parseIdToken` reads no time claim), with
+/// unsigned and with session-RSA tokens. Strict refuses it with `INVALID_ID_TOKEN` on every
+/// route, before anything else.
+#[test]
+fn a_future_dated_id_token_is_accepted_in_the_emulator_profile_and_refused_in_strict_on_every_route(
+) {
+    for profile in [Profile::Emulator, Profile::Strict] {
+        for signed in [false, true] {
+            let (state, signer, original, _) = setup_with(profile, signed);
+            let future = future_dated(&original, signed.then_some(signer.as_ref()), 600);
+            for (route, body, succeeds) in id_token_routes(&future) {
+                // Only session cookie creation is an Admin route (owner credential).
+                let response = if route.contains("createSessionCookie") {
+                    handle_with(&state, "POST", route, &owner(), &body)
+                } else {
+                    handle(&state, "POST", route, &body)
+                };
+                let label = format!("{profile:?} signed={signed} {route}: {}", response.body);
+                let refused = response.body["error"]["message"]
+                    .as_str()
+                    .is_some_and(|m| m.starts_with("INVALID_ID_TOKEN"));
+                match profile {
+                    Profile::Strict => {
+                        assert_eq!(response.status, 400, "{label}");
+                        assert!(refused, "{label}");
+                    }
+                    Profile::Emulator => {
+                        assert!(!refused, "{label}");
+                        if succeeds {
+                            assert_eq!(response.status, 200, "{label}");
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Only the future time claims are accepted in the emulator profile: a malformed `iat`, a
+/// missing `auth_time` and an `exp` past Identity Toolkit's 300 s allowance (ledger 22) are
+/// still refused there. Strict refuses the near shapes: `iat` one second ahead, and only
+/// `auth_time` ahead.
+#[test]
+fn near_shapes_of_a_future_dated_token_stay_refused_where_they_should() {
+    for profile in [Profile::Emulator, Profile::Strict] {
+        let (state, signer, original, _) = setup_with(profile, true);
+        let lookup =
+            |token: &str| handle(&state, "POST", LOOKUP, &json!({"idToken": token})).status;
+        for (key, value) in [
+            ("iat", Some(json!((NOW + 600).to_string()))),
+            ("auth_time", None),
+            ("exp", Some(json!(NOW - 301))),
+        ] {
+            let bad = revised_token(&original, signer.as_ref(), key, value.clone());
+            assert_eq!(lookup(&bad), 400, "{profile:?} {key}={value:?}");
+        }
+        let one_ahead = revised_token(&original, signer.as_ref(), "iat", Some(json!(NOW + 1)));
+        let auth_ahead = revised_token(
+            &original,
+            signer.as_ref(),
+            "auth_time",
+            Some(json!(NOW + 600)),
+        );
+        let expected = if profile == Profile::Strict { 400 } else { 200 };
+        assert_eq!(
+            lookup(&one_ahead),
+            expected,
+            "{profile:?} iat one second ahead"
+        );
+        assert_eq!(
+            lookup(&auth_ahead),
+            expected,
+            "{profile:?} only auth_time ahead"
+        );
+    }
+}
+
+/// The boundary at `exp` plus Identity Toolkit's 300 s allowance is the same in both profiles
+/// (ledger 22): the last nanosecond before it is accepted and the boundary itself refused.
+#[test]
+fn the_expiry_allowance_boundary_is_exact_in_both_profiles() {
+    let boundary = i128::from(3_600 + IDENTITY_TOOLKIT_EXPIRY_LEEWAY_SECONDS) * 1_000_000_000;
+    for profile in [Profile::Emulator, Profile::Strict] {
+        let (state, _, token, _) = setup_with(profile, true);
+        let control = control_over(state.clock.clone());
+        assert_eq!(set_clock(&control, at_offset(boundary - 1), false), 200);
+        assert_eq!(lookup_status(&state, &token), 200, "{profile:?}");
+        assert_eq!(set_clock(&control, at_offset(boundary), false), 200);
+        assert_eq!(lookup_status(&state, &token), 400, "{profile:?}");
+    }
+}
+
+/// Security review S1, option (a), pinned in both profiles. After a rewind, a revocation does
+/// not revoke a token the server issued later on the timeline: revocation compares the
+/// token's `auth_time` with the account's bound, which the rewound clock sets lower. The
+/// emulator profile then accepts the token at once (its `iat` is in the future, which ledger
+/// 781 accepts); strict refuses it only until the clock reaches its issue time. README and
+/// the control API header document this.
+#[test]
+fn a_revocation_on_a_rewound_clock_does_not_revoke_tokens_issued_later() {
+    for profile in [Profile::Emulator, Profile::Strict] {
+        let (state, _, _, _) = setup_with(profile, true);
+        let control = control_over(state.clock.clone());
+        // Sign in at T1 = AT + 600 s.
+        assert_eq!(set_clock(&control, at_offset(600_000_000_000), false), 200);
+        let signed_in = handle(
+            &state,
+            "POST",
+            "/identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key=k",
+            &json!({
+                "email": "temporal@example.invalid",
+                "password": "password1",
+                "returnSecureToken": true
+            }),
+        );
+        assert_eq!(signed_in.status, 200, "{}", signed_in.body);
+        let later = signed_in.body["idToken"].as_str().unwrap().to_owned();
+        let uid = signed_in.body["localId"].as_str().unwrap().to_owned();
+        // Rewind to T0 = AT + 10 s and revoke there (Admin validSince = now).
+        assert_eq!(set_clock(&control, at_offset(10_000_000_000), true), 200);
+        let revoked = handle_with(
+            &state,
+            "POST",
+            "/identitytoolkit.googleapis.com/v1/projects/demo-app/accounts:update",
+            &owner(),
+            &json!({"localId": uid, "validSince": (NOW + 10).to_string()}),
+        );
+        assert_eq!(revoked.status, 200, "{}", revoked.body);
+        assert_eq!(set_clock(&control, at_offset(11_000_000_000), false), 200);
+        let at_t0 = lookup_status(&state, &later);
+        assert_eq!(set_clock(&control, at_offset(601_000_000_000), false), 200);
+        let after_t1 = lookup_status(&state, &later);
+        match profile {
+            Profile::Emulator => assert_eq!((at_t0, after_t1), (200, 200), "{profile:?}"),
+            Profile::Strict => assert_eq!((at_t0, after_t1), (400, 200), "{profile:?}"),
+        }
     }
 }

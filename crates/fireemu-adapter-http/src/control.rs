@@ -5,7 +5,7 @@
 //! GET  /health/ready
 //! GET  /v1/capabilities
 //! GET  /v1/sessions/{session}                 -> { "clock": "<rfc3339>" }
-//! POST /v1/sessions/{session}/clock:set       { "instant": "<rfc3339>" }
+//! POST /v1/sessions/{session}/clock:set       { "instant": "<rfc3339>", "allowBackwards": bool? }
 //! POST /v1/sessions/{session}/clock:advance   { "seconds": n } | { "millis": n }
 //! POST /v1/sessions/{session}/clock:advanceTo { "instant": "<rfc3339>" }
 //! POST /v1/sessions/{session}:awaitIdle       { "timeoutSeconds": n }
@@ -13,6 +13,17 @@
 //! POST /v1/sessions/{session}/functions/{name}:run
 //! GET  /v1/sessions/{session}/rules/requests
 //! ```
+//!
+//! `clock:set` moves backwards only with `"allowBackwards": true`. What a rewind does to an ID
+//! token whose `iat` or `auth_time` is now in the future depends on the profile (owner decision
+//! ledger 781). The `emulator` profile accepts it on every surface, as firebase-tools 15.28.2
+//! does. `strict` refuses it until the clock reaches those claims again: Identity Toolkit answers
+//! `INVALID_ID_TOKEN`, and Firestore and Storage Rules do not admit it. Expiry still applies in
+//! both profiles. A rewind below an account's creation or revocation time makes even a new
+//! sign-in's token count as revoked.
+//! Conversely, a revocation or password change made after a rewind does not revoke tokens
+//! issued later on the timeline (accepted at once in `emulator`, once the clock catches up in
+//! `strict`).
 //!
 //! The daemon currently runs one implicit session; every session name maps to it. Sessions,
 //! snapshots and `await-idle` arrive with the session runtime.

@@ -873,3 +873,33 @@ test("an idle or finished gate holds no referenced timer and releases the caller
   assert.equal(timeouts(), baseline);
   assert.equal(getEventListeners(controller.signal, "abort").length, 0);
 });
+test("a synchronous throw from issue may follow sent bytes, so it requires termination", async () => {
+  for (const kind of ["open", "frame", "half-close", "client-cancel"]) {
+    let throwOn;
+    const { g } = await gate({
+      issue: (intent) => {
+        if (intent.kind === throwOn) throw new Error("native write failed after a partial send");
+      },
+    });
+    if (kind !== "open") await g.open();
+    throwOn = kind;
+    const action = {
+      open: () => g.open(),
+      frame: () => g.write(Buffer.from("x")),
+      "half-close": () => g.halfClose(),
+      "client-cancel": () => g.cancel(),
+    }[kind];
+    await assert.rejects(action(), /stopped/);
+    const result = await g.done();
+    assert.equal(result.stopOrigin, "uncertain", kind);
+    assert.equal(result.unknownActions, 1, kind);
+    assert.deepEqual(result.pendingCallbacks, [], kind);
+    assert.equal(result.terminationRequired, true, kind);
+  }
+  // A failure before issue is reached (here the final live check) sent nothing and stays clean.
+  const revoked = await gate({ liveCheck: () => false });
+  await assert.rejects(revoked.g.open(), /stopped/);
+  const result = await revoked.g.done();
+  assert.equal(result.stopOrigin, "revocation");
+  assert.equal(result.terminationRequired, false);
+});

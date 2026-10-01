@@ -52,7 +52,8 @@ export function createStreamingWriteGate({
     containmentSettled = false,
     containmentFailed = false,
     unsettledObserved = false,
-    synchronousContractFailed = false;
+    synchronousContractFailed = false,
+    issueFailed = false;
   const origins = new Set([
     "peer-terminal",
     "client-cancel",
@@ -208,7 +209,14 @@ export function createStreamingWriteGate({
           check();
         }
         check();
-        const result = issue(intent, wire ? Buffer.from(wire) : undefined);
+        let result;
+        try {
+          result = issue(intent, wire ? Buffer.from(wire) : undefined);
+        } catch (error) {
+          // A native write can throw after some bytes left; nothing proves otherwise.
+          issueFailed = true;
+          throw error;
+        }
         rejectAsync(`${intent.index}:async-issue`, result);
         issuedActions++;
         if (kind === "open") direction = "OPEN";
@@ -253,7 +261,11 @@ export function createStreamingWriteGate({
       stopOrigin,
       pendingCallbacks: [...pending.keys()],
       terminationRequired:
-        unsettledObserved || synchronousContractFailed || containmentFailed || !containmentSettled,
+        unsettledObserved ||
+        synchronousContractFailed ||
+        issueFailed ||
+        containmentFailed ||
+        !containmentSettled,
     };
   }
   return {

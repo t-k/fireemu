@@ -285,6 +285,15 @@ test("object bytes are compared by length and digest, inline when small, and wit
   assert.equal(out.length, 4);
   assert.equal(out.base64, small.toString("base64"));
   assert.match(out.sha256, /^[0-9a-f]{64}$/);
+  // 4,096 bytes are inline, 4,097 are not.
+  assert.equal(
+    "base64" in normalizeBody(Buffer.alloc(4096, 7), "application/octet-stream", ctx()),
+    true,
+  );
+  assert.equal(
+    "base64" in normalizeBody(Buffer.alloc(4097, 7), "application/octet-stream", ctx()),
+    false,
+  );
   const big = Buffer.alloc(5000, 7);
   const large = normalizeBody(big, "application/octet-stream", ctx());
   assert.equal(large.length, 5000);

@@ -50,6 +50,22 @@ test("a line that is not a request with a response is not an exchange", () => {
     assert.equal(exchangeOf(row), null);
 });
 
+test("a line with only a request, or only a response, is not an exchange", () => {
+  assert.equal(
+    exchangeOf({ sequence: 1, request: { method: "GET", url: "https://x.example/o" } }),
+    null,
+  );
+  assert.equal(exchangeOf({ sequence: 1, response: { status: 200 } }), null);
+  assert.equal(
+    exchangeOf({
+      sequence: 1,
+      request: { method: "GET", url: "https://x.example/o" },
+      response: null,
+    }),
+    null,
+  );
+});
+
 test("captures are split by the recipes' sequence ranges, in order, and a capture in no range is left out", () => {
   const recipes = splitRecipes({
     captureRows: [

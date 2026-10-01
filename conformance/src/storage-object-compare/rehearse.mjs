@@ -128,8 +128,7 @@ export async function rehearse({
   const summary = result.stdout
     .trim()
     .split("\n")
-    .filter((line) => line.startsWith("{"))
-    .at(-1);
+    .findLast((line) => line.startsWith("{"));
   const parsed = summary ? JSON.parse(summary) : null;
   if (!parsed?.eventDirectory)
     throw new Error(`the rehearsal did not report its journal (exit ${result.code})`);

@@ -54,6 +54,46 @@ test("alignment pairs equal keys in order, and reports what only one side has", 
   ]);
 });
 
+test("alignment finds the best pairing from either end of both lists", () => {
+  assert.deepEqual(align(["x"], ["a", "x"]), [
+    [null, 0],
+    [0, 1],
+  ]);
+  assert.deepEqual(align(["x", "a"], ["a", "a"]), [
+    [0, null],
+    [1, 0],
+    [null, 1],
+  ]);
+  assert.deepEqual(align(["a", "x"], ["x"]), [
+    [0, null],
+    [1, 0],
+  ]);
+  assert.deepEqual(
+    align(["x", "y"], ["y", "x"]).filter(([i, j]) => i !== null && j !== null).length,
+    1,
+  );
+});
+
+test("JSON differences against a value of another kind are one difference at that path", () => {
+  assert.deepEqual(jsonDifferences({ a: 1 }, 5), [{ path: "$", production: { a: 1 }, local: 5 }]);
+  assert.deepEqual(jsonDifferences(5, { a: 1 }), [{ path: "$", production: 5, local: { a: 1 } }]);
+  assert.deepEqual(jsonDifferences({ a: 1 }, null), [
+    { path: "$", production: { a: 1 }, local: null },
+  ]);
+  assert.deepEqual(jsonDifferences([1], { 0: 1 }), [
+    { path: "$", production: [1], local: { 0: 1 } },
+  ]);
+  const items = Array.from({ length: 20 }, (_, i) => i);
+  assert.equal(jsonDifferences({ items }, { items: items.map((i) => i + 100) }).length, 8);
+  assert.equal(
+    jsonDifferences(
+      items,
+      items.map((i) => i + 100),
+    ).length,
+    8,
+  );
+});
+
 test("JSON differences name the path, include absent members, and stop at the limit", () => {
   assert.deepEqual(jsonDifferences({ a: 1 }, { a: 1 }), []);
   assert.deepEqual(jsonDifferences({ a: 1, b: { c: 2 } }, { a: 1, b: { c: 3 } }), [

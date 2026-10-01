@@ -707,10 +707,17 @@ impl Drop for EventBatchReservation {
             .inner
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut retry_schedule = false;
         if inner.epoch == self.epoch {
             release_event_reservation(&mut inner, deliveries.len(), self.retained_bytes);
+            // The freed records may be what a refused schedule run waits for: re-enter the
+            // sweep as a completion does, since no completion or clock change may follow.
+            retry_schedule = inner.catch_up_pending;
         }
         drop(inner);
+        if retry_schedule {
+            runtime.on_clock_changed();
+        }
         runtime.idle.notify_waiters();
     }
 }
@@ -719,6 +726,25 @@ fn release_event_reservation(inner: &mut Inner, records: usize, bytes: usize) {
     inner.reserved_event_records = inner.reserved_event_records.saturating_sub(records);
     inner.reserved_event_bytes = inner.reserved_event_bytes.saturating_sub(bytes);
 }
+
+/// Why a manual schedule run was not enqueued.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ScheduleRunError {
+    /// The function is unknown or not scheduled, or its overlap policy refuses the run.
+    Refused(String),
+    /// Functions event admission is at capacity; nothing was enqueued.
+    Capacity(String),
+}
+
+impl std::fmt::Display for ScheduleRunError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Refused(message) | Self::Capacity(message) => f.write_str(message),
+        }
+    }
+}
+
+impl std::error::Error for ScheduleRunError {}
 
 /// Why a source mutation could not reserve all of its logical deliveries.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -2789,41 +2815,40 @@ impl FunctionsRuntime {
                 outcome: format!("skipped: catch-up {label} ({count})"),
             });
         }
-        // Oldest occurrence first across jobs, so freed capacity never goes to a newer run of
-        // one job while an older run of another waits (the sort is stable: job order breaks
-        // ties).
+        // Oldest occurrence first across jobs (the sort is stable: job order breaks ties), and
+        // the sweep stops at the first capacity refusal, so freed capacity always goes to the
+        // oldest due run, whatever its job and however many copies it needs.
         runs.sort_by_key(|(_, _, at)| at.as_nanos());
-        let mut refused: Vec<String> = Vec::new();
-        for (function, region, at) in runs {
-            // A job's later runs wait behind its refused one, in order.
-            if refused.contains(&function) {
-                continue;
-            }
-            if !self.admit_scheduled_run(&mut inner, &function) {
+        for (index, (function, region, at)) in runs.iter().enumerate() {
+            if !self.admit_scheduled_run(&mut inner, function) {
                 continue;
             }
             let id = format!("{}-{}", self.config.session.value(), inner.next_event + 1);
-            let payload = schedule_event(&id, &self.config.project, &region, &function, at);
+            let payload = schedule_event(&id, &self.config.project, region, function, *at);
             if self.enqueue_schedule_run(
                 &mut inner,
                 EventSource::Scheduler,
-                &function,
-                at,
+                function,
+                *at,
                 &payload,
             ) {
                 enqueued = true;
                 continue;
             }
-            // Refused for capacity: move the cursor back so this occurrence is due again, and
-            // keep the catch-up pending so the next completion or clock change retries it.
-            let before = LogicalInstant::from_nanos(at.as_nanos() - 1);
-            if let Some(job) = inner.jobs.iter_mut().find(|job| job.function == function) {
-                if before.as_nanos() < job.cursor.as_nanos() {
-                    job.cursor = before;
+            // Refused for capacity: move back the cursor of every job with a run not admitted
+            // (this one and all later ones) so those occurrences are due again, and keep the
+            // catch-up pending so the next completion, cancelled reservation or clock change
+            // retries them. A job's earliest such run decides its cursor.
+            for (function, _, at) in &runs[index..] {
+                let before = LogicalInstant::from_nanos(at.as_nanos() - 1);
+                if let Some(job) = inner.jobs.iter_mut().find(|job| &job.function == function) {
+                    if before.as_nanos() < job.cursor.as_nanos() {
+                        job.cursor = before;
+                    }
                 }
             }
             inner.catch_up_pending = true;
-            refused.push(function);
+            break;
         }
         // Events a `delay` fault held back became due with the clock.
         if inner.delayed.values().any(|h| h.until <= now) {
@@ -2942,30 +2967,32 @@ impl FunctionsRuntime {
     }
 
     /// Runs a scheduled function now (manual trigger).
-    pub fn run_schedule(&self, function: &str) -> Result<(), String> {
+    pub fn run_schedule(&self, function: &str) -> Result<(), ScheduleRunError> {
         let f = self
             .manifest
             .get(function)
-            .ok_or_else(|| format!("unknown function {function:?}"))?;
+            .ok_or_else(|| ScheduleRunError::Refused(format!("unknown function {function:?}")))?;
         if !matches!(f.trigger, Trigger::Schedule { .. }) {
-            return Err(format!("function {function:?} is not scheduled"));
+            return Err(ScheduleRunError::Refused(format!(
+                "function {function:?} is not scheduled"
+            )));
         }
         let now = self.now();
         let Ok(mut inner) = self.inner.lock() else {
-            return Err("runtime poisoned".into());
+            return Err(ScheduleRunError::Refused("runtime poisoned".into()));
         };
         if !self.admit_scheduled_run(&mut inner, function) {
-            return Err(format!(
+            return Err(ScheduleRunError::Refused(format!(
                 "a run of {function:?} is already queued or running (scheduler.overlap = {:?})",
                 self.config.overlap
-            ));
+            )));
         }
         let id = format!("{}-{}", self.config.session.value(), inner.next_event + 1);
         let payload = schedule_event(&id, &self.config.project, &f.region, function, now);
         if !self.enqueue_schedule_run(&mut inner, EventSource::Manual, function, now, &payload) {
-            return Err(format!(
+            return Err(ScheduleRunError::Capacity(format!(
                 "the functions event queue is at capacity; the run of {function:?} was not enqueued"
-            ));
+            )));
         }
         drop(inner);
         self.wake.notify_one();
@@ -5084,7 +5111,7 @@ mod task_completion_tests {
         dispatches.remove(0)
     }
 
-    fn created_commit() -> CommitEvent {
+    pub(super) fn created_commit() -> CommitEvent {
         let now = LogicalInstant::from_unix_seconds(1_788_004_860);
         let path = DocumentPath::parse(
             &ProjectId::try_new("demo-app").unwrap(),
@@ -5622,7 +5649,10 @@ mod schedule_capacity_tests {
         let (runtime, _clock) = runtime(CatchUpPolicy::All).await;
         set_room(&runtime, 0);
         let refused = runtime.run_schedule("tick").unwrap_err();
-        assert!(refused.contains("capacity"), "{refused}");
+        assert!(
+            matches!(&refused, super::ScheduleRunError::Capacity(m) if m.contains("capacity")),
+            "{refused:?}"
+        );
         assert!(admitted(&runtime).is_empty());
         // The refusal is counted (the resource report lists it as `admission.capacity`).
         let refusals = runtime
@@ -5778,6 +5808,80 @@ mod schedule_capacity_tests {
         finish(&runtime).await;
     }
 
+    /// Review M-D1: a cancelled source reservation that frees the last slot re-enters the
+    /// schedule sweep, as a completion does, so the refused run is delivered without a clock
+    /// change and await-idle settles.
+    #[tokio::test]
+    async fn a_cancelled_reservation_that_frees_capacity_delivers_the_refused_run() {
+        let (runtime, clock) = runtime(CatchUpPolicy::All).await;
+        let commit = super::task_completion_tests::created_commit();
+        // A pending source mutation's two reserved deliveries take the last two slots.
+        set_room(&runtime, 2);
+        let reservation = runtime.reserve_commit_events(&commit).unwrap();
+        advance(&clock, 300);
+        runtime.on_clock_changed();
+        assert!(admitted(&runtime).is_empty());
+        assert!(pending(&runtime));
+        tokio::spawn(runtime.clone().dispatch_loop());
+        // The source mutation is cancelled; no clock change follows.
+        drop(reservation);
+        runtime
+            .await_idle(Duration::from_secs(5))
+            .await
+            .expect("the refused run is delivered and the session settles");
+        assert!(runtime
+            .history()
+            .iter()
+            .any(|record| record.function == "tick" && record.outcome == "ok"));
+        assert!(!pending(&runtime));
+        finish(&runtime).await;
+    }
+
+    /// Review S-D1: freed capacity goes strictly to the oldest due run. Here every `tick`
+    /// delivery is duplicated, so tick 12:05 needs two slots; with one free slot nothing is
+    /// admitted, and in particular not the newer single-copy `nightly` 03:00.
+    #[tokio::test]
+    async fn a_newer_run_of_another_job_never_takes_the_slot_of_an_older_refused_run() {
+        let (runtime, clock) = runtime(CatchUpPolicy::All).await;
+        duplicate_tick(&runtime);
+        set_room(&runtime, 1);
+        advance(&clock, 15 * 3600 + 4 * 60);
+        runtime.on_clock_changed();
+        assert!(admitted(&runtime).is_empty(), "{:?}", admitted(&runtime));
+        assert!(pending(&runtime));
+        set_room(&runtime, 10_000);
+        runtime.on_clock_changed();
+        let order = admitted(&runtime);
+        assert_eq!(order.len(), 2 * (15 * 12 + 1) + 2);
+        let times: Vec<&str> = order.iter().map(|(_, t)| t.as_str()).collect();
+        let mut sorted = times.clone();
+        sorted.sort_unstable();
+        assert_eq!(
+            times, sorted,
+            "admission is in occurrence order across jobs"
+        );
+        assert!(!pending(&runtime));
+        finish(&runtime).await;
+    }
+
+    /// Duplicates every `tick` delivery once (two copies per occurrence).
+    fn duplicate_tick(runtime: &FunctionsRuntime) {
+        let faults = Arc::new(Mutex::new(FaultState::default()));
+        faults.lock().unwrap().install(FaultPlan {
+            seed: 1,
+            rules: vec![FaultRule {
+                matches: FaultMatch {
+                    operation: "functions.deliver".to_owned(),
+                    nth: None,
+                    function: Some("tick".to_owned()),
+                    event_type: None,
+                },
+                action: FaultAction::Duplicate { count: 1 },
+            }],
+        });
+        runtime.set_faults(faults);
+    }
+
     #[derive(Clone, Debug)]
     enum Step {
         /// Moves the clock forward and sweeps.
@@ -5786,13 +5890,16 @@ mod schedule_capacity_tests {
         Room(usize),
     }
 
-    /// Independent model of the fixture's schedules: `tick` at every multiple of 300 s,
-    /// `nightly` and `failSchedule` at 03:00 UTC, each strictly after START up to `end`.
-    fn model(end: i64) -> Vec<(String, i64)> {
+    /// Independent model of the fixture's schedules: `tick` at every multiple of 300 s (twice
+    /// when its deliveries are duplicated), `nightly` and `failSchedule` at 03:00 UTC, each
+    /// strictly after START up to `end`.
+    fn model(end: i64, tick_copies: usize) -> Vec<(String, i64)> {
         let mut runs = Vec::new();
         for t in (START + 1)..=end {
             if t % 300 == 0 {
-                runs.push(("tick".to_owned(), t));
+                for _ in 0..tick_copies {
+                    runs.push(("tick".to_owned(), t));
+                }
             }
             if t.rem_euclid(86_400) == 10_800 {
                 runs.push(("nightly".to_owned(), t));
@@ -5827,6 +5934,7 @@ mod schedule_capacity_tests {
                 ],
                 1..8,
             ),
+            duplicated in proptest::bool::ANY,
         ) {
             let tokio = tokio::runtime::Builder::new_current_thread()
                 .enable_all()
@@ -5834,6 +5942,9 @@ mod schedule_capacity_tests {
                 .unwrap();
             tokio.block_on(async {
                 let (runtime, clock) = runtime(CatchUpPolicy::All).await;
+                if duplicated {
+                    duplicate_tick(&runtime);
+                }
                 let mut room = 0usize;
                 let mut end = START;
                 for step in &steps {
@@ -5865,7 +5976,7 @@ mod schedule_capacity_tests {
                 );
                 let mut conserved = order.clone();
                 conserved.sort();
-                proptest::prop_assert_eq!(conserved, model(end));
+                proptest::prop_assert_eq!(conserved, model(end, if duplicated { 2 } else { 1 }));
                 finish(&runtime).await;
                 Ok(())
             })?;

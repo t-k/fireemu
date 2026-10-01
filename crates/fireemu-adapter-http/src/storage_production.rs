@@ -256,7 +256,12 @@ pub fn frame(shape: &Shape, mut response: StorageResponse) -> (StorageResponse, 
 #[must_use]
 pub fn production_etag(generation: u64, metageneration: u64) -> String {
     fn varint(mut value: u64, out: &mut Vec<u8>) {
-        while value >= 0x80 {
+        // A 64-bit value takes at most ten bytes, so at most nine continuation bytes precede the
+        // last; the bound keeps a broken shift from growing the buffer without end.
+        for _ in 0..9 {
+            if value < 0x80 {
+                break;
+            }
             out.push(u8::try_from(value & 0x7f).unwrap_or(0) | 0x80);
             value >>= 7;
         }
@@ -1249,6 +1254,25 @@ mod tests {
             "CNGTm8DplpcDEAM="
         );
         assert_eq!(production_etag(1, 1), "CAEQAQ==");
+    }
+
+    #[test]
+    fn the_etag_varints_hold_at_every_length_up_to_ten_bytes() {
+        // Values on either side of each seven-bit boundary and both ends of the 64-bit range,
+        // computed with an independent encoder.
+        for (generation, metageneration, expected) in [
+            (127, 128, "CH8QgAE="),
+            (16_383, 16_384, "CP9/EICAAQ=="),
+            (1_u64 << 63, 2, "CICAgICAgICAgAEQAg=="),
+            (u64::MAX, 1, "CP///////////wEQAQ=="),
+            (1, u64::MAX, "CAEQ////////////AQ=="),
+        ] {
+            assert_eq!(
+                production_etag(generation, metageneration),
+                expected,
+                "{generation} {metageneration}"
+            );
+        }
     }
 
     #[test]

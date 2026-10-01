@@ -36,7 +36,10 @@ pub fn glob_matches(pattern: &str, name: &str) -> bool {
 /// for the caller).
 fn parse(chars: &[char], at: &mut usize, in_braces: bool) -> Vec<Token> {
     let mut tokens = Vec::new();
-    while let Some(&c) = chars.get(*at) {
+    // Every pass consumes at least one character, so `chars.len()` passes are the most there can
+    // be; the bound keeps a cursor that stopped advancing from growing `tokens` without end.
+    for _ in 0..=chars.len() {
+        let Some(&c) = chars.get(*at) else { break };
         match c {
             ',' | '}' if in_braces => break,
             '\\' => {
@@ -109,7 +112,8 @@ fn parse_class(chars: &[char], start: usize) -> Option<(Token, usize)> {
     }
     let mut ranges = Vec::new();
     let mut first = true;
-    loop {
+    // As in `parse`, each pass consumes a character, so the pattern's length bounds the passes.
+    for _ in 0..=chars.len() {
         let &c = chars.get(at)?;
         if c == ']' && !first {
             return Some((Token::Class(ranges, negated), at + 1));
@@ -134,6 +138,7 @@ fn parse_class(chars: &[char], start: usize) -> Option<(Token, usize)> {
             ranges.push((low, low));
         }
     }
+    None
 }
 
 fn matches(tokens: &[Token], name: &[char]) -> bool {

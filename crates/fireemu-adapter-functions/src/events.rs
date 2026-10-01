@@ -611,14 +611,7 @@ mod tests {
 
     #[test]
     fn a_seed_without_a_counter_is_hashed_and_still_has_seventeen_digits() {
-        for seed in [
-            "",
-            "a",
-            "a-b",
-            "-",
-            "42-",
-            "42-18446744073709551616",
-        ] {
+        for seed in ["", "a", "a-b", "-", "42-", "42-18446744073709551616"] {
             let id = storage_event_id(seed);
             assert_eq!(id.len(), 17, "{seed:?} {id}");
         }

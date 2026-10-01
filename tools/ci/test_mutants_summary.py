@@ -5,6 +5,7 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 SPEC = importlib.util.spec_from_file_location(
     "mutants_summary", Path(__file__).with_name("mutants-summary.py")
@@ -89,6 +90,7 @@ class MergeTest(unittest.TestCase):
             "bidi \u202e override \u2066",
             "tick `code` `",
             "carriage\rreturn\u2028line\u2029sep",
+            "spaces\u00a0nbsp\u2003emsp\u3000ideographic",
             "a" * 1000,
         ]
         write_shard(self.root, 0, [mutant(name, "MissedMutant") for name in hostile])
@@ -96,7 +98,7 @@ class MergeTest(unittest.TestCase):
         markdown = summary.markdown(merged)
         for line in markdown.splitlines():
             self.assertFalse(line.startswith("### All mutants"), line)
-        for forbidden in ("\x1b", "\x07", "\r", "\u202e", "\u2066", "\u2028", "\u2029", "`code`"):
+        for forbidden in ("\x1b", "\x07", "\r", "\u202e", "\u2066", "\u2028", "\u2029", "\u00a0", "\u2003", "\u3000", "`code`"):
             self.assertNotIn(forbidden, markdown)
             self.assertNotIn(forbidden, json.dumps(merged, ensure_ascii=False))
         self.assertTrue(all(len(name) <= 300 for name in merged["missed_mutants"]))
@@ -122,6 +124,23 @@ class MergeTest(unittest.TestCase):
         self.assertEqual(written["missed_mutants"], ["a.rs:2: y"])
         self.assertIn("`a.rs:2: y`", (self.out / "summary.md").read_text())
         self.assertEqual(summary.main(["--expected-shards", "2", str(self.root), str(self.out)]), 1)
+
+
+    def test_text_that_came_from_an_unreadable_file_or_an_unknown_outcome_is_cleaned_too(self):
+        (self.root / "mutants-shard-0").mkdir()
+        (self.root / "mutants-shard-0" / "outcomes.json").write_text("{}")
+        with mock.patch.object(Path, "read_text", side_effect=OSError("bad\x1b[2J\u202ename")):
+            merged = summary.merge(self.root, 1)
+        problem = merged["problems"][0]
+        self.assertNotIn("\x1b", problem)
+        self.assertNotIn("\u202e", problem)
+        self.assertIn("unreadable", problem)
+        write_shard(self.root, 1, [mutant("a.rs:1: x", "Odd\n### forged\x1b[2J" + "z" * 100)])
+        merged = summary.merge(self.root, 2)
+        (key,) = merged["other"]
+        self.assertNotIn("\n", key)
+        self.assertNotIn("\x1b", key)
+        self.assertLessEqual(len(key), 40)
 
 
 if __name__ == "__main__":

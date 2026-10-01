@@ -127,4 +127,8 @@ class HeavyVerificationContractTest < Minitest::Test
   def test_a_plan_that_does_not_pin_the_locale_is_refused
     assert_violation(REAL.sub(/ *export LC_ALL=C\n/, ""), "pin the locale")
   end
+
+  def test_a_nextest_job_without_the_locked_fetch_is_refused
+    assert_violation(REAL.sub("        run: cargo fetch --locked\n", "        run: \"true\"\n"), "must fetch the locked graph")
+  end
 end

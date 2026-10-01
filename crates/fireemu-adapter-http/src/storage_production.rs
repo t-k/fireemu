@@ -1441,23 +1441,42 @@ mod tests {
             usize::try_from((h + 6) % 7).unwrap()
         }
 
+        /// The instant as the calendar and the weekday formula give it.
+        fn expected(seconds: i64) -> String {
+            let rfc = fireemu_core_types::time::LogicalInstant::from_unix_seconds(seconds)
+                .to_rfc3339()
+                .unwrap();
+            let (date, time) = rfc.trim_end_matches('Z').split_once('T').unwrap();
+            let parts: Vec<i64> = date.split('-').map(|p| p.parse().unwrap()).collect();
+            let (year, month, day) = (parts[0], parts[1], parts[2]);
+            format!(
+                "{}, {day:02} {} {year:04} {time} GMT",
+                DAYS[weekday(year, month, day)],
+                MONTHS[usize::try_from(month - 1).unwrap()]
+            )
+        }
+
         proptest! {
+            #![proptest_config(ProptestConfig::with_cases(2000))]
+
+            /// The days around the first of March are where the year of the era steps: the date
+            /// arithmetic is exercised there, in every year from 1970 to 2099, leap and not.
+            #[test]
+            fn http_dates_follow_the_calendar_around_each_first_of_march(
+                year in 1970i64..2100,
+                offset in -4i64..=4,
+                second in 0i64..86_400,
+            ) {
+                let march_first = fireemu_core_types::time::days_from_civil(year, 3, 1);
+                let seconds = (march_first + offset) * 86_400 + second;
+                prop_assert_eq!(http_date(seconds), expected(seconds));
+            }
+
             /// An HTTP date is the calendar's date and time of the instant, with the right weekday
             /// and month name: the clock fields come from the RFC 3339 spelling of the same instant.
             #[test]
             fn http_dates_follow_the_calendar(seconds in 0i64..4_102_444_800) {
-                let rfc = fireemu_core_types::time::LogicalInstant::from_unix_seconds(seconds)
-                    .to_rfc3339()
-                    .unwrap();
-                let (date, time) = rfc.trim_end_matches('Z').split_once('T').unwrap();
-                let parts: Vec<i64> = date.split('-').map(|p| p.parse().unwrap()).collect();
-                let (year, month, day) = (parts[0], parts[1], parts[2]);
-                let expected = format!(
-                    "{}, {day:02} {} {year:04} {time} GMT",
-                    DAYS[weekday(year, month, day)],
-                    MONTHS[usize::try_from(month - 1).unwrap()]
-                );
-                prop_assert_eq!(http_date(seconds), expected);
+                prop_assert_eq!(http_date(seconds), expected(seconds));
             }
         }
     }

@@ -45,7 +45,7 @@
     },
     "historical": {
       "reportPath": "spec/compatibility/closure/evidence/FS-DATA-WRITE-historical-regression.json",
-      "reportSha256": "f8d9d079ab7befd137b15a045d12e57fe3fb738125441694b89e52c7474d9da1"
+      "reportSha256": "72a9410ce5c77ec9aeb3f04093a9565ecb94bdb3272d8442aa5f647b3bd3496c"
     }
   }
 }

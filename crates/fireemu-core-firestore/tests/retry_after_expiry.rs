@@ -175,8 +175,9 @@ fn the_emulator_profile_accepts_a_retry_that_names_an_expired_token_like_the_off
 }
 
 /// Official emulator (firebase-tools 15.28.2, v1.22.0, native gRPC, measured 2026-10-02): after a retry names a token, a Rollback of the named token answers 0
-/// whether the token was live, committed or rolled back, and again when repeated; its retry token's Rollback answers 0. Strict (production) keeps its recorded
-/// answer for a retried committed token: 10 with the expired text.
+/// whether the token was live, committed or rolled back, and again when repeated; its retry token's Rollback answers 0. Strict (production) keeps its earlier
+/// answer for a retried committed token, 10 with the expired text; that answer is inferred (P09 and P10 recorded the Rollback of a committed token before the retry,
+/// not after it) and is a candidate row of the next packet.
 #[test]
 fn the_emulator_profile_accepts_the_rollback_of_a_token_a_retry_named_in_every_state() {
     for origin in ["live", "committed", "rolled back"] {
@@ -202,7 +203,7 @@ fn the_emulator_profile_accepts_the_rollback_of_a_token_a_retry_named_in_every_s
 }
 
 #[test]
-fn strict_keeps_the_recorded_answer_for_the_rollback_of_a_retried_committed_token() {
+fn strict_keeps_its_inferred_answer_for_the_rollback_of_a_retried_committed_token() {
     let mut state = strict();
     let token = state.begin_read_write_transaction(t(0)).unwrap();
     state.touch_transaction(&token, t(1)).unwrap();

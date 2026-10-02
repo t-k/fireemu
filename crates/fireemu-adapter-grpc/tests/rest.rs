@@ -4441,7 +4441,7 @@ fn a_rest_retry_that_names_an_expired_token_is_answered_per_profile() {
 }
 
 /// Official emulator (firebase-tools 15.28.2, native gRPC, measured 2026-10-02): after a retry names a live token, a Rollback of the named token answers 0 and
-/// so does the retry token's. Strict keeps its recorded answer for a token a retry named: 409 `ABORTED` with the expired text.
+/// so does the retry token's. Strict keeps its earlier answer for a token a retry named, 409 `ABORTED` with the expired text, which is inferred (not recorded; a candidate row of the next packet).
 #[test]
 fn a_rest_rollback_of_a_token_a_retry_named_is_answered_per_profile() {
     for strict in [true, false] {

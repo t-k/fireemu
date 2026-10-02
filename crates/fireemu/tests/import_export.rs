@@ -591,7 +591,7 @@ fn import_limit_warnings_use_stderr_in_both_profiles_and_respect_quiet() {
                 let settings = if storage {
                     serde_json::json!({"storage": {"maxStoredBytes": 10}})
                 } else {
-                    serde_json::json!({"firestore": {"history": {"maxBytes": 1048576}, "edition": "standard", "apiMode": "native"}})
+                    serde_json::json!({"firestore": {"history": {"maxBytes": 1_048_576}, "edition": "standard", "apiMode": "native"}})
                 };
                 let mut config_value = serde_json::json!({"schemaVersion": 1, "profile": profile});
                 config_value

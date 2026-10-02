@@ -357,6 +357,22 @@ test("invalid_sequences_and_unknown_rows_fail_closed", async () => {
     enumerable: false,
   });
   uncertain(reduce([hiddenAccessor], limits), "invalid-row");
+  const headerAccessor = terminal();
+  Object.defineProperty(headerAccessor.rawHeaders, 1, {
+    get() {
+      throw new Error("raw pair getter must not run");
+    },
+    enumerable: true,
+  });
+  uncertain(reduce([headerAccessor], limits), "invalid-headers");
+  const rowAccessor = [terminal()];
+  Object.defineProperty(rowAccessor, 0, {
+    get() {
+      throw new Error("row array getter must not run");
+    },
+    enumerable: true,
+  });
+  uncertain(reduce(rowAccessor, limits), "invalid-row");
 });
 
 test("evidence_bounds_refuse_before_unbounded_processing", async () => {

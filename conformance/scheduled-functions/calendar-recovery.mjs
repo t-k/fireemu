@@ -6,15 +6,8 @@ import {
   recordedRecoveryTopicAbsent,
   recordedRecoveryEmpty,
 } from "./calendar-settled-topic.mjs";
-import { recordedAbsent, recordedPaused, recordedMutationBusy } from "./recovery.mjs";
-import {
-  CALENDAR_CASES,
-  calendarResources,
-  recordedEmptyList,
-  recordedTopicAbsent,
-  recordedTopicOwned,
-  recordedEnabled,
-} from "./calendar.mjs";
+import { recordedPaused, recordedMutationBusy } from "./recovery.mjs";
+import { CALENDAR_CASES, calendarResources, recordedEnabled } from "./calendar.mjs";
 
 export const CALENDAR_RECOVERY_MAX_REQUESTS = 64;
 export const CALENDAR_RECOVERY_DELETE_ATTEMPTS = 3;
@@ -174,14 +167,16 @@ export async function collectCalendarRecovery({
         closureReady: closureReady && settled(known),
       };
     };
-    if (!recordedEmptyList(await take("before-list-jobs"))) return summary(false);
+    if (!recordedRecoveryEmpty(await take("before-list-jobs"))) return summary(false);
     let polls = 0;
     const pollTopic = async (answer, afterDelete) => {
       while (
         polls < 3 &&
         (!answer ||
           answer.bodyUnknown ||
-          (afterDelete ? recordedTopicOwned(answer, own) : recordedTopicAbsent(answer, own)))
+          (afterDelete
+            ? recordedRecoveryTopicOwned(answer, own)
+            : recordedRecoveryTopicAbsent(answer, own)))
       ) {
         await sleep(10000);
         polls++;
@@ -191,19 +186,20 @@ export async function collectCalendarRecovery({
     };
     const before = await pollTopic(await take("read-topic-before"), false);
     let topicSettled = false;
-    if (recordedTopicOwned(before, own)) {
+    if (recordedRecoveryTopicOwned(before, own)) {
       const answer = await take("delete-topic");
       // A complete404 is only a candidate; separate absence and list proofs are mandatory.
-      topicSettled = recordedEmptyList(answer) || (answer?.status === 404 && !answer.bodyUnknown);
+      topicSettled =
+        recordedRecoveryEmpty(answer) || (answer?.status === 404 && !answer.bodyUnknown);
     }
     const after = await pollTopic(await take("read-topic-after"), true);
     const jobs = await take("final-list-jobs"),
       topics = await take("final-list-topics");
     return summary(
       topicSettled &&
-        recordedTopicAbsent(after, own) &&
-        recordedEmptyList(jobs) &&
-        recordedEmptyList(topics),
+        recordedRecoveryTopicAbsent(after, own) &&
+        recordedRecoveryEmpty(jobs) &&
+        recordedRecoveryEmpty(topics),
     );
   }
   const topicBefore = await take("read-topic-before"),
@@ -212,7 +208,7 @@ export async function collectCalendarRecovery({
   for (const { id } of CALENDAR_CASES) {
     const before = await take(id + "-before"),
       target = { job: own.jobs[id], topic: own.topic };
-    if (recordedAbsent(before)) absent.add(id);
+    if (recordedRecoveryJobAbsent(before, own.jobs[id], "plain")) absent.add(id);
     else if (recordedPaused(before, target)) eligible.add(id);
     else if (recordedEnabled(before, target)) {
       await take(id + "-pause");
@@ -222,24 +218,25 @@ export async function collectCalendarRecovery({
   if (eligible.size) await sleep(60000); // All containment pause attempts precede settlement.
   let jobsAbsent = true;
   for (const { id } of CALENDAR_CASES) {
-    let settled = absent.has(id);
+    let jobSettled = absent.has(id);
     if (eligible.has(id)) {
       for (let attempt = 1; attempt <= CALENDAR_RECOVERY_DELETE_ATTEMPTS; attempt++) {
         if (attempt > 1) await sleep(60000);
         const answer = await take(id + "-delete-" + attempt);
         if (answer && !answer.bodyUnknown && answer.status >= 200 && answer.status < 300) {
-          settled = true; // Captured acknowledgment is not independently an absence proof.
+          jobSettled = true; // Captured acknowledgment is not independently an absence proof.
           break;
         }
         if (!recordedMutationBusy(answer, { job: own.jobs[id] })) break;
       }
     }
     const after = await take(id + "-after");
-    jobsAbsent = jobsAbsent && settled && recordedAbsent(after);
+    jobsAbsent =
+      jobsAbsent && jobSettled && recordedRecoveryJobAbsent(after, own.jobs[id], "plain");
   }
-  const jobProof = recordedEmptyList(await take("final-list-jobs")) && jobsAbsent;
-  let topicSettled = recordedTopicAbsent(topicBefore, own);
-  if (jobProof && recordedTopicOwned(topicBefore, own)) {
+  const jobProof = recordedRecoveryEmpty(await take("final-list-jobs")) && jobsAbsent;
+  let topicSettled = recordedRecoveryTopicAbsent(topicBefore, own);
+  if (jobProof && recordedRecoveryTopicOwned(topicBefore, own)) {
     const answer = await take("delete-topic");
     topicSettled = !!(answer && !answer.bodyUnknown && answer.status >= 200 && answer.status < 300);
   }
@@ -255,7 +252,7 @@ export async function collectCalendarRecovery({
       settled(known) &&
       jobProof &&
       topicSettled &&
-      recordedTopicAbsent(topicAfter, own) &&
-      recordedEmptyList(topics),
+      recordedRecoveryTopicAbsent(topicAfter, own) &&
+      recordedRecoveryEmpty(topics),
   };
 }

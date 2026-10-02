@@ -806,3 +806,56 @@ fn signed_next_line_iat_reports_token_expired_for_password_account() {
         }
     }
 }
+
+#[test]
+fn custom_token_created_account_missing_iat_follows_the_emulator_bound() {
+    for strict in [false, true] {
+        for cause in ["none", "password", "revoke", "explicit validSince"] {
+            let (mut state, signer, _, _) = setup_with(Profile::Emulator, true);
+            let signed_in = handle(
+                &state,
+                "POST",
+                "/identitytoolkit.googleapis.com/v1/accounts:signInWithCustomToken?key=k",
+                &json!({"token": "{\"uid\":\"custom-whitespace-account\"}", "returnSecureToken": true}),
+            );
+            assert_eq!(signed_in.status, 200, "{}", signed_in.body);
+            let original = signed_in.body["idToken"].as_str().unwrap();
+            let decoded = decode_token(original, Some(signer.as_ref())).unwrap();
+            let uid = decoded.sub().unwrap();
+            {
+                let mut store = state.store.lock().unwrap();
+                let id = store.user_by_id(uid).unwrap().local_id.clone();
+                assert!(store.user(&id).unwrap().custom_auth);
+                match cause {
+                    "password" => store.set_password(&id, "password1", AT).unwrap(),
+                    "revoke" => store.revoke_tokens(&id, AT).unwrap(),
+                    "explicit validSince" => store.set_valid_since(&id, AT).unwrap(),
+                    _ => {}
+                }
+                assert!(
+                    store.reports_valid_since(&id),
+                    "production reporter unchanged"
+                );
+            }
+            state.stateless_refresh_tokens = !strict;
+            let token = hand_made(original, Some(signer.as_ref()), &[("iat", None)]);
+            let response = handle(&state, "POST", LOOKUP, &json!({"idToken": token}));
+            let expected = if strict {
+                "INVALID_ID_TOKEN"
+            } else if cause != "none" {
+                "TOKEN_EXPIRED"
+            } else {
+                ""
+            };
+            assert_eq!(
+                response.status,
+                if expected.is_empty() { 200 } else { 400 },
+                "strict={strict} {cause}: {}",
+                response.body
+            );
+            if !expected.is_empty() {
+                assert_eq!(response.body["error"]["message"], expected);
+            }
+        }
+    }
+}

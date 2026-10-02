@@ -486,9 +486,7 @@ proptest::proptest! {
     }
 }
 
-/// Which accounts report a `validSince` (and so refuse a token without a usable `iat` in the
-/// emulator profile): each of production's reasons on its own, and none for a plain account or
-/// an account of another federated provider.
+/// Which accounts report a production `validSince`: each reporting reason on its own, independently of the emulator-only hand-made-token fallback, and none for a plain account or an account of another federated provider.
 #[test]
 fn each_reason_for_a_valid_since_counts_on_its_own() {
     use fireemu_core_auth::store::Provider;
@@ -559,5 +557,142 @@ fn signed_string_iat_with_next_line_is_revoked_but_ecmascript_whitespace_is_acce
                 );
             }
         }
+    }
+}
+
+/// A new custom-token account has the marker that production reports, but no other source of a validSince in the pinned official emulator (operations.js:1041-1053).
+fn store_with_custom_account() -> (AuthStore, IdTokenClaims, LocalId) {
+    let (mut store, _, uid) = store_with(Account::Anonymous);
+    let user = store.user_mut(&uid).unwrap();
+    user.provider = fireemu_core_auth::store::Provider::Custom;
+    user.custom_auth = true;
+    let claims = store.id_token_claims(&uid, None, at(NOW)).unwrap();
+    (store, claims, uid)
+}
+
+#[test]
+fn custom_token_missing_iat_is_accepted_only_without_an_independent_valid_since() {
+    for cause in ["none", "password", "revoke", "explicit validSince"] {
+        let (mut store, claims, uid) = store_with_custom_account();
+        match cause {
+            "password" => store
+                .set_password(&uid, "password1", at(CREATED_AT))
+                .unwrap(),
+            "revoke" => store.revoke_tokens(&uid, at(REVOKED_AT)).unwrap(),
+            "explicit validSince" => store.set_valid_since(&uid, at(REVOKED_AT)).unwrap(),
+            _ => {}
+        }
+        assert!(
+            store.reports_valid_since(&uid),
+            "production reporting stays unchanged"
+        );
+        let token = token_with(&store, &claims, &[("iat", None)]);
+        for (verifier, answer) in answers(&mut store, &token, true) {
+            let expected = if cause == "none" || verifier.starts_with("firestore") {
+                Ok(())
+            } else {
+                Err(JwtError::Revoked)
+            };
+            assert_eq!(answer, expected, "emulator {verifier}: {cause}");
+        }
+        for (verifier, answer) in answers(&mut store, &token, false) {
+            assert_eq!(
+                answer,
+                Err(JwtError::Malformed),
+                "strict {verifier}: {cause}"
+            );
+        }
+    }
+}
+
+#[test]
+fn custom_token_integer_claims_keep_the_existing_account_bound() {
+    let (mut store, mut claims, _) = store_with_custom_account();
+    claims.auth_time = CREATED_AT - 1;
+    let token = token_with(&store, &claims, &[]);
+    for emulator in [false, true] {
+        for (verifier, answer) in answers(&mut store, &token, emulator) {
+            let expected = if verifier.starts_with("firestore") {
+                Ok(())
+            } else {
+                Err(JwtError::Revoked)
+            };
+            assert_eq!(answer, expected, "{verifier}, emulator={emulator}");
+        }
+    }
+}
+
+proptest::proptest! {
+    #[test]
+    fn custom_token_fallback_keeps_every_other_valid_since_cause(
+        password in proptest::bool::ANY,
+        revoked in proptest::bool::ANY,
+        admin in proptest::bool::ANY,
+        email_link in proptest::bool::ANY,
+        federated in 0_u8..4,
+    ) {
+        let (mut store, claims, uid) = store_with_custom_account();
+        if password { store.set_password(&uid, "password1", at(CREATED_AT)).unwrap(); }
+        let user = store.user_mut(&uid).unwrap();
+        user.tokens_revoked = revoked;
+        user.admin_created = admin;
+        user.email_link_created = email_link;
+        user.provider = match federated {
+            1 => fireemu_core_auth::store::Provider::Federated("oidc.fixture".into()),
+            2 => fireemu_core_auth::store::Provider::Federated("saml.fixture".into()),
+            3 => fireemu_core_auth::store::Provider::Federated("google.com".into()),
+            _ => fireemu_core_auth::store::Provider::Custom,
+        };
+        let expected_bound = password || revoked || admin || email_link || federated == 1 || federated == 2;
+        proptest::prop_assert!(store.reports_valid_since(&uid));
+        let token = token_with(&store, &claims, &[("iat", None)]);
+        for (verifier, answer) in answers(&mut store, &token, true) {
+            let expected = if expected_bound && !verifier.starts_with("firestore") { Err(JwtError::Revoked) } else { Ok(()) };
+            proptest::prop_assert_eq!(answer, expected, "{}", verifier);
+        }
+    }
+}
+
+#[test]
+fn custom_token_fallback_preserves_other_account_source_decisions() {
+    use fireemu_core_auth::store::Provider;
+    type Setter = fn(&mut fireemu_core_auth::store::UserRecord);
+    for (name, set, bound) in [
+        ("Admin", (|u| u.admin_created = true) as Setter, true),
+        (
+            "email link",
+            (|u| u.email_link_created = true) as Setter,
+            true,
+        ),
+        (
+            "OIDC",
+            (|u| u.provider = Provider::Federated("oidc.fixture".into())) as Setter,
+            true,
+        ),
+        (
+            "SAML",
+            (|u| u.provider = Provider::Federated("saml.fixture".into())) as Setter,
+            true,
+        ),
+        (
+            "Google",
+            (|u| u.provider = Provider::Federated("google.com".into())) as Setter,
+            false,
+        ),
+    ] {
+        let (mut store, claims, uid) = store_with_custom_account();
+        set(store.user_mut(&uid).unwrap());
+        assert!(store.reports_valid_since(&uid));
+        let token = token_with(&store, &claims, &[("iat", None)]);
+        let answer = answers(&mut store, &token, true).remove(0).1;
+        assert_eq!(
+            answer,
+            if bound {
+                Err(JwtError::Revoked)
+            } else {
+                Ok(())
+            },
+            "{name}"
+        );
     }
 }

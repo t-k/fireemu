@@ -4679,12 +4679,7 @@ impl AuthStore {
         self.users.get(uid).is_some_and(|u| u.password.is_some())
     }
 
-    /// Whether the account reports a `validSince`: production does for an account the Admin API
-    /// created (the sandbox recording of 2026-09-23), once tokens were ever revoked or a
-    /// password set, for a custom-token or email-link account and for one an OIDC or SAML
-    /// sign-in created (record-oidc 39209e). The emulator profile's check of an ID token
-    /// without a usable `auth_time` reads it the way firebase-tools 15.28.2 reads its own
-    /// `validSince` (owner ledger 787).
+    /// Whether the account reports a `validSince`: production does for an account the Admin API created (the sandbox recording of 2026-09-23), once tokens were ever revoked or a password set, for a custom-token or email-link account and for one an OIDC or SAML sign-in created (record-oidc 39209e). This is production reporting; the emulator-only hand-made-token fallback uses its own scoped presence predicate (owner ledger 793).
     #[must_use]
     pub fn reports_valid_since(&self, uid: &LocalId) -> bool {
         self.users.get(uid).is_some_and(|u| {
@@ -4692,6 +4687,18 @@ impl AuthStore {
                 || u.tokens_revoked
                 || u.admin_created
                 || u.custom_auth
+                || u.email_link_created
+                || matches!(&u.provider, Provider::Federated(id)
+                    if id.starts_with("oidc.") || id.starts_with("saml."))
+        })
+    }
+
+    /// The emulator-only noninteger fallback excludes custom-token sign-in as an independent `validSince` source (owner ledger 793). Other sources retain their existing behavior; this is not the production wire-reporting predicate or a claim of parity for them.
+    pub(crate) fn has_emulator_fallback_valid_since(&self, uid: &LocalId) -> bool {
+        self.users.get(uid).is_some_and(|u| {
+            u.password.is_some()
+                || u.tokens_revoked
+                || u.admin_created
                 || u.email_link_created
                 || matches!(&u.provider, Provider::Federated(id)
                     if id.starts_with("oidc.") || id.starts_with("saml."))

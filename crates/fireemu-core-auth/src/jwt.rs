@@ -813,7 +813,7 @@ fn verify_id_token_with(
         // integer `iat` and `auth_time`, firebase-tools' own check decides,
         // `!user.validSince || iat >= Number(user.validSince)` (ledger 787).
         _ => {
-            store.reports_valid_since(&user.local_id)
+            store.has_emulator_fallback_valid_since(&user.local_id)
                 && !js_at_least(
                     decoded.payload.get("iat"),
                     i64::try_from(user.tokens_valid_after.as_nanos().div_euclid(1_000_000_000))

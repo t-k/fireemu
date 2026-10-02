@@ -640,6 +640,8 @@ struct Transaction {
     /// lifetime `INVALID_ARGUMENT` "no longer valid", a Commit `ABORTED` with the same text, and accepts
     /// a Rollback. Only that order (read, Commit, Rollback) is measured there.
     lifetime_expired: bool,
+    /// A retry named this token (emulator profile): the Rollback of a committed one is then accepted, as the official emulator answers it.
+    named_by_retry: bool,
     /// The time of the transaction's first read: its snapshot time for a read-only transaction. The
     /// empty commit of a transaction that has read answers this time and uses up no commit time
     /// (production, P01 REST read-write and P02 both transports); one that has not read answers none
@@ -2292,6 +2294,11 @@ impl FirestoreState {
             ));
         }
         self.ensure_transaction_capacity()?;
+        if leave_named_alone {
+            if let Some(previous_attempt) = self.transactions.get_mut(previous) {
+                previous_attempt.named_by_retry = true;
+            }
+        }
         if !expired && !leave_named_alone {
             if let Some(previous_attempt) = self.transactions.get_mut(previous) {
                 previous_attempt.state = TransactionState::Retried;
@@ -2353,6 +2360,7 @@ impl FirestoreState {
             waiting_to_commit: false,
             snapshot_pending: false,
             lifetime_expired: false,
+            named_by_retry: false,
             first_read_time: None,
         };
         self.active_transaction_deadlines.insert((
@@ -3657,13 +3665,13 @@ impl FirestoreState {
             }
             return Ok(());
         }
-        // The official emulator (firebase-tools 15.28.2, v1.22.0, measured over native gRPC) answers a Rollback of a committed token 0, with or without a retry
-        // that named it (the earlier P08 control, and a retry-then-Rollback row of 2026-10-02). Strict keeps its earlier answer, which is inferred.
+        // The official emulator (firebase-tools 15.28.2, v1.22.0, measured over native gRPC) answers the Rollback of a committed token 0 after a retry named it.
+        // Without a retry the emulator profile answers it as production did (10, the recorded `finished-token/rollback-after-commit`), as before. Strict keeps its
+        // earlier answer, which is inferred.
         if self.limit_scope == LimitScope::OfficialEmulator
-            && self
-                .transactions
-                .get(id)
-                .is_some_and(|transaction| transaction.state == TransactionState::Committed)
+            && self.transactions.get(id).is_some_and(|transaction| {
+                transaction.state == TransactionState::Committed && transaction.named_by_retry
+            })
         {
             return Ok(());
         }

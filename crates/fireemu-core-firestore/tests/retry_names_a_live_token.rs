@@ -141,3 +141,18 @@ fn strict_still_finishes_a_live_token_at_the_retry_that_names_it() {
     state.touch_transaction(&retry, t(6)).unwrap();
     state.rollback(&retry).unwrap();
 }
+
+#[test]
+fn without_a_retry_the_rollback_of_a_committed_token_still_answers_as_production_recorded() {
+    // `finished-token/rollback-after-commit` (production, expiry-retry-04): 10 with the expired text. The emulator profile has always answered it so, and the
+    // closure comparison holds it equal to the recording; only a Rollback after a retry named the token is accepted (official emulator, measured 2026-10-02).
+    let mut state = emulator();
+    let token = state.begin_read_write_transaction(t(1)).unwrap();
+    state.touch_transaction(&token, t(2)).unwrap();
+    state.commit(&[], Some(&token), t(3)).unwrap();
+    let rolled = state.rollback(&token);
+    assert!(
+        matches!(&rolled, Err(FirestoreError::Aborted(message)) if message == "The referenced transaction has expired or is no longer valid."),
+        "{rolled:?}"
+    );
+}

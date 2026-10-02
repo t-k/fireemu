@@ -4440,6 +4440,63 @@ fn a_rest_retry_that_names_an_expired_token_is_answered_per_profile() {
     }
 }
 
+/// Official emulator (firebase-tools 15.28.2, native gRPC, measured 2026-10-02): after a retry names a live token, a Rollback of the named token answers 0 and
+/// so does the retry token's. Strict keeps its recorded answer for a token a retry named: 409 `ABORTED` with the expired text.
+#[test]
+fn a_rest_rollback_of_a_token_a_retry_named_is_answered_per_profile() {
+    for strict in [true, false] {
+        let s = state_with_profile(strict);
+        let (_, begun) = call(
+            &s,
+            "POST",
+            &format!("{DOCS}:beginTransaction"),
+            json!({"options": {"readWrite": {}}}),
+        );
+        let named = begun["transaction"].as_str().unwrap().to_owned();
+        let (status, _) = call(
+            &s,
+            "GET",
+            &format!("{DOCS}/retried-rollback/missing?transaction={named}"),
+            Value::Null,
+        );
+        assert_eq!(status, 404);
+        let (status, retried) = call(
+            &s,
+            "POST",
+            &format!("{DOCS}:beginTransaction"),
+            json!({"options": {"readWrite": {"retryTransaction": named}}}),
+        );
+        assert_eq!(status, 200, "{retried}");
+        let fresh = retried["transaction"].as_str().unwrap().to_owned();
+        let (status, rolled) = call(
+            &s,
+            "POST",
+            &format!("{DOCS}:rollback"),
+            json!({"transaction": named}),
+        );
+        if strict {
+            assert_eq!(status, 409, "strict: {rolled}");
+            assert_eq!(rolled["error"]["status"], "ABORTED", "strict: {rolled}");
+        } else {
+            assert_eq!(status, 200, "emulator: {rolled}");
+            let (status, again) = call(
+                &s,
+                "POST",
+                &format!("{DOCS}:rollback"),
+                json!({"transaction": named}),
+            );
+            assert_eq!(status, 200, "emulator, again: {again}");
+        }
+        let (status, released) = call(
+            &s,
+            "POST",
+            &format!("{DOCS}:rollback"),
+            json!({"transaction": fresh}),
+        );
+        assert_eq!(status, 200, "strict={strict}: {released}");
+    }
+}
+
 /// P13b (REST, strict): the first read of a retry attempt shows an outside write committed after the retry's begin, and the attempt's Commit is
 /// accepted.
 #[test]

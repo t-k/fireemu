@@ -4460,9 +4460,6 @@ pub fn glob_scan(
                 return Ok(scan);
             }
         }
-        if batch.len() < GLOB_BATCH {
-            return Ok(scan);
-        }
         start = Bound::Excluded(last.clone());
     }
 }

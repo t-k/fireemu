@@ -1163,7 +1163,9 @@ proptest! {
         let expected: Vec<String> = names.iter().filter(|name| name.starts_with(&prefix)).cloned().collect();
         let mut read: Vec<String> = Vec::new();
         let mut start: Bound<String> = Bound::Unbounded;
-        loop {
+        // Every read gives a name or ends the walk, so the walk is at most one read per name and
+        // one that finds nothing; the bound turns a read that never ends it into a failure.
+        for _ in 0..=names.len() + 1 {
             let bound = match &start {
                 Bound::Unbounded => Bound::Unbounded,
                 Bound::Included(name) => Bound::Included(name.as_str()),

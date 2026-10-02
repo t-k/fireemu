@@ -1530,10 +1530,9 @@ impl StorageState {
         use std::ops::Bound;
         let lower = match start {
             Bound::Unbounded => Bound::Included((bucket.clone(), ObjectName::range_start(prefix))),
-            Bound::Included(name) => Bound::Included((
-                bucket.clone(),
-                ObjectName::range_start(if name > prefix { name } else { prefix }),
-            )),
+            Bound::Included(name) => {
+                Bound::Included((bucket.clone(), ObjectName::range_start(name.max(prefix))))
+            }
             Bound::Excluded(name) => {
                 Bound::Excluded((bucket.clone(), ObjectName::range_start(name)))
             }

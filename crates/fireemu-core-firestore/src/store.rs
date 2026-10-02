@@ -2258,10 +2258,13 @@ impl FirestoreState {
                 "Cannot retry a read-only transaction".into(),
             ));
         }
-        // A client retrying an attempt that is still active (its commit was held back by
-        // another transaction's locks and the client gave up waiting) abandons that attempt:
-        // it is rolled back, and its locks released, before the retry begins.
-        if previous_attempt.state == TransactionState::Active {
+        // The official emulator (firebase-tools 15.28.2, v1.22.0, native gRPC, measured 2026-10-02) begins a new transaction and does nothing to the token the
+        // retry names: a live named token still reads, still holds its read lock, still commits, and its Rollback releases the lock; a second retry may name the
+        // same token again; a committed or expired one stays so. The emulator profile follows that, for a token in any state.
+        let leave_named_alone = self.limit_scope == LimitScope::OfficialEmulator;
+        // Strict is not recorded for a live token: a client retrying an attempt that is still active (its commit was held back by another transaction's locks and
+        // the client gave up waiting) abandons that attempt, which is rolled back, and its locks released, before the retry begins.
+        if !leave_named_alone && previous_attempt.state == TransactionState::Active {
             self.finish_transaction(previous, TransactionState::RolledBack);
         }
         // Finishing the attempt may have evicted it from the bounded finished lineage.
@@ -2271,11 +2274,11 @@ impl FirestoreState {
             ));
         };
         // A retry that names an expired token that is still remembered, idle-expired or lifetime-expired, is accepted. Production did so in FS-TRANSACTION
-        // P13b (REST, two recordings: 132 s and 280 to 283 s of token age), and so does the official emulator (firebase-tools 15.28.2, v1.22.0, measured over REST
-        // and native gRPC at 130 s of idle and over REST at 282 s of age). The retry does not consume the named token: the first request on it still answers the
-        // expiry, as it would without the retry.
+        // P13b (REST, two recordings: 132 s and 280 to 283 s of token age), and so does the official emulator. The retry does not consume the named token: the
+        // first request on it still answers the expiry, as it would without the retry.
         let expired = previous_attempt.state == TransactionState::Finished;
-        if !expired
+        if !leave_named_alone
+            && !expired
             && !matches!(
                 previous_attempt.state,
                 TransactionState::RetryableAborted
@@ -2289,7 +2292,7 @@ impl FirestoreState {
             ));
         }
         self.ensure_transaction_capacity()?;
-        if !expired {
+        if !expired && !leave_named_alone {
             if let Some(previous_attempt) = self.transactions.get_mut(previous) {
                 previous_attempt.state = TransactionState::Retried;
             }
@@ -3654,13 +3657,13 @@ impl FirestoreState {
             }
             return Ok(());
         }
-        // The official emulator (firebase-tools 15.28.2, v1.22.0, measured over native gRPC) accepts the Rollback of a token a retry named, whether the token was
-        // live, committed or rolled back, and again when repeated. Strict keeps its earlier answer for it, 10 with the expired text, which is inferred: P09 and P10 recorded the Rollback of a committed token before a retry, not after one.
+        // The official emulator (firebase-tools 15.28.2, v1.22.0, measured over native gRPC) answers a Rollback of a committed token 0, with or without a retry
+        // that named it (the earlier P08 control, and a retry-then-Rollback row of 2026-10-02). Strict keeps its earlier answer, which is inferred.
         if self.limit_scope == LimitScope::OfficialEmulator
             && self
                 .transactions
                 .get(id)
-                .is_some_and(|transaction| transaction.state == TransactionState::Retried)
+                .is_some_and(|transaction| transaction.state == TransactionState::Committed)
         {
             return Ok(());
         }

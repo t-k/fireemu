@@ -5,3 +5,4 @@
 # It is recommended to check this file in to source control so that
 # everyone who runs the test benefits from these saved cases.
 cc d06d5f435d87aa73ed5f0d98e6d9beaf6fd0006eb7a582a9944fff676932661d # shrinks to flood = 8300, probe = 271
+cc 814710118a41c8fb7a16d28692ac40de638eba02d3aa79529f8f532e9b0d8c59 # shrinks to origin = 1, retry_after = 2, repeats = 1

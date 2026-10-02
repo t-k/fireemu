@@ -46,7 +46,7 @@ function environment(state = "ENABLED") {
         else if (jobs.has(id)) body = jobs.get(id);
         else {
           status = 404;
-          body = { error: { code: 404, status: "NOT_FOUND", message: "Job not found." } };
+          body = { error: { code: 404, message: "Job not found.", status: "NOT_FOUND" } };
         }
       } else if (request.id === "read-topic-before" || request.id === "read-topic-after") {
         if (topicPresent) body = { name: own.topic };
@@ -55,8 +55,8 @@ function environment(state = "ENABLED") {
           body = {
             error: {
               code: 404,
-              status: "NOT_FOUND",
               message: "Resource not found (resource=" + own.prefix + ").",
+              status: "NOT_FOUND",
             },
           };
         }
@@ -65,7 +65,7 @@ function environment(state = "ENABLED") {
         body = jobs.size ? { jobs: [...jobs.values()] } : {};
       else if (request.id === "final-list-topics")
         body = topicPresent ? { topics: [{ name: own.topic }] } : {};
-      return new Response(JSON.stringify(body), { status });
+      return new Response(JSON.stringify(body, null, 2) + "\n", { status });
     },
   };
   return { own, deps, sends, rows, waits, jobs };
@@ -319,19 +319,23 @@ test("topic-only initial404 and unknown CREATE debt stay open after bounded abse
     if (request.id.startsWith("read-topic-")) {
       e.sends.push(request);
       return new Response(
-        JSON.stringify({
-          error: {
-            code: 404,
-            status: "NOT_FOUND",
-            message: "Resource not found (resource=" + e.own.prefix + ").",
+        JSON.stringify(
+          {
+            error: {
+              code: 404,
+              message: "Resource not found (resource=" + e.own.prefix + ").",
+              status: "NOT_FOUND",
+            },
           },
-        }),
+          null,
+          2,
+        ) + "\n",
         { status: 404 },
       );
     }
     if (request.id === "final-list-topics") {
       e.sends.push(request);
-      return new Response("{}", { status: 200 });
+      return new Response("{}\n", { status: 200 });
     }
     return original(request);
   };
@@ -351,13 +355,17 @@ test("topic-only DELETE404 settles only with exact separate absence and final em
         if (!visibleAfter) await original(request);
         else e.sends.push(request);
         return new Response(
-          JSON.stringify({
-            error: {
-              code: 404,
-              status: "NOT_FOUND",
-              message: "Resource not found (resource=" + e.own.prefix + ").",
+          JSON.stringify(
+            {
+              error: {
+                code: 404,
+                message: "Resource not found (resource=" + e.own.prefix + ").",
+                status: "NOT_FOUND",
+              },
             },
-          }),
+            null,
+            2,
+          ) + "\n",
           { status: 404 },
         );
       }
@@ -408,19 +416,23 @@ test("topic-only polling shares3extras before and after one DELETE", async () =>
     ) {
       e.sends.push(request);
       return new Response(
-        JSON.stringify({
-          error: {
-            code: 404,
-            status: "NOT_FOUND",
-            message: "Resource not found (resource=" + e.own.prefix + ").",
+        JSON.stringify(
+          {
+            error: {
+              code: 404,
+              message: "Resource not found (resource=" + e.own.prefix + ").",
+              status: "NOT_FOUND",
+            },
           },
-        }),
+          null,
+          2,
+        ) + "\n",
         { status: 404 },
       );
     }
     if (request.id === "read-topic-after") {
       e.sends.push(request);
-      return new Response(JSON.stringify({ name: e.own.topic }), { status: 200 });
+      return new Response(JSON.stringify({ name: e.own.topic }, null, 2) + "\n", { status: 200 });
     }
     if (/^read-topic-poll-[1-3]$/.test(request.id))
       return original({ ...request, id: "read-topic-before" });
@@ -500,4 +512,296 @@ test("jobs-and-topic recovery withholds closure after a complete but ambiguous a
     );
     assert.equal(result.closureReady, false, String(status));
   }
+});
+
+test("topic-only recovery refuses compact preflight before any DELETE", async () => {
+  const e = environment("ABSENT"),
+    original = e.deps.send;
+  e.deps.send = async (request) => {
+    if (request.id !== "before-list-jobs") return original(request);
+    e.sends.push(request);
+    return new Response("{}", { status: 200 });
+  };
+  const result = await collectCalendarRecovery({ ...e.deps, recoveryScope: "topic-only" });
+  assert.equal(result.closureReady, false);
+  assert.ok(e.sends.every(({ method }) => method === "GET"));
+});
+
+// Independent fixtures for calendar-5a73ba99b7014cfd seq30/15/18/156/21 and
+// calendar-recovery-96f34e030642e9ca / calendar-recovery-894572e2d854a511.
+function byteVariant(bytes, variant) {
+  const json = JSON.parse(bytes);
+  if (variant === "compact") return JSON.stringify(json);
+  if (variant === "order" && json.error) {
+    const { code, message, status } = json.error;
+    return JSON.stringify({ error: { code, status, message } }, null, 2) + "\n";
+  }
+  if (variant === "newline") return bytes.replace(/\n$/, "\r\n");
+  if (variant === "length") return bytes + " ";
+  return bytes.replace(/\n$/, "");
+}
+
+async function proofPosition(scope, position, variant) {
+  const e = environment("ABSENT"),
+    original = e.deps.send;
+  e.deps.send = async (request) => {
+    const response = await original(request);
+    if (request.id !== position) return response;
+    return new Response(byteVariant(await response.text(), variant), { status: response.status });
+  };
+  const result = await collectCalendarRecovery({ ...e.deps, recoveryScope: scope });
+  return { e, result };
+}
+
+const variants = ["compact", "order", "newline", "length", "missing-newline"];
+
+test("topic-only recovery refuses compact ownership before any DELETE", async () => {
+  const { e, result } = await proofPosition("topic-only", "read-topic-before", "compact");
+  assert.equal(result.closureReady, false);
+  assert.ok(e.sends.every(({ method }) => method === "GET"));
+});
+
+test("topic-only recovery requires recorded postflight layouts at every proof position", async () => {
+  for (const position of [
+    "delete-topic",
+    "read-topic-after",
+    "final-list-jobs",
+    "final-list-topics",
+  ])
+    for (const variant of variants) {
+      const { result } = await proofPosition("topic-only", position, variant);
+      assert.equal(result.closureReady, false, `${position}/${variant}`);
+    }
+});
+
+test("jobs-and-topic recovery requires recorded job absence and final list layouts", async () => {
+  for (const position of [
+    ...Object.keys(calendarResources(originalRunId).jobs).flatMap((id) => [
+      id + "-before",
+      id + "-after",
+    ]),
+    "final-list-jobs",
+    "read-topic-after",
+    "final-list-topics",
+  ])
+    for (const variant of variants) {
+      const { e, result } = await proofPosition("jobs-and-topic", position, variant);
+      assert.equal(result.closureReady, false, `${position}/${variant}`);
+      if (position !== "read-topic-after" && position !== "final-list-topics")
+        assert.ok(!e.sends.some(({ id }) => id === "delete-topic"), `${position}/${variant}`);
+    }
+});
+
+test("jobs-and-topic recovery requires byte-exact ownership before topic DELETE", async () => {
+  for (const variant of variants) {
+    const { e, result } = await proofPosition("jobs-and-topic", "read-topic-before", variant);
+    assert.equal(result.closureReady, false, variant);
+    assert.ok(!e.sends.some(({ id }) => id === "delete-topic"), variant);
+  }
+});
+
+test("recorded recovery proofs reject the same parsed JSON with different bytes", async () => {
+  // Deterministic seeded generation; the oracle compares independent expected strings,
+  // never the imported production judge. Scope, position and whitespace vary together.
+  let seed = 0x790792;
+  const next = () => (seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0);
+  for (let sample = 0; sample < 128; sample++) {
+    const scope = next() % 2 ? "topic-only" : "jobs-and-topic";
+    const positions =
+      scope === "topic-only"
+        ? [
+            "before-list-jobs",
+            "read-topic-before",
+            "read-topic-after",
+            "final-list-jobs",
+            "final-list-topics",
+          ]
+        : [
+            "c01-before",
+            "c08-after",
+            "read-topic-before",
+            "read-topic-after",
+            "final-list-jobs",
+            "final-list-topics",
+          ];
+    const position = positions[next() % positions.length];
+    const e = environment("ABSENT"),
+      original = e.deps.send;
+    const expected = position.startsWith("c")
+      ? '{\n  "error": {\n    "code": 404,\n    "message": "Job not found.",\n    "status": "NOT_FOUND"\n  }\n}\n'
+      : position === "read-topic-before"
+        ? '{\n  "name": "' + e.own.topic + '"\n}\n'
+        : position === "read-topic-after"
+          ? '{\n  "error": {\n    "code": 404,\n    "message": "Resource not found (resource=' +
+            e.own.prefix +
+            ').",\n    "status": "NOT_FOUND"\n  }\n}\n'
+          : "{}\n";
+    const candidate =
+      next() % 4 === 0 ? expected : byteVariant(expected, variants[next() % variants.length]);
+    assert.deepEqual(JSON.parse(candidate), JSON.parse(expected));
+    e.deps.send = async (request) => {
+      const response = await original(request);
+      if (request.id !== position) return response;
+      assert.equal(await response.text(), expected, position);
+      return new Response(candidate, { status: response.status });
+    };
+    const result = await collectCalendarRecovery({ ...e.deps, recoveryScope: scope });
+    assert.equal(result.closureReady, candidate === expected, `${sample}/${scope}/${position}`);
+    assert.ok(result.attempted <= (scope === "topic-only" ? 9 : 64));
+  }
+});
+
+test("ordinary recovery rejects detailed job absence and mismatched persisted length", async () => {
+  for (const scope of ["topic-only", "jobs-and-topic"]) {
+    const e = environment("ABSENT"),
+      save = e.deps.save;
+    e.deps.save = async (row) => {
+      await save(row);
+      if (row.state === "response-persisted" && row.id === "final-list-jobs") row.bodyBytes++;
+    };
+    assert.equal(
+      (await collectCalendarRecovery({ ...e.deps, recoveryScope: scope })).closureReady,
+      false,
+    );
+  }
+  for (const position of ["c01-before", "c01-after"]) {
+    const e = environment("ABSENT"),
+      original = e.deps.send;
+    e.deps.send = async (request) => {
+      const response = await original(request);
+      if (request.id !== position) return response;
+      return new Response(
+        JSON.stringify(
+          {
+            error: {
+              code: 404,
+              message: "Resource '" + e.own.jobs.c01 + "' was not found",
+              status: "NOT_FOUND",
+              details: [
+                {
+                  "@type": "type.googleapis.com/google.rpc.ResourceInfo",
+                  resourceName: e.own.jobs.c01,
+                },
+              ],
+            },
+          },
+          null,
+          2,
+        ) + "\n",
+        { status: 404 },
+      );
+    };
+    const result = await collectCalendarRecovery(e.deps);
+    assert.equal(result.closureReady, false, position);
+    assert.ok(!e.sends.some(({ id }) => id === "delete-topic"));
+  }
+});
+
+test("cross-scope initial absence and later ownership preserve settlement debt", async () => {
+  for (const scope of ["topic-only", "jobs-and-topic"])
+    for (const variant of ["exact", "compact", "unknown-then-owned", "unknown-then-absent"]) {
+      const e = environment("ABSENT"),
+        original = e.deps.send;
+      e.deps.send = async (request) => {
+        if (request.id === "read-topic-before" && variant.startsWith("unknown")) {
+          e.sends.push(request);
+          throw new Error("unknown CREATE readback");
+        }
+        if (request.id === "read-topic-before" || request.id.startsWith("read-topic-poll-")) {
+          if (variant === "unknown-then-owned")
+            return original({ ...request, id: "read-topic-before" });
+          e.sends.push(request);
+          const body = {
+            error: {
+              code: 404,
+              message: "Resource not found (resource=" + e.own.prefix + ").",
+              status: "NOT_FOUND",
+            },
+          };
+          return new Response(
+            variant === "compact" ? JSON.stringify(body) : JSON.stringify(body, null, 2) + "\n",
+            { status: 404 },
+          );
+        }
+        if (request.id === "read-topic-after" || request.id === "final-list-topics") {
+          const body =
+            request.id === "read-topic-after"
+              ? {
+                  error: {
+                    code: 404,
+                    message: "Resource not found (resource=" + e.own.prefix + ").",
+                    status: "NOT_FOUND",
+                  },
+                }
+              : {};
+          e.sends.push(request);
+          return new Response(JSON.stringify(body, null, 2) + "\n", {
+            status: request.id === "read-topic-after" ? 404 : 200,
+          });
+        }
+        return original(request);
+      };
+      const result = await collectCalendarRecovery({ ...e.deps, recoveryScope: scope });
+      assert.equal(
+        result.closureReady,
+        scope === "jobs-and-topic" && variant === "exact",
+        `${scope}/${variant}`,
+      );
+      assert.equal(
+        e.sends.some(({ id }) => id === "delete-topic"),
+        scope === "topic-only" && variant === "unknown-then-owned",
+        `${scope}/${variant}`,
+      );
+      assert.ok(result.attempted <= (scope === "topic-only" ? 9 : 64));
+    }
+});
+
+test("topic-only polling accepts only recorded absence and ownership layouts", async () => {
+  for (const position of ["read-topic-before", "read-topic-after"])
+    for (const exact of [false, true]) {
+      const e = environment("ABSENT"),
+        original = e.deps.send;
+      e.deps.send = async (request) => {
+        if (position === "read-topic-before" && request.id === "read-topic-after") {
+          e.sends.push(request);
+          return new Response(
+            JSON.stringify(
+              {
+                error: {
+                  code: 404,
+                  message: "Resource not found (resource=" + e.own.prefix + ").",
+                  status: "NOT_FOUND",
+                },
+              },
+              null,
+              2,
+            ) + "\n",
+            { status: 404 },
+          );
+        }
+        if (request.id !== position && !request.id.startsWith("read-topic-poll-"))
+          return original(request);
+        e.sends.push(request);
+        const body =
+          position === "read-topic-before"
+            ? {
+                error: {
+                  code: 404,
+                  message: "Resource not found (resource=" + e.own.prefix + ").",
+                  status: "NOT_FOUND",
+                },
+              }
+            : { name: e.own.topic };
+        return new Response(exact ? JSON.stringify(body, null, 2) + "\n" : JSON.stringify(body), {
+          status: position === "read-topic-before" ? 404 : 200,
+        });
+      };
+      const result = await collectCalendarRecovery({ ...e.deps, recoveryScope: "topic-only" });
+      assert.equal(result.closureReady, false);
+      assert.deepEqual(e.waits, exact ? [10000, 10000, 10000] : [], `${position}/${exact}`);
+      assert.equal(
+        e.sends.filter(({ id }) => id === "delete-topic").length,
+        position === "read-topic-after" ? 1 : 0,
+      );
+    }
 });

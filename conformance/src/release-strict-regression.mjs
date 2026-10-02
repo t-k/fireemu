@@ -24,6 +24,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { isDeepStrictEqual } from "node:util";
 
+import { probeProfileBindingProblems } from "./firestore-probe/run.mjs";
 import { federationEnvironment } from "./release-openssl.mjs";
 import { bindingProblems } from "./harness-registry.mjs";
 import { EXPECTED_ACTIONS, localSetupDigest } from "./harness-target/local-tenancy.mjs";
@@ -271,7 +272,13 @@ export const RUNS = [
     commands: [
       {
         mode: "check-production",
-        argv: ["node", "conformance/src/firestore-probe/run.mjs", "check-production"],
+        argv: [
+          "node",
+          "conformance/src/firestore-probe/run.mjs",
+          "check-production",
+          "--profile",
+          "strict",
+        ],
         env: {},
         expectedExitCodes: [0],
       },
@@ -661,6 +668,21 @@ export function judgeFsDataWriteHistorical(expected, observed, binarySha256) {
   expectEqual(differences, "check-production exit code", 0, observed.exitCode);
   const result = observed.result;
   if (!result || typeof result !== "object") return [...differences, "no historical comparison"];
+  expectEqual(differences, "probe cwd", CONFORMANCE, result.profileBinding?.cwd);
+  expectEqual(
+    differences,
+    "probe source config",
+    join(CONFORMANCE, "firestore-probe.fireemu.json"),
+    result.profileBinding?.config?.sourcePath,
+  );
+  differences.push(
+    ...probeProfileBindingProblems(
+      result.profileBinding,
+      "strict",
+      binarySha256,
+      sha256Bytes(readFileSync(join(CONFORMANCE, "firestore-probe.fireemu.json"))),
+    ),
+  );
   expectEqual(differences, "binary before", binarySha256, result.artifact?.sha256Before);
   expectEqual(differences, "binary after", binarySha256, result.artifact?.sha256After);
   expectEqual(differences, "comparable", expected.comparable, result.comparable);

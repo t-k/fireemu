@@ -8,6 +8,8 @@
 // sides run the identical `session.mjs` over the identical program list through the REST
 // API, so a difference is a difference in the runtime and nowhere else.
 
+import { createHash, randomUUID } from "node:crypto";
+import { isDeepStrictEqual } from "node:util";
 import { spawn } from "node:child_process";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
@@ -64,9 +66,16 @@ async function terminateGroup(child) {
   clearTimeout(timer);
 }
 
-async function runSupervisor({ name, command, args, env, timeoutMs = 900_000 }) {
+async function runSupervisor({
+  name,
+  command,
+  args,
+  env,
+  cwd = CONFORMANCE_DIR,
+  timeoutMs = 900_000,
+}) {
   const child = spawn(command, args, {
-    cwd: CONFORMANCE_DIR,
+    cwd,
     detached: true,
     stdio: ["ignore", "pipe", "pipe"],
     env: { ...process.env, ...env },
@@ -124,16 +133,58 @@ async function probeOracle(inPath, outPath) {
   return JSON.parse(await readFile(outPath, "utf8"));
 }
 
-/** Runs the programs against fireemu. */
-async function probeFireemu(inPath, outPath, chosen) {
-  const binary = chosen ?? resolveFireemuBinary();
-  await runSupervisor({
-    name: "fireemu",
+const sha256Bytes = (bytes) => createHash("sha256").update(bytes).digest("hex");
+
+/** The profile option belongs to this Node harness, never to fireemu exec. */
+export function parseProbeArguments(args) {
+  const mode = args[0] ?? "record";
+  if (!["record", "record-production", "check", "check-production", "both"].includes(mode))
+    throw new Error(`unknown mode ${mode}`);
+  if (args.length <= 1) return { mode };
+  if (mode !== "check-production" || args.length !== 3 || args[1] !== "--profile")
+    throw new Error("invalid, missing or duplicate profile option");
+  if (!["strict", "emulator"].includes(args[2])) throw new Error("invalid profile");
+  return { mode, profile: args[2] };
+}
+
+/** Builds the exact launch argv and pins the bytes supplied through --config. */
+export async function createFireemuProbeLaunch({
+  binary,
+  inPath,
+  outPath,
+  profile,
+  configPath = join(CONFORMANCE_DIR, "firestore-probe.fireemu.json"),
+  runDirectory = RUN_DIR,
+  cwd = CONFORMANCE_DIR,
+}) {
+  if (profile !== undefined && !["strict", "emulator"].includes(profile))
+    throw new Error("invalid profile");
+  const sourceBytes = await readFile(configPath);
+  const source = JSON.parse(sourceBytes);
+  const requestedProfile = profile ?? source.profile;
+  if (source.schemaVersion !== 1 || !["strict", "emulator"].includes(requestedProfile))
+    throw new Error("invalid probe configuration profile");
+  let path = configPath,
+    bytes = sourceBytes;
+  if (profile === "strict") {
+    const config = structuredClone(source);
+    config.profile = "strict";
+    if (typeof config.firestore?.rules === "string")
+      config.firestore.rules = resolve(cwd, config.firestore.rules);
+    await mkdir(runDirectory, { recursive: true, mode: 0o700 });
+    path = join(runDirectory, `strict-config-${randomUUID()}.json`);
+    bytes = Buffer.from(JSON.stringify(config, null, 2) + "\n");
+    await writeFile(path, bytes, { flag: "wx", mode: 0o600 });
+  } else if (source.profile !== requestedProfile)
+    throw new Error("probe configuration profile mismatch");
+  return {
     command: binary,
+    cwd,
+    requestedProfile,
     args: [
       "exec",
       "--config",
-      join(CONFORMANCE_DIR, "firestore-probe.fireemu.json"),
+      path,
       "--project",
       PROJECT,
       "--only",
@@ -156,8 +207,126 @@ async function probeFireemu(inPath, outPath, chosen) {
       FIRESTORE_PROBE_PROJECT: PROJECT,
       FIRESTORE_PROBE_HOST: `127.0.0.1:${TESTD_FIRESTORE_PORT}`,
     },
+    config: {
+      sourcePath: configPath,
+      sourceBytesBase64: sourceBytes.toString("base64"),
+      sourceSha256Before: sha256Bytes(sourceBytes),
+      path,
+      bytesBase64: bytes.toString("base64"),
+      sha256Before: sha256Bytes(bytes),
+    },
+  };
+}
+
+/** Exactly one actual daemon banner is evidence; a requested marker is not. */
+export function daemonProbeProfile(log) {
+  const banners = [...String(log ?? "").matchAll(/^  profile: (strict|emulator) \([^\r\n]+\)$/gm)];
+  if (banners.length !== 1) throw new Error("missing or ambiguous daemon profile banner");
+  return banners[0][1];
+}
+
+/** Fail-closed validation shared by the collector and the strict release judge. */
+export function probeProfileBindingProblems(binding, expectedProfile, binarySha256, sourceSha256) {
+  const problems = [];
+  try {
+    if (
+      !binding ||
+      binding.requestedProfile !== expectedProfile ||
+      binding.effectiveProfile !== expectedProfile
+    )
+      throw new Error("missing or mismatched effective probe profile");
+    if (
+      daemonProbeProfile(binding.daemonLog) !== expectedProfile ||
+      sha256Bytes(binding.daemonLog) !== binding.daemonLogSha256
+    )
+      throw new Error("daemon profile readback mismatch");
+    for (const key of ["sha256Before", "sha256After"])
+      if (binding.binary?.[key] !== binarySha256 || !/^[a-f0-9]{64}$/.test(binarySha256))
+        throw new Error("profile receipt binary digest mismatch");
+    const config = binding.config;
+    const decode = (value) => {
+      if (typeof value !== "string") throw new Error("missing config bytes");
+      const bytes = Buffer.from(value, "base64");
+      if (bytes.toString("base64") !== value) throw new Error("invalid config bytes");
+      return bytes;
+    };
+    const bytes = decode(config?.bytesBase64),
+      sourceBytes = decode(config.sourceBytesBase64);
+    const configDigest = sha256Bytes(bytes),
+      sourceDigest = sha256Bytes(sourceBytes);
+    if (
+      configDigest !== config.sha256Before ||
+      configDigest !== config.sha256After ||
+      sourceDigest !== config.sourceSha256Before ||
+      sourceDigest !== config.sourceSha256After ||
+      (sourceSha256 !== undefined && sourceDigest !== sourceSha256)
+    )
+      throw new Error("profile receipt configuration digest mismatch");
+    const expected = JSON.parse(sourceBytes);
+    if (expected.schemaVersion !== 1) throw new Error("noncanonical source config");
+    if (expectedProfile === "strict") {
+      expected.profile = "strict";
+      if (typeof expected.firestore?.rules === "string")
+        expected.firestore.rules = resolve(binding.cwd, expected.firestore.rules);
+    }
+    const actual = JSON.parse(bytes);
+    if (actual.profile !== expectedProfile || !isDeepStrictEqual(actual, expected))
+      throw new Error("profile receipt configuration settings mismatch");
+    if (
+      !Array.isArray(binding.argv) ||
+      binding.argv[0] !== "exec" ||
+      binding.argv.filter((arg) => arg === "--config").length !== 1 ||
+      binding.argv[binding.argv.indexOf("--config") + 1] !== config.path ||
+      binding.argv.includes("--profile")
+    )
+      throw new Error("profile receipt launch config mismatch");
+  } catch (error) {
+    problems.push(error.message);
+  }
+  return problems;
+}
+
+/** Executes the tested plan and derives its receipt from the supervisor's actual output. */
+export async function executeFireemuProbe(plan, supervisor = runSupervisor) {
+  const before = sha256Bytes(await readFile(plan.command));
+  const daemonLog = await supervisor({
+    name: "fireemu",
+    cwd: plan.cwd,
+    command: plan.command,
+    args: plan.args,
+    env: plan.env,
   });
-  return JSON.parse(await readFile(outPath, "utf8"));
+  const binding = {
+    requestedProfile: plan.requestedProfile,
+    effectiveProfile: daemonProbeProfile(daemonLog),
+    daemonLog,
+    daemonLogSha256: sha256Bytes(daemonLog),
+    cwd: plan.cwd,
+    argv: plan.args,
+    binary: {
+      path: plan.command,
+      sha256Before: before,
+      sha256After: sha256Bytes(await readFile(plan.command)),
+    },
+    config: {
+      ...plan.config,
+      sha256After: sha256Bytes(await readFile(plan.config.path)),
+      sourceSha256After: sha256Bytes(await readFile(plan.config.sourcePath)),
+    },
+  };
+  const problems = probeProfileBindingProblems(binding, plan.requestedProfile, before);
+  if (problems.length) throw new Error(problems.join("; "));
+  return { fireemu: JSON.parse(await readFile(plan.env.FIRESTORE_PROBE_OUT, "utf8")), binding };
+}
+
+/** Ordinary comparisons retain the original emulator configuration. */
+async function probeFireemu(inPath, outPath, chosen) {
+  const plan = await createFireemuProbeLaunch({
+    binary: chosen ?? resolveFireemuBinary(),
+    inPath,
+    outPath,
+  });
+  return (await executeFireemuProbe(plan)).fireemu;
 }
 
 async function writePrograms() {
@@ -559,7 +728,7 @@ export function productionStatusLegend(counts) {
 }
 
 /** Replay the pinned historical production corpus without contacting production. */
-async function checkProduction() {
+async function checkProduction(profile) {
   const programsDigest = await digestFile(
     join(CONFORMANCE_DIR, "src/firestore-probe/programs.mjs"),
   );
@@ -579,13 +748,16 @@ async function checkProduction() {
   const inPath = await writePrograms();
   const binary = resolveFireemuBinary();
   const before = await historical.measureArtifact(binary);
-  const fireemu = await probeFireemu(
-    inPath,
-    join(RUN_DIR, "fireemu-historical-production.json"),
+  const plan = await createFireemuProbeLaunch({
     binary,
-  );
+    inPath,
+    outPath: join(RUN_DIR, "fireemu-historical-production.json"),
+    profile,
+  });
+  const { fireemu, binding } = await executeFireemuProbe(plan);
   const after = await historical.measureArtifact(binary);
   const result = {
+    profileBinding: binding,
     artifact: historical.historicalArtifactIdentity({
       binary,
       before: before.sha256,
@@ -827,7 +999,7 @@ async function recordProduction() {
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  const mode = process.argv[2] ?? "record";
+  const { mode, profile } = parseProbeArguments(process.argv.slice(2));
   if (mode === "record-production") {
     await recordProduction();
   } else if (mode === "record") {
@@ -835,7 +1007,7 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
   } else if (mode === "check") {
     process.exitCode = await check();
   } else if (mode === "check-production") {
-    process.exitCode = await checkProduction();
+    process.exitCode = await checkProduction(profile);
   } else if (mode === "both") {
     await record();
     process.exitCode = await check();

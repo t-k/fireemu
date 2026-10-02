@@ -144,3 +144,138 @@ test("an artifact is measured by its bytes and its --version answer", async () =
   );
   assert.equal(measured.version.trim(), process.version);
 });
+
+import * as probeRunner from "./run.mjs";
+
+test("historical production launch validates explicit strict selection before launching", () => {
+  assert.equal(typeof probeRunner.parseProbeArguments, "function");
+  assert.deepEqual(probeRunner.parseProbeArguments(["check-production", "--profile", "strict"]), {
+    mode: "check-production",
+    profile: "strict",
+  });
+  assert.deepEqual(probeRunner.parseProbeArguments(["check-production"]), {
+    mode: "check-production",
+  });
+  assert.deepEqual(probeRunner.parseProbeArguments(["check"]), { mode: "check" });
+  for (const args of [
+    ["check-production", "--profile"],
+    ["check-production", "--profile", "unknown"],
+    ["check-production", "--profile", "strict", "--profile", "emulator"],
+    ["check", "--profile", "strict"],
+    ["check-production", "--unknown", "strict"],
+  ])
+    assert.throws(() => probeRunner.parseProbeArguments(args), /profile|option/);
+});
+
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join, resolve } from "node:path";
+
+test("strict probe generates a pinned config while preserving settings and rules resolution", async (t) => {
+  assert.equal(typeof probeRunner.createFireemuProbeLaunch, "function");
+  const root = await mkdtemp(join(tmpdir(), "fireemu-profile-plan-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const source = {
+    schemaVersion: 1,
+    profile: "emulator",
+    firestore: { rules: "rules/source.rules", edition: "standard" },
+    daemon: { clockStart: "2026-01-02T03:04:05Z" },
+  };
+  const configPath = join(root, "probe.json");
+  await writeFile(configPath, JSON.stringify(source));
+  const options = {
+    binary: process.execPath,
+    inPath: "in",
+    outPath: "out",
+    configPath,
+    runDirectory: join(root, "private"),
+    cwd: root,
+  };
+  const ordinary = await probeRunner.createFireemuProbeLaunch(options);
+  assert.equal(ordinary.args[ordinary.args.indexOf("--config") + 1], configPath);
+  assert.equal(ordinary.requestedProfile, "emulator");
+  assert.equal(await readFile(configPath, "utf8"), JSON.stringify(source));
+  const strict = await probeRunner.createFireemuProbeLaunch({ ...options, profile: "strict" });
+  const generatedPath = strict.args[strict.args.indexOf("--config") + 1];
+  assert.notEqual(generatedPath, configPath);
+  assert.ok(!strict.args.includes("--profile"));
+  assert.deepEqual(JSON.parse(await readFile(generatedPath, "utf8")), {
+    ...source,
+    profile: "strict",
+    firestore: { ...source.firestore, rules: resolve(root, source.firestore.rules) },
+  });
+  assert.equal(
+    strict.config.sourceSha256Before,
+    createHash("sha256")
+      .update(await readFile(configPath))
+      .digest("hex"),
+  );
+  assert.equal(
+    strict.config.sha256Before,
+    createHash("sha256")
+      .update(await readFile(generatedPath))
+      .digest("hex"),
+  );
+});
+
+test("profile receipt uses actual daemon output and refuses profile lies or changed launch inputs", async (t) => {
+  for (const kind of [
+    "strict",
+    "emulator",
+    "profile-lie",
+    "requested-marker",
+    "duplicate-banner",
+    "config-change",
+    "source-change",
+    "binary-change",
+  ]) {
+    const root = await mkdtemp(join(tmpdir(), "fireemu-profile-execution-"));
+    t.after(() => rm(root, { recursive: true, force: true }));
+    const configPath = join(root, "probe.json"),
+      binary = join(root, "fireemu"),
+      outPath = join(root, "response.json");
+    await writeFile(binary, "offline binary fixture");
+    await writeFile(
+      configPath,
+      JSON.stringify({
+        schemaVersion: 1,
+        profile: "emulator",
+        firestore: { rules: "rules/source.rules" },
+      }),
+    );
+    const profile = kind === "emulator" ? "emulator" : "strict";
+    const plan = await probeRunner.createFireemuProbeLaunch({
+      binary,
+      inPath: "in",
+      outPath,
+      profile,
+      configPath,
+      runDirectory: join(root, "private"),
+      cwd: root,
+    });
+    const supervisor = async (actual) => {
+      assert.equal(actual.command, binary);
+      assert.equal(actual.cwd, root);
+      assert.deepEqual(actual.args, plan.args);
+      const config = JSON.parse(await readFile(actual.args[actual.args.indexOf("--config") + 1]));
+      assert.equal(config.profile, profile);
+      await writeFile(outPath, JSON.stringify({ writes: { steps: {} } }));
+      if (kind === "config-change")
+        await writeFile(plan.config.path, JSON.stringify({ ...config, profile: "emulator" }));
+      if (kind === "source-change") await writeFile(configPath, "{}");
+      if (kind === "binary-change") await writeFile(binary, "changed binary");
+      if (kind === "requested-marker") return "requested profile: strict\n";
+      const banner = `  profile: ${kind === "profile-lie" ? "emulator" : profile} (actual daemon fixture)\n`;
+      return kind === "duplicate-banner" ? banner + banner : banner;
+    };
+    if (["strict", "emulator"].includes(kind)) {
+      const actual = await probeRunner.executeFireemuProbe(plan, supervisor);
+      assert.equal(actual.binding.effectiveProfile, profile);
+      assert.equal(actual.binding.requestedProfile, profile);
+      assert.equal(actual.binding.binary.sha256Before, actual.binding.binary.sha256After);
+      assert.equal(actual.binding.config.sha256Before, actual.binding.config.sha256After);
+      assert.deepEqual(actual.fireemu, { writes: { steps: {} } });
+    } else
+      await assert.rejects(probeRunner.executeFireemuProbe(plan, supervisor), /profile|digest/);
+  }
+});

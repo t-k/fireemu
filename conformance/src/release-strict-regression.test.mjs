@@ -626,11 +626,42 @@ test("every departure of the FS-DATA-WRITE local comparison fails it", () => {
   }
 });
 
+const passingProfileBinding = () => {
+  const sourceBytes = readFileSync(repo("conformance/firestore-probe.fireemu.json"));
+  const config = JSON.parse(sourceBytes);
+  config.profile = "strict";
+  config.firestore.rules = repo("conformance/firestore-probe.rules");
+  const bytes = Buffer.from(JSON.stringify(config, null, 2) + "\n");
+  const digest = (value) => createHash("sha256").update(value).digest("hex");
+  const daemonLog =
+    "  profile: strict (behaves like production Firebase where the official emulators do not)\n";
+  return {
+    requestedProfile: "strict",
+    effectiveProfile: "strict",
+    daemonLog,
+    daemonLogSha256: digest(daemonLog),
+    cwd: repo("conformance"),
+    argv: ["exec", "--config", "/private/run/strict-config.json"],
+    binary: { sha256Before: BINARY, sha256After: BINARY },
+    config: {
+      sourcePath: repo("conformance/firestore-probe.fireemu.json"),
+      sourceBytesBase64: sourceBytes.toString("base64"),
+      sourceSha256Before: digest(sourceBytes),
+      sourceSha256After: digest(sourceBytes),
+      path: "/private/run/strict-config.json",
+      bytesBase64: bytes.toString("base64"),
+      sha256Before: digest(bytes),
+      sha256After: digest(bytes),
+    },
+  };
+};
+
 const passingHistorical = () => {
   const historical = regression().historical;
   const indeterminate = ["transactions/lifecycle#phantom-write"];
   return {
     artifact: { sha256Before: BINARY, sha256After: BINARY },
+    profileBinding: passingProfileBinding(),
     comparable: historical.comparable,
     currentMismatches: historical.rows.filter((row) => !indeterminate.includes(row)),
     newMismatches: [],
@@ -1070,5 +1101,147 @@ test("unsupported OpenSSL records a failure for each federation run before eithe
     }
   } finally {
     rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("R11 actual argv explicitly selects strict in the Node historical harness", () => {
+  assert.deepEqual(RUNS.find(({ id }) => id === "R11").commands[0].argv.slice(-2), [
+    "--profile",
+    "strict",
+  ]);
+});
+
+test("R11 refuses the old historical receipt without actual strict profile binding", () => {
+  const result = passingHistorical();
+  delete result.profileBinding;
+  assert.notDeepEqual(
+    judgeFsDataWriteHistorical(regression().historical, { exitCode: 0, result }, BINARY),
+    [],
+  );
+});
+
+test("R11 profile receipt fails closed on readback, config and binary near misses", () => {
+  const breakers = [
+    (b) => {
+      b.daemonLogSha256 = "f".repeat(64);
+    },
+    (b) => {
+      b.requestedProfile = "emulator";
+    },
+    (b) => {
+      b.effectiveProfile = "emulator";
+    },
+    (b) => {
+      b.daemonLog = "requested profile: strict\n";
+    },
+    (b) => {
+      b.daemonLog = b.daemonLog.replace("profile: strict", "profile: emulator");
+      b.daemonLogSha256 = createHash("sha256").update(b.daemonLog).digest("hex");
+    },
+    (b) => {
+      b.daemonLog += b.daemonLog;
+    },
+    (b) => {
+      b.config.sha256After = "b".repeat(64);
+    },
+    (b) => {
+      b.config.sourceSha256After = "b".repeat(64);
+    },
+    (b) => {
+      b.binary.sha256After = "b".repeat(64);
+    },
+    (b) => {
+      b.argv[2] = "/foreign/config.json";
+    },
+    (b) => {
+      delete b.config.bytesBase64;
+    },
+    (b) => {
+      b.config.bytesBase64 += "!";
+    },
+    (b) => {
+      const json = JSON.parse(Buffer.from(b.config.bytesBase64, "base64"));
+      json.profile = "emulator";
+      const bytes = Buffer.from(JSON.stringify(json));
+      b.config.bytesBase64 = bytes.toString("base64");
+      b.config.sha256Before = b.config.sha256After = createHash("sha256")
+        .update(bytes)
+        .digest("hex");
+    },
+    (b) => {
+      const json = JSON.parse(Buffer.from(b.config.bytesBase64, "base64"));
+      json.firestore.rules += "-foreign";
+      const bytes = Buffer.from(JSON.stringify(json));
+      b.config.bytesBase64 = bytes.toString("base64");
+      b.config.sha256Before = b.config.sha256After = createHash("sha256")
+        .update(bytes)
+        .digest("hex");
+    },
+  ];
+  for (const [index, breakIt] of breakers.entries()) {
+    const result = passingHistorical();
+    breakIt(result.profileBinding);
+    assert.notDeepEqual(
+      judgeFsDataWriteHistorical(regression().historical, { exitCode: 0, result }, BINARY),
+      [],
+      String(index),
+    );
+  }
+});
+
+test("generated strict profile receipts agree with an independent five-condition model", () => {
+  for (let mask = 0; mask < 32; mask++) {
+    const result = passingHistorical(),
+      b = result.profileBinding;
+    b.requestedProfile = mask & 1 ? "strict" : "emulator";
+    b.effectiveProfile = mask & 2 ? "strict" : "emulator";
+    b.daemonLog = `  profile: ${mask & 4 ? "strict" : "emulator"} (actual daemon fixture)\n`;
+    b.daemonLogSha256 = createHash("sha256").update(b.daemonLog).digest("hex");
+    const config = JSON.parse(Buffer.from(b.config.bytesBase64, "base64"));
+    config.profile = mask & 8 ? "strict" : "emulator";
+    const bytes = Buffer.from(JSON.stringify(config));
+    b.config.bytesBase64 = bytes.toString("base64");
+    b.config.sha256Before = b.config.sha256After = createHash("sha256").update(bytes).digest("hex");
+    if (!(mask & 16)) b.binary.sha256After = "c".repeat(64);
+    assert.equal(
+      judgeFsDataWriteHistorical(regression().historical, { exitCode: 0, result }, BINARY)
+        .length === 0,
+      mask === 31,
+      String(mask),
+    );
+  }
+});
+
+test("R11 binds source path and rules resolution to the actual launch cwd", () => {
+  for (const kind of ["cwd", "source-path", "foreign-settings", "source-bytes"]) {
+    const result = passingHistorical(),
+      b = result.profileBinding;
+    if (kind === "source-path") b.config.sourcePath = "/foreign/source.json";
+    else {
+      const config = JSON.parse(Buffer.from(b.config.bytesBase64, "base64"));
+      if (kind === "cwd") {
+        b.cwd = "/foreign";
+        config.firestore.rules = "/foreign/firestore-probe.rules";
+      } else config.daemon.clockStart = "2027-01-02T03:04:05Z";
+      const bytes = Buffer.from(JSON.stringify(config));
+      b.config.bytesBase64 = bytes.toString("base64");
+      b.config.sha256Before = b.config.sha256After = createHash("sha256")
+        .update(bytes)
+        .digest("hex");
+      if (kind === "source-bytes") {
+        const source = JSON.parse(Buffer.from(b.config.sourceBytesBase64, "base64"));
+        source.daemon.clockStart = config.daemon.clockStart;
+        const sourceBytes = Buffer.from(JSON.stringify(source));
+        b.config.sourceBytesBase64 = sourceBytes.toString("base64");
+        b.config.sourceSha256Before = b.config.sourceSha256After = createHash("sha256")
+          .update(sourceBytes)
+          .digest("hex");
+      }
+    }
+    assert.notDeepEqual(
+      judgeFsDataWriteHistorical(regression().historical, { exitCode: 0, result }, BINARY),
+      [],
+      kind,
+    );
   }
 });

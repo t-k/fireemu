@@ -267,6 +267,7 @@ test("local_lifecycle_never_fabricates_a_peer_status", async () => {
     assert.equal(result.verdict, "local-stop");
     assert.equal(result.peerTerminal, null);
   }
+  assert.equal(reduce([{ ...stop(1), committed: false }], limits).verdict, "local-stop");
   for (const event of [
     "issue-entry",
     "issue-return",
@@ -382,6 +383,13 @@ test("evidence_bounds_refuse_before_unbounded_processing", async () => {
       maxHeaderBytes: 15,
     }).verdict,
     "peer-terminal",
+  );
+  uncertain(
+    reduce([terminal(1, { rawHeaders: ["grpc-status", "0", "x", "é"] })], {
+      ...limits,
+      maxHeaderBytes: 14,
+    }),
+    "header-byte-limit",
   );
   uncertain(
     reduce([terminal(1, { rawHeaders: ["grpc-status", "0".repeat(4096)] })], limits),

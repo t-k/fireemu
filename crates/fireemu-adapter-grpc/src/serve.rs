@@ -287,9 +287,11 @@ where
 /// client is still uploading can reset the HTTP/1 connection before it sees the
 /// production-shaped 400. The finite drain cap and deadline still bound hostile senders.
 ///
-/// Only `:commit` drains. Other REST routes and `WebChannel` stop reading at the bound, so a
-/// body far over it may reset the connection instead of delivering the 400; production's
-/// answer there is unobserved beyond one byte over.
+/// Only `:commit` drains while it reads. Other REST routes and `WebChannel` stop reading at the
+/// bound, and the connection then ends with the drain of the listener (`GracefulClose`: FIN, then
+/// up to `MAX_REST_BODY_BYTES` plus an eighth, 500 ms idle, 2 s in all), so a body over that
+/// may still reset the connection instead of delivering the 400; production's answer there is
+/// unobserved beyond one byte over.
 async fn read_commit_body(
     req: Request<Incoming>,
     deadline: std::time::Duration,

@@ -245,13 +245,15 @@ fn every_keep_alive_listener_delivers_its_refusal_to_a_client_that_sends_its_bod
             ));
         }
     }
-    // The UI refuses a body over its limit before reading it.
+    // The UI reads a body up to its limit (256 KiB outside the storage routes) before it refuses a
+    // larger one, so the body is several times that limit: a substantial remainder is unread at
+    // the refusal.
     losses.extend(refusal_losses(
         "ui",
         ports.ui,
         "/api/anything",
         OTHER_SITE,
-        512 * 1024,
+        4 * 1024 * 1024,
         "HTTP/1.1 413 Payload Too Large",
     ));
     assert!(losses.is_empty(), "{}", losses.join("\n"));

@@ -766,7 +766,8 @@ fn mutation_json_response(
 
 /// What the Hub reads and discards after it has answered: its largest accepted body, the export
 /// request (`MAX_EXPORT_BODY`), and the floor of [`DrainBounds`] for the rest.
-const HUB_DRAIN_BODY_BYTES: usize = 64 * 1024;
+#[allow(clippy::cast_possible_truncation)] // 64 KiB fits every usize
+const HUB_DRAIN_BODY_BYTES: usize = MAX_EXPORT_BODY as usize;
 
 /// Serves the Hub on `listener` until the task is aborted.
 pub async fn serve(listener: TcpListener, state: Arc<HubState>) -> std::io::Result<()> {

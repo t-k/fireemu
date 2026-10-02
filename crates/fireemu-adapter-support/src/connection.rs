@@ -96,13 +96,17 @@ enum State<S> {
 /// shutdown; afterwards a read sees the end of the stream and a write fails.
 pub struct GracefulClose<S> {
     state: State<S>,
+    /// Whether the wrapped stream writes vectored, captured at construction so that it stays the same
+    /// in every state.
+    vectored: bool,
 }
 
-impl<S> GracefulClose<S> {
+impl<S: AsyncWrite> GracefulClose<S> {
     /// Wraps `stream`, which is ended with the drain of `bounds` when it is shut down.
     #[must_use]
-    pub const fn new(stream: S, bounds: DrainBounds) -> Self {
+    pub fn new(stream: S, bounds: DrainBounds) -> Self {
         Self {
+            vectored: stream.is_write_vectored(),
             state: State::Open(stream, bounds),
         }
     }
@@ -137,6 +141,24 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send + 'static> AsyncWrite for Graceful
             State::Open(stream, _) => Pin::new(stream).poll_write(cx, data),
             State::Closing(_) | State::Closed => Poll::Ready(Err(closed())),
         }
+    }
+
+    // Vectored writes are forwarded: hyper and h2 choose to queue the buffers of a response, rather than
+    // to copy all of them into one, only when the stream says it writes vectored, so a wrapper that
+    // dropped this would make every large response be copied whole.
+    fn poll_write_vectored(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        bufs: &[io::IoSlice<'_>],
+    ) -> Poll<io::Result<usize>> {
+        match &mut self.state {
+            State::Open(stream, _) => Pin::new(stream).poll_write_vectored(cx, bufs),
+            State::Closing(_) | State::Closed => Poll::Ready(Err(closed())),
+        }
+    }
+
+    fn is_write_vectored(&self) -> bool {
+        self.vectored
     }
 
     fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
@@ -583,6 +605,122 @@ mod tests {
             .flush()
             .await
             .expect("a flush after shutdown is harmless");
+    }
+
+    // ---- vectored writes ----
+
+    /// A sink that records how its writes arrive, and whether it says it writes vectored.
+    struct Sink {
+        vectored: bool,
+        single_writes: usize,
+        vectored_writes: usize,
+        bytes: Vec<u8>,
+    }
+
+    impl Sink {
+        fn new(vectored: bool) -> Self {
+            Self {
+                vectored,
+                single_writes: 0,
+                vectored_writes: 0,
+                bytes: Vec::new(),
+            }
+        }
+    }
+
+    impl AsyncRead for Sink {
+        fn poll_read(
+            self: Pin<&mut Self>,
+            _cx: &mut Context<'_>,
+            _buf: &mut ReadBuf<'_>,
+        ) -> Poll<io::Result<()>> {
+            Poll::Ready(Ok(()))
+        }
+    }
+
+    impl AsyncWrite for Sink {
+        fn poll_write(
+            mut self: Pin<&mut Self>,
+            _cx: &mut Context<'_>,
+            data: &[u8],
+        ) -> Poll<io::Result<usize>> {
+            self.single_writes += 1;
+            self.bytes.extend_from_slice(data);
+            Poll::Ready(Ok(data.len()))
+        }
+
+        fn poll_write_vectored(
+            mut self: Pin<&mut Self>,
+            _cx: &mut Context<'_>,
+            bufs: &[io::IoSlice<'_>],
+        ) -> Poll<io::Result<usize>> {
+            self.vectored_writes += 1;
+            let mut written = 0;
+            for buf in bufs {
+                self.bytes.extend_from_slice(buf);
+                written += buf.len();
+            }
+            Poll::Ready(Ok(written))
+        }
+
+        fn is_write_vectored(&self) -> bool {
+            self.vectored
+        }
+
+        fn poll_flush(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+            Poll::Ready(Ok(()))
+        }
+
+        fn poll_shutdown(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+            Poll::Ready(Ok(()))
+        }
+    }
+
+    #[tokio::test]
+    async fn the_wrapper_reports_what_the_wrapped_stream_reports_about_vectored_writes_in_every_state(
+    ) {
+        for inner in [true, false] {
+            let mut wrapped = GracefulClose::new(Sink::new(inner), bounds(LIMIT));
+            assert_eq!(wrapped.is_write_vectored(), inner, "open");
+            timeout(GUARD, wrapped.shutdown())
+                .await
+                .expect("ends")
+                .expect("shut down");
+            assert_eq!(wrapped.is_write_vectored(), inner, "closed");
+        }
+    }
+
+    #[tokio::test]
+    async fn a_vectored_write_reaches_the_wrapped_stream_as_one_write_and_fails_after_the_shutdown()
+    {
+        let mut wrapped = GracefulClose::new(Sink::new(true), bounds(LIMIT));
+        let slices = [io::IoSlice::new(b"head "), io::IoSlice::new(b"body")];
+        let written = wrapped
+            .write_vectored(&slices)
+            .await
+            .expect("a vectored write");
+        assert_eq!(written, 9);
+        let State::Open(sink, _) = &wrapped.state else {
+            panic!("the wrapper is still open");
+        };
+        assert_eq!(sink.vectored_writes, 1);
+        assert_eq!(
+            sink.single_writes, 0,
+            "the slices are not written one by one"
+        );
+        assert_eq!(sink.bytes, b"head body");
+        timeout(GUARD, wrapped.shutdown())
+            .await
+            .expect("ends")
+            .expect("shut down");
+        assert_eq!(
+            wrapped
+                .write_vectored(&slices)
+                .await
+                .expect_err("no vectored write after the shutdown")
+                .kind(),
+            io::ErrorKind::BrokenPipe
+        );
     }
 
     // ---- properties ----

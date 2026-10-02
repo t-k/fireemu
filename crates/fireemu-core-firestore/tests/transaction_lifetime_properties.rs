@@ -264,6 +264,27 @@ proptest! {
         );
     }
 
+    /// The emulator profile accepts every Rollback of a token a retry named, however the token began (live, committed or rolled back) and however often it
+    /// is repeated, as the official emulator does (measured with firebase-tools 15.28.2); strict keeps 10 with the expired text for a committed one.
+    #[test]
+    fn emulator_profile_accepts_every_rollback_of_a_token_a_retry_named(
+        origin in 0u8..3,
+        retry_after in 2i64..=200,
+        repeats in 1usize..5,
+    ) {
+        let (mut state, transaction) = seeded(LimitScope::OfficialEmulator);
+        match origin {
+            1 => { prop_assert!(state.commit(&[], Some(&transaction), t(1)).is_ok()); }
+            2 => { prop_assert!(state.rollback(&transaction).is_ok()); }
+            _ => {}
+        }
+        let retry = state.retry_transaction(&transaction, t(retry_after));
+        prop_assert!(retry.is_ok(), "origin {} retried at {} s: {:?}", origin, retry_after, retry);
+        for _ in 0..repeats {
+            prop_assert!(state.rollback(&transaction).is_ok(), "origin {}", origin);
+        }
+    }
+
     /// The emulator profile answers the order the official emulator was measured in (a read, a Commit, a Rollback after 270 s) as the official
     /// emulator does, at any ages inside its retention, and accepts every request of a live transaction.
     #[test]

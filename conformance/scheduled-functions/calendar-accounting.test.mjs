@@ -1063,7 +1063,7 @@ const exactCorruptions = {
     (set) =>
       set["measure.jsonl"].push(
         { type: "spawn-failed", handle: "measure:8", pid: null },
-        { type: "exit", handle: "measure:8", exitMonoNs: "9999" },
+        { type: "exit", handle: "measure:8", code: 0, signal: null, exitMonoNs: "9999" },
       ),
     ["measure.jsonl: failed spawn measure:8 has an exit"],
   ],
@@ -1106,7 +1106,7 @@ const exactCorruptions = {
       set["measure.jsonl"].push(
         birthRow({ handle: "measure:5", pid: 250, purpose: "outer" }),
         { type: "identity", handle: "measure:5", pid: 250, started: "s" },
-        { type: "exit", handle: "measure:5", exitMonoNs: "6000" },
+        { type: "exit", handle: "measure:5", code: 0, signal: null, exitMonoNs: "6000" },
       ),
     [
       "measure.jsonl: more than one outer child",
@@ -1473,4 +1473,55 @@ test("validator controls run only on valid base records, and drop the first exit
       ],
     ],
   );
+});
+
+// Review round 2, M6: an exit row carries exactly one of an exit code and a signal, and (B) needs
+// numeric session ids.
+test("an exit row needs exactly one of a numeric code and a signal", () => {
+  const exitOf = (set) => set["inner.jsonl"].find((row) => row.type === "exit");
+  for (const [name, change, ok] of [
+    ["code 0", (row) => Object.assign(row, { code: 0, signal: null }), true],
+    ["signal only", (row) => Object.assign(row, { code: null, signal: "SIGKILL" }), true],
+    ["neither", (row) => Object.assign(row, { code: null, signal: null }), false],
+    ["both", (row) => Object.assign(row, { code: 1, signal: "SIGTERM" }), false],
+    ["fields absent", (row) => (delete row.code, delete row.signal), false],
+    ["code a string", (row) => Object.assign(row, { code: "0", signal: null }), false],
+    ["code a fraction", (row) => Object.assign(row, { code: 0.5, signal: null }), false],
+    ["signal empty", (row) => Object.assign(row, { code: null, signal: "" }), false],
+  ]) {
+    const set = recordSet();
+    change(exitOf(set));
+    const result = validateRecords(set);
+    assert.equal(result.ok, ok, name);
+    if (!ok)
+      assert.deepEqual(
+        result.problems,
+        ["inner.jsonl: malformed exit row", "inner.jsonl: inner:1 has no exit"],
+        name,
+      );
+  }
+});
+
+test("(B) needs positive numeric session ids for the root and the outer launcher", () => {
+  for (const [name, chain] of [
+    ["root undefined", { rootSid: undefined, outerPid: 200, outerSid: 200 }],
+    ["root an error", { rootSid: "E1", outerPid: 200, outerSid: 200 }],
+    ["root ESRCH", { rootSid: "ESRCH", outerPid: 200, outerSid: 200 }],
+    ["root zero", { rootSid: 0, outerPid: 200, outerSid: 200 }],
+    ["root a string number", { rootSid: "50", outerPid: 200, outerSid: 200 }],
+    ["outer missing", { rootSid: 50, outerPid: undefined, outerSid: undefined }],
+    ["outer an error", { rootSid: 50, outerPid: "E1", outerSid: "E1" }],
+  ]) {
+    const input = verdictInput();
+    input.chain = chain;
+    assert.deepEqual(
+      refusalVerdict(input).conditions.B,
+      {
+        ok: false,
+        outcome: "fail",
+        reasons: ["the outer launcher is not the leader of its own session"],
+      },
+      name,
+    );
+  }
 });

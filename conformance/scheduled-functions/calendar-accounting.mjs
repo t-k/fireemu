@@ -75,7 +75,14 @@ export function validateRecords(files) {
           else identities.set(row.handle, row);
           break;
         case "exit":
-          if (!text(row.handle) || !digits(row.exitMonoNs))
+          // The parent's own wait reports exactly one of an exit code and a signal.
+          if (
+            !text(row.handle) ||
+            !digits(row.exitMonoNs) ||
+            (Number.isSafeInteger(row.code)
+              ? row.signal !== null
+              : !(row.code === null && text(row.signal)))
+          )
             problems.push(`${name}: malformed exit row`);
           else if (exits.has(row.handle))
             problems.push(`${name}: handle ${row.handle} exits twice`);
@@ -380,7 +387,7 @@ export function refusalVerdict(run) {
   });
   check("B", ["chain", "records"], (fail) => {
     const { rootSid, outerPid, outerSid } = run.chain;
-    if (outerSid !== outerPid || outerSid === rootSid)
+    if (!pidOk(rootSid) || !pidOk(outerSid) || outerSid !== outerPid || outerSid === rootSid)
       fail.push("the outer launcher is not the leader of its own session");
     const births = run.records.births ?? {};
     if (!(births.measure ?? []).includes("outer"))

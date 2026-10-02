@@ -678,3 +678,173 @@ test("certify reads every report and attempt, digests each file and applies the 
     (await certify(missing)).problems.includes("the refusal report is not a certificate run"),
   );
 });
+
+import { claimArguments, complete, planKind } from "./calendar-measure.mjs";
+import { CONTROL_VARIANTS } from "./calendar-controls.mjs";
+
+test("planKind selects the exact fixture and escalation for every control mode", () => {
+  const plan = (timeZone, extra = {}) => ({ session: { input: { timeZone } }, ...extra });
+  const certificate = { kind: "certificate", escalation: "on", certificate: true };
+  const positive = { kind: "positive", escalation: "on", certificate: false };
+  assert.deepEqual(planKind(plan("Invalid/CalendarZone")), certificate);
+  assert.deepEqual(planKind(plan("UTC", { positive: true })), positive);
+  assert.throws(() => planKind(plan("UTC")), /the certificate run needs the refusal fixture/);
+  assert.throws(
+    () => planKind(plan("Invalid/CalendarZone", { positive: true })),
+    /the positive control needs a valid time zone/,
+  );
+  for (const [mode, variant] of Object.entries(CONTROL_VARIANTS)) {
+    const correct = variant.fixture === "valid" ? "UTC" : "Invalid/CalendarZone";
+    const wrong = variant.fixture === "valid" ? "Invalid/CalendarZone" : "UTC";
+    assert.deepEqual(
+      planKind(plan(correct, { control: { mode } })),
+      { kind: "control", escalation: variant.escalation, certificate: false },
+      mode,
+    );
+    assert.throws(
+      () => planKind(plan(wrong, { control: { mode } })),
+      /control fixture variant differs/,
+      mode,
+    );
+    assert.throws(
+      () => planKind(plan(correct, { control: { mode }, positive: true })),
+      /a run is one control at most/,
+      mode,
+    );
+  }
+  for (const mode of [undefined, "", "missing", "toString"])
+    assert.throws(() => planKind(plan("UTC", { control: { mode } })), /unknown control mode/);
+});
+
+test("complete requires each independent query condition in the full truth table", () => {
+  for (const code of [0, 1])
+    for (const stderr of ["", "unreadable"])
+      for (const truncated of [false, true, undefined])
+        for (const timedOut of [false, true]) {
+          const answer = { code, stderr, truncated, timedOut };
+          const expected = code === 0 && stderr === "" && truncated === false && timedOut === false;
+          assert.equal(complete(answer), expected, JSON.stringify(answer));
+        }
+});
+
+test("claimArguments preserves every private registry argument in order", () => {
+  for (let index = 0; index < 64; index++) {
+    const input = {
+      script: `/tools/${index}/portctl.py`,
+      database: `/runs/${index}/registry.sqlite`,
+      cwd: `/work/${index}`,
+      service: `calendar-${index}`,
+    };
+    assert.deepEqual(claimArguments(input), [
+      input.script,
+      "--db",
+      input.database,
+      "--cwd",
+      input.cwd,
+      "claim",
+      "--service",
+      input.service,
+      "--range",
+      "10000-19999",
+      "--ttl",
+      "5m",
+      "--format",
+      "json",
+      "--random",
+    ]);
+    for (const key of ["script", "database", "cwd"])
+      for (const value of ["relative", undefined, null, 42])
+        assert.throws(
+          () => claimArguments({ ...input, [key]: value }),
+          /portctl claim paths must be absolute/,
+        );
+  }
+});
+
+const loaderReport = (kind, overrides = {}) => ({
+  kind,
+  harnessVersion: PINS.harnessVersion,
+  launchTime: Date.parse("2026-10-02T03:00:00Z"),
+  verdict: { verdict: kind === "certificate" ? "pass" : "fail" },
+  validatorControls: { ok: true },
+  identity: { ...PINS },
+  pins: { ...PINS },
+  refusal: {
+    exitCode: kind === "certificate" ? 1 : 0,
+    line: kind === "certificate" ? PINS.refusalLine : null,
+  },
+  root: { pid: 100, started: "Fri Oct 2 03:00:00 2026", sid: 50 },
+  control: kind === "certificate" ? null : { mode: kind, counts: true },
+  ...overrides,
+});
+
+test("certify binds a complete certificate to each exact loaded byte sequence", async (t) => {
+  const { certify } = await import("./calendar-measure.mjs");
+  const { mkdtemp, rm, writeFile } = await import("node:fs/promises");
+  const { tmpdir } = await import("node:os");
+  const { join } = await import("node:path");
+  const directory = await mkdtemp(join(tmpdir(), "calendar-loader-binding-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const write = async (name, report) => {
+    const path = join(directory, name);
+    const bytes = `  ${JSON.stringify(report, null, 2)}\n\n`;
+    await writeFile(path, bytes);
+    return { path, sha256: sha(bytes) };
+  };
+  const files = [await write("refusal.json", loaderReport("certificate"))];
+  for (const kind of ["positive", "orphan", "escaper", "listener", "leftover"])
+    files.push(await write(`${kind}.json`, loaderReport(kind)));
+  const earlier = await write(
+    "earlier.json",
+    loaderReport("certificate", {
+      launchTime: Date.parse("2026-10-02T02:00:00Z"),
+      verdict: { verdict: "fail" },
+    }),
+  );
+  const listPath = join(directory, "list.json");
+  const list = {
+    refusal: files[0].path,
+    controls: files.slice(1).map((file) => file.path),
+    attempts: [earlier.path],
+    explanations: { [earlier.sha256]: "observed port collision" },
+  };
+  await writeFile(listPath, JSON.stringify(list));
+  const valid = await certify(listPath);
+  assert.equal(valid.verdict, "pass", JSON.stringify(valid.problems));
+  assert.deepEqual(
+    valid.certificate.reports.map(({ path, sha256 }) => ({ path, sha256 })),
+    files,
+  );
+  assert.deepEqual(valid.certificate.attempts, [
+    { ...earlier, verdict: "fail", explanation: "observed port collision" },
+  ]);
+  // Equal parsed data with different bytes invalidates the earlier hash-keyed explanation.
+  await writeFile(
+    earlier.path,
+    JSON.stringify(
+      loaderReport("certificate", {
+        launchTime: Date.parse("2026-10-02T02:00:00Z"),
+        verdict: { verdict: "fail" },
+      }),
+    ),
+  );
+  const changed = await certify(listPath);
+  assert.equal(changed.verdict, "fail");
+  assert.ok(
+    changed.problems.includes(`an earlier attempt failed without an explanation: ${earlier.path}`),
+  );
+  const absent = join(directory, "absent.json");
+  await writeFile(
+    listPath,
+    JSON.stringify({ ...list, attempts: [absent], explanations: { null: "lost bytes" } }),
+  );
+  assert.equal((await certify(listPath)).verdict, "fail");
+  await writeFile(earlier.path, "{unreadable");
+  await writeFile(
+    listPath,
+    JSON.stringify({ ...list, explanations: { [sha("{unreadable")]: "lost parse" } }),
+  );
+  assert.equal((await certify(listPath)).verdict, "fail");
+  await writeFile(listPath, JSON.stringify({ ...list, attempts: [null] }));
+  assert.equal((await certify(listPath)).verdict, "fail");
+});

@@ -1984,3 +1984,132 @@ test("a certificate refuses a pass that follows an unexplained failed attempt", 
   assert.equal(judge([later], {}).verdict, "pass");
   assert.deepEqual(judge(undefined, undefined).certificate.attempts, []);
 });
+
+test("certificate guards reject null and primitive provenance without throwing", () => {
+  for (const field of ["identity", "pins", "root"])
+    for (const value of [undefined, null, false, 1, "x", []]) {
+      const result = certificateVerdict({
+        refusal: report("certificate", { [field]: value }),
+        controls: allControls(),
+      });
+      assert.equal(result.verdict, "fail", `${field}: ${JSON.stringify(value)}`);
+      assert.equal(result.certificate, null);
+    }
+  for (const field of ["pid", "started", "sid"])
+    for (const value of [undefined, null]) {
+      const refusal = report("certificate");
+      refusal.root[field] = value;
+      assert.ok(
+        certificateVerdict({ refusal, controls: allControls() }).problems.includes(
+          "the refusal run names no root",
+        ),
+        field,
+      );
+    }
+  for (const value of [undefined, null, false, 1, "x", {}, []]) {
+    const controls = allControls();
+    controls[1].identity = value;
+    assert.equal(certificateVerdict({ refusal: report("certificate"), controls }).verdict, "fail");
+  }
+  assert.equal(
+    certificateVerdict({
+      refusal: report("certificate"),
+      controls: allControls(),
+      standInRunnerSha256: "9".repeat(64),
+    }).verdict,
+    "pass",
+  );
+});
+
+const completeAttempt = (overrides = {}, fileOverrides = {}) => ({
+  report: report("certificate", {
+    launchTime: Date.parse("2026-10-02T02:00:00Z"),
+    verdict: { verdict: "fail" },
+    ...overrides,
+  }),
+  file: { path: "/runs/earlier/verdict.json", sha256: "a1".repeat(32), ...fileOverrides },
+});
+const judgeAttempts = (attempts, explanations = { ["a1".repeat(32)]: "observed port collision" }) =>
+  certificateVerdict({
+    refusal: report("certificate"),
+    controls: allControls(),
+    attempts,
+    explanations,
+  });
+
+test("an explanation cannot replace missing or malformed attempt provenance", () => {
+  const valid = completeAttempt();
+  assert.equal(judgeAttempts([valid]).verdict, "pass");
+  for (const attempt of [
+    null,
+    {},
+    { report: null, file: valid.file },
+    { report: valid.report, file: null },
+    completeAttempt({}, { path: null }),
+    completeAttempt({}, { sha256: null }),
+    completeAttempt({}, { sha256: "" }),
+  ]) {
+    assert.equal(
+      judgeAttempts([attempt], {
+        null: "lost bytes",
+        undefined: "lost file",
+        "": "lost hash",
+        ["a1".repeat(32)]: "observed collision",
+      }).verdict,
+      "fail",
+      JSON.stringify(attempt),
+    );
+  }
+  for (const overrides of [
+    { kind: "unknown" },
+    { harnessVersion: "other" },
+    { launchTime: null },
+    { launchTime: "unknown" },
+    { launchTime: Date.parse("2026-10-01T02:00:00Z") },
+    { verdict: { verdict: "unknown" } },
+    { identity: null },
+    { identity: { ...IDENTITY, binarySha256: "other" } },
+  ])
+    assert.equal(
+      judgeAttempts([completeAttempt(overrides)]).verdict,
+      "fail",
+      JSON.stringify(overrides),
+    );
+  for (const explanation of [undefined, null, "", "  ", 1, {}, ["collision"]])
+    assert.equal(
+      judgeAttempts([valid], { [valid.file.sha256]: explanation }).verdict,
+      "fail",
+      JSON.stringify(explanation),
+    );
+  assert.equal(judgeAttempts([valid], { ["b2".repeat(32)]: "wrong key" }).verdict, "fail");
+  assert.equal(judgeAttempts([valid, valid]).verdict, "fail", "duplicate attempt");
+  assert.equal(
+    judgeAttempts([completeAttempt({ launchTime: report("certificate").launchTime })]).verdict,
+    "fail",
+    "equal timestamps do not prove ordering",
+  );
+  assert.equal(
+    judgeAttempts([completeAttempt({ launchTime: Date.parse("2026-10-02T04:00:00Z") })], {})
+      .verdict,
+    "pass",
+    "a later failure does not undo a pass",
+  );
+  const second = completeAttempt(
+    {},
+    { path: "/runs/second/verdict.json", sha256: "b2".repeat(32) },
+  );
+  assert.equal(
+    judgeAttempts([valid, second]).verdict,
+    "fail",
+    "each earlier failure needs its own explanation",
+  );
+});
+
+test("a null SHA explanation never certifies an unreadable attempt", () => {
+  const result = judgeAttempts(
+    [{ report: null, file: { path: "/runs/missing/verdict.json", sha256: null } }],
+    { null: "missing bytes" },
+  );
+  assert.equal(result.verdict, "fail");
+  assert.equal(result.certificate, null);
+});

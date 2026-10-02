@@ -751,20 +751,47 @@ export function certificateVerdict({
   }
   // Every attempt is kept; a pass never counts after a failed attempt whose cause is unexplained
   // (coordinator policy, review round 2).
-  const tried = (attempts ?? []).map(({ report, file }) => ({
-    path: file?.path ?? null,
-    sha256: file?.sha256 ?? null,
-    verdict: report?.verdict?.verdict ?? null,
-    launchTime: report?.launchTime,
-    explanation: text(explanations?.[file?.sha256]?.trim?.()) ? explanations[file.sha256] : null,
-  }));
-  for (const attempt of tried)
+  if (!Array.isArray(attempts)) problems.push("the attempt list is unreadable");
+  const seenPaths = new Set(),
+    seenHashes = new Set();
+  const tried = (Array.isArray(attempts) ? attempts : []).map((attempt) => {
+    const report = attempt?.report,
+      file = attempt?.file;
+    const path = file?.path ?? null,
+      sha256 = file?.sha256 ?? null;
+    const verdict = report?.verdict?.verdict ?? null;
+    const launchTime = report?.launchTime;
+    const explanation =
+      typeof explanations?.[sha256] === "string" && explanations[sha256].trim().length > 0
+        ? explanations[sha256]
+        : null;
+    const kindKnown =
+      report?.kind === "certificate" ||
+      report?.kind === "positive" ||
+      (report?.kind === "control" && CONTROL_KINDS.includes(report?.control?.mode)) ||
+      CONTROL_KINDS.includes(report?.kind);
+    if (!text(path) || !/^[0-9a-f]{64}$/.test(sha256 ?? ""))
+      problems.push(`an attempt has no readable file binding: ${path}`);
+    if (seenPaths.has(path) || seenHashes.has(sha256))
+      problems.push(`an attempt is listed twice: ${path}`);
+    seenPaths.add(path);
+    seenHashes.add(sha256);
     if (
-      attempt.verdict !== "pass" &&
-      !(attempt.launchTime >= refusal?.launchTime) &&
-      attempt.explanation === null
+      !kindKnown ||
+      !["pass", "fail", "inconclusive"].includes(verdict) ||
+      !Number.isFinite(launchTime) ||
+      utcDay(launchTime) !== day ||
+      report?.harnessVersion !== refusal?.harnessVersion ||
+      !BUILD_PINS.every(
+        (key) => text(report?.identity?.[key]) && report.identity[key] === identity?.[key],
+      )
     )
-      problems.push(`an earlier attempt failed without an explanation: ${attempt.path}`);
+      problems.push(`an attempt has unreadable or mismatched provenance: ${path}`);
+    if (launchTime === refusal?.launchTime) problems.push(`an attempt's order is unknown: ${path}`);
+    if (verdict !== "pass" && !(launchTime >= refusal?.launchTime) && explanation === null)
+      problems.push(`an earlier attempt failed without an explanation: ${path}`);
+    return { path, sha256, verdict, launchTime, explanation };
+  });
   if (problems.length) return { verdict: "fail", problems, certificate: null };
   const entry = (report, index) => ({
     kind: report.kind,

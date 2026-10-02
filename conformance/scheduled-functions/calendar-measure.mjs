@@ -912,10 +912,15 @@ export async function certify(listPath) {
   const list = JSON.parse(await readFile(listPath, "utf8"));
   const load = async (path) => {
     const bytes = await readFile(path).catch(() => null);
-    return {
-      file: { path, sha256: bytes ? digest(bytes) : null },
-      report: bytes ? JSON.parse(bytes.toString("utf8")) : null,
-    };
+    let report = null;
+    if (bytes) {
+      try {
+        report = JSON.parse(bytes.toString("utf8"));
+      } catch {
+        // Unreadable raw evidence remains unknown even when its digest has an explanation.
+      }
+    }
+    return { file: { path, sha256: bytes ? digest(bytes) : null }, report };
   };
   const loaded = [];
   for (const path of [list.refusal, ...(list.controls ?? [])]) loaded.push(await load(path));

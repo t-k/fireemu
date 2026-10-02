@@ -410,6 +410,25 @@ Client SDKs retry `ABORTED` transactions. One frequently updated document under 
 
 To see how much history a running daemon holds, run `fireemu doctor --connect <control URL>`. Its `history.*` lines report the retained versions and logical bytes against the session and daemon limits, and how many bytes the next compaction would release.
 
+### Storage stored-byte limit
+
+The Storage emulator keeps every object in memory, and by default nothing bounds how much. To cap it, set `storage.maxStoredBytes` (bytes, at least 1). Production has no such limit; it is local to Fireemu:
+
+```json
+{
+  "schemaVersion": 1,
+  "storage": { "maxStoredBytes": 1073741824 }
+}
+```
+
+- Each object counts its bytes once, and a copy counts again. Replacing an object counts only the difference in size.
+- An upload, a resumable upload's final request or a copy that would grow the total past the limit is refused with HTTP 402 and the message `storage.maxStoredBytes limit exceeded` (in the JSON API, with the reason `storageCapacityExceeded`). There is no `Retry-After`. Delete objects to make room. The Firebase client SDKs report a 402 at once as `storage/quota-exceeded` without retrying; the Cloud Storage client libraries do not retry it either.
+- A write that does not grow the total, such as an equal or smaller replacement, always passes, even while the store holds more than the limit (after an import, a restore or a lowered limit).
+- A refused write changes nothing. A resumable upload stays open: its offset does not advance, so you can send the same final chunk again after making room, or cancel the upload.
+- An import (`--import`) and a snapshot restore are not checked against the limit.
+
+`fireemu doctor --connect <control URL>` reports the stored bytes as `objects.bytes` against this limit.
+
 ## Compatibility and limitations
 
 ### Differences from production Firebase

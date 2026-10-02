@@ -24,6 +24,10 @@ suite) needs, and what leaves the other smokes working without attaching a token
   succeed.
 - `storage.mjs`: `firebase-admin` storage (JSON API) and `firebase/storage` (Firebase
   protocol, resumable uploads) with Storage Rules; needs `FIREBASE_STORAGE_EMULATOR_HOST`.
+- `storage-quota.mjs`: the Web Storage SDK against `storage.maxStoredBytes` = 1,024
+  (`fireemu.storage-quota.json`): an upload past the bound must fail at once with
+  `storage/quota-exceeded` (a 402), not after the SDK's 5xx retry loop. Run it with
+  `fireemu exec --config tools/sdk-smoke/fireemu.storage-quota.json --project demo-app --only storage --storage-port 0 --http-port 0 --firestore-port 0 --hub-port 0 --ui-port 0 --logging-port 0 -- node tools/sdk-smoke/storage-quota.mjs`.
 - `storage-targets.mjs`: the real Web Storage SDK uses three explicit bucket instances to
   prove that `.firebaserc` deploy targets select independent allow/deny rules and that an
   unmapped bucket fails closed. Run it with

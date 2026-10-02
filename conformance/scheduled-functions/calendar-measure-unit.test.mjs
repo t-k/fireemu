@@ -630,3 +630,51 @@ test("a control's report carries its helper's identity, binding and observation"
     rulesFired: ["session"],
   });
 });
+
+test("certify reads every report and attempt, digests each file and applies the explanations", async (t) => {
+  const { certify } = await import("./calendar-measure.mjs");
+  const { mkdtemp, rm, writeFile } = await import("node:fs/promises");
+  const { tmpdir } = await import("node:os");
+  const { join } = await import("node:path");
+  const directory = await mkdtemp(join(tmpdir(), "calendar-certify-unit-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const write = async (name, value) => {
+    const path = join(directory, name);
+    await writeFile(path, JSON.stringify(value));
+    return path;
+  };
+  const refusal = await write("refusal.json", { kind: "certificate", launchTime: 2000 });
+  const failed = await write("failed.json", {
+    kind: "certificate",
+    launchTime: 1000,
+    verdict: { verdict: "fail" },
+  });
+  const list = await write("list.json", { refusal, controls: [], attempts: [failed] });
+  const result = await certify(list);
+  assert.ok(
+    result.problems.includes(`an earlier attempt failed without an explanation: ${failed}`),
+    String(result.problems),
+  );
+  const failedSha = sha(
+    JSON.stringify({ kind: "certificate", launchTime: 1000, verdict: { verdict: "fail" } }),
+  );
+  const explained = await write("list2.json", {
+    refusal,
+    controls: [],
+    attempts: [failed],
+    explanations: { [failedSha]: "port collision" },
+  });
+  assert.ok(
+    !(await certify(explained)).problems.some((problem) =>
+      problem.startsWith("an earlier attempt"),
+    ),
+  );
+  // A missing report file is no report.
+  const missing = await write("list3.json", {
+    refusal: join(directory, "absent.json"),
+    controls: [],
+  });
+  assert.ok(
+    (await certify(missing)).problems.includes("the refusal report is not a certificate run"),
+  );
+});

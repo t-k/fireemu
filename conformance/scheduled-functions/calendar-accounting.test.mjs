@@ -1665,6 +1665,7 @@ test("a passing certificate names its pins, root, refusal, reports and limits", 
         sha256: String(index + 2).repeat(64),
       })),
     ],
+    attempts: [],
     limits: CERTIFICATE_LIMITS,
   });
   // A failing certificate is still a record of what was judged, without a certificate body.
@@ -1945,4 +1946,41 @@ test("clause 3 matches the arguments of either private directory", () => {
     }).outcome,
     "clean",
   );
+});
+
+// Coordinator policy (review round 2 addendum): every attempt is kept, and a pass never counts
+// after a failed attempt whose cause has not been explained.
+test("a certificate refuses a pass that follows an unexplained failed attempt", () => {
+  const attempt = (verdict, launchTime, sha256) => ({
+    report: report("certificate", { verdict: { verdict }, launchTime }),
+    file: { path: `/runs/${sha256.slice(0, 2)}/verdict.json`, sha256 },
+  });
+  const earlier = attempt("fail", Date.parse("2026-10-02T02:00:00Z"), "a1".repeat(32));
+  const later = attempt("fail", Date.parse("2026-10-02T04:00:00Z"), "b2".repeat(32));
+  const judge = (attempts, explanations) =>
+    certificateVerdict({
+      refusal: report("certificate"),
+      controls: allControls(),
+      attempts,
+      explanations,
+    });
+  assert.deepEqual(judge([earlier], {}).problems, [
+    `an earlier attempt failed without an explanation: /runs/a1/verdict.json`,
+  ]);
+  const explained = judge([earlier], {
+    ["a1".repeat(32)]: "port collision, Errno 48 (stderr tail)",
+  });
+  assert.equal(explained.verdict, "pass");
+  assert.deepEqual(explained.certificate.attempts, [
+    {
+      path: "/runs/a1/verdict.json",
+      sha256: "a1".repeat(32),
+      verdict: "fail",
+      explanation: "port collision, Errno 48 (stderr tail)",
+    },
+  ]);
+  // A blank explanation explains nothing; a failure after the pass does not undo it.
+  assert.equal(judge([earlier], { ["a1".repeat(32)]: "  " }).verdict, "fail");
+  assert.equal(judge([later], {}).verdict, "pass");
+  assert.deepEqual(judge(undefined, undefined).certificate.attempts, []);
 });

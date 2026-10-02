@@ -910,20 +910,26 @@ export async function measure(planPath) {
 /** Condition (G): the certificate over one refusal report and the control reports. */
 export async function certify(listPath) {
   const list = JSON.parse(await readFile(listPath, "utf8"));
-  const paths = [list.refusal, ...(list.controls ?? [])];
-  const files = [],
-    reports = [];
-  for (const path of paths) {
+  const load = async (path) => {
     const bytes = await readFile(path).catch(() => null);
-    files.push({ path, sha256: bytes ? digest(bytes) : null });
-    reports.push(bytes ? JSON.parse(bytes.toString("utf8")) : null);
-  }
+    return {
+      file: { path, sha256: bytes ? digest(bytes) : null },
+      report: bytes ? JSON.parse(bytes.toString("utf8")) : null,
+    };
+  };
+  const loaded = [];
+  for (const path of [list.refusal, ...(list.controls ?? [])]) loaded.push(await load(path));
+  // Every attempt of the day is listed, with an explanation for each failure (coordinator policy).
+  const attempts = [];
+  for (const path of list.attempts ?? []) attempts.push(await load(path));
   // The stand-in runner of the offline tests is never certified (review round 2, M1).
   const standIn = await readFile(here("testdata/fake-runner.cjs")).catch(() => null);
   return certificateVerdict({
-    refusal: reports[0],
-    controls: reports.slice(1),
-    files,
+    refusal: loaded[0].report,
+    controls: loaded.slice(1).map((entry) => entry.report),
+    files: loaded.map((entry) => entry.file),
     standInRunnerSha256: standIn ? digest(standIn) : undefined,
+    attempts,
+    explanations: list.explanations ?? {},
   });
 }

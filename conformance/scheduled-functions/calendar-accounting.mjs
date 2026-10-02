@@ -691,7 +691,14 @@ const BUILD_PINS = [
  * report with its path and SHA-256 (`files`, in input order) and the limits (review round 2,
  * M1). A report of the stand-in runner is never certified.
  */
-export function certificateVerdict({ refusal, controls, files = [], standInRunnerSha256 }) {
+export function certificateVerdict({
+  refusal,
+  controls,
+  files = [],
+  standInRunnerSha256,
+  attempts = [],
+  explanations = {},
+}) {
   const problems = [];
   if (refusal?.kind !== "certificate") problems.push("the refusal report is not a certificate run");
   if (refusal?.verdict?.verdict !== "pass") problems.push("the refusal run did not pass");
@@ -742,6 +749,22 @@ export function certificateVerdict({ refusal, controls, files = [], standInRunne
         problems.push(`control ${kind} used the stand-in runner`);
     }
   }
+  // Every attempt is kept; a pass never counts after a failed attempt whose cause is unexplained
+  // (coordinator policy, review round 2).
+  const tried = (attempts ?? []).map(({ report, file }) => ({
+    path: file?.path ?? null,
+    sha256: file?.sha256 ?? null,
+    verdict: report?.verdict?.verdict ?? null,
+    launchTime: report?.launchTime,
+    explanation: text(explanations?.[file?.sha256]?.trim?.()) ? explanations[file.sha256] : null,
+  }));
+  for (const attempt of tried)
+    if (
+      attempt.verdict !== "pass" &&
+      !(attempt.launchTime >= refusal?.launchTime) &&
+      attempt.explanation === null
+    )
+      problems.push(`an earlier attempt failed without an explanation: ${attempt.path}`);
   if (problems.length) return { verdict: "fail", problems, certificate: null };
   const entry = (report, index) => ({
     kind: report.kind,
@@ -757,6 +780,12 @@ export function certificateVerdict({ refusal, controls, files = [], standInRunne
       root: { pid: root.pid, started: root.started, sid: root.sid },
       refusal: { exitCode: refusal.refusal.exitCode, line: refusal.refusal.line },
       reports: [refusal, ...list].map(entry),
+      attempts: tried.map(({ path, sha256, verdict, explanation }) => ({
+        path,
+        sha256,
+        verdict,
+        explanation,
+      })),
       limits: CERTIFICATE_LIMITS,
     },
   };

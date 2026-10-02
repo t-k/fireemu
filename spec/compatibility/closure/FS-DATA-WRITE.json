@@ -1279,11 +1279,11 @@
         "finalArtifactSha256": "eec383e576e5de8c63fd934ef55dde6592bb6b69888a7f00bb4129c6a9338593",
         "sourceHead": "dd0c4e6fed38d09646fb2575c2fc11251724e0f4",
         "comparisonPath": "spec/compatibility/closure/evidence/FS-DATA-WRITE-historical-regression.json",
-        "comparisonSha256": "206d27eaf9af6eb119102deeca2724ecda4a4a13dcd423bf78fd73760be29398",
+        "comparisonSha256": "ce85ddadead977c6b743773a5966aff98af5cca4704077c4898287ee4cd659b4",
         "currentComparisonPath": "spec/compatibility/closure/evidence/FS-DATA-WRITE-current-comparison.json",
         "currentComparisonSha256": "36bbc483573dcc3ff5857ddfa8bd79d3a828a389ca3befcf62469ae567c39625",
         "releaseArtifactPath": "spec/compatibility/closure/evidence/FS-DATA-WRITE-release-artifact.json",
-        "releaseArtifactSha256": "6753ebb7bf27afc965a33d0f32a43c2d4ac91b449eb5ccef91c0720e3d57340d"
+        "releaseArtifactSha256": "e2b20fd51df2103a6ba3a53776ed33540e8fbbe850469756567cb2eb9b6fec3b"
       }
     },
     {

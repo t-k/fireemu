@@ -185,6 +185,9 @@ export function claimArguments({ script, database, cwd, service }) {
     "5m",
     "--format",
     "json",
+    // Random candidates: every private registry would otherwise hand out the lowest free port,
+    // and concurrent runs collided on it (review round 2, M4).
+    "--random",
   ];
 }
 
@@ -668,6 +671,8 @@ async function judgeRun({
     lsof,
     // Design v4 section 6: the per-PID query runs only when a recorded identity is alive.
     lsofByPid: alive.length ? "ran" : "skipped: no recorded identity alive",
+    // M4: the daemon's private stderr tail explains an (A) failure; never quoted here.
+    daemonStderrTail: verdict.conditions.A?.ok === true ? null : (inner?.stderrTailPath ?? null),
     // Condition (D): what each settle phase saw end by itself.
     selfEnded: {
       inner: inner?.selfEnded ?? null,

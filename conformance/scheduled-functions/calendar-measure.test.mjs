@@ -180,9 +180,22 @@ test(
   async (t) => {
     const { path } = await planFor(t, { timeZone: REFUSAL_ZONE });
     const report = await measure(path);
+    // Review round 2, M4: a failure names its cause (every condition's reasons, the run's error,
+    // the inventory's reason and the daemon's private stderr tail).
+    let tail = null;
+    if (report.daemonStderrTail)
+      tail = await readFile(report.daemonStderrTail, "utf8").catch(() => null);
+    const details = JSON.stringify({
+      conditions: report.verdict.conditions,
+      error: report.error ?? null,
+      inventory: report.inventory
+        ? { outcome: report.inventory.outcome, reason: report.inventory.reason }
+        : null,
+      stderrTail: tail,
+    });
     for (const [letter, condition] of Object.entries(report.verdict.conditions))
-      assert.equal(condition.outcome, "pass", `${letter}: ${condition.reasons}`);
-    assert.equal(report.verdict.verdict, "pass");
+      assert.equal(condition.outcome, "pass", `${letter}: ${details}`);
+    assert.equal(report.verdict.verdict, "pass", details);
     assert.equal(report.kind, "certificate");
     assert.equal(report.validatorControls.ok, true);
     assert.equal(report.control, null);

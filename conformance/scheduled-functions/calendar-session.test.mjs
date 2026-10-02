@@ -361,6 +361,9 @@ test("the port is claimed by a recorded portctl claim in one explicit private da
     "no wrapped command: the inner supervisor is a direct child",
   );
   assert.equal(args[args.indexOf("--format") + 1], "json");
+  // Review round 2, M4: each private registry would otherwise hand out the lowest free port, and
+  // concurrent runs collided on it.
+  assert.ok(args.includes("--random"));
   assert.throws(() =>
     claimArguments({ script: "portctl.py", database: "/d", cwd: "/c", service: "s" }),
   );

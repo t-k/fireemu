@@ -140,3 +140,11 @@ test("stopping a recorded child never signals one that has exited, and waits for
   await waiting;
   assert.equal(recorder.calls.length, 2);
 });
+
+test("the daemon's stderr tail keeps only the last bytes", async () => {
+  const { stderrTail } = await import("./calendar-run-local.mjs");
+  assert.equal(stderrTail("", "abc", 4), "abc");
+  assert.equal(stderrTail("abc", "def", 4), "cdef");
+  assert.equal(stderrTail("abcd", "0123456789", 4), "6789");
+  assert.equal(stderrTail("", "", 4), "");
+});

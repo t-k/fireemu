@@ -31,6 +31,11 @@ const cleanEnv = () =>
       .map((key) => [key, process.env[key]]),
   );
 
+/** The last `limit` characters of the daemon's stderr, kept privately to explain an (A) failure. */
+export function stderrTail(tail, chunk, limit = 4096) {
+  return (tail + chunk).slice(-limit);
+}
+
 /** The diagnostic lines kept from the daemon: startup and refusal lines, never headers or dumps. */
 export function calendarDiagnostics(text) {
   return text
@@ -142,8 +147,12 @@ async function superviseSession(path) {
     if (diagnostic.length < 262144)
       diagnostic += chunk.toString().slice(0, 262144 - diagnostic.length);
   };
+  let tail = "";
   daemon.stdout?.on("data", collect);
   daemon.stderr?.on("data", collect);
+  daemon.stderr?.on("data", (chunk) => {
+    tail = stderrTail(tail, chunk.toString());
+  });
   // Diagnostics are read once the daemon's pipes close, so a buffered refusal line is not lost.
   const drained = new Promise((resolve) => daemon.once("close", resolve));
   const result = await superviseCalendarProcess({
@@ -179,6 +188,9 @@ async function superviseSession(path) {
     diagnostic.includes(name),
   );
   result.diagnostics = calendarDiagnostics(diagnostic);
+  // A private file in the run's directory, referenced from the report only when (A) fails.
+  result.stderrTailPath = join(prepared.directory, "daemon-stderr-tail.txt");
+  await writeFile(result.stderrTailPath, tail, { mode: 0o600 });
   await privateJson(prepared.supervisorOutputPath, result);
   recorder.close();
   process.off("SIGTERM", stop);

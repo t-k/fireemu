@@ -1060,11 +1060,18 @@ fn js_at_least(iat: Option<&JsonValue>, bound: i64) -> bool {
     }
 }
 
+/// ECMA-262 `WhiteSpace` and `LineTerminator`, used by `StringToNumber`.
+fn js_number_whitespace(c: char) -> bool {
+    matches!(c, '\u{0009}'..='\u{000d}' | '\u{0020}' | '\u{00a0}' | '\u{1680}'
+        | '\u{2000}'..='\u{200a}' | '\u{2028}' | '\u{2029}' | '\u{202f}'
+        | '\u{205f}' | '\u{3000}' | '\u{feff}')
+}
+
 /// JavaScript's `Number(text)` for a string (ECMA-262 `StringToNumber`): surrounding white
 /// space ignored, empty text is 0, `Infinity` with an optional sign, an unsigned `0x`, `0o` or
 /// `0b` integer, or a decimal literal; anything else is NaN (`None`).
 fn js_string_number(text: &str) -> Option<f64> {
-    let text = text.trim_matches(|c: char| c.is_whitespace() || c == '\u{feff}');
+    let text = text.trim_matches(js_number_whitespace);
     if text.is_empty() {
         return Some(0.0);
     }
@@ -1119,6 +1126,11 @@ mod tests {
             ("  ", Some(0.0)),
             (" 12 ", Some(12.0)),
             ("\u{feff}7\n", Some(7.0)),
+            ("\u{85}7", None),
+            ("7\u{85}", None),
+            ("\u{a0}7\u{a0}", Some(7.0)),
+            ("\u{2028}7\u{2029}", Some(7.0)),
+            ("7\u{feff}", Some(7.0)),
             ("+5", Some(5.0)),
             ("-5", Some(-5.0)),
             ("5.", Some(5.0)),
@@ -1147,6 +1159,31 @@ mod tests {
             ("\u{0661}", None),
         ] {
             assert_eq!(js_string_number(text), expected, "{text:?}");
+        }
+    }
+
+    // Node 24.14.0 Number oracle: each listed scalar trims on either side of a number.
+    const NUMBER_WHITESPACE: &[char] = &[
+        '\u{9}', '\u{a}', '\u{b}', '\u{c}', '\u{d}', ' ', '\u{a0}', '\u{1680}', '\u{2000}',
+        '\u{2001}', '\u{2002}', '\u{2003}', '\u{2004}', '\u{2005}', '\u{2006}', '\u{2007}',
+        '\u{2008}', '\u{2009}', '\u{200a}', '\u{2028}', '\u{2029}', '\u{202f}', '\u{205f}',
+        '\u{3000}', '\u{feff}',
+    ];
+
+    proptest::proptest! {
+        #[test]
+        fn generated_numeric_whitespace_matches_node_classes(
+            prefix in proptest::collection::vec(proptest::sample::select(NUMBER_WHITESPACE), 0..8),
+            suffix in proptest::collection::vec(proptest::sample::select(NUMBER_WHITESPACE), 0..8),
+            number in -1_000_000_i32..1_000_000,
+            non_whitespace in proptest::sample::select(&['\u{85}', '\u{180e}', '\u{200b}', '\u{2060}', '\u{fffe}']),
+        ) {
+            let prefix: String = prefix.into_iter().collect();
+            let suffix: String = suffix.into_iter().collect();
+            let text = format!("{prefix}{number}{suffix}");
+            proptest::prop_assert_eq!(js_string_number(&text), Some(f64::from(number)));
+            proptest::prop_assert_eq!(js_string_number(&format!("{non_whitespace}{text}")), None);
+            proptest::prop_assert_eq!(js_string_number(&format!("{text}{non_whitespace}")), None);
         }
     }
 

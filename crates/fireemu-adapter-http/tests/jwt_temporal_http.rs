@@ -777,3 +777,32 @@ fn a_revocation_on_a_rewound_clock_does_not_revoke_tokens_issued_later() {
         }
     }
 }
+
+#[test]
+fn signed_next_line_iat_reports_token_expired_for_password_account() {
+    for profile in [Profile::Emulator, Profile::Strict] {
+        for leading in [false, true] {
+            let (state, signer, original, _) = setup_with(profile, true);
+            let text = if leading {
+                format!("\u{85}{NOW}")
+            } else {
+                format!("{NOW}\u{85}")
+            };
+            let token = hand_made(
+                &original,
+                Some(signer.as_ref()),
+                &[("iat", Some(json!(text)))],
+            );
+            let response = handle(&state, "POST", LOOKUP, &json!({"idToken": token}));
+            assert_eq!(response.status, 400);
+            assert_eq!(
+                response.body["error"]["message"],
+                if profile == Profile::Emulator {
+                    "TOKEN_EXPIRED"
+                } else {
+                    "INVALID_ID_TOKEN"
+                }
+            );
+        }
+    }
+}

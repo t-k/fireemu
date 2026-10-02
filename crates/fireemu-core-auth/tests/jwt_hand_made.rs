@@ -530,3 +530,34 @@ fn each_reason_for_a_valid_since_counts_on_its_own() {
     store.user_mut(&uid).unwrap().tokens_revoked = false;
     assert!(store.reports_valid_since(&uid), "a password alone");
 }
+
+#[test]
+fn signed_string_iat_with_next_line_is_revoked_but_ecmascript_whitespace_is_accepted() {
+    for whitespace in ['\u{85}', '\u{a0}', '\u{feff}', '\u{2028}', '\u{2029}'] {
+        for leading in [false, true] {
+            let (mut store, claims, _) = store_with(Account::Revoked);
+            let text = if leading {
+                format!("{whitespace}{}", NOW - 10)
+            } else {
+                format!("{}{whitespace}", NOW - 10)
+            };
+            let raw = format!("\"{text}\"");
+            let token = token_with(&store, &claims, &[("iat", Some(&raw))]);
+            for (verifier, answer) in answers(&mut store, &token, true) {
+                let expected = if whitespace == '\u{85}' && !verifier.starts_with("firestore") {
+                    Err(JwtError::Revoked)
+                } else {
+                    Ok(())
+                };
+                assert_eq!(answer, expected, "{verifier}: {text:?}");
+            }
+            for (verifier, answer) in answers(&mut store, &token, false) {
+                assert_eq!(
+                    answer,
+                    Err(JwtError::Malformed),
+                    "strict {verifier}: {text:?}"
+                );
+            }
+        }
+    }
+}

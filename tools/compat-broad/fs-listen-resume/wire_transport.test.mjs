@@ -652,3 +652,27 @@ test("generated guarded operations match independent admitted effect sets", asyn
     }
   }
 });
+
+test("two distinct guards cannot own the same session request hook", () => {
+  const h = harness();
+  h.http2.connect("http://127.0.0.1:1");
+  const secondBudget = createWireBudget({ maxRequests: 3, cleanupReserve: 1 });
+  const secondHttp2 = { connect: () => h.session };
+  const secondGlobals = { fetch: () => Promise.resolve("response") };
+  const second = module.installNodeWireGuard({
+    http2: secondHttp2,
+    globals: secondGlobals,
+    budget: secondBudget,
+    phase: () => "observation",
+  });
+  try {
+    assert.throws(() => secondHttp2.connect("http://127.0.0.1:1"), /ownership/);
+    assert.equal(second.snapshot().failures.ownership, 1);
+    assert.equal(secondBudget.snapshot().total, 0);
+    h.session.request();
+    assert.equal(h.budget.snapshot().total, 1);
+  } finally {
+    second.close();
+    h.guard.close();
+  }
+});

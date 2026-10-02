@@ -29,7 +29,7 @@ export const installNodeWireGuard = ({ http2, globals, budget, phase, allowUrl =
   const available = (target, key) => {
     if (owned(target, key)) throw new Error("wire hook ownership refused");
   };
-  // Reserve both top-level hooks before touching either one.
+  // Check both top-level owners before touching either hook.
   available(http2, "connect");
   available(globals, "fetch");
 

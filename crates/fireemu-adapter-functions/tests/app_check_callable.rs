@@ -23,7 +23,9 @@ use fireemu_core_app_check::admission::{AppCheckGate, ServiceAdmission};
 use fireemu_core_app_check::crypto::AppCheckSigner;
 use fireemu_core_app_check::registry::{AppCheckRegistry, AppRegistration, ProjectEpoch};
 use fireemu_core_app_check::verify::BaselineMode;
-use fireemu_core_auth::jwt::encode_unsigned;
+use fireemu_core_auth::jwt::{
+    encode_payload_with, encode_unsigned, IdTokenSigner, TokenAcceptance,
+};
 use fireemu_core_auth::mfa::TotpPolicy;
 use fireemu_core_auth::store::{AuthStore, NewUser};
 use fireemu_core_rules::runtime::RulesetSlot;
@@ -684,6 +686,38 @@ async fn start_with_serve_entry(
     profile: fireemu_adapter_functions::http::FunctionsHttpProfile,
     default_entry: bool,
 ) -> Harness {
+    start_full(
+        trusted,
+        consume,
+        profile,
+        default_entry,
+        TokenAcceptance::Verified,
+    )
+    .await
+}
+
+/// A trusted harness whose callable verifier reads ID tokens with `acceptance` (the daemon gives
+/// the emulator profile `EmulatorMock`) and whose Auth store signs them, so the verified path
+/// decides rather than the unsigned mock fallback.
+async fn start_signed(
+    profile: fireemu_adapter_functions::http::FunctionsHttpProfile,
+    acceptance: TokenAcceptance,
+) -> Harness {
+    let h = start_full(true, "disabled", profile, false, acceptance).await;
+    h.auth
+        .lock()
+        .expect("the store is not poisoned")
+        .set_signer(Arc::new(ReversingSigner));
+    h
+}
+
+async fn start_full(
+    trusted: bool,
+    consume: &str,
+    profile: fireemu_adapter_functions::http::FunctionsHttpProfile,
+    default_entry: bool,
+    acceptance: TokenAcceptance,
+) -> Harness {
     let script = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fake_runner.py");
     let spec = SpawnSpec {
         command: vec!["python3".to_owned(), script.to_owned()],
@@ -723,11 +757,10 @@ async fn start_with_serve_entry(
         SplitMix64::new(3),
         TotpPolicy::default(),
     )));
-    let verifier = Arc::new(RulesEnforcer::new(
-        Arc::new(RulesetSlot::default()),
-        auth.clone(),
-        clock,
-    ));
+    let verifier = Arc::new(
+        RulesEnforcer::new(Arc::new(RulesetSlot::default()), auth.clone(), clock)
+            .with_token_acceptance(acceptance),
+    );
     runtime.set_callable_auth_verifier(verifier.clone());
     if trusted {
         let policy = ServiceAdmission::new(gate.clone(), "functions", BaselineMode::Unenforced)
@@ -2050,4 +2083,112 @@ async fn without_the_trusted_protocol_a_callable_receives_what_it_always_did() {
         vec!["Bearer owner".to_owned()]
     );
     h.stop().await;
+}
+
+/// A deterministic stand-in for the session RSA signer.
+struct ReversingSigner;
+
+impl IdTokenSigner for ReversingSigner {
+    fn alg(&self) -> &'static str {
+        "RS256"
+    }
+    fn kid(&self) -> &'static str {
+        "test"
+    }
+    fn sign(&self, signing_input: &[u8]) -> Vec<u8> {
+        signing_input.iter().rev().copied().collect()
+    }
+    fn verify(&self, signing_input: &[u8], signature: &[u8]) -> bool {
+        self.sign(signing_input) == signature
+    }
+    fn public_jwk_json(&self) -> String {
+        "{}".to_owned()
+    }
+}
+
+/// A hand-made token shape: its name, the claim changes (raw JSON, or `None` to remove the
+/// claim) and whether ledger 787 decided it.
+type HandMadeShape = (
+    &'static str,
+    &'static [(&'static str, Option<&'static str>)],
+    bool,
+);
+
+/// Ledger 787 on callables: a signed ID token in each hand-made shape firebase-tools 15.28.2
+/// accepts reaches the callable as its caller's credential in the emulator profile, and strict
+/// refuses the request with 401 before the handler. An `auth_time` that is present but a
+/// string is never forwarded.
+#[tokio::test]
+async fn a_hand_made_signed_token_follows_the_profile_on_callables() {
+    use fireemu_adapter_functions::http::FunctionsHttpProfile;
+    let shapes: [HandMadeShape; 6] = [
+        (
+            "iat a numeric string",
+            &[("iat", Some("\"1788004860\""))],
+            true,
+        ),
+        ("iat a fraction", &[("iat", Some("1788004860.5"))], true),
+        ("iat missing", &[("iat", None)], true),
+        ("auth_time missing", &[("auth_time", None)], true),
+        ("exp missing", &[("exp", None)], true),
+        (
+            "auth_time a string",
+            &[("auth_time", Some("\"1788004860\""))],
+            false,
+        ),
+    ];
+    for (profile, acceptance) in [
+        (FunctionsHttpProfile::Strict, TokenAcceptance::Verified),
+        (
+            FunctionsHttpProfile::Emulator,
+            TokenAcceptance::EmulatorMock,
+        ),
+    ] {
+        let h = start_signed(profile, acceptance).await;
+        for (index, (shape, changes, decided)) in shapes.iter().enumerate() {
+            let bearer = {
+                let mut store = h.auth.lock().expect("the store is not poisoned");
+                let uid = store
+                    .create_user(
+                        NewUser::email(&format!("hand-made{index}@example.com")),
+                        START,
+                    )
+                    .expect("the user is created");
+                let claims = store
+                    .id_token_claims(&uid, None, START)
+                    .expect("claims for the new user");
+                let mut payload: Value =
+                    serde_json::from_str(&claims.canonical_json()).expect("claims are JSON");
+                for (key, raw) in *changes {
+                    match raw {
+                        Some(raw) => payload[*key] = serde_json::from_str(raw).expect("raw JSON"),
+                        None => {
+                            payload.as_object_mut().expect("an object").remove(*key);
+                        }
+                    }
+                }
+                format!(
+                    "Bearer {}",
+                    encode_payload_with(&payload.to_string(), store.signer())
+                )
+            };
+            let response = h
+                .request("POST", "add", &[("authorization", &bearer)])
+                .await;
+            let label = format!("{profile:?} {shape}");
+            if profile == FunctionsHttpProfile::Strict {
+                assert_eq!(response.status, 401, "{label}");
+                continue;
+            }
+            assert_eq!(response.status, 200, "{label}");
+            let body: Value = serde_json::from_slice(&response.body).expect("the handler's JSON");
+            let forwarded = echoed(&body, "authorization");
+            if *decided {
+                assert_eq!(forwarded, vec![bearer.clone()], "{label}");
+            } else {
+                assert!(forwarded.is_empty(), "{label}: {body}");
+            }
+        }
+        h.stop().await;
+    }
 }

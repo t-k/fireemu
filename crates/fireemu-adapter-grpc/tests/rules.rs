@@ -4406,6 +4406,96 @@ service cloud.firestore {{
     h.handle.abort();
 }
 
+/// A hand-made token shape: its name, the claim changes (raw JSON, or `None` to remove the
+/// claim) and whether ledger 787 decided it.
+type HandMadeShape = (
+    &'static str,
+    &'static [(&'static str, Option<&'static str>)],
+    bool,
+);
+
+/// Ledger 787 on Firestore: a signed (session-RSA) ID token in each hand-made shape firebase-tools
+/// 15.28.2 accepts (a numeric-string or fractional `iat`, no `iat`, no `auth_time`, no `exp`) is
+/// evaluated as its user in the emulator profile (`EmulatorMock`) and not admitted in strict
+/// (`Verified`). An `auth_time` that is present but a string stays refused in both.
+#[tokio::test]
+async fn a_hand_made_signed_token_follows_the_profile_on_firestore() {
+    let shapes: [HandMadeShape; 6] = [
+        (
+            "iat a numeric string",
+            &[("iat", Some("\"1788004860\""))],
+            true,
+        ),
+        ("iat a fraction", &[("iat", Some("1788004860.5"))], true),
+        ("iat missing", &[("iat", None)], true),
+        ("auth_time missing", &[("auth_time", None)], true),
+        ("exp missing", &[("exp", None)], true),
+        (
+            "auth_time a string",
+            &[("auth_time", Some("\"1788004860\""))],
+            false,
+        ),
+    ];
+    for acceptance in [TokenAcceptance::Verified, TokenAcceptance::EmulatorMock] {
+        for (shape, changes, decided) in shapes {
+            let mut h = start_with(acceptance).await;
+            h.rules
+                .replace_source(
+                    "rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /mine/{uid} { allow read: if request.auth != null && request.auth.uid == uid; }
+  }
+}",
+                )
+                .unwrap();
+            let (uid, token) = {
+                let mut store = h.auth.lock().unwrap();
+                store.set_signer(Arc::new(ReversingSigner));
+                let uid = store
+                    .create_user(NewUser::email("hand-made@example.com"), START)
+                    .unwrap();
+                let claims = store.id_token_claims(&uid, None, START).unwrap();
+                let mut payload: serde_json::Value =
+                    serde_json::from_str(&claims.canonical_json()).unwrap();
+                for (key, raw) in changes {
+                    match raw {
+                        Some(raw) => {
+                            payload[*key] = serde_json::from_str(raw).unwrap();
+                        }
+                        None => {
+                            payload.as_object_mut().unwrap().remove(*key);
+                        }
+                    }
+                }
+                (
+                    uid.as_str().to_owned(),
+                    fireemu_core_auth::jwt::encode_payload_with(
+                        &payload.to_string(),
+                        store.signer(),
+                    ),
+                )
+            };
+            let err = h
+                .client
+                .get_document(with_bearer(get(&format!("mine/{uid}")), &token))
+                .await
+                .unwrap_err();
+            let label = format!("{acceptance:?} {shape}: {err}");
+            if acceptance == TokenAcceptance::EmulatorMock && decided {
+                // Allowed by the rule as the token's user; the document does not exist.
+                assert_eq!(err.code(), tonic::Code::NotFound, "{label}");
+            } else if acceptance == TokenAcceptance::Verified {
+                // Not admitted as its user: refused before or by the rule.
+                assert_eq!(err.code(), tonic::Code::PermissionDenied, "{label}");
+            } else {
+                assert_eq!(err.code(), tonic::Code::Unauthenticated, "{label}");
+            }
+            h.handle.abort();
+        }
+    }
+}
+
 /// Ledger 781 on Firestore: a signed (session-RSA) ID token whose `iat` and `auth_time` are in
 /// the future is not admitted as its user in strict (`Verified`), and is evaluated as its user
 /// in the emulator profile (`EmulatorMock`), as the official emulator reads no time claim.

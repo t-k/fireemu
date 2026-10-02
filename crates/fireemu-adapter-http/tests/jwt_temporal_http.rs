@@ -524,10 +524,11 @@ fn a_future_dated_id_token_is_accepted_in_the_emulator_profile_and_refused_in_st
     }
 }
 
-/// Only the future time claims are accepted in the emulator profile: a malformed `iat`, a
-/// missing `auth_time` and an `exp` past Identity Toolkit's 300 s allowance (ledger 22) are
-/// still refused there. Strict refuses the near shapes: `iat` one second ahead, and only
-/// `auth_time` ahead.
+/// Near shapes. Ledger 787 makes the emulator profile accept a string `iat` and a missing
+/// `auth_time` (see the hand-made shape test below); what it leaves undecided stays refused in
+/// both profiles: an `iat` that is neither a number nor a string, an `auth_time` that is
+/// present but not an integer, and an `exp` past Identity Toolkit's 300 s allowance (ledger
+/// 22). Strict refuses the near shapes: `iat` one second ahead, and only `auth_time` ahead.
 #[test]
 fn near_shapes_of_a_future_dated_token_stay_refused_where_they_should() {
     for profile in [Profile::Emulator, Profile::Strict] {
@@ -535,12 +536,20 @@ fn near_shapes_of_a_future_dated_token_stay_refused_where_they_should() {
         let lookup =
             |token: &str| handle(&state, "POST", LOOKUP, &json!({"idToken": token})).status;
         for (key, value) in [
-            ("iat", Some(json!((NOW + 600).to_string()))),
-            ("auth_time", None),
+            ("iat", Some(json!(null))),
+            ("auth_time", Some(json!(NOW.to_string()))),
             ("exp", Some(json!(NOW - 301))),
         ] {
             let bad = revised_token(&original, signer.as_ref(), key, value.clone());
             assert_eq!(lookup(&bad), 400, "{profile:?} {key}={value:?}");
+        }
+        let expected = if profile == Profile::Strict { 400 } else { 200 };
+        for (key, value) in [
+            ("iat", Some(json!((NOW + 600).to_string()))),
+            ("auth_time", None),
+        ] {
+            let decided = revised_token(&original, signer.as_ref(), key, value.clone());
+            assert_eq!(lookup(&decided), expected, "{profile:?} {key}={value:?}");
         }
         let one_ahead = revised_token(&original, signer.as_ref(), "iat", Some(json!(NOW + 1)));
         let auth_ahead = revised_token(
@@ -549,7 +558,6 @@ fn near_shapes_of_a_future_dated_token_stay_refused_where_they_should() {
             "auth_time",
             Some(json!(NOW + 600)),
         );
-        let expected = if profile == Profile::Strict { 400 } else { 200 };
         assert_eq!(
             lookup(&one_ahead),
             expected,
@@ -560,6 +568,151 @@ fn near_shapes_of_a_future_dated_token_stay_refused_where_they_should() {
             expected,
             "{profile:?} only auth_time ahead"
         );
+    }
+}
+
+/// `original` with each `(claim, value or removal)` applied, signed by `signer` when the
+/// session signs its tokens, otherwise unsigned (a client can make such a token by hand).
+fn hand_made(
+    original: &str,
+    signer: Option<&RsaSigner>,
+    changes: &[(&str, Option<Value>)],
+) -> String {
+    let verifier = signer.map(|s| s as &dyn fireemu_core_auth::jwt::IdTokenSigner);
+    let decoded = decode_token(original, verifier).unwrap();
+    let mut payload: Value = serde_json::from_str(&decoded.payload_json).unwrap();
+    let object = payload.as_object_mut().unwrap();
+    for (key, value) in changes {
+        match value {
+            Some(value) => {
+                object.insert((*key).to_owned(), value.clone());
+            }
+            None => {
+                object.remove(*key);
+            }
+        }
+    }
+    let token = encode_payload_with(&payload.to_string(), verifier);
+    assert!(decode_token(&token, verifier).is_ok());
+    token
+}
+
+/// The hand-made shapes of ledger 787 for an account signed up with a password at `NOW` (its
+/// `validSince`): a numeric-string or fractional `iat` not before it, a missing `auth_time`, a
+/// missing `exp`, and all three at once.
+/// Claim changes: each claim and its new value, or `None` to remove it.
+type ClaimChanges = Vec<(&'static str, Option<Value>)>;
+
+fn hand_made_shapes() -> Vec<(&'static str, ClaimChanges)> {
+    vec![
+        (
+            "iat a numeric string",
+            vec![("iat", Some(json!(NOW.to_string())))],
+        ),
+        (
+            "iat a fraction",
+            vec![("iat", Some(serde_json::from_str("1788004860.5").unwrap()))],
+        ),
+        ("auth_time missing", vec![("auth_time", None)]),
+        ("exp missing", vec![("exp", None)]),
+        (
+            "all at once",
+            vec![
+                ("iat", Some(json!(NOW.to_string()))),
+                ("auth_time", None),
+                ("exp", None),
+            ],
+        ),
+    ]
+}
+
+/// Ledger 787: the emulator profile accepts the hand-made ID-token shapes firebase-tools
+/// 15.28.2 accepts on every Identity Toolkit route that verifies an ID token, unsigned and
+/// session-RSA; strict refuses each with `INVALID_ID_TOKEN` before anything else.
+#[test]
+fn each_hand_made_shape_is_accepted_in_the_emulator_profile_and_refused_in_strict_on_every_route() {
+    for profile in [Profile::Emulator, Profile::Strict] {
+        for signed in [false, true] {
+            for (shape, changes) in hand_made_shapes() {
+                let (state, signer, original, _) = setup_with(profile, signed);
+                let token = hand_made(&original, signed.then_some(signer.as_ref()), &changes);
+                for (route, body, succeeds) in id_token_routes(&token) {
+                    let response = if route.contains("createSessionCookie") {
+                        handle_with(&state, "POST", route, &owner(), &body)
+                    } else {
+                        handle(&state, "POST", route, &body)
+                    };
+                    let label = format!(
+                        "{profile:?} signed={signed} {shape} {route}: {}",
+                        response.body
+                    );
+                    let refused = response.body["error"]["message"]
+                        .as_str()
+                        .is_some_and(|m| m.starts_with("INVALID_ID_TOKEN"));
+                    match profile {
+                        Profile::Strict => {
+                            assert_eq!(response.status, 400, "{label}");
+                            assert!(refused, "{label}");
+                        }
+                        Profile::Emulator => {
+                            assert!(!refused, "{label}");
+                            if succeeds {
+                                assert_eq!(response.status, 200, "{label}");
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// A missing `iat` is what firebase-tools' `iat >= Number(user.validSince)` makes of it: an
+/// account with a `validSince` (a password account) answers `TOKEN_EXPIRED`, one without (an
+/// anonymous account) is accepted. Strict refuses both with `INVALID_ID_TOKEN`.
+#[test]
+fn a_token_without_iat_follows_the_accounts_valid_since_in_the_emulator_profile() {
+    for profile in [Profile::Emulator, Profile::Strict] {
+        for signed in [false, true] {
+            let (state, signer, password_token, _) = setup_with(profile, signed);
+            let anonymous = handle(&state, "POST", SIGN_UP, &json!({}));
+            assert_eq!(anonymous.status, 200, "anonymous sign-up");
+            let anonymous_token = anonymous.body["idToken"].as_str().unwrap().to_owned();
+            for (account, original, expected) in [
+                ("password", &password_token, "TOKEN_EXPIRED"),
+                ("anonymous", &anonymous_token, ""),
+            ] {
+                let token = hand_made(
+                    original,
+                    signed.then_some(signer.as_ref()),
+                    &[("iat", None)],
+                );
+                for route in [LOOKUP, UPDATE] {
+                    let response = handle(
+                        &state,
+                        "POST",
+                        route,
+                        &json!({"idToken": token, "displayName": "x"}),
+                    );
+                    let message = response.body["error"]["message"].as_str().unwrap_or("");
+                    let label = format!("{profile:?} signed={signed} {account} {route}");
+                    match (profile, expected) {
+                        (Profile::Strict, _) => {
+                            assert_eq!(response.status, 400, "{label}");
+                            assert!(
+                                message.starts_with("INVALID_ID_TOKEN"),
+                                "{label}: {message}"
+                            );
+                        }
+                        (Profile::Emulator, "") => assert_eq!(response.status, 200, "{label}"),
+                        (Profile::Emulator, expected) => {
+                            assert_eq!(response.status, 400, "{label}");
+                            assert_eq!(message, expected, "{label}");
+                        }
+                    }
+                }
+            }
+        }
     }
 }
 

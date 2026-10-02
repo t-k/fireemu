@@ -10520,14 +10520,9 @@ fn user_json(store: &AuthStore, uid: &LocalId) -> Value {
     // redacted marker production sends a caller without hash-config permission
     // (conformance/auth-production-matrix.json, password/sign-up-and-sign-in#lookup).
     let has_password = store.has_password(uid);
-    let valid_since = (has_password
-        || u.tokens_revoked
-        || u.admin_created
-        || u.custom_auth
-        || u.email_link_created
-        || matches!(&u.provider, fireemu_core_auth::store::Provider::Federated(id)
-            if id.starts_with("oidc.") || id.starts_with("saml.")))
-    .then_some(u.tokens_valid_after);
+    let valid_since = store
+        .reports_valid_since(uid)
+        .then_some(u.tokens_valid_after);
     json!({
         "localId": u.local_id.as_str(),
         "tenantId": store.tenant_id(),

@@ -100,18 +100,24 @@ impl TokenAcceptance {
     }
 }
 
-/// Whether an ID token whose `iat` or `auth_time` is later than the verifier's now is refused
-/// (owner decision ledger 781).
+/// How strictly an ID token's time claims are read: whether an `iat` or `auth_time` later than
+/// the verifier's now is refused (owner decision ledger 781), and whether the hand-made shapes
+/// firebase-tools 15.28.2 accepts are refused (ledger 787).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum FutureClaims {
-    /// The `strict` profile. Inferred, not recorded: production refused a custom token with a
-    /// future `iat` (`INVALID_CUSTOM_TOKEN`), and an ID token with one cannot be produced
-    /// there; the Firebase ID-token contract requires both claims to be in the past.
+    /// The `strict` profile. `iat`, `auth_time` and `exp` are present integers, and `iat` and
+    /// `auth_time` are not in the future. Inferred, not recorded: production refused a custom
+    /// token with a future `iat` (`INVALID_CUSTOM_TOKEN`), and an ID token with one cannot be
+    /// produced there; the Firebase ID-token contract requires both claims to be in the past.
     #[default]
     Refuse,
-    /// The `emulator` profile: firebase-tools 15.28.2 reads no time claim of an ID token
-    /// (`parseIdToken`, `lib/emulator/auth/operations.js:1715-1731`). The claims must still be
-    /// present integers, and `exp` with its allowance still applies (ledger 22).
+    /// The `emulator` profile, as firebase-tools 15.28.2 reads an ID token (`parseIdToken`,
+    /// `lib/emulator/auth/operations.js:1715-1731`): it never reads `auth_time` or `exp`, and
+    /// reads `iat` only in `iat >= Number(user.validSince)`. So a future `iat` or `auth_time` is
+    /// accepted (ledger 781), and so are a missing, numeric-string or fractional `iat`, a
+    /// missing `auth_time` and a missing `exp` (ledger 787). An `exp` that is present is still
+    /// an integer whose allowance applies (ledger 22), a present `auth_time` an integer, and a
+    /// present `iat` a number or a string; signatures are still verified (ledger 713).
     Accept,
 }
 
@@ -796,7 +802,26 @@ fn verify_id_token_with(
     if user.disabled {
         return Err(JwtError::UserDisabled);
     }
-    if LogicalInstant::from_unix_seconds(auth_time) < user.tokens_valid_after {
+    let revoked = match (
+        auth_time,
+        decoded.payload.get("iat").and_then(JsonValue::as_i64),
+    ) {
+        (Some(auth_time), Some(_)) => {
+            LogicalInstant::from_unix_seconds(auth_time) < user.tokens_valid_after
+        }
+        // Only the emulator profile gets here (strict refused the shape already): without an
+        // integer `iat` and `auth_time`, firebase-tools' own check decides,
+        // `!user.validSince || iat >= Number(user.validSince)` (ledger 787).
+        _ => {
+            store.reports_valid_since(&user.local_id)
+                && !js_at_least(
+                    decoded.payload.get("iat"),
+                    i64::try_from(user.tokens_valid_after.as_nanos().div_euclid(1_000_000_000))
+                        .unwrap_or(i64::MAX),
+                )
+        }
+    };
+    if revoked {
         return Err(JwtError::Revoked);
     }
     let second_factor = decoded
@@ -961,41 +986,196 @@ fn verify_token_claims(
             return Err(JwtError::WrongSessionEpoch { expected, actual });
         }
     }
-    let exp = decoded.exp().ok_or(JwtError::Malformed)?;
     let now_secs = i64::try_from(now.as_nanos().div_euclid(1_000_000_000)).unwrap_or(i64::MAX);
-    if now_secs >= exp.saturating_add(leeway_seconds) {
-        return Err(JwtError::Expired);
+    // firebase-tools never reads `exp`: the emulator profile accepts a token without one
+    // (ledger 787). A present `exp` is an integer whose allowance applies in both (ledger 22).
+    if future == FutureClaims::Refuse || decoded.payload.get("exp").is_some() {
+        let exp = decoded.exp().ok_or(JwtError::Malformed)?;
+        if now_secs >= exp.saturating_add(leeway_seconds) {
+            return Err(JwtError::Expired);
+        }
     }
-    // Firebase's ID-token contract requires both iat and auth_time not to be in
-    // the future (strict; the emulator profile accepts them, ledger 781). Claims use
-    // whole seconds on this store's logical clock: a token issued in the current
-    // second must remain immediately usable. Either way `iat` must be an integer.
-    let issued_at = decoded
-        .payload
-        .get("iat")
-        .and_then(JsonValue::as_i64)
-        .ok_or(JwtError::Malformed)?;
-    if future == FutureClaims::Refuse && issued_at > now_secs {
-        return Err(JwtError::Malformed);
+    let issued_at = decoded.payload.get("iat");
+    match future {
+        // Firebase's ID-token contract requires an integer iat that is not in the future.
+        // Claims use whole seconds on this store's logical clock: a token issued in the
+        // current second must remain immediately usable.
+        FutureClaims::Refuse => {
+            let issued_at = issued_at
+                .and_then(JsonValue::as_i64)
+                .ok_or(JwtError::Malformed)?;
+            if issued_at > now_secs {
+                return Err(JwtError::Malformed);
+            }
+        }
+        // The emulator profile reads `iat` as firebase-tools does, only as a number to compare
+        // (ledgers 781 and 787): absent, any number or any string. Other JSON types were not
+        // decided and stay refused.
+        FutureClaims::Accept => {
+            if !matches!(
+                issued_at,
+                None | Some(JsonValue::Int(_) | JsonValue::Float(_) | JsonValue::String(_))
+            ) {
+                return Err(JwtError::Malformed);
+            }
+        }
     }
     decoded.sub().ok_or(JwtError::Malformed)?;
     Ok(decoded)
 }
 
-/// `auth_time` must be present and, unless `future` accepts it, not in the future.
+/// `auth_time` is an integer and, unless `future` accepts it, present and not in the future.
+/// The emulator profile accepts a token without one (ledger 787): `None`.
 fn check_auth_time(
     decoded: &DecodedToken,
     now: LogicalInstant,
     future: FutureClaims,
-) -> Result<i64, JwtError> {
+) -> Result<Option<i64>, JwtError> {
     let now_secs = i64::try_from(now.as_nanos().div_euclid(1_000_000_000)).unwrap_or(i64::MAX);
-    let auth_time = decoded
-        .payload
-        .get("auth_time")
+    let value = decoded.payload.get("auth_time");
+    if value.is_none() && future == FutureClaims::Accept {
+        return Ok(None);
+    }
+    let auth_time = value
         .and_then(JsonValue::as_i64)
         .ok_or(JwtError::Malformed)?;
     if future == FutureClaims::Refuse && auth_time > now_secs {
         return Err(JwtError::Malformed);
     }
-    Ok(auth_time)
+    Ok(Some(auth_time))
+}
+
+/// firebase-tools' `iat >= Number(user.validSince)` for a JSON `iat` and a whole-second bound:
+/// a number compares as itself, a string as JavaScript's `Number` reads it, and anything else
+/// (including a missing claim) is NaN, which is never at least the bound.
+fn js_at_least(iat: Option<&JsonValue>, bound: i64) -> bool {
+    // A seconds count: exact in an f64 for every instant this clock can hold.
+    #[allow(clippy::cast_precision_loss)]
+    let bound_number = bound as f64;
+    match iat {
+        Some(JsonValue::Int(value)) => *value >= bound,
+        Some(JsonValue::Float(value)) => *value >= bound_number,
+        Some(JsonValue::String(text)) => js_string_number(text).is_some_and(|n| n >= bound_number),
+        _ => false,
+    }
+}
+
+/// JavaScript's `Number(text)` for a string (ECMA-262 `StringToNumber`): surrounding white
+/// space ignored, empty text is 0, `Infinity` with an optional sign, an unsigned `0x`, `0o` or
+/// `0b` integer, or a decimal literal; anything else is NaN (`None`).
+fn js_string_number(text: &str) -> Option<f64> {
+    let text = text.trim_matches(|c: char| c.is_whitespace() || c == '\u{feff}');
+    if text.is_empty() {
+        return Some(0.0);
+    }
+    for (prefix, radix) in [
+        ("0x", 16),
+        ("0X", 16),
+        ("0o", 8),
+        ("0O", 8),
+        ("0b", 2),
+        ("0B", 2),
+    ] {
+        if let Some(digits) = text.strip_prefix(prefix) {
+            if digits.is_empty() {
+                return None;
+            }
+            return digits.chars().try_fold(0.0_f64, |total, c| {
+                c.to_digit(radix)
+                    .map(|digit| total * f64::from(radix) + f64::from(digit))
+            });
+        }
+    }
+    let unsigned = text.strip_prefix(['+', '-']).unwrap_or(text);
+    if unsigned == "Infinity" {
+        return Some(if text.starts_with('-') {
+            f64::NEG_INFINITY
+        } else {
+            f64::INFINITY
+        });
+    }
+    let (mantissa, exponent) = match unsigned.find(['e', 'E']) {
+        Some(at) => (&unsigned[..at], Some(&unsigned[at + 1..])),
+        None => (unsigned, None),
+    };
+    let (whole, fraction) = mantissa.split_once('.').unwrap_or((mantissa, ""));
+    let digits = |part: &str| part.chars().all(|c| c.is_ascii_digit());
+    let mantissa_ok =
+        digits(whole) && digits(fraction) && !(whole.is_empty() && fraction.is_empty());
+    let exponent_ok = exponent.is_none_or(|e| {
+        let e = e.strip_prefix(['+', '-']).unwrap_or(e);
+        !e.is_empty() && digits(e)
+    });
+    if mantissa_ok && exponent_ok {
+        text.parse().ok()
+    } else {
+        None
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{js_at_least, js_string_number};
+    use fireemu_core_types::json::JsonValue;
+
+    /// The values JavaScript's `Number` gives these strings (node 24: `Number("...")`).
+    #[test]
+    fn js_string_number_reads_strings_as_javascript_does() {
+        for (text, expected) in [
+            ("", Some(0.0)),
+            ("  ", Some(0.0)),
+            (" 12 ", Some(12.0)),
+            ("\u{feff}7\n", Some(7.0)),
+            ("+5", Some(5.0)),
+            ("-5", Some(-5.0)),
+            ("5.", Some(5.0)),
+            (".5", Some(0.5)),
+            ("1e3", Some(1000.0)),
+            ("1E-1", Some(0.1)),
+            ("0x10", Some(16.0)),
+            ("0XfF", Some(255.0)),
+            ("0o17", Some(15.0)),
+            ("0b101", Some(5.0)),
+            ("Infinity", Some(f64::INFINITY)),
+            ("+Infinity", Some(f64::INFINITY)),
+            ("-Infinity", Some(f64::NEG_INFINITY)),
+            ("0x", None),
+            ("0b2", None),
+            ("-0x10", None),
+            ("inf", None),
+            ("NaN", None),
+            ("infinity", None),
+            ("1e", None),
+            ("1e+", None),
+            (".", None),
+            ("+-1", None),
+            ("1.2.3", None),
+            ("12abc", None),
+            ("\u{0661}", None),
+        ] {
+            assert_eq!(js_string_number(text), expected, "{text:?}");
+        }
+    }
+
+    #[test]
+    fn js_at_least_compares_numbers_and_strings_and_nothing_else() {
+        let at = |value: JsonValue, bound| js_at_least(Some(&value), bound);
+        assert!(at(JsonValue::Int(10), 10));
+        assert!(!at(JsonValue::Int(9), 10));
+        assert!(at(JsonValue::Float(10.0), 10));
+        assert!(!at(JsonValue::Float(9.5), 10));
+        assert!(at(JsonValue::String("10".into()), 10));
+        assert!(!at(JsonValue::String("9".into()), 10));
+        assert!(at(JsonValue::String(String::new()), 0), "Number(\"\") is 0");
+        assert!(!at(JsonValue::String("x".into()), i64::MIN), "NaN is never at least");
+        for other in [
+            JsonValue::Null,
+            JsonValue::Bool(true),
+            JsonValue::Array(vec![]),
+            JsonValue::Object(std::collections::BTreeMap::new()),
+        ] {
+            assert!(!at(other, i64::MIN));
+        }
+        assert!(!js_at_least(None, i64::MIN));
+    }
 }

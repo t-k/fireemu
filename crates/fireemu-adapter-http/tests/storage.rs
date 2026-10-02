@@ -6230,6 +6230,111 @@ impl fireemu_core_auth::jwt::IdTokenSigner for ReversingSigner {
     }
 }
 
+/// A hand-made token shape: its name, the claim changes (raw JSON, or `None` to remove the
+/// claim) and whether ledger 787 decided it.
+type HandMadeShape = (
+    &'static str,
+    &'static [(&'static str, Option<&'static str>)],
+    bool,
+);
+
+/// Ledger 787 on Storage: a signed (session-RSA) ID token in each hand-made shape firebase-tools
+/// 15.28.2 accepts is evaluated as its user in the emulator profile (`EmulatorMock`) and refused
+/// with 401 in strict (`Verified`). An `auth_time` that is present but a string stays refused
+/// in both.
+#[test]
+fn a_hand_made_signed_token_follows_the_profile_on_storage() {
+    let shapes: [HandMadeShape; 6] = [
+        (
+            "iat a numeric string",
+            &[("iat", Some("\"1788004860\""))],
+            true,
+        ),
+        ("iat a fraction", &[("iat", Some("1788004860.5"))], true),
+        ("iat missing", &[("iat", None)], true),
+        ("auth_time missing", &[("auth_time", None)], true),
+        ("exp missing", &[("exp", None)], true),
+        (
+            "auth_time a string",
+            &[("auth_time", Some("\"1788004860\""))],
+            false,
+        ),
+    ];
+    for acceptance in [TokenAcceptance::Verified, TokenAcceptance::EmulatorMock] {
+        for (shape, changes, decided) in shapes {
+            let s = state_with(
+                Some(
+                    "rules_version = '2';
+service firebase.storage {
+  match /b/{bucket}/o {
+    match /users/{uid}/{file=**} {
+      allow write: if request.auth != null && request.auth.uid == uid;
+    }
+  }
+}",
+                ),
+                acceptance,
+            );
+            let (uid, token) = {
+                let store = s.auth.default_store();
+                let mut store = store.lock().unwrap();
+                store.set_signer(Arc::new(ReversingSigner));
+                let uid = store
+                    .create_user(NewUser::email("hand-made@example.com"), START)
+                    .unwrap();
+                let claims = store.id_token_claims(&uid, None, START).unwrap();
+                let mut payload: Value = serde_json::from_str(&claims.canonical_json()).unwrap();
+                for (key, raw) in changes {
+                    match raw {
+                        Some(raw) => {
+                            payload[*key] = serde_json::from_str(raw).unwrap();
+                        }
+                        None => {
+                            payload.as_object_mut().unwrap().remove(*key);
+                        }
+                    }
+                }
+                (
+                    uid.as_str().to_owned(),
+                    fireemu_core_auth::jwt::encode_payload_with(
+                        &payload.to_string(),
+                        store.signer(),
+                    ),
+                )
+            };
+            let firebase_auth = format!("Firebase {token}");
+            let (ct, body) =
+                multipart(&json!({"contentType": "text/plain"}), "text/plain", b"mine");
+            let own =
+                format!("/v0/b/{BUCKET}/o?name=users%2F{uid}%2Fnote.txt&uploadType=multipart");
+            let r = handle(
+                &s,
+                req(
+                    "POST",
+                    &own,
+                    &[
+                        ("authorization", &firebase_auth),
+                        ("content-type", &ct),
+                        ("x-goog-upload-protocol", "multipart"),
+                    ],
+                    &body,
+                ),
+            );
+            let expected = if acceptance == TokenAcceptance::EmulatorMock && decided {
+                200
+            } else {
+                401
+            };
+            assert_eq!(
+                r.status,
+                expected,
+                "{acceptance:?} {shape}: {}",
+                String::from_utf8_lossy(&r.body)
+            );
+        }
+    }
+}
+
 /// Ledger 781 on Storage: a signed (session-RSA) ID token whose `iat` and `auth_time` are in
 /// the future is not admitted as a user in strict (`Verified`), and is evaluated as its user in
 /// the emulator profile (`EmulatorMock`), as the official emulator reads no time claim.

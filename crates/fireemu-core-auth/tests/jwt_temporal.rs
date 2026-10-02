@@ -311,7 +311,8 @@ fn very_large_time_claims_do_not_require_duration_arithmetic() {
 
 /// Ledger 781: a store set to the emulator profile's policy accepts future `iat` and
 /// `auth_time` on the Identity Toolkit and Firestore verifiers; a new store refuses them
-/// (strict is the default). The claims must still be integers and `exp` still applies.
+/// (strict is the default). A present `exp` still applies, and the shapes ledger 787 leaves
+/// undecided stay refused.
 #[test]
 fn the_store_policy_decides_future_claims_and_strict_is_the_default() {
     let (mut store, mut claims, _) = fixture();
@@ -331,7 +332,9 @@ fn the_store_policy_decides_future_claims_and_strict_is_the_default() {
     store.set_future_id_token_claims(FutureClaims::Accept);
     assert!(verify_id_token(&future, &store, at(NOW)).is_ok());
     assert!(verify_firestore_token(&future, &store, at(NOW)).is_ok());
-    for (key, raw) in [("iat", Some("\"1788005460\"")), ("auth_time", None)] {
+    // Ledger 787 accepts a string `iat` and a missing `auth_time` too (jwt_hand_made.rs); the
+    // undecided shapes stay refused.
+    for (key, raw) in [("iat", Some("null")), ("auth_time", Some("\"1788005460\""))] {
         let bad = with_json_claim(&claims, key, raw);
         assert_eq!(
             verify_id_token(&bad, &store, at(NOW)),

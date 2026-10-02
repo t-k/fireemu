@@ -399,3 +399,52 @@ fn history_over_limit_names_the_databases_a_restore_left_above_a_limit() {
     assert!(usage.total_bytes > limits.max_bytes, "{usage:?}");
     assert_eq!(usage.versions, 24);
 }
+
+/// Exactly at a limit is not above it; one past it is, for the byte and the version limit
+/// alike, and either one alone is enough.
+#[test]
+fn history_over_limit_reports_only_a_limit_that_is_exceeded() {
+    let (source, clock) = backend();
+    for round in 0..3 {
+        commit(&source, &format!("doc-{round}"), "payload");
+        advance(&clock, 1);
+    }
+    let scope = fireemu_core_session::tenancy::Scope::AllExcept(std::collections::BTreeSet::new());
+    let over = |limits: HistoryLimits| {
+        let (target, _clock) = backend();
+        let target = target.with_history_limits(limits);
+        target
+            .restore_databases(source.snapshot_databases())
+            .unwrap();
+        target.history_over_limit(&scope)
+    };
+    let reported = |limits: HistoryLimits| over(limits).len();
+    // The usage the restored database holds, read through a limit it is certainly above.
+    let usage = over(HistoryLimits {
+        max_bytes: 0,
+        max_versions: 0,
+    })[0]
+        .1;
+    assert_eq!(usage.versions, 3);
+    let at = HistoryLimits {
+        max_bytes: usage.total_bytes,
+        max_versions: usage.versions,
+    };
+    assert_eq!(reported(at), 0, "exactly at both limits");
+    assert_eq!(
+        reported(HistoryLimits {
+            max_bytes: usage.total_bytes - 1,
+            ..at
+        }),
+        1,
+        "one byte past"
+    );
+    assert_eq!(
+        reported(HistoryLimits {
+            max_versions: usage.versions - 1,
+            ..at
+        }),
+        1,
+        "one version past"
+    );
+}

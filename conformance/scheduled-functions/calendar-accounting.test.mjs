@@ -2113,3 +2113,82 @@ test("a null SHA explanation never certifies an unreadable attempt", () => {
   assert.equal(result.verdict, "fail");
   assert.equal(result.certificate, null);
 });
+
+test("attempt provenance tables distinguish kinds, statuses and each independent binding", () => {
+  const modes = ["positive", "orphan", "escaper", "listener", "leftover"];
+  for (const kind of ["certificate", "positive", "control", ...modes]) {
+    const overrides = { kind, control: { mode: kind === "control" ? "escaper" : kind } };
+    assert.equal(judgeAttempts([completeAttempt(overrides)]).verdict, "pass", kind);
+  }
+  for (const overrides of [
+    { kind: "" },
+    { kind: "unknown", control: { mode: "escaper" } },
+    { kind: "control", control: { mode: "unknown" } },
+  ])
+    assert.equal(
+      judgeAttempts([completeAttempt(overrides)]).verdict,
+      "fail",
+      JSON.stringify(overrides),
+    );
+  for (const verdict of ["pass", "fail", "inconclusive"])
+    assert.equal(
+      judgeAttempts([completeAttempt({ verdict: { verdict } })]).verdict,
+      "pass",
+      verdict,
+    );
+  assert.equal(
+    judgeAttempts([completeAttempt({ verdict: { verdict: "pass" } })], {}).verdict,
+    "pass",
+  );
+  const valid = completeAttempt();
+  assert.equal(judgeAttempts([valid], { [valid.file.sha256]: "x" }).verdict, "pass");
+  for (const attempts of [null, {}, "unknown", 1])
+    assert.deepEqual(judgeAttempts(attempts).problems, ["the attempt list is unreadable"]);
+  for (const key of [
+    "sourceCommit",
+    "binarySha256",
+    "runnerSha256",
+    "portctlSha256",
+    "harnessVersion",
+  ])
+    for (const value of [undefined, null, "", "other"])
+      assert.equal(
+        judgeAttempts([completeAttempt({ identity: { ...IDENTITY, [key]: value } })]).verdict,
+        "fail",
+        key,
+      );
+  for (const file of [
+    { path: valid.file.path, sha256: "b2".repeat(32) },
+    { path: "/runs/other/verdict.json", sha256: valid.file.sha256 },
+  ]) {
+    const duplicate = { ...valid, file };
+    const result = judgeAttempts([valid, duplicate], {
+      [valid.file.sha256]: "x",
+      [file.sha256]: "y",
+    });
+    assert.deepEqual(result.problems, [`an attempt is listed twice: ${file.path}`]);
+  }
+  const equal = completeAttempt({ launchTime: report("certificate").launchTime });
+  assert.deepEqual(judgeAttempts([equal], {}).problems, [
+    "an attempt's order is unknown: /runs/earlier/verdict.json",
+  ]);
+  for (const value of [undefined, null, false, 1, "x"])
+    assert.ok(
+      certificateVerdict({
+        refusal: report("certificate", { identity: value }),
+        controls: allControls(),
+      }).problems.includes("the refusal run names no build"),
+    );
+});
+
+test("a timestamp outside the representable Date range withholds a certificate", () => {
+  for (const launchTime of [1e20, -1e20, Number.MAX_VALUE, NaN, Infinity, Symbol("time"), 1n]) {
+    const attemptResult = judgeAttempts([completeAttempt({ launchTime })]);
+    assert.equal(attemptResult.verdict, "fail");
+    const refusalResult = certificateVerdict({
+      refusal: report("certificate", { launchTime }),
+      controls: allControls(),
+    });
+    assert.equal(refusalResult.verdict, "fail");
+  }
+});

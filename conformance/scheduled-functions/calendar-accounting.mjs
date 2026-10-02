@@ -652,7 +652,11 @@ export function validatorControls(files, validate = validateRecords) {
 }
 
 const CONTROL_KINDS = ["positive", "orphan", "escaper", "listener", "leftover"];
-const utcDay = (time) => (Number.isFinite(time) ? new Date(time).toISOString().slice(0, 10) : null);
+const utcDay = (time) => {
+  if (!Number.isFinite(time)) return null;
+  const date = new Date(time);
+  return Number.isFinite(date.getTime()) ? date.toISOString().slice(0, 10) : null;
+};
 
 /**
  * The limits every certificate quotes word for word (condition text, ledger 786: "Limits that

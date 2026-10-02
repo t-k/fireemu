@@ -847,4 +847,24 @@ test("certify binds a complete certificate to each exact loaded byte sequence", 
   assert.equal((await certify(listPath)).verdict, "fail");
   await writeFile(listPath, JSON.stringify({ ...list, attempts: [null] }));
   assert.equal((await certify(listPath)).verdict, "fail");
+  // These are synthetic unit records, never an actual pinned-build measurement.
+  const { readFile } = await import("node:fs/promises");
+  const standInSha = sha(await readFile(new URL("./testdata/fake-runner.cjs", import.meta.url)));
+  for (const [index, kind] of [
+    "certificate",
+    "positive",
+    "orphan",
+    "escaper",
+    "listener",
+    "leftover",
+  ].entries()) {
+    const record = loaderReport(kind);
+    record.identity.runnerSha256 = standInSha;
+    record.pins.runnerSha256 = standInSha;
+    await writeFile(files[index].path, JSON.stringify(record));
+  }
+  await writeFile(listPath, JSON.stringify({ ...list, attempts: [] }));
+  const standIn = await certify(listPath);
+  assert.equal(standIn.verdict, "fail");
+  assert.ok(standIn.problems.includes("the refusal run used the stand-in runner"));
 });

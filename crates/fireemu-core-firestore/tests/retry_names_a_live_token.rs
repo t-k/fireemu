@@ -58,9 +58,9 @@ fn value(
         .and_then(|document| document.fields.get("v").cloned())
 }
 
-fn contended<T: std::fmt::Debug>(result: Result<T, FirestoreError>) {
+fn contended<T: std::fmt::Debug>(result: &Result<T, FirestoreError>) {
     assert!(
-        matches!(&result, Err(FirestoreError::Aborted(_))),
+        matches!(result, Err(FirestoreError::Aborted(_))),
         "a lock timeout: {result:?}"
     );
 }
@@ -80,13 +80,13 @@ fn the_named_live_token_still_reads_and_holds_its_read_lock_after_a_retry() {
         .unwrap()
         .is_none());
     // its read lock holds against an outside write and against the retry token's own write
-    contended(state.commit(&[set("live/d", 1)], None, t(5)));
+    contended(&state.commit(&[set("live/d", 1)], None, t(5)));
     state.touch_transaction(&retry, t(6)).unwrap();
     assert_eq!(value(&mut state, &retry), Some(Value::Integer(7)));
-    contended(state.commit(&[set("live/d", 5)], Some(&retry), t(7)));
+    contended(&state.commit(&[set("live/d", 5)], Some(&retry), t(7)));
     // the Rollback of the named token releases its lock; the retry token read the document too, so its own lock holds until it rolls back
     state.rollback(&named).unwrap();
-    contended(state.commit(&[set("live/d", 1)], None, t(8)));
+    contended(&state.commit(&[set("live/d", 1)], None, t(8)));
     state.rollback(&retry).unwrap();
     state.commit(&[set("live/d", 1)], None, t(9)).unwrap();
 }

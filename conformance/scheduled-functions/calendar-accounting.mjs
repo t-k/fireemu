@@ -765,6 +765,8 @@ export function certificateVerdict({
       sha256 = file?.sha256 ?? null;
     const verdict = report?.verdict?.verdict ?? null;
     const launchTime = report?.launchTime;
+    const attemptDay = utcDay(launchTime);
+    const orderKnown = attemptDay !== null && day !== null;
     const explanation =
       typeof explanations?.[sha256] === "string" && explanations[sha256].trim().length > 0
         ? explanations[sha256]
@@ -783,16 +785,22 @@ export function certificateVerdict({
     if (
       !kindKnown ||
       !["pass", "fail", "inconclusive"].includes(verdict) ||
-      !Number.isFinite(launchTime) ||
-      utcDay(launchTime) !== day ||
+      attemptDay === null ||
+      attemptDay !== day ||
       report?.harnessVersion !== refusal?.harnessVersion ||
       !BUILD_PINS.every(
         (key) => text(report?.identity?.[key]) && report.identity[key] === identity?.[key],
       )
     )
       problems.push(`an attempt has unreadable or mismatched provenance: ${path}`);
-    if (launchTime === refusal?.launchTime) problems.push(`an attempt's order is unknown: ${path}`);
-    if (verdict !== "pass" && !(launchTime >= refusal?.launchTime) && explanation === null)
+    if (orderKnown && launchTime === refusal?.launchTime)
+      problems.push(`an attempt's order is unknown: ${path}`);
+    if (
+      orderKnown &&
+      verdict !== "pass" &&
+      !(launchTime >= refusal?.launchTime) &&
+      explanation === null
+    )
       problems.push(`an earlier attempt failed without an explanation: ${path}`);
     return { path, sha256, verdict, launchTime, explanation };
   });

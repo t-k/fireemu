@@ -2182,13 +2182,30 @@ test("attempt provenance tables distinguish kinds, statuses and each independent
 });
 
 test("a timestamp outside the representable Date range withholds a certificate", () => {
-  for (const launchTime of [1e20, -1e20, Number.MAX_VALUE, NaN, Infinity, Symbol("time"), 1n]) {
-    const attemptResult = judgeAttempts([completeAttempt({ launchTime })]);
-    assert.equal(attemptResult.verdict, "fail");
-    const refusalResult = certificateVerdict({
-      refusal: report("certificate", { launchTime }),
-      controls: allControls(),
-    });
-    assert.equal(refusalResult.verdict, "fail");
+  for (const launchTime of [
+    1e20,
+    -1e20,
+    Number.MAX_VALUE,
+    NaN,
+    Infinity,
+    Symbol("time"),
+    1n,
+    undefined,
+    null,
+    "unknown",
+  ]) {
+    for (const explanations of [{}, { ["a1".repeat(32)]: "observed collision" }]) {
+      const attemptResult = judgeAttempts([completeAttempt({ launchTime })], explanations);
+      assert.equal(attemptResult.verdict, "fail");
+      assert.equal(attemptResult.certificate, null);
+      const refusalResult = certificateVerdict({
+        refusal: report("certificate", { launchTime }),
+        controls: allControls(),
+        attempts: [completeAttempt()],
+        explanations,
+      });
+      assert.equal(refusalResult.verdict, "fail");
+      assert.equal(refusalResult.certificate, null);
+    }
   }
 });

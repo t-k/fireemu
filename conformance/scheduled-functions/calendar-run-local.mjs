@@ -36,6 +36,21 @@ export function stderrTail(tail, chunk, limit = 4096) {
   return (tail + chunk).slice(-limit);
 }
 
+/**
+ * Notes the injected helper's first sighting and whether the tracker acquired it as itself (its
+ * PID and the start time of that first sighting), design v4 F2 and review S5.
+ */
+export function noteSighting(injected, rows, owned, afterMs) {
+  if (!Number.isSafeInteger(injected.pid)) return injected;
+  const row = rows.find((value) => value.pid === injected.pid);
+  if (row && !injected.firstSighting)
+    injected.firstSighting = { afterMs, ppid: row.ppid, pgid: row.pgid, started: row.started };
+  injected.acquired ||= owned.some(
+    (value) => value.pid === injected.pid && value.started === injected.firstSighting?.started,
+  );
+  return injected;
+}
+
 /** The diagnostic lines kept from the daemon: startup and refusal lines, never headers or dumps. */
 export function calendarDiagnostics(text) {
   return text
@@ -133,15 +148,7 @@ async function superviseSession(path) {
         return;
       }
     }
-    const row = rows.find((value) => value.pid === injected.pid);
-    if (row && !injected.firstSighting)
-      injected.firstSighting = {
-        afterMs: Math.round(performance.now() - started),
-        ppid: row.ppid,
-        pgid: row.pgid,
-        started: row.started,
-      };
-    injected.acquired ||= owned.some((value) => value.pid === injected.pid);
+    noteSighting(injected, rows, owned, Math.round(performance.now() - started));
   };
   const collect = (chunk) => {
     if (diagnostic.length < 262144)

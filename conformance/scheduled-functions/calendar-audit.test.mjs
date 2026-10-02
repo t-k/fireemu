@@ -86,7 +86,8 @@ export function auditSources(sources) {
     const sessions = source.match(/\bdetached\s*:/g)?.length ?? 0;
     const allowed = name === MEASURE ? 1 : 0;
     if (sessions !== allowed) problems.push(`${name}: ${sessions} detached spawn(s)`);
-    if (/\bsetsid\b/.test(source)) problems.push(`${name}: setsid`);
+    // A call, not the word: the certificate limits quote `setsid` (review round 2, M1).
+    if (/\bsetsid\s*\(/.test(source)) problems.push(`${name}: setsid`);
     for (const specifier of specifiers(source))
       if (!/^\.\/[^/]+\.mjs$/.test(specifier) && !BUILTINS.has(specifier))
         problems.push(`${name}: import of ${specifier}`);

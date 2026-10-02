@@ -481,8 +481,8 @@ function verdictInput() {
     identity: { ...pins, exitCode: undefined, refusalLine: undefined },
     refusalCheck: { ok: true, problems: [] },
     supervision: {
-      inner: { timedOut: false, cancelled: false, inventoryFailures: 0 },
-      outer: { timedOut: false, cancelled: false, inventoryFailures: 0 },
+      inner: { timedOut: false, cancelled: false, inventoryFailures: 0, escalate: true },
+      outer: { timedOut: false, cancelled: false, inventoryFailures: 0, escalate: true },
     },
     validatorControls: { ok: true, controls: [] },
     daemon: {
@@ -614,68 +614,6 @@ test("inventory rows keep the state column and refuse an unreadable row", () => 
   });
   assert.throws(() => parseInventory("garbage\n"));
   assert.throws(() => parseInventory(""));
-});
-
-test("a negative control counts only when its named rule fired on the injected row", () => {
-  const base = {
-    verdict: "fail",
-    conditions: { D: { ok: true }, E: { ok: true }, F: { ok: true } },
-  };
-  const injected = { pid: 777, uid: 501, started: "s" };
-  const withSurvivor = (rules) => ({
-    ...base,
-    inventory: { survivors: [{ row: { pid: 777 }, rules }] },
-  });
-  assert.equal(
-    controlOutcome({ mode: "orphan", injected }, withSurvivor(["session", "path"])).counts,
-    true,
-  );
-  assert.equal(
-    controlOutcome({ mode: "orphan", injected }, withSurvivor(["identity"])).counts,
-    false,
-  );
-  assert.equal(
-    controlOutcome({ mode: "escaper", injected }, withSurvivor(["identity"])).counts,
-    true,
-  );
-  assert.equal(
-    controlOutcome({ mode: "orphan", injected: { pid: 1 } }, withSurvivor(["session"])).counts,
-    false,
-    "another row's survival does not count",
-  );
-  assert.equal(
-    controlOutcome(
-      { mode: "listener", injected, bound: { beforeInventory: true } },
-      { ...base, ports: { lsof: [{ result: "listener", pids: [777] }] } },
-    ).counts,
-    true,
-  );
-  assert.equal(
-    controlOutcome(
-      { mode: "listener", injected },
-      { ...base, ports: { lsof: [{ result: "listener", pids: [9] }] } },
-    ).counts,
-    false,
-  );
-  assert.equal(
-    controlOutcome(
-      { mode: "leftover", injected },
-      { ...base, records: { signals: [{ target: { pid: 777 } }] } },
-    ).counts,
-    true,
-  );
-  assert.equal(
-    controlOutcome(
-      { mode: "leftover", injected },
-      { ...base, records: { signals: [{ target: { pid: 9 } }] } },
-    ).counts,
-    false,
-  );
-  const fired = controlOutcome(
-    { mode: "orphan", injected },
-    withSurvivor(["session", "path"]),
-  ).rulesFired;
-  assert.deepEqual(fired, ["session", "path"]);
 });
 
 test("the positive control passes B-F, including D, and observes the runner and the child", () => {
@@ -878,20 +816,6 @@ test("an ESRCH row asks for another pass when its parent could have been in the 
     judgeComplete([[member, row({ pid: 5000, ppid: 6100, sid: "ESRCH" })]], ctx).outcome,
     "survivors",
   );
-});
-
-test("the listener control counts only when its helper bound before the final inventory", () => {
-  const injected = { pid: 777 };
-  const listening = {
-    ports: { lsof: [{ result: "listener", pids: [777] }] },
-  };
-  assert.equal(
-    controlOutcome({ mode: "listener", injected, bound: { beforeInventory: true } }, listening)
-      .counts,
-    true,
-  );
-  for (const bound of [undefined, { beforeInventory: false }])
-    assert.equal(controlOutcome({ mode: "listener", injected, bound }, listening).counts, false);
 });
 
 test("the positive control needs verified cleanup and a released claim", () => {
@@ -1394,27 +1318,6 @@ test("an unreadable inventory row names itself", () => {
   assert.throws(() => parseInventory("garbage\n"), /^Error: unreadable inventory row$/);
 });
 
-test("a negative control's fired rules are exact: no port rule without a listener", () => {
-  const injected = { pid: 777 };
-  assert.deepEqual(
-    controlOutcome(
-      { mode: "orphan", injected },
-      {
-        inventory: { survivors: [{ row: { pid: 777 }, rules: ["session"] }] },
-        ports: { lsof: [] },
-      },
-    ).rulesFired,
-    ["session"],
-  );
-  assert.deepEqual(
-    controlOutcome(
-      { mode: "orphan", injected },
-      { ports: { lsof: [{ result: "listener", pids: [777] }] } },
-    ).rulesFired,
-    ["port"],
-  );
-});
-
 test("the validator controls report what each one changed and why it was refused", () => {
   const result = validatorControls(recordSet());
   assert.deepEqual(
@@ -1898,4 +1801,148 @@ test("an ESRCH chain is followed to its first ancestor with a session answer", (
     row({ pid: 8302, ppid: 8301, sid: "ESRCH", started: t }),
   ];
   assert.equal(judge(cyclic).reason, "no two consecutive clean passes");
+});
+
+// Review round 2, S5 (and the earlier PID-only tests it replaces): a negative control counts only
+// when its named rule fired on the injected helper's identity (PID and start time) and the helper
+// had the topology the control is for.
+const HELPER = { pid: 777, started: "Fri Oct 2 06:00:06 2026", acquired: true, pgid: 777 };
+const helperRow = (overrides) => ({ pid: 777, ppid: 1, started: HELPER.started, ...overrides });
+const outcomeOf = (mode, result, injected = HELPER, bound = { beforeInventory: true }) =>
+  controlOutcome({ mode, injected, bound }, result);
+const survivorsOf = (...entries) => ({ inventory: { survivors: entries } });
+
+test("each negative control counts on its helper's identity and topology", () => {
+  // (i) orphan: in S, reparented to launchd.
+  assert.deepEqual(
+    outcomeOf("orphan", survivorsOf({ row: helperRow(), rules: ["session", "path"] })),
+    {
+      counts: true,
+      rulesFired: ["session", "path"],
+    },
+  );
+  assert.equal(
+    outcomeOf("orphan", survivorsOf({ row: helperRow({ ppid: 900 }), rules: ["session"] })).counts,
+    false,
+    "not reparented to launchd",
+  );
+  // (ii) escaper: recorded, outside S.
+  assert.equal(
+    outcomeOf("escaper", survivorsOf({ row: helperRow({ ppid: 5 }), rules: ["identity"] })).counts,
+    true,
+  );
+  assert.equal(
+    outcomeOf("escaper", survivorsOf({ row: helperRow(), rules: ["identity", "session"] })).counts,
+    false,
+    "still in S",
+  );
+  // (iii) listener: bound before the inventory, holds the port, alive as itself, outside S.
+  const listening = (rules) => ({
+    ...survivorsOf({ row: helperRow({ ppid: 5 }), rules }),
+    ports: { lsof: [{ result: "listener", pids: [777] }] },
+  });
+  assert.deepEqual(outcomeOf("listener", listening(["path"])), {
+    counts: true,
+    rulesFired: ["path", "port"],
+  });
+  assert.equal(outcomeOf("listener", listening(["path", "session"])).counts, false, "in S");
+  assert.equal(
+    outcomeOf("listener", listening(["path"]), HELPER, { beforeInventory: false }).counts,
+    false,
+  );
+  assert.equal(outcomeOf("listener", listening(["path"]), HELPER, null).counts, false);
+  assert.equal(
+    outcomeOf("listener", { ports: { lsof: [{ result: "listener", pids: [777] }] } }).counts,
+    false,
+    "no row of the helper itself",
+  );
+  assert.equal(
+    outcomeOf("listener", {
+      ...listening(["path"]),
+      ports: { lsof: [{ result: "listener", pids: [9] }] },
+    }).counts,
+    false,
+    "another PID listens",
+  );
+  // (iv) leftover: acquired, in its own group, removed by a signal to its identity.
+  const signalled = (started) => ({ records: { signals: [{ target: { pid: 777, started } }] } });
+  assert.deepEqual(outcomeOf("leftover", signalled(HELPER.started)), {
+    counts: true,
+    rulesFired: ["harness-signal"],
+  });
+  assert.equal(
+    outcomeOf("leftover", signalled("Fri Oct 2 06:00:09 2026")).counts,
+    false,
+    "a recycled PID",
+  );
+  assert.equal(
+    outcomeOf("leftover", signalled(HELPER.started), { ...HELPER, acquired: false }).counts,
+    false,
+  );
+  assert.equal(
+    outcomeOf("leftover", signalled(HELPER.started), { ...HELPER, pgid: 700 }).counts,
+    false,
+  );
+});
+
+test("a row or signal of a recycled PID never counts for the helper", () => {
+  const recycled = helperRow({ started: "Fri Oct 2 06:00:09 2026" });
+  for (const mode of ["orphan", "escaper"])
+    assert.deepEqual(
+      outcomeOf(mode, survivorsOf({ row: recycled, rules: ["session", "identity"] })),
+      {
+        counts: false,
+        rulesFired: [],
+      },
+    );
+  for (const injected of [null, { pid: 777 }, { started: HELPER.started }])
+    assert.equal(
+      outcomeOf("orphan", survivorsOf({ row: helperRow(), rules: ["session"] }), injected).counts,
+      false,
+    );
+  // No port rule without a listener of the helper.
+  assert.deepEqual(
+    outcomeOf("orphan", {
+      ...survivorsOf({ row: helperRow(), rules: ["session"] }),
+      ports: { lsof: [] },
+    }).rulesFired,
+    ["session"],
+  );
+});
+
+// Review S4: (G) checks the escalation each supervisor actually ran with, not only the plan's.
+test("(G) fails a certificate run whose supervisors did not escalate", () => {
+  for (const role of ["inner", "outer"])
+    for (const escalate of [false, undefined]) {
+      const input = verdictInput();
+      input.supervision[role].escalate = escalate;
+      assert.deepEqual(refusalVerdict(input).conditions.G.reasons, [
+        `the ${role} supervisor did not run with escalation on`,
+      ]);
+    }
+});
+
+// Review S6: clause 3 names either private directory of the run.
+test("clause 3 matches the arguments of either private directory", () => {
+  const dirs = { ...ctx, privateDirs: ["/private/run-1", "/private/acc-1"] };
+  const late = (args) => row({ started: "Fri Oct 2 06:00:01 2026", args });
+  for (const args of ["x /private/run-1/y", "node outer /private/acc-1/plan.json"])
+    assert.deepEqual(
+      judgeComplete([[late(args)], [late(args)]], dirs).survivors[0].rules,
+      ["path"],
+      args,
+    );
+  assert.equal(
+    judgeComplete([[late("x /private/run-10/y")], [late("x /private/run-10/y")]], dirs).outcome,
+    "clean",
+  );
+  const { privateDir, ...none } = dirs;
+  assert.equal(privateDir, "/private/run-1");
+  assert.equal(
+    judgeComplete([[late("x /private/acc-1/y")], [late("x /private/acc-1/y")]], {
+      ...none,
+      privateDirs: [],
+    }).outcome,
+    "clean",
+  );
 });

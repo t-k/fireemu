@@ -263,10 +263,8 @@ for (const [mode, timeZone, rule] of [
       assert.equal(report.control.counts, true);
       if (mode === "listener") assert.equal(report.control.bound.beforeInventory, true);
       reports[mode] = report;
-      assert.ok(
-        report.control.injected.firstSighting,
-        "the helper's first sighting is recorded (F2)",
-      );
+      // The helper's identity from its first sighting (F2, review S5).
+      assert.equal(typeof report.control.injected.started, "string");
       const post = await readRecords(join(report.accountingDirectory, "post-verdict.jsonl"));
       // The leftover is the one helper the harness has already removed before the verdict.
       if (mode !== "leftover")

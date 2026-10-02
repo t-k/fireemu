@@ -115,12 +115,12 @@ export async function inventoryPass(recorder) {
   return rows.map((row) => ({ ...row, sid: sessions[row.pid] }));
 }
 
-/** Up to five passes, until two consecutive clean ones or a definite answer. */
-export async function finalInventory(recorder, ctx) {
+/** Up to five passes (`pass` takes one), until two consecutive clean ones or a definite answer. */
+export async function finalInventory(pass, ctx) {
   const passes = [];
   let result;
   for (let i = 0; i < 5; i++) {
-    passes.push(await inventoryPass(recorder));
+    passes.push(await pass());
     result = judgeInventory(passes, ctx);
     if (result.outcome !== "inconclusive" || result.reason !== "no two consecutive clean passes")
       return result;
@@ -467,34 +467,34 @@ const readJson = async (path) => {
   }
 };
 
+/** Words of a process API that the refusal fixture must never contain (condition (A)). */
+const PROCESS_API = /child_process|spawn|exec|fork|controls\.cjs/;
+
 /**
  * Condition (A), checked before the launch: every run kind uses the pinned source, build,
  * runner, portctl and harness version H; the certificate also uses the pinned refusal fixture and
- * config, and a refusal line the pinned source explains.
+ * config, a refusal fixture that names no process API (review S6) and a refusal line the pinned
+ * source explains. `binaryDigest` and `runnerDigest` are the files' digests on disk (null when
+ * unreadable).
  */
-export async function preLaunchProblems({
+export function pinProblems({
   plan,
   certificate,
   version,
   portctlSha256,
   refusalCheck,
+  binaryDigest,
+  runnerDigest,
 }) {
   const pins = plan.pins ?? {},
     session = plan.session ?? {},
     problems = [];
-  const fileDigest = async (path) => {
-    try {
-      return digest(await readFile(path));
-    } catch {
-      return null;
-    }
-  };
   for (const [key, value] of [
     ["sourceCommit", session.sourceCommit],
     ["binarySha256", session.binarySha256],
-    ["binarySha256", await fileDigest(session.binary)],
+    ["binarySha256", binaryDigest],
     ["runnerSha256", session.runnerSha256],
-    ["runnerSha256", await fileDigest(session.runner)],
+    ["runnerSha256", runnerDigest],
     ["portctlSha256", portctlSha256],
     ["harnessVersion", version],
   ])
@@ -503,11 +503,13 @@ export async function preLaunchProblems({
   if (certificate) {
     let fixture = null;
     try {
-      fixture = digest(calendarFixture(session.input));
+      fixture = calendarFixture(session.input);
     } catch {
       /* An unreadable fixture differs from its pin. */
     }
-    if (fixture !== pins.fixtureSha256) problems.push("fixtureSha256 differs from its pin");
+    if (fixture === null || digest(fixture) !== pins.fixtureSha256)
+      problems.push("fixtureSha256 differs from its pin");
+    else if (PROCESS_API.test(fixture)) problems.push("the refusal fixture names a process API");
     if (digest(calendarConfig(session.anchor)) !== pins.configSha256)
       problems.push("configSha256 differs from its pin");
     if (refusalCheck?.ok !== true)
@@ -516,85 +518,99 @@ export async function preLaunchProblems({
   return problems;
 }
 
-const supervisionOf = (result) =>
+/** The pre-launch check, with the binary and runner read from disk. */
+export async function preLaunchProblems(input) {
+  const fileDigest = async (path) => {
+    try {
+      return digest(await readFile(path));
+    } catch {
+      return null;
+    }
+  };
+  return pinProblems({
+    ...input,
+    binaryDigest: await fileDigest(input.plan.session?.binary),
+    runnerDigest: await fileDigest(input.plan.session?.runner),
+  });
+}
+
+/** The fields of a supervision result the verdict reads (with the escalation it ran, S4). */
+export const supervisionOf = (result) =>
   result
     ? {
         timedOut: result.timedOut,
         cancelled: result.cancelled,
         inventoryFailures: result.inventoryFailures,
+        escalate: result.escalate,
       }
     : undefined;
 
-/** Judges a launched run once the outer launcher has been reaped. */
-async function judgeRun({
+/** Recorded identities: identity rows and both trackers' owned processes, never the entry. */
+export function recordedIdentities({ files, inner, outerSupervision, selfPid, selfUid }) {
+  const rows = [];
+  for (const fileRows of Object.values(files ?? {}))
+    for (const row of fileRows) if (row.type === "identity") rows.push(row);
+  for (const row of inner?.ownedProcesses ?? []) rows.push(row);
+  for (const row of outerSupervision?.ownedProcesses ?? []) rows.push(row);
+  return rows
+    .filter((row) => row.pid !== selfPid)
+    .map((row) => ({ pid: row.pid, uid: row.uid ?? selfUid, started: row.started }));
+}
+
+/** The injected helper's identity and topology, from the inner supervisor's first sighting. */
+export function helperIdentity(inner) {
+  const sighting = inner?.injected?.firstSighting;
+  if (!sighting) return null;
+  return {
+    pid: inner.injected.pid,
+    started: sighting.started,
+    acquired: inner.injected.acquired,
+    pgid: sighting.pgid,
+  };
+}
+
+/** The listener's bind record, judged against the moment the final inventory began. */
+export function boundBefore(written, inventoryStartedAt) {
+  if (!written) return null;
+  return {
+    ...written,
+    beforeInventory:
+      Number.isFinite(written.boundAt) && written.boundAt * 1000 < inventoryStartedAt,
+  };
+}
+
+/**
+ * Assembles one run's verdict and report from what the measuring entry collected. Pure: every
+ * input is data, so the assembly is unit-tested and mutated (review round 2, M5).
+ */
+export function assembleRun({
   plan,
   kind,
   version,
-  recorder,
-  accDir,
-  launchTime,
+  outerResult,
   chain,
-  outer,
+  records,
+  validator,
+  inventory,
+  claims,
+  lsof,
+  alive,
+  bound,
   extra,
 }) {
-  const { escalation, certificate } = kind;
-  if (Number.isSafeInteger(outer.pid)) {
-    recorder.identity(outer.recordHandle, outer.pid, await recorder.startedOf(outer.pid));
-    chain.outerSid = (await sessionsOf(recorder, [outer.pid]))[outer.pid];
-  }
-  await outer.recordExit;
-  const outerResult = await readJson(join(accDir, "outer-result.json"));
-  const prepared = outerResult?.directory;
-  extra.prepared = prepared;
-  const recorded = [];
-  for (const rows of Object.values(await recordFiles(join(accDir, "records"))))
-    for (const row of rows) if (row.type === "identity") recorded.push(row);
   const inner = outerResult?.inner ?? null;
-  for (const row of inner?.ownedProcesses ?? []) recorded.push(row);
-  for (const row of outerResult?.supervision?.ownedProcesses ?? []) recorded.push(row);
-  const identities = recorded
-    .filter((row) => row.pid !== process.pid)
-    .map((row) => ({ pid: row.pid, uid: row.uid ?? process.getuid(), started: row.started }));
-  // What the post-verdict cleanup may stop besides the run's session (review round 2, M2).
-  extra.identities = identities;
-  const sighting = inner?.injected?.firstSighting;
-  extra.injected = sighting ? { pid: inner.injected.pid, started: sighting.started } : null;
-  const inventoryStartedAt = Date.now();
-  const inventory = await finalInventory(recorder, {
-    sessionId: chain.outerSid,
-    recorded: identities,
-    privateDir: prepared ?? accDir,
-    launchTime,
-    rootPid: process.pid,
-  });
-  extra.survivors = inventory.survivors;
-  const claims = outerResult?.service
-    ? (
-        await readOwnClaims(recorder, {
-          service: outerResult.service,
-          database: outerResult.database,
-        })
-      ).claims
-    : null;
-  const alive = inventory.passes.at(-1)?.survivors?.map((entry) => entry.row.pid) ?? [];
-  const lsof = outerResult?.port
-    ? await listenersOn(recorder, { port: outerResult.port, pids: alive })
-    : [];
-  recorder.close();
-  const files = await recordFiles(join(accDir, "records"));
-  const records = validateRecords(files);
-  const validator = validatorControls(files);
   const supervision = {
     inner: supervisionOf(inner),
     outer: supervisionOf(outerResult?.supervision),
   };
+  const identity = outerResult?.identity
+    ? { ...outerResult.identity, portctlSha256: extra.portctlSha256, harnessVersion: version }
+    : null;
   const verdict = refusalVerdict({
-    certificate,
-    escalation,
+    certificate: kind.certificate,
+    escalation: kind.escalation,
     pins: plan.pins,
-    identity: outerResult?.identity
-      ? { ...outerResult.identity, portctlSha256: extra.portctlSha256, harnessVersion: version }
-      : undefined,
+    identity: identity ?? undefined,
     refusalCheck: extra.refusalCheck,
     daemon: inner
       ? {
@@ -621,51 +637,38 @@ async function judgeRun({
   });
   let control = null;
   if (kind.kind !== "certificate") {
-    const injected = prepared ? await readJson(join(prepared, "control-ready.json")) : null;
-    let bound = null;
-    if (plan.control?.mode === "listener" && prepared) {
-      const written = await readJson(join(prepared, "bound.json"));
-      bound = written && {
-        ...written,
-        beforeInventory:
-          Number.isFinite(written.boundAt) && written.boundAt * 1000 < inventoryStartedAt,
-      };
-    }
     const mode = kind.kind === "positive" ? "positive" : plan.control.mode;
+    const injected = helperIdentity(inner);
     control = {
       mode,
-      injected: inner?.injected ?? null,
+      injected,
       bound,
-      ...controlOutcome(
-        mode === "positive" ? { mode } : { mode, injected: injected ?? undefined, bound },
-        {
-          ...verdict,
-          inventory,
-          ports: { lsof },
-          records,
-          observation: {
-            runner: inner?.observationHandshake === true,
-            child: inner?.observationHandshake === true,
-            matched: outerResult?.callback?.matched === true,
-            cleanupVerified:
-              inner?.cleanupVerified === true &&
-              outerResult?.supervision?.cleanupVerified === true &&
-              outerResult?.releaseCode === 0 &&
-              Array.isArray(outerResult?.claimsAfter) &&
-              outerResult.claimsAfter.length === 0,
-          },
+      ...controlOutcome(mode === "positive" ? { mode } : { mode, injected, bound }, {
+        ...verdict,
+        inventory,
+        ports: { lsof },
+        records,
+        observation: {
+          runner: inner?.observationHandshake === true,
+          child: inner?.observationHandshake === true,
+          matched: outerResult?.callback?.matched === true,
+          cleanupVerified:
+            inner?.cleanupVerified === true &&
+            outerResult?.supervision?.cleanupVerified === true &&
+            outerResult?.releaseCode === 0 &&
+            Array.isArray(outerResult?.claimsAfter) &&
+            outerResult.claimsAfter.length === 0,
         },
-      ),
+      }),
     };
   }
-  const line = inner?.diagnostics?.includes(plan.pins?.refusalLine)
+  const diagnostics = Array.isArray(inner?.diagnostics) ? inner.diagnostics : [];
+  const line = diagnostics.includes(plan.pins?.refusalLine)
     ? plan.pins.refusalLine
-    : (inner?.diagnostics?.find((value) => /unknown time zone/.test(value)) ?? null);
+    : (diagnostics.find((value) => /unknown time zone/.test(value)) ?? null);
   return {
     // The run's full identity (review round 2, M1): what it ran, and what it refused with.
-    identity: outerResult?.identity
-      ? { ...outerResult.identity, portctlSha256: extra.portctlSha256, harnessVersion: version }
-      : null,
+    identity,
     refusal: { exitCode: inner?.exitCode ?? null, line },
     verdict,
     control,
@@ -696,6 +699,82 @@ async function judgeRun({
     claims,
     records: { ok: records.ok, problems: records.problems, signals: records.signals.length },
   };
+}
+
+/** Judges a launched run once the outer launcher has been reaped. */
+async function judgeRun({
+  plan,
+  kind,
+  version,
+  recorder,
+  accDir,
+  launchTime,
+  chain,
+  outer,
+  extra,
+}) {
+  if (Number.isSafeInteger(outer.pid)) {
+    recorder.identity(outer.recordHandle, outer.pid, await recorder.startedOf(outer.pid));
+    chain.outerSid = (await sessionsOf(recorder, [outer.pid]))[outer.pid];
+  }
+  await outer.recordExit;
+  const outerResult = await readJson(join(accDir, "outer-result.json"));
+  const prepared = outerResult?.directory;
+  extra.prepared = prepared;
+  const inner = outerResult?.inner ?? null;
+  const identities = recordedIdentities({
+    files: await recordFiles(join(accDir, "records")),
+    inner,
+    outerSupervision: outerResult?.supervision,
+    selfPid: process.pid,
+    selfUid: process.getuid(),
+  });
+  // What the post-verdict cleanup may stop besides the run's session (review round 2, M2).
+  extra.identities = identities;
+  extra.injected = helperIdentity(inner);
+  const inventoryStartedAt = Date.now();
+  const inventory = await finalInventory(() => inventoryPass(recorder), {
+    sessionId: chain.outerSid,
+    recorded: identities,
+    privateDir: prepared ?? accDir,
+    privateDirs: [prepared, accDir].filter((dir) => typeof dir === "string"),
+    launchTime,
+    rootPid: process.pid,
+  });
+  extra.survivors = inventory.survivors;
+  const claims = outerResult?.service
+    ? (
+        await readOwnClaims(recorder, {
+          service: outerResult.service,
+          database: outerResult.database,
+        })
+      ).claims
+    : null;
+  const alive = inventory.passes.at(-1)?.survivors?.map((entry) => entry.row.pid) ?? [];
+  const lsof = outerResult?.port
+    ? await listenersOn(recorder, { port: outerResult.port, pids: alive })
+    : [];
+  recorder.close();
+  const files = await recordFiles(join(accDir, "records"));
+  const bound =
+    plan.control?.mode === "listener" && prepared
+      ? boundBefore(await readJson(join(prepared, "bound.json")), inventoryStartedAt)
+      : null;
+  return assembleRun({
+    plan,
+    kind,
+    version,
+    outerResult,
+    chain,
+    records: validateRecords(files),
+    validator: validatorControls(files),
+    inventory,
+    claims,
+    lsof,
+    alive,
+    bound,
+    extra,
+  });
 }
 
 /**

@@ -184,6 +184,9 @@ function judgePass(rows, ctx) {
     ignored = [],
     repass = [];
   let trigger = false;
+  const privateDirs = (Array.isArray(ctx.privateDirs) ? ctx.privateDirs : [ctx.privateDir]).filter(
+    (dir) => typeof dir === "string" && dir.length > 1,
+  );
   // Whether an ESRCH row could have been in S: its parent is launchd, a member of S or a recorded
   // identity, or an ESRCH row whose own chain could reach S. A process in S has every ancestor
   // up to S's leader in S (setsid makes a new session, never S), so a chain that reaches a live
@@ -221,10 +224,13 @@ function judgePass(rows, ctx) {
       )
     )
       rules.push("identity");
+    // Clause 3, over both private directories (review S6), as a whole path component.
     const path =
       startedAt >= ctx.launchTime &&
       typeof row.args === "string" &&
-      row.args.includes(ctx.privateDir);
+      privateDirs.some(
+        (dir) => row.args.includes(dir + "/") || row.args.split(/\s+/).includes(dir),
+      );
     if (path) rules.push("path");
     if (zombie && (recordedPid(row.pid) || recordedPid(row.ppid) || members.has(row.ppid)))
       rules.push("zombie");
@@ -480,10 +486,17 @@ export function refusalVerdict(run) {
     else if (lsof.some((answer) => answer.result !== "none"))
       unknown.push("an lsof answer is inconclusive");
   });
-  check("G", ["escalation", "validatorControls"], (fail) => {
+  check("G", ["escalation", "validatorControls"], (fail, unknown) => {
     if (run.certificate !== true) fail.push("not a certificate run");
     else if (run.escalation !== "on") fail.push("escalation off is for control runs only");
     if (run.validatorControls.ok !== true) fail.push("a validator control did not hold");
+    // Review S4: what the supervisors ran with, not only what the plan asked for.
+    if (run.certificate === true)
+      for (const role of ["inner", "outer"])
+        if (!run.supervision?.[role])
+          unknown.push(`the ${role} supervisor's escalation is unknown`);
+        else if (run.supervision[role].escalate !== true)
+          fail.push(`the ${role} supervisor did not run with escalation on`);
   });
   const outcomes = Object.values(conditions).map((condition) => condition.outcome);
   const verdict = outcomes.includes("fail")
@@ -535,24 +548,45 @@ export function controlOutcome(control, result) {
       result.observation?.cleanupVerified === true;
     return { counts: ok && seen, rulesFired: [] };
   }
-  const pid = control.injected?.pid;
-  const survivor = (result.inventory?.survivors ?? []).find((entry) => entry.row?.pid === pid);
+  // Review S5: the helper is its PID and start time, never the PID alone.
+  const { pid, started } = control.injected ?? {};
+  if (!Number.isSafeInteger(pid) || !text(started)) return { counts: false, rulesFired: [] };
+  const survivor = (result.inventory?.survivors ?? []).find(
+    (entry) => entry.row?.pid === pid && entry.row?.started === started,
+  );
   const rulesFired = [...(survivor?.rules ?? [])];
   const listened = (result.ports?.lsof ?? []).some(
     (answer) => answer.result === "listener" && answer.pids?.includes(pid),
   );
-  // (iii) counts only when its helper recorded the bind before the final inventory began.
-  if (listened && (control.mode !== "listener" || control.bound?.beforeInventory === true))
+  // (iii) counts only when its helper recorded the bind before the final inventory began, and
+  // was still itself (its row) when the inventory listed it.
+  if (
+    listened &&
+    survivor &&
+    (control.mode !== "listener" || control.bound?.beforeInventory === true)
+  )
     rulesFired.push("port");
-  if ((result.records?.signals ?? []).some((signal) => signal.target?.pid === pid))
+  if (
+    (result.records?.signals ?? []).some(
+      (signal) => signal.target?.pid === pid && signal.target?.started === started,
+    )
+  )
     rulesFired.push("harness-signal");
+  const inSession = rulesFired.includes("session");
+  // The topology each control is for (design v4 section 7).
+  const shaped = {
+    orphan: () => inSession && survivor?.row?.ppid === 1,
+    escaper: () => !inSession,
+    listener: () => !inSession,
+    leftover: () => control.injected.acquired === true && control.injected.pgid === pid,
+  }[control.mode];
   const named = {
     orphan: "session",
     escaper: "identity",
     listener: "port",
     leftover: "harness-signal",
   }[control.mode];
-  return { counts: Number.isSafeInteger(pid) && rulesFired.includes(named), rulesFired };
+  return { counts: rulesFired.includes(named) && shaped?.() === true, rulesFired };
 }
 
 const LANE_FILES = ["outer.jsonl", "inner.jsonl"];

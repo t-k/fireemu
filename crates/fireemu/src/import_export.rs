@@ -4804,6 +4804,49 @@ mod tests {
         }
     }
 
+    proptest::proptest! {
+        #![proptest_config(proptest::test_runner::Config::with_cases(96))]
+        #[test]
+        fn limit_warnings_select_exactly_the_exceeded_dimensions(
+            values in proptest::array::uniform6(proptest::prop_oneof![
+                proptest::strategy::Just(0_u64),
+                proptest::strategy::Just(u64::MAX),
+                proptest::prelude::any::<u64>(),
+            ]),
+            storage_is_bounded in proptest::prelude::any::<bool>(),
+        ) {
+            use fireemu_core_firestore::store::{HistoryLimits, HistoryUsage};
+            let [bytes, versions, max_bytes, max_versions, stored, max_stored] = values;
+            // Include exact equality in every generated case as well as arbitrary limits.
+            for limits in [HistoryLimits { max_bytes, max_versions }, HistoryLimits { max_bytes: bytes, max_versions: versions }] {
+                let warnings = super::limit_warnings(
+                    &[(
+                        ("demo-property".to_owned(), "analytics".to_owned()),
+                        HistoryUsage { total_bytes: bytes, versions, ..HistoryUsage::default() },
+                        limits,
+                    )],
+                    Some((stored, storage_is_bounded.then_some(max_stored))),
+                );
+                let byte_lines: Vec<_> = warnings.iter().filter(|line| line.contains("logical history bytes")).collect();
+                let version_lines: Vec<_> = warnings.iter().filter(|line| line.contains("history versions")).collect();
+                let storage_lines: Vec<_> = warnings.iter().filter(|line| line.starts_with("storage holds")).collect();
+                proptest::prop_assert_eq!(byte_lines.len(), usize::from(bytes > limits.max_bytes));
+                proptest::prop_assert_eq!(version_lines.len(), usize::from(versions > limits.max_versions));
+                proptest::prop_assert_eq!(storage_lines.len(), usize::from(storage_is_bounded && stored > max_stored));
+                proptest::prop_assert_eq!(warnings.len(), byte_lines.len() + version_lines.len() + storage_lines.len());
+                for line in byte_lines {
+                    proptest::prop_assert!(line.starts_with(&format!("firestore database demo-property/analytics holds {bytes} logical history bytes, above firestore.history.maxBytes {}", limits.max_bytes)), "byte warning prefix: {}", line);
+                }
+                for line in version_lines {
+                    proptest::prop_assert!(line.starts_with(&format!("firestore database demo-property/analytics holds {versions} history versions, above the database limit of {}", limits.max_versions)), "version warning prefix: {}", line);
+                }
+                for line in storage_lines {
+                    proptest::prop_assert!(line.starts_with(&format!("storage holds {stored} bytes of object data, above storage.maxStoredBytes {max_stored}")), "storage warning prefix: {}", line);
+                }
+            }
+        }
+    }
+
     #[test]
     fn limit_warnings_name_each_limit_an_import_is_above() {
         use fireemu_core_firestore::store::{HistoryLimits, HistoryUsage};

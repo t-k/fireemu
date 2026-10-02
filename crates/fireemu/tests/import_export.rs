@@ -549,6 +549,98 @@ fn an_import_above_the_stored_byte_limit_starts_with_a_warning() {
     );
 }
 
+/// Both profiles accept an over-limit import, report the installed state on stderr, and
+/// suppress the import warning on both streams when quiet is requested.
+#[cfg(unix)]
+#[test]
+fn import_limit_warnings_use_stderr_in_both_profiles_and_respect_quiet() {
+    use fireemu_core_firestore::path::DocumentPath;
+    use fireemu_core_firestore::store::{FirestoreState, ImportedDocument};
+    use fireemu_core_types::ids::{DatabaseId, ProjectId};
+    use fireemu_core_types::time::LogicalInstant;
+
+    let dir = scratch("warning-profile-quiet");
+    let export = dir.join("export");
+    write_document_artifact(&export, 24, 64 * 1024);
+    let mut state = FirestoreState::new();
+    let project = ProjectId::try_new("demo-import-rss").unwrap();
+    let database = DatabaseId::try_new("(default)").unwrap();
+    let documents = (0..24)
+        .map(|n| ImportedDocument {
+            path: DocumentPath::parse(&project, &database, &format!("payloads/doc-{n:06}"))
+                .unwrap(),
+            fields: [(
+                "payload".to_owned(),
+                Value::Bytes(vec![u8::try_from(n % 251).unwrap(); 64 * 1024]),
+            )]
+            .into_iter()
+            .collect(),
+            create_time: None,
+            update_time: None,
+        })
+        .collect();
+    state
+        .import_documents(documents, LogicalInstant::from_unix_seconds(1_788_004_860))
+        .unwrap();
+    let bytes = state.history_usage().total_bytes;
+    assert!(bytes > 1 << 20);
+    for profile in ["strict", "emulator"] {
+        for quiet in [false, true] {
+            for storage in [false, true] {
+                let config = dir.join("fireemu.json");
+                let settings = if storage {
+                    serde_json::json!({"storage": {"maxStoredBytes": 10}})
+                } else {
+                    serde_json::json!({"firestore": {"history": {"maxBytes": 1048576}, "edition": "standard", "apiMode": "native"}})
+                };
+                let mut config_value = serde_json::json!({"schemaVersion": 1, "profile": profile});
+                config_value
+                    .as_object_mut()
+                    .unwrap()
+                    .extend(settings.as_object().unwrap().clone());
+                std::fs::write(&config, config_value.to_string()).unwrap();
+                let artifact = if storage {
+                    fixture("official-multiproduct")
+                } else {
+                    export.clone()
+                };
+                let message = if storage {
+                    "storage holds 29 bytes of object data, above storage.maxStoredBytes 10; writes that would grow it are refused with 402 until objects are deleted".to_owned()
+                } else {
+                    format!("firestore database demo-import-rss/(default) holds {bytes} logical history bytes, above firestore.history.maxBytes 1048576; writes that would grow its history are refused with RESOURCE_EXHAUSTED until documents are deleted")
+                };
+                let warning = format!("warning: --import {}: {message}", artifact.display());
+                let mut cmd = exec();
+                cmd.arg("--config")
+                    .arg(&config)
+                    .arg("--import")
+                    .arg(&artifact);
+                if quiet {
+                    cmd.args(["--log-verbosity", "quiet"]);
+                }
+                let output = cmd.args(["--", "true"]).output().unwrap();
+                let stdout = String::from_utf8_lossy(&output.stdout);
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                assert!(
+                    output.status.success(),
+                    "{profile} quiet={quiet} storage={storage}: {}",
+                    text(&output)
+                );
+                assert!(!stdout.contains("warning: --import"), "{stdout}");
+                let warnings: Vec<_> = stderr
+                    .lines()
+                    .filter(|line| line.contains("warning: --import"))
+                    .collect();
+                if quiet {
+                    assert!(warnings.is_empty(), "{stderr}");
+                } else {
+                    assert_eq!(warnings, vec![warning.as_str()], "{stderr}");
+                }
+            }
+        }
+    }
+}
+
 #[test]
 fn the_recorded_value_corpus_is_imported_whole() {
     let output = Command::new(env!("CARGO_BIN_EXE_fireemu"))

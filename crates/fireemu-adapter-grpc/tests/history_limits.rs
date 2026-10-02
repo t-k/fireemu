@@ -448,3 +448,46 @@ fn history_over_limit_reports_only_a_limit_that_is_exceeded() {
         "one version past"
     );
 }
+
+proptest::proptest! {
+    #![proptest_config(proptest::test_runner::Config::with_cases(64))]
+    #[test]
+    fn history_over_limit_matches_restored_usage_and_scope(
+        payload_len in 0_usize..256,
+        count in 1_usize..6,
+        max_bytes in proptest::prop_oneof![proptest::strategy::Just(0_u64), proptest::strategy::Just(u64::MAX), proptest::prelude::any::<u64>()],
+        max_versions in proptest::prop_oneof![proptest::strategy::Just(0_u64), proptest::strategy::Just(u64::MAX), 0_u64..8],
+    ) {
+        use fireemu_core_session::tenancy::Scope;
+        let (source, clock) = backend();
+        for n in 0..count {
+            commit(&source, &format!("doc-{n}"), &"x".repeat(payload_len));
+            advance(&clock, 1);
+        }
+        let snapshot = source.snapshot_databases();
+        let state = snapshot.values().next().unwrap().clone();
+        let usage = state.history_usage();
+        let empty = fireemu_core_firestore::store::FirestoreState::new();
+        let restored = [
+            (("demo-app".to_owned(), "analytics".to_owned()), state.clone()),
+            (("demo-app".to_owned(), "(default)".to_owned()), empty),
+            (("demo-excluded".to_owned(), "analytics".to_owned()), state),
+        ].into_iter().collect::<std::collections::BTreeMap<_, _>>();
+        let boundary = HistoryLimits { max_bytes: usage.total_bytes, max_versions: usage.versions };
+        for limits in [HistoryLimits { max_bytes, max_versions }, boundary,
+            HistoryLimits { max_bytes: usage.total_bytes.saturating_sub(1), ..boundary },
+            HistoryLimits { max_versions: usage.versions.saturating_sub(1), ..boundary }]
+        {
+            let (target, _) = backend();
+            let target = target.with_history_limits(limits);
+            target.restore_databases(restored.clone()).unwrap();
+            for scope in [Scope::Project("demo-app".to_owned()), Scope::AllExcept(["demo-excluded".to_owned()].into_iter().collect()), Scope::Project("demo-excluded".to_owned())] {
+                let expected: Vec<_> = restored.iter().filter_map(|(key, state)| {
+                    let actual = state.history_usage();
+                    (scope.owns_project(&key.0) && (actual.total_bytes > limits.max_bytes || actual.versions > limits.max_versions)).then(|| (key.clone(), actual, limits))
+                }).collect();
+                proptest::prop_assert_eq!(target.history_over_limit(&scope), expected);
+            }
+        }
+    }
+}

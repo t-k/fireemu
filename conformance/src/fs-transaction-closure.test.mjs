@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
+import { createHash } from "node:crypto";
 
 const closureUrl = new URL("../../spec/compatibility/closure/FS-TRANSACTION.json", import.meta.url);
 const required = new Set([
@@ -66,6 +67,9 @@ test("FS-TRANSACTION recorded REST subset leaves every frozen condition open", (
       assert.ok(condition.partialEvidence.remainingBoundaries.length);
       assert.match(condition.partialEvidence.remainingBoundaries.join(" "), /gRPC/);
       observed.push(...condition.partialEvidence.caseIds);
+    } else if (condition.conditionId === "FS-TRANSACTION/read-only-snapshot") {
+      assert.equal(condition.productionObservation, "RECORDED_P02_P02B_SUBSET");
+      assert.equal(condition.partialEvidence.coverage, "PARTIAL");
     } else {
       assert.equal(condition.productionObservation, "UNOBSERVED_BY_RECORDED_CORPUS");
     }
@@ -185,4 +189,95 @@ test("FS-TRANSACTION proposal names every acceptance boundary without claiming c
     closure.conditions.every(({ status }) => status === "VERIFIED") &&
       closure.closureReview.decision === "APPROVED",
   );
+});
+
+test("P02/P02b retained read-only evidence preserves all steps and current profile differences without closure", () => {
+  const base = new URL("../../spec/compatibility/broad-runs/", import.meta.url);
+  const observed = JSON.parse(
+    readFileSync(new URL("fs-transaction-p02-recorded-observations-v1.json", base), "utf8"),
+  );
+  const compared = JSON.parse(
+    readFileSync(new URL("fs-transaction-p02-recorded-comparison-v1.json", base), "utf8"),
+  );
+  const closure = JSON.parse(readFileSync(closureUrl, "utf8"));
+  assert.equal(observed.authorizesProduction, false);
+  assert.equal(observed.coverage, "PARTIAL");
+  assert.equal(compared.promotionReady, false);
+  assert.equal(compared.productionRequests, 0);
+  assert.equal(compared.coverage, "PARTIAL");
+  const producerBytes = readFileSync(new URL(`../../${compared.producer.path}`, import.meta.url));
+  assert.equal(compared.producer.sha256, createHash("sha256").update(producerBytes).digest("hex"));
+  assert.equal(compared.corpora.length, 2);
+  for (const [index, corpus] of observed.corpora.entries()) {
+    const steps = index === 0 ? 35 : 42;
+    const cases = index === 0 ? 16 : 24;
+    assert.equal(corpus.recordings.length, 2);
+    assert.equal(corpus.agree, true);
+    assert.equal(corpus.recipes.length, steps);
+    assert.equal(new Set(corpus.recipes.map(({ id }) => id)).size, steps);
+    assert.equal(Object.keys(corpus.semantics.steps).length, steps);
+    assert.deepEqual(
+      new Set(Object.keys(corpus.semantics.steps)),
+      new Set(corpus.recipes.map(({ id }) => id)),
+    );
+    assert.equal(corpus.recipes.filter(({ caseId }) => caseId).length, cases);
+    for (const recording of corpus.recordings) {
+      assert.equal(recording.complete, true);
+      assert.equal(recording.graphComplete, true);
+      assert.equal(recording.cleanupAbsent, true);
+      assert.equal(recording.openTokens, 0);
+      assert.equal(recording.unknownOutcomes, 0);
+      assert.match(recording.sha256, /^[a-f0-9]{64}$/);
+      assert.equal(recording.requests, index === 0 ? 47 : 53);
+    }
+    const result = compared.corpora[index];
+    assert.equal(result.program, corpus.program);
+    assert.deepEqual(
+      result.results.map(({ profile, recording }) => `${profile}/${recording}`),
+      ["strict/1", "strict/2", "emulator/1", "emulator/2"],
+    );
+    for (const replay of result.results) {
+      assert.equal(replay.complete, true);
+      assert.equal(replay.allSteps.length, steps);
+      assert.deepEqual(
+        new Set(replay.allSteps.map(({ site }) => site)),
+        new Set(corpus.recipes.map(({ id }) => id)),
+      );
+      for (const row of replay.allSteps)
+        assert.deepEqual(row.production, corpus.semantics.steps[row.site]);
+      const mismatchCount =
+        [...replay.allSteps, ...replay.cases, ...replay.reads, ...replay.commitTimes].filter(
+          ({ match }) => !match,
+        ).length + (replay.cleanupMatch ? 0 : 1);
+      assert.equal(replay.mismatches, mismatchCount);
+      assert.equal(replay.runtimeInputsValidated, true);
+      assert.equal(replay.childStopped, true);
+      assert.equal(replay.sourceCommit, compared.artifact.sourceCommit);
+      assert.equal(replay.binarySha256, compared.artifact.binarySha256);
+      assert.equal(replay.runtime.nodeVersion, "v24.14.0");
+      assert.equal(replay.runtime.pythonVersion, "3.12.13");
+      assert.equal(replay.runtime.workerSha256, compared.producer.transportWorkerSha256);
+      for (const key of ["nodeSha256", "pythonSha256", "workerSha256", "lockSha256"])
+        assert.match(replay.runtime[key], /^[a-f0-9]{64}$/);
+      if (replay.profile === "strict") assert.equal(replay.mismatches, 0);
+    }
+  }
+  assert.ok(
+    compared.corpora[1].results
+      .filter(({ profile }) => profile === "emulator")
+      .every(({ mismatches }) => mismatches > 0),
+  );
+  const condition = closure.conditions.find(
+    ({ conditionId }) => conditionId === "FS-TRANSACTION/read-only-snapshot",
+  );
+  assert.notEqual(condition.status, "VERIFIED");
+  assert.equal(condition.partialEvidence.coverage, "PARTIAL");
+  assert.equal(condition.partialEvidence.recordingsPerCorpus, 2);
+  assert.equal(
+    condition.partialEvidence.reference,
+    "spec/compatibility/broad-runs/fs-transaction-p02-recorded-comparison-v1.json",
+  );
+  assert.equal(closure.conditions.length, 18);
+  assert.equal(closure.parentStatus, "IMPLEMENTING");
+  assert.equal(closure.closureReview.decision, "PENDING");
 });

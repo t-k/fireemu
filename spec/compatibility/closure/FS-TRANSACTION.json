@@ -153,8 +153,11 @@
         "representativeGrpc": "Record one representative gRPC case for this condition when the API supports it; REST carries the full set."
       },
       "localEvidence": {
-        "references": [],
-        "productionExecuted": false
+        "references": [
+          "spec/compatibility/broad-runs/fs-transaction-p02-recorded-comparison-v1.json",
+          "spec/compatibility/broad-runs/fs-transaction-p02-recorded-observations-v1.json"
+        ],
+        "productionExecuted": true
       },
       "historicalProductionReferences": [
         "conformance/firestore-production-matrix.json"
@@ -166,8 +169,29 @@
         ],
         "recordingsRequired": 2
       },
-      "note": "Historical recordings are reference only. Two new sandbox recordings and a final-artifact comparison are required for this condition. The 13-case recorded expiry/retry corpus supplies no production observation for this condition. Private sandbox observations, cited by run-directory name only, no status change: P02 fs-transaction-p02-readonly-88511624ef5da4ff (REST and gRPC, two agreeing recordings): a read-only transaction's snapshot is taken at its first read, a second read shows the same state, an empty read-only Commit answers 0, a write Commit answers 3 \"Cannot modify entities in a read-only transaction.\" and a Rollback after it answers 0. P02b fs-transaction-p02b-readonly-refused-956ffb458f823440 chains X and Y (both transports, two agreeing recordings): after that refused write a read and an empty Commit, in either order, answer 3 with the expired text and a Rollback answers 0. Neither is a published redacted record yet.",
-      "productionObservation": "UNOBSERVED_BY_RECORDED_CORPUS"
+      "note": "P02 and P02b now have two independently recorded, fully replay-validated observations each, with all declared setup, controls, read-only refusal/token-use chains, post-state, version/commit-time relations and cleanup retained. Every selected step agrees with the current source-bound normal artifact in strict. The emulator profile differences remain explicit. This bounded publication does not promote the condition or any other parent condition; independent review and authorized promotion remain pending. Raw REST body-byte/member-order parity is outside this decoded-semantic comparison.",
+      "productionObservation": "RECORDED_P02_P02B_SUBSET",
+      "partialEvidence": {
+        "coverage": "PARTIAL",
+        "reference": "spec/compatibility/broad-runs/fs-transaction-p02-recorded-comparison-v1.json",
+        "observationsReference": "spec/compatibility/broad-runs/fs-transaction-p02-recorded-observations-v1.json",
+        "recordingsPerCorpus": 2,
+        "transports": [
+          "rest",
+          "grpc"
+        ],
+        "programs": [
+          "FS-TRANSACTION-P02-READONLY",
+          "FS-TRANSACTION-P02B-READONLY-REFUSED"
+        ],
+        "promotionReady": false,
+        "remainingBoundaries": [
+          "Raw REST bodyBytes/content-length and response member-order evidence were not retained by these recordings; decoded equality cannot establish wire-layout parity.",
+          "Independent review and authorized condition promotion remain pending.",
+          "All other frozen conditions, the final-artifact full-parent regression and closure review remain open.",
+          "The bounded P02 representative gRPC subset is not a claim of every transaction or REST wire-layout behavior."
+        ]
+      }
     },
     {
       "conditionId": "FS-TRANSACTION/read-time-snapshot",

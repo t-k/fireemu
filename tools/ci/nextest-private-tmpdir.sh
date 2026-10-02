@@ -10,7 +10,9 @@
 # The private directories live under one root per user, `fireemu-test-tmp-<uid>` in TMPDIR (or
 # /tmp). The root must be a real directory owned by the user with mode 0700; anything else (a
 # symbolic link, another user's directory, one others can write) is refused, because the wrapper
-# deletes directories under it. The root must also be spelled as an absolute path without a
+# deletes directories under it. On macOS any extended ACL is refused, including an ACL hidden
+# by the extended-attribute marker in `ls -ld`; attributes without ACLs are allowed. The root
+# must also be spelled as an absolute path without a
 # trailing `/` or empty, `.` or `..` components: `link/` or `link/.` would make the checks look
 # through a symbolic link at the directory behind it. A wrapper killed outright (SIGKILL) cannot
 # clean up; its directory `run-<pid>.XXXXXX` is removed by a later wrapper once `kill -0` reports
@@ -48,6 +50,20 @@ esac
 case $(ls -ld "$root") in
 drwx------*) ;;
 *) refuse "$root must be a directory with mode 0700" ;;
+esac
+
+# Mode bits alone do not establish privacy on macOS: `@` can hide the ACL's `+` marker.
+# `ls -e` lists every ACL entry on its own line. Refuse all ACLs before touching children,
+# and refuse failed inspection; harmless extended attributes add no ACL lines.
+platform=$(uname -s) || refuse "cannot determine platform for ACL inspection"
+case $platform in
+Darwin)
+    acl=$(ls -lde "$root") || refuse "cannot inspect ACL of $root"
+    case $acl in
+    *'
+'*) refuse "$root must not have an extended ACL" ;;
+    esac
+    ;;
 esac
 
 for stale in "$root"/run-*; do

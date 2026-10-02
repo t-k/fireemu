@@ -269,6 +269,95 @@ class WrapperTest(unittest.TestCase):
                     subprocess.run(["rm", "-rf", str(entry)], check=True)
                 victim.rmdir()
 
+    @unittest.skipUnless(sys.platform == "darwin", "extended ACL inspection is macOS-specific")
+    def test_a_root_with_an_extended_acl_is_refused_before_any_child_is_changed(self):
+        self.parent.chmod(0o755)
+        for with_xattr in (False, True):
+            with self.subTest(with_xattr=with_xattr):
+                victim = self.victim()
+                victim = victim.rename(self.parent / f"victim-{with_xattr}")
+                victim.chmod(0o700)
+                subprocess.run(["xattr", "-c", str(victim)], check=True)
+                subprocess.run(
+                    ["chmod", "+a", "everyone allow list,search,add_file,add_subdirectory,delete_child", str(victim)],
+                    check=True,
+                )
+                if with_xattr:
+                    subprocess.run(["xattr", "-w", "com.fireemu.test", "harmless metadata", str(victim)], check=True)
+                mode = subprocess.check_output(["ls", "-ld", str(victim)], text=True).split()[0]
+                self.assertIn(mode, ("drwx------+", "drwx------@"))
+                if with_xattr:
+                    self.assertEqual(mode, "drwx------@")
+                for entry in victim.iterdir():
+                    (entry / "data" / "payload").write_bytes(b"must remain untouched")
+                    backdate(entry)
+                before = {str(p.relative_to(victim)): (p.stat().st_mode, p.stat().st_mtime_ns, p.read_bytes() if p.is_file() else None) for p in victim.rglob("*")}
+                result = self.run_wrapped(': > "$TMPDIR/../executed"', env={"FIREEMU_TEST_TMP_ROOT": str(victim)})
+                self.refused(result, "ACL")
+                after = {str(p.relative_to(victim)): (p.stat().st_mode, p.stat().st_mtime_ns, p.read_bytes() if p.is_file() else None) for p in victim.rglob("*")}
+                self.assertEqual(before, after, "refusal must preserve every child and its data")
+                subprocess.run(["chmod", "-N", str(victim)], check=True)
+                subprocess.run(["rm", "-rf", str(victim)], check=True)
+
+    @unittest.skipUnless(sys.platform == "darwin", "extended attributes are macOS-specific")
+    def test_a_private_root_with_only_harmless_extended_attributes_is_accepted(self):
+        self.root.mkdir(mode=0o700)
+        subprocess.run(["xattr", "-w", "com.fireemu.test", "harmless metadata", str(self.root)], check=True)
+        result = self.run_wrapped("exit 0")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.private_dirs(), [])
+        self.assertEqual(subprocess.check_output(["xattr", "-p", "com.fireemu.test", str(self.root)], text=True).strip(), "harmless metadata")
+
+    @unittest.skipUnless(sys.platform == "darwin", "extended ACL inspection is macOS-specific")
+    def test_a_failed_acl_inspection_is_refused_before_any_child_is_changed(self):
+        victim = self.victim()
+        victim.chmod(0o700)
+        for entry in victim.iterdir():
+            backdate(entry)
+        tools = self.parent / "tools"
+        tools.mkdir()
+        probe = tools / "ls"
+        probe.write_text('#!/bin/sh\nif [ "$1" = "-lde" ]; then exit 1; fi\nexec /bin/ls "$@"\n')
+        probe.chmod(0o700)
+        result = self.run_wrapped(
+            ': > "$TMPDIR/../executed"',
+            env={"FIREEMU_TEST_TMP_ROOT": str(victim), "PATH": f"{tools}:{os.environ['PATH']}"},
+        )
+        self.refused(result, "ACL")
+        self.assertEqual(len(list(victim.iterdir())), 2)
+        self.assert_untouched(victim)
+
+    def test_a_failed_platform_inspection_is_refused(self):
+        self.root.mkdir(mode=0o700)
+        tools = self.parent / "tools"
+        tools.mkdir()
+        probe = tools / "uname"
+        probe.write_text("#!/bin/sh\nexit 1\n")
+        probe.chmod(0o700)
+        result = self.run_wrapped(
+            ': > "$TMPDIR/../executed"', env={"PATH": f"{tools}:{os.environ['PATH']}"}
+        )
+        self.refused(result, "platform")
+        self.assertEqual(self.private_dirs(), [])
+
+    @unittest.skipUnless(sys.platform == "darwin", "extended ACL inspection is macOS-specific")
+    def test_acl_inspection_is_independent_of_the_extended_mode_marker(self):
+        self.root.mkdir(mode=0o700)
+        subprocess.run(["chmod", "+a", "everyone allow list,search,add_file,add_subdirectory,delete_child", str(self.root)], check=True)
+        tools = self.parent / "tools"
+        tools.mkdir()
+        probe = tools / "ls"
+        for marker in ("+", "@"):
+            with self.subTest(marker=marker):
+                # Real ACL inspection, with each documented presentation of the mode field.
+                probe.write_text(f'#!/bin/sh\nif [ "$1" = "-ld" ]; then printf "drwx------{marker} root\\n"; else exec /bin/ls "$@"; fi\n')
+                probe.chmod(0o700)
+                result = self.run_wrapped(
+                    ': > "$TMPDIR/../executed"', env={"PATH": f"{tools}:{os.environ['PATH']}"}
+                )
+                self.refused(result, "ACL")
+                self.assertEqual(self.private_dirs(), [])
+
     def test_an_inherited_root_that_is_a_symlink_is_refused(self):
         victim = self.victim()
         victim.chmod(0o700)

@@ -2781,6 +2781,12 @@ impl FirestoreState {
         self.history_usage
     }
 
+    /// The whole-database history limits this database refuses commits past.
+    #[must_use]
+    pub const fn history_limits(&self) -> HistoryLimits {
+        self.history_limits
+    }
+
     fn recount_history_usage(&self) -> HistoryUsage {
         let mut usage = HistoryUsage::default();
         for (path, versions) in &self.history {

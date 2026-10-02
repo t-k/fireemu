@@ -369,3 +369,33 @@ fn a_restored_snapshot_takes_the_backend_s_history_limits() {
         "{refused:?}"
     );
 }
+
+/// A restore (as an import uses) is not checked against a lowered byte limit; the backend
+/// names every database it leaves above a limit, with its usage and limits, and nothing else.
+#[test]
+fn history_over_limit_names_the_databases_a_restore_left_above_a_limit() {
+    let payload = "x".repeat(64 * 1024);
+    let (source, clock) = backend();
+    for round in 0..24 {
+        commit(&source, &format!("doc-{round}"), &payload);
+        advance(&clock, 1);
+    }
+    let snapshot = source.snapshot_databases();
+    let scope = fireemu_core_session::tenancy::Scope::AllExcept(std::collections::BTreeSet::new());
+    assert!(source.history_over_limit(&scope).is_empty());
+
+    let (limited, _clock) = backend();
+    let limits = HistoryLimits {
+        max_bytes: 1 << 20,
+        ..HistoryLimits::default()
+    };
+    let limited = limited.with_history_limits(limits);
+    limited.restore_databases(snapshot).unwrap();
+    let over = limited.history_over_limit(&scope);
+    assert_eq!(over.len(), 1, "{over:?}");
+    let (key, usage, reported) = &over[0];
+    assert_eq!(key, &("demo-app".to_owned(), "(default)".to_owned()));
+    assert_eq!(*reported, limits);
+    assert!(usage.total_bytes > limits.max_bytes, "{usage:?}");
+    assert_eq!(usage.versions, 24);
+}

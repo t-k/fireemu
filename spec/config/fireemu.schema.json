@@ -695,7 +695,7 @@
         "maxStoredBytes": {
           "type": "integer",
           "minimum": 1,
-          "description": "The object data the Storage emulator retains, in bytes, a local bound production does not have. Unset, nothing is bounded. A write that would grow the total past it (upload, resumable finalize, copy) is refused with 402 and the message storage.maxStoredBytes limit exceeded, and changes nothing; a resumable session stays open. Each object counts its bytes once (a copy counts again). Import and snapshot restore are not checked against it."
+          "description": "The object data the Storage emulator retains, in bytes, a local bound production does not have. Unset, nothing is bounded. A write that would grow the total past it (upload, resumable finalize, copy) is refused with 402 and the message storage.maxStoredBytes limit exceeded, and changes nothing; a resumable session stays open. Each object counts its bytes once (a copy counts again). Import and snapshot restore are not checked against it; an import above it starts with a warning."
         },
         "persistence": { "enum": ["memory", "snapshot-files", "redb"] }
       }

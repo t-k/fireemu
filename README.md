@@ -396,7 +396,7 @@ Versions older than an hour are released by the next commit after the clock pass
 ```
 
 - `maxVersionsPerPath` (1 to 1,000,000) sets the most versions of one document a database keeps, on either clock, in place of the defaults above.
-- `maxBytes` (1 MiB to 1 GiB) lowers the logical history bytes one database retains. An import (`--import`) is not checked against it: a larger import starts, and every later write that would grow the history is refused with `RESOURCE_EXHAUSTED`.
+- `maxBytes` (1 MiB to 1 GiB) lowers the logical history bytes one database retains. An import (`--import`) is not checked against it: a larger import starts with a `warning:` line naming the database, its bytes and the limit, and every later write that would grow the history is refused with `RESOURCE_EXHAUSTED`.
 
 Without these keys the defaults apply.
 
@@ -425,7 +425,7 @@ The Storage emulator keeps every object in memory, and by default nothing bounds
 - An upload, a resumable upload's final request or a copy that would grow the total past the limit is refused with HTTP 402 and the message `storage.maxStoredBytes limit exceeded` (in the JSON API, with the reason `storageCapacityExceeded`). There is no `Retry-After`. Delete objects to make room. The Firebase client SDKs report a 402 at once as `storage/quota-exceeded` without retrying; the Cloud Storage client libraries do not retry it either.
 - A write that does not grow the total, such as an equal or smaller replacement, always passes, even while the store holds more than the limit (after an import, a restore or a lowered limit).
 - A refused write changes nothing. A resumable upload stays open: its offset does not advance, so you can send the same final chunk again after making room, or cancel the upload.
-- An import (`--import`) and a snapshot restore are not checked against the limit.
+- An import (`--import`) and a snapshot restore are not checked against the limit. An import above it starts with a `warning:` line naming the stored bytes and the limit.
 
 `fireemu doctor --connect <control URL>` reports the stored bytes as `objects.bytes` against this limit.
 

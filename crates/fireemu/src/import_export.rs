@@ -3234,6 +3234,57 @@ fn export_firestore(
 /// One database's export section: each project with its live documents.
 type FirestoreExportSection = Vec<(String, Vec<Arc<fireemu_core_firestore::store::Document>>)>;
 
+/// What the operator should be told after an import was installed: every limit the imported
+/// state is already above. An import is not checked against the Firestore history limits or
+/// `storage.maxStoredBytes` (owner ruling: warn at start, do not refuse), so the run starts and
+/// only the writes that would grow past a limit are refused.
+pub fn import_limit_warnings(endpoints: &Endpoints) -> Vec<String> {
+    let scope = fireemu_core_session::tenancy::Scope::AllExcept(BTreeSet::new());
+    let firestore = endpoints.backend.history_over_limit(&scope);
+    let storage = endpoints
+        .storage
+        .store
+        .lock()
+        .ok()
+        .map(|store| (store.retained_blob_bytes(), store.stored_bytes_limit()));
+    limit_warnings(&firestore, storage)
+}
+
+/// The warning lines for databases over their history limits and for stored object data over
+/// `storage.maxStoredBytes` (`(stored bytes, bound)`).
+fn limit_warnings(
+    firestore: &[(
+        (String, String),
+        fireemu_core_firestore::store::HistoryUsage,
+        fireemu_core_firestore::store::HistoryLimits,
+    )],
+    storage: Option<(u64, Option<u64>)>,
+) -> Vec<String> {
+    let mut warnings = Vec::new();
+    for ((project, database), usage, limits) in firestore {
+        if usage.total_bytes > limits.max_bytes {
+            warnings.push(format!(
+                "firestore database {project}/{database} holds {} logical history bytes, above firestore.history.maxBytes {}; writes that would grow its history are refused with RESOURCE_EXHAUSTED until documents are deleted",
+                usage.total_bytes, limits.max_bytes
+            ));
+        }
+        if usage.versions > limits.max_versions {
+            warnings.push(format!(
+                "firestore database {project}/{database} holds {} history versions, above the database limit of {}; writes that would add versions are refused with RESOURCE_EXHAUSTED until documents are deleted",
+                usage.versions, limits.max_versions
+            ));
+        }
+    }
+    if let Some((stored, Some(limit))) = storage {
+        if stored > limit {
+            warnings.push(format!(
+                "storage holds {stored} bytes of object data, above storage.maxStoredBytes {limit}; writes that would grow it are refused with 402 until objects are deleted"
+            ));
+        }
+    }
+    warnings
+}
+
 /// The live documents an export writes, grouped by database id: inside each database the
 /// projects ascend and inside each project the paths ascend, the order the official artifact
 /// and earlier fireemu exports use. The documents are the allocations the stores hold, read
@@ -4736,6 +4787,42 @@ mod tests {
                 proptest::prop_assert!(actual.1 == expected.1, "{} bytes differ", database);
             }
         }
+    }
+
+    #[test]
+    fn limit_warnings_name_each_limit_an_import_is_above() {
+        use fireemu_core_firestore::store::{HistoryLimits, HistoryUsage};
+
+        let limits = HistoryLimits {
+            max_bytes: 100,
+            max_versions: 5,
+        };
+        let usage = |total_bytes, versions| HistoryUsage {
+            total_bytes,
+            versions,
+            ..HistoryUsage::default()
+        };
+        let key = ("demo-a".to_owned(), "(default)".to_owned());
+        assert!(super::limit_warnings(&[], None).is_empty());
+        assert!(super::limit_warnings(
+            &[(key.clone(), usage(100, 5), limits)],
+            Some((10, Some(10)))
+        )
+        .is_empty());
+        assert!(super::limit_warnings(&[], Some((10, None))).is_empty());
+        assert_eq!(
+            super::limit_warnings(&[(key.clone(), usage(101, 6), limits)], Some((11, Some(10)))),
+            vec![
+                "firestore database demo-a/(default) holds 101 logical history bytes, above firestore.history.maxBytes 100; writes that would grow its history are refused with RESOURCE_EXHAUSTED until documents are deleted".to_owned(),
+                "firestore database demo-a/(default) holds 6 history versions, above the database limit of 5; writes that would add versions are refused with RESOURCE_EXHAUSTED until documents are deleted".to_owned(),
+                "storage holds 11 bytes of object data, above storage.maxStoredBytes 10; writes that would grow it are refused with 402 until objects are deleted".to_owned(),
+            ]
+        );
+        assert_eq!(
+            super::limit_warnings(&[(key, usage(50, 6), limits)], None).len(),
+            1,
+            "only the version limit is crossed"
+        );
     }
 
     #[cfg(unix)]

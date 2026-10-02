@@ -394,6 +394,41 @@ fn an_official_multi_product_export_is_imported_whole() {
     );
     assert!(log.contains("auth: 5 account(s)"), "{log}");
     assert!(log.contains("storage: 3 object(s) in 1 bucket(s)"), "{log}");
+    assert!(
+        !log.contains("warning: --import"),
+        "nothing is over a limit: {log}"
+    );
+}
+
+/// An import above a configured `storage.maxStoredBytes` starts, with a warning naming the
+/// stored bytes, the bound and what is refused until objects are deleted.
+#[test]
+fn an_import_above_the_stored_byte_limit_starts_with_a_warning() {
+    let dir = scratch("stored-bytes-import");
+    let config = dir.join("fireemu.json");
+    std::fs::write(
+        &config,
+        r#"{"schemaVersion": 1, "profile": "emulator", "firestore": {"edition": "standard", "apiMode": "native"}, "storage": {"maxStoredBytes": 10}}"#,
+    )
+    .unwrap();
+    let output = exec()
+        .arg("--config")
+        .arg(&config)
+        .args(["--import"])
+        .arg(fixture("official-multiproduct"))
+        .args(["--", "true"])
+        .output()
+        .unwrap();
+    let log = text(&output);
+    assert!(output.status.success(), "{log}");
+    assert!(log.contains("storage: 3 object(s) in 1 bucket(s)"), "{log}");
+    assert!(
+        log.contains(&format!(
+            "warning: --import {}: storage holds 29 bytes of object data, above storage.maxStoredBytes 10; writes that would grow it are refused with 402 until objects are deleted",
+            fixture("official-multiproduct").display()
+        )),
+        "{log}"
+    );
 }
 
 #[test]
@@ -626,6 +661,18 @@ curl -s -w '\nwrite %{{http_code}}\n' -X PATCH -H 'Authorization: Bearer owner' 
     assert!(log.contains("write 429"), "{log}");
     assert!(
         log.contains("Firestore retained history capacity is exhausted"),
+        "{log}"
+    );
+    // The run says so at start (owner ruling: warn, do not refuse).
+    let warning = format!(
+        "warning: --import {}: firestore database demo-import-rss/(default) holds ",
+        export.display()
+    );
+    assert!(log.contains(&warning), "{log}");
+    assert!(
+        log.contains(
+            "logical history bytes, above firestore.history.maxBytes 1048576; writes that would grow its history are refused with RESOURCE_EXHAUSTED until documents are deleted"
+        ),
         "{log}"
     );
 }

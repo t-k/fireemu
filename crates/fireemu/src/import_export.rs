@@ -3240,14 +3240,29 @@ type FirestoreExportSection = Vec<(String, Vec<Arc<fireemu_core_firestore::store
 /// only the writes that would grow past a limit are refused.
 pub fn import_limit_warnings(endpoints: &Endpoints) -> Vec<String> {
     let scope = fireemu_core_session::tenancy::Scope::AllExcept(BTreeSet::new());
-    let firestore = endpoints.backend.history_over_limit(&scope);
-    let storage = endpoints
-        .storage
-        .store
-        .lock()
-        .ok()
-        .map(|store| (store.retained_blob_bytes(), store.stored_bytes_limit()));
-    limit_warnings(&firestore, storage)
+    let mut warnings = firestore_limit_warnings(endpoints.backend, &scope);
+    if let Ok(store) = endpoints.storage.store.lock() {
+        warnings.extend(storage_limit_warnings(&store));
+    }
+    warnings
+}
+
+/// The warning lines for every database `scope` owns that is above a history limit.
+pub(crate) fn firestore_limit_warnings(
+    backend: &LocalBackend,
+    scope: &fireemu_core_session::tenancy::Scope,
+) -> Vec<String> {
+    limit_warnings(&backend.history_over_limit(scope), None)
+}
+
+/// The warning line when the object data `store` holds is above `storage.maxStoredBytes`.
+pub(crate) fn storage_limit_warnings(
+    store: &fireemu_core_storage::store::StorageState,
+) -> Vec<String> {
+    limit_warnings(
+        &[],
+        Some((store.retained_blob_bytes(), store.stored_bytes_limit())),
+    )
 }
 
 /// The warning lines for databases over their history limits and for stored object data over

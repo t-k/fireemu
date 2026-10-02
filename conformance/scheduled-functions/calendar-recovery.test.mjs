@@ -603,30 +603,42 @@ test("jobs-and-topic recovery requires byte-exact ownership before topic DELETE"
 });
 
 test("recorded recovery proofs reject the same parsed JSON with different bytes", async () => {
-  // Deterministic seeded generation; the oracle compares independent expected strings,
-  // never the imported production judge. Scope, position and whitespace vary together.
+  // Explicit strata guarantee every scope/position has exact and altered-byte cases.
+  // The seed permutes only execution order; the oracle uses independent literal bytes.
+  const required = {
+    "topic-only": [
+      "before-list-jobs",
+      "read-topic-before",
+      "delete-topic",
+      "read-topic-after",
+      "final-list-jobs",
+      "final-list-topics",
+    ],
+    "jobs-and-topic": [
+      ...Object.keys(calendarResources(originalRunId).jobs).flatMap((id) => [
+        id + "-before",
+        id + "-after",
+      ]),
+      "read-topic-before",
+      "read-topic-after",
+      "final-list-jobs",
+      "final-list-topics",
+    ],
+  };
+  const reached = new Set();
   let seed = 0x790792;
   const next = () => (seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0);
-  for (let sample = 0; sample < 128; sample++) {
-    const scope = next() % 2 ? "topic-only" : "jobs-and-topic";
-    const positions =
-      scope === "topic-only"
-        ? [
-            "before-list-jobs",
-            "read-topic-before",
-            "read-topic-after",
-            "final-list-jobs",
-            "final-list-topics",
-          ]
-        : [
-            "c01-before",
-            "c08-after",
-            "read-topic-before",
-            "read-topic-after",
-            "final-list-jobs",
-            "final-list-topics",
-          ];
-    const position = positions[next() % positions.length];
+  const samples = Object.entries(required).flatMap(([scope, positions]) =>
+    positions.flatMap((position) =>
+      ["exact", ...variants].map((variant) => ({ scope, position, variant })),
+    ),
+  );
+  for (let index = samples.length - 1; index > 0; index--) {
+    const swap = (next() >>> 8) % (index + 1);
+    [samples[index], samples[swap]] = [samples[swap], samples[index]];
+  }
+  assert.equal(samples.length, 156);
+  for (const [sample, { scope, position, variant }] of samples.entries()) {
     const e = environment("ABSENT"),
       original = e.deps.send;
     const expected = position.startsWith("c")
@@ -638,19 +650,31 @@ test("recorded recovery proofs reject the same parsed JSON with different bytes"
             e.own.prefix +
             ').",\n    "status": "NOT_FOUND"\n  }\n}\n'
           : "{}\n";
-    const candidate =
-      next() % 4 === 0 ? expected : byteVariant(expected, variants[next() % variants.length]);
+    const candidate = variant === "exact" ? expected : byteVariant(expected, variant);
+    assert.equal(candidate === expected, variant === "exact", `${scope}/${position}/${variant}`);
+    reached.add(`${scope}/${position}/${variant}`);
+    reached.add(`${scope}/${position}/${candidate === expected ? "exact" : "variant"}`);
     assert.deepEqual(JSON.parse(candidate), JSON.parse(expected));
+    let observedPosition = false;
     e.deps.send = async (request) => {
       const response = await original(request);
       if (request.id !== position) return response;
+      observedPosition = true;
       assert.equal(await response.text(), expected, position);
       return new Response(candidate, { status: response.status });
     };
     const result = await collectCalendarRecovery({ ...e.deps, recoveryScope: scope });
+    assert.ok(observedPosition, `${scope}/${position}/${variant}: proof read reached`);
     assert.equal(result.closureReady, candidate === expected, `${sample}/${scope}/${position}`);
     assert.ok(result.attempted <= (scope === "topic-only" ? 9 : 64));
   }
+  for (const [scope, positions] of Object.entries(required))
+    for (const position of positions)
+      for (const outcome of ["exact", "variant", ...variants])
+        assert.ok(
+          reached.has(`${scope}/${position}/${outcome}`),
+          `unreached: ${scope}/${position}/${outcome}`,
+        );
 });
 
 test("ordinary recovery rejects detailed job absence and mismatched persisted length", async () => {

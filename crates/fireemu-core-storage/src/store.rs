@@ -398,6 +398,9 @@ pub enum StorageError {
     },
     /// Upload already finalized.
     UploadFinalized,
+    /// The write would take the object data the store retains past `storage.maxStoredBytes`
+    /// (a local bound production does not have, owner ledger 759).
+    StoredBytesLimit,
     /// Upload size differs from the declared total.
     UploadSizeMismatch,
     /// Too many open upload sessions.
@@ -432,6 +435,7 @@ impl fmt::Display for StorageError {
                 write!(f, "upload offset mismatch, expected {expected}")
             }
             Self::UploadFinalized => f.write_str("upload already finalized"),
+            Self::StoredBytesLimit => f.write_str("storage.maxStoredBytes limit exceeded"),
             Self::UploadSizeMismatch => f.write_str("upload size differs from the declared total"),
             Self::TooManyUploads => f.write_str("too many open upload sessions"),
             Self::UploadCapacityExceeded => f.write_str("resumable upload byte budget exhausted"),
@@ -518,6 +522,15 @@ enum UploadState {
     /// received byte count is kept observable; the bytes themselves are dropped, so a
     /// refused near-limit upload does not sit in memory until its TTL (S-2).
     Denied(u64),
+}
+
+/// A receiving session's length and digests, taken before a finalizing chunk is appended
+/// ([`StorageState::upload_checkpoint`]).
+#[derive(Debug, Clone)]
+pub struct UploadCheckpoint {
+    received: usize,
+    md5: Md5,
+    crc32c: Crc32c,
 }
 
 /// What a status query observes about a resumable upload.
@@ -659,11 +672,19 @@ pub struct StorageState {
     uploads: BTreeMap<UploadId, UploadSession>,
     retained_upload_bytes: u64,
     retained_upload_limit: u64,
+    /// `storage.maxStoredBytes`; `None` bounds nothing.
+    stored_bytes_limit: Option<u64>,
+    /// The length of every blob in `blobs`, summed; kept by `insert_blob` and `remove_blob`.
+    stored_bytes: u64,
     next_blob: u64,
     next_generation: u64,
     next_upload: u64,
     rng: SplitMix64,
     events: Vec<StorageEvent>,
+}
+
+fn blob_bytes(blobs: &BTreeMap<BlobId, Arc<Vec<u8>>>) -> u64 {
+    blobs.values().map(|bytes| bytes.len() as u64).sum()
 }
 
 fn custom_metadata_size(custom: &BTreeMap<String, String>) -> usize {
@@ -713,6 +734,8 @@ impl StorageState {
             uploads: BTreeMap::new(),
             retained_upload_bytes: 0,
             retained_upload_limit: MAX_RETAINED_UPLOAD_BYTES,
+            stored_bytes_limit: None,
+            stored_bytes: 0,
             next_blob: 0,
             next_generation: 0,
             next_upload: 0,
@@ -788,7 +811,13 @@ impl StorageState {
             service: "storage".to_owned(),
             gauges: vec![
                 Gauge::logical("objects.count", Unit::Count, objects, None),
-                Gauge::logical("objects.bytes", Unit::Bytes, object_bytes, None),
+                // The bound is the store's (`storage.maxStoredBytes`), shared by every bucket.
+                Gauge::logical(
+                    "objects.bytes",
+                    Unit::Bytes,
+                    object_bytes,
+                    self.stored_bytes_limit,
+                ),
                 Gauge::logical(
                     "uploads.active",
                     Unit::Count,
@@ -817,6 +846,7 @@ impl StorageState {
     pub fn clear(&mut self) {
         self.objects.clear();
         self.blobs.clear();
+        self.stored_bytes = 0;
         self.uploads.clear();
         self.retained_upload_bytes = 0;
         self.events.clear();
@@ -833,7 +863,7 @@ impl StorageState {
             .collect();
         for key in &gone {
             if let Some(m) = self.objects.remove(key) {
-                self.blobs.remove(&m.blob);
+                self.remove_blob(m.blob);
             }
         }
         self.uploads.retain(|_, u| u.bucket != *bucket);
@@ -852,7 +882,7 @@ impl StorageState {
             .collect();
         for key in &gone {
             if let Some(m) = self.objects.remove(key) {
-                self.blobs.remove(&m.blob);
+                self.remove_blob(m.blob);
             }
         }
         self.uploads.retain(|_, u| !owned(u.bucket.as_str()));
@@ -882,12 +912,15 @@ impl StorageState {
             .map(|(k, v)| (k.clone(), v.clone()))
             .collect();
         let retained_upload_bytes = Self::upload_bytes(&uploads);
+        let stored_bytes = blob_bytes(&blobs);
         Self {
             objects,
             blobs,
             uploads,
             retained_upload_bytes,
             retained_upload_limit: self.retained_upload_limit,
+            stored_bytes_limit: self.stored_bytes_limit,
+            stored_bytes,
             next_blob: self.next_blob,
             next_generation: self.next_generation,
             next_upload: self.next_upload,
@@ -904,7 +937,7 @@ impl StorageState {
         for (k, v) in &captured.objects {
             if owned(k.0.as_str()) {
                 if let Some(bytes) = captured.blobs.get(&v.blob) {
-                    self.blobs.insert(v.blob, Arc::clone(bytes));
+                    self.insert_blob(v.blob, Arc::clone(bytes));
                 }
                 self.objects.insert(k.clone(), v.clone());
             }
@@ -928,10 +961,62 @@ impl StorageState {
         });
     }
 
+    /// The `storage.maxStoredBytes` bound on [`Self::retained_blob_bytes`], if any.
+    #[must_use]
+    pub const fn stored_bytes_limit(&self) -> Option<u64> {
+        self.stored_bytes_limit
+    }
+
+    /// Sets the `storage.maxStoredBytes` bound. It applies to later writes only: object data
+    /// already retained stays, and only a write that would grow past the bound is refused.
+    pub fn set_stored_bytes_limit(&mut self, limit: Option<u64>) {
+        self.stored_bytes_limit = limit;
+    }
+
     /// Bytes of object data this state retains, each blob counted once (`SNAP-MEM-01`).
     #[must_use]
-    pub fn retained_blob_bytes(&self) -> u64 {
-        self.blobs.values().map(|b| b.len() as u64).sum()
+    pub const fn retained_blob_bytes(&self) -> u64 {
+        self.stored_bytes
+    }
+
+    /// Adds a blob under an identity no blob holds: identities are allocated once and a
+    /// restore removes the buckets it replaces first.
+    fn insert_blob(&mut self, blob: BlobId, bytes: Arc<Vec<u8>>) {
+        self.stored_bytes = self.stored_bytes.saturating_add(bytes.len() as u64);
+        let replaced = self.blobs.insert(blob, bytes);
+        debug_assert!(replaced.is_none(), "blob identities are never reused");
+        // Kept even so: a reused identity must not leave the count too high in a release build.
+        if let Some(old) = replaced {
+            self.stored_bytes = self.stored_bytes.saturating_sub(old.len() as u64);
+        }
+    }
+
+    fn remove_blob(&mut self, blob: BlobId) {
+        if let Some(old) = self.blobs.remove(&blob) {
+            self.stored_bytes = self.stored_bytes.saturating_sub(old.len() as u64);
+        }
+    }
+
+    /// Refuses a write of `size` bytes that replaces `replaced` (the current object at the
+    /// destination, if any) when it would grow the retained object data past
+    /// `storage.maxStoredBytes`. A replacement is charged only its difference, and a write
+    /// that does not grow the total always passes, even while the store is over the bound
+    /// (after an import, a restore or a lowered configuration).
+    fn check_stored_bytes(
+        &self,
+        replaced: Option<&ObjectMetadata>,
+        size: u64,
+    ) -> Result<(), StorageError> {
+        let Some(limit) = self.stored_bytes_limit else {
+            return Ok(());
+        };
+        let freed = replaced
+            .and_then(|old| self.blobs.get(&old.blob))
+            .map_or(0, |bytes| bytes.len() as u64);
+        if size > freed && self.stored_bytes.saturating_sub(freed).saturating_add(size) > limit {
+            return Err(StorageError::StoredBytesLimit);
+        }
+        Ok(())
     }
 
     /// Bytes of object data shared with `other` by allocation: blobs whose buffer is the
@@ -1160,6 +1245,7 @@ impl StorageState {
         }
         let key = (bucket.clone(), name.clone());
         Self::check(self.objects.get(&key), pre)?;
+        self.check_stored_bytes(self.objects.get(&key), size)?;
         let next_blob = self
             .next_blob
             .checked_add(1)
@@ -1204,9 +1290,9 @@ impl StorageState {
         self.next_blob = next_blob;
         self.next_generation = next_generation;
         if let Some(old) = self.objects.insert(key, meta.clone()) {
-            self.blobs.remove(&old.blob);
+            self.remove_blob(old.blob);
         }
-        self.blobs.insert(blob, bytes);
+        self.insert_blob(blob, bytes);
         self.events.push(event);
     }
 
@@ -1396,7 +1482,7 @@ impl StorageState {
         let event = StorageEvent::Deleted(meta.clone());
         let reservation = admit(&event)?;
         self.objects.remove(&key);
-        self.blobs.remove(&meta.blob);
+        self.remove_blob(meta.blob);
         self.events.push(event);
         Ok((meta, reservation))
     }
@@ -1679,9 +1765,9 @@ impl StorageState {
             .objects
             .insert((object.bucket, object.name), meta.clone())
         {
-            self.blobs.remove(&old.blob);
+            self.remove_blob(old.blob);
         }
-        self.blobs.insert(blob, Arc::new(bytes));
+        self.insert_blob(blob, Arc::new(bytes));
         Ok(meta)
     }
 
@@ -2135,6 +2221,9 @@ impl StorageState {
         let (key, meta, next_blob, next_generation) =
             match self.plan_put(&bucket, &name, size, digests, metadata, precondition, now) {
                 Ok(plan) => plan,
+                // The stored-byte bound is not the session's fault: it stays open, so the
+                // client can finish it once there is room, or cancel it.
+                Err(StorageError::StoredBytesLimit) => return Err(StorageError::StoredBytesLimit),
                 Err(error) => {
                     if let Some(upload) = self.uploads.get_mut(id) {
                         upload.state = UploadState::Aborted;
@@ -2173,6 +2262,7 @@ impl StorageState {
         finalize: bool,
         now: LogicalInstant,
     ) -> Result<UploadProgress, StorageError> {
+        let checkpoint = finalize.then(|| self.upload_checkpoint(id)).flatten();
         let received = self.append_upload(id, offset, chunk, now)?;
         if !finalize {
             return Ok(UploadProgress {
@@ -2180,11 +2270,48 @@ impl StorageState {
                 committed: None,
             });
         }
-        let meta = self.finalize_upload(id, now)?;
+        let meta = match self.finalize_upload(id, now) {
+            Err(StorageError::StoredBytesLimit) => {
+                if let Some(checkpoint) = checkpoint {
+                    self.rollback_upload(id, checkpoint);
+                }
+                return Err(StorageError::StoredBytesLimit);
+            }
+            other => other?,
+        };
         Ok(UploadProgress {
             received: meta.size,
             committed: Some(meta),
         })
+    }
+
+    /// What a receiving session holds before a chunk is appended, so a finalizing chunk the
+    /// stored-byte bound refuses can be taken back and the offset does not advance.
+    #[must_use]
+    pub fn upload_checkpoint(&self, id: &UploadId) -> Option<UploadCheckpoint> {
+        self.uploads
+            .get(id)
+            .filter(|upload| matches!(upload.state, UploadState::Receiving))
+            .map(|upload| UploadCheckpoint {
+                received: upload.received.len(),
+                md5: upload.md5.clone(),
+                crc32c: upload.crc32c,
+            })
+    }
+
+    /// Takes a receiving session back to `checkpoint`: the bytes appended since are dropped
+    /// and the running digests restored. A session that left the receiving state is left as
+    /// it is.
+    pub fn rollback_upload(&mut self, id: &UploadId, checkpoint: UploadCheckpoint) {
+        if let Some(upload) = self.uploads.get_mut(id) {
+            // Appending only grows a receiving session, so the checkpoint is a prefix of it.
+            if matches!(upload.state, UploadState::Receiving) {
+                upload.received.truncate(checkpoint.received);
+                upload.md5 = checkpoint.md5;
+                upload.crc32c = checkpoint.crc32c;
+            }
+        }
+        self.refresh_retained_upload_bytes();
     }
 
     /// Cancels an upload. A finalized session (committed, or refused by rules at

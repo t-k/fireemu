@@ -205,6 +205,7 @@ test("a failed spawn answers with no code, no signal, no timeout and its error c
     stdout: "",
     stderr: "",
     timedOut: false,
+    truncated: false,
     spawnFailed: true,
   });
   const failed = (await readRecords(path)).filter((row) => row.type === "spawn-failed");
@@ -388,4 +389,18 @@ test("ps falls back to the system PATH, and the self-start row digests the ps ar
     (row) => row.type === "birth",
   );
   assert.equal(selfBirth.argvSha256, plainBirth.argvSha256);
+});
+
+// Review round 2, M3: output past maxBuffer is reported, never silently dropped.
+test("execFile reports truncation at maxBuffer and keeps the bound", async (t) => {
+  const recorder = createRecorder({ path: join(await scratch(t), "measure.jsonl"), ...header });
+  const cut = await recorder.execFile(
+    "/bin/sh",
+    ["-c", "printf abcdef; printf ghijkl >&2"],
+    { maxBuffer: 3 },
+    "probe",
+  );
+  assert.deepEqual([cut.stdout, cut.stderr, cut.truncated], ["abc", "ghi", true]);
+  const whole = await recorder.execFile("/bin/sh", ["-c", "printf abc"], { maxBuffer: 3 }, "probe");
+  assert.deepEqual([whole.stdout, whole.truncated], ["abc", false]);
 });

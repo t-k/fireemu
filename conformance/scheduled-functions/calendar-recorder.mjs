@@ -97,6 +97,7 @@ export function createRecorder({
           stdout: "",
           stderr: "",
           timedOut: false,
+          truncated: false,
           spawnFailed: true,
         };
       }
@@ -105,11 +106,19 @@ export function createRecorder({
         timedOut = false;
       child.stdout.setEncoding("utf8");
       child.stderr.setEncoding("utf8");
+      // Output past maxBuffer is dropped and reported, so a caller never mistakes a cut
+      // listing for a complete one (review round 2, M3).
+      let truncated = false;
+      const keep = (kept, chunk) => {
+        const room = Math.max(0, maxBuffer - kept.length);
+        if (chunk.length > room) truncated = true;
+        return kept + chunk.slice(0, room);
+      };
       child.stdout.on("data", (chunk) => {
-        if (stdout.length < maxBuffer) stdout += chunk;
+        stdout = keep(stdout, chunk);
       });
       child.stderr.on("data", (chunk) => {
-        if (stderr.length < maxBuffer) stderr += chunk;
+        stderr = keep(stderr, chunk);
       });
       const closed = new Promise((resolve) => child.once("close", resolve));
       const timer = setTimeout(() => {
@@ -121,7 +130,16 @@ export function createRecorder({
       const { code, signal } = await child.recordExit;
       await closed;
       clearTimeout(timer);
-      return { code, signal, stdout, stderr, timedOut, pid: child.pid, handle: child.recordHandle };
+      return {
+        code,
+        signal,
+        stdout,
+        stderr,
+        timedOut,
+        truncated,
+        pid: child.pid,
+        handle: child.recordHandle,
+      };
     },
     /** A process's start time, from a recorded `ps` (what a parent puts in an identity row). */
     async startedOf(target) {

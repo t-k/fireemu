@@ -161,6 +161,19 @@ export function validateRecords(files) {
 
 /** One inventory pass (condition (E)); rows carry `sid` as a number, "ESRCH" or another error. */
 function judgePass(rows, ctx) {
+  // A complete pass lists launchd and the measuring entry itself (review round 2, M3).
+  if (
+    !Number.isSafeInteger(ctx.rootPid) ||
+    !rows.some((row) => row.pid === 1) ||
+    !rows.some((row) => row.pid === ctx.rootPid)
+  )
+    return {
+      survivors: [],
+      inconclusive: [{ row: null, reason: "incomplete inventory pass" }],
+      unrelatedZombies: [],
+      ignored: [],
+      trigger: false,
+    };
   const byPid = new Map(rows.map((row) => [row.pid, row]));
   const members = new Set(rows.filter((row) => row.sid === ctx.sessionId).map((row) => row.pid));
   const recordedPid = (pid) => ctx.recorded.some((identity) => identity.pid === pid);
@@ -270,8 +283,8 @@ export function judgeInventory(passes, ctx) {
 }
 
 /** Condition (F): `lsof -F pcn` answers; exit 1 is "none" only when it printed nothing. */
-export function interpretLsof({ code, stdout, stderr, timedOut }) {
-  if (timedOut) return { result: "inconclusive" };
+export function interpretLsof({ code, stdout, stderr, timedOut, truncated }) {
+  if (timedOut || truncated !== false) return { result: "inconclusive" };
   if (code === 1)
     return stdout === "" && stderr === "" ? { result: "none" } : { result: "inconclusive" };
   if (code !== 0 || stderr !== "") return { result: "inconclusive" };
@@ -421,6 +434,9 @@ export function refusalVerdict(run) {
     if ((run.records.signals ?? []).length)
       fail.push(`${run.records.signals.length} harness signal(s)`);
     if (run.daemon.timedOut || run.daemon.cancelled) fail.push("the daemon did not exit by itself");
+    // A pipe that never closes means some process still holds the daemon's output.
+    if (run.daemon.diagnosticsDrained !== true)
+      fail.push("the daemon's output pipes stayed open after it exited");
     for (const role of ["inner", "outer"]) {
       const supervision = run.supervision[role];
       if (supervision?.timedOut !== false || supervision?.cancelled !== false)

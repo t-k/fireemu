@@ -63,6 +63,13 @@ export async function harnessVersion() {
   return hash.digest("hex");
 }
 
+/**
+ * Whether a recorded query answered completely: exit 0, nothing on stderr, nothing cut at
+ * maxBuffer (review round 2, M3). Anything else is unreadable output.
+ */
+export const complete = (answer) =>
+  answer.code === 0 && answer.stderr === "" && answer.truncated === false && !answer.timedOut;
+
 /** `ps` rows for the ownership tracker, through the recorder. */
 export async function snapshotWith(recorder) {
   const answer = await recorder.execFile(
@@ -71,7 +78,7 @@ export async function snapshotWith(recorder) {
     { env: psEnv() },
     "ps",
   );
-  if (answer.code !== 0) throw new Error("process snapshot failed");
+  if (!complete(answer)) throw new Error("process snapshot failed");
   return parseProcessSnapshot(answer.stdout, answer.pid);
 }
 
@@ -86,7 +93,7 @@ export async function sessionsOf(recorder, pids) {
     { env: cleanEnv(), timeoutMs: 20000 },
     "getsid",
   );
-  if (answer.code !== 0) throw new Error("session query failed");
+  if (!complete(answer)) throw new Error("session query failed");
   const result = JSON.parse(answer.stdout);
   return Object.fromEntries(pids.map((pid) => [pid, result[String(pid)]]));
 }
@@ -99,7 +106,7 @@ export async function inventoryPass(recorder) {
     { env: psEnv() },
     "inventory",
   );
-  if (answer.code !== 0) throw new Error("inventory failed");
+  if (!complete(answer)) throw new Error("inventory failed");
   const rows = parseInventory(answer.stdout).filter((row) => row.pid !== answer.pid);
   const sessions = await sessionsOf(
     recorder,
@@ -148,7 +155,7 @@ export async function readOwnClaims(recorder, { service, database }) {
     { env: cleanEnv() },
     "claims-read",
   );
-  if (answer.code !== 0) throw new Error("own calendar claim proof is unreadable");
+  if (!complete(answer)) throw new Error("own calendar claim proof is unreadable");
   const result = JSON.parse(answer.stdout);
   if (
     result.db !== database ||
@@ -513,6 +520,7 @@ async function judgeRun({
     recorded: identities,
     privateDir: prepared ?? accDir,
     launchTime,
+    rootPid: process.pid,
   });
   extra.survivors = inventory.survivors;
   const claims = outerResult?.service
@@ -547,6 +555,7 @@ async function judgeRun({
       ? {
           exitCode: inner.exitCode,
           diagnostics: inner.diagnostics,
+          diagnosticsDrained: inner.diagnosticsDrained,
           timedOut: inner.timedOut,
           cancelled: inner.cancelled,
         }

@@ -277,6 +277,7 @@ const ctx = {
   recorded: [{ pid: 400, uid: 501, started: "Fri Oct  2 06:00:03 2026" }],
   privateDir: "/private/run-1",
   launchTime: Date.parse("2026-10-02T06:00:00Z"),
+  rootPid: 100,
 };
 const row = (overrides) => ({
   pid: 5000,
@@ -289,6 +290,22 @@ const row = (overrides) => ({
   sid: 77,
   ...overrides,
 });
+// Every real pass lists launchd and the measuring entry (review round 2, M3); the tests add
+// them to each pass they build, unless the pass names those PIDs itself.
+const baseRows = [
+  row({ pid: 1, ppid: 0, sid: 1, args: "/sbin/launchd" }),
+  row({ pid: 100, ppid: 1, sid: 50, args: "node calendar-run-local.mjs --measure plan.json" }),
+];
+const judgeComplete = (passes, context) =>
+  judgeInventory(
+    Array.isArray(passes)
+      ? passes.map((pass) => [
+          ...baseRows.filter((base) => !pass.some((other) => other.pid === base.pid)),
+          ...pass,
+        ])
+      : passes,
+    context,
+  );
 const categories = {
   unrelated: { make: (pid) => row({ pid }), expect: "clean" },
   "session member": { make: (pid) => row({ pid, sid: 300 }), expect: "survivor" },
@@ -346,7 +363,7 @@ const parentRow = row({ pid: 6000, ppid: 1, sid: 88 });
 test("each inventory category is judged as the model says", () => {
   for (const [name, category] of Object.entries(categories)) {
     const pass = [category.make(5000), ...(category.parent ? [parentRow] : [])];
-    const result = judgeInventory([pass, pass], ctx);
+    const result = judgeComplete([pass, pass], ctx);
     const outcome =
       category.expect === "survivor"
         ? "survivors"
@@ -360,14 +377,14 @@ test("each inventory category is judged as the model says", () => {
 test("a re-pass trigger in the second pass needs a later clean pair; the bound is five passes", () => {
   const esrch = row({ pid: 5000, ppid: 1, sid: "ESRCH", started: "Fri Oct 2 06:00:05 2026" });
   const clean = [row({ pid: 5001 })];
-  assert.equal(judgeInventory([clean, [esrch], clean, clean], ctx).outcome, "clean");
+  assert.equal(judgeComplete([clean, [esrch], clean, clean], ctx).outcome, "clean");
   assert.equal(
-    judgeInventory([clean, [esrch], [esrch], [esrch], [esrch]], ctx).outcome,
+    judgeComplete([clean, [esrch], [esrch], [esrch], [esrch]], ctx).outcome,
     "inconclusive",
   );
-  assert.equal(judgeInventory([clean], ctx).outcome, "inconclusive", "one pass is never enough");
+  assert.equal(judgeComplete([clean], ctx).outcome, "inconclusive", "one pass is never enough");
   assert.equal(
-    judgeInventory([clean, clean, clean, clean, clean, clean], ctx).outcome,
+    judgeComplete([clean, clean, clean, clean, clean, clean], ctx).outcome,
     "inconclusive",
     "more than five passes",
   );
@@ -394,7 +411,7 @@ test("generated inventories are judged as the category model says", () => {
       : expects.some((e) => e === "inconclusive" || e === "repass")
         ? "inconclusive"
         : "clean";
-    const result = judgeInventory([pass, pass], ctx);
+    const result = judgeComplete([pass, pass], ctx);
     assert.equal(result.outcome, model, `seed1e7e742/${i}/${inserted}`);
     if (model === "survivors") assert.ok(result.survivors.length > 0);
   }
@@ -407,7 +424,7 @@ test("the survivor report names every rule that fired", () => {
     sid: 300,
     args: "fireemu --config /private/run-1/fireemu.json",
   });
-  const result = judgeInventory([[member], [member]], {
+  const result = judgeComplete([[member], [member]], {
     ...ctx,
     launchTime: Date.parse("2026-10-02T06:00:00Z"),
   });
@@ -415,20 +432,29 @@ test("the survivor report names every rule that fired", () => {
 });
 
 test("lsof answers are none only for a silent exit 1", () => {
-  assert.deepEqual(interpretLsof({ code: 1, stdout: "", stderr: "", timedOut: false }), {
-    result: "none",
-  });
   assert.deepEqual(
-    interpretLsof({ code: 0, stdout: "p4242\ncnode\nn*:12345\n", stderr: "", timedOut: false }),
+    interpretLsof({ code: 1, stdout: "", stderr: "", timedOut: false, truncated: false }),
+    {
+      result: "none",
+    },
+  );
+  assert.deepEqual(
+    interpretLsof({
+      code: 0,
+      stdout: "p4242\ncnode\nn*:12345\n",
+      stderr: "",
+      timedOut: false,
+      truncated: false,
+    }),
     { result: "listener", pids: [4242] },
   );
   for (const answer of [
-    { code: 1, stdout: "", stderr: "lsof: illegal option", timedOut: false },
-    { code: 1, stdout: "p1\n", stderr: "", timedOut: false },
-    { code: 0, stdout: "", stderr: "", timedOut: false },
-    { code: 0, stdout: "garbage\n", stderr: "", timedOut: false },
-    { code: 2, stdout: "", stderr: "", timedOut: false },
-    { code: null, stdout: "", stderr: "", timedOut: true },
+    { code: 1, stdout: "", stderr: "lsof: illegal option", timedOut: false, truncated: false },
+    { code: 1, stdout: "p1\n", stderr: "", timedOut: false, truncated: false },
+    { code: 0, stdout: "", stderr: "", timedOut: false, truncated: false },
+    { code: 0, stdout: "garbage\n", stderr: "", timedOut: false, truncated: false },
+    { code: 2, stdout: "", stderr: "", timedOut: false, truncated: false },
+    { code: null, stdout: "", stderr: "", timedOut: true, truncated: false },
   ])
     assert.equal(interpretLsof(answer).result, "inconclusive", JSON.stringify(answer));
 });
@@ -461,6 +487,7 @@ function verdictInput() {
     daemon: {
       exitCode: 1,
       diagnostics: ["functions loaded: none", pins.refusalLine],
+      diagnosticsDrained: true,
       timedOut: false,
       cancelled: false,
     },
@@ -806,24 +833,24 @@ test("the validator controls refuse a removed file, a dropped exit and a failed 
 test("an uncovered zombie is unrelated only when its parent is alive outside the session", () => {
   const zombie = (sid, ppid) => row({ pid: 5000, ppid, stat: "Z", sid });
   assert.equal(
-    judgeInventory([[zombie(77, 6001)], [zombie(77, 6001)]], ctx).outcome,
+    judgeComplete([[zombie(77, 6001)], [zombie(77, 6001)]], ctx).outcome,
     "inconclusive",
   );
   const withParent = [zombie(77, 6000), parentRow];
-  const result = judgeInventory([withParent, withParent], ctx);
+  const result = judgeComplete([withParent, withParent], ctx);
   assert.equal(result.outcome, "clean");
   assert.equal(result.passes[0].unrelatedZombies.length, 1, "logged");
   const insideParent = [zombie(77, 6000), { ...parentRow, sid: "ESRCH" }];
-  assert.equal(judgeInventory([insideParent, insideParent], ctx).outcome, "inconclusive");
+  assert.equal(judgeComplete([insideParent, insideParent], ctx).outcome, "inconclusive");
 });
 
 test("start times are read in UTC, and an unreadable one is inconclusive", () => {
   const late = row({ started: "Fri Oct 2 06:00:01 2026", args: "x /private/run-1/y" });
-  assert.equal(judgeInventory([[late], [late]], ctx).outcome, "survivors");
+  assert.equal(judgeComplete([[late], [late]], ctx).outcome, "survivors");
   const early = row({ started: "Fri Oct 2 05:59:59 2026", args: "x /private/run-1/y" });
-  assert.equal(judgeInventory([[early], [early]], ctx).outcome, "clean");
+  assert.equal(judgeComplete([[early], [early]], ctx).outcome, "clean");
   const unreadable = row({ started: "Fri Foo 2 05:59:59 2026" });
-  assert.equal(judgeInventory([[unreadable], [unreadable]], ctx).outcome, "inconclusive");
+  assert.equal(judgeComplete([[unreadable], [unreadable]], ctx).outcome, "inconclusive");
 });
 
 test("an ESRCH row asks for another pass when its parent could have been in the session", () => {
@@ -842,12 +869,12 @@ test("an ESRCH row asks for another pass when its parent could have been in the 
     ],
   ]) {
     const clean = [row({ pid: 5001 })];
-    assert.equal(judgeInventory([clean, rows, clean], ctx).outcome, "inconclusive", name);
-    assert.equal(judgeInventory([clean, rows, clean, clean], ctx).outcome, "clean", name);
+    assert.equal(judgeComplete([clean, rows, clean], ctx).outcome, "inconclusive", name);
+    assert.equal(judgeComplete([clean, rows, clean, clean], ctx).outcome, "clean", name);
   }
   // A session member parent makes the member itself a survivor, so the run fails either way.
   assert.equal(
-    judgeInventory([[member, row({ pid: 5000, ppid: 6100, sid: "ESRCH" })]], ctx).outcome,
+    judgeComplete([[member, row({ pid: 5000, ppid: 6100, sid: "ESRCH" })]], ctx).outcome,
     "survivors",
   );
 });
@@ -1186,7 +1213,7 @@ test("a harness signal row is reported with the file it came from", () => {
 });
 
 test("inventory reasons, the launch-time boundary, ignored rows and the pass bound are exact", () => {
-  const judge = (rows) => judgeInventory([rows, rows], ctx);
+  const judge = (rows) => judgeComplete([rows, rows], ctx);
   assert.equal(judge([row({ sid: "EPERM" })]).reason, "session query failed");
   assert.equal(
     judge([row({ started: "Fri Foo 2 05:59:59 2026" })]).reason,
@@ -1205,16 +1232,16 @@ test("inventory reasons, the launch-time boundary, ignored rows and the pass bou
   assert.equal(result.outcome, "clean");
   assert.deepEqual(result.passes[0].ignored, [unrelated]);
   const clean = [row({ pid: 5001 })];
-  assert.deepEqual(judgeInventory([], ctx), {
+  assert.deepEqual(judgeComplete([], ctx), {
     passes: [],
     outcome: "inconclusive",
     reason: "an inventory has one to five passes",
     survivors: [],
   });
   const esrch = [row({ pid: 5000, ppid: 1, sid: "ESRCH", started: "Fri Oct 2 06:00:05 2026" })];
-  assert.equal(judgeInventory([clean, esrch, esrch, clean, clean], ctx).outcome, "clean");
+  assert.equal(judgeComplete([clean, esrch, esrch, clean, clean], ctx).outcome, "clean");
   assert.equal(
-    judgeInventory([clean, esrch, esrch, esrch, clean], ctx).reason,
+    judgeComplete([clean, esrch, esrch, esrch, clean], ctx).reason,
     "no two consecutive clean passes",
   );
 });
@@ -1222,16 +1249,22 @@ test("inventory reasons, the launch-time boundary, ignored rows and the pass bou
 test("lsof answers: every shape other than a silent exit 1 or a readable listener is inconclusive", () => {
   const inconclusive = { result: "inconclusive" };
   for (const answer of [
-    { code: 1, stdout: "", stderr: "", timedOut: true },
-    { code: 0, stdout: "p12\n", stderr: "warning", timedOut: false },
-    { code: 2, stdout: "", stderr: "", timedOut: false },
-    { code: 0, stdout: "", stderr: "", timedOut: false },
-    { code: 0, stdout: "p12\nx\n", stderr: "", timedOut: false },
-    { code: 0, stdout: "f3\nn*:1\n", stderr: "", timedOut: false },
+    { code: 1, stdout: "", stderr: "", timedOut: true, truncated: false },
+    { code: 0, stdout: "p12\n", stderr: "warning", timedOut: false, truncated: false },
+    { code: 2, stdout: "", stderr: "", timedOut: false, truncated: false },
+    { code: 0, stdout: "", stderr: "", timedOut: false, truncated: false },
+    { code: 0, stdout: "p12\nx\n", stderr: "", timedOut: false, truncated: false },
+    { code: 0, stdout: "f3\nn*:1\n", stderr: "", timedOut: false, truncated: false },
   ])
     assert.deepEqual(interpretLsof(answer), inconclusive, JSON.stringify(answer));
   assert.deepEqual(
-    interpretLsof({ code: 0, stdout: "p12\ncnode\nf3\nn*:1\np13\n", stderr: "", timedOut: false }),
+    interpretLsof({
+      code: 0,
+      stdout: "p12\ncnode\nf3\nn*:1\np13\n",
+      stderr: "",
+      timedOut: false,
+      truncated: false,
+    }),
     { result: "listener", pids: [12, 13] },
   );
 });
@@ -1556,19 +1589,19 @@ test("a launchd-adopted zombie that started after the launch asks for another pa
   const clean = [launchd];
   // Reaped by the next passes: clean.
   assert.equal(
-    judgeInventory([[launchd, zombie], [launchd, zombie], clean, clean], ctx).outcome,
+    judgeComplete([[launchd, zombie], [launchd, zombie], clean, clean], ctx).outcome,
     "clean",
   );
   // Persisting to the bound: inconclusive, never clean.
   const persisting = [launchd, zombie];
-  const result = judgeInventory([persisting, persisting, persisting, persisting, persisting], ctx);
+  const result = judgeComplete([persisting, persisting, persisting, persisting, persisting], ctx);
   assert.deepEqual(
     [result.outcome, result.reason],
     ["inconclusive", "no two consecutive clean passes"],
   );
   // Started before the launch: unrelated (its live parent launchd is outside the session).
   const older = { ...zombie, started: "Fri Oct 2 05:59:59 2026" };
-  const unrelated = judgeInventory(
+  const unrelated = judgeComplete(
     [
       [launchd, older],
       [launchd, older],
@@ -1583,7 +1616,7 @@ test("an uncovered zombie is unrelated only under a live, non-zombie parent outs
   const zombie = row({ pid: 7001, ppid: 6000, stat: "Z", sid: "ESRCH" });
   // launchd is in every pass, so the parent row itself is judged only for what it is.
   const judge = (parent) =>
-    judgeInventory(
+    judgeComplete(
       [
         [launchd, zombie, parent],
         [launchd, zombie, parent],
@@ -1601,7 +1634,7 @@ test("an uncovered zombie is unrelated only under a live, non-zombie parent outs
 
 test("an ESRCH row that started before the launch is ignored, even under launchd", () => {
   const old = row({ pid: 5000, ppid: 1, sid: "ESRCH" });
-  const result = judgeInventory(
+  const result = judgeComplete(
     [
       [launchd, old],
       [launchd, old],
@@ -1612,7 +1645,7 @@ test("an ESRCH row that started before the launch is ignored, even under launchd
   assert.deepEqual(result.passes[1].ignored, [old]);
   const young = { ...old, started: afterLaunch };
   assert.equal(
-    judgeInventory(
+    judgeComplete(
       [
         [launchd, young],
         [launchd, young],
@@ -1620,5 +1653,49 @@ test("an ESRCH row that started before the launch is ignored, even under launchd
       ctx,
     ).outcome,
     "inconclusive",
+  );
+});
+
+// Review round 2, M3: a pass without launchd or the measuring entry is not a complete inventory.
+test("a pass that misses launchd or the measuring entry is inconclusive", () => {
+  const other = row({ pid: 5000 });
+  for (const [name, pass] of [
+    ["empty", []],
+    ["no launchd", [baseRows[1], other]],
+    ["no measuring entry", [baseRows[0], other]],
+  ]) {
+    const result = judgeInventory([pass, [...baseRows, other]], ctx);
+    assert.deepEqual(
+      [result.outcome, result.reason],
+      ["inconclusive", "incomplete inventory pass"],
+      name,
+    );
+  }
+  assert.equal(judgeInventory([[...baseRows], [...baseRows]], ctx).outcome, "clean");
+  const { rootPid, ...noRoot } = ctx;
+  assert.equal(rootPid, 100);
+  assert.equal(judgeInventory([[...baseRows], [...baseRows]], noRoot).outcome, "inconclusive");
+});
+
+test("(D) fails when the daemon's output pipes stayed open after it exited", () => {
+  for (const drained of [false, undefined]) {
+    const input = verdictInput();
+    input.daemon.diagnosticsDrained = drained;
+    assert.deepEqual(refusalVerdict(input).conditions.D.reasons, [
+      "the daemon's output pipes stayed open after it exited",
+    ]);
+  }
+});
+
+test("an lsof answer cut at maxBuffer, or not saying, is inconclusive", () => {
+  const listener = { code: 0, stdout: "p12\n", stderr: "", timedOut: false };
+  assert.equal(interpretLsof({ ...listener, truncated: false }).result, "listener");
+  for (const truncated of [true, undefined])
+    assert.deepEqual(interpretLsof({ ...listener, truncated }), { result: "inconclusive" });
+  assert.deepEqual(
+    interpretLsof({ code: 1, stdout: "", stderr: "", timedOut: false, truncated: true }),
+    {
+      result: "inconclusive",
+    },
   );
 });

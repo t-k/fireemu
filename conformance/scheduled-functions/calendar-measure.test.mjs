@@ -8,7 +8,12 @@ import { fileURLToPath } from "node:url";
 import { certify, harnessVersion, measure, planKind } from "./calendar-measure.mjs";
 import { calendarFixture } from "./calendar-local.mjs";
 import { readRecords } from "./calendar-recorder.mjs";
-import { refusalVerdict, validateRecords } from "./calendar-accounting.mjs";
+import {
+  CERTIFICATE_LIMITS,
+  certificateVerdict,
+  refusalVerdict,
+  validateRecords,
+} from "./calendar-accounting.mjs";
 
 // End-to-end runs of harness H against a stand-in daemon (testdata/fake-fireemu.py), offline.
 // The pinned build is never run here.
@@ -214,7 +219,15 @@ test(
   async (t) => {
     const { path, plan } = await planFor(t, { timeZone: "Asia/Tokyo", positive: true });
     const report = await measure(path);
-    assert.equal(report.control.counts, true, JSON.stringify(report.verdict.conditions));
+    assert.equal(
+      report.control.counts,
+      true,
+      JSON.stringify({
+        conditions: report.verdict.conditions,
+        inventory: report.inventory,
+        error: report.error ?? null,
+      }),
+    );
     reports.positive = report;
     assert.equal(report.verdict.conditions.A.outcome, "fail", "exit 0 is not the pinned refusal");
     // Control (v): the same run's records with one lane-owned file removed.
@@ -313,10 +326,35 @@ test("the certificate holds over this file's refusal run and controls", { skip }
     list,
     JSON.stringify({ refusal: paths.certificate, controls: kinds.slice(1).map((k) => paths[k]) }),
   );
-  assert.deepEqual(await certify(list), { verdict: "pass", problems: [] });
+  // Review round 2, M1: these reports ran the stand-in, so they are never certified; every other
+  // part of the certificate holds.
+  const standIn = await certify(list);
+  assert.equal(standIn.verdict, "fail");
+  assert.equal(standIn.certificate, null);
+  assert.ok(standIn.problems.length > 0);
+  assert.deepEqual(
+    standIn.problems.filter((problem) => !problem.endsWith("used the stand-in runner")),
+    [],
+  );
+  // Judged as if the stand-in were the pinned build, the certificate names everything.
+  const judged = certificateVerdict({
+    refusal: reports.certificate,
+    controls: kinds.slice(1).map((k) => reports[k]),
+  });
+  assert.equal(judged.verdict, "pass", String(judged.problems));
+  assert.equal(judged.certificate.pins.refusalLine, refusalLine);
+  assert.deepEqual(judged.certificate.refusal, { exitCode: 1, line: refusalLine });
+  assert.equal(judged.certificate.root.pid, process.pid);
+  assert.ok(Number.isSafeInteger(judged.certificate.root.sid));
+  assert.equal(judged.certificate.limits, CERTIFICATE_LIMITS);
+  assert.equal(reports.orphan.identity.binarySha256, reports.certificate.identity.binarySha256);
+  assert.equal(reports.orphan.identity.controlMode, "orphan");
   await writeFile(
     list,
     JSON.stringify({ refusal: paths.certificate, controls: kinds.slice(2).map((k) => paths[k]) }),
   );
-  assert.equal((await certify(list)).verdict, "fail", "without the positive control");
+  assert.ok(
+    (await certify(list)).problems.includes("control positive: 0 report(s)"),
+    "without the positive control",
+  );
 });

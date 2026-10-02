@@ -172,6 +172,7 @@ function judgePass(rows, ctx) {
       inconclusive: [{ row: null, reason: "incomplete inventory pass" }],
       unrelatedZombies: [],
       ignored: [],
+      repass: [],
       trigger: false,
     };
   const byPid = new Map(rows.map((row) => [row.pid, row]));
@@ -180,8 +181,25 @@ function judgePass(rows, ctx) {
   const survivors = [],
     inconclusive = [],
     unrelatedZombies = [],
-    ignored = [];
+    ignored = [],
+    repass = [];
   let trigger = false;
+  // Whether an ESRCH row could have been in S: its parent is launchd, a member of S or a recorded
+  // identity, or an ESRCH row whose own chain could reach S. A process in S has every ancestor
+  // up to S's leader in S (setsid makes a new session, never S), so a chain that reaches a live
+  // ancestor answering another session cannot have been in S; one whose parent left no row is
+  // ignored, as the condition's other ESRCH rows are; a cycle is unknown.
+  const couldHaveBeenInSession = (row) => {
+    const seen = new Set();
+    for (let pid = row.ppid; !seen.has(pid);) {
+      seen.add(pid);
+      if (pid === 1 || members.has(pid) || recordedPid(pid)) return true;
+      const ancestor = byPid.get(pid);
+      if (ancestor?.sid !== "ESRCH") return false;
+      pid = ancestor.ppid;
+    }
+    return true;
+  };
   for (const row of rows) {
     if (typeof row.sid !== "number" && row.sid !== "ESRCH") {
       inconclusive.push({ row, reason: "session query failed" });
@@ -223,8 +241,10 @@ function judgePass(rows, ctx) {
       // reaped within milliseconds: another pass, and inconclusive if it persists. Otherwise it
       // is unrelated only under a parent in the same pass that is not a zombie and answers a
       // session other than S.
-      if (row.ppid === 1 && young) trigger = true;
-      else if (
+      if (row.ppid === 1 && young) {
+        trigger = true;
+        repass.push(row);
+      } else if (
         parent &&
         !/^Z/.test(parent.stat ?? "") &&
         typeof parent.sid === "number" &&
@@ -237,14 +257,12 @@ function judgePass(rows, ctx) {
     if (row.sid !== "ESRCH") continue;
     // Only a row that could have been in the session asks for another pass (S2: started at or
     // after the launch).
-    if (
-      young &&
-      (row.ppid === 1 || members.has(row.ppid) || recordedPid(row.ppid) || parent?.sid === "ESRCH")
-    )
+    if (young && couldHaveBeenInSession(row)) {
       trigger = true;
-    else ignored.push(row);
+      repass.push(row);
+    } else ignored.push(row);
   }
-  return { survivors, inconclusive, unrelatedZombies, ignored, trigger };
+  return { survivors, inconclusive, unrelatedZombies, ignored, repass, trigger };
 }
 
 /** At most five passes; the verdict needs two consecutive clean passes. */
@@ -603,10 +621,43 @@ const CONTROL_KINDS = ["positive", "orphan", "escaper", "listener", "leftover"];
 const utcDay = (time) => (Number.isFinite(time) ? new Date(time).toISOString().slice(0, 10) : null);
 
 /**
- * The certificate (condition (G)): a passing refusal run and every control, each counting, all
- * under the same harness version H and on the same UTC day, each with its validator controls.
+ * The limits every certificate quotes word for word (condition text, ledger 786: "Limits that
+ * cannot be caught (quoted in every certificate)").
  */
-export function certificateVerdict({ refusal, controls }) {
+export const CERTIFICATE_LIMITS = Object.freeze([
+  "Without privilege the run cannot prove that no short-lived grandchild was born, nor count, pair, read the exit status of, or confirm the reaping of such a process. Examples: the daemon's Node `--version` and `-p` probes, `/bin/kill` in the probe timeout path, a Functions runner or `--calendar-child` that lives shorter than the polling interval, children of portctl, `ps`, `lsof` or `python3`.",
+  "A descendant that leaves the session (`setsid`) and is still alive at the end is missed by (E) unless its identity was recorded or its arguments name a run path.",
+  "Survivors are judged at the time of the final inventory.",
+  "(F) covers TCP listeners only, not UDP or Unix-domain sockets.",
+  "The certificate proves that nothing survived and no TCP port was held. It does not prove that nothing else started.",
+]);
+
+/** The pins of the refusal run's identity, and the build pins every control must share. */
+const IDENTITY_PINS = [
+  "sourceCommit",
+  "binarySha256",
+  "runnerSha256",
+  "portctlSha256",
+  "harnessVersion",
+  "fixtureSha256",
+  "configSha256",
+];
+const BUILD_PINS = [
+  "sourceCommit",
+  "binarySha256",
+  "runnerSha256",
+  "portctlSha256",
+  "harnessVersion",
+];
+
+/**
+ * The certificate (condition (G)): a passing refusal run and every control, each counting, all
+ * under the same build, portctl and harness version H and on the same UTC day, each with its
+ * validator controls. A passing certificate names the pins, the root, the exact refusal, every
+ * report with its path and SHA-256 (`files`, in input order) and the limits (review round 2,
+ * M1). A report of the stand-in runner is never certified.
+ */
+export function certificateVerdict({ refusal, controls, files = [], standInRunnerSha256 }) {
   const problems = [];
   if (refusal?.kind !== "certificate") problems.push("the refusal report is not a certificate run");
   if (refusal?.verdict?.verdict !== "pass") problems.push("the refusal run did not pass");
@@ -615,10 +666,27 @@ export function certificateVerdict({ refusal, controls }) {
   const day = utcDay(refusal?.launchTime);
   if (!day || typeof refusal?.harnessVersion !== "string")
     problems.push("the refusal run names no harness version or day");
+  const identity = refusal?.identity,
+    pins = refusal?.pins;
+  if (!identity || typeof identity !== "object") problems.push("the refusal run names no build");
+  if (!pins || typeof pins !== "object") problems.push("the refusal run names no pins");
+  if (identity && pins) {
+    for (const key of IDENTITY_PINS)
+      if (!text(identity[key]) || identity[key] !== pins[key])
+        problems.push(`the refusal run's ${key} differs from its pin`);
+    if (refusal.refusal?.exitCode !== pins.exitCode)
+      problems.push("the refusal run's exit status differs from its pin");
+    if (!text(pins.refusalLine) || refusal.refusal?.line !== pins.refusalLine)
+      problems.push("the refusal run's refusal line differs from its pin");
+  }
+  const root = refusal?.root;
+  if (!pidOk(root?.pid) || !text(root?.started) || !pidOk(root?.sid))
+    problems.push("the refusal run names no root");
+  if (text(standInRunnerSha256) && identity?.runnerSha256 === standInRunnerSha256)
+    problems.push("the refusal run used the stand-in runner");
+  const list = Array.isArray(controls) ? controls : [];
   for (const kind of CONTROL_KINDS) {
-    const found = (Array.isArray(controls) ? controls : []).filter(
-      (report) => report?.kind === kind || report?.control?.mode === kind,
-    );
+    const found = list.filter((report) => report?.kind === kind || report?.control?.mode === kind);
     if (found.length !== 1) {
       problems.push(`control ${kind}: ${found.length} report(s)`);
       continue;
@@ -630,6 +698,32 @@ export function certificateVerdict({ refusal, controls }) {
     if (utcDay(report.launchTime) !== day) problems.push(`control ${kind} ran on another day`);
     if (report.validatorControls?.ok !== true)
       problems.push(`control ${kind}: validator controls did not hold`);
+    if (!report.identity || typeof report.identity !== "object")
+      problems.push(`control ${kind} names no build`);
+    else {
+      for (const key of BUILD_PINS)
+        if (report.identity[key] !== identity?.[key])
+          problems.push(`control ${kind} ran another ${key}`);
+      if (text(standInRunnerSha256) && report.identity.runnerSha256 === standInRunnerSha256)
+        problems.push(`control ${kind} used the stand-in runner`);
+    }
   }
-  return { verdict: problems.length ? "fail" : "pass", problems };
+  if (problems.length) return { verdict: "fail", problems, certificate: null };
+  const entry = (report, index) => ({
+    kind: report.kind,
+    mode: report.control?.mode ?? null,
+    path: files[index]?.path ?? null,
+    sha256: files[index]?.sha256 ?? null,
+  });
+  return {
+    verdict: "pass",
+    problems,
+    certificate: {
+      pins: { ...pins },
+      root: { pid: root.pid, started: root.started, sid: root.sid },
+      refusal: { exitCode: refusal.refusal.exitCode, line: refusal.refusal.line },
+      reports: [refusal, ...list].map(entry),
+      limits: CERTIFICATE_LIMITS,
+    },
+  };
 }

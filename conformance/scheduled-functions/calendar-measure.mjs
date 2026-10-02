@@ -658,7 +658,15 @@ async function judgeRun({
       ),
     };
   }
+  const line = inner?.diagnostics?.includes(plan.pins?.refusalLine)
+    ? plan.pins.refusalLine
+    : (inner?.diagnostics?.find((value) => /unknown time zone/.test(value)) ?? null);
   return {
+    // The run's full identity (review round 2, M1): what it ran, and what it refused with.
+    identity: outerResult?.identity
+      ? { ...outerResult.identity, portctlSha256: extra.portctlSha256, harnessVersion: version }
+      : null,
+    refusal: { exitCode: inner?.exitCode ?? null, line },
     verdict,
     control,
     validatorControls: validator,
@@ -667,6 +675,13 @@ async function judgeRun({
       outcome: inventory.outcome,
       reason: inventory.reason,
       survivors: inventory.survivors,
+      // Review S7: every pass's evidence (re-pass rows, unrelated zombies, ignored ESRCH rows).
+      passes: inventory.passes.map((pass) => ({
+        repass: pass.repass,
+        unrelatedZombies: pass.unrelatedZombies,
+        ignored: pass.ignored,
+        inconclusive: pass.inconclusive,
+      })),
     },
     lsof,
     // Design v4 section 6: the per-PID query runs only when a recorded identity is alive.
@@ -771,8 +786,11 @@ export async function measure(planPath) {
     kind: kind.kind,
     escalation: kind.escalation,
     harnessVersion: version,
-    root: root ? identityOf(root) : null,
+    // The root of the chain, as the certificate names it (review round 2, M1).
+    root: root ? { ...identityOf(root), sid: rootSid } : null,
     rootSid,
+    // What this run pinned, whatever its outcome.
+    pins: plan.pins ?? null,
     launchTime,
     chain,
   };
@@ -813,7 +831,20 @@ export async function measure(planPath) {
 /** Condition (G): the certificate over one refusal report and the control reports. */
 export async function certify(listPath) {
   const list = JSON.parse(await readFile(listPath, "utf8"));
-  const refusal = await readJson(list.refusal);
-  const controls = await Promise.all((list.controls ?? []).map((path) => readJson(path)));
-  return certificateVerdict({ refusal, controls });
+  const paths = [list.refusal, ...(list.controls ?? [])];
+  const files = [],
+    reports = [];
+  for (const path of paths) {
+    const bytes = await readFile(path).catch(() => null);
+    files.push({ path, sha256: bytes ? digest(bytes) : null });
+    reports.push(bytes ? JSON.parse(bytes.toString("utf8")) : null);
+  }
+  // The stand-in runner of the offline tests is never certified (review round 2, M1).
+  const standIn = await readFile(here("testdata/fake-runner.cjs")).catch(() => null);
+  return certificateVerdict({
+    refusal: reports[0],
+    controls: reports.slice(1),
+    files,
+    standInRunnerSha256: standIn ? digest(standIn) : undefined,
+  });
 }

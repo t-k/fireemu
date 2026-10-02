@@ -12,6 +12,7 @@ import {
   refusalLineCheck,
   validatorControls,
   certificateVerdict,
+  CERTIFICATE_LIMITS,
 } from "./calendar-accounting.mjs";
 
 function generated(seed) {
@@ -861,10 +862,10 @@ test("an ESRCH row asks for another pass when its parent could have been in the 
       [row({ pid: 5000, ppid: 400, sid: "ESRCH", started: "Fri Oct 2 06:00:05 2026" })],
     ],
     [
-      "parent an ESRCH row",
+      "parent an ESRCH row under launchd",
       [
         row({ pid: 5000, ppid: 6200, sid: "ESRCH", started: "Fri Oct 2 06:00:05 2026" }),
-        row({ pid: 6200, ppid: 6300, sid: "ESRCH", started: "Fri Oct 2 06:00:04 2026" }),
+        row({ pid: 6200, ppid: 1, sid: "ESRCH", started: "Fri Oct 2 06:00:04 2026" }),
       ],
     ],
   ]) {
@@ -909,6 +910,17 @@ test("the positive control needs verified cleanup and a released claim", () => {
 });
 
 // The certificate (condition (G)): the refusal run and every control under the same H, same day.
+const IDENTITY = {
+  sourceCommit: "a".repeat(40),
+  binarySha256: "b".repeat(64),
+  runnerSha256: "c".repeat(64),
+  portctlSha256: "f".repeat(64),
+  harnessVersion: "h1",
+  fixtureSha256: "d".repeat(64),
+  configSha256: "e".repeat(64),
+};
+const REFUSAL_LINE =
+  'error: manifest: function "calendarProbe": time zone: unknown time zone "Invalid/CalendarZone"';
 function report(kind, overrides = {}) {
   return {
     kind,
@@ -916,6 +928,13 @@ function report(kind, overrides = {}) {
     launchTime: Date.parse("2026-10-02T03:00:00Z"),
     verdict: { verdict: kind === "certificate" ? "pass" : "fail" },
     validatorControls: { ok: true },
+    identity: { ...IDENTITY },
+    pins: { ...IDENTITY, exitCode: 1, refusalLine: REFUSAL_LINE },
+    refusal: {
+      exitCode: kind === "certificate" ? 1 : 0,
+      line: kind === "certificate" ? REFUSAL_LINE : null,
+    },
+    root: { pid: 100, started: "Fri Oct 2 03:00:00 2026", sid: 50 },
     control:
       kind === "certificate"
         ? null
@@ -923,16 +942,14 @@ function report(kind, overrides = {}) {
     ...overrides,
   };
 }
+const pick = ({ verdict, problems }) => ({ verdict, problems });
 const allControls = () =>
   ["positive", "orphan", "escaper", "listener", "leftover"].map((kind) => report(kind));
 
 test("a certificate needs the refusal run and every control, same harness version, same UTC day", () => {
   assert.deepEqual(
-    certificateVerdict({ refusal: report("certificate"), controls: allControls() }),
-    {
-      verdict: "pass",
-      problems: [],
-    },
+    pick(certificateVerdict({ refusal: report("certificate"), controls: allControls() })),
+    { verdict: "pass", problems: [] },
   );
   for (const [name, refusal, controls] of [
     [
@@ -1432,10 +1449,10 @@ test("certificate problems are exact, and a missing day never throws", () => {
         control: { mode, counts: true },
       }),
     );
-  assert.deepEqual(certificateVerdict({ refusal: report("certificate"), controls: controls() }), {
-    verdict: "pass",
-    problems: [],
-  });
+  assert.deepEqual(
+    pick(certificateVerdict({ refusal: report("certificate"), controls: controls() })),
+    { verdict: "pass", problems: [] },
+  );
   assert.deepEqual(
     certificateVerdict({
       refusal: report("certificate", { launchTime: undefined }),
@@ -1698,4 +1715,187 @@ test("an lsof answer cut at maxBuffer, or not saying, is inconclusive", () => {
       result: "inconclusive",
     },
   );
+});
+
+// Review round 2, M1: the certificate names what it certifies, quotes the limits every time and
+// binds every control to the refusal run's build and harness.
+test("the certificate limits are the condition's text, word for word", () => {
+  assert.deepEqual(CERTIFICATE_LIMITS, [
+    "Without privilege the run cannot prove that no short-lived grandchild was born, nor count, pair, read the exit status of, or confirm the reaping of such a process. Examples: the daemon's Node `--version` and `-p` probes, `/bin/kill` in the probe timeout path, a Functions runner or `--calendar-child` that lives shorter than the polling interval, children of portctl, `ps`, `lsof` or `python3`.",
+    "A descendant that leaves the session (`setsid`) and is still alive at the end is missed by (E) unless its identity was recorded or its arguments name a run path.",
+    "Survivors are judged at the time of the final inventory.",
+    "(F) covers TCP listeners only, not UDP or Unix-domain sockets.",
+    "The certificate proves that nothing survived and no TCP port was held. It does not prove that nothing else started.",
+  ]);
+  assert.ok(Object.isFrozen(CERTIFICATE_LIMITS));
+});
+
+test("a passing certificate names its pins, root, refusal, reports and limits", () => {
+  const files = [
+    { path: "/runs/refusal/verdict.json", sha256: "1".repeat(64) },
+    ...["positive", "orphan", "escaper", "listener", "leftover"].map((kind, index) => ({
+      path: `/runs/${kind}/verdict.json`,
+      sha256: String(index + 2).repeat(64),
+    })),
+  ];
+  const result = certificateVerdict({
+    refusal: report("certificate"),
+    controls: allControls(),
+    files,
+  });
+  assert.equal(result.verdict, "pass", JSON.stringify(result.problems));
+  assert.deepEqual(result.certificate, {
+    pins: { ...IDENTITY, exitCode: 1, refusalLine: REFUSAL_LINE },
+    root: { pid: 100, started: "Fri Oct 2 03:00:00 2026", sid: 50 },
+    refusal: { exitCode: 1, line: REFUSAL_LINE },
+    reports: [
+      {
+        kind: "certificate",
+        mode: null,
+        path: "/runs/refusal/verdict.json",
+        sha256: "1".repeat(64),
+      },
+      ...["positive", "orphan", "escaper", "listener", "leftover"].map((kind, index) => ({
+        kind,
+        mode: kind,
+        path: `/runs/${kind}/verdict.json`,
+        sha256: String(index + 2).repeat(64),
+      })),
+    ],
+    limits: CERTIFICATE_LIMITS,
+  });
+  // A failing certificate is still a record of what was judged, without a certificate body.
+  const failed = certificateVerdict({ refusal: report("certificate"), controls: [], files });
+  assert.equal(failed.verdict, "fail");
+  assert.equal(failed.certificate, null);
+});
+
+test("every control must have run the refusal run's build, portctl and harness", () => {
+  for (const key of [
+    "sourceCommit",
+    "binarySha256",
+    "runnerSha256",
+    "portctlSha256",
+    "harnessVersion",
+  ]) {
+    const controls = allControls().map((r) =>
+      r.control.mode === "escaper" ? { ...r, identity: { ...r.identity, [key]: "0" } } : r,
+    );
+    assert.deepEqual(
+      certificateVerdict({ refusal: report("certificate"), controls }).problems,
+      [`control escaper ran another ${key}`],
+      key,
+    );
+  }
+  const unnamed = allControls().map((r) =>
+    r.control.mode === "orphan" ? { ...r, identity: undefined } : r,
+  );
+  assert.deepEqual(
+    certificateVerdict({ refusal: report("certificate"), controls: unnamed }).problems,
+    ["control orphan names no build"],
+  );
+});
+
+test("the refusal run must name its build, quote its refusal exactly and match its pins", () => {
+  for (const [name, overrides, problem] of [
+    ["no identity", { identity: undefined }, "the refusal run names no build"],
+    ["no pins", { pins: undefined }, "the refusal run names no pins"],
+    [
+      "a build other than its pins",
+      { identity: { ...IDENTITY, binarySha256: "0" } },
+      "the refusal run's binarySha256 differs from its pin",
+    ],
+    [
+      "another exit status",
+      { refusal: { exitCode: 2, line: REFUSAL_LINE } },
+      "the refusal run's exit status differs from its pin",
+    ],
+    [
+      "another line",
+      { refusal: { exitCode: 1, line: "error: x" } },
+      "the refusal run's refusal line differs from its pin",
+    ],
+    ["no root", { root: undefined }, "the refusal run names no root"],
+    [
+      "a root without a session",
+      { root: { pid: 100, started: "x", sid: "ESRCH" } },
+      "the refusal run names no root",
+    ],
+  ]) {
+    const result = certificateVerdict({
+      refusal: report("certificate", overrides),
+      controls: allControls(),
+    });
+    assert.ok(result.problems.includes(problem), `${name}: ${result.problems}`);
+    assert.equal(result.verdict, "fail", name);
+  }
+});
+
+test("reports of the stand-in daemon are never certified", () => {
+  const standIn = "9".repeat(64);
+  const withRunner = (r) => ({ ...r, identity: { ...r.identity, runnerSha256: standIn } });
+  const refusal = report("certificate", {
+    identity: { ...IDENTITY, runnerSha256: standIn },
+    pins: { ...IDENTITY, runnerSha256: standIn, exitCode: 1, refusalLine: REFUSAL_LINE },
+  });
+  const result = certificateVerdict({
+    refusal,
+    controls: allControls().map(withRunner),
+    standInRunnerSha256: standIn,
+  });
+  assert.equal(result.verdict, "fail");
+  assert.ok(
+    result.problems.includes("the refusal run used the stand-in runner"),
+    String(result.problems),
+  );
+});
+
+// Review S7: the rows that asked for another pass are kept, so an inconclusive inventory names
+// its cause.
+test("each pass names the rows that asked for another pass", () => {
+  const young = row({ pid: 5000, ppid: 1, sid: "ESRCH", started: "Fri Oct 2 06:00:05 2026" });
+  const zombie = row({
+    pid: 7001,
+    ppid: 1,
+    stat: "Z",
+    sid: "ESRCH",
+    started: "Fri Oct 2 06:00:06 2026",
+  });
+  const result = judgeComplete([[young], [young, zombie]], ctx);
+  assert.deepEqual(result.passes[0].repass, [young]);
+  assert.deepEqual(result.passes[1].repass, [young, zombie]);
+  assert.deepEqual(judgeComplete([[], []], ctx).passes[0].repass, []);
+});
+
+// Load reproduction (review round 2, M4): under churn, ESRCH chains of unrelated processes asked
+// for passes until the bound. A process in S has every ancestor up to S's leader in S (setsid
+// makes a new session, never S), so an ESRCH chain that reaches a live ancestor in another
+// session, other than launchd, cannot have been in S.
+test("an ESRCH chain is followed to its first ancestor with a session answer", () => {
+  const t = "Fri Oct 2 06:00:05 2026";
+  const other = row({ pid: 8000, ppid: 1, sid: 88, started: "Fri Oct 2 05:00:00 2026" });
+  const member = row({ pid: 8100, ppid: 1, sid: 300, started: t });
+  const chain = (top) => [
+    row({ pid: 8201, ppid: top, sid: "ESRCH", started: t }),
+    row({ pid: 8202, ppid: 8201, sid: "ESRCH", started: t }),
+  ];
+  const judge = (rows) => judgeComplete([rows, rows], ctx);
+  // Under a live ancestor in another session: ignored, clean.
+  const unrelated = judge([other, ...chain(8000)]);
+  assert.equal(unrelated.outcome, "clean");
+  assert.deepEqual(unrelated.passes[0].repass, []);
+  // Under launchd: another pass.
+  assert.equal(judge(chain(1)).reason, "no two consecutive clean passes");
+  // Under an ancestor that left no row (the condition's "other ESRCH rows"): ignored.
+  assert.equal(judge(chain(8999)).outcome, "clean");
+  // Under a member of S or a recorded identity: the member is a survivor, or another pass.
+  assert.equal(judge([member, ...chain(8100)]).outcome, "survivors");
+  const recordedTop = row({ pid: 400, ppid: 1, sid: "ESRCH", started: "Fri Oct  2 06:00:03 2026" });
+  assert.equal(judge([recordedTop, ...chain(400)]).outcome, "survivors");
+  // A cycle in the parent links is not followed forever.
+  const cyclic = [
+    row({ pid: 8301, ppid: 8302, sid: "ESRCH", started: t }),
+    row({ pid: 8302, ppid: 8301, sid: "ESRCH", started: t }),
+  ];
+  assert.equal(judge(cyclic).reason, "no two consecutive clean passes");
 });

@@ -631,6 +631,8 @@ const passingProfileBinding = () => {
   const config = JSON.parse(sourceBytes);
   config.profile = "strict";
   config.firestore.rules = repo("conformance/firestore-probe.rules");
+  config.firestore.indexFile = "/private/run/strict-indexes.json";
+  const indexBytes = readFileSync(repo("conformance/firestore-production.indexes.json"));
   const bytes = Buffer.from(JSON.stringify(config, null, 2) + "\n");
   const digest = (value) => createHash("sha256").update(value).digest("hex");
   const daemonLog =
@@ -643,6 +645,26 @@ const passingProfileBinding = () => {
     cwd: repo("conformance"),
     argv: ["exec", "--config", "/private/run/strict-config.json"],
     binary: { sha256Before: BINARY, sha256After: BINARY },
+    indexes: {
+      authority: {
+        sourceGit: "2526c61eda5fc53ac91250307786127ae3c601be",
+        file: "conformance/firestore.indexes.json",
+        bytes: 2484,
+        sha256: "sha256-8a4d4bd7a72c3ce2bed4e0f8c4adc0cdb3a7c428477578295e44a11ae063d01c",
+      },
+      sourcePath: repo("conformance/firestore-production.indexes.json"),
+      sourceBytesBase64: indexBytes.toString("base64"),
+      sourceBytesBefore: 2484,
+      sourceBytesAfter: 2484,
+      sourceSha256Before: digest(indexBytes),
+      sourceSha256After: digest(indexBytes),
+      path: "/private/run/strict-indexes.json",
+      bytesBase64: indexBytes.toString("base64"),
+      bytesBefore: 2484,
+      bytesAfter: 2484,
+      sha256Before: digest(indexBytes),
+      sha256After: digest(indexBytes),
+    },
     config: {
       sourcePath: repo("conformance/firestore-probe.fireemu.json"),
       sourceBytesBase64: sourceBytes.toString("base64"),
@@ -1243,5 +1265,179 @@ test("R11 binds source path and rules resolution to the actual launch cwd", () =
       [],
       kind,
     );
+  }
+});
+
+test("R11 refuses a strict receipt missing the recorded production index prerequisite", () => {
+  const result = passingHistorical();
+  delete result.profileBinding.indexes;
+  assert.notDeepEqual(
+    judgeFsDataWriteHistorical(regression().historical, { exitCode: 0, result }, BINARY),
+    [],
+  );
+});
+
+test("R11 rejects forged index authority, changed bytes and unbound catalog relationships", () => {
+  const breakers = [
+    (b) => {
+      b.indexes.authority.sourceGit = "a".repeat(40);
+    },
+    (b) => {
+      b.indexes.authority.file += "-foreign";
+    },
+    (b) => {
+      b.indexes.authority.bytes++;
+    },
+    (b) => {
+      b.indexes.authority.sha256 = "sha256-" + "a".repeat(64);
+    },
+    (b) => {
+      b.indexes.bytesBase64 = Buffer.from("{}\n").toString("base64");
+    },
+    (b) => {
+      b.indexes.sourceBytesBase64 = Buffer.from("{}\n").toString("base64");
+    },
+    (b) => {
+      b.indexes.path = "relative/indexes.json";
+    },
+    (b) => {
+      b.indexes.sourcePath = "/foreign/recorded.json";
+    },
+    (b) => {
+      b.indexes.bytesBefore++;
+    },
+    (b) => {
+      b.indexes.bytesAfter++;
+    },
+    (b) => {
+      b.indexes.sourceBytesBefore++;
+    },
+    (b) => {
+      b.indexes.sourceBytesAfter++;
+    },
+    (b) => {
+      b.indexes.sha256Before = "f".repeat(64);
+    },
+    (b) => {
+      b.indexes.sha256After = "f".repeat(64);
+    },
+    (b) => {
+      b.indexes.sourceSha256Before = "f".repeat(64);
+    },
+    (b) => {
+      b.indexes.sourceSha256After = "f".repeat(64);
+    },
+    (b) => {
+      const bytes = Buffer.from(b.indexes.bytesBase64, "base64");
+      bytes[0] = 32;
+      b.indexes.bytesBase64 = b.indexes.sourceBytesBase64 = bytes.toString("base64");
+      const digest = createHash("sha256").update(bytes).digest("hex");
+      b.indexes.sha256Before =
+        b.indexes.sha256After =
+        b.indexes.sourceSha256Before =
+        b.indexes.sourceSha256After =
+          digest;
+    },
+    (b) => {
+      const config = JSON.parse(Buffer.from(b.config.bytesBase64, "base64"));
+      delete config.firestore.indexFile;
+      const bytes = Buffer.from(JSON.stringify(config));
+      b.config.bytesBase64 = bytes.toString("base64");
+      b.config.sha256Before = b.config.sha256After = createHash("sha256")
+        .update(bytes)
+        .digest("hex");
+    },
+    (b) => {
+      const config = JSON.parse(Buffer.from(b.config.bytesBase64, "base64"));
+      b.indexes.path = config.firestore.indexFile = "/foreign/private/indexes.json";
+      const bytes = Buffer.from(JSON.stringify(config));
+      b.config.bytesBase64 = bytes.toString("base64");
+      b.config.sha256Before = b.config.sha256After = createHash("sha256")
+        .update(bytes)
+        .digest("hex");
+    },
+    (b) => {
+      const config = JSON.parse(Buffer.from(b.config.bytesBase64, "base64"));
+      b.indexes.path = config.firestore.indexFile = b.indexes.sourcePath;
+      const bytes = Buffer.from(JSON.stringify(config));
+      b.config.bytesBase64 = bytes.toString("base64");
+      b.config.sha256Before = b.config.sha256After = createHash("sha256")
+        .update(bytes)
+        .digest("hex");
+    },
+  ];
+  for (const [index, breakIt] of breakers.entries()) {
+    const result = passingHistorical();
+    breakIt(result.profileBinding);
+    assert.notDeepEqual(
+      judgeFsDataWriteHistorical(regression().historical, { exitCode: 0, result }, BINARY),
+      [],
+      String(index),
+    );
+  }
+});
+
+test("generated index receipts agree with an independent four-condition model", () => {
+  for (let mask = 0; mask < 16; mask++) {
+    const result = passingHistorical(),
+      b = result.profileBinding;
+    if (!(mask & 1)) delete b.indexes;
+    if (!(mask & 2) && b.indexes) b.indexes.authority.sourceGit = "b".repeat(40);
+    if (!(mask & 4) && b.indexes) b.indexes.sha256After = "b".repeat(64);
+    if (!(mask & 8)) {
+      const config = JSON.parse(Buffer.from(b.config.bytesBase64, "base64"));
+      delete config.firestore.indexFile;
+      const bytes = Buffer.from(JSON.stringify(config));
+      b.config.bytesBase64 = bytes.toString("base64");
+      b.config.sha256Before = b.config.sha256After = createHash("sha256")
+        .update(bytes)
+        .digest("hex");
+    }
+    assert.equal(
+      judgeFsDataWriteHistorical(regression().historical, { exitCode: 0, result }, BINARY)
+        .length === 0,
+      mask === 15,
+      String(mask),
+    );
+  }
+});
+
+import { probeProfileBindingProblems } from "./firestore-probe/run.mjs";
+
+test("index validator refuses coherent relative paths, fixture reuse and emulator receipts", () => {
+  for (const kind of ["relative", "fixture-reuse", "emulator"]) {
+    const result = passingHistorical(),
+      b = result.profileBinding;
+    const config = JSON.parse(Buffer.from(b.config.bytesBase64, "base64"));
+    if (kind === "relative") {
+      b.config.path = "relative/run/config.json";
+      b.indexes.path = config.firestore.indexFile = "relative/run/indexes.json";
+    } else if (kind === "fixture-reuse") {
+      b.config.path = repo("conformance/generated-config.json");
+      b.indexes.path = config.firestore.indexFile = b.indexes.sourcePath;
+    } else {
+      b.requestedProfile = b.effectiveProfile = config.profile = "emulator";
+      config.firestore.rules = JSON.parse(
+        Buffer.from(b.config.sourceBytesBase64, "base64"),
+      ).firestore.rules;
+      b.daemonLog = "  profile: emulator (actual daemon fixture)\n";
+      b.daemonLogSha256 = createHash("sha256").update(b.daemonLog).digest("hex");
+    }
+    b.argv[2] = b.config.path;
+    const bytes = Buffer.from(JSON.stringify(config));
+    b.config.bytesBase64 = bytes.toString("base64");
+    b.config.sha256Before = b.config.sha256After = createHash("sha256").update(bytes).digest("hex");
+    if (kind === "emulator")
+      assert.notDeepEqual(
+        probeProfileBindingProblems(b, "emulator", BINARY, undefined, b.indexes.authority),
+        [],
+        kind,
+      );
+    else
+      assert.notDeepEqual(
+        judgeFsDataWriteHistorical(regression().historical, { exitCode: 0, result }, BINARY),
+        [],
+        kind,
+      );
   }
 });

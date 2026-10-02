@@ -24,7 +24,10 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { isDeepStrictEqual } from "node:util";
 
-import { probeProfileBindingProblems } from "./firestore-probe/run.mjs";
+import {
+  probeProfileBindingProblems,
+  pinnedProductionIndexAuthority,
+} from "./firestore-probe/run.mjs";
 import { federationEnvironment } from "./release-openssl.mjs";
 import { bindingProblems } from "./harness-registry.mjs";
 import { EXPECTED_ACTIONS, localSetupDigest } from "./harness-target/local-tenancy.mjs";
@@ -681,7 +684,16 @@ export function judgeFsDataWriteHistorical(expected, observed, binarySha256) {
       "strict",
       binarySha256,
       sha256Bytes(readFileSync(join(CONFORMANCE, "firestore-probe.fireemu.json"))),
+      pinnedProductionIndexAuthority(
+        readFileSync(join(CONFORMANCE, "firestore-production-matrix.json")),
+      ),
     ),
+  );
+  expectEqual(
+    differences,
+    "recorded index fixture",
+    join(CONFORMANCE, "firestore-production.indexes.json"),
+    result.profileBinding?.indexes?.sourcePath,
   );
   expectEqual(differences, "binary before", binarySha256, result.artifact?.sha256Before);
   expectEqual(differences, "binary after", binarySha256, result.artifact?.sha256After);

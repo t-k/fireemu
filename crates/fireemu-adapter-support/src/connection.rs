@@ -700,7 +700,7 @@ mod tests {
             .await
             .expect("a vectored write");
         assert_eq!(written, 9);
-        let State::Open(sink, _) = &wrapped.state else {
+        let super::State::Open(sink, _) = &wrapped.state else {
             panic!("the wrapper is still open");
         };
         assert_eq!(sink.vectored_writes, 1);

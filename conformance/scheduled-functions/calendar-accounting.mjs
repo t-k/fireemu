@@ -202,17 +202,32 @@ function judgePass(rows, ctx) {
       continue;
     }
     const parent = byPid.get(row.ppid);
+    // The run's session did not exist before the launch: nothing older can have been in it.
+    const young = startedAt >= ctx.launchTime;
     if (zombie) {
-      // A zombie clause 4 does not cover, whatever its session answer, is someone else's when
-      // its live parent is outside the session; otherwise the run is inconclusive.
-      if (parent && typeof parent.sid === "number" && parent.sid !== ctx.sessionId)
+      // D4: a zombie no clause covers is not judged by its session answer (getsid answers ESRCH
+      // for every zombie on macOS). One launchd adopted after the launch may be ours and is
+      // reaped within milliseconds: another pass, and inconclusive if it persists. Otherwise it
+      // is unrelated only under a parent in the same pass that is not a zombie and answers a
+      // session other than S.
+      if (row.ppid === 1 && young) trigger = true;
+      else if (
+        parent &&
+        !/^Z/.test(parent.stat ?? "") &&
+        typeof parent.sid === "number" &&
+        parent.sid !== ctx.sessionId
+      )
         unrelatedZombies.push(row);
       else inconclusive.push({ row, reason: "zombie with an unknown parent" });
       continue;
     }
     if (row.sid !== "ESRCH") continue;
-    // Only a row that could have been in the session asks for another pass.
-    if (row.ppid === 1 || members.has(row.ppid) || recordedPid(row.ppid) || parent?.sid === "ESRCH")
+    // Only a row that could have been in the session asks for another pass (S2: started at or
+    // after the launch).
+    if (
+      young &&
+      (row.ppid === 1 || members.has(row.ppid) || recordedPid(row.ppid) || parent?.sid === "ESRCH")
+    )
       trigger = true;
     else ignored.push(row);
   }

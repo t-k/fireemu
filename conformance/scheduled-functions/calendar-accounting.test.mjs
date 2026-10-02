@@ -331,7 +331,14 @@ const categories = {
     expect: "clean",
     parent: true,
   },
-  "ESRCH, parent 1": { make: (pid) => row({ pid, ppid: 1, sid: "ESRCH" }), expect: "repass" },
+  "ESRCH, parent 1, started after the launch": {
+    make: (pid) => row({ pid, ppid: 1, sid: "ESRCH", started: "Fri Oct  2 06:00:05 2026" }),
+    expect: "repass",
+  },
+  "ESRCH, parent 1, started before the launch": {
+    make: (pid) => row({ pid, ppid: 1, sid: "ESRCH" }),
+    expect: "clean",
+  },
   "getsid error": { make: (pid) => row({ pid, sid: "EPERM" }), expect: "inconclusive" },
 };
 const parentRow = row({ pid: 6000, ppid: 1, sid: 88 });
@@ -351,7 +358,7 @@ test("each inventory category is judged as the model says", () => {
 });
 
 test("a re-pass trigger in the second pass needs a later clean pair; the bound is five passes", () => {
-  const esrch = row({ pid: 5000, ppid: 1, sid: "ESRCH" });
+  const esrch = row({ pid: 5000, ppid: 1, sid: "ESRCH", started: "Fri Oct 2 06:00:05 2026" });
   const clean = [row({ pid: 5001 })];
   assert.equal(judgeInventory([clean, [esrch], clean, clean], ctx).outcome, "clean");
   assert.equal(
@@ -822,10 +829,16 @@ test("start times are read in UTC, and an unreadable one is inconclusive", () =>
 test("an ESRCH row asks for another pass when its parent could have been in the session", () => {
   const member = row({ pid: 6100, sid: 300, args: "member" });
   for (const [name, rows] of [
-    ["parent a recorded identity", [row({ pid: 5000, ppid: 400, sid: "ESRCH" })]],
+    [
+      "parent a recorded identity",
+      [row({ pid: 5000, ppid: 400, sid: "ESRCH", started: "Fri Oct 2 06:00:05 2026" })],
+    ],
     [
       "parent an ESRCH row",
-      [row({ pid: 5000, ppid: 6200, sid: "ESRCH" }), row({ pid: 6200, ppid: 6300, sid: "ESRCH" })],
+      [
+        row({ pid: 5000, ppid: 6200, sid: "ESRCH", started: "Fri Oct 2 06:00:05 2026" }),
+        row({ pid: 6200, ppid: 6300, sid: "ESRCH", started: "Fri Oct 2 06:00:04 2026" }),
+      ],
     ],
   ]) {
     const clean = [row({ pid: 5001 })];
@@ -1198,7 +1211,7 @@ test("inventory reasons, the launch-time boundary, ignored rows and the pass bou
     reason: "an inventory has one to five passes",
     survivors: [],
   });
-  const esrch = [row({ pid: 5000, ppid: 1, sid: "ESRCH" })];
+  const esrch = [row({ pid: 5000, ppid: 1, sid: "ESRCH", started: "Fri Oct 2 06:00:05 2026" })];
   assert.equal(judgeInventory([clean, esrch, esrch, clean, clean], ctx).outcome, "clean");
   assert.equal(
     judgeInventory([clean, esrch, esrch, esrch, clean], ctx).reason,
@@ -1524,4 +1537,88 @@ test("(B) needs positive numeric session ids for the root and the outer launcher
       name,
     );
   }
+});
+
+// Review round 2, D4 and S2: zombies and re-passes, judged by start time. The run's session did
+// not exist before the launch, so nothing that started earlier can have been in it.
+const launchd = row({ pid: 1, ppid: 0, sid: 1, args: "/sbin/launchd" });
+const afterLaunch = "Fri Oct 2 06:00:05 2026";
+
+test("a launchd-adopted zombie that started after the launch asks for another pass", () => {
+  const zombie = row({
+    pid: 7001,
+    ppid: 1,
+    stat: "Z",
+    sid: "ESRCH",
+    started: afterLaunch,
+    args: "<defunct>",
+  });
+  const clean = [launchd];
+  // Reaped by the next passes: clean.
+  assert.equal(
+    judgeInventory([[launchd, zombie], [launchd, zombie], clean, clean], ctx).outcome,
+    "clean",
+  );
+  // Persisting to the bound: inconclusive, never clean.
+  const persisting = [launchd, zombie];
+  const result = judgeInventory([persisting, persisting, persisting, persisting, persisting], ctx);
+  assert.deepEqual(
+    [result.outcome, result.reason],
+    ["inconclusive", "no two consecutive clean passes"],
+  );
+  // Started before the launch: unrelated (its live parent launchd is outside the session).
+  const older = { ...zombie, started: "Fri Oct 2 05:59:59 2026" };
+  const unrelated = judgeInventory(
+    [
+      [launchd, older],
+      [launchd, older],
+    ],
+    ctx,
+  );
+  assert.equal(unrelated.outcome, "clean");
+  assert.deepEqual(unrelated.passes[0].unrelatedZombies, [older]);
+});
+
+test("an uncovered zombie is unrelated only under a live, non-zombie parent outside the session", () => {
+  const zombie = row({ pid: 7001, ppid: 6000, stat: "Z", sid: "ESRCH" });
+  // launchd is in every pass, so the parent row itself is judged only for what it is.
+  const judge = (parent) =>
+    judgeInventory(
+      [
+        [launchd, zombie, parent],
+        [launchd, zombie, parent],
+      ],
+      ctx,
+    );
+  assert.equal(judge(parentRow).outcome, "clean");
+  for (const [name, parent] of [
+    ["a zombie parent", { ...parentRow, stat: "Z" }],
+    ["a zombie parent with a session answer", { ...parentRow, stat: "Z+", sid: 88 }],
+    ["a parent with no session answer", { ...parentRow, sid: "ESRCH" }],
+  ])
+    assert.equal(judge(parent).outcome, "inconclusive", name);
+});
+
+test("an ESRCH row that started before the launch is ignored, even under launchd", () => {
+  const old = row({ pid: 5000, ppid: 1, sid: "ESRCH" });
+  const result = judgeInventory(
+    [
+      [launchd, old],
+      [launchd, old],
+    ],
+    ctx,
+  );
+  assert.equal(result.outcome, "clean");
+  assert.deepEqual(result.passes[1].ignored, [old]);
+  const young = { ...old, started: afterLaunch };
+  assert.equal(
+    judgeInventory(
+      [
+        [launchd, young],
+        [launchd, young],
+      ],
+      ctx,
+    ).outcome,
+    "inconclusive",
+  );
 });

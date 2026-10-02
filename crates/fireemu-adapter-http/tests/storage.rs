@@ -6231,8 +6231,9 @@ impl fireemu_core_auth::jwt::IdTokenSigner for ReversingSigner {
 }
 
 /// Ledger 781 on Storage: a signed (session-RSA) ID token whose `iat` and `auth_time` are in
-/// the future is not admitted as a user in strict (`Verified`), and is evaluated as its user in
-/// the emulator profile (`EmulatorMock`), as the official emulator reads no time claim.
+/// the future is refused in strict (`Verified`) with 401, as an expired token is, and
+/// is evaluated as its user in the emulator profile (`EmulatorMock`), as the official emulator
+/// reads no time claim.
 #[test]
 fn a_future_dated_signed_token_follows_the_profile_on_storage() {
     for acceptance in [TokenAcceptance::Verified, TokenAcceptance::EmulatorMock] {
@@ -6249,7 +6250,7 @@ service firebase.storage {
             ),
             acceptance,
         );
-        let (uid, future) = {
+        let (uid, future, expired) = {
             let store = s.auth.default_store();
             let mut store = store.lock().unwrap();
             store.set_signer(Arc::new(ReversingSigner));
@@ -6257,32 +6258,50 @@ service firebase.storage {
                 .create_user(NewUser::email("future@example.com"), START)
                 .unwrap();
             let mut claims = store.id_token_claims(&uid, None, START).unwrap();
+            let mut stale = claims.clone();
+            stale.iat -= 7200;
+            stale.auth_time -= 7200;
+            stale.exp -= 7200;
             claims.iat += 600;
             claims.auth_time += 600;
             (
                 uid.as_str().to_owned(),
                 fireemu_core_auth::jwt::encode_with(&claims, store.signer()),
+                fireemu_core_auth::jwt::encode_with(&stale, store.signer()),
             )
         };
-        let firebase_auth = format!("Firebase {future}");
         let (ct, body) = multipart(&json!({"contentType": "text/plain"}), "text/plain", b"mine");
         let own = format!("/v0/b/{BUCKET}/o?name=users%2F{uid}%2Fnote.txt&uploadType=multipart");
-        let r = handle(
-            &s,
-            req(
-                "POST",
-                &own,
-                &[
-                    ("authorization", &firebase_auth),
-                    ("content-type", &ct),
-                    ("x-goog-upload-protocol", "multipart"),
-                ],
-                &body,
-            ),
-        );
+        let upload = |token: &str| {
+            let firebase_auth = format!("Firebase {token}");
+            handle(
+                &s,
+                req(
+                    "POST",
+                    &own,
+                    &[
+                        ("authorization", &firebase_auth),
+                        ("content-type", &ct),
+                        ("x-goog-upload-protocol", "multipart"),
+                    ],
+                    &body,
+                ),
+            )
+        };
+        let r = upload(&future);
         match acceptance {
+            // Strict refuses it as it refuses an expired token of the same user, with 401 and the
+            // same headers, never with the anonymous caller's Rules denial (403). Only the message
+            // differs: a token issued after the session clock reads as malformed (the documented
+            // fail-closed refusal of the clock-rewind issue).
             TokenAcceptance::Verified => {
-                assert_ne!(r.status, 200, "{}", String::from_utf8_lossy(&r.body));
+                let stale = upload(&expired);
+                assert_eq!((stale.status, r.status), (401, 401));
+                assert_eq!(r.headers, stale.headers);
+                assert_eq!(
+                    String::from_utf8_lossy(&r.body),
+                    r#"{"error":{"code":401,"message":"invalid ID token: malformed token","status":"UNAUTHENTICATED"}}"#
+                );
             }
             TokenAcceptance::EmulatorMock => {
                 assert_eq!(r.status, 200, "{}", String::from_utf8_lossy(&r.body));

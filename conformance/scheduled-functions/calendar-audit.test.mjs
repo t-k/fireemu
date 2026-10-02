@@ -33,10 +33,10 @@ const BUILTINS = new Set([
   "node:url",
 ]);
 
-/** The spans of every `.signal(` call's arguments, by parenthesis matching. */
-function signalSpans(source) {
+/** The spans of every call's arguments whose callee matches `callee`, by parenthesis matching. */
+function signalSpans(source, callee) {
   const spans = [];
-  for (const match of source.matchAll(/\.signal\(/g)) {
+  for (const match of source.matchAll(callee)) {
     let depth = 1,
       index = match.index + match[0].length;
     while (index < source.length && depth > 0) {
@@ -90,8 +90,12 @@ export function auditSources(sources) {
     for (const specifier of specifiers(source))
       if (!/^\.\/[^/]+\.mjs$/.test(specifier) && !BUILTINS.has(specifier))
         problems.push(`${name}: import of ${specifier}`);
-    // Condition (D): every signal the harness sends goes through the recorder's signal row.
-    const spans = signalSpans(source);
+    // Condition (D) and review round 2, M2: every signal goes through the recorder's signal row,
+    // and outside the recorder only through its verified path (a fresh identity check first).
+    const spans = signalSpans(
+      source,
+      name === RECORDER ? /\.(?:verifiedSignal|signal)\(/g : /\.verifiedSignal\(/g,
+    );
     for (const match of source.matchAll(/\.kill\(/g))
       if (!spans.some(([from, to]) => match.index > from && match.index < to))
         problems.push(`${name}: a kill outside a recorded signal`);
@@ -117,7 +121,7 @@ test("the audit refuses each kind of call site it exists to catch", async () => 
         ...base,
         [
           "calendar-ok.mjs",
-          'await r.signal(t, "SIGTERM", async () => process.kill(p, "SIGTERM"));',
+          'await r.verifiedSignal(t, "SIGTERM", async () => process.kill(p, "SIGTERM"));',
         ],
       ]),
     ),
@@ -142,6 +146,10 @@ test("the audit refuses each kind of call site it exists to catch", async () => 
     ['export { y } from "./z.cjs";', "import of ./z.cjs"],
     ["process.kill(pid, 'SIGTERM');", "a kill outside a recorded signal"],
     ["child.kill('SIGKILL');", "a kill outside a recorded signal"],
+    [
+      'await r.signal(t, "SIGTERM", async () => process.kill(p, "SIGTERM"));',
+      "a kill outside a recorded signal",
+    ],
   ])
     assert.ok(
       auditSources(withFile("calendar-other.mjs", source)).includes(

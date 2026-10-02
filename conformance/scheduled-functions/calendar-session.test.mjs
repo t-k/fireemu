@@ -416,3 +416,23 @@ test("every harness signal reaches the caller with the target's owned identity",
     { pid: 300, kind: "SIGTERM", identity: { pid: 300, started: "Thu Oct 1 00:00:00 2026" } },
   ]);
 });
+
+// Review round 2, M2 and S1.
+test("a zombie the supervisor owns is never signalled", async () => {
+  const f = lifecycle();
+  const original = f.snapshot;
+  // The retained runner shows as a zombie (state Z) and stays listed.
+  f.snapshot = async () =>
+    (await original()).map((value) => (value.pid === 300 ? { ...value, stat: "Z" } : value));
+  const result = await superviseCalendarProcess({ ...f, graceMs: 200, killGraceMs: 100 });
+  assert.deepEqual(f.signals, []);
+  assert.equal(result.cleanupVerified, false);
+});
+
+test("with escalation off, a daemon past its deadline still gets the recorded SIGTERM, and only it", async () => {
+  const f = lifecycle({ timeout: true });
+  const result = await superviseCalendarProcess({ ...f, escalate: false });
+  assert.equal(result.timedOut, true);
+  assert.deepEqual(f.signals, [{ pid: 200, signal: "SIGTERM" }]);
+  assert.equal(result.settledWithoutEscalation, false);
+});

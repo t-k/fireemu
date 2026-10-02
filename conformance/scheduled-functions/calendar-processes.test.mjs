@@ -14,7 +14,7 @@ const row = (pid, ppid, comm = "node", args = "node local-owned.mjs") => ({
 
 test("calendar process snapshot parser retains exact start, UID and command identity", () => {
   const values = parseProcessSnapshot(
-    "  200 100 200 501 Thu Oct  1 00:00:00 2026 /usr/bin/node /usr/bin/node child.mjs --calendar-child input.json\n",
+    "  200 100 200 501 Thu Oct  1 00:00:00 2026 Ss+ /usr/bin/node /usr/bin/node child.mjs --calendar-child input.json\n",
   );
   assert.deepEqual(values, [
     {
@@ -23,16 +23,23 @@ test("calendar process snapshot parser retains exact start, UID and command iden
       pgid: 200,
       uid: 501,
       started: "Thu Oct 1 00:00:00 2026",
+      stat: "Ss+",
       comm: "/usr/bin/node",
       args: "/usr/bin/node child.mjs --calendar-child input.json",
     },
   ]);
   assert.throws(() => parseProcessSnapshot("unreadable snapshot"), /snapshot/);
+  // Review round 2, M2: the state column is required, so a zombie is never mistaken for a
+  // live process.
+  assert.throws(
+    () => parseProcessSnapshot("  200 100 200 501 Thu Oct  1 00:00:00 2026\n"),
+    /snapshot row/,
+  );
 });
 
 test("calendar process snapshot excludes only the exact observation subprocess PID", () => {
   const text =
-    "200 100 200 501 Thu Oct 1 00:00:00 2026 ps ps real-owned-server\n300 100 300 501 Thu Oct 1 00:00:00 2026 ps ps observation-command\n";
+    "200 100 200 501 Thu Oct 1 00:00:00 2026 S ps ps real-owned-server\n300 100 300 501 Thu Oct 1 00:00:00 2026 R ps ps observation-command\n";
   assert.deepEqual(
     parseProcessSnapshot(text, 300).map((value) => value.pid),
     [200],

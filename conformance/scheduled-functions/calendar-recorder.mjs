@@ -25,15 +25,17 @@ export function createRecorder({
   prelude = [],
 }) {
   const fd = openSync(path, "a", 0o600);
+  let closed = false;
   const append = (row) => {
+    // A row after close would go to whatever file reused the descriptor (review S3).
+    if (closed) throw new Error("the record file is closed");
     writeSync(fd, JSON.stringify(row) + "\n");
     fsyncSync(fd);
   };
   append({ type: "header", role, pid, started, harnessVersion });
   for (const row of prelude) append(row);
   const uid = process.getuid();
-  let next = 0,
-    closed = false;
+  let next = 0;
   const recorder = {
     /** Starts a child; its exit row comes from this process's own wait (`exit`). */
     spawn(file, args, options = {}, purpose) {
@@ -46,6 +48,9 @@ export function createRecorder({
       const child = spawnImpl(file, args, options);
       let settle;
       child.recordHandle = handle;
+      // Set by this process's own wait, before any other exit listener runs: a PID whose child
+      // has exited is never signalled (review round 2, M2).
+      child.recordExited = false;
       child.recordExit = new Promise((resolve) => {
         settle = resolve;
       });
@@ -61,6 +66,7 @@ export function createRecorder({
           spawnMonoNs,
         });
         child.once("exit", (code, signal) => {
+          child.recordExited = true;
           append({ type: "exit", handle, code, signal, exitMonoNs: mono() });
           settle({ code, signal });
         });
@@ -156,6 +162,34 @@ export function createRecorder({
     /** The parent's record of a lane-owned child's start time (checked against its header). */
     identity(handle, childPid, childStarted) {
       append({ type: "identity", handle, pid: childPid, started: childStarted });
+    },
+    /**
+     * Signals `target` only after a fresh recorded `ps` shows that PID alive, not a zombie, with
+     * the same UID and start time (review round 2, M2). Answers whether it was sent.
+     */
+    async verifiedSignal(target, kind, send) {
+      const answer = await recorder.execFile(
+        "ps",
+        ["-o", "pid=,uid=,lstart=,stat=", "-p", String(target.pid)],
+        { env: psEnv() },
+        "verify",
+      );
+      const match =
+        /^\s*(\d+)\s+(\d+)\s+(\S+\s+\S+\s+\d+\s+\d{2}:\d{2}:\d{2}\s+\d{4})\s+(\S+)\s*$/.exec(
+          answer.stdout,
+        );
+      const live =
+        answer.code === 0 &&
+        answer.stderr === "" &&
+        answer.truncated === false &&
+        match !== null &&
+        Number(match[1]) === target.pid &&
+        Number(match[2]) === target.uid &&
+        normaliseStart(match[3]) === target.started &&
+        !match[4].startsWith("Z");
+      if (!live) return false;
+      await recorder.signal(target, kind, send);
+      return true;
     },
     /** Every signal the harness sends is recorded, with the target identity, before it is sent. */
     async signal(target, kind, send) {

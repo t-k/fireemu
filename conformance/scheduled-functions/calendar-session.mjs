@@ -164,10 +164,16 @@ export async function superviseCalendarProcess({
     throw new Error("owned process inventory remains unreadable");
   };
   let signalled = false;
-  const verifiedSignal = async (pid, kind) => {
-    if (!escalate) return;
+  // `direct` is the deadline or cancellation SIGTERM to the waited child, which escalation off
+  // keeps so a hung control cannot wait forever (review S1). A zombie is never signalled.
+  const verifiedSignal = async (pid, kind, direct = false) => {
+    if (!escalate && !direct) return;
     const owned = tracker.owned().find((value) => value.pid === pid);
-    if ((await live()).some((row) => row.pid === pid && sameProcessIdentity(owned, row))) {
+    if (
+      (await live()).some(
+        (row) => row.pid === pid && sameProcessIdentity(owned, row) && !/^Z/.test(row.stat ?? ""),
+      )
+    ) {
       signalled = true;
       try {
         await signal(pid, kind, owned);
@@ -182,14 +188,14 @@ export async function superviseCalendarProcess({
       timedOut = clock() - start >= deadlineMs;
       cancelled = stopping();
       if (timedOut || cancelled) {
-        await verifiedSignal(child.pid, "SIGTERM");
+        await verifiedSignal(child.pid, "SIGTERM", true);
         break;
       }
       await sleep(pollMs);
     }
   } catch {
     try {
-      await verifiedSignal(child.pid, "SIGTERM");
+      await verifiedSignal(child.pid, "SIGTERM", true);
     } catch {
       /* Fresh identity remains required. */
     }

@@ -15,6 +15,7 @@ import {
   accountingOuter,
   certify,
   harnessVersion,
+  ownedSender,
   measure,
   snapshotWith,
 } from "./calendar-measure.mjs";
@@ -149,12 +150,7 @@ async function superviseSession(path) {
     root,
     child: { pid: daemon.pid, state: () => state },
     snapshot,
-    signal: (pid, kind, owned) =>
-      recorder.signal(
-        { pid, uid: owned?.uid ?? process.getuid(), started: owned?.started ?? "unknown" },
-        kind,
-        async () => process.kill(pid, kind),
-      ),
+    signal: ownedSender(recorder, [daemon]),
     escalate: plan.escalation !== "off",
     stopping: () => stopped || parentLost,
     ownershipComplete: () => observed,

@@ -8,7 +8,7 @@ export function parseProcessSnapshot(text, observerPid) {
     .filter((line) => line.trim())
     .map((line) => {
       const match =
-        /^\s*(\d+)\s+(\d+)\s+(\d+)\s+(\d+)\s+(\S+\s+\S+\s+\d+\s+\d{2}:\d{2}:\d{2}\s+\d{4})\s+(\S+)\s+(.+)$/.exec(
+        /^\s*(\d+)\s+(\d+)\s+(\d+)\s+(\d+)\s+(\S+\s+\S+\s+\d+\s+\d{2}:\d{2}:\d{2}\s+\d{4})\s+(\S+)\s+(\S+)\s+(.+)$/.exec(
           line,
         );
       if (!match) throw new Error("unreadable process snapshot row");
@@ -18,8 +18,10 @@ export function parseProcessSnapshot(text, observerPid) {
         pgid: Number(match[3]),
         uid: Number(match[4]),
         started: match[5].replace(/\s+/g, " "),
-        comm: match[6],
-        args: match[7],
+        // The state, so a zombie is never taken for a live process (review round 2, M2).
+        stat: match[6],
+        comm: match[7],
+        args: match[8],
       };
     })
     .filter((row) => row.pid !== observerPid);

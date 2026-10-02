@@ -404,3 +404,97 @@ test("execFile reports truncation at maxBuffer and keeps the bound", async (t) =
   const whole = await recorder.execFile("/bin/sh", ["-c", "printf abc"], { maxBuffer: 3 }, "probe");
   assert.deepEqual([whole.stdout, whole.truncated], ["abc", false]);
 });
+
+// Review round 2, M2: a signal goes only to a live, verified own identity that is not a zombie.
+test("a child knows synchronously that it has exited", async (t) => {
+  const recorder = createRecorder({ path: join(await scratch(t), "measure.jsonl"), ...header });
+  const child = recorder.spawn("/usr/bin/true", [], {}, "probe");
+  assert.equal(child.recordExited, false);
+  child.once("exit", () => assert.equal(child.recordExited, true, "set before other listeners"));
+  await child.recordExit;
+  assert.equal(child.recordExited, true);
+});
+
+test("verifiedSignal re-reads the target and sends only to a matching live identity", async (t) => {
+  const path = join(await scratch(t), "measure.jsonl");
+  const recorder = createRecorder({ path, ...header });
+  const child = recorder.spawn("/bin/sleep", ["5"], {}, "probe");
+  t.after(() => child.kill("SIGKILL"));
+  const started = await recorder.startedOf(child.pid);
+  const sends = [];
+  const send = (kind) => async () => sends.push(kind);
+  const uid = process.getuid();
+  assert.equal(
+    await recorder.verifiedSignal(
+      { pid: child.pid, uid, started: "Thu Jan 1 00:00:00 1970" },
+      "SIGTERM",
+      send("wrong start"),
+    ),
+    false,
+  );
+  assert.equal(
+    await recorder.verifiedSignal(
+      { pid: child.pid, uid: uid + 1, started },
+      "SIGTERM",
+      send("wrong uid"),
+    ),
+    false,
+  );
+  assert.equal(
+    await recorder.verifiedSignal({ pid: 2 ** 22 + 77, uid, started }, "SIGTERM", send("gone")),
+    false,
+  );
+  assert.deepEqual(sends, []);
+  assert.equal(
+    await recorder.verifiedSignal({ pid: child.pid, uid, started }, "SIGTERM", async () =>
+      child.kill("SIGTERM"),
+    ),
+    true,
+  );
+  await child.recordExit;
+  const rows = await readRecords(path);
+  const signals = rows.filter((row) => row.type === "signal");
+  assert.deepEqual(
+    signals.map((row) => [row.kind, row.target.pid, row.target.started]),
+    [["SIGTERM", child.pid, started]],
+  );
+  // Once reaped, the same identity is never signalled again.
+  assert.equal(
+    await recorder.verifiedSignal({ pid: child.pid, uid, started }, "SIGKILL", send("reaped")),
+    false,
+  );
+  assert.deepEqual(sends, []);
+});
+
+test("verifiedSignal never signals a zombie", async (t) => {
+  const recorder = createRecorder({ path: join(await scratch(t), "measure.jsonl"), ...header });
+  // `sleep 0` exits while its parent, now exec'd into `sleep 3`, never reaps it.
+  const parent = recorder.spawn("/bin/sh", ["-c", "sleep 0 & exec sleep 3"], {}, "probe");
+  t.after(() => parent.kill("SIGKILL"));
+  let zombie;
+  for (let i = 0; i < 40 && !zombie; i++) {
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    const answer = await recorder.execFile("ps", ["-axo", "pid=,ppid=,stat="], {}, "probe");
+    zombie = answer.stdout
+      .split("\n")
+      .map((line) => line.trim().split(/\s+/))
+      .find(([, ppid, stat]) => Number(ppid) === parent.pid && stat?.startsWith("Z"));
+  }
+  assert.ok(zombie, "a zombie child was made");
+  const pid = Number(zombie[0]);
+  const started = await recorder.startedOf(pid);
+  const sends = [];
+  assert.equal(
+    await recorder.verifiedSignal({ pid, uid: process.getuid(), started }, "SIGKILL", async () =>
+      sends.push(pid),
+    ),
+    false,
+  );
+  assert.deepEqual(sends, []);
+});
+
+test("a closed recorder refuses to append, by name", async (t) => {
+  const recorder = createRecorder({ path: join(await scratch(t), "measure.jsonl"), ...header });
+  recorder.close();
+  assert.throws(() => recorder.identity("measure:1", 4242, "x"), /record file is closed/);
+});

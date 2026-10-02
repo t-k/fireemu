@@ -74,7 +74,7 @@ export const complete = (answer) =>
 export async function snapshotWith(recorder) {
   const answer = await recorder.execFile(
     "ps",
-    ["-ww", "-axo", "pid=,ppid=,pgid=,uid=,lstart=,comm=,args="],
+    ["-ww", "-axo", "pid=,ppid=,pgid=,uid=,lstart=,stat=,comm=,args="],
     { env: psEnv() },
     "ps",
   );
@@ -244,24 +244,67 @@ export function planKind(plan) {
   return { kind: "certificate", escalation: "on", certificate: true };
 }
 
-/** Stops a recorded child by its recorded identity and waits for its exit (failure paths only). */
-async function stopRecordedChild(recorder, child, started) {
-  const exited = child.recordExit.then(() => true);
-  const target = { pid: child.pid, uid: process.getuid(), started: started ?? "unknown" };
-  for (const [kind, waitMs] of [
-    ["SIGTERM", 5000],
-    ["SIGKILL", 5000],
-  ]) {
-    await recorder.signal(target, kind, async () => {
-      try {
-        process.kill(child.pid, kind);
-      } catch {
-        /* It has already exited; its exit row still comes from the wait. */
-      }
+/**
+ * A supervisor's signal callback that sends only through the recorder's verified path (a fresh
+ * `ps` shows the recorded PID, UID and start time, not a zombie), and a direct child only by its
+ * handle and never once its own wait has seen it exit (review round 2, M2).
+ */
+export function ownedSender(recorder, directChildren = []) {
+  return async (pid, kind, owned) => {
+    if (typeof owned?.started !== "string" || !Number.isSafeInteger(owned?.uid)) return false;
+    const direct = directChildren.find((child) => child.pid === pid);
+    if (direct?.recordExited) return false;
+    return recorder.verifiedSignal(identityOf(owned), kind, async () => {
+      if (direct) {
+        // Node refuses to signal a child it has reaped.
+        if (!direct.recordExited) direct.kill(kind);
+      } else process.kill(pid, kind);
     });
-    if (await Promise.race([exited, delay(waitMs).then(() => false)])) return;
+  };
+}
+
+/** Stops a recorded child by its recorded identity and waits for its exit (failure paths only). */
+export async function stopRecordedChild(recorder, child, started, wait = delay) {
+  // Without a recorded start time there is no identity to verify: only the wait.
+  if (typeof started === "string") {
+    const send = ownedSender(recorder, [child]);
+    const owned = { pid: child.pid, uid: process.getuid(), started };
+    for (const [kind, waitMs] of [
+      ["SIGTERM", 5000],
+      ["SIGKILL", 5000],
+    ]) {
+      if (child.recordExited) return;
+      await send(child.pid, kind, owned);
+      if (await Promise.race([child.recordExit.then(() => true), wait(waitMs).then(() => false)]))
+        return;
+    }
   }
-  await exited;
+  await child.recordExit;
+}
+
+/**
+ * Which processes the post-verdict cleanup may stop: members of the run's session, recorded
+ * identities and the injected helper by PID and start time, all started at or after the launch.
+ * Never a zombie, never a process only a run path names (review round 2, M2).
+ */
+export function cleanupTargets({ rows, chain, launchTime, recorded, injected, selfPid }) {
+  const session =
+    Number.isSafeInteger(chain?.outerSid) && chain.outerSid > 1 && chain.outerSid !== chain.rootSid
+      ? chain.outerSid
+      : null;
+  return rows.filter((row) => {
+    const startedAt = Date.parse(row.started + " GMT");
+    if (row.pid === selfPid || /^Z/.test(row.stat ?? "")) return false;
+    if (!Number.isFinite(startedAt) || startedAt < launchTime) return false;
+    return (
+      (session !== null && row.sid === session) ||
+      (recorded ?? []).some(
+        (identity) =>
+          identity.pid === row.pid && identity.uid === row.uid && identity.started === row.started,
+      ) ||
+      (injected?.pid === row.pid && injected?.started === row.started)
+    );
+  });
 }
 
 /** The outer launcher: prepares the run, claims the port, starts and waits for the inner supervisor. */
@@ -354,12 +397,7 @@ export async function accountingOuter(accDir) {
       root,
       child: { pid: inner.pid, state: () => state },
       snapshot: () => snapshotWith(recorder),
-      signal: (pid, kind, owned) =>
-        recorder.signal(
-          identityOf(owned ?? { pid, uid: process.getuid(), started: "unknown" }),
-          kind,
-          async () => process.kill(pid, kind),
-        ),
+      signal: ownedSender(recorder, [inner]),
       escalate: plan.escalation !== "off",
       ownershipComplete: async () => true,
       deadlineMs: 170000,
@@ -514,6 +552,10 @@ async function judgeRun({
   const identities = recorded
     .filter((row) => row.pid !== process.pid)
     .map((row) => ({ pid: row.pid, uid: row.uid ?? process.getuid(), started: row.started }));
+  // What the post-verdict cleanup may stop besides the run's session (review round 2, M2).
+  extra.identities = identities;
+  const sighting = inner?.injected?.firstSighting;
+  extra.injected = sighting ? { pid: inner.injected.pid, started: sighting.started } : null;
   const inventoryStartedAt = Date.now();
   const inventory = await finalInventory(recorder, {
     sessionId: chain.outerSid,
@@ -650,20 +692,18 @@ async function postVerdictCleanup({ accDir, root, version, launchTime, chain, ex
     harnessVersion: version,
   });
   try {
-    const rows = await inventoryPass(post);
-    const dirs = [accDir, extra.prepared].filter((dir) => typeof dir === "string");
-    const ours = (row) =>
-      row.pid !== process.pid &&
-      Date.parse(row.started + " GMT") >= launchTime &&
-      ((Number.isSafeInteger(chain.outerSid) &&
-        chain.outerSid !== chain.rootSid &&
-        row.sid === chain.outerSid) ||
-        dirs.some((dir) => row.args.includes(dir + "/")) ||
-        (extra.survivors ?? []).some(
-          (entry) => entry.row.pid === row.pid && entry.row.started === row.started,
-        ));
-    for (const live of rows.filter(ours))
-      await post.signal(identityOf(live), "SIGKILL", async () => process.kill(live.pid, "SIGKILL"));
+    const targets = cleanupTargets({
+      rows: await inventoryPass(post),
+      chain,
+      launchTime,
+      recorded: extra.identities,
+      injected: extra.injected,
+      selfPid: process.pid,
+    });
+    for (const target of targets)
+      await post.verifiedSignal(identityOf(target), "SIGKILL", async () =>
+        process.kill(target.pid, "SIGKILL"),
+      );
   } finally {
     post.close();
   }

@@ -8,7 +8,10 @@
 // script reruns those local comparisons on the binary under test, from the repository root,
 // and requires each result to equal the committed file: the same rows, each with the same
 // status and the same row summary (differences, decisions, relabels), the same fixture and the
-// same totals. Nothing is sent to production: the recording modes are not in the command table,
+// same totals. R11 additionally reclassifies its retained raw replay using the pinned original
+// corpus: a removed legacy mismatch requires a complete canonical match, and the original
+// indeterminate set must remain exact. Its supplied summary must agree with that recomputation.
+// Nothing is sent to production: the recording modes are not in the command table,
 // production and sandbox credentials refuse the run, and the run refuses to start while a
 // production endpoint answers (the release job runs it in a network namespace with loopback
 // only). The comparisons that need private inputs are listed in EXCLUDED_PARTS with the issue
@@ -25,6 +28,8 @@ import { fileURLToPath } from "node:url";
 import { isDeepStrictEqual } from "node:util";
 
 import {
+  historicalProductionSummary,
+  historicalProductionBaseline,
   probeProfileBindingProblems,
   pinnedProductionIndexAuthority,
 } from "./firestore-probe/run.mjs";
@@ -697,19 +702,125 @@ export function judgeFsDataWriteHistorical(expected, observed, binarySha256) {
   );
   expectEqual(differences, "binary before", binarySha256, result.artifact?.sha256Before);
   expectEqual(differences, "binary after", binarySha256, result.artifact?.sha256After);
-  expectEqual(differences, "comparable", expected.comparable, result.comparable);
-  expectEqual(
-    differences,
-    "known mismatches",
-    expected.knownMismatches,
-    result.currentMismatches?.length,
-  );
-  expectEqual(differences, "indeterminate", expected.indeterminate, result.indeterminate?.length);
-  expectEqual(differences, "newMismatches", [], result.newMismatches);
-  expectEqual(differences, "newIndeterminate", [], result.newIndeterminate);
-  const rows = [...(result.currentMismatches ?? []), ...(result.indeterminate ?? [])];
-  if (!sameSet(expected.rows, rows)) differences.push(`known rows: got ${brief(rows)}`);
+  try {
+    if (!observed.raw || typeof observed.raw.bytesBase64 !== "string")
+      throw new Error("no retained historical raw comparands");
+    const bytes = Buffer.from(observed.raw.bytesBase64, "base64");
+    if (
+      bytes.toString("base64") !== observed.raw.bytesBase64 ||
+      sha256Bytes(bytes) !== observed.raw.sha256 ||
+      result.localRawSha256 !== observed.raw.sha256
+    )
+      throw new Error("historical raw digest mismatch");
+    if (!observed.comparison || typeof observed.comparison.bytesBase64 !== "string")
+      throw new Error("no collected historical comparison snapshot");
+    const comparisonBytes = Buffer.from(observed.comparison.bytesBase64, "base64");
+    if (
+      comparisonBytes.toString("base64") !== observed.comparison.bytesBase64 ||
+      sha256Bytes(comparisonBytes) !== observed.comparison.sha256 ||
+      !isDeepStrictEqual(parseUniqueJson(comparisonBytes.toString("utf8")), result)
+    )
+      throw new Error("historical comparison snapshot mismatch");
+    const live = parseUniqueJson(bytes.toString("utf8"));
+    const summary = historicalProductionSummary(live);
+    for (const [key, value] of Object.entries(summary))
+      expectEqual(differences, `recomputed ${key}`, value, result[key]);
+    expectEqual(differences, "comparable", expected.comparable, summary.comparable);
+    const committed = JSON.parse(
+      readFileSync(
+        join(
+          ROOT,
+          "spec/compatibility/closure/evidence/integration-v0.8.0/FS-DATA-WRITE-regression.json",
+        ),
+      ),
+    ).historical;
+    expectEqual(differences, "historical expected authority", committed, expected);
+    expectEqual(
+      differences,
+      "legacy known count",
+      expected.knownMismatches,
+      expected.rows.length - expected.indeterminate,
+    );
+    // Replaying the recorded baseline through the same classifier establishes its exact debt partition.
+    const original = historicalProductionBaseline();
+    expectEqual(
+      differences,
+      "indeterminate",
+      expected.indeterminate,
+      original.indeterminate.length,
+    );
+    if (
+      new Set(expected.rows).size !== expected.rows.length ||
+      !expected.rows.every((key) =>
+        [...original.baselineMismatches, ...original.indeterminate].includes(key),
+      )
+    )
+      differences.push("original historical row partition mismatch");
+    expectEqual(
+      differences,
+      "retained indeterminate",
+      original.indeterminate,
+      summary.indeterminate,
+    );
+    if (!summary.currentMismatches.every((key) => expected.rows.includes(key)))
+      differences.push("unlisted current historical mismatch");
+    expectEqual(differences, "newMismatches", [], summary.newMismatches);
+    expectEqual(differences, "newIndeterminate", [], summary.newIndeterminate);
+  } catch (error) {
+    differences.push(`historical raw proof: ${error.message}`);
+  }
   return differences;
+}
+
+// JSON.parse alone silently overwrites duplicate keys; inspect every object before accepting bytes.
+function parseUniqueJson(text) {
+  const value = JSON.parse(text);
+  const tokens = text.match(/"(?:\\.|[^"\\])*"|[{}[\]:,]|[^\s{}[\]:,]+/g);
+  let at = 0;
+  function visit() {
+    const token = tokens[at++];
+    if (token === "{") {
+      const keys = new Set();
+      while (tokens[at] !== "}") {
+        const key = JSON.parse(tokens[at++]);
+        if (keys.has(key)) throw new Error("duplicate historical JSON key");
+        keys.add(key);
+        if (tokens[at++] !== ":") throw new Error("invalid historical object");
+        visit();
+        if (tokens[at] !== ",") break;
+        at++;
+      }
+      at++;
+    } else if (token === "[") {
+      while (tokens[at] !== "]") {
+        visit();
+        if (tokens[at] !== ",") break;
+        at++;
+      }
+      at++;
+    }
+  }
+  visit();
+  return value;
+}
+
+export async function collectHistoricalReplay(runDir, outDir) {
+  const summaryPath = join(runDir, "historical-production-comparison.json");
+  const rawPath = join(runDir, "fireemu-historical-production.json");
+  const comparisonBytes = existsSync(summaryPath) ? await readFile(summaryPath) : undefined;
+  const rawBytes = existsSync(rawPath) ? await readFile(rawPath) : undefined;
+  if (comparisonBytes)
+    await writeFile(join(outDir, "R11-historical-production-comparison.json"), comparisonBytes);
+  if (rawBytes) await writeFile(join(outDir, "R11-fireemu-historical-production.json"), rawBytes);
+  return {
+    result: comparisonBytes ? parseUniqueJson(comparisonBytes.toString("utf8")) : undefined,
+    comparison: comparisonBytes ? historicalRawObservation(comparisonBytes) : undefined,
+    raw: rawBytes ? historicalRawObservation(rawBytes) : undefined,
+  };
+}
+
+export function historicalRawObservation(bytes) {
+  return { bytesBase64: bytes.toString("base64"), sha256: sha256Bytes(bytes) };
 }
 
 const caseCount = (recording) =>
@@ -937,11 +1048,10 @@ async function observe(run, entry, context) {
     };
   }
   if (run.id === "R11") {
-    const path = join(RUNS_DIR, "firestore-probe", "historical-production-comparison.json");
-    const result = existsSync(path) ? await readJsonFile(path) : undefined;
-    if (result)
-      await copyFile(path, join(context.out, "R11-historical-production-comparison.json"));
-    return { exitCode: lastExit, result };
+    return {
+      exitCode: lastExit,
+      ...(await collectHistoricalReplay(join(RUNS_DIR, "firestore-probe"), context.out)),
+    };
   }
   if (run.id === "R12") {
     const line = lastJsonLine(outputs.at(-1) ?? "");

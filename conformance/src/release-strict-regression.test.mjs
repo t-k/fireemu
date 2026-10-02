@@ -34,7 +34,9 @@ import {
   forbiddenEnvironment,
   judge,
   judgeFsDataWriteCurrent,
-  judgeFsDataWriteHistorical,
+  judgeFsDataWriteHistorical as judgeHistorical,
+  historicalRawObservation,
+  collectHistoricalReplay,
   judgeFunctionsHttp,
   localSetupDifferences,
   packagedRunnerError,
@@ -42,7 +44,23 @@ import {
   planComparisons,
   planRelease,
 } from "./release-strict-regression.mjs";
+import { PROGRAMS } from "./firestore-probe/programs.mjs";
+import { historicalProductionSummary } from "./firestore-probe/run.mjs";
 import { COMPARISONS } from "./auth-federation/compare.mjs";
+
+const judgeFsDataWriteHistorical = (expected, observed, binary) =>
+  judgeHistorical(
+    expected,
+    {
+      ...observed,
+      comparison:
+        observed.comparison ??
+        (observed.result
+          ? historicalRawObservation(Buffer.from(JSON.stringify(observed.result)))
+          : undefined),
+    },
+    binary,
+  );
 
 const repo = (path) => fileURLToPath(new URL(`../../${path}`, import.meta.url));
 const readJson = (path) => JSON.parse(readFileSync(repo(path), "utf8"));
@@ -678,25 +696,41 @@ const passingProfileBinding = () => {
   };
 };
 
-const passingHistorical = () => {
-  const historical = regression().historical;
-  const indeterminate = ["transactions/lifecycle#phantom-write"];
-  return {
-    artifact: { sha256Before: BINARY, sha256After: BINARY },
-    profileBinding: passingProfileBinding(),
-    comparable: historical.comparable,
-    currentMismatches: historical.rows.filter((row) => !indeterminate.includes(row)),
-    newMismatches: [],
-    indeterminate,
-    newIndeterminate: [],
-  };
+const baselineRaw = () => {
+  const saved = readJson("conformance/firestore-production-matrix.json");
+  const live = Object.fromEntries(
+    PROGRAMS.map((program) => [
+      program.id,
+      {
+        steps: Object.fromEntries(
+          program.steps.map((step) => [
+            step.id,
+            saved.programs.find((old) => old.id === program.id)?.steps[step.id]?.fireemu ?? {
+              missing: true,
+            },
+          ]),
+        ),
+      },
+    ]),
+  );
+  live["queries/collection-group"].steps["partition-query"] = saved.programs.find(
+    (p) => p.id === "queries/collection-group",
+  ).steps["partition-query"].production;
+  return live;
 };
+const passingRaw = () => historicalRawObservation(Buffer.from(JSON.stringify(baselineRaw())));
+const passingHistorical = () => ({
+  artifact: { sha256Before: BINARY, sha256After: BINARY },
+  profileBinding: passingProfileBinding(),
+  localRawSha256: passingRaw().sha256,
+  ...historicalProductionSummary(baselineRaw()),
+});
 
 test("the historical production replay passes on the committed figures", () => {
   assert.deepEqual(
     judgeFsDataWriteHistorical(
       regression().historical,
-      { exitCode: 0, result: passingHistorical() },
+      { exitCode: 0, result: passingHistorical(), raw: passingRaw() },
       BINARY,
     ),
     [],
@@ -740,7 +774,7 @@ test("every departure of the historical production replay fails it", () => {
     },
   };
   for (const [name, breakIt] of Object.entries(breakers)) {
-    const observed = { exitCode: 0, result: passingHistorical() };
+    const observed = { exitCode: 0, result: passingHistorical(), raw: passingRaw() };
     breakIt(observed);
     assert.notDeepEqual(
       judgeFsDataWriteHistorical(regression().historical, observed, BINARY),
@@ -1137,7 +1171,11 @@ test("R11 refuses the old historical receipt without actual strict profile bindi
   const result = passingHistorical();
   delete result.profileBinding;
   assert.notDeepEqual(
-    judgeFsDataWriteHistorical(regression().historical, { exitCode: 0, result }, BINARY),
+    judgeFsDataWriteHistorical(
+      regression().historical,
+      { exitCode: 0, result, raw: passingRaw() },
+      BINARY,
+    ),
     [],
   );
 });
@@ -1204,7 +1242,11 @@ test("R11 profile receipt fails closed on readback, config and binary near misse
     const result = passingHistorical();
     breakIt(result.profileBinding);
     assert.notDeepEqual(
-      judgeFsDataWriteHistorical(regression().historical, { exitCode: 0, result }, BINARY),
+      judgeFsDataWriteHistorical(
+        regression().historical,
+        { exitCode: 0, result, raw: passingRaw() },
+        BINARY,
+      ),
       [],
       String(index),
     );
@@ -1226,8 +1268,11 @@ test("generated strict profile receipts agree with an independent five-condition
     b.config.sha256Before = b.config.sha256After = createHash("sha256").update(bytes).digest("hex");
     if (!(mask & 16)) b.binary.sha256After = "c".repeat(64);
     assert.equal(
-      judgeFsDataWriteHistorical(regression().historical, { exitCode: 0, result }, BINARY)
-        .length === 0,
+      judgeFsDataWriteHistorical(
+        regression().historical,
+        { exitCode: 0, result, raw: passingRaw() },
+        BINARY,
+      ).length === 0,
       mask === 31,
       String(mask),
     );
@@ -1261,7 +1306,11 @@ test("R11 binds source path and rules resolution to the actual launch cwd", () =
       }
     }
     assert.notDeepEqual(
-      judgeFsDataWriteHistorical(regression().historical, { exitCode: 0, result }, BINARY),
+      judgeFsDataWriteHistorical(
+        regression().historical,
+        { exitCode: 0, result, raw: passingRaw() },
+        BINARY,
+      ),
       [],
       kind,
     );
@@ -1272,7 +1321,11 @@ test("R11 refuses a strict receipt missing the recorded production index prerequ
   const result = passingHistorical();
   delete result.profileBinding.indexes;
   assert.notDeepEqual(
-    judgeFsDataWriteHistorical(regression().historical, { exitCode: 0, result }, BINARY),
+    judgeFsDataWriteHistorical(
+      regression().historical,
+      { exitCode: 0, result, raw: passingRaw() },
+      BINARY,
+    ),
     [],
   );
 });
@@ -1370,7 +1423,11 @@ test("R11 rejects forged index authority, changed bytes and unbound catalog rela
     const result = passingHistorical();
     breakIt(result.profileBinding);
     assert.notDeepEqual(
-      judgeFsDataWriteHistorical(regression().historical, { exitCode: 0, result }, BINARY),
+      judgeFsDataWriteHistorical(
+        regression().historical,
+        { exitCode: 0, result, raw: passingRaw() },
+        BINARY,
+      ),
       [],
       String(index),
     );
@@ -1394,8 +1451,11 @@ test("generated index receipts agree with an independent four-condition model", 
         .digest("hex");
     }
     assert.equal(
-      judgeFsDataWriteHistorical(regression().historical, { exitCode: 0, result }, BINARY)
-        .length === 0,
+      judgeFsDataWriteHistorical(
+        regression().historical,
+        { exitCode: 0, result, raw: passingRaw() },
+        BINARY,
+      ).length === 0,
       mask === 15,
       String(mask),
     );
@@ -1435,9 +1495,226 @@ test("index validator refuses coherent relative paths, fixture reuse and emulato
       );
     else
       assert.notDeepEqual(
-        judgeFsDataWriteHistorical(regression().historical, { exitCode: 0, result }, BINARY),
+        judgeFsDataWriteHistorical(
+          regression().historical,
+          { exitCode: 0, result, raw: passingRaw() },
+          BINARY,
+        ),
         [],
         kind,
       );
+  }
+});
+
+test("R11 rejects historical counts without retained raw comparands", () => {
+  assert.notDeepEqual(
+    judgeFsDataWriteHistorical(
+      regression().historical,
+      { exitCode: 0, result: passingHistorical() },
+      BINARY,
+    ),
+    [],
+  );
+});
+
+const resolvedObservation = () => {
+  const live = baselineRaw();
+  const saved = readJson("conformance/firestore-production-matrix.json");
+  for (const id of [
+    "commit-on-the-named-database-route",
+    "named-database-document",
+    "get-named-database",
+  ])
+    live["emulator/routes"].steps[id] = saved.programs.find(
+      (p) => p.id === "emulator/routes",
+    ).steps[id].production;
+  const raw = historicalRawObservation(Buffer.from(JSON.stringify(live)));
+  return {
+    exitCode: 0,
+    raw,
+    result: {
+      ...passingHistorical(),
+      localRawSha256: raw.sha256,
+      ...historicalProductionSummary(live),
+    },
+  };
+};
+
+test("R11 accepts complete canonical matches for the three resolved legacy rows", () => {
+  const observed = resolvedObservation();
+  assert.equal(observed.result.currentMismatches.length, 13);
+  assert.deepEqual(judgeFsDataWriteHistorical(regression().historical, observed, BINARY), []);
+});
+
+test("R11 raw proof rejects digest, inventory, summary and resolution forgeries", () => {
+  const breakers = {
+    "wrong raw SHA": (o) => {
+      o.raw.sha256 = "b".repeat(64);
+    },
+    "coherent wrong digest": (o) => {
+      o.raw.sha256 = o.result.localRawSha256 = "b".repeat(64);
+    },
+    "wrong bound SHA": (o) => {
+      o.result.localRawSha256 = "b".repeat(64);
+    },
+    "altered raw body": (o) => {
+      const live = JSON.parse(Buffer.from(o.raw.bytesBase64, "base64"));
+      live["emulator/routes"].steps["get-named-database"].code = "INTERNAL";
+      o.raw = historicalRawObservation(Buffer.from(JSON.stringify(live)));
+    },
+    "forged comparable": (o) => {
+      o.result.comparable--;
+    },
+    "forged baseline": (o) => {
+      o.result.baselineMismatches.pop();
+    },
+    "forged current summary": (o) => {
+      o.result.currentMismatches.pop();
+    },
+    "forged new summary": (o) => {
+      o.result.newMismatches = ["fake#row"];
+    },
+    "forged indeterminate": (o) => {
+      o.result.indeterminate = [];
+    },
+    "forged new indeterminate": (o) => {
+      o.result.newIndeterminate = ["fake#row"];
+    },
+    "duplicate raw key": (o) => {
+      const text = Buffer.from(o.raw.bytesBase64, "base64").toString(),
+        live = JSON.parse(text),
+        key = Object.keys(live)[0];
+      o.raw = historicalRawObservation(
+        Buffer.from(`{${JSON.stringify(key)}:${JSON.stringify(live[key])},${text.slice(1)}`),
+      );
+      o.result.localRawSha256 = o.raw.sha256;
+    },
+  };
+  for (const [label, breakIt] of Object.entries(breakers)) {
+    const observed = resolvedObservation();
+    breakIt(observed);
+    assert.notDeepEqual(
+      judgeFsDataWriteHistorical(regression().historical, observed, BINARY),
+      [],
+      label,
+    );
+  }
+});
+
+test("R11 complete inventory and unchanged debt are mandatory even with coherent hashes and summaries", () => {
+  const breakers = {
+    "missing program": (live) => {
+      delete live["emulator/routes"];
+    },
+    "unknown program": (live) => {
+      live.unknown = { steps: {} };
+    },
+    "missing resolved row": (live) => {
+      delete live["emulator/routes"].steps["get-named-database"];
+    },
+    "missing excluded row": (live) => {
+      delete live["writes/transforms"].steps["maximum-and-minimum"];
+    },
+    "unknown row": (live) => {
+      live["emulator/routes"].steps.unknown = { status: 200, code: "OK" };
+    },
+    "incomplete resolution": (live) => {
+      live["emulator/routes"].steps["get-named-database"] = { skipped: true };
+    },
+    "changed indeterminate": (live) => {
+      live["values/type-order"].steps[Object.keys(live["values/type-order"].steps)[0]] = {
+        skipped: true,
+      };
+    },
+    "unlisted mismatch": (live) => {
+      live["queries/collection-group"].steps["partition-query"] = { status: 500, code: "INTERNAL" };
+    },
+    "new mismatch": (live) => {
+      live["values/type-order"].steps[Object.keys(live["values/type-order"].steps)[0]] = {
+        status: 500,
+        code: "INTERNAL",
+      };
+    },
+  };
+  for (const [label, breakIt] of Object.entries(breakers)) {
+    const observed = resolvedObservation(),
+      live = JSON.parse(Buffer.from(observed.raw.bytesBase64, "base64"));
+    breakIt(live);
+    observed.raw = historicalRawObservation(Buffer.from(JSON.stringify(live)));
+    observed.result.localRawSha256 = observed.raw.sha256;
+    try {
+      Object.assign(observed.result, historicalProductionSummary(live));
+    } catch {}
+    assert.notDeepEqual(
+      judgeFsDataWriteHistorical(regression().historical, observed, BINARY),
+      [],
+      label,
+    );
+  }
+});
+
+test("R11 binds every supplied summary and receipt field to the collected comparison snapshot", () => {
+  const observed = resolvedObservation();
+  observed.comparison = historicalRawObservation(Buffer.from(JSON.stringify(observed.result)));
+  assert.deepEqual(judgeHistorical(regression().historical, observed, BINARY), []);
+  for (const mutate of [
+    (o) => {
+      delete o.comparison;
+    },
+    (o) => {
+      o.comparison.sha256 = "b".repeat(64);
+    },
+    (o) => {
+      o.result.artifact.version = "forged";
+    },
+    (o) => {
+      o.result.comparable--;
+    },
+  ]) {
+    const changed = clone(observed);
+    mutate(changed);
+    assert.notDeepEqual(judgeHistorical(regression().historical, changed, BINARY), []);
+  }
+});
+
+test("R11 trusted collector preserves exact raw and comparison snapshots and their hashes", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "strict-raw-collector-")),
+    out = join(dir, "out");
+  mkdirSync(out);
+  try {
+    const observed = resolvedObservation(),
+      bytes = Buffer.from(observed.raw.bytesBase64, "base64"),
+      summary = Buffer.from(`${JSON.stringify(observed.result, null, 2)}\n`);
+    writeFileSync(join(dir, "fireemu-historical-production.json"), bytes);
+    writeFileSync(join(dir, "historical-production-comparison.json"), summary);
+    const collected = await collectHistoricalReplay(dir, out);
+    assert.deepEqual(collected.raw, historicalRawObservation(bytes));
+    assert.deepEqual(collected.comparison, historicalRawObservation(summary));
+    assert.deepEqual(readFileSync(join(out, "R11-fireemu-historical-production.json")), bytes);
+    assert.deepEqual(readFileSync(join(out, "R11-historical-production-comparison.json")), summary);
+    assert.deepEqual(
+      judgeHistorical(regression().historical, { exitCode: 0, ...collected }, BINARY),
+      [],
+    );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("R11 generated proof combinations agree with an independent six-condition model", () => {
+  for (let mask = 0; mask < 64; mask++) {
+    const observed = resolvedObservation();
+    observed.comparison = historicalRawObservation(Buffer.from(JSON.stringify(observed.result)));
+    if (!(mask & 1)) delete observed.raw;
+    if (!(mask & 2)) observed.comparison.sha256 = "b".repeat(64);
+    if (!(mask & 4)) observed.result.profileBinding.effectiveProfile = "emulator";
+    if (!(mask & 8)) observed.result.comparable--;
+    if (!(mask & 16) && observed.raw) observed.raw.sha256 = "b".repeat(64);
+    if (!(mask & 32)) delete observed.result.profileBinding.indexes;
+    assert.equal(
+      judgeHistorical(regression().historical, observed, BINARY).length === 0,
+      mask === 63,
+      String(mask),
+    );
   }
 });

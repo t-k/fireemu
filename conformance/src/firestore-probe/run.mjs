@@ -11,6 +11,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import { spawn } from "node:child_process";
+import { readFileSync } from "node:fs";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -446,7 +447,8 @@ export async function executeFireemuProbe(plan, supervisor = runSupervisor) {
     plan.indexes?.authority,
   );
   if (problems.length) throw new Error(problems.join("; "));
-  return { fireemu: JSON.parse(await readFile(plan.env.FIRESTORE_PROBE_OUT, "utf8")), binding };
+  const rawBytes = await readFile(plan.env.FIRESTORE_PROBE_OUT);
+  return { fireemu: JSON.parse(rawBytes), binding, localRawSha256: sha256Bytes(rawBytes) };
 }
 
 /** Ordinary comparisons retain the original emulator configuration. */
@@ -858,6 +860,58 @@ export function productionStatusLegend(counts) {
 }
 
 /** Replay the pinned historical production corpus without contacting production. */
+export function historicalProductionSummary(live) {
+  const matrixBytes = readFileSync(PRODUCTION_JSON);
+  const programsBytes = readFileSync(join(CONFORMANCE_DIR, "src/firestore-probe/programs.mjs"));
+  if (
+    `sha256-${sha256Bytes(matrixBytes)}` !== HISTORICAL_MATRIX_DIGEST ||
+    `sha256-${sha256Bytes(programsBytes)}` !== HISTORICAL_PROGRAMS_DIGEST
+  )
+    throw new Error("historical corpus pin mismatch");
+  const saved = JSON.parse(matrixBytes);
+  const ids = PROGRAMS.map((program) => program.id);
+  if (!live || !isDeepStrictEqual(Object.keys(live).toSorted(), [...ids].toSorted()))
+    throw new Error("historical program inventory mismatch");
+  for (const program of PROGRAMS) {
+    const actual = live[program.id];
+    if (
+      !actual ||
+      !actual.steps ||
+      !isDeepStrictEqual(
+        Object.keys(actual.steps).toSorted(),
+        program.steps.map((step) => step.id).toSorted(),
+      )
+    )
+      throw new Error("historical step inventory mismatch");
+  }
+  return historical.checkHistoricalProduction({
+    saved,
+    live,
+    definitions: PROGRAMS,
+    excludedKeys: HISTORICAL_CHANGED_STEPS,
+  });
+}
+
+export function historicalProductionBaseline() {
+  const saved = JSON.parse(readFileSync(PRODUCTION_JSON));
+  const live = Object.fromEntries(
+    saved.programs.map((program) => [
+      program.id,
+      {
+        steps: Object.fromEntries(
+          Object.entries(program.steps).map(([id, row]) => [id, row.fireemu]),
+        ),
+      },
+    ]),
+  );
+  return historical.checkHistoricalProduction({
+    saved,
+    live,
+    definitions: PROGRAMS,
+    excludedKeys: HISTORICAL_CHANGED_STEPS,
+  });
+}
+
 async function checkProduction(profile) {
   const programsDigest = await digestFile(
     join(CONFORMANCE_DIR, "src/firestore-probe/programs.mjs"),
@@ -884,9 +938,10 @@ async function checkProduction(profile) {
     outPath: join(RUN_DIR, "fireemu-historical-production.json"),
     profile,
   });
-  const { fireemu, binding } = await executeFireemuProbe(plan);
+  const { fireemu, binding, localRawSha256 } = await executeFireemuProbe(plan);
   const after = await historical.measureArtifact(binary);
   const result = {
+    localRawSha256,
     profileBinding: binding,
     artifact: historical.historicalArtifactIdentity({
       binary,

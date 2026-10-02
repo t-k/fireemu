@@ -1516,16 +1516,34 @@ impl StorageState {
         })
     }
 
-    /// The names of the objects under `prefix`, in name order. A caller that has to run a costly
-    /// test over every name takes this snapshot under the lock and tests the names after it is
-    /// released.
+    /// Up to `limit` names of the objects under `prefix`, in name order, from `start` on. A caller
+    /// that has to run a costly test over the names reads them in batches, taking the lock for
+    /// one batch at a time and testing the batch after the lock is released.
     #[must_use]
-    pub fn object_names_with_prefix(&self, bucket: &BucketName, prefix: &str) -> Vec<String> {
+    pub fn object_names_from(
+        &self,
+        bucket: &BucketName,
+        prefix: &str,
+        start: std::ops::Bound<&str>,
+        limit: usize,
+    ) -> Vec<String> {
+        use std::ops::Bound;
+        let lower = match start {
+            Bound::Unbounded => Bound::Included((bucket.clone(), ObjectName::range_start(prefix))),
+            Bound::Included(name) => Bound::Included((
+                bucket.clone(),
+                ObjectName::range_start(if name > prefix { name } else { prefix }),
+            )),
+            Bound::Excluded(name) => {
+                Bound::Excluded((bucket.clone(), ObjectName::range_start(name)))
+            }
+        };
         self.objects
-            .range((bucket.clone(), ObjectName::range_start(prefix))..)
+            .range((lower, Bound::Unbounded))
             .take_while(|((candidate_bucket, name), _)| {
                 candidate_bucket == bucket && name.as_str().starts_with(prefix)
             })
+            .take(limit)
             .map(|((_, name), _)| name.as_str().to_owned())
             .collect()
     }
@@ -1544,6 +1562,33 @@ impl StorageState {
         max_results: Option<usize>,
         matches: &dyn Fn(&str) -> bool,
     ) -> ListPage {
+        self.list_matching_until(
+            bucket,
+            prefix,
+            delimiter,
+            page_token,
+            max_results,
+            matches,
+            None,
+        )
+    }
+
+    /// [`Self::list_matching`] over the names up to and including `until` (all of them when it is
+    /// `None`): for a caller that has already tested the names up to there and knows the page is
+    /// complete within them, so the listing need not walk the rest of the prefix.
+    #[must_use]
+    #[allow(clippy::too_many_arguments)]
+    pub fn list_matching_until(
+        &self,
+        bucket: &BucketName,
+        prefix: &str,
+        delimiter: Option<&str>,
+        page_token: Option<&str>,
+        max_results: Option<usize>,
+        matches: &dyn Fn(&str) -> bool,
+        until: Option<&str>,
+    ) -> ListPage {
+        let in_scope = |name: &str| name.starts_with(prefix) && until.is_none_or(|end| name <= end);
         let max = max_results
             .unwrap_or(DEFAULT_LIST_PAGE_SIZE)
             .min(DEFAULT_LIST_PAGE_SIZE);
@@ -1559,14 +1604,14 @@ impl StorageState {
                     .get(&(bucket.clone(), ObjectName::range_start(token)))
                     .is_some_and(|metadata| {
                         let name = metadata.name.as_str();
-                        name.starts_with(prefix) && matches(name) && fold(name).is_none()
+                        in_scope(name) && matches(name) && fold(name).is_none()
                     })
             });
             let item_start = page_token.filter(|_| token_is_item).unwrap_or(prefix);
             let mut prefixes = Vec::new();
             let mut next_page_token = None;
             for ((candidate_bucket, name), _) in self.objects.range(lower..) {
-                if candidate_bucket != bucket || !name.as_str().starts_with(prefix) {
+                if candidate_bucket != bucket || !in_scope(name.as_str()) {
                     break;
                 }
                 if !matches(name.as_str()) {
@@ -1590,7 +1635,7 @@ impl StorageState {
             self.objects
                 .range(lower.clone()..)
                 .take_while(|((candidate_bucket, name), _)| {
-                    candidate_bucket == bucket && name.as_str().starts_with(prefix)
+                    candidate_bucket == bucket && in_scope(name.as_str())
                 })
                 .filter(|((_, name), _)| matches(name.as_str()))
                 .any(|((_, name), _)| {
@@ -1603,7 +1648,7 @@ impl StorageState {
         let mut prefixes: Vec<String> = Vec::new();
         let mut next_page_token = None;
         for ((candidate_bucket, name), meta) in self.objects.range(lower..) {
-            if candidate_bucket != bucket || !name.as_str().starts_with(prefix) {
+            if candidate_bucket != bucket || !in_scope(name.as_str()) {
                 break;
             }
             if !matches(name.as_str()) {

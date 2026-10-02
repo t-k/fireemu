@@ -1099,9 +1099,10 @@ proptest! {
 }
 
 /// The names under a prefix, in name order, of one bucket only (a name of another bucket that
-/// starts with the prefix is not listed).
+/// starts with the prefix is not listed), read from a bound and up to a limit.
 #[test]
-fn object_names_with_prefix_lists_one_bucket_in_name_order() {
+fn object_names_from_lists_one_bucket_in_name_order() {
+    use std::ops::Bound::{Excluded, Included, Unbounded};
     let mut store = StorageState::new(7);
     let other = BucketName::try_new("other-app.appspot.com").unwrap();
     for (target, name) in [
@@ -1123,37 +1124,94 @@ fn object_names_with_prefix_lists_one_bucket_in_name_order() {
             )
             .unwrap();
     }
+    let names =
+        |prefix: &str, start, limit| store.object_names_from(&bucket(), prefix, start, limit);
+    assert_eq!(names("dir/", Unbounded, 10), ["dir/a", "dir/b"]);
+    assert_eq!(names("dir", Unbounded, 10), ["dir/a", "dir/b", "dir2/x"]);
+    assert_eq!(names("absent", Unbounded, 10), Vec::<String>::new());
+    assert_eq!(names("", Unbounded, 10).len(), 4);
+    // The limit, and both bounds: included starts at the name itself, excluded after it.
+    assert_eq!(names("dir", Unbounded, 2), ["dir/a", "dir/b"]);
+    assert_eq!(names("dir", Included("dir/b"), 10), ["dir/b", "dir2/x"]);
+    assert_eq!(names("dir", Excluded("dir/b"), 10), ["dir2/x"]);
+    assert_eq!(names("dir", Excluded("dir/a"), 1), ["dir/b"]);
+    // A start before the prefix begins at the prefix; one past every name is empty.
+    assert_eq!(names("dir/", Included("a"), 10), ["dir/a", "dir/b"]);
+    assert_eq!(names("dir/", Included("zzz"), 10), Vec::<String>::new());
+    assert_eq!(names("dir", Excluded("dir2/x"), 10), Vec::<String>::new());
     assert_eq!(
-        store.object_names_with_prefix(&bucket(), "dir/"),
-        ["dir/a", "dir/b"]
-    );
-    assert_eq!(
-        store.object_names_with_prefix(&bucket(), "dir"),
-        ["dir/a", "dir/b", "dir2/x"]
-    );
-    assert_eq!(
-        store.object_names_with_prefix(&bucket(), "absent"),
-        Vec::<String>::new()
-    );
-    assert_eq!(
-        store.object_names_with_prefix(&other, "dir/"),
+        store.object_names_from(&other, "dir/", Unbounded, 10),
         ["dir/other", "dir/zzz"]
     );
-    assert_eq!(store.object_names_with_prefix(&bucket(), "").len(), 4);
+    assert!(names("dir", Unbounded, 0).is_empty());
 }
 
 proptest! {
     #![proptest_config(ProptestConfig::with_cases(256))]
 
-    /// The snapshot of names under a prefix equals the reference filter of the stored names.
+    /// Reading the names in batches of any size with exclusive bounds gives every name under the
+    /// prefix once, in order: what the reference filter of the stored names gives.
     #[test]
-    fn object_names_with_prefix_equals_the_reference_filter(
+    fn object_names_from_in_batches_equals_the_reference_filter(
         names in names(),
         prefix in proptest::collection::vec(proptest::sample::select(SEGMENTS), 0..=2)
-            .prop_map(|segments| segments.join("/"))
+            .prop_map(|segments| segments.join("/")),
+        batch in 1usize..=5
     ) {
+        use std::ops::Bound;
         let store = store_with(&names);
         let expected: Vec<String> = names.iter().filter(|name| name.starts_with(&prefix)).cloned().collect();
-        prop_assert_eq!(store.object_names_with_prefix(&bucket(), &prefix), expected);
+        let mut read: Vec<String> = Vec::new();
+        let mut start: Bound<String> = Bound::Unbounded;
+        loop {
+            let bound = match &start {
+                Bound::Unbounded => Bound::Unbounded,
+                Bound::Included(name) => Bound::Included(name.as_str()),
+                Bound::Excluded(name) => Bound::Excluded(name.as_str()),
+            };
+            let got = store.object_names_from(&bucket(), &prefix, bound, batch);
+            let Some(last) = got.last().cloned() else { break };
+            read.extend(got);
+            start = Bound::Excluded(last);
+        }
+        prop_assert_eq!(read, expected);
+    }
+}
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(256))]
+
+    /// A listing bounded at a name is the listing of a store that holds only the names up to it,
+    /// page after page.
+    #[test]
+    fn a_bounded_listing_equals_the_listing_of_the_names_up_to_the_bound(
+        names in names(),
+        cut in 0usize..=24,
+        max in 1usize..=4,
+        delimiter in proptest::option::of(Just("/")),
+        prefix in proptest::collection::vec(proptest::sample::select(SEGMENTS), 0..=1)
+            .prop_map(|segments| segments.join("/"))
+    ) {
+        let Some(until) = names.iter().nth(cut % names.len().max(1)).cloned() else {
+            return Ok(());
+        };
+        let kept: BTreeSet<String> = names.iter().filter(|name| **name <= until).cloned().collect();
+        let bounded = store_with(&names);
+        let reference = store_with(&kept);
+        let mut token_bounded: Option<String> = None;
+        let mut token_reference: Option<String> = None;
+        for _ in 0..8 {
+            let a = bounded.list_matching_until(
+                &bucket(), &prefix, delimiter, token_bounded.as_deref(), Some(max), &|_| true, Some(&until),
+            );
+            let b = reference.list(&bucket(), &prefix, delimiter, token_reference.as_deref(), Some(max));
+            prop_assert_eq!(entries(&a), entries(&b));
+            prop_assert_eq!(&a.next_page_token, &b.next_page_token);
+            token_bounded = a.next_page_token;
+            token_reference = b.next_page_token;
+            if token_reference.is_none() {
+                break;
+            }
+        }
     }
 }

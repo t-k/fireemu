@@ -40,6 +40,12 @@ pub static BODY_BUDGET: BodyBudget = BodyBudget::new(DEFAULT_BODY_BUDGET_BYTES);
 const BLOCKING_HANDLER_LIMIT: usize = 16;
 static BLOCKING_HANDLER_SLOTS: Semaphore = Semaphore::const_new(BLOCKING_HANDLER_LIMIT);
 
+/// Bounds the list requests that carry a `matchGlob`, whose cost depends on a pattern the caller
+/// writes. A request waits for one of these slots before it takes a handler slot, and waits
+/// without holding a thread, so a flood of them leaves the handler slots to the other requests.
+const GLOB_HANDLER_LIMIT: usize = 2;
+static GLOB_HANDLER_SLOTS: Semaphore = Semaphore::const_new(GLOB_HANDLER_LIMIT);
+
 /// An admission budget for the request bodies buffered in memory at the same time.
 ///
 /// Charges are held by the buffer that owns the bytes and released when it is dropped, so
@@ -392,6 +398,16 @@ async fn respond(
         Ok(buffer) => buffer,
         Err(e) => return Ok(body_error_response(e, origin.as_deref())),
     };
+    let glob_permit = if crate::storage::uses_match_glob(&method, &query) {
+        Some(
+            GLOB_HANDLER_SLOTS
+                .acquire()
+                .await
+                .expect("storage glob semaphore is never closed"),
+        )
+    } else {
+        None
+    };
     let permit = BLOCKING_HANDLER_SLOTS
         .acquire()
         .await
@@ -405,6 +421,7 @@ async fn respond(
     );
     let response = tokio::task::spawn_blocking(move || {
         let _permit = permit;
+        let _glob_permit = glob_permit;
         let body = buffer.take();
         handle_framed(
             &state,

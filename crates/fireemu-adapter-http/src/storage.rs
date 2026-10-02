@@ -4318,33 +4318,52 @@ fn gcs_list(
             body: bytes::Bytes::from_static(b"{\n  \"kind\": \"storage#objects\"\n}\n"),
         });
     }
-    // The glob is the one filter that costs more than a comparison: it is run over the names after
-    // a snapshot of them, outside the store lock, so that no pattern can hold up another request.
-    let globbed: Option<std::collections::HashSet<String>> = match &glob {
-        Some(glob) => {
-            let names = state.store()?.object_names_with_prefix(&b, &prefix);
-            Some(
-                names
-                    .into_iter()
-                    .filter(|name| in_offsets(name) && glob.matches(name))
-                    .collect(),
-            )
+    // The glob is the one filter that costs more than a comparison. It is run over the names in
+    // batches, each read under the store lock and tested after the lock is released, and the
+    // scan stops as soon as the page is complete (one entry past `maxResults`), so a request
+    // neither holds the lock for the cost of a pattern nor reads more of a large bucket than its
+    // page needs. The names kept are the ones the page can show: at most one per entry.
+    let page = if let Some(glob) = &glob {
+        let max = max_results
+            .unwrap_or(fireemu_core_storage::store::DEFAULT_LIST_PAGE_SIZE)
+            .min(fireemu_core_storage::store::DEFAULT_LIST_PAGE_SIZE);
+        let mut token = page_token.as_deref();
+        let mut scan = glob_scan(
+            state,
+            &b,
+            &prefix,
+            &delimiter,
+            token,
+            max,
+            glob,
+            &in_offsets,
+        )?;
+        if token.is_some() && scan.first_entry.as_deref() != token {
+            // A token that names no entry starts the listing over, as it does without a glob.
+            token = None;
+            scan = glob_scan(state, &b, &prefix, &delimiter, None, max, glob, &in_offsets)?;
         }
-        None => None,
+        let store = state.store()?;
+        store.list_matching_until(
+            &b,
+            &prefix,
+            Some(delimiter.as_str()),
+            token,
+            max_results,
+            &|name| scan.allowed.contains(name),
+            scan.until.as_deref(),
+        )
+    } else {
+        let store = state.store()?;
+        store.list_matching(
+            &b,
+            &prefix,
+            Some(delimiter.as_str()),
+            page_token.as_deref(),
+            max_results,
+            &in_offsets,
+        )
     };
-    let name_filter = |name: &str| match &globbed {
-        Some(matched) => matched.contains(name),
-        None => in_offsets(name),
-    };
-    let store = state.store()?;
-    let page = store.list_matching(
-        &b,
-        &prefix,
-        Some(delimiter.as_str()),
-        page_token.as_deref(),
-        max_results,
-        &name_filter,
-    );
     let mut body = json!({"kind": "storage#objects"});
     if let Some(t) = page.next_page_token {
         body["nextPageToken"] = Value::String(t);
@@ -4356,6 +4375,103 @@ fn gcs_list(
         body["items"] = Value::Array(page.items.iter().map(|m| gcs_json(m, host)).collect());
     }
     Ok(StorageResponse::json(200, &body))
+}
+
+/// Names read from the store per lock acquisition by a glob listing.
+#[doc(hidden)]
+pub const GLOB_BATCH: usize = 256;
+
+/// What a glob listing found before its page was complete (public, hidden from the documentation,
+/// so that the tests can pin how much of a bucket a page reads and keeps).
+#[doc(hidden)]
+pub struct GlobScan {
+    /// The names that matched, one for each entry (an item, or one name of a folded prefix).
+    pub allowed: std::collections::HashSet<String>,
+    /// The last name read, so that the listing walks no further than the scan did.
+    pub until: Option<String>,
+    /// The first entry found, which is what tells a token that names an entry from one that
+    /// does not.
+    pub first_entry: Option<String>,
+}
+
+/// The entry a name belongs to under `delimiter`: the prefix it folds into, or `None` for an item.
+fn fold_entry(prefix: &str, delimiter: &str, name: &str) -> Option<String> {
+    if delimiter.is_empty() {
+        return None;
+    }
+    let rest = name.get(prefix.len()..)?;
+    rest.find(delimiter)
+        .map(|index| format!("{prefix}{}{delimiter}", &rest[..index]))
+}
+
+/// Reads the names under `prefix` from `token` (or the start) on, a batch per lock acquisition,
+/// and keeps those `glob` and `in_offsets` accept, until they make `max + 1` entries (the page
+/// and the entry that tells there is a next one) or the names run out.
+#[allow(clippy::too_many_arguments)]
+#[doc(hidden)]
+pub fn glob_scan(
+    state: &StorageState,
+    bucket: &fireemu_core_storage::name::BucketName,
+    prefix: &str,
+    delimiter: &str,
+    token: Option<&str>,
+    max: usize,
+    glob: &fireemu_core_storage::glob::Glob,
+    in_offsets: &dyn Fn(&str) -> bool,
+) -> Result<GlobScan, StorageResponse> {
+    use std::ops::Bound;
+    let mut start: Bound<String> =
+        token.map_or(Bound::Unbounded, |token| Bound::Included(token.to_owned()));
+    let mut scan = GlobScan {
+        allowed: std::collections::HashSet::new(),
+        until: None,
+        first_entry: None,
+    };
+    let mut entries = 0usize;
+    let mut last_entry: Option<String> = None;
+    loop {
+        let batch = {
+            let store = state.store()?;
+            let bound = match &start {
+                Bound::Unbounded => Bound::Unbounded,
+                Bound::Included(name) => Bound::Included(name.as_str()),
+                Bound::Excluded(name) => Bound::Excluded(name.as_str()),
+            };
+            store.object_names_from(bucket, prefix, bound, GLOB_BATCH)
+        };
+        let Some(last) = batch.last() else {
+            return Ok(scan);
+        };
+        scan.until = Some(last.clone());
+        for name in &batch {
+            if !in_offsets(name) || !glob.matches(name) {
+                continue;
+            }
+            let folded = fold_entry(prefix, delimiter, name);
+            let entry = folded.as_deref().unwrap_or(name);
+            if folded.is_some() && last_entry.as_deref() == Some(entry) {
+                continue;
+            }
+            last_entry = Some(entry.to_owned());
+            scan.first_entry.get_or_insert_with(|| entry.to_owned());
+            scan.allowed.insert(name.clone());
+            entries += 1;
+            if entries > max {
+                return Ok(scan);
+            }
+        }
+        if batch.len() < GLOB_BATCH {
+            return Ok(scan);
+        }
+        start = Bound::Excluded(last.clone());
+    }
+}
+
+/// Whether a request is a JSON API list that carries a `matchGlob`, which costs more than any
+/// other Storage request and is admitted through its own small set of slots by the server.
+#[must_use]
+pub fn uses_match_glob(method: &str, query: &str) -> bool {
+    method == "GET" && query_params(query).contains_key("matchGlob")
 }
 
 #[allow(clippy::too_many_arguments)]

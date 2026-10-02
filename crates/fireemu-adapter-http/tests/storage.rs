@@ -7324,6 +7324,260 @@ mod list_properties {
     }
 }
 
+/// Puts `names` straight into the object store of `state`.
+fn put_names(state: &StorageState, names: &[String]) {
+    let mut store = state.store.lock().unwrap();
+    for name in names {
+        store
+            .put(
+                &BucketName::try_new(BUCKET).unwrap(),
+                &ObjectName::try_new(name).unwrap(),
+                vec![1],
+                NewMetadata::default(),
+                Precondition::default(),
+                START,
+            )
+            .unwrap();
+    }
+}
+
+/// A glob page read in batches and cut when it is complete is the page the whole listing filtered
+/// by the glob gives, token after token, for patterns, delimiters, prefixes, offsets and sizes,
+/// with a token that names no entry starting the listing over.
+#[test]
+#[allow(clippy::too_many_lines)]
+fn a_glob_listing_in_batches_equals_the_filtered_listing_page_by_page() {
+    let state = state_with(Some(ALLOW_ALL_RULES), TokenAcceptance::Verified);
+    let mut names: Vec<String> = Vec::new();
+    for dir in ["a", "b", "dir", "dir2", "z"] {
+        for leaf in 0..40 {
+            names.push(format!("{dir}/f{leaf:02}.txt"));
+            if leaf % 7 == 0 {
+                names.push(format!("{dir}/sub/g{leaf:02}.bin"));
+            }
+        }
+    }
+    names.extend([
+        "top.txt".to_owned(),
+        "top2.bin".to_owned(),
+        "Z.txt".to_owned(),
+    ]);
+    put_names(&state, &names);
+    let encode = |text: &str| -> String {
+        text.bytes().fold(String::new(), |mut out, byte| {
+            use std::fmt::Write as _;
+            let _ = write!(out, "%{byte:02X}");
+            out
+        })
+    };
+    let bucket = BucketName::try_new(BUCKET).unwrap();
+    for (glob, prefix, delimiter, start, end) in [
+        ("**", "", "", "", ""),
+        ("**", "", "/", "", ""),
+        ("dir/*", "", "", "", ""),
+        ("*/f0[0-3].txt", "", "/", "", ""),
+        ("{a,b}/**", "", "/", "", ""),
+        ("**.bin", "dir", "/", "", ""),
+        ("dir/**", "dir/", "/", "", ""),
+        ("**/f1?.txt", "", "", "b/", "dir2"),
+        ("nothing*", "", "/", "", ""),
+        ("*", "", "/", "", ""),
+    ] {
+        for max in [1usize, 2, 3, 7, 50, 1000] {
+            let filter = |name: &str| {
+                fireemu_core_storage::glob::glob_matches(glob, name)
+                    && (start.is_empty() || name >= start)
+                    && (end.is_empty() || name < end)
+            };
+            let mut token: Option<String> = None;
+            for round in 0..300 {
+                let expected = state.store.lock().unwrap().list_matching(
+                    &bucket,
+                    prefix,
+                    Some(delimiter),
+                    token.as_deref(),
+                    Some(max),
+                    &filter,
+                );
+                let mut query = format!(
+                    "matchGlob={}&maxResults={max}&prefix={}&delimiter={}",
+                    encode(glob),
+                    encode(prefix),
+                    encode(delimiter)
+                );
+                if !start.is_empty() {
+                    query = format!("{query}&startOffset={}", encode(start));
+                }
+                if !end.is_empty() {
+                    query = format!("{query}&endOffset={}", encode(end));
+                }
+                if let Some(token) = &token {
+                    query = format!("{query}&pageToken={}", encode(token));
+                }
+                let answered = handle(
+                    &state,
+                    req(
+                        "GET",
+                        &format!("/storage/v1/b/{BUCKET}/o?{query}"),
+                        &[("authorization", "Bearer owner")],
+                        b"",
+                    ),
+                );
+                assert_eq!(
+                    answered.status, 200,
+                    "{glob} {prefix} {delimiter} {max} {round}"
+                );
+                let body = json_body(&answered);
+                let got_items: Vec<&str> = body["items"]
+                    .as_array()
+                    .map(|items| items.iter().map(|i| i["name"].as_str().unwrap()).collect())
+                    .unwrap_or_default();
+                let want_items: Vec<&str> =
+                    expected.items.iter().map(|m| m.name.as_str()).collect();
+                let got_prefixes: Vec<&str> = body["prefixes"]
+                    .as_array()
+                    .map(|p| p.iter().map(|v| v.as_str().unwrap()).collect())
+                    .unwrap_or_default();
+                let context = format!("{glob} {prefix:?} {delimiter:?} max {max} round {round}");
+                assert_eq!(got_items, want_items, "{context}");
+                assert_eq!(got_prefixes, expected.prefixes, "{context}");
+                assert_eq!(
+                    body["nextPageToken"].as_str().map(str::to_owned),
+                    expected.next_page_token,
+                    "{context}"
+                );
+                token = expected.next_page_token;
+                if token.is_none() {
+                    break;
+                }
+            }
+        }
+    }
+    // A token that names no entry starts the listing over, with or without a glob.
+    let listed = |query: &str| {
+        json_body(&handle(
+            &state,
+            req(
+                "GET",
+                &format!("/storage/v1/b/{BUCKET}/o?{query}"),
+                &[("authorization", "Bearer owner")],
+                b"",
+            ),
+        ))
+    };
+    let with_glob = listed(&format!(
+        "matchGlob={}&maxResults=2&pageToken=nope",
+        encode("**")
+    ));
+    let without_token = listed(&format!("matchGlob={}&maxResults=2", encode("**")));
+    assert_eq!(with_glob, without_token);
+}
+
+/// How much of a large bucket a glob page reads and keeps: the names kept are one per entry of the
+/// page (and the one past it), not one per name that matched, and the scan stops after the batch
+/// that completes the page instead of walking the bucket.
+#[test]
+fn a_glob_page_reads_and_keeps_a_bounded_part_of_a_large_bucket() {
+    use fireemu_adapter_http::storage::{glob_scan, GLOB_BATCH};
+    let state = state_with(Some(ALLOW_ALL_RULES), TokenAcceptance::Verified);
+    let names: Vec<String> = (0..20_000).map(|n| format!("a/{n:05}.txt")).collect();
+    put_names(&state, &names);
+    let bucket = BucketName::try_new(BUCKET).unwrap();
+    let all = fireemu_core_storage::glob::Glob::new("**");
+    let anything = |_: &str| true;
+
+    // A page of 10 items: 11 names kept, and the scan ends inside the first batch.
+    let scan = glob_scan(&state, &bucket, "", "", None, 10, &all, &anything).unwrap();
+    assert_eq!(scan.allowed.len(), 11);
+    assert_eq!(scan.until.as_deref(), Some(names[GLOB_BATCH - 1].as_str()));
+
+    // With a delimiter every name folds into one entry: one name kept for 20,000 matches, and the
+    // scan has to read them all to know there is no second entry.
+    let scan = glob_scan(&state, &bucket, "", "/", None, 10, &all, &anything).unwrap();
+    assert_eq!(scan.allowed.len(), 1);
+    assert_eq!(scan.until.as_deref(), Some(names[19_999].as_str()));
+
+    // From a token the scan starts there: the first entry it finds is the token's.
+    let token = names[10_000].clone();
+    let scan = glob_scan(&state, &bucket, "", "", Some(&token), 10, &all, &anything).unwrap();
+    assert_eq!(scan.first_entry.as_deref(), Some(token.as_str()));
+    assert_eq!(scan.allowed.len(), 11);
+    assert_eq!(
+        scan.until.as_deref(),
+        Some(names[10_000 + GLOB_BATCH - 1].as_str())
+    );
+
+    // A glob nothing matches keeps nothing, whatever the bucket size.
+    let none = fireemu_core_storage::glob::Glob::new("nothing*");
+    let scan = glob_scan(&state, &bucket, "", "", None, 10, &none, &anything).unwrap();
+    assert!(scan.allowed.is_empty());
+    assert_eq!(scan.first_entry, None);
+}
+
+/// A flood of list requests that carry an expensive `matchGlob` (more than the handler slots, each
+/// working through many long names) leaves the other requests their slots: a plain read answers
+/// promptly while they run, and they wait for their own two slots without holding a thread.
+#[tokio::test]
+async fn a_flood_of_expensive_glob_lists_leaves_the_handler_slots_to_other_requests() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    static BUDGET: BodyBudget = BodyBudget::new(1_572_864);
+    let state = state_with(Some(ALLOW_ALL_RULES), TokenAcceptance::Verified);
+    let mut names: Vec<String> = (0..40)
+        .map(|n| format!("{n:03}{}", "x".repeat(990)))
+        .collect();
+    names.push("plain.txt".to_owned());
+    put_names(&state, &names);
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let server = tokio::spawn(serve_storage_with_budget(
+        listener,
+        Arc::new(state),
+        &BUDGET,
+    ));
+    // Every byte of the pattern percent-encoded: about 18,000 characters of query.
+    let pattern: String =
+        format!("{}z", "*{,}".repeat(1_500))
+            .bytes()
+            .fold(String::new(), |mut out, byte| {
+                use std::fmt::Write as _;
+                let _ = write!(out, "%{byte:02X}");
+                out
+            });
+    let mut flood = Vec::new();
+    for _ in 0..24 {
+        let mut stream = tokio::net::TcpStream::connect(addr).await.unwrap();
+        stream
+            .write_all(
+                format!("GET /storage/v1/b/{BUCKET}/o?matchGlob={pattern} HTTP/1.1\r\nHost: 127.0.0.1\r\nAuthorization: Bearer owner\r\nConnection: close\r\n\r\n").as_bytes(),
+            )
+            .await
+            .unwrap();
+        flood.push(stream);
+    }
+    // Let the flood reach the server and start working.
+    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+    let started = std::time::Instant::now();
+    let mut stream = tokio::net::TcpStream::connect(addr).await.unwrap();
+    stream
+        .write_all(
+            format!("GET /storage/v1/b/{BUCKET}/o/plain.txt HTTP/1.1\r\nHost: 127.0.0.1\r\nAuthorization: Bearer owner\r\nConnection: close\r\n\r\n").as_bytes(),
+        )
+        .await
+        .unwrap();
+    let mut raw = Vec::new();
+    tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        stream.read_to_end(&mut raw),
+    )
+    .await
+    .expect("a plain read waited for the flood")
+    .unwrap();
+    assert!(String::from_utf8_lossy(&raw).starts_with("HTTP/1.1 200"));
+    assert!(started.elapsed() < std::time::Duration::from_secs(5));
+    drop(flood);
+    server.abort();
+}
+
 /// An unauthenticated list can carry any `matchGlob`: a pathological one is answered on a thread
 /// with a blocking-pool sized stack, and a second request is not held up while it is evaluated.
 #[test]

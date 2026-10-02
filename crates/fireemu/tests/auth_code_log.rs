@@ -6,6 +6,7 @@
 #![cfg(unix)]
 
 mod census;
+mod scratch;
 #[path = "../../../tests/support/trusted_temp.rs"]
 mod trusted_temp;
 
@@ -85,6 +86,8 @@ struct Daemon {
     child: Child,
     stdout: Arc<Mutex<String>>,
     hub_port: u16,
+    /// The project the daemon's Hub locator is named after.
+    project: String,
     /// Owned for the daemon's lifetime; removed when the test ends.
     _dir: TrustedTempDir,
 }
@@ -138,6 +141,7 @@ impl Daemon {
             child,
             stdout: Arc::new(Mutex::new(String::new())),
             hub_port,
+            project: format!("demo-{name}"),
             _dir: dir,
         };
         let collected = Arc::clone(&daemon.stdout);
@@ -195,6 +199,7 @@ impl Drop for Daemon {
     fn drop(&mut self) {
         let _ = self.child.kill();
         let _ = self.child.wait();
+        scratch::remove_killed_daemon_locator(&self.project, self.child.id());
     }
 }
 

@@ -803,10 +803,13 @@ while True:
 /// The UI state with a real Functions port bound in front of an HTTP-capable runner, so the
 /// invoke and enqueue fronts can be driven end to end. Returns the state, the runtime, and
 /// the path the task handler records dispatched tasks to.
+/// The probe comes first so a `let (probe, state, runtime)` binding drops it last. A test that
+/// panics skips its runner shutdown, so the directory can go while the runner is alive; the runner
+/// only appends to the file, so a late write fails rather than recreating it.
 async fn state_with_http_functions() -> (
+    TaskProbe,
     Arc<UiState>,
     Arc<fireemu_adapter_functions::runtime::FunctionsRuntime>,
-    std::path::PathBuf,
 ) {
     use fireemu_adapter_functions::runner::{Runner, SpawnSpec};
     use fireemu_adapter_functions::runtime::{CatchUpPolicy, FunctionsConfig, OverlapPolicy};
@@ -819,8 +822,11 @@ async fn state_with_http_functions() -> (
     let seq = PROBE_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let dir = std::env::temp_dir().join(format!("fireemu-ui-invoke-{}-{seq}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
-    let probe = dir.join("tasks");
-    let _ = std::fs::remove_file(&probe);
+    let probe = TaskProbe {
+        file: dir.join("tasks"),
+        dir,
+    };
+    let _ = std::fs::remove_file(&*probe);
 
     let spec = SpawnSpec {
         command: vec![
@@ -887,7 +893,28 @@ async fn state_with_http_functions() -> (
         .expect("the state is unshared");
     state.info.functions_addr = Some(addr);
     state.functions = Some(runtime.clone());
-    (Arc::new(state), runtime, probe)
+    (probe, Arc::new(state), runtime)
+}
+
+/// The file the task handler records dispatched tasks to. Its directory is removed when the
+/// test ends, also when it panics.
+struct TaskProbe {
+    dir: std::path::PathBuf,
+    file: std::path::PathBuf,
+}
+
+impl std::ops::Deref for TaskProbe {
+    type Target = std::path::Path;
+
+    fn deref(&self) -> &std::path::Path {
+        &self.file
+    }
+}
+
+impl Drop for TaskProbe {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.dir);
+    }
 }
 
 /// Waits for the task probe to hold at least `expected` recorded dispatches.
@@ -910,8 +937,36 @@ async fn wait_for_probe(probe: &std::path::Path, expected: usize) -> Vec<String>
 }
 
 #[tokio::test]
+async fn a_test_that_panics_with_the_runner_still_running_leaves_no_task_probe_directory() {
+    // A panic skips the explicit runner shutdown, so the probe directory is removed while the
+    // runner (which holds the probe path) is still alive. The runner appends to the file and
+    // never creates the directory, so a late write cannot bring it back.
+    let (sender, receiver) = tokio::sync::oneshot::channel();
+    let outcome = tokio::spawn(async move {
+        let (probe, _s, runtime) = state_with_http_functions().await;
+        let _ = sender.send((probe.to_path_buf(), runtime.clone()));
+        panic!("the test failed with the runner still running");
+    })
+    .await;
+    assert!(outcome.unwrap_err().is_panic());
+    let (file, runtime) = receiver.await.unwrap();
+    let dir = file.parent().unwrap();
+    assert!(!dir.exists(), "the probe directory is removed by the panic");
+    assert!(
+        std::fs::OpenOptions::new()
+            .append(true)
+            .create(true)
+            .open(&file)
+            .is_err(),
+        "a late append cannot recreate it"
+    );
+    assert!(!dir.exists());
+    runtime.runner().shutdown().await;
+}
+
+#[tokio::test]
 async fn invoking_an_on_request_function_forwards_through_the_port_and_returns_its_response() {
-    let (s, runtime, _probe) = state_with_http_functions().await;
+    let (_probe, s, runtime) = state_with_http_functions().await;
     let (status, body) = call(
         &s,
         browser(
@@ -937,7 +992,7 @@ async fn invoking_an_on_request_function_forwards_through_the_port_and_returns_i
 
 #[tokio::test]
 async fn invoking_refuses_a_non_http_function_an_unknown_name_and_a_bad_method() {
-    let (s, runtime, _probe) = state_with_http_functions().await;
+    let (_probe, s, runtime) = state_with_http_functions().await;
     // A Firestore trigger is not HTTP-invokable.
     let (status, _) = call(
         &s,
@@ -977,7 +1032,7 @@ async fn invoking_refuses_a_non_http_function_an_unknown_name_and_a_bad_method()
 
 #[tokio::test]
 async fn enqueuing_a_task_dispatches_it_to_the_queue_handler() {
-    let (s, runtime, probe) = state_with_http_functions().await;
+    let (probe, s, runtime) = state_with_http_functions().await;
     let (status, body) = call(
         &s,
         browser(
@@ -1009,7 +1064,7 @@ async fn enqueuing_a_task_dispatches_it_to_the_queue_handler() {
 
 #[tokio::test]
 async fn enqueuing_refuses_a_non_task_function_and_a_bad_id() {
-    let (s, runtime, _probe) = state_with_http_functions().await;
+    let (_probe, s, runtime) = state_with_http_functions().await;
     let (status, _) = call(
         &s,
         browser(
@@ -1063,7 +1118,7 @@ async fn the_invoke_and_enqueue_fronts_require_the_control_token() {
 async fn invoking_forwards_a_question_mark_inside_the_query_to_the_function() {
     // Cross-layer: the front keeps a "?" that is query data, and the backend forwards it
     // unchanged rather than rejecting it. Testing each layer alone would miss the contract gap.
-    let (s, runtime, _probe) = state_with_http_functions().await;
+    let (_probe, s, runtime) = state_with_http_functions().await;
     let (status, body) = call(
         &s,
         browser(
@@ -1102,7 +1157,7 @@ async fn invoking_forwards_a_question_mark_inside_the_query_to_the_function() {
 
 #[tokio::test]
 async fn enqueuing_refuses_a_task_over_the_tasks_port_size_limit() {
-    let (s, runtime, _probe) = state_with_http_functions().await;
+    let (_probe, s, runtime) = state_with_http_functions().await;
     // A payload whose base64-encoded task request exceeds the 100 KiB Tasks-port limit is
     // refused here, exactly as it would be at the Tasks port -- the UI's 256 KiB JSON limit
     // does not become a way to enqueue an oversize task.
@@ -1139,7 +1194,7 @@ async fn enqueuing_refuses_a_task_over_the_tasks_port_size_limit() {
 
 #[tokio::test]
 async fn invoking_refuses_a_header_that_could_be_smuggled() {
-    let (s, runtime, _probe) = state_with_http_functions().await;
+    let (_probe, s, runtime) = state_with_http_functions().await;
     // A CR/LF in a header value is refused at the boundary (400), not forwarded.
     let (status, _) = call(
         &s,

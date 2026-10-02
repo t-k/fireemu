@@ -4,12 +4,12 @@
 
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
+import { tempDir } from "./test-tmpdir.mjs";
 
 const STANDIN = fileURLToPath(
   new URL("./storage-object-compare/rehearsal-standin.mjs", import.meta.url),
@@ -37,7 +37,7 @@ const RECORDED_KEYS = [
 ];
 
 function fixtureDirectory({ withPut = true } = {}) {
-  const directory = mkdtempSync(join(tmpdir(), "compare-standin-"));
+  const directory = tempDir("compare-standin-");
   const exchange = {
     n: 1,
     method: "PUT",

@@ -7,6 +7,7 @@
 //! drift from the daemon that publishes it.
 
 mod census;
+mod scratch;
 
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::TcpStream;
@@ -55,6 +56,9 @@ const APP_CHECK_CAPABILITIES: [(&str, &str, &str); 9] = [
 ];
 
 /// A daemon on ephemeral ports, and the control API port it printed.
+/// The project a daemon started without one runs as, which names its Hub locator.
+const DEFAULT_PROJECT: &str = "demo-app";
+
 struct Daemon {
     child: Child,
     control_port: u16,
@@ -143,6 +147,7 @@ impl Drop for Daemon {
     fn drop(&mut self) {
         let _ = self.child.kill();
         let _ = self.child.wait();
+        scratch::remove_killed_daemon_locator(DEFAULT_PROJECT, self.child.id());
     }
 }
 

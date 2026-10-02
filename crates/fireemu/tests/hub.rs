@@ -5,6 +5,10 @@
 //! official default 4400, and gives the daemon its own project so its locator file is its
 //! own.
 
+mod scratch;
+
+use scratch::Scratch;
+
 use std::io::{BufRead as _, BufReader, Read as _, Write as _};
 use std::net::TcpStream;
 use std::path::PathBuf;
@@ -49,11 +53,8 @@ fn free_port() -> u16 {
     listener.local_addr().unwrap().port()
 }
 
-fn scratch(name: &str) -> PathBuf {
-    let dir = std::env::temp_dir().join(format!("fireemu-hub-{name}-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
-    dir
+fn scratch(name: &str) -> Scratch {
+    Scratch::new("hub", name)
 }
 
 /// One HTTP request against the Hub. Written by hand because the binary's test suite has no
@@ -738,7 +739,6 @@ fn the_hub_switches_background_triggers_and_says_so() {
     );
     assert_ne!(emulators["functions"]["port"], emulators["tasks"]["port"]);
     assert_ne!(emulators["eventarc"]["port"], emulators["tasks"]["port"]);
-    let _ = scratch("triggers");
     daemon.stop();
 }
 

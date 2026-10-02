@@ -3,6 +3,9 @@
 //! status, and that nothing keeps listening or running afterwards.
 
 mod census;
+mod scratch;
+
+use scratch::Scratch;
 
 use std::collections::BTreeMap;
 use std::net::TcpStream;
@@ -41,11 +44,8 @@ fn free_port() -> u16 {
     port
 }
 
-fn scratch(name: &str) -> PathBuf {
-    let dir = std::env::temp_dir().join(format!("fireemu-exec-{name}-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
-    dir
+fn scratch(name: &str) -> Scratch {
+    Scratch::new("exec", name)
 }
 
 fn env_file(path: &Path) -> BTreeMap<String, String> {

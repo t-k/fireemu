@@ -136,7 +136,7 @@ jobs:
           toolchain: 1.94.0
       - uses: taiki-e/install-action@7b8d4719ee4aaa279bdf55df38dacb9ebfe12a6c
         with:
-          tool: cargo-nextest
+          tool: cargo-nextest@0.9.143
       # No cache restore here or in `build`: the published binary is built from a clean target, so a
       # cache entry written by any other run cannot reach it.
       - run: cargo nextest run --workspace --profile pr -E 'not binary(leak_fixture)'

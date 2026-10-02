@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { createPublicKey, verify } from "node:crypto";
-import { mkdtemp, readFile, stat } from "node:fs/promises";
+import { readFile, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, matchesGlob } from "node:path";
 import { test } from "node:test";
@@ -17,6 +17,7 @@ import {
   saveSigningKey,
   signIdToken,
 } from "./auth-federation/idp.mjs";
+import { tempDir } from "./test-tmpdir.mjs";
 
 const decode = (part) => JSON.parse(Buffer.from(part, "base64url").toString("utf8"));
 
@@ -78,7 +79,7 @@ test("private keys are written only below docs.local or the temp dir, mode 600",
   assert.ok(!isPrivateKeyLocation("/work/repo/docs.local", roots));
   const key = generateSigningKey();
   await assert.rejects(saveSigningKey("conformance/k.pem", key), /refusing to write a private key/);
-  const dir = await mkdtemp(join(tmpdir(), "fed-idp-"));
+  const dir = tempDir("fed-idp-");
   const path = join(dir, "keys", "signing.pem");
   await saveSigningKey(path, key);
   assert.equal((await stat(path)).mode & 0o777, 0o600);

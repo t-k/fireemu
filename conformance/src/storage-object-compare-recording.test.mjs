@@ -1,6 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import test from "node:test";
 import {
@@ -9,6 +8,7 @@ import {
   readProductionRecording,
   splitRecipes,
 } from "./storage-object-compare/recording.mjs";
+import { tempDir } from "./test-tmpdir.mjs";
 
 const capture = (sequence, extra = {}) => ({
   sequence,
@@ -123,7 +123,7 @@ test("a recipe that finishes twice is refused", () => {
 });
 
 test("a production recording is read from its directory, and needs a run ID", () => {
-  const directory = mkdtempSync(join(tmpdir(), "compare-recording-"));
+  const directory = tempDir("compare-recording-");
   writeFileSync(
     join(directory, "meta.json"),
     JSON.stringify({ runId: "056c7ca3a8c6daa38e0a", outcome: "recorded", failedRecipes: [] }),
@@ -142,7 +142,7 @@ test("a production recording is read from its directory, and needs a run ID", ()
 });
 
 test("a local journal gives its run ID from the first recipe's prefix, and its captures from lean-capture lines", () => {
-  const directory = mkdtempSync(join(tmpdir(), "compare-journal-"));
+  const directory = tempDir("compare-journal-");
   mkdirSync(directory, { recursive: true });
   const path = join(directory, "aggregate-events.jsonl");
   writeFileSync(

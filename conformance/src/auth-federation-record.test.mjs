@@ -21,6 +21,7 @@ import {
 } from "./auth-federation/record.mjs";
 import { fakeHosting } from "./auth-federation/rehearse.mjs";
 import { prepareKeys } from "./auth-federation/run.mjs";
+import { tempDir } from "./test-tmpdir.mjs";
 
 const RUN = "a1b2c3";
 const CONFIG = JSON.stringify({
@@ -423,10 +424,9 @@ test("a pass is held to its share of the requests", async () => {
 
 test("ledger lines never hold the project number or the API key", async () => {
   const { appender } = await import("./auth-federation/record.mjs");
-  const { mkdtemp, readFile } = await import("node:fs/promises");
-  const { tmpdir } = await import("node:os");
+  const { readFile } = await import("node:fs/promises");
   const { join } = await import("node:path");
-  const dir = await mkdtemp(join(tmpdir(), "fed-ledger-"));
+  const dir = tempDir("fed-ledger-");
   const path = join(dir, "ledger.jsonl");
   const state = { sent: false };
   const append = appender(path, { api: 1, issuer: 0 }, state, {
@@ -445,11 +445,10 @@ test("ledger lines never hold the project number or the API key", async () => {
 
 test("the fixture is kept privately before a scan can refuse it", async () => {
   const { writeFixtureFiles } = await import("./auth-federation/record.mjs");
-  const { mkdtemp, readFile, stat } = await import("node:fs/promises");
+  const { readFile, stat } = await import("node:fs/promises");
   const { existsSync } = await import("node:fs");
-  const { tmpdir } = await import("node:os");
   const { join } = await import("node:path");
-  const dir = await mkdtemp(join(tmpdir(), "fed-fixture-"));
+  const dir = tempDir("fed-fixture-");
   const target = join(dir, "committed.json");
   const privateDir = join(dir, "private");
   await assert.rejects(

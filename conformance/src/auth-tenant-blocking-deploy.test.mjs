@@ -1,8 +1,7 @@
 import assert from "node:assert/strict";
-import { existsSync } from "node:fs";
-import { appendFile, mkdtemp } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { existsSync, readdirSync } from "node:fs";
+import { appendFile } from "node:fs/promises";
+import { dirname, join } from "node:path";
 import { test } from "node:test";
 
 import { BLOCKING_PROGRAMS } from "./auth-tenant-blocking/blocking-corpus.mjs";
@@ -26,6 +25,7 @@ import {
   isFixtureTrigger,
 } from "./auth-tenant-blocking/deploy.mjs";
 import { validateTenantCorpus } from "./auth-tenant-blocking/guard.mjs";
+import { tempDir } from "./test-tmpdir.mjs";
 
 const PROJECT = "fireemu-oracle-idp";
 const NUMBER = "637500000000";
@@ -197,7 +197,7 @@ function fakeCloud({
   return { state, calls, runs, runOptions, deployer };
 }
 
-const buildDir = async () => join(await mkdtemp(join(tmpdir(), "atb-deploy-")), "build");
+const buildDir = async () => join(tempDir("atb-deploy-"), "build");
 const source = new URL("./auth-tenant-blocking/function", import.meta.url).pathname;
 
 test("the deployer refuses another project", () => {
@@ -420,7 +420,7 @@ test("a restore removal works without a build copy (confirmation SF-C1)", async 
     },
   });
   deployer.adoptLeftovers(new Date(0));
-  const dir = join(await mkdtemp(join(tmpdir(), "atb-restore-")), "missing", "build");
+  const dir = join(tempDir("atb-restore-"), "missing", "build");
   await deployer.remove(dir);
   assert.deepEqual(state.functions, []);
   assert.deepEqual(state.blocking, {});
@@ -431,7 +431,7 @@ test(
   { timeout: 15_000 },
   async () => {
     const { deployer, state } = fakeCloud();
-    const dir = join(await mkdtemp(join(tmpdir(), "atb-hang-")), "build");
+    const dir = join(tempDir("atb-hang-"), "build");
     await deployer.preflight();
     await deployer.deploy(source, dir);
     // From here every REST request hangs until its signal aborts it.
@@ -459,7 +459,7 @@ test(
 test("functions:delete gets at most the time left until the public deadline (review S4)", async () => {
   let clock = Date.parse("2026-09-27T12:00:00Z");
   const { deployer, runs, runOptions } = fakeCloud({ now: () => clock });
-  const dir = join(await mkdtemp(join(tmpdir(), "atb-deadline-")), "build");
+  const dir = join(tempDir("atb-deadline-"), "build");
   await deployer.preflight();
   await deployer.deploy(source, dir);
   clock += 45 * 60_000;
@@ -769,4 +769,94 @@ test("the pinned CLI starts without sending anything (allowance zero)", async ()
   assert.deepEqual(deployer.cliRequests(), [
     { call: "--version", allowance: 0, used: 0, stopped: false },
   ]);
+});
+
+test("the CLI meter directory exists only while metered calls are in flight", async () => {
+  const scratch = tempDir("atb-meter-lifecycle-");
+  const meterDirs = () => readdirSync(scratch).filter((name) => name.startsWith("atb-cli-meter-"));
+  const until = async (condition) => {
+    for (let i = 0; i < 500 && !condition(); i += 1) await new Promise((r) => setTimeout(r, 2));
+    assert.ok(condition());
+  };
+  const saved = process.env.TMPDIR;
+  process.env.TMPDIR = scratch;
+  try {
+    const seen = [];
+    const releases = [];
+    const run = async (_file, _args, { env }) => {
+      seen.push(dirname(env.FIREEMU_CLI_METER_FILE));
+      // The meter appends a byte per request; each call makes one.
+      await appendFile(env.FIREEMU_CLI_METER_FILE, "x");
+      await new Promise((resolve) => releases.push(resolve));
+      return { stdout: "15.0.0", stderr: "" };
+    };
+    const deployer = createDeployer({
+      project: PROJECT,
+      number: NUMBER,
+      token: async () => "token",
+      run,
+      charge: () => {},
+    });
+
+    const first = deployer.cliVersion();
+    await until(() => releases.length === 1);
+    assert.equal(meterDirs().length, 1);
+    releases.shift()();
+    assert.equal(await first, "15.0.0");
+    assert.deepEqual(meterDirs(), [], "a finished call leaves no meter directory");
+
+    // Two calls started together, before either has its directory: one directory, kept until the
+    // second finishes.
+    const a = deployer.cliVersion();
+    const b = deployer.cliVersion();
+    await until(() => releases.length === 2);
+    assert.equal(new Set(seen.slice(1)).size, 1, "overlapping calls share one directory");
+    assert.equal(meterDirs().length, 1);
+    // Either call may have reached the CLI first; release one, wait for whichever finished.
+    releases.shift()();
+    await Promise.race([a, b]);
+    assert.equal(meterDirs().length, 1, "kept while a call is still in flight");
+    releases.shift()();
+    await Promise.all([a, b]);
+    assert.deepEqual(meterDirs(), []);
+    assert.deepEqual(
+      deployer.cliRequests().map(({ call, used, stopped }) => [call, used, stopped]),
+      [
+        ["--version", 0, true],
+        ["--version", 0, true],
+        ["--version", 0, true],
+      ],
+      "each call is still counted on its own (one request over a zero allowance)",
+    );
+  } finally {
+    if (saved === undefined) delete process.env.TMPDIR;
+    else process.env.TMPDIR = saved;
+  }
+});
+
+test("a meter directory that cannot be created fails that call only", async () => {
+  const scratch = tempDir("atb-meter-failed-");
+  const saved = process.env.TMPDIR;
+  try {
+    const run = async () => ({ stdout: "15.0.0", stderr: "" });
+    const deployer = createDeployer({
+      project: PROJECT,
+      number: NUMBER,
+      token: async () => "token",
+      run,
+      charge: () => {},
+    });
+    process.env.TMPDIR = join(scratch, "missing");
+    assert.equal(await deployer.cliVersion(), "unknown", "no directory, so the call fails");
+    process.env.TMPDIR = scratch;
+    assert.equal(await deployer.cliVersion(), "15.0.0", "the next call creates one again");
+    assert.deepEqual(
+      readdirSync(scratch).filter((name) => name.startsWith("atb-cli-meter-")),
+      [],
+      "and removes it, so the failed call left no count behind",
+    );
+  } finally {
+    if (saved === undefined) delete process.env.TMPDIR;
+    else process.env.TMPDIR = saved;
+  }
 });

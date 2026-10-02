@@ -25,9 +25,24 @@
 # 30s is therefore chosen to exceed the longest test in the workspace (~12s) with head room:
 # a false holder is another test, so it always exits inside the period, while a genuinely
 # leaked daemon or shell never does and still fails the run.
+# Every test process runs under tools/ci/nextest-private-tmpdir.sh (all profiles inherit this):
+# it gets a private TMPDIR, which is removed afterwards even when the test panics, and a test that
+# passes but leaves anything there fails with the names it left. Leaked scratch directories had
+# filled the shared temp directory (767,725 entries on 2026-10-01), which made listing it take
+# seconds and stretched any test that scans it. Windows keeps the plain temp directory.
+experimental = ["wrapper-scripts"]
+
+[scripts.wrapper.private-tmpdir]
+command = { command-line = "tools/ci/nextest-private-tmpdir.sh", relative-to = "workspace-root" }
+
 [profile.default]
 retries = 0
 fail-fast = true
+
+[[profile.default.scripts]]
+platform = "cfg(unix)"
+filter = "all()"
+run-wrapper = "private-tmpdir"
 
 [profile.pr]
 retries = 0

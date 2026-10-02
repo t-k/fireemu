@@ -3,6 +3,7 @@
 //! privileged for pages, and a fresh daemon is quiescent.
 
 mod census;
+mod scratch;
 
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::TcpStream;
@@ -10,6 +11,9 @@ use std::process::{Child, Command, Stdio};
 use std::time::Duration;
 
 use serde_json::Value;
+
+/// The project a daemon started without one runs as, which names its Hub locator.
+const DEFAULT_PROJECT: &str = "demo-app";
 
 struct Daemon {
     child: Child,
@@ -118,6 +122,7 @@ impl Drop for Daemon {
     fn drop(&mut self) {
         let _ = self.child.kill();
         let _ = self.child.wait();
+        scratch::remove_killed_daemon_locator(DEFAULT_PROJECT, self.child.id());
     }
 }
 

@@ -11,10 +11,10 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
-import { chmod, mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { chmod, mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { test } from "node:test";
+import { tempDir } from "./test-tmpdir.mjs";
 
 const RUNNER = join(import.meta.dirname, "auth-tenant-blocking", "run.mjs");
 
@@ -45,7 +45,7 @@ globalThis.fetch = async (url) => {
 `;
 
 async function sandbox() {
-  const root = await mkdtemp(join(tmpdir(), "atb-record-"));
+  const root = tempDir("atb-record-");
   const repo = join(root, "repo");
   const runs = join(repo, "docs.local", "runs");
   await mkdir(runs, { recursive: true });

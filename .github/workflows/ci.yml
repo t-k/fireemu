@@ -42,7 +42,7 @@ jobs:
           ruby scripts/heavy-verification-contract.rb
           ruby scripts/heavy-verification-contract.test.rb
           python3 -m unittest discover -s tools/ci -p 'test_*.py'
-          shellcheck tools/ci/heavy-run.sh tools/ci/heavy-run.test.sh scripts/heavy-verification-plan.test.sh
+          shellcheck tools/ci/heavy-run.sh tools/ci/heavy-run.test.sh scripts/heavy-verification-plan.test.sh tools/ci/nextest-private-tmpdir.sh
           tools/ci/heavy-run.test.sh
           scripts/heavy-verification-plan.test.sh
       - name: fmt
@@ -78,7 +78,7 @@ jobs:
           save-if: ${{ github.ref == 'refs/heads/main' }}
       - uses: taiki-e/install-action@v2
         with:
-          tool: cargo-nextest
+          tool: cargo-nextest@0.9.143
       - name: tests (profile pr, retries 0)
         run: cargo nextest run --workspace --profile pr
       - name: limit catalog matches generated constants
@@ -160,7 +160,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: taiki-e/install-action@v2
         with:
-          tool: cargo-nextest
+          tool: cargo-nextest@0.9.143
       - uses: Swatinem/rust-cache@v2
         with:
           key: ${{ matrix.os }}
@@ -246,7 +246,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: taiki-e/install-action@v2
         with:
-          tool: cargo-nextest
+          tool: cargo-nextest@0.9.143
       - uses: Swatinem/rust-cache@v2
         with:
           key: ui

@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
-import { mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -27,6 +27,7 @@ import {
   withSandboxLock,
 } from "./auth-federation/hosting.mjs";
 import { generateSigningKey } from "./auth-federation/idp.mjs";
+import { tempDir } from "./test-tmpdir.mjs";
 
 const RUN = "a1b2c3";
 const HOST = `${SANDBOX_PROJECT}--fed-${RUN}-x7y8z9.web.app`;
@@ -437,7 +438,7 @@ test("only a fixed-form owner line naming the full digest approves, until it is 
 });
 
 test("the uncommitted check works from any directory", async () => {
-  const dir = await mkdtemp(join(tmpdir(), "fed-git-"));
+  const dir = tempDir("fed-git-");
   spawnSync("git", ["-C", dir, "init", "-q"]);
   const source = join(dir, "a.mjs");
   const cwd = process.cwd();
@@ -470,7 +471,7 @@ test("the web config must be the sandbox's, with a project number and an API key
 });
 
 test("the shared sandbox lock is exclusive and released after the run", async () => {
-  const dir = await mkdtemp(join(tmpdir(), "fed-lock-"));
+  const dir = tempDir("fed-lock-");
   const ledger = join(dir, "sandbox-ledger.jsonl");
   const inside = await withSandboxLock(ledger, async () => {
     assert.match(await readFile(`${ledger}.lock`, "utf8"), new RegExp(TASK_ID));
@@ -490,7 +491,7 @@ test("the shared sandbox lock is exclusive and released after the run", async ()
 });
 
 test("a run that needs recovery keeps the lock, and only this task's recover takes it", async () => {
-  const dir = await mkdtemp(join(tmpdir(), "fed-keep-"));
+  const dir = tempDir("fed-keep-");
   const ledger = join(dir, "sandbox-ledger.jsonl");
   const needs = await withSandboxLock(
     ledger,
@@ -589,7 +590,7 @@ test("recover deletes a channel left behind and never writes the Auth config", a
 });
 
 test("the lock stays when a run fails after its started line or while recovering", async () => {
-  const dir = await mkdtemp(join(tmpdir(), "fed-fail-"));
+  const dir = tempDir("fed-fail-");
   const ledger = join(dir, "sandbox-ledger.jsonl");
   const lock = `${ledger}.lock`;
   const boom = () => {
@@ -627,7 +628,7 @@ test("the lock stays when a run fails after its started line or while recovering
 });
 
 test("recover takes over only a lock that needs recovery or whose process is gone", async () => {
-  const dir = await mkdtemp(join(tmpdir(), "fed-take-"));
+  const dir = tempDir("fed-take-");
   const ledger = join(dir, "sandbox-ledger.jsonl");
   const lock = `${ledger}.lock`;
   const recovered = async () => ({ run: RUN, outcome: "recovered" });

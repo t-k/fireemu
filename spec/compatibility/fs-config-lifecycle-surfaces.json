@@ -424,7 +424,7 @@
       "id": "runtime.lazyDatabaseCreation",
       "local": {
         "citations": [
-          "crates/fireemu-adapter-grpc/src/local.rs:1884",
+          "crates/fireemu-adapter-grpc/src/local.rs:1897",
           "crates/fireemu-core-types/src/ids.rs:183"
         ],
         "status": "implemented"
@@ -595,7 +595,7 @@
           "crates/fireemu-adapter-grpc/src/rest/admin_fields.rs:536",
           "crates/fireemu-adapter-grpc/src/admin/fields.rs:72",
           "crates/fireemu-core-firestore/src/ttl.rs:242",
-          "crates/fireemu-adapter-grpc/src/local.rs:3389"
+          "crates/fireemu-adapter-grpc/src/local.rs:3448"
         ],
         "status": "implemented"
       },
@@ -647,7 +647,7 @@
       "local": {
         "citations": [
           "crates/fireemu-adapter-grpc/src/admin/indexes.rs:323",
-          "crates/fireemu-adapter-grpc/src/local.rs:2775"
+          "crates/fireemu-adapter-grpc/src/local.rs:2834"
         ],
         "status": "implemented"
       },
@@ -680,7 +680,7 @@
       "local": {
         "citations": [
           "crates/fireemu/src/import_export.rs:2930",
-          "crates/fireemu-core-export/src/firestore.rs:518",
+          "crates/fireemu-core-export/src/firestore.rs:576",
           "crates/fireemu-core-export/src/metadata.rs:142"
         ],
         "status": "local-extension-only"
@@ -756,8 +756,8 @@
       "local": {
         "citations": [
           "crates/fireemu-adapter-grpc/src/rest/admin_fields.rs:809",
-          "crates/fireemu-adapter-grpc/src/local.rs:3225",
-          "crates/fireemu-adapter-grpc/src/local.rs:3267"
+          "crates/fireemu-adapter-grpc/src/local.rs:3284",
+          "crates/fireemu-adapter-grpc/src/local.rs:3326"
         ],
         "status": "partial"
       },
@@ -770,7 +770,7 @@
       "local": {
         "citations": [
           "crates/fireemu-adapter-grpc/src/rest/admin_fields.rs:809",
-          "crates/fireemu-adapter-grpc/src/local.rs:3279"
+          "crates/fireemu-adapter-grpc/src/local.rs:3338"
         ],
         "status": "partial"
       },
@@ -922,8 +922,8 @@
   "repairTickets": [
     {
       "citations": [
-        "crates/fireemu-adapter-grpc/src/local.rs:1884",
-        "crates/fireemu-adapter-grpc/src/local.rs:1453",
+        "crates/fireemu-adapter-grpc/src/local.rs:1897",
+        "crates/fireemu-adapter-grpc/src/local.rs:1454",
         "crates/fireemu-core-types/src/ids.rs:183"
       ],
       "class": "local-safety-extension",

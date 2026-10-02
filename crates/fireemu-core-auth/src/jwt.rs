@@ -1094,19 +1094,12 @@ fn js_string_number(text: &str) -> Option<f64> {
             f64::INFINITY
         });
     }
-    let (mantissa, exponent) = match unsigned.find(['e', 'E']) {
-        Some(at) => (&unsigned[..at], Some(&unsigned[at + 1..])),
-        None => (unsigned, None),
-    };
-    let (whole, fraction) = mantissa.split_once('.').unwrap_or((mantissa, ""));
-    let digits = |part: &str| part.chars().all(|c| c.is_ascii_digit());
-    let mantissa_ok =
-        digits(whole) && digits(fraction) && !(whole.is_empty() && fraction.is_empty());
-    let exponent_ok = exponent.is_none_or(|e| {
-        let e = e.strip_prefix(['+', '-']).unwrap_or(e);
-        !e.is_empty() && digits(e)
-    });
-    if mantissa_ok && exponent_ok {
+    // Rust's float parser takes exactly the decimal literals JavaScript takes, and also `inf`,
+    // `infinity` and `nan`, which JavaScript does not: only decimal characters reach it.
+    if unsigned
+        .chars()
+        .all(|c| c.is_ascii_digit() || matches!(c, '.' | 'e' | 'E' | '+' | '-'))
+    {
         text.parse().ok()
     } else {
         None
@@ -1167,7 +1160,10 @@ mod tests {
         assert!(at(JsonValue::String("10".into()), 10));
         assert!(!at(JsonValue::String("9".into()), 10));
         assert!(at(JsonValue::String(String::new()), 0), "Number(\"\") is 0");
-        assert!(!at(JsonValue::String("x".into()), i64::MIN), "NaN is never at least");
+        assert!(
+            !at(JsonValue::String("x".into()), i64::MIN),
+            "NaN is never at least"
+        );
         for other in [
             JsonValue::Null,
             JsonValue::Bool(true),

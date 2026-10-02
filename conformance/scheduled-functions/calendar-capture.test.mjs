@@ -276,19 +276,23 @@ async function recoveryFixture(t) {
     if (request.id.endsWith("-before") || request.id.endsWith("-after")) {
       const topic = request.id.startsWith("read-topic");
       return new Response(
-        JSON.stringify({
-          error: {
-            code: 404,
-            status: "NOT_FOUND",
-            message: topic
-              ? "Resource not found (resource=fe-scheduled-calendar-" + originalRunId + ")."
-              : "Job not found.",
+        JSON.stringify(
+          {
+            error: {
+              code: 404,
+              message: topic
+                ? "Resource not found (resource=fe-scheduled-calendar-" + originalRunId + ")."
+                : "Job not found.",
+              status: "NOT_FOUND",
+            },
           },
-        }),
+          null,
+          2,
+        ) + "\n",
         { status: 404 },
       );
     }
-    return new Response("{}", { status: 200 });
+    return new Response("{}\n", { status: 200 });
   };
   return f;
 }
@@ -304,6 +308,20 @@ test("calendar recovery binds dynamic original count and rawpacket before provid
   assert.equal(result.closureReady, true);
   assert.equal(result.cleanupVerified, false);
   assert.equal(f.counts().tokens, 1);
+  assert.equal(f.options.sendCount, 20);
+  const persisted = (await readFile(join(result.directory, "requests.jsonl"), "utf8"))
+    .trim()
+    .split("\n")
+    .map(JSON.parse)
+    .filter(({ state }) => state === "response-persisted");
+  assert.equal(
+    persisted.filter(({ status, bodyBytes }) => status === 404 && bodyBytes === 97).length,
+    16,
+  );
+  assert.equal(
+    persisted.filter(({ status, bodyBytes }) => status === 404 && bodyBytes === 152).length,
+    2,
+  );
   const rows = (await readFile(f.ledger, "utf8")).trim().split("\n").map(JSON.parse);
   assert.equal(rows.length, 3);
   assert.equal(rows.at(-1).requests, 20);
@@ -789,4 +807,40 @@ test("old topic-only scope remains unable to admit settled journal with any orig
   await assert.rejects(captureCalendarRecovery(f.options), /topic-only original scope/);
   assert.equal(f.counts().tokens, 0);
   assert.equal(f.environment.sends.length, 0);
+});
+
+test("calendar recovery compact404 cannot settle original or recovery debt", async (t) => {
+  const f = await recoveryFixture(t),
+    originalRow = (await readFile(f.ledger, "utf8")).trim(),
+    packet = await readFile(f.options.packetPath),
+    send = f.options.send;
+  f.options.send = async (request) => {
+    const response = await send(request);
+    if (response.status !== 404) return response;
+    return new Response(JSON.stringify(await response.json()), { status: 404 });
+  };
+  const result = await captureCalendarRecovery(f.options);
+  assert.equal(result.outcome, "calendar-recovery-needs-review");
+  assert.equal(result.attempted, 20);
+  assert.equal(f.options.sendCount, 20);
+  assert.equal(f.counts().tokens, 1);
+  assert.equal(result.unknown, 0);
+  assert.equal(result.closureReady, false);
+  assert.equal(result.cleanupVerified, false);
+  assert.deepEqual(await readFile(join(result.directory, "raw-packet.json")), packet);
+  const lines = (await readFile(f.ledger, "utf8")).trim().split("\n"),
+    rows = lines.map(JSON.parse);
+  assert.equal(lines[0], originalRow);
+  assert.equal(rows.length, 3);
+  assert.equal(rows[1].event, "started");
+  assert.equal(rows[1].attemptId, f.plan.runId);
+  assert.equal(rows[1].estimatedUsd, 0.25);
+  assert.equal(rows[2].event, "needs-recovery");
+  assert.equal(rows[2].requests, 20);
+  assert.equal(rows[0].attemptId, f.plan.originalRunId);
+  assert.equal(rows[0].event, "needs-recovery");
+  assert.equal(rows[0].sandboxAtBaseline, false);
+  assert.equal(rows[2].sandboxAtBaseline, false);
+  assert.equal(await readFile(f.guard, "utf8"), "fake foreign guard");
+  await assert.doesNotReject(() => lstat(join(f.locks, "fireemu-oracle-sbx.lock")));
 });

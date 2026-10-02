@@ -12,7 +12,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import { spawn } from "node:child_process";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
-import { join, resolve } from "node:path";
+import { dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { CONFORMANCE_DIR } from "../config.mjs";
@@ -147,12 +147,65 @@ export function parseProbeArguments(args) {
   return { mode, profile: args[2] };
 }
 
+/** The pinned production observation is the authority for historical prerequisites. */
+export function recordedProductionIndexAuthority(saved) {
+  const observation = saved?.evidence?.observations?.production;
+  const files = observation?.inputs?.indexFiles;
+  const sourceGit = observation?.source?.gitSha;
+  if (
+    saved?.evidence?.verified !== true ||
+    observation?.observation?.mode !== "live" ||
+    !/^[a-f0-9]{40}$/.test(sourceGit ?? "") ||
+    !Array.isArray(files) ||
+    files.length !== 1
+  )
+    throw new Error("missing or ambiguous recorded production index authority");
+  const entry = files[0];
+  if (
+    entry?.file !== "conformance/firestore.indexes.json" ||
+    !Number.isSafeInteger(entry.bytes) ||
+    entry.bytes <= 0 ||
+    !/^sha256-[a-f0-9]{64}$/.test(entry.sha256 ?? "")
+  )
+    throw new Error("invalid recorded production index authority");
+  return { sourceGit, file: entry.file, bytes: entry.bytes, sha256: entry.sha256 };
+}
+
+/** Validate the raw matrix pin before trusting its recorded index identity. */
+export function pinnedProductionIndexAuthority(matrixBytes) {
+  if (`sha256-${sha256Bytes(matrixBytes)}` !== HISTORICAL_MATRIX_DIGEST)
+    throw new Error("recorded production matrix index authority changed");
+  return recordedProductionIndexAuthority(JSON.parse(matrixBytes));
+}
+
+/** Only strict historical replay receives the exact portable recorded catalog. */
+export async function createHistoricalProductionLaunch({
+  productionMatrixPath = PRODUCTION_JSON,
+  indexFixturePath = join(CONFORMANCE_DIR, "firestore-production.indexes.json"),
+  ...options
+}) {
+  if (options.profile !== "strict") return createFireemuProbeLaunch(options);
+  const matrixBytes = await readFile(productionMatrixPath);
+  const authority = pinnedProductionIndexAuthority(matrixBytes);
+  const sourceBytes = await readFile(indexFixturePath);
+  if (
+    sourceBytes.length !== authority.bytes ||
+    `sha256-${sha256Bytes(sourceBytes)}` !== authority.sha256
+  )
+    throw new Error("recorded production index fixture bytes or digest mismatch");
+  return createFireemuProbeLaunch({
+    ...options,
+    recordedIndexes: { authority, sourcePath: indexFixturePath, sourceBytes },
+  });
+}
+
 /** Builds the exact launch argv and pins the bytes supplied through --config. */
 export async function createFireemuProbeLaunch({
   binary,
   inPath,
   outPath,
   profile,
+  recordedIndexes,
   configPath = join(CONFORMANCE_DIR, "firestore-probe.fireemu.json"),
   runDirectory = RUN_DIR,
   cwd = CONFORMANCE_DIR,
@@ -165,13 +218,30 @@ export async function createFireemuProbeLaunch({
   if (source.schemaVersion !== 1 || !["strict", "emulator"].includes(requestedProfile))
     throw new Error("invalid probe configuration profile");
   let path = configPath,
-    bytes = sourceBytes;
+    bytes = sourceBytes,
+    indexes;
   if (profile === "strict") {
     const config = structuredClone(source);
     config.profile = "strict";
     if (typeof config.firestore?.rules === "string")
       config.firestore.rules = resolve(cwd, config.firestore.rules);
     await mkdir(runDirectory, { recursive: true, mode: 0o700 });
+    if (recordedIndexes) {
+      const indexPath = resolve(runDirectory, `strict-indexes-${randomUUID()}.json`);
+      await writeFile(indexPath, recordedIndexes.sourceBytes, { flag: "wx", mode: 0o600 });
+      config.firestore.indexFile = indexPath;
+      indexes = {
+        authority: recordedIndexes.authority,
+        sourcePath: recordedIndexes.sourcePath,
+        sourceBytesBase64: recordedIndexes.sourceBytes.toString("base64"),
+        sourceBytesBefore: recordedIndexes.sourceBytes.length,
+        sourceSha256Before: sha256Bytes(recordedIndexes.sourceBytes),
+        path: indexPath,
+        bytesBase64: recordedIndexes.sourceBytes.toString("base64"),
+        bytesBefore: recordedIndexes.sourceBytes.length,
+        sha256Before: sha256Bytes(recordedIndexes.sourceBytes),
+      };
+    }
     path = join(runDirectory, `strict-config-${randomUUID()}.json`);
     bytes = Buffer.from(JSON.stringify(config, null, 2) + "\n");
     await writeFile(path, bytes, { flag: "wx", mode: 0o600 });
@@ -181,6 +251,7 @@ export async function createFireemuProbeLaunch({
     command: binary,
     cwd,
     requestedProfile,
+    ...(indexes ? { indexes } : {}),
     args: [
       "exec",
       "--config",
@@ -226,7 +297,13 @@ export function daemonProbeProfile(log) {
 }
 
 /** Fail-closed validation shared by the collector and the strict release judge. */
-export function probeProfileBindingProblems(binding, expectedProfile, binarySha256, sourceSha256) {
+export function probeProfileBindingProblems(
+  binding,
+  expectedProfile,
+  binarySha256,
+  sourceSha256,
+  indexAuthority,
+) {
   const problems = [];
   try {
     if (
@@ -269,6 +346,42 @@ export function probeProfileBindingProblems(binding, expectedProfile, binarySha2
       if (typeof expected.firestore?.rules === "string")
         expected.firestore.rules = resolve(binding.cwd, expected.firestore.rules);
     }
+    if (indexAuthority !== undefined) {
+      const indexes = binding.indexes;
+      if (
+        expectedProfile !== "strict" ||
+        !indexes ||
+        !isDeepStrictEqual(indexes.authority, indexAuthority)
+      )
+        throw new Error("missing or mismatched recorded production index authority");
+      const indexBytes = decode(indexes.bytesBase64),
+        indexSourceBytes = decode(indexes.sourceBytesBase64);
+      const indexDigest = sha256Bytes(indexBytes),
+        indexSourceDigest = sha256Bytes(indexSourceBytes);
+      if (
+        indexBytes.length !== indexAuthority.bytes ||
+        indexSourceBytes.length !== indexAuthority.bytes ||
+        `sha256-${indexDigest}` !== indexAuthority.sha256 ||
+        `sha256-${indexSourceDigest}` !== indexAuthority.sha256 ||
+        !indexBytes.equals(indexSourceBytes)
+      )
+        throw new Error("recorded index receipt bytes or digest mismatch");
+      for (const suffix of ["Before", "After"])
+        if (
+          indexes[`bytes${suffix}`] !== indexAuthority.bytes ||
+          indexes[`sourceBytes${suffix}`] !== indexAuthority.bytes ||
+          indexes[`sha256${suffix}`] !== indexDigest ||
+          indexes[`sourceSha256${suffix}`] !== indexSourceDigest
+        )
+          throw new Error("recorded index receipt changed before or after launch");
+      if (
+        !isAbsolute(indexes.path) ||
+        dirname(indexes.path) !== dirname(config.path) ||
+        indexes.path === indexes.sourcePath
+      )
+        throw new Error("recorded index path is not a separate run-owned config prerequisite");
+      expected.firestore.indexFile = indexes.path;
+    } else if (binding.indexes) throw new Error("unbound recorded index receipt");
     const actual = JSON.parse(bytes);
     if (actual.profile !== expectedProfile || !isDeepStrictEqual(actual, expected))
       throw new Error("profile receipt configuration settings mismatch");
@@ -314,7 +427,24 @@ export async function executeFireemuProbe(plan, supervisor = runSupervisor) {
       sourceSha256After: sha256Bytes(await readFile(plan.config.sourcePath)),
     },
   };
-  const problems = probeProfileBindingProblems(binding, plan.requestedProfile, before);
+  if (plan.indexes) {
+    const indexBytes = await readFile(plan.indexes.path),
+      indexSourceBytes = await readFile(plan.indexes.sourcePath);
+    binding.indexes = {
+      ...plan.indexes,
+      bytesAfter: indexBytes.length,
+      sha256After: sha256Bytes(indexBytes),
+      sourceBytesAfter: indexSourceBytes.length,
+      sourceSha256After: sha256Bytes(indexSourceBytes),
+    };
+  }
+  const problems = probeProfileBindingProblems(
+    binding,
+    plan.requestedProfile,
+    before,
+    undefined,
+    plan.indexes?.authority,
+  );
   if (problems.length) throw new Error(problems.join("; "));
   return { fireemu: JSON.parse(await readFile(plan.env.FIRESTORE_PROBE_OUT, "utf8")), binding };
 }
@@ -748,7 +878,7 @@ async function checkProduction(profile) {
   const inPath = await writePrograms();
   const binary = resolveFireemuBinary();
   const before = await historical.measureArtifact(binary);
-  const plan = await createFireemuProbeLaunch({
+  const plan = await createHistoricalProductionLaunch({
     binary,
     inPath,
     outPath: join(RUN_DIR, "fireemu-historical-production.json"),

@@ -279,3 +279,198 @@ test("profile receipt uses actual daemon output and refuses profile lies or chan
       await assert.rejects(probeRunner.executeFireemuProbe(plan, supervisor), /profile|digest/);
   }
 });
+
+test("strict historical launch loads the exact recorded production catalog", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "fireemu-recorded-index-plan-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const configPath = join(root, "probe.json");
+  const source = { schemaVersion: 1, profile: "emulator", firestore: { rules: "source.rules" } };
+  await writeFile(configPath, JSON.stringify(source));
+  const launch =
+    probeRunner.createHistoricalProductionLaunch ?? probeRunner.createFireemuProbeLaunch;
+  const plan = await launch({
+    binary: process.execPath,
+    inPath: "in",
+    outPath: "out",
+    configPath,
+    runDirectory: join(root, "private"),
+    cwd: root,
+    profile: "strict",
+  });
+  const config = JSON.parse(await readFile(plan.config.path));
+  assert.equal(typeof config.firestore.indexFile, "string");
+  const bytes = await readFile(config.firestore.indexFile);
+  assert.equal(bytes.length, 2484);
+  assert.equal(
+    createHash("sha256").update(bytes).digest("hex"),
+    "8a4d4bd7a72c3ce2bed4e0f8c4adc0cdb3a7c428477578295e44a11ae063d01c",
+  );
+  assert.equal(plan.indexes.authority.sourceGit, "2526c61eda5fc53ac91250307786127ae3c601be");
+  assert.equal(plan.indexes.authority.file, "conformance/firestore.indexes.json");
+  assert.equal(await readFile(configPath, "utf8"), JSON.stringify(source));
+});
+
+test("only strict historical replay reads the portable catalog and pinned matrix authority", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "fireemu-recorded-index-refusal-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const configPath = join(root, "probe.json"),
+    fixturePath = join(root, "recorded.json"),
+    matrixPath = join(root, "matrix.json");
+  await writeFile(
+    configPath,
+    JSON.stringify({ schemaVersion: 1, profile: "emulator", firestore: { rules: "source.rules" } }),
+  );
+  const matrixBytes = await readFile(
+    new URL("../../firestore-production-matrix.json", import.meta.url),
+  );
+  const catalogBytes = await readFile(
+    new URL("../../firestore-production.indexes.json", import.meta.url),
+  );
+  await writeFile(matrixPath, matrixBytes);
+  await writeFile(fixturePath, catalogBytes);
+  const options = {
+    binary: process.execPath,
+    inPath: "in",
+    outPath: "out",
+    configPath,
+    runDirectory: join(root, "private"),
+    cwd: root,
+    productionMatrixPath: matrixPath,
+    indexFixturePath: fixturePath,
+  };
+  for (const profile of [undefined, "emulator"]) {
+    const plan = await probeRunner.createHistoricalProductionLaunch({
+      ...options,
+      profile,
+      indexFixturePath: join(root, "missing"),
+      productionMatrixPath: join(root, "missing-matrix"),
+    });
+    assert.equal(plan.config.path, configPath);
+    assert.equal(plan.indexes, undefined);
+  }
+  await assert.rejects(
+    probeRunner.createHistoricalProductionLaunch({
+      ...options,
+      profile: "strict",
+      indexFixturePath: join(root, "missing"),
+    }),
+    /ENOENT/,
+  );
+  for (const bytes of [
+    Buffer.from(catalogBytes.toString().replace("ord", "bad")),
+    Buffer.from(catalogBytes.toString().trim()),
+    await readFile(new URL("../../firestore.indexes.json", import.meta.url)),
+  ]) {
+    await writeFile(fixturePath, bytes);
+    await assert.rejects(
+      probeRunner.createHistoricalProductionLaunch({ ...options, profile: "strict" }),
+      /fixture bytes or digest/,
+    );
+  }
+  await writeFile(fixturePath, catalogBytes);
+  const matrixObservation = JSON.parse(matrixBytes);
+  for (const kind of ["missing", "duplicate", "path", "count", "hash", "git"]) {
+    const altered = structuredClone(matrixObservation),
+      production = altered.evidence.observations.production;
+    if (kind === "missing") delete production.inputs.indexFiles;
+    if (kind === "duplicate") production.inputs.indexFiles.push(production.inputs.indexFiles[0]);
+    if (kind === "path") production.inputs.indexFiles[0].file += "-foreign";
+    if (kind === "count") production.inputs.indexFiles[0].bytes++;
+    if (kind === "hash") production.inputs.indexFiles[0].sha256 = "sha256-" + "a".repeat(64);
+    if (kind === "git") production.source.gitSha = "a".repeat(40);
+    await writeFile(matrixPath, JSON.stringify(altered));
+    await assert.rejects(
+      probeRunner.createHistoricalProductionLaunch({ ...options, profile: "strict" }),
+      /matrix index authority changed/,
+      kind,
+    );
+  }
+});
+
+test("recorded index receipt rejects changed runtime or fixture bytes and retains exact control", async (t) => {
+  for (const kind of ["exact", "runtime-change", "fixture-change"]) {
+    const root = await mkdtemp(join(tmpdir(), "fireemu-recorded-index-execution-"));
+    t.after(() => rm(root, { recursive: true, force: true }));
+    const configPath = join(root, "probe.json"),
+      binary = join(root, "binary"),
+      outPath = join(root, "out.json"),
+      indexFixturePath = join(root, "fixture.json");
+    await writeFile(
+      configPath,
+      JSON.stringify({
+        schemaVersion: 1,
+        profile: "emulator",
+        firestore: { rules: "source.rules" },
+      }),
+    );
+    await writeFile(binary, "offline binary fixture");
+    await writeFile(
+      indexFixturePath,
+      await readFile(new URL("../../firestore-production.indexes.json", import.meta.url)),
+    );
+    const plan = await probeRunner.createHistoricalProductionLaunch({
+      binary,
+      inPath: "in",
+      outPath,
+      profile: "strict",
+      configPath,
+      runDirectory: join(root, "private"),
+      cwd: root,
+      indexFixturePath,
+    });
+    const supervisor = async ({ args }) => {
+      const config = JSON.parse(await readFile(args[args.indexOf("--config") + 1]));
+      assert.equal(config.firestore.indexFile, plan.indexes.path);
+      assert.equal((await readFile(config.firestore.indexFile)).length, 2484);
+      await writeFile(outPath, JSON.stringify({ writes: { steps: {} } }));
+      if (kind !== "exact")
+        await writeFile(kind === "runtime-change" ? plan.indexes.path : indexFixturePath, "{}\n");
+      return "  profile: strict (actual daemon fixture)\n";
+    };
+    if (kind === "exact") {
+      const { binding } = await probeRunner.executeFireemuProbe(plan, supervisor);
+      assert.deepEqual(binding.indexes.authority, plan.indexes.authority);
+      assert.equal(binding.indexes.bytesBefore, binding.indexes.bytesAfter);
+      assert.equal(binding.indexes.sha256Before, binding.indexes.sha256After);
+    } else
+      await assert.rejects(
+        probeRunner.executeFireemuProbe(plan, supervisor),
+        /index receipt changed/,
+      );
+  }
+});
+
+test("recorded authority parser refuses missing, ambiguous and malformed provenance", async () => {
+  const savedMatrix = JSON.parse(
+    await readFile(new URL("../../firestore-production-matrix.json", import.meta.url)),
+  );
+  for (const kind of [
+    "unverified",
+    "not-live",
+    "git",
+    "missing",
+    "duplicate",
+    "path",
+    "zero-count",
+    "unsafe-count",
+    "hash",
+  ]) {
+    const altered = structuredClone(savedMatrix),
+      production = altered.evidence.observations.production;
+    if (kind === "unverified") altered.evidence.verified = false;
+    if (kind === "not-live") production.observation.mode = "recorded";
+    if (kind === "git") production.source.gitSha = "not-a-source";
+    if (kind === "missing") delete production.inputs.indexFiles;
+    if (kind === "duplicate") production.inputs.indexFiles.push(production.inputs.indexFiles[0]);
+    if (kind === "path") production.inputs.indexFiles[0].file = "conformance/foreign.json";
+    if (kind === "zero-count") production.inputs.indexFiles[0].bytes = 0;
+    if (kind === "unsafe-count")
+      production.inputs.indexFiles[0].bytes = Number.MAX_SAFE_INTEGER + 1;
+    if (kind === "hash") production.inputs.indexFiles[0].sha256 = "not-a-digest";
+    assert.throws(
+      () => probeRunner.recordedProductionIndexAuthority(altered),
+      /index authority/,
+      kind,
+    );
+  }
+});

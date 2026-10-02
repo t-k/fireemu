@@ -485,3 +485,48 @@ proptest::proptest! {
         }
     }
 }
+
+/// Which accounts report a `validSince` (and so refuse a token without a usable `iat` in the
+/// emulator profile): each of production's reasons on its own, and none for a plain account or
+/// an account of another federated provider.
+#[test]
+fn each_reason_for_a_valid_since_counts_on_its_own() {
+    use fireemu_core_auth::store::Provider;
+    type Setter = fn(&mut fireemu_core_auth::store::UserRecord);
+    let reasons: [(&str, Setter, bool); 9] = [
+        ("plain", |_| {}, false),
+        ("tokens revoked", |u| u.tokens_revoked = true, true),
+        ("admin created", |u| u.admin_created = true, true),
+        ("custom token", |u| u.custom_auth = true, true),
+        ("email link created", |u| u.email_link_created = true, true),
+        (
+            "OIDC",
+            |u| u.provider = Provider::Federated("oidc.fixture".into()),
+            true,
+        ),
+        (
+            "SAML",
+            |u| u.provider = Provider::Federated("saml.fixture".into()),
+            true,
+        ),
+        (
+            "google.com",
+            |u| u.provider = Provider::Federated("google.com".into()),
+            false,
+        ),
+        (
+            "email link sign-in only",
+            |u| u.email_link_signin = true,
+            false,
+        ),
+    ];
+    for (name, set, expected) in reasons {
+        let (mut store, _, uid) = store_with(Account::Anonymous);
+        set(store.user_mut(&uid).unwrap());
+        assert_eq!(store.reports_valid_since(&uid), expected, "{name}");
+    }
+    let (mut store, _, uid) = store_with(Account::Password);
+    assert!(store.reports_valid_since(&uid), "password");
+    store.user_mut(&uid).unwrap().tokens_revoked = false;
+    assert!(store.reports_valid_since(&uid), "a password alone");
+}

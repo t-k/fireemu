@@ -298,10 +298,10 @@ jobs:
         env:
           PYTEST_SHARD: ${{ matrix.shard }}
         run: |
-          uv run --project tools/compat-inventory --locked --python 3.12 tools/compat-inventory/broad_shards.py --shards 7 --shard "$PYTEST_SHARD" > "$RUNNER_TEMP/shard-files.txt"
+          uv run --project tools/compat-inventory --locked --python 3.12.13 tools/compat-inventory/broad_shards.py --shards 7 --shard "$PYTEST_SHARD" > "$RUNNER_TEMP/shard-files.txt"
           mapfile -t files < "$RUNNER_TEMP/shard-files.txt"
           echo "shard $PYTEST_SHARD: ${#files[@]} files"
-          uv run --project tools/compat-inventory --locked --python 3.12 -m pytest "${files[@]}" -q
+          uv run --project tools/compat-inventory --locked --python 3.12.13 -m pytest "${files[@]}" -q
 
   compat-broad-retired:
     # On demand only: the retired O7/O8 campaign suites and the frozen O7-era history

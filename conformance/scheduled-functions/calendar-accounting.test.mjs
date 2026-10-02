@@ -2133,7 +2133,7 @@ test("attempt provenance tables distinguish kinds, statuses and each independent
   for (const verdict of ["pass", "fail", "inconclusive"])
     assert.equal(
       judgeAttempts([completeAttempt({ verdict: { verdict } })]).verdict,
-      "pass",
+      verdict === "inconclusive" ? "fail" : "pass",
       verdict,
     );
   assert.equal(
@@ -2208,4 +2208,10 @@ test("a timestamp outside the representable Date range withholds a certificate",
       assert.equal(refusalResult.certificate, null);
     }
   }
+});
+
+test("an inconclusive attempt remains unknown despite a cause explanation", () => {
+  const result = judgeAttempts([completeAttempt({ verdict: { verdict: "inconclusive" } })]);
+  assert.equal(result.verdict, "fail");
+  assert.equal(result.certificate, null);
 });

@@ -784,7 +784,7 @@ export function certificateVerdict({
     seenHashes.add(sha256);
     if (
       !kindKnown ||
-      !["pass", "fail", "inconclusive"].includes(verdict) ||
+      !["pass", "fail"].includes(verdict) ||
       attemptDay === null ||
       attemptDay !== day ||
       report?.harnessVersion !== refusal?.harnessVersion ||

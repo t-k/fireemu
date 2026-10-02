@@ -496,13 +496,15 @@ test("topic-only and jobs-and-topic recovery withhold closure after any unknown 
 // A complete status below 200, a 3xx or a 5xx is as unknown as a lost answer: an applied pause
 // answered with a complete 503 still gets its cleanup, but closure waits for the read-back.
 test("jobs-and-topic recovery withholds closure after a complete but ambiguous answer", async () => {
-  for (const status of [302, 500, 503]) {
+  for (const status of [199, 302, 500, 503]) {
     const e = environment("ENABLED"),
       original = e.deps.send;
     e.deps.send = async (request) => {
       if (request.id !== "c01-pause") return original(request);
       await original(request);
-      return new Response("{}", { status });
+      const response = new Response("{}", { status: status < 200 ? 200 : status });
+      if (status < 200) Object.defineProperty(response, "status", { value: status });
+      return response;
     };
     const result = await collectCalendarRecovery(e.deps);
     assert.equal(result.unknown, 0, String(status));

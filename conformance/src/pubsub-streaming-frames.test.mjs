@@ -427,3 +427,20 @@ test("the URL-safe base64 alphabet is mapped before matching at every alignment"
     assert.equal(d.push(frame(Buffer.from(form))).reason, "credential-reflection", form);
   }
 });
+
+test("the public credential validator preserves the optional credential", async () => {
+  const { validateCredential } = await import(target.href);
+  assert.equal(validateCredential(undefined), undefined);
+  assert.equal(validateCredential("abcdefgh"), "abcdefgh");
+});
+test("encoded seven-byte suffixes remain data without a complete credential window", async () => {
+  const credential = "abcdefgh";
+  for (const lead of ["", "x", "xy"])
+    for (let length = 1; length < 8; length++) {
+      const encoded = Buffer.from(lead + credential.slice(-length)).toString("base64");
+      const d = await decoder({ credential });
+      const result = d.push(frame(Buffer.from(encoded)));
+      assert.equal(result.reason, undefined, `${lead.length}/${length}: ${encoded}`);
+      assert.equal(result.frames.length, 1);
+    }
+});

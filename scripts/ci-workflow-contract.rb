@@ -1,6 +1,7 @@
 #!/usr/bin/env ruby
 
 require "yaml"
+require "shellwords"
 
 ROOT = File.expand_path("..", __dir__)
 
@@ -270,12 +271,13 @@ end
 assert(load_workflow("compatibility-inventory.yml").dig("jobs", "offline-acquisition-integrity", "timeout-minutes") == 120, "offline acquisition must have a two-hour timeout")
 broad_runs = load_workflow("compatibility-inventory.yml").dig("jobs", "compat-broad-tests", "steps")
   .flat_map { |step| step.fetch("run", "").lines.map(&:strip) }
-broad_commands = broad_runs.select do |line|
-  line.start_with?("uv run ") && (line.include?("tools/compat-inventory/broad_shards.py") || line.include?("-m pytest"))
-end
-assert(broad_commands.length == 2, "required broad tests must retain the shard planner and pytest commands")
-broad_commands.each do |command|
-  assert(command.match?(/--python\s+3\.12\.13(?:\s|$)/), "required broad planner and pytest must use the reviewed Python 3.12.13 runtime")
+broad_commands = broad_runs.select { |line| line.start_with?("uv run ") }.map { |line| Shellwords.split(line) }
+broad_planners = broad_commands.select { |args| args.include?("tools/compat-inventory/broad_shards.py") }
+broad_pytests = broad_commands.select { |args| args.each_cons(2).include?(["-m", "pytest"]) }
+assert(broad_planners.length == 1 && broad_pytests.length == 1, "required broad tests must retain exactly one shard planner and one pytest command")
+(broad_planners + broad_pytests).each do |args|
+  python_options = args.each_index.select { |index| args[index] == "--python" }
+  assert(python_options.length == 1 && args[python_options.first + 1] == "3.12.13", "required broad planner and pytest must use the reviewed Python 3.12.13 runtime")
 end
 assert(load_workflow("functions-sdk-discovery.yml").dig("jobs", "real-sdk-discovery", "timeout-minutes") == 120, "manual SDK discovery must have a two-hour timeout")
 {

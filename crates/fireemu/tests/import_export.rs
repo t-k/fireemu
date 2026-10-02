@@ -394,6 +394,251 @@ fn an_official_multi_product_export_is_imported_whole() {
     );
     assert!(log.contains("auth: 5 account(s)"), "{log}");
     assert!(log.contains("storage: 3 object(s) in 1 bucket(s)"), "{log}");
+    assert!(
+        !log.contains("warning: --import"),
+        "nothing is over a limit: {log}"
+    );
+}
+
+/// A session snapshot restore through the control API is not checked against the limits
+/// either; when it leaves stored object data above `storage.maxStoredBytes`, the daemon logs
+/// the same warning line, and the restore succeeds. A session reset between the capture and
+/// the restore empties the store, so the line describes the restored state.
+#[cfg(unix)]
+#[test]
+fn a_snapshot_restore_above_the_stored_byte_limit_logs_a_warning() {
+    let dir = scratch("stored-bytes-restore");
+    let config = dir.join("fireemu.json");
+    std::fs::write(
+        &config,
+        r#"{"schemaVersion": 1, "profile": "emulator", "firestore": {"edition": "standard", "apiMode": "native"}, "storage": {"maxStoredBytes": 10}}"#,
+    )
+    .unwrap();
+    let probe = r#"auth="Authorization: Bearer $FIREEMU_CONTROL_TOKEN"
+curl -s -o /dev/null -w 'capture %{http_code}\n' -X POST -H "$auth" -H 'Content-Type: application/json' "${FIREEMU_CONTROL_URL}sessions/default/snapshots" -d '{"name": "held"}'
+curl -s -o /dev/null -w 'reset %{http_code}\n' -X POST -H "$auth" -H 'Content-Type: application/json' "${FIREEMU_CONTROL_URL}sessions/default/reset" -d '{}'
+curl -s -o /dev/null -w 'restore %{http_code}\n' -X POST -H "$auth" -H 'Content-Type: application/json' "${FIREEMU_CONTROL_URL}sessions/default/snapshots/held:restore" -d '{}'"#;
+    let output = exec()
+        .arg("--config")
+        .arg(&config)
+        .args(["--import"])
+        .arg(fixture("official-multiproduct"))
+        .args(["--", "/bin/sh", "-c", probe])
+        .output()
+        .unwrap();
+    let log = text(&output);
+    assert!(output.status.success(), "{log}");
+    assert!(log.contains("capture 200"), "{log}");
+    assert!(log.contains("reset 200"), "{log}");
+    assert!(log.contains("restore 200"), "{log}");
+    assert!(
+        log.contains(
+            "warning: snapshot restore: storage holds 29 bytes of object data, above storage.maxStoredBytes 10; writes that would grow it are refused with 402 until objects are deleted"
+        ),
+        "{log}"
+    );
+}
+
+/// A restore that leaves everything within its limits logs no warning.
+#[cfg(unix)]
+#[test]
+fn a_snapshot_restore_within_the_limits_logs_no_warning() {
+    let probe = r#"auth="Authorization: Bearer $FIREEMU_CONTROL_TOKEN"
+curl -s -o /dev/null -w 'capture %{http_code}\n' -X POST -H "$auth" -H 'Content-Type: application/json' "${FIREEMU_CONTROL_URL}sessions/default/snapshots" -d '{"name": "held"}'
+curl -s -o /dev/null -w 'restore %{http_code}\n' -X POST -H "$auth" -H 'Content-Type: application/json' "${FIREEMU_CONTROL_URL}sessions/default/snapshots/held:restore" -d '{}'"#;
+    let output = exec()
+        .args(["--import"])
+        .arg(fixture("official-multiproduct"))
+        .args(["--", "/bin/sh", "-c", probe])
+        .output()
+        .unwrap();
+    let log = text(&output);
+    assert!(output.status.success(), "{log}");
+    assert!(log.contains("restore 200"), "{log}");
+    assert!(!log.contains("warning: snapshot restore"), "{log}");
+}
+
+/// The same for a Firestore database a restore leaves above its history byte limit.
+#[cfg(unix)]
+#[test]
+fn a_snapshot_restore_above_a_history_limit_logs_a_warning() {
+    let dir = scratch("history-bytes-restore");
+    let export = dir.join("export");
+    write_document_artifact(&export, 24, 64 * 1024);
+    let config = dir.join("fireemu.json");
+    std::fs::write(
+        &config,
+        r#"{"schemaVersion": 1, "profile": "emulator", "firestore": {"edition": "standard", "apiMode": "native", "history": {"maxBytes": 1048576}}}"#,
+    )
+    .unwrap();
+    let probe = r#"auth="Authorization: Bearer $FIREEMU_CONTROL_TOKEN"
+curl -s -o /dev/null -w 'capture %{http_code}\n' -X POST -H "$auth" -H 'Content-Type: application/json' "${FIREEMU_CONTROL_URL}sessions/default/snapshots" -d '{"name": "held"}'
+curl -s -o /dev/null -w 'reset %{http_code}\n' -X POST -H "$auth" -H 'Content-Type: application/json' "${FIREEMU_CONTROL_URL}sessions/default/reset" -d '{}'
+curl -s -o /dev/null -w 'restore %{http_code}\n' -X POST -H "$auth" -H 'Content-Type: application/json' "${FIREEMU_CONTROL_URL}sessions/default/snapshots/held:restore" -d '{}'"#;
+    let output = Command::new(env!("CARGO_BIN_EXE_fireemu"))
+        .args(["exec", "--config"])
+        .arg(&config)
+        .args([
+            "--only",
+            "firestore",
+            "--firestore-port",
+            "0",
+            "--http-port",
+            "0",
+            "--storage-port",
+            "0",
+            "--logging-port",
+            "0",
+            "--ui-port",
+            "0",
+            "--hub-port",
+            "0",
+            "--project",
+            "demo-import-rss",
+            "--import",
+        ])
+        .arg(&export)
+        .args(["--", "/bin/sh", "-c", probe])
+        .stdin(Stdio::null())
+        .output()
+        .unwrap();
+    let log = text(&output);
+    assert!(output.status.success(), "{log}");
+    assert!(log.contains("reset 200"), "{log}");
+    assert!(log.contains("restore 200"), "{log}");
+    assert!(
+        log.contains(
+            "warning: snapshot restore: firestore database demo-import-rss/(default) holds "
+        ),
+        "{log}"
+    );
+    assert!(
+        log.contains("logical history bytes, above firestore.history.maxBytes 1048576; writes that would grow its history are refused with RESOURCE_EXHAUSTED until documents are deleted"),
+        "{log}"
+    );
+}
+
+/// An import above a configured `storage.maxStoredBytes` starts, with a warning naming the
+/// stored bytes, the bound and what is refused until objects are deleted.
+#[test]
+fn an_import_above_the_stored_byte_limit_starts_with_a_warning() {
+    let dir = scratch("stored-bytes-import");
+    let config = dir.join("fireemu.json");
+    std::fs::write(
+        &config,
+        r#"{"schemaVersion": 1, "profile": "emulator", "firestore": {"edition": "standard", "apiMode": "native"}, "storage": {"maxStoredBytes": 10}}"#,
+    )
+    .unwrap();
+    let output = exec()
+        .arg("--config")
+        .arg(&config)
+        .args(["--import"])
+        .arg(fixture("official-multiproduct"))
+        .args(["--", "true"])
+        .output()
+        .unwrap();
+    let log = text(&output);
+    assert!(output.status.success(), "{log}");
+    assert!(log.contains("storage: 3 object(s) in 1 bucket(s)"), "{log}");
+    assert!(
+        log.contains(&format!(
+            "warning: --import {}: storage holds 29 bytes of object data, above storage.maxStoredBytes 10; writes that would grow it are refused with 402 until objects are deleted",
+            fixture("official-multiproduct").display()
+        )),
+        "{log}"
+    );
+}
+
+/// Both profiles accept an over-limit import, report the installed state on stderr, and
+/// suppress the import warning on both streams when quiet is requested.
+#[cfg(unix)]
+#[test]
+fn import_limit_warnings_use_stderr_in_both_profiles_and_respect_quiet() {
+    use fireemu_core_firestore::path::DocumentPath;
+    use fireemu_core_firestore::store::{FirestoreState, ImportedDocument};
+    use fireemu_core_types::ids::{DatabaseId, ProjectId};
+    use fireemu_core_types::time::LogicalInstant;
+
+    let dir = scratch("warning-profile-quiet");
+    let export = dir.join("export");
+    write_document_artifact(&export, 24, 64 * 1024);
+    let mut state = FirestoreState::new();
+    let project = ProjectId::try_new("demo-import-rss").unwrap();
+    let database = DatabaseId::try_new("(default)").unwrap();
+    let documents = (0..24)
+        .map(|n| ImportedDocument {
+            path: DocumentPath::parse(&project, &database, &format!("payloads/doc-{n:06}"))
+                .unwrap(),
+            fields: [(
+                "payload".to_owned(),
+                Value::Bytes(vec![u8::try_from(n % 251).unwrap(); 64 * 1024]),
+            )]
+            .into_iter()
+            .collect(),
+            create_time: None,
+            update_time: None,
+        })
+        .collect();
+    state
+        .import_documents(documents, LogicalInstant::from_unix_seconds(1_788_004_860))
+        .unwrap();
+    let bytes = state.history_usage().total_bytes;
+    assert!(bytes > 1 << 20);
+    for profile in ["strict", "emulator"] {
+        for quiet in [false, true] {
+            for storage in [false, true] {
+                let config = dir.join("fireemu.json");
+                let settings = if storage {
+                    serde_json::json!({"storage": {"maxStoredBytes": 10}})
+                } else {
+                    serde_json::json!({"firestore": {"history": {"maxBytes": 1_048_576}, "edition": "standard", "apiMode": "native"}})
+                };
+                let mut config_value = serde_json::json!({"schemaVersion": 1, "profile": profile});
+                config_value
+                    .as_object_mut()
+                    .unwrap()
+                    .extend(settings.as_object().unwrap().clone());
+                std::fs::write(&config, config_value.to_string()).unwrap();
+                let artifact = if storage {
+                    fixture("official-multiproduct")
+                } else {
+                    export.clone()
+                };
+                let message = if storage {
+                    "storage holds 29 bytes of object data, above storage.maxStoredBytes 10; writes that would grow it are refused with 402 until objects are deleted".to_owned()
+                } else {
+                    format!("firestore database demo-import-rss/(default) holds {bytes} logical history bytes, above firestore.history.maxBytes 1048576; writes that would grow its history are refused with RESOURCE_EXHAUSTED until documents are deleted")
+                };
+                let warning = format!("warning: --import {}: {message}", artifact.display());
+                let mut cmd = exec();
+                cmd.arg("--config")
+                    .arg(&config)
+                    .arg("--import")
+                    .arg(&artifact);
+                if quiet {
+                    cmd.args(["--log-verbosity", "quiet"]);
+                }
+                let output = cmd.args(["--", "true"]).output().unwrap();
+                let stdout = String::from_utf8_lossy(&output.stdout);
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                assert!(
+                    output.status.success(),
+                    "{profile} quiet={quiet} storage={storage}: {}",
+                    text(&output)
+                );
+                assert!(!stdout.contains("warning: --import"), "{stdout}");
+                let warnings: Vec<_> = stderr
+                    .lines()
+                    .filter(|line| line.contains("warning: --import"))
+                    .collect();
+                if quiet {
+                    assert!(warnings.is_empty(), "{stderr}");
+                } else {
+                    assert_eq!(warnings, vec![warning.as_str()], "{stderr}");
+                }
+            }
+        }
+    }
 }
 
 #[test]
@@ -626,6 +871,18 @@ curl -s -w '\nwrite %{{http_code}}\n' -X PATCH -H 'Authorization: Bearer owner' 
     assert!(log.contains("write 429"), "{log}");
     assert!(
         log.contains("Firestore retained history capacity is exhausted"),
+        "{log}"
+    );
+    // The run says so at start (owner ruling: warn, do not refuse).
+    let warning = format!(
+        "warning: --import {}: firestore database demo-import-rss/(default) holds ",
+        export.display()
+    );
+    assert!(log.contains(&warning), "{log}");
+    assert!(
+        log.contains(
+            "logical history bytes, above firestore.history.maxBytes 1048576; writes that would grow its history are refused with RESOURCE_EXHAUSTED until documents are deleted"
+        ),
         "{log}"
     );
 }

@@ -55,7 +55,13 @@ impl SnapshotHook for Firestore {
             .ok_or_else(|| wrong_shape(self.name()))?;
         self.0
             .restore_scope(scope, snapshot)
-            .map_err(|error| TransitionFailure::new(self.name(), error.to_string()))
+            .map_err(|error| TransitionFailure::new(self.name(), error.to_string()))?;
+        // A restore is not checked against the history limits (as an import is not): say so
+        // when it leaves a database above one.
+        for warning in crate::import_export::firestore_limit_warnings(&self.0, scope) {
+            eprintln!("warning: snapshot restore: {warning}");
+        }
+        Ok(())
     }
     fn retained_bytes(&self, part: &SnapshotPart) -> u64 {
         part.downcast_ref::<FirestoreSnapshot>()
@@ -235,6 +241,10 @@ impl SnapshotHook for Storage {
             .lock()
             .map_err(|_| poisoned(self.name(), "the object store"))?;
         store.restore_buckets(self.owned(scope), captured);
+        // Not checked against storage.maxStoredBytes either: say so when it is exceeded.
+        for warning in crate::import_export::storage_limit_warnings(&store) {
+            eprintln!("warning: snapshot restore: {warning}");
+        }
         Ok(())
     }
     fn retained_bytes(&self, part: &SnapshotPart) -> u64 {

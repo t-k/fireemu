@@ -3234,6 +3234,72 @@ fn export_firestore(
 /// One database's export section: each project with its live documents.
 type FirestoreExportSection = Vec<(String, Vec<Arc<fireemu_core_firestore::store::Document>>)>;
 
+/// What the operator should be told after an import was installed: every limit the imported
+/// state is already above. An import is not checked against the Firestore history limits or
+/// `storage.maxStoredBytes` (owner ruling: warn at start, do not refuse), so the run starts and
+/// only the writes that would grow past a limit are refused.
+pub fn import_limit_warnings(endpoints: &Endpoints) -> Vec<String> {
+    let scope = fireemu_core_session::tenancy::Scope::AllExcept(BTreeSet::new());
+    let mut warnings = firestore_limit_warnings(endpoints.backend, &scope);
+    if let Ok(store) = endpoints.storage.store.lock() {
+        warnings.extend(storage_limit_warnings(&store));
+    }
+    warnings
+}
+
+/// The warning lines for every database `scope` owns that is above a history limit.
+pub(crate) fn firestore_limit_warnings(
+    backend: &LocalBackend,
+    scope: &fireemu_core_session::tenancy::Scope,
+) -> Vec<String> {
+    limit_warnings(&backend.history_over_limit(scope), None)
+}
+
+/// The warning line when the object data `store` holds is above `storage.maxStoredBytes`.
+pub(crate) fn storage_limit_warnings(
+    store: &fireemu_core_storage::store::StorageState,
+) -> Vec<String> {
+    limit_warnings(
+        &[],
+        Some((store.retained_blob_bytes(), store.stored_bytes_limit())),
+    )
+}
+
+/// The warning lines for databases over their history limits and for stored object data over
+/// `storage.maxStoredBytes` (`(stored bytes, bound)`).
+fn limit_warnings(
+    firestore: &[(
+        (String, String),
+        fireemu_core_firestore::store::HistoryUsage,
+        fireemu_core_firestore::store::HistoryLimits,
+    )],
+    storage: Option<(u64, Option<u64>)>,
+) -> Vec<String> {
+    let mut warnings = Vec::new();
+    for ((project, database), usage, limits) in firestore {
+        if usage.total_bytes > limits.max_bytes {
+            warnings.push(format!(
+                "firestore database {project}/{database} holds {} logical history bytes, above firestore.history.maxBytes {}; writes that would grow its history are refused with RESOURCE_EXHAUSTED until documents are deleted",
+                usage.total_bytes, limits.max_bytes
+            ));
+        }
+        if usage.versions > limits.max_versions {
+            warnings.push(format!(
+                "firestore database {project}/{database} holds {} history versions, above the database limit of {}; writes that would add versions are refused with RESOURCE_EXHAUSTED until documents are deleted",
+                usage.versions, limits.max_versions
+            ));
+        }
+    }
+    if let Some((stored, Some(limit))) = storage {
+        if stored > limit {
+            warnings.push(format!(
+                "storage holds {stored} bytes of object data, above storage.maxStoredBytes {limit}; writes that would grow it are refused with 402 until objects are deleted"
+            ));
+        }
+    }
+    warnings
+}
+
 /// The live documents an export writes, grouped by database id: inside each database the
 /// projects ascend and inside each project the paths ascend, the order the official artifact
 /// and earlier fireemu exports use. The documents are the allocations the stores hold, read
@@ -4736,6 +4802,85 @@ mod tests {
                 proptest::prop_assert!(actual.1 == expected.1, "{} bytes differ", database);
             }
         }
+    }
+
+    proptest::proptest! {
+        #![proptest_config(proptest::test_runner::Config::with_cases(96))]
+        #[test]
+        fn limit_warnings_select_exactly_the_exceeded_dimensions(
+            values in proptest::array::uniform6(proptest::prop_oneof![
+                proptest::strategy::Just(0_u64),
+                proptest::strategy::Just(u64::MAX),
+                proptest::prelude::any::<u64>(),
+            ]),
+            storage_is_bounded in proptest::prelude::any::<bool>(),
+        ) {
+            use fireemu_core_firestore::store::{HistoryLimits, HistoryUsage};
+            let [bytes, versions, max_bytes, max_versions, stored, max_stored] = values;
+            // Include exact equality in every generated case as well as arbitrary limits.
+            for limits in [HistoryLimits { max_bytes, max_versions }, HistoryLimits { max_bytes: bytes, max_versions: versions }] {
+                let warnings = super::limit_warnings(
+                    &[(
+                        ("demo-property".to_owned(), "analytics".to_owned()),
+                        HistoryUsage { total_bytes: bytes, versions, ..HistoryUsage::default() },
+                        limits,
+                    )],
+                    Some((stored, storage_is_bounded.then_some(max_stored))),
+                );
+                let byte_lines: Vec<_> = warnings.iter().filter(|line| line.contains("logical history bytes")).collect();
+                let version_lines: Vec<_> = warnings.iter().filter(|line| line.contains("history versions")).collect();
+                let storage_lines: Vec<_> = warnings.iter().filter(|line| line.starts_with("storage holds")).collect();
+                proptest::prop_assert_eq!(byte_lines.len(), usize::from(bytes > limits.max_bytes));
+                proptest::prop_assert_eq!(version_lines.len(), usize::from(versions > limits.max_versions));
+                proptest::prop_assert_eq!(storage_lines.len(), usize::from(storage_is_bounded && stored > max_stored));
+                proptest::prop_assert_eq!(warnings.len(), byte_lines.len() + version_lines.len() + storage_lines.len());
+                for line in byte_lines {
+                    proptest::prop_assert!(line.starts_with(&format!("firestore database demo-property/analytics holds {bytes} logical history bytes, above firestore.history.maxBytes {}", limits.max_bytes)), "byte warning prefix: {}", line);
+                }
+                for line in version_lines {
+                    proptest::prop_assert!(line.starts_with(&format!("firestore database demo-property/analytics holds {versions} history versions, above the database limit of {}", limits.max_versions)), "version warning prefix: {}", line);
+                }
+                for line in storage_lines {
+                    proptest::prop_assert!(line.starts_with(&format!("storage holds {stored} bytes of object data, above storage.maxStoredBytes {max_stored}")), "storage warning prefix: {}", line);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn limit_warnings_name_each_limit_an_import_is_above() {
+        use fireemu_core_firestore::store::{HistoryLimits, HistoryUsage};
+
+        let limits = HistoryLimits {
+            max_bytes: 100,
+            max_versions: 5,
+        };
+        let usage = |total_bytes, versions| HistoryUsage {
+            total_bytes,
+            versions,
+            ..HistoryUsage::default()
+        };
+        let key = ("demo-a".to_owned(), "(default)".to_owned());
+        assert!(super::limit_warnings(&[], None).is_empty());
+        assert!(super::limit_warnings(
+            &[(key.clone(), usage(100, 5), limits)],
+            Some((10, Some(10)))
+        )
+        .is_empty());
+        assert!(super::limit_warnings(&[], Some((10, None))).is_empty());
+        assert_eq!(
+            super::limit_warnings(&[(key.clone(), usage(101, 6), limits)], Some((11, Some(10)))),
+            vec![
+                "firestore database demo-a/(default) holds 101 logical history bytes, above firestore.history.maxBytes 100; writes that would grow its history are refused with RESOURCE_EXHAUSTED until documents are deleted".to_owned(),
+                "firestore database demo-a/(default) holds 6 history versions, above the database limit of 5; writes that would add versions are refused with RESOURCE_EXHAUSTED until documents are deleted".to_owned(),
+                "storage holds 11 bytes of object data, above storage.maxStoredBytes 10; writes that would grow it are refused with 402 until objects are deleted".to_owned(),
+            ]
+        );
+        assert_eq!(
+            super::limit_warnings(&[(key, usage(50, 6), limits)], None).len(),
+            1,
+            "only the version limit is crossed"
+        );
     }
 
     #[cfg(unix)]

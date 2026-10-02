@@ -369,3 +369,125 @@ fn a_restored_snapshot_takes_the_backend_s_history_limits() {
         "{refused:?}"
     );
 }
+
+/// A restore (as an import uses) is not checked against a lowered byte limit; the backend
+/// names every database it leaves above a limit, with its usage and limits, and nothing else.
+#[test]
+fn history_over_limit_names_the_databases_a_restore_left_above_a_limit() {
+    let payload = "x".repeat(64 * 1024);
+    let (source, clock) = backend();
+    for round in 0..24 {
+        commit(&source, &format!("doc-{round}"), &payload);
+        advance(&clock, 1);
+    }
+    let snapshot = source.snapshot_databases();
+    let scope = fireemu_core_session::tenancy::Scope::AllExcept(std::collections::BTreeSet::new());
+    assert!(source.history_over_limit(&scope).is_empty());
+
+    let (limited, _clock) = backend();
+    let limits = HistoryLimits {
+        max_bytes: 1 << 20,
+        ..HistoryLimits::default()
+    };
+    let limited = limited.with_history_limits(limits);
+    limited.restore_databases(snapshot).unwrap();
+    let over = limited.history_over_limit(&scope);
+    assert_eq!(over.len(), 1, "{over:?}");
+    let (key, usage, reported) = &over[0];
+    assert_eq!(key, &("demo-app".to_owned(), "(default)".to_owned()));
+    assert_eq!(*reported, limits);
+    assert!(usage.total_bytes > limits.max_bytes, "{usage:?}");
+    assert_eq!(usage.versions, 24);
+}
+
+/// Exactly at a limit is not above it; one past it is, for the byte and the version limit
+/// alike, and either one alone is enough.
+#[test]
+fn history_over_limit_reports_only_a_limit_that_is_exceeded() {
+    let (source, clock) = backend();
+    for round in 0..3 {
+        commit(&source, &format!("doc-{round}"), "payload");
+        advance(&clock, 1);
+    }
+    let scope = fireemu_core_session::tenancy::Scope::AllExcept(std::collections::BTreeSet::new());
+    let over = |limits: HistoryLimits| {
+        let (target, _clock) = backend();
+        let target = target.with_history_limits(limits);
+        target
+            .restore_databases(source.snapshot_databases())
+            .unwrap();
+        target.history_over_limit(&scope)
+    };
+    let reported = |limits: HistoryLimits| over(limits).len();
+    // The usage the restored database holds, read through a limit it is certainly above.
+    let usage = over(HistoryLimits {
+        max_bytes: 0,
+        max_versions: 0,
+    })[0]
+        .1;
+    assert_eq!(usage.versions, 3);
+    let at = HistoryLimits {
+        max_bytes: usage.total_bytes,
+        max_versions: usage.versions,
+    };
+    assert_eq!(reported(at), 0, "exactly at both limits");
+    assert_eq!(
+        reported(HistoryLimits {
+            max_bytes: usage.total_bytes - 1,
+            ..at
+        }),
+        1,
+        "one byte past"
+    );
+    assert_eq!(
+        reported(HistoryLimits {
+            max_versions: usage.versions - 1,
+            ..at
+        }),
+        1,
+        "one version past"
+    );
+}
+
+proptest::proptest! {
+    #![proptest_config(proptest::test_runner::Config::with_cases(64))]
+    #[test]
+    fn history_over_limit_matches_restored_usage_and_scope(
+        payload_len in 0_usize..256,
+        count in 1_usize..6,
+        max_bytes in proptest::prop_oneof![proptest::strategy::Just(0_u64), proptest::strategy::Just(u64::MAX), proptest::prelude::any::<u64>()],
+        max_versions in proptest::prop_oneof![proptest::strategy::Just(0_u64), proptest::strategy::Just(u64::MAX), 0_u64..8],
+    ) {
+        use fireemu_core_session::tenancy::Scope;
+        let (source, clock) = backend();
+        for n in 0..count {
+            commit(&source, &format!("doc-{n}"), &"x".repeat(payload_len));
+            advance(&clock, 1);
+        }
+        let snapshot = source.snapshot_databases();
+        let state = snapshot.values().next().unwrap().clone();
+        let usage = state.history_usage();
+        let empty = fireemu_core_firestore::store::FirestoreState::new();
+        let restored = [
+            (("demo-app".to_owned(), "analytics".to_owned()), state.clone()),
+            (("demo-app".to_owned(), "(default)".to_owned()), empty),
+            (("demo-excluded".to_owned(), "analytics".to_owned()), state),
+        ].into_iter().collect::<std::collections::BTreeMap<_, _>>();
+        let boundary = HistoryLimits { max_bytes: usage.total_bytes, max_versions: usage.versions };
+        for limits in [HistoryLimits { max_bytes, max_versions }, boundary,
+            HistoryLimits { max_bytes: usage.total_bytes.saturating_sub(1), ..boundary },
+            HistoryLimits { max_versions: usage.versions.saturating_sub(1), ..boundary }]
+        {
+            let (target, _) = backend();
+            let target = target.with_history_limits(limits);
+            target.restore_databases(restored.clone()).unwrap();
+            for scope in [Scope::Project("demo-app".to_owned()), Scope::AllExcept(["demo-excluded".to_owned()].into_iter().collect()), Scope::Project("demo-excluded".to_owned())] {
+                let expected: Vec<_> = restored.iter().filter_map(|(key, state)| {
+                    let actual = state.history_usage();
+                    (scope.owns_project(&key.0) && (actual.total_bytes > limits.max_bytes || actual.versions > limits.max_versions)).then(|| (key.clone(), actual, limits))
+                }).collect();
+                proptest::prop_assert_eq!(target.history_over_limit(&scope), expected);
+            }
+        }
+    }
+}

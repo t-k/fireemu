@@ -2425,6 +2425,32 @@ impl LocalBackend {
             .collect()
     }
 
+    /// Every database `scope` owns whose retained history is above one of its whole-database
+    /// limits (after an import or a restore, which are not checked against them), with its
+    /// usage and limits. Each database is read under its own lock; detached and poisoned
+    /// databases are skipped.
+    #[must_use]
+    pub fn history_over_limit(
+        &self,
+        scope: &fireemu_core_session::tenancy::Scope,
+    ) -> Vec<(
+        (String, String),
+        fireemu_core_firestore::store::HistoryUsage,
+        fireemu_core_firestore::store::HistoryLimits,
+    )> {
+        self.handles_of(scope)
+            .into_iter()
+            .filter_map(|(key, handle)| {
+                handle
+                    .read(|state| (state.history_usage(), state.history_limits()))
+                    .filter(|(usage, limits)| {
+                        usage.total_bytes > limits.max_bytes || usage.versions > limits.max_versions
+                    })
+                    .map(|(usage, limits)| (key, usage, limits))
+            })
+            .collect()
+    }
+
     /// The live documents of every database `scope` owns, each database read under its own
     /// lock, as the allocations the stores hold: what an export writes, without the copy of
     /// every index and document a snapshot makes. Detached and poisoned databases are skipped,

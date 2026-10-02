@@ -901,6 +901,11 @@ fn assemble_suite(assembly: ServiceAssembly, exec_mode: bool) -> Result<ReadySui
         if !quiet {
             println!("  imported: {} ({summary})", dir.display());
         }
+        if !quiet {
+            for warning in import_export::import_limit_warnings(&exporter.endpoints()) {
+                eprintln!("warning: --import {}: {warning}", dir.display());
+            }
+        }
     }
     // Startup configuration is the final layer over imported Auth state. The import remains
     // authoritative when the corresponding setting was not explicitly configured.

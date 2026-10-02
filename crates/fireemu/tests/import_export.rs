@@ -402,7 +402,8 @@ fn an_official_multi_product_export_is_imported_whole() {
 
 /// A session snapshot restore through the control API is not checked against the limits
 /// either; when it leaves stored object data above `storage.maxStoredBytes`, the daemon logs
-/// the same warning line, and the restore succeeds.
+/// the same warning line, and the restore succeeds. A session reset between the capture and
+/// the restore empties the store, so the line describes the restored state.
 #[cfg(unix)]
 #[test]
 fn a_snapshot_restore_above_the_stored_byte_limit_logs_a_warning() {
@@ -415,6 +416,7 @@ fn a_snapshot_restore_above_the_stored_byte_limit_logs_a_warning() {
     .unwrap();
     let probe = r#"auth="Authorization: Bearer $FIREEMU_CONTROL_TOKEN"
 curl -s -o /dev/null -w 'capture %{http_code}\n' -X POST -H "$auth" -H 'Content-Type: application/json' "${FIREEMU_CONTROL_URL}sessions/default/snapshots" -d '{"name": "held"}'
+curl -s -o /dev/null -w 'reset %{http_code}\n' -X POST -H "$auth" -H 'Content-Type: application/json' "${FIREEMU_CONTROL_URL}sessions/default/reset" -d '{}'
 curl -s -o /dev/null -w 'restore %{http_code}\n' -X POST -H "$auth" -H 'Content-Type: application/json' "${FIREEMU_CONTROL_URL}sessions/default/snapshots/held:restore" -d '{}'"#;
     let output = exec()
         .arg("--config")
@@ -427,6 +429,7 @@ curl -s -o /dev/null -w 'restore %{http_code}\n' -X POST -H "$auth" -H 'Content-
     let log = text(&output);
     assert!(output.status.success(), "{log}");
     assert!(log.contains("capture 200"), "{log}");
+    assert!(log.contains("reset 200"), "{log}");
     assert!(log.contains("restore 200"), "{log}");
     assert!(
         log.contains(
@@ -470,6 +473,7 @@ fn a_snapshot_restore_above_a_history_limit_logs_a_warning() {
     .unwrap();
     let probe = r#"auth="Authorization: Bearer $FIREEMU_CONTROL_TOKEN"
 curl -s -o /dev/null -w 'capture %{http_code}\n' -X POST -H "$auth" -H 'Content-Type: application/json' "${FIREEMU_CONTROL_URL}sessions/default/snapshots" -d '{"name": "held"}'
+curl -s -o /dev/null -w 'reset %{http_code}\n' -X POST -H "$auth" -H 'Content-Type: application/json' "${FIREEMU_CONTROL_URL}sessions/default/reset" -d '{}'
 curl -s -o /dev/null -w 'restore %{http_code}\n' -X POST -H "$auth" -H 'Content-Type: application/json' "${FIREEMU_CONTROL_URL}sessions/default/snapshots/held:restore" -d '{}'"#;
     let output = Command::new(env!("CARGO_BIN_EXE_fireemu"))
         .args(["exec", "--config"])
@@ -500,6 +504,7 @@ curl -s -o /dev/null -w 'restore %{http_code}\n' -X POST -H "$auth" -H 'Content-
         .unwrap();
     let log = text(&output);
     assert!(output.status.success(), "{log}");
+    assert!(log.contains("reset 200"), "{log}");
     assert!(log.contains("restore 200"), "{log}");
     assert!(
         log.contains(

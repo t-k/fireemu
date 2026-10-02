@@ -12,9 +12,26 @@ fn free_port() -> u16 {
     port
 }
 
+/// How long a probe waits for its answer while the large queries run. The property under test is not a
+/// speed: a probe must be answered while a large query is still in flight (`assert_workload_active`
+/// checks that right after it), so the wait only has to be longer than any runner needs to finish the
+/// whole workload, and a probe that is really stalled behind the queries is answered after them and
+/// fails that check. A fixed few seconds made a slow, shared runner fail a daemon that was only slow.
+const PROBE_PATIENCE: Duration = Duration::from_secs(120);
+
 fn request(port: u16, method: &str, path: &str, origin: Option<&str>) -> Option<(u16, String)> {
+    request_within(port, method, path, origin, Duration::from_secs(5))
+}
+
+fn request_within(
+    port: u16,
+    method: &str,
+    path: &str,
+    origin: Option<&str>,
+    patience: Duration,
+) -> Option<(u16, String)> {
     let mut stream = TcpStream::connect(("127.0.0.1", port)).ok()?;
-    stream.set_read_timeout(Some(Duration::from_secs(5))).ok()?;
+    stream.set_read_timeout(Some(patience)).ok()?;
     write!(
         stream,
         "{method} {path} HTTP/1.1\r\nHost: localhost\r\n{}Connection: close\r\n\r\n",
@@ -272,13 +289,16 @@ fn large_firestore_queries_do_not_stall_auth_or_another_database() {
     seed_large_collection(firestore);
     let queries = start_large_queries(firestore);
 
-    assert_eq!(request(auth, "GET", "/", None).unwrap().0, 200);
+    assert_eq!(
+        request_within(auth, "GET", "/", None, PROBE_PATIENCE)
+            .unwrap()
+            .0,
+        200
+    );
     queries.assert_workload_active("Auth readiness probe");
     let other = "/v1/projects/demo-saturation/databases/other/documents/items/missing";
     let other_stream = write_json_request(firestore, "GET", other, "").unwrap();
-    other_stream
-        .set_read_timeout(Some(Duration::from_secs(5)))
-        .unwrap();
+    other_stream.set_read_timeout(Some(PROBE_PATIENCE)).unwrap();
     assert_eq!(read_response(other_stream).unwrap().0, 404);
     queries.assert_workload_active("other-database probe");
 

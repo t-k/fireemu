@@ -3654,6 +3654,16 @@ impl FirestoreState {
             }
             return Ok(());
         }
+        // The official emulator (firebase-tools 15.28.2, v1.22.0, measured over native gRPC) accepts the Rollback of a token a retry named, whether the token was
+        // live, committed or rolled back, and again when repeated. Strict keeps its earlier answer for it, 10 with the expired text, which is inferred: P09 and P10 recorded the Rollback of a committed token before a retry, not after one.
+        if self.limit_scope == LimitScope::OfficialEmulator
+            && self
+                .transactions
+                .get(id)
+                .is_some_and(|transaction| transaction.state == TransactionState::Retried)
+        {
+            return Ok(());
+        }
         self.transaction(id)?;
         self.finish_transaction(id, TransactionState::RolledBack);
         Ok(())

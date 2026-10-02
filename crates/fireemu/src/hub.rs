@@ -36,6 +36,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use bytes::Bytes;
+use fireemu_adapter_support::connection::{DrainBounds, GracefulClose};
 use http_body_util::Full;
 use hyper::body::Incoming;
 use hyper::server::conn::http1;
@@ -763,13 +764,21 @@ fn mutation_json_response(
     response
 }
 
+/// What the Hub reads and discards after it has answered: its largest accepted body, the export
+/// request (`MAX_EXPORT_BODY`), and the floor of [`DrainBounds`] for the rest.
+#[allow(clippy::cast_possible_truncation)] // 64 KiB fits every usize
+const HUB_DRAIN_BODY_BYTES: usize = MAX_EXPORT_BODY as usize;
+
 /// Serves the Hub on `listener` until the task is aborted.
 pub async fn serve(listener: TcpListener, state: Arc<HubState>) -> std::io::Result<()> {
     loop {
         let (stream, _) = listener.accept().await?;
         let state = state.clone();
         tokio::spawn(async move {
-            let io = TokioIo::new(stream);
+            let io = TokioIo::new(GracefulClose::new(
+                stream,
+                DrainBounds::for_largest_body(HUB_DRAIN_BODY_BYTES),
+            ));
             let svc = service_fn(move |req| respond(state.clone(), req));
             let _ = http1::Builder::new().serve_connection(io, svc).await;
         });

@@ -9,6 +9,7 @@ use std::sync::Arc;
 use std::task::{Context, Poll};
 
 use bytes::Bytes;
+use fireemu_adapter_support::connection::{DrainBounds, GracefulClose};
 use http_body_util::combinators::UnsyncBoxBody;
 use http_body_util::{BodyExt, Full, StreamBody};
 use hyper::body::{Frame, Incoming};
@@ -49,19 +50,6 @@ const MAX_FUNCTION_CONNECTIONS: usize = 128;
 const MAX_CONCURRENT_BODY_READS: usize = 64;
 const MAX_RESERVED_BODY_BYTES: usize = 64 * 1024 * 1024;
 const REQUEST_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
-
-/// What the server still reads from a client after it has answered and finished the connection: a
-/// refusal is sent from the request head alone, and the client may still be writing its body.
-/// Closing with unread request bytes makes the kernel answer them with a reset that can discard the
-/// response, so the write side is shut down first and the rest is read and thrown away, within
-/// these bounds. The byte limit counts what the client sends on the wire: the largest body the
-/// functions port accepts at all, plus an eighth for the framing of a chunked body (about 9 bytes per
-/// chunk, so chunks of 64 bytes or more fit), so a client that sends a legitimate body is not reset;
-/// a client that frames it in smaller chunks, or sends more, can still be. The time bounds keep a
-/// stalled or hostile client from holding the connection for long.
-const CLOSE_DRAIN_LIMIT_BYTES: usize = MAX_FUNCTION_BODY_BYTES + MAX_FUNCTION_BODY_BYTES / 8;
-const CLOSE_DRAIN_IDLE: std::time::Duration = std::time::Duration::from_millis(500);
-const CLOSE_DRAIN_TOTAL: std::time::Duration = std::time::Duration::from_secs(2);
 
 type BoxError = Box<dyn std::error::Error + Send + Sync>;
 type OutBody = UnsyncBoxBody<Bytes, BoxError>;
@@ -1515,37 +1503,6 @@ enum HttpSurface {
     Tasks,
 }
 
-/// Ends a connection whose response has been written: announces the end of the response (FIN), then
-/// reads and discards what the client still sends, until it closes, goes quiet for
-/// [`CLOSE_DRAIN_IDLE`], or the byte or time bound is reached. Nothing is ever kept.
-async fn close_gracefully<S>(
-    stream: &mut S,
-    limit: usize,
-    idle: std::time::Duration,
-    total: std::time::Duration,
-) where
-    S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
-{
-    if stream.shutdown().await.is_err() {
-        return;
-    }
-    let deadline = tokio::time::Instant::now() + total;
-    let mut sink = vec![0_u8; 16 * 1024];
-    let mut drained = 0_usize;
-    loop {
-        let until = deadline.min(tokio::time::Instant::now() + idle);
-        match tokio::time::timeout_at(until, stream.read(&mut sink)).await {
-            Ok(Ok(read)) if read > 0 => {
-                drained += read;
-                if drained >= limit {
-                    return;
-                }
-            }
-            _ => return,
-        }
-    }
-}
-
 async fn serve_surface(
     listener: TcpListener,
     runtime: Arc<FunctionsRuntime>,
@@ -1565,7 +1522,10 @@ async fn serve_surface(
         let request_admission = admission.requests.clone();
         tokio::spawn(async move {
             let _connection = connection;
-            let io = TokioIo::new(stream);
+            let io = TokioIo::new(GracefulClose::new(
+                stream,
+                DrainBounds::for_largest_body(MAX_FUNCTION_BODY_BYTES),
+            ));
             let svc = service_fn(move |req| {
                 let runtime = runtime.clone();
                 let request_admission = request_admission.clone();
@@ -1581,18 +1541,9 @@ async fn serve_surface(
                 .timer(TokioTimer::new())
                 .header_read_timeout(REQUEST_READ_TIMEOUT);
             builder.keep_alive(false);
-            // Without the shutdown of hyper: the connection is ended below, after the client has
-            // had the chance to finish sending what a refusal did not read.
-            if let Ok(parts) = builder.serve_connection(io, svc).without_shutdown().await {
-                let mut stream = parts.io.into_inner();
-                close_gracefully(
-                    &mut stream,
-                    CLOSE_DRAIN_LIMIT_BYTES,
-                    CLOSE_DRAIN_IDLE,
-                    CLOSE_DRAIN_TOTAL,
-                )
-                .await;
-            }
+            // The wrapper ends the connection after the client has had the chance to finish sending what
+            // a refusal did not read.
+            let _ = builder.serve_connection(io, svc).await;
         });
     }
 }
@@ -2105,291 +2056,5 @@ mod streaming_tests {
             .await
             .expect("the invalid response closes upstream")
             .unwrap();
-    }
-}
-
-#[cfg(test)]
-mod close_tests {
-    use super::close_gracefully;
-    use std::io;
-    use std::pin::Pin;
-    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-    use std::sync::Arc;
-    use std::task::{Context, Poll};
-    use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, ReadBuf};
-    use tokio::time::{timeout, Duration, Instant};
-
-    // No assertion here depends on how fast the machine is. Whether the close ends, how many reads it
-    // made and how many bytes it read are counted, not timed; the only timing left is a lower bound
-    // (a timer never fires early) and upper bounds of a second or more, against bounds of tens of
-    // milliseconds. A call that must end is wrapped in `timeout`, and a stream that is read again and
-    // again counts its reads, so a loop that does not end fails the test by its name instead of
-    // hanging it. (A paused clock would need tokio's `test-util` in Cargo.toml, which every Quint
-    // model binds through the Cargo authority.)
-    const IDLE: Duration = Duration::from_millis(50);
-    const TOTAL: Duration = Duration::from_millis(1500);
-    const LIMIT: usize = 64 * 1024;
-    const GUARD: Duration = Duration::from_secs(10);
-    const SLACK: Duration = Duration::from_secs(1);
-    const MAX_READS: usize = 1_000;
-
-    /// A stream that counts the reads and the bytes read, whether it was shut down, and whose
-    /// shutdown can fail.
-    struct Probe<S> {
-        inner: S,
-        bytes: Arc<AtomicUsize>,
-        reads: Arc<AtomicUsize>,
-        shut_down: Arc<AtomicBool>,
-        fail_shutdown: bool,
-    }
-
-    struct Counters {
-        bytes: Arc<AtomicUsize>,
-        reads: Arc<AtomicUsize>,
-        shut_down: Arc<AtomicBool>,
-    }
-
-    impl<S> Probe<S> {
-        fn new(inner: S) -> (Self, Counters) {
-            let counters = Counters {
-                bytes: Arc::new(AtomicUsize::new(0)),
-                reads: Arc::new(AtomicUsize::new(0)),
-                shut_down: Arc::new(AtomicBool::new(false)),
-            };
-            (
-                Self {
-                    inner,
-                    bytes: counters.bytes.clone(),
-                    reads: counters.reads.clone(),
-                    shut_down: counters.shut_down.clone(),
-                    fail_shutdown: false,
-                },
-                counters,
-            )
-        }
-    }
-
-    impl<S: AsyncRead + Unpin> AsyncRead for Probe<S> {
-        fn poll_read(
-            mut self: Pin<&mut Self>,
-            cx: &mut Context<'_>,
-            buf: &mut ReadBuf<'_>,
-        ) -> Poll<io::Result<()>> {
-            assert!(
-                self.reads.fetch_add(1, Ordering::SeqCst) < MAX_READS,
-                "the stream was read {MAX_READS} times: the loop does not end"
-            );
-            let before = buf.filled().len();
-            let poll = Pin::new(&mut self.inner).poll_read(cx, buf);
-            if poll.is_ready() {
-                self.bytes
-                    .fetch_add(buf.filled().len() - before, Ordering::SeqCst);
-            }
-            poll
-        }
-    }
-
-    impl<S: AsyncWrite + Unpin> AsyncWrite for Probe<S> {
-        fn poll_write(
-            mut self: Pin<&mut Self>,
-            cx: &mut Context<'_>,
-            data: &[u8],
-        ) -> Poll<io::Result<usize>> {
-            Pin::new(&mut self.inner).poll_write(cx, data)
-        }
-        fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
-            Pin::new(&mut self.inner).poll_flush(cx)
-        }
-        fn poll_shutdown(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
-            self.shut_down.store(true, Ordering::SeqCst);
-            if self.fail_shutdown {
-                return Poll::Ready(Err(io::Error::other("shutdown refused")));
-            }
-            Pin::new(&mut self.inner).poll_shutdown(cx)
-        }
-    }
-
-    /// Runs the close and returns how long it took; fails if it does not end.
-    async fn closing<S>(stream: &mut S, limit: usize) -> Duration
-    where
-        S: AsyncRead + AsyncWrite + Unpin,
-    {
-        let started = Instant::now();
-        timeout(GUARD, close_gracefully(stream, limit, IDLE, TOTAL))
-            .await
-            .expect("the close ends");
-        started.elapsed()
-    }
-
-    #[test]
-    fn the_production_bounds_cover_a_legitimate_body_and_stay_short() {
-        use super::{
-            CLOSE_DRAIN_IDLE, CLOSE_DRAIN_LIMIT_BYTES, CLOSE_DRAIN_TOTAL, MAX_FUNCTION_BODY_BYTES,
-        };
-        use std::hint::black_box;
-        // Everything the port accepts, with the framing of a chunked body, can be discarded without a reset...
-        assert_eq!(
-            black_box(CLOSE_DRAIN_LIMIT_BYTES),
-            MAX_FUNCTION_BODY_BYTES + MAX_FUNCTION_BODY_BYTES / 8
-        );
-        // ...a quiet client does not hold the connection beyond the idle time, and nobody beyond the total.
-        assert!(black_box(CLOSE_DRAIN_IDLE) >= Duration::from_millis(100));
-        assert!(black_box(CLOSE_DRAIN_IDLE) < black_box(CLOSE_DRAIN_TOTAL));
-        assert!(black_box(CLOSE_DRAIN_TOTAL) >= Duration::from_secs(1));
-        assert!(black_box(CLOSE_DRAIN_TOTAL) <= Duration::from_secs(5));
-    }
-
-    #[tokio::test]
-    async fn the_end_of_the_response_is_announced_before_anything_is_read() {
-        let (server, mut client) = tokio::io::duplex(1024 * 1024);
-        let (mut probe, counters) = Probe::new(server);
-        let task = tokio::spawn(async move { closing(&mut probe, LIMIT).await });
-        // The client sees the end of the response (EOF) while it has not closed its own side.
-        let mut seen = Vec::new();
-        timeout(GUARD, client.read_to_end(&mut seen))
-            .await
-            .expect("the shutdown reaches the client")
-            .expect("a clean end");
-        assert!(counters.shut_down.load(Ordering::SeqCst));
-        assert_eq!(
-            counters.bytes.load(Ordering::SeqCst),
-            0,
-            "nothing was sent yet"
-        );
-        drop(client);
-        timeout(GUARD, task)
-            .await
-            .expect("it ends")
-            .expect("no panic");
-    }
-
-    #[tokio::test]
-    async fn a_client_that_closes_ends_it_at_once_after_one_read() {
-        let (server, client) = tokio::io::duplex(1024 * 1024);
-        let (mut probe, counters) = Probe::new(server);
-        drop(client);
-        closing(&mut probe, LIMIT).await;
-        assert_eq!(
-            counters.reads.load(Ordering::SeqCst),
-            1,
-            "one read saw the end of the stream"
-        );
-    }
-
-    #[tokio::test]
-    async fn the_rest_of_the_body_is_read_and_discarded_until_the_client_closes() {
-        let (server, mut client) = tokio::io::duplex(1024 * 1024);
-        let (mut probe, counters) = Probe::new(server);
-        let task = tokio::spawn(async move { closing(&mut probe, 1024 * 1024).await });
-        client
-            .write_all(&vec![7_u8; 20_000])
-            .await
-            .expect("the body is written");
-        tokio::time::sleep(Duration::from_millis(10)).await;
-        client
-            .write_all(&vec![7_u8; 5_000])
-            .await
-            .expect("more body");
-        drop(client);
-        timeout(GUARD, task)
-            .await
-            .expect("it ends")
-            .expect("no panic");
-        assert_eq!(counters.bytes.load(Ordering::SeqCst), 25_000);
-    }
-
-    #[tokio::test]
-    async fn it_stops_reading_at_the_byte_limit() {
-        let (server, mut client) = tokio::io::duplex(1024 * 1024);
-        let (mut probe, counters) = Probe::new(server);
-        client
-            .write_all(&vec![1_u8; 600 * 1024])
-            .await
-            .expect("a large body fits the pipe");
-        closing(&mut probe, LIMIT).await;
-        let drained = counters.bytes.load(Ordering::SeqCst);
-        assert!(drained >= LIMIT, "{drained}");
-        assert!(
-            drained < LIMIT + 32 * 1024,
-            "stopped soon after the limit: {drained}"
-        );
-    }
-
-    #[tokio::test]
-    async fn a_silent_client_is_given_the_idle_time_and_no_more() {
-        let (server, _client) = tokio::io::duplex(1024);
-        let (mut probe, _) = Probe::new(server);
-        let elapsed = closing(&mut probe, LIMIT).await;
-        assert!(elapsed >= IDLE, "{elapsed:?}");
-        assert!(
-            elapsed < TOTAL,
-            "the idle time ends it, not the total time: {elapsed:?}"
-        );
-    }
-
-    #[tokio::test]
-    async fn a_client_that_keeps_trickling_is_cut_off_at_the_total_time() {
-        let (server, mut client) = tokio::io::duplex(1024 * 1024);
-        let (mut probe, _) = Probe::new(server);
-        let trickle = tokio::spawn(async move {
-            while client.write_all(b"x").await.is_ok() {
-                tokio::time::sleep(Duration::from_millis(10)).await;
-            }
-        });
-        let elapsed = closing(&mut probe, LIMIT).await;
-        assert!(elapsed >= TOTAL, "{elapsed:?}");
-        assert!(elapsed < TOTAL + SLACK, "{elapsed:?}");
-        trickle.abort();
-    }
-
-    #[tokio::test]
-    async fn a_failing_shutdown_ends_it_without_reading() {
-        let (server, mut client) = tokio::io::duplex(1024 * 1024);
-        client
-            .write_all(&vec![3_u8; 10_000])
-            .await
-            .expect("written");
-        let (mut probe, counters) = Probe::new(server);
-        probe.fail_shutdown = true;
-        closing(&mut probe, LIMIT).await;
-        assert!(counters.shut_down.load(Ordering::SeqCst));
-        assert_eq!(counters.reads.load(Ordering::SeqCst), 0);
-    }
-
-    #[tokio::test]
-    async fn a_read_error_ends_it_after_one_read() {
-        /// Fails every read, and fails the test if it is read again after the first failure.
-        struct Broken(Arc<AtomicUsize>);
-        impl AsyncRead for Broken {
-            fn poll_read(
-                self: Pin<&mut Self>,
-                _: &mut Context<'_>,
-                _: &mut ReadBuf<'_>,
-            ) -> Poll<io::Result<()>> {
-                assert!(
-                    self.0.fetch_add(1, Ordering::SeqCst) < 1,
-                    "the stream was read again after its read failed"
-                );
-                Poll::Ready(Err(io::Error::other("reset")))
-            }
-        }
-        impl AsyncWrite for Broken {
-            fn poll_write(
-                self: Pin<&mut Self>,
-                _: &mut Context<'_>,
-                data: &[u8],
-            ) -> Poll<io::Result<usize>> {
-                Poll::Ready(Ok(data.len()))
-            }
-            fn poll_flush(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<io::Result<()>> {
-                Poll::Ready(Ok(()))
-            }
-            fn poll_shutdown(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<io::Result<()>> {
-                Poll::Ready(Ok(()))
-            }
-        }
-        let reads = Arc::new(AtomicUsize::new(0));
-        closing(&mut Broken(reads.clone()), LIMIT).await;
-        assert_eq!(reads.load(Ordering::SeqCst), 1);
     }
 }

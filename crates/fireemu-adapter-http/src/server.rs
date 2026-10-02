@@ -3,6 +3,7 @@
 use std::sync::Arc;
 
 use bytes::Bytes;
+use fireemu_adapter_support::connection::{DrainBounds, GracefulClose};
 use http_body_util::Full;
 use hyper::body::Incoming;
 use hyper::server::conn::http1;
@@ -379,7 +380,10 @@ async fn serve_inner(
         let control = control.clone();
         let blocking_auth_slots = blocking_auth_slots.clone();
         tokio::spawn(async move {
-            let io = TokioIo::new(stream);
+            let io = TokioIo::new(GracefulClose::new(
+                stream,
+                DrainBounds::for_largest_body(MAX_BODY_BYTES),
+            ));
             let svc = service_fn(move |req| {
                 respond(
                     state.clone(),

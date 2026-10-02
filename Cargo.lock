@@ -747,6 +747,7 @@ dependencies = [
  "http",
  "http-body",
  "http-body-util",
+ "proptest",
  "serde_json",
  "subtle",
  "tokio",

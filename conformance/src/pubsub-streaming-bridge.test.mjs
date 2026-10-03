@@ -790,3 +790,89 @@ test("synchronous_marker_stop_prevents_native_write_and_end", () =>
       await f.bridge.done();
     }
   }));
+
+test("wire_and_receipt_caps_admit_exactly_the_bound_and_stop_on_the_next_item", () =>
+  withClock(async () => {
+    for (const [key, cap, payload] of [
+      ["maxFrameBytes", 1, Buffer.from("a")],
+      ["maxOutgoingBytes", 6, Buffer.from("a")],
+      ["maxFrames", 1, Buffer.from("a")],
+      ["maxActions", 2, Buffer.from("a")],
+    ]) {
+      const f = await fixture({ limits: { ...limits, [key]: cap } });
+      await f.bridge.open();
+      await f.bridge.write(payload);
+      assert.equal(f.session.stream.writes.length, 1);
+      assert.throws(() =>
+        f.bridge.write(key === "maxFrameBytes" ? Buffer.from("ab") : Buffer.alloc(0)),
+      );
+      assert.equal(f.session.stream.writes.length, 1);
+      assert.equal(f.session.destroyCalls, 1);
+      await f.bridge.done();
+    }
+    const cases = [
+      {
+        key: "maxIncomingBytes",
+        cap: 6,
+        first: frame(Buffer.from("a")),
+        extra: frame(Buffer.from("aa")),
+        reason: "total-bound",
+      },
+      {
+        key: "maxFrameBytes",
+        cap: 1,
+        first: frame(Buffer.from("a")),
+        extra: frame(Buffer.from("aa")),
+        reason: "frame-bound",
+      },
+      {
+        key: "maxIncomingFrames",
+        cap: 1,
+        first: frame(Buffer.from("a")),
+        extra: Buffer.concat([frame(Buffer.from("a")), frame(Buffer.from("b"))]),
+        reason: "frame-count",
+      },
+    ];
+    for (const item of cases) {
+      for (const over of [false, true]) {
+        const f = await fixture({ limits: { ...limits, [item.key]: item.cap } });
+        await f.bridge.open();
+        f.session.stream.emit("data", over ? item.extra : item.first);
+        for (let i = 0; i < 6; i++) await flush();
+        assert.equal(f.frames.length, over ? 0 : 1);
+        const report = await f.bridge.done();
+        if (over) assert.equal(report.receipts.framing.reason, item.reason);
+      }
+    }
+    for (const key of ["maxChunks", "maxEvents", "maxNativeCallbacks"]) {
+      const f = await fixture({ limits: { ...limits, [key]: 1 } });
+      await f.bridge.open();
+      f.session.stream.emit("data", Buffer.alloc(0));
+      await flush();
+      assert.equal(f.session.destroyCalls, 0);
+      f.session.stream.emit("data", Buffer.alloc(0));
+      assert.equal(f.session.destroyCalls, 1);
+      const report = await f.bridge.done();
+      assert.ok(report.lostCallbacks > 0);
+    }
+    for (const key of ["maxHeaderPairs", "maxHeaderBytes", "maxHeaderEvents"]) {
+      for (const over of [false, true]) {
+        const cap = key === "maxHeaderBytes" ? 12 : 1;
+        const f = await fixture({ limits: { ...limits, [key]: cap } });
+        await f.bridge.open();
+        if (key === "maxHeaderEvents" && over)
+          f.session.stream.emit("response", {}, 0, ["grpc-status", "0"]);
+        f.session.stream.emit(
+          "trailers",
+          {},
+          0,
+          key === "maxHeaderPairs" && over
+            ? ["grpc-status", "0", "x", "y"]
+            : ["grpc-status", key === "maxHeaderBytes" && over ? "00" : "0"],
+        );
+        await flush();
+        const report = await f.bridge.done();
+        assert.equal(report.provenance.verdict, over ? "uncertain" : "peer-terminal");
+      }
+    }
+  }));

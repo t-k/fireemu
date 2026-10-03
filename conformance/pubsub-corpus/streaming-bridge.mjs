@@ -742,7 +742,13 @@ export function createOwnedStreamingBridge({
       if (performance.now() >= deadlineAt) stopNow("deadline");
       throw new Error("bridge admission closed");
     }
-    return gate[method](bytes);
+    try {
+      return gate[method](bytes);
+    } catch {
+      unknown("action-refused");
+      stopNow("uncertain");
+      throw new Error("bridge action refused");
+    }
   }
   function done() {
     if (donePromise) return donePromise;

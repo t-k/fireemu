@@ -598,16 +598,23 @@ test("actual_FileHandle_short_zero_writes_and_closed_handle_syncs_never_ack_DATA
   ]) {
     await using({ ioFault }, async (f) => {
       let visible = 0;
+      const observed = deferred();
       const b = bridge(f, {
         onFrame: () => {
           visible++;
+          observed.resolve();
         },
       });
       await b.open();
       await f.peer.ready();
       f.peer.respond();
       f.peer.send(frame("fault"));
-      await f.waitFor("stream-close");
+      await f.awaitBarrier(Promise.race([f.waitFor("stream-close"), observed.promise]));
+      assert.equal(
+        visible,
+        0,
+        "a failed native filesystem operation cannot release DATA visibility",
+      );
       const report = await b.done();
       assertUnknown(report);
       assert.equal(visible, 0);

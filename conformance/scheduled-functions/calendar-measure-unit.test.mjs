@@ -2599,6 +2599,9 @@ test("native source references and publication sets refuse independent substitut
     await fs.writeFile(path, original.subarray(0, -1));
     await assert.rejects(m.resolveNativeSources(compact, "one", scope));
     await fs.writeFile(path, original);
+    await fs.writeFile(path, Buffer.concat([original, Buffer.from("x")]));
+    await assert.rejects(m.resolveNativeSources(compact, "one", scope));
+    await fs.writeFile(path, original);
     const changed = Buffer.from(original);
     changed[0] ^= 1;
     await fs.writeFile(path, changed);
@@ -2617,6 +2620,12 @@ test("native source references and publication sets refuse independent substitut
     await assert.rejects(m.resolveNativeSources(compact, "one", scope));
     await fs.unlink(directory);
     await fs.rename(join(root, "foreign-directory"), directory);
+    const foreignDirectory = join(root, "foreign-accounting");
+    await fs.rename(report.accountingDirectory, foreignDirectory);
+    const foreign = structuredClone(compact);
+    foreign.accountingDirectory = foreignDirectory;
+    await assert.rejects(m.resolveNativeSources(foreign, "one", scope));
+    await fs.rename(foreignDirectory, report.accountingDirectory);
     await assert.rejects(m.publishNativeSources(report, "one", scope));
     assert.equal((await m.resolveNativeSources(compact, "one", scope)).size, 4);
   } finally {
@@ -2712,4 +2721,42 @@ test("a failed report publication retains the measured raw bytes in an unknown t
   assert.match(envelope.error, /readback unknown/);
   assert.deepEqual(Buffer.from(envelope.rawReport, "base64"), raw);
   assert.equal(envelope.rawReportSha256, sha(raw));
+});
+
+test("over-budget plan bytes stop before effects and over-budget reports cannot acknowledge a complete terminal", async () => {
+  const { produceCampaign } = await import("./calendar-measure.mjs");
+  for (const oversizedPlan of [true, false]) {
+    const plan = Buffer.alloc(oversizedPlan ? 8193 : 2, 0x78);
+    let effects = 0,
+      terminals = 0,
+      seals = 0;
+    const result = await produceCampaign({
+      authorityId: "unit",
+      attempts: [{ attemptId: "one", planPath: "/unit", planSha256: sha(plan) }],
+      bootstrap: async () => ({ scope: { utcDay: "2026-10-02" }, receipt: { unitOnly: true } }),
+      readPlan: async () => plan,
+      measureAttempt: async () => {
+        effects++;
+        return Buffer.alloc(180001, 0x78);
+      },
+      classifyReport: () => "pass",
+      createLedger: async () => ({
+        registerBirth: async () => ({ durable: true }),
+        recordTerminal: async () => {
+          terminals++;
+          return { durable: true };
+        },
+        seal: async () => {
+          seals++;
+          return { state: "complete", durabilityAcknowledged: true };
+        },
+        close: async () => {},
+      }),
+      readSnapshot: async () => ({}),
+    });
+    assert.equal(result.state, "unknown");
+    assert.equal(effects, oversizedPlan ? 0 : 1);
+    assert.equal(terminals, 0);
+    assert.equal(seals, 0);
+  }
 });

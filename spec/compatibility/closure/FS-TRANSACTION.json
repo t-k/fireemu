@@ -387,9 +387,12 @@
       "localEvidence": {
         "references": [
           "crates/fireemu-core-firestore/tests/store.rs",
-          "spec/compatibility/broad-runs/fs-transaction-expiry-retry-04-recorded-comparison-v1.json"
+          "spec/compatibility/broad-runs/fs-transaction-expiry-retry-04-recorded-comparison-v1.json",
+          "spec/compatibility/broad-runs/fs-transaction-p08-recorded-observations-v1.json",
+          "spec/compatibility/broad-runs/fs-transaction-p08-recorded-comparison-v1.json"
         ],
-        "productionExecuted": false
+        "productionExecuted": false,
+        "note": "P08 observation publication derives decoded observations from the saved native records offline. No P08 local final-artifact comparison has been executed by this publication checkpoint."
       },
       "historicalProductionReferences": [],
       "verification": {
@@ -399,7 +402,7 @@
         ],
         "recordingsRequired": 2
       },
-      "note": "Two sandbox recordings and both fireemu profiles agree for this REST subset. The refused-commit, token-reuse, explicit-rollback and lock-release chain is not recorded. Representative gRPC is not recorded. This condition remains open. Private sandbox observation added later, cited by run-directory name only, no status change: P08 fs-transaction-p08-failed-commit-b5da53e6fa1ae0ce (REST and gRPC, two agreeing recordings, 26 cases per recording): a Commit refused by an exists precondition answers 5 and ends the transaction, so a same-token read and the corrected Commit answer 3 with the expired text, a Rollback answers 0 (also when repeated), the lock is gone (an outside writer answers 0), and a Rollback after a successful Commit answers 10. This covers the refused-commit chain named above as not recorded, but it is not a published redacted record yet.",
+      "note": "Two sandbox recordings and both fireemu profiles cover the legacy REST finished-token subset. Separately, two agreeing P08 native recordings cover the declared refused-commit, same-token read and corrected-commit, explicit and repeated rollback, outside-writer and successful-commit control chains on REST and gRPC. The P08 evidence validates decoded semantics only: raw REST bodyBytes, content-length and received member-order layout were not retained, and the missing document m was read only at setup. Comparisons against a final current source-bound normal artifact are pending. The full condition and parent remain open.",
       "partialEvidence": {
         "coverage": "PARTIAL",
         "reference": "spec/compatibility/broad-runs/fs-transaction-expiry-retry-04-recorded-comparison-v1.json",
@@ -411,10 +414,58 @@
           "finished-token/rollback-after-rollback"
         ],
         "remainingBoundaries": [
-          "The refused-commit, token-reuse, explicit-rollback and lock-release chain is not recorded.",
-          "Representative gRPC is not recorded."
+          "P08 supplies recorded REST and gRPC decoded chains; final current normal-artifact comparisons and independent full-condition approval remain pending.",
+          "Raw REST bodyBytes, content-length and received member-order layout were not retained.",
+          "No post-refusal native readback of the missing document m was recorded; its typed absence is observed at setup only."
+        ],
+        "additionalRecordedSubsets": [
+          {
+            "program": "FS-TRANSACTION-P08-FAILED-COMMIT",
+            "coverage": "PARTIAL",
+            "observations": "spec/compatibility/broad-runs/fs-transaction-p08-recorded-observations-v1.json",
+            "comparison": "spec/compatibility/broad-runs/fs-transaction-p08-recorded-comparison-v1.json",
+            "recordings": 2,
+            "transports": [
+              "rest",
+              "grpc"
+            ],
+            "recipeSteps": 45,
+            "caseIds": [
+              "rest/a-fail-commit",
+              "rest/a-plain-read",
+              "rest/a-same-token-read",
+              "rest/a-writer",
+              "rest/a-corrected-commit",
+              "rest/a-rollback",
+              "rest/a-rollback-again",
+              "rest/b-fail-commit",
+              "rest/b-rollback",
+              "rest/b-writer",
+              "rest/b-rollback-again",
+              "rest/c-commit",
+              "rest/c-rollback-after-commit",
+              "grpc/a-fail-commit",
+              "grpc/a-plain-read",
+              "grpc/a-same-token-read",
+              "grpc/a-writer",
+              "grpc/a-corrected-commit",
+              "grpc/a-rollback",
+              "grpc/a-rollback-again",
+              "grpc/b-fail-commit",
+              "grpc/b-rollback",
+              "grpc/b-writer",
+              "grpc/b-rollback-again",
+              "grpc/c-commit",
+              "grpc/c-rollback-after-commit"
+            ],
+            "decodedSemanticsValidated": true,
+            "rawRestWireLayoutValidated": false,
+            "postRefusalMissingDocumentReadValidated": false,
+            "localComparisonStatus": "PENDING_FINAL_ARTIFACT_REPLAY"
+          }
         ]
-      }
+      },
+      "productionObservation": "RECORDED_LEGACY_REST_AND_P08_DECODED_SUBSETS"
     },
     {
       "conditionId": "FS-TRANSACTION/retry-token-lifecycle",
@@ -850,7 +901,7 @@
       "OPTIMISTIC mode follow-up issue"
     ]
   },
-  "note": "The frozen denominator remains 18 behavioral conditions. Two sandbox recordings and source-bound strict/emulator comparisons cover the 13-case REST subset of idle-expiry, failed-commit-and-rollback and retry-token-lifecycle. Separately, two recordings each of P02 and P02b supply partial REST and representative gRPC decoded semantic evidence for read-only-snapshot, with both recordings compared against the source-bound normal fireemu artifact. P02/P02b do not prove raw REST bodyBytes, content-length or member-order layout. All 18 conditions, their remaining boundaries, the official emulator gate and parent closure remain open. Inferred strict answers that no recording covers are listed on their conditions (retry snapshot, retry naming an expired token, the forgetting age inside its bracket, a Rollback of an idle-expired token before 270 s or unnoticed past 270 s); each is a candidate for a later recording and none is COMPAT_VERIFIED.",
+  "note": "The frozen denominator remains 18 behavioral conditions. Two sandbox recordings and source-bound strict/emulator comparisons cover the 13-case REST subset of idle-expiry, failed-commit-and-rollback and retry-token-lifecycle. Separately, two recordings each of P02 and P02b supply partial REST and representative gRPC decoded semantic evidence for read-only-snapshot, with both recordings compared against the source-bound normal fireemu artifact. P02/P02b do not prove raw REST bodyBytes, content-length or member-order layout. Separately, P08 supplies REST and gRPC decoded partial evidence for the refused-commit and rollback chains; its final normal-artifact comparisons remain pending, raw REST byte layout is unproven, and the missing document m has setup-only typed absence. All 18 conditions, their remaining boundaries, the official emulator gate and parent closure remain open. Inferred strict answers that no recording covers are listed on their conditions (retry snapshot, retry naming an expired token, the forgetting age inside its bracket, a Rollback of an idle-expired token before 270 s or unnoticed past 270 s); each is a candidate for a later recording and none is COMPAT_VERIFIED.",
   "profileComparison": {
     "profile": "strict",
     "emulatorCompatibilityCheck": "PENDING_LOCAL_OBSERVATION",
@@ -866,7 +917,7 @@
     "database": "(default)",
     "credentials": "Admin OAuth for server transactions; unauthenticated Web SDK for optimistic transactions where deployed Rules permit",
     "productionExecuted": true,
-    "coverage": "PARTIAL_REST_THREE_CONDITIONS_AND_P02_P02B_REST_GRPC_DECODED_SUBSET"
+    "coverage": "PARTIAL_REST_THREE_CONDITIONS_AND_P02_P02B_REST_GRPC_DECODED_SUBSET_AND_P08_REST_GRPC_DECODED_SUBSET"
   },
   "frozenOn": "2026-09-27"
 }

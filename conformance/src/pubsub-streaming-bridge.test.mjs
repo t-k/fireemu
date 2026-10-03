@@ -459,6 +459,8 @@ test("only_ticket_bound_native_terminal_metadata_can_supply_peer_status", () =>
     assert.equal(f.session.destroyCalls, 1);
     const report = await f.bridge.done();
     assert.equal(report.receipts.framing.bytes, 0);
+    assert.equal(report.chronology.filter((row) => row.kind === "data").length, 0);
+    assert.ok(report.reasons.includes("nonidentity-data-refused"));
     assert.ok(report.reasons.includes("nonidentity-encoding"));
     assert.ok(!decoded(f.rows).some((row) => JSON.stringify(row).includes("abcdefgh")));
   }));
@@ -672,7 +674,11 @@ test("writer_short_zero_failed_sync_overlap_order_and_deadline_never_ack", () =>
     });
     const first = writer.write(row, {});
     first.catch(() => {});
-    await assert.rejects(writer.write({ ...row, index: 1 }, {}));
+    const overlapping = writer.write({ ...row, index: 1 }, {});
+    overlapping.catch(() => {});
+    assert.equal(writer.report().failed, true);
+    assert.equal(writer.report().attemptedRows, 1);
+    await assert.rejects(overlapping);
     await clock.advance(101);
     await assert.rejects(first);
     held.resolve({ bytesWritten: 999 });
@@ -987,7 +993,13 @@ test("writer_binding_order_and_physical_caps_fail_before_any_file_effect", () =>
       });
       return { writer: ownedWriter, effects };
     }
-    const exact = writer();
+    const exact = writer({
+      limits: {
+        maxWriterRows: 1,
+        maxWriterRecordBytes: recordBytes,
+        maxWriterBytes: recordBytes * 2,
+      },
+    });
     await exact.writer.write(row);
     assert.equal(exact.writer.report().totalBytes, recordBytes);
     assert.equal(exact.writer.report().acknowledgedRows, 1);
@@ -1400,5 +1412,28 @@ test("raw_visibility_waits_for_its_bound_durable_ticket_and_stays_closed_after_d
         report = await f.bridge.done();
         assert.equal(report.bindings.find((binding) => binding.kind === "data").state, "committed");
       }
+    }
+  }));
+
+test("lifecycle_callback_kind_and_native_sequence_bind_to_the_same_durable_receipt", () =>
+  withClock(async () => {
+    for (const [native, receipt] of [
+      ["error", "error"],
+      ["aborted", "reset"],
+      ["goaway", "goaway"],
+      ["end", "end"],
+    ]) {
+      const f = await fixture();
+      await f.bridge.open();
+      (native === "goaway" ? f.session : f.session.stream).emit(native, new Error("native"));
+      const report = await f.bridge.done();
+      const binding = report.bindings.find((item) => item.kind === receipt);
+      assert.equal(binding.state, "committed");
+      const record = decoded(f.rows).find(
+        (_item, index) => f.rows[index].index === binding.journalIndex,
+      );
+      assert.equal(record.nativeSeq, binding.seq);
+      assert.equal(record.receipt.kind, receipt);
+      assert.equal(record.receipt.index, binding.receiptIndex);
     }
   }));

@@ -908,7 +908,9 @@ export async function measure(planPath) {
 }
 
 /** Condition (G): the certificate over one refusal report and the control reports. */
-export async function certify(listPath) {
+export async function certify(listPath, { requireCampaign = false } = {}) {
+  if (requireCampaign)
+    return { verdict: "fail", problems: ["a sealed native campaign is required"], certificate: null };
   const list = JSON.parse(await readFile(listPath, "utf8"));
   const load = async (path) => {
     const bytes = await readFile(path).catch(() => null);

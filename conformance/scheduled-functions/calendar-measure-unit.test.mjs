@@ -903,3 +903,35 @@ test("certify rejects explicit malformed attempt lists while omitted and empty r
     assert.deepEqual(result.certificate.attempts, []);
   }
 });
+
+
+test("the CLI certificate boundary refuses synthetic summaries and omitted failures", async (t) => {
+  const { certify } = await import("./calendar-measure.mjs");
+  const { mkdtemp, rm, writeFile } = await import("node:fs/promises");
+  const { tmpdir } = await import("node:os");
+  const { join } = await import("node:path");
+  const directory = await mkdtemp(join(tmpdir(), "calendar-campaign-boundary-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const reports = ["certificate", "positive", "orphan", "escaper", "listener", "leftover"].map((kind) => loaderReport(kind));
+  const paths = reports.map((_, i) => join(directory, `report-${i}.json`));
+  const earlier = join(directory, "earlier-failed.json");
+  await writeFile(earlier, JSON.stringify(loaderReport("certificate", { launchTime: launchTime - 1000, verdict: { verdict: "fail" } })));
+  const listPath = join(directory, "list.json");
+  for (const contradiction of [false, true]) {
+    if (contradiction) {
+      reports[0].verdict.conditions = { A: { ok: false, outcome: "fail" }, E: { ok: false, outcome: "inconclusive" } };
+      reports[0].records = { ok: false, signals: 1 };
+      reports[0].inventory = { outcome: "inconclusive", passes: [] };
+      reports[1].inventory = { outcome: "survivors", survivors: [{ row: { pid: 999 } }] };
+      reports[1].cleanup = { outcome: "unknown" };
+    }
+    for (let i = 0; i < paths.length; i++) await writeFile(paths[i], JSON.stringify(reports[i]));
+    for (const attempts of [undefined, []]) {
+      await writeFile(listPath, JSON.stringify({ refusal: paths[0], controls: paths.slice(1), attempts }));
+      assert.equal((await certify(listPath)).verdict, "pass", "synthetic pure helper compatibility");
+      const result = await certify(listPath, { requireCampaign: true });
+      assert.equal(result.verdict, "fail", "CLI requires native sealed campaign evidence");
+      assert.equal(result.certificate, null);
+    }
+  }
+});

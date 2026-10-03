@@ -213,7 +213,7 @@ if (process.argv[1] && pathToFileURL(resolve(process.argv[1])).href === import.m
     else if (mode === "--calendar-supervisor") await superviseSession(argument);
     else if (mode === "--accounting-outer") await accountingOuter(argument);
     else if (mode === "--certify") {
-      const result = await certify(argument);
+      const result = await certify(argument, { requireCampaign: true });
       console.log(JSON.stringify(result));
       if (result.verdict !== "pass") process.exitCode = 1;
     } else if (mode === "--measure") {

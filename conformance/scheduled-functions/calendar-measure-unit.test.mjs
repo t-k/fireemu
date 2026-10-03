@@ -2760,3 +2760,23 @@ test("over-budget plan bytes stop before effects and over-budget reports cannot 
     assert.equal(seals, 0);
   }
 });
+
+test("an aliased accounting ancestor is refused before any source bytes are published into the foreign directory", async () => {
+  const fs = await import("node:fs/promises"),
+    { tmpdir } = await import("node:os"),
+    { join } = await import("node:path");
+  const m = await import("./calendar-measure.mjs");
+  const root = await fs.realpath(
+    await fs.mkdtemp(join(tmpdir(), "calendar-source-prepublication-")),
+  );
+  try {
+    const { report, scope } = await fullNativeSourceFixture(root);
+    const foreign = join(root, "foreign-directory");
+    await fs.rename(report.accountingDirectory, foreign);
+    await fs.symlink(foreign, report.accountingDirectory);
+    await assert.rejects(m.publishNativeSources(report, "one", scope));
+    assert.deepEqual(await fs.readdir(foreign), []);
+  } finally {
+    await fs.rm(root, { recursive: true });
+  }
+});

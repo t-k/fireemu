@@ -120,7 +120,7 @@ for (const {name, ...metadata} of ${JSON.stringify(definitions)}) {
 const sdkRoot = process.env.FE_SOURCE_SDK_ROOT
   ?? fileURLToPath(new URL('../../conformance/node_modules/firebase-functions', import.meta.url));
 
-test('real SDK Firestore generations preserve snapshot data and isolate Written fallback', { timeout: 20000 }, async t => {
+test('real SDK Firestore generations preserve canonical Written source and missing snapshots', { timeout: 20000 }, async t => {
   const pkg = JSON.parse(await readFile(join(sdkRoot, 'package.json'), 'utf8'));
   assert.equal(pkg.version, '7.3.2', 'the real SDK gate requires its pinned cached dependency');
   const f = await start(t, [], `
@@ -140,7 +140,7 @@ for(const [kind,method] of Object.entries({created:'onCreate',updated:'onUpdate'
   const databaseSource = '//firestore.googleapis.com/projects/demo-app/databases/(default)';
   const value = n => ({ name: documentSource, fields: {v:{integerValue:String(n)}}, createTime:'2026-09-30T12:03:18.846431Z', updateTime:'2026-09-30T12:03:18.846431Z' });
   for (const [kind,old,newValue] of [['created',null,2],['updated',1,2],['deleted',1,null],['written',null,2],['written',1,null],['written',1,2]]) {
-    const event = {id:'sdk-event',type:`google.cloud.firestore.document.v1.${kind}`,time:'2026-09-30T12:03:18.846431Z',source:kind==='written'?documentSource:databaseSource,subject:'documents/items/one',project:'demo-app',database:'(default)',document:'items/one',namespace:'(default)',params:{id:'one'},datacontenttype:'application/json',data:{...(old===null?{}:{oldValue:value(old)}),...(newValue===null?{}:{value:value(newValue)}),...(old!==null&&newValue!==null?{updateMask:{fieldPaths:['v']}}:{})}};
+    const event = {id:'sdk-event',type:`google.cloud.firestore.document.v1.${kind}`,time:'2026-09-30T12:03:18.846431Z',source:databaseSource,subject:'documents/items/one',project:'demo-app',database:'(default)',document:'items/one',namespace:'(default)',params:{id:'one'},datacontenttype:'application/json',data:{...(old===null?{}:{oldValue:value(old)}),...(newValue===null?{}:{value:value(newValue)}),...(old!==null&&newValue!==null?{updateMask:{fieldPaths:['v']}}:{})}};
     for (const generation of [1,2]) {
       const name = `${kind}V${generation}`;
       assert.equal((await f.invoke(name,'firestore',event)).ok,true,`${name}: actual SDK decode`);

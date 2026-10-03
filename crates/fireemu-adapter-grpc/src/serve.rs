@@ -178,13 +178,14 @@ fn cors_headers(
 }
 
 fn json_response(r: &RestResponse, origin: Option<&str>) -> Response<OutBody> {
-    json_response_with_layout(r, origin, false)
+    json_response_with_layout(r, origin, false, false)
 }
 
 fn json_response_with_layout(
     r: &RestResponse,
     origin: Option<&str>,
     document_not_found: bool,
+    production_json: bool,
 ) -> Response<OutBody> {
     // `:ruleCoverage.html` is the one route whose body is a page rather than JSON; it says
     // so with a single key, exactly as a `dropConnection` fault does.
@@ -208,8 +209,15 @@ fn json_response_with_layout(
     } else {
         serde_json::to_vec(&r.body).unwrap_or_default()
     };
+    // The observed production REST JSON header uses this literal charset spelling.
+    // Strict local administration shares this styling; its native behavior is unobserved.
+    let content_type = if production_json {
+        "application/json; charset=UTF-8"
+    } else {
+        "application/json; charset=utf-8"
+    };
     cors_headers(Response::builder().status(r.status), origin)
-        .header("content-type", "application/json; charset=utf-8")
+        .header("content-type", content_type)
         .body(full(Bytes::from(text)))
         .unwrap_or_else(|_| Response::new(full(Bytes::new())))
 }
@@ -409,14 +417,15 @@ async fn rest_call(
     body_deadline: std::time::Duration,
 ) -> Result<Response<OutBody>, std::io::Error> {
     let origin = header(&req, "origin").map(str::to_owned);
+    let production_json = state.gateway.production_refusals();
+    let json = |response: &RestResponse| {
+        json_response_with_layout(response, origin.as_deref(), false, production_json)
+    };
     // REST admits every request, body or not: the permit covers the `spawn_blocking`
     // execution below as well as the body, so it bounds the blocking pool and not only
     // memory. The channel path has no such execution and admits only a declared body.
     let Some(permit) = try_admit_rest_work(rest_work_limiter()) else {
-        return Ok(json_response(
-            &too_many_concurrent_requests(),
-            origin.as_deref(),
-        ));
+        return Ok(json(&too_many_concurrent_requests()));
     };
     let method = req.method().as_str().to_owned();
     let path = req.uri().path().to_owned();
@@ -445,10 +454,7 @@ async fn rest_call(
     let payload_permit = match try_admit_rest_payload(payload_units) {
         Some(permit) => Some(permit),
         None => {
-            return Ok(json_response(
-                &too_many_concurrent_requests(),
-                origin.as_deref(),
-            ));
+            return Ok(json(&too_many_concurrent_requests()));
         }
     };
     let bytes = match if commit {
@@ -458,16 +464,13 @@ async fn rest_call(
     } {
         Ok(bytes) => bytes,
         Err(rejection) => {
-            return Ok(json_response(
-                &body_rejection_response(rejection),
-                origin.as_deref(),
-            ));
+            return Ok(json(&body_rejection_response(rejection)));
         }
     };
     let (body, batch_field_order) =
         match request_body(&bytes, &path, state.gateway.production_refusals()) {
             Ok(body) => body,
-            Err(response) => return Ok(json_response(&response, origin.as_deref())),
+            Err(response) => return Ok(json(&response)),
         };
     drop(bytes);
     let request = RestEnvelope {
@@ -513,10 +516,7 @@ async fn rest_call(
         match try_admit_rest_work(rest_work_limiter()) {
             Some(admitted) => permit = admitted,
             None => {
-                return Ok(json_response(
-                    &too_many_concurrent_requests(),
-                    origin.as_deref(),
-                ));
+                return Ok(json(&too_many_concurrent_requests()));
             }
         }
     };
@@ -530,6 +530,7 @@ async fn rest_call(
         &response,
         origin.as_deref(),
         document_not_found,
+        production_json,
     ))
 }
 
@@ -1849,26 +1850,57 @@ mod document_not_found_layout_tests {
     }
 
     async fn wire(state: Arc<RestState>, method: &str, path: &str) -> (String, Vec<u8>) {
+        wire_request(state, method, path, b"").await
+    }
+
+    struct WireServer(Option<tokio::task::JoinHandle<()>>);
+
+    impl Drop for WireServer {
+        fn drop(&mut self) {
+            if let Some(server) = self.0.take() {
+                server.abort();
+            }
+        }
+    }
+
+    async fn wire_request(
+        state: Arc<RestState>,
+        method: &str,
+        path: &str,
+        body: &[u8],
+    ) -> (String, Vec<u8>) {
+        wire_exchange(state, method, path, body, body.len(), BODY_READ_DEADLINE).await
+    }
+
+    async fn wire_exchange(
+        state: Arc<RestState>,
+        method: &str,
+        path: &str,
+        body: &[u8],
+        declared_bytes: usize,
+        deadline: std::time::Duration,
+    ) -> (String, Vec<u8>) {
         let port = std::env::var("PORT").unwrap_or_else(|_| "0".to_owned());
         let listener = TcpListener::bind(format!("127.0.0.1:{port}"))
             .await
             .unwrap();
         let address = listener.local_addr().unwrap();
-        let server = tokio::spawn(async move {
+        let mut server = WireServer(Some(tokio::spawn(async move {
             let (stream, _) = listener.accept().await.unwrap();
             let service = hyper::service::service_fn(move |request| {
-                super::rest_call(Arc::clone(&state), request, BODY_READ_DEADLINE)
+                super::rest_call(Arc::clone(&state), request, deadline)
             });
             hyper::server::conn::http1::Builder::new()
                 .serve_connection(TokioIo::new(stream), service)
                 .await
                 .unwrap();
-        });
+        })));
         let mut client = TcpStream::connect(address).await.unwrap();
         client
-            .write_all(format!("{method} {path} HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\nContent-Length: 0\r\n\r\n").as_bytes())
+            .write_all(format!("{method} {path} HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\nContent-Length: {declared_bytes}\r\n\r\n").as_bytes())
             .await
             .unwrap();
+        client.write_all(body).await.unwrap();
         let mut bytes = Vec::new();
         tokio::time::timeout(
             std::time::Duration::from_secs(10),
@@ -1877,7 +1909,7 @@ mod document_not_found_layout_tests {
         .await
         .unwrap()
         .unwrap();
-        server.await.unwrap();
+        server.0.take().unwrap().await.unwrap();
         println!("wire request={method} {path} raw-response={bytes:?}");
         let split = bytes
             .windows(4)
@@ -1889,13 +1921,254 @@ mod document_not_found_layout_tests {
         )
     }
 
+    fn assert_json_headers(headers: &str, bytes: &[u8], production: bool, status: u16) {
+        assert!(
+            headers.starts_with(&format!("HTTP/1.1 {status} ")),
+            "{headers}"
+        );
+        let values: Vec<_> = headers
+            .lines()
+            .filter_map(|line| {
+                let (name, value) = line.split_once(':')?;
+                name.eq_ignore_ascii_case("content-type")
+                    .then(|| value.trim())
+            })
+            .collect();
+        let expected = if production {
+            "application/json; charset=UTF-8"
+        } else {
+            "application/json; charset=utf-8"
+        };
+        assert_eq!(values, [expected], "{headers}");
+        assert!(
+            headers.contains(&format!("content-length: {}\r\n", bytes.len())),
+            "{headers}"
+        );
+    }
+
+    #[tokio::test]
+    async fn rest_json_charset_follows_policy_through_document_lifecycle() {
+        const COLLECTION: &str = "/v1/projects/demo-app/databases/(default)/documents/cases";
+        const DOCUMENT: &str = "/v1/projects/demo-app/databases/(default)/documents/cases/owned";
+        for production in [true, false] {
+            for enforce_limits in [false, true] {
+                let state = state(production, enforce_limits);
+                for (method, path, payload, expected_status) in [
+                    ("GET", DOCUMENT.to_owned(), b"".as_slice(), 404),
+                    (
+                        "POST",
+                        format!("{COLLECTION}?documentId=owned"),
+                        br#"{"fields":{"allowed":{"booleanValue":true}}}"#.as_slice(),
+                        200,
+                    ),
+                    ("GET", DOCUMENT.to_owned(), b"".as_slice(), 200),
+                    (
+                        "PATCH",
+                        DOCUMENT.to_owned(),
+                        br#"{"fields":{"allowed":{"booleanValue":false}}}"#.as_slice(),
+                        200,
+                    ),
+                    ("DELETE", DOCUMENT.to_owned(), b"".as_slice(), 200),
+                    ("GET", DOCUMENT.to_owned(), b"".as_slice(), 404),
+                ] {
+                    let (headers, bytes) =
+                        wire_request(Arc::clone(&state), method, &path, payload).await;
+                    assert_json_headers(&headers, &bytes, production, expected_status);
+                    let response: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+                    match method {
+                        "POST" => assert_eq!(response["fields"]["allowed"]["booleanValue"], true),
+                        "PATCH" => assert_eq!(response["fields"]["allowed"]["booleanValue"], false),
+                        "DELETE" => assert_eq!(bytes, b"{}"),
+                        _ => {}
+                    }
+                }
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn rest_json_charset_follows_policy_on_early_parse_rejection() {
+        let path = "/v1/projects/demo-app/databases/(default)/documents:commit";
+        let expected = super::request_body(b"not json", path, true).unwrap_err();
+        let expected_bytes = serde_json::to_vec(&expected.body).unwrap();
+        for production in [true, false] {
+            for enforce_limits in [false, true] {
+                let (headers, bytes) =
+                    wire_request(state(production, enforce_limits), "POST", path, b"not json")
+                        .await;
+                assert_json_headers(&headers, &bytes, production, 400);
+                assert_eq!(bytes, expected_bytes);
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn rest_json_charset_follows_policy_on_body_read_rejection() {
+        let expected = serde_json::to_vec(&body_read_deadline_exceeded().body).unwrap();
+        for production in [true, false] {
+            for enforce_limits in [false, true] {
+                // An incomplete declared body reaches the real Incoming-body refusal.
+                // Only this test service gets a short deadline; production keeps its bound.
+                let (headers, bytes) = wire_exchange(
+                    state(production, enforce_limits),
+                    "POST",
+                    PATH,
+                    b"",
+                    1,
+                    std::time::Duration::from_millis(20),
+                )
+                .await;
+                assert_json_headers(&headers, &bytes, production, 408);
+                assert_eq!(bytes, expected);
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn rest_json_charset_follows_policy_on_admission_refusals() {
+        let expected = serde_json::to_vec(&too_many_concurrent_requests().body).unwrap();
+        for (limiter, units) in [
+            (rest_work_limiter(), MAX_BLOCKING_REST_REQUESTS),
+            (rest_payload_limiter(), REST_PAYLOAD_UNITS),
+        ] {
+            let held = Arc::clone(limiter)
+                .try_acquire_many_owned(u32::try_from(units).unwrap())
+                .unwrap();
+            for production in [true, false] {
+                for enforce_limits in [false, true] {
+                    let (headers, bytes) =
+                        wire(state(production, enforce_limits), "GET", PATH).await;
+                    assert_json_headers(&headers, &bytes, production, 503);
+                    assert_eq!(bytes, expected);
+                }
+            }
+            drop(held);
+            assert_eq!(limiter.available_permits(), units);
+        }
+    }
+
+    fn check_transport_projection(
+        production: bool,
+        enforce_limits: bool,
+        status: u16,
+        layout: bool,
+        kind: u8,
+        text: &str,
+        origin: Option<&str>,
+    ) {
+        let body = match kind {
+            1 => serde_json::json!({crate::rest::coverage::HTML_KEY:text}),
+            2 => serde_json::json!({crate::rest::TEXT_KEY:text}),
+            _ => serde_json::json!({"value":text,"number":17,"nested":[true,null]}),
+        };
+        let response = RestResponse { status, body };
+        let reference = json_response(&response, origin);
+        let profile = state(production, enforce_limits);
+        let actual = json_response_with_layout(
+            &response,
+            origin,
+            layout,
+            profile.gateway.production_refusals(),
+        );
+        assert_eq!(actual.status(), reference.status());
+        let expected_type = match kind {
+            1 => "text/html; charset=utf-8",
+            2 => "text/plain; charset=utf-8",
+            _ if production => "application/json; charset=UTF-8",
+            _ => "application/json; charset=utf-8",
+        };
+        assert_eq!(actual.headers()["content-type"], expected_type);
+        if kind == 0 {
+            assert_eq!(
+                reference.headers()["content-type"],
+                "application/json; charset=utf-8"
+            );
+        }
+        let mut actual_headers = actual.headers().clone();
+        let mut reference_headers = reference.headers().clone();
+        actual_headers.remove("content-type");
+        reference_headers.remove("content-type");
+        assert_eq!(actual_headers, reference_headers);
+        let expected_bytes = match kind {
+            1 | 2 => text.as_bytes().to_vec(),
+            _ if layout => {
+                let mut bytes = serde_json::to_vec_pretty(&response.body).unwrap();
+                bytes.push(b'\n');
+                bytes
+            }
+            _ => serde_json::to_vec(&response.body).unwrap(),
+        };
+        let bytes = tokio::runtime::Builder::new_current_thread()
+            .build()
+            .unwrap()
+            .block_on(async { actual.into_body().collect().await.unwrap().to_bytes() });
+        assert_eq!(bytes.as_ref(), expected_bytes);
+    }
+
+    #[test]
+    fn rest_json_transport_matches_finite_profile_model() {
+        let mut cases = 0;
+        for production in [false, true] {
+            for enforce_limits in [false, true] {
+                for status in [200, 400, 404, 429] {
+                    for layout in [false, true] {
+                        for kind in 0..3 {
+                            for origin in [None, Some("http://localhost:4321")] {
+                                check_transport_projection(
+                                    production,
+                                    enforce_limits,
+                                    status,
+                                    layout,
+                                    kind,
+                                    "雪\"\\😀",
+                                    origin,
+                                );
+                                cases += 1;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        assert_eq!(cases, 192);
+        println!("finite transport model cases={cases}");
+    }
+
+    #[tokio::test]
+    async fn shared_default_and_readiness_keep_existing_json_styling() {
+        let ready = readiness(Some("http://localhost:4321"));
+        assert_eq!(ready.status(), 200);
+        assert_eq!(
+            ready.headers()["content-type"],
+            "application/json; charset=utf-8"
+        );
+        assert_eq!(ready.headers()["cache-control"], "no-store");
+        assert_eq!(
+            ready.into_body().collect().await.unwrap().to_bytes(),
+            br#"{"emulator":"firestore"}"#.as_slice()
+        );
+        for response in [
+            too_many_concurrent_requests(),
+            body_rejection_response(BodyRejection::Deadline),
+        ] {
+            let body = serde_json::to_vec(&response.body).unwrap();
+            let shared = json_response(&response, None);
+            assert_eq!(
+                shared.headers()["content-type"],
+                "application/json; charset=utf-8"
+            );
+            assert_eq!(shared.status().as_u16(), response.status);
+            assert_eq!(shared.into_body().collect().await.unwrap().to_bytes(), body);
+        }
+    }
+
     #[tokio::test]
     async fn production_document_404_has_literal_wire_layout_and_policy_controls() {
         for enforce_limits in [false, true] {
             for production in [true, false] {
                 let (headers, bytes) = wire(state(production, enforce_limits), "GET", PATH).await;
                 assert!(headers.starts_with("HTTP/1.1 404 Not Found\r\n"));
-                assert!(headers.contains("content-type: application/json; charset=utf-8\r\n"));
+                assert_json_headers(&headers, &bytes, production, 404);
                 let expected = if production { PRETTY } else { COMPACT };
                 assert_eq!(
                     bytes, expected,
@@ -2036,13 +2309,18 @@ mod document_not_found_layout_tests {
             .build()
             .unwrap()
             .block_on(async {
-                json_response_with_layout(response, None, selected)
-                    .into_body()
-                    .collect()
-                    .await
-                    .unwrap()
-                    .to_bytes()
-                    .to_vec()
+                json_response_with_layout(
+                    response,
+                    None,
+                    selected,
+                    state.gateway.production_refusals(),
+                )
+                .into_body()
+                .collect()
+                .await
+                .unwrap()
+                .to_bytes()
+                .to_vec()
             })
     }
 
@@ -2248,6 +2526,16 @@ mod document_not_found_layout_tests {
     use proptest::prelude::*;
     proptest! {
         #![proptest_config(ProptestConfig::with_cases(128))]
+        #[test]
+        fn generated_transport_projection_preserves_profile_body_and_cors(
+            production in any::<bool>(), enforce_limits in any::<bool>(),
+            status in prop::sample::select(vec![200u16, 400, 404, 429, 500]),
+            layout in any::<bool>(), kind in 0u8..3,
+            text in proptest::collection::vec(any::<char>(), 0..64), origin in any::<bool>(),
+        ) {
+            let text: String = text.into_iter().collect();
+            check_transport_projection(production, enforce_limits, status, layout, kind, &text, origin.then_some("http://localhost:4321"));
+        }
         #[test]
         fn generated_document_layout_preserves_strings_policy_and_shape(
             id in proptest::collection::vec(any::<char>().prop_filter("document segment", |c| *c != '/'), 1..25),

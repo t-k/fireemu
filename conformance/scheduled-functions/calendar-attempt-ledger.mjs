@@ -11,7 +11,7 @@ const object = (value) => value !== null && typeof value === 'object' && !Array.
 const identifier = (value) => typeof value === 'string' && /^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/.test(value);
 const keys = (value, names) => object(value) && isDeepStrictEqual(Object.keys(value).sort(), [...names].sort());
 const encode = (record) => Buffer.from(`${JSON.stringify(record)}\n`);
-const result = (state, reason) => ({ state, reasons: reason ? [reason] : [], allDayCertified: false, historicalCompleteness: 'UNKNOWN', externalApprovalVerified: false });
+const result = (state, reason) => ({ state, reasons: reason ? [reason] : [], durabilityAcknowledged: false, allDayCertified: false, historicalCompleteness: 'UNKNOWN', externalApprovalVerified: false });
 
 function boundedLimits(input = {}) {
   if (!object(input) || Object.keys(input).some((key) => !(key in DEFAULT_LIMITS))) throw new Error('Invalid limits');
@@ -26,7 +26,7 @@ function validScope(scope) {
   if (!keys(scope, ['campaign', 'utcDay', 'runRoot', 'harnessH', 'buildPins', 'nativeRoot'])) return false;
   const pins = scope.buildPins;
   const native = scope.nativeRoot;
-  return identifier(scope.campaign) && /^\d{4}-\d{2}-\d{2}$/.test(scope.utcDay) &&
+  return identifier(scope.campaign) && typeof scope.utcDay === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(scope.utcDay) &&
     Number.isFinite(Date.parse(`${scope.utcDay}T00:00:00Z`)) && new Date(`${scope.utcDay}T00:00:00Z`).toISOString().slice(0, 10) === scope.utcDay &&
     typeof scope.runRoot === 'string' && path.isAbsolute(scope.runRoot) && scope.runRoot === path.resolve(scope.runRoot) &&
     hash(scope.harnessH) && keys(pins, ['sourceCommit', 'binarySha256', 'runnerSha256']) &&
@@ -143,10 +143,12 @@ export async function createAttemptLedger({ authorityBytes, authoritySha256, lim
   let admissionClosed = false;
   let closed = false;
   let poison = null;
+  let sealedAck = false;
   let deadline;
   const fail = (message) => { poison ??= message; return new Error(`Ledger unknown: ${poison}`); };
   const checkDay = () => { if (new Date(now()).toISOString().slice(0, 10) !== scope.utcDay) throw new Error('UTC day differs from frozen scope'); };
-  async function syscall(action) {
+  async function syscall(action, cleanup = false) {
+    if (!cleanup && (closed || poison)) throw fail(poison || 'closed during operation');
     const remaining = deadline - Date.now();
     if (remaining <= 0) throw fail('deadline expired');
     let timer;
@@ -167,19 +169,21 @@ export async function createAttemptLedger({ authorityBytes, authoritySha256, lim
     });
   }
   async function release(handle) {
-    try { await syscall(() => handle.close()); handles.delete(handle); } catch (error) { throw fail(error.message); }
+    try { await syscall(() => handle.close(), true); handles.delete(handle); } catch (error) { throw fail(error.message); }
   }
   async function pin(file, handle, directoryExpected = false) {
     const stat = await syscall(() => io.lstat(file));
     const actual = await syscall(() => handle.stat());
-    if (stat.isSymbolicLink() || (directoryExpected ? !stat.isDirectory() : !stat.isFile()) || stat.dev !== actual.dev || stat.ino !== actual.ino || await syscall(() => io.realpath(file)) !== file) throw fail('root alias or substituted filesystem identity');
-    identities.set(file, { dev: stat.dev, ino: stat.ino });
+    const previous = identities.get(file);
+    if (stat.isSymbolicLink() || (directoryExpected ? !stat.isDirectory() : !stat.isFile() || stat.nlink !== 1) || stat.dev !== actual.dev || stat.ino !== actual.ino ||
+        (previous && (previous.dev !== stat.dev || previous.ino !== stat.ino)) || await syscall(() => io.realpath(file)) !== file) throw fail('root alias or substituted filesystem identity');
+    identities.set(file, { dev: stat.dev, ino: stat.ino, directoryExpected });
   }
   async function guard() {
     checkDay();
     for (const [file, identity] of identities) {
       const stat = await syscall(() => io.lstat(file));
-      if (stat.isSymbolicLink() || stat.dev !== identity.dev || stat.ino !== identity.ino || await syscall(() => io.realpath(file)) !== file) throw fail('substituted filesystem identity');
+      if (stat.isSymbolicLink() || (!identity.directoryExpected && stat.nlink !== 1) || stat.dev !== identity.dev || stat.ino !== identity.ino || await syscall(() => io.realpath(file)) !== file) throw fail('substituted filesystem identity');
     }
   }
   async function read(handle, maximum) {
@@ -266,6 +270,12 @@ export async function createAttemptLedger({ authorityBytes, authoritySha256, lim
     throw error;
   }
   return Object.freeze({
+    ioStatus() {
+      if (poison) return result('unknown', poison);
+      if (sealedAck) return { ...result('complete'), durabilityAcknowledged: true };
+      if (closed) return result('unknown', 'Closed without durable seal');
+      return reduceAttemptRecords(scope, records, { reports, limits });
+    },
     async registerBirth({ attemptId, planBytes } = {}) {
       if (admissionClosed) throw new Error('Birth admission closed');
       if (!identifier(attemptId) || !Buffer.isBuffer(planBytes) || planBytes.length > limits.maxReportBytes) throw new Error('Invalid bounded birth');
@@ -298,6 +308,11 @@ export async function createAttemptLedger({ authorityBytes, authoritySha256, lim
       if (busy) throw fail('seal raced an accepted writer');
       return operation(async () => {
         const seal = { type: 'seal', seq: records.length + 1, scope, tail: records.length, births: records.filter((record) => record.type === 'birth').length };
+        const authority = await open(authorityPath, constants.O_RDONLY | constants.O_NOFOLLOW);
+        try {
+          await pin(authorityPath, authority);
+          if (!(await read(authority, limits.maxBytes)).equals(retainedAuthority)) throw fail('authority raw bytes mismatch');
+        } finally { await release(authority); }
         // Re-read every bound report before fixing the tail. Cached bytes are not evidence.
         for (const record of records.filter((record) => record.type === 'terminal' && record.reportFile !== null)) {
           const handle = await open(path.join(directory, record.reportFile), constants.O_RDONLY | constants.O_NOFOLLOW);
@@ -308,7 +323,10 @@ export async function createAttemptLedger({ authorityBytes, authoritySha256, lim
         if (verdict.state !== 'complete') throw fail(verdict.reasons.join('; ') || 'unknown terminal');
         await append(seal);
         await guard();
-        return validateAttemptLedger({ authorityBytes: retainedAuthority, authoritySha256, ledgerBytes: await read(journal, limits.maxBytes), reports, limits });
+        const final = validateAttemptLedger({ authorityBytes: retainedAuthority, authoritySha256, ledgerBytes: await read(journal, limits.maxBytes), reports, limits });
+        if (final.state !== 'complete') throw fail('final sealed readback unknown');
+        sealedAck = true;
+        return { ...final, durabilityAcknowledged: true };
       });
     },
     close,

@@ -162,6 +162,224 @@ test('rejects UTC day rollover, invalid bounds and terminal references without b
   await assert.rejects(createAttemptLedger({ ...other.options, limits: { deadlineMs: Infinity } }), /limit/);
 });
 
+// Instrument real FileHandles; injection is reserved for syscall failure paths.
+function observedIo(intercept = (_event, invoke) => invoke()) {
+  const events = [];
+  const live = new Set();
+  const io = { ...fs, async open(file, ...args) {
+    const handle = await fs.open(file, ...args);
+    live.add(handle);
+    const label = path.basename(file);
+    return new Proxy(handle, { get(target, method) {
+      if (typeof target[method] !== 'function') return target[method];
+      return async (...arguments_) => {
+        const event = `${label}:${String(method)}`;
+        events.push(`start:${event}`);
+        const value = await intercept(event, () => target[method](...arguments_), target, arguments_);
+        events.push(`done:${event}`);
+        if (method === 'close') live.delete(handle);
+        return value;
+      };
+    } });
+  } };
+  return { io, events, live };
+}
+
+test('birth ack follows completed file sync and initial directory sync with real readback', async (t) => {
+  const box = await sandbox(t);
+  const traced = observedIo();
+  const ledger = await createAttemptLedger({ ...box.options, io: traced.io });
+  t.after(() => ledger.close());
+  assert.ok(traced.events.includes('done:attempt-ledger:sync'), 'initial directory creation is synced');
+  assert.ok(traced.events.includes(`done:${path.basename(box.root)}:sync`), 'root directory publishes ledger directory durably');
+  assert.ok(traced.events.includes('done:authority.json:sync'));
+  traced.events.length = 0;
+  await ledger.registerBirth({ attemptId: 'a', planBytes: bytes({}) });
+  traced.events.push('caller:side-effect');
+  assert.ok(traced.events.indexOf('done:ledger.jsonl:sync') < traced.events.indexOf('caller:side-effect'));
+  assert.ok(traced.events.indexOf('done:ledger.jsonl:sync') >= 0);
+  assert.equal((await readback(box.root, box.options.authorityBytes)).state, 'unknown');
+  traced.events.length = 0;
+  await ledger.recordTerminal({ attemptId: 'a', reportBytes: report('a', 'pass', box.scope) });
+  assert.ok(traced.events.indexOf('done:report-1.json:sync') < traced.events.indexOf('start:ledger.jsonl:write'));
+  assert.ok(traced.events.indexOf('done:attempt-ledger:sync') < traced.events.indexOf('start:ledger.jsonl:write'));
+  assert.ok(traced.events.indexOf('done:report-1.json:sync') >= 0);
+  await ledger.close();
+  assert.equal(traced.live.size, 0);
+});
+
+test('complete partial writes advance until all durable bytes are retained', async (t) => {
+  const box = await sandbox(t);
+  const traced = observedIo((event, invoke, handle, args) => event.endsWith(':write')
+    ? handle.write(args[0], args[1], Math.min(args[2], 17), args[3]) : invoke());
+  const ledger = await createAttemptLedger({ ...box.options, io: traced.io });
+  t.after(() => ledger.close());
+  await ledger.registerBirth({ attemptId: 'a', planBytes: bytes({}) });
+  await ledger.recordTerminal({ attemptId: 'a', reportBytes: report('a', 'pass', box.scope) });
+  await ledger.seal();
+  assert.equal((await readback(box.root, box.options.authorityBytes)).state, 'complete');
+  assert.ok(traced.events.filter((event) => event === 'done:ledger.jsonl:write').length > 20);
+  await ledger.close();
+  assert.equal(traced.live.size, 0);
+});
+
+for (const failure of ['zero-write', 'file-sync', 'directory-sync', 'unresolved-write']) {
+  test(`${failure} denies durable ack and leaves sticky unknown IO status`, async (t) => {
+    const box = await sandbox(t);
+    let armed = false;
+    const traced = observedIo((event, invoke) => {
+      if (armed && failure === 'zero-write' && event === 'ledger.jsonl:write') return { bytesWritten: 0 };
+      if (armed && failure === 'file-sync' && event === 'ledger.jsonl:sync') throw new Error('injected sync failure');
+      if (armed && failure === 'directory-sync' && event === 'attempt-ledger:sync') throw new Error('injected directory sync failure');
+      if (armed && failure === 'unresolved-write' && event === 'ledger.jsonl:write') return new Promise(() => {});
+      return invoke();
+    });
+    const ledger = await createAttemptLedger({ ...box.options, io: traced.io, limits: { deadlineMs: 100 } });
+    t.after(() => ledger.close());
+    if (failure === 'directory-sync') await ledger.registerBirth({ attemptId: 'a', planBytes: bytes({}) });
+    armed = true;
+    const action = failure === 'directory-sync'
+      ? ledger.recordTerminal({ attemptId: 'a', reportBytes: report('a', 'pass', box.scope) })
+      : ledger.registerBirth({ attemptId: 'a', planBytes: bytes({}) });
+    await assert.rejects(action, /unknown|sync|progress|deadline/);
+    assert.equal(ledger.ioStatus().state, 'unknown');
+    assert.equal(ledger.ioStatus().durabilityAcknowledged, false);
+    await assert.rejects(ledger.registerBirth({ attemptId: 'second', planBytes: bytes({}) }), /unknown/);
+    armed = false;
+    await ledger.close();
+    assert.equal(traced.live.size, 0);
+  });
+}
+
+test('initial publication sync failure has no usable ledger and closes owned handles', async (t) => {
+  const box = await sandbox(t);
+  const traced = observedIo((event, invoke) => {
+    if (event === 'authority.json:sync') throw new Error('initial sync failure');
+    return invoke();
+  });
+  await assert.rejects(createAttemptLedger({ ...box.options, io: traced.io }), /sync failure/);
+  assert.equal(traced.live.size, 0);
+  await assert.rejects(fs.readFile(path.join(box.root, 'attempt-ledger', 'ledger.jsonl')), /ENOENT/);
+});
+
+test('seal stops admission immediately and rejects races with an accepted writer', async (t) => {
+  const box = await sandbox(t);
+  let armed = false;
+  let resume;
+  let entered;
+  const atWrite = new Promise((resolve) => { entered = resolve; });
+  const traced = observedIo(async (event, invoke) => {
+    if (armed && event === 'ledger.jsonl:write') {
+      entered();
+      await new Promise((resolve) => { resume = resolve; });
+    }
+    return invoke();
+  });
+  const ledger = await createAttemptLedger({ ...box.options, io: traced.io });
+  t.after(() => ledger.close());
+  armed = true;
+  const pending = ledger.registerBirth({ attemptId: 'a', planBytes: bytes({}) });
+  await atWrite;
+  await assert.rejects(ledger.registerBirth({ attemptId: 'b', planBytes: bytes({}) }), /Concurrent/);
+  await assert.rejects(ledger.seal(), /raced|unknown/);
+  await assert.rejects(ledger.registerBirth({ attemptId: 'late', planBytes: bytes({}) }), /closed/);
+  resume();
+  await assert.rejects(pending, /unknown/);
+  assert.equal(ledger.ioStatus().state, 'unknown');
+  await ledger.close();
+  assert.equal(traced.live.size, 0);
+});
+
+test('a valid seal reports IO ack separately from pure byte consistency', async (t) => {
+  const box = await sandbox(t);
+  const ledger = await createAttemptLedger(box.options);
+  t.after(() => ledger.close());
+  await ledger.registerBirth({ attemptId: 'a', planBytes: bytes({}) });
+  await ledger.recordTerminal({ attemptId: 'a', reportBytes: report('a', 'pass', box.scope) });
+  const sealed = await ledger.seal();
+  assert.equal(sealed.durabilityAcknowledged, true);
+  assert.equal(ledger.ioStatus().durabilityAcknowledged, true);
+  assert.equal((await readback(box.root, box.options.authorityBytes)).durabilityAcknowledged, false);
+  noCertificate(sealed);
+});
+
+test('seal rejects authority and report alterations, tail substitution and symlink reports', async (t) => {
+  for (const alteration of ['authority', 'report', 'tail', 'symlink']) {
+    const box = await sandbox(t);
+    const ledger = await createAttemptLedger(box.options);
+    t.after(() => ledger.close());
+    await ledger.registerBirth({ attemptId: 'a', planBytes: bytes({}) });
+    await ledger.recordTerminal({ attemptId: 'a', reportBytes: report('a', 'pass', box.scope) });
+    const dir = path.join(box.root, 'attempt-ledger');
+    if (alteration === 'authority') await fs.writeFile(path.join(dir, 'authority.json'), Buffer.from('altered authority'));
+    if (alteration === 'report') await fs.writeFile(path.join(dir, 'report-1.json'), report('a', 'fail', box.scope));
+    if (alteration === 'tail') await fs.appendFile(path.join(dir, 'ledger.jsonl'), '{}\n');
+    if (alteration === 'symlink') {
+      await fs.rename(path.join(dir, 'report-1.json'), path.join(dir, 'alternate.json'));
+      await fs.symlink('alternate.json', path.join(dir, 'report-1.json'));
+    }
+    await assert.rejects(ledger.seal(), /unknown|mismatch|identity|ELOOP/);
+    assert.equal(ledger.ioStatus().state, 'unknown');
+  }
+});
+
+test('crash boundary prefixes cannot supply a certified or durable IO result', () => {
+  const full = serialized([birth(), terminal(), seal()]);
+  const auth = authority();
+  for (let length = 0; length < full.length; length++) {
+    const verdict = validateAttemptLedger({ authorityBytes: auth, authoritySha256: digest(auth), ledgerBytes: full.subarray(0, length), reports: new Map([['report-1.json', report()]]) });
+    assert.notEqual(verdict.state, 'complete', `prefix ${length}`);
+    assert.equal(verdict.durabilityAcknowledged, false);
+    noCertificate(verdict);
+  }
+});
+
+// The reference model consumes semantic actions, not production transition helpers.
+test('generated independent state model reaches open, complete, unknown and rejected', () => {
+  let seed = 0x271a7;
+  const random = () => { seed ^= seed << 13; seed ^= seed >>> 17; seed ^= seed << 5; return seed >>> 0; };
+  const reached = new Set();
+  for (let trial = 0; trial < 1200; trial++) {
+    const records = [];
+    const reports = new Map();
+    const attempts = new Map();
+    let expected = 'open';
+    let unresolved = false;
+    let sealed = false;
+    const length = 1 + random() % 10;
+    for (let step = 0; step < length; step++) {
+      const action = random() % 5;
+      const id = ['a', 'b'][random() % 2];
+      const seq = records.length + 1;
+      if (action < 2) {
+        records.push(birth(seq, id));
+        if (sealed || attempts.has(id)) expected = 'rejected';
+        else attempts.set(id, { seq, finished: false });
+      } else if (action < 4) {
+        const known = random() % 3 !== 0;
+        const raw = report(id, known ? 'pass' : 'inconclusive');
+        const attempt = attempts.get(id);
+        const file = `report-${attempt?.seq ?? 999}.json`;
+        records.push(terminal(seq, id, raw, file));
+        reports.set(file, raw);
+        if (sealed || !attempt || attempt.finished) expected = 'rejected';
+        else { attempt.finished = true; unresolved ||= !known; }
+      } else {
+        records.push(seal(seq, seq - 1, attempts.size));
+        if (sealed || attempts.size === 0 || [...attempts.values()].some((attempt) => !attempt.finished)) expected = 'rejected';
+        else sealed = true;
+      }
+      if (expected !== 'rejected') expected = unresolved ? 'unknown' : sealed ? 'complete' : 'open';
+      const actual = reduceAttemptRecords(scope, records, { reports });
+      assert.equal(actual.state, expected, `trial=${trial} step=${step} actions=${JSON.stringify(records)}`);
+      noCertificate(actual);
+      reached.add(actual.state);
+      if (expected === 'rejected') break;
+    }
+  }
+  assert.deepEqual([...reached].sort(), ['complete', 'open', 'rejected', 'unknown']);
+});
+
 test('exports the bounded durable ledger and independent bytes validator', async () => {
   const api = await import('./calendar-attempt-ledger.mjs').catch(() => ({}));
   assert.equal(typeof api.createAttemptLedger, 'function', 'durable ledger API is missing');

@@ -1,7 +1,7 @@
-// Real runner/discovery and framed IPC. Metadata models the two v1 SDK forms;
-// this suite does not install Firebase or stand in for native trigger routing.
+// Real runner/discovery and framed IPC, with metadata models and a required cached SDK gate.
+// These local checks do not stand in for production trigger routing or recordings.
 import assert from 'node:assert/strict';
-import { spawn } from 'node:child_process';
+import { execFileSync, spawn } from 'node:child_process';
 import { once } from 'node:events';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -31,10 +31,10 @@ const frame = value => {
   return Buffer.concat([Buffer.from(`${data.length}\n`), data]);
 };
 
-async function start(t, definitions) {
+async function start(t, definitions, sdkSource) {
   const dir = await mkdtemp(join(tmpdir(), 'fireemu-event-resource-'));
   await writeFile(join(dir, 'package.json'), JSON.stringify({ private: true, main: 'index.cjs' }));
-  await writeFile(join(dir, 'index.cjs'), `
+  await writeFile(join(dir, 'index.cjs'), sdkSource ?? `
 const {appendFileSync} = require('node:fs');
 const {join} = require('node:path');
 module.exports = Object.create(null);
@@ -45,11 +45,16 @@ for (const {name, ...metadata} of ${JSON.stringify(definitions)}) {
   module.exports[name] = callback;
 }
 `);
-  const child = spawn(process.execPath, [runner, '--source', dir], {
-    env: { PATH: process.env.PATH, GCLOUD_PROJECT: 'demo-resource' },
+  const prefix = sdkSource && process.env.FE_SOURCE_RUNNER_PREFIX
+    ? JSON.parse(process.env.FE_SOURCE_RUNNER_PREFIX) : [process.execPath];
+  const child = spawn(prefix[0], [...prefix.slice(1), runner, '--source', dir], {
+    detached: process.platform !== 'win32',
+    env: { PATH: process.env.PATH, GCLOUD_PROJECT: 'demo-app', ...(sdkSource ? { NODE_PATH: join(sdkRoot, '..'), FE_SOURCE_RECEIPTS: process.env.FE_SOURCE_RECEIPTS } : {}) },
     stdio: ['pipe', 'pipe', 'pipe'],
   });
   const frames = [];
+  const identity = () => execFileSync('ps', ['-p', String(child.pid), '-o', 'pid=,comm=,lstart=,args='], { encoding: 'utf8' }).trim();
+  const ownedIdentity = process.platform === 'win32' ? undefined : identity();
   let buffer = Buffer.alloc(0), stderr = '', outcome, parseError;
   child.stdin.on('error', () => {});
   const exited = once(child, 'exit').then(([code, signal]) => (outcome = { code, signal }));
@@ -79,7 +84,19 @@ for (const {name, ...metadata} of ${JSON.stringify(definitions)}) {
     throw Error('runner response timeout');
   }
   t.after(async () => {
-    if (!outcome) child.kill('SIGKILL');
+    if (!outcome) {
+      child.stdin.write(frame({ type: 'shutdown' }));
+      await Promise.race([exited, new Promise(resolve => setTimeout(resolve, 3000).unref())]);
+    }
+    if (!outcome) {
+      // The still-live ChildProcess owns this isolated group; never signal a discovered PID.
+      if (process.platform === 'win32') child.kill('SIGKILL');
+      else {
+        assert.equal(identity(), ownedIdentity, 'verify owned PID, command and start time before group cleanup');
+        assert(ownedIdentity.includes(runner));
+        process.kill(-child.pid, 'SIGKILL');
+      }
+    }
     await exited;
     child.stdin.destroy(); child.stdout.destroy(); child.stderr.destroy();
     await rm(dir, { recursive: true, force: true });
@@ -100,7 +117,85 @@ for (const {name, ...metadata} of ${JSON.stringify(definitions)}) {
   };
 }
 
+const sdkRoot = process.env.FE_SOURCE_SDK_ROOT
+  ?? fileURLToPath(new URL('../../conformance/node_modules/firebase-functions', import.meta.url));
+
+test('real SDK Firestore generations preserve snapshot data and isolate Written fallback', { timeout: 20000 }, async t => {
+  const pkg = JSON.parse(await readFile(join(sdkRoot, 'package.json'), 'utf8'));
+  assert.equal(pkg.version, '7.3.2', 'the real SDK gate requires its pinned cached dependency');
+  const f = await start(t, [], `
+const {appendFileSync} = require('node:fs');
+const {join} = require('node:path');
+const v1 = require(${JSON.stringify(join(sdkRoot, 'lib/v1/index.js'))});
+const v2 = require(${JSON.stringify(join(sdkRoot, 'lib/v2/providers/firestore.js'))});
+const snapshot = s => ({path:s.ref.path,id:s.id,exists:s.exists,data:s.data() ?? null,createTime:s.createTime?.toDate().toISOString() ?? null,updateTime:s.updateTime?.toDate().toISOString() ?? null});
+const data = d => d.before ? {before:snapshot(d.before),after:snapshot(d.after)} : snapshot(d);
+const report = (name,d,event) => {appendFileSync(join(__dirname,'calls.jsonl'),JSON.stringify({name,data:data(d),event})+'\\n');return Promise.resolve();};
+for(const [kind,method] of Object.entries({created:'onCreate',updated:'onUpdate',deleted:'onDelete',written:'onWrite'})) {
+  exports[kind+'V1']=v1.firestore.document('items/{id}')[method]((d,c)=>report(kind+'V1',d,c));
+  exports[kind+'V2']=v2[{created:'onDocumentCreated',updated:'onDocumentUpdated',deleted:'onDocumentDeleted',written:'onDocumentWritten'}[kind]]('items/{id}',e=>report(kind+'V2',e.data,{...e,data:undefined}));
+}
+`);
+  const documentSource = 'projects/demo-app/databases/(default)/documents/items/one';
+  const databaseSource = '//firestore.googleapis.com/projects/demo-app/databases/(default)';
+  const value = n => ({ name: documentSource, fields: {v:{integerValue:String(n)}}, createTime:'2026-09-30T12:03:18.846431Z', updateTime:'2026-09-30T12:03:18.846431Z' });
+  for (const [kind,old,newValue] of [['created',null,2],['updated',1,2],['deleted',1,null],['written',null,2],['written',1,null],['written',1,2]]) {
+    const event = {id:'sdk-event',type:`google.cloud.firestore.document.v1.${kind}`,time:'2026-09-30T12:03:18.846431Z',source:kind==='written'?documentSource:databaseSource,subject:'documents/items/one',project:'demo-app',database:'(default)',document:'items/one',namespace:'(default)',params:{id:'one'},datacontenttype:'application/json',data:{...(old===null?{}:{oldValue:value(old)}),...(newValue===null?{}:{value:value(newValue)}),...(old!==null&&newValue!==null?{updateMask:{fieldPaths:['v']}}:{})}};
+    for (const generation of [1,2]) {
+      const name = `${kind}V${generation}`;
+      assert.equal((await f.invoke(name,'firestore',event)).ok,true,`${name}: actual SDK decode`);
+      const call=(await f.calls()).at(-1);
+      const expected = n => ({path:'items/one',id:'one',exists:n!==null,data:n===null?null:{v:n},createTime:n===null?null:'2026-09-30T12:03:18.846Z',updateTime:n===null?null:'2026-09-30T12:03:18.846Z'});
+      assert.deepEqual(call.data, ['updated','written'].includes(kind)?{before:expected(old),after:expected(newValue)}:expected(kind==='deleted'?old:newValue));
+      assert.deepEqual(call.event.params,{id:'one'});
+      if(generation===1) {
+        assert.deepEqual(call.event.resource,{service:'firestore.googleapis.com',name:documentSource},'Gen1 SDK document resource');
+        assert.equal(call.event.eventId,'sdk-event-0');
+        assert.equal(call.event.timestamp,event.time);
+      } else {
+        assert.equal(call.event.source,event.source,'Gen2 SDK envelope source');
+        assert.equal(call.event.subject,event.subject);
+        assert.equal(call.event.time,event.time);
+      }
+    }
+  }
+});
+
 for (const form of ['endpoint', 'legacy']) {
+  test(`v1 ${form}: finite metadata model keeps legacy fallback and other product resources`, { timeout: 10000 }, async t => {
+    const f = await start(t, [fsEntry('typed', 'projects/demo-app/databases/(default)/documents/items/{id}', form, 'create'), entry('topic', 'google.pubsub.topic.publish', 'projects/demo-app/topics/t', form)]);
+    const base = {id:'finite',type:'google.cloud.firestore.document.v1.created',time:'2026-09-30T12:03:18.846431Z',source:'legacy-document-source',params:{id:'one'},data:{value:{name:'sentinel'}}};
+    for(const project of [undefined, '', 1, 'projects']) {
+      for(const database of [undefined, null, 'databases']) {
+        for(const document of [undefined, false, 'documents/日本語']) {
+          const event = {...base, project, database, document};
+          assert.equal((await f.invoke('typed','firestore',event)).ok,true);
+          const expected = typeof project==='string' && project!=='' && typeof database==='string' && typeof document==='string'
+            ? `projects/${project}/databases/${database}/documents/${document}` : base.source;
+          assert.equal((await f.calls()).at(-1).context.resource,expected,'independent finite metadata admission model');
+        }
+      }
+    }
+    const source='//pubsub.googleapis.com/projects/demo-app/topics/t';
+    const event={...base,source,project:'demo-app',database:'(default)',document:'items/one',type:'google.cloud.pubsub.topic.v1.messagePublished',data:{message:{data:'',messageId:'m1'}}};
+    assert.equal((await f.invoke('topic','pubsub',event)).ok,true);
+    assert.deepEqual((await f.calls()).at(-1).context.resource,{service:'pubsub.googleapis.com',name:'projects/demo-app/topics/t'},'Firestore source projection must not apply to PubSub');
+  });
+
+  test(`v1 ${form}: typed Firestore metadata projects the document resource independently of Gen2 source`, { timeout: 10000 }, async t => {
+    const f = await start(t, [fsEntry('typed', 'projects/documents/databases/databases/documents/orders/{id}', form, 'update')]);
+    for (const document of ['orders/日本語', 'documents/one/databases/two']) {
+      const event = { id: 'typed-id', type: 'google.cloud.firestore.document.v1.updated', time: '2026-09-30T12:03:18.846431Z', source: '//firestore.googleapis.com/projects/documents/databases/databases', project: 'documents', database: 'databases', document, subject: `documents/${document}`, params: { id: document }, data: { sentinel: document } };
+      assert.equal((await f.invoke('typed', 'firestore', event)).ok, true);
+      const call = (await f.calls()).at(-1);
+      assert.equal(call.context.resource, `projects/documents/databases/databases/documents/${document}`, 'Gen1 document resource must not reuse the Gen2 database source');
+      assert.equal(call.context.eventId, 'typed-id-0');
+      assert.equal(call.context.timestamp, event.time);
+      assert.deepEqual(call.data, event.data);
+      assert.deepEqual(call.context.params, event.params);
+    }
+  });
+
   test(`v1 ${form}: Firestore namespace markers are values, not separators`, { timeout: 10000 }, async t => {
     const fixtures = [];
     for (const project of ['demo-resource', 'documents', 'databases', 'projects', '_']) {

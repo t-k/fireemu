@@ -1069,6 +1069,17 @@ async fn finish_storage_servers<T: Send + 'static>(
     while servers.join_next().await.is_some() {}
 }
 
+async fn finish_failed_exec_start<C, T: Send + 'static>(
+    child: Result<C, String>,
+    storage_shutdown: &mut Option<StorageShutdown>,
+    servers: &mut tokio::task::JoinSet<T>,
+) -> Result<C, String> {
+    if child.is_err() {
+        finish_storage_servers(storage_shutdown.take(), servers).await;
+    }
+    child
+}
+
 async fn stopped_server(
     servers: &mut tokio::task::JoinSet<(&'static str, String)>,
 ) -> Result<Option<i32>, String> {
@@ -1365,7 +1376,14 @@ async fn serve_suite(
             if !quiet {
                 println!("  running command");
             }
-            Some(spawn_child(plan, &env)?)
+            Some(
+                finish_failed_exec_start(
+                    spawn_child(plan, &env),
+                    &mut storage_shutdown,
+                    &mut servers,
+                )
+                .await?,
+            )
         }
         None => None,
     };
@@ -1899,9 +1917,10 @@ mod tests {
     use super::{
         apply_auth_config_overrides, apply_auth_password_policy_overrides, auth_project_config,
         auth_sign_in_config, auth_signup_quota_config, blocking_auth_bridge_settings,
-        blocking_auth_selection, close_functions_source_admission, finish_storage_servers,
-        function_log_input, idp_assertion_policy, reapply_explicit_auth_config,
-        reapply_explicit_auth_password_policies, reapply_explicit_auth_quota, stopped_server,
+        blocking_auth_selection, close_functions_source_admission, finish_failed_exec_start,
+        finish_storage_servers, function_log_input, idp_assertion_policy,
+        reapply_explicit_auth_config, reapply_explicit_auth_password_policies,
+        reapply_explicit_auth_quota, stopped_server,
     };
 
     /// Only the strict profile's unpinned daemon follows wall time on Firestore; a pinned clock
@@ -2551,6 +2570,69 @@ mod tests {
             abort_seen.await.unwrap(),
             "other servers must be aborted after Storage drains"
         );
+    }
+
+    /// The exec-spawn error must retain its message and complete the same ordered drain.
+    #[tokio::test]
+    async fn storage_exec_start_failure_drains_before_returning_error() {
+        struct PeerDrop(Option<tokio::sync::oneshot::Sender<()>>);
+        impl Drop for PeerDrop {
+            fn drop(&mut self) {
+                let _ = self.0.take().unwrap().send(());
+            }
+        }
+        let (aborted, mut abort_seen) = tokio::sync::oneshot::channel();
+        let (entered, entered_seen) = tokio::sync::oneshot::channel();
+        let mut servers = tokio::task::JoinSet::new();
+        servers.spawn(async move {
+            let _guard = PeerDrop(Some(aborted));
+            let _ = entered.send(());
+            std::future::pending::<()>().await;
+        });
+        entered_seen.await.unwrap();
+        let (stop, stopped) = tokio::sync::oneshot::channel();
+        let (done, finished) = tokio::sync::oneshot::channel();
+        let (seen, stop_seen) = tokio::sync::oneshot::channel();
+        let (release, released) = tokio::sync::oneshot::channel();
+        let worker = tokio::spawn(async move {
+            let _ = seen.send(stopped.await.is_ok());
+            released.await.unwrap();
+            let _ = done.send(());
+        });
+        let closing = tokio::spawn(async move {
+            let mut shutdown = Some((stop, finished));
+            finish_failed_exec_start(
+                Err::<(), _>("injected spawn failure".to_owned()),
+                &mut shutdown,
+                &mut servers,
+            )
+            .await
+        });
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_secs(2), stop_seen)
+                .await
+                .unwrap()
+                .unwrap(),
+            "exec-spawn failure must send Storage stop"
+        );
+        assert!(
+            !closing.is_finished(),
+            "exec error must wait for Storage drain"
+        );
+        assert!(
+            matches!(
+                abort_seen.try_recv(),
+                Err(tokio::sync::oneshot::error::TryRecvError::Empty)
+            ),
+            "peer servers must remain alive before Storage drains"
+        );
+        release.send(()).unwrap();
+        worker.await.unwrap();
+        assert_eq!(
+            closing.await.unwrap().unwrap_err(),
+            "injected spawn failure"
+        );
+        abort_seen.await.unwrap();
     }
 
     /// Closed shutdown channels, including a failed Storage server, must not panic or hang.

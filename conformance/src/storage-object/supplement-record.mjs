@@ -136,12 +136,15 @@ export function productionInputPaths() {
 }
 async function checkedAncestors(path) {
   let directory = dirname(path);
+  const temporary = await realpath(tmpdir());
   for (;;) {
     const stat = await lstat(directory);
+    // A root-owned sticky temp directory preserves ownership of each private child entry.
+    const stickyTemporary = directory === temporary && stat.uid === 0 && (stat.mode & 0o1000) !== 0;
     if (
       !stat.isDirectory() ||
       stat.isSymbolicLink() ||
-      (stat.mode & 0o022) !== 0 ||
+      ((stat.mode & 0o022) !== 0 && !stickyTemporary) ||
       (stat.uid !== process.getuid() && stat.uid !== 0)
     )
       fail("UNSAFE_PARENT");
@@ -470,6 +473,9 @@ async function oneWire(request, deadline, local = false) {
         agent: false,
         headers: { ...request.headers, "content-length": String(body.length), connection: "close" },
         maxHeaderSize: 32768,
+        ...(local
+          ? {}
+          : { rejectUnauthorized: true, ALPNProtocols: ["http/1.1"], minVersion: "TLSv1.2" }),
       },
       (incoming) => {
         response = incoming;
@@ -1428,6 +1434,21 @@ async function bucketBinding(capability) {
 /** Only this zero-argument entry reads Root's actual fixed authority and credentials. */
 export async function runRootSupplement(...args) {
   if (args.length !== 0) fail("NO_ARGUMENTS_PRODUCTION_ENTRY");
+  if (
+    [
+      "NODE_OPTIONS",
+      "NODE_EXTRA_CA_CERTS",
+      "NODE_TLS_REJECT_UNAUTHORIZED",
+      "NODE_USE_ENV_PROXY",
+      "HTTP_PROXY",
+      "HTTPS_PROXY",
+      "ALL_PROXY",
+      "http_proxy",
+      "https_proxy",
+      "all_proxy",
+    ].some((name) => process.env[name])
+  )
+    fail("NATIVE_ENV_OVERRIDE");
   const paths = productionInputPaths();
   const accepted = await authority(paths);
   const packet = accepted.packet;

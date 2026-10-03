@@ -433,6 +433,8 @@ test("temporary default Root runtime binds durable start, one pair, shared prech
   let adcReads = 0;
   const intercept = mock.method(https, "request", (url, options, callback) => {
     assert.ok(fixture, "fixture must exist before any wire");
+    assert.equal(options.rejectUnauthorized, true);
+    assert.deepEqual(options.ALPNProtocols, ["http/1.1"]);
     const original = new URL(url);
     assert.equal(original.protocol, "https:");
     const local = new URL(`http://127.0.0.1:${port}${original.pathname}${original.search}`);

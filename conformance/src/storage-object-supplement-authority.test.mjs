@@ -296,6 +296,17 @@ test("token proof requires prior subject/client/scopes and actual bounded lifeti
   );
 });
 
+test("native environment overrides stop before fixed Root inputs or credentials are read", async () => {
+  const previous = process.env.NODE_TLS_REJECT_UNAUTHORIZED;
+  try {
+    process.env.NODE_TLS_REJECT_UNAUTHORIZED = "0";
+    await assert.rejects(api.runRootSupplement(), /NATIVE_ENV_OVERRIDE/);
+  } finally {
+    if (previous === undefined) delete process.env.NODE_TLS_REJECT_UNAUTHORIZED;
+    else process.env.NODE_TLS_REJECT_UNAUTHORIZED = previous;
+  }
+});
+
 test("local ADC primitive uses real file identity/hash/mode and does not issue native authority", async () => {
   assert.equal(typeof api.inspectLocalSupplementAdc, "function");
   const directory = await mkdtemp(join(await realpath(tmpdir()), "object-supplement-adc-"));
@@ -323,6 +334,9 @@ test("local ADC primitive uses real file identity/hash/mode and does not issue n
     await chmod(path, 0o644);
     await assert.rejects(api.inspectLocalSupplementAdc(input), /UNSAFE_FILE/);
     await chmod(path, 0o600);
+    await chmod(directory, 0o777);
+    await assert.rejects(api.inspectLocalSupplementAdc(input), /UNSAFE_PARENT/);
+    await chmod(directory, 0o700);
     const alias = join(directory, "alias.json");
     await symlink(path, alias);
     await assert.rejects(api.inspectLocalSupplementAdc({ ...input, path: alias }));

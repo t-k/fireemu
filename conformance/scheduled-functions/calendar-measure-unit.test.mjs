@@ -1390,6 +1390,9 @@ test("campaign packets bind the current day, whole H file set and fixed real bui
       p.attempts.push(p.attempts[0]);
     },
     (p) => {
+      p.attempts.push({ ...p.attempts[0], planPath: "/plan-duplicate-id" });
+    },
+    (p) => {
       p.controlAttemptIds[0] = "missing";
     },
     (p) => {
@@ -2020,4 +2023,57 @@ test("a changed raw plan is registered but stops before measurement effects", as
   assert.equal(effects, 0);
   assert.equal(envelope.outcome, "unknown");
   assert.equal(result.state, "unknown");
+});
+
+test("native own-wait, root and kind bindings reject independent single-field contradictions", async () => {
+  const { recomputeNativeReport } = await import("./calendar-measure.mjs");
+  for (const change of [
+    (r) => {
+      r.native.queries.find((q) => q.purpose === "pinned-source").answer.pid += 1;
+    },
+    (r) => {
+      r.rootSid += 1;
+    },
+    (r) => {
+      r.escalation = "off";
+    },
+  ]) {
+    const report = nativeFixture();
+    change(report);
+    assert.equal(recomputeNativeReport(report).ok, false);
+  }
+});
+
+test("a complete sealed predicate rejects extra publications and an extra selected refusal", async () => {
+  const { evaluateCampaignSnapshot } = await import("./calendar-measure.mjs");
+  for (const extraReport of [true, false]) {
+    const { packet, snapshot } = completeCampaignFixture();
+    if (extraReport) snapshot.reports.set("extra.json", Buffer.from("{}"));
+    else packet.controlAttemptIds.push(packet.refusalAttemptId);
+    assert.equal(evaluateCampaignSnapshot(packet, snapshot).verdict, "fail");
+  }
+});
+
+test("a coherently rebound authority cannot substitute another SID for the native report root", async () => {
+  const { evaluateCampaignSnapshot } = await import("./calendar-measure.mjs");
+  const { packet, snapshot, records } = completeCampaignFixture();
+  const authority = JSON.parse(snapshot.authorityBytes);
+  authority.scope.nativeRoot.sid = 51;
+  packet.nativeRoot.sid = 51;
+  snapshot.authorityBytes = Buffer.from(JSON.stringify(authority));
+  for (const row of records) row.scope = structuredClone(authority.scope);
+  records[0].authoritySha256 = sha(snapshot.authorityBytes);
+  for (const [name, raw] of snapshot.reports) {
+    const envelope = JSON.parse(raw);
+    envelope.scope = structuredClone(authority.scope);
+    const replaced = Buffer.from(JSON.stringify(envelope));
+    snapshot.reports.set(name, replaced);
+    const terminal = records.find((r) => r.type === "terminal" && r.reportFile === name);
+    terminal.reportSha256 = sha(replaced);
+    terminal.reportBytes = replaced.length;
+  }
+  snapshot.ledgerBytes = Buffer.from(records.map((r) => JSON.stringify(r) + "\n").join(""));
+  const result = evaluateCampaignSnapshot(packet, snapshot);
+  assert.equal(result.verdict, "fail");
+  assert.ok(result.problems.includes("foreign native root, day or H"));
 });

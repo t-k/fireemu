@@ -4788,7 +4788,13 @@ fn gcs_object(
                 return Ok(gcs_no_such_object(bucket, name, false));
             }
             store.delete(&b, &n, pre).map_err(gcs_core_err)?;
-            Ok(StorageResponse::empty(204))
+            let response = StorageResponse::empty(204);
+            // A successful production JSON API object deletion carries an explicit zero length.
+            Ok(if state.is_strict() {
+                response.with_header("content-length", "0")
+            } else {
+                response
+            })
         }
         _ => Ok(plain_status(501)),
     }

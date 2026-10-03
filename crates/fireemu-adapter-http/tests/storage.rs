@@ -2879,6 +2879,7 @@ fn strict_frames_json_answers_as_production_does_and_the_emulator_profile_as_the
     }
     assert_eq!(deleted.status, 204);
     assert_eq!(header(&deleted, "content-type"), Some("application/json"));
+    assert_eq!(header(&deleted, "content-length"), Some("0"));
     // Only the 204 gains a content type: a status query answers 308 without one, and a non-error
     // JSON body is not rewritten.
     let strict = state_with(Some(ALLOW_ALL_RULES), TokenAcceptance::Verified);
@@ -2933,6 +2934,7 @@ fn strict_frames_json_answers_as_production_does_and_the_emulator_profile_as_the
         "the official emulator's compact body"
     );
     assert!(header(&deleted, "content-type").is_none());
+    assert!(header(&deleted, "content-length").is_none());
 }
 
 /// Routing edges the JSON API keeps from the official router: the ACL stub answers, an unknown
@@ -6723,9 +6725,18 @@ fn strict_json_api_answers_carry_exactly_the_recorded_header_names() {
     );
     let delete = handle(strict, req("DELETE", &object, &owner, b""));
     assert_eq!(delete.status, 204);
+    assert_eq!(header(&delete, "content-length"), Some("0"));
+    assert!(delete.body.is_empty());
     assert_eq!(
         header_names(&delete),
-        ["cache-control", "content-type", "expires", "pragma", "vary"]
+        [
+            "cache-control",
+            "content-length",
+            "content-type",
+            "expires",
+            "pragma",
+            "vary"
+        ]
     );
 }
 
@@ -9303,4 +9314,308 @@ fn glob_deleted_one_past_item_keeps_walking_forward() {
     let body = json_body(&response);
     assert_eq!(body["items"][0]["name"], "a");
     assert_eq!(body["nextPageToken"], "c");
+}
+
+/// Real HTTP framing of the strict JSON API's conditional object deletion.
+mod gcs_delete_wire {
+    use super::*;
+    use proptest::prelude::*;
+    use std::io::{Read as _, Write as _};
+    use std::time::Duration;
+
+    struct Server {
+        runtime: tokio::runtime::Runtime,
+        state: Arc<StorageState>,
+        address: std::net::SocketAddr,
+        stop: Option<tokio::sync::oneshot::Sender<()>>,
+        task: Option<tokio::task::JoinHandle<std::io::Result<()>>>,
+    }
+
+    impl Server {
+        fn new(acceptance: TokenAcceptance) -> Self {
+            static BUDGET: BodyBudget = BodyBudget::new(4 * 1024 * 1024);
+            let runtime = tokio::runtime::Builder::new_multi_thread()
+                .worker_threads(2)
+                .enable_all()
+                .build()
+                .unwrap();
+            let port = std::env::var("PORT")
+                .ok()
+                .and_then(|value| value.parse::<u16>().ok())
+                .unwrap_or(0);
+            let listener = runtime
+                .block_on(tokio::net::TcpListener::bind(("127.0.0.1", port)))
+                .unwrap();
+            let address = listener.local_addr().unwrap();
+            let state = Arc::new(state_with(Some(ALLOW_ALL_RULES), acceptance));
+            let (stop, stopped) = tokio::sync::oneshot::channel();
+            let task = runtime.spawn(
+                fireemu_adapter_http::storage_server::serve_storage_with_shutdown(
+                    listener,
+                    state.clone(),
+                    &BUDGET,
+                    async {
+                        let _ = stopped.await;
+                    },
+                    Arc::default(),
+                ),
+            );
+            Self {
+                runtime,
+                state,
+                address,
+                stop: Some(stop),
+                task: Some(task),
+            }
+        }
+
+        fn seed(&self, name: &str, bytes: Vec<u8>) {
+            self.state
+                .store
+                .lock()
+                .unwrap()
+                .put(
+                    &BucketName::try_new(BUCKET).unwrap(),
+                    &ObjectName::try_new(name.to_owned()).unwrap(),
+                    bytes,
+                    NewMetadata::default(),
+                    Precondition::default(),
+                    START,
+                )
+                .unwrap();
+        }
+
+        fn exchange(&self, method: &str, path: &str, headers: &[(&str, &str)]) -> Wire {
+            let mut client = std::net::TcpStream::connect(self.address).unwrap();
+            client
+                .set_read_timeout(Some(Duration::from_secs(5)))
+                .unwrap();
+            client
+                .set_write_timeout(Some(Duration::from_secs(5)))
+                .unwrap();
+            write!(client, "{method} {path} HTTP/1.1\r\nHost: {}\r\nAuthorization: Bearer owner\r\nContent-Length: 0\r\nConnection: close\r\n", self.address).unwrap();
+            for (key, value) in headers {
+                write!(client, "{key}: {value}\r\n").unwrap();
+            }
+            client.write_all(b"\r\n").unwrap();
+            let mut raw = Vec::new();
+            client.read_to_end(&mut raw).unwrap();
+            Wire::parse(&raw)
+        }
+
+        fn finish(mut self) {
+            self.stop.take().unwrap().send(()).unwrap();
+            self.runtime
+                .block_on(self.task.take().unwrap())
+                .unwrap()
+                .unwrap();
+        }
+    }
+
+    impl Drop for Server {
+        fn drop(&mut self) {
+            if let Some(stop) = self.stop.take() {
+                let _ = stop.send(());
+            }
+            if let Some(task) = self.task.take() {
+                let _ = self.runtime.block_on(task);
+            }
+        }
+    }
+
+    struct Wire {
+        status: u16,
+        headers: Vec<(String, String)>,
+        body: Vec<u8>,
+        raw_head: String,
+    }
+
+    impl Wire {
+        fn parse(raw: &[u8]) -> Self {
+            let split = raw
+                .windows(4)
+                .position(|part| part == b"\r\n\r\n")
+                .expect("HTTP header boundary");
+            let raw_head = String::from_utf8(raw[..split].to_vec()).unwrap();
+            let mut lines = raw_head.split("\r\n");
+            let status = lines
+                .next()
+                .unwrap()
+                .split_whitespace()
+                .nth(1)
+                .unwrap()
+                .parse()
+                .unwrap();
+            let headers = lines
+                .map(|line| {
+                    let (name, value) = line.split_once(':').unwrap();
+                    (name.to_ascii_lowercase(), value.trim().to_owned())
+                })
+                .collect();
+            Self {
+                status,
+                headers,
+                body: raw[split + 4..].to_vec(),
+                raw_head,
+            }
+        }
+
+        fn header(&self, name: &str) -> Option<&str> {
+            self.headers
+                .iter()
+                .find(|(key, _)| key == name)
+                .map(|(_, value)| value.as_str())
+        }
+    }
+
+    fn encoded(name: &str) -> String {
+        use std::fmt::Write as _;
+        name.as_bytes()
+            .iter()
+            .fold(String::new(), |mut encoded, byte| {
+                write!(encoded, "%{byte:02X}").unwrap();
+                encoded
+            })
+    }
+
+    fn deleted(server: &Server, name: &str, gcs: bool) -> Wire {
+        let path = format!("/storage/v1/b/{BUCKET}/o/{}", encoded(name));
+        let before = server.exchange("GET", &path, &[]);
+        assert_eq!(before.status, 200);
+        let metadata: Value = serde_json::from_slice(&before.body).unwrap();
+        let generation = metadata["generation"].as_str().unwrap();
+        let delete_path = if gcs {
+            format!("{path}?ifGenerationMatch={generation}")
+        } else {
+            format!("/v0/b/{BUCKET}/o/{}", encoded(name))
+        };
+        let answer = server.exchange("DELETE", &delete_path, &[]);
+        assert_eq!(answer.status, 204, "{}", answer.raw_head);
+        assert!(answer.body.is_empty());
+        for missing in [path.clone(), format!("{path}?alt=media")] {
+            assert_eq!(server.exchange("GET", &missing, &[]).status, 404);
+        }
+        answer
+    }
+
+    #[test]
+    fn gcs_delete_204_content_length_zero_on_wire() {
+        let server = Server::new(TokenAcceptance::Verified);
+        for name in ["conditional.txt", "unicode/雪.txt"] {
+            server.seed(name, b"stored bytes".to_vec());
+            let response = deleted(&server, name, true);
+            eprintln!(
+                "conditional Admin GCS DELETE actual head={:?} bodyBytes={}",
+                response.raw_head,
+                response.body.len()
+            );
+            assert_eq!(response.header("content-type"), Some("application/json"));
+            assert_eq!(response.header("content-length"), Some("0"));
+            assert_eq!(
+                response
+                    .headers
+                    .iter()
+                    .filter(|(name, _)| name == "content-length")
+                    .count(),
+                1
+            );
+            assert!(response.header("transfer-encoding").is_none());
+        }
+        server.finish();
+    }
+
+    #[test]
+    fn gcs_delete_204_marker_keeps_other_wire_answers() {
+        for acceptance in BOTH_PROFILES {
+            let server = Server::new(acceptance);
+            for gcs in [false, true] {
+                if acceptance == TokenAcceptance::Verified && gcs {
+                    continue;
+                }
+                server.seed("other.txt", b"other".to_vec());
+                let response = deleted(&server, "other.txt", gcs);
+                assert!(response.header("content-length").is_none());
+            }
+            server.seed("retained.txt", b"retained".to_vec());
+            let object = format!("/storage/v1/b/{BUCKET}/o/retained.txt");
+            let metadata: Value =
+                serde_json::from_slice(&server.exchange("GET", &object, &[]).body).unwrap();
+            let generation = metadata["generation"].as_str().unwrap();
+            let conditional = server.exchange(
+                "GET",
+                &format!("{object}?ifGenerationNotMatch={generation}"),
+                &[],
+            );
+            if acceptance == TokenAcceptance::Verified {
+                assert_eq!(conditional.status, 304);
+                assert!(conditional.body.is_empty());
+                assert!(conditional.header("content-length").is_none());
+            } else {
+                assert_eq!(conditional.status, 200);
+            }
+            let options = server.exchange("OPTIONS", &object, &[]);
+            assert_eq!(options.status, 204);
+            assert!(options.header("content-length").is_none());
+            assert!(options.body.is_empty());
+            let missing = server.exchange(
+                "DELETE",
+                &format!("/storage/v1/b/{BUCKET}/o/missing.txt"),
+                &[],
+            );
+            assert_eq!(missing.status, 404);
+            assert!(!missing.body.is_empty());
+            assert_eq!(
+                missing.header("content-length"),
+                Some(missing.body.len().to_string().as_str())
+            );
+            let expected_head = handle(
+                &server.state,
+                req("HEAD", &object, &[("authorization", "Bearer owner")], b""),
+            );
+            let head = server.exchange("HEAD", &object, &[]);
+            assert_eq!(head.status, expected_head.status);
+            assert!(head.body.is_empty());
+            let start = server.exchange(
+                "POST",
+                &format!("/upload/storage/v1/b/{BUCKET}/o?uploadType=resumable&name=session.bin"),
+                &[],
+            );
+            assert_eq!(start.status, 200);
+            let location = start.header("location").unwrap();
+            let session = location
+                .strip_prefix(&format!("http://{}", server.address))
+                .unwrap();
+            let probe = server.exchange("PUT", session, &[("content-range", "bytes */4")]);
+            assert_eq!(probe.status, 308);
+            assert!(probe.body.is_empty());
+            let cancel = server.exchange("DELETE", session, &[]);
+            assert_eq!(cancel.status, 499);
+            assert_eq!(cancel.body.len(), 224);
+            assert_eq!(
+                cancel.header("content-type"),
+                Some("application/json; charset=UTF-8")
+            );
+            assert_eq!(cancel.header("content-length"), Some("224"));
+            server.finish();
+        }
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(32))]
+        #[test]
+        fn gcs_delete_profile_and_dialect_framing_reaches_real_encoder(
+            strict in any::<bool>(), gcs in any::<bool>(), name in "[a-z]{1,12}", bytes in prop::collection::vec(any::<u8>(), 0..64)
+        ) {
+            let acceptance = if strict { TokenAcceptance::Verified } else { TokenAcceptance::EmulatorMock };
+            let server = Server::new(acceptance); server.seed(&name, bytes);
+            let response = deleted(&server, &name, gcs);
+            if strict && gcs {
+                prop_assert_eq!(response.header("content-length"), Some("0"));
+                prop_assert_eq!(response.header("content-type"), Some("application/json"));
+                prop_assert_eq!(response.headers.iter().filter(|(name, _)| name == "content-length").count(), 1);
+            } else { prop_assert!(response.header("content-length").is_none()); }
+            prop_assert!(response.body.is_empty());
+            server.finish();
+        }
+    }
 }

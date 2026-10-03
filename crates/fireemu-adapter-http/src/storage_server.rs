@@ -7,7 +7,7 @@ use std::sync::Arc;
 use bytes::Bytes;
 use fireemu_adapter_support::connection::{DrainBounds, GracefulClose};
 use http_body_util::{BodyExt, Full};
-use hyper::body::Incoming;
+use hyper::body::{Body, Frame, Incoming, SizeHint};
 use hyper::server::conn::http1;
 use hyper::service::service_fn;
 use hyper::{Request, Response, StatusCode};
@@ -17,6 +17,60 @@ use tokio::sync::{Notify, Semaphore};
 
 use crate::identity_toolkit::origin_is_local;
 use crate::storage::{handle_framed_cancellable, GlobEvent, StorageRequest, StorageState};
+
+/// Preserves the explicit zero length of an empty 204 without changing other body behavior.
+struct StorageBody {
+    inner: Full<Bytes>,
+    pending_zero: bool,
+}
+
+impl StorageBody {
+    fn new(bytes: Bytes) -> Self {
+        Self {
+            inner: Full::new(bytes),
+            pending_zero: false,
+        }
+    }
+
+    fn for_response(status: u16, headers: &[(String, String)], bytes: Bytes) -> Self {
+        let mut lengths = headers
+            .iter()
+            .filter(|(name, _)| name.eq_ignore_ascii_case("content-length"));
+        let pending_zero = status == 204
+            && bytes.is_empty()
+            && lengths.next().is_some_and(|(_, value)| value == "0")
+            && lengths.next().is_none();
+        Self {
+            inner: Full::new(bytes),
+            pending_zero,
+        }
+    }
+}
+
+impl Body for StorageBody {
+    type Data = Bytes;
+    type Error = std::convert::Infallible;
+
+    fn poll_frame(
+        mut self: std::pin::Pin<&mut Self>,
+        context: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Option<Result<Frame<Bytes>, Self::Error>>> {
+        if self.pending_zero {
+            self.pending_zero = false;
+            return std::task::Poll::Ready(Some(Ok(Frame::data(Bytes::new()))));
+        }
+        std::pin::Pin::new(&mut self.inner).poll_frame(context)
+    }
+
+    fn is_end_stream(&self) -> bool {
+        // Hyper's None-body path suppresses explicit CL0 on 204; Known(0) preserves it.
+        !self.pending_zero && self.inner.is_end_stream()
+    }
+
+    fn size_hint(&self) -> SizeHint {
+        self.inner.size_hint()
+    }
+}
 
 /// Maximum accepted upload body (object limit plus multipart overhead).
 pub const MAX_STORAGE_BODY_BYTES: usize = 260 * 1024 * 1024;
@@ -597,7 +651,7 @@ fn cors(
 }
 
 /// The refusal a body that was not accepted turns into.
-fn body_error_response(e: BodyError, origin: Option<&str>) -> Response<Full<Bytes>> {
+fn body_error_response(e: BodyError, origin: Option<&str>) -> Response<StorageBody> {
     let (status, message, retry_after) = match e {
         BodyError::TooLarge => (413, &b"payload too large"[..], false),
         BodyError::BudgetExhausted => (503, &b"storage upload memory budget exhausted"[..], true),
@@ -608,8 +662,8 @@ fn body_error_response(e: BodyError, origin: Option<&str>) -> Response<Full<Byte
         builder = builder.header("retry-after", "1");
     }
     builder
-        .body(Full::new(Bytes::from_static(message)))
-        .unwrap_or_else(|_| Response::new(Full::new(Bytes::new())))
+        .body(StorageBody::new(Bytes::from_static(message)))
+        .unwrap_or_else(|_| Response::new(StorageBody::new(Bytes::new())))
 }
 
 fn handler_error_response(
@@ -617,14 +671,14 @@ fn handler_error_response(
     message: &'static [u8],
     origin: Option<&str>,
     retry: bool,
-) -> Response<Full<Bytes>> {
+) -> Response<StorageBody> {
     let mut builder = cors(Response::builder().status(status), origin);
     if retry {
         builder = builder.header("retry-after", "1");
     }
     builder
-        .body(Full::new(Bytes::from_static(message)))
-        .unwrap_or_else(|_| Response::new(Full::new(Bytes::new())))
+        .body(StorageBody::new(Bytes::from_static(message)))
+        .unwrap_or_else(|_| Response::new(StorageBody::new(Bytes::new())))
 }
 
 #[allow(clippy::too_many_lines)]
@@ -634,7 +688,7 @@ async fn respond(
     req: Request<Incoming>,
     runtime: Arc<Runtime>,
     connection: Arc<Cancellation>,
-) -> Result<Response<Full<Bytes>>, std::io::Error> {
+) -> Result<Response<StorageBody>, std::io::Error> {
     let request_cancel = Arc::new(Cancellation::default());
     let _request_guard = CancelOnDrop(request_cancel.clone());
     let origin = req
@@ -645,8 +699,8 @@ async fn respond(
     if origin.as_deref().is_some_and(|o| !origin_is_local(o)) {
         return Ok(Response::builder()
             .status(StatusCode::FORBIDDEN)
-            .body(Full::new(Bytes::from_static(b"forbidden origin")))
-            .unwrap_or_else(|_| Response::new(Full::new(Bytes::new()))));
+            .body(StorageBody::new(Bytes::from_static(b"forbidden origin")))
+            .unwrap_or_else(|_| Response::new(StorageBody::new(Bytes::new()))));
     }
     if req.method() == hyper::Method::OPTIONS {
         // The preflight the official emulator's `cors` middleware answers: the requested
@@ -682,8 +736,8 @@ async fn respond(
             builder = builder.header("access-control-allow-headers", requested.to_owned());
         }
         return Ok(builder
-            .body(Full::new(Bytes::new()))
-            .unwrap_or_else(|_| Response::new(Full::new(Bytes::new()))));
+            .body(StorageBody::new(Bytes::new()))
+            .unwrap_or_else(|_| Response::new(StorageBody::new(Bytes::new()))));
     }
     let method = req.method().as_str().to_owned();
     let path = req.uri().path().to_owned();
@@ -911,10 +965,11 @@ async fn respond(
             origin.as_deref(),
         );
     }
+    let body = StorageBody::for_response(response.status, &response.headers, response.body);
     for (k, v) in response.headers {
         builder = builder.header(k, v);
     }
-    match builder.body(Full::new(response.body)) {
+    match builder.body(body) {
         Ok(response) => Ok(response),
         // A header value the handler built is not a valid HTTP header (a metadata string with
         // a control character reached `Builder::header`). The input boundary rejects those, so
@@ -925,10 +980,10 @@ async fn respond(
             .status(StatusCode::INTERNAL_SERVER_ERROR)
             .header("content-type", "text/plain; charset=utf-8")
             .header("x-content-type-options", "nosniff")
-            .body(Full::new(Bytes::from_static(
+            .body(StorageBody::new(Bytes::from_static(
                 b"internal error building response",
             )))
-            .unwrap_or_else(|_| Response::new(Full::new(Bytes::new())))),
+            .unwrap_or_else(|_| Response::new(StorageBody::new(Bytes::new())))),
     }
 }
 
@@ -1848,6 +1903,181 @@ mod budget_lifecycle_model_tests {
             }
             drop(owners);
             prop_assert_eq!(BUDGET.in_flight(), 0);
+        }
+    }
+}
+
+#[cfg(test)]
+mod storage_body_tests {
+    use super::*;
+    use proptest::prelude::*;
+    use std::pin::Pin;
+    use std::task::{Context, Poll, Waker};
+
+    fn headers(kind: u8) -> Vec<(String, String)> {
+        match kind {
+            0 => Vec::new(),
+            1 => vec![("content-length".into(), "0".into())],
+            2 => vec![("Content-Length".into(), "0".into())],
+            3 => vec![
+                ("content-length".into(), "0".into()),
+                ("Content-Length".into(), "0".into()),
+            ],
+            4 => vec![("content-length".into(), "1".into())],
+            5 => vec![("content-length".into(), "00".into())],
+            6 => vec![("content-length".into(), " 0".into())],
+            _ => vec![("content-length".into(), "bad".into())],
+        }
+    }
+
+    fn next(
+        body: &mut (impl Body<Data = Bytes, Error = std::convert::Infallible> + Unpin),
+    ) -> Option<Bytes> {
+        let mut context = Context::from_waker(Waker::noop());
+        match Pin::new(body).poll_frame(&mut context) {
+            Poll::Ready(frame) => frame.map(|frame| frame.unwrap().into_data().unwrap()),
+            Poll::Pending => panic!("a full body must be ready"),
+        }
+    }
+
+    fn check_traits(status: u16, kind: u8, bytes: Bytes) {
+        let marked = status == 204 && bytes.is_empty() && matches!(kind, 1 | 2);
+        let mut wrapped = StorageBody::for_response(status, &headers(kind), bytes.clone());
+        let mut reference = Full::new(bytes);
+        assert_eq!(
+            wrapped.is_end_stream(),
+            !marked && reference.is_end_stream()
+        );
+        assert_eq!(wrapped.size_hint().lower(), reference.size_hint().lower());
+        assert_eq!(wrapped.size_hint().upper(), reference.size_hint().upper());
+        if marked {
+            assert_eq!(next(&mut wrapped), Some(Bytes::new()));
+        } else {
+            assert_eq!(next(&mut wrapped), next(&mut reference));
+        }
+        assert!(wrapped.is_end_stream());
+        assert_eq!(next(&mut wrapped), None);
+        assert_eq!(wrapped.size_hint().exact(), Some(0));
+    }
+
+    #[test]
+    fn body_marker_scope_and_frame_lifecycle_are_finite() {
+        let mut inputs = 0;
+        for status in [200, 204, 304, 308, 400, 499, 500] {
+            for kind in 0..8 {
+                for bytes in [
+                    Bytes::new(),
+                    Bytes::from_static(b"x"),
+                    Bytes::from_static(b"abc"),
+                ] {
+                    check_traits(status, kind, bytes);
+                    inputs += 1;
+                }
+            }
+        }
+        assert_eq!(inputs, 168);
+        eprintln!("body marker finite inputs=168 zeroFrameBytes=0 otherFramesMatchFull=1");
+    }
+
+    struct EncodingTask(Option<tokio::task::JoinHandle<()>>);
+    impl Drop for EncodingTask {
+        fn drop(&mut self) {
+            if let Some(task) = self.0.take() {
+                task.abort();
+            }
+        }
+    }
+
+    async fn encode<B>(
+        status: u16,
+        fields: Vec<(String, String)>,
+        body: B,
+    ) -> (Vec<u8>, Option<std::io::ErrorKind>, bool)
+    where
+        B: Body<Data = Bytes, Error = std::convert::Infallible> + Send + Unpin + 'static,
+    {
+        use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
+        let port = std::env::var("PORT")
+            .ok()
+            .and_then(|value| value.parse::<u16>().ok())
+            .unwrap_or(0);
+        let listener = TcpListener::bind(("127.0.0.1", port)).await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let mut response = Response::builder().status(status);
+        for (name, value) in fields {
+            response = response.header(name, value);
+        }
+        let response = std::sync::Mutex::new(Some(response.body(body).unwrap()));
+        let mut task = EncodingTask(Some(tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let service = service_fn(move |_| {
+                std::future::ready(Ok::<_, std::convert::Infallible>(
+                    response.lock().unwrap().take().unwrap(),
+                ))
+            });
+            let _ = http1::Builder::new()
+                .serve_connection(TokioIo::new(stream), service)
+                .await;
+        })));
+        let mut client = TcpStream::connect(address).await.unwrap();
+        client
+            .write_all(b"GET / HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n")
+            .await
+            .unwrap();
+        let mut raw = Vec::new();
+        let result = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            client.read_to_end(&mut raw),
+        )
+        .await
+        .unwrap();
+        let panicked = task
+            .0
+            .take()
+            .unwrap()
+            .await
+            .err()
+            .is_some_and(|error| error.is_panic());
+        (raw, result.err().map(|error| error.kind()), panicked)
+    }
+
+    fn framing(raw: &[u8]) -> (String, Vec<String>, Vec<u8>) {
+        let Some(split) = raw.windows(4).position(|part| part == b"\r\n\r\n") else {
+            return (String::new(), Vec::new(), raw.to_vec());
+        };
+        let head = std::str::from_utf8(&raw[..split]).unwrap();
+        let mut lines = head.split("\r\n");
+        let status = lines.next().unwrap().to_owned();
+        let fields = lines
+            .filter(|line| {
+                line.starts_with("content-length:") || line.starts_with("transfer-encoding:")
+            })
+            .map(str::to_owned)
+            .collect();
+        (status, fields, raw[split + 4..].to_vec())
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(128))]
+        #[test]
+        fn body_marker_traits_and_real_encoder_match_the_closed_scope(
+            status in prop::sample::select(vec![200u16,204,304,308,400,499,500]), kind in 0u8..8,
+            payload in prop_oneof![3 => Just(Vec::new()), 1 => prop::collection::vec(any::<u8>(), 1..64)]
+        ) {
+            let bytes = Bytes::from(payload); check_traits(status, kind, bytes.clone());
+            let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+            let actual = runtime.block_on(encode(status, headers(kind), StorageBody::for_response(status, &headers(kind), bytes.clone())));
+            if status == 204 && bytes.is_empty() && matches!(kind, 1 | 2) {
+                let (line, fields, body) = framing(&actual.0);
+                prop_assert!(line.starts_with("HTTP/1.1 204"));
+                prop_assert_eq!(fields, vec!["content-length: 0"]);
+                prop_assert!(body.is_empty()); prop_assert!(actual.1.is_none());
+            } else {
+                let reference = runtime.block_on(encode(status, headers(kind), Full::new(bytes)));
+                prop_assert_eq!(framing(&actual.0), framing(&reference.0));
+                prop_assert_eq!(actual.1, reference.1);
+                prop_assert_eq!(actual.2, reference.2);
+            }
         }
     }
 }

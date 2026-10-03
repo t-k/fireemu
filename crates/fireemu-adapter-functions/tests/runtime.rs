@@ -2959,13 +2959,16 @@ fn cloudevents_carry_the_shapes_the_sdk_decodes() {
 }
 
 #[test]
-fn gen2_firestore_source_is_database_for_created_updated_deleted() {
+fn gen2_firestore_source_is_database_for_all_document_events() {
     let before = doc("documents/one/databases/two", 1);
     let after = doc("documents/one/databases/two", 2);
     for (kind, old, new) in [
         (DocumentEvent::Created, None, Some(&after)),
         (DocumentEvent::Updated, Some(&before), Some(&after)),
         (DocumentEvent::Deleted, Some(&before), None),
+        (DocumentEvent::Written, None, Some(&after)),
+        (DocumentEvent::Written, Some(&before), None),
+        (DocumentEvent::Written, Some(&before), Some(&after)),
     ] {
         let event = firestore_event(
             "source-gate",
@@ -3247,12 +3250,8 @@ exports.customV2=require(join(SDK,'lib/v2/providers/eventarc.js')).onCustomEvent
         } else {
             assert_eq!(
                 observation["event"]["source"],
-                if *kind == DocumentEvent::Written {
-                    document
-                } else {
-                    database
-                },
-                "Gen2 canonical database source; Written debt stays isolated"
+                database,
+                "Gen2 canonical database source for every document event"
             );
             for key in [
                 "id", "subject", "time", "type", "project", "database", "document",
@@ -3296,7 +3295,7 @@ proptest::proptest! {
         let path = format!("{collection}/{id}");
         let kinds = [DocumentEvent::Created, DocumentEvent::Updated, DocumentEvent::Deleted, DocumentEvent::Written];
         let event = firestore_event("property", &project, &database, "nam5", &path, kinds[usize::from(kind)], None, None, START, None);
-        let expected = if kind == 3 { format!("projects/{project}/databases/{database}/documents/{path}") } else { format!("//firestore.googleapis.com/projects/{project}/databases/{database}") };
+        let expected = format!("//firestore.googleapis.com/projects/{project}/databases/{database}");
         proptest::prop_assert_eq!(&event["source"], &json!(expected));
         proptest::prop_assert_eq!(&event["subject"], &json!(format!("documents/{path}")));
         proptest::prop_assert_eq!(&event["data"], &json!({}));

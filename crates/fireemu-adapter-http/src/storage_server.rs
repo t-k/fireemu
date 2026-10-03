@@ -88,6 +88,10 @@ impl Drop for CancelOnDrop {
 #[doc(hidden)]
 #[derive(Default)]
 pub struct ServerObserver {
+    #[cfg(all(test, unix))]
+    record_descriptors: bool,
+    #[cfg(all(test, unix))]
+    descriptors: std::sync::Mutex<Vec<DescriptorWitness>>,
     pub active_globs: AtomicUsize,
     pub queued_globs: AtomicUsize,
     pub general_permits: AtomicUsize,
@@ -106,6 +110,112 @@ pub struct ServerObserver {
     /// A verification barrier retains worker permits after cancellation until released.
     pub hold_cancelled_workers: AtomicBool,
     cancelled_gate: (std::sync::Mutex<()>, std::sync::Condvar),
+}
+
+#[cfg(all(test, unix))]
+struct DescriptorWitness {
+    fd: std::os::fd::RawFd,
+    identity: String,
+    peer: std::net::SocketAddr,
+    local: std::net::SocketAddr,
+}
+
+#[cfg(all(test, target_os = "macos"))]
+fn parse_descriptor_fields(
+    fields: &str,
+) -> std::io::Result<std::collections::BTreeMap<i32, String>> {
+    let expected_process = format!("p{}", std::process::id());
+    if fields.lines().next() != Some(expected_process.as_str()) {
+        return Err(std::io::Error::other("lsof did not identify this process"));
+    }
+    let mut descriptors = std::collections::BTreeMap::new();
+    let mut current = None;
+    for line in fields.lines().skip(1) {
+        if let Some(fd) = line.strip_prefix('f') {
+            current = fd.parse::<i32>().ok();
+            if let Some(fd) = current {
+                descriptors.insert(fd, String::new());
+            }
+        } else if line.starts_with(['t', 'n', 'D']) {
+            if let Some(fd) = current {
+                let identity = descriptors.get_mut(&fd).expect("recorded descriptor");
+                identity.push_str(line);
+                identity.push('\n');
+            }
+        } else {
+            return Err(std::io::Error::other("unexpected lsof descriptor field"));
+        }
+    }
+    if descriptors.is_empty()
+        || descriptors
+            .values()
+            .any(|identity| !identity.starts_with('t'))
+    {
+        return Err(std::io::Error::other(
+            "lsof descriptor identity is incomplete",
+        ));
+    }
+    Ok(descriptors)
+}
+
+/// Only a successful complete OS snapshot may report an absent descriptor.
+#[cfg(all(test, unix))]
+fn descriptor_snapshot() -> std::io::Result<std::collections::BTreeMap<i32, String>> {
+    #[cfg(target_os = "linux")]
+    {
+        let mut descriptors = std::collections::BTreeMap::new();
+        for entry in std::fs::read_dir("/proc/self/fd")? {
+            let entry = entry?;
+            let fd = entry
+                .file_name()
+                .to_string_lossy()
+                .parse::<i32>()
+                .map_err(std::io::Error::other)?;
+            match std::fs::read_link(entry.path()) {
+                Ok(identity) => {
+                    descriptors.insert(fd, identity.to_string_lossy().into_owned());
+                }
+                // A descriptor may close while the snapshot is enumerated.
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => return Err(error),
+            }
+        }
+        Ok(descriptors)
+    }
+    #[cfg(target_os = "macos")]
+    {
+        let output = std::process::Command::new("/usr/sbin/lsof")
+            .args([
+                "-nP",
+                "-a",
+                "-p",
+                &std::process::id().to_string(),
+                "-F",
+                "ftnD",
+            ])
+            .output()?;
+        if !output.status.success() || !output.stderr.is_empty() {
+            return Err(std::io::Error::other(format!(
+                "lsof observation failed: {:?}: {}",
+                output.status,
+                String::from_utf8_lossy(&output.stderr)
+            )));
+        }
+        let fields = String::from_utf8(output.stdout).map_err(std::io::Error::other)?;
+        parse_descriptor_fields(&fields)
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    {
+        Err(std::io::Error::new(
+            std::io::ErrorKind::Unsupported,
+            "descriptor identity gate requires Linux or macOS",
+        ))
+    }
+}
+
+#[cfg(all(test, unix))]
+fn descriptor_identity(fd: std::os::fd::RawFd) -> std::io::Result<Option<String>> {
+    Ok(descriptor_snapshot()?.remove(&fd))
 }
 
 impl ServerObserver {
@@ -762,6 +872,19 @@ pub async fn serve_storage_with_shutdown(
                     Ok(stream) => stream, Err(error) => break Err(error),
                 };
                 let stream = match TcpStream::from_std(std_stream) { Ok(stream) => stream, Err(error) => break Err(error) };
+                #[cfg(all(test, unix))]
+                if runtime.observer.record_descriptors {
+                    use std::os::fd::AsRawFd as _;
+                    for socket in [&stream, &monitor] {
+                        let fd = socket.as_raw_fd();
+                        runtime.observer.descriptors.lock().unwrap().push(DescriptorWitness {
+                            fd,
+                            identity: descriptor_identity(fd).expect("OS descriptor observation must succeed").expect("the owned socket has an OS identity"),
+                            local: socket.local_addr().unwrap(),
+                            peer: socket.peer_addr().unwrap(),
+                        });
+                    }
+                }
                 let state = state.clone();
                 let runtime = runtime.clone();
                 connections.spawn(async move {
@@ -821,5 +944,205 @@ mod handler_error_tests {
         let busy = handler_error_response(StatusCode::SERVICE_UNAVAILABLE, b"busy", None, true);
         assert_eq!(busy.status(), StatusCode::SERVICE_UNAVAILABLE);
         assert_eq!(busy.headers().get("retry-after").unwrap(), "1");
+    }
+}
+
+#[cfg(all(test, any(target_os = "macos", target_os = "linux")))]
+mod descriptor_tests {
+    use super::*;
+    use std::sync::Mutex;
+    use tokio::io::AsyncWriteExt as _;
+
+    fn state() -> Arc<StorageState> {
+        use fireemu_core_auth::{
+            mfa::TotpPolicy,
+            store::{AuthRegistry, AuthStore},
+        };
+        use fireemu_core_rules::runtime::{LoadedRules, RulesetSlot};
+        use fireemu_core_storage::{
+            name::{BucketName, ObjectName},
+            store::{NewMetadata, Precondition},
+        };
+        use fireemu_core_types::{determinism::SplitMix64, time::LogicalInstant};
+        let start = LogicalInstant::from_unix_seconds(1_788_004_860);
+        let mut store = fireemu_core_storage::store::StorageState::new(9);
+        let bucket = BucketName::try_new("demo-app.appspot.com").unwrap();
+        for number in 0..64 {
+            let name = ObjectName::try_new(format!("{number:03}{}", "x".repeat(990))).unwrap();
+            store
+                .put(
+                    &bucket,
+                    &name,
+                    vec![b'x'],
+                    NewMetadata::default(),
+                    Precondition::default(),
+                    start,
+                )
+                .unwrap();
+        }
+        Arc::new(StorageState {
+            store: Mutex::new(store),
+            clock: Arc::new(Mutex::new(fireemu_core_session::clock::VirtualClock::new(
+                start,
+            ))),
+            auth: Arc::new(AuthRegistry::new(
+                "demo-app",
+                Arc::new(Mutex::new(AuthStore::new(
+                    "demo-app",
+                    SplitMix64::new(3),
+                    TotpPolicy::default(),
+                ))),
+            )),
+            tenancy: None,
+            rules: Arc::new(crate::storage::StorageRulesRegistry::global(Arc::new(
+                RulesetSlot::new(LoadedRules::default()),
+            ))),
+            project: "demo-app".to_owned(),
+            events: None,
+            barrier: None,
+            firestore: None,
+            faults: None,
+            clock_observer: None,
+            app_check_policy: None,
+            admin_capability: None,
+            token_acceptance: fireemu_core_auth::jwt::TokenAcceptance::Verified,
+            control_token: None,
+        })
+    }
+
+    async fn observed(label: &str, predicate: impl Fn() -> bool) {
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            while !predicate() {
+                tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+            }
+        })
+        .await
+        .unwrap_or_else(|_| panic!("observation did not settle: {label}"));
+    }
+
+    struct Cleanup(
+        Option<tokio::sync::oneshot::Sender<()>>,
+        Arc<ServerObserver>,
+    );
+    impl Drop for Cleanup {
+        fn drop(&mut self) {
+            self.1.release_cancelled_workers();
+            if let Some(stop) = self.0.take() {
+                let _ = stop.send(());
+            }
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn descriptor_observation_rejects_incomplete_or_wrong_process_fields() {
+        assert!(parse_descriptor_fields("").is_err());
+        assert!(parse_descriptor_fields("p0\nf8\ntIPv4\nnlocalhost\n").is_err());
+        let process = std::process::id();
+        assert!(parse_descriptor_fields(&format!("p{process}\nf8\n")).is_err());
+        assert!(parse_descriptor_fields(&format!("p{process}\nf8\nxunknown\n")).is_err());
+        let snapshot =
+            parse_descriptor_fields(&format!("p{process}\nf8\ntIPv4\nnlocalhost\n")).unwrap();
+        assert!(!snapshot.contains_key(&9));
+        assert!(snapshot.contains_key(&8));
+    }
+
+    /// Records each accepted and cloned-monitor FD from the production accept path.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn storage_shutdown_closes_each_accepted_and_monitor_descriptor() {
+        static BUDGET: BodyBudget = BodyBudget::new(8 * 1024 * 1024);
+        for drop_future in [false, true] {
+            let port = std::env::var("PORT")
+                .ok()
+                .and_then(|value| value.parse::<u16>().ok())
+                .unwrap_or(0);
+            let listener = TcpListener::bind(("127.0.0.1", port)).await.unwrap();
+            let local = listener.local_addr().unwrap();
+            let observer = Arc::new(ServerObserver {
+                record_descriptors: true,
+                ..ServerObserver::default()
+            });
+            assert!(observer.record_descriptors);
+            let (stop, stopped) = tokio::sync::oneshot::channel();
+            let mut cleanup = Cleanup(Some(stop), observer.clone());
+            let server = tokio::spawn(serve_storage_with_shutdown(
+                listener,
+                state(),
+                &BUDGET,
+                async {
+                    let _ = stopped.await;
+                },
+                observer.clone(),
+            ));
+            let pattern = format!("{}z", "*{,}".repeat(15_000));
+            let mut clients = Vec::new();
+            for _ in 0..2 {
+                let mut stream = TcpStream::connect(local).await.unwrap();
+                let request = format!("GET /storage/v1/b/demo-app.appspot.com/o?matchGlob={pattern} HTTP/1.1\r\nHost: localhost\r\nAuthorization: Bearer owner\r\n\r\nGET /storage/v1/b/demo-app.appspot.com/o HTTP/1.1\r\nHost: localhost\r\n\r\n");
+                stream.write_all(request.as_bytes()).await.unwrap();
+                clients.push(stream);
+            }
+            observed("two matching workers", || {
+                observer.matching_workers.load(Ordering::Acquire) == 2
+                    && observer.state_polls.load(Ordering::Acquire) > 200
+            })
+            .await;
+            {
+                let descriptors = observer.descriptors.lock().unwrap();
+                assert_eq!(
+                    descriptors.len(),
+                    4,
+                    "both accepted and monitor descriptors must be recorded"
+                );
+                for witness in descriptors.iter() {
+                    assert_eq!(witness.local, local);
+                    assert!(clients
+                        .iter()
+                        .any(|client| client.local_addr().unwrap() == witness.peer));
+                    assert!(
+                        !witness.identity.is_empty(),
+                        "the OS capture must identify this FD"
+                    );
+                    eprintln!(
+                        "owned descriptor fd={} local={} peer={} identity={:?}",
+                        witness.fd, witness.local, witness.peer, witness.identity
+                    );
+                }
+            }
+            if drop_future {
+                server.abort();
+                assert!(server.await.unwrap_err().is_cancelled());
+            } else {
+                cleanup.0.take().unwrap().send(()).unwrap();
+                server.await.unwrap().unwrap();
+            }
+            observed("all own tasks and permits returned", || {
+                observer.connections.load(Ordering::Acquire) == 0
+                    && observer.monitors.load(Ordering::Acquire) == 0
+                    && observer.workers.load(Ordering::Acquire) == 0
+                    && ServerObserver::free_permits() == (2, 16)
+            })
+            .await;
+            assert_eq!(BUDGET.in_flight(), 0);
+            assert_eq!(observer.completed_workers.load(Ordering::Acquire), 2);
+            assert_eq!(observer.cancelled_workers.load(Ordering::Acquire), 2);
+            let remaining = descriptor_snapshot().expect("post-stop OS observation must succeed");
+            for witness in observer.descriptors.lock().unwrap().iter() {
+                assert_ne!(
+                    remaining.get(&witness.fd).map(String::as_str),
+                    Some(witness.identity.as_str()),
+                    "the specific accepted/monitor FD identity must disappear"
+                );
+                assert!(
+                    !remaining
+                        .values()
+                        .any(|identity| identity == &witness.identity),
+                    "no duplicate of the accepted/monitor socket may remain"
+                );
+            }
+            drop(clients);
+            drop(TcpListener::bind(local).await.unwrap());
+            eprintln!("descriptor cleanup dropFuture={drop_future} accepted=2 monitor=2 identitiesGone=4 permits=2/16 budget=0");
+        }
     }
 }

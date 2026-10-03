@@ -1052,6 +1052,33 @@ fn assemble_suite(assembly: ServiceAssembly, exec_mode: bool) -> Result<ReadySui
     })
 }
 
+type StorageShutdown = (
+    tokio::sync::oneshot::Sender<()>,
+    tokio::sync::oneshot::Receiver<()>,
+);
+
+async fn finish_storage_servers<T: Send + 'static>(
+    storage_shutdown: Option<StorageShutdown>,
+    servers: &mut tokio::task::JoinSet<T>,
+) {
+    if let Some((stop, drain_finished)) = storage_shutdown {
+        let _ = stop.send(());
+        let _ = drain_finished.await;
+    }
+    servers.abort_all();
+    while servers.join_next().await.is_some() {}
+}
+
+async fn stopped_server(
+    servers: &mut tokio::task::JoinSet<(&'static str, String)>,
+) -> Result<Option<i32>, String> {
+    match servers.join_next().await {
+        Some(Ok((name, result))) => Err(format!("{name} server stopped: {result}")),
+        Some(Err(error)) => Err(format!("server task stopped: {error}")),
+        None => Err("all server tasks stopped".to_owned()),
+    }
+}
+
 struct ReadySuite {
     cfg: RuntimeConfig,
     only: Selection,
@@ -1345,11 +1372,7 @@ async fn serve_suite(
     let child_pid = child.as_ref().and_then(super::child_id);
     let mut terminated = false;
     let outcome = tokio::select! {
-        result = servers.join_next() => match result {
-            Some(Ok((name, result))) => Err(format!("{name} server stopped: {result}")),
-            Some(Err(error)) => Err(format!("server task stopped: {error}")),
-            None => Err("all server tasks stopped".to_owned()),
-        },
+        result = stopped_server(&mut servers) => result,
         status = wait_child(child.as_mut()) => match status {
             Ok(status) => Ok(Some(exit_code(status))),
             Err(e) => Err(format!("waiting for the command: {e}")),
@@ -1417,12 +1440,7 @@ async fn serve_suite(
     pubsub.shutdown_push_dispatcher().await;
     // Storage cancels and joins its synchronous workers before the remaining servers are
     // aborted: dropping an accept future alone cannot wait for spawn_blocking work.
-    if let Some((stop, drain_finished)) = storage_shutdown {
-        let _ = stop.send(());
-        let _ = drain_finished.await;
-    }
-    servers.abort_all();
-    while servers.join_next().await.is_some() {}
+    finish_storage_servers(storage_shutdown, &mut servers).await;
     // Discovery is retired as an explicit, ordered step of shutdown, while the runtime is
     // still up and every server that answered on the advertised origin has stopped. Dropping
     // the locator on the way out is kept as a fallback, not as the mechanism: a destructor
@@ -1881,9 +1899,9 @@ mod tests {
     use super::{
         apply_auth_config_overrides, apply_auth_password_policy_overrides, auth_project_config,
         auth_sign_in_config, auth_signup_quota_config, blocking_auth_bridge_settings,
-        blocking_auth_selection, close_functions_source_admission, function_log_input,
-        idp_assertion_policy, reapply_explicit_auth_config,
-        reapply_explicit_auth_password_policies, reapply_explicit_auth_quota,
+        blocking_auth_selection, close_functions_source_admission, finish_storage_servers,
+        function_log_input, idp_assertion_policy, reapply_explicit_auth_config,
+        reapply_explicit_auth_password_policies, reapply_explicit_auth_quota, stopped_server,
     };
 
     /// Only the strict profile's unpinned daemon follows wall time on Firestore; a pinned clock
@@ -2475,6 +2493,105 @@ mod tests {
         assert_eq!(bundle["data"]["metadata"]["type"], "USER");
         assert_eq!(bundle["data"]["trace"], "projects/demo/traces/abc");
         assert_eq!(bundle["data"]["metadata"]["user"]["spoofed"], true);
+    }
+
+    /// The daemon must send stop and wait for Storage's completion before aborting peers.
+    #[tokio::test]
+    async fn storage_shutdown_drains_before_aborting_servers() {
+        struct ObserveDrop(
+            tokio::sync::oneshot::Sender<bool>,
+            Arc<std::sync::atomic::AtomicBool>,
+        );
+        impl Drop for ObserveDrop {
+            fn drop(&mut self) {
+                let (replacement, _) = tokio::sync::oneshot::channel();
+                let sender = std::mem::replace(&mut self.0, replacement);
+                let _ = sender.send(self.1.load(std::sync::atomic::Ordering::Acquire));
+            }
+        }
+        let drained = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let (aborted, abort_seen) = tokio::sync::oneshot::channel();
+        let (entered, entered_seen) = tokio::sync::oneshot::channel();
+        let mut servers = tokio::task::JoinSet::new();
+        let guard = ObserveDrop(aborted, drained.clone());
+        servers.spawn(async move {
+            let _guard = guard;
+            let _ = entered.send(());
+            std::future::pending::<()>().await;
+        });
+        entered_seen.await.unwrap();
+        let (stop, stopped) = tokio::sync::oneshot::channel();
+        let (done, finished) = tokio::sync::oneshot::channel();
+        let (stop_seen, received_stop) = tokio::sync::oneshot::channel();
+        let (release, released) = tokio::sync::oneshot::channel();
+        let worker = tokio::spawn(async move {
+            let _ = stop_seen.send(stopped.await.is_ok());
+            released.await.unwrap();
+            drained.store(true, std::sync::atomic::Ordering::Release);
+            let _ = done.send(());
+        });
+        let closing = tokio::spawn(async move {
+            finish_storage_servers(Some((stop, finished)), &mut servers).await;
+        });
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_secs(2), received_stop)
+                .await
+                .unwrap()
+                .unwrap(),
+            "Storage must receive an explicit stop before drain"
+        );
+        assert!(
+            !closing.is_finished(),
+            "drain completion must precede daemon completion"
+        );
+        release.send(()).unwrap();
+        worker.await.unwrap();
+        closing.await.unwrap();
+        assert!(
+            abort_seen.await.unwrap(),
+            "other servers must be aborted after Storage drains"
+        );
+    }
+
+    /// Closed shutdown channels, including a failed Storage server, must not panic or hang.
+    #[tokio::test]
+    async fn storage_shutdown_accepts_dropped_channels() {
+        let (stop, stopped) = tokio::sync::oneshot::channel();
+        drop(stopped);
+        let (done, finished) = tokio::sync::oneshot::channel();
+        drop(done);
+        let mut servers = tokio::task::JoinSet::<()>::new();
+        tokio::time::timeout(
+            std::time::Duration::from_secs(2),
+            finish_storage_servers(Some((stop, finished)), &mut servers),
+        )
+        .await
+        .unwrap();
+        finish_storage_servers(None, &mut servers).await;
+    }
+
+    /// A safely injected server error follows the daemon's actual server-selection branch.
+    #[tokio::test]
+    async fn storage_server_failure_uses_the_suite_shutdown_path() {
+        let mut servers = tokio::task::JoinSet::new();
+        servers.spawn(async {
+            let failure: std::io::Result<()> =
+                Err(std::io::Error::other("injected accept failure"));
+            ("Storage", format!("{failure:?}"))
+        });
+        let outcome = tokio::select! {
+            outcome = stopped_server(&mut servers) => outcome,
+            () = std::future::pending::<()>() => unreachable!(),
+        };
+        assert!(outcome.unwrap_err().contains("Storage server stopped: Err"));
+        let (stop, stopped) = tokio::sync::oneshot::channel();
+        let (done, finished) = tokio::sync::oneshot::channel();
+        let worker = tokio::spawn(async move {
+            assert!(stopped.await.is_ok());
+            let _ = done.send(());
+        });
+        finish_storage_servers(Some((stop, finished)), &mut servers).await;
+        worker.await.unwrap();
     }
 
     #[test]

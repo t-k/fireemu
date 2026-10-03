@@ -21,7 +21,7 @@ export function decodeSupplementJournal(bytes) {
     terminal.kind !== "RECORDED_UNREVIEWED" ||
     terminal.pending !== 0 ||
     terminal.parentClosed !== false ||
-    terminal.requests !== 60 ||
+    terminal.requests !== 61 ||
     terminal.source?.planSha256 !== sha256(JSON.stringify(supplementPlan()))
   )
     throw new Error("INCOMPLETE_SUPPLEMENT");
@@ -77,6 +77,7 @@ export function decodeSupplementJournal(bytes) {
   if (
     exchanges.length !== 53 ||
     terminal.families?.storage !== 53 ||
+    terminal.families?.precheck !== 1 ||
     terminal.families?.oauth !== 1 ||
     terminal.families?.tokeninfo !== 1 ||
     terminal.families?.rules !== 4 ||

@@ -40,6 +40,14 @@ export function supplementPlan() {
       "STORAGE-OBJECT/cross-dialect-state",
       "STORAGE-OBJECT/invalid-object-name-errors",
     ],
+    precheck: {
+      record1: { phaseRequests: 4, sharedRequests: 3, extraRequests: 1 },
+      record2: { phaseRequests: 4, sharedRequests: 3, extraRequests: 1 },
+      normalActual: 61,
+      recordPhysicalCap: 67,
+      campaignPhysicalCap: 134,
+      sameGoUsageLock: true,
+    },
     retainedOriginalConditionCount: 28,
     parentClosed: false,
     retries: 0,
@@ -133,6 +141,14 @@ export function parseSupplementJson(input) {
 }
 export function admissionProblem(state, family) {
   if (!state.armed || state.failed || state.pending !== 0) return "INACTIVE_OR_PENDING";
+  if (
+    family === "oauth"
+      ? state.ownerVerified || state.ownerPending
+      : family === "tokeninfo"
+        ? state.ownerVerified || !state.ownerPending
+        : !state.ownerVerified || state.ownerPending
+  )
+    return "OWNER_PHASE";
   if (!state.sourceCurrent || !state.grantCurrent || !state.locksHeld) return "AUTHORITY_CHANGED";
   if (
     !state.costKnown ||
@@ -156,11 +172,11 @@ export function admissionProblem(state, family) {
   )
     return "TOKEN_OR_GRANT_EXPIRY";
   if (family === "storage" && state.now - state.baselineObserved > 300000) return "BASELINE_STALE";
-  const cap = state.stage === "precheck" ? 8 : 66;
+  const cap = state.stage === "precheck" ? 8 : 66 + (state.precheckExtra === 1 ? 1 : 0);
   const familyCaps =
     state.stage === "precheck"
       ? { storage: 1, oauth: 1, tokeninfo: 1, rules: 4, bucket: 1 }
-      : LIMITS;
+      : { ...LIMITS, precheck: state.precheckExtra === 1 ? 1 : 0 };
   if (
     !Object.hasOwn(familyCaps, family) ||
     !Number.isSafeInteger(state.attempted) ||

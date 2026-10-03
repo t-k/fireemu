@@ -1,6 +1,6 @@
 // Root's fixed production entry. Local test helpers cannot construct its private live epoch.
-import { constants, lstatSync } from "node:fs";
-import { lstat, mkdir, open, realpath, unlink } from "node:fs/promises";
+import { constants, lstatSync, readFileSync, unlinkSync } from "node:fs";
+import { lstat, mkdir, open, realpath } from "node:fs/promises";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
@@ -690,12 +690,12 @@ export function validateSupplementPacket(packet) {
   const grant = packet.grant;
   if (
     grant.taskId !== "STORAGE-OBJECT-SANDBOX" ||
-    !["precheck", "record1", "record2"].includes(grant.stage) ||
+    !["record1", "record2"].includes(grant.stage) ||
     grant.recording !== { precheck: 0, record1: 1, record2: 2 }[grant.stage] ||
     !/^[a-f0-9]{20}$/.test(grant.runId) ||
     !SHA.test(grant.nonce) ||
     !/^[a-zA-Z0-9._-]{1,128}$/.test(grant.campaignId) ||
-    grant.maxPhysicalRequests !== (grant.stage === "precheck" ? 8 : 66) ||
+    grant.maxPhysicalRequests !== 67 ||
     grant.writes !== (grant.stage !== "precheck") ||
     grant.retries !== 0 ||
     grant.redirects !== 0 ||
@@ -850,8 +850,11 @@ export function verifySupplementDecisionRows({ ownerText, packet, packetSha256, 
     if (!/revoked|撤回|取消/.test(line)) continue;
     const otherExplicitPacket = /packetsha256\s*=\s*([a-f0-9]{64})/.exec(line)?.[1];
     if (
-      line.includes("調整役への委任") ||
+      (line.includes("調整役への委任") && !otherExplicitPacket) ||
       identifiers.some((identifier) => line.includes(identifier)) ||
+      (line.match(/[a-f0-9]{8,40}/g) ?? []).some((fragment) =>
+        packet.source.commit.startsWith(fragment),
+      ) ||
       (line.includes("storage-object") &&
         (!otherExplicitPacket || otherExplicitPacket === packetSha256))
     )
@@ -969,7 +972,7 @@ function historyAdmission(rows, packet, ownRun = null) {
       latest.set(row.runId, row);
     }
     if (row.campaignId === packet.grant.campaignId && row.event === "finished")
-      campaignAttempts += integer(row.requests, 0, 66, "CAMPAIGN_HISTORY_UNKNOWN");
+      campaignAttempts += integer(row.requests, 0, 67, "CAMPAIGN_HISTORY_UNKNOWN");
   }
   for (const [run, row] of latest) {
     if (run === ownRun) continue;
@@ -980,6 +983,18 @@ function historyAdmission(rows, packet, ownRun = null) {
     )
       fail("PRIOR_PROJECT_RUN_OPEN");
     previousTerminal = Math.max(previousTerminal ?? 0, Date.parse(row.ts));
+  }
+  if (ownRun !== null) {
+    const own = latest.get(ownRun);
+    if (
+      !own ||
+      own.event !== "started" ||
+      own.packetId !== packet.grant.nonce ||
+      own.sourceCommit !== packet.source.commit ||
+      own.pid !== process.pid ||
+      own.uid !== process.getuid()
+    )
+      fail("DURABLE_START_MISSING_OR_CHANGED");
   }
   if (campaignAttempts + packet.grant.maxPhysicalRequests > 140) fail("CAMPAIGN_CAP");
   return { previousTerminal, campaignAttempts };
@@ -1040,6 +1055,7 @@ async function costAuthority(paths, packet) {
     estimate +=
       integer(rate, 0, 10000000, "COST_RATE_UNKNOWN") *
       (packet.grant.stage === "precheck" && family === "storage" ? 1 : LIMITS[family]);
+  estimate += value.ratesMicroUsd.storage;
   for (const key of ["priorSpentMicroUsd", "priorReservedMicroUsd", "reservationMicroUsd"])
     integer(value[key], 0, 10000000, "COST_AMOUNT_UNKNOWN");
   if (
@@ -1067,6 +1083,7 @@ async function verifyEpoch(capability, family) {
     fail("LIVE_CURRENT_CHANGED");
   if (exists(epoch.paths.legacyLock)) fail("LEGACY_LOCK_PRESENT");
   for (const lock of epoch.locks) await held(lock, true);
+  await heldSharedLedger(epoch.ledger);
   await held(epoch.usage);
   await held(epoch.events);
   const prior = await history(epoch.paths, epoch.packet, epoch.packet.grant.runId);
@@ -1086,6 +1103,9 @@ async function verifyEpoch(capability, family) {
       sourceCurrent: true,
       grantCurrent: true,
       locksHeld: true,
+      precheckExtra: 1,
+      ownerVerified: epoch.verified,
+      ownerPending: Boolean(epoch.token) && !epoch.verified,
       now,
       started: epoch.utcStarted,
       previousTerminal: prior.previousTerminal,
@@ -1104,8 +1124,50 @@ async function verifyEpoch(capability, family) {
   if (problem) fail(problem);
   return epoch;
 }
+async function heldSharedLedger(record) {
+  const descriptor = await record.handle.stat({ bigint: true });
+  const current = await lstat(record.path, { bigint: true });
+  if (
+    ![descriptor, current].every(
+      (stat) =>
+        stat.isFile() &&
+        stat.dev === record.identity.dev &&
+        stat.ino === record.identity.ino &&
+        stat.birthtimeNs === record.identity.birthtimeNs &&
+        stat.uid === BigInt(process.getuid()) &&
+        stat.nlink === 1n &&
+        (Number(stat.mode) & 0o022) === 0,
+    )
+  )
+    fail("SHARED_LEDGER_FD_CHANGED");
+}
+export function supplementOwnerRequest(family, body) {
+  if (
+    !["oauth", "tokeninfo"].includes(family) ||
+    !Buffer.isBuffer(body) ||
+    (family === "tokeninfo" && body.length !== 0) ||
+    (family === "oauth" && (body.length === 0 || body.length > 65536))
+  )
+    fail("OWNER_ONE_PAIR_REQUEST");
+  return {
+    family,
+    label: family === "oauth" ? "owner-exchange" : "owner-tokeninfo",
+    method: "POST",
+    url: `https://oauth2.googleapis.com/${family === "oauth" ? "token" : "tokeninfo"}`,
+    headers: {
+      accept: "application/json",
+      "accept-encoding": "identity",
+      "content-type": "application/x-www-form-urlencoded;charset=UTF-8",
+    },
+    body,
+  };
+}
 async function dispatch(capability, request) {
   const epoch = await verifyEpoch(capability, request.family);
+  if (epoch.phase === "PRECHECK") {
+    if (epoch.precheckReads >= 4) fail("PRECHECK_PHASE_CAP");
+    epoch.precheckReads++;
+  }
   const sequence = epoch.attempted + 1;
   const duplicate = epoch.labels.has(request.label);
   if (duplicate) fail("DUPLICATE_ACTION");
@@ -1130,6 +1192,7 @@ async function dispatch(capability, request) {
     epochSha256: epoch.epochSha256,
     sequence,
     family: request.family,
+    phase: epoch.phase,
     label: request.label,
     method: request.method,
     url: request.url,
@@ -1183,6 +1246,7 @@ async function dispatch(capability, request) {
       bodyBytes: response.bodyBytes,
       bodySha256: sha256(response.body),
       requestBytesWritten: response.requestBytesWritten,
+      observedBodyBytes: response.attemptedBodyBytes,
       elapsedMs: response.receivedAtMs - response.requestStartedAtMs,
       ...(sensitive
         ? { credentialBodyOmitted: true }
@@ -1212,18 +1276,7 @@ async function ownerOnce(capability) {
   const adc = await loadAdc(epoch.packet.adc);
   epoch.secrets.push(...adc.secrets);
   try {
-    const exchange = await dispatch(capability, {
-      family: "oauth",
-      label: "owner-exchange",
-      method: "POST",
-      url: "https://oauth2.googleapis.com/token",
-      headers: {
-        accept: "application/json",
-        "accept-encoding": "identity",
-        "content-type": "application/x-www-form-urlencoded;charset=UTF-8",
-      },
-      body: adc.form,
-    });
+    const exchange = await dispatch(capability, supplementOwnerRequest("oauth", adc.form));
     if (
       !exchange.complete ||
       exchange.status !== 200 ||
@@ -1246,18 +1299,10 @@ async function ownerOnce(capability) {
     epoch.token = data.access_token;
     epoch.secrets.push(epoch.token);
     epoch.tokenUntil = exchange.requestStartedAtMs + seconds * 1000;
-    const tokeninfo = await dispatch(capability, {
-      family: "tokeninfo",
-      label: "owner-tokeninfo",
-      method: "POST",
-      url: "https://oauth2.googleapis.com/tokeninfo",
-      headers: {
-        accept: "application/json",
-        "accept-encoding": "identity",
-        "content-type": "application/x-www-form-urlencoded;charset=UTF-8",
-      },
-      body: Buffer.alloc(0),
-    });
+    const tokeninfo = await dispatch(
+      capability,
+      supplementOwnerRequest("tokeninfo", Buffer.alloc(0)),
+    );
     if (
       !tokeninfo.complete ||
       tokeninfo.status !== 200 ||
@@ -1279,6 +1324,12 @@ async function ownerOnce(capability) {
       fail("OWNER_CANNOT_COVER_RUN");
     await append(epoch.events.handle, {
       kind: "OWNER_VERIFIED",
+      actor: ROOT_ACTOR,
+      basis: ROOT_BASIS,
+      foundation: epoch.packet.foundation,
+      sourceCommit: epoch.packet.source.commit,
+      nonce: epoch.packet.grant.nonce,
+      epochSha256: epoch.epochSha256,
       adc: adc.receipt,
       ...proof,
       tokenDeadlineMonotonicMs: epoch.tokenUntil,
@@ -1439,11 +1490,12 @@ export async function runRootSupplement(...args) {
       paths.ledger,
       constants.O_WRONLY | constants.O_APPEND | constants.O_NOFOLLOW,
     );
-    const ledgerIdentity = await ledger.stat();
+    const ledgerIdentity = await ledger.stat({ bigint: true });
     if (
       !ledgerIdentity.isFile() ||
-      ledgerIdentity.uid !== process.getuid() ||
-      (ledgerIdentity.mode & 0o022) !== 0
+      ledgerIdentity.uid !== BigInt(process.getuid()) ||
+      (Number(ledgerIdentity.mode) & 0o022) !== 0 ||
+      ledgerIdentity.nlink !== 1n
     )
       fail("SHARED_LEDGER_UNSAFE");
     // From this point a partially durable start must retain locks for Root recovery.
@@ -1473,11 +1525,14 @@ export async function runRootSupplement(...args) {
       locks,
       usage,
       events,
+      ledger: { path: paths.ledger, handle: ledger, identity: ledgerIdentity },
       armed: true,
       failed: false,
       pending: 0,
       attempted: 0,
-      families: { storage: 0, oauth: 0, tokeninfo: 0, rules: 0, bucket: 0 },
+      families: { storage: 0, oauth: 0, tokeninfo: 0, rules: 0, bucket: 0, precheck: 0 },
+      phase: "OWNER",
+      precheckReads: 0,
       labels: new Set(),
       token: null,
       tokenUntil: null,
@@ -1489,8 +1544,24 @@ export async function runRootSupplement(...args) {
     };
     liveEpochs.set(capability, epoch);
     await ownerOnce(capability);
+    epoch.phase = "PRECHECK";
     const before = await rulesSnapshot(capability, "before");
     await bucketBinding(capability);
+    const precheck = await runSupplementProgram(
+      (request) => dispatch(capability, { ...request, family: "precheck" }),
+      { bucket: packet.target.bucket, runId: packet.grant.runId, stage: "precheck" },
+    );
+    if (precheck.outcome !== "PRECHECK_CANDIDATE" || epoch.precheckReads !== 4)
+      fail("PRECHECK_EMPTY_UNKNOWN");
+    await append(events.handle, {
+      kind: "PRECHECK_COMPLETE",
+      physical: 4,
+      shared: 3,
+      additional: 1,
+      sourceCommit: packet.source.commit,
+      nonce: packet.grant.nonce,
+    });
+    epoch.phase = "PROGRAM";
     const observed = await runSupplementProgram((request) => dispatch(capability, request), {
       bucket: packet.target.bucket,
       runId: packet.grant.runId,
@@ -1520,7 +1591,21 @@ export async function runRootSupplement(...args) {
       pending: 0,
     };
     await append(events.handle, terminal);
+    const journalSha256 = (await readOwned(events.path, 80 * 1024 * 1024, true)).sha256;
+    const metadata = await exclusive(join(runDirectory, "manifest.json"), {
+      ...terminal,
+      schemaVersion: 2,
+      kind: "STORAGE_OBJECT_SUPPLEMENT_PRIVATE_RECORD",
+      journalSha256,
+      originalConditionCount: 28,
+      scope: "M1_M4_ONLY",
+      recoveryExecution: "OPEN_NEW_GO_REQUIRED",
+      nativeReview: "PENDING",
+      fullCorpus: "OPEN",
+    });
+    await metadata.handle.close();
     await append(usage.handle, { ...terminal, kind: "CONSUMED" });
+    await heldSharedLedger(epoch.ledger);
     await append(ledger, {
       ...terminal,
       event: "finished",
@@ -1537,7 +1622,11 @@ export async function runRootSupplement(...args) {
       sourceCommit: packet.source.commit,
       parentClosed: false,
     };
-  } catch {
+  } catch (error) {
+    const reason =
+      typeof error?.message === "string" && /^[A-Z][A-Z0-9_]{1,95}$/.test(error.message)
+        ? error.message
+        : "INTERNAL_FAILURE";
     const epoch = liveEpochs.get(capability);
     if (epoch) epoch.failed = true;
     if (started && ledger)
@@ -1548,7 +1637,7 @@ export async function runRootSupplement(...args) {
         outcome: "unknown",
         sandboxAtBaseline: false,
         requests: epoch?.attempted ?? 0,
-        reason: "STORAGE_OBJECT_SUPPLEMENT_STOP",
+        reason,
       }).catch(() => {});
     if (usage)
       await append(usage.handle, {
@@ -1560,7 +1649,7 @@ export async function runRootSupplement(...args) {
       await append(events.handle, {
         ...base,
         kind: "UNKNOWN",
-        reason: "STORAGE_OBJECT_SUPPLEMENT_STOP",
+        reason,
       }).catch(() => {});
     fail("STORAGE_OBJECT_SUPPLEMENT_STOP");
   } finally {
@@ -1576,14 +1665,17 @@ export async function runRootSupplement(...args) {
     // Usage survives every outcome. UNKNOWN locks survive even when all private FDs close.
     if (clean || !started)
       for (const lock of locks.toReversed()) {
-        const current = await readOwned(lock.path);
+        const current = lstatSync(lock.path, { bigint: true });
         if (
-          current.identity.dev !== lock.identity.dev ||
-          current.identity.ino !== lock.identity.ino ||
-          current.bytes.toString() !== lock.body
+          !current.isFile() ||
+          current.dev !== lock.identity.dev ||
+          current.ino !== lock.identity.ino ||
+          current.uid !== BigInt(process.getuid()) ||
+          (Number(current.mode) & 0o777) !== 0o600 ||
+          readFileSync(lock.path, "utf8") !== lock.body
         )
           fail("LOCK_RELEASE_IDENTITY");
-        await unlink(lock.path);
+        unlinkSync(lock.path);
         await syncDirectory(paths.lockDir);
       }
   }

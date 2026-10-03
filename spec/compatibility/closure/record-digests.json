@@ -36,6 +36,8 @@
     "spec/compatibility/broad-runs/fs-transaction-p02-recorded-observations-v1.json": "25fb9791af20196080e79cd6a47dd5835b982fefa9ff409e05e4bd2ef2c9e23c",
     "spec/compatibility/broad-runs/fs-transaction-p08-recorded-comparison-v1.json": "404c55b0cfb5d5d8950d6581bb30b3b876d35fac783db08ee64f8baa67b91841",
     "spec/compatibility/broad-runs/fs-transaction-p08-recorded-observations-v1.json": "a405609b2b534618443924535c60d8d251a53518e17330005a1bf611c3a5f57a",
+    "spec/compatibility/broad-runs/fs-transaction-p13b-recorded-comparison-v1.json": "b4c3817e5ee9578e307272a29009e05439c929f8307b268c067ac5aca7242d57",
+    "spec/compatibility/broad-runs/fs-transaction-p13b-recorded-observations-v1.json": "3203503dd1bd4b42d7adcbbbefe87393aa4e479e406f52971a9d73b63fbf3ba0",
     "spec/compatibility/broad-runs/fs-write-limits-03.json": "145134bd10a13a9d0cead3f06929aaee6f2f491bf14bd04ab26cc6ec45cc434f",
     "spec/compatibility/closure/AUTH-ACCOUNT.json": "d04ac6a82f575b2e6d107d7b4433f8bed2305330202dd69d14963ed574788c92",
     "spec/compatibility/closure/AUTH-CREDENTIAL.json": "4cc8ea55e03ad1825cddd527f910fd597c0f1e7d7696ecb9318d481d6dea0335",

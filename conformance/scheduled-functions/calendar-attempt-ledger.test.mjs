@@ -780,6 +780,63 @@ for (const change of ["raw-report", "close-failure"]) {
   });
 }
 
+for (const change of ["close-failure", "deadline"]) {
+  test(`last identity await invalidates the final operation ack: ${change}`, async (t) => {
+    const box = await sandbox(t);
+    let ledger;
+    let armed = false;
+    let sealedReads = 0;
+    let finalReadDone = false;
+    let reportPaths = 0;
+    let changed = false;
+    let closeFailed = false;
+    const realNow = Date.now;
+    const traced = observedIo(async (event, invoke, _handle, args) => {
+      if (changed && change === "close-failure" && event.endsWith(":close") && !closeFailed) {
+        closeFailed = true;
+        throw new Error("last-boundary close failure");
+      }
+      const value = await invoke();
+      if (
+        armed &&
+        event === "ledger.jsonl:read" &&
+        args[0].toString().includes('"type":"seal"') &&
+        ++sealedReads === 2
+      )
+        finalReadDone = true;
+      return value;
+    });
+    const io = {
+      ...traced.io,
+      async realpath(file, ...args) {
+        const value = await fs.realpath(file, ...args);
+        if (finalReadDone && path.basename(file) === "report-1.json" && ++reportPaths === 2) {
+          changed = true;
+          if (change === "close-failure")
+            await assert.rejects(ledger.close(), /last-boundary close failure/);
+          else Date.now = () => realNow() + 60000;
+        }
+        return value;
+      },
+    };
+    ledger = await createAttemptLedger({ ...box.options, io });
+    t.after(() => ledger.close());
+    try {
+      await ledger.registerBirth({ attemptId: "a", planBytes: bytes({}) });
+      await ledger.recordTerminal({ attemptId: "a", reportBytes: report("a", "pass", box.scope) });
+      armed = true;
+      await assert.rejects(ledger.seal(), /unknown|closed|deadline/);
+      assert.equal(changed, true, "the last real identity query must finish before invalidation");
+      assert.equal(ledger.ioStatus().state, "unknown");
+      assert.equal(ledger.ioStatus().durabilityAcknowledged, false);
+    } finally {
+      Date.now = realNow;
+    }
+    await ledger.close();
+    assert.equal(traced.live.size, 0);
+  });
+}
+
 test("exports the bounded durable ledger and independent bytes validator", async () => {
   const api = await import("./calendar-attempt-ledger.mjs").catch(() => ({}));
   assert.equal(typeof api.createAttemptLedger, "function", "durable ledger API is missing");

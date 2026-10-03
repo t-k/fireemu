@@ -125,3 +125,73 @@ def test_markdown_fragments_are_heading_anchors(repo):
     write(repo, "spec/compatibility/closure/X.json", json.dumps(closure))
     problems = check(repo)
     assert problems == ["X.json: docs/compatibility/goals.md#missing-heading names no entry in the file"]
+
+
+def add_projection(repo):
+    historical = "spec/compatibility/official-compatibility/history/e57a78e0/X.json"
+    write(repo, historical, '{"conditions": [{"source": "tools/compat-broad/fs-write-limits/test_old.py"}]}')
+    write(repo, "tools/compat-broad/fs-write-limits/test_old.py", "")
+    official = "spec/compatibility/official-compatibility/registry.json"
+    write(repo, official, json.dumps({"snapshots": [{"snapshotPath": historical, "snapshotSha256": sha((repo / historical).read_text())}]}))
+    parent = "spec/compatibility/production-parent-registry.json"
+    write(repo, parent, json.dumps({"officialRegistryPath": official, "officialRegistrySha256": sha((repo / official).read_text())}))
+    return parent, official, historical
+
+
+def test_projection_documents_are_discovered_without_increasing_closure_count(repo):
+    parent, official, historical = add_projection(repo)
+    refs = closure_references(repo)
+    assert {parent, official, historical}.issubset({ref.path for ref in refs})
+    previous = json.loads((repo / "spec/compatibility/closure/record-digests.json").read_text())["records"]
+    updated = build_lock(repo)
+    assert all(updated["records"][path] == digest for path, digest in previous.items())
+    write(repo, "spec/compatibility/closure/record-digests.json", json.dumps(updated))
+    assert check(repo) == []
+
+
+def test_new_projection_inputs_need_pins_and_paired_real_digests(repo):
+    _, official, _ = add_projection(repo)
+    assert any("production-parent-registry.json" in p and "not pinned" in p for p in check(repo))
+    doc = json.loads((repo / official).read_text())
+    doc["snapshots"][0]["snapshotSha256"] = "0" * 64
+    write(repo, official, json.dumps(doc))
+    assert any("snapshotSha256 differs" in p for p in check(repo))
+
+
+def test_partial_projection_and_missing_snapshot_fail(repo):
+    _, official, historical = add_projection(repo)
+    (repo / historical).unlink()
+    assert any(historical in p and "missing" in p for p in check(repo))
+    (repo / official).unlink()
+    assert any("projection" in p and "missing" in p for p in check(repo))
+
+
+def test_active_projection_still_refuses_retired_execution_references(repo):
+    parent, _, _ = add_projection(repo)
+    doc = json.loads((repo / parent).read_text())
+    doc["activeEvidence"] = "tools/compat-broad/fs-write-limits/test_old.py"
+    write(repo, parent, json.dumps(doc))
+    assert any("retired" in p and "production-parent-registry" in p for p in check(repo))
+
+
+def test_historical_references_keep_existence_and_digest_checks(repo):
+    _, _, historical = add_projection(repo)
+    target = "spec/compatibility/broad-runs/old-observation.json"
+    write(repo, target, '{"recorded": true}')
+    doc = json.loads((repo / historical).read_text())
+    doc["observationPath"] = target
+    doc["observationSha256"] = sha('{"recorded": true}')
+    write(repo, historical, json.dumps(doc))
+    write(repo, "spec/compatibility/closure/record-digests.json", json.dumps(build_lock(repo)))
+    write(repo, target, '{"recorded": false}')
+    assert any("observationSha256 differs" in p for p in check(repo))
+    (repo / target).unlink()
+    assert any(target in p and "missing" in p for p in check(repo))
+
+
+def test_projection_paired_digest_cannot_be_malformed(repo):
+    _, official, _ = add_projection(repo)
+    doc = json.loads((repo / official).read_text())
+    doc["snapshots"][0]["snapshotSha256"] = "not-a-digest"
+    write(repo, official, json.dumps(doc))
+    assert any("snapshotSha256" in p and "invalid" in p for p in check(repo))

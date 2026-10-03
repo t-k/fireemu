@@ -1,0 +1,539 @@
+{
+  "schemaVersion": 1,
+  "parent": "SCHEDULED-FUNCTIONS",
+  "parentStatus": "IMPLEMENTING",
+  "inventoryStatus": "FROZEN",
+  "oracleTrack": "disposable-sandbox",
+  "oracle": {
+    "project": "fireemu-oracle-sbx",
+    "region": "us-central1",
+    "generations": [1, 2]
+  },
+  "closureReview": {
+    "decision": "PENDING"
+  },
+  "scopeDecisions": [
+    {
+      "id": "S1",
+      "decision": "Include Node.js v1 pubsub.schedule and v2 onSchedule, Cloud Scheduler dependencies and explicitly classified Fireemu-only scheduler/clock.",
+      "rationale": "Matches the lane8 owner directive.",
+      "status": "FROZEN",
+      "decidedBy": "coordinator (delegated by owner)",
+      "decidedOn": "2026-09-30",
+      "decisionRef": "docs.local/instructions/owner-decisions.md (2026-09-30 SCHEDULED-FUNCTIONS scope: coordinator rulings)"
+    },
+    {
+      "id": "S2",
+      "decision": "Exclude task queues and recommend TASK-QUEUE-FUNCTIONS as a separate future parent candidate without starting it.",
+      "rationale": "Cloud Tasks queue admission, rate, concurrency, deduplication and retries are an independent service lifecycle.",
+      "status": "FROZEN",
+      "decidedBy": "coordinator (delegated by owner)",
+      "decidedOn": "2026-09-30",
+      "decisionRef": "docs.local/instructions/owner-decisions.md (2026-09-30 SCHEDULED-FUNCTIONS scope: coordinator rulings)"
+    },
+    {
+      "id": "S3",
+      "decision": "Exclude generic Pub/Sub/custom Eventarc and ordinary Firebase source-event trigger parity.",
+      "rationale": "Owned by lane7 and FUNCTIONS-EVENTS; schedule-specific delivery remains here.",
+      "status": "FROZEN",
+      "decidedBy": "coordinator (delegated by owner)",
+      "decidedOn": "2026-09-30",
+      "decisionRef": "docs.local/instructions/owner-decisions.md (2026-09-30 SCHEDULED-FUNCTIONS scope: coordinator rulings)"
+    },
+    {
+      "id": "S4",
+      "decision": "Cloud Scheduler job readbacks are oracle setup/calendar evidence; no generic Cloud Scheduler management REST implementation claim.",
+      "rationale": "Local scope is declaration, calendar evaluation and handler-visible behavior.",
+      "status": "FROZEN",
+      "decidedBy": "coordinator (delegated by owner)",
+      "decidedOn": "2026-09-30",
+      "decisionRef": "docs.local/instructions/owner-decisions.md (2026-09-30 SCHEDULED-FUNCTIONS scope: coordinator rulings)"
+    },
+    {
+      "id": "S5",
+      "decision": "English-like App Engine/groc schedules are included; App Engine HTTP application targets, billing, scaling, IAM parity and arbitrary external targets are excluded.",
+      "rationale": "Language support differs from deployment target support.",
+      "status": "FROZEN",
+      "decidedBy": "coordinator (delegated by owner)",
+      "decidedOn": "2026-09-30",
+      "decisionRef": "docs.local/instructions/owner-decisions.md (2026-09-30 SCHEDULED-FUNCTIONS scope: coordinator rulings)"
+    },
+    {
+      "id": "S6",
+      "decision": "Observe one pinned Node.js fixture/SDK, both generations, one region; compare exact cases on final binary/runner.",
+      "rationale": "Bounded reproducible observations do not prove all runtimes or regions.",
+      "status": "FROZEN",
+      "decidedBy": "coordinator (delegated by owner)",
+      "decidedOn": "2026-09-30",
+      "decisionRef": "docs.local/instructions/owner-decisions.md (2026-09-30 SCHEDULED-FUNCTIONS scope: coordinator rulings)"
+    },
+    {
+      "id": "S7",
+      "decision": "Fireemu-only rows use local properties/regressions/mutation evidence, not fictitious production recordings.",
+      "rationale": "Virtual clock, catch-up policies and rewind have no Google control API counterpart.",
+      "status": "FROZEN",
+      "decidedBy": "coordinator (delegated by owner)",
+      "decidedOn": "2026-09-30",
+      "decisionRef": "docs.local/instructions/owner-decisions.md (2026-09-30 SCHEDULED-FUNCTIONS scope: coordinator rulings)"
+    },
+    {
+      "id": "S8",
+      "decision": "Retain and document fail-closed token verification after explicit backwards rewind; coordinate shared admission helper edits and limit lane8 fixes to schedule/manual paths.",
+      "rationale": "Avoid weakening Auth verification and changing other lanes source semantics without review.",
+      "status": "FROZEN",
+      "decidedBy": "coordinator (delegated by owner)",
+      "decidedOn": "2026-09-30",
+      "decisionRef": "docs.local/instructions/owner-decisions.md (2026-09-30 SCHEDULED-FUNCTIONS scope: coordinator rulings)"
+    }
+  ],
+  "conditions": [
+    {
+      "conditionId": "SCHEDULED-FUNCTIONS/declarations-v1-v2",
+      "evidenceType": "production-parity",
+      "recipeIds": ["scheduled-functions/deployment"],
+      "cases": [
+        "v1-schedule-chain",
+        "v2-onSchedule-string",
+        "v2-onSchedule-options",
+        "omitted-timezone",
+        "explicit-timezone",
+        "retry-options-preserved",
+        "attempt-deadline",
+        "v1-App-Engine-job-location",
+        "v2-function-region-job-location",
+        "omitted-versus-null-reset",
+        "fractional-retry-duration",
+        "SDK-attemptDeadline-versus-CLI-timeout"
+      ],
+      "status": "PENDING_CORPUS",
+      "coverageStatus": "debt",
+      "evidence": null,
+      "obligation": "Pinned SDK declarations and Firebase CLI effective job readback",
+      "source": "https://firebase.google.com/docs/functions/schedule-functions; conformance/node_modules/firebase-tools/lib/gcp/cloudscheduler.js; conformance/node_modules/firebase-functions/lib/v2/providers/scheduler.js; conformance/node_modules/firebase-functions/lib/v1/providers/pubsub.js"
+    },
+    {
+      "conditionId": "SCHEDULED-FUNCTIONS/cron-grammar",
+      "evidenceType": "production-parity",
+      "recipeIds": ["scheduled-functions/calendar/cron"],
+      "cases": [
+        "wildcard",
+        "list",
+        "range",
+        "step",
+        "named-month-weekday",
+        "sunday-0-7",
+        "day-of-month-or-weekday",
+        "field-bounds",
+        "wrong-field-count",
+        "unsupported-special-token",
+        "cron-alias",
+        "numeric-slash-step",
+        "impossible-date"
+      ],
+      "status": "PENDING_CORPUS",
+      "coverageStatus": "debt",
+      "evidence": null,
+      "obligation": "Cloud Scheduler accepted and refused cron schedules",
+      "source": "https://docs.cloud.google.com/scheduler/docs/configuring/cron-job-schedules; crates/fireemu-core-functions/src/cron.rs; conformance/node_modules/firebase-tools/lib/gcp/cloudscheduler.js"
+    },
+    {
+      "conditionId": "SCHEDULED-FUNCTIONS/groc-grammar",
+      "evidenceType": "production-parity",
+      "recipeIds": ["scheduled-functions/calendar/groc"],
+      "cases": [
+        "every-minute",
+        "every-N-minutes",
+        "every-N-hours",
+        "every-day-at-time",
+        "weekday-list",
+        "ordinal-weekday",
+        "month-calendar",
+        "interval-over-one-day",
+        "invalid-interval",
+        "invalid-calendar",
+        "invalid-weekday-prefix",
+        "interval-phase-versus-creation-anchor",
+        "synchronized-window"
+      ],
+      "status": "PENDING_CORPUS",
+      "coverageStatus": "debt",
+      "evidence": null,
+      "obligation": "English-like schedule language; no App Engine HTTP execution claim",
+      "source": "https://docs.cloud.google.com/scheduler/docs/configuring/cron-job-schedules; crates/fireemu-core-functions/src/cron.rs; conformance/node_modules/firebase-tools/lib/gcp/cloudscheduler.js"
+    },
+    {
+      "conditionId": "SCHEDULED-FUNCTIONS/timezone-validation-defaults",
+      "evidenceType": "production-parity",
+      "recipeIds": ["scheduled-functions/calendar/timezone"],
+      "cases": [
+        "explicit-UTC",
+        "Asia-Tokyo",
+        "America-New-York",
+        "v1-default",
+        "v2-default",
+        "invalid-zone"
+      ],
+      "status": "PENDING_CORPUS",
+      "coverageStatus": "debt",
+      "evidence": null,
+      "obligation": "Effective generation-specific defaults and timezone acceptance",
+      "source": "https://docs.cloud.google.com/scheduler/docs/configuring/cron-job-schedules; crates/fireemu-core-functions/src/cron.rs; conformance/node_modules/firebase-tools/lib/gcp/cloudscheduler.js"
+    },
+    {
+      "conditionId": "SCHEDULED-FUNCTIONS/next-occurrence",
+      "evidenceType": "production-parity",
+      "recipeIds": ["scheduled-functions/calendar/next"],
+      "cases": [
+        "strictly-after-anchor",
+        "minute-boundary",
+        "day-month-year-rollover",
+        "leap-day",
+        "sparse-calendar"
+      ],
+      "status": "PENDING_CORPUS",
+      "coverageStatus": "debt",
+      "evidence": null,
+      "obligation": "Recorded job next-time bracketed by create dispatch/response; local calendar query",
+      "source": "https://docs.cloud.google.com/scheduler/docs/configuring/cron-job-schedules; crates/fireemu-core-functions/src/cron.rs; conformance/node_modules/firebase-tools/lib/gcp/cloudscheduler.js"
+    },
+    {
+      "conditionId": "SCHEDULED-FUNCTIONS/dst-calendar",
+      "evidenceType": "production-parity",
+      "recipeIds": ["scheduled-functions/calendar/dst"],
+      "cases": [
+        "spring-gap-next-time",
+        "fall-fold-next-time",
+        "UTC-control",
+        "non-DST-zone-control"
+      ],
+      "status": "PENDING_CORPUS",
+      "coverageStatus": "debt",
+      "evidence": null,
+      "obligation": "Observed future transition next-time only; unobservable repeated delivery remains explicit debt",
+      "source": "https://docs.cloud.google.com/scheduler/docs/configuring/cron-job-schedules; crates/fireemu-core-functions/src/cron.rs; conformance/node_modules/firebase-tools/lib/gcp/cloudscheduler.js"
+    },
+    {
+      "conditionId": "SCHEDULED-FUNCTIONS/v2-http-delivery",
+      "evidenceType": "production-parity",
+      "recipeIds": ["scheduled-functions/delivery/v2"],
+      "cases": [
+        "request-method",
+        "jobName-header",
+        "scheduleTime-header",
+        "body",
+        "SDK-ScheduledEvent",
+        "handler-success-ack",
+        "handler-throw-ack",
+        "SDK-context-getter",
+        "SDK-event-enumerability"
+      ],
+      "status": "PENDING_CORPUS",
+      "coverageStatus": "debt",
+      "evidence": null,
+      "obligation": "Actual Scheduler to HTTP function delivery and SDK-visible event",
+      "source": "https://firebase.google.com/docs/functions/schedule-functions; conformance/node_modules/firebase-tools/lib/gcp/cloudscheduler.js; conformance/node_modules/firebase-functions/lib/v2/providers/scheduler.js; conformance/node_modules/firebase-functions/lib/v1/providers/pubsub.js"
+    },
+    {
+      "conditionId": "SCHEDULED-FUNCTIONS/v1-pubsub-delivery",
+      "evidenceType": "production-parity",
+      "recipeIds": ["scheduled-functions/delivery/v1"],
+      "cases": [
+        "published-data",
+        "published-attributes",
+        "message-id-presence",
+        "publishTime",
+        "v1-handler-context",
+        "context-only-handler",
+        "context-resource-topic-versus-job"
+      ],
+      "status": "PENDING_CORPUS",
+      "coverageStatus": "debt",
+      "evidence": null,
+      "obligation": "Actual Scheduler publish and deployed v1 handler payload",
+      "source": "https://firebase.google.com/docs/functions/schedule-functions; conformance/node_modules/firebase-tools/lib/gcp/cloudscheduler.js; conformance/node_modules/firebase-functions/lib/v2/providers/scheduler.js; conformance/node_modules/firebase-functions/lib/v1/providers/pubsub.js"
+    },
+    {
+      "conditionId": "SCHEDULED-FUNCTIONS/forced-and-natural-invocation",
+      "evidenceType": "production-parity",
+      "recipeIds": ["scheduled-functions/delivery/identity"],
+      "cases": [
+        "natural-scheduled-run",
+        "Cloud-Scheduler-run-now",
+        "retry-stable-occurrence-identity",
+        "success-next-occurrence"
+      ],
+      "status": "PENDING_CORPUS",
+      "coverageStatus": "debt",
+      "evidence": null,
+      "obligation": "Natural/forced Scheduler dispatch, distinct from Fireemu manual control",
+      "source": "https://firebase.google.com/docs/functions/schedule-functions; conformance/node_modules/firebase-tools/lib/gcp/cloudscheduler.js; conformance/node_modules/firebase-functions/lib/v2/providers/scheduler.js; conformance/node_modules/firebase-functions/lib/v1/providers/pubsub.js"
+    },
+    {
+      "conditionId": "SCHEDULED-FUNCTIONS/retry-config-validation",
+      "evidenceType": "production-parity",
+      "recipeIds": ["scheduled-functions/retry/config"],
+      "cases": [
+        "omitted-options",
+        "explicit-zero",
+        "retryCount-boundary",
+        "min-backoff",
+        "max-backoff",
+        "max-doublings",
+        "max-retry-duration",
+        "attemptDeadline-boundary"
+      ],
+      "status": "PENDING_CORPUS",
+      "coverageStatus": "debt",
+      "evidence": null,
+      "obligation": "Effective job config acceptance/refusal and declaration mapping",
+      "source": "https://docs.cloud.google.com/scheduler/docs/configuring/retry-jobs; crates/fireemu-core-functions/src/manifest.rs; conformance/node_modules/firebase-tools/lib/gcp/cloudscheduler.js"
+    },
+    {
+      "conditionId": "SCHEDULED-FUNCTIONS/v2-retry-limits",
+      "evidenceType": "production-parity",
+      "recipeIds": ["scheduled-functions/retry/v2-limits"],
+      "cases": [
+        "zero-no-retry",
+        "next-schedule-after-failure",
+        "finite-retry-count",
+        "success-stops-retry",
+        "duration-only",
+        "count-and-duration-interaction"
+      ],
+      "status": "PENDING_CORPUS",
+      "coverageStatus": "debt",
+      "evidence": null,
+      "obligation": "Record actual attempts and stopping rules; do not assume one shared event retry policy",
+      "source": "https://docs.cloud.google.com/scheduler/docs/configuring/retry-jobs; crates/fireemu-core-functions/src/manifest.rs; conformance/node_modules/firebase-tools/lib/gcp/cloudscheduler.js"
+    },
+    {
+      "conditionId": "SCHEDULED-FUNCTIONS/v2-backoff",
+      "evidenceType": "production-parity",
+      "recipeIds": ["scheduled-functions/retry/v2-backoff"],
+      "cases": [
+        "first-delay",
+        "exponential-doubling",
+        "linear-after-doublings",
+        "max-backoff-cap",
+        "stable-scheduleTime"
+      ],
+      "status": "PENDING_CORPUS",
+      "coverageStatus": "debt",
+      "evidence": null,
+      "obligation": "Short bounded production retry chains with dispatch/response timing",
+      "source": "https://docs.cloud.google.com/scheduler/docs/configuring/retry-jobs; crates/fireemu-core-functions/src/manifest.rs; conformance/node_modules/firebase-tools/lib/gcp/cloudscheduler.js"
+    },
+    {
+      "conditionId": "SCHEDULED-FUNCTIONS/v1-two-stage-retry",
+      "evidenceType": "production-parity",
+      "recipeIds": ["scheduled-functions/retry/v1"],
+      "cases": [
+        "publish-ack-versus-handler-failure",
+        "handler-no-retry",
+        "handler-retry-declaration",
+        "scheduled-occurrence-identity"
+      ],
+      "status": "PENDING_CORPUS",
+      "coverageStatus": "debt",
+      "evidence": null,
+      "obligation": "Separate Scheduler publish retry from v1 subscriber retry; coordinate generic Pub/Sub scope",
+      "source": "https://docs.cloud.google.com/scheduler/docs/configuring/retry-jobs; crates/fireemu-core-functions/src/manifest.rs; conformance/node_modules/firebase-tools/lib/gcp/cloudscheduler.js"
+    },
+    {
+      "conditionId": "SCHEDULED-FUNCTIONS/deadline-and-overlap",
+      "evidenceType": "production-parity",
+      "recipeIds": ["scheduled-functions/delivery/deadline-overlap"],
+      "cases": [
+        "attemptDeadline-readback",
+        "bounded-handler-timeout",
+        "scheduler-attempt-versus-handler-instance",
+        "next-occurrence-during-work"
+      ],
+      "status": "PENDING_CORPUS",
+      "coverageStatus": "debt",
+      "evidence": null,
+      "obligation": "Observe deadline acknowledgement and overlap; no exactly-once or scaling claim",
+      "source": "https://firebase.google.com/docs/functions/schedule-functions; conformance/node_modules/firebase-tools/lib/gcp/cloudscheduler.js; conformance/node_modules/firebase-functions/lib/v2/providers/scheduler.js; conformance/node_modules/firebase-functions/lib/v1/providers/pubsub.js"
+    },
+    {
+      "conditionId": "SCHEDULED-FUNCTIONS/clock-config",
+      "evidenceType": "fireemu-only",
+      "recipeIds": ["scheduled-functions/local/config"],
+      "cases": [
+        "daemon-clockStart",
+        "timezone-default",
+        "scheduler-virtual",
+        "unsupported-wall-mode",
+        "invalid-config-location"
+      ],
+      "status": "PENDING_LOCAL_VERIFICATION",
+      "coverageStatus": "debt",
+      "evidence": null,
+      "obligation": "Fireemu configuration contract, not a production wall-clock implementation claim",
+      "source": "spec/compatibility/contract.json#FN-CLAIM-SCHEDULE and crates/fireemu-adapter-functions/src/runtime.rs and crates/fireemu-core-session/src/clock.rs"
+    },
+    {
+      "conditionId": "SCHEDULED-FUNCTIONS/clock-forward-boundaries",
+      "evidenceType": "fireemu-only",
+      "recipeIds": ["scheduled-functions/local/clock"],
+      "cases": [
+        "advance",
+        "advanceTo",
+        "set-forward",
+        "same-instant",
+        "exact-minute",
+        "boundary-before-after"
+      ],
+      "status": "PENDING_LOCAL_VERIFICATION",
+      "coverageStatus": "debt",
+      "evidence": null,
+      "obligation": "Logical clock operations produce documented schedule occurrences",
+      "source": "spec/compatibility/contract.json#FN-CLAIM-SCHEDULE and crates/fireemu-adapter-functions/src/runtime.rs and crates/fireemu-core-session/src/clock.rs"
+    },
+    {
+      "conditionId": "SCHEDULED-FUNCTIONS/catch-up-policy",
+      "evidenceType": "fireemu-only",
+      "recipeIds": ["scheduled-functions/local/catch-up"],
+      "cases": [
+        "all",
+        "latest",
+        "none",
+        "small-cap",
+        "cap-replenishment",
+        "long-jump",
+        "repeated-notification",
+        "multiple-jobs"
+      ],
+      "status": "PENDING_LOCAL_VERIFICATION",
+      "coverageStatus": "debt",
+      "evidence": null,
+      "obligation": "Explicit policy and bounded occurrence admission",
+      "source": "spec/compatibility/contract.json#FN-CLAIM-SCHEDULE and crates/fireemu-adapter-functions/src/runtime.rs and crates/fireemu-core-session/src/clock.rs"
+    },
+    {
+      "conditionId": "SCHEDULED-FUNCTIONS/overlap-policy",
+      "evidenceType": "fireemu-only",
+      "recipeIds": ["scheduled-functions/local/overlap"],
+      "cases": ["allow", "skip", "queue", "reject", "manual-overlap", "long-running-handler"],
+      "status": "PENDING_LOCAL_VERIFICATION",
+      "coverageStatus": "debt",
+      "evidence": null,
+      "obligation": "Document local suppression/queuing; distinguish overlapping functions from Scheduler attempts",
+      "source": "spec/compatibility/contract.json#FN-CLAIM-SCHEDULE and crates/fireemu-adapter-functions/src/runtime.rs and crates/fireemu-core-session/src/clock.rs"
+    },
+    {
+      "conditionId": "SCHEDULED-FUNCTIONS/retry-delay-fairness",
+      "evidenceType": "fireemu-only",
+      "recipeIds": ["scheduled-functions/local/fairness"],
+      "cases": [
+        "full-catch-up-cap-releases-retry",
+        "delayed-fault-wakeup",
+        "completion-reentry",
+        "awaitIdle-settles"
+      ],
+      "status": "PENDING_LOCAL_VERIFICATION",
+      "coverageStatus": "debt",
+      "evidence": null,
+      "obligation": "Regression for catch-up early-return starvation",
+      "source": "spec/compatibility/contract.json#FN-CLAIM-SCHEDULE and crates/fireemu-adapter-functions/src/runtime.rs and crates/fireemu-core-session/src/clock.rs"
+    },
+    {
+      "conditionId": "SCHEDULED-FUNCTIONS/capacity-cursor",
+      "evidenceType": "fireemu-only",
+      "recipeIds": ["scheduled-functions/local/capacity"],
+      "cases": [
+        "automatic-admission-refusal-preserves-occurrence",
+        "capacity-recovery-delivers",
+        "manual-refusal-is-visible",
+        "per-job-fairness"
+      ],
+      "status": "PENDING_LOCAL_VERIFICATION",
+      "coverageStatus": "debt",
+      "evidence": null,
+      "obligation": "No silent schedule loss on admission refusal; only schedule/manual ownership",
+      "source": "spec/compatibility/contract.json#FN-CLAIM-SCHEDULE and crates/fireemu-adapter-functions/src/runtime.rs and crates/fireemu-core-session/src/clock.rs"
+    },
+    {
+      "conditionId": "SCHEDULED-FUNCTIONS/rewind-and-token-policy",
+      "evidenceType": "fireemu-only",
+      "recipeIds": ["scheduled-functions/local/rewind"],
+      "cases": [
+        "backwards-without-opt-in",
+        "allowBackwards-counter",
+        "schedule-replay-cursor-policy",
+        "future-issued-held-token",
+        "token-after-new-issuance"
+      ],
+      "status": "PENDING_LOCAL_VERIFICATION",
+      "coverageStatus": "debt",
+      "evidence": null,
+      "obligation": "Explicit rewind policy and fail-closed future-claim behavior",
+      "source": "spec/compatibility/contract.json#FN-CLAIM-SCHEDULE and crates/fireemu-adapter-functions/src/runtime.rs and crates/fireemu-core-session/src/clock.rs"
+    },
+    {
+      "conditionId": "SCHEDULED-FUNCTIONS/manual-schedule",
+      "evidenceType": "fireemu-only",
+      "recipeIds": ["scheduled-functions/local/manual"],
+      "cases": [
+        "registered-job",
+        "missing-job",
+        "payload-time",
+        "does-not-silently-consume-natural-occurrence",
+        "admission-refusal"
+      ],
+      "status": "PENDING_LOCAL_VERIFICATION",
+      "coverageStatus": "debt",
+      "evidence": null,
+      "obligation": "Fireemu manual control semantics independently documented",
+      "source": "spec/compatibility/contract.json#FN-CLAIM-SCHEDULE and crates/fireemu-adapter-functions/src/runtime.rs and crates/fireemu-core-session/src/clock.rs"
+    },
+    {
+      "conditionId": "SCHEDULED-FUNCTIONS/state-lifecycle",
+      "evidenceType": "fireemu-only",
+      "recipeIds": ["scheduled-functions/local/lifecycle"],
+      "cases": ["snapshot-restore", "reset", "reload", "runner-shutdown", "pending-job-retention"],
+      "status": "PENDING_LOCAL_VERIFICATION",
+      "coverageStatus": "debt",
+      "evidence": null,
+      "obligation": "Scheduled cursor/outbox consistency across supported lifecycle boundaries",
+      "source": "spec/compatibility/contract.json#FN-CLAIM-SCHEDULE and crates/fireemu-adapter-functions/src/runtime.rs and crates/fireemu-core-session/src/clock.rs"
+    },
+    {
+      "conditionId": "SCHEDULED-FUNCTIONS/final-artifact-regression",
+      "evidenceType": "closure-gate",
+      "recipeIds": ["scheduled-functions/final"],
+      "cases": [
+        "two-production-recordings",
+        "exact-frozen-case-set",
+        "strict-production-comparison",
+        "emulator-no-new-refusals",
+        "local-properties",
+        "workspace-regression",
+        "artifact-runner-binding"
+      ],
+      "status": "PENDING_REVIEW",
+      "coverageStatus": "debt",
+      "evidence": null,
+      "obligation": "Final binary and bundled runner receipts with exact comparison coverage",
+      "source": "spec/compatibility/closure/FUNCTIONS-HTTP.json"
+    },
+    {
+      "conditionId": "SCHEDULED-FUNCTIONS/closure-review",
+      "evidenceType": "closure-gate",
+      "recipeIds": ["scheduled-functions/review"],
+      "cases": ["independent-Opus-coordinator-review", "owner-ledger-promotion-decision"],
+      "status": "PENDING_REVIEW",
+      "coverageStatus": "debt",
+      "evidence": null,
+      "obligation": "Only reviewed frozen closure can become COMPAT_VERIFIED",
+      "source": "spec/compatibility/closure/FUNCTIONS-HTTP.json"
+    }
+  ],
+  "limitations": [
+    "The inventory is frozen; all evidence remains pending and the parent is IMPLEMENTING.",
+    "DST repeated delivery is not proven by future next-time metadata.",
+    "General Cloud Scheduler resource API is not claimed."
+  ],
+  "frozenOn": "2026-09-30",
+  "freezeAuthority": "docs.local/instructions/owner-decisions.md (2026-09-30 SCHEDULED-FUNCTIONS scope: coordinator rulings)"
+}

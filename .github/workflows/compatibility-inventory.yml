@@ -121,6 +121,7 @@ jobs:
         run: |
           pnpm -C conformance install --frozen-lockfile
           node --test conformance/src/*-closure.test.mjs
+          node conformance/src/production-closure.mjs --check
 
   feature-inventory-integrity:
     runs-on: ubuntu-latest

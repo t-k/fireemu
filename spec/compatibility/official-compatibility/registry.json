@@ -1,0 +1,55 @@
+{
+  "schemaVersion": 1,
+  "policy": "official-comparison-independent-v1",
+  "historyAuthority": "IMMUTABLE_ORIGINAL_NOT_CURRENT_APPROVAL",
+  "tasks": [
+    {
+      "facetId": "FS-TRANSACTION::official-profile-comparison",
+      "parent": "FS-TRANSACTION",
+      "conditionId": null,
+      "snapshotPath": "spec/compatibility/official-compatibility/history/e57a78e0/FS-TRANSACTION.json",
+      "snapshotSha256": "7f0633ab6a948890a4c742b17f50912c920a925a2a018cfdd636dc20278ef93f",
+      "originalSelectors": [
+        "/profileComparison/note"
+      ],
+      "originalTextSha256": [
+        "8e5db4543e5be6d85591b7da054755195358356946ba93573d448d0caf7cb996"
+      ],
+      "originalStatus": "PENDING_LOCAL_OBSERVATION",
+      "state": "OPEN",
+      "evidence": null
+    },
+    {
+      "facetId": "STORAGE-OBJECT/final-artifact-regression::official_comparison",
+      "parent": "STORAGE-OBJECT",
+      "conditionId": "STORAGE-OBJECT/final-artifact-regression",
+      "snapshotPath": "spec/compatibility/official-compatibility/history/e57a78e0/STORAGE-OBJECT.json",
+      "snapshotSha256": "0857ad38cdbd7655d1d46a8f72a233994dc38da20774ae4b339909279c8c162e",
+      "originalSelectors": [
+        "/conditions/26"
+      ],
+      "originalTextSha256": [
+        "245a11d6d21b3edb7d13ad658f39f45c4751ea9dcdb8b7d4c8853383403943b0"
+      ],
+      "originalStatus": "PENDING_CORPUS",
+      "state": "OPEN",
+      "evidence": null
+    },
+    {
+      "facetId": "STORAGE-RULES/final-artifact-regression::official_comparison",
+      "parent": "STORAGE-RULES",
+      "conditionId": "STORAGE-RULES/final-artifact-regression",
+      "snapshotPath": "spec/compatibility/official-compatibility/history/e57a78e0/STORAGE-RULES.json",
+      "snapshotSha256": "30d6f6f8b28cdebec4b2e1b8cc2aa6bb2aeaa0d86a2bcd58aa9e05a8b43379d8",
+      "originalSelectors": [
+        "/conditions/22"
+      ],
+      "originalTextSha256": [
+        "244df1185bd736d7c66ecceb5c32a222eeec639383511662fd31e3b7173293f2"
+      ],
+      "originalStatus": "VERIFIED",
+      "state": "OPEN",
+      "evidence": null
+    }
+  ]
+}

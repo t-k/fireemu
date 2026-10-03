@@ -1,0 +1,926 @@
+{
+  "schemaVersion": 1,
+  "parent": "FS-TRANSACTION",
+  "parentStatus": "IMPLEMENTING",
+  "inventoryStatus": "FROZEN",
+  "freezeState": "FROZEN",
+  "oracleTrack": "disposable-sandbox",
+  "closureReview": {
+    "decision": "PENDING",
+    "note": "Pending complete frozen conditions and independent closure review. Recorded REST13-case partial evidence does not promote any condition or the parent."
+  },
+  "scopeDecisions": [
+    {
+      "id": "T1",
+      "status": "DECIDED",
+      "recommendation": "Use behavioral conditions rather than a raw API-method denominator; each declared transaction surface must map to exactly one condition.",
+      "ownerDecisionRequired": false,
+      "decision": "BEHAVIORAL_CONDITIONS",
+      "decidedBy": "coordinator",
+      "decidedOn": "2026-09-27"
+    },
+    {
+      "id": "T2",
+      "status": "DECIDED",
+      "recommendation": "Keep query execution inside a transaction here, following the FS-QUERY-INDEX Q4d decision; ordinary query semantics stay with FS-QUERY-INDEX.",
+      "ownerDecisionRequired": false,
+      "existingDecisionRef": "spec/compatibility/closure/FS-QUERY-INDEX.json#Q4d",
+      "decision": "TRANSACTIONAL_QUERY_HERE",
+      "decidedBy": "owner via FS-QUERY-INDEX Q4d",
+      "decidedOn": "2026-09-24"
+    },
+    {
+      "id": "T3",
+      "status": "DECIDED",
+      "recommendation": "Count the atomic visibility of all writes in one transaction commit on native Listen here; SDK callback delivery belongs to FS-LISTEN-SDK.",
+      "ownerDecisionRequired": false,
+      "decision": "The atomic visibility of a transaction commit on native Listen is assigned to FS-TRANSACTION; SDK callback shape is assigned to FS-LISTEN-SDK.",
+      "decidedBy": "coordinator",
+      "decidedOn": "2026-09-27"
+    },
+    {
+      "id": "T4",
+      "status": "DECIDED",
+      "recommendation": "Count the named idle and total transaction time limits in their expiry conditions; transaction size belongs to FS-DATA-WRITE.",
+      "ownerDecisionRequired": false,
+      "decision": "Idle and total time limits are assigned to their transaction expiry conditions; transaction size is assigned to FS-DATA-WRITE.",
+      "decidedBy": "coordinator",
+      "decidedOn": "2026-09-27"
+    },
+    {
+      "id": "T5",
+      "status": "DECIDED",
+      "recommendation": "Use the sandbox conformance-harness process with clean-context corpus/runner review, two recordings and one JSONL ledger line per run. The old single-run O8 manifest is preparation material only; do not import O7/O8 Gate or reservation tooling. A fresh owner go-ahead remains necessary under the current production-send hold.",
+      "ownerDecisionRequired": false,
+      "decision": "SANDBOX_TWO_RECORDINGS_NO_O7_O8",
+      "decidedBy": "owner via sandbox standing authorization",
+      "decidedOn": "2026-09-23"
+    },
+    {
+      "id": "T6",
+      "status": "DECIDED",
+      "recommendation": "Retain historical fireemu-35fe6 recordings as immutable reference only; require sandbox evidence or an explicit owner decision before calling any historical-only condition VERIFIED.",
+      "ownerDecisionRequired": false,
+      "decision": "HISTORICAL_REFERENCE_ONLY",
+      "decidedBy": "coordinator",
+      "decidedOn": "2026-09-27"
+    },
+    {
+      "id": "T7",
+      "status": "DECIDED",
+      "recommendation": "Keep SDK-driven retry distinct from backend retry-token semantics. Do not exclude it on the strength of REST or gRPC observations.",
+      "ownerDecisionRequired": false,
+      "decision": "Keep SDK retry separate from backend retry-token behavior.",
+      "decidedBy": "coordinator",
+      "decidedOn": "2026-09-27",
+      "decisionRef": "docs.local/instructions/owner-decisions.md#2026-09-27-FS-TRANSACTION-additional-coordinator-decision"
+    },
+    {
+      "id": "OT-1",
+      "status": "DECIDED",
+      "decision": "This closure covers PESSIMISTIC mode only; OPTIMISTIC modes remain in a follow-up issue and are not known-difference exclusions.",
+      "decidedBy": "owner",
+      "decidedOn": "2026-09-27",
+      "decisionRef": "docs.local/instructions/owner-decisions.md#2026-09-27-FS-TRANSACTION-OT-1"
+    },
+    {
+      "id": "T8",
+      "status": "DECIDED",
+      "decision": "Write stream precedence belongs to FS-DATA-WRITE.",
+      "movedTo": "FS-DATA-WRITE",
+      "decidedBy": "coordinator",
+      "decidedOn": "2026-09-27",
+      "movedCondition": "FS-DATA-WRITE/stream-transaction-precedence",
+      "decisionRef": "docs.local/instructions/owner-decisions.md#2026-09-27-FS-TRANSACTION-additional-coordinator-decision"
+    },
+    {
+      "id": "T9",
+      "status": "DECIDED",
+      "decision": "Transaction size belongs to FS-DATA-WRITE.",
+      "movedTo": "FS-DATA-WRITE",
+      "decidedBy": "coordinator",
+      "decidedOn": "2026-09-27"
+    }
+  ],
+  "conditions": [
+    {
+      "conditionId": "FS-TRANSACTION/read-write-lifecycle",
+      "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
+      "recipeIds": [
+        "fs-transaction/read-write-lifecycle"
+      ],
+      "recipeStatus": "PROPOSED",
+      "status": "PENDING_RECORDING",
+      "observation": {
+        "method": "REST BeginTransaction, GetDocument, BatchGetDocuments and Commit with read-write controls.",
+        "existingCaseOrCampaignRefs": [
+          "conformance/firestore-production-matrix.json#transactions/lifecycle"
+        ],
+        "credentials": "Admin OAuth; server transaction bypasses Firestore Rules.",
+        "representativeGrpc": "Record one representative gRPC case for this condition when the API supports it; REST carries the full set."
+      },
+      "localEvidence": {
+        "references": [],
+        "productionExecuted": false
+      },
+      "historicalProductionReferences": [
+        "conformance/firestore-production-matrix.json"
+      ],
+      "verification": {
+        "requiredEvidence": [
+          "Two independently recorded sandbox observations for each new production corpus row, with complete post-state and cleanup.",
+          "A comparison against the final source-bound fireemu artifact that covers every recipe step and reports no unexplained mismatch."
+        ],
+        "recordingsRequired": 2
+      },
+      "note": "Historical recordings are reference only. Two new sandbox recordings and a final-artifact comparison are required for this condition. The 13-case recorded expiry/retry corpus supplies no production observation for this condition. Private sandbox observations, cited by run-directory name only, no status change: P01 fs-transaction-p01-lifecycle-98a788f2f2a2a5e4 (REST and gRPC, two agreeing recordings): over REST, after a Commit a further Commit, read, batch read and Rollback answer 10 with the expired text, and after an empty Commit or a Rollback a further Commit and read answer 10 with it (and a batch read after a Rollback); over gRPC only a further Commit and read after a Commit, and a further Commit after an empty Commit or after a Rollback, answered 10 with it. A Rollback after an empty Commit or after a Rollback was not recorded on either transport. P02b fs-transaction-p02b-readonly-refused-956ffb458f823440 chain Z (both transports, two agreeing recordings): an outside write acknowledged between a read-write begin and its first read is shown by that first read, the Commit then answers 0, and a later Rollback answers 10. Neither is a published redacted record yet.",
+      "productionObservation": "UNOBSERVED_BY_RECORDED_CORPUS"
+    },
+    {
+      "conditionId": "FS-TRANSACTION/read-only-snapshot",
+      "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
+      "recipeIds": [
+        "fs-transaction/read-only-snapshot"
+      ],
+      "recipeStatus": "PROPOSED",
+      "status": "PENDING_RECORDING",
+      "observation": {
+        "method": "REST read-only BeginTransaction, GetDocument and Commit refusal with a read-write control.",
+        "existingCaseOrCampaignRefs": [
+          "conformance/firestore-production-matrix.json#transactions/lifecycle"
+        ],
+        "credentials": "Admin OAuth; server transaction bypasses Firestore Rules.",
+        "representativeGrpc": "Record one representative gRPC case for this condition when the API supports it; REST carries the full set."
+      },
+      "localEvidence": {
+        "references": [
+          "spec/compatibility/broad-runs/fs-transaction-p02-recorded-comparison-v1.json",
+          "spec/compatibility/broad-runs/fs-transaction-p02-recorded-observations-v1.json"
+        ],
+        "productionExecuted": true
+      },
+      "historicalProductionReferences": [
+        "conformance/firestore-production-matrix.json"
+      ],
+      "verification": {
+        "requiredEvidence": [
+          "Two independently recorded sandbox observations for each new production corpus row, with complete post-state and cleanup.",
+          "A comparison against the final source-bound fireemu artifact that covers every recipe step and reports no unexplained mismatch."
+        ],
+        "recordingsRequired": 2
+      },
+      "note": "P02 and P02b now have two independently recorded, fully replay-validated observations each, with all declared setup, controls, read-only refusal/token-use chains, post-state, version/commit-time relations and cleanup retained. Every selected step agrees with the current source-bound normal artifact in strict. The emulator profile differences remain explicit. This bounded publication does not promote the condition or any other parent condition; independent review and authorized promotion remain pending. Raw REST body-byte/member-order parity is outside this decoded-semantic comparison.",
+      "productionObservation": "RECORDED_P02_P02B_SUBSET",
+      "partialEvidence": {
+        "coverage": "PARTIAL",
+        "reference": "spec/compatibility/broad-runs/fs-transaction-p02-recorded-comparison-v1.json",
+        "observationsReference": "spec/compatibility/broad-runs/fs-transaction-p02-recorded-observations-v1.json",
+        "recordingsPerCorpus": 2,
+        "transports": [
+          "rest",
+          "grpc"
+        ],
+        "programs": [
+          "FS-TRANSACTION-P02-READONLY",
+          "FS-TRANSACTION-P02B-READONLY-REFUSED"
+        ],
+        "promotionReady": false,
+        "remainingBoundaries": [
+          "Raw REST bodyBytes/content-length and response member-order evidence were not retained by these recordings; decoded equality cannot establish wire-layout parity.",
+          "Independent review and authorized condition promotion remain pending.",
+          "All other frozen conditions, the final-artifact full-parent regression and closure review remain open.",
+          "The bounded P02 representative gRPC subset is not a claim of every transaction or REST wire-layout behavior."
+        ]
+      }
+    },
+    {
+      "conditionId": "FS-TRANSACTION/read-time-snapshot",
+      "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
+      "recipeIds": [
+        "fs-transaction/read-time-snapshot"
+      ],
+      "recipeStatus": "PROPOSED",
+      "status": "PENDING_RECORDING",
+      "observation": {
+        "method": "REST readTime and newTransaction observations with a stable readback control.",
+        "existingCaseOrCampaignRefs": [
+          "conformance/firestore-production-matrix.json#reads/read-time"
+        ],
+        "credentials": "Admin OAuth; server transaction bypasses Firestore Rules.",
+        "representativeGrpc": "Record one representative gRPC case for this condition when the API supports it; REST carries the full set."
+      },
+      "localEvidence": {
+        "references": [],
+        "productionExecuted": false,
+        "note": "The expiry/retry local shadow contains no readTime snapshot case. Historical read-time rows require final-artifact replay."
+      },
+      "historicalProductionReferences": [
+        "conformance/firestore-production-matrix.json"
+      ],
+      "verification": {
+        "requiredEvidence": [
+          "Two independently recorded sandbox observations for each new production corpus row, with complete post-state and cleanup.",
+          "A comparison against the final source-bound fireemu artifact that covers every recipe step and reports no unexplained mismatch."
+        ],
+        "recordingsRequired": 2
+      },
+      "note": "Historical recordings are reference only. Two new sandbox recordings and a final-artifact comparison are required for this condition. The 13-case recorded expiry/retry corpus supplies no production observation for this condition. Private sandbox observation, cited by run-directory name only, no status change: P03 fs-transaction-p03-readtime-70b0ae21e52fc135 (REST and gRPC, two agreeing recordings, 15 cases per recording: readTime GetDocument and BatchGetDocuments, read-only reads and an embedded newTransaction batch with its Commit) answered 0 in every case. Not a published redacted record yet.",
+      "productionObservation": "UNOBSERVED_BY_RECORDED_CORPUS"
+    },
+    {
+      "conditionId": "FS-TRANSACTION/token-validation-and-ownership",
+      "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
+      "recipeIds": [
+        "fs-transaction/token-validation-and-ownership"
+      ],
+      "recipeStatus": "PROPOSED",
+      "status": "PENDING_CORPUS",
+      "observation": {
+        "method": "REST and gRPC use, malformed, unknown, finished, foreign-project and foreign-database tokens, with a valid-token control. Create and remove one named database for foreign-database use; test the same token on an absent document in query/(default) for foreign-project use under its shared lock.",
+        "existingCaseOrCampaignRefs": [
+          "conformance/firestore-production-matrix.json#transactions/lifecycle"
+        ],
+        "credentials": "Admin OAuth; server transaction bypasses Firestore Rules.",
+        "representativeGrpc": "Record one representative gRPC case for this condition when the API supports it; REST carries the full set."
+      },
+      "localEvidence": {
+        "references": [
+          "crates/fireemu-adapter-grpc/src/rest/transaction_tests.rs"
+        ],
+        "productionExecuted": false
+      },
+      "historicalProductionReferences": [
+        "conformance/firestore-production-matrix.json"
+      ],
+      "verification": {
+        "requiredEvidence": [
+          "Two independently recorded sandbox observations for each new production corpus row, with complete post-state and cleanup.",
+          "A comparison against the final source-bound fireemu artifact that covers every recipe step and reports no unexplained mismatch."
+        ],
+        "recordingsRequired": 2
+      },
+      "note": "Historical recordings are reference only. Two new sandbox recordings and a final-artifact comparison are required for this condition. The 13-case recorded expiry/retry corpus supplies no production observation for this condition. Private sandbox observation, cited by run-directory name only, no status change: P01 fs-transaction-p01-lifecycle-98a788f2f2a2a5e4 recorded the finished-token uses (10 with the expired text, REST and gRPC). Malformed, unknown and foreign tokens are unobserved.",
+      "productionObservation": "UNOBSERVED_BY_RECORDED_CORPUS"
+    },
+    {
+      "conditionId": "FS-TRANSACTION/read-set-conflict",
+      "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
+      "recipeIds": [
+        "fs-transaction/read-set-conflict"
+      ],
+      "recipeStatus": "PROPOSED",
+      "status": "PENDING_RECORDING",
+      "observation": {
+        "method": "Concurrent read-write transactions with a conflicting document write and a nonconflicting control; compare codes, order and final document. On PESSIMISTIC mode, hold the competing writer in a separate task, release by commit or rollback, then compare outcome and order. A bounded timeout is INDETERMINATE.",
+        "existingCaseOrCampaignRefs": [
+          "conformance/firestore-production-matrix.json#transactions/lifecycle"
+        ],
+        "credentials": "Admin OAuth; server transaction bypasses Firestore Rules.",
+        "representativeGrpc": "Record one representative gRPC case for this condition when the API supports it; REST carries the full set."
+      },
+      "localEvidence": {
+        "references": [
+          "crates/fireemu-core-firestore/tests/store.rs"
+        ],
+        "productionExecuted": false
+      },
+      "historicalProductionReferences": [
+        "conformance/firestore-production-matrix.json"
+      ],
+      "verification": {
+        "requiredEvidence": [
+          "Two independently recorded sandbox observations for each new production corpus row, with complete post-state and cleanup.",
+          "A comparison against the final source-bound fireemu artifact that covers every recipe step and reports no unexplained mismatch."
+        ],
+        "recordingsRequired": 2
+      },
+      "note": "Historical recordings are reference only. Two new sandbox recordings and a final-artifact comparison are required for this condition. The 13-case recorded expiry/retry corpus supplies no production observation for this condition. Private sandbox observations, cited by run-directory name only, no status change: P06 fs-transaction-p06-multiwrite-4a0a698be7b88e15 (REST and gRPC): recording 1 refused a multi-document write that met a holder's lock with 10 \"Too much contention on these documents. Please try again.\" after about 21 s; recording 2 was incomplete (the writer was still held at its 30 s deadline and landed about 1.2 s after the recovery released the holder), so the two disagreed. P05 v2 fs-transaction-p05-readlock-66e77ae565076eef (REST and gRPC, two agreeing recordings): with the holder released 5 s in, the outside writer that met its read lock was held and committed 0 after the holder's Commit or Rollback in all four pairs (elapsed 6.8 to 7.5 s), and a read after the Commit pair showed that writer's state. Neither is a published redacted record yet.",
+      "productionObservation": "UNOBSERVED_BY_RECORDED_CORPUS"
+    },
+    {
+      "conditionId": "FS-TRANSACTION/write-set-atomicity",
+      "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
+      "recipeIds": [
+        "fs-transaction/write-set-atomicity"
+      ],
+      "recipeStatus": "PROPOSED",
+      "status": "PENDING_RECORDING",
+      "observation": {
+        "method": "Conflicting and nonconflicting writes to transaction-owned documents; read back every write after refusal. On PESSIMISTIC mode, hold the competing writer in a separate task, release by commit or rollback, then compare outcome and order. A bounded timeout is INDETERMINATE.",
+        "existingCaseOrCampaignRefs": [
+          "conformance/firestore-production-matrix.json#transactions/lifecycle"
+        ],
+        "credentials": "Admin OAuth; server transaction bypasses Firestore Rules.",
+        "representativeGrpc": "Record one representative gRPC case for this condition when the API supports it; REST carries the full set."
+      },
+      "localEvidence": {
+        "references": [
+          "crates/fireemu-core-firestore/tests/store.rs"
+        ],
+        "productionExecuted": false
+      },
+      "historicalProductionReferences": [
+        "conformance/firestore-production-matrix.json"
+      ],
+      "verification": {
+        "requiredEvidence": [
+          "Two independently recorded sandbox observations for each new production corpus row, with complete post-state and cleanup.",
+          "A comparison against the final source-bound fireemu artifact that covers every recipe step and reports no unexplained mismatch."
+        ],
+        "recordingsRequired": 2
+      },
+      "note": "Historical recordings are reference only. Two new sandbox recordings and a final-artifact comparison are required for this condition. The 13-case recorded expiry/retry corpus supplies no production observation for this condition.",
+      "productionObservation": "UNOBSERVED_BY_RECORDED_CORPUS"
+    },
+    {
+      "conditionId": "FS-TRANSACTION/query-range-lock",
+      "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
+      "recipeIds": [
+        "fs-transaction/query-range-lock"
+      ],
+      "recipeStatus": "PROPOSED",
+      "status": "PENDING_CORPUS",
+      "observation": {
+        "method": "A query inside a read-write transaction followed by a matching phantom write and an outside-range control; compare outcome and post-state. On PESSIMISTIC mode, hold the competing writer in a separate task, release by commit or rollback, then compare outcome and order. A bounded timeout is INDETERMINATE.",
+        "existingCaseOrCampaignRefs": [
+          "conformance/firestore-production-matrix.json#phantom-write"
+        ],
+        "credentials": "Admin OAuth; server transaction bypasses Firestore Rules.",
+        "representativeGrpc": "Record one representative gRPC case for this condition when the API supports it; REST carries the full set."
+      },
+      "localEvidence": {
+        "references": [
+          "crates/fireemu-adapter-grpc/src/service/tests/query_transaction_tests.rs"
+        ],
+        "productionExecuted": false
+      },
+      "historicalProductionReferences": [],
+      "verification": {
+        "requiredEvidence": [
+          "Two independently recorded sandbox observations for each new production corpus row, with complete post-state and cleanup.",
+          "A comparison against the final source-bound fireemu artifact that covers every recipe step and reports no unexplained mismatch."
+        ],
+        "recordingsRequired": 2
+      },
+      "note": "A finite sandbox corpus, two recordings, complete cleanup and final-artifact comparison remain required. The 13-case recorded expiry/retry corpus supplies no production observation for this condition.",
+      "productionObservation": "UNOBSERVED_BY_RECORDED_CORPUS"
+    },
+    {
+      "conditionId": "FS-TRANSACTION/failed-commit-and-rollback",
+      "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
+      "recipeIds": [
+        "fs-transaction/failed-commit-and-rollback"
+      ],
+      "recipeStatus": "RECORDED_PARTIAL",
+      "status": "PRODUCTION_RECORDED",
+      "observation": {
+        "method": "A refused commit followed by token reuse, explicit rollback, lock-release and post-state readback, with a successful-commit control. Include rollback after commit, rollback after rollback and a fresh rollback control.",
+        "existingCaseOrCampaignRefs": [],
+        "existingCaseIds": [
+          "finished-token/rollback-after-begin",
+          "finished-token/rollback-after-commit",
+          "finished-token/rollback-after-rollback"
+        ],
+        "credentials": "Admin OAuth; server transaction bypasses Firestore Rules.",
+        "representativeGrpc": "Record one representative gRPC case for this condition when the API supports it; REST carries the full set."
+      },
+      "localEvidence": {
+        "references": [
+          "crates/fireemu-core-firestore/tests/store.rs",
+          "spec/compatibility/broad-runs/fs-transaction-expiry-retry-04-recorded-comparison-v1.json",
+          "spec/compatibility/broad-runs/fs-transaction-p08-recorded-observations-v1.json",
+          "spec/compatibility/broad-runs/fs-transaction-p08-recorded-comparison-v1.json"
+        ],
+        "productionExecuted": false,
+        "note": "Saved P08 records are projected offline and both recordings are compared in strict and emulator profiles against the source-bound normal runtime-validation wave. That wave is not the final all-parent source; final whole-tree comparisons remain open."
+      },
+      "historicalProductionReferences": [],
+      "verification": {
+        "requiredEvidence": [
+          "Two independently recorded sandbox observations for each new production corpus row, with complete post-state and cleanup.",
+          "A comparison against the final source-bound fireemu artifact that covers every recipe step and reports no unexplained mismatch."
+        ],
+        "recordingsRequired": 2
+      },
+      "note": "Two sandbox recordings and both fireemu profiles cover the legacy REST finished-token subset. Separately, two agreeing P08 native recordings cover the declared refused-commit, same-token read and corrected-commit, explicit and repeated rollback, outside-writer and successful-commit control chains on REST and gRPC. The P08 evidence validates decoded semantics only: raw REST bodyBytes, content-length and received member-order layout were not retained, and the missing document m was read only at setup. Both P08 recordings are compared against the source-bound normal runtime-validation wave: strict differences are 0 and emulator differences are 10 per recording. The final whole-tree normal-artifact comparisons remain pending. The full condition and parent remain open.",
+      "partialEvidence": {
+        "coverage": "PARTIAL",
+        "reference": "spec/compatibility/broad-runs/fs-transaction-expiry-retry-04-recorded-comparison-v1.json",
+        "recordings": 2,
+        "transport": "rest",
+        "caseIds": [
+          "finished-token/rollback-after-begin",
+          "finished-token/rollback-after-commit",
+          "finished-token/rollback-after-rollback"
+        ],
+        "remainingBoundaries": [
+          "P08 supplies recorded REST and gRPC decoded chains and four actual normal runtime-wave comparisons; final whole-tree comparisons and independent full-condition approval remain pending.",
+          "Raw REST bodyBytes, content-length and received member-order layout were not retained.",
+          "No post-refusal native readback of the missing document m was recorded; its typed absence is observed at setup only."
+        ],
+        "additionalRecordedSubsets": [
+          {
+            "program": "FS-TRANSACTION-P08-FAILED-COMMIT",
+            "coverage": "PARTIAL",
+            "observations": "spec/compatibility/broad-runs/fs-transaction-p08-recorded-observations-v1.json",
+            "comparison": "spec/compatibility/broad-runs/fs-transaction-p08-recorded-comparison-v1.json",
+            "recordings": 2,
+            "transports": [
+              "rest",
+              "grpc"
+            ],
+            "recipeSteps": 45,
+            "caseIds": [
+              "rest/a-fail-commit",
+              "rest/a-plain-read",
+              "rest/a-same-token-read",
+              "rest/a-writer",
+              "rest/a-corrected-commit",
+              "rest/a-rollback",
+              "rest/a-rollback-again",
+              "rest/b-fail-commit",
+              "rest/b-rollback",
+              "rest/b-writer",
+              "rest/b-rollback-again",
+              "rest/c-commit",
+              "rest/c-rollback-after-commit",
+              "grpc/a-fail-commit",
+              "grpc/a-plain-read",
+              "grpc/a-same-token-read",
+              "grpc/a-writer",
+              "grpc/a-corrected-commit",
+              "grpc/a-rollback",
+              "grpc/a-rollback-again",
+              "grpc/b-fail-commit",
+              "grpc/b-rollback",
+              "grpc/b-writer",
+              "grpc/b-rollback-again",
+              "grpc/c-commit",
+              "grpc/c-rollback-after-commit"
+            ],
+            "decodedSemanticsValidated": true,
+            "rawRestWireLayoutValidated": false,
+            "postRefusalMissingDocumentReadValidated": false,
+            "localComparisonStatus": "RECORDED_NORMAL_RUNTIME_WAVE_PARTIAL",
+            "runtimeWaveSourceCommit": "3df108a312fdf2bdd6d059bd7fa2e5e904254f02",
+            "runtimeWaveBinarySha256": "3334b797dab43668e3a3ddf185625967c3b1aa0175bf4ce2f3a5fb7836b68edf",
+            "finalWholeTreeSourceBound": false
+          }
+        ]
+      },
+      "productionObservation": "RECORDED_LEGACY_REST_AND_P08_DECODED_SUBSETS"
+    },
+    {
+      "conditionId": "FS-TRANSACTION/retry-token-lifecycle",
+      "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
+      "recipeIds": [
+        "fs-transaction/retry-token-lifecycle"
+      ],
+      "recipeStatus": "RECORDED_PARTIAL",
+      "status": "PRODUCTION_RECORDED",
+      "observation": {
+        "method": "REST retryTransaction after rollback, commit, read-only begin, unissued and malformed tokens; compare diagnostics and post-state. Include a representative gRPC case.",
+        "existingCaseOrCampaignRefs": [
+          "spec/compatibility/broad-runs/fs-transaction-expiry-retry-04-manifest-v4.json"
+        ],
+        "existingCaseIds": [
+          "retry-token/retry-with-rolled-back-previous",
+          "retry-token/retry-with-committed-previous",
+          "retry-token/retry-with-read-only-previous",
+          "retry-token/retry-with-unissued-previous",
+          "retry-token/retry-with-malformed-previous"
+        ],
+        "credentials": "Admin OAuth; server transaction bypasses Firestore Rules.",
+        "representativeGrpc": "Record one representative gRPC case for this condition when the API supports it; REST carries the full set."
+      },
+      "localEvidence": {
+        "references": [
+          "spec/compatibility/broad-runs/fs-transaction-expiry-retry-04-local-shadow-v3.json",
+          "spec/compatibility/broad-runs/fs-transaction-expiry-retry-04-recorded-comparison-v1.json"
+        ],
+        "productionExecuted": false
+      },
+      "historicalProductionReferences": [
+        "conformance/firestore-production-matrix.json"
+      ],
+      "verification": {
+        "requiredEvidence": [
+          "Two independently recorded sandbox observations for each new production corpus row, with complete post-state and cleanup.",
+          "A comparison against the final source-bound fireemu artifact that covers every recipe step and reports no unexplained mismatch."
+        ],
+        "recordingsRequired": 2
+      },
+      "note": "Two sandbox recordings and both fireemu profiles agree for this REST subset. Representative gRPC is not recorded. This condition remains open. Inferred, not recorded in production, candidates for a later recording and not COMPAT_VERIFIED: strict reads a retry attempt (retryTransaction) at its begin, while the official emulator reads it at first use (REST measured); and a retry that names an expired token is refused \"Invalid retry transaction.\" unless a Rollback reached the token first (the local contract pins this order dependence), which production has not been asked about.",
+      "partialEvidence": {
+        "coverage": "PARTIAL",
+        "reference": "spec/compatibility/broad-runs/fs-transaction-expiry-retry-04-recorded-comparison-v1.json",
+        "recordings": 2,
+        "transport": "rest",
+        "caseIds": [
+          "retry-token/retry-with-committed-previous",
+          "retry-token/retry-with-malformed-previous",
+          "retry-token/retry-with-read-only-previous",
+          "retry-token/retry-with-rolled-back-previous",
+          "retry-token/retry-with-unissued-previous"
+        ],
+        "remainingBoundaries": [
+          "Representative gRPC is not recorded."
+        ]
+      }
+    },
+    {
+      "conditionId": "FS-TRANSACTION/idle-expiry",
+      "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
+      "recipeIds": [
+        "fs-transaction/idle-expiry"
+      ],
+      "recipeStatus": "RECORDED_PARTIAL",
+      "status": "PRODUCTION_RECORDED",
+      "observation": {
+        "method": "Wall-clock idle expiry at the declared threshold, with before-threshold and held-lock controls, followed by lock-release and absence readback.",
+        "existingCaseOrCampaignRefs": [
+          "spec/compatibility/broad-runs/fs-transaction-expiry-retry-04-manifest-v4.json"
+        ],
+        "existingCaseIds": [
+          "idle-expiry/commit-before-idle",
+          "idle-expiry/commit-after-idle",
+          "idle-expiry/rollback-after-idle",
+          "idle-expiry/lock-held-before-idle",
+          "idle-expiry/lock-released-after-idle"
+        ],
+        "credentials": "Admin OAuth; server transaction bypasses Firestore Rules.",
+        "limitId": "FS-LIMIT-TRANSACTION-IDLE-TIME",
+        "representativeGrpc": "Record one representative gRPC case for this condition when the API supports it; REST carries the full set."
+      },
+      "localEvidence": {
+        "references": [
+          "spec/compatibility/broad-runs/fs-transaction-expiry-retry-04-local-shadow-v3.json",
+          "spec/compatibility/broad-runs/fs-transaction-expiry-retry-04-recorded-comparison-v1.json"
+        ],
+        "productionExecuted": false
+      },
+      "historicalProductionReferences": [],
+      "verification": {
+        "requiredEvidence": [
+          "Two independently recorded sandbox observations for each new production corpus row, with complete post-state and cleanup.",
+          "A comparison against the final source-bound fireemu artifact that covers every recipe step and reports no unexplained mismatch."
+        ],
+        "recordingsRequired": 2
+      },
+      "note": "Two sandbox recordings and both fireemu profiles agreed for this REST subset when it was recorded; that agreement was measured at strict's old 10 s idle allowance, with 90 s of local idle for idle-expiry/commit-after-idle, so it no longer describes current strict behavior (120 s limit) for three idle rows (commit-after-idle, rollback-after-idle and lock-released-after-idle, each driven at 90 s of local idle) or for the post-state and transaction releases that comparison compares: at 120 s, strict would commit that transaction, not expire it. Native gRPC sweeps (P10-B, nominal idle 65 to 70 s; P10-C, 75 to 120 s; each recorded twice) accepted every Commit through a nominal 110 s idle and refused the 120 s Commit with code 10, expired or no longer valid. The measured idle of the accepted 110 s Commit was [110.58, 113.12] s and of the refused 120 s Commit [120.54, 122.97] s. The REST refusal in the recorded run had idled about 121 s (idleSeconds 121.15 and 120.35), not the nominal 70 s wait. The exact idle threshold is not identified: it lies in [110.70, 122.96) s. Strict takes 120 s as a provisional limit, strict accepts the unobserved 113.12 to 120 s gap and refuses the unobserved 120 to 120.54 s gap. The final source-bound regression redoes the REST comparison with a driver-level override that advances the local control clock to the measured production idle (about 121 s), with new evidence versions (local shadow v5, comparison v2), leaving the recorded plan and the production fixtures untouched. This condition remains open. Private sandbox observation, cited by run-directory name only, no status change: P13a fs-transaction-p13a-inferred-answers-da25f2aa72b95011 (REST, two agreeing recordings): a token that idled out for 130 s answered reads at a token age of 132.4 to 135.1 s and 234.2 to 237.0 s with 10 and the expired text, a Rollback at 286.1 to 289.2 s with 10 and a read after it with 10, and a second such token answered a read at 309.3 to 312.2 s with 3 \"Invalid transaction.\": an idle-expired token is remembered until about 300 s of its token age like a lifetime-expired one, then forgotten (recorded over REST only: over gRPC the same memory is inferred, because the store applies one rule to both transports). Not a published redacted record yet. P13b retry-answers (REST, two agreeing recordings, 2026-10-01, private run directory): a Rollback of a token that had idled out for 130 s answered 0 at about 131 s of idle (twice), and a retry that named it afterwards was accepted; a retry that named an idle-expired token with no Rollback first, and one that named a lifetime-expired token at 280 to 283 s of age, were accepted too, the named lifetime-expired token's chain-end Rollback answering 10 with the expired text; the first read of a retry attempt showed an outside writer committed after the retry's begin. Not a published redacted record yet. Inferred, not recorded in production, candidates for a later recording and not COMPAT_VERIFIED: strict accepts a Rollback of an idle-expired token before 270 s over gRPC (E003 recorded the first request at about 121 s, and P13b recorded REST), including after earlier refused requests; it answers 10 to the Rollback of an idle-expired token that no request noticed once it is past 270 s; the Rollback of a token a retry named (strict answers 10 with the expired text, unrecorded; a candidate row of the next packet), and the retry rules above over gRPC (a candidate row of the next packet; the official emulator accepted the gRPC retry of an idle-expired token, firebase-tools 15.28.2, and both profiles answer a retry that names a token never issued \"Invalid transaction.\", the recorded text).",
+      "partialEvidence": {
+        "coverage": "PARTIAL",
+        "reference": "spec/compatibility/broad-runs/fs-transaction-expiry-retry-04-recorded-comparison-v1.json",
+        "recordings": 2,
+        "transport": "rest",
+        "caseIds": [
+          "idle-expiry/commit-after-idle",
+          "idle-expiry/commit-before-idle",
+          "idle-expiry/lock-held-before-idle",
+          "idle-expiry/lock-released-after-idle",
+          "idle-expiry/rollback-after-idle"
+        ],
+        "remainingBoundaries": [
+          "The exact idle threshold is not identified: it lies between the last accepted measured idle (lower bound 110.70 s) and the first refused one (upper bound 122.96 s). Strict's 120 s limit is provisional: it accepts the unobserved 113.12 to 120 s gap and refuses the unobserved 120 to 120.54 s gap.",
+          "The native gRPC sweeps (P10-B, P10-C) were recorded outside this recipe and are not yet bound to it.",
+          "The recorded REST comparison v1 (its local side is docs.local/runs/fs-transaction-recorded-local-after-strict; the committed local shadow files are separate evidence) describes strict at the old 10 s allowance and 90 s of local idle for the idle rows commit-after-idle, rollback-after-idle and lock-released-after-idle and their post-state; it is historical for them until local shadow v5 and comparison v2 are recorded at the final artifact."
+        ]
+      }
+    },
+    {
+      "conditionId": "FS-TRANSACTION/total-lifetime-expiry",
+      "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
+      "recipeIds": [
+        "fs-transaction/total-lifetime-expiry"
+      ],
+      "recipeStatus": "PROPOSED",
+      "status": "PENDING_CORPUS",
+      "observation": {
+        "method": "A separate bounded long-window observation across the total transaction lifetime with a live-before-boundary control.",
+        "existingCaseOrCampaignRefs": [],
+        "credentials": "Admin OAuth; server transaction bypasses Firestore Rules.",
+        "limitId": "FS-LIMIT-TRANSACTION-TOTAL-TIME",
+        "representativeGrpc": "Record one representative gRPC case for this condition when the API supports it; REST carries the full set."
+      },
+      "localEvidence": {
+        "references": [
+          "docs/compatibility/fs-transaction-next-campaign-preparation.md"
+        ],
+        "productionExecuted": false
+      },
+      "historicalProductionReferences": [],
+      "verification": {
+        "requiredEvidence": [
+          "Two independently recorded sandbox observations for each new production corpus row, with complete post-state and cleanup.",
+          "A comparison against the final source-bound fireemu artifact that covers every recipe step and reports no unexplained mismatch."
+        ],
+        "recordingsRequired": 2
+      },
+      "note": "A finite sandbox corpus, two recordings, complete cleanup and final-artifact comparison remain required. The 13-case recorded expiry/retry corpus supplies no production observation for this condition. Private sandbox observations, cited by run-directory name only, no status change: P11 fs-transaction-p11-lifetime-0478164e4f3b1948 (REST, recording 1, stopped by the old recorder): a read at 298.7 to 301.0 s answered 10 with the expired text, then a Commit and a Rollback 3 \"Invalid transaction.\". P11 v4 fs-transaction-p11-lifetime-c82deaf32c18e7dd (REST and gRPC, two agreeing recordings): keepalive reads answered 0, the live read 0 at token age 250.6 to 253.3 s (gRPC 248.8 to 251.2), the expiry read 10 with the expired text at 284.8 to 287.9 s (gRPC 282.9 to 285.5), the Commit after it 10 with the same text, an outside writer 0 and the chain-end Rollback 10. Together they fit one model: the token is remembered until about 300 s of its age (every request 10), then forgotten (3). P13a fs-transaction-p13a-inferred-answers-da25f2aa72b95011 (REST, two agreeing recordings): a Commit as the first request at a token age of 281.5 to 284.5 s answered 10 with the expired text, and so did a Rollback as the first request at 280.4 to 283.7 s and a read after it. Inferred, not recorded, a candidate for a later recording and not COMPAT_VERIFIED: the exact forgetting age inside (298.7, 302.2] s (strict takes 300 s). P12 fs-transaction-p12-first-request-6cf142d8830cd02d (REST, two agreeing recordings): with the first request at token age about 325 to 330 s, every request answered 3 \"Invalid transaction.\", whether it was the first request (a Commit or a Rollback) or a later read, Commit or Rollback, so the forgotten token answers 3 including for a first request. Not published redacted records yet.",
+      "productionObservation": "UNOBSERVED_BY_RECORDED_CORPUS"
+    },
+    {
+      "conditionId": "FS-TRANSACTION/read-time-retention",
+      "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
+      "recipeIds": [
+        "fs-transaction/read-time-retention"
+      ],
+      "recipeStatus": "PROPOSED",
+      "status": "PENDING_CORPUS",
+      "observation": {
+        "method": "At the 59-minute and 61-minute non-PITR boundary already covered by FS-QUERY-INDEX/read-time, observe GetDocument, BatchGetDocuments and read-only transaction readTime only; compare accepted/refused results and configuration. Seven-day PITR is excluded by the managed-infrastructure decision.",
+        "existingCaseOrCampaignRefs": [],
+        "credentials": "Admin OAuth; server transaction bypasses Firestore Rules.",
+        "representativeGrpc": "Record one representative gRPC case for this condition when the API supports it; REST carries the full set."
+      },
+      "localEvidence": {
+        "references": [
+          "docs/compatibility/fs-transaction-next-campaign-preparation.md"
+        ],
+        "productionExecuted": false
+      },
+      "historicalProductionReferences": [],
+      "verification": {
+        "requiredEvidence": [
+          "Two independently recorded sandbox observations for each new production corpus row, with complete post-state and cleanup.",
+          "A comparison against the final source-bound fireemu artifact that covers every recipe step and reports no unexplained mismatch."
+        ],
+        "recordingsRequired": 2
+      },
+      "note": "A finite sandbox corpus, two recordings, complete cleanup and final-artifact comparison remain required. The 13-case recorded expiry/retry corpus supplies no production observation for this condition.",
+      "productionObservation": "UNOBSERVED_BY_RECORDED_CORPUS"
+    },
+    {
+      "conditionId": "FS-TRANSACTION/web-sdk-optimistic-retry",
+      "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
+      "recipeIds": [
+        "fs-transaction/web-sdk-optimistic-retry"
+      ],
+      "recipeStatus": "PROPOSED",
+      "status": "PENDING_CORPUS",
+      "observation": {
+        "method": "Firebase Web SDK 12.18.0 runTransaction in Node and a real browser: observe BatchGetDocuments followed by precondition Commit, concurrent-write Commit refusal code, callback count, final state, and nonconflicting control. Confirm actual wire locally before corpus freeze.",
+        "existingCaseOrCampaignRefs": [],
+        "transports": [
+          "node-web-sdk",
+          "browser-webchannel"
+        ],
+        "sdkVersion": "firebase 12.18.0",
+        "credentials": "Unauthenticated Web SDK client under deployed Rules."
+      },
+      "localEvidence": {
+        "references": [
+          "docs/compatibility/fs-transaction-next-campaign-preparation.md"
+        ],
+        "productionExecuted": false
+      },
+      "historicalProductionReferences": [],
+      "verification": {
+        "requiredEvidence": [
+          "Two independent sandbox recordings for Node and real browser, including wire shape, refusal code, callback count and final state.",
+          "Final source-bound comparison with no unexplained mismatch and complete cleanup."
+        ],
+        "recordingsRequired": 2,
+        "recordingsRequiredPerTransport": 2
+      },
+      "note": "A finite sandbox corpus, two recordings, complete cleanup and final-artifact comparison remain required. The 13-case recorded expiry/retry corpus supplies no production observation for this condition.",
+      "productionObservation": "UNOBSERVED_BY_RECORDED_CORPUS"
+    },
+    {
+      "conditionId": "FS-TRANSACTION/paging-and-cancellation",
+      "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
+      "recipeIds": [
+        "fs-transaction/paging-and-cancellation"
+      ],
+      "recipeStatus": "PROPOSED",
+      "status": "PENDING_CORPUS",
+      "observation": {
+        "method": "Cancel a transactional gRPC query stream after a bounded page; show the token remains usable and the competing writer remains pending until commit or rollback, then succeeds. A bounded timeout is INDETERMINATE. ListDocuments transaction behavior belongs to FS-DATA-WRITE-LIST.",
+        "existingCaseOrCampaignRefs": [],
+        "credentials": "Admin OAuth; server transaction bypasses Firestore Rules.",
+        "representativeGrpc": "Record one representative gRPC case for this condition when the API supports it; REST carries the full set."
+      },
+      "localEvidence": {
+        "references": [
+          "crates/fireemu-adapter-grpc/src/service/tests/query_transaction_tests.rs"
+        ],
+        "productionExecuted": false
+      },
+      "historicalProductionReferences": [],
+      "verification": {
+        "requiredEvidence": [
+          "Two independently recorded sandbox observations for each new production corpus row, with complete post-state and cleanup.",
+          "A comparison against the final source-bound fireemu artifact that covers every recipe step and reports no unexplained mismatch."
+        ],
+        "recordingsRequired": 2
+      },
+      "note": "A finite sandbox corpus, two recordings, complete cleanup and final-artifact comparison remain required. The 13-case recorded expiry/retry corpus supplies no production observation for this condition.",
+      "productionObservation": "UNOBSERVED_BY_RECORDED_CORPUS"
+    },
+    {
+      "conditionId": "FS-TRANSACTION/admin-sdk-server-retry",
+      "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
+      "recipeIds": [
+        "fs-transaction/admin-sdk-server-retry"
+      ],
+      "recipeStatus": "PROPOSED",
+      "status": "PENDING_CORPUS",
+      "observation": {
+        "method": "firebase-admin 14.3.0 server-side read-write runTransaction and retryTransaction: confirm BeginTransaction, embedded newTransaction and retry token wire locally, then compare conflict code, callback count and final state.",
+        "credentials": "Admin OAuth; server transaction bypasses Firestore Rules.",
+        "transports": [
+          "node-admin-sdk"
+        ],
+        "sdkVersion": "firebase-admin 14.3.0"
+      },
+      "localEvidence": {
+        "references": [],
+        "productionExecuted": false
+      },
+      "historicalProductionReferences": [],
+      "verification": {
+        "requiredEvidence": [
+          "Two independent sandbox recordings for the declared Node Admin SDK transport, including wire shape, refusal code, callback count and final state.",
+          "Final source-bound comparison with no unexplained mismatch and complete cleanup."
+        ],
+        "recordingsRequired": 2,
+        "recordingsRequiredPerTransport": 2
+      },
+      "note": "A finite sandbox corpus, two recordings, complete cleanup and final-artifact comparison remain required. The 13-case recorded expiry/retry corpus supplies no production observation for this condition.",
+      "productionObservation": "UNOBSERVED_BY_RECORDED_CORPUS"
+    },
+    {
+      "conditionId": "FS-TRANSACTION/commit-atomic-visibility",
+      "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
+      "recipeIds": [
+        "fs-transaction/commit-atomic-visibility"
+      ],
+      "recipeStatus": "PROPOSED",
+      "status": "PENDING_CORPUS",
+      "observation": {
+        "method": "On native gRPC Listen, a multi-document transaction commit must appear as one snapshot at one commit time; compare document values and notification ordering with a nontransaction control. SDK callback form belongs to FS-LISTEN-SDK.",
+        "credentials": "Admin OAuth for transaction commit; no user credential for public native Listen target.",
+        "transports": [
+          "grpc-listen"
+        ]
+      },
+      "localEvidence": {
+        "references": [],
+        "productionExecuted": false
+      },
+      "historicalProductionReferences": [],
+      "verification": {
+        "requiredEvidence": [
+          "Two independent sandbox recordings for native gRPC Listen, including atomic snapshot visibility, commit time, notification order and final state.",
+          "Final source-bound comparison with no unexplained mismatch and complete cleanup."
+        ],
+        "recordingsRequired": 2,
+        "recordingsRequiredPerTransport": 2
+      },
+      "note": "A finite sandbox corpus, two recordings, complete cleanup and final-artifact comparison remain required. The 13-case recorded expiry/retry corpus supplies no production observation for this condition.",
+      "productionObservation": "UNOBSERVED_BY_RECORDED_CORPUS"
+    },
+    {
+      "conditionId": "FS-TRANSACTION/final-artifact-regression",
+      "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
+      "recipeIds": [
+        "fs-transaction/final-artifact-regression"
+      ],
+      "recipeStatus": "PROPOSED",
+      "status": "PENDING_REVIEW",
+      "observation": {
+        "method": "Replay every saved and newly recorded transaction recipe against one final source-bound fireemu artifact.",
+        "existingCaseOrCampaignRefs": [],
+        "credentials": "No production credential; independent review only."
+      },
+      "localEvidence": {
+        "references": [],
+        "productionExecuted": false
+      },
+      "historicalProductionReferences": [],
+      "verification": {
+        "requiredEvidence": [
+          "All conditions have source-bound comparisons and no unexplained mismatch."
+        ],
+        "recordingsRequired": 0
+      },
+      "note": "Independent final-artifact or closure review has no production request and remains open until its own evidence is approved. The 13-case recorded expiry/retry corpus supplies no production observation for this condition.",
+      "productionObservation": "UNOBSERVED_BY_RECORDED_CORPUS"
+    },
+    {
+      "conditionId": "FS-TRANSACTION/closure-review",
+      "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
+      "recipeIds": [
+        "fs-transaction/closure-review"
+      ],
+      "recipeStatus": "PROPOSED",
+      "status": "PENDING_REVIEW",
+      "observation": {
+        "method": "Independent review of the complete condition-to-recipe map, comparison, cleanup and owner decisions.",
+        "existingCaseOrCampaignRefs": [],
+        "credentials": "No production credential; independent review only."
+      },
+      "localEvidence": {
+        "references": [],
+        "productionExecuted": false
+      },
+      "historicalProductionReferences": [],
+      "verification": {
+        "requiredEvidence": [
+          "Independent approval of the exact final artifact and every condition."
+        ],
+        "recordingsRequired": 0
+      },
+      "note": "Independent final-artifact or closure review has no production request and remains open until its own evidence is approved. The 13-case recorded expiry/retry corpus supplies no production observation for this condition.",
+      "productionObservation": "UNOBSERVED_BY_RECORDED_CORPUS"
+    }
+  ],
+  "productionPlan": {
+    "status": "PARTIALLY_RECORDED",
+    "preparedCampaign": {
+      "id": "FS-TRANSACTION-EXPIRY-RETRY-04",
+      "project": "fireemu-oracle-sbx",
+      "database": "(default)",
+      "manifest": "spec/compatibility/broad-runs/fs-transaction-expiry-retry-04-manifest-v5.json",
+      "authorizesProduction": false,
+      "recordingsNeeded": 2,
+      "requestsPerRecording": 96,
+      "totalRequestEstimate": 192,
+      "estimatedUsdPerRecording": 0.05,
+      "estimatedUsdBothRecordings": 0.1,
+      "maximumSequentialSeconds": 2760,
+      "ownedDocumentsPerRecording": 5,
+      "cleanup": "Roll back every issued token, conditionally remove the five owned documents, and read back typed absence; record unknown resources for recovery.",
+      "caseMappings": {
+        "FS-TRANSACTION/idle-expiry": 5,
+        "FS-TRANSACTION/failed-commit-and-rollback": 3,
+        "FS-TRANSACTION/retry-token-lifecycle": 5
+      },
+      "coverageLimit": "The three finished-token rows cover only part of failed-commit-and-rollback. The 13-case campaign does not close that full condition or any other transaction condition by itself.",
+      "recordingsCompleted": 2,
+      "actualRequestsPerRecording": [
+        75,
+        75
+      ],
+      "actualTotalRequests": 150,
+      "estimateBasis": "Conservative reservation for the approved envelope; not measured billing.",
+      "recordedComparison": "spec/compatibility/broad-runs/fs-transaction-expiry-retry-04-recorded-comparison-v1.json"
+    },
+    "unestimatedConditions": [
+      "FS-TRANSACTION/read-write-lifecycle",
+      "FS-TRANSACTION/read-only-snapshot",
+      "FS-TRANSACTION/read-time-snapshot",
+      "FS-TRANSACTION/token-validation-and-ownership",
+      "FS-TRANSACTION/read-set-conflict",
+      "FS-TRANSACTION/write-set-atomicity",
+      "FS-TRANSACTION/query-range-lock",
+      "FS-TRANSACTION/failed-commit-and-rollback",
+      "FS-TRANSACTION/total-lifetime-expiry",
+      "FS-TRANSACTION/read-time-retention",
+      "FS-TRANSACTION/paging-and-cancellation",
+      "FS-TRANSACTION/web-sdk-optimistic-retry",
+      "FS-TRANSACTION/admin-sdk-server-retry",
+      "FS-TRANSACTION/commit-atomic-visibility"
+    ],
+    "unestimatedReason": "The 192-request envelope and actual 150 requests cover only the recorded REST13-case expiry/retry corpus. Representative gRPC, the remaining failed-commit chain and every other condition require separately bounded corpora before permission.",
+    "prerequisites": [
+      "FS-DATA-WRITE closure and exclusive sandbox scheduling",
+      "New sandbox conformance corpus and source-bound runner, with clean-context review and a bounded request count",
+      "Owner go-ahead under the current production-send hold, two recordings and one sandbox JSONL ledger line per run",
+      "Redesign the legacy one-run O8 manifest without importing Gate or reservation tooling",
+      "Check that the sbx Web app and API key already exist before any Web SDK observation; creating one needs a separate owner decision",
+      "Check the deployed Firestore Rules release before sending; do not change Rules"
+    ],
+    "productionExecuted": true,
+    "notPreparedObligations": [
+      "total-lifetime expiry",
+      "token replay in a second named database",
+      "readTime outside retention",
+      "query-range phantom lock",
+      "client SDK retry",
+      "Web SDK optimistic conflict and Admin SDK retry wire shape",
+      "native Listen atomic commit visibility",
+      "official emulator profile checks",
+      "OPTIMISTIC mode follow-up issue"
+    ]
+  },
+  "note": "The frozen denominator remains 18 behavioral conditions. Two sandbox recordings and source-bound strict/emulator comparisons cover the 13-case REST subset of idle-expiry, failed-commit-and-rollback and retry-token-lifecycle. Separately, two recordings each of P02 and P02b supply partial REST and representative gRPC decoded semantic evidence for read-only-snapshot, with both recordings compared against the source-bound normal fireemu artifact. P02/P02b do not prove raw REST bodyBytes, content-length or member-order layout. Separately, P08 supplies REST and gRPC decoded partial evidence for the refused-commit and rollback chains; its actual normal runtime-wave comparisons retain strict 0 and emulator 10 differences per recording while final whole-tree comparisons remain pending, raw REST byte layout is unproven, and the missing document m has setup-only typed absence. All 18 conditions, their remaining boundaries, the official emulator gate and parent closure remain open. Inferred strict answers that no recording covers are listed on their conditions (retry snapshot, retry naming an expired token, the forgetting age inside its bracket, a Rollback of an idle-expired token before 270 s or unnoticed past 270 s); each is a candidate for a later recording and none is COMPAT_VERIFIED.",
+  "profileComparison": {
+    "profile": "strict",
+    "emulatorCompatibilityCheck": "PENDING_LOCAL_OBSERVATION",
+    "note": "Before closure review, compare official emulator behavior for idle and total expiry, token ownership, and retry-token refusal. The emulator profile must not add refusals absent from the official emulator."
+  },
+  "configProjections": {
+    "databaseConcurrencyMode": "PESSIMISTIC",
+    "optimisticMode": "FOLLOW_UP_ISSUE",
+    "pitr": "DISABLED_FOR_RETENTION_OBSERVATION"
+  },
+  "oracle": {
+    "project": "fireemu-oracle-sbx",
+    "database": "(default)",
+    "credentials": "Admin OAuth for server transactions; unauthenticated Web SDK for optimistic transactions where deployed Rules permit",
+    "productionExecuted": true,
+    "coverage": "PARTIAL_REST_THREE_CONDITIONS_AND_P02_P02B_REST_GRPC_DECODED_SUBSET_AND_P08_REST_GRPC_DECODED_SUBSET"
+  },
+  "frozenOn": "2026-09-27"
+}

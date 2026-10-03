@@ -282,7 +282,7 @@ test("P02/P02b retained read-only evidence preserves all steps and current profi
   assert.equal(closure.closureReview.decision, "PENDING");
 });
 
-test("P08 recorded refusal chains retain decoded partial evidence while final artifact replays wait", () => {
+test("P08 retained refusal chains preserve decoded partial evidence and normal runtime-wave comparisons", () => {
   const base = new URL("../../spec/compatibility/broad-runs/", import.meta.url);
   const observed = JSON.parse(
     readFileSync(new URL("fs-transaction-p08-recorded-observations-v1.json", base), "utf8"),
@@ -471,20 +471,127 @@ test("P08 recorded refusal chains retain decoded partial evidence while final ar
   assert.equal(corpus.semantics.steps["setup/absence-m"].code, 5);
   assert.match(observed.remainingBoundaries.join(" "), /bodyBytes.*content-length.*member-order/);
   assert.match(observed.remainingBoundaries.join(" "), /post-refusal.*missing document/);
-  assert.equal(compared.status, "PENDING_FINAL_ARTIFACT_REPLAY");
-  assert.equal(compared.artifact, null);
+  assert.equal(compared.status, "RECORDED_NORMAL_RUNTIME_WAVE_PARTIAL");
+  assert.equal(compared.artifact.sourceCommit, "3df108a312fdf2bdd6d059bd7fa2e5e904254f02");
+  assert.equal(compared.artifact.sourceTree, "2b2a4dc9c1790bdd9001666fde5a07270b44299d");
+  assert.equal(
+    compared.artifact.binarySha256,
+    "3334b797dab43668e3a3ddf185625967c3b1aa0175bf4ce2f3a5fb7836b68edf",
+  );
+  assert.equal(
+    compared.artifact.role,
+    "NORMAL_RUNTIME_VALIDATION_WAVE_NOT_FINAL_ALLPARENTS_SOURCE",
+  );
+  assert.equal(compared.artifact.finalWholeTreeSourceBound, false);
+  assert.equal(compared.artifact.inputCount, 3700);
+  assert.equal(
+    compared.artifact.runtimeProofSha256,
+    "647c8dff1c720e19643e7c417b806580ced95f317175155a7076b0e36188fa0f",
+  );
+  assert.equal(
+    compared.artifact.runtimeInputReceiptSha256,
+    "fb453b9246bb52870ff043fe506ff8f149d8839700a4a7484749481fb9e603c8",
+  );
+  assert.equal(
+    compared.artifact.sourceInputBaselineSha256,
+    "36f71b09a28c45f43a41b56b4693ddcc0ba74ec7e99c9d246aabb9c024f8a938",
+  );
+  assert.equal(compared.artifact.runnerFiles, 14);
+
   assert.equal(compared.productionRequests, 0);
-  assert.equal(compared.capturedReplays, 0);
+  assert.equal(compared.capturedReplays, 4);
   assert.equal(compared.requiredReplays, 4);
   assert.equal(compared.corpora.length, 1);
   assert.equal(compared.corpora[0].program, corpus.program);
-  assert.deepEqual(compared.corpora[0].results, []);
+  assert.equal(compared.corpora[0].results.length, 4);
+  const cells = ["strict/1", "strict/2", "emulator/1", "emulator/2"];
   assert.deepEqual(
     compared.plannedReplays.map(({ profile, recording }) => `${profile}/${recording}`),
-    ["strict/1", "strict/2", "emulator/1", "emulator/2"],
+    cells,
+  );
+  assert.deepEqual(
+    compared.corpora[0].results.map(({ profile, recording }) => `${profile}/${recording}`),
+    cells,
   );
   for (const replay of compared.plannedReplays)
     assert.equal(replay.productionFileSha256, corpus.recordings[replay.recording - 1].sha256);
+  for (const replay of compared.corpora[0].results) {
+    assert.equal(replay.complete, true);
+    assert.equal(replay.failure, null);
+    assert.equal(replay.exitCode, 0);
+    assert.equal(replay.runtimeInputsValidated, true);
+    assert.equal(replay.childStopped, true);
+    assert.equal(replay.cleanupAbsent, true);
+    assert.equal(replay.sourceCommit, compared.artifact.sourceCommit);
+    assert.equal(replay.binarySha256, compared.artifact.binarySha256);
+    assert.equal(replay.productionFileSha256, corpus.recordings[replay.recording - 1].sha256);
+    assert.equal(replay.allSteps.length, 45);
+    assert.deepEqual(
+      replay.allSteps.map(({ site }) => site),
+      sites,
+    );
+    for (const row of replay.allSteps)
+      assert.deepEqual(row.production, corpus.semantics.steps[row.site]);
+    for (const row of [
+      ...replay.allSteps,
+      ...replay.cases,
+      ...replay.reads,
+      ...replay.commitTimes,
+    ]) {
+      assert.ok(Object.hasOwn(row, "production"));
+      assert.ok(Object.hasOwn(row, "local"));
+      assert.equal(row.match, digest(row.production) === digest(row.local));
+    }
+    assert.deepEqual(new Set(replay.cases.map(({ caseId }) => caseId)), new Set(cases.keys()));
+    assert.deepEqual(
+      new Set(replay.commitTimes.map(({ site }) => site)),
+      new Set(Object.keys(corpus.semantics.commitTimes)),
+    );
+
+    const differences =
+      [...replay.allSteps, ...replay.cases, ...replay.reads, ...replay.commitTimes].filter(
+        ({ match }) => !match,
+      ).length + (replay.cleanupMatch ? 0 : 1);
+    assert.equal(replay.mismatches, differences);
+    assert.equal(replay.mismatches, replay.profile === "strict" ? 0 : 10);
+    assert.equal(replay.runtime.nodeVersion, "v24.14.0");
+    assert.equal(replay.runtime.pythonVersion, "3.12.13");
+    assert.equal(replay.runtime.dependencyRoots, 114);
+    assert.equal(replay.runtime.dependencyFiles, 3396);
+    assert.equal(
+      replay.runtime.nodeSha256,
+      "20a18709f0154d668f1bd6f6ea8c2a7ae001447b4b2c339732f22e57a8767a55",
+    );
+    assert.equal(
+      replay.runtime.pythonSha256,
+      "f8cf5db64fd3715840686fcdb0f00b8b7e6c9b1e9b5f10a31183160c9bb6a6fc",
+    );
+    assert.equal(
+      replay.runtime.workerSha256,
+      createHash("sha256")
+        .update(
+          readFileSync(
+            new URL(
+              "../../tools/compat-broad/fs-write-txn/txn_program_transport.mjs",
+              import.meta.url,
+            ),
+          ),
+        )
+        .digest("hex"),
+    );
+    assert.equal(
+      replay.runtime.lockSha256,
+      createHash("sha256")
+        .update(readFileSync(new URL("../pnpm-lock.yaml", import.meta.url)))
+        .digest("hex"),
+    );
+
+    for (const key of ["nodeSha256", "pythonSha256", "workerSha256", "lockSha256"])
+      assert.match(replay.runtime[key], /^[a-f0-9]{64}$/);
+    for (const key of ["comparisonSha256", "localReceiptSha256", "captureSha256"])
+      assert.match(replay[key], /^[a-f0-9]{64}$/);
+  }
+  assert.match(compared.remainingBoundaries.join(" "), /final whole-tree/);
   assert.equal(
     compared.producer.sha256,
     createHash("sha256")

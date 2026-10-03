@@ -995,6 +995,7 @@ test("a campaign awaits durable birth before effects and retains exactly one raw
     },
   };
   const pending = produceCampaign({
+    classifyReport: (report) => report?.verdict?.verdict,
     scope,
     authorityId: "unit",
     attempts: [{ attemptId: "a", planPath: "/plan", planSha256: sha(bytes) }],
@@ -1049,6 +1050,7 @@ test("campaign early exceptions remain unknown terminals and never seal as compl
     let envelope;
     const raw = Buffer.from("{}");
     const result = await produceCampaign({
+      classifyReport: (report) => report?.verdict?.verdict,
       authorityId: "unit",
       attempts: [{ attemptId: "one", planPath: "/one", planSha256: sha(raw) }],
       bootstrap: async () => ({
@@ -1525,6 +1527,7 @@ test("campaign traces agree with an independent model for generated terminal seq
       );
     expected.push("seal", "close");
     const result = await produceCampaign({
+      classifyReport: (report) => report?.verdict?.verdict,
       authorityId: "unit",
       attempts,
       bootstrap: async () => ({
@@ -1575,6 +1578,7 @@ test("campaign failures in birth, terminal or seal cannot start later effects or
     const events = [];
     const raw = Buffer.from("{}");
     const result = await produceCampaign({
+      classifyReport: (report) => report?.verdict?.verdict,
       authorityId: "unit",
       attempts: [{ attemptId: "a", planPath: "/a", planSha256: sha(raw) }],
       bootstrap: async () => ({
@@ -1617,7 +1621,7 @@ test("campaign failures in birth, terminal or seal cannot start later effects or
   }
 });
 
-function nativeControlFixture(mode) {
+function nativeControlFixture(mode, inconclusive = false) {
   const report = nativeFixture();
   const proof = report.native;
   const plan = JSON.parse(Buffer.from(proof.rawPlan, "base64"));
@@ -1660,6 +1664,11 @@ function nativeControlFixture(mode) {
     });
   for (let i = 0; i < proof.queries.length; i++) {
     const q = proof.queries[i];
+    if (inconclusive && q.purpose === "getsid") {
+      const sessions = JSON.parse(q.answer.stdout);
+      sessions["100"] = "EPERM";
+      q.answer.stdout = JSON.stringify(sessions);
+    }
     if (q.purpose === "inventory" && ["orphan", "escaper", "listener"].includes(mode)) {
       q.answer.stdout += `900 1 ${helper.pgid} 501 ${helperStart} S helper\n`;
       const sessions = JSON.parse(proof.queries[i + 1].answer.stdout);
@@ -1762,7 +1771,9 @@ function completeCampaignFixture() {
   const h = "a".repeat(64);
   const reports = [
     nativeFixture(),
-    ...["positive", "orphan", "escaper", "listener", "leftover"].map(nativeControlFixture),
+    ...["positive", "orphan", "escaper", "listener", "leftover"].map((mode) =>
+      nativeControlFixture(mode),
+    ),
   ];
   for (const report of reports) {
     report.harnessVersion = h;
@@ -2004,6 +2015,7 @@ test("a changed raw plan is registered but stops before measurement effects", as
   let effects = 0;
   let envelope;
   const result = await produceCampaign({
+    classifyReport: (report) => report?.verdict?.verdict,
     authorityId: "unit",
     attempts: [{ attemptId: "a", planPath: "/a", planSha256: "0".repeat(64) }],
     bootstrap: async () => ({
@@ -2107,4 +2119,53 @@ test("a host verifier cannot close a certificate after the frozen UTC day rolls 
       { now: () => now },
     ),
   );
+});
+
+test("default producer classification retains incomplete failures as unknown and complete controls as fail", async () => {
+  const { produceCampaign } = await import("./calendar-measure.mjs");
+  const cases = [
+    [{ verdict: { verdict: "fail" } }, "unknown"],
+    [nativeFixture(), "pass"],
+    [nativeControlFixture("orphan"), "fail"],
+    [nativeControlFixture("positive", true), "unknown"],
+  ];
+  const incomplete = nativeFixture();
+  incomplete.verdict.verdict = "fail";
+  incomplete.verdict.conditions.E = { ok: false, outcome: "inconclusive", reasons: ["unknown"] };
+  cases.push([incomplete, "unknown"]);
+  assert.equal(cases[3][0].verdict.verdict, "fail");
+  assert.equal(cases[3][0].verdict.conditions.E.outcome, "inconclusive");
+  const { recomputeNativeReport } = await import("./calendar-measure.mjs");
+  assert.equal(recomputeNativeReport(cases[3][0]).ok, true);
+  for (const [report, expected] of cases) {
+    const raw = Buffer.from(JSON.stringify(report));
+    const plan = Buffer.from(report.native?.rawPlan ?? "e30=", "base64");
+    let envelope;
+    const result = await produceCampaign({
+      authorityId: "unit",
+      attempts: [{ attemptId: "a", planPath: "/a", planSha256: sha(plan) }],
+      bootstrap: async () => ({
+        scope: { utcDay: "2026-10-02" },
+        receipt: { phase: "infrastructure" },
+      }),
+      readPlan: async () => plan,
+      createLedger: async () => ({
+        registerBirth: async () => ({ durable: true }),
+        recordTerminal: async ({ reportBytes }) => {
+          envelope = JSON.parse(reportBytes);
+          return { durable: true };
+        },
+        seal: async () => {
+          if (envelope.outcome === "unknown") throw new Error("unknown");
+          return { state: "complete", durabilityAcknowledged: true };
+        },
+        close: async () => {},
+      }),
+      measureAttempt: async () => raw,
+      readSnapshot: async () => ({}),
+    });
+    assert.equal(envelope.outcome, expected);
+    assert.equal(result.state, expected === "unknown" ? "unknown" : "complete");
+    assert.deepEqual(Buffer.from(envelope.rawReport, "base64"), raw);
+  }
 });

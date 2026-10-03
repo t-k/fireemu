@@ -1021,6 +1021,7 @@ export async function produceCampaign({
   bootstrap,
   readPlan = readFile,
   createLedger = createAttemptLedger,
+  classifyReport = classifyTerminalReport,
   measureAttempt,
   readSnapshot,
 }) {
@@ -1055,9 +1056,8 @@ export async function produceCampaign({
       } catch {
         report = null;
       }
-      const outcome = ["pass", "fail"].includes(report?.verdict?.verdict)
-        ? report.verdict.verdict
-        : "unknown";
+      const observed = classifyReport(report);
+      const outcome = ["pass", "fail"].includes(observed) ? observed : "unknown";
       const envelope = Buffer.from(
         JSON.stringify({
           schema: "attempt-report/v1",
@@ -1865,4 +1865,17 @@ export async function verifyTrustedBinding(
   if (!isDeepStrictEqual(receipt, { ...expected, closed: true }))
     throw new Error("external verifier did not close this exact binding");
   return receipt;
+}
+
+/** An aggregate fail containing unknown facts is not a complete failed native attempt. */
+export function classifyTerminalReport(report) {
+  const recomputed = recomputeNativeReport(report);
+  if (!recomputed.ok || !["pass", "fail"].includes(report?.verdict?.verdict)) return "unknown";
+  if (
+    !["A", "B", "C", "D", "E", "F", "G"].every((letter) =>
+      ["pass", "fail"].includes(report.verdict.conditions?.[letter]?.outcome),
+    )
+  )
+    return "unknown";
+  return report.verdict.verdict;
 }

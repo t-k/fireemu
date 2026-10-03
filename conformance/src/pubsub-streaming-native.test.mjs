@@ -434,10 +434,12 @@ test("real_observer_awaiting_bridge_write_makes_WAL_and_peer_progress", async ()
 test("late_post_syscall_callback_settlement_never_mutates_returned_UNKNOWN", async () => {
   const entered = deferred(),
     release = deferred();
+  let reached = false;
   const f = await fixture({
     deadlineAt: performance.now() + 400,
     ioBarrier: async ({ operation, phase, rowIndex }) => {
       if (operation === "file-sync" && phase === "after-syscall" && rowIndex === 0) {
+        reached = true;
         entered.resolve();
         await release.promise;
       }
@@ -446,7 +448,12 @@ test("late_post_syscall_callback_settlement_never_mutates_returned_UNKNOWN", asy
   try {
     const b = bridge(f);
     const opening = b.open();
-    await entered.promise;
+    await f.awaitBarrier(Promise.race([entered.promise, opening.catch(() => {})]));
+    assert.equal(
+      reached,
+      true,
+      "post-syscall acknowledgement callback must precede open completion",
+    );
     await assert.rejects(opening, /admission stopped/);
     const report = await b.done();
     const frozen = JSON.stringify(report);
@@ -618,6 +625,8 @@ test("actual_FileHandle_short_zero_writes_and_closed_handle_syncs_never_ack_DATA
 test("failed_real_fsync_pipeline_barrier_never_releases_native_frame_visibility", async () => {
   for (const failingOperation of ["file-sync", "directory-sync"]) {
     const attempted = deferred();
+    const visible = deferred();
+    let reached = false;
     await using(
       {
         ioBarrier: async ({ operation, phase, body }) => {
@@ -627,27 +636,30 @@ test("failed_real_fsync_pipeline_barrier_never_releases_native_frame_visibility"
             body?.type === "receipt" &&
             body.receipt.kind === "data"
           ) {
+            reached = true;
             attempted.resolve();
             throw new Error("injected acknowledgement failure after actual syscall");
           }
         },
       },
       async (f) => {
-        let visible = 0;
+        let observed = 0;
         const b = bridge(f, {
           onFrame: () => {
-            visible++;
+            observed++;
+            visible.resolve();
           },
         });
         await b.open();
         await f.peer.ready();
         f.peer.respond();
         f.peer.send(frame("x"));
-        await f.awaitBarrier(attempted.promise);
+        await f.awaitBarrier(Promise.race([attempted.promise, visible.promise]));
+        assert.equal(reached, true, "acknowledgement failure callback must run before visibility");
         await f.waitFor("stream-close");
         const report = await b.done();
         assertUnknown(report);
-        assert.equal(visible, 0);
+        assert.equal(observed, 0);
         assert.equal(f.ioSnapshot().writer.failed, true);
         assert.ok(report.journal.unknownEntries > 0);
       },
@@ -879,4 +891,38 @@ test("owned_readback_is_bounded_and_settles_before_FileHandle_shutdown", async (
     release.resolve();
     await f.shutdown();
   }
+});
+
+test("actual_native_syscall_Promise_is_tracked_before_the_IO_poll_settles_it", async () => {
+  const entered = deferred();
+  await using(
+    {
+      ioBarrier: ({ operation, phase, rowIndex }) => {
+        if (operation === "file-sync" && phase === "before-syscall" && rowIndex === 0)
+          entered.resolve();
+      },
+    },
+    async (f) => {
+      const b = bridge(f);
+      const opening = b.open();
+      await f.awaitBarrier(entered.promise);
+      await Promise.resolve();
+      const snapshot = f.ioSnapshot();
+      assert.equal(snapshot.pendingNativeOperations, 1);
+      assert.ok(
+        snapshot.systemCalls.some(
+          (call) => call.operation === "file-sync" && call.phase === "entry",
+        ),
+      );
+      assert.equal(
+        snapshot.systemCalls.some(
+          (call) => call.operation === "file-sync" && call.phase === "settled",
+        ),
+        false,
+      );
+      await opening;
+      await f.peer.ready();
+      await b.done();
+    },
+  );
 });

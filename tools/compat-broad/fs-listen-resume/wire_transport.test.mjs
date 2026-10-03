@@ -1418,3 +1418,141 @@ test("generated getter ownership transitions agree with the independently select
     }
   }
 });
+
+test("rollback does not read an effectful getter belonging to a new owner", () => {
+  let a;
+  let armed = false;
+  let foreignRead = false;
+  let sends = 0;
+  let bRequest;
+  const original = () => {
+    sends++;
+    return "stream";
+  };
+  let value = original;
+  const session = {};
+  const bHttp2 = { connect: () => session };
+  Object.defineProperty(session, "request", {
+    get() {
+      if (foreignRead) {
+        foreignRead = false;
+        bRequest();
+      }
+      return value;
+    },
+    set(next) {
+      value = next;
+      if (armed && next !== original) {
+        armed = false;
+        a.close();
+        bHttp2.connect("http://localhost:1");
+        bRequest = value;
+        foreignRead = true;
+      }
+    },
+  });
+  const aBudget = createWireBudget({ maxRequests: 3, cleanupReserve: 1 });
+  const bBudget = createWireBudget({ maxRequests: 3, cleanupReserve: 1 });
+  const b = module.installNodeWireGuard({
+    http2: bHttp2,
+    globals: { fetch() {} },
+    budget: bBudget,
+    phase: () => "observation",
+  });
+  const aHttp2 = { connect: () => session };
+  a = module.installNodeWireGuard({
+    http2: aHttp2,
+    globals: { fetch() {} },
+    budget: aBudget,
+    phase: () => "observation",
+  });
+  try {
+    armed = true;
+    assert.throws(() => aHttp2.connect("http://localhost:1"), /closed/);
+    assert.equal(foreignRead, true, "A must not evaluate B property after ownership transfer");
+    assert.equal(value, bRequest);
+    assert.equal(sends, 0);
+    assert.equal(aBudget.snapshot().total + bBudget.snapshot().total, 0);
+  } finally {
+    foreignRead = false;
+    a.close();
+    b.close();
+  }
+});
+
+test("rollback descriptor lookup cannot write over an owner acquired during metadata reads", () => {
+  let a;
+  let armed = false;
+  let triggerDescriptor = false;
+  let writes = 0;
+  let sends = 0;
+  let bRequest;
+  const original = () => {
+    sends++;
+    return "stream";
+  };
+  let value = original;
+  const setterError = new Error("descriptor rollback failure");
+  const bHttp2 = {};
+  const backing = {};
+  Object.defineProperty(backing, "request", {
+    configurable: true,
+    get: () => value,
+    set(next) {
+      writes++;
+      value = next;
+      if (armed && next !== original) {
+        armed = false;
+        triggerDescriptor = true;
+        throw setterError;
+      }
+    },
+  });
+  const prototype = new Proxy(backing, {
+    getOwnPropertyDescriptor(target, key) {
+      const descriptor = Reflect.getOwnPropertyDescriptor(target, key);
+      if (triggerDescriptor && key === "request") {
+        triggerDescriptor = false;
+        a.close();
+        bHttp2.connect("http://localhost:1");
+        bRequest = value;
+      }
+      return descriptor;
+    },
+  });
+  const session = Object.create(prototype);
+  bHttp2.connect = () => session;
+  const aBudget = createWireBudget({ maxRequests: 3, cleanupReserve: 1 });
+  const bBudget = createWireBudget({ maxRequests: 3, cleanupReserve: 1 });
+  const b = module.installNodeWireGuard({
+    http2: bHttp2,
+    globals: { fetch() {} },
+    budget: bBudget,
+    phase: () => "observation",
+  });
+  const aHttp2 = { connect: () => session };
+  a = module.installNodeWireGuard({
+    http2: aHttp2,
+    globals: { fetch() {} },
+    budget: aBudget,
+    phase: () => "observation",
+  });
+  try {
+    armed = true;
+    assert.throws(
+      () => aHttp2.connect("http://localhost:1"),
+      (e) => e === setterError,
+    );
+    assert.equal(writes, 3);
+    assert.equal(value, bRequest);
+    assert.equal(Object.hasOwn(session, "request"), false);
+    assert.equal(sends, 0);
+    assert.equal(aBudget.snapshot().total + bBudget.snapshot().total, 0);
+    assert.equal(bRequest(), "stream");
+    assert.equal(bBudget.snapshot().total, 1);
+    assert.equal(aBudget.snapshot().total, 0);
+  } finally {
+    a.close();
+    b.close();
+  }
+});

@@ -34,7 +34,7 @@
     "spec/compatibility/broad-runs/fs-transaction-expiry-retry-04-recorded-comparison-v1.json": "4a4c1db1d7ac3fb5330bc5d783e16ac00de6a748e4ed8e660a4a278bdcb68107",
     "spec/compatibility/broad-runs/fs-transaction-p02-recorded-comparison-v1.json": "98906db6c9f50ebba9e3edd36383fbfc2ab9680a3426e43e52a3ba099f7f5f4f",
     "spec/compatibility/broad-runs/fs-transaction-p02-recorded-observations-v1.json": "25fb9791af20196080e79cd6a47dd5835b982fefa9ff409e05e4bd2ef2c9e23c",
-    "spec/compatibility/broad-runs/fs-transaction-p08-recorded-comparison-v1.json": "e69609f25ef46083ade06fbc56819a026355dbe69ddfd980f722addaa0f22c90",
+    "spec/compatibility/broad-runs/fs-transaction-p08-recorded-comparison-v1.json": "404c55b0cfb5d5d8950d6581bb30b3b876d35fac783db08ee64f8baa67b91841",
     "spec/compatibility/broad-runs/fs-transaction-p08-recorded-observations-v1.json": "a405609b2b534618443924535c60d8d251a53518e17330005a1bf611c3a5f57a",
     "spec/compatibility/broad-runs/fs-write-limits-03.json": "145134bd10a13a9d0cead3f06929aaee6f2f491bf14bd04ab26cc6ec45cc434f",
     "spec/compatibility/closure/AUTH-ACCOUNT.json": "d04ac6a82f575b2e6d107d7b4433f8bed2305330202dd69d14963ed574788c92",

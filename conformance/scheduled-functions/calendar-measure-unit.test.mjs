@@ -2169,3 +2169,109 @@ test("default producer classification retains incomplete failures as unknown and
     assert.deepEqual(Buffer.from(envelope.rawReport, "base64"), raw);
   }
 });
+
+async function fixedSourceBytes() {
+  const { execFileSync } = await import("node:child_process");
+  const { fileURLToPath } = await import("node:url");
+  const repository = fileURLToPath(new URL("../../", import.meta.url));
+  const commit = "33970bf501ac85e62fd8aee488d16a9405a8a019";
+  return new Map(
+    Object.values(REFUSAL_FORMATS).map(({ path }) => [
+      path,
+      execFileSync("git", ["-C", repository, "show", `${commit}:${path}`], { maxBuffer: 1048576 }),
+    ]),
+  );
+}
+
+test("all 537475 immutable source bytes reach durable ledger terminal and seal through bounded native references", async () => {
+  const fs = await import("node:fs/promises");
+  const { join } = await import("node:path");
+  const { tmpdir } = await import("node:os");
+  const m = await import("./calendar-measure.mjs");
+  const sources = await fixedSourceBytes();
+  assert.deepEqual(
+    [...sources.values()].map((b) => b.length),
+    [1946, 26838, 364353, 144338],
+  );
+  assert.equal(
+    [...sources.values()].reduce((sum, b) => sum + b.length, 0),
+    537475,
+  );
+  const root = await fs.realpath(await fs.mkdtemp(join(tmpdir(), "calendar-source-bound-")));
+  try {
+    const directory = join(root, "accounting-unit");
+    await fs.mkdir(directory);
+    const scope = {
+      campaign: "unit-source-bound",
+      utcDay: new Date().toISOString().slice(0, 10),
+      runRoot: root,
+      harnessH: "a".repeat(64),
+      buildPins: { ...m.FIXED_BUILD_PINS },
+      nativeRoot: { pid: 100, start: "unit-only", sid: 50 },
+    };
+    const plan = Buffer.from("{}");
+    const report = {
+      accountingDirectory: directory,
+      pins: { ...m.FIXED_BUILD_PINS },
+      verdict: { verdict: "fail" },
+      native: {
+        schema: "calendar-native-proof/v1",
+        queries: [...sources].map(([path, raw], i) => ({
+          file: "git",
+          args: ["-C", "/source", "show", `${m.FIXED_BUILD_PINS.sourceCommit}:${path}`],
+          purpose: "pinned-source",
+          answer: {
+            stdout: raw.toString("utf8"),
+            stderr: "",
+            code: 0,
+            timedOut: false,
+            truncated: false,
+            handle: `measure:${i + 1}`,
+            pid: 600 + i,
+          },
+        })),
+      },
+    };
+    const raw = Buffer.from(JSON.stringify(report));
+    assert.ok(raw.length > 537475);
+    const result = await m.produceCampaign({
+      authorityId: "unit",
+      attempts: [{ attemptId: "one", planPath: "/unit", planSha256: sha(plan) }],
+      bootstrap: async () => ({ scope, receipt: { phase: "infrastructure", unitOnly: true } }),
+      readPlan: async () => plan,
+      measureAttempt: async () => raw,
+      retainReport: async (bytes, attempt, currentScope) => {
+        const bounded = await m.publishNativeSources(
+          JSON.parse(bytes),
+          attempt.attemptId,
+          currentScope,
+        );
+        return Buffer.from(JSON.stringify(bounded));
+      },
+      classifyReport: () => "fail",
+      readSnapshot: async () => ({}),
+    });
+    assert.equal(result.state, "complete", JSON.stringify(result));
+    assert.equal(result.durabilityAcknowledged, true);
+    const rows = (await fs.readFile(join(root, "attempt-ledger/ledger.jsonl"), "utf8"))
+      .trimEnd()
+      .split("\n")
+      .map(JSON.parse);
+    assert.deepEqual(
+      rows.map((r) => r.type),
+      ["header", "birth", "terminal", "seal"],
+    );
+    const terminal = rows[2];
+    assert.ok(terminal.reportBytes <= 262144);
+    const envelope = JSON.parse(
+      await fs.readFile(join(root, "attempt-ledger", terminal.reportFile)),
+    );
+    const compact = JSON.parse(Buffer.from(envelope.rawReport, "base64"));
+    assert.equal(compact.native.schema, "calendar-native-proof/v2");
+    const restored = await m.resolveNativeSources(compact, "one", scope);
+    for (const [path, raw] of sources) assert.deepEqual(restored.get(path), raw);
+    assert.equal(result.nativeCertificateIssued, undefined);
+  } finally {
+    await fs.rm(root, { recursive: true });
+  }
+});

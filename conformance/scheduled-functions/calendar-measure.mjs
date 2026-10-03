@@ -1023,6 +1023,7 @@ export async function produceCampaign({
   createLedger = createAttemptLedger,
   classifyReport = classifyTerminalReport,
   measureAttempt,
+  retainReport = async (raw) => raw,
   readSnapshot,
 }) {
   let ledger;
@@ -1046,7 +1047,13 @@ export async function produceCampaign({
       try {
         if (digest(planBytes) !== attempt.planSha256)
           throw new Error("raw plan differs from packet");
-        rawReport = Buffer.from(await measureAttempt(planBytes, attempt, scope));
+        rawReport = Buffer.from(
+          await retainReport(
+            Buffer.from(await measureAttempt(planBytes, attempt, scope)),
+            attempt,
+            scope,
+          ),
+        );
       } catch (failure) {
         error = String(failure.message ?? failure);
       }
@@ -1280,6 +1287,210 @@ export function recomputeNativeReport(report) {
   } catch (error) {
     return { ok: false, problems: [String(error.message ?? error)] };
   }
+}
+
+/** Exact immutable source publications; these limits cannot be nominated by a packet. */
+export const FIXED_NATIVE_SOURCES = Object.freeze([
+  Object.freeze({
+    path: "crates/fireemu-adapter-functions/src/zone.rs",
+    bytes: 1946,
+    sha256: "ae132893d5b072cc587d56b86327ca803a81f5adda28a1625f53239afeafabcb",
+  }),
+  Object.freeze({
+    path: "crates/fireemu-adapter-functions/src/manifest_json.rs",
+    bytes: 26838,
+    sha256: "cd70002833476b6c246f9c19eba736dcbaf6c2e5d50f47fc39643800540ca2da",
+  }),
+  Object.freeze({
+    path: "crates/fireemu/src/functions.rs",
+    bytes: 364353,
+    sha256: "07fd0737972ae74bb619f862ebe302d63bd6a4dacf8e530ec64c785c3ed5725a",
+  }),
+  Object.freeze({
+    path: "crates/fireemu/src/main.rs",
+    bytes: 144338,
+    sha256: "de5b63a419a6542fc490d923f3fe0cb05c6d3bcec7b7601f8636206d6f876a4f",
+  }),
+]);
+const sameInode = (a, b) => a.dev === b.dev && a.ino === b.ino;
+async function privateDirectory(path) {
+  const stat = await lstat(path);
+  if (!stat.isDirectory() || stat.isSymbolicLink() || (await realpath(path)) !== path)
+    throw new Error("native source directory alias");
+  return stat;
+}
+async function boundedSourceRead(path, expected) {
+  const before = await lstat(path);
+  if (
+    !before.isFile() ||
+    before.isSymbolicLink() ||
+    before.nlink !== 1 ||
+    before.size !== expected.bytes ||
+    (await realpath(path)) !== path
+  )
+    throw new Error("native source file alias or byte count differs");
+  const handle = await open(path, "r");
+  try {
+    if (!sameInode(before, await handle.stat())) throw new Error("native source file substituted");
+    const raw = Buffer.alloc(expected.bytes);
+    let offset = 0;
+    while (offset < raw.length) {
+      const { bytesRead } = await handle.read(raw, offset, raw.length - offset, offset);
+      if (bytesRead <= 0) throw new Error("native source truncated read");
+      offset += bytesRead;
+    }
+    const after = await handle.stat();
+    if (
+      !sameInode(before, after) ||
+      !sameInode(before, await lstat(path)) ||
+      after.size !== expected.bytes ||
+      after.nlink !== 1 ||
+      digest(raw) !== expected.sha256 ||
+      !Buffer.from(raw.toString("utf8")).equals(raw)
+    )
+      throw new Error("native source bytes or identity changed");
+    return raw;
+  } finally {
+    await handle.close();
+  }
+}
+function sourceReference(query, expected, index, attemptId, scope) {
+  return {
+    schema: "calendar-native-source/v1",
+    sourceCommit: FIXED_BUILD_PINS.sourceCommit,
+    sourcePath: expected.path,
+    blobFile: `source-${index}.raw`,
+    rawSha256: expected.sha256,
+    rawBytes: expected.bytes,
+    scopeSha256: digest(Buffer.from(JSON.stringify(scope))),
+    attemptId,
+    queryArgvSha256: digest(Buffer.from(JSON.stringify([query.file, ...query.args]))),
+    ownHandle: query.answer.handle,
+    ownPid: query.answer.pid,
+  };
+}
+function sourceQueries(report) {
+  const queries = report.native?.queries?.filter((q) => q.purpose === "pinned-source");
+  if (
+    !queries ||
+    queries.length !== 4 ||
+    report.pins?.sourceCommit !== FIXED_BUILD_PINS.sourceCommit
+  )
+    throw new Error("native source exact four fixed queries required");
+  return FIXED_NATIVE_SOURCES.map((expected) => {
+    const matches = queries.filter(
+      (q) =>
+        q.file === "git" &&
+        q.args?.length === 4 &&
+        q.args[0] === "-C" &&
+        absolute(q.args[1]) &&
+        q.args[2] === "show" &&
+        q.args[3] === `${FIXED_BUILD_PINS.sourceCommit}:${expected.path}`,
+    );
+    if (
+      matches.length !== 1 ||
+      !complete(matches[0].answer) ||
+      typeof matches[0].answer.handle !== "string" ||
+      !Number.isSafeInteger(matches[0].answer.pid)
+    )
+      throw new Error("native source query binding differs");
+    return matches[0];
+  });
+}
+function sourceNamespace(report, scope) {
+  const directory = report.accountingDirectory;
+  if (
+    !absolute(directory) ||
+    resolve(directory, "..") !== scope.runRoot ||
+    !directory.startsWith(scope.runRoot + "/accounting-")
+  )
+    throw new Error("foreign native source namespace");
+  return join(directory, "native-sources");
+}
+/** Retains every full source byte outside the bounded ledger publication. */
+export async function publishNativeSources(report, attemptId, scope) {
+  if (report.native?.schema !== "calendar-native-proof/v1" || !identifier(attemptId))
+    throw new Error("invalid native source publication input");
+  const retained = structuredClone(report);
+  const queries = sourceQueries(retained);
+  const directory = sourceNamespace(retained, scope);
+  const parent = await privateDirectory(retained.accountingDirectory);
+  const root = await privateDirectory(scope.runRoot);
+  await mkdir(directory, { mode: 0o700 });
+  const parentHandle = await open(retained.accountingDirectory, "r");
+  try {
+    await parentHandle.sync();
+  } finally {
+    await parentHandle.close();
+  }
+  const namespace = await privateDirectory(directory);
+  for (let i = 0; i < FIXED_NATIVE_SOURCES.length; i++) {
+    const expected = FIXED_NATIVE_SOURCES[i],
+      query = queries[i];
+    if (typeof query.answer.stdout !== "string") throw new Error("missing complete source stdout");
+    const raw = Buffer.from(query.answer.stdout, "utf8");
+    if (
+      raw.length !== expected.bytes ||
+      digest(raw) !== expected.sha256 ||
+      raw.toString("utf8") !== query.answer.stdout
+    )
+      throw new Error("fixed source stdout bytes differ");
+    const ref = sourceReference(query, expected, i, attemptId, scope);
+    await publishCampaignBytes(join(directory, ref.blobFile), raw);
+    query.answer.sourceRef = ref;
+    delete query.answer.stdout;
+  }
+  retained.native.schema = "calendar-native-proof/v2";
+  retained.native.sourceBinding = {
+    attemptId,
+    scopeSha256: digest(Buffer.from(JSON.stringify(scope))),
+  };
+  await resolveNativeSources(retained, attemptId, scope);
+  if (
+    !sameInode(root, await privateDirectory(scope.runRoot)) ||
+    !sameInode(parent, await privateDirectory(retained.accountingDirectory)) ||
+    !sameInode(namespace, await privateDirectory(directory))
+  )
+    throw new Error("native source directory substituted");
+  return retained;
+}
+/** Fresh bounded readback under an exact, separate attempt-owned publication namespace. */
+export async function resolveNativeSources(report, attemptId, scope) {
+  if (report.native?.schema !== "calendar-native-proof/v2")
+    throw new Error("missing native source references");
+  const queries = sourceQueries(report);
+  const directory = sourceNamespace(report, scope);
+  const root = await privateDirectory(scope.runRoot),
+    parent = await privateDirectory(report.accountingDirectory),
+    namespace = await privateDirectory(directory);
+  const expectedNames = FIXED_NATIVE_SOURCES.map((_, i) => `source-${i}.raw`);
+  if (!isDeepStrictEqual((await readdir(directory)).sort(), expectedNames.sort()))
+    throw new Error("native source publication set differs");
+  const binding = { attemptId, scopeSha256: digest(Buffer.from(JSON.stringify(scope))) };
+  if (!isDeepStrictEqual(report.native.sourceBinding, binding))
+    throw new Error("foreign native source binding");
+  const raw = new Map();
+  for (let i = 0; i < 4; i++) {
+    const query = queries[i],
+      expected = FIXED_NATIVE_SOURCES[i];
+    if (
+      "stdout" in query.answer ||
+      !isDeepStrictEqual(
+        query.answer.sourceRef,
+        sourceReference(query, expected, i, attemptId, scope),
+      )
+    )
+      throw new Error("native source typed reference differs");
+    raw.set(expected.path, await boundedSourceRead(join(directory, `source-${i}.raw`), expected));
+  }
+  if (
+    !sameInode(root, await privateDirectory(scope.runRoot)) ||
+    !sameInode(parent, await privateDirectory(report.accountingDirectory)) ||
+    !sameInode(namespace, await privateDirectory(directory)) ||
+    !isDeepStrictEqual((await readdir(directory)).sort(), expectedNames.sort())
+  )
+    throw new Error("native source namespace changed during readback");
+  return raw;
 }
 
 /** The separately built real stage3 artifact; a caller cannot nominate a stand-in build. */

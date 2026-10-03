@@ -3,7 +3,8 @@
 Every string in `spec/compatibility/closure/*.json` that starts with a repository path is a
 reference. The path must exist; a `#fragment` must appear in the file; a sibling
 `<name>Path` / `<name>Sha256` pair must match. Record files under `spec/` and
-`conformance/` are pinned by SHA-256 in `spec/compatibility/closure/record-digests.json`,
+`conformance/`, plus the two exact transaction tool sources in `PINNED_TOOL_PATHS`,
+are pinned when cited by SHA-256 in `spec/compatibility/closure/record-digests.json`,
 so a cited record can only change together with an explicit lock update
 (`--write`). A closure may not cite a suite that CI no longer runs (the
 `RETIRED_SUITES` list in the compatibility-inventory workflow).
@@ -25,12 +26,18 @@ LOCK = f"{CLOSURE_DIR}/record-digests.json"
 WORKFLOW = ".github/workflows/compatibility-inventory.yml"
 PREFIXES = ("spec/", "conformance/", "tools/", "docs/", "crates/", "verification/")
 PINNED_PREFIXES = ("spec/", "conformance/")
+PINNED_TOOL_PATHS = (
+    "tools/compat-broad/fs-write-txn/fs_txn_compare_local.py",
+    "tools/compat-broad/fs-write-txn/fs_txn_table_p13b.py",
+)
 PROJECTION_INPUTS = (
     "spec/compatibility/production-parent-registry.json",
     "spec/compatibility/official-compatibility/registry.json",
 )
 HISTORY_DIR = "spec/compatibility/official-compatibility/history/e57a78e0"
-REFERENCE = re.compile(r"^((?:spec|conformance|tools|docs|crates|verification)/[A-Za-z0-9_./()-]+)(#[^\s]+)?(?::|\s|$)")
+REFERENCE = re.compile(
+    r"^((?:spec|conformance|tools|docs|crates|verification)/[A-Za-z0-9_./()-]+)(#[^\s]+)?(?::|\s|$)"
+)
 DIGEST = re.compile(r"^[0-9a-f]{64}$")
 
 
@@ -85,13 +92,17 @@ def closure_references(root: Path) -> list[Reference]:
     references = []
     for closure, historical in _reference_documents(root):
         if not historical and closure.relative_to(root).as_posix() in PROJECTION_INPUTS:
-            references.append(Reference(closure.name, closure.relative_to(root).as_posix(), None))
+            references.append(
+                Reference(closure.name, closure.relative_to(root).as_posix(), None)
+            )
         document = json.loads(closure.read_text())
         for text in _strings(document):
             match = REFERENCE.match(text)
             if match:
                 fragment = match.group(2)[1:] if match.group(2) else None
-                references.append(Reference(closure.name, match.group(1), fragment, historical))
+                references.append(
+                    Reference(closure.name, match.group(1), fragment, historical)
+                )
     return references
 
 
@@ -122,7 +133,8 @@ def build_lock(root: Path) -> dict:
         {
             ref.path
             for ref in closure_references(root)
-            if ref.path.startswith(PINNED_PREFIXES) and (root / ref.path).is_file()
+            if (ref.path.startswith(PINNED_PREFIXES) or ref.path in PINNED_TOOL_PATHS)
+            and (root / ref.path).is_file()
         }
     )
     return {
@@ -159,10 +171,20 @@ def check(root: Path) -> list[str]:
         if not target.exists():
             problems.append(f"{ref.closure}: {ref.path} is missing")
             continue
-        if ref.fragment and target.is_file() and not _fragment_present(target, ref.fragment):
-            problems.append(f"{ref.closure}: {ref.path}#{ref.fragment} names no entry in the file")
-        if not ref.historical and any(ref.path == suite or ref.path.startswith(f"{suite}/") for suite in retired):
-            problems.append(f"{ref.closure}: {ref.path} is in a retired suite CI no longer runs")
+        if (
+            ref.fragment
+            and target.is_file()
+            and not _fragment_present(target, ref.fragment)
+        ):
+            problems.append(
+                f"{ref.closure}: {ref.path}#{ref.fragment} names no entry in the file"
+            )
+        if not ref.historical and any(
+            ref.path == suite or ref.path.startswith(f"{suite}/") for suite in retired
+        ):
+            problems.append(
+                f"{ref.closure}: {ref.path} is in a retired suite CI no longer runs"
+            )
     for closure, _ in _reference_documents(root):
         for entry in _dicts(json.loads(closure.read_text())):
             for key, value in entry.items():
@@ -171,12 +193,17 @@ def check(root: Path) -> list[str]:
                 digest_key = f"{key[: -len('Path')]}Sha256"
                 digest = entry.get(digest_key)
                 if not (isinstance(digest, str) and DIGEST.match(digest)):
-                    if closure.relative_to(root).as_posix() in PROJECTION_INPUTS and digest_key in entry:
+                    if (
+                        closure.relative_to(root).as_posix() in PROJECTION_INPUTS
+                        and digest_key in entry
+                    ):
                         problems.append(f"{closure.name}: {digest_key} is invalid")
                     continue
                 target = root / value
                 if target.is_file() and _sha256(target) != digest:
-                    problems.append(f"{closure.name}: {digest_key} differs from {value}")
+                    problems.append(
+                        f"{closure.name}: {digest_key} differs from {value}"
+                    )
     lock_path = root / LOCK
     if not lock_path.is_file():
         return [*problems, f"{LOCK} is missing; run closure_records.py --write"]
@@ -201,7 +228,9 @@ def main(argv=None) -> int:
     parser.add_argument("--root", type=Path, default=ROOT)
     args = parser.parse_args(argv)
     if args.write:
-        (args.root / LOCK).write_text(json.dumps(build_lock(args.root), indent=2) + "\n")
+        (args.root / LOCK).write_text(
+            json.dumps(build_lock(args.root), indent=2) + "\n"
+        )
         return 0
     problems = check(args.root)
     for problem in problems:

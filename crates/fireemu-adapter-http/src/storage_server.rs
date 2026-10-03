@@ -88,6 +88,8 @@ impl Drop for CancelOnDrop {
 #[doc(hidden)]
 #[derive(Default)]
 pub struct ServerObserver {
+    #[cfg(test)]
+    publication_gate: WorkerPublicationGate,
     #[cfg(all(test, unix))]
     record_descriptors: bool,
     #[cfg(all(test, unix))]
@@ -105,11 +107,52 @@ pub struct ServerObserver {
     pub epsilon_polls: AtomicUsize,
     pub matching_workers: AtomicUsize,
     pub cancelled_workers: AtomicUsize,
+    /// Handler completions after request-charge release; worker permits may still be held.
     pub completed_workers: AtomicUsize,
     pub closed_connections: AtomicUsize,
     /// A verification barrier retains worker permits after cancellation until released.
     pub hold_cancelled_workers: AtomicBool,
     cancelled_gate: (std::sync::Mutex<()>, std::sync::Condvar),
+}
+
+/// Retains a real worker after its response has been sent, without changing production APIs.
+#[cfg(test)]
+#[derive(Default)]
+struct WorkerPublicationGate {
+    handler_entries: AtomicUsize,
+    completion_budget: AtomicUsize,
+    sent: AtomicUsize,
+    hold: AtomicBool,
+    gate: (std::sync::Mutex<()>, std::sync::Condvar),
+}
+
+#[cfg(test)]
+impl WorkerPublicationGate {
+    fn after_send(&self) {
+        self.sent.fetch_add(1, Ordering::AcqRel);
+        let mut guard = self
+            .gate
+            .0
+            .lock()
+            .expect("publication gate is not poisoned");
+        while self.hold.load(Ordering::Acquire) {
+            guard = self
+                .gate
+                .1
+                .wait(guard)
+                .expect("publication gate is not poisoned");
+        }
+    }
+
+    fn release(&self) {
+        let _guard = self
+            .gate
+            .0
+            .lock()
+            .expect("publication gate is not poisoned");
+        self.hold.store(false, Ordering::Release);
+        self.gate.1.notify_all();
+    }
 }
 
 #[cfg(all(test, unix))]
@@ -691,6 +734,11 @@ async fn respond(
         let _glob_permit = glob_permit;
         let body = buffer.take();
         let matching = std::cell::RefCell::new(None);
+        #[cfg(test)]
+        observer
+            .publication_gate
+            .handler_entries
+            .fetch_add(1, Ordering::AcqRel);
         let response = handle_framed_cancellable(
             &state,
             StorageRequest {
@@ -732,8 +780,17 @@ async fn respond(
         if response.is_err() {
             observer.cancelled_worker();
         }
+        // The handler has consumed the bytes; return the request charge before publishing its result.
+        drop(buffer);
+        #[cfg(test)]
+        observer
+            .publication_gate
+            .completion_budget
+            .store(budget.in_flight(), Ordering::Release);
         observer.completed_workers.fetch_add(1, Ordering::AcqRel);
         let _ = sender.send(response);
+        #[cfg(test)]
+        observer.publication_gate.after_send();
     });
     {
         let mut jobs = runtime
@@ -953,7 +1010,7 @@ mod descriptor_tests {
     use std::sync::Mutex;
     use tokio::io::AsyncWriteExt as _;
 
-    fn state() -> Arc<StorageState> {
+    pub(super) fn state() -> Arc<StorageState> {
         use fireemu_core_auth::{
             mfa::TotpPolicy,
             store::{AuthRegistry, AuthStore},
@@ -1143,6 +1200,404 @@ mod descriptor_tests {
             drop(clients);
             drop(TcpListener::bind(local).await.unwrap());
             eprintln!("descriptor cleanup dropFuture={drop_future} accepted=2 monitor=2 identitiesGone=4 permits=2/16 budget=0");
+        }
+    }
+}
+
+#[cfg(all(test, any(target_os = "macos", target_os = "linux")))]
+mod budget_publication_tests {
+    use super::*;
+    use std::io::{Read as _, Write as _};
+    use std::time::{Duration, Instant};
+
+    struct Cleanup<'a> {
+        runtime: &'a tokio::runtime::Runtime,
+        observer: Arc<ServerObserver>,
+        stop: Option<tokio::sync::oneshot::Sender<()>>,
+        server: Option<tokio::task::JoinHandle<std::io::Result<()>>>,
+    }
+    impl Drop for Cleanup<'_> {
+        fn drop(&mut self) {
+            self.observer.publication_gate.release();
+            if let Some(stop) = self.stop.take() {
+                let _ = stop.send(());
+            }
+            if let Some(server) = self.server.take() {
+                self.runtime.block_on(async {
+                    let _ = server.await;
+                });
+            }
+        }
+    }
+
+    fn observed(label: &str, predicate: impl Fn() -> bool) {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while !predicate() {
+            assert!(
+                Instant::now() < deadline,
+                "observation did not settle: {label}"
+            );
+            std::thread::yield_now();
+        }
+    }
+
+    fn check_stored_upload(state: &StorageState, status: u16, body_bytes: usize) {
+        use fireemu_core_storage::name::{BucketName, ObjectName};
+        let store = state.store.lock().unwrap();
+        let metadata = store.get(
+            &BucketName::try_new("demo-app.appspot.com").unwrap(),
+            &ObjectName::try_new(format!("budget-{status}")).unwrap(),
+        );
+        if status == 200 {
+            let bytes = store.bytes(metadata.expect("successful upload remains stored"));
+            assert_eq!(bytes.len(), body_bytes);
+            assert!(bytes.iter().all(|byte| *byte == 7));
+        } else {
+            assert!(metadata.is_none(), "a rejected checksum stores no object");
+        }
+    }
+
+    fn check_upload_response(client: &mut std::net::TcpStream, status: u16) {
+        let mut response = [0; 4096];
+        let received = client.read(&mut response).unwrap();
+        assert!(
+            response[..received].starts_with(format!("HTTP/1.1 {status}").as_bytes()),
+            "{}",
+            String::from_utf8_lossy(&response[..received])
+        );
+    }
+
+    /// A received response must release its body charge while the worker still owns permits.
+    #[test]
+    fn finished_upload_releases_budget_before_response_with_worker_still_running() {
+        static BUDGET: BodyBudget = BodyBudget::new(32 * 1024 * 1024);
+        const BODY_BYTES: usize = 8 * 1024 * 1024;
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(2)
+            .enable_all()
+            .build()
+            .unwrap();
+        for status in [200, 400] {
+            let state = super::descriptor_tests::state();
+            let observer = Arc::new(ServerObserver::default());
+            observer
+                .publication_gate
+                .hold
+                .store(true, Ordering::Release);
+            let port = std::env::var("PORT")
+                .ok()
+                .and_then(|value| value.parse::<u16>().ok())
+                .unwrap_or(0);
+            let listener = runtime
+                .block_on(TcpListener::bind(("127.0.0.1", port)))
+                .unwrap();
+            let address = listener.local_addr().unwrap();
+            let (stop, stopped) = tokio::sync::oneshot::channel();
+            let server = runtime.spawn(serve_storage_with_shutdown(
+                listener,
+                state.clone(),
+                &BUDGET,
+                async {
+                    let _ = stopped.await;
+                },
+                observer.clone(),
+            ));
+            let cleanup = Cleanup {
+                runtime: &runtime,
+                observer: observer.clone(),
+                stop: Some(stop),
+                server: Some(server),
+            };
+            // A failed assertion unwinds this guard before Cleanup joins the blocked handler.
+            let store_guard = state.store.lock().unwrap();
+            let mut client = std::net::TcpStream::connect(address).unwrap();
+            client
+                .set_write_timeout(Some(Duration::from_secs(5)))
+                .unwrap();
+            client
+                .set_read_timeout(Some(Duration::from_secs(5)))
+                .unwrap();
+            let checksum = if status == 400 {
+                "x-goog-hash: crc32c=AAAAAA==\r\n"
+            } else {
+                ""
+            };
+            write!(client, "POST /upload/storage/v1/b/demo-app.appspot.com/o?uploadType=media&name=budget-{status} HTTP/1.1\r\nHost: localhost\r\nAuthorization: Bearer owner\r\nContent-Type: application/octet-stream\r\nContent-Length: {BODY_BYTES}\r\nConnection: close\r\n{checksum}\r\n").unwrap();
+            client.write_all(&vec![7; BODY_BYTES]).unwrap();
+            observed("handler entered with its body", || {
+                observer
+                    .publication_gate
+                    .handler_entries
+                    .load(Ordering::Acquire)
+                    == 1
+            });
+            // A successful upload waits at this store lock; a checksum rejection may finish earlier.
+            if status == 200 {
+                assert_eq!(
+                    BUDGET.in_flight(),
+                    BODY_BYTES,
+                    "the body charge must survive through the handler"
+                );
+            }
+            drop(store_guard);
+            check_upload_response(&mut client, status);
+            observed("worker held after response publication", || {
+                observer.publication_gate.sent.load(Ordering::Acquire) == 1
+            });
+            assert_eq!(observer.workers.load(Ordering::Acquire), 1);
+            assert_eq!(observer.general_permits.load(Ordering::Acquire), 1);
+            assert_eq!(observer.completed_workers.load(Ordering::Acquire), 1);
+            assert_eq!(
+                BUDGET.in_flight(),
+                0,
+                "a published response must not retain its request charge"
+            );
+            assert_eq!(
+                observer
+                    .publication_gate
+                    .completion_budget
+                    .load(Ordering::Acquire),
+                0,
+                "completion notification must follow request-charge release"
+            );
+            check_stored_upload(&state, status, BODY_BYTES);
+            drop(client);
+            drop(cleanup);
+            assert_eq!(BUDGET.in_flight(), 0);
+            assert_eq!(ServerObserver::free_permits(), (2, 16));
+            eprintln!("response budget status={status} handlerCharge={BODY_BYTES} postSendWorkerHeld=1 charge=0 permitsRetained=1 finalPermits=2/16");
+        }
+    }
+}
+
+#[cfg(test)]
+mod budget_lifecycle_model_tests {
+    use super::*;
+    use proptest::prelude::*;
+
+    const REQUESTS: usize = 4;
+    const LIMIT_UNITS: usize = 3;
+
+    #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+    enum Phase {
+        Fresh,
+        Reserved,
+        Handling,
+        Released,
+        Published,
+        Cancelled,
+        Failed,
+    }
+
+    #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+    struct Request {
+        phase: Phase,
+        units: u8,
+        releases: u8,
+    }
+    impl Default for Request {
+        fn default() -> Self {
+            Self {
+                phase: Phase::Fresh,
+                units: 0,
+                releases: 0,
+            }
+        }
+    }
+    type State = [Request; REQUESTS];
+
+    #[derive(Clone, Copy, Debug)]
+    enum Action {
+        Reserve(u8),
+        Handler,
+        Release,
+        Publish,
+        Cancel,
+        Error,
+    }
+
+    fn action(number: u8) -> Action {
+        match number {
+            0 => Action::Reserve(1),
+            1 => Action::Reserve(2),
+            2 => Action::Handler,
+            3 => Action::Release,
+            4 => Action::Publish,
+            5 => Action::Cancel,
+            _ => Action::Error,
+        }
+    }
+
+    fn total(state: &State) -> usize {
+        state.iter().map(|request| usize::from(request.units)).sum()
+    }
+
+    fn release(request: &mut Request) {
+        if request.units > 0 {
+            request.releases += 1;
+            request.units = 0;
+        }
+    }
+
+    /// The reference protocol has independent phases and charges, so early publication violates it.
+    fn step(mut state: State, id: usize, action: Action) -> State {
+        let before = state[id];
+        match action {
+            Action::Reserve(units) if matches!(before.phase, Phase::Fresh | Phase::Reserved) => {
+                let target = units.max(before.units);
+                if total(&state) - usize::from(before.units) + usize::from(target) <= LIMIT_UNITS {
+                    state[id].units = target;
+                    state[id].phase = Phase::Reserved;
+                } else {
+                    release(&mut state[id]);
+                    state[id].phase = Phase::Failed;
+                }
+            }
+            Action::Handler if before.phase == Phase::Reserved => state[id].phase = Phase::Handling,
+            Action::Release if before.phase == Phase::Handling => {
+                release(&mut state[id]);
+                state[id].phase = Phase::Released;
+            }
+            Action::Publish if matches!(before.phase, Phase::Released | Phase::Failed) => {
+                state[id].phase = Phase::Published;
+            }
+            Action::Cancel | Action::Error
+                if matches!(
+                    before.phase,
+                    Phase::Fresh | Phase::Reserved | Phase::Handling | Phase::Released
+                ) =>
+            {
+                release(&mut state[id]);
+                state[id].phase = if matches!(action, Action::Cancel) {
+                    Phase::Cancelled
+                } else {
+                    Phase::Failed
+                };
+            }
+            _ => {}
+        }
+        state
+    }
+
+    fn valid(state: &State) -> bool {
+        total(state) <= LIMIT_UNITS
+            && state.iter().all(|request| {
+                request.units <= 2
+                    && request.releases <= 1
+                    && if matches!(request.phase, Phase::Reserved | Phase::Handling) {
+                        request.units > 0 && request.releases == 0
+                    } else {
+                        request.units == 0
+                    }
+            })
+    }
+
+    /// Exhausts every enabled ordering for four requests and all seven lifecycle actions.
+    #[test]
+    fn budget_lifecycle_model_checks_all_four_request_interleavings() {
+        let initial = [Request::default(); REQUESTS];
+        let mut visited = std::collections::HashSet::from([initial]);
+        let mut pending = std::collections::VecDeque::from([initial]);
+        let mut edges = 0usize;
+        while let Some(state) = pending.pop_front() {
+            assert!(valid(&state), "invalid ownership state: {state:?}");
+            for id in 0..REQUESTS {
+                for number in 0..7 {
+                    let next = step(state, id, action(number));
+                    edges += 1;
+                    assert!(valid(&next), "{state:?} -- {id}/{number} --> {next:?}");
+                    assert!(next
+                        .iter()
+                        .zip(state)
+                        .all(|(after, before)| after.releases >= before.releases));
+                    if visited.insert(next) {
+                        pending.push_back(next);
+                    }
+                }
+            }
+        }
+        assert!(
+            visited.len() > 1_000,
+            "the checker must explore interleavings, not a single trace"
+        );
+        eprintln!("budget finite model requests={REQUESTS} limitUnits={LIMIT_UNITS} states={} edges={edges} publicationCharged=0 doubleRelease=0", visited.len());
+    }
+
+    #[test]
+    fn budget_lifecycle_model_rejects_publication_before_release() {
+        let state = step(
+            step([Request::default(); REQUESTS], 0, Action::Reserve(1)),
+            0,
+            Action::Handler,
+        );
+        assert_eq!(
+            step(state, 0, Action::Publish),
+            state,
+            "publication before release is not enabled"
+        );
+        let mut broken = state;
+        broken[0].phase = Phase::Published;
+        assert!(
+            !valid(&broken),
+            "the charged-publication negative control must fail"
+        );
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(256))]
+        /// Exercises the real budget owner against the reference lifecycle, including failed reserves.
+        #[test]
+        fn actual_body_budget_follows_four_request_lifecycle(
+            actions in prop::collection::vec((0usize..REQUESTS, 0u8..7), 1..160)
+        ) {
+            static BUDGET: BodyBudget = BodyBudget::new(LIMIT_UNITS * CHARGE_GRANULARITY);
+            prop_assert_eq!(BUDGET.in_flight(), 0);
+            let mut state = [Request::default(); REQUESTS];
+            let mut owners: [Option<BudgetedBody>; REQUESTS] = std::array::from_fn(|_| None);
+            let mut moved: [Option<Vec<u8>>; REQUESTS] = std::array::from_fn(|_| None);
+            for (id, number) in actions {
+                let operation = action(number);
+                let before = state[id];
+                let next = step(state, id, operation);
+                match operation {
+                    Action::Reserve(units) if matches!(before.phase, Phase::Fresh | Phase::Reserved) => {
+                        let owner = owners[id].get_or_insert_with(|| BudgetedBody::new(&BUDGET, 2 * CHARGE_GRANULARITY));
+                        let result = owner.reserve_declared(usize::from(units) * CHARGE_GRANULARITY);
+                        if next[id].phase == Phase::Failed {
+                            prop_assert_eq!(result, Err(BodyError::BudgetExhausted));
+                            drop(owners[id].take());
+                        } else {
+                            prop_assert_eq!(result, Ok(()));
+                            if before.phase == Phase::Fresh { owner.extend(&[u8::try_from(id).unwrap()]).unwrap(); }
+                            prop_assert_eq!(owner.charged, usize::from(next[id].units) * CHARGE_GRANULARITY);
+                        }
+                    }
+                    Action::Handler if before.phase == Phase::Reserved => {
+                        let owner = owners[id].as_mut().unwrap();
+                        moved[id] = Some(owner.take());
+                        prop_assert_eq!(owner.charged, usize::from(before.units) * CHARGE_GRANULARITY);
+                    }
+                    Action::Release if before.phase == Phase::Handling => { drop(owners[id].take()); }
+                    Action::Cancel | Action::Error if matches!(before.phase,
+                        Phase::Fresh | Phase::Reserved | Phase::Handling | Phase::Released) => { drop(owners[id].take()); }
+                    Action::Publish if next[id].phase == Phase::Published => {
+                        prop_assert!(owners[id].is_none(), "publication must have no live request charge owner");
+                    }
+                    _ => {}
+                }
+                state = next;
+                prop_assert!(valid(&state));
+                prop_assert_eq!(BUDGET.in_flight(), total(&state) * CHARGE_GRANULARITY);
+                for index in 0..REQUESTS {
+                    prop_assert_eq!(owners[index].as_ref().map_or(0, |owner| owner.charged),
+                        usize::from(state[index].units) * CHARGE_GRANULARITY);
+                    if let Some(bytes) = &moved[index] {
+                        prop_assert_eq!(bytes.as_slice(), &[u8::try_from(index).unwrap()], "charge release must preserve transferred bytes");
+                    }
+                }
+            }
+            drop(owners);
+            prop_assert_eq!(BUDGET.in_flight(), 0);
         }
     }
 }

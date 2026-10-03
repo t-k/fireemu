@@ -1464,7 +1464,13 @@ export async function publishNativeSources(
   const parent = await privateDirectory(retained.accountingDirectory);
   const root = await privateDirectory(scope.runRoot);
   await mkdir(directory, { mode: 0o700 });
-  const parentHandle = await open(retained.accountingDirectory, "r");
+  const rootHandle = await publicationOpen(scope.runRoot, "r");
+  try {
+    await rootHandle.sync();
+  } finally {
+    await rootHandle.close();
+  }
+  const parentHandle = await publicationOpen(retained.accountingDirectory, "r");
   try {
     await parentHandle.sync();
   } finally {

@@ -2350,6 +2350,27 @@ test("native v2 recomputes A-G from every resolved full source byte and rejects 
     );
     const compact = await m.publishNativeSources(report, "one", scope);
     const sourceBlobs = await m.resolveNativeSources(compact, "one", scope);
+    for (let i = 0; i < 4; i++) {
+      const expected = m.FIXED_NATIVE_SOURCES[i],
+        q = compact.native.queries.find(
+          (q) => q.purpose === "pinned-source" && q.args.at(-1).endsWith(":" + expected.path),
+        );
+      assert.equal("stdout" in q.answer, false);
+      assert.deepEqual(q.answer.sourceRef, {
+        schema: "calendar-native-source/v1",
+        sourceCommit: "33970bf501ac85e62fd8aee488d16a9405a8a019",
+        sourcePath: expected.path,
+        blobFile: `source-${i}.raw`,
+        rawSha256: sha(sourceBlobs.get(expected.path)),
+        rawBytes: sourceBlobs.get(expected.path).length,
+        scopeSha256: sha(Buffer.from(JSON.stringify(scope))),
+        attemptId: "one",
+        queryArgvSha256: sha(Buffer.from(JSON.stringify([q.file, ...q.args]))),
+        ownHandle: q.answer.handle,
+        ownPid: q.answer.pid,
+      });
+    }
+
     const options = { sourceBlobs, attemptId: "one", scope };
     assert.equal(m.recomputeNativeReport(compact, options).ok, true);
     assert.equal(m.recomputeNativeReport(compact).ok, false);
@@ -2500,7 +2521,7 @@ test("full native source publications handle short writes and refuse failed dura
     const compact = await m.publishNativeSources(report, "one", scope, { publicationOpen });
     assert.ok(writes > 4);
     assert.equal(fileSync, 4);
-    assert.equal(dirSync, 4);
+    assert.equal(dirSync, 6);
     assert.equal((await m.resolveNativeSources(compact, "one", scope)).size, 4);
     const bad = await fullNativeSourceFixture(root);
     const corruptedOpen = async (path, flags, mode) => {

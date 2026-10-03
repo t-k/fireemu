@@ -178,6 +178,14 @@ fn cors_headers(
 }
 
 fn json_response(r: &RestResponse, origin: Option<&str>) -> Response<OutBody> {
+    json_response_with_layout(r, origin, false)
+}
+
+fn json_response_with_layout(
+    r: &RestResponse,
+    origin: Option<&str>,
+    document_not_found: bool,
+) -> Response<OutBody> {
     // `:ruleCoverage.html` is the one route whose body is a page rather than JSON; it says
     // so with a single key, exactly as a `dropConnection` fault does.
     if let Some(html) = r.body[crate::rest::coverage::HTML_KEY].as_str() {
@@ -193,7 +201,13 @@ fn json_response(r: &RestResponse, origin: Option<&str>) -> Response<OutBody> {
             .body(full(Bytes::from(text.to_owned())))
             .unwrap_or_else(|_| Response::new(full(Bytes::new())));
     }
-    let text = serde_json::to_vec(&r.body).unwrap_or_default();
+    let text = if document_not_found {
+        let mut bytes = serde_json::to_vec_pretty(&r.body).unwrap_or_default();
+        bytes.push(b'\n');
+        bytes
+    } else {
+        serde_json::to_vec(&r.body).unwrap_or_default()
+    };
     cors_headers(Response::builder().status(r.status), origin)
         .header("content-type", "application/json; charset=utf-8")
         .body(full(Bytes::from(text)))
@@ -510,7 +524,13 @@ async fn rest_call(
         // A `dropConnection` fault: the connection closes without a response.
         return Err(dropped());
     }
-    Ok(json_response(&response, origin.as_deref()))
+    let document_not_found =
+        crate::rest::production_document_not_found(&state, &request.request, &response);
+    Ok(json_response_with_layout(
+        &response,
+        origin.as_deref(),
+        document_not_found,
+    ))
 }
 
 async fn channel_call<B>(
@@ -1787,7 +1807,6 @@ mod tests {
     }
 }
 
-
 #[cfg(test)]
 mod document_not_found_layout_tests {
     use super::*;
@@ -1795,6 +1814,7 @@ mod document_not_found_layout_tests {
     use fireemu_core_session::clock::VirtualClock;
     use fireemu_core_types::edition::{FirestoreApiMode, FirestoreEdition};
     use fireemu_core_types::time::LogicalInstant;
+    use std::fmt::Write as _;
     use std::sync::Mutex;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
@@ -1830,7 +1850,9 @@ mod document_not_found_layout_tests {
 
     async fn wire(state: Arc<RestState>, method: &str, path: &str) -> (String, Vec<u8>) {
         let port = std::env::var("PORT").unwrap_or_else(|_| "0".to_owned());
-        let listener = TcpListener::bind(format!("127.0.0.1:{port}")).await.unwrap();
+        let listener = TcpListener::bind(format!("127.0.0.1:{port}"))
+            .await
+            .unwrap();
         let address = listener.local_addr().unwrap();
         let server = tokio::spawn(async move {
             let (stream, _) = listener.accept().await.unwrap();
@@ -1848,13 +1870,23 @@ mod document_not_found_layout_tests {
             .await
             .unwrap();
         let mut bytes = Vec::new();
-        tokio::time::timeout(std::time::Duration::from_secs(10), client.read_to_end(&mut bytes))
-            .await
-            .unwrap()
-            .unwrap();
+        tokio::time::timeout(
+            std::time::Duration::from_secs(10),
+            client.read_to_end(&mut bytes),
+        )
+        .await
+        .unwrap()
+        .unwrap();
         server.await.unwrap();
-        let split = bytes.windows(4).position(|part| part == b"\r\n\r\n").unwrap();
-        (String::from_utf8(bytes[..split].to_vec()).unwrap(), bytes[split + 4..].to_vec())
+        println!("wire request={method} {path} raw-response={bytes:?}");
+        let split = bytes
+            .windows(4)
+            .position(|part| part == b"\r\n\r\n")
+            .unwrap();
+        (
+            String::from_utf8(bytes[..split].to_vec()).unwrap(),
+            bytes[split + 4..].to_vec(),
+        )
     }
 
     #[tokio::test]
@@ -1865,22 +1897,412 @@ mod document_not_found_layout_tests {
                 assert!(headers.starts_with("HTTP/1.1 404 Not Found\r\n"));
                 assert!(headers.contains("content-type: application/json; charset=utf-8\r\n"));
                 let expected = if production { PRETTY } else { COMPACT };
-                assert_eq!(bytes, expected, "production={production}, enforce_limits={enforce_limits}");
+                assert_eq!(
+                    bytes, expected,
+                    "production={production}, enforce_limits={enforce_limits}"
+                );
                 assert!(headers.contains(&format!("content-length: {}\r\n", expected.len())));
             }
         }
+        for id in ["colon:inside", "documents", "quote\"slash\\", "雪😀"] {
+            let name = format!("projects/demo-app/databases/(default)/documents/cases/{id}");
+            let path = format!(
+                "/v1/projects/demo-app/databases/(default)/documents/cases/{}",
+                encoded_segment(id)
+            );
+            let (headers, bytes) = wire(state(true, true), "GET", &path).await;
+            assert!(headers.starts_with("HTTP/1.1 404 Not Found\r\n"));
+            assert_eq!(bytes, expected_layout(&name));
+        }
+        let (_, bytes) = wire(
+            state(true, true),
+            "GET",
+            &format!("{PATH}?mask.fieldPaths=value"),
+        )
+        .await;
+        assert_eq!(bytes, PRETTY);
+        root_and_uri_wire_controls().await;
         other_routes_keep_literal_compact_or_plain_wire_bodies().await;
+    }
+
+    async fn root_and_uri_wire_controls() {
+        for (path, name) in [
+            (
+                "/v1/projects/demo-app/databases/(default)/documents",
+                "projects/demo-app/databases/(default)/documents",
+            ),
+            (
+                "/v1/projects/documents/databases/(default)/documents",
+                "projects/documents/databases/(default)/documents",
+            ),
+            (
+                "/v1/projects/demo-app/databases/documents/documents",
+                "projects/demo-app/databases/documents/documents",
+            ),
+            (
+                "/v1/projects/documents/databases/documents/documents/",
+                "projects/documents/databases/documents/documents",
+            ),
+            (
+                "/v1/projects/%64ocuments/databases/documents/%64ocuments",
+                "projects/documents/databases/documents/documents",
+            ),
+        ] {
+            for production in [false, true] {
+                let (headers, bytes) = wire(state(production, true), "GET", path).await;
+                assert!(headers.starts_with("HTTP/1.1 400 Bad Request\r\n"));
+                let message =
+                    json_string(&format!("invalid parent: {name} is not a document name"));
+                let expected = format!("{{\"error\":{{\"code\":400,\"message\":{message},\"status\":\"INVALID_ARGUMENT\"}}}}").into_bytes();
+                assert_eq!(bytes, expected);
+            }
+        }
+        for suffix in ["missing:runQuery", "missing:unknown"] {
+            let (_, bytes) = wire(
+                state(true, true),
+                "GET",
+                &format!("/v1/projects/demo-app/databases/(default)/documents/cases/{suffix}"),
+            )
+            .await;
+            assert_eq!(bytes, b"Not Found\n");
+        }
+        for (id, message) in [
+            ("missing%2Finside", "encoded '/' in a path segment"),
+            ("missing%2finside", "encoded '/' in a path segment"),
+            ("%GG", "malformed percent escape in path"),
+            ("%FF", "path segment is not UTF-8"),
+        ] {
+            let (headers, bytes) = wire(
+                state(true, true),
+                "GET",
+                &format!("/v1/projects/demo-app/databases/(default)/documents/cases/{id}"),
+            )
+            .await;
+            assert!(headers.starts_with("HTTP/1.1 400 Bad Request\r\n"));
+            let expected = format!(
+                "{{\"error\":{{\"code\":400,\"message\":{},\"status\":\"INVALID_ARGUMENT\"}}}}",
+                json_string(message)
+            )
+            .into_bytes();
+            assert_eq!(bytes, expected);
+        }
     }
 
     async fn other_routes_keep_literal_compact_or_plain_wire_bodies() {
         for production in [true, false] {
-            let (_, bytes) = wire(state(production, true), "PATCH", &format!("{PATH}?currentDocument.exists=true")).await;
+            let (_, bytes) = wire(
+                state(production, true),
+                "PATCH",
+                &format!("{PATH}?currentDocument.exists=true"),
+            )
+            .await;
             assert_eq!(bytes, COMPACT);
             let (headers, bytes) = wire(state(production, true), "GET", "/unknown").await;
             assert!(headers.contains("content-type: text/plain; charset=utf-8\r\n"));
             assert_eq!(bytes, b"Not Found\n");
-            let (_, bytes) = wire(state(production, true), "GET", "/v1/projects/demo-app/databases/(default)/documents/cases").await;
+            let (_, bytes) = wire(
+                state(production, true),
+                "GET",
+                "/v1/projects/demo-app/databases/(default)/documents/cases",
+            )
+            .await;
             assert_eq!(bytes, b"{}");
         }
+    }
+
+    fn request(method: &str, path: &str) -> RestRequest {
+        RestRequest {
+            method: method.to_owned(),
+            path: path.to_owned(),
+            query: String::new(),
+            authorization: None,
+            origin: None,
+            browser_metadata: false,
+            app_check: Vec::new(),
+            body: serde_json::json!({}),
+            batch_field_order: Vec::new(),
+        }
+    }
+
+    fn missing(name: &str) -> RestResponse {
+        crate::rest::error_response(&tonic::Status::not_found(format!(
+            "Document \"{name}\" not found."
+        )))
+    }
+
+    fn render(state: &RestState, req: &RestRequest, response: &RestResponse) -> Vec<u8> {
+        let selected = crate::rest::production_document_not_found(state, req, response);
+        tokio::runtime::Builder::new_current_thread()
+            .build()
+            .unwrap()
+            .block_on(async {
+                json_response_with_layout(response, None, selected)
+                    .into_body()
+                    .collect()
+                    .await
+                    .unwrap()
+                    .to_bytes()
+                    .to_vec()
+            })
+    }
+
+    #[test]
+    fn only_the_observed_document_envelope_selects_the_layout() {
+        let state = state(true, false);
+        let req = request("GET", PATH);
+        let canonical = missing(PATH.strip_prefix("/v1/").unwrap());
+        assert_eq!(render(&state, &req, &canonical), PRETTY);
+        for path in [
+            "/unknown",
+            "/emulator/v1/projects/demo-app/databases/(default)/documents/cases/missing",
+            "/v1/projects/demo-app/databases/(default)",
+            "/v1/projects/demo-app/databases/(default)/operations/missing",
+            "/v1/projects/demo-app/databases/(default)/collectionGroups/cases/fields/missing",
+            "/v1/projects/demo-app/databases/(default)/documents",
+            "/v1/projects/documents/databases/(default)/documents",
+            "/v1/projects/demo-app/databases/documents/documents",
+            "/v1/projects/documents/databases/documents/documents",
+            "/v1/projects/documents/databases/documents/documents/",
+            "/v1/projects/%64ocuments/databases/documents/documents",
+            "/v1/projects/documents/databases/%64ocuments/documents",
+            "/v1/projects/demo-app/databases/(default)/documents/cases",
+            "/v1/projects/demo-app/databases/(default)/documents/cases/missing:runQuery",
+            "/v1/projects/demo-app/databases/(default)/documents/cases/missing:unknown",
+            "/v1/projects/demo-app/databases/(default)/documents/cases/missing%2Finside",
+            "/v1/projects/demo-app/databases/(default)/documents/cases/%FF",
+            "/v1/projects/demo-app/databases/(default)/documents/cases/%GG",
+            "/v1/projects/demo-app/databases/(default)/documents//missing",
+        ] {
+            // Even a matching message cannot turn a non-document route into a document GET.
+            let body = missing(
+                path.strip_prefix("/v1/")
+                    .unwrap_or(path)
+                    .trim_end_matches('/')
+                    .replace("%64", "d")
+                    .split('?')
+                    .next()
+                    .unwrap(),
+            );
+            let bytes = render(&state, &request("GET", path), &body);
+            assert_eq!(
+                bytes,
+                expected_compact(body.body["error"]["message"].as_str().unwrap()),
+                "{path}"
+            );
+        }
+        for query in [
+            "prettyPrint=true",
+            "x=documents:runQuery",
+            "mask.fieldPaths=value",
+        ] {
+            let mut with_query = req.clone();
+            with_query.query = query.to_owned();
+            assert_eq!(render(&state, &with_query, &canonical), PRETTY);
+            with_query.path = "/v1/projects/documents/databases/documents/documents/".to_owned();
+            let root = missing("projects/documents/databases/documents/documents");
+            assert_eq!(
+                render(&state, &with_query, &root),
+                expected_compact(
+                    "Document \"projects/documents/databases/documents/documents\" not found."
+                )
+            );
+        }
+        for method in ["POST", "PATCH", "DELETE", "HEAD", "OPTIONS"] {
+            assert_eq!(
+                render(&state, &request(method, PATH), &canonical),
+                COMPACT,
+                "{method}"
+            );
+        }
+    }
+
+    #[test]
+    fn unrelated_envelopes_stay_compact() {
+        let state = state(true, false);
+        let req = request("GET", PATH);
+        let canonical = missing(PATH.strip_prefix("/v1/").unwrap());
+        let mut alternatives = Vec::new();
+        for status in [200, 400, 403, 409, 500] {
+            let mut body = canonical.clone();
+            body.status = status;
+            alternatives.push(body);
+        }
+        for (key, value) in [
+            ("code", serde_json::json!("404")),
+            ("code", serde_json::json!(404.0)),
+            ("code", serde_json::json!(403)),
+            ("status", serde_json::json!("PERMISSION_DENIED")),
+            ("message", serde_json::json!("Document not found")),
+            ("message", serde_json::json!(null)),
+            ("message", serde_json::json!("Document \"projects/other/databases/(default)/documents/cases/missing\" not found.")),
+            ("details", serde_json::json!([])),
+            ("ftdDropConnection", serde_json::json!(true)),
+        ] {
+            let mut body = canonical.clone(); body.body["error"][key] = value; alternatives.push(body);
+        }
+        let mut extra = canonical.clone();
+        extra.body["extra"] = serde_json::json!(true);
+        alternatives.push(extra);
+        for body in [
+            serde_json::json!([canonical.body]),
+            serde_json::json!({"error":[]}),
+            serde_json::json!({}),
+            serde_json::json!({"name":"ok"}),
+        ] {
+            alternatives.push(RestResponse { status: 404, body });
+        }
+        for body in alternatives {
+            assert_eq!(
+                render(&state, &req, &body),
+                serde_json::to_vec(&body.body).unwrap(),
+                "{body:?}"
+            );
+        }
+        let html = RestResponse {
+            status: 404,
+            body: serde_json::json!({crate::rest::coverage::HTML_KEY:"<p>missing</p>"}),
+        };
+        assert_eq!(render(&state, &req, &html), b"<p>missing</p>");
+        let text = crate::rest::not_found_text();
+        assert_eq!(render(&state, &req, &text), b"Not Found\n");
+    }
+
+    // Independent JSON string oracle: it does not use the production serializer.
+    fn json_string(text: &str) -> String {
+        let mut escaped = String::from("\"");
+        for character in text.chars() {
+            match character {
+                '"' => escaped.push_str("\\\""),
+                '\\' => escaped.push_str("\\\\"),
+                '\n' => escaped.push_str("\\n"),
+                '\r' => escaped.push_str("\\r"),
+                '\t' => escaped.push_str("\\t"),
+                '\u{08}' => escaped.push_str("\\b"),
+                '\u{0c}' => escaped.push_str("\\f"),
+                c if c <= '\u{1f}' => write!(escaped, "\\u{:04x}", u32::from(c)).unwrap(),
+                c => escaped.push(c),
+            }
+        }
+        escaped.push('"');
+        escaped
+    }
+
+    fn encoded_segment(segment: &str) -> String {
+        let mut encoded = String::with_capacity(segment.len() * 3);
+        for byte in segment.as_bytes() {
+            write!(encoded, "%{byte:02X}").unwrap();
+        }
+        encoded
+    }
+
+    fn expected_compact(message: &str) -> Vec<u8> {
+        format!(
+            "{{\"error\":{{\"code\":404,\"message\":{},\"status\":\"NOT_FOUND\"}}}}",
+            json_string(message)
+        )
+        .into_bytes()
+    }
+
+    fn expected_layout(name: &str) -> Vec<u8> {
+        let message = json_string(&format!("Document \"{name}\" not found."));
+        format!("{{\n  \"error\": {{\n    \"code\": 404,\n    \"message\": {message},\n    \"status\": \"NOT_FOUND\"\n  }}\n}}\n").into_bytes()
+    }
+
+    #[test]
+    fn invalid_http_status_keeps_the_existing_empty_response_fallback() {
+        for production in [false, true] {
+            for status in [0, 99, 1000, u16::MAX] {
+                let mut response = missing(PATH.strip_prefix("/v1/").unwrap());
+                response.status = status;
+                assert_eq!(
+                    render(&state(production, true), &request("GET", PATH), &response),
+                    b""
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn escaped_document_ids_keep_the_observed_layout() {
+        let state = state(true, true);
+        for id in [
+            "colon:inside",
+            "documents",
+            "quote\"slash\\",
+            "雪😀",
+            "line\n\t\u{00}\u{08}\u{0c}\r",
+            "+% ?#",
+        ] {
+            let name = format!("projects/demo-app/databases/(default)/documents/cases/{id}");
+            let path = format!(
+                "/v1/projects/demo-app/databases/(default)/documents/cases/{}",
+                encoded_segment(id)
+            );
+            assert_eq!(
+                render(&state, &request("GET", &path), &missing(&name)),
+                expected_layout(&name)
+            );
+        }
+    }
+
+    use proptest::prelude::*;
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(128))]
+        #[test]
+        fn generated_document_layout_preserves_strings_policy_and_shape(
+            id in proptest::collection::vec(any::<char>().prop_filter("document segment", |c| *c != '/'), 1..25),
+            production in any::<bool>(), enforce_limits in any::<bool>(), extra in any::<bool>(),
+        ) {
+            let id: String = id.into_iter().collect();
+            let name = format!("projects/demo-app/databases/(default)/documents/cases/{id}");
+            let path = format!("/v1/projects/demo-app/databases/(default)/documents/cases/{}", encoded_segment(&id));
+            let req = request("GET", &path);
+            let mut response = missing(&name);
+            if extra { response.body["error"]["details"] = serde_json::json!([]); }
+            let state = state(production, enforce_limits);
+            let bytes = render(&state, &req, &response);
+            let expected = if production && !extra { expected_layout(&name) } else { serde_json::to_vec(&response.body).unwrap() };
+            prop_assert_eq!(&bytes, &expected);
+            prop_assert_eq!(&bytes, &render(&state, &req, &response));
+            prop_assert_eq!(serde_json::from_slice::<serde_json::Value>(&bytes).unwrap(), response.body);
+            prop_assert_eq!(bytes.ends_with(b"\n"), production && !extra);
+            prop_assert!(!bytes.ends_with(b"\n\n"));
+        }
+        #[test]
+        fn generated_nearby_envelopes_and_routes_stay_compact(
+            id in "[a-zA-Z0-9]{1,24}", variant in 0u8..10,
+            unknown in ".{0,32}", status in (100u16..600).prop_filter("not 404", |code| *code != 404),
+        ) {
+            let name = format!("projects/demo-app/databases/(default)/documents/cases/{id}");
+            let mut req = request("GET", &format!("/v1/{name}"));
+            let mut response = missing(&name);
+            match variant {
+                0 => response.status = status,
+                1 => response.body["error"]["code"] = serde_json::json!(status),
+                2 => response.body["error"]["status"] = serde_json::json!(format!("UNKNOWN{unknown}")),
+                3 => response.body["error"]["message"] = serde_json::json!(format!("unknown {unknown}")),
+                4 => response.body["extra"] = serde_json::json!(unknown),
+                5 => response.body["error"]["details"] = serde_json::json!(unknown),
+                6 => req.method = "PATCH".to_owned(),
+                7 => { req.path = req.path.rsplit_once('/').unwrap().0.to_owned(); response = missing(req.path.strip_prefix("/v1/").unwrap()); },
+                8 => req.path.push_str(":runQuery"),
+                _ => req.path.push_str(":unknown"),
+            }
+            let bytes = render(&state(true, true), &req, &response);
+            prop_assert_eq!(bytes, serde_json::to_vec(&response.body).unwrap());
+        }
+
+        #[test]
+        fn generated_database_roots_stay_compact(
+            project in prop_oneof![Just("documents".to_owned()), "[a-z]{1,12}"],
+            database in prop_oneof![Just("documents".to_owned()), Just("(default)".to_owned()), "[a-z]{1,12}"],
+            production in any::<bool>(), enforce_limits in any::<bool>(),
+        ) {
+            let name = format!("projects/{project}/databases/{database}/documents");
+            let path = format!("/v1/projects/{}/databases/{}/documents", encoded_segment(&project), encoded_segment(&database));
+            let response = missing(&name);
+            prop_assert_eq!(render(&state(production, enforce_limits), &request("GET", &path), &response), serde_json::to_vec(&response.body).unwrap());
+        }
+
     }
 }

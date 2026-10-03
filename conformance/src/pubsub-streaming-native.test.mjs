@@ -67,6 +67,8 @@ async function using(options, callback) {
     assert.equal(shutdown.serverClosed, true);
     assert.equal(shutdown.sockets, 0);
     assert.equal(shutdown.sessions, 0);
+    assert.equal(shutdown.streams, 0);
+    assert.equal(shutdown.clientClosed, true);
     assert.equal(shutdown.crashDurability, "UNKNOWN");
   }
 }
@@ -912,24 +914,154 @@ test("actual_native_syscall_Promise_is_tracked_before_the_IO_poll_settles_it", a
     async (f) => {
       const b = bridge(f);
       const opening = b.open();
+      const outcome = opening.then(
+        () => ({ ok: true }),
+        (error) => ({ ok: false, error: error.message }),
+      );
       await f.awaitBarrier(entered.promise);
       await Promise.resolve();
       const snapshot = f.ioSnapshot();
-      assert.equal(snapshot.pendingNativeOperations, 1);
+      const settled = await f.awaitBarrier(outcome);
+      if (!settled.ok) throw new Error(`unexpected native open outcome: ${settled.error}`);
+      await f.peer.ready();
+      const report = await b.done();
+      assertUnknown(report);
+      journalRecords(await f.readJournal());
+      const completed = f.ioSnapshot();
+      const shutdown = await f.shutdown();
+      assert.equal(
+        shutdown.pendingNativeOperations,
+        0,
+        "owned native promises settle before shutdown",
+      );
+      assert.equal(shutdown.streams, 0, "owned native streams acknowledge closure");
+      assert.equal(shutdown.clientClosed, true, "owned native client acknowledges closure");
+      assert.equal(
+        snapshot.pendingNativeOperations,
+        1,
+        "pending FileHandle.sync Promise is registered before settlement",
+      );
       assert.ok(
         snapshot.systemCalls.some(
           (call) => call.operation === "file-sync" && call.phase === "entry",
         ),
+        "actual FileHandle.sync method entry is observed",
       );
       assert.equal(
         snapshot.systemCalls.some(
           (call) => call.operation === "file-sync" && call.phase === "settled",
         ),
         false,
+        "FileHandle.sync Promise has not settled at the captured observation",
       );
-      await opening;
-      await f.peer.ready();
-      await b.done();
+      assert.equal(
+        snapshot.systemCalls.some(
+          (call) => call.operation === "file-sync" && call.phase === "rejected",
+        ),
+        false,
+        "FileHandle.sync Promise has not rejected at the captured observation",
+      );
+      assert.equal(
+        completed.pendingNativeOperations,
+        0,
+        "actual FileHandle promises settle after normal progress",
+      );
+      assert.ok(
+        completed.systemCalls.some(
+          (call) => call.operation === "file-sync" && call.phase === "settled",
+        ),
+        "actual FileHandle.sync Promise subsequently settles",
+      );
     },
   );
+});
+
+test("actual_native_write_backpressure_false_is_one_effect_without_retry_or_completion_claim", async () => {
+  const size = 131072;
+  await using(
+    {
+      limits: {
+        ...limits,
+        maxFrameBytes: size,
+        maxOutgoingBytes: 262144,
+        maxEntryBytes: 200000,
+        maxJournalBytes: 28800000,
+        maxWriterRecordBytes: 400000,
+        maxWriterBytes: 57600000,
+      },
+    },
+    async (f) => {
+      const b = bridge(f);
+      await b.open();
+      await f.peer.ready();
+      await b.write(Buffer.alloc(size));
+      await b.halfClose();
+      await f.peer.requestEnded();
+      const writes = f.boundarySnapshot().calls.filter((call) => call.method === "write");
+      assert.deepEqual(
+        writes.map((call) => call.phase),
+        ["entry", "return"],
+      );
+      assert.equal(writes[1].nativeBoolean, false);
+      assert.equal(writes[1].completion, "UNKNOWN");
+      assert.equal(f.peer.snapshot().requestBytes, size + 5);
+      const report = await b.done();
+      assertUnknown(report);
+      assert.equal(report.gate.unknownActions, 0);
+    },
+  );
+});
+
+test("native_factory_capacities_are_an_immutable_snapshot_before_bridge_creation", async () => {
+  const supplied = { ...limits, maxNativeCallbacks: 1 };
+  await using({ limits: supplied }, async (f) => {
+    supplied.maxNativeCallbacks = 32;
+    const visible = deferred();
+    let count = 0;
+    const b = bridge(f, {
+      onFrame: () => {
+        count++;
+        visible.resolve();
+      },
+    });
+    await b.open();
+    await f.peer.ready();
+    f.peer.respond();
+    f.peer.send(frame("x"));
+    await f.awaitBarrier(Promise.race([f.waitFor("stream-close"), visible.promise]));
+    assert.equal(count, 0);
+    const report = await b.done();
+    assertUnknown(report);
+    assert.equal(report.nativeCallbacks, 1);
+    assert.ok(f.boundarySnapshot().events.length <= 5);
+  });
+});
+
+test("setup_failure_before_listen_closes_actual_FileHandles_and_releases_owned_capacity", async () => {
+  let unexpectedlyCreated;
+  let caught;
+  try {
+    unexpectedlyCreated = await fixture({
+      ioBarrier: async (descriptor) => {
+        if (descriptor.operation === "setup-before-listen")
+          throw new Error("owned startup barrier rejected");
+      },
+    });
+  } catch (error) {
+    caught = error;
+  } finally {
+    if (unexpectedlyCreated) await unexpectedlyCreated.shutdown();
+  }
+  assert.ok(caught, "pre-listen setup rejection is observed after owned cleanup");
+  assert.equal(caught.cause?.message, "owned startup barrier rejected");
+  const closed = caught.ownedCleanup;
+  assert.equal(closed.fileClosed, true);
+  assert.equal(closed.directoryClosed, true);
+  assert.equal(closed.serverClosed, true);
+  assert.equal(closed.pendingNativeOperations, 0);
+  assert.equal(closed.sockets, 0);
+  assert.equal(closed.sessions, 0);
+  assert.equal(closed.streams, 0);
+  assert.equal(closed.clientClosed, true);
+  await using({}, async () => {});
 });

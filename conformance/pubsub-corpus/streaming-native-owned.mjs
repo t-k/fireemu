@@ -10,6 +10,28 @@ import { createOwnedJournalWriter, createOwnedStreamingBridge } from "./streamin
 const leases = new WeakMap();
 const activePorts = new Set();
 let RegistryDatabase;
+const LIMIT_KEYS = [
+  "maxActions",
+  "maxFrames",
+  "maxFrameBytes",
+  "maxOutgoingBytes",
+  "maxIncomingBytes",
+  "maxIncomingFrames",
+  "maxChunks",
+  "maxHeaderBytes",
+  "maxHeaderEvents",
+  "maxHeaderPairs",
+  "maxEvents",
+  "maxNativeCallbacks",
+  "maxChronologyRows",
+  "maxJournalEntries",
+  "maxEntryBytes",
+  "maxJournalBytes",
+  "maxMessageBytes",
+  "maxWriterRows",
+  "maxWriterRecordBytes",
+  "maxWriterBytes",
+];
 const sha = (bytes) => createHash("sha256").update(bytes).digest("hex");
 const deferred = () => {
   let resolve, reject;
@@ -140,7 +162,13 @@ export async function createOwnedNativeStreamingFixture(options) {
     ["lease", "deadlineAt", "limits", "ioBarrier", "ioFault"],
     "closed native fixture options required",
   );
-  const { lease, deadlineAt, limits, ioBarrier = async () => {}, ioFault } = options;
+  const {
+    lease,
+    deadlineAt,
+    limits: suppliedLimits,
+    ioBarrier = async () => {},
+    ioFault,
+  } = options;
   const state = leases.get(lease);
   if (
     !state ||
@@ -161,15 +189,19 @@ export async function createOwnedNativeStreamingFixture(options) {
     ].includes(ioFault)
   )
     throw new Error("named owned I/O fault required");
-  for (const key of [
-    "maxActions",
-    "maxNativeCallbacks",
-    "maxHeaderBytes",
-    "maxHeaderPairs",
-    "maxWriterRows",
-  ])
-    if (!Number.isSafeInteger(limits?.[key]) || limits[key] < 1)
+  closedOptions(suppliedLimits, LIMIT_KEYS, "closed native limits required");
+  const limits = Object.freeze({ ...suppliedLimits });
+  for (const key of LIMIT_KEYS)
+    if (!Number.isSafeInteger(limits[key]) || limits[key] < 1)
       throw new Error("finite native bounds required");
+  if (
+    ![
+      2 * (limits.maxActions + 4),
+      limits.maxNativeCallbacks + 4,
+      6 * limits.maxWriterRows + 8,
+    ].every(Number.isSafeInteger)
+  )
+    throw new Error("finite native capacity arithmetic required");
   const revalidate = () => {
     deadline(deadlineAt);
     if (state.kind === "registry") registryRow(state);
@@ -229,7 +261,13 @@ export async function createOwnedNativeStreamingFixture(options) {
     });
     try {
       const result = owner[method](...args);
-      calls.push({ seq: seq++, method, phase: "return", completion: "UNKNOWN" });
+      calls.push({
+        seq: seq++,
+        method,
+        phase: "return",
+        completion: "UNKNOWN",
+        ...(typeof result === "boolean" ? { nativeBoolean: result } : {}),
+      });
       return result;
     } catch (error) {
       calls.push({ seq: seq++, method, phase: "throw", completion: "UNKNOWN" });
@@ -353,7 +391,7 @@ export async function createOwnedNativeStreamingFixture(options) {
         await until(
           new Promise((resolve, reject) => {
             server.close((error) => {
-              if (error) reject(error);
+              if (error && error.code !== "ERR_SERVER_NOT_RUNNING") reject(error);
               else {
                 serverClosed = true;
                 resolve();
@@ -430,6 +468,10 @@ export async function createOwnedNativeStreamingFixture(options) {
       });
       peerReady.resolve();
     });
+    await until(
+      ioBarrier(Object.freeze({ operation: "setup-before-listen", phase: "before-syscall" })),
+      deadlineAt,
+    );
     revalidate();
     await until(
       new Promise((resolve, reject) => {
@@ -626,7 +668,8 @@ export async function createOwnedNativeStreamingFixture(options) {
       shutdown,
     });
   } catch (error) {
-    await shutdown();
-    throw error;
+    const failure = new Error("owned native setup failed", { cause: error });
+    failure.ownedCleanup = await shutdown();
+    throw failure;
   }
 }

@@ -191,11 +191,14 @@ pub fn firestore_event(
     if let Some((auth_type, auth_id)) = auth {
         with_auth_context(&mut attrs, auth_type, auth_id);
     }
-    // `firebase-functions` decodes JSON payloads with `createSnapshotFromJson(data, source,
-    // ...)`, which uses `source` as the document name when a side of the change is absent;
-    // it therefore has to be the full document resource name (the protobuf path derives the
-    // same name from the `document` attribute).
-    let source = format!("projects/{project}/databases/{database}/documents/{document_path}");
+    // Created, updated and deleted JSON snapshots carry their own document names.
+    // Written still needs the document source for the SDK's missing-side JSON fallback;
+    // that source divergence remains isolated until its payload transport is corrected.
+    let source = if kind == DocumentEvent::Written {
+        format!("projects/{project}/databases/{database}/documents/{document_path}")
+    } else {
+        attrs.source
+    };
     let mut data = Map::new();
     if let Some(a) = after {
         data.insert("value".into(), document_to_json(&encode_document(a)));

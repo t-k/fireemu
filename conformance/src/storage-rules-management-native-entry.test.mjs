@@ -343,7 +343,7 @@ test("unapproved synthetic destinations and accessor inputs leave intent, count 
     Object.defineProperty(syntheticSpec(), "body", {
       enumerable: true,
       get() {
-        assert.fail("request accessor invoked");
+        throw new Error("request accessor invoked");
       },
     }),
     new Proxy(syntheticSpec(), {
@@ -382,7 +382,7 @@ test("projection rejects malformed, relabelled and aliased frames without invoki
     Object.defineProperty(valid(), "status", {
       enumerable: true,
       get() {
-        assert.fail("frame accessor invoked");
+        throw new Error("frame accessor invoked");
       },
     }),
     new Proxy(valid(), {

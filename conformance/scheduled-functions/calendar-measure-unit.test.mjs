@@ -3085,7 +3085,14 @@ test("whole report archive short writes and independent durability faults retain
     { tmpdir } = await import("node:os"),
     { join } = await import("node:path");
   const m = await import("./calendar-measure.mjs");
-  for (const fault of ["none", "zero-write", "file-sync", "directory-sync", "corrupt-readback"]) {
+  for (const fault of [
+    "none",
+    "zero-write",
+    "file-sync",
+    "directory-sync",
+    "corrupt-readback",
+    "existing-file",
+  ]) {
     const root = await fs.realpath(await fs.mkdtemp(join(tmpdir(), "calendar-archive-write-")));
     try {
       const { report, scope } = await fullNativeSourceFixture(root);
@@ -3094,6 +3101,8 @@ test("whole report archive short writes and independent durability faults retain
         fileSyncs = 0,
         directorySyncs = 0;
       const publicationOpen = async (path, flags, mode) => {
+        if (fault === "existing-file" && path.endsWith("native-report/report.raw"))
+          await fs.writeFile(path, "exclusive publication witness");
         const handle = await fs.open(path, flags, mode);
         const archiveFile = path.endsWith("native-report/report.raw");
         const archiveDirectory = path.endsWith("native-report");
@@ -3123,7 +3132,7 @@ test("whole report archive short writes and independent durability faults retain
         { publicationOpen },
       );
       if (fault !== "none") {
-        await assert.rejects(publication, /progress|sync unknown|readback/, fault);
+        await assert.rejects(publication, /progress|sync unknown|readback|EEXIST/, fault);
         await assert.rejects(fs.stat(join(report.accountingDirectory, "durable-verdict.json")), {
           code: "ENOENT",
         });

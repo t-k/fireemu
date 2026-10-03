@@ -1013,3 +1013,408 @@ test("native connect ownership drift refuses late session hooks", () => {
   guard.close();
   assert.equal(http2.connect, foreignConnect);
 });
+
+test("getter acquisition cannot overwrite a new owner even when the captured value is original", () => {
+  for (const boundary of [1, 2, 3]) {
+    for (const originalAfterB of [false, true]) {
+      let reads = 0;
+      let writes = 0;
+      let sends = 0;
+      let bRequest;
+      const original = () => {
+        sends++;
+        return "stream";
+      };
+      let value = original;
+      const session = {};
+      const bHttp2 = { connect: () => session };
+      Object.defineProperty(session, "request", {
+        get() {
+          const captured = value;
+          if (++reads === boundary) {
+            bHttp2.connect("http://localhost:1");
+            bRequest = value;
+            if (originalAfterB) session.request = original;
+          }
+          return captured;
+        },
+        set(next) {
+          writes++;
+          value = next;
+        },
+      });
+      const aBudget = createWireBudget({ maxRequests: 3, cleanupReserve: 1 });
+      const bBudget = createWireBudget({ maxRequests: 3, cleanupReserve: 1 });
+      const b = module.installNodeWireGuard({
+        http2: bHttp2,
+        globals: { fetch() {} },
+        budget: bBudget,
+        phase: () => "observation",
+      });
+      const aHttp2 = { connect: () => session };
+      const a = module.installNodeWireGuard({
+        http2: aHttp2,
+        globals: { fetch() {} },
+        budget: aBudget,
+        phase: () => "observation",
+      });
+      try {
+        assert.throws(
+          () => aHttp2.connect("http://localhost:1"),
+          /ownership/,
+          `read ${boundary}, original ${originalAfterB}`,
+        );
+        assert.equal(writes, originalAfterB ? 2 : 1, "A adds no hook writes after B acquisition");
+        assert.equal(value, originalAfterB ? original : bRequest);
+        assert.equal(a.snapshot().closed, false);
+        assert.equal(a.snapshot().failures.ownership, 1);
+        assert.equal(aBudget.snapshot().total + bBudget.snapshot().total, 0);
+        assert.equal(sends, 0);
+        if (originalAfterB) assert.throws(() => bRequest(), /ownership/);
+        else assert.equal(bRequest(), "stream");
+        assert.equal(aBudget.snapshot().total, 0);
+        assert.equal(bBudget.snapshot().total, originalAfterB ? 0 : 1);
+      } finally {
+        a.close();
+        b.close();
+      }
+      const freshBudget = createWireBudget({ maxRequests: 3, cleanupReserve: 1 });
+      const fresh = module.installNodeWireGuard({
+        http2: aHttp2,
+        globals: { fetch() {} },
+        budget: freshBudget,
+        phase: () => "observation",
+      });
+      try {
+        assert.equal(aHttp2.connect("http://localhost:1").request(), "stream");
+      } finally {
+        fresh.close();
+      }
+      assert.equal(freshBudget.snapshot().total, 1);
+    }
+  }
+});
+
+test("rollback getter cannot overwrite or release an owner acquired after close", () => {
+  let a;
+  let armed = false;
+  let triggerRollback = false;
+  let writes = 0;
+  let sends = 0;
+  let bRequest;
+  const original = () => {
+    sends++;
+    return "stream";
+  };
+  let value = original;
+  const session = {};
+  const bHttp2 = { connect: () => session };
+  const setterError = new Error("setter failure");
+  Object.defineProperty(session, "request", {
+    get() {
+      const captured = value;
+      if (triggerRollback) {
+        triggerRollback = false;
+        a.close();
+        bHttp2.connect("http://localhost:1");
+        bRequest = value;
+      }
+      return captured;
+    },
+    set(next) {
+      writes++;
+      value = next;
+      if (armed && next !== original) {
+        armed = false;
+        triggerRollback = true;
+        throw setterError;
+      }
+    },
+  });
+  const aBudget = createWireBudget({ maxRequests: 3, cleanupReserve: 1 });
+  const bBudget = createWireBudget({ maxRequests: 3, cleanupReserve: 1 });
+  const b = module.installNodeWireGuard({
+    http2: bHttp2,
+    globals: { fetch() {} },
+    budget: bBudget,
+    phase: () => "observation",
+  });
+  const aHttp2 = { connect: () => session };
+  a = module.installNodeWireGuard({
+    http2: aHttp2,
+    globals: { fetch() {} },
+    budget: aBudget,
+    phase: () => "observation",
+  });
+  try {
+    armed = true;
+    assert.throws(
+      () => aHttp2.connect("http://localhost:1"),
+      (e) => e === setterError,
+    );
+    assert.equal(writes, 3, "no fourth restoration write may clobber B");
+    assert.equal(value, bRequest);
+    assert.equal(aBudget.snapshot().total + bBudget.snapshot().total, 0);
+    assert.equal(sends, 0);
+    assert.ok(a.snapshot().failures.ownership > 0);
+    assert.equal(bRequest(), "stream");
+    assert.equal(aBudget.snapshot().total, 0);
+    assert.equal(bBudget.snapshot().total, 1);
+    assert.equal(sends, 1);
+  } finally {
+    a.close();
+    b.close();
+  }
+});
+
+test("reserved hooks refuse another owner during setters and validation getters", () => {
+  for (const boundary of ["setter", "validation-getter"]) {
+    let armed = false;
+    let sends = 0;
+    let bRefusals = 0;
+    let bHttp2;
+    const original = () => {
+      sends++;
+      return "stream";
+    };
+    let value = original;
+    const session = {};
+    const attemptB = () => {
+      assert.throws(() => bHttp2.connect("http://localhost:1"), /ownership/);
+      bRefusals++;
+    };
+    Object.defineProperty(session, "request", {
+      get() {
+        if (armed && boundary === "validation-getter" && value !== original) {
+          armed = false;
+          attemptB();
+        }
+        return value;
+      },
+      set(next) {
+        value = next;
+        if (armed && boundary === "setter" && next !== original) {
+          armed = false;
+          attemptB();
+        }
+      },
+    });
+    bHttp2 = { connect: () => session };
+    const aBudget = createWireBudget({ maxRequests: 3, cleanupReserve: 1 });
+    const bBudget = createWireBudget({ maxRequests: 3, cleanupReserve: 1 });
+    const b = module.installNodeWireGuard({
+      http2: bHttp2,
+      globals: { fetch() {} },
+      budget: bBudget,
+      phase: () => "observation",
+    });
+    const aHttp2 = { connect: () => session };
+    const a = module.installNodeWireGuard({
+      http2: aHttp2,
+      globals: { fetch() {} },
+      budget: aBudget,
+      phase: () => "observation",
+    });
+    try {
+      armed = true;
+      assert.equal(aHttp2.connect("http://localhost:1").request(), "stream");
+      assert.equal(bRefusals, 1);
+      assert.equal(aBudget.snapshot().total, 1);
+      assert.equal(bBudget.snapshot().total, 0);
+      assert.equal(sends, 1);
+    } finally {
+      a.close();
+      b.close();
+    }
+  }
+});
+
+test("descriptor metadata acquisition cannot overwrite an owner acquired during lookup", () => {
+  let bHttp2;
+  let armed = false;
+  let writes = 0;
+  const original = () => "stream";
+  const backing = { request: original };
+  const session = new Proxy(backing, {
+    getOwnPropertyDescriptor(target, key) {
+      if (armed && key === "request") {
+        armed = false;
+        bHttp2.connect("http://localhost:1");
+      }
+      return Reflect.getOwnPropertyDescriptor(target, key);
+    },
+    set(target, key, value) {
+      writes++;
+      return Reflect.set(target, key, value);
+    },
+  });
+  bHttp2 = { connect: () => session };
+  const aHttp2 = { connect: () => session };
+  const aBudget = createWireBudget({ maxRequests: 3, cleanupReserve: 1 });
+  const bBudget = createWireBudget({ maxRequests: 3, cleanupReserve: 1 });
+  const b = module.installNodeWireGuard({
+    http2: bHttp2,
+    globals: { fetch() {} },
+    budget: bBudget,
+    phase: () => "observation",
+  });
+  const a = module.installNodeWireGuard({
+    http2: aHttp2,
+    globals: { fetch() {} },
+    budget: aBudget,
+    phase: () => "observation",
+  });
+  try {
+    armed = true;
+    assert.throws(() => aHttp2.connect("http://localhost:1"), /ownership/);
+    assert.equal(writes, 1);
+    assert.equal(aBudget.snapshot().total + bBudget.snapshot().total, 0);
+    assert.equal(session.request(), "stream");
+    assert.equal(bBudget.snapshot().total, 1);
+    assert.equal(aBudget.snapshot().total, 0);
+  } finally {
+    a.close();
+    b.close();
+  }
+});
+
+test("setter close and fresh acquisition preserve the new wrapper through rollback", () => {
+  for (const boundary of ["setter", "validation-getter"]) {
+    let a;
+    let armed = false;
+    let writes = 0;
+    let sends = 0;
+    let capturedA;
+    let bRequest;
+    const original = () => {
+      sends++;
+      return "stream";
+    };
+    let value = original;
+    const session = {};
+    const bHttp2 = { connect: () => session };
+    const changeOwner = () => {
+      armed = false;
+      capturedA = value;
+      a.close();
+      bHttp2.connect("http://localhost:1");
+      bRequest = value;
+    };
+    Object.defineProperty(session, "request", {
+      get() {
+        const captured = value;
+        if (armed && boundary === "validation-getter" && value !== original) changeOwner();
+        return captured;
+      },
+      set(next) {
+        writes++;
+        value = next;
+        if (armed && boundary === "setter" && next !== original) changeOwner();
+      },
+    });
+    const aBudget = createWireBudget({ maxRequests: 3, cleanupReserve: 1 });
+    const bBudget = createWireBudget({ maxRequests: 3, cleanupReserve: 1 });
+    const b = module.installNodeWireGuard({
+      http2: bHttp2,
+      globals: { fetch() {} },
+      budget: bBudget,
+      phase: () => "observation",
+    });
+    const aHttp2 = { connect: () => session };
+    a = module.installNodeWireGuard({
+      http2: aHttp2,
+      globals: { fetch() {} },
+      budget: aBudget,
+      phase: () => "observation",
+    });
+    try {
+      armed = true;
+      assert.throws(() => aHttp2.connect("http://localhost:1"), /closed/);
+      assert.equal(writes, 3);
+      assert.equal(value, bRequest);
+      assert.throws(() => capturedA(), /closed/);
+      assert.equal(sends, 0);
+      assert.equal(aBudget.snapshot().total + bBudget.snapshot().total, 0);
+      assert.equal(bRequest(), "stream");
+      assert.equal(sends, 1);
+      assert.equal(bBudget.snapshot().total, 1);
+      assert.equal(aBudget.snapshot().total, 0);
+    } finally {
+      a.close();
+      b.close();
+    }
+  }
+});
+
+test("generated getter ownership transitions agree with the independently selected admitted owner", () => {
+  let seed = 0xb781;
+  const next = (n) => {
+    seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0;
+    return seed % n;
+  };
+  for (let run = 0; run < 100; run++) {
+    const boundary = 1 + next(3);
+    const driftValue = next(2) === 0;
+    const inherited = next(2) === 0;
+    let reads = 0;
+    let writes = 0;
+    let sends = 0;
+    let bRequest;
+    const original = () => {
+      sends++;
+      return "stream";
+    };
+    let value = original;
+    const session = {};
+    const descriptorTarget = inherited ? {} : session;
+    if (inherited) Object.setPrototypeOf(session, Object.create(descriptorTarget));
+    const bHttp2 = { connect: () => session };
+    Object.defineProperty(descriptorTarget, "request", {
+      get() {
+        const captured = value;
+        if (++reads === boundary) {
+          bHttp2.connect("http://localhost:1");
+          bRequest = value;
+          if (driftValue) session.request = original;
+        }
+        return captured;
+      },
+      set(next) {
+        writes++;
+        value = next;
+      },
+    });
+    const aBudget = createWireBudget({ maxRequests: 3, cleanupReserve: 1 });
+    const bBudget = createWireBudget({ maxRequests: 3, cleanupReserve: 1 });
+    const b = module.installNodeWireGuard({
+      http2: bHttp2,
+      globals: { fetch() {} },
+      budget: bBudget,
+      phase: () => "observation",
+    });
+    const aHttp2 = { connect: () => session };
+    const a = module.installNodeWireGuard({
+      http2: aHttp2,
+      globals: { fetch() {} },
+      budget: aBudget,
+      phase: () => "observation",
+    });
+    const admitted = [];
+    try {
+      assert.throws(() => aHttp2.connect("http://localhost:1"), /ownership/);
+      assert.equal(writes, driftValue ? 2 : 1, `run ${run}`);
+      assert.equal(value, driftValue ? original : bRequest);
+      if (driftValue) assert.throws(() => bRequest(), /ownership/);
+      else {
+        assert.equal(bRequest(), "stream");
+        admitted.push("B");
+      }
+      assert.equal(sends, admitted.length);
+      assert.equal(aBudget.snapshot().total, admitted.filter((owner) => owner === "A").length);
+      assert.equal(bBudget.snapshot().total, admitted.filter((owner) => owner === "B").length);
+    } finally {
+      a.close();
+      b.close();
+    }
+  }
+});

@@ -43,7 +43,10 @@ export const installNodeWireGuard = ({ http2, globals, budget, phase, allowUrl =
   const installHook = (target, key, original, wrapper) => {
     if (closed) throw new Error("wire guard closed");
     available(target, key);
-    if (target[key] !== original) throw new Error("wire hook ownership refused");
+    const current = target[key];
+    if (closed) throw new Error("wire guard closed");
+    available(target, key);
+    if (current !== original) throw new Error("wire hook ownership refused");
     const hook = {
       target,
       key,
@@ -54,12 +57,14 @@ export const installNodeWireGuard = ({ http2, globals, budget, phase, allowUrl =
       inherited: Object.hasOwn(target, key) ? null : inheritedDescriptor(target, key),
     };
     if (closed) throw new Error("wire guard closed");
+    available(target, key);
     hooks.push(hook);
     if (!owners.has(target)) owners.set(target, new Map());
     owners.get(target).set(key, hook);
     try {
       target[key] = wrapper;
       if (closed) throw new Error("wire guard closed");
+      if (owned(target, key) !== hook) throw new Error("wire hook ownership refused");
       const installed = target[key];
       if (closed) throw new Error("wire guard closed");
       if (owned(target, key) !== hook || installed !== wrapper)
@@ -82,23 +87,39 @@ export const installNodeWireGuard = ({ http2, globals, budget, phase, allowUrl =
   };
   const restoreHook = (hook) => {
     const { target, key, original, wrapper, hadOwn } = hook;
+    const ownerChanged = () => {
+      if (owned(target, key) === hook) return false;
+      failures.ownership++;
+      return true;
+    };
     try {
-      if (target[key] === wrapper) {
+      if (ownerChanged()) return;
+      const currentValue = target[key];
+      if (ownerChanged()) return;
+      if (currentValue === wrapper) {
         if (hadOwn) target[key] = original;
-        else if (Object.hasOwn(target, key)) delete target[key];
         else {
-          const current = inheritedDescriptor(target, key);
-          if (
-            current?.owner !== hook.inherited?.owner ||
-            current?.descriptor.get !== hook.inherited?.descriptor.get ||
-            current?.descriptor.set !== hook.inherited?.descriptor.set
-          ) {
-            failures.ownership++;
-            return;
+          const hasOwn = Object.hasOwn(target, key);
+          if (ownerChanged()) return;
+          if (hasOwn) delete target[key];
+          else {
+            const current = inheritedDescriptor(target, key);
+            if (ownerChanged()) return;
+            if (
+              current?.owner !== hook.inherited?.owner ||
+              current?.descriptor.get !== hook.inherited?.descriptor.get ||
+              current?.descriptor.set !== hook.inherited?.descriptor.set
+            ) {
+              failures.ownership++;
+              return;
+            }
+            target[key] = original;
           }
-          target[key] = original;
         }
-        if (target[key] !== original) throw new Error("wire hook restoration refused");
+        if (ownerChanged()) return;
+        const restored = target[key];
+        if (ownerChanged()) return;
+        if (restored !== original) throw new Error("wire hook restoration refused");
       } else if (hook.installed) {
         failures.ownership++;
       }

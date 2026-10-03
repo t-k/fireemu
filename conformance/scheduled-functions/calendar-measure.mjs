@@ -924,9 +924,10 @@ export async function certify(listPath) {
   };
   const loaded = [];
   for (const path of [list.refusal, ...(list.controls ?? [])]) loaded.push(await load(path));
-  // Every attempt of the day is listed, with an explanation for each failure (coordinator policy).
-  const attempts = [];
-  for (const path of list.attempts ?? []) attempts.push(await load(path));
+  // Load caller-listed attempts; a separate trusted inventory must establish completeness.
+  const attemptPaths = list.attempts === undefined ? [] : list.attempts;
+  const attempts = Array.isArray(attemptPaths) ? [] : attemptPaths;
+  if (Array.isArray(attemptPaths)) for (const path of attemptPaths) attempts.push(await load(path));
   // The stand-in runner of the offline tests is never certified (review round 2, M1).
   const standIn = await readFile(here("testdata/fake-runner.cjs")).catch(() => null);
   return certificateVerdict({

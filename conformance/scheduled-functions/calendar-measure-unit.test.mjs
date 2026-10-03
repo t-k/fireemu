@@ -868,3 +868,38 @@ test("certify binds a complete certificate to each exact loaded byte sequence", 
   assert.equal(standIn.verdict, "fail");
   assert.ok(standIn.problems.includes("the refusal run used the stand-in runner"));
 });
+
+test("certify rejects explicit malformed attempt lists while omitted and empty remain optional", async (t) => {
+  const { certify } = await import("./calendar-measure.mjs");
+  const { mkdtemp, rm, writeFile } = await import("node:fs/promises");
+  const { tmpdir } = await import("node:os");
+  const { join } = await import("node:path");
+  const directory = await mkdtemp(join(tmpdir(), "calendar-attempt-list-schema-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const write = async (name, value) => {
+    const path = join(directory, name);
+    await writeFile(path, JSON.stringify(value));
+    return path;
+  };
+  const refusal = await write("refusal.json", loaderReport("certificate"));
+  const controls = [];
+  for (const mode of ["positive", "orphan", "escaper", "listener", "leftover"])
+    controls.push(await write(`${mode}.json`, loaderReport(mode)));
+  const listPath = join(directory, "list.json");
+  for (const attempts of [null, {}, "unknown", false, 1]) {
+    await writeFile(listPath, JSON.stringify({ refusal, controls, attempts }));
+    const result = await certify(listPath);
+    assert.equal(result.verdict, "fail", JSON.stringify(attempts));
+    assert.equal(result.certificate, null);
+    assert.deepEqual(result.problems, ["the attempt list is unreadable"]);
+  }
+  for (const list of [
+    { refusal, controls },
+    { refusal, controls, attempts: [] },
+  ]) {
+    await writeFile(listPath, JSON.stringify(list));
+    const result = await certify(listPath);
+    assert.equal(result.verdict, "pass", JSON.stringify(result.problems));
+    assert.deepEqual(result.certificate.attempts, []);
+  }
+});

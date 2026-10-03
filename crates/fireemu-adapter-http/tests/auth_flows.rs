@@ -8433,6 +8433,8 @@ fn broad_last_refresh_tracks_successful_token_issuance_not_reads_or_failures() {
         .1["users"][0]["lastRefreshAt"]
             .clone()
     };
+    // The clock sits on whole seconds, so the production profile's timestamp (the fewest digits
+    // at millisecond precision) has none.
     let expected =
         |s: &AuthState| LogicalInstant::to_rfc3339(s.clock.lock().unwrap().now()).unwrap();
     let first = lookup(&s);
@@ -9566,5 +9568,42 @@ fn saml_fixture_tenant_claims_survive_cookie_handoffs_with_refresh() {
                 attributes.as_ref(),
             );
         }
+    }
+}
+
+/// `lastRefreshAt` has millisecond precision in both profiles (recorded, lean-v5 lookups: 24
+/// characters; the official emulator writes `toISOString`): three fraction digits outside the
+/// production profile, the protobuf Timestamp's fewest digits inside it, and never the
+/// nanoseconds the clock holds.
+#[test]
+fn last_refresh_at_has_millisecond_precision() {
+    for production in [false, true] {
+        let (s, _) = oob_authorization_state(production);
+        let user = sign_up(&s, "ms-precision@example.com");
+        // 123,456,789 ns past the second.
+        s.clock
+            .lock()
+            .unwrap()
+            .advance(fireemu_core_types::time::LogicalDuration::from_nanos(
+                123_456_789,
+            ))
+            .unwrap();
+        let (status, _) = post(
+            &s,
+            "/securetoken.googleapis.com/v1/token",
+            &json!({"grant_type":"refresh_token", "refresh_token":user["refreshToken"]}),
+        );
+        assert_eq!(status, 200);
+        let at = admin(
+            &s,
+            &format!("{V1}/projects/demo-app/accounts:lookup"),
+            &json!({"localId": [user["localId"]]}),
+        )
+        .1["users"][0]["lastRefreshAt"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        assert_eq!(at, "2026-08-29T12:01:00.123Z", "{production}");
+        assert_eq!(at.len(), 24);
     }
 }

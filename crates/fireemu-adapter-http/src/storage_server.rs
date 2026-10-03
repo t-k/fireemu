@@ -1,7 +1,7 @@
 //! hyper glue for the Storage surface: raw bodies (uploads), CORS for the browser SDK,
 //! loopback-only origins.
 
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
 
 use bytes::Bytes;
@@ -12,11 +12,11 @@ use hyper::server::conn::http1;
 use hyper::service::service_fn;
 use hyper::{Request, Response, StatusCode};
 use hyper_util::rt::TokioIo;
-use tokio::net::TcpListener;
-use tokio::sync::Semaphore;
+use tokio::net::{TcpListener, TcpStream};
+use tokio::sync::{Notify, Semaphore};
 
 use crate::identity_toolkit::origin_is_local;
-use crate::storage::{handle, StorageRequest, StorageState};
+use crate::storage::{handle_framed_cancellable, GlobEvent, StorageRequest, StorageState};
 
 /// Maximum accepted upload body (object limit plus multipart overhead).
 pub const MAX_STORAGE_BODY_BYTES: usize = 260 * 1024 * 1024;
@@ -40,6 +40,255 @@ pub static BODY_BUDGET: BodyBudget = BodyBudget::new(DEFAULT_BODY_BUDGET_BYTES);
 /// lock. Body collection does not hold a slot, so slow clients cannot occupy the pool.
 const BLOCKING_HANDLER_LIMIT: usize = 16;
 static BLOCKING_HANDLER_SLOTS: Semaphore = Semaphore::const_new(BLOCKING_HANDLER_LIMIT);
+
+/// Bounds the list requests that carry a `matchGlob`, whose cost depends on a pattern the caller
+/// writes. A request waits for one of these slots before it takes a handler slot, and waits
+/// without holding a thread, so a flood of them leaves the handler slots to the other requests.
+const GLOB_HANDLER_LIMIT: usize = 2;
+static GLOB_HANDLER_SLOTS: Semaphore = Semaphore::const_new(GLOB_HANDLER_LIMIT);
+
+#[derive(Default)]
+struct Cancellation {
+    flag: AtomicBool,
+    notify: Notify,
+    glob_requests: AtomicUsize,
+}
+
+impl Cancellation {
+    fn cancel(&self) {
+        self.flag.store(true, Ordering::Release);
+        self.notify.notify_waiters();
+    }
+
+    fn is_cancelled(&self) -> bool {
+        self.flag.load(Ordering::Acquire)
+    }
+
+    async fn cancelled(&self) {
+        loop {
+            let notified = self.notify.notified();
+            tokio::pin!(notified);
+            notified.as_mut().enable();
+            if self.is_cancelled() {
+                return;
+            }
+            notified.await;
+        }
+    }
+}
+
+struct CancelOnDrop(Arc<Cancellation>);
+impl Drop for CancelOnDrop {
+    fn drop(&mut self) {
+        self.0.cancel();
+    }
+}
+
+/// Per-server observations of request admission, primitive work and resource cleanup.
+#[doc(hidden)]
+#[derive(Default)]
+pub struct ServerObserver {
+    #[cfg(all(test, unix))]
+    record_descriptors: bool,
+    #[cfg(all(test, unix))]
+    descriptors: std::sync::Mutex<Vec<DescriptorWitness>>,
+    pub active_globs: AtomicUsize,
+    pub queued_globs: AtomicUsize,
+    pub general_permits: AtomicUsize,
+    pub connections: AtomicUsize,
+    pub monitors: AtomicUsize,
+    pub workers: AtomicUsize,
+    pub compiled_patterns: AtomicUsize,
+    pub largest_pattern: AtomicUsize,
+    pub matcher_polls: AtomicUsize,
+    pub state_polls: AtomicUsize,
+    pub epsilon_polls: AtomicUsize,
+    pub matching_workers: AtomicUsize,
+    pub cancelled_workers: AtomicUsize,
+    pub completed_workers: AtomicUsize,
+    pub closed_connections: AtomicUsize,
+    /// A verification barrier retains worker permits after cancellation until released.
+    pub hold_cancelled_workers: AtomicBool,
+    cancelled_gate: (std::sync::Mutex<()>, std::sync::Condvar),
+}
+
+#[cfg(all(test, unix))]
+struct DescriptorWitness {
+    fd: std::os::fd::RawFd,
+    identity: String,
+    peer: std::net::SocketAddr,
+    local: std::net::SocketAddr,
+}
+
+#[cfg(all(test, target_os = "macos"))]
+fn parse_descriptor_fields(
+    fields: &str,
+) -> std::io::Result<std::collections::BTreeMap<i32, String>> {
+    let expected_process = format!("p{}", std::process::id());
+    if fields.lines().next() != Some(expected_process.as_str()) {
+        return Err(std::io::Error::other("lsof did not identify this process"));
+    }
+    let mut descriptors = std::collections::BTreeMap::new();
+    let mut current = None;
+    for line in fields.lines().skip(1) {
+        if let Some(fd) = line.strip_prefix('f') {
+            current = fd.parse::<i32>().ok();
+            if let Some(fd) = current {
+                descriptors.insert(fd, String::new());
+            }
+        } else if line.starts_with(['t', 'n', 'D']) {
+            if let Some(fd) = current {
+                let identity = descriptors.get_mut(&fd).expect("recorded descriptor");
+                identity.push_str(line);
+                identity.push('\n');
+            }
+        } else {
+            return Err(std::io::Error::other("unexpected lsof descriptor field"));
+        }
+    }
+    if descriptors.is_empty()
+        || descriptors
+            .values()
+            .any(|identity| !identity.starts_with('t'))
+    {
+        return Err(std::io::Error::other(
+            "lsof descriptor identity is incomplete",
+        ));
+    }
+    Ok(descriptors)
+}
+
+/// Only a successful complete OS snapshot may report an absent descriptor.
+#[cfg(all(test, unix))]
+fn descriptor_snapshot() -> std::io::Result<std::collections::BTreeMap<i32, String>> {
+    #[cfg(target_os = "linux")]
+    {
+        let mut descriptors = std::collections::BTreeMap::new();
+        for entry in std::fs::read_dir("/proc/self/fd")? {
+            let entry = entry?;
+            let fd = entry
+                .file_name()
+                .to_string_lossy()
+                .parse::<i32>()
+                .map_err(std::io::Error::other)?;
+            match std::fs::read_link(entry.path()) {
+                Ok(identity) => {
+                    descriptors.insert(fd, identity.to_string_lossy().into_owned());
+                }
+                // A descriptor may close while the snapshot is enumerated.
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => return Err(error),
+            }
+        }
+        Ok(descriptors)
+    }
+    #[cfg(target_os = "macos")]
+    {
+        let output = std::process::Command::new("/usr/sbin/lsof")
+            .args([
+                "-nP",
+                "-a",
+                "-p",
+                &std::process::id().to_string(),
+                "-F",
+                "ftnD",
+            ])
+            .output()?;
+        if !output.status.success() || !output.stderr.is_empty() {
+            return Err(std::io::Error::other(format!(
+                "lsof observation failed: {:?}: {}",
+                output.status,
+                String::from_utf8_lossy(&output.stderr)
+            )));
+        }
+        let fields = String::from_utf8(output.stdout).map_err(std::io::Error::other)?;
+        parse_descriptor_fields(&fields)
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    {
+        Err(std::io::Error::new(
+            std::io::ErrorKind::Unsupported,
+            "descriptor identity gate requires Linux or macOS",
+        ))
+    }
+}
+
+#[cfg(all(test, unix))]
+fn descriptor_identity(fd: std::os::fd::RawFd) -> std::io::Result<Option<String>> {
+    Ok(descriptor_snapshot()?.remove(&fd))
+}
+
+impl ServerObserver {
+    /// Free worker permits in the process-wide pools.
+    #[must_use]
+    pub fn free_permits() -> (usize, usize) {
+        (
+            GLOB_HANDLER_SLOTS.available_permits(),
+            BLOCKING_HANDLER_SLOTS.available_permits(),
+        )
+    }
+
+    /// Releases the verification barrier, including on a test's cleanup path.
+    pub fn release_cancelled_workers(&self) {
+        let _gate = self
+            .cancelled_gate
+            .0
+            .lock()
+            .expect("worker verification gate is not poisoned");
+        self.hold_cancelled_workers.store(false, Ordering::Release);
+        self.cancelled_gate.1.notify_all();
+    }
+
+    fn cancelled_worker(&self) {
+        self.cancelled_workers.fetch_add(1, Ordering::AcqRel);
+        let mut guard = self
+            .cancelled_gate
+            .0
+            .lock()
+            .expect("worker verification gate is not poisoned");
+        while self.hold_cancelled_workers.load(Ordering::Acquire) {
+            guard = self
+                .cancelled_gate
+                .1
+                .wait(guard)
+                .expect("worker verification gate is not poisoned");
+        }
+    }
+}
+
+struct CountGuard<'a>(&'a AtomicUsize);
+impl<'a> CountGuard<'a> {
+    fn new(count: &'a AtomicUsize) -> Self {
+        count.fetch_add(1, Ordering::AcqRel);
+        Self(count)
+    }
+}
+impl Drop for CountGuard<'_> {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::AcqRel);
+    }
+}
+
+struct Runtime {
+    shutdown: Arc<Cancellation>,
+    observer: Arc<ServerObserver>,
+    jobs: std::sync::Mutex<Vec<tokio::task::JoinHandle<()>>>,
+}
+
+/// Observes close readiness on its own descriptor without reading Hyper's HTTP bytes.
+async fn socket_closed(stream: &TcpStream, cancellation: &Cancellation) -> std::io::Result<()> {
+    loop {
+        let readiness = stream.ready(tokio::io::Interest::READABLE).await?;
+        if (readiness.is_read_closed() || readiness.is_error())
+            && cancellation.glob_requests.load(Ordering::Acquire) > 0
+        {
+            return Ok(());
+        }
+        // Ordinary readable data stays owned by Hyper. Readiness remains sticky, so a bounded
+        // tick prevents a busy loop while still noticing FIN behind pipelined request bytes.
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+}
 
 /// An admission budget for the request bodies buffered in memory at the same time.
 ///
@@ -241,7 +490,7 @@ const FORWARDED_HEADERS: &[&str] = &[
 ];
 
 /// The header set the official emulator's `cors` middleware exposes, verbatim.
-const EXPOSED_HEADERS: &str = "content-type,x-firebase-storage-version,X-Goog-Upload-Size-Received,x-goog-upload-url,x-goog-upload-command,x-gupload-uploadid,x-goog-upload-header-content-length,x-goog-upload-header-content-type,x-goog-upload-protocol,x-goog-upload-status,x-goog-upload-chunk-granularity,x-goog-upload-control-url";
+pub(crate) const EXPOSED_HEADERS: &str = "content-type,x-firebase-storage-version,X-Goog-Upload-Size-Received,x-goog-upload-url,x-goog-upload-command,x-gupload-uploadid,x-goog-upload-header-content-length,x-goog-upload-header-content-type,x-goog-upload-protocol,x-goog-upload-status,x-goog-upload-chunk-granularity,x-goog-upload-control-url";
 
 /// The CORS headers of an ordinary (non-preflight) response, as the official emulator's
 /// `cors({origin: true, exposedHeaders})` middleware stamps them: the origin reflected when
@@ -295,7 +544,11 @@ async fn respond(
     state: Arc<StorageState>,
     budget: &'static BodyBudget,
     req: Request<Incoming>,
+    runtime: Arc<Runtime>,
+    connection: Arc<Cancellation>,
 ) -> Result<Response<Full<Bytes>>, std::io::Error> {
+    let request_cancel = Arc::new(Cancellation::default());
+    let _request_guard = CancelOnDrop(request_cancel.clone());
     let origin = req
         .headers()
         .get("origin")
@@ -389,14 +642,36 @@ async fn respond(
     };
     // The buffer moves into the blocking handler and holds its budget charge until that
     // handler finishes, even if the connection is closed while it runs.
-    let mut buffer = match collect_body(budget, cap, declared, req.into_body()).await {
-        Ok(buffer) => buffer,
-        Err(e) => return Ok(body_error_response(e, origin.as_deref())),
+    let mut buffer = tokio::select! {
+        result = collect_body(budget, cap, declared, req.into_body()) => match result {
+            Ok(buffer) => buffer,
+            Err(e) => return Ok(body_error_response(e, origin.as_deref())),
+        },
+        () = connection.cancelled() => return Err(std::io::Error::other("storage connection closed")),
+        () = runtime.shutdown.cancelled() => return Err(std::io::Error::other("storage server stopped")),
     };
-    let permit = BLOCKING_HANDLER_SLOTS
-        .acquire()
-        .await
-        .expect("storage handler semaphore is never closed");
+    let glob_request = crate::storage::uses_match_glob(&method, &query);
+    let _cancellable = glob_request.then(|| CountGuard::new(&connection.glob_requests));
+    let queued = glob_request.then(|| CountGuard::new(&runtime.observer.queued_globs));
+    let glob_permit = if glob_request {
+        Some(tokio::select! {
+            permit = GLOB_HANDLER_SLOTS.acquire() => permit.expect("storage glob semaphore is never closed"),
+            () = connection.cancelled() => return Err(std::io::Error::other("storage connection closed")),
+            () = runtime.shutdown.cancelled() => return Err(std::io::Error::other("storage server stopped")),
+        })
+    } else {
+        None
+    };
+    drop(queued);
+    let permit = tokio::select! {
+        permit = BLOCKING_HANDLER_SLOTS.acquire() => permit.expect("storage handler semaphore is never closed"),
+        () = connection.cancelled() => return Err(std::io::Error::other("storage connection closed")),
+        () = runtime.shutdown.cancelled() => return Err(std::io::Error::other("storage server stopped")),
+    };
+    if connection.is_cancelled() || runtime.shutdown.is_cancelled() || request_cancel.is_cancelled()
+    {
+        return Err(std::io::Error::other("storage request cancelled"));
+    }
     let trace = std::env::var_os("FIREEMU_TRACE_STORAGE").is_some();
     let (trace_method, trace_path, trace_query, trace_len) = (
         method.clone(),
@@ -404,10 +679,19 @@ async fn respond(
         query.clone(),
         buffer.bytes.len(),
     );
-    let response = tokio::task::spawn_blocking(move || {
+    let (sender, receiver) = tokio::sync::oneshot::channel();
+    let work_runtime = runtime.clone();
+    let work_connection = connection.clone();
+    let job = tokio::task::spawn_blocking(move || {
+        let observer = &work_runtime.observer;
+        let _worker = CountGuard::new(&observer.workers);
+        let _general = CountGuard::new(&observer.general_permits);
+        let _glob = glob_request.then(|| CountGuard::new(&observer.active_globs));
         let _permit = permit;
+        let _glob_permit = glob_permit;
         let body = buffer.take();
-        handle(
+        let matching = std::cell::RefCell::new(None);
+        let response = handle_framed_cancellable(
             &state,
             StorageRequest {
                 method,
@@ -418,16 +702,63 @@ async fn respond(
                 app_check,
                 body,
             },
-        )
-    })
-    .await;
-    let Ok(response) = response else {
-        return Ok(handler_error_response(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            b"storage handler failed",
-            origin.as_deref(),
-            false,
-        ));
+            &|| {
+                request_cancel.is_cancelled()
+                    || work_connection.is_cancelled()
+                    || work_runtime.shutdown.is_cancelled()
+            },
+            &|event| match event {
+                GlobEvent::Compiled(pattern) => {
+                    observer
+                        .largest_pattern
+                        .fetch_max(pattern.len(), Ordering::Relaxed);
+                    observer.compiled_patterns.fetch_add(1, Ordering::AcqRel);
+                }
+                GlobEvent::MatcherStatePoll => {
+                    observer.state_polls.fetch_add(1, Ordering::Relaxed);
+                    if matching.borrow().is_none() {
+                        matching.replace(Some(CountGuard::new(&observer.matching_workers)));
+                    }
+                }
+                GlobEvent::MatcherEpsilonPoll => {
+                    observer.epsilon_polls.fetch_add(1, Ordering::Relaxed);
+                }
+                GlobEvent::MatcherPoll => {
+                    observer.matcher_polls.fetch_add(1, Ordering::Relaxed);
+                }
+                _ => {}
+            },
+        );
+        if response.is_err() {
+            observer.cancelled_worker();
+        }
+        observer.completed_workers.fetch_add(1, Ordering::AcqRel);
+        let _ = sender.send(response);
+    });
+    {
+        let mut jobs = runtime
+            .jobs
+            .lock()
+            .expect("storage worker registry is not poisoned");
+        jobs.retain(|job| !job.is_finished());
+        jobs.push(job);
+    }
+    let result = tokio::select! {
+        result = receiver => result,
+        () = connection.cancelled() => return Err(std::io::Error::other("storage connection closed")),
+        () = runtime.shutdown.cancelled() => return Err(std::io::Error::other("storage server stopped")),
+    };
+    let (response, framed) = match result {
+        Ok(Ok(response)) => response,
+        Ok(Err(_)) => return Err(std::io::Error::other("storage request cancelled")),
+        Err(_) => {
+            return Ok(handler_error_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                b"storage handler failed",
+                origin.as_deref(),
+                false,
+            ))
+        }
     };
     if trace {
         eprintln!(
@@ -448,18 +779,20 @@ async fn respond(
         // A `dropConnection` fault: the connection closes without a response.
         return Err(std::io::Error::other("fault plan: connection dropped"));
     }
-    let mut builder = cors(
-        Response::builder()
-            .status(
-                StatusCode::from_u16(response.status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR),
-            )
+    // A response the strict profile framed carries production's own header set; every other
+    // response gets the official emulator's CORS and `nosniff` stamps.
+    let mut builder = Response::builder()
+        .status(StatusCode::from_u16(response.status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR));
+    if !framed {
+        builder = cors(
             // Defence in depth: a body typed text/plain that happens to look like markup is
             // never sniffed as HTML on this origin. It does not change how an explicit
             // text/html content-type renders, so it is not a substitute for typing
             // caller-influenced bodies as text/plain -- see storage::gcs_no_such_object.
-            .header("x-content-type-options", "nosniff"),
-        origin.as_deref(),
-    );
+            builder.header("x-content-type-options", "nosniff"),
+            origin.as_deref(),
+        );
+    }
     for (k, v) in response.headers {
         builder = builder.header(k, v);
     }
@@ -487,24 +820,105 @@ pub async fn serve_storage(listener: TcpListener, state: Arc<StorageState>) -> s
     serve_storage_with_budget(listener, state, &BODY_BUDGET).await
 }
 
+/// Serves with the normal body budget until `shutdown`, then joins owned request work.
+pub async fn serve_storage_until(
+    listener: TcpListener,
+    state: Arc<StorageState>,
+    shutdown: impl std::future::Future<Output = ()>,
+) -> std::io::Result<()> {
+    serve_storage_with_shutdown(listener, state, &BODY_BUDGET, shutdown, Arc::default()).await
+}
+
 /// [`serve_storage`] against an explicit body budget (tests).
 pub async fn serve_storage_with_budget(
     listener: TcpListener,
     state: Arc<StorageState>,
     budget: &'static BodyBudget,
 ) -> std::io::Result<()> {
-    loop {
-        let (stream, _) = listener.accept().await?;
-        let state = state.clone();
-        tokio::spawn(async move {
-            let io = TokioIo::new(GracefulClose::new(
-                stream,
-                DrainBounds::for_largest_body(MAX_STORAGE_BODY_BYTES),
-            ));
-            let svc = service_fn(move |req| respond(state.clone(), budget, req));
-            let _ = http1::Builder::new().serve_connection(io, svc).await;
-        });
+    serve_storage_with_shutdown(
+        listener,
+        state,
+        budget,
+        std::future::pending::<()>(),
+        Arc::default(),
+    )
+    .await
+}
+
+/// Stops accepting, cancels requests and joins owned connections and blocking workers.
+#[doc(hidden)]
+pub async fn serve_storage_with_shutdown(
+    listener: TcpListener,
+    state: Arc<StorageState>,
+    budget: &'static BodyBudget,
+    shutdown: impl std::future::Future<Output = ()>,
+    observer: Arc<ServerObserver>,
+) -> std::io::Result<()> {
+    let runtime = Arc::new(Runtime {
+        shutdown: Arc::default(),
+        observer,
+        jobs: std::sync::Mutex::new(Vec::new()),
+    });
+    let _shutdown_guard = CancelOnDrop(runtime.shutdown.clone());
+    let mut connections = tokio::task::JoinSet::new();
+    tokio::pin!(shutdown);
+    let result = loop {
+        tokio::select! {
+            () = &mut shutdown => break Ok(()),
+            accepted = listener.accept() => {
+                let (stream, _) = match accepted { Ok(accepted) => accepted, Err(error) => break Err(error) };
+                let std_stream = match stream.into_std() { Ok(stream) => stream, Err(error) => break Err(error) };
+                let monitor = match std_stream.try_clone().and_then(TcpStream::from_std) {
+                    Ok(stream) => stream, Err(error) => break Err(error),
+                };
+                let stream = match TcpStream::from_std(std_stream) { Ok(stream) => stream, Err(error) => break Err(error) };
+                #[cfg(all(test, unix))]
+                if runtime.observer.record_descriptors {
+                    use std::os::fd::AsRawFd as _;
+                    for socket in [&stream, &monitor] {
+                        let fd = socket.as_raw_fd();
+                        runtime.observer.descriptors.lock().unwrap().push(DescriptorWitness {
+                            fd,
+                            identity: descriptor_identity(fd).expect("OS descriptor observation must succeed").expect("the owned socket has an OS identity"),
+                            local: socket.local_addr().unwrap(),
+                            peer: socket.peer_addr().unwrap(),
+                        });
+                    }
+                }
+                let state = state.clone();
+                let runtime = runtime.clone();
+                connections.spawn(async move {
+                    let _connection_count = CountGuard::new(&runtime.observer.connections);
+                    let _monitor_count = CountGuard::new(&runtime.observer.monitors);
+                    let cancellation = Arc::new(Cancellation::default());
+                    let _connection_guard = CancelOnDrop(cancellation.clone());
+                    let io = TokioIo::new(GracefulClose::new(stream, DrainBounds::for_largest_body(MAX_STORAGE_BODY_BYTES)));
+                    let request_runtime = runtime.clone();
+                    let request_cancel = cancellation.clone();
+                    let svc = service_fn(move |req| respond(state.clone(), budget, req, request_runtime.clone(), request_cancel.clone()));
+                    tokio::select! {
+                        _ = http1::Builder::new().serve_connection(io, svc) => {},
+                        _ = socket_closed(&monitor, &cancellation) => { runtime.observer.closed_connections.fetch_add(1, Ordering::AcqRel); },
+                        () = runtime.shutdown.cancelled() => {},
+                    }
+                });
+            },
+            _ = connections.join_next(), if !connections.is_empty() => {},
+        }
+    };
+    drop(listener);
+    runtime.shutdown.cancel();
+    while connections.join_next().await.is_some() {}
+    let jobs = std::mem::take(
+        &mut *runtime
+            .jobs
+            .lock()
+            .expect("storage worker registry is not poisoned"),
+    );
+    for job in jobs {
+        let _ = job.await;
     }
+    result
 }
 
 #[cfg(test)]
@@ -530,5 +944,205 @@ mod handler_error_tests {
         let busy = handler_error_response(StatusCode::SERVICE_UNAVAILABLE, b"busy", None, true);
         assert_eq!(busy.status(), StatusCode::SERVICE_UNAVAILABLE);
         assert_eq!(busy.headers().get("retry-after").unwrap(), "1");
+    }
+}
+
+#[cfg(all(test, any(target_os = "macos", target_os = "linux")))]
+mod descriptor_tests {
+    use super::*;
+    use std::sync::Mutex;
+    use tokio::io::AsyncWriteExt as _;
+
+    fn state() -> Arc<StorageState> {
+        use fireemu_core_auth::{
+            mfa::TotpPolicy,
+            store::{AuthRegistry, AuthStore},
+        };
+        use fireemu_core_rules::runtime::{LoadedRules, RulesetSlot};
+        use fireemu_core_storage::{
+            name::{BucketName, ObjectName},
+            store::{NewMetadata, Precondition},
+        };
+        use fireemu_core_types::{determinism::SplitMix64, time::LogicalInstant};
+        let start = LogicalInstant::from_unix_seconds(1_788_004_860);
+        let mut store = fireemu_core_storage::store::StorageState::new(9);
+        let bucket = BucketName::try_new("demo-app.appspot.com").unwrap();
+        for number in 0..64 {
+            let name = ObjectName::try_new(format!("{number:03}{}", "x".repeat(990))).unwrap();
+            store
+                .put(
+                    &bucket,
+                    &name,
+                    vec![b'x'],
+                    NewMetadata::default(),
+                    Precondition::default(),
+                    start,
+                )
+                .unwrap();
+        }
+        Arc::new(StorageState {
+            store: Mutex::new(store),
+            clock: Arc::new(Mutex::new(fireemu_core_session::clock::VirtualClock::new(
+                start,
+            ))),
+            auth: Arc::new(AuthRegistry::new(
+                "demo-app",
+                Arc::new(Mutex::new(AuthStore::new(
+                    "demo-app",
+                    SplitMix64::new(3),
+                    TotpPolicy::default(),
+                ))),
+            )),
+            tenancy: None,
+            rules: Arc::new(crate::storage::StorageRulesRegistry::global(Arc::new(
+                RulesetSlot::new(LoadedRules::default()),
+            ))),
+            project: "demo-app".to_owned(),
+            events: None,
+            barrier: None,
+            firestore: None,
+            faults: None,
+            clock_observer: None,
+            app_check_policy: None,
+            admin_capability: None,
+            token_acceptance: fireemu_core_auth::jwt::TokenAcceptance::Verified,
+            control_token: None,
+        })
+    }
+
+    async fn observed(label: &str, predicate: impl Fn() -> bool) {
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            while !predicate() {
+                tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+            }
+        })
+        .await
+        .unwrap_or_else(|_| panic!("observation did not settle: {label}"));
+    }
+
+    struct Cleanup(
+        Option<tokio::sync::oneshot::Sender<()>>,
+        Arc<ServerObserver>,
+    );
+    impl Drop for Cleanup {
+        fn drop(&mut self) {
+            self.1.release_cancelled_workers();
+            if let Some(stop) = self.0.take() {
+                let _ = stop.send(());
+            }
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn descriptor_observation_rejects_incomplete_or_wrong_process_fields() {
+        assert!(parse_descriptor_fields("").is_err());
+        assert!(parse_descriptor_fields("p0\nf8\ntIPv4\nnlocalhost\n").is_err());
+        let process = std::process::id();
+        assert!(parse_descriptor_fields(&format!("p{process}\nf8\n")).is_err());
+        assert!(parse_descriptor_fields(&format!("p{process}\nf8\nxunknown\n")).is_err());
+        let snapshot =
+            parse_descriptor_fields(&format!("p{process}\nf8\ntIPv4\nnlocalhost\n")).unwrap();
+        assert!(!snapshot.contains_key(&9));
+        assert!(snapshot.contains_key(&8));
+    }
+
+    /// Records each accepted and cloned-monitor FD from the production accept path.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn storage_shutdown_closes_each_accepted_and_monitor_descriptor() {
+        static BUDGET: BodyBudget = BodyBudget::new(8 * 1024 * 1024);
+        for drop_future in [false, true] {
+            let port = std::env::var("PORT")
+                .ok()
+                .and_then(|value| value.parse::<u16>().ok())
+                .unwrap_or(0);
+            let listener = TcpListener::bind(("127.0.0.1", port)).await.unwrap();
+            let local = listener.local_addr().unwrap();
+            let observer = Arc::new(ServerObserver {
+                record_descriptors: true,
+                ..ServerObserver::default()
+            });
+            assert!(observer.record_descriptors);
+            let (stop, stopped) = tokio::sync::oneshot::channel();
+            let mut cleanup = Cleanup(Some(stop), observer.clone());
+            let server = tokio::spawn(serve_storage_with_shutdown(
+                listener,
+                state(),
+                &BUDGET,
+                async {
+                    let _ = stopped.await;
+                },
+                observer.clone(),
+            ));
+            let pattern = format!("{}z", "*{,}".repeat(15_000));
+            let mut clients = Vec::new();
+            for _ in 0..2 {
+                let mut stream = TcpStream::connect(local).await.unwrap();
+                let request = format!("GET /storage/v1/b/demo-app.appspot.com/o?matchGlob={pattern} HTTP/1.1\r\nHost: localhost\r\nAuthorization: Bearer owner\r\n\r\nGET /storage/v1/b/demo-app.appspot.com/o HTTP/1.1\r\nHost: localhost\r\n\r\n");
+                stream.write_all(request.as_bytes()).await.unwrap();
+                clients.push(stream);
+            }
+            observed("two matching workers", || {
+                observer.matching_workers.load(Ordering::Acquire) == 2
+                    && observer.state_polls.load(Ordering::Acquire) > 200
+            })
+            .await;
+            {
+                let descriptors = observer.descriptors.lock().unwrap();
+                assert_eq!(
+                    descriptors.len(),
+                    4,
+                    "both accepted and monitor descriptors must be recorded"
+                );
+                for witness in descriptors.iter() {
+                    assert_eq!(witness.local, local);
+                    assert!(clients
+                        .iter()
+                        .any(|client| client.local_addr().unwrap() == witness.peer));
+                    assert!(
+                        !witness.identity.is_empty(),
+                        "the OS capture must identify this FD"
+                    );
+                    eprintln!(
+                        "owned descriptor fd={} local={} peer={} identity={:?}",
+                        witness.fd, witness.local, witness.peer, witness.identity
+                    );
+                }
+            }
+            if drop_future {
+                server.abort();
+                assert!(server.await.unwrap_err().is_cancelled());
+            } else {
+                cleanup.0.take().unwrap().send(()).unwrap();
+                server.await.unwrap().unwrap();
+            }
+            observed("all own tasks and permits returned", || {
+                observer.connections.load(Ordering::Acquire) == 0
+                    && observer.monitors.load(Ordering::Acquire) == 0
+                    && observer.workers.load(Ordering::Acquire) == 0
+                    && ServerObserver::free_permits() == (2, 16)
+            })
+            .await;
+            assert_eq!(BUDGET.in_flight(), 0);
+            assert_eq!(observer.completed_workers.load(Ordering::Acquire), 2);
+            assert_eq!(observer.cancelled_workers.load(Ordering::Acquire), 2);
+            let remaining = descriptor_snapshot().expect("post-stop OS observation must succeed");
+            for witness in observer.descriptors.lock().unwrap().iter() {
+                assert_ne!(
+                    remaining.get(&witness.fd).map(String::as_str),
+                    Some(witness.identity.as_str()),
+                    "the specific accepted/monitor FD identity must disappear"
+                );
+                assert!(
+                    !remaining
+                        .values()
+                        .any(|identity| identity == &witness.identity),
+                    "no duplicate of the accepted/monitor socket may remain"
+                );
+            }
+            drop(clients);
+            drop(TcpListener::bind(local).await.unwrap());
+            eprintln!("descriptor cleanup dropFuture={drop_future} accepted=2 monitor=2 identitiesGone=4 permits=2/16 budget=0");
+        }
     }
 }

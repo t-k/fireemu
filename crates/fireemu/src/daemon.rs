@@ -1052,6 +1052,44 @@ fn assemble_suite(assembly: ServiceAssembly, exec_mode: bool) -> Result<ReadySui
     })
 }
 
+type StorageShutdown = (
+    tokio::sync::oneshot::Sender<()>,
+    tokio::sync::oneshot::Receiver<()>,
+);
+
+async fn finish_storage_servers<T: Send + 'static>(
+    storage_shutdown: Option<StorageShutdown>,
+    servers: &mut tokio::task::JoinSet<T>,
+) {
+    if let Some((stop, drain_finished)) = storage_shutdown {
+        let _ = stop.send(());
+        let _ = drain_finished.await;
+    }
+    servers.abort_all();
+    while servers.join_next().await.is_some() {}
+}
+
+async fn finish_failed_exec_start<C, T: Send + 'static>(
+    child: Result<C, String>,
+    storage_shutdown: &mut Option<StorageShutdown>,
+    servers: &mut tokio::task::JoinSet<T>,
+) -> Result<C, String> {
+    if child.is_err() {
+        finish_storage_servers(storage_shutdown.take(), servers).await;
+    }
+    child
+}
+
+async fn stopped_server(
+    servers: &mut tokio::task::JoinSet<(&'static str, String)>,
+) -> Result<Option<i32>, String> {
+    match servers.join_next().await {
+        Some(Ok((name, result))) => Err(format!("{name} server stopped: {result}")),
+        Some(Err(error)) => Err(format!("server task stopped: {error}")),
+        None => Err("all server tasks stopped".to_owned()),
+    }
+}
+
 struct ReadySuite {
     cfg: RuntimeConfig,
     only: Selection,
@@ -1161,11 +1199,24 @@ async fn serve_suite(
             control.clone(),
         )
     );
+    let mut storage_shutdown = None;
     if let Some(listener) = storage_listener {
-        spawn_server!(
-            "Storage",
-            fireemu_adapter_http::storage_server::serve_storage(listener, storage.clone())
-        );
+        let (stop, stopped) = tokio::sync::oneshot::channel();
+        let (drained, drain_finished) = tokio::sync::oneshot::channel();
+        storage_shutdown = Some((stop, drain_finished));
+        let storage_for_server = storage.clone();
+        spawn_server!("Storage", async move {
+            let result = fireemu_adapter_http::storage_server::serve_storage_until(
+                listener,
+                storage_for_server,
+                async {
+                    let _ = stopped.await;
+                },
+            )
+            .await;
+            let _ = drained.send(());
+            result
+        });
     }
     if let Some(listener) = hub_listener {
         spawn_server!("Emulator Hub", hub::serve(listener, hub_state.clone()));
@@ -1325,18 +1376,21 @@ async fn serve_suite(
             if !quiet {
                 println!("  running command");
             }
-            Some(spawn_child(plan, &env)?)
+            Some(
+                finish_failed_exec_start(
+                    spawn_child(plan, &env),
+                    &mut storage_shutdown,
+                    &mut servers,
+                )
+                .await?,
+            )
         }
         None => None,
     };
     let child_pid = child.as_ref().and_then(super::child_id);
     let mut terminated = false;
     let outcome = tokio::select! {
-        result = servers.join_next() => match result {
-            Some(Ok((name, result))) => Err(format!("{name} server stopped: {result}")),
-            Some(Err(error)) => Err(format!("server task stopped: {error}")),
-            None => Err("all server tasks stopped".to_owned()),
-        },
+        result = stopped_server(&mut servers) => result,
         status = wait_child(child.as_mut()) => match status {
             Ok(status) => Ok(Some(exit_code(status))),
             Err(e) => Err(format!("waiting for the command: {e}")),
@@ -1402,8 +1456,9 @@ async fn serve_suite(
         runtime.shutdown().await;
     }
     pubsub.shutdown_push_dispatcher().await;
-    servers.abort_all();
-    while servers.join_next().await.is_some() {}
+    // Storage cancels and joins its synchronous workers before the remaining servers are
+    // aborted: dropping an accept future alone cannot wait for spawn_blocking work.
+    finish_storage_servers(storage_shutdown, &mut servers).await;
     // Discovery is retired as an explicit, ordered step of shutdown, while the runtime is
     // still up and every server that answered on the advertised origin has stopped. Dropping
     // the locator on the way out is kept as a fallback, not as the mechanism: a destructor
@@ -1862,9 +1917,10 @@ mod tests {
     use super::{
         apply_auth_config_overrides, apply_auth_password_policy_overrides, auth_project_config,
         auth_sign_in_config, auth_signup_quota_config, blocking_auth_bridge_settings,
-        blocking_auth_selection, close_functions_source_admission, function_log_input,
-        idp_assertion_policy, reapply_explicit_auth_config,
-        reapply_explicit_auth_password_policies, reapply_explicit_auth_quota,
+        blocking_auth_selection, close_functions_source_admission, finish_failed_exec_start,
+        finish_storage_servers, function_log_input, idp_assertion_policy,
+        reapply_explicit_auth_config, reapply_explicit_auth_password_policies,
+        reapply_explicit_auth_quota, stopped_server,
     };
 
     /// Only the strict profile's unpinned daemon follows wall time on Firestore; a pinned clock
@@ -2456,6 +2512,168 @@ mod tests {
         assert_eq!(bundle["data"]["metadata"]["type"], "USER");
         assert_eq!(bundle["data"]["trace"], "projects/demo/traces/abc");
         assert_eq!(bundle["data"]["metadata"]["user"]["spoofed"], true);
+    }
+
+    /// The daemon must send stop and wait for Storage's completion before aborting peers.
+    #[tokio::test]
+    async fn storage_shutdown_drains_before_aborting_servers() {
+        struct ObserveDrop(
+            tokio::sync::oneshot::Sender<bool>,
+            Arc<std::sync::atomic::AtomicBool>,
+        );
+        impl Drop for ObserveDrop {
+            fn drop(&mut self) {
+                let (replacement, _) = tokio::sync::oneshot::channel();
+                let sender = std::mem::replace(&mut self.0, replacement);
+                let _ = sender.send(self.1.load(std::sync::atomic::Ordering::Acquire));
+            }
+        }
+        let drained = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let (aborted, abort_seen) = tokio::sync::oneshot::channel();
+        let (entered, entered_seen) = tokio::sync::oneshot::channel();
+        let mut servers = tokio::task::JoinSet::new();
+        let guard = ObserveDrop(aborted, drained.clone());
+        servers.spawn(async move {
+            let _guard = guard;
+            let _ = entered.send(());
+            std::future::pending::<()>().await;
+        });
+        entered_seen.await.unwrap();
+        let (stop, stopped) = tokio::sync::oneshot::channel();
+        let (done, finished) = tokio::sync::oneshot::channel();
+        let (stop_seen, received_stop) = tokio::sync::oneshot::channel();
+        let (release, released) = tokio::sync::oneshot::channel();
+        let worker = tokio::spawn(async move {
+            let _ = stop_seen.send(stopped.await.is_ok());
+            released.await.unwrap();
+            drained.store(true, std::sync::atomic::Ordering::Release);
+            let _ = done.send(());
+        });
+        let closing = tokio::spawn(async move {
+            finish_storage_servers(Some((stop, finished)), &mut servers).await;
+        });
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_secs(2), received_stop)
+                .await
+                .unwrap()
+                .unwrap(),
+            "Storage must receive an explicit stop before drain"
+        );
+        assert!(
+            !closing.is_finished(),
+            "drain completion must precede daemon completion"
+        );
+        release.send(()).unwrap();
+        worker.await.unwrap();
+        closing.await.unwrap();
+        assert!(
+            abort_seen.await.unwrap(),
+            "other servers must be aborted after Storage drains"
+        );
+    }
+
+    /// The exec-spawn error must retain its message and complete the same ordered drain.
+    #[tokio::test]
+    async fn storage_exec_start_failure_drains_before_returning_error() {
+        struct PeerDrop(Option<tokio::sync::oneshot::Sender<()>>);
+        impl Drop for PeerDrop {
+            fn drop(&mut self) {
+                let _ = self.0.take().unwrap().send(());
+            }
+        }
+        let (aborted, mut abort_seen) = tokio::sync::oneshot::channel();
+        let (entered, entered_seen) = tokio::sync::oneshot::channel();
+        let mut servers = tokio::task::JoinSet::new();
+        servers.spawn(async move {
+            let _guard = PeerDrop(Some(aborted));
+            let _ = entered.send(());
+            std::future::pending::<()>().await;
+        });
+        entered_seen.await.unwrap();
+        let (stop, stopped) = tokio::sync::oneshot::channel();
+        let (done, finished) = tokio::sync::oneshot::channel();
+        let (seen, stop_seen) = tokio::sync::oneshot::channel();
+        let (release, released) = tokio::sync::oneshot::channel();
+        let worker = tokio::spawn(async move {
+            let _ = seen.send(stopped.await.is_ok());
+            released.await.unwrap();
+            let _ = done.send(());
+        });
+        let closing = tokio::spawn(async move {
+            let mut shutdown = Some((stop, finished));
+            finish_failed_exec_start(
+                Err::<(), _>("injected spawn failure".to_owned()),
+                &mut shutdown,
+                &mut servers,
+            )
+            .await
+        });
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_secs(2), stop_seen)
+                .await
+                .unwrap()
+                .unwrap(),
+            "exec-spawn failure must send Storage stop"
+        );
+        assert!(
+            !closing.is_finished(),
+            "exec error must wait for Storage drain"
+        );
+        assert!(
+            matches!(
+                abort_seen.try_recv(),
+                Err(tokio::sync::oneshot::error::TryRecvError::Empty)
+            ),
+            "peer servers must remain alive before Storage drains"
+        );
+        release.send(()).unwrap();
+        worker.await.unwrap();
+        assert_eq!(
+            closing.await.unwrap().unwrap_err(),
+            "injected spawn failure"
+        );
+        abort_seen.await.unwrap();
+    }
+
+    /// Closed shutdown channels, including a failed Storage server, must not panic or hang.
+    #[tokio::test]
+    async fn storage_shutdown_accepts_dropped_channels() {
+        let (stop, stopped) = tokio::sync::oneshot::channel();
+        drop(stopped);
+        let (done, finished) = tokio::sync::oneshot::channel();
+        drop(done);
+        let mut servers = tokio::task::JoinSet::<()>::new();
+        tokio::time::timeout(
+            std::time::Duration::from_secs(2),
+            finish_storage_servers(Some((stop, finished)), &mut servers),
+        )
+        .await
+        .unwrap();
+        finish_storage_servers(None, &mut servers).await;
+    }
+
+    /// A safely injected server error follows the daemon's actual server-selection branch.
+    #[tokio::test]
+    async fn storage_server_failure_uses_the_suite_shutdown_path() {
+        let mut servers = tokio::task::JoinSet::new();
+        servers.spawn(async {
+            let failure: std::io::Result<()> =
+                Err(std::io::Error::other("injected accept failure"));
+            ("Storage", format!("{failure:?}"))
+        });
+        let outcome = tokio::select! {
+            outcome = stopped_server(&mut servers) => outcome,
+            () = std::future::pending::<()>() => unreachable!(),
+        };
+        assert!(outcome.unwrap_err().contains("Storage server stopped: Err"));
+        let (stop, stopped) = tokio::sync::oneshot::channel();
+        let (done, finished) = tokio::sync::oneshot::channel();
+        let worker = tokio::spawn(async move {
+            assert!(stopped.await.is_ok());
+            let _ = done.send(());
+        });
+        finish_storage_servers(Some((stop, finished)), &mut servers).await;
+        worker.await.unwrap();
     }
 
     #[test]

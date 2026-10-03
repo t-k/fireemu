@@ -2826,6 +2826,100 @@ async fn serves_over_a_real_socket() {
     server.abort();
 }
 
+/// The strict profile frames the three recorded answers as production does (lean-v5): headers, the
+/// recorded member order, a two-space layout with a final line feed and, when the request accepts
+/// it, a gzip body. The emulator profile keeps the official emulator's framing, and an answer the
+/// recordings do not cover (an error) keeps it in both.
+#[tokio::test]
+async fn strict_frames_the_recorded_identity_answers_as_production_does() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    for strict in [true, false] {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let mut shared = state();
+        shared.stateless_refresh_tokens = !strict;
+        let server = tokio::spawn(fireemu_adapter_http::server::serve(
+            listener,
+            Arc::new(shared),
+        ));
+        let send = |path: &'static str, body: &'static str, extra: &'static str| async move {
+            let mut stream = tokio::net::TcpStream::connect(addr).await.unwrap();
+            let request = format!(
+                "POST {path} HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\n{extra}Content-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            );
+            stream.write_all(request.as_bytes()).await.unwrap();
+            let mut response = Vec::new();
+            stream.read_to_end(&mut response).await.unwrap();
+            let split = response.windows(4).position(|w| w == b"\r\n\r\n").unwrap();
+            (
+                String::from_utf8_lossy(&response[..split]).to_lowercase(),
+                response[split + 4..].to_vec(),
+            )
+        };
+        let body = r#"{"email":"f@example.com","password":"hunter22"}"#;
+        // Without Accept-Encoding: a laid-out body, no gzip.
+        let (head, payload) = send(
+            "/identitytoolkit.googleapis.com/v1/accounts:signUp",
+            body,
+            "",
+        )
+        .await;
+        assert!(head.starts_with("http/1.1 200"), "{head}");
+        let text = String::from_utf8_lossy(&payload).into_owned();
+        if strict {
+            assert!(
+                head.contains("cache-control: no-cache, no-store, max-age=0, must-revalidate"),
+                "{head}"
+            );
+            assert!(
+                head.contains("x-frame-options: sameorigin")
+                    && head.contains("x-xss-protection: 0"),
+                "{head}"
+            );
+            assert!(
+                head.contains("content-type: application/json; charset=utf-8")
+                    && head.contains("charset=utf-8"),
+                "{head}"
+            );
+            assert!(
+                !head.contains("access-control-allow-origin") && !head.contains("content-encoding"),
+                "{head}"
+            );
+            assert!(
+                text.starts_with(
+                    "{\n  \"kind\": \"identitytoolkit#SignupNewUserResponse\",\n  \"idToken\""
+                ),
+                "{text}"
+            );
+            assert!(text.ends_with("}\n"), "{text}");
+        } else {
+            assert!(head.contains("access-control-allow-origin: *"), "{head}");
+            assert!(text.starts_with("{\"") && !text.contains('\n'), "{text}");
+        }
+        // With gzip accepted: strict compresses, the emulator profile does not.
+        let (head, payload) = send(
+            "/identitytoolkit.googleapis.com/v1/accounts:signUp",
+            r#"{"email":"g@example.com","password":"hunter22"}"#,
+            "Accept-Encoding: gzip\r\n",
+        )
+        .await;
+        assert_eq!(head.contains("content-encoding: gzip"), strict, "{head}");
+        assert_eq!(payload.starts_with(&[0x1f, 0x8b, 0x08]), strict);
+        // An error answer is not a recorded shape: the official emulator's framing in both.
+        let (head, _) = send(
+            "/identitytoolkit.googleapis.com/v1/accounts:signUp",
+            r#"{"email":"not-an-email","password":"hunter22"}"#,
+            "",
+        )
+        .await;
+        assert!(head.starts_with("http/1.1 400"), "{head}");
+        assert!(head.contains("access-control-allow-origin: *"), "{head}");
+        assert!(!head.contains("x-frame-options"), "{head}");
+        server.abort();
+    }
+}
+
 /// A malformed JSON body of an Identity Platform v2 route is refused with the v2 API's
 /// `400 INVALID_ARGUMENT`, as production refuses it (AUTH-CONFIG-SDK sandbox recording
 /// 2026-09-25, config/invalid#body-malformed). The parser's diagnostic in the message is a

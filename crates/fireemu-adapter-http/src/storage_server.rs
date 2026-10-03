@@ -1,7 +1,7 @@
 //! hyper glue for the Storage surface: raw bodies (uploads), CORS for the browser SDK,
 //! loopback-only origins.
 
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
 
 use bytes::Bytes;
@@ -12,11 +12,11 @@ use hyper::server::conn::http1;
 use hyper::service::service_fn;
 use hyper::{Request, Response, StatusCode};
 use hyper_util::rt::TokioIo;
-use tokio::net::TcpListener;
-use tokio::sync::Semaphore;
+use tokio::net::{TcpListener, TcpStream};
+use tokio::sync::{Notify, Semaphore};
 
 use crate::identity_toolkit::origin_is_local;
-use crate::storage::{handle, StorageRequest, StorageState};
+use crate::storage::{handle_framed_cancellable, GlobEvent, StorageRequest, StorageState};
 
 /// Maximum accepted upload body (object limit plus multipart overhead).
 pub const MAX_STORAGE_BODY_BYTES: usize = 260 * 1024 * 1024;
@@ -40,6 +40,145 @@ pub static BODY_BUDGET: BodyBudget = BodyBudget::new(DEFAULT_BODY_BUDGET_BYTES);
 /// lock. Body collection does not hold a slot, so slow clients cannot occupy the pool.
 const BLOCKING_HANDLER_LIMIT: usize = 16;
 static BLOCKING_HANDLER_SLOTS: Semaphore = Semaphore::const_new(BLOCKING_HANDLER_LIMIT);
+
+/// Bounds the list requests that carry a `matchGlob`, whose cost depends on a pattern the caller
+/// writes. A request waits for one of these slots before it takes a handler slot, and waits
+/// without holding a thread, so a flood of them leaves the handler slots to the other requests.
+const GLOB_HANDLER_LIMIT: usize = 2;
+static GLOB_HANDLER_SLOTS: Semaphore = Semaphore::const_new(GLOB_HANDLER_LIMIT);
+
+#[derive(Default)]
+struct Cancellation {
+    flag: AtomicBool,
+    notify: Notify,
+    glob_requests: AtomicUsize,
+}
+
+impl Cancellation {
+    fn cancel(&self) {
+        self.flag.store(true, Ordering::Release);
+        self.notify.notify_waiters();
+    }
+
+    fn is_cancelled(&self) -> bool {
+        self.flag.load(Ordering::Acquire)
+    }
+
+    async fn cancelled(&self) {
+        loop {
+            let notified = self.notify.notified();
+            tokio::pin!(notified);
+            notified.as_mut().enable();
+            if self.is_cancelled() {
+                return;
+            }
+            notified.await;
+        }
+    }
+}
+
+struct CancelOnDrop(Arc<Cancellation>);
+impl Drop for CancelOnDrop {
+    fn drop(&mut self) {
+        self.0.cancel();
+    }
+}
+
+/// Per-server observations of request admission, primitive work and resource cleanup.
+#[doc(hidden)]
+#[derive(Default)]
+pub struct ServerObserver {
+    pub active_globs: AtomicUsize,
+    pub queued_globs: AtomicUsize,
+    pub general_permits: AtomicUsize,
+    pub connections: AtomicUsize,
+    pub monitors: AtomicUsize,
+    pub workers: AtomicUsize,
+    pub compiled_patterns: AtomicUsize,
+    pub largest_pattern: AtomicUsize,
+    pub matcher_polls: AtomicUsize,
+    pub state_polls: AtomicUsize,
+    pub epsilon_polls: AtomicUsize,
+    pub matching_workers: AtomicUsize,
+    pub cancelled_workers: AtomicUsize,
+    pub completed_workers: AtomicUsize,
+    pub closed_connections: AtomicUsize,
+    /// A verification barrier retains worker permits after cancellation until released.
+    pub hold_cancelled_workers: AtomicBool,
+    cancelled_gate: (std::sync::Mutex<()>, std::sync::Condvar),
+}
+
+impl ServerObserver {
+    /// Free worker permits in the process-wide pools.
+    #[must_use]
+    pub fn free_permits() -> (usize, usize) {
+        (
+            GLOB_HANDLER_SLOTS.available_permits(),
+            BLOCKING_HANDLER_SLOTS.available_permits(),
+        )
+    }
+
+    /// Releases the verification barrier, including on a test's cleanup path.
+    pub fn release_cancelled_workers(&self) {
+        let _gate = self
+            .cancelled_gate
+            .0
+            .lock()
+            .expect("worker verification gate is not poisoned");
+        self.hold_cancelled_workers.store(false, Ordering::Release);
+        self.cancelled_gate.1.notify_all();
+    }
+
+    fn cancelled_worker(&self) {
+        self.cancelled_workers.fetch_add(1, Ordering::AcqRel);
+        let mut guard = self
+            .cancelled_gate
+            .0
+            .lock()
+            .expect("worker verification gate is not poisoned");
+        while self.hold_cancelled_workers.load(Ordering::Acquire) {
+            guard = self
+                .cancelled_gate
+                .1
+                .wait(guard)
+                .expect("worker verification gate is not poisoned");
+        }
+    }
+}
+
+struct CountGuard<'a>(&'a AtomicUsize);
+impl<'a> CountGuard<'a> {
+    fn new(count: &'a AtomicUsize) -> Self {
+        count.fetch_add(1, Ordering::AcqRel);
+        Self(count)
+    }
+}
+impl Drop for CountGuard<'_> {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::AcqRel);
+    }
+}
+
+struct Runtime {
+    shutdown: Arc<Cancellation>,
+    observer: Arc<ServerObserver>,
+    jobs: std::sync::Mutex<Vec<tokio::task::JoinHandle<()>>>,
+}
+
+/// Observes close readiness on its own descriptor without reading Hyper's HTTP bytes.
+async fn socket_closed(stream: &TcpStream, cancellation: &Cancellation) -> std::io::Result<()> {
+    loop {
+        let readiness = stream.ready(tokio::io::Interest::READABLE).await?;
+        if (readiness.is_read_closed() || readiness.is_error())
+            && cancellation.glob_requests.load(Ordering::Acquire) > 0
+        {
+            return Ok(());
+        }
+        // Ordinary readable data stays owned by Hyper. Readiness remains sticky, so a bounded
+        // tick prevents a busy loop while still noticing FIN behind pipelined request bytes.
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+}
 
 /// An admission budget for the request bodies buffered in memory at the same time.
 ///
@@ -241,7 +380,7 @@ const FORWARDED_HEADERS: &[&str] = &[
 ];
 
 /// The header set the official emulator's `cors` middleware exposes, verbatim.
-const EXPOSED_HEADERS: &str = "content-type,x-firebase-storage-version,X-Goog-Upload-Size-Received,x-goog-upload-url,x-goog-upload-command,x-gupload-uploadid,x-goog-upload-header-content-length,x-goog-upload-header-content-type,x-goog-upload-protocol,x-goog-upload-status,x-goog-upload-chunk-granularity,x-goog-upload-control-url";
+pub(crate) const EXPOSED_HEADERS: &str = "content-type,x-firebase-storage-version,X-Goog-Upload-Size-Received,x-goog-upload-url,x-goog-upload-command,x-gupload-uploadid,x-goog-upload-header-content-length,x-goog-upload-header-content-type,x-goog-upload-protocol,x-goog-upload-status,x-goog-upload-chunk-granularity,x-goog-upload-control-url";
 
 /// The CORS headers of an ordinary (non-preflight) response, as the official emulator's
 /// `cors({origin: true, exposedHeaders})` middleware stamps them: the origin reflected when
@@ -295,7 +434,11 @@ async fn respond(
     state: Arc<StorageState>,
     budget: &'static BodyBudget,
     req: Request<Incoming>,
+    runtime: Arc<Runtime>,
+    connection: Arc<Cancellation>,
 ) -> Result<Response<Full<Bytes>>, std::io::Error> {
+    let request_cancel = Arc::new(Cancellation::default());
+    let _request_guard = CancelOnDrop(request_cancel.clone());
     let origin = req
         .headers()
         .get("origin")
@@ -389,14 +532,36 @@ async fn respond(
     };
     // The buffer moves into the blocking handler and holds its budget charge until that
     // handler finishes, even if the connection is closed while it runs.
-    let mut buffer = match collect_body(budget, cap, declared, req.into_body()).await {
-        Ok(buffer) => buffer,
-        Err(e) => return Ok(body_error_response(e, origin.as_deref())),
+    let mut buffer = tokio::select! {
+        result = collect_body(budget, cap, declared, req.into_body()) => match result {
+            Ok(buffer) => buffer,
+            Err(e) => return Ok(body_error_response(e, origin.as_deref())),
+        },
+        () = connection.cancelled() => return Err(std::io::Error::other("storage connection closed")),
+        () = runtime.shutdown.cancelled() => return Err(std::io::Error::other("storage server stopped")),
     };
-    let permit = BLOCKING_HANDLER_SLOTS
-        .acquire()
-        .await
-        .expect("storage handler semaphore is never closed");
+    let glob_request = crate::storage::uses_match_glob(&method, &query);
+    let _cancellable = glob_request.then(|| CountGuard::new(&connection.glob_requests));
+    let queued = glob_request.then(|| CountGuard::new(&runtime.observer.queued_globs));
+    let glob_permit = if glob_request {
+        Some(tokio::select! {
+            permit = GLOB_HANDLER_SLOTS.acquire() => permit.expect("storage glob semaphore is never closed"),
+            () = connection.cancelled() => return Err(std::io::Error::other("storage connection closed")),
+            () = runtime.shutdown.cancelled() => return Err(std::io::Error::other("storage server stopped")),
+        })
+    } else {
+        None
+    };
+    drop(queued);
+    let permit = tokio::select! {
+        permit = BLOCKING_HANDLER_SLOTS.acquire() => permit.expect("storage handler semaphore is never closed"),
+        () = connection.cancelled() => return Err(std::io::Error::other("storage connection closed")),
+        () = runtime.shutdown.cancelled() => return Err(std::io::Error::other("storage server stopped")),
+    };
+    if connection.is_cancelled() || runtime.shutdown.is_cancelled() || request_cancel.is_cancelled()
+    {
+        return Err(std::io::Error::other("storage request cancelled"));
+    }
     let trace = std::env::var_os("FIREEMU_TRACE_STORAGE").is_some();
     let (trace_method, trace_path, trace_query, trace_len) = (
         method.clone(),
@@ -404,10 +569,19 @@ async fn respond(
         query.clone(),
         buffer.bytes.len(),
     );
-    let response = tokio::task::spawn_blocking(move || {
+    let (sender, receiver) = tokio::sync::oneshot::channel();
+    let work_runtime = runtime.clone();
+    let work_connection = connection.clone();
+    let job = tokio::task::spawn_blocking(move || {
+        let observer = &work_runtime.observer;
+        let _worker = CountGuard::new(&observer.workers);
+        let _general = CountGuard::new(&observer.general_permits);
+        let _glob = glob_request.then(|| CountGuard::new(&observer.active_globs));
         let _permit = permit;
+        let _glob_permit = glob_permit;
         let body = buffer.take();
-        handle(
+        let matching = std::cell::RefCell::new(None);
+        let response = handle_framed_cancellable(
             &state,
             StorageRequest {
                 method,
@@ -418,16 +592,63 @@ async fn respond(
                 app_check,
                 body,
             },
-        )
-    })
-    .await;
-    let Ok(response) = response else {
-        return Ok(handler_error_response(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            b"storage handler failed",
-            origin.as_deref(),
-            false,
-        ));
+            &|| {
+                request_cancel.is_cancelled()
+                    || work_connection.is_cancelled()
+                    || work_runtime.shutdown.is_cancelled()
+            },
+            &|event| match event {
+                GlobEvent::Compiled(pattern) => {
+                    observer
+                        .largest_pattern
+                        .fetch_max(pattern.len(), Ordering::Relaxed);
+                    observer.compiled_patterns.fetch_add(1, Ordering::AcqRel);
+                }
+                GlobEvent::MatcherStatePoll => {
+                    observer.state_polls.fetch_add(1, Ordering::Relaxed);
+                    if matching.borrow().is_none() {
+                        matching.replace(Some(CountGuard::new(&observer.matching_workers)));
+                    }
+                }
+                GlobEvent::MatcherEpsilonPoll => {
+                    observer.epsilon_polls.fetch_add(1, Ordering::Relaxed);
+                }
+                GlobEvent::MatcherPoll => {
+                    observer.matcher_polls.fetch_add(1, Ordering::Relaxed);
+                }
+                _ => {}
+            },
+        );
+        if response.is_err() {
+            observer.cancelled_worker();
+        }
+        observer.completed_workers.fetch_add(1, Ordering::AcqRel);
+        let _ = sender.send(response);
+    });
+    {
+        let mut jobs = runtime
+            .jobs
+            .lock()
+            .expect("storage worker registry is not poisoned");
+        jobs.retain(|job| !job.is_finished());
+        jobs.push(job);
+    }
+    let result = tokio::select! {
+        result = receiver => result,
+        () = connection.cancelled() => return Err(std::io::Error::other("storage connection closed")),
+        () = runtime.shutdown.cancelled() => return Err(std::io::Error::other("storage server stopped")),
+    };
+    let (response, framed) = match result {
+        Ok(Ok(response)) => response,
+        Ok(Err(_)) => return Err(std::io::Error::other("storage request cancelled")),
+        Err(_) => {
+            return Ok(handler_error_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                b"storage handler failed",
+                origin.as_deref(),
+                false,
+            ))
+        }
     };
     if trace {
         eprintln!(
@@ -448,18 +669,20 @@ async fn respond(
         // A `dropConnection` fault: the connection closes without a response.
         return Err(std::io::Error::other("fault plan: connection dropped"));
     }
-    let mut builder = cors(
-        Response::builder()
-            .status(
-                StatusCode::from_u16(response.status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR),
-            )
+    // A response the strict profile framed carries production's own header set; every other
+    // response gets the official emulator's CORS and `nosniff` stamps.
+    let mut builder = Response::builder()
+        .status(StatusCode::from_u16(response.status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR));
+    if !framed {
+        builder = cors(
             // Defence in depth: a body typed text/plain that happens to look like markup is
             // never sniffed as HTML on this origin. It does not change how an explicit
             // text/html content-type renders, so it is not a substitute for typing
             // caller-influenced bodies as text/plain -- see storage::gcs_no_such_object.
-            .header("x-content-type-options", "nosniff"),
-        origin.as_deref(),
-    );
+            builder.header("x-content-type-options", "nosniff"),
+            origin.as_deref(),
+        );
+    }
     for (k, v) in response.headers {
         builder = builder.header(k, v);
     }
@@ -487,24 +710,92 @@ pub async fn serve_storage(listener: TcpListener, state: Arc<StorageState>) -> s
     serve_storage_with_budget(listener, state, &BODY_BUDGET).await
 }
 
+/// Serves with the normal body budget until `shutdown`, then joins owned request work.
+pub async fn serve_storage_until(
+    listener: TcpListener,
+    state: Arc<StorageState>,
+    shutdown: impl std::future::Future<Output = ()>,
+) -> std::io::Result<()> {
+    serve_storage_with_shutdown(listener, state, &BODY_BUDGET, shutdown, Arc::default()).await
+}
+
 /// [`serve_storage`] against an explicit body budget (tests).
 pub async fn serve_storage_with_budget(
     listener: TcpListener,
     state: Arc<StorageState>,
     budget: &'static BodyBudget,
 ) -> std::io::Result<()> {
-    loop {
-        let (stream, _) = listener.accept().await?;
-        let state = state.clone();
-        tokio::spawn(async move {
-            let io = TokioIo::new(GracefulClose::new(
-                stream,
-                DrainBounds::for_largest_body(MAX_STORAGE_BODY_BYTES),
-            ));
-            let svc = service_fn(move |req| respond(state.clone(), budget, req));
-            let _ = http1::Builder::new().serve_connection(io, svc).await;
-        });
+    serve_storage_with_shutdown(
+        listener,
+        state,
+        budget,
+        std::future::pending::<()>(),
+        Arc::default(),
+    )
+    .await
+}
+
+/// Stops accepting, cancels requests and joins owned connections and blocking workers.
+#[doc(hidden)]
+pub async fn serve_storage_with_shutdown(
+    listener: TcpListener,
+    state: Arc<StorageState>,
+    budget: &'static BodyBudget,
+    shutdown: impl std::future::Future<Output = ()>,
+    observer: Arc<ServerObserver>,
+) -> std::io::Result<()> {
+    let runtime = Arc::new(Runtime {
+        shutdown: Arc::default(),
+        observer,
+        jobs: std::sync::Mutex::new(Vec::new()),
+    });
+    let _shutdown_guard = CancelOnDrop(runtime.shutdown.clone());
+    let mut connections = tokio::task::JoinSet::new();
+    tokio::pin!(shutdown);
+    let result = loop {
+        tokio::select! {
+            () = &mut shutdown => break Ok(()),
+            accepted = listener.accept() => {
+                let (stream, _) = match accepted { Ok(accepted) => accepted, Err(error) => break Err(error) };
+                let std_stream = match stream.into_std() { Ok(stream) => stream, Err(error) => break Err(error) };
+                let monitor = match std_stream.try_clone().and_then(TcpStream::from_std) {
+                    Ok(stream) => stream, Err(error) => break Err(error),
+                };
+                let stream = match TcpStream::from_std(std_stream) { Ok(stream) => stream, Err(error) => break Err(error) };
+                let state = state.clone();
+                let runtime = runtime.clone();
+                connections.spawn(async move {
+                    let _connection_count = CountGuard::new(&runtime.observer.connections);
+                    let _monitor_count = CountGuard::new(&runtime.observer.monitors);
+                    let cancellation = Arc::new(Cancellation::default());
+                    let _connection_guard = CancelOnDrop(cancellation.clone());
+                    let io = TokioIo::new(GracefulClose::new(stream, DrainBounds::for_largest_body(MAX_STORAGE_BODY_BYTES)));
+                    let request_runtime = runtime.clone();
+                    let request_cancel = cancellation.clone();
+                    let svc = service_fn(move |req| respond(state.clone(), budget, req, request_runtime.clone(), request_cancel.clone()));
+                    tokio::select! {
+                        _ = http1::Builder::new().serve_connection(io, svc) => {},
+                        _ = socket_closed(&monitor, &cancellation) => { runtime.observer.closed_connections.fetch_add(1, Ordering::AcqRel); },
+                        () = runtime.shutdown.cancelled() => {},
+                    }
+                });
+            },
+            _ = connections.join_next(), if !connections.is_empty() => {},
+        }
+    };
+    drop(listener);
+    runtime.shutdown.cancel();
+    while connections.join_next().await.is_some() {}
+    let jobs = std::mem::take(
+        &mut *runtime
+            .jobs
+            .lock()
+            .expect("storage worker registry is not poisoned"),
+    );
+    for job in jobs {
+        let _ = job.await;
     }
+    result
 }
 
 #[cfg(test)]

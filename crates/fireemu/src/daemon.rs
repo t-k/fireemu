@@ -1161,11 +1161,24 @@ async fn serve_suite(
             control.clone(),
         )
     );
+    let mut storage_shutdown = None;
     if let Some(listener) = storage_listener {
-        spawn_server!(
-            "Storage",
-            fireemu_adapter_http::storage_server::serve_storage(listener, storage.clone())
-        );
+        let (stop, stopped) = tokio::sync::oneshot::channel();
+        let (drained, drain_finished) = tokio::sync::oneshot::channel();
+        storage_shutdown = Some((stop, drain_finished));
+        let storage_for_server = storage.clone();
+        spawn_server!("Storage", async move {
+            let result = fireemu_adapter_http::storage_server::serve_storage_until(
+                listener,
+                storage_for_server,
+                async {
+                    let _ = stopped.await;
+                },
+            )
+            .await;
+            let _ = drained.send(());
+            result
+        });
     }
     if let Some(listener) = hub_listener {
         spawn_server!("Emulator Hub", hub::serve(listener, hub_state.clone()));
@@ -1402,6 +1415,12 @@ async fn serve_suite(
         runtime.shutdown().await;
     }
     pubsub.shutdown_push_dispatcher().await;
+    // Storage cancels and joins its synchronous workers before the remaining servers are
+    // aborted: dropping an accept future alone cannot wait for spawn_blocking work.
+    if let Some((stop, drain_finished)) = storage_shutdown {
+        let _ = stop.send(());
+        let _ = drain_finished.await;
+    }
     servers.abort_all();
     while servers.join_next().await.is_some() {}
     // Discovery is retired as an explicit, ordered step of shutdown, while the runtime is

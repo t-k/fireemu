@@ -5,7 +5,7 @@ use std::collections::BTreeMap;
 use fireemu_core_storage::hash::{base64, crc32c, hex, md5};
 use fireemu_core_storage::name::{BucketName, NameError, ObjectName};
 use fireemu_core_storage::store::{
-    MetadataPatch, NewMetadata, Precondition, StorageError, StorageEvent, StorageState,
+    MetadataPatch, NewMetadata, Precondition, StorageError, StorageEvent, StorageState, UploadId,
 };
 use fireemu_core_types::time::LogicalInstant;
 
@@ -347,6 +347,42 @@ fn listing_uses_the_namespace_with_prefix_and_delimiter() {
     let names: Vec<&str> = page2.items.iter().map(|m| m.name.as_str()).collect();
     assert_eq!(names, vec!["dir/z.txt", "dirty.txt"]);
     assert!(page2.next_page_token.is_none());
+}
+
+/// The checksums of the bytes a session holds (the JSON API's `x-goog-running-hash` and
+/// `x-range-md5`) are the CRC32C and MD5 of exactly those bytes, whatever the chunking.
+#[test]
+fn a_session_reports_the_checksums_of_the_bytes_it_holds() {
+    let mut s = StorageState::new(3);
+    let id = s
+        .begin_upload(
+            &bucket(),
+            &name("hashes.bin"),
+            NewMetadata::default(),
+            Precondition::default(),
+            None,
+            t(0),
+        )
+        .unwrap();
+    assert_eq!(
+        s.upload_running_hashes(&id, t(0)).unwrap(),
+        (crc32c(b""), md5(b""))
+    );
+    s.upload_chunk(&id, 0, b"123456789", false, t(1)).unwrap();
+    // The recorded check value of CRC32C and the RFC 1321 digest of the same bytes.
+    assert_eq!(
+        s.upload_running_hashes(&id, t(1)).unwrap(),
+        (0xE306_9283, md5(b"123456789"))
+    );
+    s.upload_chunk(&id, 9, b"abc", false, t(2)).unwrap();
+    assert_eq!(
+        s.upload_running_hashes(&id, t(2)).unwrap(),
+        (crc32c(b"123456789abc"), md5(b"123456789abc"))
+    );
+    assert_eq!(
+        s.upload_running_hashes(&UploadId::from_str_unchecked("nope"), t(2)),
+        Err(StorageError::UploadNotFound)
+    );
 }
 
 #[test]

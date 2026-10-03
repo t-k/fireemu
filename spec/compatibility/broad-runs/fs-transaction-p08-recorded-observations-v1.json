@@ -1,0 +1,2231 @@
+{
+  "schemaVersion": 1,
+  "kind": "fs-transaction-recorded-observations-v1",
+  "parent": "FS-TRANSACTION",
+  "condition": "FS-TRANSACTION/failed-commit-and-rollback",
+  "coverage": "PARTIAL",
+  "authorizesProduction": false,
+  "promotionReady": false,
+  "decodedSemanticsValidated": true,
+  "rawRestWireLayoutValidated": false,
+  "postRefusalMissingDocumentReadValidated": false,
+  "normalization": {
+    "declaredVolatileValues": [
+      "nonce",
+      "ownerId",
+      "issued transaction token values",
+      "project identifier",
+      "absolute timestamp values"
+    ],
+    "retained": [
+      "native recipe sequence and token roles",
+      "HTTP and gRPC codes",
+      "full diagnostics",
+      "document states",
+      "timestamp paths, relative ranks and equality",
+      "REST timestamp precision and protobuf member sets",
+      "token termination and cleanup"
+    ],
+    "limits": "Project identifiers are redacted for publication only; full diagnostic comparison uses the existing producer before publication redaction. Acquisition allow sets are not production parity expectations."
+  },
+  "remainingBoundaries": [
+    "Raw REST bodyBytes, content-length and received member-order layout were not retained; decoded semantic equality is partial proof.",
+    "No post-refusal native readback of the missing document m was recorded; its typed absence is observed at setup only.",
+    "Four comparisons against a final current source-bound normal artifact are pending, including every step and cleanup in both profiles.",
+    "The official emulator gate, complete condition approval, all 18 frozen conditions and parent closure review remain open."
+  ],
+  "corpora": [
+    {
+      "program": "FS-TRANSACTION-P08-FAILED-COMMIT",
+      "table": "tools/compat-broad/fs-write-txn/fs_txn_table_p08.py",
+      "tableSourceDigest": "7379ce5f1a9fd23d1d54dcfdef2e8705b315d72fe95547d105894d3d5f7004c5",
+      "corpusDigest": "1dc1d44eca4b99a23d8f3b480eb9b8d71aec4ef0894509b149fa12354c9d92bc",
+      "sourceCommit": "181b00247bfc2456c687c45ab213d5050d069791",
+      "freezeSha256": "31d7df5ad3a8c5e4b539f86944b034768deb2ed2f6e8d15c8a09bfa750d6540b",
+      "packetSha256": "83f7d3f8cf3fb74d5260da1bdc6c1194add8e9f0837530850592f16779a5fec7",
+      "originalRunnerSha256": "abb30d3fa45306b22301208c3aa27bf4b4c6822aa33889b882796eac4aa1e64e",
+      "agree": true,
+      "recipes": [
+        {
+          "id": "setup/absence-a",
+          "transport": "grpc",
+          "rpc": "GetDocument",
+          "role": "control",
+          "caseId": null,
+          "document": "a",
+          "tokenInput": null,
+          "tokenOutput": null,
+          "writes": [],
+          "allow": [
+            5
+          ],
+          "deadlineMs": 10000
+        },
+        {
+          "id": "setup/absence-m",
+          "transport": "grpc",
+          "rpc": "GetDocument",
+          "role": "control",
+          "caseId": null,
+          "document": "m",
+          "tokenInput": null,
+          "tokenOutput": null,
+          "writes": [],
+          "allow": [
+            5
+          ],
+          "deadlineMs": 10000
+        },
+        {
+          "id": "setup/create-a",
+          "transport": "grpc",
+          "rpc": "Commit",
+          "role": "control",
+          "caseId": null,
+          "document": null,
+          "tokenInput": null,
+          "tokenOutput": null,
+          "writes": [
+            {
+              "document": "a",
+              "state": "created",
+              "exists": false
+            }
+          ],
+          "allow": [
+            0
+          ],
+          "deadlineMs": 10000
+        },
+        {
+          "id": "rest/a/begin",
+          "transport": "rest",
+          "rpc": "BeginTransaction",
+          "role": "control",
+          "caseId": null,
+          "document": null,
+          "tokenInput": null,
+          "tokenOutput": "rest-a",
+          "writes": [],
+          "allow": [
+            0
+          ],
+          "deadlineMs": 10000
+        },
+        {
+          "id": "rest/a/read-a",
+          "transport": "rest",
+          "rpc": "GetDocument",
+          "role": "control",
+          "caseId": null,
+          "document": "a",
+          "tokenInput": "rest-a",
+          "tokenOutput": null,
+          "writes": [],
+          "allow": [
+            0
+          ],
+          "deadlineMs": 10000
+        },
+        {
+          "id": "rest/a/fail-commit",
+          "transport": "rest",
+          "rpc": "Commit",
+          "role": "observation",
+          "caseId": "rest/a-fail-commit",
+          "document": null,
+          "tokenInput": "rest-a",
+          "tokenOutput": null,
+          "writes": [
+            {
+              "document": "a",
+              "state": "held",
+              "exists": true
+            },
+            {
+              "document": "m",
+              "state": "held",
+              "exists": true
+            }
+          ],
+          "allow": [
+            3,
+            5,
+            9,
+            10
+          ],
+          "deadlineMs": 10000
+        },
+        {
+          "id": "rest/a/plain-read-a",
+          "transport": "rest",
+          "rpc": "GetDocument",
+          "role": "observation",
+          "caseId": "rest/a-plain-read",
+          "document": "a",
+          "tokenInput": null,
+          "tokenOutput": null,
+          "writes": [],
+          "allow": [
+            0
+          ],
+          "deadlineMs": 10000
+        },
+        {
+          "id": "rest/a/same-token-read-a",
+          "transport": "rest",
+          "rpc": "GetDocument",
+          "role": "observation",
+          "caseId": "rest/a-same-token-read",
+          "document": "a",
+          "tokenInput": "rest-a",
+          "tokenOutput": null,
+          "writes": [],
+          "allow": [
+            0,
+            3,
+            5,
+            9,
+            10
+          ],
+          "deadlineMs": 10000
+        },
+        {
+          "id": "rest/a/writer",
+          "transport": "rest",
+          "rpc": "Commit",
+          "role": "outside-writer",
+          "caseId": "rest/a-writer",
+          "document": null,
+          "tokenInput": null,
+          "tokenOutput": null,
+          "writes": [
+            {
+              "document": "a",
+              "state": "rest-a-writer",
+              "exists": true
+            }
+          ],
+          "allow": [
+            0,
+            10
+          ],
+          "deadlineMs": 30000
+        },
+        {
+          "id": "rest/a/corrected-commit",
+          "transport": "rest",
+          "rpc": "Commit",
+          "role": "observation",
+          "caseId": "rest/a-corrected-commit",
+          "document": null,
+          "tokenInput": "rest-a",
+          "tokenOutput": null,
+          "writes": [
+            {
+              "document": "a",
+              "state": "rest-a-corrected",
+              "exists": true
+            }
+          ],
+          "allow": [
+            0,
+            3,
+            5,
+            9,
+            10
+          ],
+          "deadlineMs": 10000
+        },
+        {
+          "id": "rest/a/rollback",
+          "transport": "rest",
+          "rpc": "Rollback",
+          "role": "observation",
+          "caseId": "rest/a-rollback",
+          "document": null,
+          "tokenInput": "rest-a",
+          "tokenOutput": null,
+          "writes": [],
+          "allow": [
+            0,
+            3,
+            5,
+            9,
+            10
+          ],
+          "deadlineMs": 10000
+        },
+        {
+          "id": "rest/a/rollback-again",
+          "transport": "rest",
+          "rpc": "Rollback",
+          "role": "observation",
+          "caseId": "rest/a-rollback-again",
+          "document": null,
+          "tokenInput": "rest-a",
+          "tokenOutput": null,
+          "writes": [],
+          "allow": [
+            0,
+            3,
+            5,
+            9,
+            10
+          ],
+          "deadlineMs": 10000
+        },
+        {
+          "id": "rest/a/post-read-a",
+          "transport": "rest",
+          "rpc": "GetDocument",
+          "role": "post-state",
+          "caseId": null,
+          "document": "a",
+          "tokenInput": null,
+          "tokenOutput": null,
+          "writes": [],
+          "allow": [
+            0
+          ],
+          "deadlineMs": 10000
+        },
+        {
+          "id": "rest/b/begin",
+          "transport": "rest",
+          "rpc": "BeginTransaction",
+          "role": "control",
+          "caseId": null,
+          "document": null,
+          "tokenInput": null,
+          "tokenOutput": "rest-b",
+          "writes": [],
+          "allow": [
+            0
+          ],
+          "deadlineMs": 10000
+        },
+        {
+          "id": "rest/b/read-a",
+          "transport": "rest",
+          "rpc": "GetDocument",
+          "role": "control",
+          "caseId": null,
+          "document": "a",
+          "tokenInput": "rest-b",
+          "tokenOutput": null,
+          "writes": [],
+          "allow": [
+            0
+          ],
+          "deadlineMs": 10000
+        },
+        {
+          "id": "rest/b/fail-commit",
+          "transport": "rest",
+          "rpc": "Commit",
+          "role": "observation",
+          "caseId": "rest/b-fail-commit",
+          "document": null,
+          "tokenInput": "rest-b",
+          "tokenOutput": null,
+          "writes": [
+            {
+              "document": "a",
+              "state": "held",
+              "exists": true
+            },
+            {
+              "document": "m",
+              "state": "held",
+              "exists": true
+            }
+          ],
+          "allow": [
+            3,
+            5,
+            9,
+            10
+          ],
+          "deadlineMs": 10000
+        },
+        {
+          "id": "rest/b/rollback",
+          "transport": "rest",
+          "rpc": "Rollback",
+          "role": "observation",
+          "caseId": "rest/b-rollback",
+          "document": null,
+          "tokenInput": "rest-b",
+          "tokenOutput": null,
+          "writes": [],
+          "allow": [
+            0,
+            3,
+            5,
+            9,
+            10
+          ],
+          "deadlineMs": 10000
+        },
+        {
+          "id": "rest/b/writer",
+          "transport": "rest",
+          "rpc": "Commit",
+          "role": "outside-writer",
+          "caseId": "rest/b-writer",
+          "document": null,
+          "tokenInput": null,
+          "tokenOutput": null,
+          "writes": [
+            {
+              "document": "a",
+              "state": "rest-b-writer",
+              "exists": true
+            }
+          ],
+          "allow": [
+            0,
+            10
+          ],
+          "deadlineMs": 30000
+        },
+        {
+          "id": "rest/b/rollback-again",
+          "transport": "rest",
+          "rpc": "Rollback",
+          "role": "observation",
+          "caseId": "rest/b-rollback-again",
+          "document": null,
+          "tokenInput": "rest-b",
+          "tokenOutput": null,
+          "writes": [],
+          "allow": [
+            0,
+            3,
+            5,
+            9,
+            10
+          ],
+          "deadlineMs": 10000
+        },
+        {
+          "id": "rest/b/post-read-a",
+          "transport": "rest",
+          "rpc": "GetDocument",
+          "role": "post-state",
+          "caseId": null,
+          "document": "a",
+          "tokenInput": null,
+          "tokenOutput": null,
+          "writes": [],
+          "allow": [
+            0
+          ],
+          "deadlineMs": 10000
+        },
+        {
+          "id": "rest/c/begin",
+          "transport": "rest",
+          "rpc": "BeginTransaction",
+          "role": "control",
+          "caseId": null,
+          "document": null,
+          "tokenInput": null,
+          "tokenOutput": "rest-c",
+          "writes": [],
+          "allow": [
+            0
+          ],
+          "deadlineMs": 10000
+        },
+        {
+          "id": "rest/c/read-a",
+          "transport": "rest",
+          "rpc": "GetDocument",
+          "role": "control",
+          "caseId": null,
+          "document": "a",
+          "tokenInput": "rest-c",
+          "tokenOutput": null,
+          "writes": [],
+          "allow": [
+            0
+          ],
+          "deadlineMs": 10000
+        },
+        {
+          "id": "rest/c/commit",
+          "transport": "rest",
+          "rpc": "Commit",
+          "role": "observation",
+          "caseId": "rest/c-commit",
+          "document": null,
+          "tokenInput": "rest-c",
+          "tokenOutput": null,
+          "writes": [
+            {
+              "document": "a",
+              "state": "rest-c-commit",
+              "exists": true
+            }
+          ],
+          "allow": [
+            0
+          ],
+          "deadlineMs": 10000
+        },
+        {
+          "id": "rest/c/rollback-after-commit",
+          "transport": "rest",
+          "rpc": "Rollback",
+          "role": "observation",
+          "caseId": "rest/c-rollback-after-commit",
+          "document": null,
+          "tokenInput": "rest-c",
+          "tokenOutput": null,
+          "writes": [],
+          "allow": [
+            0,
+            10
+          ],
+          "deadlineMs": 10000
+        },
+        {
+          "id": "grpc/a/begin",
+          "transport": "grpc",
+          "rpc": "BeginTransaction",
+          "role": "control",
+          "caseId": null,
+          "document": null,
+          "tokenInput": null,
+          "tokenOutput": "grpc-a",
+          "writes": [],
+          "allow": [
+            0
+          ],
+          "deadlineMs": 10000
+        },
+        {
+          "id": "grpc/a/read-a",
+          "transport": "grpc",
+          "rpc": "GetDocument",
+          "role": "control",
+          "caseId": null,
+          "document": "a",
+          "tokenInput": "grpc-a",
+          "tokenOutput": null,
+          "writes": [],
+          "allow": [
+            0
+          ],
+          "deadlineMs": 10000
+        },
+        {
+          "id": "grpc/a/fail-commit",
+          "transport": "grpc",
+          "rpc": "Commit",
+          "role": "observation",
+          "caseId": "grpc/a-fail-commit",
+          "document": null,
+          "tokenInput": "grpc-a",
+          "tokenOutput": null,
+          "writes": [
+            {
+              "document": "a",
+              "state": "held",
+              "exists": true
+            },
+            {
+              "document": "m",
+              "state": "held",
+              "exists": true
+            }
+          ],
+          "allow": [
+            3,
+            5,
+            9,
+            10
+          ],
+          "deadlineMs": 10000
+        },
+        {
+          "id": "grpc/a/plain-read-a",
+          "transport": "grpc",
+          "rpc": "GetDocument",
+          "role": "observation",
+          "caseId": "grpc/a-plain-read",
+          "document": "a",
+          "tokenInput": null,
+          "tokenOutput": null,
+          "writes": [],
+          "allow": [
+            0
+          ],
+          "deadlineMs": 10000
+        },
+        {
+          "id": "grpc/a/same-token-read-a",
+          "transport": "grpc",
+          "rpc": "GetDocument",
+          "role": "observation",
+          "caseId": "grpc/a-same-token-read",
+          "document": "a",
+          "tokenInput": "grpc-a",
+          "tokenOutput": null,
+          "writes": [],
+          "allow": [
+            0,
+            3,
+            5,
+            9,
+            10
+          ],
+          "deadlineMs": 10000
+        },
+        {
+          "id": "grpc/a/writer",
+          "transport": "grpc",
+          "rpc": "Commit",
+          "role": "outside-writer",
+          "caseId": "grpc/a-writer",
+          "document": null,
+          "tokenInput": null,
+          "tokenOutput": null,
+          "writes": [
+            {
+              "document": "a",
+              "state": "grpc-a-writer",
+              "exists": true
+            }
+          ],
+          "allow": [
+            0,
+            10
+          ],
+          "deadlineMs": 30000
+        },
+        {
+          "id": "grpc/a/corrected-commit",
+          "transport": "grpc",
+          "rpc": "Commit",
+          "role": "observation",
+          "caseId": "grpc/a-corrected-commit",
+          "document": null,
+          "tokenInput": "grpc-a",
+          "tokenOutput": null,
+          "writes": [
+            {
+              "document": "a",
+              "state": "grpc-a-corrected",
+              "exists": true
+            }
+          ],
+          "allow": [
+            0,
+            3,
+            5,
+            9,
+            10
+          ],
+          "deadlineMs": 10000
+        },
+        {
+          "id": "grpc/a/rollback",
+          "transport": "grpc",
+          "rpc": "Rollback",
+          "role": "observation",
+          "caseId": "grpc/a-rollback",
+          "document": null,
+          "tokenInput": "grpc-a",
+          "tokenOutput": null,
+          "writes": [],
+          "allow": [
+            0,
+            3,
+            5,
+            9,
+            10
+          ],
+          "deadlineMs": 10000
+        },
+        {
+          "id": "grpc/a/rollback-again",
+          "transport": "grpc",
+          "rpc": "Rollback",
+          "role": "observation",
+          "caseId": "grpc/a-rollback-again",
+          "document": null,
+          "tokenInput": "grpc-a",
+          "tokenOutput": null,
+          "writes": [],
+          "allow": [
+            0,
+            3,
+            5,
+            9,
+            10
+          ],
+          "deadlineMs": 10000
+        },
+        {
+          "id": "grpc/a/post-read-a",
+          "transport": "grpc",
+          "rpc": "GetDocument",
+          "role": "post-state",
+          "caseId": null,
+          "document": "a",
+          "tokenInput": null,
+          "tokenOutput": null,
+          "writes": [],
+          "allow": [
+            0
+          ],
+          "deadlineMs": 10000
+        },
+        {
+          "id": "grpc/b/begin",
+          "transport": "grpc",
+          "rpc": "BeginTransaction",
+          "role": "control",
+          "caseId": null,
+          "document": null,
+          "tokenInput": null,
+          "tokenOutput": "grpc-b",
+          "writes": [],
+          "allow": [
+            0
+          ],
+          "deadlineMs": 10000
+        },
+        {
+          "id": "grpc/b/read-a",
+          "transport": "grpc",
+          "rpc": "GetDocument",
+          "role": "control",
+          "caseId": null,
+          "document": "a",
+          "tokenInput": "grpc-b",
+          "tokenOutput": null,
+          "writes": [],
+          "allow": [
+            0
+          ],
+          "deadlineMs": 10000
+        },
+        {
+          "id": "grpc/b/fail-commit",
+          "transport": "grpc",
+          "rpc": "Commit",
+          "role": "observation",
+          "caseId": "grpc/b-fail-commit",
+          "document": null,
+          "tokenInput": "grpc-b",
+          "tokenOutput": null,
+          "writes": [
+            {
+              "document": "a",
+              "state": "held",
+              "exists": true
+            },
+            {
+              "document": "m",
+              "state": "held",
+              "exists": true
+            }
+          ],
+          "allow": [
+            3,
+            5,
+            9,
+            10
+          ],
+          "deadlineMs": 10000
+        },
+        {
+          "id": "grpc/b/rollback",
+          "transport": "grpc",
+          "rpc": "Rollback",
+          "role": "observation",
+          "caseId": "grpc/b-rollback",
+          "document": null,
+          "tokenInput": "grpc-b",
+          "tokenOutput": null,
+          "writes": [],
+          "allow": [
+            0,
+            3,
+            5,
+            9,
+            10
+          ],
+          "deadlineMs": 10000
+        },
+        {
+          "id": "grpc/b/writer",
+          "transport": "grpc",
+          "rpc": "Commit",
+          "role": "outside-writer",
+          "caseId": "grpc/b-writer",
+          "document": null,
+          "tokenInput": null,
+          "tokenOutput": null,
+          "writes": [
+            {
+              "document": "a",
+              "state": "grpc-b-writer",
+              "exists": true
+            }
+          ],
+          "allow": [
+            0,
+            10
+          ],
+          "deadlineMs": 30000
+        },
+        {
+          "id": "grpc/b/rollback-again",
+          "transport": "grpc",
+          "rpc": "Rollback",
+          "role": "observation",
+          "caseId": "grpc/b-rollback-again",
+          "document": null,
+          "tokenInput": "grpc-b",
+          "tokenOutput": null,
+          "writes": [],
+          "allow": [
+            0,
+            3,
+            5,
+            9,
+            10
+          ],
+          "deadlineMs": 10000
+        },
+        {
+          "id": "grpc/b/post-read-a",
+          "transport": "grpc",
+          "rpc": "GetDocument",
+          "role": "post-state",
+          "caseId": null,
+          "document": "a",
+          "tokenInput": null,
+          "tokenOutput": null,
+          "writes": [],
+          "allow": [
+            0
+          ],
+          "deadlineMs": 10000
+        },
+        {
+          "id": "grpc/c/begin",
+          "transport": "grpc",
+          "rpc": "BeginTransaction",
+          "role": "control",
+          "caseId": null,
+          "document": null,
+          "tokenInput": null,
+          "tokenOutput": "grpc-c",
+          "writes": [],
+          "allow": [
+            0
+          ],
+          "deadlineMs": 10000
+        },
+        {
+          "id": "grpc/c/read-a",
+          "transport": "grpc",
+          "rpc": "GetDocument",
+          "role": "control",
+          "caseId": null,
+          "document": "a",
+          "tokenInput": "grpc-c",
+          "tokenOutput": null,
+          "writes": [],
+          "allow": [
+            0
+          ],
+          "deadlineMs": 10000
+        },
+        {
+          "id": "grpc/c/commit",
+          "transport": "grpc",
+          "rpc": "Commit",
+          "role": "observation",
+          "caseId": "grpc/c-commit",
+          "document": null,
+          "tokenInput": "grpc-c",
+          "tokenOutput": null,
+          "writes": [
+            {
+              "document": "a",
+              "state": "grpc-c-commit",
+              "exists": true
+            }
+          ],
+          "allow": [
+            0
+          ],
+          "deadlineMs": 10000
+        },
+        {
+          "id": "grpc/c/rollback-after-commit",
+          "transport": "grpc",
+          "rpc": "Rollback",
+          "role": "observation",
+          "caseId": "grpc/c-rollback-after-commit",
+          "document": null,
+          "tokenInput": "grpc-c",
+          "tokenOutput": null,
+          "writes": [],
+          "allow": [
+            0,
+            10
+          ],
+          "deadlineMs": 10000
+        }
+      ],
+      "semantics": {
+        "program": "FS-TRANSACTION-P08-FAILED-COMMIT",
+        "corpusDigest": "1dc1d44eca4b99a23d8f3b480eb9b8d71aec4ef0894509b149fa12354c9d92bc",
+        "steps": {
+          "setup/absence-a": {
+            "transport": "grpc",
+            "rpc": "GetDocument",
+            "caseId": null,
+            "code": 5,
+            "http": null,
+            "details": "Document \"projects/<project>/databases/(default)/documents/oracle/<nonce>/txn-p08/a\" not found.",
+            "read": {
+              "site": "setup/absence-a",
+              "code": 5,
+              "state": null
+            },
+            "versions": {}
+          },
+          "setup/absence-m": {
+            "transport": "grpc",
+            "rpc": "GetDocument",
+            "caseId": null,
+            "code": 5,
+            "http": null,
+            "details": "Document \"projects/<project>/databases/(default)/documents/oracle/<nonce>/txn-p08/m\" not found.",
+            "read": {
+              "site": "setup/absence-m",
+              "code": 5,
+              "state": null
+            },
+            "versions": {}
+          },
+          "setup/create-a": {
+            "transport": "grpc",
+            "rpc": "Commit",
+            "caseId": null,
+            "code": 0,
+            "http": null,
+            "details": "",
+            "read": null,
+            "versions": {
+              "/commitTime": {
+                "rank": 0,
+                "layout": {
+                  "members": [
+                    "nanos",
+                    "seconds"
+                  ]
+                }
+              },
+              "/writeResults/0/updateTime": {
+                "rank": 0,
+                "layout": {
+                  "members": [
+                    "nanos",
+                    "seconds"
+                  ]
+                }
+              }
+            }
+          },
+          "rest/a/begin": {
+            "transport": "rest",
+            "rpc": "BeginTransaction",
+            "caseId": null,
+            "code": 0,
+            "http": 200,
+            "details": "",
+            "read": null,
+            "versions": {}
+          },
+          "rest/a/read-a": {
+            "transport": "rest",
+            "rpc": "GetDocument",
+            "caseId": null,
+            "code": 0,
+            "http": 200,
+            "details": "",
+            "read": {
+              "site": "rest/a/read-a",
+              "code": 0,
+              "state": "created"
+            },
+            "versions": {
+              "/createTime": {
+                "rank": 0,
+                "layout": {
+                  "precision": 6
+                }
+              },
+              "/updateTime": {
+                "rank": 0,
+                "layout": {
+                  "precision": 6
+                }
+              }
+            }
+          },
+          "rest/a/fail-commit": {
+            "transport": "rest",
+            "rpc": "Commit",
+            "caseId": "rest/a-fail-commit",
+            "code": 5,
+            "http": 404,
+            "details": "No document to update: projects/<project>/databases/(default)/documents/oracle/<nonce>/txn-p08/m",
+            "read": null,
+            "versions": {}
+          },
+          "rest/a/plain-read-a": {
+            "transport": "rest",
+            "rpc": "GetDocument",
+            "caseId": "rest/a-plain-read",
+            "code": 0,
+            "http": 200,
+            "details": "",
+            "read": {
+              "site": "rest/a/plain-read-a",
+              "code": 0,
+              "state": "created"
+            },
+            "versions": {
+              "/createTime": {
+                "rank": 0,
+                "layout": {
+                  "precision": 6
+                }
+              },
+              "/updateTime": {
+                "rank": 0,
+                "layout": {
+                  "precision": 6
+                }
+              }
+            }
+          },
+          "rest/a/same-token-read-a": {
+            "transport": "rest",
+            "rpc": "GetDocument",
+            "caseId": "rest/a-same-token-read",
+            "code": 3,
+            "http": 400,
+            "details": "The referenced transaction has expired or is no longer valid.",
+            "read": {
+              "site": "rest/a/same-token-read-a",
+              "code": 3,
+              "state": null
+            },
+            "versions": {}
+          },
+          "rest/a/writer": {
+            "transport": "rest",
+            "rpc": "Commit",
+            "caseId": "rest/a-writer",
+            "code": 0,
+            "http": 200,
+            "details": "",
+            "read": null,
+            "versions": {
+              "/commitTime": {
+                "rank": 1,
+                "layout": {
+                  "precision": 6
+                }
+              },
+              "/writeResults/0/updateTime": {
+                "rank": 1,
+                "layout": {
+                  "precision": 6
+                }
+              }
+            }
+          },
+          "rest/a/corrected-commit": {
+            "transport": "rest",
+            "rpc": "Commit",
+            "caseId": "rest/a-corrected-commit",
+            "code": 3,
+            "http": 400,
+            "details": "The referenced transaction has expired or is no longer valid.",
+            "read": null,
+            "versions": {}
+          },
+          "rest/a/rollback": {
+            "transport": "rest",
+            "rpc": "Rollback",
+            "caseId": "rest/a-rollback",
+            "code": 0,
+            "http": 200,
+            "details": "",
+            "read": null,
+            "versions": {}
+          },
+          "rest/a/rollback-again": {
+            "transport": "rest",
+            "rpc": "Rollback",
+            "caseId": "rest/a-rollback-again",
+            "code": 0,
+            "http": 200,
+            "details": "",
+            "read": null,
+            "versions": {}
+          },
+          "rest/a/post-read-a": {
+            "transport": "rest",
+            "rpc": "GetDocument",
+            "caseId": null,
+            "code": 0,
+            "http": 200,
+            "details": "",
+            "read": {
+              "site": "rest/a/post-read-a",
+              "code": 0,
+              "state": "rest-a-writer"
+            },
+            "versions": {
+              "/createTime": {
+                "rank": 0,
+                "layout": {
+                  "precision": 6
+                }
+              },
+              "/updateTime": {
+                "rank": 1,
+                "layout": {
+                  "precision": 6
+                }
+              }
+            }
+          },
+          "rest/b/begin": {
+            "transport": "rest",
+            "rpc": "BeginTransaction",
+            "caseId": null,
+            "code": 0,
+            "http": 200,
+            "details": "",
+            "read": null,
+            "versions": {}
+          },
+          "rest/b/read-a": {
+            "transport": "rest",
+            "rpc": "GetDocument",
+            "caseId": null,
+            "code": 0,
+            "http": 200,
+            "details": "",
+            "read": {
+              "site": "rest/b/read-a",
+              "code": 0,
+              "state": "rest-a-writer"
+            },
+            "versions": {
+              "/createTime": {
+                "rank": 0,
+                "layout": {
+                  "precision": 6
+                }
+              },
+              "/updateTime": {
+                "rank": 1,
+                "layout": {
+                  "precision": 6
+                }
+              }
+            }
+          },
+          "rest/b/fail-commit": {
+            "transport": "rest",
+            "rpc": "Commit",
+            "caseId": "rest/b-fail-commit",
+            "code": 5,
+            "http": 404,
+            "details": "No document to update: projects/<project>/databases/(default)/documents/oracle/<nonce>/txn-p08/m",
+            "read": null,
+            "versions": {}
+          },
+          "rest/b/rollback": {
+            "transport": "rest",
+            "rpc": "Rollback",
+            "caseId": "rest/b-rollback",
+            "code": 0,
+            "http": 200,
+            "details": "",
+            "read": null,
+            "versions": {}
+          },
+          "rest/b/writer": {
+            "transport": "rest",
+            "rpc": "Commit",
+            "caseId": "rest/b-writer",
+            "code": 0,
+            "http": 200,
+            "details": "",
+            "read": null,
+            "versions": {
+              "/commitTime": {
+                "rank": 2,
+                "layout": {
+                  "precision": 6
+                }
+              },
+              "/writeResults/0/updateTime": {
+                "rank": 2,
+                "layout": {
+                  "precision": 6
+                }
+              }
+            }
+          },
+          "rest/b/rollback-again": {
+            "transport": "rest",
+            "rpc": "Rollback",
+            "caseId": "rest/b-rollback-again",
+            "code": 0,
+            "http": 200,
+            "details": "",
+            "read": null,
+            "versions": {}
+          },
+          "rest/b/post-read-a": {
+            "transport": "rest",
+            "rpc": "GetDocument",
+            "caseId": null,
+            "code": 0,
+            "http": 200,
+            "details": "",
+            "read": {
+              "site": "rest/b/post-read-a",
+              "code": 0,
+              "state": "rest-b-writer"
+            },
+            "versions": {
+              "/createTime": {
+                "rank": 0,
+                "layout": {
+                  "precision": 6
+                }
+              },
+              "/updateTime": {
+                "rank": 2,
+                "layout": {
+                  "precision": 6
+                }
+              }
+            }
+          },
+          "rest/c/begin": {
+            "transport": "rest",
+            "rpc": "BeginTransaction",
+            "caseId": null,
+            "code": 0,
+            "http": 200,
+            "details": "",
+            "read": null,
+            "versions": {}
+          },
+          "rest/c/read-a": {
+            "transport": "rest",
+            "rpc": "GetDocument",
+            "caseId": null,
+            "code": 0,
+            "http": 200,
+            "details": "",
+            "read": {
+              "site": "rest/c/read-a",
+              "code": 0,
+              "state": "rest-b-writer"
+            },
+            "versions": {
+              "/createTime": {
+                "rank": 0,
+                "layout": {
+                  "precision": 6
+                }
+              },
+              "/updateTime": {
+                "rank": 2,
+                "layout": {
+                  "precision": 6
+                }
+              }
+            }
+          },
+          "rest/c/commit": {
+            "transport": "rest",
+            "rpc": "Commit",
+            "caseId": "rest/c-commit",
+            "code": 0,
+            "http": 200,
+            "details": "",
+            "read": null,
+            "versions": {
+              "/commitTime": {
+                "rank": 3,
+                "layout": {
+                  "precision": 6
+                }
+              },
+              "/writeResults/0/updateTime": {
+                "rank": 3,
+                "layout": {
+                  "precision": 6
+                }
+              }
+            }
+          },
+          "rest/c/rollback-after-commit": {
+            "transport": "rest",
+            "rpc": "Rollback",
+            "caseId": "rest/c-rollback-after-commit",
+            "code": 10,
+            "http": 409,
+            "details": "The referenced transaction has expired or is no longer valid.",
+            "read": null,
+            "versions": {}
+          },
+          "grpc/a/begin": {
+            "transport": "grpc",
+            "rpc": "BeginTransaction",
+            "caseId": null,
+            "code": 0,
+            "http": null,
+            "details": "",
+            "read": null,
+            "versions": {}
+          },
+          "grpc/a/read-a": {
+            "transport": "grpc",
+            "rpc": "GetDocument",
+            "caseId": null,
+            "code": 0,
+            "http": null,
+            "details": "",
+            "read": {
+              "site": "grpc/a/read-a",
+              "code": 0,
+              "state": "rest-c-commit"
+            },
+            "versions": {
+              "/createTime": {
+                "rank": 0,
+                "layout": {
+                  "members": [
+                    "nanos",
+                    "seconds"
+                  ]
+                }
+              },
+              "/updateTime": {
+                "rank": 3,
+                "layout": {
+                  "members": [
+                    "nanos",
+                    "seconds"
+                  ]
+                }
+              }
+            }
+          },
+          "grpc/a/fail-commit": {
+            "transport": "grpc",
+            "rpc": "Commit",
+            "caseId": "grpc/a-fail-commit",
+            "code": 5,
+            "http": null,
+            "details": "No document to update: projects/<project>/databases/(default)/documents/oracle/<nonce>/txn-p08/m",
+            "read": null,
+            "versions": {}
+          },
+          "grpc/a/plain-read-a": {
+            "transport": "grpc",
+            "rpc": "GetDocument",
+            "caseId": "grpc/a-plain-read",
+            "code": 0,
+            "http": null,
+            "details": "",
+            "read": {
+              "site": "grpc/a/plain-read-a",
+              "code": 0,
+              "state": "rest-c-commit"
+            },
+            "versions": {
+              "/createTime": {
+                "rank": 0,
+                "layout": {
+                  "members": [
+                    "nanos",
+                    "seconds"
+                  ]
+                }
+              },
+              "/updateTime": {
+                "rank": 3,
+                "layout": {
+                  "members": [
+                    "nanos",
+                    "seconds"
+                  ]
+                }
+              }
+            }
+          },
+          "grpc/a/same-token-read-a": {
+            "transport": "grpc",
+            "rpc": "GetDocument",
+            "caseId": "grpc/a-same-token-read",
+            "code": 3,
+            "http": null,
+            "details": "The referenced transaction has expired or is no longer valid.",
+            "read": {
+              "site": "grpc/a/same-token-read-a",
+              "code": 3,
+              "state": null
+            },
+            "versions": {}
+          },
+          "grpc/a/writer": {
+            "transport": "grpc",
+            "rpc": "Commit",
+            "caseId": "grpc/a-writer",
+            "code": 0,
+            "http": null,
+            "details": "",
+            "read": null,
+            "versions": {
+              "/commitTime": {
+                "rank": 4,
+                "layout": {
+                  "members": [
+                    "nanos",
+                    "seconds"
+                  ]
+                }
+              },
+              "/writeResults/0/updateTime": {
+                "rank": 4,
+                "layout": {
+                  "members": [
+                    "nanos",
+                    "seconds"
+                  ]
+                }
+              }
+            }
+          },
+          "grpc/a/corrected-commit": {
+            "transport": "grpc",
+            "rpc": "Commit",
+            "caseId": "grpc/a-corrected-commit",
+            "code": 3,
+            "http": null,
+            "details": "The referenced transaction has expired or is no longer valid.",
+            "read": null,
+            "versions": {}
+          },
+          "grpc/a/rollback": {
+            "transport": "grpc",
+            "rpc": "Rollback",
+            "caseId": "grpc/a-rollback",
+            "code": 0,
+            "http": null,
+            "details": "",
+            "read": null,
+            "versions": {}
+          },
+          "grpc/a/rollback-again": {
+            "transport": "grpc",
+            "rpc": "Rollback",
+            "caseId": "grpc/a-rollback-again",
+            "code": 0,
+            "http": null,
+            "details": "",
+            "read": null,
+            "versions": {}
+          },
+          "grpc/a/post-read-a": {
+            "transport": "grpc",
+            "rpc": "GetDocument",
+            "caseId": null,
+            "code": 0,
+            "http": null,
+            "details": "",
+            "read": {
+              "site": "grpc/a/post-read-a",
+              "code": 0,
+              "state": "grpc-a-writer"
+            },
+            "versions": {
+              "/createTime": {
+                "rank": 0,
+                "layout": {
+                  "members": [
+                    "nanos",
+                    "seconds"
+                  ]
+                }
+              },
+              "/updateTime": {
+                "rank": 4,
+                "layout": {
+                  "members": [
+                    "nanos",
+                    "seconds"
+                  ]
+                }
+              }
+            }
+          },
+          "grpc/b/begin": {
+            "transport": "grpc",
+            "rpc": "BeginTransaction",
+            "caseId": null,
+            "code": 0,
+            "http": null,
+            "details": "",
+            "read": null,
+            "versions": {}
+          },
+          "grpc/b/read-a": {
+            "transport": "grpc",
+            "rpc": "GetDocument",
+            "caseId": null,
+            "code": 0,
+            "http": null,
+            "details": "",
+            "read": {
+              "site": "grpc/b/read-a",
+              "code": 0,
+              "state": "grpc-a-writer"
+            },
+            "versions": {
+              "/createTime": {
+                "rank": 0,
+                "layout": {
+                  "members": [
+                    "nanos",
+                    "seconds"
+                  ]
+                }
+              },
+              "/updateTime": {
+                "rank": 4,
+                "layout": {
+                  "members": [
+                    "nanos",
+                    "seconds"
+                  ]
+                }
+              }
+            }
+          },
+          "grpc/b/fail-commit": {
+            "transport": "grpc",
+            "rpc": "Commit",
+            "caseId": "grpc/b-fail-commit",
+            "code": 5,
+            "http": null,
+            "details": "No document to update: projects/<project>/databases/(default)/documents/oracle/<nonce>/txn-p08/m",
+            "read": null,
+            "versions": {}
+          },
+          "grpc/b/rollback": {
+            "transport": "grpc",
+            "rpc": "Rollback",
+            "caseId": "grpc/b-rollback",
+            "code": 0,
+            "http": null,
+            "details": "",
+            "read": null,
+            "versions": {}
+          },
+          "grpc/b/writer": {
+            "transport": "grpc",
+            "rpc": "Commit",
+            "caseId": "grpc/b-writer",
+            "code": 0,
+            "http": null,
+            "details": "",
+            "read": null,
+            "versions": {
+              "/commitTime": {
+                "rank": 5,
+                "layout": {
+                  "members": [
+                    "nanos",
+                    "seconds"
+                  ]
+                }
+              },
+              "/writeResults/0/updateTime": {
+                "rank": 5,
+                "layout": {
+                  "members": [
+                    "nanos",
+                    "seconds"
+                  ]
+                }
+              }
+            }
+          },
+          "grpc/b/rollback-again": {
+            "transport": "grpc",
+            "rpc": "Rollback",
+            "caseId": "grpc/b-rollback-again",
+            "code": 0,
+            "http": null,
+            "details": "",
+            "read": null,
+            "versions": {}
+          },
+          "grpc/b/post-read-a": {
+            "transport": "grpc",
+            "rpc": "GetDocument",
+            "caseId": null,
+            "code": 0,
+            "http": null,
+            "details": "",
+            "read": {
+              "site": "grpc/b/post-read-a",
+              "code": 0,
+              "state": "grpc-b-writer"
+            },
+            "versions": {
+              "/createTime": {
+                "rank": 0,
+                "layout": {
+                  "members": [
+                    "nanos",
+                    "seconds"
+                  ]
+                }
+              },
+              "/updateTime": {
+                "rank": 5,
+                "layout": {
+                  "members": [
+                    "nanos",
+                    "seconds"
+                  ]
+                }
+              }
+            }
+          },
+          "grpc/c/begin": {
+            "transport": "grpc",
+            "rpc": "BeginTransaction",
+            "caseId": null,
+            "code": 0,
+            "http": null,
+            "details": "",
+            "read": null,
+            "versions": {}
+          },
+          "grpc/c/read-a": {
+            "transport": "grpc",
+            "rpc": "GetDocument",
+            "caseId": null,
+            "code": 0,
+            "http": null,
+            "details": "",
+            "read": {
+              "site": "grpc/c/read-a",
+              "code": 0,
+              "state": "grpc-b-writer"
+            },
+            "versions": {
+              "/createTime": {
+                "rank": 0,
+                "layout": {
+                  "members": [
+                    "nanos",
+                    "seconds"
+                  ]
+                }
+              },
+              "/updateTime": {
+                "rank": 5,
+                "layout": {
+                  "members": [
+                    "nanos",
+                    "seconds"
+                  ]
+                }
+              }
+            }
+          },
+          "grpc/c/commit": {
+            "transport": "grpc",
+            "rpc": "Commit",
+            "caseId": "grpc/c-commit",
+            "code": 0,
+            "http": null,
+            "details": "",
+            "read": null,
+            "versions": {
+              "/commitTime": {
+                "rank": 6,
+                "layout": {
+                  "members": [
+                    "nanos",
+                    "seconds"
+                  ]
+                }
+              },
+              "/writeResults/0/updateTime": {
+                "rank": 6,
+                "layout": {
+                  "members": [
+                    "nanos",
+                    "seconds"
+                  ]
+                }
+              }
+            }
+          },
+          "grpc/c/rollback-after-commit": {
+            "transport": "grpc",
+            "rpc": "Rollback",
+            "caseId": "grpc/c-rollback-after-commit",
+            "code": 10,
+            "http": null,
+            "details": "The referenced transaction has expired or is no longer valid.",
+            "read": null,
+            "versions": {}
+          }
+        },
+        "cleanupSteps": {
+          "cleanup/read/a": {
+            "transport": "grpc",
+            "rpc": "GetDocument",
+            "caseId": null,
+            "code": 0,
+            "http": null,
+            "details": "",
+            "read": null,
+            "versions": {
+              "/createTime": {
+                "rank": 0,
+                "layout": {
+                  "members": [
+                    "nanos",
+                    "seconds"
+                  ]
+                }
+              },
+              "/updateTime": {
+                "rank": 6,
+                "layout": {
+                  "members": [
+                    "nanos",
+                    "seconds"
+                  ]
+                }
+              }
+            }
+          },
+          "cleanup/delete/a": {
+            "transport": "grpc",
+            "rpc": "DeleteDocument",
+            "caseId": null,
+            "code": 0,
+            "http": null,
+            "details": "",
+            "read": null,
+            "versions": {}
+          },
+          "cleanup/verify/a": {
+            "transport": "grpc",
+            "rpc": "GetDocument",
+            "caseId": null,
+            "code": 5,
+            "http": null,
+            "details": "Document \"projects/<project>/databases/(default)/documents/oracle/<nonce>/txn-p08/a\" not found.",
+            "read": null,
+            "versions": {}
+          }
+        },
+        "tokens": {
+          "rest-a": {
+            "transport": "rest",
+            "state": "rolled-back"
+          },
+          "rest-b": {
+            "transport": "rest",
+            "state": "rolled-back"
+          },
+          "rest-c": {
+            "transport": "rest",
+            "state": "committed"
+          },
+          "grpc-a": {
+            "transport": "grpc",
+            "state": "rolled-back"
+          },
+          "grpc-b": {
+            "transport": "grpc",
+            "state": "rolled-back"
+          },
+          "grpc-c": {
+            "transport": "grpc",
+            "state": "committed"
+          }
+        },
+        "cleanup": {
+          "absent": true
+        },
+        "commitTimes": {
+          "setup/create-a": {
+            "commitTime": true,
+            "relation": null
+          },
+          "rest/a/writer": {
+            "commitTime": true,
+            "relation": null
+          },
+          "rest/b/writer": {
+            "commitTime": true,
+            "relation": null
+          },
+          "rest/c/commit": {
+            "commitTime": true,
+            "relation": null
+          },
+          "grpc/a/writer": {
+            "commitTime": true,
+            "relation": null
+          },
+          "grpc/b/writer": {
+            "commitTime": true,
+            "relation": null
+          },
+          "grpc/c/commit": {
+            "commitTime": true,
+            "relation": null
+          }
+        }
+      },
+      "projection": {
+        "program": "FS-TRANSACTION-P08-FAILED-COMMIT",
+        "packetName": "p08-failed-commit",
+        "corpusDigest": "1dc1d44eca4b99a23d8f3b480eb9b8d71aec4ef0894509b149fa12354c9d92bc",
+        "cases": [
+          {
+            "caseId": "rest/a-fail-commit",
+            "transport": "rest",
+            "rpc": "Commit",
+            "code": 5,
+            "outcomeClass": "REFUSED",
+            "details": "No document to update: projects/<project>/databases/(default)/documents/oracle/<nonce>/txn-p08/m"
+          },
+          {
+            "caseId": "rest/a-plain-read",
+            "transport": "rest",
+            "rpc": "GetDocument",
+            "code": 0,
+            "outcomeClass": "OK",
+            "details": ""
+          },
+          {
+            "caseId": "rest/a-same-token-read",
+            "transport": "rest",
+            "rpc": "GetDocument",
+            "code": 3,
+            "outcomeClass": "REFUSED",
+            "details": "The referenced transaction has expired or is no longer valid."
+          },
+          {
+            "caseId": "rest/a-writer",
+            "transport": "rest",
+            "rpc": "Commit",
+            "code": 0,
+            "outcomeClass": "OK",
+            "details": ""
+          },
+          {
+            "caseId": "rest/a-corrected-commit",
+            "transport": "rest",
+            "rpc": "Commit",
+            "code": 3,
+            "outcomeClass": "REFUSED",
+            "details": "The referenced transaction has expired or is no longer valid."
+          },
+          {
+            "caseId": "rest/a-rollback",
+            "transport": "rest",
+            "rpc": "Rollback",
+            "code": 0,
+            "outcomeClass": "OK",
+            "details": ""
+          },
+          {
+            "caseId": "rest/a-rollback-again",
+            "transport": "rest",
+            "rpc": "Rollback",
+            "code": 0,
+            "outcomeClass": "OK",
+            "details": ""
+          },
+          {
+            "caseId": "rest/b-fail-commit",
+            "transport": "rest",
+            "rpc": "Commit",
+            "code": 5,
+            "outcomeClass": "REFUSED",
+            "details": "No document to update: projects/<project>/databases/(default)/documents/oracle/<nonce>/txn-p08/m"
+          },
+          {
+            "caseId": "rest/b-rollback",
+            "transport": "rest",
+            "rpc": "Rollback",
+            "code": 0,
+            "outcomeClass": "OK",
+            "details": ""
+          },
+          {
+            "caseId": "rest/b-writer",
+            "transport": "rest",
+            "rpc": "Commit",
+            "code": 0,
+            "outcomeClass": "OK",
+            "details": ""
+          },
+          {
+            "caseId": "rest/b-rollback-again",
+            "transport": "rest",
+            "rpc": "Rollback",
+            "code": 0,
+            "outcomeClass": "OK",
+            "details": ""
+          },
+          {
+            "caseId": "rest/c-commit",
+            "transport": "rest",
+            "rpc": "Commit",
+            "code": 0,
+            "outcomeClass": "OK",
+            "details": ""
+          },
+          {
+            "caseId": "rest/c-rollback-after-commit",
+            "transport": "rest",
+            "rpc": "Rollback",
+            "code": 10,
+            "outcomeClass": "REFUSED",
+            "details": "The referenced transaction has expired or is no longer valid."
+          },
+          {
+            "caseId": "grpc/a-fail-commit",
+            "transport": "grpc",
+            "rpc": "Commit",
+            "code": 5,
+            "outcomeClass": "REFUSED",
+            "details": "No document to update: projects/<project>/databases/(default)/documents/oracle/<nonce>/txn-p08/m"
+          },
+          {
+            "caseId": "grpc/a-plain-read",
+            "transport": "grpc",
+            "rpc": "GetDocument",
+            "code": 0,
+            "outcomeClass": "OK",
+            "details": ""
+          },
+          {
+            "caseId": "grpc/a-same-token-read",
+            "transport": "grpc",
+            "rpc": "GetDocument",
+            "code": 3,
+            "outcomeClass": "REFUSED",
+            "details": "The referenced transaction has expired or is no longer valid."
+          },
+          {
+            "caseId": "grpc/a-writer",
+            "transport": "grpc",
+            "rpc": "Commit",
+            "code": 0,
+            "outcomeClass": "OK",
+            "details": ""
+          },
+          {
+            "caseId": "grpc/a-corrected-commit",
+            "transport": "grpc",
+            "rpc": "Commit",
+            "code": 3,
+            "outcomeClass": "REFUSED",
+            "details": "The referenced transaction has expired or is no longer valid."
+          },
+          {
+            "caseId": "grpc/a-rollback",
+            "transport": "grpc",
+            "rpc": "Rollback",
+            "code": 0,
+            "outcomeClass": "OK",
+            "details": ""
+          },
+          {
+            "caseId": "grpc/a-rollback-again",
+            "transport": "grpc",
+            "rpc": "Rollback",
+            "code": 0,
+            "outcomeClass": "OK",
+            "details": ""
+          },
+          {
+            "caseId": "grpc/b-fail-commit",
+            "transport": "grpc",
+            "rpc": "Commit",
+            "code": 5,
+            "outcomeClass": "REFUSED",
+            "details": "No document to update: projects/<project>/databases/(default)/documents/oracle/<nonce>/txn-p08/m"
+          },
+          {
+            "caseId": "grpc/b-rollback",
+            "transport": "grpc",
+            "rpc": "Rollback",
+            "code": 0,
+            "outcomeClass": "OK",
+            "details": ""
+          },
+          {
+            "caseId": "grpc/b-writer",
+            "transport": "grpc",
+            "rpc": "Commit",
+            "code": 0,
+            "outcomeClass": "OK",
+            "details": ""
+          },
+          {
+            "caseId": "grpc/b-rollback-again",
+            "transport": "grpc",
+            "rpc": "Rollback",
+            "code": 0,
+            "outcomeClass": "OK",
+            "details": ""
+          },
+          {
+            "caseId": "grpc/c-commit",
+            "transport": "grpc",
+            "rpc": "Commit",
+            "code": 0,
+            "outcomeClass": "OK",
+            "details": ""
+          },
+          {
+            "caseId": "grpc/c-rollback-after-commit",
+            "transport": "grpc",
+            "rpc": "Rollback",
+            "code": 10,
+            "outcomeClass": "REFUSED",
+            "details": "The referenced transaction has expired or is no longer valid."
+          }
+        ],
+        "reads": [
+          {
+            "site": "setup/absence-a",
+            "code": 5,
+            "state": null
+          },
+          {
+            "site": "setup/absence-m",
+            "code": 5,
+            "state": null
+          },
+          {
+            "site": "rest/a/read-a",
+            "code": 0,
+            "state": "created"
+          },
+          {
+            "site": "rest/a/plain-read-a",
+            "code": 0,
+            "state": "created"
+          },
+          {
+            "site": "rest/a/same-token-read-a",
+            "code": 3,
+            "state": null
+          },
+          {
+            "site": "rest/a/post-read-a",
+            "code": 0,
+            "state": "rest-a-writer"
+          },
+          {
+            "site": "rest/b/read-a",
+            "code": 0,
+            "state": "rest-a-writer"
+          },
+          {
+            "site": "rest/b/post-read-a",
+            "code": 0,
+            "state": "rest-b-writer"
+          },
+          {
+            "site": "rest/c/read-a",
+            "code": 0,
+            "state": "rest-b-writer"
+          },
+          {
+            "site": "grpc/a/read-a",
+            "code": 0,
+            "state": "rest-c-commit"
+          },
+          {
+            "site": "grpc/a/plain-read-a",
+            "code": 0,
+            "state": "rest-c-commit"
+          },
+          {
+            "site": "grpc/a/same-token-read-a",
+            "code": 3,
+            "state": null
+          },
+          {
+            "site": "grpc/a/post-read-a",
+            "code": 0,
+            "state": "grpc-a-writer"
+          },
+          {
+            "site": "grpc/b/read-a",
+            "code": 0,
+            "state": "grpc-a-writer"
+          },
+          {
+            "site": "grpc/b/post-read-a",
+            "code": 0,
+            "state": "grpc-b-writer"
+          },
+          {
+            "site": "grpc/c/read-a",
+            "code": 0,
+            "state": "grpc-b-writer"
+          }
+        ],
+        "tokens": {
+          "rest-a": {
+            "transport": "rest",
+            "state": "rolled-back"
+          },
+          "rest-b": {
+            "transport": "rest",
+            "state": "rolled-back"
+          },
+          "rest-c": {
+            "transport": "rest",
+            "state": "committed"
+          },
+          "grpc-a": {
+            "transport": "grpc",
+            "state": "rolled-back"
+          },
+          "grpc-b": {
+            "transport": "grpc",
+            "state": "rolled-back"
+          },
+          "grpc-c": {
+            "transport": "grpc",
+            "state": "committed"
+          }
+        },
+        "expectedStates": {
+          "a": "grpc-c-commit"
+        },
+        "cleanup": {
+          "absent": true
+        }
+      },
+      "recordings": [
+        {
+          "recording": 1,
+          "reference": "fs-transaction-p08-failed-commit-b5da53e6fa1ae0ce/recording-1.json",
+          "sha256": "c9d1dc8f081c1f18f9fc7872729b7f21a6c79e95c83938425ff9112c9de99214",
+          "complete": true,
+          "graphComplete": true,
+          "cleanupAbsent": true,
+          "requests": 56,
+          "phaseRequests": {
+            "credential": 1,
+            "documentCleanup": 3,
+            "management": 7,
+            "observation": 45,
+            "tokenCleanup": 0
+          },
+          "observations": 26,
+          "transportObservations": {
+            "rest": 13,
+            "grpc": 13
+          },
+          "openTokens": 0,
+          "unknownOutcomes": 0,
+          "semanticDigest": "f687a706eb29b3b18a958d7727b55238540afc46780224473a745e7706a47517",
+          "projectionDigest": "d125a3fe1a82b810a6dcdcb3816fe7cec89828f54a1e4057c3f6109537e82e58",
+          "timingMode": "wall-clock",
+          "timingSource": "parent-wire-envelope",
+          "recordedRuntime": {
+            "nodeVersion": "v24.14.0",
+            "pythonVersion": "3.12.13",
+            "nodeSha256": "20a18709f0154d668f1bd6f6ea8c2a7ae001447b4b2c339732f22e57a8767a55",
+            "pythonSha256": "f8cf5db64fd3715840686fcdb0f00b8b7e6c9b1e9b5f10a31183160c9bb6a6fc",
+            "workerSha256": "9bbca98ede9d0d5d22e977a4fd7175ae46d3ca31ceb821c8a2f079e8d754741a",
+            "lockSha256": "05af3ef826d33548442d3503bd5a34e53106b304ee405c4e32c8c8e4934b6828"
+          },
+          "recordedRuntimeDigest": "071b7491bee33959697c1c584bc580f04209d693e9aecd61329cf5cbccef0834"
+        },
+        {
+          "recording": 2,
+          "reference": "fs-transaction-p08-failed-commit-b5da53e6fa1ae0ce/recording-2.json",
+          "sha256": "40fe3fe74e6dd11c98fe1a1950f8ec46ebab9b29c703d67530a105196b576bf6",
+          "complete": true,
+          "graphComplete": true,
+          "cleanupAbsent": true,
+          "requests": 56,
+          "phaseRequests": {
+            "credential": 1,
+            "documentCleanup": 3,
+            "management": 7,
+            "observation": 45,
+            "tokenCleanup": 0
+          },
+          "observations": 26,
+          "transportObservations": {
+            "rest": 13,
+            "grpc": 13
+          },
+          "openTokens": 0,
+          "unknownOutcomes": 0,
+          "semanticDigest": "f687a706eb29b3b18a958d7727b55238540afc46780224473a745e7706a47517",
+          "projectionDigest": "d125a3fe1a82b810a6dcdcb3816fe7cec89828f54a1e4057c3f6109537e82e58",
+          "timingMode": "wall-clock",
+          "timingSource": "parent-wire-envelope",
+          "recordedRuntime": {
+            "nodeVersion": "v24.14.0",
+            "pythonVersion": "3.12.13",
+            "nodeSha256": "20a18709f0154d668f1bd6f6ea8c2a7ae001447b4b2c339732f22e57a8767a55",
+            "pythonSha256": "f8cf5db64fd3715840686fcdb0f00b8b7e6c9b1e9b5f10a31183160c9bb6a6fc",
+            "workerSha256": "9bbca98ede9d0d5d22e977a4fd7175ae46d3ca31ceb821c8a2f079e8d754741a",
+            "lockSha256": "05af3ef826d33548442d3503bd5a34e53106b304ee405c4e32c8c8e4934b6828"
+          },
+          "recordedRuntimeDigest": "071b7491bee33959697c1c584bc580f04209d693e9aecd61329cf5cbccef0834"
+        }
+      ]
+    }
+  ]
+}

@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { test } from "node:test";
 import { createHash } from "node:crypto";
 
@@ -81,6 +81,291 @@ test("FS-TRANSACTION recorded REST subset leaves every frozen condition open", (
   assert.equal(closure.profileComparison.emulatorCompatibilityCheck, "PENDING_LOCAL_OBSERVATION");
   assert.equal(closure.productionPlan.preparedCampaign.authorizesProduction, false);
   assert.deepEqual(closure.productionPlan.preparedCampaign.actualRequestsPerRecording, [75, 75]);
+});
+
+function p13bDigest(value) {
+  const canonical = (item) => {
+    if (Array.isArray(item)) return item.map(canonical);
+    if (item !== null && typeof item === "object")
+      return Object.fromEntries(
+        Object.keys(item)
+          .toSorted()
+          .map((key) => [key, canonical(item[key])]),
+      );
+    return item;
+  };
+  return createHash("sha256")
+    .update(JSON.stringify(canonical(value)))
+    .digest("hex");
+}
+
+function assertP13bPreparation(observed, compared, closure) {
+  for (const record of [observed, compared]) {
+    assert.equal(record.coverage, "PARTIAL");
+    assert.equal(record.authorizesProduction, false);
+    assert.equal(record.promotionReady, false);
+    assert.match(record.remainingBoundaries.join(" "), /bodyBytes.*content-length.*member-order/);
+    assert.match(record.remainingBoundaries.join(" "), /18.*conditions/);
+  }
+  assert.equal(observed.decodedSemanticsValidated, true);
+  assert.equal(observed.rawRestWireLayoutValidated, false);
+  assert.equal(observed.corpora.length, 1);
+  const corpus = observed.corpora[0];
+  assert.equal(corpus.program, "FS-TRANSACTION-P13B-RETRY-ANSWERS");
+  assert.equal(corpus.sourceCommit, "2991d2f1e055407badaaac2e9edab688d42c9d1a");
+  assert.equal(
+    corpus.tableSourceDigest,
+    "6716e049745af5532b837e7c9c06c199f92c8f253c2cb7341dbf7b4a299ce468",
+  );
+  assert.equal(
+    corpus.corpusDigest,
+    "3c91e4695ace7cccb5089f3c8fc88425f1393ee40a13c28f97bf15ac05a63751",
+  );
+  assert.equal(
+    corpus.freezeSha256,
+    "9c7ff93d46ebecdf6f4e312bee443de1eea57b666499599879f7c4b96983f132",
+  );
+  assert.equal(
+    corpus.packetSha256,
+    "c3274163a581342d288a0a9c1448f724258f72f106e9506c8758ec79c1526dc7",
+  );
+  assert.equal(
+    corpus.originalRunnerSha256,
+    "7211a1ab2296db4e0712399a17b4ab26fad2beb953b44135475f58513921ec35",
+  );
+  assert.equal(corpus.historicalInstalledRuntimeInputsValidated, "UNKNOWN");
+  const sites = ["setup/absence-a", "setup/create-a"];
+  for (const [chain, names] of [
+    ["rt1", ["begin", "read-a", "rollback", "retry-begin", "writer", "first-read", "commit"]],
+    ["rt2", ["begin", "read-a", "retry-idle"]],
+    ["rt3", ["begin", "read-a", "rollback-idle", "retry-after-rollback"]],
+    [
+      "rt4",
+      [
+        "begin",
+        "read-a",
+        ...Array.from({ length: 9 }, (_, index) => `keepalive-${index + 1}`),
+        "live-read",
+        "retry-lifetime",
+      ],
+    ],
+  ])
+    sites.push(...names.map((name) => `rest/${chain}/${name}`));
+  sites.push("final/post-read-a");
+  assert.deepEqual(
+    corpus.recipes.map(({ id }) => id),
+    sites,
+  );
+  assert.equal(new Set(sites).size, 30);
+  assert.deepEqual(Object.keys(corpus.semantics.steps), sites);
+  for (const recipe of corpus.recipes) {
+    const row = corpus.semantics.steps[recipe.id];
+    assert.equal(row.transport, recipe.transport);
+    assert.equal(row.rpc, recipe.rpc);
+    assert.equal(row.caseId, recipe.caseId);
+    if (recipe.transport === "rest") {
+      assert.equal(row.code, 0);
+      assert.equal(row.http, 200);
+      assert.equal(row.details, "");
+    }
+  }
+  const cases = [
+    "rest/rt1-rollback",
+    "rest/rt1-writer",
+    "rest/rt1-first-read",
+    "rest/rt1-commit",
+    "rest/rt2-retry-idle",
+    "rest/rt3-rollback-idle",
+    "rest/rt3-retry-after-rollback",
+    "rest/rt4-retry-lifetime",
+  ];
+  assert.deepEqual(
+    corpus.projection.cases.map(({ caseId }) => caseId),
+    cases,
+  );
+  for (const row of corpus.projection.cases) {
+    assert.equal(row.transport, "rest");
+    assert.equal(row.code, 0);
+    assert.equal(row.details, "");
+  }
+  assert.equal(corpus.projection.reads.length, 17);
+  assert.equal(corpus.agree, true);
+  assert.equal(corpus.recordings.length, 2);
+  assert.deepEqual(
+    corpus.recordings.map(({ sha256 }) => sha256),
+    [
+      "0c3d167857686716f8d2ecb0b65e37cd82e3fab04676e8c8ebe0c2fc2b5d22d5",
+      "1621e5c5822245d65da750d139d879c6c07a1d41e187790341ff5232de6be8cd",
+    ],
+  );
+  for (const [index, recording] of corpus.recordings.entries()) {
+    assert.equal(recording.recording, index + 1);
+    assert.equal(recording.complete, true);
+    assert.equal(recording.graphComplete, true);
+    assert.equal(recording.cleanupAbsent, true);
+    assert.equal(recording.openTokens, 0);
+    assert.equal(recording.unknownOutcomes, 0);
+    assert.equal(recording.requests, 45);
+    assert.deepEqual(recording.phaseRequests, {
+      credential: 1,
+      documentCleanup: 3,
+      management: 6,
+      observation: 30,
+      tokenCleanup: 5,
+    });
+    assert.deepEqual(recording.transportObservations, { rest: 8 });
+    assert.equal(recording.semanticDigest, p13bDigest(corpus.semantics));
+    assert.equal(recording.projectionDigest, p13bDigest(corpus.projection));
+    assert.equal(recording.issuedTokensDistinct, true);
+    assert.equal(recording.nativeLifecycle.length, 38);
+    assert.deepEqual(
+      recording.nativeLifecycle.map(({ sequence }) => sequence),
+      Array.from({ length: 38 }, (_, n) => n),
+    );
+    assert.deepEqual(
+      new Set(recording.nativeLifecycle.map(({ site }) => site)),
+      new Set([...sites, ...Object.keys(corpus.semantics.cleanupSteps)]),
+    );
+    for (const row of recording.nativeLifecycle) {
+      assert.equal(row.complete, true);
+      assert.equal(row.ipcComplete, true);
+      assert.equal(row.childReaped, true);
+      assert.equal(row.workerExitCode, 0);
+      assert.equal(row.dispatchedRequests, 1);
+    }
+    const waits = new Map(recording.waits.map((entry) => [entry.site, entry]));
+    assert.equal(waits.size, 13);
+    assert.equal(recording.waitsDigest, p13bDigest(recording.waits));
+    for (const site of ["rest/rt2/retry-idle", "rest/rt3/rollback-idle"]) {
+      assert.ok(waits.get(site).idleInterval.lowerSeconds >= 130);
+      assert.ok(waits.get(site).totalAgeInterval.upperSeconds < 270);
+    }
+    assert.ok(waits.get("rest/rt4/retry-lifetime").totalAgeInterval.lowerSeconds > 275);
+    assert.ok(waits.get("rest/rt4/retry-lifetime").idleInterval.upperSeconds < 120);
+    assert.equal(recording.recordedRuntime.nodeVersion, "v24.14.0");
+    assert.equal(recording.recordedRuntime.pythonVersion, "3.12.13");
+    assert.equal(
+      recording.recordedRuntime.workerSha256,
+      "4047804796a8a7dd4319c70f6bbe8aa3c38873ef57047761e6a1f5629b1dfea5",
+    );
+    assert.equal(
+      recording.recordedRuntime.lockSha256,
+      "04f7f2526af7ce07ca39ceffd0712eec9b5e5e212503c7cb791ab5021a49dc60",
+    );
+  }
+  const retrySites = [
+    "rest/rt1/retry-begin",
+    "rest/rt2/retry-idle",
+    "rest/rt3/retry-after-rollback",
+    "rest/rt4/retry-lifetime",
+  ];
+  for (const [index, site] of retrySites.entries()) {
+    const recipe = corpus.recipes.find(({ id }) => id === site);
+    assert.equal(recipe.retryOf, `t${index + 1}`);
+    assert.equal(recipe.tokenOutput, `t${index + 1}r`);
+    assert.deepEqual(corpus.retryConsequences[index], {
+      site,
+      namedToken: recipe.retryOf,
+      issuedToken: recipe.tokenOutput,
+      issuedDifferent: true,
+    });
+  }
+  const steps = corpus.semantics.steps;
+  assert.equal(steps["rest/rt1/first-read"].read.state, "rest-rt1-writer");
+  assert.equal(
+    steps["rest/rt1/first-read"].versions["/updateTime"].rank,
+    steps["rest/rt1/writer"].versions["/writeResults/0/updateTime"].rank,
+  );
+  assert.equal(steps["final/post-read-a"].read.state, "rest-rt1-commit");
+  assert.equal(
+    steps["final/post-read-a"].versions["/updateTime"].rank,
+    steps["rest/rt1/commit"].versions["/writeResults/0/updateTime"].rank,
+  );
+  assert.equal(corpus.projection.expectedStates.a, "rest-rt1-commit");
+  assert.equal(corpus.semantics.tokens.t1r.state, "committed");
+  assert.equal(corpus.semantics.tokens.t4.state, "released-refused");
+  assert.deepEqual(Object.keys(corpus.semantics.cleanupSteps), [
+    "cleanup/token/t2",
+    "cleanup/token/t2r",
+    "cleanup/token/t3r",
+    "cleanup/token/t4",
+    "cleanup/token/t4r",
+    "cleanup/read/a",
+    "cleanup/delete/a",
+    "cleanup/verify/a",
+  ]);
+  assert.equal(corpus.semantics.cleanupSteps["cleanup/token/t4"].code, 10);
+  assert.equal(corpus.semantics.cleanupSteps["cleanup/token/t4"].http, 409);
+  assert.equal(
+    corpus.semantics.cleanupSteps["cleanup/token/t4"].details,
+    "The referenced transaction has expired or is no longer valid.",
+  );
+  assert.equal(corpus.semantics.cleanupSteps["cleanup/token/t4r"].code, 0);
+  assert.equal(corpus.semantics.cleanupSteps["cleanup/verify/a"].code, 5);
+  assert.deepEqual(corpus.semantics.cleanup, { absent: true });
+  assert.equal(compared.status, "PENDING_FINAL_ARTIFACT_REPLAY");
+  assert.equal(compared.artifact, null);
+  assert.equal(compared.productionRequests, 0);
+  assert.equal(compared.capturedReplays, 0);
+  assert.equal(compared.requiredReplays, 4);
+  assert.deepEqual(compared.corpora, [{ program: corpus.program, results: [] }]);
+  assert.deepEqual(
+    compared.plannedReplays.map(({ profile, recording }) => `${profile}/${recording}`),
+    ["strict/1", "strict/2", "emulator/1", "emulator/2"],
+  );
+  for (const replay of compared.plannedReplays)
+    assert.equal(replay.productionFileSha256, corpus.recordings[replay.recording - 1].sha256);
+  assert.equal(
+    compared.producer.sha256,
+    createHash("sha256")
+      .update(readFileSync(new URL(`../../${compared.producer.path}`, import.meta.url)))
+      .digest("hex"),
+  );
+  assert.equal(compared.producer.tableSha256, corpus.tableSourceDigest);
+  assert.equal(compared.producer.tableSourceCommit, corpus.sourceCommit);
+  assert.equal(
+    compared.producer.currentTableSha256,
+    createHash("sha256")
+      .update(readFileSync(new URL(`../../${corpus.table}`, import.meta.url)))
+      .digest("hex"),
+  );
+  assert.notEqual(compared.producer.currentTableSha256, corpus.tableSourceDigest);
+  const retry = closure.conditions.find(({ conditionId }) =>
+    conditionId.endsWith("/retry-token-lifecycle"),
+  );
+  assert.equal(retry.partialEvidence.caseIds.length, 5);
+  assert.equal(
+    retry.partialEvidence.reference,
+    "spec/compatibility/broad-runs/fs-transaction-expiry-retry-04-recorded-comparison-v1.json",
+  );
+  const subset = retry.partialEvidence.additionalRecordedSubsets.find(({ observations }) =>
+    observations.endsWith("p13b-recorded-observations-v1.json"),
+  );
+  assert.equal(subset.coverage, "PARTIAL");
+  assert.equal(subset.transport, "rest");
+  assert.equal(subset.rawRestWireLayoutValidated, false);
+  assert.equal(subset.localComparisonStatus, compared.status);
+  assert.deepEqual(subset.caseIds, cases);
+  assert.match(retry.note, /P13b.*first read.*writer/);
+  assert.match(closure.note, /P13b.*decoded/);
+  assert.match(closure.oracle.coverage, /P13B/);
+  assert.equal(closure.conditions.length, 18);
+  assert.equal(closure.parentStatus, "IMPLEMENTING");
+  assert.equal(closure.closureReview.decision, "PENDING");
+  assert.ok(closure.conditions.every(({ status }) => status !== "VERIFIED"));
+}
+
+test("P13b saved retry observations publish source-bound partial proof with a pending comparison", () => {
+  const base = new URL("../../spec/compatibility/broad-runs/", import.meta.url);
+  const observedUrl = new URL("fs-transaction-p13b-recorded-observations-v1.json", base);
+  const comparedUrl = new URL("fs-transaction-p13b-recorded-comparison-v1.json", base);
+  assert.ok(existsSync(observedUrl), "P13b decoded observations must be published");
+  assert.ok(existsSync(comparedUrl), "P13b comparison preparation must be published");
+  assertP13bPreparation(
+    JSON.parse(readFileSync(observedUrl)),
+    JSON.parse(readFileSync(comparedUrl)),
+    JSON.parse(readFileSync(closureUrl)),
+  );
 });
 
 test("FS-TRANSACTION proposal names every acceptance boundary without claiming closure", () => {
@@ -381,7 +666,7 @@ test("P08 retained refusal chains preserve decoded partial evidence and normal r
     if (value !== null && typeof value === "object")
       return Object.fromEntries(
         Object.keys(value)
-          .sort()
+          .toSorted()
           .map((key) => [key, canonical(value[key])]),
       );
     return value;

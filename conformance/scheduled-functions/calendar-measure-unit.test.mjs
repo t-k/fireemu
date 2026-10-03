@@ -1293,7 +1293,7 @@ function nativeFixture() {
   };
   report.cleanup.before = parseInventory(
     queries.find((q) => q.purpose === "inventory").answer.stdout,
-  ).map((r) => ({ ...r, sid: r.pid === 1 ? 1 : 50 }));
+  ).map((r) => Object.assign({}, r, { sid: r.pid === 1 ? 1 : 50 }));
   report.cleanup.after = structuredClone(report.cleanup.before);
   return JSON.parse(JSON.stringify(report));
 }
@@ -1695,10 +1695,11 @@ function nativeControlFixture(mode, inconclusive = false) {
     if (proof.queries[i].purpose === "inventory") {
       const sessions = JSON.parse(proof.queries[i + 1].answer.stdout);
       passes.push(
-        parseInventory(proof.queries[i].answer.stdout).map((r) => ({
-          ...r,
-          sid: sessions[String(r.pid)],
-        })),
+        parseInventory(proof.queries[i].answer.stdout).map((r) =>
+          Object.assign({}, r, {
+            sid: sessions[String(r.pid)],
+          }),
+        ),
       );
     }
   const inventory = judgeInventory(passes, {
@@ -2082,7 +2083,7 @@ test("a coherently rebound authority cannot substitute another SID for the nativ
   authority.scope.nativeRoot.sid = 51;
   packet.nativeRoot.sid = 51;
   snapshot.authorityBytes = Buffer.from(JSON.stringify(authority));
-  for (const row of records) row.scope = structuredClone(authority.scope);
+  for (const record of records) record.scope = structuredClone(authority.scope);
   records[0].authoritySha256 = sha(snapshot.authorityBytes);
   for (const [name, raw] of snapshot.reports) {
     const envelope = JSON.parse(raw);
@@ -2269,7 +2270,7 @@ test("all 537475 immutable source bytes reach durable ledger terminal and seal t
     const compact = JSON.parse(Buffer.from(envelope.rawReport, "base64"));
     assert.equal(compact.native.schema, "calendar-native-proof/v2");
     const restored = await m.resolveNativeSources(compact, "one", scope);
-    for (const [path, raw] of sources) assert.deepEqual(restored.get(path), raw);
+    for (const [path, sourceRaw] of sources) assert.deepEqual(restored.get(path), sourceRaw);
     assert.equal(result.nativeCertificateIssued, undefined);
   } finally {
     await fs.rm(root, { recursive: true });
@@ -2307,13 +2308,14 @@ async function fullNativeSourceFixture(root, initialReport = nativeFixture()) {
     .split("\n")
     .map(JSON.parse);
   for (const [path, raw] of await fixedSourceBytes()) {
-    const q = report.native.queries.find(
-      (q) => q.purpose === "pinned-source" && q.args.at(-1).endsWith(":" + path),
+    const query = report.native.queries.find(
+      (candidate) =>
+        candidate.purpose === "pinned-source" && candidate.args.at(-1).endsWith(":" + path),
     );
-    q.args[3] = `${m.FIXED_BUILD_PINS.sourceCommit}:${path}`;
-    q.answer.stdout = raw.toString();
-    rows.find((r) => r.type === "birth" && r.handle === q.answer.handle).argvSha256 = sha(
-      JSON.stringify([q.file, ...q.args]),
+    query.args[3] = `${m.FIXED_BUILD_PINS.sourceCommit}:${path}`;
+    query.answer.stdout = raw.toString();
+    rows.find((r) => r.type === "birth" && r.handle === query.answer.handle).argvSha256 = sha(
+      JSON.stringify([query.file, ...query.args]),
     );
   }
   report.native.rawRecords["measure.jsonl"] = Buffer.from(
@@ -2352,11 +2354,13 @@ test("native v2 recomputes A-G from every resolved full source byte and rejects 
     const sourceBlobs = await m.resolveNativeSources(compact, "one", scope);
     for (let i = 0; i < 4; i++) {
       const expected = m.FIXED_NATIVE_SOURCES[i],
-        q = compact.native.queries.find(
-          (q) => q.purpose === "pinned-source" && q.args.at(-1).endsWith(":" + expected.path),
+        query = compact.native.queries.find(
+          (candidate) =>
+            candidate.purpose === "pinned-source" &&
+            candidate.args.at(-1).endsWith(":" + expected.path),
         );
-      assert.equal("stdout" in q.answer, false);
-      assert.deepEqual(q.answer.sourceRef, {
+      assert.equal("stdout" in query.answer, false);
+      assert.deepEqual(query.answer.sourceRef, {
         schema: "calendar-native-source/v1",
         sourceCommit: "33970bf501ac85e62fd8aee488d16a9405a8a019",
         sourcePath: expected.path,
@@ -2365,9 +2369,9 @@ test("native v2 recomputes A-G from every resolved full source byte and rejects 
         rawBytes: sourceBlobs.get(expected.path).length,
         scopeSha256: sha(Buffer.from(JSON.stringify(scope))),
         attemptId: "one",
-        queryArgvSha256: sha(Buffer.from(JSON.stringify([q.file, ...q.args]))),
-        ownHandle: q.answer.handle,
-        ownPid: q.answer.pid,
+        queryArgvSha256: sha(Buffer.from(JSON.stringify([query.file, ...query.args]))),
+        ownHandle: query.answer.handle,
+        ownPid: query.answer.pid,
       });
     }
 
@@ -2817,7 +2821,11 @@ async function hugeNativeReportFixture(root) {
         : [
             parseInventory(q.answer.stdout)
               .filter((r) => r.pid !== q.answer.pid)
-              .map((r) => ({ ...r, sid: JSON.parse(queries[i + 1].answer.stdout)[String(r.pid)] })),
+              .map((r) =>
+                Object.assign({}, r, {
+                  sid: JSON.parse(queries[i + 1].answer.stdout)[String(r.pid)],
+                }),
+              ),
           ],
     );
   const outer = JSON.parse(Buffer.from(report.native.rawOuterResult, "base64"));
@@ -3025,6 +3033,9 @@ test("whole report archive readback preserves exact original bytes and rejects i
       rawFile: "foreign.raw",
       rawBytes: originalBytes.length - 1,
       rawSha256: "f".repeat(64),
+      projectionBytes: descriptor.projectionBytes - 1,
+      projectionSha256: "f".repeat(64),
+      sources: [],
       manifestFile: "foreign.json",
       manifestBytes: descriptor.manifestBytes + 1,
       manifestSha256: "f".repeat(64),
@@ -3248,32 +3259,32 @@ test("archive manifest bindings reject rehashed projected summaries or changed f
     const original = await fs.readFile(path),
       manifest = JSON.parse(original);
     for (const change of [
-      (m) => {
-        m.projectionSha256 = "f".repeat(64);
+      (entry) => {
+        entry.projectionSha256 = "f".repeat(64);
       },
-      (m) => {
-        m.projectionBytes--;
+      (entry) => {
+        entry.projectionBytes--;
       },
-      (m) => {
-        m.sources[0].ownPid++;
+      (entry) => {
+        entry.sources[0].ownPid++;
       },
-      (m) => {
-        m.sources[0].queryArgvSha256 = "f".repeat(64);
+      (entry) => {
+        entry.sources[0].queryArgvSha256 = "f".repeat(64);
       },
-      (m) => {
-        m.sources[0].rawSha256 = "f".repeat(64);
+      (entry) => {
+        entry.sources[0].rawSha256 = "f".repeat(64);
       },
-      (m) => {
-        m.sources[0].sourcePath = "foreign/path";
+      (entry) => {
+        entry.sources[0].sourcePath = "foreign/path";
       },
-      (m) => {
-        m.sources.push(m.sources[0]);
+      (entry) => {
+        entry.sources.push(entry.sources[0]);
       },
-      (m) => {
-        m.sources.pop();
+      (entry) => {
+        entry.sources.pop();
       },
-      (m) => {
-        m.originalSchema = "summary/v1";
+      (entry) => {
+        entry.originalSchema = "summary/v1";
       },
     ]) {
       const forged = structuredClone(manifest);
@@ -3282,7 +3293,14 @@ test("archive manifest bindings reject rehashed projected summaries or changed f
       await fs.writeFile(path, raw);
       await assert.rejects(
         m.resolveNativeReport(
-          { ...descriptor, manifestBytes: raw.length, manifestSha256: sha(raw) },
+          {
+            ...descriptor,
+            manifestBytes: raw.length,
+            manifestSha256: sha(raw),
+            projectionBytes: forged.projectionBytes,
+            projectionSha256: forged.projectionSha256,
+            sources: forged.sources,
+          },
           "one",
           scope,
         ),
@@ -3521,10 +3539,10 @@ test("a sealed source-only archive campaign reaches the production certifier and
     assert.equal(providerCalls, 1);
     assert.equal(refused.nativeCertificateIssued, false);
     assert.match(refused.problems.join(";"), /external verifier did not close this exact binding/);
-    for (const row of predicate.allBirths)
+    for (const entry of predicate.allBirths)
       assert.equal(
-        row.rawReportSha256,
-        sha(Buffer.from(JSON.stringify(reports.get(row.attemptId)))),
+        entry.rawReportSha256,
+        sha(Buffer.from(JSON.stringify(reports.get(entry.attemptId)))),
       );
   } finally {
     await fs.rm(root, { recursive: true });

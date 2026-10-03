@@ -125,7 +125,7 @@ export async function inventoryPass(recorder) {
     recorder,
     rows.map((row) => row.pid),
   );
-  return rows.map((row) => ({ ...row, sid: sessions[row.pid] }));
+  return rows.map((row) => Object.assign({}, row, { sid: sessions[row.pid] }));
 }
 
 /** Up to five passes (`pass` takes one), until two consecutive clean ones or a definite answer. */
@@ -231,8 +231,7 @@ const identityOf = (row) => ({ pid: row.pid, uid: row.uid, started: row.started 
 
 const zoneIsValid = (timeZone) => {
   try {
-    new Intl.DateTimeFormat("en-US", { timeZone });
-    return true;
+    return Boolean(new Intl.DateTimeFormat("en-US", { timeZone }));
   } catch {
     return false;
   }
@@ -310,7 +309,7 @@ export function cleanupTargets({ rows, chain, launchTime, recorded, injected, se
       : null;
   return rows.filter((row) => {
     const startedAt = Date.parse(row.started + " GMT");
-    if (row.pid === selfPid || /^Z/.test(row.stat ?? "")) return false;
+    if (row.pid === selfPid || String(row.stat ?? "").startsWith("Z")) return false;
     if (!Number.isFinite(startedAt) || startedAt < launchTime) return false;
     return (
       (session !== null && row.sid === session) ||
@@ -462,7 +461,7 @@ export async function accountingOuter(accDir) {
 
 async function recordFiles(directory) {
   const files = {};
-  for (const name of (await readdir(directory)).sort())
+  for (const name of (await readdir(directory)).toSorted())
     try {
       files[name] = name.endsWith(".jsonl") ? await readRecords(join(directory, name)) : [];
     } catch {
@@ -1125,7 +1124,10 @@ export async function cleanupOwned({ inventory, signal, context }) {
   const after = await inventory();
   const remaining = cleanupTargets({ ...context, rows: after });
   const uncertain = after.some(
-    (row) => row.sid === "ESRCH" || !Number.isSafeInteger(row.sid) || /^Z/.test(row.stat ?? ""),
+    (row) =>
+      row.sid === "ESRCH" ||
+      !Number.isSafeInteger(row.sid) ||
+      String(row.stat ?? "").startsWith("Z"),
   );
   return {
     outcome:
@@ -1261,7 +1263,7 @@ export function recomputeNativeReport(report, { sourceBlobs, attemptId, scope } 
         (r) => r.pid !== inventoryQuery.answer.pid,
       );
       const sessions = JSON.parse(sessionQuery.answer.stdout);
-      passes.push(rows.map((r) => ({ ...r, sid: sessions[String(r.pid)] })));
+      passes.push(rows.map((r) => Object.assign({}, r, { sid: sessions[String(r.pid)] })));
     }
     const identities = recordedIdentities({
       files,
@@ -1522,8 +1524,8 @@ function verifySourceBytes(report, sourceBlobs, attemptId, scope) {
     !scope ||
     !identifier(attemptId) ||
     !isDeepStrictEqual(
-      [...sourceBlobs.keys()].sort(),
-      FIXED_NATIVE_SOURCES.map((s) => s.path).sort(),
+      [...sourceBlobs.keys()].toSorted(),
+      FIXED_NATIVE_SOURCES.map((s) => s.path).toSorted(),
     )
   )
     throw new Error("missing complete native source resolution");
@@ -1556,7 +1558,7 @@ export async function resolveNativeSources(report, attemptId, scope) {
     parent = await privateDirectory(report.accountingDirectory),
     namespace = await privateDirectory(directory);
   const expectedNames = FIXED_NATIVE_SOURCES.map((_, i) => `source-${i}.raw`);
-  if (!isDeepStrictEqual((await readdir(directory)).sort(), expectedNames.sort()))
+  if (!isDeepStrictEqual((await readdir(directory)).toSorted(), expectedNames.toSorted()))
     throw new Error("native source publication set differs");
   const binding = { attemptId, scopeSha256: digest(Buffer.from(JSON.stringify(scope))) };
   if (!isDeepStrictEqual(report.native.sourceBinding, binding))
@@ -1579,7 +1581,7 @@ export async function resolveNativeSources(report, attemptId, scope) {
     !sameInode(root, await privateDirectory(scope.runRoot)) ||
     !sameInode(parent, await privateDirectory(report.accountingDirectory)) ||
     !sameInode(namespace, await privateDirectory(directory)) ||
-    !isDeepStrictEqual((await readdir(directory)).sort(), expectedNames.sort())
+    !isDeepStrictEqual((await readdir(directory)).toSorted(), expectedNames.toSorted())
   )
     throw new Error("native source namespace changed during readback");
   verifySourceBytes(report, raw, attemptId, scope);
@@ -1663,6 +1665,9 @@ function archiveDescriptor(manifest, manifestRaw, accountingDirectory) {
     rawFile: "report.raw",
     rawBytes: manifest.rawBytes,
     rawSha256: manifest.rawSha256,
+    projectionBytes: manifest.projectionBytes,
+    projectionSha256: manifest.projectionSha256,
+    sources: manifest.sources,
     manifestFile: "manifest.json",
     manifestBytes: manifestRaw.length,
     manifestSha256: digest(manifestRaw),
@@ -1741,7 +1746,7 @@ export async function resolveNativeReport(descriptor, attemptId, scope) {
     parent = await ownedArchiveDirectory(descriptor.accountingDirectory),
     namespace = await ownedArchiveDirectory(directory);
   const exactFiles = ["manifest.json", "report.raw"];
-  if (!isDeepStrictEqual((await readdir(directory)).sort(), exactFiles))
+  if (!isDeepStrictEqual((await readdir(directory)).toSorted(), exactFiles))
     throw new Error("native archive publication set differs");
   const manifestRaw = await boundedSourceRead(join(directory, "manifest.json"), {
     bytes: descriptor.manifestBytes,
@@ -1770,7 +1775,7 @@ export async function resolveNativeReport(descriptor, attemptId, scope) {
     !sameInode(root, await ownedArchiveDirectory(scope.runRoot)) ||
     !sameInode(parent, await ownedArchiveDirectory(descriptor.accountingDirectory)) ||
     !sameInode(namespace, await ownedArchiveDirectory(directory)) ||
-    !isDeepStrictEqual((await readdir(directory)).sort(), exactFiles)
+    !isDeepStrictEqual((await readdir(directory)).toSorted(), exactFiles)
   )
     throw new Error("native archive namespace changed during readback");
   return { originalBytes, report, sourceBlobs };
@@ -1833,7 +1838,7 @@ export function validateCampaignPacket(packet, { utcDay, harnessH, filePins }) {
     problems.push("current day or H differs");
   if (
     !isDeepStrictEqual(packet?.harnessFiles, filePins) ||
-    !isDeepStrictEqual(Object.keys(filePins).sort(), [...HARNESS_FILES].sort()) ||
+    !isDeepStrictEqual(Object.keys(filePins).toSorted(), [...HARNESS_FILES].toSorted()) ||
     !Object.values(filePins).every(hash64)
   )
     problems.push("whole H file pins differ");
@@ -1896,7 +1901,7 @@ async function publishCampaignBytes(path, raw, publicationOpen = open) {
   try {
     return await boundedSourceRead(path, { bytes: raw.length, sha256: digest(raw) });
   } catch (error) {
-    throw new Error(`durable publication readback differs: ${error.message}`);
+    throw new Error(`durable publication readback differs: ${error.message}`, { cause: error });
   }
 }
 
@@ -1921,8 +1926,8 @@ export async function readCampaignSnapshot(scope) {
     throw new Error("invalid report enumeration");
   if (
     !isDeepStrictEqual(
-      (await readdir(directory)).sort(),
-      ["authority.json", "ledger.jsonl", ...names].sort(),
+      (await readdir(directory)).toSorted(),
+      ["authority.json", "ledger.jsonl", ...names].toSorted(),
     )
   )
     throw new Error("omitted or extra ledger publication");
@@ -2145,7 +2150,12 @@ export function evaluateCampaignSnapshot(packet, snapshot, standInRunnerSha256) 
       )
     )
       throw new Error("omitted, extra or duplicate accepted attempt");
-    if (!isDeepStrictEqual([...reports.keys()].sort(), terminals.map((r) => r.reportFile).sort()))
+    if (
+      !isDeepStrictEqual(
+        [...reports.keys()].toSorted(),
+        terminals.map((r) => r.reportFile).toSorted(),
+      )
+    )
       throw new Error("omitted or extra raw report");
     const entries = births.map((birth) => {
       const terminal = terminals.find((r) => r.attemptId === birth.attemptId);
@@ -2383,7 +2393,7 @@ function verifyCleanupProof(cleanup, context, root, version) {
     observations.push(
       parseInventory(q.answer.stdout)
         .filter((r) => r.pid !== q.answer.pid)
-        .map((r) => ({ ...r, sid: sids[String(r.pid)] })),
+        .map((r) => Object.assign({}, r, { sid: sids[String(r.pid)] })),
     );
   }
   if (
@@ -2409,7 +2419,8 @@ function verifyCleanupProof(cleanup, context, root, version) {
   if (
     cleanupTargets({ ...context, rows: cleanup.after }).length ||
     cleanup.after.some(
-      (r) => r.sid === "ESRCH" || !Number.isSafeInteger(r.sid) || /^Z/.test(r.stat ?? ""),
+      (r) =>
+        r.sid === "ESRCH" || !Number.isSafeInteger(r.sid) || String(r.stat ?? "").startsWith("Z"),
     )
   )
     throw new Error("cleanup after inventory unknown");

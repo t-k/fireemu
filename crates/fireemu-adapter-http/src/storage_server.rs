@@ -120,6 +120,14 @@ pub struct ServerObserver {
 #[derive(Default)]
 struct WorkerPublicationGate {
     handler_entries: AtomicUsize,
+    panic_on_matcher: AtomicBool,
+    hold_unwinding: AtomicBool,
+    unwinding: AtomicUsize,
+    unwind_budget: AtomicUsize,
+    unwind_workers: AtomicUsize,
+    unwind_general: AtomicUsize,
+    joining_workers: AtomicUsize,
+    receiver_disconnected: AtomicUsize,
     completion_budget: AtomicUsize,
     sent: AtomicUsize,
     hold: AtomicBool,
@@ -151,7 +159,44 @@ impl WorkerPublicationGate {
             .lock()
             .expect("publication gate is not poisoned");
         self.hold.store(false, Ordering::Release);
+        self.hold_unwinding.store(false, Ordering::Release);
         self.gate.1.notify_all();
+    }
+}
+
+/// Records a real handler's unwind without imposing a release-before-response contract.
+#[cfg(test)]
+struct HandlerUnwindProbe<'a> {
+    observer: &'a ServerObserver,
+    budget: &'static BodyBudget,
+}
+
+#[cfg(test)]
+impl Drop for HandlerUnwindProbe<'_> {
+    fn drop(&mut self) {
+        if !std::thread::panicking() {
+            return;
+        }
+        let gate = &self.observer.publication_gate;
+        gate.unwind_budget
+            .store(self.budget.in_flight(), Ordering::Release);
+        gate.unwind_workers.store(
+            self.observer.workers.load(Ordering::Acquire),
+            Ordering::Release,
+        );
+        gate.unwind_general.store(
+            self.observer.general_permits.load(Ordering::Acquire),
+            Ordering::Release,
+        );
+        gate.unwinding.fetch_add(1, Ordering::AcqRel);
+        let mut guard = gate.gate.0.lock().expect("unwind gate is not poisoned");
+        while gate.hold_unwinding.load(Ordering::Acquire) {
+            guard = gate
+                .gate
+                .1
+                .wait(guard)
+                .expect("unwind gate is not poisoned");
+        }
     }
 }
 
@@ -733,6 +778,8 @@ async fn respond(
         let _permit = permit;
         let _glob_permit = glob_permit;
         let body = buffer.take();
+        #[cfg(test)]
+        let _unwind = HandlerUnwindProbe { observer, budget };
         let matching = std::cell::RefCell::new(None);
         #[cfg(test)]
         observer
@@ -766,6 +813,14 @@ async fn respond(
                     observer.state_polls.fetch_add(1, Ordering::Relaxed);
                     if matching.borrow().is_none() {
                         matching.replace(Some(CountGuard::new(&observer.matching_workers)));
+                    }
+                    #[cfg(test)]
+                    if observer
+                        .publication_gate
+                        .panic_on_matcher
+                        .load(Ordering::Acquire)
+                    {
+                        panic!("test-only Storage handler panic inside matcher primitive");
                     }
                 }
                 GlobEvent::MatcherEpsilonPoll => {
@@ -809,12 +864,18 @@ async fn respond(
         Ok(Ok(response)) => response,
         Ok(Err(_)) => return Err(std::io::Error::other("storage request cancelled")),
         Err(_) => {
+            #[cfg(test)]
+            runtime
+                .observer
+                .publication_gate
+                .receiver_disconnected
+                .fetch_add(1, Ordering::AcqRel);
             return Ok(handler_error_response(
                 StatusCode::INTERNAL_SERVER_ERROR,
                 b"storage handler failed",
                 origin.as_deref(),
                 false,
-            ))
+            ));
         }
     };
     if trace {
@@ -972,6 +1033,12 @@ pub async fn serve_storage_with_shutdown(
             .lock()
             .expect("storage worker registry is not poisoned"),
     );
+    #[cfg(test)]
+    runtime
+        .observer
+        .publication_gate
+        .joining_workers
+        .store(jobs.len(), Ordering::Release);
     for job in jobs {
         let _ = job.await;
     }
@@ -1218,6 +1285,7 @@ mod budget_publication_tests {
     }
     impl Drop for Cleanup<'_> {
         fn drop(&mut self) {
+            self.observer.release_cancelled_workers();
             self.observer.publication_gate.release();
             if let Some(stop) = self.stop.take() {
                 let _ = stop.send(());
@@ -1265,6 +1333,188 @@ mod budget_publication_tests {
             "{}",
             String::from_utf8_lossy(&response[..received])
         );
+    }
+
+    fn start_charged_matcher<'a>(
+        runtime: &'a tokio::runtime::Runtime,
+        budget: &'static BodyBudget,
+        observer: Arc<ServerObserver>,
+    ) -> (Cleanup<'a>, std::net::TcpStream) {
+        let port = std::env::var("PORT")
+            .ok()
+            .and_then(|value| value.parse::<u16>().ok())
+            .unwrap_or(0);
+        let listener = runtime
+            .block_on(TcpListener::bind(("127.0.0.1", port)))
+            .unwrap();
+        let address = listener.local_addr().unwrap();
+        let (stop, stopped) = tokio::sync::oneshot::channel();
+        let server = runtime.spawn(serve_storage_with_shutdown(
+            listener,
+            super::descriptor_tests::state(),
+            budget,
+            async {
+                let _ = stopped.await;
+            },
+            observer.clone(),
+        ));
+        let cleanup = Cleanup {
+            runtime,
+            observer,
+            stop: Some(stop),
+            server: Some(server),
+        };
+        let mut client = std::net::TcpStream::connect(address).unwrap();
+        client
+            .set_write_timeout(Some(Duration::from_secs(5)))
+            .unwrap();
+        client
+            .set_read_timeout(Some(Duration::from_secs(5)))
+            .unwrap();
+        let pattern = "*{,}".repeat(15_000) + "z";
+        write!(client, "GET /storage/v1/b/demo-app.appspot.com/o?matchGlob={pattern} HTTP/1.1\r\nHost: localhost\r\nAuthorization: Bearer owner\r\nContent-Length: {CHARGE_GRANULARITY}\r\nConnection: close\r\n\r\n").unwrap();
+        client.write_all(&vec![7; CHARGE_GRANULARITY]).unwrap();
+        (cleanup, client)
+    }
+
+    fn runtime() -> tokio::runtime::Runtime {
+        tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(2)
+            .enable_all()
+            .build()
+            .unwrap()
+    }
+
+    #[test]
+    fn charged_cancellation_retains_charge_through_observer_then_joins_worker() {
+        static BUDGET: BodyBudget = BodyBudget::new(4 * CHARGE_GRANULARITY);
+        let runtime = runtime();
+        let observer = Arc::new(ServerObserver::default());
+        observer
+            .hold_cancelled_workers
+            .store(true, Ordering::Release);
+        observer
+            .publication_gate
+            .hold
+            .store(true, Ordering::Release);
+        let (mut cleanup, client) = start_charged_matcher(&runtime, &BUDGET, observer.clone());
+        observed("charged request reached matcher primitives", || {
+            observer.state_polls.load(Ordering::Acquire) > 0
+        });
+        assert_eq!(BUDGET.in_flight(), CHARGE_GRANULARITY);
+        client.shutdown(std::net::Shutdown::Write).unwrap();
+        observed("cancel observer holds the charged body", || {
+            observer.cancelled_workers.load(Ordering::Acquire) == 1
+        });
+        assert_eq!(BUDGET.in_flight(), CHARGE_GRANULARITY);
+        assert_eq!(observer.completed_workers.load(Ordering::Acquire), 0);
+        assert_eq!(observer.publication_gate.sent.load(Ordering::Acquire), 0);
+        assert_eq!(observer.workers.load(Ordering::Acquire), 1);
+        assert_eq!(observer.general_permits.load(Ordering::Acquire), 1);
+        assert_eq!(observer.active_globs.load(Ordering::Acquire), 1);
+        observer.release_cancelled_workers();
+        observed("cancel result sent while worker retained", || {
+            observer.publication_gate.sent.load(Ordering::Acquire) == 1
+        });
+        assert_eq!(BUDGET.in_flight(), 0);
+        assert_eq!(
+            observer
+                .publication_gate
+                .completion_budget
+                .load(Ordering::Acquire),
+            0
+        );
+        assert_eq!(observer.completed_workers.load(Ordering::Acquire), 1);
+        assert_eq!(observer.workers.load(Ordering::Acquire), 1);
+        assert_eq!(observer.general_permits.load(Ordering::Acquire), 1);
+        assert_eq!(observer.active_globs.load(Ordering::Acquire), 1);
+        assert_eq!(ServerObserver::free_permits(), (1, 15));
+        cleanup.stop.take().unwrap().send(()).unwrap();
+        observed("shutdown reached its registered worker join", || {
+            observer
+                .publication_gate
+                .joining_workers
+                .load(Ordering::Acquire)
+                == 1
+        });
+        assert!(
+            !cleanup.server.as_ref().unwrap().is_finished(),
+            "held worker keeps shutdown pending"
+        );
+        drop(client);
+        drop(cleanup);
+        assert_eq!(BUDGET.in_flight(), 0);
+        assert_eq!(observer.workers.load(Ordering::Acquire), 0);
+        assert_eq!(ServerObserver::free_permits(), (2, 16));
+        eprintln!("charged cancel bodyBytes={CHARGE_GRANULARITY} observerChargeHeld=1 completionCharge=0 workerPermitsHeld=1 shutdownJoined=1 finalPermits=2/16 budget=0");
+    }
+
+    #[test]
+    fn charged_handler_panic_unwinds_without_completion_and_returns_500() {
+        static BUDGET: BodyBudget = BodyBudget::new(4 * CHARGE_GRANULARITY);
+        let runtime = runtime();
+        let observer = Arc::new(ServerObserver::default());
+        observer
+            .publication_gate
+            .panic_on_matcher
+            .store(true, Ordering::Release);
+        observer
+            .publication_gate
+            .hold_unwinding
+            .store(true, Ordering::Release);
+        let (cleanup, mut client) = start_charged_matcher(&runtime, &BUDGET, observer.clone());
+        observed("real handler unwind probe", || {
+            observer.publication_gate.unwinding.load(Ordering::Acquire) == 1
+        });
+        assert!(observer.state_polls.load(Ordering::Acquire) > 0);
+        assert_eq!(observer.completed_workers.load(Ordering::Acquire), 0);
+        eprintln!(
+            "panic unwind snapshot charge={} workers={} generalPermits={}",
+            observer
+                .publication_gate
+                .unwind_budget
+                .load(Ordering::Acquire),
+            observer
+                .publication_gate
+                .unwind_workers
+                .load(Ordering::Acquire),
+            observer
+                .publication_gate
+                .unwind_general
+                .load(Ordering::Acquire)
+        );
+        observer.publication_gate.release();
+        check_upload_response(&mut client, 500);
+        observed("receiver observed worker sender disconnection", || {
+            observer
+                .publication_gate
+                .receiver_disconnected
+                .load(Ordering::Acquire)
+                == 1
+        });
+        assert_eq!(observer.completed_workers.load(Ordering::Acquire), 0);
+        assert_eq!(observer.publication_gate.sent.load(Ordering::Acquire), 0);
+        eprintln!(
+            "panic HTTP500 snapshot charge={} workers={} generalPermits={}",
+            BUDGET.in_flight(),
+            observer.workers.load(Ordering::Acquire),
+            observer.general_permits.load(Ordering::Acquire)
+        );
+        drop(client);
+        drop(cleanup);
+        assert_eq!(
+            observer
+                .publication_gate
+                .joining_workers
+                .load(Ordering::Acquire),
+            1
+        );
+        assert_eq!(observer.completed_workers.load(Ordering::Acquire), 0);
+        assert_eq!(observer.workers.load(Ordering::Acquire), 0);
+        assert_eq!(observer.general_permits.load(Ordering::Acquire), 0);
+        assert_eq!(BUDGET.in_flight(), 0);
+        assert_eq!(ServerObserver::free_permits(), (2, 16));
+        eprintln!("charged handler panic bodyBytes={CHARGE_GRANULARITY} oneshotDisconnected=1 HTTP=500 completed=0 shutdownJoined=1 finalPermits=2/16 budget=0");
     }
 
     /// A received response must release its body charge while the worker still owns permits.

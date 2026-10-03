@@ -509,6 +509,44 @@ test('raw report alteration during seal publication prevents durable seal acknow
   assert.equal(ledger.ioStatus().state, 'unknown');
 });
 
+for (const change of ['raw-report', 'close-failure']) {
+  test(`final journal read overlap denies seal ack: ${change}`, async (t) => {
+    const box = await sandbox(t);
+    let ledger;
+    let armed = false;
+    let sealedReads = 0;
+    let didChange = false;
+    let closeFailed = false;
+    const traced = observedIo(async (event, invoke, _handle, args) => {
+      if (change === 'close-failure' && didChange && event.endsWith(':close') && !closeFailed) {
+        closeFailed = true;
+        throw new Error('review close failure');
+      }
+      const value = await invoke();
+      if (armed && event === 'ledger.jsonl:read' && args[0].toString().includes('"type":"seal"') && ++sealedReads === 2) {
+        didChange = true;
+        if (change === 'raw-report') await fs.writeFile(path.join(box.root, 'attempt-ledger', 'report-1.json'), report('a', 'fail', box.scope));
+        else await assert.rejects(ledger.close(), /review close failure/);
+      }
+      return value;
+    });
+    ledger = await createAttemptLedger({ ...box.options, io: traced.io });
+    t.after(() => ledger.close());
+    await ledger.registerBirth({ attemptId: 'a', planBytes: bytes({}) });
+    await ledger.recordTerminal({ attemptId: 'a', reportBytes: report('a', 'pass', box.scope) });
+    armed = true;
+    await assert.rejects(ledger.seal(), /unknown|mismatch|closed/);
+    assert.equal(didChange, true, 'the exact final real journal read boundary must be reached');
+    assert.equal(ledger.ioStatus().state, 'unknown');
+    assert.equal(ledger.ioStatus().durabilityAcknowledged, false);
+    const actual = await readback(box.root, box.options.authorityBytes);
+    assert.equal(actual.durabilityAcknowledged, false);
+    if (change === 'raw-report') assert.equal(actual.state, 'rejected');
+    await ledger.close();
+    assert.equal(traced.live.size, 0);
+  });
+}
+
 test('exports the bounded durable ledger and independent bytes validator', async () => {
   const api = await import('./calendar-attempt-ledger.mjs').catch(() => ({}));
   assert.equal(typeof api.createAttemptLedger, 'function', 'durable ledger API is missing');

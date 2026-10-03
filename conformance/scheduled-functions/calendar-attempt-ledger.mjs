@@ -119,6 +119,9 @@ export function validateAttemptLedger({ authorityBytes, authoritySha256, ledgerB
 }
 
 // A fresh, fixed child directory is exclusively owned for this handle's lifetime.
+// The caller must exclusively control its namespace and forbid external writers.
+// Readback rechecks detect observed interference; they are not an atomic snapshot
+// against arbitrary concurrent writers. Published authority/report bytes are immutable.
 // No recovery takeover, directory discovery, producer launch or process probing is performed.
 // The caller must await registerBirth before any attempt side effect. An ack means
 // full write, file sync, directory sync when publishing, and exact readback succeeded.
@@ -147,16 +150,24 @@ export async function createAttemptLedger({ authorityBytes, authoritySha256, lim
   let deadline;
   const fail = (message) => { poison ??= message; return new Error(`Ledger unknown: ${poison}`); };
   const checkDay = () => { if (new Date(now()).toISOString().slice(0, 10) !== scope.utcDay) throw new Error('UTC day differs from frozen scope'); };
-  async function syscall(action, cleanup = false) {
-    if (!cleanup && (closed || poison)) throw fail(poison || 'closed during operation');
-    const remaining = deadline - Date.now();
+  function checkLive(operationDeadline) {
+    if (closed || poison) throw fail(poison || 'closed during operation');
+    if (Date.now() >= operationDeadline) throw fail('deadline expired');
+    checkDay();
+  }
+  async function syscall(action, cleanup = false, syscallDeadline = deadline) {
+    if (!cleanup) checkLive(syscallDeadline);
+    const remaining = syscallDeadline - Date.now();
     if (remaining <= 0) throw fail('deadline expired');
     let timer;
     try {
-      return await Promise.race([
+      const value = await Promise.race([
         Promise.resolve().then(action),
         new Promise((_, reject) => { timer = setTimeout(() => reject(fail('unresolved syscall deadline')), remaining); }),
       ]);
+      if (!cleanup) checkLive(syscallDeadline);
+      else if (Date.now() >= syscallDeadline) throw fail('cleanup deadline expired');
+      return value;
     } finally { clearTimeout(timer); }
   }
   async function open(file, flags) {
@@ -168,8 +179,8 @@ export async function createAttemptLedger({ authorityBytes, authoritySha256, lim
       return handle;
     });
   }
-  async function release(handle) {
-    try { await syscall(() => handle.close(), true); handles.delete(handle); } catch (error) { throw fail(error.message); }
+  async function release(handle, cleanupDeadline = deadline) {
+    try { await syscall(() => handle.close(), true, cleanupDeadline); handles.delete(handle); } catch (error) { throw fail(error.message); }
   }
   async function pin(file, handle, directoryExpected = false) {
     const stat = await syscall(() => io.lstat(file));
@@ -231,13 +242,20 @@ export async function createAttemptLedger({ authorityBytes, authoritySha256, lim
     records.push(record);
     offset += raw.length;
   }
-  async function operation(action) {
+  async function operation(action, commitsSeal = false) {
     if (closed) throw new Error('Ledger closed');
     if (poison) throw fail(poison);
     if (busy) throw new Error('Concurrent ledger operation rejected');
     busy = true;
-    deadline = Date.now() + limits.deadlineMs;
-    try { await guard(); return await action(); }
+    const operationDeadline = Date.now() + limits.deadlineMs;
+    deadline = operationDeadline;
+    try {
+      await guard();
+      const value = await action();
+      checkLive(operationDeadline);
+      if (commitsSeal) sealedAck = true;
+      return value;
+    }
     catch (error) { throw fail(error.message); }
     finally { busy = false; }
   }
@@ -245,11 +263,10 @@ export async function createAttemptLedger({ authorityBytes, authoritySha256, lim
     if (closed && handles.size === 0) return;
     closed = true;
     admissionClosed = true;
-    deadline = Date.now() + limits.deadlineMs;
     let failure;
     for (const handle of [...handles]) {
-      try { await release(handle); }
-      catch (error) { failure ??= error; deadline = Date.now() + limits.deadlineMs; }
+      try { await release(handle, Date.now() + limits.deadlineMs); }
+      catch (error) { failure ??= error; }
     }
     if (failure) throw failure;
   }
@@ -292,6 +309,9 @@ export async function createAttemptLedger({ authorityBytes, authoritySha256, lim
   }
   return Object.freeze({
     ioStatus() {
+      // A successful seal is a historical owned-I/O acknowledgement, not a fresh
+      // filesystem readback. Sticky unknown invalidates it; producer certification
+      // must independently acquire and validate its immutable supplied snapshot.
       if (poison) return result('unknown', poison);
       if (sealedAck) return { ...result('complete'), durabilityAcknowledged: true };
       if (closed) return result('unknown', 'Closed without durable seal');
@@ -338,11 +358,15 @@ export async function createAttemptLedger({ authorityBytes, authoritySha256, lim
         await verifyAuthority();
         await refreshReports();
         await guard();
-        const final = validateAttemptLedger({ authorityBytes: retainedAuthority, authoritySha256, ledgerBytes: await read(journal, limits.maxBytes), reports, limits });
+        const ledgerBytes = await read(journal, limits.maxBytes);
+        // The final journal await is also an interference/lifecycle boundary.
+        await verifyAuthority();
+        await refreshReports();
+        await guard();
+        const final = validateAttemptLedger({ authorityBytes: retainedAuthority, authoritySha256, ledgerBytes, reports, limits });
         if (final.state !== 'complete') throw fail('final sealed readback unknown');
-        sealedAck = true;
         return { ...final, durabilityAcknowledged: true };
-      });
+      }, true);
     },
     close,
   });

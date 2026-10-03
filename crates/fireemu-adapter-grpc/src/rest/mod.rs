@@ -543,6 +543,71 @@ fn classify(resource: &str) -> Result<Target, Status> {
     }
 }
 
+/// Decodes the REST resource and its raw custom-method suffix once for every consumer.
+fn decoded_rest_route(
+    req: &RestRequest,
+    production: bool,
+) -> Result<Option<(String, Option<&str>)>, Status> {
+    let (raw_resource, action) = match req.path.rsplit_once(':') {
+        // The query methods' templates need a document below `documents`; with one
+        // segment there, production's front end matches the create template instead, with
+        // the method in the collection id (FS-QUERY-INDEX parent-is-collection). The
+        // emulator profile keeps the query route, which refuses the collection parent, so
+        // a mistaken query never creates a document there.
+        Some((r, a)) if QUERY_METHODS.contains(&a) && names_a_root_collection(r) && production => {
+            (req.path.as_str(), None)
+        }
+        Some((r, a)) if CUSTOM_METHODS.contains(&a) => (r, Some(a)),
+        // A colon in the last segment is routing syntax (a document ID carries it
+        // percent-encoded), so an unknown method is a route that does not exist -- never
+        // a collection whose ID happens to contain the colon.
+        Some((_, a)) if !a.contains('/') => return Ok(None),
+        _ => (req.path.as_str(), None),
+    };
+    let decoded = decode_path(raw_resource).map_err(|status| {
+        observed_create_collection_slash_error(req, raw_resource, action, status)
+    })?;
+    let Some(path) = decoded.strip_prefix("/v1/") else {
+        return Ok(None);
+    };
+    Ok(Some((path.to_owned(), action)))
+}
+
+/// The observed production layout applies only to the bare missing-document GET envelope.
+/// This selects the existing index policy, independently of the limits setting.
+pub(crate) fn production_document_not_found(
+    state: &RestState,
+    req: &RestRequest,
+    response: &RestResponse,
+) -> bool {
+    if !state.gateway.production_refusals() || req.method != "GET" || response.status != 404 {
+        return false;
+    }
+    let Ok(Some((path, None))) = decoded_rest_route(req, true) else {
+        return false;
+    };
+    let Ok(Target::Resource(name)) = classify(&path) else {
+        return false;
+    };
+    if name.split('/').nth(5).is_none() {
+        return false;
+    }
+    let Some(body) = response.body.as_object().filter(|body| body.len() == 1) else {
+        return false;
+    };
+    let Some(error) = body
+        .get("error")
+        .and_then(Value::as_object)
+        .filter(|error| error.len() == 3)
+    else {
+        return false;
+    };
+    error.get("code").and_then(Value::as_u64) == Some(404)
+        && error.get("status").and_then(Value::as_str) == Some("NOT_FOUND")
+        && error.get("message").and_then(Value::as_str)
+            == Some(format!("Document \"{name}\" not found.").as_str())
+}
+
 /// The caller of a REST request: its principal plus the reset epoch the request started in
 /// (read before the token is verified; the guards refuse a caller from an earlier epoch).
 pub struct Caller {
@@ -1023,32 +1088,11 @@ impl RestState {
         if let Some(response) = crate::admin::rest::route(self, req) {
             return Ok(response);
         }
-        let (raw_resource, action) = match req.path.rsplit_once(':') {
-            // The query methods' templates need a document below `documents`; with one
-            // segment there, production's front end matches the create template instead, with
-            // the method in the collection id (FS-QUERY-INDEX parent-is-collection). The
-            // emulator profile keeps the query route, which refuses the collection parent, so
-            // a mistaken query never creates a document there.
-            Some((r, a))
-                if QUERY_METHODS.contains(&a)
-                    && names_a_root_collection(r)
-                    && self.gateway.production_refusals() =>
-            {
-                (req.path.as_str(), None)
-            }
-            Some((r, a)) if CUSTOM_METHODS.contains(&a) => (r, Some(a)),
-            // A colon in the last segment is routing syntax (a document ID carries it
-            // percent-encoded), so an unknown method is a route that does not exist -- never
-            // a collection whose ID happens to contain the colon.
-            Some((_, a)) if !a.contains('/') => return Ok(not_found_text()),
-            _ => (req.path.as_str(), None),
-        };
-        let decoded = decode_path(raw_resource).map_err(|status| {
-            observed_create_collection_slash_error(req, raw_resource, action, status)
-        })?;
-        let Some(path) = decoded.strip_prefix("/v1/") else {
+        let Some((decoded, action)) = decoded_rest_route(req, self.gateway.production_refusals())?
+        else {
             return Ok(not_found_text());
         };
+        let path = decoded.as_str();
         let params = query_params(&req.query);
         let segments: Vec<&str> = path.split('/').collect();
         if let Some(response) = self.database_subroute(req, path, &segments, action, &params) {

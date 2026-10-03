@@ -279,7 +279,7 @@ test('seal stops admission immediately and rejects races with an accepted writer
   t.after(() => ledger.close());
   armed = true;
   const pending = ledger.registerBirth({ attemptId: 'a', planBytes: bytes({}) });
-  await atWrite;
+  await Promise.race([atWrite, pending.then(() => assert.fail('accepted birth bypassed durable write'))]);
   await assert.rejects(ledger.registerBirth({ attemptId: 'b', planBytes: bytes({}) }), /Concurrent/);
   await assert.rejects(ledger.seal(), /raced|unknown/);
   await assert.rejects(ledger.registerBirth({ attemptId: 'late', planBytes: bytes({}) }), /closed/);

@@ -100,6 +100,7 @@ for (const {name, ...metadata} of ${JSON.stringify(definitions)}) {
     await exited;
     child.stdin.destroy(); child.stdout.destroy(); child.stderr.destroy();
     await rm(dir, { recursive: true, force: true });
+    assert.equal(outcome.code, 0, `runner shutdown failed: ${stderr.slice(-1000)}`);
   });
   const hello = await wait(() => frames.find(x => x.type === 'hello'));
   let sequence = 0;
@@ -133,7 +134,11 @@ const data = d => d.before ? {before:snapshot(d.before),after:snapshot(d.after)}
 const report = (name,d,event) => {appendFileSync(join(__dirname,'calls.jsonl'),JSON.stringify({name,data:data(d),event})+'\\n');return Promise.resolve();};
 for(const [kind,method] of Object.entries({created:'onCreate',updated:'onUpdate',deleted:'onDelete',written:'onWrite'})) {
   exports[kind+'V1']=v1.firestore.document('items/{id}')[method]((d,c)=>report(kind+'V1',d,c));
-  exports[kind+'V2']=v2[{created:'onDocumentCreated',updated:'onDocumentUpdated',deleted:'onDocumentDeleted',written:'onDocumentWritten'}[kind]]('items/{id}',e=>report(kind+'V2',e.data,{...e,data:undefined}));
+  const fn=v2[{created:'onDocumentCreated',updated:'onDocumentUpdated',deleted:'onDocumentDeleted',written:'onDocumentWritten'}[kind]]('items/{id}',e=>report(kind+'V2',e.data,{...e,data:undefined}));
+  exports[kind+'V2']=Object.assign(async e=>{
+    if(kind!=='written'&&(Buffer.isBuffer(e.data)||e.datacontenttype!=='application/json'))throw Error('C/U/D retain JSON transport');
+    return fn(e);
+  },fn);
 }
 `);
   const documentSource = 'projects/demo-app/databases/(default)/documents/items/one';
@@ -159,6 +164,114 @@ for(const [kind,method] of Object.entries({created:'onCreate',updated:'onUpdate'
       }
     }
   }
+});
+
+test('real SDK Written protobuf preserves generated values, nanoseconds, side states, auth and replay', { timeout: 30000 }, async t => {
+  assert.equal(JSON.parse(await readFile(join(sdkRoot,'package.json'),'utf8')).version,'7.3.2');
+  const f = await start(t, [], `
+const {appendFileSync}=require('node:fs');
+const {join}=require('node:path');
+const sdk=require(${JSON.stringify(join(sdkRoot, 'lib/v2/providers/firestore.js'))});
+const admin=require('firebase-admin/app');
+require('firebase-admin/firestore').getFirestore(admin.initializeApp({projectId:'demo-app'})).settings({useBigInt:true});
+const codec=require(${JSON.stringify(join(sdkRoot, 'protos/compiledFirestore.js'))}).google.events.cloud.firestore.v1.DocumentEventData;
+const normalize=v=>{
+ if(typeof v==='bigint')return {integer:v.toString()};
+ if(typeof v==='number'&&!Number.isFinite(v))return {double:String(v)};
+ if(Object.is(v,-0))return {double:'-0'};
+ if(Buffer.isBuffer(v))return {bytes:v.toString('base64')};
+ if(v?.constructor.name==='Timestamp')return {seconds:v.seconds,nanoseconds:v.nanoseconds};
+ if(v?.constructor.name==='DocumentReference')return {reference:v.path};
+ if(v?.constructor.name==='GeoPoint')return {latitude:v.latitude,longitude:v.longitude};
+ if(Array.isArray(v))return v.map(normalize);
+ if(v&&typeof v==='object')return Object.fromEntries(Object.entries(v).map(([k,x])=>[k,normalize(x)]));
+ return v;
+};
+const snap=s=>({exists:s.exists,path:s.ref.path,id:s.id,data:normalize(s.data()??null),createTime:normalize(s.createTime??null),updateTime:normalize(s.updateTime??null)});
+let retry=false;
+function declare(name,auth=false,retried=false){
+ const fn=sdk[auth?'onDocumentWrittenWithAuthContext':'onDocumentWritten']({document:'items/{id}',retry:retried},async e=>{
+  appendFileSync(join(__dirname,'calls.jsonl'),JSON.stringify({name,event:{...e,data:undefined},before:snap(e.data.before),after:snap(e.data.after)})+'\\n');
+  if(retried&&!retry){retry=true;throw Error('intentional Written retry');}
+ });
+ // Observe the actual wire at entry, then delegate to the unmodified SDK function.
+ exports[name]=Object.assign(async e=>{
+  if(!Buffer.isBuffer(e.data)||e.datacontenttype!=='application/protobuf')throw Error('Written requires actual protobuf bytes');
+  appendFileSync(join(__dirname,'calls.jsonl'),JSON.stringify({name,wire:codec.toObject(codec.decode(e.data),{longs:String,bytes:String})})+'\\n');
+  return fn(e);
+ },fn);
+}
+declare('written');declare('authWritten',true);declare('retryWritten',false,true);
+`);
+  const source = '//firestore.googleapis.com/projects/demo-app/databases/(default)';
+  const document = 'projects/demo-app/databases/(default)/documents/items/one';
+  // A deterministic generated corpus crosses value shapes with all meaningful side states.
+  const values = [
+    [{nullValue:'NULL_VALUE'},null], [{booleanValue:false},false],
+    [{integerValue:'-9223372036854775808'},{integer:'-9223372036854775808'}],
+    [{integerValue:'9223372036854775807'},{integer:'9223372036854775807'}],
+    [{doubleValue:'NaN'},{double:'NaN'}], [{doubleValue:'Infinity'},{double:'Infinity'}],
+    [{doubleValue:'-Infinity'},{double:'-Infinity'}], [{doubleValue:'-0'},{double:'-0'}],
+    [{bytesValue:'AAH/'},{bytes:'AAH/'}], [{referenceValue:document},{reference:'items/one'}],
+    [{geoPointValue:{latitude:-42.5,longitude:170.25}},{latitude:-42.5,longitude:170.25}],
+    [{stringValue:'日本語/é'},'日本語/é'], [{arrayValue:{}},[]], [{mapValue:{}},{}],
+  ];
+  let random=0x6d2b79f5;
+  const next=()=>{random^=random<<13;random^=random>>>17;random^=random<<5;return random>>>0;};
+  for(let generated=0;generated<12;generated++) {
+    const integer=((BigInt(next())<<32n)|BigInt(next()))-(1n<<63n);
+    const bytes=Buffer.from(Array.from({length:generated+1},()=>next()&255)).toString('base64');
+    values.push([{integerValue:String(integer)},{integer:String(integer)}],[{bytesValue:bytes},{bytes}]);
+  }
+  const second = Math.floor(Date.parse('2026-09-30T12:03:18Z') / 1000);
+  const event = data => ({id:'written-replay',type:'google.cloud.firestore.document.v1.written',source,subject:'documents/items/one',time:'2026-09-30T12:03:18.846431Z',project:'demo-app',database:'(default)',document:'items/one',namespace:'(default)',params:{id:'one'},datacontenttype:'application/json',data});
+  for (let seed=0; seed<values.length; seed++) {
+    const nanos=(846431123+seed*9973)%1000000000;
+    const stamp=`2026-09-30T12:03:18.${String(nanos).padStart(9,'0')}Z`;
+    const [value,expected]=values[seed];
+    const fields={v:value,nested:{mapValue:{fields:{arr:{arrayValue:{values:[value,{timestampValue:stamp}]}}}}}};
+    const present={name:document,fields,createTime:stamp,updateTime:stamp};
+    const expectedData={v:expected,nested:{arr:[expected,{seconds:second,nanoseconds:nanos}]}};
+    for (const [old,newValue] of [[undefined,present],[present,undefined],[present,present]]) {
+      const e=event({...(old?{oldValue:old}:{}),...(newValue?{value:newValue}:{}),...(old&&newValue?{updateMask:{fieldPaths:['v','nested']}}:{})});
+      assert.equal((await f.invoke('written','firestore',e)).ok,true,'actual generated Written SDK callback');
+      const [raw,call]=(await f.calls()).slice(-2);
+      assert.equal(Object.hasOwn(raw.wire,'oldValue'),!!old,'missing before is omitted on the wire');
+      assert.equal(Object.hasOwn(raw.wire,'value'),!!newValue,'missing after is omitted on the wire');
+      assert.deepEqual(raw.wire.updateMask,old&&newValue?{fieldPaths:['v','nested']}:undefined,'updateMask wire values');
+      for (const [side,exists] of [['before',!!old],['after',!!newValue]]) {
+        assert.deepEqual(call[side],{exists,path:'items/one',id:'one',data:exists?expectedData:null,createTime:exists?{seconds:second,nanoseconds:nanos}:null,updateTime:exists?{seconds:second,nanoseconds:nanos}:null},'generated values and full timestamp precision');
+      }
+      assert.equal(call.event.source,source);assert.equal(call.event.subject,e.subject);assert.equal(call.event.time,e.time);assert.deepEqual(call.event.params,{id:'one'});
+    }
+  }
+  const empty={name:document,fields:{},createTime:'1969-12-31T23:59:59.123456789Z',updateTime:'1969-12-31T23:59:59.123456789Z'};
+  assert.equal((await f.invoke('written','firestore',event({value:empty}))).ok,true);
+  const emptyCall=(await f.calls()).at(-1);
+  assert.equal(emptyCall.before.exists,false);assert.equal(emptyCall.after.exists,true,'empty real document is present');
+  assert.deepEqual(emptyCall.after.data,{});assert.deepEqual(emptyCall.after.createTime,{seconds:-1,nanoseconds:123456789});
+  for (const [stamp,seconds,nanoseconds] of [
+    ['0001-01-01T00:00:00Z',-62135596800,0],
+    ['9999-12-31T23:59:59.999999999Z',253402300799,999999999],
+    ['1970-01-01T01:00:00.1+01:00',0,100000000],
+  ]) {
+    assert.equal((await f.invoke('written','firestore',event({value:{...empty,createTime:stamp,updateTime:stamp}}))).ok,true,'timestamp boundary actual SDK callback');
+    assert.deepEqual((await f.calls()).at(-1).after.createTime,{seconds,nanoseconds},'timestamp seconds/nanoseconds preserve ranges and offsets');
+  }
+  for (const stamp of ['invalid','2026-09-30T12:03:18.1234567890Z']) {
+    const count=(await f.calls()).length;
+    assert.equal((await f.invoke('written','firestore',event({value:{...empty,createTime:stamp}}))).ok,false,'invalid timestamp fails before the callback');
+    assert.equal((await f.calls()).length,count,'invalid timestamp has no wire or handler side effects');
+  }
+  const auth={...event({oldValue:empty}),type:'google.cloud.firestore.document.v1.written.withAuthContext',authtype:'system',authid:'principal'};
+  assert.equal((await f.invoke('authWritten','firestore',auth)).ok,true,'actual Written auth callback');
+  const authCall=(await f.calls()).at(-1);
+  assert.equal(authCall.after.exists,false);assert.equal(authCall.event.authType,'system');assert.equal(authCall.event.authId,'principal');assert.equal(authCall.event.source,source);
+  const retry=event({value:empty});
+  assert.equal((await f.invoke('retryWritten','firestore',retry)).ok,false,'first callback fails intentionally');
+  const first=(await f.calls()).at(-1);
+  assert.equal((await f.invoke('retryWritten','firestore',retry)).ok,true,'retry reaches the actual SDK callback');
+  assert.deepEqual((await f.calls()).at(-1),first,'retry preserves identity, data and envelope');
 });
 
 for (const form of ['endpoint', 'legacy']) {

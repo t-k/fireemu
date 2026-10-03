@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createHook } from "node:async_hooks";
 import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
 import { mkdtemp, realpath, rm } from "node:fs/promises";
@@ -1064,4 +1065,191 @@ test("setup_failure_before_listen_closes_actual_FileHandles_and_releases_owned_c
   assert.equal(closed.streams, 0);
   assert.equal(closed.clientClosed, true);
   await using({}, async () => {});
+});
+
+test("actual_SQLite_exclusive_contention_caps_busy_wait_by_remaining_deadline_before_native_effects", async (t) => {
+  const api = await exports();
+  const { DatabaseSync } = await import("node:sqlite");
+  const directory = await mkdtemp(join(tmpdir(), "native-exclusive-lease-"));
+  const dbPath = join(directory, "owned.sqlite");
+  const keys = ["PORT", "PORT_REGISTRY_TOKEN", "PORT_REGISTRY_DB"];
+  const originalEnvironment = keys.map((key) => process.env[key]);
+  const nativeExec = DatabaseSync.prototype.exec;
+  const nativePrepare = DatabaseSync.prototype.prepare;
+  const token = "2".repeat(32);
+  const configurations = [];
+  const outcomes = [];
+  const nativeResources = [];
+  let locker;
+  let transaction = false;
+  let currentDeadline;
+  let probeReadOnly = false;
+  let readonlyProbe;
+  const hook = createHook({
+    init(id, type) {
+      if (/TCP|HTTP2/.test(type)) nativeResources.push({ id, type });
+    },
+  });
+  try {
+    locker = new DatabaseSync(dbPath);
+    locker.exec("CREATE TABLE reservations (token TEXT, pid INTEGER)");
+    // The exclusively owned row is intentionally invalid and is never a successful capability.
+    locker.prepare("INSERT INTO reservations VALUES (?, ?)").run(token, 0);
+    process.env.PORT = originalEnvironment[0] ?? "12345";
+    process.env.PORT_REGISTRY_TOKEN = token;
+    process.env.PORT_REGISTRY_DB = dbPath;
+    DatabaseSync.prototype.exec = function (sql) {
+      const result = Reflect.apply(nativeExec, this, [sql]);
+      if (sql.startsWith("PRAGMA busy_timeout = ")) {
+        const accepted = Reflect.apply(nativePrepare, this, ["PRAGMA busy_timeout"]).get();
+        configurations.push({ value: accepted.timeout, deadlineAt: currentDeadline });
+        if (probeReadOnly) {
+          try {
+            Reflect.apply(nativeExec, this, ["CREATE TABLE readonly_probe(value INTEGER)"]);
+            readonlyProbe = "write-accepted";
+          } catch (error) {
+            readonlyProbe = error.message;
+          }
+        }
+      }
+      return result;
+    };
+    hook.enable();
+    for (const remaining of [40, 150]) {
+      Reflect.apply(nativeExec, locker, ["BEGIN EXCLUSIVE"]);
+      transaction = true;
+      const started = performance.now();
+      currentDeadline = started + remaining;
+      let capability;
+      let rejection;
+      try {
+        capability = await api.acquireOwnedLoopbackLease({ deadlineAt: currentDeadline });
+      } catch (error) {
+        rejection = error;
+      } finally {
+        Reflect.apply(nativeExec, locker, ["ROLLBACK"]);
+        transaction = false;
+      }
+      outcomes.push({
+        remaining,
+        started,
+        deadlineAt: currentDeadline,
+        elapsed: performance.now() - started,
+        capability,
+        rejection,
+      });
+    }
+    await assert.rejects(
+      api.createOwnedNativeStreamingFixture({
+        lease: outcomes[0].capability,
+        deadlineAt: performance.now() + 1000,
+        limits,
+      }),
+      /unused owned loopback lease/,
+    );
+    assert.deepEqual(
+      nativeResources,
+      [],
+      "locked invalid lease cannot create native server, session, or TCP resources",
+    );
+    assert.equal(
+      configurations.length,
+      2,
+      "each locked read-only connection configures a native SQLite busy timeout",
+    );
+    for (let index = 0; index < outcomes.length; index++) {
+      const outcome = outcomes[index];
+      assert.equal(
+        outcome.capability,
+        undefined,
+        "SQLite contention never mints an owned native capability",
+      );
+      assert.match(
+        outcome.rejection?.message ?? "",
+        /database is locked/,
+        "actual SQLite lock refusal is observed",
+      );
+      const configured = configurations[index];
+      assert.equal(configured.deadlineAt, outcome.deadlineAt);
+      assert.ok(Number.isInteger(configured.value) && configured.value >= 0);
+      assert.ok(
+        configured.value <= Math.min(50, outcome.remaining),
+        "native SQLite busy timeout cannot exceed the remaining deadline or 50ms cap",
+      );
+      if (outcome.remaining === 150)
+        assert.equal(configured.value, 50, "long remaining deadline uses the native 50ms busy cap");
+    }
+    probeReadOnly = true;
+    await assert.rejects(
+      api.acquireOwnedLoopbackLease({ deadlineAt: performance.now() + 1000 }),
+      /owned loopback lease/,
+    );
+    assert.match(
+      readonlyProbe ?? "",
+      /readonly database/,
+      "actual lease lookup connection refuses a write to its exclusively owned SQLite database",
+    );
+    assert.deepEqual(
+      nativeResources,
+      [],
+      "all invalid lease refusals leave native resource creation at zero",
+    );
+    assert.equal(
+      Reflect.apply(nativePrepare, locker, ["SELECT count(*) AS rows FROM reservations"]).get()
+        .rows,
+      1,
+    );
+  } finally {
+    hook.disable();
+    DatabaseSync.prototype.exec = nativeExec;
+    keys.forEach((key, index) => {
+      if (originalEnvironment[index] === undefined) delete process.env[key];
+      else process.env[key] = originalEnvironment[index];
+    });
+    if (locker) {
+      try {
+        if (transaction) Reflect.apply(nativeExec, locker, ["ROLLBACK"]);
+      } finally {
+        locker.close();
+      }
+    }
+    await rm(directory, { recursive: true, force: true });
+  }
+  assert.equal(
+    existsSync(directory),
+    false,
+    "owned SQLite database and journal directory are removed",
+  );
+  // This positive control uses the real process lease after environment restoration.
+  hook.enable();
+  try {
+    await using({}, async () => {});
+  } finally {
+    hook.disable();
+  }
+  assert.ok(
+    nativeResources.some(({ type }) => type === "TCPSERVERWRAP"),
+    "actual native resource observer detects the owned positive server",
+  );
+  assert.ok(
+    nativeResources.some(({ type }) => type === "TCPWRAP"),
+    "actual native resource observer detects the owned positive connection",
+  );
+  t.diagnostic(
+    JSON.stringify({
+      ownedSQLiteContention: outcomes.map((outcome, index) => ({
+        remainingMilliseconds: outcome.remaining,
+        configuredBusyMilliseconds: configurations[index].value,
+        observedElapsedMilliseconds: outcome.elapsed,
+        rejection: outcome.rejection.message,
+      })),
+      readonlyProbe,
+      invalidNativeResourceInits: 0,
+      positiveNativeResourceTypes: [...new Set(nativeResources.map(({ type }) => type))],
+      ownedDatabaseRemoved: !existsSync(directory),
+      strictOSDeadlineClaim: false,
+      nativeCompleteness: "UNKNOWN",
+      crashDurability: "UNKNOWN",
+    }),
+  );
 });

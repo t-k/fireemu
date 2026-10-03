@@ -1293,7 +1293,7 @@ function nativeFixture() {
   };
   report.cleanup.before = parseInventory(
     queries.find((q) => q.purpose === "inventory").answer.stdout,
-  ).map((r) => ({ ...r, sid: r.pid === 1 ? 1 : 50 }));
+  ).map((r) => Object.assign({}, r, { sid: r.pid === 1 ? 1 : 50 }));
   report.cleanup.after = structuredClone(report.cleanup.before);
   return JSON.parse(JSON.stringify(report));
 }
@@ -1695,10 +1695,11 @@ function nativeControlFixture(mode, inconclusive = false) {
     if (proof.queries[i].purpose === "inventory") {
       const sessions = JSON.parse(proof.queries[i + 1].answer.stdout);
       passes.push(
-        parseInventory(proof.queries[i].answer.stdout).map((r) => ({
-          ...r,
-          sid: sessions[String(r.pid)],
-        })),
+        parseInventory(proof.queries[i].answer.stdout).map((r) =>
+          Object.assign({}, r, {
+            sid: sessions[String(r.pid)],
+          }),
+        ),
       );
     }
   const inventory = judgeInventory(passes, {
@@ -2082,7 +2083,7 @@ test("a coherently rebound authority cannot substitute another SID for the nativ
   authority.scope.nativeRoot.sid = 51;
   packet.nativeRoot.sid = 51;
   snapshot.authorityBytes = Buffer.from(JSON.stringify(authority));
-  for (const row of records) row.scope = structuredClone(authority.scope);
+  for (const record of records) record.scope = structuredClone(authority.scope);
   records[0].authoritySha256 = sha(snapshot.authorityBytes);
   for (const [name, raw] of snapshot.reports) {
     const envelope = JSON.parse(raw);
@@ -2269,19 +2270,19 @@ test("all 537475 immutable source bytes reach durable ledger terminal and seal t
     const compact = JSON.parse(Buffer.from(envelope.rawReport, "base64"));
     assert.equal(compact.native.schema, "calendar-native-proof/v2");
     const restored = await m.resolveNativeSources(compact, "one", scope);
-    for (const [path, raw] of sources) assert.deepEqual(restored.get(path), raw);
+    for (const [path, sourceRaw] of sources) assert.deepEqual(restored.get(path), sourceRaw);
     assert.equal(result.nativeCertificateIssued, undefined);
   } finally {
     await fs.rm(root, { recursive: true });
   }
 });
 
-async function fullNativeSourceFixture(root) {
+async function fullNativeSourceFixture(root, initialReport = nativeFixture()) {
   const fs = await import("node:fs/promises");
   const { join } = await import("node:path");
   const m = await import("./calendar-measure.mjs");
   const report = JSON.parse(
-    JSON.stringify(nativeFixture()).replaceAll(PINS.harnessVersion, "a".repeat(64)),
+    JSON.stringify(initialReport).replaceAll(PINS.harnessVersion, "a".repeat(64)),
   );
   const rebindRawH = (raw) =>
     Buffer.from(
@@ -2307,13 +2308,14 @@ async function fullNativeSourceFixture(root) {
     .split("\n")
     .map(JSON.parse);
   for (const [path, raw] of await fixedSourceBytes()) {
-    const q = report.native.queries.find(
-      (q) => q.purpose === "pinned-source" && q.args.at(-1).endsWith(":" + path),
+    const query = report.native.queries.find(
+      (candidate) =>
+        candidate.purpose === "pinned-source" && candidate.args.at(-1).endsWith(":" + path),
     );
-    q.args[3] = `${m.FIXED_BUILD_PINS.sourceCommit}:${path}`;
-    q.answer.stdout = raw.toString();
-    rows.find((r) => r.type === "birth" && r.handle === q.answer.handle).argvSha256 = sha(
-      JSON.stringify([q.file, ...q.args]),
+    query.args[3] = `${m.FIXED_BUILD_PINS.sourceCommit}:${path}`;
+    query.answer.stdout = raw.toString();
+    rows.find((r) => r.type === "birth" && r.handle === query.answer.handle).argvSha256 = sha(
+      JSON.stringify([query.file, ...query.args]),
     );
   }
   report.native.rawRecords["measure.jsonl"] = Buffer.from(
@@ -2352,11 +2354,13 @@ test("native v2 recomputes A-G from every resolved full source byte and rejects 
     const sourceBlobs = await m.resolveNativeSources(compact, "one", scope);
     for (let i = 0; i < 4; i++) {
       const expected = m.FIXED_NATIVE_SOURCES[i],
-        q = compact.native.queries.find(
-          (q) => q.purpose === "pinned-source" && q.args.at(-1).endsWith(":" + expected.path),
+        query = compact.native.queries.find(
+          (candidate) =>
+            candidate.purpose === "pinned-source" &&
+            candidate.args.at(-1).endsWith(":" + expected.path),
         );
-      assert.equal("stdout" in q.answer, false);
-      assert.deepEqual(q.answer.sourceRef, {
+      assert.equal("stdout" in query.answer, false);
+      assert.deepEqual(query.answer.sourceRef, {
         schema: "calendar-native-source/v1",
         sourceCommit: "33970bf501ac85e62fd8aee488d16a9405a8a019",
         sourcePath: expected.path,
@@ -2365,9 +2369,9 @@ test("native v2 recomputes A-G from every resolved full source byte and rejects 
         rawBytes: sourceBlobs.get(expected.path).length,
         scopeSha256: sha(Buffer.from(JSON.stringify(scope))),
         attemptId: "one",
-        queryArgvSha256: sha(Buffer.from(JSON.stringify([q.file, ...q.args]))),
-        ownHandle: q.answer.handle,
-        ownPid: q.answer.pid,
+        queryArgvSha256: sha(Buffer.from(JSON.stringify([query.file, ...query.args]))),
+        ownHandle: query.answer.handle,
+        ownPid: query.answer.pid,
       });
     }
 
@@ -2515,6 +2519,7 @@ test("full native source publications handle short writes and refuse failed dura
           else dirSync++;
           return h.sync();
         },
+        stat: () => h.stat(),
         close: () => h.close(),
       };
     };
@@ -2532,6 +2537,7 @@ test("full native source publications handle short writes and refuse failed dura
           if (flags === "wx") await h.write(Buffer.from("!"), 0, 1, 0);
           return h.sync();
         },
+        stat: () => h.stat(),
         close: () => h.close(),
       };
     };
@@ -2778,5 +2784,834 @@ test("an aliased accounting ancestor is refused before any source bytes are publ
     assert.deepEqual(await fs.readdir(foreign), []);
   } finally {
     await fs.rm(root, { recursive: true });
+  }
+});
+
+function bindFixedUnitCampaign(report, scope, fixed) {
+  Object.assign(report.pins, fixed);
+  Object.assign(report.identity, fixed);
+  const plan = JSON.parse(Buffer.from(report.native.rawPlan, "base64"));
+  Object.assign(plan.pins, fixed);
+  Object.assign(plan.session, fixed);
+  report.native.rawPlan = Buffer.from(JSON.stringify(plan)).toString("base64");
+  const outer = JSON.parse(Buffer.from(report.native.rawOuterResult, "base64"));
+  Object.assign(outer.identity, fixed);
+  report.native.rawOuterResult = Buffer.from(JSON.stringify(outer)).toString("base64");
+  scope.utcDay = new Date().toISOString().slice(0, 10);
+  report.launchTime = Date.parse(scope.utcDay + "T06:00:00Z");
+}
+
+async function hugeNativeReportFixture(root) {
+  const { report, scope } = await fullNativeSourceFixture(root);
+  const listing = Array.from(
+    { length: 450 },
+    (_, i) => `${20000 + i} 1 1 0 Thu Jan 1 00:00:00 1970 S foreign-process-${"x".repeat(700)}\n`,
+  ).join("");
+  for (const queries of [report.native.queries, report.cleanup.queries]) {
+    for (let i = 0; i < queries.length; i++) {
+      if (queries[i].purpose !== "inventory") continue;
+      queries[i].answer.stdout += listing;
+      const sessions = JSON.parse(queries[i + 1].answer.stdout);
+      for (let n = 0; n < 450; n++) sessions[String(20000 + n)] = 1;
+      queries[i + 1].answer.stdout = JSON.stringify(sessions);
+    }
+  }
+  const inventories = (queries) =>
+    queries.flatMap((q, i) =>
+      q.purpose !== "inventory"
+        ? []
+        : [
+            parseInventory(q.answer.stdout)
+              .filter((r) => r.pid !== q.answer.pid)
+              .map((r) =>
+                Object.assign({}, r, {
+                  sid: JSON.parse(queries[i + 1].answer.stdout)[String(r.pid)],
+                }),
+              ),
+          ],
+    );
+  const outer = JSON.parse(Buffer.from(report.native.rawOuterResult, "base64"));
+  const files = Object.fromEntries(
+    Object.entries(report.native.rawRecords).map(([name, raw]) => [
+      name,
+      Buffer.from(raw, "base64").toString().trimEnd().split("\n").map(JSON.parse),
+    ]),
+  );
+  const identities = recordedIdentities({
+    files,
+    inner: outer.inner,
+    outerSupervision: outer.supervision,
+    selfPid: report.root.pid,
+    selfUid: report.root.uid,
+  });
+  const state = judgeInventory(inventories(report.native.queries), {
+    sessionId: report.chain.outerSid,
+    recorded: identities,
+    privateDir: outer.directory ?? report.accountingDirectory,
+    privateDirs: [outer.directory, report.accountingDirectory].filter((d) => typeof d === "string"),
+    launchTime: report.launchTime,
+    rootPid: report.root.pid,
+  });
+  report.inventory = {
+    outcome: state.outcome,
+    reason: state.reason,
+    survivors: state.survivors,
+    passes: state.passes.map(({ repass, unrelatedZombies, ignored, inconclusive }) => ({
+      repass,
+      unrelatedZombies,
+      ignored,
+      inconclusive,
+    })),
+  };
+  [report.cleanup.before, report.cleanup.after] = inventories(report.cleanup.queries);
+  bindFixedUnitCampaign(report, scope, (await import("./calendar-measure.mjs")).FIXED_BUILD_PINS);
+  return { report: JSON.parse(JSON.stringify(report)), scope };
+}
+
+test("whole native report archive reaches the real ledger seal and default full raw snapshot", async () => {
+  const fs = await import("node:fs/promises"),
+    { tmpdir } = await import("node:os"),
+    { join } = await import("node:path");
+  const m = await import("./calendar-measure.mjs");
+  const root = await fs.realpath(await fs.mkdtemp(join(tmpdir(), "calendar-full-report-")));
+  try {
+    const { report, scope } = await hugeNativeReportFixture(root);
+    const raw = Buffer.from(JSON.stringify(report) + "\n");
+    assert.ok(raw.length > 2495176);
+    assert.equal(
+      m.recomputeNativeReport(report).ok,
+      true,
+      JSON.stringify(m.recomputeNativeReport(report)),
+    );
+    const plan = Buffer.from(report.native.rawPlan, "base64");
+    const produced = await m.produceCampaign({
+      authorityId: "unit",
+      attempts: [{ attemptId: "one", planPath: "/unit", planSha256: sha(plan) }],
+      bootstrap: async () => ({ scope, receipt: { phase: "infrastructure", unitOnly: true } }),
+      readPlan: async () => plan,
+      measureAttempt: async () => raw,
+      retainReport: m.publishNativeReport,
+    });
+    assert.equal(produced.state, "complete", JSON.stringify(produced));
+    assert.equal(produced.durabilityAcknowledged, true);
+    const journal = (await fs.readFile(join(root, "attempt-ledger/ledger.jsonl"), "utf8"))
+      .trimEnd()
+      .split("\n")
+      .map(JSON.parse);
+    assert.deepEqual(
+      journal.map((r) => r.type),
+      ["header", "birth", "terminal", "seal"],
+    );
+    const envelopeRaw = produced.snapshot.reports.get(journal[2].reportFile);
+    assert.ok(envelopeRaw.length <= m.NATIVE_ENVELOPE_BUDGET.envelopeBytes);
+    const envelope = JSON.parse(envelopeRaw);
+    assert.equal(envelope.outcome, "pass");
+    const descriptor = JSON.parse(Buffer.from(envelope.rawReport, "base64"));
+    assert.equal(descriptor.schema, "calendar-native-report-ref/v1");
+    const hydrated = await m.resolveNativeReport(descriptor, "one", scope);
+    assert.deepEqual(hydrated.originalBytes, raw);
+    assert.equal(hydrated.report.native.schema, "calendar-native-proof/v2");
+    const actual = m.recomputeNativeReport(hydrated.report, {
+      sourceBlobs: hydrated.sourceBlobs,
+      attemptId: "one",
+      scope,
+    });
+    assert.equal(actual.ok, true, JSON.stringify(actual));
+    assert.deepEqual(hydrated.report.cleanup, report.cleanup);
+    assert.deepEqual(hydrated.report.inventory, report.inventory);
+    assert.deepEqual(hydrated.report.verdict, report.verdict);
+    assert.equal(produced.externalApprovalVerified, false);
+    assert.equal(produced.allDayCertified, false);
+  } finally {
+    await fs.rm(root, { recursive: true });
+  }
+});
+
+test("an oversized retention failure preserves the original cause alongside encoder failure", async () => {
+  const { produceCampaign } = await import("./calendar-measure.mjs");
+  const plan = Buffer.from("{}");
+  let closed = 0,
+    terminals = 0;
+  const result = await produceCampaign({
+    authorityId: "unit",
+    attempts: [{ attemptId: "one", planPath: "/unit", planSha256: sha(plan) }],
+    bootstrap: async () => ({ scope: {}, receipt: {} }),
+    readPlan: async () => plan,
+    measureAttempt: async () => Buffer.alloc(180001, 0x78),
+    retainReport: async () => {
+      throw new Error("original retention sync failure");
+    },
+    createLedger: async () => ({
+      registerBirth: async () => ({ durable: true }),
+      recordTerminal: async () => {
+        terminals++;
+      },
+      close: async () => {
+        closed++;
+      },
+    }),
+    classifyReport: () => "pass",
+    readSnapshot: async () => ({}),
+  });
+  assert.equal(result.state, "unknown");
+  assert.match(result.reasons.join("; "), /original retention sync failure/);
+  assert.match(result.reasons.join("; "), /native raw acceptance budget exceeded/);
+  assert.equal(terminals, 0);
+  assert.equal(closed, 1);
+});
+
+test("whole report archive has a separate finite admission policy and a one-byte oversize refusal", async () => {
+  const m = await import("./calendar-measure.mjs");
+  assert.deepEqual(m.NATIVE_ENVELOPE_BUDGET, {
+    reportBytes: 180000,
+    planBytes: 8192,
+    overheadBytes: 8192,
+    envelopeBytes: 262144,
+  });
+  assert.equal(m.NATIVE_ARCHIVE_BUDGET.reportBytes, 32 * 1024 * 1024);
+  assert.equal(m.NATIVE_ARCHIVE_BUDGET.manifestBytes, 8192);
+  assert.equal(m.NATIVE_ARCHIVE_BUDGET.sourceBytes, 537475);
+  assert.equal(m.NATIVE_ARCHIVE_BUDGET.fileCount, 6);
+  assert.equal(m.NATIVE_ARCHIVE_BUDGET.currentAttemptCount, 6);
+  assert.equal(6 * (32 * 1024 * 1024 + 8192 + 537475), 204600594);
+  await assert.rejects(
+    m.publishNativeReport(Buffer.alloc(32 * 1024 * 1024 + 1), { attemptId: "one" }, {}),
+    /acceptance budget/,
+  );
+  for (const field of ["rawBytes", "manifestBytes"])
+    await assert.rejects(
+      m.resolveNativeReport(
+        {
+          schema: "calendar-native-report-ref/v1",
+          attemptId: "one",
+          scopeSha256: sha(JSON.stringify({ harnessH: "a".repeat(64) })),
+          harnessH: "a".repeat(64),
+          ownerUid: process.getuid(),
+          rawBytes: 1,
+          manifestBytes: 1,
+          [field]: (field === "rawBytes" ? 32 * 1024 * 1024 : 8192) + 1,
+        },
+        "one",
+        { harnessH: "a".repeat(64) },
+      ),
+      /acceptance budget/,
+    );
+});
+
+test("whole report archive readback preserves exact original bytes and rejects independent binding changes", async () => {
+  const fs = await import("node:fs/promises"),
+    { tmpdir } = await import("node:os"),
+    { join } = await import("node:path");
+  const m = await import("./calendar-measure.mjs");
+  const root = await fs.realpath(await fs.mkdtemp(join(tmpdir(), "calendar-archive-bind-")));
+  try {
+    const { report, scope } = await fullNativeSourceFixture(root);
+    const originalBytes = Buffer.from(JSON.stringify(report) + "\n");
+    const attempt = {
+      attemptId: "one",
+      planSha256: sha(Buffer.from(report.native.rawPlan, "base64")),
+    };
+    const descriptor = JSON.parse(await m.publishNativeReport(originalBytes, attempt, scope));
+    const restored = await m.resolveNativeReport(descriptor, "one", scope);
+    assert.deepEqual(restored.originalBytes, originalBytes);
+    assert.equal(
+      m.recomputeNativeReport(restored.report, {
+        sourceBlobs: restored.sourceBlobs,
+        attemptId: "one",
+        scope,
+      }).ok,
+      true,
+    );
+    assert.deepEqual(await fs.readdir(join(report.accountingDirectory, "native-report")), [
+      "manifest.json",
+      "report.raw",
+    ]);
+    for (const [key, value] of Object.entries({
+      attemptId: "foreign",
+      scopeSha256: "f".repeat(64),
+      planSha256: "f".repeat(64),
+      harnessH: "f".repeat(64),
+      ownerUid: process.getuid() + 1,
+      rawFile: "foreign.raw",
+      rawBytes: originalBytes.length - 1,
+      rawSha256: "f".repeat(64),
+      projectionBytes: descriptor.projectionBytes - 1,
+      projectionSha256: "f".repeat(64),
+      sources: [],
+      manifestFile: "foreign.json",
+      manifestBytes: descriptor.manifestBytes + 1,
+      manifestSha256: "f".repeat(64),
+      extra: true,
+    }))
+      await assert.rejects(
+        m.resolveNativeReport({ ...descriptor, [key]: value }, "one", scope),
+        undefined,
+        key,
+      );
+    await assert.rejects(m.publishNativeReport(originalBytes, attempt, scope));
+    const path = join(report.accountingDirectory, "native-report/report.raw");
+    await fs.writeFile(path, originalBytes.subarray(0, -1));
+    await assert.rejects(m.resolveNativeReport(descriptor, "one", scope), /byte count/);
+  } finally {
+    await fs.rm(root, { recursive: true });
+  }
+});
+
+test("whole report archive rejects alias missing extra and hardlinked publications", async () => {
+  const fs = await import("node:fs/promises"),
+    { tmpdir } = await import("node:os"),
+    { join } = await import("node:path");
+  const m = await import("./calendar-measure.mjs");
+  for (const attack of ["extra", "missing", "symlink", "hardlink", "directory-alias"]) {
+    const root = await fs.realpath(await fs.mkdtemp(join(tmpdir(), "calendar-archive-alias-")));
+    try {
+      const { report, scope } = await fullNativeSourceFixture(root);
+      const descriptor = JSON.parse(
+        await m.publishNativeReport(
+          Buffer.from(JSON.stringify(report)),
+          { attemptId: "one", planSha256: sha(Buffer.from(report.native.rawPlan, "base64")) },
+          scope,
+        ),
+      );
+      const directory = join(report.accountingDirectory, "native-report"),
+        rawPath = join(directory, "report.raw");
+      if (attack === "extra") await fs.writeFile(join(directory, "extra"), "!");
+      if (attack === "missing") await fs.unlink(rawPath);
+      if (attack === "hardlink") await fs.link(rawPath, join(root, "linked"));
+      if (attack === "symlink") {
+        await fs.rename(rawPath, join(root, "foreign.raw"));
+        await fs.symlink(join(root, "foreign.raw"), rawPath);
+      }
+      if (attack === "directory-alias") {
+        await fs.rename(directory, join(root, "foreign-directory"));
+        await fs.symlink(join(root, "foreign-directory"), directory);
+      }
+      await assert.rejects(m.resolveNativeReport(descriptor, "one", scope), undefined, attack);
+    } finally {
+      await fs.rm(root, { recursive: true });
+    }
+  }
+});
+
+test("whole report archive short writes and independent durability faults retain fail closed authority", async () => {
+  const fs = await import("node:fs/promises"),
+    { tmpdir } = await import("node:os"),
+    { join } = await import("node:path");
+  const m = await import("./calendar-measure.mjs");
+  for (const fault of [
+    "none",
+    "zero-write",
+    "file-sync",
+    "directory-sync",
+    "corrupt-readback",
+    "existing-file",
+  ]) {
+    const root = await fs.realpath(await fs.mkdtemp(join(tmpdir(), "calendar-archive-write-")));
+    try {
+      const { report, scope } = await fullNativeSourceFixture(root);
+      const raw = Buffer.from(JSON.stringify(report));
+      let writes = 0,
+        fileSyncs = 0,
+        directorySyncs = 0;
+      const publicationOpen = async (path, flags, mode) => {
+        if (fault === "existing-file" && path.endsWith("native-report/report.raw"))
+          await fs.writeFile(path, "exclusive publication witness");
+        const handle = await fs.open(path, flags, mode);
+        const archiveFile = path.endsWith("native-report/report.raw");
+        const archiveDirectory = path.endsWith("native-report");
+        return {
+          write: async (bytes, offset, length, position) => {
+            writes++;
+            if (fault === "zero-write" && archiveFile) return { bytesWritten: 0 };
+            return handle.write(bytes, offset, Math.min(length, 2048), position);
+          },
+          sync: async () => {
+            if ((await handle.stat()).isFile()) fileSyncs++;
+            else directorySyncs++;
+            if (fault === "file-sync" && archiveFile) throw new Error("archive file sync unknown");
+            if (fault === "directory-sync" && archiveDirectory)
+              throw new Error("archive directory sync unknown");
+            if (fault === "corrupt-readback" && archiveFile)
+              await handle.write(Buffer.from("!"), 0, 1, 0);
+            return handle.sync();
+          },
+          stat: () => handle.stat(),
+          close: () => handle.close(),
+        };
+      };
+      const publication = m.publishNativeReport(
+        raw,
+        { attemptId: "one", planSha256: sha(Buffer.from(report.native.rawPlan, "base64")) },
+        scope,
+        { publicationOpen },
+      );
+      if (fault !== "none") {
+        await assert.rejects(publication, /progress|sync unknown|readback|EEXIST/, fault);
+        await assert.rejects(fs.stat(join(report.accountingDirectory, "durable-verdict.json")), {
+          code: "ENOENT",
+        });
+      } else {
+        const descriptor = JSON.parse(await publication);
+        assert.ok(writes > 7);
+        assert.equal(fileSyncs, 7);
+        assert.equal(directorySyncs, 10);
+        assert.deepEqual(
+          (await m.resolveNativeReport(descriptor, "one", scope)).originalBytes,
+          raw,
+        );
+      }
+    } finally {
+      await fs.rm(root, { recursive: true });
+    }
+  }
+});
+
+test("a caller map or cloned snapshot cannot provide whole native archive authority", async () => {
+  const fs = await import("node:fs/promises"),
+    { tmpdir } = await import("node:os"),
+    { join } = await import("node:path");
+  const m = await import("./calendar-measure.mjs");
+  const root = await fs.realpath(await fs.mkdtemp(join(tmpdir(), "calendar-archive-authority-")));
+  try {
+    const { report, scope } = await fullNativeSourceFixture(root);
+    bindFixedUnitCampaign(report, scope, m.FIXED_BUILD_PINS);
+    const plan = Buffer.from(report.native.rawPlan, "base64"),
+      attempt = { attemptId: "one", planPath: "/unit", planSha256: sha(plan) };
+    const produced = await m.produceCampaign({
+      authorityId: "unit",
+      attempts: [attempt],
+      bootstrap: async () => ({ scope, receipt: { unitOnly: true } }),
+      readPlan: async () => plan,
+      measureAttempt: async () => Buffer.from(JSON.stringify(report)),
+      retainReport: m.publishNativeReport,
+    });
+    assert.equal(produced.state, "complete", JSON.stringify(produced));
+    const packet = {
+      ...scope,
+      authorityId: "unit",
+      attempts: [attempt],
+      refusalAttemptId: "one",
+      controlAttemptIds: [],
+    };
+    const actual = m.evaluateCampaignSnapshot(packet, produced.snapshot, "f".repeat(64));
+    assert.match(actual.problems.join(";"), /selected report partition/);
+    assert.equal(actual.nativeCertificateIssued, false);
+    const cloned = {
+      ...produced.snapshot,
+      nativeArchives: new Map([["one", report]]),
+      nativeReports: new Map([["one", report]]),
+    };
+    const rejected = m.evaluateCampaignSnapshot(packet, cloned, "f".repeat(64));
+    assert.match(rejected.problems.join(";"), /missing default native archive authority/);
+    assert.equal(rejected.nativeCertificateIssued, false);
+    const name = [...produced.snapshot.reports.keys()][0];
+    const envelope = JSON.parse(produced.snapshot.reports.get(name));
+    envelope.outcome = "fail";
+    const altered = Buffer.from(JSON.stringify(envelope));
+    produced.snapshot.reports.set(name, altered);
+    const rows = produced.snapshot.ledgerBytes.toString().trimEnd().split("\n").map(JSON.parse);
+    rows[2].reportSha256 = sha(altered);
+    rows[2].reportBytes = altered.length;
+    // The ledger parser rejects a changed sealed journal before archive authority is considered.
+    assert.equal(
+      m.evaluateCampaignSnapshot(packet, produced.snapshot, "f".repeat(64)).nativeCertificateIssued,
+      false,
+    );
+  } finally {
+    await fs.rm(root, { recursive: true });
+  }
+});
+
+test("the current archive campaign admission rejects a seventh attempt before infrastructure or effects", async () => {
+  const m = await import("./calendar-measure.mjs");
+  let bootstrap = 0,
+    effects = 0;
+  const result = await m.produceCampaign({
+    attempts: Array.from({ length: 7 }, (_, i) => ({ attemptId: `a${i}` })),
+    bootstrap: async () => {
+      bootstrap++;
+      throw new Error("unexpected infrastructure");
+    },
+    measureAttempt: async () => {
+      effects++;
+    },
+    retainReport: m.publishNativeReport,
+  });
+  assert.equal(result.state, "unknown");
+  assert.match(result.reasons.join(";"), /archive campaign acceptance budget/);
+  assert.equal(bootstrap, 0);
+  assert.equal(effects, 0);
+});
+
+test("archive manifest bindings reject rehashed projected summaries or changed full source references", async () => {
+  const fs = await import("node:fs/promises"),
+    { tmpdir } = await import("node:os"),
+    { join } = await import("node:path");
+  const m = await import("./calendar-measure.mjs");
+  const root = await fs.realpath(await fs.mkdtemp(join(tmpdir(), "calendar-archive-manifest-")));
+  try {
+    const { report, scope } = await fullNativeSourceFixture(root);
+    const descriptor = JSON.parse(
+      await m.publishNativeReport(
+        Buffer.from(JSON.stringify(report)),
+        { attemptId: "one", planSha256: sha(Buffer.from(report.native.rawPlan, "base64")) },
+        scope,
+      ),
+    );
+    const path = join(report.accountingDirectory, "native-report/manifest.json");
+    const original = await fs.readFile(path),
+      manifest = JSON.parse(original);
+    for (const change of [
+      (entry) => {
+        entry.projectionSha256 = "f".repeat(64);
+      },
+      (entry) => {
+        entry.projectionBytes--;
+      },
+      (entry) => {
+        entry.sources[0].ownPid++;
+      },
+      (entry) => {
+        entry.sources[0].queryArgvSha256 = "f".repeat(64);
+      },
+      (entry) => {
+        entry.sources[0].rawSha256 = "f".repeat(64);
+      },
+      (entry) => {
+        entry.sources[0].sourcePath = "foreign/path";
+      },
+      (entry) => {
+        entry.sources.push(entry.sources[0]);
+      },
+      (entry) => {
+        entry.sources.pop();
+      },
+      (entry) => {
+        entry.originalSchema = "summary/v1";
+      },
+    ]) {
+      const forged = structuredClone(manifest);
+      change(forged);
+      const raw = Buffer.from(JSON.stringify(forged) + "\n");
+      await fs.writeFile(path, raw);
+      await assert.rejects(
+        m.resolveNativeReport(
+          {
+            ...descriptor,
+            manifestBytes: raw.length,
+            manifestSha256: sha(raw),
+            projectionBytes: forged.projectionBytes,
+            projectionSha256: forged.projectionSha256,
+            sources: forged.sources,
+          },
+          "one",
+          scope,
+        ),
+        /manifest binding/,
+      );
+    }
+    await fs.writeFile(path, original);
+    assert.deepEqual(
+      (await m.resolveNativeReport(descriptor, "one", scope)).report.cleanup,
+      report.cleanup,
+    );
+  } finally {
+    await fs.rm(root, { recursive: true });
+  }
+});
+
+test("archive descriptor admission property model preserves bindings for independent malformed shapes", async () => {
+  const fs = await import("node:fs/promises"),
+    { tmpdir } = await import("node:os"),
+    { join } = await import("node:path");
+  const m = await import("./calendar-measure.mjs");
+  const root = await fs.realpath(await fs.mkdtemp(join(tmpdir(), "calendar-archive-model-")));
+  try {
+    const { report, scope } = await fullNativeSourceFixture(root);
+    const descriptor = JSON.parse(
+      await m.publishNativeReport(
+        Buffer.from(JSON.stringify(report)),
+        { attemptId: "one", planSha256: sha(Buffer.from(report.native.rawPlan, "base64")) },
+        scope,
+      ),
+    );
+    const values = [
+      null,
+      false,
+      [],
+      {},
+      -1,
+      0,
+      0.5,
+      Number.MAX_SAFE_INTEGER + 1,
+      "",
+      "../foreign",
+      "f".repeat(64),
+      "é".repeat(63),
+    ];
+    const fields = [
+      "attemptId",
+      "scopeSha256",
+      "planSha256",
+      "harnessH",
+      "rawBytes",
+      "rawSha256",
+      "manifestBytes",
+      "manifestSha256",
+      "ownerUid",
+      "rawFile",
+      "manifestFile",
+    ];
+    let state = 0x786;
+    for (let i = 0; i < 64; i++) {
+      state = (Math.imul(state, 1664525) + 1013904223) >>> 0;
+      const field = fields[state % fields.length],
+        value = values[(state >>> 8) % values.length];
+      await assert.rejects(
+        m.resolveNativeReport({ ...descriptor, [field]: value }, "one", scope),
+        undefined,
+        `case ${i}: ${field}`,
+      );
+    }
+    assert.deepEqual(
+      (await m.resolveNativeReport(descriptor, "one", scope)).report.inventory,
+      report.inventory,
+    );
+  } finally {
+    await fs.rm(root, { recursive: true });
+  }
+});
+
+test("default whole archive classification cannot promote contradictory records control or unknown cleanup", async () => {
+  const fs = await import("node:fs/promises"),
+    { tmpdir } = await import("node:os"),
+    { join } = await import("node:path");
+  const m = await import("./calendar-measure.mjs");
+  for (const field of ["records", "cleanup", "control"]) {
+    const root = await fs.realpath(await fs.mkdtemp(join(tmpdir(), "calendar-archive-unknown-")));
+    try {
+      const { report, scope } = await fullNativeSourceFixture(
+        root,
+        field === "control" ? nativeControlFixture("orphan") : nativeFixture(),
+      );
+      bindFixedUnitCampaign(report, scope, m.FIXED_BUILD_PINS);
+      assert.equal(m.recomputeNativeReport(report).ok, true);
+      if (field === "records") report.records.ok = false;
+      if (field === "cleanup") report.cleanup.outcome = "unknown";
+      if (field === "control") report.control.counts = false;
+      const plan = Buffer.from(report.native.rawPlan, "base64");
+      const result = await m.produceCampaign({
+        authorityId: "unit",
+        attempts: [{ attemptId: "one", planPath: "/unit", planSha256: sha(plan) }],
+        bootstrap: async () => ({ scope, receipt: { unitOnly: true } }),
+        readPlan: async () => plan,
+        measureAttempt: async () => Buffer.from(JSON.stringify(report)),
+        retainReport: m.publishNativeReport,
+      });
+      assert.equal(result.state, "unknown", field);
+      const journal = (await fs.readFile(join(root, "attempt-ledger/ledger.jsonl"), "utf8"))
+        .trimEnd()
+        .split("\n")
+        .map(JSON.parse);
+      const terminal = JSON.parse(
+        await fs.readFile(
+          join(root, "attempt-ledger", journal.find((r) => r.type === "terminal").reportFile),
+        ),
+      );
+      assert.equal(terminal.outcome, "unknown", field);
+      assert.equal(result.externalApprovalVerified, false);
+      assert.equal(result.allDayCertified, false);
+    } finally {
+      await fs.rm(root, { recursive: true });
+    }
+  }
+});
+
+test("a sealed source-only archive campaign reaches the production certifier and rejects invented host authority", async () => {
+  const fs = await import("node:fs/promises"),
+    { tmpdir } = await import("node:os"),
+    { join } = await import("node:path");
+  const m = await import("./calendar-measure.mjs");
+  const root = await fs.realpath(await fs.mkdtemp(join(tmpdir(), "calendar-archive-certifier-")));
+  try {
+    const currentH = await m.harnessVersion(),
+      reports = new Map(),
+      attempts = [];
+    let scope;
+    for (const [i, mode] of [
+      "refusal",
+      "orphan",
+      "escaper",
+      "listener",
+      "leftover",
+      "positive",
+    ].entries()) {
+      const fixture = await fullNativeSourceFixture(
+        root,
+        mode === "refusal" ? nativeFixture() : nativeControlFixture(mode),
+      );
+      bindFixedUnitCampaign(fixture.report, fixture.scope, m.FIXED_BUILD_PINS);
+      const oldH = fixture.report.harnessVersion;
+      const report = JSON.parse(JSON.stringify(fixture.report).replaceAll(oldH, currentH));
+      const rebind = (raw) =>
+        Buffer.from(Buffer.from(raw, "base64").toString().replaceAll(oldH, currentH)).toString(
+          "base64",
+        );
+      report.native.rawPlan = rebind(report.native.rawPlan);
+      report.native.rawOuterResult = rebind(report.native.rawOuterResult);
+      report.native.rawRecords = Object.fromEntries(
+        Object.entries(report.native.rawRecords).map(([name, raw]) => [name, rebind(raw)]),
+      );
+      report.cleanup.rawRecords = rebind(report.cleanup.rawRecords);
+      fixture.scope.harnessH = currentH;
+      scope ??= fixture.scope;
+      assert.equal(m.recomputeNativeReport(report).ok, true, mode);
+      const plan = Buffer.from(report.native.rawPlan, "base64"),
+        attemptId = `unit-${mode}`,
+        planPath = join(root, `plan-${i}.json`);
+      await fs.writeFile(planPath, plan);
+      attempts.push({ attemptId, planPath, planSha256: sha(plan) });
+      reports.set(attemptId, report);
+    }
+    const produced = await m.produceCampaign({
+      authorityId: "unit-source-only",
+      attempts,
+      bootstrap: async () => ({ scope, receipt: { unitOnly: true } }),
+      measureAttempt: async (bytes, attempt) =>
+        Buffer.from(JSON.stringify(reports.get(attempt.attemptId))),
+      retainReport: m.publishNativeReport,
+    });
+    assert.equal(produced.state, "complete", JSON.stringify(produced));
+    const harnessFiles = Object.fromEntries(
+      await Promise.all(
+        m.HARNESS_FILES.map(async (name) => [
+          name,
+          sha(await fs.readFile(new URL(name, import.meta.url))),
+        ]),
+      ),
+    );
+    const packet = {
+      schema: "calendar-campaign/v1",
+      ...scope,
+      authorityId: "unit-source-only",
+      harnessFiles,
+      bootstrap: "ordinary-user-own-ps",
+      attempts,
+      refusalAttemptId: attempts[0].attemptId,
+      controlAttemptIds: attempts.slice(1).map((a) => a.attemptId),
+    };
+    const predicate = m.evaluateCampaignSnapshot(packet, produced.snapshot, "f".repeat(64));
+    assert.equal(predicate.verdict, "pass", JSON.stringify(predicate));
+    assert.equal(predicate.predicateOnly, true);
+    assert.equal(predicate.nativeCertificateIssued, false);
+    assert.equal(predicate.externalApprovalVerified, false);
+    assert.equal(predicate.allDayCertified, false);
+    const packetPath = join(root, "packet.json"),
+      packetRaw = Buffer.from(JSON.stringify(packet));
+    await fs.writeFile(packetPath, packetRaw);
+    await fs.mkdir(join(root, "campaign-bootstrap"));
+    await fs.writeFile(
+      join(root, "campaign-bootstrap/receipt.json"),
+      JSON.stringify({
+        phase: "infrastructure",
+        operation: "ordinary-user-own-ps",
+        packetSha256: sha(packetRaw),
+        nativeRoot: scope.nativeRoot,
+        lifetime: { id: "unit-only", pid: 100, openedAt: Date.now() },
+        unitOnly: true,
+      }),
+    );
+    const manifestPath = join(root, "snapshot.json");
+    await fs.writeFile(
+      manifestPath,
+      JSON.stringify({
+        schema: "calendar-campaign-snapshot/v1",
+        packetPath,
+        packetSha256: sha(packetRaw),
+        runRoot: root,
+      }),
+    );
+    let providerCalls = 0;
+    const refused = await m.certify(manifestPath, {
+      requireCampaign: true,
+      trustedPacketVerifier: async () => {
+        providerCalls++;
+        return true;
+      },
+    });
+    assert.equal(providerCalls, 1);
+    assert.equal(refused.nativeCertificateIssued, false);
+    assert.match(refused.problems.join(";"), /external verifier did not close this exact binding/);
+    for (const entry of predicate.allBirths)
+      assert.equal(
+        entry.rawReportSha256,
+        sha(Buffer.from(JSON.stringify(reports.get(entry.attemptId)))),
+      );
+  } finally {
+    await fs.rm(root, { recursive: true });
+  }
+});
+
+test("durable publication rejects same-byte inode replacement after writer close or directory sync", async () => {
+  const fs = await import("node:fs/promises"),
+    { tmpdir } = await import("node:os"),
+    { join, dirname } = await import("node:path");
+  const m = await import("./calendar-measure.mjs");
+  for (const suffix of [
+    "native-sources/source-0.raw",
+    "native-report/report.raw",
+    "native-report/manifest.json",
+    "durable-verdict.json",
+  ]) {
+    for (const boundary of ["close", "directory-sync"]) {
+      const root = await fs.realpath(
+        await fs.mkdtemp(join(tmpdir(), "calendar-inode-publication-")),
+      );
+      try {
+        const { report, scope } = await fullNativeSourceFixture(root);
+        let target,
+          replaced = false;
+        const replace = async () => {
+          const bytes = await fs.readFile(target),
+            before = await fs.stat(target);
+          const displaced = target + ".displaced";
+          await fs.rename(target, displaced);
+          await fs.writeFile(target, bytes, { flag: "wx", mode: 0o600 });
+          assert.notEqual((await fs.stat(target)).ino, before.ino);
+          await fs.unlink(displaced);
+          replaced = true;
+        };
+        const publicationOpen = async (path, flags, mode) => {
+          const handle = await fs.open(path, flags, mode);
+          if (path.endsWith(suffix)) target = path;
+          return {
+            write: (...args) => handle.write(...args),
+            stat: () => handle.stat(),
+            sync: async () => {
+              await handle.sync();
+              if (boundary === "directory-sync" && target && path === dirname(target) && !replaced)
+                await replace();
+            },
+            close: async () => {
+              await handle.close();
+              if (boundary === "close" && path === target && !replaced) await replace();
+            },
+          };
+        };
+        await assert.rejects(
+          m.publishNativeReport(
+            Buffer.from(JSON.stringify(report)),
+            { attemptId: "one", planSha256: sha(Buffer.from(report.native.rawPlan, "base64")) },
+            scope,
+            { publicationOpen },
+          ),
+          /durable publication readback differs/,
+          `${suffix}:${boundary}`,
+        );
+        assert.equal(replaced, true);
+      } finally {
+        await fs.rm(root, { recursive: true });
+      }
+    }
   }
 });

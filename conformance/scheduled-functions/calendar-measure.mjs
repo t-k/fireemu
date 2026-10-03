@@ -125,7 +125,7 @@ export async function inventoryPass(recorder) {
     recorder,
     rows.map((row) => row.pid),
   );
-  return rows.map((row) => ({ ...row, sid: sessions[row.pid] }));
+  return rows.map((row) => Object.assign({}, row, { sid: sessions[row.pid] }));
 }
 
 /** Up to five passes (`pass` takes one), until two consecutive clean ones or a definite answer. */
@@ -231,8 +231,7 @@ const identityOf = (row) => ({ pid: row.pid, uid: row.uid, started: row.started 
 
 const zoneIsValid = (timeZone) => {
   try {
-    new Intl.DateTimeFormat("en-US", { timeZone });
-    return true;
+    return Boolean(new Intl.DateTimeFormat("en-US", { timeZone }));
   } catch {
     return false;
   }
@@ -310,7 +309,7 @@ export function cleanupTargets({ rows, chain, launchTime, recorded, injected, se
       : null;
   return rows.filter((row) => {
     const startedAt = Date.parse(row.started + " GMT");
-    if (row.pid === selfPid || /^Z/.test(row.stat ?? "")) return false;
+    if (row.pid === selfPid || String(row.stat ?? "").startsWith("Z")) return false;
     if (!Number.isFinite(startedAt) || startedAt < launchTime) return false;
     return (
       (session !== null && row.sid === session) ||
@@ -462,7 +461,7 @@ export async function accountingOuter(accDir) {
 
 async function recordFiles(directory) {
   const files = {};
-  for (const name of (await readdir(directory)).sort())
+  for (const name of (await readdir(directory)).toSorted())
     try {
       files[name] = name.endsWith(".jsonl") ? await readRecords(join(directory, name)) : [];
     } catch {
@@ -1021,15 +1020,21 @@ export async function produceCampaign({
   bootstrap,
   readPlan = readFile,
   createLedger = createAttemptLedger,
-  classifyReport = classifyTerminalReport,
+  classifyReport = classifyCampaignReport,
   measureAttempt,
   retainReport = async (raw) => raw,
-  readSnapshot,
+  readSnapshot = readCampaignSnapshot,
 }) {
   let ledger;
   let receipt;
   let authorityBytes;
+  const causes = [];
   try {
+    if (
+      retainReport === publishNativeReport &&
+      attempts.length > NATIVE_ARCHIVE_BUDGET.currentAttemptCount
+    )
+      throw new Error("native archive campaign acceptance budget exceeded");
     const infrastructure = await bootstrap();
     scope = infrastructure.scope;
     receipt = infrastructure.receipt;
@@ -1053,6 +1058,7 @@ export async function produceCampaign({
         rawReport = Buffer.from(await retainReport(rawReport, attempt, scope));
       } catch (failure) {
         error = String(failure.message ?? failure);
+        causes.push(error);
       }
       let report;
       try {
@@ -1097,7 +1103,7 @@ export async function produceCampaign({
   } catch (error) {
     return {
       state: "unknown",
-      reasons: [String(error.message ?? error)],
+      reasons: [...causes, String(error.message ?? error)],
       receipt,
       externalApprovalVerified: false,
       allDayCertified: false,
@@ -1118,7 +1124,10 @@ export async function cleanupOwned({ inventory, signal, context }) {
   const after = await inventory();
   const remaining = cleanupTargets({ ...context, rows: after });
   const uncertain = after.some(
-    (row) => row.sid === "ESRCH" || !Number.isSafeInteger(row.sid) || /^Z/.test(row.stat ?? ""),
+    (row) =>
+      row.sid === "ESRCH" ||
+      !Number.isSafeInteger(row.sid) ||
+      String(row.stat ?? "").startsWith("Z"),
   );
   return {
     outcome:
@@ -1254,7 +1263,7 @@ export function recomputeNativeReport(report, { sourceBlobs, attemptId, scope } 
         (r) => r.pid !== inventoryQuery.answer.pid,
       );
       const sessions = JSON.parse(sessionQuery.answer.stdout);
-      passes.push(rows.map((r) => ({ ...r, sid: sessions[String(r.pid)] })));
+      passes.push(rows.map((r) => Object.assign({}, r, { sid: sessions[String(r.pid)] })));
     }
     const identities = recordedIdentities({
       files,
@@ -1361,13 +1370,15 @@ async function privateDirectory(path) {
     throw new Error("native source directory alias");
   return stat;
 }
-async function boundedSourceRead(path, expected) {
+async function boundedSourceRead(path, expected, syncedWriter) {
   const before = await lstat(path);
   if (
     !before.isFile() ||
     before.isSymbolicLink() ||
     before.nlink !== 1 ||
+    before.uid !== process.getuid() ||
     before.size !== expected.bytes ||
+    (syncedWriter && !sameInode(before, syncedWriter)) ||
     (await realpath(path)) !== path
   )
     throw new Error("native source file alias or byte count differs");
@@ -1387,6 +1398,7 @@ async function boundedSourceRead(path, expected) {
       !sameInode(before, await lstat(path)) ||
       after.size !== expected.bytes ||
       after.nlink !== 1 ||
+      after.uid !== process.getuid() ||
       digest(raw) !== expected.sha256 ||
       !Buffer.from(raw.toString("utf8")).equals(raw)
     )
@@ -1513,8 +1525,8 @@ function verifySourceBytes(report, sourceBlobs, attemptId, scope) {
     !scope ||
     !identifier(attemptId) ||
     !isDeepStrictEqual(
-      [...sourceBlobs.keys()].sort(),
-      FIXED_NATIVE_SOURCES.map((s) => s.path).sort(),
+      [...sourceBlobs.keys()].toSorted(),
+      FIXED_NATIVE_SOURCES.map((s) => s.path).toSorted(),
     )
   )
     throw new Error("missing complete native source resolution");
@@ -1547,7 +1559,7 @@ export async function resolveNativeSources(report, attemptId, scope) {
     parent = await privateDirectory(report.accountingDirectory),
     namespace = await privateDirectory(directory);
   const expectedNames = FIXED_NATIVE_SOURCES.map((_, i) => `source-${i}.raw`);
-  if (!isDeepStrictEqual((await readdir(directory)).sort(), expectedNames.sort()))
+  if (!isDeepStrictEqual((await readdir(directory)).toSorted(), expectedNames.toSorted()))
     throw new Error("native source publication set differs");
   const binding = { attemptId, scopeSha256: digest(Buffer.from(JSON.stringify(scope))) };
   if (!isDeepStrictEqual(report.native.sourceBinding, binding))
@@ -1570,11 +1582,236 @@ export async function resolveNativeSources(report, attemptId, scope) {
     !sameInode(root, await privateDirectory(scope.runRoot)) ||
     !sameInode(parent, await privateDirectory(report.accountingDirectory)) ||
     !sameInode(namespace, await privateDirectory(directory)) ||
-    !isDeepStrictEqual((await readdir(directory)).sort(), expectedNames.sort())
+    !isDeepStrictEqual((await readdir(directory)).toSorted(), expectedNames.toSorted())
   )
     throw new Error("native source namespace changed during readback");
   verifySourceBytes(report, raw, attemptId, scope);
   return raw;
+}
+
+/** A separate full-raw admission policy; recorder output and historical logs had no such cap. */
+export const NATIVE_ARCHIVE_BUDGET = Object.freeze({
+  reportBytes: 32 * 1024 * 1024,
+  manifestBytes: 8192,
+  sourceBytes: FIXED_NATIVE_SOURCES.reduce((total, source) => total + source.bytes, 0),
+  fileCount: 6,
+  currentAttemptCount: 6,
+});
+const archiveSnapshotBindings = new WeakMap();
+const archiveScopeSha = (scope) => digest(Buffer.from(JSON.stringify(scope)));
+const archiveRef = (value) => value?.schema === "calendar-native-report-ref/v1";
+function archiveDirectory(directory, scope) {
+  sourceNamespace({ accountingDirectory: directory }, scope);
+  return join(directory, "native-report");
+}
+function projectArchivedReport(original, attemptId, scope) {
+  if (original.native?.schema !== "calendar-native-proof/v1")
+    throw new Error("archive requires complete original native proof v1");
+  const report = structuredClone(original);
+  const queries = sourceQueries(report);
+  for (let i = 0; i < queries.length; i++) {
+    const source = FIXED_NATIVE_SOURCES[i],
+      query = queries[i];
+    const raw = Buffer.from(query.answer.stdout ?? "", "utf8");
+    if (raw.length !== source.bytes || digest(raw) !== source.sha256)
+      throw new Error("archive original full source differs");
+    query.answer.sourceRef = sourceReference(query, source, i, attemptId, scope);
+    delete query.answer.stdout;
+  }
+  report.native.schema = "calendar-native-proof/v2";
+  report.native.sourceBinding = { attemptId, scopeSha256: archiveScopeSha(scope) };
+  return report;
+}
+function archiveManifest(raw, report, attemptId, scope) {
+  const original = JSON.parse(raw.toString("utf8"));
+  const plan = exactBase64(original.native.rawPlan);
+  const projected = Buffer.from(JSON.stringify(report) + "\n");
+  if (
+    plan.length > NATIVE_ENVELOPE_BUDGET.planBytes ||
+    projected.length > NATIVE_ARCHIVE_BUDGET.reportBytes
+  )
+    throw new Error("archive plan or projection acceptance budget exceeded");
+  if (
+    !identifier(attemptId) ||
+    original.harnessVersion !== scope.harnessH ||
+    original.root?.uid !== process.getuid()
+  )
+    throw new Error("archive attempt or H differs");
+  return {
+    schema: "calendar-native-report-manifest/v1",
+    scopeSha256: archiveScopeSha(scope),
+    attemptId,
+    planSha256: digest(plan),
+    harnessH: scope.harnessH,
+    ownerUid: process.getuid(),
+    originalSchema: "calendar-native-proof/v1",
+    projectedSchema: "calendar-native-proof/v2",
+    rawFile: "report.raw",
+    rawBytes: raw.length,
+    rawSha256: digest(raw),
+    projectionBytes: projected.length,
+    projectionSha256: digest(projected),
+    sources: sourceQueries(report).map((q) => q.answer.sourceRef),
+  };
+}
+function archiveDescriptor(manifest, manifestRaw, accountingDirectory) {
+  return {
+    schema: "calendar-native-report-ref/v1",
+    accountingDirectory,
+    scopeSha256: manifest.scopeSha256,
+    attemptId: manifest.attemptId,
+    planSha256: manifest.planSha256,
+    harnessH: manifest.harnessH,
+    ownerUid: manifest.ownerUid,
+    rawFile: "report.raw",
+    rawBytes: manifest.rawBytes,
+    rawSha256: manifest.rawSha256,
+    projectionBytes: manifest.projectionBytes,
+    projectionSha256: manifest.projectionSha256,
+    sources: manifest.sources,
+    manifestFile: "manifest.json",
+    manifestBytes: manifestRaw.length,
+    manifestSha256: digest(manifestRaw),
+  };
+}
+function archiveSize(bytes, cap) {
+  if (!Number.isSafeInteger(bytes) || bytes <= 0 || bytes > cap)
+    throw new Error("native archive acceptance budget exceeded");
+}
+async function ownedArchiveDirectory(path) {
+  const stat = await privateDirectory(path);
+  if (stat.uid !== process.getuid()) throw new Error("foreign archive directory UID");
+  return stat;
+}
+async function syncArchiveDirectory(path, publicationOpen) {
+  const handle = await publicationOpen(path, "r");
+  try {
+    await handle.sync();
+  } finally {
+    await handle.close();
+  }
+}
+/** Exclusive complete-byte storage; the descriptor never substitutes for native facts. */
+export async function publishNativeReport(raw, attempt, scope, { publicationOpen = open } = {}) {
+  if (!Buffer.isBuffer(raw)) throw new Error("archive raw bytes required");
+  archiveSize(raw.length, NATIVE_ARCHIVE_BUDGET.reportBytes);
+  if (!Buffer.from(raw.toString("utf8")).equals(raw)) throw new Error("archive raw UTF-8 differs");
+  const original = JSON.parse(raw.toString("utf8"));
+  const attemptId = attempt.attemptId;
+  const report = projectArchivedReport(original, attemptId, scope);
+  const manifest = archiveManifest(raw, report, attemptId, scope);
+  if (attempt.planSha256 !== manifest.planSha256)
+    throw new Error("archive plan differs from accepted birth");
+  const manifestRaw = Buffer.from(JSON.stringify(manifest) + "\n");
+  archiveSize(manifestRaw.length, NATIVE_ARCHIVE_BUDGET.manifestBytes);
+  const descriptor = archiveDescriptor(manifest, manifestRaw, original.accountingDirectory);
+  const retained = Buffer.from(JSON.stringify(descriptor) + "\n");
+  archiveSize(retained.length, NATIVE_ENVELOPE_BUDGET.reportBytes);
+  const directory = archiveDirectory(original.accountingDirectory, scope);
+  const root = await ownedArchiveDirectory(scope.runRoot),
+    parent = await ownedArchiveDirectory(original.accountingDirectory);
+  await publishNativeSources(original, attemptId, scope, { publicationOpen });
+  await mkdir(directory, { mode: 0o700 });
+  await syncArchiveDirectory(original.accountingDirectory, publicationOpen);
+  const namespace = await ownedArchiveDirectory(directory);
+  await publishCampaignBytes(join(directory, "report.raw"), raw, publicationOpen);
+  await publishCampaignBytes(join(directory, "manifest.json"), manifestRaw, publicationOpen);
+  await resolveNativeReport(descriptor, attemptId, scope);
+  if (
+    !sameInode(root, await ownedArchiveDirectory(scope.runRoot)) ||
+    !sameInode(parent, await ownedArchiveDirectory(original.accountingDirectory)) ||
+    !sameInode(namespace, await ownedArchiveDirectory(directory))
+  )
+    throw new Error("archive publication directory substituted");
+  await publishCampaignBytes(
+    join(original.accountingDirectory, "durable-verdict.json"),
+    retained,
+    publicationOpen,
+  );
+  return retained;
+}
+/** Reads only the exact owned publications, then reconstructs every original native fact. */
+export async function resolveNativeReport(descriptor, attemptId, scope) {
+  if (
+    !archiveRef(descriptor) ||
+    descriptor.attemptId !== attemptId ||
+    descriptor.scopeSha256 !== archiveScopeSha(scope) ||
+    descriptor.harnessH !== scope.harnessH ||
+    descriptor.ownerUid !== process.getuid()
+  )
+    throw new Error("foreign native archive descriptor");
+  archiveSize(descriptor.rawBytes, NATIVE_ARCHIVE_BUDGET.reportBytes);
+  archiveSize(descriptor.manifestBytes, NATIVE_ARCHIVE_BUDGET.manifestBytes);
+  const directory = archiveDirectory(descriptor.accountingDirectory, scope);
+  const root = await ownedArchiveDirectory(scope.runRoot),
+    parent = await ownedArchiveDirectory(descriptor.accountingDirectory),
+    namespace = await ownedArchiveDirectory(directory);
+  const exactFiles = ["manifest.json", "report.raw"];
+  if (!isDeepStrictEqual((await readdir(directory)).toSorted(), exactFiles))
+    throw new Error("native archive publication set differs");
+  const manifestRaw = await boundedSourceRead(join(directory, "manifest.json"), {
+    bytes: descriptor.manifestBytes,
+    sha256: descriptor.manifestSha256,
+  });
+  const manifest = JSON.parse(manifestRaw.toString("utf8"));
+  if (
+    !isDeepStrictEqual(
+      descriptor,
+      archiveDescriptor(manifest, manifestRaw, descriptor.accountingDirectory),
+    )
+  )
+    throw new Error("native archive descriptor binding differs");
+  const originalBytes = await boundedSourceRead(join(directory, "report.raw"), {
+    bytes: descriptor.rawBytes,
+    sha256: descriptor.rawSha256,
+  });
+  const original = JSON.parse(originalBytes.toString("utf8"));
+  if (original.accountingDirectory !== descriptor.accountingDirectory)
+    throw new Error("foreign original native archive directory");
+  const report = projectArchivedReport(original, attemptId, scope);
+  if (!isDeepStrictEqual(manifest, archiveManifest(originalBytes, report, attemptId, scope)))
+    throw new Error("native archive manifest binding differs");
+  const sourceBlobs = await resolveNativeSources(report, attemptId, scope);
+  if (
+    !sameInode(root, await ownedArchiveDirectory(scope.runRoot)) ||
+    !sameInode(parent, await ownedArchiveDirectory(descriptor.accountingDirectory)) ||
+    !sameInode(namespace, await ownedArchiveDirectory(directory)) ||
+    !isDeepStrictEqual((await readdir(directory)).toSorted(), exactFiles)
+  )
+    throw new Error("native archive namespace changed during readback");
+  return { originalBytes, report, sourceBlobs };
+}
+async function classifyCampaignReport(report, attempt, scope) {
+  if (!archiveRef(report)) return classifyTerminalReport(report);
+  const hydrated = await resolveNativeReport(report, attempt.attemptId, scope);
+  return classifyTerminalReport(hydrated.report, {
+    sourceBlobs: hydrated.sourceBlobs,
+    attemptId: attempt.attemptId,
+    scope,
+  });
+}
+function boundSnapshotReport(snapshot, envelopeBytes, envelope, value) {
+  if (!archiveRef(value))
+    return {
+      report: value,
+      sourceBlobs: snapshot.nativeSources?.get(envelope.attemptId),
+      originalBytes: exactBase64(envelope.rawReport),
+    };
+  const authority = archiveSnapshotBindings.get(snapshot);
+  if (
+    !authority ||
+    authority.authoritySha256 !== digest(snapshot.authorityBytes) ||
+    authority.ledgerSha256 !== digest(snapshot.ledgerBytes)
+  )
+    throw new Error("missing default native archive authority");
+  const binding = authority.archives.get(envelope.attemptId);
+  if (!binding || binding.envelopeSha256 !== digest(envelopeBytes))
+    throw new Error("missing default native archive authority");
+  return {
+    report: JSON.parse(binding.projectedBytes.toString("utf8")),
+    sourceBlobs: new Map([...binding.sourceBlobs].map(([name, raw]) => [name, Buffer.from(raw)])),
+    originalBytes: Buffer.from(binding.originalBytes),
+  };
 }
 
 /** The separately built real stage3 artifact; a caller cannot nominate a stand-in build. */
@@ -1602,7 +1839,7 @@ export function validateCampaignPacket(packet, { utcDay, harnessH, filePins }) {
     problems.push("current day or H differs");
   if (
     !isDeepStrictEqual(packet?.harnessFiles, filePins) ||
-    !isDeepStrictEqual(Object.keys(filePins).sort(), [...HARNESS_FILES].sort()) ||
+    !isDeepStrictEqual(Object.keys(filePins).toSorted(), [...HARNESS_FILES].toSorted()) ||
     !Object.values(filePins).every(hash64)
   )
     problems.push("whole H file pins differ");
@@ -1642,9 +1879,17 @@ async function currentCampaignContext() {
   return { utcDay: frozenDay(), harnessH: await harnessVersion(), filePins };
 }
 
+async function publicationIdentity(handle) {
+  const stat = await handle.stat();
+  if (!stat.isFile() || stat.nlink !== 1 || stat.uid !== process.getuid())
+    throw new Error("publication writer file identity differs");
+  return Object.freeze({ dev: stat.dev, ino: stat.ino });
+}
+
 /** An exclusive publication's full write, file+directory sync and exact raw readback. */
 async function publishCampaignBytes(path, raw, publicationOpen = open) {
   const handle = await publicationOpen(path, "wx", 0o600);
+  let syncedWriter;
   try {
     let offset = 0;
     while (offset < raw.length) {
@@ -1652,6 +1897,7 @@ async function publishCampaignBytes(path, raw, publicationOpen = open) {
       if (bytesWritten <= 0) throw new Error("publication made no progress");
       offset += bytesWritten;
     }
+    syncedWriter = await publicationIdentity(handle);
     await handle.sync();
   } finally {
     await handle.close();
@@ -1662,9 +1908,11 @@ async function publishCampaignBytes(path, raw, publicationOpen = open) {
   } finally {
     await directory.close();
   }
-  const retained = await readFile(path);
-  if (!retained.equals(raw)) throw new Error("durable publication readback differs");
-  return retained;
+  try {
+    return await boundedSourceRead(path, { bytes: raw.length, sha256: digest(raw) }, syncedWriter);
+  } catch (error) {
+    throw new Error(`durable publication readback differs: ${error.message}`, { cause: error });
+  }
 }
 
 export async function readCampaignSnapshot(scope) {
@@ -1688,8 +1936,8 @@ export async function readCampaignSnapshot(scope) {
     throw new Error("invalid report enumeration");
   if (
     !isDeepStrictEqual(
-      (await readdir(directory)).sort(),
-      ["authority.json", "ledger.jsonl", ...names].sort(),
+      (await readdir(directory)).toSorted(),
+      ["authority.json", "ledger.jsonl", ...names].toSorted(),
     )
   )
     throw new Error("omitted or extra ledger publication");
@@ -1710,6 +1958,8 @@ export async function readCampaignSnapshot(scope) {
   const nativeScope = JSON.parse(authorityBytes.toString("utf8")).scope;
   if (nativeScope.runRoot !== scope.runRoot) throw new Error("foreign native snapshot root");
   const nativeSources = new Map();
+  const archiveBindings = new Map();
+  const archiveDirectories = new Set();
   for (const bytes of reports.values()) {
     const envelope = JSON.parse(bytes.toString("utf8"));
     if (envelope.rawReport === null) continue;
@@ -1723,7 +1973,29 @@ export async function readCampaignSnapshot(scope) {
       rawReport,
       error: envelope.error,
     });
-    const report = JSON.parse(rawReport.toString("utf8"));
+    let report = JSON.parse(rawReport.toString("utf8"));
+    if (archiveRef(report)) {
+      if (
+        archiveBindings.has(envelope.attemptId) ||
+        archiveDirectories.has(report.accountingDirectory)
+      )
+        throw new Error("duplicate native archive attempt or directory");
+      if (archiveBindings.size >= NATIVE_ARCHIVE_BUDGET.currentAttemptCount)
+        throw new Error("native archive campaign acceptance budget exceeded");
+      await boundedSourceRead(join(report.accountingDirectory, "durable-verdict.json"), {
+        bytes: rawReport.length,
+        sha256: digest(rawReport),
+      });
+      const hydrated = await resolveNativeReport(report, envelope.attemptId, nativeScope);
+      archiveDirectories.add(report.accountingDirectory);
+      archiveBindings.set(envelope.attemptId, {
+        envelopeSha256: digest(bytes),
+        originalBytes: hydrated.originalBytes,
+        projectedBytes: Buffer.from(JSON.stringify(hydrated.report)),
+        sourceBlobs: hydrated.sourceBlobs,
+      });
+      report = hydrated.report;
+    }
     if (report.native?.schema !== "calendar-native-proof/v2") continue;
     if (nativeSources.has(envelope.attemptId)) throw new Error("duplicate native source attempt");
     nativeSources.set(
@@ -1731,7 +2003,13 @@ export async function readCampaignSnapshot(scope) {
       await resolveNativeSources(report, envelope.attemptId, nativeScope),
     );
   }
-  return { authorityBytes, ledgerBytes, reports, nativeSources };
+  const snapshot = { authorityBytes, ledgerBytes, reports, nativeSources };
+  archiveSnapshotBindings.set(snapshot, {
+    authoritySha256: digest(authorityBytes),
+    ledgerSha256: digest(ledgerBytes),
+    archives: archiveBindings,
+  });
+  return snapshot;
 }
 
 /** Explicit single-lifetime local producer; an external ROOT packet is required to run it. */
@@ -1813,28 +2091,7 @@ export async function campaign(packetPath, { trustedPacketVerifier } = {}) {
       const report = await measure(attempt.planPath, { planBytes: raw, runRoot: scope.runRoot });
       return Buffer.from(JSON.stringify(report) + "\n");
     },
-    retainReport: async (raw, attempt, scope) => {
-      const report = await publishNativeSources(
-        JSON.parse(raw.toString("utf8")),
-        attempt.attemptId,
-        scope,
-      );
-      const retained = Buffer.from(JSON.stringify(report) + "\n");
-      if (retained.length > NATIVE_ENVELOPE_BUDGET.reportBytes)
-        throw new Error("native report acceptance budget exceeded");
-      return publishCampaignBytes(
-        join(report.accountingDirectory, "durable-verdict.json"),
-        retained,
-      );
-    },
-    classifyReport: async (report, attempt, scope) =>
-      report === null
-        ? "unknown"
-        : classifyTerminalReport(report, {
-            sourceBlobs: await resolveNativeSources(report, attempt.attemptId, scope),
-            attemptId: attempt.attemptId,
-            scope,
-          }),
+    retainReport: publishNativeReport,
     readSnapshot: readCampaignSnapshot,
   });
   if (produced.state !== "complete")
@@ -1903,7 +2160,12 @@ export function evaluateCampaignSnapshot(packet, snapshot, standInRunnerSha256) 
       )
     )
       throw new Error("omitted, extra or duplicate accepted attempt");
-    if (!isDeepStrictEqual([...reports.keys()].sort(), terminals.map((r) => r.reportFile).sort()))
+    if (
+      !isDeepStrictEqual(
+        [...reports.keys()].toSorted(),
+        terminals.map((r) => r.reportFile).toSorted(),
+      )
+    )
       throw new Error("omitted or extra raw report");
     const entries = births.map((birth) => {
       const terminal = terminals.find((r) => r.attemptId === birth.attemptId);
@@ -1924,7 +2186,13 @@ export function evaluateCampaignSnapshot(packet, snapshot, standInRunnerSha256) 
         digest(rawReport) !== envelope.rawReportSha256
       )
         throw new Error("nested raw bytes SHA differs");
-      const report = JSON.parse(rawReport.toString("utf8"));
+      const publication = boundSnapshotReport(
+        snapshot,
+        reports.get(terminal.reportFile),
+        envelope,
+        JSON.parse(rawReport.toString("utf8")),
+      );
+      const report = publication.report;
       if (envelope.outcome !== report.verdict?.verdict || envelope.error !== null)
         throw new Error("raw terminal outcome differs or is unknown");
       if (
@@ -1942,7 +2210,7 @@ export function evaluateCampaignSnapshot(packet, snapshot, standInRunnerSha256) 
       )
         throw new Error("foreign native build");
       const native = recomputeNativeReport(report, {
-        sourceBlobs: snapshot.nativeSources?.get(birth.attemptId),
+        sourceBlobs: publication.sourceBlobs,
         attemptId: birth.attemptId,
         scope,
       });
@@ -1954,8 +2222,10 @@ export function evaluateCampaignSnapshot(packet, snapshot, standInRunnerSha256) 
         attemptId: birth.attemptId,
         report,
         file: {
-          path: join(report.accountingDirectory, "durable-verdict.json"),
-          sha256: digest(rawReport),
+          path: archiveRef(JSON.parse(rawReport.toString("utf8")))
+            ? join(report.accountingDirectory, "native-report", "report.raw")
+            : join(report.accountingDirectory, "durable-verdict.json"),
+          sha256: digest(publication.originalBytes),
         },
         envelopeSha256: terminal.reportSha256,
       };
@@ -2038,7 +2308,11 @@ async function certifyCampaignManifest(manifestPath, trustedPacketVerifier) {
     for (const rawEnvelope of snapshot.reports.values()) {
       const envelope = JSON.parse(rawEnvelope.toString("utf8"));
       const raw = exactBase64(envelope.rawReport);
-      const report = JSON.parse(raw.toString("utf8"));
+      const descriptor = JSON.parse(raw.toString("utf8"));
+      if (!archiveRef(descriptor))
+        throw new Error("native certificate requires full report archive proof v1");
+      const publication = boundSnapshotReport(snapshot, rawEnvelope, envelope, descriptor);
+      const report = publication.report;
       if (report.native?.schema !== "calendar-native-proof/v2")
         throw new Error("native certificate requires source proof v2");
       const directory = report.accountingDirectory;
@@ -2129,7 +2403,7 @@ function verifyCleanupProof(cleanup, context, root, version) {
     observations.push(
       parseInventory(q.answer.stdout)
         .filter((r) => r.pid !== q.answer.pid)
-        .map((r) => ({ ...r, sid: sids[String(r.pid)] })),
+        .map((r) => Object.assign({}, r, { sid: sids[String(r.pid)] })),
     );
   }
   if (
@@ -2155,7 +2429,8 @@ function verifyCleanupProof(cleanup, context, root, version) {
   if (
     cleanupTargets({ ...context, rows: cleanup.after }).length ||
     cleanup.after.some(
-      (r) => r.sid === "ESRCH" || !Number.isSafeInteger(r.sid) || /^Z/.test(r.stat ?? ""),
+      (r) =>
+        r.sid === "ESRCH" || !Number.isSafeInteger(r.sid) || String(r.stat ?? "").startsWith("Z"),
     )
   )
     throw new Error("cleanup after inventory unknown");

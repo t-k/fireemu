@@ -4,6 +4,14 @@ Status: `IN_PROGRESS`
 
 Goal ID: `IP-FS-PRODUCTION-COMPATIBILITY`
 
+## Production-first tracked scope (2026-10-03)
+
+The current production scope contains exactly 21 parents. The [production parent registry](../../spec/compatibility/production-parent-registry.json) and [deterministic status report](production-parent-status.md) retain the historical 13 approvals and the eight remaining parents. Four remaining inventories are published; four original frozen inventories have UNKNOWN publication and cannot count as adopted closures. Earlier 14-parent and 16-parent checkpoints below remain historical.
+
+The [independent official comparison registry](../../spec/compatibility/official-compatibility/registry.json) preserves original condition identities, complete mixed text and statuses in immutable source snapshots. Its official-only work starts OPEN independently of production closure. Production behavior in mixed conditions, UNKNOWN obligations, local product checks, the same final product, an independent clean review and the emulator profile contract remain mandatory. This separation changes neither runtime profiles nor refusal policy.
+
+This first source slice validates pending integrity and preserves all 95 published and 66 unpublished original condition bindings. It does not adopt new production evidence, reissue historical approvals or complete the existing four Node consumer migration. Canonical record pins require coordinator generation and fresh checks on the resulting tree. `production-closure.mjs --check` is an integrity gate; `--require-all` rejects this incomplete checkpoint. The existing closure contracts continue to run unchanged.
+
 Auth claim-source, MFA and Limits native updates remain local-only; executor `571d5a6bb63289893661d88470d47e8ffb4870a2` is source-only evidence. As of the v0.8.0 integration (2026-09-28), 9 of the 14 parents are `COMPAT_VERIFIED`; the section below records the integrated regression.
 
 ## v0.8.0 integrated regression (2026-09-28)

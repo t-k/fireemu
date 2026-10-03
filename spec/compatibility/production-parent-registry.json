@@ -1,0 +1,3609 @@
+{
+  "schemaVersion": 1,
+  "policy": "production-first-original-facets-v1",
+  "baselineSourceCommit": "e57a78e0f5c4852894d14fad31438b2fa9d681e0",
+  "requiredParentIds": [
+    "AUTH-ACCOUNT",
+    "AUTH-ACTION",
+    "AUTH-CONFIG-SDK",
+    "AUTH-CREDENTIAL",
+    "AUTH-FEDERATION",
+    "AUTH-FS-CROSS",
+    "AUTH-MFA",
+    "AUTH-TENANT-BLOCKING",
+    "FS-CONFIG-LIFECYCLE",
+    "FS-DATA-WRITE",
+    "FS-QUERY-INDEX",
+    "FS-RULES",
+    "FS-TRANSACTION",
+    "FUNCTIONS-HTTP",
+    "SCHEDULED-FUNCTIONS",
+    "STORAGE-OBJECT",
+    "STORAGE-RULES",
+    "FS-LISTEN-SDK",
+    "FUNCTIONS-EVENTS",
+    "PUBSUB",
+    "EVENTARC"
+  ],
+  "originalPendingConditionCount": 161,
+  "officialRegistryPath": "spec/compatibility/official-compatibility/registry.json",
+  "officialRegistrySha256": "8ece949d30e22806ce6753d0adcb8a86a2dad1b0f157de1530064d8af2dd3a31",
+  "consumerMigration": {
+    "state": "PENDING_SECOND_DELTA",
+    "consumers": [
+      "conformance/src/fs-transaction-closure.test.mjs",
+      "conformance/src/storage-object-closure.test.mjs",
+      "conformance/src/storage-rules-closure.test.mjs",
+      "conformance/src/scheduled-functions-closure.test.mjs"
+    ],
+    "evidenceAdmission": "PENDING_SOURCE_BOUND_EVIDENCE_ADOPTION"
+  },
+  "globalFinalProduct": {
+    "state": "PENDING",
+    "sourceCommit": null,
+    "artifactSha256": null,
+    "runnerSha256": null,
+    "comparison": null,
+    "independentReview": null
+  },
+  "parents": [
+    {
+      "parent": "AUTH-ACCOUNT",
+      "publicationState": "PUBLISHED",
+      "track": "PRESERVED_HISTORICAL",
+      "inventoryPath": "spec/compatibility/closure/AUTH-ACCOUNT.json",
+      "sourceIdentity": {
+        "commit": "e57a78e0f5c4852894d14fad31438b2fa9d681e0",
+        "gitObject": "e57a78e0f5c4852894d14fad31438b2fa9d681e0:spec/compatibility/closure/AUTH-ACCOUNT.json",
+        "blob": "d19ebdceb2ad3b7e426847a4399d7105e34cd055",
+        "rawSha256": "d04ac6a82f575b2e6d107d7b4433f8bed2305330202dd69d14963ed574788c92",
+        "snapshotPath": null,
+        "snapshotSha256": null
+      },
+      "conditionRegistry": [],
+      "conditions": [],
+      "profileContract": null
+    },
+    {
+      "parent": "AUTH-ACTION",
+      "publicationState": "PUBLISHED",
+      "track": "PRESERVED_HISTORICAL",
+      "inventoryPath": "spec/compatibility/closure/AUTH-ACTION.json",
+      "sourceIdentity": {
+        "commit": "e57a78e0f5c4852894d14fad31438b2fa9d681e0",
+        "gitObject": "e57a78e0f5c4852894d14fad31438b2fa9d681e0:spec/compatibility/closure/AUTH-ACTION.json",
+        "blob": "e1ce0c2336547b24e7c8a6ade9456f80def99d5d",
+        "rawSha256": "9949c4d3b6b7fed48135b631239eb6070b6d7fd7e8fa14cd05320faceea73c7e",
+        "snapshotPath": null,
+        "snapshotSha256": null
+      },
+      "conditionRegistry": [],
+      "conditions": [],
+      "profileContract": null
+    },
+    {
+      "parent": "AUTH-CONFIG-SDK",
+      "publicationState": "PUBLISHED",
+      "track": "PRESERVED_HISTORICAL",
+      "inventoryPath": "spec/compatibility/closure/AUTH-CONFIG-SDK.json",
+      "sourceIdentity": {
+        "commit": "e57a78e0f5c4852894d14fad31438b2fa9d681e0",
+        "gitObject": "e57a78e0f5c4852894d14fad31438b2fa9d681e0:spec/compatibility/closure/AUTH-CONFIG-SDK.json",
+        "blob": "b864eec5fdc4e0c8cfab532018c43742dec7b70c",
+        "rawSha256": "d49f1e87557bdf901fe93b450bae7b55d606681633e1de5bbd4243709179532b",
+        "snapshotPath": null,
+        "snapshotSha256": null
+      },
+      "conditionRegistry": [],
+      "conditions": [],
+      "profileContract": null
+    },
+    {
+      "parent": "AUTH-CREDENTIAL",
+      "publicationState": "PUBLISHED",
+      "track": "PRESERVED_HISTORICAL",
+      "inventoryPath": "spec/compatibility/closure/AUTH-CREDENTIAL.json",
+      "sourceIdentity": {
+        "commit": "e57a78e0f5c4852894d14fad31438b2fa9d681e0",
+        "gitObject": "e57a78e0f5c4852894d14fad31438b2fa9d681e0:spec/compatibility/closure/AUTH-CREDENTIAL.json",
+        "blob": "60b460d842e4b8e426d18e05cfaed4f4b8385db1",
+        "rawSha256": "4cc8ea55e03ad1825cddd527f910fd597c0f1e7d7696ecb9318d481d6dea0335",
+        "snapshotPath": null,
+        "snapshotSha256": null
+      },
+      "conditionRegistry": [],
+      "conditions": [],
+      "profileContract": null
+    },
+    {
+      "parent": "AUTH-FEDERATION",
+      "publicationState": "PUBLISHED",
+      "track": "PRESERVED_HISTORICAL",
+      "inventoryPath": "spec/compatibility/closure/AUTH-FEDERATION.json",
+      "sourceIdentity": {
+        "commit": "e57a78e0f5c4852894d14fad31438b2fa9d681e0",
+        "gitObject": "e57a78e0f5c4852894d14fad31438b2fa9d681e0:spec/compatibility/closure/AUTH-FEDERATION.json",
+        "blob": "8b10cc648677a6ad6e1f8563ea953c98abfef057",
+        "rawSha256": "6db291bb4d553a6c42537c416e8e2ec3650474495d4617786c606b85e8767a1d",
+        "snapshotPath": null,
+        "snapshotSha256": null
+      },
+      "conditionRegistry": [],
+      "conditions": [],
+      "profileContract": null
+    },
+    {
+      "parent": "AUTH-FS-CROSS",
+      "publicationState": "PUBLISHED",
+      "track": "PRESERVED_HISTORICAL",
+      "inventoryPath": "spec/compatibility/closure/AUTH-FS-CROSS.json",
+      "sourceIdentity": {
+        "commit": "e57a78e0f5c4852894d14fad31438b2fa9d681e0",
+        "gitObject": "e57a78e0f5c4852894d14fad31438b2fa9d681e0:spec/compatibility/closure/AUTH-FS-CROSS.json",
+        "blob": "a0b5d1a2e5ee042a7fdd198ce2f97b5434741f3d",
+        "rawSha256": "ecc1d2c0a917a249990935cab3524f4428a18a7d275bd6ce3ea2beade38a2ee4",
+        "snapshotPath": null,
+        "snapshotSha256": null
+      },
+      "conditionRegistry": [],
+      "conditions": [],
+      "profileContract": null
+    },
+    {
+      "parent": "AUTH-MFA",
+      "publicationState": "PUBLISHED",
+      "track": "PRESERVED_HISTORICAL",
+      "inventoryPath": "spec/compatibility/closure/AUTH-MFA.json",
+      "sourceIdentity": {
+        "commit": "e57a78e0f5c4852894d14fad31438b2fa9d681e0",
+        "gitObject": "e57a78e0f5c4852894d14fad31438b2fa9d681e0:spec/compatibility/closure/AUTH-MFA.json",
+        "blob": "cd501a49dc142ed5f5b4a565d7099120f0f35f63",
+        "rawSha256": "a1e72883bbb1974cdaa26013013c46487eb99ba11d6625916b9a4e5f33a59da7",
+        "snapshotPath": null,
+        "snapshotSha256": null
+      },
+      "conditionRegistry": [],
+      "conditions": [],
+      "profileContract": null
+    },
+    {
+      "parent": "AUTH-TENANT-BLOCKING",
+      "publicationState": "PUBLISHED",
+      "track": "PRESERVED_HISTORICAL",
+      "inventoryPath": "spec/compatibility/closure/AUTH-TENANT-BLOCKING.json",
+      "sourceIdentity": {
+        "commit": "e57a78e0f5c4852894d14fad31438b2fa9d681e0",
+        "gitObject": "e57a78e0f5c4852894d14fad31438b2fa9d681e0:spec/compatibility/closure/AUTH-TENANT-BLOCKING.json",
+        "blob": "7f66c34f448e8f4dd1453ce12d7ac79a9ffe9983",
+        "rawSha256": "abfc0d92fb63497b2f0fbd32fd6374c68d665886e9026cd19864e83bf52aae0c",
+        "snapshotPath": null,
+        "snapshotSha256": null
+      },
+      "conditionRegistry": [],
+      "conditions": [],
+      "profileContract": null
+    },
+    {
+      "parent": "FS-CONFIG-LIFECYCLE",
+      "publicationState": "PUBLISHED",
+      "track": "PRESERVED_HISTORICAL",
+      "inventoryPath": "spec/compatibility/closure/FS-CONFIG-LIFECYCLE.json",
+      "sourceIdentity": {
+        "commit": "e57a78e0f5c4852894d14fad31438b2fa9d681e0",
+        "gitObject": "e57a78e0f5c4852894d14fad31438b2fa9d681e0:spec/compatibility/closure/FS-CONFIG-LIFECYCLE.json",
+        "blob": "871b3688d23176faeff32dac8163dece0cf50209",
+        "rawSha256": "21ff48041dc4d09f777a7a59571e230a40db54c98a33e8239c9ac4982d5415ce",
+        "snapshotPath": null,
+        "snapshotSha256": null
+      },
+      "conditionRegistry": [],
+      "conditions": [],
+      "profileContract": null
+    },
+    {
+      "parent": "FS-DATA-WRITE",
+      "publicationState": "PUBLISHED",
+      "track": "PRESERVED_HISTORICAL",
+      "inventoryPath": "spec/compatibility/closure/FS-DATA-WRITE.json",
+      "sourceIdentity": {
+        "commit": "e57a78e0f5c4852894d14fad31438b2fa9d681e0",
+        "gitObject": "e57a78e0f5c4852894d14fad31438b2fa9d681e0:spec/compatibility/closure/FS-DATA-WRITE.json",
+        "blob": "503f090e549b1c07dded1f9df347d07aa20cfcd4",
+        "rawSha256": "418f10039714d8367ad573300982a2bfd6dd70fbd33c78932da69e8ea5c636a7",
+        "snapshotPath": null,
+        "snapshotSha256": null
+      },
+      "conditionRegistry": [],
+      "conditions": [],
+      "profileContract": null
+    },
+    {
+      "parent": "FS-QUERY-INDEX",
+      "publicationState": "PUBLISHED",
+      "track": "PRESERVED_HISTORICAL",
+      "inventoryPath": "spec/compatibility/closure/FS-QUERY-INDEX.json",
+      "sourceIdentity": {
+        "commit": "e57a78e0f5c4852894d14fad31438b2fa9d681e0",
+        "gitObject": "e57a78e0f5c4852894d14fad31438b2fa9d681e0:spec/compatibility/closure/FS-QUERY-INDEX.json",
+        "blob": "c23a0d5ce7fa7d72df3583f66a7f74fe0005b0fb",
+        "rawSha256": "8d1b27fa081c77aeedce616a8194c5e85118cc1549a031aeccea35478db38736",
+        "snapshotPath": null,
+        "snapshotSha256": null
+      },
+      "conditionRegistry": [],
+      "conditions": [],
+      "profileContract": null
+    },
+    {
+      "parent": "FS-RULES",
+      "publicationState": "PUBLISHED",
+      "track": "PRESERVED_HISTORICAL",
+      "inventoryPath": "spec/compatibility/closure/FS-RULES.json",
+      "sourceIdentity": {
+        "commit": "e57a78e0f5c4852894d14fad31438b2fa9d681e0",
+        "gitObject": "e57a78e0f5c4852894d14fad31438b2fa9d681e0:spec/compatibility/closure/FS-RULES.json",
+        "blob": "14ab75b92d86caa660449d07acc84d2f6735b102",
+        "rawSha256": "5f45a16bdec5e6968e2b818decb73fd1f680185ce3b6e4ad622c5bbaf5eb03a0",
+        "snapshotPath": null,
+        "snapshotSha256": null
+      },
+      "conditionRegistry": [],
+      "conditions": [],
+      "profileContract": null
+    },
+    {
+      "parent": "FS-TRANSACTION",
+      "publicationState": "PUBLISHED",
+      "track": "PRODUCTION_PENDING",
+      "inventoryPath": "spec/compatibility/closure/FS-TRANSACTION.json",
+      "sourceIdentity": {
+        "commit": "e57a78e0f5c4852894d14fad31438b2fa9d681e0",
+        "gitObject": "e57a78e0f5c4852894d14fad31438b2fa9d681e0:spec/compatibility/closure/FS-TRANSACTION.json",
+        "blob": "8146f9ddbd7eb9d65cfb86adcfd8e31ff706ef87",
+        "rawSha256": "7f0633ab6a948890a4c742b17f50912c920a925a2a018cfdd636dc20278ef93f",
+        "snapshotPath": "spec/compatibility/official-compatibility/history/e57a78e0/FS-TRANSACTION.json",
+        "snapshotSha256": "7f0633ab6a948890a4c742b17f50912c920a925a2a018cfdd636dc20278ef93f"
+      },
+      "conditionRegistry": [
+        {
+          "conditionId": "FS-TRANSACTION/read-write-lifecycle",
+          "originalPointer": "/conditions/0",
+          "originalSha256": "43f00520c6d2f0ff7d87f618526d3d0ae82e876d3dde2ebea031012c406fa508",
+          "cases": [],
+          "casesSha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+        },
+        {
+          "conditionId": "FS-TRANSACTION/read-only-snapshot",
+          "originalPointer": "/conditions/1",
+          "originalSha256": "9b0e05d0b2122aaf53ca94b5664e6507b449a09ee82c32e3eda0802fbc1c2958",
+          "cases": [],
+          "casesSha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+        },
+        {
+          "conditionId": "FS-TRANSACTION/read-time-snapshot",
+          "originalPointer": "/conditions/2",
+          "originalSha256": "92bc7efb577260f9519e7ecb26d14e30b837564673b273dc929dd4bd78ec124c",
+          "cases": [],
+          "casesSha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+        },
+        {
+          "conditionId": "FS-TRANSACTION/token-validation-and-ownership",
+          "originalPointer": "/conditions/3",
+          "originalSha256": "772f0e64c5889beda06975d642dbe6330f30f66bcacb57a6abeb544aaf1da9e3",
+          "cases": [],
+          "casesSha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+        },
+        {
+          "conditionId": "FS-TRANSACTION/read-set-conflict",
+          "originalPointer": "/conditions/4",
+          "originalSha256": "1564f3fb950d11639842196c23c9e0fa5e4819f56f243dfd59307da9b4e94766",
+          "cases": [],
+          "casesSha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+        },
+        {
+          "conditionId": "FS-TRANSACTION/write-set-atomicity",
+          "originalPointer": "/conditions/5",
+          "originalSha256": "a72f326823bbdffb53efa478b5581ca422241bf89a904a8d7adf6f02c20dad78",
+          "cases": [],
+          "casesSha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+        },
+        {
+          "conditionId": "FS-TRANSACTION/query-range-lock",
+          "originalPointer": "/conditions/6",
+          "originalSha256": "e7fc5e861538f5b66ecbe4102c4fc8e5d780972aaf6d13a0d27ab65107c2287d",
+          "cases": [],
+          "casesSha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+        },
+        {
+          "conditionId": "FS-TRANSACTION/failed-commit-and-rollback",
+          "originalPointer": "/conditions/7",
+          "originalSha256": "288e4da3656d8f4515ee3fc1e3b944f86cc5ceef7f63c9b4f5864a5f2292acee",
+          "cases": [],
+          "casesSha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+        },
+        {
+          "conditionId": "FS-TRANSACTION/retry-token-lifecycle",
+          "originalPointer": "/conditions/8",
+          "originalSha256": "4e7757982e048877808f24f92d09273e9b328afc34be64cabb9377b344f9b767",
+          "cases": [],
+          "casesSha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+        },
+        {
+          "conditionId": "FS-TRANSACTION/idle-expiry",
+          "originalPointer": "/conditions/9",
+          "originalSha256": "c45b14e3574574c1e9e824a0d5fbf81ad8da20941f6056444eac7c960cbe5334",
+          "cases": [],
+          "casesSha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+        },
+        {
+          "conditionId": "FS-TRANSACTION/total-lifetime-expiry",
+          "originalPointer": "/conditions/10",
+          "originalSha256": "55689bcfdd3be8d120a1949f224c6b5c33046d66dea72762df971819e3573ca5",
+          "cases": [],
+          "casesSha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+        },
+        {
+          "conditionId": "FS-TRANSACTION/read-time-retention",
+          "originalPointer": "/conditions/11",
+          "originalSha256": "25f6e7ce55cc6a67e70bc149816e562d1e597f6b7fa3baae884fedccc11e81c8",
+          "cases": [],
+          "casesSha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+        },
+        {
+          "conditionId": "FS-TRANSACTION/web-sdk-optimistic-retry",
+          "originalPointer": "/conditions/12",
+          "originalSha256": "40e96fdcf10cb2183bd053869998b4db7b6f08c049966be9c243587bec2340c6",
+          "cases": [],
+          "casesSha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+        },
+        {
+          "conditionId": "FS-TRANSACTION/paging-and-cancellation",
+          "originalPointer": "/conditions/13",
+          "originalSha256": "ab0b5a053bb5c1a975755e188e9381c04e2e93da1e6c29bffe02a21fb37d24af",
+          "cases": [],
+          "casesSha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+        },
+        {
+          "conditionId": "FS-TRANSACTION/admin-sdk-server-retry",
+          "originalPointer": "/conditions/14",
+          "originalSha256": "90c075cd300c31646ab89e64a707eda9f531f25420a9f902ed022078c063c3e7",
+          "cases": [],
+          "casesSha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+        },
+        {
+          "conditionId": "FS-TRANSACTION/commit-atomic-visibility",
+          "originalPointer": "/conditions/15",
+          "originalSha256": "c341248b6cf0a1ce62fcbcb3ca9efcbd137edac4ba3a7ad444b2fa716094e1bd",
+          "cases": [],
+          "casesSha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+        },
+        {
+          "conditionId": "FS-TRANSACTION/final-artifact-regression",
+          "originalPointer": "/conditions/16",
+          "originalSha256": "a9c3cc8eff9629c29e023261ad8c0ce9642a4d02ba5c751bcbd0fba51b1fb436",
+          "cases": [],
+          "casesSha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+        },
+        {
+          "conditionId": "FS-TRANSACTION/closure-review",
+          "originalPointer": "/conditions/17",
+          "originalSha256": "7ded56bb8943828ee805e61421981d8dbe12f88b8665e90921b44282e2dd1973",
+          "cases": [],
+          "casesSha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+        }
+      ],
+      "conditions": [
+        {
+          "conditionId": "FS-TRANSACTION/read-write-lifecycle",
+          "originalPointer": "/conditions/0",
+          "classification": "PRODUCTION_REQUIRED",
+          "facets": [
+            {
+              "facetId": "FS-TRANSACTION/read-write-lifecycle::production_behavior",
+              "kind": "PRODUCTION_BEHAVIOR",
+              "originalSelectors": [
+                "/conditions/0"
+              ],
+              "state": "OPEN",
+              "evidence": null
+            }
+          ]
+        },
+        {
+          "conditionId": "FS-TRANSACTION/read-only-snapshot",
+          "originalPointer": "/conditions/1",
+          "classification": "PRODUCTION_REQUIRED",
+          "facets": [
+            {
+              "facetId": "FS-TRANSACTION/read-only-snapshot::production_behavior",
+              "kind": "PRODUCTION_BEHAVIOR",
+              "originalSelectors": [
+                "/conditions/1"
+              ],
+              "state": "OPEN",
+              "evidence": null
+            }
+          ]
+        },
+        {
+          "conditionId": "FS-TRANSACTION/read-time-snapshot",
+          "originalPointer": "/conditions/2",
+          "classification": "PRODUCTION_REQUIRED",
+          "facets": [
+            {
+              "facetId": "FS-TRANSACTION/read-time-snapshot::production_behavior",
+              "kind": "PRODUCTION_BEHAVIOR",
+              "originalSelectors": [
+                "/conditions/2"
+              ],
+              "state": "OPEN",
+              "evidence": null
+            }
+          ]
+        },
+        {
+          "conditionId": "FS-TRANSACTION/token-validation-and-ownership",
+          "originalPointer": "/conditions/3",
+          "classification": "PRODUCTION_REQUIRED",
+          "facets": [
+            {
+              "facetId": "FS-TRANSACTION/token-validation-and-ownership::production_behavior",
+              "kind": "PRODUCTION_BEHAVIOR",
+              "originalSelectors": [
+                "/conditions/3"
+              ],
+              "state": "OPEN",
+              "evidence": null
+            }
+          ]
+        },
+        {
+          "conditionId": "FS-TRANSACTION/read-set-conflict",
+          "originalPointer": "/conditions/4",
+          "classification": "PRODUCTION_REQUIRED",
+          "facets": [
+            {
+              "facetId": "FS-TRANSACTION/read-set-conflict::production_behavior",
+              "kind": "PRODUCTION_BEHAVIOR",
+              "originalSelectors": [
+                "/conditions/4"
+              ],
+              "state": "OPEN",
+              "evidence": null
+            }
+          ]
+        },
+        {
+          "conditionId": "FS-TRANSACTION/write-set-atomicity",
+          "originalPointer": "/conditions/5",
+          "classification": "PRODUCTION_REQUIRED",
+          "facets": [
+            {
+              "facetId": "FS-TRANSACTION/write-set-atomicity::production_behavior",
+              "kind": "PRODUCTION_BEHAVIOR",
+              "originalSelectors": [
+                "/conditions/5"
+              ],
+              "state": "OPEN",
+              "evidence": null
+            }
+          ]
+        },
+        {
+          "conditionId": "FS-TRANSACTION/query-range-lock",
+          "originalPointer": "/conditions/6",
+          "classification": "PRODUCTION_REQUIRED",
+          "facets": [
+            {
+              "facetId": "FS-TRANSACTION/query-range-lock::production_behavior",
+              "kind": "PRODUCTION_BEHAVIOR",
+              "originalSelectors": [
+                "/conditions/6"
+              ],
+              "state": "OPEN",
+              "evidence": null
+            }
+          ]
+        },
+        {
+          "conditionId": "FS-TRANSACTION/failed-commit-and-rollback",
+          "originalPointer": "/conditions/7",
+          "classification": "PRODUCTION_REQUIRED",
+          "facets": [
+            {
+              "facetId": "FS-TRANSACTION/failed-commit-and-rollback::production_behavior",
+              "kind": "PRODUCTION_BEHAVIOR",
+              "originalSelectors": [
+                "/conditions/7"
+              ],
+              "state": "OPEN",
+              "evidence": null
+            }
+          ]
+        },
+        {
+          "conditionId": "FS-TRANSACTION/retry-token-lifecycle",
+          "originalPointer": "/conditions/8",
+          "classification": "PRODUCTION_REQUIRED",
+          "facets": [
+            {
+              "facetId": "FS-TRANSACTION/retry-token-lifecycle::production_behavior",
+              "kind": "PRODUCTION_BEHAVIOR",
+              "originalSelectors": [
+                "/conditions/8"
+              ],
+              "state": "OPEN",
+              "evidence": null
+            }
+          ]
+        },
+        {
+          "conditionId": "FS-TRANSACTION/idle-expiry",
+          "originalPointer": "/conditions/9",
+          "classification": "PRODUCTION_REQUIRED",
+          "facets": [
+            {
+              "facetId": "FS-TRANSACTION/idle-expiry::production_behavior",
+              "kind": "PRODUCTION_BEHAVIOR",
+              "originalSelectors": [
+                "/conditions/9"
+              ],
+              "state": "OPEN",
+              "evidence": null
+            }
+          ]
+        },
+        {
+          "conditionId": "FS-TRANSACTION/total-lifetime-expiry",
+          "originalPointer": "/conditions/10",
+          "classification": "PRODUCTION_REQUIRED",
+          "facets": [
+            {
+              "facetId": "FS-TRANSACTION/total-lifetime-expiry::production_behavior",
+              "kind": "PRODUCTION_BEHAVIOR",
+              "originalSelectors": [
+                "/conditions/10"
+              ],
+              "state": "OPEN",
+              "evidence": null
+            }
+          ]
+        },
+        {
+          "conditionId": "FS-TRANSACTION/read-time-retention",
+          "originalPointer": "/conditions/11",
+          "classification": "PRODUCTION_REQUIRED",
+          "facets": [
+            {
+              "facetId": "FS-TRANSACTION/read-time-retention::production_behavior",
+              "kind": "PRODUCTION_BEHAVIOR",
+              "originalSelectors": [
+                "/conditions/11"
+              ],
+              "state": "OPEN",
+              "evidence": null
+            }
+          ]
+        },
+        {
+          "conditionId": "FS-TRANSACTION/web-sdk-optimistic-retry",
+          "originalPointer": "/conditions/12",
+          "classification": "PRODUCTION_REQUIRED",
+          "facets": [
+            {
+              "facetId": "FS-TRANSACTION/web-sdk-optimistic-retry::production_behavior",
+              "kind": "PRODUCTION_BEHAVIOR",
+              "originalSelectors": [
+                "/conditions/12"
+              ],
+              "state": "OPEN",
+              "evidence": null
+            }
+          ]
+        },
+        {
+          "conditionId": "FS-TRANSACTION/paging-and-cancellation",
+          "originalPointer": "/conditions/13",
+          "classification": "PRODUCTION_REQUIRED",
+          "facets": [
+            {
+              "facetId": "FS-TRANSACTION/paging-and-cancellation::production_behavior",
+              "kind": "PRODUCTION_BEHAVIOR",
+              "originalSelectors": [
+                "/conditions/13"
+              ],
+              "state": "OPEN",
+              "evidence": null
+            }
+          ]
+        },
+        {
+          "conditionId": "FS-TRANSACTION/admin-sdk-server-retry",
+          "originalPointer": "/conditions/14",
+          "classification": "PRODUCTION_REQUIRED",
+          "facets": [
+            {
+              "facetId": "FS-TRANSACTION/admin-sdk-server-retry::production_behavior",
+              "kind": "PRODUCTION_BEHAVIOR",
+              "originalSelectors": [
+                "/conditions/14"
+              ],
+              "state": "OPEN",
+              "evidence": null
+            }
+          ]
+        },
+        {
+          "conditionId": "FS-TRANSACTION/commit-atomic-visibility",
+          "originalPointer": "/conditions/15",
+          "classification": "PRODUCTION_REQUIRED",
+          "facets": [
+            {
+              "facetId": "FS-TRANSACTION/commit-atomic-visibility::production_behavior",
+              "kind": "PRODUCTION_BEHAVIOR",
+              "originalSelectors": [
+                "/conditions/15"
+              ],
+              "state": "OPEN",
+              "evidence": null
+            }
+          ]
+        },
+        {
+          "conditionId": "FS-TRANSACTION/final-artifact-regression",
+          "originalPointer": "/conditions/16",
+          "classification": "PRODUCTION_REQUIRED",
+          "facets": [
+            {
+              "facetId": "FS-TRANSACTION/final-artifact-regression::final_product",
+              "kind": "FINAL_PRODUCT",
+              "originalSelectors": [
+                "/conditions/16"
+              ],
+              "state": "OPEN",
+              "evidence": null
+            }
+          ]
+        },
+        {
+          "conditionId": "FS-TRANSACTION/closure-review",
+          "originalPointer": "/conditions/17",
+          "classification": "PRODUCTION_REQUIRED",
+          "facets": [
+            {
+              "facetId": "FS-TRANSACTION/closure-review::clean_review",
+              "kind": "CLEAN_REVIEW",
+              "originalSelectors": [
+                "/conditions/17"
+              ],
+              "state": "OPEN",
+              "evidence": null
+            }
+          ]
+        }
+      ],
+      "profileContract": {
+        "facetId": "FS-TRANSACTION::emulator-profile-contract",
+        "kind": "EMULATOR_PROFILE_CONTRACT",
+        "originalSelectors": [
+          "/profileComparison"
+        ],
+        "state": "OPEN",
+        "evidence": null
+      }
+    },
+    {
+      "parent": "FUNCTIONS-HTTP",
+      "publicationState": "PUBLISHED",
+      "track": "PRESERVED_HISTORICAL",
+      "inventoryPath": "spec/compatibility/closure/FUNCTIONS-HTTP.json",
+      "sourceIdentity": {
+        "commit": "e57a78e0f5c4852894d14fad31438b2fa9d681e0",
+        "gitObject": "e57a78e0f5c4852894d14fad31438b2fa9d681e0:spec/compatibility/closure/FUNCTIONS-HTTP.json",
+        "blob": "5e0fc481dbd639f1bab1c9d225bb0d7fa9902eb9",
+        "rawSha256": "3f38facca11152463a4b272120681eb630eb4c290737127a156e0c82c6a69e96",
+        "snapshotPath": null,
+        "snapshotSha256": null
+      },
+      "conditionRegistry": [],
+      "conditions": [],
+      "profileContract": null
+    },
+    {
+      "parent": "SCHEDULED-FUNCTIONS",
+      "publicationState": "PUBLISHED",
+      "track": "PRODUCTION_PENDING",
+      "inventoryPath": "spec/compatibility/closure/SCHEDULED-FUNCTIONS.json",
+      "sourceIdentity": {
+        "commit": "e57a78e0f5c4852894d14fad31438b2fa9d681e0",
+        "gitObject": "e57a78e0f5c4852894d14fad31438b2fa9d681e0:spec/compatibility/closure/SCHEDULED-FUNCTIONS.json",
+        "blob": "fc4e8138989530bbf53e7df67c82a3805e1476b5",
+        "rawSha256": "cc2218eb413d53db064f807b956a44ec81236aa6f2e662bd9acff6b45bcc1983",
+        "snapshotPath": "spec/compatibility/official-compatibility/history/e57a78e0/SCHEDULED-FUNCTIONS.json",
+        "snapshotSha256": "cc2218eb413d53db064f807b956a44ec81236aa6f2e662bd9acff6b45bcc1983"
+      },
+      "conditionRegistry": [
+        {
+          "conditionId": "SCHEDULED-FUNCTIONS/declarations-v1-v2",
+          "originalPointer": "/conditions/0",
+          "originalSha256": "a75db888b9f133f84fd035f96000e709202f920adc0d935c9bf06c20fa095618",
+          "cases": [
+            "v1-schedule-chain",
+            "v2-onSchedule-string",
+            "v2-onSchedule-options",
+            "omitted-timezone",
+            "explicit-timezone",
+            "retry-options-preserved",
+            "attempt-deadline",
+            "v1-App-Engine-job-location",
+            "v2-function-region-job-location",
+            "omitted-versus-null-reset",
+            "fractional-retry-duration",
+            "SDK-attemptDeadline-versus-CLI-timeout"
+          ],
+          "casesSha256": "8ebea6a6d8694abdcba0c439580124ff0234ff61c8b0adf893347e124270ea62"
+        },
+        {
+          "conditionId": "SCHEDULED-FUNCTIONS/cron-grammar",
+          "originalPointer": "/conditions/1",
+          "originalSha256": "ab3c90cf13cdd86b8484293f028e29e09276ae2009136a43e39d18fbd51e8f40",
+          "cases": [
+            "wildcard",
+            "list",
+            "range",
+            "step",
+            "named-month-weekday",
+            "sunday-0-7",
+            "day-of-month-or-weekday",
+            "field-bounds",
+            "wrong-field-count",
+            "unsupported-special-token",
+            "cron-alias",
+            "numeric-slash-step",
+            "impossible-date"
+          ],
+          "casesSha256": "f55d7703c17783761090b71fe681d439da18a2a58640d94cf92c42fbe536e589"
+        },
+        {
+          "conditionId": "SCHEDULED-FUNCTIONS/groc-grammar",
+          "originalPointer": "/conditions/2",
+          "originalSha256": "17eda8136b963d62c1fd45a390f3c3107b5912a1eadda50029e2a289ad3180e6",
+          "cases": [
+            "every-minute",
+            "every-N-minutes",
+            "every-N-hours",
+            "every-day-at-time",
+            "weekday-list",
+            "ordinal-weekday",
+            "month-calendar",
+            "interval-over-one-day",
+            "invalid-interval",
+            "invalid-calendar",
+            "invalid-weekday-prefix",
+            "interval-phase-versus-creation-anchor",
+            "synchronized-window"
+          ],
+          "casesSha256": "571119bbbe79ad8be7f6fc3ac50e0d8e89d47281610ce44eff459f0afdf5477a"
+        },
+        {
+          "conditionId": "SCHEDULED-FUNCTIONS/timezone-validation-defaults",
+          "originalPointer": "/conditions/3",
+          "originalSha256": "2f193e0d729620f825316c3dfa56852fa4c67697565b135386da964c8adef394",
+          "cases": [
+            "explicit-UTC",
+            "Asia-Tokyo",
+            "America-New-York",
+            "v1-default",
+            "v2-default",
+            "invalid-zone"
+          ],
+          "casesSha256": "972caf63fa96f0ed4b70e3f4e05eaf49952f811c28a07dae81839c7dd068fda2"
+        },
+        {
+          "conditionId": "SCHEDULED-FUNCTIONS/next-occurrence",
+          "originalPointer": "/conditions/4",
+          "originalSha256": "024e2620f101a71eb0174d37562a217f6111f9cbcef89394ac93d15b2794200f",
+          "cases": [
+            "strictly-after-anchor",
+            "minute-boundary",
+            "day-month-year-rollover",
+            "leap-day",
+            "sparse-calendar"
+          ],
+          "casesSha256": "dd85338c0bf9c4cc2b09f74b31c5590642dcdb36342e619cf29f346811e04c46"
+        },
+        {
+          "conditionId": "SCHEDULED-FUNCTIONS/dst-calendar",
+          "originalPointer": "/conditions/5",
+          "originalSha256": "1ecddb2d940cc122639ce150c1cb429aa9c5e66bcd0f0296b80f17adfa22c96f",
+          "cases": [
+            "spring-gap-next-time",
+            "fall-fold-next-time",
+            "UTC-control",
+            "non-DST-zone-control"
+          ],
+          "casesSha256": "e4391a7cfcd19bc6507d87ee71e266bc13f934012e6b34a0f3036b9e79e21e68"
+        },
+        {
+          "conditionId": "SCHEDULED-FUNCTIONS/v2-http-delivery",
+          "originalPointer": "/conditions/6",
+          "originalSha256": "37ee6125298b415c26c091da114f4dfad3ac49915ef0f33825ff0a5555f25612",
+          "cases": [
+            "request-method",
+            "jobName-header",
+            "scheduleTime-header",
+            "body",
+            "SDK-ScheduledEvent",
+            "handler-success-ack",
+            "handler-throw-ack",
+            "SDK-context-getter",
+            "SDK-event-enumerability"
+          ],
+          "casesSha256": "a882db8338e95aefa3a88261fa4a88eae194c386635205594a23925819cc86ac"
+        },
+        {
+          "conditionId": "SCHEDULED-FUNCTIONS/v1-pubsub-delivery",
+          "originalPointer": "/conditions/7",
+          "originalSha256": "b9bab26e2a5a84d11f6f19f6ef8905a7a4360ac37644854c79fc0ffd199973e4",
+          "cases": [
+            "published-data",
+            "published-attributes",
+            "message-id-presence",
+            "publishTime",
+            "v1-handler-context",
+            "context-only-handler",
+            "context-resource-topic-versus-job"
+          ],
+          "casesSha256": "36ea1725ae73f9d168a1baa7e914bda37156f25838b6f5dce5848452bbf7b9bc"
+        },
+        {
+          "conditionId": "SCHEDULED-FUNCTIONS/forced-and-natural-invocation",
+          "originalPointer": "/conditions/8",
+          "originalSha256": "a070fdcd8c71f7de448a9d18cc5e2821d8dcc474afc96d66bb1789608c07856b",
+          "cases": [
+            "natural-scheduled-run",
+            "Cloud-Scheduler-run-now",
+            "retry-stable-occurrence-identity",
+            "success-next-occurrence"
+          ],
+          "casesSha256": "978726ae38401c4cfbb83ddb1431688bec61b7d5f021698830775e417f9380a3"
+        },
+        {
+          "conditionId": "SCHEDULED-FUNCTIONS/retry-config-validation",
+          "originalPointer": "/conditions/9",
+          "originalSha256": "b35da6857bc65d9d11d8609942b6e5912aded2070df5c47519cb63536b1e0325",
+          "cases": [
+            "omitted-options",
+            "explicit-zero",
+            "retryCount-boundary",
+            "min-backoff",
+            "max-backoff",
+            "max-doublings",
+            "max-retry-duration",
+            "attemptDeadline-boundary"
+          ],
+          "casesSha256": "f63df1be140b405541cadaef066a2b4cf4d268c4ba2fd76840f134ec2b17cc53"
+        },
+        {
+          "conditionId": "SCHEDULED-FUNCTIONS/v2-retry-limits",
+          "originalPointer": "/conditions/10",
+          "originalSha256": "517e7a1fc96df5238f691115c8645285d357846046c6c2dc9e0345ca1320ce45",
+          "cases": [
+            "zero-no-retry",
+            "next-schedule-after-failure",
+            "finite-retry-count",
+            "success-stops-retry",
+            "duration-only",
+            "count-and-duration-interaction"
+          ],
+          "casesSha256": "79d2f31ea347556670ffdd73e16482fdf6ef109789a11ab0f95dc25d58f68b0a"
+        },
+        {
+          "conditionId": "SCHEDULED-FUNCTIONS/v2-backoff",
+          "originalPointer": "/conditions/11",
+          "originalSha256": "3a4783116f569369719d5325674aadcdf2ae74cb07d656007007a00b3aee2e79",
+          "cases": [
+            "first-delay",
+            "exponential-doubling",
+            "linear-after-doublings",
+            "max-backoff-cap",
+            "stable-scheduleTime"
+          ],
+          "casesSha256": "af1e50e9375e85d1af398b678d68e1802b0ac98f178cb23658dd6afc2cc99d54"
+        },
+        {
+          "conditionId": "SCHEDULED-FUNCTIONS/v1-two-stage-retry",
+          "originalPointer": "/conditions/12",
+          "originalSha256": "bc0998658cd5f4744aa99c3b339c87424465afc9842c7ad18cf55cae5e1fc364",
+          "cases": [
+            "publish-ack-versus-handler-failure",
+            "handler-no-retry",
+            "handler-retry-declaration",
+            "scheduled-occurrence-identity"
+          ],
+          "casesSha256": "473f85e409e522253305ffbea0b340eb5850fb7bc9234b2e40bd754d0de3f45d"
+        },
+        {
+          "conditionId": "SCHEDULED-FUNCTIONS/deadline-and-overlap",
+          "originalPointer": "/conditions/13",
+          "originalSha256": "04e0c35842de02df02f443f70f44c482a4e0006f7eba906a007d54e8d84fc05e",
+          "cases": [
+            "attemptDeadline-readback",
+            "bounded-handler-timeout",
+            "scheduler-attempt-versus-handler-instance",
+            "next-occurrence-during-work"
+          ],
+          "casesSha256": "d7ae05df8b93ad3a5608a77874dd540b174cfde6b914af844a32e717086385ee"
+        },
+        {
+          "conditionId": "SCHEDULED-FUNCTIONS/clock-config",
+          "originalPointer": "/conditions/14",
+          "originalSha256": "308f47ecf5c6d3d00662e5f6b7bd2b4f7c635a1e09ceffd2e125d9e9865c98bf",
+          "cases": [
+            "daemon-clockStart",
+            "timezone-default",
+            "scheduler-virtual",
+            "unsupported-wall-mode",
+            "invalid-config-location"
+          ],
+          "casesSha256": "445036ce7990ca08930977880f9f9c7857d2b79dba8ace88de4eea89bccc4106"
+        },
+        {
+          "conditionId": "SCHEDULED-FUNCTIONS/clock-forward-boundaries",
+          "originalPointer": "/conditions/15",
+          "originalSha256": "c3dc318ee8e613551008e87128c8a3f739179544fcaaeb44f6a1986befd54e13",
+          "cases": [
+            "advance",
+            "advanceTo",
+            "set-forward",
+            "same-instant",
+            "exact-minute",
+            "boundary-before-after"
+          ],
+          "casesSha256": "e2826bcba06a38e2b988dc4e62fcd0f67e6e1d5578fdfa9706468c03e93c4c78"
+        },
+        {
+          "conditionId": "SCHEDULED-FUNCTIONS/catch-up-policy",
+          "originalPointer": "/conditions/16",
+          "originalSha256": "40b3f657c1fbac0ea60b863bfa9651a762efaad21fc7641ff2319f652d3ee3ff",
+          "cases": [
+            "all",
+            "latest",
+            "none",
+            "small-cap",
+            "cap-replenishment",
+            "long-jump",
+            "repeated-notification",
+            "multiple-jobs"
+          ],
+          "casesSha256": "d8f5fa6a94b2f3e7648198af6bae6f6b40288548c57313e36b76c4dabe1e9e6c"
+        },
+        {
+          "conditionId": "SCHEDULED-FUNCTIONS/overlap-policy",
+          "originalPointer": "/conditions/17",
+          "originalSha256": "1b078099ad36d3e2b1b650dd92058ba302c9a7c9f63951f16a424a85c2237ae9",
+          "cases": [
+            "allow",
+            "skip",
+            "queue",
+            "reject",
+            "manual-overlap",
+            "long-running-handler"
+          ],
+          "casesSha256": "be47ceffac67ed6b53111f4fd1669eda83cf80fcbce9139d6fe65b76ed894760"
+        },
+        {
+          "conditionId": "SCHEDULED-FUNCTIONS/retry-delay-fairness",
+          "originalPointer": "/conditions/18",
+          "originalSha256": "57cb8e69b06b9e023e9669093a606bc5464a4577eaeb95f8f54abf1e9ec1dd12",
+          "cases": [
+            "full-catch-up-cap-releases-retry",
+            "delayed-fault-wakeup",
+            "completion-reentry",
+            "awaitIdle-settles"
+          ],
+          "casesSha256": "890cee6d20f14e29d6be53a9a9603b29ec3ac544d377efde05b4534b2aafdc98"
+        },
+        {
+          "conditionId": "SCHEDULED-FUNCTIONS/capacity-cursor",
+          "originalPointer": "/conditions/19",
+          "originalSha256": "fdb3f4b32a96c1ee56927718a1faeb07dadb041cf8556153dda1c40c76f8ce18",
+          "cases": [
+            "automatic-admission-refusal-preserves-occurrence",
+            "capacity-recovery-delivers",
+            "manual-refusal-is-visible",
+            "per-job-fairness"
+          ],
+          "casesSha256": "d367b8f52b01acef0ccc7eac2168aa25feb3e147783fbc4dc82e529be61ad53c"
+        },
+        {
+          "conditionId": "SCHEDULED-FUNCTIONS/rewind-and-token-policy",
+          "originalPointer": "/conditions/20",
+          "originalSha256": "10e7335481d79784c46ba30a3d7496e0a9efdf50c86a40df4fa43f6176311335",
+          "cases": [
+            "backwards-without-opt-in",
+            "allowBackwards-counter",
+            "schedule-replay-cursor-policy",
+            "future-issued-held-token",
+            "token-after-new-issuance"
+          ],
+          "casesSha256": "bcc9184d7ee83d8a6ca9513085fead3e16e4bee192ff1ea96313222fdd42de2e"
+        },
+        {
+          "conditionId": "SCHEDULED-FUNCTIONS/manual-schedule",
+          "originalPointer": "/conditions/21",
+          "originalSha256": "ae566809fb754be81f2c7fc7cebb7da3c2f677de553c7c48fef55b80522019ba",
+          "cases": [
+            "registered-job",
+            "missing-job",
+            "payload-time",
+            "does-not-silently-consume-natural-occurrence",
+            "admission-refusal"
+          ],
+          "casesSha256": "4eee9fd5a929b39962f1d94bf882e396718239323f397a371066ae8efdbf129f"
+        },
+        {
+          "conditionId": "SCHEDULED-FUNCTIONS/state-lifecycle",
+          "originalPointer": "/conditions/22",
+          "originalSha256": "83625c1f24338a700291847e4fca4fe4ce8cb824000f5bf019bcfcf8d9be57d8",
+          "cases": [
+            "snapshot-restore",
+            "reset",
+            "reload",
+            "runner-shutdown",
+            "pending-job-retention"
+          ],
+          "casesSha256": "10c73dec4445a5f8990df8c6df55464306efe6ee0f9f54a691e15b698000bff6"
+        },
+        {
+          "conditionId": "SCHEDULED-FUNCTIONS/final-artifact-regression",
+          "originalPointer": "/conditions/23",
+          "originalSha256": "0d4b3c488414ac16ed871f65cc18a16a3fb0cb42c557fd6dcf3c10451d803e0b",
+          "cases": [
+            "two-production-recordings",
+            "exact-frozen-case-set",
+            "strict-production-comparison",
+            "emulator-no-new-refusals",
+            "local-properties",
+            "workspace-regression",
+            "artifact-runner-binding"
+          ],
+          "casesSha256": "51e8d1b78f79c2a0da9498b5b6821d5f19ed132fbf9d6106dcb71112ffac0cda"
+        },
+        {
+          "conditionId": "SCHEDULED-FUNCTIONS/closure-review",
+          "originalPointer": "/conditions/24",
+          "originalSha256": "988e2abf5d68b2f241ed30b88c52fec5e4d0e213b9d3cf9d9037995c2ea3f315",
+          "cases": [
+            "independent-Opus-coordinator-review",
+            "owner-ledger-promotion-decision"
+          ],
+          "casesSha256": "08a5035fbd892d1c9e54e5f2eefe5eab0b37a04d8bb9d3880cc39328e76de42a"
+        }
+      ],
+      "conditions": [
+        {
+          "conditionId": "SCHEDULED-FUNCTIONS/declarations-v1-v2",
+          "originalPointer": "/conditions/0",
+          "classification": "PRODUCTION_REQUIRED",
+          "facets": [
+            {
+              "facetId": "SCHEDULED-FUNCTIONS/declarations-v1-v2::production_behavior",
+              "kind": "PRODUCTION_BEHAVIOR",
+              "originalSelectors": [
+                "/conditions/0"
+              ],
+              "state": "OPEN",
+              "evidence": null
+            }
+          ]
+        },
+        {
+          "conditionId": "SCHEDULED-FUNCTIONS/cron-grammar",
+          "originalPointer": "/conditions/1",
+          "classification": "PRODUCTION_REQUIRED",
+          "facets": [
+            {
+              "facetId": "SCHEDULED-FUNCTIONS/cron-grammar::production_behavior",
+              "kind": "PRODUCTION_BEHAVIOR",
+              "originalSelectors": [
+                "/conditions/1"
+              ],
+              "state": "OPEN",
+              "evidence": null
+            }
+          ]
+        },
+        {
+          "conditionId": "SCHEDULED-FUNCTIONS/groc-grammar",
+          "originalPointer": "/conditions/2",
+          "classification": "PRODUCTION_REQUIRED",
+          "facets": [
+            {
+              "facetId": "SCHEDULED-FUNCTIONS/groc-grammar::production_behavior",
+              "kind": "PRODUCTION_BEHAVIOR",
+              "originalSelectors": [
+                "/conditions/2"
+              ],
+              "state": "OPEN",
+              "evidence": null
+            }
+          ]
+        },
+        {
+          "conditionId": "SCHEDULED-FUNCTIONS/timezone-validation-defaults",
+          "originalPointer": "/conditions/3",
+          "classification": "PRODUCTION_REQUIRED",
+          "facets": [
+            {
+              "facetId": "SCHEDULED-FUNCTIONS/timezone-validation-defaults::production_behavior",
+              "kind": "PRODUCTION_BEHAVIOR",
+              "originalSelectors": [
+                "/conditions/3"
+              ],
+              "state": "OPEN",
+              "evidence": null
+            }
+          ]
+        },
+        {
+          "conditionId": "SCHEDULED-FUNCTIONS/next-occurrence",
+          "originalPointer": "/conditions/4",
+          "classification": "PRODUCTION_REQUIRED",
+          "facets": [
+            {
+              "facetId": "SCHEDULED-FUNCTIONS/next-occurrence::production_behavior",
+              "kind": "PRODUCTION_BEHAVIOR",
+              "originalSelectors": [
+                "/conditions/4"
+              ],
+              "state": "OPEN",
+              "evidence": null
+            }
+          ]
+        },
+        {
+          "conditionId": "SCHEDULED-FUNCTIONS/dst-calendar",
+          "originalPointer": "/conditions/5",
+          "classification": "PRODUCTION_REQUIRED",
+          "facets": [
+            {
+              "facetId": "SCHEDULED-FUNCTIONS/dst-calendar::production_behavior",
+              "kind": "PRODUCTION_BEHAVIOR",
+              "originalSelectors": [
+                "/conditions/5"
+              ],
+              "state": "OPEN",
+              "evidence": null
+            }
+          ]
+        },
+        {
+          "conditionId": "SCHEDULED-FUNCTIONS/v2-http-delivery",
+          "originalPointer": "/conditions/6",
+          "classification": "PRODUCTION_REQUIRED",
+          "facets": [
+            {
+              "facetId": "SCHEDULED-FUNCTIONS/v2-http-delivery::production_behavior",
+              "kind": "PRODUCTION_BEHAVIOR",
+              "originalSelectors": [
+                "/conditions/6"
+              ],
+              "state": "OPEN",
+              "evidence": null
+            }
+          ]
+        },
+        {
+          "conditionId": "SCHEDULED-FUNCTIONS/v1-pubsub-delivery",
+          "originalPointer": "/conditions/7",
+          "classification": "PRODUCTION_REQUIRED",
+          "facets": [
+            {
+              "facetId": "SCHEDULED-FUNCTIONS/v1-pubsub-delivery::production_behavior",
+              "kind": "PRODUCTION_BEHAVIOR",
+              "originalSelectors": [
+                "/conditions/7"
+              ],
+              "state": "OPEN",
+              "evidence": null
+            }
+          ]
+        },
+        {
+          "conditionId": "SCHEDULED-FUNCTIONS/forced-and-natural-invocation",
+          "originalPointer": "/conditions/8",
+          "classification": "PRODUCTION_REQUIRED",
+          "facets": [
+            {
+              "facetId": "SCHEDULED-FUNCTIONS/forced-and-natural-invocation::production_behavior",
+              "kind": "PRODUCTION_BEHAVIOR",
+              "originalSelectors": [
+                "/conditions/8"
+              ],
+              "state": "OPEN",
+              "evidence": null
+            }
+          ]
+        },
+        {
+          "conditionId": "SCHEDULED-FUNCTIONS/retry-config-validation",
+          "originalPointer": "/conditions/9",
+          "classification": "PRODUCTION_REQUIRED",
+          "facets": [
+            {
+              "facetId": "SCHEDULED-FUNCTIONS/retry-config-validation::production_behavior",
+              "kind": "PRODUCTION_BEHAVIOR",
+              "originalSelectors": [
+                "/conditions/9"
+              ],
+              "state": "OPEN",
+              "evidence": null
+            }
+          ]
+        },
+        {
+          "conditionId": "SCHEDULED-FUNCTIONS/v2-retry-limits",
+          "originalPointer": "/conditions/10",
+          "classification": "PRODUCTION_REQUIRED",
+          "facets": [
+            {
+              "facetId": "SCHEDULED-FUNCTIONS/v2-retry-limits::production_behavior",
+              "kind": "PRODUCTION_BEHAVIOR",
+              "originalSelectors": [
+                "/conditions/10"
+              ],
+              "state": "OPEN",
+              "evidence": null
+            }
+          ]
+        },
+        {
+          "conditionId": "SCHEDULED-FUNCTIONS/v2-backoff",
+          "originalPointer": "/conditions/11",
+          "classification": "PRODUCTION_REQUIRED",
+          "facets": [
+            {
+              "facetId": "SCHEDULED-FUNCTIONS/v2-backoff::production_behavior",
+              "kind": "PRODUCTION_BEHAVIOR",
+              "originalSelectors": [
+                "/conditions/11"
+              ],
+              "state": "OPEN",
+              "evidence": null
+            }
+          ]
+        },
+        {
+          "conditionId": "SCHEDULED-FUNCTIONS/v1-two-stage-retry",
+          "originalPointer": "/conditions/12",
+          "classification": "PRODUCTION_REQUIRED",
+          "facets": [
+            {
+              "facetId": "SCHEDULED-FUNCTIONS/v1-two-stage-retry::production_behavior",
+              "kind": "PRODUCTION_BEHAVIOR",
+              "originalSelectors": [
+                "/conditions/12"
+              ],
+              "state": "OPEN",
+              "evidence": null
+            }
+          ]
+        },
+        {
+          "conditionId": "SCHEDULED-FUNCTIONS/deadline-and-overlap",
+          "originalPointer": "/conditions/13",
+          "classification": "PRODUCTION_REQUIRED",
+          "facets": [
+            {
+              "facetId": "SCHEDULED-FUNCTIONS/deadline-and-overlap::production_behavior",
+              "kind": "PRODUCTION_BEHAVIOR",
+              "originalSelectors": [
+                "/conditions/13"
+              ],
+              "state": "OPEN",
+              "evidence": null
+            }
+          ]
+        },
+        {
+          "conditionId": "SCHEDULED-FUNCTIONS/clock-config",
+          "originalPointer": "/conditions/14",
+          "classification": "PRODUCTION_REQUIRED",
+          "facets": [
+            {
+              "facetId": "SCHEDULED-FUNCTIONS/clock-config::local_product",
+              "kind": "LOCAL_PRODUCT",
+              "originalSelectors": [
+                "/conditions/14"
+              ],
+              "state": "OPEN",
+              "evidence": null
+            }
+          ]
+        },
+        {
+          "conditionId": "SCHEDULED-FUNCTIONS/clock-forward-boundaries",
+          "originalPointer": "/conditions/15",
+          "classification": "PRODUCTION_REQUIRED",
+          "facets": [
+            {
+              "facetId": "SCHEDULED-FUNCTIONS/clock-forward-boundaries::local_product",
+              "kind": "LOCAL_PRODUCT",
+              "originalSelectors": [
+                "/conditions/15"
+              ],
+              "state": "OPEN",
+              "evidence": null
+            }
+          ]
+        },
+        {
+          "conditionId": "SCHEDULED-FUNCTIONS/catch-up-policy",
+          "originalPointer": "/conditions/16",
+          "classification": "PRODUCTION_REQUIRED",
+          "facets": [
+            {
+              "facetId": "SCHEDULED-FUNCTIONS/catch-up-policy::local_product",
+              "kind": "LOCAL_PRODUCT",
+              "originalSelectors": [
+                "/conditions/16"
+              ],
+              "state": "OPEN",
+              "evidence": null
+            }
+          ]
+        },
+        {
+          "conditionId": "SCHEDULED-FUNCTIONS/overlap-policy",
+          "originalPointer": "/conditions/17",
+          "classification": "PRODUCTION_REQUIRED",
+          "facets": [
+            {
+              "facetId": "SCHEDULED-FUNCTIONS/overlap-policy::local_product",
+              "kind": "LOCAL_PRODUCT",
+              "originalSelectors": [
+                "/conditions/17"
+              ],
+              "state": "OPEN",
+              "evidence": null
+            }
+          ]
+        },
+        {
+          "conditionId": "SCHEDULED-FUNCTIONS/retry-delay-fairness",
+          "originalPointer": "/conditions/18",
+          "classification": "PRODUCTION_REQUIRED",
+          "facets": [
+            {
+              "facetId": "SCHEDULED-FUNCTIONS/retry-delay-fairness::local_product",
+              "kind": "LOCAL_PRODUCT",
+              "originalSelectors": [
+                "/conditions/18"
+              ],
+              "state": "OPEN",
+              "evidence": null
+            }
+          ]
+        },
+        {
+          "conditionId": "SCHEDULED-FUNCTIONS/capacity-cursor",
+          "originalPointer": "/conditions/19",
+          "classification": "PRODUCTION_REQUIRED",
+          "facets": [
+            {
+              "facetId": "SCHEDULED-FUNCTIONS/capacity-cursor::local_product",
+              "kind": "LOCAL_PRODUCT",
+              "originalSelectors": [
+                "/conditions/19"
+              ],
+              "state": "OPEN",
+              "evidence": null
+            }
+          ]
+        },
+        {
+          "conditionId": "SCHEDULED-FUNCTIONS/rewind-and-token-policy",
+          "originalPointer": "/conditions/20",
+          "classification": "PRODUCTION_REQUIRED",
+          "facets": [
+            {
+              "facetId": "SCHEDULED-FUNCTIONS/rewind-and-token-policy::local_product",
+              "kind": "LOCAL_PRODUCT",
+              "originalSelectors": [
+                "/conditions/20"
+              ],
+              "state": "OPEN",
+              "evidence": null
+            }
+          ]
+        },
+        {
+          "conditionId": "SCHEDULED-FUNCTIONS/manual-schedule",
+          "originalPointer": "/conditions/21",
+          "classification": "PRODUCTION_REQUIRED",
+          "facets": [
+            {
+              "facetId": "SCHEDULED-FUNCTIONS/manual-schedule::local_product",
+              "kind": "LOCAL_PRODUCT",
+              "originalSelectors": [
+                "/conditions/21"
+              ],
+              "state": "OPEN",
+              "evidence": null
+            }
+          ]
+        },
+        {
+          "conditionId": "SCHEDULED-FUNCTIONS/state-lifecycle",
+          "originalPointer": "/conditions/22",
+          "classification": "PRODUCTION_REQUIRED",
+          "facets": [
+            {
+              "facetId": "SCHEDULED-FUNCTIONS/state-lifecycle::local_product",
+              "kind": "LOCAL_PRODUCT",
+              "originalSelectors": [
+                "/conditions/22"
+              ],
+              "state": "OPEN",
+              "evidence": null
+            }
+          ]
+        },
+        {
+          "conditionId": "SCHEDULED-FUNCTIONS/final-artifact-regression",
+          "originalPointer": "/conditions/23",
+          "classification": "PRODUCTION_REQUIRED",
+          "facets": [
+            {
+              "facetId": "SCHEDULED-FUNCTIONS/final-artifact-regression::final_product",
+              "kind": "FINAL_PRODUCT",
+              "originalSelectors": [
+                "/conditions/23"
+              ],
+              "state": "OPEN",
+              "evidence": null
+            }
+          ]
+        },
+        {
+          "conditionId": "SCHEDULED-FUNCTIONS/closure-review",
+          "originalPointer": "/conditions/24",
+          "classification": "PRODUCTION_REQUIRED",
+          "facets": [
+            {
+              "facetId": "SCHEDULED-FUNCTIONS/closure-review::clean_review",
+              "kind": "CLEAN_REVIEW",
+              "originalSelectors": [
+                "/conditions/24"
+              ],
+              "state": "OPEN",
+              "evidence": null
+            }
+          ]
+        }
+      ],
+      "profileContract": {
+        "facetId": "SCHEDULED-FUNCTIONS::emulator-profile-contract",
+        "kind": "EMULATOR_PROFILE_CONTRACT",
+        "originalSelectors": [
+          "/conditions/23/cases/3"
+        ],
+        "state": "OPEN",
+        "evidence": null
+      }
+    },
+    {
+      "parent": "STORAGE-OBJECT",
+      "publicationState": "PUBLISHED",
+      "track": "PRODUCTION_PENDING",
+      "inventoryPath": "spec/compatibility/closure/STORAGE-OBJECT.json",
+      "sourceIdentity": {
+        "commit": "e57a78e0f5c4852894d14fad31438b2fa9d681e0",
+        "gitObject": "e57a78e0f5c4852894d14fad31438b2fa9d681e0:spec/compatibility/closure/STORAGE-OBJECT.json",
+        "blob": "210652382062c5d7b7c9a485fd52793ef28b04cf",
+        "rawSha256": "0857ad38cdbd7655d1d46a8f72a233994dc38da20774ae4b339909279c8c162e",
+        "snapshotPath": "spec/compatibility/official-compatibility/history/e57a78e0/STORAGE-OBJECT.json",
+        "snapshotSha256": "0857ad38cdbd7655d1d46a8f72a233994dc38da20774ae4b339909279c8c162e"
+      },
+      "conditionRegistry": [
+        {
+          "conditionId": "STORAGE-OBJECT/firebase-simple-upload",
+          "originalPointer": "/conditions/0",
+          "originalSha256": "2f3f18fd830430608471fd3116d32f13ce24fdecd7d9239b82ef75ccb8fdaec7",
+          "cases": [],
+          "casesSha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+        },
+        {
+          "conditionId": "STORAGE-OBJECT/firebase-multipart-upload",
+          "originalPointer": "/conditions/1",
+          "originalSha256": "ba63d183b82cb04f0b2630785fd559444c4aed27bfc7aede0805dd42aa922f35",
+          "cases": [],
+          "casesSha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+        },
+        {
+          "conditionId": "STORAGE-OBJECT/firebase-resumable-upload",
+          "originalPointer": "/conditions/2",
+          "originalSha256": "3d299371e508fe87cfc1e976ca81ec03edd6e6a35d965515a16a93d68a9b086b",
+          "cases": [],
+          "casesSha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+        },
+        {
+          "conditionId": "STORAGE-OBJECT/firebase-download",
+          "originalPointer": "/conditions/3",
+          "originalSha256": "ecea67ec56332b190b344adff47643e30dc73ac5b5d2c6b61be6daa3949cdcff",
+          "cases": [],
+          "casesSha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+        },
+        {
+          "conditionId": "STORAGE-OBJECT/firebase-download-tokens",
+          "originalPointer": "/conditions/4",
+          "originalSha256": "05f1bfabd92810c89c954bd5205fcdf42717087a603f8515bc21704ac556ff2a",
+          "cases": [],
+          "casesSha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+        },
+        {
+          "conditionId": "STORAGE-OBJECT/firebase-metadata",
+          "originalPointer": "/conditions/5",
+          "originalSha256": "53a541a3f2418b72fa574d9aa9b67bf491aa0ec678f14e90fb8b6bfbb454d9b0",
+          "cases": [],
+          "casesSha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+        },
+        {
+          "conditionId": "STORAGE-OBJECT/firebase-delete",
+          "originalPointer": "/conditions/6",
+          "originalSha256": "9a00c8af0c96f46caab83e1a082becc2bcda84aa31d607327763ed75ef4d2a13",
+          "cases": [],
+          "casesSha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+        },
+        {
+          "conditionId": "STORAGE-OBJECT/firebase-list",
+          "originalPointer": "/conditions/7",
+          "originalSha256": "41299f3b1072cfeaec097cb2422d759cbd1325654c7db6e1ba9658065504c9d6",
+          "cases": [],
+          "casesSha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+        },
+        {
+          "conditionId": "STORAGE-OBJECT/firebase-overwrite",
+          "originalPointer": "/conditions/8",
+          "originalSha256": "a9ed6a2393f670e5e7b72ee2447b1b8d02000f6ddd9febc95dee9d052c3231b6",
+          "cases": [],
+          "casesSha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+        },
+        {
+          "conditionId": "STORAGE-OBJECT/gcs-simple-multipart-upload",
+          "originalPointer": "/conditions/9",
+          "originalSha256": "00100e4807709895585a1e859fe600cf1d58a5539c10476d85b2e3275a586e09",
+          "cases": [],
+          "casesSha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+        },
+        {
+          "conditionId": "STORAGE-OBJECT/gcs-resumable-upload",
+          "originalPointer": "/conditions/10",
+          "originalSha256": "7f3f998ca868bfde549b8bbbef37dc24e4a7801b233c5ba5f67eda13cd9ece51",
+          "cases": [],
+          "casesSha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+        },
+        {
+          "conditionId": "STORAGE-OBJECT/gcs-download",
+          "originalPointer": "/conditions/11",
+          "originalSha256": "eb63dd2915587faa51edae366a70298b010fd11d1cd108df85b42799edc3cd7b",
+          "cases": [],
+          "casesSha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+        },
+        {
+          "conditionId": "STORAGE-OBJECT/gcs-metadata",
+          "originalPointer": "/conditions/12",
+          "originalSha256": "a02f7f7b71231ce972ce6ab4238bc1e986995fc3a61e49594c2179bd0ccf31f9",
+          "cases": [],
+          "casesSha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+        },
+        {
+          "conditionId": "STORAGE-OBJECT/gcs-delete",
+          "originalPointer": "/conditions/13",
+          "originalSha256": "40b0ca0b2a52a31f7cfd3b277007faacaa60d556ef79300d3dc3b1b63e9429fe",
+          "cases": [],
+          "casesSha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+        },
+        {
+          "conditionId": "STORAGE-OBJECT/gcs-list",
+          "originalPointer": "/conditions/14",
+          "originalSha256": "7e4489544f221407307f0f7696bdd824667c18bb057d30eb7c96fa1b0fa5703e",
+          "cases": [],
+          "casesSha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+        },
+        {
+          "conditionId": "STORAGE-OBJECT/gcs-copy-rewrite",
+          "originalPointer": "/conditions/15",
+          "originalSha256": "78154a080e113af4435f9bce9ef3fd91099721ed65e7669dcce948c3dcde4334",
+          "cases": [],
+          "casesSha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+        },
+        {
+          "conditionId": "STORAGE-OBJECT/generation-preconditions",
+          "originalPointer": "/conditions/16",
+          "originalSha256": "15cc0ae9fc5610566d6f0615cf7dbb89a79737f52bbc45d754d296ff1ea9f610",
+          "cases": [],
+          "casesSha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+        },
+        {
+          "conditionId": "STORAGE-OBJECT/metageneration-preconditions",
+          "originalPointer": "/conditions/17",
+          "originalSha256": "9f5fecb1a3fee28076bbfbe4e63cfeb7b6f6c3d5399a36b69ca6f3a72f92049f",
+          "cases": [],
+          "casesSha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+        },
+        {
+          "conditionId": "STORAGE-OBJECT/checksums",
+          "originalPointer": "/conditions/18",
+          "originalSha256": "caee3de78317422be7b21253a3883731db5d5ee79b0a2b2fb99d013779a93fbd",
+          "cases": [],
+          "casesSha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+        },
+        {
+          "conditionId": "STORAGE-OBJECT/missing-object-errors",
+          "originalPointer": "/conditions/19",
+          "originalSha256": "eee809d4a32fbdaf2bb806af521673c8ec2f186369d3c3bccd13b5f54fc334ea",
+          "cases": [],
+          "casesSha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+        },
+        {
+          "conditionId": "STORAGE-OBJECT/authorization-errors",
+          "originalPointer": "/conditions/20",
+          "originalSha256": "f966f598bf526cab4506e166c0487593d57621e99736f52fc7ddf41f7d2e7e95",
+          "cases": [],
+          "casesSha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+        },
+        {
+          "conditionId": "STORAGE-OBJECT/invalid-object-name-errors",
+          "originalPointer": "/conditions/21",
+          "originalSha256": "d4d0a9de59e163ba068d80b529f0534853a7b7c87dc735316596da19e5703abc",
+          "cases": [],
+          "casesSha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+        },
+        {
+          "conditionId": "STORAGE-OBJECT/invalid-range-errors",
+          "originalPointer": "/conditions/22",
+          "originalSha256": "f268f864ab913abb6085d2555a7b8dcd0d6b34ecfc8c6fe8f1878ac6bd8b5dda",
+          "cases": [],
+          "casesSha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+        },
+        {
+          "conditionId": "STORAGE-OBJECT/admin-credential",
+          "originalPointer": "/conditions/23",
+          "originalSha256": "026684c6092b5180084a498e52ef22cbc59dd4f3350d03d7f5fe40f12209496b",
+          "cases": [],
+          "casesSha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+        },
+        {
+          "conditionId": "STORAGE-OBJECT/firebase-id-token",
+          "originalPointer": "/conditions/24",
+          "originalSha256": "74c36917b04e86de59322b40c6d6fc181911d996c040901d75ec752a1fde2dad",
+          "cases": [],
+          "casesSha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+        },
+        {
+          "conditionId": "STORAGE-OBJECT/cross-dialect-state",
+          "originalPointer": "/conditions/25",
+          "originalSha256": "127b86772dd18cf1a77f02cab59f8fae28f97da9776a46f6d59ac4b9f67d1307",
+          "cases": [],
+          "casesSha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+        },
+        {
+          "conditionId": "STORAGE-OBJECT/final-artifact-regression",
+          "originalPointer": "/conditions/26",
+          "originalSha256": "245a11d6d21b3edb7d13ad658f39f45c4751ea9dcdb8b7d4c8853383403943b0",
+          "cases": [],
+          "casesSha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+        },
+        {
+          "conditionId": "STORAGE-OBJECT/closure-review",
+          "originalPointer": "/conditions/27",
+          "originalSha256": "08a76ed454e16e8a7f780e3851b76b9cfd4b86a6fb942d8c6ba4f81f9ea69eba",
+          "cases": [],
+          "casesSha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+        }
+      ],
+      "conditions": [
+        {
+          "conditionId": "STORAGE-OBJECT/firebase-simple-upload",
+          "originalPointer": "/conditions/0",
+          "classification": "PRODUCTION_REQUIRED",
+          "facets": [
+            {
+              "facetId": "STORAGE-OBJECT/firebase-simple-upload::production_behavior",
+              "kind": "PRODUCTION_BEHAVIOR",
+              "originalSelectors": [
+                "/conditions/0"
+              ],
+              "state": "OPEN",
+              "evidence": null
+            }
+          ]
+        },
+        {
+          "conditionId": "STORAGE-OBJECT/firebase-multipart-upload",
+          "originalPointer": "/conditions/1",
+          "classification": "PRODUCTION_REQUIRED",
+          "facets": [
+            {
+              "facetId": "STORAGE-OBJECT/firebase-multipart-upload::production_behavior",
+              "kind": "PRODUCTION_BEHAVIOR",
+              "originalSelectors": [
+                "/conditions/1"
+              ],
+              "state": "OPEN",
+              "evidence": null
+            }
+          ]
+        },
+        {
+          "conditionId": "STORAGE-OBJECT/firebase-resumable-upload",
+          "originalPointer": "/conditions/2",
+          "classification": "PRODUCTION_REQUIRED",
+          "facets": [
+            {
+              "facetId": "STORAGE-OBJECT/firebase-resumable-upload::production_behavior",
+              "kind": "PRODUCTION_BEHAVIOR",
+              "originalSelectors": [
+                "/conditions/2"
+              ],
+              "state": "OPEN",
+              "evidence": null
+            }
+          ]
+        },
+        {
+          "conditionId": "STORAGE-OBJECT/firebase-download",
+          "originalPointer": "/conditions/3",
+          "classification": "PRODUCTION_REQUIRED",
+          "facets": [
+            {
+              "facetId": "STORAGE-OBJECT/firebase-download::production_behavior",
+              "kind": "PRODUCTION_BEHAVIOR",
+              "originalSelectors": [
+                "/conditions/3"
+              ],
+              "state": "OPEN",
+              "evidence": null
+            }
+          ]
+        },
+        {
+          "conditionId": "STORAGE-OBJECT/firebase-download-tokens",
+          "originalPointer": "/conditions/4",
+          "classification": "PRODUCTION_REQUIRED",
+          "facets": [
+            {
+              "facetId": "STORAGE-OBJECT/firebase-download-tokens::production_behavior",
+              "kind": "PRODUCTION_BEHAVIOR",
+              "originalSelectors": [
+                "/conditions/4"
+              ],
+              "state": "OPEN",
+              "evidence": null
+            }
+          ]
+        },
+        {
+          "conditionId": "STORAGE-OBJECT/firebase-metadata",
+          "originalPointer": "/conditions/5",
+          "classification": "PRODUCTION_REQUIRED",
+          "facets": [
+            {
+              "facetId": "STORAGE-OBJECT/firebase-metadata::production_behavior",
+              "kind": "PRODUCTION_BEHAVIOR",
+              "originalSelectors": [
+                "/conditions/5"
+              ],
+              "state": "OPEN",
+              "evidence": null
+            }
+          ]
+        },
+        {
+          "conditionId": "STORAGE-OBJECT/firebase-delete",
+          "originalPointer": "/conditions/6",
+          "classification": "PRODUCTION_REQUIRED",
+          "facets": [
+            {
+              "facetId": "STORAGE-OBJECT/firebase-delete::production_behavior",
+              "kind": "PRODUCTION_BEHAVIOR",
+              "originalSelectors": [
+                "/conditions/6"
+              ],
+              "state": "OPEN",
+              "evidence": null
+            }
+          ]
+        },
+        {
+          "conditionId": "STORAGE-OBJECT/firebase-list",
+          "originalPointer": "/conditions/7",
+          "classification": "PRODUCTION_REQUIRED",
+          "facets": [
+            {
+              "facetId": "STORAGE-OBJECT/firebase-list::production_behavior",
+              "kind": "PRODUCTION_BEHAVIOR",
+              "originalSelectors": [
+                "/conditions/7"
+              ],
+              "state": "OPEN",
+              "evidence": null
+            }
+          ]
+        },
+        {
+          "conditionId": "STORAGE-OBJECT/firebase-overwrite",
+          "originalPointer": "/conditions/8",
+          "classification": "PRODUCTION_REQUIRED",
+          "facets": [
+            {
+              "facetId": "STORAGE-OBJECT/firebase-overwrite::production_behavior",
+              "kind": "PRODUCTION_BEHAVIOR",
+              "originalSelectors": [
+                "/conditions/8"
+              ],
+              "state": "OPEN",
+              "evidence": null
+            }
+          ]
+        },
+        {
+          "conditionId": "STORAGE-OBJECT/gcs-simple-multipart-upload",
+          "originalPointer": "/conditions/9",
+          "classification": "PRODUCTION_REQUIRED",
+          "facets": [
+            {
+              "facetId": "STORAGE-OBJECT/gcs-simple-multipart-upload::production_behavior",
+              "kind": "PRODUCTION_BEHAVIOR",
+              "originalSelectors": [
+                "/conditions/9"
+              ],
+              "state": "OPEN",
+              "evidence": null
+            }
+          ]
+        },
+        {
+          "conditionId": "STORAGE-OBJECT/gcs-resumable-upload",
+          "originalPointer": "/conditions/10",
+          "classification": "PRODUCTION_REQUIRED",
+          "facets": [
+            {
+              "facetId": "STORAGE-OBJECT/gcs-resumable-upload::production_behavior",
+              "kind": "PRODUCTION_BEHAVIOR",
+              "originalSelectors": [
+                "/conditions/10"
+              ],
+              "state": "OPEN",
+              "evidence": null
+            }
+          ]
+        },
+        {
+          "conditionId": "STORAGE-OBJECT/gcs-download",
+          "originalPointer": "/conditions/11",
+          "classification": "PRODUCTION_REQUIRED",
+          "facets": [
+            {
+              "facetId": "STORAGE-OBJECT/gcs-download::production_behavior",
+              "kind": "PRODUCTION_BEHAVIOR",
+              "originalSelectors": [
+                "/conditions/11"
+              ],
+              "state": "OPEN",
+              "evidence": null
+            }
+          ]
+        },
+        {
+          "conditionId": "STORAGE-OBJECT/gcs-metadata",
+          "originalPointer": "/conditions/12",
+          "classification": "PRODUCTION_REQUIRED",
+          "facets": [
+            {
+              "facetId": "STORAGE-OBJECT/gcs-metadata::production_behavior",
+              "kind": "PRODUCTION_BEHAVIOR",
+              "originalSelectors": [
+                "/conditions/12"
+              ],
+              "state": "OPEN",
+              "evidence": null
+            }
+          ]
+        },
+        {
+          "conditionId": "STORAGE-OBJECT/gcs-delete",
+          "originalPointer": "/conditions/13",
+          "classification": "PRODUCTION_REQUIRED",
+          "facets": [
+            {
+              "facetId": "STORAGE-OBJECT/gcs-delete::production_behavior",
+              "kind": "PRODUCTION_BEHAVIOR",
+              "originalSelectors": [
+                "/conditions/13"
+              ],
+              "state": "OPEN",
+              "evidence": null
+            }
+          ]
+        },
+        {
+          "conditionId": "STORAGE-OBJECT/gcs-list",
+          "originalPointer": "/conditions/14",
+          "classification": "PRODUCTION_REQUIRED",
+          "facets": [
+            {
+              "facetId": "STORAGE-OBJECT/gcs-list::production_behavior",
+              "kind": "PRODUCTION_BEHAVIOR",
+              "originalSelectors": [
+                "/conditions/14"
+              ],
+              "state": "OPEN",
+              "evidence": null
+            }
+          ]
+        },
+        {
+          "conditionId": "STORAGE-OBJECT/gcs-copy-rewrite",
+          "originalPointer": "/conditions/15",
+          "classification": "PRODUCTION_REQUIRED",
+          "facets": [
+            {
+              "facetId": "STORAGE-OBJECT/gcs-copy-rewrite::production_behavior",
+              "kind": "PRODUCTION_BEHAVIOR",
+              "originalSelectors": [
+                "/conditions/15"
+              ],
+              "state": "OPEN",
+              "evidence": null
+            }
+          ]
+        },
+        {
+          "conditionId": "STORAGE-OBJECT/generation-preconditions",
+          "originalPointer": "/conditions/16",
+          "classification": "PRODUCTION_REQUIRED",
+          "facets": [
+            {
+              "facetId": "STORAGE-OBJECT/generation-preconditions::production_behavior",
+              "kind": "PRODUCTION_BEHAVIOR",
+              "originalSelectors": [
+                "/conditions/16"
+              ],
+              "state": "OPEN",
+              "evidence": null
+            }
+          ]
+        },
+        {
+          "conditionId": "STORAGE-OBJECT/metageneration-preconditions",
+          "originalPointer": "/conditions/17",
+          "classification": "PRODUCTION_REQUIRED",
+          "facets": [
+            {
+              "facetId": "STORAGE-OBJECT/metageneration-preconditions::production_behavior",
+              "kind": "PRODUCTION_BEHAVIOR",
+              "originalSelectors": [
+                "/conditions/17"
+              ],
+              "state": "OPEN",
+              "evidence": null
+            }
+          ]
+        },
+        {
+          "conditionId": "STORAGE-OBJECT/checksums",
+          "originalPointer": "/conditions/18",
+          "classification": "PRODUCTION_REQUIRED",
+          "facets": [
+            {
+              "facetId": "STORAGE-OBJECT/checksums::production_behavior",
+              "kind": "PRODUCTION_BEHAVIOR",
+              "originalSelectors": [
+                "/conditions/18"
+              ],
+              "state": "OPEN",
+              "evidence": null
+            }
+          ]
+        },
+        {
+          "conditionId": "STORAGE-OBJECT/missing-object-errors",
+          "originalPointer": "/conditions/19",
+          "classification": "PRODUCTION_REQUIRED",
+          "facets": [
+            {
+              "facetId": "STORAGE-OBJECT/missing-object-errors::production_behavior",
+              "kind": "PRODUCTION_BEHAVIOR",
+              "originalSelectors": [
+                "/conditions/19"
+              ],
+              "state": "OPEN",
+              "evidence": null
+            }
+          ]
+        },
+        {
+          "conditionId": "STORAGE-OBJECT/authorization-errors",
+          "originalPointer": "/conditions/20",
+          "classification": "PRODUCTION_REQUIRED",
+          "facets": [
+            {
+              "facetId": "STORAGE-OBJECT/authorization-errors::production_behavior",
+              "kind": "PRODUCTION_BEHAVIOR",
+              "originalSelectors": [
+                "/conditions/20"
+              ],
+              "state": "OPEN",
+              "evidence": null
+            }
+          ]
+        },
+        {
+          "conditionId": "STORAGE-OBJECT/invalid-object-name-errors",
+          "originalPointer": "/conditions/21",
+          "classification": "PRODUCTION_REQUIRED",
+          "facets": [
+            {
+              "facetId": "STORAGE-OBJECT/invalid-object-name-errors::production_behavior",
+              "kind": "PRODUCTION_BEHAVIOR",
+              "originalSelectors": [
+                "/conditions/21"
+              ],
+              "state": "OPEN",
+              "evidence": null
+            }
+          ]
+        },
+        {
+          "conditionId": "STORAGE-OBJECT/invalid-range-errors",
+          "originalPointer": "/conditions/22",
+          "classification": "PRODUCTION_REQUIRED",
+          "facets": [
+            {
+              "facetId": "STORAGE-OBJECT/invalid-range-errors::production_behavior",
+              "kind": "PRODUCTION_BEHAVIOR",
+              "originalSelectors": [
+                "/conditions/22"
+              ],
+              "state": "OPEN",
+              "evidence": null
+            }
+          ]
+        },
+        {
+          "conditionId": "STORAGE-OBJECT/admin-credential",
+          "originalPointer": "/conditions/23",
+          "classification": "PRODUCTION_REQUIRED",
+          "facets": [
+            {
+              "facetId": "STORAGE-OBJECT/admin-credential::production_behavior",
+              "kind": "PRODUCTION_BEHAVIOR",
+              "originalSelectors": [
+                "/conditions/23"
+              ],
+              "state": "OPEN",
+              "evidence": null
+            }
+          ]
+        },
+        {
+          "conditionId": "STORAGE-OBJECT/firebase-id-token",
+          "originalPointer": "/conditions/24",
+          "classification": "PRODUCTION_REQUIRED",
+          "facets": [
+            {
+              "facetId": "STORAGE-OBJECT/firebase-id-token::production_behavior",
+              "kind": "PRODUCTION_BEHAVIOR",
+              "originalSelectors": [
+                "/conditions/24"
+              ],
+              "state": "OPEN",
+              "evidence": null
+            }
+          ]
+        },
+        {
+          "conditionId": "STORAGE-OBJECT/cross-dialect-state",
+          "originalPointer": "/conditions/25",
+          "classification": "PRODUCTION_REQUIRED",
+          "facets": [
+            {
+              "facetId": "STORAGE-OBJECT/cross-dialect-state::production_behavior",
+              "kind": "PRODUCTION_BEHAVIOR",
+              "originalSelectors": [
+                "/conditions/25"
+              ],
+              "state": "OPEN",
+              "evidence": null
+            }
+          ]
+        },
+        {
+          "conditionId": "STORAGE-OBJECT/final-artifact-regression",
+          "originalPointer": "/conditions/26",
+          "classification": "MIXED",
+          "facets": [
+            {
+              "facetId": "STORAGE-OBJECT/final-artifact-regression::final_product",
+              "kind": "FINAL_PRODUCT",
+              "originalSelectors": [
+                "/conditions/26"
+              ],
+              "state": "OPEN",
+              "evidence": null
+            },
+            {
+              "facetId": "STORAGE-OBJECT/final-artifact-regression::official_comparison",
+              "kind": "OFFICIAL_COMPARISON",
+              "originalSelectors": [
+                "/conditions/26"
+              ],
+              "state": "OPEN",
+              "evidence": null
+            }
+          ]
+        },
+        {
+          "conditionId": "STORAGE-OBJECT/closure-review",
+          "originalPointer": "/conditions/27",
+          "classification": "PRODUCTION_REQUIRED",
+          "facets": [
+            {
+              "facetId": "STORAGE-OBJECT/closure-review::clean_review",
+              "kind": "CLEAN_REVIEW",
+              "originalSelectors": [
+                "/conditions/27"
+              ],
+              "state": "OPEN",
+              "evidence": null
+            }
+          ]
+        }
+      ],
+      "profileContract": {
+        "facetId": "STORAGE-OBJECT::emulator-profile-contract",
+        "kind": "EMULATOR_PROFILE_CONTRACT",
+        "originalSelectors": [
+          "/observationContract"
+        ],
+        "state": "OPEN",
+        "evidence": null
+      }
+    },
+    {
+      "parent": "STORAGE-RULES",
+      "publicationState": "PUBLISHED",
+      "track": "PRODUCTION_PENDING",
+      "inventoryPath": "spec/compatibility/closure/STORAGE-RULES.json",
+      "sourceIdentity": {
+        "commit": "e57a78e0f5c4852894d14fad31438b2fa9d681e0",
+        "gitObject": "e57a78e0f5c4852894d14fad31438b2fa9d681e0:spec/compatibility/closure/STORAGE-RULES.json",
+        "blob": "9eb23b1842e1fca2b6a3cd3f2465ce5c04c6adc8",
+        "rawSha256": "30d6f6f8b28cdebec4b2e1b8cc2aa6bb2aeaa0d86a2bcd58aa9e05a8b43379d8",
+        "snapshotPath": "spec/compatibility/official-compatibility/history/e57a78e0/STORAGE-RULES.json",
+        "snapshotSha256": "30d6f6f8b28cdebec4b2e1b8cc2aa6bb2aeaa0d86a2bcd58aa9e05a8b43379d8"
+      },
+      "conditionRegistry": [
+        {
+          "conditionId": "STORAGE-RULES/method-grants",
+          "originalPointer": "/conditions/0",
+          "originalSha256": "8ed9d3aafa3133f65a62ddd6cccc5de17159b0a8ab20412a506480f3cf133bda",
+          "cases": [],
+          "casesSha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+        },
+        {
+          "conditionId": "STORAGE-RULES/list-v2",
+          "originalPointer": "/conditions/1",
+          "originalSha256": "3ea211e1630c53a9dd2d74009a1d7ceaaa3f1a6178271453457040ec3efdc590",
+          "cases": [],
+          "casesSha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+        },
+        {
+          "conditionId": "STORAGE-RULES/anonymous-and-id-token",
+          "originalPointer": "/conditions/2",
+          "originalSha256": "b3b616f322559ce6dcf7520f565d8a89f451480c44d1c1b8e8148ef488762bf4",
+          "cases": [],
+          "casesSha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+        },
+        {
+          "conditionId": "STORAGE-RULES/token-claims",
+          "originalPointer": "/conditions/3",
+          "originalSha256": "d5f6997beaf62d5b21d7c2028d0051c05b2ee05a3ba0b1f279b533fbda7bc3be",
+          "cases": [],
+          "casesSha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+        },
+        {
+          "conditionId": "STORAGE-RULES/token-refusal",
+          "originalPointer": "/conditions/4",
+          "originalSha256": "1a6478419e5775386cf9810bc3dc159709881502c2763fbb7d7544fe196039a9",
+          "cases": [],
+          "casesSha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+        },
+        {
+          "conditionId": "STORAGE-RULES/upload-request-resource",
+          "originalPointer": "/conditions/5",
+          "originalSha256": "455d92d9ef75606655d0a9489f757d8d32b824b2f1a3e465f15d0fd973e1ebad",
+          "cases": [],
+          "casesSha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+        },
+        {
+          "conditionId": "STORAGE-RULES/metadata-request-resource",
+          "originalPointer": "/conditions/6",
+          "originalSha256": "fd0a4fdd665a3339a38726ac8d3d05d17fb5d79944783da600305cf2212545db",
+          "cases": [],
+          "casesSha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+        },
+        {
+          "conditionId": "STORAGE-RULES/stored-resource",
+          "originalPointer": "/conditions/7",
+          "originalSha256": "638da9eb9edb959361e0170a0e49b08499daa9dd340e2d0c62aeec044c996b99",
+          "cases": [],
+          "casesSha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+        },
+        {
+          "conditionId": "STORAGE-RULES/create-update-delete-state",
+          "originalPointer": "/conditions/8",
+          "originalSha256": "efc7e4c8e0a4e97981da6ae622c0a406950692ec7a0a94fd46207f92a9146a80",
+          "cases": [],
+          "casesSha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+        },
+        {
+          "conditionId": "STORAGE-RULES/request-time",
+          "originalPointer": "/conditions/9",
+          "originalSha256": "2d6a758a557be5592c49dd5b185f555511d0d6de498c8f355d7ab781f10d22fe",
+          "cases": [],
+          "casesSha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+        },
+        {
+          "conditionId": "STORAGE-RULES/path-variables",
+          "originalPointer": "/conditions/10",
+          "originalSha256": "b1960de5de4fcb629185508e4b64e7246856f82993be6399a7017f0878dfc6d3",
+          "cases": [],
+          "casesSha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+        },
+        {
+          "conditionId": "STORAGE-RULES/recursive-wildcard",
+          "originalPointer": "/conditions/11",
+          "originalSha256": "41320bbb86096b1070c978e4fb8795d26a2ad69f4ad8d45143d716b8efc29f8d",
+          "cases": [],
+          "casesSha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+        },
+        {
+          "conditionId": "STORAGE-RULES/storage-service-compile",
+          "originalPointer": "/conditions/12",
+          "originalSha256": "e69d3f41c1fac54962f3243d12e5975c7a21be4d9a8d41207bdcc8df2073e5ac",
+          "cases": [],
+          "casesSha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+        },
+        {
+          "conditionId": "STORAGE-RULES/firestore-get",
+          "originalPointer": "/conditions/13",
+          "originalSha256": "b3ca5f3c1bdb7821eda6dade525c3374f71cdc93b3cc1e628de90e147440200c",
+          "cases": [],
+          "casesSha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+        },
+        {
+          "conditionId": "STORAGE-RULES/firestore-exists",
+          "originalPointer": "/conditions/14",
+          "originalSha256": "d90cc8c5ebd6e254112efdeb67a1b46ae1baaf14534f8931da93e984642d026d",
+          "cases": [],
+          "casesSha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+        },
+        {
+          "conditionId": "STORAGE-RULES/firestore-access-budget",
+          "originalPointer": "/conditions/15",
+          "originalSha256": "0c7fe1470397d997ae2819cb3cff07026bd6f0d7a73ba50b234029720b9cae69",
+          "cases": [],
+          "casesSha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+        },
+        {
+          "conditionId": "STORAGE-RULES/firebase-denial-shape",
+          "originalPointer": "/conditions/16",
+          "originalSha256": "ba78fd1754655b41effa79b0d3559b8bd5e15556fb39b9f760994a1e380e93bf",
+          "cases": [],
+          "casesSha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+        },
+        {
+          "conditionId": "STORAGE-RULES/denial-precedence",
+          "originalPointer": "/conditions/17",
+          "originalSha256": "e7b21e9d2832c600ecdb14a411a69dbc9d2ef49a72e8f3731ec3179d5a6e5059",
+          "cases": [],
+          "casesSha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+        },
+        {
+          "conditionId": "STORAGE-RULES/gcs-admin-boundary",
+          "originalPointer": "/conditions/18",
+          "originalSha256": "bae5ebf8f10712ff8e063ffb3ea50efac7b79f7d44f77c636e34fbc966931463",
+          "cases": [],
+          "casesSha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+        },
+        {
+          "conditionId": "STORAGE-RULES/download-token-boundary",
+          "originalPointer": "/conditions/19",
+          "originalSha256": "e339b8db7a2570541ed3b051f52a77aee4874de3a358cd0cfefccd9c3d688d1d",
+          "cases": [],
+          "casesSha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+        },
+        {
+          "conditionId": "STORAGE-RULES/release-switch",
+          "originalPointer": "/conditions/20",
+          "originalSha256": "dd9cb71c0626846db444aa9e5919043e5be3ac8bffc143f612f55611d1a8fab9",
+          "cases": [],
+          "casesSha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+        },
+        {
+          "conditionId": "STORAGE-RULES/no-release",
+          "originalPointer": "/conditions/21",
+          "originalSha256": "eba97420daf08a7df422c6c87e8b15361fe635a94083de5e3cc31247356b9d70",
+          "cases": [],
+          "casesSha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+        },
+        {
+          "conditionId": "STORAGE-RULES/final-artifact-regression",
+          "originalPointer": "/conditions/22",
+          "originalSha256": "244df1185bd736d7c66ecceb5c32a222eeec639383511662fd31e3b7173293f2",
+          "cases": [],
+          "casesSha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+        },
+        {
+          "conditionId": "STORAGE-RULES/closure-review",
+          "originalPointer": "/conditions/23",
+          "originalSha256": "ec59f159bda834864328353cf75eb9a9f6f5743e34da08599faa71dd63998733",
+          "cases": [],
+          "casesSha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+        }
+      ],
+      "conditions": [
+        {
+          "conditionId": "STORAGE-RULES/method-grants",
+          "originalPointer": "/conditions/0",
+          "classification": "PRODUCTION_REQUIRED",
+          "facets": [
+            {
+              "facetId": "STORAGE-RULES/method-grants::production_behavior",
+              "kind": "PRODUCTION_BEHAVIOR",
+              "originalSelectors": [
+                "/conditions/0"
+              ],
+              "state": "OPEN",
+              "evidence": null
+            }
+          ]
+        },
+        {
+          "conditionId": "STORAGE-RULES/list-v2",
+          "originalPointer": "/conditions/1",
+          "classification": "PRODUCTION_REQUIRED",
+          "facets": [
+            {
+              "facetId": "STORAGE-RULES/list-v2::production_behavior",
+              "kind": "PRODUCTION_BEHAVIOR",
+              "originalSelectors": [
+                "/conditions/1"
+              ],
+              "state": "OPEN",
+              "evidence": null
+            }
+          ]
+        },
+        {
+          "conditionId": "STORAGE-RULES/anonymous-and-id-token",
+          "originalPointer": "/conditions/2",
+          "classification": "PRODUCTION_REQUIRED",
+          "facets": [
+            {
+              "facetId": "STORAGE-RULES/anonymous-and-id-token::production_behavior",
+              "kind": "PRODUCTION_BEHAVIOR",
+              "originalSelectors": [
+                "/conditions/2"
+              ],
+              "state": "OPEN",
+              "evidence": null
+            }
+          ]
+        },
+        {
+          "conditionId": "STORAGE-RULES/token-claims",
+          "originalPointer": "/conditions/3",
+          "classification": "PRODUCTION_REQUIRED",
+          "facets": [
+            {
+              "facetId": "STORAGE-RULES/token-claims::production_behavior",
+              "kind": "PRODUCTION_BEHAVIOR",
+              "originalSelectors": [
+                "/conditions/3"
+              ],
+              "state": "OPEN",
+              "evidence": null
+            }
+          ]
+        },
+        {
+          "conditionId": "STORAGE-RULES/token-refusal",
+          "originalPointer": "/conditions/4",
+          "classification": "PRODUCTION_REQUIRED",
+          "facets": [
+            {
+              "facetId": "STORAGE-RULES/token-refusal::production_behavior",
+              "kind": "PRODUCTION_BEHAVIOR",
+              "originalSelectors": [
+                "/conditions/4"
+              ],
+              "state": "OPEN",
+              "evidence": null
+            }
+          ]
+        },
+        {
+          "conditionId": "STORAGE-RULES/upload-request-resource",
+          "originalPointer": "/conditions/5",
+          "classification": "PRODUCTION_REQUIRED",
+          "facets": [
+            {
+              "facetId": "STORAGE-RULES/upload-request-resource::production_behavior",
+              "kind": "PRODUCTION_BEHAVIOR",
+              "originalSelectors": [
+                "/conditions/5"
+              ],
+              "state": "OPEN",
+              "evidence": null
+            }
+          ]
+        },
+        {
+          "conditionId": "STORAGE-RULES/metadata-request-resource",
+          "originalPointer": "/conditions/6",
+          "classification": "PRODUCTION_REQUIRED",
+          "facets": [
+            {
+              "facetId": "STORAGE-RULES/metadata-request-resource::production_behavior",
+              "kind": "PRODUCTION_BEHAVIOR",
+              "originalSelectors": [
+                "/conditions/6"
+              ],
+              "state": "OPEN",
+              "evidence": null
+            }
+          ]
+        },
+        {
+          "conditionId": "STORAGE-RULES/stored-resource",
+          "originalPointer": "/conditions/7",
+          "classification": "PRODUCTION_REQUIRED",
+          "facets": [
+            {
+              "facetId": "STORAGE-RULES/stored-resource::production_behavior",
+              "kind": "PRODUCTION_BEHAVIOR",
+              "originalSelectors": [
+                "/conditions/7"
+              ],
+              "state": "OPEN",
+              "evidence": null
+            }
+          ]
+        },
+        {
+          "conditionId": "STORAGE-RULES/create-update-delete-state",
+          "originalPointer": "/conditions/8",
+          "classification": "PRODUCTION_REQUIRED",
+          "facets": [
+            {
+              "facetId": "STORAGE-RULES/create-update-delete-state::production_behavior",
+              "kind": "PRODUCTION_BEHAVIOR",
+              "originalSelectors": [
+                "/conditions/8"
+              ],
+              "state": "OPEN",
+              "evidence": null
+            }
+          ]
+        },
+        {
+          "conditionId": "STORAGE-RULES/request-time",
+          "originalPointer": "/conditions/9",
+          "classification": "PRODUCTION_REQUIRED",
+          "facets": [
+            {
+              "facetId": "STORAGE-RULES/request-time::production_behavior",
+              "kind": "PRODUCTION_BEHAVIOR",
+              "originalSelectors": [
+                "/conditions/9"
+              ],
+              "state": "OPEN",
+              "evidence": null
+            }
+          ]
+        },
+        {
+          "conditionId": "STORAGE-RULES/path-variables",
+          "originalPointer": "/conditions/10",
+          "classification": "PRODUCTION_REQUIRED",
+          "facets": [
+            {
+              "facetId": "STORAGE-RULES/path-variables::production_behavior",
+              "kind": "PRODUCTION_BEHAVIOR",
+              "originalSelectors": [
+                "/conditions/10"
+              ],
+              "state": "OPEN",
+              "evidence": null
+            }
+          ]
+        },
+        {
+          "conditionId": "STORAGE-RULES/recursive-wildcard",
+          "originalPointer": "/conditions/11",
+          "classification": "PRODUCTION_REQUIRED",
+          "facets": [
+            {
+              "facetId": "STORAGE-RULES/recursive-wildcard::production_behavior",
+              "kind": "PRODUCTION_BEHAVIOR",
+              "originalSelectors": [
+                "/conditions/11"
+              ],
+              "state": "OPEN",
+              "evidence": null
+            }
+          ]
+        },
+        {
+          "conditionId": "STORAGE-RULES/storage-service-compile",
+          "originalPointer": "/conditions/12",
+          "classification": "PRODUCTION_REQUIRED",
+          "facets": [
+            {
+              "facetId": "STORAGE-RULES/storage-service-compile::production_behavior",
+              "kind": "PRODUCTION_BEHAVIOR",
+              "originalSelectors": [
+                "/conditions/12"
+              ],
+              "state": "OPEN",
+              "evidence": null
+            }
+          ]
+        },
+        {
+          "conditionId": "STORAGE-RULES/firestore-get",
+          "originalPointer": "/conditions/13",
+          "classification": "PRODUCTION_REQUIRED",
+          "facets": [
+            {
+              "facetId": "STORAGE-RULES/firestore-get::production_behavior",
+              "kind": "PRODUCTION_BEHAVIOR",
+              "originalSelectors": [
+                "/conditions/13"
+              ],
+              "state": "OPEN",
+              "evidence": null
+            }
+          ]
+        },
+        {
+          "conditionId": "STORAGE-RULES/firestore-exists",
+          "originalPointer": "/conditions/14",
+          "classification": "PRODUCTION_REQUIRED",
+          "facets": [
+            {
+              "facetId": "STORAGE-RULES/firestore-exists::production_behavior",
+              "kind": "PRODUCTION_BEHAVIOR",
+              "originalSelectors": [
+                "/conditions/14"
+              ],
+              "state": "OPEN",
+              "evidence": null
+            }
+          ]
+        },
+        {
+          "conditionId": "STORAGE-RULES/firestore-access-budget",
+          "originalPointer": "/conditions/15",
+          "classification": "PRODUCTION_REQUIRED",
+          "facets": [
+            {
+              "facetId": "STORAGE-RULES/firestore-access-budget::production_behavior",
+              "kind": "PRODUCTION_BEHAVIOR",
+              "originalSelectors": [
+                "/conditions/15"
+              ],
+              "state": "OPEN",
+              "evidence": null
+            }
+          ]
+        },
+        {
+          "conditionId": "STORAGE-RULES/firebase-denial-shape",
+          "originalPointer": "/conditions/16",
+          "classification": "PRODUCTION_REQUIRED",
+          "facets": [
+            {
+              "facetId": "STORAGE-RULES/firebase-denial-shape::production_behavior",
+              "kind": "PRODUCTION_BEHAVIOR",
+              "originalSelectors": [
+                "/conditions/16"
+              ],
+              "state": "OPEN",
+              "evidence": null
+            }
+          ]
+        },
+        {
+          "conditionId": "STORAGE-RULES/denial-precedence",
+          "originalPointer": "/conditions/17",
+          "classification": "PRODUCTION_REQUIRED",
+          "facets": [
+            {
+              "facetId": "STORAGE-RULES/denial-precedence::production_behavior",
+              "kind": "PRODUCTION_BEHAVIOR",
+              "originalSelectors": [
+                "/conditions/17"
+              ],
+              "state": "OPEN",
+              "evidence": null
+            }
+          ]
+        },
+        {
+          "conditionId": "STORAGE-RULES/gcs-admin-boundary",
+          "originalPointer": "/conditions/18",
+          "classification": "PRODUCTION_REQUIRED",
+          "facets": [
+            {
+              "facetId": "STORAGE-RULES/gcs-admin-boundary::production_behavior",
+              "kind": "PRODUCTION_BEHAVIOR",
+              "originalSelectors": [
+                "/conditions/18"
+              ],
+              "state": "OPEN",
+              "evidence": null
+            }
+          ]
+        },
+        {
+          "conditionId": "STORAGE-RULES/download-token-boundary",
+          "originalPointer": "/conditions/19",
+          "classification": "PRODUCTION_REQUIRED",
+          "facets": [
+            {
+              "facetId": "STORAGE-RULES/download-token-boundary::production_behavior",
+              "kind": "PRODUCTION_BEHAVIOR",
+              "originalSelectors": [
+                "/conditions/19"
+              ],
+              "state": "OPEN",
+              "evidence": null
+            }
+          ]
+        },
+        {
+          "conditionId": "STORAGE-RULES/release-switch",
+          "originalPointer": "/conditions/20",
+          "classification": "PRODUCTION_REQUIRED",
+          "facets": [
+            {
+              "facetId": "STORAGE-RULES/release-switch::production_behavior",
+              "kind": "PRODUCTION_BEHAVIOR",
+              "originalSelectors": [
+                "/conditions/20"
+              ],
+              "state": "OPEN",
+              "evidence": null
+            }
+          ]
+        },
+        {
+          "conditionId": "STORAGE-RULES/no-release",
+          "originalPointer": "/conditions/21",
+          "classification": "PRODUCTION_REQUIRED",
+          "facets": [
+            {
+              "facetId": "STORAGE-RULES/no-release::production_behavior",
+              "kind": "PRODUCTION_BEHAVIOR",
+              "originalSelectors": [
+                "/conditions/21"
+              ],
+              "state": "OPEN",
+              "evidence": null
+            }
+          ]
+        },
+        {
+          "conditionId": "STORAGE-RULES/final-artifact-regression",
+          "originalPointer": "/conditions/22",
+          "classification": "MIXED",
+          "facets": [
+            {
+              "facetId": "STORAGE-RULES/final-artifact-regression::final_product",
+              "kind": "FINAL_PRODUCT",
+              "originalSelectors": [
+                "/conditions/22"
+              ],
+              "state": "OPEN",
+              "evidence": null
+            },
+            {
+              "facetId": "STORAGE-RULES/final-artifact-regression::official_comparison",
+              "kind": "OFFICIAL_COMPARISON",
+              "originalSelectors": [
+                "/conditions/22"
+              ],
+              "state": "OPEN",
+              "evidence": null
+            }
+          ]
+        },
+        {
+          "conditionId": "STORAGE-RULES/closure-review",
+          "originalPointer": "/conditions/23",
+          "classification": "PRODUCTION_REQUIRED",
+          "facets": [
+            {
+              "facetId": "STORAGE-RULES/closure-review::clean_review",
+              "kind": "CLEAN_REVIEW",
+              "originalSelectors": [
+                "/conditions/23"
+              ],
+              "state": "OPEN",
+              "evidence": null
+            }
+          ]
+        }
+      ],
+      "profileContract": {
+        "facetId": "STORAGE-RULES::emulator-profile-contract",
+        "kind": "EMULATOR_PROFILE_CONTRACT",
+        "originalSelectors": [
+          "/observationContract"
+        ],
+        "state": "OPEN",
+        "evidence": null
+      }
+    },
+    {
+      "parent": "FS-LISTEN-SDK",
+      "publicationState": "UNKNOWN",
+      "track": "UNPUBLISHED_FROZEN",
+      "inventoryPath": null,
+      "sourceIdentity": {
+        "commit": "e4f549410c1cd4aba58476988f5d07fa8eb5afed",
+        "gitObject": "e4f549410c1cd4aba58476988f5d07fa8eb5afed:spec/compatibility/closure/FS-LISTEN-SDK.json",
+        "blob": "e7e6452f2996ea1cacb4589c586d5c8b10bc2a6a",
+        "rawSha256": "0067836d43f427496eb7bb105e4c338aba8bbadfb07174b5b62fcd325041e716",
+        "snapshotPath": null,
+        "snapshotSha256": null
+      },
+      "conditionRegistry": [
+        {
+          "conditionId": "FS-LISTEN-SDK/document-event-order",
+          "originalPointer": "/conditions/0",
+          "originalSha256": "846ef2fcf7c212b32ac87d7ff666920d3fd670f25718c8d03ba57484078097b1",
+          "cases": [],
+          "casesSha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+        },
+        {
+          "conditionId": "FS-LISTEN-SDK/pending-writes",
+          "originalPointer": "/conditions/1",
+          "originalSha256": "f5f2c8eb0317538b67b99aa6b63a22de6943caa66d954833d43e69e0b9b15a80",
+          "cases": [],
+          "casesSha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+        },
+        {
+          "conditionId": "FS-LISTEN-SDK/query-change-order",
+          "originalPointer": "/conditions/2",
+          "originalSha256": "bbefe39366d329bbc0901379cca63e9aae6f2f716a56eb4ccb7b99e6bef2121e",
+          "cases": [],
+          "casesSha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+        },
+        {
+          "conditionId": "FS-LISTEN-SDK/reconnect-resume",
+          "originalPointer": "/conditions/3",
+          "originalSha256": "c9ed537a163409b166afe0373eb65dadcd77689ec4d6180388aad7579addec9f",
+          "cases": [],
+          "casesSha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+        },
+        {
+          "conditionId": "FS-LISTEN-SDK/unsubscribe",
+          "originalPointer": "/conditions/4",
+          "originalSha256": "1891dd0f6c4745e53972687cc9301c462d1a32ec811e4f5255234fb06bab42d2",
+          "cases": [],
+          "casesSha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+        },
+        {
+          "conditionId": "FS-LISTEN-SDK/initial-unauthenticated-refusal",
+          "originalPointer": "/conditions/5",
+          "originalSha256": "266026a1595c7d3c0178f6a2400a1022b18634bd5fd57203f3432073641c92db",
+          "cases": [],
+          "casesSha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+        },
+        {
+          "conditionId": "FS-LISTEN-SDK/default-subscription",
+          "originalPointer": "/conditions/6",
+          "originalSha256": "d560059ab029d8aa2c3bedfe83c6f2c87e9fc4d9cda25cba6e042c6ae98557b6",
+          "cases": [],
+          "casesSha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+        },
+        {
+          "conditionId": "FS-LISTEN-SDK/cross-principal-rules",
+          "originalPointer": "/conditions/7",
+          "originalSha256": "b9afa85cbd61e87e3b6c650bc670fab130d12c664495760e7cbb48d2de347f65",
+          "cases": [],
+          "casesSha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+        },
+        {
+          "conditionId": "FS-LISTEN-SDK/raw-resume-token",
+          "originalPointer": "/conditions/8",
+          "originalSha256": "0d9515c7c9adafb4cfaa575f7cbcadbbfc651848862c5c279cd9cb057b315bf1",
+          "cases": [],
+          "casesSha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+        },
+        {
+          "conditionId": "FS-LISTEN-SDK/browser-tab-lifecycle",
+          "originalPointer": "/conditions/9",
+          "originalSha256": "af40cb110cffeb2580a9832f4fe0740b57aee4c5d8b30c1dca5e5a71aeb85b23",
+          "cases": [],
+          "casesSha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+        },
+        {
+          "conditionId": "FS-LISTEN-SDK/existence-filter-reconnect",
+          "originalPointer": "/conditions/10",
+          "originalSha256": "e79d7a141869a9d93956cb70110ec30c751ed8107bc3d734883b80bbc2f819ab",
+          "cases": [],
+          "casesSha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+        },
+        {
+          "conditionId": "FS-LISTEN-SDK/backend-cache-transitions",
+          "originalPointer": "/conditions/11",
+          "originalSha256": "a69aef8878d6593adad1c7a74c073c47ae34c4dc09ac6d866a67729607f6b6e9",
+          "cases": [],
+          "casesSha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+        },
+        {
+          "conditionId": "FS-LISTEN-SDK/native-target-protocol",
+          "originalPointer": "/conditions/12",
+          "originalSha256": "e0b749a1de99b972016d11eb16d2b4075bac511d6e09862775b0303d0d6988d6",
+          "cases": [],
+          "casesSha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+        },
+        {
+          "conditionId": "FS-LISTEN-SDK/final-artifact-regression",
+          "originalPointer": "/conditions/13",
+          "originalSha256": "3abab467b82d71d5fbbea2fd5e5259fbbc20972448c6f178b9b33c8e95901470",
+          "cases": [],
+          "casesSha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+        },
+        {
+          "conditionId": "FS-LISTEN-SDK/closure-review",
+          "originalPointer": "/conditions/14",
+          "originalSha256": "a3a3c80ee396898bccd1ea59b19181b918ca68c10e511423e0be7e4b4997bdf3",
+          "cases": [],
+          "casesSha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+        }
+      ],
+      "conditions": [],
+      "profileContract": null
+    },
+    {
+      "parent": "FUNCTIONS-EVENTS",
+      "publicationState": "UNKNOWN",
+      "track": "UNPUBLISHED_FROZEN",
+      "inventoryPath": null,
+      "sourceIdentity": {
+        "commit": "391d5c239f60cb855ef310842e25318b72a80d45",
+        "gitObject": "391d5c239f60cb855ef310842e25318b72a80d45:spec/compatibility/closure/FUNCTIONS-EVENTS.json",
+        "blob": "c2c2df29695af0a29eeffe2266ba4c6cd46bcbe9",
+        "rawSha256": "c19f68def2ad700d628ed12171ca646f61793dd8d5eb1cfa576543a2a0b2bc27",
+        "snapshotPath": null,
+        "snapshotSha256": null
+      },
+      "conditionRegistry": [
+        {
+          "conditionId": "FUNCTIONS-EVENTS/firestore-created",
+          "originalPointer": "/conditions/0",
+          "originalSha256": "b273e83825901350815ef17157d8c34a03f9c9b92997b597ab54df2ea2413c92",
+          "cases": [
+            "new-document",
+            "before-absent",
+            "after-present"
+          ],
+          "casesSha256": "12f0f2397a682963e15769aa8948a7e52d24f0c39d58e660a6bd21bb0bbdb02a"
+        },
+        {
+          "conditionId": "FUNCTIONS-EVENTS/firestore-updated",
+          "originalPointer": "/conditions/1",
+          "originalSha256": "9dcde493d8dda28a68b26b3f6905e323ff4891c4387bcab1a7988ce631e9b2bc",
+          "cases": [
+            "changed-field",
+            "before-present",
+            "after-present"
+          ],
+          "casesSha256": "8923b8f7c778c25de494a6d0d8aa8d9dad0bef3833887ffe23c22184dac8b51a"
+        },
+        {
+          "conditionId": "FUNCTIONS-EVENTS/firestore-deleted",
+          "originalPointer": "/conditions/2",
+          "originalSha256": "a577f8d9737ffbfc43604f949a22d54d94b8cb862b286fc196ac4dae52f1307a",
+          "cases": [
+            "deleted-document",
+            "before-present",
+            "after-absent"
+          ],
+          "casesSha256": "1d6df8fa6d97ba92d0b623f2a6413cef331b2dacf252c8cd844ad5ae8cc36627"
+        },
+        {
+          "conditionId": "FUNCTIONS-EVENTS/firestore-written",
+          "originalPointer": "/conditions/3",
+          "originalSha256": "a7afff47ed39ffb8cc1d16adce9edffcf78d3f854478a3b800ddbffd5a05b6b4",
+          "cases": [
+            "create",
+            "update",
+            "delete"
+          ],
+          "casesSha256": "a5003c0e63c68914bd84a07e880915bc493972ee9cf81d9a8d06bfd6264846c8"
+        },
+        {
+          "conditionId": "FUNCTIONS-EVENTS/firestore-noop",
+          "originalPointer": "/conditions/4",
+          "originalSha256": "67519a1cd391498ab71e646cb9caa550c37f823c77fd46c9ced3cfaa55f1e003",
+          "cases": [
+            "same-value-write-no-event"
+          ],
+          "casesSha256": "2f5ec1290fd0895a97e71e5ea422acf3c9eff14ec7c8c0e59143a928e5cdda5b"
+        },
+        {
+          "conditionId": "FUNCTIONS-EVENTS/firestore-routing-params",
+          "originalPointer": "/conditions/5",
+          "originalSha256": "e9798d4f3d884bb3470db91678d63ddb731f22e6e680a36e9f8f3056c7bce6b4",
+          "cases": [
+            "matching-path",
+            "nonmatching-path",
+            "wildcard-param"
+          ],
+          "casesSha256": "7835e90630e2b8ffd870da4a50a32eff236a1de8ed68f5b6db64692fc84d8b04"
+        },
+        {
+          "conditionId": "FUNCTIONS-EVENTS/firestore-payload",
+          "originalPointer": "/conditions/6",
+          "originalSha256": "9bd607499e470363a9dc971e49260e39327cdbf6ba48995faa31d132e6186e2f",
+          "cases": [
+            "handler-envelope",
+            "field-values",
+            "document-name",
+            "update-time",
+            "event-metadata"
+          ],
+          "casesSha256": "f05195bd571e70c6d90657ff503b9d42b5c353c0916953dcf2086a5bd0953426"
+        },
+        {
+          "conditionId": "FUNCTIONS-EVENTS/firestore-auth-context",
+          "originalPointer": "/conditions/7",
+          "originalSha256": "bea2f39ef4b7aeadb51873e60f684fc80112b7f2fc776d34875aa3a1333c330f",
+          "cases": [
+            "authenticated-write",
+            "admin-write",
+            "auth-type-and-id"
+          ],
+          "casesSha256": "1d90b0a8ea797d0aa4afbff20b425aa78b99cd1616ed65a5e0b65531963fd2d1"
+        },
+        {
+          "conditionId": "FUNCTIONS-EVENTS/storage-finalized",
+          "originalPointer": "/conditions/8",
+          "originalSha256": "c123f75036d7c05a35edbf762841239cefc9a73c2d05110725be9d70cf36ecbc",
+          "cases": [
+            "new-object",
+            "overwritten-generation",
+            "failed-upload-no-event"
+          ],
+          "casesSha256": "dca58f210bdb42cabddb00276cdb9f134002a467d934808f2187d44b2a87ae73"
+        },
+        {
+          "conditionId": "FUNCTIONS-EVENTS/storage-deleted",
+          "originalPointer": "/conditions/9",
+          "originalSha256": "b51f0c94089071c23b0a4e4289917b14c71ebcc8cd1916cf2d3c444464a99ffe",
+          "cases": [
+            "live-object-delete",
+            "no-event-for-missing-object"
+          ],
+          "casesSha256": "aca9feca998e4232037c66f1dd703f9d8769ee5175b87c5092bacbbabbde1065"
+        },
+        {
+          "conditionId": "FUNCTIONS-EVENTS/storage-metadata-updated",
+          "originalPointer": "/conditions/10",
+          "originalSha256": "e6cc48679c43afe04923baab81f833506d034a6d823c2488d1ea906f6559cde6",
+          "cases": [
+            "custom-metadata-change",
+            "metageneration"
+          ],
+          "casesSha256": "1a399b927dff7a5338c24248d368f84ae06643725791d4c95d81ba3478eec75f"
+        },
+        {
+          "conditionId": "FUNCTIONS-EVENTS/storage-archived",
+          "originalPointer": "/conditions/11",
+          "originalSha256": "f5d467f960fe1310f49a6ef17d695c68c12bb8163a4175f772d34d6e5a722c79",
+          "cases": [
+            "versioned-overwrite",
+            "archived-generation"
+          ],
+          "casesSha256": "91d1db01f1a8eeea9bb93976a6dea8d40d8e9e9078ee6cd5698cb5188a82e894"
+        },
+        {
+          "conditionId": "FUNCTIONS-EVENTS/storage-payload",
+          "originalPointer": "/conditions/12",
+          "originalSha256": "5f987c0951c8494d845fe3e8325eda4f16b57e67af9b1215d0cda1ccd6c62e17",
+          "cases": [
+            "handler-envelope",
+            "name-and-bucket",
+            "generation",
+            "content-type",
+            "event-metadata"
+          ],
+          "casesSha256": "de5f190d87fc53f4d4b4d1e743e9cea4c79107fe9df16187dc6f17c85fc9e634"
+        },
+        {
+          "conditionId": "FUNCTIONS-EVENTS/storage-bucket-routing",
+          "originalPointer": "/conditions/13",
+          "originalSha256": "3ee9ae120dcedd447b4c43028f6201349928b22cdfc0cad1e0d24c6e5b358bf1",
+          "cases": [
+            "matching-bucket",
+            "nonmatching-bucket",
+            "same-bucket-other-prefix-delivered"
+          ],
+          "casesSha256": "40352434e9acf2f795cc96d6f6e5e5e4687de6ab3691c0d2358bb0191e476f9d"
+        },
+        {
+          "conditionId": "FUNCTIONS-EVENTS/auth-created",
+          "originalPointer": "/conditions/14",
+          "originalSha256": "dc7130f074fcc6a459320e9d569076fc08577cb38d3535cb1d1b24832f81b54c",
+          "cases": [
+            "admin-create",
+            "email-password-create",
+            "repeat-sign-in-no-event"
+          ],
+          "casesSha256": "64356e84b25a7dbe96bef498cabed3cf94247d17d3d7a9ce76dd111d91b86868"
+        },
+        {
+          "conditionId": "FUNCTIONS-EVENTS/auth-deleted",
+          "originalPointer": "/conditions/15",
+          "originalSha256": "f8fa70e9a1b80b96b009fabefc047e8fcf0f5a03305965af789e197c26cafcd0",
+          "cases": [
+            "single-user-delete",
+            "bulk-delete-no-event"
+          ],
+          "casesSha256": "b95884e09ba7dc1b8d11c5b275f21f2e7f84036a5cbfab9e2179223acdd366f9"
+        },
+        {
+          "conditionId": "FUNCTIONS-EVENTS/auth-payload",
+          "originalPointer": "/conditions/16",
+          "originalSha256": "1c0f341aa0cb26b5a9148fb039cf8cb02bfbfe917612bad1bb84a19a882cdda3",
+          "cases": [
+            "handler-envelope",
+            "uid",
+            "email",
+            "empty-provider-data",
+            "event-metadata"
+          ],
+          "casesSha256": "4012f5f5501c315d2085cdb49f1f339d1001bc6bc2875b61b87a01cc9f11c9ec"
+        },
+        {
+          "conditionId": "FUNCTIONS-EVENTS/pubsub-published",
+          "originalPointer": "/conditions/17",
+          "originalSha256": "07538a144c44b2989d357e4abbedec767b363ee9dd032b66dc52b4f72c134e8a",
+          "cases": [
+            "handler-envelope",
+            "base64-data",
+            "attributes",
+            "message-id",
+            "publish-time"
+          ],
+          "casesSha256": "3e87c94548466e500fbb9341f51612a200ad39f117c44decf7f1c73e5170ef1b"
+        },
+        {
+          "conditionId": "FUNCTIONS-EVENTS/pubsub-topic-routing",
+          "originalPointer": "/conditions/18",
+          "originalSha256": "ed00b2e33c106f7cf23b2e1c36b1da06ce9bba1c916dc932a38e65eb56222200",
+          "cases": [
+            "matching-topic",
+            "nonmatching-topic",
+            "ordering-key"
+          ],
+          "casesSha256": "48d9308c070696798f09b75f5a68ab0ec48d27299057d0119e44606c94a78026"
+        },
+        {
+          "conditionId": "FUNCTIONS-EVENTS/delivery-retry-identity",
+          "originalPointer": "/conditions/19",
+          "originalSha256": "73e220dd41b3563f847a255831f2d08d6c31ebe938d3d99f2c7709fc4d2921dc",
+          "cases": [
+            "handler-failure",
+            "fail-once-then-success",
+            "retry-enabled",
+            "event-id-across-attempts"
+          ],
+          "casesSha256": "a1c37105683e775ec85cd8b66a36f2e66195b3539087ad148165188e70346872"
+        },
+        {
+          "conditionId": "FUNCTIONS-EVENTS/final-artifact-regression",
+          "originalPointer": "/conditions/20",
+          "originalSha256": "997482e656a59d8fe74d6a2189f4a193076def3255d814a47269370982e75c4b",
+          "cases": [
+            "two-production-recordings",
+            "same-source-final-artifact-comparison",
+            "workspace-regression"
+          ],
+          "casesSha256": "efdd5718123e255a6e23c60b8de47978bf6ac88e8f53fbd1b6e39478bc5a1485"
+        },
+        {
+          "conditionId": "FUNCTIONS-EVENTS/closure-review",
+          "originalPointer": "/conditions/21",
+          "originalSha256": "2c4afd5b2982c12e683ff11232dcc72480641c08dd96fffce4f23c07ac5a521b",
+          "cases": [
+            "independent-coordinator-approval"
+          ],
+          "casesSha256": "e1af64c5561b912078f34c17ded5a444565139ca6770ad58942f79c9e87b6187"
+        }
+      ],
+      "conditions": [],
+      "profileContract": null
+    },
+    {
+      "parent": "PUBSUB",
+      "publicationState": "UNKNOWN",
+      "track": "UNPUBLISHED_FROZEN",
+      "inventoryPath": null,
+      "sourceIdentity": {
+        "commit": "2f7da4b355f6ae4b3a69a6bb5392bbf4d00d0b07",
+        "gitObject": "2f7da4b355f6ae4b3a69a6bb5392bbf4d00d0b07:spec/compatibility/closure/PUBSUB.json",
+        "blob": "b88d71a4cb739431643b008e17081390304a4d3b",
+        "rawSha256": "75fc1fbab923cc3a6ddb0b01393a57ef85a61e76d58c41945ee7ae73fc55cfc5",
+        "snapshotPath": null,
+        "snapshotSha256": null
+      },
+      "conditionRegistry": [
+        {
+          "conditionId": "PUBSUB/topic-lifecycle",
+          "originalPointer": "/conditions/0",
+          "originalSha256": "70dec368432b330871adb47eaf4ab3b8f6d9641e0c9b1e9aa7dbbfc8b9961bb9",
+          "cases": [
+            "create-get-list-delete",
+            "labels",
+            "duplicate-create",
+            "missing-get-delete",
+            "list-topic-subscriptions",
+            "delete-topic-with-subscription"
+          ],
+          "casesSha256": "6cd022c32bbe659deebab33fbc41095f2d08663885d652ccc705129076f492d4"
+        },
+        {
+          "conditionId": "PUBSUB/resource-names",
+          "originalPointer": "/conditions/1",
+          "originalSha256": "0ea85827e35ed299050c9c8b0e7fa868d908cb949ce51e6a5c772ea9e1aa559c",
+          "cases": [
+            "valid-name",
+            "invalid-name",
+            "length-boundary",
+            "reserved-prefix",
+            "path-body-mismatch",
+            "invalid-resource-path"
+          ],
+          "casesSha256": "3ef25802231e03915e3733ed946ea77ddd90e8fdb0c480a472b60061a5e5143a"
+        },
+        {
+          "conditionId": "PUBSUB/list-pagination",
+          "originalPointer": "/conditions/2",
+          "originalSha256": "1a36090a15377275a288010a165613ca8f9966fa1bb921f6db8492a8a2d4336d",
+          "cases": [
+            "page-traversal",
+            "invalid-page-token",
+            "owned-resources-only"
+          ],
+          "casesSha256": "36c1d94fc9110a5d49cbe3205e357fe768f8106984d81c6d035a704763e5ef26"
+        },
+        {
+          "conditionId": "PUBSUB/subscription-lifecycle",
+          "originalPointer": "/conditions/3",
+          "originalSha256": "79277bbecee50296bd380e87a7fd1c721d4b586f175d6f00cc667bc598b27520",
+          "cases": [
+            "create-get-list-delete",
+            "default-ack-deadline",
+            "explicit-ack-deadline",
+            "missing-topic",
+            "duplicate-create",
+            "missing-subscription"
+          ],
+          "casesSha256": "cadb620e33e07a9d566f42063f39b0d4e04862a03883f9cb62911ae7421fa0bf"
+        },
+        {
+          "conditionId": "PUBSUB/subscription-configuration",
+          "originalPointer": "/conditions/4",
+          "originalSha256": "62041a8621e458b80c2b6fb96a2364924e6179ceac09303461ca2bfc1a76a5dc",
+          "cases": [
+            "message-retention-duration",
+            "retain-acked-messages",
+            "filter",
+            "dead-letter-policy",
+            "retry-policy",
+            "enable-message-ordering",
+            "create-get-round-trip",
+            "atomic-field-mask-update",
+            "omitted-field-preservation",
+            "immutable-field-update",
+            "duration-boundaries",
+            "ack-deadline-boundaries"
+          ],
+          "casesSha256": "35ed43174ac77dd2bed9a62d5c6c8f9dd776d4c87294f079cad01277d53c4262"
+        },
+        {
+          "conditionId": "PUBSUB/push-configuration",
+          "originalPointer": "/conditions/5",
+          "originalSha256": "d3afd929d2e99a7e99418c3241d31637fda434b4fc34fcb6deb99bffdf3ed76c",
+          "cases": [
+            "create-push-config",
+            "get-push-config",
+            "modify-push-config",
+            "switch-to-pull",
+            "invalid-push-config",
+            "no-publications"
+          ],
+          "casesSha256": "f2d47dde91131c133b8c07e5741108cdca1467faea4b9b63990b5d8cd0b6b279"
+        },
+        {
+          "conditionId": "PUBSUB/publish-wire",
+          "originalPointer": "/conditions/6",
+          "originalSha256": "d23aa8a989c00d02da4b5a04104140c94873cbdb9600efc5a4dcd551b389fcbc",
+          "cases": [
+            "binary-data",
+            "attributes-only",
+            "data-only",
+            "ordering-key",
+            "mixed-batch",
+            "empty-message",
+            "invalid-base64",
+            "nonempty-unique-message-ids",
+            "publish-pull-id-correlation"
+          ],
+          "casesSha256": "3759d617c152981aa8da82e29bceee4d83d2c308b5360ebb79a5db352fd9cb9f"
+        },
+        {
+          "conditionId": "PUBSUB/publish-limits",
+          "originalPointer": "/conditions/7",
+          "originalSha256": "3785e26ef40cca8f0e131126b74050e0c92aa5ffa43c72e60814aac4e60ce27f",
+          "cases": [
+            "request-bytes-boundary",
+            "batch-count-boundary",
+            "message-bytes-boundary",
+            "attribute-count-boundary",
+            "attribute-size-boundary",
+            "ordering-key-bytes-boundary"
+          ],
+          "casesSha256": "34498d55ffbd73f8eff84faa1ea55c86fa9e9f9b1d40cb86fd143cc3538dfc1d"
+        },
+        {
+          "conditionId": "PUBSUB/pull-ack",
+          "originalPointer": "/conditions/8",
+          "originalSha256": "ab08cd26202931c29d27aca62c0a2f7f7a1a8e54d02fd437e345071b631cb895",
+          "cases": [
+            "empty-pull",
+            "max-messages-validity",
+            "publish-pull-ack",
+            "multiple-subscriptions",
+            "acked-not-redelivered",
+            "unknown-ack-id",
+            "repeated-ack-id",
+            "stale-ack-id"
+          ],
+          "casesSha256": "6d889dbf1a6e263b6846a360afdad493558f65a8ebc13aeada0af68233e5cb2f"
+        },
+        {
+          "conditionId": "PUBSUB/nack-deadline-redelivery",
+          "originalPointer": "/conditions/9",
+          "originalSha256": "fbc00b9919c0dd66d369daeeb88b4b8ddf98a7ee8d28a77a39f170ac64240f88",
+          "cases": [
+            "nack-zero",
+            "deadline-extension",
+            "invalid-deadline",
+            "deadline-expiry",
+            "redelivery-id-correlation",
+            "cancel-without-ack"
+          ],
+          "casesSha256": "c5cef74d71bf94c0bf740ca76b2c82dc0e272cbf198fd0f45384653c7ee6ab41"
+        },
+        {
+          "conditionId": "PUBSUB/filter-evaluation",
+          "originalPointer": "/conditions/10",
+          "originalSha256": "2768740f84b9e6ddf026c015cd65f2422a7e3be42da4e62a974234edda349af2",
+          "cases": [
+            "match",
+            "nonmatch",
+            "missing-attribute",
+            "attribute-exists",
+            "inequality",
+            "conjunction",
+            "disjunction",
+            "negation",
+            "invalid-filter",
+            "filter-update-refusal"
+          ],
+          "casesSha256": "c96d03d35a159e9c79391af67c0d5038eeaea60e2ad38a9c7ee48cc37096ea9a"
+        },
+        {
+          "conditionId": "PUBSUB/ordering",
+          "originalPointer": "/conditions/11",
+          "originalSha256": "487e1de94d650e54fe72b0e34df4de712f398948c2755fd0b5a286d08fa0cc2b",
+          "cases": [
+            "single-key-sequence",
+            "separate-keys",
+            "ordering-disabled",
+            "nack-blocks-key",
+            "ack-unblocks-key"
+          ],
+          "casesSha256": "c0e2526be19c0279835d8d11e609060ae789b29d5ce221182252720a3997c322"
+        },
+        {
+          "conditionId": "PUBSUB/retry-dead-letter",
+          "originalPointer": "/conditions/12",
+          "originalSha256": "3cd96c703fedc7e2dcf91e50548b1c34ae767e6de72cd396a91e2309d9965c1a",
+          "cases": [
+            "policy-round-trip",
+            "delivery-attempt-without-policy",
+            "delivery-attempt-with-policy",
+            "eventual-forwarding",
+            "forwarded-payload-identity",
+            "invalid-policy"
+          ],
+          "casesSha256": "7670468e6f63fbe8d1c6720a0b3ded6ef150d0996136a8c5f222757be167cc74"
+        },
+        {
+          "conditionId": "PUBSUB/streaming-pull",
+          "originalPointer": "/conditions/13",
+          "originalSha256": "8ef797ff437801d42d85ec35d68e106f19ef3e74ed09ad95616d4b2869fa8323",
+          "cases": [
+            "opening-frame",
+            "future-publications",
+            "in-stream-ack",
+            "in-stream-nack",
+            "in-stream-deadline-update",
+            "flow-control",
+            "client-cancel",
+            "half-close",
+            "missing-subscription",
+            "invalid-opening-frame",
+            "invalid-update-frame"
+          ],
+          "casesSha256": "c6d8c3d2b60440490f371fa4f18f840c1561b56d45c994f4fdceb695d2b914a6"
+        },
+        {
+          "conditionId": "PUBSUB/snapshot-seek",
+          "originalPointer": "/conditions/14",
+          "originalSha256": "efef4b123a53636154a28595530332a5a086936ac3d9da172d7a058ff2f1556a",
+          "cases": [
+            "snapshot-lifecycle",
+            "snapshot-labels",
+            "snapshot-topic-relationship",
+            "backlog-replay",
+            "post-snapshot-publication",
+            "seek-time-retain-true",
+            "seek-time-retain-false",
+            "wrong-topic-target",
+            "missing-snapshot",
+            "snapshot-lifetime-shape"
+          ],
+          "casesSha256": "30e989abd517a365d011843f874eee2d4ef92ce51402fc20e67dc9b7f82cf06e"
+        },
+        {
+          "conditionId": "PUBSUB/errors-authentication",
+          "originalPointer": "/conditions/15",
+          "originalSha256": "86ddf220003daf0b0da5482a876fd4ec359bf9953f5b79812ef9b95c8457bfca",
+          "cases": [
+            "missing-resource",
+            "invalid-argument",
+            "duplicate-resource",
+            "no-token",
+            "invalid-token",
+            "canonical-error-shape"
+          ],
+          "casesSha256": "91b08405c2efbb5f1cacb0093089dfba5f580399954b9ef5bd8e98b515f69e28"
+        },
+        {
+          "conditionId": "PUBSUB/final-artifact-regression",
+          "originalPointer": "/conditions/16",
+          "originalSha256": "9b932d1aba4070908cdb5a01b4e6b5655aa40001dae3302c899f5b55579ee035",
+          "cases": [
+            "strict-production",
+            "emulator-official",
+            "complete-case-set",
+            "clean-source-build",
+            "same-final-artifact"
+          ],
+          "casesSha256": "cf3150c2164eba8995cb1f6826fcb68aa31faa9e4b06b120370bc15e4f182ef2"
+        },
+        {
+          "conditionId": "PUBSUB/closure-review",
+          "originalPointer": "/conditions/17",
+          "originalSha256": "d14938da0d9d776c05bea51c4f6b8c92b84595532d821850c7778f4c9561662b",
+          "cases": [
+            "independent-approval"
+          ],
+          "casesSha256": "a16ae54f4629a1671e44cb0f124ae057a68e403fdcdcb38fb9515dd03b2f0b7e"
+        }
+      ],
+      "conditions": [],
+      "profileContract": null
+    },
+    {
+      "parent": "EVENTARC",
+      "publicationState": "UNKNOWN",
+      "track": "UNPUBLISHED_FROZEN",
+      "inventoryPath": null,
+      "sourceIdentity": {
+        "commit": "2f7da4b355f6ae4b3a69a6bb5392bbf4d00d0b07",
+        "gitObject": "2f7da4b355f6ae4b3a69a6bb5392bbf4d00d0b07:spec/compatibility/closure/EVENTARC.json",
+        "blob": "240597c17733022bf23439757a236e30c7da05b2",
+        "rawSha256": "a85cf91322b7c087ce9ba5635f2f49fa24c0c196c734d44f66cc3b7ef42fc68e",
+        "snapshotPath": null,
+        "snapshotSha256": null
+      },
+      "conditionRegistry": [
+        {
+          "conditionId": "EVENTARC/channel-lifecycle",
+          "originalPointer": "/conditions/0",
+          "originalSha256": "2e9e6613ec4f46c55069d016f1a3ad6c8fafeebe824daa2d7c4d328b12d9a275",
+          "cases": [
+            "providerless-create-capability",
+            "get-channel",
+            "list-channels",
+            "duplicate-channel",
+            "invalid-channel-name",
+            "readiness-shape",
+            "delete-owned-channel"
+          ],
+          "casesSha256": "867635785401a13c8bf39071a807178564c3333b2d5d74a6dda94b350c4b0999"
+        },
+        {
+          "conditionId": "EVENTARC/publish-envelope",
+          "originalPointer": "/conditions/1",
+          "originalSha256": "dfe24f3b475b0282dcc4a1f9319b73d11b45f3f304d335a34eaa3dc6df3d68d8",
+          "cases": [
+            "single-event",
+            "multiple-events",
+            "empty-batch",
+            "required-attributes",
+            "invalid-attribute-type",
+            "invalid-timestamp",
+            "response-shape",
+            "event-id-correlation"
+          ],
+          "casesSha256": "f4b9a202bcd092340acb6b7a297acc9f60ac77e86247b42ee5c7adbe43db7fd5"
+        },
+        {
+          "conditionId": "EVENTARC/publish-content",
+          "originalPointer": "/conditions/2",
+          "originalSha256": "ecd1f27026613587bd53ff3bd2dcf11d5e778c5cf108273f06682346ff7d1250",
+          "cases": [
+            "json-object",
+            "json-scalar",
+            "json-null",
+            "json-array",
+            "text",
+            "binary-data",
+            "absent-data",
+            "invalid-json",
+            "invalid-base64",
+            "oneof-collision"
+          ],
+          "casesSha256": "392fd6512e06746802a8bf31469e676d598dcc227bb9d1e36af59d326368c702"
+        },
+        {
+          "conditionId": "EVENTARC/admin-sdk-publish",
+          "originalPointer": "/conditions/3",
+          "originalSha256": "d2397f282dd2c80cbfffdc5f116cfb3b2db30b879c8d5bf8556cd71c80376312",
+          "cases": [
+            "full-channel",
+            "relative-channel",
+            "default-channel",
+            "single-event",
+            "multiple-events",
+            "generated-metadata",
+            "caller-metadata",
+            "allowed-event-types",
+            "client-validation-refusal"
+          ],
+          "casesSha256": "bfe529a288b7b2ba03312504a1d6c2ec277f76ec18768aae98d4b9fc266e4658"
+        },
+        {
+          "conditionId": "EVENTARC/publish-limits",
+          "originalPointer": "/conditions/4",
+          "originalSha256": "395b4203782c5e99ce5b027ab2e9db8e49026f1c7a653df32597b5da45594717",
+          "cases": [
+            "request-bytes-boundary",
+            "event-count-boundary",
+            "event-bytes-boundary",
+            "attribute-shape-boundary",
+            "batch-delivered-subset"
+          ],
+          "casesSha256": "64eb68753c2c7525bd077940c2f6c3135ff7d6bff7bb2528c76b6782d144edc2"
+        },
+        {
+          "conditionId": "EVENTARC/custom-handler-envelope",
+          "originalPointer": "/conditions/5",
+          "originalSha256": "929cd2368937382143c5da622d936f5e22252c377cfc6e4cddbb885a71b88a6c",
+          "cases": [
+            "required-attributes",
+            "optional-attribute-absence",
+            "extension-attributes",
+            "json-data",
+            "text-data",
+            "binary-data",
+            "stable-id-correlation"
+          ],
+          "casesSha256": "5e4dc7222d37118c98c21c89861b6a1d1ac43af5dc80861494165f3b0b859466"
+        },
+        {
+          "conditionId": "EVENTARC/trigger-filters",
+          "originalPointer": "/conditions/6",
+          "originalSha256": "ef68ef934cedbfd68ddc3d4ae539c70af22117f944e641d1fddd264a62e04bf0",
+          "cases": [
+            "type",
+            "source",
+            "extension-attribute",
+            "missing-attribute",
+            "nonmatch",
+            "multiple-filters",
+            "channel-isolation",
+            "multiple-handlers",
+            "unsupported-filter-refusal"
+          ],
+          "casesSha256": "92b608dcb5be6226c46d34710eeaba1043cb73e1bf0932ed0f0a3a689c0284a4"
+        },
+        {
+          "conditionId": "EVENTARC/delivery-retry-identity",
+          "originalPointer": "/conditions/7",
+          "originalSha256": "56a14da30f9898404513013fcfbe7117fa1464d30f0604ca5eeb2fef7c97cd74",
+          "cases": [
+            "fail-then-succeed",
+            "stable-id-and-data"
+          ],
+          "casesSha256": "9e9f4d306a676fbf9439450cfaa5e5e88814f8f5ca31f49bfe838b0a8db8c09b"
+        },
+        {
+          "conditionId": "EVENTARC/errors-authentication",
+          "originalPointer": "/conditions/8",
+          "originalSha256": "3b45c5cda2acc8f483bfdf6db704a0bbd9e5ebed78b28da58277c01028920c21",
+          "cases": [
+            "missing-channel",
+            "invalid-event",
+            "wrong-project-location",
+            "no-token",
+            "invalid-token",
+            "canonical-error-shape"
+          ],
+          "casesSha256": "1e4584a4cc3d8d2d3d5fab4475f14e985e02069d408350df04c8efbc3b583102"
+        },
+        {
+          "conditionId": "EVENTARC/final-artifact-regression",
+          "originalPointer": "/conditions/9",
+          "originalSha256": "2e5188eb96559ca2b22a8787809fbe0fdfe65d3b33747b6d546c899b7231a3ff",
+          "cases": [
+            "strict-production",
+            "emulator-official",
+            "complete-case-set",
+            "same-fixture-source",
+            "same-final-artifact",
+            "runner-tree"
+          ],
+          "casesSha256": "eb8ebbac36024d30ecd552b23577be9b1e2aad96e5614909a8911f47b9c8aed7"
+        },
+        {
+          "conditionId": "EVENTARC/closure-review",
+          "originalPointer": "/conditions/10",
+          "originalSha256": "6c36a23bf89cd1ee5756dff05ff969cc720baaf988383457b89cfcb97481ae38",
+          "cases": [
+            "independent-approval"
+          ],
+          "casesSha256": "a16ae54f4629a1671e44cb0f124ae057a68e403fdcdcb38fb9515dd03b2f0b7e"
+        }
+      ],
+      "conditions": [],
+      "profileContract": null
+    }
+  ]
+}

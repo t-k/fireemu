@@ -25,6 +25,11 @@ LOCK = f"{CLOSURE_DIR}/record-digests.json"
 WORKFLOW = ".github/workflows/compatibility-inventory.yml"
 PREFIXES = ("spec/", "conformance/", "tools/", "docs/", "crates/", "verification/")
 PINNED_PREFIXES = ("spec/", "conformance/")
+PROJECTION_INPUTS = (
+    "spec/compatibility/production-parent-registry.json",
+    "spec/compatibility/official-compatibility/registry.json",
+)
+HISTORY_DIR = "spec/compatibility/official-compatibility/history/e57a78e0"
 REFERENCE = re.compile(r"^((?:spec|conformance|tools|docs|crates|verification)/[A-Za-z0-9_./()-]+)(#[^\s]+)?(?::|\s|$)")
 DIGEST = re.compile(r"^[0-9a-f]{64}$")
 
@@ -34,6 +39,7 @@ class Reference:
     closure: str
     path: str
     fragment: str | None
+    historical: bool = False
 
 
 def _closures(root: Path) -> list[Path]:
@@ -65,15 +71,27 @@ def _dicts(value):
             yield from _dicts(item)
 
 
+def _reference_documents(root: Path):
+    yield from ((path, False) for path in _closures(root))
+    for name in PROJECTION_INPUTS:
+        path = root / name
+        if path.is_file():
+            yield path, False
+    # Raw snapshots are historical integrity inputs, never execution authority.
+    yield from ((path, True) for path in sorted((root / HISTORY_DIR).glob("*.json")))
+
+
 def closure_references(root: Path) -> list[Reference]:
     references = []
-    for closure in _closures(root):
+    for closure, historical in _reference_documents(root):
+        if not historical and closure.relative_to(root).as_posix() in PROJECTION_INPUTS:
+            references.append(Reference(closure.name, closure.relative_to(root).as_posix(), None))
         document = json.loads(closure.read_text())
         for text in _strings(document):
             match = REFERENCE.match(text)
             if match:
                 fragment = match.group(2)[1:] if match.group(2) else None
-                references.append(Reference(closure.name, match.group(1), fragment))
+                references.append(Reference(closure.name, match.group(1), fragment, historical))
     return references
 
 
@@ -128,6 +146,12 @@ def retired_suites(root: Path) -> list[str]:
 
 def check(root: Path) -> list[str]:
     problems = []
+    if any((root / name).exists() for name in PROJECTION_INPUTS):
+        problems.extend(
+            f"projection input {name} is missing"
+            for name in PROJECTION_INPUTS
+            if not (root / name).is_file()
+        )
     references = closure_references(root)
     retired = retired_suites(root)
     for ref in references:
@@ -137,9 +161,9 @@ def check(root: Path) -> list[str]:
             continue
         if ref.fragment and target.is_file() and not _fragment_present(target, ref.fragment):
             problems.append(f"{ref.closure}: {ref.path}#{ref.fragment} names no entry in the file")
-        if any(ref.path == suite or ref.path.startswith(f"{suite}/") for suite in retired):
+        if not ref.historical and any(ref.path == suite or ref.path.startswith(f"{suite}/") for suite in retired):
             problems.append(f"{ref.closure}: {ref.path} is in a retired suite CI no longer runs")
-    for closure in _closures(root):
+    for closure, _ in _reference_documents(root):
         for entry in _dicts(json.loads(closure.read_text())):
             for key, value in entry.items():
                 if not (key.endswith("Path") and isinstance(value, str)):
@@ -147,6 +171,8 @@ def check(root: Path) -> list[str]:
                 digest_key = f"{key[: -len('Path')]}Sha256"
                 digest = entry.get(digest_key)
                 if not (isinstance(digest, str) and DIGEST.match(digest)):
+                    if closure.relative_to(root).as_posix() in PROJECTION_INPUTS and digest_key in entry:
+                        problems.append(f"{closure.name}: {digest_key} is invalid")
                     continue
                 target = root / value
                 if target.is_file() and _sha256(target) != digest:

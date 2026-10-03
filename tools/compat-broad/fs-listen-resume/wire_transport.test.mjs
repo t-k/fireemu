@@ -714,6 +714,7 @@ test("reentrant callbacks cannot send after closing or replacing the active owne
           await assert.rejects(send(), /closed|ownership/, `${boundary}/${action}`);
         else assert.throws(send, /closed|ownership/, `${boundary}/${action}`);
         assert.equal(h.sent.grpc + h.sent.auth, 0);
+        if (boundary.startsWith("allow")) assert.equal(h.budget.snapshot().total, 0);
         assert.equal(h.sent.connects, boundary.endsWith("request") ? 1 : 0);
         const failure = action === "foreign" ? "ownership" : "closed";
         assert.equal(h.guard.snapshot().failures[failure], 1);
@@ -841,7 +842,7 @@ test("inherited accessor prototype drift is retained without invoking a foreign 
       value = next;
     },
   });
-  const globals = Object.create(prototype);
+  const globals = Object.create(Object.create(prototype));
   const http2 = { connect: () => ({ request() {} }) };
   const guard = module.installNodeWireGuard({
     http2,
@@ -989,4 +990,25 @@ test("getter lifecycle changes immediately before send retain closed refusal pro
   assert.equal(budget.snapshot().total, 0);
   assert.equal(guard.snapshot().failures.closed, 1);
   assert.equal(guard.snapshot().failures.ownership, 0);
+});
+
+test("native connect ownership drift refuses late session hooks", () => {
+  const originalRequest = () => "stream";
+  const session = { request: originalRequest };
+  const foreignConnect = () => session;
+  const http2 = {
+    connect() {
+      http2.connect = foreignConnect;
+      return session;
+    },
+  };
+  const globals = { fetch() {} };
+  const budget = createWireBudget({ maxRequests: 3, cleanupReserve: 1 });
+  const guard = module.installNodeWireGuard({ http2, globals, budget, phase: () => "observation" });
+  assert.throws(() => http2.connect("http://127.0.0.1:1"), /ownership/);
+  assert.equal(session.request, originalRequest);
+  assert.equal(budget.snapshot().total, 0);
+  assert.equal(guard.snapshot().failures.ownership, 1);
+  guard.close();
+  assert.equal(http2.connect, foreignConnect);
 });

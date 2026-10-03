@@ -36,13 +36,14 @@ def validate_runtime_inputs(expected, actual):
         raise ValueError("runtime inputs differ")
 
 
-def recording_semantics(receipt, table):
+def recording_semantics(receipt, table, *, local_diagnostics=False):
     """Derive every declared response and cleanup from the existing closed-graph replay.
 
     Timestamp values are volatile. Their ordering, equality and wire precision remain visible.
     Marker identities and issued token values are replaced only by their declared roles.
     """
     projected = projection(receipt, table)
+    pairs = diagnostic_resource_pairs(receipt, table)["steps"] if local_diagnostics else None
     rows = receipt["steps"] + receipt["cleanupSteps"]
     stamps = []
 
@@ -71,12 +72,12 @@ def recording_semantics(receipt, table):
         result = row["result"]
         if row["transport"] == "rest" and not (200 <= result["http"] < 300 or 400 <= result["http"] < 500):
             raise ValueError("HTTP outcome is indeterminate")
-        details = result["details"]
+        details = normalize(result["details"], pairs[row["site"]]) if pairs is not None else result["details"]
         for role, token in receipt["tokens"].items():
             details = details.replace(token["value"], f"<token:{role}>")
         details = details.replace(receipt["nonce"], "<nonce>").replace(receipt["ownerId"], "<owner>")
         return {"transport": row["transport"], "rpc": row["rpc"], "caseId": row["caseId"],
-                "code": result["code"], "http": result["http"], "details": normalize(details),
+                "code": result["code"], "http": result["http"], "details": details if pairs is not None else normalize(details),
                 "read": reads.get(row["site"]),
                 "versions": {name: {"rank": ranks[moment], "layout": layout} for name, moment, layout in timestamps(result.get("response"), row["transport"])} }
 
@@ -87,8 +88,33 @@ def recording_semantics(receipt, table):
             "commitTimes": commit_relations(receipt["steps"])}
 
 
-def normalize(text):
-    return text.replace("demo-program", "fireemu-oracle-sbx")
+def diagnostic_resource_pairs(receipt, table):
+    """Bind each closed request's declared document resources to its local wire resources."""
+    projection(receipt, table)
+    plan = compile_plan(table, receipt["nonce"], receipt["ownerId"])
+    declared = set(plan["documents"].values())
+    source_database = plan["database"]
+    local_database = "projects/demo-program/databases/(default)"
+    result = {"steps": {}, "cases": {}}
+    for row in receipt["steps"] + receipt["cleanupSteps"]:
+        request = row.get("request") or {}
+        resources = [request.get("name"), *request.get("documents", []),
+                     *(write.get("update", {}).get("name") for write in request.get("writes", []))]
+        pairs = {source.replace(source_database + "/", local_database + "/", 1): source
+                 for source in resources if source in declared}
+        result["steps"][row["site"]] = pairs
+        if row.get("caseId"):
+            result["cases"][row["caseId"]] = {local.replace(receipt["nonce"], "<nonce>"): source.replace(receipt["nonce"], "<nonce>")
+                                             for local, source in pairs.items()}
+    return result
+
+
+def normalize(text, resource_pairs=None):
+    if resource_pairs is None:
+        return text.replace("demo-program", "fireemu-oracle-sbx")
+    for local, source in resource_pairs.items():
+        text = text.replace('"' + local + '"', '"' + source + '"')
+    return text
 
 
 def commit_relations(steps):
@@ -112,7 +138,7 @@ def commit_relations(steps):
     return relations
 
 
-def compare(production, local, production_relations, local_relations):
+def compare(production, local, production_relations, local_relations, *, diagnostic_pairs=None):
     cases, reads, times = [], [], []
     for section, key in (("cases", "caseId"), ("reads", "site")):
         for value in (production, local):
@@ -124,9 +150,11 @@ def compare(production, local, production_relations, local_relations):
     by_case = {case["caseId"]: case for case in local["cases"]}
     for case in production["cases"]:
         other = by_case.get(case["caseId"])
-        same = other is not None and other["code"] == case["code"] and normalize(other["details"]) == case["details"] and all(other.get(key) == case.get(key) for key in ("transport", "rpc"))
-        cases.append({"caseId": case["caseId"], "production": {"code": case["code"], "details": case["details"][:100]},
-                      "local": None if other is None else {"code": other["code"], "details": normalize(other["details"])[:100]}, "match": same})
+        pairs = None if diagnostic_pairs is None else diagnostic_pairs.get(case["caseId"], {})
+        details = None if other is None else normalize(other["details"], pairs)
+        same = other is not None and other["code"] == case["code"] and details == case["details"] and all(other.get(key) == case.get(key) for key in ("transport", "rpc"))
+        cases.append({"caseId": case["caseId"], "production": {"code": case["code"], "details": case["details"][:100] if diagnostic_pairs is None else case["details"]},
+                      "local": None if other is None else {"code": other["code"], "details": details[:100] if diagnostic_pairs is None else details}, "match": same})
     by_site = {read["site"]: read for read in local["reads"]}
     for read in production["reads"]:
         other = by_site.get(read["site"])
@@ -179,8 +207,8 @@ def main():
         local = projection(receipt, table)
         production_relations = commit_relations(source["steps"]) if recorded else None
         local_relations = commit_relations(receipt["steps"])
-        result["cases"], result["reads"], result["commitTimes"] = compare(production, local, production_relations, local_relations)
-        local_semantics = recording_semantics(receipt, table)
+        result["cases"], result["reads"], result["commitTimes"] = compare(production, local, production_relations, local_relations, diagnostic_pairs=diagnostic_resource_pairs(receipt, table)["cases"])
+        local_semantics = recording_semantics(receipt, table, local_diagnostics=True)
         result["allSteps"] = [{"site": site, "production": expected, "local": local_semantics["steps"].get(site), "match": expected == local_semantics["steps"].get(site)} for site, expected in (production_semantics or {}).get("steps", {}).items()]
         result["cleanupMatch"] = None if production_semantics is None else all(production_semantics[key] == local_semantics[key] for key in ("cleanupSteps", "tokens", "cleanup"))
         rows = result["cases"] + result["reads"] + (result["commitTimes"] or [])

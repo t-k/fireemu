@@ -809,6 +809,16 @@ def test_cli_binds_the_validated_table_project_to_the_local_wire(tmp_path, monke
     monkeypatch.delenv("COMPARE_RUNTIME_PROOF", raising=False)
     monkeypatch.setattr(wire, "discover_runtime", lambda _node: {})
     calls = []
+    semantic_contexts, case_contexts = [], []
+    original_semantics, original_compare = tool.recording_semantics, tool.compare
+    def observe_semantics(*args, **kwargs):
+        semantic_contexts.append(kwargs.get("local_diagnostics", False))
+        return original_semantics(*args, **kwargs)
+    def observe_compare(*args, **kwargs):
+        case_contexts.append(kwargs.get("diagnostic_pairs"))
+        return original_compare(*args, **kwargs)
+    monkeypatch.setattr(tool, "recording_semantics", observe_semantics)
+    monkeypatch.setattr(tool, "compare", observe_compare)
     monkeypatch.setattr(wire, "NodeWire", lambda *args, **kwargs: calls.append(kwargs) or object())
     class FixtureCollector:
         def __init__(self, *_args, **_kwargs): pass
@@ -818,6 +828,9 @@ def test_cli_binds_the_validated_table_project_to_the_local_wire(tmp_path, monke
     tool.main()
     assert len(calls) == 1
     assert calls[0].get("project") == expected_project
+    assert semantic_contexts == [False, True]
+    assert len(case_contexts) == 1 and case_contexts[0] is not None
+    assert set(case_contexts[0]) == {row["caseId"] for row in receipt["observations"]}
     assert calls[0]["target"] == {"kind": "local", "host": "127.0.0.1", "port": 12345}
     assert json.loads(output.read_text())["mismatches"] == 0
 
@@ -876,3 +889,88 @@ def test_generated_table_projects_rebase_only_declared_request_fields(project, n
     assert spec["request"]["transaction"] == original["transaction"]
     assert spec["request"]["literal"] == database
     assert request == original
+
+
+
+@pytest.mark.parametrize("project", ["fireemu-oracle-sbx", "fireemu-oracle-txn"])
+def test_local_diagnostic_resource_pairs_replace_only_complete_quoted_documents(project):
+    local = "projects/demo-program/databases/(default)/documents/oracle/<nonce>/txn-p13b/a"
+    source = local.replace("projects/demo-program/", f"projects/{project}/", 1)
+    pairs = {local: source}
+    assert tool.normalize(f'Document "{local}" not found.', pairs) == f'Document "{source}" not found.'
+    for foreign in [local.replace("demo-program", "demo-program-extra"), local.replace("demo-program", "demo-program2"), local.replace("demo-program", "foreign-project"), local.replace("(default)", "foreign"), local + "-extra", local[:-1] + "foreign", local, "bare demo-program"]:
+        text = foreign if foreign in [local, "bare demo-program"] else f'Document "{foreign}" not found.'
+        assert tool.normalize(text, pairs) == text
+    assert tool.normalize(f'Document "{source}" not found.', pairs) == f'Document "{source}" not found.'
+
+
+def test_local_case_comparison_preserves_full_suffix_and_code_differences():
+    local = "projects/demo-program/databases/(default)/documents/oracle/<nonce>/txn-p13b/a"
+    source = local.replace("demo-program", "fireemu-oracle-txn", 1)
+    suffix = " important suffix " + "x" * 140
+    expected = projection(code=5, details=f'Document "{source}" not found.' + suffix)
+    actual = projection(code=5, details=f'Document "{local}" not found.' + suffix)
+    pairs = {"c": {local: source}}
+    row = tool.compare(expected, actual, None, {}, diagnostic_pairs=pairs)[0][0]
+    assert row["match"] and row["production"]["details"].endswith(suffix) and row["local"]["details"].endswith(suffix)
+    actual["cases"][0]["details"] += " meaningful change"
+    row = tool.compare(expected, actual, None, {}, diagnostic_pairs=pairs)[0][0]
+    assert not row["match"] and row["local"]["details"].endswith(" meaningful change")
+    actual["cases"][0]["details"] = f'Document "{local}" not found.' + suffix
+    actual["cases"][0]["code"] = 3
+    assert not tool.compare(expected, actual, None, {}, diagnostic_pairs=pairs)[0][0]["match"]
+
+
+def test_diagnostic_pairs_are_derived_from_each_validated_closed_request():
+    receipt, table = toy_recording()
+    pairs = tool.diagnostic_resource_pairs(receipt, table)
+    assert set(pairs["steps"]) == {row["site"] for row in receipt["steps"] + receipt["cleanupSteps"]}
+    for row in receipt["steps"] + receipt["cleanupSteps"]:
+        request = row["request"]
+        declared = [request.get("name"), *request.get("documents", []), *(write.get("update", {}).get("name") for write in request.get("writes", []))]
+        for local, source in pairs["steps"][row["site"]].items():
+            assert source in declared
+            assert local == source.replace("projects/fireemu-oracle-sbx/databases/(default)/", "projects/demo-program/databases/(default)/", 1)
+    changed = copy.deepcopy(receipt)
+    changed["steps"][0]["request"]["name"] += "-foreign"
+    with pytest.raises(ValueError): tool.diagnostic_resource_pairs(changed, table)
+
+
+@settings(max_examples=30, deadline=None)
+@given(st.sampled_from(["fireemu-oracle-sbx", "fireemu-oracle-txn"]), st.text(alphabet="abcdefghijklmnopqrstuvwxyz0123456789-", min_size=1, max_size=20), st.text(alphabet="abc xyz", min_size=101, max_size=150))
+def test_generated_exact_document_pairs_keep_foreign_prefixes_and_full_text(project, role, suffix):
+    local = f"projects/demo-program/databases/(default)/documents/oracle/<nonce>/test/{role}"
+    source = local.replace("projects/demo-program/", f"projects/{project}/", 1)
+    pairs = {local: source}
+    text = f'prefix "{local}" suffix ' + suffix
+    assert tool.normalize(text, pairs) == f'prefix "{source}" suffix ' + suffix
+    foreign = text.replace(f'/{role}"', f'/{role}-foreign"')
+    assert tool.normalize(foreign, pairs) == foreign
+    assert tool.normalize(text + "demo-program", pairs).endswith(suffix + "demo-program")
+
+
+def test_native_semantic_publication_keeps_its_existing_default_boundary():
+    receipt, table = toy_recording()
+    row = receipt["steps"][0]
+    row["result"]["details"] += " bare demo-program"
+    original = tool.recording_semantics(receipt, table)
+    assert "bare fireemu-oracle-sbx" in original["steps"][row["site"]]["details"]
+    local = tool.recording_semantics(receipt, table, local_diagnostics=True)
+    assert "bare demo-program" in local["steps"][row["site"]]["details"]
+
+
+@pytest.mark.parametrize("mutation", ["http", "code", "precision"])
+def test_local_diagnostic_context_preserves_status_codes_and_timestamp_precision(mutation):
+    receipt, table = toy_recording()
+    baseline = tool.recording_semantics(receipt, table, local_diagnostics=True)
+    changed = copy.deepcopy(receipt)
+    if mutation == "http": changed["steps"][4]["result"]["http"] = 201
+    if mutation == "code": changed["steps"][4]["result"]["code"] = 3
+    if mutation == "precision":
+        stamp = changed["steps"][14]["result"]["response"]["commitTime"]
+        changed["steps"][14]["result"]["response"]["commitTime"] = stamp.split(".")[0] + "Z"
+    for observation in changed["observations"]:
+        observation["result"] = copy.deepcopy(next(row["result"] for row in changed["steps"] if row["site"] == observation["site"]))
+    try: actual = tool.recording_semantics(changed, table, local_diagnostics=True)
+    except ValueError: return
+    assert actual != baseline

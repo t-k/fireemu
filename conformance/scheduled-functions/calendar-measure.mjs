@@ -804,12 +804,21 @@ async function postVerdictCleanup({ accDir, root, version, launchTime, chain, ex
     started: root?.started ?? "unknown",
     harnessVersion: version,
   });
+  const queries = [];
+  const rawExec = post.execFile;
+  post.execFile = async (file, args, options, purpose) => {
+    const answer = await rawExec(file, args, options, purpose);
+    queries.push({ file, args, purpose, answer });
+    return answer;
+  };
   try {
-    return await cleanupOwned({
+    const cleanup = await cleanupOwned({
       inventory: () => inventoryPass(post),
       signal: (target) => post.verifiedSignal(identityOf(target), "SIGKILL", async () => process.kill(target.pid, "SIGKILL")),
       context: { chain, launchTime, recorded: extra.identities, injected: extra.injected, selfPid: process.pid },
     });
+    post.close();
+    return { ...cleanup, queries, rawRecords: (await readFile(join(accDir, "post-verdict.jsonl"))).toString("base64") };
   } finally {
     post.close();
   }
@@ -930,8 +939,7 @@ export async function measure(planPath, { planBytes, runRoot } = {}) {
 
 /** Condition (G): the certificate over one refusal report and the control reports. */
 export async function certify(listPath, { requireCampaign = false } = {}) {
-  if (requireCampaign)
-    return { verdict: "fail", problems: ["a sealed native campaign is required"], certificate: null };
+  if (requireCampaign) return certifyCampaignManifest(listPath);
   const list = JSON.parse(await readFile(listPath, "utf8"));
   const load = async (path) => {
     const bytes = await readFile(path).catch(() => null);
@@ -1027,4 +1035,253 @@ export async function cleanupOwned({ inventory, signal, context }) {
   const remaining = cleanupTargets({ ...context, rows: after });
   const uncertain = after.some((row) => row.sid === "ESRCH" || !Number.isSafeInteger(row.sid) || /^Z/.test(row.stat ?? ""));
   return { outcome: signals.every((row) => row.sent === true) && remaining.length === 0 && !uncertain ? "clean" : "unknown", before, signals, after };
+}
+
+
+const rawObject = (base64) => JSON.parse(Buffer.from(base64, "base64").toString("utf8"));
+
+/** Re-evaluates A-G and native controls from the retained raw producer inputs. */
+export function recomputeNativeReport(report) {
+  try {
+    const proof = report.native;
+    if (proof?.schema !== "calendar-native-proof/v1") throw new Error("missing native proof");
+    const plan = rawObject(proof.rawPlan);
+    const outerResult = rawObject(proof.rawOuterResult);
+    const files = {};
+    for (const [name, raw] of Object.entries(proof.rawRecords)) {
+      const text = Buffer.from(raw, "base64").toString("utf8");
+      if (!text.endsWith("\n")) throw new Error("incomplete raw records");
+      files[name] = text.slice(0, -1).split("\n").map((line) => JSON.parse(line));
+    }
+    const records = validateRecords(files);
+    const validator = validatorControls(files);
+    if (!records.ok || !validator.ok || files["measure.jsonl"][0].harnessVersion !== report.harnessVersion)
+      throw new Error("invalid native record set");
+    const measuring = files["measure.jsonl"];
+    const header = measuring[0];
+    if (header.pid !== report.root?.pid || header.started !== report.root?.started || report.rootSid !== report.root?.sid)
+      throw new Error("native root differs");
+    const queries = proof.queries;
+    for (const q of queries) {
+      const birth = measuring.find((r) => r.type === "birth" && r.handle === q.answer.handle);
+      const exit = measuring.find((r) => r.type === "exit" && r.handle === q.answer.handle);
+      if (!birth || !exit || birth.pid !== q.answer.pid || birth.file !== q.file || birth.purpose !== q.purpose || birth.argvSha256 !== digest(Buffer.from(JSON.stringify([q.file, ...q.args]))) || exit.code !== q.answer.code)
+        throw new Error("raw query differs from its own wait");
+    }
+    const sources = {};
+    for (const { path } of Object.values(REFUSAL_FORMATS)) {
+      const query = queries.find((q) => q.purpose === "pinned-source" && q.args.at(-1) === `${plan.pins.sourceCommit}:${path}`);
+      if (!query || !complete(query.answer)) throw new Error("missing pinned source query");
+      sources[path] = query.answer.stdout;
+    }
+    const refusalCheck = refusalLineCheck(plan.pins.refusalLine, { functionName: "calendarProbe", timeZone: plan.session.input.timeZone, sources });
+    const passes = [];
+    for (let i = 0; i < queries.length; i++) {
+      if (queries[i].purpose !== "inventory") continue;
+      const inventoryQuery = queries[i];
+      const sessionQuery = queries[i + 1];
+      if (!complete(inventoryQuery.answer) || sessionQuery?.purpose !== "getsid" || !complete(sessionQuery.answer))
+        throw new Error("unreadable native inventory");
+      const rows = parseInventory(inventoryQuery.answer.stdout).filter((r) => r.pid !== inventoryQuery.answer.pid);
+      const sessions = JSON.parse(sessionQuery.answer.stdout);
+      passes.push(rows.map((r) => ({ ...r, sid: sessions[String(r.pid)] })));
+    }
+    const identities = recordedIdentities({ files, inner: outerResult.inner, outerSupervision: outerResult.supervision, selfPid: report.root.pid, selfUid: report.root.uid });
+    const inventory = judgeInventory(passes, { sessionId: report.chain.outerSid, recorded: identities, privateDir: outerResult.directory ?? report.accountingDirectory, privateDirs: [outerResult.directory, report.accountingDirectory].filter((d) => typeof d === "string"), launchTime: report.launchTime, rootPid: report.root.pid });
+    const claimQuery = queries.find((q) => q.purpose === "claims-read");
+    if (!claimQuery || !complete(claimQuery.answer)) throw new Error("missing raw claim proof");
+    const claims = JSON.parse(claimQuery.answer.stdout).claims;
+    const lsof = queries.filter((q) => q.purpose === "lsof").map((q) => interpretLsof(q.answer));
+    const alive = inventory.passes.at(-1)?.survivors?.map((e) => e.row.pid) ?? [];
+    const kind = planKind(plan);
+    const assembled = assembleRun({ plan, kind, version: report.harnessVersion, outerResult, chain: report.chain, records, validator, inventory, claims, lsof, alive, bound: proof.rawBound === null ? null : boundBefore(rawObject(proof.rawBound), proof.inventoryStartedAt), extra: { portctlSha256: proof.portctlSha256, refusalCheck } });
+    for (const key of ["identity", "refusal", "verdict", "control", "validatorControls", "supervision", "inventory", "lsof", "claims", "records"])
+      if (!isDeepStrictEqual(JSON.parse(JSON.stringify(assembled[key])), report[key])) throw new Error(`summary contradicts raw ${key}`);
+    if (kind.kind !== report.kind || kind.escalation !== report.escalation) throw new Error("kind differs from raw plan");
+    if (report.cleanup?.outcome !== "clean" || !Array.isArray(report.cleanup.after)) throw new Error("post-verdict cleanup unknown");
+    return { ok: true, report, plan };
+  } catch (error) {
+    return { ok: false, problems: [String(error.message ?? error)] };
+  }
+}
+
+/** The separately built real stage3 artifact; a caller cannot nominate a stand-in build. */
+export const FIXED_BUILD_PINS = Object.freeze({
+  sourceCommit: "33970bf501ac85e62fd8aee488d16a9405a8a019",
+  binarySha256: "2fa4f8795d692d29715f7fa9628d00779ff56d365e5ec87a6d1688880caf19bd",
+  runnerSha256: "5fa364b83f2d23c56336acafd36c72ed3d772a95ee9c03d5c0e042732614248e",
+});
+const hash64 = (value) => typeof value === "string" && /^[a-f0-9]{64}$/.test(value);
+const identifier = (value) => typeof value === "string" && /^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/.test(value);
+const absolute = (value) => typeof value === "string" && resolve(value) === value;
+const frozenDay = () => new Date().toISOString().slice(0, 10);
+
+/** Consistency with an external packet is technical scope, never authenticated owner approval. */
+export function validateCampaignPacket(packet, { utcDay, harnessH, filePins }) {
+  const problems = [];
+  if (packet?.schema !== "calendar-campaign/v1" || !identifier(packet.campaign) || !identifier(packet.authorityId)) problems.push("invalid campaign packet");
+  if (packet?.utcDay !== utcDay || packet?.harnessH !== harnessH || !hash64(harnessH)) problems.push("current day or H differs");
+  if (!isDeepStrictEqual(packet?.harnessFiles, filePins) || !isDeepStrictEqual(Object.keys(filePins).sort(), [...HARNESS_FILES].sort()) || !Object.values(filePins).every(hash64)) problems.push("whole H file pins differ");
+  if (!isDeepStrictEqual(packet?.buildPins, FIXED_BUILD_PINS)) problems.push("fixed real build differs");
+  if (!absolute(packet?.runRoot) || packet?.bootstrap !== "ordinary-user-own-ps") problems.push("explicit fresh root and infrastructure bootstrap required");
+  if (packet?.externalApprovalVerified !== undefined || packet?.allDayCertified !== undefined) problems.push("external approval cannot be supplied as a flag");
+  const attempts = Array.isArray(packet?.attempts) ? packet.attempts : [];
+  if (attempts.length < 6 || attempts.length > 64 || attempts.some((a) => !identifier(a?.attemptId) || !absolute(a.planPath) || !hash64(a.planSha256)) || new Set(attempts.map((a) => a.attemptId)).size !== attempts.length || new Set(attempts.map((a) => a.planPath)).size !== attempts.length) problems.push("invalid exact attempt sequence");
+  const selected = [packet?.refusalAttemptId, ...(Array.isArray(packet?.controlAttemptIds) ? packet.controlAttemptIds : [])];
+  if (selected.length !== 6 || new Set(selected).size !== 6 || selected.some((id) => !attempts.some((a) => a.attemptId === id))) problems.push("invalid selected report partition");
+  return problems;
+}
+
+async function currentCampaignContext() {
+  const filePins = {};
+  for (const name of HARNESS_FILES) filePins[name] = digest(await readFile(here(name)));
+  return { utcDay: frozenDay(), harnessH: await harnessVersion(), filePins };
+}
+
+/** An exclusive publication's full write, file+directory sync and exact raw readback. */
+async function publishCampaignBytes(path, raw) {
+  const handle = await open(path, "wx", 0o600);
+  try {
+    let offset = 0;
+    while (offset < raw.length) {
+      const { bytesWritten } = await handle.write(raw, offset, raw.length - offset, offset);
+      if (bytesWritten <= 0) throw new Error("publication made no progress");
+      offset += bytesWritten;
+    }
+    await handle.sync();
+  } finally { await handle.close(); }
+  const directory = await open(resolve(path, ".."), "r");
+  try { await directory.sync(); } finally { await directory.close(); }
+  const retained = await readFile(path);
+  if (!retained.equals(raw)) throw new Error("durable publication readback differs");
+  return retained;
+}
+
+async function readCampaignSnapshot(scope) {
+  const directory = join(scope.runRoot, "attempt-ledger");
+  if (await realpath(directory) !== directory || (await lstat(directory)).isSymbolicLink()) throw new Error("ledger namespace alias");
+  const authorityBytes = await readFile(join(directory, "authority.json"));
+  const ledgerBytes = await readFile(join(directory, "ledger.jsonl"));
+  const records = ledgerBytes.toString("utf8").trimEnd().split("\n").map((line) => JSON.parse(line));
+  const names = records.filter((r) => r.type === "terminal" && r.reportFile !== null).map((r) => r.reportFile);
+  if (new Set(names).size !== names.length || names.some((n) => !/^report-[1-9][0-9]*\.json$/.test(n))) throw new Error("invalid report enumeration");
+  if (!isDeepStrictEqual((await readdir(directory)).sort(), ["authority.json", "ledger.jsonl", ...names].sort())) throw new Error("omitted or extra ledger publication");
+  const reports = new Map();
+  for (const name of names) {
+    const path = join(directory, name);
+    const stat = await lstat(path);
+    if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink !== 1 || await realpath(path) !== path) throw new Error("report namespace alias");
+    reports.set(name, await readFile(path));
+  }
+  return { authorityBytes, ledgerBytes, reports };
+}
+
+/** Explicit single-lifetime local producer; an external ROOT packet is required to run it. */
+export async function campaign(packetPath) {
+  const packetBytes = await readFile(packetPath);
+  const packet = JSON.parse(packetBytes.toString("utf8"));
+  const problems = validateCampaignPacket(packet, await currentCampaignContext());
+  if (problems.length) return { verdict: "fail", problems, certificate: null };
+  const scope = { campaign: packet.campaign, utcDay: packet.utcDay, runRoot: packet.runRoot, harnessH: packet.harnessH, buildPins: packet.buildPins };
+  const produced = await produceCampaign({
+    scope, authorityId: packet.authorityId, attempts: packet.attempts,
+    bootstrap: async () => {
+      const rootStat = await lstat(scope.runRoot);
+      if (!rootStat.isDirectory() || rootStat.isSymbolicLink() || await realpath(scope.runRoot) !== scope.runRoot || (await readdir(scope.runRoot)).length !== 0) throw new Error("fresh exclusive real run root required");
+      const directory = join(scope.runRoot, "campaign-bootstrap");
+      await mkdir(directory, { mode: 0o700 });
+      const recorder = await createSelfRecorder({ path: join(directory, "records.jsonl"), role: "measure", harnessVersion: scope.harnessH });
+      try {
+        const rows = await snapshotWith(recorder);
+        const root = rows.find((row) => row.pid === process.pid);
+        const sid = (await sessionsOf(recorder, [process.pid]))[process.pid];
+        if (!root || typeof root.started !== "string" || !Number.isSafeInteger(sid)) throw new Error("bootstrap native root unknown");
+        scope.nativeRoot = { pid: root.pid, start: root.started, sid };
+        recorder.close();
+        const receipt = { phase: "infrastructure", operation: "ordinary-user-own-ps", nativeRoot: scope.nativeRoot, rawRecords: (await readFile(join(directory, "records.jsonl"))).toString("base64"), packetSha256: digest(packetBytes) };
+        await publishCampaignBytes(join(directory, "receipt.json"), Buffer.from(JSON.stringify(receipt) + "\n"));
+        return { scope, receipt };
+      } finally { recorder.close(); }
+    },
+    measureAttempt: async (raw, attempt) => {
+      const plan = JSON.parse(raw.toString("utf8"));
+      if (plan.pins?.harnessVersion !== scope.harnessH || Object.entries(scope.buildPins).some(([key, value]) => plan.pins?.[key] !== value || plan.session?.[key] !== value)) throw new Error("attempt plan differs from frozen build/H");
+      const report = await measure(attempt.planPath, { planBytes: raw, runRoot: scope.runRoot });
+      return publishCampaignBytes(join(report.accountingDirectory, "durable-verdict.json"), Buffer.from(JSON.stringify(report) + "\n"));
+    },
+    readSnapshot: readCampaignSnapshot,
+  });
+  if (produced.state !== "complete") return { verdict: "fail", problems: produced.reasons, certificate: null, producer: produced };
+  const manifest = { schema: "calendar-campaign-snapshot/v1", packetPath: resolve(packetPath), packetSha256: digest(packetBytes), runRoot: scope.runRoot };
+  const manifestPath = join(scope.runRoot, "campaign-snapshot.json");
+  await publishCampaignBytes(manifestPath, Buffer.from(JSON.stringify(manifest) + "\n"));
+  const certified = await certifyCampaignManifest(manifestPath);
+  return { ...certified, manifestPath };
+}
+
+const campaignFailure = (problems) => ({ verdict: "fail", problems, certificate: null, nativeCertificateIssued: false, externalApprovalVerified: false, allDayCertified: false, historicalCompleteness: "UNKNOWN" });
+const exactBase64 = (value) => {
+  if (typeof value !== "string") throw new Error("missing retained raw bytes");
+  const bytes = Buffer.from(value, "base64");
+  if (bytes.toString("base64") !== value) throw new Error("invalid retained raw encoding");
+  return bytes;
+};
+
+/** Sealed births, not a caller's report list, enumerate every native attempt in this scope. */
+export function evaluateCampaignSnapshot(packet, snapshot, standInRunnerSha256) {
+  try {
+    const { authorityBytes, ledgerBytes, reports } = snapshot;
+    const authority = JSON.parse(authorityBytes.toString("utf8"));
+    const scope = authority.scope;
+    const ledger = validateAttemptLedger({ authorityBytes, authoritySha256: digest(authorityBytes), ledgerBytes, reports });
+    if (ledger.state !== "complete") throw new Error(`ledger ${ledger.state}: ${ledger.reasons.join("; ")}`);
+    if (authority.authorityId !== packet.authorityId || ["campaign", "utcDay", "runRoot", "harnessH", "buildPins"].some((key) => !isDeepStrictEqual(scope[key], packet[key]))) throw new Error("foreign campaign authority");
+    const records = ledgerBytes.toString("utf8").trimEnd().split("\n").map((line) => JSON.parse(line));
+    const births = records.filter((r) => r.type === "birth");
+    const terminals = records.filter((r) => r.type === "terminal");
+    if (!isDeepStrictEqual(births.map((r) => ({ attemptId: r.attemptId, planSha256: r.planSha256 })), packet.attempts.map((a) => ({ attemptId: a.attemptId, planSha256: a.planSha256 })))) throw new Error("omitted, extra or duplicate accepted attempt");
+    if (!isDeepStrictEqual([...reports.keys()].sort(), terminals.map((r) => r.reportFile).sort())) throw new Error("omitted or extra raw report");
+    const entries = births.map((birth) => {
+      const terminal = terminals.find((r) => r.attemptId === birth.attemptId);
+      const envelope = JSON.parse(reports.get(terminal.reportFile).toString("utf8"));
+      const rawPlan = exactBase64(envelope.rawPlan);
+      const rawReport = exactBase64(envelope.rawReport);
+      if (digest(rawPlan) !== birth.planSha256 || digest(rawPlan) !== envelope.rawPlanSha256 || digest(rawReport) !== envelope.rawReportSha256) throw new Error("nested raw bytes SHA differs");
+      const report = JSON.parse(rawReport.toString("utf8"));
+      if (envelope.outcome !== report.verdict?.verdict || envelope.error !== null) throw new Error("raw terminal outcome differs or is unknown");
+      if (report.harnessVersion !== scope.harnessH || new Date(report.launchTime).toISOString().slice(0, 10) !== scope.utcDay || report.root?.pid !== scope.nativeRoot.pid || report.root?.started !== scope.nativeRoot.start || report.root?.sid !== scope.nativeRoot.sid) throw new Error("foreign native root, day or H");
+      if (Object.entries(scope.buildPins).some(([key, value]) => report.identity?.[key] !== value || report.pins?.[key] !== value)) throw new Error("foreign native build");
+      const native = recomputeNativeReport(report);
+      if (!native.ok || !exactBase64(report.native.rawPlan).equals(rawPlan)) throw new Error(`native proof invalid: ${native.problems?.join("; ") ?? "raw plan differs"}`);
+      return { attemptId: birth.attemptId, report, file: { path: join(scope.runRoot, "attempt-ledger", terminal.reportFile), sha256: digest(rawReport) }, envelopeSha256: terminal.reportSha256 };
+    });
+    const selectedIds = [packet.refusalAttemptId, ...packet.controlAttemptIds];
+    if (selectedIds.length !== 6 || new Set(selectedIds).size !== 6) throw new Error("selected report partition differs");
+    const selected = selectedIds.map((id) => entries.find((entry) => entry.attemptId === id));
+    if (selected.some((entry) => !entry)) throw new Error("missing selected report");
+    const attempts = entries.filter((entry) => !selectedIds.includes(entry.attemptId));
+    const predicate = certificateVerdict({ refusal: selected[0].report, controls: selected.slice(1).map((e) => e.report), files: selected.map((e) => e.file), attempts, explanations: packet.explanations ?? {}, standInRunnerSha256 });
+    if (predicate.verdict !== "pass") return campaignFailure(predicate.problems);
+    return { ...predicate, predicateOnly: true, nativeCertificateIssued: false, externalApprovalVerified: false, allDayCertified: false, historicalCompleteness: "UNKNOWN", technicalScope: { ...scope }, ledgerSha256: digest(ledgerBytes), authoritySha256: digest(authorityBytes), allBirths: entries.map((e) => ({ attemptId: e.attemptId, rawReportSha256: e.file.sha256, envelopeSha256: e.envelopeSha256 })) };
+  } catch (error) { return campaignFailure([String(error.message ?? error)]); }
+}
+
+async function certifyCampaignManifest(manifestPath) {
+  try {
+    const manifest = JSON.parse((await readFile(manifestPath)).toString("utf8"));
+    if (manifest.schema !== "calendar-campaign-snapshot/v1" || !absolute(manifest.packetPath) || !absolute(manifest.runRoot) || !hash64(manifest.packetSha256)) throw new Error("a sealed native campaign is required");
+    const packetBytes = await readFile(manifest.packetPath);
+    if (digest(packetBytes) !== manifest.packetSha256) throw new Error("external packet raw bytes differ");
+    const packet = JSON.parse(packetBytes.toString("utf8"));
+    const problems = validateCampaignPacket(packet, await currentCampaignContext());
+    if (problems.length || packet.runRoot !== manifest.runRoot || await realpath(packet.runRoot) !== packet.runRoot || (await lstat(packet.runRoot)).isSymbolicLink()) return campaignFailure(problems.length ? problems : ["foreign real campaign root"]);
+    const snapshot = await readCampaignSnapshot({ runRoot: packet.runRoot });
+    const bootstrapBytes = await readFile(join(packet.runRoot, "campaign-bootstrap", "receipt.json"));
+    const bootstrap = JSON.parse(bootstrapBytes.toString("utf8"));
+    const authority = JSON.parse(snapshot.authorityBytes.toString("utf8"));
+    if (bootstrap.phase !== "infrastructure" || bootstrap.operation !== "ordinary-user-own-ps" || bootstrap.packetSha256 !== manifest.packetSha256 || !isDeepStrictEqual(bootstrap.nativeRoot, authority.scope.nativeRoot)) throw new Error("missing or foreign native bootstrap receipt");
+    const standIn = digest(await readFile(here("testdata/fake-runner.cjs")));
+    const evaluated = evaluateCampaignSnapshot(packet, snapshot, standIn);
+    return evaluated.verdict === "pass" ? { ...evaluated, predicateOnly: false, nativeCertificateIssued: true } : evaluated;
+  } catch (error) { return campaignFailure([String(error.message ?? error)]); }
 }

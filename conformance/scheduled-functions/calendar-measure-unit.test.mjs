@@ -1013,3 +1013,109 @@ test("post-verdict cleanup saves an independent after inventory and refuses unkn
     assert.equal(result.outcome, expected);
   }
 });
+
+
+function nativeFixture() {
+  const input = runInput();
+  input.plan = { ...pinInput().plan, positive: false };
+  const h = PINS.harnessVersion;
+  const start = "Fri Oct 2 06:00:00 2026";
+  const header = (role, pid) => ({ type: "header", role, pid, started: start, harnessVersion: h });
+  let tick = 0;
+  const birth = (role, n, pid, purpose) => ({ type: "birth", handle: `${role}:${n}`, pid, uid: 501, purpose, file: "node", argvSha256: "a".repeat(64), spawnMonoNs: String(++tick) });
+  const exit = (role, n, code = 0) => ({ type: "exit", handle: `${role}:${n}`, code, signal: null, exitMonoNs: String(++tick) });
+  const identity = (role, n, pid) => ({ type: "identity", handle: `${role}:${n}`, pid, started: start });
+  const files = {
+    "measure.jsonl": [header("measure", 100), birth("measure", 1, 300, "outer"), identity("measure", 1, 300), exit("measure", 1)],
+    "outer.jsonl": [header("outer", 300), birth("outer", 1, 301, "claim"), exit("outer", 1), birth("outer", 2, 400, "inner"), identity("outer", 2, 400), exit("outer", 2)],
+    "inner.jsonl": [header("inner", 400), birth("inner", 1, 500, "daemon"), exit("inner", 1)],
+  };
+  const queries = [];
+  const answer = (stdout, code = 0) => ({ stdout, code, stderr: "", timedOut: false, truncated: false });
+  const query = (purpose, file, args, stdout, code = 0) => {
+    const n = files["measure.jsonl"].filter((r) => r.type === "birth").length + 1;
+    const b = birth("measure", n, 600 + n, purpose); b.file = file; b.argvSha256 = sha(JSON.stringify([file, ...args]));
+    files["measure.jsonl"].push(b, exit("measure", n, code));
+    queries.push({ purpose, file, args, answer: { ...answer(stdout, code), handle: b.handle, pid: b.pid } });
+  };
+  const sources = {};
+  for (const { path, text } of Object.values(REFUSAL_FORMATS)) sources[path] = (sources[path] ?? "") + text + "\n";
+  for (const [path, text] of Object.entries(sources)) query("pinned-source", "git", ["-C", "/source", "show", `${PINS.sourceCommit}:${path}`], text);
+  for (let i = 0; i < 2; i++) {
+    query("inventory", "ps", [], "1 0 1 0 Thu Jan 1 00:00:00 1970 S launchd\n100 1 50 501 Fri Oct 2 06:00:00 2026 S node measure\n");
+    query("getsid", "python3", [], '{"1":1,"100":50}');
+  }
+  query("claims-read", "python3", [], '{"claims":[]}');
+  query("lsof", "lsof", [], "", 1);
+  input.records = validateRecords(files);
+  input.validator = validatorControls(files);
+  input.inventory = judgeInventory([[{ pid: 1, ppid: 0, pgid: 1, uid: 0, started: "Thu Jan 1 00:00:00 1970", stat: "S", args: "launchd", sid: 1 }, { pid: 100, ppid: 1, pgid: 50, uid: 501, started: start, stat: "S", args: "node measure", sid: 50 }], [{ pid: 1, ppid: 0, pgid: 1, uid: 0, started: "Thu Jan 1 00:00:00 1970", stat: "S", args: "launchd", sid: 1 }, { pid: 100, ppid: 1, pgid: 50, uid: 501, started: start, stat: "S", args: "node measure", sid: 50 }]], { sessionId: 300, recorded: [], privateDir: "/run", launchTime, rootPid: 100 });
+  const report = { ...assembleRun(input), launchTime, chain: input.chain, kind: "certificate", escalation: "on", harnessVersion: h, pins: input.plan.pins, root: { pid: 100, uid: 501, started: start, sid: 50 }, rootSid: 50, accountingDirectory: "/run", cleanup: { outcome: "clean", before: [], signals: [], after: [] } };
+  report.native = { schema: "calendar-native-proof/v1", rawPlan: Buffer.from(JSON.stringify(input.plan)).toString("base64"), rawOuterResult: Buffer.from(JSON.stringify(input.outerResult)).toString("base64"), rawRecords: Object.fromEntries(Object.entries(files).map(([name, rows]) => [name, Buffer.from(rows.map((r) => JSON.stringify(r) + "\n").join("")).toString("base64")])), queries, inventoryStartedAt: launchTime, rawBound: null, portctlSha256: PINS.portctlSha256 };
+  return JSON.parse(JSON.stringify(report));
+}
+
+import { validateRecords, validatorControls, judgeInventory, REFUSAL_FORMATS } from "./calendar-accounting.mjs";
+
+test("native certificate facts are recomputed from raw records rather than contradictory summaries", async () => {
+  const { recomputeNativeReport } = await import("./calendar-measure.mjs");
+  const base = nativeFixture();
+  assert.equal(recomputeNativeReport(base).ok, true);
+  for (const change of [
+    (r) => { r.records.ok = false; },
+    (r) => { r.records.signals = 1; },
+    (r) => { r.verdict.conditions.A.outcome = "fail"; },
+    (r) => { r.inventory.outcome = "inconclusive"; },
+    (r) => { r.cleanup.outcome = "unknown"; },
+    (r) => { delete r.native.rawRecords["inner.jsonl"]; },
+    (r) => { r.native.queries.find((q) => q.purpose === "inventory").answer.timedOut = true; },
+  ]) {
+    const report = structuredClone(base); change(report);
+    assert.equal(recomputeNativeReport(report).ok, false);
+  }
+});
+
+
+test("campaign packets bind the current day, whole H file set and fixed real build", async () => {
+  const { validateCampaignPacket, FIXED_BUILD_PINS, HARNESS_FILES } = await import("./calendar-measure.mjs");
+  const filePins = Object.fromEntries(HARNESS_FILES.map((name) => [name, "a".repeat(64)]));
+  const context = { utcDay: "2026-10-02", harnessH: "b".repeat(64), filePins };
+  const packet = { schema: "calendar-campaign/v1", campaign: "unit", authorityId: "root-unit", utcDay: context.utcDay, runRoot: "/run", harnessH: context.harnessH, harnessFiles: filePins, buildPins: { ...FIXED_BUILD_PINS }, bootstrap: "ordinary-user-own-ps", attempts: [{ attemptId: "a", planPath: "/plan", planSha256: "c".repeat(64) }], refusalAttemptId: "a", controlAttemptIds: ["b", "c", "d", "e", "f"] };
+  packet.attempts.push(...packet.controlAttemptIds.map((attemptId) => ({ attemptId, planPath: `/plan-${attemptId}`, planSha256: "c".repeat(64) })));
+  assert.deepEqual(validateCampaignPacket(packet, context), []);
+  for (const change of [
+    (p) => { p.utcDay = "2026-10-03"; },
+    (p) => { p.harnessH = "d".repeat(64); },
+    (p) => { delete p.harnessFiles["calendar-attempt-ledger.mjs"]; },
+    (p) => { p.buildPins.sourceCommit = "e".repeat(40); },
+    (p) => { p.attempts.push(p.attempts[0]); },
+    (p) => { p.controlAttemptIds[0] = "missing"; },
+    (p) => { p.runRoot = "/alias/../run"; },
+    (p) => { p.externalApprovalVerified = true; },
+  ]) { const changed = structuredClone(packet); change(changed); assert.notEqual(validateCampaignPacket(changed, context).length, 0); }
+});
+
+
+test("sealed campaign validation rejects omission, extras and raw nested report substitution", async () => {
+  const { evaluateCampaignSnapshot } = await import("./calendar-measure.mjs");
+  const scope = { campaign: "unit", utcDay: "2026-10-02", runRoot: "/run", harnessH: "a".repeat(64), buildPins: { sourceCommit: "a".repeat(40), binarySha256: "b".repeat(64), runnerSha256: "c".repeat(64) }, nativeRoot: { pid: 100, start: "Fri Oct 2 06:00:00 2026", sid: 50 } };
+  const authorityBytes = Buffer.from(JSON.stringify({ schema: "scoped-attempt-authority/v1", authorityId: "root-unit", scope }));
+  const rawPlan = Buffer.from("{}");
+  const rawReport = Buffer.from(JSON.stringify(loaderReport("certificate")));
+  const envelope = Buffer.from(JSON.stringify({ schema: "attempt-report/v1", scope, attemptId: "one", outcome: "pass", rawPlan: rawPlan.toString("base64"), rawPlanSha256: sha(rawPlan), rawReport: rawReport.toString("base64"), rawReportSha256: sha(rawReport) }));
+  const rows = [
+    { type: "header", seq: 0, scope, authoritySha256: sha(authorityBytes) },
+    { type: "birth", seq: 1, scope, attemptId: "one", planSha256: sha(rawPlan) },
+    { type: "terminal", seq: 2, scope, attemptId: "one", reportFile: "report-1.json", reportSha256: sha(envelope), reportBytes: envelope.length },
+    { type: "seal", seq: 3, scope, tail: 2, births: 1 },
+  ];
+  const snapshot = { authorityBytes, ledgerBytes: Buffer.from(rows.map((r) => JSON.stringify(r) + "\n").join("")), reports: new Map([["report-1.json", envelope]]) };
+  const packet = { authorityId: "root-unit", ...scope, attempts: [{ attemptId: "one", planPath: "/plan", planSha256: sha(rawPlan) }], refusalAttemptId: "one", controlAttemptIds: [] };
+  assert.equal(evaluateCampaignSnapshot(packet, snapshot).verdict, "fail", "summary-only data is not native proof");
+  for (const change of [
+    (s) => { s.reports.clear(); },
+    (s) => { s.reports.set("extra.json", envelope); },
+    (s) => { s.reports.set("report-1.json", Buffer.from("{}")); },
+  ]) { const changed = { ...snapshot, reports: new Map(snapshot.reports) }; change(changed); const result = evaluateCampaignSnapshot(packet, changed); assert.equal(result.verdict, "fail"); assert.equal(result.certificate, null); }
+  for (const change of [(p) => { p.attempts = []; }, (p) => { p.attempts.push(p.attempts[0]); }, (p) => { p.utcDay = "2026-10-03"; }]) { const changed = structuredClone(packet); change(changed); assert.equal(evaluateCampaignSnapshot(changed, snapshot).verdict, "fail"); }
+});

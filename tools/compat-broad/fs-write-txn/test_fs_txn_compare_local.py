@@ -510,3 +510,288 @@ def test_p08_uniform_time_translation_keeps_all_state_and_version_relations(delt
             return (dt.datetime.fromisoformat(base) + dt.timedelta(seconds=delta)).isoformat() + (dot + fraction if dot else "") + "Z"
         return value
     assert tool.recording_semantics(shift(receipt), table) == tool.recording_semantics(receipt, table)
+
+
+def p13b_recording():
+    """Replay the finite retry graph with a virtual clock and the observed acceptance model."""
+    from test_fs_txn_table_p13b import TABLE, collector, RECORDED_PACE
+    from test_txn_program_collector import Clock, Service
+    class RecordedRetryService(Service):
+        def _send(self, transport, method, request, **kwargs):
+            result = super()._send(transport, method, request, **kwargs)
+            if method == "Rollback" and request.get("transaction") in self.tokens and result["code"] == 10 and self.clock.now() - self.tstart[request["transaction"]] < 270:
+                self.tokens[request["transaction"]] = "rolled-back"
+                result = self._receipt(transport, 0, response={})
+            if method == "Commit" and result["code"] == 0 and result["response"].get("writeResults"):
+                result["response"]["commitTime"] = copy.deepcopy(result["response"]["writeResults"][-1]["updateTime"])
+            return result
+    clock = Clock()
+    service = RecordedRetryService(clock, expiry=True, lifetime=270, idle=120, rpc_seconds=RECORDED_PACE)
+    receipt = collector(service, clock).run()
+    assert receipt["complete"] is True and receipt["failureType"] is None
+    return receipt, TABLE
+
+
+def synchronize_p13b_observations(receipt):
+    for row in receipt["observations"]:
+        row["result"] = copy.deepcopy(next(step["result"] for step in receipt["steps"] if step["site"] == row["site"]))
+
+
+def test_p13b_retry_model_preserves_all_steps_named_tokens_versions_and_cleanup():
+    receipt, table = p13b_recording()
+    semantic = tool.recording_semantics(receipt, table)
+    assert len(semantic["steps"]) == 30 and len(semantic["cleanupSteps"]) == 8
+    assert len({row["caseId"] for row in receipt["observations"]}) == 8
+    assert all(row["result"]["code"] == 0 and row["transport"] == "rest" for row in receipt["observations"])
+    assert len({entry["value"] for entry in receipt["tokens"].values()}) == 8
+    rows = {row["site"]: row for row in receipt["steps"]}
+    for role, site in [("t1", "rest/rt1/retry-begin"), ("t2", "rest/rt2/retry-idle"), ("t3", "rest/rt3/retry-after-rollback"), ("t4", "rest/rt4/retry-lifetime")]:
+        assert rows[site]["request"]["options"]["readWrite"]["retryTransaction"] == receipt["tokens"][role]["value"]
+        assert rows[site]["result"]["response"]["transaction"] == receipt["tokens"][role + "r"]["value"]
+        assert receipt["tokens"][role]["value"] != receipt["tokens"][role + "r"]["value"]
+    first_read = semantic["steps"]["rest/rt1/first-read"]
+    writer = semantic["steps"]["rest/rt1/writer"]
+    assert first_read["read"]["state"] == "rest-rt1-writer"
+    assert first_read["versions"]["/updateTime"]["rank"] == writer["versions"]["/writeResults/0/updateTime"]["rank"]
+    assert rows["rest/rt1/retry-begin"]["sequence"] < rows["rest/rt1/writer"]["sequence"] < rows["rest/rt1/first-read"]["sequence"]
+    assert semantic["tokens"]["t1r"]["state"] == "committed"
+    assert semantic["tokens"]["t4"]["state"] == "released-refused"
+    assert semantic["cleanupSteps"]["cleanup/token/t4"]["code"] == 10
+    assert semantic["cleanupSteps"]["cleanup/token/t4r"]["code"] == 0
+    assert semantic["cleanupSteps"]["cleanup/verify/a"]["code"] == 5
+    assert semantic["cleanup"] == {"absent": True}
+    commit_response = rows["rest/rt1/commit"]["result"]["response"]
+    assert "commitTime" in commit_response
+    assert commit_response["commitTime"] == commit_response["writeResults"][-1]["updateTime"]
+    commit_versions = semantic["steps"]["rest/rt1/commit"]["versions"]
+    assert commit_versions["/commitTime"] == commit_versions["/writeResults/0/updateTime"]
+    assert len(commit_response["writeResults"]) == 1
+    assert commit_versions["/commitTime"]["layout"] == {"precision": 9}
+    assert semantic["steps"]["setup/create-a"]["versions"]["/commitTime"]["layout"] == {"members": ["nanos", "seconds"]}
+    assert semantic["steps"]["final/post-read-a"]["read"]["state"] == "rest-rt1-commit"
+    assert semantic["steps"]["final/post-read-a"]["versions"]["/updateTime"] == commit_versions["/commitTime"]
+    cleanup = {row["site"]: row for row in receipt["cleanupSteps"]}
+    readback = cleanup["cleanup/read/a"]
+    delete = cleanup["cleanup/delete/a"]
+    verify = cleanup["cleanup/verify/a"]
+    response = readback["result"]["response"]
+    assert readback["transport"] == "grpc" and readback["rpc"] == "GetDocument" and readback["result"]["code"] == 0
+    assert response["fields"]["state"]["stringValue"] == "rest-rt1-commit"
+    assert response["name"] == readback["request"]["name"] == delete["request"]["name"] == rows["final/post-read-a"]["request"]["name"]
+    assert response["updateTime"] == receipt["documents"]["a"]["stamp"] == delete["request"]["currentDocument"]["updateTime"]
+    assert semantic["cleanupSteps"]["cleanup/read/a"]["versions"]["/updateTime"]["layout"] == {"members": ["nanos", "seconds"]}
+    assert delete["result"]["code"] == 0 and verify["result"]["code"] == 5
+    assert semantic["cleanupSteps"]["cleanup/verify/a"]["versions"] == {}
+    assert all(not receipt[key] for key in ["openTokens", "unknownStarts", "unknownRollbacks", "unknownCommits"])
+    # Native REST precision is an independent saved-source contract, not the mock clock's epoch.
+    from pathlib import Path
+    native_path = Path(__file__).resolve().parents[3] / "spec/compatibility/broad-runs/fs-transaction-p13b-recorded-observations-v1.json"
+    native_semantic = json.loads(native_path.read_text())["corpora"][0]["semantics"]
+    native_commit = native_semantic["steps"]["rest/rt1/commit"]["versions"]
+    assert native_commit["/commitTime"] == native_commit["/writeResults/0/updateTime"]
+    assert native_commit["/commitTime"]["layout"] == {"precision": 6}
+    assert native_semantic["cleanupSteps"]["cleanup/read/a"]["versions"]["/updateTime"]["layout"] == {"members": ["nanos", "seconds"]}
+    waits = {entry["site"]: entry for entry in receipt["waits"]}
+    for site in ["rest/rt2/retry-idle", "rest/rt3/rollback-idle"]:
+        assert waits[site]["idleInterval"]["lowerSeconds"] >= 130
+    assert waits["rest/rt4/retry-lifetime"]["totalAgeInterval"]["lowerSeconds"] > 270
+    assert waits["rest/rt4/retry-lifetime"]["idleInterval"]["upperSeconds"] < 120
+
+
+@pytest.mark.parametrize("mutation", ["missing", "duplicate", "completion", "source", "unknown", "cleanup", "transport", "sequence", "named-retry", "reused-token", "age", "dispatch"])
+def test_p13b_forged_graph_retry_identity_and_clock_proof_are_rejected(mutation):
+    receipt, table = p13b_recording()
+    changed = copy.deepcopy(receipt)
+    rows = {row["site"]: row for row in changed["steps"]}
+    if mutation == "missing": changed["steps"].pop()
+    if mutation == "duplicate": changed["steps"][-1] = copy.deepcopy(changed["steps"][-2])
+    if mutation == "completion": changed["graphComplete"] = False
+    if mutation == "source": changed["sourceDigest"] = "0" * 64
+    if mutation == "unknown": changed["unknownCommits"] = ["rest/rt1/writer"]
+    if mutation == "cleanup": changed["cleanupSteps"].pop()
+    if mutation == "transport": rows["rest/rt2/retry-idle"]["transport"] = "grpc"
+    if mutation == "sequence": rows["rest/rt1/writer"]["sequence"] = 999
+    if mutation == "named-retry": rows["rest/rt2/retry-idle"]["request"]["options"]["readWrite"]["retryTransaction"] = changed["tokens"]["t1"]["value"]
+    if mutation == "reused-token": rows["rest/rt2/retry-idle"]["result"]["response"]["transaction"] = changed["tokens"]["t2"]["value"]
+    if mutation == "age": changed["waits"][-1]["totalAgeInterval"]["lowerSeconds"] = 260
+    if mutation == "dispatch": rows["rest/rt1/first-read"]["timing"]["dispatchMonotonic"] = rows["rest/rt1/writer"]["timing"]["dispatchMonotonic"]
+    assert changed != receipt
+    synchronize_p13b_observations(changed)
+    with pytest.raises(ValueError): tool.recording_semantics(changed, table)
+
+
+@pytest.mark.parametrize("mutation", ["http", "diagnostic", "version", "commit-time", "retry-code", "cleanup-code"])
+def test_p13b_a_semantic_difference_cannot_disappear_from_full_response_comparison(mutation):
+    receipt, table = p13b_recording()
+    original = tool.recording_semantics(receipt, table)
+    changed = copy.deepcopy(receipt)
+    rows = {row["site"]: row for row in changed["steps"]}
+    if mutation == "http": rows["rest/rt2/retry-idle"]["result"]["http"] = 201
+    if mutation == "diagnostic": rows["rest/rt2/retry-idle"]["result"]["details"] = "x" * 120 + " meaningful suffix"
+    if mutation == "version":
+        before = rows["rest/rt1/first-read"]["result"]["response"]["updateTime"]
+        replacement = rows["rest/rt1/read-a"]["result"]["response"]["updateTime"]
+        assert before != replacement
+        rows["rest/rt1/first-read"]["result"]["response"]["updateTime"] = replacement
+    if mutation == "commit-time": rows["rest/rt1/commit"]["result"]["response"].pop("commitTime")
+    if mutation == "retry-code": rows["rest/rt4/retry-lifetime"]["result"]["code"] = 3
+    if mutation == "cleanup-code": next(row for row in changed["cleanupSteps"] if row["site"] == "cleanup/token/t4")["result"]["code"] = 0
+    assert changed != receipt
+    synchronize_p13b_observations(changed)
+    try:
+        actual = tool.recording_semantics(changed, table)
+    except ValueError:
+        assert mutation in ["version", "retry-code", "cleanup-code"]
+    else:
+        assert actual != original
+        if mutation == "version":
+            assert actual["steps"]["rest/rt1/first-read"]["versions"] != original["steps"]["rest/rt1/first-read"]["versions"]
+
+
+@settings(max_examples=20, deadline=None)
+@given(st.sampled_from(["rest/rt1-rollback", "rest/rt1-writer", "rest/rt1-first-read", "rest/rt1-commit", "rest/rt2-retry-idle", "rest/rt3-rollback-idle", "rest/rt3-retry-after-rollback", "rest/rt4-retry-lifetime"]), st.integers(1, 16))
+def test_generated_p13b_nonzero_case_codes_are_rejected_or_visible(case_id, code):
+    receipt, table = p13b_recording()
+    original = tool.recording_semantics(receipt, table)
+    row = next(row for row in receipt["steps"] if row["caseId"] == case_id)
+    assert row["result"]["code"] == 0
+    row["result"]["code"] = code
+    synchronize_p13b_observations(receipt)
+    try:
+        actual = tool.recording_semantics(receipt, table)
+    except ValueError:
+        return
+    assert actual != original
+
+
+def p13b_shift_timestamps(value, delta):
+    """Shift whole timestamps while preserving duration, shape, precision and duplicates."""
+    if isinstance(value, dict):
+        if set(value) <= {"seconds", "nanos"} and isinstance(value.get("seconds"), str) and re.fullmatch(r"[0-9]{1,12}", value["seconds"]) and type(value.get("nanos", 0)) is int and 0 <= value.get("nanos", 0) <= 999999999:
+            return {**value, "seconds": str(int(value["seconds"]) + delta)}
+        return {key: p13b_shift_timestamps(item, delta) for key, item in value.items()}
+    if isinstance(value, list):
+        return [p13b_shift_timestamps(item, delta) for item in value]
+    if isinstance(value, str) and re.fullmatch(r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d{1,9})?Z", value):
+        base, dot, fraction = value[:-1].partition(".")
+        return (dt.datetime.fromisoformat(base) + dt.timedelta(seconds=delta)).isoformat() + (dot + fraction if dot else "") + "Z"
+    return value
+
+
+def assert_p13b_translation(receipt, translated, table, delta):
+    assert tool.projection(translated, table)
+    assert translated["steps"][0]["timing"]["dispatchUtc"] != receipt["steps"][0]["timing"]["dispatchUtc"]
+    for original, changed in zip(receipt["waits"], translated["waits"], strict=True):
+        assert type(changed["seconds"]) is int and changed["seconds"] == original["seconds"]
+        for key in ["idleInterval", "totalAgeInterval"]:
+            assert changed[key] == original[key]
+    for group in ["steps", "cleanupSteps"]:
+        assert len(translated[group]) == len(receipt[group])
+        for original, changed in zip(receipt[group], translated[group], strict=True):
+            for key in ["site", "sequence", "transport", "rpc"]:
+                assert changed[key] == original[key]
+            for key, value in original["timing"].items():
+                if "Monotonic" in key:
+                    assert changed["timing"][key] == value
+    assert set(translated["tokens"]) == set(receipt["tokens"])
+    for role, original in receipt["tokens"].items():
+        assert translated["tokens"][role]["value"] == original["value"]
+        assert translated["tokens"][role]["state"] == original["state"]
+    for key in ["sourceDigest", "corpusDigest", "phaseRequests", "sandboxRequests", "graphComplete", "complete", "openTokens", "unknownStarts", "unknownRollbacks", "unknownCommits"]:
+        assert translated[key] == receipt[key]
+    assert tool.recording_semantics(translated, table) == tool.recording_semantics(receipt, table)
+
+
+def test_p13b_literal_one_second_translation_preserves_native_duration_and_completion():
+    receipt, table = p13b_recording()
+    translated = p13b_shift_timestamps(receipt, 1)
+    assert_p13b_translation(receipt, translated, table, 1)
+    for key in ["rpc", "phaseRequests", "sandboxRequests", "openTokens", "unknownStarts", "unknownRollbacks", "unknownCommits"]:
+        changed = copy.deepcopy(translated)
+        if key == "rpc":
+            changed["steps"][0][key] = "ForgedRpc"
+        elif key == "phaseRequests":
+            changed[key]["observation"] += 1
+        elif key == "sandboxRequests":
+            changed[key] += 1
+        else:
+            changed[key] = ["forged-resource"]
+        assert changed != translated
+        with pytest.raises((ValueError, AssertionError)):
+            assert_p13b_translation(receipt, changed, table, 1)
+        missing = copy.deepcopy(translated)
+        if key == "rpc":
+            del missing["steps"][0][key]
+        else:
+            del missing[key]
+        with pytest.raises((ValueError, KeyError)):
+            assert_p13b_translation(receipt, missing, table, 1)
+
+
+@settings(max_examples=10, deadline=None)
+@given(st.integers(1, 1000000))
+def test_p13b_time_translation_keeps_retry_state_and_version_relations(delta):
+    receipt, table = p13b_recording()
+    assert_p13b_translation(receipt, p13b_shift_timestamps(receipt, delta), table, delta)
+
+
+@settings(max_examples=30, deadline=None)
+@given(st.integers(1, 1000000), st.sampled_from([None, 0, 1, 999999999]), st.sampled_from(["", ".000", ".000001", ".000000001"]))
+def test_generated_p13b_timestamp_shapes_keep_precision_members_and_duplicate_equality(delta, nanos, fraction):
+    proto = {"seconds": "1790726400"}
+    if nanos is not None:
+        proto["nanos"] = nanos
+    rest = "2026-09-30T00:00:00" + fraction + "Z"
+    value = {"seconds": 130, "monotonic": 100.25, "interval": {"lowerSeconds": 130.0, "upperSeconds": 131.0}, "uri": "demo/example", "marker": "owned", "stamps": [proto, rest, copy.deepcopy(proto), rest]}
+    changed = p13b_shift_timestamps(value, delta)
+    assert changed["seconds"] == 130 and type(changed["seconds"]) is int
+    for key in ["monotonic", "interval", "uri", "marker"]:
+        assert changed[key] == value[key]
+    assert len(changed["stamps"]) == 4
+    assert set(changed["stamps"][0]) == set(proto)
+    assert changed["stamps"][0]["seconds"] == str(int(proto["seconds"]) + delta)
+    if nanos is not None:
+        assert changed["stamps"][0]["nanos"] == nanos and type(changed["stamps"][0]["nanos"]) is int
+    assert changed["stamps"][0] == changed["stamps"][2]
+    assert changed["stamps"][1] == changed["stamps"][3] != rest
+    expected = (dt.datetime(2026, 9, 30) + dt.timedelta(seconds=delta)).isoformat() + fraction + "Z"
+    assert changed["stamps"][1] == expected
+    assert p13b_shift_timestamps(changed, -delta) == value
+
+
+@pytest.mark.parametrize("value", [{"seconds": 130}, {"seconds": "130", "duration": True}, {"seconds": "130", "nanos": "1"}, {"seconds": "130", "nanos": -1}, {"seconds": "130", "nanos": 1000000000}, {"seconds": "invalid", "nanos": 0}])
+def test_p13b_translation_leaves_non_timestamp_seconds_objects_unchanged(value):
+    assert p13b_shift_timestamps(value, 1) == value
+
+
+@pytest.mark.parametrize("mutation", ["unequal-duplicate", "reverse-rank", "duration", "precision", "missing-path"])
+def test_p13b_nonuniform_timestamp_and_duration_changes_are_rejected_or_visible(mutation):
+    receipt, table = p13b_recording()
+    original = tool.recording_semantics(receipt, table)
+    rows = {row["site"]: row for row in receipt["steps"]}
+    first = rows["rest/rt1/first-read"]["result"]["response"]
+    if mutation == "unequal-duplicate":
+        before = first["updateTime"]
+        first["updateTime"] = p13b_shift_timestamps(before, 1)
+        assert before != first["updateTime"]
+    if mutation == "reverse-rank":
+        before = first["updateTime"]
+        first["updateTime"] = rows["rest/rt1/read-a"]["result"]["response"]["updateTime"]
+        assert before != first["updateTime"]
+    if mutation == "duration":
+        before = receipt["waits"][0]["seconds"]
+        receipt["waits"][0]["seconds"] += 1
+        assert receipt["waits"][0]["seconds"] != before
+    if mutation == "precision":
+        before = first["updateTime"]
+        first["updateTime"] = before.split(".")[0] + "Z"
+        assert first["updateTime"] != before
+    if mutation == "missing-path":
+        assert "updateTime" in first
+        del first["updateTime"]
+    synchronize_p13b_observations(receipt)
+    try:
+        actual = tool.recording_semantics(receipt, table)
+    except ValueError:
+        return
+    assert actual != original

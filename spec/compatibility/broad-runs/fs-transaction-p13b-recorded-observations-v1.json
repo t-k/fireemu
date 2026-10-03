@@ -1,0 +1,3010 @@
+{
+  "schemaVersion": 1,
+  "kind": "fs-transaction-recorded-observations-v1",
+  "parent": "FS-TRANSACTION",
+  "condition": "FS-TRANSACTION/retry-token-lifecycle",
+  "coverage": "PARTIAL",
+  "authorizesProduction": false,
+  "promotionReady": false,
+  "decodedSemanticsValidated": true,
+  "rawRestWireLayoutValidated": false,
+  "normalization": {
+    "declaredVolatileValues": [
+      "nonce",
+      "ownerId",
+      "issued transaction token values",
+      "project identifier",
+      "absolute timestamp values"
+    ],
+    "retained": [
+      "native recipe sequence and named retry roles",
+      "HTTP and gRPC codes",
+      "full diagnostics",
+      "document states",
+      "timestamp paths, relative ranks and equality",
+      "REST timestamp precision and protobuf member sets",
+      "actual idle and total-age intervals",
+      "issued token freshness and termination",
+      "cleanup and native child completion"
+    ],
+    "limits": "Publication redacts project identifiers after the unchanged producer validates full decoded diagnostics. Decoded equality does not establish raw REST byte layout. Acquisition allow sets are not production parity expectations."
+  },
+  "remainingBoundaries": [
+    "Raw REST bodyBytes, content-length and received member-order layout were not retained; decoded semantic equality is partial proof.",
+    "Historical installed runtime input currency cannot be independently established from the retained packet and decoded receipts; it remains UNKNOWN.",
+    "Representative gRPC retry snapshot and idle/lifetime consequences, remaining original boundaries, the official emulator gate, all 18 frozen conditions and parent closure review remain open.",
+    "Four source-bound normal artifact comparisons remain pending; frozen nominal 260-second lifetime waits may not reproduce the recorded 279-to-283-second age with faster local RPCs."
+  ],
+  "corpora": [
+    {
+      "program": "FS-TRANSACTION-P13B-RETRY-ANSWERS",
+      "table": "tools/compat-broad/fs-write-txn/fs_txn_table_p13b.py",
+      "tableSourceDigest": "6716e049745af5532b837e7c9c06c199f92c8f253c2cb7341dbf7b4a299ce468",
+      "corpusDigest": "3c91e4695ace7cccb5089f3c8fc88425f1393ee40a13c28f97bf15ac05a63751",
+      "sourceCommit": "2991d2f1e055407badaaac2e9edab688d42c9d1a",
+      "freezeSha256": "9c7ff93d46ebecdf6f4e312bee443de1eea57b666499599879f7c4b96983f132",
+      "packetSha256": "c3274163a581342d288a0a9c1448f724258f72f106e9506c8758ec79c1526dc7",
+      "originalRunnerSha256": "7211a1ab2296db4e0712399a17b4ab26fad2beb953b44135475f58513921ec35",
+      "originalRunnerFiles": 76,
+      "historicalInstalledRuntimeInputsValidated": "UNKNOWN",
+      "agree": true,
+      "recipes": [
+        {
+          "id": "setup/absence-a",
+          "transport": "grpc",
+          "rpc": "GetDocument",
+          "role": "control",
+          "caseId": null,
+          "document": "a",
+          "tokenInput": null,
+          "tokenOutput": null,
+          "writes": [],
+          "allow": [
+            5
+          ],
+          "deadlineMs": 10000
+        },
+        {
+          "id": "setup/create-a",
+          "transport": "grpc",
+          "rpc": "Commit",
+          "role": "control",
+          "caseId": null,
+          "document": null,
+          "tokenInput": null,
+          "tokenOutput": null,
+          "writes": [
+            {
+              "document": "a",
+              "state": "created",
+              "exists": false
+            }
+          ],
+          "allow": [
+            0
+          ],
+          "deadlineMs": 10000
+        },
+        {
+          "id": "rest/rt1/begin",
+          "transport": "rest",
+          "rpc": "BeginTransaction",
+          "role": "control",
+          "caseId": null,
+          "document": null,
+          "tokenInput": null,
+          "tokenOutput": "t1",
+          "writes": [],
+          "allow": [
+            0
+          ],
+          "deadlineMs": 10000
+        },
+        {
+          "id": "rest/rt1/read-a",
+          "transport": "rest",
+          "rpc": "GetDocument",
+          "role": "control",
+          "caseId": null,
+          "document": "a",
+          "tokenInput": "t1",
+          "tokenOutput": null,
+          "writes": [],
+          "allow": [
+            0
+          ],
+          "deadlineMs": 10000
+        },
+        {
+          "id": "rest/rt1/rollback",
+          "transport": "rest",
+          "rpc": "Rollback",
+          "role": "observation",
+          "caseId": "rest/rt1-rollback",
+          "document": null,
+          "tokenInput": "t1",
+          "tokenOutput": null,
+          "writes": [],
+          "allow": [
+            0,
+            10
+          ],
+          "deadlineMs": 10000
+        },
+        {
+          "id": "rest/rt1/retry-begin",
+          "transport": "rest",
+          "rpc": "BeginTransaction",
+          "role": "control",
+          "caseId": null,
+          "document": null,
+          "tokenInput": null,
+          "tokenOutput": "t1r",
+          "writes": [],
+          "allow": [
+            0
+          ],
+          "deadlineMs": 10000,
+          "retryOf": "t1"
+        },
+        {
+          "id": "rest/rt1/writer",
+          "transport": "rest",
+          "rpc": "Commit",
+          "role": "outside-writer",
+          "caseId": "rest/rt1-writer",
+          "document": null,
+          "tokenInput": null,
+          "tokenOutput": null,
+          "writes": [
+            {
+              "document": "a",
+              "state": "rest-rt1-writer",
+              "exists": true
+            }
+          ],
+          "allow": [
+            0,
+            10
+          ],
+          "deadlineMs": 30000
+        },
+        {
+          "id": "rest/rt1/first-read",
+          "transport": "rest",
+          "rpc": "GetDocument",
+          "role": "observation",
+          "caseId": "rest/rt1-first-read",
+          "document": "a",
+          "tokenInput": "t1r",
+          "tokenOutput": null,
+          "writes": [],
+          "allow": [
+            0,
+            3,
+            5,
+            9,
+            10
+          ],
+          "deadlineMs": 10000
+        },
+        {
+          "id": "rest/rt1/commit",
+          "transport": "rest",
+          "rpc": "Commit",
+          "role": "observation",
+          "caseId": "rest/rt1-commit",
+          "document": null,
+          "tokenInput": "t1r",
+          "tokenOutput": null,
+          "writes": [
+            {
+              "document": "a",
+              "state": "rest-rt1-commit",
+              "exists": true
+            }
+          ],
+          "allow": [
+            0,
+            3,
+            5,
+            9,
+            10
+          ],
+          "deadlineMs": 10000
+        },
+        {
+          "id": "rest/rt2/begin",
+          "transport": "rest",
+          "rpc": "BeginTransaction",
+          "role": "control",
+          "caseId": null,
+          "document": null,
+          "tokenInput": null,
+          "tokenOutput": "t2",
+          "writes": [],
+          "allow": [
+            0
+          ],
+          "deadlineMs": 10000
+        },
+        {
+          "id": "rest/rt2/read-a",
+          "transport": "rest",
+          "rpc": "GetDocument",
+          "role": "control",
+          "caseId": null,
+          "document": "a",
+          "tokenInput": "t2",
+          "tokenOutput": null,
+          "writes": [],
+          "allow": [
+            0
+          ],
+          "deadlineMs": 10000
+        },
+        {
+          "id": "rest/rt2/retry-idle",
+          "transport": "rest",
+          "rpc": "BeginTransaction",
+          "role": "observation",
+          "caseId": "rest/rt2-retry-idle",
+          "document": null,
+          "tokenInput": null,
+          "tokenOutput": "t2r",
+          "writes": [],
+          "allow": [
+            0,
+            3,
+            5,
+            9,
+            10
+          ],
+          "deadlineMs": 10000,
+          "retryOf": "t2",
+          "waitSeconds": 130
+        },
+        {
+          "id": "rest/rt3/begin",
+          "transport": "rest",
+          "rpc": "BeginTransaction",
+          "role": "control",
+          "caseId": null,
+          "document": null,
+          "tokenInput": null,
+          "tokenOutput": "t3",
+          "writes": [],
+          "allow": [
+            0
+          ],
+          "deadlineMs": 10000
+        },
+        {
+          "id": "rest/rt3/read-a",
+          "transport": "rest",
+          "rpc": "GetDocument",
+          "role": "control",
+          "caseId": null,
+          "document": "a",
+          "tokenInput": "t3",
+          "tokenOutput": null,
+          "writes": [],
+          "allow": [
+            0
+          ],
+          "deadlineMs": 10000
+        },
+        {
+          "id": "rest/rt3/rollback-idle",
+          "transport": "rest",
+          "rpc": "Rollback",
+          "role": "observation",
+          "caseId": "rest/rt3-rollback-idle",
+          "document": null,
+          "tokenInput": "t3",
+          "tokenOutput": null,
+          "writes": [],
+          "allow": [
+            0,
+            3,
+            5,
+            9,
+            10
+          ],
+          "deadlineMs": 10000,
+          "waitSeconds": 130
+        },
+        {
+          "id": "rest/rt3/retry-after-rollback",
+          "transport": "rest",
+          "rpc": "BeginTransaction",
+          "role": "observation",
+          "caseId": "rest/rt3-retry-after-rollback",
+          "document": null,
+          "tokenInput": null,
+          "tokenOutput": "t3r",
+          "writes": [],
+          "allow": [
+            0,
+            3,
+            5,
+            9,
+            10
+          ],
+          "deadlineMs": 10000,
+          "retryOf": "t3"
+        },
+        {
+          "id": "rest/rt4/begin",
+          "transport": "rest",
+          "rpc": "BeginTransaction",
+          "role": "control",
+          "caseId": null,
+          "document": null,
+          "tokenInput": null,
+          "tokenOutput": "t4",
+          "writes": [],
+          "allow": [
+            0
+          ],
+          "deadlineMs": 10000
+        },
+        {
+          "id": "rest/rt4/read-a",
+          "transport": "rest",
+          "rpc": "GetDocument",
+          "role": "control",
+          "caseId": null,
+          "document": "a",
+          "tokenInput": "t4",
+          "tokenOutput": null,
+          "writes": [],
+          "allow": [
+            0
+          ],
+          "deadlineMs": 10000
+        },
+        {
+          "id": "rest/rt4/keepalive-1",
+          "transport": "rest",
+          "rpc": "GetDocument",
+          "role": "observation",
+          "caseId": null,
+          "document": "a",
+          "tokenInput": "t4",
+          "tokenOutput": null,
+          "writes": [],
+          "allow": [
+            0,
+            3,
+            5,
+            9,
+            10
+          ],
+          "deadlineMs": 10000,
+          "waitSeconds": 24
+        },
+        {
+          "id": "rest/rt4/keepalive-2",
+          "transport": "rest",
+          "rpc": "GetDocument",
+          "role": "observation",
+          "caseId": null,
+          "document": "a",
+          "tokenInput": "t4",
+          "tokenOutput": null,
+          "writes": [],
+          "allow": [
+            0,
+            3,
+            5,
+            9,
+            10
+          ],
+          "deadlineMs": 10000,
+          "waitSeconds": 24
+        },
+        {
+          "id": "rest/rt4/keepalive-3",
+          "transport": "rest",
+          "rpc": "GetDocument",
+          "role": "observation",
+          "caseId": null,
+          "document": "a",
+          "tokenInput": "t4",
+          "tokenOutput": null,
+          "writes": [],
+          "allow": [
+            0,
+            3,
+            5,
+            9,
+            10
+          ],
+          "deadlineMs": 10000,
+          "waitSeconds": 24
+        },
+        {
+          "id": "rest/rt4/keepalive-4",
+          "transport": "rest",
+          "rpc": "GetDocument",
+          "role": "observation",
+          "caseId": null,
+          "document": "a",
+          "tokenInput": "t4",
+          "tokenOutput": null,
+          "writes": [],
+          "allow": [
+            0,
+            3,
+            5,
+            9,
+            10
+          ],
+          "deadlineMs": 10000,
+          "waitSeconds": 24
+        },
+        {
+          "id": "rest/rt4/keepalive-5",
+          "transport": "rest",
+          "rpc": "GetDocument",
+          "role": "observation",
+          "caseId": null,
+          "document": "a",
+          "tokenInput": "t4",
+          "tokenOutput": null,
+          "writes": [],
+          "allow": [
+            0,
+            3,
+            5,
+            9,
+            10
+          ],
+          "deadlineMs": 10000,
+          "waitSeconds": 24
+        },
+        {
+          "id": "rest/rt4/keepalive-6",
+          "transport": "rest",
+          "rpc": "GetDocument",
+          "role": "observation",
+          "caseId": null,
+          "document": "a",
+          "tokenInput": "t4",
+          "tokenOutput": null,
+          "writes": [],
+          "allow": [
+            0,
+            3,
+            5,
+            9,
+            10
+          ],
+          "deadlineMs": 10000,
+          "waitSeconds": 24
+        },
+        {
+          "id": "rest/rt4/keepalive-7",
+          "transport": "rest",
+          "rpc": "GetDocument",
+          "role": "observation",
+          "caseId": null,
+          "document": "a",
+          "tokenInput": "t4",
+          "tokenOutput": null,
+          "writes": [],
+          "allow": [
+            0,
+            3,
+            5,
+            9,
+            10
+          ],
+          "deadlineMs": 10000,
+          "waitSeconds": 24
+        },
+        {
+          "id": "rest/rt4/keepalive-8",
+          "transport": "rest",
+          "rpc": "GetDocument",
+          "role": "observation",
+          "caseId": null,
+          "document": "a",
+          "tokenInput": "t4",
+          "tokenOutput": null,
+          "writes": [],
+          "allow": [
+            0,
+            3,
+            5,
+            9,
+            10
+          ],
+          "deadlineMs": 10000,
+          "waitSeconds": 24
+        },
+        {
+          "id": "rest/rt4/keepalive-9",
+          "transport": "rest",
+          "rpc": "GetDocument",
+          "role": "observation",
+          "caseId": null,
+          "document": "a",
+          "tokenInput": "t4",
+          "tokenOutput": null,
+          "writes": [],
+          "allow": [
+            0,
+            3,
+            5,
+            9,
+            10
+          ],
+          "deadlineMs": 10000,
+          "waitSeconds": 24
+        },
+        {
+          "id": "rest/rt4/live-read",
+          "transport": "rest",
+          "rpc": "GetDocument",
+          "role": "observation",
+          "caseId": null,
+          "document": "a",
+          "tokenInput": "t4",
+          "tokenOutput": null,
+          "writes": [],
+          "allow": [
+            0,
+            3,
+            5,
+            9,
+            10
+          ],
+          "deadlineMs": 10000,
+          "waitSeconds": 12
+        },
+        {
+          "id": "rest/rt4/retry-lifetime",
+          "transport": "rest",
+          "rpc": "BeginTransaction",
+          "role": "observation",
+          "caseId": "rest/rt4-retry-lifetime",
+          "document": null,
+          "tokenInput": null,
+          "tokenOutput": "t4r",
+          "writes": [],
+          "allow": [
+            0,
+            3,
+            5,
+            9,
+            10
+          ],
+          "deadlineMs": 10000,
+          "retryOf": "t4",
+          "waitSeconds": 32
+        },
+        {
+          "id": "final/post-read-a",
+          "transport": "rest",
+          "rpc": "GetDocument",
+          "role": "post-state",
+          "caseId": null,
+          "document": "a",
+          "tokenInput": null,
+          "tokenOutput": null,
+          "writes": [],
+          "allow": [
+            0
+          ],
+          "deadlineMs": 10000
+        }
+      ],
+      "retryConsequences": [
+        {
+          "site": "rest/rt1/retry-begin",
+          "namedToken": "t1",
+          "issuedToken": "t1r",
+          "issuedDifferent": true
+        },
+        {
+          "site": "rest/rt2/retry-idle",
+          "namedToken": "t2",
+          "issuedToken": "t2r",
+          "issuedDifferent": true
+        },
+        {
+          "site": "rest/rt3/retry-after-rollback",
+          "namedToken": "t3",
+          "issuedToken": "t3r",
+          "issuedDifferent": true
+        },
+        {
+          "site": "rest/rt4/retry-lifetime",
+          "namedToken": "t4",
+          "issuedToken": "t4r",
+          "issuedDifferent": true
+        }
+      ],
+      "semantics": {
+        "program": "FS-TRANSACTION-P13B-RETRY-ANSWERS",
+        "corpusDigest": "3c91e4695ace7cccb5089f3c8fc88425f1393ee40a13c28f97bf15ac05a63751",
+        "steps": {
+          "setup/absence-a": {
+            "transport": "grpc",
+            "rpc": "GetDocument",
+            "caseId": null,
+            "code": 5,
+            "http": null,
+            "details": "Document \"projects/<project>/databases/(default)/documents/oracle/<nonce>/txn-p13b/a\" not found.",
+            "read": {
+              "site": "setup/absence-a",
+              "code": 5,
+              "state": null
+            },
+            "versions": {}
+          },
+          "setup/create-a": {
+            "transport": "grpc",
+            "rpc": "Commit",
+            "caseId": null,
+            "code": 0,
+            "http": null,
+            "details": "",
+            "read": null,
+            "versions": {
+              "/commitTime": {
+                "rank": 0,
+                "layout": {
+                  "members": [
+                    "nanos",
+                    "seconds"
+                  ]
+                }
+              },
+              "/writeResults/0/updateTime": {
+                "rank": 0,
+                "layout": {
+                  "members": [
+                    "nanos",
+                    "seconds"
+                  ]
+                }
+              }
+            }
+          },
+          "rest/rt1/begin": {
+            "transport": "rest",
+            "rpc": "BeginTransaction",
+            "caseId": null,
+            "code": 0,
+            "http": 200,
+            "details": "",
+            "read": null,
+            "versions": {}
+          },
+          "rest/rt1/read-a": {
+            "transport": "rest",
+            "rpc": "GetDocument",
+            "caseId": null,
+            "code": 0,
+            "http": 200,
+            "details": "",
+            "read": {
+              "site": "rest/rt1/read-a",
+              "code": 0,
+              "state": "created"
+            },
+            "versions": {
+              "/createTime": {
+                "rank": 0,
+                "layout": {
+                  "precision": 6
+                }
+              },
+              "/updateTime": {
+                "rank": 0,
+                "layout": {
+                  "precision": 6
+                }
+              }
+            }
+          },
+          "rest/rt1/rollback": {
+            "transport": "rest",
+            "rpc": "Rollback",
+            "caseId": "rest/rt1-rollback",
+            "code": 0,
+            "http": 200,
+            "details": "",
+            "read": null,
+            "versions": {}
+          },
+          "rest/rt1/retry-begin": {
+            "transport": "rest",
+            "rpc": "BeginTransaction",
+            "caseId": null,
+            "code": 0,
+            "http": 200,
+            "details": "",
+            "read": null,
+            "versions": {}
+          },
+          "rest/rt1/writer": {
+            "transport": "rest",
+            "rpc": "Commit",
+            "caseId": "rest/rt1-writer",
+            "code": 0,
+            "http": 200,
+            "details": "",
+            "read": null,
+            "versions": {
+              "/commitTime": {
+                "rank": 1,
+                "layout": {
+                  "precision": 6
+                }
+              },
+              "/writeResults/0/updateTime": {
+                "rank": 1,
+                "layout": {
+                  "precision": 6
+                }
+              }
+            }
+          },
+          "rest/rt1/first-read": {
+            "transport": "rest",
+            "rpc": "GetDocument",
+            "caseId": "rest/rt1-first-read",
+            "code": 0,
+            "http": 200,
+            "details": "",
+            "read": {
+              "site": "rest/rt1/first-read",
+              "code": 0,
+              "state": "rest-rt1-writer"
+            },
+            "versions": {
+              "/createTime": {
+                "rank": 0,
+                "layout": {
+                  "precision": 6
+                }
+              },
+              "/updateTime": {
+                "rank": 1,
+                "layout": {
+                  "precision": 6
+                }
+              }
+            }
+          },
+          "rest/rt1/commit": {
+            "transport": "rest",
+            "rpc": "Commit",
+            "caseId": "rest/rt1-commit",
+            "code": 0,
+            "http": 200,
+            "details": "",
+            "read": null,
+            "versions": {
+              "/commitTime": {
+                "rank": 2,
+                "layout": {
+                  "precision": 6
+                }
+              },
+              "/writeResults/0/updateTime": {
+                "rank": 2,
+                "layout": {
+                  "precision": 6
+                }
+              }
+            }
+          },
+          "rest/rt2/begin": {
+            "transport": "rest",
+            "rpc": "BeginTransaction",
+            "caseId": null,
+            "code": 0,
+            "http": 200,
+            "details": "",
+            "read": null,
+            "versions": {}
+          },
+          "rest/rt2/read-a": {
+            "transport": "rest",
+            "rpc": "GetDocument",
+            "caseId": null,
+            "code": 0,
+            "http": 200,
+            "details": "",
+            "read": {
+              "site": "rest/rt2/read-a",
+              "code": 0,
+              "state": "rest-rt1-commit"
+            },
+            "versions": {
+              "/createTime": {
+                "rank": 0,
+                "layout": {
+                  "precision": 6
+                }
+              },
+              "/updateTime": {
+                "rank": 2,
+                "layout": {
+                  "precision": 6
+                }
+              }
+            }
+          },
+          "rest/rt2/retry-idle": {
+            "transport": "rest",
+            "rpc": "BeginTransaction",
+            "caseId": "rest/rt2-retry-idle",
+            "code": 0,
+            "http": 200,
+            "details": "",
+            "read": null,
+            "versions": {}
+          },
+          "rest/rt3/begin": {
+            "transport": "rest",
+            "rpc": "BeginTransaction",
+            "caseId": null,
+            "code": 0,
+            "http": 200,
+            "details": "",
+            "read": null,
+            "versions": {}
+          },
+          "rest/rt3/read-a": {
+            "transport": "rest",
+            "rpc": "GetDocument",
+            "caseId": null,
+            "code": 0,
+            "http": 200,
+            "details": "",
+            "read": {
+              "site": "rest/rt3/read-a",
+              "code": 0,
+              "state": "rest-rt1-commit"
+            },
+            "versions": {
+              "/createTime": {
+                "rank": 0,
+                "layout": {
+                  "precision": 6
+                }
+              },
+              "/updateTime": {
+                "rank": 2,
+                "layout": {
+                  "precision": 6
+                }
+              }
+            }
+          },
+          "rest/rt3/rollback-idle": {
+            "transport": "rest",
+            "rpc": "Rollback",
+            "caseId": "rest/rt3-rollback-idle",
+            "code": 0,
+            "http": 200,
+            "details": "",
+            "read": null,
+            "versions": {}
+          },
+          "rest/rt3/retry-after-rollback": {
+            "transport": "rest",
+            "rpc": "BeginTransaction",
+            "caseId": "rest/rt3-retry-after-rollback",
+            "code": 0,
+            "http": 200,
+            "details": "",
+            "read": null,
+            "versions": {}
+          },
+          "rest/rt4/begin": {
+            "transport": "rest",
+            "rpc": "BeginTransaction",
+            "caseId": null,
+            "code": 0,
+            "http": 200,
+            "details": "",
+            "read": null,
+            "versions": {}
+          },
+          "rest/rt4/read-a": {
+            "transport": "rest",
+            "rpc": "GetDocument",
+            "caseId": null,
+            "code": 0,
+            "http": 200,
+            "details": "",
+            "read": {
+              "site": "rest/rt4/read-a",
+              "code": 0,
+              "state": "rest-rt1-commit"
+            },
+            "versions": {
+              "/createTime": {
+                "rank": 0,
+                "layout": {
+                  "precision": 6
+                }
+              },
+              "/updateTime": {
+                "rank": 2,
+                "layout": {
+                  "precision": 6
+                }
+              }
+            }
+          },
+          "rest/rt4/keepalive-1": {
+            "transport": "rest",
+            "rpc": "GetDocument",
+            "caseId": null,
+            "code": 0,
+            "http": 200,
+            "details": "",
+            "read": {
+              "site": "rest/rt4/keepalive-1",
+              "code": 0,
+              "state": "rest-rt1-commit"
+            },
+            "versions": {
+              "/createTime": {
+                "rank": 0,
+                "layout": {
+                  "precision": 6
+                }
+              },
+              "/updateTime": {
+                "rank": 2,
+                "layout": {
+                  "precision": 6
+                }
+              }
+            }
+          },
+          "rest/rt4/keepalive-2": {
+            "transport": "rest",
+            "rpc": "GetDocument",
+            "caseId": null,
+            "code": 0,
+            "http": 200,
+            "details": "",
+            "read": {
+              "site": "rest/rt4/keepalive-2",
+              "code": 0,
+              "state": "rest-rt1-commit"
+            },
+            "versions": {
+              "/createTime": {
+                "rank": 0,
+                "layout": {
+                  "precision": 6
+                }
+              },
+              "/updateTime": {
+                "rank": 2,
+                "layout": {
+                  "precision": 6
+                }
+              }
+            }
+          },
+          "rest/rt4/keepalive-3": {
+            "transport": "rest",
+            "rpc": "GetDocument",
+            "caseId": null,
+            "code": 0,
+            "http": 200,
+            "details": "",
+            "read": {
+              "site": "rest/rt4/keepalive-3",
+              "code": 0,
+              "state": "rest-rt1-commit"
+            },
+            "versions": {
+              "/createTime": {
+                "rank": 0,
+                "layout": {
+                  "precision": 6
+                }
+              },
+              "/updateTime": {
+                "rank": 2,
+                "layout": {
+                  "precision": 6
+                }
+              }
+            }
+          },
+          "rest/rt4/keepalive-4": {
+            "transport": "rest",
+            "rpc": "GetDocument",
+            "caseId": null,
+            "code": 0,
+            "http": 200,
+            "details": "",
+            "read": {
+              "site": "rest/rt4/keepalive-4",
+              "code": 0,
+              "state": "rest-rt1-commit"
+            },
+            "versions": {
+              "/createTime": {
+                "rank": 0,
+                "layout": {
+                  "precision": 6
+                }
+              },
+              "/updateTime": {
+                "rank": 2,
+                "layout": {
+                  "precision": 6
+                }
+              }
+            }
+          },
+          "rest/rt4/keepalive-5": {
+            "transport": "rest",
+            "rpc": "GetDocument",
+            "caseId": null,
+            "code": 0,
+            "http": 200,
+            "details": "",
+            "read": {
+              "site": "rest/rt4/keepalive-5",
+              "code": 0,
+              "state": "rest-rt1-commit"
+            },
+            "versions": {
+              "/createTime": {
+                "rank": 0,
+                "layout": {
+                  "precision": 6
+                }
+              },
+              "/updateTime": {
+                "rank": 2,
+                "layout": {
+                  "precision": 6
+                }
+              }
+            }
+          },
+          "rest/rt4/keepalive-6": {
+            "transport": "rest",
+            "rpc": "GetDocument",
+            "caseId": null,
+            "code": 0,
+            "http": 200,
+            "details": "",
+            "read": {
+              "site": "rest/rt4/keepalive-6",
+              "code": 0,
+              "state": "rest-rt1-commit"
+            },
+            "versions": {
+              "/createTime": {
+                "rank": 0,
+                "layout": {
+                  "precision": 6
+                }
+              },
+              "/updateTime": {
+                "rank": 2,
+                "layout": {
+                  "precision": 6
+                }
+              }
+            }
+          },
+          "rest/rt4/keepalive-7": {
+            "transport": "rest",
+            "rpc": "GetDocument",
+            "caseId": null,
+            "code": 0,
+            "http": 200,
+            "details": "",
+            "read": {
+              "site": "rest/rt4/keepalive-7",
+              "code": 0,
+              "state": "rest-rt1-commit"
+            },
+            "versions": {
+              "/createTime": {
+                "rank": 0,
+                "layout": {
+                  "precision": 6
+                }
+              },
+              "/updateTime": {
+                "rank": 2,
+                "layout": {
+                  "precision": 6
+                }
+              }
+            }
+          },
+          "rest/rt4/keepalive-8": {
+            "transport": "rest",
+            "rpc": "GetDocument",
+            "caseId": null,
+            "code": 0,
+            "http": 200,
+            "details": "",
+            "read": {
+              "site": "rest/rt4/keepalive-8",
+              "code": 0,
+              "state": "rest-rt1-commit"
+            },
+            "versions": {
+              "/createTime": {
+                "rank": 0,
+                "layout": {
+                  "precision": 6
+                }
+              },
+              "/updateTime": {
+                "rank": 2,
+                "layout": {
+                  "precision": 6
+                }
+              }
+            }
+          },
+          "rest/rt4/keepalive-9": {
+            "transport": "rest",
+            "rpc": "GetDocument",
+            "caseId": null,
+            "code": 0,
+            "http": 200,
+            "details": "",
+            "read": {
+              "site": "rest/rt4/keepalive-9",
+              "code": 0,
+              "state": "rest-rt1-commit"
+            },
+            "versions": {
+              "/createTime": {
+                "rank": 0,
+                "layout": {
+                  "precision": 6
+                }
+              },
+              "/updateTime": {
+                "rank": 2,
+                "layout": {
+                  "precision": 6
+                }
+              }
+            }
+          },
+          "rest/rt4/live-read": {
+            "transport": "rest",
+            "rpc": "GetDocument",
+            "caseId": null,
+            "code": 0,
+            "http": 200,
+            "details": "",
+            "read": {
+              "site": "rest/rt4/live-read",
+              "code": 0,
+              "state": "rest-rt1-commit"
+            },
+            "versions": {
+              "/createTime": {
+                "rank": 0,
+                "layout": {
+                  "precision": 6
+                }
+              },
+              "/updateTime": {
+                "rank": 2,
+                "layout": {
+                  "precision": 6
+                }
+              }
+            }
+          },
+          "rest/rt4/retry-lifetime": {
+            "transport": "rest",
+            "rpc": "BeginTransaction",
+            "caseId": "rest/rt4-retry-lifetime",
+            "code": 0,
+            "http": 200,
+            "details": "",
+            "read": null,
+            "versions": {}
+          },
+          "final/post-read-a": {
+            "transport": "rest",
+            "rpc": "GetDocument",
+            "caseId": null,
+            "code": 0,
+            "http": 200,
+            "details": "",
+            "read": {
+              "site": "final/post-read-a",
+              "code": 0,
+              "state": "rest-rt1-commit"
+            },
+            "versions": {
+              "/createTime": {
+                "rank": 0,
+                "layout": {
+                  "precision": 6
+                }
+              },
+              "/updateTime": {
+                "rank": 2,
+                "layout": {
+                  "precision": 6
+                }
+              }
+            }
+          }
+        },
+        "cleanupSteps": {
+          "cleanup/token/t2": {
+            "transport": "rest",
+            "rpc": "Rollback",
+            "caseId": null,
+            "code": 0,
+            "http": 200,
+            "details": "",
+            "read": null,
+            "versions": {}
+          },
+          "cleanup/token/t2r": {
+            "transport": "rest",
+            "rpc": "Rollback",
+            "caseId": null,
+            "code": 0,
+            "http": 200,
+            "details": "",
+            "read": null,
+            "versions": {}
+          },
+          "cleanup/token/t3r": {
+            "transport": "rest",
+            "rpc": "Rollback",
+            "caseId": null,
+            "code": 0,
+            "http": 200,
+            "details": "",
+            "read": null,
+            "versions": {}
+          },
+          "cleanup/token/t4": {
+            "transport": "rest",
+            "rpc": "Rollback",
+            "caseId": null,
+            "code": 10,
+            "http": 409,
+            "details": "The referenced transaction has expired or is no longer valid.",
+            "read": null,
+            "versions": {}
+          },
+          "cleanup/token/t4r": {
+            "transport": "rest",
+            "rpc": "Rollback",
+            "caseId": null,
+            "code": 0,
+            "http": 200,
+            "details": "",
+            "read": null,
+            "versions": {}
+          },
+          "cleanup/read/a": {
+            "transport": "grpc",
+            "rpc": "GetDocument",
+            "caseId": null,
+            "code": 0,
+            "http": null,
+            "details": "",
+            "read": null,
+            "versions": {
+              "/createTime": {
+                "rank": 0,
+                "layout": {
+                  "members": [
+                    "nanos",
+                    "seconds"
+                  ]
+                }
+              },
+              "/updateTime": {
+                "rank": 2,
+                "layout": {
+                  "members": [
+                    "nanos",
+                    "seconds"
+                  ]
+                }
+              }
+            }
+          },
+          "cleanup/delete/a": {
+            "transport": "grpc",
+            "rpc": "DeleteDocument",
+            "caseId": null,
+            "code": 0,
+            "http": null,
+            "details": "",
+            "read": null,
+            "versions": {}
+          },
+          "cleanup/verify/a": {
+            "transport": "grpc",
+            "rpc": "GetDocument",
+            "caseId": null,
+            "code": 5,
+            "http": null,
+            "details": "Document \"projects/<project>/databases/(default)/documents/oracle/<nonce>/txn-p13b/a\" not found.",
+            "read": null,
+            "versions": {}
+          }
+        },
+        "tokens": {
+          "t1": {
+            "transport": "rest",
+            "state": "rolled-back"
+          },
+          "t1r": {
+            "transport": "rest",
+            "state": "committed"
+          },
+          "t2": {
+            "transport": "rest",
+            "state": "rolled-back"
+          },
+          "t2r": {
+            "transport": "rest",
+            "state": "rolled-back"
+          },
+          "t3": {
+            "transport": "rest",
+            "state": "rolled-back"
+          },
+          "t3r": {
+            "transport": "rest",
+            "state": "rolled-back"
+          },
+          "t4": {
+            "transport": "rest",
+            "state": "released-refused"
+          },
+          "t4r": {
+            "transport": "rest",
+            "state": "rolled-back"
+          }
+        },
+        "cleanup": {
+          "absent": true
+        },
+        "commitTimes": {
+          "setup/create-a": {
+            "commitTime": true,
+            "relation": null
+          },
+          "rest/rt1/writer": {
+            "commitTime": true,
+            "relation": null
+          },
+          "rest/rt1/commit": {
+            "commitTime": true,
+            "relation": null
+          }
+        }
+      },
+      "projection": {
+        "program": "FS-TRANSACTION-P13B-RETRY-ANSWERS",
+        "packetName": "p13b-retry-answers",
+        "corpusDigest": "3c91e4695ace7cccb5089f3c8fc88425f1393ee40a13c28f97bf15ac05a63751",
+        "cases": [
+          {
+            "caseId": "rest/rt1-rollback",
+            "transport": "rest",
+            "rpc": "Rollback",
+            "code": 0,
+            "outcomeClass": "OK",
+            "details": ""
+          },
+          {
+            "caseId": "rest/rt1-writer",
+            "transport": "rest",
+            "rpc": "Commit",
+            "code": 0,
+            "outcomeClass": "OK",
+            "details": ""
+          },
+          {
+            "caseId": "rest/rt1-first-read",
+            "transport": "rest",
+            "rpc": "GetDocument",
+            "code": 0,
+            "outcomeClass": "OK",
+            "details": ""
+          },
+          {
+            "caseId": "rest/rt1-commit",
+            "transport": "rest",
+            "rpc": "Commit",
+            "code": 0,
+            "outcomeClass": "OK",
+            "details": ""
+          },
+          {
+            "caseId": "rest/rt2-retry-idle",
+            "transport": "rest",
+            "rpc": "BeginTransaction",
+            "code": 0,
+            "outcomeClass": "OK",
+            "details": ""
+          },
+          {
+            "caseId": "rest/rt3-rollback-idle",
+            "transport": "rest",
+            "rpc": "Rollback",
+            "code": 0,
+            "outcomeClass": "OK",
+            "details": ""
+          },
+          {
+            "caseId": "rest/rt3-retry-after-rollback",
+            "transport": "rest",
+            "rpc": "BeginTransaction",
+            "code": 0,
+            "outcomeClass": "OK",
+            "details": ""
+          },
+          {
+            "caseId": "rest/rt4-retry-lifetime",
+            "transport": "rest",
+            "rpc": "BeginTransaction",
+            "code": 0,
+            "outcomeClass": "OK",
+            "details": ""
+          }
+        ],
+        "reads": [
+          {
+            "site": "setup/absence-a",
+            "code": 5,
+            "state": null
+          },
+          {
+            "site": "rest/rt1/read-a",
+            "code": 0,
+            "state": "created"
+          },
+          {
+            "site": "rest/rt1/first-read",
+            "code": 0,
+            "state": "rest-rt1-writer"
+          },
+          {
+            "site": "rest/rt2/read-a",
+            "code": 0,
+            "state": "rest-rt1-commit"
+          },
+          {
+            "site": "rest/rt3/read-a",
+            "code": 0,
+            "state": "rest-rt1-commit"
+          },
+          {
+            "site": "rest/rt4/read-a",
+            "code": 0,
+            "state": "rest-rt1-commit"
+          },
+          {
+            "site": "rest/rt4/keepalive-1",
+            "code": 0,
+            "state": "rest-rt1-commit"
+          },
+          {
+            "site": "rest/rt4/keepalive-2",
+            "code": 0,
+            "state": "rest-rt1-commit"
+          },
+          {
+            "site": "rest/rt4/keepalive-3",
+            "code": 0,
+            "state": "rest-rt1-commit"
+          },
+          {
+            "site": "rest/rt4/keepalive-4",
+            "code": 0,
+            "state": "rest-rt1-commit"
+          },
+          {
+            "site": "rest/rt4/keepalive-5",
+            "code": 0,
+            "state": "rest-rt1-commit"
+          },
+          {
+            "site": "rest/rt4/keepalive-6",
+            "code": 0,
+            "state": "rest-rt1-commit"
+          },
+          {
+            "site": "rest/rt4/keepalive-7",
+            "code": 0,
+            "state": "rest-rt1-commit"
+          },
+          {
+            "site": "rest/rt4/keepalive-8",
+            "code": 0,
+            "state": "rest-rt1-commit"
+          },
+          {
+            "site": "rest/rt4/keepalive-9",
+            "code": 0,
+            "state": "rest-rt1-commit"
+          },
+          {
+            "site": "rest/rt4/live-read",
+            "code": 0,
+            "state": "rest-rt1-commit"
+          },
+          {
+            "site": "final/post-read-a",
+            "code": 0,
+            "state": "rest-rt1-commit"
+          }
+        ],
+        "tokens": {
+          "t1": {
+            "transport": "rest",
+            "state": "rolled-back"
+          },
+          "t1r": {
+            "transport": "rest",
+            "state": "committed"
+          },
+          "t2": {
+            "transport": "rest",
+            "state": "rolled-back"
+          },
+          "t2r": {
+            "transport": "rest",
+            "state": "rolled-back"
+          },
+          "t3": {
+            "transport": "rest",
+            "state": "rolled-back"
+          },
+          "t3r": {
+            "transport": "rest",
+            "state": "rolled-back"
+          },
+          "t4": {
+            "transport": "rest",
+            "state": "released-refused"
+          },
+          "t4r": {
+            "transport": "rest",
+            "state": "rolled-back"
+          }
+        },
+        "expectedStates": {
+          "a": "rest-rt1-commit"
+        },
+        "cleanup": {
+          "absent": true
+        },
+        "waits": [
+          {
+            "site": "rest/rt2/retry-idle",
+            "seconds": 130,
+            "ageClass": "BEFORE"
+          },
+          {
+            "site": "rest/rt3/rollback-idle",
+            "seconds": 130,
+            "ageClass": "BEFORE"
+          },
+          {
+            "site": "rest/rt4/keepalive-1",
+            "seconds": 24,
+            "ageClass": "BEFORE"
+          },
+          {
+            "site": "rest/rt4/keepalive-2",
+            "seconds": 24,
+            "ageClass": "BEFORE"
+          },
+          {
+            "site": "rest/rt4/keepalive-3",
+            "seconds": 24,
+            "ageClass": "BEFORE"
+          },
+          {
+            "site": "rest/rt4/keepalive-4",
+            "seconds": 24,
+            "ageClass": "BEFORE"
+          },
+          {
+            "site": "rest/rt4/keepalive-5",
+            "seconds": 24,
+            "ageClass": "BEFORE"
+          },
+          {
+            "site": "rest/rt4/keepalive-6",
+            "seconds": 24,
+            "ageClass": "BEFORE"
+          },
+          {
+            "site": "rest/rt4/keepalive-7",
+            "seconds": 24,
+            "ageClass": "BEFORE"
+          },
+          {
+            "site": "rest/rt4/keepalive-8",
+            "seconds": 24,
+            "ageClass": "BEFORE"
+          },
+          {
+            "site": "rest/rt4/keepalive-9",
+            "seconds": 24,
+            "ageClass": "BEFORE"
+          },
+          {
+            "site": "rest/rt4/live-read",
+            "seconds": 12,
+            "ageClass": "BEFORE"
+          },
+          {
+            "site": "rest/rt4/retry-lifetime",
+            "seconds": 32,
+            "ageClass": "AFTER"
+          }
+        ]
+      },
+      "recordings": [
+        {
+          "recording": 1,
+          "reference": "fs-transaction-p13b/recording-1.json",
+          "sha256": "0c3d167857686716f8d2ecb0b65e37cd82e3fab04676e8c8ebe0c2fc2b5d22d5",
+          "complete": true,
+          "graphComplete": true,
+          "cleanupAbsent": true,
+          "requests": 45,
+          "phaseRequests": {
+            "credential": 1,
+            "documentCleanup": 3,
+            "management": 6,
+            "observation": 30,
+            "tokenCleanup": 5
+          },
+          "observations": 8,
+          "transportObservations": {
+            "rest": 8
+          },
+          "openTokens": 0,
+          "unknownOutcomes": 0,
+          "issuedTokensDistinct": true,
+          "semanticDigest": "f1ff8680bc03e91c12d81419333f0026af5c638b55bc4699306268b0ebe9f54b",
+          "projectionDigest": "2272508d8189b049b9bf315d99c5b4c93142cedabb54f8f77994b2c9dd5d0a62",
+          "waits": [
+            {
+              "site": "rest/rt2/retry-idle",
+              "seconds": 130,
+              "tokenRole": "t2",
+              "idleInterval": {
+                "lowerSeconds": 130.6133042499423,
+                "upperSeconds": 132.81313683325425
+              },
+              "totalAgeInterval": {
+                "lowerSeconds": 132.24386612465605,
+                "upperSeconds": 134.53852562513202
+              }
+            },
+            {
+              "site": "rest/rt3/rollback-idle",
+              "seconds": 130,
+              "tokenRole": "t3",
+              "idleInterval": {
+                "lowerSeconds": 130.6185357091017,
+                "upperSeconds": 132.79740991722792
+              },
+              "totalAgeInterval": {
+                "lowerSeconds": 132.30436287494376,
+                "upperSeconds": 134.50740225007758
+              }
+            },
+            {
+              "site": "rest/rt4/keepalive-1",
+              "seconds": 24,
+              "tokenRole": "t4",
+              "idleInterval": {
+                "lowerSeconds": 24.618578125257045,
+                "upperSeconds": 26.96724154194817
+              },
+              "totalAgeInterval": {
+                "lowerSeconds": 26.430105958133936,
+                "upperSeconds": 28.686170666944236
+              }
+            },
+            {
+              "site": "rest/rt4/keepalive-2",
+              "seconds": 24,
+              "tokenRole": "t4",
+              "idleInterval": {
+                "lowerSeconds": 24.6281659998931,
+                "upperSeconds": 26.951723457779735
+              },
+              "totalAgeInterval": {
+                "lowerSeconds": 52.20135370781645,
+                "upperSeconds": 54.494812374934554
+              }
+            },
+            {
+              "site": "rest/rt4/keepalive-3",
+              "seconds": 24,
+              "tokenRole": "t4",
+              "idleInterval": {
+                "lowerSeconds": 24.652687458787113,
+                "upperSeconds": 26.882031958084553
+              },
+              "totalAgeInterval": {
+                "lowerSeconds": 78.03451687470078,
+                "upperSeconds": 80.19636862492189
+              }
+            },
+            {
+              "site": "rest/rt4/keepalive-4",
+              "seconds": 24,
+              "tokenRole": "t4",
+              "idleInterval": {
+                "lowerSeconds": 24.614613125100732,
+                "upperSeconds": 27.184890958014876
+              },
+              "totalAgeInterval": {
+                "lowerSeconds": 103.69799879100174,
+                "upperSeconds": 106.33239079173654
+              }
+            },
+            {
+              "site": "rest/rt4/keepalive-5",
+              "seconds": 24,
+              "tokenRole": "t4",
+              "idleInterval": {
+                "lowerSeconds": 24.61963858315721,
+                "upperSeconds": 27.161367708817124
+              },
+              "totalAgeInterval": {
+                "lowerSeconds": 129.83904641587287,
+                "upperSeconds": 131.97234945883974
+              }
+            },
+            {
+              "site": "rest/rt4/keepalive-6",
+              "seconds": 24,
+              "tokenRole": "t4",
+              "idleInterval": {
+                "lowerSeconds": 24.623924083076417,
+                "upperSeconds": 26.862272209022194
+              },
+              "totalAgeInterval": {
+                "lowerSeconds": 155.48329058289528,
+                "upperSeconds": 157.81430158391595
+              }
+            },
+            {
+              "site": "rest/rt4/keepalive-7",
+              "seconds": 24,
+              "tokenRole": "t4",
+              "idleInterval": {
+                "lowerSeconds": 24.617502333130687,
+                "upperSeconds": 26.848171249963343
+              },
+              "totalAgeInterval": {
+                "lowerSeconds": 181.31882095802575,
+                "upperSeconds": 183.4444447918795
+              }
+            },
+            {
+              "site": "rest/rt4/keepalive-8",
+              "seconds": 24,
+              "tokenRole": "t4",
+              "idleInterval": {
+                "lowerSeconds": 24.615807333029807,
+                "upperSeconds": 26.73251554183662
+              },
+              "totalAgeInterval": {
+                "lowerSeconds": 206.94726916588843,
+                "upperSeconds": 209.16431945888326
+              }
+            },
+            {
+              "site": "rest/rt4/keepalive-9",
+              "seconds": 24,
+              "tokenRole": "t4",
+              "idleInterval": {
+                "lowerSeconds": 24.62323808297515,
+                "upperSeconds": 26.925839833915234
+              },
+              "totalAgeInterval": {
+                "lowerSeconds": 232.67457458283752,
+                "upperSeconds": 234.98609195882455
+              }
+            },
+            {
+              "site": "rest/rt4/live-read",
+              "seconds": 12,
+              "tokenRole": "t4",
+              "idleInterval": {
+                "lowerSeconds": 12.662034540902823,
+                "upperSeconds": 14.986349292099476
+              },
+              "totalAgeInterval": {
+                "lowerSeconds": 246.53514354070649,
+                "upperSeconds": 248.77390683395788
+              }
+            },
+            {
+              "site": "rest/rt4/retry-lifetime",
+              "seconds": 32,
+              "tokenRole": "t4",
+              "idleInterval": {
+                "lowerSeconds": 32.6160130831413,
+                "upperSeconds": 35.09671258414164
+              },
+              "totalAgeInterval": {
+                "lowerSeconds": 280.2769369580783,
+                "upperSeconds": 282.744839083869
+              }
+            }
+          ],
+          "waitsDigest": "b5d6529ee76dabc5d3c650a7996e033dc91f7f6a20f662c34452e70299b0d18a",
+          "nativeLifecycle": [
+            {
+              "sequence": 0,
+              "site": "setup/absence-a",
+              "phase": "observation",
+              "transport": "grpc",
+              "rpc": "GetDocument",
+              "complete": true,
+              "ipcComplete": true,
+              "childReaped": true,
+              "workerExitCode": 0,
+              "dispatchedRequests": 1
+            },
+            {
+              "sequence": 1,
+              "site": "setup/create-a",
+              "phase": "observation",
+              "transport": "grpc",
+              "rpc": "Commit",
+              "complete": true,
+              "ipcComplete": true,
+              "childReaped": true,
+              "workerExitCode": 0,
+              "dispatchedRequests": 1
+            },
+            {
+              "sequence": 2,
+              "site": "rest/rt1/begin",
+              "phase": "observation",
+              "transport": "rest",
+              "rpc": "BeginTransaction",
+              "complete": true,
+              "ipcComplete": true,
+              "childReaped": true,
+              "workerExitCode": 0,
+              "dispatchedRequests": 1
+            },
+            {
+              "sequence": 3,
+              "site": "rest/rt1/read-a",
+              "phase": "observation",
+              "transport": "rest",
+              "rpc": "GetDocument",
+              "complete": true,
+              "ipcComplete": true,
+              "childReaped": true,
+              "workerExitCode": 0,
+              "dispatchedRequests": 1
+            },
+            {
+              "sequence": 4,
+              "site": "rest/rt1/rollback",
+              "phase": "observation",
+              "transport": "rest",
+              "rpc": "Rollback",
+              "complete": true,
+              "ipcComplete": true,
+              "childReaped": true,
+              "workerExitCode": 0,
+              "dispatchedRequests": 1
+            },
+            {
+              "sequence": 5,
+              "site": "rest/rt1/retry-begin",
+              "phase": "observation",
+              "transport": "rest",
+              "rpc": "BeginTransaction",
+              "complete": true,
+              "ipcComplete": true,
+              "childReaped": true,
+              "workerExitCode": 0,
+              "dispatchedRequests": 1
+            },
+            {
+              "sequence": 6,
+              "site": "rest/rt1/writer",
+              "phase": "observation",
+              "transport": "rest",
+              "rpc": "Commit",
+              "complete": true,
+              "ipcComplete": true,
+              "childReaped": true,
+              "workerExitCode": 0,
+              "dispatchedRequests": 1
+            },
+            {
+              "sequence": 7,
+              "site": "rest/rt1/first-read",
+              "phase": "observation",
+              "transport": "rest",
+              "rpc": "GetDocument",
+              "complete": true,
+              "ipcComplete": true,
+              "childReaped": true,
+              "workerExitCode": 0,
+              "dispatchedRequests": 1
+            },
+            {
+              "sequence": 8,
+              "site": "rest/rt1/commit",
+              "phase": "observation",
+              "transport": "rest",
+              "rpc": "Commit",
+              "complete": true,
+              "ipcComplete": true,
+              "childReaped": true,
+              "workerExitCode": 0,
+              "dispatchedRequests": 1
+            },
+            {
+              "sequence": 9,
+              "site": "rest/rt2/begin",
+              "phase": "observation",
+              "transport": "rest",
+              "rpc": "BeginTransaction",
+              "complete": true,
+              "ipcComplete": true,
+              "childReaped": true,
+              "workerExitCode": 0,
+              "dispatchedRequests": 1
+            },
+            {
+              "sequence": 10,
+              "site": "rest/rt2/read-a",
+              "phase": "observation",
+              "transport": "rest",
+              "rpc": "GetDocument",
+              "complete": true,
+              "ipcComplete": true,
+              "childReaped": true,
+              "workerExitCode": 0,
+              "dispatchedRequests": 1
+            },
+            {
+              "sequence": 11,
+              "site": "rest/rt2/retry-idle",
+              "phase": "observation",
+              "transport": "rest",
+              "rpc": "BeginTransaction",
+              "complete": true,
+              "ipcComplete": true,
+              "childReaped": true,
+              "workerExitCode": 0,
+              "dispatchedRequests": 1
+            },
+            {
+              "sequence": 12,
+              "site": "cleanup/token/t2",
+              "phase": "tokenCleanup",
+              "transport": "rest",
+              "rpc": "Rollback",
+              "complete": true,
+              "ipcComplete": true,
+              "childReaped": true,
+              "workerExitCode": 0,
+              "dispatchedRequests": 1
+            },
+            {
+              "sequence": 13,
+              "site": "cleanup/token/t2r",
+              "phase": "tokenCleanup",
+              "transport": "rest",
+              "rpc": "Rollback",
+              "complete": true,
+              "ipcComplete": true,
+              "childReaped": true,
+              "workerExitCode": 0,
+              "dispatchedRequests": 1
+            },
+            {
+              "sequence": 14,
+              "site": "rest/rt3/begin",
+              "phase": "observation",
+              "transport": "rest",
+              "rpc": "BeginTransaction",
+              "complete": true,
+              "ipcComplete": true,
+              "childReaped": true,
+              "workerExitCode": 0,
+              "dispatchedRequests": 1
+            },
+            {
+              "sequence": 15,
+              "site": "rest/rt3/read-a",
+              "phase": "observation",
+              "transport": "rest",
+              "rpc": "GetDocument",
+              "complete": true,
+              "ipcComplete": true,
+              "childReaped": true,
+              "workerExitCode": 0,
+              "dispatchedRequests": 1
+            },
+            {
+              "sequence": 16,
+              "site": "rest/rt3/rollback-idle",
+              "phase": "observation",
+              "transport": "rest",
+              "rpc": "Rollback",
+              "complete": true,
+              "ipcComplete": true,
+              "childReaped": true,
+              "workerExitCode": 0,
+              "dispatchedRequests": 1
+            },
+            {
+              "sequence": 17,
+              "site": "rest/rt3/retry-after-rollback",
+              "phase": "observation",
+              "transport": "rest",
+              "rpc": "BeginTransaction",
+              "complete": true,
+              "ipcComplete": true,
+              "childReaped": true,
+              "workerExitCode": 0,
+              "dispatchedRequests": 1
+            },
+            {
+              "sequence": 18,
+              "site": "cleanup/token/t3r",
+              "phase": "tokenCleanup",
+              "transport": "rest",
+              "rpc": "Rollback",
+              "complete": true,
+              "ipcComplete": true,
+              "childReaped": true,
+              "workerExitCode": 0,
+              "dispatchedRequests": 1
+            },
+            {
+              "sequence": 19,
+              "site": "rest/rt4/begin",
+              "phase": "observation",
+              "transport": "rest",
+              "rpc": "BeginTransaction",
+              "complete": true,
+              "ipcComplete": true,
+              "childReaped": true,
+              "workerExitCode": 0,
+              "dispatchedRequests": 1
+            },
+            {
+              "sequence": 20,
+              "site": "rest/rt4/read-a",
+              "phase": "observation",
+              "transport": "rest",
+              "rpc": "GetDocument",
+              "complete": true,
+              "ipcComplete": true,
+              "childReaped": true,
+              "workerExitCode": 0,
+              "dispatchedRequests": 1
+            },
+            {
+              "sequence": 21,
+              "site": "rest/rt4/keepalive-1",
+              "phase": "observation",
+              "transport": "rest",
+              "rpc": "GetDocument",
+              "complete": true,
+              "ipcComplete": true,
+              "childReaped": true,
+              "workerExitCode": 0,
+              "dispatchedRequests": 1
+            },
+            {
+              "sequence": 22,
+              "site": "rest/rt4/keepalive-2",
+              "phase": "observation",
+              "transport": "rest",
+              "rpc": "GetDocument",
+              "complete": true,
+              "ipcComplete": true,
+              "childReaped": true,
+              "workerExitCode": 0,
+              "dispatchedRequests": 1
+            },
+            {
+              "sequence": 23,
+              "site": "rest/rt4/keepalive-3",
+              "phase": "observation",
+              "transport": "rest",
+              "rpc": "GetDocument",
+              "complete": true,
+              "ipcComplete": true,
+              "childReaped": true,
+              "workerExitCode": 0,
+              "dispatchedRequests": 1
+            },
+            {
+              "sequence": 24,
+              "site": "rest/rt4/keepalive-4",
+              "phase": "observation",
+              "transport": "rest",
+              "rpc": "GetDocument",
+              "complete": true,
+              "ipcComplete": true,
+              "childReaped": true,
+              "workerExitCode": 0,
+              "dispatchedRequests": 1
+            },
+            {
+              "sequence": 25,
+              "site": "rest/rt4/keepalive-5",
+              "phase": "observation",
+              "transport": "rest",
+              "rpc": "GetDocument",
+              "complete": true,
+              "ipcComplete": true,
+              "childReaped": true,
+              "workerExitCode": 0,
+              "dispatchedRequests": 1
+            },
+            {
+              "sequence": 26,
+              "site": "rest/rt4/keepalive-6",
+              "phase": "observation",
+              "transport": "rest",
+              "rpc": "GetDocument",
+              "complete": true,
+              "ipcComplete": true,
+              "childReaped": true,
+              "workerExitCode": 0,
+              "dispatchedRequests": 1
+            },
+            {
+              "sequence": 27,
+              "site": "rest/rt4/keepalive-7",
+              "phase": "observation",
+              "transport": "rest",
+              "rpc": "GetDocument",
+              "complete": true,
+              "ipcComplete": true,
+              "childReaped": true,
+              "workerExitCode": 0,
+              "dispatchedRequests": 1
+            },
+            {
+              "sequence": 28,
+              "site": "rest/rt4/keepalive-8",
+              "phase": "observation",
+              "transport": "rest",
+              "rpc": "GetDocument",
+              "complete": true,
+              "ipcComplete": true,
+              "childReaped": true,
+              "workerExitCode": 0,
+              "dispatchedRequests": 1
+            },
+            {
+              "sequence": 29,
+              "site": "rest/rt4/keepalive-9",
+              "phase": "observation",
+              "transport": "rest",
+              "rpc": "GetDocument",
+              "complete": true,
+              "ipcComplete": true,
+              "childReaped": true,
+              "workerExitCode": 0,
+              "dispatchedRequests": 1
+            },
+            {
+              "sequence": 30,
+              "site": "rest/rt4/live-read",
+              "phase": "observation",
+              "transport": "rest",
+              "rpc": "GetDocument",
+              "complete": true,
+              "ipcComplete": true,
+              "childReaped": true,
+              "workerExitCode": 0,
+              "dispatchedRequests": 1
+            },
+            {
+              "sequence": 31,
+              "site": "rest/rt4/retry-lifetime",
+              "phase": "observation",
+              "transport": "rest",
+              "rpc": "BeginTransaction",
+              "complete": true,
+              "ipcComplete": true,
+              "childReaped": true,
+              "workerExitCode": 0,
+              "dispatchedRequests": 1
+            },
+            {
+              "sequence": 32,
+              "site": "cleanup/token/t4",
+              "phase": "tokenCleanup",
+              "transport": "rest",
+              "rpc": "Rollback",
+              "complete": true,
+              "ipcComplete": true,
+              "childReaped": true,
+              "workerExitCode": 0,
+              "dispatchedRequests": 1
+            },
+            {
+              "sequence": 33,
+              "site": "cleanup/token/t4r",
+              "phase": "tokenCleanup",
+              "transport": "rest",
+              "rpc": "Rollback",
+              "complete": true,
+              "ipcComplete": true,
+              "childReaped": true,
+              "workerExitCode": 0,
+              "dispatchedRequests": 1
+            },
+            {
+              "sequence": 34,
+              "site": "final/post-read-a",
+              "phase": "observation",
+              "transport": "rest",
+              "rpc": "GetDocument",
+              "complete": true,
+              "ipcComplete": true,
+              "childReaped": true,
+              "workerExitCode": 0,
+              "dispatchedRequests": 1
+            },
+            {
+              "sequence": 35,
+              "site": "cleanup/read/a",
+              "phase": "documentCleanup",
+              "transport": "grpc",
+              "rpc": "GetDocument",
+              "complete": true,
+              "ipcComplete": true,
+              "childReaped": true,
+              "workerExitCode": 0,
+              "dispatchedRequests": 1
+            },
+            {
+              "sequence": 36,
+              "site": "cleanup/delete/a",
+              "phase": "documentCleanup",
+              "transport": "grpc",
+              "rpc": "DeleteDocument",
+              "complete": true,
+              "ipcComplete": true,
+              "childReaped": true,
+              "workerExitCode": 0,
+              "dispatchedRequests": 1
+            },
+            {
+              "sequence": 37,
+              "site": "cleanup/verify/a",
+              "phase": "documentCleanup",
+              "transport": "grpc",
+              "rpc": "GetDocument",
+              "complete": true,
+              "ipcComplete": true,
+              "childReaped": true,
+              "workerExitCode": 0,
+              "dispatchedRequests": 1
+            }
+          ],
+          "timingMode": "wall-clock",
+          "timingSource": "parent-wire-envelope",
+          "recordedRuntime": {
+            "nodeVersion": "v24.14.0",
+            "pythonVersion": "3.12.13",
+            "nodeSha256": "20a18709f0154d668f1bd6f6ea8c2a7ae001447b4b2c339732f22e57a8767a55",
+            "pythonSha256": "f8cf5db64fd3715840686fcdb0f00b8b7e6c9b1e9b5f10a31183160c9bb6a6fc",
+            "workerSha256": "4047804796a8a7dd4319c70f6bbe8aa3c38873ef57047761e6a1f5629b1dfea5",
+            "lockSha256": "04f7f2526af7ce07ca39ceffd0712eec9b5e5e212503c7cb791ab5021a49dc60"
+          },
+          "recordedRuntimeDigest": "d49ca68553dce05f4fbfb039a5aa63c1bc7b490c6b054a3aec65b582bb19ec73"
+        },
+        {
+          "recording": 2,
+          "reference": "fs-transaction-p13b/recording-2.json",
+          "sha256": "1621e5c5822245d65da750d139d879c6c07a1d41e187790341ff5232de6be8cd",
+          "complete": true,
+          "graphComplete": true,
+          "cleanupAbsent": true,
+          "requests": 45,
+          "phaseRequests": {
+            "credential": 1,
+            "documentCleanup": 3,
+            "management": 6,
+            "observation": 30,
+            "tokenCleanup": 5
+          },
+          "observations": 8,
+          "transportObservations": {
+            "rest": 8
+          },
+          "openTokens": 0,
+          "unknownOutcomes": 0,
+          "issuedTokensDistinct": true,
+          "semanticDigest": "f1ff8680bc03e91c12d81419333f0026af5c638b55bc4699306268b0ebe9f54b",
+          "projectionDigest": "2272508d8189b049b9bf315d99c5b4c93142cedabb54f8f77994b2c9dd5d0a62",
+          "waits": [
+            {
+              "site": "rest/rt2/retry-idle",
+              "seconds": 130,
+              "tokenRole": "t2",
+              "idleInterval": {
+                "lowerSeconds": 130.61176933301613,
+                "upperSeconds": 132.85609554080293
+              },
+              "totalAgeInterval": {
+                "lowerSeconds": 132.36563037522137,
+                "upperSeconds": 134.5258986246772
+              }
+            },
+            {
+              "site": "rest/rt3/rollback-idle",
+              "seconds": 130,
+              "tokenRole": "t3",
+              "idleInterval": {
+                "lowerSeconds": 130.6074034580961,
+                "upperSeconds": 132.91532354196534
+              },
+              "totalAgeInterval": {
+                "lowerSeconds": 132.36066233320162,
+                "upperSeconds": 135.16120354179293
+              }
+            },
+            {
+              "site": "rest/rt4/keepalive-1",
+              "seconds": 24,
+              "tokenRole": "t4",
+              "idleInterval": {
+                "lowerSeconds": 24.6139784171246,
+                "upperSeconds": 26.85865004127845
+              },
+              "totalAgeInterval": {
+                "lowerSeconds": 26.413904166780412,
+                "upperSeconds": 28.97689391626045
+              }
+            },
+            {
+              "site": "rest/rt4/keepalive-2",
+              "seconds": 24,
+              "tokenRole": "t4",
+              "idleInterval": {
+                "lowerSeconds": 24.610951874870807,
+                "upperSeconds": 26.749079125002027
+              },
+              "totalAgeInterval": {
+                "lowerSeconds": 52.09300608281046,
+                "upperSeconds": 54.657823000103235
+              }
+            },
+            {
+              "site": "rest/rt4/keepalive-3",
+              "seconds": 24,
+              "tokenRole": "t4",
+              "idleInterval": {
+                "lowerSeconds": 24.652971665840596,
+                "upperSeconds": 26.87377183418721
+              },
+              "totalAgeInterval": {
+                "lowerSeconds": 77.81595495762303,
+                "upperSeconds": 80.46161762531847
+              }
+            },
+            {
+              "site": "rest/rt4/keepalive-4",
+              "seconds": 24,
+              "tokenRole": "t4",
+              "idleInterval": {
+                "lowerSeconds": 24.614546957891434,
+                "upperSeconds": 26.89981908397749
+              },
+              "totalAgeInterval": {
+                "lowerSeconds": 103.5813248748891,
+                "upperSeconds": 106.21061374992132
+              }
+            },
+            {
+              "site": "rest/rt4/keepalive-5",
+              "seconds": 24,
+              "tokenRole": "t4",
+              "idleInterval": {
+                "lowerSeconds": 24.615078791044652,
+                "upperSeconds": 26.961755957920104
+              },
+              "totalAgeInterval": {
+                "lowerSeconds": 129.33085283264518,
+                "upperSeconds": 132.03792054113
+              }
+            },
+            {
+              "site": "rest/rt4/keepalive-6",
+              "seconds": 24,
+              "tokenRole": "t4",
+              "idleInterval": {
+                "lowerSeconds": 24.615750500001013,
+                "upperSeconds": 27.385848875157535
+              },
+              "totalAgeInterval": {
+                "lowerSeconds": 155.15883133281022,
+                "upperSeconds": 158.2115414161235
+              }
+            },
+            {
+              "site": "rest/rt4/keepalive-7",
+              "seconds": 24,
+              "tokenRole": "t4",
+              "idleInterval": {
+                "lowerSeconds": 24.61675920896232,
+                "upperSeconds": 27.30032437480986
+              },
+              "totalAgeInterval": {
+                "lowerSeconds": 181.33346091676503,
+                "upperSeconds": 183.95399541594088
+              }
+            },
+            {
+              "site": "rest/rt4/keepalive-8",
+              "seconds": 24,
+              "tokenRole": "t4",
+              "idleInterval": {
+                "lowerSeconds": 24.656939834356308,
+                "upperSeconds": 26.870970208197832
+              },
+              "totalAgeInterval": {
+                "lowerSeconds": 207.1160955419764,
+                "upperSeconds": 209.69927083328366
+              }
+            },
+            {
+              "site": "rest/rt4/keepalive-9",
+              "seconds": 24,
+              "tokenRole": "t4",
+              "idleInterval": {
+                "lowerSeconds": 24.617353832814842,
+                "upperSeconds": 26.12765416596085
+              },
+              "totalAgeInterval": {
+                "lowerSeconds": 232.8217849577777,
+                "upperSeconds": 234.73858941625804
+              }
+            },
+            {
+              "site": "rest/rt4/live-read",
+              "seconds": 12,
+              "tokenRole": "t4",
+              "idleInterval": {
+                "lowerSeconds": 12.60867041675374,
+                "upperSeconds": 14.22967941686511
+              },
+              "totalAgeInterval": {
+                "lowerSeconds": 245.85242012469098,
+                "upperSeconds": 248.54630408296362
+              }
+            },
+            {
+              "site": "rest/rt4/retry-lifetime",
+              "seconds": 32,
+              "tokenRole": "t4",
+              "idleInterval": {
+                "lowerSeconds": 32.61544175026938,
+                "upperSeconds": 34.87780220806599
+              },
+              "totalAgeInterval": {
+                "lowerSeconds": 279.6669061249122,
+                "upperSeconds": 282.22506204107776
+              }
+            }
+          ],
+          "waitsDigest": "8a1313a79dc33b7bb451d62f851f0843e4e7bccbfa6d12748b818bd1ace0388c",
+          "nativeLifecycle": [
+            {
+              "sequence": 0,
+              "site": "setup/absence-a",
+              "phase": "observation",
+              "transport": "grpc",
+              "rpc": "GetDocument",
+              "complete": true,
+              "ipcComplete": true,
+              "childReaped": true,
+              "workerExitCode": 0,
+              "dispatchedRequests": 1
+            },
+            {
+              "sequence": 1,
+              "site": "setup/create-a",
+              "phase": "observation",
+              "transport": "grpc",
+              "rpc": "Commit",
+              "complete": true,
+              "ipcComplete": true,
+              "childReaped": true,
+              "workerExitCode": 0,
+              "dispatchedRequests": 1
+            },
+            {
+              "sequence": 2,
+              "site": "rest/rt1/begin",
+              "phase": "observation",
+              "transport": "rest",
+              "rpc": "BeginTransaction",
+              "complete": true,
+              "ipcComplete": true,
+              "childReaped": true,
+              "workerExitCode": 0,
+              "dispatchedRequests": 1
+            },
+            {
+              "sequence": 3,
+              "site": "rest/rt1/read-a",
+              "phase": "observation",
+              "transport": "rest",
+              "rpc": "GetDocument",
+              "complete": true,
+              "ipcComplete": true,
+              "childReaped": true,
+              "workerExitCode": 0,
+              "dispatchedRequests": 1
+            },
+            {
+              "sequence": 4,
+              "site": "rest/rt1/rollback",
+              "phase": "observation",
+              "transport": "rest",
+              "rpc": "Rollback",
+              "complete": true,
+              "ipcComplete": true,
+              "childReaped": true,
+              "workerExitCode": 0,
+              "dispatchedRequests": 1
+            },
+            {
+              "sequence": 5,
+              "site": "rest/rt1/retry-begin",
+              "phase": "observation",
+              "transport": "rest",
+              "rpc": "BeginTransaction",
+              "complete": true,
+              "ipcComplete": true,
+              "childReaped": true,
+              "workerExitCode": 0,
+              "dispatchedRequests": 1
+            },
+            {
+              "sequence": 6,
+              "site": "rest/rt1/writer",
+              "phase": "observation",
+              "transport": "rest",
+              "rpc": "Commit",
+              "complete": true,
+              "ipcComplete": true,
+              "childReaped": true,
+              "workerExitCode": 0,
+              "dispatchedRequests": 1
+            },
+            {
+              "sequence": 7,
+              "site": "rest/rt1/first-read",
+              "phase": "observation",
+              "transport": "rest",
+              "rpc": "GetDocument",
+              "complete": true,
+              "ipcComplete": true,
+              "childReaped": true,
+              "workerExitCode": 0,
+              "dispatchedRequests": 1
+            },
+            {
+              "sequence": 8,
+              "site": "rest/rt1/commit",
+              "phase": "observation",
+              "transport": "rest",
+              "rpc": "Commit",
+              "complete": true,
+              "ipcComplete": true,
+              "childReaped": true,
+              "workerExitCode": 0,
+              "dispatchedRequests": 1
+            },
+            {
+              "sequence": 9,
+              "site": "rest/rt2/begin",
+              "phase": "observation",
+              "transport": "rest",
+              "rpc": "BeginTransaction",
+              "complete": true,
+              "ipcComplete": true,
+              "childReaped": true,
+              "workerExitCode": 0,
+              "dispatchedRequests": 1
+            },
+            {
+              "sequence": 10,
+              "site": "rest/rt2/read-a",
+              "phase": "observation",
+              "transport": "rest",
+              "rpc": "GetDocument",
+              "complete": true,
+              "ipcComplete": true,
+              "childReaped": true,
+              "workerExitCode": 0,
+              "dispatchedRequests": 1
+            },
+            {
+              "sequence": 11,
+              "site": "rest/rt2/retry-idle",
+              "phase": "observation",
+              "transport": "rest",
+              "rpc": "BeginTransaction",
+              "complete": true,
+              "ipcComplete": true,
+              "childReaped": true,
+              "workerExitCode": 0,
+              "dispatchedRequests": 1
+            },
+            {
+              "sequence": 12,
+              "site": "cleanup/token/t2",
+              "phase": "tokenCleanup",
+              "transport": "rest",
+              "rpc": "Rollback",
+              "complete": true,
+              "ipcComplete": true,
+              "childReaped": true,
+              "workerExitCode": 0,
+              "dispatchedRequests": 1
+            },
+            {
+              "sequence": 13,
+              "site": "cleanup/token/t2r",
+              "phase": "tokenCleanup",
+              "transport": "rest",
+              "rpc": "Rollback",
+              "complete": true,
+              "ipcComplete": true,
+              "childReaped": true,
+              "workerExitCode": 0,
+              "dispatchedRequests": 1
+            },
+            {
+              "sequence": 14,
+              "site": "rest/rt3/begin",
+              "phase": "observation",
+              "transport": "rest",
+              "rpc": "BeginTransaction",
+              "complete": true,
+              "ipcComplete": true,
+              "childReaped": true,
+              "workerExitCode": 0,
+              "dispatchedRequests": 1
+            },
+            {
+              "sequence": 15,
+              "site": "rest/rt3/read-a",
+              "phase": "observation",
+              "transport": "rest",
+              "rpc": "GetDocument",
+              "complete": true,
+              "ipcComplete": true,
+              "childReaped": true,
+              "workerExitCode": 0,
+              "dispatchedRequests": 1
+            },
+            {
+              "sequence": 16,
+              "site": "rest/rt3/rollback-idle",
+              "phase": "observation",
+              "transport": "rest",
+              "rpc": "Rollback",
+              "complete": true,
+              "ipcComplete": true,
+              "childReaped": true,
+              "workerExitCode": 0,
+              "dispatchedRequests": 1
+            },
+            {
+              "sequence": 17,
+              "site": "rest/rt3/retry-after-rollback",
+              "phase": "observation",
+              "transport": "rest",
+              "rpc": "BeginTransaction",
+              "complete": true,
+              "ipcComplete": true,
+              "childReaped": true,
+              "workerExitCode": 0,
+              "dispatchedRequests": 1
+            },
+            {
+              "sequence": 18,
+              "site": "cleanup/token/t3r",
+              "phase": "tokenCleanup",
+              "transport": "rest",
+              "rpc": "Rollback",
+              "complete": true,
+              "ipcComplete": true,
+              "childReaped": true,
+              "workerExitCode": 0,
+              "dispatchedRequests": 1
+            },
+            {
+              "sequence": 19,
+              "site": "rest/rt4/begin",
+              "phase": "observation",
+              "transport": "rest",
+              "rpc": "BeginTransaction",
+              "complete": true,
+              "ipcComplete": true,
+              "childReaped": true,
+              "workerExitCode": 0,
+              "dispatchedRequests": 1
+            },
+            {
+              "sequence": 20,
+              "site": "rest/rt4/read-a",
+              "phase": "observation",
+              "transport": "rest",
+              "rpc": "GetDocument",
+              "complete": true,
+              "ipcComplete": true,
+              "childReaped": true,
+              "workerExitCode": 0,
+              "dispatchedRequests": 1
+            },
+            {
+              "sequence": 21,
+              "site": "rest/rt4/keepalive-1",
+              "phase": "observation",
+              "transport": "rest",
+              "rpc": "GetDocument",
+              "complete": true,
+              "ipcComplete": true,
+              "childReaped": true,
+              "workerExitCode": 0,
+              "dispatchedRequests": 1
+            },
+            {
+              "sequence": 22,
+              "site": "rest/rt4/keepalive-2",
+              "phase": "observation",
+              "transport": "rest",
+              "rpc": "GetDocument",
+              "complete": true,
+              "ipcComplete": true,
+              "childReaped": true,
+              "workerExitCode": 0,
+              "dispatchedRequests": 1
+            },
+            {
+              "sequence": 23,
+              "site": "rest/rt4/keepalive-3",
+              "phase": "observation",
+              "transport": "rest",
+              "rpc": "GetDocument",
+              "complete": true,
+              "ipcComplete": true,
+              "childReaped": true,
+              "workerExitCode": 0,
+              "dispatchedRequests": 1
+            },
+            {
+              "sequence": 24,
+              "site": "rest/rt4/keepalive-4",
+              "phase": "observation",
+              "transport": "rest",
+              "rpc": "GetDocument",
+              "complete": true,
+              "ipcComplete": true,
+              "childReaped": true,
+              "workerExitCode": 0,
+              "dispatchedRequests": 1
+            },
+            {
+              "sequence": 25,
+              "site": "rest/rt4/keepalive-5",
+              "phase": "observation",
+              "transport": "rest",
+              "rpc": "GetDocument",
+              "complete": true,
+              "ipcComplete": true,
+              "childReaped": true,
+              "workerExitCode": 0,
+              "dispatchedRequests": 1
+            },
+            {
+              "sequence": 26,
+              "site": "rest/rt4/keepalive-6",
+              "phase": "observation",
+              "transport": "rest",
+              "rpc": "GetDocument",
+              "complete": true,
+              "ipcComplete": true,
+              "childReaped": true,
+              "workerExitCode": 0,
+              "dispatchedRequests": 1
+            },
+            {
+              "sequence": 27,
+              "site": "rest/rt4/keepalive-7",
+              "phase": "observation",
+              "transport": "rest",
+              "rpc": "GetDocument",
+              "complete": true,
+              "ipcComplete": true,
+              "childReaped": true,
+              "workerExitCode": 0,
+              "dispatchedRequests": 1
+            },
+            {
+              "sequence": 28,
+              "site": "rest/rt4/keepalive-8",
+              "phase": "observation",
+              "transport": "rest",
+              "rpc": "GetDocument",
+              "complete": true,
+              "ipcComplete": true,
+              "childReaped": true,
+              "workerExitCode": 0,
+              "dispatchedRequests": 1
+            },
+            {
+              "sequence": 29,
+              "site": "rest/rt4/keepalive-9",
+              "phase": "observation",
+              "transport": "rest",
+              "rpc": "GetDocument",
+              "complete": true,
+              "ipcComplete": true,
+              "childReaped": true,
+              "workerExitCode": 0,
+              "dispatchedRequests": 1
+            },
+            {
+              "sequence": 30,
+              "site": "rest/rt4/live-read",
+              "phase": "observation",
+              "transport": "rest",
+              "rpc": "GetDocument",
+              "complete": true,
+              "ipcComplete": true,
+              "childReaped": true,
+              "workerExitCode": 0,
+              "dispatchedRequests": 1
+            },
+            {
+              "sequence": 31,
+              "site": "rest/rt4/retry-lifetime",
+              "phase": "observation",
+              "transport": "rest",
+              "rpc": "BeginTransaction",
+              "complete": true,
+              "ipcComplete": true,
+              "childReaped": true,
+              "workerExitCode": 0,
+              "dispatchedRequests": 1
+            },
+            {
+              "sequence": 32,
+              "site": "cleanup/token/t4",
+              "phase": "tokenCleanup",
+              "transport": "rest",
+              "rpc": "Rollback",
+              "complete": true,
+              "ipcComplete": true,
+              "childReaped": true,
+              "workerExitCode": 0,
+              "dispatchedRequests": 1
+            },
+            {
+              "sequence": 33,
+              "site": "cleanup/token/t4r",
+              "phase": "tokenCleanup",
+              "transport": "rest",
+              "rpc": "Rollback",
+              "complete": true,
+              "ipcComplete": true,
+              "childReaped": true,
+              "workerExitCode": 0,
+              "dispatchedRequests": 1
+            },
+            {
+              "sequence": 34,
+              "site": "final/post-read-a",
+              "phase": "observation",
+              "transport": "rest",
+              "rpc": "GetDocument",
+              "complete": true,
+              "ipcComplete": true,
+              "childReaped": true,
+              "workerExitCode": 0,
+              "dispatchedRequests": 1
+            },
+            {
+              "sequence": 35,
+              "site": "cleanup/read/a",
+              "phase": "documentCleanup",
+              "transport": "grpc",
+              "rpc": "GetDocument",
+              "complete": true,
+              "ipcComplete": true,
+              "childReaped": true,
+              "workerExitCode": 0,
+              "dispatchedRequests": 1
+            },
+            {
+              "sequence": 36,
+              "site": "cleanup/delete/a",
+              "phase": "documentCleanup",
+              "transport": "grpc",
+              "rpc": "DeleteDocument",
+              "complete": true,
+              "ipcComplete": true,
+              "childReaped": true,
+              "workerExitCode": 0,
+              "dispatchedRequests": 1
+            },
+            {
+              "sequence": 37,
+              "site": "cleanup/verify/a",
+              "phase": "documentCleanup",
+              "transport": "grpc",
+              "rpc": "GetDocument",
+              "complete": true,
+              "ipcComplete": true,
+              "childReaped": true,
+              "workerExitCode": 0,
+              "dispatchedRequests": 1
+            }
+          ],
+          "timingMode": "wall-clock",
+          "timingSource": "parent-wire-envelope",
+          "recordedRuntime": {
+            "nodeVersion": "v24.14.0",
+            "pythonVersion": "3.12.13",
+            "nodeSha256": "20a18709f0154d668f1bd6f6ea8c2a7ae001447b4b2c339732f22e57a8767a55",
+            "pythonSha256": "f8cf5db64fd3715840686fcdb0f00b8b7e6c9b1e9b5f10a31183160c9bb6a6fc",
+            "workerSha256": "4047804796a8a7dd4319c70f6bbe8aa3c38873ef57047761e6a1f5629b1dfea5",
+            "lockSha256": "04f7f2526af7ce07ca39ceffd0712eec9b5e5e212503c7cb791ab5021a49dc60"
+          },
+          "recordedRuntimeDigest": "d49ca68553dce05f4fbfb039a5aa63c1bc7b490c6b054a3aec65b582bb19ec73"
+        }
+      ]
+    }
+  ]
+}

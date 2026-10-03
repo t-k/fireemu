@@ -1,0 +1,59 @@
+{
+  "schemaVersion": 1,
+  "kind": "fs-transaction-recorded-comparison-preparation-v1",
+  "parent": "FS-TRANSACTION",
+  "condition": "FS-TRANSACTION/retry-token-lifecycle",
+  "coverage": "PARTIAL",
+  "promotionReady": false,
+  "authorizesProduction": false,
+  "status": "PENDING_FINAL_ARTIFACT_REPLAY",
+  "productionRequests": 0,
+  "capturedReplays": 0,
+  "requiredReplays": 4,
+  "artifact": null,
+  "preparationBaseCommit": "e57a78e0f5c4852894d14fad31438b2fa9d681e0",
+  "producer": {
+    "path": "tools/compat-broad/fs-write-txn/fs_txn_compare_local.py",
+    "sha256": "9fab208ef9e30a0332d78e061a12563355bc519611d7ed9e8ae0e1685493848f",
+    "tablePath": "tools/compat-broad/fs-write-txn/fs_txn_table_p13b.py",
+    "tableSha256": "6716e049745af5532b837e7c9c06c199f92c8f253c2cb7341dbf7b4a299ce468",
+    "tableSourceCommit": "2991d2f1e055407badaaac2e9edab688d42c9d1a",
+    "currentTableSha256": "c15dcba233334b5dd437aa4fad955fcc6af41089973d1a1bce083769910d5c3a",
+    "tableBinding": "Original frozen bytes must be materialized without rewriting recording sourceDigest; the current table differs only in its module docstring."
+  },
+  "plannedReplays": [
+    {
+      "profile": "strict",
+      "recording": 1,
+      "productionFileSha256": "0c3d167857686716f8d2ecb0b65e37cd82e3fab04676e8c8ebe0c2fc2b5d22d5"
+    },
+    {
+      "profile": "strict",
+      "recording": 2,
+      "productionFileSha256": "1621e5c5822245d65da750d139d879c6c07a1d41e187790341ff5232de6be8cd"
+    },
+    {
+      "profile": "emulator",
+      "recording": 1,
+      "productionFileSha256": "0c3d167857686716f8d2ecb0b65e37cd82e3fab04676e8c8ebe0c2fc2b5d22d5"
+    },
+    {
+      "profile": "emulator",
+      "recording": 2,
+      "productionFileSha256": "1621e5c5822245d65da750d139d879c6c07a1d41e187790341ff5232de6be8cd"
+    }
+  ],
+  "corpora": [
+    {
+      "program": "FS-TRANSACTION-P13B-RETRY-ANSWERS",
+      "results": []
+    }
+  ],
+  "remainingBoundaries": [
+    "Raw REST bodyBytes, content-length and received member-order layout were not retained; decoded semantic equality is partial proof.",
+    "Historical installed runtime input currency cannot be independently established from the retained packet and decoded receipts; it remains UNKNOWN.",
+    "Representative gRPC retry snapshot and idle/lifetime consequences, remaining original boundaries, the official emulator gate, all 18 frozen conditions and parent closure review remain open.",
+    "Four source-bound normal artifact comparisons remain pending; frozen nominal 260-second lifetime waits may not reproduce the recorded 279-to-283-second age with faster local RPCs."
+  ],
+  "dependency": "ROOT must provide a source-bound normal artifact and exact current runtime proof. A normal runtime wave is not a final whole-tree artifact. The unchanged comparator project-diagnostic context and actual lifetime age must be checked before claiming agreement; unresolved differences remain RED."
+}

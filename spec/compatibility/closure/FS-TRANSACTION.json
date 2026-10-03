@@ -496,7 +496,9 @@
       "localEvidence": {
         "references": [
           "spec/compatibility/broad-runs/fs-transaction-expiry-retry-04-local-shadow-v3.json",
-          "spec/compatibility/broad-runs/fs-transaction-expiry-retry-04-recorded-comparison-v1.json"
+          "spec/compatibility/broad-runs/fs-transaction-expiry-retry-04-recorded-comparison-v1.json",
+          "spec/compatibility/broad-runs/fs-transaction-p13b-recorded-observations-v1.json",
+          "spec/compatibility/broad-runs/fs-transaction-p13b-recorded-comparison-v1.json"
         ],
         "productionExecuted": false
       },
@@ -510,7 +512,7 @@
         ],
         "recordingsRequired": 2
       },
-      "note": "Two sandbox recordings and both fireemu profiles agree for this REST subset. Representative gRPC is not recorded. This condition remains open. Inferred, not recorded in production, candidates for a later recording and not COMPAT_VERIFIED: strict reads a retry attempt (retryTransaction) at its begin, while the official emulator reads it at first use (REST measured); and a retry that names an expired token is refused \"Invalid retry transaction.\" unless a Rollback reached the token first (the local contract pins this order dependence), which production has not been asked about.",
+      "note": "The original two sandbox recordings and historical fireemu comparisons cover the five-case REST retry subset cited in partialEvidence; they do not establish current final-artifact agreement. Separately, P13b supplies two agreeing source-bound decoded REST recordings: a retry after Rollback is accepted, its first read sees an outside writer acknowledged after retry Begin, retries naming idle-expired tokens with or without an earlier Rollback are accepted, and a retry naming a token at a measured total age of 279.7 to 282.8 s is accepted. The named lifetime-expired token then answers its cleanup Rollback with code 10 while the newly issued retry token answers Rollback with code 0. These retained answers do not support the earlier unobserved predictions of a retry snapshot fixed at Begin or refusal of an expired named token. P13b comparisons against a source-bound normal artifact remain pending. The original five-case REST subset, representative gRPC requirements, raw REST wire layout, the official emulator gate, final whole-tree regression and complete condition approval remain open; no condition is COMPAT_VERIFIED.",
       "partialEvidence": {
         "coverage": "PARTIAL",
         "reference": "spec/compatibility/broad-runs/fs-transaction-expiry-retry-04-recorded-comparison-v1.json",
@@ -525,6 +527,34 @@
         ],
         "remainingBoundaries": [
           "Representative gRPC is not recorded."
+        ],
+        "additionalRecordedSubsets": [
+          {
+            "coverage": "PARTIAL",
+            "observations": "spec/compatibility/broad-runs/fs-transaction-p13b-recorded-observations-v1.json",
+            "comparison": "spec/compatibility/broad-runs/fs-transaction-p13b-recorded-comparison-v1.json",
+            "recordings": 2,
+            "transport": "rest",
+            "caseIds": [
+              "rest/rt1-rollback",
+              "rest/rt1-writer",
+              "rest/rt1-first-read",
+              "rest/rt1-commit",
+              "rest/rt2-retry-idle",
+              "rest/rt3-rollback-idle",
+              "rest/rt3-retry-after-rollback",
+              "rest/rt4-retry-lifetime"
+            ],
+            "localComparisonStatus": "PENDING_FINAL_ARTIFACT_REPLAY",
+            "decodedSemanticsValidated": true,
+            "rawRestWireLayoutValidated": false,
+            "historicalInstalledRuntimeInputsValidated": "UNKNOWN",
+            "remainingBoundaries": [
+              "Representative gRPC snapshot and idle/lifetime retry chains are not established by these REST observations.",
+              "Raw REST bodyBytes, content-length and received member-order layout were not retained.",
+              "Current source-bound normal artifact comparisons, the official emulator gate and complete condition approval remain pending."
+            ]
+          }
         ]
       }
     },
@@ -555,7 +585,9 @@
       "localEvidence": {
         "references": [
           "spec/compatibility/broad-runs/fs-transaction-expiry-retry-04-local-shadow-v3.json",
-          "spec/compatibility/broad-runs/fs-transaction-expiry-retry-04-recorded-comparison-v1.json"
+          "spec/compatibility/broad-runs/fs-transaction-expiry-retry-04-recorded-comparison-v1.json",
+          "spec/compatibility/broad-runs/fs-transaction-p13b-recorded-observations-v1.json",
+          "spec/compatibility/broad-runs/fs-transaction-p13b-recorded-comparison-v1.json"
         ],
         "productionExecuted": false
       },
@@ -567,7 +599,7 @@
         ],
         "recordingsRequired": 2
       },
-      "note": "Two sandbox recordings and both fireemu profiles agreed for this REST subset when it was recorded; that agreement was measured at strict's old 10 s idle allowance, with 90 s of local idle for idle-expiry/commit-after-idle, so it no longer describes current strict behavior (120 s limit) for three idle rows (commit-after-idle, rollback-after-idle and lock-released-after-idle, each driven at 90 s of local idle) or for the post-state and transaction releases that comparison compares: at 120 s, strict would commit that transaction, not expire it. Native gRPC sweeps (P10-B, nominal idle 65 to 70 s; P10-C, 75 to 120 s; each recorded twice) accepted every Commit through a nominal 110 s idle and refused the 120 s Commit with code 10, expired or no longer valid. The measured idle of the accepted 110 s Commit was [110.58, 113.12] s and of the refused 120 s Commit [120.54, 122.97] s. The REST refusal in the recorded run had idled about 121 s (idleSeconds 121.15 and 120.35), not the nominal 70 s wait. The exact idle threshold is not identified: it lies in [110.70, 122.96) s. Strict takes 120 s as a provisional limit, strict accepts the unobserved 113.12 to 120 s gap and refuses the unobserved 120 to 120.54 s gap. The final source-bound regression redoes the REST comparison with a driver-level override that advances the local control clock to the measured production idle (about 121 s), with new evidence versions (local shadow v5, comparison v2), leaving the recorded plan and the production fixtures untouched. This condition remains open. Private sandbox observation, cited by run-directory name only, no status change: P13a fs-transaction-p13a-inferred-answers-da25f2aa72b95011 (REST, two agreeing recordings): a token that idled out for 130 s answered reads at a token age of 132.4 to 135.1 s and 234.2 to 237.0 s with 10 and the expired text, a Rollback at 286.1 to 289.2 s with 10 and a read after it with 10, and a second such token answered a read at 309.3 to 312.2 s with 3 \"Invalid transaction.\": an idle-expired token is remembered until about 300 s of its token age like a lifetime-expired one, then forgotten (recorded over REST only: over gRPC the same memory is inferred, because the store applies one rule to both transports). Not a published redacted record yet. P13b retry-answers (REST, two agreeing recordings, 2026-10-01, private run directory): a Rollback of a token that had idled out for 130 s answered 0 at about 131 s of idle (twice), and a retry that named it afterwards was accepted; a retry that named an idle-expired token with no Rollback first, and one that named a lifetime-expired token at 280 to 283 s of age, were accepted too, the named lifetime-expired token's chain-end Rollback answering 10 with the expired text; the first read of a retry attempt showed an outside writer committed after the retry's begin. Not a published redacted record yet. Inferred, not recorded in production, candidates for a later recording and not COMPAT_VERIFIED: strict accepts a Rollback of an idle-expired token before 270 s over gRPC (E003 recorded the first request at about 121 s, and P13b recorded REST), including after earlier refused requests; it answers 10 to the Rollback of an idle-expired token that no request noticed once it is past 270 s; the Rollback of a token a retry named (strict answers 10 with the expired text, unrecorded; a candidate row of the next packet), and the retry rules above over gRPC (a candidate row of the next packet; the official emulator accepted the gRPC retry of an idle-expired token, firebase-tools 15.28.2, and both profiles answer a retry that names a token never issued \"Invalid transaction.\", the recorded text).",
+      "note": "Two sandbox recordings and both fireemu profiles agreed for this REST subset when it was recorded; that agreement was measured at strict's old 10 s idle allowance, with 90 s of local idle for idle-expiry/commit-after-idle, so it no longer describes current strict behavior (120 s limit) for three idle rows (commit-after-idle, rollback-after-idle and lock-released-after-idle, each driven at 90 s of local idle) or for the post-state and transaction releases that comparison compares: at 120 s, strict would commit that transaction, not expire it. Native gRPC sweeps (P10-B, nominal idle 65 to 70 s; P10-C, 75 to 120 s; each recorded twice) accepted every Commit through a nominal 110 s idle and refused the 120 s Commit with code 10, expired or no longer valid. The measured idle of the accepted 110 s Commit was [110.58, 113.12] s and of the refused 120 s Commit [120.54, 122.97] s. The REST refusal in the recorded run had idled about 121 s (idleSeconds 121.15 and 120.35), not the nominal 70 s wait. The exact idle threshold is not identified: it lies in [110.70, 122.96) s. Strict takes 120 s as a provisional limit, strict accepts the unobserved 113.12 to 120 s gap and refuses the unobserved 120 to 120.54 s gap. The final source-bound regression redoes the REST comparison with a driver-level override that advances the local control clock to the measured production idle (about 121 s), with new evidence versions (local shadow v5, comparison v2), leaving the recorded plan and the production fixtures untouched. This condition remains open. Private sandbox observation, cited by run-directory name only, no status change: P13a fs-transaction-p13a-inferred-answers-da25f2aa72b95011 (REST, two agreeing recordings): a token that idled out for 130 s answered reads at a token age of 132.4 to 135.1 s and 234.2 to 237.0 s with 10 and the expired text, a Rollback at 286.1 to 289.2 s with 10 and a read after it with 10, and a second such token answered a read at 309.3 to 312.2 s with 3 \"Invalid transaction.\": an idle-expired token is remembered until about 300 s of its token age like a lifetime-expired one, then forgotten (recorded over REST only: over gRPC the same memory is inferred, because the store applies one rule to both transports). Not a published redacted record yet. P13b retry-answers (REST, two agreeing recordings, 2026-10-01, private run directory): a Rollback of a token that had idled out for 130 s answered 0 at about 131 s of idle (twice), and a retry that named it afterwards was accepted; a retry that named an idle-expired token with no Rollback first, and one that named a lifetime-expired token at 280 to 283 s of age, were accepted too, the named lifetime-expired token's chain-end Rollback answering 10 with the expired text; the first read of a retry attempt showed an outside writer committed after the retry's begin. The source-bound P13b decoded observations are now published as a partial subset; current normal artifact comparisons are pending, raw REST wire layout is unproven and historical installed runtime input currency remains UNKNOWN. Inferred, not recorded in production, candidates for a later recording and not COMPAT_VERIFIED: strict accepts a Rollback of an idle-expired token before 270 s over gRPC (E003 recorded the first request at about 121 s, and P13b recorded REST), including after earlier refused requests; it answers 10 to the Rollback of an idle-expired token that no request noticed once it is past 270 s; the Rollback of a token a retry named (strict answers 10 with the expired text, unrecorded; a candidate row of the next packet), and the retry rules above over gRPC (a candidate row of the next packet; the official emulator accepted the gRPC retry of an idle-expired token, firebase-tools 15.28.2, and both profiles answer a retry that names a token never issued \"Invalid transaction.\", the recorded text).",
       "partialEvidence": {
         "coverage": "PARTIAL",
         "reference": "spec/compatibility/broad-runs/fs-transaction-expiry-retry-04-recorded-comparison-v1.json",
@@ -584,6 +616,26 @@
           "The exact idle threshold is not identified: it lies between the last accepted measured idle (lower bound 110.70 s) and the first refused one (upper bound 122.96 s). Strict's 120 s limit is provisional: it accepts the unobserved 113.12 to 120 s gap and refuses the unobserved 120 to 120.54 s gap.",
           "The native gRPC sweeps (P10-B, P10-C) were recorded outside this recipe and are not yet bound to it.",
           "The recorded REST comparison v1 (its local side is docs.local/runs/fs-transaction-recorded-local-after-strict; the committed local shadow files are separate evidence) describes strict at the old 10 s allowance and 90 s of local idle for the idle rows commit-after-idle, rollback-after-idle and lock-released-after-idle and their post-state; it is historical for them until local shadow v5 and comparison v2 are recorded at the final artifact."
+        ],
+        "additionalRecordedSubsets": [
+          {
+            "coverage": "PARTIAL",
+            "observations": "spec/compatibility/broad-runs/fs-transaction-p13b-recorded-observations-v1.json",
+            "comparison": "spec/compatibility/broad-runs/fs-transaction-p13b-recorded-comparison-v1.json",
+            "recordings": 2,
+            "transport": "rest",
+            "caseIds": [
+              "rest/rt3-rollback-idle"
+            ],
+            "localComparisonStatus": "PENDING_FINAL_ARTIFACT_REPLAY",
+            "decodedSemanticsValidated": true,
+            "rawRestWireLayoutValidated": false,
+            "historicalInstalledRuntimeInputsValidated": "UNKNOWN",
+            "remainingBoundaries": [
+              "The exact idle threshold and representative gRPC Rollback/retry ordering remain unresolved.",
+              "Raw REST wire layout and current normal artifact comparisons remain pending."
+            ]
+          }
         ]
       }
     },
@@ -904,7 +956,7 @@
       "OPTIMISTIC mode follow-up issue"
     ]
   },
-  "note": "The frozen denominator remains 18 behavioral conditions. Two sandbox recordings and source-bound strict/emulator comparisons cover the 13-case REST subset of idle-expiry, failed-commit-and-rollback and retry-token-lifecycle. Separately, two recordings each of P02 and P02b supply partial REST and representative gRPC decoded semantic evidence for read-only-snapshot, with both recordings compared against the source-bound normal fireemu artifact. P02/P02b do not prove raw REST bodyBytes, content-length or member-order layout. Separately, P08 supplies REST and gRPC decoded partial evidence for the refused-commit and rollback chains; its actual normal runtime-wave comparisons retain strict 0 and emulator 10 differences per recording while final whole-tree comparisons remain pending, raw REST byte layout is unproven, and the missing document m has setup-only typed absence. All 18 conditions, their remaining boundaries, the official emulator gate and parent closure remain open. Inferred strict answers that no recording covers are listed on their conditions (retry snapshot, retry naming an expired token, the forgetting age inside its bracket, a Rollback of an idle-expired token before 270 s or unnoticed past 270 s); each is a candidate for a later recording and none is COMPAT_VERIFIED.",
+  "note": "The frozen denominator remains 18 behavioral conditions. Two sandbox recordings and source-bound strict/emulator comparisons cover the 13-case REST subset of idle-expiry, failed-commit-and-rollback and retry-token-lifecycle. Separately, two recordings each of P02 and P02b supply partial REST and representative gRPC decoded semantic evidence for read-only-snapshot, with both recordings compared against the source-bound normal fireemu artifact. P02/P02b do not prove raw REST bodyBytes, content-length or member-order layout. Separately, P08 supplies REST and gRPC decoded partial evidence for the refused-commit and rollback chains; its actual normal runtime-wave comparisons retain strict 0 and emulator 10 differences per recording while final whole-tree comparisons remain pending, raw REST byte layout is unproven, and the missing document m has setup-only typed absence. All 18 conditions, their remaining boundaries, the official emulator gate and parent closure remain open. Separately, P13b supplies two agreeing source-bound REST decoded observations for retry snapshot timing, named idle/lifetime-expired retry tokens and Rollback ordering, retaining the original five-case retry and other recorded REST subsets. Its first retry read sees the writer acknowledged after retry Begin; the named expired-token retries are accepted. P13b current normal artifact comparisons remain pending and historical installed runtime input currency is UNKNOWN. Inferred answers still lacking their required observations include representative gRPC retry and Rollback ordering, the exact forgetting age inside its bracket and a Rollback of an idle-expired token unnoticed past 270 s. Raw REST byte/header/member-order proof, the official emulator gate, final whole-tree regression, all 18 complete conditions and parent closure review remain open; no partial subset is COMPAT_VERIFIED.",
   "profileComparison": {
     "profile": "strict",
     "emulatorCompatibilityCheck": "PENDING_LOCAL_OBSERVATION",
@@ -920,7 +972,7 @@
     "database": "(default)",
     "credentials": "Admin OAuth for server transactions; unauthenticated Web SDK for optimistic transactions where deployed Rules permit",
     "productionExecuted": true,
-    "coverage": "PARTIAL_REST_THREE_CONDITIONS_AND_P02_P02B_REST_GRPC_DECODED_SUBSET_AND_P08_REST_GRPC_DECODED_SUBSET"
+    "coverage": "PARTIAL_REST_THREE_CONDITIONS_AND_P02_P02B_REST_GRPC_DECODED_SUBSET_AND_P08_REST_GRPC_DECODED_SUBSET_AND_P13B_REST_DECODED_SUBSET"
   },
   "frozenOn": "2026-09-27"
 }

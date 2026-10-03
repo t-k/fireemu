@@ -196,13 +196,33 @@ async function syncDirectory(path) {
 }
 async function privateDirectory(path) {
   await mkdir(path, { recursive: true, mode: 0o700 });
-  const stat = await lstat(path);
-  if (!stat.isDirectory() || stat.uid !== process.getuid() || (stat.mode & 0o777) !== 0o700)
+  const stat = await lstat(path, { bigint: true });
+  if (
+    !stat.isDirectory() ||
+    stat.uid !== BigInt(process.getuid()) ||
+    (Number(stat.mode) & 0o777) !== 0o700
+  )
     fail("PRIVATE_DIRECTORY_REQUIRED");
   await checkedAncestors(join(path, "entry"));
+  return { path, identity: stat };
 }
-async function exclusive(path, row) {
+async function heldUsageParent(parent) {
+  const current = await lstat(parent.path, { bigint: true });
+  if (
+    !current.isDirectory() ||
+    current.isSymbolicLink() ||
+    current.dev !== parent.identity.dev ||
+    current.ino !== parent.identity.ino ||
+    current.birthtimeNs !== parent.identity.birthtimeNs ||
+    current.uid !== parent.identity.uid ||
+    current.uid !== BigInt(process.getuid()) ||
+    (Number(current.mode) & 0o777) !== 0o700
+  )
+    fail("HELD_USAGE_PARENT_CHANGED");
+}
+async function exclusive(path, row, parent = null) {
   await checkedAncestors(path);
+  if (parent) await heldUsageParent(parent);
   const handle = await open(
     path,
     constants.O_CREAT | constants.O_EXCL | constants.O_RDWR | constants.O_NOFOLLOW,
@@ -210,14 +230,15 @@ async function exclusive(path, row) {
   );
   const identity = await handle.stat({ bigint: true });
   const body = `${JSON.stringify(row)}\n`;
+  const record = { path, handle, identity, body, parent };
   try {
-    await append(handle, row);
+    await appendHeld(record, row);
     await syncDirectory(dirname(path));
   } catch (error) {
     await handle.close();
     throw error;
   }
-  return { path, handle, identity, body };
+  return record;
 }
 async function append(handle, row) {
   const bytes = Buffer.from(`${JSON.stringify(row)}\n`);
@@ -226,6 +247,7 @@ async function append(handle, row) {
   await handle.sync();
 }
 async function held(record, immutableBody = false) {
+  if (record.parent) await heldUsageParent(record.parent);
   const opened = await record.handle.stat({ bigint: true });
   const current = await lstat(record.path, { bigint: true });
   if (
@@ -243,6 +265,61 @@ async function held(record, immutableBody = false) {
     fail("HELD_FD_CHANGED");
   if (immutableBody && (await readOwned(record.path)).bytes.toString() !== record.body)
     fail("LOCK_BODY_CHANGED");
+}
+async function appendHeld(record, row) {
+  await held(record);
+  await append(record.handle, row);
+  await held(record);
+}
+
+/** A pure capture check; it cannot issue or replace Root's private authority. */
+export function supplementCaptureProblem(capture, secrets) {
+  const body = Buffer.from(capture.body ?? []);
+  const fields = [
+    ...Object.keys(capture.headers ?? {}),
+    ...Object.values(capture.headers ?? {})
+      .flat()
+      .map(String),
+    ...(capture.rawHeaders ?? []).map(String),
+    body.toString("utf8"),
+    body.toString("base64"),
+  ];
+  for (const secret of secrets) {
+    if (!secret) continue;
+    const bytes = Buffer.from(secret);
+    const representations = new Set([
+      secret,
+      encodeURIComponent(secret),
+      encodeURI(secret),
+      new URLSearchParams({ value: secret }).toString().slice(6),
+      JSON.stringify(secret).slice(1, -1),
+      bytes.toString("base64"),
+      bytes.toString("base64").replace(/=+$/, ""),
+      bytes.toString("base64url"),
+      bytes.toString("hex"),
+      bytes.toString("hex").toUpperCase(),
+      [...bytes].map((byte) => `%${byte.toString(16).padStart(2, "0")}`).join(""),
+      Array.from(
+        { length: secret.length },
+        (_, index) => `\\u${secret.charCodeAt(index).toString(16).padStart(4, "0")}`,
+      ).join(""),
+    ]);
+    for (const field of fields) {
+      if ([...representations].some((representation) => field.includes(representation)))
+        return "SECRET_IN_CAPTURE";
+      // Mixed-case and partially escaped percent/JSON forms must not bypass the raw check.
+      let decoded = field;
+      for (let depth = 0; depth < 2; depth++) {
+        decoded = decoded
+          .replace(/(?:%[a-f0-9]{2})+/gi, (value) =>
+            Buffer.from(value.replace(/%/g, ""), "hex").toString("utf8"),
+          )
+          .replace(/\\u([a-f0-9]{4})/gi, (_, value) => String.fromCharCode(parseInt(value, 16)));
+        if (decoded.includes(secret)) return "SECRET_IN_CAPTURE";
+      }
+    }
+  }
+  return null;
 }
 
 /** The prior principal is a required input, never learned from the response being checked. */
@@ -1209,7 +1286,7 @@ async function dispatch(capability, request) {
   epoch.labels.add(request.label);
   epoch.attempted++;
   epoch.families[request.family]++;
-  await append(epoch.usage.handle, intent);
+  await appendHeld(epoch.usage, intent);
   await append(epoch.events.handle, intent);
   // Persistence can be held while Root revokes a grant; read the authority again before wire.
   epoch.attempted--;
@@ -1233,15 +1310,10 @@ async function dispatch(capability, request) {
     if (epoch.captureBytes + response.bodyBytes > 40 * 1024 * 1024) fail("RUN_CAPTURE_CAP");
     epoch.captureBytes += response.bodyBytes;
     const sensitive = ["oauth", "tokeninfo"].includes(request.family);
-    const bodyText = response.body.toString("utf8");
-    if (
-      !sensitive &&
-      epoch.secrets.some(
-        (secret) =>
-          secret && (bodyText.includes(secret) || bodyText.includes(encodeURIComponent(secret))),
-      )
-    )
-      fail("SECRET_IN_CAPTURE");
+    if (!sensitive) {
+      const captureProblem = supplementCaptureProblem(response, epoch.secrets);
+      if (captureProblem) fail(captureProblem);
+    }
     const saved = {
       kind: "RESPONSE",
       sequence,
@@ -1262,6 +1334,7 @@ async function dispatch(capability, request) {
             bodyBase64: response.body.toString("base64"),
           }),
     };
+    await held(epoch.usage);
     await append(epoch.events.handle, saved);
     if (
       !response.complete ||
@@ -1460,7 +1533,7 @@ export async function runRootSupplement(...args) {
     fail("PROJECT_SPACING");
   if (exists(paths.legacyLock)) fail("LEGACY_LOCK_PRESENT");
   await privateDirectory(paths.lockDir);
-  await privateDirectory(join(paths.home, "usage"));
+  const usageParent = await privateDirectory(join(paths.home, "usage"));
   await privateDirectory(join(paths.home, "records"));
   const runDirectory = join(paths.home, "records", packet.grant.runId);
   await mkdir(runDirectory, { mode: 0o700 });
@@ -1495,12 +1568,16 @@ export async function runRootSupplement(...args) {
     await history(paths, packet);
     const fresh = await authority(paths);
     if (fresh.currentSha256 !== accepted.currentSha256) fail("CURRENT_CHANGED_BEFORE_START");
-    usage = await exclusive(join(paths.home, "usage", `${packet.grant.nonce}.jsonl`), {
-      ...base,
-      kind: "RESERVED",
-      reservationMicroUsd: cost.reservationMicroUsd,
-      maxPhysicalRequests: packet.grant.maxPhysicalRequests,
-    });
+    usage = await exclusive(
+      join(paths.home, "usage", `${packet.grant.nonce}.jsonl`),
+      {
+        ...base,
+        kind: "RESERVED",
+        reservationMicroUsd: cost.reservationMicroUsd,
+        maxPhysicalRequests: packet.grant.maxPhysicalRequests,
+      },
+      usageParent,
+    );
     events = await exclusive(join(runDirectory, "events.jsonl"), {
       ...base,
       kind: "STARTED",
@@ -1529,7 +1606,7 @@ export async function runRootSupplement(...args) {
       maxRequests: packet.grant.maxPhysicalRequests,
       estimatedUsd: cost.reservationMicroUsd / 1000000,
     });
-    await append(usage.handle, {
+    await appendHeld(usage, {
       ...base,
       kind: "ACTIVE",
       epochSha256: sha256(JSON.stringify(base)),
@@ -1625,7 +1702,7 @@ export async function runRootSupplement(...args) {
       fullCorpus: "OPEN",
     });
     await metadata.handle.close();
-    await append(usage.handle, { ...terminal, kind: "CONSUMED" });
+    await appendHeld(usage, { ...terminal, kind: "CONSUMED" });
     await heldSharedLedger(epoch.ledger);
     await append(ledger, {
       ...terminal,
@@ -1661,7 +1738,7 @@ export async function runRootSupplement(...args) {
         reason,
       }).catch(() => {});
     if (usage)
-      await append(usage.handle, {
+      await appendHeld(usage, {
         ...base,
         kind: "UNKNOWN",
         requests: epoch?.attempted ?? 0,

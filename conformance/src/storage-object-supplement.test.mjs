@@ -178,11 +178,11 @@ test("complete program observes actual wrong-offset and unnamed statuses and emi
       ).searchParams.get("ifGenerationMatch"),
       "1730000000000000",
     );
-    for (const request of sent.filter((request) => request.label.includes("-whole-"))) {
-      const query = new URL(request.url).searchParams;
-      assert.equal(query.get("versions"), "true");
-      assert.equal(query.get("maxResults"), "1");
-      assert.equal(query.has("prefix"), false);
+    for (const request of sent.filter((candidate) => candidate.label.includes("-whole-"))) {
+      const parameters = new URL(request.url).searchParams;
+      assert.equal(parameters.get("versions"), "true");
+      assert.equal(parameters.get("maxResults"), "1");
+      assert.equal(parameters.has("prefix"), false);
     }
     for (const caseId of api.supplementPlan().m4.cases) {
       const subject = sent.find((request) => request.label === `${caseId}-subject`);
@@ -784,6 +784,341 @@ test("temporary Root faults stop before ADC or wire, retain UNKNOWN locks, and n
       await new Promise((resolve) => server.close(resolve));
       if (fixture) await rm(fixture.directory, { recursive: true, force: true });
     }
+  }
+});
+
+function rootControlResponse(intent, fixture) {
+  const headers = { "content-type": "application/json" };
+  let data;
+  if (intent.family === "oauth")
+    data = { access_token: "LOCAL_ONLY_FAKE_TOKEN", expires_in: 3600, token_type: "Bearer" };
+  else if (intent.family === "tokeninfo")
+    data = {
+      sub: fixture.packet.principal.subject,
+      aud: fixture.packet.principal.clientId,
+      azp: fixture.packet.principal.clientId,
+      scope: fixture.packet.principal.requiredScopes[0],
+      expires_in: "3600",
+    };
+  else if (intent.family === "rules")
+    data = intent.label.endsWith("release")
+      ? {
+          name: fixture.snapshot.releaseName,
+          rulesetName: fixture.snapshot.rulesetName,
+          createTime: fixture.snapshot.createTime,
+          updateTime: fixture.snapshot.updateTime,
+        }
+      : {
+          name: fixture.snapshot.rulesetName,
+          source: { files: [{ name: "local.rules", content: "LOCAL_ONLY_ALLOW_RULES" }] },
+        };
+  else if (intent.family === "bucket")
+    data = {
+      name: fixture.packet.target.bucket,
+      projectNumber: fixture.packet.target.projectNumber,
+      versioning: { enabled: false },
+    };
+  else return modelResponse(intent, { bucket: fixture.packet.target.bucket, runId: fixture.runId });
+  return { status: 200, headers, body: Buffer.from(JSON.stringify(data)) };
+}
+
+const fakeSecrets = ["LOCAL_ONLY_FAKE_TOKEN", "LOCAL_ONLY_FAKE_SECRET", "LOCAL_ONLY_FAKE_REFRESH"];
+const reflectionEncodings = {
+  raw: (value) => value,
+  base64: (value) => Buffer.from(value).toString("base64"),
+  base64url: (value) => Buffer.from(value).toString("base64url"),
+  percent: (value) =>
+    [...Buffer.from(value)].map((byte) => `%${byte.toString(16).padStart(2, "0")}`).join(""),
+  unicode: (value) =>
+    [...value]
+      .map((character) => `\\u${character.charCodeAt(0).toString(16).padStart(4, "0")}`)
+      .join(""),
+};
+
+for (const [place, encoding, secretIndex] of [
+  ["headers", "raw", 0],
+  ["headers", "base64", 1],
+  ["headers", "percent", 2],
+  ["rawHeaders", "raw", 0],
+  ["rawHeaders", "base64", 1],
+  ["body", "raw", 0],
+  ["body", "base64", 1],
+  ["body", "percent", 2],
+  ["body", "unicode", 0],
+])
+  test(`temporary Root rejects secret reflection in ${place} as ${encoding} before capture`, async (context) => {
+    const rolePath = process.env.FIREEMU_STORAGE_OBJECT_TEST_ROLE_FIXTURE;
+    if (!rolePath) {
+      context.skip("canonical fixture required for final reflection gate");
+      return;
+    }
+    const port = Number(process.env.PORT);
+    assert.ok(port > 0, "run with portctl");
+    const canary = reflectionEncodings[encoding](fakeSecrets[secretIndex]);
+    let fixture;
+    let peerAttempts = 0;
+    let injected = false;
+    let rawOnlyObserved = false;
+    const intercept = mock.method(https, "request", (url, options, callback) => {
+      assert.ok(fixture);
+      const original = new URL(url);
+      return localHttpRequest(
+        new URL(`http://127.0.0.1:${port}${original.pathname}${original.search}`),
+        options,
+        (incoming) => {
+          if (place === "rawHeaders" && peerAttempts === 3) {
+            assert.equal(incoming.headers["content-type"], "application/json");
+            assert.equal(JSON.stringify(incoming.headers).includes(canary), false);
+            assert.equal(incoming.rawHeaders.includes(canary), true);
+            rawOnlyObserved = true;
+          }
+          callback(incoming);
+        },
+      );
+    });
+    syncBuiltinESMExports();
+    const server = createServer(async (request, response) => {
+      peerAttempts++;
+      const rows = (await readFile(fixture.events, "utf8")).trim().split("\n").map(JSON.parse);
+      const intent = rows.at(-1);
+      assert.equal(intent.kind, "ATTEMPT");
+      assert.equal(intent.sequence, peerAttempts);
+      const chunks = [];
+      for await (const chunk of request) chunks.push(chunk);
+      assert.equal(api.sha256(Buffer.concat(chunks)), intent.bodySha256);
+      const value = rootControlResponse(intent, fixture);
+      if (intent.label === "rules-before-release") {
+        injected = true;
+        if (place === "headers") value.headers["x-reflected-canary"] = canary;
+        else if (place === "rawHeaders")
+          value.headers = ["Content-Type", "application/json", "Content-Type", canary];
+        else
+          value.body = Buffer.from(
+            `${value.body.toString().slice(0, -1)},"reflected":"${canary}"}`,
+          );
+      }
+      response.writeHead(value.status, value.headers);
+      response.end(value.body);
+    });
+    try {
+      fixture = await temporaryRootFixture(rolePath);
+      await new Promise((resolve) => server.listen(port, "127.0.0.1", resolve));
+      await assert.rejects(fixture.copied.runRootSupplement(), {
+        message: "STORAGE_OBJECT_SUPPLEMENT_STOP",
+      });
+      assert.equal(injected, true);
+      assert.equal(peerAttempts, 3, "reflection must stop the next physical effect");
+      if (place === "rawHeaders") assert.equal(rawOnlyObserved, true);
+      const bytes = await readFile(fixture.events);
+      const rows = bytes.toString().trim().split("\n").map(JSON.parse);
+      assert.equal(rows.at(-1).kind, "UNKNOWN");
+      assert.equal(rows.at(-1).reason, "SECRET_IN_CAPTURE");
+      assert.equal(
+        rows.some((row) => row.kind === "RESPONSE" && row.label === "rules-before-release"),
+        false,
+      );
+      const usage = await readFile(
+        join(fixture.home, "usage", `${fixture.packet.grant.nonce}.jsonl`),
+      );
+      const ledger = await readFile(fixture.ledgerPath);
+      assert.equal(usage.includes(Buffer.from("CONSUMED")), false);
+      for (const capture of [bytes, usage, ledger]) {
+        assert.equal(
+          capture.includes(Buffer.from(canary)),
+          false,
+          "reflected representation cannot be persisted",
+        );
+        for (const secret of fakeSecrets)
+          assert.equal(capture.includes(Buffer.from(secret)), false);
+      }
+      for (const name of [`${fixture.packet.grant.taskId}.budget`, fixture.packet.target.projectId])
+        assert.equal(
+          (
+            await fsPromises.stat(
+              join(fixture.directory, "docs.local/runs/sandbox-locks", `${name}.lock`),
+            )
+          ).isFile(),
+          true,
+        );
+      await assert.rejects(fixture.copied.runRootSupplement());
+      assert.equal(peerAttempts, 3, "sticky UNKNOWN cannot reuse the grant");
+    } finally {
+      intercept.mock.restore();
+      syncBuiltinESMExports();
+      await new Promise((resolve) => server.close(resolve));
+      if (fixture) await rm(fixture.directory, { recursive: true, force: true });
+    }
+  });
+
+for (const mode of ["mode", "replacement", "symlink", "after-intent"])
+  test(`temporary Root rejects changed admitted usage parent ${mode} before the next wire`, async (context) => {
+    const rolePath = process.env.FIREEMU_STORAGE_OBJECT_TEST_ROLE_FIXTURE;
+    if (!rolePath) {
+      context.skip("canonical fixture required for final usage parent gate");
+      return;
+    }
+    const port = Number(process.env.PORT);
+    assert.ok(port > 0, "run with portctl");
+    let fixture;
+    let peerAttempts = 0;
+    let changed = false;
+    const nativeOpen = fsPromises.open;
+    const files = mock.method(fsPromises, "open", async (...args) => {
+      const handle = await nativeOpen(...args);
+      if (
+        mode === "after-intent" &&
+        fixture &&
+        args[0] === join(fixture.home, "usage", `${fixture.packet.grant.nonce}.jsonl`)
+      ) {
+        const originalSync = handle.sync.bind(handle);
+        handle.sync = async () => {
+          await originalSync();
+          const last = (await readFile(args[0], "utf8")).trim().split("\n").map(JSON.parse).at(-1);
+          if (!changed && last.kind === "ATTEMPT") {
+            await fsPromises.chmod(join(fixture.home, "usage"), 0o777);
+            changed = true;
+          }
+        };
+      }
+      return handle;
+    });
+    const intercept = mock.method(https, "request", (url, options, callback) => {
+      assert.ok(fixture);
+      const original = new URL(url);
+      return localHttpRequest(
+        new URL(`http://127.0.0.1:${port}${original.pathname}${original.search}`),
+        options,
+        callback,
+      );
+    });
+    syncBuiltinESMExports();
+    const server = createServer(async (request, response) => {
+      peerAttempts++;
+      const intent = (await readFile(fixture.events, "utf8"))
+        .trim()
+        .split("\n")
+        .map(JSON.parse)
+        .at(-1);
+      assert.equal(intent.kind, "ATTEMPT");
+      request.resume();
+      if (intent.label === "owner-exchange" && mode !== "after-intent") {
+        const parent = join(fixture.home, "usage");
+        const filename = `${fixture.packet.grant.nonce}.jsonl`;
+        const before = await fsPromises.stat(join(parent, filename), { bigint: true });
+        if (mode === "mode") await fsPromises.chmod(parent, 0o777);
+        else {
+          await rename(parent, `${parent}.admitted`);
+          if (mode === "symlink") await fsPromises.symlink(`${parent}.admitted`, parent);
+          else {
+            await mkdir(parent, { mode: 0o700 });
+            await rename(join(`${parent}.admitted`, filename), join(parent, filename));
+          }
+        }
+        const after = await fsPromises.stat(join(parent, filename), { bigint: true });
+        assert.equal(after.dev, before.dev);
+        assert.equal(
+          after.ino,
+          before.ino,
+          "the held file remains identical, only its parent changes",
+        );
+        changed = true;
+      }
+      const value = rootControlResponse(intent, fixture);
+      response.writeHead(value.status, value.headers);
+      response.end(value.body);
+    });
+    try {
+      fixture = await temporaryRootFixture(rolePath);
+      await new Promise((resolve) => server.listen(port, "127.0.0.1", resolve));
+      await assert.rejects(fixture.copied.runRootSupplement(), {
+        message: "STORAGE_OBJECT_SUPPLEMENT_STOP",
+      });
+      assert.equal(changed, true);
+      assert.equal(
+        peerAttempts,
+        mode === "after-intent" ? 0 : 1,
+        "unsafe or replaced parent must prevent the next wire",
+      );
+      const rows = (await readFile(fixture.events, "utf8")).trim().split("\n").map(JSON.parse);
+      assert.equal(rows.at(-1).kind, "UNKNOWN");
+      assert.equal(rows.at(-1).reason, "HELD_USAGE_PARENT_CHANGED");
+      const usage = await readFile(
+        join(fixture.home, "usage", `${fixture.packet.grant.nonce}.jsonl`),
+        "utf8",
+      );
+      assert.doesNotMatch(usage, /CONSUMED/);
+      assert.equal(
+        (
+          await fsPromises.stat(
+            join(
+              fixture.directory,
+              "docs.local/runs/sandbox-locks",
+              `${fixture.packet.target.projectId}.lock`,
+            ),
+          )
+        ).isFile(),
+        true,
+      );
+    } finally {
+      intercept.mock.restore();
+      files.mock.restore();
+      syncBuiltinESMExports();
+      await new Promise((resolve) => server.close(resolve));
+      if (fixture) await rm(fixture.directory, { recursive: true, force: true });
+    }
+  });
+
+test("finite and generated secret representations are rejected independently in each capture collection", () => {
+  assert.equal(typeof runtime.supplementCaptureProblem, "function");
+  let state = 0x795;
+  for (let index = 0; index < 1024; index++) {
+    state = (Math.imul(state, 1664525) + 1013904223) >>> 0;
+    const secret = `PRIVATE_${state.toString(36)}_+/=?%"\\`;
+    const variants = [
+      secret,
+      encodeURIComponent(secret),
+      JSON.stringify(secret).slice(1, -1),
+      ...Object.values(reflectionEncodings).map((encode) => encode(secret)),
+      [...Buffer.from(secret)]
+        .map((byte, position) =>
+          position % 2
+            ? String.fromCharCode(byte)
+            : `%${byte.toString(16).toUpperCase().padStart(2, "0")}`,
+        )
+        .join(""),
+      [...secret]
+        .map((character, position) =>
+          position % 2
+            ? character
+            : `\\u${character.charCodeAt(0).toString(16).toUpperCase().padStart(4, "0")}`,
+        )
+        .join(""),
+      reflectionEncodings.percent(secret).replace(/%/g, "%25"),
+    ];
+    for (const variant of variants)
+      for (const place of ["headers", "rawHeaders", "body"]) {
+        const capture = { headers: {}, rawHeaders: [], body: Buffer.alloc(0) };
+        if (place === "headers") capture.headers["x-reflected"] = `prefix:${variant}:suffix`;
+        else if (place === "rawHeaders")
+          capture.rawHeaders = ["x-reflected", `prefix:${variant}:suffix`];
+        else capture.body = Buffer.from(`prefix:${variant}:suffix`);
+        assert.equal(
+          runtime.supplementCaptureProblem(capture, [secret]),
+          "SECRET_IN_CAPTURE",
+          `${place} representation ${index}`,
+        );
+      }
+    assert.equal(
+      runtime.supplementCaptureProblem(
+        {
+          headers: { "x-control": "public" },
+          rawHeaders: ["x-control", "public"],
+          body: Buffer.from("public"),
+        },
+        [secret],
+      ),
+      null,
+    );
   }
 });
 

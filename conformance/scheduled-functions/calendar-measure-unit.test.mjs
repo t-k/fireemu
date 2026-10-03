@@ -1929,10 +1929,15 @@ test("host binding requires a closed exact raw packet, H, build, root and lifeti
     ledgerSha256: "f".repeat(64),
   };
   const good = async (input) => ({ ...input.binding, closed: true });
-  assert.deepEqual(await verifyTrustedBinding(good, request, Buffer.from("raw packet")), {
-    ...request,
-    closed: true,
-  });
+  assert.deepEqual(
+    await verifyTrustedBinding(good, request, Buffer.from("raw packet"), {
+      now: () => Date.parse("2026-10-02T06:00:00Z"),
+    }),
+    {
+      ...request,
+      closed: true,
+    },
+  );
   for (const provider of [
     undefined,
     true,
@@ -1942,7 +1947,11 @@ test("host binding requires a closed exact raw packet, H, build, root and lifeti
     async () => ({ ...request, closed: true, ledgerSha256: "0".repeat(64) }),
     async () => ({ ...request, closed: true, lifetime: { id: "other", pid: 100 } }),
   ]) {
-    await assert.rejects(verifyTrustedBinding(provider, request, Buffer.from("raw packet")));
+    await assert.rejects(
+      verifyTrustedBinding(provider, request, Buffer.from("raw packet"), {
+        now: () => Date.parse("2026-10-02T06:00:00Z"),
+      }),
+    );
   }
 });
 
@@ -2076,4 +2085,26 @@ test("a coherently rebound authority cannot substitute another SID for the nativ
   const result = evaluateCampaignSnapshot(packet, snapshot);
   assert.equal(result.verdict, "fail");
   assert.ok(result.problems.includes("foreign native root, day or H"));
+});
+
+test("a host verifier cannot close a certificate after the frozen UTC day rolls over", async () => {
+  const { verifyTrustedBinding } = await import("./calendar-measure.mjs");
+  let now = Date.parse("2026-10-02T23:59:59Z");
+  const bytes = Buffer.from("unit packet");
+  const binding = {
+    utcDay: "2026-10-02",
+    packetSha256: sha(bytes),
+    lifetime: { id: "unit", pid: 100 },
+  };
+  await assert.rejects(
+    verifyTrustedBinding(
+      async (request) => {
+        now += 2000;
+        return { ...request.binding, closed: true };
+      },
+      binding,
+      bytes,
+      { now: () => now },
+    ),
+  );
 });

@@ -1723,6 +1723,12 @@ async function certifyCampaignManifest(manifestPath, trustedPacketVerifier) {
         ),
         packetBytes,
       );
+    if (evaluated.verdict === "pass") {
+      const after = await currentCampaignContext();
+      const changed = validateCampaignPacket(packet, after);
+      if (changed.length || frozenDay() !== packet.utcDay)
+        throw new Error("H or day changed after host binding");
+    }
     return evaluated.verdict === "pass"
       ? { ...evaluated, predicateOnly: false, nativeCertificateIssued: true }
       : evaluated;
@@ -1828,7 +1834,12 @@ function bindingRequest(
 }
 
 /** Only an external host can supply this capability; a file or boolean is never a verifier. */
-export async function verifyTrustedBinding(trustedPacketVerifier, binding, packetBytes) {
+export async function verifyTrustedBinding(
+  trustedPacketVerifier,
+  binding,
+  packetBytes,
+  { now = Date.now } = {},
+) {
   if (typeof trustedPacketVerifier !== "function" || !Buffer.isBuffer(packetBytes))
     throw new Error("missing external host verifier");
   const expected = structuredClone(binding);
@@ -1841,10 +1852,16 @@ export async function verifyTrustedBinding(trustedPacketVerifier, binding, packe
     !Number.isSafeInteger(expected.lifetime.pid)
   )
     throw new Error("missing producer lifetime");
+  const checkDay = () => {
+    if (new Date(now()).toISOString().slice(0, 10) !== expected.utcDay)
+      throw new Error("host binding UTC day changed");
+  };
+  checkDay();
   const receipt = await trustedPacketVerifier({
     binding: structuredClone(expected),
     packetBytes: Buffer.from(packetBytes),
   });
+  checkDay();
   if (!isDeepStrictEqual(receipt, { ...expected, closed: true }))
     throw new Error("external verifier did not close this exact binding");
   return receipt;

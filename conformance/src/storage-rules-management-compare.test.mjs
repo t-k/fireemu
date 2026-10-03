@@ -442,7 +442,9 @@ for (const [name, tamper] of Object.entries({
   });
 
 // Native stage3-20260930c compile sequences 482, 485, 488, 491, 1061, 1064, 1067.
-const nativeV1WarningBytes = Buffer.from("{\n  \"issues\": [\n    {\n      \"sourcePosition\": {\n        \"fileName\": \"storage.rules\"\n      },\n      \"description\": \"Ruleset uses old version (version [1]). Please update to the latest version (version [2]).\",\n      \"severity\": \"WARNING\"\n    }\n  ]\n}\n");
+const nativeV1WarningBytes = Buffer.from(
+  '{\n  "issues": [\n    {\n      "sourcePosition": {\n        "fileName": "storage.rules"\n      },\n      "description": "Ruleset uses old version (version [1]). Please update to the latest version (version [2]).",\n      "severity": "WARNING"\n    }\n  ]\n}\n',
+);
 const nativeV1Warning = JSON.parse(nativeV1WarningBytes);
 const nativeV1Refs = new Set([
   "case/list-v1-read-get-media-absent",
@@ -485,12 +487,24 @@ const warningBodies = {
   "unknown severity": { issues: [{ ...nativeV1Warning.issues[0], severity: "INFO" }] },
   "unknown warning": { issues: [{ ...nativeV1Warning.issues[0], description: "unknown" }] },
   "description suffix": {
-    issues: [{ ...nativeV1Warning.issues[0], description: nativeV1Warning.issues[0].description + " " }],
+    issues: [
+      { ...nativeV1Warning.issues[0], description: nativeV1Warning.issues[0].description + " " },
+    ],
   },
-  "missing description": { issues: [{ severity: "WARNING", sourcePosition: { fileName: "storage.rules" } }] },
-  "missing position": { issues: [{ severity: "WARNING", description: nativeV1Warning.issues[0].description }] },
-  "foreign file": { issues: [{ ...nativeV1Warning.issues[0], sourcePosition: { fileName: "other.rules" } }] },
-  "position line": { issues: [{ ...nativeV1Warning.issues[0], sourcePosition: { fileName: "storage.rules", line: 1 } }] },
+  "missing description": {
+    issues: [{ severity: "WARNING", sourcePosition: { fileName: "storage.rules" } }],
+  },
+  "missing position": {
+    issues: [{ severity: "WARNING", description: nativeV1Warning.issues[0].description }],
+  },
+  "foreign file": {
+    issues: [{ ...nativeV1Warning.issues[0], sourcePosition: { fileName: "other.rules" } }],
+  },
+  "position line": {
+    issues: [
+      { ...nativeV1Warning.issues[0], sourcePosition: { fileName: "storage.rules", line: 1 } },
+    ],
+  },
   "null position": { issues: [{ ...nativeV1Warning.issues[0], sourcePosition: null }] },
   "extra issue field": { issues: [{ ...nativeV1Warning.issues[0], unknown: true }] },
   "extra envelope field": { ...nativeV1Warning, unknown: true },
@@ -520,12 +534,24 @@ for (const status of [201, 204, 400, 403, 500])
     assert.equal(compare(f).pairedEffectsMatch, false);
   });
 
-for (const drift of ["v2 source", "source digest", "source reference", "body digest", "body length", "content length", "body encoding", "malformed JSON", "receipt"])
+for (const drift of [
+  "v2 source",
+  "source digest",
+  "source reference",
+  "body digest",
+  "body length",
+  "content length",
+  "body encoding",
+  "malformed JSON",
+  "receipt",
+])
   test(`native v1 warning rejects ${drift} drift`, async () => {
     const f = await fixture();
     let row = warningRow(f);
     if (drift === "v2 source")
-      row = f.production.rows.find((candidate) => candidate.kind === "compile" && !nativeV1Refs.has(candidate.sourceRef));
+      row = f.production.rows.find(
+        (candidate) => candidate.kind === "compile" && !nativeV1Refs.has(candidate.sourceRef),
+      );
     replaceBytes(row, nativeV1WarningBytes);
     if (drift === "source digest") row.sourceSha256 = "f".repeat(64);
     if (drift === "source reference") row.sourceRef = "case/foreign";
@@ -546,7 +572,13 @@ for (const shape of ["symbol", "nonenumerable", "accessor"])
     if (shape === "symbol") row.response[Symbol("hidden")] = true;
     if (shape === "nonenumerable") Object.defineProperty(row.response, "hidden", { value: true });
     if (shape === "accessor")
-      Object.defineProperty(row.response, "status", { enumerable: true, get: () => { reads++; return 200; } });
+      Object.defineProperty(row.response, "status", {
+        enumerable: true,
+        get: () => {
+          reads++;
+          return 200;
+        },
+      });
     reseal(f);
     reads = 0;
     assert.equal(compare(f).pairedEffectsMatch, false);
@@ -556,7 +588,9 @@ for (const shape of ["symbol", "nonenumerable", "accessor"])
 test("generated compile envelopes agree with the frozen source and warning reference model", async () => {
   const base = await fixture();
   const v1 = base.production.rows.filter((row) => nativeV1Refs.has(row.sourceRef));
-  const v2 = base.production.rows.filter((row) => row.kind === "compile" && !nativeV1Refs.has(row.sourceRef)).slice(0, 7);
+  const v2 = base.production.rows
+    .filter((row) => row.kind === "compile" && !nativeV1Refs.has(row.sourceRef))
+    .slice(0, 7);
   const bodies = [{}, nativeV1Warning, ...Object.values(warningBodies)];
   let seed = 0x747758;
   for (let i = 0; i < 96; i++) {
@@ -565,10 +599,214 @@ test("generated compile envelopes agree with the frozen source and warning refer
     const bodyIndex = i < 28 ? Math.floor(i / 14) : seed % bodies.length;
     const status = i < 28 || (seed & 1) === 0 ? 200 : 400;
     const f = structuredClone(base);
-    const row = f.production.rows.find((candidate) => candidate.kind === "compile" && candidate.sourceRef === ref);
+    const row = f.production.rows.find(
+      (candidate) => candidate.kind === "compile" && candidate.sourceRef === ref,
+    );
     replaceBody(row, bodies[bodyIndex], status);
     reseal(f);
-    const expected = status === 200 && (bodyIndex === 0 || (bodyIndex === 1 && nativeV1Refs.has(ref)));
-    assert.equal(compare(f).pairedEffectsMatch, expected, JSON.stringify({ i, ref, bodyIndex, status }));
+    const expected =
+      status === 200 && (bodyIndex === 0 || (bodyIndex === 1 && nativeV1Refs.has(ref)));
+    assert.equal(
+      compare(f).pairedEffectsMatch,
+      expected,
+      JSON.stringify({ i, ref, bodyIndex, status }),
+    );
+  }
+});
+
+const earlyConsumers = {
+  "local binding": (f) => [f.local.binding, "bucket"],
+  "production binding": (f) => [f.production.binding, "bucket"],
+  "receipt binding": (f) => [f.receipt.binding, "bucket"],
+  "receipt provenance": (f) => [f.receipt.localProvenance, "fixtureSha256"],
+  "production row ID": (f) => [f.production.rows[0], "id"],
+  "production chronology": (f) => [f.production.rows[0].evidence, "sequence"],
+  "production source response": (f) => [f.production.sourceEvidence[0].response, "status"],
+  "local atomic row ID": (f) => [f.local.localOnly[0], "id"],
+  "local response": (f) => [f.local.rows[0].response, "status"],
+  "production array entry": (f) => [f.production.rows, "0"],
+};
+for (const [name, select] of Object.entries(earlyConsumers))
+  test(`descriptor preflight refuses ${name} getter before any consumer`, async () => {
+    const f = await fixture();
+    f.production.binding = structuredClone(f.production.binding);
+    const [object, key] = select(f);
+    const original = object[key];
+    let reads = 0;
+    Object.defineProperty(object, key, {
+      enumerable: true,
+      get: () => {
+        reads++;
+        return original;
+      },
+    });
+    const result = compare(f);
+    assert.equal(result.pairedEffectsMatch, false);
+    assert.equal(result.closureReady, false);
+    assert.equal(result.mismatches[0].kind, "INVALID_EVIDENCE");
+    assert.equal(reads, 0);
+  });
+
+test("descriptor preflight refuses throwing getters without executing user code", async () => {
+  const f = await fixture();
+  let reads = 0;
+  Object.defineProperty(warningRow(f).response, "status", {
+    enumerable: true,
+    get: () => {
+      reads++;
+      throw new Error("GETTER_EXECUTED");
+    },
+  });
+  const result = compare(f);
+  assert.equal(result.pairedEffectsMatch, false);
+  assert.equal(reads, 0);
+  assert.ok(!result.mismatches[0].message.includes("GETTER_EXECUTED"));
+});
+
+const nestedContainers = {
+  "production rows": (f) => f.production.rows,
+  "source evidence": (f) => f.production.sourceEvidence,
+  "local atomic rows": (f) => f.local.localOnly,
+  response: (f) => warningRow(f).response,
+  headers: (f) => warningRow(f).response.headers,
+};
+for (const [name, select] of Object.entries(nestedContainers))
+  for (const shape of ["symbol", "nonenumerable", "hidden known key"])
+    test(`descriptor preflight refuses ${name} ${shape}`, async () => {
+      const f = await fixture();
+      const object = select(f);
+      if (shape === "symbol") object[Symbol("hidden")] = true;
+      if (shape === "nonenumerable") Object.defineProperty(object, "hidden", { value: true });
+      if (shape === "hidden known key")
+        Object.defineProperty(object, Object.keys(object)[0], { enumerable: false });
+      reseal(f);
+      assert.equal(compare(f).pairedEffectsMatch, false);
+    });
+
+for (const shape of ["hole", "extra key", "replacement key", "foreign prototype"])
+  test(`descriptor preflight refuses array ${shape}`, async () => {
+    const f = await fixture();
+    if (shape === "hole") delete f.production.gaps[0];
+    if (shape === "extra key") f.production.gaps.extra = true;
+    if (shape === "replacement key") {
+      delete f.production.gaps[0];
+      f.production.gaps.extra = "gap";
+    }
+    if (shape === "foreign prototype") Object.setPrototypeOf(f.production.gaps, null);
+    reseal(f);
+    assert.equal(compare(f).pairedEffectsMatch, false);
+  });
+
+test("descriptor preflight refuses toJSON without executing it", async () => {
+  const f = await fixture();
+  const response = warningRow(f).response;
+  const original = structuredClone(response);
+  let calls = 0;
+  response.toJSON = () => {
+    calls++;
+    return original;
+  };
+  const result = compare(f);
+  assert.equal(result.pairedEffectsMatch, false);
+  assert.equal(calls, 0);
+});
+
+for (const [name, value] of Object.entries({
+  undefined: undefined,
+  function: () => null,
+  symbol: Symbol("scalar"),
+  bigint: 1n,
+  NaN: NaN,
+  Infinity: Infinity,
+  "negative Infinity": -Infinity,
+  date: new Date(0),
+  "foreign object prototype": Object.create(null),
+}))
+  test(`descriptor preflight refuses non-JSON ${name}`, async () => {
+    const f = await fixture();
+    f.production.gaps.push(value);
+    if (!["bigint"].includes(name)) reseal(f);
+    assert.equal(compare(f).pairedEffectsMatch, false);
+  });
+
+test("descriptor preflight rejects ancestor cycles and accepts shared ordinary data", async () => {
+  const shared = await fixture();
+  shared.production.binding = shared.local.binding;
+  shared.receipt.binding = shared.local.binding;
+  reseal(shared);
+  const bytesBefore = JSON.stringify(shared.production);
+  assert.equal(compare(shared).pairedEffectsMatch, true);
+  assert.equal(JSON.stringify(shared.production), bytesBefore);
+  const cycle = await fixture();
+  cycle.production.gaps.push(cycle.production.gaps);
+  assert.equal(compare(cycle).pairedEffectsMatch, false);
+});
+
+test("descriptor preflight refuses proxies before reflection traps", async () => {
+  const f = await fixture();
+  let calls = 0;
+  const trap = () => {
+    calls++;
+    throw new Error("PROXY_TRAP_EXECUTED");
+  };
+  f.production.gaps.push(
+    new Proxy(
+      {},
+      { get: trap, ownKeys: trap, getPrototypeOf: trap, getOwnPropertyDescriptor: trap },
+    ),
+  );
+  assert.equal(compare(f).pairedEffectsMatch, false);
+  assert.equal(calls, 0);
+});
+
+test("generated JSON graph boundaries preserve the serialized projection without accepting hidden data", async () => {
+  const base = await fixture();
+  const cases = [
+    [true, () => null],
+    [true, () => ({ gap: [false, 0, "native"] })],
+    [true, () => [null, true, 1.25]],
+    [
+      true,
+      () => {
+        const shared = { native: true };
+        return [shared, shared];
+      },
+    ],
+    [false, () => undefined],
+    [false, () => NaN],
+    [false, () => Infinity],
+    [false, () => new Date(0)],
+    [false, () => Object.assign(Object.create(null), { native: true })],
+    [
+      false,
+      () => {
+        const value = {};
+        value[Symbol("hidden")] = true;
+        return value;
+      },
+    ],
+    [false, () => Object.defineProperty({}, "hidden", { value: true })],
+    [
+      false,
+      () => {
+        const value = ["native"];
+        value.extra = true;
+        return value;
+      },
+    ],
+    [false, () => new Array(1)],
+    [false, () => ({ toJSON: () => ({ native: true }) })],
+  ];
+  let seed = 758747;
+  for (let i = 0; i < 42; i++) {
+    seed = (Math.imul(seed, 1103515245) + 12345) >>> 0;
+    const index = i < cases.length ? i : seed % cases.length;
+    const [expected, make] = cases[index];
+    const f = structuredClone(base);
+    f.production.gaps.push(make());
+    reseal(f);
+    const before = JSON.stringify(f.production);
+    assert.equal(compare(f).pairedEffectsMatch, expected, JSON.stringify({ i, index }));
+    assert.equal(JSON.stringify(f.production), before);
   }
 });

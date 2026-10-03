@@ -676,3 +676,256 @@ test("two distinct guards cannot own the same session request hook", () => {
     h.guard.close();
   }
 });
+
+test("reentrant callbacks cannot send after closing or replacing the active owner", async () => {
+  for (const boundary of ["phase-request", "phase-fetch", "allow-connect", "allow-fetch"]) {
+    for (const action of ["close", "foreign", "fresh"]) {
+      let h;
+      let fresh;
+      const callback = () => {
+        if (action === "foreign") {
+          if (boundary.endsWith("request")) h.session.request = () => "foreign";
+          else if (boundary.endsWith("connect")) h.http2.connect = () => h.session;
+          else h.globals.fetch = () => "foreign";
+        } else {
+          h.guard.close();
+          if (action === "fresh")
+            fresh = module.installNodeWireGuard({
+              http2: h.http2,
+              globals: h.globals,
+              budget: createWireBudget({ maxRequests: 3, cleanupReserve: 1 }),
+              phase: () => "observation",
+            });
+        }
+        return boundary.startsWith("phase") ? "observation" : true;
+      };
+      h = harness({
+        guardInputs: boundary.startsWith("phase") ? { phase: callback } : { allowUrl: callback },
+      });
+      try {
+        if (boundary.endsWith("request")) h.http2.connect("http://127.0.0.1:1");
+        const send = () =>
+          boundary.endsWith("request")
+            ? h.session.request()
+            : boundary.endsWith("connect")
+              ? h.http2.connect("http://127.0.0.1:1")
+              : h.globals.fetch("http://127.0.0.1:1");
+        if (boundary.endsWith("fetch"))
+          await assert.rejects(send(), /closed|ownership/, `${boundary}/${action}`);
+        else assert.throws(send, /closed|ownership/, `${boundary}/${action}`);
+        assert.equal(h.sent.grpc + h.sent.auth, 0);
+        assert.equal(h.sent.connects, boundary.endsWith("request") ? 1 : 0);
+        const failure = action === "foreign" ? "ownership" : "closed";
+        assert.equal(h.guard.snapshot().failures[failure], 1);
+        if (fresh) {
+          assert.equal(fresh.snapshot().closed, false);
+          assert.equal(h.http2.connect("http://127.0.0.1:1").request(), "stream");
+          assert.equal(fresh.snapshot().failures.ownership, 0);
+        }
+      } finally {
+        h.guard.close();
+        fresh?.close();
+      }
+    }
+  }
+});
+
+test("native connect and hook setter reentrancy cannot install hooks after close", () => {
+  for (const boundary of ["connect", "request-setter"]) {
+    let guard;
+    let requests = 0;
+    let connects = 0;
+    const originalRequest = () => {
+      requests++;
+    };
+    let value = originalRequest;
+    const session = {};
+    Object.defineProperty(session, "request", {
+      configurable: true,
+      get: () => value,
+      set(next) {
+        value = next;
+        if (boundary === "request-setter" && next !== originalRequest) guard.close();
+      },
+    });
+    const http2 = {
+      connect() {
+        connects++;
+        if (boundary === "connect") guard.close();
+        return session;
+      },
+    };
+    const originalConnect = http2.connect;
+    const globals = { fetch() {} };
+    const originalFetch = globals.fetch;
+    guard = module.installNodeWireGuard({
+      http2,
+      globals,
+      budget: createWireBudget({ maxRequests: 3, cleanupReserve: 1 }),
+      phase: () => "observation",
+    });
+    assert.throws(() => http2.connect("http://127.0.0.1:1"), /closed/);
+    guard.close();
+    assert.equal(connects, 1);
+    assert.equal(requests, 0);
+    assert.equal(session.request, originalRequest);
+    assert.equal(http2.connect, originalConnect);
+    assert.equal(globals.fetch, originalFetch);
+    assert.equal(guard.snapshot().closed, true);
+  }
+});
+
+test("inherited reversible accessors restore backing functions and preserve foreign replacements", () => {
+  for (const key of ["connect", "fetch", "request"]) {
+    for (const action of ["close", "foreign", "throw"]) {
+      const session = { request() {} };
+      const http2 = { connect: () => session };
+      const globals = { fetch() {} };
+      const target = key === "connect" ? http2 : key === "fetch" ? globals : session;
+      const original = target[key];
+      const foreign = () => "foreign";
+      let value = original;
+      delete target[key];
+      const prototype = {};
+      const setterError = new Error("inherited setter refusal");
+      Object.defineProperty(prototype, key, {
+        configurable: true,
+        get: () => value,
+        set(next) {
+          value = next;
+          if (action === "throw" && next !== original) throw setterError;
+        },
+      });
+      Object.setPrototypeOf(target, prototype);
+      const inputs = {
+        http2,
+        globals,
+        budget: createWireBudget({ maxRequests: 3, cleanupReserve: 1 }),
+        phase: () => "observation",
+      };
+      if (action === "throw" && key !== "request")
+        assert.throws(
+          () => module.installNodeWireGuard(inputs),
+          (e) => e === setterError,
+        );
+      else {
+        const guard = module.installNodeWireGuard(inputs);
+        if (action === "throw")
+          assert.throws(
+            () => http2.connect("http://127.0.0.1:1"),
+            (e) => e === setterError,
+          );
+        else if (key === "request") http2.connect("http://127.0.0.1:1");
+        if (action === "foreign") target[key] = foreign;
+        guard.close();
+        if (action === "foreign") assert.equal(guard.snapshot().failures.ownership, 1);
+        const snapshot = guard.snapshot();
+        snapshot.failures.ownership = 100;
+        assert.notEqual(guard.snapshot().failures.ownership, 100);
+      }
+      assert.equal(target[key], action === "foreign" ? foreign : original, `${key}/${action}`);
+      assert.equal(Object.hasOwn(target, key), false);
+    }
+  }
+});
+
+test("inherited accessor prototype drift is retained without invoking a foreign setter", () => {
+  const original = () => "original";
+  let value = original;
+  let foreignSets = 0;
+  const prototype = {};
+  Object.defineProperty(prototype, "fetch", {
+    configurable: true,
+    get: () => value,
+    set(next) {
+      value = next;
+    },
+  });
+  const globals = Object.create(prototype);
+  const http2 = { connect: () => ({ request() {} }) };
+  const guard = module.installNodeWireGuard({
+    http2,
+    globals,
+    budget: createWireBudget({ maxRequests: 3, cleanupReserve: 1 }),
+    phase: () => "observation",
+  });
+  const captured = globals.fetch;
+  Object.defineProperty(prototype, "fetch", {
+    configurable: true,
+    get: () => value,
+    set() {
+      foreignSets++;
+    },
+  });
+  guard.close();
+  assert.equal(foreignSets, 0);
+  assert.equal(globals.fetch, captured);
+  assert.equal(Object.hasOwn(globals, "fetch"), false);
+  assert.equal(guard.snapshot().failures.ownership, 1);
+});
+
+test("a reentrant hook getter cannot complete installation after closing the guard", () => {
+  let guard;
+  const original = () => "original";
+  let value = original;
+  let armed = false;
+  const session = {};
+  Object.defineProperty(session, "request", {
+    get() {
+      const read = value;
+      if (armed && read !== original) guard.close();
+      return read;
+    },
+    set(next) {
+      value = next;
+    },
+  });
+  const http2 = { connect: () => session };
+  const globals = { fetch() {} };
+  guard = module.installNodeWireGuard({
+    http2,
+    globals,
+    budget: createWireBudget({ maxRequests: 3, cleanupReserve: 1 }),
+    phase: () => "observation",
+  });
+  armed = true;
+  assert.throws(() => http2.connect("http://127.0.0.1:1"), /closed/);
+  guard.close();
+  assert.equal(session.request, original);
+  assert.equal(guard.snapshot().failures.closed, 1);
+});
+
+test("generated callback lifecycle transitions retain an empty refused effect set", async () => {
+  let seed = 0xa02;
+  const next = (n) => {
+    seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0;
+    return seed % n;
+  };
+  for (let run = 0; run < 100; run++) {
+    const transport = ["grpc", "auth"][next(2)];
+    const transition = ["close", "replace"][next(2)];
+    const boundary = transport === "grpc" ? "phase" : ["phase", "allowUrl"][next(2)];
+    let h;
+    const transitionOwner = () => {
+      if (transition === "close") h.guard.close();
+      else if (transport === "grpc") h.session.request = () => "foreign";
+      else h.globals.fetch = () => "foreign";
+      return boundary === "phase" ? "observation" : true;
+    };
+    h = harness({ guardInputs: { [boundary]: transitionOwner } });
+    try {
+      if (transport === "grpc") {
+        h.http2.connect("http://127.0.0.1:1");
+        assert.throws(() => h.session.request(), /closed|ownership/);
+      } else await assert.rejects(h.globals.fetch("http://127.0.0.1:1"), /closed|ownership/);
+      assert.equal(h.sent.grpc + h.sent.auth, 0, `run ${run}`);
+      assert.equal(h.guard.snapshot().failures[transition === "close" ? "closed" : "ownership"], 1);
+      assert.ok(
+        h.budget.snapshot().total <= 1,
+        "an admitted attempt may remain, but no effect is sent",
+      );
+    } finally {
+      h.guard.close();
+    }
+  }
+});

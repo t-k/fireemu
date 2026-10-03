@@ -33,7 +33,15 @@ export const installNodeWireGuard = ({ http2, globals, budget, phase, allowUrl =
   available(http2, "connect");
   available(globals, "fetch");
 
+  const inheritedDescriptor = (target, key) => {
+    for (let owner = Object.getPrototypeOf(target); owner; owner = Object.getPrototypeOf(owner)) {
+      const descriptor = Object.getOwnPropertyDescriptor(owner, key);
+      if (descriptor) return { owner, descriptor };
+    }
+    return null;
+  };
   const installHook = (target, key, original, wrapper) => {
+    if (closed) throw new Error("wire guard closed");
     available(target, key);
     if (target[key] !== original) throw new Error("wire hook ownership refused");
     const hook = {
@@ -43,13 +51,18 @@ export const installNodeWireGuard = ({ http2, globals, budget, phase, allowUrl =
       wrapper,
       hadOwn: Object.hasOwn(target, key),
       installed: false,
+      inherited: Object.hasOwn(target, key) ? null : inheritedDescriptor(target, key),
     };
     hooks.push(hook);
     if (!owners.has(target)) owners.set(target, new Map());
     owners.get(target).set(key, hook);
     try {
       target[key] = wrapper;
-      if (target[key] !== wrapper) throw new Error("wire hook installation refused");
+      if (closed) throw new Error("wire guard closed");
+      const installed = target[key];
+      if (closed) throw new Error("wire guard closed");
+      if (owned(target, key) !== hook || installed !== wrapper)
+        throw new Error("wire hook installation refused");
       hook.installed = true;
       return hook;
     } catch (error) {
@@ -71,7 +84,19 @@ export const installNodeWireGuard = ({ http2, globals, budget, phase, allowUrl =
     try {
       if (target[key] === wrapper) {
         if (hadOwn) target[key] = original;
-        else delete target[key];
+        else if (Object.hasOwn(target, key)) delete target[key];
+        else {
+          const current = inheritedDescriptor(target, key);
+          if (
+            current?.owner !== hook.inherited?.owner ||
+            current?.descriptor.get !== hook.inherited?.descriptor.get ||
+            current?.descriptor.set !== hook.inherited?.descriptor.set
+          ) {
+            failures.ownership++;
+            return;
+          }
+          target[key] = original;
+        }
         if (target[key] !== original) throw new Error("wire hook restoration refused");
       } else if (hook.installed) {
         failures.ownership++;
@@ -82,7 +107,9 @@ export const installNodeWireGuard = ({ http2, globals, budget, phase, allowUrl =
   };
   const active = (target, key, wrapper) => {
     if (closed) refuse("closed", new Error("wire guard closed"));
-    if (owned(target, key)?.wrapper !== wrapper || target[key] !== wrapper) {
+    const current = target[key];
+    if (closed) refuse("closed", new Error("wire guard closed"));
+    if (owned(target, key)?.wrapper !== wrapper || current !== wrapper) {
       refuse("ownership", new Error("wire hook ownership refused"));
     }
   };
@@ -116,7 +143,9 @@ export const installNodeWireGuard = ({ http2, globals, budget, phase, allowUrl =
   const guardedConnect = function (authority, ...options) {
     active(http2, "connect", guardedConnect);
     destination(authority);
+    active(http2, "connect", guardedConnect);
     const session = originalConnect.call(this, authority, ...options);
+    active(http2, "connect", guardedConnect);
     if (!sessions.has(session)) {
       try {
         if (typeof session?.request !== "function") throw new Error("invalid wire session request");
@@ -124,11 +153,12 @@ export const installNodeWireGuard = ({ http2, globals, budget, phase, allowUrl =
         const guardedRequest = function (...args) {
           active(session, "request", guardedRequest);
           claim("grpc");
+          active(session, "request", guardedRequest);
           return request.apply(this, args);
         };
         sessions.set(session, installHook(session, "request", request, guardedRequest));
       } catch (error) {
-        refuse("ownership", error);
+        refuse(closed ? "closed" : "ownership", error);
       }
     } else {
       active(session, "request", sessions.get(session).wrapper);
@@ -139,7 +169,9 @@ export const installNodeWireGuard = ({ http2, globals, budget, phase, allowUrl =
     try {
       active(globals, "fetch", guardedFetch);
       destination(input);
+      active(globals, "fetch", guardedFetch);
       claim("auth");
+      active(globals, "fetch", guardedFetch);
     } catch (error) {
       return Promise.reject(error);
     }

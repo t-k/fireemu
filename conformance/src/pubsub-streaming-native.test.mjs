@@ -564,10 +564,18 @@ test("opaque_lease_is_single_use_and_expired_deadlines_cannot_create_owned_conne
   } finally {
     await f.shutdown();
   }
-  await assert.rejects(
-    api.createOwnedNativeStreamingFixture({ lease, deadlineAt, limits }),
-    /unused owned loopback lease/,
-  );
+  let unexpectedlyCreated;
+  try {
+    await assert.rejects(async () => {
+      unexpectedlyCreated = await api.createOwnedNativeStreamingFixture({
+        lease,
+        deadlineAt,
+        limits,
+      });
+    }, /unused owned loopback lease/);
+  } finally {
+    await unexpectedlyCreated?.shutdown();
+  }
   await assert.rejects(
     api.acquireOwnedLoopbackLease({ deadlineAt: performance.now() - 1 }),
     /absolute deadline/,

@@ -1,0 +1,2505 @@
+{
+  "schemaVersion": 1,
+  "kind": "fs-transaction-p02-recorded-observations-v1",
+  "parent": "FS-TRANSACTION",
+  "coverage": "PARTIAL",
+  "authorizesProduction": false,
+  "promotionReady": false,
+  "decodedSemanticsValidated": true,
+  "rawRestWireLayoutValidated": false,
+  "normalization": {
+    "identities": "Only declared project, nonce, owner and issued token values are replaced by roles.",
+    "timestamps": "Absolute timestamp values are volatile; each timestamp path, equality, chronological rank and precision/member set are retained. Decoded protobuf member insertion order has no wire-order meaning. Native request sequence remains closed-graph validated.",
+    "diagnostics": "Full diagnostics are retained after declared identity substitution.",
+    "wireLayout": "This record proves decoded response semantics. It does not prove raw REST body-byte/member-order parity."
+  },
+  "condition": "FS-TRANSACTION/read-only-snapshot",
+  "corpora": [
+    {
+      "program": "FS-TRANSACTION-P02-READONLY",
+      "table": "tools/compat-broad/fs-write-txn/fs_txn_table_p02.py",
+      "tableSourceDigest": "0cd47eaf97546ce47528342a57dea68793f8b217f0231b2bc380d371a7dd17d6",
+      "corpusDigest": "1b38109181ba6120eca4e273587b4ed24dfa097c442abb2fc288ebe01f84ccc0",
+      "sourceCommit": "62d0e47b519622faaddc022382ffc913f0d26088",
+      "freezeSha256": "153a157d19c63fbdfabdef20165674bec0e3ede3265fea808830f2bddd48ab2d",
+      "packetSha256": "0e59046f6ae27ae2d018b5dc04741de91ac74587d5e92670dc73972b2a9dc49b",
+      "agree": true,
+      "recipes": [
+        {
+          "id": "setup/absence-a",
+          "transport": "grpc",
+          "rpc": "GetDocument",
+          "role": "control",
+          "caseId": null
+        },
+        {
+          "id": "setup/absence-m",
+          "transport": "grpc",
+          "rpc": "GetDocument",
+          "role": "control",
+          "caseId": null
+        },
+        {
+          "id": "setup/create-a",
+          "transport": "grpc",
+          "rpc": "Commit",
+          "role": "control",
+          "caseId": null
+        },
+        {
+          "id": "rest/s1/begin",
+          "transport": "rest",
+          "rpc": "BeginTransaction",
+          "role": "control",
+          "caseId": null
+        },
+        {
+          "id": "rest/s1/writer",
+          "transport": "rest",
+          "rpc": "Commit",
+          "role": "outside-writer",
+          "caseId": "rest/s1-writer"
+        },
+        {
+          "id": "rest/s1/ro-read",
+          "transport": "rest",
+          "rpc": "GetDocument",
+          "role": "observation",
+          "caseId": "rest/s1-ro-read"
+        },
+        {
+          "id": "rest/s1/ro-batch",
+          "transport": "rest",
+          "rpc": "BatchGetDocuments",
+          "role": "observation",
+          "caseId": "rest/s1-ro-batch"
+        },
+        {
+          "id": "rest/s1/ro-write",
+          "transport": "rest",
+          "rpc": "Commit",
+          "role": "observation",
+          "caseId": "rest/s1-ro-write"
+        },
+        {
+          "id": "rest/s1/rollback",
+          "transport": "rest",
+          "rpc": "Rollback",
+          "role": "observation",
+          "caseId": "rest/s1-rollback"
+        },
+        {
+          "id": "rest/s1/post-read-a",
+          "transport": "rest",
+          "rpc": "GetDocument",
+          "role": "post-state",
+          "caseId": null
+        },
+        {
+          "id": "rest/s2/begin",
+          "transport": "rest",
+          "rpc": "BeginTransaction",
+          "role": "control",
+          "caseId": null
+        },
+        {
+          "id": "rest/s2/read-a",
+          "transport": "rest",
+          "rpc": "GetDocument",
+          "role": "control",
+          "caseId": null
+        },
+        {
+          "id": "rest/s2/writer",
+          "transport": "rest",
+          "rpc": "Commit",
+          "role": "outside-writer",
+          "caseId": "rest/s2-writer"
+        },
+        {
+          "id": "rest/s2/ro-read-again",
+          "transport": "rest",
+          "rpc": "GetDocument",
+          "role": "observation",
+          "caseId": "rest/s2-ro-read-again"
+        },
+        {
+          "id": "rest/s2/ro-empty",
+          "transport": "rest",
+          "rpc": "Commit",
+          "role": "observation",
+          "caseId": "rest/s2-ro-empty"
+        },
+        {
+          "id": "rest/s2/post-read-a",
+          "transport": "rest",
+          "rpc": "GetDocument",
+          "role": "post-state",
+          "caseId": null
+        },
+        {
+          "id": "rest/w/begin",
+          "transport": "rest",
+          "rpc": "BeginTransaction",
+          "role": "control",
+          "caseId": null
+        },
+        {
+          "id": "rest/w/read-a",
+          "transport": "rest",
+          "rpc": "GetDocument",
+          "role": "control",
+          "caseId": null
+        },
+        {
+          "id": "rest/w/commit",
+          "transport": "rest",
+          "rpc": "Commit",
+          "role": "observation",
+          "caseId": "rest/w-commit"
+        },
+        {
+          "id": "rest/w/post-read-a",
+          "transport": "rest",
+          "rpc": "GetDocument",
+          "role": "post-state",
+          "caseId": null
+        },
+        {
+          "id": "grpc/s1/begin",
+          "transport": "grpc",
+          "rpc": "BeginTransaction",
+          "role": "control",
+          "caseId": null
+        },
+        {
+          "id": "grpc/s1/writer",
+          "transport": "grpc",
+          "rpc": "Commit",
+          "role": "outside-writer",
+          "caseId": "grpc/s1-writer"
+        },
+        {
+          "id": "grpc/s1/ro-read",
+          "transport": "grpc",
+          "rpc": "GetDocument",
+          "role": "observation",
+          "caseId": "grpc/s1-ro-read"
+        },
+        {
+          "id": "grpc/s1/ro-write",
+          "transport": "grpc",
+          "rpc": "Commit",
+          "role": "observation",
+          "caseId": "grpc/s1-ro-write"
+        },
+        {
+          "id": "grpc/s1/post-read-a",
+          "transport": "grpc",
+          "rpc": "GetDocument",
+          "role": "post-state",
+          "caseId": null
+        },
+        {
+          "id": "grpc/s2/begin",
+          "transport": "grpc",
+          "rpc": "BeginTransaction",
+          "role": "control",
+          "caseId": null
+        },
+        {
+          "id": "grpc/s2/read-a",
+          "transport": "grpc",
+          "rpc": "GetDocument",
+          "role": "control",
+          "caseId": null
+        },
+        {
+          "id": "grpc/s2/writer",
+          "transport": "grpc",
+          "rpc": "Commit",
+          "role": "outside-writer",
+          "caseId": "grpc/s2-writer"
+        },
+        {
+          "id": "grpc/s2/ro-read-again",
+          "transport": "grpc",
+          "rpc": "GetDocument",
+          "role": "observation",
+          "caseId": "grpc/s2-ro-read-again"
+        },
+        {
+          "id": "grpc/s2/ro-empty",
+          "transport": "grpc",
+          "rpc": "Commit",
+          "role": "observation",
+          "caseId": "grpc/s2-ro-empty"
+        },
+        {
+          "id": "grpc/s2/post-read-a",
+          "transport": "grpc",
+          "rpc": "GetDocument",
+          "role": "post-state",
+          "caseId": null
+        },
+        {
+          "id": "grpc/w/begin",
+          "transport": "grpc",
+          "rpc": "BeginTransaction",
+          "role": "control",
+          "caseId": null
+        },
+        {
+          "id": "grpc/w/read-a",
+          "transport": "grpc",
+          "rpc": "GetDocument",
+          "role": "control",
+          "caseId": null
+        },
+        {
+          "id": "grpc/w/commit",
+          "transport": "grpc",
+          "rpc": "Commit",
+          "role": "observation",
+          "caseId": "grpc/w-commit"
+        },
+        {
+          "id": "grpc/w/post-read-a",
+          "transport": "grpc",
+          "rpc": "GetDocument",
+          "role": "post-state",
+          "caseId": null
+        }
+      ],
+      "semantics": {
+        "program": "FS-TRANSACTION-P02-READONLY",
+        "corpusDigest": "1b38109181ba6120eca4e273587b4ed24dfa097c442abb2fc288ebe01f84ccc0",
+        "steps": {
+          "setup/absence-a": {
+            "transport": "grpc",
+            "rpc": "GetDocument",
+            "caseId": null,
+            "code": 5,
+            "http": null,
+            "details": "Document \"projects/<project>/databases/(default)/documents/oracle/<nonce>/txn-p02/a\" not found.",
+            "read": {
+              "site": "setup/absence-a",
+              "code": 5,
+              "state": null
+            },
+            "versions": {}
+          },
+          "setup/absence-m": {
+            "transport": "grpc",
+            "rpc": "GetDocument",
+            "caseId": null,
+            "code": 5,
+            "http": null,
+            "details": "Document \"projects/<project>/databases/(default)/documents/oracle/<nonce>/txn-p02/m\" not found.",
+            "read": {
+              "site": "setup/absence-m",
+              "code": 5,
+              "state": null
+            },
+            "versions": {}
+          },
+          "setup/create-a": {
+            "transport": "grpc",
+            "rpc": "Commit",
+            "caseId": null,
+            "code": 0,
+            "http": null,
+            "details": "",
+            "read": null,
+            "versions": {
+              "/commitTime": {
+                "rank": 0,
+                "layout": {
+                  "members": [
+                    "nanos",
+                    "seconds"
+                  ]
+                }
+              },
+              "/writeResults/0/updateTime": {
+                "rank": 0,
+                "layout": {
+                  "members": [
+                    "nanos",
+                    "seconds"
+                  ]
+                }
+              }
+            }
+          },
+          "rest/s1/begin": {
+            "transport": "rest",
+            "rpc": "BeginTransaction",
+            "caseId": null,
+            "code": 0,
+            "http": 200,
+            "details": "",
+            "read": null,
+            "versions": {}
+          },
+          "rest/s1/writer": {
+            "transport": "rest",
+            "rpc": "Commit",
+            "caseId": "rest/s1-writer",
+            "code": 0,
+            "http": 200,
+            "details": "",
+            "read": null,
+            "versions": {
+              "/commitTime": {
+                "rank": 1,
+                "layout": {
+                  "precision": 6
+                }
+              },
+              "/writeResults/0/updateTime": {
+                "rank": 1,
+                "layout": {
+                  "precision": 6
+                }
+              }
+            }
+          },
+          "rest/s1/ro-read": {
+            "transport": "rest",
+            "rpc": "GetDocument",
+            "caseId": "rest/s1-ro-read",
+            "code": 0,
+            "http": 200,
+            "details": "",
+            "read": {
+              "site": "rest/s1/ro-read",
+              "code": 0,
+              "state": "rest-s1-w"
+            },
+            "versions": {
+              "/createTime": {
+                "rank": 0,
+                "layout": {
+                  "precision": 6
+                }
+              },
+              "/updateTime": {
+                "rank": 1,
+                "layout": {
+                  "precision": 6
+                }
+              }
+            }
+          },
+          "rest/s1/ro-batch": {
+            "transport": "rest",
+            "rpc": "BatchGetDocuments",
+            "caseId": "rest/s1-ro-batch",
+            "code": 0,
+            "http": 200,
+            "details": "",
+            "read": {
+              "site": "rest/s1/ro-batch",
+              "code": 0,
+              "documents": {
+                "a": "rest-s1-w",
+                "m": null
+              }
+            },
+            "versions": {
+              "/responses/0/found/createTime": {
+                "rank": 0,
+                "layout": {
+                  "precision": 6
+                }
+              },
+              "/responses/0/found/updateTime": {
+                "rank": 1,
+                "layout": {
+                  "precision": 6
+                }
+              },
+              "/responses/0/readTime": {
+                "rank": 2,
+                "layout": {
+                  "precision": 6
+                }
+              },
+              "/responses/1/readTime": {
+                "rank": 2,
+                "layout": {
+                  "precision": 6
+                }
+              }
+            }
+          },
+          "rest/s1/ro-write": {
+            "transport": "rest",
+            "rpc": "Commit",
+            "caseId": "rest/s1-ro-write",
+            "code": 3,
+            "http": 400,
+            "details": "Cannot modify entities in a read-only transaction.",
+            "read": null,
+            "versions": {}
+          },
+          "rest/s1/rollback": {
+            "transport": "rest",
+            "rpc": "Rollback",
+            "caseId": "rest/s1-rollback",
+            "code": 0,
+            "http": 200,
+            "details": "",
+            "read": null,
+            "versions": {}
+          },
+          "rest/s1/post-read-a": {
+            "transport": "rest",
+            "rpc": "GetDocument",
+            "caseId": null,
+            "code": 0,
+            "http": 200,
+            "details": "",
+            "read": {
+              "site": "rest/s1/post-read-a",
+              "code": 0,
+              "state": "rest-s1-w"
+            },
+            "versions": {
+              "/createTime": {
+                "rank": 0,
+                "layout": {
+                  "precision": 6
+                }
+              },
+              "/updateTime": {
+                "rank": 1,
+                "layout": {
+                  "precision": 6
+                }
+              }
+            }
+          },
+          "rest/s2/begin": {
+            "transport": "rest",
+            "rpc": "BeginTransaction",
+            "caseId": null,
+            "code": 0,
+            "http": 200,
+            "details": "",
+            "read": null,
+            "versions": {}
+          },
+          "rest/s2/read-a": {
+            "transport": "rest",
+            "rpc": "GetDocument",
+            "caseId": null,
+            "code": 0,
+            "http": 200,
+            "details": "",
+            "read": {
+              "site": "rest/s2/read-a",
+              "code": 0,
+              "state": "rest-s1-w"
+            },
+            "versions": {
+              "/createTime": {
+                "rank": 0,
+                "layout": {
+                  "precision": 6
+                }
+              },
+              "/updateTime": {
+                "rank": 1,
+                "layout": {
+                  "precision": 6
+                }
+              }
+            }
+          },
+          "rest/s2/writer": {
+            "transport": "rest",
+            "rpc": "Commit",
+            "caseId": "rest/s2-writer",
+            "code": 0,
+            "http": 200,
+            "details": "",
+            "read": null,
+            "versions": {
+              "/commitTime": {
+                "rank": 4,
+                "layout": {
+                  "precision": 6
+                }
+              },
+              "/writeResults/0/updateTime": {
+                "rank": 4,
+                "layout": {
+                  "precision": 6
+                }
+              }
+            }
+          },
+          "rest/s2/ro-read-again": {
+            "transport": "rest",
+            "rpc": "GetDocument",
+            "caseId": "rest/s2-ro-read-again",
+            "code": 0,
+            "http": 200,
+            "details": "",
+            "read": {
+              "site": "rest/s2/ro-read-again",
+              "code": 0,
+              "state": "rest-s1-w"
+            },
+            "versions": {
+              "/createTime": {
+                "rank": 0,
+                "layout": {
+                  "precision": 6
+                }
+              },
+              "/updateTime": {
+                "rank": 1,
+                "layout": {
+                  "precision": 6
+                }
+              }
+            }
+          },
+          "rest/s2/ro-empty": {
+            "transport": "rest",
+            "rpc": "Commit",
+            "caseId": "rest/s2-ro-empty",
+            "code": 0,
+            "http": 200,
+            "details": "",
+            "read": null,
+            "versions": {
+              "/commitTime": {
+                "rank": 3,
+                "layout": {
+                  "precision": 6
+                }
+              }
+            }
+          },
+          "rest/s2/post-read-a": {
+            "transport": "rest",
+            "rpc": "GetDocument",
+            "caseId": null,
+            "code": 0,
+            "http": 200,
+            "details": "",
+            "read": {
+              "site": "rest/s2/post-read-a",
+              "code": 0,
+              "state": "rest-s2-w"
+            },
+            "versions": {
+              "/createTime": {
+                "rank": 0,
+                "layout": {
+                  "precision": 6
+                }
+              },
+              "/updateTime": {
+                "rank": 4,
+                "layout": {
+                  "precision": 6
+                }
+              }
+            }
+          },
+          "rest/w/begin": {
+            "transport": "rest",
+            "rpc": "BeginTransaction",
+            "caseId": null,
+            "code": 0,
+            "http": 200,
+            "details": "",
+            "read": null,
+            "versions": {}
+          },
+          "rest/w/read-a": {
+            "transport": "rest",
+            "rpc": "GetDocument",
+            "caseId": null,
+            "code": 0,
+            "http": 200,
+            "details": "",
+            "read": {
+              "site": "rest/w/read-a",
+              "code": 0,
+              "state": "rest-s2-w"
+            },
+            "versions": {
+              "/createTime": {
+                "rank": 0,
+                "layout": {
+                  "precision": 6
+                }
+              },
+              "/updateTime": {
+                "rank": 4,
+                "layout": {
+                  "precision": 6
+                }
+              }
+            }
+          },
+          "rest/w/commit": {
+            "transport": "rest",
+            "rpc": "Commit",
+            "caseId": "rest/w-commit",
+            "code": 0,
+            "http": 200,
+            "details": "",
+            "read": null,
+            "versions": {
+              "/commitTime": {
+                "rank": 5,
+                "layout": {
+                  "precision": 6
+                }
+              },
+              "/writeResults/0/updateTime": {
+                "rank": 5,
+                "layout": {
+                  "precision": 6
+                }
+              }
+            }
+          },
+          "rest/w/post-read-a": {
+            "transport": "rest",
+            "rpc": "GetDocument",
+            "caseId": null,
+            "code": 0,
+            "http": 200,
+            "details": "",
+            "read": {
+              "site": "rest/w/post-read-a",
+              "code": 0,
+              "state": "rest-w-commit"
+            },
+            "versions": {
+              "/createTime": {
+                "rank": 0,
+                "layout": {
+                  "precision": 6
+                }
+              },
+              "/updateTime": {
+                "rank": 5,
+                "layout": {
+                  "precision": 6
+                }
+              }
+            }
+          },
+          "grpc/s1/begin": {
+            "transport": "grpc",
+            "rpc": "BeginTransaction",
+            "caseId": null,
+            "code": 0,
+            "http": null,
+            "details": "",
+            "read": null,
+            "versions": {}
+          },
+          "grpc/s1/writer": {
+            "transport": "grpc",
+            "rpc": "Commit",
+            "caseId": "grpc/s1-writer",
+            "code": 0,
+            "http": null,
+            "details": "",
+            "read": null,
+            "versions": {
+              "/commitTime": {
+                "rank": 6,
+                "layout": {
+                  "members": [
+                    "nanos",
+                    "seconds"
+                  ]
+                }
+              },
+              "/writeResults/0/updateTime": {
+                "rank": 6,
+                "layout": {
+                  "members": [
+                    "nanos",
+                    "seconds"
+                  ]
+                }
+              }
+            }
+          },
+          "grpc/s1/ro-read": {
+            "transport": "grpc",
+            "rpc": "GetDocument",
+            "caseId": "grpc/s1-ro-read",
+            "code": 0,
+            "http": null,
+            "details": "",
+            "read": {
+              "site": "grpc/s1/ro-read",
+              "code": 0,
+              "state": "grpc-s1-w"
+            },
+            "versions": {
+              "/createTime": {
+                "rank": 0,
+                "layout": {
+                  "members": [
+                    "nanos",
+                    "seconds"
+                  ]
+                }
+              },
+              "/updateTime": {
+                "rank": 6,
+                "layout": {
+                  "members": [
+                    "nanos",
+                    "seconds"
+                  ]
+                }
+              }
+            }
+          },
+          "grpc/s1/ro-write": {
+            "transport": "grpc",
+            "rpc": "Commit",
+            "caseId": "grpc/s1-ro-write",
+            "code": 3,
+            "http": null,
+            "details": "Cannot modify entities in a read-only transaction.",
+            "read": null,
+            "versions": {}
+          },
+          "grpc/s1/post-read-a": {
+            "transport": "grpc",
+            "rpc": "GetDocument",
+            "caseId": null,
+            "code": 0,
+            "http": null,
+            "details": "",
+            "read": {
+              "site": "grpc/s1/post-read-a",
+              "code": 0,
+              "state": "grpc-s1-w"
+            },
+            "versions": {
+              "/createTime": {
+                "rank": 0,
+                "layout": {
+                  "members": [
+                    "nanos",
+                    "seconds"
+                  ]
+                }
+              },
+              "/updateTime": {
+                "rank": 6,
+                "layout": {
+                  "members": [
+                    "nanos",
+                    "seconds"
+                  ]
+                }
+              }
+            }
+          },
+          "grpc/s2/begin": {
+            "transport": "grpc",
+            "rpc": "BeginTransaction",
+            "caseId": null,
+            "code": 0,
+            "http": null,
+            "details": "",
+            "read": null,
+            "versions": {}
+          },
+          "grpc/s2/read-a": {
+            "transport": "grpc",
+            "rpc": "GetDocument",
+            "caseId": null,
+            "code": 0,
+            "http": null,
+            "details": "",
+            "read": {
+              "site": "grpc/s2/read-a",
+              "code": 0,
+              "state": "grpc-s1-w"
+            },
+            "versions": {
+              "/createTime": {
+                "rank": 0,
+                "layout": {
+                  "members": [
+                    "nanos",
+                    "seconds"
+                  ]
+                }
+              },
+              "/updateTime": {
+                "rank": 6,
+                "layout": {
+                  "members": [
+                    "nanos",
+                    "seconds"
+                  ]
+                }
+              }
+            }
+          },
+          "grpc/s2/writer": {
+            "transport": "grpc",
+            "rpc": "Commit",
+            "caseId": "grpc/s2-writer",
+            "code": 0,
+            "http": null,
+            "details": "",
+            "read": null,
+            "versions": {
+              "/commitTime": {
+                "rank": 8,
+                "layout": {
+                  "members": [
+                    "nanos",
+                    "seconds"
+                  ]
+                }
+              },
+              "/writeResults/0/updateTime": {
+                "rank": 8,
+                "layout": {
+                  "members": [
+                    "nanos",
+                    "seconds"
+                  ]
+                }
+              }
+            }
+          },
+          "grpc/s2/ro-read-again": {
+            "transport": "grpc",
+            "rpc": "GetDocument",
+            "caseId": "grpc/s2-ro-read-again",
+            "code": 0,
+            "http": null,
+            "details": "",
+            "read": {
+              "site": "grpc/s2/ro-read-again",
+              "code": 0,
+              "state": "grpc-s1-w"
+            },
+            "versions": {
+              "/createTime": {
+                "rank": 0,
+                "layout": {
+                  "members": [
+                    "nanos",
+                    "seconds"
+                  ]
+                }
+              },
+              "/updateTime": {
+                "rank": 6,
+                "layout": {
+                  "members": [
+                    "nanos",
+                    "seconds"
+                  ]
+                }
+              }
+            }
+          },
+          "grpc/s2/ro-empty": {
+            "transport": "grpc",
+            "rpc": "Commit",
+            "caseId": "grpc/s2-ro-empty",
+            "code": 0,
+            "http": null,
+            "details": "",
+            "read": null,
+            "versions": {
+              "/commitTime": {
+                "rank": 7,
+                "layout": {
+                  "members": [
+                    "nanos",
+                    "seconds"
+                  ]
+                }
+              }
+            }
+          },
+          "grpc/s2/post-read-a": {
+            "transport": "grpc",
+            "rpc": "GetDocument",
+            "caseId": null,
+            "code": 0,
+            "http": null,
+            "details": "",
+            "read": {
+              "site": "grpc/s2/post-read-a",
+              "code": 0,
+              "state": "grpc-s2-w"
+            },
+            "versions": {
+              "/createTime": {
+                "rank": 0,
+                "layout": {
+                  "members": [
+                    "nanos",
+                    "seconds"
+                  ]
+                }
+              },
+              "/updateTime": {
+                "rank": 8,
+                "layout": {
+                  "members": [
+                    "nanos",
+                    "seconds"
+                  ]
+                }
+              }
+            }
+          },
+          "grpc/w/begin": {
+            "transport": "grpc",
+            "rpc": "BeginTransaction",
+            "caseId": null,
+            "code": 0,
+            "http": null,
+            "details": "",
+            "read": null,
+            "versions": {}
+          },
+          "grpc/w/read-a": {
+            "transport": "grpc",
+            "rpc": "GetDocument",
+            "caseId": null,
+            "code": 0,
+            "http": null,
+            "details": "",
+            "read": {
+              "site": "grpc/w/read-a",
+              "code": 0,
+              "state": "grpc-s2-w"
+            },
+            "versions": {
+              "/createTime": {
+                "rank": 0,
+                "layout": {
+                  "members": [
+                    "nanos",
+                    "seconds"
+                  ]
+                }
+              },
+              "/updateTime": {
+                "rank": 8,
+                "layout": {
+                  "members": [
+                    "nanos",
+                    "seconds"
+                  ]
+                }
+              }
+            }
+          },
+          "grpc/w/commit": {
+            "transport": "grpc",
+            "rpc": "Commit",
+            "caseId": "grpc/w-commit",
+            "code": 0,
+            "http": null,
+            "details": "",
+            "read": null,
+            "versions": {
+              "/commitTime": {
+                "rank": 9,
+                "layout": {
+                  "members": [
+                    "nanos",
+                    "seconds"
+                  ]
+                }
+              },
+              "/writeResults/0/updateTime": {
+                "rank": 9,
+                "layout": {
+                  "members": [
+                    "nanos",
+                    "seconds"
+                  ]
+                }
+              }
+            }
+          },
+          "grpc/w/post-read-a": {
+            "transport": "grpc",
+            "rpc": "GetDocument",
+            "caseId": null,
+            "code": 0,
+            "http": null,
+            "details": "",
+            "read": {
+              "site": "grpc/w/post-read-a",
+              "code": 0,
+              "state": "grpc-w-commit"
+            },
+            "versions": {
+              "/createTime": {
+                "rank": 0,
+                "layout": {
+                  "members": [
+                    "nanos",
+                    "seconds"
+                  ]
+                }
+              },
+              "/updateTime": {
+                "rank": 9,
+                "layout": {
+                  "members": [
+                    "nanos",
+                    "seconds"
+                  ]
+                }
+              }
+            }
+          }
+        },
+        "cleanupSteps": {
+          "cleanup/token/grpc-s1": {
+            "transport": "grpc",
+            "rpc": "Rollback",
+            "caseId": null,
+            "code": 0,
+            "http": null,
+            "details": "",
+            "read": null,
+            "versions": {}
+          },
+          "cleanup/read/a": {
+            "transport": "grpc",
+            "rpc": "GetDocument",
+            "caseId": null,
+            "code": 0,
+            "http": null,
+            "details": "",
+            "read": null,
+            "versions": {
+              "/createTime": {
+                "rank": 0,
+                "layout": {
+                  "members": [
+                    "nanos",
+                    "seconds"
+                  ]
+                }
+              },
+              "/updateTime": {
+                "rank": 9,
+                "layout": {
+                  "members": [
+                    "nanos",
+                    "seconds"
+                  ]
+                }
+              }
+            }
+          },
+          "cleanup/delete/a": {
+            "transport": "grpc",
+            "rpc": "DeleteDocument",
+            "caseId": null,
+            "code": 0,
+            "http": null,
+            "details": "",
+            "read": null,
+            "versions": {}
+          },
+          "cleanup/verify/a": {
+            "transport": "grpc",
+            "rpc": "GetDocument",
+            "caseId": null,
+            "code": 5,
+            "http": null,
+            "details": "Document \"projects/<project>/databases/(default)/documents/oracle/<nonce>/txn-p02/a\" not found.",
+            "read": null,
+            "versions": {}
+          }
+        },
+        "tokens": {
+          "rest-s1": {
+            "transport": "rest",
+            "state": "rolled-back"
+          },
+          "rest-s2": {
+            "transport": "rest",
+            "state": "committed"
+          },
+          "rest-w": {
+            "transport": "rest",
+            "state": "committed"
+          },
+          "grpc-s1": {
+            "transport": "grpc",
+            "state": "rolled-back"
+          },
+          "grpc-s2": {
+            "transport": "grpc",
+            "state": "committed"
+          },
+          "grpc-w": {
+            "transport": "grpc",
+            "state": "committed"
+          }
+        },
+        "cleanup": {
+          "absent": true
+        },
+        "commitTimes": {
+          "setup/create-a": {
+            "commitTime": true,
+            "relation": null
+          },
+          "rest/s1/writer": {
+            "commitTime": true,
+            "relation": null
+          },
+          "rest/s2/writer": {
+            "commitTime": true,
+            "relation": null
+          },
+          "rest/s2/ro-empty": {
+            "commitTime": true,
+            "relation": "before-writer"
+          },
+          "rest/w/commit": {
+            "commitTime": true,
+            "relation": null
+          },
+          "grpc/s1/writer": {
+            "commitTime": true,
+            "relation": null
+          },
+          "grpc/s2/writer": {
+            "commitTime": true,
+            "relation": null
+          },
+          "grpc/s2/ro-empty": {
+            "commitTime": true,
+            "relation": "before-writer"
+          },
+          "grpc/w/commit": {
+            "commitTime": true,
+            "relation": null
+          }
+        }
+      },
+      "recordings": [
+        {
+          "recording": 1,
+          "reference": "docs.local/runs/fs-transaction-p02-readonly-88511624ef5da4ff/recording-1.json",
+          "sha256": "27005c100521b05fd8c4c82d914621005e5c514c2458dfc7c932aab9e985f489",
+          "complete": true,
+          "graphComplete": true,
+          "cleanupAbsent": true,
+          "ownedDocumentsAbsent": 2,
+          "requests": 47,
+          "phaseRequests": {
+            "credential": 1,
+            "documentCleanup": 3,
+            "management": 7,
+            "observation": 35,
+            "tokenCleanup": 1
+          },
+          "observations": 16,
+          "transportObservations": {
+            "rest": 9,
+            "grpc": 7
+          },
+          "openTokens": 0,
+          "unknownOutcomes": 0,
+          "semanticDigest": "f741d82b9cea57b57150d1b3c79d33165362b4f6f48ea70159b4491460a6e205",
+          "projectionDigest": "01ae00b92c281d0f2567116b621cd9e6cb50d0a3bb401da948043cdaf7a0800b",
+          "timingMode": "wall-clock",
+          "timingSource": "parent-wire-envelope"
+        },
+        {
+          "recording": 2,
+          "reference": "docs.local/runs/fs-transaction-p02-readonly-88511624ef5da4ff/recording-2.json",
+          "sha256": "6fed8bbf10edaab96e44957ec754aeed69bff0942a9e229a5228d1ccf14cd6f0",
+          "complete": true,
+          "graphComplete": true,
+          "cleanupAbsent": true,
+          "ownedDocumentsAbsent": 2,
+          "requests": 47,
+          "phaseRequests": {
+            "credential": 1,
+            "documentCleanup": 3,
+            "management": 7,
+            "observation": 35,
+            "tokenCleanup": 1
+          },
+          "observations": 16,
+          "transportObservations": {
+            "rest": 9,
+            "grpc": 7
+          },
+          "openTokens": 0,
+          "unknownOutcomes": 0,
+          "semanticDigest": "f741d82b9cea57b57150d1b3c79d33165362b4f6f48ea70159b4491460a6e205",
+          "projectionDigest": "01ae00b92c281d0f2567116b621cd9e6cb50d0a3bb401da948043cdaf7a0800b",
+          "timingMode": "wall-clock",
+          "timingSource": "parent-wire-envelope"
+        }
+      ]
+    },
+    {
+      "program": "FS-TRANSACTION-P02B-READONLY-REFUSED",
+      "table": "tools/compat-broad/fs-write-txn/fs_txn_table_p02b.py",
+      "tableSourceDigest": "5ee2f8fe09b73cf9a60a6504eb6ffd46a34563f2673e5d89271b8c716608f47f",
+      "corpusDigest": "82609a7a852a5bcb93ec8efbda5040ecbc1ec3dd728d3ab49663b560ea656e2e",
+      "sourceCommit": "1ffc022980f750d6a79eeed280f42ec8df63cca7",
+      "freezeSha256": "58249d82c91ca82e56c73f7358e1c127ac2b1ca9943776e40b7cd72594640893",
+      "packetSha256": "e6318ecf9f2c9ee53c61e13f80e9dfc3d96ce429bdc82a24555b95b2de4fe372",
+      "agree": true,
+      "recipes": [
+        {
+          "id": "setup/absence-a",
+          "transport": "grpc",
+          "rpc": "GetDocument",
+          "role": "control",
+          "caseId": null
+        },
+        {
+          "id": "setup/create-a",
+          "transport": "grpc",
+          "rpc": "Commit",
+          "role": "control",
+          "caseId": null
+        },
+        {
+          "id": "rest/x/begin",
+          "transport": "rest",
+          "rpc": "BeginTransaction",
+          "role": "control",
+          "caseId": null
+        },
+        {
+          "id": "rest/x/read-a",
+          "transport": "rest",
+          "rpc": "GetDocument",
+          "role": "control",
+          "caseId": null
+        },
+        {
+          "id": "rest/x/ro-write",
+          "transport": "rest",
+          "rpc": "Commit",
+          "role": "observation",
+          "caseId": "rest/x-ro-write"
+        },
+        {
+          "id": "rest/x/get-after",
+          "transport": "rest",
+          "rpc": "GetDocument",
+          "role": "observation",
+          "caseId": "rest/x-get-after"
+        },
+        {
+          "id": "rest/x/commit-empty",
+          "transport": "rest",
+          "rpc": "Commit",
+          "role": "observation",
+          "caseId": "rest/x-commit-empty"
+        },
+        {
+          "id": "rest/x/rollback",
+          "transport": "rest",
+          "rpc": "Rollback",
+          "role": "observation",
+          "caseId": "rest/x-rollback"
+        },
+        {
+          "id": "rest/x/post-read-a",
+          "transport": "rest",
+          "rpc": "GetDocument",
+          "role": "post-state",
+          "caseId": null
+        },
+        {
+          "id": "rest/y/begin",
+          "transport": "rest",
+          "rpc": "BeginTransaction",
+          "role": "control",
+          "caseId": null
+        },
+        {
+          "id": "rest/y/read-a",
+          "transport": "rest",
+          "rpc": "GetDocument",
+          "role": "control",
+          "caseId": null
+        },
+        {
+          "id": "rest/y/ro-write",
+          "transport": "rest",
+          "rpc": "Commit",
+          "role": "observation",
+          "caseId": "rest/y-ro-write"
+        },
+        {
+          "id": "rest/y/commit-empty",
+          "transport": "rest",
+          "rpc": "Commit",
+          "role": "observation",
+          "caseId": "rest/y-commit-empty"
+        },
+        {
+          "id": "rest/y/get-after",
+          "transport": "rest",
+          "rpc": "GetDocument",
+          "role": "observation",
+          "caseId": "rest/y-get-after"
+        },
+        {
+          "id": "rest/y/rollback",
+          "transport": "rest",
+          "rpc": "Rollback",
+          "role": "observation",
+          "caseId": "rest/y-rollback"
+        },
+        {
+          "id": "rest/y/post-read-a",
+          "transport": "rest",
+          "rpc": "GetDocument",
+          "role": "post-state",
+          "caseId": null
+        },
+        {
+          "id": "grpc/x/begin",
+          "transport": "grpc",
+          "rpc": "BeginTransaction",
+          "role": "control",
+          "caseId": null
+        },
+        {
+          "id": "grpc/x/read-a",
+          "transport": "grpc",
+          "rpc": "GetDocument",
+          "role": "control",
+          "caseId": null
+        },
+        {
+          "id": "grpc/x/ro-write",
+          "transport": "grpc",
+          "rpc": "Commit",
+          "role": "observation",
+          "caseId": "grpc/x-ro-write"
+        },
+        {
+          "id": "grpc/x/get-after",
+          "transport": "grpc",
+          "rpc": "GetDocument",
+          "role": "observation",
+          "caseId": "grpc/x-get-after"
+        },
+        {
+          "id": "grpc/x/commit-empty",
+          "transport": "grpc",
+          "rpc": "Commit",
+          "role": "observation",
+          "caseId": "grpc/x-commit-empty"
+        },
+        {
+          "id": "grpc/x/rollback",
+          "transport": "grpc",
+          "rpc": "Rollback",
+          "role": "observation",
+          "caseId": "grpc/x-rollback"
+        },
+        {
+          "id": "grpc/x/post-read-a",
+          "transport": "grpc",
+          "rpc": "GetDocument",
+          "role": "post-state",
+          "caseId": null
+        },
+        {
+          "id": "grpc/y/begin",
+          "transport": "grpc",
+          "rpc": "BeginTransaction",
+          "role": "control",
+          "caseId": null
+        },
+        {
+          "id": "grpc/y/read-a",
+          "transport": "grpc",
+          "rpc": "GetDocument",
+          "role": "control",
+          "caseId": null
+        },
+        {
+          "id": "grpc/y/ro-write",
+          "transport": "grpc",
+          "rpc": "Commit",
+          "role": "observation",
+          "caseId": "grpc/y-ro-write"
+        },
+        {
+          "id": "grpc/y/commit-empty",
+          "transport": "grpc",
+          "rpc": "Commit",
+          "role": "observation",
+          "caseId": "grpc/y-commit-empty"
+        },
+        {
+          "id": "grpc/y/get-after",
+          "transport": "grpc",
+          "rpc": "GetDocument",
+          "role": "observation",
+          "caseId": "grpc/y-get-after"
+        },
+        {
+          "id": "grpc/y/rollback",
+          "transport": "grpc",
+          "rpc": "Rollback",
+          "role": "observation",
+          "caseId": "grpc/y-rollback"
+        },
+        {
+          "id": "grpc/y/post-read-a",
+          "transport": "grpc",
+          "rpc": "GetDocument",
+          "role": "post-state",
+          "caseId": null
+        },
+        {
+          "id": "rest/z/begin",
+          "transport": "rest",
+          "rpc": "BeginTransaction",
+          "role": "control",
+          "caseId": null
+        },
+        {
+          "id": "rest/z/writer",
+          "transport": "rest",
+          "rpc": "Commit",
+          "role": "outside-writer",
+          "caseId": "rest/z-writer"
+        },
+        {
+          "id": "rest/z/first-read",
+          "transport": "rest",
+          "rpc": "GetDocument",
+          "role": "observation",
+          "caseId": "rest/z-first-read"
+        },
+        {
+          "id": "rest/z/commit",
+          "transport": "rest",
+          "rpc": "Commit",
+          "role": "observation",
+          "caseId": "rest/z-commit"
+        },
+        {
+          "id": "rest/z/rollback",
+          "transport": "rest",
+          "rpc": "Rollback",
+          "role": "observation",
+          "caseId": "rest/z-rollback"
+        },
+        {
+          "id": "rest/z/post-read-a",
+          "transport": "rest",
+          "rpc": "GetDocument",
+          "role": "post-state",
+          "caseId": null
+        },
+        {
+          "id": "grpc/z/begin",
+          "transport": "grpc",
+          "rpc": "BeginTransaction",
+          "role": "control",
+          "caseId": null
+        },
+        {
+          "id": "grpc/z/writer",
+          "transport": "grpc",
+          "rpc": "Commit",
+          "role": "outside-writer",
+          "caseId": "grpc/z-writer"
+        },
+        {
+          "id": "grpc/z/first-read",
+          "transport": "grpc",
+          "rpc": "GetDocument",
+          "role": "observation",
+          "caseId": "grpc/z-first-read"
+        },
+        {
+          "id": "grpc/z/commit",
+          "transport": "grpc",
+          "rpc": "Commit",
+          "role": "observation",
+          "caseId": "grpc/z-commit"
+        },
+        {
+          "id": "grpc/z/rollback",
+          "transport": "grpc",
+          "rpc": "Rollback",
+          "role": "observation",
+          "caseId": "grpc/z-rollback"
+        },
+        {
+          "id": "grpc/z/post-read-a",
+          "transport": "grpc",
+          "rpc": "GetDocument",
+          "role": "post-state",
+          "caseId": null
+        }
+      ],
+      "semantics": {
+        "program": "FS-TRANSACTION-P02B-READONLY-REFUSED",
+        "corpusDigest": "82609a7a852a5bcb93ec8efbda5040ecbc1ec3dd728d3ab49663b560ea656e2e",
+        "steps": {
+          "setup/absence-a": {
+            "transport": "grpc",
+            "rpc": "GetDocument",
+            "caseId": null,
+            "code": 5,
+            "http": null,
+            "details": "Document \"projects/<project>/databases/(default)/documents/oracle/<nonce>/txn-p02b/a\" not found.",
+            "read": {
+              "site": "setup/absence-a",
+              "code": 5,
+              "state": null
+            },
+            "versions": {}
+          },
+          "setup/create-a": {
+            "transport": "grpc",
+            "rpc": "Commit",
+            "caseId": null,
+            "code": 0,
+            "http": null,
+            "details": "",
+            "read": null,
+            "versions": {
+              "/commitTime": {
+                "rank": 0,
+                "layout": {
+                  "members": [
+                    "nanos",
+                    "seconds"
+                  ]
+                }
+              },
+              "/writeResults/0/updateTime": {
+                "rank": 0,
+                "layout": {
+                  "members": [
+                    "nanos",
+                    "seconds"
+                  ]
+                }
+              }
+            }
+          },
+          "rest/x/begin": {
+            "transport": "rest",
+            "rpc": "BeginTransaction",
+            "caseId": null,
+            "code": 0,
+            "http": 200,
+            "details": "",
+            "read": null,
+            "versions": {}
+          },
+          "rest/x/read-a": {
+            "transport": "rest",
+            "rpc": "GetDocument",
+            "caseId": null,
+            "code": 0,
+            "http": 200,
+            "details": "",
+            "read": {
+              "site": "rest/x/read-a",
+              "code": 0,
+              "state": "created"
+            },
+            "versions": {
+              "/createTime": {
+                "rank": 0,
+                "layout": {
+                  "precision": 6
+                }
+              },
+              "/updateTime": {
+                "rank": 0,
+                "layout": {
+                  "precision": 6
+                }
+              }
+            }
+          },
+          "rest/x/ro-write": {
+            "transport": "rest",
+            "rpc": "Commit",
+            "caseId": "rest/x-ro-write",
+            "code": 3,
+            "http": 400,
+            "details": "Cannot modify entities in a read-only transaction.",
+            "read": null,
+            "versions": {}
+          },
+          "rest/x/get-after": {
+            "transport": "rest",
+            "rpc": "GetDocument",
+            "caseId": "rest/x-get-after",
+            "code": 3,
+            "http": 400,
+            "details": "The referenced transaction has expired or is no longer valid.",
+            "read": {
+              "site": "rest/x/get-after",
+              "code": 3,
+              "state": null
+            },
+            "versions": {}
+          },
+          "rest/x/commit-empty": {
+            "transport": "rest",
+            "rpc": "Commit",
+            "caseId": "rest/x-commit-empty",
+            "code": 3,
+            "http": 400,
+            "details": "The referenced transaction has expired or is no longer valid.",
+            "read": null,
+            "versions": {}
+          },
+          "rest/x/rollback": {
+            "transport": "rest",
+            "rpc": "Rollback",
+            "caseId": "rest/x-rollback",
+            "code": 0,
+            "http": 200,
+            "details": "",
+            "read": null,
+            "versions": {}
+          },
+          "rest/x/post-read-a": {
+            "transport": "rest",
+            "rpc": "GetDocument",
+            "caseId": null,
+            "code": 0,
+            "http": 200,
+            "details": "",
+            "read": {
+              "site": "rest/x/post-read-a",
+              "code": 0,
+              "state": "created"
+            },
+            "versions": {
+              "/createTime": {
+                "rank": 0,
+                "layout": {
+                  "precision": 6
+                }
+              },
+              "/updateTime": {
+                "rank": 0,
+                "layout": {
+                  "precision": 6
+                }
+              }
+            }
+          },
+          "rest/y/begin": {
+            "transport": "rest",
+            "rpc": "BeginTransaction",
+            "caseId": null,
+            "code": 0,
+            "http": 200,
+            "details": "",
+            "read": null,
+            "versions": {}
+          },
+          "rest/y/read-a": {
+            "transport": "rest",
+            "rpc": "GetDocument",
+            "caseId": null,
+            "code": 0,
+            "http": 200,
+            "details": "",
+            "read": {
+              "site": "rest/y/read-a",
+              "code": 0,
+              "state": "created"
+            },
+            "versions": {
+              "/createTime": {
+                "rank": 0,
+                "layout": {
+                  "precision": 6
+                }
+              },
+              "/updateTime": {
+                "rank": 0,
+                "layout": {
+                  "precision": 6
+                }
+              }
+            }
+          },
+          "rest/y/ro-write": {
+            "transport": "rest",
+            "rpc": "Commit",
+            "caseId": "rest/y-ro-write",
+            "code": 3,
+            "http": 400,
+            "details": "Cannot modify entities in a read-only transaction.",
+            "read": null,
+            "versions": {}
+          },
+          "rest/y/commit-empty": {
+            "transport": "rest",
+            "rpc": "Commit",
+            "caseId": "rest/y-commit-empty",
+            "code": 3,
+            "http": 400,
+            "details": "The referenced transaction has expired or is no longer valid.",
+            "read": null,
+            "versions": {}
+          },
+          "rest/y/get-after": {
+            "transport": "rest",
+            "rpc": "GetDocument",
+            "caseId": "rest/y-get-after",
+            "code": 3,
+            "http": 400,
+            "details": "The referenced transaction has expired or is no longer valid.",
+            "read": {
+              "site": "rest/y/get-after",
+              "code": 3,
+              "state": null
+            },
+            "versions": {}
+          },
+          "rest/y/rollback": {
+            "transport": "rest",
+            "rpc": "Rollback",
+            "caseId": "rest/y-rollback",
+            "code": 0,
+            "http": 200,
+            "details": "",
+            "read": null,
+            "versions": {}
+          },
+          "rest/y/post-read-a": {
+            "transport": "rest",
+            "rpc": "GetDocument",
+            "caseId": null,
+            "code": 0,
+            "http": 200,
+            "details": "",
+            "read": {
+              "site": "rest/y/post-read-a",
+              "code": 0,
+              "state": "created"
+            },
+            "versions": {
+              "/createTime": {
+                "rank": 0,
+                "layout": {
+                  "precision": 6
+                }
+              },
+              "/updateTime": {
+                "rank": 0,
+                "layout": {
+                  "precision": 6
+                }
+              }
+            }
+          },
+          "grpc/x/begin": {
+            "transport": "grpc",
+            "rpc": "BeginTransaction",
+            "caseId": null,
+            "code": 0,
+            "http": null,
+            "details": "",
+            "read": null,
+            "versions": {}
+          },
+          "grpc/x/read-a": {
+            "transport": "grpc",
+            "rpc": "GetDocument",
+            "caseId": null,
+            "code": 0,
+            "http": null,
+            "details": "",
+            "read": {
+              "site": "grpc/x/read-a",
+              "code": 0,
+              "state": "created"
+            },
+            "versions": {
+              "/createTime": {
+                "rank": 0,
+                "layout": {
+                  "members": [
+                    "nanos",
+                    "seconds"
+                  ]
+                }
+              },
+              "/updateTime": {
+                "rank": 0,
+                "layout": {
+                  "members": [
+                    "nanos",
+                    "seconds"
+                  ]
+                }
+              }
+            }
+          },
+          "grpc/x/ro-write": {
+            "transport": "grpc",
+            "rpc": "Commit",
+            "caseId": "grpc/x-ro-write",
+            "code": 3,
+            "http": null,
+            "details": "Cannot modify entities in a read-only transaction.",
+            "read": null,
+            "versions": {}
+          },
+          "grpc/x/get-after": {
+            "transport": "grpc",
+            "rpc": "GetDocument",
+            "caseId": "grpc/x-get-after",
+            "code": 3,
+            "http": null,
+            "details": "The referenced transaction has expired or is no longer valid.",
+            "read": {
+              "site": "grpc/x/get-after",
+              "code": 3,
+              "state": null
+            },
+            "versions": {}
+          },
+          "grpc/x/commit-empty": {
+            "transport": "grpc",
+            "rpc": "Commit",
+            "caseId": "grpc/x-commit-empty",
+            "code": 3,
+            "http": null,
+            "details": "The referenced transaction has expired or is no longer valid.",
+            "read": null,
+            "versions": {}
+          },
+          "grpc/x/rollback": {
+            "transport": "grpc",
+            "rpc": "Rollback",
+            "caseId": "grpc/x-rollback",
+            "code": 0,
+            "http": null,
+            "details": "",
+            "read": null,
+            "versions": {}
+          },
+          "grpc/x/post-read-a": {
+            "transport": "grpc",
+            "rpc": "GetDocument",
+            "caseId": null,
+            "code": 0,
+            "http": null,
+            "details": "",
+            "read": {
+              "site": "grpc/x/post-read-a",
+              "code": 0,
+              "state": "created"
+            },
+            "versions": {
+              "/createTime": {
+                "rank": 0,
+                "layout": {
+                  "members": [
+                    "nanos",
+                    "seconds"
+                  ]
+                }
+              },
+              "/updateTime": {
+                "rank": 0,
+                "layout": {
+                  "members": [
+                    "nanos",
+                    "seconds"
+                  ]
+                }
+              }
+            }
+          },
+          "grpc/y/begin": {
+            "transport": "grpc",
+            "rpc": "BeginTransaction",
+            "caseId": null,
+            "code": 0,
+            "http": null,
+            "details": "",
+            "read": null,
+            "versions": {}
+          },
+          "grpc/y/read-a": {
+            "transport": "grpc",
+            "rpc": "GetDocument",
+            "caseId": null,
+            "code": 0,
+            "http": null,
+            "details": "",
+            "read": {
+              "site": "grpc/y/read-a",
+              "code": 0,
+              "state": "created"
+            },
+            "versions": {
+              "/createTime": {
+                "rank": 0,
+                "layout": {
+                  "members": [
+                    "nanos",
+                    "seconds"
+                  ]
+                }
+              },
+              "/updateTime": {
+                "rank": 0,
+                "layout": {
+                  "members": [
+                    "nanos",
+                    "seconds"
+                  ]
+                }
+              }
+            }
+          },
+          "grpc/y/ro-write": {
+            "transport": "grpc",
+            "rpc": "Commit",
+            "caseId": "grpc/y-ro-write",
+            "code": 3,
+            "http": null,
+            "details": "Cannot modify entities in a read-only transaction.",
+            "read": null,
+            "versions": {}
+          },
+          "grpc/y/commit-empty": {
+            "transport": "grpc",
+            "rpc": "Commit",
+            "caseId": "grpc/y-commit-empty",
+            "code": 3,
+            "http": null,
+            "details": "The referenced transaction has expired or is no longer valid.",
+            "read": null,
+            "versions": {}
+          },
+          "grpc/y/get-after": {
+            "transport": "grpc",
+            "rpc": "GetDocument",
+            "caseId": "grpc/y-get-after",
+            "code": 3,
+            "http": null,
+            "details": "The referenced transaction has expired or is no longer valid.",
+            "read": {
+              "site": "grpc/y/get-after",
+              "code": 3,
+              "state": null
+            },
+            "versions": {}
+          },
+          "grpc/y/rollback": {
+            "transport": "grpc",
+            "rpc": "Rollback",
+            "caseId": "grpc/y-rollback",
+            "code": 0,
+            "http": null,
+            "details": "",
+            "read": null,
+            "versions": {}
+          },
+          "grpc/y/post-read-a": {
+            "transport": "grpc",
+            "rpc": "GetDocument",
+            "caseId": null,
+            "code": 0,
+            "http": null,
+            "details": "",
+            "read": {
+              "site": "grpc/y/post-read-a",
+              "code": 0,
+              "state": "created"
+            },
+            "versions": {
+              "/createTime": {
+                "rank": 0,
+                "layout": {
+                  "members": [
+                    "nanos",
+                    "seconds"
+                  ]
+                }
+              },
+              "/updateTime": {
+                "rank": 0,
+                "layout": {
+                  "members": [
+                    "nanos",
+                    "seconds"
+                  ]
+                }
+              }
+            }
+          },
+          "rest/z/begin": {
+            "transport": "rest",
+            "rpc": "BeginTransaction",
+            "caseId": null,
+            "code": 0,
+            "http": 200,
+            "details": "",
+            "read": null,
+            "versions": {}
+          },
+          "rest/z/writer": {
+            "transport": "rest",
+            "rpc": "Commit",
+            "caseId": "rest/z-writer",
+            "code": 0,
+            "http": 200,
+            "details": "",
+            "read": null,
+            "versions": {
+              "/commitTime": {
+                "rank": 1,
+                "layout": {
+                  "precision": 6
+                }
+              },
+              "/writeResults/0/updateTime": {
+                "rank": 1,
+                "layout": {
+                  "precision": 6
+                }
+              }
+            }
+          },
+          "rest/z/first-read": {
+            "transport": "rest",
+            "rpc": "GetDocument",
+            "caseId": "rest/z-first-read",
+            "code": 0,
+            "http": 200,
+            "details": "",
+            "read": {
+              "site": "rest/z/first-read",
+              "code": 0,
+              "state": "rest-z-w"
+            },
+            "versions": {
+              "/createTime": {
+                "rank": 0,
+                "layout": {
+                  "precision": 6
+                }
+              },
+              "/updateTime": {
+                "rank": 1,
+                "layout": {
+                  "precision": 6
+                }
+              }
+            }
+          },
+          "rest/z/commit": {
+            "transport": "rest",
+            "rpc": "Commit",
+            "caseId": "rest/z-commit",
+            "code": 0,
+            "http": 200,
+            "details": "",
+            "read": null,
+            "versions": {
+              "/commitTime": {
+                "rank": 2,
+                "layout": {
+                  "precision": 6
+                }
+              },
+              "/writeResults/0/updateTime": {
+                "rank": 2,
+                "layout": {
+                  "precision": 6
+                }
+              }
+            }
+          },
+          "rest/z/rollback": {
+            "transport": "rest",
+            "rpc": "Rollback",
+            "caseId": "rest/z-rollback",
+            "code": 10,
+            "http": 409,
+            "details": "The referenced transaction has expired or is no longer valid.",
+            "read": null,
+            "versions": {}
+          },
+          "rest/z/post-read-a": {
+            "transport": "rest",
+            "rpc": "GetDocument",
+            "caseId": null,
+            "code": 0,
+            "http": 200,
+            "details": "",
+            "read": {
+              "site": "rest/z/post-read-a",
+              "code": 0,
+              "state": "rest-z-commit"
+            },
+            "versions": {
+              "/createTime": {
+                "rank": 0,
+                "layout": {
+                  "precision": 6
+                }
+              },
+              "/updateTime": {
+                "rank": 2,
+                "layout": {
+                  "precision": 6
+                }
+              }
+            }
+          },
+          "grpc/z/begin": {
+            "transport": "grpc",
+            "rpc": "BeginTransaction",
+            "caseId": null,
+            "code": 0,
+            "http": null,
+            "details": "",
+            "read": null,
+            "versions": {}
+          },
+          "grpc/z/writer": {
+            "transport": "grpc",
+            "rpc": "Commit",
+            "caseId": "grpc/z-writer",
+            "code": 0,
+            "http": null,
+            "details": "",
+            "read": null,
+            "versions": {
+              "/commitTime": {
+                "rank": 3,
+                "layout": {
+                  "members": [
+                    "nanos",
+                    "seconds"
+                  ]
+                }
+              },
+              "/writeResults/0/updateTime": {
+                "rank": 3,
+                "layout": {
+                  "members": [
+                    "nanos",
+                    "seconds"
+                  ]
+                }
+              }
+            }
+          },
+          "grpc/z/first-read": {
+            "transport": "grpc",
+            "rpc": "GetDocument",
+            "caseId": "grpc/z-first-read",
+            "code": 0,
+            "http": null,
+            "details": "",
+            "read": {
+              "site": "grpc/z/first-read",
+              "code": 0,
+              "state": "grpc-z-w"
+            },
+            "versions": {
+              "/createTime": {
+                "rank": 0,
+                "layout": {
+                  "members": [
+                    "nanos",
+                    "seconds"
+                  ]
+                }
+              },
+              "/updateTime": {
+                "rank": 3,
+                "layout": {
+                  "members": [
+                    "nanos",
+                    "seconds"
+                  ]
+                }
+              }
+            }
+          },
+          "grpc/z/commit": {
+            "transport": "grpc",
+            "rpc": "Commit",
+            "caseId": "grpc/z-commit",
+            "code": 0,
+            "http": null,
+            "details": "",
+            "read": null,
+            "versions": {
+              "/commitTime": {
+                "rank": 4,
+                "layout": {
+                  "members": [
+                    "nanos",
+                    "seconds"
+                  ]
+                }
+              },
+              "/writeResults/0/updateTime": {
+                "rank": 4,
+                "layout": {
+                  "members": [
+                    "nanos",
+                    "seconds"
+                  ]
+                }
+              }
+            }
+          },
+          "grpc/z/rollback": {
+            "transport": "grpc",
+            "rpc": "Rollback",
+            "caseId": "grpc/z-rollback",
+            "code": 10,
+            "http": null,
+            "details": "The referenced transaction has expired or is no longer valid.",
+            "read": null,
+            "versions": {}
+          },
+          "grpc/z/post-read-a": {
+            "transport": "grpc",
+            "rpc": "GetDocument",
+            "caseId": null,
+            "code": 0,
+            "http": null,
+            "details": "",
+            "read": {
+              "site": "grpc/z/post-read-a",
+              "code": 0,
+              "state": "grpc-z-commit"
+            },
+            "versions": {
+              "/createTime": {
+                "rank": 0,
+                "layout": {
+                  "members": [
+                    "nanos",
+                    "seconds"
+                  ]
+                }
+              },
+              "/updateTime": {
+                "rank": 4,
+                "layout": {
+                  "members": [
+                    "nanos",
+                    "seconds"
+                  ]
+                }
+              }
+            }
+          }
+        },
+        "cleanupSteps": {
+          "cleanup/read/a": {
+            "transport": "grpc",
+            "rpc": "GetDocument",
+            "caseId": null,
+            "code": 0,
+            "http": null,
+            "details": "",
+            "read": null,
+            "versions": {
+              "/createTime": {
+                "rank": 0,
+                "layout": {
+                  "members": [
+                    "nanos",
+                    "seconds"
+                  ]
+                }
+              },
+              "/updateTime": {
+                "rank": 4,
+                "layout": {
+                  "members": [
+                    "nanos",
+                    "seconds"
+                  ]
+                }
+              }
+            }
+          },
+          "cleanup/delete/a": {
+            "transport": "grpc",
+            "rpc": "DeleteDocument",
+            "caseId": null,
+            "code": 0,
+            "http": null,
+            "details": "",
+            "read": null,
+            "versions": {}
+          },
+          "cleanup/verify/a": {
+            "transport": "grpc",
+            "rpc": "GetDocument",
+            "caseId": null,
+            "code": 5,
+            "http": null,
+            "details": "Document \"projects/<project>/databases/(default)/documents/oracle/<nonce>/txn-p02b/a\" not found.",
+            "read": null,
+            "versions": {}
+          }
+        },
+        "tokens": {
+          "rest-x": {
+            "transport": "rest",
+            "state": "rolled-back"
+          },
+          "rest-y": {
+            "transport": "rest",
+            "state": "rolled-back"
+          },
+          "grpc-x": {
+            "transport": "grpc",
+            "state": "rolled-back"
+          },
+          "grpc-y": {
+            "transport": "grpc",
+            "state": "rolled-back"
+          },
+          "rest-z": {
+            "transport": "rest",
+            "state": "committed"
+          },
+          "grpc-z": {
+            "transport": "grpc",
+            "state": "committed"
+          }
+        },
+        "cleanup": {
+          "absent": true
+        },
+        "commitTimes": {
+          "setup/create-a": {
+            "commitTime": true,
+            "relation": null
+          },
+          "rest/z/writer": {
+            "commitTime": true,
+            "relation": null
+          },
+          "rest/z/commit": {
+            "commitTime": true,
+            "relation": null
+          },
+          "grpc/z/writer": {
+            "commitTime": true,
+            "relation": null
+          },
+          "grpc/z/commit": {
+            "commitTime": true,
+            "relation": null
+          }
+        }
+      },
+      "recordings": [
+        {
+          "recording": 1,
+          "reference": "docs.local/runs/fs-transaction-p02b-readonly-refused-956ffb458f823440/recording-1.json",
+          "sha256": "240d434d6f16111d7fd9c875e7799fbda79eb3b55d72a2a238f718d230798cc8",
+          "complete": true,
+          "graphComplete": true,
+          "cleanupAbsent": true,
+          "ownedDocumentsAbsent": 1,
+          "requests": 53,
+          "phaseRequests": {
+            "credential": 1,
+            "documentCleanup": 3,
+            "management": 7,
+            "observation": 42,
+            "tokenCleanup": 0
+          },
+          "observations": 24,
+          "transportObservations": {
+            "rest": 12,
+            "grpc": 12
+          },
+          "openTokens": 0,
+          "unknownOutcomes": 0,
+          "semanticDigest": "b935ea798b2cffe0383736bbef3ac72511cb3a214c80a1d5a0550c4e0a6fdf7d",
+          "projectionDigest": "cc4d288e7b6069b96290b3c3f4a08205a7ab9752f9ac9f0eeeb88d47e92bf726",
+          "timingMode": "wall-clock",
+          "timingSource": "parent-wire-envelope"
+        },
+        {
+          "recording": 2,
+          "reference": "docs.local/runs/fs-transaction-p02b-readonly-refused-956ffb458f823440/recording-2.json",
+          "sha256": "bd6b1e27d5aa319b3672a65c952d874a1ca31d9fe06780ae75750611742a7823",
+          "complete": true,
+          "graphComplete": true,
+          "cleanupAbsent": true,
+          "ownedDocumentsAbsent": 1,
+          "requests": 53,
+          "phaseRequests": {
+            "credential": 1,
+            "documentCleanup": 3,
+            "management": 7,
+            "observation": 42,
+            "tokenCleanup": 0
+          },
+          "observations": 24,
+          "transportObservations": {
+            "rest": 12,
+            "grpc": 12
+          },
+          "openTokens": 0,
+          "unknownOutcomes": 0,
+          "semanticDigest": "b935ea798b2cffe0383736bbef3ac72511cb3a214c80a1d5a0550c4e0a6fdf7d",
+          "projectionDigest": "cc4d288e7b6069b96290b3c3f4a08205a7ab9752f9ac9f0eeeb88d47e92bf726",
+          "timingMode": "wall-clock",
+          "timingSource": "parent-wire-envelope"
+        }
+      ]
+    }
+  ]
+}

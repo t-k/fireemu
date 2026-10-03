@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { readFileSync, writeFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
+import { types } from "node:util";
 import { buildCorpus } from "./corpus.mjs";
 
 export const sha256 = (bytes) => createHash("sha256").update(bytes).digest("hex");
@@ -37,6 +38,36 @@ const fail = (message) => {
   throw new Error(`invalid management evidence: ${message}`);
 };
 const exact = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+function requireJsonData(value, ancestors = new Set()) {
+  if (value === null || typeof value === "string" || typeof value === "boolean") return;
+  if (typeof value === "number" && Number.isFinite(value)) return;
+  if (typeof value !== "object" || types.isProxy(value)) fail("ordinary JSON data");
+  const array = Array.isArray(value);
+  if (Object.getPrototypeOf(value) !== (array ? Array.prototype : Object.prototype))
+    fail("JSON data prototype");
+  if (ancestors.has(value)) fail("JSON data cycle");
+  ancestors.add(value);
+  const keys = Reflect.ownKeys(value);
+  const length = array ? Object.getOwnPropertyDescriptor(value, "length").value : null;
+  if (array && keys.length !== length + 1) fail("JSON array entries");
+  for (const key of keys) {
+    if (array && key === "length") continue;
+    const descriptor = Object.getOwnPropertyDescriptor(value, key);
+    if (
+      typeof key !== "string" ||
+      !descriptor.enumerable ||
+      !Object.hasOwn(descriptor, "value") ||
+      (array &&
+        (!Number.isSafeInteger(Number(key)) ||
+          Number(key) < 0 ||
+          Number(key) >= length ||
+          String(Number(key)) !== key))
+    )
+      fail("JSON data property");
+    requireJsonData(descriptor.value, ancestors);
+  }
+  ancestors.delete(value);
+}
 function record(value, keys, label) {
   if (
     !value ||
@@ -173,6 +204,31 @@ function validateResponse(response) {
   )
     fail("content length");
 }
+function validateCompileSuccess(response, source) {
+  if (response.status !== 200) fail("production compile status");
+  const body = JSON.parse(Buffer.from(response.bodyBase64, "base64").toString("utf8"));
+  if (
+    body &&
+    Object.getPrototypeOf(body) === Object.prototype &&
+    Reflect.ownKeys(body).length === 0
+  )
+    return;
+  record(body, ["issues"], "production compile raw success");
+  if (!Array.isArray(body.issues) || body.issues.length !== 1)
+    fail("production compile warning count");
+  const [issue] = body.issues;
+  record(issue, ["sourcePosition", "description", "severity"], "production compile warning shape");
+  record(issue.sourcePosition, ["fileName"], "production compile warning position");
+  // Native stage3-20260930c/d v1 sources omit a version declaration; exact source digests are checked first.
+  if (
+    !source?.startsWith("service firebase.storage {") ||
+    issue.sourcePosition.fileName !== "storage.rules" ||
+    issue.severity !== "WARNING" ||
+    issue.description !==
+      "Ruleset uses old version (version [1]). Please update to the latest version (version [2])."
+  )
+    fail("production compile warning binding");
+}
 function validateRows(rows, binding, production) {
   const steps = managementSteps(binding);
   if (
@@ -186,9 +242,9 @@ function validateRows(rows, binding, production) {
   );
   if (new Set(evidenceNumbers).size !== rows.length) fail("duplicate chronology");
   const indexed = new Map(rows.map((r) => [r.id, r]));
-  const sources = new Map(
-    buildCorpus(binding).managementPrograms[0].validSources.map((s) => [s.ref, s.sha256]),
-  );
+  const validSources = buildCorpus(binding).managementPrograms[0].validSources;
+  const sources = new Map(validSources.map((s) => [s.ref, s.sha256]));
+  const sourceContents = new Map(validSources.map((s) => [s.ref, s.content]));
   sources.set(
     "invalid/storage-expression",
     sha256(buildCorpus(binding).managementPrograms[0].invalidSource.content),
@@ -243,14 +299,8 @@ function validateRows(rows, binding, production) {
       (!production && (!Number.isSafeInteger(row.evidence.ordinal) || row.evidence.ordinal <= 0))
     )
       fail("row provenance");
-    if (production && step.kind === "compile") {
-      if (row.response.status !== 200) fail("production compile status");
-      record(
-        JSON.parse(Buffer.from(row.response.bodyBase64, "base64").toString("utf8")),
-        [],
-        "production compile raw success",
-      );
-    }
+    if (production && step.kind === "compile")
+      validateCompileSuccess(row.response, sourceContents.get(step.sourceRef));
     if (production && step.kind === "rejection") {
       const body = JSON.parse(Buffer.from(row.response.bodyBase64, "base64").toString("utf8"));
       record(body, ["issues"], "production invalid raw shape");
@@ -327,6 +377,8 @@ const LOCAL_ONLY_IDS = [
 ];
 export function compareManagement(local, production, receipt) {
   try {
+    // Inspect descriptors before any equality, serialization, or array traversal consumes evidence.
+    for (const value of [local, production, receipt]) requireJsonData(value);
     record(
       local,
       ["schemaVersion", "kind", "profile", "binding", "provenance", "rows", "errors", "localOnly"],

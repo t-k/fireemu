@@ -160,7 +160,7 @@ def main():
             raise ValueError("runtime artifact binding differs")
     runtime = discover_runtime(Path(os.environ.get("NODE_BINARY") or shutil.which("node")))
     plan = compile_plan(table, os.urandom(16).hex(), os.urandom(16).hex())
-    wire = NodeWire(runtime, wire_scope(table), target={"kind": "local", "host": host, "port": int(port)})
+    wire = NodeWire(runtime, wire_scope(table), target={"kind": "local", "host": host, "port": int(port)}, project=plan["project"])
     receipt = Collector(plan, table, RequestBudget(plan, table), wire, "owner", save=lambda _state: None).run()
     receipt["runtime"] = runtime
     out = Path(sys.argv[2])

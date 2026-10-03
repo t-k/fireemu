@@ -632,6 +632,36 @@ export async function runNativeRecordCommand({ out = () => {} } = {}) {
   return 3;
 }
 
+/** Preserve the transport frame verbatim; timing has its own receipt and grants no authority. */
+export function projectNativeTransportResponse(response) {
+  const frame = nativeSnapshot(response, "native transport frame");
+  nativeClosed(
+    frame,
+    ["status", "rawHeaders", "bytes", "startedAtMs", "finishedAtMs"],
+    "native transport frame",
+  );
+  if (
+    !Number.isInteger(frame.status) ||
+    frame.status < 100 ||
+    frame.status > 599 ||
+    !Buffer.isBuffer(frame.bytes) ||
+    frame.bytes.length > 2 * 1024 * 1024 ||
+    !Array.isArray(frame.rawHeaders) ||
+    frame.rawHeaders.length % 2 ||
+    frame.rawHeaders.some((value) => typeof value !== "string" || /[\r\n]/.test(value)) ||
+    frame.rawHeaders.reduce((sum, value) => sum + Buffer.byteLength(value) + 2, 0) > 32 * 1024 ||
+    !Number.isSafeInteger(frame.startedAtMs) ||
+    frame.startedAtMs < 0 ||
+    !Number.isSafeInteger(frame.finishedAtMs) ||
+    frame.finishedAtMs < frame.startedAtMs
+  )
+    fail("unknown native transport frame");
+  return Object.freeze({
+    raw: Object.freeze({ status: frame.status, rawHeaders: frame.rawHeaders, bytes: frame.bytes }),
+    timing: Object.freeze({ startedAtMs: frame.startedAtMs, finishedAtMs: frame.finishedAtMs }),
+  });
+}
+
 const STABLE = ["content-type", "content-length", "x-content-type-options", "cache-control"];
 export function nativeRawRecord(raw) {
   if (
@@ -1282,7 +1312,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href)
     out: (line) => process.stderr.write(`${line}\n`),
   });
 
-/** Bind all four owned source files, including the independent test model, by their actual bytes. */
+/** Bind the narrow driver, fixed entry, transport and independent test models by their actual bytes. */
 export function nativeRunnerDigest() {
   return nativeDigest(
     Object.fromEntries(
@@ -1291,6 +1321,9 @@ export function nativeRunnerDigest() {
         "./management-native-schedule.mjs",
         "./management-native-record.mjs",
         "../storage-rules-management-native.test.mjs",
+        "./management-native-entry.mjs",
+        "./http-transport.mjs",
+        "../storage-rules-management-native-entry.test.mjs",
       ].map((path) => [path, nativeDigest(readFileSync(new URL(path, import.meta.url)))]),
     ),
   );

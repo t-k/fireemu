@@ -159,8 +159,9 @@ async function bounded(work, deadlineAt) {
 /** Caller owns exclusively created handles and closes them after all underlying calls settle. */
 export function createOwnedJournalWriter({ fileHandle, directoryHandle, deadlineAt, limits }) {
   liveDeadline(deadlineAt);
+  const writerLimits = {};
   for (const key of ["maxWriterRows", "maxWriterRecordBytes", "maxWriterBytes"])
-    positive(limits?.[key]);
+    writerLimits[key] = positive(limits?.[key]);
   if (
     typeof fileHandle?.write !== "function" ||
     typeof fileHandle?.sync !== "function" ||
@@ -185,10 +186,10 @@ export function createOwnedJournalWriter({ fileHandle, directoryHandle, deadline
         row.index !== attemptedRows ||
         !Number.isSafeInteger(row.index) ||
         typeof row.bodyBase64 !== "string" ||
-        row.bodyBase64.length > limits.maxWriterRecordBytes ||
+        row.bodyBase64.length > writerLimits.maxWriterRecordBytes ||
         !Number.isSafeInteger(row.bodyBytes) ||
         row.bodyBytes < 0 ||
-        row.bodyBytes > limits.maxWriterRecordBytes ||
+        row.bodyBytes > writerLimits.maxWriterRecordBytes ||
         typeof row.sha256 !== "string" ||
         row.sha256.length !== 64 ||
         !/^[a-f0-9]{64}$/.test(row.sha256)
@@ -210,9 +211,9 @@ export function createOwnedJournalWriter({ fileHandle, directoryHandle, deadline
         }) + "\n",
       );
       if (
-        attemptedRows >= limits.maxWriterRows ||
-        record.length > limits.maxWriterRecordBytes ||
-        record.length > limits.maxWriterBytes - totalBytes
+        attemptedRows >= writerLimits.maxWriterRows ||
+        record.length > writerLimits.maxWriterRecordBytes ||
+        record.length > writerLimits.maxWriterBytes - totalBytes
       )
         throw new Error("writer bound");
       busy = true;

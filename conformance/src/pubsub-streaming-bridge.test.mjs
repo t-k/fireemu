@@ -1437,3 +1437,42 @@ test("lifecycle_callback_kind_and_native_sequence_bind_to_the_same_durable_recei
       assert.equal(record.receipt.index, binding.receiptIndex);
     }
   }));
+
+test("writer_lifetime_caps_stay_fixed_to_the_admitted_constructor_values", () =>
+  withClock(async () => {
+    const { createOwnedJournalWriter } = await exports();
+    const body = Buffer.from("x");
+    const row = {
+      index: 0,
+      bodyBase64: body.toString("base64"),
+      bodyBytes: 1,
+      sha256: createHash("sha256").update(body).digest("hex"),
+    };
+    const admitted = { maxWriterRows: 1, maxWriterRecordBytes: 1024, maxWriterBytes: 2048 };
+    const effects = [];
+    const writer = createOwnedJournalWriter({
+      deadlineAt: 100,
+      limits: admitted,
+      fileHandle: {
+        async write(bytes) {
+          effects.push("write");
+          return { bytesWritten: bytes.length };
+        },
+        async sync() {
+          effects.push("file-sync");
+        },
+      },
+      directoryHandle: {
+        async sync() {
+          effects.push("directory-sync");
+        },
+      },
+    });
+    admitted.maxWriterRows = Infinity;
+    admitted.maxWriterRecordBytes = Infinity;
+    admitted.maxWriterBytes = Infinity;
+    await writer.write(row);
+    await assert.rejects(writer.write({ ...row, index: 1 }));
+    assert.deepEqual(effects, ["write", "file-sync", "directory-sync"]);
+    assert.equal(writer.report().acknowledgedRows, 1);
+  }));

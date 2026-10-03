@@ -14,6 +14,18 @@ export const fixtureDigest = (binding) =>
       }),
     ),
   );
+/** Exact UTF-8 bytes of JSON.stringify(projection), without whitespace rewriting. */
+export const projectionDigest = (projection) => sha256(Buffer.from(JSON.stringify(projection)));
+const UNJUDGED_HEADERS = new Set([
+  "date",
+  "expires",
+  "server",
+  "connection",
+  "x-guploader-uploadid",
+  "access-control-expose-headers",
+  "access-control-allow-origin",
+  "alt-svc",
+]);
 export const STABLE_HEADERS = Object.freeze([
   "content-type",
   "content-length",
@@ -51,6 +63,9 @@ export function managementSteps(binding) {
     for (const scope of ["bucket", "bucketless"])
       add(`${position}/${scope}`, "absence", "admin", "control");
   add("management/prefix-empty", "storage", "admin", "gcs");
+  add("release/restore/delete", "clear", "admin", "control");
+  for (const scope of ["bucket", "bucketless"])
+    add(`release/restore/${scope}-absence`, "absence", "admin", "control");
   add("compile/release/before", "absence", "admin", "control");
   for (const source of compile.validSources)
     add(`compile/${source.ref}`, "compile", "admin", "control", source.ref);
@@ -166,6 +181,10 @@ function validateRows(rows, binding, production) {
     new Set(rows.map((r) => r?.id)).size !== rows.length
   )
     fail("closed step count");
+  const evidenceNumbers = rows.map((r) =>
+    production ? r?.evidence?.sequence : r?.evidence?.ordinal,
+  );
+  if (new Set(evidenceNumbers).size !== rows.length) fail("duplicate chronology");
   const indexed = new Map(rows.map((r) => [r.id, r]));
   const sources = new Map(
     buildCorpus(binding).managementPrograms[0].validSources.map((s) => [s.ref, s.sha256]),
@@ -224,6 +243,32 @@ function validateRows(rows, binding, production) {
       (!production && (!Number.isSafeInteger(row.evidence.ordinal) || row.evidence.ordinal <= 0))
     )
       fail("row provenance");
+    if (production && step.kind === "compile") {
+      if (row.response.status !== 200) fail("production compile status");
+      record(
+        JSON.parse(Buffer.from(row.response.bodyBase64, "base64").toString("utf8")),
+        [],
+        "production compile raw success",
+      );
+    }
+    if (production && step.kind === "rejection") {
+      const body = JSON.parse(Buffer.from(row.response.bodyBase64, "base64").toString("utf8"));
+      record(body, ["issues"], "production invalid raw shape");
+      if (
+        row.response.status !== 200 ||
+        !Array.isArray(body.issues) ||
+        !body.issues.some(
+          (issue) =>
+            issue?.severity === "ERROR" &&
+            issue.sourcePosition?.fileName === "storage.rules" &&
+            Number.isSafeInteger(issue.sourcePosition.line) &&
+            issue.sourcePosition.line > 0 &&
+            Number.isSafeInteger(issue.sourcePosition.column) &&
+            issue.sourcePosition.column > 0,
+        )
+      )
+        fail("production invalid raw rejection");
+    }
     if (step.kind === "compile" || step.kind === "identity") {
       record(row.effect, ["sourceAccepted"], "source effect");
       if (row.effect.sourceAccepted !== true) fail(`source refused: ${step.id}`);
@@ -231,9 +276,20 @@ function validateRows(rows, binding, production) {
       record(row.effect, ["rejected"], "invalid effect");
       if (row.effect.rejected !== true || (!production && row.response.status !== 400))
         fail("invalid accepted");
+    } else if (step.kind === "clear") {
+      record(row.effect, ["cleared"], "clear effect");
+      if (row.effect.cleared !== true || row.response.status !== 200) fail("release clear failed");
     } else if (step.kind === "absence") {
       record(row.effect, ["absent"], "absence effect");
-      if (row.effect.absent !== true) fail("release present");
+      if (row.effect.absent !== true || (production && row.response.status !== 404))
+        fail("release present");
+      if (!production) {
+        const snapshot = JSON.parse(
+          Buffer.from(row.response.bodyBase64, "base64").toString("utf8"),
+        );
+        if (row.response.status !== 200 || snapshot.loaded !== false)
+          fail("local absence raw readback");
+      }
     } else if (step.kind === "metadata") {
       record(row.effect, ["stateSha256"], "metadata effect");
       if (
@@ -241,6 +297,21 @@ function validateRows(rows, binding, production) {
         row.effect.stateSha256 !== row.response.bodySha256
       )
         fail("metadata digest");
+      if (!/(?:baseline|absence)-metadata$/.test(step.id)) {
+        const object = JSON.parse(Buffer.from(row.response.bodyBase64, "base64").toString("utf8"));
+        const index = step.id.startsWith("management/no-release/")
+          ? 5
+          : Number(step.id.match(/control-([345])/)[1]);
+        const [, switched, noRelease] = buildCorpus(binding).managementPrograms;
+        const name =
+          index === 3 ? switched.objectA : index === 4 ? switched.objectB : noRelease.objectName;
+        if (
+          row.response.status !== 200 ||
+          object.name !== name ||
+          !/^\d+$/.test(object.generation ?? "")
+        )
+          fail("Admin object present");
+      }
     } else if (row.effect !== null) fail("storage effect");
   }
   return indexed;
@@ -273,6 +344,7 @@ export function compareManagement(local, production, receipt) {
         "rows",
         "gaps",
         "unjudgedHeaders",
+        "sourceEvidence",
       ],
       "production schema",
     );
@@ -294,7 +366,11 @@ export function compareManagement(local, production, receipt) {
       ],
       "local provenance",
     );
-    record(receipt.production, ["runId", "sourceCommit", "journalSha256"], "production receipt");
+    record(
+      receipt.production,
+      ["runId", "sourceCommit", "journalSha256", "projectionSha256"],
+      "production receipt",
+    );
     if (
       [local.schemaVersion, production.schemaVersion, receipt.schemaVersion].some((v) => v !== 1) ||
       local.kind !== "local-management" ||
@@ -308,6 +384,7 @@ export function compareManagement(local, production, receipt) {
         runId: production.runId,
         sourceCommit: production.sourceCommit,
         journalSha256: production.journalSha256,
+        projectionSha256: projectionDigest(production),
       })
     )
       fail("stale/profile/binding receipt");
@@ -324,6 +401,16 @@ export function compareManagement(local, production, receipt) {
     )
       fail("errors or production binding");
     if (
+      production.unjudgedHeaders.some(
+        (header) =>
+          typeof header !== "string" ||
+          !UNJUDGED_HEADERS.has(header) ||
+          STABLE_HEADERS.includes(header),
+      ) ||
+      new Set(production.unjudgedHeaders).size !== production.unjudgedHeaders.length
+    )
+      fail("unjudged header scope");
+    if (
       !Array.isArray(local.localOnly) ||
       !exact(
         local.localOnly.map((r) => r.id),
@@ -337,6 +424,15 @@ export function compareManagement(local, production, receipt) {
       validateResponse(row.response);
     }
     const atomic = local.localOnly;
+    const [atomicCompile, atomicSwitch] = buildCorpus(local.binding).managementPrograms;
+    for (const row of atomic) {
+      const expectedSource = row.id.endsWith("identity")
+        ? sha256(atomicSwitch.sourceA)
+        : row.id === "invalid"
+          ? atomicCompile.invalidSource.sha256
+          : null;
+      if (row.sourceSha256 !== expectedSource) fail("local-only source binding");
+    }
     for (const row of [atomic[0], atomic[4]]) {
       const snapshot = JSON.parse(Buffer.from(row.response.bodyBase64, "base64").toString("utf8"));
       if (
@@ -360,6 +456,43 @@ export function compareManagement(local, production, receipt) {
     )
       fail("local invalid atomicity");
     if (local.provenance.fixtureSha256 !== fixtureDigest(local.binding)) fail("fixture bytes");
+    if (!Array.isArray(production.sourceEvidence) || production.sourceEvidence.length !== 2)
+      fail("native source evidence count");
+    const [, switched] = buildCorpus(production.binding).managementPrograms;
+    for (const [i, sourceId] of ["A", "B"].entries()) {
+      const evidence = production.sourceEvidence[i];
+      record(
+        evidence,
+        ["runId", "sequence", "operationId", "sourceRef", "response"],
+        "native source evidence schema",
+      );
+      validateResponse(evidence.response);
+      const body = JSON.parse(Buffer.from(evidence.response.bodyBase64, "base64").toString("utf8"));
+      const release = production.rows.find((row) => row.id === `release/${sourceId}/after`);
+      const installed = JSON.parse(
+        Buffer.from(release.response.bodyBase64, "base64").toString("utf8"),
+      );
+      if (
+        evidence.runId !== production.runId ||
+        evidence.operationId !== `ruleset/${sourceId}/read-source` ||
+        evidence.sourceRef !== `release-switch/${sourceId}` ||
+        !Number.isSafeInteger(evidence.sequence) ||
+        evidence.sequence <= 0 ||
+        evidence.sequence >= release.evidence.sequence ||
+        evidence.response.status !== 200 ||
+        !Array.isArray(body.source?.files) ||
+        body.source.files.length !== 1 ||
+        body.source.files[0].name !== "storage.rules" ||
+        typeof body.source.files[0].content !== "string" ||
+        sha256(body.source.files[0].content) !== sha256(switched[`source${sourceId}`]) ||
+        typeof body.name !== "string" ||
+        !body.name.startsWith("projects/fireemu-oracle-query/rulesets/") ||
+        release.response.status !== 200 ||
+        installed.rulesetName !== body.name ||
+        installed.name !== switched.releaseName
+      )
+        fail("native installed source authority");
+    }
     const l = validateRows(local.rows, local.binding, false),
       p = validateRows(production.rows, production.binding, true);
     for (const row of production.rows)
@@ -371,6 +504,43 @@ export function compareManagement(local, production, receipt) {
       "management/B/control-4/subject",
     ];
     for (const index of [l, p]) {
+      for (const i of [3, 4, 5]) {
+        const seeded = index.get(`management/control-${i}/seed-metadata`).response.bodySha256;
+        for (const row of index.values()) {
+          if (
+            row.kind === "metadata" &&
+            row.id.includes(`/control-${i}/`) &&
+            !/(?:baseline|absence)-metadata$/.test(row.id) &&
+            row.response.bodySha256 !== seeded
+          )
+            fail("owned metadata continuity");
+        }
+      }
+      for (const row of index.values())
+        if (
+          row.kind === "storage" &&
+          row.caller === "admin" &&
+          /(?:seed|before|after)-media$/.test(row.id)
+        ) {
+          const control = row.id.startsWith("management/no-release/")
+            ? 5
+            : Number(row.id.match(/control-([345])/)[1]);
+          const seededMedia = index.get(`management/control-${control}/seed-media`).response;
+          if (
+            row.response.status !== 200 ||
+            row.response.bodySha256 !== seededMedia.bodySha256 ||
+            row.response.bodyBytes !== seededMedia.bodyBytes
+          )
+            fail("Admin media continuity");
+        }
+      const noReleaseSeed = index.get("management/control-5/seed-metadata").response.bodySha256;
+      for (const row of index.values())
+        if (
+          row.kind === "metadata" &&
+          row.id.startsWith("management/no-release/") &&
+          row.response.bodySha256 !== noReleaseSeed
+        )
+          fail("owned no-release metadata continuity");
       for (const [i, id] of decisions.entries())
         if (index.get(id).response.status !== [200, 403, 403, 200][i]) fail("switch decision");
       for (const source of ["A", "B"])
@@ -428,7 +598,40 @@ export function compareManagement(local, production, receipt) {
               (stage) => `management/${source}/control-${i}/${stage}`,
             ),
           );
+      ordered([
+        "preflight/release/entry/bucket",
+        "preflight/release/entry/bucketless",
+        "management/control-5/baseline-metadata",
+        "management/control-5/baseline-media",
+        "management/control-5/seed",
+        "management/control-5/seed-metadata",
+        "management/control-5/seed-media",
+        "management/no-release/entry/subject",
+        "management/no-release/entry/after-metadata",
+        "management/no-release/entry/after-media",
+      ]);
+      ordered([
+        "management/B/control-4/after-media",
+        "release/restore/delete",
+        "release/restore/bucket-absence",
+        "release/restore/bucketless-absence",
+        "management/no-release/final/before-metadata",
+        "management/no-release/final/before-media",
+        "management/no-release/final/subject",
+        "management/no-release/final/after-metadata",
+        "management/no-release/final/after-media",
+        "release/final/bucket",
+        "release/final/bucketless",
+      ]);
       for (const i of [3, 4, 5]) {
+        ordered([
+          "release/final/bucketless",
+          `management/control-${i}/cleanup-metadata`,
+          `management/control-${i}/delete`,
+          `management/control-${i}/absence-metadata`,
+          `management/control-${i}/absence-media`,
+          "management/prefix-empty",
+        ]);
         ordered(
           [
             "baseline-metadata",

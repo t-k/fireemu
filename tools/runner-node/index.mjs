@@ -1085,7 +1085,11 @@ function v1Context(msg) {
         eventType: legacy,
         // A string: firebase-functions rewrites a legacy event type's resource into
         // { service, name } itself (makeCloudFunction); an object here would be nested.
-        resource: event.source,
+        resource: [event.project, event.database, event.document].every(
+          value => typeof value === "string" && value.length > 0,
+        )
+          ? `projects/${event.project}/databases/${event.database}/documents/${event.document}`
+          : event.source,
         params: event.params || {},
       };
     }

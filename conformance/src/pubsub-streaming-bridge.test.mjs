@@ -1211,6 +1211,7 @@ test("generated_fault_schedules_reach_all_groups_against_independent_effect_fact
           expectedFrames = 0;
         const f = await fixture({
           credential: "abcdefghTOKEN",
+          limits: name === "stop-row-reserve" ? { ...limits, maxChunks: repetition + 1 } : limits,
           liveCheck: () => live,
           write: (row) => {
             stored.push(structuredClone(row));
@@ -1301,6 +1302,13 @@ test("generated_fault_schedules_reach_all_groups_against_independent_effect_fact
           f.session.acks = false;
         } else if (name === "stop-row-reserve") {
           groups.add(6);
+          for (let count = 0; count <= repetition; count++) {
+            f.session.stream.emit("data", Buffer.alloc(0));
+            await flush();
+            assert.equal(f.session.destroyCalls, 0);
+          }
+          f.session.stream.emit("data", Buffer.alloc(0));
+          assert.equal(f.session.destroyCalls, 1);
           owner.stopNow("abort");
           owner.stopNow("deadline");
         } else if (name === "suffix-contradiction") {

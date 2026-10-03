@@ -1556,3 +1556,68 @@ test("rollback descriptor lookup cannot write over an owner acquired during meta
     b.close();
   }
 });
+
+test("a getter-acquired owner is refused before effectful metadata of that owner is read", () => {
+  let reads = 0;
+  let sends = 0;
+  let bRequest;
+  let bHttp2;
+  let effectArmed = false;
+  const original = () => {
+    sends++;
+    return "stream";
+  };
+  let value = original;
+  const backing = {};
+  Object.defineProperty(backing, "request", {
+    configurable: true,
+    get() {
+      const captured = value;
+      if (++reads === 3) {
+        bHttp2.connect("http://localhost:1");
+        bRequest = value;
+        effectArmed = true;
+      }
+      return captured;
+    },
+    set(next) {
+      value = next;
+    },
+  });
+  const session = new Proxy(backing, {
+    getOwnPropertyDescriptor(target, key) {
+      if (effectArmed && key === "request") {
+        effectArmed = false;
+        bRequest();
+      }
+      return Reflect.getOwnPropertyDescriptor(target, key);
+    },
+  });
+  bHttp2 = { connect: () => session };
+  const aHttp2 = { connect: () => session };
+  const aBudget = createWireBudget({ maxRequests: 3, cleanupReserve: 1 });
+  const bBudget = createWireBudget({ maxRequests: 3, cleanupReserve: 1 });
+  const b = module.installNodeWireGuard({
+    http2: bHttp2,
+    globals: { fetch() {} },
+    budget: bBudget,
+    phase: () => "observation",
+  });
+  const a = module.installNodeWireGuard({
+    http2: aHttp2,
+    globals: { fetch() {} },
+    budget: aBudget,
+    phase: () => "observation",
+  });
+  try {
+    assert.throws(() => aHttp2.connect("http://localhost:1"), /ownership/);
+    assert.equal(effectArmed, true);
+    assert.equal(value, bRequest);
+    assert.equal(sends, 0);
+    assert.equal(aBudget.snapshot().total + bBudget.snapshot().total, 0);
+  } finally {
+    effectArmed = false;
+    a.close();
+    b.close();
+  }
+});

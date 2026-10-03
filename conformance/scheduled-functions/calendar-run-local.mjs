@@ -229,6 +229,7 @@ if (process.argv[1] && pathToFileURL(resolve(process.argv[1])).href === import.m
           control: report.control,
           accountingDirectory: report.accountingDirectory,
           productionParity: false,
+          nativeCertificateIssued: false,
         }),
       );
       if (report.verdict.verdict !== "pass" && !report.control?.counts) process.exitCode = 1;

@@ -904,7 +904,6 @@ test("certify rejects explicit malformed attempt lists while omitted and empty r
   }
 });
 
-
 test("the CLI certificate boundary refuses synthetic summaries and omitted failures", async (t) => {
   const { certify } = await import("./calendar-measure.mjs");
   const { mkdtemp, rm, writeFile } = await import("node:fs/promises");
@@ -912,14 +911,24 @@ test("the CLI certificate boundary refuses synthetic summaries and omitted failu
   const { join } = await import("node:path");
   const directory = await mkdtemp(join(tmpdir(), "calendar-campaign-boundary-"));
   t.after(() => rm(directory, { recursive: true, force: true }));
-  const reports = ["certificate", "positive", "orphan", "escaper", "listener", "leftover"].map((kind) => loaderReport(kind));
+  const reports = ["certificate", "positive", "orphan", "escaper", "listener", "leftover"].map(
+    (kind) => loaderReport(kind),
+  );
   const paths = reports.map((_, i) => join(directory, `report-${i}.json`));
   const earlier = join(directory, "earlier-failed.json");
-  await writeFile(earlier, JSON.stringify(loaderReport("certificate", { launchTime: launchTime - 1000, verdict: { verdict: "fail" } })));
+  await writeFile(
+    earlier,
+    JSON.stringify(
+      loaderReport("certificate", { launchTime: launchTime - 1000, verdict: { verdict: "fail" } }),
+    ),
+  );
   const listPath = join(directory, "list.json");
   for (const contradiction of [false, true]) {
     if (contradiction) {
-      reports[0].verdict.conditions = { A: { ok: false, outcome: "fail" }, E: { ok: false, outcome: "inconclusive" } };
+      reports[0].verdict.conditions = {
+        A: { ok: false, outcome: "fail" },
+        E: { ok: false, outcome: "inconclusive" },
+      };
       reports[0].records = { ok: false, signals: 1 };
       reports[0].inventory = { outcome: "inconclusive", passes: [] };
       reports[1].inventory = { outcome: "survivors", survivors: [{ row: { pid: 999 } }] };
@@ -927,8 +936,15 @@ test("the CLI certificate boundary refuses synthetic summaries and omitted failu
     }
     for (let i = 0; i < paths.length; i++) await writeFile(paths[i], JSON.stringify(reports[i]));
     for (const attempts of [undefined, []]) {
-      await writeFile(listPath, JSON.stringify({ refusal: paths[0], controls: paths.slice(1), attempts }));
-      assert.equal((await certify(listPath)).verdict, "pass", "synthetic pure helper compatibility");
+      await writeFile(
+        listPath,
+        JSON.stringify({ refusal: paths[0], controls: paths.slice(1), attempts }),
+      );
+      assert.equal(
+        (await certify(listPath)).verdict,
+        "pass",
+        "synthetic pure helper compatibility",
+      );
       const result = await certify(listPath, { requireCampaign: true });
       assert.equal(result.verdict, "fail", "CLI requires native sealed campaign evidence");
       assert.equal(result.certificate, null);
@@ -936,40 +952,86 @@ test("the CLI certificate boundary refuses synthetic summaries and omitted failu
   }
 });
 
-
 test("a campaign awaits durable birth before effects and retains exactly one raw plan read", async () => {
   const { produceCampaign } = await import("./calendar-measure.mjs");
   const events = [];
   const bytes = Buffer.from('{"plan":"retained"}');
   const retained = Buffer.from(bytes);
   let release;
-  const ack = new Promise((resolve) => { release = resolve; });
+  const ack = new Promise((resolve) => {
+    release = resolve;
+  });
   const scope = { campaign: "unit", utcDay: "2026-10-02" };
   const handles = {
-    registerBirth: async ({ planBytes }) => { events.push("birth"); assert.deepEqual(planBytes, bytes); await ack; events.push("birth-ack"); return { durable: true }; },
-    recordTerminal: async ({ reportBytes }) => { events.push("terminal"); const envelope = JSON.parse(reportBytes); assert.equal(envelope.outcome, "fail"); assert.equal(envelope.rawReportSha256, sha(Buffer.from(envelope.rawReport, "base64"))); return { durable: true }; },
-    seal: async () => { events.push("seal"); return { state: "complete", durabilityAcknowledged: true }; },
-    close: async () => { events.push("close"); },
+    registerBirth: async ({ planBytes }) => {
+      events.push("birth");
+      assert.deepEqual(planBytes, bytes);
+      await ack;
+      events.push("birth-ack");
+      return { durable: true };
+    },
+    recordTerminal: async ({ reportBytes }) => {
+      events.push("terminal");
+      const envelope = JSON.parse(reportBytes);
+      assert.equal(envelope.outcome, "fail");
+      assert.equal(envelope.rawReportSha256, sha(Buffer.from(envelope.rawReport, "base64")));
+      return { durable: true };
+    },
+    seal: async () => {
+      events.push("seal");
+      return { state: "complete", durabilityAcknowledged: true };
+    },
+    close: async () => {
+      events.push("close");
+    },
   };
   const pending = produceCampaign({
-    scope, authorityId: "unit", attempts: [{ attemptId: "a", planPath: "/plan", planSha256: sha(bytes) }],
-    bootstrap: async () => { events.push("bootstrap"); return { scope, receipt: { phase: "infrastructure" } }; },
-    readPlan: async () => { events.push("read-plan"); return bytes; },
-    createLedger: async () => { events.push("ledger"); return handles; },
-    measureAttempt: async (raw) => { events.push("effects"); assert.deepEqual(raw, retained); return Buffer.from('{"verdict":{"verdict":"fail"}}'); },
-    readSnapshot: async () => { events.push("readback"); return {}; },
+    scope,
+    authorityId: "unit",
+    attempts: [{ attemptId: "a", planPath: "/plan", planSha256: sha(bytes) }],
+    bootstrap: async () => {
+      events.push("bootstrap");
+      return { scope, receipt: { phase: "infrastructure" } };
+    },
+    readPlan: async () => {
+      events.push("read-plan");
+      return bytes;
+    },
+    createLedger: async () => {
+      events.push("ledger");
+      return handles;
+    },
+    measureAttempt: async (raw) => {
+      events.push("effects");
+      assert.deepEqual(raw, retained);
+      return Buffer.from('{"verdict":{"verdict":"fail"}}');
+    },
+    readSnapshot: async () => {
+      events.push("readback");
+      return {};
+    },
   });
   await new Promise((resolve) => setImmediate(resolve));
   assert.deepEqual(events, ["bootstrap", "ledger", "read-plan", "birth"]);
   bytes[0] = 32;
   release();
   const result = await pending;
-  assert.deepEqual(events, ["bootstrap", "ledger", "read-plan", "birth", "birth-ack", "effects", "terminal", "seal", "readback", "close"]);
+  assert.deepEqual(events, [
+    "bootstrap",
+    "ledger",
+    "read-plan",
+    "birth",
+    "birth-ack",
+    "effects",
+    "terminal",
+    "seal",
+    "readback",
+    "close",
+  ]);
   assert.equal(result.state, "complete");
   assert.equal(result.externalApprovalVerified, false);
   assert.equal(result.allDayCertified, false);
 });
-
 
 test("campaign early exceptions remain unknown terminals and never seal as complete failures", async () => {
   const { produceCampaign } = await import("./calendar-measure.mjs");
@@ -978,16 +1040,39 @@ test("campaign early exceptions remain unknown terminals and never seal as compl
     let envelope;
     const raw = Buffer.from("{}");
     const result = await produceCampaign({
-      authorityId: "unit", attempts: [{ attemptId: "one", planPath: "/one", planSha256: sha(raw) }],
-      bootstrap: async () => ({ scope: { utcDay: "2026-10-02" }, receipt: { phase: "infrastructure" } }),
+      authorityId: "unit",
+      attempts: [{ attemptId: "one", planPath: "/one", planSha256: sha(raw) }],
+      bootstrap: async () => ({
+        scope: { utcDay: "2026-10-02" },
+        receipt: { phase: "infrastructure" },
+      }),
       readPlan: async () => raw,
       createLedger: async () => ({
-        registerBirth: async () => { events.push("birth-ack"); return { durable: true }; },
-        recordTerminal: async ({ reportBytes }) => { envelope = JSON.parse(reportBytes); events.push("terminal"); return { durable: true }; },
-        seal: async () => { events.push("seal"); if (envelope.outcome === "unknown") throw new Error("unknown terminal"); return { state: "complete", durabilityAcknowledged: true }; },
-        close: async () => { events.push("close"); },
+        registerBirth: async () => {
+          events.push("birth-ack");
+          return { durable: true };
+        },
+        recordTerminal: async ({ reportBytes }) => {
+          envelope = JSON.parse(reportBytes);
+          events.push("terminal");
+          return { durable: true };
+        },
+        seal: async () => {
+          events.push("seal");
+          if (envelope.outcome === "unknown") throw new Error("unknown terminal");
+          return { state: "complete", durabilityAcknowledged: true };
+        },
+        close: async () => {
+          events.push("close");
+        },
       }),
-      measureAttempt: async () => { events.push("effects"); if (outcome === "throw") throw new Error("prelaunch"); return Buffer.from(outcome === "bad-json" ? "{" : JSON.stringify({ verdict: { verdict: outcome } })); },
+      measureAttempt: async () => {
+        events.push("effects");
+        if (outcome === "throw") throw new Error("prelaunch");
+        return Buffer.from(
+          outcome === "bad-json" ? "{" : JSON.stringify({ verdict: { verdict: outcome } }),
+        );
+      },
       readSnapshot: async () => ({}),
     });
     const known = ["pass", "fail"].includes(outcome);
@@ -1000,7 +1085,11 @@ test("campaign early exceptions remain unknown terminals and never seal as compl
 
 test("post-verdict cleanup saves an independent after inventory and refuses unknown signals", async () => {
   const { cleanupOwned } = await import("./calendar-measure.mjs");
-  for (const [signalOk, remains, expected] of [[true, false, "clean"], [false, false, "unknown"], [true, true, "unknown"]]) {
+  for (const [signalOk, remains, expected] of [
+    [true, false, "clean"],
+    [false, false, "unknown"],
+    [true, true, "unknown"],
+  ]) {
     let calls = 0;
     const target = row({ pid: 201, sid: 300 });
     const result = await cleanupOwned({
@@ -1014,7 +1103,6 @@ test("post-verdict cleanup saves an independent after inventory and refuses unkn
   }
 });
 
-
 function nativeFixture() {
   const input = runInput();
   input.plan = { ...pinInput().plan, positive: false };
@@ -1022,100 +1110,870 @@ function nativeFixture() {
   const start = "Fri Oct 2 06:00:00 2026";
   const header = (role, pid) => ({ type: "header", role, pid, started: start, harnessVersion: h });
   let tick = 0;
-  const birth = (role, n, pid, purpose) => ({ type: "birth", handle: `${role}:${n}`, pid, uid: 501, purpose, file: "node", argvSha256: "a".repeat(64), spawnMonoNs: String(++tick) });
-  const exit = (role, n, code = 0) => ({ type: "exit", handle: `${role}:${n}`, code, signal: null, exitMonoNs: String(++tick) });
-  const identity = (role, n, pid) => ({ type: "identity", handle: `${role}:${n}`, pid, started: start });
+  const birth = (role, n, pid, purpose) => ({
+    type: "birth",
+    handle: `${role}:${n}`,
+    pid,
+    uid: 501,
+    purpose,
+    file: "node",
+    argvSha256: "a".repeat(64),
+    spawnMonoNs: String(++tick),
+  });
+  const exit = (role, n, code = 0) => ({
+    type: "exit",
+    handle: `${role}:${n}`,
+    code,
+    signal: null,
+    exitMonoNs: String(++tick),
+  });
+  const identity = (role, n, pid) => ({
+    type: "identity",
+    handle: `${role}:${n}`,
+    pid,
+    started: start,
+  });
   const files = {
-    "measure.jsonl": [header("measure", 100), birth("measure", 1, 300, "outer"), identity("measure", 1, 300), exit("measure", 1)],
-    "outer.jsonl": [header("outer", 300), birth("outer", 1, 301, "claim"), exit("outer", 1), birth("outer", 2, 400, "inner"), identity("outer", 2, 400), exit("outer", 2)],
+    "measure.jsonl": [
+      header("measure", 100),
+      birth("measure", 1, 300, "outer"),
+      identity("measure", 1, 300),
+      exit("measure", 1),
+    ],
+    "outer.jsonl": [
+      header("outer", 300),
+      birth("outer", 1, 301, "claim"),
+      exit("outer", 1),
+      birth("outer", 2, 400, "inner"),
+      identity("outer", 2, 400),
+      exit("outer", 2),
+    ],
     "inner.jsonl": [header("inner", 400), birth("inner", 1, 500, "daemon"), exit("inner", 1)],
   };
   const queries = [];
-  const answer = (stdout, code = 0) => ({ stdout, code, stderr: "", timedOut: false, truncated: false });
+  const answer = (stdout, code = 0) => ({
+    stdout,
+    code,
+    stderr: "",
+    timedOut: false,
+    truncated: false,
+  });
   const query = (purpose, file, args, stdout, code = 0) => {
     const n = files["measure.jsonl"].filter((r) => r.type === "birth").length + 1;
-    const b = birth("measure", n, 600 + n, purpose); b.file = file; b.argvSha256 = sha(JSON.stringify([file, ...args]));
+    const b = birth("measure", n, 600 + n, purpose);
+    b.file = file;
+    b.argvSha256 = sha(JSON.stringify([file, ...args]));
     files["measure.jsonl"].push(b, exit("measure", n, code));
-    queries.push({ purpose, file, args, answer: { ...answer(stdout, code), handle: b.handle, pid: b.pid } });
+    queries.push({
+      purpose,
+      file,
+      args,
+      answer: { ...answer(stdout, code), handle: b.handle, pid: b.pid },
+    });
   };
   const sources = {};
-  for (const { path, text } of Object.values(REFUSAL_FORMATS)) sources[path] = (sources[path] ?? "") + text + "\n";
-  for (const [path, text] of Object.entries(sources)) query("pinned-source", "git", ["-C", "/source", "show", `${PINS.sourceCommit}:${path}`], text);
+  for (const { path, text } of Object.values(REFUSAL_FORMATS))
+    sources[path] = (sources[path] ?? "") + text + "\n";
+  for (const [path, text] of Object.entries(sources))
+    query("pinned-source", "git", ["-C", "/source", "show", `${PINS.sourceCommit}:${path}`], text);
   for (let i = 0; i < 2; i++) {
-    query("inventory", "ps", [], "1 0 1 0 Thu Jan 1 00:00:00 1970 S launchd\n100 1 50 501 Fri Oct 2 06:00:00 2026 S node measure\n");
+    query(
+      "inventory",
+      "ps",
+      [],
+      "1 0 1 0 Thu Jan 1 00:00:00 1970 S launchd\n100 1 50 501 Fri Oct 2 06:00:00 2026 S node measure\n",
+    );
     query("getsid", "python3", [], '{"1":1,"100":50}');
   }
   query("claims-read", "python3", [], '{"claims":[]}');
   query("lsof", "lsof", [], "", 1);
   input.records = validateRecords(files);
   input.validator = validatorControls(files);
-  input.inventory = judgeInventory([[{ pid: 1, ppid: 0, pgid: 1, uid: 0, started: "Thu Jan 1 00:00:00 1970", stat: "S", args: "launchd", sid: 1 }, { pid: 100, ppid: 1, pgid: 50, uid: 501, started: start, stat: "S", args: "node measure", sid: 50 }], [{ pid: 1, ppid: 0, pgid: 1, uid: 0, started: "Thu Jan 1 00:00:00 1970", stat: "S", args: "launchd", sid: 1 }, { pid: 100, ppid: 1, pgid: 50, uid: 501, started: start, stat: "S", args: "node measure", sid: 50 }]], { sessionId: 300, recorded: [], privateDir: "/run", launchTime, rootPid: 100 });
-  const report = { ...assembleRun(input), launchTime, chain: input.chain, kind: "certificate", escalation: "on", harnessVersion: h, pins: input.plan.pins, root: { pid: 100, uid: 501, started: start, sid: 50 }, rootSid: 50, accountingDirectory: "/run", cleanup: { outcome: "clean", before: [], signals: [], after: [] } };
-  report.native = { schema: "calendar-native-proof/v1", rawPlan: Buffer.from(JSON.stringify(input.plan)).toString("base64"), rawOuterResult: Buffer.from(JSON.stringify(input.outerResult)).toString("base64"), rawRecords: Object.fromEntries(Object.entries(files).map(([name, rows]) => [name, Buffer.from(rows.map((r) => JSON.stringify(r) + "\n").join("")).toString("base64")])), queries, inventoryStartedAt: launchTime, rawBound: null, portctlSha256: PINS.portctlSha256 };
+  input.inventory = judgeInventory(
+    [
+      [
+        {
+          pid: 1,
+          ppid: 0,
+          pgid: 1,
+          uid: 0,
+          started: "Thu Jan 1 00:00:00 1970",
+          stat: "S",
+          args: "launchd",
+          sid: 1,
+        },
+        {
+          pid: 100,
+          ppid: 1,
+          pgid: 50,
+          uid: 501,
+          started: start,
+          stat: "S",
+          args: "node measure",
+          sid: 50,
+        },
+      ],
+      [
+        {
+          pid: 1,
+          ppid: 0,
+          pgid: 1,
+          uid: 0,
+          started: "Thu Jan 1 00:00:00 1970",
+          stat: "S",
+          args: "launchd",
+          sid: 1,
+        },
+        {
+          pid: 100,
+          ppid: 1,
+          pgid: 50,
+          uid: 501,
+          started: start,
+          stat: "S",
+          args: "node measure",
+          sid: 50,
+        },
+      ],
+    ],
+    { sessionId: 300, recorded: [], privateDir: "/run", launchTime, rootPid: 100 },
+  );
+  const report = {
+    ...assembleRun(input),
+    launchTime,
+    chain: input.chain,
+    kind: "certificate",
+    escalation: "on",
+    harnessVersion: h,
+    pins: input.plan.pins,
+    root: { pid: 100, uid: 501, started: start, sid: 50 },
+    rootSid: 50,
+    accountingDirectory: "/run",
+    cleanup: { outcome: "clean", before: [], signals: [], after: [] },
+  };
+  report.native = {
+    schema: "calendar-native-proof/v1",
+    rawPlan: Buffer.from(JSON.stringify(input.plan)).toString("base64"),
+    rawOuterResult: Buffer.from(JSON.stringify(input.outerResult)).toString("base64"),
+    rawRecords: Object.fromEntries(
+      Object.entries(files).map(([name, rows]) => [
+        name,
+        Buffer.from(rows.map((r) => JSON.stringify(r) + "\n").join("")).toString("base64"),
+      ]),
+    ),
+    queries,
+    inventoryStartedAt: launchTime,
+    rawBound: null,
+    portctlSha256: PINS.portctlSha256,
+  };
+  const cleanupQueries = queries.filter((q) => ["inventory", "getsid"].includes(q.purpose));
+  const handles = new Set(cleanupQueries.map((q) => q.answer.handle));
+  report.cleanup = {
+    outcome: "clean",
+    before: input.inventory.passes[0].rows,
+    after: input.inventory.passes[0].rows,
+    signals: [],
+    queries: cleanupQueries,
+    rawRecords: Buffer.from(
+      [files["measure.jsonl"][0], ...files["measure.jsonl"].filter((r) => handles.has(r.handle))]
+        .map((r) => JSON.stringify(r) + "\n")
+        .join(""),
+    ).toString("base64"),
+  };
+  report.cleanup.before = parseInventory(
+    queries.find((q) => q.purpose === "inventory").answer.stdout,
+  ).map((r) => ({ ...r, sid: r.pid === 1 ? 1 : 50 }));
+  report.cleanup.after = structuredClone(report.cleanup.before);
   return JSON.parse(JSON.stringify(report));
 }
 
-import { validateRecords, validatorControls, judgeInventory, REFUSAL_FORMATS } from "./calendar-accounting.mjs";
+import {
+  validateRecords,
+  validatorControls,
+  judgeInventory,
+  REFUSAL_FORMATS,
+  parseInventory,
+} from "./calendar-accounting.mjs";
 
 test("native certificate facts are recomputed from raw records rather than contradictory summaries", async () => {
   const { recomputeNativeReport } = await import("./calendar-measure.mjs");
   const base = nativeFixture();
   assert.equal(recomputeNativeReport(base).ok, true);
   for (const change of [
-    (r) => { r.records.ok = false; },
-    (r) => { r.records.signals = 1; },
-    (r) => { r.verdict.conditions.A.outcome = "fail"; },
-    (r) => { r.inventory.outcome = "inconclusive"; },
-    (r) => { r.cleanup.outcome = "unknown"; },
-    (r) => { delete r.native.rawRecords["inner.jsonl"]; },
-    (r) => { r.native.queries.find((q) => q.purpose === "inventory").answer.timedOut = true; },
+    (r) => {
+      r.records.ok = false;
+    },
+    (r) => {
+      r.records.signals = 1;
+    },
+    (r) => {
+      r.verdict.conditions.A.outcome = "fail";
+    },
+    (r) => {
+      r.inventory.outcome = "inconclusive";
+    },
+    (r) => {
+      r.cleanup.outcome = "unknown";
+    },
+    (r) => {
+      delete r.cleanup.rawRecords;
+    },
+    (r) => {
+      r.cleanup.queries = r.cleanup.queries.slice(0, 2);
+    },
+    (r) => {
+      r.cleanup.after = [];
+    },
+    (r) => {
+      delete r.native.rawRecords["inner.jsonl"];
+    },
+    (r) => {
+      r.native.queries.find((q) => q.purpose === "inventory").answer.timedOut = true;
+    },
   ]) {
-    const report = structuredClone(base); change(report);
+    const report = structuredClone(base);
+    change(report);
     assert.equal(recomputeNativeReport(report).ok, false);
   }
 });
 
-
 test("campaign packets bind the current day, whole H file set and fixed real build", async () => {
-  const { validateCampaignPacket, FIXED_BUILD_PINS, HARNESS_FILES } = await import("./calendar-measure.mjs");
+  const { validateCampaignPacket, FIXED_BUILD_PINS, HARNESS_FILES } =
+    await import("./calendar-measure.mjs");
   const filePins = Object.fromEntries(HARNESS_FILES.map((name) => [name, "a".repeat(64)]));
   const context = { utcDay: "2026-10-02", harnessH: "b".repeat(64), filePins };
-  const packet = { schema: "calendar-campaign/v1", campaign: "unit", authorityId: "root-unit", utcDay: context.utcDay, runRoot: "/run", harnessH: context.harnessH, harnessFiles: filePins, buildPins: { ...FIXED_BUILD_PINS }, bootstrap: "ordinary-user-own-ps", attempts: [{ attemptId: "a", planPath: "/plan", planSha256: "c".repeat(64) }], refusalAttemptId: "a", controlAttemptIds: ["b", "c", "d", "e", "f"] };
-  packet.attempts.push(...packet.controlAttemptIds.map((attemptId) => ({ attemptId, planPath: `/plan-${attemptId}`, planSha256: "c".repeat(64) })));
+  const packet = {
+    schema: "calendar-campaign/v1",
+    campaign: "unit",
+    authorityId: "root-unit",
+    utcDay: context.utcDay,
+    runRoot: "/run",
+    harnessH: context.harnessH,
+    harnessFiles: filePins,
+    buildPins: { ...FIXED_BUILD_PINS },
+    bootstrap: "ordinary-user-own-ps",
+    attempts: [{ attemptId: "a", planPath: "/plan", planSha256: "c".repeat(64) }],
+    refusalAttemptId: "a",
+    controlAttemptIds: ["b", "c", "d", "e", "f"],
+  };
+  packet.attempts.push(
+    ...packet.controlAttemptIds.map((attemptId) => ({
+      attemptId,
+      planPath: `/plan-${attemptId}`,
+      planSha256: "c".repeat(64),
+    })),
+  );
   assert.deepEqual(validateCampaignPacket(packet, context), []);
   for (const change of [
-    (p) => { p.utcDay = "2026-10-03"; },
-    (p) => { p.harnessH = "d".repeat(64); },
-    (p) => { delete p.harnessFiles["calendar-attempt-ledger.mjs"]; },
-    (p) => { p.buildPins.sourceCommit = "e".repeat(40); },
-    (p) => { p.attempts.push(p.attempts[0]); },
-    (p) => { p.controlAttemptIds[0] = "missing"; },
-    (p) => { p.runRoot = "/alias/../run"; },
-    (p) => { p.externalApprovalVerified = true; },
-  ]) { const changed = structuredClone(packet); change(changed); assert.notEqual(validateCampaignPacket(changed, context).length, 0); }
+    (p) => {
+      p.utcDay = "2026-10-03";
+    },
+    (p) => {
+      p.harnessH = "d".repeat(64);
+    },
+    (p) => {
+      delete p.harnessFiles["calendar-attempt-ledger.mjs"];
+    },
+    (p) => {
+      p.buildPins.sourceCommit = "e".repeat(40);
+    },
+    (p) => {
+      p.attempts.push(p.attempts[0]);
+    },
+    (p) => {
+      p.controlAttemptIds[0] = "missing";
+    },
+    (p) => {
+      p.runRoot = "/alias/../run";
+    },
+    (p) => {
+      p.externalApprovalVerified = true;
+    },
+  ]) {
+    const changed = structuredClone(packet);
+    change(changed);
+    assert.notEqual(validateCampaignPacket(changed, context).length, 0);
+  }
 });
-
 
 test("sealed campaign validation rejects omission, extras and raw nested report substitution", async () => {
   const { evaluateCampaignSnapshot } = await import("./calendar-measure.mjs");
-  const scope = { campaign: "unit", utcDay: "2026-10-02", runRoot: "/run", harnessH: "a".repeat(64), buildPins: { sourceCommit: "a".repeat(40), binarySha256: "b".repeat(64), runnerSha256: "c".repeat(64) }, nativeRoot: { pid: 100, start: "Fri Oct 2 06:00:00 2026", sid: 50 } };
-  const authorityBytes = Buffer.from(JSON.stringify({ schema: "scoped-attempt-authority/v1", authorityId: "root-unit", scope }));
+  const scope = {
+    campaign: "unit",
+    utcDay: "2026-10-02",
+    runRoot: "/run",
+    harnessH: "a".repeat(64),
+    buildPins: {
+      sourceCommit: "a".repeat(40),
+      binarySha256: "b".repeat(64),
+      runnerSha256: "c".repeat(64),
+    },
+    nativeRoot: { pid: 100, start: "Fri Oct 2 06:00:00 2026", sid: 50 },
+  };
+  const authorityBytes = Buffer.from(
+    JSON.stringify({ schema: "scoped-attempt-authority/v1", authorityId: "root-unit", scope }),
+  );
   const rawPlan = Buffer.from("{}");
   const rawReport = Buffer.from(JSON.stringify(loaderReport("certificate")));
-  const envelope = Buffer.from(JSON.stringify({ schema: "attempt-report/v1", scope, attemptId: "one", outcome: "pass", rawPlan: rawPlan.toString("base64"), rawPlanSha256: sha(rawPlan), rawReport: rawReport.toString("base64"), rawReportSha256: sha(rawReport) }));
+  const envelope = Buffer.from(
+    JSON.stringify({
+      schema: "attempt-report/v1",
+      scope,
+      attemptId: "one",
+      outcome: "pass",
+      rawPlan: rawPlan.toString("base64"),
+      rawPlanSha256: sha(rawPlan),
+      rawReport: rawReport.toString("base64"),
+      rawReportSha256: sha(rawReport),
+    }),
+  );
   const rows = [
     { type: "header", seq: 0, scope, authoritySha256: sha(authorityBytes) },
     { type: "birth", seq: 1, scope, attemptId: "one", planSha256: sha(rawPlan) },
-    { type: "terminal", seq: 2, scope, attemptId: "one", reportFile: "report-1.json", reportSha256: sha(envelope), reportBytes: envelope.length },
+    {
+      type: "terminal",
+      seq: 2,
+      scope,
+      attemptId: "one",
+      reportFile: "report-1.json",
+      reportSha256: sha(envelope),
+      reportBytes: envelope.length,
+    },
     { type: "seal", seq: 3, scope, tail: 2, births: 1 },
   ];
-  const snapshot = { authorityBytes, ledgerBytes: Buffer.from(rows.map((r) => JSON.stringify(r) + "\n").join("")), reports: new Map([["report-1.json", envelope]]) };
-  const packet = { authorityId: "root-unit", ...scope, attempts: [{ attemptId: "one", planPath: "/plan", planSha256: sha(rawPlan) }], refusalAttemptId: "one", controlAttemptIds: [] };
-  assert.equal(evaluateCampaignSnapshot(packet, snapshot).verdict, "fail", "summary-only data is not native proof");
+  const snapshot = {
+    authorityBytes,
+    ledgerBytes: Buffer.from(rows.map((r) => JSON.stringify(r) + "\n").join("")),
+    reports: new Map([["report-1.json", envelope]]),
+  };
+  const packet = {
+    authorityId: "root-unit",
+    ...scope,
+    attempts: [{ attemptId: "one", planPath: "/plan", planSha256: sha(rawPlan) }],
+    refusalAttemptId: "one",
+    controlAttemptIds: [],
+  };
+  assert.equal(
+    evaluateCampaignSnapshot(packet, snapshot).verdict,
+    "fail",
+    "summary-only data is not native proof",
+  );
   for (const change of [
-    (s) => { s.reports.clear(); },
-    (s) => { s.reports.set("extra.json", envelope); },
-    (s) => { s.reports.set("report-1.json", Buffer.from("{}")); },
-  ]) { const changed = { ...snapshot, reports: new Map(snapshot.reports) }; change(changed); const result = evaluateCampaignSnapshot(packet, changed); assert.equal(result.verdict, "fail"); assert.equal(result.certificate, null); }
-  for (const change of [(p) => { p.attempts = []; }, (p) => { p.attempts.push(p.attempts[0]); }, (p) => { p.utcDay = "2026-10-03"; }]) { const changed = structuredClone(packet); change(changed); assert.equal(evaluateCampaignSnapshot(changed, snapshot).verdict, "fail"); }
+    (s) => {
+      s.reports.clear();
+    },
+    (s) => {
+      s.reports.set("extra.json", envelope);
+    },
+    (s) => {
+      s.reports.set("report-1.json", Buffer.from("{}"));
+    },
+  ]) {
+    const changed = { ...snapshot, reports: new Map(snapshot.reports) };
+    change(changed);
+    const result = evaluateCampaignSnapshot(packet, changed);
+    assert.equal(result.verdict, "fail");
+    assert.equal(result.certificate, null);
+  }
+  for (const change of [
+    (p) => {
+      p.attempts = [];
+    },
+    (p) => {
+      p.attempts.push(p.attempts[0]);
+    },
+    (p) => {
+      p.utcDay = "2026-10-03";
+    },
+  ]) {
+    const changed = structuredClone(packet);
+    change(changed);
+    assert.equal(evaluateCampaignSnapshot(changed, snapshot).verdict, "fail");
+  }
+});
+
+test("campaign traces agree with an independent model for generated terminal sequences", async () => {
+  const { produceCampaign } = await import("./calendar-measure.mjs");
+  const outcomes = ["pass", "fail", "inconclusive", "throw"];
+  for (let seed = 0; seed < 64; seed++) {
+    const expected = [];
+    const actual = [];
+    const terminals = [];
+    const attempts = Array.from({ length: 3 }, (_, i) => ({
+      attemptId: `a${i}`,
+      planPath: `/a${i}`,
+      planSha256: sha(Buffer.from(JSON.stringify({ i }))),
+    }));
+    const sequence = Array.from({ length: 3 }, (_, i) => outcomes[Math.floor(seed / 4 ** i) % 4]);
+    for (let i = 0; i < sequence.length; i++)
+      expected.push(
+        `birth:${i}`,
+        `effects:${i}`,
+        `terminal:${i}:${["pass", "fail"].includes(sequence[i]) ? sequence[i] : "unknown"}`,
+      );
+    expected.push("seal", "close");
+    const result = await produceCampaign({
+      authorityId: "unit",
+      attempts,
+      bootstrap: async () => ({
+        scope: { utcDay: "2026-10-02" },
+        receipt: { phase: "infrastructure" },
+      }),
+      readPlan: async (path) => Buffer.from(JSON.stringify({ i: Number(path.at(-1)) })),
+      createLedger: async () => ({
+        registerBirth: async ({ attemptId }) => {
+          await Promise.resolve();
+          actual.push(`birth:${attemptId.at(-1)}`);
+          return { durable: true };
+        },
+        recordTerminal: async ({ attemptId, reportBytes }) => {
+          const envelope = JSON.parse(reportBytes);
+          terminals.push(envelope);
+          actual.push(`terminal:${attemptId.at(-1)}:${envelope.outcome}`);
+          return { durable: true };
+        },
+        seal: async () => {
+          actual.push("seal");
+          if (terminals.some((e) => e.outcome === "unknown")) throw new Error("unknown");
+          return { state: "complete", durabilityAcknowledged: true };
+        },
+        close: async () => {
+          actual.push("close");
+        },
+      }),
+      measureAttempt: async (raw) => {
+        const { i } = JSON.parse(raw);
+        actual.push(`effects:${i}`);
+        if (sequence[i] === "throw") throw new Error("prelaunch exception");
+        return Buffer.from(JSON.stringify({ verdict: { verdict: sequence[i] } }));
+      },
+      readSnapshot: async () => ({}),
+    });
+    assert.deepEqual(actual, expected, `seed ${seed}`);
+    assert.equal(
+      result.state,
+      sequence.every((o) => ["pass", "fail"].includes(o)) ? "complete" : "unknown",
+    );
+  }
+});
+
+test("campaign failures in birth, terminal or seal cannot start later effects or issue approval", async () => {
+  const { produceCampaign } = await import("./calendar-measure.mjs");
+  for (const boundary of ["birth", "terminal", "seal", "snapshot", "day-rollover"]) {
+    const events = [];
+    const raw = Buffer.from("{}");
+    const result = await produceCampaign({
+      authorityId: "unit",
+      attempts: [{ attemptId: "a", planPath: "/a", planSha256: sha(raw) }],
+      bootstrap: async () => ({
+        scope: { utcDay: "2026-10-02" },
+        receipt: { phase: "infrastructure" },
+      }),
+      readPlan: async () => raw,
+      createLedger: async () => ({
+        registerBirth: async () => {
+          events.push("birth");
+          if (["birth", "day-rollover"].includes(boundary)) throw new Error(boundary);
+          return { durable: true };
+        },
+        recordTerminal: async () => {
+          events.push("terminal");
+          if (boundary === "terminal") throw new Error(boundary);
+          return { durable: true };
+        },
+        seal: async () => {
+          events.push("seal");
+          if (boundary === "seal") throw new Error(boundary);
+          return { state: "complete", durabilityAcknowledged: true };
+        },
+        close: async () => {
+          events.push("close");
+        },
+      }),
+      measureAttempt: async () => {
+        events.push("effects");
+        return Buffer.from('{"verdict":{"verdict":"pass"}}');
+      },
+      readSnapshot: async () => {
+        throw new Error("snapshot");
+      },
+    });
+    assert.equal(result.state, "unknown");
+    assert.equal(result.externalApprovalVerified, false);
+    assert.equal(events.at(-1), "close");
+    if (["birth", "day-rollover"].includes(boundary)) assert.deepEqual(events, ["birth", "close"]);
+  }
+});
+
+function nativeControlFixture(mode) {
+  const report = nativeFixture();
+  const proof = report.native;
+  const plan = JSON.parse(Buffer.from(proof.rawPlan, "base64"));
+  const outerResult = JSON.parse(Buffer.from(proof.rawOuterResult, "base64"));
+  if (mode === "positive") plan.positive = true;
+  else {
+    plan.control = { mode };
+    delete plan.positive;
+  }
+  plan.session.input.timeZone =
+    mode === "positive" || CONTROL_VARIANTS[mode].fixture === "valid"
+      ? "UTC"
+      : "Invalid/CalendarZone";
+  const files = Object.fromEntries(
+    Object.entries(proof.rawRecords).map(([name, raw]) => [
+      name,
+      Buffer.from(raw, "base64")
+        .toString()
+        .trimEnd()
+        .split("\n")
+        .map((line) => JSON.parse(line)),
+    ]),
+  );
+  const helperStart = "Fri Oct 2 06:00:05 2026";
+  const helper = { pid: 900, uid: 501, started: helperStart, pgid: mode === "orphan" ? 300 : 900 };
+  if (mode === "positive") {
+    outerResult.inner.observationHandshake = true;
+    outerResult.callback = { matched: true };
+  } else {
+    outerResult.identity.controlMode = mode;
+    outerResult.inner.injected = { pid: 900, acquired: mode !== "orphan", firstSighting: helper };
+    if (mode !== "orphan") outerResult.inner.ownedProcesses = [helper];
+  }
+  if (mode === "leftover")
+    files["measure.jsonl"].push({
+      type: "signal",
+      target: { pid: 900, uid: 501, started: helperStart },
+      kind: "SIGTERM",
+      monoNs: "9999",
+    });
+  for (let i = 0; i < proof.queries.length; i++) {
+    const q = proof.queries[i];
+    if (q.purpose === "inventory" && ["orphan", "escaper", "listener"].includes(mode)) {
+      q.answer.stdout += `900 1 ${helper.pgid} 501 ${helperStart} S helper\n`;
+      const sessions = JSON.parse(proof.queries[i + 1].answer.stdout);
+      sessions["900"] = mode === "orphan" ? 300 : 900;
+      proof.queries[i + 1].answer.stdout = JSON.stringify(sessions);
+    }
+    if (q.purpose === "lsof" && mode === "listener") {
+      q.answer.stdout = "p900\ncunit-helper\nnTCP *:12345 (LISTEN)\n";
+      q.answer.code = 0;
+      files["measure.jsonl"].find((r) => r.type === "exit" && r.handle === q.answer.handle).code =
+        0;
+    }
+  }
+  const records = validateRecords(files);
+  const identities = recordedIdentities({
+    files,
+    inner: outerResult.inner,
+    outerSupervision: outerResult.supervision,
+    selfPid: 100,
+    selfUid: 501,
+  });
+  const passes = [];
+  for (let i = 0; i < proof.queries.length; i++)
+    if (proof.queries[i].purpose === "inventory") {
+      const sessions = JSON.parse(proof.queries[i + 1].answer.stdout);
+      passes.push(
+        parseInventory(proof.queries[i].answer.stdout).map((r) => ({
+          ...r,
+          sid: sessions[String(r.pid)],
+        })),
+      );
+    }
+  const inventory = judgeInventory(passes, {
+    sessionId: 300,
+    recorded: identities,
+    privateDir: "/run",
+    launchTime,
+    rootPid: 100,
+  });
+  const bound = mode === "listener" ? { boundAt: launchTime / 1000 - 1, pid: 900 } : null;
+  const assembled = assembleRun({
+    plan,
+    kind: planKind(plan),
+    version: PINS.harnessVersion,
+    outerResult,
+    chain: report.chain,
+    records,
+    validator: validatorControls(files),
+    inventory,
+    claims: [],
+    lsof: proof.queries.filter((q) => q.purpose === "lsof").map((q) => interpretLsof(q.answer)),
+    alive: inventory.passes.at(-1).survivors.map((e) => e.row.pid),
+    bound: bound === null ? null : boundBefore(bound, launchTime),
+    extra: {
+      portctlSha256: PINS.portctlSha256,
+      refusalCheck: {
+        ok: mode === "orphan" || mode === "listener",
+        problems:
+          mode === "orphan" || mode === "listener"
+            ? []
+            : ["the pinned refusal line is not explained by the pinned format strings"],
+      },
+    },
+  });
+  Object.assign(report, assembled, {
+    kind: mode === "positive" ? "positive" : "control",
+    escalation: planKind(plan).escalation,
+  });
+  proof.rawPlan = Buffer.from(JSON.stringify(plan)).toString("base64");
+  proof.rawOuterResult = Buffer.from(JSON.stringify(outerResult)).toString("base64");
+  proof.rawRecords = Object.fromEntries(
+    Object.entries(files).map(([name, rows]) => [
+      name,
+      Buffer.from(rows.map((r) => JSON.stringify(r) + "\n").join("")).toString("base64"),
+    ]),
+  );
+  proof.rawBound = bound === null ? null : Buffer.from(JSON.stringify(bound)).toString("base64");
+  return JSON.parse(JSON.stringify(report));
+}
+
+import { interpretLsof } from "./calendar-accounting.mjs";
+
+test("raw native positive and all four negative controls reproduce their named facts", async () => {
+  const { recomputeNativeReport } = await import("./calendar-measure.mjs");
+  for (const mode of ["positive", "orphan", "escaper", "listener", "leftover"]) {
+    const report = nativeControlFixture(mode);
+    assert.equal(report.control.counts, true, mode);
+    assert.equal(
+      recomputeNativeReport(report).ok,
+      true,
+      `${mode}: ${JSON.stringify(recomputeNativeReport(report))}`,
+    );
+    const fake = structuredClone(report);
+    fake.control.counts = false;
+    assert.equal(recomputeNativeReport(fake).ok, false, mode);
+  }
+});
+
+function completeCampaignFixture() {
+  const h = "a".repeat(64);
+  const reports = [
+    nativeFixture(),
+    ...["positive", "orphan", "escaper", "listener", "leftover"].map(nativeControlFixture),
+  ];
+  for (const report of reports) {
+    report.harnessVersion = h;
+    report.identity.harnessVersion = h;
+    report.pins.harnessVersion = h;
+    const plan = JSON.parse(Buffer.from(report.native.rawPlan, "base64"));
+    plan.pins.harnessVersion = h;
+    report.native.rawPlan = Buffer.from(JSON.stringify(plan)).toString("base64");
+    const replaceHeader = (raw) => {
+      const rows = Buffer.from(raw, "base64")
+        .toString()
+        .trimEnd()
+        .split("\n")
+        .map((line) => JSON.parse(line));
+      rows[0].harnessVersion = h;
+      return Buffer.from(rows.map((r) => JSON.stringify(r) + "\n").join("")).toString("base64");
+    };
+    report.native.rawRecords = Object.fromEntries(
+      Object.entries(report.native.rawRecords).map(([name, raw]) => [name, replaceHeader(raw)]),
+    );
+    report.cleanup.rawRecords = replaceHeader(report.cleanup.rawRecords);
+  }
+  const scope = {
+    campaign: "unit",
+    utcDay: "2026-10-02",
+    runRoot: "/run",
+    harnessH: h,
+    buildPins: {
+      sourceCommit: PINS.sourceCommit,
+      binarySha256: PINS.binarySha256,
+      runnerSha256: PINS.runnerSha256,
+    },
+    nativeRoot: { pid: 100, start: reports[0].root.started, sid: 50 },
+  };
+  const authorityBytes = Buffer.from(
+    JSON.stringify({ schema: "scoped-attempt-authority/v1", authorityId: "root-unit", scope }),
+  );
+  const records = [{ type: "header", seq: 0, scope, authoritySha256: sha(authorityBytes) }];
+  const rawReports = new Map();
+  const attempts = [];
+  for (const [i, report] of reports.entries()) {
+    const attemptId = `a${i}`;
+    const rawPlan = Buffer.from(report.native.rawPlan, "base64");
+    const rawReport = Buffer.from(JSON.stringify(report));
+    const birth = {
+      type: "birth",
+      seq: records.length,
+      scope,
+      attemptId,
+      planSha256: sha(rawPlan),
+    };
+    records.push(birth);
+    const raw = Buffer.from(
+      JSON.stringify({
+        schema: "attempt-report/v1",
+        scope,
+        attemptId,
+        outcome: report.verdict.verdict,
+        rawPlan: rawPlan.toString("base64"),
+        rawPlanSha256: sha(rawPlan),
+        rawReport: rawReport.toString("base64"),
+        rawReportSha256: sha(rawReport),
+        error: null,
+      }),
+    );
+    const name = `report-${birth.seq}.json`;
+    rawReports.set(name, raw);
+    records.push({
+      type: "terminal",
+      seq: records.length,
+      scope,
+      attemptId,
+      reportFile: name,
+      reportSha256: sha(raw),
+      reportBytes: raw.length,
+    });
+    attempts.push({ attemptId, planPath: `/plan-${i}`, planSha256: sha(rawPlan) });
+  }
+  records.push({
+    type: "seal",
+    seq: records.length,
+    scope,
+    tail: records.length - 1,
+    births: reports.length,
+  });
+  return {
+    packet: {
+      ...scope,
+      authorityId: "root-unit",
+      attempts,
+      refusalAttemptId: "a0",
+      controlAttemptIds: ["a1", "a2", "a3", "a4", "a5"],
+    },
+    snapshot: {
+      authorityBytes,
+      ledgerBytes: Buffer.from(records.map((r) => JSON.stringify(r) + "\n").join("")),
+      reports: rawReports,
+    },
+    records,
+  };
+}
+
+test("a complete raw sealed fixture passes only as a scoped predicate and retains every birth", async () => {
+  const { evaluateCampaignSnapshot } = await import("./calendar-measure.mjs");
+  const { packet, snapshot } = completeCampaignFixture();
+  const result = evaluateCampaignSnapshot(packet, snapshot);
+  assert.equal(result.verdict, "pass", JSON.stringify(result.problems));
+  assert.equal(result.predicateOnly, true);
+  assert.equal(result.nativeCertificateIssued, false);
+  assert.equal(result.externalApprovalVerified, false);
+  assert.equal(result.allDayCertified, false);
+  assert.equal(result.historicalCompleteness, "UNKNOWN");
+  assert.equal(result.allBirths.length, 6);
+  for (const change of [
+    (p) => {
+      p.attempts.pop();
+    },
+    (p) => {
+      p.attempts.reverse();
+    },
+    (p) => {
+      p.attempts.push(p.attempts[0]);
+    },
+    (p) => {
+      p.controlAttemptIds[0] = p.refusalAttemptId;
+    },
+    (p) => {
+      p.buildPins.binarySha256 = "0".repeat(64);
+    },
+  ]) {
+    const changed = structuredClone(packet);
+    change(changed);
+    assert.equal(evaluateCampaignSnapshot(changed, snapshot).verdict, "fail");
+  }
+});
+
+test("file campaign entry points require an external host verifier rather than self approval", async () => {
+  const { campaign, certify } = await import("./calendar-measure.mjs");
+  for (const trustedPacketVerifier of [undefined, true, {}, "ROOT-approved", { closed: true }]) {
+    const result = await campaign("/missing-unit-packet", { trustedPacketVerifier });
+    assert.equal(result.verdict, "fail");
+    assert.equal(result.nativeCertificateIssued, false);
+    assert.equal(result.externalApprovalVerified, false);
+  }
+  const result = await certify("/missing-unit-manifest", { requireCampaign: true });
+  assert.equal(result.nativeCertificateIssued, false);
+});
+
+test("host binding requires a closed exact raw packet, H, build, root and lifetime receipt", async () => {
+  const { verifyTrustedBinding } = await import("./calendar-measure.mjs");
+  const request = {
+    schema: "calendar-trusted-binding/v1",
+    phase: "sealed-certificate",
+    packetSha256: sha(Buffer.from("raw packet")),
+    harnessH: "b".repeat(64),
+    harnessFiles: { file: "c".repeat(64) },
+    utcDay: "2026-10-02",
+    buildPins: { sourceCommit: "d".repeat(40) },
+    nativeRoot: { pid: 100, start: "native", sid: 50 },
+    campaign: "unit",
+    runRoot: "/run",
+    lifetime: { id: "unit-lifetime", pid: 100 },
+    authoritySha256: "e".repeat(64),
+    ledgerSha256: "f".repeat(64),
+  };
+  const good = async (input) => ({ ...input.binding, closed: true });
+  assert.deepEqual(await verifyTrustedBinding(good, request, Buffer.from("raw packet")), {
+    ...request,
+    closed: true,
+  });
+  for (const provider of [
+    undefined,
+    true,
+    async () => true,
+    async () => ({ closed: true }),
+    async () => ({ ...request, closed: false }),
+    async () => ({ ...request, closed: true, ledgerSha256: "0".repeat(64) }),
+    async () => ({ ...request, closed: true, lifetime: { id: "other", pid: 100 } }),
+  ]) {
+    await assert.rejects(verifyTrustedBinding(provider, request, Buffer.from("raw packet")));
+  }
+});
+
+test("nested raw report hashes and outcomes survive independent envelope rehash attacks", async () => {
+  const { evaluateCampaignSnapshot } = await import("./calendar-measure.mjs");
+  for (const change of [
+    (e) => {
+      e.rawReportSha256 = "0".repeat(64);
+    },
+    (e) => {
+      e.rawPlanSha256 = "0".repeat(64);
+    },
+    (e) => {
+      e.outcome = "fail";
+    },
+    (e) => {
+      e.error = "late unknown";
+    },
+    (e) => {
+      const r = JSON.parse(Buffer.from(e.rawReport, "base64"));
+      r.records.signals = 1;
+      const raw = Buffer.from(JSON.stringify(r));
+      e.rawReport = raw.toString("base64");
+      e.rawReportSha256 = sha(raw);
+    },
+    (e) => {
+      const r = JSON.parse(Buffer.from(e.rawReport, "base64"));
+      r.root.pid = 101;
+      const raw = Buffer.from(JSON.stringify(r));
+      e.rawReport = raw.toString("base64");
+      e.rawReportSha256 = sha(raw);
+    },
+  ]) {
+    const { packet, snapshot, records } = completeCampaignFixture();
+    const name = "report-1.json";
+    const envelope = JSON.parse(snapshot.reports.get(name));
+    change(envelope);
+    const raw = Buffer.from(JSON.stringify(envelope));
+    snapshot.reports.set(name, raw);
+    const terminal = records.find((r) => r.type === "terminal" && r.reportFile === name);
+    terminal.reportSha256 = sha(raw);
+    terminal.reportBytes = raw.length;
+    snapshot.ledgerBytes = Buffer.from(records.map((r) => JSON.stringify(r) + "\n").join(""));
+    assert.equal(evaluateCampaignSnapshot(packet, snapshot).verdict, "fail");
+  }
 });

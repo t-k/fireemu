@@ -3042,6 +3042,17 @@ for(const [kind,method]of Object.entries({created:'onCreate',updated:'onUpdate',
  exports[kind+'V2']=v2[{created:'onDocumentCreated',updated:'onDocumentUpdated',deleted:'onDocumentDeleted',written:'onDocumentWritten'}[kind]]('items/{id}',e=>report(kind+'V2',e.data,{...e,data:undefined}));
 }
 exports.authV2=v2.onDocumentCreatedWithAuthContext('items/{id}',e=>report('authV2',e.data,{...e,data:undefined}));
+exports.authWrittenV2=v2.onDocumentWrittenWithAuthContext('items/{id}',e=>report('authWrittenV2',e.data,{...e,data:undefined}));
+let wire;
+const rich=v2.onDocumentWritten('items/{id}',e=>{
+ appendFileSync(join(__dirname,'observations.jsonl'),JSON.stringify({name:'richV2',wire,data:{before:snap(e.data.before),after:snap(e.data.after)},event:{...e,data:undefined}})+'\n');
+});
+exports.richV2=Object.assign(async e=>{
+ if(!Buffer.isBuffer(e.data))throw Error('expected actual protobuf bytes');
+ const codec=require(join(SDK,'protos/compiledFirestore.js')).google.events.cloud.firestore.v1.DocumentEventData;
+ wire=codec.toObject(codec.decode(e.data),{longs:String,bytes:String});
+ return rich(e);
+},rich);
 let retried=false;
 exports.retryV2=v2.onDocumentCreated({document:'items/{id}',retry:true},async e=>{
  await report('retryV2',e.data,{...e,data:undefined});
@@ -3177,6 +3188,57 @@ exports.customV2=require(join(SDK,'lib/v2/providers/eventarc.js')).onCustomEvent
     for attempt in [1, 2] {
         retry_outcomes.push(runner.invoke(json!({"type":"invoke","invocationId":format!("retry-{attempt}"),"function":"retryV2","entryPoint":"retryV2","trigger":"firestore","event":replay}), Duration::from_secs(10)).await.outcome);
     }
+    let mut rich = after.clone();
+    let nanosecond =
+        fireemu_core_firestore::value::Timestamp::new(1_790_769_798, 846_431_123).unwrap();
+    rich.fields
+        .insert("large".into(), FsValue::Integer(i64::MAX));
+    rich.fields
+        .insert("small".into(), FsValue::Integer(i64::MIN));
+    rich.fields
+        .insert("bytes".into(), FsValue::Bytes(vec![0, 1, 255]));
+    rich.fields.insert(
+        "nested".into(),
+        FsValue::Map(
+            [(
+                "arr".into(),
+                FsValue::Array(vec![
+                    FsValue::Timestamp(nanosecond),
+                    FsValue::Bytes(vec![0, 1, 255]),
+                ]),
+            )]
+            .into_iter()
+            .collect(),
+        ),
+    );
+    let mut rich_event = firestore_event(
+        "rich",
+        "demo-app",
+        "(default)",
+        "nam5",
+        "items/one",
+        DocumentEvent::Written,
+        None,
+        Some(&rich),
+        START,
+        None,
+    );
+    rich_event["params"] = json!({"id":"one"});
+    let rich_outcome = runner.invoke(json!({"type":"invoke","invocationId":"rich","function":"richV2","entryPoint":"richV2","trigger":"firestore","event":rich_event}), Duration::from_secs(10)).await.outcome;
+    let mut written_auth = firestore_event(
+        "written-auth",
+        "demo-app",
+        "(default)",
+        "nam5",
+        "items/one",
+        DocumentEvent::Written,
+        Some(&rich),
+        None,
+        START,
+        Some(("system", Some("principal"))),
+    );
+    written_auth["params"] = json!({"id":"one"});
+    let written_auth_outcome = runner.invoke(json!({"type":"invoke","invocationId":"written-auth","function":"authWrittenV2","entryPoint":"authWrittenV2","trigger":"firestore","event":written_auth}), Duration::from_secs(10)).await.outcome;
     let bytes = std::fs::read_to_string(dir.0.join("observations.jsonl"));
     runner.shutdown().await;
     assert!(!runner.is_alive());
@@ -3214,7 +3276,15 @@ exports.customV2=require(join(SDK,'lib/v2/providers/eventarc.js')).onCustomEvent
         retry_outcomes[1],
         fireemu_adapter_functions::runner::InvokeOutcome::Ok
     );
-    assert_eq!(observations.len(), 18);
+    assert_eq!(
+        rich_outcome,
+        fireemu_adapter_functions::runner::InvokeOutcome::Ok
+    );
+    assert_eq!(
+        written_auth_outcome,
+        fireemu_adapter_functions::runner::InvokeOutcome::Ok
+    );
+    assert_eq!(observations.len(), 20);
     let document = "projects/demo-app/databases/(default)/documents/items/one";
     let database = "//firestore.googleapis.com/projects/demo-app/databases/(default)";
     for (observation, (_, generation, kind, old, new, event)) in
@@ -3249,8 +3319,7 @@ exports.customV2=require(join(SDK,'lib/v2/providers/eventarc.js')).onCustomEvent
             assert_eq!(observation["event"]["timestamp"], event["time"]);
         } else {
             assert_eq!(
-                observation["event"]["source"],
-                database,
+                observation["event"]["source"], database,
                 "Gen2 canonical database source for every document event"
             );
             for key in [
@@ -3283,6 +3352,33 @@ exports.customV2=require(join(SDK,'lib/v2/providers/eventarc.js')).onCustomEvent
         observations[16], observations[17],
         "actual failing and successful SDK retry callbacks retain identity and data"
     );
+    let wire = &observations[18]["wire"];
+    assert!(
+        wire.get("oldValue").is_none(),
+        "missing before stays omitted"
+    );
+    assert_eq!(
+        wire["value"]["fields"]["large"]["integerValue"],
+        i64::MAX.to_string()
+    );
+    assert_eq!(
+        wire["value"]["fields"]["small"]["integerValue"],
+        i64::MIN.to_string()
+    );
+    assert_eq!(wire["value"]["fields"]["bytes"]["bytesValue"], "AAH/");
+    assert_eq!(
+        wire["value"]["fields"]["nested"]["mapValue"]["fields"]["arr"]["arrayValue"]["values"][0]
+            ["timestampValue"],
+        json!({"seconds":"1790769798","nanos":846_431_123})
+    );
+    assert_eq!(observations[18]["data"]["before"]["exists"], false);
+    assert_eq!(observations[18]["data"]["after"]["path"], "items/one");
+    assert_eq!(observations[18]["event"]["source"], database);
+    assert_eq!(observations[19]["data"]["after"]["exists"], false);
+    assert_eq!(observations[19]["data"]["after"]["id"], "one");
+    assert_eq!(observations[19]["event"]["authType"], "system");
+    assert_eq!(observations[19]["event"]["authId"], "principal");
+    assert_eq!(observations[19]["event"]["source"], database);
 }
 
 proptest::proptest! {

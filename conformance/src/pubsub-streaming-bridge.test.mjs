@@ -962,7 +962,7 @@ test("writer_binding_order_and_physical_caps_fail_before_any_file_effect", () =>
     const recordBytes = Buffer.byteLength(JSON.stringify(row) + "\n");
     function writer(extra = {}) {
       const effects = [];
-      const writer = createOwnedJournalWriter({
+      const ownedWriter = createOwnedJournalWriter({
         deadlineAt: 100,
         limits: {
           maxWriterRows: 1,
@@ -985,7 +985,7 @@ test("writer_binding_order_and_physical_caps_fail_before_any_file_effect", () =>
         },
         ...extra,
       });
-      return { writer, effects };
+      return { writer: ownedWriter, effects };
     }
     const exact = writer();
     await exact.writer.write(row);
@@ -1148,4 +1148,257 @@ test("clock_drains_microtask_registered_due_timers_without_extending_time", () =
     await assert.rejects(clock.advance(0), /did not converge/);
     assert.ok(calls > 0 && calls <= 32);
     assert.equal(clock.now(), 11);
+  }));
+
+test("generated_fault_schedules_reach_all_groups_against_independent_effect_facts", async () => {
+  let seed = 0x6a09e667;
+  const random = (n) => {
+    seed ^= seed << 13;
+    seed ^= seed >>> 17;
+    seed ^= seed << 5;
+    return (seed >>> 0) % n;
+  };
+  const cases = [
+    "pre-WAL-hold",
+    "post-WAL-revoke",
+    "inline-event",
+    "throw-after-event",
+    "false-write",
+    "raw-present-refusal",
+    "raw-absent-refusal",
+    "observer-await-write",
+    "deadline-held-writer",
+    "peer-before-local",
+    "peer-after-local",
+    "stop-row-reserve",
+    "unconfirmed-closure",
+    "suffix-contradiction",
+  ];
+  const reached = new Set(),
+    groups = new Set(),
+    innerVerdicts = new Set();
+  for (let repetition = 0; repetition < 3; repetition++) {
+    const order = cases
+      .map((name) => ({ name, rank: random(1000000) }))
+      .toSorted((a, b) => a.rank - b.rank);
+    for (const { name } of order)
+      await withClock(async (clock) => {
+        const payload = Buffer.alloc(1 + random(8), 65 + random(20));
+        const held = deferred(),
+          stored = [];
+        let holding = false,
+          live = true,
+          owner,
+          expectedRequests = 1,
+          expectedWrites = 0,
+          expectedEnd = 0,
+          peerBeforeStop = false,
+          peerAfterStop = false,
+          terminalCommitted = false,
+          taintedTerminal = false,
+          expectedFrames = 0;
+        const f = await fixture({
+          credential: "abcdefghTOKEN",
+          liveCheck: () => live,
+          write: (row) => {
+            stored.push(structuredClone(row));
+            const record = decoded([row])[0];
+            if (
+              name === "post-WAL-revoke" &&
+              record.type === "action" &&
+              record.intent.state === "before-send"
+            )
+              live = false;
+            return holding ? held.promise : Promise.resolve();
+          },
+          onFrame: async () => {
+            expectedFrames++;
+            if (name === "observer-await-write") await owner.write(payload);
+          },
+        });
+        owner = f.bridge;
+        if (name === "pre-WAL-hold") {
+          groups.add(1);
+          holding = true;
+          const opening = owner.open();
+          await flush();
+          assert.equal(f.session.requests.length, 0);
+          holding = false;
+          held.resolve();
+          await opening;
+        } else if (name === "post-WAL-revoke") {
+          groups.add(1);
+          expectedRequests = 0;
+          await assert.rejects(owner.open());
+        } else await owner.open();
+        if (["inline-event", "throw-after-event"].includes(name)) {
+          groups.add(4);
+          expectedWrites = 1;
+          peerBeforeStop = true;
+          terminalCommitted = true;
+          f.session.stream.onWrite = () => {
+            terminal(f.session.stream);
+            if (name === "throw-after-event") throw Error("after callback");
+          };
+          if (name === "throw-after-event") await assert.rejects(owner.write(payload));
+          else await owner.write(payload);
+        } else if (name === "false-write") {
+          groups.add(9);
+          f.session.stream.writeResult = false;
+          await owner.write(payload);
+          expectedWrites = 1;
+        } else if (name.startsWith("raw-")) {
+          groups.add(8);
+          f.session.stream.emit(
+            "data",
+            name === "raw-present-refusal" ? Buffer.from([1, 0, 0, 0, 0]) : Buffer.from("abcdefgh"),
+          );
+        } else if (name === "observer-await-write") {
+          groups.add(7);
+          f.session.stream.emit("data", frame(payload));
+          for (let i = 0; i < 20; i++) await flush();
+          expectedWrites = 1;
+        } else if (name === "deadline-held-writer") {
+          groups.add(2);
+          groups.add(3);
+          groups.add(9);
+          holding = true;
+          const action = owner.write(payload);
+          action.catch(() => {});
+          await flush();
+        } else if (name === "peer-before-local") {
+          groups.add(5);
+          terminal(f.session.stream);
+          peerBeforeStop = true;
+          terminalCommitted = true;
+          if (random(2)) {
+            await owner.halfClose();
+            expectedEnd = 1;
+          }
+          await owner.cancel();
+        } else if (name === "peer-after-local") {
+          groups.add(5);
+          terminalCommitted = true;
+          peerAfterStop = true;
+          f.session.stream.onCancel = () => terminal(f.session.stream);
+          await owner.cancel();
+        } else if (name === "unconfirmed-closure") {
+          groups.add(3);
+          groups.add(9);
+          f.session.stream.acks = false;
+          f.session.acks = false;
+        } else if (name === "stop-row-reserve") {
+          groups.add(6);
+          owner.stopNow("abort");
+          owner.stopNow("deadline");
+        } else if (name === "suffix-contradiction") {
+          groups.add(8);
+          terminal(f.session.stream);
+          terminalCommitted = true;
+          peerBeforeStop = true;
+          f.session.stream.emit("data", Buffer.alloc(0));
+          taintedTerminal = true;
+        }
+        const closing = owner.done();
+        await flush();
+        if (["deadline-held-writer", "unconfirmed-closure"].includes(name))
+          await clock.advance(101);
+        const report = await closing;
+        const expectedInner =
+          taintedTerminal || peerAfterStop
+            ? "uncertain"
+            : terminalCommitted && peerBeforeStop
+              ? "peer-terminal"
+              : "local-stop";
+        assert.equal(report.provenance.verdict, expectedInner, name);
+        innerVerdicts.add(report.provenance.verdict);
+        assert.equal(
+          report.provenance.peerTerminal?.status ?? null,
+          terminalCommitted ? 0 : null,
+          name,
+        );
+        assert.equal(f.session.requests.length, expectedRequests, name);
+        assert.equal(f.session.stream.writes.length, expectedWrites, name);
+        assert.equal(f.session.stream.endCalls, expectedEnd, name);
+        assert.equal(f.session.destroyCalls, 1, name);
+        assert.equal(f.session.stream.closeCalls, expectedRequests, name);
+        assert.equal(report.verdict, "uncertain", name);
+        assert.equal(
+          new Set(report.chronology.map((row) => row.seq)).size,
+          report.chronology.length,
+          name,
+        );
+        assert.ok(report.chronology.length <= limits.maxChronologyRows, name);
+        assert.ok(report.bindings.length <= limits.maxEvents, name);
+        assert.equal(expectedFrames, name === "observer-await-write" ? 1 : 0, name);
+        for (const binding of report.bindings.filter((b) => b.state === "committed")) {
+          const record = decoded(stored).find((_r, i) => stored[i].index === binding.journalIndex);
+          assert.equal(record.nativeSeq, binding.seq, name);
+          assert.equal(record.receipt.index, binding.receiptIndex, name);
+          assert.equal(record.receipt.kind, binding.kind, name);
+        }
+        if (name === "stop-row-reserve") {
+          const reserved = decoded(stored).filter(
+            (r) =>
+              r.type === "stop" || ["native-close-ack", "local-stop-return"].includes(r.row?.event),
+          );
+          assert.equal(reserved.length, 4);
+        }
+        if (name.startsWith("raw-"))
+          assert.equal(
+            report.bindings[0].state,
+            name === "raw-present-refusal" ? "committed" : "raw-absent",
+          );
+        const snapshot = structuredClone(report);
+        holding = false;
+        held.resolve();
+        await flush();
+        assert.deepEqual(report, snapshot, name);
+        reached.add(name);
+      });
+  }
+  assert.deepEqual([...reached].toSorted(), [...cases].toSorted());
+  assert.deepEqual([...groups].toSorted(), [1, 2, 3, 4, 5, 6, 7, 8, 9]);
+  assert.deepEqual([...innerVerdicts].toSorted(), ["local-stop", "peer-terminal", "uncertain"]);
+});
+
+test("raw_visibility_waits_for_its_bound_durable_ticket_and_stays_closed_after_deadline", () =>
+  withClock(async (clock) => {
+    for (const expire of [false, true]) {
+      const held = deferred();
+      let holding = false,
+        visible = 0;
+      const f = await fixture({
+        write: () => (holding ? held.promise : Promise.resolve()),
+        onFrame: () => {
+          visible++;
+        },
+      });
+      await f.bridge.open();
+      holding = true;
+      f.session.stream.emit("data", frame(Buffer.from("a")));
+      await flush();
+      assert.equal(visible, 0);
+      let report;
+      if (expire) {
+        const pending = f.bridge.done();
+        await clock.advance(101);
+        report = await pending;
+        assert.equal(report.verdict, "uncertain");
+        assert.equal(report.terminationRequired, true);
+        assert.equal(visible, 0);
+      }
+      holding = false;
+      held.resolve();
+      for (let pass = 0; pass < 10; pass++) await flush();
+      assert.equal(visible, expire ? 0 : 1);
+      if (expire) {
+        const copy = structuredClone(report);
+        await flush();
+        assert.deepEqual(report, copy);
+      } else {
+        report = await f.bridge.done();
+        assert.equal(report.bindings.find((binding) => binding.kind === "data").state, "committed");
+      }
+    }
   }));

@@ -1786,3 +1786,101 @@ mod tests {
         assert_eq!(MAX_COMMIT_RAW_BYTES.div_ceil(REST_PAYLOAD_UNIT_BYTES), 11);
     }
 }
+
+
+#[cfg(test)]
+mod document_not_found_layout_tests {
+    use super::*;
+    use fireemu_core_firestore::index::{IndexSet, IndexValidationPolicy, PlanningContext};
+    use fireemu_core_session::clock::VirtualClock;
+    use fireemu_core_types::edition::{FirestoreApiMode, FirestoreEdition};
+    use fireemu_core_types::time::LogicalInstant;
+    use std::sync::Mutex;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    const PATH: &str = "/v1/projects/demo-app/databases/(default)/documents/cases/missing";
+    const PRETTY: &[u8] = b"{\n  \"error\": {\n    \"code\": 404,\n    \"message\": \"Document \\\"projects/demo-app/databases/(default)/documents/cases/missing\\\" not found.\",\n    \"status\": \"NOT_FOUND\"\n  }\n}\n";
+    const COMPACT: &[u8] = br#"{"error":{"code":404,"message":"Document \"projects/demo-app/databases/(default)/documents/cases/missing\" not found.","status":"NOT_FOUND"}}"#;
+
+    fn state(production: bool, enforce_limits: bool) -> Arc<RestState> {
+        let gateway = crate::gateway::Gateway {
+            enforce_limits,
+            ctx: PlanningContext {
+                edition: FirestoreEdition::Standard,
+                api_mode: FirestoreApiMode::Native,
+                policy: if production {
+                    IndexValidationPolicy::Production
+                } else {
+                    IndexValidationPolicy::Emulator
+                },
+            },
+            indexes: IndexSet::default(),
+        };
+        let clock = Arc::new(Mutex::new(VirtualClock::new(
+            LogicalInstant::from_unix_seconds(1_788_004_860),
+        )));
+        Arc::new(RestState {
+            local: Arc::new(crate::local::LocalBackend::new(gateway.clone(), clock, 7)),
+            gateway: Arc::new(gateway),
+            rules: None,
+            control_token: None,
+            app_check: None,
+        })
+    }
+
+    async fn wire(state: Arc<RestState>, method: &str, path: &str) -> (String, Vec<u8>) {
+        let port = std::env::var("PORT").unwrap_or_else(|_| "0".to_owned());
+        let listener = TcpListener::bind(format!("127.0.0.1:{port}")).await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let service = hyper::service::service_fn(move |request| {
+                super::rest_call(Arc::clone(&state), request, BODY_READ_DEADLINE)
+            });
+            hyper::server::conn::http1::Builder::new()
+                .serve_connection(TokioIo::new(stream), service)
+                .await
+                .unwrap();
+        });
+        let mut client = TcpStream::connect(address).await.unwrap();
+        client
+            .write_all(format!("{method} {path} HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\nContent-Length: 0\r\n\r\n").as_bytes())
+            .await
+            .unwrap();
+        let mut bytes = Vec::new();
+        tokio::time::timeout(std::time::Duration::from_secs(10), client.read_to_end(&mut bytes))
+            .await
+            .unwrap()
+            .unwrap();
+        server.await.unwrap();
+        let split = bytes.windows(4).position(|part| part == b"\r\n\r\n").unwrap();
+        (String::from_utf8(bytes[..split].to_vec()).unwrap(), bytes[split + 4..].to_vec())
+    }
+
+    #[tokio::test]
+    async fn production_document_404_has_literal_wire_layout_and_policy_controls() {
+        for enforce_limits in [false, true] {
+            for production in [true, false] {
+                let (headers, bytes) = wire(state(production, enforce_limits), "GET", PATH).await;
+                assert!(headers.starts_with("HTTP/1.1 404 Not Found\r\n"));
+                assert!(headers.contains("content-type: application/json; charset=utf-8\r\n"));
+                let expected = if production { PRETTY } else { COMPACT };
+                assert_eq!(bytes, expected, "production={production}, enforce_limits={enforce_limits}");
+                assert!(headers.contains(&format!("content-length: {}\r\n", expected.len())));
+            }
+        }
+        other_routes_keep_literal_compact_or_plain_wire_bodies().await;
+    }
+
+    async fn other_routes_keep_literal_compact_or_plain_wire_bodies() {
+        for production in [true, false] {
+            let (_, bytes) = wire(state(production, true), "PATCH", &format!("{PATH}?currentDocument.exists=true")).await;
+            assert_eq!(bytes, COMPACT);
+            let (headers, bytes) = wire(state(production, true), "GET", "/unknown").await;
+            assert!(headers.contains("content-type: text/plain; charset=utf-8\r\n"));
+            assert_eq!(bytes, b"Not Found\n");
+            let (_, bytes) = wire(state(production, true), "GET", "/v1/projects/demo-app/databases/(default)/documents/cases").await;
+            assert_eq!(bytes, b"{}");
+        }
+    }
+}

@@ -10,9 +10,10 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, resolve } from "node:path";
+import { dirname, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
+import { loadCurrentBinding as loadFixtureBinding } from "./production-evidence.mjs";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 const modulePath = resolve(root, "conformance/src/production-evidence.mjs");
@@ -48,7 +49,7 @@ const fixture = (parent = "FS-TRANSACTION") => {
     const document = read(recordPath);
     return { recordType: document.kind, recordPath, recordSha256: sha(documents.get(recordPath)) };
   });
-  return {
+  const value = {
     root,
     parent,
     originalInventory,
@@ -58,10 +59,29 @@ const fixture = (parent = "FS-TRANSACTION") => {
       inventoryPath,
       inventorySha256: sha(documents.get(inventoryPath)),
       records,
+      dependencies:
+        parent === "FS-TRANSACTION"
+          ? [
+              [
+                "fs-transaction-p13b-comparator-source-v1",
+                "tools/compat-broad/fs-write-txn/fs_txn_compare_local.py",
+              ],
+              [
+                "fs-transaction-p13b-table-source-v1",
+                "tools/compat-broad/fs-write-txn/fs_txn_table_p13b.py",
+              ],
+            ].map(([sourceType, sourcePath]) => ({
+              sourceType,
+              sourcePath,
+              sourceSha256: sha(readFileSync(resolve(root, sourcePath))),
+            }))
+          : [],
       finalProduct: null,
       independentReview: null,
     },
   };
+  loadFixtureBinding(root, parent, value.currentBinding, documents);
+  return value;
 };
 const replaceRecord = (value, path, change) => {
   const record = JSON.parse(value.documents.get(path));
@@ -272,6 +292,231 @@ test("fake final and review refs cannot turn source-only status into admission",
   }
 });
 
+for (const role of ["producer", "table"]) {
+  test(`dependency confinement refuses a JSON-selected external ${role} before reading it`, async () => {
+    const { evaluateCurrentParent } = await api();
+    const value = fixture();
+    const directory = mkdtempSync(resolve(tmpdir(), "fireemu-dependency-sentinel-"));
+    try {
+      const sentinel = resolve(directory, "nonsecret.txt");
+      const bytes = Buffer.from("Nonsecret dependency witness\n");
+      writeFileSync(sentinel, bytes);
+      if (role === "producer")
+        replaceRecord(value, paths.preparation, (d) => {
+          d.producer.path = relative(root, sentinel);
+          d.producer.sha256 = sha(bytes);
+        });
+      else {
+        replaceRecord(value, paths.observations, (d) => {
+          d.corpora[0].table = relative(root, sentinel);
+        });
+        replaceRecord(value, paths.preparation, (d) => {
+          d.producer.currentTableSha256 = sha(bytes);
+        });
+      }
+      assert.throws(() => evaluateCurrentParent(value), /admitted dependency path/);
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+}
+
+test("dependency confinement rejects a caller root different from the loaded repository", async () => {
+  const { evaluateCurrentParent, loadCurrentBinding } = await api();
+  const value = fixture();
+  loadCurrentBinding(root, value.parent, value.currentBinding, value.documents);
+  const directory = mkdtempSync(resolve(tmpdir(), "fireemu-other-root-"));
+  try {
+    value.root = directory;
+    assert.throws(() => evaluateCurrentParent(value), /loaded repository root/);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("dependency bindings reject missing, extra, duplicate, traversal and rewritten actual bytes", async () => {
+  const { evaluateCurrentParent } = await api();
+  for (const change of [
+    (v) => {
+      v.currentBinding.dependencies.pop();
+    },
+    (v) => {
+      v.currentBinding.dependencies.push(structuredClone(v.currentBinding.dependencies[0]));
+    },
+    (v) => {
+      v.currentBinding.dependencies[0].sourceType = "UNKNOWN";
+    },
+    (v) => {
+      v.currentBinding.dependencies[0].sourcePath = "../outside.py";
+    },
+    (v) => {
+      v.currentBinding.dependencies[0].extra = true;
+    },
+    (v) => {
+      v.currentBinding.dependencies[0].sourceSha256 = "0".repeat(64);
+    },
+    (v) => {
+      v.documents.set(
+        v.currentBinding.dependencies[0].sourcePath,
+        Buffer.from("different loaded bytes\n"),
+      );
+    },
+    (v) => {
+      const ref = v.currentBinding.dependencies[0];
+      const bytes = Buffer.from("fabricated current source\n");
+      v.documents.set(ref.sourcePath, bytes);
+      ref.sourceSha256 = sha(bytes);
+      replaceRecord(v, paths.preparation, (d) => {
+        d.producer.sha256 = ref.sourceSha256;
+      });
+    },
+  ]) {
+    const value = fixture();
+    change(value);
+    assert.throws(() => evaluateCurrentParent(value));
+  }
+});
+
+test("typed dependency roles reject substitution with other admitted public source bytes", async () => {
+  const { evaluateCurrentParent } = await api();
+  for (const role of ["producer", "corpus-table", "producer-table"]) {
+    const value = fixture();
+    const [comparator, table] = value.currentBinding.dependencies;
+    if (role === "producer")
+      replaceRecord(value, paths.preparation, (d) => {
+        d.producer.path = table.sourcePath;
+        d.producer.sha256 = table.sourceSha256;
+      });
+    else if (role === "producer-table")
+      replaceRecord(value, paths.preparation, (d) => {
+        d.producer.tablePath = comparator.sourcePath;
+      });
+    else {
+      replaceRecord(value, paths.observations, (d) => {
+        d.corpora[0].table = comparator.sourcePath;
+      });
+      replaceRecord(value, paths.preparation, (d) => {
+        d.producer.currentTableSha256 = comparator.sourceSha256;
+      });
+    }
+    assert.throws(() => evaluateCurrentParent(value), /admitted dependency path/);
+  }
+});
+
+test("dependency loader uses the caller root and refuses file and directory symlink escapes", async () => {
+  const { evaluateCurrentParent, loadCurrentBinding } = await api();
+  const value = fixture();
+  const directory = mkdtempSync(resolve(tmpdir(), "fireemu-confined-dependencies-"));
+  const outside = mkdtempSync(resolve(tmpdir(), "fireemu-external-dependencies-"));
+  try {
+    for (const [path, bytes] of value.documents) {
+      const target = resolve(directory, path);
+      mkdirSync(dirname(target), { recursive: true });
+      writeFileSync(target, bytes);
+    }
+    const documents = new Map();
+    loadCurrentBinding(directory, value.parent, value.currentBinding, documents);
+    assert.equal(evaluateCurrentParent({ ...value, root: directory, documents }).records.length, 2);
+    for (const ref of value.currentBinding.dependencies) {
+      const target = resolve(directory, ref.sourcePath);
+      const sentinel = resolve(outside, "sentinel.py");
+      writeFileSync(sentinel, value.documents.get(ref.sourcePath));
+      rmSync(target);
+      symlinkSync(sentinel, target);
+      assert.throws(
+        () => loadCurrentBinding(directory, value.parent, value.currentBinding, new Map()),
+        /regular file/,
+      );
+      rmSync(target);
+      writeFileSync(target, value.documents.get(ref.sourcePath));
+    }
+    const parent = dirname(resolve(directory, value.currentBinding.dependencies[0].sourcePath));
+    rmSync(parent, { recursive: true });
+    for (const ref of value.currentBinding.dependencies)
+      writeFileSync(
+        resolve(outside, ref.sourcePath.split("/").at(-1)),
+        value.documents.get(ref.sourcePath),
+      );
+    symlinkSync(outside, parent, "dir");
+    assert.throws(
+      () => loadCurrentBinding(directory, value.parent, value.currentBinding, new Map()),
+      /escaped repository/,
+    );
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+    rmSync(outside, { recursive: true, force: true });
+  }
+});
+
+test("published typed dependency and nested preparation schemas reject every unexpected field permutation", async () => {
+  const { evaluateCurrentParent } = await api();
+  let seed = 0x13b39701;
+  for (let i = 0; i < 64; i++) {
+    const value = fixture();
+    seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0;
+    if (seed & 1) value.currentBinding.dependencies.reverse();
+    const result = evaluateCurrentParent(value);
+    assert.equal(result.eligible, false);
+    assert.deepEqual(
+      result.dependencies,
+      evaluateCurrentParent(fixture()).dependencies,
+      "dependency ordering must not change the report",
+    );
+    const level = seed % 4;
+    replaceRecord(value, paths.preparation, (d) => {
+      const target = [d, d.producer, d.plannedReplays[seed % 4], d.corpora[0]][level];
+      target[`unknown_${i}`] = { status: "VERIFIED", complete: true };
+    });
+    assert.throws(() => evaluateCurrentParent(value), /closed fields/);
+  }
+});
+
+for (const [label, change] of [
+  [
+    "unknown top-level receipt",
+    (d) => {
+      d.futureVerifiedReceipt = { kind: "UNKNOWN", complete: true };
+    },
+  ],
+  [
+    "unknown producer field",
+    (d) => {
+      d.producer.approval = "VERIFIED";
+    },
+  ],
+  [
+    "unknown replay field",
+    (d) => {
+      d.plannedReplays[0].complete = true;
+    },
+  ],
+  [
+    "unknown corpus field",
+    (d) => {
+      d.corpora[0].finalReview = "APPROVED";
+    },
+  ],
+  [
+    "omitted boundary field",
+    (d) => {
+      delete d.remainingBoundaries;
+    },
+  ],
+  [
+    "altered provenance",
+    (d) => {
+      d.preparationBaseCommit = "0".repeat(40);
+    },
+  ],
+]) {
+  test(`published preparation closed schema rejects ${label}`, async () => {
+    const value = fixture();
+    replaceRecord(value, paths.preparation, change);
+    const { evaluateCurrentParent } = await api();
+    assert.throws(() => evaluateCurrentParent(value), /closed fields|preparation provenance/);
+  });
+}
+
 test("current facts preserve every original obligation and profile gate", async () => {
   const value = fixture();
   const result = (await api()).evaluateCurrentParent(value);
@@ -361,6 +606,7 @@ test("actual loader reads current public bytes and refuses symlink substitution"
         [
           value.currentBinding.inventoryPath,
           ...value.currentBinding.records.map((ref) => ref.recordPath),
+          ...value.currentBinding.dependencies.map((ref) => ref.sourcePath),
         ].map((path) => [path, value.documents.get(path)]),
       ),
     );

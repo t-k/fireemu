@@ -5,6 +5,12 @@ import { relative, resolve, sep } from "node:path";
 
 const sha = (bytes) => createHash("sha256").update(bytes).digest("hex");
 const digestPattern = /^[0-9a-f]{64}$/;
+const dependencyTypes = {
+  "fs-transaction-p13b-comparator-source-v1":
+    "tools/compat-broad/fs-write-txn/fs_txn_compare_local.py",
+  "fs-transaction-p13b-table-source-v1": "tools/compat-broad/fs-write-txn/fs_txn_table_p13b.py",
+};
+const loadedDocuments = new WeakMap();
 const supported = {
   "fs-transaction-recorded-observations-v1": {
     parent: "FS-TRANSACTION",
@@ -43,7 +49,14 @@ function checkedReference(parent, ref) {
 function checkBinding(parent, binding) {
   closed(
     binding,
-    ["inventoryPath", "inventorySha256", "records", "finalProduct", "independentReview"],
+    [
+      "inventoryPath",
+      "inventorySha256",
+      "records",
+      "dependencies",
+      "finalProduct",
+      "independentReview",
+    ],
     "current binding",
   );
   assert.equal(
@@ -59,6 +72,26 @@ function checkBinding(parent, binding) {
     assert.ok(!seen.has(ref.recordPath), "duplicate evidence reference");
     seen.add(ref.recordPath);
   }
+  assert.ok(Array.isArray(binding.dependencies), "typed dependencies required");
+  const requiredTypes = new Set();
+  if (binding.records.some((ref) => ref.recordType.startsWith("fs-transaction-")))
+    requiredTypes.add("fs-transaction-p13b-table-source-v1");
+  if (
+    binding.records.some(
+      (ref) => ref.recordType === "fs-transaction-recorded-comparison-preparation-v1",
+    )
+  )
+    requiredTypes.add("fs-transaction-p13b-comparator-source-v1");
+  const dependencySet = new Set();
+  for (const ref of binding.dependencies) {
+    closed(ref, ["sourceType", "sourcePath", "sourceSha256"], "dependency reference");
+    assert.ok(requiredTypes.has(ref.sourceType), "unadmitted dependency type");
+    assert.equal(ref.sourcePath, dependencyTypes[ref.sourceType], "admitted dependency path");
+    assert.match(ref.sourceSha256, digestPattern, "dependency SHA-256");
+    assert.ok(!dependencySet.has(ref.sourceType), "duplicate dependency reference");
+    dependencySet.add(ref.sourceType);
+  }
+  assert.deepEqual(dependencySet, requiredTypes, "required typed dependency set");
   // No current final-product or independent-review producer has been published in this slice.
   // A retained partial comparison cannot occupy either slot, even with an approval string.
   for (const [slot, ref] of [
@@ -72,17 +105,59 @@ function checkBinding(parent, binding) {
   }
 }
 
+function checkDependencyPaths(records) {
+  const observed = records.get("fs-transaction-recorded-observations-v1");
+  if (observed)
+    assert.equal(
+      observed.corpora?.[0]?.table,
+      dependencyTypes["fs-transaction-p13b-table-source-v1"],
+      "admitted dependency path",
+    );
+  const prepared = records.get("fs-transaction-recorded-comparison-preparation-v1");
+  if (prepared) {
+    assert.equal(
+      prepared.producer?.path,
+      dependencyTypes["fs-transaction-p13b-comparator-source-v1"],
+      "admitted dependency path",
+    );
+    assert.equal(
+      prepared.producer?.tablePath,
+      dependencyTypes["fs-transaction-p13b-table-source-v1"],
+      "admitted dependency path",
+    );
+  }
+}
+
 /** Read only the exact admitted public inputs. Private records and authority are never opened. */
 export function loadCurrentBinding(root, parent, binding, documents) {
   checkBinding(parent, binding);
   const actualRoot = realpathSync(root);
-  for (const path of [binding.inventoryPath, ...binding.records.map((ref) => ref.recordPath)]) {
+  const origin = loadedDocuments.get(documents) ?? { root: actualRoot, dependencies: new Map() };
+  assert.equal(origin.root, actualRoot, "loaded repository root mismatch");
+  const read = (path) => {
     const target = resolve(actualRoot, path);
     assert.ok(lstatSync(target).isFile(), `${path}: regular file required`);
     const actual = realpathSync(target);
     assert.ok(!relative(actualRoot, actual).startsWith(`..${sep}`), `${path}: escaped repository`);
     documents.set(path, readFileSync(actual));
+  };
+  for (const path of [binding.inventoryPath, ...binding.records.map((ref) => ref.recordPath)])
+    read(path);
+  checkDependencyPaths(
+    new Map(
+      binding.records.map((ref) => [
+        ref.recordType,
+        parseStrictJson(documents.get(ref.recordPath)),
+      ]),
+    ),
+  );
+  for (const ref of binding.dependencies) read(ref.sourcePath);
+  for (const ref of binding.dependencies) {
+    const actualSha256 = sha(documents.get(ref.sourcePath));
+    assert.equal(actualSha256, ref.sourceSha256, "loaded dependency SHA-256 mismatch");
+    origin.dependencies.set(ref.sourcePath, actualSha256);
   }
+  loadedDocuments.set(documents, origin);
 }
 
 export function parseStrictJson(input) {
@@ -412,7 +487,69 @@ function verifyP13bObservations(observed) {
   return corpus;
 }
 
-function verifyP13bPreparation(compared, corpus) {
+function verifyP13bPreparation(compared, corpus, dependencies) {
+  closed(
+    compared,
+    [
+      "schemaVersion",
+      "kind",
+      "parent",
+      "condition",
+      "coverage",
+      "promotionReady",
+      "authorizesProduction",
+      "status",
+      "productionRequests",
+      "capturedReplays",
+      "requiredReplays",
+      "artifact",
+      "preparationBaseCommit",
+      "producer",
+      "plannedReplays",
+      "corpora",
+      "remainingBoundaries",
+      "dependency",
+    ],
+    "published preparation",
+  );
+  closed(
+    compared.producer,
+    [
+      "path",
+      "sha256",
+      "tablePath",
+      "tableSha256",
+      "tableSourceCommit",
+      "currentTableSha256",
+      "tableBinding",
+    ],
+    "preparation producer",
+  );
+  assert.equal(
+    compared.preparationBaseCommit,
+    "e57a78e0f5c4852894d14fad31438b2fa9d681e0",
+    "preparation provenance",
+  );
+  assert.equal(
+    compared.producer.tableBinding,
+    "Original frozen bytes must be materialized without rewriting recording sourceDigest; the current table differs only in its module docstring.",
+  );
+  assert.deepEqual(compared.remainingBoundaries, [
+    "Raw REST bodyBytes, content-length and received member-order layout were not retained; decoded semantic equality is partial proof.",
+    "Historical installed runtime input currency cannot be independently established from the retained packet and decoded receipts; it remains UNKNOWN.",
+    "Representative gRPC retry snapshot and idle/lifetime consequences, remaining original boundaries, the official emulator gate, all 18 frozen conditions and parent closure review remain open.",
+    "Four source-bound normal artifact comparisons remain pending; frozen nominal 260-second lifetime waits may not reproduce the recorded 279-to-283-second age with faster local RPCs.",
+  ]);
+  assert.equal(
+    compared.dependency,
+    "ROOT must provide a source-bound normal artifact and exact current runtime proof. A normal runtime wave is not a final whole-tree artifact. The unchanged comparator project-diagnostic context and actual lifetime age must be checked before claiming agreement; unresolved differences remain RED.",
+  );
+  assert.ok(Array.isArray(compared.plannedReplays), "planned replay array required");
+  for (const replay of compared.plannedReplays)
+    closed(replay, ["profile", "recording", "productionFileSha256"], "preparation replay");
+  assert.ok(Array.isArray(compared.corpora), "preparation corpora required");
+  for (const recorded of compared.corpora)
+    closed(recorded, ["program", "results"], "preparation corpus");
   assert.equal(compared.schemaVersion, 1);
   assert.equal(compared.kind, "fs-transaction-recorded-comparison-preparation-v1");
   assert.equal(compared.parent, "FS-TRANSACTION");
@@ -432,20 +569,10 @@ function verifyP13bPreparation(compared, corpus) {
   );
   for (const replay of compared.plannedReplays)
     assert.equal(replay.productionFileSha256, corpus.recordings[replay.recording - 1].sha256);
-  assert.equal(
-    compared.producer.sha256,
-    createHash("sha256")
-      .update(readFileSync(new URL(`../../${compared.producer.path}`, import.meta.url)))
-      .digest("hex"),
-  );
+  assert.equal(compared.producer.sha256, dependencies.get(compared.producer.path));
   assert.equal(compared.producer.tableSha256, corpus.tableSourceDigest);
   assert.equal(compared.producer.tableSourceCommit, corpus.sourceCommit);
-  assert.equal(
-    compared.producer.currentTableSha256,
-    createHash("sha256")
-      .update(readFileSync(new URL(`../../${corpus.table}`, import.meta.url)))
-      .digest("hex"),
-  );
+  assert.equal(compared.producer.currentTableSha256, dependencies.get(corpus.table));
   assert.notEqual(compared.producer.currentTableSha256, corpus.tableSourceDigest);
 }
 
@@ -540,6 +667,7 @@ function obligationFacets(parent, original) {
 
 /** Evaluate retained facts against original obligations. A partial fact is never closure authority. */
 export function evaluateCurrentParent({
+  root,
   parent,
   originalInventory,
   currentInventory,
@@ -547,6 +675,21 @@ export function evaluateCurrentParent({
   documents,
 }) {
   checkBinding(parent, currentBinding);
+  const origin = loadedDocuments.get(documents);
+  assert.ok(root && origin, "loaded repository root required");
+  assert.equal(realpathSync(root), origin.root, "loaded repository root mismatch");
+  const dependencies = new Map();
+  for (const ref of currentBinding.dependencies) {
+    const bytes = documents.get(ref.sourcePath);
+    assert.ok(bytes, "actual dependency bytes missing");
+    assert.equal(sha(bytes), ref.sourceSha256, "actual dependency bytes differ");
+    assert.equal(
+      origin.dependencies.get(ref.sourcePath),
+      ref.sourceSha256,
+      "loaded dependency SHA-256 mismatch",
+    );
+    dependencies.set(ref.sourcePath, ref.sourceSha256);
+  }
   assert.equal(originalInventory.parent, parent);
   assert.equal(currentInventory.parent, parent);
   const inventoryBytes = documents.get(currentBinding.inventoryPath);
@@ -620,6 +763,7 @@ export function evaluateCurrentParent({
   const missing = [];
   const observed = loaded.get("fs-transaction-recorded-observations-v1");
   const prepared = loaded.get("fs-transaction-recorded-comparison-preparation-v1");
+  checkDependencyPaths(loaded);
   if (observed) {
     const corpus = verifyP13bObservations(observed);
     records.push({
@@ -635,7 +779,7 @@ export function evaluateCurrentParent({
       `P13b historical installed runtime currency: ${corpus.historicalInstalledRuntimeInputsValidated}`,
     );
     if (prepared) {
-      verifyP13bPreparation(prepared, corpus);
+      verifyP13bPreparation(prepared, corpus, dependencies);
       records.push({
         recordType: prepared.kind,
         scope: prepared.coverage,
@@ -681,6 +825,9 @@ export function evaluateCurrentParent({
   return {
     parent,
     facets,
+    dependencies: currentBinding.dependencies
+      .map((ref) => Object.assign({}, ref))
+      .toSorted((a, b) => a.sourcePath.localeCompare(b.sourcePath, "en")),
     records: records.toSorted((a, b) => a.recordType.localeCompare(b.recordType, "en")),
     missing: [...new Set(missing)].toSorted(),
     eligible,

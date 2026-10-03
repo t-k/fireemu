@@ -529,6 +529,30 @@ function connectedConsumers(documents) {
     );
     let actualCalls = 0;
     let negativeCalls = 0;
+    let topLevelActualCalls = 0;
+    for (const statement of ast.body) {
+      if (statement.type !== "VariableDeclaration" || statement.kind !== "const") continue;
+      for (const declaration of statement.declarations) {
+        const call = declaration.init;
+        if (
+          declaration.id.type === "Identifier" &&
+          declaration.id.name === "admission" &&
+          call?.type === "CallExpression" &&
+          call.callee.type === "Identifier" &&
+          call.callee.name === "assertCurrentParentEvidence" &&
+          call.arguments.length === 2 &&
+          call.arguments[1].type === "Literal" &&
+          call.arguments[1].value === parent &&
+          call.arguments[0].type === "CallExpression" &&
+          call.arguments[0].callee.type === "Identifier" &&
+          call.arguments[0].callee.name === "loadRepository" &&
+          call.arguments[0].arguments.length === 1 &&
+          call.arguments[0].arguments[0].type === "Identifier" &&
+          call.arguments[0].arguments[0].name === "root"
+        )
+          topLevelActualCalls++;
+      }
+    }
     const walk = (node) => {
       if (!node || typeof node !== "object") return;
       if (
@@ -561,6 +585,7 @@ function connectedConsumers(documents) {
       names.has("assertCurrentParentEvidence") &&
         names.has("loadRepository") &&
         actualCalls === 1 &&
+        topLevelActualCalls === 1 &&
         negativeCalls === 1,
       `${path}: actual current consumer and negative connection missing`,
     );
@@ -570,10 +595,11 @@ function connectedConsumers(documents) {
 }
 
 /** Enforce the same actual input validation in each existing parent consumer and the CLI. */
-export function assertCurrentParentEvidence({ registry, documents }, parent) {
+export function assertCurrentParentEvidence({ root, registry, documents }, parent) {
   const row = registry.parents.find((p) => p.parent === parent);
   demand(row?.track === "PRODUCTION_PENDING", `${parent}: current parent binding missing`);
   return evaluateCurrentParent({
+    root,
     parent,
     originalInventory: parseStrictJson(documents.get(row.sourceIdentity.snapshotPath)),
     currentInventory: parseStrictJson(documents.get(row.inventoryPath)),
@@ -606,10 +632,10 @@ export function loadRepository(root) {
   for (const row of registry.parents)
     if (row.track === "PRODUCTION_PENDING")
       loadCurrentBinding(root, row.parent, row.currentBinding, documents);
-  return { registry, official, documents, lock };
+  return { root, registry, official, documents, lock };
 }
 
-export function checkProjection({ registry, official, documents, lock }) {
+export function checkProjection({ root, registry, official, documents, lock }) {
   const result = {
     problems: [],
     requiredParents: 21,
@@ -799,7 +825,7 @@ export function checkProjection({ registry, official, documents, lock }) {
         );
       tasks.push(...expectedOfficial(label, original, pin.sourceIdentity));
       result.publicOriginalConditions += original.conditions.length;
-      const actual = assertCurrentParentEvidence({ registry, documents }, label);
+      const actual = assertCurrentParentEvidence({ root, registry, documents }, label);
       result.currentEvidence.push(actual);
       const assertedFacets = [...row.conditions.flatMap((c) => c.facets), row.profileContract];
       for (const declared of assertedFacets) {
@@ -879,6 +905,9 @@ export function checkProjection({ registry, official, documents, lock }) {
       ...registry.parents
         .flatMap((p) => p.currentBinding?.records ?? [])
         .map((ref) => [ref.recordPath, ref.recordSha256]),
+      ...registry.parents
+        .flatMap((p) => p.currentBinding?.dependencies ?? [])
+        .map((ref) => [ref.sourcePath, ref.sourceSha256]),
       ...Object.values(BASELINE_PINS)
         .filter((pin) => pin.sourceIdentity.snapshotPath)
         .map((pin) => [pin.sourceIdentity.snapshotPath, pin.sourceIdentity.rawSha256]),
@@ -964,6 +993,10 @@ export function renderStatus(result) {
       ...row.records.map(
         (record) =>
           `- \`${record.recordType}\`: \`${record.scope}\`; ${record.observedCases ?? record.capturedReplays ?? 0} retained cases or replays.`,
+      ),
+      ...row.dependencies.map(
+        (ref) =>
+          `- Bound public source input: \`${ref.sourcePath}\`; SHA-256 \`${ref.sourceSha256}\`.`,
       ),
       ...row.missing.map((reason) => `- Missing: ${reason}`),
       "",

@@ -54,6 +54,8 @@ Current final-product gate: `PENDING`. Saved partial equality, synthetic fixture
 
 - `fs-transaction-recorded-comparison-preparation-v1`: `PARTIAL`; 0 retained cases or replays.
 - `fs-transaction-recorded-observations-v1`: `PARTIAL`; 8 retained cases or replays.
+- Bound public source input: `tools/compat-broad/fs-write-txn/fs_txn_compare_local.py`; SHA-256 `9fab208ef9e30a0332d78e061a12563355bc519611d7ed9e8ae0e1685493848f`.
+- Bound public source input: `tools/compat-broad/fs-write-txn/fs_txn_table_p13b.py`; SHA-256 `c15dcba233334b5dd437aa4fad955fcc6af41089973d1a1bce083769910d5c3a`.
 - Missing: FS-TRANSACTION/admin-sdk-server-retry::production_behavior: complete production_behavior evidence missing
 - Missing: FS-TRANSACTION/closure-review::clean_review: complete clean_review evidence missing
 - Missing: FS-TRANSACTION/commit-atomic-visibility::production_behavior: complete production_behavior evidence missing

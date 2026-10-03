@@ -671,7 +671,19 @@
           }
         ],
         "finalProduct": null,
-        "independentReview": null
+        "independentReview": null,
+        "dependencies": [
+          {
+            "sourceType": "fs-transaction-p13b-comparator-source-v1",
+            "sourcePath": "tools/compat-broad/fs-write-txn/fs_txn_compare_local.py",
+            "sourceSha256": "9fab208ef9e30a0332d78e061a12563355bc519611d7ed9e8ae0e1685493848f"
+          },
+          {
+            "sourceType": "fs-transaction-p13b-table-source-v1",
+            "sourcePath": "tools/compat-broad/fs-write-txn/fs_txn_table_p13b.py",
+            "sourceSha256": "c15dcba233334b5dd437aa4fad955fcc6af41089973d1a1bce083769910d5c3a"
+          }
+        ]
       }
     },
     {
@@ -1417,7 +1429,8 @@
         "inventorySha256": "cc2218eb413d53db064f807b956a44ec81236aa6f2e662bd9acff6b45bcc1983",
         "records": [],
         "finalProduct": null,
-        "independentReview": null
+        "independentReview": null,
+        "dependencies": []
       }
     },
     {
@@ -2044,7 +2057,8 @@
         "inventorySha256": "0857ad38cdbd7655d1d46a8f72a233994dc38da20774ae4b339909279c8c162e",
         "records": [],
         "finalProduct": null,
-        "independentReview": null
+        "independentReview": null,
+        "dependencies": []
       }
     },
     {
@@ -2593,7 +2607,8 @@
           }
         ],
         "finalProduct": null,
-        "independentReview": null
+        "independentReview": null,
+        "dependencies": []
       }
     },
     {

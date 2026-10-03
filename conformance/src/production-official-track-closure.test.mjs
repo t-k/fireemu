@@ -34,11 +34,53 @@ test("consumer migration requires executable actual and negative calls, not comm
     (s) => s.replace(actual, `({ eligible: false }) /* ${actual} */`),
     (s) => s.replace(negative, `({ eligible: false }) /* ${negative} */`),
     (s) => `${s}\n${actual};\n`,
+    (s) =>
+      s.replace(
+        `const admission = ${actual};`,
+        `const admission = { eligible: false }; function unusedConnection() { return ${actual}; }`,
+      ),
+    (s) =>
+      s.replace(
+        `const admission = ${actual};`,
+        `const admission = { eligible: false }; if (false) { ${actual}; }`,
+      ),
   ]) {
     const value = await fixture();
     value.documents.set(path, Buffer.from(change(source)));
     assert.ok((await problems(value)).some((p) => p.includes("connection missing")));
   }
+});
+
+test("current FS consumers do not equate historical false status with actual current admission", async () => {
+  const source = (await fixture()).documents
+    .get("conformance/src/fs-transaction-closure.test.mjs")
+    .toString();
+  const historical = source.slice(
+    source.indexOf('test("FS-TRANSACTION recorded REST subset'),
+    source.indexOf("function p13bDigest"),
+  );
+  assert.ok(historical.indexOf('assert.equal(closure.parentStatus, "IMPLEMENTING")') >= 0);
+  assert.ok(historical.indexOf('assert.equal(closure.closureReview.decision, "PENDING")') >= 0);
+  assert.ok(
+    historical.indexOf("admission.eligible") === -1,
+    "historical state must not force current eligibility false",
+  );
+  for (const start of ["P02/P02b retained", "P08 retained"]) {
+    const tail = source.slice(source.indexOf(`test("${start}`));
+    const section = tail.slice(0, tail.indexOf('\ntest("', 1));
+    assert.ok(section.indexOf('assert.equal(closure.parentStatus, "IMPLEMENTING")') === -1);
+    assert.ok(section.indexOf('assert.equal(closure.closureReview.decision, "PENDING")') === -1);
+    assert.ok(
+      section.indexOf(
+        'assert.equal(closure.parentStatus === "COMPAT_VERIFIED", admission.eligible)',
+      ) >= 0,
+    );
+  }
+  assert.ok(
+    !source.includes(
+      'assert.equal(closure.parentStatus === "COMPAT_VERIFIED", admission.eligible);\n  assert.equal(closure.parentStatus === "COMPAT_VERIFIED", admission.eligible);',
+    ),
+  );
 });
 
 test("honest pending integrity preserves 21 parents, 95 public and 66 frozen conditions", async () => {

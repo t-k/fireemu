@@ -795,3 +795,84 @@ def test_p13b_nonuniform_timestamp_and_duration_changes_are_rejected_or_visible(
     except ValueError:
         return
     assert actual != original
+
+
+@pytest.mark.parametrize("table_name,expected_project", [("fs_txn_table_p02", "fireemu-oracle-sbx"), ("fs_txn_table_p13b", "fireemu-oracle-txn")])
+def test_cli_binds_the_validated_table_project_to_the_local_wire(tmp_path, monkeypatch, table_name, expected_project):
+    import txn_program_wire as wire
+    receipt, _ = toy_recording() if table_name == "fs_txn_table_p02" else p13b_recording()
+    production = tmp_path / "production.json"
+    production.write_text(json.dumps(receipt))
+    output = tmp_path / "compared.json"
+    monkeypatch.setenv("SMOKE_TABLE", table_name)
+    monkeypatch.setenv("FIRESTORE_EMULATOR_HOST", "127.0.0.1:12345")
+    monkeypatch.delenv("COMPARE_RUNTIME_PROOF", raising=False)
+    monkeypatch.setattr(wire, "discover_runtime", lambda _node: {})
+    calls = []
+    monkeypatch.setattr(wire, "NodeWire", lambda *args, **kwargs: calls.append(kwargs) or object())
+    class FixtureCollector:
+        def __init__(self, *_args, **_kwargs): pass
+        def run(self): return copy.deepcopy(receipt)
+    monkeypatch.setattr(tool, "Collector", FixtureCollector)
+    monkeypatch.setattr(tool.sys, "argv", ["compare", str(production), str(output)])
+    tool.main()
+    assert len(calls) == 1
+    assert calls[0].get("project") == expected_project
+    assert calls[0]["target"] == {"kind": "local", "host": "127.0.0.1", "port": 12345}
+    assert json.loads(output.read_text())["mismatches"] == 0
+
+
+@pytest.mark.parametrize("project", ["foreign-project", "fireemu-oracle-txn-extra", "", None, 7])
+def test_cli_rejects_an_unapproved_table_project_before_creating_a_wire(tmp_path, monkeypatch, project):
+    import types
+    import txn_program_wire as wire
+    from fs_txn_table_p02 import TABLE
+    table = {**TABLE, "project": project}
+    production = tmp_path / "freeze.json"
+    production.write_text(json.dumps({"projection": {"corpusDigest": "unused"}}))
+    output = tmp_path / "compared.json"
+    monkeypatch.setenv("SMOKE_TABLE", "fixture_table")
+    monkeypatch.setenv("FIRESTORE_EMULATOR_HOST", "127.0.0.1:12345")
+    monkeypatch.delenv("COMPARE_RUNTIME_PROOF", raising=False)
+    monkeypatch.setattr(tool.importlib, "import_module", lambda _name: types.SimpleNamespace(TABLE=table))
+    monkeypatch.setattr(wire, "discover_runtime", lambda _node: {})
+    dispatches = []
+    monkeypatch.setattr(wire, "NodeWire", lambda *_args, **_kwargs: dispatches.append(True))
+    monkeypatch.setattr(tool.sys, "argv", ["compare", str(production), str(output)])
+    with pytest.raises(ValueError, match="project"):
+        tool.main()
+    assert dispatches == [] and not output.exists()
+
+
+@settings(max_examples=30, deadline=None)
+@given(st.sampled_from(["fireemu-oracle-sbx", "fireemu-oracle-txn"]), st.text(alphabet="0123456789abcdef", min_size=32, max_size=32))
+def test_generated_table_projects_rebase_only_declared_request_fields(project, nonce):
+    import txn_program_wire as wire
+    from unittest.mock import patch
+    from fs_txn_table_p02 import TABLE
+    from txn_program_program import compile_plan
+    from txn_program_runner import wire_scope
+    plan = compile_plan({**TABLE, "project": project}, nonce, "b" * 32)
+    database = plan["database"]
+    document = plan["documents"]["a"]
+    request = {"database": database, "name": document, "documents": [document], "writes": [{"update": {"name": document, "fields": {}}}], "transaction": "dG9rZW4=", "literal": database}
+    original = copy.deepcopy(request)
+    specs = []
+    with patch.object(wire, "verify_runtime", lambda _runtime: None):
+        local = wire.NodeWire({}, wire_scope(TABLE), target={"kind": "local", "host": "127.0.0.1", "port": 12345}, project=plan["project"])
+    def intercept(spec, _timeout):
+        specs.append(spec)
+        raise RuntimeError("offline dispatch interception")
+    local._child = intercept
+    with patch.object(wire, "verify_runtime", lambda _runtime: None), pytest.raises(RuntimeError, match="offline dispatch interception"):
+        local.send("grpc", "GetDocument", request, nonce=nonce, owner_id="b" * 32, bearer="owner")
+    spec = specs[0]
+    assert spec["projectId"] == "demo-program"
+    assert spec["request"]["database"] == "projects/demo-program/databases/(default)"
+    expected_document = document.replace(database, "projects/demo-program/databases/(default)", 1)
+    assert spec["request"]["name"] == expected_document
+    assert spec["request"]["documents"] == [expected_document]
+    assert spec["request"]["writes"][0]["update"]["name"] == expected_document
+    assert spec["request"]["transaction"] == original["transaction"]
+    assert spec["request"]["literal"] == database
+    assert request == original

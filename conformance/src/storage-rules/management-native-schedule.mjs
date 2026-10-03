@@ -1,7 +1,12 @@
-import { buildNativeManifest, nativeDigest } from "./management-native-manifest.mjs";
+import {
+  buildNativeManifest,
+  nativeDigest,
+  nativeSnapshot,
+} from "./management-native-manifest.mjs";
 
 /** Reject relabelled, mixed-branch or resealed inventories rather than filtering a full manifest. */
-export function validateNativeManifest(manifest) {
+export function validateNativeManifest(input) {
+  const manifest = nativeSnapshot(input, "native manifest");
   const params = Object.fromEntries(
     [
       "runId",

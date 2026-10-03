@@ -1,6 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { buildNativeManifest } from "./storage-rules/management-native-manifest.mjs";
+import {
+  buildNativeManifest,
+  nativeSnapshot,
+} from "./storage-rules/management-native-manifest.mjs";
 
 export function nativeParams(branch = "absent") {
   return {
@@ -160,13 +163,15 @@ function gateHarness(manifest, fault = {}) {
     send: async (spec) => {
       sent.push(spec);
       if (fault.unknown) throw Error("lost response");
-      return spec.url.endsWith("/token")
+      const raw = spec.url.endsWith("/token")
         ? bytes({
             access_token: "synthetic-owner-token-0000",
             token_type: "Bearer",
             expires_in: 3600,
           })
         : bytes({ id: "synthetic-owner" });
+      fault.observedRaw = raw;
+      return raw;
     },
   };
   const gate = createNativeGate({
@@ -189,6 +194,7 @@ function gateHarness(manifest, fault = {}) {
     bucket,
     capture,
     admission,
+    reservations,
     get checks() {
       return checks;
     },
@@ -214,7 +220,7 @@ test("owner refresh uses one leased counted OAuth row before a data request, wit
 
 const { withNativeMockRecording, nativeRunnerDigest } =
   await import("./storage-rules/management-native-record.mjs");
-import { mkdtemp, mkdir, rm } from "node:fs/promises";
+import { mkdtemp, mkdir, rm, readdir } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { nativeDigest } from "./storage-rules/management-native-manifest.mjs";
@@ -498,6 +504,7 @@ export async function runNativeMock(
   fault = "none",
   delay = 0,
   changeProof = () => {},
+  hooks = {},
 ) {
   const m = structuredClone(buildNativeManifest(nativeParams(branch))),
     proof = nativeApprovalFixture(m),
@@ -513,13 +520,16 @@ export async function runNativeMock(
   await mkdir(join(dir, "run"), { mode: 0o700 });
   let result;
   try {
-    result = await withNativeMockRecording(
+    const pending = withNativeMockRecording(
       {
         manifest: m,
         packet: proof.packet,
         review: proof.review,
         readLedger: async () => proof.ledger,
-        readCurrent: async () => proof.current,
+        readCurrent: async () => {
+          await hooks.readCurrent?.({ proof, model });
+          return proof.current;
+        },
         directory: join(dir, "run"),
         lockOptions: {
           lockDir: join(dir, "locks"),
@@ -534,12 +544,15 @@ export async function runNativeMock(
         responseContracts: model.contracts,
       },
       async (recording) => {
+        await hooks.afterAssembly?.({ recording, proof, model });
         const r = await recording.run();
         result = r;
         if (r.status === "finished") recording.confirmCleanClose(r);
         return r;
       },
     );
+    await hooks.duringAssembly?.({ proof, model });
+    result = await pending;
   } catch (error) {
     result = {
       ...result,
@@ -549,6 +562,7 @@ export async function runNativeMock(
       reason: result?.reason ?? error.message,
       lockReason: error.message,
     };
+    await hooks.afterFailure?.({ dir, result });
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
@@ -891,4 +905,337 @@ test("native 200 with error.code 403 cannot be frozen as a denial contract", asy
   const { result, model } = await runNativeMock("absent", "contract-deny-status200");
   assert.equal(result.status, "HOLD");
   assert.equal(model.wire.length, 0);
+});
+
+for (const branch of ["absent", "present"])
+  test(`snapshot rejects post-assembly deny relabelling in ${branch} branch`, async () => {
+    const { result, model: actualModel } = await runNativeMock(branch, "none", 0, () => {}, {
+      afterAssembly({ model }) {
+        model.contracts.denied = model.contracts.allowed;
+        const original = model.transport.send;
+        model.transport.send = async (spec) => {
+          const raw = await original(spec);
+          return new URL(spec.url).origin === "https://firebasestorage.googleapis.com" &&
+            raw.status === 403
+            ? model.contracts.allowed
+            : raw;
+        };
+      },
+      async afterFailure({ dir }) {
+        assert((await readdir(join(dir, "locks"), { recursive: true })).length > 0);
+      },
+    });
+    assert.equal(result.status, "HOLD");
+    assert.equal(result.supplementPassed, false);
+    assert.equal(result.usage.unknown, false);
+    assert.equal(result.reason, "finite complete settle budget exhausted");
+    assert(result.lockReason);
+    assert(
+      !result.evidence.some((row) => row.id.startsWith("before/") || row.kind === "invalid-test"),
+    );
+    assert.equal(result.usage.requests, actualModel.wire.length);
+    assert(!actualModel.wire.some((row) => row.method === "DELETE"));
+    assert.equal(result.parentClaim, false);
+  });
+test("snapshot rejects external Buffer edits across the first admission await", async () => {
+  let edited = false;
+  const { result } = await runNativeMock("absent", "none", 0, () => {}, {
+    async readCurrent({ model }) {
+      await Promise.resolve();
+      if (!edited) {
+        edited = true;
+        model.contracts.adminMedia.bytes[0] = 0x58;
+        model.contracts.adminMedia.rawHeaders[0] = "content-type";
+      }
+    },
+  });
+  assert.equal(result.status, "HOLD");
+  assert.equal(result.usage.unknown, true);
+  assert.equal(result.parentClaim, false);
+});
+test("snapshot binds runner pins before the first readCurrent callback", async () => {
+  let changed = false;
+  const { result, model } = await runNativeMock("absent", "none", 0, () => {}, {
+    readCurrent({ proof }) {
+      if (!changed) {
+        changed = true;
+        const old = proof.packet.runnerSha256;
+        proof.packet.runnerSha256 = "0".repeat(64);
+        proof.review.runnerSha256 = proof.packet.runnerSha256;
+        proof.ledger = proof.ledger.replace(old, proof.packet.runnerSha256);
+      }
+    },
+  });
+  assert.equal(result.status, "HOLD");
+  assert.equal(model.wire.length, 0);
+  assert.equal(result.parentClaim, false);
+});
+test("gate excludes same and different IDs before the first admission await", async () => {
+  for (const same of [true, false]) {
+    const h = gateHarness(buildNativeManifest(nativeParams()));
+    await h.gate.start();
+    await h.gate.sendCredential("preflight/credential/owner/1");
+    let release, entered;
+    const held = new Promise((resolve) => {
+      release = resolve;
+    });
+    const ready = new Promise((resolve) => {
+      entered = resolve;
+    });
+    h.admission.check = async () => {
+      entered();
+      await held;
+      return { admitted: true };
+    };
+    const first = h.gate.send(h.prepared);
+    await ready;
+    const second = h.gate.send(same ? h.prepared : h.bucket);
+    const outcomes = Promise.allSettled([first, second]);
+    release();
+    const settled = await outcomes;
+    assert.equal(settled[0].status, "fulfilled");
+    assert.equal(settled[1].status, "rejected");
+    assert.equal(h.sent.length, 2);
+    assert.equal(h.gate.snapshot().requests, 2);
+    assert.equal(h.gate.snapshot().used.length, 2);
+  }
+});
+
+test("snapshot rejects external stable header edits across an admission await", async () => {
+  let edited = false;
+  const { result } = await runNativeMock("absent", "none", 0, () => {}, {
+    async readCurrent({ model }) {
+      await Promise.resolve();
+      if (!edited) {
+        edited = true;
+        model.contracts.adminMedia.rawHeaders[1] = "text/plain";
+      }
+    },
+  });
+  assert.equal(result.status, "HOLD");
+  assert.equal(result.usage.unknown, true);
+});
+test("snapshot rejects packet, nested array and contract accessors or proxies without invoking them", async () => {
+  for (const kind of ["packet-proxy", "review-accessor", "project-accessor"]) {
+    let invoked = 0;
+    const { result, model } = await runNativeMock("absent", "none", 0, (proof) => {
+      if (kind === "packet-proxy")
+        proof.packet = new Proxy(proof.packet, {
+          getPrototypeOf() {
+            invoked++;
+            throw Error("proxy trap invoked");
+          },
+        });
+      if (kind === "review-accessor")
+        Object.defineProperty(proof.review, "runnerSha256", {
+          get() {
+            invoked++;
+            throw Error("accessor invoked");
+          },
+          enumerable: true,
+          configurable: true,
+        });
+      if (kind === "project-accessor")
+        Object.defineProperty(proof.packet.projects, "0", {
+          get() {
+            invoked++;
+            throw Error("array accessor invoked");
+          },
+          enumerable: true,
+          configurable: true,
+        });
+    });
+    assert.equal(result.status, "HOLD");
+    assert.equal(model.wire.length, 0);
+    assert.equal(invoked, 0);
+  }
+});
+
+test("snapshot copies Buffer and arrays and rejects their accessors and proxies without traps", () => {
+  const input = { headers: ["content-type", "application/json"], bytes: Buffer.from("next") },
+    copy = nativeSnapshot(input);
+  input.bytes.fill(0);
+  input.headers[1] = "text/plain";
+  assert.equal(copy.bytes.toString(), "next");
+  assert.equal(copy.headers[1], "application/json");
+  assert(Object.isFrozen(copy));
+  assert(Object.isFrozen(copy.headers));
+  for (const kind of ["headers-accessor", "buffer-accessor", "headers-proxy", "buffer-proxy"]) {
+    let invoked = 0;
+    const raw = { headers: ["content-type", "application/json"], bytes: Buffer.from("next") };
+    if (kind === "headers-accessor")
+      Object.defineProperty(raw.headers, "0", {
+        get() {
+          invoked++;
+          throw Error("snapshot accessor invoked");
+        },
+        enumerable: true,
+      });
+    if (kind === "buffer-accessor")
+      Object.defineProperty(raw.bytes, "danger", {
+        get() {
+          invoked++;
+          throw Error("snapshot accessor invoked");
+        },
+        enumerable: true,
+      });
+    const trap = {
+      getPrototypeOf() {
+        invoked++;
+        throw Error("proxy invoked");
+      },
+    };
+    if (kind === "headers-proxy") raw.headers = new Proxy(raw.headers, trap);
+    if (kind === "buffer-proxy") raw.bytes = new Proxy(raw.bytes, trap);
+    assert.throws(() => nativeSnapshot(raw));
+    assert.equal(invoked, 0);
+  }
+});
+test("gate start is exclusive before await and failed admission remains refused", async () => {
+  const h = gateHarness(buildNativeManifest(nativeParams()));
+  let release, entered;
+  const held = new Promise((resolve) => {
+    release = resolve;
+  });
+  const ready = new Promise((resolve) => {
+    entered = resolve;
+  });
+  h.admission.begin = async () => {
+    entered();
+    await held;
+    return { admitted: true };
+  };
+  const first = h.gate.start();
+  await ready;
+  const settled = Promise.allSettled([
+    first,
+    h.gate.start(),
+    h.gate.sendCredential("preflight/credential/owner/1"),
+    h.gate.finish("finished"),
+  ]);
+  release();
+  assert.deepEqual(
+    (await settled).map((row) => row.status),
+    ["fulfilled", "rejected", "rejected", "rejected"],
+  );
+  assert.equal(h.events.filter((row) => row[0] === "started").length, 1);
+  assert.equal(h.sent.length, 0);
+  const failed = gateHarness(buildNativeManifest(nativeParams()));
+  failed.admission.begin = async () => ({ admitted: false });
+  await assert.rejects(failed.gate.start());
+  await assert.rejects(failed.gate.start());
+  assert.equal(failed.sent.length, 0);
+});
+test("gate release after admission refusal cannot reopen a route", async () => {
+  const h = gateHarness(buildNativeManifest(nativeParams()), { revoked: true });
+  await h.gate.start();
+  await assert.rejects(h.gate.sendCredential("preflight/credential/owner/1"));
+  await assert.rejects(h.gate.sendCredential("preflight/credential/owner/1"));
+  assert.equal(h.sent.length, 0);
+  assert.equal(h.gate.snapshot().refused, true);
+});
+test("gate finish excludes dispatch and another finish until the durable terminal is complete", async () => {
+  const h = gateHarness(buildNativeManifest(nativeParams()));
+  await h.gate.start();
+  let release, entered;
+  const held = new Promise((resolve) => {
+    release = resolve;
+  });
+  const ready = new Promise((resolve) => {
+    entered = resolve;
+  });
+  // This injected terminal models exclusion only; actual journals require complete preflight proofs.
+  h.reservations.onTerminal = async () => {
+    entered();
+    await held;
+  };
+  const first = h.gate.finish("finished");
+  await ready;
+  const settled = Promise.allSettled([
+    first,
+    h.gate.finish("finished"),
+    h.gate.sendCredential("preflight/credential/owner/1"),
+  ]);
+  release();
+  assert.deepEqual(
+    (await settled).map((row) => row.status),
+    ["fulfilled", "rejected", "rejected"],
+  );
+  await assert.rejects(h.gate.sendCredential("preflight/credential/owner/1"));
+  assert.equal(h.sent.length, 0);
+});
+
+test("snapshot pins observed response bytes and headers before journal awaits", async () => {
+  const fault = {},
+    h = gateHarness(buildNativeManifest(nativeParams()), fault);
+  await h.gate.start();
+  await h.gate.sendCredential("preflight/credential/owner/1");
+  const observed = await h.gate.send(h.prepared),
+    saved = Buffer.from(observed.raw.bytes),
+    savedHeaders = [...observed.raw.rawHeaders];
+  fault.observedRaw.bytes.fill(0);
+  fault.observedRaw.rawHeaders[1] = "text/plain";
+  assert(observed.raw.bytes.equals(saved));
+  assert.deepEqual(observed.raw.rawHeaders, savedHeaders);
+});
+
+test("snapshot makes caller-only packet and review edits inert when fresh ledger stays bound", async () => {
+  const { result } = await runNativeMock("absent", "none", 0, () => {}, {
+    afterAssembly({ proof }) {
+      proof.packet.runnerSha256 = "0".repeat(64);
+      proof.packet.packetName = "foreign";
+      proof.review.verdict = "DENY";
+      proof.review.must.push("foreign");
+    },
+  });
+  assert.equal(result.status, "finished");
+  assert.equal(result.supplementPassed, true);
+  assert.equal(result.parentClaim, false);
+});
+test("snapshot rejects nested manifest accessors and proxies without invoking them", () => {
+  for (const proxy of [false, true]) {
+    let invoked = 0;
+    const input = nativeParams();
+    if (proxy)
+      input.baseline = new Proxy(input.baseline, {
+        get() {
+          invoked++;
+          throw Error("proxy invoked");
+        },
+      });
+    else
+      Object.defineProperty(input.baseline, "observedAt", {
+        get() {
+          invoked++;
+          return 1000;
+        },
+        enumerable: true,
+      });
+    assert.throws(() => buildNativeManifest(input));
+    assert.equal(invoked, 0);
+  }
+});
+
+test("snapshot binds fixture bytes before the first asynchronous lock acquisition", async () => {
+  const { result } = await runNativeMock("absent", "none", 0, () => {}, {
+    duringAssembly({ model }) {
+      model.contracts.adminMedia.rawHeaders[1] = "text/plain";
+    },
+  });
+  assert.equal(result.status, "HOLD");
+  assert.equal(result.supplementPassed, false);
+  assert.equal(result.usage.unknown, true);
+  assert.equal(result.parentClaim, false);
+});
+
+test("gate terminal failure is sticky after exclusivity releases", async () => {
+  const h = gateHarness(buildNativeManifest(nativeParams()));
+  await h.gate.start();
+  h.reservations.onTerminal = async () => {
+    throw Error("terminal persistence lost");
+  };
+  await assert.rejects(h.gate.finish("finished"));
+  assert.equal(h.gate.snapshot().poisoned, true);
+  await assert.rejects(h.gate.sendCredential("preflight/credential/owner/1"));
+  assert.equal(h.sent.length, 0);
 });

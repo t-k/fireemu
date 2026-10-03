@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { types } from "node:util";
 import { buildManagementPrograms } from "./management_programs.mjs";
 
 export const NATIVE_PROJECT = "fireemu-oracle-query";
@@ -11,6 +12,7 @@ export const nativeDigest = (value) =>
 export function nativeClosed(value, keys, label = "native input") {
   if (
     !value ||
+    types.isProxy(value) ||
     Object.getPrototypeOf(value) !== Object.prototype ||
     Reflect.ownKeys(value).length !== keys.length ||
     keys.some(
@@ -20,6 +22,76 @@ export function nativeClosed(value, keys, label = "native input") {
     )
   )
     throw new Error(`invalid ${label}`);
+}
+/** Copy closed data before any callback; descriptors avoid accessors and proxies are never inspected. */
+export function nativeSnapshot(value, label = "native snapshot", ancestors = new Set()) {
+  if (
+    value === null ||
+    typeof value === "string" ||
+    typeof value === "boolean" ||
+    (typeof value === "number" && Number.isFinite(value))
+  )
+    return value;
+  if (typeof value !== "object" || types.isProxy(value) || ancestors.has(value))
+    throw new Error(`invalid ${label}`);
+  const prototype = Object.getPrototypeOf(value),
+    descriptors = Object.getOwnPropertyDescriptors(value),
+    keys = Reflect.ownKeys(descriptors);
+  if (Buffer.isBuffer(value)) {
+    if (
+      prototype !== Buffer.prototype ||
+      keys.some(
+        (key) =>
+          typeof key !== "string" ||
+          !/^(?:0|[1-9]\d*)$/.test(key) ||
+          !Object.hasOwn(descriptors[key], "value"),
+      ) ||
+      keys.length !== value.length ||
+      value.length > 2 * 1024 * 1024
+    )
+      throw new Error(`invalid ${label} bytes`);
+    return Buffer.from(Uint8Array.prototype.slice.call(value));
+  }
+  const array = Array.isArray(value);
+  if (
+    prototype !== (array ? Array.prototype : Object.prototype) ||
+    keys.length > 10000 ||
+    keys.some(
+      (key) =>
+        typeof key !== "string" ||
+        !Object.hasOwn(descriptors[key], "value") ||
+        (key !== "length" && !descriptors[key].enumerable),
+    )
+  )
+    throw new Error(`invalid ${label} descriptors`);
+  if (
+    array &&
+    (!Number.isSafeInteger(descriptors.length?.value) ||
+      descriptors.length.value < 0 ||
+      keys.length !== descriptors.length.value + 1 ||
+      keys.some(
+        (key) =>
+          key !== "length" &&
+          (!/^(?:0|[1-9]\d*)$/.test(key) || Number(key) >= descriptors.length.value),
+      ))
+  )
+    throw new Error(`invalid ${label} array`);
+  ancestors.add(value);
+  const result = array ? [] : {};
+  try {
+    for (const key of keys) {
+      if (array && key === "length") continue;
+      Object.defineProperty(result, key, {
+        value: nativeSnapshot(descriptors[key].value, label, ancestors),
+        enumerable: true,
+        writable: false,
+        configurable: false,
+      });
+    }
+  } finally {
+    ancestors.delete(value);
+  }
+  return Object.freeze(result);
 }
 const freeze = (value) => {
   if (value && typeof value === "object") {
@@ -49,7 +121,7 @@ export function buildNativeManifest(input) {
     "limits",
     "priorCompileProofs",
   ]);
-  const p = structuredClone(input);
+  const p = structuredClone(nativeSnapshot(input, "native manifest input"));
   if (
     !/^[a-z0-9][a-z0-9-]{0,47}$/.test(p.runId) ||
     !/^[a-f0-9]{40}$/.test(p.sourceCommit) ||

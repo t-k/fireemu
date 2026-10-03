@@ -8,6 +8,7 @@ import {
   nativeClosed,
   nativeDigest,
   nativeRef,
+  nativeSnapshot,
 } from "./management-native-manifest.mjs";
 import { validateNativeManifest, buildNativeSchedule } from "./management-native-schedule.mjs";
 import { createTargetBuilder } from "./target.mjs";
@@ -455,35 +456,37 @@ export function createNativeGate(options) {
   }
   async function dispatch(id, prepared, credential) {
     check();
-    const row = rows.get(id);
-    if (!row || row.phase !== mode || (row.kind === "owner-credential") !== credential)
-      fail("undeclared native phase or route");
-    if (used.has(id)) fail("duplicate used native ID");
-    if (
-      requests >= manifest.counts.total ||
-      (mode === "recovery"
-        ? recovery >= manifest.counts.recovery
-        : normal >= manifest.counts.normal)
-    )
-      fail("derived native cap exhausted");
-    const spec = credential ? provider.prepare(row) : prepared.spec;
-    if (
-      credential
-        ? spec.url !== "https://oauth2.googleapis.com/token" ||
-          spec.method !== "POST" ||
-          !Buffer.isBuffer(spec.body)
-        : !targets.verify(prepared) ||
-          prepared.rowId !== id ||
-          prepared.project !== NATIVE_PROJECT ||
-          prepared.credential !== row.request.credential
-    )
-      fail("closed native target required");
-    transport.validate(spec);
-    await admitted();
-    if (capture.snapshot().uncertain) fail("capture journal uncertain");
     busy = true;
-    used.add(id);
+    let durableStarted = false;
     try {
+      const row = rows.get(id);
+      if (!row || row.phase !== mode || (row.kind === "owner-credential") !== credential)
+        fail("undeclared native phase or route");
+      if (used.has(id)) fail("duplicate used native ID");
+      if (
+        requests >= manifest.counts.total ||
+        (mode === "recovery"
+          ? recovery >= manifest.counts.recovery
+          : normal >= manifest.counts.normal)
+      )
+        fail("derived native cap exhausted");
+      const spec = credential ? provider.prepare(row) : prepared.spec;
+      if (
+        credential
+          ? spec.url !== "https://oauth2.googleapis.com/token" ||
+            spec.method !== "POST" ||
+            !Buffer.isBuffer(spec.body)
+          : !targets.verify(prepared) ||
+            prepared.rowId !== id ||
+            prepared.project !== NATIVE_PROJECT ||
+            prepared.credential !== row.request.credential
+      )
+        fail("closed native target required");
+      transport.validate(spec);
+      await admitted();
+      if (capture.snapshot().uncertain) fail("capture journal uncertain");
+      used.add(id);
+      durableStarted = true;
       await capture.writeIntent({
         operationId: id,
         phase: mode,
@@ -510,7 +513,8 @@ export function createNativeGate(options) {
               }),
             };
         const response = await transport.send({ ...spec, headers });
-        raw = { status: response.status, rawHeaders: response.rawHeaders, bytes: response.bytes };
+        raw = nativeSnapshot(response, "observed native response");
+        nativeClosed(raw, ["status", "rawHeaders", "bytes"], "observed native response");
       } catch {
         unknown = true;
         await capture.writeNote({
@@ -537,7 +541,7 @@ export function createNativeGate(options) {
       }
       return { raw, attempt: requests, row };
     } catch (error) {
-      if (!unknown) poisoned = true;
+      if (durableStarted && !unknown) poisoned = true;
       throw error;
     } finally {
       busy = false;
@@ -545,25 +549,33 @@ export function createNativeGate(options) {
   }
   return Object.freeze({
     async start() {
-      if (mode !== "not-started") fail("native gate already started");
-      const seen = await admission.begin();
-      if (seen?.admitted !== true) fail("native admission refused");
-      await reservations.onStarted({
-        runId: manifest.runId,
-        ...manifest.legacyReservationCeiling,
-        preflightIds: preflight,
-      });
-      startedAt = nowSeconds();
-      mode = "preflight";
-      await capture.writeNote({
-        operationId: null,
-        text: JSON.stringify({
-          kind: "NARROW_DERIVED_CAP",
-          cap: manifest.counts,
-          legacyReservationCeiling: manifest.legacyReservationCeiling,
-          accountProof: manifest.accountProof,
-        }),
-      });
+      if (mode !== "not-started" || busy || refused) fail("native gate already started");
+      busy = true;
+      try {
+        const seen = await admission.begin();
+        if (seen?.admitted !== true) fail("native admission refused");
+        await reservations.onStarted({
+          runId: manifest.runId,
+          ...manifest.legacyReservationCeiling,
+          preflightIds: preflight,
+        });
+        startedAt = nowSeconds();
+        mode = "preflight";
+        await capture.writeNote({
+          operationId: null,
+          text: JSON.stringify({
+            kind: "NARROW_DERIVED_CAP",
+            cap: manifest.counts,
+            legacyReservationCeiling: manifest.legacyReservationCeiling,
+            accountProof: manifest.accountProof,
+          }),
+        });
+      } catch (error) {
+        refused = true;
+        throw error;
+      } finally {
+        busy = false;
+      }
     },
     send: (prepared) => dispatch(prepared.rowId, prepared, false),
     sendCredential: (id) => dispatch(id, null, true),
@@ -580,14 +592,22 @@ export function createNativeGate(options) {
     },
     async finish(outcome) {
       check();
-      await reservations.onTerminal({
-        outcome,
-        requests,
-        normal,
-        recovery,
-        maxRequests: manifest.legacyReservationCeiling.maxRequests,
-      });
-      mode = "closed";
+      busy = true;
+      try {
+        await reservations.onTerminal({
+          outcome,
+          requests,
+          normal,
+          recovery,
+          maxRequests: manifest.legacyReservationCeiling.maxRequests,
+        });
+        mode = "closed";
+      } catch (error) {
+        poisoned = true;
+        throw error;
+      } finally {
+        busy = false;
+      }
     },
     markUnknown() {
       unknown = true;
@@ -780,8 +800,8 @@ export function createNativeDriver(options) {
   );
   const manifest = validateNativeManifest(options.manifest),
     schedule = buildNativeSchedule(manifest),
-    { gate, targets, refs, objects, capture, provider, wait, nowSeconds, responseContracts } =
-      options;
+    { gate, targets, refs, objects, capture, provider, wait, nowSeconds } = options,
+    responseContracts = nativeSnapshot(options.responseContracts, "native response contracts");
   if (
     options.evidenceKind !== "SYNTHETIC_ONLY" ||
     typeof wait !== "function" ||
@@ -1297,7 +1317,13 @@ export async function withNativeMockRecording(options, use) {
     "native mock assembly",
   );
   const manifest = validateNativeManifest(options.manifest),
-    { packet, review, readLedger, readCurrent, directory, clock } = options;
+    { readLedger, readCurrent, directory } = options,
+    packet = nativeSnapshot(options.packet, "native packet"),
+    review = nativeSnapshot(options.review, "native review"),
+    responseContracts = nativeSnapshot(options.responseContracts, "native response contracts"),
+    refreshBody = nativeSnapshot(options.refreshBody, "owner refresh bytes");
+  nativeClosed(options.clock, ["nowSeconds", "sleep"], "native clock");
+  const clock = Object.freeze({ nowSeconds: options.clock.nowSeconds, sleep: options.clock.sleep });
   nativeClosed(clock, ["nowSeconds", "sleep"], "native clock");
   if (
     typeof use !== "function" ||
@@ -1306,10 +1332,10 @@ export async function withNativeMockRecording(options, use) {
     fail("invalid native mock assembly");
   if (
     packet.runnerSha256 !== nativeRunnerDigest() ||
-    packet.fixtureSchemaSha256 !== nativeDigest(options.responseContracts)
+    packet.fixtureSchemaSha256 !== nativeDigest(responseContracts)
   )
     fail("native source or fixture receipt mismatch");
-  validateResponseContracts(manifest, options.responseContracts);
+  validateResponseContracts(manifest, responseContracts);
   const usage = createRecordingUsage({
     path: options.usagePath,
     packetSha256: packet.packetSha256,
@@ -1327,7 +1353,7 @@ export async function withNativeMockRecording(options, use) {
     const check = async () => {
       if (refused) fail("native admission permanently refused");
       try {
-        const current = await readCurrent();
+        const current = nativeSnapshot(await readCurrent(), "fresh current admission");
         if (current.kind !== "MOCK_CURRENT_ADMISSION")
           fail("mock assembly does not accept live ROOT capability");
         validateNativeApproval({
@@ -1407,7 +1433,7 @@ export async function withNativeMockRecording(options, use) {
         verify: (prepared) => issued.has(prepared) && underlying.verify(prepared),
       });
       const provider = createOwnerOnlyProvider({
-        refreshBody: options.refreshBody,
+        refreshBody,
         nowSeconds: clock.nowSeconds,
         digestSalt,
       });
@@ -1432,7 +1458,7 @@ export async function withNativeMockRecording(options, use) {
         provider,
         wait: clock.sleep,
         nowSeconds: clock.nowSeconds,
-        responseContracts: options.responseContracts,
+        responseContracts,
         evidenceKind: "SYNTHETIC_ONLY",
       });
       await capture.writeCredentialProof({

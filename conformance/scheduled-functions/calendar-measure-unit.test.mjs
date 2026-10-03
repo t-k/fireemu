@@ -2519,6 +2519,7 @@ test("full native source publications handle short writes and refuse failed dura
           else dirSync++;
           return h.sync();
         },
+        stat: () => h.stat(),
         close: () => h.close(),
       };
     };
@@ -2536,6 +2537,7 @@ test("full native source publications handle short writes and refuse failed dura
           if (flags === "wx") await h.write(Buffer.from("!"), 0, 1, 0);
           return h.sync();
         },
+        stat: () => h.stat(),
         close: () => h.close(),
       };
     };
@@ -3124,7 +3126,7 @@ test("whole report archive short writes and independent durability faults retain
             return handle.write(bytes, offset, Math.min(length, 2048), position);
           },
           sync: async () => {
-            if (flags === "wx") fileSyncs++;
+            if ((await handle.stat()).isFile()) fileSyncs++;
             else directorySyncs++;
             if (fault === "file-sync" && archiveFile) throw new Error("archive file sync unknown");
             if (fault === "directory-sync" && archiveDirectory)
@@ -3133,6 +3135,7 @@ test("whole report archive short writes and independent durability faults retain
               await handle.write(Buffer.from("!"), 0, 1, 0);
             return handle.sync();
           },
+          stat: () => handle.stat(),
           close: () => handle.close(),
         };
       };
@@ -3546,5 +3549,69 @@ test("a sealed source-only archive campaign reaches the production certifier and
       );
   } finally {
     await fs.rm(root, { recursive: true });
+  }
+});
+
+test("durable publication rejects same-byte inode replacement after writer close or directory sync", async () => {
+  const fs = await import("node:fs/promises"),
+    { tmpdir } = await import("node:os"),
+    { join, dirname } = await import("node:path");
+  const m = await import("./calendar-measure.mjs");
+  for (const suffix of [
+    "native-sources/source-0.raw",
+    "native-report/report.raw",
+    "native-report/manifest.json",
+    "durable-verdict.json",
+  ]) {
+    for (const boundary of ["close", "directory-sync"]) {
+      const root = await fs.realpath(
+        await fs.mkdtemp(join(tmpdir(), "calendar-inode-publication-")),
+      );
+      try {
+        const { report, scope } = await fullNativeSourceFixture(root);
+        let target,
+          replaced = false;
+        const replace = async () => {
+          const bytes = await fs.readFile(target),
+            before = await fs.stat(target);
+          const displaced = target + ".displaced";
+          await fs.rename(target, displaced);
+          await fs.writeFile(target, bytes, { flag: "wx", mode: 0o600 });
+          assert.notEqual((await fs.stat(target)).ino, before.ino);
+          await fs.unlink(displaced);
+          replaced = true;
+        };
+        const publicationOpen = async (path, flags, mode) => {
+          const handle = await fs.open(path, flags, mode);
+          if (path.endsWith(suffix)) target = path;
+          return {
+            write: (...args) => handle.write(...args),
+            stat: () => handle.stat(),
+            sync: async () => {
+              await handle.sync();
+              if (boundary === "directory-sync" && target && path === dirname(target) && !replaced)
+                await replace();
+            },
+            close: async () => {
+              await handle.close();
+              if (boundary === "close" && path === target && !replaced) await replace();
+            },
+          };
+        };
+        await assert.rejects(
+          m.publishNativeReport(
+            Buffer.from(JSON.stringify(report)),
+            { attemptId: "one", planSha256: sha(Buffer.from(report.native.rawPlan, "base64")) },
+            scope,
+            { publicationOpen },
+          ),
+          /durable publication readback differs/,
+          `${suffix}:${boundary}`,
+        );
+        assert.equal(replaced, true);
+      } finally {
+        await fs.rm(root, { recursive: true });
+      }
+    }
   }
 });

@@ -1370,7 +1370,7 @@ async function privateDirectory(path) {
     throw new Error("native source directory alias");
   return stat;
 }
-async function boundedSourceRead(path, expected) {
+async function boundedSourceRead(path, expected, syncedWriter) {
   const before = await lstat(path);
   if (
     !before.isFile() ||
@@ -1378,6 +1378,7 @@ async function boundedSourceRead(path, expected) {
     before.nlink !== 1 ||
     before.uid !== process.getuid() ||
     before.size !== expected.bytes ||
+    (syncedWriter && !sameInode(before, syncedWriter)) ||
     (await realpath(path)) !== path
   )
     throw new Error("native source file alias or byte count differs");
@@ -1878,9 +1879,17 @@ async function currentCampaignContext() {
   return { utcDay: frozenDay(), harnessH: await harnessVersion(), filePins };
 }
 
+async function publicationIdentity(handle) {
+  const stat = await handle.stat();
+  if (!stat.isFile() || stat.nlink !== 1 || stat.uid !== process.getuid())
+    throw new Error("publication writer file identity differs");
+  return Object.freeze({ dev: stat.dev, ino: stat.ino });
+}
+
 /** An exclusive publication's full write, file+directory sync and exact raw readback. */
 async function publishCampaignBytes(path, raw, publicationOpen = open) {
   const handle = await publicationOpen(path, "wx", 0o600);
+  let syncedWriter;
   try {
     let offset = 0;
     while (offset < raw.length) {
@@ -1888,6 +1897,7 @@ async function publishCampaignBytes(path, raw, publicationOpen = open) {
       if (bytesWritten <= 0) throw new Error("publication made no progress");
       offset += bytesWritten;
     }
+    syncedWriter = await publicationIdentity(handle);
     await handle.sync();
   } finally {
     await handle.close();
@@ -1899,7 +1909,7 @@ async function publishCampaignBytes(path, raw, publicationOpen = open) {
     await directory.close();
   }
   try {
-    return await boundedSourceRead(path, { bytes: raw.length, sha256: digest(raw) });
+    return await boundedSourceRead(path, { bytes: raw.length, sha256: digest(raw) }, syncedWriter);
   } catch (error) {
     throw new Error(`durable publication readback differs: ${error.message}`, { cause: error });
   }

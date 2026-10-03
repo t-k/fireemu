@@ -53,6 +53,7 @@ export const installNodeWireGuard = ({ http2, globals, budget, phase, allowUrl =
       installed: false,
       inherited: Object.hasOwn(target, key) ? null : inheritedDescriptor(target, key),
     };
+    if (closed) throw new Error("wire guard closed");
     hooks.push(hook);
     if (!owners.has(target)) owners.set(target, new Map());
     owners.get(target).set(key, hook);

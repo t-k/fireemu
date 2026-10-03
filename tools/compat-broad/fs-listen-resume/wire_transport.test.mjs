@@ -929,3 +929,64 @@ test("generated callback lifecycle transitions retain an empty refused effect se
     }
   }
 });
+
+test("session getters closing before installation cannot trigger even a temporary hook write", () => {
+  let guard;
+  let reads = 0;
+  let writes = 0;
+  const original = () => "original";
+  let value = original;
+  const session = {};
+  Object.defineProperty(session, "request", {
+    get() {
+      if (++reads === 3) guard.close();
+      return value;
+    },
+    set(next) {
+      writes++;
+      value = next;
+    },
+  });
+  const http2 = { connect: () => session };
+  const globals = { fetch() {} };
+  guard = module.installNodeWireGuard({
+    http2,
+    globals,
+    budget: createWireBudget({ maxRequests: 3, cleanupReserve: 1 }),
+    phase: () => "observation",
+  });
+  assert.throws(() => http2.connect("http://127.0.0.1:1"), /closed/);
+  assert.equal(writes, 0);
+  assert.equal(session.request, original);
+});
+
+test("getter lifecycle changes immediately before send retain closed refusal provenance", async () => {
+  let guard;
+  let sends = 0;
+  let armed = false;
+  const original = () => {
+    sends++;
+  };
+  let value = original;
+  const globals = {};
+  Object.defineProperty(globals, "fetch", {
+    get() {
+      const read = value;
+      if (armed) guard.close();
+      return read;
+    },
+    set(next) {
+      value = next;
+    },
+  });
+  const http2 = { connect: () => ({ request() {} }) };
+  const budget = createWireBudget({ maxRequests: 3, cleanupReserve: 1 });
+  guard = module.installNodeWireGuard({ http2, globals, budget, phase: () => "observation" });
+  const captured = globals.fetch;
+  armed = true;
+  await assert.rejects(captured("http://127.0.0.1:1"), /closed/);
+  assert.equal(sends, 0);
+  assert.equal(budget.snapshot().total, 0);
+  assert.equal(guard.snapshot().failures.closed, 1);
+  assert.equal(guard.snapshot().failures.ownership, 0);
+});

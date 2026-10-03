@@ -440,3 +440,135 @@ for (const [name, tamper] of Object.entries({
     reseal(f);
     assert.equal(compare(f).pairedEffectsMatch, false);
   });
+
+// Native stage3-20260930c compile sequences 482, 485, 488, 491, 1061, 1064, 1067.
+const nativeV1WarningBytes = Buffer.from("{\n  \"issues\": [\n    {\n      \"sourcePosition\": {\n        \"fileName\": \"storage.rules\"\n      },\n      \"description\": \"Ruleset uses old version (version [1]). Please update to the latest version (version [2]).\",\n      \"severity\": \"WARNING\"\n    }\n  ]\n}\n");
+const nativeV1Warning = JSON.parse(nativeV1WarningBytes);
+const nativeV1Refs = new Set([
+  "case/list-v1-read-get-media-absent",
+  "case/list-v1-read-get-media-present",
+  "case/list-v1-read-list-absent",
+  "case/list-v1-read-list-present",
+  "case/recursive-v1-depth-0",
+  "case/recursive-v1-depth-1",
+  "case/recursive-v1-depth-2",
+]);
+function warningRow(f) {
+  return f.production.rows.find((row) => nativeV1Refs.has(row.sourceRef));
+}
+function replaceBytes(row, bytes) {
+  row.response.bodyBase64 = bytes.toString("base64");
+  row.response.bodyBytes = bytes.length;
+  row.response.bodySha256 = sha256(bytes);
+  row.response.headers["content-length"] = String(bytes.length);
+}
+
+test("native saved v1 warning bytes accept all seven exact compiled sources", async () => {
+  assert.equal(
+    sha256(nativeV1WarningBytes),
+    "9e2cfeb61db6c6aba51c1cf0dec680be5b81ede9ff560e3e80ae3548be789489",
+  );
+  const f = await fixture();
+  const selected = f.production.rows.filter((row) => nativeV1Refs.has(row.sourceRef));
+  assert.equal(selected.length, 7);
+  for (const row of selected) replaceBytes(row, nativeV1WarningBytes);
+  reseal(f);
+  const frozenProjection = JSON.stringify(f.production);
+  const result = compare(f);
+  assert.equal(result.pairedEffectsMatch, true, JSON.stringify(result.mismatches));
+  assert.equal(result.closureReady, false);
+  assert.equal(JSON.stringify(f.production), frozenProjection);
+});
+
+const warningBodies = {
+  "ERROR severity": { issues: [{ ...nativeV1Warning.issues[0], severity: "ERROR" }] },
+  "unknown severity": { issues: [{ ...nativeV1Warning.issues[0], severity: "INFO" }] },
+  "unknown warning": { issues: [{ ...nativeV1Warning.issues[0], description: "unknown" }] },
+  "description suffix": {
+    issues: [{ ...nativeV1Warning.issues[0], description: nativeV1Warning.issues[0].description + " " }],
+  },
+  "missing description": { issues: [{ severity: "WARNING", sourcePosition: { fileName: "storage.rules" } }] },
+  "missing position": { issues: [{ severity: "WARNING", description: nativeV1Warning.issues[0].description }] },
+  "foreign file": { issues: [{ ...nativeV1Warning.issues[0], sourcePosition: { fileName: "other.rules" } }] },
+  "position line": { issues: [{ ...nativeV1Warning.issues[0], sourcePosition: { fileName: "storage.rules", line: 1 } }] },
+  "null position": { issues: [{ ...nativeV1Warning.issues[0], sourcePosition: null }] },
+  "extra issue field": { issues: [{ ...nativeV1Warning.issues[0], unknown: true }] },
+  "extra envelope field": { ...nativeV1Warning, unknown: true },
+  "empty issues": { issues: [] },
+  "duplicate warning": { issues: [nativeV1Warning.issues[0], nativeV1Warning.issues[0]] },
+  "mixed error": { issues: [nativeV1Warning.issues[0], { severity: "ERROR" }] },
+  "nonarray issues": { issues: nativeV1Warning.issues[0] },
+  "null issue": { issues: [null] },
+  "array body": [],
+  "null body": null,
+};
+for (const [name, body] of Object.entries(warningBodies))
+  test(`native v1 warning rejects ${name}`, async () => {
+    const f = await fixture();
+    replaceBody(warningRow(f), body, 200);
+    reseal(f);
+    assert.equal(compare(f).pairedEffectsMatch, false);
+  });
+
+for (const status of [201, 204, 400, 403, 500])
+  test(`native v1 warning rejects HTTP ${status}`, async () => {
+    const f = await fixture();
+    const row = warningRow(f);
+    replaceBytes(row, nativeV1WarningBytes);
+    row.response.status = status;
+    reseal(f);
+    assert.equal(compare(f).pairedEffectsMatch, false);
+  });
+
+for (const drift of ["v2 source", "source digest", "source reference", "body digest", "body length", "content length", "body encoding", "malformed JSON", "receipt"])
+  test(`native v1 warning rejects ${drift} drift`, async () => {
+    const f = await fixture();
+    let row = warningRow(f);
+    if (drift === "v2 source")
+      row = f.production.rows.find((candidate) => candidate.kind === "compile" && !nativeV1Refs.has(candidate.sourceRef));
+    replaceBytes(row, nativeV1WarningBytes);
+    if (drift === "source digest") row.sourceSha256 = "f".repeat(64);
+    if (drift === "source reference") row.sourceRef = "case/foreign";
+    if (drift === "body digest") row.response.bodySha256 = "f".repeat(64);
+    if (drift === "body length") row.response.bodyBytes++;
+    if (drift === "content length") row.response.headers["content-length"] = "1";
+    if (drift === "body encoding") row.response.bodyBase64 += "=";
+    if (drift === "malformed JSON") replaceBytes(row, Buffer.from('{"issues":'));
+    if (drift !== "receipt") reseal(f);
+    assert.equal(compare(f).pairedEffectsMatch, false);
+  });
+
+for (const shape of ["symbol", "nonenumerable", "accessor"])
+  test(`compile raw response rejects ${shape} schema fields without invoking getters`, async () => {
+    const f = await fixture();
+    const row = warningRow(f);
+    let reads = 0;
+    if (shape === "symbol") row.response[Symbol("hidden")] = true;
+    if (shape === "nonenumerable") Object.defineProperty(row.response, "hidden", { value: true });
+    if (shape === "accessor")
+      Object.defineProperty(row.response, "status", { enumerable: true, get: () => { reads++; return 200; } });
+    reseal(f);
+    reads = 0;
+    assert.equal(compare(f).pairedEffectsMatch, false);
+    assert.equal(reads, 0);
+  });
+
+test("generated compile envelopes agree with the frozen source and warning reference model", async () => {
+  const base = await fixture();
+  const v1 = base.production.rows.filter((row) => nativeV1Refs.has(row.sourceRef));
+  const v2 = base.production.rows.filter((row) => row.kind === "compile" && !nativeV1Refs.has(row.sourceRef)).slice(0, 7);
+  const bodies = [{}, nativeV1Warning, ...Object.values(warningBodies)];
+  let seed = 0x747758;
+  for (let i = 0; i < 96; i++) {
+    seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0;
+    const ref = [...v1, ...v2][i % 14].sourceRef;
+    const bodyIndex = i < 28 ? Math.floor(i / 14) : seed % bodies.length;
+    const status = i < 28 || (seed & 1) === 0 ? 200 : 400;
+    const f = structuredClone(base);
+    const row = f.production.rows.find((candidate) => candidate.kind === "compile" && candidate.sourceRef === ref);
+    replaceBody(row, bodies[bodyIndex], status);
+    reseal(f);
+    const expected = status === 200 && (bodyIndex === 0 || (bodyIndex === 1 && nativeV1Refs.has(ref)));
+    assert.equal(compare(f).pairedEffectsMatch, expected, JSON.stringify({ i, ref, bodyIndex, status }));
+  }
+});

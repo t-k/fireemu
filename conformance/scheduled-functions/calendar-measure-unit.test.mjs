@@ -948,6 +948,15 @@ test("the CLI certificate boundary refuses synthetic summaries and omitted failu
       const result = await certify(listPath, { requireCampaign: true });
       assert.equal(result.verdict, "fail", "CLI requires native sealed campaign evidence");
       assert.equal(result.certificate, null);
+      const { spawnSync } = await import("node:child_process");
+      const { fileURLToPath } = await import("node:url");
+      const cli = fileURLToPath(new URL("./calendar-run-local.mjs", import.meta.url));
+      const child = spawnSync(process.execPath, [cli, "--certify", listPath], {
+        encoding: "utf8",
+        timeout: 10000,
+      });
+      assert.equal(child.status, 1, child.stdout + child.stderr);
+      assert.equal(JSON.parse(child.stdout).nativeCertificateIssued, false);
     }
   }
 });

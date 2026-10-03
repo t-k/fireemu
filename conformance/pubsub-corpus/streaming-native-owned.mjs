@@ -185,11 +185,14 @@ export async function createOwnedNativeStreamingFixture(options) {
     shutdownPromise;
   let seq = 0,
     eventOverflow = false,
-    currentRow;
+    currentRow,
+    readbackStarted = false;
   const calls = [],
     events = [],
     steps = [],
     pending = new Set();
+  const systemCalls = [],
+    nativePending = new Set();
   const sockets = new Set(),
     sessions = new Set(),
     streams = new Set();
@@ -311,6 +314,29 @@ export async function createOwnedNativeStreamingFixture(options) {
     );
     return task;
   }
+  function systemCall(handle, method, args, operationName) {
+    if (!owned.has(handle) || (handle !== file && handle !== directoryHandle))
+      throw new Error("foreign file handle refused");
+    if (systemCalls.length >= 6 * limits.maxWriterRows + 8) throw new Error("native syscall bound");
+    systemCalls.push({ operation: operationName, phase: "entry" });
+    const work = Promise.resolve(handle[method](...args));
+    nativePending.add(work);
+    work.then(
+      (result) => {
+        nativePending.delete(work);
+        systemCalls.push({
+          operation: operationName,
+          phase: "settled",
+          ...(method === "write" ? { bytesWritten: result.bytesWritten } : {}),
+        });
+      },
+      () => {
+        nativePending.delete(work);
+        systemCalls.push({ operation: operationName, phase: "rejected" });
+      },
+    );
+    return work;
+  }
   async function shutdown() {
     if (shutdownPromise) return shutdownPromise;
     shuttingDown = true;
@@ -336,7 +362,7 @@ export async function createOwnedNativeStreamingFixture(options) {
           }),
           cleanupAt,
         );
-      await until(Promise.allSettled([completion, ...pending]), cleanupAt);
+      await until(Promise.allSettled([completion, ...pending, ...nativePending]), cleanupAt);
       await until(
         Promise.all(
           [...streams, ...sessions, ...sockets].map(
@@ -345,20 +371,21 @@ export async function createOwnedNativeStreamingFixture(options) {
         ),
         cleanupAt,
       );
-      if (pending.size)
+      if (pending.size || nativePending.size)
         throw new Error("underlying I/O settlement unconfirmed; supervisor cleanup required");
       if (file) {
-        await file.close();
+        await systemCall(file, "close", [], "file-close");
         fileClosed = file.fd === -1;
       }
       if (directoryHandle) {
-        await directoryHandle.close();
+        await systemCall(directoryHandle, "close", [], "directory-close");
         directoryClosed = directoryHandle.fd === -1;
       }
       if (directory) await rm(directory, { recursive: true, force: true });
       activePorts.delete(state.port);
       return Object.freeze({
         pendingOperations: pending.size,
+        pendingNativeOperations: nativePending.size,
         serverClosed,
         fileClosed,
         directoryClosed,
@@ -374,7 +401,9 @@ export async function createOwnedNativeStreamingFixture(options) {
   try {
     directory = await mkdtemp(join(tmpdir(), "fireemu-native-owned-"));
     file = await open(join(directory, "wal"), "wx");
+    owned.add(file);
     directoryHandle = await open(directory, "r");
+    owned.add(directoryHandle);
     server = nativeCreateServer();
     owned.add(server);
     server.on("error", () => {});
@@ -435,13 +464,14 @@ export async function createOwnedNativeStreamingFixture(options) {
           return operation("write", () => {
             if (isDataRow() && ["short-write", "zero-write"].includes(ioFault))
               args[2] = ioFault === "zero-write" ? 0 : args[2] - 1;
-            return file.write(...args);
+            return systemCall(file, "write", args, "file-write");
           });
         },
         sync() {
           return operation("file-sync", async () => {
-            if (isDataRow() && ioFault === "close-file-before-sync") await file.close();
-            return file.sync();
+            if (isDataRow() && ioFault === "close-file-before-sync")
+              await systemCall(file, "close", [], "file-close");
+            return systemCall(file, "sync", [], "file-sync");
           });
         },
       },
@@ -449,8 +479,8 @@ export async function createOwnedNativeStreamingFixture(options) {
         sync() {
           return operation("directory-sync", async () => {
             if (isDataRow() && ioFault === "close-directory-before-sync")
-              await directoryHandle.close();
-            return directoryHandle.sync();
+              await systemCall(directoryHandle, "close", [], "directory-close");
+            return systemCall(directoryHandle, "sync", [], "directory-sync");
           });
         },
       },
@@ -548,7 +578,9 @@ export async function createOwnedNativeStreamingFixture(options) {
       ioSnapshot: () =>
         structuredClone({
           steps,
+          systemCalls,
           pendingOperations: pending.size,
+          pendingNativeOperations: nativePending.size,
           writer: writer.report(),
           crashDurability: "UNKNOWN",
         }),
@@ -573,7 +605,24 @@ export async function createOwnedNativeStreamingFixture(options) {
           );
         });
       },
-      readJournal: () => readFile(join(directory, "wal")),
+      readJournal() {
+        if (readbackStarted || shuttingDown)
+          throw new Error("one owned readback required before shutdown");
+        readbackStarted = true;
+        return operation("readback", async () => {
+          systemCalls.push({ operation: "readback", phase: "entry" });
+          const work = readFile(join(directory, "wal"));
+          nativePending.add(work);
+          try {
+            const bytes = await work;
+            if (bytes.length > limits.maxWriterBytes) throw new Error("owned readback byte bound");
+            systemCalls.push({ operation: "readback", phase: "settled" });
+            return bytes;
+          } finally {
+            nativePending.delete(work);
+          }
+        });
+      },
       shutdown,
     });
   } catch (error) {

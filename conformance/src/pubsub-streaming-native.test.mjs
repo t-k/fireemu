@@ -1,6 +1,9 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
+import { mkdtemp, realpath, rm } from "node:fs/promises";
+import { hostname, tmpdir, userInfo } from "node:os";
+import { join, relative } from "node:path";
 import { test } from "node:test";
 
 const target = new URL("../pubsub-corpus/streaming-native-owned.mjs", import.meta.url);
@@ -58,6 +61,7 @@ async function using(options, callback) {
   } finally {
     const shutdown = await f.shutdown();
     assert.equal(shutdown.pendingOperations, 0);
+    assert.equal(shutdown.pendingNativeOperations, 0);
     assert.equal(shutdown.fileClosed, true);
     assert.equal(shutdown.directoryClosed, true);
     assert.equal(shutdown.serverClosed, true);
@@ -454,6 +458,12 @@ test("late_post_syscall_callback_settlement_never_mutates_returned_UNKNOWN", asy
         .ioSnapshot()
         .steps.some((step) => step.operation === "file-sync" && step.phase === "settled"),
     );
+    assert.equal(f.ioSnapshot().pendingNativeOperations, 0);
+    assert.ok(
+      f
+        .ioSnapshot()
+        .systemCalls.some((call) => call.operation === "file-sync" && call.phase === "settled"),
+    );
     release.resolve();
     const shutdown = await f.shutdown();
     assert.equal(shutdown.pendingOperations, 0);
@@ -750,4 +760,115 @@ test("actual_native_callback_cap_causes_containment_without_frame_visibility", a
     assert.equal(report.nativeCallbacks, 1);
     assert.ok(f.boundarySnapshot().events.length <= 5);
   });
+});
+
+test("actual_registry_reads_refuse_foreign_PID_owner_authority_and_expired_rows_without_connect", async () => {
+  const api = await exports();
+  const { DatabaseSync } = await import("node:sqlite");
+  const directory = await mkdtemp(join(tmpdir(), "native-invalid-lease-"));
+  const dbPath = join(directory, "invalid.sqlite");
+  const keys = ["PORT", "PORT_REGISTRY_TOKEN", "PORT_REGISTRY_DB"];
+  const original = keys.map((key) => process.env[key]);
+  const cwd = await realpath(process.cwd());
+  const token = "0".repeat(32);
+  let base = {
+    token,
+    port: 12345,
+    host: "127.0.0.1",
+    pid: process.pid,
+    service: "codex-pubsub-native-e3",
+    agent_id: process.env.AGENT_ID ?? `${userInfo().username}@${hostname()}:${process.ppid}`,
+    cwd,
+    command: [
+      "node",
+      ...process.execArgv,
+      relative(cwd, process.argv[1]),
+      ...process.argv.slice(2),
+    ].join(" "),
+    expires_at: Math.floor(Date.now() / 1000) + 60,
+  };
+  if (original.every((value) => value !== undefined)) {
+    const registry = new DatabaseSync(original[2], { readOnly: true });
+    try {
+      const selected = registry
+        .prepare(
+          "SELECT token, port, host, pid, service, agent_id, cwd, command, expires_at FROM reservations WHERE token = ?",
+        )
+        .get(original[1]);
+      assert.equal(selected.pid, process.pid);
+      assert.equal(selected.service, "codex-pubsub-native-e3");
+      base = { ...selected, token };
+    } finally {
+      registry.close();
+    }
+  }
+  // These invalid, exclusively owned databases test refusal only; no capability is used to bind.
+  const poisons = [
+    { pid: process.pid + 1 },
+    { port: base.port === 65535 ? 65534 : base.port + 1 },
+    { host: "localhost" },
+    { service: "foreign-service" },
+    { agent_id: "foreign-owner" },
+    { cwd: directory },
+    { command: "node foreign-process.mjs" },
+    { token: "1".repeat(32) },
+    { expires_at: Math.floor(Date.now() / 1000) - 1 },
+  ];
+  try {
+    process.env.PORT = String(base.port);
+    process.env.PORT_REGISTRY_TOKEN = token;
+    process.env.PORT_REGISTRY_DB = dbPath;
+    for (const poison of poisons) {
+      const db = new DatabaseSync(dbPath);
+      try {
+        db.exec(
+          "DROP TABLE IF EXISTS reservations; CREATE TABLE reservations (token TEXT, port INTEGER, host TEXT, pid INTEGER, service TEXT, agent_id TEXT, cwd TEXT, command TEXT, expires_at INTEGER)",
+        );
+        const row = { ...base, ...poison };
+        db.prepare("INSERT INTO reservations VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)").run(
+          ...Object.values(row),
+        );
+      } finally {
+        db.close();
+      }
+      await assert.rejects(
+        api.acquireOwnedLoopbackLease({ deadlineAt: performance.now() + 1000 }),
+        /owned loopback lease/,
+      );
+    }
+  } finally {
+    keys.forEach((key, index) => {
+      if (original[index] === undefined) delete process.env[key];
+      else process.env[key] = original[index];
+    });
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("owned_readback_is_bounded_and_settles_before_FileHandle_shutdown", async () => {
+  const release = deferred();
+  const f = await fixture({
+    ioBarrier: async ({ operation, phase }) => {
+      if (operation === "readback" && phase === "before-syscall") await release.promise;
+    },
+  });
+  try {
+    const b = bridge(f);
+    await b.open();
+    await f.peer.ready();
+    await b.done();
+    const read = f.readJournal();
+    assert.equal(f.ioSnapshot().pendingOperations, 1);
+    assert.throws(() => f.readJournal(), /one owned readback/);
+    const stop = f.shutdown();
+    release.resolve();
+    journalRecords(await read);
+    const shutdown = await stop;
+    assert.equal(shutdown.pendingOperations, 0);
+    assert.equal(shutdown.pendingNativeOperations, 0);
+    assert.equal(shutdown.fileClosed, true);
+  } finally {
+    release.resolve();
+    await f.shutdown();
+  }
 });

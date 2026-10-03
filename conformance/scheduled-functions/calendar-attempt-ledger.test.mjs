@@ -469,6 +469,46 @@ test('close continues releasing remaining handles after one close failure', asyn
   assert.equal(traced.live.size, 0);
 });
 
+test('filesystem substitution during birth write prevents an acknowledgement before side effects', async (t) => {
+  const box = await sandbox(t);
+  let armed = false;
+  const traced = observedIo(async (event, invoke) => {
+    const value = await invoke();
+    if (armed && event === 'ledger.jsonl:write') {
+      armed = false;
+      await fs.rename(box.root, `${box.root}-original`);
+      await fs.mkdir(box.root);
+    }
+    return value;
+  });
+  const ledger = await createAttemptLedger({ ...box.options, io: traced.io });
+  t.after(() => ledger.close());
+  t.after(() => fs.rm(`${box.root}-original`, { recursive: true, force: true }));
+  armed = true;
+  await assert.rejects(ledger.registerBirth({ attemptId: 'a', planBytes: bytes({}) }), /unknown|identity/);
+  assert.equal(ledger.ioStatus().state, 'unknown');
+});
+
+test('raw report alteration during seal publication prevents durable seal acknowledgement', async (t) => {
+  const box = await sandbox(t);
+  let armed = false;
+  const traced = observedIo(async (event, invoke) => {
+    const value = await invoke();
+    if (armed && event === 'ledger.jsonl:write') {
+      armed = false;
+      await fs.writeFile(path.join(box.root, 'attempt-ledger', 'report-1.json'), report('a', 'fail', box.scope));
+    }
+    return value;
+  });
+  const ledger = await createAttemptLedger({ ...box.options, io: traced.io });
+  t.after(() => ledger.close());
+  await ledger.registerBirth({ attemptId: 'a', planBytes: bytes({}) });
+  await ledger.recordTerminal({ attemptId: 'a', reportBytes: report('a', 'pass', box.scope) });
+  armed = true;
+  await assert.rejects(ledger.seal(), /unknown|mismatch/);
+  assert.equal(ledger.ioStatus().state, 'unknown');
+});
+
 test('exports the bounded durable ledger and independent bytes validator', async () => {
   const api = await import('./calendar-attempt-ledger.mjs').catch(() => ({}));
   assert.equal(typeof api.createAttemptLedger, 'function', 'durable ledger API is missing');

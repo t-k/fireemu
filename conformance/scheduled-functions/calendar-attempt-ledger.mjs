@@ -227,6 +227,7 @@ export async function createAttemptLedger({ authorityBytes, authoritySha256, lim
     await fullWrite(journal, raw, offset);
     const after = await read(journal, limits.maxBytes);
     if (!after.equals(Buffer.concat([before, raw]))) throw fail('journal readback mismatch');
+    await guard();
     records.push(record);
     offset += raw.length;
   }
@@ -251,6 +252,21 @@ export async function createAttemptLedger({ authorityBytes, authoritySha256, lim
       catch (error) { failure ??= error; deadline = Date.now() + limits.deadlineMs; }
     }
     if (failure) throw failure;
+  }
+  async function verifyAuthority() {
+    const authority = await open(authorityPath, constants.O_RDONLY | constants.O_NOFOLLOW);
+    try {
+      await pin(authorityPath, authority);
+      if (!(await read(authority, limits.maxBytes)).equals(retainedAuthority)) throw fail('authority raw bytes mismatch');
+    } finally { await release(authority); }
+  }
+  async function refreshReports() {
+    for (const record of records.filter((record) => record.type === 'terminal' && record.reportFile !== null)) {
+      const file = path.join(directory, record.reportFile);
+      const handle = await open(file, constants.O_RDONLY | constants.O_NOFOLLOW);
+      try { await pin(file, handle); reports.set(record.reportFile, await read(handle, limits.maxReportBytes)); }
+      finally { await release(handle); }
+    }
   }
   try {
     deadline = Date.now() + limits.deadlineMs;
@@ -313,20 +329,14 @@ export async function createAttemptLedger({ authorityBytes, authoritySha256, lim
       if (busy) throw fail('seal raced an accepted writer');
       return operation(async () => {
         const seal = { type: 'seal', seq: records.length + 1, scope, tail: records.length, births: records.filter((record) => record.type === 'birth').length };
-        const authority = await open(authorityPath, constants.O_RDONLY | constants.O_NOFOLLOW);
-        try {
-          await pin(authorityPath, authority);
-          if (!(await read(authority, limits.maxBytes)).equals(retainedAuthority)) throw fail('authority raw bytes mismatch');
-        } finally { await release(authority); }
+        await verifyAuthority();
         // Re-read every bound report before fixing the tail. Cached bytes are not evidence.
-        for (const record of records.filter((record) => record.type === 'terminal' && record.reportFile !== null)) {
-          const handle = await open(path.join(directory, record.reportFile), constants.O_RDONLY | constants.O_NOFOLLOW);
-          try { await pin(path.join(directory, record.reportFile), handle); reports.set(record.reportFile, await read(handle, limits.maxReportBytes)); }
-          finally { await release(handle); }
-        }
+        await refreshReports();
         const verdict = reduceAttemptRecords(scope, [...records, seal], { reports, limits });
         if (verdict.state !== 'complete') throw fail(verdict.reasons.join('; ') || 'unknown terminal');
         await append(seal);
+        await verifyAuthority();
+        await refreshReports();
         await guard();
         const final = validateAttemptLedger({ authorityBytes: retainedAuthority, authoritySha256, ledgerBytes: await read(journal, limits.maxBytes), reports, limits });
         if (final.state !== 'complete') throw fail('final sealed readback unknown');

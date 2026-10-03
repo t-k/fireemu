@@ -191,14 +191,6 @@ pub fn firestore_event(
     if let Some((auth_type, auth_id)) = auth {
         with_auth_context(&mut attrs, auth_type, auth_id);
     }
-    // Created, updated and deleted JSON snapshots carry their own document names.
-    // Written still needs the document source for the SDK's missing-side JSON fallback;
-    // that source divergence remains isolated until its payload transport is corrected.
-    let source = if kind == DocumentEvent::Written {
-        format!("projects/{project}/databases/{database}/documents/{document_path}")
-    } else {
-        attrs.source
-    };
     let mut data = Map::new();
     if let Some(a) = after {
         data.insert("value".into(), document_to_json(&encode_document(a)));
@@ -215,7 +207,7 @@ pub fn firestore_event(
     let mut event = json!({
         "specversion": "1.0",
         "id": event_id_uuid(id),
-        "source": source,
+        "source": attrs.source,
         "subject": attrs.subject,
         "type": attrs.event_type,
         "time": firestore_time(time),

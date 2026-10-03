@@ -76,11 +76,15 @@ function closedOptions(options, allowed, message) {
       throw new Error(message);
 }
 
-function registryRow(state) {
+function registryRow(state, deadlineAt) {
+  deadline(deadlineAt);
   const db = new RegistryDatabase(state.db, { readOnly: true });
   let row;
   try {
+    const busyMilliseconds = Math.max(0, Math.min(50, Math.floor(deadlineAt - performance.now())));
+    db.exec(`PRAGMA busy_timeout = ${busyMilliseconds}`);
     row = db.prepare("SELECT * FROM reservations WHERE token = ?").get(state.token);
+    deadline(deadlineAt);
   } finally {
     db.close();
   }
@@ -148,7 +152,7 @@ export async function acquireOwnedLoopbackLease({ deadlineAt }) {
     if (!Number.isSafeInteger(state.port) || state.port < 1 || state.port > 65535)
       throw new Error("owned loopback lease required");
     RegistryDatabase ??= (await import("node:sqlite")).DatabaseSync;
-    registryRow(state);
+    registryRow(state, deadlineAt);
   }
   const capability = Object.freeze(Object.create(null));
   leases.set(capability, state);
@@ -204,7 +208,7 @@ export async function createOwnedNativeStreamingFixture(options) {
     throw new Error("finite native capacity arithmetic required");
   const revalidate = () => {
     deadline(deadlineAt);
-    if (state.kind === "registry") registryRow(state);
+    if (state.kind === "registry") registryRow(state, deadlineAt);
   };
   revalidate();
   state.consumed = true;

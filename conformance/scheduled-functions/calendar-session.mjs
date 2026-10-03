@@ -5,8 +5,14 @@ import { mkdir, mkdtemp, readFile, writeFile, chmod } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import { join, isAbsolute } from "node:path";
 import { calendarFixture } from "./calendar-local.mjs";
+import { controlFixture } from "./calendar-controls.mjs";
 
 const digest = (bytes) => createHash("sha256").update(bytes).digest("hex");
+/** The run's fireemu config text (its hash is pinned as configSha256). */
+export function calendarConfig(anchor) {
+  return JSON.stringify({ schemaVersion: 1, profile: "strict", daemon: { clockStart: anchor } });
+}
+
 export async function prepareCalendarSession({
   root,
   binary,
@@ -17,6 +23,8 @@ export async function prepareCalendarSession({
   anchor,
   input,
   childPath,
+  // A negative-control run only (launch accounting design v4 section 7); never a certificate.
+  control,
 }) {
   if (
     ![root, binary, runner, childPath].every(isAbsolute) ||
@@ -43,12 +51,25 @@ export async function prepareCalendarSession({
   await chmod(directory, 0o700);
   const fixturePath = join(directory, "fixture");
   await mkdir(fixturePath, { mode: 0o700 });
-  const fixture = calendarFixture(input),
-    config = JSON.stringify({
-      schemaVersion: 1,
-      profile: "strict",
-      daemon: { clockStart: anchor },
+  const readyPath = join(directory, "control-ready.json");
+  let fixture = calendarFixture(input),
+    controls;
+  if (control) {
+    const generated = controlFixture(input, {
+      mode: control.mode,
+      helperPath: control.helperPath,
+      readyPath,
+      // Longer than the slowest run (170 s deadline plus 30 s grace), so a helper is still there
+      // for the final inventory; the measuring entry stops it after the verdict.
+      hold: control.hold ?? 240,
+      portFile: join(directory, "port.json"),
+      boundPath: join(directory, "bound.json"),
     });
+    fixture = generated.index;
+    controls = generated.controls;
+    await writeFile(join(fixturePath, "controls.cjs"), controls, { mode: 0o600 });
+  }
+  const config = calendarConfig(anchor);
   const configPath = join(directory, "fireemu.json"),
     inputPath = join(directory, "input.json");
   await writeFile(join(fixturePath, "index.cjs"), fixture, { mode: 0o600 });
@@ -68,6 +89,7 @@ export async function prepareCalendarSession({
     proceedPath: join(directory, "proceed.json"),
     outputPath: join(directory, "callback.json"),
     supervisorOutputPath: join(directory, "supervisor-result.json"),
+    readyPath,
   };
   await writeFile(inputPath, JSON.stringify({ input, anchor, ...paths }), { mode: 0o600 });
   return {
@@ -82,6 +104,13 @@ export async function prepareCalendarSession({
       cliVersion: cli.version,
       fixtureSha256: digest(fixture),
       configSha256: digest(config),
+      ...(control
+        ? {
+            controlMode: control.mode,
+            controlsSha256: digest(controls),
+            helperSha256: digest(await readFile(control.helperPath)),
+          }
+        : {}),
       anchor,
     },
   };
@@ -102,6 +131,8 @@ export async function superviseCalendarProcess({
   graceMs = 25000,
   killGraceMs = 1000,
   pollMs = 250,
+  // Control runs only (launch accounting design v4): observe leftovers, never signal them.
+  escalate = true,
 }) {
   let acceptsInitial = Boolean(initial);
   const tracker = ownedProcessTracker(root, {
@@ -132,19 +163,20 @@ export async function superviseCalendarProcess({
     }
     throw new Error("owned process inventory remains unreadable");
   };
-  const verifiedSignal = async (pid, kind) => {
+  let signalled = false;
+  // `direct` is the deadline or cancellation SIGTERM to the waited child, which escalation off
+  // keeps so a hung control cannot wait forever (review S1). A zombie is never signalled.
+  const verifiedSignal = async (pid, kind, direct = false) => {
+    if (!escalate && !direct) return;
+    const owned = tracker.owned().find((value) => value.pid === pid);
     if (
       (await live()).some(
-        (row) =>
-          row.pid === pid &&
-          sameProcessIdentity(
-            tracker.owned().find((owned) => owned.pid === pid),
-            row,
-          ),
+        (row) => row.pid === pid && sameProcessIdentity(owned, row) && !/^Z/.test(row.stat ?? ""),
       )
     ) {
+      signalled = true;
       try {
-        await signal(pid, kind);
+        await signal(pid, kind, owned);
       } catch {
         signalFailures++;
       }
@@ -156,18 +188,20 @@ export async function superviseCalendarProcess({
       timedOut = clock() - start >= deadlineMs;
       cancelled = stopping();
       if (timedOut || cancelled) {
-        await verifiedSignal(child.pid, "SIGTERM");
+        await verifiedSignal(child.pid, "SIGTERM", true);
         break;
       }
       await sleep(pollMs);
     }
   } catch {
     try {
-      await verifiedSignal(child.pid, "SIGTERM");
+      await verifiedSignal(child.pid, "SIGTERM", true);
     } catch {
       /* Fresh identity remains required. */
     }
   }
+  // Processes a settle saw that later ended with no signal from this supervisor.
+  const seenInSettle = new Map();
   const settle = async (milliseconds) => {
     const until = clock() + milliseconds;
     let empty = 0;
@@ -178,6 +212,7 @@ export async function superviseCalendarProcess({
       } catch {
         return false;
       }
+      for (const row of remaining) if (!seenInSettle.has(row.pid)) seenInSettle.set(row.pid, row);
       if (!remaining.length) {
         if (++empty >= 2) return true;
       } else empty = 0;
@@ -186,6 +221,8 @@ export async function superviseCalendarProcess({
     return false;
   };
   let cleanupVerified = await settle(graceMs);
+  const settledWithoutEscalation = cleanupVerified && !signalled;
+  const selfEnded = settledWithoutEscalation ? [...seenInSettle.values()] : [];
   for (const kind of ["SIGTERM", "SIGKILL"]) {
     if (cleanupVerified) break;
     let survivors;
@@ -209,6 +246,9 @@ export async function superviseCalendarProcess({
     exitCode: child.state().code,
     timedOut,
     cancelled,
+    escalate,
+    settledWithoutEscalation,
+    selfEnded,
     inventoryFailures,
     signalFailures,
     trackedAbsenceVerified: cleanupVerified,

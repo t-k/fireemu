@@ -1,8 +1,5 @@
-import {
-  calendarPortctlInvocation,
-  createCalendarSignalRelay,
-  readOwnCalendarClaims,
-} from "./calendar-run-local.mjs";
+import { claimArguments, readOwnClaims } from "./calendar-measure.mjs";
+import { createRecorder } from "./calendar-recorder.mjs";
 import { execFileSync } from "node:child_process";
 import assert from "node:assert/strict";
 import { test } from "node:test";
@@ -279,12 +276,15 @@ test("own claim query reads one exact service without probing or mutating foreig
     database,
   ]);
   const before = await readFile(database);
-  const result = await readOwnCalendarClaims({
-    script,
-    cwd: directory,
-    service: "own-service",
-    database,
+  const recorder = createRecorder({
+    path: join(directory, "measure.jsonl"),
+    role: "measure",
+    pid: process.pid,
+    started: "test",
+    harnessVersion: "test",
   });
+  const result = await readOwnClaims(recorder, { service: "own-service", database });
+  recorder.close();
   assert.equal(result.claims.length, 1);
   assert.equal(result.claims[0].service, "own-service");
   assert.ok(!JSON.stringify(result).includes("foreign"));
@@ -347,87 +347,95 @@ test("an exited unacquired child PID cannot be acquired from a later caller subp
   assert.deepEqual(f.signals, []);
 });
 
-test("calendar cancellation relay verifies the original inner identity before signaling", async () => {
-  const wrapper = { ...lifecycle().root, pid: 200 },
-    inner = {
-      ...wrapper,
-      pid: 300,
-      ppid: 200,
-      args: "node launcher.mjs --calendar-supervisor input.json",
-    };
-  for (const change of [
-    null,
-    { uid: 999 },
-    { started: "Thu Oct 1 00:00:05 2026" },
-    { comm: "foreign" },
-    { args: inner.args + " extra" },
-  ]) {
-    const signals = [],
-      relay = createCalendarSignalRelay({
-        wrapperPid: wrapper.pid,
-        innerArgs: inner.args,
-        snapshot: async () => [wrapper, { ...inner, ...change }],
-        kill: (pid, kind) => signals.push({ pid, kind }),
-      });
-    relay.observe([wrapper, inner]);
-    if (change) {
-      await assert.rejects(relay.signal(wrapper.pid, "SIGTERM"), /identity/);
-      assert.deepEqual(signals, []);
-      assert.equal(relay.debt(), true);
-    } else {
-      await relay.signal(wrapper.pid, "SIGTERM");
-      assert.deepEqual(signals, [{ pid: inner.pid, kind: "SIGTERM" }]);
-      assert.equal(relay.debt(), false);
-    }
-  }
-});
-
-test("calendar cancellation relay refuses an inner identity that was never acquired", async () => {
-  const signals = [],
-    relay = createCalendarSignalRelay({
-      wrapperPid: 200,
-      innerArgs: "node launcher.mjs --calendar-supervisor input.json",
-      snapshot: async () => [
-        { pid: 300, ppid: 200, args: "node launcher.mjs --calendar-supervisor input.json" },
-      ],
-      kill: (pid, kind) => signals.push({ pid, kind }),
-    });
-  await assert.rejects(relay.signal(200, "SIGTERM"), /identity/);
-  assert.deepEqual(signals, []);
-  assert.equal(relay.debt(), true);
-});
-
-test("calendar cancellation relay retains identity debt when fresh inventory is unreadable", async () => {
-  const inner = { ...lifecycle().root, pid: 300, ppid: 200 },
-    signals = [],
-    relay = createCalendarSignalRelay({
-      wrapperPid: 200,
-      innerArgs: inner.args,
-      snapshot: async () => {
-        throw new Error("unreadable identity inventory");
-      },
-      kill: (pid, kind) => signals.push({ pid, kind }),
-    });
-  relay.observe([inner]);
-  await assert.rejects(relay.signal(200, "SIGTERM"), /inventory/);
-  assert.equal(relay.debt(), true);
-  assert.deepEqual(signals, []);
-});
-
-test("calendar port acquisition and own query require one explicit private database", async () => {
-  const prepared = { directory: "/private/calendar/unique-session" },
-    invocation = calendarPortctlInvocation({
-      prepared,
-      script: "/private/portctl.py",
-      cwd: "/private/conformance",
-      service: "lane8-calendar-unique",
-      launcherPath: "/private/calendar/unique-session/launcher.json",
-    });
-  assert.equal(invocation.database, prepared.directory + "/ports.sqlite3");
-  assert.equal(invocation.args[invocation.args.indexOf("--db") + 1], invocation.database);
-  assert.ok(invocation.args.indexOf("--db") < invocation.args.indexOf("run"));
-  await assert.rejects(
-    readOwnCalendarClaims({ service: "lane8-calendar-unique" }),
-    /private database/,
+test("the port is claimed by a recorded portctl claim in one explicit private database", async () => {
+  const args = claimArguments({
+    script: "/private/portctl.py",
+    database: "/private/calendar/unique-session/ports.sqlite3",
+    cwd: "/private/conformance",
+    service: "lane8-calendar-unique",
+  });
+  assert.equal(args[args.indexOf("--db") + 1], "/private/calendar/unique-session/ports.sqlite3");
+  assert.ok(args.indexOf("--db") < args.indexOf("claim"));
+  assert.ok(
+    !args.includes("run") && !args.includes("--"),
+    "no wrapped command: the inner supervisor is a direct child",
   );
+  assert.equal(args[args.indexOf("--format") + 1], "json");
+  // Review round 2, M4: each private registry would otherwise hand out the lowest free port, and
+  // concurrent runs collided on it.
+  assert.ok(args.includes("--random"));
+  assert.throws(() =>
+    claimArguments({ script: "portctl.py", database: "/d", cwd: "/c", service: "s" }),
+  );
+  await assert.rejects(readOwnClaims({}, { service: "lane8-calendar-unique" }), /private database/);
+});
+
+// Launch accounting (design v4 section 4): a refusal run passes (D) only when the settle phase
+// empties by itself; a control run may turn escalation off so a leftover reaches the inventory.
+test("a settle that empties without signals reports it and lists what ended by itself", async () => {
+  const f = lifecycle();
+  let polls = 0;
+  const original = f.snapshot;
+  f.snapshot = async () => {
+    // The runner the daemon killed is still listed for two polls, then gone.
+    const rows = await original();
+    return ++polls > 2 ? rows.filter((value) => value.pid !== 300) : rows;
+  };
+  const result = await superviseCalendarProcess({ ...f, graceMs: 1000 });
+  assert.deepEqual(f.signals, []);
+  assert.equal(result.settledWithoutEscalation, true);
+  assert.deepEqual(
+    result.selfEnded.map((row) => row.pid),
+    [300],
+  );
+});
+
+test("escalation off observes a leftover and never signals it", async () => {
+  const f = lifecycle();
+  const result = await superviseCalendarProcess({ ...f, escalate: false });
+  assert.deepEqual(f.signals, []);
+  assert.equal(result.settledWithoutEscalation, false);
+  assert.equal(result.cleanupVerified, false);
+  assert.equal(result.escalate, false);
+});
+
+test("every harness signal reaches the caller with the target's owned identity", async () => {
+  const f = lifecycle();
+  const seen = [];
+  const original = f.signal;
+  const result = await superviseCalendarProcess({
+    ...f,
+    signal: async (pid, kind, identity) => {
+      seen.push({
+        pid,
+        kind,
+        identity: identity && { pid: identity.pid, started: identity.started },
+      });
+      await original(pid, kind);
+    },
+  });
+  assert.equal(result.settledWithoutEscalation, false);
+  assert.deepEqual(seen, [
+    { pid: 300, kind: "SIGTERM", identity: { pid: 300, started: "Thu Oct 1 00:00:00 2026" } },
+  ]);
+});
+
+// Review round 2, M2 and S1.
+test("a zombie the supervisor owns is never signalled", async () => {
+  const f = lifecycle();
+  const original = f.snapshot;
+  // The retained runner shows as a zombie (state Z) and stays listed.
+  f.snapshot = async () =>
+    (await original()).map((value) => (value.pid === 300 ? { ...value, stat: "Z" } : value));
+  const result = await superviseCalendarProcess({ ...f, graceMs: 200, killGraceMs: 100 });
+  assert.deepEqual(f.signals, []);
+  assert.equal(result.cleanupVerified, false);
+});
+
+test("with escalation off, a daemon past its deadline still gets the recorded SIGTERM, and only it", async () => {
+  const f = lifecycle({ timeout: true });
+  const result = await superviseCalendarProcess({ ...f, escalate: false });
+  assert.equal(result.timedOut, true);
+  assert.deepEqual(f.signals, [{ pid: 200, signal: "SIGTERM" }]);
+  assert.equal(result.settledWithoutEscalation, false);
 });

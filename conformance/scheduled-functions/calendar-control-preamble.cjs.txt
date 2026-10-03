@@ -1,0 +1,15 @@
+"use strict";
+// Negative-control preamble (stage3 launch accounting, design v4 section 7), run first during
+// discovery of a control fixture only. Generated from calendar-control-preamble.cjs.txt.
+const { spawn } = require("node:child_process");
+const { existsSync } = require("node:fs");
+const helper = spawn("python3", __ARGS__, { stdio: "ignore" });
+helper.unref();
+const pause = new Int32Array(new SharedArrayBuffer(4));
+const until = Date.now() + 10000;
+while (!existsSync(__READY__)) {
+  if (Date.now() > until) throw new Error("control helper did not become ready");
+  Atomics.wait(pause, 0, 0, 20);
+}
+// F2: block at least four polling intervals so the lineage is observed before discovery returns.
+Atomics.wait(pause, 0, 0, 1000);

@@ -1,22 +1,27 @@
-// This launcher only contacts loopback services. It never obtains production credentials.
-import { execFile as execFileCallback, spawn } from "node:child_process";
-import { promisify } from "node:util";
+// This launcher only contacts loopback services. It never obtains production credentials. Every
+// child process goes through the recorder (stage3 launch accounting, owner ledger 786).
 import { readFile, writeFile, lstat } from "node:fs/promises";
-import { resolve, join } from "node:path";
+import { join, resolve } from "node:path";
 import { pathToFileURL, fileURLToPath } from "node:url";
-import { randomBytes } from "node:crypto";
 import { setTimeout as delay } from "node:timers/promises";
-import { parseProcessSnapshot } from "./calendar-processes.mjs";
+import { createSelfRecorder } from "./calendar-recorder.mjs";
 import { localCalendarClient, exerciseCalendarSession } from "./calendar-local.mjs";
 import {
-  prepareCalendarSession,
   sessionArguments,
   superviseCalendarProcess,
   calendarOwnedBranches,
 } from "./calendar-session.mjs";
+import {
+  accountingOuter,
+  campaign,
+  certify,
+  harnessVersion,
+  ownedSender,
+  measure,
+  snapshotWith,
+} from "./calendar-measure.mjs";
 
-const execFile = promisify(execFileCallback),
-  self = fileURLToPath(import.meta.url);
+const self = fileURLToPath(import.meta.url);
 const sameIdentity = (a, b) =>
   a && b && ["pid", "comm", "args", "uid", "started"].every((key) => a[key] === b[key]);
 const privateJson = (path, value) => writeFile(path, JSON.stringify(value) + "\n", { mode: 0o600 });
@@ -27,45 +32,36 @@ const cleanEnv = () =>
       .map((key) => [key, process.env[key]]),
   );
 
-// Redirection has its own original-identity guard because its target differs from the wrapper.
-export function createCalendarSignalRelay({ wrapperPid, innerArgs, snapshot: readSnapshot, kill }) {
-  let inner,
-    identityDebt = false;
-  return {
-    observe(owned) {
-      if (!inner) {
-        const captured = owned.find((row) => row.ppid === wrapperPid && row.args === innerArgs);
-        if (captured) inner = Object.freeze({ ...captured });
-      }
-    },
-    debt: () => identityDebt,
-    async signal(pid, kind) {
-      if (pid !== wrapperPid || kind !== "SIGTERM") return kill(pid, kind);
-      try {
-        const rows = await readSnapshot();
-        if (!inner || !rows.some((row) => sameIdentity(inner, row)))
-          throw new Error("original calendar supervisor identity unavailable for cancellation");
-        return await kill(inner.pid, "SIGTERM");
-      } catch (error) {
-        identityDebt = true;
-        throw error;
-      }
-    },
-  };
+/** The last `limit` characters of the daemon's stderr, kept privately to explain an (A) failure. */
+export function stderrTail(tail, chunk, limit = 4096) {
+  return (tail + chunk).slice(-limit);
 }
 
-async function snapshot() {
-  const operation = execFile("ps", ["-ww", "-axo", "pid=,ppid=,pgid=,uid=,lstart=,comm=,args="], {
-    encoding: "utf8",
-    maxBuffer: 16777216,
-    timeout: 5000,
-    env: { ...cleanEnv(), LC_ALL: "C" },
-  });
-  const observerPid = operation.child?.pid;
-  if (!Number.isSafeInteger(observerPid) || observerPid <= 1)
-    throw new Error("process snapshot observer identity unavailable");
-  const { stdout } = await operation;
-  return parseProcessSnapshot(stdout, observerPid);
+/**
+ * Notes the injected helper's first sighting and whether the tracker acquired it as itself (its
+ * PID and the start time of that first sighting), design v4 F2 and review S5.
+ */
+export function noteSighting(injected, rows, owned, afterMs) {
+  if (!Number.isSafeInteger(injected.pid)) return injected;
+  const row = rows.find((value) => value.pid === injected.pid);
+  if (row && !injected.firstSighting)
+    injected.firstSighting = { afterMs, ppid: row.ppid, pgid: row.pgid, started: row.started };
+  injected.acquired ||= owned.some(
+    (value) => value.pid === injected.pid && value.started === injected.firstSighting?.started,
+  );
+  return injected;
+}
+
+/** The diagnostic lines kept from the daemon: startup and refusal lines, never headers or dumps. */
+export function calendarDiagnostics(text) {
+  return text
+    .split("\n")
+    .filter((line) =>
+      /functions loaded:|calendarProbe|calendarReceipt|invalid schedule|invalid time.?zone|unknown time zone/i.test(
+        line,
+      ),
+    )
+    .slice(0, 20);
 }
 
 async function childSession(path) {
@@ -96,27 +92,9 @@ async function childSession(path) {
   if (!result.matched) process.exitCode = 1;
 }
 
-async function releaseClaim(
-  script,
-  capability = { token: process.env.PORT_REGISTRY_TOKEN, db: process.env.PORT_REGISTRY_DB },
-) {
-  if (!capability.token || !capability.db)
-    throw new Error("missing own calendar port claim capability");
-  const code =
-    "import importlib.util,sys,os,pathlib; s=importlib.util.spec_from_file_location('calendar_portctl',sys.argv[1]); m=importlib.util.module_from_spec(s); sys.modules[s.name]=m; s.loader.exec_module(m); m.release(pathlib.Path(os.environ['PORT_REGISTRY_DB']),token=os.environ['PORT_REGISTRY_TOKEN'],port=None)";
-  await execFile("python3", ["-c", code, script], {
-    env: {
-      ...cleanEnv(),
-      PORT_REGISTRY_TOKEN: capability.token,
-      PORT_REGISTRY_DB: capability.db,
-    },
-    timeout: 5000,
-  });
-}
-
+/** The inner supervisor: a waited direct child of the outer launcher that starts the daemon. */
 async function superviseSession(path) {
-  let stopped = false,
-    parentLost = false;
+  let stopped = false;
   const stop = () => {
     stopped = true;
   };
@@ -124,13 +102,19 @@ async function superviseSession(path) {
   process.on("SIGINT", stop);
   const plan = JSON.parse(await readFile(path, "utf8")),
     prepared = plan.prepared;
+  const recorder = await createSelfRecorder({
+    path: join(plan.accDir, "records", "inner.jsonl"),
+    role: "inner",
+    harnessVersion: await harnessVersion(),
+  });
+  const snapshot = () => snapshotWith(recorder);
   const before = await snapshot(),
     root = before.find((row) => row.pid === process.pid),
     parent = before.find((row) => row.pid === process.ppid);
   if (!root || !parent) throw new Error("local calendar supervisor identity unavailable");
   await privateJson(prepared.ackPath, root);
   const state = { done: false, code: null };
-  const daemon = spawn(
+  const daemon = recorder.spawn(
     prepared.binary,
     sessionArguments({ ...prepared, port: Number(process.env.PORT) }),
     {
@@ -138,6 +122,7 @@ async function superviseSession(path) {
       stdio: ["ignore", "pipe", "pipe"],
       env: { ...cleanEnv(), FIREEMU_RUNNER_NODE: prepared.runner },
     },
+    "daemon",
   );
   daemon.once("error", () => {
     state.done = true;
@@ -149,21 +134,45 @@ async function superviseSession(path) {
     state.code = code ?? -1;
   });
   let diagnostic = "",
-    observed = false;
+    observed = false,
+    parentLost = false;
+  // A control run records its injected helper's first sighting and whether the tracker acquired
+  // it (design v4 F2).
+  const injected = prepared.identity.controlMode ? { pid: null } : null;
+  const started = performance.now();
+  const sight = async (rows, owned) => {
+    if (!injected) return;
+    if (injected.pid === null) {
+      try {
+        injected.pid = JSON.parse(await readFile(prepared.readyPath, "utf8")).pid;
+      } catch {
+        return;
+      }
+    }
+    noteSighting(injected, rows, owned, Math.round(performance.now() - started));
+  };
   const collect = (chunk) => {
     if (diagnostic.length < 262144)
       diagnostic += chunk.toString().slice(0, 262144 - diagnostic.length);
   };
-  daemon.stdout.on("data", collect);
-  daemon.stderr.on("data", collect);
+  let tail = "";
+  daemon.stdout?.on("data", collect);
+  daemon.stderr?.on("data", collect);
+  daemon.stderr?.on("data", (chunk) => {
+    tail = stderrTail(tail, chunk.toString());
+  });
+  // Diagnostics are read once the daemon's pipes close, so a buffered refusal line is not lost.
+  const drained = new Promise((resolve) => daemon.once("close", resolve));
   const result = await superviseCalendarProcess({
     root,
     child: { pid: daemon.pid, state: () => state },
     snapshot,
-    signal: async (pid, signal) => process.kill(pid, signal),
+    signal: ownedSender(recorder, [daemon]),
+    escalate: plan.escalation !== "off",
     stopping: () => stopped || parentLost,
     ownershipComplete: () => observed,
-    onObserved: async (owned, rows) => {
+    onObserved: async (owned, rows, acquired) => {
+      await sight(rows, acquired);
       parentLost ||= !sameIdentity(
         parent,
         rows.find((row) => row.pid === parent.pid),
@@ -175,237 +184,60 @@ async function superviseSession(path) {
       }
     },
   });
+  await daemon.recordExit;
+  result.diagnosticsDrained = await Promise.race([
+    drained.then(() => true),
+    delay(2000).then(() => false),
+  ]);
   result.observationHandshake = observed;
+  if (injected) result.injected = { acquired: false, firstSighting: null, ...injected };
   result.parentLost = parentLost;
   result.loadedExports = ["calendarProbe", "calendarReceipt"].every((name) =>
     diagnostic.includes(name),
   );
-  // Keep only the trusted fixture's startup/refusal lines, never headers or environment dumps.
-  result.diagnostics = diagnostic
-    .split("\n")
-    .filter((line) =>
-      /functions loaded:|calendarProbe|calendarReceipt|invalid schedule|invalid time.?zone/i.test(
-        line,
-      ),
-    )
-    .slice(0, 20);
+  result.diagnostics = calendarDiagnostics(diagnostic);
+  // A private file in the run's directory, referenced from the report only when (A) fails.
+  result.stderrTailPath = join(prepared.directory, "daemon-stderr-tail.txt");
+  await writeFile(result.stderrTailPath, tail, { mode: 0o600 });
   await privateJson(prepared.supervisorOutputPath, result);
-  if (parentLost && result.cleanupVerified) await releaseClaim(plan.portctl);
+  recorder.close();
   process.off("SIGTERM", stop);
   process.off("SIGINT", stop);
   if (!result.cleanupVerified || state.code !== 0) process.exitCode = 1;
 }
 
-export function calendarPortctlInvocation({ prepared, script, cwd, service, launcherPath }) {
-  const database = join(prepared.directory, "ports.sqlite3");
-  return {
-    database,
-    args: [
-      script,
-      "--db",
-      database,
-      "--cwd",
-      cwd,
-      "run",
-      "--service",
-      service,
-      "--range",
-      "10000-19999",
-      "--ttl",
-      "5m",
-      "--",
-      process.execPath,
-      self,
-      "--calendar-supervisor",
-      launcherPath,
-    ],
-  };
-}
-
-export async function readOwnCalendarClaims({ service, database }) {
-  if (typeof database !== "string" || resolve(database) !== database)
-    throw new Error("explicit absolute private database required for own calendar claims");
-  const code =
-    "import sys,pathlib,json,sqlite3; db=pathlib.Path(sys.argv[1]); c=sqlite3.connect(db.as_uri()+'?mode=ro',uri=True,timeout=2); c.row_factory=sqlite3.Row; rows=[dict(r) for r in c.execute('SELECT * FROM reservations WHERE service = ?', (sys.argv[2],))]; c.close(); print(json.dumps({'db':str(db),'claims':rows}))";
-  const { stdout } = await execFile("python3", ["-c", code, database, service], {
-    env: cleanEnv(),
-    timeout: 5000,
-  });
-  const result = JSON.parse(stdout);
-  if (
-    result.db !== database ||
-    !Array.isArray(result.claims) ||
-    result.claims.some((row) => row.service !== service)
-  )
-    throw new Error("own calendar claim proof is unreadable");
-  return result;
-}
-
-export async function runCalendarLocal({
-  root,
-  binary,
-  runner,
-  sourceCommit,
-  binarySha256,
-  runnerSha256,
-  input,
-  anchor,
-  portctl,
-}) {
-  const prepared = await prepareCalendarSession({
-    root,
-    binary,
-    runner,
-    sourceCommit,
-    binarySha256,
-    runnerSha256,
-    input,
-    anchor,
-    childPath: self,
-  });
-  const service = "lane8-calendar-" + randomBytes(8).toString("hex"),
-    conformanceRoot = join(root, "conformance"),
-    launcherPath = join(prepared.directory, "launcher.json");
-  await privateJson(launcherPath, { prepared, conformanceRoot, portctl });
-  let stopped = false;
-  const stop = () => {
-    stopped = true;
-  };
-  process.on("SIGTERM", stop);
-  process.on("SIGINT", stop);
-  const rootIdentity = (await snapshot()).find((row) => row.pid === process.pid);
-  if (!rootIdentity) throw new Error("outer calendar launcher identity unavailable");
-  const invocation = calendarPortctlInvocation({
-    prepared,
-    script: portctl,
-    cwd: conformanceRoot,
-    service,
-    launcherPath,
-  });
-  const wrapper = spawn("python3", invocation.args, {
-    stdio: ["ignore", "ignore", "ignore"],
-    env: cleanEnv(),
-  });
-  const wrapperState = { done: false, code: null };
-  wrapper.once("error", () => {
-    wrapperState.done = true;
-    wrapperState.code = -1;
-    wrapperState.spawnFailed = true;
-  });
-  wrapper.once("exit", (value) => {
-    wrapperState.done = true;
-    wrapperState.code = value ?? -1;
-  });
-  const relay = createCalendarSignalRelay({
-    wrapperPid: wrapper.pid,
-    innerArgs: [process.execPath, self, "--calendar-supervisor", launcherPath].join(" "),
-    snapshot,
-    kill: (pid, kind) => process.kill(pid, kind),
-  });
-  let launcher;
-  try {
-    launcher = await superviseCalendarProcess({
-      root: rootIdentity,
-      child: { pid: wrapper.pid, state: () => wrapperState },
-      snapshot,
-      stopping: () => stopped,
-      onObserved: (_current, _rows, owned) => relay.observe(owned),
-      ownershipComplete: async () => {
-        try {
-          return (
-            !relay.debt() &&
-            JSON.parse(await readFile(prepared.supervisorOutputPath, "utf8")).cleanupVerified ===
-              true
-          );
-        } catch {
-          return false;
-        }
-      },
-      deadlineMs: 170000,
-      graceMs: 30000,
-      killGraceMs: 2000,
-      signal: relay.signal,
-    });
-  } finally {
-    process.off("SIGTERM", stop);
-    process.off("SIGINT", stop);
-  }
-  let supervisor = null,
-    callback = null;
-  try {
-    supervisor = JSON.parse(await readFile(prepared.supervisorOutputPath, "utf8"));
-  } catch {
-    /* Missing proof fails acceptance. */
-  }
-  try {
-    callback = JSON.parse(await readFile(prepared.outputPath, "utf8"));
-  } catch {
-    /* Discovery refusal or missing callback remains evidence. */
-  }
-  const owned = [
-    ...launcher.ownedProcesses.filter((row) => row.pid !== rootIdentity.pid),
-    ...(supervisor?.ownedProcesses ?? []),
-  ];
-  const rows = await snapshot(),
-    survivors = owned.filter((ownedRow) =>
-      rows.some(
-        (row) =>
-          row.pid === ownedRow.pid && row.uid === ownedRow.uid && row.started === ownedRow.started,
-      ),
-    );
-  let registry = await readOwnCalendarClaims({ service, database: invocation.database });
-  if (launcher.cleanupVerified && survivors.length === 0 && wrapperState.done) {
-    for (const claim of registry.claims) {
-      if (!owned.some((row) => row.pid === claim.pid)) continue;
-      await releaseClaim(portctl, { token: claim.token, db: registry.db });
-    }
-    registry = await readOwnCalendarClaims({ service, database: invocation.database });
-  }
-  const claimReleased = registry.claims.length === 0;
-  const cleanupVerified =
-    launcher.cleanupVerified &&
-    supervisor?.cleanupVerified === true &&
-    survivors.length === 0 &&
-    claimReleased;
-  const result = {
-    identity: prepared.identity,
-    input,
-    anchor,
-    wrapperExitCode: wrapperState.code,
-    launcher,
-    callback,
-    supervisor,
-    survivors,
-    claimReleased,
-    cleanupVerified,
-    productionParity: false,
-    matched: callback?.matched === true && supervisor?.loadedExports === true && cleanupVerified,
-  };
-  await privateJson(join(prepared.directory, "result.json"), result);
-  return { ...result, directory: prepared.directory };
-}
-
 if (process.argv[1] && pathToFileURL(resolve(process.argv[1])).href === import.meta.url) {
+  const [mode, argument] = process.argv.slice(2);
   try {
-    if (process.argv.length === 4 && process.argv[2] === "--calendar-child")
-      await childSession(process.argv[3]);
-    else if (process.argv.length === 4 && process.argv[2] === "--calendar-supervisor")
-      await superviseSession(process.argv[3]);
-    else if (process.argv.length === 4 && process.argv[2] === "--smoke-plan") {
-      const plan = JSON.parse(await readFile(process.argv[3], "utf8"));
-      const result = await runCalendarLocal(plan);
+    if (process.argv.length !== 4) throw new Error("explicit local calendar mode required");
+    if (mode === "--calendar-child") await childSession(argument);
+    else if (mode === "--calendar-supervisor") await superviseSession(argument);
+    else if (mode === "--accounting-outer") await accountingOuter(argument);
+    else if (mode === "--campaign") {
+      const result = await campaign(argument);
+      console.log(JSON.stringify(result));
+      if (result.verdict !== "pass") process.exitCode = 1;
+    } else if (mode === "--certify") {
+      const result = await certify(argument, { requireCampaign: true });
+      console.log(JSON.stringify(result));
+      if (result.verdict !== "pass") process.exitCode = 1;
+    } else if (mode === "--measure") {
+      const report = await measure(argument);
       console.log(
         JSON.stringify({
-          directory: result.directory,
-          matched: result.matched,
-          cleanupVerified: result.cleanupVerified,
+          verdict: report.verdict.verdict,
+          control: report.control,
+          accountingDirectory: report.accountingDirectory,
           productionParity: false,
+          nativeCertificateIssued: false,
         }),
       );
-      if (!result.matched) process.exitCode = 1;
+      if (report.verdict.verdict !== "pass" && !report.control?.counts) process.exitCode = 1;
     } else throw new Error("explicit local calendar mode required");
   } catch {
     console.error("local calendar session failed; inspect its private proof artifacts");
     process.exitCode = 1;
   }
 }
+
+export { self as calendarRunLocalPath };

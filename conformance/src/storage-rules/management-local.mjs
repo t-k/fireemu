@@ -199,7 +199,8 @@ export async function collectManagement({ binding, profile, provenance, transpor
           "after-media",
         ]);
     }
-    await send({ kind: "clear" });
+    await row("release/restore/delete", { kind: "clear" }, (r) => ({ cleared: r.status === 200 }));
+    for (const scope of ["bucket", "bucketless"]) await absence(`release/restore/${scope}-absence`);
     await observe("management/no-release/final", noRelease.objectName, [
       "before-metadata",
       "before-media",

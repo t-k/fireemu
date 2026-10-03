@@ -245,7 +245,12 @@ export async function createAttemptLedger({ authorityBytes, authoritySha256, lim
     closed = true;
     admissionClosed = true;
     deadline = Date.now() + limits.deadlineMs;
-    for (const handle of [...handles]) await release(handle);
+    let failure;
+    for (const handle of [...handles]) {
+      try { await release(handle); }
+      catch (error) { failure ??= error; deadline = Date.now() + limits.deadlineMs; }
+    }
+    if (failure) throw failure;
   }
   try {
     deadline = Date.now() + limits.deadlineMs;

@@ -380,6 +380,95 @@ test('generated independent state model reaches open, complete, unknown and reje
   assert.deepEqual([...reached].sort(), ['complete', 'open', 'rejected', 'unknown']);
 });
 
+test('each publication failure boundary denies acknowledgement even if page-cache bytes are complete', async (t) => {
+  for (const boundary of ['report-sync', 'report-directory-sync', 'terminal-write', 'terminal-sync', 'seal-sync']) {
+    const box = await sandbox(t);
+    let armed = false;
+    const traced = observedIo(async (event, invoke) => {
+      const matches = (boundary === 'report-sync' && event === 'report-1.json:sync') ||
+        (boundary === 'report-directory-sync' && event === 'attempt-ledger:sync') ||
+        (boundary === 'terminal-write' && event === 'ledger.jsonl:write') ||
+        (['terminal-sync', 'seal-sync'].includes(boundary) && event === 'ledger.jsonl:sync');
+      const value = await invoke();
+      if (armed && matches) throw new Error(`injected completed syscall failure: ${boundary}`);
+      return value;
+    });
+    const ledger = await createAttemptLedger({ ...box.options, io: traced.io });
+    t.after(() => ledger.close());
+    await ledger.registerBirth({ attemptId: 'a', planBytes: bytes({}) });
+    if (boundary === 'seal-sync') await ledger.recordTerminal({ attemptId: 'a', reportBytes: report('a', 'pass', box.scope) });
+    armed = true;
+    await assert.rejects(boundary === 'seal-sync' ? ledger.seal()
+      : ledger.recordTerminal({ attemptId: 'a', reportBytes: report('a', 'pass', box.scope) }), /unknown|failure/);
+    assert.equal(ledger.ioStatus().state, 'unknown');
+    assert.equal(ledger.ioStatus().durabilityAcknowledged, false);
+    const rawOnly = await readback(box.root, box.options.authorityBytes);
+    assert.equal(rawOnly.durabilityAcknowledged, false, 'page-cache readback never proves completed sync');
+    noCertificate(rawOnly);
+    armed = false;
+    await ledger.close();
+    assert.equal(traced.live.size, 0);
+  }
+});
+
+test('missing, inconclusive and foreign terminal reports never receive a seal IO ack', async (t) => {
+  for (const value of [null, Buffer.from('{'), 'inconclusive', 'foreign']) {
+    const box = await sandbox(t);
+    const ledger = await createAttemptLedger(box.options);
+    t.after(() => ledger.close());
+    await ledger.registerBirth({ attemptId: 'a', planBytes: bytes({}) });
+    const raw = typeof value === 'string' ? report('a', value === 'foreign' ? 'pass' : value,
+      value === 'foreign' ? { ...box.scope, campaign: 'foreign' } : box.scope) : value;
+    await ledger.recordTerminal({ attemptId: 'a', reportBytes: raw });
+    await assert.rejects(ledger.seal(), /unknown|Inconclusive|Foreign/);
+    assert.equal(ledger.ioStatus().state, 'unknown');
+    assert.equal(ledger.ioStatus().durabilityAcknowledged, false);
+  }
+});
+
+test('writer finite limits retain unresolved births and prevent unbounded admission', async (t) => {
+  const box = await sandbox(t);
+  const ledger = await createAttemptLedger({ ...box.options, limits: { maxRecords: 2 } });
+  t.after(() => ledger.close());
+  await ledger.registerBirth({ attemptId: 'a', planBytes: bytes({}) });
+  await assert.rejects(ledger.registerBirth({ attemptId: 'b', planBytes: bytes({}) }), /bound|unknown/);
+  assert.equal((await readback(box.root, box.options.authorityBytes)).state, 'unknown');
+  assert.equal(ledger.ioStatus().state, 'unknown');
+});
+
+test('hardlink aliases and substituted journal files are rejected without following aliases', async (t) => {
+  for (const change of ['hardlink', 'substitute']) {
+    const box = await sandbox(t);
+    const ledger = await createAttemptLedger(box.options);
+    t.after(() => ledger.close());
+    const journal = path.join(box.root, 'attempt-ledger', 'ledger.jsonl');
+    if (change === 'hardlink') await fs.link(journal, path.join(box.root, 'aliased-ledger'));
+    else {
+      const retained = await fs.readFile(journal);
+      await fs.unlink(journal);
+      await fs.writeFile(journal, retained);
+    }
+    await assert.rejects(ledger.registerBirth({ attemptId: 'a', planBytes: bytes({}) }), /identity|unknown/);
+  }
+});
+
+test('close continues releasing remaining handles after one close failure', async (t) => {
+  const box = await sandbox(t);
+  let armed = false;
+  let failed = false;
+  const traced = observedIo((event, invoke) => {
+    if (armed && !failed && event.endsWith(':close')) { failed = true; throw new Error('injected close failure'); }
+    return invoke();
+  });
+  const ledger = await createAttemptLedger({ ...box.options, io: traced.io });
+  t.after(() => ledger.close());
+  armed = true;
+  await assert.rejects(ledger.close(), /unknown|close failure/);
+  assert.equal(traced.live.size, 1, 'only the failed handle remains retryable');
+  await ledger.close();
+  assert.equal(traced.live.size, 0);
+});
+
 test('exports the bounded durable ledger and independent bytes validator', async () => {
   const api = await import('./calendar-attempt-ledger.mjs').catch(() => ({}));
   assert.equal(typeof api.createAttemptLedger, 'function', 'durable ledger API is missing');

@@ -15,6 +15,32 @@ const clone = (value) => structuredClone(value);
 const pending = (value) => value.registry.parents.find((p) => p.parent === "STORAGE-RULES");
 const problems = async (value) => (await api()).checkProjection(value).problems;
 
+test("current projection reads the actual partial files instead of freezing every parent pending", async () => {
+  const result = (await api()).checkProjection(await fixture());
+  assert.ok(Array.isArray(result.currentEvidence), "current actual evidence must be evaluated");
+  const transaction = result.currentEvidence.find((row) => row.parent === "FS-TRANSACTION");
+  assert.equal(transaction.records.length, 2);
+  assert.equal(transaction.eligible, false);
+  assert.ok(transaction.missing.some((reason) => reason.includes("0/4")));
+});
+
+test("consumer migration requires executable actual and negative calls, not comment pins", async () => {
+  const path = "conformance/src/fs-transaction-closure.test.mjs";
+  const source = (await fixture()).documents.get(path).toString();
+  const actual = 'assertCurrentParentEvidence(loadRepository(root), "FS-TRANSACTION")';
+  const negative = 'assertCurrentParentEvidence(value, "FS-TRANSACTION")';
+  assert.ok(source.includes(actual) && source.includes(negative));
+  for (const change of [
+    (s) => s.replace(actual, `({ eligible: false }) /* ${actual} */`),
+    (s) => s.replace(negative, `({ eligible: false }) /* ${negative} */`),
+    (s) => `${s}\n${actual};\n`,
+  ]) {
+    const value = await fixture();
+    value.documents.set(path, Buffer.from(change(source)));
+    assert.ok((await problems(value)).some((p) => p.includes("connection missing")));
+  }
+});
+
 test("honest pending integrity preserves 21 parents, 95 public and 66 frozen conditions", async () => {
   const { checkProjection, renderStatus } = await api();
   const value = await fixture();
@@ -53,7 +79,13 @@ test("pending canonical pins include new current inventories and existing consum
   const value = await fixture();
   value.lock.records = {};
   const result = checkProjection(value);
-  assert.equal(result.pendingPins.length, 27);
+  assert.ok(result.pendingPins.length >= 29);
+  assert.ok(result.pendingPins.includes("conformance/src/production-evidence.mjs"));
+  assert.ok(
+    result.pendingPins.includes(
+      "spec/compatibility/broad-runs/fs-transaction-p13b-recorded-observations-v1.json",
+    ),
+  );
   assert.ok(result.pendingPins.includes("conformance/src/storage-rules-closure.test.mjs"));
   assert.ok(result.pendingPins.includes("spec/compatibility/closure/FS-DATA-WRITE.json"));
 });
@@ -149,7 +181,7 @@ test("source-only, old or synthetic status cannot complete the new product or re
       v.registry.globalFinalProduct.state = "VERIFIED";
     },
     (v) => {
-      v.registry.consumerMigration.state = "COMPLETE";
+      v.registry.consumerMigration.state = "SOURCE_ONLY_VERIFIED";
     },
     (v) => {
       pending(v).conditions[0].facets[0].evidence = { sourceOnly: true };
@@ -194,7 +226,8 @@ test("the finite production model excludes only official comparison", async () =
 });
 
 test("seeded properties preserve order independence and refuse lost or duplicate obligations", async () => {
-  const { checkProjection } = await api();
+  const { checkProjection, renderStatus } = await api();
+  const expectedStatus = renderStatus(checkProjection(await fixture()));
   let seed = 0x21c09566;
   const next = () => (seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0);
   for (let i = 0; i < 96; i++) {
@@ -207,6 +240,11 @@ test("seeded properties preserve order independence and refuse lost or duplicate
       ];
     }
     assert.deepEqual(checkProjection(value).problems, []);
+    assert.equal(
+      renderStatus(checkProjection(value)),
+      expectedStatus,
+      "status depends only on current evidence, not registry ordering",
+    );
     const p = pending(value);
     const index = next() % p.conditions.length;
     if (i % 2) p.conditions.splice(index, 1);

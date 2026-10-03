@@ -1,8 +1,11 @@
+import { assertCurrentParentEvidence, loadRepository } from "./production-closure.mjs";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
 
 const root = new URL("../../", import.meta.url);
+const admission = assertCurrentParentEvidence(loadRepository(root), "STORAGE-OBJECT");
+
 const closurePath = new URL("spec/compatibility/closure/STORAGE-OBJECT.json", root);
 
 // The inventory is deliberately separate from the official-emulator storage matrix.
@@ -137,13 +140,15 @@ test("frozen scope cites the owner decision and discloses the large-object limit
 
 test("parent promotion requires frozen scope, two recordings, final comparison and review", () => {
   const closure = load();
-  const allVerified = closure.conditions.every(({ status }) => status === "VERIFIED");
-  const approvedScope = closure.scopeDecisions.every(({ status }) => status === "APPROVED");
-  assert.equal(
-    closure.parentStatus === "COMPAT_VERIFIED",
-    closure.inventoryState === "FROZEN" &&
-      allVerified &&
-      approvedScope &&
-      closure.closureReview?.decision === "APPROVED",
+  assert.equal(closure.parentStatus === "COMPAT_VERIFIED", admission.eligible);
+});
+
+test("STORAGE-OBJECT rejects an actual current inventory byte mismatch", () => {
+  const value = loadRepository(root);
+  value.registry.parents.find((p) => p.parent === "STORAGE-OBJECT").currentBinding.inventorySha256 =
+    "0".repeat(64);
+  assert.throws(
+    () => assertCurrentParentEvidence(value, "STORAGE-OBJECT"),
+    /current inventory bytes differ/,
   );
 });

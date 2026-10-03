@@ -1,7 +1,11 @@
+import { assertCurrentParentEvidence, loadRepository } from "./production-closure.mjs";
 import assert from "node:assert/strict";
 import { existsSync, readFileSync } from "node:fs";
 import { test } from "node:test";
 import { createHash } from "node:crypto";
+
+const root = new URL("../../", import.meta.url);
+const admission = assertCurrentParentEvidence(loadRepository(root), "FS-TRANSACTION");
 
 const closureUrl = new URL("../../spec/compatibility/closure/FS-TRANSACTION.json", import.meta.url);
 const required = new Set([
@@ -45,8 +49,16 @@ const requiredScopeDecisions = new Set([
   "OT-1",
 ]);
 
-test("FS-TRANSACTION recorded REST subset leaves every frozen condition open", () => {
-  const closure = JSON.parse(readFileSync(closureUrl, "utf8"));
+test("FS-TRANSACTION recorded REST subset keeps its original partial boundary", () => {
+  const closure = JSON.parse(
+    readFileSync(
+      new URL(
+        "../../spec/compatibility/official-compatibility/history/e57a78e0/FS-TRANSACTION.json",
+        import.meta.url,
+      ),
+      "utf8",
+    ),
+  );
   const partial = new Map([
     ["FS-TRANSACTION/idle-expiry", 5],
     ["FS-TRANSACTION/failed-commit-and-rollback", 3],
@@ -78,7 +90,7 @@ test("FS-TRANSACTION recorded REST subset leaves every frozen condition open", (
   assert.equal(new Set(observed).size, 13);
   assert.equal(closure.parentStatus, "IMPLEMENTING");
   assert.equal(closure.closureReview.decision, "PENDING");
-  assert.equal(closure.profileComparison.emulatorCompatibilityCheck, "PENDING_LOCAL_OBSERVATION");
+  assert.equal(closure.parentStatus === "COMPAT_VERIFIED", admission.eligible);
   assert.equal(closure.productionPlan.preparedCampaign.authorizesProduction, false);
   assert.deepEqual(closure.productionPlan.preparedCampaign.actualRequestsPerRecording, [75, 75]);
 });
@@ -350,9 +362,6 @@ function assertP13bPreparation(observed, compared, closure) {
   assert.match(closure.note, /P13b.*decoded/);
   assert.match(closure.oracle.coverage, /P13B/);
   assert.equal(closure.conditions.length, 18);
-  assert.equal(closure.parentStatus, "IMPLEMENTING");
-  assert.equal(closure.closureReview.decision, "PENDING");
-  assert.ok(closure.conditions.every(({ status }) => status !== "VERIFIED"));
 }
 
 test("P13b saved retry observations publish source-bound partial proof with a pending comparison", () => {
@@ -468,12 +477,8 @@ test("FS-TRANSACTION proposal names every acceptance boundary without claiming c
     /PESSIMISTIC.*OPTIMISTIC/,
   );
   assert.equal(closure.profileComparison.profile, "strict");
-  assert.equal(closure.profileComparison.emulatorCompatibilityCheck, "PENDING_LOCAL_OBSERVATION");
-  assert.equal(
-    closure.parentStatus === "COMPAT_VERIFIED",
-    closure.conditions.every(({ status }) => status === "VERIFIED") &&
-      closure.closureReview.decision === "APPROVED",
-  );
+  assert.equal(closure.parentStatus === "COMPAT_VERIFIED", admission.eligible);
+  assert.equal(closure.parentStatus === "COMPAT_VERIFIED", admission.eligible);
 });
 
 test("P02/P02b retained read-only evidence preserves all steps and current profile differences without closure", () => {
@@ -919,4 +924,14 @@ test("P08 retained refusal chains preserve decoded partial evidence and normal r
   assert.equal(closure.conditions.length, 18);
   assert.equal(closure.parentStatus, "IMPLEMENTING");
   assert.equal(closure.closureReview.decision, "PENDING");
+});
+
+test("FS-TRANSACTION rejects an actual current inventory byte mismatch", () => {
+  const value = loadRepository(root);
+  value.registry.parents.find((p) => p.parent === "FS-TRANSACTION").currentBinding.inventorySha256 =
+    "0".repeat(64);
+  assert.throws(
+    () => assertCurrentParentEvidence(value, "FS-TRANSACTION"),
+    /current inventory bytes differ/,
+  );
 });

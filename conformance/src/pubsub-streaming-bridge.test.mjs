@@ -83,6 +83,16 @@ function clockFixture() {
       }
       now = end;
       await flush();
+      for (let pass = 0; ; pass++) {
+        const due = [...timers.values()]
+          .filter((timer) => timer.at <= now)
+          .toSorted((a, b) => a.at - b.at)[0];
+        if (!due) break;
+        if (pass >= 32) throw new Error("clock due timers did not converge");
+        timers.delete(due.id);
+        due.callback();
+        await flush();
+      }
     },
     restore() {
       if (originalNow) Object.defineProperty(performance, "now", originalNow);
@@ -875,4 +885,267 @@ test("wire_and_receipt_caps_admit_exactly_the_bound_and_stop_on_the_next_item", 
         assert.equal(report.provenance.verdict, over ? "uncertain" : "peer-terminal");
       }
     }
+  }));
+
+test("metadata_total_bytes_and_every_own_descriptor_are_bounded_before_effects", () =>
+  withClock(async () => {
+    const { createOwnedStreamingBridge } = await exports();
+    const session = new Session();
+    const args = {
+      session,
+      authority: "http://localhost:1",
+      path,
+      deadlineAt: 100,
+      limits,
+      guard: () => {},
+      liveCheck: () => true,
+      write: async () => {},
+      onFrame: () => {},
+    };
+    const first = "x-goog-request-params",
+      second = "x-goog-user-project";
+    const metadata = {
+      [first]: "a".repeat(16391),
+      [second]: "b".repeat(32768 - first.length - second.length - 16391),
+    };
+    const f = await fixture({ metadata });
+    await f.bridge.open();
+    assert.equal(
+      Object.entries(metadata).reduce(
+        (n, [k, v]) => n + Buffer.byteLength(k) + Buffer.byteLength(v),
+        0,
+      ),
+      32768,
+    );
+    await f.bridge.done();
+    assert.throws(() =>
+      createOwnedStreamingBridge({
+        ...args,
+        metadata: { ...metadata, [second]: metadata[second] + "b" },
+      }),
+    );
+    for (const key of [first, "unknown", Symbol("hidden")]) {
+      for (const enumerable of [false, true]) {
+        let calls = 0;
+        const object = {};
+        Object.defineProperty(object, key, {
+          enumerable,
+          get() {
+            calls++;
+            throw Error("unreadable");
+          },
+        });
+        assert.throws(() => createOwnedStreamingBridge({ ...args, metadata: object }));
+        assert.equal(calls, 0);
+      }
+    }
+    const ownData = {};
+    Object.defineProperty(ownData, first, { value: "a" });
+    const accepted = await fixture({ metadata: ownData });
+    await accepted.bridge.open();
+    assert.equal(accepted.session.requests[0][first], "a");
+    await accepted.bridge.done();
+    assert.equal(session.requests.length, 0);
+    assert.equal(session.destroyCalls, 0);
+  }));
+
+test("writer_binding_order_and_physical_caps_fail_before_any_file_effect", () =>
+  withClock(async (clock) => {
+    const { createOwnedJournalWriter } = await exports();
+    const body = Buffer.from("x");
+    const row = {
+      index: 0,
+      bodyBase64: body.toString("base64"),
+      bodyBytes: body.length,
+      sha256: createHash("sha256").update(body).digest("hex"),
+    };
+    const recordBytes = Buffer.byteLength(JSON.stringify(row) + "\n");
+    function writer(extra = {}) {
+      const effects = [];
+      const writer = createOwnedJournalWriter({
+        deadlineAt: 100,
+        limits: {
+          maxWriterRows: 1,
+          maxWriterRecordBytes: recordBytes,
+          maxWriterBytes: recordBytes,
+        },
+        fileHandle: {
+          async write(bytes, offset, length, position) {
+            effects.push(["write", offset, length, position]);
+            return { bytesWritten: bytes.length };
+          },
+          async sync() {
+            effects.push(["file-sync"]);
+          },
+        },
+        directoryHandle: {
+          async sync() {
+            effects.push(["directory-sync"]);
+          },
+        },
+        ...extra,
+      });
+      return { writer, effects };
+    }
+    const exact = writer();
+    await exact.writer.write(row);
+    assert.equal(exact.writer.report().totalBytes, recordBytes);
+    assert.equal(exact.writer.report().acknowledgedRows, 1);
+    await assert.rejects(exact.writer.write({ ...row, index: 1 }));
+    assert.equal(exact.effects.length, 3);
+    for (const bad of [
+      { ...row, index: 1 },
+      { ...row, index: -1 },
+      { ...row, bodyBase64: "eA" },
+      { ...row, bodyBytes: 2 },
+      { ...row, sha256: "0".repeat(64) },
+      { ...row, unknown: true },
+      Object.defineProperty({ ...row }, "hidden", { value: true }),
+    ]) {
+      const f = writer();
+      await assert.rejects(f.writer.write(bad));
+      assert.deepEqual(f.effects, []);
+      assert.equal(f.writer.report().acknowledgedRows, 0);
+    }
+    for (const key of ["maxWriterRecordBytes", "maxWriterBytes"]) {
+      const f = writer({
+        limits: {
+          maxWriterRows: 1,
+          maxWriterRecordBytes: recordBytes,
+          maxWriterBytes: recordBytes,
+          [key]: recordBytes - 1,
+        },
+      });
+      await assert.rejects(f.writer.write(row));
+      assert.deepEqual(f.effects, []);
+    }
+    const aborted = writer();
+    await assert.rejects(aborted.writer.write(row, { signal: AbortSignal.abort() }));
+    assert.deepEqual(aborted.effects, []);
+    const sync = deferred();
+    const stages = [];
+    const late = writer({
+      fileHandle: {
+        async write(bytes) {
+          stages.push("write");
+          return { bytesWritten: bytes.length };
+        },
+        sync() {
+          stages.push("file-sync");
+          return sync.promise;
+        },
+      },
+      directoryHandle: {
+        async sync() {
+          stages.push("directory-sync");
+        },
+      },
+    });
+    const pending = late.writer.write(row);
+    const rejected = assert.rejects(pending);
+    await flush();
+    await clock.advance(101);
+    await rejected;
+    sync.resolve();
+    await flush();
+    assert.deepEqual(stages, ["write", "file-sync"]);
+    assert.equal(late.writer.report().acknowledgedRows, 0);
+  }));
+
+test("native_throws_lifecycle_and_uncommitted_terminal_never_infer_peer_success", () =>
+  withClock(async (clock) => {
+    for (const nativeEvent of ["aborted", "error", "goaway", "close"]) {
+      const f = await fixture();
+      await f.bridge.open();
+      (nativeEvent === "goaway" ? f.session : f.session.stream).emit(
+        nativeEvent,
+        new Error("native"),
+      );
+      const report = await f.bridge.done();
+      assert.equal(report.provenance.peerTerminal, null);
+      assert.equal(report.verdict, "uncertain");
+      assert.equal(f.session.destroyCalls, 1);
+    }
+    for (const throwing of ["request", "cancel", "destroy"]) {
+      const session = new Session();
+      if (throwing === "request")
+        session.onRequest = () => {
+          throw Error("request");
+        };
+      if (throwing === "cancel")
+        session.stream.onCancel = () => {
+          throw Error("cancel");
+        };
+      if (throwing === "destroy")
+        session.onDestroy = () => {
+          throw Error("destroy");
+        };
+      const f = await fixture({ session });
+      if (throwing === "request") await assert.rejects(f.bridge.open());
+      else await f.bridge.open();
+      const closing = f.bridge.done();
+      await flush();
+      await clock.advance(101);
+      const report = await closing;
+      assert.equal(report.verdict, "uncertain");
+      assert.equal(report.provenance.peerTerminal, null);
+      assert.equal(session.destroyCalls, 1);
+      if (throwing !== "request") {
+        assert.equal(session.stream.closeCalls, 1);
+        assert.equal(report.terminationRequired, true);
+        assert.ok(report.reasons.includes("native-close-unconfirmed"));
+      }
+    }
+    const held = deferred();
+    let hold = false;
+    const f = await fixture({ write: () => (hold ? held.promise : Promise.resolve()) });
+    await f.bridge.open();
+    hold = true;
+    terminal(f.session.stream);
+    await flush();
+    const pending = f.bridge.done();
+    await clock.advance(101);
+    const report = await pending;
+    assert.equal(report.provenance.peerTerminal, null);
+    assert.equal(report.terminationRequired, true);
+    assert.equal(report.verdict, "uncertain");
+    assert.ok(report.receipts.unknownEvents > 0);
+    assert.ok(report.journal.unknownEntries > 0);
+    const snapshot = structuredClone(report);
+    held.resolve();
+    await flush();
+    assert.deepEqual(report, snapshot);
+    const suffix = await fixture();
+    await suffix.bridge.open();
+    terminal(suffix.session.stream);
+    suffix.session.stream.emit("data", Buffer.alloc(0));
+    const contradictory = await suffix.bridge.done();
+    assert.equal(contradictory.provenance.peerTerminal.status, 0);
+    assert.equal(contradictory.provenance.verdict, "uncertain");
+    assert.ok(contradictory.provenance.reasons.includes("data-after-terminal"));
+  }));
+
+test("clock_drains_microtask_registered_due_timers_without_extending_time", () =>
+  withClock(async (clock) => {
+    const observed = [];
+    const cleared = setTimeout(() => observed.push("cleared"), 0);
+    clearTimeout(cleared);
+    setTimeout(() => observed.push("future"), 11);
+    Promise.resolve().then(() => setTimeout(() => observed.push("due"), 0));
+    await clock.advance(10);
+    assert.deepEqual(observed, ["due"]);
+    assert.equal(clock.now(), 10);
+    assert.equal([...clock.timers.values()].filter((timer) => timer.at <= 10).length, 0);
+    await clock.advance(1);
+    assert.equal(clock.now(), 11);
+    assert.deepEqual(observed, ["due", "future"]);
+    let calls = 0;
+    const repeat = () => {
+      calls++;
+      setTimeout(repeat, 0);
+    };
+    Promise.resolve().then(() => setTimeout(repeat, 0));
+    await assert.rejects(clock.advance(0), /did not converge/);
+    assert.ok(calls > 0 && calls <= 32);
+    assert.equal(clock.now(), 11);
   }));

@@ -1513,6 +1513,7 @@ export async function campaign(packetPath, { trustedPacketVerifier } = {}) {
 }
 
 const campaignFailure = (problems) => ({
+  predicateOnly: true,
   verdict: "fail",
   problems,
   certificate: null,

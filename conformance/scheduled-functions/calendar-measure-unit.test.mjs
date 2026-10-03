@@ -1977,3 +1977,38 @@ test("nested raw report hashes and outcomes survive independent envelope rehash 
     assert.equal(evaluateCampaignSnapshot(packet, snapshot).verdict, "fail");
   }
 });
+
+test("a changed raw plan is registered but stops before measurement effects", async () => {
+  const { produceCampaign } = await import("./calendar-measure.mjs");
+  let effects = 0;
+  let envelope;
+  const result = await produceCampaign({
+    authorityId: "unit",
+    attempts: [{ attemptId: "a", planPath: "/a", planSha256: "0".repeat(64) }],
+    bootstrap: async () => ({
+      scope: { utcDay: "2026-10-02" },
+      receipt: { phase: "infrastructure" },
+    }),
+    readPlan: async () => Buffer.from("{}"),
+    createLedger: async () => ({
+      registerBirth: async () => ({ durable: true }),
+      recordTerminal: async ({ reportBytes }) => {
+        envelope = JSON.parse(reportBytes);
+        return { durable: true };
+      },
+      seal: async () => {
+        if (envelope.outcome === "unknown") throw new Error("unknown");
+        return { state: "complete", durabilityAcknowledged: true };
+      },
+      close: async () => {},
+    }),
+    measureAttempt: async () => {
+      effects++;
+      return Buffer.from('{"verdict":{"verdict":"pass"}}');
+    },
+    readSnapshot: async () => ({}),
+  });
+  assert.equal(effects, 0);
+  assert.equal(envelope.outcome, "unknown");
+  assert.equal(result.state, "unknown");
+});

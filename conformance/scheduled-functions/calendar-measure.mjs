@@ -2,7 +2,7 @@
 // stays outside the run's session, starts the outer launcher as the leader of a new session,
 // waits for it, then takes the final inventory with no exclusion. Every child process goes
 // through the recorder. Nothing here asks for privilege or contacts anything but loopback.
-import { chmod, mkdir, mkdtemp, readFile, readdir, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, readdir, writeFile, open, realpath, lstat } from "node:fs/promises";
 import { createHash, randomBytes } from "node:crypto";
 import { join, resolve } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
@@ -28,6 +28,8 @@ import {
 } from "./calendar-session.mjs";
 import { calendarFixture } from "./calendar-local.mjs";
 import { CONTROL_VARIANTS } from "./calendar-controls.mjs";
+import { createAttemptLedger, validateAttemptLedger } from "./calendar-attempt-ledger.mjs";
+import { isDeepStrictEqual } from "node:util";
 
 const here = (name) => fileURLToPath(new URL("./" + name, import.meta.url));
 const runLocal = here("calendar-run-local.mjs");
@@ -43,6 +45,7 @@ const cleanEnv = () =>
 /** The files whose bytes make harness version H (the import closure and the control assets). */
 export const HARNESS_FILES = [
   "calendar-measure.mjs",
+  "calendar-attempt-ledger.mjs",
   "calendar-run-local.mjs",
   "calendar-session.mjs",
   "calendar-processes.mjs",
@@ -760,7 +763,7 @@ async function judgeRun({
     plan.control?.mode === "listener" && prepared
       ? boundBefore(await readJson(join(prepared, "bound.json")), inventoryStartedAt)
       : null;
-  return assembleRun({
+  const assembled = assembleRun({
     plan,
     kind,
     version,
@@ -775,6 +778,17 @@ async function judgeRun({
     bound,
     extra,
   });
+  const rawRecords = {};
+  for (const name of await readdir(join(accDir, "records")))
+    rawRecords[name] = (await readFile(join(accDir, "records", name))).toString("base64");
+  assembled.native = {
+    schema: "calendar-native-proof/v1", rawPlan: extra.rawPlan,
+    rawOuterResult: (await readFile(join(accDir, "outer-result.json"))).toString("base64"),
+    rawRecords, queries: extra.queries, inventoryStartedAt,
+    rawBound: bound === null ? null : (await readFile(join(prepared, "bound.json"))).toString("base64"),
+    portctlSha256: extra.portctlSha256,
+  };
+  return assembled;
 }
 
 /**
@@ -791,18 +805,11 @@ async function postVerdictCleanup({ accDir, root, version, launchTime, chain, ex
     harnessVersion: version,
   });
   try {
-    const targets = cleanupTargets({
-      rows: await inventoryPass(post),
-      chain,
-      launchTime,
-      recorded: extra.identities,
-      injected: extra.injected,
-      selfPid: process.pid,
+    return await cleanupOwned({
+      inventory: () => inventoryPass(post),
+      signal: (target) => post.verifiedSignal(identityOf(target), "SIGKILL", async () => process.kill(target.pid, "SIGKILL")),
+      context: { chain, launchTime, recorded: extra.identities, injected: extra.injected, selfPid: process.pid },
     });
-    for (const target of targets)
-      await post.verifiedSignal(identityOf(target), "SIGKILL", async () =>
-        process.kill(target.pid, "SIGKILL"),
-      );
   } finally {
     post.close();
   }
@@ -812,11 +819,12 @@ async function postVerdictCleanup({ accDir, root, version, launchTime, chain, ex
  * The measuring entry: verifies the pins before launching, starts the outer launcher in a new
  * session (the only `detached` spawn in the harness), waits for it, judges the run, and cleans up.
  */
-export async function measure(planPath) {
-  const plan = JSON.parse(await readFile(planPath, "utf8"));
+export async function measure(planPath, { planBytes, runRoot } = {}) {
+  const retained = planBytes === undefined ? await readFile(planPath) : Buffer.from(planBytes);
+  const plan = JSON.parse(retained.toString("utf8"));
   const kind = planKind(plan);
   const version = await harnessVersion();
-  const base = join(plan.session.root, "conformance/.runs");
+  const base = runRoot ?? join(plan.session.root, "conformance/.runs");
   await mkdir(base, { recursive: true, mode: 0o700 });
   const accDir = await mkdtemp(join(base, "accounting-"));
   await chmod(accDir, 0o700);
@@ -826,7 +834,14 @@ export async function measure(planPath) {
     role: "measure",
     harnessVersion: version,
   });
-  const extra = {};
+  try {
+  const extra = { queries: [], rawPlan: retained.toString("base64") };
+  const rawExec = recorder.execFile;
+  recorder.execFile = async (file, args, options, purpose) => {
+    const answer = await rawExec(file, args, options, purpose);
+    extra.queries.push({ file, args, purpose, answer });
+    return answer;
+  };
   extra.portctlSha256 = digest(await readFile(plan.portctl));
   extra.refusalCheck = await checkPinnedRefusalLine(recorder, {
     sourceRepo: plan.sourceRepo,
@@ -903,8 +918,14 @@ export async function measure(planPath) {
   }
   report.accountingDirectory = accDir;
   await privateJson(join(accDir, "verdict.json"), report);
-  await postVerdictCleanup({ accDir, root, version, launchTime, chain, extra });
+  try {
+    report.cleanup = await postVerdictCleanup({ accDir, root, version, launchTime, chain, extra });
+  } catch (error) {
+    report.cleanup = { outcome: "unknown", error: String(error.message ?? error), after: null };
+  }
+  await privateJson(join(accDir, "verdict.json"), report);
   return report;
+  } finally { recorder.close(); }
 }
 
 /** Condition (G): the certificate over one refusal report and the control reports. */
@@ -932,7 +953,7 @@ export async function certify(listPath, { requireCampaign = false } = {}) {
   if (Array.isArray(attemptPaths)) for (const path of attemptPaths) attempts.push(await load(path));
   // The stand-in runner of the offline tests is never certified (review round 2, M1).
   const standIn = await readFile(here("testdata/fake-runner.cjs")).catch(() => null);
-  return certificateVerdict({
+  const predicate = certificateVerdict({
     refusal: loaded[0].report,
     controls: loaded.slice(1).map((entry) => entry.report),
     files: loaded.map((entry) => entry.file),
@@ -940,4 +961,70 @@ export async function certify(listPath, { requireCampaign = false } = {}) {
     attempts: Array.isArray(attemptPaths) ? attempts : attemptPaths,
     explanations: list.explanations ?? {},
   });
+  return { ...predicate, predicateOnly: true, nativeCertificateIssued: false, externalApprovalVerified: false };
+}
+
+
+/** One handle owns all accepted births. Mock I/O tests establish ordering, not native proof. */
+export async function produceCampaign({
+  scope, authorityId, attempts, bootstrap, readPlan = readFile,
+  createLedger = createAttemptLedger, measureAttempt, readSnapshot,
+}) {
+  let ledger;
+  let receipt;
+  let authorityBytes;
+  try {
+    const infrastructure = await bootstrap();
+    scope = infrastructure.scope;
+    receipt = infrastructure.receipt;
+    authorityBytes = Buffer.from(JSON.stringify({ schema: "scoped-attempt-authority/v1", authorityId, scope }));
+    ledger = await createLedger({ authorityBytes, authoritySha256: digest(authorityBytes) });
+    for (const attempt of attempts) {
+      // Retain the only read before its ack; no attempt effects can use a later file version.
+      const planBytes = Buffer.from(await readPlan(attempt.planPath));
+      const birth = await ledger.registerBirth({ attemptId: attempt.attemptId, planBytes });
+      if (birth.durable !== true) throw new Error("birth durability is unknown");
+      let rawReport = null;
+      let error = null;
+      try {
+        if (digest(planBytes) !== attempt.planSha256) throw new Error("raw plan differs from packet");
+        rawReport = Buffer.from(await measureAttempt(planBytes, attempt, scope));
+      } catch (failure) {
+        error = String(failure.message ?? failure);
+      }
+      let report;
+      try { report = rawReport === null ? null : JSON.parse(rawReport.toString("utf8")); } catch { report = null; }
+      const outcome = ["pass", "fail"].includes(report?.verdict?.verdict) ? report.verdict.verdict : "unknown";
+      const envelope = Buffer.from(JSON.stringify({
+        schema: "attempt-report/v1", scope, attemptId: attempt.attemptId, outcome,
+        rawPlan: planBytes.toString("base64"), rawPlanSha256: digest(planBytes),
+        rawReport: rawReport?.toString("base64") ?? null,
+        rawReportSha256: rawReport === null ? null : digest(rawReport), error,
+      }));
+      const terminal = await ledger.recordTerminal({ attemptId: attempt.attemptId, reportBytes: envelope });
+      if (terminal.durable !== true) throw new Error("terminal durability is unknown");
+    }
+    const sealed = await ledger.seal();
+    if (sealed.state !== "complete" || sealed.durabilityAcknowledged !== true)
+      throw new Error("sealed durability is unknown");
+    const snapshot = await readSnapshot(scope);
+    return { ...sealed, snapshot, receipt, authorityBytes, externalApprovalVerified: false, allDayCertified: false, historicalCompleteness: "UNKNOWN" };
+  } catch (error) {
+    return { state: "unknown", reasons: [String(error.message ?? error)], receipt, externalApprovalVerified: false, allDayCertified: false, historicalCompleteness: "UNKNOWN" };
+  } finally {
+    if (ledger) await ledger.close();
+  }
+}
+
+
+/** Cleanup is a separate observation; it cannot rescue the pre-cleanup native verdict. */
+export async function cleanupOwned({ inventory, signal, context }) {
+  const before = await inventory();
+  const targets = cleanupTargets({ ...context, rows: before });
+  const signals = [];
+  for (const target of targets) signals.push({ target: identityOf(target), sent: await signal(target) });
+  const after = await inventory();
+  const remaining = cleanupTargets({ ...context, rows: after });
+  const uncertain = after.some((row) => row.sid === "ESRCH" || !Number.isSafeInteger(row.sid) || /^Z/.test(row.stat ?? ""));
+  return { outcome: signals.every((row) => row.sent === true) && remaining.length === 0 && !uncertain ? "clean" : "unknown", before, signals, after };
 }

@@ -935,3 +935,81 @@ test("the CLI certificate boundary refuses synthetic summaries and omitted failu
     }
   }
 });
+
+
+test("a campaign awaits durable birth before effects and retains exactly one raw plan read", async () => {
+  const { produceCampaign } = await import("./calendar-measure.mjs");
+  const events = [];
+  const bytes = Buffer.from('{"plan":"retained"}');
+  const retained = Buffer.from(bytes);
+  let release;
+  const ack = new Promise((resolve) => { release = resolve; });
+  const scope = { campaign: "unit", utcDay: "2026-10-02" };
+  const handles = {
+    registerBirth: async ({ planBytes }) => { events.push("birth"); assert.deepEqual(planBytes, bytes); await ack; events.push("birth-ack"); return { durable: true }; },
+    recordTerminal: async ({ reportBytes }) => { events.push("terminal"); const envelope = JSON.parse(reportBytes); assert.equal(envelope.outcome, "fail"); assert.equal(envelope.rawReportSha256, sha(Buffer.from(envelope.rawReport, "base64"))); return { durable: true }; },
+    seal: async () => { events.push("seal"); return { state: "complete", durabilityAcknowledged: true }; },
+    close: async () => { events.push("close"); },
+  };
+  const pending = produceCampaign({
+    scope, authorityId: "unit", attempts: [{ attemptId: "a", planPath: "/plan", planSha256: sha(bytes) }],
+    bootstrap: async () => { events.push("bootstrap"); return { scope, receipt: { phase: "infrastructure" } }; },
+    readPlan: async () => { events.push("read-plan"); return bytes; },
+    createLedger: async () => { events.push("ledger"); return handles; },
+    measureAttempt: async (raw) => { events.push("effects"); assert.deepEqual(raw, retained); return Buffer.from('{"verdict":{"verdict":"fail"}}'); },
+    readSnapshot: async () => { events.push("readback"); return {}; },
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(events, ["bootstrap", "ledger", "read-plan", "birth"]);
+  bytes[0] = 32;
+  release();
+  const result = await pending;
+  assert.deepEqual(events, ["bootstrap", "ledger", "read-plan", "birth", "birth-ack", "effects", "terminal", "seal", "readback", "close"]);
+  assert.equal(result.state, "complete");
+  assert.equal(result.externalApprovalVerified, false);
+  assert.equal(result.allDayCertified, false);
+});
+
+
+test("campaign early exceptions remain unknown terminals and never seal as complete failures", async () => {
+  const { produceCampaign } = await import("./calendar-measure.mjs");
+  for (const outcome of ["pass", "fail", "inconclusive", "throw", "bad-json"]) {
+    const events = [];
+    let envelope;
+    const raw = Buffer.from("{}");
+    const result = await produceCampaign({
+      authorityId: "unit", attempts: [{ attemptId: "one", planPath: "/one", planSha256: sha(raw) }],
+      bootstrap: async () => ({ scope: { utcDay: "2026-10-02" }, receipt: { phase: "infrastructure" } }),
+      readPlan: async () => raw,
+      createLedger: async () => ({
+        registerBirth: async () => { events.push("birth-ack"); return { durable: true }; },
+        recordTerminal: async ({ reportBytes }) => { envelope = JSON.parse(reportBytes); events.push("terminal"); return { durable: true }; },
+        seal: async () => { events.push("seal"); if (envelope.outcome === "unknown") throw new Error("unknown terminal"); return { state: "complete", durabilityAcknowledged: true }; },
+        close: async () => { events.push("close"); },
+      }),
+      measureAttempt: async () => { events.push("effects"); if (outcome === "throw") throw new Error("prelaunch"); return Buffer.from(outcome === "bad-json" ? "{" : JSON.stringify({ verdict: { verdict: outcome } })); },
+      readSnapshot: async () => ({}),
+    });
+    const known = ["pass", "fail"].includes(outcome);
+    assert.equal(envelope.outcome, known ? outcome : "unknown");
+    assert.equal(result.state, known ? "complete" : "unknown");
+    assert.deepEqual(events, ["birth-ack", "effects", "terminal", "seal", "close"]);
+    assert.equal(result.externalApprovalVerified, false);
+  }
+});
+
+test("post-verdict cleanup saves an independent after inventory and refuses unknown signals", async () => {
+  const { cleanupOwned } = await import("./calendar-measure.mjs");
+  for (const [signalOk, remains, expected] of [[true, false, "clean"], [false, false, "unknown"], [true, true, "unknown"]]) {
+    let calls = 0;
+    const target = row({ pid: 201, sid: 300 });
+    const result = await cleanupOwned({
+      inventory: async () => (++calls === 1 || remains ? [target] : []),
+      signal: async () => signalOk,
+      context: { chain, launchTime, recorded: [], injected: null, selfPid: 100 },
+    });
+    assert.equal(calls, 2);
+    assert.deepEqual(result.after, remains ? [target] : []);
+    assert.equal(result.outcome, expected);
+  }
+});

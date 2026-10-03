@@ -31,6 +31,7 @@ const BUILTINS = new Set([
   "node:path",
   "node:timers/promises",
   "node:url",
+  "node:util",
 ]);
 
 /** The spans of every call's arguments whose callee matches `callee`, by parenthesis matching. */

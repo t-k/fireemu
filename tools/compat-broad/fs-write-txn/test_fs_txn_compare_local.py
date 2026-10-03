@@ -348,3 +348,165 @@ def test_semantic_diagnostic_suffix_is_retained_beyond_the_display_prefix():
 def test_a_missing_local_row_is_a_mismatch():
     cases, reads, times = tool.compare(projection(), {"cases": [], "reads": []}, {"s": {"commitTime": True, "relation": None}}, {})
     assert not cases[0]["match"] and not reads[0]["match"] and not times[0]["match"]
+
+
+def p08_recording():
+    from fs_txn_table_p08 import TABLE
+    from test_txn_program_collector import Clock, Service
+    from txn_program_collector import Collector
+    from txn_program_program import RequestBudget, compile_plan
+
+    class RecordedRefusalService(Service):
+        """A finite stand-in for P08's observed refusal family, without network access."""
+
+        def _send(self, transport, method, request, **kwargs):
+            result = super()._send(transport, method, request, **kwargs)
+            token = request.get("transaction")
+            if method in ("GetDocument", "Commit") and self.tokens.get(token) == "dead" and result["code"] == 10:
+                result["code"] = 3
+                result["details"] = "The referenced transaction has expired or is no longer valid."
+            if method == "Commit" and result["code"] == 5:
+                result["details"] = "No document to update: " + request["writes"][1]["update"]["name"]
+            if transport == "rest":
+                result["http"] = {0: 200, 3: 400, 5: 404, 10: 409}[result["code"]]
+            if method == "Commit" and result["code"] == 0 and result["response"].get("writeResults"):
+                result["response"]["commitTime"] = copy.deepcopy(result["response"]["writeResults"][-1]["updateTime"])
+            return result
+
+    clock = Clock()
+    plan = compile_plan(TABLE, "a" * 32, "b" * 32)
+    service = RecordedRefusalService(clock, dead_on_failure=True, fail_code=5, dead_rollback_code=0)
+    receipt = Collector(plan, TABLE, RequestBudget(plan, TABLE), service, "owner", save=lambda _state: None, monotonic=clock.now, utc=clock.utc).run()
+    assert receipt["complete"] is True and receipt["failureType"] is None
+    return receipt, TABLE
+
+
+def synchronize_p08_observations(receipt):
+    for row in receipt["observations"]:
+        row["result"] = copy.deepcopy(next(step["result"] for step in receipt["steps"] if step["site"] == row["site"]))
+
+
+def test_p08_native_refusal_model_preserves_every_step_state_version_and_cleanup():
+    receipt, table = p08_recording()
+    semantic = tool.recording_semantics(receipt, table)
+    assert len(semantic["steps"]) == 45
+    assert len(semantic["cleanupSteps"]) == 3
+    for transport in ("rest", "grpc"):
+        steps = semantic["steps"]
+        assert steps[f"{transport}/a/fail-commit"]["code"] == 5
+        assert steps[f"{transport}/a/same-token-read-a"]["code"] == 3
+        assert steps[f"{transport}/a/corrected-commit"]["code"] == 3
+        for chain in ("a", "b"):
+            assert steps[f"{transport}/{chain}/rollback"]["code"] == 0
+            assert steps[f"{transport}/{chain}/rollback-again"]["code"] == 0
+            assert steps[f"{transport}/{chain}/writer"]["code"] == 0
+            assert steps[f"{transport}/{chain}/post-read-a"]["read"]["state"] == f"{transport}-{chain}-writer"
+        assert steps[f"{transport}/a/plain-read-a"]["versions"] == steps[f"{transport}/a/read-a"]["versions"]
+        assert steps[f"{transport}/c/rollback-after-commit"]["code"] == 10
+    assert semantic["steps"]["rest/a/fail-commit"]["http"] == 404
+    assert semantic["steps"]["rest/a/corrected-commit"]["http"] == 400
+    assert semantic["cleanup"]["absent"] is True
+    assert list(semantic["cleanupSteps"]) == ["cleanup/read/a", "cleanup/delete/a", "cleanup/verify/a"]
+    assert "cleanup/verify/m" not in semantic["cleanupSteps"]
+    assert len(semantic["commitTimes"]) == 7
+
+
+@pytest.mark.parametrize("mutation", ["missing", "duplicate", "complete", "source", "token", "cleanup", "unknown", "sequence"])
+def test_p08_forged_native_completion_is_rejected(mutation):
+    receipt, table = p08_recording()
+    original = tool.recording_semantics(receipt, table)
+    changed = copy.deepcopy(receipt)
+    if mutation == "missing": changed["steps"].pop()
+    if mutation == "duplicate": changed["steps"][-1] = copy.deepcopy(changed["steps"][-2])
+    if mutation == "complete": changed["graphComplete"] = False
+    if mutation == "source": changed["sourceDigest"] = "0" * 64
+    if mutation == "token": changed["steps"][7]["request"]["transaction"] = "AAAA"
+    if mutation == "cleanup": changed["cleanupSteps"].pop()
+    if mutation == "unknown": changed["unknownCommits"] = ["rest/a/writer"]
+    if mutation == "sequence": changed["steps"][7]["sequence"] = 999
+    assert changed != receipt and original["cleanup"]["absent"] is True
+    with pytest.raises(ValueError): tool.recording_semantics(changed, table)
+
+
+@pytest.mark.parametrize("transport", ["rest", "grpc"])
+def test_p08_a_changed_refusal_diagnostic_suffix_remains_visible(transport):
+    receipt, table = p08_recording()
+    original = tool.recording_semantics(receipt, table)
+    changed = copy.deepcopy(receipt)
+    row = next(row for row in changed["steps"] if row["site"] == f"{transport}/a/fail-commit")
+    row["result"]["details"] += "\n" + "x" * 120 + " meaningful suffix"
+    synchronize_p08_observations(changed)
+    actual = tool.recording_semantics(changed, table)
+    assert actual != original
+    assert actual["steps"][row["site"]]["details"].endswith("meaningful suffix")
+
+
+@pytest.mark.parametrize("transport", ["rest", "grpc"])
+def test_p08_a_changed_plain_read_version_reaches_the_semantic_comparison(transport):
+    receipt, table = p08_recording()
+    original = tool.recording_semantics(receipt, table)
+    changed = copy.deepcopy(receipt)
+    plain = next(row for row in changed["steps"] if row["site"] == f"{transport}/a/plain-read-a")
+    writer = next(row for row in changed["steps"] if row["site"] == f"{transport}/a/writer")
+    previous = plain["result"]["response"]["updateTime"]
+    replacement = writer["result"]["response"]["writeResults"][0]["updateTime"]
+    assert previous != replacement
+    plain["result"]["response"]["updateTime"] = copy.deepcopy(replacement)
+    synchronize_p08_observations(changed)
+    actual = tool.recording_semantics(changed, table)
+    assert actual != original
+    old_rank = original["steps"][plain["site"]]["versions"]["/updateTime"]["rank"]
+    new_rank = actual["steps"][plain["site"]]["versions"]["/updateTime"]["rank"]
+    assert old_rank != new_rank
+
+
+@pytest.mark.parametrize("mutation", ["state", "http", "extra-commit-time"])
+def test_p08_native_state_http_and_commit_times_cannot_be_lost(mutation):
+    receipt, table = p08_recording()
+    original = tool.recording_semantics(receipt, table)
+    changed = copy.deepcopy(receipt)
+    if mutation == "state": changed["steps"][6]["result"]["response"]["fields"]["state"]["stringValue"] = "held"
+    if mutation == "http": changed["steps"][5]["result"]["http"] = 409
+    if mutation == "extra-commit-time": changed["steps"][8]["result"]["response"].pop("commitTime")
+    synchronize_p08_observations(changed)
+    try:
+        actual = tool.recording_semantics(changed, table)
+    except ValueError:
+        assert mutation == "state"
+    else:
+        assert actual != original
+
+
+@settings(max_examples=20)
+@given(st.sampled_from([f"{transport}/{chain}-{name}" for transport in ("rest", "grpc") for chain, name in [("a", "fail-commit"), ("a", "same-token-read"), ("a", "corrected-commit"), ("a", "rollback"), ("b", "writer"), ("c", "rollback-after-commit")]]), st.integers(0, 16))
+def test_generated_p08_case_code_changes_are_rejected_or_visible(case_id, code):
+    receipt, table = p08_recording()
+    original = tool.recording_semantics(receipt, table)
+    row = next(row for row in receipt["steps"] if row["caseId"] == case_id)
+    if row["result"]["code"] == code:
+        assert tool.recording_semantics(copy.deepcopy(receipt), table) == original
+        return
+    previous = row["result"]["code"]
+    row["result"]["code"] = code
+    assert previous != row["result"]["code"]
+    synchronize_p08_observations(receipt)
+    try:
+        actual = tool.recording_semantics(receipt, table)
+    except ValueError:
+        return
+    assert actual != original
+
+
+@settings(max_examples=15)
+@given(st.integers(1, 1000000))
+def test_p08_uniform_time_translation_keeps_all_state_and_version_relations(delta):
+    receipt, table = p08_recording()
+    def shift(value):
+        if isinstance(value, dict):
+            return {key: str(int(item) + delta) if key == "seconds" else shift(item) for key, item in value.items()}
+        if isinstance(value, list): return [shift(item) for item in value]
+        if isinstance(value, str) and re.fullmatch(r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d{1,9})?Z", value):
+            base, dot, fraction = value[:-1].partition(".")
+            return (dt.datetime.fromisoformat(base) + dt.timedelta(seconds=delta)).isoformat() + (dot + fraction if dot else "") + "Z"
+        return value
+    assert tool.recording_semantics(shift(receipt), table) == tool.recording_semantics(receipt, table)

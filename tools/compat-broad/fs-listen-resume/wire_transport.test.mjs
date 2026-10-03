@@ -835,9 +835,10 @@ test("inherited accessor prototype drift is retained without invoking a foreign 
   let value = original;
   let foreignSets = 0;
   const prototype = {};
+  const getter = () => value;
   Object.defineProperty(prototype, "fetch", {
     configurable: true,
-    get: () => value,
+    get: getter,
     set(next) {
       value = next;
     },
@@ -853,7 +854,7 @@ test("inherited accessor prototype drift is retained without invoking a foreign 
   const captured = globals.fetch;
   Object.defineProperty(prototype, "fetch", {
     configurable: true,
-    get: () => value,
+    get: getter,
     set() {
       foreignSets++;
     },

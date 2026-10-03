@@ -41,15 +41,11 @@ function dataField(object, name) {
   return descriptor && Object.hasOwn(descriptor, "value") ? descriptor.value : undefined;
 }
 function validShape(row, keys) {
-  for (const key of keys) {
-    const descriptor = Object.getOwnPropertyDescriptor(row, key);
-    if (descriptor && !Object.hasOwn(descriptor, "value")) return false;
-  }
-  for (const key in row) {
-    if (!Object.hasOwn(row, key) || !keys.has(key)) return false;
+  for (const key of Reflect.ownKeys(row)) {
+    if (!keys.has(key)) return false;
     if (!Object.hasOwn(Object.getOwnPropertyDescriptor(row, key), "value")) return false;
   }
-  return Object.getOwnPropertySymbols(row).length === 0;
+  return true;
 }
 function statusValue(raw) {
   if (raw.length === 0) return null;

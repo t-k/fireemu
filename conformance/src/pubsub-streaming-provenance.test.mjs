@@ -459,6 +459,58 @@ test("evidence_bounds_refuse_before_unbounded_processing", async () => {
   uncertain(reduce([pairGetter], { ...limits, maxHeaderPairs: 1 }), "header-pair-limit");
 });
 
+test("all_own_fields_are_closed_data_descriptors_regardless_of_enumerability", async () => {
+  const reduce = await reducer();
+  for (const field of ["index", "journalIndex", "other", "toString", "__proto__"]) {
+    for (const enumerable of [false, true]) {
+      for (const accessor of [false, true]) {
+        const row = terminal(1);
+        let calls = 0;
+        Object.defineProperty(
+          row,
+          field,
+          accessor
+            ? {
+                get() {
+                  calls++;
+                  throw new Error("unknown getter must not run");
+                },
+                enumerable,
+              }
+            : { value: 99, enumerable },
+        );
+        const result = reduce([row], limits);
+        uncertain(result, "invalid-row");
+        assert.equal(result.peerTerminal, null);
+        assert.equal(calls, 0);
+      }
+    }
+  }
+  for (const row of [terminal(1), stop(1), marker(1, "peer-reset"), data(1)]) {
+    for (const field of Object.getOwnPropertyNames(row)) {
+      let calls = 0;
+      const input = { ...row };
+      Object.defineProperty(input, field, {
+        get() {
+          calls++;
+          throw new Error("known hidden getter must not run");
+        },
+        enumerable: false,
+      });
+      uncertain(reduce([input], limits), "invalid-row");
+      assert.equal(calls, 0);
+    }
+  }
+  const hiddenData = {};
+  for (const [field, value] of Object.entries(terminal(1))) {
+    Object.defineProperty(hiddenData, field, { value, enumerable: false });
+  }
+  assert.deepEqual(reduce([hiddenData], limits), reduce([terminal(1)], limits));
+  const symbolRow = terminal(1);
+  Object.defineProperty(symbolRow, Symbol("hidden"), { value: 99, enumerable: false });
+  uncertain(reduce([symbolRow], limits), "invalid-row");
+});
+
 test("the_result_is_pure_deterministic_and_detached", async () => {
   const reduce = await reducer();
   const rows = [
@@ -543,13 +595,20 @@ function reference(rows, bounds = limits) {
   const ids = new Map();
   let bytes = 0;
   for (const row of rows) {
+    if (!row || Array.isArray(row) || typeof row !== "object") {
+      reasons.add("invalid-row");
+      continue;
+    }
+    const names = Object.getOwnPropertyNames(row);
+    const descriptors = Object.getOwnPropertyDescriptors(row);
     if (
-      !row ||
-      Array.isArray(row) ||
-      typeof row !== "object" ||
-      typeof row.committed !== "boolean" ||
-      typeof row.kind !== "string"
+      Object.getOwnPropertySymbols(row).length ||
+      names.some((name) => !("value" in descriptors[name]))
     ) {
+      reasons.add("invalid-row");
+      continue;
+    }
+    if (typeof row.committed !== "boolean" || typeof row.kind !== "string") {
       reasons.add("invalid-row");
       continue;
     }
@@ -557,11 +616,7 @@ function reference(rows, bounds = limits) {
       reasons.add("unknown-kind");
       continue;
     }
-    if (
-      Object.keys(row).some(
-        (key) => !["kind", "seq", "committed", ...schemas[row.kind]].includes(key),
-      )
-    ) {
+    if (names.some((key) => !["kind", "seq", "committed", ...schemas[row.kind]].includes(key))) {
       reasons.add("invalid-row");
       continue;
     }
@@ -705,7 +760,7 @@ test("generated_chronologies_match_an_independent_oracle_and_reach_every_class",
   const verdicts = new Set();
   const check = (rows, bounds = limits) => {
     const actual = reduce(rows, bounds);
-    assert.deepEqual(actual, reference(rows, bounds), JSON.stringify({ rows, bounds }));
+    assert.deepEqual(actual, reference(rows, bounds), "independent provenance model mismatch");
     actual.reasons.forEach((reason) => reached.add(reason));
     verdicts.add(actual.verdict);
   };
@@ -741,6 +796,41 @@ test("generated_chronologies_match_an_independent_oracle_and_reach_every_class",
     [[]],
   ];
   for (const [rows, bounds] of negativeCases) check(rows, bounds ?? limits);
+  for (const field of ["index", "nativeSequence", "other"]) {
+    for (const enumerable of [false, true]) {
+      const hiddenUnknown = terminal(0);
+      Object.defineProperty(hiddenUnknown, field, { value: 99, enumerable });
+      check([hiddenUnknown]);
+      const hiddenAccessor = terminal(0);
+      let calls = 0;
+      Object.defineProperty(hiddenAccessor, field, {
+        get() {
+          calls++;
+          return 99;
+        },
+        enumerable,
+      });
+      check([hiddenAccessor]);
+      assert.equal(calls, 0);
+    }
+  }
+  for (const field of Object.getOwnPropertyNames(terminal(0))) {
+    const hiddenKnown = terminal(0);
+    let calls = 0;
+    Object.defineProperty(hiddenKnown, field, {
+      get() {
+        calls++;
+        return 0;
+      },
+      enumerable: false,
+    });
+    check([hiddenKnown]);
+    assert.equal(calls, 0);
+  }
+  const hiddenKnownData = {};
+  for (const [field, value] of Object.entries(terminal(0)))
+    Object.defineProperty(hiddenKnownData, field, { value, enumerable: false });
+  check([hiddenKnownData]);
   let state = 0x4b1d5e77;
   const random = (n) => {
     state ^= state << 13;

@@ -269,7 +269,7 @@ impl StorageGenerationDriver {
 
     fn high_water(&self) -> Result<u64> {
         self.store
-            .next_generation_preview()
+            .next_generation_preview(LogicalInstant::UNIX_EPOCH)
             .map(|next| next - 1)
             .map_err(|error| invalid_data(&format!("cannot observe generation allocator: {error}")))
     }

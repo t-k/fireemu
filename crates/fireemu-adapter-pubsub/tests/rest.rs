@@ -35,6 +35,16 @@ async fn rest_request(
     path: &str,
     body: Value,
 ) -> (u16, Value) {
+    let (status, body) = rest_request_raw(address, method, path, body).await;
+    (status, serde_json::from_slice(&body).unwrap())
+}
+
+async fn rest_request_raw(
+    address: std::net::SocketAddr,
+    method: &str,
+    path: &str,
+    body: Value,
+) -> (u16, Vec<u8>) {
     let mut stream = tokio::net::TcpStream::connect(address).await.unwrap();
     let body = serde_json::to_vec(&body).unwrap();
     let request = format!(
@@ -66,7 +76,7 @@ async fn rest_request(
         .unwrap()
         .parse()
         .unwrap();
-    (status, serde_json::from_slice(body).unwrap())
+    (status, body.to_vec())
 }
 
 async fn grpc_channel(address: std::net::SocketAddr) -> tonic::transport::Channel {
@@ -75,6 +85,100 @@ async fn grpc_channel(address: std::net::SocketAddr) -> tonic::transport::Channe
         .connect()
         .await
         .unwrap()
+}
+
+#[tokio::test]
+async fn recorded_rest_bootstrap_empty_lists_omit_default_fields() {
+    let address = start().await;
+    for collection in ["topics", "subscriptions"] {
+        let (status, body) = rest_request(
+            address,
+            "GET",
+            &format!("/v1/projects/demo-app/{collection}"),
+            json!({}),
+        )
+        .await;
+        assert_eq!(status, 200);
+        assert_eq!(body, json!({}), "{collection}");
+    }
+}
+
+/// The exact defaults are the recorded production REST response of a created pull subscription: see
+/// `subscription_json` in `src/rest.rs` for the captures (run shape-001-6a666e3ffa9444cc80de18944b38ae36
+/// on fireemu-oracle-idp, and the fireemu-oracle-sbx recorded-shape-responses). Capture-only evidence.
+#[tokio::test]
+async fn recorded_rest_bootstrap_pull_subscription_has_exact_defaults() {
+    let address = start().await;
+    let topic = "projects/demo-app/topics/bootstrap-defaults";
+    let subscription = "projects/demo-app/subscriptions/bootstrap-defaults-sub";
+    let (status, _) = rest_request(address, "PUT", &format!("/v1/{topic}"), json!({})).await;
+    assert_eq!(status, 200);
+    let expected = json!({
+        "name": subscription, "topic": topic, "pushConfig": {}, "ackDeadlineSeconds": 60,
+        "messageRetentionDuration": "604800s", "expirationPolicy": {"ttl": "2678400s"}, "state": "ACTIVE",
+    });
+    let (status, created) = rest_request(
+        address,
+        "PUT",
+        &format!("/v1/{subscription}"),
+        json!({"topic": topic, "ackDeadlineSeconds": 60}),
+    )
+    .await;
+    assert_eq!(status, 200);
+    assert_eq!(created, expected);
+    let (status, fetched) =
+        rest_request(address, "GET", &format!("/v1/{subscription}"), json!({})).await;
+    assert_eq!(status, 200);
+    assert_eq!(fetched, expected);
+    for resource in [subscription, topic] {
+        let (status, deleted) =
+            rest_request(address, "DELETE", &format!("/v1/{resource}"), json!({})).await;
+        assert_eq!(status, 200);
+        assert_eq!(deleted, json!({}));
+        let (status, absent) =
+            rest_request(address, "GET", &format!("/v1/{resource}"), json!({})).await;
+        assert_eq!(status, 404);
+        let leaf = resource.rsplit('/').next().unwrap();
+        assert_eq!(
+            absent,
+            json!({"error": {
+                "code": 404, "message": format!("Resource not found (resource={leaf})."), "status": "NOT_FOUND",
+            }})
+        );
+    }
+    for collection in ["topics", "subscriptions"] {
+        let (status, body) = rest_request(
+            address,
+            "GET",
+            &format!("/v1/projects/demo-app/{collection}"),
+            json!({}),
+        )
+        .await;
+        assert_eq!(status, 200);
+        assert_eq!(body, json!({}));
+    }
+}
+
+#[tokio::test]
+async fn recorded_rest_bootstrap_missing_get_uses_leaf_resource_error() {
+    let address = start().await;
+    for collection in ["topics", "subscriptions"] {
+        let leaf = "bootstrap-never-created";
+        let (status, error) = rest_request(
+            address,
+            "GET",
+            &format!("/v1/projects/demo-app/{collection}/{leaf}"),
+            json!({}),
+        )
+        .await;
+        assert_eq!(status, 404);
+        assert_eq!(
+            error,
+            json!({"error": {
+                "code": 404, "message": format!("Resource not found (resource={leaf})."), "status": "NOT_FOUND",
+            }})
+        );
+    }
 }
 
 async fn assert_subscription_values(
@@ -383,8 +487,10 @@ async fn a_rejected_rest_subscription_update_keeps_the_previous_configuration() 
     )
     .await;
     assert_eq!(status, 200);
-    assert_eq!(after["ackDeadlineSeconds"], 10);
-    assert!(after.get("pushConfig").is_none());
+    assert_eq!(
+        after, created,
+        "a rejected update must preserve every field"
+    );
 }
 
 #[tokio::test]
@@ -798,7 +904,7 @@ async fn rest_and_grpc_masks_reset_ack_deadline_and_push_config_to_defaults() {
     .await;
     assert_eq!(status, 200, "{reset}");
     assert_eq!(reset["ackDeadlineSeconds"], 10);
-    assert!(reset.get("pushConfig").is_none());
+    assert_eq!(reset["pushConfig"], json!({}));
 
     let mut subscriber = SubscriberClient::new(grpc_channel(address).await);
     let reset = subscriber
@@ -901,7 +1007,7 @@ async fn grpc_create_uses_the_same_policy_defaults_and_retry_bounds_as_rest() {
     assert_eq!(error.code(), tonic::Code::InvalidArgument);
 }
 
-/// One unsupported subscription option: its JSON name, its protobuf name, the JSON value a REST
+/// One subscription option unsupported on update (and, except retention, on create): its JSON name, its protobuf name, the JSON value a REST
 /// client sends and the protobuf field a gRPC client sets.
 type UnsupportedOption = (&'static str, &'static str, Value, fn(&mut pb::Subscription));
 
@@ -1032,8 +1138,12 @@ async fn both_transports_refuse_every_declared_but_unsupported_subscription_opti
     assert_eq!(status, 200);
     let mut subscriber = SubscriberClient::new(grpc_channel(address).await);
 
-    for (index, (json_field, proto_field, value, set)) in
-        unsupported_subscription_options().into_iter().enumerate()
+    for (index, (json_field, proto_field, value, set)) in unsupported_subscription_options()
+        .into_iter()
+        .filter(|(_, field, _, _)| {
+            !["retain_acked_messages", "message_retention_duration"].contains(field)
+        })
+        .enumerate()
     {
         let rest_id = format!("matrix-rest-{index}");
         let rest_path = format!("/v1/projects/demo-app/subscriptions/{rest_id}");
@@ -1093,8 +1203,8 @@ async fn both_transports_refuse_every_declared_but_unsupported_subscription_opti
     .await;
     assert_eq!(status, 200);
     assert_eq!(
-        listed["subscriptions"].as_array().unwrap().len(),
-        0,
+        listed,
+        json!({}),
         "a refused option must not leave a listed subscription: {listed}"
     );
 }
@@ -1405,17 +1515,23 @@ async fn assert_subscription_matrix(
         "{id}"
     );
     assert_eq!(from_get["retryPolicy"]["minimumBackoff"], "1.500s", "{id}");
+    // The proto defines mode-independent policy defaults and output-only ACTIVE state.
+    // These fixed REST metadata values do not enable unsupported mutation inputs.
+    assert_eq!(from_get["messageRetentionDuration"], "604800s", "{id}");
+    assert_eq!(
+        from_get["expirationPolicy"],
+        json!({"ttl": "2678400s"}),
+        "{id}"
+    );
+    assert_eq!(from_get["state"], "ACTIVE", "{id}");
     for unsupported in [
         "bigqueryConfig",
         "cloudStorageConfig",
         "bigtableConfig",
         "retainAckedMessages",
-        "messageRetentionDuration",
         "labels",
-        "expirationPolicy",
         "detached",
         "enableExactlyOnceDelivery",
-        "state",
     ] {
         assert!(
             from_get.get(unsupported).is_none(),
@@ -2058,4 +2174,85 @@ async fn rest_snapshot_creation_separates_unknown_names_from_unsupported_fields(
     .await;
     assert_eq!(status, 200, "{snapshot}");
     assert_eq!(snapshot["labels"]["owner"], "test");
+}
+
+#[tokio::test]
+async fn rest_collection_fields_follow_cardinality_on_the_pubsub_listener() {
+    let clock = Arc::new(Mutex::new(VirtualClock::new(
+        LogicalInstant::from_unix_seconds(1_700_000_000),
+    )));
+    let handle = PubSubHandle::new(Arc::new(Mutex::new(PubSubState::new(99))), clock, None);
+    let port = std::env::var("PORT").unwrap_or_else(|_| "0".to_owned());
+    let listener = tokio::net::TcpListener::bind(format!("127.0.0.1:{port}"))
+        .await
+        .unwrap();
+    let address = listener.local_addr().unwrap();
+    let server = tokio::spawn(serve_pubsub(listener, handle));
+
+    // Exhaust a small cardinality model and sample larger collections reproducibly.
+    let generated_counts = (0..12).scan(0x5eed_u64, |seed, _| {
+        *seed = seed.wrapping_mul(6_364_136_223_846_793_005).wrapping_add(1);
+        Some(((*seed >> 32) % 8) as usize)
+    });
+    for (case, count) in (0..=3).chain(generated_counts).enumerate() {
+        let project = format!("list-cardinality-{case}");
+        let topics_path = format!("/v1/projects/{project}/topics");
+        let subscriptions_path = format!("/v1/projects/{project}/subscriptions");
+        for path in [&topics_path, &subscriptions_path] {
+            let (status, body) = rest_request_raw(address, "GET", path, json!({})).await;
+            assert_eq!(status, 200);
+            assert_eq!(body, b"{}", "fresh collection: {path}");
+        }
+        for id in 0..count {
+            let topic_name = format!("projects/{project}/topics/topic-{id}");
+            let (status, _) =
+                rest_request(address, "PUT", &format!("/v1/{topic_name}"), json!({})).await;
+            assert_eq!(status, 200);
+            let (status, _) = rest_request(
+                address,
+                "PUT",
+                &format!("{subscriptions_path}/sub-{id}"),
+                json!({"topic": topic_name}),
+            )
+            .await;
+            assert_eq!(status, 200);
+        }
+        for (path, field, prefix) in [
+            (&topics_path, "topics", "topic"),
+            (&subscriptions_path, "subscriptions", "sub"),
+        ] {
+            let (status, response) = rest_request(address, "GET", path, json!({})).await;
+            assert_eq!(status, 200);
+            let object = response.as_object().unwrap();
+            assert!(!object.contains_key("nextPageToken"));
+            if count == 0 {
+                assert!(object.is_empty());
+            } else {
+                assert_eq!(object.len(), 1);
+                let resources = response[field].as_array().unwrap();
+                assert_eq!(resources.len(), count);
+                for id in 0..count {
+                    let name = format!("projects/{project}/{field}/{prefix}-{id}");
+                    assert!(resources.iter().any(|resource| resource["name"] == name));
+                }
+            }
+        }
+        for id in 0..count {
+            for path in [
+                format!("{subscriptions_path}/sub-{id}"),
+                format!("{topics_path}/topic-{id}"),
+            ] {
+                let (status, _) = rest_request(address, "DELETE", &path, json!({})).await;
+                assert_eq!(status, 200);
+            }
+        }
+        for path in [&topics_path, &subscriptions_path] {
+            let (status, body) = rest_request_raw(address, "GET", path, json!({})).await;
+            assert_eq!(status, 200);
+            assert_eq!(body, b"{}", "deleted collection: {path}");
+        }
+    }
+    server.abort();
+    assert!(server.await.unwrap_err().is_cancelled());
+    assert!(tokio::net::TcpStream::connect(address).await.is_err());
 }

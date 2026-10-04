@@ -828,6 +828,7 @@ name = "fireemu-core-functions"
 version = "0.10.0"
 dependencies = [
  "fireemu-core-types",
+ "proptest",
 ]
 
 [[package]]

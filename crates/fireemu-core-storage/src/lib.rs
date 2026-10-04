@@ -6,6 +6,7 @@
 //! `delimiter`; resumable uploads are an explicit state machine on the virtual clock.
 //! Hashes (MD5, CRC32C) are implemented in-crate so the core stays dependency-free.
 
+pub mod glob;
 pub mod hash;
 pub mod name;
 pub mod store;

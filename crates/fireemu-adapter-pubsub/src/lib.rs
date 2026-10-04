@@ -1669,6 +1669,8 @@ mod dispatch_tests {
             state.create_topic(topic.clone(), BTreeMap::new()).unwrap();
             state
                 .create_subscription(SubscriptionConfig {
+                    retain_acked_messages: false,
+                    message_retention_duration: None,
                     name: subscription,
                     topic: topic.clone(),
                     ack_deadline_seconds: 10,
@@ -1747,6 +1749,8 @@ mod dispatch_tests {
             state.create_topic(topic.clone(), BTreeMap::new()).unwrap();
             state
                 .create_subscription(SubscriptionConfig {
+                    retain_acked_messages: false,
+                    message_retention_duration: None,
                     name: subscription.clone(),
                     topic: topic.clone(),
                     ack_deadline_seconds: 10,
@@ -1820,6 +1824,8 @@ mod dispatch_tests {
         let topic = TopicName::new("demo-project", "reset-topic").unwrap();
         let subscription = SubscriptionName::new("demo-project", "reset-subscription").unwrap();
         let config = || SubscriptionConfig {
+            retain_acked_messages: false,
+            message_retention_duration: None,
             name: subscription.clone(),
             topic: topic.clone(),
             ack_deadline_seconds: 10,
@@ -1937,6 +1943,8 @@ mod dispatch_tests {
                 .unwrap();
             state
                 .create_subscription(SubscriptionConfig {
+                    retain_acked_messages: false,
+                    message_retention_duration: None,
                     name: source_subscription.clone(),
                     topic: source_topic.clone(),
                     ack_deadline_seconds: DEFAULT_ACK_DEADLINE_SECONDS,

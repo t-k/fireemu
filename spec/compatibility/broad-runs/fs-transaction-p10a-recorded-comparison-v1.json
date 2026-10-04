@@ -1,0 +1,788 @@
+{
+  "schemaVersion": 1,
+  "kind": "fs-transaction-recorded-comparison-v1",
+  "parent": "FS-TRANSACTION",
+  "program": "FS-TRANSACTION-P10-A-GRPC-IDLE",
+  "condition": [
+    "FS-TRANSACTION/idle-expiry"
+  ],
+  "coverage": "PARTIAL",
+  "authorizesProduction": false,
+  "productionRequests": 0,
+  "profile": "strict",
+  "artifact": {
+    "sourceCommit": "da9480d7842b4600d064da7f1d8cef2914664ecf",
+    "binarySha256": "852816f997d99beaa82ef8f8c10253af4b04c536bf612725a76a06e08fde70cb"
+  },
+  "comparer": {
+    "sha256": "cd788ad83279453792d9518aaa73e1a898c3ef7433c6ed9ed50cf0baef203eab",
+    "replayClock": "virtual"
+  },
+  "recordings": [
+    {
+      "recording": 1,
+      "productionFileSha256": "b51b7eef2f013d6e9acd427ed6973a0ba52e3e262c75a5a66a655c9aeaeb5e43",
+      "mismatches": 0,
+      "cases": [
+        {
+          "caseId": "grpc/commit-before-idle",
+          "production": {
+            "caseId": "grpc/commit-before-idle",
+            "rpc": "Commit",
+            "code": 0,
+            "details": "",
+            "issuedToken": false
+          },
+          "local": {
+            "caseId": "grpc/commit-before-idle",
+            "rpc": "Commit",
+            "code": 0,
+            "details": "",
+            "issuedToken": false
+          },
+          "match": true
+        },
+        {
+          "caseId": "grpc/commit-after-idle",
+          "production": {
+            "caseId": "grpc/commit-after-idle",
+            "rpc": "Commit",
+            "code": 0,
+            "details": "",
+            "issuedToken": false
+          },
+          "local": {
+            "caseId": "grpc/commit-after-idle",
+            "rpc": "Commit",
+            "code": 0,
+            "details": "",
+            "issuedToken": false
+          },
+          "match": true
+        },
+        {
+          "caseId": "grpc/rollback-first-after-idle",
+          "production": {
+            "caseId": "grpc/rollback-first-after-idle",
+            "rpc": "Rollback",
+            "code": 0,
+            "details": "",
+            "issuedToken": false
+          },
+          "local": {
+            "caseId": "grpc/rollback-first-after-idle",
+            "rpc": "Rollback",
+            "code": 0,
+            "details": "",
+            "issuedToken": false
+          },
+          "match": true
+        },
+        {
+          "caseId": "grpc/retry-after-rollback-first",
+          "production": {
+            "caseId": "grpc/retry-after-rollback-first",
+            "rpc": "BeginTransaction",
+            "code": 0,
+            "details": "",
+            "issuedToken": true
+          },
+          "local": {
+            "caseId": "grpc/retry-after-rollback-first",
+            "rpc": "BeginTransaction",
+            "code": 0,
+            "details": "",
+            "issuedToken": true
+          },
+          "match": true
+        },
+        {
+          "caseId": "grpc/get-first-after-idle",
+          "production": {
+            "caseId": "grpc/get-first-after-idle",
+            "rpc": "GetDocument",
+            "code": 0,
+            "details": "",
+            "issuedToken": false
+          },
+          "local": {
+            "caseId": "grpc/get-first-after-idle",
+            "rpc": "GetDocument",
+            "code": 0,
+            "details": "",
+            "issuedToken": false
+          },
+          "match": true
+        },
+        {
+          "caseId": "grpc/rollback-after-expiry-touch",
+          "production": {
+            "caseId": "grpc/rollback-after-expiry-touch",
+            "rpc": "Rollback",
+            "code": 0,
+            "details": "",
+            "issuedToken": false
+          },
+          "local": {
+            "caseId": "grpc/rollback-after-expiry-touch",
+            "rpc": "Rollback",
+            "code": 0,
+            "details": "",
+            "issuedToken": false
+          },
+          "match": true
+        },
+        {
+          "caseId": "grpc/retry-after-expiry-touch",
+          "production": {
+            "caseId": "grpc/retry-after-expiry-touch",
+            "rpc": "BeginTransaction",
+            "code": 0,
+            "details": "",
+            "issuedToken": true
+          },
+          "local": {
+            "caseId": "grpc/retry-after-expiry-touch",
+            "rpc": "BeginTransaction",
+            "code": 0,
+            "details": "",
+            "issuedToken": true
+          },
+          "match": true
+        }
+      ],
+      "reads": [
+        {
+          "site": "setup/absence",
+          "production": {
+            "site": "setup/absence",
+            "code": 5,
+            "state": null,
+            "details": "Document \"projects/<project>/databases/(default)/documents/oracle/<nonce>/txn-p10/control\" not found."
+          },
+          "local": {
+            "site": "setup/absence",
+            "code": 5,
+            "state": null,
+            "details": "Document \"projects/<project>/databases/(default)/documents/oracle/<nonce>/txn-p10/control\" not found."
+          },
+          "match": true
+        },
+        {
+          "site": "live/read",
+          "production": {
+            "site": "live/read",
+            "code": 0,
+            "state": "created",
+            "details": ""
+          },
+          "local": {
+            "site": "live/read",
+            "code": 0,
+            "state": "created",
+            "details": ""
+          },
+          "match": true
+        },
+        {
+          "site": "live/post-state",
+          "production": {
+            "site": "live/post-state",
+            "code": 0,
+            "state": "committed-before-idle",
+            "details": ""
+          },
+          "local": {
+            "site": "live/post-state",
+            "code": 0,
+            "state": "committed-before-idle",
+            "details": ""
+          },
+          "match": true
+        },
+        {
+          "site": "expired/read",
+          "production": {
+            "site": "expired/read",
+            "code": 0,
+            "state": "committed-before-idle",
+            "details": ""
+          },
+          "local": {
+            "site": "expired/read",
+            "code": 0,
+            "state": "committed-before-idle",
+            "details": ""
+          },
+          "match": true
+        },
+        {
+          "site": "expired/post-state",
+          "production": {
+            "site": "expired/post-state",
+            "code": 0,
+            "state": "attempted-after-idle",
+            "details": ""
+          },
+          "local": {
+            "site": "expired/post-state",
+            "code": 0,
+            "state": "attempted-after-idle",
+            "details": ""
+          },
+          "match": true
+        },
+        {
+          "site": "rollback-first/read",
+          "production": {
+            "site": "rollback-first/read",
+            "code": 0,
+            "state": "attempted-after-idle",
+            "details": ""
+          },
+          "local": {
+            "site": "rollback-first/read",
+            "code": 0,
+            "state": "attempted-after-idle",
+            "details": ""
+          },
+          "match": true
+        },
+        {
+          "site": "rollback-first/snapshot",
+          "production": {
+            "site": "rollback-first/snapshot",
+            "code": 0,
+            "state": "after-rollback-first",
+            "details": ""
+          },
+          "local": {
+            "site": "rollback-first/snapshot",
+            "code": 0,
+            "state": "after-rollback-first",
+            "details": ""
+          },
+          "match": true
+        },
+        {
+          "site": "get-first/read",
+          "production": {
+            "site": "get-first/read",
+            "code": 0,
+            "state": "after-rollback-first",
+            "details": ""
+          },
+          "local": {
+            "site": "get-first/read",
+            "code": 0,
+            "state": "after-rollback-first",
+            "details": ""
+          },
+          "match": true
+        },
+        {
+          "site": "get-first/expired-read",
+          "production": {
+            "site": "get-first/expired-read",
+            "code": 0,
+            "state": "after-rollback-first",
+            "details": ""
+          },
+          "local": {
+            "site": "get-first/expired-read",
+            "code": 0,
+            "state": "after-rollback-first",
+            "details": ""
+          },
+          "match": true
+        },
+        {
+          "site": "get-first/snapshot",
+          "production": {
+            "site": "get-first/snapshot",
+            "code": 0,
+            "state": "after-get-first",
+            "details": ""
+          },
+          "local": {
+            "site": "get-first/snapshot",
+            "code": 0,
+            "state": "after-get-first",
+            "details": ""
+          },
+          "match": true
+        },
+        {
+          "site": "post-state",
+          "production": {
+            "site": "post-state",
+            "code": 0,
+            "state": "after-get-first",
+            "details": ""
+          },
+          "local": {
+            "site": "post-state",
+            "code": 0,
+            "state": "after-get-first",
+            "details": ""
+          },
+          "match": true
+        }
+      ],
+      "idleCandidates": [
+        {
+          "site": "live/commit",
+          "production": {
+            "site": "live/commit",
+            "seconds": 55,
+            "classification": "BEFORE",
+            "thresholdSeconds": 60
+          },
+          "local": {
+            "site": "live/commit",
+            "seconds": 55,
+            "classification": "BEFORE",
+            "thresholdSeconds": 60
+          },
+          "match": true
+        },
+        {
+          "site": "expired/commit",
+          "production": {
+            "site": "expired/commit",
+            "seconds": 65,
+            "classification": "AFTER",
+            "thresholdSeconds": 60
+          },
+          "local": {
+            "site": "expired/commit",
+            "seconds": 65,
+            "classification": "AFTER",
+            "thresholdSeconds": 60
+          },
+          "match": true
+        },
+        {
+          "site": "rollback-first/rollback",
+          "production": {
+            "site": "rollback-first/rollback",
+            "seconds": 65,
+            "classification": "AFTER",
+            "thresholdSeconds": 60
+          },
+          "local": {
+            "site": "rollback-first/rollback",
+            "seconds": 65,
+            "classification": "AFTER",
+            "thresholdSeconds": 60
+          },
+          "match": true
+        },
+        {
+          "site": "get-first/expired-read",
+          "production": {
+            "site": "get-first/expired-read",
+            "seconds": 65,
+            "classification": "AFTER",
+            "thresholdSeconds": 60
+          },
+          "local": {
+            "site": "get-first/expired-read",
+            "seconds": 65,
+            "classification": "AFTER",
+            "thresholdSeconds": 60
+          },
+          "match": true
+        }
+      ]
+    },
+    {
+      "recording": 2,
+      "productionFileSha256": "e010620ee5504f26085786e98282a27cd4ff08979ea5d8792672570f932d4569",
+      "mismatches": 0,
+      "cases": [
+        {
+          "caseId": "grpc/commit-before-idle",
+          "production": {
+            "caseId": "grpc/commit-before-idle",
+            "rpc": "Commit",
+            "code": 0,
+            "details": "",
+            "issuedToken": false
+          },
+          "local": {
+            "caseId": "grpc/commit-before-idle",
+            "rpc": "Commit",
+            "code": 0,
+            "details": "",
+            "issuedToken": false
+          },
+          "match": true
+        },
+        {
+          "caseId": "grpc/commit-after-idle",
+          "production": {
+            "caseId": "grpc/commit-after-idle",
+            "rpc": "Commit",
+            "code": 0,
+            "details": "",
+            "issuedToken": false
+          },
+          "local": {
+            "caseId": "grpc/commit-after-idle",
+            "rpc": "Commit",
+            "code": 0,
+            "details": "",
+            "issuedToken": false
+          },
+          "match": true
+        },
+        {
+          "caseId": "grpc/rollback-first-after-idle",
+          "production": {
+            "caseId": "grpc/rollback-first-after-idle",
+            "rpc": "Rollback",
+            "code": 0,
+            "details": "",
+            "issuedToken": false
+          },
+          "local": {
+            "caseId": "grpc/rollback-first-after-idle",
+            "rpc": "Rollback",
+            "code": 0,
+            "details": "",
+            "issuedToken": false
+          },
+          "match": true
+        },
+        {
+          "caseId": "grpc/retry-after-rollback-first",
+          "production": {
+            "caseId": "grpc/retry-after-rollback-first",
+            "rpc": "BeginTransaction",
+            "code": 0,
+            "details": "",
+            "issuedToken": true
+          },
+          "local": {
+            "caseId": "grpc/retry-after-rollback-first",
+            "rpc": "BeginTransaction",
+            "code": 0,
+            "details": "",
+            "issuedToken": true
+          },
+          "match": true
+        },
+        {
+          "caseId": "grpc/get-first-after-idle",
+          "production": {
+            "caseId": "grpc/get-first-after-idle",
+            "rpc": "GetDocument",
+            "code": 0,
+            "details": "",
+            "issuedToken": false
+          },
+          "local": {
+            "caseId": "grpc/get-first-after-idle",
+            "rpc": "GetDocument",
+            "code": 0,
+            "details": "",
+            "issuedToken": false
+          },
+          "match": true
+        },
+        {
+          "caseId": "grpc/rollback-after-expiry-touch",
+          "production": {
+            "caseId": "grpc/rollback-after-expiry-touch",
+            "rpc": "Rollback",
+            "code": 0,
+            "details": "",
+            "issuedToken": false
+          },
+          "local": {
+            "caseId": "grpc/rollback-after-expiry-touch",
+            "rpc": "Rollback",
+            "code": 0,
+            "details": "",
+            "issuedToken": false
+          },
+          "match": true
+        },
+        {
+          "caseId": "grpc/retry-after-expiry-touch",
+          "production": {
+            "caseId": "grpc/retry-after-expiry-touch",
+            "rpc": "BeginTransaction",
+            "code": 0,
+            "details": "",
+            "issuedToken": true
+          },
+          "local": {
+            "caseId": "grpc/retry-after-expiry-touch",
+            "rpc": "BeginTransaction",
+            "code": 0,
+            "details": "",
+            "issuedToken": true
+          },
+          "match": true
+        }
+      ],
+      "reads": [
+        {
+          "site": "setup/absence",
+          "production": {
+            "site": "setup/absence",
+            "code": 5,
+            "state": null,
+            "details": "Document \"projects/<project>/databases/(default)/documents/oracle/<nonce>/txn-p10/control\" not found."
+          },
+          "local": {
+            "site": "setup/absence",
+            "code": 5,
+            "state": null,
+            "details": "Document \"projects/<project>/databases/(default)/documents/oracle/<nonce>/txn-p10/control\" not found."
+          },
+          "match": true
+        },
+        {
+          "site": "live/read",
+          "production": {
+            "site": "live/read",
+            "code": 0,
+            "state": "created",
+            "details": ""
+          },
+          "local": {
+            "site": "live/read",
+            "code": 0,
+            "state": "created",
+            "details": ""
+          },
+          "match": true
+        },
+        {
+          "site": "live/post-state",
+          "production": {
+            "site": "live/post-state",
+            "code": 0,
+            "state": "committed-before-idle",
+            "details": ""
+          },
+          "local": {
+            "site": "live/post-state",
+            "code": 0,
+            "state": "committed-before-idle",
+            "details": ""
+          },
+          "match": true
+        },
+        {
+          "site": "expired/read",
+          "production": {
+            "site": "expired/read",
+            "code": 0,
+            "state": "committed-before-idle",
+            "details": ""
+          },
+          "local": {
+            "site": "expired/read",
+            "code": 0,
+            "state": "committed-before-idle",
+            "details": ""
+          },
+          "match": true
+        },
+        {
+          "site": "expired/post-state",
+          "production": {
+            "site": "expired/post-state",
+            "code": 0,
+            "state": "attempted-after-idle",
+            "details": ""
+          },
+          "local": {
+            "site": "expired/post-state",
+            "code": 0,
+            "state": "attempted-after-idle",
+            "details": ""
+          },
+          "match": true
+        },
+        {
+          "site": "rollback-first/read",
+          "production": {
+            "site": "rollback-first/read",
+            "code": 0,
+            "state": "attempted-after-idle",
+            "details": ""
+          },
+          "local": {
+            "site": "rollback-first/read",
+            "code": 0,
+            "state": "attempted-after-idle",
+            "details": ""
+          },
+          "match": true
+        },
+        {
+          "site": "rollback-first/snapshot",
+          "production": {
+            "site": "rollback-first/snapshot",
+            "code": 0,
+            "state": "after-rollback-first",
+            "details": ""
+          },
+          "local": {
+            "site": "rollback-first/snapshot",
+            "code": 0,
+            "state": "after-rollback-first",
+            "details": ""
+          },
+          "match": true
+        },
+        {
+          "site": "get-first/read",
+          "production": {
+            "site": "get-first/read",
+            "code": 0,
+            "state": "after-rollback-first",
+            "details": ""
+          },
+          "local": {
+            "site": "get-first/read",
+            "code": 0,
+            "state": "after-rollback-first",
+            "details": ""
+          },
+          "match": true
+        },
+        {
+          "site": "get-first/expired-read",
+          "production": {
+            "site": "get-first/expired-read",
+            "code": 0,
+            "state": "after-rollback-first",
+            "details": ""
+          },
+          "local": {
+            "site": "get-first/expired-read",
+            "code": 0,
+            "state": "after-rollback-first",
+            "details": ""
+          },
+          "match": true
+        },
+        {
+          "site": "get-first/snapshot",
+          "production": {
+            "site": "get-first/snapshot",
+            "code": 0,
+            "state": "after-get-first",
+            "details": ""
+          },
+          "local": {
+            "site": "get-first/snapshot",
+            "code": 0,
+            "state": "after-get-first",
+            "details": ""
+          },
+          "match": true
+        },
+        {
+          "site": "post-state",
+          "production": {
+            "site": "post-state",
+            "code": 0,
+            "state": "after-get-first",
+            "details": ""
+          },
+          "local": {
+            "site": "post-state",
+            "code": 0,
+            "state": "after-get-first",
+            "details": ""
+          },
+          "match": true
+        }
+      ],
+      "idleCandidates": [
+        {
+          "site": "live/commit",
+          "production": {
+            "site": "live/commit",
+            "seconds": 55,
+            "classification": "BEFORE",
+            "thresholdSeconds": 60
+          },
+          "local": {
+            "site": "live/commit",
+            "seconds": 55,
+            "classification": "BEFORE",
+            "thresholdSeconds": 60
+          },
+          "match": true
+        },
+        {
+          "site": "expired/commit",
+          "production": {
+            "site": "expired/commit",
+            "seconds": 65,
+            "classification": "AFTER",
+            "thresholdSeconds": 60
+          },
+          "local": {
+            "site": "expired/commit",
+            "seconds": 65,
+            "classification": "AFTER",
+            "thresholdSeconds": 60
+          },
+          "match": true
+        },
+        {
+          "site": "rollback-first/rollback",
+          "production": {
+            "site": "rollback-first/rollback",
+            "seconds": 65,
+            "classification": "AFTER",
+            "thresholdSeconds": 60
+          },
+          "local": {
+            "site": "rollback-first/rollback",
+            "seconds": 65,
+            "classification": "AFTER",
+            "thresholdSeconds": 60
+          },
+          "match": true
+        },
+        {
+          "site": "get-first/expired-read",
+          "production": {
+            "site": "get-first/expired-read",
+            "seconds": 65,
+            "classification": "AFTER",
+            "thresholdSeconds": 60
+          },
+          "local": {
+            "site": "get-first/expired-read",
+            "seconds": 65,
+            "classification": "AFTER",
+            "thresholdSeconds": 60
+          },
+          "match": true
+        }
+      ]
+    }
+  ],
+  "summary": {
+    "recordings": 2,
+    "rows": 44,
+    "mismatches": 0
+  },
+  "remainingBoundaries": [
+    "Raw REST bodyBytes, content-length and member-order layout were not retained; the record proves decoded response semantics, not wire layout.",
+    "The closure review and the final-artifact regression are separate conditions and stay open.",
+    "The artifact is the strict profile of the commit named; a later source change needs a new replay.",
+    "Idle and lifetime boundaries are judged by the intervals production narrowed: the idle threshold lies in [110.70, 122.96) s and the age at which an expired token is forgotten in (298.7, 302.2] s; strict's values (a 120 s idle limit, a 270 s total lifetime, 300 s of memory) lie inside them. The replay runs on the emulator's virtual clock and reproduces each recorded idle (the least the production token idled before the request) and each recorded token age, so a row at a boundary is compared at the measured production value, not at the nominal wait."
+  ]
+}

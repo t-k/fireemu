@@ -1,0 +1,192 @@
+{
+  "schemaVersion": 1,
+  "kind": "fs-transaction-recorded-observations-v1",
+  "parent": "FS-TRANSACTION",
+  "condition": [
+    "FS-TRANSACTION/idle-expiry"
+  ],
+  "coverage": "PARTIAL",
+  "authorizesProduction": false,
+  "decodedSemanticsValidated": true,
+  "rawRestWireLayoutValidated": false,
+  "normalization": "Only the declared run identities (nonce, owner marker, issued token values, project number) are replaced by roles; codes, diagnostics, read states, token ends and cleanup are the program's own projection.",
+  "remainingBoundaries": [
+    "Raw REST bodyBytes, content-length and member-order layout were not retained; the record proves decoded response semantics, not wire layout.",
+    "The closure review and the final-artifact regression are separate conditions and stay open.",
+    "Idle and lifetime boundaries are judged by the intervals production narrowed: the idle threshold lies in [110.70, 122.96) s and the age at which an expired token is forgotten in (298.7, 302.2] s; strict's values (a 120 s idle limit, a 270 s total lifetime, 300 s of memory) lie inside them. The replay runs on the emulator's virtual clock and reproduces each recorded idle (the least the production token idled before the request) and each recorded token age, so a row at a boundary is compared at the measured production value, not at the nominal wait.",
+    "Replayed with txn_boundary_grpc_program.py as recorded (its digest is the recording's source digest); the file in the repository today differs from it.",
+    "Replayed with txn_boundary_grpc_transport.mjs as recorded (its digest is the recording's source digest); the file in the repository today differs from it."
+  ],
+  "corpora": [
+    {
+      "program": "FS-TRANSACTION-P10-B-GRPC-BOUNDARY",
+      "packetName": null,
+      "corpusDigest": "2da1823d971c6044063251b4ad510756aa8d2c73ae7a4793c2fcbee98ec1b9bd",
+      "recordings": 2,
+      "agree": true,
+      "productionFileSha256": [
+        "4f4e65c0426d707776e2705e45e7ab59b7bd0c2b1ae42c95a25892424c9bd1b5",
+        "2141615b4b8d3c9eae1a5eb2ec564d2b3163b31e77ef5947c24001d09297c656"
+      ],
+      "projection": {
+        "program": "FS-TRANSACTION-P10-B-GRPC-BOUNDARY",
+        "corpusDigest": "2da1823d971c6044063251b4ad510756aa8d2c73ae7a4793c2fcbee98ec1b9bd",
+        "cases": [
+          {
+            "caseId": "grpc/commit-idle-65",
+            "rpc": "Commit",
+            "candidateSeconds": 65,
+            "code": 0,
+            "details": ""
+          },
+          {
+            "caseId": "grpc/commit-idle-66",
+            "rpc": "Commit",
+            "candidateSeconds": 66,
+            "code": 0,
+            "details": ""
+          },
+          {
+            "caseId": "grpc/commit-idle-67",
+            "rpc": "Commit",
+            "candidateSeconds": 67,
+            "code": 0,
+            "details": ""
+          },
+          {
+            "caseId": "grpc/commit-idle-68",
+            "rpc": "Commit",
+            "candidateSeconds": 68,
+            "code": 0,
+            "details": ""
+          },
+          {
+            "caseId": "grpc/commit-idle-69",
+            "rpc": "Commit",
+            "candidateSeconds": 69,
+            "code": 0,
+            "details": ""
+          },
+          {
+            "caseId": "grpc/commit-idle-70",
+            "rpc": "Commit",
+            "candidateSeconds": 70,
+            "code": 0,
+            "details": ""
+          }
+        ],
+        "reads": [
+          {
+            "site": "setup/absence",
+            "code": 5,
+            "state": null
+          },
+          {
+            "site": "idle-65/read",
+            "code": 0,
+            "state": "created"
+          },
+          {
+            "site": "idle-65/post-state",
+            "code": 0,
+            "state": "accepted-idle-65"
+          },
+          {
+            "site": "idle-66/read",
+            "code": 0,
+            "state": "accepted-idle-65"
+          },
+          {
+            "site": "idle-66/post-state",
+            "code": 0,
+            "state": "accepted-idle-66"
+          },
+          {
+            "site": "idle-67/read",
+            "code": 0,
+            "state": "accepted-idle-66"
+          },
+          {
+            "site": "idle-67/post-state",
+            "code": 0,
+            "state": "accepted-idle-67"
+          },
+          {
+            "site": "idle-68/read",
+            "code": 0,
+            "state": "accepted-idle-67"
+          },
+          {
+            "site": "idle-68/post-state",
+            "code": 0,
+            "state": "accepted-idle-68"
+          },
+          {
+            "site": "idle-69/read",
+            "code": 0,
+            "state": "accepted-idle-68"
+          },
+          {
+            "site": "idle-69/post-state",
+            "code": 0,
+            "state": "accepted-idle-69"
+          },
+          {
+            "site": "idle-70/read",
+            "code": 0,
+            "state": "accepted-idle-69"
+          },
+          {
+            "site": "idle-70/post-state",
+            "code": 0,
+            "state": "accepted-idle-70"
+          }
+        ],
+        "timingMode": "wall-clock",
+        "idleCandidates": [
+          {
+            "site": "idle-65/commit",
+            "seconds": 65,
+            "classification": "AFTER",
+            "thresholdSeconds": 60
+          },
+          {
+            "site": "idle-66/commit",
+            "seconds": 66,
+            "classification": "AFTER",
+            "thresholdSeconds": 60
+          },
+          {
+            "site": "idle-67/commit",
+            "seconds": 67,
+            "classification": "AFTER",
+            "thresholdSeconds": 60
+          },
+          {
+            "site": "idle-68/commit",
+            "seconds": 68,
+            "classification": "AFTER",
+            "thresholdSeconds": 60
+          },
+          {
+            "site": "idle-69/commit",
+            "seconds": 69,
+            "classification": "AFTER",
+            "thresholdSeconds": 60
+          },
+          {
+            "site": "idle-70/commit",
+            "seconds": 70,
+            "classification": "AFTER",
+            "thresholdSeconds": 60
+          }
+        ],
+        "boundaryClassification": "INDETERMINATE",
+        "exactThresholdProven": false,
+        "cleanup": {
+          "absent": true
+        }
+      }
+    }
+  ]
+}

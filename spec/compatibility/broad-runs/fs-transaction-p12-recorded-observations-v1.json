@@ -1,0 +1,345 @@
+{
+  "schemaVersion": 1,
+  "kind": "fs-transaction-recorded-observations-v1",
+  "parent": "FS-TRANSACTION",
+  "condition": [
+    "FS-TRANSACTION/total-lifetime-expiry"
+  ],
+  "coverage": "PARTIAL",
+  "authorizesProduction": false,
+  "decodedSemanticsValidated": true,
+  "rawRestWireLayoutValidated": false,
+  "normalization": "Only the declared run identities (nonce, owner marker, issued token values, project number) are replaced by roles; codes, diagnostics, read states, token ends and cleanup are the program's own projection.",
+  "remainingBoundaries": [
+    "Raw REST bodyBytes, content-length and member-order layout were not retained; the record proves decoded response semantics, not wire layout.",
+    "The closure review and the final-artifact regression are separate conditions and stay open.",
+    "Idle and lifetime boundaries are judged by the intervals production narrowed: the idle threshold lies in [110.70, 122.96) s and the age at which an expired token is forgotten in (298.7, 302.2] s; strict's values (a 120 s idle limit, a 270 s total lifetime, 300 s of memory) lie inside them. The replay runs on the emulator's virtual clock and reproduces each recorded idle (the least the production token idled before the request) and each recorded token age, so a row at a boundary is compared at the measured production value, not at the nominal wait.",
+    "Replayed with fs_txn_table_p12.py as recorded (its digest is the recording's source digest); the file in the repository today differs from it."
+  ],
+  "corpora": [
+    {
+      "program": "FS-TRANSACTION-P12-FIRST-REQUEST",
+      "packetName": "p12-first-request",
+      "corpusDigest": "6b95437d01903a57ba6a15ef3a9294f6816596c532f6e92cda2c344a379aa61a",
+      "recordings": 2,
+      "agree": true,
+      "productionFileSha256": [
+        "682409fff83d58ed64cf3354c977f380db934d8e4f78c49e735b4cecb0a1a922",
+        "8ebde4df4b3938aedf4c3d4851a33dbd31352eaaceda800290bda80a1444f802"
+      ],
+      "projection": {
+        "program": "FS-TRANSACTION-P12-FIRST-REQUEST",
+        "packetName": "p12-first-request",
+        "corpusDigest": "6b95437d01903a57ba6a15ef3a9294f6816596c532f6e92cda2c344a379aa61a",
+        "cases": [
+          {
+            "caseId": "rest/c-commit-first",
+            "transport": "rest",
+            "rpc": "Commit",
+            "code": 3,
+            "outcomeClass": "REFUSED",
+            "details": "Invalid transaction."
+          },
+          {
+            "caseId": "rest/c-read-after",
+            "transport": "rest",
+            "rpc": "GetDocument",
+            "code": 3,
+            "outcomeClass": "REFUSED",
+            "details": "Invalid transaction."
+          },
+          {
+            "caseId": "rest/c-read-again",
+            "transport": "rest",
+            "rpc": "GetDocument",
+            "code": 3,
+            "outcomeClass": "REFUSED",
+            "details": "Invalid transaction."
+          },
+          {
+            "caseId": "rest/c-rollback-last",
+            "transport": "rest",
+            "rpc": "Rollback",
+            "code": 3,
+            "outcomeClass": "REFUSED",
+            "details": "Invalid transaction."
+          },
+          {
+            "caseId": "rest/r-rollback-first",
+            "transport": "rest",
+            "rpc": "Rollback",
+            "code": 3,
+            "outcomeClass": "REFUSED",
+            "details": "Invalid transaction."
+          },
+          {
+            "caseId": "rest/r-read-after",
+            "transport": "rest",
+            "rpc": "GetDocument",
+            "code": 3,
+            "outcomeClass": "REFUSED",
+            "details": "Invalid transaction."
+          },
+          {
+            "caseId": "rest/r-commit-last",
+            "transport": "rest",
+            "rpc": "Commit",
+            "code": 3,
+            "outcomeClass": "REFUSED",
+            "details": "Invalid transaction."
+          }
+        ],
+        "reads": [
+          {
+            "site": "setup/absence-a",
+            "code": 5,
+            "state": null
+          },
+          {
+            "site": "rest/c/read-a",
+            "code": 0,
+            "state": "created"
+          },
+          {
+            "site": "rest/c/keepalive-1",
+            "code": 0,
+            "state": "created"
+          },
+          {
+            "site": "rest/c/keepalive-2",
+            "code": 0,
+            "state": "created"
+          },
+          {
+            "site": "rest/c/keepalive-3",
+            "code": 0,
+            "state": "created"
+          },
+          {
+            "site": "rest/c/keepalive-4",
+            "code": 0,
+            "state": "created"
+          },
+          {
+            "site": "rest/c/keepalive-5",
+            "code": 0,
+            "state": "created"
+          },
+          {
+            "site": "rest/c/keepalive-6",
+            "code": 0,
+            "state": "created"
+          },
+          {
+            "site": "rest/c/keepalive-7",
+            "code": 0,
+            "state": "created"
+          },
+          {
+            "site": "rest/c/keepalive-8",
+            "code": 0,
+            "state": "created"
+          },
+          {
+            "site": "rest/c/keepalive-9",
+            "code": 0,
+            "state": "created"
+          },
+          {
+            "site": "rest/c/read-after",
+            "code": 3,
+            "state": null
+          },
+          {
+            "site": "rest/c/read-again",
+            "code": 3,
+            "state": null
+          },
+          {
+            "site": "rest/c/post-read-a",
+            "code": 0,
+            "state": "created"
+          },
+          {
+            "site": "rest/r/read-a",
+            "code": 0,
+            "state": "created"
+          },
+          {
+            "site": "rest/r/keepalive-1",
+            "code": 0,
+            "state": "created"
+          },
+          {
+            "site": "rest/r/keepalive-2",
+            "code": 0,
+            "state": "created"
+          },
+          {
+            "site": "rest/r/keepalive-3",
+            "code": 0,
+            "state": "created"
+          },
+          {
+            "site": "rest/r/keepalive-4",
+            "code": 0,
+            "state": "created"
+          },
+          {
+            "site": "rest/r/keepalive-5",
+            "code": 0,
+            "state": "created"
+          },
+          {
+            "site": "rest/r/keepalive-6",
+            "code": 0,
+            "state": "created"
+          },
+          {
+            "site": "rest/r/keepalive-7",
+            "code": 0,
+            "state": "created"
+          },
+          {
+            "site": "rest/r/keepalive-8",
+            "code": 0,
+            "state": "created"
+          },
+          {
+            "site": "rest/r/keepalive-9",
+            "code": 0,
+            "state": "created"
+          },
+          {
+            "site": "rest/r/read-after",
+            "code": 3,
+            "state": null
+          },
+          {
+            "site": "rest/r/post-read-a",
+            "code": 0,
+            "state": "created"
+          }
+        ],
+        "tokens": {
+          "rest-c": {
+            "transport": "rest",
+            "state": "released-expired"
+          },
+          "rest-r": {
+            "transport": "rest",
+            "state": "released-expired"
+          }
+        },
+        "expectedStates": {
+          "a": "created"
+        },
+        "cleanup": {
+          "absent": true
+        },
+        "waits": [
+          {
+            "site": "rest/c/keepalive-1",
+            "seconds": 24,
+            "ageClass": "BEFORE"
+          },
+          {
+            "site": "rest/c/keepalive-2",
+            "seconds": 24,
+            "ageClass": "BEFORE"
+          },
+          {
+            "site": "rest/c/keepalive-3",
+            "seconds": 24,
+            "ageClass": "BEFORE"
+          },
+          {
+            "site": "rest/c/keepalive-4",
+            "seconds": 24,
+            "ageClass": "BEFORE"
+          },
+          {
+            "site": "rest/c/keepalive-5",
+            "seconds": 24,
+            "ageClass": "BEFORE"
+          },
+          {
+            "site": "rest/c/keepalive-6",
+            "seconds": 24,
+            "ageClass": "BEFORE"
+          },
+          {
+            "site": "rest/c/keepalive-7",
+            "seconds": 24,
+            "ageClass": "BEFORE"
+          },
+          {
+            "site": "rest/c/keepalive-8",
+            "seconds": 24,
+            "ageClass": "BEFORE"
+          },
+          {
+            "site": "rest/c/keepalive-9",
+            "seconds": 24,
+            "ageClass": "BEFORE"
+          },
+          {
+            "site": "rest/c/commit-first",
+            "seconds": 90,
+            "ageClass": "AFTER"
+          },
+          {
+            "site": "rest/r/keepalive-1",
+            "seconds": 24,
+            "ageClass": "BEFORE"
+          },
+          {
+            "site": "rest/r/keepalive-2",
+            "seconds": 24,
+            "ageClass": "BEFORE"
+          },
+          {
+            "site": "rest/r/keepalive-3",
+            "seconds": 24,
+            "ageClass": "BEFORE"
+          },
+          {
+            "site": "rest/r/keepalive-4",
+            "seconds": 24,
+            "ageClass": "BEFORE"
+          },
+          {
+            "site": "rest/r/keepalive-5",
+            "seconds": 24,
+            "ageClass": "BEFORE"
+          },
+          {
+            "site": "rest/r/keepalive-6",
+            "seconds": 24,
+            "ageClass": "BEFORE"
+          },
+          {
+            "site": "rest/r/keepalive-7",
+            "seconds": 24,
+            "ageClass": "BEFORE"
+          },
+          {
+            "site": "rest/r/keepalive-8",
+            "seconds": 24,
+            "ageClass": "BEFORE"
+          },
+          {
+            "site": "rest/r/keepalive-9",
+            "seconds": 24,
+            "ageClass": "BEFORE"
+          },
+          {
+            "site": "rest/r/rollback-first",
+            "seconds": 90,
+            "ageClass": "AFTER"
+          }
+        ]
+      }
+    }
+  ]
+}

@@ -1,0 +1,1299 @@
+{
+  "schemaVersion": 1,
+  "kind": "fs-transaction-recorded-comparison-v1",
+  "parent": "FS-TRANSACTION",
+  "program": "FS-TRANSACTION-P08-FAILED-COMMIT",
+  "condition": [
+    "FS-TRANSACTION/failed-commit-and-rollback"
+  ],
+  "coverage": "PARTIAL",
+  "authorizesProduction": false,
+  "productionRequests": 0,
+  "profile": "strict",
+  "artifact": {
+    "sourceCommit": "da9480d7842b4600d064da7f1d8cef2914664ecf",
+    "binarySha256": "852816f997d99beaa82ef8f8c10253af4b04c536bf612725a76a06e08fde70cb"
+  },
+  "comparer": {
+    "sha256": "3313d77fb70da7695817d36b0485ed7cfcacabcd5beddf5201c74d2278d598f5",
+    "replayClock": "real"
+  },
+  "table": {
+    "path": "tools/compat-broad/fs-write-txn/fs_txn_table_p08.py",
+    "sha256": "7379ce5f1a9fd23d1d54dcfdef2e8705b315d72fe95547d105894d3d5f7004c5"
+  },
+  "recordings": [
+    {
+      "recording": 1,
+      "productionFileSha256": "c9d1dc8f081c1f18f9fc7872729b7f21a6c79e95c83938425ff9112c9de99214",
+      "mismatches": 0,
+      "cases": [
+        {
+          "caseId": "rest/a-fail-commit",
+          "production": {
+            "code": 5,
+            "details": "No document to update: projects/fireemu-oracle-sbx/databases/(default)/documents/oracle/<nonce>/txn-"
+          },
+          "local": {
+            "code": 5,
+            "details": "No document to update: projects/fireemu-oracle-sbx/databases/(default)/documents/oracle/<nonce>/txn-"
+          },
+          "match": true
+        },
+        {
+          "caseId": "rest/a-plain-read",
+          "production": {
+            "code": 0,
+            "details": ""
+          },
+          "local": {
+            "code": 0,
+            "details": ""
+          },
+          "match": true
+        },
+        {
+          "caseId": "rest/a-same-token-read",
+          "production": {
+            "code": 3,
+            "details": "The referenced transaction has expired or is no longer valid."
+          },
+          "local": {
+            "code": 3,
+            "details": "The referenced transaction has expired or is no longer valid."
+          },
+          "match": true
+        },
+        {
+          "caseId": "rest/a-writer",
+          "production": {
+            "code": 0,
+            "details": ""
+          },
+          "local": {
+            "code": 0,
+            "details": ""
+          },
+          "match": true
+        },
+        {
+          "caseId": "rest/a-corrected-commit",
+          "production": {
+            "code": 3,
+            "details": "The referenced transaction has expired or is no longer valid."
+          },
+          "local": {
+            "code": 3,
+            "details": "The referenced transaction has expired or is no longer valid."
+          },
+          "match": true
+        },
+        {
+          "caseId": "rest/a-rollback",
+          "production": {
+            "code": 0,
+            "details": ""
+          },
+          "local": {
+            "code": 0,
+            "details": ""
+          },
+          "match": true
+        },
+        {
+          "caseId": "rest/a-rollback-again",
+          "production": {
+            "code": 0,
+            "details": ""
+          },
+          "local": {
+            "code": 0,
+            "details": ""
+          },
+          "match": true
+        },
+        {
+          "caseId": "rest/b-fail-commit",
+          "production": {
+            "code": 5,
+            "details": "No document to update: projects/fireemu-oracle-sbx/databases/(default)/documents/oracle/<nonce>/txn-"
+          },
+          "local": {
+            "code": 5,
+            "details": "No document to update: projects/fireemu-oracle-sbx/databases/(default)/documents/oracle/<nonce>/txn-"
+          },
+          "match": true
+        },
+        {
+          "caseId": "rest/b-rollback",
+          "production": {
+            "code": 0,
+            "details": ""
+          },
+          "local": {
+            "code": 0,
+            "details": ""
+          },
+          "match": true
+        },
+        {
+          "caseId": "rest/b-writer",
+          "production": {
+            "code": 0,
+            "details": ""
+          },
+          "local": {
+            "code": 0,
+            "details": ""
+          },
+          "match": true
+        },
+        {
+          "caseId": "rest/b-rollback-again",
+          "production": {
+            "code": 0,
+            "details": ""
+          },
+          "local": {
+            "code": 0,
+            "details": ""
+          },
+          "match": true
+        },
+        {
+          "caseId": "rest/c-commit",
+          "production": {
+            "code": 0,
+            "details": ""
+          },
+          "local": {
+            "code": 0,
+            "details": ""
+          },
+          "match": true
+        },
+        {
+          "caseId": "rest/c-rollback-after-commit",
+          "production": {
+            "code": 10,
+            "details": "The referenced transaction has expired or is no longer valid."
+          },
+          "local": {
+            "code": 10,
+            "details": "The referenced transaction has expired or is no longer valid."
+          },
+          "match": true
+        },
+        {
+          "caseId": "grpc/a-fail-commit",
+          "production": {
+            "code": 5,
+            "details": "No document to update: projects/fireemu-oracle-sbx/databases/(default)/documents/oracle/<nonce>/txn-"
+          },
+          "local": {
+            "code": 5,
+            "details": "No document to update: projects/fireemu-oracle-sbx/databases/(default)/documents/oracle/<nonce>/txn-"
+          },
+          "match": true
+        },
+        {
+          "caseId": "grpc/a-plain-read",
+          "production": {
+            "code": 0,
+            "details": ""
+          },
+          "local": {
+            "code": 0,
+            "details": ""
+          },
+          "match": true
+        },
+        {
+          "caseId": "grpc/a-same-token-read",
+          "production": {
+            "code": 3,
+            "details": "The referenced transaction has expired or is no longer valid."
+          },
+          "local": {
+            "code": 3,
+            "details": "The referenced transaction has expired or is no longer valid."
+          },
+          "match": true
+        },
+        {
+          "caseId": "grpc/a-writer",
+          "production": {
+            "code": 0,
+            "details": ""
+          },
+          "local": {
+            "code": 0,
+            "details": ""
+          },
+          "match": true
+        },
+        {
+          "caseId": "grpc/a-corrected-commit",
+          "production": {
+            "code": 3,
+            "details": "The referenced transaction has expired or is no longer valid."
+          },
+          "local": {
+            "code": 3,
+            "details": "The referenced transaction has expired or is no longer valid."
+          },
+          "match": true
+        },
+        {
+          "caseId": "grpc/a-rollback",
+          "production": {
+            "code": 0,
+            "details": ""
+          },
+          "local": {
+            "code": 0,
+            "details": ""
+          },
+          "match": true
+        },
+        {
+          "caseId": "grpc/a-rollback-again",
+          "production": {
+            "code": 0,
+            "details": ""
+          },
+          "local": {
+            "code": 0,
+            "details": ""
+          },
+          "match": true
+        },
+        {
+          "caseId": "grpc/b-fail-commit",
+          "production": {
+            "code": 5,
+            "details": "No document to update: projects/fireemu-oracle-sbx/databases/(default)/documents/oracle/<nonce>/txn-"
+          },
+          "local": {
+            "code": 5,
+            "details": "No document to update: projects/fireemu-oracle-sbx/databases/(default)/documents/oracle/<nonce>/txn-"
+          },
+          "match": true
+        },
+        {
+          "caseId": "grpc/b-rollback",
+          "production": {
+            "code": 0,
+            "details": ""
+          },
+          "local": {
+            "code": 0,
+            "details": ""
+          },
+          "match": true
+        },
+        {
+          "caseId": "grpc/b-writer",
+          "production": {
+            "code": 0,
+            "details": ""
+          },
+          "local": {
+            "code": 0,
+            "details": ""
+          },
+          "match": true
+        },
+        {
+          "caseId": "grpc/b-rollback-again",
+          "production": {
+            "code": 0,
+            "details": ""
+          },
+          "local": {
+            "code": 0,
+            "details": ""
+          },
+          "match": true
+        },
+        {
+          "caseId": "grpc/c-commit",
+          "production": {
+            "code": 0,
+            "details": ""
+          },
+          "local": {
+            "code": 0,
+            "details": ""
+          },
+          "match": true
+        },
+        {
+          "caseId": "grpc/c-rollback-after-commit",
+          "production": {
+            "code": 10,
+            "details": "The referenced transaction has expired or is no longer valid."
+          },
+          "local": {
+            "code": 10,
+            "details": "The referenced transaction has expired or is no longer valid."
+          },
+          "match": true
+        }
+      ],
+      "reads": [
+        {
+          "site": "setup/absence-a",
+          "production": {
+            "code": 5,
+            "state": null,
+            "documents": null
+          },
+          "local": {
+            "code": 5,
+            "state": null,
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "setup/absence-m",
+          "production": {
+            "code": 5,
+            "state": null,
+            "documents": null
+          },
+          "local": {
+            "code": 5,
+            "state": null,
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "rest/a/read-a",
+          "production": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "local": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "rest/a/plain-read-a",
+          "production": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "local": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "rest/a/same-token-read-a",
+          "production": {
+            "code": 3,
+            "state": null,
+            "documents": null
+          },
+          "local": {
+            "code": 3,
+            "state": null,
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "rest/a/post-read-a",
+          "production": {
+            "code": 0,
+            "state": "rest-a-writer",
+            "documents": null
+          },
+          "local": {
+            "code": 0,
+            "state": "rest-a-writer",
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "rest/b/read-a",
+          "production": {
+            "code": 0,
+            "state": "rest-a-writer",
+            "documents": null
+          },
+          "local": {
+            "code": 0,
+            "state": "rest-a-writer",
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "rest/b/post-read-a",
+          "production": {
+            "code": 0,
+            "state": "rest-b-writer",
+            "documents": null
+          },
+          "local": {
+            "code": 0,
+            "state": "rest-b-writer",
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "rest/c/read-a",
+          "production": {
+            "code": 0,
+            "state": "rest-b-writer",
+            "documents": null
+          },
+          "local": {
+            "code": 0,
+            "state": "rest-b-writer",
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "grpc/a/read-a",
+          "production": {
+            "code": 0,
+            "state": "rest-c-commit",
+            "documents": null
+          },
+          "local": {
+            "code": 0,
+            "state": "rest-c-commit",
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "grpc/a/plain-read-a",
+          "production": {
+            "code": 0,
+            "state": "rest-c-commit",
+            "documents": null
+          },
+          "local": {
+            "code": 0,
+            "state": "rest-c-commit",
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "grpc/a/same-token-read-a",
+          "production": {
+            "code": 3,
+            "state": null,
+            "documents": null
+          },
+          "local": {
+            "code": 3,
+            "state": null,
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "grpc/a/post-read-a",
+          "production": {
+            "code": 0,
+            "state": "grpc-a-writer",
+            "documents": null
+          },
+          "local": {
+            "code": 0,
+            "state": "grpc-a-writer",
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "grpc/b/read-a",
+          "production": {
+            "code": 0,
+            "state": "grpc-a-writer",
+            "documents": null
+          },
+          "local": {
+            "code": 0,
+            "state": "grpc-a-writer",
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "grpc/b/post-read-a",
+          "production": {
+            "code": 0,
+            "state": "grpc-b-writer",
+            "documents": null
+          },
+          "local": {
+            "code": 0,
+            "state": "grpc-b-writer",
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "grpc/c/read-a",
+          "production": {
+            "code": 0,
+            "state": "grpc-b-writer",
+            "documents": null
+          },
+          "local": {
+            "code": 0,
+            "state": "grpc-b-writer",
+            "documents": null
+          },
+          "match": true
+        }
+      ],
+      "commitTimes": [
+        {
+          "site": "setup/create-a",
+          "production": {
+            "commitTime": true,
+            "relation": null
+          },
+          "local": {
+            "commitTime": true,
+            "relation": null
+          },
+          "match": true
+        },
+        {
+          "site": "rest/a/writer",
+          "production": {
+            "commitTime": true,
+            "relation": null
+          },
+          "local": {
+            "commitTime": true,
+            "relation": null
+          },
+          "match": true
+        },
+        {
+          "site": "rest/b/writer",
+          "production": {
+            "commitTime": true,
+            "relation": null
+          },
+          "local": {
+            "commitTime": true,
+            "relation": null
+          },
+          "match": true
+        },
+        {
+          "site": "rest/c/commit",
+          "production": {
+            "commitTime": true,
+            "relation": null
+          },
+          "local": {
+            "commitTime": true,
+            "relation": null
+          },
+          "match": true
+        },
+        {
+          "site": "grpc/a/writer",
+          "production": {
+            "commitTime": true,
+            "relation": null
+          },
+          "local": {
+            "commitTime": true,
+            "relation": null
+          },
+          "match": true
+        },
+        {
+          "site": "grpc/b/writer",
+          "production": {
+            "commitTime": true,
+            "relation": null
+          },
+          "local": {
+            "commitTime": true,
+            "relation": null
+          },
+          "match": true
+        },
+        {
+          "site": "grpc/c/commit",
+          "production": {
+            "commitTime": true,
+            "relation": null
+          },
+          "local": {
+            "commitTime": true,
+            "relation": null
+          },
+          "match": true
+        }
+      ]
+    },
+    {
+      "recording": 2,
+      "productionFileSha256": "40fe3fe74e6dd11c98fe1a1950f8ec46ebab9b29c703d67530a105196b576bf6",
+      "mismatches": 0,
+      "cases": [
+        {
+          "caseId": "rest/a-fail-commit",
+          "production": {
+            "code": 5,
+            "details": "No document to update: projects/fireemu-oracle-sbx/databases/(default)/documents/oracle/<nonce>/txn-"
+          },
+          "local": {
+            "code": 5,
+            "details": "No document to update: projects/fireemu-oracle-sbx/databases/(default)/documents/oracle/<nonce>/txn-"
+          },
+          "match": true
+        },
+        {
+          "caseId": "rest/a-plain-read",
+          "production": {
+            "code": 0,
+            "details": ""
+          },
+          "local": {
+            "code": 0,
+            "details": ""
+          },
+          "match": true
+        },
+        {
+          "caseId": "rest/a-same-token-read",
+          "production": {
+            "code": 3,
+            "details": "The referenced transaction has expired or is no longer valid."
+          },
+          "local": {
+            "code": 3,
+            "details": "The referenced transaction has expired or is no longer valid."
+          },
+          "match": true
+        },
+        {
+          "caseId": "rest/a-writer",
+          "production": {
+            "code": 0,
+            "details": ""
+          },
+          "local": {
+            "code": 0,
+            "details": ""
+          },
+          "match": true
+        },
+        {
+          "caseId": "rest/a-corrected-commit",
+          "production": {
+            "code": 3,
+            "details": "The referenced transaction has expired or is no longer valid."
+          },
+          "local": {
+            "code": 3,
+            "details": "The referenced transaction has expired or is no longer valid."
+          },
+          "match": true
+        },
+        {
+          "caseId": "rest/a-rollback",
+          "production": {
+            "code": 0,
+            "details": ""
+          },
+          "local": {
+            "code": 0,
+            "details": ""
+          },
+          "match": true
+        },
+        {
+          "caseId": "rest/a-rollback-again",
+          "production": {
+            "code": 0,
+            "details": ""
+          },
+          "local": {
+            "code": 0,
+            "details": ""
+          },
+          "match": true
+        },
+        {
+          "caseId": "rest/b-fail-commit",
+          "production": {
+            "code": 5,
+            "details": "No document to update: projects/fireemu-oracle-sbx/databases/(default)/documents/oracle/<nonce>/txn-"
+          },
+          "local": {
+            "code": 5,
+            "details": "No document to update: projects/fireemu-oracle-sbx/databases/(default)/documents/oracle/<nonce>/txn-"
+          },
+          "match": true
+        },
+        {
+          "caseId": "rest/b-rollback",
+          "production": {
+            "code": 0,
+            "details": ""
+          },
+          "local": {
+            "code": 0,
+            "details": ""
+          },
+          "match": true
+        },
+        {
+          "caseId": "rest/b-writer",
+          "production": {
+            "code": 0,
+            "details": ""
+          },
+          "local": {
+            "code": 0,
+            "details": ""
+          },
+          "match": true
+        },
+        {
+          "caseId": "rest/b-rollback-again",
+          "production": {
+            "code": 0,
+            "details": ""
+          },
+          "local": {
+            "code": 0,
+            "details": ""
+          },
+          "match": true
+        },
+        {
+          "caseId": "rest/c-commit",
+          "production": {
+            "code": 0,
+            "details": ""
+          },
+          "local": {
+            "code": 0,
+            "details": ""
+          },
+          "match": true
+        },
+        {
+          "caseId": "rest/c-rollback-after-commit",
+          "production": {
+            "code": 10,
+            "details": "The referenced transaction has expired or is no longer valid."
+          },
+          "local": {
+            "code": 10,
+            "details": "The referenced transaction has expired or is no longer valid."
+          },
+          "match": true
+        },
+        {
+          "caseId": "grpc/a-fail-commit",
+          "production": {
+            "code": 5,
+            "details": "No document to update: projects/fireemu-oracle-sbx/databases/(default)/documents/oracle/<nonce>/txn-"
+          },
+          "local": {
+            "code": 5,
+            "details": "No document to update: projects/fireemu-oracle-sbx/databases/(default)/documents/oracle/<nonce>/txn-"
+          },
+          "match": true
+        },
+        {
+          "caseId": "grpc/a-plain-read",
+          "production": {
+            "code": 0,
+            "details": ""
+          },
+          "local": {
+            "code": 0,
+            "details": ""
+          },
+          "match": true
+        },
+        {
+          "caseId": "grpc/a-same-token-read",
+          "production": {
+            "code": 3,
+            "details": "The referenced transaction has expired or is no longer valid."
+          },
+          "local": {
+            "code": 3,
+            "details": "The referenced transaction has expired or is no longer valid."
+          },
+          "match": true
+        },
+        {
+          "caseId": "grpc/a-writer",
+          "production": {
+            "code": 0,
+            "details": ""
+          },
+          "local": {
+            "code": 0,
+            "details": ""
+          },
+          "match": true
+        },
+        {
+          "caseId": "grpc/a-corrected-commit",
+          "production": {
+            "code": 3,
+            "details": "The referenced transaction has expired or is no longer valid."
+          },
+          "local": {
+            "code": 3,
+            "details": "The referenced transaction has expired or is no longer valid."
+          },
+          "match": true
+        },
+        {
+          "caseId": "grpc/a-rollback",
+          "production": {
+            "code": 0,
+            "details": ""
+          },
+          "local": {
+            "code": 0,
+            "details": ""
+          },
+          "match": true
+        },
+        {
+          "caseId": "grpc/a-rollback-again",
+          "production": {
+            "code": 0,
+            "details": ""
+          },
+          "local": {
+            "code": 0,
+            "details": ""
+          },
+          "match": true
+        },
+        {
+          "caseId": "grpc/b-fail-commit",
+          "production": {
+            "code": 5,
+            "details": "No document to update: projects/fireemu-oracle-sbx/databases/(default)/documents/oracle/<nonce>/txn-"
+          },
+          "local": {
+            "code": 5,
+            "details": "No document to update: projects/fireemu-oracle-sbx/databases/(default)/documents/oracle/<nonce>/txn-"
+          },
+          "match": true
+        },
+        {
+          "caseId": "grpc/b-rollback",
+          "production": {
+            "code": 0,
+            "details": ""
+          },
+          "local": {
+            "code": 0,
+            "details": ""
+          },
+          "match": true
+        },
+        {
+          "caseId": "grpc/b-writer",
+          "production": {
+            "code": 0,
+            "details": ""
+          },
+          "local": {
+            "code": 0,
+            "details": ""
+          },
+          "match": true
+        },
+        {
+          "caseId": "grpc/b-rollback-again",
+          "production": {
+            "code": 0,
+            "details": ""
+          },
+          "local": {
+            "code": 0,
+            "details": ""
+          },
+          "match": true
+        },
+        {
+          "caseId": "grpc/c-commit",
+          "production": {
+            "code": 0,
+            "details": ""
+          },
+          "local": {
+            "code": 0,
+            "details": ""
+          },
+          "match": true
+        },
+        {
+          "caseId": "grpc/c-rollback-after-commit",
+          "production": {
+            "code": 10,
+            "details": "The referenced transaction has expired or is no longer valid."
+          },
+          "local": {
+            "code": 10,
+            "details": "The referenced transaction has expired or is no longer valid."
+          },
+          "match": true
+        }
+      ],
+      "reads": [
+        {
+          "site": "setup/absence-a",
+          "production": {
+            "code": 5,
+            "state": null,
+            "documents": null
+          },
+          "local": {
+            "code": 5,
+            "state": null,
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "setup/absence-m",
+          "production": {
+            "code": 5,
+            "state": null,
+            "documents": null
+          },
+          "local": {
+            "code": 5,
+            "state": null,
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "rest/a/read-a",
+          "production": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "local": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "rest/a/plain-read-a",
+          "production": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "local": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "rest/a/same-token-read-a",
+          "production": {
+            "code": 3,
+            "state": null,
+            "documents": null
+          },
+          "local": {
+            "code": 3,
+            "state": null,
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "rest/a/post-read-a",
+          "production": {
+            "code": 0,
+            "state": "rest-a-writer",
+            "documents": null
+          },
+          "local": {
+            "code": 0,
+            "state": "rest-a-writer",
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "rest/b/read-a",
+          "production": {
+            "code": 0,
+            "state": "rest-a-writer",
+            "documents": null
+          },
+          "local": {
+            "code": 0,
+            "state": "rest-a-writer",
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "rest/b/post-read-a",
+          "production": {
+            "code": 0,
+            "state": "rest-b-writer",
+            "documents": null
+          },
+          "local": {
+            "code": 0,
+            "state": "rest-b-writer",
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "rest/c/read-a",
+          "production": {
+            "code": 0,
+            "state": "rest-b-writer",
+            "documents": null
+          },
+          "local": {
+            "code": 0,
+            "state": "rest-b-writer",
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "grpc/a/read-a",
+          "production": {
+            "code": 0,
+            "state": "rest-c-commit",
+            "documents": null
+          },
+          "local": {
+            "code": 0,
+            "state": "rest-c-commit",
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "grpc/a/plain-read-a",
+          "production": {
+            "code": 0,
+            "state": "rest-c-commit",
+            "documents": null
+          },
+          "local": {
+            "code": 0,
+            "state": "rest-c-commit",
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "grpc/a/same-token-read-a",
+          "production": {
+            "code": 3,
+            "state": null,
+            "documents": null
+          },
+          "local": {
+            "code": 3,
+            "state": null,
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "grpc/a/post-read-a",
+          "production": {
+            "code": 0,
+            "state": "grpc-a-writer",
+            "documents": null
+          },
+          "local": {
+            "code": 0,
+            "state": "grpc-a-writer",
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "grpc/b/read-a",
+          "production": {
+            "code": 0,
+            "state": "grpc-a-writer",
+            "documents": null
+          },
+          "local": {
+            "code": 0,
+            "state": "grpc-a-writer",
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "grpc/b/post-read-a",
+          "production": {
+            "code": 0,
+            "state": "grpc-b-writer",
+            "documents": null
+          },
+          "local": {
+            "code": 0,
+            "state": "grpc-b-writer",
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "grpc/c/read-a",
+          "production": {
+            "code": 0,
+            "state": "grpc-b-writer",
+            "documents": null
+          },
+          "local": {
+            "code": 0,
+            "state": "grpc-b-writer",
+            "documents": null
+          },
+          "match": true
+        }
+      ],
+      "commitTimes": [
+        {
+          "site": "setup/create-a",
+          "production": {
+            "commitTime": true,
+            "relation": null
+          },
+          "local": {
+            "commitTime": true,
+            "relation": null
+          },
+          "match": true
+        },
+        {
+          "site": "rest/a/writer",
+          "production": {
+            "commitTime": true,
+            "relation": null
+          },
+          "local": {
+            "commitTime": true,
+            "relation": null
+          },
+          "match": true
+        },
+        {
+          "site": "rest/b/writer",
+          "production": {
+            "commitTime": true,
+            "relation": null
+          },
+          "local": {
+            "commitTime": true,
+            "relation": null
+          },
+          "match": true
+        },
+        {
+          "site": "rest/c/commit",
+          "production": {
+            "commitTime": true,
+            "relation": null
+          },
+          "local": {
+            "commitTime": true,
+            "relation": null
+          },
+          "match": true
+        },
+        {
+          "site": "grpc/a/writer",
+          "production": {
+            "commitTime": true,
+            "relation": null
+          },
+          "local": {
+            "commitTime": true,
+            "relation": null
+          },
+          "match": true
+        },
+        {
+          "site": "grpc/b/writer",
+          "production": {
+            "commitTime": true,
+            "relation": null
+          },
+          "local": {
+            "commitTime": true,
+            "relation": null
+          },
+          "match": true
+        },
+        {
+          "site": "grpc/c/commit",
+          "production": {
+            "commitTime": true,
+            "relation": null
+          },
+          "local": {
+            "commitTime": true,
+            "relation": null
+          },
+          "match": true
+        }
+      ]
+    }
+  ],
+  "summary": {
+    "recordings": 2,
+    "rows": 98,
+    "mismatches": 0
+  },
+  "remainingBoundaries": [
+    "Raw REST bodyBytes, content-length and member-order layout were not retained; the record proves decoded response semantics, not wire layout.",
+    "The closure review and the final-artifact regression are separate conditions and stay open.",
+    "The artifact is the strict profile of the commit named; a later source change needs a new replay."
+  ]
+}

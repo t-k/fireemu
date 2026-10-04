@@ -61,7 +61,7 @@ fn observable(s: &StorageState) -> (Vec<String>, u64, u64) {
     (
         objects,
         s.retained_blob_bytes(),
-        s.next_generation_preview().unwrap(),
+        s.next_generation_preview(t(0)).unwrap(),
     )
 }
 

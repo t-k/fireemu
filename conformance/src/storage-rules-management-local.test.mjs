@@ -297,7 +297,7 @@ test("collector fails closed on each unusable answer and still cleans up", async
     ],
     [
       "an activation that did not load the rules",
-      async (a, m) => {
+      async (a) => {
         if (a.kind === "activate") installed = a.source;
         if (a.kind === "snapshot" && installed !== null)
           return wireResponse(200, JSON.stringify({ loaded: false, source: installed }));

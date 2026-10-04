@@ -34,7 +34,7 @@ const isText = (value) => typeof value === "string" && value.length > 0;
  * True when a frame names a resource the way resourceMatches reads it (session.mjs). A frame that
  * names a resource no operation owns cannot be a subject's event; one that names none could be.
  */
-function resourceIdentified(frame) {
+export function resourceIdentified(frame) {
   const event = frame.event ?? {};
   const data = event.data ?? {};
   switch (frame.source) {
@@ -84,39 +84,40 @@ function attribute(production, toleranceMs) {
   return attribution;
 }
 
-const byLogTime = (a, b) => a.logMs - b.logMs || byText(a.insertId, b.insertId);
-
 /** At-least-once duplicates of one event print the same frame; otherwise no representative exists. */
 const allSame = (frames) =>
   frames.every((frame) => JSON.stringify(frame) === JSON.stringify(frames[0]));
 
 function retryObservation(frames, label, handler, windowSeconds, frameOf) {
-  const attempts = (kind) =>
-    frames.filter((frame) => frameOf(frame).event?.data?.fixtureAttempt === kind);
+  const printed = frames.map(frameOf);
+  const attempts = (kind) => printed.filter((frame) => frame.event?.data?.fixtureAttempt === kind);
   const failed = attempts("failed");
   const succeeded = attempts("succeeded");
-  if (failed.length + succeeded.length !== frames.length) {
+  if (failed.length + succeeded.length !== printed.length) {
     return incomplete(`${label}: ${handler} frame(s) without a fixture attempt`);
   }
-  const missing = [];
-  if (failed.length === 0)
-    missing.push(`${label}: no failed ${handler} attempt in the ${windowSeconds} s window`);
-  if (succeeded.length === 0) {
-    missing.push(`${label}: no succeeded ${handler} attempt in the ${windowSeconds} s window`);
+  const reasons = [];
+  for (const [kind, list] of [
+    ["failed", failed],
+    ["succeeded", succeeded],
+  ]) {
+    if (list.length === 0) {
+      reasons.push(`${label}: no ${kind} ${handler} attempt in the ${windowSeconds} s window`);
+    } else if (!allSame(list)) {
+      reasons.push(`${label}: ${list.length} ${kind} ${handler} frames differ from each other`);
+    }
   }
-  if (missing.length > 0) return incomplete(missing);
-  const first = frameOf(failed[0]).event;
-  const same = (frame) =>
-    typeof first.id === "string" && first.id.length > 0 && frameOf(frame).event.id === first.id;
-  const pair = frameOf(succeeded.find(same) ?? succeeded[0]);
+  if (reasons.length > 0) return incomplete(reasons);
+  const [first] = failed;
+  const [pair] = succeeded;
   return result("OK", [], {
     observation: {
       retry: {
-        sameEventId: pair.event.id === first.id,
-        sameSource: pair.event.source === first.source,
-        sameTime: pair.event.time === first.time,
+        sameEventId: pair.event.id === first.event.id,
+        sameSource: pair.event.source === first.event.source,
+        sameTime: pair.event.time === first.event.time,
       },
-      failed: frameOf(failed[0]),
+      failed: first,
       succeeded: pair,
     },
   });
@@ -206,7 +207,7 @@ function observeProductionPass({
     ]);
   }
   if (reasons.length > 0) return incomplete([...new Set(reasons)]);
-  const inWindow = [...subject].sort(byLogTime);
+  const inWindow = subject;
   if (inWindow.length === 0) {
     return incomplete(`${label}: no ${handler} frame in the ${windowSeconds} s window`);
   }
@@ -263,7 +264,7 @@ function observeLocal({ local, profile, row, scenario, handler, localProject }) 
   if (op.status === "INCOMPLETE") {
     return incomplete(`${profile}: the local driver marked the operation INCOMPLETE`);
   }
-  const frames = [...op.frames[row.generation]].sort((a, b) => a.sequence - b.sequence);
+  const frames = op.frames[row.generation];
   if (frames.some(({ frame }) => frame.handler !== handler)) {
     return incomplete(`${profile}: a local frame belongs to another handler than ${handler}`);
   }

@@ -358,6 +358,12 @@ export const EXCLUDED_KINDS = [
       "the stage-2 local window keeps production's timeline in real time (about 61 minutes on the v0.9.0 final artifact) and drives a browser client, which the 45-minute release job and its runner do not allow; the local tenant setup is no longer a reason (it runs outside the recorded harness), and the rows were compared on the final artifact",
     issue: "auth-fs-cross-stage2-needs-a-long-release-job.md",
   },
+  {
+    kind: "storage-object-comparison-v1",
+    reason:
+      "the comparison is made from a rehearsal of the STORAGE-OBJECT recorder (26 recipes, 2,436 exchanges) that lives on its own branch and not in this tree, and it runs under a Rules file kept outside the repository; both must be published and the tool given a check and an export-comparison mode before the release job can rerun it; the rows were compared on the closure-base binary named by the closure",
+    issue: "storage-object-comparison-needs-the-recorder-in-the-release-job.md",
+  },
 ];
 
 /**

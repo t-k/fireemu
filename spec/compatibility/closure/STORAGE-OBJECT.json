@@ -123,5 +123,28 @@
     { "conditionId": "STORAGE-OBJECT/cross-dialect-state", "source": "spec/compatibility/contract.json#ST-CLAIM-OBJECTS", "recipeIds": ["storage-object/cross-dialect/state"], "checks": ["Object bytes, metadata, generation and deletion written through one dialect are observed consistently through the other."], "status": "VERIFIED", "evidence": { "productionRecordings": [{ "recordedAt": "2026-09-30T23:14:35.996Z", "gitSha": "9d4262cad1d3727f51dadd67a767469b229b7fa8", "runId": "056c7ca3a8c6daa38e0a", "project": "fireemu-oracle-query" }, { "recordedAt": "2026-09-30T23:58:33.198Z", "gitSha": "9d4262cad1d3727f51dadd67a767469b229b7fa8", "runId": "202dd40ac90863add783", "project": "fireemu-oracle-query" }], "finalArtifactSha256": "d0d8d43726a808b600f702f1f6be26c4863fc48dd7b4971a519adcae9ce01888", "sourceCommit": "774a9f24c62abdd7381c66797d6202ed03f24666", "comparisonPath": "spec/compatibility/closure/evidence/STORAGE-OBJECT-comparison.json", "rows": { "MATCH": 17 } } },
     { "conditionId": "STORAGE-OBJECT/final-artifact-regression", "source": "docs/compatibility/ip-fs-production-compatibility.md#storage-object-production-closure", "recipeIds": ["storage-object/final-artifact"], "checks": ["The same copied binary and SHA-256 produce a complete strict-profile production comparison, with a clean source-bound build receipt."], "status": "VERIFIED", "note": "The official-emulator storage-probe comparison moved to the separate official compatibility track by the owner (owner ledger \"Production Firebase gap priority and separate official compatibility track\", 2026-10-03, and \"Official-emulator-only remnants leave production parent closure\", 2026-10-04); the unfinished official part, including the official Firestore seed that answered 503, is kept as history. Original wording: \"The same copied binary and SHA-256 produce a complete strict-profile production comparison and official-emulator storage-probe comparison, with a clean source-bound build receipt.\"", "evidence": { "productionRecordings": [{ "recordedAt": "2026-09-30T23:14:35.996Z", "gitSha": "9d4262cad1d3727f51dadd67a767469b229b7fa8", "runId": "056c7ca3a8c6daa38e0a", "project": "fireemu-oracle-query" }, { "recordedAt": "2026-09-30T23:58:33.198Z", "gitSha": "9d4262cad1d3727f51dadd67a767469b229b7fa8", "runId": "202dd40ac90863add783", "project": "fireemu-oracle-query" }], "finalArtifactSha256": "d0d8d43726a808b600f702f1f6be26c4863fc48dd7b4971a519adcae9ce01888", "sourceCommit": "774a9f24c62abdd7381c66797d6202ed03f24666", "comparisonPath": "spec/compatibility/closure/evidence/STORAGE-OBJECT-comparison.json", "rows": { "MATCH": 2436 }, "buildRecordPath": "spec/compatibility/closure/evidence/STORAGE-OBJECT-build.json", "buildRecordSha256": "989011a238b2eb677ba6d9360637799615a8453df11db6b8ee95ff0e3ef2d1bc" } },
     { "conditionId": "STORAGE-OBJECT/closure-review", "source": "docs/compatibility/ip-fs-production-compatibility.md#storage-object-production-closure", "recipeIds": ["storage-object/closure-review"], "checks": ["An independent reviewer approves every declared condition, scope decision, production recording and final-artifact binding before COMPAT_VERIFIED."], "status": "VERIFIED", "evidence": { "productionRecordings": [{ "recordedAt": "2026-09-30T23:14:35.996Z", "gitSha": "9d4262cad1d3727f51dadd67a767469b229b7fa8", "runId": "056c7ca3a8c6daa38e0a", "project": "fireemu-oracle-query" }, { "recordedAt": "2026-09-30T23:58:33.198Z", "gitSha": "9d4262cad1d3727f51dadd67a767469b229b7fa8", "runId": "202dd40ac90863add783", "project": "fireemu-oracle-query" }], "finalArtifactSha256": "d0d8d43726a808b600f702f1f6be26c4863fc48dd7b4971a519adcae9ce01888", "sourceCommit": "774a9f24c62abdd7381c66797d6202ed03f24666", "comparisonPath": "spec/compatibility/closure/evidence/STORAGE-OBJECT-comparison.json", "rows": { "MATCH": 2436 }, "reviewedCommit": "2458ba59fd95113b9fa49dd4bfdae0c9463e8af8", "reviewReportSha256": ["d75590e0d878c6c5bac15a5a6946134ad241fde3d3b9b007f165fd183dc1e3fe"] } }
-  ]
+  ],
+  "integratedRegression": {
+    "release": "closure-base-774a9f24c",
+    "integrationCommit": "774a9f24c62abdd7381c66797d6202ed03f24666",
+    "releaseBinarySha256": "d0d8d43726a808b600f702f1f6be26c4863fc48dd7b4971a519adcae9ce01888",
+    "buildReceiptPath": "spec/compatibility/closure/evidence/STORAGE-OBJECT-build.json",
+    "buildReceiptSha256": "989011a238b2eb677ba6d9360637799615a8453df11db6b8ee95ff0e3ef2d1bc",
+    "comparisons": [
+      {
+        "path": "spec/compatibility/closure/evidence/STORAGE-OBJECT-comparison.json",
+        "sha256": "0782a4c7e7b8f4a93d69a0187a00c5bcc7508bfb033e2e8deb10890736867540",
+        "rows": 2436,
+        "summary": {
+          "MATCH": 2436
+        },
+        "laneComparisonPath": "spec/compatibility/closure/evidence/STORAGE-OBJECT-comparison.json",
+        "laneComparisonSha256": "0782a4c7e7b8f4a93d69a0187a00c5bcc7508bfb033e2e8deb10890736867540",
+        "identicalRows": 2436,
+        "changedRows": []
+      }
+    ],
+    "result": "IDENTICAL_TO_LANE",
+    "productionRequests": 0
+  }
 }

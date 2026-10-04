@@ -6,6 +6,7 @@
 //        --out spec/compatibility/closure/evidence/STORAGE-OBJECT-comparison.json
 //        --comparison-path spec/compatibility/closure/evidence/STORAGE-OBJECT-comparison.json
 //        [--hold <condition id>[,<condition id>...]]
+//        [--build-record <build record.json> --build-record-out <repo copy> --build-record-path <cited path>]
 //
 // It refuses anything but a complete comparison: every fixture row compared and a MATCH, the
 // rehearsal finished, the report, the receipt and the fixture naming the same binary, commit, recorder
@@ -13,9 +14,13 @@
 // recorded row each, in the query project, at one commit). Then it writes the comparison evidence (one
 // row per compared exchange, bound to the binary) and sets VERIFIED and the evidence on every recipe
 // condition of the closure that is not held. The final-artifact and review conditions are never
-// touched. Running it again for another binary replaces the evidence of every condition together,
+// touched unless a build record is given: the record of the binary's build (commit, a tree clean
+// outside the build output, the cargo version, --locked, the SHA-256), which must name the compared
+// binary and commit. Then it also sets the final-artifact condition from the comparison and the record,
+// copies the record into the repository and cites its digest. Running it again for another binary replaces the evidence of every condition together,
 // and an existing note on a condition stays.
 
+import { createHash } from "node:crypto";
 import { readFileSync, mkdirSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 import { loadFixture } from "./run.mjs";
@@ -153,8 +158,53 @@ export function buildEvidence({ report, receipt, fixture }) {
   };
 }
 
+const BUILD_RECORD_KEYS = [
+  "sourceCommit",
+  "gitStatusOutsideBuildOutput",
+  "cargoVersion",
+  "locked",
+  "binarySha256",
+];
+
+/** The build record of the compared binary, or a refusal: its commit, a clean tree, the cargo version, --locked, the digest. */
+export function finalArtifactEvidence({ buildRecord, comparison }) {
+  const record = buildRecord;
+  const plain = record !== null && typeof record === "object" && !Array.isArray(record);
+  if (
+    !plain ||
+    Object.keys(record).length !== BUILD_RECORD_KEYS.length ||
+    !BUILD_RECORD_KEYS.every((key) => Object.hasOwn(record, key))
+  )
+    refuse("the build record has the wrong fields");
+  if (typeof record.sourceCommit !== "string" || !HEX40.test(record.sourceCommit))
+    refuse("the build record has no source commit");
+  if (typeof record.binarySha256 !== "string" || !HEX64.test(record.binarySha256))
+    refuse("the build record has no binary digest");
+  if (
+    !Array.isArray(record.gitStatusOutsideBuildOutput) ||
+    record.gitStatusOutsideBuildOutput.length !== 0
+  )
+    refuse("the build record's tree was not clean outside the build output");
+  if (typeof record.cargoVersion !== "string" || record.cargoVersion.trim() === "")
+    refuse("the build record has no cargo version");
+  if (record.locked !== true) refuse("the build record was not built with --locked");
+  if (
+    record.binarySha256 !== comparison.artifactSha256 ||
+    record.sourceCommit !== comparison.sourceCommit
+  )
+    refuse("the build record is of another binary or commit than the comparison");
+  return Object.freeze({ ...record, gitStatusOutsideBuildOutput: [] });
+}
+
 /** A copy of the closure with VERIFIED and the evidence on every compared recipe condition that is not held. */
-export function applyClosure({ closure, comparison, recordings, comparisonPath, hold = [] }) {
+export function applyClosure({
+  closure,
+  comparison,
+  recordings,
+  comparisonPath,
+  hold = [],
+  finalArtifact = undefined,
+}) {
   if (typeof comparisonPath !== "string" || comparisonPath === "")
     refuse("the comparison path is empty");
   if (!Array.isArray(recordings) || recordings.length !== 2)
@@ -164,6 +214,18 @@ export function applyClosure({ closure, comparison, recordings, comparisonPath, 
   const ids = new Set(closure.conditions.map((condition) => condition.conditionId));
   for (const id of hold)
     if (!ids.has(id)) refuse(`cannot hold ${id}: the closure has no such condition`);
+  if (finalArtifact !== undefined) {
+    finalArtifactEvidence({ buildRecord: finalArtifact.buildRecord, comparison });
+    if (typeof finalArtifact.buildRecordPath !== "string" || finalArtifact.buildRecordPath === "")
+      refuse("the build record path is empty");
+    if (
+      typeof finalArtifact.buildRecordSha256 !== "string" ||
+      !HEX64.test(finalArtifact.buildRecordSha256)
+    )
+      refuse("the build record digest is malformed");
+    if (![...ids].some((id) => id.endsWith("/final-artifact-regression")))
+      refuse("the closure has no final artifact condition for the build record");
+  }
   const perRecipe = new Map();
   for (const { row, status } of comparison.rows) {
     const recipe = row.split("#")[0];
@@ -174,8 +236,24 @@ export function applyClosure({ closure, comparison, recordings, comparisonPath, 
   }
   const copy = structuredClone(closure);
   for (const condition of copy.conditions) {
-    if (GATES.has(condition.conditionId.split("/").at(-1)) || hold.includes(condition.conditionId))
+    if (hold.includes(condition.conditionId)) continue;
+    if (
+      condition.conditionId.endsWith("/final-artifact-regression") &&
+      finalArtifact !== undefined
+    ) {
+      condition.status = "VERIFIED";
+      condition.evidence = {
+        productionRecordings: structuredClone(recordings),
+        finalArtifactSha256: comparison.artifactSha256,
+        sourceCommit: comparison.sourceCommit,
+        comparisonPath,
+        rows: { MATCH: comparison.rows.length },
+        buildRecordPath: finalArtifact.buildRecordPath,
+        buildRecordSha256: finalArtifact.buildRecordSha256,
+      };
       continue;
+    }
+    if (GATES.has(condition.conditionId.split("/").at(-1))) continue;
     let rows = 0;
     for (const recipe of condition.recipeIds ?? []) {
       const entry = perRecipe.get(recipe);
@@ -253,6 +331,20 @@ export function closureEvidenceCommand(
   );
   const { comparison } = buildEvidence({ report, receipt, fixture });
   const hold = options.hold ? options.hold.split(",").filter(Boolean) : [];
+  // The build record, its copy in the repository and the path the closure cites go together.
+  const recordOptions = ["build-record", "build-record-out", "build-record-path"];
+  let finalArtifact;
+  let recordBytes;
+  if (recordOptions.some((name) => options[name])) {
+    for (const name of recordOptions)
+      if (!options[name]) refuse(`--${name} is required with the build record options`);
+    recordBytes = readFileSync(options["build-record"]);
+    finalArtifact = {
+      buildRecord: JSON.parse(recordBytes.toString("utf8")),
+      buildRecordPath: options["build-record-path"],
+      buildRecordSha256: createHash("sha256").update(recordBytes).digest("hex"),
+    };
+  }
   const closureText = readFileSync(options.closure, "utf8");
   const closure = applyClosure({
     closure: JSON.parse(closureText),
@@ -260,7 +352,12 @@ export function closureEvidenceCommand(
     recordings,
     comparisonPath: options["comparison-path"],
     hold,
+    finalArtifact,
   });
+  if (recordBytes !== undefined) {
+    mkdirSync(dirname(options["build-record-out"]), { recursive: true });
+    writeFileSync(options["build-record-out"], recordBytes);
+  }
   mkdirSync(dirname(options.out), { recursive: true });
   writeFileSync(options.out, `${JSON.stringify(comparison, null, 1)}\n`);
   writeFileSync(options.closure, replaceConditionLines(closureText, closure));

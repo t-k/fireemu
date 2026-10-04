@@ -211,7 +211,7 @@ def _validate_table(table):
             query = step.get("query")
             if rpc != "RunQuery" or not isinstance(query, dict) or set(query) - {"stateEquals"} or ("stateEquals" in query and query["stateEquals"] not in states):
                 _bad(f"{step['id']} is a query that is malformed or on another request")
-            if step["document"] is not None or step["writes"] or step["tokenOutput"] is not None or "tokenLiteral" in step or "readAgoSeconds" in step or "newTransaction" in step or step["role"] == "outside-writer":
+            if step["document"] is not None or step["writes"] or step["tokenOutput"] is not None or "readAgoSeconds" in step or "newTransaction" in step or step["role"] == "outside-writer":
                 _bad(f"{step['id']} is a query that names a document, writes, outputs a token or reads at another time")
         if "cancelAfter" in step:
             # The client cancels a native query stream itself: the one use of code 1 that is a definite outcome.

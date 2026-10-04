@@ -56,19 +56,27 @@ def test_a_literal_token_resolves_to_the_closed_constant_and_never_to_an_issued_
         program.canonical_token(program.LITERAL_TOKENS["malformed"])
 
 
-@pytest.mark.parametrize("label,step", [
-    ("malformed over gRPC", literal("lit/g", "grpc", "GetDocument", "malformed")),
-    ("a literal that is not in the closed set", literal("lit/x", "rest", "GetDocument", "forged")),
-    ("a literal beside an issued token", literal("lit/b", "rest", "GetDocument", "unknown", tokenInput="rest-r")),
-    ("a literal on a begin", literal("lit/begin", "rest", "BeginTransaction", "unknown", tokenOutput="rest-z", document=None)),
-    ("a literal on a control step", literal("lit/c", "rest", "GetDocument", "unknown", role="control", allow=(0,))),
-    ("a literal on a post-state read", literal("lit/p", "rest", "GetDocument", "unknown", role="post-state", allow=(0,), caseId=None)),
-    ("a literal on an outside writer", literal("lit/w", "rest", "Commit", "unknown", role="outside-writer", deadlineMs=30000)),
-    ("a literal that is not a string", literal("lit/n", "rest", "GetDocument", 7)),
+@pytest.mark.parametrize("label,step,message", [
+    ("malformed over gRPC", literal("lit/g", "grpc", "GetDocument", "malformed"), "malformed token over gRPC"),
+    ("a literal that is not in the closed set", literal("lit/x", "rest", "GetDocument", "forged"), "literal token that is not allowed"),
+    ("a literal beside an issued token", "chain", "literal token that is not allowed"),
+    ("a literal on a begin", literal("lit/begin", "rest", "BeginTransaction", "unknown", tokenOutput="rest-z", document=None), "literal token that is not allowed"),
+    ("a literal on a control step", literal("lit/c", "rest", "GetDocument", "unknown", role="control", allow=(0,), caseId=None), "literal token that is not allowed"),
+    ("a literal on a post-state read", literal("lit/p", "rest", "GetDocument", "unknown", role="post-state", allow=(0,), caseId=None), "literal token that is not allowed"),
+    ("a literal on an outside writer", literal("lit/w", "rest", "Commit", "unknown", role="outside-writer", deadlineMs=30000), "literal token that is not allowed"),
+    ("a literal that is not a string", literal("lit/n", "rest", "GetDocument", 7), "literal token that is not allowed"),
 ])
-def test_a_misplaced_literal_token_never_compiles(program, toy, label, step):
-    with pytest.raises(ValueError):
-        program.compile_plan(table_with(toy, step), NONCE, OWNER)
+def test_a_misplaced_literal_token_never_compiles(program, toy, label, step, message):
+    # the message names the literal rule: another rule refusing the table would not show that the literal rule works
+    table = table_with(toy, step) if step != "chain" else None
+    if table is None:
+        # a literal beside an issued token, inside a transaction of its own so that nothing else refuses the table
+        begin = {"id": "z/begin", "transport": "rest", "rpc": "BeginTransaction", "document": None, "tokenInput": None, "tokenOutput": "rest-z", "writes": (), "caseId": None, "role": "control", "allow": (0,)}
+        rollback = {"id": "z/rollback", "transport": "rest", "rpc": "Rollback", "document": None, "tokenInput": "rest-z", "tokenOutput": None, "writes": (), "caseId": "z/rollback", "role": "observation", "allow": WIDE}
+        table = table_with(toy, begin, literal("lit/b", "rest", "GetDocument", "unknown", tokenInput="rest-z"), rollback)
+        table["maxTokens"] = 3
+    with pytest.raises(ValueError, match=message):
+        program.compile_plan(table, NONCE, OWNER)
 
 
 def test_a_literal_step_moves_the_corpus_digest_and_an_absent_key_keeps_every_earlier_one(program, toy):

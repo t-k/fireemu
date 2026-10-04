@@ -60,21 +60,38 @@ def test_a_read_only_begin_may_read_at_a_time_ago(program, toy):
     assert request["options"] == {"readOnly": {"readTime": {"seconds": str(1_788_000_000 - 3540), "nanos": 250_000_000}}}
 
 
-@pytest.mark.parametrize("label,step", [
-    ("zero seconds", ago("ago/z", "rest", "GetDocument", 0)),
-    ("negative seconds", ago("ago/n", "rest", "GetDocument", -5)),
-    ("not an int", ago("ago/f", "rest", "GetDocument", 3.5)),
-    ("over two hours", ago("ago/big", "rest", "GetDocument", 7201)),
-    ("inside a transaction", ago("ago/t", "rest", "GetDocument", 60, tokenInput="rest-r")),
-    ("beside readAt", ago("ago/a", "rest", "GetDocument", 60, readAt={"document": "a", "commit": "setup/create-a"})),
-    ("on a commit", ago("ago/c", "rest", "Commit", 60, writes=({"document": "a", "state": "held", "exists": True},))),
-    ("on a rollback", ago("ago/r", "rest", "Rollback", 60, tokenInput="rest-r")),
-    ("on a read-write begin", ago("ago/rw", "rest", "BeginTransaction", 60, mode="readWrite")),
-    ("with a new transaction", ago("ago/nt", "rest", "BatchGetDocuments", 60, newTransaction="readOnly", tokenOutput="ro-new")),
+@pytest.mark.parametrize("label,step,max_tokens,message", [
+    ("zero seconds", ago("ago/z", "rest", "GetDocument", 0), None, "out of range or beside"),
+    ("negative seconds", ago("ago/n", "rest", "GetDocument", -5), None, "out of range or beside"),
+    ("not an int", ago("ago/f", "rest", "GetDocument", 3.5), None, "out of range or beside"),
+    ("over two hours", ago("ago/big", "rest", "GetDocument", 7201), None, "out of range or beside"),
+    ("inside a transaction", "chain-get", 3, "out of range or beside"),
+    ("beside readAt", ago("ago/a", "rest", "GetDocument", 60, readAt={"document": "a", "commit": "setup/create-a"}), None, "out of range or beside"),
+    ("on a commit", ago("ago/c", "rest", "Commit", 60, writes=({"document": "a", "state": "held", "exists": True},)), None, "on a request that cannot"),
+    ("on a rollback", "chain-rollback", 3, "out of range or beside"),
+    ("beside a literal token", ago("ago/l", "rest", "GetDocument", 60, tokenLiteral="unknown"), None, "out of range or beside"),
+    ("on a read-write begin", ago("ago/rw", "rest", "BeginTransaction", 60, mode="readWrite"), 3, "on a request that cannot"),
+    ("with a new transaction", ago("ago/nt", "rest", "BatchGetDocuments", 60, newTransaction="readOnly", tokenOutput="ro-new"), 3, "out of range or beside"),
 ])
-def test_a_misplaced_read_ago_never_compiles(program, toy, label, step):
-    with pytest.raises(ValueError):
-        program.compile_plan(table_with(toy, step, max_tokens=3), NONCE, OWNER)
+def test_a_misplaced_read_ago_never_compiles(program, toy, label, step, max_tokens, message):
+    # the message names the read-time rule: another rule refusing the table (a token count that does not add up, say) would not show that this one works
+    if isinstance(step, str):
+        # inside a transaction of its own, so that nothing else refuses the table
+        begin = {"id": "z/begin", "transport": "rest", "rpc": "BeginTransaction", "document": None, "tokenInput": None, "tokenOutput": "rest-z", "writes": (), "caseId": None, "role": "control", "allow": (0,)}
+        inner = ago("ago/t", "rest", "GetDocument", 60, tokenInput="rest-z") if step == "chain-get" else ago("ago/r", "rest", "Rollback", 60, tokenInput="rest-z")
+        release = [] if step == "chain-rollback" else [{"id": "z/rollback", "transport": "rest", "rpc": "Rollback", "document": None, "tokenInput": "rest-z", "tokenOutput": None, "writes": (), "caseId": "z/rollback", "role": "observation", "allow": WIDE}]
+        table = table_with(toy, begin, inner, *release, max_tokens=max_tokens)
+    else:
+        table = table_with(toy, step, max_tokens=max_tokens)
+    with pytest.raises(ValueError, match=message):
+        program.compile_plan(table, NONCE, OWNER)
+
+
+def test_the_largest_read_time_ago_is_admitted_and_one_more_second_is_not(program, toy):
+    program.compile_plan(table_with(toy, ago("ago/max", "rest", "GetDocument", program.READ_AGO_MAX)), NONCE, OWNER)
+    with pytest.raises(ValueError, match="out of range"):
+        program.compile_plan(table_with(toy, ago("ago/over", "rest", "GetDocument", program.READ_AGO_MAX + 1)), NONCE, OWNER)
+    assert program.READ_AGO_MAX == 7200
 
 
 def test_the_recorded_read_time_must_be_the_dispatch_time_less_the_seconds_within_a_short_build_delay(program):
@@ -203,3 +220,61 @@ def test_a_read_time_ago_never_has_more_than_microsecond_precision(program, now)
     stamp = program.read_time_ago(now, 3540)
     assert stamp["nanos"] % 1000 == 0 and 0 <= stamp["nanos"] < 1_000_000_000
     assert abs((int(stamp["seconds"]) + stamp["nanos"] / 1e9) - (now - 3540)) < 1e-6
+
+
+def test_the_tolerance_is_inclusive_at_five_seconds_and_a_begin_is_compared_by_its_options(program):
+    step = {"readAgoSeconds": 3540}
+    expected = {"database": "d", "options": {"readOnly": {"readTime": {"seconds": "1000", "nanos": 0}}}}
+    early = {"database": "d", "options": {"readOnly": {"readTime": {"seconds": "995", "nanos": 0}}}}
+    assert program.same_request(step, early, expected)          # exactly 5 s before: still the declared request
+    assert not program.same_request(step, {"database": "d", "options": {"readOnly": {"readTime": {"seconds": "994", "nanos": 999_999_000}}}}, expected)
+    assert not program.same_request(step, {"database": "other", "options": early["options"]}, expected)
+    assert not program.same_request(step, {"database": "d", "options": {"readOnly": {}}}, expected)
+
+
+def test_a_recording_replays_when_the_clock_moves_between_building_a_request_and_dispatching_it(program, toy):
+    """The collector builds the request, journals, then reads the clock for the dispatch time: the replay must accept that gap (an exact comparison would not)."""
+    collector_tests = importlib.import_module("test_txn_program_collector")
+    table = table_with(toy, ago("ago/get-59", "rest", "GetDocument", 3540))
+    collector, service, _budget, _journal, clock, _plan = collector_tests.fixture(table)
+    ticking = clock.utc
+    calls = {"n": 0}
+
+    def utc():
+        calls["n"] += 1
+        return (collector_tests.dt.datetime(2026, 9, 30, tzinfo=collector_tests.dt.timezone.utc) + collector_tests.dt.timedelta(seconds=clock.now() + 0.1 * calls["n"])).isoformat().replace("+00:00", "Z")
+
+    collector.utc = utc
+    wire = AgoWire(service)
+    collector.wire = wire
+    receipt = collector.run()
+    collector_module = importlib.import_module("txn_program_collector")
+    # the clock ticks 0.1 s per reading, so the dispatch time follows the build time by more than a rounding error
+    assert receipt["complete"] is True
+    assert collector_module.projection(receipt, table)["cases"]
+
+
+def test_a_found_document_at_a_time_ago_in_a_batch_is_checked_for_its_owner_and_nothing_else(program, toy):
+    collector_tests = importlib.import_module("test_txn_program_collector")
+    table = table_with(toy, ago("ago/batch-59", "grpc", "BatchGetDocuments", 3540))
+
+    def run(owner):
+        collector, service, _budget, _journal, _clock, plan = collector_tests.fixture(table)
+        inner = service
+
+        class Found:
+            def __getattr__(self, name):
+                return getattr(inner, name)
+
+            def send(self, transport, method, request, **kwargs):
+                if request.get("readTime") is None:
+                    return inner.send(transport, method, request, **kwargs)
+                name = request["documents"][0]
+                document = {"name": name, "fields": {"owner": {"stringValue": owner}, "nonce": {"stringValue": NONCE}, "role": {"stringValue": "a"}, "state": {"stringValue": "created"}}, "createTime": {"seconds": "1788004860", "nanos": 1}, "updateTime": {"seconds": "1788004860", "nanos": 1}}
+                return {"kind": "txn-program-receipt-v1", "transport": transport, "complete": True, "code": 0, "details": "", "response": {"responses": [{"found": document, "readTime": {"seconds": "1788004860", "nanos": 1}}]}, "http": None, "dispatchedRequests": 1, "childReaped": True}
+
+        collector.wire = Found()
+        return collector.run()
+
+    assert run(OWNER)["complete"] is True
+    assert run("c" * 32)["complete"] is False, "a found document with another owner's marker stops the recording"

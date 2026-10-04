@@ -274,8 +274,9 @@ class Ledger:
             raise ValueError("HTTP status disagrees with the transport or the code")
         if code == 0 and not isinstance(result.get("response"), dict):
             raise ValueError("native success has no typed response")
-        if code == 1 and (step is None or "cancelAfter" not in step or not isinstance(result.get("response"), dict) or not isinstance(result["response"].get("responses"), list)):
-            raise ValueError("a client cancel is recorded only for a step that cancels, with the frames it received")
+        # a code 1 on a step that did not ask for a cancel is refused above (unknown); on one that did, it must carry the frames received before the cancel
+        if code == 1 and (not isinstance(result.get("response"), dict) or not isinstance(result["response"].get("responses"), list)):
+            raise ValueError("a client cancel carries the frames it received")
 
     def after(self, site, transport, method, request, step, result, timing):
         self._check_receipt(transport, method, result, step)
@@ -390,8 +391,8 @@ class Ledger:
             role = next((role for role, owned in self.plan["documents"].items() if owned == name), None)
             if role is None or role in documents:
                 raise ValueError("query frame names a document that is not this run's, or repeats")
-            # Only the owner marker and a state this recording tried are checked: what a query shows is the observation, not a verdict.
-            self._owned(role, document, transport, set(self.tried[role]) | set(self.history[role]))
+            # Only the owner marker and a state this recording tried writing are checked: what a query shows is the observation, not a verdict.
+            self._owned(role, document, transport, set(self.tried[role]))
             documents[role] = document["fields"]["state"]["stringValue"]
         return documents
 
@@ -448,7 +449,7 @@ class Ledger:
             role = self._role_of(name)
             if step is not None and "readAgoSeconds" in step:
                 if kind == "found":
-                    self._owned(role, frame["found"], transport, set(self.tried[role]) | set(self.history[role]))
+                    self._owned(role, frame["found"], transport, set(self.tried[role]))
                 continue
             visible = self._visible(role, request, step)
             if kind == "found":
@@ -524,7 +525,7 @@ class Ledger:
             return
         if step is not None and "readAgoSeconds" in step:
             # A read at a time ago is an observation of production's retention, not of a state this recording acknowledged: only the owner marker is checked.
-            self._owned(role, result["response"], transport, set(self.tried[role]) | set(self.history[role]))
+            self._owned(role, result["response"], transport, set(self.tried[role]))
             return
         visible = self._visible(role, request, step) - {None}
         if doc["state"] is None or not visible:

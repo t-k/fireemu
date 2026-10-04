@@ -4235,7 +4235,14 @@ mod tests {
         );
         for bad in [json!("real"), json!(""), json!(5), json!(null), json!(true)] {
             let error = parse(json!({"clock": bad})).unwrap_err();
-            assert!(error.0.contains("scheduler.clock"), "{bad}: {error:?}");
+            assert!(
+                error.0.contains("scheduler.clock must be \"virtual\""),
+                "{bad}: {error:?}"
+            );
+            assert!(
+                !error.0.contains("use \"virtual\""),
+                "only wall is named as declared but not implemented: {bad}: {error:?}"
+            );
         }
     }
 

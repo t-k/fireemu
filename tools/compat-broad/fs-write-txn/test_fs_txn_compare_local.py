@@ -260,6 +260,7 @@ def test_a_retention_read_row_is_judged_by_class_and_by_state_only_when_both_sid
     judge = lambda production, local: tool.compare(production, local, None, {}, retention=sites)[1][0]   # noqa: E731
     # not found against found: both accepted, the document may not have existed that long ago
     assert judge(read_projection(5), read_projection(0, "v1"))["match"] is True
+    assert judge(read_projection(0, "v1"), read_projection(5))["match"] is True
     assert judge(read_projection(3), read_projection(9))["match"] is True
     assert judge(read_projection(9), read_projection(0, "v1"))["match"] is False
     assert judge(read_projection(0, "v1"), read_projection(9))["match"] is False

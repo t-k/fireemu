@@ -735,6 +735,15 @@ fn the_fields_projection_selects_nested_fields() {
             get("name,versioning(enabled)"),
             json!({"name": BUCKET, "versioning": {"enabled": true}})
         );
+        // A comma inside parentheses belongs to the group; one outside separates selectors.
+        assert_eq!(
+            get("versioning(enabled,nothing),name"),
+            json!({"name": BUCKET, "versioning": {"enabled": true}})
+        );
+        assert_eq!(
+            get("name,versioning(nothing,enabled)"),
+            json!({"name": BUCKET, "versioning": {"enabled": true}})
+        );
         assert_eq!(get("versioning/nothing"), json!({"versioning": {}}));
         assert_eq!(get("nothing"), json!({}));
     }

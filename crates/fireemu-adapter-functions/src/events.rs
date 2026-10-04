@@ -12,7 +12,7 @@ use fireemu_core_functions::event::{
     storage_attributes, with_auth_context,
 };
 use fireemu_core_functions::manifest::{AuthEvent, DocumentEvent, ObjectEvent};
-use fireemu_core_storage::store::ObjectMetadata;
+use fireemu_core_storage::store::{ObjectMetadata, StorageEvent};
 use fireemu_core_types::time::LogicalInstant;
 use serde_json::{json, Map, Value};
 use std::fmt::Write as _;
@@ -286,6 +286,41 @@ fn percent_encode(s: &str) -> String {
         }
     }
     out
+}
+
+/// What a core Storage event turns into: the trigger kind, the object, the `timeDeleted` its
+/// resource carries and the instant of its `CloudEvent` when that is not the instant it is
+/// admitted at.
+#[derive(Debug, Clone, Copy)]
+pub struct StorageEventParts<'a> {
+    /// The trigger kind.
+    pub kind: ObjectEvent,
+    /// The object as it was.
+    pub object: &'a ObjectMetadata,
+    /// `data.timeDeleted`, when the event carries one.
+    pub time_deleted: Option<LogicalInstant>,
+    /// The event's own instant; `None` means the admission instant.
+    pub at: Option<LogicalInstant>,
+}
+
+/// Splits a core Storage event into what [`storage_event`] needs.
+#[must_use]
+pub fn storage_event_parts(event: &StorageEvent) -> StorageEventParts<'_> {
+    let (kind, object, time_deleted, at) = match event {
+        StorageEvent::Finalized(m) => (ObjectEvent::Finalized, m, None, None),
+        StorageEvent::Deleted { object, .. } => (ObjectEvent::Deleted, object, None, None),
+        StorageEvent::MetadataUpdated(m) => (ObjectEvent::MetadataUpdated, m, None, None),
+        StorageEvent::Archived {
+            object,
+            time_deleted,
+        } => (ObjectEvent::Archived, object, Some(*time_deleted), None),
+    };
+    StorageEventParts {
+        kind,
+        object,
+        time_deleted,
+        at,
+    }
 }
 
 /// A Storage object event. `id` seeds the event's seventeen-digit decimal `id`

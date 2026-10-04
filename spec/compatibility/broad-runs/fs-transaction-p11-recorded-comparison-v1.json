@@ -1,0 +1,1108 @@
+{
+  "schemaVersion": 1,
+  "kind": "fs-transaction-recorded-comparison-v1",
+  "parent": "FS-TRANSACTION",
+  "program": "FS-TRANSACTION-P11-LIFETIME",
+  "condition": [
+    "FS-TRANSACTION/total-lifetime-expiry"
+  ],
+  "coverage": "PARTIAL",
+  "authorizesProduction": false,
+  "productionRequests": 0,
+  "profile": "strict",
+  "artifact": {
+    "sourceCommit": "da9480d7842b4600d064da7f1d8cef2914664ecf",
+    "binarySha256": "852816f997d99beaa82ef8f8c10253af4b04c536bf612725a76a06e08fde70cb"
+  },
+  "comparer": {
+    "sha256": "3313d77fb70da7695817d36b0485ed7cfcacabcd5beddf5201c74d2278d598f5",
+    "replayClock": "virtual"
+  },
+  "table": {
+    "path": "tools/compat-broad/fs-write-txn/fs_txn_table_p11.py",
+    "sha256": "40586ce982f861df4098064f81f613313212756b84816f90b8d68f44ce48a4f9"
+  },
+  "recordings": [
+    {
+      "recording": 1,
+      "productionFileSha256": "2673bc8bdb57c1aee6825e53ac9c444bf88943dcdd2ad5586a0ebb85652921b9",
+      "mismatches": 0,
+      "cases": [
+        {
+          "caseId": "rest/live-read",
+          "production": {
+            "code": 0,
+            "details": ""
+          },
+          "local": {
+            "code": 0,
+            "details": ""
+          },
+          "match": true
+        },
+        {
+          "caseId": "rest/expiry-read",
+          "production": {
+            "code": 10,
+            "details": "The referenced transaction has expired or is no longer valid."
+          },
+          "local": {
+            "code": 10,
+            "details": "The referenced transaction has expired or is no longer valid."
+          },
+          "match": true
+        },
+        {
+          "caseId": "rest/expiry-commit",
+          "production": {
+            "code": 10,
+            "details": "The referenced transaction has expired or is no longer valid."
+          },
+          "local": {
+            "code": 10,
+            "details": "The referenced transaction has expired or is no longer valid."
+          },
+          "match": true
+        },
+        {
+          "caseId": "rest/writer",
+          "production": {
+            "code": 0,
+            "details": ""
+          },
+          "local": {
+            "code": 0,
+            "details": ""
+          },
+          "match": true
+        },
+        {
+          "caseId": "grpc/live-read",
+          "production": {
+            "code": 0,
+            "details": ""
+          },
+          "local": {
+            "code": 0,
+            "details": ""
+          },
+          "match": true
+        },
+        {
+          "caseId": "grpc/expiry-read",
+          "production": {
+            "code": 10,
+            "details": "The referenced transaction has expired or is no longer valid."
+          },
+          "local": {
+            "code": 10,
+            "details": "The referenced transaction has expired or is no longer valid."
+          },
+          "match": true
+        },
+        {
+          "caseId": "grpc/expiry-commit",
+          "production": {
+            "code": 10,
+            "details": "The referenced transaction has expired or is no longer valid."
+          },
+          "local": {
+            "code": 10,
+            "details": "The referenced transaction has expired or is no longer valid."
+          },
+          "match": true
+        },
+        {
+          "caseId": "grpc/writer",
+          "production": {
+            "code": 0,
+            "details": ""
+          },
+          "local": {
+            "code": 0,
+            "details": ""
+          },
+          "match": true
+        }
+      ],
+      "reads": [
+        {
+          "site": "setup/absence-a",
+          "production": {
+            "code": 5,
+            "state": null,
+            "documents": null
+          },
+          "local": {
+            "code": 5,
+            "state": null,
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "setup/absence-m",
+          "production": {
+            "code": 5,
+            "state": null,
+            "documents": null
+          },
+          "local": {
+            "code": 5,
+            "state": null,
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "rest/read-a",
+          "production": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "local": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "rest/keepalive-1",
+          "production": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "local": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "rest/keepalive-2",
+          "production": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "local": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "rest/keepalive-3",
+          "production": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "local": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "rest/keepalive-4",
+          "production": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "local": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "rest/keepalive-5",
+          "production": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "local": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "rest/keepalive-6",
+          "production": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "local": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "rest/keepalive-7",
+          "production": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "local": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "rest/keepalive-8",
+          "production": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "local": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "rest/keepalive-9",
+          "production": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "local": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "rest/live-read",
+          "production": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "local": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "rest/expiry-read",
+          "production": {
+            "code": 10,
+            "state": null,
+            "documents": null
+          },
+          "local": {
+            "code": 10,
+            "state": null,
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "rest/post-read-a",
+          "production": {
+            "code": 0,
+            "state": "rest-writer",
+            "documents": null
+          },
+          "local": {
+            "code": 0,
+            "state": "rest-writer",
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "grpc/read-a",
+          "production": {
+            "code": 0,
+            "state": "rest-writer",
+            "documents": null
+          },
+          "local": {
+            "code": 0,
+            "state": "rest-writer",
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "grpc/keepalive-1",
+          "production": {
+            "code": 0,
+            "state": "rest-writer",
+            "documents": null
+          },
+          "local": {
+            "code": 0,
+            "state": "rest-writer",
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "grpc/keepalive-2",
+          "production": {
+            "code": 0,
+            "state": "rest-writer",
+            "documents": null
+          },
+          "local": {
+            "code": 0,
+            "state": "rest-writer",
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "grpc/keepalive-3",
+          "production": {
+            "code": 0,
+            "state": "rest-writer",
+            "documents": null
+          },
+          "local": {
+            "code": 0,
+            "state": "rest-writer",
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "grpc/keepalive-4",
+          "production": {
+            "code": 0,
+            "state": "rest-writer",
+            "documents": null
+          },
+          "local": {
+            "code": 0,
+            "state": "rest-writer",
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "grpc/keepalive-5",
+          "production": {
+            "code": 0,
+            "state": "rest-writer",
+            "documents": null
+          },
+          "local": {
+            "code": 0,
+            "state": "rest-writer",
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "grpc/keepalive-6",
+          "production": {
+            "code": 0,
+            "state": "rest-writer",
+            "documents": null
+          },
+          "local": {
+            "code": 0,
+            "state": "rest-writer",
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "grpc/keepalive-7",
+          "production": {
+            "code": 0,
+            "state": "rest-writer",
+            "documents": null
+          },
+          "local": {
+            "code": 0,
+            "state": "rest-writer",
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "grpc/keepalive-8",
+          "production": {
+            "code": 0,
+            "state": "rest-writer",
+            "documents": null
+          },
+          "local": {
+            "code": 0,
+            "state": "rest-writer",
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "grpc/keepalive-9",
+          "production": {
+            "code": 0,
+            "state": "rest-writer",
+            "documents": null
+          },
+          "local": {
+            "code": 0,
+            "state": "rest-writer",
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "grpc/live-read",
+          "production": {
+            "code": 0,
+            "state": "rest-writer",
+            "documents": null
+          },
+          "local": {
+            "code": 0,
+            "state": "rest-writer",
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "grpc/expiry-read",
+          "production": {
+            "code": 10,
+            "state": null,
+            "documents": null
+          },
+          "local": {
+            "code": 10,
+            "state": null,
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "grpc/post-read-a",
+          "production": {
+            "code": 0,
+            "state": "grpc-writer",
+            "documents": null
+          },
+          "local": {
+            "code": 0,
+            "state": "grpc-writer",
+            "documents": null
+          },
+          "match": true
+        }
+      ],
+      "commitTimes": [
+        {
+          "site": "setup/create-a",
+          "production": {
+            "commitTime": true,
+            "relation": null
+          },
+          "local": {
+            "commitTime": true,
+            "relation": null
+          },
+          "match": true
+        },
+        {
+          "site": "rest/writer",
+          "production": {
+            "commitTime": true,
+            "relation": null
+          },
+          "local": {
+            "commitTime": true,
+            "relation": null
+          },
+          "match": true
+        },
+        {
+          "site": "grpc/writer",
+          "production": {
+            "commitTime": true,
+            "relation": null
+          },
+          "local": {
+            "commitTime": true,
+            "relation": null
+          },
+          "match": true
+        }
+      ]
+    },
+    {
+      "recording": 2,
+      "productionFileSha256": "51cd84c1b0f29f4ec8bfe882e2b0de0710e2807d2083f0094492c409effe5487",
+      "mismatches": 0,
+      "cases": [
+        {
+          "caseId": "rest/live-read",
+          "production": {
+            "code": 0,
+            "details": ""
+          },
+          "local": {
+            "code": 0,
+            "details": ""
+          },
+          "match": true
+        },
+        {
+          "caseId": "rest/expiry-read",
+          "production": {
+            "code": 10,
+            "details": "The referenced transaction has expired or is no longer valid."
+          },
+          "local": {
+            "code": 10,
+            "details": "The referenced transaction has expired or is no longer valid."
+          },
+          "match": true
+        },
+        {
+          "caseId": "rest/expiry-commit",
+          "production": {
+            "code": 10,
+            "details": "The referenced transaction has expired or is no longer valid."
+          },
+          "local": {
+            "code": 10,
+            "details": "The referenced transaction has expired or is no longer valid."
+          },
+          "match": true
+        },
+        {
+          "caseId": "rest/writer",
+          "production": {
+            "code": 0,
+            "details": ""
+          },
+          "local": {
+            "code": 0,
+            "details": ""
+          },
+          "match": true
+        },
+        {
+          "caseId": "grpc/live-read",
+          "production": {
+            "code": 0,
+            "details": ""
+          },
+          "local": {
+            "code": 0,
+            "details": ""
+          },
+          "match": true
+        },
+        {
+          "caseId": "grpc/expiry-read",
+          "production": {
+            "code": 10,
+            "details": "The referenced transaction has expired or is no longer valid."
+          },
+          "local": {
+            "code": 10,
+            "details": "The referenced transaction has expired or is no longer valid."
+          },
+          "match": true
+        },
+        {
+          "caseId": "grpc/expiry-commit",
+          "production": {
+            "code": 10,
+            "details": "The referenced transaction has expired or is no longer valid."
+          },
+          "local": {
+            "code": 10,
+            "details": "The referenced transaction has expired or is no longer valid."
+          },
+          "match": true
+        },
+        {
+          "caseId": "grpc/writer",
+          "production": {
+            "code": 0,
+            "details": ""
+          },
+          "local": {
+            "code": 0,
+            "details": ""
+          },
+          "match": true
+        }
+      ],
+      "reads": [
+        {
+          "site": "setup/absence-a",
+          "production": {
+            "code": 5,
+            "state": null,
+            "documents": null
+          },
+          "local": {
+            "code": 5,
+            "state": null,
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "setup/absence-m",
+          "production": {
+            "code": 5,
+            "state": null,
+            "documents": null
+          },
+          "local": {
+            "code": 5,
+            "state": null,
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "rest/read-a",
+          "production": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "local": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "rest/keepalive-1",
+          "production": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "local": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "rest/keepalive-2",
+          "production": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "local": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "rest/keepalive-3",
+          "production": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "local": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "rest/keepalive-4",
+          "production": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "local": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "rest/keepalive-5",
+          "production": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "local": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "rest/keepalive-6",
+          "production": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "local": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "rest/keepalive-7",
+          "production": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "local": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "rest/keepalive-8",
+          "production": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "local": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "rest/keepalive-9",
+          "production": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "local": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "rest/live-read",
+          "production": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "local": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "rest/expiry-read",
+          "production": {
+            "code": 10,
+            "state": null,
+            "documents": null
+          },
+          "local": {
+            "code": 10,
+            "state": null,
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "rest/post-read-a",
+          "production": {
+            "code": 0,
+            "state": "rest-writer",
+            "documents": null
+          },
+          "local": {
+            "code": 0,
+            "state": "rest-writer",
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "grpc/read-a",
+          "production": {
+            "code": 0,
+            "state": "rest-writer",
+            "documents": null
+          },
+          "local": {
+            "code": 0,
+            "state": "rest-writer",
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "grpc/keepalive-1",
+          "production": {
+            "code": 0,
+            "state": "rest-writer",
+            "documents": null
+          },
+          "local": {
+            "code": 0,
+            "state": "rest-writer",
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "grpc/keepalive-2",
+          "production": {
+            "code": 0,
+            "state": "rest-writer",
+            "documents": null
+          },
+          "local": {
+            "code": 0,
+            "state": "rest-writer",
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "grpc/keepalive-3",
+          "production": {
+            "code": 0,
+            "state": "rest-writer",
+            "documents": null
+          },
+          "local": {
+            "code": 0,
+            "state": "rest-writer",
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "grpc/keepalive-4",
+          "production": {
+            "code": 0,
+            "state": "rest-writer",
+            "documents": null
+          },
+          "local": {
+            "code": 0,
+            "state": "rest-writer",
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "grpc/keepalive-5",
+          "production": {
+            "code": 0,
+            "state": "rest-writer",
+            "documents": null
+          },
+          "local": {
+            "code": 0,
+            "state": "rest-writer",
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "grpc/keepalive-6",
+          "production": {
+            "code": 0,
+            "state": "rest-writer",
+            "documents": null
+          },
+          "local": {
+            "code": 0,
+            "state": "rest-writer",
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "grpc/keepalive-7",
+          "production": {
+            "code": 0,
+            "state": "rest-writer",
+            "documents": null
+          },
+          "local": {
+            "code": 0,
+            "state": "rest-writer",
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "grpc/keepalive-8",
+          "production": {
+            "code": 0,
+            "state": "rest-writer",
+            "documents": null
+          },
+          "local": {
+            "code": 0,
+            "state": "rest-writer",
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "grpc/keepalive-9",
+          "production": {
+            "code": 0,
+            "state": "rest-writer",
+            "documents": null
+          },
+          "local": {
+            "code": 0,
+            "state": "rest-writer",
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "grpc/live-read",
+          "production": {
+            "code": 0,
+            "state": "rest-writer",
+            "documents": null
+          },
+          "local": {
+            "code": 0,
+            "state": "rest-writer",
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "grpc/expiry-read",
+          "production": {
+            "code": 10,
+            "state": null,
+            "documents": null
+          },
+          "local": {
+            "code": 10,
+            "state": null,
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "grpc/post-read-a",
+          "production": {
+            "code": 0,
+            "state": "grpc-writer",
+            "documents": null
+          },
+          "local": {
+            "code": 0,
+            "state": "grpc-writer",
+            "documents": null
+          },
+          "match": true
+        }
+      ],
+      "commitTimes": [
+        {
+          "site": "setup/create-a",
+          "production": {
+            "commitTime": true,
+            "relation": null
+          },
+          "local": {
+            "commitTime": true,
+            "relation": null
+          },
+          "match": true
+        },
+        {
+          "site": "rest/writer",
+          "production": {
+            "commitTime": true,
+            "relation": null
+          },
+          "local": {
+            "commitTime": true,
+            "relation": null
+          },
+          "match": true
+        },
+        {
+          "site": "grpc/writer",
+          "production": {
+            "commitTime": true,
+            "relation": null
+          },
+          "local": {
+            "commitTime": true,
+            "relation": null
+          },
+          "match": true
+        }
+      ]
+    }
+  ],
+  "summary": {
+    "recordings": 2,
+    "rows": 78,
+    "mismatches": 0
+  },
+  "remainingBoundaries": [
+    "Raw REST bodyBytes, content-length and member-order layout were not retained; the record proves decoded response semantics, not wire layout.",
+    "The closure review and the final-artifact regression are separate conditions and stay open.",
+    "The artifact is the strict profile of the commit named; a later source change needs a new replay.",
+    "Idle and lifetime boundaries are judged by the intervals production narrowed: the idle threshold lies in [110.70, 122.96) s and the age at which an expired token is forgotten in (298.7, 302.2] s; strict's values (a 120 s idle limit, a 270 s total lifetime, 300 s of memory) lie inside them. The replay runs on the emulator's virtual clock and reproduces each recorded idle (the least the production token idled before the request) and each recorded token age, so a row at a boundary is compared at the measured production value, not at the nominal wait."
+  ]
+}

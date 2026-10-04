@@ -1,0 +1,526 @@
+{
+  "schemaVersion": 1,
+  "kind": "fs-transaction-recorded-comparison-v1",
+  "parent": "FS-TRANSACTION",
+  "program": "FS-TRANSACTION-P09-GRPC-RETRY",
+  "condition": [
+    "FS-TRANSACTION/failed-commit-and-rollback",
+    "FS-TRANSACTION/retry-token-lifecycle"
+  ],
+  "coverage": "PARTIAL",
+  "authorizesProduction": false,
+  "productionRequests": 0,
+  "profile": "strict",
+  "artifact": {
+    "sourceCommit": "da9480d7842b4600d064da7f1d8cef2914664ecf",
+    "binarySha256": "852816f997d99beaa82ef8f8c10253af4b04c536bf612725a76a06e08fde70cb"
+  },
+  "comparer": {
+    "sha256": "213f7b94c5497375db3f904c96e154466faf6a9449c60151c71d328d17ef324b",
+    "replayClock": "real"
+  },
+  "recordings": [
+    {
+      "recording": 1,
+      "productionFileSha256": "b129f425d3b8ac8cb3e7d40654b4e68f57172d9973a8406518fb81764bcc2e84",
+      "mismatches": 0,
+      "cases": [
+        {
+          "caseId": "grpc/rollback-after-commit",
+          "production": {
+            "caseId": "grpc/rollback-after-commit",
+            "rpc": "Rollback",
+            "code": 10,
+            "details": "The referenced transaction has expired or is no longer valid.",
+            "issuedToken": false
+          },
+          "local": {
+            "caseId": "grpc/rollback-after-commit",
+            "rpc": "Rollback",
+            "code": 10,
+            "details": "The referenced transaction has expired or is no longer valid.",
+            "issuedToken": false
+          },
+          "match": true
+        },
+        {
+          "caseId": "grpc/retry-with-committed-previous",
+          "production": {
+            "caseId": "grpc/retry-with-committed-previous",
+            "rpc": "BeginTransaction",
+            "code": 0,
+            "details": "",
+            "issuedToken": true
+          },
+          "local": {
+            "caseId": "grpc/retry-with-committed-previous",
+            "rpc": "BeginTransaction",
+            "code": 0,
+            "details": "",
+            "issuedToken": true
+          },
+          "match": true
+        },
+        {
+          "caseId": "grpc/rollback-after-rollback",
+          "production": {
+            "caseId": "grpc/rollback-after-rollback",
+            "rpc": "Rollback",
+            "code": 0,
+            "details": "",
+            "issuedToken": false
+          },
+          "local": {
+            "caseId": "grpc/rollback-after-rollback",
+            "rpc": "Rollback",
+            "code": 0,
+            "details": "",
+            "issuedToken": false
+          },
+          "match": true
+        },
+        {
+          "caseId": "grpc/retry-with-rolled-back-previous",
+          "production": {
+            "caseId": "grpc/retry-with-rolled-back-previous",
+            "rpc": "BeginTransaction",
+            "code": 0,
+            "details": "",
+            "issuedToken": true
+          },
+          "local": {
+            "caseId": "grpc/retry-with-rolled-back-previous",
+            "rpc": "BeginTransaction",
+            "code": 0,
+            "details": "",
+            "issuedToken": true
+          },
+          "match": true
+        },
+        {
+          "caseId": "grpc/retry-with-read-only-previous",
+          "production": {
+            "caseId": "grpc/retry-with-read-only-previous",
+            "rpc": "BeginTransaction",
+            "code": 3,
+            "details": "Cannot retry a read-only transaction",
+            "issuedToken": false
+          },
+          "local": {
+            "caseId": "grpc/retry-with-read-only-previous",
+            "rpc": "BeginTransaction",
+            "code": 3,
+            "details": "Cannot retry a read-only transaction",
+            "issuedToken": false
+          },
+          "match": true
+        },
+        {
+          "caseId": "grpc/retry-with-unissued-previous",
+          "production": {
+            "caseId": "grpc/retry-with-unissued-previous",
+            "rpc": "BeginTransaction",
+            "code": 3,
+            "details": "Invalid transaction.",
+            "issuedToken": false
+          },
+          "local": {
+            "caseId": "grpc/retry-with-unissued-previous",
+            "rpc": "BeginTransaction",
+            "code": 3,
+            "details": "Invalid transaction.",
+            "issuedToken": false
+          },
+          "match": true
+        }
+      ],
+      "reads": [
+        {
+          "site": "setup/absence",
+          "production": {
+            "site": "setup/absence",
+            "code": 5,
+            "state": null,
+            "details": "Document \"projects/<project>/databases/(default)/documents/oracle/<nonce>/txn-p09/control\" not found."
+          },
+          "local": {
+            "site": "setup/absence",
+            "code": 5,
+            "state": null,
+            "details": "Document \"projects/<project>/databases/(default)/documents/oracle/<nonce>/txn-p09/control\" not found."
+          },
+          "match": true
+        },
+        {
+          "site": "committed/read",
+          "production": {
+            "site": "committed/read",
+            "code": 0,
+            "state": "created",
+            "details": ""
+          },
+          "local": {
+            "site": "committed/read",
+            "code": 0,
+            "state": "created",
+            "details": ""
+          },
+          "match": true
+        },
+        {
+          "site": "committed/snapshot",
+          "production": {
+            "site": "committed/snapshot",
+            "code": 0,
+            "state": "outside",
+            "details": ""
+          },
+          "local": {
+            "site": "committed/snapshot",
+            "code": 0,
+            "state": "outside",
+            "details": ""
+          },
+          "match": true
+        },
+        {
+          "site": "rolled-back/read",
+          "production": {
+            "site": "rolled-back/read",
+            "code": 0,
+            "state": "outside",
+            "details": ""
+          },
+          "local": {
+            "site": "rolled-back/read",
+            "code": 0,
+            "state": "outside",
+            "details": ""
+          },
+          "match": true
+        },
+        {
+          "site": "rolled-back/snapshot",
+          "production": {
+            "site": "rolled-back/snapshot",
+            "code": 0,
+            "state": "outside",
+            "details": ""
+          },
+          "local": {
+            "site": "rolled-back/snapshot",
+            "code": 0,
+            "state": "outside",
+            "details": ""
+          },
+          "match": true
+        },
+        {
+          "site": "read-only/read",
+          "production": {
+            "site": "read-only/read",
+            "code": 0,
+            "state": "outside",
+            "details": ""
+          },
+          "local": {
+            "site": "read-only/read",
+            "code": 0,
+            "state": "outside",
+            "details": ""
+          },
+          "match": true
+        },
+        {
+          "site": "read-only/snapshot",
+          "production": {
+            "site": "read-only/snapshot",
+            "code": 0,
+            "state": "outside",
+            "details": ""
+          },
+          "local": {
+            "site": "read-only/snapshot",
+            "code": 0,
+            "state": "outside",
+            "details": ""
+          },
+          "match": true
+        },
+        {
+          "site": "post-state/read",
+          "production": {
+            "site": "post-state/read",
+            "code": 0,
+            "state": "after-readonly-start",
+            "details": ""
+          },
+          "local": {
+            "site": "post-state/read",
+            "code": 0,
+            "state": "after-readonly-start",
+            "details": ""
+          },
+          "match": true
+        }
+      ],
+      "idleCandidates": []
+    },
+    {
+      "recording": 2,
+      "productionFileSha256": "d6d8fd9c1a793a34f61eeab9389bf6cbbf085348df2f2f6e6f995c0ab68e9506",
+      "mismatches": 0,
+      "cases": [
+        {
+          "caseId": "grpc/rollback-after-commit",
+          "production": {
+            "caseId": "grpc/rollback-after-commit",
+            "rpc": "Rollback",
+            "code": 10,
+            "details": "The referenced transaction has expired or is no longer valid.",
+            "issuedToken": false
+          },
+          "local": {
+            "caseId": "grpc/rollback-after-commit",
+            "rpc": "Rollback",
+            "code": 10,
+            "details": "The referenced transaction has expired or is no longer valid.",
+            "issuedToken": false
+          },
+          "match": true
+        },
+        {
+          "caseId": "grpc/retry-with-committed-previous",
+          "production": {
+            "caseId": "grpc/retry-with-committed-previous",
+            "rpc": "BeginTransaction",
+            "code": 0,
+            "details": "",
+            "issuedToken": true
+          },
+          "local": {
+            "caseId": "grpc/retry-with-committed-previous",
+            "rpc": "BeginTransaction",
+            "code": 0,
+            "details": "",
+            "issuedToken": true
+          },
+          "match": true
+        },
+        {
+          "caseId": "grpc/rollback-after-rollback",
+          "production": {
+            "caseId": "grpc/rollback-after-rollback",
+            "rpc": "Rollback",
+            "code": 0,
+            "details": "",
+            "issuedToken": false
+          },
+          "local": {
+            "caseId": "grpc/rollback-after-rollback",
+            "rpc": "Rollback",
+            "code": 0,
+            "details": "",
+            "issuedToken": false
+          },
+          "match": true
+        },
+        {
+          "caseId": "grpc/retry-with-rolled-back-previous",
+          "production": {
+            "caseId": "grpc/retry-with-rolled-back-previous",
+            "rpc": "BeginTransaction",
+            "code": 0,
+            "details": "",
+            "issuedToken": true
+          },
+          "local": {
+            "caseId": "grpc/retry-with-rolled-back-previous",
+            "rpc": "BeginTransaction",
+            "code": 0,
+            "details": "",
+            "issuedToken": true
+          },
+          "match": true
+        },
+        {
+          "caseId": "grpc/retry-with-read-only-previous",
+          "production": {
+            "caseId": "grpc/retry-with-read-only-previous",
+            "rpc": "BeginTransaction",
+            "code": 3,
+            "details": "Cannot retry a read-only transaction",
+            "issuedToken": false
+          },
+          "local": {
+            "caseId": "grpc/retry-with-read-only-previous",
+            "rpc": "BeginTransaction",
+            "code": 3,
+            "details": "Cannot retry a read-only transaction",
+            "issuedToken": false
+          },
+          "match": true
+        },
+        {
+          "caseId": "grpc/retry-with-unissued-previous",
+          "production": {
+            "caseId": "grpc/retry-with-unissued-previous",
+            "rpc": "BeginTransaction",
+            "code": 3,
+            "details": "Invalid transaction.",
+            "issuedToken": false
+          },
+          "local": {
+            "caseId": "grpc/retry-with-unissued-previous",
+            "rpc": "BeginTransaction",
+            "code": 3,
+            "details": "Invalid transaction.",
+            "issuedToken": false
+          },
+          "match": true
+        }
+      ],
+      "reads": [
+        {
+          "site": "setup/absence",
+          "production": {
+            "site": "setup/absence",
+            "code": 5,
+            "state": null,
+            "details": "Document \"projects/<project>/databases/(default)/documents/oracle/<nonce>/txn-p09/control\" not found."
+          },
+          "local": {
+            "site": "setup/absence",
+            "code": 5,
+            "state": null,
+            "details": "Document \"projects/<project>/databases/(default)/documents/oracle/<nonce>/txn-p09/control\" not found."
+          },
+          "match": true
+        },
+        {
+          "site": "committed/read",
+          "production": {
+            "site": "committed/read",
+            "code": 0,
+            "state": "created",
+            "details": ""
+          },
+          "local": {
+            "site": "committed/read",
+            "code": 0,
+            "state": "created",
+            "details": ""
+          },
+          "match": true
+        },
+        {
+          "site": "committed/snapshot",
+          "production": {
+            "site": "committed/snapshot",
+            "code": 0,
+            "state": "outside",
+            "details": ""
+          },
+          "local": {
+            "site": "committed/snapshot",
+            "code": 0,
+            "state": "outside",
+            "details": ""
+          },
+          "match": true
+        },
+        {
+          "site": "rolled-back/read",
+          "production": {
+            "site": "rolled-back/read",
+            "code": 0,
+            "state": "outside",
+            "details": ""
+          },
+          "local": {
+            "site": "rolled-back/read",
+            "code": 0,
+            "state": "outside",
+            "details": ""
+          },
+          "match": true
+        },
+        {
+          "site": "rolled-back/snapshot",
+          "production": {
+            "site": "rolled-back/snapshot",
+            "code": 0,
+            "state": "outside",
+            "details": ""
+          },
+          "local": {
+            "site": "rolled-back/snapshot",
+            "code": 0,
+            "state": "outside",
+            "details": ""
+          },
+          "match": true
+        },
+        {
+          "site": "read-only/read",
+          "production": {
+            "site": "read-only/read",
+            "code": 0,
+            "state": "outside",
+            "details": ""
+          },
+          "local": {
+            "site": "read-only/read",
+            "code": 0,
+            "state": "outside",
+            "details": ""
+          },
+          "match": true
+        },
+        {
+          "site": "read-only/snapshot",
+          "production": {
+            "site": "read-only/snapshot",
+            "code": 0,
+            "state": "outside",
+            "details": ""
+          },
+          "local": {
+            "site": "read-only/snapshot",
+            "code": 0,
+            "state": "outside",
+            "details": ""
+          },
+          "match": true
+        },
+        {
+          "site": "post-state/read",
+          "production": {
+            "site": "post-state/read",
+            "code": 0,
+            "state": "after-readonly-start",
+            "details": ""
+          },
+          "local": {
+            "site": "post-state/read",
+            "code": 0,
+            "state": "after-readonly-start",
+            "details": ""
+          },
+          "match": true
+        }
+      ],
+      "idleCandidates": []
+    }
+  ],
+  "summary": {
+    "recordings": 2,
+    "rows": 28,
+    "mismatches": 0
+  },
+  "remainingBoundaries": [
+    "Raw REST bodyBytes, content-length and member-order layout were not retained; the record proves decoded response semantics, not wire layout.",
+    "The closure review and the final-artifact regression are separate conditions and stay open.",
+    "The artifact is the strict profile of the commit named; a later source change needs a new replay."
+  ]
+}

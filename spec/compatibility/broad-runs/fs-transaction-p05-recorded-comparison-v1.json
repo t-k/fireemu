@@ -1,0 +1,1099 @@
+{
+  "schemaVersion": 1,
+  "kind": "fs-transaction-recorded-comparison-v1",
+  "parent": "FS-TRANSACTION",
+  "program": "FS-TRANSACTION-P05-READLOCK",
+  "condition": [
+    "FS-TRANSACTION/read-set-conflict"
+  ],
+  "coverage": "PARTIAL",
+  "authorizesProduction": false,
+  "productionRequests": 0,
+  "profile": "strict",
+  "artifact": {
+    "sourceCommit": "da9480d7842b4600d064da7f1d8cef2914664ecf",
+    "binarySha256": "852816f997d99beaa82ef8f8c10253af4b04c536bf612725a76a06e08fde70cb"
+  },
+  "comparer": {
+    "sha256": "3313d77fb70da7695817d36b0485ed7cfcacabcd5beddf5201c74d2278d598f5",
+    "replayClock": "real"
+  },
+  "table": {
+    "path": "tools/compat-broad/fs-write-txn/fs_txn_table_p05.py",
+    "sha256": "1a1357f9ce76398c6b4c3a5345c9c9cba746f792cd07805c088fc26824cb42df"
+  },
+  "recordings": [
+    {
+      "recording": 1,
+      "productionFileSha256": "101667ad79498a33eca1cee6e4b8fa82fed33f6a436596cbfeb9235db6a233e9",
+      "mismatches": 0,
+      "cases": [
+        {
+          "caseId": "rest/c-writer-b",
+          "production": {
+            "code": 0,
+            "details": ""
+          },
+          "local": {
+            "code": 0,
+            "details": ""
+          },
+          "match": true
+        },
+        {
+          "caseId": "rest/c-commit",
+          "production": {
+            "code": 0,
+            "details": ""
+          },
+          "local": {
+            "code": 0,
+            "details": ""
+          },
+          "match": true
+        },
+        {
+          "caseId": "rest/c-writer-a",
+          "production": {
+            "code": 0,
+            "details": ""
+          },
+          "local": {
+            "code": 0,
+            "details": ""
+          },
+          "match": true
+        },
+        {
+          "caseId": "rest/c-writer-after-commit",
+          "production": {
+            "code": 0,
+            "details": ""
+          },
+          "local": {
+            "code": 0,
+            "details": ""
+          },
+          "match": true
+        },
+        {
+          "caseId": "rest/r-rollback",
+          "production": {
+            "code": 0,
+            "details": ""
+          },
+          "local": {
+            "code": 0,
+            "details": ""
+          },
+          "match": true
+        },
+        {
+          "caseId": "rest/r-writer-a",
+          "production": {
+            "code": 0,
+            "details": ""
+          },
+          "local": {
+            "code": 0,
+            "details": ""
+          },
+          "match": true
+        },
+        {
+          "caseId": "rest/r-writer-after-rollback",
+          "production": {
+            "code": 0,
+            "details": ""
+          },
+          "local": {
+            "code": 0,
+            "details": ""
+          },
+          "match": true
+        },
+        {
+          "caseId": "grpc/c-writer-b",
+          "production": {
+            "code": 0,
+            "details": ""
+          },
+          "local": {
+            "code": 0,
+            "details": ""
+          },
+          "match": true
+        },
+        {
+          "caseId": "grpc/c-commit",
+          "production": {
+            "code": 0,
+            "details": ""
+          },
+          "local": {
+            "code": 0,
+            "details": ""
+          },
+          "match": true
+        },
+        {
+          "caseId": "grpc/c-writer-a",
+          "production": {
+            "code": 0,
+            "details": ""
+          },
+          "local": {
+            "code": 0,
+            "details": ""
+          },
+          "match": true
+        },
+        {
+          "caseId": "grpc/c-writer-after-commit",
+          "production": {
+            "code": 0,
+            "details": ""
+          },
+          "local": {
+            "code": 0,
+            "details": ""
+          },
+          "match": true
+        },
+        {
+          "caseId": "grpc/r-rollback",
+          "production": {
+            "code": 0,
+            "details": ""
+          },
+          "local": {
+            "code": 0,
+            "details": ""
+          },
+          "match": true
+        },
+        {
+          "caseId": "grpc/r-writer-a",
+          "production": {
+            "code": 0,
+            "details": ""
+          },
+          "local": {
+            "code": 0,
+            "details": ""
+          },
+          "match": true
+        },
+        {
+          "caseId": "grpc/r-writer-after-rollback",
+          "production": {
+            "code": 0,
+            "details": ""
+          },
+          "local": {
+            "code": 0,
+            "details": ""
+          },
+          "match": true
+        }
+      ],
+      "reads": [
+        {
+          "site": "setup/absence-a",
+          "production": {
+            "code": 5,
+            "state": null,
+            "documents": null
+          },
+          "local": {
+            "code": 5,
+            "state": null,
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "setup/absence-b",
+          "production": {
+            "code": 5,
+            "state": null,
+            "documents": null
+          },
+          "local": {
+            "code": 5,
+            "state": null,
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "rest/c/read-a",
+          "production": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "local": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "rest/c/read-after-pair",
+          "production": {
+            "code": 0,
+            "state": "rest-c-conflict",
+            "documents": null
+          },
+          "local": {
+            "code": 0,
+            "state": "rest-c-conflict",
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "rest/c/post-read-a",
+          "production": {
+            "code": 0,
+            "state": "rest-c-after",
+            "documents": null
+          },
+          "local": {
+            "code": 0,
+            "state": "rest-c-after",
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "rest/c/post-read-b",
+          "production": {
+            "code": 0,
+            "state": "rest-c-unrelated",
+            "documents": null
+          },
+          "local": {
+            "code": 0,
+            "state": "rest-c-unrelated",
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "rest/r/read-a",
+          "production": {
+            "code": 0,
+            "state": "rest-c-after",
+            "documents": null
+          },
+          "local": {
+            "code": 0,
+            "state": "rest-c-after",
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "rest/r/post-read-a",
+          "production": {
+            "code": 0,
+            "state": "rest-r-after",
+            "documents": null
+          },
+          "local": {
+            "code": 0,
+            "state": "rest-r-after",
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "grpc/c/read-a",
+          "production": {
+            "code": 0,
+            "state": "rest-r-after",
+            "documents": null
+          },
+          "local": {
+            "code": 0,
+            "state": "rest-r-after",
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "grpc/c/read-after-pair",
+          "production": {
+            "code": 0,
+            "state": "grpc-c-conflict",
+            "documents": null
+          },
+          "local": {
+            "code": 0,
+            "state": "grpc-c-conflict",
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "grpc/c/post-read-a",
+          "production": {
+            "code": 0,
+            "state": "grpc-c-after",
+            "documents": null
+          },
+          "local": {
+            "code": 0,
+            "state": "grpc-c-after",
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "grpc/c/post-read-b",
+          "production": {
+            "code": 0,
+            "state": "grpc-c-unrelated",
+            "documents": null
+          },
+          "local": {
+            "code": 0,
+            "state": "grpc-c-unrelated",
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "grpc/r/read-a",
+          "production": {
+            "code": 0,
+            "state": "grpc-c-after",
+            "documents": null
+          },
+          "local": {
+            "code": 0,
+            "state": "grpc-c-after",
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "grpc/r/post-read-a",
+          "production": {
+            "code": 0,
+            "state": "grpc-r-after",
+            "documents": null
+          },
+          "local": {
+            "code": 0,
+            "state": "grpc-r-after",
+            "documents": null
+          },
+          "match": true
+        }
+      ],
+      "commitTimes": [
+        {
+          "site": "setup/create-a-and-b",
+          "production": {
+            "commitTime": true,
+            "relation": null
+          },
+          "local": {
+            "commitTime": true,
+            "relation": null
+          },
+          "match": true
+        },
+        {
+          "site": "rest/c/writer-b",
+          "production": {
+            "commitTime": true,
+            "relation": null
+          },
+          "local": {
+            "commitTime": true,
+            "relation": null
+          },
+          "match": true
+        },
+        {
+          "site": "rest/c/commit",
+          "production": {
+            "commitTime": true,
+            "relation": null
+          },
+          "local": {
+            "commitTime": true,
+            "relation": null
+          },
+          "match": true
+        },
+        {
+          "site": "rest/c/writer-a",
+          "production": {
+            "commitTime": true,
+            "relation": null
+          },
+          "local": {
+            "commitTime": true,
+            "relation": null
+          },
+          "match": true
+        },
+        {
+          "site": "rest/c/writer-after-commit",
+          "production": {
+            "commitTime": true,
+            "relation": null
+          },
+          "local": {
+            "commitTime": true,
+            "relation": null
+          },
+          "match": true
+        },
+        {
+          "site": "rest/r/writer-a",
+          "production": {
+            "commitTime": true,
+            "relation": null
+          },
+          "local": {
+            "commitTime": true,
+            "relation": null
+          },
+          "match": true
+        },
+        {
+          "site": "rest/r/writer-after-rollback",
+          "production": {
+            "commitTime": true,
+            "relation": null
+          },
+          "local": {
+            "commitTime": true,
+            "relation": null
+          },
+          "match": true
+        },
+        {
+          "site": "grpc/c/writer-b",
+          "production": {
+            "commitTime": true,
+            "relation": null
+          },
+          "local": {
+            "commitTime": true,
+            "relation": null
+          },
+          "match": true
+        },
+        {
+          "site": "grpc/c/commit",
+          "production": {
+            "commitTime": true,
+            "relation": null
+          },
+          "local": {
+            "commitTime": true,
+            "relation": null
+          },
+          "match": true
+        },
+        {
+          "site": "grpc/c/writer-a",
+          "production": {
+            "commitTime": true,
+            "relation": null
+          },
+          "local": {
+            "commitTime": true,
+            "relation": null
+          },
+          "match": true
+        },
+        {
+          "site": "grpc/c/writer-after-commit",
+          "production": {
+            "commitTime": true,
+            "relation": null
+          },
+          "local": {
+            "commitTime": true,
+            "relation": null
+          },
+          "match": true
+        },
+        {
+          "site": "grpc/r/writer-a",
+          "production": {
+            "commitTime": true,
+            "relation": null
+          },
+          "local": {
+            "commitTime": true,
+            "relation": null
+          },
+          "match": true
+        },
+        {
+          "site": "grpc/r/writer-after-rollback",
+          "production": {
+            "commitTime": true,
+            "relation": null
+          },
+          "local": {
+            "commitTime": true,
+            "relation": null
+          },
+          "match": true
+        }
+      ]
+    },
+    {
+      "recording": 2,
+      "productionFileSha256": "3ade56ca7ebb3526cae596a89e4a7b3d6c4ee1c49024810cb10eca4b05677822",
+      "mismatches": 0,
+      "cases": [
+        {
+          "caseId": "rest/c-writer-b",
+          "production": {
+            "code": 0,
+            "details": ""
+          },
+          "local": {
+            "code": 0,
+            "details": ""
+          },
+          "match": true
+        },
+        {
+          "caseId": "rest/c-commit",
+          "production": {
+            "code": 0,
+            "details": ""
+          },
+          "local": {
+            "code": 0,
+            "details": ""
+          },
+          "match": true
+        },
+        {
+          "caseId": "rest/c-writer-a",
+          "production": {
+            "code": 0,
+            "details": ""
+          },
+          "local": {
+            "code": 0,
+            "details": ""
+          },
+          "match": true
+        },
+        {
+          "caseId": "rest/c-writer-after-commit",
+          "production": {
+            "code": 0,
+            "details": ""
+          },
+          "local": {
+            "code": 0,
+            "details": ""
+          },
+          "match": true
+        },
+        {
+          "caseId": "rest/r-rollback",
+          "production": {
+            "code": 0,
+            "details": ""
+          },
+          "local": {
+            "code": 0,
+            "details": ""
+          },
+          "match": true
+        },
+        {
+          "caseId": "rest/r-writer-a",
+          "production": {
+            "code": 0,
+            "details": ""
+          },
+          "local": {
+            "code": 0,
+            "details": ""
+          },
+          "match": true
+        },
+        {
+          "caseId": "rest/r-writer-after-rollback",
+          "production": {
+            "code": 0,
+            "details": ""
+          },
+          "local": {
+            "code": 0,
+            "details": ""
+          },
+          "match": true
+        },
+        {
+          "caseId": "grpc/c-writer-b",
+          "production": {
+            "code": 0,
+            "details": ""
+          },
+          "local": {
+            "code": 0,
+            "details": ""
+          },
+          "match": true
+        },
+        {
+          "caseId": "grpc/c-commit",
+          "production": {
+            "code": 0,
+            "details": ""
+          },
+          "local": {
+            "code": 0,
+            "details": ""
+          },
+          "match": true
+        },
+        {
+          "caseId": "grpc/c-writer-a",
+          "production": {
+            "code": 0,
+            "details": ""
+          },
+          "local": {
+            "code": 0,
+            "details": ""
+          },
+          "match": true
+        },
+        {
+          "caseId": "grpc/c-writer-after-commit",
+          "production": {
+            "code": 0,
+            "details": ""
+          },
+          "local": {
+            "code": 0,
+            "details": ""
+          },
+          "match": true
+        },
+        {
+          "caseId": "grpc/r-rollback",
+          "production": {
+            "code": 0,
+            "details": ""
+          },
+          "local": {
+            "code": 0,
+            "details": ""
+          },
+          "match": true
+        },
+        {
+          "caseId": "grpc/r-writer-a",
+          "production": {
+            "code": 0,
+            "details": ""
+          },
+          "local": {
+            "code": 0,
+            "details": ""
+          },
+          "match": true
+        },
+        {
+          "caseId": "grpc/r-writer-after-rollback",
+          "production": {
+            "code": 0,
+            "details": ""
+          },
+          "local": {
+            "code": 0,
+            "details": ""
+          },
+          "match": true
+        }
+      ],
+      "reads": [
+        {
+          "site": "setup/absence-a",
+          "production": {
+            "code": 5,
+            "state": null,
+            "documents": null
+          },
+          "local": {
+            "code": 5,
+            "state": null,
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "setup/absence-b",
+          "production": {
+            "code": 5,
+            "state": null,
+            "documents": null
+          },
+          "local": {
+            "code": 5,
+            "state": null,
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "rest/c/read-a",
+          "production": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "local": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "rest/c/read-after-pair",
+          "production": {
+            "code": 0,
+            "state": "rest-c-conflict",
+            "documents": null
+          },
+          "local": {
+            "code": 0,
+            "state": "rest-c-conflict",
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "rest/c/post-read-a",
+          "production": {
+            "code": 0,
+            "state": "rest-c-after",
+            "documents": null
+          },
+          "local": {
+            "code": 0,
+            "state": "rest-c-after",
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "rest/c/post-read-b",
+          "production": {
+            "code": 0,
+            "state": "rest-c-unrelated",
+            "documents": null
+          },
+          "local": {
+            "code": 0,
+            "state": "rest-c-unrelated",
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "rest/r/read-a",
+          "production": {
+            "code": 0,
+            "state": "rest-c-after",
+            "documents": null
+          },
+          "local": {
+            "code": 0,
+            "state": "rest-c-after",
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "rest/r/post-read-a",
+          "production": {
+            "code": 0,
+            "state": "rest-r-after",
+            "documents": null
+          },
+          "local": {
+            "code": 0,
+            "state": "rest-r-after",
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "grpc/c/read-a",
+          "production": {
+            "code": 0,
+            "state": "rest-r-after",
+            "documents": null
+          },
+          "local": {
+            "code": 0,
+            "state": "rest-r-after",
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "grpc/c/read-after-pair",
+          "production": {
+            "code": 0,
+            "state": "grpc-c-conflict",
+            "documents": null
+          },
+          "local": {
+            "code": 0,
+            "state": "grpc-c-conflict",
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "grpc/c/post-read-a",
+          "production": {
+            "code": 0,
+            "state": "grpc-c-after",
+            "documents": null
+          },
+          "local": {
+            "code": 0,
+            "state": "grpc-c-after",
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "grpc/c/post-read-b",
+          "production": {
+            "code": 0,
+            "state": "grpc-c-unrelated",
+            "documents": null
+          },
+          "local": {
+            "code": 0,
+            "state": "grpc-c-unrelated",
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "grpc/r/read-a",
+          "production": {
+            "code": 0,
+            "state": "grpc-c-after",
+            "documents": null
+          },
+          "local": {
+            "code": 0,
+            "state": "grpc-c-after",
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "grpc/r/post-read-a",
+          "production": {
+            "code": 0,
+            "state": "grpc-r-after",
+            "documents": null
+          },
+          "local": {
+            "code": 0,
+            "state": "grpc-r-after",
+            "documents": null
+          },
+          "match": true
+        }
+      ],
+      "commitTimes": [
+        {
+          "site": "setup/create-a-and-b",
+          "production": {
+            "commitTime": true,
+            "relation": null
+          },
+          "local": {
+            "commitTime": true,
+            "relation": null
+          },
+          "match": true
+        },
+        {
+          "site": "rest/c/writer-b",
+          "production": {
+            "commitTime": true,
+            "relation": null
+          },
+          "local": {
+            "commitTime": true,
+            "relation": null
+          },
+          "match": true
+        },
+        {
+          "site": "rest/c/commit",
+          "production": {
+            "commitTime": true,
+            "relation": null
+          },
+          "local": {
+            "commitTime": true,
+            "relation": null
+          },
+          "match": true
+        },
+        {
+          "site": "rest/c/writer-a",
+          "production": {
+            "commitTime": true,
+            "relation": null
+          },
+          "local": {
+            "commitTime": true,
+            "relation": null
+          },
+          "match": true
+        },
+        {
+          "site": "rest/c/writer-after-commit",
+          "production": {
+            "commitTime": true,
+            "relation": null
+          },
+          "local": {
+            "commitTime": true,
+            "relation": null
+          },
+          "match": true
+        },
+        {
+          "site": "rest/r/writer-a",
+          "production": {
+            "commitTime": true,
+            "relation": null
+          },
+          "local": {
+            "commitTime": true,
+            "relation": null
+          },
+          "match": true
+        },
+        {
+          "site": "rest/r/writer-after-rollback",
+          "production": {
+            "commitTime": true,
+            "relation": null
+          },
+          "local": {
+            "commitTime": true,
+            "relation": null
+          },
+          "match": true
+        },
+        {
+          "site": "grpc/c/writer-b",
+          "production": {
+            "commitTime": true,
+            "relation": null
+          },
+          "local": {
+            "commitTime": true,
+            "relation": null
+          },
+          "match": true
+        },
+        {
+          "site": "grpc/c/commit",
+          "production": {
+            "commitTime": true,
+            "relation": null
+          },
+          "local": {
+            "commitTime": true,
+            "relation": null
+          },
+          "match": true
+        },
+        {
+          "site": "grpc/c/writer-a",
+          "production": {
+            "commitTime": true,
+            "relation": null
+          },
+          "local": {
+            "commitTime": true,
+            "relation": null
+          },
+          "match": true
+        },
+        {
+          "site": "grpc/c/writer-after-commit",
+          "production": {
+            "commitTime": true,
+            "relation": null
+          },
+          "local": {
+            "commitTime": true,
+            "relation": null
+          },
+          "match": true
+        },
+        {
+          "site": "grpc/r/writer-a",
+          "production": {
+            "commitTime": true,
+            "relation": null
+          },
+          "local": {
+            "commitTime": true,
+            "relation": null
+          },
+          "match": true
+        },
+        {
+          "site": "grpc/r/writer-after-rollback",
+          "production": {
+            "commitTime": true,
+            "relation": null
+          },
+          "local": {
+            "commitTime": true,
+            "relation": null
+          },
+          "match": true
+        }
+      ]
+    }
+  ],
+  "summary": {
+    "recordings": 2,
+    "rows": 82,
+    "mismatches": 0
+  },
+  "remainingBoundaries": [
+    "Raw REST bodyBytes, content-length and member-order layout were not retained; the record proves decoded response semantics, not wire layout.",
+    "The closure review and the final-artifact regression are separate conditions and stay open.",
+    "The artifact is the strict profile of the commit named; a later source change needs a new replay."
+  ]
+}

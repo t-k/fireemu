@@ -1,0 +1,1239 @@
+{
+  "schemaVersion": 1,
+  "kind": "fs-transaction-recorded-comparison-v1",
+  "parent": "FS-TRANSACTION",
+  "program": "FS-TRANSACTION-P01-LIFECYCLE",
+  "condition": [
+    "FS-TRANSACTION/read-write-lifecycle"
+  ],
+  "coverage": "PARTIAL",
+  "authorizesProduction": false,
+  "productionRequests": 0,
+  "profile": "strict",
+  "artifact": {
+    "sourceCommit": "da9480d7842b4600d064da7f1d8cef2914664ecf",
+    "binarySha256": "852816f997d99beaa82ef8f8c10253af4b04c536bf612725a76a06e08fde70cb"
+  },
+  "comparer": {
+    "sha256": "3313d77fb70da7695817d36b0485ed7cfcacabcd5beddf5201c74d2278d598f5",
+    "replayClock": "real"
+  },
+  "table": {
+    "path": "tools/compat-broad/fs-write-txn/fs_txn_table_p01.py",
+    "sha256": "32dca740275b0a6b5bb2c5a0bcbbd8546013aae0e87ce955740610730670d0a0"
+  },
+  "recordings": [
+    {
+      "recording": 1,
+      "productionFileSha256": "82395ae3806774df6ec35bf781f5b978a59528c6cf02433c899b576479acf559",
+      "mismatches": 0,
+      "cases": [
+        {
+          "caseId": "rest/l-batch",
+          "production": {
+            "code": 0,
+            "details": ""
+          },
+          "local": {
+            "code": 0,
+            "details": ""
+          },
+          "match": true
+        },
+        {
+          "caseId": "rest/l-commit",
+          "production": {
+            "code": 0,
+            "details": ""
+          },
+          "local": {
+            "code": 0,
+            "details": ""
+          },
+          "match": true
+        },
+        {
+          "caseId": "rest/l-commit-again",
+          "production": {
+            "code": 10,
+            "details": "The referenced transaction has expired or is no longer valid."
+          },
+          "local": {
+            "code": 10,
+            "details": "The referenced transaction has expired or is no longer valid."
+          },
+          "match": true
+        },
+        {
+          "caseId": "rest/l-get-after-commit",
+          "production": {
+            "code": 10,
+            "details": "The referenced transaction has expired or is no longer valid."
+          },
+          "local": {
+            "code": 10,
+            "details": "The referenced transaction has expired or is no longer valid."
+          },
+          "match": true
+        },
+        {
+          "caseId": "rest/l-batch-after-commit",
+          "production": {
+            "code": 10,
+            "details": "The referenced transaction has expired or is no longer valid."
+          },
+          "local": {
+            "code": 10,
+            "details": "The referenced transaction has expired or is no longer valid."
+          },
+          "match": true
+        },
+        {
+          "caseId": "rest/l-rollback-after-commit",
+          "production": {
+            "code": 10,
+            "details": "The referenced transaction has expired or is no longer valid."
+          },
+          "local": {
+            "code": 10,
+            "details": "The referenced transaction has expired or is no longer valid."
+          },
+          "match": true
+        },
+        {
+          "caseId": "rest/e-empty-commit",
+          "production": {
+            "code": 0,
+            "details": ""
+          },
+          "local": {
+            "code": 0,
+            "details": ""
+          },
+          "match": true
+        },
+        {
+          "caseId": "rest/e-commit-after-empty",
+          "production": {
+            "code": 10,
+            "details": "The referenced transaction has expired or is no longer valid."
+          },
+          "local": {
+            "code": 10,
+            "details": "The referenced transaction has expired or is no longer valid."
+          },
+          "match": true
+        },
+        {
+          "caseId": "rest/e-get-after-empty",
+          "production": {
+            "code": 10,
+            "details": "The referenced transaction has expired or is no longer valid."
+          },
+          "local": {
+            "code": 10,
+            "details": "The referenced transaction has expired or is no longer valid."
+          },
+          "match": true
+        },
+        {
+          "caseId": "rest/r-rollback",
+          "production": {
+            "code": 0,
+            "details": ""
+          },
+          "local": {
+            "code": 0,
+            "details": ""
+          },
+          "match": true
+        },
+        {
+          "caseId": "rest/r-commit-after-rollback",
+          "production": {
+            "code": 10,
+            "details": "The referenced transaction has expired or is no longer valid."
+          },
+          "local": {
+            "code": 10,
+            "details": "The referenced transaction has expired or is no longer valid."
+          },
+          "match": true
+        },
+        {
+          "caseId": "rest/r-get-after-rollback",
+          "production": {
+            "code": 10,
+            "details": "The referenced transaction has expired or is no longer valid."
+          },
+          "local": {
+            "code": 10,
+            "details": "The referenced transaction has expired or is no longer valid."
+          },
+          "match": true
+        },
+        {
+          "caseId": "rest/r-batch-after-rollback",
+          "production": {
+            "code": 10,
+            "details": "The referenced transaction has expired or is no longer valid."
+          },
+          "local": {
+            "code": 10,
+            "details": "The referenced transaction has expired or is no longer valid."
+          },
+          "match": true
+        },
+        {
+          "caseId": "grpc/l-batch",
+          "production": {
+            "code": 0,
+            "details": ""
+          },
+          "local": {
+            "code": 0,
+            "details": ""
+          },
+          "match": true
+        },
+        {
+          "caseId": "grpc/l-commit",
+          "production": {
+            "code": 0,
+            "details": ""
+          },
+          "local": {
+            "code": 0,
+            "details": ""
+          },
+          "match": true
+        },
+        {
+          "caseId": "grpc/l-commit-again",
+          "production": {
+            "code": 10,
+            "details": "The referenced transaction has expired or is no longer valid."
+          },
+          "local": {
+            "code": 10,
+            "details": "The referenced transaction has expired or is no longer valid."
+          },
+          "match": true
+        },
+        {
+          "caseId": "grpc/l-get-after-commit",
+          "production": {
+            "code": 10,
+            "details": "The referenced transaction has expired or is no longer valid."
+          },
+          "local": {
+            "code": 10,
+            "details": "The referenced transaction has expired or is no longer valid."
+          },
+          "match": true
+        },
+        {
+          "caseId": "grpc/e-empty-commit",
+          "production": {
+            "code": 0,
+            "details": ""
+          },
+          "local": {
+            "code": 0,
+            "details": ""
+          },
+          "match": true
+        },
+        {
+          "caseId": "grpc/e-commit-after-empty",
+          "production": {
+            "code": 10,
+            "details": "The referenced transaction has expired or is no longer valid."
+          },
+          "local": {
+            "code": 10,
+            "details": "The referenced transaction has expired or is no longer valid."
+          },
+          "match": true
+        },
+        {
+          "caseId": "grpc/r-rollback",
+          "production": {
+            "code": 0,
+            "details": ""
+          },
+          "local": {
+            "code": 0,
+            "details": ""
+          },
+          "match": true
+        },
+        {
+          "caseId": "grpc/r-commit-after-rollback",
+          "production": {
+            "code": 10,
+            "details": "The referenced transaction has expired or is no longer valid."
+          },
+          "local": {
+            "code": 10,
+            "details": "The referenced transaction has expired or is no longer valid."
+          },
+          "match": true
+        }
+      ],
+      "reads": [
+        {
+          "site": "setup/absence-a",
+          "production": {
+            "code": 5,
+            "state": null,
+            "documents": null
+          },
+          "local": {
+            "code": 5,
+            "state": null,
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "setup/absence-m",
+          "production": {
+            "code": 5,
+            "state": null,
+            "documents": null
+          },
+          "local": {
+            "code": 5,
+            "state": null,
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "rest/l/read-a",
+          "production": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "local": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "rest/l/batch",
+          "production": {
+            "code": 0,
+            "state": null,
+            "documents": {
+              "a": "created",
+              "m": null
+            }
+          },
+          "local": {
+            "code": 0,
+            "state": null,
+            "documents": {
+              "a": "created",
+              "m": null
+            }
+          },
+          "match": true
+        },
+        {
+          "site": "rest/l/get-after-commit",
+          "production": {
+            "code": 10,
+            "state": null,
+            "documents": null
+          },
+          "local": {
+            "code": 10,
+            "state": null,
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "rest/l/batch-after-commit",
+          "production": {
+            "code": 10,
+            "state": null,
+            "documents": null
+          },
+          "local": {
+            "code": 10,
+            "state": null,
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "rest/l/post-read-a",
+          "production": {
+            "code": 0,
+            "state": "rest-l-commit",
+            "documents": null
+          },
+          "local": {
+            "code": 0,
+            "state": "rest-l-commit",
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "rest/e/read-a",
+          "production": {
+            "code": 0,
+            "state": "rest-l-commit",
+            "documents": null
+          },
+          "local": {
+            "code": 0,
+            "state": "rest-l-commit",
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "rest/e/get-after-empty",
+          "production": {
+            "code": 10,
+            "state": null,
+            "documents": null
+          },
+          "local": {
+            "code": 10,
+            "state": null,
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "rest/e/post-read-a",
+          "production": {
+            "code": 0,
+            "state": "rest-l-commit",
+            "documents": null
+          },
+          "local": {
+            "code": 0,
+            "state": "rest-l-commit",
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "rest/r/read-a",
+          "production": {
+            "code": 0,
+            "state": "rest-l-commit",
+            "documents": null
+          },
+          "local": {
+            "code": 0,
+            "state": "rest-l-commit",
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "rest/r/get-after-rollback",
+          "production": {
+            "code": 10,
+            "state": null,
+            "documents": null
+          },
+          "local": {
+            "code": 10,
+            "state": null,
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "rest/r/batch-after-rollback",
+          "production": {
+            "code": 10,
+            "state": null,
+            "documents": null
+          },
+          "local": {
+            "code": 10,
+            "state": null,
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "rest/r/post-read-a",
+          "production": {
+            "code": 0,
+            "state": "rest-l-commit",
+            "documents": null
+          },
+          "local": {
+            "code": 0,
+            "state": "rest-l-commit",
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "grpc/l/batch",
+          "production": {
+            "code": 0,
+            "state": null,
+            "documents": {
+              "a": "rest-l-commit",
+              "m": null
+            }
+          },
+          "local": {
+            "code": 0,
+            "state": null,
+            "documents": {
+              "a": "rest-l-commit",
+              "m": null
+            }
+          },
+          "match": true
+        },
+        {
+          "site": "grpc/l/get-after-commit",
+          "production": {
+            "code": 10,
+            "state": null,
+            "documents": null
+          },
+          "local": {
+            "code": 10,
+            "state": null,
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "grpc/l/post-read-a",
+          "production": {
+            "code": 0,
+            "state": "grpc-l-commit",
+            "documents": null
+          },
+          "local": {
+            "code": 0,
+            "state": "grpc-l-commit",
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "grpc/e/post-read-a",
+          "production": {
+            "code": 0,
+            "state": "grpc-l-commit",
+            "documents": null
+          },
+          "local": {
+            "code": 0,
+            "state": "grpc-l-commit",
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "grpc/r/post-read-a",
+          "production": {
+            "code": 0,
+            "state": "grpc-l-commit",
+            "documents": null
+          },
+          "local": {
+            "code": 0,
+            "state": "grpc-l-commit",
+            "documents": null
+          },
+          "match": true
+        }
+      ],
+      "commitTimes": [
+        {
+          "site": "setup/create-a",
+          "production": {
+            "commitTime": true,
+            "relation": null
+          },
+          "local": {
+            "commitTime": true,
+            "relation": null
+          },
+          "match": true
+        },
+        {
+          "site": "rest/l/commit",
+          "production": {
+            "commitTime": true,
+            "relation": null
+          },
+          "local": {
+            "commitTime": true,
+            "relation": null
+          },
+          "match": true
+        },
+        {
+          "site": "rest/e/empty-commit",
+          "production": {
+            "commitTime": true,
+            "relation": null
+          },
+          "local": {
+            "commitTime": true,
+            "relation": null
+          },
+          "match": true
+        },
+        {
+          "site": "grpc/l/commit",
+          "production": {
+            "commitTime": true,
+            "relation": null
+          },
+          "local": {
+            "commitTime": true,
+            "relation": null
+          },
+          "match": true
+        },
+        {
+          "site": "grpc/e/empty-commit",
+          "production": {
+            "commitTime": false,
+            "relation": null
+          },
+          "local": {
+            "commitTime": false,
+            "relation": null
+          },
+          "match": true
+        }
+      ]
+    },
+    {
+      "recording": 2,
+      "productionFileSha256": "63d8a1725b9202929f22343823e597ae98b9e811bff4772379ae8cf1b88185d7",
+      "mismatches": 0,
+      "cases": [
+        {
+          "caseId": "rest/l-batch",
+          "production": {
+            "code": 0,
+            "details": ""
+          },
+          "local": {
+            "code": 0,
+            "details": ""
+          },
+          "match": true
+        },
+        {
+          "caseId": "rest/l-commit",
+          "production": {
+            "code": 0,
+            "details": ""
+          },
+          "local": {
+            "code": 0,
+            "details": ""
+          },
+          "match": true
+        },
+        {
+          "caseId": "rest/l-commit-again",
+          "production": {
+            "code": 10,
+            "details": "The referenced transaction has expired or is no longer valid."
+          },
+          "local": {
+            "code": 10,
+            "details": "The referenced transaction has expired or is no longer valid."
+          },
+          "match": true
+        },
+        {
+          "caseId": "rest/l-get-after-commit",
+          "production": {
+            "code": 10,
+            "details": "The referenced transaction has expired or is no longer valid."
+          },
+          "local": {
+            "code": 10,
+            "details": "The referenced transaction has expired or is no longer valid."
+          },
+          "match": true
+        },
+        {
+          "caseId": "rest/l-batch-after-commit",
+          "production": {
+            "code": 10,
+            "details": "The referenced transaction has expired or is no longer valid."
+          },
+          "local": {
+            "code": 10,
+            "details": "The referenced transaction has expired or is no longer valid."
+          },
+          "match": true
+        },
+        {
+          "caseId": "rest/l-rollback-after-commit",
+          "production": {
+            "code": 10,
+            "details": "The referenced transaction has expired or is no longer valid."
+          },
+          "local": {
+            "code": 10,
+            "details": "The referenced transaction has expired or is no longer valid."
+          },
+          "match": true
+        },
+        {
+          "caseId": "rest/e-empty-commit",
+          "production": {
+            "code": 0,
+            "details": ""
+          },
+          "local": {
+            "code": 0,
+            "details": ""
+          },
+          "match": true
+        },
+        {
+          "caseId": "rest/e-commit-after-empty",
+          "production": {
+            "code": 10,
+            "details": "The referenced transaction has expired or is no longer valid."
+          },
+          "local": {
+            "code": 10,
+            "details": "The referenced transaction has expired or is no longer valid."
+          },
+          "match": true
+        },
+        {
+          "caseId": "rest/e-get-after-empty",
+          "production": {
+            "code": 10,
+            "details": "The referenced transaction has expired or is no longer valid."
+          },
+          "local": {
+            "code": 10,
+            "details": "The referenced transaction has expired or is no longer valid."
+          },
+          "match": true
+        },
+        {
+          "caseId": "rest/r-rollback",
+          "production": {
+            "code": 0,
+            "details": ""
+          },
+          "local": {
+            "code": 0,
+            "details": ""
+          },
+          "match": true
+        },
+        {
+          "caseId": "rest/r-commit-after-rollback",
+          "production": {
+            "code": 10,
+            "details": "The referenced transaction has expired or is no longer valid."
+          },
+          "local": {
+            "code": 10,
+            "details": "The referenced transaction has expired or is no longer valid."
+          },
+          "match": true
+        },
+        {
+          "caseId": "rest/r-get-after-rollback",
+          "production": {
+            "code": 10,
+            "details": "The referenced transaction has expired or is no longer valid."
+          },
+          "local": {
+            "code": 10,
+            "details": "The referenced transaction has expired or is no longer valid."
+          },
+          "match": true
+        },
+        {
+          "caseId": "rest/r-batch-after-rollback",
+          "production": {
+            "code": 10,
+            "details": "The referenced transaction has expired or is no longer valid."
+          },
+          "local": {
+            "code": 10,
+            "details": "The referenced transaction has expired or is no longer valid."
+          },
+          "match": true
+        },
+        {
+          "caseId": "grpc/l-batch",
+          "production": {
+            "code": 0,
+            "details": ""
+          },
+          "local": {
+            "code": 0,
+            "details": ""
+          },
+          "match": true
+        },
+        {
+          "caseId": "grpc/l-commit",
+          "production": {
+            "code": 0,
+            "details": ""
+          },
+          "local": {
+            "code": 0,
+            "details": ""
+          },
+          "match": true
+        },
+        {
+          "caseId": "grpc/l-commit-again",
+          "production": {
+            "code": 10,
+            "details": "The referenced transaction has expired or is no longer valid."
+          },
+          "local": {
+            "code": 10,
+            "details": "The referenced transaction has expired or is no longer valid."
+          },
+          "match": true
+        },
+        {
+          "caseId": "grpc/l-get-after-commit",
+          "production": {
+            "code": 10,
+            "details": "The referenced transaction has expired or is no longer valid."
+          },
+          "local": {
+            "code": 10,
+            "details": "The referenced transaction has expired or is no longer valid."
+          },
+          "match": true
+        },
+        {
+          "caseId": "grpc/e-empty-commit",
+          "production": {
+            "code": 0,
+            "details": ""
+          },
+          "local": {
+            "code": 0,
+            "details": ""
+          },
+          "match": true
+        },
+        {
+          "caseId": "grpc/e-commit-after-empty",
+          "production": {
+            "code": 10,
+            "details": "The referenced transaction has expired or is no longer valid."
+          },
+          "local": {
+            "code": 10,
+            "details": "The referenced transaction has expired or is no longer valid."
+          },
+          "match": true
+        },
+        {
+          "caseId": "grpc/r-rollback",
+          "production": {
+            "code": 0,
+            "details": ""
+          },
+          "local": {
+            "code": 0,
+            "details": ""
+          },
+          "match": true
+        },
+        {
+          "caseId": "grpc/r-commit-after-rollback",
+          "production": {
+            "code": 10,
+            "details": "The referenced transaction has expired or is no longer valid."
+          },
+          "local": {
+            "code": 10,
+            "details": "The referenced transaction has expired or is no longer valid."
+          },
+          "match": true
+        }
+      ],
+      "reads": [
+        {
+          "site": "setup/absence-a",
+          "production": {
+            "code": 5,
+            "state": null,
+            "documents": null
+          },
+          "local": {
+            "code": 5,
+            "state": null,
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "setup/absence-m",
+          "production": {
+            "code": 5,
+            "state": null,
+            "documents": null
+          },
+          "local": {
+            "code": 5,
+            "state": null,
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "rest/l/read-a",
+          "production": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "local": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "rest/l/batch",
+          "production": {
+            "code": 0,
+            "state": null,
+            "documents": {
+              "a": "created",
+              "m": null
+            }
+          },
+          "local": {
+            "code": 0,
+            "state": null,
+            "documents": {
+              "a": "created",
+              "m": null
+            }
+          },
+          "match": true
+        },
+        {
+          "site": "rest/l/get-after-commit",
+          "production": {
+            "code": 10,
+            "state": null,
+            "documents": null
+          },
+          "local": {
+            "code": 10,
+            "state": null,
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "rest/l/batch-after-commit",
+          "production": {
+            "code": 10,
+            "state": null,
+            "documents": null
+          },
+          "local": {
+            "code": 10,
+            "state": null,
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "rest/l/post-read-a",
+          "production": {
+            "code": 0,
+            "state": "rest-l-commit",
+            "documents": null
+          },
+          "local": {
+            "code": 0,
+            "state": "rest-l-commit",
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "rest/e/read-a",
+          "production": {
+            "code": 0,
+            "state": "rest-l-commit",
+            "documents": null
+          },
+          "local": {
+            "code": 0,
+            "state": "rest-l-commit",
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "rest/e/get-after-empty",
+          "production": {
+            "code": 10,
+            "state": null,
+            "documents": null
+          },
+          "local": {
+            "code": 10,
+            "state": null,
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "rest/e/post-read-a",
+          "production": {
+            "code": 0,
+            "state": "rest-l-commit",
+            "documents": null
+          },
+          "local": {
+            "code": 0,
+            "state": "rest-l-commit",
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "rest/r/read-a",
+          "production": {
+            "code": 0,
+            "state": "rest-l-commit",
+            "documents": null
+          },
+          "local": {
+            "code": 0,
+            "state": "rest-l-commit",
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "rest/r/get-after-rollback",
+          "production": {
+            "code": 10,
+            "state": null,
+            "documents": null
+          },
+          "local": {
+            "code": 10,
+            "state": null,
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "rest/r/batch-after-rollback",
+          "production": {
+            "code": 10,
+            "state": null,
+            "documents": null
+          },
+          "local": {
+            "code": 10,
+            "state": null,
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "rest/r/post-read-a",
+          "production": {
+            "code": 0,
+            "state": "rest-l-commit",
+            "documents": null
+          },
+          "local": {
+            "code": 0,
+            "state": "rest-l-commit",
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "grpc/l/batch",
+          "production": {
+            "code": 0,
+            "state": null,
+            "documents": {
+              "a": "rest-l-commit",
+              "m": null
+            }
+          },
+          "local": {
+            "code": 0,
+            "state": null,
+            "documents": {
+              "a": "rest-l-commit",
+              "m": null
+            }
+          },
+          "match": true
+        },
+        {
+          "site": "grpc/l/get-after-commit",
+          "production": {
+            "code": 10,
+            "state": null,
+            "documents": null
+          },
+          "local": {
+            "code": 10,
+            "state": null,
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "grpc/l/post-read-a",
+          "production": {
+            "code": 0,
+            "state": "grpc-l-commit",
+            "documents": null
+          },
+          "local": {
+            "code": 0,
+            "state": "grpc-l-commit",
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "grpc/e/post-read-a",
+          "production": {
+            "code": 0,
+            "state": "grpc-l-commit",
+            "documents": null
+          },
+          "local": {
+            "code": 0,
+            "state": "grpc-l-commit",
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "grpc/r/post-read-a",
+          "production": {
+            "code": 0,
+            "state": "grpc-l-commit",
+            "documents": null
+          },
+          "local": {
+            "code": 0,
+            "state": "grpc-l-commit",
+            "documents": null
+          },
+          "match": true
+        }
+      ],
+      "commitTimes": [
+        {
+          "site": "setup/create-a",
+          "production": {
+            "commitTime": true,
+            "relation": null
+          },
+          "local": {
+            "commitTime": true,
+            "relation": null
+          },
+          "match": true
+        },
+        {
+          "site": "rest/l/commit",
+          "production": {
+            "commitTime": true,
+            "relation": null
+          },
+          "local": {
+            "commitTime": true,
+            "relation": null
+          },
+          "match": true
+        },
+        {
+          "site": "rest/e/empty-commit",
+          "production": {
+            "commitTime": true,
+            "relation": null
+          },
+          "local": {
+            "commitTime": true,
+            "relation": null
+          },
+          "match": true
+        },
+        {
+          "site": "grpc/l/commit",
+          "production": {
+            "commitTime": true,
+            "relation": null
+          },
+          "local": {
+            "commitTime": true,
+            "relation": null
+          },
+          "match": true
+        },
+        {
+          "site": "grpc/e/empty-commit",
+          "production": {
+            "commitTime": false,
+            "relation": null
+          },
+          "local": {
+            "commitTime": false,
+            "relation": null
+          },
+          "match": true
+        }
+      ]
+    }
+  ],
+  "summary": {
+    "recordings": 2,
+    "rows": 90,
+    "mismatches": 0
+  },
+  "remainingBoundaries": [
+    "Raw REST bodyBytes, content-length and member-order layout were not retained; the record proves decoded response semantics, not wire layout.",
+    "The closure review and the final-artifact regression are separate conditions and stay open.",
+    "The artifact is the strict profile of the commit named; a later source change needs a new replay."
+  ]
+}

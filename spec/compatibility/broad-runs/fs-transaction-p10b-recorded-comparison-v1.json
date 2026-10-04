@@ -1,0 +1,843 @@
+{
+  "schemaVersion": 1,
+  "kind": "fs-transaction-recorded-comparison-v1",
+  "parent": "FS-TRANSACTION",
+  "program": "FS-TRANSACTION-P10-B-GRPC-BOUNDARY",
+  "condition": [
+    "FS-TRANSACTION/idle-expiry"
+  ],
+  "coverage": "PARTIAL",
+  "authorizesProduction": false,
+  "productionRequests": 0,
+  "profile": "strict",
+  "artifact": {
+    "sourceCommit": "da9480d7842b4600d064da7f1d8cef2914664ecf",
+    "binarySha256": "852816f997d99beaa82ef8f8c10253af4b04c536bf612725a76a06e08fde70cb"
+  },
+  "comparer": {
+    "sha256": "cd788ad83279453792d9518aaa73e1a898c3ef7433c6ed9ed50cf0baef203eab",
+    "replayClock": "virtual"
+  },
+  "asRecorded": [
+    {
+      "path": "tools/compat-broad/fs-write-txn/txn_boundary_grpc_program.py",
+      "commit": "05ee1703ac19828cec81becb31f891c283537a52",
+      "blob": "329f98d78802154861f6e9f65e0ac7c18c367e6e",
+      "sha256": "64ca3df00af2c1ad5d29bfa17aaa22b603eb45358b4712fe912787b359ef68f4"
+    },
+    {
+      "path": "tools/compat-broad/fs-write-txn/txn_boundary_grpc_transport.mjs",
+      "commit": "05ee1703ac19828cec81becb31f891c283537a52",
+      "blob": "a772783314312fcee62488ec64de662278346f68",
+      "sha256": "39f451bbc3970c0f47b81b9d63a8686e2367513bd0ce2e4387b1f12fdbd54819"
+    }
+  ],
+  "recordings": [
+    {
+      "recording": 1,
+      "productionFileSha256": "4f4e65c0426d707776e2705e45e7ab59b7bd0c2b1ae42c95a25892424c9bd1b5",
+      "mismatches": 0,
+      "cases": [
+        {
+          "caseId": "grpc/commit-idle-65",
+          "production": {
+            "caseId": "grpc/commit-idle-65",
+            "rpc": "Commit",
+            "candidateSeconds": 65,
+            "code": 0,
+            "details": ""
+          },
+          "local": {
+            "caseId": "grpc/commit-idle-65",
+            "rpc": "Commit",
+            "candidateSeconds": 65,
+            "code": 0,
+            "details": ""
+          },
+          "match": true
+        },
+        {
+          "caseId": "grpc/commit-idle-66",
+          "production": {
+            "caseId": "grpc/commit-idle-66",
+            "rpc": "Commit",
+            "candidateSeconds": 66,
+            "code": 0,
+            "details": ""
+          },
+          "local": {
+            "caseId": "grpc/commit-idle-66",
+            "rpc": "Commit",
+            "candidateSeconds": 66,
+            "code": 0,
+            "details": ""
+          },
+          "match": true
+        },
+        {
+          "caseId": "grpc/commit-idle-67",
+          "production": {
+            "caseId": "grpc/commit-idle-67",
+            "rpc": "Commit",
+            "candidateSeconds": 67,
+            "code": 0,
+            "details": ""
+          },
+          "local": {
+            "caseId": "grpc/commit-idle-67",
+            "rpc": "Commit",
+            "candidateSeconds": 67,
+            "code": 0,
+            "details": ""
+          },
+          "match": true
+        },
+        {
+          "caseId": "grpc/commit-idle-68",
+          "production": {
+            "caseId": "grpc/commit-idle-68",
+            "rpc": "Commit",
+            "candidateSeconds": 68,
+            "code": 0,
+            "details": ""
+          },
+          "local": {
+            "caseId": "grpc/commit-idle-68",
+            "rpc": "Commit",
+            "candidateSeconds": 68,
+            "code": 0,
+            "details": ""
+          },
+          "match": true
+        },
+        {
+          "caseId": "grpc/commit-idle-69",
+          "production": {
+            "caseId": "grpc/commit-idle-69",
+            "rpc": "Commit",
+            "candidateSeconds": 69,
+            "code": 0,
+            "details": ""
+          },
+          "local": {
+            "caseId": "grpc/commit-idle-69",
+            "rpc": "Commit",
+            "candidateSeconds": 69,
+            "code": 0,
+            "details": ""
+          },
+          "match": true
+        },
+        {
+          "caseId": "grpc/commit-idle-70",
+          "production": {
+            "caseId": "grpc/commit-idle-70",
+            "rpc": "Commit",
+            "candidateSeconds": 70,
+            "code": 0,
+            "details": ""
+          },
+          "local": {
+            "caseId": "grpc/commit-idle-70",
+            "rpc": "Commit",
+            "candidateSeconds": 70,
+            "code": 0,
+            "details": ""
+          },
+          "match": true
+        }
+      ],
+      "reads": [
+        {
+          "site": "setup/absence",
+          "production": {
+            "site": "setup/absence",
+            "code": 5,
+            "state": null
+          },
+          "local": {
+            "site": "setup/absence",
+            "code": 5,
+            "state": null
+          },
+          "match": true
+        },
+        {
+          "site": "idle-65/read",
+          "production": {
+            "site": "idle-65/read",
+            "code": 0,
+            "state": "created"
+          },
+          "local": {
+            "site": "idle-65/read",
+            "code": 0,
+            "state": "created"
+          },
+          "match": true
+        },
+        {
+          "site": "idle-65/post-state",
+          "production": {
+            "site": "idle-65/post-state",
+            "code": 0,
+            "state": "accepted-idle-65"
+          },
+          "local": {
+            "site": "idle-65/post-state",
+            "code": 0,
+            "state": "accepted-idle-65"
+          },
+          "match": true
+        },
+        {
+          "site": "idle-66/read",
+          "production": {
+            "site": "idle-66/read",
+            "code": 0,
+            "state": "accepted-idle-65"
+          },
+          "local": {
+            "site": "idle-66/read",
+            "code": 0,
+            "state": "accepted-idle-65"
+          },
+          "match": true
+        },
+        {
+          "site": "idle-66/post-state",
+          "production": {
+            "site": "idle-66/post-state",
+            "code": 0,
+            "state": "accepted-idle-66"
+          },
+          "local": {
+            "site": "idle-66/post-state",
+            "code": 0,
+            "state": "accepted-idle-66"
+          },
+          "match": true
+        },
+        {
+          "site": "idle-67/read",
+          "production": {
+            "site": "idle-67/read",
+            "code": 0,
+            "state": "accepted-idle-66"
+          },
+          "local": {
+            "site": "idle-67/read",
+            "code": 0,
+            "state": "accepted-idle-66"
+          },
+          "match": true
+        },
+        {
+          "site": "idle-67/post-state",
+          "production": {
+            "site": "idle-67/post-state",
+            "code": 0,
+            "state": "accepted-idle-67"
+          },
+          "local": {
+            "site": "idle-67/post-state",
+            "code": 0,
+            "state": "accepted-idle-67"
+          },
+          "match": true
+        },
+        {
+          "site": "idle-68/read",
+          "production": {
+            "site": "idle-68/read",
+            "code": 0,
+            "state": "accepted-idle-67"
+          },
+          "local": {
+            "site": "idle-68/read",
+            "code": 0,
+            "state": "accepted-idle-67"
+          },
+          "match": true
+        },
+        {
+          "site": "idle-68/post-state",
+          "production": {
+            "site": "idle-68/post-state",
+            "code": 0,
+            "state": "accepted-idle-68"
+          },
+          "local": {
+            "site": "idle-68/post-state",
+            "code": 0,
+            "state": "accepted-idle-68"
+          },
+          "match": true
+        },
+        {
+          "site": "idle-69/read",
+          "production": {
+            "site": "idle-69/read",
+            "code": 0,
+            "state": "accepted-idle-68"
+          },
+          "local": {
+            "site": "idle-69/read",
+            "code": 0,
+            "state": "accepted-idle-68"
+          },
+          "match": true
+        },
+        {
+          "site": "idle-69/post-state",
+          "production": {
+            "site": "idle-69/post-state",
+            "code": 0,
+            "state": "accepted-idle-69"
+          },
+          "local": {
+            "site": "idle-69/post-state",
+            "code": 0,
+            "state": "accepted-idle-69"
+          },
+          "match": true
+        },
+        {
+          "site": "idle-70/read",
+          "production": {
+            "site": "idle-70/read",
+            "code": 0,
+            "state": "accepted-idle-69"
+          },
+          "local": {
+            "site": "idle-70/read",
+            "code": 0,
+            "state": "accepted-idle-69"
+          },
+          "match": true
+        },
+        {
+          "site": "idle-70/post-state",
+          "production": {
+            "site": "idle-70/post-state",
+            "code": 0,
+            "state": "accepted-idle-70"
+          },
+          "local": {
+            "site": "idle-70/post-state",
+            "code": 0,
+            "state": "accepted-idle-70"
+          },
+          "match": true
+        }
+      ],
+      "idleCandidates": [
+        {
+          "site": "idle-65/commit",
+          "production": {
+            "site": "idle-65/commit",
+            "seconds": 65,
+            "classification": "AFTER",
+            "thresholdSeconds": 60
+          },
+          "local": {
+            "site": "idle-65/commit",
+            "seconds": 65,
+            "classification": "AFTER",
+            "thresholdSeconds": 60
+          },
+          "match": true
+        },
+        {
+          "site": "idle-66/commit",
+          "production": {
+            "site": "idle-66/commit",
+            "seconds": 66,
+            "classification": "AFTER",
+            "thresholdSeconds": 60
+          },
+          "local": {
+            "site": "idle-66/commit",
+            "seconds": 66,
+            "classification": "AFTER",
+            "thresholdSeconds": 60
+          },
+          "match": true
+        },
+        {
+          "site": "idle-67/commit",
+          "production": {
+            "site": "idle-67/commit",
+            "seconds": 67,
+            "classification": "AFTER",
+            "thresholdSeconds": 60
+          },
+          "local": {
+            "site": "idle-67/commit",
+            "seconds": 67,
+            "classification": "AFTER",
+            "thresholdSeconds": 60
+          },
+          "match": true
+        },
+        {
+          "site": "idle-68/commit",
+          "production": {
+            "site": "idle-68/commit",
+            "seconds": 68,
+            "classification": "AFTER",
+            "thresholdSeconds": 60
+          },
+          "local": {
+            "site": "idle-68/commit",
+            "seconds": 68,
+            "classification": "AFTER",
+            "thresholdSeconds": 60
+          },
+          "match": true
+        },
+        {
+          "site": "idle-69/commit",
+          "production": {
+            "site": "idle-69/commit",
+            "seconds": 69,
+            "classification": "AFTER",
+            "thresholdSeconds": 60
+          },
+          "local": {
+            "site": "idle-69/commit",
+            "seconds": 69,
+            "classification": "AFTER",
+            "thresholdSeconds": 60
+          },
+          "match": true
+        },
+        {
+          "site": "idle-70/commit",
+          "production": {
+            "site": "idle-70/commit",
+            "seconds": 70,
+            "classification": "AFTER",
+            "thresholdSeconds": 60
+          },
+          "local": {
+            "site": "idle-70/commit",
+            "seconds": 70,
+            "classification": "AFTER",
+            "thresholdSeconds": 60
+          },
+          "match": true
+        }
+      ]
+    },
+    {
+      "recording": 2,
+      "productionFileSha256": "2141615b4b8d3c9eae1a5eb2ec564d2b3163b31e77ef5947c24001d09297c656",
+      "mismatches": 0,
+      "cases": [
+        {
+          "caseId": "grpc/commit-idle-65",
+          "production": {
+            "caseId": "grpc/commit-idle-65",
+            "rpc": "Commit",
+            "candidateSeconds": 65,
+            "code": 0,
+            "details": ""
+          },
+          "local": {
+            "caseId": "grpc/commit-idle-65",
+            "rpc": "Commit",
+            "candidateSeconds": 65,
+            "code": 0,
+            "details": ""
+          },
+          "match": true
+        },
+        {
+          "caseId": "grpc/commit-idle-66",
+          "production": {
+            "caseId": "grpc/commit-idle-66",
+            "rpc": "Commit",
+            "candidateSeconds": 66,
+            "code": 0,
+            "details": ""
+          },
+          "local": {
+            "caseId": "grpc/commit-idle-66",
+            "rpc": "Commit",
+            "candidateSeconds": 66,
+            "code": 0,
+            "details": ""
+          },
+          "match": true
+        },
+        {
+          "caseId": "grpc/commit-idle-67",
+          "production": {
+            "caseId": "grpc/commit-idle-67",
+            "rpc": "Commit",
+            "candidateSeconds": 67,
+            "code": 0,
+            "details": ""
+          },
+          "local": {
+            "caseId": "grpc/commit-idle-67",
+            "rpc": "Commit",
+            "candidateSeconds": 67,
+            "code": 0,
+            "details": ""
+          },
+          "match": true
+        },
+        {
+          "caseId": "grpc/commit-idle-68",
+          "production": {
+            "caseId": "grpc/commit-idle-68",
+            "rpc": "Commit",
+            "candidateSeconds": 68,
+            "code": 0,
+            "details": ""
+          },
+          "local": {
+            "caseId": "grpc/commit-idle-68",
+            "rpc": "Commit",
+            "candidateSeconds": 68,
+            "code": 0,
+            "details": ""
+          },
+          "match": true
+        },
+        {
+          "caseId": "grpc/commit-idle-69",
+          "production": {
+            "caseId": "grpc/commit-idle-69",
+            "rpc": "Commit",
+            "candidateSeconds": 69,
+            "code": 0,
+            "details": ""
+          },
+          "local": {
+            "caseId": "grpc/commit-idle-69",
+            "rpc": "Commit",
+            "candidateSeconds": 69,
+            "code": 0,
+            "details": ""
+          },
+          "match": true
+        },
+        {
+          "caseId": "grpc/commit-idle-70",
+          "production": {
+            "caseId": "grpc/commit-idle-70",
+            "rpc": "Commit",
+            "candidateSeconds": 70,
+            "code": 0,
+            "details": ""
+          },
+          "local": {
+            "caseId": "grpc/commit-idle-70",
+            "rpc": "Commit",
+            "candidateSeconds": 70,
+            "code": 0,
+            "details": ""
+          },
+          "match": true
+        }
+      ],
+      "reads": [
+        {
+          "site": "setup/absence",
+          "production": {
+            "site": "setup/absence",
+            "code": 5,
+            "state": null
+          },
+          "local": {
+            "site": "setup/absence",
+            "code": 5,
+            "state": null
+          },
+          "match": true
+        },
+        {
+          "site": "idle-65/read",
+          "production": {
+            "site": "idle-65/read",
+            "code": 0,
+            "state": "created"
+          },
+          "local": {
+            "site": "idle-65/read",
+            "code": 0,
+            "state": "created"
+          },
+          "match": true
+        },
+        {
+          "site": "idle-65/post-state",
+          "production": {
+            "site": "idle-65/post-state",
+            "code": 0,
+            "state": "accepted-idle-65"
+          },
+          "local": {
+            "site": "idle-65/post-state",
+            "code": 0,
+            "state": "accepted-idle-65"
+          },
+          "match": true
+        },
+        {
+          "site": "idle-66/read",
+          "production": {
+            "site": "idle-66/read",
+            "code": 0,
+            "state": "accepted-idle-65"
+          },
+          "local": {
+            "site": "idle-66/read",
+            "code": 0,
+            "state": "accepted-idle-65"
+          },
+          "match": true
+        },
+        {
+          "site": "idle-66/post-state",
+          "production": {
+            "site": "idle-66/post-state",
+            "code": 0,
+            "state": "accepted-idle-66"
+          },
+          "local": {
+            "site": "idle-66/post-state",
+            "code": 0,
+            "state": "accepted-idle-66"
+          },
+          "match": true
+        },
+        {
+          "site": "idle-67/read",
+          "production": {
+            "site": "idle-67/read",
+            "code": 0,
+            "state": "accepted-idle-66"
+          },
+          "local": {
+            "site": "idle-67/read",
+            "code": 0,
+            "state": "accepted-idle-66"
+          },
+          "match": true
+        },
+        {
+          "site": "idle-67/post-state",
+          "production": {
+            "site": "idle-67/post-state",
+            "code": 0,
+            "state": "accepted-idle-67"
+          },
+          "local": {
+            "site": "idle-67/post-state",
+            "code": 0,
+            "state": "accepted-idle-67"
+          },
+          "match": true
+        },
+        {
+          "site": "idle-68/read",
+          "production": {
+            "site": "idle-68/read",
+            "code": 0,
+            "state": "accepted-idle-67"
+          },
+          "local": {
+            "site": "idle-68/read",
+            "code": 0,
+            "state": "accepted-idle-67"
+          },
+          "match": true
+        },
+        {
+          "site": "idle-68/post-state",
+          "production": {
+            "site": "idle-68/post-state",
+            "code": 0,
+            "state": "accepted-idle-68"
+          },
+          "local": {
+            "site": "idle-68/post-state",
+            "code": 0,
+            "state": "accepted-idle-68"
+          },
+          "match": true
+        },
+        {
+          "site": "idle-69/read",
+          "production": {
+            "site": "idle-69/read",
+            "code": 0,
+            "state": "accepted-idle-68"
+          },
+          "local": {
+            "site": "idle-69/read",
+            "code": 0,
+            "state": "accepted-idle-68"
+          },
+          "match": true
+        },
+        {
+          "site": "idle-69/post-state",
+          "production": {
+            "site": "idle-69/post-state",
+            "code": 0,
+            "state": "accepted-idle-69"
+          },
+          "local": {
+            "site": "idle-69/post-state",
+            "code": 0,
+            "state": "accepted-idle-69"
+          },
+          "match": true
+        },
+        {
+          "site": "idle-70/read",
+          "production": {
+            "site": "idle-70/read",
+            "code": 0,
+            "state": "accepted-idle-69"
+          },
+          "local": {
+            "site": "idle-70/read",
+            "code": 0,
+            "state": "accepted-idle-69"
+          },
+          "match": true
+        },
+        {
+          "site": "idle-70/post-state",
+          "production": {
+            "site": "idle-70/post-state",
+            "code": 0,
+            "state": "accepted-idle-70"
+          },
+          "local": {
+            "site": "idle-70/post-state",
+            "code": 0,
+            "state": "accepted-idle-70"
+          },
+          "match": true
+        }
+      ],
+      "idleCandidates": [
+        {
+          "site": "idle-65/commit",
+          "production": {
+            "site": "idle-65/commit",
+            "seconds": 65,
+            "classification": "AFTER",
+            "thresholdSeconds": 60
+          },
+          "local": {
+            "site": "idle-65/commit",
+            "seconds": 65,
+            "classification": "AFTER",
+            "thresholdSeconds": 60
+          },
+          "match": true
+        },
+        {
+          "site": "idle-66/commit",
+          "production": {
+            "site": "idle-66/commit",
+            "seconds": 66,
+            "classification": "AFTER",
+            "thresholdSeconds": 60
+          },
+          "local": {
+            "site": "idle-66/commit",
+            "seconds": 66,
+            "classification": "AFTER",
+            "thresholdSeconds": 60
+          },
+          "match": true
+        },
+        {
+          "site": "idle-67/commit",
+          "production": {
+            "site": "idle-67/commit",
+            "seconds": 67,
+            "classification": "AFTER",
+            "thresholdSeconds": 60
+          },
+          "local": {
+            "site": "idle-67/commit",
+            "seconds": 67,
+            "classification": "AFTER",
+            "thresholdSeconds": 60
+          },
+          "match": true
+        },
+        {
+          "site": "idle-68/commit",
+          "production": {
+            "site": "idle-68/commit",
+            "seconds": 68,
+            "classification": "AFTER",
+            "thresholdSeconds": 60
+          },
+          "local": {
+            "site": "idle-68/commit",
+            "seconds": 68,
+            "classification": "AFTER",
+            "thresholdSeconds": 60
+          },
+          "match": true
+        },
+        {
+          "site": "idle-69/commit",
+          "production": {
+            "site": "idle-69/commit",
+            "seconds": 69,
+            "classification": "AFTER",
+            "thresholdSeconds": 60
+          },
+          "local": {
+            "site": "idle-69/commit",
+            "seconds": 69,
+            "classification": "AFTER",
+            "thresholdSeconds": 60
+          },
+          "match": true
+        },
+        {
+          "site": "idle-70/commit",
+          "production": {
+            "site": "idle-70/commit",
+            "seconds": 70,
+            "classification": "AFTER",
+            "thresholdSeconds": 60
+          },
+          "local": {
+            "site": "idle-70/commit",
+            "seconds": 70,
+            "classification": "AFTER",
+            "thresholdSeconds": 60
+          },
+          "match": true
+        }
+      ]
+    }
+  ],
+  "summary": {
+    "recordings": 2,
+    "rows": 50,
+    "mismatches": 0
+  },
+  "remainingBoundaries": [
+    "Raw REST bodyBytes, content-length and member-order layout were not retained; the record proves decoded response semantics, not wire layout.",
+    "The closure review and the final-artifact regression are separate conditions and stay open.",
+    "The artifact is the strict profile of the commit named; a later source change needs a new replay.",
+    "Idle and lifetime boundaries are judged by the intervals production narrowed: the idle threshold lies in [110.70, 122.96) s and the age at which an expired token is forgotten in (298.7, 302.2] s; strict's values (a 120 s idle limit, a 270 s total lifetime, 300 s of memory) lie inside them. The replay runs on the emulator's virtual clock and reproduces each recorded idle (the least the production token idled before the request) and each recorded token age, so a row at a boundary is compared at the measured production value, not at the nominal wait.",
+    "Replayed with the files named in asRecorded as they were when the recording was made (git show <commit>:<path>); the files in the repository today differ from them."
+  ]
+}

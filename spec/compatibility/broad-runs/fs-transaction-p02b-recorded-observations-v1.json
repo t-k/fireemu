@@ -1,0 +1,349 @@
+{
+  "schemaVersion": 1,
+  "kind": "fs-transaction-recorded-observations-v1",
+  "parent": "FS-TRANSACTION",
+  "condition": [
+    "FS-TRANSACTION/read-only-snapshot",
+    "FS-TRANSACTION/read-write-lifecycle"
+  ],
+  "coverage": "PARTIAL",
+  "authorizesProduction": false,
+  "decodedSemanticsValidated": true,
+  "rawRestWireLayoutValidated": false,
+  "normalization": "Only the declared run identities (nonce, owner marker, issued token values, project number) are replaced by roles; codes, diagnostics, read states, token ends and cleanup are the program's own projection.",
+  "remainingBoundaries": [
+    "Raw REST bodyBytes, content-length and member-order layout were not retained; the record proves decoded response semantics, not wire layout.",
+    "The closure review and the final-artifact regression are separate conditions and stay open."
+  ],
+  "corpora": [
+    {
+      "program": "FS-TRANSACTION-P02B-READONLY-REFUSED",
+      "packetName": "p02b-readonly-refused",
+      "corpusDigest": "82609a7a852a5bcb93ec8efbda5040ecbc1ec3dd728d3ab49663b560ea656e2e",
+      "recordings": 2,
+      "agree": true,
+      "productionFileSha256": [
+        "240d434d6f16111d7fd9c875e7799fbda79eb3b55d72a2a238f718d230798cc8",
+        "bd6b1e27d5aa319b3672a65c952d874a1ca31d9fe06780ae75750611742a7823"
+      ],
+      "projection": {
+        "program": "FS-TRANSACTION-P02B-READONLY-REFUSED",
+        "packetName": "p02b-readonly-refused",
+        "corpusDigest": "82609a7a852a5bcb93ec8efbda5040ecbc1ec3dd728d3ab49663b560ea656e2e",
+        "cases": [
+          {
+            "caseId": "rest/x-ro-write",
+            "transport": "rest",
+            "rpc": "Commit",
+            "code": 3,
+            "outcomeClass": "REFUSED",
+            "details": "Cannot modify entities in a read-only transaction."
+          },
+          {
+            "caseId": "rest/x-get-after",
+            "transport": "rest",
+            "rpc": "GetDocument",
+            "code": 3,
+            "outcomeClass": "REFUSED",
+            "details": "The referenced transaction has expired or is no longer valid."
+          },
+          {
+            "caseId": "rest/x-commit-empty",
+            "transport": "rest",
+            "rpc": "Commit",
+            "code": 3,
+            "outcomeClass": "REFUSED",
+            "details": "The referenced transaction has expired or is no longer valid."
+          },
+          {
+            "caseId": "rest/x-rollback",
+            "transport": "rest",
+            "rpc": "Rollback",
+            "code": 0,
+            "outcomeClass": "OK",
+            "details": ""
+          },
+          {
+            "caseId": "rest/y-ro-write",
+            "transport": "rest",
+            "rpc": "Commit",
+            "code": 3,
+            "outcomeClass": "REFUSED",
+            "details": "Cannot modify entities in a read-only transaction."
+          },
+          {
+            "caseId": "rest/y-commit-empty",
+            "transport": "rest",
+            "rpc": "Commit",
+            "code": 3,
+            "outcomeClass": "REFUSED",
+            "details": "The referenced transaction has expired or is no longer valid."
+          },
+          {
+            "caseId": "rest/y-get-after",
+            "transport": "rest",
+            "rpc": "GetDocument",
+            "code": 3,
+            "outcomeClass": "REFUSED",
+            "details": "The referenced transaction has expired or is no longer valid."
+          },
+          {
+            "caseId": "rest/y-rollback",
+            "transport": "rest",
+            "rpc": "Rollback",
+            "code": 0,
+            "outcomeClass": "OK",
+            "details": ""
+          },
+          {
+            "caseId": "grpc/x-ro-write",
+            "transport": "grpc",
+            "rpc": "Commit",
+            "code": 3,
+            "outcomeClass": "REFUSED",
+            "details": "Cannot modify entities in a read-only transaction."
+          },
+          {
+            "caseId": "grpc/x-get-after",
+            "transport": "grpc",
+            "rpc": "GetDocument",
+            "code": 3,
+            "outcomeClass": "REFUSED",
+            "details": "The referenced transaction has expired or is no longer valid."
+          },
+          {
+            "caseId": "grpc/x-commit-empty",
+            "transport": "grpc",
+            "rpc": "Commit",
+            "code": 3,
+            "outcomeClass": "REFUSED",
+            "details": "The referenced transaction has expired or is no longer valid."
+          },
+          {
+            "caseId": "grpc/x-rollback",
+            "transport": "grpc",
+            "rpc": "Rollback",
+            "code": 0,
+            "outcomeClass": "OK",
+            "details": ""
+          },
+          {
+            "caseId": "grpc/y-ro-write",
+            "transport": "grpc",
+            "rpc": "Commit",
+            "code": 3,
+            "outcomeClass": "REFUSED",
+            "details": "Cannot modify entities in a read-only transaction."
+          },
+          {
+            "caseId": "grpc/y-commit-empty",
+            "transport": "grpc",
+            "rpc": "Commit",
+            "code": 3,
+            "outcomeClass": "REFUSED",
+            "details": "The referenced transaction has expired or is no longer valid."
+          },
+          {
+            "caseId": "grpc/y-get-after",
+            "transport": "grpc",
+            "rpc": "GetDocument",
+            "code": 3,
+            "outcomeClass": "REFUSED",
+            "details": "The referenced transaction has expired or is no longer valid."
+          },
+          {
+            "caseId": "grpc/y-rollback",
+            "transport": "grpc",
+            "rpc": "Rollback",
+            "code": 0,
+            "outcomeClass": "OK",
+            "details": ""
+          },
+          {
+            "caseId": "rest/z-writer",
+            "transport": "rest",
+            "rpc": "Commit",
+            "code": 0,
+            "outcomeClass": "OK",
+            "details": ""
+          },
+          {
+            "caseId": "rest/z-first-read",
+            "transport": "rest",
+            "rpc": "GetDocument",
+            "code": 0,
+            "outcomeClass": "OK",
+            "details": ""
+          },
+          {
+            "caseId": "rest/z-commit",
+            "transport": "rest",
+            "rpc": "Commit",
+            "code": 0,
+            "outcomeClass": "OK",
+            "details": ""
+          },
+          {
+            "caseId": "rest/z-rollback",
+            "transport": "rest",
+            "rpc": "Rollback",
+            "code": 10,
+            "outcomeClass": "REFUSED",
+            "details": "The referenced transaction has expired or is no longer valid."
+          },
+          {
+            "caseId": "grpc/z-writer",
+            "transport": "grpc",
+            "rpc": "Commit",
+            "code": 0,
+            "outcomeClass": "OK",
+            "details": ""
+          },
+          {
+            "caseId": "grpc/z-first-read",
+            "transport": "grpc",
+            "rpc": "GetDocument",
+            "code": 0,
+            "outcomeClass": "OK",
+            "details": ""
+          },
+          {
+            "caseId": "grpc/z-commit",
+            "transport": "grpc",
+            "rpc": "Commit",
+            "code": 0,
+            "outcomeClass": "OK",
+            "details": ""
+          },
+          {
+            "caseId": "grpc/z-rollback",
+            "transport": "grpc",
+            "rpc": "Rollback",
+            "code": 10,
+            "outcomeClass": "REFUSED",
+            "details": "The referenced transaction has expired or is no longer valid."
+          }
+        ],
+        "reads": [
+          {
+            "site": "setup/absence-a",
+            "code": 5,
+            "state": null
+          },
+          {
+            "site": "rest/x/read-a",
+            "code": 0,
+            "state": "created"
+          },
+          {
+            "site": "rest/x/get-after",
+            "code": 3,
+            "state": null
+          },
+          {
+            "site": "rest/x/post-read-a",
+            "code": 0,
+            "state": "created"
+          },
+          {
+            "site": "rest/y/read-a",
+            "code": 0,
+            "state": "created"
+          },
+          {
+            "site": "rest/y/get-after",
+            "code": 3,
+            "state": null
+          },
+          {
+            "site": "rest/y/post-read-a",
+            "code": 0,
+            "state": "created"
+          },
+          {
+            "site": "grpc/x/read-a",
+            "code": 0,
+            "state": "created"
+          },
+          {
+            "site": "grpc/x/get-after",
+            "code": 3,
+            "state": null
+          },
+          {
+            "site": "grpc/x/post-read-a",
+            "code": 0,
+            "state": "created"
+          },
+          {
+            "site": "grpc/y/read-a",
+            "code": 0,
+            "state": "created"
+          },
+          {
+            "site": "grpc/y/get-after",
+            "code": 3,
+            "state": null
+          },
+          {
+            "site": "grpc/y/post-read-a",
+            "code": 0,
+            "state": "created"
+          },
+          {
+            "site": "rest/z/first-read",
+            "code": 0,
+            "state": "rest-z-w"
+          },
+          {
+            "site": "rest/z/post-read-a",
+            "code": 0,
+            "state": "rest-z-commit"
+          },
+          {
+            "site": "grpc/z/first-read",
+            "code": 0,
+            "state": "grpc-z-w"
+          },
+          {
+            "site": "grpc/z/post-read-a",
+            "code": 0,
+            "state": "grpc-z-commit"
+          }
+        ],
+        "tokens": {
+          "rest-x": {
+            "transport": "rest",
+            "state": "rolled-back"
+          },
+          "rest-y": {
+            "transport": "rest",
+            "state": "rolled-back"
+          },
+          "grpc-x": {
+            "transport": "grpc",
+            "state": "rolled-back"
+          },
+          "grpc-y": {
+            "transport": "grpc",
+            "state": "rolled-back"
+          },
+          "rest-z": {
+            "transport": "rest",
+            "state": "committed"
+          },
+          "grpc-z": {
+            "transport": "grpc",
+            "state": "committed"
+          }
+        },
+        "expectedStates": {
+          "a": "grpc-z-commit"
+        },
+        "cleanup": {
+          "absent": true
+        }
+      }
+    }
+  ]
+}

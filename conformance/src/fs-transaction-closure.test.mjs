@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { test } from "node:test";
 
 const closureUrl = new URL("../../spec/compatibility/closure/FS-TRANSACTION.json", import.meta.url);
@@ -44,6 +44,74 @@ const requiredScopeDecisions = new Set([
   "OT-1",
 ]);
 
+const recordedConditions = new Map([
+  ["FS-TRANSACTION/read-write-lifecycle", ["P01", "P02B"]],
+  ["FS-TRANSACTION/read-only-snapshot", ["P02", "P02B"]],
+  ["FS-TRANSACTION/read-time-snapshot", ["P03"]],
+  ["FS-TRANSACTION/read-set-conflict", ["P05"]],
+  ["FS-TRANSACTION/failed-commit-and-rollback", ["P08", "P09"]],
+  ["FS-TRANSACTION/retry-token-lifecycle", ["P09", "P13B"]],
+  ["FS-TRANSACTION/idle-expiry", ["P10-A", "P10-B", "P10-C", "P13A"]],
+  ["FS-TRANSACTION/total-lifetime-expiry", ["P11", "P12", "P13A"]],
+]);
+
+test("FS-TRANSACTION published records cover eight conditions and promote none", () => {
+  const closure = JSON.parse(readFileSync(closureUrl, "utf8"));
+  const root = new URL("../../", import.meta.url);
+  for (const condition of closure.conditions) {
+    const expected = recordedConditions.get(condition.conditionId);
+    if (!expected) {
+      assert.equal(condition.recordedComparison, undefined, condition.conditionId);
+      continue;
+    }
+    assert.equal(condition.status, "PRODUCTION_RECORDED", condition.conditionId);
+    assert.equal(condition.productionObservation, "RECORDED_TWICE_STRICT_COMPARED");
+    const recorded = condition.recordedComparison;
+    assert.equal(recorded.profile, "strict");
+    assert.equal(recorded.recordings, 2);
+    const programs = recorded.programs.map(({ program }) =>
+      program.replace(/^FS-TRANSACTION-/, "").split("-").slice(0, program.includes("P10-") ? 2 : 1).join("-"),
+    );
+    assert.deepEqual(programs, expected, condition.conditionId);
+    for (const entry of recorded.programs) {
+      assert.equal(entry.mismatches, 0, entry.program);
+      assert.ok(entry.rows > 0, entry.program);
+      const observations = JSON.parse(readFileSync(new URL(entry.observationsPath, root), "utf8"));
+      const comparison = JSON.parse(readFileSync(new URL(entry.comparisonPath, root), "utf8"));
+      assert.equal(observations.kind, "fs-transaction-recorded-observations-v1");
+      assert.equal(comparison.kind, "fs-transaction-recorded-comparison-v1");
+      assert.ok(observations.condition.includes(condition.conditionId), entry.program);
+      assert.ok(comparison.condition.includes(condition.conditionId), entry.program);
+      assert.equal(comparison.program, entry.program);
+      assert.equal(comparison.profile, "strict");
+      assert.equal(comparison.authorizesProduction, false);
+      assert.equal(comparison.productionRequests, 0);
+      assert.deepEqual(comparison.summary, { recordings: 2, rows: entry.rows, mismatches: 0 });
+      assert.equal(comparison.recordings.length, 2);
+      assert.equal(observations.corpora[0].agree, true);
+      assert.match(comparison.artifact.sourceCommit, /^[0-9a-f]{40}$/);
+      assert.match(comparison.artifact.binarySha256, /^[0-9a-f]{64}$/);
+      assert.ok(existsSync(new URL(entry.comparisonPath, root)));
+    }
+    if (["FS-TRANSACTION/idle-expiry", "FS-TRANSACTION/total-lifetime-expiry"].includes(condition.conditionId))
+      assert.match(recorded.boundaryRuling, /110\.70, 122\.96.*298\.7, 302\.2/);
+    assert.match(condition.note, /not COMPAT_VERIFIED/);
+    assert.doesNotMatch(condition.note, /not a published redacted record yet/i);
+  }
+  // one strict artifact per publication: every record names the same commit and binary
+  const artifacts = new Set(
+    [...recordedConditions.keys()].flatMap((id) =>
+      closure.conditions
+        .find(({ conditionId }) => conditionId === id)
+        .recordedComparison.programs.map(({ comparisonPath }) => {
+          const { artifact } = JSON.parse(readFileSync(new URL(comparisonPath, root), "utf8"));
+          return `${artifact.sourceCommit} ${artifact.binarySha256}`;
+        }),
+    ),
+  );
+  assert.equal(artifacts.size, 1);
+});
+
 test("FS-TRANSACTION recorded REST subset leaves every frozen condition open", () => {
   const closure = JSON.parse(readFileSync(closureUrl, "utf8"));
   const partial = new Map([
@@ -64,8 +132,9 @@ test("FS-TRANSACTION recorded REST subset leaves every frozen condition open", (
       assert.equal(condition.partialEvidence.recordings, 2);
       assert.equal(condition.partialEvidence.caseIds.length, partial.get(condition.conditionId));
       assert.ok(condition.partialEvidence.remainingBoundaries.length);
-      assert.match(condition.partialEvidence.remainingBoundaries.join(" "), /gRPC/);
       observed.push(...condition.partialEvidence.caseIds);
+    } else if (recordedConditions.has(condition.conditionId)) {
+      assert.equal(condition.productionObservation, "RECORDED_TWICE_STRICT_COMPARED");
     } else {
       assert.equal(condition.productionObservation, "UNOBSERVED_BY_RECORDED_CORPUS");
     }
@@ -74,7 +143,7 @@ test("FS-TRANSACTION recorded REST subset leaves every frozen condition open", (
   assert.equal(new Set(observed).size, 13);
   assert.equal(closure.parentStatus, "IMPLEMENTING");
   assert.equal(closure.closureReview.decision, "PENDING");
-  assert.equal(closure.profileComparison.emulatorCompatibilityCheck, "PENDING_LOCAL_OBSERVATION");
+  assert.equal(closure.profileComparison.emulatorCompatibilityCheck, "SEPARATE_TRACK");
   assert.equal(closure.productionPlan.preparedCampaign.authorizesProduction, false);
   assert.deepEqual(closure.productionPlan.preparedCampaign.actualRequestsPerRecording, [75, 75]);
 });
@@ -179,7 +248,7 @@ test("FS-TRANSACTION proposal names every acceptance boundary without claiming c
     /PESSIMISTIC.*OPTIMISTIC/,
   );
   assert.equal(closure.profileComparison.profile, "strict");
-  assert.equal(closure.profileComparison.emulatorCompatibilityCheck, "PENDING_LOCAL_OBSERVATION");
+  assert.equal(closure.profileComparison.emulatorCompatibilityCheck, "SEPARATE_TRACK");
   assert.equal(
     closure.parentStatus === "COMPAT_VERIFIED",
     closure.conditions.every(({ status }) => status === "VERIFIED") &&

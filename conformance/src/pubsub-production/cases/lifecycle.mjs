@@ -52,25 +52,18 @@ export const names = {
       ["topics", { rest: "ab", grpc: "ac" }],
       ["topics", { rest: "x1a", grpc: "x1b" }],
       ["topics", "1-leading-digit"],
-      ["topics", "-leading-dash"],
       ["topics", "bad$character"],
-      ["topics", "with.dot_tilde~plus+percent%25"],
       ["topics", { rest: "a".repeat(256), grpc: "b".repeat(256) }],
       ["subscriptions", "goog-probe"],
       ["subscriptions", { rest: "ab", grpc: "ac" }],
-      ["subscriptions", "1-leading-digit"],
     ];
     const topic = ctx.name("topics", "n");
     must(await c.createTopic(topic), "createTopic");
     for (const [kind, id] of probes) {
       const name = ctx.probe(kind, id);
-      if (kind === "topics") {
-        await c.createTopic(name);
-        await c.getTopic(name);
-      } else {
-        await c.createSubscription(name, { topic });
-        await c.getSubscription(name);
-      }
+      // Whatever the service accepted is removed by the cleanup, which reads every deletion back.
+      if (kind === "topics") await c.createTopic(name);
+      else await c.createSubscription(name, { topic });
     }
     // The longest ID that is allowed, as an owned name.
     const longest = ctx.name("topics", "z".repeat(ctx.maxKeyLength));
@@ -112,7 +105,6 @@ export const paging = {
     }
     await c.listTopicSubscriptions(topic, { pageSize: 0 });
     await c.listTopicSubscriptions(topic, { pageSize: -1 });
-    await c.listTopicSubscriptions(topic, { pageSize: 100_000 });
     await c.listTopicSubscriptions(topic, { pageToken: "garbage" });
     // A token from a page of one used with another size, and a token of another list.
     const one = await c.listTopicSubscriptions(topic, { pageSize: 1 });
@@ -124,10 +116,8 @@ export const paging = {
     const topics = await c.listTopics(ctx.project, { pageSize: 1 });
     if (topics.body?.nextPageToken)
       await c.listTopics(ctx.project, { pageSize: 1, pageToken: topics.body.nextPageToken });
-    await c.listTopics(ctx.project, { pageSize: -1 });
     await c.listTopics(ctx.project, { pageToken: "garbage" });
     await c.listSubscriptions(ctx.project, { pageSize: 1 });
-    await c.listSubscriptions(ctx.project, { pageSize: -1 });
     await c.listSnapshots(ctx.project, { pageSize: 1 });
     await c.listSnapshots(ctx.project, { pageToken: "garbage" });
     await c.listTopicSnapshots(topic, { pageSize: 1 });

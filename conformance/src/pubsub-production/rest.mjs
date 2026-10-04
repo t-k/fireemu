@@ -65,12 +65,13 @@ export function createRest({
         });
         const parsed = parseBody(await reply.text());
         response = { status: reply.status, body: parsed };
-        // A status below 200, a redirect, a server error, and a success whose body is not JSON do not
+        // A status below 200, a redirect, a server error (other than 501, which says the method is not
+        // implemented and so was not applied), and a success whose body is not JSON do not
         // say what was done.
         if (
           reply.status < 200 ||
           (reply.status >= 300 && reply.status < 400) ||
-          reply.status >= 500 ||
+          (reply.status >= 500 && reply.status !== 501) ||
           (reply.status < 300 && parsed !== null && typeof parsed.raw === "string")
         )
           response.unknown = true;

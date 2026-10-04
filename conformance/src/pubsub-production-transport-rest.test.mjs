@@ -199,3 +199,29 @@ test("the token provider runs gcloud without a shell, caches the token, and an e
       error.message === "gcloud could not print an access token" && !error.message.includes(TOKEN),
   );
 });
+
+test("which statuses say what was done: a 501 does (the method was not applied), other 5xx, redirects and a non-JSON success do not", async () => {
+  const classify = async (status, text) => {
+    const capture = createCapture({ journal: { write() {} } });
+    const rest = createRest({
+      base: "http://127.0.0.1:1",
+      budget: createBudget(1),
+      capture,
+      fetchImpl: async () => ({ status, text: async () => text }),
+    });
+    return (await rest.request({ label: {}, op: "x", method: "GET", path: "/a" })).unknown;
+  };
+  for (const [status, text, unknown] of [
+    [200, "{}", false],
+    [204, "", false],
+    [400, '{"error":{"status":"INVALID_ARGUMENT"}}', false],
+    [404, "{}", false],
+    [501, '{"error":{"status":"UNIMPLEMENTED"}}', false],
+    [500, "{}", true],
+    [503, "{}", true],
+    [302, "", true],
+    [100, "", true],
+    [200, "<html>", true],
+  ])
+    assert.equal(await classify(status, text), unknown, String(status));
+});

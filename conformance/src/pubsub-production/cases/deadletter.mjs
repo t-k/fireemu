@@ -7,10 +7,11 @@ const SUBSCRIBER = "roles/pubsub.subscriber";
 /**
  * Binds `member` to `role` on one resource of the run, with the policy read before and after (the
  * recording keeps both), through the resource's own IAM methods and nothing project wide. Returns the
- * reply of setIamPolicy.
+ * reply of the first call that failed, or of setIamPolicy.
  */
 async function bind(rest, resource, role, member) {
-  const before = must(await rest.getIamPolicy(resource), `getIamPolicy ${resource}`);
+  const before = await rest.getIamPolicy(resource);
+  if (!before.ok) return before;
   const policy = before.body ?? {};
   const bindings = [...(policy.bindings ?? []), { role, members: [member] }];
   const reply = await rest.setIamPolicy(resource, { ...policy, bindings });

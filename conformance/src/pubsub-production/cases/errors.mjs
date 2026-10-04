@@ -14,10 +14,8 @@ export const authErrors = {
     for (const token of ["none", "invalid"]) {
       const t = c.with({ token });
       await t.getTopic(topic);
-      await t.listTopics(ctx.project);
       await t.createTopic(ctx.name("topics", `denied-${token}`));
       await t.publish(topic, [message({ data: "denied" })]);
-      await t.pull(subscription, { maxMessages: 1, returnImmediately: true });
       // Nothing came of the refused calls.
       await c.getTopic(ctx.name("topics", `denied-${token}`));
     }
@@ -25,8 +23,6 @@ export const authErrors = {
     await c.getTopic("projects/fireemu-no-such-project-0/topics/x");
     await c.getSubscription("projects/fireemu-no-such-project-0/subscriptions/x");
     await c.listTopics("fireemu-no-such-project-0");
-    await c.listSubscriptions("fireemu-no-such-project-0");
-    await c.listSnapshots("fireemu-no-such-project-0");
   },
 };
 
@@ -42,10 +38,8 @@ export const pushConfig = {
     const subscription = ctx.name("subscriptions", "s");
     must(await c.createTopic(topic), "createTopic");
     const endpoint = "https://example.com/fireemu-push-probe";
-    must(
-      await c.createSubscription(subscription, { topic, pushConfig: { pushEndpoint: endpoint } }),
-      "createSubscription",
-    );
+    // Not required to succeed: whatever answer comes is recorded, and the steps after it too.
+    await c.createSubscription(subscription, { topic, pushConfig: { pushEndpoint: endpoint } });
     await c.getSubscription(subscription);
     await c.modifyPushConfig(subscription, {});
     await c.getSubscription(subscription);

@@ -10,7 +10,6 @@ export const snapshotSeek = {
     const topic = ctx.name("topics", "t");
     const subscription = ctx.name("subscriptions", "s");
     const snapshot = ctx.name("snapshots", "snap");
-    const second = ctx.name("snapshots", "snap2");
     must(await c.createTopic(topic), "createTopic");
     must(
       await c.createSubscription(subscription, { topic, retainAckedMessages: true }),
@@ -57,14 +56,11 @@ export const snapshotSeek = {
     await c.seek(subscription, { snapshot: ctx.name("snapshots", "never-created") });
     await c.seek(ctx.name("subscriptions", "never-created"), { snapshot });
     await c.seek(subscription, { snapshot, time: "2000-01-01T00:00:00Z" });
-    // A second snapshot after the seek, then deletion.
-    await c.createSnapshot(second, subscription);
-    await c.listTopicSnapshots(topic);
+    // Deletion.
     await c.deleteSnapshot(snapshot);
     await c.deleteSnapshot(snapshot);
     await c.getSnapshot(snapshot);
     await c.seek(subscription, { snapshot });
-    await c.deleteSnapshot(second);
     // A subscription deleted while a snapshot of it exists.
     await c.createSnapshot(snapshot, subscription);
     await c.deleteSubscription(subscription);

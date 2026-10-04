@@ -17,7 +17,7 @@ test("the arguments: an emulator target needs a host, a production target a proj
   assert.equal(emulator.production, false);
   assert.equal(emulator.host, "127.0.0.1:8085");
   assert.match(emulator.runId, /^[0-9a-f]{12}$/);
-  assert.equal(emulator.maxRequests, 700);
+  assert.equal(emulator.maxRequests, 750);
   assert.deepEqual(emulator.transports, ["rest", "grpc"]);
   assert.throws(() => parseArgs(["--target", "emulator", "--out", "o"], {}), /emulator-host/);
   assert.throws(() => parseArgs(["--target", "production", "--out", "o"]), /--project is required/);

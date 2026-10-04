@@ -21,7 +21,7 @@ import { exitCodeOf, runCases, selectCases } from "./runner.mjs";
 import { createTokenProvider } from "./token.mjs";
 
 const PRODUCTION = { rest: "https://pubsub.googleapis.com", grpc: "pubsub.googleapis.com:443" };
-const DEFAULT_MAX_REQUESTS = 700;
+const DEFAULT_MAX_REQUESTS = 750;
 const CLEANUP_BUDGET = 400;
 
 export function parseArgs(argv, env = {}) {

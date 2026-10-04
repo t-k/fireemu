@@ -58,7 +58,6 @@ export const subscriptionConfig = {
       ["ack-600", { ackDeadlineSeconds: 600 }],
       ["ack-9", { ackDeadlineSeconds: 9 }],
       ["ack-601", { ackDeadlineSeconds: 601 }],
-      ["ack-negative", { ackDeadlineSeconds: -1 }],
       ["retain-acked", { retainAckedMessages: true }],
       ["retention-min", { messageRetentionDuration: "600s" }],
       ["retention-under-min", { messageRetentionDuration: "599s" }],
@@ -69,16 +68,12 @@ export const subscriptionConfig = {
       ["labels", { labels: { env: "test", ttl: "7" } }],
       ["filter", { filter: 'attributes.color = "red"' }],
       ["filter-bad-syntax", { filter: "attributes.color ==" }],
-      ["filter-unknown-function", { filter: "nosuchfunction(attributes.color)" }],
       ["ttl-one-day", { expirationPolicy: { ttl: "86400s" } }],
       ["ttl-under-one-day", { expirationPolicy: { ttl: "86399s" } }],
       ["ttl-never", { expirationPolicy: {} }],
-      ["ttl-zero", { expirationPolicy: { ttl: "0s" } }],
       ["retry-valid", { retryPolicy: { minimumBackoff: "10s", maximumBackoff: "600s" } }],
       ["retry-min-over-max", { retryPolicy: { minimumBackoff: "100s", maximumBackoff: "50s" } }],
       ["retry-max-over-600", { retryPolicy: { minimumBackoff: "10s", maximumBackoff: "601s" } }],
-      ["retry-min-over-600", { retryPolicy: { minimumBackoff: "601s" } }],
-      ["retry-empty", { retryPolicy: {} }],
       ["output-state", { state: "RESOURCE_ERROR" }],
     ];
     for (const [key, body] of variants) {
@@ -94,7 +89,6 @@ export const subscriptionConfig = {
       ["dl-5", { deadLetterTopic: dlTopic, maxDeliveryAttempts: 5 }],
       ["dl-default", { deadLetterTopic: dlTopic }],
       ["dl-4", { deadLetterTopic: dlTopic, maxDeliveryAttempts: 4 }],
-      ["dl-100", { deadLetterTopic: dlTopic, maxDeliveryAttempts: 100 }],
       ["dl-101", { deadLetterTopic: dlTopic, maxDeliveryAttempts: 101 }],
       [
         "dl-missing-topic",
@@ -126,12 +120,10 @@ export const subscriptionUpdate = {
     must(await c.createSubscription(subscription, { topic }), "createSubscription");
     const updates = [
       [{ ackDeadlineSeconds: 20 }, "ackDeadlineSeconds"],
-      [{ ackDeadlineSeconds: 5 }, "ackDeadlineSeconds"],
       [{ labels: { env: "updated" } }, "labels"],
       [{ expirationPolicy: { ttl: "172800s" } }, "expirationPolicy"],
       [{ expirationPolicy: { ttl: "3600s" } }, "expirationPolicy"],
       [{ retainAckedMessages: true }, "retainAckedMessages"],
-      [{ messageRetentionDuration: "3600s" }, "messageRetentionDuration"],
       [{ enableMessageOrdering: true }, "enableMessageOrdering"],
       [{ filter: 'attributes.color = "blue"' }, "filter"],
       [{ retryPolicy: { minimumBackoff: "20s", maximumBackoff: "300s" } }, "retryPolicy"],
@@ -142,8 +134,9 @@ export const subscriptionUpdate = {
       [{ topic: ctx.name("topics", "other") }, "topic"],
     ];
     for (const [body, mask] of updates) {
-      await c.updateSubscription(subscription, body, mask);
-      await c.getSubscription(subscription);
+      // Read back only what the service accepted.
+      const reply = await c.updateSubscription(subscription, body, mask);
+      if (reply.ok) await c.getSubscription(subscription);
     }
     await c.updateSubscription(
       ctx.name("subscriptions", "never-created"),

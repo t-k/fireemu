@@ -49,7 +49,8 @@ export async function cleanup({
   const probes = new Set(ownership.probes());
   // A probe name the service refuses as invalid cannot exist: it answers INVALID_ARGUMENT to a read and
   // to a deletion, which is as gone as NOT_FOUND.
-  const goneCodes = (name) => (probes.has(name) ? ["NOT_FOUND", "INVALID_ARGUMENT"] : ["NOT_FOUND"]);
+  const goneCodes = (name) =>
+    probes.has(name) ? ["NOT_FOUND", "INVALID_ARGUMENT"] : ["NOT_FOUND"];
   const kindOf = (name) => name.split("/")[2];
   for (const [kind, list, get, remove] of KINDS) {
     const { found: names, failed } = await listOwned({

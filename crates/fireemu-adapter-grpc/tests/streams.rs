@@ -2880,9 +2880,8 @@ async fn emulator_profile_assigns_an_id_to_target_zero() {
     handle.abort();
 }
 
-/// Near misses of the emulator profile's id 0: an explicit id already in use is still refused
-/// (as the official emulator does), and a stream whose id 0 target names a missing index is
-/// not special-cased.
+/// Near miss of the emulator profile's id 0: an explicit id already in use is still refused (as
+/// the official emulator does).
 #[tokio::test]
 async fn emulator_profile_still_refuses_an_active_target_id() {
     let (mut client, handle) = start_configured(None, IndexValidationPolicy::Emulator).await;

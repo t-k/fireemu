@@ -313,7 +313,10 @@ test("the later run refuses to start before ten minutes, and without the ledger 
   writeFileSync(join(empty, `capture-${RUN}.jsonl`), "");
   const missing = [];
   assert.equal(
-    await main(a2(empty, svc.host), {}, io(missing), { now: () => T0 + MIN_A2_WAIT_MS }),
+    await main(a2(empty, svc.host), {}, io(missing), {
+      now: () => T0 + MIN_A2_WAIT_MS,
+      sleep: async () => {},
+    }),
     2,
   );
   assert.match(missing.join(""), /ENOENT|no such file/);
@@ -339,7 +342,10 @@ test("the later run works in the recording's own directory and settles by name: 
     [probeConflict, "create", "conflict"],
   ]);
   const before = readFileSync(join(dir, `capture-${RUN}.jsonl`), "utf8");
-  const code = await main(a2(dir, svc.host), {}, io(), { now: () => T0 + MIN_A2_WAIT_MS });
+  const code = await main(a2(dir, svc.host), {}, io(), {
+    now: () => T0 + MIN_A2_WAIT_MS,
+    sleep: async () => {},
+  });
   assert.equal(code, 0);
   const summary = summaryOf(dir);
   assert.deepEqual(
@@ -378,7 +384,10 @@ test("the later run is not closable while a name stays, and reports it", async (
   const dir = recording([[stuck, "create", "ok"]]);
   const out = join(mkdtempSync(join(tmpdir(), "pubsub-a2-out-")), "a2");
   mkdirSync(out, { recursive: true });
-  const code = await main(a2(dir, svc.host, out), {}, io(), { now: () => T0 + MIN_A2_WAIT_MS });
+  const code = await main(a2(dir, svc.host, out), {}, io(), {
+    now: () => T0 + MIN_A2_WAIT_MS,
+    sleep: async () => {},
+  });
   assert.equal(code, 1);
   const summary = summaryOf(out);
   assert.deepEqual(

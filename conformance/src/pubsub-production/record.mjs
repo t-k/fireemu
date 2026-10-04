@@ -133,6 +133,7 @@ export async function main(
   io = { stdout: process.stdout, stderr: process.stderr },
   deps = { now: Date.now },
 ) {
+  const wait = deps.sleep ?? sleep;
   let options;
   let cases = [];
   let issued = null;
@@ -215,7 +216,7 @@ export async function main(
           ownership,
           project: options.project,
           ledger,
-          sleep,
+          sleep: wait,
         }),
       };
     else
@@ -228,7 +229,7 @@ export async function main(
         pushState,
         capture,
         options,
-        sleep,
+        sleep: wait,
         ledger,
         isStopping: () => stopping,
       });

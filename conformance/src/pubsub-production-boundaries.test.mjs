@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import { createServer } from "node:http";
 import { mkdtempSync, readFileSync, readdirSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -237,9 +238,14 @@ test("a pull that reaches its count does not wait, and a waiting pull gets the d
 });
 
 /** A server that has no Pub/Sub resources: every list is empty, everything else is NOT_FOUND. */
-async function emptyServer() {
+async function emptyServer({ onFirstRequest } = {}) {
   const seen = [];
+  let first = true;
   const server = createServer((request, response) => {
+    if (first) {
+      first = false;
+      onFirstRequest?.();
+    }
     seen.push({
       method: request.method,
       url: request.url,
@@ -382,4 +388,53 @@ test("runCases without a stop check runs every case, and a spent budget is its o
   );
   assert.equal(notes.find((note) => note.note === "case-end").outcome, "budget");
   assert.equal(notes.find((note) => note.note === "case-start").case, "spent/rest");
+});
+
+test("main: a signal during a case run stops it between cases, after which the cleanup still runs", async (t) => {
+  const service = await emptyServer({
+    onFirstRequest: () => {
+      // The handlers are registered once each; emitting both leaves none behind.
+      process.emit("SIGTERM");
+      process.emit("SIGINT");
+    },
+  });
+  t.after(service.close);
+  const out = join(mkdtempSync(join(tmpdir(), "pubsub-main-")), "o");
+  const io = { stdout: { write: () => true }, stderr: { write: () => true } };
+  await main(
+    [
+      "--target",
+      "emulator",
+      "--emulator-host",
+      service.host,
+      "--out",
+      out,
+      "--only",
+      "lifecycle",
+      "--run-id",
+      RUN,
+    ],
+    {},
+    io,
+  );
+  const summary = JSON.parse(readFileSync(join(out, `summary-${RUN}.json`), "utf8"));
+  assert.equal(summary.stopped, "signal");
+  assert.deepEqual(
+    summary.cases.map((item) => item.transport),
+    ["rest"],
+  );
+  assert.equal(summary.closureReady, false);
+  assert.ok(summary.requests > 2, "the cleanup ran after the stop");
+});
+
+test("run as a program, a usage error exits 2 and names the option", () => {
+  const result = spawnSync(
+    process.execPath,
+    ["src/pubsub-production/record.mjs", "--target", "nope", "--out", "x"],
+    {
+      encoding: "utf8",
+    },
+  );
+  assert.equal(result.status, 2);
+  assert.match(result.stderr, /--target must be emulator or production/);
 });

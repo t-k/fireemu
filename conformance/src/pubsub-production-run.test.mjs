@@ -284,6 +284,8 @@ test("a StopClean stops the run after cleaning up, with its own exit code; a spe
     summary.cases.map((c) => c.outcome),
     ["stopped"],
   );
+  assert.equal(summary.cases[0].reason, "the service agent is missing");
+  assert.equal(summary.cases[0].reason, "the service agent is missing");
   assert.equal(summary.stopped, "the service agent is missing");
   assert.ok(summary.cleanup);
   assert.equal(exitCodeOf(summary), 3);

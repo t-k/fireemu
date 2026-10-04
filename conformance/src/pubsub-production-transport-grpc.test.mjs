@@ -200,6 +200,7 @@ test("a call is converted, sent with the credentials, converted back and capture
   assert.equal(lines[0].request.rpc, "Subscriber/CreateSubscription");
   assert.deepEqual(lines[0].request.body.expirationPolicy, { ttl: "86400s" });
   assert.equal(lines[0].response.code, "OK");
+  assert.equal(typeof lines[0].ms, "number");
   assert.equal(JSON.stringify(lines).includes(TOKEN), false);
   transport.close();
 });

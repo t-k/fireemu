@@ -38,7 +38,7 @@
     "spec/compatibility/closure/AUTH-MFA.json": "a1e72883bbb1974cdaa26013013c46487eb99ba11d6625916b9a4e5f33a59da7",
     "spec/compatibility/closure/FS-QUERY-INDEX.json": "8d1b27fa081c77aeedce616a8194c5e85118cc1549a031aeccea35478db38736",
     "spec/compatibility/closure/FUNCTIONS-HTTP.json": "3f38facca11152463a4b272120681eb630eb4c290737127a156e0c82c6a69e96",
-    "spec/compatibility/closure/STORAGE-OBJECT.json": "4352ed3c0bc5c4707da9f15cfffa0d7a375bf3409593ae4bb02591f39139f7b9",
+    "spec/compatibility/closure/STORAGE-OBJECT.json": "91fa25b3346e0110c5255f9467e40147659dc707d55599440cf56bdb6ebb9ad2",
     "spec/compatibility/closure/evidence/AUTH-ACCOUNT-comparison.json": "e0488696cb231c64066b43b674364dcac6b9ec3916a3153a7c0ec03d95489747",
     "spec/compatibility/closure/evidence/AUTH-ACCOUNT-saved-replay.json": "82229878d36b84be3b54f651f5051a1c09dfc5bca28a1e6fbd26579a9f9e522a",
     "spec/compatibility/closure/evidence/AUTH-ACTION-account-regression.json": "5af73b3363a0b41e53d4059ffcf3c5d7cd93a5317fa744efd3fc91fdc08c9d6f",

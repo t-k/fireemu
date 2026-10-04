@@ -28,14 +28,44 @@ const result = (status, reasons, extra = {}) => ({ status, reasons, ...extra });
 const incomplete = (...reasons) => result("INCOMPLETE", reasons.flat());
 const isObject = (value) => value !== null && typeof value === "object" && !Array.isArray(value);
 
+const isText = (value) => typeof value === "string" && value.length > 0;
+
+/**
+ * True when a frame names a resource the way resourceMatches reads it (session.mjs). A frame that
+ * names a resource no operation owns cannot be a subject's event; one that names none could be.
+ */
+function resourceIdentified(frame) {
+  const event = frame.event ?? {};
+  const data = event.data ?? {};
+  switch (frame.source) {
+    case "firestore":
+      return [
+        data.path,
+        data.before?.path,
+        data.after?.path,
+        event.subject,
+        event.context?.resource?.name,
+      ].some(isText);
+    case "storage":
+      return isText(data.name);
+    case "auth":
+      return isText(data.uid);
+    case "pubsub":
+      return [data.message?.messageId, data.messageId, event.context?.eventId].some(isText);
+    default:
+      return false;
+  }
+}
+
 /** For every production frame, the operations it matches by resource and by event time. */
 function attribute(production, toleranceMs) {
   const operations = production.passes.flatMap((pass) => pass.operations);
   const attribution = new Map();
   for (const frame of production.frames) {
-    const entry = { resourceOf: [], subjectOf: [], nearOf: [] };
+    const entry = { resourceOf: [], subjectOf: [], nearOf: [], identified: false };
     attribution.set(frame, entry);
     if (!isObject(frame.frame)) continue;
+    entry.identified = resourceIdentified(frame.frame);
     for (const op of operations) {
       if (!validMatchKey(op.matchKey) || !resourceMatches(frame.frame, op.matchKey)) continue;
       entry.resourceOf.push(op);
@@ -139,14 +169,13 @@ function observeProductionPass({
       ]);
     }
     if (reasons.length > 0) return incomplete([...new Set(reasons)]);
-    const foreign = handlerFrames.filter(
+    const unidentified = handlerFrames.filter(
       (frame) =>
-        attribution.get(frame).resourceOf.length === 0 &&
-        !(frame.logMs !== null && frame.logMs < op.startMs),
+        !attribution.get(frame).identified && !(frame.logMs !== null && frame.logMs < op.startMs),
     );
-    if (foreign.length > 0) {
+    if (unidentified.length > 0) {
       reasons.push(
-        `${label}: ${foreign.length} ${handler} frame(s) correlate with no operation during or after the observation`,
+        `${label}: ${unidentified.length} ${handler} frame(s) with no identifiable resource during or after the observation`,
       );
     }
     const others = new Set(pass.operations.filter((other) => other !== op));
@@ -416,7 +445,8 @@ export function compareRuns({
       ]
         .map(String)
         .sort(byText),
-      foreign: entries.filter((entry) => entry.resourceOf.length === 0).length,
+      unowned: entries.filter((entry) => entry.identified && entry.resourceOf.length === 0).length,
+      unidentified: entries.filter((entry) => !entry.identified).length,
       lifecycle: entries.filter(
         (entry) =>
           entry.resourceOf.length > 0 && entry.subjectOf.length === 0 && entry.nearOf.length === 0,

@@ -448,30 +448,58 @@ test("negative case: positive controls before the operation and after the window
   );
 });
 
-test("negative case: a frame of the handler that correlates with no operation leaves the absence unproven", () => {
-  const w = world();
+test("negative case: a frame of the handler whose resource cannot be identified leaves the absence unproven", () => {
   const s = T0 + 60_000;
-  w.run.frames.push(
-    frameEntry(
-      firestoreFrame({
-        handler: "fsCreatedV1",
-        generation: 1,
-        project: PRODUCTION_PROJECT,
-        path: "fe_events_primary/unknown",
-        eventId: uuid(8),
-        timeMs: s + 50_000,
-      }),
-      s + 51_000,
-    ),
+  const unowned = (path) =>
+    firestoreFrame({
+      handler: "fsCreatedV1",
+      generation: 1,
+      project: PRODUCTION_PROJECT,
+      path,
+      eventId: uuid(8),
+      timeMs: s + 50_000,
+    });
+  const owned = world();
+  owned.run.frames.push(frameEntry(unowned("fe_events_primary/unknown"), s + 51_000));
+  const ignored = compare(owned);
+  assert.equal(
+    rowById(ignored, "functions-events/firestore/routing#nonmatching-path#v1").status,
+    "MATCH",
+    "a frame for a resource no operation owns cannot be the subject's",
   );
-  const row = rowById(compare(w), "functions-events/firestore/routing#nonmatching-path#v1");
-  assert.equal(row.status, "INCOMPLETE");
-  assert.ok(
-    row.reasons.includes(
-      "production pass 1: 1 fsCreatedV1 frame(s) correlate with no operation during or after the observation",
-    ),
-  );
-  assert.equal(compare(w).frameAccounting.foreign, 1);
+  assert.equal(ignored.frameAccounting.unowned, 1);
+  assert.equal(ignored.frameAccounting.unidentified, 0);
+
+  for (const blank of [
+    (frame) => {
+      delete frame.event.data.path;
+      delete frame.event.context.resource.name;
+    },
+    (frame) => {
+      frame.source = "unknown";
+    },
+  ]) {
+    const w = world();
+    const frame = unowned("fe_events_primary/unknown");
+    blank(frame);
+    w.run.frames.push(frameEntry(frame, s + 51_000));
+    const result = compare(w);
+    const row = rowById(result, "functions-events/firestore/routing#nonmatching-path#v1");
+    assert.equal(row.status, "INCOMPLETE");
+    assert.ok(
+      row.reasons.includes(
+        "production pass 1: 1 fsCreatedV1 frame(s) with no identifiable resource during or after the observation",
+      ),
+    );
+    assert.equal(result.frameAccounting.unidentified, 1);
+    const before = world();
+    before.run.frames.push(frameEntry(frame, s + 9_000));
+    assert.equal(
+      rowById(compare(before), "functions-events/firestore/routing#nonmatching-path#v1").status,
+      "MATCH",
+      "an unidentified frame logged before the operation cannot be its event",
+    );
+  }
 });
 
 test("frames of the subject resource from other mutations are not the subject's; near ones are INCOMPLETE", () => {

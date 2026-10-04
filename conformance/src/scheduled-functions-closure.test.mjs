@@ -52,6 +52,15 @@ function validateInventory(closure) {
       "closure-gate": "PENDING_REVIEW",
     }[condition.evidenceType];
     assert.ok([pending, "PRODUCTION_RECORDED", "MISMATCH", "VERIFIED"].includes(condition.status));
+    assert.ok(
+      ["debt", "covered"].includes(condition.coverageStatus),
+      `${condition.conditionId}: coverageStatus ${JSON.stringify(condition.coverageStatus)}`,
+    );
+    assert.equal(
+      condition.coverageStatus === "covered",
+      condition.status === "VERIFIED",
+      `${condition.conditionId}: covered exactly when verified`,
+    );
     if (condition.status !== "VERIFIED") continue;
     const evidence = condition.evidence;
     assert.ok(evidence, `${condition.conditionId}: missing evidence`);
@@ -117,6 +126,16 @@ test("pending SCHEDULED-FUNCTIONS cannot be promoted", () => {
   if (closure.conditions.every(({ status }) => status === "VERIFIED")) return;
   closure.parentStatus = "COMPAT_VERIFIED";
   assert.throws(() => validateInventory(closure), /every condition must be verified/);
+});
+
+test("a mistyped or inconsistent coverageStatus is refused", () => {
+  const typo = readRepo(closurePath);
+  typo.conditions[0].coverageStatus = "coverd";
+  assert.throws(() => validateInventory(typo), /coverageStatus/);
+  const optimistic = readRepo(closurePath);
+  const pending = optimistic.conditions.find(({ status }) => status !== "VERIFIED");
+  pending.coverageStatus = "covered";
+  assert.throws(() => validateInventory(optimistic), /covered exactly when verified/);
 });
 
 test("dropping a frozen case or disguising local evidence is refused", () => {

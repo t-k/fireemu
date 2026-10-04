@@ -1,0 +1,1107 @@
+{
+  "schemaVersion": 1,
+  "parent": "SCHEDULED-FUNCTIONS",
+  "evidenceType": "fireemu-only",
+  "sourceCommit": "1688ee39aa424d806b47369c84702df4db6efaf2",
+  "artifactSha256": "ebb87bf3c1a01006f44332c09eab34c91c1603c2b52a5ec2d108f612a3500368",
+  "artifactBuiltFrom": "8218affac25038eae2f4b4aafd2cdcacc313d173",
+  "artifactNote": "The release binary fireemu was built at artifactBuiltFrom. sourceCommit differs from it by test code, documentation and closure files only.",
+  "runnerSha256": "56280f3e549ad5f47447f5e96feba2ae64a2af77eadc4b2bfd0e835d33dbe56a",
+  "runnerTreeManifestFormat": "For each file of tools/runner-node that the product bundles (every tracked file except *.test.mjs), sorted by file name in ascending ASCII order: the UTF-8 file name, TAB, the lowercase SHA-256 hex of the file bytes, LF. SHA-256 the concatenated bytes.",
+  "testTool": "cargo nextest run (profile pr), one test id per mapped test: path#name",
+  "claim": "Local tests only. No production behaviour is claimed for these conditions (scope decision S7).",
+  "mutation": {
+    "tool": "cargo-mutants 27.1.0 with nextest, plus 7 hand mutants",
+    "base": "origin/main da9480d78",
+    "note": "Mutation covers the source the nine conditions rest on (the scheduler functions of the runtime, the cron window search, the virtual clock, the scheduler configuration) and the lines this change touched. A caught mutant is one a test failed on or that hung (timeout); unviable mutants do not compile and are not counted as kills.",
+    "runs": [
+      {
+        "name": "runtime",
+        "scope": "on_clock_changed, admit_scheduled_run, run_schedule, FunctionsRuntime::reset, enqueue_schedule_run, is_idle, schedule_event in crates/fireemu-adapter-functions/src/runtime.rs",
+        "total": 58,
+        "caught": 55,
+        "missed": 3,
+        "unviable": 0,
+        "timeouts": 0,
+        "missedAnalysis": [
+          {
+            "mutant": "runtime.rs:2776 replace > with >= (all policy, cursor = now)",
+            "verdict": "equivalent",
+            "reason": "`if now > cursor { cursor = now }`: at equality the assignment stores the same value."
+          },
+          {
+            "mutant": "runtime.rs:2794 replace > with >= (latest and none policy, cursor = now)",
+            "verdict": "equivalent",
+            "reason": "The same assignment of an equal value."
+          },
+          {
+            "mutant": "runtime.rs:2857 replace < with <= (cursor = before)",
+            "verdict": "equivalent",
+            "reason": "`if before < cursor { cursor = before }`: at equality it assigns the same value."
+          }
+        ]
+      },
+      {
+        "name": "cron",
+        "scope": "runs_between_in, runs_between, window_in, next_after_in_counted, last_cron_run, count_cron_runs in crates/fireemu-core-functions/src/cron.rs",
+        "total": 170,
+        "caught": 125,
+        "missed": 4,
+        "unviable": 3,
+        "timeouts": 38,
+        "missedAnalysis": [
+          {
+            "mutant": "cron.rs:280 replace += with *= (interval branch step counter)",
+            "verdict": "equivalent",
+            "reason": "The interval branch of next_after_in_counted is reached only through next_after_in, which discards its step counter; window_in answers interval schedules without it."
+          },
+          {
+            "mutant": "cron.rs:287 replace < with <= (search horizon)",
+            "verdict": "equivalent",
+            "reason": "Differs only for a run exactly at the 8 x 366 day horizon. No cron schedule can place its only run there: a yearly run recurs within 366 days, and the day-of-month and day-of-week fields combine with OR."
+          },
+          {
+            "mutant": "cron.rs:307 replace + with * (c.hour + 1 to c.hour * 1)",
+            "verdict": "equivalent",
+            "reason": "The hour is not in the allowed set at this point, so next_from(hour) and next_from(hour + 1) give the same hour."
+          },
+          {
+            "mutant": "cron.rs:325 replace > with >= (utc > after)",
+            "verdict": "equivalent",
+            "reason": "Equality needs a civil minute after the start that maps to the instant `after` itself; a gap has no instant and a fold maps to its first occurrence, which is earlier."
+          }
+        ]
+      },
+      {
+        "name": "clock",
+        "scope": "VirtualClock::advance, advance_to, set, set_allow_backwards, backwards_sets, new in crates/fireemu-core-session/src/clock.rs",
+        "total": 15,
+        "caught": 15,
+        "missed": 0,
+        "unviable": 0,
+        "timeouts": 0
+      },
+      {
+        "name": "config",
+        "scope": "parse_scheduler selector (the selector also pulled in six unrelated mutants of daemon.rs and import_export.rs)",
+        "total": 22,
+        "caught": 15,
+        "missed": 7,
+        "unviable": 0,
+        "timeouts": 0,
+        "missedAnalysis": [
+          {
+            "mutant": "config.rs:3190 replace match guard mode == \"wall\" with true",
+            "verdict": "killed after a test change",
+            "reason": "The refusal message of a scheduler.clock that is not wall was not asserted. The test now asserts it; the diff-scoped run below kills the mutant."
+          },
+          {
+            "mutant": "six mutants in daemon.rs (HistoryLimits field) and import_export.rs (TenantMetadata and ProviderUserInfo fields)",
+            "verdict": "out of scope",
+            "reason": "Not code this change touches or the conditions rest on; the selector pulled them in."
+          }
+        ]
+      },
+      {
+        "name": "config-diff",
+        "scope": "mutants on the lines this change touched in crates/fireemu/src/config.rs",
+        "total": 9,
+        "caught": 9,
+        "missed": 0,
+        "unviable": 0,
+        "timeouts": 0
+      },
+      {
+        "name": "functions-diff",
+        "scope": "mutants on the lines this change touched in crates/fireemu/src/functions.rs (apply_default_time_zone)",
+        "total": 4,
+        "caught": 3,
+        "missed": 0,
+        "unviable": 1,
+        "timeouts": 0
+      },
+      {
+        "name": "review-round-runtime",
+        "scope": "on_clock_changed (the shutdown check moved under the lock), FunctionsRuntime::reset and the new reset_at in crates/fireemu-adapter-functions/src/runtime.rs; cargo-mutants --in-diff of the review-round commit",
+        "total": 3,
+        "caught": 3,
+        "missed": 0,
+        "unviable": 0,
+        "timeouts": 0,
+        "missedAnalysis": []
+      },
+      {
+        "name": "review-round-snapshots",
+        "scope": "the Functions snapshot hook (capture, restore) in crates/fireemu/src/snapshots.rs; cargo-mutants --in-diff of the review-round commit, test selection --bin fireemu (the integration tests need a git checkout that the mutation copy does not have)",
+        "total": 2,
+        "caught": 1,
+        "missed": 0,
+        "unviable": 1,
+        "timeouts": 0,
+        "missedAnalysis": [],
+        "unviableNote": "capture -> Ok(Default::default()) does not compile (SnapshotPart has no Default); the equivalent hand mutant below is killed."
+      }
+    ],
+    "handMutants": [
+      {
+        "id": "shutdown-run-schedule",
+        "description": "delete the shutdown check in run_schedule",
+        "status": "KILLED",
+        "killedBy": "fireemu-adapter-functions::runtime shutdown_closes_the_manual_and_the_clock_driven_schedule_paths"
+      },
+      {
+        "id": "shutdown-on-clock-changed",
+        "description": "delete the shutdown check in on_clock_changed",
+        "status": "KILLED",
+        "killedBy": "fireemu-adapter-functions::runtime shutdown_closes_the_manual_and_the_clock_driven_schedule_paths"
+      },
+      {
+        "id": "control-notify-always",
+        "description": "notify the functions runtime even when the clock move was refused",
+        "status": "KILLED",
+        "killedBy": "fireemu-adapter-http::control the_clock_routes_notify_functions_on_success_only_and_count_rewinds"
+      },
+      {
+        "id": "control-notify-never",
+        "description": "never notify the functions runtime of a clock move",
+        "status": "KILLED",
+        "killedBy": "fireemu-adapter-http::control the_clock_routes_notify_functions_on_success_only_and_count_rewinds"
+      },
+      {
+        "id": "control-advanceto-honours-opt-in",
+        "description": "let clock:advanceTo take allowBackwards",
+        "status": "KILLED",
+        "killedBy": "fireemu-adapter-http::control the_clock_routes_notify_functions_on_success_only_and_count_rewinds"
+      },
+      {
+        "id": "control-nonbool-opt-in",
+        "description": "treat a missing or non-boolean allowBackwards as an opt-in",
+        "status": "KILLED",
+        "killedBy": "fireemu-adapter-http::control the_clock_routes_notify_functions_on_success_only_and_count_rewinds"
+      },
+      {
+        "id": "config-scheduler-not-object",
+        "description": "ignore a scheduler section that is not an object",
+        "status": "KILLED",
+        "killedBy": "fireemu::bin/fireemu config::tests::scheduler_and_clock_settings_in_the_wrong_place_are_refused"
+      },
+      {
+        "id": "clock-changed-check-before-lock",
+        "description": "check the shutdown flag in on_clock_changed before taking the lock (the form before the review)",
+        "status": "KILLED",
+        "killedBy": "fireemu-adapter-functions runtime::schedule_capacity_tests::a_clock_move_that_waits_for_the_lock_while_shutdown_begins_enqueues_nothing"
+      },
+      {
+        "id": "functions-capture-marker",
+        "description": "the Functions snapshot hook captures () instead of the runtime's instant (so a restore uses the clock at restore time)",
+        "status": "KILLED",
+        "killedBy": "fireemu::bin/fireemu snapshots::tests::a_restore_resets_the_schedule_to_the_restored_clock"
+      }
+    ],
+    "firstPass": [
+      {
+        "name": "runtime",
+        "result": "58 mutants: 54 caught, 4 missed. One was real (`due.len() > chunk`: a cap filled exactly left a spurious backlog) and is now killed by a_cap_filled_exactly_leaves_no_backlog_and_one_more_run_leaves_one."
+      },
+      {
+        "name": "cron",
+        "result": "170 mutants: 105 caught, 30 missed, 32 timeouts. Tests were added for restricted months and leap days, cron-field latest and none, the DST gap and fold, a cap equal to the window, and the deterministic work counter; 26 of the 30 are now killed and four are equivalent (above)."
+      }
+    ],
+    "notRun": "The control crate's route function was not run through cargo-mutants: one mutant costs the whole adapter-http suite (about four minutes of baseline, more than ten minutes with a hang). Four hand mutants on its boundary conditions replace it.",
+    "noopControl": {
+      "description": "A semantic no-op edit (swapping the operands of max in on_clock_changed) run under the same command as the mutants.",
+      "status": "SURVIVED",
+      "summary": "32 tests run: 32 passed",
+      "note": "Every cargo-mutants run above also passes its unmutated baseline under the same command and test order (the first line of each mut-*.log)."
+    },
+    "killingTests": "mutants-killing-tests.json lists, for each caught mutant, the failing test names taken from its own log; timeouts have no test and are listed separately.",
+    "reviewRound": "2026-10-05 review round (M1 timezone-default binding, M2 overlap-policy back to PENDING, M3 README, S1 shutdown race, S2 coverageStatus check, S4 weak rows): the Rust changes are runtime.rs (on_clock_changed lock order, reset_at), snapshots.rs (Functions capture and restore) and tests; the two cargo-mutants runs above cover exactly those lines, base 035eba21e. Round 3 (review approve-with-conditions R1): the no-default half of the time-zone test now uses generation 2 schedules (production's v2 default is UTC); test code only, no Rust mutant applies."
+  },
+  "rows": [
+    {
+      "conditionId": "SCHEDULED-FUNCTIONS/clock-config",
+      "caseId": "daemon-clockStart",
+      "status": "PASS",
+      "tests": [
+        {
+          "id": "crates/fireemu/src/config.rs#daemon_clock_start_pins_the_clock_and_refuses_what_is_not_a_time",
+          "binary": "fireemu::bin/fireemu",
+          "result": "PASS"
+        },
+        {
+          "id": "crates/fireemu/src/config.rs#a_scheduler_or_clock_setting_that_is_not_a_string_is_refused",
+          "binary": "fireemu::bin/fireemu",
+          "result": "PASS"
+        }
+      ]
+    },
+    {
+      "conditionId": "SCHEDULED-FUNCTIONS/clock-config",
+      "caseId": "timezone-default",
+      "status": "PASS",
+      "tests": [
+        {
+          "id": "crates/fireemu/src/config.rs#scheduler_default_time_zone_is_validated_and_kept",
+          "binary": "fireemu::bin/fireemu",
+          "result": "PASS"
+        },
+        {
+          "id": "crates/fireemu/src/config.rs#a_scheduler_or_clock_setting_that_is_not_a_string_is_refused",
+          "binary": "fireemu::bin/fireemu",
+          "result": "PASS"
+        },
+        {
+          "id": "crates/fireemu/src/functions.rs#the_default_time_zone_goes_only_to_schedules_that_name_none",
+          "binary": "fireemu::bin/fireemu",
+          "result": "PASS"
+        },
+        {
+          "id": "crates/fireemu/src/functions.rs#a_configured_default_time_zone_moves_the_occurrences_of_a_schedule_that_names_none",
+          "binary": "fireemu::bin/fireemu",
+          "result": "PASS"
+        }
+      ]
+    },
+    {
+      "conditionId": "SCHEDULED-FUNCTIONS/clock-config",
+      "caseId": "scheduler-virtual",
+      "status": "PASS",
+      "tests": [
+        {
+          "id": "crates/fireemu/src/config.rs#scheduler_clock_accepts_virtual_and_refuses_wall_and_everything_else",
+          "binary": "fireemu::bin/fireemu",
+          "result": "PASS"
+        },
+        {
+          "id": "crates/fireemu-adapter-functions/src/runtime.rs#real_time_passing_without_a_clock_move_produces_no_run",
+          "binary": "fireemu-adapter-functions",
+          "result": "PASS"
+        },
+        {
+          "id": "crates/fireemu-adapter-http/tests/control.rs#the_clock_routes_notify_functions_on_success_only_and_count_rewinds",
+          "binary": "fireemu-adapter-http::control",
+          "result": "PASS"
+        }
+      ]
+    },
+    {
+      "conditionId": "SCHEDULED-FUNCTIONS/clock-config",
+      "caseId": "unsupported-wall-mode",
+      "status": "PASS",
+      "tests": [
+        {
+          "id": "crates/fireemu/src/config.rs#scheduler_clock_accepts_virtual_and_refuses_wall_and_everything_else",
+          "binary": "fireemu::bin/fireemu",
+          "result": "PASS"
+        },
+        {
+          "id": "crates/fireemu/src/config.rs#a_scheduler_or_clock_setting_that_is_not_a_string_is_refused",
+          "binary": "fireemu::bin/fireemu",
+          "result": "PASS"
+        }
+      ]
+    },
+    {
+      "conditionId": "SCHEDULED-FUNCTIONS/clock-config",
+      "caseId": "invalid-config-location",
+      "status": "PASS",
+      "tests": [
+        {
+          "id": "crates/fireemu/src/config.rs#scheduler_and_clock_settings_in_the_wrong_place_are_refused",
+          "binary": "fireemu::bin/fireemu",
+          "result": "PASS"
+        },
+        {
+          "id": "crates/fireemu/src/config.rs#a_section_that_is_not_an_object_is_refused",
+          "binary": "fireemu::bin/fireemu",
+          "result": "PASS"
+        }
+      ]
+    },
+    {
+      "conditionId": "SCHEDULED-FUNCTIONS/clock-forward-boundaries",
+      "caseId": "advance",
+      "status": "PASS",
+      "tests": [
+        {
+          "id": "crates/fireemu-core-session/tests/clock.rs#starts_at_configured_instant_and_advances",
+          "binary": "fireemu-core-session::clock",
+          "result": "PASS"
+        },
+        {
+          "id": "crates/fireemu-core-session/tests/clock.rs#advance_rejects_negative_duration_and_overflow",
+          "binary": "fireemu-core-session::clock",
+          "result": "PASS"
+        },
+        {
+          "id": "crates/fireemu-adapter-http/tests/control.rs#the_clock_routes_notify_functions_on_success_only_and_count_rewinds",
+          "binary": "fireemu-adapter-http::control",
+          "result": "PASS"
+        },
+        {
+          "id": "crates/fireemu-adapter-functions/tests/runtime.rs#catch_up_policies_keep_all_the_latest_or_no_due_runs",
+          "binary": "fireemu-adapter-functions::runtime",
+          "result": "PASS"
+        }
+      ]
+    },
+    {
+      "conditionId": "SCHEDULED-FUNCTIONS/clock-forward-boundaries",
+      "caseId": "advanceTo",
+      "status": "PASS",
+      "tests": [
+        {
+          "id": "crates/fireemu-core-session/tests/clock.rs#advance_to_only_moves_forward",
+          "binary": "fireemu-core-session::clock",
+          "result": "PASS"
+        },
+        {
+          "id": "crates/fireemu-adapter-http/tests/control.rs#the_clock_routes_notify_functions_on_success_only_and_count_rewinds",
+          "binary": "fireemu-adapter-http::control",
+          "result": "PASS"
+        },
+        {
+          "id": "crates/fireemu-adapter-functions/src/runtime.rs#a_forward_move_to_an_instant_produces_exactly_the_occurrences_up_to_it",
+          "binary": "fireemu-adapter-functions",
+          "result": "PASS"
+        }
+      ]
+    },
+    {
+      "conditionId": "SCHEDULED-FUNCTIONS/clock-forward-boundaries",
+      "caseId": "set-forward",
+      "status": "PASS",
+      "tests": [
+        {
+          "id": "crates/fireemu-adapter-http/tests/control.rs#the_clock_routes_notify_functions_on_success_only_and_count_rewinds",
+          "binary": "fireemu-adapter-http::control",
+          "result": "PASS"
+        },
+        {
+          "id": "crates/fireemu-adapter-functions/src/runtime.rs#a_forward_move_to_an_instant_produces_exactly_the_occurrences_up_to_it",
+          "binary": "fireemu-adapter-functions",
+          "result": "PASS"
+        }
+      ]
+    },
+    {
+      "conditionId": "SCHEDULED-FUNCTIONS/clock-forward-boundaries",
+      "caseId": "same-instant",
+      "status": "PASS",
+      "tests": [
+        {
+          "id": "crates/fireemu-core-session/tests/clock.rs#zero_advance_and_equal_set_are_not_backwards",
+          "binary": "fireemu-core-session::clock",
+          "result": "PASS"
+        },
+        {
+          "id": "crates/fireemu-adapter-functions/src/runtime.rs#a_forward_move_to_an_instant_produces_exactly_the_occurrences_up_to_it",
+          "binary": "fireemu-adapter-functions",
+          "result": "PASS"
+        },
+        {
+          "id": "crates/fireemu-adapter-functions/src/runtime.rs#an_automatic_run_refused_for_capacity_stays_due_and_runs_once_room_frees",
+          "binary": "fireemu-adapter-functions",
+          "result": "PASS"
+        }
+      ]
+    },
+    {
+      "conditionId": "SCHEDULED-FUNCTIONS/clock-forward-boundaries",
+      "caseId": "exact-minute",
+      "status": "PASS",
+      "tests": [
+        {
+          "id": "crates/fireemu-core-functions/tests/core.rs#cron_schedules_compute_the_next_run_in_a_fixed_offset_zone",
+          "binary": "fireemu-core-functions::core",
+          "result": "PASS"
+        },
+        {
+          "id": "crates/fireemu-core-functions/tests/core.rs#an_occurrence_is_in_the_window_that_ends_at_it_and_not_in_one_that_ends_a_nanosecond_before",
+          "binary": "fireemu-core-functions::core",
+          "result": "PASS"
+        },
+        {
+          "id": "crates/fireemu-adapter-functions/src/runtime.rs#an_occurrence_runs_at_its_instant_and_not_a_nanosecond_before",
+          "binary": "fireemu-adapter-functions",
+          "result": "PASS"
+        },
+        {
+          "id": "crates/fireemu-adapter-functions/src/runtime.rs#an_occurrence_at_the_start_instant_is_not_run",
+          "binary": "fireemu-adapter-functions",
+          "result": "PASS"
+        }
+      ]
+    },
+    {
+      "conditionId": "SCHEDULED-FUNCTIONS/clock-forward-boundaries",
+      "caseId": "boundary-before-after",
+      "status": "PASS",
+      "tests": [
+        {
+          "id": "crates/fireemu-core-functions/tests/core.rs#an_occurrence_is_in_the_window_that_ends_at_it_and_not_in_one_that_ends_a_nanosecond_before",
+          "binary": "fireemu-core-functions::core",
+          "result": "PASS"
+        },
+        {
+          "id": "crates/fireemu-adapter-functions/src/runtime.rs#an_occurrence_runs_at_its_instant_and_not_a_nanosecond_before",
+          "binary": "fireemu-adapter-functions",
+          "result": "PASS"
+        }
+      ]
+    },
+    {
+      "conditionId": "SCHEDULED-FUNCTIONS/catch-up-policy",
+      "caseId": "all",
+      "status": "PASS",
+      "tests": [
+        {
+          "id": "crates/fireemu-adapter-functions/tests/runtime.rs#catch_up_policies_keep_all_the_latest_or_no_due_runs",
+          "binary": "fireemu-adapter-functions::runtime",
+          "result": "PASS"
+        },
+        {
+          "id": "crates/fireemu-adapter-functions/src/runtime.rs#refused_schedule_runs_are_conserved_and_admitted_oldest_first",
+          "binary": "fireemu-adapter-functions",
+          "result": "PASS"
+        }
+      ]
+    },
+    {
+      "conditionId": "SCHEDULED-FUNCTIONS/catch-up-policy",
+      "caseId": "latest",
+      "status": "PASS",
+      "tests": [
+        {
+          "id": "crates/fireemu-adapter-functions/src/runtime.rs#latest_keeps_the_newest_due_occurrence_and_records_what_it_dropped",
+          "binary": "fireemu-adapter-functions",
+          "result": "PASS"
+        },
+        {
+          "id": "crates/fireemu-adapter-functions/src/runtime.rs#latest_and_none_also_answer_a_schedule_written_as_cron_fields",
+          "binary": "fireemu-adapter-functions",
+          "result": "PASS"
+        },
+        {
+          "id": "crates/fireemu-adapter-functions/tests/runtime.rs#catch_up_policies_keep_all_the_latest_or_no_due_runs",
+          "binary": "fireemu-adapter-functions::runtime",
+          "result": "PASS"
+        },
+        {
+          "id": "crates/fireemu-adapter-functions/tests/runtime.rs#catch_up_latest_and_none_stay_idle_beyond_the_cap",
+          "binary": "fireemu-adapter-functions::runtime",
+          "result": "PASS"
+        }
+      ]
+    },
+    {
+      "conditionId": "SCHEDULED-FUNCTIONS/catch-up-policy",
+      "caseId": "none",
+      "status": "PASS",
+      "tests": [
+        {
+          "id": "crates/fireemu-adapter-functions/tests/runtime.rs#catch_up_policies_keep_all_the_latest_or_no_due_runs",
+          "binary": "fireemu-adapter-functions::runtime",
+          "result": "PASS"
+        },
+        {
+          "id": "crates/fireemu-adapter-functions/src/runtime.rs#none_records_one_summary_and_a_repeated_notification_adds_none",
+          "binary": "fireemu-adapter-functions",
+          "result": "PASS"
+        },
+        {
+          "id": "crates/fireemu-adapter-functions/src/runtime.rs#latest_and_none_also_answer_a_schedule_written_as_cron_fields",
+          "binary": "fireemu-adapter-functions",
+          "result": "PASS"
+        }
+      ]
+    },
+    {
+      "conditionId": "SCHEDULED-FUNCTIONS/catch-up-policy",
+      "caseId": "small-cap",
+      "status": "PASS",
+      "tests": [
+        {
+          "id": "crates/fireemu-adapter-functions/tests/runtime.rs#full_catch_up_cap_still_wakes_delayed_events",
+          "binary": "fireemu-adapter-functions::runtime",
+          "result": "PASS"
+        },
+        {
+          "id": "crates/fireemu-adapter-functions/tests/runtime.rs#catch_up_conserves_schedule_runs_and_releases_retries",
+          "binary": "fireemu-adapter-functions::runtime",
+          "result": "PASS"
+        },
+        {
+          "id": "crates/fireemu-adapter-functions/src/runtime.rs#a_small_cap_applies_per_job_so_one_backlog_cannot_starve_another",
+          "binary": "fireemu-adapter-functions",
+          "result": "PASS"
+        },
+        {
+          "id": "crates/fireemu-adapter-functions/src/runtime.rs#a_cap_filled_exactly_leaves_no_backlog_and_one_more_run_leaves_one",
+          "binary": "fireemu-adapter-functions",
+          "result": "PASS"
+        }
+      ]
+    },
+    {
+      "conditionId": "SCHEDULED-FUNCTIONS/catch-up-policy",
+      "caseId": "cap-replenishment",
+      "status": "PASS",
+      "tests": [
+        {
+          "id": "crates/fireemu-adapter-functions/tests/runtime.rs#full_catch_up_cap_still_wakes_delayed_events",
+          "binary": "fireemu-adapter-functions::runtime",
+          "result": "PASS"
+        },
+        {
+          "id": "crates/fireemu-adapter-functions/tests/runtime.rs#catch_up_conserves_schedule_runs_and_releases_retries",
+          "binary": "fireemu-adapter-functions::runtime",
+          "result": "PASS"
+        }
+      ]
+    },
+    {
+      "conditionId": "SCHEDULED-FUNCTIONS/catch-up-policy",
+      "caseId": "long-jump",
+      "status": "PASS",
+      "tests": [
+        {
+          "id": "crates/fireemu-adapter-functions/tests/runtime.rs#catch_up_latest_and_none_stay_idle_beyond_the_cap",
+          "binary": "fireemu-adapter-functions::runtime",
+          "result": "PASS"
+        },
+        {
+          "id": "crates/fireemu-adapter-functions/src/runtime.rs#all_after_a_long_jump_admits_at_most_the_cap_per_job_and_keeps_the_rest_due",
+          "binary": "fireemu-adapter-functions",
+          "result": "PASS"
+        },
+        {
+          "id": "crates/fireemu-core-functions/tests/core.rs#a_large_window_costs_the_same_whatever_it_holds",
+          "binary": "fireemu-core-functions::core",
+          "result": "PASS"
+        },
+        {
+          "id": "crates/fireemu-core-functions/tests/core.rs#a_window_over_a_restricted_schedule_lists_counts_and_ends_on_the_right_runs",
+          "binary": "fireemu-core-functions::core",
+          "result": "PASS"
+        }
+      ]
+    },
+    {
+      "conditionId": "SCHEDULED-FUNCTIONS/catch-up-policy",
+      "caseId": "repeated-notification",
+      "status": "PASS",
+      "tests": [
+        {
+          "id": "crates/fireemu-adapter-functions/src/runtime.rs#an_automatic_run_refused_for_capacity_stays_due_and_runs_once_room_frees",
+          "binary": "fireemu-adapter-functions",
+          "result": "PASS"
+        },
+        {
+          "id": "crates/fireemu-adapter-functions/src/runtime.rs#none_records_one_summary_and_a_repeated_notification_adds_none",
+          "binary": "fireemu-adapter-functions",
+          "result": "PASS"
+        },
+        {
+          "id": "crates/fireemu-adapter-functions/src/runtime.rs#a_run_held_for_capacity_survives_a_reload_and_is_admitted_once",
+          "binary": "fireemu-adapter-functions",
+          "result": "PASS"
+        }
+      ]
+    },
+    {
+      "conditionId": "SCHEDULED-FUNCTIONS/catch-up-policy",
+      "caseId": "multiple-jobs",
+      "status": "PASS",
+      "tests": [
+        {
+          "id": "crates/fireemu-adapter-functions/tests/runtime.rs#catch_up_latest_and_none_stay_idle_beyond_the_cap",
+          "binary": "fireemu-adapter-functions::runtime",
+          "result": "PASS"
+        },
+        {
+          "id": "crates/fireemu-adapter-functions/src/runtime.rs#freed_capacity_goes_to_the_oldest_due_run_across_jobs",
+          "binary": "fireemu-adapter-functions",
+          "result": "PASS"
+        },
+        {
+          "id": "crates/fireemu-adapter-functions/src/runtime.rs#a_small_cap_applies_per_job_so_one_backlog_cannot_starve_another",
+          "binary": "fireemu-adapter-functions",
+          "result": "PASS"
+        }
+      ]
+    },
+    {
+      "conditionId": "SCHEDULED-FUNCTIONS/retry-delay-fairness",
+      "caseId": "full-catch-up-cap-releases-retry",
+      "status": "PASS",
+      "tests": [
+        {
+          "id": "crates/fireemu-adapter-functions/tests/runtime.rs#full_catch_up_cap_still_releases_due_retries",
+          "binary": "fireemu-adapter-functions::runtime",
+          "result": "PASS"
+        },
+        {
+          "id": "crates/fireemu-adapter-functions/tests/runtime.rs#catch_up_conserves_schedule_runs_and_releases_retries",
+          "binary": "fireemu-adapter-functions::runtime",
+          "result": "PASS"
+        }
+      ]
+    },
+    {
+      "conditionId": "SCHEDULED-FUNCTIONS/retry-delay-fairness",
+      "caseId": "delayed-fault-wakeup",
+      "status": "PASS",
+      "tests": [
+        {
+          "id": "crates/fireemu-adapter-functions/tests/runtime.rs#full_catch_up_cap_still_wakes_delayed_events",
+          "binary": "fireemu-adapter-functions::runtime",
+          "result": "PASS"
+        },
+        {
+          "id": "crates/fireemu-adapter-functions/tests/runtime.rs#scheduled_runs_obey_delivery_faults_and_delays_keep_their_outcome",
+          "binary": "fireemu-adapter-functions::runtime",
+          "result": "PASS"
+        }
+      ]
+    },
+    {
+      "conditionId": "SCHEDULED-FUNCTIONS/retry-delay-fairness",
+      "caseId": "completion-reentry",
+      "status": "PASS",
+      "tests": [
+        {
+          "id": "crates/fireemu-adapter-functions/tests/runtime.rs#full_catch_up_cap_still_wakes_delayed_events",
+          "binary": "fireemu-adapter-functions::runtime",
+          "result": "PASS"
+        },
+        {
+          "id": "crates/fireemu-adapter-functions/src/runtime.rs#a_completion_that_frees_capacity_delivers_the_refused_run",
+          "binary": "fireemu-adapter-functions",
+          "result": "PASS"
+        },
+        {
+          "id": "crates/fireemu-adapter-functions/src/runtime.rs#a_cancelled_reservation_that_frees_capacity_delivers_the_refused_run",
+          "binary": "fireemu-adapter-functions",
+          "result": "PASS"
+        }
+      ]
+    },
+    {
+      "conditionId": "SCHEDULED-FUNCTIONS/retry-delay-fairness",
+      "caseId": "awaitIdle-settles",
+      "status": "PASS",
+      "tests": [
+        {
+          "id": "crates/fireemu-adapter-functions/tests/runtime.rs#full_catch_up_cap_still_releases_due_retries",
+          "binary": "fireemu-adapter-functions::runtime",
+          "result": "PASS"
+        },
+        {
+          "id": "crates/fireemu-adapter-functions/tests/runtime.rs#full_catch_up_cap_still_wakes_delayed_events",
+          "binary": "fireemu-adapter-functions::runtime",
+          "result": "PASS"
+        },
+        {
+          "id": "crates/fireemu-adapter-functions/src/runtime.rs#the_session_is_not_idle_while_only_the_backlog_remains",
+          "binary": "fireemu-adapter-functions",
+          "result": "PASS"
+        }
+      ]
+    },
+    {
+      "conditionId": "SCHEDULED-FUNCTIONS/capacity-cursor",
+      "caseId": "automatic-admission-refusal-preserves-occurrence",
+      "status": "PASS",
+      "tests": [
+        {
+          "id": "crates/fireemu-adapter-functions/src/runtime.rs#an_automatic_run_refused_for_capacity_stays_due_and_runs_once_room_frees",
+          "binary": "fireemu-adapter-functions",
+          "result": "PASS"
+        },
+        {
+          "id": "crates/fireemu-adapter-functions/src/runtime.rs#duplicate_copies_of_a_schedule_run_are_admitted_all_or_none",
+          "binary": "fireemu-adapter-functions",
+          "result": "PASS"
+        },
+        {
+          "id": "crates/fireemu-adapter-functions/src/runtime.rs#refused_schedule_runs_are_conserved_and_admitted_oldest_first",
+          "binary": "fireemu-adapter-functions",
+          "result": "PASS"
+        }
+      ]
+    },
+    {
+      "conditionId": "SCHEDULED-FUNCTIONS/capacity-cursor",
+      "caseId": "capacity-recovery-delivers",
+      "status": "PASS",
+      "tests": [
+        {
+          "id": "crates/fireemu-adapter-functions/src/runtime.rs#an_automatic_run_refused_for_capacity_stays_due_and_runs_once_room_frees",
+          "binary": "fireemu-adapter-functions",
+          "result": "PASS"
+        },
+        {
+          "id": "crates/fireemu-adapter-functions/src/runtime.rs#a_completion_that_frees_capacity_delivers_the_refused_run",
+          "binary": "fireemu-adapter-functions",
+          "result": "PASS"
+        },
+        {
+          "id": "crates/fireemu-adapter-functions/src/runtime.rs#a_cancelled_reservation_that_frees_capacity_delivers_the_refused_run",
+          "binary": "fireemu-adapter-functions",
+          "result": "PASS"
+        }
+      ]
+    },
+    {
+      "conditionId": "SCHEDULED-FUNCTIONS/capacity-cursor",
+      "caseId": "manual-refusal-is-visible",
+      "status": "PASS",
+      "tests": [
+        {
+          "id": "crates/fireemu-adapter-functions/src/runtime.rs#a_manual_run_refused_for_capacity_is_an_error_and_enqueues_nothing",
+          "binary": "fireemu-adapter-functions",
+          "result": "PASS"
+        },
+        {
+          "id": "crates/fireemu-adapter-http/tests/control.rs#a_manual_run_refused_for_capacity_answers_resource_exhausted",
+          "binary": "fireemu-adapter-http::control",
+          "result": "PASS"
+        },
+        {
+          "id": "crates/fireemu/src/functions.rs#a_capacity_refusal_reaches_the_control_api_as_one",
+          "binary": "fireemu::bin/fireemu",
+          "result": "PASS"
+        }
+      ]
+    },
+    {
+      "conditionId": "SCHEDULED-FUNCTIONS/capacity-cursor",
+      "caseId": "per-job-fairness",
+      "status": "PASS",
+      "tests": [
+        {
+          "id": "crates/fireemu-adapter-functions/src/runtime.rs#a_later_run_of_a_job_never_overtakes_its_refused_run",
+          "binary": "fireemu-adapter-functions",
+          "result": "PASS"
+        },
+        {
+          "id": "crates/fireemu-adapter-functions/src/runtime.rs#freed_capacity_goes_to_the_oldest_due_run_across_jobs",
+          "binary": "fireemu-adapter-functions",
+          "result": "PASS"
+        },
+        {
+          "id": "crates/fireemu-adapter-functions/src/runtime.rs#a_newer_run_of_another_job_never_takes_the_slot_of_an_older_refused_run",
+          "binary": "fireemu-adapter-functions",
+          "result": "PASS"
+        },
+        {
+          "id": "crates/fireemu-adapter-functions/src/runtime.rs#refused_schedule_runs_are_conserved_and_admitted_oldest_first",
+          "binary": "fireemu-adapter-functions",
+          "result": "PASS"
+        }
+      ]
+    },
+    {
+      "conditionId": "SCHEDULED-FUNCTIONS/rewind-and-token-policy",
+      "caseId": "backwards-without-opt-in",
+      "status": "PASS",
+      "tests": [
+        {
+          "id": "crates/fireemu-adapter-http/tests/jwt_temporal_http.rs#a_clock_rewind_below_issuance_refuses_a_held_token_in_strict_until_the_clock_catches_up",
+          "binary": "fireemu-adapter-http::jwt_temporal_http",
+          "result": "PASS"
+        },
+        {
+          "id": "crates/fireemu-core-session/tests/clock.rs#set_backwards_requires_explicit_permission",
+          "binary": "fireemu-core-session::clock",
+          "result": "PASS"
+        },
+        {
+          "id": "crates/fireemu-adapter-http/tests/control.rs#the_clock_routes_notify_functions_on_success_only_and_count_rewinds",
+          "binary": "fireemu-adapter-http::control",
+          "result": "PASS"
+        }
+      ]
+    },
+    {
+      "conditionId": "SCHEDULED-FUNCTIONS/rewind-and-token-policy",
+      "caseId": "allowBackwards-counter",
+      "status": "PASS",
+      "tests": [
+        {
+          "id": "crates/fireemu-core-session/tests/clock.rs#set_backwards_requires_explicit_permission",
+          "binary": "fireemu-core-session::clock",
+          "result": "PASS"
+        },
+        {
+          "id": "crates/fireemu-core-session/tests/clock.rs#zero_advance_and_equal_set_are_not_backwards",
+          "binary": "fireemu-core-session::clock",
+          "result": "PASS"
+        },
+        {
+          "id": "crates/fireemu-adapter-http/tests/control.rs#the_clock_routes_notify_functions_on_success_only_and_count_rewinds",
+          "binary": "fireemu-adapter-http::control",
+          "result": "PASS"
+        }
+      ]
+    },
+    {
+      "conditionId": "SCHEDULED-FUNCTIONS/rewind-and-token-policy",
+      "caseId": "schedule-replay-cursor-policy",
+      "status": "PASS",
+      "tests": [
+        {
+          "id": "crates/fireemu-adapter-functions/src/runtime.rs#a_rewind_replays_nothing_until_the_clock_passes_the_old_cursor",
+          "binary": "fireemu-adapter-functions",
+          "result": "PASS"
+        },
+        {
+          "id": "crates/fireemu-adapter-functions/src/runtime.rs#a_reset_after_a_rewind_restarts_the_schedule_from_the_rewound_time",
+          "binary": "fireemu-adapter-functions",
+          "result": "PASS"
+        },
+        {
+          "id": "crates/fireemu/src/snapshots.rs#a_restore_resets_the_schedule_to_the_restored_clock",
+          "binary": "fireemu::bin/fireemu",
+          "result": "PASS"
+        }
+      ]
+    },
+    {
+      "conditionId": "SCHEDULED-FUNCTIONS/rewind-and-token-policy",
+      "caseId": "future-issued-held-token",
+      "status": "PASS",
+      "tests": [
+        {
+          "id": "crates/fireemu-adapter-http/tests/jwt_temporal_http.rs#a_clock_rewind_below_issuance_refuses_a_held_token_in_strict_until_the_clock_catches_up",
+          "binary": "fireemu-adapter-http::jwt_temporal_http",
+          "result": "PASS"
+        },
+        {
+          "id": "crates/fireemu-adapter-http/tests/jwt_temporal_http.rs#a_clock_rewind_below_issuance_keeps_a_held_token_usable_in_the_emulator_profile",
+          "binary": "fireemu-adapter-http::jwt_temporal_http",
+          "result": "PASS"
+        },
+        {
+          "id": "crates/fireemu-adapter-http/tests/jwt_temporal_http.rs#a_held_token_verifies_exactly_inside_its_issuance_window_after_any_clock_set",
+          "binary": "fireemu-adapter-http::jwt_temporal_http",
+          "result": "PASS"
+        },
+        {
+          "id": "crates/fireemu-adapter-grpc/tests/rules.rs#a_future_dated_signed_token_follows_the_profile_on_firestore",
+          "binary": "fireemu-adapter-grpc::rules",
+          "result": "PASS"
+        },
+        {
+          "id": "crates/fireemu-adapter-http/tests/storage.rs#a_future_dated_signed_token_follows_the_profile_on_storage",
+          "binary": "fireemu-adapter-http::storage",
+          "result": "PASS"
+        }
+      ]
+    },
+    {
+      "conditionId": "SCHEDULED-FUNCTIONS/rewind-and-token-policy",
+      "caseId": "token-after-new-issuance",
+      "status": "PASS",
+      "tests": [
+        {
+          "id": "crates/fireemu-adapter-http/tests/jwt_temporal_http.rs#a_rewind_below_the_account_creation_makes_a_new_sign_in_count_as_revoked",
+          "binary": "fireemu-adapter-http::jwt_temporal_http",
+          "result": "PASS"
+        },
+        {
+          "id": "crates/fireemu-adapter-http/tests/jwt_temporal_http.rs#a_token_issued_after_a_rewind_is_usable_beside_the_held_future_token",
+          "binary": "fireemu-adapter-http::jwt_temporal_http",
+          "result": "PASS"
+        },
+        {
+          "id": "crates/fireemu-adapter-http/tests/jwt_temporal_http.rs#a_revocation_on_a_rewound_clock_does_not_revoke_tokens_issued_later",
+          "binary": "fireemu-adapter-http::jwt_temporal_http",
+          "result": "PASS"
+        }
+      ]
+    },
+    {
+      "conditionId": "SCHEDULED-FUNCTIONS/manual-schedule",
+      "caseId": "registered-job",
+      "status": "PASS",
+      "tests": [
+        {
+          "id": "crates/fireemu-adapter-functions/tests/runtime.rs#schedule_retry_options_control_attempts_and_logical_backoff",
+          "binary": "fireemu-adapter-functions::runtime",
+          "result": "PASS"
+        },
+        {
+          "id": "crates/fireemu-adapter-functions/src/runtime.rs#a_manual_run_carries_the_current_virtual_time_and_the_job_name",
+          "binary": "fireemu-adapter-functions",
+          "result": "PASS"
+        },
+        {
+          "id": "crates/fireemu-adapter-functions/src/runtime.rs#a_manual_run_leaves_the_next_natural_occurrence_alone",
+          "binary": "fireemu-adapter-functions",
+          "result": "PASS"
+        }
+      ]
+    },
+    {
+      "conditionId": "SCHEDULED-FUNCTIONS/manual-schedule",
+      "caseId": "missing-job",
+      "status": "PASS",
+      "tests": [
+        {
+          "id": "crates/fireemu-adapter-functions/tests/runtime.rs#a_manual_run_of_an_unknown_or_unscheduled_function_is_refused_and_changes_nothing",
+          "binary": "fireemu-adapter-functions::runtime",
+          "result": "PASS"
+        },
+        {
+          "id": "crates/fireemu-adapter-http/tests/control.rs#a_manual_run_route_without_a_name_is_not_found",
+          "binary": "fireemu-adapter-http::control",
+          "result": "PASS"
+        }
+      ]
+    },
+    {
+      "conditionId": "SCHEDULED-FUNCTIONS/manual-schedule",
+      "caseId": "payload-time",
+      "status": "PASS",
+      "tests": [
+        {
+          "id": "crates/fireemu-adapter-functions/src/runtime.rs#a_manual_run_carries_the_current_virtual_time_and_the_job_name",
+          "binary": "fireemu-adapter-functions",
+          "result": "PASS"
+        }
+      ]
+    },
+    {
+      "conditionId": "SCHEDULED-FUNCTIONS/manual-schedule",
+      "caseId": "does-not-silently-consume-natural-occurrence",
+      "status": "PASS",
+      "tests": [
+        {
+          "id": "crates/fireemu-adapter-functions/src/runtime.rs#a_manual_run_leaves_the_next_natural_occurrence_alone",
+          "binary": "fireemu-adapter-functions",
+          "result": "PASS"
+        }
+      ]
+    },
+    {
+      "conditionId": "SCHEDULED-FUNCTIONS/manual-schedule",
+      "caseId": "admission-refusal",
+      "status": "PASS",
+      "tests": [
+        {
+          "id": "crates/fireemu-adapter-functions/src/runtime.rs#a_manual_run_refused_for_capacity_is_an_error_and_enqueues_nothing",
+          "binary": "fireemu-adapter-functions",
+          "result": "PASS"
+        },
+        {
+          "id": "crates/fireemu-adapter-functions/src/runtime.rs#a_manual_run_follows_the_overlap_policy_against_a_scheduler_run",
+          "binary": "fireemu-adapter-functions",
+          "result": "PASS"
+        },
+        {
+          "id": "crates/fireemu-adapter-http/tests/control.rs#a_manual_run_refused_for_capacity_answers_resource_exhausted",
+          "binary": "fireemu-adapter-http::control",
+          "result": "PASS"
+        },
+        {
+          "id": "crates/fireemu-adapter-functions/tests/runtime.rs#shutdown_closes_the_manual_and_the_clock_driven_schedule_paths",
+          "binary": "fireemu-adapter-functions::runtime",
+          "result": "PASS"
+        }
+      ]
+    },
+    {
+      "conditionId": "SCHEDULED-FUNCTIONS/state-lifecycle",
+      "caseId": "snapshot-restore",
+      "status": "PASS",
+      "tests": [
+        {
+          "id": "crates/fireemu/src/snapshots.rs#a_restore_resets_the_schedule_to_the_restored_clock",
+          "binary": "fireemu::bin/fireemu",
+          "result": "PASS"
+        }
+      ]
+    },
+    {
+      "conditionId": "SCHEDULED-FUNCTIONS/state-lifecycle",
+      "caseId": "reset",
+      "status": "PASS",
+      "tests": [
+        {
+          "id": "crates/fireemu-adapter-functions/src/runtime.rs#a_reset_restarts_every_schedule_from_now_and_drops_the_backlog",
+          "binary": "fireemu-adapter-functions",
+          "result": "PASS"
+        },
+        {
+          "id": "crates/fireemu-adapter-functions/src/runtime.rs#a_reset_after_a_rewind_restarts_the_schedule_from_the_rewound_time",
+          "binary": "fireemu-adapter-functions",
+          "result": "PASS"
+        }
+      ]
+    },
+    {
+      "conditionId": "SCHEDULED-FUNCTIONS/state-lifecycle",
+      "caseId": "reload",
+      "status": "PASS",
+      "tests": [
+        {
+          "id": "crates/fireemu-adapter-functions/tests/runtime.rs#a_schedule_run_queued_while_the_runner_is_stopped_survives_a_reload_and_runs_once",
+          "binary": "fireemu-adapter-functions::runtime",
+          "result": "PASS"
+        },
+        {
+          "id": "crates/fireemu-adapter-functions/src/runtime.rs#a_run_held_for_capacity_survives_a_reload_and_is_admitted_once",
+          "binary": "fireemu-adapter-functions",
+          "result": "PASS"
+        }
+      ]
+    },
+    {
+      "conditionId": "SCHEDULED-FUNCTIONS/state-lifecycle",
+      "caseId": "runner-shutdown",
+      "status": "PASS",
+      "tests": [
+        {
+          "id": "crates/fireemu-adapter-functions/tests/runtime.rs#shutdown_closes_the_manual_and_the_clock_driven_schedule_paths",
+          "binary": "fireemu-adapter-functions::runtime",
+          "result": "PASS"
+        },
+        {
+          "id": "crates/fireemu-adapter-functions/src/runtime.rs#a_clock_move_that_waits_for_the_lock_while_shutdown_begins_enqueues_nothing",
+          "binary": "fireemu-adapter-functions",
+          "result": "PASS"
+        },
+        {
+          "id": "crates/fireemu-adapter-functions/tests/runtime.rs#a_schedule_run_is_delivered_once_after_the_runner_died_before_it",
+          "binary": "fireemu-adapter-functions::runtime",
+          "result": "PASS"
+        }
+      ]
+    },
+    {
+      "conditionId": "SCHEDULED-FUNCTIONS/state-lifecycle",
+      "caseId": "pending-job-retention",
+      "status": "PASS",
+      "tests": [
+        {
+          "id": "crates/fireemu-adapter-functions/src/runtime.rs#a_run_held_for_capacity_survives_a_reload_and_is_admitted_once",
+          "binary": "fireemu-adapter-functions",
+          "result": "PASS"
+        },
+        {
+          "id": "crates/fireemu-adapter-functions/tests/runtime.rs#a_schedule_run_queued_while_the_runner_is_stopped_survives_a_reload_and_runs_once",
+          "binary": "fireemu-adapter-functions::runtime",
+          "result": "PASS"
+        },
+        {
+          "id": "crates/fireemu-adapter-functions/src/runtime.rs#a_reset_restarts_every_schedule_from_now_and_drops_the_backlog",
+          "binary": "fireemu-adapter-functions",
+          "result": "PASS"
+        }
+      ]
+    }
+  ]
+}

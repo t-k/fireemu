@@ -443,3 +443,63 @@ test("a region of null is no region, and the summary is read from the end of a l
   });
   assert.equal(result.errored, 4);
 });
+
+test(
+  "real run: the preflight judges, run over the 22 recorded preflight answers in order, find no problem (as the run did)",
+  { skip: !haveReal },
+  async () => {
+    const { runPreflight } = await import("./functions-events/record/preflight.mjs");
+    const files = readdirSync(realResponses).filter((f) => /^\d{4}-preflight\./.test(f));
+    assert.equal(files.length, 22);
+    const byId = new Map(
+      files.map((f) => [JSON.parse(readFileSync(join(realResponses, f), "utf8")).id, f]),
+    );
+    const asked = [];
+    const notifications = JSON.parse(
+      readFileSync(join(realRuns, "fe-formal-v5", "notification-configs-real.json"), "utf8"),
+    );
+    const result = await runPreflight(async (spec) => {
+      asked.push(spec.id);
+      if (spec.id === "preflight.notification-configs")
+        return { id: spec.id, status: 200, json: notifications, kind: "success" };
+      const file = byId.get(spec.id);
+      assert.ok(file, `a recorded answer for ${spec.id}`);
+      const answer = JSON.parse(readFileSync(join(realResponses, file), "utf8"));
+      return { id: spec.id, status: answer.status, json: answer.body, kind: "success" };
+    });
+    assert.deepEqual(result.problems, []);
+    assert.equal(asked.length, 23, "the 22 recorded steps and the new notification read");
+    assert.deepEqual(
+      result.notificationsBefore.map((c) =>
+        c.id.startsWith("cloud-functions-fireemu-oracle-events-"),
+      ),
+      [true],
+    );
+  },
+);
+
+test(
+  "real run: every one of the 153 recorded responses has a judge that reads it: lists, the cleanup's reads and the capture are parsed",
+  { skip: !haveReal },
+  () => {
+    const files = readdirSync(realResponses).filter((f) => f.endsWith(".json"));
+    assert.equal(files.length, 153);
+    const kinds = new Map();
+    for (const f of files) {
+      const answer = JSON.parse(readFileSync(join(realResponses, f), "utf8"));
+      assert.ok(typeof answer.id === "string" && typeof answer.status === "number", f);
+      const kind = answer.id.split(".")[0];
+      kinds.set(kind, (kinds.get(kind) ?? 0) + 1);
+    }
+    assert.deepEqual(
+      [...kinds.entries()].toSorted(),
+      [
+        ["capture", 1],
+        ["cleanup", 19],
+        ["lists", 90],
+        ["preflight", 22],
+        ["setup", 21],
+      ].toSorted(),
+    );
+  },
+);

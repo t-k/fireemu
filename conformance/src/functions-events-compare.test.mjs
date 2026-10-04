@@ -447,13 +447,24 @@ test("more than one subject operation for a scenario in a pass is INCOMPLETE", (
 
 test("the condition result is the worst row of its cases", () => {
   const w = world();
-  w.strict.programs[0].operations[0].readback = { exists: false, path: "x" };
+  w.strict.programs[0].operations[0].sourceResult = "typed-refusal";
   const result = compare(w);
   assert.equal(rowById(result, "functions-events/firestore/create#new-document#v1").status, "DIFF");
   assert.equal(result.conditions["FUNCTIONS-EVENTS/firestore-created"], "DIFF");
   assert.equal(result.conditions["FUNCTIONS-EVENTS/firestore-routing-params"], "MATCH");
   assert.equal(result.conditions["FUNCTIONS-EVENTS/delivery-retry-identity"], "MATCH");
   assert.equal(result.conditions["FUNCTIONS-EVENTS/auth-created"], "INCOMPLETE");
+});
+
+test("source readbacks are recorded for review but never compared", () => {
+  const w = world();
+  w.strict.programs[0].operations[0].readback = { exists: false, path: "x" };
+  w.run.passes[0].operations[0].readback = [{ id: "fs-create.2", status: 200 }];
+  const result = compare(w);
+  assert.equal(
+    rowById(result, "functions-events/firestore/create#new-document#v1").status,
+    "MATCH",
+  );
 });
 
 test("the result never carries a raw id or time from either side", () => {

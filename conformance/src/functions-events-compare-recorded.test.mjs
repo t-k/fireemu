@@ -248,7 +248,6 @@ test("recorded Storage finalized shapes (attempt 012) against a real fireemu ses
     "format $.frame.event.data.generation length",
     "format $.frame.event.data.id length",
     "format $.frame.event.data.mediaLink length",
-    "format $.readback.generation length",
   ];
   const both = (heads) =>
     ["emulator", "strict"].flatMap((profile) => heads.map((head) => `${profile}: ${head}`));
@@ -264,7 +263,7 @@ test("recorded Storage finalized shapes (attempt 012) against a real fireemu ses
   assert.equal(v2.status, "DIFF");
   assert.deepEqual(
     reasonHeads(v2),
-    both([...expectedV1.slice(0, 4), "type $.frame.event.datacontenttype", expectedV1[4]]),
+    both([...expectedV1.slice(0, 4), "type $.frame.event.datacontenttype"]),
   );
   assert.ok(
     v2.reasons.includes(

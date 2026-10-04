@@ -164,7 +164,9 @@ function observeProductionPass({
       reasons.push(`${label}: a ${handler} frame matches more than one operation`);
     }
   }
-  const base = { sourceResult: op.sourceResult, readback: op.readback ?? null };
+  // The source readbacks are recorded for review, not compared: production REST answers and the local SDK's
+  // readbacks have different shapes, and every delivered field already sits in the frames.
+  const base = { sourceResult: op.sourceResult };
   const table = placeholderTable({ matchKey: op.matchKey, project: production.project });
 
   if (row.delivery === NEGATIVE) {
@@ -266,7 +268,9 @@ function observeLocal({ local, profile, row, scenario, handler, localProject }) 
   if (frames.some(({ frame }) => frame.handler !== handler)) {
     return incomplete(`${profile}: a local frame belongs to another handler than ${handler}`);
   }
-  const base = { sourceResult: op.sourceResult, readback: op.readback ?? null };
+  // The source readbacks are recorded for review, not compared: production REST answers and the local SDK's
+  // readbacks have different shapes, and every delivered field already sits in the frames.
+  const base = { sourceResult: op.sourceResult };
   const table = placeholderTable({ matchKey: op.matchKey, project: localProject });
   if (row.delivery === NEGATIVE) {
     if (frames.length > 0) {

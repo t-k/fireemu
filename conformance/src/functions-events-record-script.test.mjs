@@ -14,6 +14,7 @@ import {
   SCENARIO_EVENTS,
   buildPass,
   passSummary,
+  pubsubPublication,
 } from "./functions-events/record/script.mjs";
 
 const read = (path) => JSON.parse(readFileSync(new URL(path, import.meta.url), "utf8"));
@@ -157,5 +158,43 @@ test("a step names where its matchKey comes from and what the subject request re
       step.subject.length > 0 && step.subject.every((id) => step.requests.some((r) => r.id === id)),
       step.scenarioId,
     );
+  }
+});
+
+test("a Pub/Sub publication is the message id as data and as the probe attribute, on the scenario's topic, with the ordering key only for ordering", () => {
+  assert.deepEqual(pubsubPublication("pubsub-publish", "eabc"), {
+    topic: "fe-events-primary",
+    text: "eabc",
+    attributes: { probe: "eabc" },
+    extra: {},
+  });
+  assert.deepEqual(pubsubPublication("pubsub-other-topic", "eabc"), {
+    topic: "fe-events-control",
+    text: "eabc",
+    attributes: { probe: "eabc" },
+    extra: {},
+  });
+  assert.deepEqual(pubsubPublication("pubsub-ordering", "eabc"), {
+    topic: "fe-events-primary",
+    text: "eabc",
+    attributes: { probe: "eabc" },
+    extra: { orderingKey: "fe-events-order" },
+  });
+  assert.throws(() => pubsubPublication("fs-create", "eabc"), /not a Pub\/Sub scenario/);
+  // the pass publishes exactly this
+  const steps = pass1().steps.filter((step) => step.scenarioId.startsWith("pubsub-"));
+  for (const step of steps) {
+    const publication = pubsubPublication(step.scenarioId, step.matchKey.probe);
+    const request = step.requests.find((r) => r.role === "subject");
+    assert.ok(request.url.includes(`/topics/${publication.topic}:publish`));
+    assert.deepEqual(request.body, {
+      messages: [
+        {
+          data: Buffer.from(publication.text).toString("base64"),
+          attributes: publication.attributes,
+          ...publication.extra,
+        },
+      ],
+    });
   }
 });

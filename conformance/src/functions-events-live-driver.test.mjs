@@ -4,6 +4,7 @@ import {
   advanceLocalClock,
   createLiveDriver,
   ensureLocalTopic,
+  runPubsubScenario,
 } from "./functions-events/live-driver.mjs";
 
 const required = [
@@ -86,4 +87,47 @@ test("a trigger-owned primary topic is reused and a missing control topic is cre
   assert.deepEqual(await ensureLocalTopic(primary), { created: false, existed: true });
   assert.deepEqual(await ensureLocalTopic(control), { created: true, existed: false });
   assert.deepEqual(calls, ["control-create"]);
+});
+
+function fakePubsub() {
+  const published = [];
+  const topics = new Map();
+  return {
+    published,
+    topic(name, options) {
+      const topic = {
+        name,
+        options,
+        exists: async () => [true],
+        publishMessage: async (message) => {
+          published.push({ topic: name, ...message });
+          return String(published.length);
+        },
+      };
+      topics.set(name, topic);
+      return topic;
+    },
+  };
+}
+
+test("the local Pub/Sub scenarios publish what the production script publishes", async () => {
+  const capture = { barrier: async () => ({ cursor: 7 }) };
+  for (const [id, resource, topic, orderingKey] of [
+    ["pubsub-publish", "topic-primary", "fe-events-primary", undefined],
+    ["pubsub-other-topic", "topic-control", "fe-events-control", undefined],
+    ["pubsub-ordering", "topic-primary", "fe-events-primary", "fe-events-order"],
+  ]) {
+    const pubsub = fakePubsub();
+    const result = await runPubsubScenario({ scenario: { id, resource }, capture, pubsub });
+    assert.equal(pubsub.published.length, 1);
+    const [message] = pubsub.published;
+    assert.equal(message.topic, topic);
+    const text = message.data.toString("utf8");
+    assert.match(text, /^e[0-9a-f]{24}m\d+$/);
+    assert.deepEqual(message.attributes, { probe: text });
+    assert.equal(message.orderingKey, orderingKey);
+    assert.equal(result.cursor, 7);
+    assert.deepEqual(result.matchKey, { kind: "pubsub", value: "1", topic, probe: text });
+    assert.equal(result.readback.topicName, topic);
+  }
 });

@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
-import { randomUUID } from "node:crypto";
+import { randomBytes, randomUUID } from "node:crypto";
 import { createRequire } from "node:module";
 import { setTimeout as delay } from "node:timers/promises";
+import { pubsubPublication } from "./record/script.mjs";
 import { runStorageScenario } from "./storage-driver.mjs";
 
 const require = createRequire(import.meta.url);
@@ -230,9 +231,14 @@ export async function ensureLocalTopic(topic) {
   return { created: !existed, existed };
 }
 
-async function runPubsubScenario({ scenario, capture, pubsub }) {
-  const topicName =
-    scenario.resource === "topic-control" ? "fe-events-control" : "fe-events-primary";
+// The message id of the production script: "e", 24 hex digits, the role letter and a counter.
+let messageCounter = 0;
+
+/** Publishes exactly what the production script publishes (`pubsubPublication`), under a message text of its own. */
+export async function runPubsubScenario({ scenario, capture, pubsub }) {
+  const text = `e${randomBytes(12).toString("hex")}m${(messageCounter += 1)}`;
+  const publication = pubsubPublication(scenario.id, text);
+  const topicName = publication.topic;
   const topic = pubsub.topic(topicName, { messageOrdering: scenario.id === "pubsub-ordering" });
   let created = false;
   let existed = false;
@@ -251,18 +257,15 @@ async function runPubsubScenario({ scenario, capture, pubsub }) {
     const [before] = await topic.exists();
     assert.equal(before, true);
     const cursor = (await capture.barrier()).cursor;
-    const message = scenario.message;
     const messageId = await topic.publishMessage({
-      data: Buffer.from(message.dataUtf8, "utf8"),
-      attributes: message.attributes,
-      ...(scenario.id === "pubsub-ordering"
-        ? { orderingKey: `e${randomUUID().replaceAll("-", "")}` }
-        : {}),
+      data: Buffer.from(publication.text, "utf8"),
+      attributes: publication.attributes,
+      ...publication.extra,
     });
     const [after] = await topic.exists();
     return {
       cursor,
-      matchKey: { kind: "pubsub", value: messageId },
+      matchKey: { kind: "pubsub", value: messageId, topic: topicName, probe: text },
       sourceResult: "typed-success",
       readback: { topicExists: after, messageIdPresent: Boolean(messageId), topicName },
       cleanup,

@@ -598,43 +598,48 @@ function authStep(scenarioId, newId, prefix = scenarioId) {
   return { b, matchKey, sourceResult: "typed-success", seed, settle };
 }
 
-const publish = (b, topic, text, extra = {}) =>
+const publish = (b, topic, text, attributes, extra = {}) =>
   b.add(
     "subject",
     {
       method: "POST",
       url: `${topicUrl(topic)}:publish`,
       body: {
-        messages: [
-          { data: Buffer.from(text).toString("base64"), attributes: { probe: text }, ...extra },
-        ],
+        messages: [{ data: Buffer.from(text).toString("base64"), attributes, ...extra }],
       },
       capture: { messageId: "$.messageIds[0]" },
     },
     { subject: true },
   );
 
-function pubsubStep(scenarioId, newId, prefix = scenarioId) {
-  const b = new Builder(scenarioId, newId, prefix);
-  const id = newId("msg");
+/**
+ * What a Pub/Sub scenario publishes, for the production script and for the local driver alike: the topic, the message
+ * text (the run's own message id, which is both the data and the `probe` attribute) and the extra message fields.
+ */
+export function pubsubPublication(scenarioId, id) {
   let topic = PRIMARY_TOPIC;
   let extra = {};
-  let settle = POSITIVE_SETTLE_SECONDS;
   if (scenarioId === "pubsub-other-topic") {
     topic = CONTROL_TOPIC;
-    settle = NEGATIVE_WINDOW_SECONDS;
   } else if (scenarioId === "pubsub-ordering") {
     extra = { orderingKey: "fe-events-order" };
   } else if (scenarioId !== "pubsub-publish") {
     throw new Error(`not a Pub/Sub scenario: ${scenarioId}`);
   }
-  publish(b, topic, id, extra);
+  return { topic, text: id, attributes: { probe: id }, extra };
+}
+
+function pubsubStep(scenarioId, newId, prefix = scenarioId) {
+  const b = new Builder(scenarioId, newId, prefix);
+  const id = newId("msg");
+  const { topic, text, attributes, extra } = pubsubPublication(scenarioId, id);
+  publish(b, topic, text, attributes, extra);
   return {
     b,
     matchKey: { kind: "pubsub", value: "${messageId}", topic, probe: id },
     sourceResult: "typed-success",
     seed: false,
-    settle,
+    settle: scenarioId === "pubsub-other-topic" ? NEGATIVE_WINDOW_SECONDS : POSITIVE_SETTLE_SECONDS,
   };
 }
 

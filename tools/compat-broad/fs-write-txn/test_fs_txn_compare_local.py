@@ -121,3 +121,12 @@ def test_the_orders_of_production_and_the_local_replay_are_compared_site_by_site
     rows = tool.compare_orders({"w/writer": "after-anchor"}, {"q/writer": "after-anchor"})
     assert [(row["site"], row["match"]) for row in rows] == [("q/writer", False), ("w/writer", False)]
     assert tool.compare_orders({}, {}) == []
+
+
+def test_a_writer_that_answered_while_its_anchor_was_in_flight_was_held():
+    # between the anchor's dispatch and its answer: the writer was released by it, so it was held
+    assert tool.writer_orders([timed("w/writer", 10.0, 105.5), timed("w/release", 105.0, 106.0)], PLAN) == {"w/writer": "after-anchor"}
+
+
+def test_a_step_with_no_anchor_has_no_order():
+    assert tool.writer_orders([timed("plain", 1.0, 2.0), timed("w/release", 3.0, 4.0)], {"steps": [{"id": "plain"}, {"id": "w/release"}]}) == {}

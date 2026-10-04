@@ -70,7 +70,7 @@ def writer_orders(steps, plan):
     orders = {}
     for declared in plan["steps"]:
         anchor = declared.get("concurrentWith")
-        if anchor is None or declared["id"] not in rows or anchor not in rows:
+        if declared["id"] not in rows or anchor not in rows:   # a step with no anchor has none in the rows either
             continue
         orders[declared["id"]] = "before-anchor" if rows[declared["id"]]["timing"]["responseMonotonic"] < rows[anchor]["timing"]["dispatchMonotonic"] else "after-anchor"
     return orders

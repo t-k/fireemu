@@ -125,10 +125,11 @@ def test_a_clock_without_a_start_is_real_time_plus_every_advance(control):
     before = virtual.now()
     virtual.sleep(2.4)
     virtual.sleep(0.2)
-    # a wait advances a whole number of seconds, at least one, and the clock reads that much later
-    assert [call[1] for call in control.calls] == [{"seconds": 2}, {"seconds": 1}]
+    virtual.sleep(2.6)
+    # a wait advances a whole number of seconds (rounded), at least one, and the clock reads that much later
+    assert [call[1] for call in control.calls] == [{"seconds": 2}, {"seconds": 1}, {"seconds": 3}]
     assert control.calls[0][0] == "http://127.0.0.1:1/v1/sessions/default/clock:advance" and control.calls[0][2] == "Bearer tok"
-    assert 3.0 <= virtual.now() - before < 4.0
+    assert 6.0 <= virtual.now() - before < 7.0
     assert virtual.utc().endswith("Z") and len(virtual.utc()) == 27
 
 
@@ -154,16 +155,22 @@ def test_a_collector_that_advances_the_clock_once_after_a_named_step(control):
     class Base:
         def __init__(self):
             self.sites = []
+            self.advances_seen = {}
 
         def _rpc(self, site, *args, **kwargs):
             self.sites.append(site)
+            self.advances_seen.setdefault(site, len(control.calls))   # what the emulator's clock had been asked for when this step's request went out
             return f"answer {site}"
 
     virtual = clock.VirtualClock("http://c", "tok", datetime.datetime(2026, 10, 4, tzinfo=datetime.timezone.utc))
     collector = clock.advancing(Base, virtual, 3700, "b")()
-    assert [collector._rpc(site) for site in ("a", "b", "c", "b")] == ["answer a", "answer b", "answer c", "answer b"]
+    after = []
+    for site in ("a", "b", "c", "b"):
+        assert collector._rpc(site) == f"answer {site}"
+        after.append(len(control.calls))
     assert collector.sites == ["a", "b", "c", "b"]
-    # one advance, after the first answer of the named step, and a hidden one
+    # the clock moves once, hidden, after the answer to the named step: not before its request, and not after another step's
+    assert collector.advances_seen["b"] == 0 and after == [0, 1, 1, 1]
     assert [call[1] for call in control.calls] == [{"seconds": 3700}] and virtual.now() == 1000.0 and virtual.utc() == "2026-10-04T01:01:40.000000Z"
 
 

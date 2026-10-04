@@ -86,6 +86,10 @@ function attribute(production, toleranceMs) {
 
 const byLogTime = (a, b) => a.logMs - b.logMs || byText(a.insertId, b.insertId);
 
+/** At-least-once duplicates of one event print the same frame; otherwise no representative exists. */
+const allSame = (frames) =>
+  frames.every((frame) => JSON.stringify(frame) === JSON.stringify(frames[0]));
+
 function retryObservation(frames, label, handler, windowSeconds, frameOf) {
   const attempts = (kind) =>
     frames.filter((frame) => frameOf(frame).event?.data?.fixtureAttempt === kind);
@@ -220,8 +224,14 @@ function observeProductionPass({
       listings: listings.map((listing) => applyPlaceholders(listing, table)),
     });
   }
+  const stripped = inWindow.map(strip);
+  if (!allSame(stripped)) {
+    return incomplete(
+      `${label}: ${stripped.length} ${handler} frames of the subject differ from each other`,
+    );
+  }
   return result("OK", [], {
-    observation: applyPlaceholders({ ...base, frame: strip(inWindow[0]) }, table),
+    observation: applyPlaceholders({ ...base, frame: stripped[0] }, table),
     listings: listings.map((listing) => applyPlaceholders(listing, table)),
   });
 }
@@ -288,8 +298,14 @@ function observeLocal({ local, profile, row, scenario, handler, localProject }) 
       observation: applyPlaceholders({ ...base, ...retry.observation }, table),
     });
   }
+  const stripped = frames.map(strip);
+  if (!allSame(stripped)) {
+    return incomplete(
+      `${profile}: ${stripped.length} local ${handler} frames differ from each other`,
+    );
+  }
   return result("OK", [], {
-    observation: applyPlaceholders({ ...base, frame: strip(frames[0]) }, table),
+    observation: applyPlaceholders({ ...base, frame: stripped[0] }, table),
   });
 }
 

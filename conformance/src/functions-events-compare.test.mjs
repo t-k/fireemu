@@ -695,3 +695,57 @@ test("inconsistent frozen inputs are refused", () => {
     /strict/,
   );
 });
+
+test("duplicate deliveries of one subject must agree with each other to pick a representative", () => {
+  const pass1V1 = (w) =>
+    w.run.frames.find(
+      (entry) =>
+        entry.handler === "fsCreatedV1" &&
+        entry.frame.event.context.resource.name.endsWith(docId(101)),
+    );
+  const duplicate = (w, edit) => {
+    const copy = structuredClone(pass1V1(w));
+    copy.insertId = "duplicate-delivery";
+    copy.logTimestamp = new Date(T0 + 60_000 + 5000).toISOString();
+    edit(copy.frame);
+    w.run.frames.push(copy);
+  };
+  const same = world();
+  duplicate(same, (frame) => {
+    frame.event.extensionAttributes = { traceparent: "00-other" };
+  });
+  assert.equal(
+    rowById(compare(same), "functions-events/firestore/create#new-document#v1").status,
+    "MATCH",
+  );
+
+  const differ = world();
+  duplicate(differ, (frame) => {
+    frame.event.data.data.value = "other";
+  });
+  const row = rowById(compare(differ), "functions-events/firestore/create#new-document#v1");
+  assert.equal(row.status, "INCOMPLETE");
+  assert.deepEqual(row.reasons, [
+    "production pass 1: 2 fsCreatedV1 frames of the subject differ from each other",
+  ]);
+
+  const local = world();
+  const subject = local.emulator.programs[0].operations[0];
+  const second = JSON.parse(subject.framesByGeneration.v1[0].rawJson);
+  subject.framesByGeneration.v1.push({
+    sequence: 9,
+    receivedAt: "x",
+    rawJson: JSON.stringify(second),
+  });
+  assert.equal(
+    rowById(compare(local), "functions-events/firestore/create#new-document#v1").status,
+    "MATCH",
+  );
+  second.event.data.data.count = 2;
+  subject.framesByGeneration.v1[1].rawJson = JSON.stringify(second);
+  const localRow = rowById(compare(local), "functions-events/firestore/create#new-document#v1");
+  assert.equal(localRow.status, "INCOMPLETE");
+  assert.deepEqual(localRow.reasons, [
+    "emulator: 2 local fsCreatedV1 frames differ from each other",
+  ]);
+});

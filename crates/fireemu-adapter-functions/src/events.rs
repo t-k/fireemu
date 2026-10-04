@@ -368,6 +368,14 @@ pub fn storage_event(
 
 /// A Pub/Sub message event (`MessagePublishedData` of `onMessagePublished`): `message` is
 /// the published message (`data` base64, `attributes`, `orderingKey`).
+///
+/// The shape is the recorded production one (FUNCTIONS-EVENTS formal record, 2026-10-04, run
+/// `a9621bfae74fe9bc`, frame `6ac2a47f0000967f445e8b09`): `id` is the message id, `time` and
+/// `message.publishTime` are the publish instant with exactly three fractional digits (cut, not
+/// rounded), and the event has no `datacontenttype` (the frame's `event.datacontenttype` is
+/// null). The subscription name is Eventarc's internal one in production
+/// (`eventarc-us-central1-pubsubpublishedv2-834054-sub-834`); no shape was decided for it, so
+/// the emulator keeps its own.
 #[must_use]
 pub fn pubsub_event(
     id: &str,
@@ -377,11 +385,12 @@ pub fn pubsub_event(
     time: LogicalInstant,
 ) -> Value {
     let attrs = pubsub_attributes(project, topic);
+    let published = object_time(time);
     let mut msg = json!({
         "messageId": id,
         "data": message.get("data").cloned().unwrap_or(Value::String(String::new())),
         "attributes": message.get("attributes").cloned().unwrap_or_else(|| json!({})),
-        "publishTime": rfc3339(time),
+        "publishTime": published,
     });
     if let Some(key) = message.get("orderingKey").and_then(Value::as_str) {
         msg["orderingKey"] = Value::String(key.to_owned());
@@ -391,8 +400,7 @@ pub fn pubsub_event(
         "id": id,
         "source": attrs.source,
         "type": attrs.event_type,
-        "time": rfc3339(time),
-        "datacontenttype": "application/json",
+        "time": published,
         "data": {
             "message": msg,
             "subscription": format!("projects/{project}/subscriptions/emulator-sub-{topic}"),
@@ -555,7 +563,8 @@ pub fn schedule_event(
 #[cfg(test)]
 mod tests {
     use super::{
-        event_id_uuid, firestore_time, object_json, storage_event, storage_event_id, storage_time,
+        event_id_uuid, firestore_time, object_json, pubsub_event, storage_event, storage_event_id,
+        storage_time,
     };
     use fireemu_core_functions::manifest::ObjectEvent;
     use fireemu_core_storage::name::{BucketName, ObjectName};
@@ -1018,6 +1027,71 @@ mod tests {
                     prop_assert_eq!(parsed, at - at.rem_euclid(1_000));
                 }
             }
+        }
+    }
+
+    /// The Pub/Sub event of the FUNCTIONS-EVENTS formal record of 2026-10-04 (run
+    /// `a9621bfae74fe9bc`): the 2nd gen frame `6ac2a47f0000967f445e8b09` and the 1st gen frame
+    /// `6ac2a47e0006b2dd7f2584d4` of the same message. `time` and `publishTime` are the publish
+    /// instant with exactly three fractional digits, `id` is the message id, and the event has no
+    /// `datacontenttype` (the frame's `event.datacontenttype` is null).
+    #[test]
+    fn a_pubsub_event_has_the_shape_of_the_recorded_production_event() {
+        let published = at(1_791_140_986, 102_437_891);
+        let message = serde_json::json!({
+            "data": "ZWNmNTBhODZhMTQzMzY0ZmQ1NGZjZTUxNm0yNg==",
+            "attributes": {"probe": "ecf50a86a143364fd54fce516m26"},
+        });
+        let event = pubsub_event(
+            "22254343790642112",
+            "fireemu-oracle-events",
+            "fe-events-primary",
+            &message,
+            published,
+        );
+        assert_eq!(event["id"], "22254343790642112");
+        assert_eq!(event["time"], "2026-10-04T19:09:46.102Z");
+        assert_eq!(
+            event["data"]["message"]["publishTime"],
+            "2026-10-04T19:09:46.102Z"
+        );
+        assert_eq!(event["data"]["message"]["messageId"], "22254343790642112");
+        assert_eq!(event["specversion"], "1.0");
+        assert_eq!(
+            event["type"],
+            "google.cloud.pubsub.topic.v1.messagePublished"
+        );
+        assert_eq!(
+            event["source"],
+            "//pubsub.googleapis.com/projects/fireemu-oracle-events/topics/fe-events-primary"
+        );
+        assert!(
+            event.get("datacontenttype").is_none(),
+            "production's event carries no datacontenttype: {event}"
+        );
+    }
+
+    #[test]
+    fn a_pubsub_event_time_is_cut_not_rounded_and_equals_the_publish_time() {
+        for (nanos, expected) in [
+            (102_999_999, "2026-10-04T19:09:46.102Z"),
+            (102_000_000, "2026-10-04T19:09:46.102Z"),
+            (999_999_999, "2026-10-04T19:09:46.999Z"),
+            (5_000_000, "2026-10-04T19:09:46.005Z"),
+            (0, "2026-10-04T19:09:46.000Z"),
+        ] {
+            let event = pubsub_event(
+                "1",
+                "p",
+                "t",
+                &serde_json::json!({}),
+                at(1_791_140_986, nanos),
+            );
+            assert_eq!(event["time"], expected, "time at {nanos}");
+            assert_eq!(
+                event["data"]["message"]["publishTime"], expected,
+                "publishTime at {nanos}"
+            );
         }
     }
 }

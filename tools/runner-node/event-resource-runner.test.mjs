@@ -292,7 +292,7 @@ for (const form of ['endpoint', 'legacy']) {
     const source='//pubsub.googleapis.com/projects/demo-app/topics/t';
     const event={...base,source,project:'demo-app',database:'(default)',document:'items/one',type:'google.cloud.pubsub.topic.v1.messagePublished',data:{message:{data:'',messageId:'m1'}}};
     assert.equal((await f.invoke('topic','pubsub',event)).ok,true);
-    assert.deepEqual((await f.calls()).at(-1).context.resource,{service:'pubsub.googleapis.com',name:'projects/demo-app/topics/t'},'Firestore source projection must not apply to PubSub');
+    assert.deepEqual((await f.calls()).at(-1).context.resource,{service:'pubsub.googleapis.com',name:'projects/demo-app/topics/t',type:'type.googleapis.com/google.pubsub.v1.PubsubMessage'},'Firestore source projection must not apply to PubSub');
   });
 
   test(`v1 ${form}: typed Firestore metadata projects the document resource independently of Gen2 source`, { timeout: 10000 }, async t => {
@@ -413,7 +413,7 @@ for (const form of ['endpoint', 'legacy']) {
     assert.deepEqual(calls.map(call => call.name), events.map(([name]) => name));
     assert.deepEqual(calls.map(call => call.context.eventId), events.map(() => id));
     // Storage prints its legacy timestamp with exactly three fraction digits (observed 2026-10-01).
-    assert.deepEqual(calls.map(call => call.context.timestamp), ['2026-09-30T12:03:18.846Z', time, time]);
+    assert.deepEqual(calls.map(call => call.context.timestamp), ['2026-09-30T12:03:18.846Z', '2026-09-30T12:03:18.846Z', time]);
   });
 
   test(`v1 ${form}: a Firestore and an Auth legacy context carry the empty notSupported member production sends, Storage and Pub/Sub do not`, { timeout: 10000 }, async t => {
@@ -602,3 +602,18 @@ test('v2: every one of the 44 recorded Storage frames is handed over in its reco
     assert.deepEqual(Object.keys(call.data.data), v5Orders.frames[index].members, v5Orders.frames[index].insertId);
   });
 });
+for (const form of ['endpoint', 'legacy']) {
+  test(`v1 ${form}: a Pub/Sub legacy context has the members and forms of the recorded production context`, { timeout: 10000 }, async t => {
+    // Production (functions-events-formal run a9621bfae74fe9bc, transport/responses/0282-capture.list.json, handler
+    // pubsubPublishedV1): eventId is the message id (seventeen decimals), the timestamp has exactly three fraction
+    // digits, and the resource carries the message type next to the topic and the service.
+    const f = await start(t, [entry('onPublish', 'google.pubsub.topic.publish', 'projects/fireemu-oracle-events/topics/fe-events-primary', form)]);
+    const event = { id: '22255693239595822', type: 'google.cloud.pubsub.topic.v1.messagePublished', time: '2026-10-04T19:48:48.931482Z', source: '//pubsub.googleapis.com/projects/fireemu-oracle-events/topics/fe-events-primary', data: { message: { data: '', attributes: {}, messageId: '22255693239595822' } } };
+    assert.equal((await f.invoke('onPublish', 'pubsub', event)).ok, true);
+    const context = (await f.calls()).at(-1).context;
+    assert.equal(context.eventId, '22255693239595822');
+    assert.equal(context.timestamp, '2026-10-04T19:48:48.931Z');
+    assert.equal(context.eventType, 'google.pubsub.topic.publish');
+    assert.deepEqual(context.resource, { name: 'projects/fireemu-oracle-events/topics/fe-events-primary', service: 'pubsub.googleapis.com', type: 'type.googleapis.com/google.pubsub.v1.PubsubMessage' });
+  });
+}

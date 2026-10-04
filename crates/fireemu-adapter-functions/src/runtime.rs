@@ -2189,7 +2189,8 @@ impl FunctionsRuntime {
         let deliver = self.background_triggers_enabled();
         for message in messages {
             inner.next_event += 1;
-            let message_id = format!("{}-{}", self.config.session.value(), inner.next_event);
+            let message_id =
+                fireemu_core_types::pubsub_message_id::pubsub_message_id(inner.next_event);
             ids.push(message_id.clone());
             if !deliver {
                 continue; // the message is accepted and dropped, as Pub/Sub does without a subscriber

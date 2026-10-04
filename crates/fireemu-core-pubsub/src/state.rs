@@ -1070,7 +1070,7 @@ impl PubSubState {
             // The ids repeat after `SPAN` messages, so the space ends there.
             next_message_counter = next_message_counter
                 .checked_add(1)
-                .filter(|counter| *counter <= crate::message_id::SPAN)
+                .filter(|counter| *counter <= crate::MESSAGE_ID_SPAN)
                 .ok_or_else(|| {
                     PubSubError::resource_exhausted("Pub/Sub message identifier space exhausted")
                 })?;
@@ -2439,7 +2439,9 @@ mod tests {
         // 22254343790642112 and 22256683947060623).
         let mut state = PubSubState::new(5);
         let topic_name = topic("p", "events");
-        state.create_topic(topic_name.clone(), Default::default()).unwrap();
+        state
+            .create_topic(topic_name.clone(), Default::default())
+            .unwrap();
         let now = LogicalInstant::from_unix_seconds(10);
         let published = state
             .publish_shared(&topic_name, vec![data(b"a"), data(b"b"), data(b"c")], now)
@@ -2463,12 +2465,21 @@ mod tests {
     fn the_id_space_ends_before_two_messages_could_share_an_id() {
         let mut state = PubSubState::new(5);
         let topic_name = topic("p", "events");
-        state.create_topic(topic_name.clone(), Default::default()).unwrap();
+        state
+            .create_topic(topic_name.clone(), Default::default())
+            .unwrap();
         let now = LogicalInstant::from_unix_seconds(10);
-        state.message_counter = crate::message_id::SPAN - 1;
-        let last = state.publish_shared(&topic_name, vec![data(b"a")], now).unwrap();
-        assert_eq!(last[0].message_id, crate::pubsub_message_id(crate::message_id::SPAN - 1 + 1));
-        let error = state.publish_shared(&topic_name, vec![data(b"b")], now).unwrap_err();
+        state.message_counter = crate::MESSAGE_ID_SPAN - 1;
+        let last = state
+            .publish_shared(&topic_name, vec![data(b"a")], now)
+            .unwrap();
+        assert_eq!(
+            last[0].message_id,
+            crate::pubsub_message_id(crate::MESSAGE_ID_SPAN - 1 + 1)
+        );
+        let error = state
+            .publish_shared(&topic_name, vec![data(b"b")], now)
+            .unwrap_err();
         assert_eq!(error.code(), crate::error::Code::ResourceExhausted);
     }
 

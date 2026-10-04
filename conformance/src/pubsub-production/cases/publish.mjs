@@ -12,7 +12,7 @@ import {
 export const publishWire = {
   id: "publish-wire",
   short: "pw",
-  requests: 45,
+  requests: 28,
   async run(ctx) {
     const c = ctx.client;
     const topic = ctx.name("topics", "t");

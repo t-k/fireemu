@@ -4,7 +4,7 @@ import { must } from "./support.mjs";
 export const authErrors = {
   id: "auth-errors",
   short: "ae",
-  requests: 20,
+  requests: 15,
   async run(ctx) {
     const c = ctx.client;
     const topic = ctx.name("topics", "t");
@@ -31,7 +31,7 @@ export const authErrors = {
 export const pushConfig = {
   id: "push-config",
   short: "pc",
-  requests: 40,
+  requests: 30,
   async run(ctx) {
     const c = ctx.client;
     const topic = ctx.name("topics", "t");

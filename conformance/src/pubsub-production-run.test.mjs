@@ -1,11 +1,14 @@
 import assert from "node:assert/strict";
+import { mkdtempSync, readdirSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import test from "node:test";
 import { createCapture } from "./pubsub-production/capture.mjs";
 import { StopClean, must } from "./pubsub-production/cases/support.mjs";
 import { createClient, newPushState } from "./pubsub-production/client.mjs";
 import { createOwnership } from "./pubsub-production/names.mjs";
-import { parseArgs, summarize } from "./pubsub-production/record.mjs";
-import { exitCodeOf, runCases, selectCases } from "./pubsub-production/runner.mjs";
+import { DEFAULT_MAX_REQUESTS, main, parseArgs, summarize } from "./pubsub-production/record.mjs";
+import { exitCodeOf, plannedRequests, runCases, selectCases } from "./pubsub-production/runner.mjs";
 import { CASES } from "./pubsub-production/cases/index.mjs";
 
 const RUN = "0123456789ab";
@@ -17,7 +20,7 @@ test("the arguments: an emulator target needs a host, a production target a proj
   assert.equal(emulator.production, false);
   assert.equal(emulator.host, "127.0.0.1:8085");
   assert.match(emulator.runId, /^[0-9a-f]{12}$/);
-  assert.equal(emulator.maxRequests, 750);
+  assert.equal(emulator.maxRequests, 850);
   assert.deepEqual(emulator.transports, ["rest", "grpc"]);
   assert.throws(() => parseArgs(["--target", "emulator", "--out", "o"], {}), /emulator-host/);
   assert.throws(() => parseArgs(["--target", "production", "--out", "o"]), /--project is required/);
@@ -372,4 +375,63 @@ test("a run is closable only with no unknown answer, no stop and a clean cleanup
     many.record({ case: "a/rest", step: "01", op: "x", unknown: true });
   assert.equal(many.unknownCount(), 150);
   assert.equal(many.unknowns().length, 100);
+});
+
+test("every case declares a ceiling, the whole set fits the default budget, and a smaller budget is refused before anything starts", async () => {
+  assert.ok(CASES.every((item) => Number.isInteger(item.requests) && item.requests > 0));
+  assert.equal(
+    plannedRequests(CASES),
+    CASES.reduce((sum, item) => sum + item.requests * 2, 0),
+  );
+  assert.equal(plannedRequests(CASES, ["rest"]), plannedRequests(CASES) / 2);
+  assert.ok(plannedRequests(CASES) <= DEFAULT_MAX_REQUESTS);
+  const errors = [];
+  const io = { stdout: { write: () => true }, stderr: { write: (text) => errors.push(text) } };
+  const out = join(mkdtempSync(join(tmpdir(), "pubsub-plan-")), "o");
+  const code = await main(
+    [
+      "--target",
+      "emulator",
+      "--emulator-host",
+      "127.0.0.1:1",
+      "--out",
+      out,
+      "--max-requests",
+      "100",
+    ],
+    {},
+    io,
+  );
+  assert.equal(code, 2);
+  assert.match(errors.join(""), /may send \d+ requests, over --max-requests 100/);
+  assert.throws(() => readdirSync(out), "nothing was created");
+  const unknown = await main(
+    ["--target", "emulator", "--emulator-host", "127.0.0.1:1", "--out", out, "--only", "nope"],
+    {},
+    io,
+  );
+  assert.equal(unknown, 2);
+});
+
+test("a case that sends more than it declared is flagged in the summary", async () => {
+  const item = {
+    id: "over",
+    short: "ov",
+    requests: 1,
+    async run(ctx) {
+      await ctx.client.getTopic(ctx.name("topics", "a"));
+      await ctx.client.getTopic(ctx.name("topics", "b"));
+    },
+  };
+  const { run } = setup([item]);
+  const summary = await run();
+  assert.deepEqual(
+    summary.cases.map((c) => [c.requests, c.overDeclared]),
+    [
+      [2, 1],
+      [2, 1],
+    ],
+  );
+  const fine = setup([{ ...item, requests: 2 }]);
+  assert.equal((await fine.run()).cases[0].overDeclared, undefined);
 });

@@ -109,6 +109,7 @@ export async function runCases({
         }
       }
       entry.requests = capture.count() - before;
+      if (entry.requests > item.requests) entry.overDeclared = item.requests;
       capture.note("case-end", { case: `${item.id}/${transportName}`, ...entry });
       summary.cases.push(entry);
       if (summary.stopped !== null && entry.outcome !== "aborted") break outer;
@@ -122,6 +123,11 @@ export async function runCases({
     sleep,
   });
   return summary;
+}
+
+/** The requests the selected cases may send: each case declares its own ceiling, once for each transport. */
+export function plannedRequests(cases, transportNames = REST_AND_GRPC) {
+  return cases.reduce((sum, item) => sum + item.requests * transportNames.length, 0);
 }
 
 export function exitCodeOf(summary) {

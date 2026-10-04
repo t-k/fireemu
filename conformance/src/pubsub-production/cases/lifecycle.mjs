@@ -3,7 +3,7 @@ import { must } from "./support.mjs";
 export const lifecycle = {
   id: "lifecycle",
   short: "lc",
-  requests: 30,
+  requests: 24,
   async run(ctx) {
     const c = ctx.client;
     const topic = ctx.name("topics", "t");
@@ -44,7 +44,7 @@ export const lifecycle = {
 export const names = {
   id: "names",
   short: "nm",
-  requests: 40,
+  requests: 15,
   async run(ctx) {
     const c = ctx.client;
     const probes = [
@@ -80,7 +80,7 @@ export const names = {
 export const paging = {
   id: "paging",
   short: "pg",
-  requests: 40,
+  requests: 18,
   async run(ctx) {
     const c = ctx.client;
     const topic = ctx.name("topics", "p");

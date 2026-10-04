@@ -121,7 +121,7 @@ test("the token is cached for 40 minutes, gcloud is given a bounded output, and 
 });
 
 test("the budgets and the options have their numbers", () => {
-  assert.equal(DEFAULT_MAX_REQUESTS, 750);
+  assert.equal(DEFAULT_MAX_REQUESTS, 850);
   assert.equal(CLEANUP_BUDGET, 400);
   const base = ["--target", "production", "--project", "sandbox-project", "--out", "o"];
   assert.equal(parseArgs([...base, "--max-requests", "1"]).maxRequests, 1);

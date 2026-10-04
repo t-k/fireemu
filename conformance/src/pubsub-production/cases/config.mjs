@@ -1,16 +1,19 @@
 import { must } from "./support.mjs";
 
-/** Creates a resource and reads it back, so that every configuration is recorded as sent and as stored. */
-async function createAndGet(c, create, get) {
+// The reply of a creation already carries the stored configuration. Only the variants named here are
+// read back as well, which records that what is stored survives to a later read.
+const READ_BACK = new Set(["plain", "labels", "ttl-never", "retry-valid", "dl-5", "retention-min"]);
+
+async function createAndGet(c, key, create, get) {
   const reply = await create();
-  if (reply.ok) await get();
+  if (reply.ok && READ_BACK.has(key)) await get();
   return reply;
 }
 
 export const topicConfig = {
   id: "topic-config",
   short: "tc",
-  requests: 30,
+  requests: 16,
   async run(ctx) {
     const c = ctx.client;
     const variants = [
@@ -33,6 +36,7 @@ export const topicConfig = {
       const name = ctx.name("topics", key);
       await createAndGet(
         c,
+        key,
         () => c.createTopic(name, body),
         () => c.getTopic(name),
       );
@@ -45,7 +49,7 @@ export const topicConfig = {
 export const subscriptionConfig = {
   id: "subscription-config",
   short: "sc",
-  requests: 70,
+  requests: 45,
   async run(ctx) {
     const c = ctx.client;
     const topic = ctx.name("topics", "t");
@@ -80,6 +84,7 @@ export const subscriptionConfig = {
       const name = ctx.name("subscriptions", key);
       await createAndGet(
         c,
+        key,
         () => c.createSubscription(name, { topic, ...body }),
         () => c.getSubscription(name),
       );
@@ -100,6 +105,7 @@ export const subscriptionConfig = {
       const name = ctx.name("subscriptions", key);
       await createAndGet(
         c,
+        key,
         () => c.createSubscription(name, { topic, deadLetterPolicy: policy }),
         () => c.getSubscription(name),
       );
@@ -111,7 +117,7 @@ export const subscriptionConfig = {
 export const subscriptionUpdate = {
   id: "subscription-update",
   short: "su",
-  requests: 30,
+  requests: 22,
   async run(ctx) {
     const c = ctx.client;
     const topic = ctx.name("topics", "t");

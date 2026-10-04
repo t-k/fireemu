@@ -375,6 +375,15 @@ test("the later run works in the recording's own directory and settles by name: 
     before,
     "the recording's capture is untouched",
   );
+  const a2Capture = readdirSync(dir).find((name) => /^capture-.*-a2-.*\.jsonl$/.test(name));
+  const a2Lines = readFileSync(join(dir, a2Capture), "utf8")
+    .trim()
+    .split("\n")
+    .map((line) => JSON.parse(line));
+  assert.equal(a2Lines[0].note, "run-start");
+  assert.equal(a2Lines[0].cleanupOnly, true);
+  assert.deepEqual([a2Lines.at(-1).note, a2Lines.at(-1).stopped], ["run-end", null]);
+  assert.equal(summary.cleanup.budgetSpent, false);
   assert.ok(readdirSync(dir).some((name) => /^capture-.*-a2-\d{8}T\d{6}Z\.jsonl$/.test(name)));
   assert.ok(readdirSync(dir).some((name) => /^issued-.*-a2-\d{8}T\d{6}Z\.jsonl$/.test(name)));
   assert.equal(svc.names.has(probeConflict), true, "a probe that answered 409 was never ours");

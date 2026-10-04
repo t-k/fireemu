@@ -207,13 +207,11 @@ fn versions_are_listed_by_name_then_generation_with_the_live_one_marked() {
     let a1 = put(&mut store, &b, "a.txt", "1", 1);
     let a2 = put(&mut store, &b, "a.txt", "22", 2);
     let c1 = put(&mut store, &b, "c.txt", "3", 3);
-    put(
-        &mut store,
-        &BucketName::try_new("other-bucket").unwrap(),
-        "a.txt",
-        "x",
-        4,
-    );
+    // Another bucket's versions, live and noncurrent, never leak into this bucket's listing.
+    let other = BucketName::try_new("other-bucket").unwrap();
+    store.set_versioning(&other, true);
+    put(&mut store, &other, "a.txt", "x", 4);
+    put(&mut store, &other, "a.txt", "y", 5);
     let listed: Vec<(String, u64, bool)> = store
         .list_versions(&b, "")
         .into_iter()

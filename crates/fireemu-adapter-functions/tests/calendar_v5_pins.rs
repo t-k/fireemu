@@ -10,7 +10,12 @@
 //! an unknown instant between dispatch and response, so a case matches when SOME instant in
 //! that window makes the local next-run computation yield the recorded value. This is the
 //! recorded obligation, not a loosening: a value that no instant in the window can produce
-//! does not match (see the near-miss tests).
+//! does not match (see the near-miss tests). c01 is the one case that relies on the window's
+//! far edge (see its test).
+//!
+//! The daylight-saving cases (c05, c06) record the next run only: a gap is skipped and a fold
+//! runs at its first occurrence, which matches the rule fireemu inherits from cron fields. The
+//! repeated-delivery behaviour of a fold is not observed.
 //!
 //! Wire shapes (the 400 body and its message) are not claimed here: these tests cover the
 //! schedule grammar, the zone lookup and the next-run computation only.
@@ -131,10 +136,14 @@ fn every_accepted_production_case_matches_within_its_window() {
     }
 }
 
-/// c01: the create request was dispatched before 05:20:00 and answered after it. A server
-/// that evaluated at dispatch would answer 05:20:00; the recorded 05:21:00 means it evaluated
-/// after the 05:20:00 tick. The pin therefore holds only through the dispatch-to-response
-/// window, and the two window edges give different answers.
+/// c01: the create request was dispatched at 05:19:58.550Z, answered at 05:20:00.636Z, and the
+/// response's own `userUpdateTime` is 05:19:59.866Z, 0.13 s before the 05:20:00 tick. Production
+/// still answered 05:21:00. A server that evaluated at its `userUpdateTime` would have returned
+/// 05:20:00 under the plain "first run strictly after now" rule, so either it evaluated later
+/// than `userUpdateTime`, or it skips a run that is too close to now. This pin does not choose:
+/// it holds through the dispatch-to-response window only (dispatch gives 05:20:00, response
+/// gives the recorded 05:21:00). The fireemu rule has no "too close" margin; one more
+/// observation of a create made just before a boundary is a candidate for the next recording.
 #[test]
 fn c01_matches_only_because_the_create_window_straddles_the_minute_boundary() {
     let case = &ACCEPTED[0];

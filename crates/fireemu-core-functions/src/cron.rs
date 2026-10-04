@@ -720,6 +720,11 @@ fn groc_time(text: &str) -> Option<(u32, u32)> {
 /// `quarter` (January, April, July and October) or a list of month names; without `of` every
 /// month matches. `Ok(None)` when the text does not begin with an ordinal list, so it is not
 /// this form; anything else this form does not spell out is refused, never guessed.
+///
+/// Not verified against production: that `quarter` means those four months (the one recorded
+/// case cannot tell it from `month`), and how this form treats a daylight-saving gap or fold
+/// (it follows the cron-field rule: a skipped civil minute is not run, an ambiguous one runs
+/// at its first occurrence).
 fn groc_ordinal_weekday(text: &str) -> Result<Option<Schedule>, ScheduleError> {
     let lower = text.to_ascii_lowercase();
     let words: Vec<&str> = lower.split_whitespace().collect();

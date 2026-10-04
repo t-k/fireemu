@@ -35,6 +35,8 @@ const requiredScopeDecisions = new Set([
   "L4",
   "L5",
   "L6",
+  "L7",
+  "L8",
   "OL-1",
   "OL-2",
   "OL-3",
@@ -130,5 +132,35 @@ test("FS-LISTEN-SDK proposal covers its 18-case catalog and leaves unobserved pa
     closure.parentStatus === "COMPAT_VERIFIED",
     closure.conditions.every(({ status }) => status === "VERIFIED") &&
       closure.closureReview.decision === "APPROVED",
+  );
+});
+
+test("the ledger 824 amendment names the native project and the fixture rows it relies on", () => {
+  const closure = read("../../spec/compatibility/closure/FS-LISTEN-SDK.json");
+  const fixture = read("../auth-fs-cross-stage2-production.json");
+  assert.equal(closure.amendedOn, "2026-10-05");
+  assert.equal(closure.productionPlan.nativeProject, "fireemu-oracle-txn");
+  assert.equal(closure.oracle.nativeProject, "fireemu-oracle-txn");
+  // The SDK, browser and Auth-dependent recordings stay on the query project.
+  assert.equal(closure.productionPlan.project, "fireemu-oracle-query");
+  const withFixture = closure.conditions.filter(({ fixtureEvidence }) => fixtureEvidence);
+  assert.deepEqual(withFixture.map(({ conditionId }) => conditionId.split("/")[1]).toSorted(), [
+    "cross-principal-rules",
+    "initial-unauthenticated-refusal",
+    "raw-resume-token",
+  ]);
+  for (const { conditionId, fixtureEvidence } of withFixture) {
+    assert.equal(fixtureEvidence.fixture, "conformance/auth-fs-cross-stage2-production.json");
+    assert.equal(fixtureEvidence.decisionRef, "L8");
+    assert.equal(fixtureEvidence.recordings, fixture.recordings.length);
+    for (const row of fixtureEvidence.rows)
+      assert.ok(Object.hasOwn(fixture.rows, row), `${conditionId}: row ${row} is in the fixture`);
+  }
+  const decision = (id) => closure.scopeDecisions.find((entry) => entry.id === id);
+  assert.match(decision("L7").decidedBy, /^owner via ledger 824/);
+  assert.match(decision("L8").decidedBy, /^owner via ledger 824/);
+  assert.match(
+    closure.conditions.find(({ conditionId }) => conditionId.endsWith("/raw-resume-token")).note,
+    /native\/resume-token-expired/,
   );
 });

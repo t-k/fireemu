@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -618,4 +618,45 @@ test("importing the module does not run the command line", () => {
   );
   assert.equal(out.stdout, "imported\n");
   assert.equal(out.status, 0);
+});
+
+// Rows production recorded for native Listen streams and SDK listeners (AUTH-FS-CROSS stage 2,
+// two recordings): the comparer must read these shapes, and compare the two recordings of one row.
+const stage2 = JSON.parse(
+  readFileSync(new URL("../auth-fs-cross-stage2-production.json", import.meta.url), "utf8"),
+);
+
+test("the comparer reads the recorded production Listen frames: resumed streams from both recordings agree", () => {
+  const { resumes, first } = stage2.rows["resume/open"].production;
+  const asRow = (frames) => ({ conditions: [], rows: frames, end: null, timedOut: false });
+  for (const frames of [first, resumes.same.frames, resumes.switch.frames]) {
+    assert.equal(classifyRow(asRow(frames), asRow(structuredClone(frames))), "MATCH");
+  }
+  // The resume with the same principal and with another one are the same frames.
+  assert.equal(classifyRow(asRow(resumes.same.frames), asRow(resumes.switch.frames)), "MATCH");
+  // Moving the document change across the CURRENT frame is a difference; the boundary frames stay put.
+  const moved = structuredClone(resumes.same.frames);
+  const doc = moved.findIndex((f) => f.kind === "documentChange");
+  const current = moved.findIndex((f) => f.kind === "targetChange" && f.type === "CURRENT");
+  [moved[doc], moved[current]] = [moved[current], moved[doc]];
+  assert.equal(classifyRow(asRow(resumes.same.frames), asRow(moved)), "DIFFER");
+  // A first stream's frames are not the resumed stream's.
+  assert.equal(classifyRow(asRow(first), asRow(resumes.same.frames)), "DIFFER");
+});
+
+test("the comparer reads the recorded production listener events, row by row", () => {
+  const rows = Object.entries(stage2.rows).filter(([, entry]) => entry.production.listeners);
+  assert.ok(rows.length > 30);
+  for (const [id, entry] of rows) {
+    const observed = entry.production.listeners;
+    const a = { conditions: entry.conditions, observed, end: null, timedOut: false };
+    assert.equal(classifyRow(a, structuredClone(a)), "MATCH", id);
+  }
+  const refused = stage2.rows["n-out/listen-signed-out"].production.listeners;
+  const permitted = structuredClone(refused);
+  permitted["n-out/own-signed-out"] = ["docs:1"];
+  assert.equal(
+    classifyRow({ ...plain, observed: refused }, { ...plain, observed: permitted }),
+    "DIFFER",
+  );
 });

@@ -95,6 +95,24 @@
       "decision": "limitToLast, backend-mediated cache and native Listen targets belong to FS-LISTEN-SDK.",
       "decidedBy": "owner via FS-QUERY-INDEX Q1 and Q4c",
       "decidedOn": "2026-09-24"
+    },
+    {
+      "id": "L7",
+      "status": "DECIDED",
+      "recommendation": "Run the native gRPC Listen programs (native-target-protocol, raw-resume-token, existence-filter-reconnect, and FS-TRANSACTION/commit-atomic-visibility) on fireemu-oracle-txn with the owner access token. An IAM-authenticated Listen is not subject to Rules, so no Rules release is needed there. The Node SDK, browser and Auth-dependent recordings stay on fireemu-oracle-query/(default) under the deployed Rules (OL-3).",
+      "decision": "NATIVE_GRPC_ON_TXN",
+      "decidedBy": "owner via ledger 824 (2)",
+      "decidedOn": "2026-10-05",
+      "decisionRef": "owner-decisions.md ledger 824"
+    },
+    {
+      "id": "L8",
+      "status": "DECIDED",
+      "recommendation": "Use the AUTH-FS-CROSS stage-2 fixture (conformance/auth-fs-cross-stage2-production.json, two production recordings on fireemu-oracle-idp) as Listen evidence for: a listener started after sign-out is refused (initial-unauthenticated-refusal; rows n-out/listen-signed-out and b-out/listen-signed-out), another principal's listener on a private document is refused (cross-principal-rules; rows n-ab/as-alice, n-ab/after-switch and the b-ab rows), and a native gRPC Listen resumed with the current token (raw-resume-token; row resume/open). Differences to state wherever the evidence is cited: project (idp, not query), Rules (the cross2 ruleset, not conformance/firestore.rules), principals made by the administrator, a state change in one client instead of two static clients, and the browser rows in the browser's default WebChannel mode.",
+      "decision": "AUTH_FS_CROSS_STAGE2_FIXTURE_REUSED",
+      "decidedBy": "owner via ledger 824 (1)",
+      "decidedOn": "2026-10-05",
+      "decisionRef": "owner-decisions.md ledger 824"
     }
   ],
   "conditions": [
@@ -329,7 +347,18 @@
         ],
         "recordingsRequired": 2
       },
-      "note": "Existing local receipts use the historical catalog. New conf_* sandbox recordings, complete cleanup and final-artifact comparison are still required."
+      "note": "Existing local receipts use the historical catalog. New conf_* sandbox recordings, complete cleanup and final-artifact comparison are still required.",
+      "fixtureEvidence": {
+        "fixture": "conformance/auth-fs-cross-stage2-production.json",
+        "decisionRef": "L8",
+        "rows": [
+          "n-out/listen-signed-out",
+          "b-out/listen-signed-out"
+        ],
+        "covers": "A listener started after sign-out ends permission-denied with no server snapshot, over the Node SDK and the browser SDK (default transport).",
+        "recordings": 2,
+        "status": "RECORDED_NOT_COMPARED"
+      }
     },
     {
       "conditionId": "FS-LISTEN-SDK/default-subscription",
@@ -407,7 +436,20 @@
         ],
         "recordingsRequired": 2
       },
-      "note": "Existing local receipts use the historical catalog. New conf_* sandbox recordings, complete cleanup and final-artifact comparison are still required."
+      "note": "Existing local receipts use the historical catalog. New conf_* sandbox recordings, complete cleanup and final-artifact comparison are still required.",
+      "fixtureEvidence": {
+        "fixture": "conformance/auth-fs-cross-stage2-production.json",
+        "decisionRef": "L8",
+        "rows": [
+          "n-ab/as-alice",
+          "n-ab/after-switch",
+          "b-ab/as-alice",
+          "b-ab/after-switch"
+        ],
+        "covers": "The owner receives the private document; with the other principal's token the listener on it ends permission-denied.",
+        "recordings": 2,
+        "status": "RECORDED_NOT_COMPARED"
+      }
     },
     {
       "conditionId": "FS-LISTEN-SDK/raw-resume-token",
@@ -439,7 +481,17 @@
         ],
         "recordingsRequired": 2
       },
-      "note": "Existing local receipts use the historical catalog. New conf_* sandbox recordings, complete cleanup and final-artifact comparison are still required."
+      "note": "Existing local receipts use the historical catalog. New conf_* sandbox recordings, complete cleanup and final-artifact comparison are still required. Stale is read as both an older token that is still inside the resume window and a token aged past it (about 30 minutes): packet L1 records both (rows native/resume-token/older and native/resume-token-expired/expired), beside the invalid-bytes, other-query and fresh-target rows.",
+      "fixtureEvidence": {
+        "fixture": "conformance/auth-fs-cross-stage2-production.json",
+        "decisionRef": "L8",
+        "rows": [
+          "resume/open"
+        ],
+        "covers": "A native gRPC Listen resumed with the current resume token, by the principal that got it and by another one: the frames that follow.",
+        "recordings": 2,
+        "status": "RECORDED_NOT_COMPARED"
+      }
     },
     {
       "conditionId": "FS-LISTEN-SDK/browser-tab-lifecycle",
@@ -666,7 +718,9 @@
       "conf_rules_owner"
     ],
     "retainedCatalogCases": 15,
-    "movedCatalogCases": 3
+    "movedCatalogCases": 3,
+    "nativeProject": "fireemu-oracle-txn",
+    "nativeProjectReason": "L7: native gRPC Listen with the owner access token needs no Rules and costs nothing on the unbilled txn project."
   },
   "note": "The shared 18-case catalog uses case IDs as recipe IDs; 15 belong to this parent and 106, 109 and 109C belong to AUTH-FS-CROSS under R2. Additional recipes use fs-listen-sdk/<condition>. Historical local shadows bind the old o6_listen paths and remain immutable. No production recording or closure is claimed.",
   "profileComparison": {
@@ -701,6 +755,10 @@
     "project": "fireemu-oracle-query",
     "database": "(default)",
     "credentials": "Unauthenticated Web SDK for public conf_listen cases and two throwaway Email/Password Firebase Auth accounts for conf_rules_owner cases.",
-    "productionExecuted": false
-  }
+    "productionExecuted": false,
+    "nativeProject": "fireemu-oracle-txn",
+    "nativeCredentials": "Owner access token (gcloud auth application-default print-access-token); no end-user credential."
+  },
+  "amendedOn": "2026-10-05",
+  "amendment": "Owner ledger 824 (2026-10-05) and the coordinator: native gRPC Listen recordings run on fireemu-oracle-txn (L7) and the AUTH-FS-CROSS stage-2 fixture serves as Listen evidence for three behaviours (L8). The 15 conditions, the frozen catalog mapping and every other scope decision are unchanged."
 }

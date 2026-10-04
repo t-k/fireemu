@@ -1,10 +1,12 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
 import { test } from "node:test";
 
 import {
   conditionsOf,
+  issuedSdkNames,
   loadApiKey,
   preflightKey,
   projectEvent,
@@ -13,6 +15,7 @@ import {
   rowsFromReceipt,
   runDriver,
   sweepDocuments,
+  unknownWrites,
 } from "./fs-listen/sdk-record.mjs";
 
 test("every SDK case maps to exactly one closure condition", () => {
@@ -109,45 +112,80 @@ test("rowsFromReceipt projects each event to its case's compared fields", () => 
   assert.deepEqual(rows["sdk/101"].observed, [{ docs: ["alpha"] }]);
 });
 
-test("sweepDocuments deletes the run's documents and the accounts' owner documents, then reads back", async () => {
-  const present = new Set([
-    "projects/p/databases/(default)/documents/conf_listen/r1-alpha",
-    "projects/p/databases/(default)/documents/conf_rules_owner/uB",
-  ]);
+test("sweepDocuments reads each issued name, deletes what is there and reads back", async () => {
+  const root = "projects/p/databases/(default)/documents";
+  const present = new Set([`${root}/conf_listen/r1-alpha`, `${root}/conf_rules_owner/uB`]);
+  const log = { commits: [], lists: [] };
   const client = {
-    async listIds() {
-      return ["projects/p/databases/(default)/documents/conf_listen/r1-alpha"];
+    async listIds(request) {
+      log.lists.push(request);
+      return [];
     },
     async missing(names) {
       return names.map((name) => ({ name, exists: present.has(name) }));
     },
     async commit({ writes }) {
+      log.commits.push(writes.map((w) => w.delete));
       for (const w of writes) present.delete(w.delete);
     },
   };
-  const report = await sweepDocuments({
-    client,
-    project: "p",
-    run: "r1",
-    accounts: { a: { uid: "uA" }, b: { uid: "uB" } },
-  });
-  assert.deepEqual(report, { complete: true, deleted: 2, stillPresent: 0, checked: 3 });
+  const accounts = { a: { uid: "uA" }, b: { uid: "uB" } };
+  const report = await sweepDocuments({ client, project: "p", run: "r1", accounts });
+  assert.equal(report.complete, true);
+  assert.equal(report.deleted, 2);
+  assert.equal(report.checked, 7);
   assert.equal(present.size, 0);
-  const stubborn = {
-    ...client,
-    async commit() {},
-    async listIds() {
-      return [];
+  assert.deepEqual(log.commits, [[`${root}/conf_listen/r1-alpha`, `${root}/conf_rules_owner/uB`]]);
+  // The prefix listing only looks for strays, in both collections the cases write to.
+  assert.deepEqual(
+    log.lists.map((l) => l.collectionId),
+    ["conf_listen", "conf_rules_owner"],
+  );
+  assert.ok(log.lists.every((l) => l.prefix === "r1" && l.parent === root));
+  // A stray (run-prefixed, never issued) is reported and not deleted.
+  const stray = `${root}/conf_listen/r1-stray`;
+  present.add(stray);
+  const withStray = await sweepDocuments({
+    client: {
+      ...client,
+      async listIds(r) {
+        return r.collectionId === "conf_listen" ? [stray] : [];
+      },
     },
-  };
-  present.add("projects/p/databases/(default)/documents/conf_rules_owner/uB");
-  const bad = await sweepDocuments({
-    client: stubborn,
     project: "p",
     run: "r1",
-    accounts: { b: { uid: "uB" } },
+    accounts,
   });
-  assert.equal(bad.complete, false);
+  assert.deepEqual(withStray.strays, [stray]);
+  assert.equal(withStray.complete, false);
+  assert.ok(present.has(stray));
+});
+
+test("issuedSdkNames lists the run's five public names and the accounts' owner documents", () => {
+  const names = issuedSdkNames({
+    project: "p",
+    run: "r1",
+    accounts: { a: { uid: "uA" }, b: { uid: "uB" }, c: {} },
+  });
+  const root = "projects/p/databases/(default)/documents";
+  assert.deepEqual(names, [
+    ...["alpha", "beta", "gamma", "delta", "absent"].map((d) => `${root}/conf_listen/r1-${d}`),
+    `${root}/conf_rules_owner/uA`,
+    `${root}/conf_rules_owner/uB`,
+  ]);
+  assert.equal(issuedSdkNames({ project: "p", run: "r1", accounts: {} }).length, 5);
+});
+
+test("unknownWrites is true for any case with a step that threw, and for nothing else", () => {
+  const receipt = (failures) => ({ cases: [{ failures: [] }, { failures }] });
+  assert.equal(unknownWrites(receipt(["step-threw:unavailable"])), true);
+  assert.equal(unknownWrites(receipt(["x", "step-threw:x"])), true);
+  assert.equal(
+    unknownWrites(receipt(["step-timeout", "deadline-exceeded", "unsubscribe-failed:p"])),
+    false,
+  );
+  assert.equal(unknownWrites(receipt([])), false);
+  assert.equal(unknownWrites({ cases: [] }), false);
 });
 
 test("recordSdk: a driver that fails leaves an error row and still cleans up the accounts", async () => {
@@ -446,6 +484,9 @@ test("recordSdk: a sweep or an account cleanup that fails is reported, not throw
   };
   const broken = {
     close() {},
+    async missing(names) {
+      return names.map((name) => ({ name, exists: false }));
+    },
     async listIds() {
       throw new Error("list refused");
     },
@@ -476,6 +517,9 @@ test("recordSdk: a thrown value that is not an Error is still reported as text",
       },
       makeNative: () => ({
         close() {},
+        async missing(names) {
+          return names.map((name) => ({ name, exists: false }));
+        },
         async listIds() {
           throw "no list";
         },
@@ -486,48 +530,6 @@ test("recordSdk: a thrown value that is not an Error is still reported as text",
   } finally {
     globalThis.fetch = realFetch;
   }
-});
-
-test("sweepDocuments asks for the run's prefix, deletes nothing when nothing is there, and passes a failed delete on", async () => {
-  const asked = [];
-  const commits = [];
-  const client = {
-    async listIds(request) {
-      asked.push(request);
-      return [];
-    },
-    async missing(names) {
-      return names.map((name) => ({ name, exists: false }));
-    },
-    async commit(request) {
-      commits.push(request);
-    },
-  };
-  const report = await sweepDocuments({ client, project: "p", run: "r1", accounts: {} });
-  assert.deepEqual(asked, [
-    {
-      parent: "projects/p/databases/(default)/documents",
-      collectionId: "conf_listen",
-      prefix: "r1",
-    },
-  ]);
-  assert.deepEqual(commits, []);
-  assert.deepEqual(report, { complete: true, deleted: 0, stillPresent: 0, checked: 0 });
-  const present = new Set(["projects/p/databases/(default)/documents/conf_rules_owner/uB"]);
-  const failing = {
-    ...client,
-    async missing(names) {
-      return names.map((name) => ({ name, exists: present.has(name) }));
-    },
-    async commit() {
-      await Promise.resolve();
-      throw new Error("delete refused");
-    },
-  };
-  await assert.rejects(
-    sweepDocuments({ client: failing, project: "p", run: "r1", accounts: { b: { uid: "uB" } } }),
-    /delete refused/,
-  );
 });
 
 test("runDriver: the process is spawned with piped output and inherited errors; other events change nothing; the deadline is 20 minutes", async (t) => {
@@ -659,7 +661,10 @@ const NUMBER = "123456789012";
 /** A fetch answering the two preflight reads; either answer can be replaced. */
 function preflightFetch({
   toolkit = [200, { projectId: NUMBER }],
-  crm = [200, { projectId: "fireemu-oracle-query", projectNumber: NUMBER }],
+  crm = [
+    200,
+    { projectId: "fireemu-oracle-query", projectNumber: NUMBER, lifecycleState: "ACTIVE" },
+  ],
 } = {}) {
   const calls = [];
   const fetchImpl = async (url, init = {}) => {
@@ -728,6 +733,23 @@ test("preflightKey fails closed on a different project, a missing value or any u
   await refuses(
     preflightFetch({ crm: [200, { projectId: "other", projectNumber: NUMBER }] }),
     /is not the project/,
+  );
+  await refuses(
+    preflightFetch({ crm: [200, { projectId: "fireemu-oracle-query", projectNumber: NUMBER }] }),
+    /is not ACTIVE/,
+  );
+  await refuses(
+    preflightFetch({
+      crm: [
+        200,
+        {
+          projectId: "fireemu-oracle-query",
+          projectNumber: NUMBER,
+          lifecycleState: "DELETE_REQUESTED",
+        },
+      ],
+    }),
+    /is not ACTIVE/,
   );
   await refuses(preflightFetch({ toolkit: [400, { error: {} }] }), /key read failed/);
   await refuses(preflightFetch({ toolkit: [403, {}] }), /key read failed/);
@@ -909,4 +931,65 @@ test("loadApiKey on a real file: the owner-only file is read as text, a group-re
   await assert.rejects(loadApiKey(file), /readable by others/);
   await assert.rejects(loadApiKey(dir), /not a file/);
   await assert.rejects(loadApiKey(join(dir, "missing")), /ENOENT/);
+});
+
+test("the key preflight accepts the answers production recorded for both reads", async () => {
+  const shapes = JSON.parse(
+    readFileSync(new URL("../fixtures/fs-listen/preflight-shapes.json", import.meta.url), "utf8"),
+  );
+  const toolkit = shapes.identityToolkitProjectsWithKey;
+  const crm = shapes.resourceManagerProject;
+  const run = (a, b, project = crm.body.projectId) =>
+    preflightKey({
+      apiKey: KEY,
+      project,
+      token: "TOK",
+      fetchImpl: async (url) => {
+        const answer = url.startsWith("https://identitytoolkit.googleapis.com/") ? a : b;
+        return { status: answer.status, json: async () => structuredClone(answer.body) };
+      },
+    });
+  assert.deepEqual(await run(toolkit, crm), { projectNumber: crm.body.projectNumber });
+  // The members the check reads are strings in the recorded shape: a number-typed projectId fails.
+  assert.equal(typeof toolkit.body.projectId, "string");
+  assert.equal(typeof crm.body.projectNumber, "string");
+  assert.equal(toolkit.body.projectId, crm.body.projectNumber);
+  await assert.rejects(
+    run({ ...toolkit, body: { ...toolkit.body, projectId: crm.body.projectId } }, crm),
+    /no project number/,
+  );
+  await assert.rejects(run(toolkit, crm, "another-project"), /is not the project/);
+});
+
+test("recordSdk: a case whose step threw makes the cleanup incomplete even when every read comes back clean", async () => {
+  const target = {
+    kind: "local",
+    project: "demo",
+    firestore: { host: "h", port: 1 },
+    auth: "http://a",
+  };
+  const receipt = (failures) => ({
+    thrown: null,
+    cleanup: { complete: true },
+    teardown: [{ client: "primary", closed: true }],
+    cases: [
+      {
+        caseId: "FS-LISTEN-SDK-101",
+        comparedFields: null,
+        observed: [],
+        failures,
+        invariantViolations: [],
+      },
+    ],
+  });
+  const clean = await recordWith(target, {
+    driver: { receipt: receipt([]), wire: 1, connections: 1 },
+  });
+  assert.equal(clean.recording.cleanup.writesKnown, true);
+  assert.equal(clean.recording.cleanup.complete, true);
+  const threw = await recordWith(target, {
+    driver: { receipt: receipt(["step-threw:unavailable"]), wire: 1, connections: 1 },
+  });
+  assert.equal(threw.recording.cleanup.writesKnown, false);
+  assert.equal(threw.recording.cleanup.complete, false);
 });

@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { test } from "node:test";
 
 import { createAccountClient, createAccountSession } from "./fs-listen/accounts.mjs";
@@ -474,4 +475,54 @@ test("the request deadline is a real one: it has not passed at once, and it pass
   await client.create({ email: "e", password: "p" });
   await new Promise((resolve) => setTimeout(resolve, 20));
   assert.equal(signal.aborted, false, "a deadline of 0 or a few ms would have passed by now");
+});
+
+// The answers production recorded for the same routes (conformance/auth-account-production.json,
+// the Identity Platform sandbox): the client must read exactly these.
+const recordedAccounts = JSON.parse(
+  readFileSync(new URL("../auth-account-production.json", import.meta.url), "utf8"),
+);
+const recordedStep = (program, step) => recordedAccounts.programs[program].steps[step];
+
+test("the account client reads the recorded production answers: create, delete, delete again, lookup of nobody", async () => {
+  const created = recordedStep("auth-account/admin/delete", "create");
+  const deleted = recordedStep("auth-account/admin/delete", "delete");
+  const again = recordedStep("auth-account/admin/delete", "delete-again");
+  const nobody = recordedStep("auth-account/admin/batch-delete", "lookup-after-force");
+  const present = recordedStep("auth-account/admin/batch-delete", "lookup-after-without-force");
+  assert.equal(created.body.kind, "identitytoolkit#SignupNewUserResponse");
+  assert.equal(again.status, 400);
+  const clientFor = (...steps) => {
+    const queue = [...steps];
+    return createAccountClient({
+      base: "b",
+      project: "p",
+      headers: {},
+      fetchImpl: async () => {
+        const next = queue.length > 1 ? queue.shift() : queue[0];
+        return { status: next.status, json: async () => structuredClone(next.body) };
+      },
+    });
+  };
+  assert.deepEqual(await clientFor(created).create({ email: "e", password: "p" }), {
+    kind: "created",
+    uid: created.body.localId,
+  });
+  assert.deepEqual(await clientFor(nobody).lookup({ localId: ["x"] }), []);
+  assert.deepEqual(
+    await clientFor(present).lookup({ localId: ["x"] }),
+    present.body.users.map((u) => u.localId),
+  );
+  // Delete then a lookup of nobody: gone and settled; the delete's own answer was a clean 200.
+  assert.deepEqual(await clientFor(deleted, nobody).remove("u"), {
+    settled: true,
+    unknownDelete: false,
+    why: null,
+  });
+  // Deleting an account that is already gone is a definite 400 refusal, not an unknown answer.
+  assert.deepEqual(await clientFor(again, nobody).remove("u"), {
+    settled: true,
+    unknownDelete: false,
+    why: null,
+  });
 });

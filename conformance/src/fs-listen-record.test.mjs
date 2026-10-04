@@ -44,13 +44,16 @@ function fakeClock() {
 }
 
 /** A client whose first write fails: the programs end in errors, the cleanup must still run. */
-function failingClient() {
+/** The code of the first commit's failure: 3 is a definite refusal, none is an unknown answer. */
+function failingClient(code = 3) {
+  failingClient.code = code;
   const calls = [];
   return {
     calls,
     async commit({ writes }) {
       calls.push(["commit", writes.length]);
-      if (calls.filter(([name]) => name === "commit").length === 1) throw new Error("boom");
+      if (calls.filter(([name]) => name === "commit").length === 1)
+        throw Object.assign(new Error("boom"), { code: failingClient.code });
     },
     async beginTransaction() {
       return Buffer.from("t");
@@ -174,4 +177,31 @@ test("recordNative reports a cleanup failure by its message, or by the value whe
     complete: false,
     error: "plain text",
   });
+});
+
+test("recordNative: a first write whose answer was unknown cannot be settled by finding nothing", async () => {
+  const client = failingClient(null);
+  const recording = await recordNative({ client, project: "p", run: "r1", clock: fakeClock() });
+  assert.equal(recording.cleanup.complete, false);
+  assert.equal(recording.cleanup.unsettled.length, 1);
+  assert.match(
+    recording.cleanup.unsettled[0],
+    /^projects\/p\/databases\/\(default\)\/documents\/lsn_native\/r1-/,
+  );
+  assert.equal(recording.cleanup.unknownDeletes.length, 0);
+  const refused = await recordNative({
+    client: failingClient(3),
+    project: "p",
+    run: "r1",
+    clock: fakeClock(),
+  });
+  assert.equal(refused.cleanup.complete, true, "a definite refusal left nothing behind");
+});
+
+test("recordNative can record the long program too, and defaults to the short ones", async () => {
+  const { programsFor } = await import("./fs-listen/record.mjs");
+  const { LONG_PROGRAMS, NATIVE_PROGRAMS } = await import("./fs-listen/native-programs.mjs");
+  assert.deepEqual(programsFor({}), NATIVE_PROGRAMS);
+  assert.deepEqual(programsFor({ "include-long": "no" }), NATIVE_PROGRAMS);
+  assert.deepEqual(programsFor({ "include-long": "yes" }), [...NATIVE_PROGRAMS, ...LONG_PROGRAMS]);
 });

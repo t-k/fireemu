@@ -5,6 +5,7 @@
 // tested with a scripted one.
 
 import { commitGroups, frameRows } from "./frames.mjs";
+import { createLedger, isDefinitiveRefusal } from "./native-ledger.mjs";
 
 const sleepReal = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -117,12 +118,25 @@ export async function runNative(
     settleMs = 1500,
     maxRequests = 400,
     log = () => {},
+    ledger = createLedger(),
   },
 ) {
   const root = `projects/${project}/databases/(default)/documents`;
   const database = `projects/${project}/databases/(default)`;
   const rows = {};
   const errors = {};
+  /** One Commit whose names are issued first and whose answer is recorded as ok, refused or unknown. */
+  const commitTracked = async (request) => {
+    ledger.issue(request.writes);
+    try {
+      const answer = await client.commit(request);
+      ledger.answered(request.writes, "ok");
+      return answer;
+    } catch (error) {
+      ledger.answered(request.writes, isDefinitiveRefusal(error) ? "refused" : "unknown");
+      throw error;
+    }
+  };
   let requests = 0;
   const charge = (what) => {
     requests += 1;
@@ -148,21 +162,21 @@ export async function runNative(
           case "seed":
           case "write":
             charge(step.do);
-            await client.commit({ writes: [writeOf(step)] });
+            await commitTracked({ writes: [writeOf(step)] });
             break;
           case "delete":
             charge(step.do);
-            await client.commit({ writes: [writeOf({ delete: step.doc })] });
+            await commitTracked({ writes: [writeOf({ delete: step.doc })] });
             break;
           case "commit":
             charge(step.do);
-            await client.commit({ writes: step.writes.map(writeOf) });
+            await commitTracked({ writes: step.writes.map(writeOf) });
             break;
           case "txn": {
             charge("begin");
             const transaction = await client.beginTransaction();
             charge(step.do);
-            await client.commit({ writes: step.writes.map(writeOf), transaction });
+            await commitTracked({ writes: step.writes.map(writeOf), transaction });
             break;
           }
           case "open": {
@@ -234,6 +248,10 @@ export async function runNative(
           case "sleep":
             await sleep(step.ms);
             break;
+          case "refresh":
+            // A long wait outlives an access token: the client gets a fresh one if it can.
+            await client.refresh?.();
+            break;
           default:
             throw new Error(`unknown step ${step.do}`);
         }
@@ -244,33 +262,5 @@ export async function runNative(
       for (const stream of streams.values()) await stream.close();
     }
   }
-  return { rows, errors, requests };
-}
-
-/**
- * Deletes what the run created and reads every name back. `sweep` lists collections whose
- * documents carry the run's prefix (a write whose answer was lost); only names with that prefix
- * are touched. Complete means every name read back as missing.
- */
-export async function cleanupNative(programs, { client, project, run, sweep }) {
-  const root = `projects/${project}/databases/(default)/documents`;
-  const names = new Set();
-  for (const program of programs)
-    for (const template of Object.values(program.docs ?? {}))
-      names.add(`${root}/${template.replaceAll("{run}", run)}`);
-  for (const { parent, collectionId } of sweep)
-    for (const name of await client.listIds({ parent, collectionId, prefix: run })) names.add(name);
-  const all = [...names];
-  const before = await client.missing(all);
-  const existing = before.filter((entry) => entry.exists).map((entry) => entry.name);
-  for (let i = 0; i < existing.length; i += 100)
-    await client.commit({ writes: existing.slice(i, i + 100).map((name) => ({ delete: name })) });
-  const after = await client.missing(all);
-  const stillPresent = after.filter((entry) => entry.exists).map((entry) => entry.name);
-  return {
-    complete: stillPresent.length === 0,
-    deleted: existing,
-    stillPresent,
-    checked: all.length,
-  };
+  return { rows, errors, requests, issued: ledger.entries() };
 }

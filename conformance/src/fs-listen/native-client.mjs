@@ -6,6 +6,7 @@
 import { createRequire } from "node:module";
 
 import { describeFrame } from "../auth-fs-cross/listen-grpc.mjs";
+import { listedNames, readBack } from "./native-parse.mjs";
 
 const require = createRequire(import.meta.url);
 const grpc = require("@grpc/grpc-js");
@@ -15,7 +16,14 @@ const SERVICE = "/google.firestore.v1.Firestore";
 /** The frames a stream may record before it is closed as over its cap. */
 export const FRAME_CAP = 500;
 
-export function createNativeClient({ project, target, token, now = () => Date.now() }) {
+export function createNativeClient({
+  project,
+  target,
+  token,
+  refreshToken,
+  now = () => Date.now(),
+}) {
+  let bearer = token;
   const protos = new v1.FirestoreClient({ projectId: project })._protos.google.firestore.v1;
   const database = `projects/${project}/databases/(default)`;
   const grpcClient =
@@ -24,7 +32,7 @@ export function createNativeClient({ project, target, token, now = () => Date.no
       : new grpc.Client(`${target.host}:${target.port}`, grpc.credentials.createInsecure());
   const metadata = () => {
     const meta = new grpc.Metadata();
-    meta.set("authorization", `Bearer ${target.kind === "production" ? token : "owner"}`);
+    meta.set("authorization", `Bearer ${target.kind === "production" ? bearer : "owner"}`);
     meta.set("google-cloud-resource-prefix", database);
     meta.set("x-goog-request-params", `database=${encodeURIComponent(database)}`);
     if (target.kind === "production") meta.set("x-goog-user-project", project);
@@ -60,6 +68,11 @@ export function createNativeClient({ project, target, token, now = () => Date.no
 
   return {
     close: () => grpcClient.close(),
+
+    /** A new access token for later calls (a recording that waits longer than a token lives). */
+    async refresh() {
+      if (refreshToken) bearer = await refreshToken();
+    },
 
     async commit({ writes, transaction }) {
       return unary("Commit", { database, writes, ...(transaction ? { transaction } : {}) });
@@ -126,8 +139,7 @@ export function createNativeClient({ project, target, token, now = () => Date.no
       for (let i = 0; i < names.length; i += 100) {
         const chunk = names.slice(i, i + 100);
         const results = await serverStream("BatchGetDocuments", { database, documents: chunk });
-        const found = new Set(results.filter((r) => r.found).map((r) => r.found.name));
-        for (const name of chunk) out.push({ name, exists: found.has(name) });
+        out.push(...readBack(chunk, results));
       }
       return out;
     },
@@ -143,8 +155,7 @@ export function createNativeClient({ project, target, token, now = () => Date.no
           pageToken,
           showMissing: false,
         });
-        for (const doc of page.documents ?? [])
-          if (doc.name.split("/").at(-1).startsWith(prefix)) names.push(doc.name);
+        names.push(...listedNames(page, prefix));
         pageToken = page.nextPageToken ?? "";
       } while (pageToken);
       return names;

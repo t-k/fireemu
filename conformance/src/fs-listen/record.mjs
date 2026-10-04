@@ -5,6 +5,7 @@
 //
 //   node src/fs-listen/record.mjs native --target production --project fireemu-oracle-txn --out F
 //   node src/fs-listen/record.mjs native --target local [--profile strict|emulator] --out F
+//   (add `--include-long yes` to also record the expired-token program: about 35 minutes of waiting)
 //   node src/fs-listen/record.mjs sdk --target production --project fireemu-oracle-query \
 //        --api-key-file KEY --out F     (KEY: a 0600 file holding only the web app's API key;
 //                                         the key is bound to the project before anything is made)
@@ -21,8 +22,9 @@ import { promisify } from "node:util";
 
 import { resolveFireemuBinary } from "../evidence.mjs";
 import { createNativeClient } from "./native-client.mjs";
-import { NATIVE_PROGRAMS, SWEEP, programProblems } from "./native-programs.mjs";
-import { cleanupNative, runNative } from "./native-run.mjs";
+import { createLedger, settleNames } from "./native-ledger.mjs";
+import { LONG_PROGRAMS, NATIVE_PROGRAMS, programProblems } from "./native-programs.mjs";
+import { runNative } from "./native-run.mjs";
 import { loadApiKey, recordSdk } from "./sdk-record.mjs";
 
 const execFileAsync = promisify(execFile);
@@ -61,23 +63,30 @@ async function accessToken() {
 /** The run id: lower-case letters and digits, valid in a document id. */
 export const newRunId = (now = Date.now()) => `n${now.toString(36)}`;
 
-/** Records the native programs once with `client`, then cleans up; returns the recording. */
-export async function recordNative({ client, project, run, log = () => {}, clock = {} }) {
+/** The programs a run records: the short ones, and the long ones too with `--include-long yes`. */
+export const programsFor = (options) =>
+  options["include-long"] === "yes" ? [...NATIVE_PROGRAMS, ...LONG_PROGRAMS] : NATIVE_PROGRAMS;
+
+/** Records the native programs once with `client`, then settles every name issued; returns the recording. */
+export async function recordNative({
+  client,
+  project,
+  run,
+  log = () => {},
+  clock = {},
+  programs = NATIVE_PROGRAMS,
+}) {
   const startedAt = new Date().toISOString();
   const root = `projects/${project}/databases/(default)/documents`;
+  // The ledger outlives a run that fails: cleanup works from the names issued, however it ended.
+  const ledger = createLedger();
   let cleanup;
   let outcome;
   try {
-    outcome = await runNative(NATIVE_PROGRAMS, { client, project, run, log, ...clock });
+    outcome = await runNative(programs, { client, project, run, log, ledger, ...clock });
   } finally {
     try {
-      const report = await cleanupNative(NATIVE_PROGRAMS, {
-        client,
-        project,
-        run,
-        sweep: SWEEP(root),
-      });
-      cleanup = { ...report, deleted: report.deleted.length };
+      cleanup = await settleNames({ issued: ledger.entries(), client, root, run });
     } catch (error) {
       cleanup = { complete: false, error: String(error?.message ?? error) };
     }
@@ -96,12 +105,13 @@ export async function recordNative({ client, project, run, log = () => {}, clock
 
 async function nativeProduction(options) {
   checkProject("native", options.project);
-  const problems = programProblems(NATIVE_PROGRAMS);
+  const problems = programProblems([...NATIVE_PROGRAMS, ...LONG_PROGRAMS]);
   if (problems.length) throw new Error(`the programs are malformed:\n${problems.join("\n")}`);
   const client = createNativeClient({
     project: options.project,
     target: { kind: "production" },
     token: await accessToken(),
+    refreshToken: accessToken,
   });
   try {
     return await recordNative({
@@ -109,6 +119,7 @@ async function nativeProduction(options) {
       project: options.project,
       run: newRunId(),
       log: (line) => console.error(line),
+      programs: programsFor(options),
     });
   } finally {
     client.close();
@@ -124,7 +135,12 @@ async function nativeInsideFireemu(options) {
     target: { kind: "local", host, port: Number(port) },
   });
   try {
-    return await recordNative({ client, project, run: newRunId() });
+    return await recordNative({
+      client,
+      project,
+      run: newRunId(),
+      programs: programsFor(options),
+    });
   } finally {
     client.close();
   }
@@ -249,7 +265,12 @@ export async function withOfficialEmulator({ script, args, rules, auth = false }
 /** Runs `command` of this file inside a fireemu session and returns the recording it wrote. */
 async function inFireemu(options, command, { rules } = {}) {
   const tmp = join(await mkdtemp(join(tmpdir(), "fs-listen-out-")), "recording.json");
-  const args = [command, "--out", tmp];
+  const args = [
+    command,
+    "--out",
+    tmp,
+    ...(options["include-long"] ? ["--include-long", options["include-long"]] : []),
+  ];
   const code =
     options.target === "official"
       ? await withOfficialEmulator({ script: HERE, args, rules, auth: command.startsWith("sdk") })

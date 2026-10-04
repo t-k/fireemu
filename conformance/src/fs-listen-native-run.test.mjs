@@ -1,13 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import {
-  cleanupNative,
-  runNative,
-  targetFor,
-  toFields,
-  waitHolds,
-} from "./fs-listen/native-run.mjs";
+import { runNative, targetFor, toFields, waitHolds } from "./fs-listen/native-run.mjs";
 
 const PROJECT = "p1";
 const RUN = "r1";
@@ -275,42 +269,6 @@ test("a transaction step begins, then commits with the transaction id; a commit 
   assert.equal(log[1][0], "commit");
   assert.deepEqual(log[1][2], Buffer.from("tx"));
   assert.equal(log[2][1].length, 2);
-});
-
-test("cleanup deletes every owned document and reads each back as missing", async () => {
-  const { client, docs } = fakeClient();
-  docs.set(`${ROOT}/lsn/${RUN}-a`, {});
-  docs.set(`${ROOT}/lsn/${RUN}-zz`, {});
-  docs.set(`${ROOT}/lsn/other-1`, {});
-  const report = await cleanupNative([{ docs: { a: "lsn/{run}-a" } }], {
-    client,
-    project: PROJECT,
-    run: RUN,
-    sweep: [{ parent: ROOT, collectionId: "lsn" }],
-  });
-  assert.equal(report.complete, true);
-  assert.deepEqual([...docs.keys()], [`${ROOT}/lsn/other-1`]);
-  assert.deepEqual(
-    report.deleted.toSorted(),
-    [`${ROOT}/lsn/${RUN}-a`, `${ROOT}/lsn/${RUN}-zz`].toSorted(),
-  );
-});
-
-test("cleanup is incomplete when a document is still there after the delete", async () => {
-  const { client, docs } = fakeClient();
-  docs.set(`${ROOT}/lsn/${RUN}-a`, {});
-  const stubborn = {
-    ...client,
-    async commit() {},
-  };
-  const report = await cleanupNative([{ docs: { a: "lsn/{run}-a" } }], {
-    client: stubborn,
-    project: PROJECT,
-    run: RUN,
-    sweep: [],
-  });
-  assert.equal(report.complete, false);
-  assert.deepEqual(report.stillPresent, [`${ROOT}/lsn/${RUN}-a`]);
 });
 
 test("toFields writes each supported JS value as its Firestore Value and refuses the rest", () => {
@@ -624,48 +582,6 @@ test("runNative: a program that fails closes its streams; the next program still
   assert.deepEqual(log.at(-1), ["commit", [`${ROOT}/lsn/${RUN}-b`], null]);
 });
 
-test("cleanup deletes only what exists, in batches of at most 100, and reports what it checked", async () => {
-  const { client, docs, log } = fakeClient();
-  const template = {};
-  for (let i = 0; i < 230; i += 1) {
-    template[`d${i}`] = `lsn/{run}-d${i}`;
-    docs.set(`${ROOT}/lsn/${RUN}-d${i}`, {});
-  }
-  template.absent = "lsn/{run}-nope";
-  const report = await cleanupNative([{ docs: template }], {
-    client,
-    project: PROJECT,
-    run: RUN,
-    sweep: [],
-  });
-  assert.equal(report.checked, 231);
-  assert.equal(report.deleted.length, 230);
-  assert.deepEqual(
-    log.filter(([name]) => name === "commit").map(([, deletes]) => deletes.length),
-    [100, 100, 30],
-  );
-  assert.equal(report.complete, true);
-});
-
-test("cleanup asks the client to sweep with the run as the prefix and deletes what it finds", async () => {
-  const { client, docs } = fakeClient();
-  docs.set(`${ROOT}/c/${RUN}-lost`, {});
-  const asked = [];
-  client.listIds = async (request) => {
-    asked.push(request);
-    return [`${ROOT}/c/${RUN}-lost`];
-  };
-  const report = await cleanupNative([{ docs: {} }], {
-    client,
-    project: PROJECT,
-    run: RUN,
-    sweep: [{ parent: ROOT, collectionId: "c" }],
-  });
-  assert.deepEqual(asked, [{ parent: ROOT, collectionId: "c", prefix: RUN }]);
-  assert.deepEqual(report.deleted, [`${ROOT}/c/${RUN}-lost`]);
-  assert.equal(docs.size, 0);
-});
-
 test("a wait that nothing satisfies ends exactly at its deadline, 30 s by default", async () => {
   const wait = (extra) => [
     { do: "open", stream: "s", targets: [{ id: 1, doc: "a" }] },
@@ -837,40 +753,6 @@ test("a stream name can be used again after it was closed, from its first frame"
   );
   assert.equal(out.rows["native/t/one"].rows.length, 3);
   assert.equal(out.rows["native/t/two"].rows.length, 2);
-});
-
-test("a cleanup commit that fails is the cleanup's failure, and 100 documents are one batch", async () => {
-  const { client, docs, log } = fakeClient();
-  for (let i = 0; i < 100; i += 1) docs.set(`${ROOT}/lsn/${RUN}-d${i}`, {});
-  const template = Object.fromEntries(
-    Array.from({ length: 100 }, (_, i) => [`d${i}`, `lsn/{run}-d${i}`]),
-  );
-  const report = await cleanupNative([{ docs: template }], {
-    client,
-    project: PROJECT,
-    run: RUN,
-    sweep: [],
-  });
-  assert.deepEqual(
-    log.filter(([name]) => name === "commit").map(([, w]) => w.length),
-    [100],
-  );
-  assert.equal(report.complete, true);
-  const failing = fakeClient();
-  failing.docs.set(`${ROOT}/lsn/${RUN}-a`, {});
-  failing.client.commit = async () => {
-    await Promise.resolve();
-    throw new Error("commit refused");
-  };
-  await assert.rejects(
-    cleanupNative([{ docs: { a: "lsn/{run}-a" } }], {
-      client: failing.client,
-      project: PROJECT,
-      run: RUN,
-      sweep: [],
-    }),
-    /commit refused/,
-  );
 });
 
 test("a token or read time that is a plain Buffer survives a save and an open unchanged", async () => {
@@ -1062,4 +944,102 @@ test("a record with groups lists the commit groups with the program's names; wit
   );
   const without = await runSteps(rec(false), frames);
   assert.equal("groups" in without.out.rows["native/t/x"], false);
+});
+
+test("runNative reports every name it issued with what each answer said", async () => {
+  const { client, clock } = fakeClient({});
+  const codes = [undefined, 3, 14, undefined, 14];
+  let call = 0;
+  client.commit = async () => {
+    const code = codes[call++];
+    if (code !== undefined) throw Object.assign(new Error("x"), { code });
+  };
+  const one = (id, step) => ({
+    id: `native/${id}`,
+    conditions: ["x"],
+    docs: { a: "lsn/{run}-a", b: "lsn/{run}-b", c: "lsn/{run}-c", d: "lsn/{run}-d" },
+    steps: [step],
+  });
+  const out = await runNative(
+    [
+      one("1", { do: "seed", doc: "a", fields: {} }),
+      one("2", { do: "seed", doc: "b", fields: {} }),
+      one("3", { do: "seed", doc: "c", fields: {} }),
+      one("4", { do: "delete", doc: "a" }),
+      one("5", { do: "delete", doc: "d" }),
+    ],
+    {
+      client,
+      project: PROJECT,
+      run: RUN,
+      sleep: async (ms) => {
+        await Promise.resolve();
+        clock.t += ms;
+      },
+      now: () => clock.t,
+    },
+  );
+  const issued = Object.fromEntries(
+    out.issued.map(([name, state]) => [name.split("-").at(-1), state]),
+  );
+  // a: created (ok), then deleted (ok); b: refused (code 3); c: unknown (code 14);
+  // d: only ever deleted, and the delete's answer was unknown.
+  assert.deepEqual(issued, {
+    a: { present: false, unknownDelete: false },
+    b: { present: false, unknownDelete: false },
+    c: { present: "unknown", unknownDelete: false },
+    d: { present: "unknown", unknownDelete: true },
+  });
+  assert.deepEqual(Object.keys(out.errors), ["native/2", "native/3", "native/5"]);
+});
+
+test("a ledger supplied by the caller keeps the names even when the run is cut short", async () => {
+  const { createLedger } = await import("./fs-listen/native-ledger.mjs");
+  const ledger = createLedger();
+  const { client, clock } = fakeClient({});
+  await runNative(
+    [
+      {
+        id: "native/t",
+        conditions: ["x"],
+        docs: { a: "lsn/{run}-a" },
+        steps: [{ do: "seed", doc: "a", fields: {} }, { do: "teleport" }],
+      },
+    ],
+    {
+      client,
+      project: PROJECT,
+      run: RUN,
+      ledger,
+      sleep: async (ms) => {
+        await Promise.resolve();
+        clock.t += ms;
+      },
+      now: () => clock.t,
+    },
+  );
+  assert.deepEqual(
+    ledger.entries().map(([name]) => name),
+    [`${ROOT}/lsn/${RUN}-a`],
+  );
+});
+
+test("a refresh step asks the client for a new token, and a client without one is fine", async () => {
+  const { client } = fakeClient({});
+  let refreshed = 0;
+  const steps = [{ do: "refresh" }];
+  const run = (c) =>
+    runNative([{ id: "native/t", conditions: ["x"], docs: {}, steps }], {
+      client: c,
+      project: PROJECT,
+      run: RUN,
+      sleep: async () => {},
+      now: () => 0,
+    });
+  assert.deepEqual((await run(client)).errors, {});
+  client.refresh = async () => {
+    refreshed += 1;
+  };
+  assert.deepEqual((await run(client)).errors, {});
+  assert.equal(refreshed, 1);
 });

@@ -3,14 +3,15 @@ import { test } from "node:test";
 
 import {
   COLLECTION,
+  LONG_PROGRAMS,
   NATIVE_PROGRAMS,
-  SWEEP,
   programProblems,
 } from "./fs-listen/native-programs.mjs";
-import { cleanupNative, runNative, targetFor } from "./fs-listen/native-run.mjs";
+import { runNative, targetFor } from "./fs-listen/native-run.mjs";
 
 test("the native programs are well formed", () => {
   assert.deepEqual(programProblems(NATIVE_PROGRAMS), []);
+  assert.deepEqual(programProblems([...NATIVE_PROGRAMS, ...LONG_PROGRAMS]), []);
 });
 
 test("every closure condition the native programs serve is named by a program", () => {
@@ -128,13 +129,6 @@ test("the programs run to the end against a client that answers every wait", asy
   for (const program of NATIVE_PROGRAMS)
     for (const step of program.steps)
       if (step.do === "record") assert.ok(recorded.has(step.row), step.row);
-  const report = await cleanupNative(NATIVE_PROGRAMS, {
-    client,
-    project: "p",
-    run: "r",
-    sweep: [],
-  });
-  assert.equal(report.complete, true);
 });
 
 const prog = (steps, extra = {}) => ({
@@ -324,10 +318,9 @@ test("a once target is not waited for with CURRENT, and the helper waits for eve
   assert.deepEqual(all[dup + 2], { do: "settle" });
 });
 
-test("the sweep covers the collection the programs write to", () => {
-  assert.deepEqual(SWEEP("ROOT"), [{ parent: "ROOT", collectionId: COLLECTION }]);
-  for (const p of NATIVE_PROGRAMS)
-    for (const t of Object.values(p.docs)) assert.ok(t.startsWith(`${COLLECTION}/`));
+test("every document a program writes is under the collection the strays check lists", () => {
+  for (const p of [...NATIVE_PROGRAMS, ...LONG_PROGRAMS])
+    for (const t of Object.values(p.docs)) assert.ok(t.startsWith(`${COLLECTION}/`), t);
 });
 
 test("programProblems reports each fault once, with its step number and kind", () => {
@@ -394,6 +387,7 @@ test("the programs record exactly these rows", () => {
     "native/target-lifecycle/delete",
     "native/target-protocol/duplicate-id",
     "native/target-protocol/server-assigned-id",
+    "native/target-protocol/second-zero-id",
     "native/target-protocol/id-after-assigned",
     "native/target-protocol/negative-id",
     "native/target-protocol/once",
@@ -449,4 +443,36 @@ test("a step on a stream that is not open is one problem, whatever the step", ()
     [],
   );
   assert.deepEqual(problemsOf(prog([open, { do: "settle" }, { do: "close", stream: "s" }])), []);
+});
+
+test("the expired-token program waits past the resume window, refreshes the token, and is the only long one", () => {
+  assert.deepEqual(
+    LONG_PROGRAMS.map((p) => p.id),
+    ["native/resume-token-expired"],
+  );
+  assert.ok(LONG_PROGRAMS.every((p) => p.long === true));
+  assert.ok(NATIVE_PROGRAMS.every((p) => p.long !== true));
+  const steps = LONG_PROGRAMS[0].steps;
+  const sleep = steps.findIndex((s) => s.do === "sleep");
+  assert.ok(steps[sleep].ms >= 31 * 60_000, "longer than the 30 minutes a backend can resume from");
+  assert.deepEqual(steps[sleep + 1], { do: "refresh" });
+  // The token is saved before the wait and the stream is closed during it.
+  const save = steps.findIndex((s) => s.do === "save");
+  const close = steps.findIndex((s) => s.do === "close");
+  assert.ok(save < close && close < sleep);
+  assert.deepEqual(
+    steps.filter((s) => s.do === "record").map((s) => s.row),
+    [
+      "native/resume-token-expired/first",
+      "native/resume-token-expired/expired",
+      "native/resume-token-expired/fresh-control",
+    ],
+  );
+});
+
+test("the programs ask for target id 0 twice on one stream, beside an explicit id", () => {
+  const steps = NATIVE_PROGRAMS.find((p) => p.id === "native/target-protocol").steps;
+  const zeros = steps.filter((s) => (s.targets ?? [s.target ?? {}]).some((t) => t.id === 0));
+  assert.equal(zeros.length, 2);
+  assert.ok(steps.some((s) => s.target?.id === 7));
 });

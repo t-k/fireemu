@@ -1,7 +1,7 @@
 {
  "kind": "storage-object-comparison-v1",
- "artifactSha256": "9a44dceb1fd5a058513e0bfde6cc498aa4afec45fa5f63cb452bdd174f73dabb",
- "sourceCommit": "c57f0b2091da13ce6e2b8efee0e6755e9d5d3f30",
+ "artifactSha256": "d0d8d43726a808b600f702f1f6be26c4863fc48dd7b4971a519adcae9ce01888",
+ "sourceCommit": "774a9f24c62abdd7381c66797d6202ed03f24666",
  "fixtureSha256": "bc3e93d9d9a3a10db5ff322e15f06a4258d2dd6e20c08400ad12d75f9c228446",
  "recorderCommit": "9d4262cad1d3727f51dadd67a767469b229b7fa8",
  "summary": {

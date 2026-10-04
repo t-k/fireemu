@@ -1,6 +1,11 @@
 import { isAbsolute } from "node:path";
 
-const canaries = new Set(["fsCreatedV1", "fsCreatedV2", "storageFinalizedV1", "storageFinalizedV2"]);
+const canaries = new Set([
+  "fsCreatedV1",
+  "fsCreatedV2",
+  "storageFinalizedV1",
+  "storageFinalizedV2",
+]);
 const captureModes = new Set(["reject-canary", "stdout"]);
 
 // The Firestore, Storage and Pub/Sub handlers of the second delivery probe (FE 013), in the order the
@@ -23,17 +28,36 @@ export const probeCanaries = [
 // The 22 handlers of the formal recording (every export of the fixture), in the order the capture
 // lists them. Like the probe set, they deploy and delete as one set, in one CLI command each.
 export const formalHandlers = [
-  "fsCreatedV1", "fsCreatedV2", "fsUpdatedV1", "fsUpdatedV2", "fsDeletedV1", "fsDeletedV2",
-  "fsWrittenV1", "fsWrittenV2", "fsWrittenWithAuthContextV2", "fsRetryV2",
-  "storageFinalizedV1", "storageFinalizedV2", "storageDeletedV1", "storageDeletedV2",
-  "storageMetadataUpdatedV1", "storageMetadataUpdatedV2", "storageArchivedV1", "storageArchivedV2",
-  "authCreatedV1", "authDeletedV1", "pubsubPublishedV1", "pubsubPublishedV2",
+  "fsCreatedV1",
+  "fsCreatedV2",
+  "fsUpdatedV1",
+  "fsUpdatedV2",
+  "fsDeletedV1",
+  "fsDeletedV2",
+  "fsWrittenV1",
+  "fsWrittenV2",
+  "fsWrittenWithAuthContextV2",
+  "fsRetryV2",
+  "storageFinalizedV1",
+  "storageFinalizedV2",
+  "storageDeletedV1",
+  "storageDeletedV2",
+  "storageMetadataUpdatedV1",
+  "storageMetadataUpdatedV2",
+  "storageArchivedV1",
+  "storageArchivedV2",
+  "authCreatedV1",
+  "authDeletedV1",
+  "pubsubPublishedV1",
+  "pubsubPublishedV2",
 ];
 
 const reviewedSets = [probeCanaries, formalHandlers];
 const isReviewedSet = (names) =>
   Array.isArray(names) &&
-  reviewedSets.some((set) => names.length === set.length && names.every((name, index) => name === set[index]));
+  reviewedSets.some(
+    (set) => names.length === set.length && names.every((name, index) => name === set[index]),
+  );
 
 function requireProject(projectId) {
   if (!/^[a-z][a-z0-9-]{4,28}[a-z0-9]$/.test(projectId)) {

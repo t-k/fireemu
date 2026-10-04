@@ -13,7 +13,13 @@ function setup() {
   let t = Date.UTC(2026, 9, 4);
   const world = createWorld({ now: () => t });
   const directory = mkdtempSync(join(tmpdir(), "fe-clean-"));
-  const transport = createTransport({ directory, ceiling: 1000, token: async () => "t", apiKey: "k", fetch: world.fetch });
+  const transport = createTransport({
+    directory,
+    ceiling: 1000,
+    token: async () => "t",
+    apiKey: "k",
+    fetch: world.fetch,
+  });
   const slept = [];
   const cliCalls = [];
   const cli = async (action) => {
@@ -43,7 +49,10 @@ test("leftover objects (every generation), markers and versioning are removed an
   const { world, transport, cli, sleep } = setup();
   world.deploy();
   world.buckets.get(PRIMARY_BUCKET).versioning = true;
-  put(world, `${PRIMARY_BUCKET}/fe-events/e1.txt`, [{ generation: "1", live: false }, { generation: "2", live: true }]);
+  put(world, `${PRIMARY_BUCKET}/fe-events/e1.txt`, [
+    { generation: "1", live: false },
+    { generation: "2", live: true },
+  ]);
   put(world, `${PRIMARY_BUCKET}/other/e2.txt`, [{ generation: "3", live: true }]);
   world.docs.set("fe_events_retry_markers/abc", { documentPath: { stringValue: "x" } });
   const result = await runCleanup({ transport, cli, sleep, ran: { deployStarted: true } });
@@ -55,7 +64,7 @@ test("leftover objects (every generation), markers and versioning are removed an
 });
 
 test("a run that never started the deploy sends no CLI delete", async () => {
-  const { world, transport, cli, cliCalls, sleep } = setup();
+  const { transport, cli, cliCalls, sleep } = setup();
   const result = await runCleanup({ transport, cli, sleep, ran: { deployStarted: false } });
   assert.deepEqual(cliCalls, []);
   assert.equal(result.steps.functions.skipped.includes("never started"), true);
@@ -78,7 +87,10 @@ test("functions that stay listed after the delete make the run needs-recovery, w
 
 test("an unreadable object list is a problem, never an empty bucket", async () => {
   const { world, transport, cli, sleep } = setup();
-  world.failures.push({ match: (m, u) => u.includes(`/b/${PRIMARY_BUCKET}/o?versions=true`), status: 503 });
+  world.failures.push({
+    match: (m, u) => u.includes(`/b/${PRIMARY_BUCKET}/o?versions=true`),
+    status: 503,
+  });
   const result = await runCleanup({ transport, cli, sleep, ran: { deployStarted: false } });
   assert.equal(result.verified, false);
   assert.ok(result.problems.some((p) => p.startsWith("objects-primary")));
@@ -90,5 +102,9 @@ test("a delete that gets no answer is not counted as removed and is not retried"
   world.failures.push({ match: (m) => m === "DELETE", error: "TimeoutError" });
   const result = await runCleanup({ transport, cli, sleep, ran: { deployStarted: false } });
   assert.equal(result.verified, false);
-  assert.equal(world.requests.filter((r) => r.method === "DELETE" && r.url.includes("fe-events%2Fe1.txt")).length, 1);
+  assert.equal(
+    world.requests.filter((r) => r.method === "DELETE" && r.url.includes("fe-events%2Fe1.txt"))
+      .length,
+    1,
+  );
 });

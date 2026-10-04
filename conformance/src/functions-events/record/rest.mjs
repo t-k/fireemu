@@ -19,7 +19,8 @@ export class BudgetExhausted extends Error {}
 /** `unknown` is the answer class a change may not be settled on: no answer, a timeout, a redirect, below 200, 5xx, an unreadable body. */
 export function classify({ status, error, bodyReadable }) {
   if (error) return "unknown";
-  if (!Number.isInteger(status) || status < 200 || (status >= 300 && status < 400) || status >= 500) return "unknown";
+  if (!Number.isInteger(status) || status < 200 || (status >= 300 && status < 400) || status >= 500)
+    return "unknown";
   if (!bodyReadable) return "unknown";
   return status < 300 ? "success" : "refusal";
 }
@@ -34,7 +35,8 @@ export function resolveText(text, vars) {
 function resolveDeep(value, vars) {
   if (typeof value === "string") return resolveText(value, vars);
   if (Array.isArray(value)) return value.map((item) => resolveDeep(item, vars));
-  if (value && typeof value === "object") return Object.fromEntries(Object.entries(value).map(([k, v]) => [k, resolveDeep(v, vars)]));
+  if (value && typeof value === "object")
+    return Object.fromEntries(Object.entries(value).map(([k, v]) => [k, resolveDeep(v, vars)]));
   return value;
 }
 
@@ -48,12 +50,20 @@ export function pick(json, path) {
   return current;
 }
 
-const SECRET_KEYS = new Set(["idToken", "refreshToken", "access_token", "refresh_token", "id_token"]);
+const SECRET_KEYS = new Set([
+  "idToken",
+  "refreshToken",
+  "access_token",
+  "refresh_token",
+  "id_token",
+]);
 const mask = (value) =>
   Array.isArray(value)
     ? value.map(mask)
     : value && typeof value === "object"
-      ? Object.fromEntries(Object.entries(value).map(([k, v]) => [k, SECRET_KEYS.has(k) ? "<masked>" : mask(v)]))
+      ? Object.fromEntries(
+          Object.entries(value).map(([k, v]) => [k, SECRET_KEYS.has(k) ? "<masked>" : mask(v)]),
+        )
       : value;
 
 /**
@@ -62,7 +72,15 @@ const mask = (value) =>
  * run directory (mode 700) the journal and the raw answers go to, `ceiling` the most requests the
  * run may send.
  */
-export function createTransport({ fetch: send = fetch, token, apiKey, directory, ceiling, now = () => Date.now(), onSent = () => {} }) {
+export function createTransport({
+  fetch: send = fetch,
+  token,
+  apiKey,
+  directory,
+  ceiling,
+  now = () => Date.now(),
+  onSent = () => {},
+}) {
   mkdirSync(join(directory, "responses"), { recursive: true, mode: 0o700 });
   const journal = join(directory, "journal.jsonl");
   const state = { sent: 0, refused: 0, sequence: 0, vars: {}, ceiling };
@@ -71,26 +89,51 @@ export function createTransport({ fetch: send = fetch, token, apiKey, directory,
   async function request(spec, extraVars = {}) {
     const vars = { ...state.vars, ...extraVars };
     if (spec.when && !(spec.when in vars)) {
-      line({ ts: new Date(now()).toISOString(), id: spec.id, state: "skipped", reason: `${spec.when} has no value` });
+      line({
+        ts: new Date(now()).toISOString(),
+        id: spec.id,
+        state: "skipped",
+        reason: `${spec.when} has no value`,
+      });
       return { id: spec.id, skipped: true };
     }
     const resolved = { ...spec, url: resolveText(spec.url, vars) };
-    const answer = destination({ method: resolved.method, url: resolved.url, mutation: resolved.mutation });
+    const answer = destination({
+      method: resolved.method,
+      url: resolved.url,
+      mutation: resolved.mutation,
+    });
     if (answer.problem) {
       state.refused += 1;
-      line({ ts: new Date(now()).toISOString(), id: spec.id, state: "refused-before-send", problem: answer.problem });
+      line({
+        ts: new Date(now()).toISOString(),
+        id: spec.id,
+        state: "refused-before-send",
+        problem: answer.problem,
+      });
       throw new GuardRefused(`${spec.id}: ${answer.problem}`);
     }
     if (state.sent >= state.ceiling) {
-      line({ ts: new Date(now()).toISOString(), id: spec.id, state: "refused-before-send", problem: "request ceiling reached" });
+      line({
+        ts: new Date(now()).toISOString(),
+        id: spec.id,
+        state: "refused-before-send",
+        problem: "request ceiling reached",
+      });
       throw new BudgetExhausted(`${spec.id}: the ceiling of ${state.ceiling} requests is used`);
     }
-    const headers = { accept: "application/json", ...(resolved.headers ?? {}) };
+    const headers = { accept: "application/json", ...resolved.headers };
     let url = resolved.url;
     // The owner's authorized-user credential is billed and quota-checked against the sandbox project, not the client project of the gcloud login.
-    if (resolved.auth === "oauth") Object.assign(headers, { authorization: `Bearer ${await token()}`, "x-goog-user-project": PROJECT });
-    else if (resolved.auth === "idtoken") headers.authorization = `Bearer ${resolveText("${idToken}", vars)}`;
-    else if (resolved.auth === "apikey") url += `${url.includes("?") ? "&" : "?"}key=${encodeURIComponent(apiKey)}`;
+    if (resolved.auth === "oauth")
+      Object.assign(headers, {
+        authorization: `Bearer ${await token()}`,
+        "x-goog-user-project": PROJECT,
+      });
+    else if (resolved.auth === "idtoken")
+      headers.authorization = `Bearer ${resolveText("${idToken}", vars)}`;
+    else if (resolved.auth === "apikey")
+      url += `${url.includes("?") ? "&" : "?"}key=${encodeURIComponent(apiKey)}`;
     // auth "none" (the token refresh itself) sends no credential header.
     let body;
     if (resolved.body !== undefined) {
@@ -104,7 +147,16 @@ export function createTransport({ fetch: send = fetch, token, apiKey, directory,
     }
     const sequence = (state.sequence += 1);
     const startedAt = now();
-    line({ ts: new Date(startedAt).toISOString(), seq: sequence, id: spec.id, state: "before-send", method: resolved.method, url: resolved.url, mutation: resolved.mutation, bodySha256: body === undefined ? null : createHash("sha256").update(body).digest("hex") });
+    line({
+      ts: new Date(startedAt).toISOString(),
+      seq: sequence,
+      id: spec.id,
+      state: "before-send",
+      method: resolved.method,
+      url: resolved.url,
+      mutation: resolved.mutation,
+      bodySha256: body === undefined ? null : createHash("sha256").update(body).digest("hex"),
+    });
     state.sent += 1;
     onSent(spec);
     let status;
@@ -112,7 +164,13 @@ export function createTransport({ fetch: send = fetch, token, apiKey, directory,
     let error;
     let bodyReadable = true;
     try {
-      const response = await send(url, { method: resolved.method, headers, body, redirect: "manual", signal: AbortSignal.timeout(TIMEOUT_MS) });
+      const response = await send(url, {
+        method: resolved.method,
+        headers,
+        body,
+        redirect: "manual",
+        signal: AbortSignal.timeout(TIMEOUT_MS),
+      });
       status = response.status;
       const buffer = Buffer.from(await response.arrayBuffer());
       if (buffer.length > MAX_BODY_BYTES) bodyReadable = false;
@@ -130,14 +188,45 @@ export function createTransport({ fetch: send = fetch, token, apiKey, directory,
     }
     const kind = classify({ status, error, bodyReadable });
     const file = `${String(sequence).padStart(4, "0")}-${spec.id}.json`;
-    writeFileSync(join(directory, "responses", file), `${JSON.stringify({ id: spec.id, status: status ?? null, error: error ?? null, bytes: Buffer.byteLength(text), body: json === undefined ? text : mask(json) })}\n`, { mode: 0o600 });
+    writeFileSync(
+      join(directory, "responses", file),
+      `${JSON.stringify({ id: spec.id, status: status ?? null, error: error ?? null, bytes: Buffer.byteLength(text), body: json === undefined ? text : mask(json) })}\n`,
+      { mode: 0o600 },
+    );
     for (const [name, path] of Object.entries(spec.capture ?? {})) {
       const value = json === undefined ? undefined : pick(json, path);
       if (value !== undefined && value !== null && kind === "success") state.vars[name] = value;
     }
-    line({ ts: new Date(now()).toISOString(), seq: sequence, id: spec.id, state: "response-persisted", status: status ?? null, error: error ?? null, kind, bytes: Buffer.byteLength(text), durationMs: now() - startedAt, expected: status === undefined ? false : spec.expect.includes(status), file });
-    return { id: spec.id, status, kind, json, text, expected: status === undefined ? false : spec.expect.includes(status), file };
+    line({
+      ts: new Date(now()).toISOString(),
+      seq: sequence,
+      id: spec.id,
+      state: "response-persisted",
+      status: status ?? null,
+      error: error ?? null,
+      kind,
+      bytes: Buffer.byteLength(text),
+      durationMs: now() - startedAt,
+      expected: status === undefined ? false : spec.expect.includes(status),
+      file,
+    });
+    return {
+      id: spec.id,
+      status,
+      kind,
+      json,
+      text,
+      expected: status === undefined ? false : spec.expect.includes(status),
+      file,
+    };
   }
 
-  return { request, state, line, setCeiling: (n) => { state.ceiling = n; } };
+  return {
+    request,
+    state,
+    line,
+    setCeiling: (n) => {
+      state.ceiling = n;
+    },
+  };
 }

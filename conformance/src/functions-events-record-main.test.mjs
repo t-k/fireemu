@@ -5,16 +5,34 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
-import { envProblems, firebaseToolsProblems, harnessDigest, main, nodeProblems, parseArgs } from "./functions-events/record/main.mjs";
+import {
+  envProblems,
+  firebaseToolsProblems,
+  harnessDigest,
+  main,
+  nodeProblems,
+  parseArgs,
+} from "./functions-events/record/main.mjs";
 import { ENVELOPE_TOPIC, TOPIC } from "./functions-events/record/sandbox.mjs";
 import { createWorld } from "./functions-events-record-world.mjs";
 
-const root = execFileSync("git", ["rev-parse", "--show-toplevel"], { cwd: new URL(".", import.meta.url).pathname }).toString().trim();
+const root = execFileSync("git", ["rev-parse", "--show-toplevel"], {
+  cwd: new URL(".", import.meta.url).pathname,
+})
+  .toString()
+  .trim();
 const head = execFileSync("git", ["-C", root, "rev-parse", "HEAD"]).toString().trim();
 
 test("the environment, Node and firebase-tools checks", () => {
   assert.deepEqual(envProblems({ PATH: "x", HOME: "y" }), []);
-  for (const name of ["GOOGLE_APPLICATION_CREDENTIALS", "FIREBASE_TOKEN", "CLOUDSDK_CORE_PROJECT", "FIRESTORE_EMULATOR_HOST", "GCLOUD_PROJECT"]) assert.equal(envProblems({ [name]: "x" }).length, 1, name);
+  for (const name of [
+    "GOOGLE_APPLICATION_CREDENTIALS",
+    "FIREBASE_TOKEN",
+    "CLOUDSDK_CORE_PROJECT",
+    "FIRESTORE_EMULATOR_HOST",
+    "GCLOUD_PROJECT",
+  ])
+    assert.equal(envProblems({ [name]: "x" }).length, 1, name);
   assert.deepEqual(nodeProblems("22.22.1"), []);
   assert.equal(nodeProblems("24.14.0").length, 1);
   assert.deepEqual(firebaseToolsProblems({ version: "15.28.2" }), []);
@@ -27,7 +45,10 @@ test("the arguments are strict", () => {
   assert.equal(parseArgs(ok).command, "record");
   assert.throws(() => parseArgs(["go"]), /usage/);
   assert.throws(() => parseArgs(ok.slice(0, 5)), /api-key-file|bad argument/);
-  assert.throws(() => parseArgs(["record", "--packet", "p", "--source-commit", "HEAD", "--api-key-file", "k"]), /full SHA/);
+  assert.throws(
+    () => parseArgs(["record", "--packet", "p", "--source-commit", "HEAD", "--api-key-file", "k"]),
+    /full SHA/,
+  );
 });
 
 test("the harness digest covers the recorder, the fixture and the dotenv, and is stable", () => {
@@ -45,7 +66,10 @@ function arrange({ approve = true } = {}) {
   const keyFile = join(dir, "key.json");
   writeFileSync(keyFile, JSON.stringify({ apiKey: "synthetic-key" }));
   const ledgerPath = join(dir, "ledger.jsonl");
-  writeFileSync(ledgerPath, `${JSON.stringify({ ts: "2026-10-01T08:30:00Z", event: "finished", taskId: "FUNCTIONS-EVENTS-SANDBOX", project: "fireemu-oracle-events", outcome: "prepared", lockRetained: false, runDir: "old", estimatedUsd: 2 })}\n`);
+  writeFileSync(
+    ledgerPath,
+    `${JSON.stringify({ ts: "2026-10-01T08:30:00Z", event: "finished", taskId: "FUNCTIONS-EVENTS-SANDBOX", project: "fireemu-oracle-events", outcome: "prepared", lockRetained: false, runDir: "old", estimatedUsd: 2 })}\n`,
+  );
   const packetSha256 = execFileSync("shasum", ["-a", "256", packet]).toString().split(" ")[0];
   const { digest } = harnessDigest(root);
   const ownerPath = join(dir, "owner.md");
@@ -63,7 +87,12 @@ function arrange({ approve = true } = {}) {
     env: { PATH: "/usr/bin", HOME: dir },
     log: () => {},
     fetch: world.fetch,
-    readCredential: () => ({ type: "authorized_user", client_id: "i", client_secret: "s", refresh_token: "r" }),
+    readCredential: () => ({
+      type: "authorized_user",
+      client_id: "i",
+      client_secret: "s",
+      refresh_token: "r",
+    }),
     runCli: async ({ action }) => {
       cliCalls.push(action);
       if (action === "deploy") world.deploy();
@@ -83,7 +112,15 @@ function arrange({ approve = true } = {}) {
     git: (args) => (args[0] === "rev-parse" ? head : ""),
     readTools: () => ({ version: "15.28.2" }),
   };
-  const argv = (command) => [command, "--packet", packet, "--source-commit", head, "--api-key-file", keyFile];
+  const argv = (command) => [
+    command,
+    "--packet",
+    packet,
+    "--source-commit",
+    head,
+    "--api-key-file",
+    keyFile,
+  ];
   return { deps, argv, world, cliCalls, ledgerPath, dir };
 }
 
@@ -104,12 +141,18 @@ test("check refuses without the approval lines", async () => {
 });
 
 test("record runs end to end: lock, started line, the run, SHA256SUMS, finished line, lock released", async () => {
-  const { deps, argv, world, cliCalls, ledgerPath, dir } = arrange();
+  const { deps, argv, cliCalls, ledgerPath, dir } = arrange();
   const result = await main(argv("record"), deps);
   assert.equal(result.outcome, "recorded", JSON.stringify(result));
   assert.deepEqual(cliCalls, ["deploy", "delete"]);
-  const rows = readFileSync(ledgerPath, "utf8").trim().split("\n").map((l) => JSON.parse(l));
-  assert.deepEqual(rows.slice(-2).map((r) => r.event), ["started", "finished"]);
+  const rows = readFileSync(ledgerPath, "utf8")
+    .trim()
+    .split("\n")
+    .map((l) => JSON.parse(l));
+  assert.deepEqual(
+    rows.slice(-2).map((r) => r.event),
+    ["started", "finished"],
+  );
   assert.equal(rows.at(-1).outcome, "recorded");
   assert.equal(rows.at(-1).lockRetained, false);
   assert.equal(existsSync(join(dir, "locks", "fireemu-oracle-events.lock")), false);
@@ -117,7 +160,10 @@ test("record runs end to end: lock, started line, the run, SHA256SUMS, finished 
   assert.ok(existsSync(join(result.runDir, "SHA256SUMS")));
   const run = JSON.parse(readFileSync(join(result.runDir, "production-run.json"), "utf8"));
   assert.equal(run.passes.length, 2);
-  assert.ok(!readFileSync(join(result.runDir, "transport/journal.jsonl"), "utf8").includes("synthetic-key"), "the API key is never journaled");
+  assert.ok(
+    !readFileSync(join(result.runDir, "transport/journal.jsonl"), "utf8").includes("synthetic-key"),
+    "the API key is never journaled",
+  );
   // the same packet cannot run twice
   const again = await main(argv("record"), deps);
   assert.equal(again.ok, false);
@@ -139,16 +185,43 @@ test("a run that cannot verify its cleanup keeps the lock and says so in the led
 
 test("a dirty tree, another HEAD, a set credential variable or a held lock refuse the start", async () => {
   for (const [label, change, pattern] of [
-    ["dirty", (d) => { d.git = (args) => (args[0] === "rev-parse" ? head : " M file"); }, /not clean/],
-    ["head", (d) => { d.git = (args) => (args[0] === "rev-parse" ? "f".repeat(40) : ""); }, /HEAD is/],
-    ["env", (d) => { d.env = { ...d.env, FIREBASE_TOKEN: "x" }; }, /FIREBASE_TOKEN/],
-    ["node", (d) => { d.nodeVersion = "24.14.0"; }, /Node 22/],
+    [
+      "dirty",
+      (d) => {
+        d.git = (args) => (args[0] === "rev-parse" ? head : " M file");
+      },
+      /not clean/,
+    ],
+    [
+      "head",
+      (d) => {
+        d.git = (args) => (args[0] === "rev-parse" ? "f".repeat(40) : "");
+      },
+      /HEAD is/,
+    ],
+    [
+      "env",
+      (d) => {
+        d.env = { ...d.env, FIREBASE_TOKEN: "x" };
+      },
+      /FIREBASE_TOKEN/,
+    ],
+    [
+      "node",
+      (d) => {
+        d.nodeVersion = "24.14.0";
+      },
+      /Node 22/,
+    ],
   ]) {
     const { deps, argv } = arrange();
     change(deps);
     const result = await main(argv("record"), deps);
     assert.equal(result.ok, false, label);
-    assert.ok(result.problems.some((p) => pattern.test(p)), label);
+    assert.ok(
+      result.problems.some((p) => pattern.test(p)),
+      label,
+    );
     assert.equal(deps.fetchCalled, undefined);
   }
 });

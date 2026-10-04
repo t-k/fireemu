@@ -4,7 +4,18 @@
 // version (V) lines; the recorder only reads them.
 
 import { createHash } from "node:crypto";
-import { appendFileSync, closeSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, statSync, unlinkSync, writeSync } from "node:fs";
+import {
+  appendFileSync,
+  closeSync,
+  fsyncSync,
+  lstatSync,
+  mkdirSync,
+  openSync,
+  readFileSync,
+  statSync,
+  unlinkSync,
+  writeSync,
+} from "node:fs";
 import { join } from "node:path";
 
 export const TASK_ID = "FUNCTIONS-EVENTS-SANDBOX";
@@ -37,7 +48,9 @@ const OPEN_EVENTS = new Set(["started", "needs-recovery"]);
 const cleanClose = (row) =>
   !OPEN_EVENTS.has(row.event) &&
   row.sandboxAtBaseline !== false &&
-  (row.sandboxAtBaseline === true || row.event === "cleanup-verified" || (["prepared", "recorded"].includes(row.outcome) && row.lockRetained === false));
+  (row.sandboxAtBaseline === true ||
+    row.event === "cleanup-verified" ||
+    (["prepared", "recorded"].includes(row.outcome) && row.lockRetained === false));
 
 /**
  * Why a run may not start on the events project now: no clean closing line to start from, a run of
@@ -48,7 +61,10 @@ export function ledgerProblems(ledgerText, now = Date.now()) {
   const problems = [];
   const rows = ledgerEntries(ledgerText).filter((row) => row.project === PROJECT);
   for (const row of rows) {
-    if (!Number.isFinite(Date.parse(row.ts))) problems.push(`a line of ${row.taskId ?? "no task"} has an unreadable time ${JSON.stringify(row.ts)}`);
+    if (!Number.isFinite(Date.parse(row.ts)))
+      problems.push(
+        `a line of ${row.taskId ?? "no task"} has an unreadable time ${JSON.stringify(row.ts)}`,
+      );
   }
   // The baseline is the latest clean closing line of the project; only what follows it can be open.
   let anchor = -1;
@@ -63,9 +79,14 @@ export function ledgerProblems(ledgerText, now = Date.now()) {
     else if (cleanClose(row)) open.delete(row.taskId);
     else if (row.event === "finished") open.set(row.taskId, row);
   }
-  for (const [task, row] of open) problems.push(`${task} has a run that did not end cleanly (${row.event} at ${row.ts})`);
-  const last = rows.map((row) => Date.parse(row.ts)).filter(Number.isFinite).sort((a, b) => b - a)[0];
-  if (last !== undefined && now - last < SPACING_MINUTES * 60_000) problems.push(`the last line of ${PROJECT} is less than ${SPACING_MINUTES} minutes old`);
+  for (const [task, row] of open)
+    problems.push(`${task} has a run that did not end cleanly (${row.event} at ${row.ts})`);
+  const last = rows
+    .map((row) => Date.parse(row.ts))
+    .filter(Number.isFinite)
+    .toSorted((a, b) => b - a)[0];
+  if (last !== undefined && now - last < SPACING_MINUTES * 60_000)
+    problems.push(`the last line of ${PROJECT} is less than ${SPACING_MINUTES} minutes old`);
   return problems;
 }
 
@@ -75,12 +96,17 @@ export function budgetProblems(ledgerText, { reserve = RESERVE_USD, cap = TASK_C
   for (const row of ledgerEntries(ledgerText)) {
     if (row.taskId !== TASK_ID) continue;
     const cost = row.estimatedUsd ?? 0;
-    if (typeof cost !== "number" || !Number.isFinite(cost) || cost < 0) return [`a line of the task has a cost that is not a number: ${JSON.stringify(cost)}`];
+    if (typeof cost !== "number" || !Number.isFinite(cost) || cost < 0)
+      return [`a line of the task has a cost that is not a number: ${JSON.stringify(cost)}`];
     const key = row.runDir ?? `${row.ts}`;
     byRun.set(key, Math.max(byRun.get(key) ?? 0, cost));
   }
   const spent = [...byRun.values()].reduce((a, b) => a + b, 0);
-  return spent + reserve > cap + 1e-9 ? [`the task has used US$${spent.toFixed(2)}; this run's reserve US$${reserve.toFixed(2)} passes the cap of US$${cap}`] : [];
+  return spent + reserve > cap + 1e-9
+    ? [
+        `the task has used US$${spent.toFixed(2)}; this run's reserve US$${reserve.toFixed(2)} passes the cap of US$${cap}`,
+      ]
+    : [];
 }
 
 // ---- owner decisions ---------------------------------------------------------------------------
@@ -92,7 +118,10 @@ export function fields(text) {
       .split(";")
       .map((part) => part.trim())
       .filter((part) => part.includes("="))
-      .map((part) => [part.slice(0, part.indexOf("=")).trim(), part.slice(part.indexOf("=") + 1).trim()]),
+      .map((part) => [
+        part.slice(0, part.indexOf("=")).trim(),
+        part.slice(part.indexOf("=") + 1).trim(),
+      ]),
   );
 }
 const number = (value) => (/^\d+(\.\d+)?$/.test(value ?? "") ? Number(value) : Number.NaN);
@@ -111,7 +140,10 @@ export function approval(ownerText, { packetSha256, harnessSha256, sourceCommit 
   for (const raw of ownerText.split("\n")) {
     const line = raw.trim();
     if (!DATE_LINE.test(line)) continue;
-    const [, topic = "", body = "", decider = ""] = line.slice(2).split(" | ").map((c) => c.trim());
+    const [, topic = "", body = "", decider = ""] = line
+      .slice(2)
+      .split(" | ")
+      .map((c) => c.trim());
     if (topic !== TOPIC && topic !== ENVELOPE_TOPIC && !topic.startsWith(`${TOPIC} `)) continue;
     if (/\bREVOKED\b/i.test(body)) {
       if (body.includes(packetSha256)) version = undefined;
@@ -125,22 +157,42 @@ export function approval(ownerText, { packetSha256, harnessSha256, sourceCommit 
     if (!decidedBy(decider)) continue;
     const entry = fields(body);
     if (topic === ENVELOPE_TOPIC && entry.envelopeId) envelopes.set(entry.envelopeId, entry);
-    else if (topic === TOPIC && entry.decision === "APPROVE" && entry.packetSha256 === packetSha256 && entry.harnessSha256 === harnessSha256 && entry.sourceCommit === sourceCommit) version = { ...entry, line };
+    else if (
+      topic === TOPIC &&
+      entry.decision === "APPROVE" &&
+      entry.packetSha256 === packetSha256 &&
+      entry.harnessSha256 === harnessSha256 &&
+      entry.sourceCommit === sourceCommit
+    )
+      version = { ...entry, line };
   }
-  if (!version) return { problems: ["no approval line for this packet, harness and source commit"] };
+  if (!version)
+    return { problems: ["no approval line for this packet, harness and source commit"] };
   const envelope = envelopes.get(version.envelopeId);
-  if (!envelope) return { problems: [`the approval names envelope ${version.envelopeId}, which has no (or a revoked) envelope line`] };
+  if (!envelope)
+    return {
+      problems: [
+        `the approval names envelope ${version.envelopeId}, which has no (or a revoked) envelope line`,
+      ],
+    };
   const problems = [];
   if (envelope.project !== PROJECT) problems.push("the envelope names another project");
-  if (!(number(envelope.maxRequests) >= MAX_REQUESTS)) problems.push(`the envelope allows fewer than ${MAX_REQUESTS} requests`);
-  if (!(number(envelope.cliMax) >= CLI_MAX)) problems.push(`the envelope allows fewer than ${CLI_MAX} CLI runs`);
-  if (!(number(envelope.reserveUsd) >= RESERVE_USD)) problems.push(`the envelope reserves less than US$${RESERVE_USD}`);
-  return problems.length ? { problems } : { approval: { envelopeId: version.envelopeId, line: version.line }, problems: [] };
+  if (!(number(envelope.maxRequests) >= MAX_REQUESTS))
+    problems.push(`the envelope allows fewer than ${MAX_REQUESTS} requests`);
+  if (!(number(envelope.cliMax) >= CLI_MAX))
+    problems.push(`the envelope allows fewer than ${CLI_MAX} CLI runs`);
+  if (!(number(envelope.reserveUsd) >= RESERVE_USD))
+    problems.push(`the envelope reserves less than US$${RESERVE_USD}`);
+  return problems.length
+    ? { problems }
+    : { approval: { envelopeId: version.envelopeId, line: version.line }, problems: [] };
 }
 
 /** An approval is used once: a run of the same packet that already started refuses a second start. */
 export function packetUsed(ledgerText, packetSha256) {
-  return ledgerEntries(ledgerText).some((row) => row.taskId === TASK_ID && row.event === "started" && row.packetSha256 === packetSha256);
+  return ledgerEntries(ledgerText).some(
+    (row) => row.taskId === TASK_ID && row.event === "started" && row.packetSha256 === packetSha256,
+  );
 }
 
 // ---- the project lock --------------------------------------------------------------------------
@@ -159,7 +211,8 @@ export function acquireLock({ lockDir, legacyLock, body }) {
   try {
     fd = openSync(path, "wx", 0o600);
   } catch (error) {
-    if (error.code === "EEXIST") throw new Error(`the lock of ${PROJECT} is held; not starting`);
+    if (error.code === "EEXIST")
+      throw new Error(`the lock of ${PROJECT} is held; not starting`, { cause: error });
     throw error;
   }
   const text = JSON.stringify(body);
@@ -175,20 +228,70 @@ export function acquireLock({ lockDir, legacyLock, body }) {
 /** Removes the lock only while it is still this run's file (same inode, same body). */
 export function releaseLock(lock) {
   const found = lstatSync(lock.path);
-  if (!found.isFile() || found.isSymbolicLink() || found.ino !== lock.inode) throw new Error("the lock was replaced; left in place");
-  if (sha256(readFileSync(lock.path, "utf8")) !== lock.sha256) throw new Error("the lock was rewritten; left in place");
+  if (!found.isFile() || found.isSymbolicLink() || found.ino !== lock.inode)
+    throw new Error("the lock was replaced; left in place");
+  if (sha256(readFileSync(lock.path, "utf8")) !== lock.sha256)
+    throw new Error("the lock was rewritten; left in place");
   unlinkSync(lock.path);
 }
 
 // ---- ledger lines ------------------------------------------------------------------------------
 
-export function startedLine({ ts, runDir, packetSha256, harnessSha256, gitSha, approval: approved, lock }) {
-  return { ts, event: "started", taskId: TASK_ID, project: PROJECT, database: "(default)", phase: "formal-record", runDir, packetSha256, harnessSha256, gitSha, envelopeId: approved.envelopeId, maxRequests: MAX_REQUESTS, cliMax: CLI_MAX, estimatedUsd: RESERVE_USD, lockSha256: lock.sha256 };
+export function startedLine({
+  ts,
+  runDir,
+  packetSha256,
+  harnessSha256,
+  gitSha,
+  approval: approved,
+  lock,
+}) {
+  return {
+    ts,
+    event: "started",
+    taskId: TASK_ID,
+    project: PROJECT,
+    database: "(default)",
+    phase: "formal-record",
+    runDir,
+    packetSha256,
+    harnessSha256,
+    gitSha,
+    envelopeId: approved.envelopeId,
+    maxRequests: MAX_REQUESTS,
+    cliMax: CLI_MAX,
+    estimatedUsd: RESERVE_USD,
+    lockSha256: lock.sha256,
+  };
 }
 
 /** The closing line; the lock stays when the outcome is needs-recovery. */
-export function finishedLine({ ts, runDir, packetSha256, gitSha, outcome, requests, cliAttempts, lockRetained }) {
-  return { ts, event: "finished", taskId: TASK_ID, project: PROJECT, database: "(default)", phase: "formal-record", runDir, packetSha256, gitSha, outcome, requests, cliAttempts, estimatedUsd: RESERVE_USD, lockRetained };
+export function finishedLine({
+  ts,
+  runDir,
+  packetSha256,
+  gitSha,
+  outcome,
+  requests,
+  cliAttempts,
+  lockRetained,
+}) {
+  return {
+    ts,
+    event: "finished",
+    taskId: TASK_ID,
+    project: PROJECT,
+    database: "(default)",
+    phase: "formal-record",
+    runDir,
+    packetSha256,
+    gitSha,
+    outcome,
+    requests,
+    cliAttempts,
+    estimatedUsd: RESERVE_USD,
+    lockRetained,
+  };
 }
 
 export function appendLedger(path, row) {

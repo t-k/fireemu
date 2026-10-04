@@ -87,7 +87,10 @@ export const SCENARIO_EVENTS = {
   "auth-admin-create": { delivers: handlers.userCreated, silent: [] },
   "auth-delete": { delivers: [...handlers.userCreated, ...handlers.userDeleted], silent: [] },
   "auth-repeat-signin": { delivers: handlers.userCreated, silent: handlers.userCreated },
-  "auth-bulk-delete": { delivers: [...handlers.userCreated, ...handlers.userDeleted], silent: handlers.userDeleted },
+  "auth-bulk-delete": {
+    delivers: [...handlers.userCreated, ...handlers.userDeleted],
+    silent: handlers.userDeleted,
+  },
   "auth-signup": { delivers: [...handlers.userCreated, ...handlers.userDeleted], silent: [] },
   "pubsub-publish": { delivers: handlers.published, silent: [] },
   "pubsub-other-topic": { delivers: [], silent: handlers.published },
@@ -177,13 +180,17 @@ class Builder {
 }
 
 const docCreateRequest = (b, collection, id, data, spec = {}) =>
-  b.add(spec.role ?? "setup", {
-    method: "POST",
-    url: `${documents}/${collection}?documentId=${id}`,
-    body: { fields: fields(data) },
-    auth: spec.auth ?? "oauth",
-    expect: [200],
-  }, { subject: spec.subject });
+  b.add(
+    spec.role ?? "setup",
+    {
+      method: "POST",
+      url: `${documents}/${collection}?documentId=${id}`,
+      body: { fields: fields(data) },
+      auth: spec.auth ?? "oauth",
+      expect: [200],
+    },
+    { subject: spec.subject },
+  );
 const docGet = (b, collection, id, expect = [200], role = "readback") =>
   b.add(role, { method: "GET", url: `${documents}/${collection}/${id}`, expect });
 const docDelete_ = (b, collection, id, role = "cleanup") =>
@@ -200,7 +207,10 @@ function firestoreStep(scenarioId, newId) {
     case "fs-create":
     case "fs-other-path":
     case "fs-auth-admin":
-      docCreateRequest(b, collection, id, documentData("created"), { role: "subject", subject: true });
+      docCreateRequest(b, collection, id, documentData("created"), {
+        role: "subject",
+        subject: true,
+      });
       docGet(b, collection, id);
       docDelete_(b, collection, id);
       docGet(b, collection, id, [404]);
@@ -209,11 +219,15 @@ function firestoreStep(scenarioId, newId) {
     case "fs-update":
       docCreateRequest(b, collection, id, documentData("before"));
       seed = true;
-      b.add("subject", {
-        method: "PATCH",
-        url: `${documents}/${collection}/${id}?updateMask.fieldPaths=value&updateMask.fieldPaths=count&currentDocument.exists=true`,
-        body: { fields: fields({ value: "updated", count: 2 }) },
-      }, { subject: true });
+      b.add(
+        "subject",
+        {
+          method: "PATCH",
+          url: `${documents}/${collection}/${id}?updateMask.fieldPaths=value&updateMask.fieldPaths=count&currentDocument.exists=true`,
+          body: { fields: fields({ value: "updated", count: 2 }) },
+        },
+        { subject: true },
+      );
       docGet(b, collection, id);
       docDelete_(b, collection, id);
       docGet(b, collection, id, [404]);
@@ -221,24 +235,35 @@ function firestoreStep(scenarioId, newId) {
     case "fs-delete":
       docCreateRequest(b, collection, id, documentData("before"));
       seed = true;
-      b.add("subject", { method: "DELETE", url: `${documents}/${collection}/${id}`, expect: [200] }, { subject: true });
+      b.add(
+        "subject",
+        { method: "DELETE", url: `${documents}/${collection}/${id}`, expect: [200] },
+        { subject: true },
+      );
       docGet(b, collection, id, [404]);
       break;
     case "fs-noop":
       docCreateRequest(b, collection, id, documentData("before"));
       seed = true;
-      b.add("subject", {
-        method: "PATCH",
-        url: `${documents}/${collection}/${id}?currentDocument.exists=true`,
-        body: { fields: fields(documentData("before")) },
-      }, { subject: true });
+      b.add(
+        "subject",
+        {
+          method: "PATCH",
+          url: `${documents}/${collection}/${id}?currentDocument.exists=true`,
+          body: { fields: fields(documentData("before")) },
+        },
+        { subject: true },
+      );
       docGet(b, collection, id);
       docDelete_(b, collection, id);
       docGet(b, collection, id, [404]);
       settle = NEGATIVE_WINDOW_SECONDS;
       break;
     case "fs-retry": {
-      docCreateRequest(b, collection, id, documentData("retry", 1, "retry"), { role: "subject", subject: true });
+      docCreateRequest(b, collection, id, documentData("retry", 1, "retry"), {
+        role: "subject",
+        subject: true,
+      });
       b.add("readback", {
         method: "POST",
         url: `${documents}:runQuery`,
@@ -246,7 +271,13 @@ function firestoreStep(scenarioId, newId) {
         body: {
           structuredQuery: {
             from: [{ collectionId: MARKER_COLLECTION }],
-            where: { fieldFilter: { field: { fieldPath: "documentPath" }, op: "EQUAL", value: { stringValue: path } } },
+            where: {
+              fieldFilter: {
+                field: { fieldPath: "documentPath" },
+                op: "EQUAL",
+                value: { stringValue: path },
+              },
+            },
             limit: 10,
           },
         },
@@ -254,7 +285,12 @@ function firestoreStep(scenarioId, newId) {
       });
       docGet(b, collection, id);
       docDelete_(b, collection, id);
-      b.add("cleanup", { method: "DELETE", url: "https://firestore.googleapis.com/v1/${markerName}", expect: [200, 404], when: "markerName" });
+      b.add("cleanup", {
+        method: "DELETE",
+        url: "https://firestore.googleapis.com/v1/${markerName}",
+        expect: [200, 404],
+        when: "markerName",
+      });
       docGet(b, collection, id, [404]);
       settle = RETRY_WINDOW_SECONDS;
       break;
@@ -268,11 +304,19 @@ function firestoreStep(scenarioId, newId) {
         body: { email, password: PASSWORD, returnSecureToken: true },
         capture: { idToken: "$.idToken", uid: "$.localId" },
       });
-      docCreateRequest(b, collection, id, documentData("client"), { role: "subject", subject: true, auth: "idtoken" });
+      docCreateRequest(b, collection, id, documentData("client"), {
+        role: "subject",
+        subject: true,
+        auth: "idtoken",
+      });
       docGet(b, collection, id);
       docDelete_(b, collection, id);
       docGet(b, collection, id, [404]);
-      b.add("cleanup", { method: "POST", url: `${identity}/accounts:delete`, body: { localId: "${uid}" } });
+      b.add("cleanup", {
+        method: "POST",
+        url: `${identity}/accounts:delete`,
+        body: { localId: "${uid}" },
+      });
       break;
     }
     default:
@@ -289,15 +333,25 @@ function firestoreStep(scenarioId, newId) {
 
 const objectName = (scenarioId, id) =>
   scenarioId === "storage-other-prefix" ? `other/${id}.txt` : `fe-events/${id}.txt`;
-const textUpload = (b, bucket, name, text, { role, subject = false, precondition = true, expect = [200], capture } = {}) =>
-  b.add(role, {
-    method: "POST",
-    url: uploadUrl(bucket, name, precondition ? "&ifGenerationMatch=0" : ""),
-    contentType: "text/plain",
-    body: text,
-    expect,
-    ...(capture ? { capture } : {}),
-  }, { subject });
+const textUpload = (
+  b,
+  bucket,
+  name,
+  text,
+  { role, subject = false, precondition = true, expect = [200], capture } = {},
+) =>
+  b.add(
+    role,
+    {
+      method: "POST",
+      url: uploadUrl(bucket, name, precondition ? "&ifGenerationMatch=0" : ""),
+      contentType: "text/plain",
+      body: text,
+      expect,
+      ...(capture ? { capture } : {}),
+    },
+    { subject },
+  );
 const objectGet = (b, bucket, name, expect = [200]) =>
   b.add("readback", { method: "GET", url: objectsUrl(bucket, name), expect });
 const objectDelete = (b, bucket, name, expect = [204], role = "cleanup") =>
@@ -340,20 +394,28 @@ function storageStep(scenarioId, newId) {
     case "storage-overwrite":
       textUpload(b, bucket, name, "before", { role: "setup" });
       seed = true;
-      textUpload(b, bucket, name, "updated", { role: "subject", subject: true, precondition: false });
+      textUpload(b, bucket, name, "updated", {
+        role: "subject",
+        subject: true,
+        precondition: false,
+      });
       objectGet(b, bucket, name);
       objectDelete(b, bucket, name);
       versionList(b, bucket, name);
       break;
     case "storage-failed-upload":
-      b.add("subject", {
-        method: "POST",
-        url: uploadUrl(bucket, name),
-        contentType: "text/plain",
-        headers: { "x-goog-hash": `md5=${md5("hello")}` },
-        body: "hellp",
-        expect: [400],
-      }, { subject: true });
+      b.add(
+        "subject",
+        {
+          method: "POST",
+          url: uploadUrl(bucket, name),
+          contentType: "text/plain",
+          headers: { "x-goog-hash": `md5=${md5("hello")}` },
+          body: "hellp",
+          expect: [400],
+        },
+        { subject: true },
+      );
       versionList(b, bucket, name);
       sourceResult = "typed-refusal";
       settle = NEGATIVE_WINDOW_SECONDS;
@@ -361,12 +423,20 @@ function storageStep(scenarioId, newId) {
     case "storage-delete":
       textUpload(b, bucket, name, "before", { role: "setup" });
       seed = true;
-      b.add("subject", { method: "DELETE", url: objectsUrl(bucket, name), expect: [204] }, { subject: true });
+      b.add(
+        "subject",
+        { method: "DELETE", url: objectsUrl(bucket, name), expect: [204] },
+        { subject: true },
+      );
       objectGet(b, bucket, name, [404]);
       versionList(b, bucket, name);
       break;
     case "storage-delete-missing":
-      b.add("subject", { method: "DELETE", url: objectsUrl(bucket, name), expect: [404] }, { subject: true });
+      b.add(
+        "subject",
+        { method: "DELETE", url: objectsUrl(bucket, name), expect: [404] },
+        { subject: true },
+      );
       versionList(b, bucket, name);
       sourceResult = "typed-refusal";
       settle = NEGATIVE_WINDOW_SECONDS;
@@ -374,11 +444,15 @@ function storageStep(scenarioId, newId) {
     case "storage-metadata":
       textUpload(b, bucket, name, "before", { role: "setup" });
       seed = true;
-      b.add("subject", {
-        method: "PATCH",
-        url: objectsUrl(bucket, name),
-        body: { metadata: { fixtureMarker: "updated" } },
-      }, { subject: true });
+      b.add(
+        "subject",
+        {
+          method: "PATCH",
+          url: objectsUrl(bucket, name),
+          body: { metadata: { fixtureMarker: "updated" } },
+        },
+        { subject: true },
+      );
       objectGet(b, bucket, name);
       objectDelete(b, bucket, name);
       versionList(b, bucket, name);
@@ -387,7 +461,10 @@ function storageStep(scenarioId, newId) {
       bucketVersioning(b, bucket);
       setVersioning(b, bucket, true, "setup");
       bucketVersioning(b, bucket);
-      textUpload(b, bucket, name, "before", { role: "setup", capture: { firstGeneration: "$.generation" } });
+      textUpload(b, bucket, name, "before", {
+        role: "setup",
+        capture: { firstGeneration: "$.generation" },
+      });
       seed = true;
       textUpload(b, bucket, name, "updated", {
         role: "subject",
@@ -396,8 +473,16 @@ function storageStep(scenarioId, newId) {
         capture: { secondGeneration: "$.generation" },
       });
       versionList(b, bucket, name);
-      b.add("cleanup", { method: "DELETE", url: `${objectsUrl(bucket, name)}?generation=\${firstGeneration}`, expect: [204, 404] });
-      b.add("cleanup", { method: "DELETE", url: `${objectsUrl(bucket, name)}?generation=\${secondGeneration}`, expect: [204, 404] });
+      b.add("cleanup", {
+        method: "DELETE",
+        url: `${objectsUrl(bucket, name)}?generation=\${firstGeneration}`,
+        expect: [204, 404],
+      });
+      b.add("cleanup", {
+        method: "DELETE",
+        url: `${objectsUrl(bucket, name)}?generation=\${secondGeneration}`,
+        expect: [204, 404],
+      });
       versionList(b, bucket, name);
       setVersioning(b, bucket, false, "cleanup");
       bucketVersioning(b, bucket);
@@ -409,13 +494,22 @@ function storageStep(scenarioId, newId) {
 }
 
 const accountLookup = (b, ids) =>
-  b.add("readback", { method: "POST", url: `${identity}/accounts:lookup`, mutation: false, body: { localId: ids } });
-const accountCreate = (b, uid, email, role, subject = false) =>
-  b.add(role, {
+  b.add("readback", {
     method: "POST",
-    url: `${identity}/accounts`,
-    body: { localId: uid, email, password: PASSWORD, emailVerified: false },
-  }, { subject });
+    url: `${identity}/accounts:lookup`,
+    mutation: false,
+    body: { localId: ids },
+  });
+const accountCreate = (b, uid, email, role, subject = false) =>
+  b.add(
+    role,
+    {
+      method: "POST",
+      url: `${identity}/accounts`,
+      body: { localId: uid, email, password: PASSWORD, emailVerified: false },
+    },
+    { subject },
+  );
 const accountDelete = (b, uid, role = "cleanup") =>
   b.add(role, { method: "POST", url: `${identity}/accounts:delete`, body: { localId: uid } });
 
@@ -434,13 +528,17 @@ function authStep(scenarioId, newId) {
       accountLookup(b, [uid]);
       break;
     case "auth-signup":
-      b.add("subject", {
-        method: "POST",
-        url: "https://identitytoolkit.googleapis.com/v1/accounts:signUp",
-        auth: "apikey",
-        body: { email, password: PASSWORD, returnSecureToken: true },
-        capture: { uid: "$.localId" },
-      }, { subject: true });
+      b.add(
+        "subject",
+        {
+          method: "POST",
+          url: "https://identitytoolkit.googleapis.com/v1/accounts:signUp",
+          auth: "apikey",
+          body: { email, password: PASSWORD, returnSecureToken: true },
+          capture: { uid: "$.localId" },
+        },
+        { subject: true },
+      );
       accountLookup(b, ["${uid}"]);
       accountDelete(b, "${uid}");
       accountLookup(b, ["${uid}"]);
@@ -449,12 +547,16 @@ function authStep(scenarioId, newId) {
     case "auth-repeat-signin":
       accountCreate(b, uid, email, "setup");
       seed = true;
-      b.add("subject", {
-        method: "POST",
-        url: "https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword",
-        auth: "apikey",
-        body: { email, password: PASSWORD, returnSecureToken: true },
-      }, { subject: true });
+      b.add(
+        "subject",
+        {
+          method: "POST",
+          url: "https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword",
+          auth: "apikey",
+          body: { email, password: PASSWORD, returnSecureToken: true },
+        },
+        { subject: true },
+      );
       accountLookup(b, [uid]);
       accountDelete(b, uid);
       accountLookup(b, [uid]);
@@ -463,7 +565,11 @@ function authStep(scenarioId, newId) {
     case "auth-delete":
       accountCreate(b, uid, email, "setup");
       seed = true;
-      b.add("subject", { method: "POST", url: `${identity}/accounts:delete`, body: { localId: uid } }, { subject: true });
+      b.add(
+        "subject",
+        { method: "POST", url: `${identity}/accounts:delete`, body: { localId: uid } },
+        { subject: true },
+      );
       accountLookup(b, [uid]);
       break;
     case "auth-bulk-delete": {
@@ -471,11 +577,15 @@ function authStep(scenarioId, newId) {
       accountCreate(b, uid, email, "setup");
       accountCreate(b, second, `${second}@example.test`, "setup");
       seed = true;
-      b.add("subject", {
-        method: "POST",
-        url: `${identity}/accounts:batchDelete`,
-        body: { localIds: [uid, second], force: true },
-      }, { subject: true });
+      b.add(
+        "subject",
+        {
+          method: "POST",
+          url: `${identity}/accounts:batchDelete`,
+          body: { localIds: [uid, second], force: true },
+        },
+        { subject: true },
+      );
       accountLookup(b, [uid, second]);
       matchKey = { kind: "auth", value: uid, values: [uid, second] };
       settle = NEGATIVE_WINDOW_SECONDS;
@@ -488,12 +598,20 @@ function authStep(scenarioId, newId) {
 }
 
 const publish = (b, topic, text, extra = {}) =>
-  b.add("subject", {
-    method: "POST",
-    url: `${topicUrl(topic)}:publish`,
-    body: { messages: [{ data: Buffer.from(text).toString("base64"), attributes: { probe: text }, ...extra }] },
-    capture: { messageId: "$.messageIds[0]" },
-  }, { subject: true });
+  b.add(
+    "subject",
+    {
+      method: "POST",
+      url: `${topicUrl(topic)}:publish`,
+      body: {
+        messages: [
+          { data: Buffer.from(text).toString("base64"), attributes: { probe: text }, ...extra },
+        ],
+      },
+      capture: { messageId: "$.messageIds[0]" },
+    },
+    { subject: true },
+  );
 
 function pubsubStep(scenarioId, newId) {
   const b = new Builder(scenarioId, newId);
@@ -510,7 +628,13 @@ function pubsubStep(scenarioId, newId) {
     throw new Error(`not a Pub/Sub scenario: ${scenarioId}`);
   }
   publish(b, topic, id, extra);
-  return { b, matchKey: { kind: "pubsub", value: "${messageId}", topic, probe: id }, sourceResult: "typed-success", seed: false, settle };
+  return {
+    b,
+    matchKey: { kind: "pubsub", value: "${messageId}", topic, probe: id },
+    sourceResult: "typed-success",
+    seed: false,
+    settle,
+  };
 }
 
 // ---- a pass --------------------------------------------------------------------------------
@@ -564,8 +688,26 @@ export function passSummary({ steps }) {
 /** The data resources the run creates before the pass and removes after the last. */
 export function runSetupRequests() {
   return [
-    { id: "setup.topic-primary", role: "setup", method: "PUT", url: topicUrl(PRIMARY_TOPIC), body: {}, auth: "oauth", mutation: true, expect: [200] },
-    { id: "setup.topic-control", role: "setup", method: "PUT", url: topicUrl(CONTROL_TOPIC), body: {}, auth: "oauth", mutation: true, expect: [200] },
+    {
+      id: "setup.topic-primary",
+      role: "setup",
+      method: "PUT",
+      url: topicUrl(PRIMARY_TOPIC),
+      body: {},
+      auth: "oauth",
+      mutation: true,
+      expect: [200],
+    },
+    {
+      id: "setup.topic-control",
+      role: "setup",
+      method: "PUT",
+      url: topicUrl(CONTROL_TOPIC),
+      body: {},
+      auth: "oauth",
+      mutation: true,
+      expect: [200],
+    },
     {
       id: "setup.bucket-control",
       role: "setup",
@@ -576,15 +718,55 @@ export function runSetupRequests() {
       mutation: true,
       expect: [200],
     },
-    { id: "setup.topic-primary-get", role: "readback", method: "GET", url: topicUrl(PRIMARY_TOPIC), auth: "oauth", mutation: false, expect: [200] },
-    { id: "setup.topic-control-get", role: "readback", method: "GET", url: topicUrl(CONTROL_TOPIC), auth: "oauth", mutation: false, expect: [200] },
+    {
+      id: "setup.topic-primary-get",
+      role: "readback",
+      method: "GET",
+      url: topicUrl(PRIMARY_TOPIC),
+      auth: "oauth",
+      mutation: false,
+      expect: [200],
+    },
+    {
+      id: "setup.topic-control-get",
+      role: "readback",
+      method: "GET",
+      url: topicUrl(CONTROL_TOPIC),
+      auth: "oauth",
+      mutation: false,
+      expect: [200],
+    },
   ];
 }
 
 export function runCleanupRequests() {
   return [
-    { id: "cleanup.topic-primary", role: "cleanup", method: "DELETE", url: topicUrl(PRIMARY_TOPIC), auth: "oauth", mutation: true, expect: [200, 404] },
-    { id: "cleanup.topic-control", role: "cleanup", method: "DELETE", url: topicUrl(CONTROL_TOPIC), auth: "oauth", mutation: true, expect: [200, 404] },
-    { id: "cleanup.bucket-control", role: "cleanup", method: "DELETE", url: `https://storage.googleapis.com/storage/v1/b/${CONTROL_BUCKET}`, auth: "oauth", mutation: true, expect: [204, 404] },
+    {
+      id: "cleanup.topic-primary",
+      role: "cleanup",
+      method: "DELETE",
+      url: topicUrl(PRIMARY_TOPIC),
+      auth: "oauth",
+      mutation: true,
+      expect: [200, 404],
+    },
+    {
+      id: "cleanup.topic-control",
+      role: "cleanup",
+      method: "DELETE",
+      url: topicUrl(CONTROL_TOPIC),
+      auth: "oauth",
+      mutation: true,
+      expect: [200, 404],
+    },
+    {
+      id: "cleanup.bucket-control",
+      role: "cleanup",
+      method: "DELETE",
+      url: `https://storage.googleapis.com/storage/v1/b/${CONTROL_BUCKET}`,
+      auth: "oauth",
+      mutation: true,
+      expect: [204, 404],
+    },
   ];
 }

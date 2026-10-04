@@ -13,7 +13,14 @@ function setup({ ceiling = 1000, world: worldOptions = {} } = {}) {
   const clock = { t: Date.UTC(2026, 9, 4, 0, 0, 0) };
   const world = createWorld({ now: () => clock.t, ...worldOptions });
   const directory = mkdtempSync(join(tmpdir(), "fe-run-"));
-  const transport = createTransport({ directory, ceiling, token: async () => "t", apiKey: "k", fetch: world.fetch, now: () => clock.t });
+  const transport = createTransport({
+    directory,
+    ceiling,
+    token: async () => "t",
+    apiKey: "k",
+    fetch: world.fetch,
+    now: () => clock.t,
+  });
   const calls = [];
   const cli = async (action) => {
     calls.push(action);
@@ -41,7 +48,11 @@ test("a full run records two passes of every scenario, captures the deliveries, 
   assert.equal(outcome, "recorded", JSON.stringify([run.stops, run.cleanup?.problems]));
   assert.deepEqual(calls, ["deploy", "delete"]);
   assert.equal(run.passes.length, 2);
-  for (const pass of run.passes) assert.deepEqual(pass.operations.map((o) => o.scenarioId), SCENARIO_ORDER);
+  for (const pass of run.passes)
+    assert.deepEqual(
+      pass.operations.map((o) => o.scenarioId),
+      SCENARIO_ORDER,
+    );
   assert.ok(run.frames.length > 40, `${run.frames.length} frames`);
   assert.equal(run.frames.length, world.entries.length, "every delivered frame was captured once");
   assert.equal(new Set(run.frames.map((f) => f.insertId)).size, run.frames.length);
@@ -50,7 +61,7 @@ test("a full run records two passes of every scenario, captures the deliveries, 
 });
 
 test("the request count stays inside the ceiling the design gives", async () => {
-  const { deps, transport } = setup();
+  const { deps } = setup();
   const { run } = await record(deps);
   assert.ok(run.requestsSent <= CLEANUP_CEILING, `${run.requestsSent}`);
   assert.ok(run.requestsSent >= 250 && run.requestsSent <= 420, `${run.requestsSent}`);
@@ -74,9 +85,15 @@ test("inside the noop window the world delivered no write for the same-value wri
   const { run } = await record(deps);
   const op = run.passes[0].operations.find((o) => o.scenarioId === "fs-noop");
   const start = Date.parse(op.endedAt);
-  const forDocument = run.frames.filter((f) => f.handler === "fsWrittenV2" && JSON.stringify(f.frame).includes(op.matchKey.value));
+  const forDocument = run.frames.filter(
+    (f) => f.handler === "fsWrittenV2" && JSON.stringify(f.frame).includes(op.matchKey.value),
+  );
   assert.equal(forDocument.length, 2, "the seed create and the cleanup delete");
-  const inWindow = forDocument.filter((f) => Date.parse(f.logTimestamp) > start && Date.parse(f.logTimestamp) < start + op.windowSeconds * 1000);
+  const inWindow = forDocument.filter(
+    (f) =>
+      Date.parse(f.logTimestamp) > start &&
+      Date.parse(f.logTimestamp) < start + op.windowSeconds * 1000,
+  );
   assert.equal(inWindow.length, 0);
 });
 
@@ -87,11 +104,18 @@ test("a failed preflight stops clean: nothing is created, deployed or deleted", 
   assert.equal(outcome, "stopped-clean");
   assert.deepEqual(calls, []);
   assert.ok(run.preflight.problems.length > 0);
-  assert.ok(!world.requests.some((r) => ["POST", "PUT", "PATCH", "DELETE"].includes(r.method) && !r.url.includes(":getIamPolicy") && !r.url.includes("oauth2")));
+  assert.ok(
+    !world.requests.some(
+      (r) =>
+        ["POST", "PUT", "PATCH", "DELETE"].includes(r.method) &&
+        !r.url.includes(":getIamPolicy") &&
+        !r.url.includes("oauth2"),
+    ),
+  );
 });
 
 test("a deploy that never becomes ready skips the passes and still cleans up with the one delete", async () => {
-  const { deps, calls, world } = setup();
+  const { deps, calls } = setup();
   deps.cli = async (action) => {
     calls.push(action);
     return { action, exitCode: 1 };
@@ -155,7 +179,10 @@ test("the run says which IAM bindings the deploy added or removed, with user acc
   };
   const { run } = await record(deps);
   const step = run.cleanup.steps.inventory;
-  assert.deepEqual(step.iamDiff, { added: ["roles/pubsub.publisher serviceAccount:gcs-agent@example"], removed: [] });
+  assert.deepEqual(step.iamDiff, {
+    added: ["roles/pubsub.publisher serviceAccount:gcs-agent@example"],
+    removed: [],
+  });
   assert.ok(run.preflight.iamBefore.every((p) => !p.includes("@example.com")));
   assert.ok(Array.isArray(step.iamAfter));
 });

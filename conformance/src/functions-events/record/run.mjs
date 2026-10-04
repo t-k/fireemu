@@ -4,7 +4,7 @@
 // ready, a signal, the request ceiling, and a guard refusal. After any of them, if something was
 // created, the cleanup still runs.
 
-import { LISTS, PROPAGATION_WAIT_SECONDS, waitReady } from "./deploy.mjs";
+import { PROPAGATION_WAIT_SECONDS, waitReady } from "./deploy.mjs";
 import { runCleanup } from "./cleanup.mjs";
 import { listRequest, parseEntries } from "./logs.mjs";
 import { iamPairs, runPreflight } from "./preflight.mjs";
@@ -36,14 +36,17 @@ function createCapture({ transport, now, startedAt }) {
     let pageToken;
     for (let page = 0; page < MAX_PAGES; page += 1) {
       polls += 1;
-      const answer = await transport.request(listRequest({ start: micro(start), end: micro(end), pageToken }));
+      const answer = await transport.request(
+        listRequest({ start: micro(start), end: micro(end), pageToken }),
+      );
       if (answer.kind !== "success") {
         incomplete += 1;
         return;
       }
       const parsed = parseEntries(answer.json, { readAt: new Date(now()).toISOString(), seen });
       frames.push(...parsed.frames);
-      for (const [key, count] of Object.entries(parsed.ignored)) ignored[key] = (ignored[key] ?? 0) + count;
+      for (const [key, count] of Object.entries(parsed.ignored))
+        ignored[key] = (ignored[key] ?? 0) + count;
       pageToken = parsed.nextPageToken;
       if (!pageToken) {
         lastEnd = end;
@@ -52,7 +55,12 @@ function createCapture({ transport, now, startedAt }) {
     }
     incomplete += 1;
   }
-  return { poll, frames, sincePoll: () => now() - lastPollAt, stats: () => ({ polls, incompletePolls: incomplete, ignored }) };
+  return {
+    poll,
+    frames,
+    sincePoll: () => now() - lastPollAt,
+    stats: () => ({ polls, incompletePolls: incomplete, ignored }),
+  };
 }
 
 const iso = (now) => new Date(now()).toISOString();
@@ -61,9 +69,31 @@ const iso = (now) => new Date(now()).toISOString();
  * `record({ transport, cli, sleep, now, newId, corpusDigest, signal })`. `cli(action)` runs the one
  * deploy or delete; `sleep(seconds)` waits (a test advances a virtual clock); `now()` is epoch ms.
  */
-export async function record({ transport, cli, sleep, now, newId, corpusDigest, signal = { aborted: false }, log = () => {} }) {
+export async function record({
+  transport,
+  cli,
+  sleep,
+  now,
+  newId,
+  corpusDigest,
+  signal = { aborted: false },
+  log = () => {},
+}) {
   const startedAt = now();
-  const run = { schemaVersion: 1, kind: "functions-events-production-run", project: "fireemu-oracle-events", corpusDigest, recordedAt: new Date(startedAt).toISOString(), passes: [], frames: [], preflight: null, deploy: { cli: null, readiness: null }, cleanup: null, capture: null, stops: [] };
+  const run = {
+    schemaVersion: 1,
+    kind: "functions-events-production-run",
+    project: "fireemu-oracle-events",
+    corpusDigest,
+    recordedAt: new Date(startedAt).toISOString(),
+    passes: [],
+    frames: [],
+    preflight: null,
+    deploy: { cli: null, readiness: null },
+    cleanup: null,
+    capture: null,
+    stops: [],
+  };
   const ran = { created: false, deployStarted: false };
   transport.setCeiling(NORMAL_CEILING);
   const capture = createCapture({ transport, now, startedAt });
@@ -87,13 +117,24 @@ export async function record({ transport, cli, sleep, now, newId, corpusDigest, 
         return false;
       }
       transport.state.vars = {};
-      const op = { scenarioId: step.scenarioId, role: step.role, sourceResult: null, startedAt: null, endedAt: null, matchKey: null, readback: [], windowSeconds: step.settleSeconds, requests: [] };
+      const op = {
+        scenarioId: step.scenarioId,
+        role: step.role,
+        sourceResult: null,
+        startedAt: null,
+        endedAt: null,
+        matchKey: null,
+        readback: [],
+        windowSeconds: step.settleSeconds,
+        requests: [],
+      };
       record_.operations.push(op);
       let subject;
       let windowDone = false;
       let previous = null;
       for (const request of step.requests) {
-        if (request.role === "subject" && step.seedWaitSeconds > 0 && previous?.role === "setup") await waitAndCapture(step.seedWaitSeconds);
+        if (request.role === "subject" && step.seedWaitSeconds > 0 && previous?.role === "setup")
+          await waitAndCapture(step.seedWaitSeconds);
         if (request.role === "cleanup" && !windowDone) {
           await waitAndCapture(step.settleSeconds);
           windowDone = true;
@@ -105,12 +146,25 @@ export async function record({ transport, cli, sleep, now, newId, corpusDigest, 
           op.endedAt = iso(now);
           subject = answer;
         }
-        op.requests.push({ id: request.id, role: request.role, status: answer.status ?? null, kind: answer.kind ?? null, skipped: answer.skipped ?? false, expected: answer.expected ?? null });
-        if (request.role === "readback" && !answer.skipped) op.readback.push({ id: request.id, status: answer.status ?? null });
+        op.requests.push({
+          id: request.id,
+          role: request.role,
+          status: answer.status ?? null,
+          kind: answer.kind ?? null,
+          skipped: answer.skipped ?? false,
+          expected: answer.expected ?? null,
+        });
+        if (request.role === "readback" && !answer.skipped)
+          op.readback.push({ id: request.id, status: answer.status ?? null });
         previous = request;
       }
       if (!windowDone) await waitAndCapture(step.settleSeconds);
-      op.sourceResult = subject?.kind === "success" ? "typed-success" : subject?.kind === "refusal" ? "typed-refusal" : "unknown";
+      op.sourceResult =
+        subject?.kind === "success"
+          ? "typed-success"
+          : subject?.kind === "refusal"
+            ? "typed-refusal"
+            : "unknown";
       const vars = transport.state.vars;
       const resolve = (text) => {
         try {
@@ -119,7 +173,11 @@ export async function record({ transport, cli, sleep, now, newId, corpusDigest, 
           return null;
         }
       };
-      op.matchKey = { ...step.matchKey, value: resolve(step.matchKey.value), ...(step.matchKey.values ? { values: step.matchKey.values } : {}) };
+      op.matchKey = {
+        ...step.matchKey,
+        value: resolve(step.matchKey.value),
+        ...(step.matchKey.values ? { values: step.matchKey.values } : {}),
+      };
       await waitAndCapture(STEP_GAP_SECONDS);
     }
     record_.endedAt = iso(now);
@@ -163,14 +221,18 @@ export async function record({ transport, cli, sleep, now, newId, corpusDigest, 
     run.cleanup = { verified: false, problems: [`cleanup: ${error.message}`], steps: {} };
   }
   await capture.poll().catch(() => {});
-  const outcome = run.cleanup.verified ? (passesComplete && run.stops.length === 0 ? "recorded" : "incomplete-clean") : "needs-recovery";
+  const outcome = run.cleanup.verified
+    ? passesComplete && run.stops.length === 0
+      ? "recorded"
+      : "incomplete-clean"
+    : "needs-recovery";
   return finish(outcome);
 
-  function finish(outcome) {
+  function finish(finalOutcome) {
     run.frames = capture.frames;
     run.capture = capture.stats();
     run.requestsSent = transport.state.sent;
     run.endedAt = iso(now);
-    return { outcome, run };
+    return { outcome: finalOutcome, run };
   }
 }

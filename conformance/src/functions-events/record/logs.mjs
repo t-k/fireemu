@@ -8,17 +8,28 @@ import { PROJECT, REGION } from "./script.mjs";
 export const FRAME_MARKER = "FE_EVENTS_FRAME ";
 
 export const HANDLERS = [
-  ["fsCreatedV1", 1, "firestore"], ["fsCreatedV2", 2, "firestore"],
-  ["fsUpdatedV1", 1, "firestore"], ["fsUpdatedV2", 2, "firestore"],
-  ["fsDeletedV1", 1, "firestore"], ["fsDeletedV2", 2, "firestore"],
-  ["fsWrittenV1", 1, "firestore"], ["fsWrittenV2", 2, "firestore"],
-  ["fsWrittenWithAuthContextV2", 2, "firestore"], ["fsRetryV2", 2, "firestore"],
-  ["storageFinalizedV1", 1, "storage"], ["storageFinalizedV2", 2, "storage"],
-  ["storageDeletedV1", 1, "storage"], ["storageDeletedV2", 2, "storage"],
-  ["storageMetadataUpdatedV1", 1, "storage"], ["storageMetadataUpdatedV2", 2, "storage"],
-  ["storageArchivedV1", 1, "storage"], ["storageArchivedV2", 2, "storage"],
-  ["authCreatedV1", 1, "auth"], ["authDeletedV1", 1, "auth"],
-  ["pubsubPublishedV1", 1, "pubsub"], ["pubsubPublishedV2", 2, "pubsub"],
+  ["fsCreatedV1", 1, "firestore"],
+  ["fsCreatedV2", 2, "firestore"],
+  ["fsUpdatedV1", 1, "firestore"],
+  ["fsUpdatedV2", 2, "firestore"],
+  ["fsDeletedV1", 1, "firestore"],
+  ["fsDeletedV2", 2, "firestore"],
+  ["fsWrittenV1", 1, "firestore"],
+  ["fsWrittenV2", 2, "firestore"],
+  ["fsWrittenWithAuthContextV2", 2, "firestore"],
+  ["fsRetryV2", 2, "firestore"],
+  ["storageFinalizedV1", 1, "storage"],
+  ["storageFinalizedV2", 2, "storage"],
+  ["storageDeletedV1", 1, "storage"],
+  ["storageDeletedV2", 2, "storage"],
+  ["storageMetadataUpdatedV1", 1, "storage"],
+  ["storageMetadataUpdatedV2", 2, "storage"],
+  ["storageArchivedV1", 1, "storage"],
+  ["storageArchivedV2", 2, "storage"],
+  ["authCreatedV1", 1, "auth"],
+  ["authDeletedV1", 1, "auth"],
+  ["pubsubPublishedV1", 1, "pubsub"],
+  ["pubsubPublishedV2", 2, "pubsub"],
 ].map(([name, generation, source]) => ({ name, generation, source }));
 
 /** The exact origin of one handler's stdout: log name, monitored resource type and labels. */
@@ -70,9 +81,15 @@ export const IGNORED = ["notTyped", "notFrame", "unparsed", "unknownHandler", "f
 
 /** The frames in one entries:list answer, deduplicated by insertId against `seen` (a Set, updated). */
 export function parseEntries(body, { readAt, seen = new Set() }) {
-  const result = { entries: 0, frames: [], ignored: Object.fromEntries(IGNORED.map((k) => [k, 0])), nextPageToken: null };
+  const result = {
+    entries: 0,
+    frames: [],
+    ignored: Object.fromEntries(IGNORED.map((k) => [k, 0])),
+    nextPageToken: null,
+  };
   if (!body || typeof body !== "object") return result;
-  if (typeof body.nextPageToken === "string" && body.nextPageToken) result.nextPageToken = body.nextPageToken;
+  if (typeof body.nextPageToken === "string" && body.nextPageToken)
+    result.nextPageToken = body.nextPageToken;
   if (!Array.isArray(body.entries)) return result;
   for (const entry of body.entries) {
     result.entries += 1;
@@ -80,7 +97,8 @@ export function parseEntries(body, { readAt, seen = new Set() }) {
       result.ignored.notTyped += 1;
       continue;
     }
-    const text = typeof entry.textPayload === "string" ? entry.textPayload : entry.jsonPayload?.message;
+    const text =
+      typeof entry.textPayload === "string" ? entry.textPayload : entry.jsonPayload?.message;
     if (typeof text !== "string" || !text.startsWith(FRAME_MARKER)) {
       result.ignored.notFrame += 1;
       continue;
@@ -99,11 +117,16 @@ export function parseEntries(body, { readAt, seen = new Set() }) {
     }
     const o = origin(handler);
     const labels = entry.resource?.labels ?? {};
-    if (entry.logName !== o.logName || entry.resource?.type !== o.resourceType || Object.entries(o.labels).some(([k, v]) => labels[k] !== v)) {
+    if (
+      entry.logName !== o.logName ||
+      entry.resource?.type !== o.resourceType ||
+      Object.entries(o.labels).some(([k, v]) => labels[k] !== v)
+    ) {
       result.ignored.foreignOrigin += 1;
       continue;
     }
-    const key = typeof entry.insertId === "string" ? entry.insertId : `${entry.timestamp}:${handler.name}`;
+    const key =
+      typeof entry.insertId === "string" ? entry.insertId : `${entry.timestamp}:${handler.name}`;
     if (seen.has(key)) continue;
     seen.add(key);
     result.frames.push({

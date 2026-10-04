@@ -1,7 +1,14 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { HANDLERS, FRAME_MARKER, listRequest, logFilter, origin, parseEntries } from "./functions-events/record/logs.mjs";
+import {
+  HANDLERS,
+  FRAME_MARKER,
+  listRequest,
+  logFilter,
+  origin,
+  parseEntries,
+} from "./functions-events/record/logs.mjs";
 import { destination } from "./functions-events/record/guard.mjs";
 
 const entryFor = (name, over = {}, frame = {}) => {
@@ -26,11 +33,26 @@ test("the 22 handlers are the fixture's exports, one origin each", () => {
 });
 
 test("the filter names every origin, the window and the marker; the request passes the guard", () => {
-  const filter = logFilter({ start: "2026-10-04T00:00:00.000000Z", end: "2026-10-04T01:00:00.000000Z" });
-  for (const h of HANDLERS) assert.ok(filter.includes(h.generation === 1 ? `function_name="${h.name}"` : `service_name="${h.name.toLowerCase()}"`), h.name);
-  assert.ok(filter.includes('timestamp>="2026-10-04T00:00:00.000000Z"') && filter.includes("FE_EVENTS_FRAME"));
+  const filter = logFilter({
+    start: "2026-10-04T00:00:00.000000Z",
+    end: "2026-10-04T01:00:00.000000Z",
+  });
+  for (const h of HANDLERS)
+    assert.ok(
+      filter.includes(
+        h.generation === 1 ? `function_name="${h.name}"` : `service_name="${h.name.toLowerCase()}"`,
+      ),
+      h.name,
+    );
+  assert.ok(
+    filter.includes('timestamp>="2026-10-04T00:00:00.000000Z"') &&
+      filter.includes("FE_EVENTS_FRAME"),
+  );
   const request = listRequest({ start: "a", end: "b" });
-  assert.equal(destination({ method: request.method, url: request.url, mutation: request.mutation }).rule, "logging-list");
+  assert.equal(
+    destination({ method: request.method, url: request.url, mutation: request.mutation }).rule,
+    "logging-list",
+  );
   assert.deepEqual(request.body.resourceNames, ["projects/fireemu-oracle-events"]);
 });
 
@@ -48,7 +70,10 @@ test("a frame line becomes a frame record; the same entry is not counted twice",
 test("a JSON payload message is read as a frame line", () => {
   const e = entryFor("authCreatedV1");
   const { textPayload, ...rest } = e;
-  const parsed = parseEntries({ entries: [{ ...rest, jsonPayload: { message: textPayload } }] }, { readAt: "t" });
+  const parsed = parseEntries(
+    { entries: [{ ...rest, jsonPayload: { message: textPayload } }] },
+    { readAt: "t" },
+  );
   assert.equal(parsed.frames.length, 1);
 });
 
@@ -62,20 +87,36 @@ test("what cannot be used is counted and never thrown", () => {
         entryFor("fsCreatedV1", {}, { handler: "nobody" }),
         entryFor("fsCreatedV1", {}, { generation: 2 }),
         entryFor("fsCreatedV1", { logName: "projects/other/logs/x" }),
-        entryFor("fsCreatedV1", { resource: { type: "cloud_function", labels: { function_name: "other", region: "us-central1" } } }),
+        entryFor("fsCreatedV1", {
+          resource: {
+            type: "cloud_function",
+            labels: { function_name: "other", region: "us-central1" },
+          },
+        }),
       ],
       nextPageToken: "next",
     },
     { readAt: "t" },
   );
   assert.equal(parsed.frames.length, 0);
-  assert.deepEqual(parsed.ignored, { notTyped: 1, notFrame: 1, unparsed: 1, unknownHandler: 2, foreignOrigin: 2 });
+  assert.deepEqual(parsed.ignored, {
+    notTyped: 1,
+    notFrame: 1,
+    unparsed: 1,
+    unknownHandler: 2,
+    foreignOrigin: 2,
+  });
   assert.equal(parsed.nextPageToken, "next");
-  for (const bad of [undefined, null, 7, {}, { entries: "x" }]) assert.equal(parseEntries(bad, { readAt: "t" }).frames.length, 0);
+  for (const bad of [undefined, null, 7, {}, { entries: "x" }])
+    assert.equal(parseEntries(bad, { readAt: "t" }).frames.length, 0);
 });
 
 test("the frame is kept exactly as printed, including members the local runs do not have", () => {
-  const extra = { event: { context: { eventId: "1" }, data: {} }, contextKeys: ["eventId"], contextExtras: {} };
+  const extra = {
+    event: { context: { eventId: "1" }, data: {} },
+    contextKeys: ["eventId"],
+    contextExtras: {},
+  };
   const parsed = parseEntries({ entries: [entryFor("fsUpdatedV1", {}, extra)] }, { readAt: "t" });
   assert.deepEqual(parsed.frames[0].frame.contextKeys, ["eventId"]);
 });

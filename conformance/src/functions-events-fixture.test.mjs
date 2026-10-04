@@ -299,8 +299,18 @@ test("stdout capture adds the event and context member listing; other modes keep
     process.env.FE_EVENTS_CAPTURE_MODE = "stdout";
     const printedContext = v1Context(context);
     assert.deepEqual(printedContext.contextKeys, [
-      "authId", "authType", "eventId", "eventType", "extraCount", "extraFlag", "extraList",
-      "extraNote", "extraObject", "params", "resource", "timestamp",
+      "authId",
+      "authType",
+      "eventId",
+      "eventType",
+      "extraCount",
+      "extraFlag",
+      "extraList",
+      "extraNote",
+      "extraObject",
+      "params",
+      "resource",
+      "timestamp",
     ]);
     assert.deepEqual(printedContext.contextExtras, {
       extraCount: 7,
@@ -312,7 +322,15 @@ test("stdout capture adds the event and context member listing; other modes keep
     assert.equal(JSON.stringify(printedContext).includes("must-not-be-printed"), false);
     const printedEvent = v2Event(event, { name: "o" });
     assert.deepEqual(printedEvent.eventKeys, [
-      "bucket", "data", "id", "location", "source", "specversion", "subject", "time", "type",
+      "bucket",
+      "data",
+      "id",
+      "location",
+      "source",
+      "specversion",
+      "subject",
+      "time",
+      "type",
     ]);
     assert.deepEqual(printedEvent.extensionAttributes, { bucket: "b", location: "us-central1" });
     assert.deepEqual(printedEvent.data, { name: "o" });
@@ -421,7 +439,15 @@ test("retry in the production fixture mode needs no emulator host; every other m
   const { requireRetryFirestore } = require("../functions-events/fixtures/local-host.js");
   assert.doesNotThrow(() => requireRetryFirestore({ FE_EVENTS_MODE: "production" }));
   assert.throws(() => requireRetryFirestore({}), /loopback Firestore emulator/);
-  assert.throws(() => requireRetryFirestore({ FE_EVENTS_MODE: "local" }), /loopback Firestore emulator/);
-  assert.throws(() => requireRetryFirestore({ FE_EVENTS_MODE: "Production" }), /loopback Firestore emulator/);
-  assert.doesNotThrow(() => requireRetryFirestore({ FE_EVENTS_MODE: "local", FIRESTORE_EMULATOR_HOST: "127.0.0.1:8080" }));
+  assert.throws(
+    () => requireRetryFirestore({ FE_EVENTS_MODE: "local" }),
+    /loopback Firestore emulator/,
+  );
+  assert.throws(
+    () => requireRetryFirestore({ FE_EVENTS_MODE: "Production" }),
+    /loopback Firestore emulator/,
+  );
+  assert.doesNotThrow(() =>
+    requireRetryFirestore({ FE_EVENTS_MODE: "local", FIRESTORE_EMULATOR_HOST: "127.0.0.1:8080" }),
+  );
 });

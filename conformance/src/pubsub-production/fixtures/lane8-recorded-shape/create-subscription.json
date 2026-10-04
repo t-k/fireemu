@@ -1,0 +1,11 @@
+{
+  "name": "projects/fireemu-oracle-sbx/subscriptions/fe-scheduled-shape-96db1cb7ca5fcb35",
+  "topic": "projects/fireemu-oracle-sbx/topics/fe-scheduled-shape-96db1cb7ca5fcb35",
+  "pushConfig": {},
+  "ackDeadlineSeconds": 10,
+  "messageRetentionDuration": "604800s",
+  "expirationPolicy": {
+    "ttl": "2678400s"
+  },
+  "state": "ACTIVE"
+}

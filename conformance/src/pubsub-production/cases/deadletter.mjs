@@ -25,7 +25,7 @@ async function bind(rest, resource, role, member) {
 export const deadLetterForwarding = {
   id: "dead-letter-forwarding",
   short: "dl",
-  requests: 45,
+  requests: 56,
   slow: true,
   async run(ctx) {
     const c = ctx.client;

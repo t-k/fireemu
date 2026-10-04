@@ -8,8 +8,31 @@ import { CASES } from "./cases/index.mjs";
 import { CaseAbort, StopClean } from "./cases/support.mjs";
 import { cleanup } from "./cleanup.mjs";
 import { createClient } from "./client.mjs";
+import { createLedger } from "./ledger.mjs";
 
 const REST_AND_GRPC = ["rest", "grpc"];
+
+/** A case reached the number of requests it declared: its ceiling is a maximum, not a hint. */
+export class CaseLimit extends Error {
+  constructor(limit) {
+    super(`the case reached its limit of ${limit} requests`);
+    this.name = "CaseLimit";
+  }
+}
+
+/** The same transport, refusing (before the budget is touched) the request after the case's limit. */
+function limited(transport, meter, limit) {
+  const wrap = (send) => (call) => {
+    if (meter.used >= limit) throw new CaseLimit(limit);
+    meter.used += 1;
+    return send.call(transport, call);
+  };
+  return {
+    ...transport,
+    ...(transport.request ? { request: wrap(transport.request) } : {}),
+    ...(transport.call ? { call: wrap(transport.call) } : {}),
+  };
+}
 
 export function selectCases(only) {
   if (only === undefined) return CASES;
@@ -29,18 +52,28 @@ function createContext({
   capture,
   options,
   sleep,
+  ledger,
 }) {
+  const meter = { used: 0 };
+  const guarded = Object.fromEntries(
+    Object.entries(transports).map(([name, transport]) => [
+      name,
+      limited(transport, meter, item.requests),
+    ]),
+  );
   const tag = `${item.short}-${transportName === "rest" ? "r" : "g"}-`;
   const caseId = `${item.id}/${transportName}`;
-  const clientOf = (transport, id) => createClient({ transport, ownership, pushState, caseId: id });
+  const clientOf = (transport, id) =>
+    createClient({ transport, ownership, pushState, caseId: id, ledger });
   return {
     transport: transportName,
     project: ownership.project,
+    runId: ownership.runId,
     production: options.production,
     serviceAgent: options.serviceAgent ?? null,
-    client: clientOf(transports[transportName], caseId),
+    client: clientOf(guarded[transportName], caseId),
     // IAM is only available over REST, whichever transport the case is recording.
-    rest: clientOf(transports.rest, `${caseId}/rest`),
+    rest: clientOf(guarded.rest, `${caseId}/rest`),
     maxKeyLength: 255 - (ownership.prefix.length + tag.length),
     name: (kind, key) => ownership.resource(kind, `${tag}${key}`),
     /** A name sent on purpose that cannot carry the prefix; `id` may differ by transport. */
@@ -63,9 +96,10 @@ export async function runCases({
   capture,
   options,
   sleep,
+  ledger = createLedger(),
   isStopping = () => false,
 }) {
-  const summary = { cases: [], stopped: null, cleanup: null };
+  const summary = { cases: [], stopped: null, limited: [], cleanup: null };
   const stoppable = async (ms) => {
     if (isStopping()) throw new StopClean("stopped by a signal");
     await sleep(ms);
@@ -89,6 +123,7 @@ export async function runCases({
           capture,
           options,
           sleep: stoppable,
+          ledger,
         });
         await item.run(ctx);
       } catch (error) {
@@ -99,6 +134,10 @@ export async function runCases({
           entry.outcome = "stopped";
           entry.reason = error.message;
           summary.stopped = error.message;
+        } else if (error instanceof CaseLimit) {
+          entry.outcome = "limit";
+          entry.reason = error.message;
+          summary.limited.push(`${item.id}/${transportName}`);
         } else if (error instanceof BudgetExceeded) {
           entry.outcome = "budget";
           entry.reason = error.message;
@@ -109,7 +148,6 @@ export async function runCases({
         }
       }
       entry.requests = capture.count() - before;
-      if (entry.requests > item.requests) entry.overDeclared = item.requests;
       capture.note("case-end", { case: `${item.id}/${transportName}`, ...entry });
       summary.cases.push(entry);
       if (summary.stopped !== null && entry.outcome !== "aborted") break outer;
@@ -119,7 +157,7 @@ export async function runCases({
     client: cleanupRest,
     ownership,
     project: ownership.project,
-    known: ownership.issued(),
+    ledger,
     sleep,
   });
   return summary;

@@ -4,7 +4,7 @@ import { must } from "./support.mjs";
 export const authErrors = {
   id: "auth-errors",
   short: "ae",
-  requests: 15,
+  requests: 16,
   async run(ctx) {
     const c = ctx.client;
     const topic = ctx.name("topics", "t");

@@ -1,0 +1,9 @@
+{
+  "id": "subscription-create",
+  "method": "PUT",
+  "url": "https://pubsub.googleapis.com/v1/projects/fireemu-oracle-idp/subscriptions/fireemu-lane7-6a666e3ffa9444cc80de18944b38ae36-sub",
+  "status": 200,
+  "body": "{\n  \"name\": \"projects/fireemu-oracle-idp/subscriptions/fireemu-lane7-6a666e3ffa9444cc80de18944b38ae36-sub\",\n  \"topic\": \"projects/fireemu-oracle-idp/topics/fireemu-lane7-6a666e3ffa9444cc80de18944b38ae36-topic\",\n  \"pushConfig\": {},\n  \"ackDeadlineSeconds\": 60,\n  \"messageRetentionDuration\": \"604800s\",\n  \"expirationPolicy\": {\n    \"ttl\": \"2678400s\"\n  },\n  \"state\": \"ACTIVE\"\n}\n",
+  "contentType": "application/json; charset=UTF-8",
+  "bodyBytes": 372
+}

@@ -274,6 +274,37 @@ declare('written');declare('authWritten',true);declare('retryWritten',false,true
   assert.deepEqual((await f.calls()).at(-1),first,'retry preserves identity, data and envelope');
 });
 
+// FE formal v5 production recording (run functions-events-formal-20261004T182904Z-a9621bfae74fe9bc,
+// 2026-10-04): every 1st gen Firestore frame carried `context.resource` as
+// `{ service: 'firestore.googleapis.com', name: 'projects/<p>/databases/(default)/documents/<col>/<id>' }`
+// (cloud logging insertIds below; the project and document ids are replaced). The FE v5 comparison saw
+// `//firestore.googleapis.com/projects/<p>/databases/(default)` instead, because its tree (f105742b2) predated
+// 67f4721bb. The runner must hand the SDK the document path for each legacy kind.
+const PRODUCTION_V1_RESOURCE_FRAMES = [
+  { insertId: '6ac29cbf000826228b54e636', handler: 'fsCreatedV1', kind: 'create', type: 'created' },
+  { insertId: '6ac29d32000d4c0008580d85', handler: 'fsUpdatedV1', kind: 'update', type: 'updated' },
+  { insertId: '6ac29cde000a08e1464a9b24', handler: 'fsDeletedV1', kind: 'delete', type: 'deleted' },
+  { insertId: '6ac29cbf000e3cc9fcd898ae', handler: 'fsWrittenV1', kind: 'write', type: 'written' },
+];
+for (const form of ['endpoint', 'legacy']) {
+  test(`v1 ${form}: the document resource of every recorded production Firestore frame (FE v5)`, { timeout: 10000 }, async t => {
+    const f = await start(t, PRODUCTION_V1_RESOURCE_FRAMES.map(({ handler, kind }) =>
+      fsEntry(handler, 'projects/demo-app/databases/(default)/documents/fe_events_primary/{documentId}', form, kind)));
+    for (const { insertId, handler, type } of PRODUCTION_V1_RESOURCE_FRAMES) {
+      const document = 'fe_events_primary/e2e281b8599406e2c4df8a97bf1';
+      const event = { id: `v5-${insertId}`, type: `google.cloud.firestore.document.v1.${type}`, time: '2026-10-04T18:36:46.701823Z',
+        source: '//firestore.googleapis.com/projects/demo-app/databases/(default)', subject: `documents/${document}`,
+        project: 'demo-app', database: '(default)', namespace: '(default)', document, location: 'us-central1',
+        params: { documentId: 'e2e281b8599406e2c4df8a97bf1' }, data: { value: { name: `projects/demo-app/databases/(default)/documents/${document}` } } };
+      assert.equal((await f.invoke(handler, 'firestore', event)).ok, true, `${insertId} ${handler}`);
+      const { context } = (await f.calls()).at(-1);
+      assert.equal(context.resource, `projects/demo-app/databases/(default)/documents/${document}`, `${insertId} ${handler}`);
+      assert.notEqual(context.resource, event.source, `${insertId}: the database source is not the document resource`);
+      assert.deepEqual(context.params, { documentId: 'e2e281b8599406e2c4df8a97bf1' });
+    }
+  });
+}
+
 for (const form of ['endpoint', 'legacy']) {
   test(`v1 ${form}: finite metadata model keeps legacy fallback and other product resources`, { timeout: 10000 }, async t => {
     const f = await start(t, [fsEntry('typed', 'projects/demo-app/databases/(default)/documents/items/{id}', form, 'create'), entry('topic', 'google.pubsub.topic.publish', 'projects/demo-app/topics/t', form)]);

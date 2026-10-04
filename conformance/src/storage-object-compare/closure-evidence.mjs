@@ -197,6 +197,38 @@ export function applyClosure({ closure, comparison, recordings, comparisonPath, 
   return copy;
 }
 
+/** JSON on one line, in the style of the conditions of the closure files: `{ "a": 1, "b": ["x"] }`. */
+export function inlineJson(value) {
+  if (Array.isArray(value)) return `[${value.map(inlineJson).join(", ")}]`;
+  if (value !== null && typeof value === "object") {
+    const entries = Object.entries(value);
+    if (entries.length === 0) return "{}";
+    return `{ ${entries.map(([key, item]) => `${JSON.stringify(key)}: ${inlineJson(item)}`).join(", ")} }`;
+  }
+  return JSON.stringify(value);
+}
+
+/**
+ * The closure file with the line of each condition rewritten, and every other line as it was: a closure
+ * file keeps one condition on one line, so a change shows as a change of that line and nothing else.
+ */
+export function replaceConditionLines(text, closure) {
+  const lines = text.split("\n");
+  for (const condition of closure.conditions) {
+    const marker = `{ "conditionId": ${JSON.stringify(condition.conditionId)},`;
+    const found = lines.flatMap((line, index) =>
+      line.trimStart().startsWith(marker) ? [index] : [],
+    );
+    if (found.length !== 1)
+      refuse(`the closure file has no single line for condition ${condition.conditionId}`);
+    const [index] = found;
+    const indent = lines[index].slice(0, lines[index].length - lines[index].trimStart().length);
+    const comma = lines[index].trimEnd().endsWith(",") ? "," : "";
+    lines[index] = `${indent}${inlineJson(condition)}${comma}`;
+  }
+  return lines.join("\n");
+}
+
 /** The command, with its collaborators injected. */
 export function closureEvidenceCommand(
   options,
@@ -221,8 +253,9 @@ export function closureEvidenceCommand(
   );
   const { comparison } = buildEvidence({ report, receipt, fixture });
   const hold = options.hold ? options.hold.split(",").filter(Boolean) : [];
+  const closureText = readFileSync(options.closure, "utf8");
   const closure = applyClosure({
-    closure: JSON.parse(readFileSync(options.closure, "utf8")),
+    closure: JSON.parse(closureText),
     comparison,
     recordings,
     comparisonPath: options["comparison-path"],
@@ -230,7 +263,7 @@ export function closureEvidenceCommand(
   });
   mkdirSync(dirname(options.out), { recursive: true });
   writeFileSync(options.out, `${JSON.stringify(comparison, null, 1)}\n`);
-  writeFileSync(options.closure, `${JSON.stringify(closure, null, 2)}\n`);
+  writeFileSync(options.closure, replaceConditionLines(closureText, closure));
   log(
     `closure evidence: ${comparison.rows.length} rows of ${comparison.artifactSha256} written; ${closure.conditions.filter((c) => c.status === "VERIFIED").length} conditions verified`,
   );

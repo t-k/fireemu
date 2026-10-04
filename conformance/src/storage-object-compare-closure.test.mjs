@@ -10,7 +10,9 @@ import {
   applyClosure,
   buildEvidence,
   closureEvidenceCommand,
+  inlineJson,
   recordingsFromLedger,
+  replaceConditionLines,
 } from "./storage-object-compare/closure-evidence.mjs";
 
 const RUN1 = "056c7ca3a8c6daa38e0a";
@@ -123,6 +125,22 @@ const closure = () => ({
   ],
 });
 const refuses = (fn, pattern) => assert.throws(fn, pattern);
+// A closure file in the style of the real one: expanded header, one line for each condition.
+const closureText = (value) =>
+  [
+    "{",
+    '  "parent": "STORAGE-OBJECT",',
+    '  "conditions": [',
+    value.conditions
+      .map(
+        (condition, i) =>
+          `    ${inlineJson(condition)}${i < value.conditions.length - 1 ? "," : ""}`,
+      )
+      .join("\n"),
+    "  ]",
+    "}",
+    "",
+  ].join("\n");
 
 test("the recordings come from the sandbox ledger: one started and one recorded finished row for each run, in the query project, at one commit", () => {
   assert.deepEqual(recordings(), [
@@ -436,7 +454,7 @@ test("the command writes the evidence and the closure from the files, and writes
     receipt: write("receipt.json", receipt()),
     fixture: dir,
     "sandbox-ledger": write("ledger.jsonl", `${ledgerText()}\n`),
-    closure: write("closure.json", closure()),
+    closure: write("closure.json", closureText(closure())),
     out: join(dir, "evidence", "comparison.json"),
     "comparison-path": "spec/compatibility/closure/evidence/STORAGE-OBJECT-comparison.json",
     ...extra,
@@ -658,7 +676,7 @@ test("the command line writes the files from a comparison of the committed fixtu
     "spec/compatibility/closure/evidence/STORAGE-OBJECT-comparison.json",
   ];
   const out = join(dir, "comparison.json");
-  const closurePath = file("closure.json", closureValue);
+  const closurePath = file("closure.json", closureText(closureValue));
   const ok = spawnSync(process.execPath, args(out, closurePath), { encoding: "utf8" });
   assert.equal(ok.status, 0, ok.stderr);
   assert.match(
@@ -694,4 +712,51 @@ test("the command line writes the files from a comparison of the committed fixtu
     assert.equal(refused.status, 1);
     assert.match(refused.stderr, /bad argument/);
   }
+});
+
+test("a condition is written on one line like the rest of the file, and the other lines stay byte for byte", () => {
+  assert.equal(
+    inlineJson({ a: "x", b: ["y", "z"], c: { d: 1, e: [] }, f: {}, g: true, h: null }),
+    '{ "a": "x", "b": ["y", "z"], "c": { "d": 1, "e": [] }, "f": {}, "g": true, "h": null }',
+  );
+  assert.equal(inlineJson([]), "[]");
+  assert.equal(inlineJson('quote " and \\ and \n'), JSON.stringify('quote " and \\ and \n'));
+  // The real closure file is reproduced exactly by its own conditions.
+  const path = new URL("../../spec/compatibility/closure/STORAGE-OBJECT.json", import.meta.url);
+  const text = readFileSync(path, "utf8");
+  assert.equal(replaceConditionLines(text, JSON.parse(text)), text);
+  // A changed condition changes its own line only.
+  const parsed = JSON.parse(text);
+  parsed.conditions[1].note = "changed";
+  const lines = text.split("\n");
+  const changed = replaceConditionLines(text, parsed).split("\n");
+  assert.equal(changed.length, lines.length);
+  const differing = changed.map((line, i) => i).filter((i) => changed[i] !== lines[i]);
+  assert.equal(differing.length, 1);
+  assert.match(changed[differing[0]], /"note": "changed" }[,]?$/);
+  assert.ok(
+    changed[differing[0]].startsWith(
+      '    { "conditionId": "STORAGE-OBJECT/firebase-multipart-upload"',
+    ),
+  );
+  // The last condition has no comma; the others keep theirs.
+  parsed.conditions.at(-1).note = "last";
+  const last = replaceConditionLines(text, parsed).split("\n");
+  assert.match(
+    last[lines.findIndex((line) => line.includes('"STORAGE-OBJECT/closure-review"'))],
+    /"note": "last" }$/,
+  );
+  // A closure whose conditions are not each on a line of the file is refused, and so is a condition the file lacks.
+  refuses(
+    () => replaceConditionLines(text, { conditions: [{ conditionId: "STORAGE-OBJECT/none" }] }),
+    /line/i,
+  );
+  refuses(
+    () =>
+      replaceConditionLines(
+        text.replace('"STORAGE-OBJECT/firebase-delete"', '"STORAGE-OBJECT/firebase-delete" ,\n"x"'),
+        JSON.parse(text),
+      ),
+    /line|style/i,
+  );
 });

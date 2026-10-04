@@ -4443,3 +4443,141 @@ fn a_schedule_run_refusal_displays_its_message() {
         "function \"ok\" is not scheduled"
     );
 }
+
+// ---------------------------------------------------------------------------------------------
+// Manual schedule runs and the schedule across lifecycle boundaries.
+// ---------------------------------------------------------------------------------------------
+
+#[tokio::test]
+async fn a_manual_run_of_an_unknown_or_unscheduled_function_is_refused_and_changes_nothing() {
+    use fireemu_adapter_functions::runtime::ScheduleRunError;
+    let (runtime, _clock) = start().await;
+    assert_eq!(
+        runtime.run_schedule("noSuchJob"),
+        Err(ScheduleRunError::Refused(
+            "unknown function \"noSuchJob\"".to_owned()
+        ))
+    );
+    // `ok` is a registered function, but not a scheduled one.
+    let unscheduled = runtime.run_schedule("ok");
+    assert!(
+        matches!(&unscheduled, Err(ScheduleRunError::Refused(m)) if m.contains("is not scheduled")),
+        "{unscheduled:?}"
+    );
+    assert!(runtime.is_idle(), "nothing was enqueued");
+    assert!(runtime.history().is_empty());
+    assert_eq!(runtime.status()["pending"], 0);
+    runtime.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_schedule_run_queued_while_the_runner_is_stopped_survives_a_reload_and_runs_once() {
+    let (runtime, clock) = start().await;
+    let guard = runtime
+        .stop_runner_for_fixed_inspector_reload("default")
+        .await
+        .unwrap();
+    clock
+        .lock()
+        .unwrap()
+        .advance(LogicalDuration::from_seconds(5 * 60))
+        .unwrap();
+    runtime.on_clock_changed();
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert!(!runtime.is_idle(), "the 12:05 run waits for a runner");
+    assert!(runtime.history().is_empty());
+    let spec = SpawnSpec {
+        command: vec![
+            "python3".to_owned(),
+            concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fake_runner.py").to_owned(),
+        ],
+        cwd: None,
+        env: Vec::new(),
+        hello_timeout: RUNNER_HELLO_TIMEOUT,
+    };
+    let replacement = Arc::new(Runner::spawn_spec(&spec).await.unwrap());
+    runtime
+        .reload_codebase(CodebaseSpec {
+            name: "default".to_owned(),
+            manifest: runtime.manifest().clone(),
+            runner: replacement,
+            spawn: Some(spec),
+            cleanup_dir: None,
+        })
+        .unwrap();
+    drop(guard);
+    runtime.await_idle(Duration::from_secs(3)).await.unwrap();
+    let ticks = |runtime: &FunctionsRuntime| {
+        runtime
+            .history()
+            .iter()
+            .filter(|r| r.function == "tick" && r.outcome == "ok")
+            .count()
+    };
+    assert_eq!(ticks(&runtime), 1, "the queued run was delivered once");
+    // The reload kept the schedule's cursor: 12:05 is not run again, 12:10 is.
+    clock
+        .lock()
+        .unwrap()
+        .advance(LogicalDuration::from_seconds(5 * 60))
+        .unwrap();
+    runtime.on_clock_changed();
+    runtime.await_idle(Duration::from_secs(3)).await.unwrap();
+    assert_eq!(ticks(&runtime), 2);
+    runtime.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_schedule_run_is_delivered_once_after_the_runner_died_before_it() {
+    let (runtime, clock) = start().await;
+    runtime.runner().kill_now();
+    clock
+        .lock()
+        .unwrap()
+        .advance(LogicalDuration::from_seconds(5 * 60))
+        .unwrap();
+    runtime.on_clock_changed();
+    runtime.await_idle(Duration::from_secs(5)).await.unwrap();
+    let ticks = runtime
+        .history()
+        .iter()
+        .filter(|r| r.function == "tick" && r.outcome == "ok")
+        .count();
+    assert_eq!(ticks, 1);
+    runtime.shutdown().await;
+}
+
+#[tokio::test]
+async fn queue_runs_one_scheduled_invocation_at_a_time_where_allow_runs_several() {
+    use fireemu_adapter_functions::runtime::{CatchUpPolicy, OverlapPolicy};
+    for (overlap, running) in [(OverlapPolicy::Queue, 1u64), (OverlapPolicy::Allow, 2)] {
+        let (runtime, _clock) =
+            start_with_policies_and_manifest(overlap, CatchUpPolicy::All, |m| {
+                // A function whose name contains "slow" never answers, so what runs at once is
+                // exactly what dispatch admitted.
+                let mut slow = parse_manifest(&json!({"functions": [{
+                    "name": "slowTick",
+                    "generation": 2,
+                    "concurrency": 5,
+                    "trigger": {"type": "schedule", "schedule": "every 5 minutes"}
+                }]}))
+                .unwrap();
+                m.functions.append(&mut slow.functions);
+            })
+            .await;
+        runtime.run_schedule("slowTick").unwrap();
+        runtime.run_schedule("slowTick").unwrap();
+        for _ in 0..100 {
+            if runtime.status()["running"].as_u64() >= Some(running) {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        // Let a second invocation start if the policy allows one.
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        let status = runtime.status();
+        assert_eq!(status["running"], running, "{overlap:?}: {status}");
+        assert_eq!(status["pending"], 2 - running, "{overlap:?}: {status}");
+        runtime.shutdown().await;
+    }
+}

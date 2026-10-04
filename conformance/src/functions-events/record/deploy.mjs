@@ -26,6 +26,7 @@ import { PRIMARY_BUCKET, PRIMARY_COLLECTION, PRIMARY_TOPIC, PROJECT, REGION } fr
 
 export const DEPLOY_TIMEOUT_MS = 40 * 60 * 1000;
 export const DELETE_TIMEOUT_MS = 20 * 60 * 1000;
+export const DRY_RUN_TIMEOUT_MS = 10 * 60 * 1000;
 export const READY_POLL_SECONDS = 30;
 export const READY_MAX_POLLS = 40;
 export const PROPAGATION_WAIT_SECONDS = 300;
@@ -176,13 +177,17 @@ export function sourceProblems({ fixtureDir, node, directory }) {
 
 /** The CLI invocation (args, cwd, env) for deploy or delete of the formal set, from the reviewed helper. */
 export function cliPlan(action, { configHome, configPath, workDir, home, path }) {
-  return buildCanaryBatchCli(action, PROJECT, formalHandlers, {
+  // `dry-run` is the exact deploy command with `--dry-run` appended; the deploy carries `--force`
+  // (a deploy that retries a failed event is refused without it). The delete is unchanged.
+  if (!["deploy", "dry-run", "delete"].includes(action)) throw new Error("unknown CLI action");
+  return buildCanaryBatchCli(action === "dry-run" ? "deploy" : action, PROJECT, formalHandlers, {
     configHome,
     configPath,
     workDir,
     home,
     path,
     captureMode: "stdout",
+    ...(action === "delete" ? {} : { force: true, dryRun: action === "dry-run" }),
   });
 }
 
@@ -247,7 +252,10 @@ export function runCli({
           );
         }, killGraceMs);
       },
-      timeoutMs ?? (action === "deploy" ? DEPLOY_TIMEOUT_MS : DELETE_TIMEOUT_MS),
+      timeoutMs ??
+        { deploy: DEPLOY_TIMEOUT_MS, "dry-run": DRY_RUN_TIMEOUT_MS, delete: DELETE_TIMEOUT_MS }[
+          action
+        ],
     );
     child.on("error", (error) => finish(null, null, error));
     child.on("exit", (code, signal) => finish(code, signal));

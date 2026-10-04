@@ -58,6 +58,39 @@ test("the CLI plan deploys and deletes the 22 handlers once each, in stdout capt
   assert.deepEqual(cliPlan("delete", options).args.slice(1, 23), formalHandlers);
 });
 
+test("the deploy carries --force, the dry run is the same command with --dry-run appended, the delete is as before", () => {
+  const options = {
+    configHome: "/tmp/c",
+    configPath: "/tmp/f.json",
+    workDir: "/tmp/w",
+    home: "/tmp/h",
+    path: "/usr/bin",
+  };
+  const deploy = cliPlan("deploy", options);
+  const dryRun = cliPlan("dry-run", options);
+  const only = formalHandlers.map((name) => `functions:events:${name}`).join(",");
+  assert.deepEqual(deploy.args, [
+    "deploy",
+    "--config",
+    "/tmp/f.json",
+    "--project",
+    "fireemu-oracle-events",
+    "--only",
+    only,
+    "--non-interactive",
+    "--force",
+    "--debug",
+  ]);
+  assert.deepEqual(dryRun.args, [...deploy.args, "--dry-run"]);
+  assert.deepEqual(dryRun.env, deploy.env);
+  assert.equal(dryRun.cwd, deploy.cwd);
+  const remove = cliPlan("delete", options);
+  assert.ok(!remove.args.includes("--dry-run"));
+  assert.equal(remove.args.filter((a) => a === "--force").length, 1);
+  assert.equal(remove.args[0], "functions:delete");
+  assert.throws(() => cliPlan("deploy-dry", options), /unknown CLI action/);
+});
+
 test("the source copy comes from the pinned commit and carries the dotenv, nothing untracked", () => {
   const commit = execFileSync("git", ["-C", repoRoot, "rev-parse", "HEAD"]).toString().trim();
   const target = mkdtempSync(join(tmpdir(), "fe-src-"));

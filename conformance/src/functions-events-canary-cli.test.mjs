@@ -283,6 +283,53 @@ test("the formal recording's set is the fixture's 22 handlers and deploys and de
   assert.equal(remove.args.filter((a) => a === "functions:delete").length, 1);
 });
 
+test("--force and --dry-run are opt-in, for the deploy only, and leave the probe argv as it was", () => {
+  const options = { ...cliOptions, captureMode: "stdout" };
+  const plain = buildCanaryBatchCli("deploy", "demo-events-prod", formalHandlers, options);
+  assert.ok(!plain.args.includes("--force"));
+  assert.ok(!plain.args.includes("--dry-run"));
+  const probe = buildCanaryBatchCli("deploy", "demo-events-prod", probeCanaries, cliOptions);
+  assert.ok(!probe.args.includes("--force") && !probe.args.includes("--dry-run"));
+  const forced = buildCanaryBatchCli("deploy", "demo-events-prod", formalHandlers, {
+    ...options,
+    force: true,
+  });
+  assert.deepEqual(
+    forced.args,
+    plain.args.toSpliced(plain.args.indexOf("--non-interactive") + 1, 0, "--force"),
+  );
+  const dry = buildCanaryBatchCli("deploy", "demo-events-prod", formalHandlers, {
+    ...options,
+    force: true,
+    dryRun: true,
+  });
+  assert.deepEqual(dry.args, [...forced.args, "--dry-run"]);
+  const off = buildCanaryBatchCli("deploy", "demo-events-prod", formalHandlers, {
+    ...options,
+    force: false,
+    dryRun: false,
+  });
+  assert.deepEqual(off.args, plain.args);
+  for (const flags of [{ force: true }, { dryRun: true }, { force: false }])
+    assert.throws(
+      () =>
+        buildCanaryBatchCli("delete", "demo-events-prod", formalHandlers, { ...options, ...flags }),
+      /for the deploy only/,
+    );
+  for (const flags of [{ force: "yes" }, { dryRun: 1 }, { force: null }])
+    assert.throws(
+      () =>
+        buildCanaryBatchCli("deploy", "demo-events-prod", formalHandlers, { ...options, ...flags }),
+      /boolean/,
+    );
+  // the single-canary builder takes neither flag
+  assert.ok(
+    !buildCanaryCli("deploy", "demo-events-prod", "fsCreatedV1", cliOptions).args.includes(
+      "--force",
+    ),
+  );
+});
+
 test("the batch CLI still refuses a partial, reordered or mixed set", () => {
   const options = { ...cliOptions, captureMode: "stdout" };
   for (const names of [

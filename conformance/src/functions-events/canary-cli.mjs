@@ -97,12 +97,20 @@ function canaryEnvironment(projectId, options, captureMode) {
 }
 
 // One deploy or delete command for one whole reviewed set (the probe set or the formal set, and nothing else).
+// `options.force` and `options.dryRun` are for the deploy only and are off unless `true`: `--force` skips the
+// failure-policy and minimum-instances prompts (a non-interactive deploy of a function that retries is refused
+// without it), and `--dry-run` appended last makes the same command prepare and validate without deploying.
 export function buildCanaryBatchCli(action, projectId, names, options) {
   requireProject(projectId);
   if (!isReviewedSet(names)) {
     throw new Error("canary batch CLI takes exactly one reviewed set");
   }
   const captureMode = requireOptions(options);
+  if ((options.force !== undefined || options.dryRun !== undefined) && action !== "deploy")
+    throw new Error("canary CLI --force and --dry-run are for the deploy only");
+  for (const flag of [options.force, options.dryRun])
+    if (flag !== undefined && typeof flag !== "boolean")
+      throw new Error("canary CLI --force and --dry-run take a boolean");
   let args;
   if (action === "deploy") {
     args = [
@@ -114,7 +122,9 @@ export function buildCanaryBatchCli(action, projectId, names, options) {
       "--only",
       names.map((name) => `functions:events:${name}`).join(","),
       "--non-interactive",
+      ...(options.force === true ? ["--force"] : []),
       "--debug",
+      ...(options.dryRun === true ? ["--dry-run"] : []),
     ];
   } else if (action === "delete") {
     args = [

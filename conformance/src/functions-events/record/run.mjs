@@ -98,7 +98,7 @@ export async function record({
     passes: [],
     frames: [],
     preflight: null,
-    deploy: { cli: null, readiness: null },
+    deploy: { dryRun: null, cli: null, readiness: null },
     cleanup: null,
     capture: null,
     stops: [],
@@ -236,6 +236,18 @@ export async function record({
     }
     if (signal.aborted) {
       run.stops.push("a stop signal arrived before anything was created");
+      return finish("stopped-clean");
+    }
+    // One CLI dry run of the exact deploy command, before anything is created: a refusal of the CLI itself
+    // (a prompt it cannot answer, a build or validation error) stops the run with nothing written.
+    log("dry run");
+    run.deploy.dryRun = await cli("dry-run");
+    if (run.deploy.dryRun?.exitCode !== 0 || run.deploy.dryRun?.timedOut) {
+      run.stops.push("the CLI dry run failed; nothing was created or deployed");
+      return finish("stopped-clean");
+    }
+    if (signal.aborted) {
+      run.stops.push("a stop signal arrived after the dry run; nothing was created");
       return finish("stopped-clean");
     }
     ran.created = true;

@@ -29,8 +29,8 @@ async function recordedRun() {
     transport,
     cli: async (action) => {
       if (action === "deploy") world.deploy();
-      else world.undeploy();
-      return { action };
+      else if (action === "delete") world.undeploy();
+      return { action, exitCode: 0 };
     },
     sleep: async (s) => {
       clock.t += s * 1000;

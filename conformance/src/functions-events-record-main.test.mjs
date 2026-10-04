@@ -90,7 +90,7 @@ function arrange({ approve = true } = {}) {
   writeFileSync(
     ownerPath,
     approve
-      ? `- 2026-10-04 | ${ENVELOPE_TOPIC} | envelopeId=E1; project=fireemu-oracle-events; maxRequests=520; cliMax=2; reserveUsd=4.00; retries=none | オーナー | x\n- 2026-10-04 | ${TOPIC} | decision=APPROVE; envelopeId=E1; packetSha256=${packetSha256}; harnessSha256=${digest}; sourceCommit=${head} | Claude（委任 | y\n`
+      ? `- 2026-10-04 | ${ENVELOPE_TOPIC} | envelopeId=E1; project=fireemu-oracle-events; maxRequests=520; cliMax=3; reserveUsd=4.00; retries=none | オーナー | x\n- 2026-10-04 | ${TOPIC} | decision=APPROVE; envelopeId=E1; packetSha256=${packetSha256}; harnessSha256=${digest}; sourceCommit=${head} | Claude（委任 | y\n`
       : "",
   );
   let t = Date.parse("2026-10-04T12:00:00Z");
@@ -110,7 +110,7 @@ function arrange({ approve = true } = {}) {
     runCli: async ({ action }) => {
       cliCalls.push(action);
       if (action === "deploy") world.deploy();
-      else world.undeploy();
+      else if (action === "delete") world.undeploy();
       return { action, exitCode: 0 };
     },
     sleep: async (seconds) => {
@@ -158,7 +158,7 @@ test("record runs end to end: lock, started line, the run, SHA256SUMS, finished 
   const { deps, argv, cliCalls, ledgerPath, dir } = arrange();
   const result = await main(argv("record"), deps);
   assert.equal(result.outcome, "recorded", JSON.stringify(result));
-  assert.deepEqual(cliCalls, ["deploy", "delete"]);
+  assert.deepEqual(cliCalls, ["dry-run", "deploy", "delete"]);
   const rows = readFileSync(ledgerPath, "utf8")
     .trim()
     .split("\n")
@@ -169,6 +169,8 @@ test("record runs end to end: lock, started line, the run, SHA256SUMS, finished 
   );
   assert.equal(rows.at(-1).outcome, "recorded");
   assert.equal(rows.at(-1).lockRetained, false);
+  assert.deepEqual(rows.at(-1).cliAttempts, { dryRun: 1, deploy: 1, delete: 1 });
+  assert.equal(rows.at(-2).cliMax, 3);
   assert.equal(existsSync(join(dir, "locks", "fireemu-oracle-events.lock")), false);
   assert.equal(statSync(join(result.runDir, "production-run.json")).mode & 0o077, 0);
   assert.ok(existsSync(join(result.runDir, "SHA256SUMS")));
@@ -182,6 +184,32 @@ test("record runs end to end: lock, started line, the run, SHA256SUMS, finished 
   const again = await main(argv("record"), deps);
   assert.equal(again.ok, false);
   assert.ok(again.problems.some((p) => p.includes("already started")));
+});
+
+test("a CLI dry run that fails stops the run with nothing written, and the ledger says one CLI attempt", async () => {
+  const { deps, argv, cliCalls, ledgerPath, dir, world } = arrange();
+  deps.runCli = async ({ action }) => {
+    cliCalls.push(action);
+    return { action, exitCode: 1 };
+  };
+  const result = await main(argv("record"), deps);
+  assert.equal(result.outcome, "stopped-clean");
+  assert.deepEqual(cliCalls, ["dry-run"]);
+  const last = JSON.parse(readFileSync(ledgerPath, "utf8").trim().split("\n").at(-1));
+  assert.equal(last.outcome, "stopped-clean");
+  assert.equal(last.lockRetained, false);
+  assert.deepEqual(last.cliAttempts, { dryRun: 1, deploy: 0, delete: 0 });
+  assert.equal(existsSync(join(dir, "locks", "fireemu-oracle-events.lock")), false);
+  assert.ok(
+    world.requests.every(
+      (r) =>
+        r.method === "GET" ||
+        r.url.includes(":getIamPolicy") ||
+        r.url.includes(":runQuery") ||
+        r.url.includes("oauth2"),
+    ),
+    "only reads were sent",
+  );
 });
 
 test("a run that cannot verify its cleanup keeps the lock and says so in the ledger", async () => {

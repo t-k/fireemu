@@ -272,11 +272,14 @@ export async function main(argv, deps) {
       ceiling: sandbox.MAX_REQUESTS,
       now: deps.now,
     });
-    const cliAttempts = { deploy: 0, delete: 0 };
+    const cliAttempts = { dryRun: 0, deploy: 0, delete: 0 };
+    const attemptKey = { "dry-run": "dryRun", deploy: "deploy", delete: "delete" };
     const cli = async (action) => {
-      if (cliAttempts[action] >= 1)
+      const key = attemptKey[action];
+      if (key === undefined) throw new Error(`unknown CLI action ${action}`);
+      if (cliAttempts[key] >= 1)
         throw new Error(`the CLI ${action} was already run once; never re-sent`);
-      cliAttempts[action] += 1;
+      cliAttempts[key] += 1;
       const configHome = join(runDir, `config-${action}`);
       mkdirSync(configHome, { mode: 0o700 });
       const plan = cliPlan(action, {

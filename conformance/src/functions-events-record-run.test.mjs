@@ -25,7 +25,7 @@ function setup({ ceiling = 1000, world: worldOptions = {} } = {}) {
   const cli = async (action) => {
     calls.push(action);
     if (action === "deploy") world.deploy();
-    else world.undeploy();
+    else if (action === "delete") world.undeploy();
     return { action, exitCode: 0 };
   };
   let n = 0;
@@ -46,7 +46,7 @@ test("a full run records two passes of every scenario, captures the deliveries, 
   const { deps, world, calls } = setup();
   const { outcome, run } = await record(deps);
   assert.equal(outcome, "recorded", JSON.stringify([run.stops, run.cleanup?.problems]));
-  assert.deepEqual(calls, ["deploy", "delete"]);
+  assert.deepEqual(calls, ["dry-run", "deploy", "delete"]);
   assert.equal(run.passes.length, 2);
   for (const pass of run.passes)
     assert.deepEqual(
@@ -119,12 +119,12 @@ test("a deploy that never becomes ready skips the passes and still cleans up wit
   const { deps, calls } = setup();
   deps.cli = async (action) => {
     calls.push(action);
-    return { action, exitCode: 1 };
+    return { action, exitCode: action === "dry-run" ? 0 : 1 };
   };
   const { outcome, run } = await record(deps);
   assert.equal(outcome, "incomplete-clean");
   assert.equal(run.passes.length, 0);
-  assert.deepEqual(calls, ["deploy", "delete"]);
+  assert.deepEqual(calls, ["dry-run", "deploy", "delete"]);
   assert.ok(run.stops.some((s) => s.includes("did not become active")));
 });
 
@@ -141,7 +141,7 @@ test("a stop signal ends the passes at the next step, and the cleanup still runs
   const { outcome, run } = await record({ ...deps, signal });
   assert.equal(outcome, "incomplete-clean");
   assert.ok(run.passes[0].operations.length < SCENARIO_ORDER.length);
-  assert.deepEqual(calls, ["deploy", "delete"]);
+  assert.deepEqual(calls, ["dry-run", "deploy", "delete"]);
   assert.ok(run.stops.some((s) => s.includes("stop signal")));
 });
 
@@ -153,7 +153,7 @@ test("the request ceiling stops the passes, and the cleanup still has its own al
   const result = await record(tight.deps);
   assert.equal(result.outcome, "incomplete-clean", JSON.stringify(result.run.stops));
   assert.ok(result.run.stops.some((s) => s.includes("BudgetExhausted")));
-  assert.deepEqual(tight.calls, ["deploy", "delete"]);
+  assert.deepEqual(tight.calls, ["dry-run", "deploy", "delete"]);
   assert.equal(result.run.cleanup.verified, true);
   assert.ok(result.run.requestsSent <= CLEANUP_CEILING);
 });
@@ -208,7 +208,7 @@ test("a resource that cannot be created stops before the deploy and the cleanup 
   });
   const { outcome, run } = await record(deps);
   assert.equal(outcome, "incomplete-clean");
-  assert.deepEqual(calls, []);
+  assert.deepEqual(calls, ["dry-run"]);
   assert.ok(run.stops.some((s) => s.includes("could not be created")));
   assert.equal(run.cleanup.verified, true);
 });
@@ -260,6 +260,81 @@ test("a sign-up whose answer was lost (the user exists) does not end the recordi
   assert.ok(run.stops.some((s) => s.includes("fs-auth-client")));
 });
 
+const writes = (world) =>
+  world.requests
+    .filter((r) => ["POST", "PUT", "PATCH", "DELETE"].includes(r.method))
+    .filter(
+      (r) =>
+        !r.url.includes(":getIamPolicy") &&
+        !r.url.includes(":runQuery") &&
+        !r.url.includes("oauth2"),
+    );
+
+test("the CLI dry run comes after the preflight and before anything is created", async () => {
+  const { deps, world, calls } = setup();
+  const seen = [];
+  const cli = deps.cli;
+  deps.cli = async (action) => {
+    if (action === "dry-run")
+      seen.push({ writes: writes(world).length, requests: world.requests.length });
+    return cli(action);
+  };
+  const { outcome } = await record(deps);
+  assert.equal(outcome, "recorded");
+  assert.deepEqual(calls, ["dry-run", "deploy", "delete"]);
+  assert.equal(seen.length, 1);
+  assert.equal(seen[0].writes, 0, "nothing was written before the dry run");
+  assert.ok(seen[0].requests > 0, "the preflight reads came first");
+});
+
+for (const [label, answer] of [
+  ["exits non-zero", { exitCode: 1 }],
+  ["times out", { exitCode: null, timedOut: true }],
+  ["gives no exit code", {}],
+]) {
+  test(`a CLI dry run that ${label} stops clean: nothing is created, deployed or deleted`, async () => {
+    const { deps, world, calls } = setup();
+    deps.cli = async (action) => {
+      calls.push(action);
+      return { action, ...answer };
+    };
+    const { outcome, run } = await record(deps);
+    assert.equal(outcome, "stopped-clean");
+    assert.deepEqual(calls, ["dry-run"]);
+    assert.equal(writes(world).length, 0);
+    assert.ok(run.stops.some((s) => s.includes("dry run failed")));
+    assert.equal(run.cleanup, null);
+    assert.equal(run.passes.length, 0);
+    assert.equal(run.deploy.cli, null);
+  });
+}
+
+test("a CLI dry run that cannot even start stops clean with nothing written", async () => {
+  const { deps, world } = setup();
+  deps.cli = async () => {
+    throw new Error("spawn failed");
+  };
+  const { outcome, run } = await record(deps);
+  assert.equal(outcome, "stopped-clean");
+  assert.equal(writes(world).length, 0);
+  assert.ok(run.stops.some((s) => s.includes("spawn failed")));
+});
+
+test("a stop signal during the dry run stops clean before anything is created", async () => {
+  const { deps, world, calls } = setup();
+  const signal = { aborted: false };
+  const cli = deps.cli;
+  deps.cli = async (action) => {
+    if (action === "dry-run") signal.aborted = true;
+    return cli(action);
+  };
+  const { outcome, run } = await record({ ...deps, signal });
+  assert.equal(outcome, "stopped-clean");
+  assert.deepEqual(calls, ["dry-run"]);
+  assert.equal(writes(world).length, 0);
+  assert.ok(run.stops.some((s) => s.includes("after the dry run")));
+});
+
 test("a stop signal before anything is created stops clean: no resource, no CLI, no delete", async () => {
   const { deps, world, calls } = setup();
   const { outcome } = await record({ ...deps, signal: { aborted: true } });
@@ -276,7 +351,7 @@ test("a stop signal during setup cleans up without a deploy", async () => {
   });
   const { outcome, run } = await record({ ...deps, signal });
   assert.equal(outcome, "incomplete-clean");
-  assert.deepEqual(calls, []);
+  assert.deepEqual(calls, ["dry-run"]);
   assert.ok(run.stops.some((s) => s.includes("before the deploy")));
   assert.equal(world.topics.size, 0);
 });
@@ -291,7 +366,7 @@ test("a stop signal while the deploy settles skips the passes and runs the one C
   };
   const { outcome, run } = await record({ ...deps, signal });
   assert.equal(outcome, "incomplete-clean");
-  assert.deepEqual(calls, ["deploy", "delete"]);
+  assert.deepEqual(calls, ["dry-run", "deploy", "delete"]);
   assert.equal(run.passes.length, 0);
   assert.equal(world.deployed, false);
 });

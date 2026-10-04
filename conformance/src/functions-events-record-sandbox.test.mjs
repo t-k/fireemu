@@ -301,6 +301,8 @@ const nearMisses = [
   ["CLI attempts that are not known", { finished: { cliAttempts: null } }],
   ["CLI attempts that are missing", { finished: { cliAttempts: undefined } }],
   ["a CLI count that is not a number", { finished: { cliAttempts: { deploy: "0", delete: 0 } } }],
+  ["a deploy count that is missing", { finished: { cliAttempts: { dryRun: 0, delete: 0 } } }],
+  ["a delete count that is missing", { finished: { cliAttempts: { dryRun: 0, deploy: 0 } } }],
   ["a CLI dry run", { finished: { cliAttempts: { dryRun: 1, deploy: 0, delete: 0 } } }],
   [
     "a CLI attempt of a kind we do not know",

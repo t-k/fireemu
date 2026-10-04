@@ -104,6 +104,7 @@ test("a failed preflight stops clean: nothing is created, deployed or deleted", 
   assert.equal(outcome, "stopped-clean");
   assert.deepEqual(calls, []);
   assert.ok(run.preflight.problems.length > 0);
+  assert.equal(run.deploy.dryRun, null, "no dry run was attempted");
   assert.ok(
     !world.requests.some(
       (r) =>
@@ -291,6 +292,7 @@ test("the CLI dry run comes after the preflight and before anything is created",
 for (const [label, answer] of [
   ["exits non-zero", { exitCode: 1 }],
   ["times out", { exitCode: null, timedOut: true }],
+  ["times out and still exits 0 after the SIGTERM", { exitCode: 0, timedOut: true }],
   ["gives no exit code", {}],
 ]) {
   test(`a CLI dry run that ${label} stops clean: nothing is created, deployed or deleted`, async () => {

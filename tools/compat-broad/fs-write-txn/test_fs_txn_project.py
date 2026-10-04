@@ -100,7 +100,7 @@ def test_the_txn_project_session_uses_five_slots_and_proves_there_is_no_rules_re
     assert seen == [("oauth-tokeninfo", None), ("project", None), ("database", None), ("rules-release", None), ("project", None), ("database", None)]
     assert budget.management == 6
     assert first["rules-absent"] == "absent" and "rulesSourceSha256" not in first and "rulesetName" not in first
-    assert set(second) == {"project", "database"}
+    assert set(second) == {"project", "database", "databaseSettings"}
     assert TOKEN not in repr(first) + repr(second)
 
 
@@ -486,3 +486,56 @@ def test_two_txn_recordings_that_agree_without_proving_the_absence_of_a_rules_re
         runner.record_twice(**kwargs)
     assert (tmp_path / TXN_LOCK).exists()
     assert json.loads(ledger.read_text().splitlines()[-1])["outcome"] == "stopped-needs-review"
+
+
+# --- the database settings the read-time retention condition compares: stored from the database GET, in the receipt's metadata ---
+
+PITR, RETENTION = "POINT_IN_TIME_RECOVERY_DISABLED", "3600s"
+
+
+def with_settings(pitr=PITR, retention=RETENTION, *, change_after=None):
+    calls = {"database": 0}
+
+    def request(slot, token, resource=None):
+        answer = txn_answer(slot)
+        if slot == "database":
+            calls["database"] += 1
+            body = dict(answer["body"])
+            changed = change_after is not None and calls["database"] > change_after
+            if pitr is not None:
+                body["pointInTimeRecoveryEnablement"] = "POINT_IN_TIME_RECOVERY_ENABLED" if changed else pitr
+            if retention is not None:
+                body["versionRetentionPeriod"] = retention
+            answer["body"] = body
+        return answer
+    return request
+
+
+def test_the_database_settings_the_retention_condition_compares_are_stored_before_and_after(monkeypatch):
+    run, _seen, _budget = session(monkeypatch, request=with_settings())
+    first, second = run.preflight(), run.postflight()
+    expected = {"pointInTimeRecoveryEnablement": PITR, "versionRetentionPeriod": RETENTION}
+    assert first["databaseSettings"] == expected and second["databaseSettings"] == expected
+    # nothing but those two values: the digest and the slots are as before
+    assert set(first) == {"oauth-tokeninfo", "project", "database", "rules-absent", "databaseSettings"} and set(second) == {"project", "database", "databaseSettings"}
+    assert first["database"] == second["database"]
+
+
+def test_a_database_that_reports_no_settings_stores_them_as_not_reported(monkeypatch):
+    run, _seen, _budget = session(monkeypatch)
+    assert run.preflight()["databaseSettings"] == {"pointInTimeRecoveryEnablement": None, "versionRetentionPeriod": None}
+
+
+@pytest.mark.parametrize("pitr,retention", [(7, RETENTION), (PITR, ["3600s"]), ({"x": 1}, RETENTION), (PITR, 3600)])
+def test_a_setting_that_is_not_a_string_refuses_the_run(monkeypatch, pitr, retention):
+    run, _seen, _budget = session(monkeypatch, request=with_settings(pitr, retention))
+    with pytest.raises(ValueError, match="database settings"):
+        run.preflight()
+
+
+def test_settings_that_change_between_the_preflight_and_the_postflight_refuse_the_run(monkeypatch):
+    run, _seen, _budget = session(monkeypatch, request=with_settings(change_after=1))
+    run.preflight()
+    with pytest.raises(ValueError, match="changed after observation"):
+        run.postflight()
+

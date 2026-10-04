@@ -32,7 +32,7 @@ def test_the_table_is_registered_bound_and_targets_the_free_tier_project():
 
 def test_the_requests_tokens_and_waits_stay_inside_the_declared_caps():
     value = plan()
-    assert len(value["steps"]) == 69 and len(value["cases"]) == 44
+    assert len(value["steps"]) == 69 and len(value["cases"]) == 46
     assert value["caps"] == {"observation": 69, "tokenCleanup": 9, "documentCleanup": 56, "management": 7, "credential": 2}
     assert value["maxRequests"] == 143 and value["maxTokens"] == 9
     assert sum(value["waits"].values()) == 2 * p14.WRITE_SET_HOLD_SECONDS + 4 * p14.HOLD_SECONDS == 110
@@ -88,13 +88,15 @@ def test_the_paging_chain_cancels_the_stream_after_one_frame_and_keeps_using_the
 
 def test_the_retention_reads_name_59_and_61_minutes_ago_and_a_begin_is_released_only_when_it_was_accepted():
     steps = {step["id"]: step for step in plan()["steps"]}
-    assert tail("rest/ret/") == ["get-59", "batch-59", "begin-59", "release-59", "get-61", "batch-61", "begin-61"]
+    assert tail("rest/ret/") == ["get-59", "batch-59", "get-61", "batch-61", "begin-59", "release-59", "begin-61"]
     assert tail("grpc/ret/") == ["get-59", "get-61", "batch-61"]
+    assert [step["id"] for step in plan()["steps"]][-3:] == ["rest/ret/begin-59", "rest/ret/release-59", "rest/ret/begin-61"], "the two begins come last: a stop there costs no other row"
     for step_id, step in steps.items():
         if "/ret/" in step_id:
             if "readAgoSeconds" in step:
                 assert step["readAgoSeconds"] == (3540 if step_id.endswith("59") else 3660), step_id
-            assert step["allow"] == [0, 3, 5, 9, 10] and step["tokenInput"] in (None, "ro-59")
+            expected = {"rest/ret/begin-59": [0], "rest/ret/begin-61": [3, 5, 9, 10]}.get(step_id, [0, 3, 5, 9, 10])
+            assert step["allow"] == expected and step["tokenInput"] in (None, "ro-59"), step_id
     assert steps["rest/ret/begin-59"]["mode"] == "readOnly" and steps["rest/ret/begin-61"]["mode"] == "readOnly"
     assert steps["rest/ret/release-59"]["tokenInput"] == "ro-59"
     assert not any(step["tokenInput"] == "ro-61" for step in steps.values()), "a refused 61 minute begin leaves nothing to release; an accepted one is released by the recovery"
@@ -112,7 +114,7 @@ def test_the_token_chain_is_a_valid_control_then_literal_tokens_with_the_malform
 
 def test_every_observation_may_give_any_refusal_and_nothing_outside_the_declared_set_names_a_foreign_document():
     for step in plan()["steps"]:
-        if step["role"] == "observation" and "cancelAfter" not in step and step["allow"] != [0, 10]:
+        if step["role"] == "observation" and "cancelAfter" not in step and step["allow"] != [0, 10] and step["id"] not in ("rest/ret/begin-59", "rest/ret/begin-61"):
             assert step["allow"] == [0, 3, 5, 9, 10], step["id"]
         assert step["document"] in (None, *TABLE["documents"])
         assert all(write["document"] in TABLE["documents"] for write in step["writes"])

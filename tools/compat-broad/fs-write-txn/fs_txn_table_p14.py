@@ -17,7 +17,7 @@ gRPC write-set chain, created by a writer), `h` (the range-lock chains' in-range
 - paging-and-cancellation (gRPC): a transaction runs the unfiltered query (more than three documents exist) and the call cancels the stream after the
   first frame; the same token then reads and commits, and a writer to a document of the range, sent first, answers only after that commit.
 - read-time-retention: reads 59 and 61 minutes before they are sent (the one-hour retention boundary, no point-in-time recovery): GetDocument,
-  BatchGetDocuments and a read-only begin over REST, GetDocument and BatchGetDocuments over gRPC. The condition asks only for accepted or refused
+  BatchGetDocuments and, last, a read-only begin over REST (59 minutes must be accepted, 61 refused: the other answer stops the run), GetDocument and BatchGetDocuments over gRPC. The condition asks only for accepted or refused
   answers ("compare accepted/refused results and configuration"), so a document created in this run is enough and nothing waits an hour.
 - token validation: a valid-token control, then a token that does not decode (REST only) and one that decodes and was never issued, on a read, a
   batch read, a commit and a rollback over REST, and the unknown token on a read, a commit and a rollback over gRPC.
@@ -110,14 +110,15 @@ def _retention():
     for label, ago in RETENTION_AGO.items():
         steps.append(_step(f"rest/ret/get-{label}", "rest", "GetDocument", "observation", document="a", case=f"rest/ret/get-{label}", allow=WIDE, readAgoSeconds=ago))
         steps.append(_step(f"rest/ret/batch-{label}", "rest", "BatchGetDocuments", "observation", case=f"rest/ret/batch-{label}", allow=WIDE, readAgoSeconds=ago, documents=["a"]))
-        if label == "59":
-            steps.append(_step("rest/ret/begin-59", "rest", "BeginTransaction", "observation", token_out="ro-59", case="rest/ret/begin-59", allow=WIDE, mode="readOnly", readAgoSeconds=RETENTION_AGO["59"]))
-            steps.append(_step("rest/ret/release-59", "rest", "Rollback", "observation", token_in="ro-59", case="rest/ret/release-59", allow=WIDE))
-        else:
-            steps.append(_step("rest/ret/begin-61", "rest", "BeginTransaction", "observation", token_out="ro-61", case="rest/ret/begin-61", allow=WIDE, mode="readOnly", readAgoSeconds=RETENTION_AGO["61"]))
     for label, ago in RETENTION_AGO.items():
         steps.append(_step(f"grpc/ret/get-{label}", "grpc", "GetDocument", "observation", document="a", case=f"grpc/ret/get-{label}", allow=WIDE, readAgoSeconds=ago))
     steps.append(_step("grpc/ret/batch-61", "grpc", "BatchGetDocuments", "observation", case="grpc/ret/batch-61", allow=WIDE, readAgoSeconds=RETENTION_AGO["61"], documents=["a"]))
+    # The two read-only begins come last, with the allow sets of what production is known to do (a begin validates its read time at the begin): 59 minutes accepted, 61 refused.
+    # The other answer is a stop, honestly: an accepted 61 minute begin leaves a token the recovery releases and a graph the replay does not accept, a refused 59 minute begin
+    # leaves the release below it with no token. Last, a stop costs no other row.
+    steps.append(_step("rest/ret/begin-59", "rest", "BeginTransaction", "observation", token_out="ro-59", case="rest/ret/begin-59", allow=(0,), mode="readOnly", readAgoSeconds=RETENTION_AGO["59"]))
+    steps.append(_step("rest/ret/release-59", "rest", "Rollback", "observation", token_in="ro-59", case="rest/ret/release-59", allow=WIDE))
+    steps.append(_step("rest/ret/begin-61", "rest", "BeginTransaction", "observation", token_out="ro-61", case="rest/ret/begin-61", allow=(3, 5, 9, 10), mode="readOnly", readAgoSeconds=RETENTION_AGO["61"]))
     return steps
 
 
@@ -155,7 +156,7 @@ STEPS = tuple(
     _SETUP
     + _write_set("rest", "c") + _write_set("grpc", "d")
     + _range_chain("rest", "q1", "o", "q-out") + _range_chain("rest", "q2", "p", "q-in")
-    + [_query("rest/q/post-query-in", "rest", query={"stateEquals": "q-in"}), _read("rest/q/post-read-p", "rest", "p", role="post-state"), _read("rest/q/post-read-o", "rest", "o", role="post-state")]
+    + [_query("rest/q/post-query-in", "rest", query={"stateEquals": "q-in"}), _read("rest/q/post-read-p", "rest", "p"), _read("rest/q/post-read-o", "rest", "o")]
     + _range_chain("grpc", "q", "p2", "q-in") + [_query("grpc/q/post-query-in", "grpc", query={"stateEquals": "q-in"})]
     + _paging()
     + _tokens()

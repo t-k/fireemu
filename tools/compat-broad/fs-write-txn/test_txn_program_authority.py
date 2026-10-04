@@ -46,6 +46,52 @@ def test_the_envelope_scope_comes_from_the_table():
     assert authority.envelope_scope(no_writer)["writerDeadlineSeconds"] == "none"
 
 
+def _with_writer_deadlines(*deadlines):
+    """The toy table with its outside writers' deadlines replaced, in order (the toy has two writers)."""
+    steps, queue = [], list(deadlines)
+    for step in support.TABLE["steps"]:
+        steps.append({**step, "deadlineMs": queue.pop(0)} if step["role"] == "outside-writer" else step)
+    return {**support.TABLE, "steps": tuple(steps)}
+
+
+def test_the_envelope_states_the_longest_writer_deadline_the_table_declares():
+    # an approval must not understate how long a writer may stay in flight against production
+    assert authority.envelope_scope(_with_writer_deadlines(30000, 30000))["writerDeadlineSeconds"] == "30"
+    assert authority.envelope_scope(_with_writer_deadlines(30000, 90000))["writerDeadlineSeconds"] == "90"
+    assert authority.envelope_scope(_with_writer_deadlines(90000, 30000))["writerDeadlineSeconds"] == "90"
+    assert authority.envelope_scope(_with_writer_deadlines(45000, 60000))["writerDeadlineSeconds"] == "60"
+    # a deadline that is not a whole second rounds up
+    assert authority.envelope_scope(_with_writer_deadlines(30500, 30000))["writerDeadlineSeconds"] == "31"
+
+
+def test_only_the_outside_writers_deadlines_state_the_writer_deadline():
+    # the other steps' deadline (the 10 s default, longer than these writers') must not leak into the statement
+    table = _with_writer_deadlines(5000, 4000)
+    assert authority.envelope_scope(table)["writerDeadlineSeconds"] == "5"
+
+
+def test_the_stage_2_table_states_90_seconds_and_the_earlier_tables_keep_30():
+    import fs_txn_table_p05 as p05
+    import fs_txn_table_p13b as p13b
+    import fs_txn_table_p14 as p14
+
+    assert authority.envelope_scope(p14.TABLE)["writerDeadlineSeconds"] == "90"
+    assert authority.envelope_scope(p05.TABLE)["writerDeadlineSeconds"] == "30"
+    assert authority.envelope_scope(p13b.TABLE)["writerDeadlineSeconds"] == "30"
+
+
+def test_an_envelope_that_states_the_shorter_deadline_does_not_authorize_a_table_with_the_longer_one():
+    scope90 = authority.envelope_scope(_with_writer_deadlines(30000, 90000))
+    assert scope90["writerDeadlineSeconds"] == "90"
+    pins = {**PINS, "scope": scope90}
+    truthful = AUTHORITY + envelope_row(scope=scope90) + approve_row()
+    assert authority.authorize(truthful, pins) == (2 * REQUESTS, 0.04)
+    # the envelope of the 30 s table, offered for the table whose writer waits 90 s, is refused: the line understates how long a writer stays in flight
+    understated = AUTHORITY + envelope_row(scope=SCOPE) + approve_row()
+    with pytest.raises(ValueError):
+        authority.authorize(understated, pins)
+
+
 def test_delegation_with_exact_foundation_envelope_and_version_is_accepted():
     assert authority.authorize(DECISIONS, PINS) == (2 * REQUESTS, 0.04)
     assert authority.verify_initial_gates([LAST], NOW, DECISIONS, PINS) == LAST["ts"]

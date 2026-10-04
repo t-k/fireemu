@@ -25,6 +25,7 @@ EXPECTED_DATABASE = {
 
 class MetadataSession(management.MetadataSession):
     def __init__(self, token, baseline, budget, *, request_fn=None, project=PROJECT):
+        self.project = project
         if project == PROJECT:
             super().__init__(token, baseline, budget, request_fn=request_fn)
             return
@@ -42,6 +43,7 @@ class MetadataSession(management.MetadataSession):
         self.request = request_fn
         self._ready = False
         self._database_projection = None
+        self._database_settings = None
         self.project = project
 
     def _read(self, slot, resource=None):
@@ -73,9 +75,13 @@ class MetadataSession(management.MetadataSession):
             if any(body.get(key) != value for key, value in EXPECTED_DATABASE.items()):
                 raise ValueError("sandbox database must match PESSIMISTIC expected settings")
             projection = database_evidence(body)["projectionDigest"]
+            # The two non-secret values the boundary of a read at a time ago depends on (read-time retention compares "configuration"): kept in the receipt, as reported or None.
+            settings = {key: body.get(key) for key in ("pointInTimeRecoveryEnablement", "versionRetentionPeriod")}
+            if any(value is not None and not isinstance(value, str) for value in settings.values()):
+                raise ValueError("sandbox database settings must be strings")
             if self._database_projection is None:
-                self._database_projection = projection
-            elif projection != self._database_projection:
+                self._database_projection, self._database_settings = projection, settings
+            elif projection != self._database_projection:   # the projection retains both settings, so a change in either is refused here
                 raise ValueError("sandbox database changed after observation")
             return projection
         if body.get("projectId") != self.project or body.get("projectNumber") != preflight.validate_project_number(self.baseline.get("projectNumber")):
@@ -86,5 +92,12 @@ class MetadataSession(management.MetadataSession):
         if self.project == PROJECT:
             return super().preflight()
         observed = {slot: self._read(slot) for slot in TXN_PRE_SLOTS}
+        observed["databaseSettings"] = dict(self._database_settings)
         self._ready = True
+        return observed
+
+    def postflight(self):
+        observed = super().postflight()
+        if self.project != PROJECT:
+            observed["databaseSettings"] = dict(self._database_settings)
         return observed

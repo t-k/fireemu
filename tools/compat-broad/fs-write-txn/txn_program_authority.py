@@ -19,7 +19,7 @@ def envelope_scope(table):
     """The resource scope an envelope must state, derived from the table alone."""
     plan = compile_plan(table, 'a' * 32, 'b' * 32)
     writer = any(step['role'] == 'outside-writer' for step in plan['steps'])
-    return {'project': f"{plan['project']}/(default)", 'writes': f"owned-{len(plan['documents'])}-documents", 'iamConfig': 'none', 'retries': 'none', 'onStop': 'needs-recovery-lock-held', 'observationSeconds': str(plan['observationSeconds']), 'recoverySeconds': str(plan['recoverySeconds']), 'maxTokens': str(plan['maxTokens']), 'maxUnresolvedTokens': str(plan['maxUnresolvedTokens']), 'releasePolicy': plan['releasePolicy'], 'timing': plan['timing'], 'timingSource': 'parent-wire-envelope', 'transports': '+'.join(sorted({step['transport'] for step in plan['steps']})), 'writerDeadlineSeconds': '30' if writer else 'none'}
+    return {'project': f"{plan['project']}/(default)", 'writes': f"owned-{len(plan['documents'])}-documents", 'iamConfig': 'none', 'retries': 'none', 'onStop': 'needs-recovery-lock-held', 'observationSeconds': str(plan['observationSeconds']), 'recoverySeconds': str(plan['recoverySeconds']), 'maxTokens': str(plan['maxTokens']), 'maxUnresolvedTokens': str(plan['maxUnresolvedTokens']), 'releasePolicy': plan['releasePolicy'], 'timing': plan['timing'], 'timingSource': 'parent-wire-envelope', 'transports': '+'.join(sorted({step['transport'] for step in plan['steps']})), 'writerDeadlineSeconds': str(-(-max(step['deadlineMs'] for step in plan['steps'] if step['role'] == 'outside-writer') // 1000)) if writer else 'none'}
 
 
 def _values(columns):

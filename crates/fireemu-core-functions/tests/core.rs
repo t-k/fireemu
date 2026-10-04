@@ -578,8 +578,8 @@ struct UsEastern2026;
 impl UsEastern2026 {
     const EDT: i64 = -4 * 3_600;
     const EST: i64 = -5 * 3_600;
-    const SPRING: i64 = 1772953200; // 2026-03-08T07:00:00Z
-    const FALL: i64 = 1793512800; // 2026-11-01T06:00:00Z
+    const SPRING: i64 = 1_772_953_200; // 2026-03-08T07:00:00Z
+    const FALL: i64 = 1_793_512_800; // 2026-11-01T06:00:00Z
 
     const fn offset_at(utc: i64) -> i64 {
         if utc >= Self::SPRING && utc < Self::FALL {
@@ -959,54 +959,63 @@ fn the_dst_gap_is_skipped_and_the_fold_runs_at_its_first_occurrence_in_every_win
 fn the_work_counter_is_deterministic() {
     let utc = FixedOffset(0);
     let every5 = Schedule::parse("every 5 minutes").unwrap();
-    let w = every5.window_in(
+    let interval_window = every5.window_in(
         t("2026-08-29T12:00:00Z"),
         t("2026-08-29T12:20:00Z"),
         &utc,
         100,
     );
-    assert_eq!(w.steps, 2, "an interval window is two divisions");
+    assert_eq!(
+        interval_window.steps, 2,
+        "an interval window is two divisions"
+    );
     let nightly = Schedule::parse("0 3 * * *").unwrap();
-    let n = nightly.window_in(
+    let nightly_window = nightly.window_in(
         t("2026-08-29T12:01:00Z"),
         t("2026-09-01T04:00:00Z"),
         &utc,
         100,
     );
     assert_eq!(
-        n.steps, 45,
+        nightly_window.steps, 45,
         "27 reverse-probe hours, the backward walk, the forward count"
     );
     let june = Schedule::parse("0 9 1 6 *").unwrap();
-    let j = june.window_in(
+    let june_window = june.window_in(
         t("2020-01-01T00:00:00Z"),
         t("2026-12-31T00:00:00Z"),
         &utc,
         100,
     );
-    assert_eq!(j.steps, 380, "a month-restricted schedule walks months");
+    assert_eq!(
+        june_window.steps, 380,
+        "a month-restricted schedule walks months"
+    );
     let ny = UsEastern2026;
     let fold = Schedule::parse("30 1 * * *").unwrap();
-    let f = fold.window_in(
+    let fold_window = fold.window_in(
         t("2026-10-31T12:00:00Z"),
         t("2026-11-01T06:10:00Z"),
         &ny,
         100,
     );
-    assert_eq!(f.steps, 39, "a fold window walks one repeated hour");
+    assert_eq!(
+        fold_window.steps, 39,
+        "a fold window walks one repeated hour"
+    );
     // An every-minute schedule across the repeated hour: 01:01 to 01:59 run once (05:01 to 05:59Z),
     // and the second 01:00 hour (06:00 to 06:59Z) holds no run at all.
     let every_minute = Schedule::parse("* * * * *").unwrap();
-    let m = every_minute.window_in(
+    let minute_window = every_minute.window_in(
         t("2026-11-01T05:00:00Z"),
         t("2026-11-01T06:10:00Z"),
         &ny,
         1_000,
     );
-    assert_eq!(m.count, RunCount::Exact(59));
-    assert_eq!(m.latest, Some(t("2026-11-01T05:59:00Z")));
+    assert_eq!(minute_window.count, RunCount::Exact(59));
+    assert_eq!(minute_window.latest, Some(t("2026-11-01T05:59:00Z")));
     assert_eq!(
-        m.steps, 100,
+        minute_window.steps, 100,
         "a window ending in the repeated hour starts its walk at the right height"
     );
 }

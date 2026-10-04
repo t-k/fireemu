@@ -20,6 +20,21 @@ export const probeCanaries = [
   "pubsubPublishedV2",
 ];
 
+// The 22 handlers of the formal recording (every export of the fixture), in the order the capture
+// lists them. Like the probe set, they deploy and delete as one set, in one CLI command each.
+export const formalHandlers = [
+  "fsCreatedV1", "fsCreatedV2", "fsUpdatedV1", "fsUpdatedV2", "fsDeletedV1", "fsDeletedV2",
+  "fsWrittenV1", "fsWrittenV2", "fsWrittenWithAuthContextV2", "fsRetryV2",
+  "storageFinalizedV1", "storageFinalizedV2", "storageDeletedV1", "storageDeletedV2",
+  "storageMetadataUpdatedV1", "storageMetadataUpdatedV2", "storageArchivedV1", "storageArchivedV2",
+  "authCreatedV1", "authDeletedV1", "pubsubPublishedV1", "pubsubPublishedV2",
+];
+
+const reviewedSets = [probeCanaries, formalHandlers];
+const isReviewedSet = (names) =>
+  Array.isArray(names) &&
+  reviewedSets.some((set) => names.length === set.length && names.every((name, index) => name === set[index]));
+
 function requireProject(projectId) {
   if (!/^[a-z][a-z0-9-]{4,28}[a-z0-9]$/.test(projectId)) {
     throw new Error("canary project ID is invalid");
@@ -57,15 +72,11 @@ function canaryEnvironment(projectId, options, captureMode) {
   };
 }
 
-// One deploy or delete command for the whole reviewed probe set (and nothing else).
+// One deploy or delete command for one whole reviewed set (the probe set or the formal set, and nothing else).
 export function buildCanaryBatchCli(action, projectId, names, options) {
   requireProject(projectId);
-  if (
-    !Array.isArray(names) ||
-    names.length !== probeCanaries.length ||
-    names.some((name, index) => name !== probeCanaries[index])
-  ) {
-    throw new Error("canary batch CLI takes exactly the reviewed probe set");
+  if (!isReviewedSet(names)) {
+    throw new Error("canary batch CLI takes exactly one reviewed set");
   }
   const captureMode = requireOptions(options);
   let args;

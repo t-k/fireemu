@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
-import { buildCanaryBatchCli, buildCanaryCli, probeCanaries } from "./functions-events/canary-cli.mjs";
+import { buildCanaryBatchCli, buildCanaryCli, formalHandlers, probeCanaries } from "./functions-events/canary-cli.mjs";
 
 const configPath = new URL("../functions-events/firebase.json", import.meta.url);
 const fixtureLockPath = new URL("../functions-events/fixtures/pnpm-lock.yaml", import.meta.url);
@@ -173,7 +173,7 @@ test("the batch CLI takes exactly the reviewed set, once each, in the reviewed o
   ];
   for (const names of bad) {
     for (const action of ["deploy", "delete"]) {
-      assert.throws(() => buildCanaryBatchCli(action, "demo-events-prod", names, cliOptions), /reviewed probe set/);
+      assert.throws(() => buildCanaryBatchCli(action, "demo-events-prod", names, cliOptions), /exactly one reviewed set/);
     }
   }
   assert.throws(() => buildCanaryBatchCli("other", "demo-events-prod", probeCanaries, cliOptions), /unknown canary CLI action/);
@@ -185,5 +185,24 @@ test("the batch CLI takes exactly the reviewed set, once each, in the reviewed o
 test("the single-function helper still refuses the probe set's names", () => {
   for (const name of probeCanaries) {
     assert.throws(() => buildCanaryCli("deploy", "demo-events-prod", name, cliOptions), /unreviewed canary function/);
+  }
+});
+
+test("the formal recording's set is the fixture's 22 handlers and deploys and deletes in one command each", () => {
+  const exported = [...readFileSync(new URL("../functions-events/fixtures/index.js", import.meta.url), "utf8").matchAll(/^exports\.(\w+) =/gm)].map((m) => m[1]);
+  assert.equal(formalHandlers.length, 22);
+  assert.deepEqual([...formalHandlers].sort(), [...exported].sort());
+  const deploy = buildCanaryBatchCli("deploy", "demo-events-prod", formalHandlers, { ...cliOptions, captureMode: "stdout" });
+  assert.equal(deploy.args[deploy.args.indexOf("--only") + 1], formalHandlers.map((n) => `functions:events:${n}`).join(","));
+  assert.equal(deploy.env.FE_EVENTS_CAPTURE_MODE, "stdout");
+  const remove = buildCanaryBatchCli("delete", "demo-events-prod", formalHandlers, { ...cliOptions, captureMode: "stdout" });
+  assert.deepEqual(remove.args.slice(1, 1 + formalHandlers.length), formalHandlers);
+  assert.equal(remove.args.filter((a) => a === "functions:delete").length, 1);
+});
+
+test("the batch CLI still refuses a partial, reordered or mixed set", () => {
+  const options = { ...cliOptions, captureMode: "stdout" };
+  for (const names of [formalHandlers.slice(1), [...formalHandlers].reverse(), [...formalHandlers.slice(0, 21), "fsCreatedV1"], [...probeCanaries, ...formalHandlers]]) {
+    assert.throws(() => buildCanaryBatchCli("deploy", "demo-events-prod", names, options), /reviewed/);
   }
 });

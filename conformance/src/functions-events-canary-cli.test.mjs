@@ -1,7 +1,11 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
-import { buildCanaryBatchCli, buildCanaryCli, probeCanaries } from "./functions-events/canary-cli.mjs";
+import {
+  buildCanaryBatchCli,
+  buildCanaryCli,
+  probeCanaries,
+} from "./functions-events/canary-cli.mjs";
 
 const configPath = new URL("../functions-events/firebase.json", import.meta.url);
 const fixtureLockPath = new URL("../functions-events/fixtures/pnpm-lock.yaml", import.meta.url);
@@ -100,7 +104,13 @@ test("the delivery probe selects the stdout capture and nothing else can", () =>
 });
 
 test("canary CLI rejects an unreviewed function or malformed project", () => {
-  for (const name of ["authCreatedV1", "storageDeletedV1", "storageFinalizedV2,fsCreatedV2", "fsCreatedV2,storageFinalizedV2", ""]) {
+  for (const name of [
+    "authCreatedV1",
+    "storageDeletedV1",
+    "storageFinalizedV2,fsCreatedV2",
+    "fsCreatedV2,storageFinalizedV2",
+    "",
+  ]) {
     assert.throws(() => buildCanaryCli("deploy", "demo-events-prod", name, cliOptions));
   }
   assert.throws(() => buildCanaryCli("deploy", "futaba-prod;other", "fsCreatedV1", cliOptions));
@@ -131,29 +141,61 @@ test("the deployable fixture has its own frozen SDK dependency lockfile", () => 
 
 test("the delivery probe set is exactly the twelve reviewed handlers and deploys in one command", () => {
   assert.deepEqual(probeCanaries, [
-    "fsUpdatedV1", "fsUpdatedV2", "fsDeletedV1", "fsDeletedV2", "fsWrittenV1", "fsWrittenV2",
-    "storageDeletedV1", "storageDeletedV2", "storageMetadataUpdatedV1", "storageMetadataUpdatedV2",
-    "pubsubPublishedV1", "pubsubPublishedV2",
+    "fsUpdatedV1",
+    "fsUpdatedV2",
+    "fsDeletedV1",
+    "fsDeletedV2",
+    "fsWrittenV1",
+    "fsWrittenV2",
+    "storageDeletedV1",
+    "storageDeletedV2",
+    "storageMetadataUpdatedV1",
+    "storageMetadataUpdatedV2",
+    "pubsubPublishedV1",
+    "pubsubPublishedV2",
   ]);
-  const deploy = buildCanaryBatchCli("deploy", "demo-events-prod", probeCanaries, { ...cliOptions, captureMode: "stdout" });
+  const deploy = buildCanaryBatchCli("deploy", "demo-events-prod", probeCanaries, {
+    ...cliOptions,
+    captureMode: "stdout",
+  });
   assert.deepEqual(deploy.args, [
-    "deploy", "--config", cliOptions.configPath, "--project", "demo-events-prod",
-    "--only", probeCanaries.map((name) => `functions:events:${name}`).join(","),
-    "--non-interactive", "--debug",
+    "deploy",
+    "--config",
+    cliOptions.configPath,
+    "--project",
+    "demo-events-prod",
+    "--only",
+    probeCanaries.map((name) => `functions:events:${name}`).join(","),
+    "--non-interactive",
+    "--debug",
   ]);
   assert.equal(deploy.env.FE_EVENTS_CAPTURE_MODE, "stdout");
   assert.equal(deploy.env.FE_EVENTS_MODE, "production");
   assert.equal(deploy.args.includes("--force"), false);
   const remove = buildCanaryBatchCli("delete", "demo-events-prod", probeCanaries, cliOptions);
   assert.deepEqual(remove.args, [
-    "functions:delete", ...probeCanaries, "--config", cliOptions.configPath, "--region", "us-central1",
-    "--project", "demo-events-prod", "--non-interactive", "--force", "--debug",
+    "functions:delete",
+    ...probeCanaries,
+    "--config",
+    cliOptions.configPath,
+    "--region",
+    "us-central1",
+    "--project",
+    "demo-events-prod",
+    "--non-interactive",
+    "--force",
+    "--debug",
   ]);
   assert.equal(remove.env.FE_EVENTS_CAPTURE_MODE, "reject-canary");
   for (const built of [deploy, remove]) {
     assert.equal(built.env.GOOGLE_CLOUD_QUOTA_PROJECT, "demo-events-prod");
     assert.equal(built.env.XDG_CONFIG_HOME, cliOptions.configHome);
-    for (const envName of ["FIREBASE_TOKEN", "GOOGLE_APPLICATION_CREDENTIALS", "CLOUDSDK_CONFIG", "FIRESTORE_EMULATOR_HOST"]) {
+    for (const envName of [
+      "FIREBASE_TOKEN",
+      "GOOGLE_APPLICATION_CREDENTIALS",
+      "CLOUDSDK_CONFIG",
+      "FIRESTORE_EMULATOR_HOST",
+    ]) {
       assert.equal(built.env[envName], undefined);
     }
   }
@@ -173,17 +215,43 @@ test("the batch CLI takes exactly the reviewed set, once each, in the reviewed o
   ];
   for (const names of bad) {
     for (const action of ["deploy", "delete"]) {
-      assert.throws(() => buildCanaryBatchCli(action, "demo-events-prod", names, cliOptions), /reviewed probe set/);
+      assert.throws(
+        () => buildCanaryBatchCli(action, "demo-events-prod", names, cliOptions),
+        /reviewed probe set/,
+      );
     }
   }
-  assert.throws(() => buildCanaryBatchCli("other", "demo-events-prod", probeCanaries, cliOptions), /unknown canary CLI action/);
-  assert.throws(() => buildCanaryBatchCli("deploy", "futaba-prod;other", probeCanaries, cliOptions), /project ID/);
-  assert.throws(() => buildCanaryBatchCli("deploy", "demo-events-prod", probeCanaries, { ...cliOptions, configHome: "" }), /absolute configHome/);
-  assert.throws(() => buildCanaryBatchCli("deploy", "demo-events-prod", probeCanaries, { ...cliOptions, captureMode: "socket" }), /capture mode/);
+  assert.throws(
+    () => buildCanaryBatchCli("other", "demo-events-prod", probeCanaries, cliOptions),
+    /unknown canary CLI action/,
+  );
+  assert.throws(
+    () => buildCanaryBatchCli("deploy", "futaba-prod;other", probeCanaries, cliOptions),
+    /project ID/,
+  );
+  assert.throws(
+    () =>
+      buildCanaryBatchCli("deploy", "demo-events-prod", probeCanaries, {
+        ...cliOptions,
+        configHome: "",
+      }),
+    /absolute configHome/,
+  );
+  assert.throws(
+    () =>
+      buildCanaryBatchCli("deploy", "demo-events-prod", probeCanaries, {
+        ...cliOptions,
+        captureMode: "socket",
+      }),
+    /capture mode/,
+  );
 });
 
 test("the single-function helper still refuses the probe set's names", () => {
   for (const name of probeCanaries) {
-    assert.throws(() => buildCanaryCli("deploy", "demo-events-prod", name, cliOptions), /unreviewed canary function/);
+    assert.throws(
+      () => buildCanaryCli("deploy", "demo-events-prod", name, cliOptions),
+      /unreviewed canary function/,
+    );
   }
 });

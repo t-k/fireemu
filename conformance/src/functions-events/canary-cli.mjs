@@ -1,6 +1,11 @@
 import { isAbsolute } from "node:path";
 
-const canaries = new Set(["fsCreatedV1", "fsCreatedV2", "storageFinalizedV1", "storageFinalizedV2"]);
+const canaries = new Set([
+  "fsCreatedV1",
+  "fsCreatedV2",
+  "storageFinalizedV1",
+  "storageFinalizedV2",
+]);
 const captureModes = new Set(["reject-canary", "stdout"]);
 
 // The Firestore, Storage and Pub/Sub handlers of the second delivery probe (FE 013), in the order the

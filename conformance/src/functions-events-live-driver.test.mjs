@@ -1,6 +1,10 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { advanceLocalClock, createLiveDriver, ensureLocalTopic } from "./functions-events/live-driver.mjs";
+import {
+  advanceLocalClock,
+  createLiveDriver,
+  ensureLocalTopic,
+} from "./functions-events/live-driver.mjs";
 
 const required = [
   "FIRESTORE_EMULATOR_HOST",
@@ -69,11 +73,15 @@ test("a trigger-owned primary topic is reused and a missing control topic is cre
   const calls = [];
   const primary = {
     exists: async () => [true],
-    create: async () => { calls.push("primary-create"); },
+    create: async () => {
+      calls.push("primary-create");
+    },
   };
   const control = {
     exists: async () => [false],
-    create: async () => { calls.push("control-create"); },
+    create: async () => {
+      calls.push("control-create");
+    },
   };
   assert.deepEqual(await ensureLocalTopic(primary), { created: false, existed: true });
   assert.deepEqual(await ensureLocalTopic(control), { created: true, existed: false });

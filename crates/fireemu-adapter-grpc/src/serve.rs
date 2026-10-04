@@ -187,6 +187,16 @@ fn json_response_with_layout(
     document_not_found: bool,
     production_json: bool,
 ) -> Response<OutBody> {
+    json_response_with_document_layout(r, origin, document_not_found, production_json, false)
+}
+
+fn json_response_with_document_layout(
+    r: &RestResponse,
+    origin: Option<&str>,
+    document_not_found: bool,
+    production_json: bool,
+    document_success: bool,
+) -> Response<OutBody> {
     // `:ruleCoverage.html` is the one route whose body is a page rather than JSON; it says
     // so with a single key, exactly as a `dropConnection` fault does.
     if let Some(html) = r.body[crate::rest::coverage::HTML_KEY].as_str() {
@@ -202,7 +212,9 @@ fn json_response_with_layout(
             .body(full(Bytes::from(text.to_owned())))
             .unwrap_or_else(|_| Response::new(full(Bytes::new())));
     }
-    let text = if document_not_found {
+    let text = if document_success {
+        crate::rest::document_response::to_vec(&r.body).unwrap_or_default()
+    } else if document_not_found {
         let mut bytes = serde_json::to_vec_pretty(&r.body).unwrap_or_default();
         bytes.push(b'\n');
         bytes
@@ -526,11 +538,14 @@ async fn rest_call(
     }
     let document_not_found =
         crate::rest::production_document_not_found(&state, &request.request, &response);
-    Ok(json_response_with_layout(
+    let document_success =
+        crate::rest::production_document_success(&state, &request.request, &response);
+    Ok(json_response_with_document_layout(
         &response,
         origin.as_deref(),
         document_not_found,
         production_json,
+        document_success,
     ))
 }
 
@@ -1946,6 +1961,826 @@ mod document_not_found_layout_tests {
         );
     }
 
+    // Synthetic scalar literals retain each saved production case's root byte layout.
+    fn check_saved_document_success_layout(
+        id: &str,
+        allowed: bool,
+        updated: &str,
+        expected: &[u8],
+    ) {
+        let name = format!("projects/demo-app/databases/(default)/documents/cases/{id}");
+        let method = if id.ends_with("-create") {
+            "POST"
+        } else if id.ends_with("-update") {
+            "PATCH"
+        } else {
+            "GET"
+        };
+        let (path, query) = if method == "POST" {
+            (
+                "/v1/projects/demo-app/databases/(default)/documents/cases".to_owned(),
+                format!("documentId={id}"),
+            )
+        } else {
+            (format!("/v1/{name}"), String::new())
+        };
+        let mut req = request(method, &path);
+        req.query = query;
+        let response = RestResponse {
+            status: 200,
+            body: serde_json::json!({
+                "name": name, "fields": {"allowed": {"booleanValue": allowed}},
+                "createTime": "2000-01-02T03:04:05.123456Z", "updateTime": updated,
+            }),
+        };
+        for production in [true, false] {
+            for enforce_limits in [true, false] {
+                let actual = render(&state(production, enforce_limits), &req, &response);
+                println!("saved-case={id} production={production} limits={enforce_limits} expected={expected:?} actual={actual:?}");
+                let compact = serde_json::to_vec(&response.body).unwrap();
+                assert_eq!(
+                    actual,
+                    if production {
+                        expected
+                    } else {
+                        compact.as_slice()
+                    }
+                );
+                assert_eq!(
+                    serde_json::from_slice::<serde_json::Value>(&actual).unwrap(),
+                    response.body
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn saved_document_success_layout_01_get() {
+        check_saved_document_success_layout(
+            "saved-01-get",
+            true,
+            "2000-01-02T03:04:05.123456Z",
+            br#"{
+  "name": "projects/demo-app/databases/(default)/documents/cases/saved-01-get",
+  "fields": {
+    "allowed": {
+      "booleanValue": true
+    }
+  },
+  "createTime": "2000-01-02T03:04:05.123456Z",
+  "updateTime": "2000-01-02T03:04:05.123456Z"
+}
+"#,
+        );
+    }
+
+    #[test]
+    fn saved_document_success_layout_02_get() {
+        check_saved_document_success_layout(
+            "saved-02-get",
+            true,
+            "2000-01-02T03:04:05.123456Z",
+            br#"{
+  "name": "projects/demo-app/databases/(default)/documents/cases/saved-02-get",
+  "fields": {
+    "allowed": {
+      "booleanValue": true
+    }
+  },
+  "createTime": "2000-01-02T03:04:05.123456Z",
+  "updateTime": "2000-01-02T03:04:05.123456Z"
+}
+"#,
+        );
+    }
+
+    #[test]
+    fn saved_document_success_layout_03_create() {
+        check_saved_document_success_layout(
+            "saved-03-create",
+            true,
+            "2000-01-02T03:04:05.123456Z",
+            br#"{
+  "name": "projects/demo-app/databases/(default)/documents/cases/saved-03-create",
+  "fields": {
+    "allowed": {
+      "booleanValue": true
+    }
+  },
+  "createTime": "2000-01-02T03:04:05.123456Z",
+  "updateTime": "2000-01-02T03:04:05.123456Z"
+}
+"#,
+        );
+    }
+
+    #[test]
+    fn saved_document_success_layout_04_create() {
+        check_saved_document_success_layout(
+            "saved-04-create",
+            true,
+            "2000-01-02T03:04:05.123456Z",
+            br#"{
+  "name": "projects/demo-app/databases/(default)/documents/cases/saved-04-create",
+  "fields": {
+    "allowed": {
+      "booleanValue": true
+    }
+  },
+  "createTime": "2000-01-02T03:04:05.123456Z",
+  "updateTime": "2000-01-02T03:04:05.123456Z"
+}
+"#,
+        );
+    }
+
+    #[test]
+    fn saved_document_success_layout_05_get() {
+        check_saved_document_success_layout(
+            "saved-05-get",
+            true,
+            "2000-01-02T03:04:05.123456Z",
+            br#"{
+  "name": "projects/demo-app/databases/(default)/documents/cases/saved-05-get",
+  "fields": {
+    "allowed": {
+      "booleanValue": true
+    }
+  },
+  "createTime": "2000-01-02T03:04:05.123456Z",
+  "updateTime": "2000-01-02T03:04:05.123456Z"
+}
+"#,
+        );
+    }
+
+    #[test]
+    fn saved_document_success_layout_06_get() {
+        check_saved_document_success_layout(
+            "saved-06-get",
+            true,
+            "2000-01-02T03:04:05.123456Z",
+            br#"{
+  "name": "projects/demo-app/databases/(default)/documents/cases/saved-06-get",
+  "fields": {
+    "allowed": {
+      "booleanValue": true
+    }
+  },
+  "createTime": "2000-01-02T03:04:05.123456Z",
+  "updateTime": "2000-01-02T03:04:05.123456Z"
+}
+"#,
+        );
+    }
+
+    #[test]
+    fn saved_document_success_layout_07_get() {
+        check_saved_document_success_layout(
+            "saved-07-get",
+            true,
+            "2000-01-02T03:04:05.123456Z",
+            br#"{
+  "name": "projects/demo-app/databases/(default)/documents/cases/saved-07-get",
+  "fields": {
+    "allowed": {
+      "booleanValue": true
+    }
+  },
+  "createTime": "2000-01-02T03:04:05.123456Z",
+  "updateTime": "2000-01-02T03:04:05.123456Z"
+}
+"#,
+        );
+    }
+
+    #[test]
+    fn saved_document_success_layout_08_get() {
+        check_saved_document_success_layout(
+            "saved-08-get",
+            true,
+            "2000-01-02T03:04:05.123456Z",
+            br#"{
+  "name": "projects/demo-app/databases/(default)/documents/cases/saved-08-get",
+  "fields": {
+    "allowed": {
+      "booleanValue": true
+    }
+  },
+  "createTime": "2000-01-02T03:04:05.123456Z",
+  "updateTime": "2000-01-02T03:04:05.123456Z"
+}
+"#,
+        );
+    }
+
+    #[test]
+    fn saved_document_success_layout_09_get() {
+        check_saved_document_success_layout(
+            "saved-09-get",
+            true,
+            "2000-01-02T03:04:05.123456Z",
+            br#"{
+  "name": "projects/demo-app/databases/(default)/documents/cases/saved-09-get",
+  "fields": {
+    "allowed": {
+      "booleanValue": true
+    }
+  },
+  "createTime": "2000-01-02T03:04:05.123456Z",
+  "updateTime": "2000-01-02T03:04:05.123456Z"
+}
+"#,
+        );
+    }
+
+    #[test]
+    fn saved_document_success_layout_10_create() {
+        check_saved_document_success_layout(
+            "saved-10-create",
+            true,
+            "2000-01-02T03:04:05.123456Z",
+            br#"{
+  "name": "projects/demo-app/databases/(default)/documents/cases/saved-10-create",
+  "fields": {
+    "allowed": {
+      "booleanValue": true
+    }
+  },
+  "createTime": "2000-01-02T03:04:05.123456Z",
+  "updateTime": "2000-01-02T03:04:05.123456Z"
+}
+"#,
+        );
+    }
+
+    #[test]
+    fn saved_document_success_layout_11_create() {
+        check_saved_document_success_layout(
+            "saved-11-create",
+            true,
+            "2000-01-02T03:04:05.123456Z",
+            br#"{
+  "name": "projects/demo-app/databases/(default)/documents/cases/saved-11-create",
+  "fields": {
+    "allowed": {
+      "booleanValue": true
+    }
+  },
+  "createTime": "2000-01-02T03:04:05.123456Z",
+  "updateTime": "2000-01-02T03:04:05.123456Z"
+}
+"#,
+        );
+    }
+
+    #[test]
+    fn saved_document_success_layout_12_create() {
+        check_saved_document_success_layout(
+            "saved-12-create",
+            true,
+            "2000-01-02T03:04:05.123456Z",
+            br#"{
+  "name": "projects/demo-app/databases/(default)/documents/cases/saved-12-create",
+  "fields": {
+    "allowed": {
+      "booleanValue": true
+    }
+  },
+  "createTime": "2000-01-02T03:04:05.123456Z",
+  "updateTime": "2000-01-02T03:04:05.123456Z"
+}
+"#,
+        );
+    }
+
+    #[test]
+    fn saved_document_success_layout_13_get() {
+        check_saved_document_success_layout(
+            "saved-13-get",
+            true,
+            "2000-01-02T03:04:05.123456Z",
+            br#"{
+  "name": "projects/demo-app/databases/(default)/documents/cases/saved-13-get",
+  "fields": {
+    "allowed": {
+      "booleanValue": true
+    }
+  },
+  "createTime": "2000-01-02T03:04:05.123456Z",
+  "updateTime": "2000-01-02T03:04:05.123456Z"
+}
+"#,
+        );
+    }
+
+    #[test]
+    fn saved_document_success_layout_14_get() {
+        check_saved_document_success_layout(
+            "saved-14-get",
+            true,
+            "2000-01-02T03:04:05.123456Z",
+            br#"{
+  "name": "projects/demo-app/databases/(default)/documents/cases/saved-14-get",
+  "fields": {
+    "allowed": {
+      "booleanValue": true
+    }
+  },
+  "createTime": "2000-01-02T03:04:05.123456Z",
+  "updateTime": "2000-01-02T03:04:05.123456Z"
+}
+"#,
+        );
+    }
+
+    #[test]
+    fn saved_document_success_layout_15_get() {
+        check_saved_document_success_layout(
+            "saved-15-get",
+            true,
+            "2000-01-02T03:04:05.123456Z",
+            br#"{
+  "name": "projects/demo-app/databases/(default)/documents/cases/saved-15-get",
+  "fields": {
+    "allowed": {
+      "booleanValue": true
+    }
+  },
+  "createTime": "2000-01-02T03:04:05.123456Z",
+  "updateTime": "2000-01-02T03:04:05.123456Z"
+}
+"#,
+        );
+    }
+
+    #[test]
+    fn saved_document_success_layout_16_get() {
+        check_saved_document_success_layout(
+            "saved-16-get",
+            true,
+            "2000-01-02T03:04:05.123456Z",
+            br#"{
+  "name": "projects/demo-app/databases/(default)/documents/cases/saved-16-get",
+  "fields": {
+    "allowed": {
+      "booleanValue": true
+    }
+  },
+  "createTime": "2000-01-02T03:04:05.123456Z",
+  "updateTime": "2000-01-02T03:04:05.123456Z"
+}
+"#,
+        );
+    }
+
+    #[test]
+    fn saved_document_success_layout_17_get() {
+        check_saved_document_success_layout(
+            "saved-17-get",
+            true,
+            "2000-01-02T03:04:05.123456Z",
+            br#"{
+  "name": "projects/demo-app/databases/(default)/documents/cases/saved-17-get",
+  "fields": {
+    "allowed": {
+      "booleanValue": true
+    }
+  },
+  "createTime": "2000-01-02T03:04:05.123456Z",
+  "updateTime": "2000-01-02T03:04:05.123456Z"
+}
+"#,
+        );
+    }
+
+    #[test]
+    fn saved_document_success_layout_18_create() {
+        check_saved_document_success_layout(
+            "saved-18-create",
+            true,
+            "2000-01-02T03:04:05.123456Z",
+            br#"{
+  "name": "projects/demo-app/databases/(default)/documents/cases/saved-18-create",
+  "fields": {
+    "allowed": {
+      "booleanValue": true
+    }
+  },
+  "createTime": "2000-01-02T03:04:05.123456Z",
+  "updateTime": "2000-01-02T03:04:05.123456Z"
+}
+"#,
+        );
+    }
+
+    #[test]
+    fn saved_document_success_layout_19_create() {
+        check_saved_document_success_layout(
+            "saved-19-create",
+            true,
+            "2000-01-02T03:04:05.123456Z",
+            br#"{
+  "name": "projects/demo-app/databases/(default)/documents/cases/saved-19-create",
+  "fields": {
+    "allowed": {
+      "booleanValue": true
+    }
+  },
+  "createTime": "2000-01-02T03:04:05.123456Z",
+  "updateTime": "2000-01-02T03:04:05.123456Z"
+}
+"#,
+        );
+    }
+
+    #[test]
+    fn saved_document_success_layout_20_get() {
+        check_saved_document_success_layout(
+            "saved-20-get",
+            true,
+            "2000-01-02T03:04:05.123456Z",
+            br#"{
+  "name": "projects/demo-app/databases/(default)/documents/cases/saved-20-get",
+  "fields": {
+    "allowed": {
+      "booleanValue": true
+    }
+  },
+  "createTime": "2000-01-02T03:04:05.123456Z",
+  "updateTime": "2000-01-02T03:04:05.123456Z"
+}
+"#,
+        );
+    }
+
+    #[test]
+    fn saved_document_success_layout_21_get() {
+        check_saved_document_success_layout(
+            "saved-21-get",
+            true,
+            "2000-01-02T03:04:05.123456Z",
+            br#"{
+  "name": "projects/demo-app/databases/(default)/documents/cases/saved-21-get",
+  "fields": {
+    "allowed": {
+      "booleanValue": true
+    }
+  },
+  "createTime": "2000-01-02T03:04:05.123456Z",
+  "updateTime": "2000-01-02T03:04:05.123456Z"
+}
+"#,
+        );
+    }
+
+    #[test]
+    fn saved_document_success_layout_22_create() {
+        check_saved_document_success_layout(
+            "saved-22-create",
+            true,
+            "2000-01-02T03:04:05.123456Z",
+            br#"{
+  "name": "projects/demo-app/databases/(default)/documents/cases/saved-22-create",
+  "fields": {
+    "allowed": {
+      "booleanValue": true
+    }
+  },
+  "createTime": "2000-01-02T03:04:05.123456Z",
+  "updateTime": "2000-01-02T03:04:05.123456Z"
+}
+"#,
+        );
+    }
+
+    #[test]
+    fn saved_document_success_layout_23_get() {
+        check_saved_document_success_layout(
+            "saved-23-get",
+            true,
+            "2000-01-02T03:04:05.123456Z",
+            br#"{
+  "name": "projects/demo-app/databases/(default)/documents/cases/saved-23-get",
+  "fields": {
+    "allowed": {
+      "booleanValue": true
+    }
+  },
+  "createTime": "2000-01-02T03:04:05.123456Z",
+  "updateTime": "2000-01-02T03:04:05.123456Z"
+}
+"#,
+        );
+    }
+
+    #[test]
+    fn saved_document_success_layout_24_create() {
+        check_saved_document_success_layout(
+            "saved-24-create",
+            true,
+            "2000-01-02T03:04:05.123456Z",
+            br#"{
+  "name": "projects/demo-app/databases/(default)/documents/cases/saved-24-create",
+  "fields": {
+    "allowed": {
+      "booleanValue": true
+    }
+  },
+  "createTime": "2000-01-02T03:04:05.123456Z",
+  "updateTime": "2000-01-02T03:04:05.123456Z"
+}
+"#,
+        );
+    }
+
+    #[test]
+    fn saved_document_success_layout_25_get() {
+        check_saved_document_success_layout(
+            "saved-25-get",
+            false,
+            "2000-01-02T03:04:06.654321Z",
+            br#"{
+  "name": "projects/demo-app/databases/(default)/documents/cases/saved-25-get",
+  "fields": {
+    "allowed": {
+      "booleanValue": false
+    }
+  },
+  "createTime": "2000-01-02T03:04:05.123456Z",
+  "updateTime": "2000-01-02T03:04:06.654321Z"
+}
+"#,
+        );
+    }
+
+    #[test]
+    fn saved_document_success_layout_26_get() {
+        check_saved_document_success_layout(
+            "saved-26-get",
+            true,
+            "2000-01-02T03:04:05.123456Z",
+            br#"{
+  "name": "projects/demo-app/databases/(default)/documents/cases/saved-26-get",
+  "fields": {
+    "allowed": {
+      "booleanValue": true
+    }
+  },
+  "createTime": "2000-01-02T03:04:05.123456Z",
+  "updateTime": "2000-01-02T03:04:05.123456Z"
+}
+"#,
+        );
+    }
+
+    #[test]
+    fn saved_document_success_layout_27_update() {
+        check_saved_document_success_layout(
+            "saved-27-update",
+            false,
+            "2000-01-02T03:04:06.654321Z",
+            br#"{
+  "name": "projects/demo-app/databases/(default)/documents/cases/saved-27-update",
+  "fields": {
+    "allowed": {
+      "booleanValue": false
+    }
+  },
+  "createTime": "2000-01-02T03:04:05.123456Z",
+  "updateTime": "2000-01-02T03:04:06.654321Z"
+}
+"#,
+        );
+    }
+
+    const WIRE_DOCUMENT_TRUE: &[u8] = br#"{
+  "name": "projects/demo-app/databases/(default)/documents/cases/owned",
+  "fields": {
+    "allowed": {
+      "booleanValue": true
+    }
+  },
+  "createTime": "2026-08-29T12:01:00Z",
+  "updateTime": "2026-08-29T12:01:00Z"
+}
+"#;
+    const WIRE_DOCUMENT_FALSE: &[u8] = br#"{
+  "name": "projects/demo-app/databases/(default)/documents/cases/owned",
+  "fields": {
+    "allowed": {
+      "booleanValue": false
+    }
+  },
+  "createTime": "2026-08-29T12:01:00Z",
+  "updateTime": "2026-08-29T12:01:00.000001Z"
+}
+"#;
+
+    #[tokio::test]
+    async fn document_success_wire_crud_and_commit_readback_preserve_exact_layout() {
+        const COLLECTION: &str = "/v1/projects/demo-app/databases/(default)/documents/cases";
+        const DOCUMENT: &str = "/v1/projects/demo-app/databases/(default)/documents/cases/owned";
+        const COMMIT: &[u8] = br#"{"writes":[{"update":{"name":"projects/demo-app/databases/(default)/documents/cases/owned","fields":{"allowed":{"booleanValue":true}}}}]}"#;
+        for production in [true, false] {
+            for limits in [true, false] {
+                let state = state(production, limits);
+                for (method, path, payload, literal) in [
+                    (
+                        "POST",
+                        format!("{COLLECTION}?documentId=owned"),
+                        br#"{"fields":{"allowed":{"booleanValue":true}}}"#.as_slice(),
+                        WIRE_DOCUMENT_TRUE,
+                    ),
+                    (
+                        "GET",
+                        DOCUMENT.to_owned(),
+                        b"".as_slice(),
+                        WIRE_DOCUMENT_TRUE,
+                    ),
+                    (
+                        "PATCH",
+                        DOCUMENT.to_owned(),
+                        br#"{"fields":{"allowed":{"booleanValue":false}}}"#.as_slice(),
+                        WIRE_DOCUMENT_FALSE,
+                    ),
+                ] {
+                    let (headers, actual) =
+                        wire_request(Arc::clone(&state), method, &path, payload).await;
+                    assert_json_headers(&headers, &actual, production, 200);
+                    let compact = serde_json::to_vec(
+                        &serde_json::from_slice::<serde_json::Value>(literal).unwrap(),
+                    )
+                    .unwrap();
+                    assert_eq!(
+                        actual,
+                        if production {
+                            literal
+                        } else {
+                            compact.as_slice()
+                        }
+                    );
+                    assert_eq!(actual.ends_with(b"\n"), production);
+                    assert!(!actual.ends_with(b"\n\n"));
+                    assert!(headers.contains("access-control-allow-origin: *\r\n"));
+                }
+                let (headers, body) = wire_request(
+                    Arc::clone(&state),
+                    "POST",
+                    "/v1/projects/demo-app/databases/(default)/documents:commit",
+                    COMMIT,
+                )
+                .await;
+                assert_json_headers(&headers, &body, production, 200);
+                assert_eq!(body, br#"{"commitTime":"2026-08-29T12:01:00.000002Z","writeResults":[{"updateTime":"2026-08-29T12:01:00.000002Z"}]}"#);
+                let (headers, actual) = wire(Arc::clone(&state), "GET", DOCUMENT).await;
+                assert_json_headers(&headers, &actual, production, 200);
+                let compact = br#"{"createTime":"2026-08-29T12:01:00Z","fields":{"allowed":{"booleanValue":true}},"name":"projects/demo-app/databases/(default)/documents/cases/owned","updateTime":"2026-08-29T12:01:00.000002Z"}"#;
+                assert_eq!(
+                    actual,
+                    if production {
+                        br#"{
+  "name": "projects/demo-app/databases/(default)/documents/cases/owned",
+  "fields": {
+    "allowed": {
+      "booleanValue": true
+    }
+  },
+  "createTime": "2026-08-29T12:01:00Z",
+  "updateTime": "2026-08-29T12:01:00.000002Z"
+}
+"#
+                    } else {
+                        compact.as_slice()
+                    }
+                );
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn document_success_wire_masks_auto_ids_encoded_paths_and_query_create_are_selected() {
+        const COLLECTION: &str = "/v1/projects/demo-app/databases/(default)/documents/cases";
+        for production in [true, false] {
+            for limits in [true, false] {
+                let state = state(production, limits);
+                for query in [
+                    "",
+                    "?documentId=",
+                    "?documentId=colon%3Ainside&mask.fieldPaths=missing",
+                ] {
+                    let (headers, bytes) = wire_request(
+                        Arc::clone(&state),
+                        "POST",
+                        &format!("{COLLECTION}{query}"),
+                        br#"{"fields":{"allowed":{"booleanValue":true}}}"#,
+                    )
+                    .await;
+                    assert_json_headers(&headers, &bytes, production, 200);
+                    let value: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+                    assert!(value["name"]
+                        .as_str()
+                        .unwrap()
+                        .starts_with("projects/demo-app/databases/(default)/documents/cases/"));
+                    if query.contains("mask") {
+                        assert!(value.get("fields").is_none());
+                    }
+                    let expected = if production {
+                        reference_document_body(&value)
+                    } else {
+                        serde_json::to_vec(&value).unwrap()
+                    };
+                    assert_eq!(bytes, expected);
+                    let id = value["name"].as_str().unwrap().rsplit('/').next().unwrap();
+                    let path = format!(
+                        "{COLLECTION}/{}?mask.fieldPaths=missing",
+                        encoded_segment(id)
+                    );
+                    let (headers, bytes) = wire(Arc::clone(&state), "GET", &path).await;
+                    assert_json_headers(&headers, &bytes, production, 200);
+                    let value: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+                    assert!(value.get("fields").is_none());
+                    assert_eq!(
+                        bytes,
+                        if production {
+                            reference_document_body(&value)
+                        } else {
+                            serde_json::to_vec(&value).unwrap()
+                        }
+                    );
+                }
+                for action in ["runQuery", "runAggregationQuery", "partitionQuery"] {
+                    let path = format!("{COLLECTION}:{action}?documentId=owned");
+                    let (headers, bytes) =
+                        wire_request(Arc::clone(&state), "POST", &path, b"{}").await;
+                    if production {
+                        assert_json_headers(&headers, &bytes, true, 200);
+                        let value: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+                        assert_eq!(value["name"], format!("projects/demo-app/databases/(default)/documents/cases:{action}/owned"));
+                        assert!(value.get("fields").is_none());
+                        assert_eq!(bytes, reference_document_body(&value));
+                    } else {
+                        assert!(!headers.starts_with("HTTP/1.1 200 "));
+                        let value: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+                        assert_eq!(bytes, serde_json::to_vec(&value).unwrap());
+                    }
+                }
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn document_success_wire_non_document_successes_stay_compact() {
+        const COLLECTION: &str = "/v1/projects/demo-app/databases/(default)/documents/cases";
+        const ROOT: &str = "/v1/projects/demo-app/databases/(default)/documents";
+        for production in [false, true] {
+            for limits in [false, true] {
+                let expected_state = state(production, limits);
+                let state = state(production, limits);
+                let payload = br#"{"fields":{"allowed":{"booleanValue":true}}}"#;
+                let mut seed = request("POST", COLLECTION);
+                seed.query = "documentId=owned".to_owned();
+                seed.body = serde_json::from_slice(payload).unwrap();
+                let seeded = expected_state.handle(&seed);
+                assert_eq!(seeded.status, 200);
+                let (_, created) = wire_request(
+                    Arc::clone(&state),
+                    "POST",
+                    &format!("{COLLECTION}?documentId=owned"),
+                    payload,
+                )
+                .await;
+                let document: serde_json::Value = serde_json::from_slice(&created).unwrap();
+                assert_eq!(document, seeded.body);
+                for (method, path, payload) in [
+                ("GET", COLLECTION.to_owned(), b"".as_slice()),
+                ("POST", format!("{ROOT}:runQuery"), br#"{"structuredQuery":{"from":[{"collectionId":"cases"}]}}"#.as_slice()),
+                ("POST", format!("{ROOT}:batchGet"), br#"{"documents":["projects/demo-app/databases/(default)/documents/cases/owned"]}"#.as_slice()),
+                ("POST", format!("{ROOT}:batchWrite"), br#"{"writes":[]}"#.as_slice()),
+                ("POST", format!("{ROOT}:commit"), br#"{"writes":[]}"#.as_slice()),
+            ] {
+                let mut req = request(method, &path); req.body = serde_json::from_slice(payload).unwrap_or(serde_json::json!({}));
+                let response = expected_state.handle(&req);
+                let expected = serde_json::to_vec(&response.body).unwrap();
+                assert_eq!(response.status, 200, "{response:?}");
+                let (headers, actual) = wire_request(Arc::clone(&state), method, &path, payload).await;
+                assert_json_headers(&headers, &actual, production, 200);
+                assert_eq!(actual, expected, "{path}");
+                assert!(!actual.ends_with(b"\n"));
+                if path.ends_with(":commit") {
+                    assert_eq!(actual, if production && !limits {
+                        br#"{"commitTime":"2026-08-29T12:01:00.000001Z"}"#.as_slice()
+                    } else { b"{}".as_slice() });
+                }
+                let value: serde_json::Value = serde_json::from_slice(&actual).unwrap();
+                if method == "GET" { assert_eq!(value["documents"][0], document); }
+                if path.ends_with(":runQuery") { assert_eq!(value[0]["document"], document); }
+                if path.ends_with(":batchGet") { assert_eq!(value[0]["found"], document); }
+            }
+            }
+        }
+    }
+
     #[tokio::test]
     async fn rest_json_charset_follows_policy_through_document_lifecycle() {
         const COLLECTION: &str = "/v1/projects/demo-app/databases/(default)/documents/cases";
@@ -2305,15 +3140,17 @@ mod document_not_found_layout_tests {
 
     fn render(state: &RestState, req: &RestRequest, response: &RestResponse) -> Vec<u8> {
         let selected = crate::rest::production_document_not_found(state, req, response);
+        let success = crate::rest::production_document_success(state, req, response);
         tokio::runtime::Builder::new_current_thread()
             .build()
             .unwrap()
             .block_on(async {
-                json_response_with_layout(
+                json_response_with_document_layout(
                     response,
                     None,
                     selected,
                     state.gateway.production_refusals(),
+                    success,
                 )
                 .into_body()
                 .collect()
@@ -2445,6 +3282,299 @@ mod document_not_found_layout_tests {
         assert_eq!(render(&state, &req, &text), b"Not Found\n");
     }
 
+    fn success(name: &str) -> RestResponse {
+        RestResponse {
+            status: 200,
+            body: serde_json::json!({
+                "name": name, "fields": {"allowed": {"booleanValue": true}},
+                "createTime": "2000-01-02T03:04:05.123456Z", "updateTime": "2000-01-02T03:04:05.123456Z",
+            }),
+        }
+    }
+
+    #[test]
+    #[allow(clippy::too_many_lines)] // Keep the independent route matrix beside its oracle.
+    fn document_success_selector_matches_finite_route_and_envelope_model() {
+        const NAME: &str = "projects/demo-app/databases/(default)/documents/cases/owned";
+        const COLLECTION: &str = "/v1/projects/demo-app/databases/(default)/documents/cases";
+        let mut routes = vec![
+            ("GET", format!("/v1/{NAME}"), "", NAME.to_owned(), true),
+            (
+                "PATCH",
+                format!("/v1/{NAME}"),
+                "mask.fieldPaths=missing",
+                NAME.to_owned(),
+                true,
+            ),
+            (
+                "POST",
+                COLLECTION.to_owned(),
+                "documentId=owned",
+                NAME.to_owned(),
+                true,
+            ),
+            ("POST", COLLECTION.to_owned(), "", NAME.to_owned(), true),
+            (
+                "POST",
+                COLLECTION.to_owned(),
+                "documentId=",
+                NAME.to_owned(),
+                true,
+            ),
+            (
+                "POST",
+                COLLECTION.to_owned(),
+                "documentId=owned&documentId=other",
+                NAME.to_owned(),
+                true,
+            ),
+            (
+                "POST",
+                COLLECTION.to_owned(),
+                "document%49d=%6fwned",
+                NAME.to_owned(),
+                true,
+            ),
+            (
+                "POST",
+                COLLECTION.to_owned(),
+                "documentId=other",
+                NAME.to_owned(),
+                false,
+            ),
+            (
+                "POST",
+                COLLECTION.to_owned(),
+                "",
+                format!("{NAME}/sub/doc"),
+                false,
+            ),
+            (
+                "POST",
+                COLLECTION.to_owned(),
+                "",
+                "projects/other/databases/(default)/documents/cases/owned".to_owned(),
+                false,
+            ),
+            (
+                "POST",
+                COLLECTION.to_owned(),
+                "",
+                "projects/demo-app/databases/(default)/documents/cases/".to_owned(),
+                false,
+            ),
+            ("GET", COLLECTION.to_owned(), "", NAME.to_owned(), false),
+            ("PATCH", COLLECTION.to_owned(), "", NAME.to_owned(), false),
+            ("POST", format!("/v1/{NAME}"), "", NAME.to_owned(), false),
+            ("DELETE", format!("/v1/{NAME}"), "", NAME.to_owned(), false),
+            ("HEAD", format!("/v1/{NAME}"), "", NAME.to_owned(), false),
+            (
+                "GET",
+                "/v1/projects/demo-app/databases/(default)/documents".to_owned(),
+                "",
+                "projects/demo-app/databases/(default)/documents".to_owned(),
+                false,
+            ),
+            (
+                "GET",
+                format!("/v1/{NAME}:runQuery"),
+                "",
+                NAME.to_owned(),
+                false,
+            ),
+            (
+                "GET",
+                format!("/v1/{NAME}:unknown"),
+                "",
+                NAME.to_owned(),
+                false,
+            ),
+            (
+                "GET",
+                format!("/v1/{NAME}%2Finside"),
+                "",
+                format!("{NAME}/inside"),
+                false,
+            ),
+            ("GET", format!("/v1/{NAME}%FF"), "", NAME.to_owned(), false),
+            (
+                "GET",
+                format!("/emulator/v1/{NAME}"),
+                "",
+                NAME.to_owned(),
+                false,
+            ),
+            ("GET", "/unknown".to_owned(), "", NAME.to_owned(), false),
+        ];
+        for action in ["runQuery", "runAggregationQuery", "partitionQuery"] {
+            routes.push((
+                "POST",
+                format!("{COLLECTION}:{action}"),
+                "documentId=owned",
+                format!("projects/demo-app/databases/(default)/documents/cases:{action}/owned"),
+                true,
+            ));
+        }
+        for id in ["colon:inside", "quote\"slash\\", "雪😀", "+% ?#"] {
+            routes.push((
+                "GET",
+                format!("{COLLECTION}/{}", encoded_segment(id)),
+                "",
+                format!("projects/demo-app/databases/(default)/documents/cases/{id}"),
+                true,
+            ));
+        }
+        let mut count = 0;
+        for production in [false, true] {
+            for limits in [false, true] {
+                let state = state(production, limits);
+                for (method, path, query, name, route_matches) in &routes {
+                    for status in [200, 201, 400, 404, 500] {
+                        for shape in 0..12 {
+                            let mut req = request(method, path);
+                            req.query = (*query).to_owned();
+                            let mut response = success(name);
+                            response.status = status;
+                            let shape_matches = match shape {
+                                0 => true,
+                                1 => {
+                                    response.body.as_object_mut().unwrap().remove("fields");
+                                    true
+                                }
+                                2 => {
+                                    response.body.as_object_mut().unwrap().remove("createTime");
+                                    true
+                                }
+                                3 => {
+                                    response.body = serde_json::json!({"name": name});
+                                    true
+                                }
+                                4 => {
+                                    response.body["extra"] = serde_json::json!(true);
+                                    false
+                                }
+                                5 => {
+                                    response.body["fields"] = serde_json::json!([]);
+                                    false
+                                }
+                                6 => {
+                                    response.body["createTime"] = serde_json::json!(null);
+                                    false
+                                }
+                                7 => {
+                                    response.body["updateTime"] = serde_json::json!(17);
+                                    false
+                                }
+                                8 => {
+                                    response.body["name"] = serde_json::json!(false);
+                                    false
+                                }
+                                9 => {
+                                    response.body["name"] = serde_json::json!("projects/demo-app/databases/(default)/documents/other/name");
+                                    false
+                                }
+                                10 => {
+                                    response.body = serde_json::json!([response.body]);
+                                    false
+                                }
+                                _ => {
+                                    response.body.as_object_mut().unwrap().remove("name");
+                                    false
+                                }
+                            };
+                            let selected =
+                                production && status == 200 && *route_matches && shape_matches;
+                            assert_eq!(
+                                crate::rest::production_document_success(&state, &req, &response),
+                                selected,
+                                "{req:?} {response:?}"
+                            );
+                            let actual = render(&state, &req, &response);
+                            if selected {
+                                assert_eq!(actual, reference_document_body(&response.body));
+                            } else {
+                                assert_eq!(actual, serde_json::to_vec(&response.body).unwrap());
+                            }
+                            count += 1;
+                        }
+                    }
+                }
+            }
+        }
+        println!("document success finite selector cases={count}");
+    }
+
+    // A separate recursive oracle tests framing without calling the production framer.
+    fn reference_json(value: &serde_json::Value, depth: usize) -> String {
+        match value {
+            serde_json::Value::Null => "null".to_owned(),
+            serde_json::Value::Bool(value) => value.to_string(),
+            serde_json::Value::Number(value) => value.to_string(),
+            serde_json::Value::String(value) => json_string(value),
+            serde_json::Value::Array(values) if values.is_empty() => "[]".to_owned(),
+            serde_json::Value::Array(values) => {
+                let lines: Vec<_> = values
+                    .iter()
+                    .map(|value| {
+                        format!(
+                            "{}{}",
+                            "  ".repeat(depth + 1),
+                            reference_json(value, depth + 1)
+                        )
+                    })
+                    .collect();
+                format!("[\n{}\n{}]", lines.join(",\n"), "  ".repeat(depth))
+            }
+            serde_json::Value::Object(values) if values.is_empty() => "{}".to_owned(),
+            serde_json::Value::Object(values) => {
+                let mut keys: Vec<_> = values.keys().collect();
+                keys.sort();
+                let lines: Vec<_> = keys
+                    .into_iter()
+                    .map(|key| {
+                        format!(
+                            "{}{}: {}",
+                            "  ".repeat(depth + 1),
+                            json_string(key),
+                            reference_json(&values[key], depth + 1)
+                        )
+                    })
+                    .collect();
+                format!("{{\n{}\n{}}}", lines.join(",\n"), "  ".repeat(depth))
+            }
+        }
+    }
+
+    fn reference_document_body(value: &serde_json::Value) -> Vec<u8> {
+        let members: Vec<_> = ["name", "fields", "createTime", "updateTime"]
+            .into_iter()
+            .filter_map(|key| {
+                value
+                    .get(key)
+                    .map(|value| format!("  {}: {}", json_string(key), reference_json(value, 1)))
+            })
+            .collect();
+        format!("{{\n{}\n}}\n", members.join(",\n")).into_bytes()
+    }
+
+    fn arbitrary_nested_json() -> impl proptest::strategy::Strategy<Value = serde_json::Value> {
+        use proptest::prelude::*;
+        prop_oneof![
+            Just(serde_json::Value::Null),
+            any::<bool>().prop_map(serde_json::Value::Bool),
+            any::<i64>().prop_map(|n| serde_json::json!(n)),
+            proptest::collection::vec(any::<char>(), 0..24)
+                .prop_map(|chars| serde_json::Value::String(chars.into_iter().collect())),
+        ]
+        .prop_recursive(3, 32, 5, |inner| {
+            prop_oneof![
+                proptest::collection::vec(inner.clone(), 0..5).prop_map(serde_json::Value::Array),
+                proptest::collection::btree_map(".{0,12}", inner, 0..5)
+                    .prop_map(|entries| serde_json::Value::Object(entries.into_iter().collect())),
+            ]
+        })
+    }
+
     // Independent JSON string oracle: it does not use the production serializer.
     fn json_string(text: &str) -> String {
         let mut escaped = String::from("\"");
@@ -2526,6 +3656,74 @@ mod document_not_found_layout_tests {
     use proptest::prelude::*;
     proptest! {
         #![proptest_config(ProptestConfig::with_cases(128))]
+        #[test]
+        fn generated_success_framing_preserves_nested_order_arrays_and_escaping(
+            id in proptest::collection::vec(any::<char>().prop_filter("document segment", |c| *c != '/'), 1..25),
+            text in proptest::collection::vec(any::<char>(), 0..32),
+            value in arbitrary_nested_json(), omission in 0u8..8,
+        ) {
+            let id: String = id.into_iter().collect(); let text: String = text.into_iter().collect();
+            let name = format!("projects/demo-app/databases/(default)/documents/cases/{id}");
+            let req = request("GET", &format!("/v1/projects/demo-app/databases/(default)/documents/cases/{}", encoded_segment(&id)));
+            let mut response = success(&name);
+            response.body["fields"] = serde_json::json!({
+                "a": {"arrayValue": {"values": [{"integerValue": "7"}, {"integerValue": "2"}, {"stringValue": text}]}},
+                "z": {"mapValue": {"fields": {"z": {"stringValue": "last"}, "a": {"stringValue": "first"}}}},
+                "synthetic": value,
+            });
+            for (index, member) in ["fields", "createTime", "updateTime"].into_iter().enumerate() {
+                if omission & (1 << index) != 0 { response.body.as_object_mut().unwrap().remove(member); }
+            }
+            let state = state(true, false);
+            prop_assert!(crate::rest::production_document_success(&state, &req, &response));
+            let actual = render(&state, &req, &response);
+            prop_assert_eq!(&actual, &reference_document_body(&response.body));
+            prop_assert_eq!(serde_json::from_slice::<serde_json::Value>(&actual).unwrap(), response.body);
+            prop_assert!(actual.ends_with(b"}\n"), "expected one final LF");
+            prop_assert!(!actual.ends_with(b"\n\n"));
+        }
+
+        #[test]
+        fn generated_document_success_matches_independent_reference(
+            id in "[a-zA-Z0-9]{1,24}", key in proptest::collection::vec(any::<char>(), 0..24),
+            value in arbitrary_nested_json(), method_index in 0u8..3, omission in 0u8..8,
+            production in any::<bool>(), enforce_limits in any::<bool>(), variant in 0u8..10,
+        ) {
+            let name = format!("projects/demo-app/databases/(default)/documents/cases/{id}");
+            let method = ["GET", "PATCH", "POST"][usize::from(method_index)];
+            let path = if method == "POST" { "/v1/projects/demo-app/databases/(default)/documents/cases".to_owned() } else { format!("/v1/{name}") };
+            let mut req = request(method, &path);
+            if method == "POST" { req.query = format!("documentId={id}"); }
+            let mut response = success(&name);
+            let key: String = key.into_iter().collect();
+            response.body["fields"] = serde_json::Value::Object([(key, value)].into_iter().collect());
+            for (index, member) in ["fields", "createTime", "updateTime"].into_iter().enumerate() {
+                if omission & (1 << index) != 0 { response.body.as_object_mut().unwrap().remove(member); }
+            }
+            match variant {
+                0 => {},
+                1 => response.status = 201,
+                2 => req.method = "DELETE".to_owned(),
+                3 => req.path.push_str(":unknown"),
+                4 => response.body["name"] = serde_json::json!(format!("{name}-other")),
+                5 => response.body["extra"] = serde_json::json!(true),
+                6 => response.body["fields"] = serde_json::json!([]),
+                7 => response.body["createTime"] = serde_json::json!(null),
+                8 => response.body = serde_json::json!({"document": response.body}),
+                _ => req.path = "/unknown".to_owned(),
+            }
+            let state = state(production, enforce_limits);
+            let selected = production && variant == 0;
+            prop_assert_eq!(crate::rest::production_document_success(&state, &req, &response), selected);
+            let actual = render(&state, &req, &response);
+            let expected = if selected { reference_document_body(&response.body) } else { serde_json::to_vec(&response.body).unwrap() };
+            prop_assert_eq!(&actual, &expected);
+            prop_assert_eq!(serde_json::from_slice::<serde_json::Value>(&actual).unwrap(), response.body.clone());
+            prop_assert_eq!(&actual, &render(&state, &req, &response));
+            prop_assert_eq!(actual.ends_with(b"\n"), selected);
+            prop_assert!(!actual.ends_with(b"\n\n"));
+        }
+
         #[test]
         fn generated_transport_projection_preserves_profile_body_and_cors(
             production in any::<bool>(), enforce_limits in any::<bool>(),

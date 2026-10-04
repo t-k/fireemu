@@ -59,6 +59,8 @@ pub struct Schedule {
     /// (or vice versa) applies only the restricted one (Vixie cron semantics).
     dom_restricted: bool,
     dow_restricted: bool,
+    /// Ordinal weekdays require both day fields; ordinary cron keeps Vixie OR semantics.
+    day_fields_intersect: bool,
 }
 
 /// Schedule parse errors.
@@ -186,9 +188,11 @@ impl Schedule {
                 days_of_week: FieldSet(0),
                 dom_restricted: false,
                 dow_restricted: false,
+                day_fields_intersect: false,
             });
         }
         let expanded = match text {
+            "1st friday of quarter 9:00" => "0 9 1-7 1,4,7,10 5".to_owned(),
             "@hourly" => "0 * * * *".to_owned(),
             "@daily" | "@midnight" => "0 0 * * *".to_owned(),
             "@weekly" => "0 0 * * 0".to_owned(),
@@ -222,6 +226,7 @@ impl Schedule {
             days_of_week,
             dom_restricted: month_days_restricted,
             dow_restricted: weekdays_restricted,
+            day_fields_intersect: text == "1st friday of quarter 9:00",
         })
     }
 
@@ -237,6 +242,9 @@ impl Schedule {
     fn day_matches(&self, c: &Civil) -> bool {
         let dom = self.days_of_month.contains(c.day);
         let dow = self.days_of_week.contains(c.weekday);
+        if self.day_fields_intersect {
+            return dom && dow;
+        }
         match (self.dom_restricted, self.dow_restricted) {
             (true, true) => dom || dow,
             (true, false) => dom,
@@ -787,4 +795,179 @@ pub fn fixed_offset_seconds(zone: Option<&str>) -> Result<i64, TimeZoneError> {
         _ => return Err(TimeZoneError::Unsupported(zone.to_owned())),
     };
     Ok(offset)
+}
+
+#[cfg(test)]
+mod quarter_groc_tests {
+    use super::*;
+
+    const OBSERVED: &str = "1st friday of quarter 9:00";
+
+    fn instant(text: &str) -> LogicalInstant {
+        LogicalInstant::parse_rfc3339(text).unwrap()
+    }
+
+    // Independent Gregorian arithmetic: count complete years and months from 1970.
+    fn reference_midnight(year: i64, month: u32, day: u32) -> i64 {
+        let leap_years = |before: i64| before / 4 - before / 100 + before / 400;
+        let leap = year % 4 == 0 && (year % 100 != 0 || year % 400 == 0);
+        let lengths = [
+            31,
+            if leap { 29 } else { 28 },
+            31,
+            30,
+            31,
+            30,
+            31,
+            31,
+            30,
+            31,
+            30,
+            31,
+        ];
+        let days = 365 * (year - 1970) + leap_years(year - 1) - leap_years(1969)
+            + lengths[..usize::try_from(month - 1).unwrap()]
+                .iter()
+                .sum::<i64>()
+            + i64::from(day - 1);
+        days * 86_400
+    }
+
+    fn reference_runs(year: i64, offset: i64) -> Vec<LogicalInstant> {
+        (0..4)
+            .map(|quarter| {
+                let month = 3 * quarter + 1;
+                let day = (1..=7)
+                    .find(|day| (reference_midnight(year, month, *day) / 86_400 + 4) % 7 == 5)
+                    .unwrap();
+                LogicalInstant::from_unix_seconds(
+                    reference_midnight(year, month, day) + 9 * 3_600 - offset,
+                )
+            })
+            .collect()
+    }
+
+    #[test]
+    fn recorded_c04_quarter_schedule_matches_production_next_time() {
+        // Calendar seed 5a73ba99b7014cfd, request journal rows 67-69: UTC, HTTP 200.
+        let schedule = Schedule::parse(OBSERVED).unwrap();
+        assert_eq!(schedule.as_str(), OBSERVED);
+        for anchor in ["2026-10-01T05:20:18.402Z", "2026-10-01T05:20:20.355Z"] {
+            assert_eq!(
+                schedule.next_after(instant(anchor), 0),
+                Some(instant("2026-10-02T09:00:00Z"))
+            );
+        }
+    }
+
+    #[test]
+    fn quarter_first_friday_boundaries_and_year_rollover() {
+        let schedule = Schedule::parse(OBSERVED).unwrap();
+        for (after, next) in [
+            ("2026-01-01T00:00:00Z", "2026-01-02T09:00:00Z"),
+            ("2026-01-02T08:59:59.999999999Z", "2026-01-02T09:00:00Z"),
+            ("2026-01-02T09:00:00Z", "2026-04-03T09:00:00Z"),
+            ("2026-04-03T09:00:00Z", "2026-07-03T09:00:00Z"),
+            ("2026-07-03T09:00:00Z", "2026-10-02T09:00:00Z"),
+            ("2026-10-02T09:00:00Z", "2027-01-01T09:00:00Z"),
+            ("2026-12-31T23:59:59Z", "2027-01-01T09:00:00Z"),
+        ] {
+            assert_eq!(
+                schedule.next_after(instant(after), 0),
+                Some(instant(next)),
+                "{after}"
+            );
+        }
+    }
+
+    #[test]
+    fn quarter_calendar_matches_independent_gregorian_reference() {
+        let schedule = Schedule::parse(OBSERVED).unwrap();
+        for year in 1970..=2105 {
+            for offset in [0, 32_400, -25_200] {
+                let expected = reference_runs(year, offset);
+                let from =
+                    LogicalInstant::from_unix_seconds(reference_midnight(year, 1, 1) - offset - 1);
+                let to = LogicalInstant::from_unix_seconds(
+                    reference_midnight(year + 1, 1, 1) - offset - 1,
+                );
+                assert_eq!(
+                    schedule.runs_between(from, to, offset, 5),
+                    expected,
+                    "{year}/{offset}"
+                );
+                let window = schedule.window_in(from, to, &FixedOffset(offset), 5);
+                assert_eq!(window.count, RunCount::Exact(4));
+                assert_eq!(window.latest, expected.last().copied());
+                for (index, run) in expected.iter().enumerate() {
+                    assert_eq!(
+                        schedule.next_after(LogicalInstant::from_nanos(run.as_nanos() - 1), offset),
+                        Some(*run)
+                    );
+                    let window = schedule.window_in(*run, to, &FixedOffset(offset), 5);
+                    assert_eq!(window.count.value(), u64::try_from(3 - index).unwrap());
+                    assert_eq!(window.latest, expected[index + 1..].last().copied());
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn quarter_seeded_next_run_property_matches_reference() {
+        let schedule = Schedule::parse(OBSERVED).unwrap();
+        let mut seed = 0x734a_25c9_15ea_b81fu64;
+        for _ in 0..1024 {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            let year = 1970 + i64::try_from(seed % 240).unwrap();
+            let month = 1 + u32::try_from((seed >> 8) % 12).unwrap();
+            let day = 1 + u32::try_from((seed >> 16) % 28).unwrap();
+            let offset = [0, 32_400, -25_200, 19_800][usize::try_from((seed >> 24) % 4).unwrap()];
+            let after = LogicalInstant::from_unix_seconds(
+                reference_midnight(year, month, day)
+                    + i64::try_from((seed >> 32) % 86_400).unwrap()
+                    - offset,
+            );
+            let expected = reference_runs(year, offset)
+                .into_iter()
+                .chain(reference_runs(year + 1, offset))
+                .find(|run| *run > after);
+            assert_eq!(
+                schedule.next_after(after, offset),
+                expected,
+                "{year}/{month}/{day}/{offset}"
+            );
+        }
+    }
+
+    #[test]
+    fn quarter_literal_preserves_existing_cron_and_groc_controls() {
+        assert_eq!(
+            Schedule::parse("0 9 1-7 1,4,7,10 fri")
+                .unwrap()
+                .next_after(instant("2026-10-01T00:00:00Z"), 0),
+            Some(instant("2026-10-01T09:00:00Z"))
+        );
+        for accepted in [
+            "every 5 minutes",
+            "every day 09:00",
+            "every friday 9:00",
+            "@monthly",
+            "0 9 * JAN MON",
+        ] {
+            assert!(Schedule::parse(accepted).is_ok(), "{accepted}");
+        }
+        for refused in [
+            "2nd friday of quarter 9:00",
+            "1st friday of month 9:00",
+            "1st thursday of quarter 9:00",
+            "1st friday of quarter 25:00",
+            "1st friday of quarter",
+            "0 0 0 1 4 *",
+            "every 0 minutes",
+        ] {
+            assert!(Schedule::parse(refused).is_err(), "{refused}");
+        }
+    }
 }

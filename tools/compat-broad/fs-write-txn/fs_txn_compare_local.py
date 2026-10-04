@@ -80,14 +80,66 @@ def compare_orders(production, local):
     return [{"site": site, "production": production.get(site), "local": local.get(site), "match": production.get(site) == local.get(site)} for site in sorted(set(production) | set(local))]
 
 
-def compare(production, local, production_relations, local_relations, project=DEFAULT_PROJECT):
+# The two answers of a read at a time ago that mean "the read time was within the retention" and "was not": a document that did not exist that long ago is not found
+# (5) at a read time the database does accept. Any other answer is its own class and matches only itself.
+ACCEPTED_CODES, REFUSED_CODES = (0, 5), (3, 9)
+# How far the server's own clock (a Commit's updateTime) may be from the recording's host clock before the one-hour boundary is no evidence.
+CLOCK_WINDOW_SECONDS = 2
+
+
+def retention_cases(plan):
+    """The cases whose step names a read time an interval ago (the 59 and 61 minute reads)."""
+    return frozenset(step["caseId"] for step in plan["steps"] if "readAgoSeconds" in step and step.get("caseId"))
+
+
+def outcome_class(code):
+    return "accepted" if code in ACCEPTED_CODES else "refused" if code in REFUSED_CODES else f"other:{code}"
+
+
+def _seconds(moment):
+    return moment[0] + moment[1] / 1e9
+
+
+def _utc_seconds(text):
+    return _seconds(parse_time(text, "rest"))
+
+
+def clock_evidence(steps):
+    """Per acknowledged Commit with write results: whether every updateTime (the server's clock) lies within the window around the request, widened by two seconds.
+    An empty commit has no write result (its commitTime is a snapshot time), a refused commit has no time."""
+    rows = {}
+    for step in steps:
+        if step["rpc"] != "Commit" or step["result"]["code"] != 0:
+            continue
+        results = (step["result"]["response"] or {}).get("writeResults") or []
+        if not results:
+            continue
+        low = _utc_seconds(step["timing"]["dispatchUtc"]) - CLOCK_WINDOW_SECONDS
+        high = _utc_seconds(step["timing"]["responseUtc"]) + CLOCK_WINDOW_SECONDS
+        rows[step["site"]] = all(low <= _seconds(parse_time(result["updateTime"], step["transport"])) <= high for result in results)
+    return rows
+
+
+def compare_clock(production, local):
+    return [{"site": site, "production": production.get(site), "local": local.get(site), "match": production.get(site) is True and local.get(site) is True}
+            for site in sorted(set(production) | set(local))]
+
+
+def compare(production, local, production_relations, local_relations, project=DEFAULT_PROJECT, retention=frozenset()):
     cases, reads, times = [], [], []
     by_case = {case["caseId"]: case for case in local["cases"]}
     for case in production["cases"]:
         other = by_case.get(case["caseId"])
-        same = other is not None and other["code"] == case["code"] and normalize(other["details"], project).split("\n")[0] == case["details"].split("\n")[0]
+        if case["caseId"] in retention:
+            # judged by class: both sides accepted the read time or both refused it (the exact code and the text are in the row)
+            classes = {"production": outcome_class(case["code"]), "local": None if other is None else outcome_class(other["code"])}
+            same = classes["production"] == classes["local"]
+        else:
+            classes = None
+            same = other is not None and other["code"] == case["code"] and normalize(other["details"], project).split("\n")[0] == case["details"].split("\n")[0]
         cases.append({"caseId": case["caseId"], "production": {"code": case["code"], "details": case["details"][:100]},
-                      "local": None if other is None else {"code": other["code"], "details": normalize(other["details"], project)[:100]}, "match": same})
+                      "local": None if other is None else {"code": other["code"], "details": normalize(other["details"], project)[:100]}, "match": same,
+                      **({"class": classes} if classes else {})})
     by_site = {read["site"]: read for read in local["reads"]}
     for read in production["reads"]:
         other = by_site.get(read["site"])
@@ -143,13 +195,14 @@ def main():
         local = projection(receipt, table)
         production_relations = commit_relations(source["steps"]) if recorded else None
         local_relations = commit_relations(receipt["steps"])
-        result["cases"], result["reads"], result["commitTimes"] = compare(production, local, production_relations, local_relations, project)
+        result["cases"], result["reads"], result["commitTimes"] = compare(production, local, production_relations, local_relations, project, retention_cases(plan))
         result["orders"] = compare_orders(writer_orders(source["steps"], plan), writer_orders(receipt["steps"], plan)) if recorded else None
-        rows = result["cases"] + result["reads"] + (result["commitTimes"] or []) + (result["orders"] or [])
+        result["clock"] = compare_clock(clock_evidence(source["steps"]), clock_evidence(receipt["steps"])) if recorded else None
+        rows = result["cases"] + result["reads"] + (result["commitTimes"] or []) + (result["orders"] or []) + (result["clock"] or [])
         result["mismatches"] = sum(not row["match"] for row in rows)
     out.write_text(json.dumps(result, indent=1))
     print("complete", receipt["complete"], receipt["failureType"], "mismatches", result.get("mismatches"))
-    for row in (result["cases"] or []) + (result["reads"] or []) + (result["commitTimes"] or []) + (result.get("orders") or []):
+    for row in (result["cases"] or []) + (result["reads"] or []) + (result["commitTimes"] or []) + (result.get("orders") or []) + (result.get("clock") or []):
         if not row["match"]:
             print("DIVERGE", json.dumps(row)[:300])
 

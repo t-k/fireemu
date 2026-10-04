@@ -130,3 +130,103 @@ def test_a_writer_that_answered_while_its_anchor_was_in_flight_was_held():
 
 def test_a_step_with_no_anchor_has_no_order():
     assert tool.writer_orders([timed("plain", 1.0, 2.0), timed("w/release", 3.0, 4.0)], {"steps": [{"id": "plain"}, {"id": "w/release"}]}) == {}
+
+
+# --- the read-time retention rows are judged by class, and the host clock the 59/61-minute boundary depends on is checked against the server's own clock ---
+
+def retention_plan():
+    return {"steps": [{"id": "rest/ret/get-59", "caseId": "rest/ret/get-59", "readAgoSeconds": 3540}, {"id": "rest/ret/get-61", "caseId": "rest/ret/get-61", "readAgoSeconds": 3660},
+                      {"id": "rest/ret/release-59", "caseId": "rest/ret/release-59"}, {"id": "plain", "caseId": "plain"}, {"id": "setup", "caseId": None}]}
+
+
+def test_the_retention_cases_are_the_steps_that_name_a_time_ago():
+    assert tool.retention_cases(retention_plan()) == frozenset({"rest/ret/get-59", "rest/ret/get-61"})
+    assert tool.retention_cases({"steps": []}) == frozenset()
+
+
+def test_a_read_at_a_time_ago_is_accepted_or_refused_and_any_other_answer_has_its_own_class():
+    assert [tool.outcome_class(code) for code in (0, 5)] == ["accepted", "accepted"]
+    assert [tool.outcome_class(code) for code in (3, 9)] == ["refused", "refused"]
+    assert [tool.outcome_class(code) for code in (10, 1, 13)] == ["other:10", "other:1", "other:13"]
+
+
+def case_projection(code, details="x"):
+    return {"cases": [{"caseId": "rest/ret/get-61", "code": code, "details": details}], "reads": []}
+
+
+def test_a_retention_case_matches_when_both_sides_are_in_the_same_class_whatever_the_code_and_text():
+    # 9 (too old) against 3 (before the database existed): both refuse the read time
+    cases, _reads, _times = tool.compare(case_projection(9, "too old"), case_projection(3, "before creation"), None, {}, retention=frozenset({"rest/ret/get-61"}))
+    assert cases[0]["match"] is True
+    # the rows still carry both exact answers
+    assert cases[0]["production"]["code"] == 9 and cases[0]["local"]["code"] == 3
+    assert cases[0]["class"] == {"production": "refused", "local": "refused"}
+
+
+def test_a_retention_case_refused_on_one_side_and_accepted_on_the_other_is_a_mismatch():
+    cases, _reads, _times = tool.compare(case_projection(9), case_projection(0), None, {}, retention=frozenset({"rest/ret/get-61"}))
+    assert cases[0]["match"] is False
+    cases, _reads, _times = tool.compare(case_projection(0), case_projection(5), None, {}, retention=frozenset({"rest/ret/get-61"}))
+    assert cases[0]["match"] is True   # found and not found are both accepted: the document may not have existed that long ago
+    # an answer of another kind (10) never matches a different one, and matches itself
+    assert tool.compare(case_projection(10), case_projection(9), None, {}, retention=frozenset({"rest/ret/get-61"}))[0][0]["match"] is False
+    assert tool.compare(case_projection(10), case_projection(10), None, {}, retention=frozenset({"rest/ret/get-61"}))[0][0]["match"] is True
+
+
+def test_a_case_that_is_not_a_retention_case_still_compares_code_and_text():
+    cases, _reads, _times = tool.compare(case_projection(9, "too old"), case_projection(3, "before creation"), None, {}, retention=frozenset({"other"}))
+    assert cases[0]["match"] is False
+    assert "class" not in cases[0]
+
+
+def rest_commit(site, dispatch, response, update):
+    return {"site": site, "rpc": "Commit", "transport": "rest", "request": {}, "result": {"code": 0, "response": {"commitTime": update, "writeResults": [{"updateTime": update}]}},
+            "timing": {"dispatchUtc": dispatch, "responseUtc": response}}
+
+
+def test_every_update_time_of_an_acknowledged_commit_is_checked_against_the_window_around_the_request():
+    steps = [rest_commit("a", "2026-10-05T10:00:00.000000Z", "2026-10-05T10:00:01.000000Z", "2026-10-05T10:00:00.500000Z"),
+             rest_commit("b", "2026-10-05T10:00:10.000000Z", "2026-10-05T10:00:11.000000Z", "2026-10-05T10:00:12.900000Z"),
+             rest_commit("c", "2026-10-05T10:00:20.000000Z", "2026-10-05T10:00:21.000000Z", "2026-10-05T10:00:23.100000Z"),
+             rest_commit("d", "2026-10-05T10:00:30.000000Z", "2026-10-05T10:00:31.000000Z", "2026-10-05T10:00:28.100000Z"),
+             rest_commit("e", "2026-10-05T10:00:40.000000Z", "2026-10-05T10:00:41.000000Z", "2026-10-05T10:00:37.900000Z")]
+    assert tool.clock_evidence(steps) == {"a": True, "b": True, "c": False, "d": True, "e": False}
+
+
+def test_the_window_is_two_seconds_either_side_inclusive_and_covers_native_stamps_too():
+    exactly = [rest_commit("lo", "2026-10-05T10:00:10.000000Z", "2026-10-05T10:00:11.000000Z", "2026-10-05T10:00:08.000000Z"),
+               rest_commit("hi", "2026-10-05T10:00:10.000000Z", "2026-10-05T10:00:11.000000Z", "2026-10-05T10:00:13.000000Z")]
+    assert tool.clock_evidence(exactly) == {"lo": True, "hi": True}
+    native = {"site": "g", "rpc": "Commit", "transport": "grpc", "request": {}, "timing": {"dispatchUtc": "2026-10-05T10:00:10.000000Z", "responseUtc": "2026-10-05T10:00:11.000000Z"},
+              "result": {"code": 0, "response": {"commitTime": {"seconds": "1", "nanos": 0}, "writeResults": [{"updateTime": {"seconds": "1791194413", "nanos": 500000000}}]}}}
+    # 2026-10-05T10:00:13.5Z is 2.5 s after the response
+    assert tool.clock_evidence([native]) == {"g": False}
+    native["result"]["response"]["writeResults"][0]["updateTime"] = {"seconds": "1791194412", "nanos": 0}
+    assert tool.clock_evidence([native]) == {"g": True}
+
+
+def test_a_commit_with_several_write_results_is_in_the_window_only_if_every_update_time_is():
+    step = rest_commit("m", "2026-10-05T10:00:10.000000Z", "2026-10-05T10:00:11.000000Z", "2026-10-05T10:00:10.500000Z")
+    step["result"]["response"]["writeResults"].append({"updateTime": "2026-10-05T10:00:20.000000Z"})
+    assert tool.clock_evidence([step]) == {"m": False}
+
+
+def test_only_acknowledged_commits_with_an_update_time_are_checked():
+    refused = rest_commit("r", "2026-10-05T10:00:10.000000Z", "2026-10-05T10:00:11.000000Z", "2026-10-05T11:00:00.000000Z")
+    refused["result"]["code"] = 10
+    empty = rest_commit("e", "2026-10-05T10:00:10.000000Z", "2026-10-05T10:00:11.000000Z", "2026-10-05T09:00:00.000000Z")
+    empty["result"]["response"]["writeResults"] = []   # an empty commit's commitTime is a snapshot time, not the server's clock
+    read = {**rest_commit("g", "2026-10-05T10:00:10.000000Z", "2026-10-05T10:00:11.000000Z", "2026-10-05T11:00:00.000000Z"), "rpc": "GetDocument"}
+    assert tool.clock_evidence([refused, empty, read]) == {}
+
+
+def test_the_clock_evidence_rows_match_when_both_the_recording_and_the_replay_keep_the_server_clock_inside_the_window():
+    rows = tool.compare_clock({"a": True, "b": True}, {"a": True, "b": True})
+    assert [(row["site"], row["match"]) for row in rows] == [("a", True), ("b", True)]
+    # a recording whose host clock was off is a mismatch: its retention rows are not evidence of the boundary
+    rows = tool.compare_clock({"a": False}, {"a": True})
+    assert rows == [{"site": "a", "production": False, "local": True, "match": False}]
+    # a replay whose clock drifted is one too, and so is a row only one side has
+    assert tool.compare_clock({"a": True}, {"a": False})[0]["match"] is False
+    assert [row["match"] for row in tool.compare_clock({"a": True}, {"b": True})] == [False, False]
+    assert tool.compare_clock({}, {}) == []

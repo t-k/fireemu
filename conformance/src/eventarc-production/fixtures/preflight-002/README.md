@@ -1,0 +1,3 @@
+# Recorded production answers (preflight 002, fireemu-oracle-idp, 2026-09-30)
+
+The answers of three read-only requests, kept as the recorder's real bodies for the tests that replay them: the Service Usage state of `eventarcpublishing.googleapis.com` (state DISABLED), the Eventarc channel list of us-central1 (an empty object) and the 404 of `channels/firebase`. Only the project number in the Service Usage URL and body is replaced by 123456789012 (the same number of digits); every other byte of `body` is as recorded. The `bodyBase64` member of the original files is dropped because it carries the unmasked number.

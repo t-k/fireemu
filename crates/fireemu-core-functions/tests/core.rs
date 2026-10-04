@@ -890,6 +890,21 @@ fn a_window_over_a_restricted_schedule_lists_counts_and_ends_on_the_right_runs()
     assert_eq!(nights.count, RunCount::Exact(3));
     assert_eq!(nights.latest, Some(t("2026-09-01T03:00:00Z")));
     assert!(nights.steps >= 3, "{} steps", nights.steps);
+    // A cap equal to the number of runs is not "at least": nothing more lies in the window.
+    let exact = nightly.window_in(
+        t("2026-08-29T12:01:00Z"),
+        t("2026-09-01T04:00:00Z"),
+        &utc,
+        3,
+    );
+    assert_eq!(exact.count, RunCount::Exact(3));
+    let below = nightly.window_in(
+        t("2026-08-29T12:01:00Z"),
+        t("2026-09-01T04:00:00Z"),
+        &utc,
+        2,
+    );
+    assert_eq!(below.count, RunCount::AtLeast(2));
 }
 
 #[test]

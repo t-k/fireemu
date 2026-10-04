@@ -60,21 +60,24 @@ export const publishWire = {
   },
 };
 
-// Both limits are 10,000,000 bytes: a message and a whole request. Each boundary is recorded on both
+// The documented limit is 10,000,000 bytes (10 MB) for a message and for a whole request, while the
+// service's own error text for an oversized request has been seen to name 10485760 bytes (10 MiB). Both
+// numbers are recorded for the request so that the boundary is found, not assumed. Each boundary is recorded on both
 // sides (accepted at the limit, refused one byte over) on a topic of its own with no subscription,
 // since only the answer to the publish matters. The time limit follows the payload size; an answer
 // that does not come in time is an unknown answer, recorded as such.
 const LIMIT = 10_000_000;
+const MIB_LIMIT = 10_485_760;
 
 export const publishLimits = {
   id: "publish-limits",
   short: "pl",
-  requests: 12,
+  requests: 10,
   async run(ctx) {
     const c = ctx.client;
     const topic = ctx.name("topics", "t");
     must(await c.createTopic(topic), "createTopic");
-    const big = c.with({ timeoutMs: timeoutForBytes(LIMIT * 1.4) });
+    const big = c.with({ timeoutMs: timeoutForBytes(MIB_LIMIT * 1.4) });
     // The message boundary: the data is exactly LIMIT bytes, then one more.
     ctx.note("publish-limits", {
       messageDataBytes: LIMIT,
@@ -92,6 +95,9 @@ export const publishLimits = {
     await big.publish(topic, [
       message({ data: payload(LIMIT + 1 - (messageSize(payload(LIMIT)) - LIMIT)) }),
     ]);
+    // The request boundary at 10 MiB.
+    await big.publish(topic, messagesOfRequestSize(topic, MIB_LIMIT));
+    await big.publish(topic, messagesOfRequestSize(topic, MIB_LIMIT + 1));
     await c.publish(topic, [message({ data: "after the large ones" })]);
   },
 };

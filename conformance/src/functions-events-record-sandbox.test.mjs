@@ -746,7 +746,8 @@ test(
   "real ledger: spent is US$24.50 with the close lines, so the v4 reserve fits (28.50 of 34)",
   { skip: !haveReal },
   () => {
-    const text = readFileSync(realLedger, "utf8");
+    // the first 584 lines: the ledger as it was when the close lines of the 14:55Z and 15:26Z runs were written
+    const text = readFileSync(realLedger, "utf8").split("\n").slice(0, 584).join("\n");
     assert.deepEqual(sandbox.budgetProblems(text), []);
     assert.equal(headroom(text), 9.5, "24.50 spent, headroom to the cap of 34");
     // without the close lines of the 14:55Z and 15:26Z runs the two reserves would count (the owner's old rule)

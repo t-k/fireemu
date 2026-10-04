@@ -246,7 +246,15 @@ const decidedBy = (text) => text.startsWith("オーナー") || text.startsWith("
  * The envelope must cover this recorder's limits. A later line saying REVOKED withdraws the version
  * (by packet SHA) or the envelope (by its id).
  */
-export function approval(ownerText, { packetSha256, harnessSha256, sourceCommit }) {
+export function approval(
+  ownerText,
+  { packetSha256, harnessSha256, sourceCommit },
+  {
+    topic: familyTopic = TOPIC,
+    envelopeTopic = ENVELOPE_TOPIC,
+    limits = { maxRequests: MAX_REQUESTS, cliMax: CLI_MAX, reserveUsd: RESERVE_USD },
+  } = {},
+) {
   const envelopes = new Map();
   let version;
   for (const raw of ownerText.split("\n")) {
@@ -256,7 +264,8 @@ export function approval(ownerText, { packetSha256, harnessSha256, sourceCommit 
       .slice(2)
       .split(" | ")
       .map((c) => c.trim());
-    if (topic !== TOPIC && topic !== ENVELOPE_TOPIC && !topic.startsWith(`${TOPIC} `)) continue;
+    if (topic !== familyTopic && topic !== envelopeTopic && !topic.startsWith(`${familyTopic} `))
+      continue;
     if (/\bREVOKED\b/i.test(body)) {
       if (body.includes(packetSha256)) version = undefined;
       const id = /\benvelopeId=([A-Za-z0-9_-]+)/.exec(body)?.[1];
@@ -268,9 +277,9 @@ export function approval(ownerText, { packetSha256, harnessSha256, sourceCommit 
     }
     if (!decidedBy(decider)) continue;
     const entry = fields(body);
-    if (topic === ENVELOPE_TOPIC && entry.envelopeId) envelopes.set(entry.envelopeId, entry);
+    if (topic === envelopeTopic && entry.envelopeId) envelopes.set(entry.envelopeId, entry);
     else if (
-      topic === TOPIC &&
+      topic === familyTopic &&
       entry.decision === "APPROVE" &&
       entry.packetSha256 === packetSha256 &&
       entry.harnessSha256 === harnessSha256 &&
@@ -289,13 +298,13 @@ export function approval(ownerText, { packetSha256, harnessSha256, sourceCommit 
     };
   const problems = [];
   if (envelope.project !== PROJECT) problems.push("the envelope names another project");
-  if (!(number(envelope.maxRequests) >= MAX_REQUESTS))
-    problems.push(`the envelope allows fewer than ${MAX_REQUESTS} requests`);
-  if (!(number(envelope.cliMax) >= CLI_MAX))
-    problems.push(`the envelope allows fewer than ${CLI_MAX} CLI runs`);
+  if (!(number(envelope.maxRequests) >= limits.maxRequests))
+    problems.push(`the envelope allows fewer than ${limits.maxRequests} requests`);
+  if (!(number(envelope.cliMax) >= limits.cliMax))
+    problems.push(`the envelope allows fewer than ${limits.cliMax} CLI runs`);
   if (envelope.retries !== "none") problems.push("the envelope does not say retries=none");
-  if (!(number(envelope.reserveUsd) >= RESERVE_USD))
-    problems.push(`the envelope reserves less than US$${RESERVE_USD}`);
+  if (!(number(envelope.reserveUsd) >= limits.reserveUsd))
+    problems.push(`the envelope reserves less than US$${limits.reserveUsd}`);
   return problems.length
     ? { problems }
     : { approval: { envelopeId: version.envelopeId, line: version.line }, problems: [] };
@@ -425,4 +434,154 @@ export function finishedLine({
 
 export function appendLedger(path, row) {
   appendFileSync(path, `${JSON.stringify(row)}\n`, { mode: 0o600, flag: "a" });
+}
+
+// ---- the recovery of a run that ended needs-recovery (recover-main.mjs) -------------------------
+
+export const RECOVERY_TOPIC = "FUNCTIONS-EVENTS recovery v4";
+export const RECOVERY_ENVELOPE_TOPIC = `${RECOVERY_TOPIC} envelope`;
+export const RECOVERY_MAX_REQUESTS = 90;
+export const RECOVERY_RESERVE_USD = 0.1;
+export const RECOVERY_WAIT_MINUTES = 10;
+export const RECOVERY_LIMITS = {
+  maxRequests: RECOVERY_MAX_REQUESTS,
+  cliMax: 0,
+  reserveUsd: RECOVERY_RESERVE_USD,
+};
+
+/** The approval of this exact recovery: the same two-line form as the formal run, with the recovery topics and limits. */
+export const recoveryApproval = (ownerText, pins) =>
+  approval(ownerText, pins, {
+    topic: RECOVERY_TOPIC,
+    envelopeTopic: RECOVERY_ENVELOPE_TOPIC,
+    limits: RECOVERY_LIMITS,
+  });
+
+/**
+ * Why the recovery of `originRunDir` may not start now. The origin run must have a `started` line and a
+ * `finished` line with outcome needs-recovery and the lock retained, and nothing of the project after it but
+ * lines of recoveries of the same origin that ended; it must not be closed already; the last line of the project
+ * must be at least RECOVERY_WAIT_MINUTES old (a function delete can still be finishing); and the project lock must
+ * be the origin's own, with its holder gone. `lock` is `{ text, isAlive }` (the lock file's text, or undefined, and
+ * a test of whether a pid is alive).
+ */
+export function recoveryProblems(ledgerText, { originRunDir, now, lock, legacyLockHeld = false }) {
+  const problems = [];
+  const rows = ledgerEntries(ledgerText).filter((row) => row.project === PROJECT);
+  const origin = rows.filter((row) => row.runDir === originRunDir && row.taskId === TASK_ID);
+  const started = origin.filter((row) => row.event === "started");
+  const finished = origin.filter((row) => row.event === "finished");
+  if (started.length !== 1 || finished.length !== 1)
+    return [
+      `the origin run needs exactly one started and one finished line (found ${started.length} and ${finished.length})`,
+    ];
+  if (finished[0].outcome !== "needs-recovery" || finished[0].lockRetained !== true)
+    problems.push("the origin run did not end needs-recovery with its lock retained");
+  if (origin.some((row) => row.event === "cleanup-verified"))
+    problems.push("the origin run is already closed");
+  const finishedAt = rows.indexOf(finished[0]);
+  for (const row of rows.slice(finishedAt + 1)) {
+    const ownLine =
+      row.phase === "recovery" && row.originRunDir === originRunDir && row.taskId === TASK_ID;
+    if (!ownLine)
+      problems.push(
+        `a line of ${row.taskId ?? "no task"} follows the origin run (${row.event} at ${row.ts})`,
+      );
+  }
+  const open = new Set(
+    rows
+      .slice(finishedAt + 1)
+      .filter((row) => row.phase === "recovery" && row.event === "started")
+      .map((row) => row.runDir),
+  );
+  for (const row of rows.slice(finishedAt + 1))
+    if (row.phase === "recovery" && row.event === "finished") open.delete(row.runDir);
+  if (open.size > 0) problems.push("a recovery of this origin started and did not finish");
+  const lastTs = rows.map((row) => Date.parse(row.ts)).filter(Number.isFinite);
+  if (rows.some((row) => !Number.isFinite(Date.parse(row.ts))))
+    problems.push("a line of the project has an unreadable time");
+  const last = lastTs.toSorted((a, b) => b - a)[0];
+  if (last === undefined || now - last < RECOVERY_WAIT_MINUTES * 60_000)
+    problems.push(`the last line of ${PROJECT} is less than ${RECOVERY_WAIT_MINUTES} minutes old`);
+  if (legacyLockHeld) problems.push("the legacy shared lock is held");
+  if (lock?.text === undefined)
+    problems.push("the project lock is not held, so there is nothing to recover under");
+  else {
+    if (sha256(lock.text) !== started[0].lockSha256)
+      problems.push(
+        "the project lock is not the origin run's lock (its SHA-256 differs from the started line)",
+      );
+    let body;
+    try {
+      body = JSON.parse(lock.text);
+    } catch {
+      problems.push("the project lock body does not parse");
+    }
+    if (body && body.runDir !== originRunDir) problems.push("the project lock names another run");
+    if (body && (!Number.isInteger(body.pid) || lock.isAlive(body.pid)))
+      problems.push("the holder of the project lock is still running (or its pid is unknown)");
+  }
+  return problems;
+}
+
+/** The started line of a recovery: it names the origin run and the lock it works under, and never takes or frees a lock. */
+export function recoveryStartedLine({
+  ts,
+  runDir,
+  originRunDir,
+  packetSha256,
+  harnessSha256,
+  gitSha,
+  approval: approved,
+  lockSha256,
+}) {
+  return {
+    ts,
+    event: "started",
+    taskId: TASK_ID,
+    project: PROJECT,
+    database: "(default)",
+    phase: "recovery",
+    runDir,
+    originRunDir,
+    packetSha256,
+    harnessSha256,
+    gitSha,
+    envelopeId: approved.envelopeId,
+    maxRequests: RECOVERY_MAX_REQUESTS,
+    cliMax: 0,
+    estimatedUsd: RECOVERY_RESERVE_USD,
+    heldLockSha256: lockSha256,
+  };
+}
+
+/** The closing line of a recovery. The project lock stays: the coordinator reads the result and frees it. */
+export function recoveryFinishedLine({
+  ts,
+  runDir,
+  originRunDir,
+  packetSha256,
+  gitSha,
+  outcome,
+  requests,
+  deletes,
+}) {
+  return {
+    ts,
+    event: "finished",
+    taskId: TASK_ID,
+    project: PROJECT,
+    database: "(default)",
+    phase: "recovery",
+    runDir,
+    originRunDir,
+    packetSha256,
+    gitSha,
+    outcome,
+    requests,
+    deletes,
+    cliAttempts: { dryRun: 0, deploy: 0, delete: 0 },
+    estimatedUsd: RECOVERY_RESERVE_USD,
+    lockRetained: true,
+  };
 }

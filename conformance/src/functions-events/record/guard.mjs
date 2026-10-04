@@ -5,6 +5,12 @@
 // two topics, the owned object prefixes and the test user email domain.
 
 import {
+  FUNCTION_TARGETS,
+  RECOVERY_REGIONS,
+  SUBSCRIPTION_TARGETS,
+  TOPIC_TARGETS,
+} from "./recover-targets.mjs";
+import {
   CONTROL_BUCKET,
   CONTROL_COLLECTION,
   CONTROL_TOPIC,
@@ -371,6 +377,107 @@ export const RULES = [
   ),
 ];
 
+// ---- the recovery rules (recover.mjs): exact names, one by one -----------------------------------
+// The recovery transport is given these and only these: it reads, then deletes the two functions and the
+// Pub/Sub objects named in recover-targets.mjs, each by its full name, and reads everything back in both regions.
+
+const alt = (values) => values.map((v) => v.replaceAll(".", "\\.")).join("|");
+const REGIONS = alt(RECOVERY_REGIONS);
+const FUNCTION_PATHS = FUNCTION_TARGETS.map((t) => `locations/${t.region}/functions/${t.id}`).join(
+  "|",
+);
+const regional = (tail) => `/projects/${P}/locations/(?:${REGIONS})${tail}`;
+const SUBSCRIPTIONS = alt(SUBSCRIPTION_TARGETS);
+const TOPIC_NAMES = alt(TOPIC_TARGETS);
+
+export const RECOVERY_RULES = [
+  rule(
+    "recovery-function-get",
+    "GET",
+    "cloudfunctions.googleapis.com",
+    `/v2/projects/${P}/(?:${FUNCTION_PATHS})`,
+  ),
+  rule(
+    "recovery-function-delete",
+    "DELETE",
+    "cloudfunctions.googleapis.com",
+    `/v2/projects/${P}/(?:${FUNCTION_PATHS})`,
+    { mutation: true },
+  ),
+  rule(
+    "recovery-operation-get",
+    "GET",
+    "cloudfunctions.googleapis.com",
+    `/v2${regional("/operations/[A-Za-z0-9_-]{1,128}")}`,
+  ),
+  rule(
+    "recovery-subscription-get",
+    "GET",
+    "pubsub.googleapis.com",
+    `/v1/projects/${P}/subscriptions/(?:${SUBSCRIPTIONS})`,
+  ),
+  rule(
+    "recovery-subscription-delete",
+    "DELETE",
+    "pubsub.googleapis.com",
+    `/v1/projects/${P}/subscriptions/(?:${SUBSCRIPTIONS})`,
+    { mutation: true },
+  ),
+  rule(
+    "recovery-topic-get",
+    "GET",
+    "pubsub.googleapis.com",
+    `/v1/projects/${P}/topics/(?:${TOPIC_NAMES})`,
+  ),
+  rule(
+    "recovery-topic-delete",
+    "DELETE",
+    "pubsub.googleapis.com",
+    `/v1/projects/${P}/topics/(?:${TOPIC_NAMES})`,
+    { mutation: true },
+  ),
+  rule(
+    "recovery-functions-v1-list",
+    "GET",
+    "cloudfunctions.googleapis.com",
+    `/v1${regional("/functions")}`,
+    {
+      query: ["pageToken"],
+    },
+  ),
+  rule(
+    "recovery-functions-v2-list",
+    "GET",
+    "cloudfunctions.googleapis.com",
+    `/v2${regional("/functions")}`,
+    {
+      query: ["pageToken"],
+    },
+  ),
+  rule("recovery-run-services-list", "GET", "run.googleapis.com", `/v2${regional("/services")}`, {
+    query: ["pageToken"],
+  }),
+  rule(
+    "recovery-eventarc-triggers-list",
+    "GET",
+    "eventarc.googleapis.com",
+    `/v1${regional("/triggers")}`,
+    {
+      query: ["pageToken"],
+    },
+  ),
+  rule(
+    "recovery-artifact-registry-read",
+    "GET",
+    "artifactregistry.googleapis.com",
+    `/v1${regional("/repositories/gcf\\-artifacts")}`,
+  ),
+  // the project-wide lists and the primary bucket's metadata are the recorder's own read rules
+  ...RULES.filter((entry) =>
+    ["pubsub-topic-list", "pubsub-subscription-list", "storage-bucket-get"].includes(entry.name),
+  ),
+];
+
 // Which destinations get `x-goog-user-project`. The header names the quota project of the owner's
 // credential, which these API calls need; it is wrong on the calls that do not carry that credential
 // (the client sign-in calls and the key's project read use the API key), and some Google endpoints
@@ -383,7 +490,7 @@ export const quotaProjectFor = (ruleName) => !WITHOUT_QUOTA_PROJECT.has(ruleName
  * The rule a resolved request (no placeholders left) matches, or a reason it may not be sent. `body`
  * is the resolved body (an object, or a string for a text upload) and `headers` the extra headers.
  */
-export function destination({ method, url, mutation, body, headers }) {
+export function destination({ method, url, mutation, body, headers }, rules = RULES) {
   let parsed;
   try {
     parsed = new URL(url);
@@ -399,7 +506,7 @@ export function destination({ method, url, mutation, body, headers }) {
   ) {
     return { problem: "only a plain https URL without credentials, port or fragment may be sent" };
   }
-  for (const entry of RULES) {
+  for (const entry of rules) {
     if (
       entry.method !== method ||
       entry.host !== parsed.hostname ||

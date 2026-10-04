@@ -70,7 +70,7 @@ const mask = (value) =>
  * `createTransport({ fetch, token, apiKey, directory, ceiling, now })`: `token()` returns the OAuth
  * access token, `apiKey` the browser key for the two client sign-in calls, `directory` the private
  * run directory (mode 700) the journal and the raw answers go to, `ceiling` the most requests the
- * run may send.
+ * run may send, `rules` (optional) the destination rules to use instead of the recorder's own.
  */
 export function createTransport({
   fetch: send = fetch,
@@ -80,6 +80,7 @@ export function createTransport({
   ceiling,
   now = () => Date.now(),
   onSent = () => {},
+  rules,
 }) {
   mkdirSync(join(directory, "responses"), { recursive: true, mode: 0o700 });
   const journal = join(directory, "journal.jsonl");
@@ -115,13 +116,16 @@ export function createTransport({
       });
       throw new Error_(message);
     };
-    const answer = destination({
-      method: resolved.method,
-      url: resolved.url,
-      mutation: resolved.mutation,
-      body: bodyValue,
-      headers: resolved.headers,
-    });
+    const answer = destination(
+      {
+        method: resolved.method,
+        url: resolved.url,
+        mutation: resolved.mutation,
+        body: bodyValue,
+        headers: resolved.headers,
+      },
+      rules,
+    );
     if (answer.problem) {
       state.refused += 1;
       refuse(answer.problem);

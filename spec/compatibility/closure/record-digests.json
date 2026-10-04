@@ -108,6 +108,8 @@
     "spec/compatibility/closure/evidence/integration-v0.8.0/release-artifact.json": "439d1f55b447d2621661077fc8c130df1fba8f38d996b0a952adef0d4d8bcd1c",
     "spec/compatibility/closure/evidence/integration-v0.9.0/release-artifact.json": "5de64ae72ddab9c30a3544f3957d95dbb1d3708c390f0319e09ddf97f29e6e3f",
     "spec/compatibility/contract.json": "4eea2fb4533a7107beae6631467b88d619b170ec5ec4eba14e34b499bc6cdbda",
+    "spec/compatibility/fs-listen-sdk-browser-local-shadow.json": "41b2adb3265f6120291f48ea72532fb6927c4fda93f3893ace16a207d7122797",
+    "spec/compatibility/fs-listen-sdk-local-shadow.json": "aea62689faa5e52ca96e1b3af9c6bc971cd72101ee588b371dd04f2121a56c95",
     "spec/compatibility/gaps.json": "bc22d5f813b12d99682a2a05bd3e2a47d930767c79be57f35d1f481e42b46a7e",
     "spec/limits/firestore-standard-2026-08-25.json": "a5c9da71bd74c7341da1cb3d25542db3aecb935b2387d4a61c8cb43857055fa4"
   }

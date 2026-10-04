@@ -229,4 +229,6 @@ def test_the_clock_evidence_rows_match_when_both_the_recording_and_the_replay_ke
     # a replay whose clock drifted is one too, and so is a row only one side has
     assert tool.compare_clock({"a": True}, {"a": False})[0]["match"] is False
     assert [row["match"] for row in tool.compare_clock({"a": True}, {"b": True})] == [False, False]
+    # both sides out of the window is no evidence either
+    assert tool.compare_clock({"a": False}, {"a": False})[0]["match"] is False
     assert tool.compare_clock({}, {}) == []

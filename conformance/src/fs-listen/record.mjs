@@ -6,7 +6,8 @@
 //   node src/fs-listen/record.mjs native --target production --project fireemu-oracle-txn --out F
 //   node src/fs-listen/record.mjs native --target local [--profile strict|emulator] --out F
 //   node src/fs-listen/record.mjs sdk --target production --project fireemu-oracle-query \
-//        --web-config WEB.json --out F        (WEB.json: { apiKey, authDomain, projectId })
+//        --api-key-file KEY --out F     (KEY: a 0600 file holding only the web app's API key;
+//                                         the key is bound to the project before anything is made)
 //   node src/fs-listen/record.mjs sdk --target local [--profile strict|emulator] --out F
 //
 // `--target local` starts fireemu itself (`fireemu exec`) and runs the same programs inside it.
@@ -22,7 +23,7 @@ import { resolveFireemuBinary } from "../evidence.mjs";
 import { createNativeClient } from "./native-client.mjs";
 import { NATIVE_PROGRAMS, SWEEP, programProblems } from "./native-programs.mjs";
 import { cleanupNative, runNative } from "./native-run.mjs";
-import { recordSdk } from "./sdk-record.mjs";
+import { loadApiKey, recordSdk } from "./sdk-record.mjs";
 
 const execFileAsync = promisify(execFile);
 const HERE = fileURLToPath(import.meta.url);
@@ -181,16 +182,15 @@ export async function withFireemu({ profile, script, args, env, rules }) {
 
 async function sdkProduction(options) {
   checkProject("sdk", options.project);
-  if (!options["web-config"]) throw new Error("--web-config <file> is required");
-  const web = JSON.parse(await readFile(options["web-config"], "utf8"));
-  if (web.projectId !== options.project || !web.apiKey || !web.authDomain)
-    throw new Error("the web config is not for this project");
+  if (!options["api-key-file"]) throw new Error("--api-key-file <file> is required");
+  const apiKey = await loadApiKey(options["api-key-file"]);
+  const token = await accessToken();
   return recordSdk({
     target: {
       kind: "production",
       project: options.project,
-      token: await accessToken(),
-      web: { apiKey: web.apiKey, authDomain: web.authDomain, projectId: web.projectId },
+      token,
+      web: { apiKey, authDomain: `${options.project}.firebaseapp.com`, projectId: options.project },
     },
     run: newRunId(),
     log: (line) => console.error(line),

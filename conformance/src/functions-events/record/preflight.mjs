@@ -81,6 +81,7 @@ export const PREFLIGHT = [
   {
     ...post("iam", `https://cloudresourcemanager.googleapis.com/v1/projects/${PROJECT}:getIamPolicy`, {}),
     check: ({ json }, context) => {
+      context.iamBefore = json;
       const member = `serviceAccount:service-${context.projectNumber}@gcp-sa-eventarc.iam.gserviceaccount.com`;
       const held = (json?.bindings ?? []).some((b) => b.role === "roles/eventarc.serviceAgent" && !b.condition && (b.members ?? []).includes(member));
       return held ? ok() : bad("the Eventarc service agent does not hold roles/eventarc.serviceAgent");
@@ -172,5 +173,20 @@ export async function runPreflight(request) {
     const verdict = check(answer, context);
     if (!verdict.ok) problems.push(`${step.id}: ${verdict.reason}`);
   }
-  return { problems, projectNumber: context.projectNumber ?? null };
+  return { problems, projectNumber: context.projectNumber ?? null, iamBefore: context.iamBefore ?? null };
+}
+
+/** The (role, member) pairs of an IAM policy as strings, user accounts redacted: enough to name what a deploy added. */
+export function iamPairs(policy) {
+  const pairs = [];
+  for (const binding of policy?.bindings ?? []) {
+    for (const member of binding.members ?? []) pairs.push(`${binding.role} ${member.startsWith("user:") ? "user:<redacted>" : member}${binding.condition ? " (conditional)" : ""}`);
+  }
+  return pairs.sort();
+}
+
+export function iamDiff(before, after) {
+  const was = new Set(iamPairs(before));
+  const is = new Set(iamPairs(after));
+  return { added: [...is].filter((p) => !was.has(p)), removed: [...was].filter((p) => !is.has(p)) };
 }

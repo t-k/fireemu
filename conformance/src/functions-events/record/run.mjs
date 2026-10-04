@@ -7,7 +7,7 @@
 import { LISTS, PROPAGATION_WAIT_SECONDS, waitReady } from "./deploy.mjs";
 import { runCleanup } from "./cleanup.mjs";
 import { listRequest, parseEntries } from "./logs.mjs";
-import { runPreflight } from "./preflight.mjs";
+import { iamPairs, runPreflight } from "./preflight.mjs";
 import { resolveText } from "./rest.mjs";
 import { STEP_GAP_SECONDS, buildPass, runSetupRequests } from "./script.mjs";
 
@@ -123,9 +123,11 @@ export async function record({ transport, cli, sleep, now, newId, corpusDigest, 
   }
 
   let passesComplete = false;
+  let iamBefore = null;
   try {
     const pre = await runPreflight((spec, vars) => transport.request(spec, vars));
-    run.preflight = { problems: pre.problems };
+    iamBefore = pre.iamBefore;
+    run.preflight = { problems: pre.problems, iamBefore: iamPairs(pre.iamBefore) };
     if (pre.problems.length) {
       run.stops.push("the preflight found problems; nothing was written");
       run.cleanup = null;
@@ -151,7 +153,7 @@ export async function record({ transport, cli, sleep, now, newId, corpusDigest, 
   // The cleanup runs after any stop once something was created.
   transport.setCeiling(CLEANUP_CEILING);
   try {
-    run.cleanup = await runCleanup({ transport, cli, sleep, ran });
+    run.cleanup = await runCleanup({ transport, cli, sleep, ran, iamBefore });
   } catch (error) {
     run.cleanup = { verified: false, problems: [`cleanup: ${error.message}`], steps: {} };
   }

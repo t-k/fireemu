@@ -145,3 +145,17 @@ test("a cleanup that cannot verify the functions gone ends needs-recovery and ne
   assert.equal(calls.filter((a) => a === "delete").length, 1);
   assert.ok(run.cleanup.problems.some((p) => p.startsWith("functions:")));
 });
+
+test("the run says which IAM bindings the deploy added or removed, with user accounts redacted", async () => {
+  const { deps, world } = setup();
+  const original = deps.cli;
+  deps.cli = async (action) => {
+    if (action === "deploy") world.extraIam = true;
+    return original(action);
+  };
+  const { run } = await record(deps);
+  const step = run.cleanup.steps.inventory;
+  assert.deepEqual(step.iamDiff, { added: ["roles/pubsub.publisher serviceAccount:gcs-agent@example"], removed: [] });
+  assert.ok(run.preflight.iamBefore.every((p) => !p.includes("@example.com")));
+  assert.ok(Array.isArray(step.iamAfter));
+});

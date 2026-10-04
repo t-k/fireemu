@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { destination } from "./functions-events/record/guard.mjs";
-import { PREFLIGHT, REQUIRED_APIS, runPreflight } from "./functions-events/record/preflight.mjs";
+import { PREFLIGHT, REQUIRED_APIS, iamDiff, iamPairs, runPreflight } from "./functions-events/record/preflight.mjs";
 import { PRIMARY_COLLECTION, PROJECT } from "./functions-events/record/script.mjs";
 
 import { NUMBER, healthy } from "./functions-events-record-world.mjs";
@@ -63,4 +63,11 @@ test("a step that gets no usable answer is a problem, not a pass", async () => {
 
 test("an unrelated function in the region does not stop the preflight", async () => {
   assert.deepEqual((await runWith(healthy())).problems, []);
+});
+
+test("IAM pairs redact user accounts and the diff names what was added and removed", () => {
+  const before = { bindings: [{ role: "roles/owner", members: ["user:someone@example.com"] }, { role: "roles/run.invoker", members: ["serviceAccount:a@x"] }] };
+  const after = { bindings: [{ role: "roles/owner", members: ["user:someone@example.com"] }, { role: "roles/pubsub.publisher", members: ["serviceAccount:b@x"], condition: { title: "t" } }] };
+  assert.deepEqual(iamPairs(before), ["roles/owner user:<redacted>", "roles/run.invoker serviceAccount:a@x"]);
+  assert.deepEqual(iamDiff(before, after), { added: ["roles/pubsub.publisher serviceAccount:b@x (conditional)"], removed: ["roles/run.invoker serviceAccount:a@x"] });
 });

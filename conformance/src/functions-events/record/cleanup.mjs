@@ -4,7 +4,8 @@
 // staging object, no IAM binding) and never retries a delete. A step that cannot be verified makes the
 // run `needs-recovery`; the recovery is a separate approval.
 
-import { LISTS, readLists, summarize } from "./deploy.mjs";
+import { readLists, summarize } from "./deploy.mjs";
+import { iamDiff, iamPairs } from "./preflight.mjs";
 import { CONTROL_BUCKET, MARKER_COLLECTION, PRIMARY_BUCKET, PROJECT, REGION } from "./script.mjs";
 
 const documents = `https://firestore.googleapis.com/v1/projects/${PROJECT}/databases/(default)/documents`;
@@ -32,7 +33,7 @@ const objectUrl = (bucket, name, generation) => `${bucketUrl(bucket)}/o/${encode
  * `cli("delete")` is the one CLI delete of the 22 handlers. `ran` says how far the run got, so a run
  * that stopped before the deploy does not send a delete for functions that were never deployed.
  */
-export async function runCleanup({ transport, cli, sleep, ran }) {
+export async function runCleanup({ transport, cli, sleep, ran, iamBefore = null }) {
   const steps = {};
   const request = (spec, vars) => transport.request(spec, vars);
 
@@ -109,7 +110,7 @@ export async function runCleanup({ transport, cli, sleep, ran }) {
   await safely(steps, "inventory", async () => {
     const packages = await request(read("artifact-packages", `https://artifactregistry.googleapis.com/v1/projects/${PROJECT}/locations/${REGION}/repositories/gcf-artifacts/packages?pageSize=100`, [200, 404]));
     const iam = await request({ ...read("iam", `https://cloudresourcemanager.googleapis.com/v1/projects/${PROJECT}:getIamPolicy`), method: "POST", body: {} });
-    return { ok: true, packages: (packages.json?.packages ?? []).map((p) => p.name?.split("/").at(-1)), iamBindings: iam.json?.bindings?.length ?? null };
+    return { ok: true, packages: (packages.json?.packages ?? []).map((p) => p.name?.split("/").at(-1)), iamBindings: iam.json?.bindings?.length ?? null, iamDiff: iamBefore && iam.kind === "success" ? iamDiff(iamBefore, iam.json) : null, iamAfter: iam.kind === "success" ? iamPairs(iam.json) : null };
   });
 
   const problems = Object.entries(steps).filter(([, s]) => !s.ok).map(([name, s]) => `${name}: ${s.error ?? JSON.stringify({ ...s, ok: undefined }).slice(0, 200)}`);

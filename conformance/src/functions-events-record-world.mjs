@@ -270,7 +270,7 @@ export function createWorld({ now, rulesAllow = true }) {
     if (u.hostname === "run.googleapis.com") return json(200, world.deployed ? { services: names.filter((h) => h.generation === 2).map((h) => ({ name: `projects/${PROJECT}/locations/us-central1/services/${h.name.toLowerCase()}` })) } : {});
     if (u.hostname === "eventarc.googleapis.com") return json(200, world.deployed ? { triggers: names.filter((h) => h.generation === 2).map((h) => ({ name: `projects/${PROJECT}/locations/us-central1/triggers/${h.name.toLowerCase()}-1` })) } : {});
     const fixed = {
-      "cloudresourcemanager.googleapis.com": path.endsWith(":getIamPolicy") ? healthy()["preflight.iam"].json : healthy()["preflight.project"].json,
+      "cloudresourcemanager.googleapis.com": path.endsWith(":getIamPolicy") ? { bindings: [...healthy()["preflight.iam"].json.bindings, ...(world.extraIam ? [{ role: "roles/pubsub.publisher", members: ["serviceAccount:gcs-agent@example"] }] : [])] } : healthy()["preflight.project"].json,
       "serviceusage.googleapis.com": healthy()["preflight.services"].json,
       "artifactregistry.googleapis.com": path.endsWith("gcf-artifacts") ? healthy()["preflight.artifact-repository"].json : {},
     };

@@ -129,7 +129,8 @@ const decidedBy = (text) => text.startsWith("オーナー") || text.startsWith("
 
 /**
  * The approval of this exact version, or the reasons there is none. Two lines are needed:
- *   - D | FUNCTIONS-EVENTS formal envelope | envelopeId=…; project=…; maxRequests=…; cliMax=…; reserveUsd=… | (owner or delegated coordinator) | …
+ *   - D | FUNCTIONS-EVENTS formal envelope | envelopeId=…; project=…; maxRequests=…; cliMax=…; reserveUsd=…; retries=none; writes=…; onStop=… | (owner or delegated coordinator) | …
+ *     (`writes` and `onStop` are for the reader of the line: the declared resources only, and the lock stays on needs-recovery)
  *   - D | FUNCTIONS-EVENTS formal | decision=APPROVE; envelopeId=…; packetSha256=…; harnessSha256=…; sourceCommit=… | (owner or delegated coordinator) | …
  * The envelope must cover this recorder's limits. A later line saying REVOKED withdraws the version
  * (by packet SHA) or the envelope (by its id).
@@ -181,6 +182,7 @@ export function approval(ownerText, { packetSha256, harnessSha256, sourceCommit 
     problems.push(`the envelope allows fewer than ${MAX_REQUESTS} requests`);
   if (!(number(envelope.cliMax) >= CLI_MAX))
     problems.push(`the envelope allows fewer than ${CLI_MAX} CLI runs`);
+  if (envelope.retries !== "none") problems.push("the envelope does not say retries=none");
   if (!(number(envelope.reserveUsd) >= RESERVE_USD))
     problems.push(`the envelope reserves less than US$${RESERVE_USD}`);
   return problems.length

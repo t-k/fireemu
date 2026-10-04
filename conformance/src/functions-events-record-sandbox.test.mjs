@@ -93,7 +93,7 @@ const pins = {
   harnessSha256: "b".repeat(64),
   sourceCommit: "c".repeat(40),
 };
-const E = `- 2026-10-04 | ${sandbox.ENVELOPE_TOPIC} | envelopeId=FE-FORMAL-1; project=fireemu-oracle-events; maxRequests=520; cliMax=2; reserveUsd=4.00 | オーナー | ledger 812`;
+const E = `- 2026-10-04 | ${sandbox.ENVELOPE_TOPIC} | envelopeId=FE-FORMAL-1; project=fireemu-oracle-events; maxRequests=520; cliMax=2; reserveUsd=4.00; retries=none; writes=declared resources only; onStop=needs-recovery keeps the lock | オーナー | ledger 812`;
 const V = `- 2026-10-04 | ${sandbox.TOPIC} | decision=APPROVE; envelopeId=FE-FORMAL-1; packetSha256=${pins.packetSha256}; harnessSha256=${pins.harnessSha256}; sourceCommit=${pins.sourceCommit} | Claude（委任。枠の内） | review`;
 
 test("an envelope line and a version line that name the same pins approve the run", () => {
@@ -113,6 +113,7 @@ test("the approval is refused for another pin, a missing or smaller envelope, a 
     ["maxRequests=520", "maxRequests=519"],
     ["cliMax=2", "cliMax=1"],
     ["reserveUsd=4.00", "reserveUsd=3.99"],
+    ["retries=none", "retries=twice"],
     ["project=fireemu-oracle-events", "project=other"],
   ])
     assert.ok(refused(`${E.replace(from, to)}\n${V}`), to);

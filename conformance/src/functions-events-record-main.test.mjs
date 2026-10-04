@@ -76,7 +76,7 @@ function arrange({ approve = true } = {}) {
   writeFileSync(
     ownerPath,
     approve
-      ? `- 2026-10-04 | ${ENVELOPE_TOPIC} | envelopeId=E1; project=fireemu-oracle-events; maxRequests=520; cliMax=2; reserveUsd=4.00 | オーナー | x\n- 2026-10-04 | ${TOPIC} | decision=APPROVE; envelopeId=E1; packetSha256=${packetSha256}; harnessSha256=${digest}; sourceCommit=${head} | Claude（委任 | y\n`
+      ? `- 2026-10-04 | ${ENVELOPE_TOPIC} | envelopeId=E1; project=fireemu-oracle-events; maxRequests=520; cliMax=2; reserveUsd=4.00; retries=none | オーナー | x\n- 2026-10-04 | ${TOPIC} | decision=APPROVE; envelopeId=E1; packetSha256=${packetSha256}; harnessSha256=${digest}; sourceCommit=${head} | Claude（委任 | y\n`
       : "",
   );
   let t = Date.parse("2026-10-04T12:00:00Z");

@@ -373,6 +373,9 @@ export async function collect({
         all.every((r) => !r.issued || r.settled === true) &&
         all.every((r) => !["unknown-unsettled", "identity-contradiction"].includes(r.outcome)),
       cleanupVerified: false,
+      // False when the budget made the run skip cases: the packet is then incomplete even if
+      // everything it did create is cleaned up.
+      complete: all.every((r) => r.outcome !== "skipped-budget"),
       topicIssued,
       cases: all,
     };
@@ -474,14 +477,14 @@ export async function collect({
       url: SCHEDULER + "projects/" + PROJECT + "/locations/" + REGION + "/jobs",
       json: createBody(c, own),
     });
-    if (answer && !answer.bodyUnknown && createAccepted(c, answer, own)) {
+    if (createAccepted(c, answer, own)) {
       rec.outcome = "accepted";
       rec.created = true;
     } else if (createRefusedExact(answer)) {
       rec.outcome = "refused";
     } else if (createRefusedOther(answer)) {
       rec.outcome = "refused-other";
-    } else if (answer && !answer.bodyUnknown && ownJob(answer, c, own)) {
+    } else if (ownJob(answer, c, own)) {
       // Complete 200 that names the own job but not in the recorded layout: it is ours.
       rec.outcome = "accepted-unrecorded-layout";
       rec.created = true;

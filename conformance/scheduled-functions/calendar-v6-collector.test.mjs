@@ -450,9 +450,213 @@ test("a clean run is closed and says it is not yet verified clean", async () => 
   assert.equal(result.stage, "done");
 });
 
-test("the budget guard pins how many jobs a small budget takes", async () => {
+test("the budget guard takes more jobs as the budget grows, in steps a formula change would shift", async () => {
+  const taken = [];
+  for (let budget = 80; budget <= 100; budget++) {
+    const server = fakeServer({ refuse: refuseSecond });
+    const { result } = await run(server, { budget });
+    taken.push(result.cases.filter((c) => c.issued).length);
+    assert.ok(result.attempted <= budget, "budget " + budget);
+    assert.equal(result.closureReady, true, "what it created is cleaned up, budget " + budget);
+    assert.equal(result.complete, false, "skipped cases make the packet incomplete");
+    assert.equal(server.state.jobs.size, 0);
+  }
+  assert.deepEqual(
+    taken,
+    [15, 15, 15, 16, 16, 16, 16, 17, 17, 17, 17, 18, 18, 18, 18, 19, 19, 19, 19, 20, 20],
+  );
+});
+
+test("the documented limits are the ones in force", () => {
+  assert.equal(MAX_REQUESTS, 240);
+  assert.equal(MAX_JOBS, 50);
+});
+
+test("waitFor names an unknown timing", () => {
+  assert.throws(() => waitFor({ kind: "nope" }, 1), /unknown timing nope/);
+});
+
+test("capture needs a real token and a request cap of at least one", () => {
+  for (const bad of ["", undefined, null, 5, "a\rb"])
+    assert.throws(() => capture({ accessToken: bad }), /token/);
+  assert.doesNotThrow(() => capture({ maxRequests: 1 }));
+});
+
+test("a clean run reads no topic back (the create proved it), and completes", async () => {
   const server = fakeServer({ refuse: refuseSecond });
-  const { result } = await run(server, { budget: 90 });
-  assert.equal(result.cases.filter((c) => c.issued).length, 17);
-  assert.equal(result.cases.filter((c) => c.outcome === "skipped-budget").length, 30);
+  const { result, journal } = await run(server);
+  assert.ok(!journal.some((r) => r.id.startsWith("read-topic")));
+  assert.equal(result.complete, true);
+});
+
+// ---- topic create status boundaries ---------------------------------------------------------
+
+test("a client error on the topic create is a refusal and is not polled; anything else is read", async () => {
+  for (const status of [400, 404, 499]) {
+    const server = fakeServer({ hooks: { [key("PUT", TOPIC)]: async () => error(status, "no") } });
+    const { journal, result } = await run(server);
+    assert.equal(result.stage, "topic", String(status));
+    assert.ok(!journal.some((r) => r.id.startsWith("read-topic")), "no polling after " + status);
+  }
+  for (const status of [300, 399, 500, 503]) {
+    const server = fakeServer({
+      hooks: { [key("PUT", TOPIC)]: async () => error(status, "later") },
+    });
+    const { journal } = await run(server);
+    assert.ok(
+      journal.some((r) => r.id === "read-topic"),
+      "read after " + status,
+    );
+  }
+});
+
+// ---- creates: layouts and 2xx boundaries ----------------------------------------------------
+
+test("a 200 that names the own job in an unrecorded layout is accepted as ours and cleaned up", async () => {
+  const name = JOB("cr02");
+  const server = fakeServer({
+    refuse: refuseSecond,
+    hooks: {
+      [key("POST", JOBS)]: async ({ state, body, own }) => {
+        if (!body.name.endsWith("-cr02")) return undefined;
+        state.jobs.set(name, { ...body, state: "ENABLED" });
+        state.everCreated.add(name);
+        return new Response(
+          JSON.stringify({ name, state: "ENABLED", pubsubTarget: { topicName: own.topic } }),
+          { status: 200 },
+        );
+      },
+    },
+  });
+  const { result } = await run(server);
+  const rec = result.cases.find((c) => c.id === "cr02");
+  assert.equal(rec.outcome, "accepted-unrecorded-layout");
+  assert.equal(rec.created, true);
+  assert.equal(rec.deleted, true);
+  assert.equal(server.state.jobs.size, 0);
+});
+
+test("a 2xx create that is not the own job is a contradiction; a 3xx is merely unknown", async () => {
+  const other = JOB("cr05");
+  const body = JSON.stringify({ name: other, state: "ENABLED" }, null, 2) + "\n";
+  for (const [status, outcome] of [
+    [200, "identity-contradiction"],
+    [299, "identity-contradiction"],
+    [300, "unknown-unsettled"],
+  ]) {
+    const server = fakeServer({
+      refuse: refuseSecond,
+      hooks: {
+        [key("POST", JOBS)]: async ({ body: sent }) =>
+          sent.name.endsWith("-cr02") ? new Response(body, { status }) : undefined,
+      },
+    });
+    const { result } = await run(server);
+    assert.equal(result.cases.find((c) => c.id === "cr02").outcome, outcome, String(status));
+    assert.ok(!server.state.calls.includes("DELETE " + JOB("cr02")));
+  }
+});
+
+// ---- the bounded budget of settlement reads -------------------------------------------------
+
+const failFirstFour = (extra = {}) => ({
+  [key("POST", JOBS)]: async ({ body }) => (/-cr0[1-4]$/.test(body.name) ? "throw" : undefined),
+  ...extra,
+});
+
+test("the settlement reads are bounded: twelve in all, however many creates are unknown", async () => {
+  const server = fakeServer({
+    refuse: refuseSecond,
+    hooks: {
+      [key("POST", JOBS)]: async ({ body }) => (/-cr0[1-5]$/.test(body.name) ? "throw" : undefined),
+    },
+  });
+  const { journal } = await run(server);
+  const reads = journal.filter(
+    (r) => r.state === "before-send" && r.id.includes("-settle-create-"),
+  );
+  assert.equal(reads.length, 12);
+});
+
+test("with the settlement budget spent, a failed pause is not read back", async () => {
+  const server = fakeServer({
+    refuse: refuseSecond,
+    hooks: failFirstFour({
+      [key("POST", JOB("cr05") + ":pause")]: async () => error(500, "later"),
+    }),
+  });
+  const { journal } = await run(server);
+  assert.ok(!journal.some((r) => r.id === "cr05-read-after-pause"));
+});
+
+test("with the settlement budget spent, a busy DELETE is tried once and not read back", async () => {
+  const name = JOB("cr05");
+  const server = fakeServer({
+    refuse: refuseSecond,
+    hooks: failFirstFour({ [key("DELETE", name)]: async () => busy(name) }),
+  });
+  const { journal } = await run(server);
+  const ids = journal
+    .filter((r) => r.state === "before-send" && r.id.startsWith("cr05-"))
+    .map((r) => r.id);
+  assert.ok(ids.includes("cr05-delete"));
+  assert.ok(!ids.some((id) => id.includes("retry") || id.includes("settle-delete")), ids.join());
+});
+
+// ---- settling the end -----------------------------------------------------------------------
+
+test("a refused case whose read-back fails is not settled, and the topic stays", async () => {
+  const server = fakeServer({
+    refuse: refuseSecond,
+    hooks: { [key("GET", JOB("cr08"))]: async () => error(500, "later") },
+  });
+  const { result } = await run(server);
+  assert.equal(result.cases.find((c) => c.id === "cr08").settled, false);
+  assert.equal(server.state.topic, true);
+  assert.equal(result.closureReady, false);
+});
+
+test("only a 2xx DELETE of a job is an acknowledgement: 204 is, 300 is not", async () => {
+  const name = JOB("cr01");
+  const ok = fakeServer({
+    refuse: refuseSecond,
+    hooks: {
+      [key("DELETE", name)]: async ({ state }) => {
+        state.jobs.delete(name);
+        return new Response(null, { status: 204 });
+      },
+    },
+  });
+  assert.equal((await run(ok)).result.cases.find((c) => c.id === "cr01").deleted, true);
+  const redirect = fakeServer({
+    refuse: refuseSecond,
+    hooks: { [key("DELETE", name)]: async () => new Response("{}\n", { status: 300 }) },
+  });
+  const { result } = await run(redirect);
+  assert.ok(!result.cases.find((c) => c.id === "cr01").deleted);
+  assert.ok(redirect.state.jobs.has(name));
+  assert.equal(result.closureReady, false);
+});
+
+test("only a 2xx DELETE of the topic settles it", async () => {
+  for (const [status, closed] of [
+    [200, true],
+    [204, true],
+    [299, true],
+    [300, false],
+    [404, false],
+    [500, false],
+  ]) {
+    const server = fakeServer({
+      refuse: refuseSecond,
+      hooks: {
+        [key("DELETE", TOPIC)]: async ({ state }) => {
+          state.topic = false;
+          return new Response(status === 204 ? null : "{}\n", { status });
+        },
+      },
+    });
+    const { result } = await run(server);
+    assert.equal(result.closureReady, closed, String(status));
+  }
 });

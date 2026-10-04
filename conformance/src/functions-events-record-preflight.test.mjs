@@ -318,3 +318,23 @@ test("without a project number from this run the key cannot be bound: fail close
     );
   }
 });
+
+const keyStep = PREFLIGHT.find((step) => step.id === "preflight.api-key-project");
+
+test("the key check on its own: the run's project number must be a digit string, whatever else the answer says", () => {
+  const answer = (projectId) => ({ json: { authorizedDomains: [], projectId } });
+  assert.deepEqual(keyStep.check(answer(NUMBER), { projectNumber: NUMBER }), { ok: true });
+  for (const projectNumber of [undefined, null, 123456789012, "", "abc", `${NUMBER}x`, "12345"]) {
+    const verdict = keyStep.check(answer(NUMBER), { projectNumber });
+    assert.equal(verdict.ok, false, String(projectNumber));
+    assert.match(verdict.reason, /project number of this run is not known/, String(projectNumber));
+  }
+  // the answer's projectId must be a digit string of its own: an empty string is not one
+  for (const projectId of ["", "abc", 123456789012, null, undefined]) {
+    const verdict = keyStep.check(answer(projectId), { projectNumber: NUMBER });
+    assert.equal(verdict.ok, false, String(projectId));
+    assert.match(verdict.reason, /not a project number/, String(projectId));
+  }
+  const other = keyStep.check(answer("999999999999"), { projectNumber: NUMBER });
+  assert.match(other.reason, /does not belong/);
+});

@@ -80,6 +80,34 @@ async function stopGroup(child) {
   }
 }
 
+/**
+ * The environment of one local session: no credentials, the capture socket, the identity of the binary and, pinned, the runner of
+ * this checkout (the daemon would otherwise walk up from the binary to whichever checkout holds it and run that one's runner).
+ */
+export function sessionEnvironment({
+  base,
+  shortDir,
+  onlyRecipeIds,
+  windowMs,
+  socketPath,
+  identity,
+}) {
+  const env = {
+    ...base,
+    GOOGLE_APPLICATION_CREDENTIALS: "",
+    FE_EVENTS_PRIVATE_DIR: shortDir,
+    FE_EVENTS_ONLY: onlyRecipeIds ?? "",
+    FE_EVENTS_WINDOW_MS: String(windowMs),
+    FE_EVENTS_MODE: "local",
+    FE_EVENTS_CAPTURE_MODE: "socket",
+    FE_EVENTS_CAPTURE_SOCKET: socketPath,
+    ...identityEnv(identity),
+    FIREEMU_RUNNER_NODE: identity.runnerPath,
+  };
+  delete env.FE_EVENTS_ALLOW_PRODUCTION_ADMIN;
+  return env;
+}
+
 async function runProfile({ profile, binary, identity, privateRoot, onlyRecipeIds, windowMs }) {
   const privateDir = join(privateRoot, profile);
   await mkdir(privateDir, { recursive: true, mode: 0o700 });
@@ -97,20 +125,14 @@ async function runProfile({ profile, binary, identity, privateRoot, onlyRecipeId
   );
   const logPath = join(privateDir, "supervisor.log");
   const log = createWriteStream(logPath, { flags: "wx", mode: 0o600 });
-  const env = {
-    ...process.env,
-    GOOGLE_APPLICATION_CREDENTIALS: "",
-    FE_EVENTS_PRIVATE_DIR: shortDir,
-    FE_EVENTS_ONLY: onlyRecipeIds ?? "",
-    FE_EVENTS_WINDOW_MS: String(windowMs),
-    FE_EVENTS_MODE: "local",
-    FE_EVENTS_CAPTURE_MODE: "socket",
-    FE_EVENTS_CAPTURE_SOCKET: socketPath,
-    ...identityEnv(identity),
-    // the daemon would otherwise walk up from the binary to whichever checkout holds it: pin the runner of this checkout
-    FIREEMU_RUNNER_NODE: identity.runnerPath,
-  };
-  delete env.FE_EVENTS_ALLOW_PRODUCTION_ADMIN;
+  const env = sessionEnvironment({
+    base: process.env,
+    shortDir,
+    onlyRecipeIds,
+    windowMs,
+    socketPath,
+    identity,
+  });
   let child;
   let logBytes = 0;
   let exceeded = false;

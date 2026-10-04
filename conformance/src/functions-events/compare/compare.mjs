@@ -207,8 +207,7 @@ function observeProductionPass({
     ]);
   }
   if (reasons.length > 0) return incomplete([...new Set(reasons)]);
-  const inWindow = subject;
-  if (inWindow.length === 0) {
+  if (subject.length === 0) {
     return incomplete(`${label}: no ${handler} frame in the ${windowSeconds} s window`);
   }
   const listings = [];
@@ -218,14 +217,14 @@ function observeProductionPass({
     return stripped;
   };
   if (row.delivery === RETRY) {
-    const retry = retryObservation(inWindow, label, handler, windowSeconds, strip);
+    const retry = retryObservation(subject, label, handler, windowSeconds, strip);
     if (retry.status !== "OK") return retry;
     return result("OK", [], {
       observation: applyPlaceholders({ ...base, ...retry.observation }, table),
       listings: listings.map((listing) => applyPlaceholders(listing, table)),
     });
   }
-  const stripped = inWindow.map(strip);
+  const stripped = subject.map(strip);
   if (!allSame(stripped)) {
     return incomplete(
       `${label}: ${stripped.length} ${handler} frames of the subject differ from each other`,

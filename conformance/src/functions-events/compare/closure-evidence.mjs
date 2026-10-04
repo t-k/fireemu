@@ -14,8 +14,8 @@
 // otherwise the specific DIFF and INCOMPLETE rows with their reasons, and the rows the comparison does not have. With
 // --write it refuses anything but a complete, final comparison, and then writes the comparison evidence and the closure:
 //   - VERIFIED, with the two recordings, the artifact and the comparison path, on each condition whose rows all MATCH;
-//   - MISMATCH, with the DIFF rows, on each condition that has a DIFF row;
-//   - PRODUCTION_RECORDED, with the INCOMPLETE rows, on each condition that has INCOMPLETE rows and no DIFF row;
+//   - nothing on any other condition: it keeps its current status and gets no evidence block (its DIFF and INCOMPLETE rows
+//     are in the report only), so a write never changes a status without closing the condition;
 //   - final-artifact-regression VERIFIED only when every row of the comparison MATCHes, the build record names the
 //     compared binary, and a workspace regression receipt names the same binary and commit (its three gate rows are then
 //     added to the evidence); closure-review and the parent status are never touched.
@@ -280,7 +280,7 @@ export function gateRows() {
 }
 
 /**
- * A copy of the closure with the evidence of every business condition and, when its preconditions hold, of the final-artifact
+ * A copy of the closure with the evidence of every VERIFIED business condition (the others are left as they are) and, when its preconditions hold, of the final-artifact
  * gate. `mapping` is `mapConditions`' answer, `recordings` the two recordings, `finalArtifact` the build record (or undefined),
  * `workspace` the workspace receipt (or undefined), `comparison` the comparison evidence (the checked comparison, with the three
  * gate rows added when the gate applies).
@@ -324,18 +324,14 @@ export function applyClosure({
     }
     const entry = byId.get(condition.conditionId);
     if (!entry) refuse(`${condition.conditionId} was not mapped`);
-    condition.status = entry.status;
+    // Only VERIFIED is written: any other condition keeps its status and gets no evidence (its rows are in the report).
+    if (entry.status !== "VERIFIED") continue;
+    condition.status = "VERIFIED";
     condition.evidence = {
       productionRecordings: structuredClone(recordings),
       finalArtifactSha256: comparison.artifactSha256,
       comparisonPath,
-      rows: {
-        MATCH: entry.match,
-        DIFF: entry.diffRows.length,
-        INCOMPLETE: entry.incompleteRows.length,
-      },
-      ...(entry.diffRows.length > 0 ? { diffRows: entry.diffRows } : {}),
-      ...(entry.incompleteRows.length > 0 ? { incompleteRows: entry.incompleteRows } : {}),
+      rows: { MATCH: entry.match, DIFF: 0, INCOMPLETE: 0 },
       ...(finalArtifact ? { sourceCommit: finalArtifact.sourceCommit } : {}),
     };
   }

@@ -121,10 +121,7 @@ function assertClosureConsistent(next, evidence) {
   const label = (c) => c.conditionId;
   for (const condition of next.conditions) {
     if (!["PENDING_CORPUS", "PENDING_SCOPE", "PENDING_REVIEW"].includes(condition.status))
-      assert.ok(
-        ["PRODUCTION_RECORDED", "MISMATCH", "VERIFIED"].includes(condition.status),
-        label(condition),
-      );
+      assert.ok(condition.status === "VERIFIED", label(condition));
     if (["PENDING_CORPUS", "PENDING_SCOPE", "PENDING_REVIEW"].includes(condition.status))
       assert.equal(
         condition.evidence,
@@ -585,17 +582,19 @@ test("without the workspace receipt the gate stays pending and the evidence has 
   assertClosureConsistent(next, evidence);
 });
 
-test("a DIFF writes MISMATCH with the rows into that condition only, the gate stays pending, and the closure file stays consistent", () => {
+test("a DIFF leaves its condition as it was, with no evidence; the others are VERIFIED, the gate stays pending, and the closure file stays consistent", () => {
   const diffId = "functions-events/storage/finalize#new-object#v1";
   const { next, evidence } = applied({
     comparison: comparisonOf({
       over: { [diffId]: { status: "DIFF", reasons: ["data.etag differs"] } },
     }),
   });
-  assert.equal(status(next, "/storage-finalized"), "MISMATCH");
   const condition = next.conditions.find((c) => c.conditionId.endsWith("/storage-finalized"));
-  assert.deepEqual(condition.evidence.diffRows, [{ row: diffId, reasons: ["data.etag differs"] }]);
-  assert.deepEqual(condition.evidence.rows, { MATCH: 5, DIFF: 1, INCOMPLETE: 0 });
+  const before = closure().conditions.find((c) => c.conditionId.endsWith("/storage-finalized"));
+  assert.deepEqual(condition, before);
+  assert.notEqual(condition.status, "VERIFIED");
+  assert.equal(condition.evidence, undefined);
+  assert.equal(evidence.rows.find((r) => r.row === diffId).status, "DIFF");
   assert.equal(next.conditions.filter((c) => c.status === "VERIFIED").length, 19);
   assert.equal(status(next, "/final-artifact-regression"), "PENDING_CORPUS");
   assertClosureConsistent(next, evidence);
@@ -805,7 +804,10 @@ test("--write without a workspace receipt writes the 20 conditions and leaves th
     }),
   });
   const { closure: withDiff, evidence } = closureEvidenceCommand(writing(), diff.io);
-  assert.equal(status(withDiff, "/pubsub-published"), "MISMATCH");
+  assert.deepEqual(
+    withDiff.conditions.find((c) => c.conditionId.endsWith("/pubsub-published")),
+    closure().conditions.find((c) => c.conditionId.endsWith("/pubsub-published")),
+  );
   assert.equal(withDiff.conditions.filter((c) => c.status === "VERIFIED").length, 19);
   assert.equal(
     evidence.rows.some((r) => r.row.startsWith("functions-events/gate#")),
@@ -1018,7 +1020,7 @@ test("two passes at one time are refused even when the first pass is instantaneo
   asRefusal(() => checkBuildRecord({ ...rest, lockedBy: locked }, comparisonOf()), /wrong fields/);
 });
 
-test("the final-artifact gate needs the build record; INCOMPLETE rows and the source commit are written into the evidence", () => {
+test("the final-artifact gate needs the build record; an INCOMPLETE row leaves its condition as it was, and the source commit is written into the evidence of a VERIFIED one", () => {
   const checked = checkComparison(
     comparisonOf({
       over: {
@@ -1041,11 +1043,11 @@ test("the final-artifact gate needs the build record; INCOMPLETE rows and the so
   };
   const withBuild = applyClosure(base);
   const condition = withBuild.conditions.find((c) => c.conditionId.endsWith("/storage-deleted"));
-  assert.equal(condition.status, "PRODUCTION_RECORDED");
-  assert.deepEqual(condition.evidence.incompleteRows, [
-    { row: "functions-events/storage/delete#live-object-delete#v2", reasons: ["no frame"] },
-  ]);
-  assert.equal(condition.evidence.sourceCommit, COMMIT);
+  assert.deepEqual(
+    condition,
+    closure().conditions.find((c) => c.conditionId.endsWith("/storage-deleted")),
+  );
+  assert.equal(condition.evidence, undefined);
   assert.equal(
     withBuild.conditions.find((c) => c.conditionId.endsWith("/firestore-created")).evidence
       .sourceCommit,

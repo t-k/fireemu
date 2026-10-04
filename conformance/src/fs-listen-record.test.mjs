@@ -92,3 +92,45 @@ test("recordNative marks the cleanup incomplete when the read-back itself fails"
   assert.equal(recording.cleanup.complete, false);
   assert.match(recording.cleanup.error, /read-back unavailable/);
 });
+
+test("parseArgs: no arguments is an empty command; a flag without a value has none; the last one wins", () => {
+  assert.deepEqual(parseArgs([]), { command: undefined });
+  assert.deepEqual(parseArgs(["sdk", "--out"]), { command: "sdk", out: undefined });
+  assert.deepEqual(parseArgs(["sdk", "--out", "a", "--out", "b"]), { command: "sdk", out: "b" });
+  assert.throws(() => parseArgs(["sdk", "--out", "a", "stray", "b"]), /unexpected argument stray/);
+  assert.throws(() => parseArgs(["sdk", "-o", "a"]), /unexpected argument -o/);
+});
+
+test("checkProject names the one project a kind may address", () => {
+  assert.throws(
+    () => checkProject("native", "x"),
+    /native recordings may address only fireemu-oracle-txn$/,
+  );
+  assert.throws(
+    () => checkProject("sdk", "x"),
+    /sdk recordings may address only fireemu-oracle-query$/,
+  );
+});
+
+test("newRunId: the same moment gives the same id, and the default is now", () => {
+  assert.equal(newRunId(36), "n10");
+  assert.equal(newRunId(0), "n0");
+  assert.match(newRunId(), /^n[0-9a-z]{8,}$/);
+});
+
+test("recordNative returns a recording with its facts and a clean cleanup on a client that holds nothing", async () => {
+  const client = failingClient();
+  const before = Date.now();
+  const recording = await recordNative({ client, project: "p", run: "r1", clock: fakeClock() });
+  assert.equal(recording.node, process.version);
+  assert.ok(Date.parse(recording.startedAt) >= before - 1000);
+  assert.equal(typeof recording.requests, "number");
+  assert.ok(recording.requests > 0);
+  assert.deepEqual(recording.cleanup.stillPresent, []);
+  assert.equal(recording.cleanup.deleted, 0);
+  assert.ok(recording.cleanup.checked > 0);
+  assert.ok(
+    client.calls.some(([name]) => name === "list"),
+    "the run's prefix is swept",
+  );
+});

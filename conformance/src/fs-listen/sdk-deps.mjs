@@ -4,14 +4,15 @@
 // bounded to that band instead of ranging over the whole collection; and a write marked `__txn`
 // is committed together with the others of its group in one `runTransaction`.
 
+import { createHash } from "node:crypto";
+
 import { createDeps } from "../../../tools/compat-broad/fs-listen-resume/listen_sdk_adapter.mjs";
 import { PUBLIC_COLLECTION } from "./sdk-cases.mjs";
 
-/** Ranks of one run: 1000 + (the run's last six digits) * 100, so runs do not overlap. */
+/** Ranks of one run: 1000 + 100 * (a million-way hash of the run id), so runs rarely overlap. */
 export function bandOf(run) {
-  let hash = 0;
-  for (const char of String(run)) hash = (hash * 31 + char.charCodeAt(0)) % 1_000_000;
-  return 1000 + hash * 100;
+  const digest = createHash("sha256").update(String(run)).digest();
+  return 1000 + (digest.readUInt32BE(0) % 1_000_000) * 100;
 }
 
 /** The constraints of a catalog query listener, as data, inside the run's rank band. */

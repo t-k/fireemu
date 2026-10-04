@@ -240,3 +240,141 @@ test("commitGroups: no changes, no groups; a change with no update time is not s
   );
   assert.deepEqual(mixed, [{ docs: ["a", "b"], sameUpdateTime: false }]);
 });
+
+const OPTS = { names, project: "p1", run: "r1" };
+
+test("a target change is a boundary only when it is NO_CHANGE for no target at all", () => {
+  // No type and no ids: NO_CHANGE for everything.
+  assert.deepEqual(frameRows([{ kind: "targetChange", targetChange: {} }], OPTS), [
+    { kind: "boundary", resumeToken: false },
+  ]);
+  assert.deepEqual(frameRows([{ kind: "targetChange" }], OPTS), [
+    { kind: "boundary", resumeToken: false },
+  ]);
+  // NO_CHANGE for a named target is a row of its own.
+  assert.deepEqual(frameRows([target("NO_CHANGE")], OPTS), [
+    { kind: "targetChange", type: "NO_CHANGE", targetIds: [1], cause: null, resumeToken: false },
+  ]);
+  // A type that is not NO_CHANGE with no ids is a row too.
+  assert.deepEqual(
+    frameRows([{ kind: "targetChange", targetChange: { targetChangeType: "RESET" } }], OPTS),
+    [{ kind: "targetChange", type: "RESET", targetIds: [], cause: null, resumeToken: false }],
+  );
+  // A named target without a type is NO_CHANGE.
+  assert.equal(
+    frameRows([{ kind: "targetChange", targetChange: { targetIds: [2] } }], OPTS)[0].type,
+    "NO_CHANGE",
+  );
+});
+
+test("target ids sort as numbers, and a cause without a message has an empty one", () => {
+  const [row] = frameRows(
+    [
+      {
+        kind: "targetChange",
+        targetChange: { targetChangeType: "REMOVE", targetIds: [10, 2, 1], cause: { code: 5 } },
+      },
+    ],
+    OPTS,
+  );
+  assert.deepEqual(row.targetIds, [1, 2, 10]);
+  assert.deepEqual(row.cause, { code: 5, message: "" });
+});
+
+test("a document change with nothing in it, and an unknown frame kind, still make rows", () => {
+  assert.deepEqual(frameRows([{ kind: "documentChange" }], OPTS), [
+    { kind: "documentChange", doc: "<other>", fields: {}, targetIds: [], removedTargetIds: [] },
+  ]);
+  assert.deepEqual(frameRows([{ kind: "documentDelete" }, { kind: "documentRemove" }], OPTS), [
+    { kind: "documentDelete", doc: "<other>", removedTargetIds: [] },
+    { kind: "documentRemove", doc: "<other>", removedTargetIds: [] },
+  ]);
+  assert.deepEqual(frameRows([{ kind: "somethingNew" }, { kind: 7 }], OPTS), [
+    { kind: "somethingNew" },
+    { kind: "7" },
+  ]);
+  assert.deepEqual(frameRows([{ kind: "filter" }], OPTS), [
+    { kind: "filter", targetId: undefined, count: undefined, unchangedNames: null },
+  ]);
+});
+
+test("a bloom filter without bits reports zero bytes and zero padding", () => {
+  const [row] = frameRows(
+    [{ kind: "filter", filter: { targetId: 1, count: 1, unchangedNames: { hashCount: 2 } } }],
+    OPTS,
+  );
+  assert.deepEqual(row.unchangedNames, { hashCount: 2, bitmapBytes: 0, padding: 0 });
+  const [full] = frameRows(
+    [
+      {
+        kind: "filter",
+        filter: {
+          targetId: 1,
+          count: 1,
+          unchangedNames: { hashCount: 2, bits: { bitmap: Buffer.alloc(9), padding: 5 } },
+        },
+      },
+    ],
+    OPTS,
+  );
+  assert.deepEqual(full.unchangedNames, { hashCount: 2, bitmapBytes: 9, padding: 5 });
+});
+
+test("maskText leaves text without the project or the run alone and masks every occurrence", () => {
+  assert.equal(maskText("plain", { project: "p1", run: "r1" }), "plain");
+  assert.equal(maskText(undefined, { project: "p1", run: "r1" }), "");
+  assert.equal(
+    maskText("p1 p1 r1 r1", { project: "p1", run: "r1" }),
+    "{project} {project} {run} {run}",
+  );
+  assert.equal(
+    maskText("a create_composite=Ab-_%3D.x and create_composite=Z", { project: "p1", run: "r1" }),
+    "a create_composite=<index> and create_composite=<index>",
+  );
+});
+
+test("commitGroups names an unnamed document, treats a missing time as none and nanos as zero", () => {
+  const at = (name, time) => ({
+    kind: "documentChange",
+    documentChange: { document: { name, ...(time ? { updateTime: time } : {}) } },
+  });
+  const close = global({ resumeToken: Buffer.from("t") });
+  assert.deepEqual(commitGroups([at(`${ROOT}/lsn/other`, { seconds: "1" }), close], { names }), [
+    { docs: ["<other>"], sameUpdateTime: true },
+  ]);
+  // The same second with nanos left out and nanos 0 is one time.
+  assert.deepEqual(
+    commitGroups(
+      [
+        at(`${ROOT}/lsn/r1-a`, { seconds: "1" }),
+        at(`${ROOT}/lsn/r1-b`, { seconds: "1", nanos: 0 }),
+        close,
+      ],
+      { names },
+    ),
+    [{ docs: ["a", "b"], sameUpdateTime: true }],
+  );
+  // Two documents with no time share the "none" time; one with and one without differ.
+  assert.deepEqual(
+    commitGroups([at(`${ROOT}/lsn/r1-a`), at(`${ROOT}/lsn/r1-b`), close], { names }),
+    [{ docs: ["a", "b"], sameUpdateTime: true }],
+  );
+  assert.deepEqual(commitGroups([{ kind: "documentChange" }, close], { names }), [
+    { docs: ["<other>"], sameUpdateTime: true },
+  ]);
+  // A boundary without a token, or a target change for a named target, closes nothing.
+  assert.deepEqual(
+    commitGroups(
+      [
+        at(`${ROOT}/lsn/r1-a`, { seconds: "1" }),
+        global(),
+        target("NO_CHANGE", { resumeToken: Buffer.from("t") }),
+        at(`${ROOT}/lsn/r1-b`, { seconds: "1" }),
+        close,
+      ],
+      { names },
+    ),
+    [{ docs: ["a", "b"], sameUpdateTime: true }],
+  );
+  assert.deepEqual(commitGroups([{ kind: "targetChange" }, close], { names }), []);
+});

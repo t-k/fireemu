@@ -1,7 +1,12 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { NATIVE_PROGRAMS, programProblems } from "./fs-listen/native-programs.mjs";
+import {
+  COLLECTION,
+  NATIVE_PROGRAMS,
+  SWEEP,
+  programProblems,
+} from "./fs-listen/native-programs.mjs";
 import { cleanupNative, runNative, targetFor } from "./fs-listen/native-run.mjs";
 
 test("the native programs are well formed", () => {
@@ -130,4 +135,197 @@ test("the programs run to the end against a client that answers every wait", asy
     sweep: [],
   });
   assert.equal(report.complete, true);
+});
+
+const prog = (steps, extra = {}) => ({
+  id: "native/p",
+  conditions: ["c"],
+  docs: { a: "c/{run}-a", b: "c/{run}-b" },
+  steps,
+  ...extra,
+});
+const problemsOf = (...programs) => programProblems(programs);
+
+test("programProblems: one rule at a time", () => {
+  assert.deepEqual(problemsOf(prog([])), []);
+  assert.match(problemsOf(prog([], { id: "other/p" }))[0], /id must start with native\//);
+  assert.match(problemsOf(prog([], { conditions: [] })).join(), /names no condition/);
+  assert.match(problemsOf(prog([{ do: "nope" }])).join(), /#0 \(nope\): unknown step/);
+  assert.match(problemsOf(prog([{ do: "close", stream: "s" }])).join(), /stream s is not open/);
+  assert.match(
+    problemsOf(prog([{ do: "remove", stream: "s", id: 1 }])).join(),
+    /stream s is not open/,
+  );
+  assert.match(
+    problemsOf(prog([{ do: "add", stream: "s", target: { id: 1, doc: "a" } }])).join(),
+    /stream s is not open/,
+  );
+  const open = { do: "open", stream: "s", targets: [{ id: 1, doc: "a" }] };
+  assert.match(
+    problemsOf(prog([open, open, { do: "close", stream: "s" }])).join(),
+    /stream s opened twice/,
+  );
+  // A stream can be opened again after it was closed.
+  assert.deepEqual(
+    problemsOf(prog([open, { do: "close", stream: "s" }, open, { do: "close", stream: "s" }])),
+    [],
+  );
+  assert.match(
+    problemsOf(
+      prog([
+        open,
+        { do: "add", stream: "s", target: { id: 2, doc: "zz" } },
+        { do: "close", stream: "s" },
+      ]),
+    ).join(),
+    /unknown doc zz/,
+  );
+  assert.deepEqual(
+    problemsOf(
+      prog([
+        open,
+        { do: "add", stream: "s", target: { id: 2, collectionGroup: "k" } },
+        { do: "close", stream: "s" },
+      ]),
+    ),
+    [],
+  );
+  assert.match(problemsOf(prog([{ do: "delete", doc: "zz" }])).join(), /unknown doc zz/);
+  assert.match(problemsOf(prog([{ do: "write", doc: "zz", fields: {} }])).join(), /unknown doc zz/);
+  assert.deepEqual(problemsOf(prog([{ do: "settle" }, { do: "sleep", ms: 1 }])), []);
+});
+
+test("programProblems: writes in a commit or a transaction name documents the program has", () => {
+  assert.match(
+    problemsOf(
+      prog([
+        {
+          do: "commit",
+          writes: [
+            { doc: "a", fields: {} },
+            { doc: "zz", fields: {} },
+          ],
+        },
+      ]),
+    ).join(),
+    /unknown doc zz/,
+  );
+  assert.match(
+    problemsOf(prog([{ do: "txn", writes: [{ delete: "zz" }] }])).join(),
+    /unknown doc zz/,
+  );
+  assert.deepEqual(
+    problemsOf(prog([{ do: "commit", writes: [{ doc: "a", fields: {} }, { delete: "b" }] }])),
+    [],
+  );
+});
+
+test("programProblems: a token or a read time must be saved by an earlier step, under the name used", () => {
+  const open = { do: "open", stream: "s", targets: [{ id: 1, doc: "a" }] };
+  const close = { do: "close", stream: "s" };
+  const use = (target) => ({ do: "open", stream: "r", targets: [{ id: 1, doc: "a", ...target }] });
+  const closeR = { do: "close", stream: "r" };
+  const withSave = (save, target) =>
+    problemsOf(prog([open, save, close, use(target), closeR])).join();
+  assert.equal(withSave({ do: "save", stream: "s", id: 1, token: "t" }, { resume: "t" }), "");
+  assert.equal(withSave({ do: "save", stream: "s", id: 1, time: "w" }, { readTimeFrom: "w" }), "");
+  assert.equal(
+    withSave(
+      { do: "save", stream: "s", id: 1, token: "t", time: "w" },
+      { resume: "t", readTimeFrom: "w" },
+    ),
+    "",
+  );
+  assert.equal(
+    withSave({ do: "save", stream: "s", id: 1, token: "t", time: "w" }, { resume: "w" }),
+    "",
+  );
+  assert.match(
+    withSave({ do: "save", stream: "s", id: 1, token: "t" }, { resume: "x" }),
+    /token x is not saved yet/,
+  );
+  assert.match(
+    withSave({ do: "save", stream: "s", id: 1, token: "t" }, { readTimeFrom: "x" }),
+    /read time x is not saved yet/,
+  );
+  // A save later in the program does not help an earlier open.
+  assert.match(
+    problemsOf(
+      prog([
+        use({ resume: "t" }),
+        closeR,
+        open,
+        { do: "save", stream: "s", id: 1, token: "t" },
+        close,
+      ]),
+    ).join(),
+    /token t is not saved yet/,
+  );
+  assert.match(
+    problemsOf(prog([{ do: "save", stream: "s", id: 1, token: "t" }])).join(),
+    /stream s is not open/,
+  );
+});
+
+test("programProblems: rows are named after their program and are unique across programs", () => {
+  const rec = (row) => [
+    { do: "open", stream: "s", targets: [{ id: 1, doc: "a" }] },
+    { do: "record", row, stream: "s" },
+    { do: "close", stream: "s" },
+  ];
+  assert.deepEqual(problemsOf(prog(rec("native/p/x"))), []);
+  assert.match(
+    problemsOf(prog(rec("native/pp/x"))).join(),
+    /row native\/pp\/x must start with native\/p\//,
+  );
+  assert.match(problemsOf(prog(rec("native/p"))).join(), /must start with native\/p\//);
+  assert.match(
+    problemsOf(prog(rec("native/p/x")), prog(rec("native/p/x"), { id: "native/p" })).join(),
+    /recorded twice/,
+  );
+  const other = prog(rec("native/q/x"), { id: "native/q" });
+  assert.deepEqual(problemsOf(prog(rec("native/p/x")), other), []);
+  // Two rows of one stream are two rows; the same row twice is not.
+  const twice = [
+    { do: "open", stream: "s", targets: [{ id: 1, doc: "a" }] },
+    { do: "record", row: "native/p/1", stream: "s" },
+    { do: "record", row: "native/p/2", stream: "s" },
+    { do: "close", stream: "s" },
+  ];
+  assert.deepEqual(problemsOf(prog(twice)), []);
+});
+
+test("every program owns its documents and its group, so one program's state cannot reach another's", () => {
+  const templates = NATIVE_PROGRAMS.flatMap((p) => Object.values(p.docs));
+  assert.equal(new Set(templates).size, templates.length);
+  for (const t of templates) assert.match(t, /^lsn_native\/.*\{run\}-[a-z]+-/);
+  const groupsOf = (p) =>
+    new Set(
+      [...JSON.stringify(p.steps).matchAll(/"g":"([^"]+)"|\["g","([^"]+)"\]/g)].map(
+        (m) => m[1] ?? m[2],
+      ),
+    );
+  const seen = new Map();
+  for (const p of NATIVE_PROGRAMS)
+    for (const g of groupsOf(p)) {
+      if (g.endsWith("-other")) continue;
+      assert.equal(seen.get(g), undefined, `group ${g} is used by ${seen.get(g)} and ${p.id}`);
+      seen.set(g, p.id);
+    }
+  assert.deepEqual([...seen.keys()].toSorted(), ["atomic", "filter", "proto", "resume"]);
+});
+
+test("a once target is not waited for with CURRENT, and the helper waits for every other target", () => {
+  const all = NATIVE_PROGRAMS.find((p) => p.id === "native/target-protocol").steps;
+  const onceOpen = all.findIndex((s) => s.stream === "once" && s.do === "open");
+  assert.equal(all[onceOpen + 1].until.type, "REMOVE");
+  const dup = all.findIndex((s) => s.stream === "dup" && s.do === "open");
+  assert.deepEqual(all[dup + 1], { do: "wait", stream: "dup", until: { current: 1 }, settleMs: 0 });
+  assert.deepEqual(all[dup + 2], { do: "settle" });
+});
+
+test("the sweep covers the collection the programs write to", () => {
+  assert.deepEqual(SWEEP("ROOT"), [{ parent: "ROOT", collectionId: COLLECTION }]);
+  for (const p of NATIVE_PROGRAMS)
+    for (const t of Object.values(p.docs)) assert.ok(t.startsWith(`${COLLECTION}/`));
 });

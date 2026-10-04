@@ -297,3 +297,61 @@ test("random ledgers: the deletes and the verdict follow the rules", async () =>
     assert.ok(w.present.has(stray) === strayCount > 0, `seed ${seed}: a stray is never deleted`);
   }
 });
+
+/** A journal that keeps its lines in memory. */
+const memoryJournal = () => {
+  const lines = [];
+  return { lines, append: (record) => lines.push(record), close() {} };
+};
+
+test("a Commit is journaled before it is sent and again with its answer; a refusal is journaled but issues no name", () => {
+  const journal = memoryJournal();
+  const ledger = createLedger({ journal });
+  const writes = [upd(N("a")), del(N("b"))];
+  ledger.sending(writes);
+  assert.deepEqual(journal.lines, [
+    {
+      type: "names",
+      phase: "before",
+      names: [
+        { name: N("a"), op: "create" },
+        { name: N("b"), op: "delete" },
+      ],
+    },
+  ]);
+  assert.deepEqual(ledger.entries(), [], "sending issues nothing yet");
+  ledger.answered(writes, "unknown");
+  assert.equal(journal.lines.at(-1).phase, "after");
+  assert.equal(journal.lines.at(-1).outcome, "unknown");
+  const refused = createLedger({ journal });
+  refused.answered([upd(N("c"))], "refused");
+  assert.equal(journal.lines.at(-1).outcome, "refused");
+  assert.deepEqual(refused.entries(), []);
+});
+
+test("the cleanup journals each delete batch before and after, with the answer", async () => {
+  for (const [failure, outcome] of [
+    [undefined, "ok"],
+    [Object.assign(new Error("x"), { code: 3 }), "refused"],
+    [Object.assign(new Error("x"), { code: 14 }), "unknown"],
+  ]) {
+    const w = world({ docs: [N("a")] });
+    w.client.commitFails = failure;
+    const journal = memoryJournal();
+    await settleNames({
+      issued: [[N("a"), st(true)]],
+      client: w.client,
+      root: ROOT,
+      run: RUN,
+      journal,
+    });
+    assert.deepEqual(
+      journal.lines.map((line) => [line.phase, line.outcome]),
+      [
+        ["before", undefined],
+        ["after", outcome],
+      ],
+    );
+    assert.deepEqual(journal.lines[0].names, [{ name: N("a"), op: "delete" }]);
+  }
+});

@@ -1,7 +1,21 @@
 import assert from "node:assert/strict";
+import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { test } from "node:test";
 
-import { checkProject, newRunId, parseArgs, recordNative } from "./fs-listen/record.mjs";
+import {
+  accessToken,
+  admit,
+  checkProject,
+  nativeProduction,
+  newRunId,
+  parseArgs,
+  readbackProduction,
+  recordNative,
+  sdkProduction,
+  validToken,
+} from "./fs-listen/record.mjs";
 
 test("a recording may address only the sandbox that owns its kind", () => {
   checkProject("native", "fireemu-oracle-txn");
@@ -204,4 +218,306 @@ test("recordNative can record the long program too, and defaults to the short on
   assert.deepEqual(programsFor({}), NATIVE_PROGRAMS);
   assert.deepEqual(programsFor({ "include-long": "no" }), NATIVE_PROGRAMS);
   assert.deepEqual(programsFor({ "include-long": "yes" }), [...NATIVE_PROGRAMS, ...LONG_PROGRAMS]);
+});
+
+// ---- the production wiring order (S6), the token check (S4), the journal and the read-back ----
+
+test("validToken accepts one token and refuses an empty or whitespace-bearing output without printing it", () => {
+  assert.equal(validToken("ya29.abc\n"), "ya29.abc");
+  assert.equal(validToken("  ya29.abc  "), "ya29.abc");
+  for (const bad of ["", "   \n", undefined, null, "two words", "ya29.a\nya29.b", "a\tb"]) {
+    assert.throws(
+      () => validToken(bad),
+      (error) =>
+        /empty or malformed/.test(error.message) && !String(error.message).includes("ya29"),
+      JSON.stringify(bad),
+    );
+  }
+});
+
+test("accessToken runs gcloud with fixed arguments and validates what it prints", async () => {
+  const calls = [];
+  const run = async (command, args) => {
+    calls.push([command, args]);
+    return { stdout: "ya29.token\n" };
+  };
+  assert.equal(await accessToken(run), "ya29.token");
+  assert.deepEqual(calls, [["gcloud", ["auth", "application-default", "print-access-token"]]]);
+  await assert.rejects(
+    accessToken(async () => ({ stdout: "\n" })),
+    /empty or malformed/,
+  );
+  await assert.rejects(
+    accessToken(async () => ({ stdout: "a b" })),
+    /empty or malformed/,
+  );
+});
+
+/** Dependencies that record the order of the calls; `refuse` makes one step throw. */
+function deps(order, { refuse } = {}) {
+  const step =
+    (name, value) =>
+    async (...args) => {
+      order.push(name);
+      if (refuse === name) throw new Error(`refused at ${name}`);
+      return typeof value === "function" ? value(...args) : value;
+    };
+  const journal = { append() {}, close: () => order.push("journal.close") };
+  return {
+    checkProject: (...args) => {
+      order.push("checkProject");
+      if (refuse === "checkProject") throw new Error("refused at checkProject");
+      return args;
+    },
+    admit: step("admit"),
+    loadApiKey: step("loadApiKey", "KEYKEYKEYKEYKEYKEYKEYKEYKEY"),
+    accessToken: step("accessToken", "TOKEN"),
+    newRunId: () => {
+      order.push("newRunId");
+      return "rid";
+    },
+    openJournal: (options, kind, run) => {
+      order.push(`openJournal:${kind}:${run}`);
+      if (refuse === "openJournal") throw new Error("refused at openJournal");
+      return journal;
+    },
+    createClient: () => {
+      order.push("createClient");
+      return { close: () => order.push("client.close") };
+    },
+    recordNative: step("recordNative", { rows: {} }),
+    recordSdk: step("recordSdk", { rows: {} }),
+  };
+}
+const NATIVE_OPTIONS = {
+  project: "fireemu-oracle-txn",
+  envelope: "E",
+  ledger: "L",
+  out: "o.json",
+};
+const SDK_OPTIONS = {
+  project: "fireemu-oracle-query",
+  envelope: "E",
+  ledger: "L",
+  out: "o.json",
+  "api-key-file": "K",
+};
+
+test("native production: project, admission, token, run id, journal, and only then the client and the recording", async () => {
+  const order = [];
+  await nativeProduction(NATIVE_OPTIONS, deps(order));
+  assert.deepEqual(order, [
+    "checkProject",
+    "admit",
+    "accessToken",
+    "newRunId",
+    "openJournal:native:rid",
+    "createClient",
+    "recordNative",
+    "client.close",
+    "journal.close",
+  ]);
+});
+
+test("native production: a refusal at any step makes no later call", async () => {
+  const steps = ["checkProject", "admit", "accessToken", "openJournal"];
+  for (const [index, refuse] of steps.entries()) {
+    const order = [];
+    await assert.rejects(nativeProduction(NATIVE_OPTIONS, deps(order, { refuse })), /refused at/);
+    assert.equal(order.at(-1), refuse === "openJournal" ? "openJournal:native:rid" : refuse);
+    assert.ok(!order.includes("createClient"), refuse);
+    assert.ok(!order.includes("recordNative"), refuse);
+    if (index < 2)
+      assert.ok(!order.includes("accessToken"), `${refuse}: no token before admission`);
+  }
+});
+
+test("sdk production: project, admission, key file, token, run id, journal, then the recording", async () => {
+  const order = [];
+  await sdkProduction(SDK_OPTIONS, deps(order));
+  assert.deepEqual(order, [
+    "checkProject",
+    "admit",
+    "loadApiKey",
+    "accessToken",
+    "newRunId",
+    "openJournal:sdk:rid",
+    "recordSdk",
+    "journal.close",
+  ]);
+});
+
+test("sdk production: a refusal at any step makes no later call, and the key file is never read before admission", async () => {
+  for (const refuse of ["checkProject", "admit", "loadApiKey", "accessToken", "openJournal"]) {
+    const order = [];
+    await assert.rejects(sdkProduction(SDK_OPTIONS, deps(order, { refuse })), /refused at/);
+    assert.ok(!order.includes("recordSdk"), refuse);
+    if (refuse === "checkProject" || refuse === "admit")
+      assert.ok(!order.includes("loadApiKey") && !order.includes("accessToken"), refuse);
+    if (refuse === "loadApiKey") assert.ok(!order.includes("accessToken"));
+    if (refuse !== "openJournal") assert.ok(!order.includes("openJournal:sdk:rid"), refuse);
+  }
+  // A missing key file option is refused after admission and before any token.
+  const order = [];
+  const { "api-key-file": _omitted, ...withoutKey } = SDK_OPTIONS;
+  await assert.rejects(sdkProduction(withoutKey, deps(order)), /--api-key-file/);
+  assert.deepEqual(order, ["checkProject", "admit"]);
+});
+
+test("the journal is closed even when the recording throws", async () => {
+  const order = [];
+  const d = deps(order);
+  d.recordNative = async () => {
+    throw new Error("boom");
+  };
+  await assert.rejects(nativeProduction(NATIVE_OPTIONS, d), /boom/);
+  assert.deepEqual(order.slice(-2), ["client.close", "journal.close"]);
+});
+
+test("a native production client refreshes its token through the same checked command", async () => {
+  let options;
+  const d = deps([]);
+  d.createClient = (o) => {
+    options = o;
+    return { close() {} };
+  };
+  await nativeProduction(NATIVE_OPTIONS, d);
+  assert.equal(options.refreshToken, d.accessToken);
+  assert.equal(options.token, "TOKEN");
+  assert.deepEqual(options.target, { kind: "production" });
+});
+
+test("recordNative returns the run, the end time, the issued names and the request count, and journals an end line", async () => {
+  const lines = [];
+  const client = {
+    ...failingClient(3),
+    requestCount: () => 42,
+  };
+  const recording = await recordNative({
+    client,
+    project: "p",
+    run: "r9",
+    clock: fakeClock(),
+    journal: { append: (line) => lines.push(line), close() {} },
+  });
+  assert.equal(recording.run, "r9");
+  assert.equal(recording.productionRequests, 42);
+  assert.ok(
+    Array.isArray(recording.issued) && recording.issued.every((n) => n.includes("/lsn_native")),
+  );
+  assert.match(recording.endedAt, /^\d{4}-\d\d-\d\dT/);
+  assert.deepEqual(lines.at(-1), { type: "end", productionRequests: 42 });
+  const local = await recordNative({
+    client: failingClient(3),
+    project: "p",
+    run: "r9",
+    clock: fakeClock(),
+  });
+  assert.equal(local.productionRequests, null);
+});
+
+test("readback: a native journal is read through the client and nothing is deleted", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "rb-"));
+  const journal = join(dir, "j.jsonl");
+  writeFileSync(
+    journal,
+    [
+      { type: "run", runId: "r1", kind: "native", project: "fireemu-oracle-txn" },
+      { type: "names", phase: "before", names: [{ name: "n/a", op: "create" }] },
+    ]
+      .map((r) => JSON.stringify(r))
+      .join("\n"),
+  );
+  const calls = [];
+  const d = {
+    accessToken: async () => "T",
+    createClient: () => ({
+      missing: async (names) => {
+        calls.push(["missing", names]);
+        return names.map((name) => ({ name, exists: false }));
+      },
+      commit: async () => calls.push(["commit"]),
+      close: () => calls.push(["close"]),
+    }),
+  };
+  const report = await readbackProduction({ journal, project: "fireemu-oracle-txn" }, d);
+  assert.equal(report.clean, true);
+  assert.deepEqual(calls, [["missing", ["n/a"]], ["close"]]);
+  // The journal's own project and kind decide: another project is refused before any token.
+  let tokenAsked = false;
+  await assert.rejects(
+    readbackProduction(
+      { journal, project: "fireemu-oracle-query" },
+      { accessToken: async () => (tokenAsked = true) },
+    ),
+    /may address only|another project/,
+  );
+  assert.equal(tokenAsked, false);
+  await assert.rejects(readbackProduction({ project: "fireemu-oracle-txn" }, d), /--journal/);
+});
+
+test("admit needs the ledger and the envelope, and reads the real lock and ledger files for that envelope", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "admit-"));
+  const ledger = join(dir, "sandbox-ledger.jsonl");
+  mkdirSync(join(dir, "sandbox-locks"));
+  writeFileSync(ledger, "");
+  const project = "fireemu-oracle-txn";
+  writeFileSync(
+    join(dir, "sandbox-locks", `${project}.lock`),
+    JSON.stringify({ taskId: "FS-LISTEN-SDK-SANDBOX", envelopeId: "E1" }),
+  );
+  await assert.rejects(admit({ project, envelope: "E1" }), /--ledger/);
+  await assert.rejects(admit({ project, ledger }), /--envelope/);
+  await assert.rejects(admit({ project, ledger, envelope: "E2" }), /not held for envelope E2/);
+  await admit({ project, ledger, envelope: "E1" });
+});
+
+test("a crash during the third Commit leaves a journal that names the run and every name sent, and the read-back finds them", async () => {
+  const { createJournal, issuedFromJournal, readbackJournal } =
+    await import("./fs-listen/journal.mjs");
+  const dir = mkdtempSync(join(tmpdir(), "crash-"));
+  const path = join(dir, "run.journal.jsonl");
+  const journal = createJournal(path);
+  journal.append({ type: "run", runId: "r1", kind: "native", project: "p" });
+  const { readFileSync } = await import("node:fs");
+  const docs = new Set();
+  let snapshot;
+  let commits = 0;
+  const client = {
+    ...failingClient(3),
+    async commit({ writes }) {
+      commits += 1;
+      if (commits === 3) {
+        // The process dies here: what is on disk now is all that survives.
+        snapshot = readFileSync(path, "utf8");
+        throw Object.assign(new Error("killed"), { code: 14 });
+      }
+      for (const w of writes) {
+        if (w.update) docs.add(w.update.name);
+      }
+    },
+    async missing(names) {
+      return names.map((name) => ({ name, exists: docs.has(name) }));
+    },
+  };
+  await recordNative({ client, project: "p", run: "r1", clock: fakeClock(), journal });
+  const issued = issuedFromJournal(snapshot);
+  assert.equal(issued.run.runId, "r1");
+  assert.equal(issued.ended, false);
+  assert.ok(
+    issued.names.length >= 1,
+    "the names of the commits sent so far, including the one in flight",
+  );
+  assert.ok(issued.names.every((name) => name.includes("/lsn_native/r1-")));
+  const report = await readbackJournal({
+    text: snapshot,
+    client: { missing: async (names) => names.map((name) => ({ name, exists: docs.has(name) })) },
+    accountClient: { lookup: async () => [] },
+  });
+  assert.equal(
+    report.clean,
+    false,
+    "a name the run created is still there and the read-back says so",
+  );
+  assert.ok(report.names.some((entry) => entry.exists));
 });

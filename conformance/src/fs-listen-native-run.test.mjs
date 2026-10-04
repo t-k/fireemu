@@ -1109,3 +1109,73 @@ test("a refresh step waits for the client's new token before the next step; a sl
   ]);
   assert.deepEqual(events, [], "only a refresh step refreshes");
 });
+
+test("every Commit is journaled before the client sends it and again with its answer (a crash then still names the run's names)", async () => {
+  const { createLedger } = await import("./fs-listen/native-ledger.mjs");
+  const lines = [];
+  const ledger = createLedger({ journal: { append: (r) => lines.push(r), close() {} } });
+  const { client, clock } = fakeClient({});
+  const commit = client.commit;
+  let seenBeforeSend;
+  client.commit = async (request) => {
+    seenBeforeSend = lines.map((l) => l.phase);
+    return commit(request);
+  };
+  await runNative(
+    [
+      {
+        id: "native/t",
+        conditions: ["x"],
+        docs: { a: "lsn/{run}-a" },
+        steps: [{ do: "seed", doc: "a", fields: {} }],
+      },
+    ],
+    {
+      client,
+      project: PROJECT,
+      run: RUN,
+      ledger,
+      sleep: async (ms) => {
+        await Promise.resolve();
+        clock.t += ms;
+      },
+      now: () => clock.t,
+    },
+  );
+  assert.deepEqual(seenBeforeSend, ["before"]);
+  assert.deepEqual(
+    lines.map((l) => [l.phase, l.outcome]),
+    [
+      ["before", undefined],
+      ["after", "ok"],
+    ],
+  );
+  assert.deepEqual(lines[0].names, [{ name: `${ROOT}/lsn/${RUN}-a`, op: "create" }]);
+});
+
+test("a definite refusal is journaled as refused and an unknown answer as unknown", async () => {
+  const { createLedger } = await import("./fs-listen/native-ledger.mjs");
+  for (const [code, outcome] of [
+    [7, "refused"],
+    [14, "unknown"],
+  ]) {
+    const lines = [];
+    const ledger = createLedger({ journal: { append: (r) => lines.push(r), close() {} } });
+    const { client } = fakeClient({});
+    client.commit = async () => {
+      throw Object.assign(new Error("x"), { code });
+    };
+    await runNative(
+      [
+        {
+          id: "native/t",
+          conditions: ["x"],
+          docs: { a: "lsn/{run}-a" },
+          steps: [{ do: "seed", doc: "a", fields: {} }],
+        },
+      ],
+      { client, project: PROJECT, run: RUN, ledger, sleep: async () => {}, now: () => 0 },
+    );
+    assert.equal(lines.at(-1).outcome, outcome, `${code}`);
+  }
+});

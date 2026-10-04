@@ -866,7 +866,9 @@ test("recordSdk against production stops on a failed key preflight before any ac
       }),
       /different project/,
     );
-    assert.deepEqual(asked, { apiKey: KEY, project: "fireemu-oracle-query", token: "TOK" });
+    const { onRequest, ...rest } = asked;
+    assert.deepEqual(rest, { apiKey: KEY, project: "fireemu-oracle-query", token: "TOK" });
+    assert.equal(typeof onRequest, "function");
     assert.deepEqual([fetched, drove, madeNative], [0, 0, 0]);
     // A local target is not preflighted.
     let localAsked = false;
@@ -993,4 +995,169 @@ test("recordSdk: a case whose step threw makes the cleanup incomplete even when 
   });
   assert.equal(threw.recording.cleanup.writesKnown, false);
   assert.equal(threw.recording.cleanup.complete, false);
+});
+
+const PROD = {
+  kind: "production",
+  project: "fireemu-oracle-query",
+  token: "TOK",
+  web: { apiKey: "k", authDomain: "d", projectId: "fireemu-oracle-query" },
+};
+const OKDRIVER = {
+  receipt: { thrown: null, cleanup: { complete: true }, teardown: [], cases: [] },
+  wire: 5,
+  connections: 1,
+};
+const emptyNative = (extra = {}) => ({
+  close() {},
+  async listIds() {
+    return [];
+  },
+  async missing(names) {
+    return names.map((name) => ({ name, exists: false }));
+  },
+  async commit() {},
+  ...extra,
+});
+
+test("ledger 330: a non-empty conf_listen before the run stops it before any account is made, and nothing is deleted", async () => {
+  const commits = [];
+  const { recording, fetched, drove } = await recordWith(PROD, {
+    native: emptyNative({
+      listIds: async () => ["projects/p/databases/(default)/documents/conf_listen/someone-else"],
+      commit: async (request) => commits.push(request),
+    }),
+  });
+  assert.deepEqual(fetched, [], "no account was made");
+  assert.equal(
+    drove.some((entry) => entry.config),
+    false,
+    "the driver never started",
+  );
+  assert.match(recording.errors["sdk/run"], /conf_listen is not empty before the run/);
+  assert.equal(recording.cleanup.complete, false);
+  assert.deepEqual(commits, []);
+});
+
+test("ledger 330: documents left in conf_listen after the sweep make the cleanup incomplete and are named, not deleted", async () => {
+  const left = "projects/p/databases/(default)/documents/conf_listen/stray";
+  let listed = 0;
+  const commits = [];
+  const { recording } = await recordWith(PROD, {
+    driver: OKDRIVER,
+    native: emptyNative({
+      listIds: async ({ prefix }) => (prefix === "" && ++listed === 2 ? [left] : []),
+      commit: async (request) => commits.push(request),
+    }),
+  });
+  assert.equal(listed, 2, "listed once before and once after");
+  assert.equal(recording.cleanup.complete, false);
+  assert.deepEqual(recording.cleanup.documents.confListenLeft, [left]);
+  assert.deepEqual(commits, []);
+  // Empty before and after: complete.
+  const clean = await recordWith(PROD, { driver: OKDRIVER });
+  assert.equal(clean.recording.cleanup.documents.confListenLeft, undefined);
+  assert.equal(clean.recording.cleanup.complete, true);
+});
+
+test("a local recording does not list conf_listen (the emulator starts empty)", async () => {
+  const { recording } = await recordWith(
+    { kind: "local", project: "demo", firestore: { host: "h", port: 1 }, auth: "http://a" },
+    {
+      driver: OKDRIVER,
+      native: emptyNative({
+        listIds: async ({ prefix }) => {
+          if (prefix === "") throw new Error("must not list the whole collection");
+          return [];
+        },
+      }),
+    },
+  );
+  assert.equal(recording.cleanup.complete, true);
+  assert.equal(recording.productionRequests, null);
+});
+
+test("productionRequests counts the preflight, the accounts' calls, the native client's calls and the wire records", async () => {
+  const { recording } = await recordWith(PROD, {
+    driver: OKDRIVER,
+    native: emptyNative({ requestCount: () => 7 }),
+  });
+  // preflight (recordWith's is a no-op): 0; accounts: 2 creates + 2 deletes + 2 lookups = 6;
+  // native: 7; wire: 5.
+  assert.equal(recording.productionRequests, 0 + 6 + 7 + 5);
+  assert.equal(recording.run, "r1");
+  assert.match(recording.endedAt, /^\d{4}-\d\d-\d\dT/);
+});
+
+test("the preflight's reads are counted even when it throws, and a driver that dies still reports its wire count", async () => {
+  const counted = [];
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = async () => ({ status: 200, json: async () => ({ localId: "u" }) });
+  try {
+    const { recording } = await (async () => {
+      const recorded = await recordSdk({
+        target: PROD,
+        run: "r1",
+        preflightImpl: async ({ onRequest }) => {
+          onRequest();
+          onRequest();
+          counted.push("preflight");
+        },
+        runDriverImpl: async () => {
+          throw Object.assign(new Error("died"), { wire: 11 });
+        },
+        makeNative: () => emptyNative(),
+      });
+      return { recording: recorded };
+    })();
+    assert.equal(recording.productionRequests, 2 + 6 + 0 + 11);
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+});
+
+test("the SDK run journals the names the cases may write before the driver starts, and an end line with the request count", async () => {
+  const lines = [];
+  const journal = { append: (record) => lines.push(record), close() {} };
+  let linesAtDriver;
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = async (url, init) => ({
+    status: 200,
+    json: async () =>
+      url.endsWith("/accounts") ? { localId: `u-${JSON.parse(init.body).email}` } : {},
+  });
+  try {
+    await recordSdk({
+      target: PROD,
+      run: "r1",
+      journal,
+      preflightImpl: async () => {},
+      runDriverImpl: async () => {
+        linesAtDriver = lines.map((line) => line.type);
+        return OKDRIVER;
+      },
+      makeNative: () => emptyNative(),
+    });
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+  assert.ok(linesAtDriver.includes("names"), "the names were journaled before the driver ran");
+  const names = lines.find((line) => line.type === "names").names.map((n) => n.name);
+  assert.ok(names.some((name) => name.endsWith("/conf_listen/r1-alpha")));
+  assert.ok(names.some((name) => name.includes("/conf_rules_owner/u-fsl-r1-a@example.com")));
+  assert.equal(lines.at(-1).type, "end");
+  assert.equal(typeof lines.at(-1).productionRequests, "number");
+  assert.equal(lines.filter((l) => l.type === "account" && l.phase === "before").length, 2);
+});
+
+test("runDriver's rejection carries the wire and connection counts it saw", async () => {
+  const child = new EventEmitter();
+  child.stdout = new PassThrough();
+  child.stdin = new PassThrough();
+  child.kill = () => {};
+  const promise = runDriver({ config: {}, input: {}, spawnImpl: () => child });
+  child.stdout.write('{"event":"wire"}\n{"event":"wire"}\n{"event":"connection"}\n');
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  child.emit("close", 1);
+  await assert.rejects(promise, (error) => error.wire === 2 && error.connections === 1);
 });

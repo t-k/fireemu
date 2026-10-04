@@ -9,6 +9,7 @@ import { createInterface } from "node:readline";
 import { fileURLToPath } from "node:url";
 
 import { createAccountClient, createAccountSession } from "./accounts.mjs";
+import { NULL_JOURNAL } from "./journal.mjs";
 import { createNativeClient } from "./native-client.mjs";
 import { createLedger, settleNames } from "./native-ledger.mjs";
 import { OWNER_COLLECTION, PUBLIC_COLLECTION } from "./sdk-cases.mjs";
@@ -62,8 +63,15 @@ export async function loadApiKey(
  * from Resource Manager under the owner's token. They must be the same, and either missing stops
  * the run. Messages never carry the key or a number.
  */
-export async function preflightKey({ apiKey, project, token, fetchImpl = globalThis.fetch }) {
+export async function preflightKey({
+  apiKey,
+  project,
+  token,
+  fetchImpl = globalThis.fetch,
+  onRequest = () => {},
+}) {
   const read = async (url, headers, what) => {
+    onRequest();
     let response;
     try {
       response = await fetchImpl(url, {
@@ -162,8 +170,11 @@ export function runDriver({ config, input, timeoutMs = DRIVER_TIMEOUT_MS, spawnI
       if (receipt) resolve({ receipt, wire, connections, refused });
       else
         reject(
-          new Error(
-            `sdk driver ended (${code}) without a receipt: ${driverError ?? refused?.reason ?? "no reason"}`,
+          Object.assign(
+            new Error(
+              `sdk driver ended (${code}) without a receipt: ${driverError ?? refused?.reason ?? "no reason"}`,
+            ),
+            { wire, connections },
           ),
         );
     });
@@ -218,17 +229,34 @@ export async function recordSdk({
   runDriverImpl = runDriver,
   makeNative = createNativeClient,
   preflightImpl = preflightKey,
+  journal = NULL_JOURNAL,
 }) {
   const startedAt = new Date().toISOString();
   const production = target.kind === "production";
+  // Every production request but the token commands: the preflight reads, the accounts' calls, the
+  // native client's calls and the SDK's own wire records.
+  let preflightRequests = 0;
+  let wire = 0;
+  let accountClient;
+  let native;
+  const productionRequests = () =>
+    production
+      ? preflightRequests +
+        (accountClient?.requestCount?.() ?? 0) +
+        (native?.requestCount?.() ?? 0) +
+        wire
+      : null;
   // The key must belong to this project before an account is made or a request is signed in.
   if (production)
     await preflightImpl({
       apiKey: target.web.apiKey,
       project: target.project,
       token: target.token,
+      onRequest: () => {
+        preflightRequests += 1;
+      },
     });
-  const accountClient = createAccountClient({
+  accountClient = createAccountClient({
     base: production
       ? "https://identitytoolkit.googleapis.com"
       : `${target.auth}/identitytoolkit.googleapis.com`,
@@ -237,8 +265,8 @@ export async function recordSdk({
       ? { authorization: `Bearer ${target.token}`, "x-goog-user-project": target.project }
       : { authorization: "Bearer owner" },
   });
-  const session = createAccountSession({ client: accountClient, run });
-  const native = makeNative({
+  const session = createAccountSession({ client: accountClient, run, journal });
+  native = makeNative({
     project: target.project,
     target: production ? { kind: "production" } : { kind: "local", ...target.firestore },
     token: target.token,
@@ -246,9 +274,30 @@ export async function recordSdk({
   const errors = {};
   let accounts = {};
   let outcome;
+  let confListenBefore;
+  const root = `projects/${target.project}/databases/(default)/documents`;
   try {
+    // Ledger 330: the query cases read conf_listen as empty before the run; if it is not, stop
+    // without deleting anything (nothing has been made yet).
+    if (production) {
+      confListenBefore = await native.listIds({
+        parent: root,
+        collectionId: PUBLIC_COLLECTION,
+        prefix: "",
+      });
+      if (confListenBefore.length > 0)
+        throw new Error(`${PUBLIC_COLLECTION} is not empty before the run: nothing was made`);
+    }
     accounts = await session.create(["a", "b"]);
     log("accounts created");
+    journal.append({
+      type: "names",
+      phase: "before",
+      names: issuedSdkNames({ project: target.project, run, accounts }).map((name) => ({
+        name,
+        op: "create",
+      })),
+    });
     const config = {
       mode: production ? "production" : "local",
       wireCap: WIRE_CAP,
@@ -259,12 +308,23 @@ export async function recordSdk({
       ...(production ? {} : { authEmulator: target.auth, firestoreEmulator: target.firestore }),
     };
     outcome = await runDriverImpl({ config, input: { run, accounts } });
+    wire = outcome.wire ?? 0;
   } catch (error) {
     errors["sdk/run"] = String(error?.message ?? error);
+    wire = error?.wire ?? 0;
   }
   let documents;
   try {
     documents = await sweepDocuments({ client: native, project: target.project, run, accounts });
+    // Ledger 330 again at the end: conf_listen must be empty; anything left is reported, not deleted.
+    if (production) {
+      const left = await native.listIds({
+        parent: root,
+        collectionId: PUBLIC_COLLECTION,
+        prefix: "",
+      });
+      if (left.length > 0) documents = { ...documents, complete: false, confListenLeft: left };
+    }
   } catch (error) {
     documents = { complete: false, error: String(error?.message ?? error) };
   } finally {
@@ -281,13 +341,19 @@ export async function recordSdk({
   const clientsClosed = receipt ? receipt.teardown.every((t) => t.closed) : false;
   // A write that threw has an unknown outcome, which a read that finds nothing cannot settle.
   const writesKnown = receipt ? !unknownWrites(receipt) : false;
+  const total = productionRequests();
+  journal.append({ type: "end", productionRequests: total });
   return {
     version: 1,
     kind: "sdk",
+    run,
     startedAt,
+    endedAt: new Date().toISOString(),
     node: process.version,
     sdk: "firebase 12.18.0",
     requests: outcome ? outcome.wire : 0,
+    productionRequests: total,
+    issued: issuedSdkNames({ project: target.project, run, accounts }),
     connections: outcome ? outcome.connections : 0,
     errors,
     cleanup: {

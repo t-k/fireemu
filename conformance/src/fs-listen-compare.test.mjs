@@ -11,6 +11,7 @@ import {
   classifyRow,
   compareRecordings,
   recordingProblems,
+  settlementProblems,
 } from "./fs-listen/compare.mjs";
 
 // A small seeded generator, so a failing property replays.
@@ -231,8 +232,8 @@ test("recordingProblems names an incomplete cleanup, a program error and a wrong
     /cleanup was not complete/,
   );
   assert.match(
-    recordingProblems(recording({}, { errors: { "native/x": "boom" } })).join(),
-    /native\/x: boom/,
+    recordingProblems(recording({}, { errors: { "sdk/run": "boom" } })).join(),
+    /sdk\/run: boom/,
   );
   assert.match(recordingProblems(recording({}, { version: 2 })).join(), /version/);
 });
@@ -659,4 +660,146 @@ test("the comparer reads the recorded production listener events, row by row", (
     classifyRow({ ...plain, observed: refused }, { ...plain, observed: permitted }),
     "DIFFER",
   );
+});
+
+// A production recording whose program threw: only that program's rows are unfinished (S1).
+const prow = (program, n = 1) => ({ ...row(n), program });
+
+test("one program's error makes only that program's rows INDETERMINATE", () => {
+  const a = recording(
+    { "t/one": prow("native/t1"), "t/two": prow("native/t2") },
+    { errors: { "native/t2": "no saved token t0" } },
+  );
+  const b = recording({ "t/one": prow("native/t1"), "t/two": prow("native/t2") });
+  const local = recording({ "t/one": prow("native/t1"), "t/two": prow("native/t2") });
+  const report = compareRecordings({ productions: [a, b], local });
+  assert.equal(report.rows["t/one"].status, "MATCH");
+  assert.equal(report.rows["t/two"].status, "INDETERMINATE");
+  assert.equal(report.ok, false, "an unfinished row is never a pass");
+  // The same for the local recording, and in the other production recording.
+  const badLocal = { ...local, errors: { "native/t2": "boom" } };
+  const r2 = compareRecordings({ productions: [b, b], local: badLocal });
+  assert.equal(r2.rows["t/two"].status, "INDETERMINATE");
+  assert.equal(r2.rows["t/one"].status, "MATCH");
+});
+
+test("an error that is not one program's still makes a production recording unfit", () => {
+  for (const key of ["sdk/run", "sdk/driver", "native", ""]) {
+    const bad = recording({}, { errors: { [key]: "boom" } });
+    assert.throws(
+      () => compareRecordings({ productions: [bad, recording({})], local: recording({}) }),
+      /not clean/,
+      key,
+    );
+  }
+});
+
+test("an end with no status is unfinished, like a frame cap", () => {
+  const noStatus = { ...row(1), end: { reason: "ended-without-status", code: null } };
+  assert.equal(classifyRow(noStatus, row(1)), "INDETERMINATE");
+  assert.equal(classifyRow(row(1), noStatus), "INDETERMINATE");
+  const ended = { ...row(1), end: { reason: "ended", code: 0 } };
+  assert.equal(classifyRow(ended, ended), "MATCH");
+});
+
+const RUN_END = "2026-10-05T10:00:00.000Z";
+const settledRecording = (extra = {}) =>
+  recording(
+    { r: row(1) },
+    {
+      run: "r1",
+      endedAt: RUN_END,
+      issued: ["n/a", "n/b"],
+      cleanup: { complete: false, accounts: { rows: [{ email: "a@example.com", uid: "u1" }] } },
+      ...extra,
+    },
+  );
+const readback = (extra = {}) => ({
+  run: "r1",
+  readAt: "2026-10-05T10:10:00.000Z",
+  clean: true,
+  names: [
+    { name: "n/a", exists: false },
+    { name: "n/b", exists: false },
+  ],
+  accounts: [{ email: "a@example.com", foundByEmail: [], foundByUid: [] }],
+  ...extra,
+});
+
+test("an incomplete cleanup is accepted with an A2 read-back that names the run and shows everything absent", () => {
+  assert.deepEqual(settlementProblems(settledRecording(), readback()), []);
+  const ok = compareRecordings({
+    productions: [settledRecording(), recording({ r: row(1) })],
+    local: recording({ r: row(1) }),
+    settlements: [readback()],
+  });
+  assert.equal(ok.rows.r.status, "MATCH");
+  assert.equal(ok.ok, true);
+  assert.throws(
+    () =>
+      compareRecordings({
+        productions: [settledRecording(), recording({ r: row(1) })],
+        local: recording({ r: row(1) }),
+      }),
+    /cleanup was not complete$/,
+  );
+});
+
+test("an A2 read-back that is for another run, too early, not clean or incomplete does not settle", () => {
+  const problems = (settlement, recordingExtra) =>
+    settlementProblems(settledRecording(recordingExtra), settlement).join(";");
+  assert.match(problems(readback({ run: "r2" })), /another run/);
+  assert.match(problems(readback({ clean: false })), /not clean/);
+  assert.match(problems(readback({ readAt: "2026-10-05T10:09:59.999Z" })), /10 minutes/);
+  assert.match(problems(readback({ readAt: "2026-10-05T10:10:00.000Z" })), /^$/);
+  assert.match(problems(readback({ readAt: "soon" })), /10 minutes/);
+  assert.match(problems(readback({ names: [{ name: "n/a", exists: false }] })), /n\/b absent/);
+  assert.match(
+    problems(
+      readback({
+        names: [
+          { name: "n/a", exists: false },
+          { name: "n/b", exists: true },
+        ],
+      }),
+    ),
+    /n\/b absent/,
+  );
+  assert.match(problems(readback({ accounts: [] })), /account a@example.com absent/);
+  assert.match(
+    problems(
+      readback({ accounts: [{ email: "a@example.com", foundByEmail: ["u1"], foundByUid: [] }] }),
+    ),
+    /account a@example.com absent/,
+  );
+  assert.match(
+    problems(
+      readback({ accounts: [{ email: "a@example.com", foundByEmail: [], foundByUid: null }] }),
+    ),
+    /account a@example.com absent/,
+  );
+  assert.match(problems(undefined), /no A2 read-back/);
+  assert.match(problems(readback(), { issued: undefined }), /lists no issued names/);
+  assert.match(problems(readback(), { run: undefined }), /another run/);
+});
+
+test("the command line takes the A2 read-backs with --settlements", () => {
+  const files = {
+    p1: settledRecording(),
+    p2: recording({ r: row(1) }),
+    good: recording({ r: row(1) }),
+    s: [readback()],
+  };
+  const withS = runCli(files, (f) => [
+    "--production",
+    f.p1,
+    f.p2,
+    "--local",
+    f.good,
+    "--settlements",
+    f.s,
+  ]);
+  assert.equal(withS.code, 0, withS.stderr);
+  const without = runCli(files, (f) => ["--production", f.p1, f.p2, "--local", f.good]);
+  assert.equal(without.code, 2);
 });

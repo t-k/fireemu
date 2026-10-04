@@ -3,24 +3,42 @@
 // deleted; an unknown answer is settled by a direct read of that very name, and absence alone
 // never settles an unknown create. A listing is only a check for strays and deletes nothing.
 
+import { NULL_JOURNAL } from "./journal.mjs";
+
 /** gRPC codes that say the request was not applied (a definite refusal). Anything else is unknown. */
 export const DEFINITIVE_CODES = new Set([3, 5, 6, 7, 8, 9, 11, 12, 16]);
 
 export const isDefinitiveRefusal = (error) => DEFINITIVE_CODES.has(error?.code);
 
-/** The issued names: `present` is true, false or "unknown"; `unknownDelete` is sticky. */
-export function createLedger() {
+const described = (writes) =>
+  writes.map((write) =>
+    write.delete !== undefined
+      ? { name: write.delete, op: "delete" }
+      : { name: write.update.name, op: "create" },
+  );
+
+/**
+ * The issued names: `present` is true, false or "unknown"; `unknownDelete` is sticky. Every Commit
+ * is journaled before it is sent (`sending`) and after its answer (`answered`).
+ */
+export function createLedger({ journal = NULL_JOURNAL } = {}) {
   const names = new Map();
   const entry = (name) => {
     if (!names.has(name)) names.set(name, { present: false, unknownDelete: false });
     return names.get(name);
   };
   return {
+    /** Journals the names a Commit is about to send, before the request goes out. */
+    sending(writes) {
+      journal.append({ type: "names", phase: "before", names: described(writes) });
+    },
     /**
-     * Records the answer to one Commit: "ok" (a complete 2xx) or "unknown". A definite refusal is
-     * not recorded: it applied nothing and issued no name.
+     * Records the answer to one Commit: "ok" (a complete 2xx) or "unknown". A definite refusal
+     * ("refused") is journaled only: it applied nothing and issued no name.
      */
     answered(writes, outcome) {
+      journal.append({ type: "names", phase: "after", outcome, names: described(writes) });
+      if (outcome === "refused") return;
       for (const write of writes) {
         const isDelete = write.delete !== undefined;
         const state = entry(isDelete ? write.delete : write.update.name);
@@ -47,7 +65,7 @@ export function collectionOf(name, root) {
  * Settles the run's names. `issued` is `ledger.entries()`; `client` reads (`missing`), deletes
  * (`commit`) and lists (`listIds`). Returns what was deleted and every reason it is not complete.
  */
-export async function settleNames({ issued, client, root, run }) {
+export async function settleNames({ issued, client, root, run, journal = NULL_JOURNAL }) {
   const names = issued.map(([name]) => name);
   const state = new Map(issued);
   const before = new Map((await client.missing(names)).map((e) => [e.name, e.exists]));
@@ -63,13 +81,16 @@ export async function settleNames({ issued, client, root, run }) {
   const unknownDeletes = new Set(issued.filter(([, s]) => s.unknownDelete).map(([name]) => name));
   for (let i = 0; i < toDelete.length; i += 100) {
     const batch = toDelete.slice(i, i + 100).map((name) => ({ delete: name }));
+    journal.append({ type: "names", phase: "before", names: described(batch) });
+    let outcome = "ok";
     try {
       await client.commit({ writes: batch });
     } catch (error) {
       // A refused delete is read back below; an unknown one is sticky for these names.
-      if (!isDefinitiveRefusal(error))
-        for (const { delete: name } of batch) unknownDeletes.add(name);
+      outcome = isDefinitiveRefusal(error) ? "refused" : "unknown";
+      if (outcome === "unknown") for (const { delete: name } of batch) unknownDeletes.add(name);
     }
+    journal.append({ type: "names", phase: "after", outcome, names: described(batch) });
   }
   const after = new Map((await client.missing(names)).map((e) => [e.name, e.exists]));
   const stillPresent = names.filter((name) => after.get(name) !== false);

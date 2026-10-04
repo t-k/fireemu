@@ -87,6 +87,10 @@ const targetProtocol = {
     { do: "open", stream: "zero", targets: [{ id: 0, doc: "a" }] },
     { do: "wait", stream: "zero", until: { frames: 3 }, settleMs: 2000, timeoutMs: 10_000 },
     { do: "record", row: "native/target-protocol/server-assigned-id", stream: "zero" },
+    // A second target with id 0 on the same stream: the next id the server picks.
+    { do: "add", stream: "zero", target: { id: 0, doc: "b" } },
+    { do: "settle" },
+    { do: "record", row: "native/target-protocol/second-zero-id", stream: "zero" },
     { do: "add", stream: "zero", target: { id: 7, doc: "b" } },
     { do: "settle" },
     { do: "record", row: "native/target-protocol/id-after-assigned", stream: "zero" },
@@ -300,6 +304,43 @@ const commitAtomicVisibility = {
   ],
 };
 
+/** How long the expired token waits: past the 30 minutes a backend can resume from, with margin. */
+export const EXPIRY_WAIT_MS = 35 * 60_000;
+
+/**
+ * expired token: the stale case of raw-resume-token. A long program (about 35 minutes of waiting on
+ * an unbilled project); it is run only on request (`--include-long`) and last, after a token refresh.
+ */
+const resumeTokenExpired = {
+  id: "native/resume-token-expired",
+  conditions: [CONDITION.resume],
+  long: true,
+  docs: docsFor("expired"),
+  steps: [
+    { do: "seed", doc: "a", fields: { n: 1, g: "expired" } },
+    ...openAndWait(
+      "first",
+      [{ id: 1, query: inGroup("expired") }],
+      "native/resume-token-expired/first",
+    ),
+    { do: "save", stream: "first", id: 1, token: "old" },
+    { do: "close", stream: "first" },
+    { do: "sleep", ms: EXPIRY_WAIT_MS },
+    { do: "refresh" },
+    { do: "write", doc: "a", fields: { n: 2, g: "expired" } },
+    { do: "open", stream: "late", targets: [{ id: 1, query: inGroup("expired"), resume: "old" }] },
+    { do: "wait", stream: "late", until: { current: 1 }, timeoutMs: 60_000 },
+    { do: "record", row: "native/resume-token-expired/expired", stream: "late" },
+    { do: "close", stream: "late" },
+    ...openAndWait(
+      "fresh",
+      [{ id: 1, query: inGroup("expired") }],
+      "native/resume-token-expired/fresh-control",
+    ),
+    { do: "close", stream: "fresh" },
+  ],
+};
+
 export const NATIVE_PROGRAMS = [
   targetLifecycle,
   targetProtocol,
@@ -308,8 +349,8 @@ export const NATIVE_PROGRAMS = [
   commitAtomicVisibility,
 ];
 
-/** The collections whose run-prefixed documents the cleanup sweeps. */
-export const SWEEP = (root) => [{ parent: root, collectionId: COLLECTION }];
+/** The programs only an explicit request runs, after the others. */
+export const LONG_PROGRAMS = [resumeTokenExpired];
 
 /** Checks a program list is well formed; returns the problems (empty when it is). */
 export function programProblems(programs) {
@@ -357,6 +398,7 @@ export function programProblems(programs) {
           break;
         case "settle":
         case "sleep":
+        case "refresh":
           break;
         case "remove":
         case "wait":

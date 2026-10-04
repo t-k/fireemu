@@ -10,6 +10,7 @@ import { fileURLToPath } from "node:url";
 
 import { createAccountClient, createAccountSession } from "./accounts.mjs";
 import { createNativeClient } from "./native-client.mjs";
+import { settleNames } from "./native-ledger.mjs";
 import { OWNER_COLLECTION, PUBLIC_COLLECTION } from "./sdk-cases.mjs";
 
 const DRIVER = fileURLToPath(new URL("./sdk-driver.mjs", import.meta.url));
@@ -95,6 +96,7 @@ export async function preflightKey({ apiKey, project, token, fetchImpl = globalT
   if (!isNumber(keyed.projectId)) throw new Error("the key read gave no project number");
   if (!isNumber(owned.projectNumber)) throw new Error("the project read gave no project number");
   if (owned.projectId !== project) throw new Error("the project read is not the project asked for");
+  if (owned.lifecycleState !== "ACTIVE") throw new Error("the project is not ACTIVE");
   if (keyed.projectId !== owned.projectNumber)
     throw new Error("the API key belongs to a different project");
   return { projectNumber: owned.projectNumber };
@@ -169,32 +171,39 @@ export function runDriver({ config, input, timeoutMs = DRIVER_TIMEOUT_MS, spawnI
   });
 }
 
-/** Deletes what the run left in the shared collections and reads every name back. */
-export async function sweepDocuments({ client, project, run, accounts }) {
+/** The document names the SDK cases may write: the run's public ones and the accounts' owner documents. */
+export function issuedSdkNames({ project, run, accounts }) {
   const root = `projects/${project}/databases/(default)/documents`;
-  const listed = await client.listIds({
-    parent: root,
-    collectionId: PUBLIC_COLLECTION,
-    prefix: run,
-  });
-  const names = new Set(listed);
+  const names = ["alpha", "beta", "gamma", "delta", "absent"].map(
+    (doc) => `${root}/${PUBLIC_COLLECTION}/${run}-${doc}`,
+  );
   for (const uid of Object.values(accounts)
     .map((a) => a.uid)
     .filter(Boolean))
-    names.add(`${root}/${OWNER_COLLECTION}/${uid}`);
-  const all = [...names];
-  const before = await client.missing(all);
-  const present = before.filter((entry) => entry.exists).map((entry) => entry.name);
-  if (present.length) await client.commit({ writes: present.map((name) => ({ delete: name })) });
-  const after = await client.missing(all);
-  const stillPresent = after.filter((entry) => entry.exists).map((entry) => entry.name);
-  return {
-    complete: stillPresent.length === 0,
-    deleted: present.length,
-    stillPresent: stillPresent.length,
-    checked: all.length,
-  };
+    names.push(`${root}/${OWNER_COLLECTION}/${uid}`);
+  return names;
 }
+
+/**
+ * Settles the names the SDK cases may have written. Each is read directly: one that is there is
+ * ours (the run issued the name, and an account's owner document carries the uid of an account the
+ * run created) and is deleted and read back; a prefix listing only looks for strays. Whether a
+ * case's write threw is the receipt's to say (see `unknownWrites`): absence cannot settle those.
+ */
+export async function sweepDocuments({ client, project, run, accounts }) {
+  const root = `projects/${project}/databases/(default)/documents`;
+  const issued = issuedSdkNames({ project, run, accounts }).map((name) => [
+    name,
+    { present: true, unknownDelete: false },
+  ]);
+  return settleNames({ issued, client, root, run });
+}
+
+/** Whether any case recorded a step that threw: a write or delete whose outcome is then unknown. */
+export const unknownWrites = (receipt) =>
+  receipt.cases.some((record) =>
+    record.failures.some((failure) => failure.startsWith("step-threw")),
+  );
 
 /**
  * One SDK recording. `target` is { kind: "production", project, token, web } or
@@ -268,6 +277,8 @@ export async function recordSdk({
   const receipt = outcome?.receipt;
   if (receipt?.thrown) errors["sdk/driver"] = String(receipt.thrown);
   const clientsClosed = receipt ? receipt.teardown.every((t) => t.closed) : false;
+  // A write that threw has an unknown outcome, which a read that finds nothing cannot settle.
+  const writesKnown = receipt ? !unknownWrites(receipt) : false;
   return {
     version: 1,
     kind: "sdk",
@@ -282,7 +293,9 @@ export async function recordSdk({
         Boolean(receipt?.cleanup?.complete) &&
         documents.complete &&
         accountReport.complete &&
-        clientsClosed,
+        clientsClosed &&
+        writesKnown,
+      writesKnown,
       sdk: receipt ? { complete: receipt.cleanup.complete } : null,
       documents,
       accounts: accountReport,

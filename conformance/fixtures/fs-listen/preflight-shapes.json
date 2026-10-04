@@ -1,0 +1,22 @@
+{
+  "note": "Shapes of the two answers the key preflight reads, as production returned them to the FUNCTIONS-EVENTS recorder on 2026-10-04 (transport/responses 0022 and 0001). Project numbers, folder ids and owner labels are replaced by placeholders; every other member and its type is as recorded. Replayed by src/fs-listen-sdk-record.test.mjs.",
+  "identityToolkitProjectsWithKey": {
+    "status": 200,
+    "body": {
+      "projectId": "100000000001",
+      "authorizedDomains": ["localhost", "demo-project.firebaseapp.com", "demo-project.web.app"]
+    }
+  },
+  "resourceManagerProject": {
+    "status": 200,
+    "body": {
+      "projectNumber": "100000000001",
+      "projectId": "demo-project",
+      "lifecycleState": "ACTIVE",
+      "name": "demo-project",
+      "labels": { "firebase": "enabled", "firebase-core": "disabled" },
+      "createTime": "2026-09-27T13:38:27.169Z",
+      "parent": { "type": "folder", "id": "100000000002" }
+    }
+  }
+}

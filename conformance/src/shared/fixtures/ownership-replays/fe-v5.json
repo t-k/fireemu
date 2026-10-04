@@ -1,0 +1,361 @@
+{
+ "sources": [
+  {
+   "path": "functions-events-formal-20261004T182904Z-a9621bfae74fe9bc/transport/journal.jsonl",
+   "sha256": "1dfe0fc8001f1418b5dbd9681ca13ac0b301d48ed9c6f71f88cbe7d5b114c581"
+  }
+ ],
+ "note": "FE v5 storage objects, topics and the control bucket: creates 200, deletes 204 or 200, one delete of a missing object 404.",
+ "ops": [
+  {
+   "action": "create",
+   "transport": "rest",
+   "name": "topics/fe-events-primary",
+   "status": 200,
+   "bodyReadable": true
+  },
+  {
+   "action": "create",
+   "transport": "rest",
+   "name": "topics/fe-events-control",
+   "status": 200,
+   "bodyReadable": true
+  },
+  {
+   "action": "create",
+   "transport": "rest",
+   "name": "buckets/control",
+   "status": 200,
+   "bodyReadable": true
+  },
+  {
+   "action": "create",
+   "transport": "rest",
+   "name": "objects/fe-events/e893ed7dc92e824b9ac1c6c8ao9.txt",
+   "status": 200,
+   "bodyReadable": true
+  },
+  {
+   "action": "delete",
+   "transport": "rest",
+   "name": "objects/fe-events/e893ed7dc92e824b9ac1c6c8ao9.txt",
+   "status": 204,
+   "bodyReadable": true
+  },
+  {
+   "action": "create",
+   "transport": "rest",
+   "name": "objects/fe-events/e916d7f659ba25a79bd2d81c9o10.txt",
+   "status": 200,
+   "bodyReadable": true
+  },
+  {
+   "action": "create",
+   "transport": "rest",
+   "name": "objects/fe-events/ee9b13377941952b4200cda86o11.txt",
+   "status": 200,
+   "bodyReadable": true
+  },
+  {
+   "action": "create",
+   "transport": "rest",
+   "name": "objects/fe-events/ee9b13377941952b4200cda86o11.txt",
+   "status": 200,
+   "bodyReadable": true
+  },
+  {
+   "action": "delete",
+   "transport": "rest",
+   "name": "objects/fe-events/ee9b13377941952b4200cda86o11.txt",
+   "status": 204,
+   "bodyReadable": true
+  },
+  {
+   "action": "create",
+   "transport": "rest",
+   "name": "objects/fe-events/ed5c2f9498d2e5f3305d3613co12.txt",
+   "status": 200,
+   "bodyReadable": true
+  },
+  {
+   "action": "delete",
+   "transport": "rest",
+   "name": "objects/fe-events/ed5c2f9498d2e5f3305d3613co12.txt",
+   "status": 204,
+   "bodyReadable": true
+  },
+  {
+   "action": "create",
+   "transport": "rest",
+   "name": "objects/fe-events/e0c2d35244107273fed02ce9bo13.txt",
+   "status": 200,
+   "bodyReadable": true
+  },
+  {
+   "action": "delete",
+   "transport": "rest",
+   "name": "objects/fe-events/e0c2d35244107273fed02ce9bo13.txt",
+   "status": 204,
+   "bodyReadable": true
+  },
+  {
+   "action": "create",
+   "transport": "rest",
+   "name": "objects/fe-events/e0287364255d5d86420d9ddbco14.txt",
+   "status": 200,
+   "bodyReadable": true
+  },
+  {
+   "action": "delete",
+   "transport": "rest",
+   "name": "objects/fe-events/e0287364255d5d86420d9ddbco14.txt",
+   "status": 204,
+   "bodyReadable": true
+  },
+  {
+   "action": "delete",
+   "transport": "rest",
+   "name": "objects/fe-events/ed703a8721da864019e710e33o15.txt",
+   "status": 404,
+   "bodyReadable": true
+  },
+  {
+   "action": "create",
+   "transport": "rest",
+   "name": "objects/fe-events/ee91692240a8159a677cdca28o16.txt",
+   "status": 200,
+   "bodyReadable": true
+  },
+  {
+   "action": "delete",
+   "transport": "rest",
+   "name": "objects/fe-events/ee91692240a8159a677cdca28o16.txt",
+   "status": 204,
+   "bodyReadable": true
+  },
+  {
+   "action": "create",
+   "transport": "rest",
+   "name": "objects/other/ef36fce1fa1ebba51c5a8ecddo17.txt",
+   "status": 200,
+   "bodyReadable": true
+  },
+  {
+   "action": "delete",
+   "transport": "rest",
+   "name": "objects/other/ef36fce1fa1ebba51c5a8ecddo17.txt",
+   "status": 204,
+   "bodyReadable": true
+  },
+  {
+   "action": "create",
+   "transport": "rest",
+   "name": "objects/fe-events/e41b46385e484e05eff4f9568o18.txt",
+   "status": 200,
+   "bodyReadable": true
+  },
+  {
+   "action": "create",
+   "transport": "rest",
+   "name": "objects/fe-events/e41b46385e484e05eff4f9568o18.txt",
+   "status": 200,
+   "bodyReadable": true
+  },
+  {
+   "action": "delete",
+   "transport": "rest",
+   "name": "objects/fe-events/e41b46385e484e05eff4f9568o18.txt",
+   "status": 204,
+   "bodyReadable": true
+  },
+  {
+   "action": "delete",
+   "transport": "rest",
+   "name": "objects/fe-events/e41b46385e484e05eff4f9568o18.txt",
+   "status": 204,
+   "bodyReadable": true
+  },
+  {
+   "action": "create",
+   "transport": "rest",
+   "name": "objects/fe-events/e853496f70d243e6b89dba094o37.txt",
+   "status": 200,
+   "bodyReadable": true
+  },
+  {
+   "action": "delete",
+   "transport": "rest",
+   "name": "objects/fe-events/e853496f70d243e6b89dba094o37.txt",
+   "status": 204,
+   "bodyReadable": true
+  },
+  {
+   "action": "create",
+   "transport": "rest",
+   "name": "objects/fe-events/e1ebd947a181fd1b5f83bcb28o38.txt",
+   "status": 200,
+   "bodyReadable": true
+  },
+  {
+   "action": "create",
+   "transport": "rest",
+   "name": "objects/fe-events/ec79477167f82e50d5f8b8b1ao39.txt",
+   "status": 200,
+   "bodyReadable": true
+  },
+  {
+   "action": "create",
+   "transport": "rest",
+   "name": "objects/fe-events/ec79477167f82e50d5f8b8b1ao39.txt",
+   "status": 200,
+   "bodyReadable": true
+  },
+  {
+   "action": "delete",
+   "transport": "rest",
+   "name": "objects/fe-events/ec79477167f82e50d5f8b8b1ao39.txt",
+   "status": 204,
+   "bodyReadable": true
+  },
+  {
+   "action": "create",
+   "transport": "rest",
+   "name": "objects/fe-events/ecf5a6ef74c16647f2c8ccd59o40.txt",
+   "status": 200,
+   "bodyReadable": true
+  },
+  {
+   "action": "delete",
+   "transport": "rest",
+   "name": "objects/fe-events/ecf5a6ef74c16647f2c8ccd59o40.txt",
+   "status": 204,
+   "bodyReadable": true
+  },
+  {
+   "action": "create",
+   "transport": "rest",
+   "name": "objects/fe-events/ee418473bc5a6b7956fce6f77o41.txt",
+   "status": 200,
+   "bodyReadable": true
+  },
+  {
+   "action": "delete",
+   "transport": "rest",
+   "name": "objects/fe-events/ee418473bc5a6b7956fce6f77o41.txt",
+   "status": 204,
+   "bodyReadable": true
+  },
+  {
+   "action": "create",
+   "transport": "rest",
+   "name": "objects/fe-events/efaf133ac468c76e736c02f47o42.txt",
+   "status": 200,
+   "bodyReadable": true
+  },
+  {
+   "action": "delete",
+   "transport": "rest",
+   "name": "objects/fe-events/efaf133ac468c76e736c02f47o42.txt",
+   "status": 204,
+   "bodyReadable": true
+  },
+  {
+   "action": "delete",
+   "transport": "rest",
+   "name": "objects/fe-events/e0c638757a849786ccf2e5352o43.txt",
+   "status": 404,
+   "bodyReadable": true
+  },
+  {
+   "action": "create",
+   "transport": "rest",
+   "name": "objects/fe-events/e4fa92947781399dde4c40dffo44.txt",
+   "status": 200,
+   "bodyReadable": true
+  },
+  {
+   "action": "delete",
+   "transport": "rest",
+   "name": "objects/fe-events/e4fa92947781399dde4c40dffo44.txt",
+   "status": 204,
+   "bodyReadable": true
+  },
+  {
+   "action": "create",
+   "transport": "rest",
+   "name": "objects/other/e254e609378ff5190203a01a7o45.txt",
+   "status": 200,
+   "bodyReadable": true
+  },
+  {
+   "action": "delete",
+   "transport": "rest",
+   "name": "objects/other/e254e609378ff5190203a01a7o45.txt",
+   "status": 204,
+   "bodyReadable": true
+  },
+  {
+   "action": "create",
+   "transport": "rest",
+   "name": "objects/fe-events/e4919156bddaa767dbc3c3f4ao46.txt",
+   "status": 200,
+   "bodyReadable": true
+  },
+  {
+   "action": "create",
+   "transport": "rest",
+   "name": "objects/fe-events/e4919156bddaa767dbc3c3f4ao46.txt",
+   "status": 200,
+   "bodyReadable": true
+  },
+  {
+   "action": "delete",
+   "transport": "rest",
+   "name": "objects/fe-events/e4919156bddaa767dbc3c3f4ao46.txt",
+   "status": 204,
+   "bodyReadable": true
+  },
+  {
+   "action": "delete",
+   "transport": "rest",
+   "name": "objects/fe-events/e4919156bddaa767dbc3c3f4ao46.txt",
+   "status": 204,
+   "bodyReadable": true
+  },
+  {
+   "action": "delete",
+   "transport": "rest",
+   "name": "objects/fe-events/e1ebd947a181fd1b5f83bcb28o38.txt",
+   "status": 204,
+   "bodyReadable": true
+  },
+  {
+   "action": "delete",
+   "transport": "rest",
+   "name": "objects/fe-events/e916d7f659ba25a79bd2d81c9o10.txt",
+   "status": 204,
+   "bodyReadable": true
+  },
+  {
+   "action": "delete",
+   "transport": "rest",
+   "name": "topics/fe-events-primary",
+   "status": 200,
+   "bodyReadable": true
+  },
+  {
+   "action": "delete",
+   "transport": "rest",
+   "name": "topics/fe-events-control",
+   "status": 200,
+   "bodyReadable": true
+  },
+  {
+   "action": "delete",
+   "transport": "rest",
+   "name": "buckets/control",
+   "status": 204,
+   "bodyReadable": true
+  }
+ ]
+}

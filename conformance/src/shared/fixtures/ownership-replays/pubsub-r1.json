@@ -1,0 +1,1573 @@
+{
+ "sources": [
+  {
+   "path": "pubsub-production-20261005-r1/capture-148026092d56.jsonl",
+   "sha256": "a4d89ed7597562af456f9a1dd39e9458e5d990348ddc896c75be4f1f73782036"
+  }
+ ],
+ "note": "Pub/Sub lifecycle and name probes, REST and gRPC; one real create timed out (a transport error).",
+ "ops": [
+  {
+   "action": "get",
+   "transport": "rest",
+   "name": "topics/fe148026092d56-lc-r-t",
+   "status": 404,
+   "bodyReadable": true
+  },
+  {
+   "action": "create",
+   "transport": "rest",
+   "name": "topics/fe148026092d56-lc-r-t",
+   "status": 200,
+   "bodyReadable": true
+  },
+  {
+   "action": "create",
+   "transport": "rest",
+   "name": "topics/fe148026092d56-lc-r-t",
+   "status": 409,
+   "bodyReadable": true
+  },
+  {
+   "action": "get",
+   "transport": "rest",
+   "name": "topics/fe148026092d56-lc-r-t",
+   "status": 200,
+   "bodyReadable": true
+  },
+  {
+   "action": "get",
+   "transport": "rest",
+   "name": "subscriptions/fe148026092d56-lc-r-s",
+   "status": 404,
+   "bodyReadable": true
+  },
+  {
+   "action": "create",
+   "transport": "rest",
+   "name": "subscriptions/fe148026092d56-lc-r-s",
+   "status": 404,
+   "bodyReadable": true
+  },
+  {
+   "action": "create",
+   "transport": "rest",
+   "name": "subscriptions/fe148026092d56-lc-r-s",
+   "status": 200,
+   "bodyReadable": true
+  },
+  {
+   "action": "create",
+   "transport": "rest",
+   "name": "subscriptions/fe148026092d56-lc-r-s",
+   "status": 409,
+   "bodyReadable": true
+  },
+  {
+   "action": "get",
+   "transport": "rest",
+   "name": "subscriptions/fe148026092d56-lc-r-s",
+   "status": 200,
+   "bodyReadable": true
+  },
+  {
+   "action": "delete",
+   "transport": "rest",
+   "name": "topics/fe148026092d56-lc-r-t",
+   "status": 200,
+   "bodyReadable": true
+  },
+  {
+   "action": "get",
+   "transport": "rest",
+   "name": "topics/fe148026092d56-lc-r-t",
+   "status": 404,
+   "bodyReadable": true
+  },
+  {
+   "action": "get",
+   "transport": "rest",
+   "name": "subscriptions/fe148026092d56-lc-r-s",
+   "status": 200,
+   "bodyReadable": true
+  },
+  {
+   "action": "create",
+   "transport": "rest",
+   "name": "subscriptions/fe148026092d56-lc-r-s-after",
+   "status": 404,
+   "bodyReadable": true
+  },
+  {
+   "action": "delete",
+   "transport": "rest",
+   "name": "subscriptions/fe148026092d56-lc-r-s",
+   "status": 200,
+   "bodyReadable": true
+  },
+  {
+   "action": "delete",
+   "transport": "rest",
+   "name": "subscriptions/fe148026092d56-lc-r-s",
+   "status": 404,
+   "bodyReadable": true
+  },
+  {
+   "action": "get",
+   "transport": "rest",
+   "name": "subscriptions/fe148026092d56-lc-r-s",
+   "status": 404,
+   "bodyReadable": true
+  },
+  {
+   "action": "delete",
+   "transport": "rest",
+   "name": "topics/fe148026092d56-lc-r-t",
+   "status": 404,
+   "bodyReadable": true
+  },
+  {
+   "action": "create",
+   "transport": "rest",
+   "name": "topics/fe148026092d56-lc-r-t",
+   "status": null,
+   "bodyReadable": false,
+   "transportError": "timeout"
+  },
+  {
+   "action": "get",
+   "transport": "grpc",
+   "name": "topics/fe148026092d56-lc-g-t",
+   "status": 404,
+   "bodyReadable": true
+  },
+  {
+   "action": "create",
+   "transport": "grpc",
+   "name": "topics/fe148026092d56-lc-g-t",
+   "status": 200,
+   "bodyReadable": true
+  },
+  {
+   "action": "create",
+   "transport": "grpc",
+   "name": "topics/fe148026092d56-lc-g-t",
+   "status": 409,
+   "bodyReadable": true
+  },
+  {
+   "action": "get",
+   "transport": "grpc",
+   "name": "topics/fe148026092d56-lc-g-t",
+   "status": 200,
+   "bodyReadable": true
+  },
+  {
+   "action": "get",
+   "transport": "grpc",
+   "name": "subscriptions/fe148026092d56-lc-g-s",
+   "status": 404,
+   "bodyReadable": true
+  },
+  {
+   "action": "create",
+   "transport": "grpc",
+   "name": "subscriptions/fe148026092d56-lc-g-s",
+   "status": 404,
+   "bodyReadable": true
+  },
+  {
+   "action": "create",
+   "transport": "grpc",
+   "name": "subscriptions/fe148026092d56-lc-g-s",
+   "status": 200,
+   "bodyReadable": true
+  },
+  {
+   "action": "create",
+   "transport": "grpc",
+   "name": "subscriptions/fe148026092d56-lc-g-s",
+   "status": 409,
+   "bodyReadable": true
+  },
+  {
+   "action": "get",
+   "transport": "grpc",
+   "name": "subscriptions/fe148026092d56-lc-g-s",
+   "status": 200,
+   "bodyReadable": true
+  },
+  {
+   "action": "delete",
+   "transport": "grpc",
+   "name": "topics/fe148026092d56-lc-g-t",
+   "status": 200,
+   "bodyReadable": true
+  },
+  {
+   "action": "get",
+   "transport": "grpc",
+   "name": "topics/fe148026092d56-lc-g-t",
+   "status": 404,
+   "bodyReadable": true
+  },
+  {
+   "action": "get",
+   "transport": "grpc",
+   "name": "subscriptions/fe148026092d56-lc-g-s",
+   "status": 200,
+   "bodyReadable": true
+  },
+  {
+   "action": "create",
+   "transport": "grpc",
+   "name": "subscriptions/fe148026092d56-lc-g-s-after",
+   "status": 404,
+   "bodyReadable": true
+  },
+  {
+   "action": "delete",
+   "transport": "grpc",
+   "name": "subscriptions/fe148026092d56-lc-g-s",
+   "status": 200,
+   "bodyReadable": true
+  },
+  {
+   "action": "delete",
+   "transport": "grpc",
+   "name": "subscriptions/fe148026092d56-lc-g-s",
+   "status": 404,
+   "bodyReadable": true
+  },
+  {
+   "action": "get",
+   "transport": "grpc",
+   "name": "subscriptions/fe148026092d56-lc-g-s",
+   "status": 404,
+   "bodyReadable": true
+  },
+  {
+   "action": "delete",
+   "transport": "grpc",
+   "name": "topics/fe148026092d56-lc-g-t",
+   "status": 404,
+   "bodyReadable": true
+  },
+  {
+   "action": "create",
+   "transport": "grpc",
+   "name": "topics/fe148026092d56-lc-g-t",
+   "status": 200,
+   "bodyReadable": true
+  },
+  {
+   "action": "get",
+   "transport": "grpc",
+   "name": "topics/fe148026092d56-lc-g-t",
+   "status": 200,
+   "bodyReadable": true
+  },
+  {
+   "action": "delete",
+   "transport": "grpc",
+   "name": "topics/fe148026092d56-lc-g-t",
+   "status": 200,
+   "bodyReadable": true
+  },
+  {
+   "action": "get",
+   "transport": "grpc",
+   "name": "topics/fe148026092d56-lc-g-t",
+   "status": 404,
+   "bodyReadable": true
+  },
+  {
+   "action": "create",
+   "transport": "rest",
+   "name": "topics/fe148026092d56-nm-r-n",
+   "status": 200,
+   "bodyReadable": true
+  },
+  {
+   "action": "create",
+   "transport": "rest",
+   "name": "topics/goog-probe-r",
+   "status": 400,
+   "bodyReadable": true
+  },
+  {
+   "action": "create",
+   "transport": "rest",
+   "name": "topics/ab",
+   "status": 400,
+   "bodyReadable": true
+  },
+  {
+   "action": "get",
+   "transport": "rest",
+   "name": "topics/x14",
+   "status": 404,
+   "bodyReadable": true
+  },
+  {
+   "action": "create",
+   "transport": "rest",
+   "name": "topics/x14",
+   "status": 200,
+   "bodyReadable": true
+  },
+  {
+   "action": "create",
+   "transport": "rest",
+   "name": "topics/1-leading-digit-r",
+   "status": 400,
+   "bodyReadable": true
+  },
+  {
+   "action": "create",
+   "transport": "rest",
+   "name": "topics/bad%24character-r",
+   "status": 200,
+   "bodyReadable": true
+  },
+  {
+   "action": "create",
+   "transport": "rest",
+   "name": "topics/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+   "status": 400,
+   "bodyReadable": true
+  },
+  {
+   "action": "create",
+   "transport": "rest",
+   "name": "subscriptions/goog-probe-r",
+   "status": 400,
+   "bodyReadable": true
+  },
+  {
+   "action": "create",
+   "transport": "rest",
+   "name": "subscriptions/ab",
+   "status": 400,
+   "bodyReadable": true
+  },
+  {
+   "action": "create",
+   "transport": "rest",
+   "name": "topics/fe148026092d56-nm-r-zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz",
+   "status": 200,
+   "bodyReadable": true
+  },
+  {
+   "action": "get",
+   "transport": "rest",
+   "name": "topics/fe148026092d56-nm-r-zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz",
+   "status": 200,
+   "bodyReadable": true
+  },
+  {
+   "action": "get",
+   "transport": "rest",
+   "name": "topic/x",
+   "status": 404,
+   "bodyReadable": true
+  },
+  {
+   "action": "get",
+   "transport": "rest",
+   "name": "topics",
+   "status": 200,
+   "bodyReadable": true
+  },
+  {
+   "action": "get",
+   "transport": "rest",
+   "name": "topics/x",
+   "status": 404,
+   "bodyReadable": true
+  },
+  {
+   "action": "get",
+   "transport": "rest",
+   "name": "topics/x",
+   "status": 400,
+   "bodyReadable": true
+  },
+  {
+   "action": "create",
+   "transport": "grpc",
+   "name": "topics/fe148026092d56-nm-g-n",
+   "status": 200,
+   "bodyReadable": true
+  },
+  {
+   "action": "create",
+   "transport": "grpc",
+   "name": "topics/goog-probe-g",
+   "status": 400,
+   "bodyReadable": true
+  },
+  {
+   "action": "create",
+   "transport": "grpc",
+   "name": "topics/ac",
+   "status": 400,
+   "bodyReadable": true
+  },
+  {
+   "action": "get",
+   "transport": "grpc",
+   "name": "topics/y80",
+   "status": 404,
+   "bodyReadable": true
+  },
+  {
+   "action": "create",
+   "transport": "grpc",
+   "name": "topics/y80",
+   "status": 200,
+   "bodyReadable": true
+  },
+  {
+   "action": "create",
+   "transport": "grpc",
+   "name": "topics/1-leading-digit-g",
+   "status": 400,
+   "bodyReadable": true
+  },
+  {
+   "action": "create",
+   "transport": "grpc",
+   "name": "topics/bad$character-g",
+   "status": 400,
+   "bodyReadable": true
+  },
+  {
+   "action": "create",
+   "transport": "grpc",
+   "name": "topics/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+   "status": 400,
+   "bodyReadable": true
+  },
+  {
+   "action": "create",
+   "transport": "grpc",
+   "name": "subscriptions/goog-probe-g",
+   "status": 400,
+   "bodyReadable": true
+  },
+  {
+   "action": "create",
+   "transport": "grpc",
+   "name": "subscriptions/ac",
+   "status": 400,
+   "bodyReadable": true
+  },
+  {
+   "action": "create",
+   "transport": "grpc",
+   "name": "topics/fe148026092d56-nm-g-zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz",
+   "status": 200,
+   "bodyReadable": true
+  },
+  {
+   "action": "get",
+   "transport": "grpc",
+   "name": "topics/fe148026092d56-nm-g-zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz",
+   "status": 200,
+   "bodyReadable": true
+  },
+  {
+   "action": "get",
+   "transport": "grpc",
+   "name": "topic/x",
+   "status": 400,
+   "bodyReadable": true
+  },
+  {
+   "action": "get",
+   "transport": "grpc",
+   "name": "topics",
+   "status": 400,
+   "bodyReadable": true
+  },
+  {
+   "action": "get",
+   "transport": "grpc",
+   "name": "topics/x",
+   "status": 400,
+   "bodyReadable": true
+  },
+  {
+   "action": "get",
+   "transport": "grpc",
+   "name": "topics/x",
+   "status": 400,
+   "bodyReadable": true
+  },
+  {
+   "action": "create",
+   "transport": "rest",
+   "name": "topics/fe148026092d56-pg-r-p",
+   "status": 200,
+   "bodyReadable": true
+  },
+  {
+   "action": "create",
+   "transport": "rest",
+   "name": "subscriptions/fe148026092d56-pg-r-a",
+   "status": 200,
+   "bodyReadable": true
+  },
+  {
+   "action": "create",
+   "transport": "rest",
+   "name": "subscriptions/fe148026092d56-pg-r-b",
+   "status": 200,
+   "bodyReadable": true
+  },
+  {
+   "action": "create",
+   "transport": "rest",
+   "name": "subscriptions/fe148026092d56-pg-r-c",
+   "status": 200,
+   "bodyReadable": true
+  },
+  {
+   "action": "create",
+   "transport": "grpc",
+   "name": "topics/fe148026092d56-pg-g-p",
+   "status": 200,
+   "bodyReadable": true
+  },
+  {
+   "action": "create",
+   "transport": "grpc",
+   "name": "subscriptions/fe148026092d56-pg-g-a",
+   "status": 200,
+   "bodyReadable": true
+  },
+  {
+   "action": "create",
+   "transport": "grpc",
+   "name": "subscriptions/fe148026092d56-pg-g-b",
+   "status": 200,
+   "bodyReadable": true
+  },
+  {
+   "action": "create",
+   "transport": "grpc",
+   "name": "subscriptions/fe148026092d56-pg-g-c",
+   "status": 200,
+   "bodyReadable": true
+  },
+  {
+   "action": "create",
+   "transport": "rest",
+   "name": "topics/fe148026092d56-tc-r-plain",
+   "status": 200,
+   "bodyReadable": true
+  },
+  {
+   "action": "get",
+   "transport": "rest",
+   "name": "topics/fe148026092d56-tc-r-plain",
+   "status": 200,
+   "bodyReadable": true
+  },
+  {
+   "action": "create",
+   "transport": "rest",
+   "name": "topics/fe148026092d56-tc-r-labels",
+   "status": 200,
+   "bodyReadable": true
+  },
+  {
+   "action": "get",
+   "transport": "rest",
+   "name": "topics/fe148026092d56-tc-r-labels",
+   "status": 200,
+   "bodyReadable": true
+  },
+  {
+   "action": "create",
+   "transport": "rest",
+   "name": "topics/fe148026092d56-tc-r-retention-min",
+   "status": 200,
+   "bodyReadable": true
+  },
+  {
+   "action": "get",
+   "transport": "rest",
+   "name": "topics/fe148026092d56-tc-r-retention-min",
+   "status": 200,
+   "bodyReadable": true
+  },
+  {
+   "action": "create",
+   "transport": "rest",
+   "name": "topics/fe148026092d56-tc-r-retention-under-min",
+   "status": 400,
+   "bodyReadable": true
+  },
+  {
+   "action": "create",
+   "transport": "rest",
+   "name": "topics/fe148026092d56-tc-r-retention-max",
+   "status": 200,
+   "bodyReadable": true
+  },
+  {
+   "action": "create",
+   "transport": "rest",
+   "name": "topics/fe148026092d56-tc-r-retention-over-max",
+   "status": 400,
+   "bodyReadable": true
+  },
+  {
+   "action": "create",
+   "transport": "rest",
+   "name": "topics/fe148026092d56-tc-r-retention-fraction",
+   "status": 200,
+   "bodyReadable": true
+  },
+  {
+   "action": "create",
+   "transport": "rest",
+   "name": "topics/fe148026092d56-tc-r-storage-region",
+   "status": 200,
+   "bodyReadable": true
+  },
+  {
+   "action": "create",
+   "transport": "rest",
+   "name": "topics/fe148026092d56-tc-r-storage-bad-region",
+   "status": 400,
+   "bodyReadable": true
+  },
+  {
+   "action": "create",
+   "transport": "rest",
+   "name": "topics/fe148026092d56-tc-r-label-key-upper",
+   "status": 400,
+   "bodyReadable": true
+  },
+  {
+   "action": "create",
+   "transport": "rest",
+   "name": "topics/fe148026092d56-tc-r-label-value-long",
+   "status": 400,
+   "bodyReadable": true
+  },
+  {
+   "action": "create",
+   "transport": "rest",
+   "name": "topics/fe148026092d56-tc-r-unknown-field",
+   "status": 400,
+   "bodyReadable": true
+  },
+  {
+   "action": "create",
+   "transport": "grpc",
+   "name": "topics/fe148026092d56-tc-g-plain",
+   "status": 200,
+   "bodyReadable": true
+  },
+  {
+   "action": "get",
+   "transport": "grpc",
+   "name": "topics/fe148026092d56-tc-g-plain",
+   "status": 200,
+   "bodyReadable": true
+  },
+  {
+   "action": "create",
+   "transport": "grpc",
+   "name": "topics/fe148026092d56-tc-g-labels",
+   "status": 200,
+   "bodyReadable": true
+  },
+  {
+   "action": "get",
+   "transport": "grpc",
+   "name": "topics/fe148026092d56-tc-g-labels",
+   "status": 200,
+   "bodyReadable": true
+  },
+  {
+   "action": "create",
+   "transport": "grpc",
+   "name": "topics/fe148026092d56-tc-g-retention-min",
+   "status": 200,
+   "bodyReadable": true
+  },
+  {
+   "action": "get",
+   "transport": "grpc",
+   "name": "topics/fe148026092d56-tc-g-retention-min",
+   "status": 200,
+   "bodyReadable": true
+  },
+  {
+   "action": "create",
+   "transport": "grpc",
+   "name": "topics/fe148026092d56-tc-g-retention-under-min",
+   "status": 400,
+   "bodyReadable": true
+  },
+  {
+   "action": "create",
+   "transport": "grpc",
+   "name": "topics/fe148026092d56-tc-g-retention-max",
+   "status": 200,
+   "bodyReadable": true
+  },
+  {
+   "action": "create",
+   "transport": "grpc",
+   "name": "topics/fe148026092d56-tc-g-retention-over-max",
+   "status": 400,
+   "bodyReadable": true
+  },
+  {
+   "action": "create",
+   "transport": "grpc",
+   "name": "topics/fe148026092d56-tc-g-retention-fraction",
+   "status": 200,
+   "bodyReadable": true
+  },
+  {
+   "action": "create",
+   "transport": "grpc",
+   "name": "topics/fe148026092d56-tc-g-storage-region",
+   "status": 200,
+   "bodyReadable": true
+  },
+  {
+   "action": "create",
+   "transport": "grpc",
+   "name": "topics/fe148026092d56-tc-g-storage-bad-region",
+   "status": 400,
+   "bodyReadable": true
+  },
+  {
+   "action": "create",
+   "transport": "grpc",
+   "name": "topics/fe148026092d56-tc-g-label-key-upper",
+   "status": 400,
+   "bodyReadable": true
+  },
+  {
+   "action": "create",
+   "transport": "grpc",
+   "name": "topics/fe148026092d56-tc-g-label-value-long",
+   "status": 400,
+   "bodyReadable": true
+  },
+  {
+   "action": "create",
+   "transport": "grpc",
+   "name": "topics/fe148026092d56-tc-g-unknown-field",
+   "status": 200,
+   "bodyReadable": true
+  },
+  {
+   "action": "create",
+   "transport": "rest",
+   "name": "topics/fe148026092d56-sc-r-t",
+   "status": 200,
+   "bodyReadable": true
+  },
+  {
+   "action": "create",
+   "transport": "rest",
+   "name": "topics/fe148026092d56-sc-r-dl",
+   "status": 200,
+   "bodyReadable": true
+  },
+  {
+   "action": "create",
+   "transport": "rest",
+   "name": "subscriptions/fe148026092d56-sc-r-plain",
+   "status": 200,
+   "bodyReadable": true
+  },
+  {
+   "action": "get",
+   "transport": "rest",
+   "name": "subscriptions/fe148026092d56-sc-r-plain",
+   "status": 200,
+   "bodyReadable": true
+  },
+  {
+   "action": "create",
+   "transport": "rest",
+   "name": "subscriptions/fe148026092d56-sc-r-ack-10",
+   "status": 200,
+   "bodyReadable": true
+  },
+  {
+   "action": "create",
+   "transport": "rest",
+   "name": "subscriptions/fe148026092d56-sc-r-ack-600",
+   "status": 200,
+   "bodyReadable": true
+  },
+  {
+   "action": "create",
+   "transport": "rest",
+   "name": "subscriptions/fe148026092d56-sc-r-ack-9",
+   "status": 400,
+   "bodyReadable": true
+  },
+  {
+   "action": "create",
+   "transport": "rest",
+   "name": "subscriptions/fe148026092d56-sc-r-ack-601",
+   "status": 400,
+   "bodyReadable": true
+  },
+  {
+   "action": "create",
+   "transport": "rest",
+   "name": "subscriptions/fe148026092d56-sc-r-retain-acked",
+   "status": 200,
+   "bodyReadable": true
+  },
+  {
+   "action": "create",
+   "transport": "rest",
+   "name": "subscriptions/fe148026092d56-sc-r-retention-min",
+   "status": 200,
+   "bodyReadable": true
+  },
+  {
+   "action": "get",
+   "transport": "rest",
+   "name": "subscriptions/fe148026092d56-sc-r-retention-min",
+   "status": 200,
+   "bodyReadable": true
+  },
+  {
+   "action": "create",
+   "transport": "rest",
+   "name": "subscriptions/fe148026092d56-sc-r-retention-under-min",
+   "status": 400,
+   "bodyReadable": true
+  },
+  {
+   "action": "create",
+   "transport": "rest",
+   "name": "subscriptions/fe148026092d56-sc-r-retention-max",
+   "status": 200,
+   "bodyReadable": true
+  },
+  {
+   "action": "create",
+   "transport": "rest",
+   "name": "subscriptions/fe148026092d56-sc-r-retention-over-max",
+   "status": 200,
+   "bodyReadable": true
+  },
+  {
+   "action": "create",
+   "transport": "rest",
+   "name": "subscriptions/fe148026092d56-sc-r-ordering",
+   "status": 200,
+   "bodyReadable": true
+  },
+  {
+   "action": "create",
+   "transport": "rest",
+   "name": "subscriptions/fe148026092d56-sc-r-exactly-once",
+   "status": 200,
+   "bodyReadable": true
+  },
+  {
+   "action": "create",
+   "transport": "rest",
+   "name": "subscriptions/fe148026092d56-sc-r-labels",
+   "status": 200,
+   "bodyReadable": true
+  },
+  {
+   "action": "get",
+   "transport": "rest",
+   "name": "subscriptions/fe148026092d56-sc-r-labels",
+   "status": 200,
+   "bodyReadable": true
+  },
+  {
+   "action": "create",
+   "transport": "rest",
+   "name": "subscriptions/fe148026092d56-sc-r-filter",
+   "status": 200,
+   "bodyReadable": true
+  },
+  {
+   "action": "create",
+   "transport": "rest",
+   "name": "subscriptions/fe148026092d56-sc-r-filter-bad-syntax",
+   "status": 400,
+   "bodyReadable": true
+  },
+  {
+   "action": "create",
+   "transport": "rest",
+   "name": "subscriptions/fe148026092d56-sc-r-ttl-one-day",
+   "status": 200,
+   "bodyReadable": true
+  },
+  {
+   "action": "create",
+   "transport": "rest",
+   "name": "subscriptions/fe148026092d56-sc-r-ttl-under-one-day",
+   "status": 400,
+   "bodyReadable": true
+  },
+  {
+   "action": "create",
+   "transport": "rest",
+   "name": "subscriptions/fe148026092d56-sc-r-ttl-never",
+   "status": 200,
+   "bodyReadable": true
+  },
+  {
+   "action": "get",
+   "transport": "rest",
+   "name": "subscriptions/fe148026092d56-sc-r-ttl-never",
+   "status": 200,
+   "bodyReadable": true
+  },
+  {
+   "action": "create",
+   "transport": "rest",
+   "name": "subscriptions/fe148026092d56-sc-r-retry-valid",
+   "status": 200,
+   "bodyReadable": true
+  },
+  {
+   "action": "get",
+   "transport": "rest",
+   "name": "subscriptions/fe148026092d56-sc-r-retry-valid",
+   "status": 200,
+   "bodyReadable": true
+  },
+  {
+   "action": "create",
+   "transport": "rest",
+   "name": "subscriptions/fe148026092d56-sc-r-retry-min-over-max",
+   "status": 400,
+   "bodyReadable": true
+  },
+  {
+   "action": "create",
+   "transport": "rest",
+   "name": "subscriptions/fe148026092d56-sc-r-retry-max-over-600",
+   "status": 400,
+   "bodyReadable": true
+  },
+  {
+   "action": "create",
+   "transport": "rest",
+   "name": "subscriptions/fe148026092d56-sc-r-output-state",
+   "status": 200,
+   "bodyReadable": true
+  },
+  {
+   "action": "create",
+   "transport": "rest",
+   "name": "subscriptions/fe148026092d56-sc-r-dl-5",
+   "status": 200,
+   "bodyReadable": true
+  },
+  {
+   "action": "get",
+   "transport": "rest",
+   "name": "subscriptions/fe148026092d56-sc-r-dl-5",
+   "status": 200,
+   "bodyReadable": true
+  },
+  {
+   "action": "create",
+   "transport": "rest",
+   "name": "subscriptions/fe148026092d56-sc-r-dl-default",
+   "status": 200,
+   "bodyReadable": true
+  },
+  {
+   "action": "create",
+   "transport": "rest",
+   "name": "subscriptions/fe148026092d56-sc-r-dl-4",
+   "status": 400,
+   "bodyReadable": true
+  },
+  {
+   "action": "create",
+   "transport": "rest",
+   "name": "subscriptions/fe148026092d56-sc-r-dl-101",
+   "status": 400,
+   "bodyReadable": true
+  },
+  {
+   "action": "create",
+   "transport": "rest",
+   "name": "subscriptions/fe148026092d56-sc-r-dl-missing-topic",
+   "status": 404,
+   "bodyReadable": true
+  },
+  {
+   "action": "create",
+   "transport": "rest",
+   "name": "subscriptions/fe148026092d56-sc-r-dl-same-topic",
+   "status": 200,
+   "bodyReadable": true
+  },
+  {
+   "action": "create",
+   "transport": "grpc",
+   "name": "topics/fe148026092d56-sc-g-t",
+   "status": 200,
+   "bodyReadable": true
+  },
+  {
+   "action": "create",
+   "transport": "grpc",
+   "name": "topics/fe148026092d56-sc-g-dl",
+   "status": 200,
+   "bodyReadable": true
+  },
+  {
+   "action": "create",
+   "transport": "grpc",
+   "name": "subscriptions/fe148026092d56-sc-g-plain",
+   "status": 200,
+   "bodyReadable": true
+  },
+  {
+   "action": "get",
+   "transport": "grpc",
+   "name": "subscriptions/fe148026092d56-sc-g-plain",
+   "status": 200,
+   "bodyReadable": true
+  },
+  {
+   "action": "create",
+   "transport": "grpc",
+   "name": "subscriptions/fe148026092d56-sc-g-ack-10",
+   "status": 200,
+   "bodyReadable": true
+  },
+  {
+   "action": "create",
+   "transport": "grpc",
+   "name": "subscriptions/fe148026092d56-sc-g-ack-600",
+   "status": 200,
+   "bodyReadable": true
+  },
+  {
+   "action": "create",
+   "transport": "grpc",
+   "name": "subscriptions/fe148026092d56-sc-g-ack-9",
+   "status": 400,
+   "bodyReadable": true
+  },
+  {
+   "action": "create",
+   "transport": "grpc",
+   "name": "subscriptions/fe148026092d56-sc-g-ack-601",
+   "status": 400,
+   "bodyReadable": true
+  },
+  {
+   "action": "create",
+   "transport": "grpc",
+   "name": "subscriptions/fe148026092d56-sc-g-retain-acked",
+   "status": 200,
+   "bodyReadable": true
+  },
+  {
+   "action": "create",
+   "transport": "grpc",
+   "name": "subscriptions/fe148026092d56-sc-g-retention-min",
+   "status": 200,
+   "bodyReadable": true
+  },
+  {
+   "action": "get",
+   "transport": "grpc",
+   "name": "subscriptions/fe148026092d56-sc-g-retention-min",
+   "status": 200,
+   "bodyReadable": true
+  },
+  {
+   "action": "create",
+   "transport": "grpc",
+   "name": "subscriptions/fe148026092d56-sc-g-retention-under-min",
+   "status": 400,
+   "bodyReadable": true
+  },
+  {
+   "action": "create",
+   "transport": "grpc",
+   "name": "subscriptions/fe148026092d56-sc-g-retention-max",
+   "status": 200,
+   "bodyReadable": true
+  },
+  {
+   "action": "create",
+   "transport": "grpc",
+   "name": "subscriptions/fe148026092d56-sc-g-retention-over-max",
+   "status": 200,
+   "bodyReadable": true
+  },
+  {
+   "action": "create",
+   "transport": "grpc",
+   "name": "subscriptions/fe148026092d56-sc-g-ordering",
+   "status": 200,
+   "bodyReadable": true
+  },
+  {
+   "action": "create",
+   "transport": "grpc",
+   "name": "subscriptions/fe148026092d56-sc-g-exactly-once",
+   "status": 200,
+   "bodyReadable": true
+  },
+  {
+   "action": "create",
+   "transport": "grpc",
+   "name": "subscriptions/fe148026092d56-sc-g-labels",
+   "status": 200,
+   "bodyReadable": true
+  },
+  {
+   "action": "get",
+   "transport": "grpc",
+   "name": "subscriptions/fe148026092d56-sc-g-labels",
+   "status": 200,
+   "bodyReadable": true
+  },
+  {
+   "action": "create",
+   "transport": "grpc",
+   "name": "subscriptions/fe148026092d56-sc-g-filter",
+   "status": 200,
+   "bodyReadable": true
+  },
+  {
+   "action": "create",
+   "transport": "grpc",
+   "name": "subscriptions/fe148026092d56-sc-g-filter-bad-syntax",
+   "status": 400,
+   "bodyReadable": true
+  },
+  {
+   "action": "create",
+   "transport": "grpc",
+   "name": "subscriptions/fe148026092d56-sc-g-ttl-one-day",
+   "status": 200,
+   "bodyReadable": true
+  },
+  {
+   "action": "create",
+   "transport": "grpc",
+   "name": "subscriptions/fe148026092d56-sc-g-ttl-under-one-day",
+   "status": 400,
+   "bodyReadable": true
+  },
+  {
+   "action": "create",
+   "transport": "grpc",
+   "name": "subscriptions/fe148026092d56-sc-g-ttl-never",
+   "status": 200,
+   "bodyReadable": true
+  },
+  {
+   "action": "get",
+   "transport": "grpc",
+   "name": "subscriptions/fe148026092d56-sc-g-ttl-never",
+   "status": 200,
+   "bodyReadable": true
+  },
+  {
+   "action": "create",
+   "transport": "grpc",
+   "name": "subscriptions/fe148026092d56-sc-g-retry-valid",
+   "status": 200,
+   "bodyReadable": true
+  },
+  {
+   "action": "get",
+   "transport": "grpc",
+   "name": "subscriptions/fe148026092d56-sc-g-retry-valid",
+   "status": 200,
+   "bodyReadable": true
+  },
+  {
+   "action": "create",
+   "transport": "grpc",
+   "name": "subscriptions/fe148026092d56-sc-g-retry-min-over-max",
+   "status": 400,
+   "bodyReadable": true
+  },
+  {
+   "action": "create",
+   "transport": "grpc",
+   "name": "subscriptions/fe148026092d56-sc-g-retry-max-over-600",
+   "status": 400,
+   "bodyReadable": true
+  },
+  {
+   "action": "create",
+   "transport": "grpc",
+   "name": "subscriptions/fe148026092d56-sc-g-output-state",
+   "status": 200,
+   "bodyReadable": true
+  },
+  {
+   "action": "create",
+   "transport": "grpc",
+   "name": "subscriptions/fe148026092d56-sc-g-dl-5",
+   "status": 200,
+   "bodyReadable": true
+  },
+  {
+   "action": "get",
+   "transport": "grpc",
+   "name": "subscriptions/fe148026092d56-sc-g-dl-5",
+   "status": 200,
+   "bodyReadable": true
+  },
+  {
+   "action": "create",
+   "transport": "grpc",
+   "name": "subscriptions/fe148026092d56-sc-g-dl-default",
+   "status": 200,
+   "bodyReadable": true
+  },
+  {
+   "action": "create",
+   "transport": "grpc",
+   "name": "subscriptions/fe148026092d56-sc-g-dl-4",
+   "status": 400,
+   "bodyReadable": true
+  },
+  {
+   "action": "create",
+   "transport": "grpc",
+   "name": "subscriptions/fe148026092d56-sc-g-dl-101",
+   "status": 400,
+   "bodyReadable": true
+  },
+  {
+   "action": "create",
+   "transport": "grpc",
+   "name": "subscriptions/fe148026092d56-sc-g-dl-missing-topic",
+   "status": 404,
+   "bodyReadable": true
+  },
+  {
+   "action": "create",
+   "transport": "grpc",
+   "name": "subscriptions/fe148026092d56-sc-g-dl-same-topic",
+   "status": 200,
+   "bodyReadable": true
+  },
+  {
+   "action": "create",
+   "transport": "rest",
+   "name": "topics/fe148026092d56-su-r-t",
+   "status": 200,
+   "bodyReadable": true
+  },
+  {
+   "action": "create",
+   "transport": "rest",
+   "name": "subscriptions/fe148026092d56-su-r-s",
+   "status": 200,
+   "bodyReadable": true
+  },
+  {
+   "action": "get",
+   "transport": "rest",
+   "name": "subscriptions/fe148026092d56-su-r-s",
+   "status": 200,
+   "bodyReadable": true
+  },
+  {
+   "action": "get",
+   "transport": "rest",
+   "name": "subscriptions/fe148026092d56-su-r-s",
+   "status": 200,
+   "bodyReadable": true
+  },
+  {
+   "action": "get",
+   "transport": "rest",
+   "name": "subscriptions/fe148026092d56-su-r-s",
+   "status": 200,
+   "bodyReadable": true
+  },
+  {
+   "action": "get",
+   "transport": "rest",
+   "name": "subscriptions/fe148026092d56-su-r-s",
+   "status": 200,
+   "bodyReadable": true
+  },
+  {
+   "action": "get",
+   "transport": "rest",
+   "name": "subscriptions/fe148026092d56-su-r-s",
+   "status": 200,
+   "bodyReadable": true
+  },
+  {
+   "action": "get",
+   "transport": "rest",
+   "name": "subscriptions/fe148026092d56-su-r-s",
+   "status": 200,
+   "bodyReadable": true
+  },
+  {
+   "action": "create",
+   "transport": "grpc",
+   "name": "topics/fe148026092d56-su-g-t",
+   "status": 200,
+   "bodyReadable": true
+  },
+  {
+   "action": "create",
+   "transport": "grpc",
+   "name": "subscriptions/fe148026092d56-su-g-s",
+   "status": 200,
+   "bodyReadable": true
+  },
+  {
+   "action": "get",
+   "transport": "grpc",
+   "name": "subscriptions/fe148026092d56-su-g-s",
+   "status": 200,
+   "bodyReadable": true
+  },
+  {
+   "action": "get",
+   "transport": "grpc",
+   "name": "subscriptions/fe148026092d56-su-g-s",
+   "status": 200,
+   "bodyReadable": true
+  },
+  {
+   "action": "get",
+   "transport": "grpc",
+   "name": "subscriptions/fe148026092d56-su-g-s",
+   "status": 200,
+   "bodyReadable": true
+  },
+  {
+   "action": "get",
+   "transport": "grpc",
+   "name": "subscriptions/fe148026092d56-su-g-s",
+   "status": 200,
+   "bodyReadable": true
+  },
+  {
+   "action": "get",
+   "transport": "grpc",
+   "name": "subscriptions/fe148026092d56-su-g-s",
+   "status": 200,
+   "bodyReadable": true
+  },
+  {
+   "action": "get",
+   "transport": "grpc",
+   "name": "subscriptions/fe148026092d56-su-g-s",
+   "status": 200,
+   "bodyReadable": true
+  },
+  {
+   "action": "create",
+   "transport": "rest",
+   "name": "topics/fe148026092d56-pw-r-t",
+   "status": 200,
+   "bodyReadable": true
+  },
+  {
+   "action": "create",
+   "transport": "rest",
+   "name": "subscriptions/fe148026092d56-pw-r-s",
+   "status": 200,
+   "bodyReadable": true
+  },
+  {
+   "action": "create",
+   "transport": "rest",
+   "name": "topics/fe148026092d56-pw-r-batch",
+   "status": 200,
+   "bodyReadable": true
+  },
+  {
+   "action": "create",
+   "transport": "grpc",
+   "name": "topics/fe148026092d56-pw-g-t",
+   "status": 200,
+   "bodyReadable": true
+  },
+  {
+   "action": "create",
+   "transport": "grpc",
+   "name": "subscriptions/fe148026092d56-pw-g-s",
+   "status": 200,
+   "bodyReadable": true
+  },
+  {
+   "action": "create",
+   "transport": "grpc",
+   "name": "topics/fe148026092d56-pw-g-batch",
+   "status": 200,
+   "bodyReadable": true
+  },
+  {
+   "action": "create",
+   "transport": "rest",
+   "name": "topics/fe148026092d56-pl-r-t",
+   "status": 200,
+   "bodyReadable": true
+  },
+  {
+   "action": "create",
+   "transport": "grpc",
+   "name": "topics/fe148026092d56-pl-g-t",
+   "status": 200,
+   "bodyReadable": true
+  },
+  {
+   "action": "create",
+   "transport": "rest",
+   "name": "topics/fe148026092d56-pa-r-t-s",
+   "status": 200,
+   "bodyReadable": true
+  },
+  {
+   "action": "create",
+   "transport": "rest",
+   "name": "subscriptions/fe148026092d56-pa-r-s",
+   "status": 200,
+   "bodyReadable": true
+  },
+  {
+   "action": "create",
+   "transport": "grpc",
+   "name": "topics/fe148026092d56-pa-g-t-s",
+   "status": 200,
+   "bodyReadable": true
+  },
+  {
+   "action": "create",
+   "transport": "grpc",
+   "name": "subscriptions/fe148026092d56-pa-g-s",
+   "status": 200,
+   "bodyReadable": true
+  },
+  {
+   "action": "create",
+   "transport": "rest",
+   "name": "topics/fe148026092d56-fl-r-t-s",
+   "status": 200,
+   "bodyReadable": true
+  },
+  {
+   "action": "create",
+   "transport": "rest",
+   "name": "subscriptions/fe148026092d56-fl-r-s",
+   "status": 200,
+   "bodyReadable": true
+  },
+  {
+   "action": "create",
+   "transport": "rest",
+   "name": "subscriptions/fe148026092d56-fl-r-s2",
+   "status": 200,
+   "bodyReadable": true
+  },
+  {
+   "action": "create",
+   "transport": "rest",
+   "name": "subscriptions/fe148026092d56-fl-r-s3",
+   "status": 200,
+   "bodyReadable": true
+  },
+  {
+   "action": "create",
+   "transport": "rest",
+   "name": "subscriptions/fe148026092d56-fl-r-s4",
+   "status": 200,
+   "bodyReadable": true
+  },
+  {
+   "action": "create",
+   "transport": "grpc",
+   "name": "topics/fe148026092d56-fl-g-t-s",
+   "status": 200,
+   "bodyReadable": true
+  },
+  {
+   "action": "create",
+   "transport": "grpc",
+   "name": "subscriptions/fe148026092d56-fl-g-s",
+   "status": 200,
+   "bodyReadable": true
+  },
+  {
+   "action": "create",
+   "transport": "grpc",
+   "name": "subscriptions/fe148026092d56-fl-g-s2",
+   "status": 200,
+   "bodyReadable": true
+  },
+  {
+   "action": "create",
+   "transport": "grpc",
+   "name": "subscriptions/fe148026092d56-fl-g-s3",
+   "status": 200,
+   "bodyReadable": true
+  },
+  {
+   "action": "create",
+   "transport": "grpc",
+   "name": "subscriptions/fe148026092d56-fl-g-s4",
+   "status": 200,
+   "bodyReadable": true
+  },
+  {
+   "action": "create",
+   "transport": "rest",
+   "name": "topics/fe148026092d56-or-r-t-s",
+   "status": 200,
+   "bodyReadable": true
+  },
+  {
+   "action": "create",
+   "transport": "rest",
+   "name": "subscriptions/fe148026092d56-or-r-s",
+   "status": 200,
+   "bodyReadable": true
+  },
+  {
+   "action": "create",
+   "transport": "rest",
+   "name": "subscriptions/fe148026092d56-or-r-plain",
+   "status": 200,
+   "bodyReadable": true
+  },
+  {
+   "action": "create",
+   "transport": "grpc",
+   "name": "topics/fe148026092d56-or-g-t-s",
+   "status": 200,
+   "bodyReadable": true
+  }
+ ]
+}

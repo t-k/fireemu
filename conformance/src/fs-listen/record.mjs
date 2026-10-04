@@ -3,11 +3,12 @@
 // resource is named with the run id and deleted by that prefix with a read-back, and the program
 // only records rows. Whether a row is right is decided offline (compare.mjs).
 //
-//   node src/fs-listen/record.mjs native --target production --project fireemu-oracle-txn --out F
+//   node src/fs-listen/record.mjs native --target production --project fireemu-oracle-txn --ledger L --out F
 //   node src/fs-listen/record.mjs native --target local [--profile strict|emulator] --out F
-//   (add `--include-long yes` to also record the expired-token program: about 35 minutes of waiting)
+//   (L: the sandbox ledger; a production run is admitted only if the coordinator holds the project's
+//   lock and its last run ended 30 minutes ago. Add `--include-long yes` to also record the expired-token program: about 35 minutes of waiting)
 //   node src/fs-listen/record.mjs sdk --target production --project fireemu-oracle-query \
-//        --api-key-file KEY --out F     (KEY: a 0600 file holding only the web app's API key;
+//        --ledger L --api-key-file KEY --out F     (KEY: a 0600 file holding only the web app's API key;
 //                                         the key is bound to the project before anything is made)
 //   node src/fs-listen/record.mjs sdk --target local [--profile strict|emulator] --out F
 //
@@ -22,6 +23,7 @@ import { promisify } from "node:util";
 
 import { resolveFireemuBinary } from "../evidence.mjs";
 import { createNativeClient } from "./native-client.mjs";
+import { checkAdmission } from "./admission.mjs";
 import { createLedger, settleNames } from "./native-ledger.mjs";
 import { LONG_PROGRAMS, NATIVE_PROGRAMS, programProblems } from "./native-programs.mjs";
 import { runNative } from "./native-run.mjs";
@@ -103,8 +105,20 @@ export async function recordNative({
   };
 }
 
+/** The read-only admission of a production recording: the project's lock is held and the spacing has passed. */
+async function admit(options) {
+  if (!options.ledger) throw new Error("--ledger <sandbox-ledger.jsonl> is required");
+  const admitted = await checkAdmission({
+    ledger: options.ledger,
+    project: options.project,
+    readFile,
+  });
+  console.error(`admitted: lock held by ${admitted.holder.taskId}`);
+}
+
 async function nativeProduction(options) {
   checkProject("native", options.project);
+  await admit(options);
   const problems = programProblems([...NATIVE_PROGRAMS, ...LONG_PROGRAMS]);
   if (problems.length) throw new Error(`the programs are malformed:\n${problems.join("\n")}`);
   const client = createNativeClient({
@@ -198,6 +212,7 @@ export async function withFireemu({ profile, script, args, env, rules }) {
 
 async function sdkProduction(options) {
   checkProject("sdk", options.project);
+  await admit(options);
   if (!options["api-key-file"]) throw new Error("--api-key-file <file> is required");
   const apiKey = await loadApiKey(options["api-key-file"]);
   const token = await accessToken();

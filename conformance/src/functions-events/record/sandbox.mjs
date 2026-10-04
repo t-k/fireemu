@@ -183,18 +183,36 @@ export function ledgerProblems(ledgerText, now = Date.now(), { readJournal } = {
   return problems;
 }
 
-/** The task's estimated cost so far (each run once, at its highest estimate) plus this run's reserve must stay within the owner's cap. */
+const isCost = (value) => typeof value === "number" && Number.isFinite(value) && value >= 0;
+
+/**
+ * The task's estimated cost so far plus this run's reserve must stay within the owner's cap (ledger 776).
+ * Each run counts once. A run counts at its highest estimate (the reserve its `started` line books) unless the
+ * coordinator closed it with a `cleanup-verified` line of the task: then that line's `estimatedUsd` is the run's
+ * actual cost (owner ledger 823). Fail closed: a cost that is not a number (a close line with no cost included),
+ * two close lines of one run with different costs, and a run with no close line (it stays at its reserve).
+ */
 export function budgetProblems(ledgerText, { reserve = RESERVE_USD, cap = TASK_CAP_USD } = {}) {
   const byRun = new Map();
   for (const row of ledgerEntries(ledgerText)) {
     if (row.taskId !== TASK_ID) continue;
-    const cost = row.estimatedUsd ?? 0;
-    if (typeof cost !== "number" || !Number.isFinite(cost) || cost < 0)
+    const closing =
+      row.event === "cleanup-verified" && typeof row.runDir === "string" && row.runDir !== "";
+    const cost = closing ? row.estimatedUsd : (row.estimatedUsd ?? 0);
+    if (!isCost(cost))
       return [`a line of the task has a cost that is not a number: ${JSON.stringify(cost)}`];
     const key = row.runDir ?? `${row.ts}`;
-    byRun.set(key, Math.max(byRun.get(key) ?? 0, cost));
+    const run = byRun.get(key) ?? { highest: 0, closes: [] };
+    run.highest = Math.max(run.highest, cost);
+    if (closing) run.closes.push(cost);
+    byRun.set(key, run);
   }
-  const spent = [...byRun.values()].reduce((a, b) => a + b, 0);
+  let spent = 0;
+  for (const [key, run] of byRun) {
+    if (run.closes.some((cost) => cost !== run.closes[0]))
+      return [`the run ${JSON.stringify(key)} has close lines with different costs`];
+    spent += run.closes.length > 0 ? run.closes[0] : run.highest;
+  }
   return spent + reserve > cap + 1e-9
     ? [
         `the task has used US$${spent.toFixed(2)}; this run's reserve US$${reserve.toFixed(2)} passes the cap of US$${cap}`,

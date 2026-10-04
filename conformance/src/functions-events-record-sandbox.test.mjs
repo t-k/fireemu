@@ -95,6 +95,138 @@ test("the budget counts each run once and refuses a reserve that passes the cap"
   assert.equal(sandbox.budgetProblems(row({ event: "started", estimatedUsd: "2" })).length, 1);
 });
 
+// ---- the budget with the coordinator's close line (owner ledger 823) ---------------------------------
+
+const costRow = (over) =>
+  JSON.stringify({
+    ts: "2026-10-04T14:55:00Z",
+    project: sandbox.PROJECT,
+    taskId: sandbox.TASK_ID,
+    ...over,
+  });
+const runRows = (runDir, { reserve = 4, close } = {}) => [
+  costRow({ event: "started", runDir, estimatedUsd: reserve }),
+  costRow({ event: "finished", runDir, outcome: "stopped-clean", estimatedUsd: reserve }),
+  ...(close === undefined ? [] : [costRow({ event: "cleanup-verified", runDir, ...close })]),
+];
+/** The largest reserve that still fits under the cap, found by asking the function. */
+const headroom = (text) => {
+  let [low, high] = [0, 100];
+  for (let i = 0; i < 50; i += 1) {
+    const middle = (low + high) / 2;
+    if (sandbox.budgetProblems(text, { reserve: middle }).length === 0) low = middle;
+    else high = middle;
+  }
+  return Math.round(low * 100) / 100;
+};
+
+test("a run the coordinator closed counts at the close line's cost, not at its reserve", () => {
+  const open = runRows("a", { reserve: 4 }).join("\n");
+  assert.equal(headroom(open), 30);
+  const closed = runRows("a", { reserve: 4, close: { estimatedUsd: 0 } }).join("\n");
+  assert.equal(headroom(closed), 34);
+  const costly = runRows("a", { reserve: 4, close: { estimatedUsd: 5 } }).join("\n");
+  assert.equal(headroom(costly), 29);
+  // the close line is final even when it comes first in the file
+  const first = [...runRows("a", { close: { estimatedUsd: 0 } }).toReversed()].join("\n");
+  assert.equal(headroom(first), 34);
+  // two close lines with the same cost are one cost
+  const twice = [
+    ...runRows("a", { close: { estimatedUsd: 1 } }),
+    costRow({ event: "cleanup-verified", runDir: "a", estimatedUsd: 1 }),
+  ].join("\n");
+  assert.equal(headroom(twice), 33);
+});
+
+test("the budget fails closed on the near misses of the close line", () => {
+  const close = (over) => runRows("a", { close: over }).join("\n");
+  const refused = (text) => sandbox.budgetProblems(text, { reserve: 0 }).length === 1;
+  assert.ok(refused(close({ estimatedUsd: undefined })), "a close line with no cost");
+  assert.ok(refused(close({ estimatedUsd: null })), "a close line with a null cost");
+  assert.ok(refused(close({ estimatedUsd: "0" })), "a close line with a string cost");
+  assert.ok(refused(close({ estimatedUsd: -1 })), "a negative cost");
+  assert.ok(refused(close({ estimatedUsd: Number.NaN })), "a cost that is not finite");
+  const differing = [
+    ...runRows("a", { close: { estimatedUsd: 0 } }),
+    costRow({ event: "cleanup-verified", runDir: "a", estimatedUsd: 1 }),
+  ].join("\n");
+  assert.ok(refused(differing), "two close lines with different costs");
+  const order = `${costRow({ event: "cleanup-verified", runDir: "a", estimatedUsd: 1 })}\n${runRows("a", { close: { estimatedUsd: 0 } }).join("\n")}`;
+  assert.ok(refused(order), "different costs in either order");
+  // lines that are not a close line of a run keep the old rule (the highest estimate counts)
+  const notClosing = [
+    ...runRows("a", { reserve: 4 }),
+    costRow({ event: "cleanup-verified", estimatedUsd: 0, ts: "2026-10-04T16:00:00Z" }),
+    costRow({ event: "cleanup-verified", runDir: "", estimatedUsd: 0, ts: "2026-10-04T16:01:00Z" }),
+    costRow({ event: "cleanup-verified", runDir: "a", taskId: "OTHER-TASK", estimatedUsd: 0 }),
+    costRow({ event: "note", runDir: "a", estimatedUsd: 0 }),
+  ].join("\n");
+  assert.equal(headroom(notClosing), 30);
+  // a run with a started line and nothing after counts at its reserve; another run's close line does not help it
+  const unfinished = [
+    costRow({ event: "started", runDir: "a", estimatedUsd: 4 }),
+    ...runRows("b", { close: { estimatedUsd: 0 } }),
+  ].join("\n");
+  assert.equal(headroom(unfinished), 30);
+  // a finished run with no close line keeps its estimate
+  assert.equal(headroom(runRows("a", { reserve: 2 }).join("\n")), 32);
+});
+
+test("the budget counts the 14:55Z and 15:26Z runs at 0 and a run without a close line at its estimate (rows 579-584 and 565-566)", () => {
+  const lines = (runDir, ts, over) => costRow({ runDir, ts, ...over });
+  const text = [
+    // FE 012 stage 2: no close line, keeps its 2.00
+    lines("fe012", "2026-10-01T08:34:07.967012Z", { event: "started", estimatedUsd: 2 }),
+    lines("fe012", "2026-10-01T08:50:30.918120Z", {
+      event: "finished",
+      outcome: "prepared",
+      requests: 84,
+      estimatedUsd: 2,
+    }),
+    // the 14:55Z run of envelope 001 (close line 0)
+    lines("r1455", "2026-10-04T14:55:11.429Z", { event: "started", estimatedUsd: 4 }),
+    lines("r1455", "2026-10-04T14:55:26.646Z", {
+      event: "finished",
+      outcome: "stopped-clean",
+      requests: 22,
+      estimatedUsd: 4,
+    }),
+    lines("r1455", "2026-10-04T14:56:22.709811Z", {
+      event: "cleanup-verified",
+      sandboxAtBaseline: true,
+      requests: 22,
+      unknownAnswers: 0,
+      estimatedUsd: 0,
+    }),
+    // the 15:26Z run of envelope 002 (close line 0)
+    lines("r1526", "2026-10-04T15:26:48.489Z", { event: "started", estimatedUsd: 4 }),
+    lines("r1526", "2026-10-04T15:28:29.427Z", {
+      event: "finished",
+      outcome: "incomplete-clean",
+      requests: 57,
+      estimatedUsd: 4,
+    }),
+    lines("r1526", "2026-10-04T15:30:40.780641Z", {
+      event: "cleanup-verified",
+      sandboxAtBaseline: true,
+      requests: 57,
+      unknownAnswers: 0,
+      estimatedUsd: 0,
+    }),
+  ].join("\n");
+  assert.equal(headroom(text), 32, "only the FE 012 run's 2.00 is spent");
+  assert.deepEqual(sandbox.budgetProblems(text), []);
+  assert.equal(
+    headroom(
+      text
+        .replaceAll('"estimatedUsd":0,', '"estimatedUsd":4,')
+        .replaceAll('"estimatedUsd":0}', '"estimatedUsd":4}'),
+    ),
+    24,
+    "with the old rule the two runs would count 4 each",
+  );
+});
+
 const pins = {
   packetSha256: "a".repeat(64),
   harnessSha256: "b".repeat(64),
@@ -590,3 +722,23 @@ test("model: with a run that wrote nothing in the ledger, only the other lines o
     assert.equal(spaced(problems), expected, JSON.stringify({ extras, problems }));
   }
 });
+
+test(
+  "real ledger: spent is US$24.50 with the close lines, so the v4 reserve fits (28.50 of 34)",
+  { skip: !haveReal },
+  () => {
+    const text = readFileSync(realLedger, "utf8");
+    assert.deepEqual(sandbox.budgetProblems(text), []);
+    assert.equal(headroom(text), 9.5, "24.50 spent, headroom to the cap of 34");
+    // without the close lines of the 14:55Z and 15:26Z runs the two reserves would count (the owner's old rule)
+    const noClose = text
+      .split("\n")
+      .filter(
+        (line) =>
+          !/"event": ?"cleanup-verified"/.test(line) ||
+          !/functions-events-formal-2026100[4]T1(45|52)/.test(line),
+      )
+      .join("\n");
+    assert.equal(headroom(noClose), 1.5);
+  },
+);

@@ -67,6 +67,45 @@ test("each CLI action has its own timeout: the dry run is the shortest, the depl
   });
 });
 
+test("runCli arms the timeout of its own action unless one is given", async () => {
+  const { EventEmitter } = await import("node:events");
+  const delays = [];
+  const realSetTimeout = globalThis.setTimeout;
+  globalThis.setTimeout = (fn, ms, ...rest) => {
+    if (ms >= 60_000) delays.push(ms);
+    return realSetTimeout(fn, ms, ...rest);
+  };
+  try {
+    for (const [action, timeoutMs, expected] of [
+      ["deploy", undefined, 40 * 60_000],
+      ["dry-run", undefined, 10 * 60_000],
+      ["delete", undefined, 20 * 60_000],
+      ["dry-run", 123_456, 123_456],
+    ]) {
+      delays.length = 0;
+      const directory = mkdtempSync(join(tmpdir(), "fe-cli-"));
+      const result = await runCli({
+        action,
+        plan: { args: [], cwd: directory, env: {} },
+        firebaseJs: "x",
+        node: "node",
+        directory,
+        timeoutMs,
+        spawnFn: () => {
+          const child = new EventEmitter();
+          child.pid = 0;
+          realSetTimeout(() => child.emit("exit", 0, null), 5);
+          return child;
+        },
+      });
+      assert.equal(result.exitCode, 0, action);
+      assert.deepEqual(delays, [expected], `${action} ${timeoutMs ?? ""}`);
+    }
+  } finally {
+    globalThis.setTimeout = realSetTimeout;
+  }
+});
+
 test("the deploy carries --force, the dry run is the same command with --dry-run appended, the delete is as before", () => {
   const options = {
     configHome: "/tmp/c",

@@ -14,5 +14,6 @@ pub mod edition;
 pub mod hash;
 pub mod ids;
 pub mod json;
+pub mod pubsub_message_id;
 pub mod resources;
 pub mod time;

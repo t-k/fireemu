@@ -17,15 +17,14 @@
 pub mod error;
 pub mod filter;
 pub mod message;
-pub mod message_id;
 pub mod name;
 pub mod state;
 pub mod subscription;
 
 pub use error::{Code, PubSubError, Result};
 pub use filter::Filter;
+pub use fireemu_core_types::pubsub_message_id::{pubsub_message_id, SPAN as MESSAGE_ID_SPAN};
 pub use message::{PubsubMessage, StoredMessage};
-pub use message_id::pubsub_message_id;
 pub use name::{SubscriptionName, TopicName};
 pub use state::{DeadLetterForward, PubSubState, PullResult, Snapshot};
 pub use subscription::{

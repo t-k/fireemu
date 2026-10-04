@@ -1129,11 +1129,17 @@ function v1Context(msg) {
       };
     case "pubsub": {
       const topic = String(event.source || "").replace(/^\/\/pubsub\.googleapis\.com\//, "");
+      // Production (functions-events-formal run a9621bfae74fe9bc, handler pubsubPublishedV1): the
+      // timestamp has exactly three fraction digits and the resource carries the message type.
       return {
         eventId: event.id,
-        timestamp: event.time,
+        timestamp: millisecondTimestamp(event.time),
         eventType: "google.pubsub.topic.publish",
-        resource: { service: "pubsub.googleapis.com", name: topic },
+        resource: {
+          service: "pubsub.googleapis.com",
+          name: topic,
+          type: "type.googleapis.com/google.pubsub.v1.PubsubMessage",
+        },
         params: {},
       };
     }

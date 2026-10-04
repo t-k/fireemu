@@ -1,4 +1,5 @@
-//! The ids of published messages.
+//! The ids of published Pub/Sub messages, shared by the broker (`fireemu-core-pubsub`) and the
+//! Functions runtime's own publish path.
 //!
 //! Production gives every published message a decimal id of seventeen digits, with no relation to
 //! the order of publication. The four ids of the FUNCTIONS-EVENTS formal record of 2026-10-04 (run
@@ -7,7 +8,7 @@
 //! which is also the `messageId`) are `22254343790642112`, `22256683947060623`,
 //! `22254564432090315` and `22255693239595822`: all in `2225e13..2226e13`. The counter of the
 //! emulator's state is mapped into the same range by a fixed permutation, so a recorded run replays
-//! with the same ids and two messages of one state never share an id.
+//! with the same ids and two messages of one counter never share an id.
 
 /// The first id of the range: `22250000000000000`, seventeen digits.
 const FIRST: u64 = 22_250_000_000_000_000;
@@ -60,7 +61,10 @@ mod tests {
         assert_ne!(ids[0], "1");
         let mut sorted = ids.clone();
         sorted.sort();
-        assert_ne!(ids, sorted, "the order of the ids is not the order of the messages");
+        assert_ne!(
+            ids, sorted,
+            "the order of the ids is not the order of the messages"
+        );
     }
 
     #[test]

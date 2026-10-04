@@ -4470,6 +4470,31 @@ fn the_bounded_run_window_matches_enumeration_in_iana_zones() {
 }
 
 #[tokio::test]
+async fn messages_published_through_the_runtime_get_seventeen_digit_decimal_ids() {
+    // Production's message ids are seventeen-digit decimal strings, not counts or session
+    // strings (FUNCTIONS-EVENTS formal record 2026-10-04, `messageId` of the 2nd gen frames
+    // 6ac2a47f0000967f445e8b09 and 6ac2a51c000844422b7986d1).
+    let (runtime, _clock) = start().await;
+    let ids = runtime.publish(
+        "jobs",
+        &[
+            serde_json::json!({"data": "YQ=="}),
+            serde_json::json!({"data": "Yg=="}),
+        ],
+    );
+    let silent = runtime.publish("nobody", &[serde_json::json!({"data": ""})]);
+    let mut all: Vec<String> = ids.into_iter().chain(silent).collect();
+    for id in &all {
+        assert_eq!(id.len(), 17, "{id}");
+        assert!(id.bytes().all(|byte| byte.is_ascii_digit()), "{id}");
+    }
+    all.sort();
+    all.dedup();
+    assert_eq!(all.len(), 3, "the ids are all different");
+    assert!(runtime.await_idle(Duration::from_secs(5)).await.is_ok());
+}
+
+#[tokio::test]
 async fn diagnostic_retention_is_bounded_and_counters_survive_eviction() {
     // FN-RET-01 / 03 / 04: completing twice the retention budget leaves a bounded window in
     // the order the records were made, while the cumulative counters keep every outcome.

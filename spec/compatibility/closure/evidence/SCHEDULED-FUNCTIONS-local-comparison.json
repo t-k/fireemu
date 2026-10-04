@@ -2,10 +2,12 @@
   "schemaVersion": 1,
   "parent": "SCHEDULED-FUNCTIONS",
   "evidenceType": "fireemu-only",
-  "sourceCommit": "305b6a2d07cbe68f1b43eb7f3de65eae338f32f5",
+  "sourceCommit": "e609246031c5348bbe82d766f89d8f7c5800eab7",
   "artifactSha256": "fdbecf5a452ac9deb2f3cf1968c2087d0a2ca3a4cda7c977d9668d988e440303",
+  "artifactBuiltFrom": "305b6a2d07cbe68f1b43eb7f3de65eae338f32f5",
+  "artifactNote": "The release binary fireemu was built at artifactBuiltFrom. sourceCommit differs from it by test code, documentation and closure files only.",
   "runnerSha256": "56280f3e549ad5f47447f5e96feba2ae64a2af77eadc4b2bfd0e835d33dbe56a",
-  "runnerTreeManifestFormat": "For each runner-node file sorted by filename in ascending ASCII order, concatenate UTF-8 filename, TAB, lowercase SHA-256 hex of file bytes, LF; SHA-256 the concatenated bytes.",
+  "runnerTreeManifestFormat": "For each file of tools/runner-node that the product bundles (every tracked file except *.test.mjs), sorted by file name in ascending ASCII order: the UTF-8 file name, TAB, the lowercase SHA-256 hex of the file bytes, LF. SHA-256 the concatenated bytes.",
   "testTool": "cargo nextest run (profile pr), one test id per mapped test: path#name",
   "claim": "Local tests only. No production behaviour is claimed for these conditions (scope decision S7).",
   "mutation": {
@@ -173,7 +175,14 @@
         "result": "170 mutants: 105 caught, 30 missed, 32 timeouts. Tests were added for restricted months and leap days, cron-field latest and none, the DST gap and fold, a cap equal to the window, and the deterministic work counter; 26 of the 30 are now killed and four are equivalent (above)."
       }
     ],
-    "notRun": "The control crate's route function was not run through cargo-mutants: one mutant costs the whole adapter-http suite (about four minutes of baseline, more than ten minutes with a hang). Four hand mutants on its boundary conditions replace it."
+    "notRun": "The control crate's route function was not run through cargo-mutants: one mutant costs the whole adapter-http suite (about four minutes of baseline, more than ten minutes with a hang). Four hand mutants on its boundary conditions replace it.",
+    "noopControl": {
+      "description": "A semantic no-op edit (swapping the operands of max in on_clock_changed) run under the same command as the mutants.",
+      "status": "SURVIVED",
+      "summary": "32 tests run: 32 passed",
+      "note": "Every cargo-mutants run above also passes its unmutated baseline under the same command and test order (the first line of each mut-*.log)."
+    },
+    "killingTests": "mutants-killing-tests.json lists, for each caught mutant, the failing test names taken from its own log; timeouts have no test and are listed separately."
   },
   "rows": [
     {
@@ -183,6 +192,11 @@
       "tests": [
         {
           "id": "crates/fireemu/src/config.rs#daemon_clock_start_pins_the_clock_and_refuses_what_is_not_a_time",
+          "binary": "fireemu::bin/fireemu",
+          "result": "PASS"
+        },
+        {
+          "id": "crates/fireemu/src/config.rs#a_scheduler_or_clock_setting_that_is_not_a_string_is_refused",
           "binary": "fireemu::bin/fireemu",
           "result": "PASS"
         }
@@ -195,6 +209,11 @@
       "tests": [
         {
           "id": "crates/fireemu/src/config.rs#scheduler_default_time_zone_is_validated_and_kept",
+          "binary": "fireemu::bin/fireemu",
+          "result": "PASS"
+        },
+        {
+          "id": "crates/fireemu/src/config.rs#a_scheduler_or_clock_setting_that_is_not_a_string_is_refused",
           "binary": "fireemu::bin/fireemu",
           "result": "PASS"
         },
@@ -241,6 +260,11 @@
           "id": "crates/fireemu/src/config.rs#scheduler_clock_accepts_virtual_and_refuses_wall_and_everything_else",
           "binary": "fireemu::bin/fireemu",
           "result": "PASS"
+        },
+        {
+          "id": "crates/fireemu/src/config.rs#a_scheduler_or_clock_setting_that_is_not_a_string_is_refused",
+          "binary": "fireemu::bin/fireemu",
+          "result": "PASS"
         }
       ]
     },
@@ -251,6 +275,11 @@
       "tests": [
         {
           "id": "crates/fireemu/src/config.rs#scheduler_and_clock_settings_in_the_wrong_place_are_refused",
+          "binary": "fireemu::bin/fireemu",
+          "result": "PASS"
+        },
+        {
+          "id": "crates/fireemu/src/config.rs#a_section_that_is_not_an_object_is_refused",
           "binary": "fireemu::bin/fireemu",
           "result": "PASS"
         },

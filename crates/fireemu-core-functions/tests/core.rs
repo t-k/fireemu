@@ -994,4 +994,19 @@ fn the_work_counter_is_deterministic() {
         100,
     );
     assert_eq!(f.steps, 39, "a fold window walks one repeated hour");
+    // An every-minute schedule across the repeated hour: 01:01 to 01:59 run once (05:01 to 05:59Z),
+    // and the second 01:00 hour (06:00 to 06:59Z) holds no run at all.
+    let every_minute = Schedule::parse("* * * * *").unwrap();
+    let m = every_minute.window_in(
+        t("2026-11-01T05:00:00Z"),
+        t("2026-11-01T06:10:00Z"),
+        &ny,
+        1_000,
+    );
+    assert_eq!(m.count, RunCount::Exact(59));
+    assert_eq!(m.latest, Some(t("2026-11-01T05:59:00Z")));
+    assert_eq!(
+        m.steps, 100,
+        "a window ending in the repeated hour starts its walk at the right height"
+    );
 }

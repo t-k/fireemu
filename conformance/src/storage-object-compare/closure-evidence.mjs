@@ -237,23 +237,25 @@ export function applyClosure({
   const copy = structuredClone(closure);
   for (const condition of copy.conditions) {
     if (hold.includes(condition.conditionId)) continue;
-    if (
-      condition.conditionId.endsWith("/final-artifact-regression") &&
-      finalArtifact !== undefined
-    ) {
-      condition.status = "VERIFIED";
-      condition.evidence = {
-        productionRecordings: structuredClone(recordings),
-        finalArtifactSha256: comparison.artifactSha256,
-        sourceCommit: comparison.sourceCommit,
-        comparisonPath,
-        rows: { MATCH: comparison.rows.length },
-        buildRecordPath: finalArtifact.buildRecordPath,
-        buildRecordSha256: finalArtifact.buildRecordSha256,
-      };
+    if (GATES.has(condition.conditionId.split("/").at(-1))) {
+      // Only the final-artifact gate takes evidence, and only from a build record.
+      if (
+        condition.conditionId.endsWith("/final-artifact-regression") &&
+        finalArtifact !== undefined
+      ) {
+        condition.status = "VERIFIED";
+        condition.evidence = {
+          productionRecordings: structuredClone(recordings),
+          finalArtifactSha256: comparison.artifactSha256,
+          sourceCommit: comparison.sourceCommit,
+          comparisonPath,
+          rows: { MATCH: comparison.rows.length },
+          buildRecordPath: finalArtifact.buildRecordPath,
+          buildRecordSha256: finalArtifact.buildRecordSha256,
+        };
+      }
       continue;
     }
-    if (GATES.has(condition.conditionId.split("/").at(-1))) continue;
     let rows = 0;
     for (const recipe of condition.recipeIds ?? []) {
       const entry = perRecipe.get(recipe);

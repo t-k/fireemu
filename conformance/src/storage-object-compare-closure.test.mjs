@@ -804,6 +804,17 @@ test("the final artifact needs a build record of the compared binary: its commit
       /build record/i,
       name,
     );
+  // The refusal names what is wrong, so a malformed commit or digest is not caught by the comparison with the binary.
+  for (const sourceCommit of ["abc", 5, null, "E".repeat(40)])
+    refuses(
+      () => finalArtifactEvidence({ buildRecord: buildRecord({ sourceCommit }), comparison }),
+      /no source commit/,
+    );
+  for (const binarySha256 of ["abc", 5, null, "E".repeat(64)])
+    refuses(
+      () => finalArtifactEvidence({ buildRecord: buildRecord({ binarySha256 }), comparison }),
+      /no binary digest/,
+    );
   const missing = buildRecord();
   delete missing.cargoVersion;
   refuses(() => finalArtifactEvidence({ buildRecord: missing, comparison }), /build record/i);
@@ -926,7 +937,7 @@ test("the command copies the build record next to the evidence, pins its digest 
     out: join(dir, "comparison.json"),
     "comparison-path": "cp",
     "build-record": write("build.json", record),
-    "build-record-out": join(dir, "build-copy.json"),
+    "build-record-out": join(dir, "nested", "deeper", "build-copy.json"),
     "build-record-path": "bp",
     ...extra,
   });

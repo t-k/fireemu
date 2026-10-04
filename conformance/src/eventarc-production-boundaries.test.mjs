@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { createServer } from "node:http";
+import { fileURLToPath } from "node:url";
 import { mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -216,7 +217,13 @@ test("the options: one digit is a project number, a location has 2 to 41 charact
   assert.throws(() => parseArgs([...base, "--location", `a${"b".repeat(41)}`]), /not a location/);
   const result = spawnSync(
     process.execPath,
-    ["src/eventarc-production/record.mjs", "--target", "nope", "--out", "x"],
+    [
+      fileURLToPath(new URL("./eventarc-production/record.mjs", import.meta.url)),
+      "--target",
+      "nope",
+      "--out",
+      "x",
+    ],
     { encoding: "utf8" },
   );
   assert.equal(result.status, 2);

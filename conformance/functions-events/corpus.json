@@ -1,0 +1,3670 @@
+{
+  "schemaVersion": 1,
+  "parent": "FUNCTIONS-EVENTS",
+  "status": "LOCAL_DRAFT",
+  "transport": "none",
+  "productionEvidence": null,
+  "sendAuthorized": false,
+  "requestBudget": null,
+  "scope": "Frozen behavioral obligations only; each row is an observation aspect, not a separately budgeted send.",
+  "notPrepared": [
+    "pinned-sdk-handlers",
+    "concrete-request-bytes-and-budgets",
+    "deployment-and-iam-plan",
+    "dedicated-project-readiness",
+    "bounded-private-event-capture",
+    "versioning-and-rules-restoration",
+    "production-recording-1",
+    "production-recording-2",
+    "evidence-based-normalization",
+    "final-artifact-comparison",
+    "independent-closure-review"
+  ],
+  "rawEventPolicy": "Retain raw IDs, times, resource names and payloads privately; no pre-observation normalization.",
+  "scenarios": [
+    {
+      "id": "fs-create",
+      "source": "firestore",
+      "mutation": "firestore.create",
+      "resource": "collection-primary",
+      "credential": "admin",
+      "preconditions": [
+        "owned-resource-binding",
+        "handler-readiness-readback",
+        "document-absent"
+      ],
+      "cleanup": [
+        "owned-documents-typed-absence"
+      ],
+      "sourceResult": "typed-success",
+      "readback": [
+        "document-state"
+      ]
+    },
+    {
+      "id": "fs-update",
+      "source": "firestore",
+      "mutation": "firestore.update",
+      "resource": "collection-primary",
+      "credential": "admin",
+      "preconditions": [
+        "owned-resource-binding",
+        "handler-readiness-readback",
+        "seeded-document-readback",
+        "seed-event-drained"
+      ],
+      "cleanup": [
+        "owned-documents-typed-absence"
+      ],
+      "sourceResult": "typed-success",
+      "readback": [
+        "document-state"
+      ]
+    },
+    {
+      "id": "fs-delete",
+      "source": "firestore",
+      "mutation": "firestore.delete",
+      "resource": "collection-primary",
+      "credential": "admin",
+      "preconditions": [
+        "owned-resource-binding",
+        "handler-readiness-readback",
+        "seeded-document-readback",
+        "seed-event-drained"
+      ],
+      "cleanup": [
+        "owned-documents-typed-absence"
+      ],
+      "sourceResult": "typed-success",
+      "readback": [
+        "document-state"
+      ]
+    },
+    {
+      "id": "fs-noop",
+      "source": "firestore",
+      "mutation": "firestore.write-same-value",
+      "resource": "collection-primary",
+      "credential": "admin",
+      "preconditions": [
+        "owned-resource-binding",
+        "handler-readiness-readback",
+        "seeded-document-readback",
+        "seed-event-drained",
+        "same-typed-fields"
+      ],
+      "cleanup": [
+        "owned-documents-typed-absence"
+      ],
+      "sourceResult": "typed-success",
+      "readback": [
+        "document-state"
+      ]
+    },
+    {
+      "id": "fs-other-path",
+      "source": "firestore",
+      "mutation": "firestore.create",
+      "resource": "collection-control",
+      "credential": "admin",
+      "preconditions": [
+        "owned-resource-binding",
+        "handler-readiness-readback",
+        "document-absent"
+      ],
+      "cleanup": [
+        "owned-documents-typed-absence"
+      ],
+      "sourceResult": "typed-success",
+      "readback": [
+        "document-state"
+      ]
+    },
+    {
+      "id": "fs-auth-client",
+      "source": "firestore",
+      "mutation": "firestore.create",
+      "resource": "collection-primary",
+      "credential": "signed-in-client",
+      "preconditions": [
+        "owned-resource-binding",
+        "handler-readiness-readback",
+        "owned-user-created",
+        "rules-reviewed-and-read-back",
+        "document-absent"
+      ],
+      "cleanup": [
+        "owned-documents-typed-absence",
+        "owned-users-typed-absence",
+        "rules-restoration-readback"
+      ],
+      "sourceResult": "typed-success",
+      "readback": [
+        "document-state"
+      ]
+    },
+    {
+      "id": "fs-auth-admin",
+      "source": "firestore",
+      "mutation": "firestore.create",
+      "resource": "collection-primary",
+      "credential": "admin",
+      "preconditions": [
+        "owned-resource-binding",
+        "handler-readiness-readback",
+        "document-absent"
+      ],
+      "cleanup": [
+        "owned-documents-typed-absence"
+      ],
+      "sourceResult": "typed-success",
+      "readback": [
+        "document-state"
+      ]
+    },
+    {
+      "id": "fs-retry",
+      "source": "firestore",
+      "mutation": "firestore.create",
+      "resource": "collection-primary",
+      "credential": "admin",
+      "preconditions": [
+        "owned-resource-binding",
+        "handler-readiness-readback",
+        "document-absent",
+        "retry-enabled-readback",
+        "durable-fail-once-handler-state"
+      ],
+      "cleanup": [
+        "owned-documents-typed-absence",
+        "owned-retry-state-absence",
+        "retry-handler-disabled-readback"
+      ],
+      "sourceResult": "typed-success",
+      "readback": [
+        "document-state"
+      ]
+    },
+    {
+      "id": "storage-upload",
+      "source": "storage",
+      "mutation": "storage.upload",
+      "resource": "bucket-primary",
+      "credential": "admin",
+      "preconditions": [
+        "owned-resource-binding",
+        "handler-readiness-readback",
+        "object-absent"
+      ],
+      "cleanup": [
+        "owned-object-generations-typed-absence"
+      ],
+      "objectRole": "primary",
+      "sourceResult": "typed-success",
+      "readback": [
+        "object-state-and-generation"
+      ]
+    },
+    {
+      "id": "storage-overwrite",
+      "source": "storage",
+      "mutation": "storage.overwrite",
+      "resource": "bucket-primary",
+      "credential": "admin",
+      "preconditions": [
+        "owned-resource-binding",
+        "handler-readiness-readback",
+        "seeded-object-generation-readback",
+        "seed-event-drained"
+      ],
+      "cleanup": [
+        "owned-object-generations-typed-absence"
+      ],
+      "objectRole": "primary",
+      "sourceResult": "typed-success",
+      "readback": [
+        "object-state-and-generation"
+      ]
+    },
+    {
+      "id": "storage-failed-upload",
+      "source": "storage",
+      "mutation": "storage.upload-invalid-checksum",
+      "resource": "bucket-primary",
+      "credential": "admin",
+      "preconditions": [
+        "owned-resource-binding",
+        "handler-readiness-readback",
+        "object-absent"
+      ],
+      "cleanup": [
+        "owned-object-generations-typed-absence"
+      ],
+      "objectRole": "primary",
+      "sourceResult": "typed-refusal",
+      "readback": [
+        "object-state-and-generation"
+      ]
+    },
+    {
+      "id": "storage-delete",
+      "source": "storage",
+      "mutation": "storage.delete",
+      "resource": "bucket-primary",
+      "credential": "admin",
+      "preconditions": [
+        "owned-resource-binding",
+        "handler-readiness-readback",
+        "seeded-object-generation-readback",
+        "seed-event-drained"
+      ],
+      "cleanup": [
+        "owned-object-generations-typed-absence"
+      ],
+      "objectRole": "primary",
+      "sourceResult": "typed-success",
+      "readback": [
+        "object-state-and-generation"
+      ]
+    },
+    {
+      "id": "storage-delete-missing",
+      "source": "storage",
+      "mutation": "storage.delete",
+      "resource": "bucket-primary",
+      "credential": "admin",
+      "preconditions": [
+        "owned-resource-binding",
+        "handler-readiness-readback",
+        "object-typed-absence"
+      ],
+      "cleanup": [
+        "owned-object-generations-typed-absence"
+      ],
+      "objectRole": "primary",
+      "sourceResult": "typed-refusal",
+      "readback": [
+        "object-state-and-generation"
+      ]
+    },
+    {
+      "id": "storage-metadata",
+      "source": "storage",
+      "mutation": "storage.patch-custom-metadata",
+      "resource": "bucket-primary",
+      "credential": "admin",
+      "preconditions": [
+        "owned-resource-binding",
+        "handler-readiness-readback",
+        "seeded-object-generation-readback",
+        "seed-event-drained"
+      ],
+      "cleanup": [
+        "owned-object-generations-typed-absence"
+      ],
+      "objectRole": "primary",
+      "sourceResult": "typed-success",
+      "readback": [
+        "object-state-and-generation"
+      ]
+    },
+    {
+      "id": "storage-archive",
+      "source": "storage",
+      "mutation": "storage.overwrite",
+      "resource": "bucket-primary",
+      "credential": "admin",
+      "preconditions": [
+        "owned-resource-binding",
+        "handler-readiness-readback",
+        "versioning-readback-enabled",
+        "seeded-object-generation-readback",
+        "seed-event-drained"
+      ],
+      "cleanup": [
+        "all-owned-object-generations",
+        "versioning-restoration-readback"
+      ],
+      "objectRole": "primary",
+      "sourceResult": "typed-success",
+      "readback": [
+        "object-state-and-generation"
+      ]
+    },
+    {
+      "id": "storage-other-bucket",
+      "source": "storage",
+      "mutation": "storage.upload",
+      "resource": "bucket-control",
+      "credential": "admin",
+      "preconditions": [
+        "owned-resource-binding",
+        "handler-readiness-readback",
+        "object-absent"
+      ],
+      "cleanup": [
+        "owned-object-generations-typed-absence"
+      ],
+      "objectRole": "primary",
+      "sourceResult": "typed-success",
+      "readback": [
+        "object-state-and-generation"
+      ]
+    },
+    {
+      "id": "storage-other-prefix",
+      "source": "storage",
+      "mutation": "storage.upload",
+      "resource": "bucket-primary",
+      "credential": "admin",
+      "preconditions": [
+        "owned-resource-binding",
+        "handler-readiness-readback",
+        "object-absent"
+      ],
+      "cleanup": [
+        "owned-object-generations-typed-absence"
+      ],
+      "objectRole": "other-prefix",
+      "sourceResult": "typed-success",
+      "readback": [
+        "object-state-and-generation"
+      ]
+    },
+    {
+      "id": "auth-admin-create",
+      "source": "auth",
+      "mutation": "auth.admin-create",
+      "resource": "auth-project",
+      "credential": "admin",
+      "preconditions": [
+        "owned-resource-binding",
+        "handler-readiness-readback",
+        "user-absent"
+      ],
+      "cleanup": [
+        "owned-users-typed-absence"
+      ],
+      "sourceResult": "typed-success",
+      "readback": [
+        "user-presence-or-typed-absence"
+      ]
+    },
+    {
+      "id": "auth-signup",
+      "source": "auth",
+      "mutation": "auth.email-password-signup",
+      "resource": "auth-project",
+      "credential": "anonymous-client",
+      "preconditions": [
+        "owned-resource-binding",
+        "handler-readiness-readback",
+        "user-absent",
+        "email-password-provider-readback"
+      ],
+      "cleanup": [
+        "owned-users-typed-absence"
+      ],
+      "sourceResult": "typed-success",
+      "readback": [
+        "user-presence-or-typed-absence"
+      ]
+    },
+    {
+      "id": "auth-repeat-signin",
+      "source": "auth",
+      "mutation": "auth.email-password-signin",
+      "resource": "auth-project",
+      "credential": "anonymous-client",
+      "preconditions": [
+        "owned-resource-binding",
+        "handler-readiness-readback",
+        "existing-owned-user",
+        "initial-create-event-drained"
+      ],
+      "cleanup": [
+        "owned-users-typed-absence"
+      ],
+      "sourceResult": "typed-success",
+      "readback": [
+        "user-presence-or-typed-absence"
+      ]
+    },
+    {
+      "id": "auth-delete",
+      "source": "auth",
+      "mutation": "auth.delete-single-user",
+      "resource": "auth-project",
+      "credential": "admin",
+      "preconditions": [
+        "owned-resource-binding",
+        "handler-readiness-readback",
+        "existing-owned-user",
+        "initial-create-event-drained"
+      ],
+      "cleanup": [
+        "owned-users-typed-absence"
+      ],
+      "sourceResult": "typed-success",
+      "readback": [
+        "user-presence-or-typed-absence"
+      ]
+    },
+    {
+      "id": "auth-bulk-delete",
+      "source": "auth",
+      "mutation": "auth.bulk-delete-owned-users",
+      "resource": "auth-project",
+      "credential": "admin",
+      "preconditions": [
+        "owned-resource-binding",
+        "handler-readiness-readback",
+        "bounded-owned-user-list",
+        "initial-create-events-drained"
+      ],
+      "cleanup": [
+        "owned-users-typed-absence"
+      ],
+      "sourceResult": "typed-success",
+      "readback": [
+        "user-presence-or-typed-absence"
+      ]
+    },
+    {
+      "id": "pubsub-publish",
+      "source": "pubsub",
+      "mutation": "pubsub.publish",
+      "resource": "topic-primary",
+      "credential": "admin",
+      "preconditions": [
+        "owned-resource-binding",
+        "handler-readiness-readback",
+        "owned-topic-readback"
+      ],
+      "cleanup": [
+        "owned-subscriptions-deletion-readback",
+        "owned-topics-deletion-readback"
+      ],
+      "message": {
+        "dataUtf8": "events-fixture",
+        "attributes": {
+          "fixture": "events"
+        },
+        "maximumBytes": 1024
+      },
+      "sourceResult": "typed-success",
+      "readback": [
+        "topic-configuration",
+        "publish-message-id-in-source-receipt"
+      ]
+    },
+    {
+      "id": "pubsub-other-topic",
+      "source": "pubsub",
+      "mutation": "pubsub.publish",
+      "resource": "topic-control",
+      "credential": "admin",
+      "preconditions": [
+        "owned-resource-binding",
+        "handler-readiness-readback",
+        "owned-topic-readback"
+      ],
+      "cleanup": [
+        "owned-subscriptions-deletion-readback",
+        "owned-topics-deletion-readback"
+      ],
+      "message": {
+        "dataUtf8": "control-fixture",
+        "attributes": {
+          "fixture": "events"
+        },
+        "maximumBytes": 1024
+      },
+      "sourceResult": "typed-success",
+      "readback": [
+        "topic-configuration",
+        "publish-message-id-in-source-receipt"
+      ]
+    },
+    {
+      "id": "pubsub-ordering",
+      "source": "pubsub",
+      "mutation": "pubsub.publish",
+      "resource": "topic-primary",
+      "credential": "admin",
+      "preconditions": [
+        "owned-resource-binding",
+        "handler-readiness-readback",
+        "owned-topic-readback"
+      ],
+      "cleanup": [
+        "owned-subscriptions-deletion-readback",
+        "owned-topics-deletion-readback"
+      ],
+      "message": {
+        "dataUtf8": "ordered-fixture",
+        "attributes": {
+          "fixture": "events"
+        },
+        "orderingKeyRole": "owned-run-key",
+        "maximumBytes": 1024
+      },
+      "sourceResult": "typed-success",
+      "readback": [
+        "topic-configuration",
+        "publish-message-id-in-source-receipt"
+      ]
+    }
+  ],
+  "cases": [
+    {
+      "id": "FUNCTIONS-EVENTS/firestore-created#new-document#v1",
+      "conditionId": "FUNCTIONS-EVENTS/firestore-created",
+      "recipeId": "functions-events/firestore/create",
+      "case": "new-document",
+      "generation": 1,
+      "source": "firestore",
+      "scenario": "fs-create",
+      "handlerResource": "collection-primary",
+      "delivery": "at-least-one",
+      "window": {
+        "maximumSeconds": 120,
+        "timeoutMeans": "incomplete",
+        "provesPermanentAbsence": false
+      },
+      "evidenceRequired": [
+        "source-result",
+        "source-readback",
+        "baseline-cursor",
+        "run-resource-correlation",
+        "raw-handler-event",
+        "raw-event-identity",
+        "raw-event-time",
+        "no-capture-loss"
+      ],
+      "observation": "new-document",
+      "handlerEvent": "created"
+    },
+    {
+      "id": "FUNCTIONS-EVENTS/firestore-created#new-document#v2",
+      "conditionId": "FUNCTIONS-EVENTS/firestore-created",
+      "recipeId": "functions-events/firestore/create",
+      "case": "new-document",
+      "generation": 2,
+      "source": "firestore",
+      "scenario": "fs-create",
+      "handlerResource": "collection-primary",
+      "delivery": "at-least-one",
+      "window": {
+        "maximumSeconds": 120,
+        "timeoutMeans": "incomplete",
+        "provesPermanentAbsence": false
+      },
+      "evidenceRequired": [
+        "source-result",
+        "source-readback",
+        "baseline-cursor",
+        "run-resource-correlation",
+        "raw-handler-event",
+        "raw-event-identity",
+        "raw-event-time",
+        "no-capture-loss"
+      ],
+      "observation": "new-document",
+      "handlerEvent": "created"
+    },
+    {
+      "id": "FUNCTIONS-EVENTS/firestore-created#before-absent#v1",
+      "conditionId": "FUNCTIONS-EVENTS/firestore-created",
+      "recipeId": "functions-events/firestore/create",
+      "case": "before-absent",
+      "generation": 1,
+      "source": "firestore",
+      "scenario": "fs-create",
+      "handlerResource": "collection-primary",
+      "delivery": "at-least-one",
+      "window": {
+        "maximumSeconds": 120,
+        "timeoutMeans": "incomplete",
+        "provesPermanentAbsence": false
+      },
+      "evidenceRequired": [
+        "source-result",
+        "source-readback",
+        "baseline-cursor",
+        "run-resource-correlation",
+        "raw-handler-event",
+        "raw-event-identity",
+        "raw-event-time",
+        "no-capture-loss"
+      ],
+      "observation": "before-absent",
+      "handlerEvent": "created"
+    },
+    {
+      "id": "FUNCTIONS-EVENTS/firestore-created#before-absent#v2",
+      "conditionId": "FUNCTIONS-EVENTS/firestore-created",
+      "recipeId": "functions-events/firestore/create",
+      "case": "before-absent",
+      "generation": 2,
+      "source": "firestore",
+      "scenario": "fs-create",
+      "handlerResource": "collection-primary",
+      "delivery": "at-least-one",
+      "window": {
+        "maximumSeconds": 120,
+        "timeoutMeans": "incomplete",
+        "provesPermanentAbsence": false
+      },
+      "evidenceRequired": [
+        "source-result",
+        "source-readback",
+        "baseline-cursor",
+        "run-resource-correlation",
+        "raw-handler-event",
+        "raw-event-identity",
+        "raw-event-time",
+        "no-capture-loss"
+      ],
+      "observation": "before-absent",
+      "handlerEvent": "created"
+    },
+    {
+      "id": "FUNCTIONS-EVENTS/firestore-created#after-present#v1",
+      "conditionId": "FUNCTIONS-EVENTS/firestore-created",
+      "recipeId": "functions-events/firestore/create",
+      "case": "after-present",
+      "generation": 1,
+      "source": "firestore",
+      "scenario": "fs-create",
+      "handlerResource": "collection-primary",
+      "delivery": "at-least-one",
+      "window": {
+        "maximumSeconds": 120,
+        "timeoutMeans": "incomplete",
+        "provesPermanentAbsence": false
+      },
+      "evidenceRequired": [
+        "source-result",
+        "source-readback",
+        "baseline-cursor",
+        "run-resource-correlation",
+        "raw-handler-event",
+        "raw-event-identity",
+        "raw-event-time",
+        "no-capture-loss"
+      ],
+      "observation": "after-present",
+      "handlerEvent": "created"
+    },
+    {
+      "id": "FUNCTIONS-EVENTS/firestore-created#after-present#v2",
+      "conditionId": "FUNCTIONS-EVENTS/firestore-created",
+      "recipeId": "functions-events/firestore/create",
+      "case": "after-present",
+      "generation": 2,
+      "source": "firestore",
+      "scenario": "fs-create",
+      "handlerResource": "collection-primary",
+      "delivery": "at-least-one",
+      "window": {
+        "maximumSeconds": 120,
+        "timeoutMeans": "incomplete",
+        "provesPermanentAbsence": false
+      },
+      "evidenceRequired": [
+        "source-result",
+        "source-readback",
+        "baseline-cursor",
+        "run-resource-correlation",
+        "raw-handler-event",
+        "raw-event-identity",
+        "raw-event-time",
+        "no-capture-loss"
+      ],
+      "observation": "after-present",
+      "handlerEvent": "created"
+    },
+    {
+      "id": "FUNCTIONS-EVENTS/firestore-updated#changed-field#v1",
+      "conditionId": "FUNCTIONS-EVENTS/firestore-updated",
+      "recipeId": "functions-events/firestore/update",
+      "case": "changed-field",
+      "generation": 1,
+      "source": "firestore",
+      "scenario": "fs-update",
+      "handlerResource": "collection-primary",
+      "delivery": "at-least-one",
+      "window": {
+        "maximumSeconds": 120,
+        "timeoutMeans": "incomplete",
+        "provesPermanentAbsence": false
+      },
+      "evidenceRequired": [
+        "source-result",
+        "source-readback",
+        "baseline-cursor",
+        "run-resource-correlation",
+        "raw-handler-event",
+        "raw-event-identity",
+        "raw-event-time",
+        "no-capture-loss"
+      ],
+      "observation": "changed-field",
+      "handlerEvent": "updated"
+    },
+    {
+      "id": "FUNCTIONS-EVENTS/firestore-updated#changed-field#v2",
+      "conditionId": "FUNCTIONS-EVENTS/firestore-updated",
+      "recipeId": "functions-events/firestore/update",
+      "case": "changed-field",
+      "generation": 2,
+      "source": "firestore",
+      "scenario": "fs-update",
+      "handlerResource": "collection-primary",
+      "delivery": "at-least-one",
+      "window": {
+        "maximumSeconds": 120,
+        "timeoutMeans": "incomplete",
+        "provesPermanentAbsence": false
+      },
+      "evidenceRequired": [
+        "source-result",
+        "source-readback",
+        "baseline-cursor",
+        "run-resource-correlation",
+        "raw-handler-event",
+        "raw-event-identity",
+        "raw-event-time",
+        "no-capture-loss"
+      ],
+      "observation": "changed-field",
+      "handlerEvent": "updated"
+    },
+    {
+      "id": "FUNCTIONS-EVENTS/firestore-updated#before-present#v1",
+      "conditionId": "FUNCTIONS-EVENTS/firestore-updated",
+      "recipeId": "functions-events/firestore/update",
+      "case": "before-present",
+      "generation": 1,
+      "source": "firestore",
+      "scenario": "fs-update",
+      "handlerResource": "collection-primary",
+      "delivery": "at-least-one",
+      "window": {
+        "maximumSeconds": 120,
+        "timeoutMeans": "incomplete",
+        "provesPermanentAbsence": false
+      },
+      "evidenceRequired": [
+        "source-result",
+        "source-readback",
+        "baseline-cursor",
+        "run-resource-correlation",
+        "raw-handler-event",
+        "raw-event-identity",
+        "raw-event-time",
+        "no-capture-loss"
+      ],
+      "observation": "before-present",
+      "handlerEvent": "updated"
+    },
+    {
+      "id": "FUNCTIONS-EVENTS/firestore-updated#before-present#v2",
+      "conditionId": "FUNCTIONS-EVENTS/firestore-updated",
+      "recipeId": "functions-events/firestore/update",
+      "case": "before-present",
+      "generation": 2,
+      "source": "firestore",
+      "scenario": "fs-update",
+      "handlerResource": "collection-primary",
+      "delivery": "at-least-one",
+      "window": {
+        "maximumSeconds": 120,
+        "timeoutMeans": "incomplete",
+        "provesPermanentAbsence": false
+      },
+      "evidenceRequired": [
+        "source-result",
+        "source-readback",
+        "baseline-cursor",
+        "run-resource-correlation",
+        "raw-handler-event",
+        "raw-event-identity",
+        "raw-event-time",
+        "no-capture-loss"
+      ],
+      "observation": "before-present",
+      "handlerEvent": "updated"
+    },
+    {
+      "id": "FUNCTIONS-EVENTS/firestore-updated#after-present#v1",
+      "conditionId": "FUNCTIONS-EVENTS/firestore-updated",
+      "recipeId": "functions-events/firestore/update",
+      "case": "after-present",
+      "generation": 1,
+      "source": "firestore",
+      "scenario": "fs-update",
+      "handlerResource": "collection-primary",
+      "delivery": "at-least-one",
+      "window": {
+        "maximumSeconds": 120,
+        "timeoutMeans": "incomplete",
+        "provesPermanentAbsence": false
+      },
+      "evidenceRequired": [
+        "source-result",
+        "source-readback",
+        "baseline-cursor",
+        "run-resource-correlation",
+        "raw-handler-event",
+        "raw-event-identity",
+        "raw-event-time",
+        "no-capture-loss"
+      ],
+      "observation": "after-present",
+      "handlerEvent": "updated"
+    },
+    {
+      "id": "FUNCTIONS-EVENTS/firestore-updated#after-present#v2",
+      "conditionId": "FUNCTIONS-EVENTS/firestore-updated",
+      "recipeId": "functions-events/firestore/update",
+      "case": "after-present",
+      "generation": 2,
+      "source": "firestore",
+      "scenario": "fs-update",
+      "handlerResource": "collection-primary",
+      "delivery": "at-least-one",
+      "window": {
+        "maximumSeconds": 120,
+        "timeoutMeans": "incomplete",
+        "provesPermanentAbsence": false
+      },
+      "evidenceRequired": [
+        "source-result",
+        "source-readback",
+        "baseline-cursor",
+        "run-resource-correlation",
+        "raw-handler-event",
+        "raw-event-identity",
+        "raw-event-time",
+        "no-capture-loss"
+      ],
+      "observation": "after-present",
+      "handlerEvent": "updated"
+    },
+    {
+      "id": "FUNCTIONS-EVENTS/firestore-deleted#deleted-document#v1",
+      "conditionId": "FUNCTIONS-EVENTS/firestore-deleted",
+      "recipeId": "functions-events/firestore/delete",
+      "case": "deleted-document",
+      "generation": 1,
+      "source": "firestore",
+      "scenario": "fs-delete",
+      "handlerResource": "collection-primary",
+      "delivery": "at-least-one",
+      "window": {
+        "maximumSeconds": 120,
+        "timeoutMeans": "incomplete",
+        "provesPermanentAbsence": false
+      },
+      "evidenceRequired": [
+        "source-result",
+        "source-readback",
+        "baseline-cursor",
+        "run-resource-correlation",
+        "raw-handler-event",
+        "raw-event-identity",
+        "raw-event-time",
+        "no-capture-loss"
+      ],
+      "observation": "deleted-document",
+      "handlerEvent": "deleted"
+    },
+    {
+      "id": "FUNCTIONS-EVENTS/firestore-deleted#deleted-document#v2",
+      "conditionId": "FUNCTIONS-EVENTS/firestore-deleted",
+      "recipeId": "functions-events/firestore/delete",
+      "case": "deleted-document",
+      "generation": 2,
+      "source": "firestore",
+      "scenario": "fs-delete",
+      "handlerResource": "collection-primary",
+      "delivery": "at-least-one",
+      "window": {
+        "maximumSeconds": 120,
+        "timeoutMeans": "incomplete",
+        "provesPermanentAbsence": false
+      },
+      "evidenceRequired": [
+        "source-result",
+        "source-readback",
+        "baseline-cursor",
+        "run-resource-correlation",
+        "raw-handler-event",
+        "raw-event-identity",
+        "raw-event-time",
+        "no-capture-loss"
+      ],
+      "observation": "deleted-document",
+      "handlerEvent": "deleted"
+    },
+    {
+      "id": "FUNCTIONS-EVENTS/firestore-deleted#before-present#v1",
+      "conditionId": "FUNCTIONS-EVENTS/firestore-deleted",
+      "recipeId": "functions-events/firestore/delete",
+      "case": "before-present",
+      "generation": 1,
+      "source": "firestore",
+      "scenario": "fs-delete",
+      "handlerResource": "collection-primary",
+      "delivery": "at-least-one",
+      "window": {
+        "maximumSeconds": 120,
+        "timeoutMeans": "incomplete",
+        "provesPermanentAbsence": false
+      },
+      "evidenceRequired": [
+        "source-result",
+        "source-readback",
+        "baseline-cursor",
+        "run-resource-correlation",
+        "raw-handler-event",
+        "raw-event-identity",
+        "raw-event-time",
+        "no-capture-loss"
+      ],
+      "observation": "before-present",
+      "handlerEvent": "deleted"
+    },
+    {
+      "id": "FUNCTIONS-EVENTS/firestore-deleted#before-present#v2",
+      "conditionId": "FUNCTIONS-EVENTS/firestore-deleted",
+      "recipeId": "functions-events/firestore/delete",
+      "case": "before-present",
+      "generation": 2,
+      "source": "firestore",
+      "scenario": "fs-delete",
+      "handlerResource": "collection-primary",
+      "delivery": "at-least-one",
+      "window": {
+        "maximumSeconds": 120,
+        "timeoutMeans": "incomplete",
+        "provesPermanentAbsence": false
+      },
+      "evidenceRequired": [
+        "source-result",
+        "source-readback",
+        "baseline-cursor",
+        "run-resource-correlation",
+        "raw-handler-event",
+        "raw-event-identity",
+        "raw-event-time",
+        "no-capture-loss"
+      ],
+      "observation": "before-present",
+      "handlerEvent": "deleted"
+    },
+    {
+      "id": "FUNCTIONS-EVENTS/firestore-deleted#after-absent#v1",
+      "conditionId": "FUNCTIONS-EVENTS/firestore-deleted",
+      "recipeId": "functions-events/firestore/delete",
+      "case": "after-absent",
+      "generation": 1,
+      "source": "firestore",
+      "scenario": "fs-delete",
+      "handlerResource": "collection-primary",
+      "delivery": "at-least-one",
+      "window": {
+        "maximumSeconds": 120,
+        "timeoutMeans": "incomplete",
+        "provesPermanentAbsence": false
+      },
+      "evidenceRequired": [
+        "source-result",
+        "source-readback",
+        "baseline-cursor",
+        "run-resource-correlation",
+        "raw-handler-event",
+        "raw-event-identity",
+        "raw-event-time",
+        "no-capture-loss"
+      ],
+      "observation": "after-absent",
+      "handlerEvent": "deleted"
+    },
+    {
+      "id": "FUNCTIONS-EVENTS/firestore-deleted#after-absent#v2",
+      "conditionId": "FUNCTIONS-EVENTS/firestore-deleted",
+      "recipeId": "functions-events/firestore/delete",
+      "case": "after-absent",
+      "generation": 2,
+      "source": "firestore",
+      "scenario": "fs-delete",
+      "handlerResource": "collection-primary",
+      "delivery": "at-least-one",
+      "window": {
+        "maximumSeconds": 120,
+        "timeoutMeans": "incomplete",
+        "provesPermanentAbsence": false
+      },
+      "evidenceRequired": [
+        "source-result",
+        "source-readback",
+        "baseline-cursor",
+        "run-resource-correlation",
+        "raw-handler-event",
+        "raw-event-identity",
+        "raw-event-time",
+        "no-capture-loss"
+      ],
+      "observation": "after-absent",
+      "handlerEvent": "deleted"
+    },
+    {
+      "id": "FUNCTIONS-EVENTS/firestore-written#create#v1",
+      "conditionId": "FUNCTIONS-EVENTS/firestore-written",
+      "recipeId": "functions-events/firestore/write",
+      "case": "create",
+      "generation": 1,
+      "source": "firestore",
+      "scenario": "fs-create",
+      "handlerResource": "collection-primary",
+      "delivery": "at-least-one",
+      "window": {
+        "maximumSeconds": 120,
+        "timeoutMeans": "incomplete",
+        "provesPermanentAbsence": false
+      },
+      "evidenceRequired": [
+        "source-result",
+        "source-readback",
+        "baseline-cursor",
+        "run-resource-correlation",
+        "raw-handler-event",
+        "raw-event-identity",
+        "raw-event-time",
+        "no-capture-loss"
+      ],
+      "observation": "create",
+      "handlerEvent": "written"
+    },
+    {
+      "id": "FUNCTIONS-EVENTS/firestore-written#create#v2",
+      "conditionId": "FUNCTIONS-EVENTS/firestore-written",
+      "recipeId": "functions-events/firestore/write",
+      "case": "create",
+      "generation": 2,
+      "source": "firestore",
+      "scenario": "fs-create",
+      "handlerResource": "collection-primary",
+      "delivery": "at-least-one",
+      "window": {
+        "maximumSeconds": 120,
+        "timeoutMeans": "incomplete",
+        "provesPermanentAbsence": false
+      },
+      "evidenceRequired": [
+        "source-result",
+        "source-readback",
+        "baseline-cursor",
+        "run-resource-correlation",
+        "raw-handler-event",
+        "raw-event-identity",
+        "raw-event-time",
+        "no-capture-loss"
+      ],
+      "observation": "create",
+      "handlerEvent": "written"
+    },
+    {
+      "id": "FUNCTIONS-EVENTS/firestore-written#update#v1",
+      "conditionId": "FUNCTIONS-EVENTS/firestore-written",
+      "recipeId": "functions-events/firestore/write",
+      "case": "update",
+      "generation": 1,
+      "source": "firestore",
+      "scenario": "fs-update",
+      "handlerResource": "collection-primary",
+      "delivery": "at-least-one",
+      "window": {
+        "maximumSeconds": 120,
+        "timeoutMeans": "incomplete",
+        "provesPermanentAbsence": false
+      },
+      "evidenceRequired": [
+        "source-result",
+        "source-readback",
+        "baseline-cursor",
+        "run-resource-correlation",
+        "raw-handler-event",
+        "raw-event-identity",
+        "raw-event-time",
+        "no-capture-loss"
+      ],
+      "observation": "update",
+      "handlerEvent": "written"
+    },
+    {
+      "id": "FUNCTIONS-EVENTS/firestore-written#update#v2",
+      "conditionId": "FUNCTIONS-EVENTS/firestore-written",
+      "recipeId": "functions-events/firestore/write",
+      "case": "update",
+      "generation": 2,
+      "source": "firestore",
+      "scenario": "fs-update",
+      "handlerResource": "collection-primary",
+      "delivery": "at-least-one",
+      "window": {
+        "maximumSeconds": 120,
+        "timeoutMeans": "incomplete",
+        "provesPermanentAbsence": false
+      },
+      "evidenceRequired": [
+        "source-result",
+        "source-readback",
+        "baseline-cursor",
+        "run-resource-correlation",
+        "raw-handler-event",
+        "raw-event-identity",
+        "raw-event-time",
+        "no-capture-loss"
+      ],
+      "observation": "update",
+      "handlerEvent": "written"
+    },
+    {
+      "id": "FUNCTIONS-EVENTS/firestore-written#delete#v1",
+      "conditionId": "FUNCTIONS-EVENTS/firestore-written",
+      "recipeId": "functions-events/firestore/write",
+      "case": "delete",
+      "generation": 1,
+      "source": "firestore",
+      "scenario": "fs-delete",
+      "handlerResource": "collection-primary",
+      "delivery": "at-least-one",
+      "window": {
+        "maximumSeconds": 120,
+        "timeoutMeans": "incomplete",
+        "provesPermanentAbsence": false
+      },
+      "evidenceRequired": [
+        "source-result",
+        "source-readback",
+        "baseline-cursor",
+        "run-resource-correlation",
+        "raw-handler-event",
+        "raw-event-identity",
+        "raw-event-time",
+        "no-capture-loss"
+      ],
+      "observation": "delete",
+      "handlerEvent": "written"
+    },
+    {
+      "id": "FUNCTIONS-EVENTS/firestore-written#delete#v2",
+      "conditionId": "FUNCTIONS-EVENTS/firestore-written",
+      "recipeId": "functions-events/firestore/write",
+      "case": "delete",
+      "generation": 2,
+      "source": "firestore",
+      "scenario": "fs-delete",
+      "handlerResource": "collection-primary",
+      "delivery": "at-least-one",
+      "window": {
+        "maximumSeconds": 120,
+        "timeoutMeans": "incomplete",
+        "provesPermanentAbsence": false
+      },
+      "evidenceRequired": [
+        "source-result",
+        "source-readback",
+        "baseline-cursor",
+        "run-resource-correlation",
+        "raw-handler-event",
+        "raw-event-identity",
+        "raw-event-time",
+        "no-capture-loss"
+      ],
+      "observation": "delete",
+      "handlerEvent": "written"
+    },
+    {
+      "id": "FUNCTIONS-EVENTS/firestore-noop#same-value-write-no-event#v1",
+      "conditionId": "FUNCTIONS-EVENTS/firestore-noop",
+      "recipeId": "functions-events/firestore/noop",
+      "case": "same-value-write-no-event",
+      "generation": 1,
+      "source": "firestore",
+      "scenario": "fs-noop",
+      "handlerResource": "collection-primary",
+      "delivery": "none-in-window",
+      "window": {
+        "maximumSeconds": 120,
+        "timeoutMeans": "bounded-observation-only",
+        "provesPermanentAbsence": false
+      },
+      "evidenceRequired": [
+        "source-result",
+        "source-readback",
+        "baseline-cursor",
+        "run-resource-correlation",
+        "positive-control-before",
+        "positive-control-after",
+        "window-complete",
+        "no-capture-loss"
+      ],
+      "observation": "same-value-write-no-event",
+      "positiveControlScenario": "fs-update",
+      "handlerEvent": "written",
+      "positiveControlGeneration": 1
+    },
+    {
+      "id": "FUNCTIONS-EVENTS/firestore-noop#same-value-write-no-event#v2",
+      "conditionId": "FUNCTIONS-EVENTS/firestore-noop",
+      "recipeId": "functions-events/firestore/noop",
+      "case": "same-value-write-no-event",
+      "generation": 2,
+      "source": "firestore",
+      "scenario": "fs-noop",
+      "handlerResource": "collection-primary",
+      "delivery": "none-in-window",
+      "window": {
+        "maximumSeconds": 120,
+        "timeoutMeans": "bounded-observation-only",
+        "provesPermanentAbsence": false
+      },
+      "evidenceRequired": [
+        "source-result",
+        "source-readback",
+        "baseline-cursor",
+        "run-resource-correlation",
+        "positive-control-before",
+        "positive-control-after",
+        "window-complete",
+        "no-capture-loss"
+      ],
+      "observation": "same-value-write-no-event",
+      "positiveControlScenario": "fs-update",
+      "handlerEvent": "written",
+      "positiveControlGeneration": 2
+    },
+    {
+      "id": "FUNCTIONS-EVENTS/firestore-routing-params#matching-path#v1",
+      "conditionId": "FUNCTIONS-EVENTS/firestore-routing-params",
+      "recipeId": "functions-events/firestore/routing",
+      "case": "matching-path",
+      "generation": 1,
+      "source": "firestore",
+      "scenario": "fs-create",
+      "handlerResource": "collection-primary",
+      "delivery": "at-least-one",
+      "window": {
+        "maximumSeconds": 120,
+        "timeoutMeans": "incomplete",
+        "provesPermanentAbsence": false
+      },
+      "evidenceRequired": [
+        "source-result",
+        "source-readback",
+        "baseline-cursor",
+        "run-resource-correlation",
+        "raw-handler-event",
+        "raw-event-identity",
+        "raw-event-time",
+        "no-capture-loss"
+      ],
+      "observation": "matching-path",
+      "handlerEvent": "created"
+    },
+    {
+      "id": "FUNCTIONS-EVENTS/firestore-routing-params#matching-path#v2",
+      "conditionId": "FUNCTIONS-EVENTS/firestore-routing-params",
+      "recipeId": "functions-events/firestore/routing",
+      "case": "matching-path",
+      "generation": 2,
+      "source": "firestore",
+      "scenario": "fs-create",
+      "handlerResource": "collection-primary",
+      "delivery": "at-least-one",
+      "window": {
+        "maximumSeconds": 120,
+        "timeoutMeans": "incomplete",
+        "provesPermanentAbsence": false
+      },
+      "evidenceRequired": [
+        "source-result",
+        "source-readback",
+        "baseline-cursor",
+        "run-resource-correlation",
+        "raw-handler-event",
+        "raw-event-identity",
+        "raw-event-time",
+        "no-capture-loss"
+      ],
+      "observation": "matching-path",
+      "handlerEvent": "created"
+    },
+    {
+      "id": "FUNCTIONS-EVENTS/firestore-routing-params#nonmatching-path#v1",
+      "conditionId": "FUNCTIONS-EVENTS/firestore-routing-params",
+      "recipeId": "functions-events/firestore/routing",
+      "case": "nonmatching-path",
+      "generation": 1,
+      "source": "firestore",
+      "scenario": "fs-other-path",
+      "handlerResource": "collection-primary",
+      "delivery": "none-in-window",
+      "window": {
+        "maximumSeconds": 120,
+        "timeoutMeans": "bounded-observation-only",
+        "provesPermanentAbsence": false
+      },
+      "evidenceRequired": [
+        "source-result",
+        "source-readback",
+        "baseline-cursor",
+        "run-resource-correlation",
+        "positive-control-before",
+        "positive-control-after",
+        "window-complete",
+        "no-capture-loss"
+      ],
+      "observation": "nonmatching-path",
+      "positiveControlScenario": "fs-create",
+      "handlerEvent": "created",
+      "positiveControlGeneration": 1
+    },
+    {
+      "id": "FUNCTIONS-EVENTS/firestore-routing-params#nonmatching-path#v2",
+      "conditionId": "FUNCTIONS-EVENTS/firestore-routing-params",
+      "recipeId": "functions-events/firestore/routing",
+      "case": "nonmatching-path",
+      "generation": 2,
+      "source": "firestore",
+      "scenario": "fs-other-path",
+      "handlerResource": "collection-primary",
+      "delivery": "none-in-window",
+      "window": {
+        "maximumSeconds": 120,
+        "timeoutMeans": "bounded-observation-only",
+        "provesPermanentAbsence": false
+      },
+      "evidenceRequired": [
+        "source-result",
+        "source-readback",
+        "baseline-cursor",
+        "run-resource-correlation",
+        "positive-control-before",
+        "positive-control-after",
+        "window-complete",
+        "no-capture-loss"
+      ],
+      "observation": "nonmatching-path",
+      "positiveControlScenario": "fs-create",
+      "handlerEvent": "created",
+      "positiveControlGeneration": 2
+    },
+    {
+      "id": "FUNCTIONS-EVENTS/firestore-routing-params#wildcard-param#v1",
+      "conditionId": "FUNCTIONS-EVENTS/firestore-routing-params",
+      "recipeId": "functions-events/firestore/routing",
+      "case": "wildcard-param",
+      "generation": 1,
+      "source": "firestore",
+      "scenario": "fs-create",
+      "handlerResource": "collection-primary",
+      "delivery": "at-least-one",
+      "window": {
+        "maximumSeconds": 120,
+        "timeoutMeans": "incomplete",
+        "provesPermanentAbsence": false
+      },
+      "evidenceRequired": [
+        "source-result",
+        "source-readback",
+        "baseline-cursor",
+        "run-resource-correlation",
+        "raw-handler-event",
+        "raw-event-identity",
+        "raw-event-time",
+        "no-capture-loss"
+      ],
+      "observation": "wildcard-param",
+      "handlerEvent": "created"
+    },
+    {
+      "id": "FUNCTIONS-EVENTS/firestore-routing-params#wildcard-param#v2",
+      "conditionId": "FUNCTIONS-EVENTS/firestore-routing-params",
+      "recipeId": "functions-events/firestore/routing",
+      "case": "wildcard-param",
+      "generation": 2,
+      "source": "firestore",
+      "scenario": "fs-create",
+      "handlerResource": "collection-primary",
+      "delivery": "at-least-one",
+      "window": {
+        "maximumSeconds": 120,
+        "timeoutMeans": "incomplete",
+        "provesPermanentAbsence": false
+      },
+      "evidenceRequired": [
+        "source-result",
+        "source-readback",
+        "baseline-cursor",
+        "run-resource-correlation",
+        "raw-handler-event",
+        "raw-event-identity",
+        "raw-event-time",
+        "no-capture-loss"
+      ],
+      "observation": "wildcard-param",
+      "handlerEvent": "created"
+    },
+    {
+      "id": "FUNCTIONS-EVENTS/firestore-payload#handler-envelope#v1",
+      "conditionId": "FUNCTIONS-EVENTS/firestore-payload",
+      "recipeId": "functions-events/firestore/payload",
+      "case": "handler-envelope",
+      "generation": 1,
+      "source": "firestore",
+      "scenario": "fs-update",
+      "handlerResource": "collection-primary",
+      "delivery": "at-least-one",
+      "window": {
+        "maximumSeconds": 120,
+        "timeoutMeans": "incomplete",
+        "provesPermanentAbsence": false
+      },
+      "evidenceRequired": [
+        "source-result",
+        "source-readback",
+        "baseline-cursor",
+        "run-resource-correlation",
+        "raw-handler-event",
+        "raw-event-identity",
+        "raw-event-time",
+        "no-capture-loss"
+      ],
+      "observation": "handler-envelope",
+      "handlerEvent": "updated"
+    },
+    {
+      "id": "FUNCTIONS-EVENTS/firestore-payload#handler-envelope#v2",
+      "conditionId": "FUNCTIONS-EVENTS/firestore-payload",
+      "recipeId": "functions-events/firestore/payload",
+      "case": "handler-envelope",
+      "generation": 2,
+      "source": "firestore",
+      "scenario": "fs-update",
+      "handlerResource": "collection-primary",
+      "delivery": "at-least-one",
+      "window": {
+        "maximumSeconds": 120,
+        "timeoutMeans": "incomplete",
+        "provesPermanentAbsence": false
+      },
+      "evidenceRequired": [
+        "source-result",
+        "source-readback",
+        "baseline-cursor",
+        "run-resource-correlation",
+        "raw-handler-event",
+        "raw-event-identity",
+        "raw-event-time",
+        "no-capture-loss"
+      ],
+      "observation": "handler-envelope",
+      "handlerEvent": "updated"
+    },
+    {
+      "id": "FUNCTIONS-EVENTS/firestore-payload#field-values#v1",
+      "conditionId": "FUNCTIONS-EVENTS/firestore-payload",
+      "recipeId": "functions-events/firestore/payload",
+      "case": "field-values",
+      "generation": 1,
+      "source": "firestore",
+      "scenario": "fs-update",
+      "handlerResource": "collection-primary",
+      "delivery": "at-least-one",
+      "window": {
+        "maximumSeconds": 120,
+        "timeoutMeans": "incomplete",
+        "provesPermanentAbsence": false
+      },
+      "evidenceRequired": [
+        "source-result",
+        "source-readback",
+        "baseline-cursor",
+        "run-resource-correlation",
+        "raw-handler-event",
+        "raw-event-identity",
+        "raw-event-time",
+        "no-capture-loss"
+      ],
+      "observation": "field-values",
+      "handlerEvent": "updated"
+    },
+    {
+      "id": "FUNCTIONS-EVENTS/firestore-payload#field-values#v2",
+      "conditionId": "FUNCTIONS-EVENTS/firestore-payload",
+      "recipeId": "functions-events/firestore/payload",
+      "case": "field-values",
+      "generation": 2,
+      "source": "firestore",
+      "scenario": "fs-update",
+      "handlerResource": "collection-primary",
+      "delivery": "at-least-one",
+      "window": {
+        "maximumSeconds": 120,
+        "timeoutMeans": "incomplete",
+        "provesPermanentAbsence": false
+      },
+      "evidenceRequired": [
+        "source-result",
+        "source-readback",
+        "baseline-cursor",
+        "run-resource-correlation",
+        "raw-handler-event",
+        "raw-event-identity",
+        "raw-event-time",
+        "no-capture-loss"
+      ],
+      "observation": "field-values",
+      "handlerEvent": "updated"
+    },
+    {
+      "id": "FUNCTIONS-EVENTS/firestore-payload#document-name#v1",
+      "conditionId": "FUNCTIONS-EVENTS/firestore-payload",
+      "recipeId": "functions-events/firestore/payload",
+      "case": "document-name",
+      "generation": 1,
+      "source": "firestore",
+      "scenario": "fs-update",
+      "handlerResource": "collection-primary",
+      "delivery": "at-least-one",
+      "window": {
+        "maximumSeconds": 120,
+        "timeoutMeans": "incomplete",
+        "provesPermanentAbsence": false
+      },
+      "evidenceRequired": [
+        "source-result",
+        "source-readback",
+        "baseline-cursor",
+        "run-resource-correlation",
+        "raw-handler-event",
+        "raw-event-identity",
+        "raw-event-time",
+        "no-capture-loss"
+      ],
+      "observation": "document-name",
+      "handlerEvent": "updated"
+    },
+    {
+      "id": "FUNCTIONS-EVENTS/firestore-payload#document-name#v2",
+      "conditionId": "FUNCTIONS-EVENTS/firestore-payload",
+      "recipeId": "functions-events/firestore/payload",
+      "case": "document-name",
+      "generation": 2,
+      "source": "firestore",
+      "scenario": "fs-update",
+      "handlerResource": "collection-primary",
+      "delivery": "at-least-one",
+      "window": {
+        "maximumSeconds": 120,
+        "timeoutMeans": "incomplete",
+        "provesPermanentAbsence": false
+      },
+      "evidenceRequired": [
+        "source-result",
+        "source-readback",
+        "baseline-cursor",
+        "run-resource-correlation",
+        "raw-handler-event",
+        "raw-event-identity",
+        "raw-event-time",
+        "no-capture-loss"
+      ],
+      "observation": "document-name",
+      "handlerEvent": "updated"
+    },
+    {
+      "id": "FUNCTIONS-EVENTS/firestore-payload#update-time#v1",
+      "conditionId": "FUNCTIONS-EVENTS/firestore-payload",
+      "recipeId": "functions-events/firestore/payload",
+      "case": "update-time",
+      "generation": 1,
+      "source": "firestore",
+      "scenario": "fs-update",
+      "handlerResource": "collection-primary",
+      "delivery": "at-least-one",
+      "window": {
+        "maximumSeconds": 120,
+        "timeoutMeans": "incomplete",
+        "provesPermanentAbsence": false
+      },
+      "evidenceRequired": [
+        "source-result",
+        "source-readback",
+        "baseline-cursor",
+        "run-resource-correlation",
+        "raw-handler-event",
+        "raw-event-identity",
+        "raw-event-time",
+        "no-capture-loss"
+      ],
+      "observation": "update-time",
+      "handlerEvent": "updated"
+    },
+    {
+      "id": "FUNCTIONS-EVENTS/firestore-payload#update-time#v2",
+      "conditionId": "FUNCTIONS-EVENTS/firestore-payload",
+      "recipeId": "functions-events/firestore/payload",
+      "case": "update-time",
+      "generation": 2,
+      "source": "firestore",
+      "scenario": "fs-update",
+      "handlerResource": "collection-primary",
+      "delivery": "at-least-one",
+      "window": {
+        "maximumSeconds": 120,
+        "timeoutMeans": "incomplete",
+        "provesPermanentAbsence": false
+      },
+      "evidenceRequired": [
+        "source-result",
+        "source-readback",
+        "baseline-cursor",
+        "run-resource-correlation",
+        "raw-handler-event",
+        "raw-event-identity",
+        "raw-event-time",
+        "no-capture-loss"
+      ],
+      "observation": "update-time",
+      "handlerEvent": "updated"
+    },
+    {
+      "id": "FUNCTIONS-EVENTS/firestore-payload#event-metadata#v1",
+      "conditionId": "FUNCTIONS-EVENTS/firestore-payload",
+      "recipeId": "functions-events/firestore/payload",
+      "case": "event-metadata",
+      "generation": 1,
+      "source": "firestore",
+      "scenario": "fs-update",
+      "handlerResource": "collection-primary",
+      "delivery": "at-least-one",
+      "window": {
+        "maximumSeconds": 120,
+        "timeoutMeans": "incomplete",
+        "provesPermanentAbsence": false
+      },
+      "evidenceRequired": [
+        "source-result",
+        "source-readback",
+        "baseline-cursor",
+        "run-resource-correlation",
+        "raw-handler-event",
+        "raw-event-identity",
+        "raw-event-time",
+        "no-capture-loss"
+      ],
+      "observation": "event-metadata",
+      "handlerEvent": "updated"
+    },
+    {
+      "id": "FUNCTIONS-EVENTS/firestore-payload#event-metadata#v2",
+      "conditionId": "FUNCTIONS-EVENTS/firestore-payload",
+      "recipeId": "functions-events/firestore/payload",
+      "case": "event-metadata",
+      "generation": 2,
+      "source": "firestore",
+      "scenario": "fs-update",
+      "handlerResource": "collection-primary",
+      "delivery": "at-least-one",
+      "window": {
+        "maximumSeconds": 120,
+        "timeoutMeans": "incomplete",
+        "provesPermanentAbsence": false
+      },
+      "evidenceRequired": [
+        "source-result",
+        "source-readback",
+        "baseline-cursor",
+        "run-resource-correlation",
+        "raw-handler-event",
+        "raw-event-identity",
+        "raw-event-time",
+        "no-capture-loss"
+      ],
+      "observation": "event-metadata",
+      "handlerEvent": "updated"
+    },
+    {
+      "id": "FUNCTIONS-EVENTS/firestore-auth-context#authenticated-write#v2",
+      "conditionId": "FUNCTIONS-EVENTS/firestore-auth-context",
+      "recipeId": "functions-events/firestore/auth-context",
+      "case": "authenticated-write",
+      "generation": 2,
+      "source": "firestore",
+      "scenario": "fs-auth-client",
+      "handlerResource": "collection-primary",
+      "delivery": "at-least-one",
+      "window": {
+        "maximumSeconds": 120,
+        "timeoutMeans": "incomplete",
+        "provesPermanentAbsence": false
+      },
+      "evidenceRequired": [
+        "source-result",
+        "source-readback",
+        "baseline-cursor",
+        "run-resource-correlation",
+        "raw-handler-event",
+        "raw-event-identity",
+        "raw-event-time",
+        "no-capture-loss"
+      ],
+      "observation": "authenticated-write",
+      "handlerEvent": "written-with-auth-context"
+    },
+    {
+      "id": "FUNCTIONS-EVENTS/firestore-auth-context#admin-write#v2",
+      "conditionId": "FUNCTIONS-EVENTS/firestore-auth-context",
+      "recipeId": "functions-events/firestore/auth-context",
+      "case": "admin-write",
+      "generation": 2,
+      "source": "firestore",
+      "scenario": "fs-auth-admin",
+      "handlerResource": "collection-primary",
+      "delivery": "at-least-one",
+      "window": {
+        "maximumSeconds": 120,
+        "timeoutMeans": "incomplete",
+        "provesPermanentAbsence": false
+      },
+      "evidenceRequired": [
+        "source-result",
+        "source-readback",
+        "baseline-cursor",
+        "run-resource-correlation",
+        "raw-handler-event",
+        "raw-event-identity",
+        "raw-event-time",
+        "no-capture-loss"
+      ],
+      "observation": "admin-write",
+      "handlerEvent": "written-with-auth-context"
+    },
+    {
+      "id": "FUNCTIONS-EVENTS/firestore-auth-context#auth-type-and-id#v2",
+      "conditionId": "FUNCTIONS-EVENTS/firestore-auth-context",
+      "recipeId": "functions-events/firestore/auth-context",
+      "case": "auth-type-and-id",
+      "generation": 2,
+      "source": "firestore",
+      "scenario": "fs-auth-client",
+      "handlerResource": "collection-primary",
+      "delivery": "at-least-one",
+      "window": {
+        "maximumSeconds": 120,
+        "timeoutMeans": "incomplete",
+        "provesPermanentAbsence": false
+      },
+      "evidenceRequired": [
+        "source-result",
+        "source-readback",
+        "baseline-cursor",
+        "run-resource-correlation",
+        "raw-handler-event",
+        "raw-event-identity",
+        "raw-event-time",
+        "no-capture-loss"
+      ],
+      "observation": "auth-type-and-id",
+      "handlerEvent": "written-with-auth-context"
+    },
+    {
+      "id": "FUNCTIONS-EVENTS/storage-finalized#new-object#v1",
+      "conditionId": "FUNCTIONS-EVENTS/storage-finalized",
+      "recipeId": "functions-events/storage/finalize",
+      "case": "new-object",
+      "generation": 1,
+      "source": "storage",
+      "scenario": "storage-upload",
+      "handlerResource": "bucket-primary",
+      "delivery": "at-least-one",
+      "window": {
+        "maximumSeconds": 120,
+        "timeoutMeans": "incomplete",
+        "provesPermanentAbsence": false
+      },
+      "evidenceRequired": [
+        "source-result",
+        "source-readback",
+        "baseline-cursor",
+        "run-resource-correlation",
+        "raw-handler-event",
+        "raw-event-identity",
+        "raw-event-time",
+        "no-capture-loss"
+      ],
+      "observation": "new-object",
+      "handlerEvent": "finalized"
+    },
+    {
+      "id": "FUNCTIONS-EVENTS/storage-finalized#new-object#v2",
+      "conditionId": "FUNCTIONS-EVENTS/storage-finalized",
+      "recipeId": "functions-events/storage/finalize",
+      "case": "new-object",
+      "generation": 2,
+      "source": "storage",
+      "scenario": "storage-upload",
+      "handlerResource": "bucket-primary",
+      "delivery": "at-least-one",
+      "window": {
+        "maximumSeconds": 120,
+        "timeoutMeans": "incomplete",
+        "provesPermanentAbsence": false
+      },
+      "evidenceRequired": [
+        "source-result",
+        "source-readback",
+        "baseline-cursor",
+        "run-resource-correlation",
+        "raw-handler-event",
+        "raw-event-identity",
+        "raw-event-time",
+        "no-capture-loss"
+      ],
+      "observation": "new-object",
+      "handlerEvent": "finalized"
+    },
+    {
+      "id": "FUNCTIONS-EVENTS/storage-finalized#overwritten-generation#v1",
+      "conditionId": "FUNCTIONS-EVENTS/storage-finalized",
+      "recipeId": "functions-events/storage/finalize",
+      "case": "overwritten-generation",
+      "generation": 1,
+      "source": "storage",
+      "scenario": "storage-overwrite",
+      "handlerResource": "bucket-primary",
+      "delivery": "at-least-one",
+      "window": {
+        "maximumSeconds": 120,
+        "timeoutMeans": "incomplete",
+        "provesPermanentAbsence": false
+      },
+      "evidenceRequired": [
+        "source-result",
+        "source-readback",
+        "baseline-cursor",
+        "run-resource-correlation",
+        "raw-handler-event",
+        "raw-event-identity",
+        "raw-event-time",
+        "no-capture-loss"
+      ],
+      "observation": "overwritten-generation",
+      "handlerEvent": "finalized"
+    },
+    {
+      "id": "FUNCTIONS-EVENTS/storage-finalized#overwritten-generation#v2",
+      "conditionId": "FUNCTIONS-EVENTS/storage-finalized",
+      "recipeId": "functions-events/storage/finalize",
+      "case": "overwritten-generation",
+      "generation": 2,
+      "source": "storage",
+      "scenario": "storage-overwrite",
+      "handlerResource": "bucket-primary",
+      "delivery": "at-least-one",
+      "window": {
+        "maximumSeconds": 120,
+        "timeoutMeans": "incomplete",
+        "provesPermanentAbsence": false
+      },
+      "evidenceRequired": [
+        "source-result",
+        "source-readback",
+        "baseline-cursor",
+        "run-resource-correlation",
+        "raw-handler-event",
+        "raw-event-identity",
+        "raw-event-time",
+        "no-capture-loss"
+      ],
+      "observation": "overwritten-generation",
+      "handlerEvent": "finalized"
+    },
+    {
+      "id": "FUNCTIONS-EVENTS/storage-finalized#failed-upload-no-event#v1",
+      "conditionId": "FUNCTIONS-EVENTS/storage-finalized",
+      "recipeId": "functions-events/storage/finalize",
+      "case": "failed-upload-no-event",
+      "generation": 1,
+      "source": "storage",
+      "scenario": "storage-failed-upload",
+      "handlerResource": "bucket-primary",
+      "delivery": "none-in-window",
+      "window": {
+        "maximumSeconds": 120,
+        "timeoutMeans": "bounded-observation-only",
+        "provesPermanentAbsence": false
+      },
+      "evidenceRequired": [
+        "source-result",
+        "source-readback",
+        "baseline-cursor",
+        "run-resource-correlation",
+        "positive-control-before",
+        "positive-control-after",
+        "window-complete",
+        "no-capture-loss"
+      ],
+      "observation": "failed-upload-no-event",
+      "positiveControlScenario": "storage-upload",
+      "handlerEvent": "finalized",
+      "positiveControlGeneration": 1
+    },
+    {
+      "id": "FUNCTIONS-EVENTS/storage-finalized#failed-upload-no-event#v2",
+      "conditionId": "FUNCTIONS-EVENTS/storage-finalized",
+      "recipeId": "functions-events/storage/finalize",
+      "case": "failed-upload-no-event",
+      "generation": 2,
+      "source": "storage",
+      "scenario": "storage-failed-upload",
+      "handlerResource": "bucket-primary",
+      "delivery": "none-in-window",
+      "window": {
+        "maximumSeconds": 120,
+        "timeoutMeans": "bounded-observation-only",
+        "provesPermanentAbsence": false
+      },
+      "evidenceRequired": [
+        "source-result",
+        "source-readback",
+        "baseline-cursor",
+        "run-resource-correlation",
+        "positive-control-before",
+        "positive-control-after",
+        "window-complete",
+        "no-capture-loss"
+      ],
+      "observation": "failed-upload-no-event",
+      "positiveControlScenario": "storage-upload",
+      "handlerEvent": "finalized",
+      "positiveControlGeneration": 2
+    },
+    {
+      "id": "FUNCTIONS-EVENTS/storage-deleted#live-object-delete#v1",
+      "conditionId": "FUNCTIONS-EVENTS/storage-deleted",
+      "recipeId": "functions-events/storage/delete",
+      "case": "live-object-delete",
+      "generation": 1,
+      "source": "storage",
+      "scenario": "storage-delete",
+      "handlerResource": "bucket-primary",
+      "delivery": "at-least-one",
+      "window": {
+        "maximumSeconds": 120,
+        "timeoutMeans": "incomplete",
+        "provesPermanentAbsence": false
+      },
+      "evidenceRequired": [
+        "source-result",
+        "source-readback",
+        "baseline-cursor",
+        "run-resource-correlation",
+        "raw-handler-event",
+        "raw-event-identity",
+        "raw-event-time",
+        "no-capture-loss"
+      ],
+      "observation": "live-object-delete",
+      "handlerEvent": "deleted"
+    },
+    {
+      "id": "FUNCTIONS-EVENTS/storage-deleted#live-object-delete#v2",
+      "conditionId": "FUNCTIONS-EVENTS/storage-deleted",
+      "recipeId": "functions-events/storage/delete",
+      "case": "live-object-delete",
+      "generation": 2,
+      "source": "storage",
+      "scenario": "storage-delete",
+      "handlerResource": "bucket-primary",
+      "delivery": "at-least-one",
+      "window": {
+        "maximumSeconds": 120,
+        "timeoutMeans": "incomplete",
+        "provesPermanentAbsence": false
+      },
+      "evidenceRequired": [
+        "source-result",
+        "source-readback",
+        "baseline-cursor",
+        "run-resource-correlation",
+        "raw-handler-event",
+        "raw-event-identity",
+        "raw-event-time",
+        "no-capture-loss"
+      ],
+      "observation": "live-object-delete",
+      "handlerEvent": "deleted"
+    },
+    {
+      "id": "FUNCTIONS-EVENTS/storage-deleted#no-event-for-missing-object#v1",
+      "conditionId": "FUNCTIONS-EVENTS/storage-deleted",
+      "recipeId": "functions-events/storage/delete",
+      "case": "no-event-for-missing-object",
+      "generation": 1,
+      "source": "storage",
+      "scenario": "storage-delete-missing",
+      "handlerResource": "bucket-primary",
+      "delivery": "none-in-window",
+      "window": {
+        "maximumSeconds": 120,
+        "timeoutMeans": "bounded-observation-only",
+        "provesPermanentAbsence": false
+      },
+      "evidenceRequired": [
+        "source-result",
+        "source-readback",
+        "baseline-cursor",
+        "run-resource-correlation",
+        "positive-control-before",
+        "positive-control-after",
+        "window-complete",
+        "no-capture-loss"
+      ],
+      "observation": "no-event-for-missing-object",
+      "positiveControlScenario": "storage-delete",
+      "handlerEvent": "deleted",
+      "positiveControlGeneration": 1
+    },
+    {
+      "id": "FUNCTIONS-EVENTS/storage-deleted#no-event-for-missing-object#v2",
+      "conditionId": "FUNCTIONS-EVENTS/storage-deleted",
+      "recipeId": "functions-events/storage/delete",
+      "case": "no-event-for-missing-object",
+      "generation": 2,
+      "source": "storage",
+      "scenario": "storage-delete-missing",
+      "handlerResource": "bucket-primary",
+      "delivery": "none-in-window",
+      "window": {
+        "maximumSeconds": 120,
+        "timeoutMeans": "bounded-observation-only",
+        "provesPermanentAbsence": false
+      },
+      "evidenceRequired": [
+        "source-result",
+        "source-readback",
+        "baseline-cursor",
+        "run-resource-correlation",
+        "positive-control-before",
+        "positive-control-after",
+        "window-complete",
+        "no-capture-loss"
+      ],
+      "observation": "no-event-for-missing-object",
+      "positiveControlScenario": "storage-delete",
+      "handlerEvent": "deleted",
+      "positiveControlGeneration": 2
+    },
+    {
+      "id": "FUNCTIONS-EVENTS/storage-metadata-updated#custom-metadata-change#v1",
+      "conditionId": "FUNCTIONS-EVENTS/storage-metadata-updated",
+      "recipeId": "functions-events/storage/metadata",
+      "case": "custom-metadata-change",
+      "generation": 1,
+      "source": "storage",
+      "scenario": "storage-metadata",
+      "handlerResource": "bucket-primary",
+      "delivery": "at-least-one",
+      "window": {
+        "maximumSeconds": 120,
+        "timeoutMeans": "incomplete",
+        "provesPermanentAbsence": false
+      },
+      "evidenceRequired": [
+        "source-result",
+        "source-readback",
+        "baseline-cursor",
+        "run-resource-correlation",
+        "raw-handler-event",
+        "raw-event-identity",
+        "raw-event-time",
+        "no-capture-loss"
+      ],
+      "observation": "custom-metadata-change",
+      "handlerEvent": "metadata-updated"
+    },
+    {
+      "id": "FUNCTIONS-EVENTS/storage-metadata-updated#custom-metadata-change#v2",
+      "conditionId": "FUNCTIONS-EVENTS/storage-metadata-updated",
+      "recipeId": "functions-events/storage/metadata",
+      "case": "custom-metadata-change",
+      "generation": 2,
+      "source": "storage",
+      "scenario": "storage-metadata",
+      "handlerResource": "bucket-primary",
+      "delivery": "at-least-one",
+      "window": {
+        "maximumSeconds": 120,
+        "timeoutMeans": "incomplete",
+        "provesPermanentAbsence": false
+      },
+      "evidenceRequired": [
+        "source-result",
+        "source-readback",
+        "baseline-cursor",
+        "run-resource-correlation",
+        "raw-handler-event",
+        "raw-event-identity",
+        "raw-event-time",
+        "no-capture-loss"
+      ],
+      "observation": "custom-metadata-change",
+      "handlerEvent": "metadata-updated"
+    },
+    {
+      "id": "FUNCTIONS-EVENTS/storage-metadata-updated#metageneration#v1",
+      "conditionId": "FUNCTIONS-EVENTS/storage-metadata-updated",
+      "recipeId": "functions-events/storage/metadata",
+      "case": "metageneration",
+      "generation": 1,
+      "source": "storage",
+      "scenario": "storage-metadata",
+      "handlerResource": "bucket-primary",
+      "delivery": "at-least-one",
+      "window": {
+        "maximumSeconds": 120,
+        "timeoutMeans": "incomplete",
+        "provesPermanentAbsence": false
+      },
+      "evidenceRequired": [
+        "source-result",
+        "source-readback",
+        "baseline-cursor",
+        "run-resource-correlation",
+        "raw-handler-event",
+        "raw-event-identity",
+        "raw-event-time",
+        "no-capture-loss"
+      ],
+      "observation": "metageneration",
+      "handlerEvent": "metadata-updated"
+    },
+    {
+      "id": "FUNCTIONS-EVENTS/storage-metadata-updated#metageneration#v2",
+      "conditionId": "FUNCTIONS-EVENTS/storage-metadata-updated",
+      "recipeId": "functions-events/storage/metadata",
+      "case": "metageneration",
+      "generation": 2,
+      "source": "storage",
+      "scenario": "storage-metadata",
+      "handlerResource": "bucket-primary",
+      "delivery": "at-least-one",
+      "window": {
+        "maximumSeconds": 120,
+        "timeoutMeans": "incomplete",
+        "provesPermanentAbsence": false
+      },
+      "evidenceRequired": [
+        "source-result",
+        "source-readback",
+        "baseline-cursor",
+        "run-resource-correlation",
+        "raw-handler-event",
+        "raw-event-identity",
+        "raw-event-time",
+        "no-capture-loss"
+      ],
+      "observation": "metageneration",
+      "handlerEvent": "metadata-updated"
+    },
+    {
+      "id": "FUNCTIONS-EVENTS/storage-archived#versioned-overwrite#v1",
+      "conditionId": "FUNCTIONS-EVENTS/storage-archived",
+      "recipeId": "functions-events/storage/archive",
+      "case": "versioned-overwrite",
+      "generation": 1,
+      "source": "storage",
+      "scenario": "storage-archive",
+      "handlerResource": "bucket-primary",
+      "delivery": "at-least-one",
+      "window": {
+        "maximumSeconds": 120,
+        "timeoutMeans": "incomplete",
+        "provesPermanentAbsence": false
+      },
+      "evidenceRequired": [
+        "source-result",
+        "source-readback",
+        "baseline-cursor",
+        "run-resource-correlation",
+        "raw-handler-event",
+        "raw-event-identity",
+        "raw-event-time",
+        "no-capture-loss"
+      ],
+      "observation": "versioned-overwrite",
+      "handlerEvent": "archived"
+    },
+    {
+      "id": "FUNCTIONS-EVENTS/storage-archived#versioned-overwrite#v2",
+      "conditionId": "FUNCTIONS-EVENTS/storage-archived",
+      "recipeId": "functions-events/storage/archive",
+      "case": "versioned-overwrite",
+      "generation": 2,
+      "source": "storage",
+      "scenario": "storage-archive",
+      "handlerResource": "bucket-primary",
+      "delivery": "at-least-one",
+      "window": {
+        "maximumSeconds": 120,
+        "timeoutMeans": "incomplete",
+        "provesPermanentAbsence": false
+      },
+      "evidenceRequired": [
+        "source-result",
+        "source-readback",
+        "baseline-cursor",
+        "run-resource-correlation",
+        "raw-handler-event",
+        "raw-event-identity",
+        "raw-event-time",
+        "no-capture-loss"
+      ],
+      "observation": "versioned-overwrite",
+      "handlerEvent": "archived"
+    },
+    {
+      "id": "FUNCTIONS-EVENTS/storage-archived#archived-generation#v1",
+      "conditionId": "FUNCTIONS-EVENTS/storage-archived",
+      "recipeId": "functions-events/storage/archive",
+      "case": "archived-generation",
+      "generation": 1,
+      "source": "storage",
+      "scenario": "storage-archive",
+      "handlerResource": "bucket-primary",
+      "delivery": "at-least-one",
+      "window": {
+        "maximumSeconds": 120,
+        "timeoutMeans": "incomplete",
+        "provesPermanentAbsence": false
+      },
+      "evidenceRequired": [
+        "source-result",
+        "source-readback",
+        "baseline-cursor",
+        "run-resource-correlation",
+        "raw-handler-event",
+        "raw-event-identity",
+        "raw-event-time",
+        "no-capture-loss"
+      ],
+      "observation": "archived-generation",
+      "handlerEvent": "archived"
+    },
+    {
+      "id": "FUNCTIONS-EVENTS/storage-archived#archived-generation#v2",
+      "conditionId": "FUNCTIONS-EVENTS/storage-archived",
+      "recipeId": "functions-events/storage/archive",
+      "case": "archived-generation",
+      "generation": 2,
+      "source": "storage",
+      "scenario": "storage-archive",
+      "handlerResource": "bucket-primary",
+      "delivery": "at-least-one",
+      "window": {
+        "maximumSeconds": 120,
+        "timeoutMeans": "incomplete",
+        "provesPermanentAbsence": false
+      },
+      "evidenceRequired": [
+        "source-result",
+        "source-readback",
+        "baseline-cursor",
+        "run-resource-correlation",
+        "raw-handler-event",
+        "raw-event-identity",
+        "raw-event-time",
+        "no-capture-loss"
+      ],
+      "observation": "archived-generation",
+      "handlerEvent": "archived"
+    },
+    {
+      "id": "FUNCTIONS-EVENTS/storage-payload#handler-envelope#v1",
+      "conditionId": "FUNCTIONS-EVENTS/storage-payload",
+      "recipeId": "functions-events/storage/payload",
+      "case": "handler-envelope",
+      "generation": 1,
+      "source": "storage",
+      "scenario": "storage-upload",
+      "handlerResource": "bucket-primary",
+      "delivery": "at-least-one",
+      "window": {
+        "maximumSeconds": 120,
+        "timeoutMeans": "incomplete",
+        "provesPermanentAbsence": false
+      },
+      "evidenceRequired": [
+        "source-result",
+        "source-readback",
+        "baseline-cursor",
+        "run-resource-correlation",
+        "raw-handler-event",
+        "raw-event-identity",
+        "raw-event-time",
+        "no-capture-loss"
+      ],
+      "observation": "handler-envelope",
+      "handlerEvent": "finalized"
+    },
+    {
+      "id": "FUNCTIONS-EVENTS/storage-payload#handler-envelope#v2",
+      "conditionId": "FUNCTIONS-EVENTS/storage-payload",
+      "recipeId": "functions-events/storage/payload",
+      "case": "handler-envelope",
+      "generation": 2,
+      "source": "storage",
+      "scenario": "storage-upload",
+      "handlerResource": "bucket-primary",
+      "delivery": "at-least-one",
+      "window": {
+        "maximumSeconds": 120,
+        "timeoutMeans": "incomplete",
+        "provesPermanentAbsence": false
+      },
+      "evidenceRequired": [
+        "source-result",
+        "source-readback",
+        "baseline-cursor",
+        "run-resource-correlation",
+        "raw-handler-event",
+        "raw-event-identity",
+        "raw-event-time",
+        "no-capture-loss"
+      ],
+      "observation": "handler-envelope",
+      "handlerEvent": "finalized"
+    },
+    {
+      "id": "FUNCTIONS-EVENTS/storage-payload#name-and-bucket#v1",
+      "conditionId": "FUNCTIONS-EVENTS/storage-payload",
+      "recipeId": "functions-events/storage/payload",
+      "case": "name-and-bucket",
+      "generation": 1,
+      "source": "storage",
+      "scenario": "storage-upload",
+      "handlerResource": "bucket-primary",
+      "delivery": "at-least-one",
+      "window": {
+        "maximumSeconds": 120,
+        "timeoutMeans": "incomplete",
+        "provesPermanentAbsence": false
+      },
+      "evidenceRequired": [
+        "source-result",
+        "source-readback",
+        "baseline-cursor",
+        "run-resource-correlation",
+        "raw-handler-event",
+        "raw-event-identity",
+        "raw-event-time",
+        "no-capture-loss"
+      ],
+      "observation": "name-and-bucket",
+      "handlerEvent": "finalized"
+    },
+    {
+      "id": "FUNCTIONS-EVENTS/storage-payload#name-and-bucket#v2",
+      "conditionId": "FUNCTIONS-EVENTS/storage-payload",
+      "recipeId": "functions-events/storage/payload",
+      "case": "name-and-bucket",
+      "generation": 2,
+      "source": "storage",
+      "scenario": "storage-upload",
+      "handlerResource": "bucket-primary",
+      "delivery": "at-least-one",
+      "window": {
+        "maximumSeconds": 120,
+        "timeoutMeans": "incomplete",
+        "provesPermanentAbsence": false
+      },
+      "evidenceRequired": [
+        "source-result",
+        "source-readback",
+        "baseline-cursor",
+        "run-resource-correlation",
+        "raw-handler-event",
+        "raw-event-identity",
+        "raw-event-time",
+        "no-capture-loss"
+      ],
+      "observation": "name-and-bucket",
+      "handlerEvent": "finalized"
+    },
+    {
+      "id": "FUNCTIONS-EVENTS/storage-payload#generation#v1",
+      "conditionId": "FUNCTIONS-EVENTS/storage-payload",
+      "recipeId": "functions-events/storage/payload",
+      "case": "generation",
+      "generation": 1,
+      "source": "storage",
+      "scenario": "storage-upload",
+      "handlerResource": "bucket-primary",
+      "delivery": "at-least-one",
+      "window": {
+        "maximumSeconds": 120,
+        "timeoutMeans": "incomplete",
+        "provesPermanentAbsence": false
+      },
+      "evidenceRequired": [
+        "source-result",
+        "source-readback",
+        "baseline-cursor",
+        "run-resource-correlation",
+        "raw-handler-event",
+        "raw-event-identity",
+        "raw-event-time",
+        "no-capture-loss"
+      ],
+      "observation": "generation",
+      "handlerEvent": "finalized"
+    },
+    {
+      "id": "FUNCTIONS-EVENTS/storage-payload#generation#v2",
+      "conditionId": "FUNCTIONS-EVENTS/storage-payload",
+      "recipeId": "functions-events/storage/payload",
+      "case": "generation",
+      "generation": 2,
+      "source": "storage",
+      "scenario": "storage-upload",
+      "handlerResource": "bucket-primary",
+      "delivery": "at-least-one",
+      "window": {
+        "maximumSeconds": 120,
+        "timeoutMeans": "incomplete",
+        "provesPermanentAbsence": false
+      },
+      "evidenceRequired": [
+        "source-result",
+        "source-readback",
+        "baseline-cursor",
+        "run-resource-correlation",
+        "raw-handler-event",
+        "raw-event-identity",
+        "raw-event-time",
+        "no-capture-loss"
+      ],
+      "observation": "generation",
+      "handlerEvent": "finalized"
+    },
+    {
+      "id": "FUNCTIONS-EVENTS/storage-payload#content-type#v1",
+      "conditionId": "FUNCTIONS-EVENTS/storage-payload",
+      "recipeId": "functions-events/storage/payload",
+      "case": "content-type",
+      "generation": 1,
+      "source": "storage",
+      "scenario": "storage-upload",
+      "handlerResource": "bucket-primary",
+      "delivery": "at-least-one",
+      "window": {
+        "maximumSeconds": 120,
+        "timeoutMeans": "incomplete",
+        "provesPermanentAbsence": false
+      },
+      "evidenceRequired": [
+        "source-result",
+        "source-readback",
+        "baseline-cursor",
+        "run-resource-correlation",
+        "raw-handler-event",
+        "raw-event-identity",
+        "raw-event-time",
+        "no-capture-loss"
+      ],
+      "observation": "content-type",
+      "handlerEvent": "finalized"
+    },
+    {
+      "id": "FUNCTIONS-EVENTS/storage-payload#content-type#v2",
+      "conditionId": "FUNCTIONS-EVENTS/storage-payload",
+      "recipeId": "functions-events/storage/payload",
+      "case": "content-type",
+      "generation": 2,
+      "source": "storage",
+      "scenario": "storage-upload",
+      "handlerResource": "bucket-primary",
+      "delivery": "at-least-one",
+      "window": {
+        "maximumSeconds": 120,
+        "timeoutMeans": "incomplete",
+        "provesPermanentAbsence": false
+      },
+      "evidenceRequired": [
+        "source-result",
+        "source-readback",
+        "baseline-cursor",
+        "run-resource-correlation",
+        "raw-handler-event",
+        "raw-event-identity",
+        "raw-event-time",
+        "no-capture-loss"
+      ],
+      "observation": "content-type",
+      "handlerEvent": "finalized"
+    },
+    {
+      "id": "FUNCTIONS-EVENTS/storage-payload#event-metadata#v1",
+      "conditionId": "FUNCTIONS-EVENTS/storage-payload",
+      "recipeId": "functions-events/storage/payload",
+      "case": "event-metadata",
+      "generation": 1,
+      "source": "storage",
+      "scenario": "storage-upload",
+      "handlerResource": "bucket-primary",
+      "delivery": "at-least-one",
+      "window": {
+        "maximumSeconds": 120,
+        "timeoutMeans": "incomplete",
+        "provesPermanentAbsence": false
+      },
+      "evidenceRequired": [
+        "source-result",
+        "source-readback",
+        "baseline-cursor",
+        "run-resource-correlation",
+        "raw-handler-event",
+        "raw-event-identity",
+        "raw-event-time",
+        "no-capture-loss"
+      ],
+      "observation": "event-metadata",
+      "handlerEvent": "finalized"
+    },
+    {
+      "id": "FUNCTIONS-EVENTS/storage-payload#event-metadata#v2",
+      "conditionId": "FUNCTIONS-EVENTS/storage-payload",
+      "recipeId": "functions-events/storage/payload",
+      "case": "event-metadata",
+      "generation": 2,
+      "source": "storage",
+      "scenario": "storage-upload",
+      "handlerResource": "bucket-primary",
+      "delivery": "at-least-one",
+      "window": {
+        "maximumSeconds": 120,
+        "timeoutMeans": "incomplete",
+        "provesPermanentAbsence": false
+      },
+      "evidenceRequired": [
+        "source-result",
+        "source-readback",
+        "baseline-cursor",
+        "run-resource-correlation",
+        "raw-handler-event",
+        "raw-event-identity",
+        "raw-event-time",
+        "no-capture-loss"
+      ],
+      "observation": "event-metadata",
+      "handlerEvent": "finalized"
+    },
+    {
+      "id": "FUNCTIONS-EVENTS/storage-bucket-routing#matching-bucket#v1",
+      "conditionId": "FUNCTIONS-EVENTS/storage-bucket-routing",
+      "recipeId": "functions-events/storage/routing",
+      "case": "matching-bucket",
+      "generation": 1,
+      "source": "storage",
+      "scenario": "storage-upload",
+      "handlerResource": "bucket-primary",
+      "delivery": "at-least-one",
+      "window": {
+        "maximumSeconds": 120,
+        "timeoutMeans": "incomplete",
+        "provesPermanentAbsence": false
+      },
+      "evidenceRequired": [
+        "source-result",
+        "source-readback",
+        "baseline-cursor",
+        "run-resource-correlation",
+        "raw-handler-event",
+        "raw-event-identity",
+        "raw-event-time",
+        "no-capture-loss"
+      ],
+      "observation": "matching-bucket",
+      "handlerEvent": "finalized"
+    },
+    {
+      "id": "FUNCTIONS-EVENTS/storage-bucket-routing#matching-bucket#v2",
+      "conditionId": "FUNCTIONS-EVENTS/storage-bucket-routing",
+      "recipeId": "functions-events/storage/routing",
+      "case": "matching-bucket",
+      "generation": 2,
+      "source": "storage",
+      "scenario": "storage-upload",
+      "handlerResource": "bucket-primary",
+      "delivery": "at-least-one",
+      "window": {
+        "maximumSeconds": 120,
+        "timeoutMeans": "incomplete",
+        "provesPermanentAbsence": false
+      },
+      "evidenceRequired": [
+        "source-result",
+        "source-readback",
+        "baseline-cursor",
+        "run-resource-correlation",
+        "raw-handler-event",
+        "raw-event-identity",
+        "raw-event-time",
+        "no-capture-loss"
+      ],
+      "observation": "matching-bucket",
+      "handlerEvent": "finalized"
+    },
+    {
+      "id": "FUNCTIONS-EVENTS/storage-bucket-routing#nonmatching-bucket#v1",
+      "conditionId": "FUNCTIONS-EVENTS/storage-bucket-routing",
+      "recipeId": "functions-events/storage/routing",
+      "case": "nonmatching-bucket",
+      "generation": 1,
+      "source": "storage",
+      "scenario": "storage-other-bucket",
+      "handlerResource": "bucket-primary",
+      "delivery": "none-in-window",
+      "window": {
+        "maximumSeconds": 120,
+        "timeoutMeans": "bounded-observation-only",
+        "provesPermanentAbsence": false
+      },
+      "evidenceRequired": [
+        "source-result",
+        "source-readback",
+        "baseline-cursor",
+        "run-resource-correlation",
+        "positive-control-before",
+        "positive-control-after",
+        "window-complete",
+        "no-capture-loss"
+      ],
+      "observation": "nonmatching-bucket",
+      "positiveControlScenario": "storage-upload",
+      "handlerEvent": "finalized",
+      "positiveControlGeneration": 1
+    },
+    {
+      "id": "FUNCTIONS-EVENTS/storage-bucket-routing#nonmatching-bucket#v2",
+      "conditionId": "FUNCTIONS-EVENTS/storage-bucket-routing",
+      "recipeId": "functions-events/storage/routing",
+      "case": "nonmatching-bucket",
+      "generation": 2,
+      "source": "storage",
+      "scenario": "storage-other-bucket",
+      "handlerResource": "bucket-primary",
+      "delivery": "none-in-window",
+      "window": {
+        "maximumSeconds": 120,
+        "timeoutMeans": "bounded-observation-only",
+        "provesPermanentAbsence": false
+      },
+      "evidenceRequired": [
+        "source-result",
+        "source-readback",
+        "baseline-cursor",
+        "run-resource-correlation",
+        "positive-control-before",
+        "positive-control-after",
+        "window-complete",
+        "no-capture-loss"
+      ],
+      "observation": "nonmatching-bucket",
+      "positiveControlScenario": "storage-upload",
+      "handlerEvent": "finalized",
+      "positiveControlGeneration": 2
+    },
+    {
+      "id": "FUNCTIONS-EVENTS/storage-bucket-routing#same-bucket-other-prefix-delivered#v1",
+      "conditionId": "FUNCTIONS-EVENTS/storage-bucket-routing",
+      "recipeId": "functions-events/storage/routing",
+      "case": "same-bucket-other-prefix-delivered",
+      "generation": 1,
+      "source": "storage",
+      "scenario": "storage-other-prefix",
+      "handlerResource": "bucket-primary",
+      "delivery": "at-least-one",
+      "window": {
+        "maximumSeconds": 120,
+        "timeoutMeans": "incomplete",
+        "provesPermanentAbsence": false
+      },
+      "evidenceRequired": [
+        "source-result",
+        "source-readback",
+        "baseline-cursor",
+        "run-resource-correlation",
+        "raw-handler-event",
+        "raw-event-identity",
+        "raw-event-time",
+        "no-capture-loss"
+      ],
+      "observation": "same-bucket-other-prefix-delivered",
+      "handlerEvent": "finalized"
+    },
+    {
+      "id": "FUNCTIONS-EVENTS/storage-bucket-routing#same-bucket-other-prefix-delivered#v2",
+      "conditionId": "FUNCTIONS-EVENTS/storage-bucket-routing",
+      "recipeId": "functions-events/storage/routing",
+      "case": "same-bucket-other-prefix-delivered",
+      "generation": 2,
+      "source": "storage",
+      "scenario": "storage-other-prefix",
+      "handlerResource": "bucket-primary",
+      "delivery": "at-least-one",
+      "window": {
+        "maximumSeconds": 120,
+        "timeoutMeans": "incomplete",
+        "provesPermanentAbsence": false
+      },
+      "evidenceRequired": [
+        "source-result",
+        "source-readback",
+        "baseline-cursor",
+        "run-resource-correlation",
+        "raw-handler-event",
+        "raw-event-identity",
+        "raw-event-time",
+        "no-capture-loss"
+      ],
+      "observation": "same-bucket-other-prefix-delivered",
+      "handlerEvent": "finalized"
+    },
+    {
+      "id": "FUNCTIONS-EVENTS/auth-created#admin-create#v1",
+      "conditionId": "FUNCTIONS-EVENTS/auth-created",
+      "recipeId": "functions-events/auth/create",
+      "case": "admin-create",
+      "generation": 1,
+      "source": "auth",
+      "scenario": "auth-admin-create",
+      "handlerResource": "auth-project",
+      "delivery": "at-least-one",
+      "window": {
+        "maximumSeconds": 120,
+        "timeoutMeans": "incomplete",
+        "provesPermanentAbsence": false
+      },
+      "evidenceRequired": [
+        "source-result",
+        "source-readback",
+        "baseline-cursor",
+        "run-resource-correlation",
+        "raw-handler-event",
+        "raw-event-identity",
+        "raw-event-time",
+        "no-capture-loss"
+      ],
+      "observation": "admin-create",
+      "handlerEvent": "created"
+    },
+    {
+      "id": "FUNCTIONS-EVENTS/auth-created#email-password-create#v1",
+      "conditionId": "FUNCTIONS-EVENTS/auth-created",
+      "recipeId": "functions-events/auth/create",
+      "case": "email-password-create",
+      "generation": 1,
+      "source": "auth",
+      "scenario": "auth-signup",
+      "handlerResource": "auth-project",
+      "delivery": "at-least-one",
+      "window": {
+        "maximumSeconds": 120,
+        "timeoutMeans": "incomplete",
+        "provesPermanentAbsence": false
+      },
+      "evidenceRequired": [
+        "source-result",
+        "source-readback",
+        "baseline-cursor",
+        "run-resource-correlation",
+        "raw-handler-event",
+        "raw-event-identity",
+        "raw-event-time",
+        "no-capture-loss"
+      ],
+      "observation": "email-password-create",
+      "handlerEvent": "created"
+    },
+    {
+      "id": "FUNCTIONS-EVENTS/auth-created#repeat-sign-in-no-event#v1",
+      "conditionId": "FUNCTIONS-EVENTS/auth-created",
+      "recipeId": "functions-events/auth/create",
+      "case": "repeat-sign-in-no-event",
+      "generation": 1,
+      "source": "auth",
+      "scenario": "auth-repeat-signin",
+      "handlerResource": "auth-project",
+      "delivery": "none-in-window",
+      "window": {
+        "maximumSeconds": 120,
+        "timeoutMeans": "bounded-observation-only",
+        "provesPermanentAbsence": false
+      },
+      "evidenceRequired": [
+        "source-result",
+        "source-readback",
+        "baseline-cursor",
+        "run-resource-correlation",
+        "positive-control-before",
+        "positive-control-after",
+        "window-complete",
+        "no-capture-loss"
+      ],
+      "observation": "repeat-sign-in-no-event",
+      "positiveControlScenario": "auth-admin-create",
+      "handlerEvent": "created",
+      "positiveControlGeneration": 1
+    },
+    {
+      "id": "FUNCTIONS-EVENTS/auth-deleted#single-user-delete#v1",
+      "conditionId": "FUNCTIONS-EVENTS/auth-deleted",
+      "recipeId": "functions-events/auth/delete",
+      "case": "single-user-delete",
+      "generation": 1,
+      "source": "auth",
+      "scenario": "auth-delete",
+      "handlerResource": "auth-project",
+      "delivery": "at-least-one",
+      "window": {
+        "maximumSeconds": 120,
+        "timeoutMeans": "incomplete",
+        "provesPermanentAbsence": false
+      },
+      "evidenceRequired": [
+        "source-result",
+        "source-readback",
+        "baseline-cursor",
+        "run-resource-correlation",
+        "raw-handler-event",
+        "raw-event-identity",
+        "raw-event-time",
+        "no-capture-loss"
+      ],
+      "observation": "single-user-delete",
+      "handlerEvent": "deleted"
+    },
+    {
+      "id": "FUNCTIONS-EVENTS/auth-deleted#bulk-delete-no-event#v1",
+      "conditionId": "FUNCTIONS-EVENTS/auth-deleted",
+      "recipeId": "functions-events/auth/delete",
+      "case": "bulk-delete-no-event",
+      "generation": 1,
+      "source": "auth",
+      "scenario": "auth-bulk-delete",
+      "handlerResource": "auth-project",
+      "delivery": "none-in-window",
+      "window": {
+        "maximumSeconds": 120,
+        "timeoutMeans": "bounded-observation-only",
+        "provesPermanentAbsence": false
+      },
+      "evidenceRequired": [
+        "source-result",
+        "source-readback",
+        "baseline-cursor",
+        "run-resource-correlation",
+        "positive-control-before",
+        "positive-control-after",
+        "window-complete",
+        "no-capture-loss"
+      ],
+      "observation": "bulk-delete-no-event",
+      "positiveControlScenario": "auth-delete",
+      "handlerEvent": "deleted",
+      "positiveControlGeneration": 1
+    },
+    {
+      "id": "FUNCTIONS-EVENTS/auth-payload#handler-envelope#v1",
+      "conditionId": "FUNCTIONS-EVENTS/auth-payload",
+      "recipeId": "functions-events/auth/payload",
+      "case": "handler-envelope",
+      "generation": 1,
+      "source": "auth",
+      "scenario": "auth-admin-create",
+      "handlerResource": "auth-project",
+      "delivery": "at-least-one",
+      "window": {
+        "maximumSeconds": 120,
+        "timeoutMeans": "incomplete",
+        "provesPermanentAbsence": false
+      },
+      "evidenceRequired": [
+        "source-result",
+        "source-readback",
+        "baseline-cursor",
+        "run-resource-correlation",
+        "raw-handler-event",
+        "raw-event-identity",
+        "raw-event-time",
+        "no-capture-loss"
+      ],
+      "observation": "handler-envelope",
+      "handlerEvent": "created"
+    },
+    {
+      "id": "FUNCTIONS-EVENTS/auth-payload#uid#v1",
+      "conditionId": "FUNCTIONS-EVENTS/auth-payload",
+      "recipeId": "functions-events/auth/payload",
+      "case": "uid",
+      "generation": 1,
+      "source": "auth",
+      "scenario": "auth-admin-create",
+      "handlerResource": "auth-project",
+      "delivery": "at-least-one",
+      "window": {
+        "maximumSeconds": 120,
+        "timeoutMeans": "incomplete",
+        "provesPermanentAbsence": false
+      },
+      "evidenceRequired": [
+        "source-result",
+        "source-readback",
+        "baseline-cursor",
+        "run-resource-correlation",
+        "raw-handler-event",
+        "raw-event-identity",
+        "raw-event-time",
+        "no-capture-loss"
+      ],
+      "observation": "uid",
+      "handlerEvent": "created"
+    },
+    {
+      "id": "FUNCTIONS-EVENTS/auth-payload#email#v1",
+      "conditionId": "FUNCTIONS-EVENTS/auth-payload",
+      "recipeId": "functions-events/auth/payload",
+      "case": "email",
+      "generation": 1,
+      "source": "auth",
+      "scenario": "auth-admin-create",
+      "handlerResource": "auth-project",
+      "delivery": "at-least-one",
+      "window": {
+        "maximumSeconds": 120,
+        "timeoutMeans": "incomplete",
+        "provesPermanentAbsence": false
+      },
+      "evidenceRequired": [
+        "source-result",
+        "source-readback",
+        "baseline-cursor",
+        "run-resource-correlation",
+        "raw-handler-event",
+        "raw-event-identity",
+        "raw-event-time",
+        "no-capture-loss"
+      ],
+      "observation": "email",
+      "handlerEvent": "created"
+    },
+    {
+      "id": "FUNCTIONS-EVENTS/auth-payload#empty-provider-data#v1",
+      "conditionId": "FUNCTIONS-EVENTS/auth-payload",
+      "recipeId": "functions-events/auth/payload",
+      "case": "empty-provider-data",
+      "generation": 1,
+      "source": "auth",
+      "scenario": "auth-admin-create",
+      "handlerResource": "auth-project",
+      "delivery": "at-least-one",
+      "window": {
+        "maximumSeconds": 120,
+        "timeoutMeans": "incomplete",
+        "provesPermanentAbsence": false
+      },
+      "evidenceRequired": [
+        "source-result",
+        "source-readback",
+        "baseline-cursor",
+        "run-resource-correlation",
+        "raw-handler-event",
+        "raw-event-identity",
+        "raw-event-time",
+        "no-capture-loss"
+      ],
+      "observation": "empty-provider-data",
+      "handlerEvent": "created"
+    },
+    {
+      "id": "FUNCTIONS-EVENTS/auth-payload#event-metadata#v1",
+      "conditionId": "FUNCTIONS-EVENTS/auth-payload",
+      "recipeId": "functions-events/auth/payload",
+      "case": "event-metadata",
+      "generation": 1,
+      "source": "auth",
+      "scenario": "auth-admin-create",
+      "handlerResource": "auth-project",
+      "delivery": "at-least-one",
+      "window": {
+        "maximumSeconds": 120,
+        "timeoutMeans": "incomplete",
+        "provesPermanentAbsence": false
+      },
+      "evidenceRequired": [
+        "source-result",
+        "source-readback",
+        "baseline-cursor",
+        "run-resource-correlation",
+        "raw-handler-event",
+        "raw-event-identity",
+        "raw-event-time",
+        "no-capture-loss"
+      ],
+      "observation": "event-metadata",
+      "handlerEvent": "created"
+    },
+    {
+      "id": "FUNCTIONS-EVENTS/pubsub-published#handler-envelope#v1",
+      "conditionId": "FUNCTIONS-EVENTS/pubsub-published",
+      "recipeId": "functions-events/pubsub/publish",
+      "case": "handler-envelope",
+      "generation": 1,
+      "source": "pubsub",
+      "scenario": "pubsub-publish",
+      "handlerResource": "topic-primary",
+      "delivery": "at-least-one",
+      "window": {
+        "maximumSeconds": 120,
+        "timeoutMeans": "incomplete",
+        "provesPermanentAbsence": false
+      },
+      "evidenceRequired": [
+        "source-result",
+        "source-readback",
+        "baseline-cursor",
+        "run-resource-correlation",
+        "raw-handler-event",
+        "raw-event-identity",
+        "raw-event-time",
+        "no-capture-loss"
+      ],
+      "observation": "handler-envelope",
+      "handlerEvent": "published"
+    },
+    {
+      "id": "FUNCTIONS-EVENTS/pubsub-published#handler-envelope#v2",
+      "conditionId": "FUNCTIONS-EVENTS/pubsub-published",
+      "recipeId": "functions-events/pubsub/publish",
+      "case": "handler-envelope",
+      "generation": 2,
+      "source": "pubsub",
+      "scenario": "pubsub-publish",
+      "handlerResource": "topic-primary",
+      "delivery": "at-least-one",
+      "window": {
+        "maximumSeconds": 120,
+        "timeoutMeans": "incomplete",
+        "provesPermanentAbsence": false
+      },
+      "evidenceRequired": [
+        "source-result",
+        "source-readback",
+        "baseline-cursor",
+        "run-resource-correlation",
+        "raw-handler-event",
+        "raw-event-identity",
+        "raw-event-time",
+        "no-capture-loss"
+      ],
+      "observation": "handler-envelope",
+      "handlerEvent": "published"
+    },
+    {
+      "id": "FUNCTIONS-EVENTS/pubsub-published#base64-data#v1",
+      "conditionId": "FUNCTIONS-EVENTS/pubsub-published",
+      "recipeId": "functions-events/pubsub/publish",
+      "case": "base64-data",
+      "generation": 1,
+      "source": "pubsub",
+      "scenario": "pubsub-publish",
+      "handlerResource": "topic-primary",
+      "delivery": "at-least-one",
+      "window": {
+        "maximumSeconds": 120,
+        "timeoutMeans": "incomplete",
+        "provesPermanentAbsence": false
+      },
+      "evidenceRequired": [
+        "source-result",
+        "source-readback",
+        "baseline-cursor",
+        "run-resource-correlation",
+        "raw-handler-event",
+        "raw-event-identity",
+        "raw-event-time",
+        "no-capture-loss"
+      ],
+      "observation": "base64-data",
+      "handlerEvent": "published"
+    },
+    {
+      "id": "FUNCTIONS-EVENTS/pubsub-published#base64-data#v2",
+      "conditionId": "FUNCTIONS-EVENTS/pubsub-published",
+      "recipeId": "functions-events/pubsub/publish",
+      "case": "base64-data",
+      "generation": 2,
+      "source": "pubsub",
+      "scenario": "pubsub-publish",
+      "handlerResource": "topic-primary",
+      "delivery": "at-least-one",
+      "window": {
+        "maximumSeconds": 120,
+        "timeoutMeans": "incomplete",
+        "provesPermanentAbsence": false
+      },
+      "evidenceRequired": [
+        "source-result",
+        "source-readback",
+        "baseline-cursor",
+        "run-resource-correlation",
+        "raw-handler-event",
+        "raw-event-identity",
+        "raw-event-time",
+        "no-capture-loss"
+      ],
+      "observation": "base64-data",
+      "handlerEvent": "published"
+    },
+    {
+      "id": "FUNCTIONS-EVENTS/pubsub-published#attributes#v1",
+      "conditionId": "FUNCTIONS-EVENTS/pubsub-published",
+      "recipeId": "functions-events/pubsub/publish",
+      "case": "attributes",
+      "generation": 1,
+      "source": "pubsub",
+      "scenario": "pubsub-publish",
+      "handlerResource": "topic-primary",
+      "delivery": "at-least-one",
+      "window": {
+        "maximumSeconds": 120,
+        "timeoutMeans": "incomplete",
+        "provesPermanentAbsence": false
+      },
+      "evidenceRequired": [
+        "source-result",
+        "source-readback",
+        "baseline-cursor",
+        "run-resource-correlation",
+        "raw-handler-event",
+        "raw-event-identity",
+        "raw-event-time",
+        "no-capture-loss"
+      ],
+      "observation": "attributes",
+      "handlerEvent": "published"
+    },
+    {
+      "id": "FUNCTIONS-EVENTS/pubsub-published#attributes#v2",
+      "conditionId": "FUNCTIONS-EVENTS/pubsub-published",
+      "recipeId": "functions-events/pubsub/publish",
+      "case": "attributes",
+      "generation": 2,
+      "source": "pubsub",
+      "scenario": "pubsub-publish",
+      "handlerResource": "topic-primary",
+      "delivery": "at-least-one",
+      "window": {
+        "maximumSeconds": 120,
+        "timeoutMeans": "incomplete",
+        "provesPermanentAbsence": false
+      },
+      "evidenceRequired": [
+        "source-result",
+        "source-readback",
+        "baseline-cursor",
+        "run-resource-correlation",
+        "raw-handler-event",
+        "raw-event-identity",
+        "raw-event-time",
+        "no-capture-loss"
+      ],
+      "observation": "attributes",
+      "handlerEvent": "published"
+    },
+    {
+      "id": "FUNCTIONS-EVENTS/pubsub-published#message-id#v1",
+      "conditionId": "FUNCTIONS-EVENTS/pubsub-published",
+      "recipeId": "functions-events/pubsub/publish",
+      "case": "message-id",
+      "generation": 1,
+      "source": "pubsub",
+      "scenario": "pubsub-publish",
+      "handlerResource": "topic-primary",
+      "delivery": "at-least-one",
+      "window": {
+        "maximumSeconds": 120,
+        "timeoutMeans": "incomplete",
+        "provesPermanentAbsence": false
+      },
+      "evidenceRequired": [
+        "source-result",
+        "source-readback",
+        "baseline-cursor",
+        "run-resource-correlation",
+        "raw-handler-event",
+        "raw-event-identity",
+        "raw-event-time",
+        "no-capture-loss"
+      ],
+      "observation": "message-id",
+      "handlerEvent": "published"
+    },
+    {
+      "id": "FUNCTIONS-EVENTS/pubsub-published#message-id#v2",
+      "conditionId": "FUNCTIONS-EVENTS/pubsub-published",
+      "recipeId": "functions-events/pubsub/publish",
+      "case": "message-id",
+      "generation": 2,
+      "source": "pubsub",
+      "scenario": "pubsub-publish",
+      "handlerResource": "topic-primary",
+      "delivery": "at-least-one",
+      "window": {
+        "maximumSeconds": 120,
+        "timeoutMeans": "incomplete",
+        "provesPermanentAbsence": false
+      },
+      "evidenceRequired": [
+        "source-result",
+        "source-readback",
+        "baseline-cursor",
+        "run-resource-correlation",
+        "raw-handler-event",
+        "raw-event-identity",
+        "raw-event-time",
+        "no-capture-loss"
+      ],
+      "observation": "message-id",
+      "handlerEvent": "published"
+    },
+    {
+      "id": "FUNCTIONS-EVENTS/pubsub-published#publish-time#v1",
+      "conditionId": "FUNCTIONS-EVENTS/pubsub-published",
+      "recipeId": "functions-events/pubsub/publish",
+      "case": "publish-time",
+      "generation": 1,
+      "source": "pubsub",
+      "scenario": "pubsub-publish",
+      "handlerResource": "topic-primary",
+      "delivery": "at-least-one",
+      "window": {
+        "maximumSeconds": 120,
+        "timeoutMeans": "incomplete",
+        "provesPermanentAbsence": false
+      },
+      "evidenceRequired": [
+        "source-result",
+        "source-readback",
+        "baseline-cursor",
+        "run-resource-correlation",
+        "raw-handler-event",
+        "raw-event-identity",
+        "raw-event-time",
+        "no-capture-loss"
+      ],
+      "observation": "publish-time",
+      "handlerEvent": "published"
+    },
+    {
+      "id": "FUNCTIONS-EVENTS/pubsub-published#publish-time#v2",
+      "conditionId": "FUNCTIONS-EVENTS/pubsub-published",
+      "recipeId": "functions-events/pubsub/publish",
+      "case": "publish-time",
+      "generation": 2,
+      "source": "pubsub",
+      "scenario": "pubsub-publish",
+      "handlerResource": "topic-primary",
+      "delivery": "at-least-one",
+      "window": {
+        "maximumSeconds": 120,
+        "timeoutMeans": "incomplete",
+        "provesPermanentAbsence": false
+      },
+      "evidenceRequired": [
+        "source-result",
+        "source-readback",
+        "baseline-cursor",
+        "run-resource-correlation",
+        "raw-handler-event",
+        "raw-event-identity",
+        "raw-event-time",
+        "no-capture-loss"
+      ],
+      "observation": "publish-time",
+      "handlerEvent": "published"
+    },
+    {
+      "id": "FUNCTIONS-EVENTS/pubsub-topic-routing#matching-topic#v1",
+      "conditionId": "FUNCTIONS-EVENTS/pubsub-topic-routing",
+      "recipeId": "functions-events/pubsub/routing",
+      "case": "matching-topic",
+      "generation": 1,
+      "source": "pubsub",
+      "scenario": "pubsub-publish",
+      "handlerResource": "topic-primary",
+      "delivery": "at-least-one",
+      "window": {
+        "maximumSeconds": 120,
+        "timeoutMeans": "incomplete",
+        "provesPermanentAbsence": false
+      },
+      "evidenceRequired": [
+        "source-result",
+        "source-readback",
+        "baseline-cursor",
+        "run-resource-correlation",
+        "raw-handler-event",
+        "raw-event-identity",
+        "raw-event-time",
+        "no-capture-loss"
+      ],
+      "observation": "matching-topic",
+      "handlerEvent": "published"
+    },
+    {
+      "id": "FUNCTIONS-EVENTS/pubsub-topic-routing#matching-topic#v2",
+      "conditionId": "FUNCTIONS-EVENTS/pubsub-topic-routing",
+      "recipeId": "functions-events/pubsub/routing",
+      "case": "matching-topic",
+      "generation": 2,
+      "source": "pubsub",
+      "scenario": "pubsub-publish",
+      "handlerResource": "topic-primary",
+      "delivery": "at-least-one",
+      "window": {
+        "maximumSeconds": 120,
+        "timeoutMeans": "incomplete",
+        "provesPermanentAbsence": false
+      },
+      "evidenceRequired": [
+        "source-result",
+        "source-readback",
+        "baseline-cursor",
+        "run-resource-correlation",
+        "raw-handler-event",
+        "raw-event-identity",
+        "raw-event-time",
+        "no-capture-loss"
+      ],
+      "observation": "matching-topic",
+      "handlerEvent": "published"
+    },
+    {
+      "id": "FUNCTIONS-EVENTS/pubsub-topic-routing#nonmatching-topic#v1",
+      "conditionId": "FUNCTIONS-EVENTS/pubsub-topic-routing",
+      "recipeId": "functions-events/pubsub/routing",
+      "case": "nonmatching-topic",
+      "generation": 1,
+      "source": "pubsub",
+      "scenario": "pubsub-other-topic",
+      "handlerResource": "topic-primary",
+      "delivery": "none-in-window",
+      "window": {
+        "maximumSeconds": 120,
+        "timeoutMeans": "bounded-observation-only",
+        "provesPermanentAbsence": false
+      },
+      "evidenceRequired": [
+        "source-result",
+        "source-readback",
+        "baseline-cursor",
+        "run-resource-correlation",
+        "positive-control-before",
+        "positive-control-after",
+        "window-complete",
+        "no-capture-loss"
+      ],
+      "observation": "nonmatching-topic",
+      "positiveControlScenario": "pubsub-publish",
+      "handlerEvent": "published",
+      "positiveControlGeneration": 1
+    },
+    {
+      "id": "FUNCTIONS-EVENTS/pubsub-topic-routing#nonmatching-topic#v2",
+      "conditionId": "FUNCTIONS-EVENTS/pubsub-topic-routing",
+      "recipeId": "functions-events/pubsub/routing",
+      "case": "nonmatching-topic",
+      "generation": 2,
+      "source": "pubsub",
+      "scenario": "pubsub-other-topic",
+      "handlerResource": "topic-primary",
+      "delivery": "none-in-window",
+      "window": {
+        "maximumSeconds": 120,
+        "timeoutMeans": "bounded-observation-only",
+        "provesPermanentAbsence": false
+      },
+      "evidenceRequired": [
+        "source-result",
+        "source-readback",
+        "baseline-cursor",
+        "run-resource-correlation",
+        "positive-control-before",
+        "positive-control-after",
+        "window-complete",
+        "no-capture-loss"
+      ],
+      "observation": "nonmatching-topic",
+      "positiveControlScenario": "pubsub-publish",
+      "handlerEvent": "published",
+      "positiveControlGeneration": 2
+    },
+    {
+      "id": "FUNCTIONS-EVENTS/pubsub-topic-routing#ordering-key#v1",
+      "conditionId": "FUNCTIONS-EVENTS/pubsub-topic-routing",
+      "recipeId": "functions-events/pubsub/routing",
+      "case": "ordering-key",
+      "generation": 1,
+      "source": "pubsub",
+      "scenario": "pubsub-ordering",
+      "handlerResource": "topic-primary",
+      "delivery": "at-least-one",
+      "window": {
+        "maximumSeconds": 120,
+        "timeoutMeans": "incomplete",
+        "provesPermanentAbsence": false
+      },
+      "evidenceRequired": [
+        "source-result",
+        "source-readback",
+        "baseline-cursor",
+        "run-resource-correlation",
+        "raw-handler-event",
+        "raw-event-identity",
+        "raw-event-time",
+        "no-capture-loss"
+      ],
+      "observation": "ordering-key",
+      "handlerEvent": "published"
+    },
+    {
+      "id": "FUNCTIONS-EVENTS/pubsub-topic-routing#ordering-key#v2",
+      "conditionId": "FUNCTIONS-EVENTS/pubsub-topic-routing",
+      "recipeId": "functions-events/pubsub/routing",
+      "case": "ordering-key",
+      "generation": 2,
+      "source": "pubsub",
+      "scenario": "pubsub-ordering",
+      "handlerResource": "topic-primary",
+      "delivery": "at-least-one",
+      "window": {
+        "maximumSeconds": 120,
+        "timeoutMeans": "incomplete",
+        "provesPermanentAbsence": false
+      },
+      "evidenceRequired": [
+        "source-result",
+        "source-readback",
+        "baseline-cursor",
+        "run-resource-correlation",
+        "raw-handler-event",
+        "raw-event-identity",
+        "raw-event-time",
+        "no-capture-loss"
+      ],
+      "observation": "ordering-key",
+      "handlerEvent": "published"
+    },
+    {
+      "id": "FUNCTIONS-EVENTS/delivery-retry-identity#handler-failure#v2",
+      "conditionId": "FUNCTIONS-EVENTS/delivery-retry-identity",
+      "recipeId": "functions-events/delivery/retry",
+      "case": "handler-failure",
+      "generation": 2,
+      "source": "firestore",
+      "scenario": "fs-retry",
+      "handlerResource": "collection-primary",
+      "delivery": "failed-then-succeeded-same-event",
+      "window": {
+        "maximumSeconds": 600,
+        "timeoutMeans": "incomplete",
+        "provesPermanentAbsence": false
+      },
+      "evidenceRequired": [
+        "source-result",
+        "source-readback",
+        "baseline-cursor",
+        "run-resource-correlation",
+        "raw-handler-event",
+        "raw-event-identity",
+        "raw-event-time",
+        "no-capture-loss",
+        "same-event-failed-and-succeeded"
+      ],
+      "observation": "handler-failure",
+      "retry": {
+        "stableIdentity": true,
+        "exactAttempts": null,
+        "exactDelay": null,
+        "independentEventOrder": null
+      },
+      "handlerEvent": "written"
+    },
+    {
+      "id": "FUNCTIONS-EVENTS/delivery-retry-identity#fail-once-then-success#v2",
+      "conditionId": "FUNCTIONS-EVENTS/delivery-retry-identity",
+      "recipeId": "functions-events/delivery/retry",
+      "case": "fail-once-then-success",
+      "generation": 2,
+      "source": "firestore",
+      "scenario": "fs-retry",
+      "handlerResource": "collection-primary",
+      "delivery": "failed-then-succeeded-same-event",
+      "window": {
+        "maximumSeconds": 600,
+        "timeoutMeans": "incomplete",
+        "provesPermanentAbsence": false
+      },
+      "evidenceRequired": [
+        "source-result",
+        "source-readback",
+        "baseline-cursor",
+        "run-resource-correlation",
+        "raw-handler-event",
+        "raw-event-identity",
+        "raw-event-time",
+        "no-capture-loss",
+        "same-event-failed-and-succeeded"
+      ],
+      "observation": "fail-once-then-success",
+      "retry": {
+        "stableIdentity": true,
+        "exactAttempts": null,
+        "exactDelay": null,
+        "independentEventOrder": null
+      },
+      "handlerEvent": "written"
+    },
+    {
+      "id": "FUNCTIONS-EVENTS/delivery-retry-identity#retry-enabled#v2",
+      "conditionId": "FUNCTIONS-EVENTS/delivery-retry-identity",
+      "recipeId": "functions-events/delivery/retry",
+      "case": "retry-enabled",
+      "generation": 2,
+      "source": "firestore",
+      "scenario": "fs-retry",
+      "handlerResource": "collection-primary",
+      "delivery": "failed-then-succeeded-same-event",
+      "window": {
+        "maximumSeconds": 600,
+        "timeoutMeans": "incomplete",
+        "provesPermanentAbsence": false
+      },
+      "evidenceRequired": [
+        "source-result",
+        "source-readback",
+        "baseline-cursor",
+        "run-resource-correlation",
+        "raw-handler-event",
+        "raw-event-identity",
+        "raw-event-time",
+        "no-capture-loss",
+        "same-event-failed-and-succeeded"
+      ],
+      "observation": "retry-enabled",
+      "retry": {
+        "stableIdentity": true,
+        "exactAttempts": null,
+        "exactDelay": null,
+        "independentEventOrder": null
+      },
+      "handlerEvent": "written"
+    },
+    {
+      "id": "FUNCTIONS-EVENTS/delivery-retry-identity#event-id-across-attempts#v2",
+      "conditionId": "FUNCTIONS-EVENTS/delivery-retry-identity",
+      "recipeId": "functions-events/delivery/retry",
+      "case": "event-id-across-attempts",
+      "generation": 2,
+      "source": "firestore",
+      "scenario": "fs-retry",
+      "handlerResource": "collection-primary",
+      "delivery": "failed-then-succeeded-same-event",
+      "window": {
+        "maximumSeconds": 600,
+        "timeoutMeans": "incomplete",
+        "provesPermanentAbsence": false
+      },
+      "evidenceRequired": [
+        "source-result",
+        "source-readback",
+        "baseline-cursor",
+        "run-resource-correlation",
+        "raw-handler-event",
+        "raw-event-identity",
+        "raw-event-time",
+        "no-capture-loss",
+        "same-event-failed-and-succeeded"
+      ],
+      "observation": "event-id-across-attempts",
+      "retry": {
+        "stableIdentity": true,
+        "exactAttempts": null,
+        "exactDelay": null,
+        "independentEventOrder": null
+      },
+      "handlerEvent": "written"
+    }
+  ]
+}

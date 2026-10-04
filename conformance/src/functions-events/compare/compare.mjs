@@ -173,7 +173,6 @@ function observeProductionPass({
         `${label}: ${handler} delivered ${subject.length} frame(s) on a no-event case`,
       ]);
     }
-    if (reasons.length > 0) return incomplete([...new Set(reasons)]);
     const unidentified = handlerFrames.filter(
       (frame) =>
         !attribution.get(frame).identified && !(frame.logMs !== null && frame.logMs < op.startMs),

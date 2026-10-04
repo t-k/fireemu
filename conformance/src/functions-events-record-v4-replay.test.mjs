@@ -479,26 +479,38 @@ test(
 );
 
 test(
-  "real run: every one of the 153 recorded responses has a judge that reads it: lists, the cleanup's reads and the capture are parsed",
+  "real run: the 153 recorded responses are the answers the judges were written for (104 lists, 22 preflight, 21 cleanup, 5 setup, 1 capture) and every list answer reads as a list",
   { skip: !haveReal },
   () => {
     const files = readdirSync(realResponses).filter((f) => f.endsWith(".json"));
     assert.equal(files.length, 153);
     const kinds = new Map();
+    const keys = {
+      "lists.functions-v1": "functions",
+      "lists.functions-v2": "functions",
+      "lists.run-services": "services",
+      "lists.eventarc-triggers": "triggers",
+    };
     for (const f of files) {
       const answer = JSON.parse(readFileSync(join(realResponses, f), "utf8"));
       assert.ok(typeof answer.id === "string" && typeof answer.status === "number", f);
       const kind = answer.id.split(".")[0];
       kinds.set(kind, (kinds.get(kind) ?? 0) + 1);
+      if (keys[answer.id]) {
+        assert.equal(answer.status, 200, f);
+        const items = answer.body[keys[answer.id]];
+        assert.ok(items === undefined || Array.isArray(items), `${f}: a list or absent`);
+        assert.equal(answer.body.nextPageToken, undefined, f);
+      }
     }
     assert.deepEqual(
       [...kinds.entries()].toSorted(),
       [
         ["capture", 1],
-        ["cleanup", 19],
-        ["lists", 90],
+        ["cleanup", 21],
+        ["lists", 104],
         ["preflight", 22],
-        ["setup", 21],
+        ["setup", 5],
       ].toSorted(),
     );
   },

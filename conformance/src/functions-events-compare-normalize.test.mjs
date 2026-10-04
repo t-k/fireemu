@@ -421,3 +421,70 @@ test("a format feature production never had is reported as none, not hidden", ()
     ],
   );
 });
+
+test("member order is ignored under the paths the caller names and their descendants, and nowhere else; values are always compared", () => {
+  const frame = (data, resource) => ({
+    frame: { event: { data: { data }, context: { resource } } },
+  });
+  const ignored = (path) =>
+    path === "$.frame.event.data.data" || path.startsWith("$.frame.event.data.data.");
+  const production = flatten(
+    frame(
+      { fixtureKind: "k", value: "v", nested: { a: 1, b: 2 } },
+      { name: "n", service: "s", type: "t" },
+    ),
+  );
+  const reordered = flatten(
+    frame(
+      { value: "v", nested: { b: 2, a: 1 }, fixtureKind: "k" },
+      { name: "n", service: "s", type: "t" },
+    ),
+  );
+  // without the predicate the difference is an order DIFF at both objects
+  assert.deepEqual(
+    compareObservation(production, new Map(), reordered, "strict").map((r) => r.split(" (")[0]),
+    ["strict: order $.frame.event.data.data", "strict: order $.frame.event.data.data.nested"],
+  );
+  assert.deepEqual(
+    compareObservation(production, new Map(), reordered, "strict", { orderIgnored: ignored }),
+    [],
+  );
+  // the same predicate leaves another object's order alone
+  const otherOrder = flatten(
+    frame(
+      { fixtureKind: "k", value: "v", nested: { a: 1, b: 2 } },
+      { service: "s", name: "n", type: "t" },
+    ),
+  );
+  assert.deepEqual(
+    compareObservation(production, new Map(), otherOrder, "strict", { orderIgnored: ignored }).map(
+      (r) => r.split(" (")[0],
+    ),
+    ["strict: order $.frame.event.context.resource"],
+  );
+  // a value, a missing field and an extra field are reported even where order is ignored
+  const changed = flatten(
+    frame(
+      { value: "w", nested: { b: 2, a: 1 }, fixtureKind: "k" },
+      { name: "n", service: "s", type: "t" },
+    ),
+  );
+  assert.deepEqual(
+    compareObservation(production, new Map(), changed, "strict", { orderIgnored: ignored }).map(
+      (r) => r.split(" (")[0],
+    ),
+    ["strict: value $.frame.event.data.data.value"],
+  );
+  const missing = flatten(
+    frame({ value: "v", fixtureKind: "k" }, { name: "n", service: "s", type: "t" }),
+  );
+  assert.deepEqual(
+    compareObservation(production, new Map(), missing, "strict", { orderIgnored: ignored }),
+    ["strict: missing-field $.frame.event.data.data.nested"],
+  );
+  // production passes that only differ in order under an ignored path derive no volatile order there
+  const { volatile } = deriveVolatile(production, reordered, { orderIgnored: ignored });
+  assert.equal(volatile.has("$.frame.event.data.data"), false);
+  assert.equal(volatile.has("$.frame.event.data.data.nested"), false);
+  assert.equal(deriveVolatile(production, reordered).volatile.has("$.frame.event.data.data"), true);
+});

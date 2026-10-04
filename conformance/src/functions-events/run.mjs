@@ -5,6 +5,7 @@ import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promis
 import { dirname, join, resolve as resolvePath } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
+import { identityEnv, identityOf } from "./binary-identity.mjs";
 
 const repoRoot = fileURLToPath(new URL("../../../", import.meta.url));
 const fixtureDir = join(repoRoot, "conformance/functions-events/fixtures");
@@ -79,7 +80,35 @@ async function stopGroup(child) {
   }
 }
 
-async function runProfile({ profile, binary, privateRoot, onlyRecipeIds, windowMs }) {
+/**
+ * The environment of one local session: no credentials, the capture socket, the identity of the binary and, pinned, the runner of
+ * this checkout (the daemon would otherwise walk up from the binary to whichever checkout holds it and run that one's runner).
+ */
+export function sessionEnvironment({
+  base,
+  shortDir,
+  onlyRecipeIds,
+  windowMs,
+  socketPath,
+  identity,
+}) {
+  const env = {
+    ...base,
+    GOOGLE_APPLICATION_CREDENTIALS: "",
+    FE_EVENTS_PRIVATE_DIR: shortDir,
+    FE_EVENTS_ONLY: onlyRecipeIds ?? "",
+    FE_EVENTS_WINDOW_MS: String(windowMs),
+    FE_EVENTS_MODE: "local",
+    FE_EVENTS_CAPTURE_MODE: "socket",
+    FE_EVENTS_CAPTURE_SOCKET: socketPath,
+    ...identityEnv(identity),
+    FIREEMU_RUNNER_NODE: identity.runnerPath,
+  };
+  delete env.FE_EVENTS_ALLOW_PRODUCTION_ADMIN;
+  return env;
+}
+
+async function runProfile({ profile, binary, identity, privateRoot, onlyRecipeIds, windowMs }) {
   const privateDir = join(privateRoot, profile);
   await mkdir(privateDir, { recursive: true, mode: 0o700 });
   const shortRoot = await mkdtemp(join(tmpdir(), "fe-"));
@@ -96,17 +125,14 @@ async function runProfile({ profile, binary, privateRoot, onlyRecipeIds, windowM
   );
   const logPath = join(privateDir, "supervisor.log");
   const log = createWriteStream(logPath, { flags: "wx", mode: 0o600 });
-  const env = {
-    ...process.env,
-    GOOGLE_APPLICATION_CREDENTIALS: "",
-    FE_EVENTS_PRIVATE_DIR: shortDir,
-    FE_EVENTS_ONLY: onlyRecipeIds ?? "",
-    FE_EVENTS_WINDOW_MS: String(windowMs),
-    FE_EVENTS_MODE: "local",
-    FE_EVENTS_CAPTURE_MODE: "socket",
-    FE_EVENTS_CAPTURE_SOCKET: socketPath,
-  };
-  delete env.FE_EVENTS_ALLOW_PRODUCTION_ADMIN;
+  const env = sessionEnvironment({
+    base: process.env,
+    shortDir,
+    onlyRecipeIds,
+    windowMs,
+    socketPath,
+    identity,
+  });
   let child;
   let logBytes = 0;
   let exceeded = false;
@@ -162,15 +188,25 @@ async function main() {
   await mkdir(privateRoot, { recursive: true, mode: 0o700 });
   const binary = process.env.FIREEMU_BIN ?? join(repoRoot, "target/debug/fireemu");
   if (!existsSync(binary)) throw new Error("build fireemu in this worktree before the local run");
+  // The binary that runs is the one the sessions will name: hashed from the file here, not typed in later.
+  const identity = identityOf({ binary, repoRoot });
   const onlyRecipeIds = process.env.FE_EVENTS_ONLY ?? "";
   const windowMs = Number(process.env.FE_EVENTS_WINDOW_MS ?? "5000");
   const runs = {};
   for (const profile of ["emulator", "strict"]) {
-    runs[profile] = await runProfile({ profile, binary, privateRoot, onlyRecipeIds, windowMs });
+    runs[profile] = await runProfile({
+      profile,
+      binary,
+      identity,
+      privateRoot,
+      onlyRecipeIds,
+      windowMs,
+    });
   }
   const summary = {
     authority: "LOCAL_ONLY",
     productionEvidence: null,
+    fireemu: identity,
     profiles: Object.fromEntries(
       Object.entries(runs).map(([profile, result]) => [
         profile,

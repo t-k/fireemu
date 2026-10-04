@@ -9,6 +9,11 @@
 //                 --comparison-path <the path the closure cites for --out>
 //                 --build-record-out <repo copy> --build-record-path <cited path>]
 //
+// The closure is judged on the strict profile against production (owner ledger 811): a condition is VERIFIED when every one of its
+// rows is MATCH in the strict profile (the worse of the production observation and the strict comparison, so a fault of the
+// recording itself still blocks) in both recordings. The emulator profile's rows are compared and reported in their own section,
+// "emulator-profile versus production", and never block VERIFIED. A comparison must carry the per-profile status of every row.
+//
 // Without --write it only reports: for each of the 20 business conditions of the closure, the comparison rows that settle
 // it (every case of every generation, `<recipe>#<case>#v<generation>`), whether every one MATCHes in both recordings, and
 // otherwise the specific DIFF and INCOMPLETE rows with their reasons, and the rows the comparison does not have. With
@@ -22,9 +27,11 @@
 // A comparison labelled preliminary is never written. "Both recordings" are the two passes of the one production run: the
 // same deploy, two source-script passes, which is what owner ledger 812 counts as two recordings.
 
+import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 
 const HEX64 = /^[0-9a-f]{64}$/;
 const HEX40 = /^[0-9a-f]{40}$/;
@@ -50,6 +57,26 @@ const isGate = (condition) => GATES.includes(gateOf(condition));
 
 // ---- the comparison ---------------------------------------------------------------------------
 
+const PROFILE_NAMES = ["emulator", "strict"];
+const RANK = { MATCH: 0, INCOMPLETE: 1, DIFF: 2 };
+const worst = (statuses) =>
+  statuses.reduce((found, status) => (RANK[status] > RANK[found] ? status : found), "MATCH");
+
+/** A row must carry the status and reasons of each profile, and its combined status must be the worse of the two. */
+function checkProfiles(row) {
+  if (!plain(row.profiles) || !PROFILE_NAMES.every((name) => plain(row.profiles[name])))
+    refuse(
+      `row ${row.row} has no per-profile status: the comparison is from a comparator without the strict/emulator split`,
+    );
+  for (const name of PROFILE_NAMES) {
+    const profile = row.profiles[name];
+    if (!STATUSES.has(profile.status) || !Array.isArray(profile.reasons))
+      refuse(`row ${row.row} has a bad ${name} status or reasons`);
+  }
+  if (worst(PROFILE_NAMES.map((name) => row.profiles[name].status)) !== row.status)
+    refuse(`row ${row.row}: the combined status is not the worse of its two profiles`);
+}
+
 /** The comparison document, or a refusal: its kind, the artifact, and rows that are what the closure's inventory expects. */
 export function checkComparison(comparison) {
   if (!plain(comparison) || comparison.kind !== COMPARISON_KIND)
@@ -67,6 +94,7 @@ export function checkComparison(comparison) {
     if (!STATUSES.has(row.status))
       refuse(`row ${row.row} has the status ${JSON.stringify(row.status)}`);
     if (!Array.isArray(row.reasons)) refuse(`row ${row.row} has no reasons list`);
+    checkProfiles(row);
     if (seen.has(row.row)) refuse(`row ${row.row} appears twice`);
     seen.add(row.row);
   }
@@ -117,6 +145,8 @@ export function mapConditions(closure, comparison) {
       diffRows: [],
       incompleteRows: [],
       missingRows: [],
+      // the emulator profile against production: reported, never blocking
+      emulatorProfile: { match: 0, diffRows: [], incompleteRows: [] },
     };
     for (const id of expected) {
       const row = byRow.get(id);
@@ -127,9 +157,15 @@ export function mapConditions(closure, comparison) {
       if (row.conditionId !== condition.conditionId)
         refuse(`row ${id} belongs to ${row.conditionId}, not to ${condition.conditionId}`);
       claimed.add(id);
-      if (row.status === "MATCH") entry.match += 1;
-      else if (row.status === "DIFF") entry.diffRows.push({ row: id, reasons: row.reasons });
-      else entry.incompleteRows.push({ row: id, reasons: row.reasons });
+      const strict = row.profiles.strict;
+      if (strict.status === "MATCH") entry.match += 1;
+      else if (strict.status === "DIFF") entry.diffRows.push({ row: id, reasons: strict.reasons });
+      else entry.incompleteRows.push({ row: id, reasons: strict.reasons });
+      const emulator = row.profiles.emulator;
+      if (emulator.status === "MATCH") entry.emulatorProfile.match += 1;
+      else if (emulator.status === "DIFF")
+        entry.emulatorProfile.diffRows.push({ row: id, reasons: emulator.reasons });
+      else entry.emulatorProfile.incompleteRows.push({ row: id, reasons: emulator.reasons });
     }
     entry.status =
       entry.missingRows.length > 0
@@ -266,6 +302,58 @@ export function checkLedger(text, runDir) {
   return { gitSha: started.gitSha, packetSha256: started.packetSha256 ?? null };
 }
 
+// ---- binding the comparison to what it is written with ------------------------------------------
+
+/**
+ * The comparison must be of the files it is written with: the corpus (its own digest, the `--corpus` file, the run's digest and
+ * the repository's corpus all agree) and the production run (project, recordedAt and corpus digest). A comparison of another run
+ * or another corpus is refused, never written as these recordings' evidence.
+ */
+export function checkComparisonBinding(comparison, { run, corpusSha256, repoCorpusSha256 }) {
+  if (!HEX64.test(comparison.corpusSha256 ?? "")) refuse("the comparison names no corpus digest");
+  if (corpusSha256 !== repoCorpusSha256)
+    refuse("--corpus is not the repository's conformance/functions-events/corpus.json");
+  if (comparison.corpusSha256 !== corpusSha256)
+    refuse("the comparison was made against another corpus than --corpus");
+  if (run.corpusDigest !== comparison.corpusSha256)
+    refuse("the comparison was made against another corpus than the production run's");
+  const recorded = comparison.productionRun;
+  if (!plain(recorded)) refuse("the comparison names no production run");
+  if (recorded.project !== run.project)
+    refuse("the comparison is of another project than --production-run");
+  if (recorded.recordedAt !== run.recordedAt)
+    refuse(
+      "the comparison is of another production run than --production-run (recordedAt differs)",
+    );
+  if (recorded.corpusDigest !== run.corpusDigest)
+    refuse("the comparison's production run names another corpus than --production-run");
+}
+
+const defaultGit = (args) =>
+  execFileSync("git", ["-C", fileURLToPath(new URL("../../../../", import.meta.url)), ...args]);
+
+/**
+ * The local sessions must have run the artifact: the comparison's `localBinary` is that binary (hashed by run.mjs from the file it
+ * spawned), from a clean harness tree whose commit is the build's commit, with the Node runner that commit holds (the daemon takes
+ * its runner from a checkout, so a runner of another tree would run other code than the binary was built with).
+ */
+export function checkLocalBinary(comparison, build, { git = defaultGit } = {}) {
+  const local = comparison.localBinary;
+  if (!plain(local))
+    refuse("the comparison names no local binary: its sessions were not made by run.mjs");
+  if (local.sha256 !== comparison.artifactSha256 || local.sha256 !== build.binarySha256)
+    refuse("the sessions ran another binary than the artifact and the build record");
+  if (local.dirty !== false) refuse("the sessions ran from a tree with uncommitted changes");
+  if (local.sourceCommit !== build.sourceCommit)
+    refuse("the sessions ran from another commit than the build record's source commit");
+  const tree = String(git(["rev-parse", `${build.sourceCommit}:tools/runner-node`])).trim();
+  if (local.runnerTree !== tree)
+    refuse("the runner the sessions used is not the runner tree of the build's source commit");
+  const bytes = git(["cat-file", "blob", `${build.sourceCommit}:tools/runner-node/index.mjs`]);
+  if (local.runnerSha256 !== sha256(bytes))
+    refuse("the runner file the sessions used is not index.mjs of the build's source commit");
+}
+
 // ---- applying it ------------------------------------------------------------------------------------
 
 /** The gate rows of the comparison evidence: three MATCH rows, only when every precondition of the final-artifact gate holds. */
@@ -276,6 +364,10 @@ export function gateRows() {
     conditionId: "FUNCTIONS-EVENTS/final-artifact-regression",
     status: "MATCH",
     reasons: [],
+    profiles: {
+      emulator: { status: "MATCH", reasons: [] },
+      strict: { status: "MATCH", reasons: [] },
+    },
   }));
 }
 
@@ -307,7 +399,7 @@ export function applyClosure({
     );
   const byId = new Map(mapping.map((entry) => [entry.conditionId, entry]));
   const copy = structuredClone(closure);
-  const everyMatch = comparison.rows.every((row) => row.status === "MATCH");
+  const everyMatch = comparison.rows.every((row) => row.profiles?.strict?.status === "MATCH");
   for (const condition of copy.conditions) {
     if (gateOf(condition) === "closure-review") continue;
     if (gateOf(condition) === "final-artifact-regression") {
@@ -341,12 +433,15 @@ export function applyClosure({
 /** The report of a mapping: what a coordinator reads to see which product fixes the comparison still asks for. */
 export function buildReport({ comparison, mapping }) {
   const count = (status) => mapping.filter((entry) => entry.status === status).length;
+  const emulatorRows = (key) =>
+    mapping.reduce((sum, entry) => sum + entry.emulatorProfile[key].length, 0);
   return {
     kind: "functions-events-closure-report",
     artifactSha256: comparison.artifactSha256,
     execution: comparison.execution,
     preliminary: /preliminary/i.test(comparison.execution),
     comparison: comparison.summary,
+    judgedOn: "strict profile against production (owner ledger 811)",
     conditions: {
       total: mapping.length,
       verified: count("VERIFIED"),
@@ -354,19 +449,28 @@ export function buildReport({ comparison, mapping }) {
       productionRecorded: count("PRODUCTION_RECORDED"),
       missing: count("MISSING"),
     },
+    // the emulator profile against PRODUCTION frames (not against the official emulator): reported, it never blocks VERIFIED
+    emulatorProfileVersusProduction: {
+      match: mapping.reduce((sum, entry) => sum + entry.emulatorProfile.match, 0),
+      diff: emulatorRows("diffRows"),
+      incomplete: emulatorRows("incompleteRows"),
+    },
     details: mapping,
   };
 }
 
-/** One line per condition that is not VERIFIED, then the totals, for the terminal. */
+/** One line per condition that is not VERIFIED (strict profile), then the totals and the emulator-profile section, for the terminal. */
 export function reportText(report) {
   const lines = [
     `closure report of ${report.artifactSha256} (${report.execution})${report.preliminary ? " [preliminary]" : ""}`,
-    `rows: ${report.comparison.match} MATCH, ${report.comparison.diff} DIFF, ${report.comparison.incomplete} INCOMPLETE of ${report.comparison.rows}`,
+    `rows: ${report.comparison.match} MATCH, ${report.comparison.diff} DIFF, ${report.comparison.incomplete} INCOMPLETE of ${report.comparison.rows} (both profiles, as combined)`,
+    `judged on: ${report.judgedOn}`,
   ];
   for (const entry of report.details) {
     if (entry.status === "VERIFIED") continue;
-    lines.push(`${entry.status} ${entry.conditionId}: ${entry.match}/${entry.expected} MATCH`);
+    lines.push(
+      `${entry.status} ${entry.conditionId}: ${entry.match}/${entry.expected} MATCH (strict)`,
+    );
     for (const row of entry.diffRows) lines.push(`  DIFF ${row.row}: ${row.reasons.join("; ")}`);
     for (const row of entry.incompleteRows)
       lines.push(`  INCOMPLETE ${row.row}: ${row.reasons.join("; ")}`);
@@ -376,13 +480,31 @@ export function reportText(report) {
   lines.push(
     `conditions: ${c.verified} VERIFIED, ${c.mismatch} MISMATCH, ${c.productionRecorded} PRODUCTION_RECORDED, ${c.missing} MISSING of ${c.total}`,
   );
+  const e = report.emulatorProfileVersusProduction;
+  lines.push(
+    `emulator-profile versus production (reported, not blocking): ${e.match} MATCH, ${e.diff} DIFF, ${e.incomplete} INCOMPLETE rows`,
+  );
+  for (const entry of report.details) {
+    const { diffRows, incompleteRows } = entry.emulatorProfile;
+    if (diffRows.length + incompleteRows.length === 0) continue;
+    lines.push(
+      `  ${entry.conditionId}: ${diffRows.length} DIFF, ${incompleteRows.length} INCOMPLETE (emulator profile)`,
+    );
+  }
   return lines.join("\n");
 }
 
 /** The command, with its collaborators injected. */
 export function closureEvidenceCommand(
   options,
-  { read = (path) => readFileSync(path, "utf8"), write = defaultWrite, log = console.log } = {},
+  {
+    read = (path) => readFileSync(path, "utf8"),
+    write = defaultWrite,
+    log = console.log,
+    git = defaultGit,
+    repoCorpus = () =>
+      readFileSync(new URL("../../../functions-events/corpus.json", import.meta.url), "utf8"),
+  } = {},
 ) {
   for (const name of ["comparison", "production-run", "closure", "corpus"])
     if (!options[name]) refuse(`--${name} is required`);
@@ -403,18 +525,25 @@ export function closureEvidenceCommand(
     "build-record",
     "build-record-out",
     "build-record-path",
+    "sandbox-ledger",
   ])
     if (!options[name]) refuse(`--${name} is required with --write`);
   const run = JSON.parse(read(options["production-run"]));
-  const recordings = recordingsFromRun(run, { corpusSha256: sha256(read(options.corpus)) });
-  if (options["sandbox-ledger"])
-    checkLedger(read(options["sandbox-ledger"]), resolve(dirname(options["production-run"])));
+  const corpusSha256 = sha256(read(options.corpus));
+  const recordings = recordingsFromRun(run, { corpusSha256 });
+  checkComparisonBinding(comparison, {
+    run,
+    corpusSha256,
+    repoCorpusSha256: sha256(repoCorpus()),
+  });
+  checkLedger(read(options["sandbox-ledger"]), resolve(dirname(options["production-run"])));
   const buildBytes = read(options["build-record"]);
   const finalArtifact = checkBuildRecord(JSON.parse(buildBytes), comparison);
+  checkLocalBinary(comparison, finalArtifact, { git });
   const workspace = options["workspace-regression"]
     ? checkWorkspaceReceipt(JSON.parse(read(options["workspace-regression"])), finalArtifact)
     : undefined;
-  const everyMatch = comparison.rows.every((row) => row.status === "MATCH");
+  const everyMatch = comparison.rows.every((row) => row.profiles.strict.status === "MATCH");
   const withGates = everyMatch && workspace !== undefined;
   const evidence = {
     ...comparison,

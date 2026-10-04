@@ -1,7 +1,11 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
-import { compareRuns } from "./functions-events/compare/compare.mjs";
+import {
+  GEN2_FIRESTORE_FIELD_MAPS,
+  compareRuns,
+  orderIgnoredFor,
+} from "./functions-events/compare/compare.mjs";
 import {
   LOCAL_PROJECT,
   PRODUCTION_PROJECT,
@@ -126,6 +130,160 @@ test("a deterministic local difference is a DIFF naming the path, profile by pro
     "MATCH",
   );
   assert.equal(result.conditions["FUNCTIONS-EVENTS/firestore-created"], "DIFF");
+});
+
+test("every row carries a status and the reasons of each profile; production-side problems count against both", () => {
+  const w = world();
+  // a strict-only difference
+  for (const program of w.strict.programs)
+    for (const operation of program.operations)
+      for (const entry of operation.framesByGeneration.v1) {
+        const frame = JSON.parse(entry.rawJson);
+        frame.event.context.eventType = "providers/cloud.firestore/eventTypes/document.create";
+        entry.rawJson = JSON.stringify(frame);
+      }
+  const result = compare(w);
+  const diff = rowById(result, "functions-events/firestore/create#new-document#v1");
+  assert.deepEqual(Object.keys(diff.profiles), ["emulator", "strict"]);
+  assert.deepEqual(diff.profiles.emulator, { status: "MATCH", reasons: [] });
+  assert.equal(diff.profiles.strict.status, "DIFF");
+  assert.deepEqual(diff.profiles.strict.reasons, diff.reasons);
+  const match = rowById(result, "functions-events/firestore/create#new-document#v2");
+  assert.deepEqual(match.profiles, {
+    emulator: { status: "MATCH", reasons: [] },
+    strict: { status: "MATCH", reasons: [] },
+  });
+  // an emulator-only difference does not touch strict
+  const e = world();
+  for (const program of e.emulator.programs)
+    for (const operation of program.operations)
+      for (const entry of operation.framesByGeneration.v1) {
+        const frame = JSON.parse(entry.rawJson);
+        frame.event.context.eventType = "providers/cloud.firestore/eventTypes/document.create";
+        entry.rawJson = JSON.stringify(frame);
+      }
+  const only = rowById(compare(e), "functions-events/firestore/create#new-document#v1");
+  assert.equal(only.status, "DIFF");
+  assert.equal(only.profiles.emulator.status, "DIFF");
+  assert.deepEqual(only.profiles.strict, { status: "MATCH", reasons: [] });
+});
+
+test("a production-side INCOMPLETE is INCOMPLETE in both profiles, with its reason in each", () => {
+  const w = world();
+  const pass2 = w.run.frames.find(
+    (entry) =>
+      entry.handler === "fsCreatedV1" &&
+      entry.frame.event.context.resource.name.endsWith(docId(201)),
+  );
+  pass2.frame.event.context.authType = "ADMIN";
+  const row = rowById(compare(w), "functions-events/firestore/create#new-document#v1");
+  for (const profile of ["emulator", "strict"]) {
+    assert.equal(row.profiles[profile].status, "INCOMPLETE", profile);
+    assert.deepEqual(row.profiles[profile].reasons, row.reasons, profile);
+  }
+  // a local-driver problem of one profile stays that profile's, next to the production reasons
+  const m = world();
+  const update = rowById(compare(m), "functions-events/firestore/update#changed-field#v1");
+  assert.ok(
+    update.profiles.strict.reasons.includes(
+      "production pass 1: 0 subject operations for fs-update",
+    ),
+  );
+  assert.ok(
+    update.profiles.strict.reasons.includes(
+      "strict: local session has no functions-events/firestore/update program",
+    ),
+  );
+  assert.ok(!update.profiles.strict.reasons.some((r) => r.startsWith("emulator:")));
+  assert.ok(!update.profiles.emulator.reasons.some((r) => r.startsWith("strict:")));
+});
+
+function reorderLocalData(w, generation, mutate = (data) => data) {
+  for (const profile of ["emulator", "strict"])
+    for (const program of w[profile].programs)
+      for (const operation of program.operations)
+        for (const entry of operation.framesByGeneration[`v${generation}`]) {
+          const frame = JSON.parse(entry.rawJson);
+          const { data } = frame.event.data;
+          frame.event.data.data = mutate(Object.fromEntries(Object.entries(data).reverse()));
+          entry.rawJson = JSON.stringify(frame);
+        }
+}
+
+test("ledger 840: a Gen2 Firestore field map in another order is a MATCH, a different value is a DIFF, and Gen1 order still DIFFs", () => {
+  const w = world();
+  reorderLocalData(w, 2);
+  const v2 = rowById(compare(w), "functions-events/firestore/create#new-document#v2");
+  assert.equal(v2.status, "MATCH", v2.reasons.join("; "));
+  assert.deepEqual(v2.profiles.strict, { status: "MATCH", reasons: [] });
+
+  const valued = world();
+  reorderLocalData(valued, 2, (data) => ({ ...data, count: data.count + 1 }));
+  const changed = rowById(compare(valued), "functions-events/firestore/create#new-document#v2");
+  assert.equal(changed.status, "DIFF");
+  assert.ok(
+    changed.reasons.some((r) => /^strict: value \$\.frame\.event\.data\.data\.count /.test(r)),
+    changed.reasons.join("; "),
+  );
+  assert.ok(!changed.reasons.some((r) => r.includes(": order ")));
+
+  const gen1 = world();
+  reorderLocalData(gen1, 1);
+  const v1 = rowById(compare(gen1), "functions-events/firestore/create#new-document#v1");
+  assert.equal(v1.status, "DIFF");
+  assert.ok(v1.reasons.some((r) => r.startsWith("strict: order $.frame.event.data.data (")));
+  // the Gen2 row of the same world is untouched by the Gen1 reordering
+  assert.equal(
+    rowById(compare(gen1), "functions-events/firestore/create#new-document#v2").status,
+    "MATCH",
+  );
+});
+
+test("ledger 840 reaches only Gen2 Firestore: another member's order in a Gen2 Firestore frame still DIFFs", () => {
+  const w = world();
+  for (const profile of ["emulator", "strict"])
+    for (const program of w[profile].programs)
+      for (const operation of program.operations)
+        for (const entry of operation.framesByGeneration.v2) {
+          const frame = JSON.parse(entry.rawJson);
+          frame.event = Object.fromEntries(Object.entries(frame.event).reverse());
+          entry.rawJson = JSON.stringify(frame);
+        }
+  const v2 = rowById(compare(w), "functions-events/firestore/create#new-document#v2");
+  assert.equal(v2.status, "DIFF");
+  assert.ok(
+    v2.reasons.some((r) => r.startsWith("strict: order $.frame.event (")),
+    v2.reasons.join("; "),
+  );
+});
+
+test("order is ignored only for the three Gen2 Firestore field maps and what lies under them", () => {
+  const ignored = orderIgnoredFor({ generation: 2 }, { source: "firestore" });
+  for (const root of GEN2_FIRESTORE_FIELD_MAPS) {
+    assert.equal(ignored(root), true, root);
+    assert.equal(ignored(`${root}.nested`), true, root);
+    assert.equal(ignored(`${root}.nested.deeper`), true, root);
+    assert.equal(ignored(`${root}[0]`), true, root);
+    assert.equal(ignored(`${root}x`), false, `${root}x`);
+  }
+  assert.equal(GEN2_FIRESTORE_FIELD_MAPS.length, 3);
+  for (const path of [
+    "$.frame.event",
+    "$.frame.event.data",
+    "$.frame.event.data.before",
+    "$.frame.event.data.after",
+    "$.frame.event.context.resource",
+    "$.frame.event.data.dataX",
+    "$.frame.event.data.value.data",
+  ])
+    assert.equal(ignored(path), false, path);
+  for (const [row, scenario] of [
+    [{ generation: 1 }, { source: "firestore" }],
+    [{ generation: 2 }, { source: "storage" }],
+    [{ generation: 2 }, { source: "auth" }],
+    [{ generation: 2 }, { source: "pubsub" }],
+  ])
+    assert.equal(orderIgnoredFor(row, scenario)("$.frame.event.data.data"), false);
 });
 
 test("a local frame with a field production never showed is a DIFF, not silently accepted", () => {

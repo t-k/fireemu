@@ -8,6 +8,7 @@ import { afterEach, test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { runCli, stableJson } from "./functions-events/compare/compare-cli.mjs";
 import {
+  LOCAL_BINARY,
   LOCAL_PROJECT,
   PRODUCTION_PROJECT,
   T0,
@@ -169,7 +170,22 @@ test("the CLI writes the binary the sessions ran, and refuses sessions that do n
     sha256: ARTIFACT,
     sourceCommit: "c".repeat(40),
     dirty: false,
+    runnerPath: LOCAL_BINARY.runnerPath,
+    runnerSha256: LOCAL_BINARY.runnerSha256,
+    runnerTree: LOCAL_BINARY.runnerTree,
   });
+  // the two sessions must have run the same runner
+  const withRunner = async (key, value) => {
+    const session = JSON.parse(await readFile(files.emulator, "utf8"));
+    const before = session.fireemu[key];
+    session.fireemu[key] = value;
+    await writeFile(files.emulator, JSON.stringify(session));
+    await assert.rejects(runCli(argv), /different runners/);
+    session.fireemu[key] = before;
+    await writeFile(files.emulator, JSON.stringify(session));
+  };
+  await withRunner("runnerSha256", "8".repeat(64));
+  await withRunner("runnerTree", "6".repeat(40));
   const sessionOf = async (file) => JSON.parse(await readFile(file, "utf8"));
   const rewrite = async (file, change) => {
     const session = await sessionOf(file);

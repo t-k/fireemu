@@ -107,6 +107,8 @@ async function runProfile({ profile, binary, identity, privateRoot, onlyRecipeId
     FE_EVENTS_CAPTURE_MODE: "socket",
     FE_EVENTS_CAPTURE_SOCKET: socketPath,
     ...identityEnv(identity),
+    // the daemon would otherwise walk up from the binary to whichever checkout holds it: pin the runner of this checkout
+    FIREEMU_RUNNER_NODE: identity.runnerPath,
   };
   delete env.FE_EVENTS_ALLOW_PRODUCTION_ADMIN;
   let child;

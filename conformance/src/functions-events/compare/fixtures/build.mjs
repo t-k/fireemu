@@ -59,7 +59,7 @@ export function localOp({ scenarioId, role = "subject", matchKey, sourceResult =
 }
 
 /** The identity run.mjs writes into a session: the binary it ran, the harness commit and whether the tree was dirty. */
-export const LOCAL_BINARY = Object.freeze({ binarySha256: "b".repeat(64), sourceCommit: "c".repeat(40), dirty: false });
+export const LOCAL_BINARY = Object.freeze({ binarySha256: "b".repeat(64), sourceCommit: "c".repeat(40), dirty: false, runnerPath: "/repo/tools/runner-node/index.mjs", runnerSha256: "9".repeat(64), runnerTree: "7".repeat(40) });
 
 export function localSession(programs, fireemu = LOCAL_BINARY) {
   return {

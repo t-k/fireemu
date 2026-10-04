@@ -2,7 +2,7 @@
 // the environment, written into each session.json, and checked against the artifact the comparison names.
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -15,35 +15,57 @@ import {
 
 const HEX64 = "a".repeat(64);
 const COMMIT = "c".repeat(40);
+const TREE = "7".repeat(40);
+const RUNNER = {
+  runnerPath: "/repo/tools/runner-node/index.mjs",
+  runnerSha256: "9".repeat(64),
+  runnerTree: TREE,
+};
 
-test("the identity of a binary is the sha256 of the file it was read from, the harness commit and whether the tree was dirty", async () => {
+test("the identity of a binary is the sha256 of the file it was read from, the harness commit, the tree state and the runner", async () => {
   const dir = await mkdtemp(join(tmpdir(), "fe-identity-"));
   try {
     const binary = join(dir, "fireemu");
     await writeFile(binary, "fake binary bytes");
-    const git = (args) => {
-      assert.deepEqual(args.slice(0, 1), args.slice(0, 1));
-      return args[0] === "rev-parse" ? `${COMMIT}\n` : "";
+    // the harness checkout: its runner is a file of its own, committed as the git tree TREE
+    const repo = join(dir, "repo");
+    await mkdir(join(repo, "tools/runner-node"), { recursive: true });
+    await writeFile(join(repo, "tools/runner-node/index.mjs"), "runner bytes");
+    const gitWith = (status) => (args) => {
+      if (args[0] === "rev-parse" && args[1] === "HEAD") return `${COMMIT}\n`;
+      if (args[0] === "rev-parse") return `${TREE}\n`;
+      return status;
     };
-    const identity = identityOf({ binary, repoRoot: "/repo", git });
+    const identity = identityOf({ binary, repoRoot: repo, git: gitWith("") });
     assert.deepEqual(identity, {
       binarySha256: createHash("sha256").update("fake binary bytes").digest("hex"),
       sourceCommit: COMMIT,
       dirty: false,
+      runnerPath: join(repo, "tools/runner-node/index.mjs"),
+      runnerSha256: createHash("sha256").update("runner bytes").digest("hex"),
+      runnerTree: TREE,
     });
-    const dirty = identityOf({
-      binary,
-      repoRoot: "/repo",
-      git: (args) => (args[0] === "rev-parse" ? `${COMMIT}\n` : " M a.txt\n"),
-    });
-    assert.equal(dirty.dirty, true);
+    assert.equal(identityOf({ binary, repoRoot: repo, git: gitWith(" M a.txt\n") }).dirty, true);
     assert.throws(
-      () => identityOf({ binary: join(dir, "missing"), repoRoot: "/repo", git }),
+      () => identityOf({ binary: join(dir, "missing"), repoRoot: repo, git: gitWith("") }),
       /ENOENT/,
     );
     assert.throws(
-      () => identityOf({ binary, repoRoot: "/repo", git: () => "not a commit\n" }),
+      () => identityOf({ binary, repoRoot: join(dir, "no-repo"), git: gitWith("") }),
+      /ENOENT/,
+    );
+    assert.throws(
+      () => identityOf({ binary, repoRoot: repo, git: () => "not a commit\n" }),
       /source commit/,
+    );
+    assert.throws(
+      () =>
+        identityOf({
+          binary,
+          repoRoot: repo,
+          git: (args) => (args[1] === "HEAD" ? `${COMMIT}\n` : "nope\n"),
+        }),
+      /runner tree/,
     );
   } finally {
     await rm(dir, { recursive: true, force: true });
@@ -51,7 +73,7 @@ test("the identity of a binary is the sha256 of the file it was read from, the h
 });
 
 test("the identity travels by the environment and is read back whole or refused", () => {
-  const identity = { binarySha256: HEX64, sourceCommit: COMMIT, dirty: false };
+  const identity = { binarySha256: HEX64, sourceCommit: COMMIT, dirty: false, ...RUNNER };
   const env = identityEnv(identity);
   assert.deepEqual(identityFromEnv(env), identity);
   assert.deepEqual(identityFromEnv({ ...env, FE_EVENTS_TREE_DIRTY: "1" }).dirty, true);
@@ -73,15 +95,21 @@ test("the identity travels by the environment and is read back whole or refused"
     /binary identity/,
   );
   assert.throws(() => identityFromEnv({ ...env, FE_EVENTS_TREE_DIRTY: "yes" }), /binary identity/);
+  assert.throws(() => identityFromEnv({ ...env, FE_EVENTS_RUNNER_SHA256: "x" }), /binary identity/);
+  assert.throws(() => identityFromEnv({ ...env, FE_EVENTS_RUNNER_TREE: "x" }), /binary identity/);
+  assert.throws(
+    () => identityFromEnv({ ...env, FE_EVENTS_RUNNER_PATH: "relative/index.mjs" }),
+    /binary identity/,
+  );
 });
 
 const session = (fireemu) => ({ schemaVersion: 1, ...(fireemu === undefined ? {} : { fireemu }) });
-const good = { binarySha256: HEX64, sourceCommit: COMMIT, dirty: false };
+const good = { binarySha256: HEX64, sourceCommit: COMMIT, dirty: false, ...RUNNER };
 
 test("both sessions must name the same binary, and it must be the artifact", () => {
   assert.deepEqual(
     checkSessionIdentities({ emulator: session(good), strict: session({ ...good }) }, HEX64),
-    { sha256: HEX64, sourceCommit: COMMIT, dirty: false },
+    { sha256: HEX64, sourceCommit: COMMIT, dirty: false, ...RUNNER },
   );
   const refuse = (sessions, artifact, pattern) =>
     assert.throws(() => checkSessionIdentities(sessions, artifact), pattern);

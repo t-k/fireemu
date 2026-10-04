@@ -367,3 +367,37 @@ test("a local frame printed in the stdout capture mode has its listing ignored t
     "MATCH",
   );
 });
+
+test("an operation without a valid matchKey never claims a frame of another operation", () => {
+  for (const matchKey of [{ kind: "firestore" }, undefined]) {
+    const w = world();
+    w.run.passes[0].operations.push(op({ scenarioId: "fs-update", start: S, matchKey }));
+    const result = compare(w);
+    assert.equal(row(result, CREATE_V1).status, "MATCH", JSON.stringify(matchKey));
+    assert.equal(result.frameAccounting.multiplyAttributed, 0);
+  }
+});
+
+test("retry: the failed attempt is compared too, and its listing is reported", () => {
+  const w = world();
+  const retry = w.strict.programs[2].operations[0];
+  const failed = JSON.parse(retry.framesByGeneration.v2[0].rawJson);
+  failed.event.data.data.fixtureKind = "other";
+  retry.framesByGeneration.v2[0].rawJson = JSON.stringify(failed);
+  const found = row(compare(w), RETRY_ROW);
+  assert.equal(found.status, "DIFF");
+  assert.ok(
+    found.reasons.some((reason) =>
+      reason.startsWith("strict: value $.failed.event.data.data.fixtureKind "),
+    ),
+    found.reasons.join("; "),
+  );
+
+  const listed = world();
+  for (const entry of listed.run.frames.filter(({ handler }) => handler === "fsRetryV2")) {
+    entry.frame.event.eventKeys = ["data", "id", "traceparent"];
+  }
+  assert.deepEqual(row(compare(listed), RETRY_ROW).productionOnly, {
+    "$.event.eventKeys": ["data", "id", "traceparent"],
+  });
+});

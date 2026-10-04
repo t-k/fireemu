@@ -398,9 +398,8 @@ export function compareRuns({
         });
       }
     }
-    const program = programs.programs.find((candidate) => candidate.caseIds.includes(row.id));
     return {
-      row: `${program.recipeId}#${row.case}#v${row.generation}`,
+      row: `${row.recipeId}#${row.case}#v${row.generation}`,
       caseId: row.id,
       conditionId: row.conditionId,
       case: row.case,

@@ -663,7 +663,7 @@ function preflightFetch({
 } = {}) {
   const calls = [];
   const fetchImpl = async (url, init = {}) => {
-    calls.push({ url, headers: init.headers ?? {} });
+    calls.push({ url, headers: init.headers ?? {}, init });
     const [status, json] = url.startsWith("https://identitytoolkit.googleapis.com/")
       ? toolkit
       : crm;
@@ -878,4 +878,35 @@ test("recordSdk against production stops on a failed key preflight before any ac
   } finally {
     globalThis.fetch = realFetch;
   }
+});
+
+test("both preflight reads are plain GETs that do not follow a redirect and have a live deadline", async () => {
+  const stub = preflightFetch();
+  await preflight(stub);
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  for (const { init } of stub.calls) {
+    assert.equal(init.method, "GET");
+    assert.equal(init.redirect, "manual");
+    assert.equal(init.signal.aborted, false, "a deadline of 0 would have passed by now");
+  }
+  // A redirect answer is not a 200, so it is a failed read.
+  await assert.rejects(
+    preflight(preflightFetch({ toolkit: [302, {}] })),
+    /key read failed \(status 302\)/,
+  );
+});
+
+test("loadApiKey on a real file: the owner-only file is read as text, a group-readable one is refused", async () => {
+  const { chmod, mkdtemp, writeFile } = await import("node:fs/promises");
+  const { tmpdir } = await import("node:os");
+  const { join } = await import("node:path");
+  const dir = await mkdtemp(join(tmpdir(), "fs-listen-key-"));
+  const file = join(dir, "key");
+  await writeFile(file, `${KEY}\n`);
+  await chmod(file, 0o600);
+  assert.equal(await loadApiKey(file), KEY);
+  await chmod(file, 0o640);
+  await assert.rejects(loadApiKey(file), /readable by others/);
+  await assert.rejects(loadApiKey(dir), /not a file/);
+  await assert.rejects(loadApiKey(join(dir, "missing")), /ENOENT/);
 });

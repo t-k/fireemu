@@ -102,6 +102,12 @@ test("parseArgs: no arguments is an empty command; a flag without a value has no
 });
 
 test("checkProject names the one project a kind may address", () => {
+  // The allowed lists hold one project each, so the message shows exactly that one.
+  assert.throws(
+    () => checkProject("native", "x"),
+    (error) => !error.message.includes(","),
+  );
+
   assert.throws(
     () => checkProject("native", "x"),
     /native recordings may address only fireemu-oracle-txn$/,

@@ -578,8 +578,8 @@ struct UsEastern2026;
 impl UsEastern2026 {
     const EDT: i64 = -4 * 3_600;
     const EST: i64 = -5 * 3_600;
-    const SPRING: i64 = 1_773_385_200; // 2026-03-08T07:00:00Z
-    const FALL: i64 = 1_793_944_800; // 2026-11-01T06:00:00Z
+    const SPRING: i64 = 1772953200; // 2026-03-08T07:00:00Z
+    const FALL: i64 = 1793512800; // 2026-11-01T06:00:00Z
 
     const fn offset_at(utc: i64) -> i64 {
         if utc >= Self::SPRING && utc < Self::FALL {
@@ -890,4 +890,93 @@ fn a_window_over_a_restricted_schedule_lists_counts_and_ends_on_the_right_runs()
     assert_eq!(nights.count, RunCount::Exact(3));
     assert_eq!(nights.latest, Some(t("2026-09-01T03:00:00Z")));
     assert!(nights.steps >= 3, "{} steps", nights.steps);
+}
+
+#[test]
+fn the_dst_gap_is_skipped_and_the_fold_runs_at_its_first_occurrence_in_every_window_search() {
+    let ny = UsEastern2026;
+    // 2026-03-08 02:30 does not exist: the next run of `30 2 * * *` is the day after.
+    let spring = Schedule::parse("30 2 * * *").unwrap();
+    assert_eq!(
+        spring.next_after_in(t("2026-03-07T12:00:00Z"), &ny),
+        Some(t("2026-03-09T06:30:00Z"))
+    );
+    let gap = spring.window_in(
+        t("2026-03-07T12:00:00Z"),
+        t("2026-03-09T12:00:00Z"),
+        &ny,
+        100,
+    );
+    assert_eq!(gap.count, RunCount::Exact(1));
+    assert_eq!(gap.latest, Some(t("2026-03-09T06:30:00Z")));
+
+    // 2026-11-01 01:30 happens twice: the schedule runs at the first (EDT, 05:30Z) only.
+    let fold = Schedule::parse("30 1 * * *").unwrap();
+    assert_eq!(
+        fold.next_after_in(t("2026-10-31T12:00:00Z"), &ny),
+        Some(t("2026-11-01T05:30:00Z"))
+    );
+    assert_eq!(
+        fold.next_after_in(t("2026-11-01T05:30:00Z"), &ny),
+        Some(t("2026-11-02T06:30:00Z")),
+        "the second 01:30 (EST) is not a run"
+    );
+    // A window ending in the repeated hour, after the first occurrence: it holds that run, and
+    // the one ending after the second occurrence holds it too, once.
+    for to in ["2026-11-01T06:10:00Z", "2026-11-01T06:40:00Z"] {
+        let w = fold.window_in(t("2026-10-31T12:00:00Z"), t(to), &ny, 100);
+        assert_eq!(w.count, RunCount::Exact(1), "{to}");
+        assert_eq!(w.latest, Some(t("2026-11-01T05:30:00Z")), "{to}");
+    }
+    // A window that ends before the first occurrence: the candidate 01:30 maps to an instant
+    // after the window's end, so the latest run is the previous night's.
+    let before = fold.window_in(
+        t("2026-10-30T12:00:00Z"),
+        t("2026-11-01T05:10:00Z"),
+        &ny,
+        100,
+    );
+    assert_eq!(before.count, RunCount::Exact(1));
+    assert_eq!(before.latest, Some(t("2026-10-31T05:30:00Z")));
+}
+
+#[test]
+fn the_work_counter_is_deterministic() {
+    let utc = FixedOffset(0);
+    let every5 = Schedule::parse("every 5 minutes").unwrap();
+    let w = every5.window_in(
+        t("2026-08-29T12:00:00Z"),
+        t("2026-08-29T12:20:00Z"),
+        &utc,
+        100,
+    );
+    assert_eq!(w.steps, 2, "an interval window is two divisions");
+    let nightly = Schedule::parse("0 3 * * *").unwrap();
+    let n = nightly.window_in(
+        t("2026-08-29T12:01:00Z"),
+        t("2026-09-01T04:00:00Z"),
+        &utc,
+        100,
+    );
+    assert_eq!(
+        n.steps, 45,
+        "27 reverse-probe hours, the backward walk, the forward count"
+    );
+    let june = Schedule::parse("0 9 1 6 *").unwrap();
+    let j = june.window_in(
+        t("2020-01-01T00:00:00Z"),
+        t("2026-12-31T00:00:00Z"),
+        &utc,
+        100,
+    );
+    assert_eq!(j.steps, 380, "a month-restricted schedule walks months");
+    let ny = UsEastern2026;
+    let fold = Schedule::parse("30 1 * * *").unwrap();
+    let f = fold.window_in(
+        t("2026-10-31T12:00:00Z"),
+        t("2026-11-01T06:10:00Z"),
+        &ny,
+        100,
+    );
+    assert_eq!(f.steps, 39, "a fold window walks one repeated hour");
 }

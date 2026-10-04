@@ -401,10 +401,11 @@ def read_time_ago(now, seconds):
     """The timestamp `seconds` before `now` (epoch seconds, a float)."""
     moment = now - seconds
     whole = math.floor(moment)
-    nanos = round((moment - whole) * 1_000_000_000)
-    if nanos >= 1_000_000_000:
-        whole, nanos = whole + 1, 0
-    return {"seconds": str(whole), "nanos": nanos}
+    # Firestore refuses a read time with sub-microsecond digits, so the time is rounded to the microsecond.
+    micros = round((moment - whole) * 1_000_000)
+    if micros >= 1_000_000:
+        whole, micros = whole + 1, 0
+    return {"seconds": str(whole), "nanos": micros * 1000}
 
 
 def _epoch(timestamp):

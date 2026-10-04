@@ -195,3 +195,11 @@ def test_a_document_found_at_a_time_before_it_existed_is_recorded_not_judged(pro
     collector.wire = Found()
     receipt = collector.run()
     assert receipt["complete"] is True
+
+
+@pytest.mark.parametrize("now", [1_788_000_000.123456789, 1_788_000_000.9999996, 1_788_000_000.0000004, 1_788_000_123.5])
+def test_a_read_time_ago_never_has_more_than_microsecond_precision(program, now):
+    # Firestore refuses a read time with sub-microsecond digits ("timestamp cannot have more than microseconds precision")
+    stamp = program.read_time_ago(now, 3540)
+    assert stamp["nanos"] % 1000 == 0 and 0 <= stamp["nanos"] < 1_000_000_000
+    assert abs((int(stamp["seconds"]) + stamp["nanos"] / 1e9) - (now - 3540)) < 1e-6

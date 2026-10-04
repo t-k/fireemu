@@ -379,7 +379,7 @@ class Ledger:
             raise ValueError("query answer is not a list of frames")
         documents = {}
         for frame in frames:
-            if not isinstance(frame, dict) or set(frame) - {"document", "readTime", "skippedResults", "done", "explainMetrics", "result"}:
+            if not isinstance(frame, dict) or set(frame) - {"document", "readTime", "transaction", "skippedResults", "done", "explainMetrics", "result", "continuationSelector"}:
                 raise ValueError("query frame carries something a query does not answer with")
             if _present(frame, "transaction"):
                 raise ValueError("query frame carries an unrequested transaction")

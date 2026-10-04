@@ -54,7 +54,11 @@ class QueryWire:
         name = self.plan["documents"][role]
         fields = {"owner": {"stringValue": OWNER}, "nonce": {"stringValue": NONCE}, "role": {"stringValue": role}, "state": {"stringValue": state}}
         stamp = "2026-09-30T00:00:00.000000001Z" if transport == "rest" else {"seconds": "1788004860", "nanos": 1}
-        return {"document": {"name": name, "fields": fields, "createTime": stamp, "updateTime": stamp}, "readTime": stamp}
+        frame = {"document": {"name": name, "fields": fields, "createTime": stamp, "updateTime": stamp}, "readTime": stamp}
+        if transport == "grpc":
+            # the native decoder adds the members it has no value for: an empty transaction, no skipped results, no explain metrics
+            frame.update(transaction="", skippedResults=0, explainMetrics=None)
+        return frame
 
     def send(self, transport, method, request, **kwargs):
         if method != "RunQuery":

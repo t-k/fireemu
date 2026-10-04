@@ -166,10 +166,7 @@ fn dispatch_topic(
                 topic_json(&name, &labels)
             })
             .collect::<Vec<_>>();
-        return Ok((
-            StatusCode::OK,
-            json!({"topics": topics, "nextPageToken": ""}),
-        ));
+        return Ok((StatusCode::OK, collection_json("topics", topics)));
     }
     if parts.len() != 1 {
         return Err(RestError::not_found("invalid topic resource path"));
@@ -216,6 +213,14 @@ fn dispatch_topic(
     }
 }
 
+fn collection_json(field: &str, resources: Vec<Value>) -> Value {
+    let mut response = Map::new();
+    if !resources.is_empty() {
+        response.insert(field.to_owned(), Value::Array(resources));
+    }
+    Value::Object(response)
+}
+
 fn update_topic(topic: &TopicName, body: &Value) -> Result<(StatusCode, Value), RestError> {
     let topic_body = field(body, "topic").unwrap_or(body);
     let topic_options = topic_from_json(topic, topic_body)?;
@@ -255,7 +260,7 @@ fn dispatch_subscription(
             .collect::<Vec<_>>();
         return Ok((
             StatusCode::OK,
-            json!({"subscriptions": subscriptions, "nextPageToken": ""}),
+            collection_json("subscriptions", subscriptions),
         ));
     }
     if parts.len() != 1 {

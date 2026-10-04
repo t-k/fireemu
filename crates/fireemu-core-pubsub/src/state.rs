@@ -1453,6 +1453,8 @@ mod tests {
 
     fn sub_cfg(p: &str, s: &str, t: &str, filter: Filter) -> SubscriptionConfig {
         SubscriptionConfig {
+            retain_acked_messages: false,
+            message_retention_duration: None,
             name: SubscriptionName::new(p, s).unwrap(),
             topic: TopicName::new(p, t).unwrap(),
             ack_deadline_seconds: DEFAULT_ACK_DEADLINE_SECONDS,
@@ -1461,6 +1463,101 @@ mod tests {
             dead_letter_policy: None,
             retry_policy: None,
             push_config: PushConfig::default(),
+        }
+    }
+
+    // A finite configuration model: requests determine expected values; state operations must preserve those values until deletion/reset. This makes no message-expiry claim.
+    fn exercise_retention_config_model(retain: bool, nanos: Option<i128>) {
+        let mut state = PubSubState::new(42);
+        for project in ["demo-a", "demo-b"] {
+            state
+                .create_topic(topic(project, "events"), BTreeMap::new())
+                .unwrap();
+        }
+        let mut config = sub_cfg("demo-a", "retention", "events", Filter::always());
+        let name = config.name.clone();
+        config.retain_acked_messages = retain;
+        config.message_retention_duration = nanos.map(LogicalDuration::from_nanos);
+        state.create_subscription(config).unwrap();
+        let other = sub_cfg("demo-b", "retention", "events", Filter::always());
+        let other_name = other.name.clone();
+        state.create_subscription(other).unwrap();
+        let assert_model = |state: &PubSubState, expected_retain, expected_nanos, ack| {
+            let config = state.subscription_config(&name).unwrap();
+            assert_eq!(config.retain_acked_messages, expected_retain);
+            assert_eq!(
+                config
+                    .message_retention_duration
+                    .map(LogicalDuration::as_nanos),
+                expected_nanos
+            );
+            assert_eq!(config.ack_deadline_seconds, ack);
+            assert_eq!(state.list_subscriptions("demo-a"), vec![config.clone()]);
+            let other = state.subscription_config(&other_name).unwrap();
+            assert!(!other.retain_acked_messages);
+            assert_eq!(other.message_retention_duration, None);
+            assert_eq!(state.list_subscriptions("demo-b"), vec![other.clone()]);
+        };
+        assert_model(&state, retain, nanos, 10);
+        state
+            .update_subscription(
+                &name,
+                Some(30),
+                Some(PushConfig {
+                    push_endpoint: "http://127.0.0.1:1/push".into(),
+                }),
+            )
+            .unwrap();
+        assert_model(&state, retain, nanos, 30);
+        assert!(state.update_subscription(&name, Some(1), None).is_err());
+        assert_model(&state, retain, nanos, 30);
+        state.delete_subscription(&name).unwrap();
+        assert!(state.subscription_config(&name).is_err());
+        assert!(state.list_subscriptions("demo-a").is_empty());
+        state
+            .create_subscription(sub_cfg("demo-a", "retention", "events", Filter::always()))
+            .unwrap();
+        assert_model(&state, false, None, 10);
+        state.clear_project("demo-a");
+        assert!(state.subscription_config(&name).is_err());
+        assert!(state.list_subscriptions("demo-a").is_empty());
+        assert!(state.subscription_config(&other_name).is_ok());
+        state.clear();
+        assert!(state.subscription_config(&other_name).is_err());
+    }
+
+    #[test]
+    fn retention_config_finite_lifecycle_model() {
+        for retain in [false, true] {
+            for nanos in [
+                None,
+                Some(600_000_000_000),
+                Some(601_000_000_001),
+                Some(2_678_400_000_000_000),
+            ] {
+                exercise_retention_config_model(retain, nanos);
+            }
+        }
+    }
+
+    proptest::proptest! {
+        #[test]
+        fn retention_config_property_matches_lifecycle_model(retain in proptest::bool::ANY, nanos in proptest::option::of(600_000_000_000_i128..=2_678_400_000_000_000_i128)) {
+            exercise_retention_config_model(retain, nanos);
+        }
+
+        #[test]
+        fn retention_config_validation_matches_schema_domain(nanos in -1_i128..=2_678_401_000_000_000_i128) {
+            let mut config = sub_cfg("demo-a", "validation", "events", Filter::always());
+            config.message_retention_duration = Some(LogicalDuration::from_nanos(nanos));
+            proptest::prop_assert_eq!(config.validate().is_ok(), (600_000_000_000..=2_678_400_000_000_000).contains(&nanos));
+            let mut state = PubSubState::new(42);
+            state.create_topic(topic("demo-a", "events"), BTreeMap::new()).unwrap();
+            let name = config.name.clone();
+            let result = state.create_subscription(config);
+            proptest::prop_assert_eq!(result.is_ok(), (600_000_000_000..=2_678_400_000_000_000).contains(&nanos));
+            proptest::prop_assert_eq!(state.subscription_config(&name).is_ok(), result.is_ok());
+            proptest::prop_assert_eq!(state.topic_subscriptions(&topic("demo-a", "events")).len(), usize::from(result.is_ok()));
         }
     }
 

@@ -466,7 +466,20 @@ fn create_subscription(
     let retry_policy = field(body, "retryPolicy")
         .map(parse_retry_policy)
         .transpose()?;
+    let retain_acked_messages = field(body, "retainAckedMessages")
+        .map(|value| {
+            value
+                .as_bool()
+                .ok_or_else(|| RestError::invalid("retainAckedMessages must be a boolean"))
+        })
+        .transpose()?
+        .unwrap_or(false);
+    let message_retention_duration = field(body, "messageRetentionDuration")
+        .map(parse_duration)
+        .transpose()?;
     let config = SubscriptionConfig {
+        retain_acked_messages,
+        message_retention_duration,
         name: subscription.clone(),
         topic: topic.clone(),
         ack_deadline_seconds,
@@ -1017,6 +1030,12 @@ fn subscription_json(state: &PubSubState, config: &SubscriptionConfig) -> Value 
         "ackDeadlineSeconds": config.ack_deadline_seconds,
         "enableMessageOrdering": config.enable_message_ordering,
     });
+    if config.retain_acked_messages {
+        value["retainAckedMessages"] = json!(true);
+    }
+    if let Some(duration) = config.message_retention_duration {
+        value["messageRetentionDuration"] = json!(duration_json(duration));
+    }
     if !config.push_config.push_endpoint.is_empty() {
         value["pushConfig"] = json!({"pushEndpoint": config.push_config.push_endpoint});
     }

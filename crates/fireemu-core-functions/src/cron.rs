@@ -120,6 +120,10 @@ const FULL_DAYS: [&str; 7] = [
     "friday",
     "saturday",
 ];
+/// January, April, July and October (bits 1, 4, 7 and 10): the first month of each quarter.
+const QUARTER_MONTHS: u64 = 0b100_1001_0010;
+/// Every month (bits 1 to 12).
+const ALL_MONTHS: u64 = 0b1_1111_1111_1110;
 const ORDINALS: [&str; 5] = ["1st", "2nd", "3rd", "4th", "5th"];
 const FULL_ORDINALS: [&str; 5] = ["first", "second", "third", "fourth", "fifth"];
 
@@ -735,8 +739,8 @@ fn groc_ordinal_weekday(text: &str) -> Result<Option<Schedule>, ScheduleError> {
     let ordinals = name_list(ordinals, &ORDINALS, &FULL_ORDINALS, 1).ok_or_else(malformed)?;
     let weekdays = name_list(weekdays, &DAYS, &FULL_DAYS, 0).ok_or_else(malformed)?;
     let months = match months.copied() {
-        None | Some("month") => 0b1_1111_1111_1110,
-        Some("quarter") => (1 << 1) | (1 << 4) | (1 << 7) | (1 << 10),
+        None | Some("month") => ALL_MONTHS,
+        Some("quarter") => QUARTER_MONTHS,
         Some(list) => name_list(list, &MONTHS, &FULL_MONTHS, 1).ok_or_else(malformed)?,
     };
     let (hour, minute) = groc_time(time).ok_or_else(malformed)?;

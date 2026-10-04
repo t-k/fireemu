@@ -21,8 +21,8 @@ import { exitCodeOf, runCases, selectCases } from "./runner.mjs";
 import { createTokenProvider } from "./token.mjs";
 
 const PRODUCTION = { rest: "https://pubsub.googleapis.com", grpc: "pubsub.googleapis.com:443" };
-const DEFAULT_MAX_REQUESTS = 750;
-const CLEANUP_BUDGET = 400;
+export const DEFAULT_MAX_REQUESTS = 750;
+export const CLEANUP_BUDGET = 400;
 
 export function parseArgs(argv, env = {}) {
   const options = { transports: ["rest", "grpc"], maxRequests: DEFAULT_MAX_REQUESTS };
@@ -100,12 +100,16 @@ export function summarize({ options, capture, summary }) {
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
-export async function main(argv, env = process.env) {
+export async function main(
+  argv,
+  env = process.env,
+  io = { stdout: process.stdout, stderr: process.stderr },
+) {
   let options;
   try {
     options = parseArgs(argv, env);
   } catch (error) {
-    process.stderr.write(`${error.message}\n`);
+    io.stderr.write(`${error.message}\n`);
     return 2;
   }
   mkdirSync(options.out, { recursive: true, mode: 0o700 });
@@ -180,7 +184,7 @@ export async function main(argv, env = process.env) {
     `${JSON.stringify(result, null, 2)}\n`,
     { mode: 0o600 },
   );
-  process.stdout.write(
+  io.stdout.write(
     `${JSON.stringify({ runId: result.runId, requests: result.requests, stopped: result.stopped, cleanup: { deleted: summary.cleanup.deleted.length, leftover: summary.cleanup.leftover, errors: summary.cleanup.errors } })}\n`,
   );
   return exitCodeOf(summary);

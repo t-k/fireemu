@@ -44,7 +44,7 @@ export async function pullMessages(
     // A pull that waits for messages may take a while to answer.
     const client = immediately ? ctx.client : ctx.client.with({ timeoutMs: 20_000 });
     const reply = await client.pull(subscription, {
-      maxMessages: Math.max(count - received.length, 1),
+      maxMessages: count - received.length,
       returnImmediately: immediately,
     });
     if (!reply.ok) break;

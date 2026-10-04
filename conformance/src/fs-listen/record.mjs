@@ -61,13 +61,13 @@ async function accessToken() {
 export const newRunId = (now = Date.now()) => `n${now.toString(36)}`;
 
 /** Records the native programs once with `client`, then cleans up; returns the recording. */
-export async function recordNative({ client, project, run, log = () => {} }) {
+export async function recordNative({ client, project, run, log = () => {}, clock = {} }) {
   const startedAt = new Date().toISOString();
   const root = `projects/${project}/databases/(default)/documents`;
   let cleanup = { complete: false, error: "cleanup did not run" };
   let outcome = { rows: {}, errors: {}, requests: 0 };
   try {
-    outcome = await runNative(NATIVE_PROGRAMS, { client, project, run, log });
+    outcome = await runNative(NATIVE_PROGRAMS, { client, project, run, log, ...clock });
   } finally {
     try {
       const report = await cleanupNative(NATIVE_PROGRAMS, {

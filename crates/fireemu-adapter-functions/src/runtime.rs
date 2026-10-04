@@ -2061,11 +2061,14 @@ impl FunctionsRuntime {
         if !self.background_triggers_enabled() {
             return Ok(self.empty_event_reservation());
         }
-        let (kind, object) = match event {
-            StorageEvent::Finalized(m) => (ObjectEvent::Finalized, m),
-            StorageEvent::Deleted(m) => (ObjectEvent::Deleted, m),
-            StorageEvent::MetadataUpdated(m) => (ObjectEvent::MetadataUpdated, m),
-            StorageEvent::Archived { object, .. } => (ObjectEvent::Archived, object),
+        let (kind, object, time_deleted) = match event {
+            StorageEvent::Finalized(m) => (ObjectEvent::Finalized, m, None),
+            StorageEvent::Deleted(m) => (ObjectEvent::Deleted, m, None),
+            StorageEvent::MetadataUpdated(m) => (ObjectEvent::MetadataUpdated, m, None),
+            StorageEvent::Archived {
+                object,
+                time_deleted,
+            } => (ObjectEvent::Archived, object, Some(*time_deleted)),
         };
         let time = self.now();
         let mut inner = self
@@ -2084,7 +2087,7 @@ impl FunctionsRuntime {
                 .and_then(|next| next.checked_add(1))
                 .ok_or(SourceEventAdmissionError::Capacity)?;
             let id = format!("{}-{next}", self.config.session.value());
-            let payload = storage_event(&id, kind, object, time);
+            let payload = storage_event(&id, kind, object, time, time_deleted);
             let event_type = kind.event_type().to_owned();
             let subject = format!("objects/{}", object.name.as_str());
             let copies = self.delivery_copies(&f.name, &event_type);

@@ -40,9 +40,17 @@ fn object_time(t: LogicalInstant) -> String {
 /// object's own `timeCreated` shows `.486Z`), printed as protobuf JSON prints a `Timestamp`.
 /// The other kinds were not recorded; they keep the instant the runtime admitted the event, in
 /// the same form.
-fn storage_time(kind: ObjectEvent, object: &ObjectMetadata, admitted: LogicalInstant) -> String {
+fn storage_time(
+    kind: ObjectEvent,
+    object: &ObjectMetadata,
+    admitted: LogicalInstant,
+    time_deleted: Option<LogicalInstant>,
+) -> String {
     let instant = match kind {
         ObjectEvent::Finalized => object.time_created,
+        // UNRECORDED: the event of a generation that became noncurrent is stamped with the instant
+        // it stopped being live (the FE recording decides).
+        ObjectEvent::Archived => time_deleted.unwrap_or(admitted),
         _ => admitted,
     };
     let nanos = instant.as_nanos();
@@ -289,17 +297,24 @@ pub fn storage_event(
     kind: ObjectEvent,
     object: &ObjectMetadata,
     time: LogicalInstant,
+    time_deleted: Option<LogicalInstant>,
 ) -> Value {
     let attrs = storage_attributes(object.bucket.as_str(), object.name.as_str(), kind);
+    let mut data = object_json(object);
+    // UNRECORDED: the object resource of an Archived event carries `timeDeleted`, the instant the
+    // generation stopped being live.
+    if let Some(at) = time_deleted {
+        data["timeDeleted"] = Value::String(object_time(at));
+    }
     let mut event = json!({
         "specversion": "1.0",
         "id": storage_event_id(id),
         "source": attrs.source,
         "subject": attrs.subject,
         "type": attrs.event_type,
-        "time": storage_time(kind, object, time),
+        "time": storage_time(kind, object, time, time_deleted),
         "datacontenttype": "application/json",
-        "data": object_json(object),
+        "data": data,
     });
     for (k, v) in attrs.extensions {
         event[k] = Value::String(v);
@@ -683,7 +698,8 @@ mod tests {
                 storage_time(
                     ObjectEvent::Finalized,
                     &object,
-                    LogicalInstant::from_nanos(0)
+                    LogicalInstant::from_nanos(0),
+                    None
                 ),
                 finalize_time,
                 "finalize time at {nanos}"
@@ -702,7 +718,7 @@ mod tests {
         for admitted in [LogicalInstant::MIN, LogicalInstant::MAX] {
             for kind in [ObjectEvent::Deleted, ObjectEvent::MetadataUpdated] {
                 assert_eq!(
-                    storage_time(kind, &object, admitted),
+                    storage_time(kind, &object, admitted, None),
                     "1970-01-01T00:00:00Z"
                 );
             }
@@ -739,7 +755,7 @@ mod tests {
         ] {
             let object = object_created_at(SECOND + nanos);
             assert_eq!(
-                storage_time(ObjectEvent::Finalized, &object, admitted),
+                storage_time(ObjectEvent::Finalized, &object, admitted, None),
                 expected,
                 "{nanos}"
             );
@@ -752,7 +768,7 @@ mod tests {
         let admitted = LogicalInstant::from_nanos(SECOND + 577_123_456);
         for kind in [ObjectEvent::Deleted, ObjectEvent::MetadataUpdated] {
             assert_eq!(
-                storage_time(kind, &object, admitted),
+                storage_time(kind, &object, admitted, None),
                 "2026-10-01T08:49:26.577123Z"
             );
         }
@@ -800,7 +816,7 @@ mod tests {
             fn a_finalize_time_is_the_creation_instant_cut_to_the_microsecond(nanos in -4_000_000_000_000_000_000_i128..4_000_000_000_000_000_000, admitted in -4_000_000_000_000_000_000_i128..4_000_000_000_000_000_000) {
                 let created = SECOND + nanos;
                 let object = object_created_at(created);
-                let time = storage_time(ObjectEvent::Finalized, &object, LogicalInstant::from_nanos(SECOND + admitted));
+                let time = storage_time(ObjectEvent::Finalized, &object, LogicalInstant::from_nanos(SECOND + admitted), None);
                 let parsed = LogicalInstant::parse_rfc3339(&time).unwrap().as_nanos();
                 prop_assert_eq!(parsed, created - created.rem_euclid(1_000));
                 prop_assert_eq!(&time, &firestore_time(LogicalInstant::from_nanos(parsed)));
@@ -811,7 +827,7 @@ mod tests {
                 let object = object_created_at(SECOND + nanos);
                 let at = SECOND + admitted;
                 for kind in [ObjectEvent::Deleted, ObjectEvent::MetadataUpdated] {
-                    let time = storage_time(kind, &object, LogicalInstant::from_nanos(at));
+                    let time = storage_time(kind, &object, LogicalInstant::from_nanos(at), None);
                     let parsed = LogicalInstant::parse_rfc3339(&time).unwrap().as_nanos();
                     prop_assert_eq!(parsed, at - at.rem_euclid(1_000));
                 }

@@ -2755,7 +2755,7 @@ fn a_storage_finalize_event_matches_the_recorded_production_delivery() {
             created,
         )
         .unwrap();
-    let event = storage_event("42-1", ObjectEvent::Finalized, &meta, delivered);
+    let event = storage_event("42-1", ObjectEvent::Finalized, &meta, delivered, None);
     // The attributes production and the runtime agree on, the bucket extension included.
     for key in ["type", "subject", "source", "specversion"] {
         assert_eq!(event[key], gen2[key], "{key}");
@@ -2946,7 +2946,7 @@ fn cloudevents_carry_the_shapes_the_sdk_decodes() {
             START,
         )
         .unwrap();
-    let s = storage_event("e3", ObjectEvent::Finalized, &meta, START);
+    let s = storage_event("e3", ObjectEvent::Finalized, &meta, START, None);
     assert_eq!(s["type"], "google.cloud.storage.object.v1.finalized");
     assert_eq!(s["bucket"], "demo-app.appspot.com");
     assert_eq!(s["subject"], "objects/dir/a.txt");
@@ -4855,5 +4855,255 @@ fn a_schedule_run_refusal_displays_its_message() {
     assert_eq!(
         ScheduleRunError::Refused("function \"ok\" is not scheduled".to_owned()).to_string(),
         "function \"ok\" is not scheduled"
+    );
+}
+
+/// An Archived event (a generation of a versioned bucket became noncurrent) carries the time it
+/// stopped being live: as `timeDeleted` in the object resource and as the `CloudEvent` time. The
+/// shape is UNRECORDED (the FE recording decides); the Archived event is the only one that has it.
+#[test]
+fn an_archived_event_carries_the_time_the_generation_stopped_being_live() {
+    let mut store = StorageState::new(1);
+    let bucket = BucketName::try_new("versioned-bucket").unwrap();
+    store.set_versioning(&bucket, true);
+    let put = |store: &mut StorageState, at: LogicalInstant| {
+        store
+            .put(
+                &bucket,
+                &ObjectName::try_new("o.txt").unwrap(),
+                b"x".to_vec(),
+                NewMetadata::default(),
+                Precondition::default(),
+                at,
+            )
+            .unwrap()
+    };
+    let first = put(&mut store, START);
+    let deleted = START.checked_add(LogicalDuration::from_seconds(5)).unwrap();
+    let second = put(&mut store, deleted);
+    let archived = storage_event("e9", ObjectEvent::Archived, &first, START, Some(deleted));
+    assert_eq!(archived["type"], "google.cloud.storage.object.v1.archived");
+    assert_eq!(archived["subject"], "objects/o.txt");
+    assert_eq!(archived["data"]["generation"], first.generation.to_string());
+    // The instant the generation stopped being live is the instant of the overwrite: the
+    // creation time of the generation that replaced it, in both places it is printed.
+    let finalized = storage_event("e9", ObjectEvent::Finalized, &second, START, None);
+    assert_eq!(archived["time"], finalized["time"]);
+    assert_eq!(
+        archived["data"]["timeDeleted"],
+        finalized["data"]["timeCreated"]
+    );
+    // No other event carries timeDeleted, and the data otherwise is the object resource.
+    assert!(finalized["data"].get("timeDeleted").is_none());
+    let mut without = archived["data"].clone();
+    without.as_object_mut().unwrap().remove("timeDeleted");
+    assert_eq!(
+        without,
+        storage_event("e9", ObjectEvent::Finalized, &first, START, None)["data"]
+    );
+}
+
+/// Archived events reach the functions that subscribed to them and only those; the Finalized
+/// events of the same overwrite reach the finalize ones. The overwrite announces Archived first.
+#[tokio::test]
+async fn archived_events_reach_archived_functions_and_finalized_events_finalized_ones() {
+    let (runtime, _clock) = start_with_policies_and_manifest(
+        fireemu_adapter_functions::runtime::OverlapPolicy::Allow,
+        fireemu_adapter_functions::runtime::CatchUpPolicy::All,
+        |manifest| {
+            manifest.functions.extend(
+                parse_manifest(&json!({"functions": [
+                    {"name": "archivedObserver", "generation": 2, "trigger": {"type": "storage", "eventType": "google.cloud.storage.object.v1.archived", "bucket": "versioned-bucket"}},
+                    {"name": "finalizedObserver", "generation": 2, "trigger": {"type": "storage", "eventType": "google.cloud.storage.object.v1.finalized", "bucket": "versioned-bucket"}},
+                    {"name": "otherBucketArchived", "generation": 2, "trigger": {"type": "storage", "eventType": "google.cloud.storage.object.v1.archived", "bucket": "elsewhere"}},
+                ]}))
+                .unwrap()
+                .functions,
+            );
+        },
+    )
+    .await;
+    let mut store = StorageState::new(1);
+    let bucket = BucketName::try_new("versioned-bucket").unwrap();
+    store.set_versioning(&bucket, true);
+    for (data, at) in [(&b"one"[..], START), (&b"two"[..], START)] {
+        store
+            .put(
+                &bucket,
+                &ObjectName::try_new("o.txt").unwrap(),
+                data.to_vec(),
+                NewMetadata::default(),
+                Precondition::default(),
+                at,
+            )
+            .unwrap();
+    }
+    let events = store.drain_events();
+    assert_eq!(events.len(), 3, "{events:?}");
+    for event in &events {
+        runtime.on_storage_event(event);
+    }
+    assert!(runtime.await_idle(Duration::from_secs(10)).await.is_ok());
+    let ran = |function: &str| {
+        runtime
+            .history()
+            .iter()
+            .filter(|record| record.function == function && record.outcome == "ok")
+            .count()
+    };
+    assert_eq!(ran("archivedObserver"), 1, "one generation was archived");
+    assert_eq!(
+        ran("finalizedObserver"),
+        2,
+        "two generations were finalized"
+    );
+    assert_eq!(ran("otherBucketArchived"), 0, "another bucket's trigger");
+    runtime.runner().shutdown().await;
+}
+
+/// The real `firebase-functions` 7.3.2 SDK's `onArchive` (v1) and `onObjectArchived` (v2) handlers
+/// receive an Archived event with the object resource, `timeDeleted` included. The Archived event
+/// shape is UNRECORDED; this pins what the local runtime delivers to the real handlers.
+#[tokio::test]
+#[allow(clippy::too_many_lines)]
+async fn real_sdk_archived_handlers_receive_the_archived_event() {
+    struct Fixture(std::path::PathBuf);
+    impl Drop for Fixture {
+        fn drop(&mut self) {
+            std::fs::remove_dir_all(&self.0).unwrap();
+        }
+    }
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap();
+    let sdk = std::env::var("FE_SOURCE_SDK_ROOT").unwrap_or_else(|_| {
+        root.join("conformance/node_modules/firebase-functions")
+            .to_string_lossy()
+            .into_owned()
+    });
+    let package: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(Path::new(&sdk).join("package.json"))
+            .expect("cached real firebase-functions is required"),
+    )
+    .unwrap();
+    assert_eq!(package["version"], "7.3.2");
+    let dir =
+        Fixture(std::env::temp_dir().join(format!("fireemu-archived-sdk-{}", std::process::id())));
+    std::fs::create_dir(&dir.0).unwrap();
+    std::fs::write(
+        dir.0.join("package.json"),
+        r#"{"private":true,"main":"index.cjs"}"#,
+    )
+    .unwrap();
+    let fixture = r"
+const {appendFileSync}=require('node:fs');
+const {join}=require('node:path');
+const v1=require(join(SDK,'lib/v1/index.js'));
+const v2=require(join(SDK,'lib/v2/providers/storage.js'));
+const seen=(name,object,event)=>{appendFileSync(join(__dirname,'observations.jsonl'),JSON.stringify({name,object,event})+'\n');return Promise.resolve();};
+exports.archivedV1=v1.storage.bucket('versioned-bucket').object().onArchive((object,context)=>seen('archivedV1',object,context));
+exports.archivedV2=v2.onObjectArchived({bucket:'versioned-bucket'},(event)=>seen('archivedV2',event.data,{...event,data:undefined}));
+";
+    std::fs::write(
+        dir.0.join("index.cjs"),
+        format!("const SDK={};\n{fixture}", json!(sdk)),
+    )
+    .unwrap();
+    let mut command: Vec<String> = std::env::var("FE_SOURCE_RUNNER_PREFIX").map_or_else(
+        |_| vec!["node".to_owned()],
+        |s| serde_json::from_str(&s).unwrap(),
+    );
+    command.extend([
+        root.join("tools/runner-node/index.mjs")
+            .to_string_lossy()
+            .into_owned(),
+        "--source".into(),
+        dir.0.to_string_lossy().into_owned(),
+    ]);
+    let runner = Runner::spawn_spec(&SpawnSpec {
+        command,
+        cwd: Some(dir.0.to_string_lossy().into_owned()),
+        env: vec![
+            ("GCLOUD_PROJECT".into(), "demo-app".into()),
+            (
+                "NODE_PATH".into(),
+                Path::new(&sdk)
+                    .parent()
+                    .unwrap()
+                    .to_string_lossy()
+                    .into_owned(),
+            ),
+        ],
+        hello_timeout: RUNNER_HELLO_TIMEOUT,
+    })
+    .await
+    .unwrap();
+    let mut store = StorageState::new(1);
+    let bucket = BucketName::try_new("versioned-bucket").unwrap();
+    store.set_versioning(&bucket, true);
+    let put = |store: &mut StorageState, data: &[u8], at: LogicalInstant| {
+        store
+            .put(
+                &bucket,
+                &ObjectName::try_new("dir/o.txt").unwrap(),
+                data.to_vec(),
+                NewMetadata::default(),
+                Precondition::default(),
+                at,
+            )
+            .unwrap()
+    };
+    let first = put(&mut store, b"one", START);
+    let deleted = START.checked_add(LogicalDuration::from_seconds(5)).unwrap();
+    put(&mut store, b"two", deleted);
+    let event = storage_event(
+        "77-1",
+        ObjectEvent::Archived,
+        &first,
+        deleted,
+        Some(deleted),
+    );
+    let mut outcomes = Vec::new();
+    for (id, function) in [("v1", "archivedV1"), ("v2", "archivedV2")] {
+        outcomes.push(
+            runner
+                .invoke(
+                    json!({"type":"invoke","invocationId":format!("archived-{id}"),"function":function,"entryPoint":function,"trigger":"storage","event":event}),
+                    Duration::from_secs(10),
+                )
+                .await
+                .outcome,
+        );
+    }
+    let bytes = std::fs::read_to_string(dir.0.join("observations.jsonl"));
+    runner.shutdown().await;
+    for outcome in &outcomes {
+        assert_eq!(
+            outcome,
+            &fireemu_adapter_functions::runner::InvokeOutcome::Ok,
+            "the real SDK decodes the Archived event"
+        );
+    }
+    let observations: Vec<serde_json::Value> = bytes
+        .unwrap()
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    assert_eq!(observations.len(), 2);
+    for observation in &observations {
+        let object = &observation["object"];
+        assert_eq!(object["name"], "dir/o.txt");
+        assert_eq!(object["bucket"], "versioned-bucket");
+        assert_eq!(object["generation"], first.generation.to_string());
+        assert_eq!(
+            object["timeDeleted"], event["data"]["timeDeleted"],
+            "{observation}"
+        );
+    }
+    assert_eq!(
+        observations[1]["event"]["type"],
+        "google.cloud.storage.object.v1.archived"
     );
 }

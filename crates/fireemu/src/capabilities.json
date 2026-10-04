@@ -359,7 +359,7 @@
     "implemented": [
       "Firestore document created / updated / deleted / written triggers (v2, JSON CloudEvents; v1 document handlers)",
       "Firestore *.withAuthContext variants: authtype / authid of the committing principal (app_user, service_account, unauthenticated, system)",
-      "Storage object finalized / deleted / metadataUpdated triggers (v2 and v1)",
+      "Storage object finalized / deleted / metadataUpdated triggers (v2 and v1), and archived triggers (onArchive / onObjectArchived) for versioned buckets, whose event shape, order and absence of a Deleted event on a plain live delete are unrecorded",
       "Pub/Sub topic triggers (v2 onMessagePublished, v1 topic().onPublish) fed by POST /v1/sessions/{s}/pubsub/topics/{t}:publish or /v1/projects/{p}/topics/{t}:publish",
       "the Pub/Sub wire bridge preserves the canonical source topic resource and invokes a topic trigger only when that topic belongs to the Functions runtime project; a same-named topic in another project cannot cross the session boundary",
       "Auth user created / deleted events to v1 auth.user() handlers",
@@ -723,14 +723,15 @@
       "Firebase Storage protocol (/v0/b, the X-Goog-Upload resumable command grammar with terminal denied sessions, download tokens incl. the ?create_token / ?delete_token routes and production's first-metadata-read token minting (a media read does not mint; the official emulator mints on both), the official plain-status and rules-denial bodies)",
       "JSON API with /b short spelling for every object method, /storage/v1 long spelling including object PATCH and copy/rewrite (the official emulator answers 501 on these spellings; a published divergence), /download/storage/v1 reads only (GET), /upload/storage/v1 uploads, the resumable session cancelled by a DELETE on its URL (499, as production answers it, where the official emulator answers 501; a status query after it is 499 too) and started with no body and a session URL that repeats the start query, the XML-style GET /{bucket}/{object} fallback, GET /b bucket listing, multipart/form-data POST /{bucket} upload and the ACL stub",
       "generation / metageneration preconditions (match / not-match / source) and declared-checksum verification, honoured as production honours them under strict (a not-match guard naming the current value is a bodiless 304, a match guard that fails or has a negative value (recorded: -1) is production's 412 body, a not-match guard with a negative value is accepted, a value that is no long is production's 400 Invalid long value and the write is not done) and ignored by the emulator profile, as the official emulator ignores them; PUT updates metadata in both profiles and replaces the custom metadata and download tokens when it carries metadata; the official emulator verifies no declared checksum, yet the emulator profile still refuses an upload whose declared checksum does not match (a known over-refusal, to be removed), and every such step is pinned as a documented divergence in conformance/storage-matrix.json",
-      "generation selectors (current generation only, JSON API dialect)",
+      "generation selectors on the JSON API dialect: a live or a noncurrent generation of a versioned bucket, for reads and for deletes by number",
+      "object versioning on the JSON API dialect (a production-side extension; the official emulator has none): GET and PATCH /storage/v1/b/{bucket} carry `versioning` only; a versioned bucket keeps the generation an overwrite or a plain delete replaces as a noncurrent version (`timeDeleted`) and announces it with an Archived event; `versions=true` lists every generation; a delete by generation removes it for good; noncurrent data counts toward storage.maxStoredBytes (the only bound) and export/import carries live objects only (a local-only difference); UNRECORDED: the Archived event payload and its order before Finalized, whether a plain delete of a live object also announces Deleted (it does not here), the bucket resource beyond `versioning`, and the page token of a versions listing",
       "prefix / delimiter listing with a combined page budget for items and folded prefixes, a 1000-entry cap and no prefix repeated across pages; unlike the official emulator, which pages items alone and repeats every folded prefix; the Firebase dialect's page token is the standard base64 of the last entry returned (as production answers it) where the JSON API's names the first entry of the next page, and maxResults=0 is production's 400 under strict and an empty page under the emulator profile",
       "MD5 / CRC32C (X-Goog-Hash verified before commit)",
       "Range: bytes=a-b / a- / -n; an unsatisfiable range serves the whole object in the emulator profile, while strict returns 416 with Content-Range: bytes */N",
       "object resources follow the production recording of stage 3 v9 (2026-09-30) wherever no refusal is involved: timestamps with three fractional digits, timeFinalized on the JSON API resource, base64 crc32c and a default contentDisposition of `inline; filename*=utf-8''<file>` on the Firebase dialect, no `metadata` for an empty custom map and no `downloadTokens` for an object without a token, the `Not Found.` JSON for an absent object, the `Parser Error` and `Parse Error: ...` bodies of a malformed PATCH, an empty resumable start and the `Upload has already been finalized.` late cancel; each differs from the official emulator and is pinned as a documented divergence in conformance/storage-matrix.json"
     ],
     "notes": [
-      "Storage object triggers are not part of this entry: FN-EVT-1 delivers object finalized / deleted / metadataUpdated events, and this entry owns the object surface only",
+      "Storage object triggers are not part of this entry: FN-EVT-1 delivers object finalized / deleted / metadataUpdated / archived events, and this entry owns the object surface only",
       "objects are at most 256 MiB and request bodies at most 260 MiB (413 beyond that)",
       "storage.maxStoredBytes (unset by default) bounds the object data the store retains; a write past it answers 402 storage.maxStoredBytes limit exceeded (reason storageCapacityExceeded on the JSON API) and changes nothing, and the objects.bytes resource gauge reports the bound",
       "upload bytes are moved into the object store, never copied: one payload-sized buffer per upload",
@@ -740,7 +741,6 @@
     ],
     "status": "implemented",
     "unimplemented": [
-      "object versioning / archived generations",
       "ACLs (the official emulator's no-effect POST acl stub is served) and signed URLs",
       "compose",
       "notifications"

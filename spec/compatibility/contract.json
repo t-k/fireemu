@@ -481,7 +481,7 @@
         "owners": [
           "FN-EVT-1"
         ],
-        "qualifier": "Storage object finalized / deleted / metadataUpdated events reach v1 and v2 handlers"
+        "qualifier": "Storage object finalized / deleted / metadataUpdated events (and archived events of versioned buckets, whose shape is unrecorded) reach v1 and v2 handlers"
       },
       {
         "term": "limited-use",
@@ -1614,7 +1614,11 @@
               "precision": "documented-divergence"
             },
             {
-              "behaviour": "the strict profile refuses list filters it cannot apply (matchGlob, startOffset, endOffset and includeTrailingDelimiter=true) with 400, returns current generations for versions=true because archived generations are unavailable, and refuses unsatisfiable media ranges with 416 and Content-Range; a nonzero suffix on an empty object is accepted as RFC 9110 section 14.1.1 specifies; the emulator profile retains the official emulator's behavior; https://cloud.google.com/storage/docs/json_api/v1/objects/list, https://cloud.google.com/storage/docs/json_api/v1/status-codes, https://www.rfc-editor.org/rfc/rfc9110.html#section-14.1.1",
+              "behaviour": "object versioning is served in both profiles as a production-side extension (the official emulator has no bucket route and no versioning): GET and PATCH /storage/v1/b/{bucket} with `versioning` only, noncurrent versions kept by a versioned bucket on an overwrite or a plain delete with an Archived event, the generation selector on reads and deletes, and versions=true listing; noncurrent data counts toward storage.maxStoredBytes (the only bound) and export/import carries live objects only, a local-only difference; UNRECORDED: the Archived event payload and its order before Finalized, whether a plain live delete also announces Deleted, the bucket resource beyond versioning and the page token of a versions listing; https://cloud.google.com/storage/docs/object-versioning, https://cloud.google.com/storage/docs/json_api/v1/buckets/patch",
+              "precision": "documented-divergence"
+            },
+            {
+              "behaviour": "the strict profile refuses list filters it cannot apply (matchGlob, startOffset, endOffset and includeTrailingDelimiter=true) with 400, lists every generation for versions=true (object versioning is implemented, see the versioning entry), and refuses unsatisfiable media ranges with 416 and Content-Range; a nonzero suffix on an empty object is accepted as RFC 9110 section 14.1.1 specifies; the emulator profile retains the official emulator's behavior; https://cloud.google.com/storage/docs/json_api/v1/objects/list, https://cloud.google.com/storage/docs/json_api/v1/status-codes, https://www.rfc-editor.org/rfc/rfc9110.html#section-14.1.1",
               "precision": "conservative"
             }
           ],

@@ -11,5 +11,8 @@ description = "std-only Cloud Functions core: function manifest, trigger matchin
 [dependencies]
 fireemu-core-types = { path = "../fireemu-core-types" }
 
+[dev-dependencies]
+proptest.workspace = true
+
 [lints]
 workspace = true

@@ -2727,15 +2727,16 @@ impl FunctionsRuntime {
     /// change, carrying a count that is exact up to the cap and "at least" beyond it.
     #[allow(clippy::too_many_lines)]
     pub fn on_clock_changed(&self) {
-        // Once shutdown began the dispatcher is stopping: a run enqueued now would never be
-        // delivered and would keep the session busy.
-        if self.shutting_down.load(std::sync::atomic::Ordering::SeqCst) {
-            return;
-        }
         let now = self.now();
         let Ok(mut inner) = self.inner.lock() else {
             return;
         };
+        // Once shutdown began the dispatcher is stopping: a run enqueued now would never be
+        // delivered and would keep the session busy. `begin_shutdown` sets the flag under this
+        // lock, so the check is made under it too.
+        if self.shutting_down.load(std::sync::atomic::Ordering::SeqCst) {
+            return;
+        }
         let mut enqueued = false;
         let policy = self.config.catch_up;
         let cap = self.config.max_catch_up_runs.max(1);
@@ -3020,10 +3021,15 @@ impl FunctionsRuntime {
     /// reset session) and restarted from its spec, every non-terminal event is discarded,
     /// and schedules restart from now. Dispatch resumes when the new runner is up.
     pub fn reset(self: &Arc<Self>) {
+        self.reset_at(self.now());
+    }
+
+    /// [`Self::reset`] with the schedules restarting from `now` instead of the clock's current
+    /// time, for a restore that must not depend on whether the clock was put back first.
+    pub fn reset_at(self: &Arc<Self>, now: LogicalInstant) {
         if self.shutting_down.load(std::sync::atomic::Ordering::SeqCst) {
             return;
         }
-        let now = self.now();
         let (retired_attempts, generation) = {
             // The supervisor is locked before queue state for both dispatch and lifecycle
             // transitions. No dispatch can be removed from the scheduler without being added
@@ -6468,6 +6474,32 @@ mod schedule_capacity_tests {
         assert_eq!(
             admitted(&runtime),
             vec![run("tick", "2026-08-29T12:15:00Z")]
+        );
+        finish(&runtime).await;
+    }
+
+    #[tokio::test]
+    async fn a_clock_move_that_waits_for_the_lock_while_shutdown_begins_enqueues_nothing() {
+        use super::OverlapPolicy;
+        let (runtime, clock) =
+            runtime_with(CatchUpPolicy::All, OverlapPolicy::Allow, 100_000, START).await;
+        advance(&clock, 5 * 60);
+        // The clock hook starts while the lock is held, so it is past any check made before the
+        // lock when shutdown begins, which sets the flag under the same lock.
+        let guard = runtime.inner.lock().unwrap();
+        let hook = {
+            let runtime = Arc::clone(&runtime);
+            std::thread::spawn(move || runtime.on_clock_changed())
+        };
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        runtime
+            .shutting_down
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+        drop(guard);
+        hook.join().unwrap();
+        assert!(
+            admitted(&runtime).is_empty(),
+            "a run enqueued after shutdown began would never be delivered"
         );
         finish(&runtime).await;
     }

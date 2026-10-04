@@ -3104,6 +3104,59 @@ async fn overlap_policies_skip_queue_or_reject_concurrent_schedule_runs() {
     runtime.runner().shutdown().await;
 }
 
+/// A handler that is really still running (it never answers) makes its function busy, so
+/// under `skip` and `reject` both a manual run and a clock-driven occurrence meet the policy.
+#[tokio::test]
+async fn a_really_running_handler_makes_skip_and_reject_refuse_the_next_run() {
+    use fireemu_adapter_functions::runtime::{CatchUpPolicy, OverlapPolicy};
+    for overlap in [OverlapPolicy::Skip, OverlapPolicy::Reject] {
+        let (runtime, clock) =
+            start_with_policies_and_manifest(overlap, CatchUpPolicy::All, |m| {
+                let mut slow = parse_manifest(&json!({"functions": [{
+                    "name": "slowTick",
+                    "generation": 2,
+                    "trigger": {"type": "schedule", "schedule": "every 5 minutes"}
+                }]}))
+                .unwrap();
+                m.functions.append(&mut slow.functions);
+            })
+            .await;
+        runtime.run_schedule("slowTick").unwrap();
+        for _ in 0..100 {
+            if runtime.status()["running"].as_u64() >= Some(1) {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        assert_eq!(runtime.status()["running"], 1, "{overlap:?}: the handler runs");
+        let refused = |runtime: &FunctionsRuntime| -> usize {
+            let tag = match overlap {
+                OverlapPolicy::Skip => "skipped: overlap",
+                _ => "rejected: overlap",
+            };
+            runtime
+                .history()
+                .iter()
+                .chain(runtime.dead_letters().iter())
+                .filter(|r| r.function == "slowTick" && r.outcome == tag)
+                .count()
+        };
+        // A manual run while the handler runs is refused and recorded.
+        assert!(runtime.run_schedule("slowTick").is_err(), "{overlap:?}");
+        assert_eq!(refused(&runtime), 1, "{overlap:?}: manual run");
+        // So is the occurrence a clock move brings due.
+        clock
+            .lock()
+            .unwrap()
+            .advance(fireemu_core_types::time::LogicalDuration::from_seconds(300))
+            .unwrap();
+        runtime.on_clock_changed();
+        assert_eq!(refused(&runtime), 2, "{overlap:?}: clock-driven occurrence");
+        assert_eq!(runtime.status()["running"], 1, "{overlap:?}: still one handler");
+        runtime.shutdown().await;
+    }
+}
+
 #[tokio::test]
 async fn pubsub_messages_and_auth_user_events_reach_their_functions() {
     use fireemu_core_auth::mfa::TotpPolicy;

@@ -424,6 +424,9 @@ impl fireemu_adapter_http::control::FunctionsHook for FakeFunctions {
             "busy" => Err(RunScheduleError::Refused(
                 "a run is already queued".to_owned(),
             )),
+            "nosuch" => Err(RunScheduleError::Refused(
+                "unknown function \"nosuch\"".to_owned(),
+            )),
             _ => Ok(()),
         }
     }
@@ -2343,10 +2346,17 @@ fn the_clock_routes_notify_functions_on_success_only_and_count_rewinds() {
     let session = handle(&s, "GET", "/v1/sessions/default", &json!({}));
     assert_eq!(session.body["clock"]["clock"], "2026-08-29T12:20:00Z");
     assert_eq!(session.body["clock"]["backwardsSets"], 2);
+    let moves_before = functions.moves();
+    // A plain forward set needs no opt-in: it moves the clock, is no rewind, tells the runtime.
+    let forward_set = post("clock:set", json!({"instant": "2026-08-29T12:40:00Z"}));
+    assert_eq!(forward_set.status, 200, "{}", forward_set.body);
+    assert_eq!(clock(&forward_set), "2026-08-29T12:40:00Z");
+    assert_eq!(forward_set.body["backwardsSets"], 2);
+    assert_eq!(functions.moves(), moves_before + 1);
 }
 
-/// An empty function name is not a run request at all, and an unknown name is refused as a
-/// bad request (the manual control is fireemu's own, not production's `jobs.run`).
+/// An empty function name is not a run request at all, and a name the functions runtime
+/// refuses as unknown is a bad request (the manual control is fireemu's own).
 #[test]
 fn a_manual_run_route_without_a_name_is_not_found() {
     let mut s = state(Arc::new(AtomicUsize::new(0)));
@@ -2358,6 +2368,18 @@ fn a_manual_run_route_without_a_name_is_not_found() {
         &json!({}),
     );
     assert_eq!(nameless.status, 404, "{}", nameless.body);
+    let unknown = handle(
+        &s,
+        "POST",
+        "/v1/sessions/default/functions/nosuch:run",
+        &json!({}),
+    );
+    assert_eq!(unknown.status, 400, "{}", unknown.body);
+    assert!(
+        unknown.body.to_string().contains("INVALID_ARGUMENT"),
+        "{}",
+        unknown.body
+    );
 }
 
 /// A manual schedule run refused because the event queue is full answers 429

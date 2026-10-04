@@ -607,8 +607,10 @@ impl SnapshotHook for AppCheck {
     }
 }
 
-/// The functions runtime (shared) keeps no snapshot state: a restore resets it (queue,
-/// schedules and the runner belong to the state that was replaced).
+/// The functions runtime (shared) keeps no snapshot state but the clock instant of the capture:
+/// a restore resets it (queue, schedules and the runner belong to the state that was replaced)
+/// and restarts the schedules from that instant, so the order of the clock and functions hooks
+/// does not matter.
 pub struct Functions {
     runtime: Arc<FunctionsRuntime>,
     publication_gate: Arc<Mutex<()>>,
@@ -633,17 +635,21 @@ impl SnapshotHook for Functions {
         true
     }
     fn capture(&self, _: &Scope) -> Result<SnapshotPart, TransitionFailure> {
-        Ok(Arc::new(()))
+        // The only state kept is the instant the schedules restart from.
+        Ok(Arc::new(self.runtime.now()))
     }
     fn validate(&self, _: &Scope, _: &SnapshotPart) -> Result<(), TransitionFailure> {
         Ok(())
     }
-    fn restore(&self, _: &Scope, _: &SnapshotPart) -> Result<(), TransitionFailure> {
+    fn restore(&self, _: &Scope, part: &SnapshotPart) -> Result<(), TransitionFailure> {
         let _publication = self
             .publication_gate
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        self.runtime.reset();
+        match part.downcast_ref::<fireemu_core_types::time::LogicalInstant>() {
+            Some(at) => self.runtime.reset_at(*at),
+            None => self.runtime.reset(),
+        }
         Ok(())
     }
 }
@@ -761,8 +767,10 @@ mod tests {
         runtime.on_clock_changed();
         assert_eq!(runtime.status()["pending"], 2, "12:05 and 12:10 are queued");
 
-        clock_hook.restore(&scope, &captured_clock).unwrap();
+        // The functions hook restores first here: the schedules restart from the instant the
+        // capture held, whatever order the hooks are registered and applied in.
         functions.restore(&scope, &captured).unwrap();
+        clock_hook.restore(&scope, &captured_clock).unwrap();
         assert_eq!(runtime.now(), AT);
         assert_eq!(
             runtime.status()["pending"],

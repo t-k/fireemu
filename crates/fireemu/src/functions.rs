@@ -9241,6 +9241,45 @@ mod tests {
     }
 
     #[test]
+    fn a_configured_default_time_zone_moves_the_occurrences_of_a_schedule_that_names_none() {
+        use fireemu_core_types::time::LogicalInstant;
+        const MIDNIGHT_UTC: i64 = 1_791_158_400; // 2026-10-05T00:00:00Z
+        let occurrence = |default: Option<&str>| {
+            let mut manifest = json!({"functions": [
+                {"name": "daily", "trigger": {"type": "schedule", "schedule": "0 9 * * *"}},
+                {"name": "pinned", "trigger": {"type": "schedule", "schedule": "0 9 * * *", "timeZone": "UTC"}},
+            ]});
+            if let Some(zone) = default {
+                super::apply_default_time_zone(&mut manifest, zone);
+            }
+            let manifest = parse_manifest(&manifest).unwrap();
+            let after = LogicalInstant::from_unix_seconds(MIDNIGHT_UTC - 1);
+            manifest
+                .scheduled()
+                .map(|(function, schedule, zone)| {
+                    let zone = fireemu_adapter_functions::zone::resolve(zone).unwrap();
+                    (
+                        function.name.clone(),
+                        schedule.next_after_in(after, &*zone).unwrap(),
+                    )
+                })
+                .collect::<Vec<_>>()
+        };
+        let at = |seconds: i64| LogicalInstant::from_unix_seconds(MIDNIGHT_UTC + seconds);
+        // 09:00 in Tokyo (UTC+9) is 00:00 UTC; 09:00 UTC is nine hours later.
+        assert_eq!(
+            occurrence(Some("Asia/Tokyo")),
+            [("daily".to_owned(), at(0)), ("pinned".to_owned(), at(9 * 3600))],
+            "the configured default moves a schedule that names no zone and leaves a named one",
+        );
+        assert_eq!(
+            occurrence(None),
+            [("daily".to_owned(), at(9 * 3600)), ("pinned".to_owned(), at(9 * 3600))],
+            "without a configured default a schedule that names no zone runs in UTC",
+        );
+    }
+
+    #[test]
     fn a_capacity_refusal_reaches_the_control_api_as_one() {
         use fireemu_adapter_functions::runtime::ScheduleRunError;
         use fireemu_adapter_http::control::RunScheduleError;

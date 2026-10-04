@@ -442,3 +442,52 @@ test("replay: the recorded empty lists and DELETE answers drive the cleanup to n
   const report = await cleanup({ client, ownership: own, project: "demo-project", ledger, sleep });
   assert.deepEqual(report.settled, [{ name, how: "deleted" }]);
 });
+
+test("a name of the ledger that the listing did not show and whose read is not a clean answer is an error, and nothing is sent to delete it", async () => {
+  const name = mine("topics", "unreadable");
+  issue(name, "ok");
+  const calls = [];
+  const transport = {
+    name: "rest",
+    request: async ({ method, path }) => {
+      calls.push(`${method} ${path}`);
+      if (path.includes("?")) return { status: 200, body: {}, unknown: false };
+      return { status: 503, body: {}, unknown: true };
+    },
+  };
+  const client = createClient({
+    transport,
+    ownership: own,
+    pushState: newPushState(),
+    caseId: "cleanup",
+    ledger,
+  });
+  const report = await cleanup({ client, ownership: own, project: "demo-project", ledger, sleep });
+  assert.deepEqual(report.errors, [`getTopic ${name}: unknown answer`]);
+  assert.equal(
+    calls.some((call) => call.startsWith("DELETE")),
+    false,
+  );
+  assert.deepEqual([report.unsettled, report.budgetSpent, report.deleted], [[name], false, []]);
+  const refused = createClient({
+    transport: {
+      name: "rest",
+      request: async ({ path }) =>
+        path.includes("?")
+          ? { status: 200, body: {}, unknown: false }
+          : { status: 403, body: { error: { status: "PERMISSION_DENIED" } }, unknown: false },
+    },
+    ownership: own,
+    pushState: newPushState(),
+    caseId: "cleanup",
+    ledger,
+  });
+  const second = await cleanup({
+    client: refused,
+    ownership: own,
+    project: "demo-project",
+    ledger,
+    sleep,
+  });
+  assert.deepEqual(second.errors, [`getTopic ${name}: PERMISSION_DENIED`]);
+});

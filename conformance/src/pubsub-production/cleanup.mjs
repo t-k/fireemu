@@ -31,15 +31,15 @@ async function listOwned({ client, ownership, project, kind, list, report }) {
     });
     if (!reply.ok) {
       report.errors.push(`${list}: ${reply.unknown ? "unknown answer" : reply.code}`);
-      return { found, failed: true };
+      return found;
     }
     for (const item of reply.body?.[LIST_KEY[kind]] ?? [])
       if (ownership.prefixPattern.test(item.name)) found.add(item.name);
     pageToken = reply.body?.nextPageToken;
-    if (!pageToken) return { found, failed: false };
+    if (!pageToken) return found;
   }
   report.errors.push(`${list}: more than ${PAGE_LIMIT} pages`);
-  return { found, failed: true };
+  return found;
 }
 
 /** The names of the ledger this run may be answerable for, by kind of resource. */
@@ -78,7 +78,7 @@ export async function cleanup({
   const everything = new Set(targets);
   try {
     for (const [kind, list, get, remove] of KINDS) {
-      const { found } = await listOwned({ client, ownership, project, kind, list, report });
+      const found = await listOwned({ client, ownership, project, kind, list, report });
       const names = new Set(found);
       for (const name of found) everything.add(name);
       for (const name of targets) if (kindOf(name) === kind) names.add(name);

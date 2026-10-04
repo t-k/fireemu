@@ -464,3 +464,23 @@ test("the push ban also refuses a seek on a push subscription, a dead-letter top
   await client.createSubscription(quietSub, { topic: quiet });
   await client.seek(quietSub, { time: "2026-10-05T00:00:00Z" });
 });
+
+test("a dead-letter topic without a push subscription is allowed, a missing one too, and the refusals carry their names", async () => {
+  const pushState = newPushState();
+  const transport = fakeRest();
+  const client = createClient({ transport, ownership: own, pushState, caseId: "c" });
+  const dead = own.resource("topics", "dl-free");
+  await client.createSubscription(own.resource("subscriptions", "dl-a"), {
+    topic: own.resource("topics", "dl-src"),
+    deadLetterPolicy: { deadLetterTopic: dead, maxDeliveryAttempts: 5 },
+  });
+  await client.createSubscription(own.resource("subscriptions", "dl-b"), {
+    topic: own.resource("topics", "dl-src"),
+  });
+  assert.equal(transport.calls.length, 2);
+  assert.equal(new PushRefused("x").name, "PushRefused");
+  assert.match(
+    new PushRefused("a seek").message,
+    /refusing a seek: it could cause a delivery to a push endpoint/,
+  );
+});

@@ -42,11 +42,22 @@ test("the kind of an answer, the ledger lines written before and after a request
   );
   assert.deepEqual([...ledger.state().get("a").open], ["create"]);
   assert.equal(maybeCreated(ledger.state().get("a")), true, "sent and not answered may exist");
+  ledger.sent({ name: "a", action: "create", transport: "grpc" });
   ledger.answered({ name: "a", action: "create", transport: "rest", kind: "conflict" });
-  assert.deepEqual(ledger.state().get("a"), { creates: ["conflict"], deletes: [], open: [] });
+  assert.deepEqual(
+    ledger.state().get("a"),
+    { creates: ["conflict"], deletes: [], open: ["create"] },
+    "the other request is still open",
+  );
+  ledger.answered({ name: "a", action: "create", transport: "grpc", kind: "conflict" });
+  assert.deepEqual(ledger.state().get("a"), {
+    creates: ["conflict", "conflict"],
+    deletes: [],
+    open: [],
+  });
   assert.equal(maybeCreated(ledger.state().get("a")), false);
   assert.equal(maybeDeleting(ledger.state().get("a")), false);
-  assert.deepEqual(lines[1], {
+  assert.deepEqual(lines[2], {
     at: "2026-10-05T10:00:00.000Z",
     phase: "answered",
     name: "a",
@@ -60,7 +71,7 @@ test("the kind of an answer, the ledger lines written before and after a request
   const shared = ledger.withJournal({ write: (line) => other.push(line) });
   shared.sent({ name: "b", action: "create", transport: "grpc" });
   assert.equal(ledger.state().has("b"), true, "the view is shared");
-  assert.deepEqual([lines.length, other.length], [3, 1], "new lines go to the other journal only");
+  assert.deepEqual([lines.length, other.length], [5, 1], "new lines go to the other journal only");
 });
 
 test("a ledger file is read back with a request that was sent and never answered counted as unknown", () => {

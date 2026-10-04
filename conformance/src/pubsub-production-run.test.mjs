@@ -9,6 +9,7 @@ import { createClient, newPushState } from "./pubsub-production/client.mjs";
 import { createOwnership } from "./pubsub-production/names.mjs";
 import { DEFAULT_MAX_REQUESTS, main, parseArgs, summarize } from "./pubsub-production/record.mjs";
 import {
+  CaseLimit,
   assertBudgetCovers,
   exitCodeOf,
   plannedRequests,
@@ -565,4 +566,9 @@ test("every case's ceiling covers the most it can send against a service that an
     ([id, worst]) => worst > CASES.find((item) => item.id === id).requests,
   );
   assert.deepEqual(over, [], `measured worst cases: ${JSON.stringify(measured)}`);
+});
+
+test("the case limit is an error of its own name", () => {
+  assert.equal(new CaseLimit(3).name, "CaseLimit");
+  assert.equal(new CaseLimit(3).message, "the case reached its limit of 3 requests");
 });

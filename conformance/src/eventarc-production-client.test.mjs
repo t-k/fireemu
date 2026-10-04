@@ -1,6 +1,11 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { OPERATION_NAMES, PUBLISHING_API, createClient } from "./eventarc-production/client.mjs";
+import {
+  OPERATION_NAMES,
+  PUBLISHING_API,
+  createClient,
+  kindOfOperation,
+} from "./eventarc-production/client.mjs";
 import { createOwnership } from "./eventarc-production/names.mjs";
 
 const RUN = "0123456789ab";
@@ -220,4 +225,20 @@ test("a publish target may be published to but is never a channel the cleanup co
     /one channel/,
   );
   assert.throws(() => ownership.assertPublishable(5), /refusing to publish/);
+});
+
+test("an operation is settled by what it says: done without an error is ok, ALREADY_EXISTS is a conflict, any other error is an error, and anything not read as done is unknown", () => {
+  const read = (body, ok = true) => ({ ok, body });
+  assert.equal(kindOfOperation(read({ done: true })), "ok");
+  assert.equal(kindOfOperation(read({ done: true, error: { code: 6 } })), "conflict");
+  assert.equal(
+    kindOfOperation(read({ done: true, error: { status: "ALREADY_EXISTS", code: 0 } })),
+    "conflict",
+  );
+  assert.equal(kindOfOperation(read({ done: true, error: { code: 13 } })), "error");
+  assert.equal(kindOfOperation(read({ done: true, error: { status: "INTERNAL" } })), "error");
+  assert.equal(kindOfOperation(read({ done: false })), "unknown");
+  assert.equal(kindOfOperation(read({})), "unknown");
+  assert.equal(kindOfOperation(read({ done: true }, false)), "unknown");
+  assert.equal(kindOfOperation(undefined), "unknown");
 });

@@ -5,6 +5,8 @@ import { test } from "node:test";
 
 import {
   conditionsOf,
+  loadApiKey,
+  preflightKey,
   projectEvent,
   ranOut,
   recordSdk,
@@ -337,6 +339,7 @@ async function recordWith(target, { driver, native, status = 200 } = {}) {
       target,
       run: "r1",
       log: (line) => drove.push(line),
+      preflightImpl: async () => {},
       runDriverImpl: async (request) => {
         drove.push(request);
         return (
@@ -645,6 +648,233 @@ test("recordSdk: an account cleanup that throws is reported, with the message or
       assert.deepEqual(out.cleanup.accounts, { complete: false, error: expected });
       assert.equal(out.cleanup.complete, false);
     }
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+});
+
+const KEY = "AIzaSyTestKeyTestKeyTestKeyTestKey01";
+const NUMBER = "123456789012";
+
+/** A fetch answering the two preflight reads; either answer can be replaced. */
+function preflightFetch({
+  toolkit = [200, { projectId: NUMBER }],
+  crm = [200, { projectId: "fireemu-oracle-query", projectNumber: NUMBER }],
+} = {}) {
+  const calls = [];
+  const fetchImpl = async (url, init = {}) => {
+    calls.push({ url, headers: init.headers ?? {} });
+    const [status, json] = url.startsWith("https://identitytoolkit.googleapis.com/")
+      ? toolkit
+      : crm;
+    return { status, json: async () => json };
+  };
+  return { calls, fetchImpl };
+}
+const preflight = (fetchStub, extra = {}) =>
+  preflightKey({
+    apiKey: KEY,
+    project: "fireemu-oracle-query",
+    token: "TOK",
+    fetchImpl: fetchStub.fetchImpl,
+    ...extra,
+  });
+
+test("preflightKey binds the key to the project: the toolkit's project number must equal the project's own", async () => {
+  const stub = preflightFetch();
+  assert.deepEqual(await preflight(stub), { projectNumber: NUMBER });
+  assert.equal(stub.calls.length, 2);
+  const toolkit = stub.calls.find((c) =>
+    c.url.startsWith("https://identitytoolkit.googleapis.com/"),
+  );
+  assert.equal(
+    toolkit.url,
+    `https://identitytoolkit.googleapis.com/v1/projects?key=${encodeURIComponent(KEY)}`,
+  );
+  const crm = stub.calls.find((c) =>
+    c.url.startsWith("https://cloudresourcemanager.googleapis.com/"),
+  );
+  assert.equal(
+    crm.url,
+    "https://cloudresourcemanager.googleapis.com/v1/projects/fireemu-oracle-query",
+  );
+  assert.equal(crm.headers.authorization, "Bearer TOK");
+  assert.equal(crm.headers["x-goog-user-project"], "fireemu-oracle-query");
+  assert.equal(toolkit.headers.authorization, undefined, "the key read carries no credential");
+});
+
+test("preflightKey fails closed on a different project, a missing value or any unreadable answer", async () => {
+  const refuses = async (stub, pattern) => {
+    await assert.rejects(preflight(stub), pattern);
+  };
+  await refuses(
+    preflightFetch({ toolkit: [200, { projectId: "999999999999" }] }),
+    /belongs to a different project/,
+  );
+  await refuses(preflightFetch({ toolkit: [200, {}] }), /no project number/);
+  await refuses(preflightFetch({ toolkit: [200, { projectId: "" }] }), /no project number/);
+  await refuses(
+    preflightFetch({ toolkit: [200, { projectId: 123456789012 }] }),
+    /no project number/,
+  );
+  await refuses(
+    preflightFetch({ toolkit: [200, { projectId: "not-a-number" }] }),
+    /no project number/,
+  );
+  await refuses(
+    preflightFetch({ crm: [200, { projectId: "fireemu-oracle-query" }] }),
+    /no project number/,
+  );
+  await refuses(
+    preflightFetch({ crm: [200, { projectId: "other", projectNumber: NUMBER }] }),
+    /is not the project/,
+  );
+  await refuses(preflightFetch({ toolkit: [400, { error: {} }] }), /key read failed/);
+  await refuses(preflightFetch({ toolkit: [403, {}] }), /key read failed/);
+  await refuses(preflightFetch({ crm: [403, {}] }), /project read failed/);
+  await refuses(preflightFetch({ crm: [500, {}] }), /project read failed/);
+  await assert.rejects(
+    preflight({
+      fetchImpl: async () => {
+        throw new Error("network");
+      },
+    }),
+    /key read failed/,
+  );
+  await assert.rejects(
+    preflight({
+      fetchImpl: async () => ({
+        status: 200,
+        json: async () => {
+          throw new Error("bad json");
+        },
+      }),
+    }),
+    /unreadable/,
+  );
+});
+
+test("a preflight failure never prints the key or the project numbers", async () => {
+  const cases = [
+    preflightFetch({ toolkit: [200, { projectId: "999999999999" }] }),
+    preflightFetch({ crm: [200, { projectId: "other", projectNumber: NUMBER }] }),
+    preflightFetch({ toolkit: [403, {}] }),
+  ];
+  for (const stub of cases) {
+    try {
+      await preflight(stub);
+      assert.fail("should refuse");
+    } catch (error) {
+      assert.ok(!error.message.includes(KEY), error.message);
+      assert.ok(
+        !error.message.includes(NUMBER) && !error.message.includes("999999999999"),
+        error.message,
+      );
+    }
+  }
+});
+
+test("loadApiKey reads one key from a file only the owner can read", async () => {
+  const stat = (mode) => async () => ({ mode, isFile: () => true });
+  const read = (text) => async () => text;
+  assert.equal(await loadApiKey("f", { stat: stat(0o100600), readFile: read(`${KEY}\n`) }), KEY);
+  assert.equal(await loadApiKey("f", { stat: stat(0o100400), readFile: read(KEY) }), KEY);
+  await assert.rejects(
+    loadApiKey("f", { stat: stat(0o100644), readFile: read(KEY) }),
+    /readable by others/,
+  );
+  await assert.rejects(
+    loadApiKey("f", { stat: stat(0o100660), readFile: read(KEY) }),
+    /readable by others/,
+  );
+  await assert.rejects(
+    loadApiKey("f", { stat: stat(0o100604), readFile: read(KEY) }),
+    /readable by others/,
+  );
+  await assert.rejects(
+    loadApiKey("f", {
+      stat: async () => ({ mode: 0o100600, isFile: () => false }),
+      readFile: read(KEY),
+    }),
+    /not a file/,
+  );
+  for (const text of [
+    "",
+    "\n",
+    "short",
+    "has space in it key key key key",
+    `{"apiKey":"${KEY}"}`,
+    `${KEY}\n${KEY}`,
+  ])
+    await assert.rejects(
+      loadApiKey("f", { stat: stat(0o100600), readFile: read(text) }),
+      /does not hold one API key/,
+      JSON.stringify(text),
+    );
+});
+
+test("recordSdk against production stops on a failed key preflight before any account or request, and asks with its own key, project and token", async () => {
+  const web = { apiKey: KEY, authDomain: "d", projectId: "fireemu-oracle-query" };
+  const target = { kind: "production", project: "fireemu-oracle-query", token: "TOK", web };
+  let asked;
+  const realFetch = globalThis.fetch;
+  let fetched = 0;
+  globalThis.fetch = async () => {
+    fetched += 1;
+    return { status: 200, json: async () => ({ localId: "u" }) };
+  };
+  let drove = 0;
+  let madeNative = 0;
+  try {
+    await assert.rejects(
+      recordSdk({
+        target,
+        run: "r1",
+        preflightImpl: async (request) => {
+          asked = request;
+          throw new Error("the API key belongs to a different project");
+        },
+        runDriverImpl: async () => {
+          drove += 1;
+        },
+        makeNative: () => {
+          madeNative += 1;
+        },
+      }),
+      /different project/,
+    );
+    assert.deepEqual(asked, { apiKey: KEY, project: "fireemu-oracle-query", token: "TOK" });
+    assert.deepEqual([fetched, drove, madeNative], [0, 0, 0]);
+    // A local target is not preflighted.
+    let localAsked = false;
+    await recordSdk({
+      target: {
+        kind: "local",
+        project: "demo",
+        firestore: { host: "h", port: 1 },
+        auth: "http://a",
+      },
+      run: "r1",
+      preflightImpl: async () => {
+        localAsked = true;
+      },
+      runDriverImpl: async () => ({
+        receipt: { thrown: null, cleanup: { complete: true }, teardown: [], cases: [] },
+        wire: 0,
+        connections: 0,
+      }),
+      makeNative: () => ({
+        close() {},
+        async listIds() {
+          return [];
+        },
+        async missing() {
+          return [];
+        },
+        async commit() {},
+      }),
+    });
+    assert.equal(localAsked, false);
   } finally {
     globalThis.fetch = realFetch;
   }

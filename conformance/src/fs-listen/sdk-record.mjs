@@ -4,6 +4,7 @@
 // process never sees it. Whether a row is right is decided offline (compare.mjs).
 
 import { spawn } from "node:child_process";
+import { readFile, stat } from "node:fs/promises";
 import { createInterface } from "node:readline";
 import { fileURLToPath } from "node:url";
 
@@ -33,6 +34,70 @@ export function conditionsOf(caseId) {
   const hit = table.find(([pattern]) => pattern.test(n));
   if (!hit) throw new Error(`no condition for case ${caseId}`);
   return [`FS-LISTEN-SDK/${hit[1]}`];
+}
+
+/**
+ * The API key of the web app, from a file only the owner may read. The file holds the key alone;
+ * the other web config fields (project id, auth domain) are derived from the project, not read
+ * from a secret.
+ */
+export async function loadApiKey(
+  path,
+  { stat: statImpl = stat, readFile: readImpl = readFile } = {},
+) {
+  const info = await statImpl(path);
+  if (!info.isFile()) throw new Error("the API key path is not a file");
+  if ((info.mode & 0o077) !== 0)
+    throw new Error("the API key file is readable by others (use mode 0600)");
+  const key = (await readImpl(path, "utf8")).trim();
+  if (!/^[A-Za-z0-9_-]{20,}$/.test(key))
+    throw new Error("the API key file does not hold one API key");
+  return key;
+}
+
+/**
+ * Binds the key to the project before anything is created. The Identity Toolkit project read with
+ * the key answers the project NUMBER in its `projectId` field; the project's own number comes
+ * from Resource Manager under the owner's token. They must be the same, and either missing stops
+ * the run. Messages never carry the key or a number.
+ */
+export async function preflightKey({ apiKey, project, token, fetchImpl = globalThis.fetch }) {
+  const read = async (url, headers, what) => {
+    let response;
+    try {
+      response = await fetchImpl(url, {
+        method: "GET",
+        headers,
+        redirect: "manual",
+        signal: AbortSignal.timeout(30_000),
+      });
+    } catch {
+      throw new Error(`${what} failed (transport)`);
+    }
+    if (response.status !== 200) throw new Error(`${what} failed (status ${response.status})`);
+    try {
+      return await response.json();
+    } catch {
+      throw new Error(`${what} answer was unreadable`);
+    }
+  };
+  const isNumber = (value) => typeof value === "string" && /^[0-9]+$/.test(value);
+  const keyed = await read(
+    `https://identitytoolkit.googleapis.com/v1/projects?key=${encodeURIComponent(apiKey)}`,
+    {},
+    "key read",
+  );
+  const owned = await read(
+    `https://cloudresourcemanager.googleapis.com/v1/projects/${encodeURIComponent(project)}`,
+    { authorization: `Bearer ${token}`, "x-goog-user-project": project },
+    "project read",
+  );
+  if (!isNumber(keyed.projectId)) throw new Error("the key read gave no project number");
+  if (!isNumber(owned.projectNumber)) throw new Error("the project read gave no project number");
+  if (owned.projectId !== project) throw new Error("the project read is not the project asked for");
+  if (keyed.projectId !== owned.projectNumber)
+    throw new Error("the API key belongs to a different project");
+  return { projectNumber: owned.projectNumber };
 }
 
 /** A wait that ran out says nothing about absence: such a case is INDETERMINATE offline. */
@@ -141,9 +206,17 @@ export async function recordSdk({
   log = () => {},
   runDriverImpl = runDriver,
   makeNative = createNativeClient,
+  preflightImpl = preflightKey,
 }) {
   const startedAt = new Date().toISOString();
   const production = target.kind === "production";
+  // The key must belong to this project before an account is made or a request is signed in.
+  if (production)
+    await preflightImpl({
+      apiKey: target.web.apiKey,
+      project: target.project,
+      token: target.token,
+    });
   const accountClient = createAccountClient({
     base: production
       ? "https://identitytoolkit.googleapis.com"

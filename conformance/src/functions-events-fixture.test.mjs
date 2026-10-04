@@ -416,3 +416,12 @@ test("fixture service hosts must all be loopback before SDK initialization", () 
     /loopback emulator/,
   );
 });
+
+test("retry in the production fixture mode needs no emulator host; every other mode still needs a loopback one", () => {
+  const { requireRetryFirestore } = require("../functions-events/fixtures/local-host.js");
+  assert.doesNotThrow(() => requireRetryFirestore({ FE_EVENTS_MODE: "production" }));
+  assert.throws(() => requireRetryFirestore({}), /loopback Firestore emulator/);
+  assert.throws(() => requireRetryFirestore({ FE_EVENTS_MODE: "local" }), /loopback Firestore emulator/);
+  assert.throws(() => requireRetryFirestore({ FE_EVENTS_MODE: "Production" }), /loopback Firestore emulator/);
+  assert.doesNotThrow(() => requireRetryFirestore({ FE_EVENTS_MODE: "local", FIRESTORE_EMULATOR_HOST: "127.0.0.1:8080" }));
+});

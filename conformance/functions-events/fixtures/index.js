@@ -1,5 +1,5 @@
 const { createHash } = require("node:crypto");
-const { assertFixtureEnvironment, requireRetryFirestoreHost } = require("./local-host");
+const { assertFixtureEnvironment, requireRetryFirestore } = require("./local-host");
 assertFixtureEnvironment();
 const { getApps, initializeApp } = require("firebase-admin/app");
 const { getFirestore } = require("firebase-admin/firestore");
@@ -63,7 +63,7 @@ exports.fsWrittenWithAuthContextV2 = onDocumentWrittenWithAuthContext(document, 
 exports.fsRetryV2 = onDocumentWritten({ document, retry: true }, async (event) => {
   const data = firestoreData(event.data);
   if (data?.after?.data?.fixtureKind !== "retry") return;
-  requireRetryFirestoreHost();
+  requireRetryFirestore();
   const app = getApps()[0] ?? initializeApp();
   const db = getFirestore(app);
   const markerId = createHash("sha256").update(event.id).digest("hex");

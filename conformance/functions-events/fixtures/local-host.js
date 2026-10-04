@@ -100,10 +100,21 @@ function requireRetryFirestoreHost() {
   }
 }
 
+// In the production fixture mode the project's own Firestore is the retry state store (the
+// environment was already refused above if it named any emulator host); every other mode needs a
+// loopback emulator.
+function requireRetryFirestore(env = process.env) {
+  if (env.FE_EVENTS_MODE === "production") return;
+  if (!isLoopbackHostPort(env.FIRESTORE_EMULATOR_HOST)) {
+    throw new Error("retry requires a loopback Firestore emulator before Admin initialization");
+  }
+}
+
 module.exports = {
   assertFixtureEnvironment,
   assertLocalEnvironment,
   isLoopbackHostPort,
   requireLoopbackService,
+  requireRetryFirestore,
   requireRetryFirestoreHost,
 };

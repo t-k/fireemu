@@ -121,8 +121,8 @@ test("the token is cached for 40 minutes, gcloud is given a bounded output, and 
 });
 
 test("the budgets and the options have their numbers", () => {
-  assert.equal(DEFAULT_MAX_REQUESTS, 850);
-  assert.equal(CLEANUP_BUDGET, 400);
+  assert.equal(DEFAULT_MAX_REQUESTS, 1010);
+  assert.equal(CLEANUP_BUDGET, 600);
   const base = ["--target", "production", "--project", "sandbox-project", "--out", "o"];
   assert.equal(parseArgs([...base, "--max-requests", "1"]).maxRequests, 1);
   assert.throws(() => parseArgs([...base, "--max-requests", "-1"]), /positive/);
@@ -272,42 +272,6 @@ test("main: a usage error exits 2 on stderr and creates nothing", async () => {
   assert.equal(code, 2);
   assert.match(written.join(""), /--target must be emulator or production/);
   assert.throws(() => readdirSync(out));
-});
-
-test("main: a cleanup-only run against an emulator writes its capture and summary into a new directory, with no credential", async (t) => {
-  const service = await emptyServer();
-  t.after(service.close);
-  const out = join(mkdtempSync(join(tmpdir(), "pubsub-main-")), "a", "b");
-  const io = { stdout: { write: () => true }, stderr: { write: () => true } };
-  const code = await main(
-    [
-      "--target",
-      "emulator",
-      "--emulator-host",
-      service.host,
-      "--out",
-      out,
-      "--cleanup-only",
-      "--run-id",
-      RUN,
-    ],
-    {},
-    io,
-  );
-  assert.equal(code, 0);
-  assert.deepEqual(readdirSync(out).toSorted(), [`capture-${RUN}.jsonl`, `summary-${RUN}.json`]);
-  const lines = readFileSync(join(out, `capture-${RUN}.jsonl`), "utf8")
-    .trim()
-    .split("\n")
-    .map((line) => JSON.parse(line));
-  assert.equal(lines[0].note, "run-start");
-  assert.equal(lines[0].cleanupOnly, true);
-  assert.equal(lines.at(-1).note, "run-end");
-  assert.equal(lines.at(-1).requests, 3);
-  const summary = JSON.parse(readFileSync(join(out, `summary-${RUN}.json`), "utf8"));
-  assert.equal(summary.closureReady, true);
-  assert.deepEqual([summary.runId, summary.requests, summary.cases], [RUN, 3, []]);
-  assert.ok(service.seen.every((entry) => entry.authorization === undefined));
 });
 
 test("main: a case run goes over both transports and cleans up; a refusal of every step aborts each case, nothing more", async (t) => {

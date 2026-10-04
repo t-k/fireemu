@@ -9,6 +9,7 @@ import { createClient, newPushState } from "./pubsub-production/client.mjs";
 import { createOwnership } from "./pubsub-production/names.mjs";
 import { DEFAULT_MAX_REQUESTS, main, parseArgs, summarize } from "./pubsub-production/record.mjs";
 import {
+  CaseLimit,
   assertBudgetCovers,
   exitCodeOf,
   plannedRequests,
@@ -26,7 +27,7 @@ test("the arguments: an emulator target needs a host, a production target a proj
   assert.equal(emulator.production, false);
   assert.equal(emulator.host, "127.0.0.1:8085");
   assert.match(emulator.runId, /^[0-9a-f]{12}$/);
-  assert.equal(emulator.maxRequests, 850);
+  assert.equal(emulator.maxRequests, 1010);
   assert.deepEqual(emulator.transports, ["rest", "grpc"]);
   assert.throws(() => parseArgs(["--target", "emulator", "--out", "o"], {}), /emulator-host/);
   assert.throws(() => parseArgs(["--target", "production", "--out", "o"]), /--project is required/);
@@ -79,10 +80,28 @@ test("bad arguments are refused", () => {
     [["--only"], /needs a value/],
     [["stray"], /unexpected argument/],
     [["--cleanup-only"], /12 hex/],
+    [["--cleanup-only", "--run-id", RUN], /needs --from-capture/],
+    [
+      ["--cleanup-only", "--run-id", RUN, "--from-capture", "/x/capture-ffffffffffff.jsonl"],
+      /must be capture-<run ID>\.jsonl of that run/,
+    ],
+    [
+      ["--cleanup-only", "--run-id", RUN, "--from-capture", "/x/other.jsonl"],
+      /must be capture-<run ID>/,
+    ],
+    [["--from-capture", `/x/capture-${RUN}.jsonl`], /is for --cleanup-only/],
   ])
     assert.throws(() => parseArgs([...base, ...extra]), pattern, extra.join(" "));
-  const cleanupOnly = parseArgs([...base, "--cleanup-only", "--run-id", RUN]);
+  const cleanupOnly = parseArgs([
+    ...base,
+    "--cleanup-only",
+    "--run-id",
+    RUN,
+    "--from-capture",
+    `/x/y/capture-${RUN}.jsonl`,
+  ]);
   assert.equal(cleanupOnly.cleanupOnly, true);
+  assert.equal(cleanupOnly.ledgerPath, `/x/y/issued-${RUN}.jsonl`);
 });
 
 test("the selected cases keep the order of the list, and an unknown case is refused", () => {
@@ -112,7 +131,7 @@ function fakeTransport(name, capture, answer) {
   return name === "rest" ? { name, calls, request: send } : { name, calls, call: send };
 }
 
-function setup(cases, { restAnswer, options = {}, stopping = () => false } = {}) {
+function setup(cases, { restAnswer, grpcAnswer, options = {}, stopping = () => false } = {}) {
   const ownership = createOwnership({ project: "demo-project", runId: RUN });
   const pushState = newPushState();
   const notes = [];
@@ -120,7 +139,7 @@ function setup(cases, { restAnswer, options = {}, stopping = () => false } = {})
   const capture = createCapture({ journal, now: () => new Date(0) });
   const transports = {
     rest: fakeTransport("rest", capture, restAnswer),
-    grpc: fakeTransport("grpc", capture),
+    grpc: fakeTransport("grpc", capture, grpcAnswer),
   };
   const cleanupTransport = fakeTransport("rest", capture, (call) =>
     call.method === "GET" && /\/(topics|subscriptions|snapshots)(\?|$)/.test(call.path)
@@ -353,7 +372,11 @@ test("the dead-letter case stops clean on production without a service agent, be
 
 test("a run is closable only with no unknown answer, no stop and a clean cleanup; the unknown ones are listed", () => {
   const journal = { write() {} };
-  const clean = { stopped: null, cleanup: { deleted: [], leftover: [], errors: [] }, cases: [] };
+  const clean = {
+    stopped: null,
+    cleanup: { deleted: [], leftover: [], errors: [], unsettled: [] },
+    cases: [],
+  };
   const options = { runId: RUN, target: "emulator", project: "demo-project" };
   const none = createCapture({ journal });
   none.record({ case: "a/rest", step: "01", op: "getTopic" });
@@ -419,7 +442,7 @@ test("every case declares a ceiling, the whole set fits the default budget, and 
   assert.equal(unknown, 2);
 });
 
-test("a case that sends more than it declared is flagged in the summary", async () => {
+test("a case's ceiling is a maximum: the request after it is not sent, the case ends as limited, and the run is not closable", async () => {
   const item = {
     id: "over",
     short: "ov",
@@ -429,17 +452,33 @@ test("a case that sends more than it declared is flagged in the summary", async 
       await ctx.client.getTopic(ctx.name("topics", "b"));
     },
   };
-  const { run } = setup([item]);
+  const { run, transports } = setup([item]);
   const summary = await run();
   assert.deepEqual(
-    summary.cases.map((c) => [c.requests, c.overDeclared]),
+    summary.cases.map((c) => [c.outcome, c.requests, c.reason]),
     [
-      [2, 1],
-      [2, 1],
+      ["limit", 1, "the case reached its limit of 1 requests"],
+      ["limit", 1, "the case reached its limit of 1 requests"],
     ],
   );
+  assert.deepEqual(summary.limited, ["over/rest", "over/grpc"]);
+  assert.deepEqual(
+    [transports.rest.calls.length, transports.grpc.calls.length],
+    [1, 1],
+    "one request for each transport",
+  );
+  assert.equal(summary.stopped, null);
+  const capture = createCapture({ journal: { write() {} } });
+  assert.equal(
+    summarize({ options: { runId: RUN, target: "emulator", project: "p" }, capture, summary })
+      .closureReady,
+    false,
+  );
   const fine = setup([{ ...item, requests: 2 }]);
-  assert.equal((await fine.run()).cases[0].overDeclared, undefined);
+  assert.deepEqual(
+    (await fine.run()).cases.map((c) => c.outcome),
+    ["completed", "completed"],
+  );
 });
 
 test("a budget equal to the plan is enough, one request less is not", () => {
@@ -451,4 +490,85 @@ test("a budget equal to the plan is enough, one request less is not", () => {
     /may send 30 requests, over --max-requests 29/,
   );
   assert.throws(() => assertBudgetCovers(cases, ["rest"], 14), /may send 15/);
+});
+
+/** The most requests a case sends against four kinds of service, with no ceiling in the way. */
+async function worstCase(item, serviceAgent) {
+  const modes = {
+    // Everything answers 200 with an empty body: every wait for a message runs out its attempts.
+    empty: () => ({ status: 200, body: {}, unknown: false }),
+    // Everything is refused as missing.
+    missing: () => ({ status: 404, body: { error: { status: "NOT_FOUND" } }, unknown: false }),
+    // Every answer is an unknown one.
+    unknown: () => ({ status: 503, body: {}, unknown: true }),
+    // A pull gets one message at a time, so a wait for several runs through its attempts.
+    trickle: (call) =>
+      call.op === "pull"
+        ? {
+            status: 200,
+            body: {
+              receivedMessages: [{ ackId: "a", message: { publishTime: "2026-10-05T00:00:00Z" } }],
+            },
+            unknown: false,
+          }
+        : { status: 200, body: {}, unknown: false },
+    // A pull gets a message on every other call, so the waits for the last message are long.
+    alternate: (() => {
+      let n = 0;
+      return (call) =>
+        call.op === "pull" && (n += 1) % 2 === 0
+          ? {
+              status: 200,
+              body: {
+                receivedMessages: [
+                  { ackId: "a", message: { publishTime: "2026-10-05T00:00:00Z" } },
+                ],
+              },
+              unknown: false,
+            }
+          : { status: 200, body: {}, unknown: false };
+    })(),
+  };
+  let worst = 0;
+  for (const answer of Object.values(modes)) {
+    const { run } = setup([{ ...item, requests: Infinity }], {
+      options: { production: true, serviceAgent },
+      restAnswer: (call) => answer(call),
+      // The same behavior in the shape of a gRPC answer.
+      grpcAnswer: (call) => {
+        const reply = answer(call);
+        return {
+          code:
+            reply.status >= 200 && reply.status < 300
+              ? "OK"
+              : reply.unknown
+                ? "UNAVAILABLE"
+                : "NOT_FOUND",
+          body: reply.body,
+          unknown: reply.unknown,
+        };
+      },
+    });
+    const summary = await run();
+    worst = Math.max(worst, ...summary.cases.map((entry) => entry.requests));
+  }
+  return worst;
+}
+
+test("every case's ceiling covers the most it can send against a service that answers empty, missing or unknown", async () => {
+  const measured = {};
+  for (const item of CASES)
+    measured[item.id] = await worstCase(
+      item,
+      "serviceAccount:service-0@gcp-sa-pubsub.iam.gserviceaccount.com",
+    );
+  const over = Object.entries(measured).filter(
+    ([id, worst]) => worst > CASES.find((item) => item.id === id).requests,
+  );
+  assert.deepEqual(over, [], `measured worst cases: ${JSON.stringify(measured)}`);
+});
+
+test("the case limit is an error of its own name", () => {
+  assert.equal(new CaseLimit(3).name, "CaseLimit");
+  assert.equal(new CaseLimit(3).message, "the case reached its limit of 3 requests");
 });

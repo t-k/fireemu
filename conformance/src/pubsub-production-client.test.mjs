@@ -3,6 +3,7 @@ import test from "node:test";
 import {
   OPERATION_NAMES,
   PushPublishRefused,
+  PushRefused,
   createClient,
   message,
   newPushState,
@@ -346,7 +347,6 @@ test("a topic with a push subscription is never published to, on either transpor
   await assert.rejects(restClient.publish(pushTopic, [{}]), /push subscription is attached/);
   // A pull subscription that is turned into a push one, by a push config or by an update, bans its topic.
   await restClient.createSubscription(pullSubscription, { topic: pullTopic });
-  await restClient.publish(pullTopic, [{}]);
   await grpcClient.modifyPushConfig(pullSubscription, { pushEndpoint: "https://example.com/q" });
   await assert.rejects(restClient.publish(pullTopic, [{}]), PushPublishRefused);
   assert.deepEqual([...pushState.topics].toSorted(), [pullTopic, pushTopic].toSorted());
@@ -380,7 +380,7 @@ test("a topic with a push subscription is never published to, on either transpor
     }),
     /cannot tell the topic/,
   );
-  assert.equal(restTransport.calls.filter((call) => call.op === "publish").length, 2);
+  assert.equal(restTransport.calls.filter((call) => call.op === "publish").length, 1);
   assert.equal(grpcTransport.calls.filter((call) => call.op === "publish").length, 0);
 });
 
@@ -392,4 +392,95 @@ test("an IAM policy is only changed on a resource of the run", async () => {
   );
   await client.getIamPolicy("projects/demo-project/topics/other");
   assert.equal(transport.calls.length, 1);
+});
+
+test("the push ban also refuses a seek on a push subscription, a dead-letter topic with one, and a push on a topic with messages or retention", async () => {
+  const pushState = newPushState();
+  const transport = fakeRest();
+  const client = createClient({ transport, ownership: own, pushState, caseId: "c" });
+  const grpcClient = createClient({
+    transport: fakeGrpc(),
+    ownership: own,
+    pushState,
+    caseId: "g",
+  });
+  const topic = own.resource("topics", "ban-t");
+  const sub = own.resource("subscriptions", "ban-s");
+  await client.createSubscription(sub, {
+    topic,
+    pushConfig: { pushEndpoint: "https://example.com/p" },
+  });
+  const sent = transport.calls.length;
+  // A seek on the push subscription, from either transport.
+  await assert.rejects(client.seek(sub, { time: "2026-10-05T00:00:00Z" }), PushRefused);
+  await assert.rejects(grpcClient.seek(sub, { time: "2026-10-05T00:00:00Z" }), PushRefused);
+  // A dead-letter topic that has a push subscription would receive forwarded messages.
+  const source = own.resource("subscriptions", "ban-source");
+  await assert.rejects(
+    client.createSubscription(source, {
+      topic: own.resource("topics", "ban-other"),
+      deadLetterPolicy: { deadLetterTopic: topic },
+    }),
+    PushRefused,
+  );
+  assert.equal(transport.calls.length, sent, "nothing was sent for any of them");
+  // A pull subscription on a published-to topic cannot be turned into a push one, by create, update or modify.
+  const published = own.resource("topics", "ban-published");
+  const pullSub = own.resource("subscriptions", "ban-pull");
+  await client.createSubscription(pullSub, { topic: published });
+  await client.publish(published, [{}]);
+  await assert.rejects(
+    client.modifyPushConfig(pullSub, { pushEndpoint: "https://example.com/q" }),
+    PushRefused,
+  );
+  await assert.rejects(
+    client.updateSubscription(
+      pullSub,
+      { pushConfig: { pushEndpoint: "https://example.com/q" } },
+      "pushConfig",
+    ),
+    PushRefused,
+  );
+  await assert.rejects(
+    client.createSubscription(own.resource("subscriptions", "ban-late"), {
+      topic: published,
+      pushConfig: { pushEndpoint: "https://example.com/q" },
+    }),
+    PushRefused,
+  );
+  // A topic that keeps messages (retention) cannot get a push subscription either.
+  const retained = own.resource("topics", "ban-retained");
+  await client.createTopic(retained, { messageRetentionDuration: "3600s" });
+  await assert.rejects(
+    client.createSubscription(own.resource("subscriptions", "ban-ret"), {
+      topic: retained,
+      pushConfig: { pushEndpoint: "https://example.com/q" },
+    }),
+    PushRefused,
+  );
+  // A pull subscription on a quiet topic is still fine, and so is a seek on it.
+  const quiet = own.resource("topics", "ban-quiet");
+  const quietSub = own.resource("subscriptions", "ban-quiet-s");
+  await client.createSubscription(quietSub, { topic: quiet });
+  await client.seek(quietSub, { time: "2026-10-05T00:00:00Z" });
+});
+
+test("a dead-letter topic without a push subscription is allowed, a missing one too, and the refusals carry their names", async () => {
+  const pushState = newPushState();
+  const transport = fakeRest();
+  const client = createClient({ transport, ownership: own, pushState, caseId: "c" });
+  const dead = own.resource("topics", "dl-free");
+  await client.createSubscription(own.resource("subscriptions", "dl-a"), {
+    topic: own.resource("topics", "dl-src"),
+    deadLetterPolicy: { deadLetterTopic: dead, maxDeliveryAttempts: 5 },
+  });
+  await client.createSubscription(own.resource("subscriptions", "dl-b"), {
+    topic: own.resource("topics", "dl-src"),
+  });
+  assert.equal(transport.calls.length, 2);
+  assert.equal(new PushRefused("x").name, "PushRefused");
+  assert.match(
+    new PushRefused("a seek").message,
+    /refusing a seek: it could cause a delivery to a push endpoint/,
+  );
 });

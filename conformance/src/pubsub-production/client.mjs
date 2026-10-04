@@ -4,6 +4,8 @@
 // resource that must belong to the run) or publish to a topic that has a push subscription (a push
 // subscription is created, read and deleted, and never delivered to).
 
+import { createLedger, kindOf } from "./ledger.mjs";
+
 const CODE_OF_STATUS = new Map([
   [400, "INVALID_ARGUMENT"],
   [401, "UNAUTHENTICATED"],
@@ -22,6 +24,14 @@ export class PushPublishRefused extends Error {
   constructor(topic) {
     super(`refusing to publish to ${topic}: a push subscription is attached to it`);
     this.name = "PushPublishRefused";
+  }
+}
+
+/** A request that could cause a delivery to a push endpoint, refused before it is sent. */
+export class PushRefused extends Error {
+  constructor(what) {
+    super(`refusing ${what}: it could cause a delivery to a push endpoint`);
+    this.name = "PushRefused";
   }
 }
 
@@ -57,6 +67,8 @@ const OPERATIONS = {
     rest: ["PUT", `/v1/${encodeName(name)}`, body],
     grpc: ["Publisher", "CreateTopic", { name, ...body }],
     changes: [name],
+    ledger: { action: "create", name },
+    retains: body.messageRetentionDuration === undefined ? undefined : name,
   }),
   getTopic: (name) => ({
     rest: ["GET", `/v1/${encodeName(name)}`],
@@ -70,6 +82,7 @@ const OPERATIONS = {
     rest: ["DELETE", `/v1/${encodeName(name)}`],
     grpc: ["Publisher", "DeleteTopic", { topic: name }],
     changes: [name],
+    ledger: { action: "delete", name },
   }),
   publish: (topic, messages) => ({
     rest: ["POST", `/v1/${encodeName(topic)}:publish`, { messages }],
@@ -89,7 +102,9 @@ const OPERATIONS = {
     rest: ["PUT", `/v1/${encodeName(name)}`, body],
     grpc: ["Subscriber", "CreateSubscription", { name, ...body }],
     changes: [name, body.topic],
+    ledger: { action: "create", name },
     subscription: { name, topic: body.topic, push: body.pushConfig?.pushEndpoint },
+    deadLetterTopic: body.deadLetterPolicy?.deadLetterTopic,
   }),
   getSubscription: (name) => ({
     rest: ["GET", `/v1/${encodeName(name)}`],
@@ -103,6 +118,7 @@ const OPERATIONS = {
     rest: ["DELETE", `/v1/${encodeName(name)}`],
     grpc: ["Subscriber", "DeleteSubscription", { subscription: name }],
     changes: [name],
+    ledger: { action: "delete", name },
   }),
   updateSubscription: (name, subscription, updateMask) => ({
     rest: [
@@ -147,6 +163,7 @@ const OPERATIONS = {
     rest: ["PUT", `/v1/${encodeName(name)}`, { subscription, ...(labels ? { labels } : {}) }],
     grpc: ["Subscriber", "CreateSnapshot", { name, subscription, ...(labels ? { labels } : {}) }],
     changes: [name, subscription],
+    ledger: { action: "create", name },
   }),
   getSnapshot: (name) => ({
     rest: ["GET", `/v1/${encodeName(name)}`],
@@ -160,6 +177,7 @@ const OPERATIONS = {
     rest: ["DELETE", `/v1/${encodeName(name)}`],
     grpc: ["Subscriber", "DeleteSnapshot", { snapshot: name }],
     changes: [name],
+    ledger: { action: "delete", name },
   }),
   // The IAM methods are REST only: the google.iam protos are not part of the Pub/Sub package.
   getIamPolicy: (resource) => ({
@@ -175,6 +193,7 @@ const OPERATIONS = {
     rest: ["POST", `/v1/${encodeName(subscription)}:seek`, target],
     grpc: ["Subscriber", "Seek", { subscription, ...target }],
     changes: target.snapshot === undefined ? [subscription] : [subscription, target.snapshot],
+    seeks: subscription,
   }),
 };
 
@@ -184,15 +203,24 @@ export const OPERATION_NAMES = Object.freeze(Object.keys(OPERATIONS));
  * The client of one transport. `label()` gives the capture its case and a step number; `pushState` is
  * shared by every client of the run so that the push ban holds across transports.
  */
-export function createClient({ transport, ownership, pushState, caseId }) {
+export function createClient({ transport, ownership, pushState, caseId, ledger = createLedger() }) {
   let step = 0;
   const run = async (operation, args, options = {}) => {
     const spec = OPERATIONS[operation](...args);
     if (spec.grpc === null && transport.name !== "rest")
       throw new Error(`${operation} is only available over REST`);
     for (const name of spec.changes ?? []) if (name !== undefined) ownership.assertOwned(name);
-    if (spec.publishes !== undefined && pushState.topics.has(spec.publishes))
-      throw new PushPublishRefused(spec.publishes);
+    if (spec.publishes !== undefined) {
+      if (pushState.topics.has(spec.publishes)) throw new PushPublishRefused(spec.publishes);
+      pushState.published.add(spec.publishes);
+    }
+    if (spec.seeks !== undefined && pushState.subscriptions.has(spec.seeks))
+      throw new PushRefused(`a seek on the push subscription ${spec.seeks}`);
+    if (spec.deadLetterTopic !== undefined && pushState.topics.has(spec.deadLetterTopic))
+      throw new PushRefused(
+        `a dead-letter topic ${spec.deadLetterTopic} that has a push subscription`,
+      );
+    if (spec.retains !== undefined) pushState.retained.add(spec.retains);
     const subscription = spec.subscription;
     if (subscription !== undefined) {
       if (subscription.topic !== undefined)
@@ -203,12 +231,20 @@ export function createClient({ transport, ownership, pushState, caseId }) {
         const topic = pushState.topicOf.get(subscription.name);
         if (topic === undefined)
           throw new Error(`cannot tell the topic of the push subscription ${subscription.name}`);
+        // A topic that was published to, or that keeps messages, would redeliver them to the endpoint
+        // (a seek, or the first delivery attempt).
+        if (pushState.published.has(topic) || pushState.retained.has(topic))
+          throw new PushRefused(`a push subscription on ${topic}, which has messages or retention`);
         pushState.subscriptions.add(subscription.name);
         pushState.topics.add(topic);
       }
     }
     step += 1;
     const label = { case: caseId, step: String(step).padStart(2, "0") };
+    // The ledger line is written before the request is sent: a run that dies in the middle of it still
+    // names what may have been created or deleted.
+    const entry = spec.ledger && { ...spec.ledger, transport: transport.name };
+    if (entry) ledger.sent(entry);
     let reply;
     if (transport.name === "rest") {
       const [method, path, body] = spec.rest;
@@ -218,7 +254,14 @@ export function createClient({ transport, ownership, pushState, caseId }) {
       const [service, method, request] = spec.grpc;
       reply = await transport.call({ label, op: operation, service, method, request, ...options });
     }
-    return { ...reply, ok: reply.code === "OK", step: label.step };
+    // A 2xx whose body cannot be read does not say what was done, so it is not a success.
+    const result = {
+      ...reply,
+      ok: reply.code === "OK" && reply.unknown !== true,
+      step: label.step,
+    };
+    if (entry) ledger.answered({ ...entry, kind: kindOf(result) });
+    return result;
   };
   const methods = (options) =>
     Object.fromEntries(
@@ -237,4 +280,6 @@ export const newPushState = () => ({
   subscriptions: new Set(),
   topics: new Set(),
   topicOf: new Map(),
+  published: new Set(),
+  retained: new Set(),
 });

@@ -4,7 +4,7 @@ import { ackIds, must, pullMessages } from "./support.mjs";
 export const snapshotSeek = {
   id: "snapshot-seek",
   short: "ss",
-  requests: 45,
+  requests: 55,
   async run(ctx) {
     const c = ctx.client;
     const topic = ctx.name("topics", "t");

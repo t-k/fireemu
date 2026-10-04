@@ -13,7 +13,7 @@ async function createAndGet(c, key, create, get) {
 export const topicConfig = {
   id: "topic-config",
   short: "tc",
-  requests: 16,
+  requests: 18,
   async run(ctx) {
     const c = ctx.client;
     const variants = [
@@ -117,7 +117,7 @@ export const subscriptionConfig = {
 export const subscriptionUpdate = {
   id: "subscription-update",
   short: "su",
-  requests: 22,
+  requests: 34,
   async run(ctx) {
     const c = ctx.client;
     const topic = ctx.name("topics", "t");

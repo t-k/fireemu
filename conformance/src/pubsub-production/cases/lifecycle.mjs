@@ -3,7 +3,7 @@ import { must } from "./support.mjs";
 export const lifecycle = {
   id: "lifecycle",
   short: "lc",
-  requests: 24,
+  requests: 28,
   async run(ctx) {
     const c = ctx.client;
     const topic = ctx.name("topics", "t");
@@ -44,13 +44,15 @@ export const lifecycle = {
 export const names = {
   id: "names",
   short: "nm",
-  requests: 15,
+  requests: 18,
   async run(ctx) {
     const c = ctx.client;
     const probes = [
       ["topics", "goog-probe"],
       ["topics", { rest: "ab", grpc: "ac" }],
-      ["topics", { rest: "x1a", grpc: "x1b" }],
+      // A valid 3-character ID the service will create. It is derived from the run (a letter and two
+      // hex digits of the run ID, one for each transport) and read first: if it exists, it is not ours.
+      ["topics", { rest: `x${ctx.runId.slice(0, 2)}`, grpc: `y${ctx.runId.slice(2, 4)}` }, true],
       ["topics", "1-leading-digit"],
       ["topics", "bad$character"],
       ["topics", { rest: "a".repeat(256), grpc: "b".repeat(256) }],
@@ -59,9 +61,13 @@ export const names = {
     ];
     const topic = ctx.name("topics", "n");
     must(await c.createTopic(topic), "createTopic");
-    for (const [kind, id] of probes) {
+    for (const [kind, id, readFirst] of probes) {
       const name = ctx.probe(kind, id);
-      // Whatever the service accepted is removed by the cleanup, which reads every deletion back.
+      if (readFirst && (await c.getTopic(name)).ok) {
+        ctx.note("probe-exists", { name });
+        continue;
+      }
+      // The cleanup removes a probe only when this run's own creation of it answered 2xx or unknown.
       if (kind === "topics") await c.createTopic(name);
       else await c.createSubscription(name, { topic });
     }
@@ -80,7 +86,7 @@ export const names = {
 export const paging = {
   id: "paging",
   short: "pg",
-  requests: 18,
+  requests: 20,
   async run(ctx) {
     const c = ctx.client;
     const topic = ctx.name("topics", "p");

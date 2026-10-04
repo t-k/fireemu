@@ -12,7 +12,7 @@ async function topicAndSubscription(ctx, body = {}, key = "s") {
 export const pullAck = {
   id: "pull-ack",
   short: "pa",
-  requests: 25,
+  requests: 30,
   async run(ctx) {
     const c = ctx.client;
     const { topic, subscription } = await topicAndSubscription(ctx);
@@ -55,7 +55,7 @@ export const pullAck = {
 export const nackAndDeadline = {
   id: "nack-deadline",
   short: "nd",
-  requests: 20,
+  requests: 26,
   slow: true,
   async run(ctx) {
     const c = ctx.client;
@@ -89,7 +89,7 @@ export const nackAndDeadline = {
 export const filtering = {
   id: "filter",
   short: "fl",
-  requests: 15,
+  requests: 22,
   async run(ctx) {
     const c = ctx.client;
     const { topic, subscription } = await topicAndSubscription(ctx, {
@@ -131,7 +131,7 @@ export const filtering = {
 export const ordering = {
   id: "ordering",
   short: "or",
-  requests: 22,
+  requests: 34,
   async run(ctx) {
     const c = ctx.client;
     const { topic, subscription } = await topicAndSubscription(ctx, {

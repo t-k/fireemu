@@ -12,7 +12,7 @@ import {
 export const publishWire = {
   id: "publish-wire",
   short: "pw",
-  requests: 28,
+  requests: 36,
   async run(ctx) {
     const c = ctx.client;
     const topic = ctx.name("topics", "t");
@@ -72,7 +72,7 @@ const MIB_LIMIT = 10_485_760;
 export const publishLimits = {
   id: "publish-limits",
   short: "pl",
-  requests: 10,
+  requests: 12,
   async run(ctx) {
     const c = ctx.client;
     const topic = ctx.name("topics", "t");

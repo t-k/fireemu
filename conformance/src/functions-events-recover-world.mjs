@@ -22,6 +22,7 @@ export function createRecoverWorld({
   failOperationFor = [],
   failures = [],
   neverDone = [],
+  errorButRemoved = [],
 } = {}) {
   const fnCentral = recorded("0140-lists.functions-v2").functions[0];
   const fnEast = clone(fnCentral);
@@ -124,6 +125,12 @@ export function createRecoverWorld({
             if (k.includes(low)) state.subscriptions.delete(k);
           for (const k of [...state.topics.keys()]) if (k.includes(low)) state.topics.delete(k);
         }
+        if (errorButRemoved.includes(op.fn))
+          return json(200, {
+            name: op.name,
+            done: true,
+            error: { code: 13, message: "finished with an error after the function was gone" },
+          });
         return json(200, { name: op.name, done: true, response: {} });
       }
       if (

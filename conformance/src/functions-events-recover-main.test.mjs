@@ -302,6 +302,22 @@ test("recoveryProblems: each way the origin run is not a run to recover", () => 
   assert.ok(run(other).some((p) => /follows the origin run/.test(p)));
   const unreadable = `${base}\n${JSON.stringify({ project: sandbox.PROJECT, taskId: sandbox.TASK_ID, event: "finished", phase: "recovery", originRunDir: origin(runs), ts: "soon" })}`;
   assert.ok(run(unreadable).some((p) => /unreadable time/.test(p)));
+  const otherOrigin = `${base}\n${JSON.stringify({ project: sandbox.PROJECT, taskId: sandbox.TASK_ID, phase: "recovery", originRunDir: "/runs/another-origin", runDir: "/runs/rec-9", event: "started", ts: "2026-10-04T16:39:00Z" })}`;
+  assert.ok(
+    run(otherOrigin).some((p) => /follows the origin run/.test(p)),
+    "a recovery of another origin is not this one's",
+  );
+  const namesOther = JSON.stringify({ pid: 5, runDir: "/runs/another-run" });
+  assert.ok(
+    sandbox
+      .recoveryProblems(ledgerFor(runs, namesOther), {
+        originRunDir: origin(runs),
+        now: NOW,
+        lock: { text: namesOther, isAlive: () => false },
+      })
+      .some((p) => /names another run/.test(p)),
+    "a lock whose SHA matches but that names another run",
+  );
   const foreignProject = `${base}\n${JSON.stringify({ project: "other-project", taskId: "X", event: "started", ts: "2026-10-04T16:49:00Z" })}`;
   assert.deepEqual(run(foreignProject), [], "lines of other projects do not matter");
   assert.ok(

@@ -175,7 +175,7 @@ test("an operation that is never done is polled at most 30 times, 10 s apart, an
     ).length,
     1,
   );
-  assert.ok(sleeps.slice(0, 29).every((s) => s === 10));
+  assert.equal(sleeps.filter((s) => s === 10).length, 29 + 2);
 });
 
 test("a delete answer that names no operation of this project stops the deletes", async () => {
@@ -399,4 +399,92 @@ test("the worst case (both operations polled 30 times, nothing else helps) stays
   assert.equal(record.steps.filter((s) => s.result === "operation-pending").length, 2);
   assert.equal(RECOVERY_MAX_REQUESTS, 90);
   assert.ok(world.state.requests.length > 60, "the worst case is what the ceiling is for");
+});
+
+test("a pub/sub read that shows another name, or a 2xx that is not a 200, is not taken for the resource", async () => {
+  const id = "eventarc-us-east1-pubsubpublishedv2-974238-sub-583";
+  const wrongName = setup({ eventarcCleans: false });
+  wrongName.world.state.subscriptions.get(id).name =
+    "projects/fireemu-oracle-events/subscriptions/other";
+  const first = await recover({ transport: wrongName.transport, sleep: wrongName.sleep });
+  assert.equal(first.record.steps.find((s) => s.resource.includes(id)).result, "unsettled");
+  assert.ok(!deletes(wrongName.world).includes(`subscriptions/${id}`));
+  for (const url of ["/functions/storageArchivedV2", `/subscriptions/${id}`]) {
+    const { world, transport, sleep } = setup({
+      eventarcCleans: false,
+      failures: [
+        {
+          match: (m, u) => m === "GET" && u.endsWith(url),
+          status: 203,
+          body: {
+            name: url.includes("functions")
+              ? "projects/fireemu-oracle-events/locations/us-central1/functions/storageArchivedV2"
+              : `projects/fireemu-oracle-events/subscriptions/${id}`,
+          },
+        },
+      ],
+    });
+    const { record } = await recover({ transport, sleep });
+    assert.ok(
+      record.steps.some((s) => s.result === "unsettled"),
+      url,
+    );
+    assert.ok(!deletes(world).some((d) => url.endsWith(d)), url);
+  }
+});
+
+test("an unknown pub/sub delete is sent once and stops the later pub/sub deletes", async () => {
+  const id = "eventarc-us-east1-pubsubpublishedv2-974238-sub-583";
+  const { world, transport, sleep } = setup({
+    eventarcCleans: false,
+    failures: [
+      { match: (m, u) => m === "DELETE" && u.endsWith(`/subscriptions/${id}`), timeout: true },
+    ],
+  });
+  const { outcome, record } = await recover({ transport, sleep });
+  assert.equal(outcome, "needs-review");
+  assert.deepEqual(
+    deletes(world).filter((d) => d.startsWith("subscriptions") || d.startsWith("topics")),
+    [`subscriptions/${id}`],
+  );
+  assert.equal(
+    record.steps.filter(
+      (s) => s.resource.startsWith("subscription") || s.resource.startsWith("topic"),
+    ).length,
+    1,
+  );
+});
+
+test("a refusal that says done is not a finished operation; an error after the function is gone is still a problem", async () => {
+  const stuck = setup({
+    failures: [
+      {
+        match: (m, u) => m === "GET" && u.includes("/operations/"),
+        status: 403,
+        body: { done: true, error: { code: 403 } },
+      },
+    ],
+  });
+  const first = await recover({ transport: stuck.transport, sleep: stuck.sleep });
+  assert.equal(first.record.steps[0].result, "operation-pending");
+  const late = setup({ errorButRemoved: ["storageArchivedV2"] });
+  const second = await recover({ transport: late.transport, sleep: late.sleep });
+  assert.equal(second.record.steps[0].result, "operation-failed");
+  assert.equal(
+    second.outcome,
+    "needs-review",
+    "the residue is empty but the operation said it failed",
+  );
+  assert.deepEqual(second.record.residue.remaining, []);
+});
+
+test("the operation is polled every ten seconds, so a function that takes a minute to go is waited for", async () => {
+  const { transport, sleep, sleeps } = setup({ neverDone: ["storageArchivedV2"] });
+  await recover({ transport, sleep });
+  assert.equal(
+    sleeps.filter((s) => s === 10).length,
+    29 + 2,
+    "29 waits for the first operation, 2 for the second",
+  );
+  assert.ok(sleeps.every((s) => s === 10));
 });

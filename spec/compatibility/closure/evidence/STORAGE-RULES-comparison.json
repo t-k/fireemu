@@ -1,14 +1,26 @@
 {
- "kind": "storage-rules-comparison-v1",
- "divergenceClasses": {
-  "firestore-adapter-content-type": "Firestore program rows read the Firestore adapter, whose JSON content type is outside the Storage framing"
- },
- "artifactSha256": "075593e8e7f528b2f318fd121f67bf539b4a1f7cf039b3fb9e980b49c9a936f7",
- "fixtureSha256": "0ef2d20dfcfa90df183db90c107f74af0bd25cefe14a24256fbe3e3213d235b4",
+ "kind": "storage-rules-comparison-v2",
+ "artifactSha256": "d0d8d43726a808b600f702f1f6be26c4863fc48dd7b4971a519adcae9ce01888",
+ "recordings": [
+  {
+   "runId": "stage3-20260930c",
+   "fixtureSha256": "0ef2d20dfcfa90df183db90c107f74af0bd25cefe14a24256fbe3e3213d235b4",
+   "summary": {
+    "MATCH": 3641
+   }
+  },
+  {
+   "runId": "stage3-20260930d",
+   "fixtureSha256": "19d039ae166c54c922d3b688b0bc57523376836896f093888af7577ee7f5657f",
+   "summary": {
+    "MATCH": 3641
+   }
+  }
+ ],
  "summary": {
-  "MATCH": 3583,
-  "RECORDED_DIVERGENCE": 58
+  "MATCH": 3641
  },
+ "note": "Each of the 3641 rows is MATCH against recording c and against recording d (the rows are identical); no row is a recorded divergence any more.",
  "rows": [
   {
    "row": "case/boundary-firebase-admin-delete-absent/after/after-media",
@@ -14040,33 +14052,27 @@
   },
   {
    "row": "firestore-program/firestore-budget-repeat/cleanup/doc-a-cleanup-absence",
-   "status": "RECORDED_DIVERGENCE",
-   "divergence": "firestore-adapter-content-type"
+   "status": "MATCH"
   },
   {
    "row": "firestore-program/firestore-budget-repeat/cleanup/doc-a-cleanup-delete",
-   "status": "RECORDED_DIVERGENCE",
-   "divergence": "firestore-adapter-content-type"
+   "status": "MATCH"
   },
   {
    "row": "firestore-program/firestore-budget-repeat/cleanup/doc-a-cleanup-read",
-   "status": "RECORDED_DIVERGENCE",
-   "divergence": "firestore-adapter-content-type"
+   "status": "MATCH"
   },
   {
    "row": "firestore-program/firestore-budget-repeat/cleanup/doc-b-cleanup-absence",
-   "status": "RECORDED_DIVERGENCE",
-   "divergence": "firestore-adapter-content-type"
+   "status": "MATCH"
   },
   {
    "row": "firestore-program/firestore-budget-repeat/cleanup/doc-b-cleanup-delete",
-   "status": "RECORDED_DIVERGENCE",
-   "divergence": "firestore-adapter-content-type"
+   "status": "MATCH"
   },
   {
    "row": "firestore-program/firestore-budget-repeat/cleanup/doc-b-cleanup-read",
-   "status": "RECORDED_DIVERGENCE",
-   "divergence": "firestore-adapter-content-type"
+   "status": "MATCH"
   },
   {
    "row": "firestore-program/firestore-budget-repeat/cleanup/object-cleanup-absence-media",
@@ -14110,33 +14116,27 @@
   },
   {
    "row": "firestore-program/firestore-budget-repeat/step/doc-absence-a",
-   "status": "RECORDED_DIVERGENCE",
-   "divergence": "firestore-adapter-content-type"
+   "status": "MATCH"
   },
   {
    "row": "firestore-program/firestore-budget-repeat/step/doc-absence-b",
-   "status": "RECORDED_DIVERGENCE",
-   "divergence": "firestore-adapter-content-type"
+   "status": "MATCH"
   },
   {
    "row": "firestore-program/firestore-budget-repeat/step/doc-create-a",
-   "status": "RECORDED_DIVERGENCE",
-   "divergence": "firestore-adapter-content-type"
+   "status": "MATCH"
   },
   {
    "row": "firestore-program/firestore-budget-repeat/step/doc-create-b",
-   "status": "RECORDED_DIVERGENCE",
-   "divergence": "firestore-adapter-content-type"
+   "status": "MATCH"
   },
   {
    "row": "firestore-program/firestore-budget-repeat/step/doc-read-a",
-   "status": "RECORDED_DIVERGENCE",
-   "divergence": "firestore-adapter-content-type"
+   "status": "MATCH"
   },
   {
    "row": "firestore-program/firestore-budget-repeat/step/doc-read-b",
-   "status": "RECORDED_DIVERGENCE",
-   "divergence": "firestore-adapter-content-type"
+   "status": "MATCH"
   },
   {
    "row": "firestore-program/firestore-budget-repeat/step/seed-object",
@@ -14148,48 +14148,39 @@
   },
   {
    "row": "firestore-program/firestore-budget-three/cleanup/doc-a-cleanup-absence",
-   "status": "RECORDED_DIVERGENCE",
-   "divergence": "firestore-adapter-content-type"
+   "status": "MATCH"
   },
   {
    "row": "firestore-program/firestore-budget-three/cleanup/doc-a-cleanup-delete",
-   "status": "RECORDED_DIVERGENCE",
-   "divergence": "firestore-adapter-content-type"
+   "status": "MATCH"
   },
   {
    "row": "firestore-program/firestore-budget-three/cleanup/doc-a-cleanup-read",
-   "status": "RECORDED_DIVERGENCE",
-   "divergence": "firestore-adapter-content-type"
+   "status": "MATCH"
   },
   {
    "row": "firestore-program/firestore-budget-three/cleanup/doc-b-cleanup-absence",
-   "status": "RECORDED_DIVERGENCE",
-   "divergence": "firestore-adapter-content-type"
+   "status": "MATCH"
   },
   {
    "row": "firestore-program/firestore-budget-three/cleanup/doc-b-cleanup-delete",
-   "status": "RECORDED_DIVERGENCE",
-   "divergence": "firestore-adapter-content-type"
+   "status": "MATCH"
   },
   {
    "row": "firestore-program/firestore-budget-three/cleanup/doc-b-cleanup-read",
-   "status": "RECORDED_DIVERGENCE",
-   "divergence": "firestore-adapter-content-type"
+   "status": "MATCH"
   },
   {
    "row": "firestore-program/firestore-budget-three/cleanup/doc-c-cleanup-absence",
-   "status": "RECORDED_DIVERGENCE",
-   "divergence": "firestore-adapter-content-type"
+   "status": "MATCH"
   },
   {
    "row": "firestore-program/firestore-budget-three/cleanup/doc-c-cleanup-delete",
-   "status": "RECORDED_DIVERGENCE",
-   "divergence": "firestore-adapter-content-type"
+   "status": "MATCH"
   },
   {
    "row": "firestore-program/firestore-budget-three/cleanup/doc-c-cleanup-read",
-   "status": "RECORDED_DIVERGENCE",
-   "divergence": "firestore-adapter-content-type"
+   "status": "MATCH"
   },
   {
    "row": "firestore-program/firestore-budget-three/cleanup/object-cleanup-absence-media",
@@ -14233,48 +14224,39 @@
   },
   {
    "row": "firestore-program/firestore-budget-three/step/doc-absence-a",
-   "status": "RECORDED_DIVERGENCE",
-   "divergence": "firestore-adapter-content-type"
+   "status": "MATCH"
   },
   {
    "row": "firestore-program/firestore-budget-three/step/doc-absence-b",
-   "status": "RECORDED_DIVERGENCE",
-   "divergence": "firestore-adapter-content-type"
+   "status": "MATCH"
   },
   {
    "row": "firestore-program/firestore-budget-three/step/doc-absence-c",
-   "status": "RECORDED_DIVERGENCE",
-   "divergence": "firestore-adapter-content-type"
+   "status": "MATCH"
   },
   {
    "row": "firestore-program/firestore-budget-three/step/doc-create-a",
-   "status": "RECORDED_DIVERGENCE",
-   "divergence": "firestore-adapter-content-type"
+   "status": "MATCH"
   },
   {
    "row": "firestore-program/firestore-budget-three/step/doc-create-b",
-   "status": "RECORDED_DIVERGENCE",
-   "divergence": "firestore-adapter-content-type"
+   "status": "MATCH"
   },
   {
    "row": "firestore-program/firestore-budget-three/step/doc-create-c",
-   "status": "RECORDED_DIVERGENCE",
-   "divergence": "firestore-adapter-content-type"
+   "status": "MATCH"
   },
   {
    "row": "firestore-program/firestore-budget-three/step/doc-read-a",
-   "status": "RECORDED_DIVERGENCE",
-   "divergence": "firestore-adapter-content-type"
+   "status": "MATCH"
   },
   {
    "row": "firestore-program/firestore-budget-three/step/doc-read-b",
-   "status": "RECORDED_DIVERGENCE",
-   "divergence": "firestore-adapter-content-type"
+   "status": "MATCH"
   },
   {
    "row": "firestore-program/firestore-budget-three/step/doc-read-c",
-   "status": "RECORDED_DIVERGENCE",
-   "divergence": "firestore-adapter-content-type"
+   "status": "MATCH"
   },
   {
    "row": "firestore-program/firestore-budget-three/step/seed-object",
@@ -14286,33 +14268,27 @@
   },
   {
    "row": "firestore-program/firestore-budget-two/cleanup/doc-a-cleanup-absence",
-   "status": "RECORDED_DIVERGENCE",
-   "divergence": "firestore-adapter-content-type"
+   "status": "MATCH"
   },
   {
    "row": "firestore-program/firestore-budget-two/cleanup/doc-a-cleanup-delete",
-   "status": "RECORDED_DIVERGENCE",
-   "divergence": "firestore-adapter-content-type"
+   "status": "MATCH"
   },
   {
    "row": "firestore-program/firestore-budget-two/cleanup/doc-a-cleanup-read",
-   "status": "RECORDED_DIVERGENCE",
-   "divergence": "firestore-adapter-content-type"
+   "status": "MATCH"
   },
   {
    "row": "firestore-program/firestore-budget-two/cleanup/doc-b-cleanup-absence",
-   "status": "RECORDED_DIVERGENCE",
-   "divergence": "firestore-adapter-content-type"
+   "status": "MATCH"
   },
   {
    "row": "firestore-program/firestore-budget-two/cleanup/doc-b-cleanup-delete",
-   "status": "RECORDED_DIVERGENCE",
-   "divergence": "firestore-adapter-content-type"
+   "status": "MATCH"
   },
   {
    "row": "firestore-program/firestore-budget-two/cleanup/doc-b-cleanup-read",
-   "status": "RECORDED_DIVERGENCE",
-   "divergence": "firestore-adapter-content-type"
+   "status": "MATCH"
   },
   {
    "row": "firestore-program/firestore-budget-two/cleanup/object-cleanup-absence-media",
@@ -14356,33 +14332,27 @@
   },
   {
    "row": "firestore-program/firestore-budget-two/step/doc-absence-a",
-   "status": "RECORDED_DIVERGENCE",
-   "divergence": "firestore-adapter-content-type"
+   "status": "MATCH"
   },
   {
    "row": "firestore-program/firestore-budget-two/step/doc-absence-b",
-   "status": "RECORDED_DIVERGENCE",
-   "divergence": "firestore-adapter-content-type"
+   "status": "MATCH"
   },
   {
    "row": "firestore-program/firestore-budget-two/step/doc-create-a",
-   "status": "RECORDED_DIVERGENCE",
-   "divergence": "firestore-adapter-content-type"
+   "status": "MATCH"
   },
   {
    "row": "firestore-program/firestore-budget-two/step/doc-create-b",
-   "status": "RECORDED_DIVERGENCE",
-   "divergence": "firestore-adapter-content-type"
+   "status": "MATCH"
   },
   {
    "row": "firestore-program/firestore-budget-two/step/doc-read-a",
-   "status": "RECORDED_DIVERGENCE",
-   "divergence": "firestore-adapter-content-type"
+   "status": "MATCH"
   },
   {
    "row": "firestore-program/firestore-budget-two/step/doc-read-b",
-   "status": "RECORDED_DIVERGENCE",
-   "divergence": "firestore-adapter-content-type"
+   "status": "MATCH"
   },
   {
    "row": "firestore-program/firestore-budget-two/step/seed-object",
@@ -14394,13 +14364,11 @@
   },
   {
    "row": "firestore-program/firestore-exists-transition/cleanup/doc-cleanup-absence",
-   "status": "RECORDED_DIVERGENCE",
-   "divergence": "firestore-adapter-content-type"
+   "status": "MATCH"
   },
   {
    "row": "firestore-program/firestore-exists-transition/cleanup/doc-cleanup-read",
-   "status": "RECORDED_DIVERGENCE",
-   "divergence": "firestore-adapter-content-type"
+   "status": "MATCH"
   },
   {
    "row": "firestore-program/firestore-exists-transition/cleanup/object-cleanup-absence-media",
@@ -14452,28 +14420,23 @@
   },
   {
    "row": "firestore-program/firestore-exists-transition/step/doc-absence",
-   "status": "RECORDED_DIVERGENCE",
-   "divergence": "firestore-adapter-content-type"
+   "status": "MATCH"
   },
   {
    "row": "firestore-program/firestore-exists-transition/step/doc-create",
-   "status": "RECORDED_DIVERGENCE",
-   "divergence": "firestore-adapter-content-type"
+   "status": "MATCH"
   },
   {
    "row": "firestore-program/firestore-exists-transition/step/doc-delete",
-   "status": "RECORDED_DIVERGENCE",
-   "divergence": "firestore-adapter-content-type"
+   "status": "MATCH"
   },
   {
    "row": "firestore-program/firestore-exists-transition/step/doc-read-missing",
-   "status": "RECORDED_DIVERGENCE",
-   "divergence": "firestore-adapter-content-type"
+   "status": "MATCH"
   },
   {
    "row": "firestore-program/firestore-exists-transition/step/doc-read-present",
-   "status": "RECORDED_DIVERGENCE",
-   "divergence": "firestore-adapter-content-type"
+   "status": "MATCH"
   },
   {
    "row": "firestore-program/firestore-exists-transition/step/seed-object",
@@ -14489,13 +14452,11 @@
   },
   {
    "row": "firestore-program/firestore-get-transition/cleanup/doc-cleanup-absence",
-   "status": "RECORDED_DIVERGENCE",
-   "divergence": "firestore-adapter-content-type"
+   "status": "MATCH"
   },
   {
    "row": "firestore-program/firestore-get-transition/cleanup/doc-cleanup-read",
-   "status": "RECORDED_DIVERGENCE",
-   "divergence": "firestore-adapter-content-type"
+   "status": "MATCH"
   },
   {
    "row": "firestore-program/firestore-get-transition/cleanup/object-0-cleanup-absence-media",
@@ -14587,38 +14548,31 @@
   },
   {
    "row": "firestore-program/firestore-get-transition/step/doc-absence",
-   "status": "RECORDED_DIVERGENCE",
-   "divergence": "firestore-adapter-content-type"
+   "status": "MATCH"
   },
   {
    "row": "firestore-program/firestore-get-transition/step/doc-create-true",
-   "status": "RECORDED_DIVERGENCE",
-   "divergence": "firestore-adapter-content-type"
+   "status": "MATCH"
   },
   {
    "row": "firestore-program/firestore-get-transition/step/doc-delete",
-   "status": "RECORDED_DIVERGENCE",
-   "divergence": "firestore-adapter-content-type"
+   "status": "MATCH"
   },
   {
    "row": "firestore-program/firestore-get-transition/step/doc-read-false",
-   "status": "RECORDED_DIVERGENCE",
-   "divergence": "firestore-adapter-content-type"
+   "status": "MATCH"
   },
   {
    "row": "firestore-program/firestore-get-transition/step/doc-read-missing",
-   "status": "RECORDED_DIVERGENCE",
-   "divergence": "firestore-adapter-content-type"
+   "status": "MATCH"
   },
   {
    "row": "firestore-program/firestore-get-transition/step/doc-read-true",
-   "status": "RECORDED_DIVERGENCE",
-   "divergence": "firestore-adapter-content-type"
+   "status": "MATCH"
   },
   {
    "row": "firestore-program/firestore-get-transition/step/doc-update-false",
-   "status": "RECORDED_DIVERGENCE",
-   "divergence": "firestore-adapter-content-type"
+   "status": "MATCH"
   },
   {
    "row": "firestore-program/firestore-get-transition/step/subject-false",

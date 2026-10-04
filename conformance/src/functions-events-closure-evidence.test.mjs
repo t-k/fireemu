@@ -879,3 +879,84 @@ test(
     asRefusal(() => closureEvidenceCommand(writing(), io), /the run has 0 passes/);
   },
 );
+
+// ---- the command line, on real files in a temporary directory --------------------------------------------
+
+test("the command line reports, writes with --write, and says what is wrong with an exit code 1", async () => {
+  const { spawnSync } = await import("node:child_process");
+  const { mkdtempSync, mkdirSync, writeFileSync } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const dir = mkdtempSync(join(tmpdir(), "fe-ce-"));
+  const put = (name, text) => {
+    mkdirSync(join(dir, name, ".."), { recursive: true });
+    writeFileSync(join(dir, name), typeof text === "string" ? text : JSON.stringify(text));
+    return join(dir, name);
+  };
+  const files = {
+    comparison: put("comparison.json", comparisonOf()),
+    run: put("run/production-run.json", runOf()),
+    closure: put("closure.json", closureText),
+    corpus: put("corpus.json", corpusText),
+    build: put("build.json", buildOf()),
+    receipt: put("receipt.json", receiptOf()),
+  };
+  const script = fileURLToPath(
+    new URL("./functions-events/compare/closure-evidence.mjs", import.meta.url),
+  );
+  const base = [
+    "--comparison",
+    files.comparison,
+    "--production-run",
+    files.run,
+    "--closure",
+    files.closure,
+    "--corpus",
+    files.corpus,
+  ];
+  const run = (args) => spawnSync(process.execPath, [script, ...args], { encoding: "utf8" });
+  const report = run([...base, "--report-out", join(dir, "report.json")]);
+  assert.equal(report.status, 0, report.stderr);
+  assert.match(report.stdout, /20 VERIFIED, 0 MISMATCH/);
+  assert.equal(JSON.parse(readFileSync(join(dir, "report.json"), "utf8")).conditions.verified, 20);
+  assert.equal(
+    readFileSync(files.closure, "utf8"),
+    closureText,
+    "the report does not touch the closure",
+  );
+  const written = run([
+    ...base,
+    "--write",
+    "--out",
+    join(dir, "evidence/out.json"),
+    "--comparison-path",
+    "spec/compatibility/closure/evidence/FUNCTIONS-EVENTS-comparison.json",
+    "--build-record",
+    files.build,
+    "--build-record-out",
+    join(dir, "evidence/build.json"),
+    "--build-record-path",
+    "spec/compatibility/closure/evidence/FUNCTIONS-EVENTS-build.json",
+    "--workspace-regression",
+    files.receipt,
+  ]);
+  assert.equal(written.status, 0, written.stderr);
+  const closureAfter = JSON.parse(readFileSync(files.closure, "utf8"));
+  assert.equal(closureAfter.conditions.filter((c) => c.status === "VERIFIED").length, 21);
+  assertClosureConsistent(
+    closureAfter,
+    JSON.parse(readFileSync(join(dir, "evidence/out.json"), "utf8")),
+  );
+  assert.equal(readFileSync(join(dir, "evidence/build.json"), "utf8"), JSON.stringify(buildOf()));
+  for (const args of [
+    ["--nonsense"],
+    ["--comparison"],
+    [...base.slice(0, 6)],
+    ["comparison", "x"],
+  ]) {
+    const failed = run(args);
+    assert.equal(failed.status, 1, args.join(" "));
+    assert.ok(failed.stderr.length > 0);
+  }
+  assert.match(run(["--nonsense"]).stderr, /bad argument: --nonsense/);
+  assert.match(run(["--comparison"]).stderr, /bad argument: --comparison/);
+});

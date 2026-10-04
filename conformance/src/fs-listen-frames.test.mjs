@@ -27,6 +27,38 @@ test("decodeValue reads the Value shapes a Listen frame carries", () => {
   assert.deepEqual(decodeValue({ doubleValue: 1.5 }), 1.5);
 });
 
+test("decodeValue answers the placeholder shapes and empty containers", () => {
+  assert.equal(decodeValue(null), null);
+  assert.equal(decodeValue(undefined), null);
+  assert.equal(decodeValue("text"), null);
+  assert.equal(decodeValue(7), null);
+  assert.equal(decodeValue({ timestampValue: "2026-01-01T00:00:00Z" }), "<timestamp>");
+  assert.equal(
+    decodeValue({ referenceValue: "projects/p/databases/d/documents/c/x" }),
+    "<reference>",
+  );
+  assert.equal(decodeValue({ geoPointValue: { latitude: 1 } }), "<unsupported>");
+  assert.deepEqual(decodeValue({ arrayValue: {} }), []);
+  assert.deepEqual(decodeValue({ mapValue: {} }), {});
+  assert.equal(decodeValue({ booleanValue: false }), false);
+  assert.equal(decodeValue({ integerValue: "0" }), 0);
+  assert.equal(decodeValue({ stringValue: "" }), "");
+});
+
+test("decodeValue orders map members by name, whatever the input order", () => {
+  const names = ["m", "a", "z", "b", "k"];
+  const orders = [names, names.toReversed(), ["z", "m", "k", "b", "a"], ["b", "k", "a", "z", "m"]];
+  for (const order of orders) {
+    const fields = Object.fromEntries(order.map((n) => [n, { integerValue: "1" }]));
+    assert.deepEqual(Object.keys(decodeValue({ mapValue: { fields } })), ["a", "b", "k", "m", "z"]);
+  }
+  // Equal names cannot occur in an object, but a name that is a prefix of another sorts first.
+  const prefixed = decodeValue({
+    mapValue: { fields: { ab: { integerValue: "1" }, a: { integerValue: "1" } } },
+  });
+  assert.deepEqual(Object.keys(prefixed), ["a", "ab"]);
+});
+
 test("decodeValue sorts map members, so the server's order cannot differ a row", () => {
   const one = decodeValue({
     mapValue: { fields: { b: { integerValue: "1" }, a: { integerValue: "2" } } },

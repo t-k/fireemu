@@ -120,6 +120,10 @@ def clock_evidence(steps):
     return rows
 
 
+def clock_rows(production_steps, local_steps):
+    return compare_clock(clock_evidence(production_steps), clock_evidence(local_steps))
+
+
 def compare_clock(production, local):
     return [{"site": site, "production": production.get(site), "local": local.get(site), "match": production.get(site) is True and local.get(site) is True}
             for site in sorted(set(production) | set(local))]
@@ -197,7 +201,7 @@ def main():
         local_relations = commit_relations(receipt["steps"])
         result["cases"], result["reads"], result["commitTimes"] = compare(production, local, production_relations, local_relations, project, retention_cases(plan))
         result["orders"] = compare_orders(writer_orders(source["steps"], plan), writer_orders(receipt["steps"], plan)) if recorded else None
-        result["clock"] = compare_clock(clock_evidence(source["steps"]), clock_evidence(receipt["steps"])) if recorded else None
+        result["clock"] = clock_rows(source["steps"], receipt["steps"]) if recorded else None
         rows = result["cases"] + result["reads"] + (result["commitTimes"] or []) + (result["orders"] or []) + (result["clock"] or [])
         result["mismatches"] = sum(not row["match"] for row in rows)
     out.write_text(json.dumps(result, indent=1))

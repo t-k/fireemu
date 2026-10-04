@@ -141,6 +141,8 @@ def retention_plan():
 
 def test_the_retention_cases_are_the_steps_that_name_a_time_ago():
     assert tool.retention_cases(retention_plan()) == frozenset({"rest/ret/get-59", "rest/ret/get-61"})
+    # a step with no case is nobody's case
+    assert tool.retention_cases({"steps": [{"id": "x", "caseId": None, "readAgoSeconds": 3540}]}) == frozenset()
     assert tool.retention_cases({"steps": []}) == frozenset()
 
 
@@ -232,3 +234,18 @@ def test_the_clock_evidence_rows_match_when_both_the_recording_and_the_replay_ke
     # both sides out of the window is no evidence either
     assert tool.compare_clock({"a": False}, {"a": False})[0]["match"] is False
     assert tool.compare_clock({}, {}) == []
+
+
+def test_a_retention_case_the_local_replay_never_answered_is_a_mismatch_whatever_the_production_class():
+    local = {"cases": [], "reads": []}
+    for code in (0, 9, 10):
+        cases, _reads, _times = tool.compare(case_projection(code), local, None, {}, retention=frozenset({"rest/ret/get-61"}))
+        assert cases[0]["match"] is False and cases[0]["local"] is None and cases[0]["class"]["local"] is None
+
+
+def test_the_clock_rows_check_the_recording_and_the_replay_each_by_its_own_steps():
+    inside = rest_commit("a", "2026-10-05T10:00:00.000000Z", "2026-10-05T10:00:01.000000Z", "2026-10-05T10:00:00.500000Z")
+    outside = rest_commit("a", "2026-10-05T10:00:00.000000Z", "2026-10-05T10:00:01.000000Z", "2026-10-05T10:05:00.000000Z")
+    assert [row["match"] for row in tool.clock_rows([inside], [inside])] == [True]
+    assert tool.clock_rows([outside], [inside]) == [{"site": "a", "production": False, "local": True, "match": False}]
+    assert tool.clock_rows([inside], [outside]) == [{"site": "a", "production": True, "local": False, "match": False}]

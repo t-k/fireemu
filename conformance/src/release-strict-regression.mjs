@@ -358,6 +358,18 @@ export const EXCLUDED_KINDS = [
       "the stage-2 local window keeps production's timeline in real time (about 61 minutes on the v0.9.0 final artifact) and drives a browser client, which the 45-minute release job and its runner do not allow; the local tenant setup is no longer a reason (it runs outside the recorded harness), and the rows were compared on the final artifact",
     issue: "auth-fs-cross-stage2-needs-a-long-release-job.md",
   },
+  {
+    kind: "storage-rules-comparison-v2",
+    reason:
+      "the 3,641 strict rows are the local answers to two private production recordings (stage3 runs c and d) that are not published, collected by a comparison tool kept outside this tree; the recordings and the tool must be published before the release job can rerun them; the rows were compared on the closure-base binary named by the closure",
+    issue: "storage-rules-strict-comparison-needs-the-recordings-in-the-release-job.md",
+  },
+  {
+    kind: "storage-rules-management-comparison-v1",
+    reason:
+      "the management comparison pairs the local answers with frozen projections of the same private production recordings and runs the management programs under a local setup of the recorded sandbox; the projections are not published and the runner has no check and export-comparison mode; the rows were compared on the closure-base binary named by the closure",
+    issue: "storage-rules-management-comparison-needs-the-projections-in-the-release-job.md",
+  },
 ];
 
 /**

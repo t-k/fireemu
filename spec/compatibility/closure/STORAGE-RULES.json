@@ -926,5 +926,37 @@
       }
     }
   ],
-  "note": "No official-emulator-only remnant of this parent is open (owner ledger 811, 2026-10-04). The principle that the emulator profile refuses no more than the official emulator is unchanged, apart from the owner-ruled exceptions recorded in the contract (ledger 713, `rules.idTokenVerification`)."
+  "note": "No official-emulator-only remnant of this parent is open (owner ledger 811, 2026-10-04). The principle that the emulator profile refuses no more than the official emulator is unchanged, apart from the owner-ruled exceptions recorded in the contract (ledger 713, `rules.idTokenVerification`).",
+  "integratedRegression": {
+    "release": "closure-base-774a9f24c",
+    "integrationCommit": "774a9f24c62abdd7381c66797d6202ed03f24666",
+    "releaseBinarySha256": "d0d8d43726a808b600f702f1f6be26c4863fc48dd7b4971a519adcae9ce01888",
+    "buildReceiptPath": "spec/compatibility/closure/evidence/STORAGE-RULES-release-artifact.json",
+    "buildReceiptSha256": "f98346a713accd1e08377530adbefab8c134211c25789fb32dc9437aa5668b2f",
+    "comparisons": [
+      {
+        "path": "spec/compatibility/closure/evidence/STORAGE-RULES-comparison.json",
+        "sha256": "de9ece3550b1578f2fcfb857842fd36db2c19c920db421ac2e637aa91b80907c",
+        "rows": 3641,
+        "summary": {
+          "MATCH": 3641
+        },
+        "laneComparisonPath": "spec/compatibility/closure/evidence/STORAGE-RULES-comparison.json",
+        "laneComparisonSha256": "de9ece3550b1578f2fcfb857842fd36db2c19c920db421ac2e637aa91b80907c",
+        "identicalRows": 3641,
+        "changedRows": []
+      },
+      {
+        "path": "spec/compatibility/closure/evidence/STORAGE-RULES-management-comparison.json",
+        "sha256": "698c69b730fe6949f0774234ccde11d444487928626fd9e03c30aeb20cf04b29",
+        "rows": 406,
+        "laneComparisonPath": "spec/compatibility/closure/evidence/STORAGE-RULES-management-comparison.json",
+        "laneComparisonSha256": "698c69b730fe6949f0774234ccde11d444487928626fd9e03c30aeb20cf04b29",
+        "identicalRows": 406,
+        "changedRows": []
+      }
+    ],
+    "result": "IDENTICAL_TO_LANE",
+    "productionRequests": 0
+  }
 }

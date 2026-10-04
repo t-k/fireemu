@@ -40,7 +40,17 @@ test("the client writes the ledger line before a channel creation or deletion is
   assert.deepEqual(seen, ["sent", "transport", "answered", "transport"]);
   assert.deepEqual(ledger.state().get(name).creates, ["conflict"]);
   for (const [reply, expected] of [
-    [{ status: 200, body: {}, unknown: false }, "ok"],
+    [{ status: 200, body: { name: "operations/o", done: true }, unknown: false }, "ok"],
+    [{ status: 200, body: { name: "operations/o", done: false }, unknown: false }, "unknown"],
+    [
+      {
+        status: 200,
+        body: { name: "operations/o", done: true, error: { code: 6 } },
+        unknown: false,
+      },
+      "unknown",
+    ],
+    [{ status: 200, body: {}, unknown: false }, "unknown"],
     [{ status: 400, body: { error: { status: "INVALID_ARGUMENT" } }, unknown: false }, "error"],
     [{ status: 503, body: {}, unknown: true }, "unknown"],
     [{ status: 200, body: { raw: "<html>" }, unknown: true }, "unknown"],
@@ -55,7 +65,7 @@ test("the client writes the ledger line before a channel creation or deletion is
     });
     const answer = await c.deleteChannel(name);
     assert.equal(fresh.state().get(name).deletes[0], expected);
-    assert.equal(answer.ok, expected === "ok", "an unreadable 2xx is not ok");
+    assert.equal(answer.ok, reply.status === 200 && !reply.unknown, "an unreadable 2xx is not ok");
   }
 });
 
@@ -268,4 +278,68 @@ test("the later run lists the location of the run, so a prefixed channel the led
   assert.equal(await main(a2(dir, host), {}, io(), deps()), 0);
   assert.deepEqual(summaryOf(dir).cleanup.deleted, [unnamed]);
   assert.equal(present.size, 0);
+});
+
+test("the later run never lists a location that cannot exist, and a probe there is settled by its own recorded 404", async () => {
+  const nowhere = channel(`nowhere-${RUN}`, "no-such-location1");
+  const svc = await service({});
+  const dir = recording([[nowhere, "create", "unknown"]]);
+  const code = await main(a2(dir, svc.host), {}, io(), deps());
+  svc.close();
+  assert.equal(code, 0);
+  assert.equal(
+    svc.seen.some(
+      (line) => line.includes("no-such-location1/channels") && !line.includes(`nowhere-${RUN}`),
+    ),
+    false,
+    "that location was not listed",
+  );
+  const summary = summaryOf(dir);
+  assert.deepEqual(
+    [summary.closureReady, summary.cleanup.unsettled, summary.cleanup.listed],
+    [true, [], ["us-central1"]],
+  );
+});
+
+test("the ledgers of the earlier later runs are read too: a channel an earlier later run sent a deletion for is not deleted again", async () => {
+  const name = mine("deleted-before");
+  const svc = await service({ live: [name], stuck: [name] });
+  const dir = recording([
+    [name, "create", "ok"],
+    [name, "delete", "unknown"],
+  ]);
+  // The first later run sent one DELETE for it.
+  writeFileSync(
+    join(dir, `issued-${RUN}-a2-20261005T101500Z.jsonl`),
+    `${JSON.stringify({ at: "x", phase: "sent", name, action: "delete", transport: "rest" })}\n${JSON.stringify({ at: "x", phase: "answered", name, action: "delete", transport: "rest", kind: "unknown" })}\n`,
+  );
+  const out = join(mkdtempSync(join(tmpdir(), "eventarc-a2-out-")), "second");
+  const code = await main(a2(dir, svc.host, out), {}, io(), deps());
+  svc.close();
+  assert.equal(code, 1);
+  assert.equal(
+    svc.seen.some((line) => line.startsWith("DELETE")),
+    false,
+    "no DELETE was sent",
+  );
+  const summary = summaryOf(out);
+  assert.deepEqual([summary.cleanup.leftover, summary.closureReady], [[name], false]);
+});
+
+test("the capture notes the quota project of a request that carried the header, and the later run lists only the run's location", async () => {
+  const svc = await service({});
+  const dir = recording([]);
+  await main(a2(dir, svc.host), {}, io(), deps());
+  svc.close();
+  const a2Capture = readdirSync(dir).find((name) =>
+    /^capture-.*-a2-\d{8}T\d{6}Z\.jsonl$/.test(name),
+  );
+  const entries = readFileSync(join(dir, a2Capture), "utf8")
+    .trim()
+    .split("\n")
+    .map((line) => JSON.parse(line))
+    .filter((entry) => entry.op);
+  assert.ok(entries.length > 0);
+  // Against an emulator no quota project is sent: the field is absent.
+  assert.ok(entries.every((entry) => entry.quotaProject === undefined));
 });

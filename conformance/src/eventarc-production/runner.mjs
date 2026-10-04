@@ -48,7 +48,7 @@ export function assertBudgetCovers(cases, maxRequests) {
     );
 }
 
-function createContext({ item, transports, ownership, capture, options, sleep, sdk, ledger }) {
+function createContext({ item, transports, ownership, capture, options, sleep, makeSdk, ledger }) {
   const caseId = item.id;
   const meter = { used: 0 };
   const guarded = Object.fromEntries(
@@ -57,7 +57,24 @@ function createContext({ item, transports, ownership, capture, options, sleep, s
       limited(transport, meter, item.requests),
     ]),
   );
-  return {
+  // The Admin SDK forwarder is made for this case at its first use and closed when the case ends.
+  let forwarder = null;
+  const note = (kind, data) => capture.note(kind, { case: caseId, ...data });
+  const sdk =
+    makeSdk === null
+      ? null
+      : {
+          publish: async (spec) => {
+            forwarder ??= await makeSdk({
+              caseId,
+              transport: guarded.publishing,
+              ownership,
+              note,
+            });
+            return forwarder.publish(spec);
+          },
+        };
+  const context = {
     caseId,
     project: ownership.project,
     location: options.location,
@@ -87,8 +104,9 @@ function createContext({ item, transports, ownership, capture, options, sleep, s
         `projects/${ownership.project}/locations/${options.location}/channels/${id}`,
       ),
     sleep,
-    note: (kind, data) => capture.note(kind, { case: caseId, ...data }),
+    note,
   };
+  return { context, closeSdk: async () => forwarder?.close() };
 }
 
 export async function runCases({
@@ -99,7 +117,7 @@ export async function runCases({
   capture,
   options,
   sleep,
-  sdk = null,
+  makeSdk = null,
   ledger = createLedger(),
   isStopping = () => false,
 }) {
@@ -116,19 +134,18 @@ export async function runCases({
     const before = capture.count();
     const entry = { id: item.id, outcome: "completed" };
     capture.note("case-start", { case: item.id });
+    const { context, closeSdk } = createContext({
+      item,
+      transports,
+      ownership,
+      capture,
+      options,
+      sleep: stoppable,
+      makeSdk,
+      ledger,
+    });
     try {
-      await item.run(
-        createContext({
-          item,
-          transports,
-          ownership,
-          capture,
-          options,
-          sleep: stoppable,
-          sdk,
-          ledger,
-        }),
-      );
+      await item.run(context);
     } catch (error) {
       if (error instanceof CaseAbort) {
         entry.outcome = "aborted";
@@ -150,6 +167,8 @@ export async function runCases({
         entry.reason = `${error?.name ?? "Error"}: ${String(error?.message ?? error).slice(0, 300)}`;
       }
     }
+    // The forwarder of the case is closed whatever the case did.
+    await closeSdk().catch(() => {});
     entry.requests = capture.count() - before;
     capture.note("case-end", { case: item.id, ...entry });
     summary.cases.push(entry);

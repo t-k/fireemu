@@ -120,8 +120,8 @@ test("bad arguments are refused, and the numbers have their values", () => {
   assert.equal(parseArgs([...base, "--max-requests", "1"]).maxRequests, 1);
   assert.equal(parseArgs([...base, "--project-number", "1".repeat(20)]).usageProject.length, 20);
   assert.throws(() => parseArgs([...base, "--project-number", "1".repeat(21)]), /digits/);
-  assert.equal(DEFAULT_MAX_REQUESTS, 200);
-  assert.equal(CLEANUP_BUDGET, 150);
+  assert.equal(DEFAULT_MAX_REQUESTS, 280);
+  assert.equal(CLEANUP_BUDGET, 300);
 });
 
 test("the cases are unique, in the order that records the disabled state first, and fit the default budget", () => {
@@ -177,7 +177,7 @@ function setup(cases, { answer, options = {}, stopping } = {}) {
     caseId: "cleanup",
     usageProject: "p",
   });
-  const run = () =>
+  const run = ({ sleep: sleepOverride } = {}) =>
     runCases({
       cases,
       transports,
@@ -191,7 +191,7 @@ function setup(cases, { answer, options = {}, stopping } = {}) {
         publishPrefix: "/v1",
         ...options,
       },
-      sleep: async () => {},
+      sleep: sleepOverride ?? (async () => {}),
       isStopping: stopping,
     });
   return { run, calls, notes, ownership };
@@ -577,6 +577,15 @@ async function worstCase(item) {
         : call.method === "GET" && call.op !== "getOperation"
           ? { status: 404, body: { error: { status: "NOT_FOUND" } }, unknown: false }
           : { status: 200, body: operation, unknown: false },
+    // The API is DISABLED for good, the lists are complete and the operations finish: the state polls run out.
+    stuck: (call) =>
+      call.op === "getService"
+        ? { status: 200, body: { state: "DISABLED" }, unknown: false }
+        : call.op === "listEnabledServices"
+          ? { status: 200, body: { services: [] }, unknown: false }
+          : call.method === "GET" && call.op !== "getOperation"
+            ? { status: 404, body: { error: { status: "NOT_FOUND" } }, unknown: false }
+            : { status: 200, body: { name: "x", done: true }, unknown: false },
     // Every channel exists and every operation finishes.
     exists: (call) =>
       call.op === "getService"
@@ -601,31 +610,117 @@ test("every case's ceiling covers the most it can send against a service that an
   assert.deepEqual(over, [], `measured worst cases: ${JSON.stringify(measured)}`);
 });
 
-test("the enabled services are read at most three pages, and an unreadable page makes the read incomplete", async () => {
-  const run = async (answerList) => {
-    const { run: go, notes } = setup([serviceState], {
-      answer: ({ host, method, path }) => {
-        if (host === "usage" && path.includes("/services?")) return answerList(path);
-        if (host === "usage" && path.endsWith(":enable"))
-          return { status: 200, body: { name: "operations/x", done: true }, unknown: false };
-        if (host === "usage" && method === "GET")
-          return { status: 200, body: { state: "DISABLED" }, unknown: false };
-        return { status: 404, body: { error: { status: "NOT_FOUND" } }, unknown: false };
-      },
-    });
-    await go();
-    return notes.find((n) => n.note === "enabled-services");
-  };
-  const endless = await run((path) => ({
-    status: 200,
-    body: { services: [{ name: path }], nextPageToken: "more" },
-    unknown: false,
-  }));
-  assert.deepEqual([endless.before, endless.after, endless.complete], [3, 3, false]);
-  const failing = await run(() => ({
-    status: 403,
-    body: { error: { status: "PERMISSION_DENIED" } },
-    unknown: false,
-  }));
-  assert.deepEqual([failing.before, failing.after, failing.complete], [0, 0, false]);
+/** The service-state case against a service whose usage answers are given by the arguments. */
+async function serviceRun({
+  list,
+  states,
+  enable = { status: 200, body: { name: "operations/x", done: true }, unknown: false },
+}) {
+  const sleeps = [];
+  let reads = 0;
+  const {
+    run: go,
+    notes,
+    calls,
+  } = setup([serviceState], {
+    answer: ({ host, method, path, op }) => {
+      if (host === "usage" && path.includes("/services?")) return list(path);
+      if (host === "usage" && path.endsWith(":enable")) return enable;
+      if (host === "usage" && method === "GET" && op === "getService") {
+        const state = states[Math.min(reads, states.length - 1)];
+        reads += 1;
+        return { status: 200, body: { state }, unknown: false };
+      }
+      return { status: 404, body: { error: { status: "NOT_FOUND" } }, unknown: false };
+    },
+  });
+  const summary = await go({ sleep: async (ms) => sleeps.push(ms) });
+  return { summary, notes, calls, sleeps };
+}
+
+const page = (path) => ({ status: 200, body: { services: [{ name: path }] }, unknown: false });
+
+test("the enabled services are read at most three pages: an incomplete list before the enabling stops the run before the enable is sent", async () => {
+  const endless = await serviceRun({
+    list: (path) => ({
+      ...page(path),
+      body: { services: [{ name: path }], nextPageToken: "more" },
+    }),
+    states: ["DISABLED"],
+  });
+  assert.equal(
+    endless.calls.some((call) => call.op === "enableService"),
+    false,
+    "no enable was sent",
+  );
+  assert.deepEqual(
+    endless.summary.cases.map((c) => [c.outcome, c.reason]),
+    [
+      [
+        "stopped",
+        "the list of enabled services before the enabling is incomplete: the enabling was not sent",
+      ],
+    ],
+  );
+  assert.deepEqual(endless.calls.filter((call) => call.op === "listEnabledServices").length, 3);
+  assert.ok(endless.notes.some((n) => n.note === "enable-skipped"));
+  const failing = await serviceRun({
+    list: () => ({ status: 403, body: { error: { status: "PERMISSION_DENIED" } }, unknown: false }),
+    states: ["DISABLED"],
+  });
+  assert.equal(
+    failing.calls.some((call) => call.op === "enableService"),
+    false,
+  );
+  assert.equal(failing.summary.stopped !== null, true);
+});
+
+test("after the enabling the state is read until it says ENABLED, ten seconds apart, and the cases that follow start only then", async () => {
+  const slow = await serviceRun({
+    list: page,
+    states: ["DISABLED", "DISABLED", "DISABLED", "ENABLED"],
+  });
+  const reads = slow.calls.filter((call) => call.op === "getService");
+  // The first read is the one that finds DISABLED; then three polls, the last one says ENABLED.
+  assert.equal(reads.length, 4);
+  assert.deepEqual(slow.sleeps, [10_000, 10_000]);
+  assert.deepEqual(
+    slow.notes.filter((n) => n.note === "enable-state").map((n) => n.state),
+    ["ENABLED"],
+  );
+  assert.equal(
+    slow.calls.at(-1).op,
+    "publishEvents",
+    "the publish of the enabled state comes last",
+  );
+  const after = slow.calls.findIndex((call) => call.op === "enableService");
+  assert.ok(slow.calls.slice(after).some((call) => call.op === "listEnabledServices"));
+  assert.equal(slow.summary.stopped, null);
+  const never = await serviceRun({ list: page, states: ["DISABLED"] });
+  assert.equal(
+    never.calls.filter((call) => call.op === "getService").length,
+    13,
+    "the first read and twelve polls",
+  );
+  assert.equal(never.sleeps.length, 11);
+  assert.deepEqual(
+    never.summary.cases.map((c) => c.reason),
+    ["the publishing API did not report ENABLED within 12 reads after the enabling"],
+  );
+  assert.equal(
+    never.calls.filter((call) => call.op === "publishEvents").length,
+    2,
+    "only the two publishes of the disabled state were sent",
+  );
+});
+
+test("a production run sends the quota project of the run on every request and the capture notes it; an emulator run sends none", () => {
+  const base = ["--target", "production", "--project", "sandbox-project", "--out", "o"];
+  assert.equal(parseArgs(base).quotaProject, "sandbox-project");
+  assert.equal(parseArgs([...base, "--quota-project", "other-1234"]).quotaProject, "other-1234");
+  assert.equal(
+    parseArgs(["--target", "emulator", "--out", "o", "--emulator-host", "127.0.0.1:1"])
+      .quotaProject,
+    undefined,
+  );
 });

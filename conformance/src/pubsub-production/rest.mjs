@@ -54,6 +54,8 @@ export function createRest({
         transport: "rest",
         op,
         request: { method, path, ...(body === undefined ? {} : { body }) },
+        // The one header that is recorded: where the quota of the call is charged (never a credential).
+        ...(quotaProject !== null && token !== "none" ? { quotaProject } : {}),
       };
       let response;
       try {

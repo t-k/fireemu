@@ -9,6 +9,41 @@ import { createLedger, kindOf } from "../pubsub-production/ledger.mjs";
 
 export const PUBLISHING_API = "eventarcpublishing.googleapis.com";
 
+/**
+ * Whether an answer is the recorded production answer for a missing resource: a 404 with a JSON body
+ * whose `error.status` is `NOT_FOUND` (preflight 002, `channels/firebase`: 373 bytes). A 404 with any
+ * other body (a text, an HTML page) says nothing about the resource and settles nothing.
+ */
+export function isRecordedNotFound(reply) {
+  return (
+    reply?.unknown !== true &&
+    reply?.status === 404 &&
+    typeof reply.body === "object" &&
+    reply.body !== null &&
+    reply.body.error?.status === "NOT_FOUND"
+  );
+}
+
+/**
+ * The kind of an answer to a channel creation or deletion: a 2xx whose long-running operation is not
+ * known to be done (or is done with an error) is not "ok" yet. It is `unknown` until the operation is
+ * read (see `settleOperation`), because the 2xx alone does not say that this run created (or removed)
+ * the channel: an operation can end with ALREADY_EXISTS.
+ */
+function kindOfAnswer(result) {
+  const kind = kindOf(result);
+  if (kind !== "ok") return kind;
+  return result.body?.done === true && result.body?.error === undefined ? "ok" : "unknown";
+}
+
+/** The kind the final read of an operation settles a creation or deletion to. */
+export function kindOfOperation(operation) {
+  if (!operation?.ok || operation.body?.done !== true) return "unknown";
+  const error = operation.body?.error;
+  if (error === undefined) return "ok";
+  return error.code === 6 || error.status === "ALREADY_EXISTS" ? "conflict" : "error";
+}
+
 const encodeName = (name) => name.split("/").map(encodeURIComponent).join("/");
 const query = (page = {}) => {
   const parts = [];
@@ -117,12 +152,22 @@ export function createClient({
       ok: code === "OK" && reply.unknown !== true,
       step: label.step,
     };
-    if (entry) ledger.answered({ ...entry, kind: kindOf(result) });
+    if (entry) ledger.answered({ ...entry, kind: kindOfAnswer(result) });
     return result;
   };
   const methods = (options) =>
     Object.fromEntries(
       OPERATION_NAMES.map((name) => [name, (...args) => run(name, args, options)]),
     );
-  return Object.freeze({ ...methods(), with: (options) => methods(options) });
+  return Object.freeze({
+    ...methods(),
+    with: (options) => methods(options),
+    /**
+     * Writes into the ledger what the last read of the operation of a creation or deletion says: `ok`
+     * when it is done without an error, `conflict` for ALREADY_EXISTS, `error` for another error, and
+     * `unknown` when it was not read as done.
+     */
+    settleOperation: (name, action, operation) =>
+      ledger.answered({ name, action, transport: "rest", kind: kindOfOperation(operation) }),
+  });
 }

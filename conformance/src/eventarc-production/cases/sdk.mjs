@@ -5,14 +5,13 @@ import { createOwnedChannel, defaultChannelAbsent } from "./support.mjs";
 export const adminSdkPublish = {
   id: "admin-sdk-publish",
   short: "sd",
-  requests: 14,
+  requests: 16,
   async run(ctx) {
     const channel = (await createOwnedChannel(ctx, "sdk")) ?? ctx.channel("sdk-absent");
     const relative = channel.replace(`projects/${ctx.project}/`, "");
     const source = `//fireemu/recorder/${ctx.ownership.runId}`;
-    const caseId = `${ctx.caseId}`;
     const record = async (name, spec) => {
-      const outcome = await ctx.sdk.publish({ caseId, ...spec });
+      const outcome = await ctx.sdk.publish(spec);
       ctx.note("sdk-outcome", { name, ...outcome });
       return outcome;
     };
@@ -40,8 +39,11 @@ export const adminSdkPublish = {
       }),
     });
     // The default channel is only used while it does not exist, so that nothing reaches a real channel.
-    if (await defaultChannelAbsent(ctx))
+    if (await defaultChannelAbsent(ctx)) {
+      // Only now may a publish name the default channel (it is not the run's, and is never deleted).
+      ctx.publishTarget("firebase");
       await record("default-channel", { events: object({ source }) });
+    }
     // The SDK filters by allowed event types itself: nothing is sent for a type that is not in the list.
     await record("allowed-event-types", {
       channel,

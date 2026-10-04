@@ -1,4 +1,8 @@
-import { cloudEvent, defaultChannelAbsent, waitOperation } from "./support.mjs";
+import { StopClean, cloudEvent, defaultChannelAbsent, waitOperation } from "./support.mjs";
+
+/** How long the state is polled after the enabling: 12 reads, 10 seconds apart. */
+const STATE_POLLS = 12;
+const STATE_POLL_MS = 10_000;
 
 /** The names of the enabled services, read a page at a time (at most 3 pages), and whether the read was complete. */
 async function enabledServices(ctx) {
@@ -20,7 +24,7 @@ async function enabledServices(ctx) {
 export const serviceState = {
   id: "service-state",
   short: "sv",
-  requests: 26,
+  requests: 36,
   async run(ctx) {
     const c = ctx.client;
     const before = await c.getService();
@@ -40,9 +44,29 @@ export const serviceState = {
       await c.getChannel(never);
       await c.listChannels(ctx.project, ctx.location, { pageSize: 10 });
       const listedBefore = await enabledServices(ctx);
+      // The dependent APIs the enabling turns on are only knowable from a complete list before it.
+      if (!listedBefore.complete) {
+        ctx.note("enable-skipped", {
+          why: "the list of enabled services before the enabling is incomplete",
+        });
+        throw new StopClean(
+          "the list of enabled services before the enabling is incomplete: the enabling was not sent",
+        );
+      }
       const enabled = await c.enableService();
       await waitOperation(ctx, "usage", enabled);
-      await c.getService();
+      // A publish can still answer SERVICE_DISABLED for a while after the operation is done: the state is
+      // read until it says ENABLED, and the cases that follow start only then.
+      let state = null;
+      for (let poll = 0; poll < STATE_POLLS && state !== "ENABLED"; poll += 1) {
+        if (poll > 0) await ctx.sleep(STATE_POLL_MS);
+        state = (await c.getService()).body?.state ?? null;
+      }
+      ctx.note("enable-state", { state, polls: STATE_POLLS });
+      if (state !== "ENABLED")
+        throw new StopClean(
+          `the publishing API did not report ENABLED within ${STATE_POLLS} reads after the enabling`,
+        );
       const listedAfter = await enabledServices(ctx);
       // What the enabling turned on besides the publishing API (a dependency of it).
       ctx.note("enabled-services", {

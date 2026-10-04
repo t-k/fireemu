@@ -13,18 +13,14 @@
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import { createBudget, createCapture, createFileJournal } from "../pubsub-production/capture.mjs";
-import {
-  createLedger,
-  maybeCreated,
-  maybeDeleting,
-  readLedger,
-} from "../pubsub-production/ledger.mjs";
+import { createLedger } from "../pubsub-production/ledger.mjs";
 import { createRest } from "../pubsub-production/rest.mjs";
 import { createTokenProvider } from "../pubsub-production/token.mjs";
-import { cleanup } from "./cleanup.mjs";
+import { cleanup, ledgerFacts } from "./cleanup.mjs";
 import { createClient } from "./client.mjs";
 import { createOwnership, isRunId, newRunId } from "./names.mjs";
 import { assertBudgetCovers, exitCodeOf, runCases, selectCases } from "./runner.mjs";
+import { directoryOf, ledgerFilesOf, readLedgerFiles } from "./ledger-files.mjs";
 import { createSdk } from "./sdk.mjs";
 
 const PRODUCTION = {
@@ -32,8 +28,8 @@ const PRODUCTION = {
   publishing: "https://eventarcpublishing.googleapis.com",
   usage: "https://serviceusage.googleapis.com",
 };
-export const DEFAULT_MAX_REQUESTS = 200;
-export const CLEANUP_BUDGET = 150;
+export const DEFAULT_MAX_REQUESTS = 280;
+export const CLEANUP_BUDGET = 300;
 /** The later --cleanup-only run starts at least this long after the recording's last line. */
 export const MIN_A2_WAIT_MS = 10 * 60 * 1000;
 
@@ -77,6 +73,8 @@ export function parseArgs(argv, env = {}) {
   if (!/^[a-z][a-z0-9-]{1,40}$/.test(options.location))
     throw new Error("--location is not a location");
   options.fromCapture = take("from-capture");
+  options.quotaProject =
+    take("quota-project") ?? (options.production ? options.project : undefined);
   options.runId = take("run-id") ?? (options.cleanupOnly ? undefined : newRunId());
   if (options.runId === undefined || !isRunId(options.runId))
     throw new Error("--run-id must be 12 hex digits (required with --cleanup-only)");
@@ -153,7 +151,8 @@ export async function main(
       assertBudgetCovers(cases, options.maxRequests);
     } else {
       // The later run reads the channels the recording issued, and waits for the service to settle.
-      issued = readLedger(options.ledgerPath, {});
+      // The recording's ledger and those of the later runs before this one.
+      issued = readLedgerFiles(ledgerFilesOf(directoryOf(options.fromCapture), options.runId), {});
       const waited = deps.now() - lastLineTime(options.fromCapture);
       if (waited < MIN_A2_WAIT_MS)
         throw new Error(
@@ -173,7 +172,9 @@ export async function main(
   );
   // The later run keeps the names it read, and adds what it sends.
   const ledger =
-    issued === null ? createLedger({ journal: ledgerJournal }) : issued.withJournal(ledgerJournal);
+    issued === null
+      ? createLedger({ journal: ledgerJournal })
+      : issued.ledger.withJournal(ledgerJournal);
   const token = options.production ? createTokenProvider() : null;
   const getToken = token === null ? null : () => token.get();
   const base = (key) =>
@@ -186,7 +187,13 @@ export async function main(
     Object.fromEntries(
       ["eventarc", "publishing", "usage"].map((key) => [
         key,
-        createRest({ base: base(key), budget, capture, getToken }),
+        createRest({
+          base: base(key),
+          budget,
+          capture,
+          getToken,
+          quotaProject: options.quotaProject,
+        }),
       ]),
     );
   const budget = createBudget(options.maxRequests);
@@ -195,11 +202,13 @@ export async function main(
   const ownership = createOwnership({ project: options.project, runId: options.runId });
   if (issued !== null) {
     // A name that is not the run's by prefix (a probe) is changeable only if the run's own creation of
-    // it, or of its deletion, may have happened; a conflict or a refusal never makes it ours.
-    for (const [name, item] of issued.state())
-      if (!ownership.isOwned(name) && (maybeCreated(item) || maybeDeleting(item)))
-        ownership.registerProbe(name);
-    // The location the run records in is listed too, whatever the ledger names.
+    // it, or of its deletion, may have happened; a conflict or a refusal never makes it ours. None is
+    // listed: only the location the run records in is.
+    for (const [name, item] of issued.ledger.state()) {
+      const facts = ledgerFacts(item);
+      if (!ownership.isOwned(name) && (facts.mayExist || facts.deleteSent))
+        ownership.registerProbe(name, { listable: false });
+    }
     ownership.channel(options.location, "cleanup-only");
   }
   const cleanupClient = createClient({
@@ -219,11 +228,16 @@ export async function main(
     maxRequests: options.maxRequests,
     cleanupOnly: options.cleanupOnly === true,
   });
-  let summary;
-  let sdk = null;
-  try {
-    if (options.cleanupOnly) {
-      summary = {
+  const makeSdk = (parts) =>
+    createSdk({
+      project: options.project,
+      runId: options.runId,
+      getToken: getToken ?? (async () => "local-emulator-token"),
+      publishPrefix: options.publishPrefix,
+      ...parts,
+    });
+  const summary = options.cleanupOnly
+    ? {
         cases: [],
         stopped: null,
         limited: [],
@@ -233,17 +247,11 @@ export async function main(
           project: options.project,
           ledger,
           sleep: wait,
+          mode: "later",
+          noDelete: issued.deletedByLater,
         }),
-      };
-    } else {
-      sdk = await createSdk({
-        project: options.project,
-        runId: options.runId,
-        getToken: getToken ?? (async () => "local-emulator-token"),
-        publishing: transports.publishing,
-        publishPrefix: options.publishPrefix,
-      });
-      summary = await runCases({
+      }
+    : await runCases({
         cases,
         transports,
         cleanupClient,
@@ -251,14 +259,10 @@ export async function main(
         capture,
         options,
         sleep: wait,
-        sdk,
+        makeSdk,
         ledger,
         isStopping: () => stopping,
       });
-    }
-  } finally {
-    if (sdk !== null) await sdk.close();
-  }
   const result = summarize({ options, capture, summary });
   capture.note("run-end", { requests: result.requests, stopped: result.stopped });
   journal.close();

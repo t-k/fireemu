@@ -7,8 +7,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { createOwnership } from "./eventarc-production/names.mjs";
-import { CaseLimit, exitCodeOf } from "./eventarc-production/runner.mjs";
-import { createSdk } from "./eventarc-production/sdk.mjs";
+import { CaseLimit } from "./eventarc-production/runner.mjs";
 import { main, parseArgs } from "./eventarc-production/record.mjs";
 import {
   CE_TYPE,
@@ -65,9 +64,11 @@ test("the event helpers: a unique id with the run's prefix, members removed, att
 function fakeCtx(replies) {
   const sleeps = [];
   const reads = [];
+  const settled = [];
   return {
     sleeps,
     reads,
+    settled,
     ctx: {
       project: "demo-project",
       location: "us-central1",
@@ -79,12 +80,13 @@ function fakeCtx(replies) {
           replies.shift() ?? { ok: true, body: { name, done: false } }
         ),
         createChannel: async () => replies.created,
+        settleOperation: (name, action, operation) => settled.push([name, action, operation]),
       },
     },
   };
 }
 
-test("waiting for an operation: no wait for what is done or refused, one read each two seconds, at most 8 reads", async () => {
+test("waiting for an operation: no wait for what is done or refused, one read each two seconds, at most 10 reads, and the outcome settles the ledger", async () => {
   const done = fakeCtx([]);
   const ready = { ok: true, body: { name: "operations/o", done: true } };
   assert.equal(await waitOperation(done.ctx, "eventarc", ready), ready);
@@ -97,8 +99,8 @@ test("waiting for an operation: no wait for what is done or refused, one read ea
   const pending = { ok: true, body: { name: "operations/o", done: false } };
   const never = fakeCtx([]);
   await waitOperation(never.ctx, "usage", pending);
-  assert.equal(never.reads.length, 8);
-  assert.deepEqual(never.sleeps, Array(7).fill(2000));
+  assert.equal(never.reads.length, 10);
+  assert.deepEqual(never.sleeps, Array(9).fill(2000));
   assert.deepEqual(never.reads[0], ["usage", "operations/o"]);
   const few = fakeCtx([
     { ok: true, body: { name: "operations/o", done: false } },
@@ -113,23 +115,46 @@ test("waiting for an operation: no wait for what is done or refused, one read ea
   const limited = fakeCtx([]);
   await waitOperation(limited.ctx, "eventarc", pending, { attempts: 3 });
   assert.equal(limited.reads.length, 3);
+  // With `settle`, the last read is written into the ledger, but only for a request that was accepted.
+  const settling = fakeCtx([{ ok: true, body: { name: "operations/o", done: true } }]);
+  const finished = await waitOperation(settling.ctx, "eventarc", pending, {
+    settle: { name: "c", action: "create" },
+  });
+  assert.deepEqual(settling.settled, [["c", "create", finished]]);
+  const immediate = fakeCtx([]);
+  await waitOperation(immediate.ctx, "eventarc", ready, {
+    settle: { name: "c", action: "delete" },
+  });
+  assert.deepEqual(immediate.settled, [["c", "delete", ready]]);
+  await waitOperation(immediate.ctx, "eventarc", refused, {
+    settle: { name: "c", action: "create" },
+  });
+  assert.equal(immediate.settled.length, 1, "a refused request has nothing to settle");
 });
 
-test("an owned channel is returned only when the creation and its operation both succeeded without an error", async () => {
-  const outcome = async (created, settled) => {
-    const { ctx } = fakeCtx([settled]);
+test("an owned channel is proven only when the creation's operation is done without an error, and the outcome is written into the ledger", async () => {
+  const outcome = async (created, settledReply) => {
+    const { ctx, settled } = fakeCtx([settledReply]);
     ctx.client.createChannel = async () => created;
-    return createOwnedChannel(ctx, "k");
+    const name = await createOwnedChannel(ctx, "k");
+    return { name, settled };
   };
   const op = (extra = {}) => ({ ok: true, body: { name: "operations/o", done: true, ...extra } });
+  const wanted = "projects/demo-project/locations/us-central1/channels/fe-k";
+  assert.equal((await outcome(op(), op())).name, wanted);
+  assert.equal((await outcome({ ok: false, body: {} }, op())).name, null);
+  assert.equal((await outcome(op({ done: false }), { ok: false, body: {} })).name, null);
+  assert.equal((await outcome(op({ done: false }), op({ error: { code: 3 } }))).name, null);
+  assert.equal((await outcome(op({ error: { code: 3 } }), op())).name, null);
+  // A creation that is still pending when the reads stop is not proven either.
   assert.equal(
-    await outcome(op(), op()),
-    "projects/demo-project/locations/us-central1/channels/fe-k",
+    (await outcome(op({ done: false }), { ok: true, body: { name: "operations/o", done: false } }))
+      .name,
+    null,
   );
-  assert.equal(await outcome({ ok: false, body: {} }, op()), null);
-  assert.equal(await outcome(op({ done: false }), { ok: false, body: {} }), null);
-  assert.equal(await outcome(op({ done: false }), op({ error: { code: 3 } })), null);
-  assert.equal(await outcome(op({ error: { code: 3 } }), op()), null);
+  const { settled } = await outcome(op({ done: false }), op());
+  assert.equal(settled.length, 1);
+  assert.deepEqual(settled[0].slice(0, 2), [wanted, "create"]);
 });
 
 test("a case's notes carry its id, a probe is listed by default, and the outcomes carry their reasons", async () => {
@@ -283,168 +308,4 @@ test("main: a signal during a case run stops it between cases, after which the c
     [lines[0].note, lines[0].cleanupOnly, lines.at(-1).note, lines.at(-1).stopped],
     ["run-start", false, "run-end", "signal"],
   );
-});
-
-test("the SDK forwarder: every forwarded request is counted for its case, a body that is not JSON is sent as none, and the answer is JSON", async (t) => {
-  const calls = [];
-  const publishing = {
-    name: "rest",
-    request: async (call) => (
-      calls.push(call),
-      { status: 200, body: { ok: true }, unknown: false }
-    ),
-  };
-  const tokens = [];
-  const sdk = await createSdk({
-    project: "demo-project",
-    runId: RUN,
-    getToken: async () => (tokens.push(1), "ya29.token-value-0123456789"),
-    publishing,
-    publishPrefix: "/v1",
-  });
-  t.after(() => sdk.close());
-  const first = await sdk.publish({
-    caseId: "c",
-    channel: "projects/demo-project/locations/us-central1/channels/x",
-    events: { type: "t", source: "//s", data: "x" },
-  });
-  const second = await sdk.publish({
-    caseId: "c",
-    channel: "projects/demo-project/locations/us-central1/channels/x",
-    events: [
-      { type: "t", source: "//s", data: "a" },
-      { type: "t", source: "//s", data: "b" },
-    ],
-  });
-  assert.deepEqual([first.requests, second.requests, first.threw], [1, 1, false]);
-  assert.deepEqual(
-    calls.map((call) => call.label.step),
-    ["s01-1", "s02-1"],
-  );
-  assert.equal(tokens.length >= 1, true);
-  // The forwarder's own answer: a JSON body with the content type, whatever the service said.
-  const reply = await fetch(`${sdk.host}/projects/p/locations/l/channels/c:publishEvents`, {
-    method: "POST",
-    body: "{not json",
-  });
-  assert.equal(reply.headers.get("content-type"), "application/json");
-  assert.deepEqual(await reply.json(), { ok: true });
-  assert.equal(calls.at(-1).body, undefined, "an unreadable body is forwarded as none");
-  const noBody = await fetch(`${sdk.host}/projects/p/locations/l/channels/c:publishEvents`, {
-    method: "POST",
-    body: "[1]",
-  });
-  assert.equal(noBody.status, 200);
-  assert.deepEqual(calls.at(-1).body, [1]);
-  // An error message is cut at 300 characters.
-  const long = "x".repeat(400);
-  const refused = await sdk.publish({
-    caseId: "c",
-    channel: "projects/demo-project/locations/us-central1/channels/x",
-    events: { type: "t", source: "//s", data: "x", [long]: 5 },
-  });
-  assert.equal(refused.threw, true);
-  assert.equal(refused.error.message.length, 300);
-});
-
-test("the ceiling error and the outcomes of an abort and of a spent budget are recorded with their reasons", async () => {
-  const { CaseAbort } = await import("./eventarc-production/cases/support.mjs");
-  const { BudgetExceeded } = await import("./pubsub-production/capture.mjs");
-  assert.equal(new CaseLimit(2).name, "CaseLimit");
-  const ownership = createOwnership({ project: "demo-project", runId: RUN });
-  const capture = createCapture({ journal: { write() {} } });
-  const transport = {
-    name: "rest",
-    request: async () => ({ status: 200, body: {}, unknown: false }),
-  };
-  const cleanupClient = createClient({
-    transports: {
-      eventarc: {
-        name: "rest",
-        request: async (call) =>
-          call.path.includes("/channels?")
-            ? { status: 200, body: {}, unknown: false }
-            : { status: 404, body: { error: { status: "NOT_FOUND" } }, unknown: false },
-      },
-    },
-    ownership,
-    caseId: "cleanup",
-    usageProject: "p",
-  });
-  const common = {
-    transports: { eventarc: transport, publishing: transport, usage: transport },
-    cleanupClient,
-    ownership,
-    capture,
-    options: {
-      production: false,
-      location: "us-central1",
-      usageProject: "p",
-      publishPrefix: "/v1",
-    },
-    sleep: async () => {},
-  };
-  const aborted = await runCases({
-    ...common,
-    cases: [
-      {
-        id: "a",
-        short: "a1",
-        requests: 1,
-        async run() {
-          throw new CaseAbort("a step", { code: "NOT_FOUND" });
-        },
-      },
-    ],
-  });
-  assert.deepEqual(
-    aborted.cases.map((c) => [c.outcome, c.reason]),
-    [["aborted", "a step did not succeed (NOT_FOUND)"]],
-  );
-  assert.equal(aborted.stopped, null);
-  const spent = await runCases({
-    ...common,
-    cases: [
-      {
-        id: "b",
-        short: "b1",
-        requests: 1,
-        async run() {
-          throw new BudgetExceeded(7);
-        },
-      },
-      {
-        id: "c",
-        short: "c1",
-        requests: 1,
-        async run() {
-          throw new Error("must not run");
-        },
-      },
-    ],
-  });
-  assert.deepEqual(
-    spent.cases.map((c) => [c.outcome, c.reason]),
-    [["budget", "the request budget of 7 is spent"]],
-  );
-  assert.equal(spent.stopped, "the request budget of 7 is spent");
-  assert.equal(exitCodeOf(spent), 4);
-  // A probe in another location is listed unless it says it cannot exist.
-  const other = createOwnership({ project: "demo-project", runId: RUN });
-  await runCases({
-    ...common,
-    ownership: other,
-    cases: [
-      {
-        id: "p",
-        short: "p1",
-        requests: 1,
-        async run(ctx) {
-          ctx.probe("x", { location: "europe-west1" });
-          ctx.probe("y", { location: "nowhere1", listable: false });
-        },
-      },
-    ],
-  });
-  assert.deepEqual(other.locations(), ["europe-west1"]);
 });

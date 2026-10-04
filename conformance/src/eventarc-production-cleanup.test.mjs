@@ -33,6 +33,7 @@ function fakeService({
   doneAfter = 2,
   stay = new Set(),
   endless = false,
+  textNotFound = false,
 }) {
   const live = new Set(channels);
   const calls = [];
@@ -70,7 +71,11 @@ function fakeService({
         };
       }
       if (method === "GET")
-        return live.has(bare) ? { status: 200, body: { name: bare }, unknown: false } : NOT_FOUND;
+        return live.has(bare)
+          ? { status: 200, body: { name: bare }, unknown: false }
+          : textNotFound
+            ? { status: 404, body: { raw: "Not Found" }, unknown: false }
+            : NOT_FOUND;
       if (method === "DELETE") {
         const fault = deleteFault?.(bare);
         if (fault) return fault;
@@ -176,7 +181,11 @@ test("a probe is touched only when the run's own creation of it answered 2xx or 
   );
   assert.equal(touched(never), false);
   assert.equal(service.live.has(conflict), true);
-  assert.deepEqual(report.unsettled, []);
+  assert.deepEqual(
+    report.unsettled,
+    [unknownAbsent],
+    "a creation that is still unknown is not settled by absence",
+  );
 });
 
 test("a creation sent and never answered is unknown and read by name, and a location the ledger names is listed too", async () => {
@@ -374,7 +383,7 @@ test("replay on the recorded answers: the empty channel list and the 404 of chan
 
 test("a channel that is absent when read by name is settled as absent, and a refused deletion is not read back", async () => {
   const gone = mine("absent");
-  issue(gone, "unknown");
+  issue(gone, "ok");
   const denied = mine("denied-readback");
   issue(denied, "ok");
   const service = fakeService({
@@ -399,14 +408,14 @@ test("a channel that is absent when read by name is settled as absent, and a ref
   assert.deepEqual(report.unsettled, [denied]);
 });
 
-test("an operation that never finishes is read eight times by default with two seconds between, and as often as it is asked for", async () => {
+test("an operation that never finishes is read fifteen times by default with two seconds between, and as often as it is asked for", async () => {
   const name = mine("never-done");
   const defaultReads = fakeService({ channels: [name], doneAfter: 99 });
   own.channel("us-central1", "seed");
   const sleeps = [];
   const report = await run(defaultReads, { sleep: async (ms) => sleeps.push(ms) });
-  assert.equal([...defaultReads.operations.values()][0].reads, 8);
-  assert.deepEqual(sleeps.slice(0, 7), Array(7).fill(2000));
+  assert.equal([...defaultReads.operations.values()][0].reads, 15);
+  assert.deepEqual(sleeps.slice(0, 14), Array(14).fill(2000));
   assert.ok(report.errors.some((error) => error.endsWith("not done")));
   ledger = createLedger();
   const three = fakeService({ channels: [mine("three")], doneAfter: 99 });
@@ -416,4 +425,128 @@ test("an operation that never finishes is read eight times by default with two s
   const one = fakeService({ channels: [mine("one")], doneAfter: 99 });
   await run(one, { pollAttempts: 1 });
   assert.equal([...one.operations.values()][0].reads, 1);
+});
+
+const later = { mode: "later" };
+
+test("a creation that is still unknown is not settled by a 404 inside the recording, but by the later run's own 404", async () => {
+  // The POST answered 2xx and the operation was never read as done: `unknown`, not `ok`.
+  const pending = mine("pending");
+  issue(pending, "unknown");
+  const absent = fakeService({ channels: [] });
+  own.channel("us-central1", "seed");
+  const inRecording = await run(absent);
+  assert.deepEqual(inRecording.unsettled, [pending]);
+  assert.deepEqual(inRecording.settled, []);
+  assert.deepEqual(inRecording.alreadyGone, [pending]);
+  const afterwards = await run(fakeService({ channels: [] }), later);
+  assert.deepEqual(afterwards.unsettled, []);
+  assert.deepEqual(afterwards.settled, [{ name: pending, how: "absent" }]);
+  // Once the operation is read as done and the channel is ours, a 404 settles it.
+  ledger = createLedger();
+  const proven = mine("proven");
+  issue(proven, "unknown");
+  issue(proven, "ok");
+  const second = await run(fakeService({ channels: [] }));
+  assert.deepEqual(second.settled, [{ name: proven, how: "absent" }]);
+});
+
+test("a creation whose operation ended with ALREADY_EXISTS is a conflict and the channel is never deleted", async () => {
+  const taken = own.registerProbe("projects/demo-project/locations/us-central1/channels/taken");
+  issue(taken, "unknown");
+  issue(taken, "conflict");
+  const service = fakeService({ channels: [taken] });
+  const report = await run(service);
+  assert.equal(service.calls.length > 0, true);
+  assert.equal(
+    service.calls.some((call) => call.startsWith("DELETE")),
+    false,
+  );
+  assert.equal(service.live.has(taken), true);
+  assert.deepEqual([report.deleted, report.unsettled], [[], []]);
+});
+
+test("after an unknown deletion nothing is sent again inside the recording; the later run sends one after its own 2xx read, unless an earlier later run did", async () => {
+  const name = mine("flaky");
+  issue(name, "ok");
+  issue(name, "unknown", "delete");
+  const inRecording = fakeService({ channels: [name] });
+  const recorded = await run(inRecording);
+  assert.equal(deletes(inRecording).length, 0, "read-backs only");
+  assert.deepEqual(recorded.leftover, [name]);
+  assert.deepEqual(recorded.unsettled, [name]);
+  // The deletion was applied after all: a read-back settles it.
+  let applied;
+  applied = fakeService({ channels: [name] });
+  applied.live.delete(name);
+  const settledBack = await run(applied);
+  assert.deepEqual(settledBack.settled, [{ name, how: "absent" }]);
+  assert.equal(deletes(applied).length, 0);
+  // The later run: one DELETE after its own read.
+  const afterwards = fakeService({ channels: [name] });
+  const one = await run(afterwards, later);
+  assert.equal(deletes(afterwards).length, 1);
+  assert.deepEqual(one.settled, [{ name, how: "deleted" }]);
+  // Not again when an earlier later run sent one.
+  const again = fakeService({ channels: [name], stay: new Set([name]) });
+  const blocked = await run(again, { ...later, noDelete: new Set([name]) });
+  assert.equal(deletes(again).length, 0);
+  assert.deepEqual(blocked.leftover, [name]);
+});
+
+test("a deletion answered 2xx whose operation did not finish is written into the ledger as unknown and is not sent again", async () => {
+  const name = mine("slow-delete");
+  issue(name, "ok");
+  const service = fakeService({ channels: [name], doneAfter: 99, stay: new Set([name]) });
+  const first = await run(service, { pollAttempts: 2 });
+  assert.equal(deletes(service).length, 1);
+  assert.ok(first.errors.some((error) => error.endsWith("not done")));
+  assert.deepEqual(first.leftover, [name]);
+  const facts = ledger.state().get(name);
+  assert.deepEqual(
+    facts.deletes,
+    ["unknown", "unknown"],
+    "the 2xx, then the operation that was not done",
+  );
+  // A second cleanup of the same run sends nothing more.
+  const second = await run(service, { pollAttempts: 2 });
+  assert.equal(deletes(service).length, 1);
+  assert.deepEqual(second.unsettled, [name]);
+});
+
+test("only the recorded JSON 404 settles anything: a 404 with a text body is an error", async () => {
+  const name = mine("text-404");
+  issue(name, "ok");
+  const service = fakeService({ channels: [], textNotFound: true });
+  own.channel("us-central1", "seed");
+  const report = await run(service);
+  assert.deepEqual(report.settled, []);
+  assert.deepEqual(report.alreadyGone, []);
+  assert.deepEqual(report.errors, [
+    `getChannel ${name}: NOT_FOUND (a 404 that is not the recorded shape)`,
+  ]);
+  assert.deepEqual(report.unsettled, [name]);
+  // And a read-back that answers a text 404 is not a settlement.
+  ledger = createLedger();
+  const stuck = fakeService({ channels: [mine("gone-by-text")], textNotFound: true });
+  const back = await run(stuck);
+  assert.deepEqual(back.leftover.length + back.settled.length, 1);
+  assert.equal(back.settled.length, 0, "the text 404 did not settle the read-back");
+});
+
+test("a target in a location that cannot exist is read by name and its location is never listed", async () => {
+  const nowhere = own.registerProbe(
+    "projects/demo-project/locations/no-such-location1/channels/nowhere",
+    { listable: false },
+  );
+  issue(nowhere, "unknown");
+  const service = fakeService({ channels: [] });
+  const report = await run(service, later);
+  assert.equal(
+    service.calls.some((call) => call.includes("locations/no-such-location1/channels?")),
+    false,
+  );
+  assert.deepEqual(report.listed, []);
+  assert.deepEqual(report.settled, [{ name: nowhere, how: "absent" }]);
+  assert.deepEqual(report.errors, []);
 });

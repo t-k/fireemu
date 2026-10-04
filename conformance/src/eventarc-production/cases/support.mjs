@@ -1,7 +1,10 @@
 // Helpers the cases share. A case never judges an answer: it records it. It only reads an answer to
 // decide the next step (the operation to poll, whether a channel exists before something is published to it).
 
+import { isRecordedNotFound } from "../client.mjs";
+
 export { CaseAbort, StopClean, must } from "../../pubsub-production/cases/support.mjs";
+export { isRecordedNotFound };
 
 export const CE_TYPE = "type.googleapis.com/io.cloudevents.v1.CloudEvent";
 
@@ -44,33 +47,53 @@ export const withoutAttribute = (event, name) => ({
 
 /**
  * Polls the operation a reply names until it is done, at most `attempts` reads. Every read is a step of
- * the capture. Returns the last read (or the reply itself when it names no operation).
+ * the capture. Returns the last read (or the reply itself when it names no operation). With `settle`
+ * (`{ name, action }`), the result is written into the ledger as what the operation says of that
+ * channel: the 2xx that started it does not prove that the run created (or removed) it.
  */
-export async function waitOperation(ctx, host, reply, { attempts = 8 } = {}) {
+export async function waitOperation(ctx, host, reply, { attempts = 10, settle } = {}) {
   const name = reply?.body?.name;
-  if (!reply?.ok || typeof name !== "string" || reply.body?.done === true) return reply;
   let last = reply;
-  for (let attempt = 0; attempt < attempts; attempt += 1) {
-    if (attempt > 0) await ctx.sleep(2000);
-    last = await ctx.client.getOperation(host, name);
-    if (!last.ok || last.body?.done === true) return last;
+  const finished = () => !last?.ok || last.body?.done === true;
+  if (reply?.ok && typeof name === "string" && reply.body?.done !== true) {
+    for (let attempt = 0; attempt < attempts; attempt += 1) {
+      if (attempt > 0) await ctx.sleep(2000);
+      last = await ctx.client.getOperation(host, name);
+      if (finished()) break;
+    }
   }
+  if (settle !== undefined && reply?.ok)
+    ctx.client.settleOperation(settle.name, settle.action, last);
   return last;
 }
 
-/** Creates an owned channel and waits for the creation; returns the channel name, or null if it was refused. */
-export async function createOwnedChannel(ctx, key, body = {}) {
-  const name = ctx.channel(key);
+/**
+ * Creates the channel `name` and waits for its operation, writing the outcome into the ledger.
+ * Returns `{ created, settled, owned }`: `owned` is true only when the operation is done without an
+ * error (a 2xx alone does not prove that this run created the channel).
+ */
+export async function createAndWait(ctx, name, body = {}) {
   const id = name.split("/").at(-1);
-  const created = await ctx.client.createChannel(ctx.project, ctx.location, id, body);
-  const settled = await waitOperation(ctx, "eventarc", created);
-  return created.ok && settled.ok && settled.body?.error === undefined ? name : null;
+  const location = name.split("/")[3];
+  const created = await ctx.client.createChannel(ctx.project, location, id, body);
+  const settled = await waitOperation(ctx, "eventarc", created, {
+    settle: { name, action: "create" },
+  });
+  const owned =
+    created.ok && settled.ok && settled.body?.done === true && settled.body?.error === undefined;
+  return { created, settled, owned };
 }
 
-/** True when the default channel does not exist, so that a publish to it cannot reach a real channel. */
+/** Creates an owned channel and waits for the creation; returns its name, or null if it is not proven ours. */
+export async function createOwnedChannel(ctx, key, body = {}) {
+  const name = ctx.channel(key);
+  return (await createAndWait(ctx, name, body)).owned ? name : null;
+}
+
+/** True when the default channel is known not to exist (the recorded 404), so a publish to it reaches nothing. */
 export async function defaultChannelAbsent(ctx) {
   const reply = await ctx.client.getChannel(
     `projects/${ctx.project}/locations/${ctx.location}/channels/firebase`,
   );
-  return reply.code === "NOT_FOUND";
+  return isRecordedNotFound(reply);
 }

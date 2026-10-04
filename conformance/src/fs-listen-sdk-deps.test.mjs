@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { test } from "node:test";
 
 import { bandOf, inBand, makeDeps, queryConstraints } from "./fs-listen/sdk-deps.mjs";
@@ -232,4 +233,31 @@ test("makeDeps: a plain write to another collection is not shifted, and groups a
   );
   // The group member's marker is not written.
   assert.deepEqual(sets[0][1], { rank: 5001 });
+});
+
+test("bandOf has fixed values, so a change of the hash or its range shows", () => {
+  assert.equal(
+    bandOf("na1"),
+    1000 + 100 * (createHash("sha256").update("na1").digest().readUInt32BE(0) % 1_000_000),
+  );
+  assert.equal(bandOf("na1"), 92252600);
+  assert.equal(
+    bandOf("n1"),
+    1000 + 100 * (createHash("sha256").update("n1").digest().readUInt32BE(0) % 1_000_000),
+  );
+});
+
+test("makeDeps hands the revoke function to the adapter's auth dependencies", async () => {
+  const calls = [];
+  const clients = { primary: { db: {}, auth: { currentUser: { uid: "u9" } } } };
+  const deps = makeDeps({
+    sdk: fakeSdk([]),
+    clients,
+    base: 1,
+    revoke: async (uid) => calls.push(uid),
+  });
+  await deps.auth.revoke("primary");
+  assert.deepEqual(calls, ["u9"]);
+  const without = makeDeps({ sdk: fakeSdk([]), clients, base: 1 });
+  await assert.rejects(without.auth.revoke("primary"), /revocation is unavailable/);
 });

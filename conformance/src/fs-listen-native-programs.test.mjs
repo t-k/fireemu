@@ -329,3 +329,93 @@ test("the sweep covers the collection the programs write to", () => {
   for (const p of NATIVE_PROGRAMS)
     for (const t of Object.values(p.docs)) assert.ok(t.startsWith(`${COLLECTION}/`));
 });
+
+test("programProblems reports each fault once, with its step number and kind", () => {
+  const open = { do: "open", stream: "s", targets: [{ id: 1, doc: "a" }] };
+  const close = { do: "close", stream: "s" };
+  assert.deepEqual(problemsOf(prog([{ do: "close", stream: "s" }])), [
+    "native/p#0 (close): stream s is not open",
+  ]);
+  assert.deepEqual(
+    problemsOf(prog([open, { do: "add", stream: "q", target: { id: 2, doc: "a" } }, close])),
+    ["native/p#1 (add): stream q is not open"],
+  );
+  assert.deepEqual(
+    problemsOf(prog([{ do: "open", stream: "s", targets: [{ id: 1, doc: "zz" }] }, close])),
+    ["native/p#0 (open): unknown doc zz"],
+  );
+  assert.deepEqual(
+    problemsOf(prog([open, { do: "add", stream: "s", target: { id: 2, doc: "zz" } }, close])),
+    ["native/p#1 (add): unknown doc zz"],
+  );
+  assert.deepEqual(problemsOf(prog([open])), ["native/p: stream s is never closed"]);
+  assert.deepEqual(
+    problemsOf(prog([{ do: "settle" }, { do: "sleep", ms: 1 }, { do: "mystery" }])),
+    ["native/p#2 (mystery): unknown step"],
+  );
+});
+
+test("every query the programs open filters on its own program's group", () => {
+  const groupOf = (id) =>
+    ({
+      "native/target-protocol": "proto",
+      "native/resume-token": "resume",
+      "native/existence-filter": "filter",
+      "native/commit-atomic-visibility": "atomic",
+    })[id];
+  let queries = 0;
+  for (const p of NATIVE_PROGRAMS)
+    for (const step of p.steps)
+      for (const t of step.targets ?? []) {
+        if (!t.query?.where) continue;
+        queries += 1;
+        assert.equal(t.query.collection, COLLECTION);
+        assert.equal(t.query.where.length, 1);
+        const [field, value] = t.query.where[0];
+        assert.equal(field, "g");
+        assert.ok(
+          value === groupOf(p.id) || value === `${groupOf(p.id)}-other`,
+          `${p.id}: ${value}`,
+        );
+      }
+  assert.ok(queries >= 10);
+});
+
+test("the programs record exactly these rows", () => {
+  const rows = NATIVE_PROGRAMS.flatMap((p) =>
+    p.steps.filter((s) => s.do === "record").map((s) => s.row),
+  );
+  assert.deepEqual(rows, [
+    "native/target-lifecycle/open",
+    "native/target-lifecycle/update",
+    "native/target-lifecycle/same-data",
+    "native/target-lifecycle/remove",
+    "native/target-lifecycle/readd",
+    "native/target-lifecycle/delete",
+    "native/target-protocol/duplicate-id",
+    "native/target-protocol/server-assigned-id",
+    "native/target-protocol/id-after-assigned",
+    "native/target-protocol/negative-id",
+    "native/target-protocol/once",
+    "native/target-protocol/read-time-before-write",
+    "native/target-protocol/read-time-after-write",
+    "native/target-protocol/missing-index",
+    "native/target-protocol/equality-only-query",
+    "native/target-protocol/collection-group",
+    "native/resume-token/first",
+    "native/resume-token/current",
+    "native/resume-token/older",
+    "native/resume-token/unchanged",
+    "native/resume-token/invalid",
+    "native/resume-token/other-query",
+    "native/resume-token/fresh-control",
+    "native/existence-filter/first",
+    "native/existence-filter/no-change",
+    "native/existence-filter/with-expected-count",
+    "native/existence-filter/without-expected-count",
+    "native/commit-atomic-visibility/open",
+    "native/commit-atomic-visibility/transaction",
+    "native/commit-atomic-visibility/single-commit",
+    "native/commit-atomic-visibility/separate-commits",
+  ]);
+});

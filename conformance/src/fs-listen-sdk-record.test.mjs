@@ -317,3 +317,241 @@ test("recordSdk: a clean run keeps the receipt's rows and counts, and the cleanu
     globalThis.fetch = realFetch;
   }
 });
+
+/** Runs recordSdk against a stub driver and records everything it was asked. */
+async function recordWith(target, { driver, native, status = 200 } = {}) {
+  const fetched = [];
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = async (url, init) => {
+    const body = JSON.parse(init.body);
+    fetched.push({ url, headers: init.headers, body });
+    return {
+      status,
+      json: async () => (url.endsWith("/accounts") ? { localId: `u-${body.email}` } : {}),
+    };
+  };
+  const drove = [];
+  const nativeCalls = [];
+  try {
+    const recording = await recordSdk({
+      target,
+      run: "r1",
+      log: (line) => drove.push(line),
+      runDriverImpl: async (request) => {
+        drove.push(request);
+        return (
+          driver ?? {
+            receipt: { thrown: null, cleanup: { complete: true }, teardown: [], cases: [] },
+            wire: 0,
+            connections: 0,
+          }
+        );
+      },
+      makeNative: (options) => {
+        nativeCalls.push(options);
+        return (
+          native ?? {
+            close() {},
+            async listIds() {
+              return [];
+            },
+            async missing(names) {
+              return names.map((name) => ({ name, exists: false }));
+            },
+            async commit() {},
+          }
+        );
+      },
+    });
+    return { recording, fetched, drove, nativeCalls };
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+}
+
+test("recordSdk against production: the accounts use the token, the driver gets the web config and the caps", async () => {
+  const web = { apiKey: "k", authDomain: "d", projectId: "fireemu-oracle-query" };
+  const { fetched, drove, nativeCalls } = await recordWith({
+    kind: "production",
+    project: "fireemu-oracle-query",
+    token: "TOK",
+    web,
+  });
+  assert.ok(fetched.length >= 4);
+  for (const { url, headers } of fetched) {
+    assert.match(
+      url,
+      /^https:\/\/identitytoolkit\.googleapis\.com\/v1\/projects\/fireemu-oracle-query\/accounts/,
+    );
+    assert.equal(headers.authorization, "Bearer TOK");
+    assert.equal(headers["x-goog-user-project"], "fireemu-oracle-query");
+  }
+  assert.deepEqual(fetched[0].body.email, "fsl-r1-a@example.com");
+  assert.deepEqual(fetched[1].body.email, "fsl-r1-b@example.com");
+  assert.deepEqual(nativeCalls, [
+    { project: "fireemu-oracle-query", target: { kind: "production" }, token: "TOK" },
+  ]);
+  const request = drove.find((entry) => entry.config);
+  assert.deepEqual(request.config, { mode: "production", wireCap: 1500, connectionCap: 200, web });
+  assert.deepEqual(Object.keys(request.input), ["run", "accounts"]);
+  assert.equal(request.input.run, "r1");
+  assert.equal(request.input.accounts.a.uid, "u-fsl-r1-a@example.com");
+  assert.equal(request.input.accounts.b.email, "fsl-r1-b@example.com");
+  assert.ok(drove.includes("accounts created"));
+});
+
+test("recordSdk against fireemu: the accounts use the local owner, the driver gets the emulator addresses", async () => {
+  const target = {
+    kind: "local",
+    project: "demo",
+    firestore: { host: "127.0.0.1", port: 11 },
+    auth: "http://127.0.0.1:22",
+  };
+  const { fetched, drove, nativeCalls } = await recordWith(target);
+  for (const { url, headers } of fetched) {
+    assert.ok(
+      url.startsWith(
+        "http://127.0.0.1:22/identitytoolkit.googleapis.com/v1/projects/demo/accounts",
+      ),
+      url,
+    );
+    assert.deepEqual(headers, {
+      "content-type": "application/json",
+      authorization: "Bearer owner",
+    });
+  }
+  assert.deepEqual(nativeCalls, [
+    { project: "demo", target: { kind: "local", host: "127.0.0.1", port: 11 }, token: undefined },
+  ]);
+  const { config } = drove.find((entry) => entry.config);
+  assert.deepEqual(config, {
+    mode: "local",
+    wireCap: 1500,
+    connectionCap: 200,
+    web: { apiKey: "fake-api-key", projectId: "demo", authDomain: "localhost" },
+    authEmulator: "http://127.0.0.1:22",
+    firestoreEmulator: { host: "127.0.0.1", port: 11 },
+  });
+});
+
+test("recordSdk: a sweep or an account cleanup that fails is reported, not thrown", async () => {
+  const target = {
+    kind: "local",
+    project: "demo",
+    firestore: { host: "h", port: 1 },
+    auth: "http://a",
+  };
+  const broken = {
+    close() {},
+    async listIds() {
+      throw new Error("list refused");
+    },
+  };
+  const swept = await recordWith(target, { native: broken });
+  assert.deepEqual(swept.recording.cleanup.documents, { complete: false, error: "list refused" });
+  assert.equal(swept.recording.cleanup.complete, false);
+  const rejected = await recordWith(target, { status: 400 });
+  assert.match(rejected.recording.errors["sdk/run"], /account a was not created: refused 400/);
+  assert.equal(rejected.recording.cleanup.accounts.complete, true);
+});
+
+test("recordSdk: a thrown value that is not an Error is still reported as text", async () => {
+  const target = {
+    kind: "local",
+    project: "demo",
+    firestore: { host: "h", port: 1 },
+    auth: "http://a",
+  };
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = async () => ({ status: 200, json: async () => ({ localId: "u" }) });
+  try {
+    const recording = await recordSdk({
+      target,
+      run: "r1",
+      runDriverImpl: async () => {
+        throw "plain text";
+      },
+      makeNative: () => ({
+        close() {},
+        async listIds() {
+          throw "no list";
+        },
+      }),
+    });
+    assert.equal(recording.errors["sdk/run"], "plain text");
+    assert.equal(recording.cleanup.documents.error, "no list");
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+});
+
+test("sweepDocuments asks for the run's prefix, deletes nothing when nothing is there, and passes a failed delete on", async () => {
+  const asked = [];
+  const commits = [];
+  const client = {
+    async listIds(request) {
+      asked.push(request);
+      return [];
+    },
+    async missing(names) {
+      return names.map((name) => ({ name, exists: false }));
+    },
+    async commit(request) {
+      commits.push(request);
+    },
+  };
+  const report = await sweepDocuments({ client, project: "p", run: "r1", accounts: {} });
+  assert.deepEqual(asked, [
+    {
+      parent: "projects/p/databases/(default)/documents",
+      collectionId: "conf_listen",
+      prefix: "r1",
+    },
+  ]);
+  assert.deepEqual(commits, []);
+  assert.deepEqual(report, { complete: true, deleted: 0, stillPresent: 0, checked: 0 });
+  const present = new Set(["projects/p/databases/(default)/documents/conf_rules_owner/uB"]);
+  const failing = {
+    ...client,
+    async missing(names) {
+      return names.map((name) => ({ name, exists: present.has(name) }));
+    },
+    async commit() {
+      await Promise.resolve();
+      throw new Error("delete refused");
+    },
+  };
+  await assert.rejects(
+    sweepDocuments({ client: failing, project: "p", run: "r1", accounts: { b: { uid: "uB" } } }),
+    /delete refused/,
+  );
+});
+
+test("runDriver: the process is spawned with piped output and inherited errors; other events change nothing; the deadline is 20 minutes", async (t) => {
+  const child = fakeChild();
+  let options;
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const pending = runDriver({
+    config: {},
+    input: {},
+    spawnImpl: (cmd, args, o) => {
+      options = o;
+      return child;
+    },
+  });
+  assert.deepEqual(options.stdio, ["pipe", "pipe", "inherit"]);
+  child.say({ event: "something-else" });
+  child.say({ event: "receipt", receipt: { cases: [] } });
+  await new Promise((resolve) => setImmediate(resolve));
+  t.mock.timers.tick(20 * 60_000 - 1);
+  assert.deepEqual(child.killed, []);
+  child.end(0);
+  const out = await pending;
+  assert.equal(out.refused, undefined);
+  assert.equal(out.wire, 0);
+  const late = fakeChild();
+  const waiting = runDriver({ config: {}, input: {}, spawnImpl: () => late });
+  t.mock.timers.tick(20 * 60_000);
+  await assert.rejects(waiting, /without a receipt/);
+  assert.deepEqual(late.killed, ["SIGKILL"]);
+});

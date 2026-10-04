@@ -320,7 +320,6 @@ export function programProblems(programs) {
     if (!program.id.startsWith("native/"))
       problems.push(`${program.id}: id must start with native/`);
     const streams = new Set();
-    const opened = new Set();
     const tokens = new Set();
     program.steps.forEach((step, n) => {
       const here = where(n, step);
@@ -344,7 +343,6 @@ export function programProblems(programs) {
           if (streams.has(step.stream))
             problems.push(`${here}: stream ${step.stream} opened twice`);
           streams.add(step.stream);
-          opened.add(step.stream);
           for (const t of step.targets) {
             if (t.doc !== undefined) usesDoc(t.doc);
             if (t.resume !== undefined && !tokens.has(t.resume))
@@ -362,8 +360,8 @@ export function programProblems(programs) {
         case "record":
         case "save":
           usesStream(step.stream);
-          if (step.do === "save") tokens.add(step.token ?? step.time);
-          if (step.do === "save" && step.token && step.time) tokens.add(step.time);
+          if (step.do === "save")
+            for (const name of [step.token, step.time]) if (name !== undefined) tokens.add(name);
           if (step.do === "record") {
             if (!step.row.startsWith(`${program.id}/`))
               problems.push(`${here}: row ${step.row} must start with ${program.id}/`);

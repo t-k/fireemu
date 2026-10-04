@@ -134,3 +134,38 @@ test("recordNative returns a recording with its facts and a clean cleanup on a c
     "the run's prefix is swept",
   );
 });
+
+test("recordNative runs the programs on the clock it is given", async () => {
+  const reads = [];
+  await recordNative({
+    client: failingClient(),
+    project: "p",
+    run: "r1",
+    clock: {
+      sleep: async () => {},
+      now: () => {
+        reads.push(1);
+        return reads.length * 1000;
+      },
+    },
+  });
+  assert.ok(reads.length > 0, "the supplied clock is read");
+});
+
+test("recordNative reports a cleanup failure by its message, or by the value when it has none", async () => {
+  const withMissing = async (thrown) => {
+    const client = failingClient();
+    client.missing = async () => {
+      throw thrown;
+    };
+    return recordNative({ client, project: "p", run: "r1", clock: fakeClock() });
+  };
+  assert.deepEqual((await withMissing(new Error("gone"))).cleanup, {
+    complete: false,
+    error: "gone",
+  });
+  assert.deepEqual((await withMissing("plain text")).cleanup, {
+    complete: false,
+    error: "plain text",
+  });
+});

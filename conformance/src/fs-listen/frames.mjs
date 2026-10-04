@@ -12,11 +12,12 @@ export function decodeValue(value) {
   if ("stringValue" in value) return value.stringValue;
   if ("arrayValue" in value) return (value.arrayValue.values ?? []).map(decodeValue);
   if ("mapValue" in value) {
-    // The server's member order is not stable between runs: sort it.
+    // The server's member order is not stable between runs: sort it (by UTF-16 code units).
+    const fields = value.mapValue.fields ?? {};
     return Object.fromEntries(
-      Object.entries(value.mapValue.fields ?? {})
-        .toSorted(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
-        .map(([key, item]) => [key, decodeValue(item)]),
+      Object.keys(fields)
+        .toSorted()
+        .map((key) => [key, decodeValue(fields[key])]),
     );
   }
   if ("timestampValue" in value) return "<timestamp>";

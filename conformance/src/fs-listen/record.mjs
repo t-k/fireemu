@@ -64,8 +64,8 @@ export const newRunId = (now = Date.now()) => `n${now.toString(36)}`;
 export async function recordNative({ client, project, run, log = () => {}, clock = {} }) {
   const startedAt = new Date().toISOString();
   const root = `projects/${project}/databases/(default)/documents`;
-  let cleanup = { complete: false, error: "cleanup did not run" };
-  let outcome = { rows: {}, errors: {}, requests: 0 };
+  let cleanup;
+  let outcome;
   try {
     outcome = await runNative(NATIVE_PROGRAMS, { client, project, run, log, ...clock });
   } finally {

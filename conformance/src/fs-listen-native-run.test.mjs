@@ -128,7 +128,7 @@ test("targetFor carries a saved token, a saved read time and an expected count",
 });
 
 test("runNative: seed, open, wait for CURRENT, record rows, remove, close", async () => {
-  const { client, log } = fakeClient({
+  const { client, log, clock } = fakeClient({
     0: [
       targetChange("ADD", [1]),
       {
@@ -162,8 +162,11 @@ test("runNative: seed, open, wait for CURRENT, record rows, remove, close", asyn
     client,
     project: PROJECT,
     run: RUN,
-    sleep: async () => {},
-    now: () => 0,
+    sleep: async (ms) => {
+      await Promise.resolve();
+      clock.t += ms;
+    },
+    now: () => clock.t,
   });
   assert.deepEqual(Object.keys(out.rows), ["t/open", "t/remove"]);
   assert.deepEqual(
@@ -196,6 +199,7 @@ test("a wait that never completes records timedOut instead of waiting forever", 
     project: PROJECT,
     run: RUN,
     sleep: async (ms) => {
+      await Promise.resolve();
       clock.t += ms;
     },
     now: () => clock.t,
@@ -204,7 +208,7 @@ test("a wait that never completes records timedOut instead of waiting forever", 
 });
 
 test("save keeps the latest token and read time of a target for a later open", async () => {
-  const { client, streams } = fakeClient({
+  const { client, streams, clock } = fakeClient({
     0: [
       targetChange("CURRENT", [1], {
         resumeToken: Buffer.from("T1"),
@@ -231,8 +235,11 @@ test("save keeps the latest token and read time of a target for a later open", a
     client,
     project: PROJECT,
     run: RUN,
-    sleep: async () => {},
-    now: () => 0,
+    sleep: async (ms) => {
+      await Promise.resolve();
+      clock.t += ms;
+    },
+    now: () => clock.t,
   });
   assert.deepEqual(streams[1].sent[0].addTarget.resumeToken, Buffer.from("T1"));
 });
@@ -258,8 +265,11 @@ test("a transaction step begins, then commits with the transaction id; a commit 
     client,
     project: PROJECT,
     run: RUN,
-    sleep: async () => {},
-    now: () => 0,
+    sleep: async (ms) => {
+      await Promise.resolve();
+      clock.t += ms;
+    },
+    now: () => clock.t,
   });
   assert.deepEqual(log[0], ["begin"]);
   assert.equal(log[1][0], "commit");
@@ -414,6 +424,7 @@ async function runSteps(
     project: PROJECT,
     run: RUN,
     sleep: async (ms) => {
+      await Promise.resolve();
       clock.t += ms;
     },
     now: () => clock.t,
@@ -601,8 +612,11 @@ test("runNative: a program that fails closes its streams; the next program still
     client,
     project: PROJECT,
     run: RUN,
-    sleep: async () => {},
-    now: () => 0,
+    sleep: async (ms) => {
+      await Promise.resolve();
+      clock.t += ms;
+    },
+    now: () => clock.t,
   });
   assert.ok(out.errors["native/one"]);
   assert.equal(out.errors["native/two"], undefined);
@@ -650,4 +664,225 @@ test("cleanup asks the client to sweep with the run as the prefix and deletes wh
   assert.deepEqual(asked, [{ parent: ROOT, collectionId: "c", prefix: RUN }]);
   assert.deepEqual(report.deleted, [`${ROOT}/c/${RUN}-lost`]);
   assert.equal(docs.size, 0);
+});
+
+test("a wait that nothing satisfies ends exactly at its deadline, 30 s by default", async () => {
+  const wait = (extra) => [
+    { do: "open", stream: "s", targets: [{ id: 1, doc: "a" }] },
+    { do: "wait", stream: "s", until: { current: 9 }, settleMs: 0, ...extra },
+  ];
+  assert.equal((await runSteps(wait({}))).clock.t, 30_000);
+  assert.equal((await runSteps(wait({ timeoutMs: 1000 }))).clock.t, 1000);
+  assert.equal((await runSteps(wait({ timeoutMs: 1010 }))).clock.t, 1050);
+});
+
+test("a wait that is satisfied at once sleeps only its settle time: 1500 ms by default, none for 0", async () => {
+  const frames = { 0: [change("CURRENT", [1])] };
+  const wait = (extra) => [
+    { do: "open", stream: "s", targets: [{ id: 1, doc: "a" }] },
+    { do: "wait", stream: "s", until: { current: 1 }, ...extra },
+  ];
+  assert.equal((await runSteps(wait({}), frames)).clock.t, 1500);
+  assert.equal((await runSteps(wait({ settleMs: 0 }), frames)).clock.t, 0);
+  assert.equal((await runSteps(wait({ settleMs: 250 }), frames)).clock.t, 250);
+  const slow = await runSteps(wait({}), frames, { settleMs: 800 });
+  assert.equal(slow.clock.t, 800, "the run's own settle time is the default");
+});
+
+test("a wait on a stream that is already over does not sleep past the deadline", async () => {
+  const { client, clock } = fakeClient({});
+  const open = client.openStream;
+  client.openStream = () => Object.assign(open(), { ended: () => ({ reason: "ended" }) });
+  const out = await runNative(
+    [
+      {
+        id: "native/t",
+        conditions: ["x"],
+        docs: { a: "lsn/{run}-a" },
+        steps: [
+          { do: "open", stream: "s", targets: [{ id: 1, doc: "a" }] },
+          { do: "wait", stream: "s", until: { ended: true }, settleMs: 0 },
+          { do: "record", row: "native/t/x", stream: "s" },
+        ],
+      },
+    ],
+    {
+      client,
+      project: PROJECT,
+      run: RUN,
+      sleep: async (ms) => {
+        await Promise.resolve();
+        clock.t += ms;
+      },
+      now: () => clock.t,
+    },
+  );
+  assert.equal(clock.t, 0);
+  assert.equal(out.rows["native/t/x"].timedOut, false);
+});
+
+test("steps report themselves to the log as program: step", async () => {
+  const lines = [];
+  await runSteps(
+    [
+      { do: "settle", ms: 1 },
+      { do: "sleep", ms: 1 },
+    ],
+    {},
+    { log: (line) => lines.push(line) },
+  );
+  assert.deepEqual(lines, ["native/t: settle", "native/t: sleep"]);
+});
+
+test("the default request ceiling is 400 and the error names the step that crossed it", async () => {
+  const steps = Array.from({ length: 401 }, () => ({ do: "write", doc: "a", fields: { n: 1 } }));
+  const { out, log } = await runSteps(steps);
+  assert.match(out.errors["native/t"], /request ceiling 400 reached at write/);
+  assert.equal(log.filter(([name]) => name === "commit").length, 400);
+  const begin = await runSteps(
+    [{ do: "txn", writes: [{ doc: "a", fields: {} }] }],
+    {},
+    { maxRequests: 0 },
+  );
+  assert.match(begin.out.errors["native/t"], /reached at begin/);
+  const open = await runSteps([{ do: "open", stream: "s", targets: [] }], {}, { maxRequests: 0 });
+  assert.match(open.out.errors["native/t"], /reached at open s/);
+  const txn = await runSteps(
+    [{ do: "txn", writes: [{ doc: "a", fields: {} }] }],
+    {},
+    { maxRequests: 1 },
+  );
+  assert.match(txn.out.errors["native/t"], /reached at txn/);
+  const commit = await runSteps(
+    [{ do: "commit", writes: [{ doc: "a", fields: {} }] }],
+    {},
+    { maxRequests: 0 },
+  );
+  assert.match(commit.out.errors["native/t"], /reached at commit/);
+  const del = await runSteps([{ do: "delete", doc: "a" }], {}, { maxRequests: 0 });
+  assert.match(del.out.errors["native/t"], /reached at delete/);
+  const seed = await runSteps([{ do: "seed", doc: "a", fields: {} }], {}, { maxRequests: 0 });
+  assert.match(seed.out.errors["native/t"], /reached at seed/);
+});
+
+test("a delete step deletes and does nothing else; a failed commit, begin or delete is the program's error", async () => {
+  const del = await runSteps([{ do: "delete", doc: "a" }]);
+  assert.deepEqual(del.out.errors, {});
+  assert.equal(del.log.length, 1);
+  for (const [method, steps] of [
+    ["commit", [{ do: "seed", doc: "a", fields: {} }]],
+    ["commit", [{ do: "delete", doc: "a" }]],
+    ["commit", [{ do: "commit", writes: [{ doc: "a", fields: {} }] }]],
+    ["commit", [{ do: "txn", writes: [{ doc: "a", fields: {} }] }]],
+    ["beginTransaction", [{ do: "txn", writes: [{ doc: "a", fields: {} }] }]],
+  ]) {
+    const { client, clock } = fakeClient({});
+    client[method] = async () => {
+      await Promise.resolve();
+      throw new Error(`${method} failed`);
+    };
+    const out = await runNative(
+      [{ id: "native/t", conditions: ["x"], docs: { a: "lsn/{run}-a" }, steps }],
+      {
+        client,
+        project: PROJECT,
+        run: RUN,
+        sleep: async (ms) => {
+          await Promise.resolve();
+          clock.t += ms;
+        },
+        now: () => clock.t,
+      },
+    );
+    assert.equal(out.errors["native/t"], `${method} failed`, JSON.stringify(steps));
+  }
+});
+
+test("a stream name can be used again after it was closed, from its first frame", async () => {
+  const { client, clock } = fakeClient({});
+  const open = client.openStream;
+  let n = 0;
+  client.openStream = () => {
+    const stream = open();
+    n += 1;
+    for (let i = 0; i < 4 - n; i += 1) stream.frames.push(change("ADD", [i + 1]));
+    return stream;
+  };
+  const out = await runNative(
+    [
+      {
+        id: "native/t",
+        conditions: ["x"],
+        docs: { a: "lsn/{run}-a" },
+        steps: [
+          { do: "open", stream: "s", targets: [{ id: 1, doc: "a" }] },
+          { do: "record", row: "native/t/one", stream: "s" },
+          { do: "close", stream: "s" },
+          { do: "open", stream: "s", targets: [{ id: 1, doc: "a" }] },
+          { do: "record", row: "native/t/two", stream: "s" },
+          { do: "close", stream: "s" },
+        ],
+      },
+    ],
+    {
+      client,
+      project: PROJECT,
+      run: RUN,
+      sleep: async (ms) => {
+        await Promise.resolve();
+        clock.t += ms;
+      },
+      now: () => clock.t,
+    },
+  );
+  assert.equal(out.rows["native/t/one"].rows.length, 3);
+  assert.equal(out.rows["native/t/two"].rows.length, 2);
+});
+
+test("a cleanup commit that fails is the cleanup's failure, and 100 documents are one batch", async () => {
+  const { client, docs, log } = fakeClient();
+  for (let i = 0; i < 100; i += 1) docs.set(`${ROOT}/lsn/${RUN}-d${i}`, {});
+  const template = Object.fromEntries(
+    Array.from({ length: 100 }, (_, i) => [`d${i}`, `lsn/{run}-d${i}`]),
+  );
+  const report = await cleanupNative([{ docs: template }], {
+    client,
+    project: PROJECT,
+    run: RUN,
+    sweep: [],
+  });
+  assert.deepEqual(
+    log.filter(([name]) => name === "commit").map(([, w]) => w.length),
+    [100],
+  );
+  assert.equal(report.complete, true);
+  const failing = fakeClient();
+  failing.docs.set(`${ROOT}/lsn/${RUN}-a`, {});
+  failing.client.commit = async () => {
+    await Promise.resolve();
+    throw new Error("commit refused");
+  };
+  await assert.rejects(
+    cleanupNative([{ docs: { a: "lsn/{run}-a" } }], {
+      client: failing.client,
+      project: PROJECT,
+      run: RUN,
+      sweep: [],
+    }),
+    /commit refused/,
+  );
+});
+
+test("a token or read time that is a plain Buffer survives a save and an open unchanged", async () => {
+  const bytes = Buffer.from([9, 8, 7]);
+  const { streams } = await runSteps(
+    [
+      { do: "open", stream: "s", targets: [{ id: 1, doc: "a" }] },
+      { do: "save", stream: "s", id: 1, token: "t" },
+      { do: "open", stream: "r", targets: [{ id: 1, doc: "a", resume: "t" }] },
+    ],
+    { 0: [change("CURRENT", [1], { resumeToken: bytes })] },
+  );
+  assert.deepEqual(streams[1].sent[0].addTarget.resumeToken, bytes);
+  assert.ok(Buffer.isBuffer(streams[1].sent[0].addTarget.resumeToken));
 });

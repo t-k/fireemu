@@ -1,4 +1,9 @@
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
+import { mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { test } from "node:test";
 
 import {
@@ -467,4 +472,147 @@ test("compareRecordings: known divergences count as good, an unfit local recordi
       }),
     /two production/,
   );
+});
+
+test("a documentRemove run compares as a set too, and so do mixed kinds", () => {
+  const rm = (doc) => ({ kind: "documentRemove", doc, removedTargetIds: [1] });
+  const del = (doc) => ({ kind: "documentDelete", doc, removedTargetIds: [1] });
+  const a = { ...plain, rows: [rm("a"), rm("b"), del("c")] };
+  const b = { ...plain, rows: [del("c"), rm("b"), rm("a")] };
+  assert.equal(classifyRow(a, b), "MATCH");
+  assert.equal(classifyRow(a, { ...plain, rows: [rm("a"), rm("b"), rm("c")] }), "DIFFER");
+});
+
+test("a production recording that timed out in only one of the two is INDETERMINATE, not a match", () => {
+  const timed = { ...row(1), timedOut: true };
+  for (const [one, two] of [
+    [row(1), timed],
+    [timed, row(1)],
+  ])
+    assert.equal(
+      compareRecordings({
+        productions: [recording({ r: one }), recording({ r: two })],
+        local: recording({ r: row(1) }),
+      }).rows.r.status,
+      "INDETERMINATE",
+    );
+});
+
+test("an unclean production recording is refused with every problem, separated by semicolons", () => {
+  assert.throws(
+    () =>
+      compareRecordings({
+        productions: [
+          recording({}, { cleanup: { complete: false }, errors: { a: "x" } }),
+          recording({}),
+        ],
+        local: recording({}),
+      }),
+    /a production recording is not clean: cleanup was not complete; a: x$/,
+  );
+});
+
+const COMPARE = fileURLToPath(new URL("./fs-listen/compare.mjs", import.meta.url));
+
+function runCli(files, args) {
+  const dir = mkdtempSync(join(tmpdir(), "fs-listen-cli-"));
+  const path = (name, value) => {
+    const file = join(dir, name);
+    writeFileSync(file, JSON.stringify(value));
+    return file;
+  };
+  const made = Object.fromEntries(
+    Object.entries(files).map(([name, value]) => [name, path(name, value)]),
+  );
+  const out = spawnSync(process.execPath, [COMPARE, ...args(made)], { encoding: "utf8" });
+  return { code: out.status, stdout: out.stdout, stderr: out.stderr };
+}
+
+test("the command line prints one line per row and a summary, and exits 0 only when every row is good", () => {
+  const files = {
+    p1: recording({ r: row(1), s: row(1) }),
+    p2: recording({ r: row(1), s: row(1) }),
+    good: recording({ r: row(1), s: row(1) }),
+    bad: recording({ r: row(1), s: row(0) }),
+    div: { r: "owner decision D9" },
+  };
+  const ok = runCli(files, (f) => ["--production", f.p1, f.p2, "--local", f.good]);
+  assert.equal(ok.code, 0);
+  assert.match(ok.stdout, /^MATCH {14}r\nMATCH {14}s\n\{"MATCH":2\} OK\n$/);
+  const notOk = runCli(files, (f) => ["--production", f.p1, f.p2, "--local", f.bad]);
+  assert.equal(notOk.code, 1);
+  assert.match(notOk.stdout, /MISMATCH {11}s\n/);
+  assert.match(notOk.stdout, /NOT OK\n$/);
+  const known = runCli(files, (f) => [
+    "--production",
+    f.p1,
+    f.p2,
+    "--local",
+    f.bad,
+    "--divergences",
+    f.div,
+  ]);
+  assert.equal(known.code, 1, "the divergence names r, not s");
+  const named = runCli({ ...files, div: { s: "owner decision D9" } }, (f) => [
+    "--production",
+    f.p1,
+    f.p2,
+    "--local",
+    f.bad,
+    "--divergences",
+    f.div,
+  ]);
+  assert.equal(named.code, 0);
+  assert.match(named.stdout, /KNOWN_DIVERGENCE {3}s {2}\(owner decision D9\)\n/);
+});
+
+test("the command line prints the local recording's problems and exits 1", () => {
+  const files = {
+    p1: recording({ r: row(1) }),
+    p2: recording({ r: row(1) }),
+    dirty: recording({ r: row(1) }, { cleanup: { complete: false } }),
+  };
+  const out = runCli(files, (f) => ["--production", f.p1, f.p2, "--local", f.dirty]);
+  assert.equal(out.code, 1);
+  assert.match(out.stdout, /local: cleanup was not complete\n$/);
+});
+
+test("the command line exits 2 with the reason for a bad argument or an unreadable file", () => {
+  const stray = runCli({ a: recording({}) }, () => ["--bogus"]);
+  assert.equal(stray.code, 2);
+  assert.equal(stray.stderr, "unexpected argument --bogus\n");
+  assert.equal(stray.stdout, "");
+  const missing = runCli({ a: recording({}) }, (f) => [
+    "--production",
+    f.a,
+    f.a,
+    "--local",
+    "/nonexistent/x.json",
+  ]);
+  assert.equal(missing.code, 2);
+  assert.match(missing.stderr, /ENOENT/);
+  const one = runCli({ a: recording({}) }, (f) => [
+    "--production",
+    f.a,
+    f.a,
+    "--local",
+    f.a,
+    "--production",
+    f.a,
+    f.a,
+  ]);
+  assert.equal(one.code, 2);
+  assert.match(one.stderr, /two production recordings are required/);
+});
+
+test("importing the module does not run the command line", () => {
+  const out = spawnSync(
+    process.execPath,
+    ["--input-type=module", "-e", `import ${JSON.stringify(COMPARE)}; console.log("imported")`],
+    {
+      encoding: "utf8",
+    },
+  );
+  assert.equal(out.stdout, "imported\n");
+  assert.equal(out.status, 0);
 });

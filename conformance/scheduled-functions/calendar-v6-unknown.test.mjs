@@ -2,7 +2,17 @@
 // of the settle rules for the calendar v6 collector.
 import assert from "node:assert/strict";
 import test from "node:test";
-import { CASES, PROJECT, answerClass, isUnknownClass } from "./calendar-v6.mjs";
+import {
+  CASES,
+  PROJECT,
+  absentClass,
+  answerClass,
+  emptyListClass,
+  isUnknownClass,
+  refusedClass,
+  resources,
+  topicOwnedClass,
+} from "./calendar-v6.mjs";
 import { RUN, fakeServer, refuseSecond, reply, run } from "./calendar-v6-fake.mjs";
 
 const key = (method, path) => method + " " + path;
@@ -452,4 +462,180 @@ test("generated: over any mix of answer classes, closure implies a clean sandbox
   }
   assert.ok(closed > 0, "some generated runs close");
   assert.ok(unknownRuns > 100, "many generated runs carry an unknown answer");
+});
+
+// ---- the class judges, one condition at a time ---------------------------------------------
+
+const answer = (status, json, extra = {}) => ({ status, json, bodyUnknown: false, ...extra });
+
+test("a class judge needs a readable JSON object body, a status and the right fields", () => {
+  const own = resources(RUN);
+  const notReadable = [
+    answer(200, null),
+    answer(200, undefined),
+    answer(200, "text"),
+    answer(200, {}, { bodyUnknown: true }),
+    null,
+  ];
+  for (const a of notReadable) {
+    assert.equal(emptyListClass(a), false, JSON.stringify(a));
+    assert.equal(topicOwnedClass(a, own), false, JSON.stringify(a));
+    assert.equal(absentClass(a), false, JSON.stringify(a));
+    assert.equal(refusedClass(a), false, JSON.stringify(a));
+  }
+  assert.equal(emptyListClass(answer(200, {})), true);
+  assert.equal(emptyListClass(answer(200, { jobs: [] })), true);
+  assert.equal(emptyListClass(answer(200, { jobs: [{ name: "x" }] })), false);
+  assert.equal(emptyListClass(answer(200, { topics: [{ name: "x" }] })), false);
+  assert.equal(emptyListClass(answer(404, {})), false);
+  assert.equal(topicOwnedClass(answer(200, { name: own.topic }), own), true);
+  assert.equal(topicOwnedClass(answer(200, { name: "other" }), own), false);
+  assert.equal(topicOwnedClass(answer(201, { name: own.topic }), own), false);
+  const notFound = { error: { code: 404, message: "m", status: "NOT_FOUND" } };
+  assert.equal(absentClass(answer(404, notFound)), true);
+  assert.equal(absentClass(answer(404, { error: { status: "X" } })), false);
+  assert.equal(absentClass(answer(404, {})), false);
+  assert.equal(absentClass(answer(200, notFound)), false);
+});
+
+test("a refused class is a complete readable 4xx with a message, except 401, 403, 409 and 429", () => {
+  const body = { error: { message: "no" } };
+  for (const [status, refused] of [
+    [399, false],
+    [400, true],
+    [401, false],
+    [402, true],
+    [403, false],
+    [404, true],
+    [408, true],
+    [409, false],
+    [410, true],
+    [429, false],
+    [499, true],
+    [500, false],
+  ])
+    assert.equal(refusedClass(answer(status, body)), refused, String(status));
+  assert.equal(refusedClass(answer(400, { error: {} })), false);
+  assert.equal(refusedClass(answer(400, { error: { message: 5 } })), false);
+});
+
+// ---- exact ids and budgets ------------------------------------------------------------------
+
+test("an accepted body in an unrecorded layout and a pause in one are named in the review list", async () => {
+  const jobBody = (body, state) => ({
+    name: body.name,
+    pubsubTarget: { topicName: TOPIC, data: "Y2FsZW5kYXItdjY=" },
+    state,
+    schedule: body.schedule,
+    timeZone: body.timeZone,
+  });
+  const server = fakeServer({
+    refuse: refuseSecond,
+    hooks: {
+      [key("POST", JOBS)]: async ({ state, body }) => {
+        if (!body.name.endsWith("-cr01")) return undefined;
+        state.jobs.set(body.name, { ...body, state: "ENABLED" });
+        state.everCreated.add(body.name);
+        return compact(jobBody(body, "ENABLED"));
+      },
+      [key("POST", JOB("cr02") + ":pause")]: async ({ state }) => {
+        const job = state.jobs.get(JOB("cr02"));
+        job.state = "PAUSED";
+        return compact(jobBody(job, "PAUSED"));
+      },
+      [key("DELETE", JOB("cr03"))]: async ({ state }) => {
+        state.jobs.delete(JOB("cr03"));
+        return compact({ unexpected: "layout" });
+      },
+      [key("GET", JOB("cr08"))]: async () =>
+        compact({ error: { code: 404, message: "Job not found.", status: "NOT_FOUND" } }, 404),
+    },
+  });
+  const { result } = await run(server);
+  for (const id of ["cr01-create", "cr02-pause", "cr03-delete", "cr08-read-deleted"])
+    assert.ok(result.layoutUnrecorded.includes(id), id + " in " + result.layoutUnrecorded.join());
+  assert.equal(result.closureReady, false);
+  assert.equal(result.unknownMutations, 0);
+});
+
+test("a pause answered 504 is named by its own id", async () => {
+  const name = JOB("cr02");
+  const server = fakeServer({
+    refuse: refuseSecond,
+    hooks: {
+      [key("POST", name + ":pause")]: async ({ state }) => {
+        state.jobs.get(name).state = "PAUSED";
+        return error(504, "later");
+      },
+    },
+  });
+  const { result } = await run(server);
+  assert.deepEqual(result.unknownMutationList, [{ id: "cr02-pause", class: "unknown-status" }]);
+});
+
+test("the settlement budget is six reads: the last one still confirms a pause that failed", async () => {
+  let reads = 0;
+  const server = fakeServer({
+    refuse: refuseSecond,
+    hooks: {
+      // cr01 never exists: three reads. cr02 appears on its second read: two more. One is left.
+      [key("POST", JOBS)]: async ({ state, body }) => {
+        if (body.name.endsWith("-cr02")) {
+          state.jobs.set(body.name, { ...body, state: "ENABLED" });
+          state.everCreated.add(body.name);
+        }
+        return /-cr0[12]$/.test(body.name) ? "throw" : undefined;
+      },
+      [key("GET", JOB("cr02"))]: async () => (++reads === 1 ? error(404, "not yet") : undefined),
+      [key("POST", JOB("cr03") + ":pause")]: async ({ state }) => {
+        state.jobs.get(JOB("cr03")).state = "PAUSED";
+        return error(500, "later");
+      },
+      [key("POST", JOB("cr04") + ":pause")]: async ({ state }) => {
+        state.jobs.get(JOB("cr04")).state = "PAUSED";
+        return error(500, "later");
+      },
+    },
+  });
+  const { journal } = await run(server);
+  const sent = new Set(journal.filter((r) => r.state === "before-send").map((r) => r.id));
+  assert.ok(sent.has("cr03-read-after-pause"), "the sixth read is available");
+  assert.ok(!sent.has("cr04-read-after-pause"), "and the seventh is not");
+});
+
+test("the retry budget is ten: it runs out exactly after the ninth retry and the tenth settle read", async () => {
+  const busyOn = (id) => async () => busy(JOB(id));
+  const server = fakeServer({
+    refuse: refuseSecond,
+    hooks: {
+      [key("DELETE", JOB("cr01"))]: busyOn("cr01"),
+      [key("DELETE", JOB("cr02"))]: busyOn("cr02"),
+      [key("DELETE", JOB("cr03"))]: busyOn("cr03"),
+      // After three busy jobs one retry unit is left: the settle read takes it.
+      [key("DELETE", JOB("cr04"))]: async ({ state }) => {
+        state.jobs.delete(JOB("cr04"));
+        return error(503, "later");
+      },
+      // Nothing is left for the next unknown DELETE: no settle read.
+      [key("DELETE", JOB("cr05"))]: async ({ state }) => {
+        state.jobs.delete(JOB("cr05"));
+        return error(503, "later");
+      },
+    },
+  });
+  const { journal } = await run(server);
+  const sent = journal.filter((r) => r.state === "before-send").map((r) => r.id);
+  for (const id of ["cr01", "cr02", "cr03"])
+    assert.deepEqual(
+      sent.filter((x) => x.startsWith(id + "-delete")),
+      [id + "-delete", id + "-delete-retry-1", id + "-delete-retry-2", id + "-delete-retry-3"],
+    );
+  assert.deepEqual(
+    sent.filter((x) => x.startsWith("cr04-delete") || x.startsWith("cr04-settle")),
+    ["cr04-delete", "cr04-settle-delete-0"],
+  );
+  assert.deepEqual(
+    sent.filter((x) => x.startsWith("cr05-delete") || x.startsWith("cr05-settle")),
+    ["cr05-delete"],
+  );
 });

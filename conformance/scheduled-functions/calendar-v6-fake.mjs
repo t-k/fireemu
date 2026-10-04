@@ -9,8 +9,8 @@ export function reply(status, json) {
 }
 
 /** A fake Cloud Scheduler and Pub/Sub that answers in the recorded layouts. */
-export function fakeServer({ refuse = () => false, hooks = {} } = {}) {
-  const own = resources(RUN);
+export function fakeServer({ refuse = () => false, hooks = {}, runId = RUN } = {}) {
+  const own = resources(runId);
   const state = {
     topic: false,
     jobs: new Map(),
@@ -47,7 +47,7 @@ export function fakeServer({ refuse = () => false, hooks = {} } = {}) {
     const method = request.method;
     state.calls.push(method + " " + url);
     const body = request.body ? JSON.parse(request.body) : undefined;
-    const hook = hooks[method + " " + url] ?? hooks[method + " " + url.replace(RUN, "<run>")];
+    const hook = hooks[method + " " + url] ?? hooks[method + " " + url.replace(runId, "<run>")];
     if (hook) {
       const out = await hook({ state, body, url, method, own });
       if (out === "throw") throw new Error("transport");

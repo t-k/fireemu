@@ -1,0 +1,252 @@
+import assert from "node:assert/strict";
+import { test } from "node:test";
+
+import {
+  canonicalRow,
+  classifyRow,
+  compareRecordings,
+  recordingProblems,
+} from "./fs-listen/compare.mjs";
+
+// A small seeded generator, so a failing property replays.
+function prng(seed) {
+  let a = seed >>> 0;
+  return () => {
+    a = (a + 0x6d2b79f5) >>> 0;
+    let t = a;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+const pick = (random, list) => list[Math.floor(random() * list.length)];
+
+function randomFrameRow(random) {
+  const kind = pick(random, ["targetChange", "documentChange", "documentDelete", "boundary"]);
+  if (kind === "boundary") return { kind, resumeToken: random() < 0.5 };
+  if (kind === "targetChange")
+    return {
+      kind,
+      type: pick(random, ["ADD", "CURRENT", "REMOVE", "RESET", "NO_CHANGE"]),
+      targetIds: [pick(random, [1, 2, 3])],
+      cause: random() < 0.2 ? { code: 9, message: "x" } : null,
+      resumeToken: random() < 0.5,
+    };
+  if (kind === "documentChange")
+    return {
+      kind,
+      doc: pick(random, ["a", "b", "c"]),
+      fields: { n: Math.floor(random() * 3) },
+      targetIds: [1],
+      removedTargetIds: [],
+    };
+  return { kind, doc: pick(random, ["a", "b", "c"]), removedTargetIds: [1] };
+}
+function randomRow(random) {
+  const rows = Array.from({ length: 1 + Math.floor(random() * 8) }, () => randomFrameRow(random));
+  return {
+    conditions: ["FS-LISTEN-SDK/x"],
+    rows,
+    end: random() < 0.2 ? { reason: "error", code: 3 } : null,
+    timedOut: false,
+  };
+}
+
+test("a row equals itself, in any seed (reflexive)", () => {
+  for (let seed = 1; seed <= 200; seed += 1) {
+    const row = randomRow(prng(seed));
+    assert.equal(classifyRow(row, structuredClone(row)), "MATCH", `seed ${seed}`);
+  }
+});
+
+test("the classification is symmetric", () => {
+  for (let seed = 1; seed <= 200; seed += 1) {
+    const random = prng(seed);
+    const a = randomRow(random);
+    const b = randomRow(random);
+    assert.equal(classifyRow(a, b), classifyRow(b, a), `seed ${seed}`);
+  }
+});
+
+test("canonicalRow is idempotent", () => {
+  for (let seed = 1; seed <= 200; seed += 1) {
+    const once = canonicalRow(randomRow(prng(seed)));
+    assert.deepEqual(canonicalRow(once), once, `seed ${seed}`);
+  }
+});
+
+test("documents inside one snapshot compare as a set; across a boundary they do not", () => {
+  const doc = (name) => ({
+    kind: "documentChange",
+    doc: name,
+    fields: {},
+    targetIds: [1],
+    removedTargetIds: [],
+  });
+  const boundary = { kind: "boundary", resumeToken: true };
+  const base = { conditions: [], end: null, timedOut: false };
+  const ab = { ...base, rows: [doc("a"), doc("b"), boundary] };
+  const ba = { ...base, rows: [doc("b"), doc("a"), boundary] };
+  assert.equal(classifyRow(ab, ba), "MATCH");
+  const split1 = { ...base, rows: [doc("a"), boundary, doc("b"), boundary] };
+  const split2 = { ...base, rows: [doc("b"), boundary, doc("a"), boundary] };
+  assert.equal(classifyRow(split1, split2), "DIFFER");
+});
+
+test("any single change to a row differs", () => {
+  for (let seed = 1; seed <= 200; seed += 1) {
+    const random = prng(seed);
+    const row = randomRow(random);
+    const changed = structuredClone(row);
+    const i = Math.floor(random() * changed.rows.length);
+    const target = changed.rows[i];
+    if (target.kind === "boundary") target.resumeToken = !target.resumeToken;
+    else if (target.kind === "targetChange") target.targetIds = [target.targetIds[0] + 10];
+    else if (target.kind === "documentChange") target.fields = { n: target.fields.n + 10 };
+    else target.doc = `${target.doc}x`;
+    assert.equal(classifyRow(row, changed), "DIFFER", `seed ${seed}`);
+  }
+});
+
+test("the end of a stream and the group structure are part of the row", () => {
+  const base = { conditions: [], rows: [], end: null, timedOut: false };
+  assert.equal(classifyRow(base, { ...base, end: { reason: "error", code: 3 } }), "DIFFER");
+  assert.equal(
+    classifyRow(
+      { ...base, groups: [{ docs: ["a", "b"], sameUpdateTime: true }] },
+      {
+        ...base,
+        groups: [
+          { docs: ["a"], sameUpdateTime: true },
+          { docs: ["b"], sameUpdateTime: true },
+        ],
+      },
+    ),
+    "DIFFER",
+  );
+  assert.equal(
+    classifyRow(
+      { ...base, groups: [{ docs: ["a", "b"], sameUpdateTime: true }] },
+      { ...base, groups: [{ docs: ["b", "a"], sameUpdateTime: true }] },
+    ),
+    "MATCH",
+  );
+});
+
+test("a row that timed out is INDETERMINATE, never a match or a difference", () => {
+  const row = { conditions: [], rows: [], end: null, timedOut: false };
+  assert.equal(classifyRow({ ...row, timedOut: true }, row), "INDETERMINATE");
+  assert.equal(classifyRow(row, { ...row, timedOut: true }), "INDETERMINATE");
+  assert.equal(
+    classifyRow({ ...row, timedOut: true }, { ...row, timedOut: true }),
+    "INDETERMINATE",
+  );
+  assert.equal(classifyRow({ ...row, end: { reason: "frame-cap" } }, row), "INDETERMINATE");
+});
+
+const recording = (rows, extra = {}) => ({
+  version: 1,
+  kind: "native",
+  errors: {},
+  cleanup: { complete: true },
+  rows,
+  ...extra,
+});
+const row = (n) => ({
+  conditions: ["FS-LISTEN-SDK/x"],
+  rows: [{ kind: "boundary", resumeToken: n > 0 }],
+  end: null,
+  timedOut: false,
+});
+
+test("compareRecordings: two matching productions and a matching local are MATCH", () => {
+  const out = compareRecordings({
+    productions: [recording({ r: row(1) }), recording({ r: row(1) })],
+    local: recording({ r: row(1) }),
+  });
+  assert.equal(out.rows.r.status, "MATCH");
+  assert.deepEqual(out.summary, { MATCH: 1 });
+  assert.equal(out.ok, true);
+});
+
+test("compareRecordings: productions that disagree make the row NONDETERMINISTIC, whatever local says", () => {
+  const out = compareRecordings({
+    productions: [recording({ r: row(1) }), recording({ r: row(0) })],
+    local: recording({ r: row(1) }),
+  });
+  assert.equal(out.rows.r.status, "NONDETERMINISTIC");
+  assert.equal(out.ok, false);
+});
+
+test("compareRecordings: local differs from agreeing productions is MISMATCH; a row missing locally is MISSING", () => {
+  const out = compareRecordings({
+    productions: [recording({ r: row(1), s: row(1) }), recording({ r: row(1), s: row(1) })],
+    local: recording({ r: row(0) }),
+  });
+  assert.equal(out.rows.r.status, "MISMATCH");
+  assert.equal(out.rows.s.status, "MISSING");
+  assert.equal(out.ok, false);
+  assert.deepEqual(out.summary, { MISMATCH: 1, MISSING: 1 });
+});
+
+test("compareRecordings: a row only in local is EXTRA, a divergence listed with a reason is KNOWN_DIVERGENCE", () => {
+  const out = compareRecordings({
+    productions: [recording({ r: row(1) }), recording({ r: row(1) })],
+    local: recording({ r: row(0), x: row(1) }),
+    divergences: { r: "owner decision D1: reason" },
+  });
+  assert.equal(out.rows.r.status, "KNOWN_DIVERGENCE");
+  assert.equal(out.rows.r.reason, "owner decision D1: reason");
+  assert.equal(out.rows.x.status, "EXTRA");
+  assert.equal(out.ok, false);
+});
+
+test("a divergence never hides a row that matches, and needs a reason", () => {
+  const out = compareRecordings({
+    productions: [recording({ r: row(1) }), recording({ r: row(1) })],
+    local: recording({ r: row(1) }),
+    divergences: { r: "stale entry" },
+  });
+  assert.equal(out.rows.r.status, "MATCH");
+  assert.throws(
+    () =>
+      compareRecordings({
+        productions: [recording({ r: row(1) }), recording({ r: row(1) })],
+        local: recording({ r: row(0) }),
+        divergences: { r: "" },
+      }),
+    /reason/,
+  );
+});
+
+test("recordingProblems names an incomplete cleanup, a program error and a wrong kind", () => {
+  assert.deepEqual(recordingProblems(recording({})), []);
+  assert.match(
+    recordingProblems(recording({}, { cleanup: { complete: false } })).join(),
+    /cleanup was not complete/,
+  );
+  assert.match(
+    recordingProblems(recording({}, { errors: { "native/x": "boom" } })).join(),
+    /native\/x: boom/,
+  );
+  assert.match(recordingProblems(recording({}, { version: 2 })).join(), /version/);
+});
+
+test("compareRecordings refuses a production recording that is not clean", () => {
+  const dirty = recording({ r: row(1) }, { cleanup: { complete: false } });
+  assert.throws(
+    () =>
+      compareRecordings({
+        productions: [dirty, recording({ r: row(1) })],
+        local: recording({ r: row(1) }),
+      }),
+    /cleanup was not complete/,
+  );
+});
+
+test("compareRecordings needs exactly two production recordings", () => {
+  assert.throws(
+    () => compareRecordings({ productions: [recording({})], local: recording({}) }),
+    /two production recordings/,
+  );
+});

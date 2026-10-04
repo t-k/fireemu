@@ -803,3 +803,15 @@ test("the command line takes the A2 read-backs with --settlements", () => {
   const without = runCli(files, (f) => ["--production", f.p1, f.p2, "--local", f.good]);
   assert.equal(without.code, 2);
 });
+
+test("a settlement that does not settle keeps the production recording refused, with its reasons", () => {
+  assert.throws(
+    () =>
+      compareRecordings({
+        productions: [settledRecording(), recording({ r: row(1) })],
+        local: recording({ r: row(1) }),
+        settlements: [readback({ clean: false })],
+      }),
+    /cleanup was not complete; the read-back is not clean/,
+  );
+});

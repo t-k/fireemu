@@ -355,3 +355,20 @@ test("the cleanup journals each delete batch before and after, with the answer",
     assert.deepEqual(journal.lines[0].names, [{ name: N("a"), op: "delete" }]);
   }
 });
+
+test("journal lines are of type names, whoever writes them", async () => {
+  const journal = memoryJournal();
+  const ledger = createLedger({ journal });
+  ledger.sending([upd(N("a"))]);
+  ledger.answered([upd(N("a"))], "ok");
+  const w = world({ docs: [N("a")] });
+  await settleNames({
+    issued: [[N("a"), st(true)]],
+    client: w.client,
+    root: ROOT,
+    run: RUN,
+    journal,
+  });
+  assert.equal(journal.lines.length, 4);
+  assert.ok(journal.lines.every((line) => line.type === "names"));
+});

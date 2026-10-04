@@ -131,3 +131,19 @@ test("the local Pub/Sub scenarios publish what the production script publishes",
     assert.equal(result.readback.topicName, topic);
   }
 });
+
+test("each local Pub/Sub message gets its own id, counted like the production script's", async () => {
+  const capture = { barrier: async () => ({ cursor: 0 }) };
+  const pubsub = fakePubsub();
+  for (let i = 0; i < 3; i += 1)
+    await runPubsubScenario({
+      scenario: { id: "pubsub-publish", resource: "topic-primary" },
+      capture,
+      pubsub,
+    });
+  const texts = pubsub.published.map((message) => message.data.toString("utf8"));
+  assert.equal(new Set(texts).size, 3);
+  const counters = texts.map((text) => Number(text.match(/m(\d+)$/)[1]));
+  assert.equal(counters[1], counters[0] + 1);
+  assert.equal(counters[2], counters[1] + 1);
+});

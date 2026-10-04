@@ -224,8 +224,7 @@ export async function runNative(
             if (withToken) saved.token = asBuffer(withToken.resumeToken);
             const withTime = changes.findLast((c) => c.readTime);
             if (withTime) saved.readTime = withTime.readTime;
-            tokens.set(step.token ?? step.time, saved);
-            if (step.token && step.time) tokens.set(step.time, saved);
+            for (const name of [step.token, step.time]) if (name !== undefined) tokens.set(name, saved);
             break;
           }
           case "close":

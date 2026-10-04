@@ -178,7 +178,7 @@ export async function recordSdk({
   } catch (error) {
     errors["sdk/run"] = String(error?.message ?? error);
   }
-  let documents = { complete: false, error: "sweep did not run" };
+  let documents;
   try {
     documents = await sweepDocuments({ client: native, project: target.project, run, accounts });
   } catch (error) {
@@ -186,7 +186,7 @@ export async function recordSdk({
   } finally {
     native.close();
   }
-  let accountReport = { complete: false, error: "cleanup did not run" };
+  let accountReport;
   try {
     accountReport = await session.cleanup();
   } catch (error) {

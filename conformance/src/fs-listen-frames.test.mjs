@@ -395,3 +395,14 @@ test("a boundary merges only into the one directly before it, not into an earlie
     { kind: "boundary", resumeToken: true },
   ]);
 });
+
+test("a run of boundaries after another row merges into that run, not into the first row", () => {
+  const rows = frameRows(
+    [target("ADD"), global(), global({ resumeToken: Buffer.from("t") })],
+    OPTS,
+  );
+  assert.deepEqual(rows, [
+    { kind: "targetChange", type: "ADD", targetIds: [1], cause: null, resumeToken: false },
+    { kind: "boundary", resumeToken: true },
+  ]);
+});

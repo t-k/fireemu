@@ -357,24 +357,26 @@ export function programProblems(programs) {
           break;
         case "remove":
         case "wait":
-        case "record":
+          usesStream(step.stream);
+          break;
         case "save":
           usesStream(step.stream);
-          if (step.do === "save")
-            for (const name of [step.token, step.time]) if (name !== undefined) tokens.add(name);
-          if (step.do === "record") {
-            if (!step.row.startsWith(`${program.id}/`))
-              problems.push(`${here}: row ${step.row} must start with ${program.id}/`);
-            if (rowIds.has(step.row)) problems.push(`${here}: row ${step.row} is recorded twice`);
-            rowIds.add(step.row);
-          }
+          tokens.add(step.token);
+          tokens.add(step.time);
+          break;
+        case "record":
+          usesStream(step.stream);
+          if (!step.row.startsWith(`${program.id}/`))
+            problems.push(`${here}: row ${step.row} must start with ${program.id}/`);
+          if (rowIds.has(step.row)) problems.push(`${here}: row ${step.row} is recorded twice`);
+          rowIds.add(step.row);
+          break;
+        case "settle":
+        case "sleep":
           break;
         case "close":
           usesStream(step.stream);
           streams.delete(step.stream);
-          break;
-        case "settle":
-        case "sleep":
           break;
         default:
           problems.push(`${here}: unknown step`);

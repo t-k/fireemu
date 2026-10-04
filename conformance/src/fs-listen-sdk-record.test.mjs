@@ -555,3 +555,97 @@ test("runDriver: the process is spawned with piped output and inherited errors; 
   await assert.rejects(waiting, /without a receipt/);
   assert.deepEqual(late.killed, ["SIGKILL"]);
 });
+
+test("recordSdk: what it records when the driver fails, and that it closes the native client and names the SDK", async () => {
+  const target = {
+    kind: "local",
+    project: "demo",
+    firestore: { host: "h", port: 1 },
+    auth: "http://a",
+  };
+  let closed = 0;
+  const native = {
+    close() {
+      closed += 1;
+    },
+    async listIds() {
+      return [];
+    },
+    async missing(names) {
+      return names.map((name) => ({ name, exists: false }));
+    },
+    async commit() {},
+  };
+  const failed = await recordWith(target, { native, driver: undefined });
+  assert.equal(closed, 1);
+  assert.equal(failed.recording.sdk, "firebase 12.18.0");
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = async () => ({ status: 200, json: async () => ({ localId: "u" }) });
+  try {
+    const out = await recordSdk({
+      target,
+      run: "r1",
+      runDriverImpl: async () => {
+        throw new Error("no driver");
+      },
+      makeNative: () => native,
+    });
+    assert.equal(out.requests, 0);
+    assert.equal(out.connections, 0);
+    assert.equal(out.cleanup.clientsClosed, false);
+    assert.equal(out.cleanup.sdk, null);
+    assert.deepEqual(out.rows, {});
+    assert.equal(closed, 2);
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+});
+
+test("recordSdk: an account cleanup that throws is reported, with the message or the value", async () => {
+  const target = {
+    kind: "local",
+    project: "demo",
+    firestore: { host: "h", port: 1 },
+    auth: "http://a",
+  };
+  const native = {
+    close() {},
+    async listIds() {
+      return [];
+    },
+    async missing(names) {
+      return names.map((name) => ({ name, exists: false }));
+    },
+    async commit() {},
+  };
+  const realFetch = globalThis.fetch;
+  try {
+    for (const [thrown, expected] of [
+      [new Error("odd status"), "odd status"],
+      ["plain", "plain"],
+    ]) {
+      globalThis.fetch = async (url) =>
+        url.endsWith("/accounts")
+          ? { status: 200, json: async () => ({ localId: "u" }) }
+          : {
+              get status() {
+                throw thrown;
+              },
+            };
+      const out = await recordSdk({
+        target,
+        run: "r1",
+        runDriverImpl: async () => ({
+          receipt: { thrown: null, cleanup: { complete: true }, teardown: [], cases: [] },
+          wire: 0,
+          connections: 0,
+        }),
+        makeNative: () => native,
+      });
+      assert.deepEqual(out.cleanup.accounts, { complete: false, error: expected });
+      assert.equal(out.cleanup.complete, false);
+    }
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+});

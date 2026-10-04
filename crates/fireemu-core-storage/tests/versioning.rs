@@ -95,13 +95,19 @@ fn an_overwrite_in_a_versioned_bucket_keeps_the_old_generation_and_announces_it(
 fn an_overwrite_in_an_unversioned_bucket_keeps_nothing() {
     let mut store = StorageState::new(1);
     let b = bucket();
-    put(&mut store, &b, "o.txt", "before", 1);
+    let first = put(&mut store, &b, "o.txt", "before", 1);
     let _ = store.drain_events();
     let second = put(&mut store, &b, "o.txt", "updated", 2);
     assert!(store.noncurrent_versions(&b, &name("o.txt")).is_empty());
+    // DOCUMENTED, UNRECORDED: production announces the replaced generation as deleted ("This
+    // includes objects that are overwritten", https://firebase.google.com/docs/functions/gcp-storage-events);
+    // the order of the two events is unrecorded.
     assert_eq!(
         kinds(&store.drain_events()),
-        vec![("finalized", second.generation)]
+        vec![
+            ("deleted", first.generation),
+            ("finalized", second.generation)
+        ]
     );
     assert_eq!(store.retained_blob_bytes(), "updated".len() as u64);
 }
@@ -478,6 +484,8 @@ proptest! {
                         if model.versioned {
                             model.noncurrent.entry(key).or_default().push(old);
                             expected.push(("archived", old.0));
+                        } else {
+                            expected.push(("deleted", old.0));
                         }
                     }
                     expected.push(("finalized", meta.generation));

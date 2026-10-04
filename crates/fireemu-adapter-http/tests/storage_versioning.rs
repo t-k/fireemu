@@ -273,7 +273,12 @@ fn an_overwrite_in_an_unversioned_bucket_keeps_nothing_and_announces_no_archive(
     let first = upload(&s, "o.txt", "before");
     let _ = drain(&seen);
     let second = upload(&s, "o.txt", "updated");
-    assert_eq!(drain(&seen), vec![("finalized", gen(&second))]);
+    // DOCUMENTED, UNRECORDED: the replaced generation is announced as deleted before the new one
+    // is finalized (https://firebase.google.com/docs/functions/gcp-storage-events).
+    assert_eq!(
+        drain(&seen),
+        vec![("deleted", gen(&first)), ("finalized", gen(&second))]
+    );
     let gone = call(
         &s,
         "GET",
@@ -505,4 +510,302 @@ fn deleting_an_unknown_generation_is_not_found_and_changes_nothing() {
         b"",
     );
     assert_eq!(still.status, 200);
+}
+
+fn media(s: &StorageState, name: &str) -> Vec<u8> {
+    let r = call(
+        s,
+        "GET",
+        &format!("/storage/v1/b/{BUCKET}/o/{name}?alt=media"),
+        b"",
+    );
+    assert_eq!(r.status, 200);
+    r.body.to_vec()
+}
+
+#[test]
+fn copy_and_rewrite_can_read_a_noncurrent_source_generation() {
+    for acceptance in PROFILES {
+        let (s, seen) = state(acceptance);
+        set_versioning(&s, true);
+        let one = upload(&s, "o.txt", "one");
+        let two = upload(&s, "o.txt", "two");
+        let _ = drain(&seen);
+        // Restoring an old generation: copy it over the live name.
+        let r = call(
+            &s,
+            "POST",
+            &format!(
+                "/storage/v1/b/{BUCKET}/o/o.txt/copyTo/b/{BUCKET}/o/o.txt?sourceGeneration={}",
+                gen(&one)
+            ),
+            b"{}",
+        );
+        assert_eq!(r.status, 200, "{}", String::from_utf8_lossy(&r.body));
+        let restored = body(&r);
+        assert_eq!(media(&s, "o.txt"), b"one");
+        assert_ne!(gen(&restored), gen(&one), "a copy is a new generation");
+        assert_eq!(
+            drain(&seen),
+            vec![("archived", gen(&two)), ("finalized", gen(&restored))]
+        );
+        // The source version is still there, and a rewrite reads it too.
+        let r = call(
+            &s,
+            "POST",
+            &format!(
+                "/storage/v1/b/{BUCKET}/o/o.txt/rewriteTo/b/{BUCKET}/o/copy.txt?sourceGeneration={}",
+                gen(&two)
+            ),
+            b"{}",
+        );
+        assert_eq!(r.status, 200, "{}", String::from_utf8_lossy(&r.body));
+        assert_eq!(body(&r)["resource"]["size"], "3");
+        assert_eq!(media(&s, "copy.txt"), b"two");
+        // A generation that never existed is still not found, and changes nothing.
+        let _ = drain(&seen);
+        let r = call(
+            &s,
+            "POST",
+            &format!(
+                "/storage/v1/b/{BUCKET}/o/o.txt/copyTo/b/{BUCKET}/o/x.txt?sourceGeneration=424242"
+            ),
+            b"{}",
+        );
+        assert_eq!(r.status, 404);
+        assert!(drain(&seen).is_empty());
+    }
+}
+
+#[test]
+fn patching_a_generation_changes_that_generation_and_never_the_live_object() {
+    for acceptance in PROFILES {
+        let (s, seen) = state(acceptance);
+        set_versioning(&s, true);
+        let one = upload(&s, "o.txt", "one");
+        let two = upload(&s, "o.txt", "two");
+        let _ = drain(&seen);
+        let r = call(
+            &s,
+            "PATCH",
+            &format!("/storage/v1/b/{BUCKET}/o/o.txt?generation={}", gen(&one)),
+            br#"{"metadata":{"k":"v"}}"#,
+        );
+        assert_eq!(r.status, 200, "{}", String::from_utf8_lossy(&r.body));
+        let patched = body(&r);
+        assert_eq!(gen(&patched), gen(&one));
+        assert_eq!(patched["metageneration"], "2");
+        assert_eq!(patched["metadata"], json!({"k": "v"}));
+        // The live object is untouched.
+        let live = body(&call(
+            &s,
+            "GET",
+            &format!("/storage/v1/b/{BUCKET}/o/o.txt"),
+            b"",
+        ));
+        assert_eq!(gen(&live), gen(&two));
+        assert_eq!(live["metageneration"], "1");
+        assert!(live.get("metadata").is_none(), "{live}");
+        // The noncurrent version keeps the change.
+        let old = body(&call(
+            &s,
+            "GET",
+            &format!("/storage/v1/b/{BUCKET}/o/o.txt?generation={}", gen(&one)),
+            b"",
+        ));
+        assert_eq!(old["metageneration"], "2");
+        // UNRECORDED: a metadata change of a noncurrent version announces nothing.
+        assert!(drain(&seen).is_empty());
+        // The live generation by number patches the live object, as a plain patch does.
+        let r = call(
+            &s,
+            "PATCH",
+            &format!("/storage/v1/b/{BUCKET}/o/o.txt?generation={}", gen(&two)),
+            br#"{"contentType":"text/x-live"}"#,
+        );
+        assert_eq!(r.status, 200);
+        assert_eq!(body(&r)["metageneration"], "2");
+        assert_eq!(drain(&seen), vec![("metadata", gen(&two))]);
+    }
+}
+
+#[test]
+fn patching_an_unknown_generation_is_not_found_in_strict_and_patches_the_live_object_in_the_emulator(
+) {
+    let (s, _) = state(TokenAcceptance::Verified);
+    upload(&s, "o.txt", "one");
+    let r = call(
+        &s,
+        "PATCH",
+        &format!("/storage/v1/b/{BUCKET}/o/o.txt?generation=424242"),
+        br#"{"contentType":"text/x"}"#,
+    );
+    assert_eq!(r.status, 404);
+    let live = body(&call(
+        &s,
+        "GET",
+        &format!("/storage/v1/b/{BUCKET}/o/o.txt"),
+        b"",
+    ));
+    assert_eq!(live["metageneration"], "1", "nothing changed");
+    // The official emulator never reads `generation` on a patch and completes it; the emulator
+    // profile keeps completing it rather than refusing what that emulator accepts.
+    let (s, _) = state(TokenAcceptance::EmulatorMock);
+    upload(&s, "o.txt", "one");
+    let r = call(
+        &s,
+        "PATCH",
+        &format!("/storage/v1/b/{BUCKET}/o/o.txt?generation=424242"),
+        br#"{"contentType":"text/x"}"#,
+    );
+    assert_eq!(r.status, 200);
+}
+
+#[test]
+fn a_bucket_that_does_not_exist_is_not_found_and_patching_it_stores_nothing() {
+    for acceptance in PROFILES {
+        let (s, _) = state(acceptance);
+        let ghost = "/storage/v1/b/ghost-bucket";
+        assert_eq!(call(&s, "GET", ghost, b"").status, 404);
+        let r = call(&s, "PATCH", ghost, br#"{"versioning":{"enabled":true}}"#);
+        assert_eq!(r.status, 404, "{}", String::from_utf8_lossy(&r.body));
+        assert_eq!(body(&r)["error"]["status"], "NOT_FOUND");
+        assert_eq!(
+            call(&s, "GET", ghost, b"").status,
+            404,
+            "nothing was stored"
+        );
+        // The project's default buckets exist from the start; any bucket holding an object, or
+        // configured earlier, exists too.
+        assert_eq!(
+            call(&s, "GET", "/storage/v1/b/demo-app.firebasestorage.app", b"").status,
+            200
+        );
+        assert_eq!(
+            call(&s, "GET", &format!("/storage/v1/b/{BUCKET}"), b"").status,
+            200
+        );
+        let r = call(
+            &s,
+            "POST",
+            "/upload/storage/v1/b/other-bucket/o?uploadType=media&name=a.txt",
+            b"x",
+        );
+        assert_eq!(r.status, 200);
+        assert_eq!(
+            call(&s, "GET", "/storage/v1/b/other-bucket", b"").status,
+            200
+        );
+        assert_eq!(
+            call(
+                &s,
+                "PATCH",
+                "/storage/v1/b/other-bucket",
+                br#"{"versioning":{"enabled":true}}"#
+            )
+            .status,
+            200
+        );
+    }
+}
+
+#[test]
+fn the_fields_projection_selects_nested_fields() {
+    for acceptance in PROFILES {
+        let (s, _) = state(acceptance);
+        set_versioning(&s, true);
+        let get = |fields: &str| {
+            body(&call(
+                &s,
+                "GET",
+                &format!("/storage/v1/b/{BUCKET}?fields={fields}"),
+                b"",
+            ))
+        };
+        assert_eq!(
+            get("versioning/enabled"),
+            json!({"versioning": {"enabled": true}})
+        );
+        assert_eq!(
+            get("versioning(enabled)"),
+            json!({"versioning": {"enabled": true}})
+        );
+        assert_eq!(
+            get("name,versioning(enabled)"),
+            json!({"name": BUCKET, "versioning": {"enabled": true}})
+        );
+        assert_eq!(get("versioning/nothing"), json!({"versioning": {}}));
+        assert_eq!(get("nothing"), json!({}));
+    }
+}
+
+#[test]
+fn a_versions_listing_refuses_a_page_token_it_cannot_read() {
+    for acceptance in PROFILES {
+        let (s, _) = state(acceptance);
+        set_versioning(&s, true);
+        upload(&s, "a.txt", "1");
+        for token in ["garbage", "3", "", "i:notanumber:a.txt"] {
+            let r = call(
+                &s,
+                "GET",
+                &format!("/storage/v1/b/{BUCKET}/o?versions=true&pageToken={token}"),
+                b"",
+            );
+            if token.is_empty() {
+                // An empty token is no token.
+                assert_eq!(r.status, 200, "{token:?}");
+            } else {
+                assert_eq!(
+                    r.status,
+                    400,
+                    "{token:?}: {}",
+                    String::from_utf8_lossy(&r.body)
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn a_versions_page_token_is_a_cursor_that_survives_writes_between_pages() {
+    for acceptance in PROFILES {
+        let (s, _) = state(acceptance);
+        set_versioning(&s, true);
+        let a1 = upload(&s, "a.txt", "1");
+        let a2 = upload(&s, "a.txt", "22");
+        let b1 = upload(&s, "b.txt", "3");
+        let c1 = upload(&s, "c.txt", "4");
+        let page = |token: Option<&str>| {
+            let query = token.map_or(String::new(), |t| format!("&pageToken={t}"));
+            body(&call(
+                &s,
+                "GET",
+                &format!("/storage/v1/b/{BUCKET}/o?versions=true&maxResults=1{query}"),
+                b"",
+            ))
+        };
+        let first = page(None);
+        assert_eq!(gen(&first["items"][0]), gen(&a1));
+        let token = first["nextPageToken"].as_str().unwrap().to_owned();
+        // An entry before the cursor disappears between the pages: an offset would now skip `a2`.
+        let r = call(
+            &s,
+            "DELETE",
+            &format!("/storage/v1/b/{BUCKET}/o/a.txt?generation={}", gen(&a1)),
+            b"",
+        );
+        assert_eq!(r.status, 204);
+        // A new generation of an earlier name appears before the cursor too.
+        let mut seen = Vec::new();
+        let mut next = Some(token);
+        while let Some(t) = next {
+            let p = page(Some(&t));
+            for item in p["items"].as_array().cloned().unwrap_or_default() {
+                seen.push(gen(&item));
+            }
+            next = p["nextPageToken"].as_str().map(str::to_owned);
+        }
+        assert_eq!(seen, vec![gen(&a2), gen(&b1), gen(&c1)]);
+    }
 }

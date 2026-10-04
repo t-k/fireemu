@@ -16,7 +16,7 @@ function v2Frame(path, time, extra = {}) {
     generation: 2,
     source: "firestore",
     event: {
-      id: "dc880941-8bb2-410f-9b10-51c47560a33a",
+      id: "3b9d2e71-0f5a-4c86-b2d4-8e1f6a7c9d05",
       time,
       type: "google.cloud.firestore.document.v1.created",
       subject: `documents/${path}`,

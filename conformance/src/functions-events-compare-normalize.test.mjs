@@ -130,13 +130,13 @@ test("format descriptors keep precision, length and kind but not the value", () 
     fractionDigits: 0,
     zone: "Z",
   });
-  assert.deepEqual(formatOf("22201766561849599"), { kind: "decimal", length: 17 });
-  assert.deepEqual(formatOf("4e141130-b7ae-47a0-9009-d11bc411baf5-0"), {
+  assert.deepEqual(formatOf("31415926535897932"), { kind: "decimal", length: 17 });
+  assert.deepEqual(formatOf("7c2f3a90-41de-4b8e-9a3c-5e6f7a8b9c0d-0"), {
     kind: "uuid",
     length: 38,
   });
-  assert.deepEqual(formatOf("dc880941-8bb2-410f-9b10-51c47560a33a"), { kind: "uuid", length: 36 });
-  assert.deepEqual(formatOf("o9gONg=="), { kind: "text", length: 8 });
+  assert.deepEqual(formatOf("3b9d2e71-0f5a-4c86-b2d4-8e1f6a7c9d05"), { kind: "uuid", length: 36 });
+  assert.deepEqual(formatOf("MnnT1Q=="), { kind: "text", length: 8 });
   assert.deepEqual(formatOf(3), { kind: "integer" });
   assert.deepEqual(formatOf(-0.5), { kind: "fraction" });
   assert.deepEqual(formatOf(true), { kind: "boolean" });
@@ -179,15 +179,15 @@ test("a format feature that also varies between passes is volatile; presence and
 });
 
 test("local comparison reports deterministic value, presence, type, format and order differences", () => {
-  const production = flatten({ id: "111", kind: "k", gen: "1790844566471739", n: { a: 1, b: 2 } });
-  const pass2 = flatten({ id: "222", kind: "k", gen: "1790844566471800", n: { a: 1, b: 2 } });
+  const production = flatten({ id: "111", kind: "k", gen: "1790844566123456", n: { a: 1, b: 2 } });
+  const pass2 = flatten({ id: "222", kind: "k", gen: "1790844566123500", n: { a: 1, b: 2 } });
   const { volatile } = deriveVolatile(production, pass2);
 
   assert.deepEqual(
     compareObservation(
       production,
       volatile,
-      flatten({ id: "333", kind: "k", gen: "1790844566471999", n: { a: 1, b: 2 } }),
+      flatten({ id: "333", kind: "k", gen: "1790844566123999", n: { a: 1, b: 2 } }),
       "emulator",
     ),
     [],
@@ -210,20 +210,20 @@ test("local comparison reports deterministic value, presence, type, format and o
   );
   for (const reason of reasons) {
     assert.equal(reason.includes("other"), false, "raw values never appear in a reason");
-    assert.equal(reason.includes("1790844566471739"), false);
+    assert.equal(reason.includes("1790844566123456"), false);
   }
 
   const missing = compareObservation(
     production,
     volatile,
-    flatten({ kind: "k", gen: "1790844566471999", n: { a: 1, b: 2 } }),
+    flatten({ kind: "k", gen: "1790844566123999", n: { a: 1, b: 2 } }),
     "emulator",
   );
   assert.deepEqual(missing, ["emulator: missing-field $.id"]);
   const typed = compareObservation(
     production,
     volatile,
-    flatten({ id: 333, kind: "k", gen: "1790844566471999", n: { a: 1, b: 2 } }),
+    flatten({ id: 333, kind: "k", gen: "1790844566123999", n: { a: 1, b: 2 } }),
     "emulator",
   );
   assert.deepEqual(typed, ["emulator: type $.id (production string, local number)"]);

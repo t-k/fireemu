@@ -535,6 +535,10 @@ class Ledger:
     def _cleanup_read(self, site, role, transport, result, code):
         doc = self.docs[role]
         if site.startswith("cleanup/read/"):
+            if code == 5 and doc["status"] == "possibly-owned":
+                # A create that was refused (or never landed): the recovery's read proves nothing exists, so nothing is owned and nothing is deleted.
+                doc["status"] = "confirmed-absent"
+                return
             if code != 0:
                 raise ValueError("owned document is not readable for deletion")
             doc["stamp"] = self._owned(role, result["response"], "grpc", set(doc["possible"]) | {doc["state"]} | self.tried[role])
@@ -757,6 +761,8 @@ class Collector:
         for role in self.ledger.owed_documents():
             try:
                 self._rpc(f"cleanup/read/{role}", "grpc", "GetDocument", self.ledger.cleanup_request("read", role), "documentCleanup")
+                if self.ledger.docs[role]["status"] == "confirmed-absent":
+                    continue   # the read found nothing: there is nothing to delete or to verify
                 self._rpc(f"cleanup/delete/{role}", "grpc", "DeleteDocument", self.ledger.cleanup_request("delete", role), "documentCleanup")
                 self._rpc(f"cleanup/verify/{role}", "grpc", "GetDocument", self.ledger.cleanup_request("verify", role), "documentCleanup")
             except (Exception, KeyboardInterrupt):
@@ -912,6 +918,8 @@ def projection(receipt, table):
                 raise ValueError("cleanup request differs")
             ledger.before(site, transport, method, request, None)
             ledger.after(site, transport, method, request, None, result, row["timing"])
+            if kind == "read" and ledger.docs[role]["status"] == "confirmed-absent":
+                queue = [entry for entry in queue if entry[1] != role]   # found absent: no delete or verify follows for it
         else:
             raise ValueError("undeclared native phase")
     if index != len(steps) or waiting is not None or owed or queue or releases != counts["tokenCleanup"] or not ledger.all_absent() or ledger.unresolved_tokens() or observations != receipt.get("observations") or ledger.snapshot()["tokens"] != receipt.get("tokens") or ledger.snapshot()["documents"] != receipt.get("documents") or (waits or receipt.get("waits")) and waits != receipt.get("waits"):

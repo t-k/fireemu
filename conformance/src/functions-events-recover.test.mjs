@@ -6,6 +6,7 @@ import test from "node:test";
 
 import { RECOVERY_RULES } from "./functions-events/record/guard.mjs";
 import { OPERATION_MAX_POLLS, recover, residue } from "./functions-events/record/recover.mjs";
+import { RECOVERY_MAX_REQUESTS } from "./functions-events/record/sandbox.mjs";
 import { createTransport } from "./functions-events/record/rest.mjs";
 import { createRecoverWorld } from "./functions-events-recover-world.mjs";
 
@@ -283,4 +284,119 @@ test("the recovery sends only requests its own rules name: no POST, PUT or PATCH
       (r) => !r.host.includes("storage.googleapis.com") || r.method === "GET",
     ),
   );
+});
+
+test("a 404 whose body cannot be read settles nothing: the resource is not taken for absent and not deleted", async () => {
+  for (const url of [
+    "/functions/storageArchivedV2",
+    "/subscriptions/eventarc-us-east1-pubsubpublishedv2-974238-sub-583",
+  ]) {
+    const { world, transport, sleep } = setup({
+      failures: [
+        {
+          match: (m, u) => m === "GET" && u.endsWith(url),
+          status: 404,
+          body: "<html>not found</html>",
+        },
+      ],
+    });
+    const { outcome, record } = await recover({ transport, sleep });
+    assert.equal(outcome, "needs-review", url);
+    assert.ok(
+      record.steps.some((step) => step.result === "unsettled"),
+      url,
+    );
+    assert.ok(!deletes(world).some((d) => url.endsWith(d)), url);
+  }
+});
+
+test("a read-back that cannot be read is not complete, so nothing is settled by it", async () => {
+  for (const tail of ["/locations/us-east1/services", "/subscriptions", "/topics"]) {
+    const { transport, sleep } = setup({
+      failures: [{ match: (m, u) => m === "GET" && u.endsWith(tail), status: 503 }],
+    });
+    const { outcome, record } = await recover({ transport, sleep });
+    assert.equal(outcome, "needs-review", tail);
+    assert.equal(record.residue.complete, false, tail);
+  }
+});
+
+test("a list that comes in pages is read to the end, and a list of more than five pages is not complete", async () => {
+  const { world, transport, sleep } = setup();
+  const original = world.fetch;
+  const pages = new Map();
+  world.fetch = async (url, init) => {
+    const parsed = new URL(url);
+    if (
+      parsed.hostname === "pubsub.googleapis.com" &&
+      parsed.pathname.endsWith("/subscriptions") &&
+      init.method === "GET"
+    ) {
+      const page = Number(parsed.searchParams.get("pageToken") ?? "0");
+      pages.set(page, true);
+      const body =
+        page < 2
+          ? {
+              subscriptions: [{ name: `projects/p/subscriptions/mine-${page}` }],
+              nextPageToken: String(page + 1),
+            }
+          : { subscriptions: [{ name: "projects/p/subscriptions/eventarc-late" }] };
+      return { status: 200, arrayBuffer: async () => Buffer.from(JSON.stringify(body)) };
+    }
+    return original(url, init);
+  };
+  const paged = createTransport({
+    directory: mkdtempSync(join(tmpdir(), "fe-recover-")),
+    ceiling: 90,
+    token: async () => "t".repeat(24),
+    fetch: world.fetch,
+    rules: RECOVERY_RULES,
+  });
+  const { record } = await recover({ transport: paged, sleep });
+  assert.deepEqual([...pages.keys()], [0, 1, 2]);
+  assert.deepEqual(
+    record.residue.remaining.filter((r) => r.startsWith("subscription")),
+    ["subscription: eventarc-late"],
+  );
+  const endless = setup();
+  const endlessFetch = endless.world.fetch;
+  let served = 0;
+  endless.world.fetch = async (url, init) => {
+    const parsed = new URL(url);
+    if (
+      parsed.hostname === "pubsub.googleapis.com" &&
+      parsed.pathname.endsWith("/topics") &&
+      init.method === "GET"
+    ) {
+      served += 1;
+      return {
+        status: 200,
+        arrayBuffer: async () => Buffer.from(JSON.stringify({ topics: [], nextPageToken: "more" })),
+      };
+    }
+    return endlessFetch(url, init);
+  };
+  const transport2 = createTransport({
+    directory: mkdtempSync(join(tmpdir(), "fe-recover-")),
+    ceiling: 90,
+    token: async () => "t".repeat(24),
+    fetch: endless.world.fetch,
+    rules: RECOVERY_RULES,
+  });
+  const result = await recover({ transport: transport2, sleep: endless.sleep });
+  assert.equal(served, 5);
+  assert.equal(result.record.residue.complete, false);
+});
+
+test("the worst case (both operations polled 30 times, nothing else helps) stays inside the 90 requests the envelope allows", async () => {
+  const { world, transport, sleep } = setup({
+    eventarcCleans: false,
+    neverDone: ["storageArchivedV2", "pubsubPublishedV2"],
+  });
+  const { record } = await recover({ transport, sleep });
+  assert.ok(world.state.requests.length <= 90, `${world.state.requests.length} requests`);
+  assert.equal(transport.state.refused, 0);
+  assert.equal(record.steps.filter((s) => s.result === "operation-pending").length, 2);
+  assert.equal(RECOVERY_MAX_REQUESTS, 90);
+  assert.ok(world.state.requests.length > 60, "the worst case is what the ceiling is for");
 });

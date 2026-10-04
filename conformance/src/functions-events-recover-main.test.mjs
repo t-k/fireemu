@@ -455,3 +455,52 @@ test(
     assert.ok(!problems.some((p) => /lock/.test(p)), "the real lock is the origin's own");
   },
 );
+
+test("the budget is checked: a ledger that has used the cap refuses the recovery's reserve", async () => {
+  const a = arrange();
+  const extra = JSON.stringify({
+    project: sandbox.PROJECT,
+    taskId: sandbox.TASK_ID,
+    event: "started",
+    runDir: "/runs/big",
+    estimatedUsd: 29.95,
+    ts: "2026-10-04T13:00:00Z",
+  });
+  writeFileSync(a.ledgerPath, `${extra}\n${readFileSync(a.ledgerPath, "utf8")}`);
+  const result = await main(a.argv("check"), a.deps);
+  assert.ok(
+    result.problems.some((p) => /passes the cap/.test(p)),
+    JSON.stringify(result.problems),
+  );
+  const fine = arrange();
+  const small = JSON.stringify({
+    project: sandbox.PROJECT,
+    taskId: sandbox.TASK_ID,
+    event: "started",
+    runDir: "/runs/big",
+    estimatedUsd: 29.9,
+    ts: "2026-10-04T13:00:00Z",
+  });
+  writeFileSync(fine.ledgerPath, `${small}\n${readFileSync(fine.ledgerPath, "utf8")}`);
+  assert.deepEqual((await main(fine.argv("check"), fine.deps)).problems, []);
+});
+
+test("the default test of a live holder: a pid that exists (even one we may not signal) blocks, a pid that does not exist does not", async () => {
+  for (const [pid, blocked] of [
+    [process.pid, true],
+    [1, true],
+    [999999, false],
+  ]) {
+    const a = arrange();
+    const text = JSON.stringify({ pid, runDir: origin(a.runsDir), packetSha256: "e".repeat(64) });
+    writeFileSync(join(a.lockDir, `${sandbox.PROJECT}.lock`), text);
+    writeFileSync(a.ledgerPath, `${ledgerFor(a.runsDir, text)}\n`);
+    delete a.deps.isAlive;
+    const result = await main(a.argv("check"), a.deps);
+    assert.equal(
+      result.problems.some((p) => /still running/.test(p)),
+      blocked,
+      `pid ${pid}: ${JSON.stringify(result.problems)}`,
+    );
+  }
+});

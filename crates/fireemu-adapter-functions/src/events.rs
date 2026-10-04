@@ -1128,6 +1128,39 @@ mod auth_event_shapes {
     }
 
     #[test]
+    fn a_federated_provider_entry_carries_the_members_it_has_and_no_placeholders() {
+        // Unrecorded (no recorded account was federated): the entry keeps the members the
+        // identity has, and a member it lacks is absent like the password entry's.
+        use fireemu_core_auth::store::FederatedIdentity;
+        let mut user = password_user("a@example.test", at(FRAME_55_SECOND, 0));
+        user.federated = vec![
+            FederatedIdentity {
+                provider_id: "google.com".to_owned(),
+                raw_id: "g-1".to_owned(),
+                email: Some("g@example.test".to_owned()),
+                display_name: None,
+                photo_url: Some("https://example.test/g.png".to_owned()),
+            },
+            FederatedIdentity {
+                provider_id: "github.com".to_owned(),
+                raw_id: "h-1".to_owned(),
+                email: None,
+                display_name: Some("H".to_owned()),
+                photo_url: None,
+            },
+        ];
+        let wire = user_record_json(&user);
+        assert_eq!(
+            wire["providerData"][1],
+            json!({"uid": "g-1", "providerId": "google.com", "email": "g@example.test", "photoURL": "https://example.test/g.png"})
+        );
+        assert_eq!(
+            wire["providerData"][2],
+            json!({"uid": "h-1", "providerId": "github.com", "displayName": "H"})
+        );
+    }
+
+    #[test]
     fn tokens_valid_after_time_is_null_for_the_recorded_never_revoked_accounts() {
         // Frames 55, 121, 125, 131 ...: `tokensValidAfterTime` is null for an admin-created and
         // for a signed-up account alike.
@@ -1211,8 +1244,8 @@ mod auth_event_shapes {
 
         #[test]
         fn creation_and_sign_in_times_are_the_instant_cut_to_the_whole_second(
-            created in 0_i128..4_000_000_000_000_000_000,
-            signed_in in proptest::option::of(0_i128..4_000_000_000_000_000_000),
+            created in -4_000_000_000_000_000_000_i128..4_000_000_000_000_000_000,
+            signed_in in proptest::option::of(-4_000_000_000_000_000_000_i128..4_000_000_000_000_000_000),
         ) {
             let mut user = password_user("a@example.test", LogicalInstant::from_nanos(created));
             user.last_sign_in_at = signed_in.map(LogicalInstant::from_nanos);

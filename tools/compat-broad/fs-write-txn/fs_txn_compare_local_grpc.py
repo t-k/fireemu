@@ -110,6 +110,12 @@ def main():
         result["cases"], result["reads"], result["skipped"], result["idleCandidates"] = compare(production, local)
         rows = result["cases"] + result["reads"] + result["skipped"] + result["idleCandidates"]
         result["mismatches"] = sum(not row["match"] for row in rows)
+        if os.environ.get("COMPARE_CLOCK") == "virtual":
+            # the idle each candidate reached beside the recorded one (the least the production token idled before the request)
+            from txn_replay_clock import achieved_ages, production_idle_gaps
+
+            sites = {row["site"] for row in production.get("idleCandidates", [])}
+            result["achievedAges"] = achieved_ages(production_idle_gaps(source["steps"]), production_idle_gaps(receipt["steps"]), sites=sites)
         if not result["skipped"]:
             result["skipped"] = None
     out.write_text(json.dumps(result, indent=1))

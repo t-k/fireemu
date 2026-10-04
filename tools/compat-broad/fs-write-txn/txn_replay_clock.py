@@ -46,6 +46,27 @@ def production_idle_gaps(steps):
     return result
 
 
+def dispatch_gaps(steps, sites):
+    """Per named site, the seconds between the dispatch of the step before it and its own dispatch (the age its wait reached); the first step has none."""
+    result = {}
+    for previous, step in zip(steps, steps[1:]):
+        if step["site"] in sites:
+            result[step["site"]] = step["timing"]["dispatchMonotonic"] - previous["timing"]["dispatchMonotonic"]
+    return result
+
+
+def achieved_ages(production, local, sites=None):
+    """Per site, the age (or idle) the recording had and the replay reached, so the record shows what a boundary row was compared at."""
+    rows = []
+    for site, value in production.items():
+        if sites is not None and site not in sites:
+            continue
+        if site not in local:
+            raise ValueError("a recorded site has no local age")
+        rows.append({"site": site, "production": value, "local": local[site], "difference": round(local[site] - value, 3)})
+    return rows
+
+
 def paced_wait(declared, production_step, local_duration):
     """The local wait for one step: the production step less the local duration of the request before it, never below the declared wait."""
     if production_step is None:
@@ -69,11 +90,14 @@ class VirtualClock:
         return moment.strftime("%Y-%m-%dT%H:%M:%S.%fZ")
 
     def sleep(self, seconds):
-        seconds = max(1, int(round(seconds)))
-        request = urllib.request.Request(self.control + "/sessions/default/clock:advance", data=json.dumps({"seconds": seconds}).encode(),
+        """Advance the emulator's clock by exactly this wait: the control API takes whole milliseconds, so a long program's token ages do not drift."""
+        if seconds <= 0:
+            return
+        millis = max(1, int(round(seconds * 1000)))
+        request = urllib.request.Request(self.control + "/sessions/default/clock:advance", data=json.dumps({"millis": millis}).encode(),
                                          method="POST", headers={"content-type": "application/json", "authorization": "Bearer " + self.token})
         urllib.request.urlopen(request, timeout=10).read()
-        self.skew += seconds
+        self.skew += millis / 1000
 
 
 class PacedCollector(Collector):

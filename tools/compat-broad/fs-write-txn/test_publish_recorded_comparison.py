@@ -194,3 +194,26 @@ def test_the_records_authorize_no_production_request_and_number_the_recordings(t
     assert observations["authorizesProduction"] is False and comparison["authorizesProduction"] is False
     assert comparison["productionRequests"] == 0
     assert [entry["recording"] for entry in comparison["recordings"]] == [1, 2]
+
+
+def test_the_ages_each_replay_reached_are_published_beside_its_rows(tmp_path):
+    paths = [write(tmp_path, 1), write(tmp_path, 2)]
+    ages = [{"site": "w", "production": 121.0, "local": 121.0, "difference": 0.0}]
+    results = [result(paths[0], achievedAges=ages), result(paths[1])]
+    _observations, comparison = build(tmp_path, results=results, paths=paths)
+    assert comparison["recordings"][0]["achievedAges"] == ages
+    assert "achievedAges" not in comparison["recordings"][1]
+    assert comparison["summary"] == {"recordings": 2, "rows": 4, "mismatches": 0}   # ages are not rows
+
+
+def test_a_table_file_that_was_replayed_as_recorded_is_named_once_by_its_as_recorded_entry(tmp_path):
+    paths = [write(tmp_path, 1), write(tmp_path, 2)]
+    table = {"path": "tools/compat-broad/fs-write-txn/fs_txn_table_p12.py", "sha256": "5" * 64}
+    entry = {"path": table["path"], "commit": "6" * 40, "blob": "7" * 40, "sha256": "8" * 64}
+    kwargs = dict(program="P", key="p12", conditions=["FS-TRANSACTION/x"], recordings=paths, results=[result(path) for path in paths], projections=[projection(), projection()], identities=[])
+    _o, replayed = publish.build(table=table, as_recorded=[entry], **kwargs)
+    assert "table" not in replayed and replayed["asRecorded"] == [entry]
+    # a table the replay used as committed, and one beside a different as-recorded file, are named by `table`
+    assert publish.build(table=table, **kwargs)[1]["table"] == table
+    other = {**entry, "path": "tools/compat-broad/fs-write-txn/other.py"}
+    assert publish.build(table=table, as_recorded=[other], **kwargs)[1]["table"] == table

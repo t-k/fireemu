@@ -119,6 +119,12 @@ def main():
         result["cases"], result["reads"], result["commitTimes"] = compare(production, local, production_relations, local_relations, project)
         rows = result["cases"] + result["reads"] + (result["commitTimes"] or [])
         result["mismatches"] = sum(not row["match"] for row in rows)
+        if os.environ.get("COMPARE_CLOCK") == "virtual" and recorded:
+            # what each wait reached beside what the recording had: the record shows the boundary rows were compared at the recorded ages
+            from txn_replay_clock import achieved_ages, dispatch_gaps
+
+            waited = {step["id"] for step in plan["steps"] if "waitSeconds" in step}
+            result["achievedAges"] = achieved_ages(dispatch_gaps(source["steps"], waited), dispatch_gaps(receipt["steps"], waited))
     out.write_text(json.dumps(result, indent=1))
     print("complete", receipt["complete"], receipt["failureType"], "mismatches", result.get("mismatches"))
     for row in (result["cases"] or []) + (result["reads"] or []) + (result["commitTimes"] or []):

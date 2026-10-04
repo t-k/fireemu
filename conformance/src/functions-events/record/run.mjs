@@ -4,7 +4,7 @@
 // ready, a signal, the request ceiling, and a guard refusal. After any of them, if something was
 // created, the cleanup still runs.
 
-import { PROPAGATION_WAIT_SECONDS, waitReady } from "./deploy.mjs";
+import { PROPAGATION_WAIT_SECONDS, cliFailed as failed, waitReady } from "./deploy.mjs";
 import { runCleanup } from "./cleanup.mjs";
 import { listRequest, parseEntries } from "./logs.mjs";
 import { iamPairs, runPreflight } from "./preflight.mjs";
@@ -242,7 +242,7 @@ export async function record({
     // (a prompt it cannot answer, a build or validation error) stops the run with nothing written.
     log("dry run");
     run.deploy.dryRun = await cli("dry-run");
-    if (run.deploy.dryRun?.exitCode !== 0 || run.deploy.dryRun?.timedOut) {
+    if (failed(run.deploy.dryRun)) {
       run.stops.push("the CLI dry run failed; nothing was created or deployed");
       return finish("stopped-clean");
     }
@@ -266,7 +266,7 @@ export async function record({
       log("deploy");
       ran.deployStarted = true;
       run.deploy.cli = await cli("deploy");
-      const cliFailed = run.deploy.cli?.exitCode !== 0 || run.deploy.cli?.timedOut;
+      const cliFailed = failed(run.deploy.cli);
       run.deploy.readiness = await waitReady({
         transport,
         sleep,

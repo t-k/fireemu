@@ -104,6 +104,12 @@ export function createWorld({ now, rulesAllow = true }) {
     topics: new Set(),
     entries: [],
     deployed: false,
+    leftover: new Set(),
+    operations: new Map(),
+    operationPolls: 1,
+    restDeleteFails: false,
+    restDeletes: [],
+    removed: new Set(),
     rulesAllow,
     failures: [],
     requests: [],
@@ -521,51 +527,86 @@ export function createWorld({ now, rulesAllow = true }) {
       return json(200, entries.length ? { entries } : {});
     }
     const names = HANDLERS;
+    // What is deployed: every handler while `deployed`, plus what a partly failed CLI delete left (`world.leftover`,
+    // state UNKNOWN, with its Run service and trigger), as the v4 run recorded it: GCF v2 names keep their case, the v2
+    // list also lists the Gen1 functions, Run service and trigger ids are lowercase.
+    const present = () => {
+      const all = new Set(world.leftover);
+      if (world.deployed) for (const h of names) all.add(h.name);
+      return names.filter((h) => all.has(h.name));
+    };
+    const region = "us-central1";
     if (u.hostname === "cloudfunctions.googleapis.com") {
+      let m = /^\/v2\/projects\/[^/]+\/locations\/([a-z0-9-]+)\/functions\/([A-Za-z0-9]+)$/.exec(
+        path,
+      );
+      if (m && method === "DELETE") {
+        const handler = names.find((h) => h.name === m[2] && h.generation === 2);
+        if (!handler || m[1] !== region || !present().includes(handler)) return notFound();
+        world.restDeletes.push(m[2]);
+        const id = `operation-${world.restDeletes.length}`;
+        world.operations.set(id, { handler: handler.name, polls: 0 });
+        return json(200, {
+          name: `projects/${PROJECT}/locations/${region}/operations/${id}`,
+          metadata: { verb: "delete" },
+          done: false,
+        });
+      }
+      m = /^\/v2\/projects\/[^/]+\/locations\/([a-z0-9-]+)\/operations\/([A-Za-z0-9_-]+)$/.exec(
+        path,
+      );
+      if (m && method === "GET") {
+        const op = world.operations.get(m[2]);
+        if (!op) return notFound();
+        op.polls += 1;
+        if (op.polls <= world.operationPolls)
+          return json(200, {
+            name: `projects/${PROJECT}/locations/${region}/operations/${m[2]}`,
+            done: false,
+          });
+        if (world.restDeleteFails)
+          return json(200, {
+            name: `projects/${PROJECT}/locations/${region}/operations/${m[2]}`,
+            done: true,
+            error: { code: 13, message: "Deleting trigger failed" },
+          });
+        world.leftover.delete(op.handler);
+        world.removed.add(op.handler);
+        return json(200, {
+          name: `projects/${PROJECT}/locations/${region}/operations/${m[2]}`,
+          done: true,
+          response: {},
+        });
+      }
       const gen = path.startsWith("/v1/") ? 1 : 2;
-      const list = world.deployed
-        ? names
-            .filter((h) => h.generation === gen)
-            .map((h) =>
-              gen === 1
-                ? {
-                    name: `projects/${PROJECT}/locations/us-central1/functions/${h.name}`,
-                    status: "ACTIVE",
-                  }
-                : {
-                    name: `projects/${PROJECT}/locations/us-central1/functions/${h.name.toLowerCase()}`,
-                    state: "ACTIVE",
-                  },
-            )
-        : [];
+      const list = present()
+        .filter((h) => (gen === 1 ? h.generation === 1 : true))
+        .map((h) => {
+          const state = world.leftover.has(h.name) && !world.deployed ? "UNKNOWN" : "ACTIVE";
+          const name = `projects/${PROJECT}/locations/${region}/functions/${h.name}`;
+          if (gen === 1) return { name, status: "ACTIVE" };
+          return h.generation === 1
+            ? { name, state, environment: "GEN_1" }
+            : { name, state, environment: "GEN_2" };
+        });
       return json(200, list.length ? { functions: list } : {});
     }
-    if (u.hostname === "run.googleapis.com")
-      return json(
-        200,
-        world.deployed
-          ? {
-              services: names
-                .filter((h) => h.generation === 2)
-                .map((h) => ({
-                  name: `projects/${PROJECT}/locations/us-central1/services/${h.name.toLowerCase()}`,
-                })),
-            }
-          : {},
-      );
-    if (u.hostname === "eventarc.googleapis.com")
-      return json(
-        200,
-        world.deployed
-          ? {
-              triggers: names
-                .filter((h) => h.generation === 2)
-                .map((h) => ({
-                  name: `projects/${PROJECT}/locations/us-central1/triggers/${h.name.toLowerCase()}-1`,
-                })),
-            }
-          : {},
-      );
+    if (u.hostname === "run.googleapis.com") {
+      const services = present()
+        .filter((h) => h.generation === 2)
+        .map((h) => ({
+          name: `projects/${PROJECT}/locations/${region}/services/${h.name.toLowerCase()}`,
+        }));
+      return json(200, services.length ? { services } : {});
+    }
+    if (u.hostname === "eventarc.googleapis.com") {
+      const triggers = present()
+        .filter((h) => h.generation === 2)
+        .map((h) => ({
+          name: `projects/${PROJECT}/locations/${region}/triggers/${h.name.toLowerCase()}-494903`,
+        }));
+      return json(200, triggers.length ? { triggers } : {});
+    }
     const fixed = {
       "cloudresourcemanager.googleapis.com": path.endsWith(":getIamPolicy")
         ? {
@@ -622,8 +663,10 @@ export function createWorld({ now, rulesAllow = true }) {
   world.deploy = () => {
     world.deployed = true;
   };
-  world.undeploy = () => {
+  // `stuck`: the handlers a partly failed CLI delete leaves behind (the v4 run's storageArchivedV2)
+  world.undeploy = ({ stuck = [] } = {}) => {
     world.deployed = false;
+    world.leftover = new Set(stuck);
   };
   return world;
 }

@@ -5,6 +5,7 @@ import { join } from "node:path";
 import test from "node:test";
 
 import { runCleanup } from "./functions-events/record/cleanup.mjs";
+import { HANDLERS } from "./functions-events/record/logs.mjs";
 import { createTransport } from "./functions-events/record/rest.mjs";
 import { CONTROL_BUCKET, PRIMARY_BUCKET } from "./functions-events/record/script.mjs";
 import { createWorld } from "./functions-events-record-world.mjs";
@@ -70,7 +71,7 @@ test("a run that never started the deploy sends no CLI delete", async () => {
   assert.equal(result.steps.functions.skipped.includes("never started"), true);
 });
 
-test("functions that stay listed after the delete make the run needs-recovery, with six polls and no second delete", async () => {
+test("functions that stay listed after the CLI delete get one REST delete each and, if they still stay, make the run needs-recovery", async () => {
   const { world, transport, sleep, slept } = setup();
   world.deploy();
   const cliCalls = [];
@@ -81,8 +82,146 @@ test("functions that stay listed after the delete make the run needs-recovery, w
   const result = await runCleanup({ transport, cli, sleep, ran: { deployStarted: true } });
   assert.equal(result.verified, false);
   assert.ok(result.problems.some((p) => p.startsWith("functions:")));
+  assert.deepEqual(cliCalls, ["delete"], "no second CLI delete");
+  assert.deepEqual(
+    world.restDeletes.toSorted(),
+    HANDLERS.filter((h) => h.generation === 2)
+      .map((h) => h.name)
+      .toSorted(),
+    "one REST delete for each Gen2 function, none for Gen1",
+  );
+  assert.equal(
+    slept.filter((s) => s === 30).length,
+    5 + 3,
+    "six polls before the REST deletes, four after",
+  );
+});
+
+const gen2 = HANDLERS.filter((h) => h.generation === 2).map((h) => h.name);
+
+test("the recorded storageArchivedV2 case: the CLI delete leaves it listed, one REST delete takes it, the lists then verify", async () => {
+  const { world, transport, sleep } = setup();
+  world.deploy();
+  const cliCalls = [];
+  const cli = async (action) => {
+    cliCalls.push(action);
+    world.undeploy({ stuck: ["storageArchivedV2"] });
+    return { action, exitCode: 0, errored: 1 };
+  };
+  const result = await runCleanup({ transport, cli, sleep, ran: { deployStarted: true } });
+  assert.equal(result.verified, true, JSON.stringify(result.problems));
   assert.deepEqual(cliCalls, ["delete"]);
-  assert.equal(slept.filter((s) => s === 30).length, 5);
+  assert.deepEqual(world.restDeletes, ["storageArchivedV2"]);
+  assert.deepEqual(
+    result.steps.functions.rest.map((r) => [r.name, r.delete.status, r.error]),
+    [["storageArchivedV2", 200, null]],
+  );
+  assert.equal(result.steps.functions.cli.errored, 1);
+  assert.equal(result.steps.functions.summary.absent, true);
+});
+
+test("two functions left behind are deleted one at a time: the second delete is sent only after the first operation is done", async () => {
+  const { world, transport, sleep } = setup();
+  world.deploy();
+  world.operationPolls = 2;
+  const cli = async (action) => {
+    world.undeploy({ stuck: ["storageArchivedV2", "fsCreatedV2"] });
+    return { action, exitCode: 0 };
+  };
+  const result = await runCleanup({ transport, cli, sleep, ran: { deployStarted: true } });
+  assert.equal(result.verified, true, JSON.stringify(result.problems));
+  const order = world.requests
+    .filter(
+      (r) =>
+        r.url.includes("/operations/") || (r.method === "DELETE" && r.url.includes("/functions/")),
+    )
+    .map((r) => `${r.method} ${r.url.split("/").slice(-2).join("/")}`);
+  const firstOp = order.findLastIndex((entry) => entry.includes("operation-1"));
+  const secondDelete = order.findIndex(
+    (entry) => entry.startsWith("DELETE functions/") && order.indexOf(entry) > 0,
+  );
+  assert.ok(firstOp >= 0 && secondDelete > firstOp, order.join("\n"));
+  assert.equal(world.restDeletes.length, 2);
+});
+
+test("a REST delete whose operation ends in an error is sent once and leaves the run needs-recovery", async () => {
+  const { world, transport, sleep } = setup();
+  world.deploy();
+  world.restDeleteFails = true;
+  const cli = async (action) => {
+    world.undeploy({ stuck: ["storageArchivedV2"] });
+    return { action, exitCode: 0 };
+  };
+  const result = await runCleanup({ transport, cli, sleep, ran: { deployStarted: true } });
+  assert.equal(result.verified, false);
+  assert.deepEqual(world.restDeletes, ["storageArchivedV2"]);
+  assert.match(result.steps.functions.rest[0].error.message, /Deleting trigger failed/);
+});
+
+test("a REST delete with no usable answer is sent once and stops the other REST deletes", async () => {
+  const { world, transport, sleep } = setup();
+  world.deploy();
+  world.failures.push({
+    match: (m, u) => m === "DELETE" && u.endsWith("/functions/fsCreatedV2"),
+    status: 503,
+  });
+  const cli = async (action) => {
+    world.undeploy({ stuck: ["storageArchivedV2", "fsCreatedV2"] });
+    return { action, exitCode: 0 };
+  };
+  const result = await runCleanup({ transport, cli, sleep, ran: { deployStarted: true } });
+  assert.equal(result.verified, false);
+  const sent = world.requests
+    .filter((r) => r.method === "DELETE" && r.url.includes("/functions/"))
+    .map((r) => r.url.split("/").at(-1));
+  assert.deepEqual(sent.length, 1, "one delete, no retry, no other delete");
+  assert.equal(result.steps.functions.rest[0].stopped, true);
+});
+
+test("a Gen1 function left behind and an unreadable list are not deleted by REST", async () => {
+  const gen1 = setup();
+  gen1.world.deploy();
+  const first = await runCleanup({
+    transport: gen1.transport,
+    cli: async (action) => {
+      gen1.world.undeploy({ stuck: ["fsCreatedV1"] });
+      return { action, exitCode: 0 };
+    },
+    sleep: gen1.sleep,
+    ran: { deployStarted: true },
+  });
+  assert.equal(first.verified, false);
+  assert.deepEqual(gen1.world.restDeletes, []);
+  const unreadable = setup();
+  unreadable.world.deploy();
+  unreadable.world.failures.push({
+    match: (m, u) => m === "GET" && u.includes("/v2/projects") && u.endsWith("/functions"),
+    status: 503,
+  });
+  const second = await runCleanup({
+    transport: unreadable.transport,
+    cli: unreadable.cli,
+    sleep: unreadable.sleep,
+    ran: { deployStarted: true },
+  });
+  assert.equal(second.verified, false);
+  assert.deepEqual(unreadable.world.restDeletes, []);
+});
+
+test("no REST delete is sent when the lists are already empty, or when the deploy never started", async () => {
+  const { world, transport, cli, sleep } = setup();
+  world.deploy();
+  await runCleanup({ transport, cli, sleep, ran: { deployStarted: true } });
+  assert.deepEqual(world.restDeletes, []);
+  const never = setup();
+  await runCleanup({
+    transport: never.transport,
+    cli: never.cli,
+    sleep: never.sleep,
+    ran: { deployStarted: false },
+  });
+  assert.deepEqual(never.world.restDeletes, []);
+  void gen2;
 });
 
 test("an unreadable object list is a problem, never an empty bucket", async () => {

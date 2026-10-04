@@ -1,0 +1,460 @@
+{
+ "endpoints": {
+  "fsCreatedV1": {
+   "platform": "gcfv1",
+   "availableMemoryMb": null,
+   "timeoutSeconds": null,
+   "minInstances": null,
+   "maxInstances": null,
+   "ingressSettings": null,
+   "serviceAccountEmail": null,
+   "vpc": null,
+   "eventTrigger": {
+    "eventType": "providers/cloud.firestore/eventTypes/document.create",
+    "eventFilters": {
+     "resource": "projects/{{ params.PROJECT_ID }}/databases/(default)/documents/fe_events_primary/{documentId}"
+    },
+    "retry": false
+   },
+   "labels": {},
+   "entryPoint": "fsCreatedV1"
+  },
+  "fsUpdatedV1": {
+   "platform": "gcfv1",
+   "availableMemoryMb": null,
+   "timeoutSeconds": null,
+   "minInstances": null,
+   "maxInstances": null,
+   "ingressSettings": null,
+   "serviceAccountEmail": null,
+   "vpc": null,
+   "eventTrigger": {
+    "eventType": "providers/cloud.firestore/eventTypes/document.update",
+    "eventFilters": {
+     "resource": "projects/{{ params.PROJECT_ID }}/databases/(default)/documents/fe_events_primary/{documentId}"
+    },
+    "retry": false
+   },
+   "labels": {},
+   "entryPoint": "fsUpdatedV1"
+  },
+  "fsDeletedV1": {
+   "platform": "gcfv1",
+   "availableMemoryMb": null,
+   "timeoutSeconds": null,
+   "minInstances": null,
+   "maxInstances": null,
+   "ingressSettings": null,
+   "serviceAccountEmail": null,
+   "vpc": null,
+   "eventTrigger": {
+    "eventType": "providers/cloud.firestore/eventTypes/document.delete",
+    "eventFilters": {
+     "resource": "projects/{{ params.PROJECT_ID }}/databases/(default)/documents/fe_events_primary/{documentId}"
+    },
+    "retry": false
+   },
+   "labels": {},
+   "entryPoint": "fsDeletedV1"
+  },
+  "fsWrittenV1": {
+   "platform": "gcfv1",
+   "availableMemoryMb": null,
+   "timeoutSeconds": null,
+   "minInstances": null,
+   "maxInstances": null,
+   "ingressSettings": null,
+   "serviceAccountEmail": null,
+   "vpc": null,
+   "eventTrigger": {
+    "eventType": "providers/cloud.firestore/eventTypes/document.write",
+    "eventFilters": {
+     "resource": "projects/{{ params.PROJECT_ID }}/databases/(default)/documents/fe_events_primary/{documentId}"
+    },
+    "retry": false
+   },
+   "labels": {},
+   "entryPoint": "fsWrittenV1"
+  },
+  "fsCreatedV2": {
+   "availableMemoryMb": null,
+   "timeoutSeconds": null,
+   "minInstances": null,
+   "maxInstances": null,
+   "ingressSettings": null,
+   "concurrency": null,
+   "serviceAccountEmail": null,
+   "vpc": null,
+   "platform": "gcfv2",
+   "labels": {},
+   "eventTrigger": {
+    "eventType": "google.cloud.firestore.document.v1.created",
+    "eventFilters": {
+     "database": "(default)",
+     "namespace": "(default)"
+    },
+    "eventFilterPathPatterns": {
+     "document": "fe_events_primary/{documentId}"
+    },
+    "retry": false
+   },
+   "entryPoint": "fsCreatedV2"
+  },
+  "fsUpdatedV2": {
+   "availableMemoryMb": null,
+   "timeoutSeconds": null,
+   "minInstances": null,
+   "maxInstances": null,
+   "ingressSettings": null,
+   "concurrency": null,
+   "serviceAccountEmail": null,
+   "vpc": null,
+   "platform": "gcfv2",
+   "labels": {},
+   "eventTrigger": {
+    "eventType": "google.cloud.firestore.document.v1.updated",
+    "eventFilters": {
+     "database": "(default)",
+     "namespace": "(default)"
+    },
+    "eventFilterPathPatterns": {
+     "document": "fe_events_primary/{documentId}"
+    },
+    "retry": false
+   },
+   "entryPoint": "fsUpdatedV2"
+  },
+  "fsDeletedV2": {
+   "availableMemoryMb": null,
+   "timeoutSeconds": null,
+   "minInstances": null,
+   "maxInstances": null,
+   "ingressSettings": null,
+   "concurrency": null,
+   "serviceAccountEmail": null,
+   "vpc": null,
+   "platform": "gcfv2",
+   "labels": {},
+   "eventTrigger": {
+    "eventType": "google.cloud.firestore.document.v1.deleted",
+    "eventFilters": {
+     "database": "(default)",
+     "namespace": "(default)"
+    },
+    "eventFilterPathPatterns": {
+     "document": "fe_events_primary/{documentId}"
+    },
+    "retry": false
+   },
+   "entryPoint": "fsDeletedV2"
+  },
+  "fsWrittenV2": {
+   "availableMemoryMb": null,
+   "timeoutSeconds": null,
+   "minInstances": null,
+   "maxInstances": null,
+   "ingressSettings": null,
+   "concurrency": null,
+   "serviceAccountEmail": null,
+   "vpc": null,
+   "platform": "gcfv2",
+   "labels": {},
+   "eventTrigger": {
+    "eventType": "google.cloud.firestore.document.v1.written",
+    "eventFilters": {
+     "database": "(default)",
+     "namespace": "(default)"
+    },
+    "eventFilterPathPatterns": {
+     "document": "fe_events_primary/{documentId}"
+    },
+    "retry": false
+   },
+   "entryPoint": "fsWrittenV2"
+  },
+  "fsWrittenWithAuthContextV2": {
+   "availableMemoryMb": null,
+   "timeoutSeconds": null,
+   "minInstances": null,
+   "maxInstances": null,
+   "ingressSettings": null,
+   "concurrency": null,
+   "serviceAccountEmail": null,
+   "vpc": null,
+   "platform": "gcfv2",
+   "labels": {},
+   "eventTrigger": {
+    "eventType": "google.cloud.firestore.document.v1.written.withAuthContext",
+    "eventFilters": {
+     "database": "(default)",
+     "namespace": "(default)"
+    },
+    "eventFilterPathPatterns": {
+     "document": "fe_events_primary/{documentId}"
+    },
+    "retry": false
+   },
+   "entryPoint": "fsWrittenWithAuthContextV2"
+  },
+  "fsRetryV2": {
+   "availableMemoryMb": null,
+   "timeoutSeconds": null,
+   "minInstances": null,
+   "maxInstances": null,
+   "ingressSettings": null,
+   "concurrency": null,
+   "serviceAccountEmail": null,
+   "vpc": null,
+   "platform": "gcfv2",
+   "labels": {},
+   "eventTrigger": {
+    "eventType": "google.cloud.firestore.document.v1.written",
+    "eventFilters": {
+     "database": "(default)",
+     "namespace": "(default)"
+    },
+    "eventFilterPathPatterns": {
+     "document": "fe_events_primary/{documentId}"
+    },
+    "retry": true
+   },
+   "entryPoint": "fsRetryV2"
+  },
+  "storageFinalizedV1": {
+   "platform": "gcfv1",
+   "availableMemoryMb": null,
+   "timeoutSeconds": null,
+   "minInstances": null,
+   "maxInstances": null,
+   "ingressSettings": null,
+   "serviceAccountEmail": null,
+   "vpc": null,
+   "eventTrigger": {
+    "eventType": "google.storage.object.finalize",
+    "eventFilters": {
+     "resource": "projects/_/buckets/fireemu-oracle-events.firebasestorage.app"
+    },
+    "retry": false
+   },
+   "labels": {},
+   "entryPoint": "storageFinalizedV1"
+  },
+  "storageDeletedV1": {
+   "platform": "gcfv1",
+   "availableMemoryMb": null,
+   "timeoutSeconds": null,
+   "minInstances": null,
+   "maxInstances": null,
+   "ingressSettings": null,
+   "serviceAccountEmail": null,
+   "vpc": null,
+   "eventTrigger": {
+    "eventType": "google.storage.object.delete",
+    "eventFilters": {
+     "resource": "projects/_/buckets/fireemu-oracle-events.firebasestorage.app"
+    },
+    "retry": false
+   },
+   "labels": {},
+   "entryPoint": "storageDeletedV1"
+  },
+  "storageMetadataUpdatedV1": {
+   "platform": "gcfv1",
+   "availableMemoryMb": null,
+   "timeoutSeconds": null,
+   "minInstances": null,
+   "maxInstances": null,
+   "ingressSettings": null,
+   "serviceAccountEmail": null,
+   "vpc": null,
+   "eventTrigger": {
+    "eventType": "google.storage.object.metadataUpdate",
+    "eventFilters": {
+     "resource": "projects/_/buckets/fireemu-oracle-events.firebasestorage.app"
+    },
+    "retry": false
+   },
+   "labels": {},
+   "entryPoint": "storageMetadataUpdatedV1"
+  },
+  "storageArchivedV1": {
+   "platform": "gcfv1",
+   "availableMemoryMb": null,
+   "timeoutSeconds": null,
+   "minInstances": null,
+   "maxInstances": null,
+   "ingressSettings": null,
+   "serviceAccountEmail": null,
+   "vpc": null,
+   "eventTrigger": {
+    "eventType": "google.storage.object.archive",
+    "eventFilters": {
+     "resource": "projects/_/buckets/fireemu-oracle-events.firebasestorage.app"
+    },
+    "retry": false
+   },
+   "labels": {},
+   "entryPoint": "storageArchivedV1"
+  },
+  "storageFinalizedV2": {
+   "platform": "gcfv2",
+   "availableMemoryMb": null,
+   "timeoutSeconds": null,
+   "minInstances": null,
+   "maxInstances": null,
+   "ingressSettings": null,
+   "concurrency": null,
+   "serviceAccountEmail": null,
+   "vpc": null,
+   "labels": {},
+   "eventTrigger": {
+    "eventType": "google.cloud.storage.object.v1.finalized",
+    "eventFilters": {
+     "bucket": "fireemu-oracle-events.firebasestorage.app"
+    },
+    "retry": false
+   },
+   "entryPoint": "storageFinalizedV2"
+  },
+  "storageDeletedV2": {
+   "platform": "gcfv2",
+   "availableMemoryMb": null,
+   "timeoutSeconds": null,
+   "minInstances": null,
+   "maxInstances": null,
+   "ingressSettings": null,
+   "concurrency": null,
+   "serviceAccountEmail": null,
+   "vpc": null,
+   "labels": {},
+   "eventTrigger": {
+    "eventType": "google.cloud.storage.object.v1.deleted",
+    "eventFilters": {
+     "bucket": "fireemu-oracle-events.firebasestorage.app"
+    },
+    "retry": false
+   },
+   "entryPoint": "storageDeletedV2"
+  },
+  "storageMetadataUpdatedV2": {
+   "platform": "gcfv2",
+   "availableMemoryMb": null,
+   "timeoutSeconds": null,
+   "minInstances": null,
+   "maxInstances": null,
+   "ingressSettings": null,
+   "concurrency": null,
+   "serviceAccountEmail": null,
+   "vpc": null,
+   "labels": {},
+   "eventTrigger": {
+    "eventType": "google.cloud.storage.object.v1.metadataUpdated",
+    "eventFilters": {
+     "bucket": "fireemu-oracle-events.firebasestorage.app"
+    },
+    "retry": false
+   },
+   "entryPoint": "storageMetadataUpdatedV2"
+  },
+  "storageArchivedV2": {
+   "platform": "gcfv2",
+   "availableMemoryMb": null,
+   "timeoutSeconds": null,
+   "minInstances": null,
+   "maxInstances": null,
+   "ingressSettings": null,
+   "concurrency": null,
+   "serviceAccountEmail": null,
+   "vpc": null,
+   "labels": {},
+   "eventTrigger": {
+    "eventType": "google.cloud.storage.object.v1.archived",
+    "eventFilters": {
+     "bucket": "fireemu-oracle-events.firebasestorage.app"
+    },
+    "retry": false
+   },
+   "entryPoint": "storageArchivedV2"
+  },
+  "authCreatedV1": {
+   "platform": "gcfv1",
+   "availableMemoryMb": null,
+   "timeoutSeconds": null,
+   "minInstances": null,
+   "maxInstances": null,
+   "ingressSettings": null,
+   "serviceAccountEmail": null,
+   "vpc": null,
+   "eventTrigger": {
+    "eventType": "providers/firebase.auth/eventTypes/user.create",
+    "eventFilters": {
+     "resource": "projects/fireemu-oracle-events"
+    },
+    "retry": false
+   },
+   "labels": {},
+   "entryPoint": "authCreatedV1"
+  },
+  "authDeletedV1": {
+   "platform": "gcfv1",
+   "availableMemoryMb": null,
+   "timeoutSeconds": null,
+   "minInstances": null,
+   "maxInstances": null,
+   "ingressSettings": null,
+   "serviceAccountEmail": null,
+   "vpc": null,
+   "eventTrigger": {
+    "eventType": "providers/firebase.auth/eventTypes/user.delete",
+    "eventFilters": {
+     "resource": "projects/fireemu-oracle-events"
+    },
+    "retry": false
+   },
+   "labels": {},
+   "entryPoint": "authDeletedV1"
+  },
+  "pubsubPublishedV1": {
+   "platform": "gcfv1",
+   "availableMemoryMb": null,
+   "timeoutSeconds": null,
+   "minInstances": null,
+   "maxInstances": null,
+   "ingressSettings": null,
+   "serviceAccountEmail": null,
+   "vpc": null,
+   "eventTrigger": {
+    "eventType": "google.pubsub.topic.publish",
+    "eventFilters": {
+     "resource": "projects/fireemu-oracle-events/topics/fe-events-primary"
+    },
+    "retry": false
+   },
+   "labels": {},
+   "entryPoint": "pubsubPublishedV1"
+  },
+  "pubsubPublishedV2": {
+   "availableMemoryMb": null,
+   "timeoutSeconds": null,
+   "minInstances": null,
+   "maxInstances": null,
+   "ingressSettings": null,
+   "concurrency": null,
+   "serviceAccountEmail": null,
+   "vpc": null,
+   "platform": "gcfv2",
+   "labels": {},
+   "eventTrigger": {
+    "eventType": "google.cloud.pubsub.topic.v1.messagePublished",
+    "eventFilters": {
+     "topic": "fe-events-primary"
+    },
+    "retry": false
+   },
+   "entryPoint": "pubsubPublishedV2"
+  }
+ },
+ "specVersion": "v1alpha1",
+ "requiredAPIs": [],
+ "extensions": {}
+}

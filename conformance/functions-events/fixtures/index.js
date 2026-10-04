@@ -121,6 +121,8 @@ exports.authDeletedV1 = functions.auth.user().onDelete((user, context) =>
 exports.pubsubPublishedV1 = functions.pubsub.topic(topic).onPublish((message, context) =>
   v1("pubsubPublishedV1", "pubsub", message.toJSON(), context),
 );
-exports.pubsubPublishedV2 = onMessagePublished({ topic }, (event) =>
+// Pinned: firebase-tools 15.28.2 puts a Gen2 Pub/Sub trigger with no region in us-east1 (its service default), where the
+// formal recorder neither reads nor deletes. Only this handler is pinned, so the other manifests stay as they were.
+exports.pubsubPublishedV2 = onMessagePublished({ topic, region: "us-central1" }, (event) =>
   v2("pubsubPublishedV2", "pubsub", event, event.data),
 );

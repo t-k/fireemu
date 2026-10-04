@@ -4,6 +4,7 @@
 // only: the project, the region, the two collections plus the marker collection, the two buckets, the
 // two topics, the owned object prefixes and the test user email domain.
 
+import { HANDLERS } from "./logs.mjs";
 import {
   CONTROL_BUCKET,
   CONTROL_COLLECTION,
@@ -324,6 +325,23 @@ export const RULES = [
   rule("functions-v2-list", "GET", "cloudfunctions.googleapis.com", `/v2${region}/functions`, {
     query: ["pageToken"],
   }),
+  // The cleanup's one REST delete of a Gen2 function the CLI delete left behind (a fresh list still shows it): the
+  // eleven Gen2 names of the run in the declared region, and the operation reads that wait for it.
+  rule(
+    "functions-v2-delete",
+    "DELETE",
+    "cloudfunctions.googleapis.com",
+    `/v2${region}/functions/(?:${HANDLERS.filter((h) => h.generation === 2)
+      .map((h) => h.name)
+      .join("|")})`,
+    { mutation: true },
+  ),
+  rule(
+    "functions-v2-operation-get",
+    "GET",
+    "cloudfunctions.googleapis.com",
+    `/v2${region}/operations/[A-Za-z0-9_-]{1,128}`,
+  ),
   rule("run-services-list", "GET", "run.googleapis.com", `/v2${region}/services`, {
     query: ["pageToken"],
   }),

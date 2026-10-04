@@ -10,6 +10,7 @@
 // `needs-recovery`; the recovery is a separate approval.
 
 import { readLists, summarize } from "./deploy.mjs";
+import { HANDLERS } from "./logs.mjs";
 import { iamDiff, iamPairs } from "./preflight.mjs";
 import {
   CONTROL_BUCKET,
@@ -45,9 +46,69 @@ const write = (id, spec) => ({
 });
 const readPost = (id, url, body) => ({ ...read(id, url), method: "POST", body });
 
+export const REST_POLLS = 4;
+export const OPERATION_POLLS = 12;
+export const OPERATION_POLL_SECONDS = 10;
 export const DELETE_POLLS = 6;
 export const DELETE_POLL_SECONDS = 30;
 export const SWEEP_LIMIT = 100;
+
+const GEN2 = new Set(HANDLERS.filter((h) => h.generation === 2).map((h) => h.name));
+const lastSegment = (name) =>
+  String(name ?? "")
+    .split("/")
+    .at(-1);
+
+/**
+ * One REST delete for each Gen2 function of the run a fresh complete v2 list still shows, one at a time; each
+ * operation is polled to done before the next function. A function whose delete has no usable answer stops the
+ * rest (never re-sent). Gen1 leftovers and anything outside the 11 names are left for the recovery.
+ */
+async function restDeleteLeftovers({ request, sleep, lists }) {
+  const done = [];
+  if (!lists?.v2?.complete) return done;
+  const names = lists.v2.items
+    .map((item) => lastSegment(item.name))
+    .filter((name) => GEN2.has(name));
+  for (const name of names) {
+    const entry = { name };
+    done.push(entry);
+    const deleted = await request(
+      write(`function-delete-${name}`, {
+        method: "DELETE",
+        url: `https://cloudfunctions.googleapis.com/v2/projects/${PROJECT}/locations/${REGION}/functions/${name}`,
+        expect: [200, 404],
+      }),
+    );
+    entry.delete = { status: deleted.status ?? null, kind: deleted.kind };
+    if (deleted.kind === "unknown") {
+      entry.stopped = true;
+      break;
+    }
+    const operation = deleted.json?.name;
+    if (
+      deleted.kind !== "success" ||
+      typeof operation !== "string" ||
+      !operation.startsWith(`projects/${PROJECT}/locations/${REGION}/operations/`)
+    )
+      continue;
+    for (let poll = 1; poll <= OPERATION_POLLS; poll += 1) {
+      const answer = await request(
+        read(
+          `function-operation-${name}-${poll}`,
+          `https://cloudfunctions.googleapis.com/v2/${operation}`,
+        ),
+      );
+      entry.polls = poll;
+      if (answer.kind === "success" && answer.json?.done === true) {
+        entry.error = answer.json.error ?? null;
+        break;
+      }
+      if (poll < OPERATION_POLLS) await sleep(OPERATION_POLL_SECONDS);
+    }
+  }
+  return done;
+}
 
 async function safely(steps, name, body) {
   try {
@@ -222,17 +283,30 @@ export async function runCleanup({
     return { ok: after.complete && after.uids.length === 0, removed, left: after.uids.length };
   });
 
-  // 5. The one CLI delete of the functions, then the lists until they are empty.
+  // 5. The one CLI delete of the functions, then the lists until they are empty. A Gen2 function a fresh complete
+  // list still shows after that (the v4 run's storageArchivedV2: the CLI's operation lost a race on the bucket's
+  // metadata, printed "1 Functions Errored" and exited 0) gets one REST delete of its own, one function at a time,
+  // each operation polled to done before the next; then the lists again. Nothing is deleted that no fresh list shows.
   await safely(steps, "functions", async () => {
     if (!ran.deployStarted) return { ok: true, skipped: "the deploy was never started" };
     const result = await cli("delete");
+    let lists;
     let summary;
-    for (let i = 1; i <= DELETE_POLLS; i += 1) {
-      summary = summarize(await readLists(transport));
-      if (summary.absent) return { ok: true, cli: result, polls: i, summary };
-      if (i < DELETE_POLLS) await sleep(DELETE_POLL_SECONDS);
-    }
-    return { ok: false, cli: result, polls: DELETE_POLLS, summary };
+    const poll = async (rounds) => {
+      for (let i = 1; i <= rounds; i += 1) {
+        lists = await readLists(transport);
+        summary = summarize(lists);
+        if (summary.absent) return i;
+        if (i < rounds) await sleep(DELETE_POLL_SECONDS);
+      }
+      return rounds;
+    };
+    const polls = await poll(DELETE_POLLS);
+    if (summary.absent) return { ok: true, cli: result, polls, summary };
+    const rest = await restDeleteLeftovers({ request, sleep, lists });
+    if (rest.length === 0) return { ok: false, cli: result, polls, summary };
+    const afterPolls = await poll(REST_POLLS);
+    return { ok: summary.absent, cli: result, polls, afterPolls, rest, summary };
   });
 
   // 6. Retry markers, after the functions are gone (a late retry can no longer write one), read back.

@@ -135,7 +135,7 @@ export function prepareSource({ repoRoot, commit, target, depsDir }) {
  * of the endpoints it finds. A missing dependency, a refused environment or a handler that does not load
  * shows up here, before anything is sent.
  */
-export function discoverEndpoints({ fixtureDir, node, directory }) {
+export function discoverManifest({ fixtureDir, node, directory }) {
   mkdirSync(directory, { recursive: true, mode: 0o700 });
   const manifest = join(directory, "functions-manifest.json");
   const env = {
@@ -156,16 +156,56 @@ export function discoverEndpoints({ fixtureDir, node, directory }) {
     [join(fixtureDir, "node_modules/firebase-functions/lib/bin/firebase-functions.js"), fixtureDir],
     { env, cwd: fixtureDir, timeout: 60_000, stdio: ["ignore", "ignore", "pipe"] },
   );
-  return Object.keys(JSON.parse(readFileSync(manifest, "utf8")).endpoints ?? {});
+  return JSON.parse(readFileSync(manifest, "utf8")).endpoints ?? {};
+}
+
+/** The names of the endpoints the discovery finds (see `discoverManifest`). */
+export function discoverEndpoints(options) {
+  return Object.keys(discoverManifest(options));
+}
+
+// Where firebase-tools 15.28.2 puts an endpoint whose manifest names no region (prepare.js
+// resolveDefaultRegionsForBuild): a Gen1 function in us-central1; a Gen2 Firestore or Storage trigger in the
+// location of its database or bucket (us-central1 in the sandbox project); every other Gen2 trigger by its
+// service's default, which for Pub/Sub is us-east1 (services/index.js DEFAULT_GLOBAL_TRIGGER_REGION). The v4 run
+// put pubsubPublishedV2 in us-east1 that way, where the recorder neither read nor deleted it.
+const PINNED_REGION = ["us-central1"];
+const sameRegion = (region) => JSON.stringify(region) === JSON.stringify(PINNED_REGION);
+const locatedByResource = (endpoint) => {
+  const type = endpoint.eventTrigger?.eventType ?? "";
+  return type.startsWith("google.cloud.firestore.") || type.startsWith("google.cloud.storage.");
+};
+
+/**
+ * The endpoints of a discovered manifest whose region is not the one the recorder reads and deletes in. A region
+ * that is set must be exactly ["us-central1"]. An endpoint with no region must be a Gen1 function, or a Gen2
+ * Firestore or Storage trigger (placed by its resource); every other one must be pinned.
+ */
+export function regionProblems(endpoints) {
+  const problems = [];
+  for (const [name, endpoint] of Object.entries(endpoints)) {
+    const region = endpoint.region;
+    if (region !== undefined && region !== null) {
+      if (!sameRegion(region))
+        problems.push(`${name}: the region is ${JSON.stringify(region)}, not ["us-central1"]`);
+    } else if (endpoint.platform !== "gcfv1" && !locatedByResource(endpoint)) {
+      problems.push(
+        `${name}: no region is set, and firebase-tools would place a ${endpoint.eventTrigger?.eventType ?? "this kind of"} trigger by its service's default; pin region "us-central1"`,
+      );
+    }
+  }
+  return problems;
 }
 
 /** Everything about the source copy that can be checked offline: the dependencies and the 22 discovered endpoints. */
 export function sourceProblems({ fixtureDir, node, directory }) {
   const problems = dependencyProblems(fixtureDir);
   if (problems.length) return problems;
+  let manifest;
   let found;
   try {
-    found = discoverEndpoints({ fixtureDir, node, directory });
+    manifest = discoverManifest({ fixtureDir, node, directory });
+    found = Object.keys(manifest);
   } catch (error) {
     return [
       `the SDK discovery of the fixture failed: ${String(error.stderr ?? error.message).slice(0, 300)}`,
@@ -177,7 +217,7 @@ export function sourceProblems({ fixtureDir, node, directory }) {
     return [
       `the fixture exports ${found.length} endpoints (missing: ${missing.join(", ") || "none"}; extra: ${extra.join(", ") || "none"})`,
     ];
-  return [];
+  return regionProblems(manifest);
 }
 
 /** The CLI invocation (args, cwd, env) for deploy or delete of the formal set, from the reviewed helper. */
@@ -197,8 +237,26 @@ export function cliPlan(action, { configHome, configPath, workDir, home, path })
 }
 
 /**
+ * How many functions the CLI says errored: the line `N Functions Errored` its summary prints for a deploy
+ * and for a delete (with or without a timestamp in front, from `--debug`). `null` when the output has no such
+ * line. The v4 run's CLI delete printed `1 Functions Errored` and still exited 0, so the exit code alone judges nothing.
+ */
+export function erroredFunctions(text) {
+  const matches = [...String(text).matchAll(/^(?:\[[^\]]*\] )?(\d+) Functions? Errored[ \t]*$/gm)];
+  return matches.length === 0 ? null : Number(matches.at(-1)[1]);
+}
+
+/** Whether a CLI result (`runCli`'s answer) is a failure: a non-zero exit, a timeout, an error, or any function errored. */
+export const cliFailed = (result) =>
+  result?.exitCode !== 0 ||
+  Boolean(result?.timedOut) ||
+  Boolean(result?.error) ||
+  (Number.isInteger(result?.errored) && result.errored > 0);
+
+/**
  * Runs the pinned firebase-tools once. stdout and stderr go to private files in `directory`. Never
- * retried; a timeout stops the process group. Returns what happened, judging nothing.
+ * retried; a timeout stops the process group. Returns what happened (the exit code, and the count of errored
+ * functions the output reports), judging nothing; `cliFailed` judges.
  */
 export function runCli({
   action,
@@ -231,12 +289,20 @@ export function runCli({
       clearTimeout(killTimer);
       closeSync(out);
       closeSync(err);
+      let errored = null;
+      try {
+        const text = readFileSync(join(directory, `cli-${action}-stdout.txt`), "utf8");
+        errored = erroredFunctions(text.slice(-65_536));
+      } catch {
+        // the output cannot be read: no count
+      }
       resolve({
         action,
         exitCode,
         signal,
         timedOut,
         error: error?.message ?? null,
+        errored,
         durationMs: Date.now() - startedAt,
       });
     };
@@ -328,7 +394,7 @@ export function summarize({ v1, v2, run, eventarc }) {
   const triggers = eventarc.items.map((t) => lastSegment(t.name));
   const listed = {
     functionsActive: HANDLERS.filter((h) =>
-      h.generation === 1 ? v1Active.has(h.name) : v2Active.has(h.name.toLowerCase()),
+      h.generation === 1 ? v1Active.has(h.name) : v2Active.has(h.name),
     ).map((h) => h.name),
     functionsListed: v1.items.length + v2.items.length,
     runServices: HANDLERS.filter(

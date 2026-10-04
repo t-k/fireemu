@@ -26,7 +26,9 @@ def budget_for(project):
     return (0.0, 0.0) if project in FREE_TIER_PROJECTS else (0.01, 0.04)
 DATABASE = "(default)"
 TRANSPORTS = ("rest", "grpc")
-RPCS = ("GetDocument", "BatchGetDocuments", "BeginTransaction", "Commit", "Rollback")
+RPCS = ("GetDocument", "BatchGetDocuments", "BeginTransaction", "Commit", "Rollback", "RunQuery")
+# A native query stream a step cancels itself after this many frames at most (the transport keeps at most this many frames).
+MAX_CANCEL_FRAMES = 16
 ROLES = ("control", "observation", "outside-writer", "post-state")
 PHASES = ("observation", "tokenCleanup", "documentCleanup", "management", "credential")
 UNKNOWN_CODES = (1, 2, 4, 13, 14)
@@ -40,12 +42,19 @@ MAX_DOCUMENTS = 8
 MAX_WAIT_SECONDS = 600
 MAX_STATES = 32
 _STEP_KEYS = ("id", "transport", "rpc", "document", "tokenInput", "tokenOutput", "writes", "caseId", "role", "allow")
-_OPTIONAL_STEP_KEYS = ("deadlineMs", "documents", "mode", "readAt", "newTransaction", "waitSeconds", "sinceBegin", "concurrentWith", "retryOf", "tokenLiteral", "readAgoSeconds")
+_OPTIONAL_STEP_KEYS = ("deadlineMs", "documents", "mode", "readAt", "newTransaction", "waitSeconds", "sinceBegin", "concurrentWith", "retryOf", "tokenLiteral", "readAgoSeconds", "query", "cancelAfter")
 # A read may name a time this many seconds before it is sent: at most two hours, enough for the one-hour retention boundary.
 READ_AGO_MAX = 7200
 # Transaction tokens the table never issued. "malformed" does not decode as base64 (a REST request only: a gRPC client cannot send it); "unknown" decodes and
 # was never issued by any transaction.
 LITERAL_TOKENS = {"malformed": "not base64!", "unknown": "ZmlyZWVtdS11bmlzc3VlZC10eG4tdG9rZW4="}
+
+
+def step_outcome_class(step, code):
+    """The class of an answer to a step: a native query stream the step cancelled itself answers code 1, which is a definite outcome there and unknown anywhere else."""
+    if code == 1 and "cancelAfter" in step:
+        return "CLIENT_CANCEL"
+    return outcome_class(code)
 
 
 def outcome_class(code):
@@ -92,6 +101,11 @@ def _step(row):
         step["tokenLiteral"] = row["tokenLiteral"]
     if "readAgoSeconds" in row:
         step["readAgoSeconds"] = row["readAgoSeconds"]
+    if "query" in row:
+        # A query over this table's own collection: every owned document, or the ones in one declared state.
+        step["query"] = copy.deepcopy(row["query"])
+    if "cancelAfter" in row:
+        step["cancelAfter"] = row["cancelAfter"]
     if "retryOf" in row:
         # A read-write begin that names an earlier token of the same table as the attempt it retries (REST `retryTransaction`);
         # only present on that begin. The named token is released after this begin, not before it.
@@ -159,7 +173,7 @@ def _validate_table(table):
             _bad(f"{step['id']} has an unknown transport, rpc or role")
         if step["document"] is not None and step["document"] not in documents:
             _bad(f"{step['id']} names an unknown document")
-        if not step["allow"] or any(type(code) is not int or not 0 <= code <= 16 or code in UNKNOWN_CODES for code in step["allow"]):
+        if not step["allow"] or any(type(code) is not int or not 0 <= code <= 16 or (code in UNKNOWN_CODES and not (code == 1 and "cancelAfter" in step)) for code in step["allow"]):
             _bad(f"{step['id']} allows no code or an unknown-outcome code")
         if type(step["deadlineMs"]) is not int or not 1 <= step["deadlineMs"] <= (WRITER_DEADLINE_MS if step["role"] == "outside-writer" else DEFAULT_DEADLINE_MS):
             _bad(f"{step['id']} has a bad deadline")
@@ -193,6 +207,17 @@ def _validate_table(table):
                 _bad(f"{step['id']} names a literal token that is not allowed here")
             if step["tokenLiteral"] == "malformed" and step["transport"] != "rest":
                 _bad(f"{step['id']} sends a malformed token over gRPC, which a native client cannot")
+        if "query" in step or rpc == "RunQuery":
+            query = step.get("query")
+            if rpc != "RunQuery" or not isinstance(query, dict) or set(query) - {"stateEquals"} or ("stateEquals" in query and query["stateEquals"] not in states):
+                _bad(f"{step['id']} is a query that is malformed or on another request")
+            if step["document"] is not None or step["writes"] or step["tokenOutput"] is not None or "tokenLiteral" in step or "readAgoSeconds" in step or "newTransaction" in step or step["role"] == "outside-writer":
+                _bad(f"{step['id']} is a query that names a document, writes, outputs a token or reads at another time")
+        if "cancelAfter" in step:
+            # The client cancels a native query stream itself: the one use of code 1 that is a definite outcome.
+            cancel = step["cancelAfter"]
+            if rpc != "RunQuery" or step["transport"] != "grpc" or type(cancel) is not int or not 1 <= cancel <= MAX_CANCEL_FRAMES or step["allow"] != [1]:
+                _bad(f"{step['id']} cancels something other than a native query stream, or allows more than the cancel")
         if "readAgoSeconds" in step:
             # A time before the request is sent, not a version this table wrote: never inside a transaction and never beside a version time.
             ago = step["readAgoSeconds"]
@@ -254,6 +279,8 @@ def _validate_table(table):
                 if step["role"] != "control" or step["tokenInput"] is not None or step["allow"] != [5]:
                     _bad(f"{step['id']} touches {step['document']} before an absence probe")
                 probed.add(step["document"])
+        elif rpc == "RunQuery":
+            pass   # a query reads the run's own collection; nothing foreign can be in it (the nonce is the run's)
         elif rpc == "Rollback":
             if (step["tokenInput"] is None and "tokenLiteral" not in step) or step["document"] is not None or step["writes"]:
                 _bad(f"{step['id']} is not a rollback of an issued token")
@@ -295,7 +322,7 @@ def corpus_digest(table):
         "states": list(table["states"]),
         "waits": {step["id"]: step["waitSeconds"] for step in steps if "waitSeconds" in step},
         "transports": sorted({step["transport"] for step in steps}),
-        "outcomeClasses": {step["id"]: [outcome_class(code) for code in step["allow"]] for step in steps},
+        "outcomeClasses": {step["id"]: [step_outcome_class(step, code) for code in step["allow"]] for step in steps},
     }
     if table.get("thresholds"):
         body["thresholds"] = dict(table["thresholds"])
@@ -432,6 +459,11 @@ def request_for_step(value, step, tokens, table, times=None, now=None):
         return {"name": value["documents"][step["document"]], **({"transaction": token} if token else {}), **({"readTime": read_time} if read_time else {})}
     if rpc == "BatchGetDocuments":
         return {"database": value["database"], "documents": [value["documents"][role] for role in step["documents"]], **({"transaction": token} if token else {}), **({"readTime": read_time} if read_time else {}), **({"newTransaction": {step["newTransaction"]: {}}} if "newTransaction" in step else {})}
+    if rpc == "RunQuery":
+        query = {"from": [{"collectionId": table["slug"]}]}
+        if "stateEquals" in step["query"]:
+            query["where"] = {"fieldFilter": {"field": {"fieldPath": "state"}, "op": "EQUAL", "value": {"stringValue": step["query"]["stateEquals"]}}}
+        return {"parent": f"{value['database']}/documents/oracle/{value['nonce']}", "structuredQuery": query, **({"transaction": token} if token else {})}
     if rpc == "Rollback":
         return {"database": value["database"], "transaction": token}
     if rpc == "BeginTransaction":

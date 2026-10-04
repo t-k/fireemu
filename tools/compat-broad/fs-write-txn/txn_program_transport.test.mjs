@@ -492,3 +492,119 @@ test('rest: the malformed literal travels in the request body as the plain strin
   const read = restRequest(spec('GetDocument', { name: name('a'), transaction: MALFORMED }, 'rest'));
   assert.ok(read.path.includes(encodeURIComponent(MALFORMED)));
 });
+
+// RunQuery: a query over the run's own collection, in a transaction or not; over gRPC the call may cancel its own stream after N frames.
+const parent = `${database}/documents/oracle/${nonce}`;
+const stateFilter = state => ({ fieldFilter: { field: { fieldPath: 'state' }, op: 'EQUAL', value: { stringValue: state } } });
+const queryRequest = (extra = {}, where) => ({ parent, structuredQuery: { from: [{ collectionId: 'txn-toy' }], ...(where ? { where } : {}) }, ...extra });
+
+for (const transport of ['rest', 'grpc']) {
+  test(`${transport}: a query over the run's collection is admitted, with or without a transaction and a state filter`, async () => {
+    const { validateCall } = await module();
+    validateCall(spec('RunQuery', queryRequest(), transport));
+    validateCall(spec('RunQuery', queryRequest({ transaction: token }), transport));
+    validateCall(spec('RunQuery', queryRequest({}, stateFilter('held')), transport));
+    validateCall(spec('RunQuery', queryRequest({ transaction: UNKNOWN }, stateFilter('moved')), transport));
+  });
+
+  test(`${transport}: a query that leaves the run's collection or the closed shape is refused before dispatch`, async () => {
+    const { validateCall } = await module();
+    const refused = [
+      queryRequest({ parent: parent.replace(nonce, 'c'.repeat(32)) }),
+      queryRequest({ parent: `${database}/documents/oracle` }),
+      { ...queryRequest(), structuredQuery: { from: [{ collectionId: 'txn-other' }] } },
+      { ...queryRequest(), structuredQuery: { from: [{ collectionId: 'txn-toy' }, { collectionId: 'txn-toy' }] } },
+      { ...queryRequest(), structuredQuery: { from: [{ collectionId: 'txn-toy', allDescendants: true }] } },
+      { ...queryRequest(), structuredQuery: { from: [{ collectionId: 'txn-toy' }], limit: 3 } },
+      { ...queryRequest(), structuredQuery: { from: [{ collectionId: 'txn-toy' }], orderBy: [] } },
+      queryRequest({}, stateFilter('elsewhere')),
+      queryRequest({}, { fieldFilter: { field: { fieldPath: 'owner' }, op: 'EQUAL', value: { stringValue: 'x' } } }),
+      queryRequest({}, { fieldFilter: { field: { fieldPath: 'state' }, op: 'NOT_EQUAL', value: { stringValue: 'held' } } }),
+      queryRequest({}, { fieldFilter: { field: { fieldPath: 'state' }, op: 'EQUAL', value: { integerValue: '1' } } }),
+      queryRequest({}, { compositeFilter: { op: 'AND', filters: [] } }),
+      queryRequest({ transaction: 'not canonical' }),
+      queryRequest({ readTime: at }),
+      queryRequest({ newTransaction: { readOnly: {} } }),
+      { structuredQuery: queryRequest().structuredQuery },
+    ];
+    for (const request of refused) assert.throws(() => validateCall(spec('RunQuery', request, transport)), undefined, JSON.stringify(request).slice(0, 120));
+  });
+}
+
+test('rest: the malformed token literal is admitted on a query too', async () => {
+  const { validateCall } = await module();
+  validateCall(spec('RunQuery', queryRequest({ transaction: MALFORMED }), 'rest'));
+  assert.throws(() => validateCall(spec('RunQuery', queryRequest({ transaction: MALFORMED }), 'grpc')));
+});
+
+test('rest: a query is one runQuery request on the run\'s parent document', async () => {
+  const { restRequest, runUnary } = await module();
+  const call = spec('RunQuery', queryRequest({ transaction: token }, stateFilter('held')), 'rest');
+  assert.deepEqual(restRequest(call), { method: 'POST', path: `/v1/${parent}:runQuery`, body: { structuredQuery: queryRequest({}, stateFilter('held')).structuredQuery, transaction: token } });
+  const frames = [{ document: { name: name('a'), fields: {}, updateTime: '2026-09-30T00:00:00.000000001Z' }, readTime: '2026-09-30T00:00:01Z' }, { readTime: '2026-09-30T00:00:01Z' }];
+  const result = await runUnary(call, exchange([{ status: 200, text: JSON.stringify(frames) }]).run);
+  assert.deepEqual([result.code, result.complete, result.http, result.response], [0, true, 200, { responses: frames }]);
+  const refused = await runUnary(call, exchange([{ status: 409, text: JSON.stringify([{ error: { code: 409, message: 'contended', status: 'ABORTED' } }]) }]).run);
+  assert.deepEqual([refused.code, refused.complete], [10, true]);
+  const flood = await runUnary(call, exchange([{ status: 200, text: JSON.stringify(Array.from({ length: 17 }, () => ({ readTime: '2026-09-30T00:00:01Z' }))) }]).run);
+  assert.deepEqual([flood.code, flood.complete], [2, false]);
+});
+
+function queryClient(events) {
+  const handlers = {};
+  const call = { on(name, handler) { handlers[name] = handler; return call; }, cancel() { call.cancelled = true; } };
+  return { call, factory: () => ({
+    makeServerStreamRequest(path, serialize, _deserialize, request, metadata, options) {
+      assert.equal(path, '/google.firestore.v1.Firestore/RunQuery');
+      assert.ok(serialize(request).length > 0); assert.deepEqual(metadata.get('x-goog-request-params'), [`parent=${encodeURIComponent(parent)}`]); assert.ok(options.deadline instanceof Date);
+      queueMicrotask(() => events(handlers));
+      return call;
+    },
+    close() {},
+  }) };
+}
+
+test('gRPC: a query is one server stream whose frames are collected', async () => {
+  const { runUnary } = await module();
+  const frame = { document: { name: name('a'), fields: {}, updateTime: { seconds: '1', nanos: 1 } }, readTime: { seconds: '2', nanos: 0 } };
+  const stream = queryClient(handlers => { handlers.data(frame); handlers.data({ readTime: { seconds: '2', nanos: 0 } }); handlers.end(); });
+  const result = await runUnary(spec('RunQuery', queryRequest({ transaction: token })), stream.factory);
+  assert.deepEqual([result.code, result.complete, result.http], [0, true, null]);
+  assert.equal(result.response.responses.length, 2);
+  const refused = queryClient(handlers => handlers.error({ code: 10, details: 'contention' }));
+  assert.deepEqual([(await runUnary(spec('RunQuery', queryRequest()), refused.factory)).code], [10]);
+  const failing = queryClient(handlers => handlers.error({ code: 14, details: 'unavailable' }));
+  const failed = await runUnary(spec('RunQuery', queryRequest()), failing.factory);
+  assert.deepEqual([failed.code, failed.complete], [14, false]);
+  const flood = queryClient(handlers => { for (let index = 0; index < 20; index += 1) handlers.data({ readTime: { seconds: '2', nanos: 0 } }); handlers.end(); });
+  const over = await runUnary(spec('RunQuery', queryRequest()), flood.factory);
+  assert.deepEqual([over.code, over.complete, over.response], [2, false, null]);
+});
+
+test('gRPC: a stream the call cancels itself after N frames is a definite client cancel with the frames it got', async () => {
+  const { runUnary } = await module();
+  const frame = index => ({ document: { name: name('a'), fields: {}, updateTime: { seconds: '1', nanos: index } }, readTime: { seconds: '2', nanos: 0 } });
+  const stream = queryClient(handlers => { handlers.data(frame(1)); handlers.data(frame(2)); handlers.error({ code: 1, details: 'Cancelled on client' }); });
+  const result = await runUnary(spec('RunQuery', queryRequest({ transaction: token }), 'grpc', { cancelAfter: 1 }), stream.factory);
+  assert.deepEqual([result.code, result.complete, result.http], [1, true, null]);
+  assert.equal(result.details, 'cancelled by the client after 1 frame(s)');
+  assert.equal(result.response.responses.length, 1, 'the frames after the cancel are not kept');
+  assert.equal(stream.call.cancelled, true);
+  // a stream that ends before the cancel was reached is a plain success: nothing was cancelled
+  const short = queryClient(handlers => { handlers.data(frame(1)); handlers.end(); });
+  const plain = await runUnary(spec('RunQuery', queryRequest(), 'grpc', { cancelAfter: 2 }), short.factory);
+  assert.deepEqual([plain.code, plain.complete, plain.response.responses.length], [0, true, 1]);
+  assert.notEqual(short.call.cancelled, true);
+  // an error before the cancel was reached keeps its own status
+  const early = queryClient(handlers => handlers.error({ code: 10, details: 'contention' }));
+  assert.deepEqual([(await runUnary(spec('RunQuery', queryRequest(), 'grpc', { cancelAfter: 1 }), early.factory)).code], [10]);
+});
+
+test('a cancel is a gRPC query call\'s alone and stays within the frame cap', async () => {
+  const { validateCall } = await module();
+  validateCall(spec('RunQuery', queryRequest(), 'grpc', { cancelAfter: 16 }));
+  for (const extra of [{ cancelAfter: 0 }, { cancelAfter: 17 }, { cancelAfter: 1.5 }, { cancelAfter: '1' }, { cancelAfter: null }]) assert.throws(() => validateCall(spec('RunQuery', queryRequest(), 'grpc', extra)), undefined, JSON.stringify(extra));
+  assert.throws(() => validateCall(spec('RunQuery', queryRequest(), 'rest', { cancelAfter: 1 })));
+  assert.throws(() => validateCall(spec('GetDocument', { name: name('a') }, 'grpc', { cancelAfter: 1 })));
+  assert.throws(() => validateCall(spec('BatchGetDocuments', { database, documents: [name('a')] }, 'grpc', { cancelAfter: 1 })));
+});

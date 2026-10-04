@@ -66,7 +66,7 @@ test("the request count stays inside the ceiling the design gives", async () => 
   assert.ok(run.requestsSent <= CLEANUP_CEILING, `${run.requestsSent}`);
   assert.ok(run.requestsSent >= 250 && run.requestsSent <= 420, `${run.requestsSent}`);
   const writes = passSummary(buildPass({ pass: 1, newId: (r) => r })).mutations * 2;
-  assert.ok(writes === 124);
+  assert.ok(writes === 128);
 });
 
 test("the source results follow what the calls returned, and a refusal is recorded as a refusal", async () => {

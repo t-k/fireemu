@@ -331,13 +331,15 @@ export function createWorld({ now, rulesAllow = true }) {
       if ((m = /^\/upload\/storage\/v1\/b\/([^/]+)\/o$/.exec(path)) && method === "POST") {
         const bucket = m[1];
         const name = u.searchParams.get("name");
-        const hash = init.headers["x-goog-hash"];
-        if (hash && hash !== `md5=${createHash("md5").update(body).digest("base64")}`)
-          return json(400, { error: { code: 400 } });
         const key = `${bucket}/${name}`;
         const list = world.objects.get(key) ?? [];
         const live = list.find((g) => g.live);
-        if (u.searchParams.get("ifGenerationMatch") === "0" && live)
+        // Production: ifGenerationMatch=0 needs the object absent; any other value needs that live generation.
+        const precondition = u.searchParams.get("ifGenerationMatch");
+        if (
+          (precondition === "0" && live) ||
+          (precondition !== null && precondition !== "0" && precondition !== live?.generation)
+        )
           return json(412, { error: { code: 412 } });
         const gen = {
           generation: String(1700000000000000 + next()),

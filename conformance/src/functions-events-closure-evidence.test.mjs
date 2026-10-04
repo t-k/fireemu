@@ -877,6 +877,8 @@ test(
     const run = JSON.parse(readFileSync(v4, "utf8"));
     assert.equal(run.passes.length, 0);
     assert.equal(run.frames.length, 0);
+    // the v4 run was recorded against the v4 corpus; bind it to the current one so the pass count is what refuses it
+    run.corpusDigest = sha256(corpusText);
     asRefusal(
       () => recordingsFromRun(run, { corpusSha256: sha256(corpusText) }),
       /the run has 0 passes/,

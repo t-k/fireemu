@@ -167,3 +167,15 @@ test("a positive control must exercise the same handler event", () => {
   deletion.positiveControlScenario = "storage-upload";
   assert.throws(() => validateCorpus(value, closure), /handler event/);
 });
+
+test("storage-failed-upload is a precondition failure on a seeded object, as the v6 recorder script sends it", () => {
+  // v5's invalid-checksum upload was accepted by production (HTTP 200), so it could not be a refusal.
+  const value = corpus();
+  const failed = value.scenarios.find(({ id }) => id === "storage-failed-upload");
+  assert.equal(failed.mutation, "storage.upload-precondition-failed");
+  assert.equal(failed.sourceResult, "typed-refusal");
+  assert.ok(failed.preconditions.includes("seeded-object-generation-readback"));
+  assert.ok(failed.preconditions.includes("seed-event-drained"));
+  assert.ok(!failed.preconditions.includes("object-absent"));
+  assert.equal(JSON.stringify(value).includes("invalid-checksum"), false);
+});

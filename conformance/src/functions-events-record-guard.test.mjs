@@ -662,3 +662,35 @@ test("the update mask is the one parameter that may repeat", () => {
   });
   assert.equal(answer.rule, "firestore-patch");
 });
+
+const uploadAsked = (query, headers) => ({
+  method: "POST",
+  url: `https://storage.googleapis.com/upload/storage/v1/b/${PRIMARY_BUCKET}/o?uploadType=media&name=fe-events%2Fx.txt${query}`,
+  mutation: true,
+  body: "t",
+  ...(headers ? { headers } : {}),
+});
+
+test("an upload may carry ifGenerationMatch 0 (a create) or 1 (a write that production refuses), and nothing else", () => {
+  for (const query of ["", "&ifGenerationMatch=0", "&ifGenerationMatch=1"])
+    assert.equal(destination(uploadAsked(query)).problem, undefined, query);
+  for (const value of ["2", "5", "", "01", "1x", "-1", "1790000000000000", "0%2C1"])
+    assert.match(
+      destination(uploadAsked(`&ifGenerationMatch=${value}`)).problem ?? "",
+      /ifGenerationMatch may only be 0 or 1/,
+      value,
+    );
+});
+
+test("an upload adds no header at all: the x-goog-hash of v5 is gone", () => {
+  assert.equal(destination(uploadAsked("", {})).problem, undefined);
+  for (const headers of [
+    { "x-goog-hash": "md5=x" },
+    { "X-Goog-Hash": "md5=x" },
+    { "x-other": "1" },
+  ])
+    assert.match(
+      destination(uploadAsked("", headers)).problem ?? "",
+      /an upload may not add a header/,
+    );
+});

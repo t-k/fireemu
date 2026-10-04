@@ -135,12 +135,12 @@ test("the pass sizes match the design (writes and all requests per pass)", () =>
   const summary = passSummary(pass1());
   assert.deepEqual(summary.perFamily.mutations, {
     firestore: 21,
-    storage: 24,
+    storage: 26,
     auth: 14,
     pubsub: 3,
   });
-  assert.equal(summary.mutations, 62);
-  assert.equal(summary.requests, 108);
+  assert.equal(summary.mutations, 64);
+  assert.equal(summary.requests, 111);
   assert.ok(
     summary.minutes >= 25 && summary.minutes <= 42,
     `pass takes ${summary.minutes} minutes`,
@@ -197,4 +197,37 @@ test("a Pub/Sub publication is the message id as data and as the probe attribute
       ],
     });
   }
+});
+
+test("storage-failed-upload seeds an object, then writes it with a non-matching ifGenerationMatch that production refuses with 412", () => {
+  const step = pass1().steps.find((s) => s.scenarioId === "storage-failed-upload");
+  const roles = step.requests.map((r) => r.role);
+  assert.deepEqual(roles, ["setup", "subject", "readback", "readback", "cleanup"]);
+  const [seed, subject, get, versions, cleanup] = step.requests;
+  assert.ok(seed.url.includes("ifGenerationMatch=0"));
+  assert.equal(seed.method, "POST");
+  assert.ok(subject.url.includes("ifGenerationMatch=1"), subject.url);
+  assert.ok(!subject.url.includes("ifGenerationMatch=0"));
+  assert.deepEqual(subject.expect, [412]);
+  assert.equal(subject.headers, undefined);
+  assert.equal(subject.mutation, true);
+  assert.notEqual(subject.body, seed.body, "the refused write has its own body");
+  assert.equal(get.method, "GET");
+  assert.deepEqual(get.expect, [200]);
+  assert.ok(versions.url.includes("versions=true"));
+  assert.equal(cleanup.method, "DELETE");
+  assert.deepEqual(step.subject, [subject.id]);
+  assert.equal(
+    step.seedWaitSeconds > 0,
+    true,
+    "the seed finalize is drained before the refused write",
+  );
+  assert.equal(step.matchKey.kind, "storage");
+  assert.equal(step.expectedSourceResult, "typed-refusal");
+  assert.equal(step.settleSeconds, NEGATIVE_WINDOW_SECONDS);
+  // one object, one name for all five requests
+  const names = step.requests.map((r) =>
+    decodeURIComponent(r.url.match(/(?:name=|\/o\/|prefix=)([^&?]+)/)[1]),
+  );
+  assert.equal(new Set(names).size, 1);
 });

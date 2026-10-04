@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { createHash, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import { setTimeout as delay } from "node:timers/promises";
 
 const primaryBucket = "demo-conformance-events-primary";
@@ -65,29 +65,33 @@ async function waitForSeed(capture, cursor, bucket, name) {
   throw new Error("Storage seed event did not drain before source mutation");
 }
 
-/** Submit a deliberately bad digest only to the local JSON upload API. */
-export async function attemptInvalidChecksumUpload({ host, bucket, name, request = fetch }) {
+/**
+ * The refused write of the failed-upload scenario, the one the production script sends: the same object, ifGenerationMatch=1
+ * (a real generation is never 1, so production answers 412 and changes nothing), a short body of its own and no extra header.
+ * It answers what the profile did: a 4xx is a typed refusal, a 2xx a typed success (the official emulator ignores upload
+ * preconditions and completes the write); any other status is an error.
+ */
+export async function attemptPreconditionUpload({ host, bucket, name, request = fetch }) {
   loopbackStorageHost(host);
   const endpoint = new URL(`http://${host}/upload/storage/v1/b/${encodeURIComponent(bucket)}/o`);
   endpoint.searchParams.set("uploadType", "media");
   endpoint.searchParams.set("name", name);
-  const goodDigest = createHash("md5").update("hello").digest("base64");
+  endpoint.searchParams.set("ifGenerationMatch", "1");
   const response = await request(endpoint.href, {
     method: "POST",
-    headers: {
-      authorization: "Bearer owner",
-      "content-type": "text/plain",
-      "x-goog-hash": `md5=${goodDigest}`,
-    },
-    body: "hellp",
+    headers: { authorization: "Bearer owner", "content-type": "text/plain" },
+    body: "refused",
     redirect: "error",
     signal: AbortSignal.timeout(15_000),
   });
-  if (response.status >= 400 && response.status < 500) return "typed-refusal";
-  throw new Error(`local invalid-checksum upload was not refused (HTTP ${response.status})`);
+  if (response.status >= 400 && response.status < 500)
+    return { status: response.status, sourceResult: "typed-refusal" };
+  if (response.status >= 200 && response.status < 300)
+    return { status: response.status, sourceResult: "typed-success" };
+  throw new Error(`local precondition upload answered HTTP ${response.status}`);
 }
 
-export async function runStorageScenario({ scenario, capture, storage }) {
+export async function runStorageScenario({ scenario, capture, storage, request = fetch }) {
   const bucketName = scenario.resource === "bucket-control" ? controlBucket : primaryBucket;
   const bucket = storage.bucket(bucketName);
   const id = `e${randomUUID().replaceAll("-", "")}`;
@@ -95,6 +99,7 @@ export async function runStorageScenario({ scenario, capture, storage }) {
   const file = bucket.file(name);
   let originalVersioning = null;
   let versioningChanged = false;
+  let seedGeneration = null;
   const cleanup = async () => {
     const absent = await deleteOwnedGenerations(bucket, name);
     let versioningRestored = true;
@@ -126,14 +131,19 @@ export async function runStorageScenario({ scenario, capture, storage }) {
       assert.equal(updated.versioning?.enabled, true, "versioning enablement requires readback");
     }
     if (
-      ["storage-overwrite", "storage-delete", "storage-metadata", "storage-archive"].includes(
-        scenario.id,
-      )
+      [
+        "storage-overwrite",
+        "storage-delete",
+        "storage-metadata",
+        "storage-archive",
+        "storage-failed-upload",
+      ].includes(scenario.id)
     ) {
       const seedCursor = (await capture.barrier()).cursor;
       await file.save("before", { contentType: "text/plain", resumable: false });
       const seed = await metadataOrNull(file);
       assert.ok(seed?.generation, "Storage seed generation requires readback");
+      seedGeneration = seed.generation;
       await waitForSeed(capture, seedCursor, bucketName, name);
     }
     const cursor = (await capture.barrier()).cursor;
@@ -164,17 +174,24 @@ export async function runStorageScenario({ scenario, capture, storage }) {
         }
         break;
       case "storage-failed-upload":
-        sourceResult = await attemptInvalidChecksumUpload({
+        ({ sourceResult } = await attemptPreconditionUpload({
           host: process.env.FIREBASE_STORAGE_EMULATOR_HOST,
           bucket: bucketName,
           name,
-        });
+          request,
+        }));
         break;
       default:
         throw new Error(`unknown Storage scenario: ${scenario.id}`);
     }
     const after = await metadataOrNull(file);
-    if (sourceResult === "typed-refusal" || scenario.id === "storage-delete") {
+    if (scenario.id === "storage-failed-upload" && sourceResult === "typed-refusal") {
+      assert.equal(
+        after?.generation,
+        seedGeneration,
+        "a refused write changed the Storage object (its generation is not the seed's)",
+      );
+    } else if (sourceResult === "typed-refusal" || scenario.id === "storage-delete") {
       assert.equal(after, null, "refused/deleted Storage object requires typed absence");
     } else {
       assert.ok(after?.generation, "Storage source generation requires readback");

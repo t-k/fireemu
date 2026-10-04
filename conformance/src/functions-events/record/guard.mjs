@@ -118,13 +118,12 @@ export const RULES = [
       if (params.get("uploadType") !== "media") return "an upload must be uploadType=media";
       if (!OBJECT_NAME.test(params.get("name") ?? ""))
         return "the object name is outside the owned prefixes";
-      if (params.has("ifGenerationMatch") && params.get("ifGenerationMatch") !== "0")
-        return "ifGenerationMatch may only be 0";
+      // 0 creates; 1 is a write production refuses (a real generation is never 1), the failed-upload scenario.
+      if (params.has("ifGenerationMatch") && !["0", "1"].includes(params.get("ifGenerationMatch")))
+        return "ifGenerationMatch may only be 0 or 1";
       if (typeof body !== "string" || body.length > 64)
         return "the upload body is not a short text";
-      return Object.keys(headers ?? {}).every((name) => name.toLowerCase() === "x-goog-hash")
-        ? undefined
-        : "an upload may only add x-goog-hash";
+      return Object.keys(headers ?? {}).length === 0 ? undefined : "an upload may not add a header";
     },
   }),
   rule("storage-object-get", "GET", "storage.googleapis.com", `${storage}/o/${OBJECT}`),

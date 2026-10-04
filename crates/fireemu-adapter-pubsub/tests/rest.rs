@@ -921,7 +921,8 @@ async fn rest_and_grpc_masks_reset_ack_deadline_and_push_config_to_defaults() {
         .unwrap()
         .into_inner();
     assert_eq!(reset.ack_deadline_seconds, 10);
-    assert_eq!(reset.push_config, None);
+    // A pull subscription carries an empty, present push config.
+    assert_eq!(reset.push_config, Some(pb::PushConfig::default()));
 }
 
 #[tokio::test]
@@ -1067,22 +1068,6 @@ fn unsupported_subscription_options() -> Vec<UnsupportedOption> {
                 });
             },
         ),
-        ("labels", "labels", json!({"owner": "test"}), |sub| {
-            sub.labels.insert("owner".to_owned(), "test".to_owned());
-        }),
-        (
-            "expirationPolicy",
-            "expiration_policy",
-            json!({"ttl": "86400s"}),
-            |sub| {
-                sub.expiration_policy = Some(pb::ExpirationPolicy {
-                    ttl: Some(prost_types::Duration {
-                        seconds: 86_400,
-                        nanos: 0,
-                    }),
-                });
-            },
-        ),
         ("detached", "detached", json!(true), |sub| {
             sub.detached = true;
         }),
@@ -1103,7 +1088,6 @@ fn unsupported_subscription_options() -> Vec<UnsupportedOption> {
                 });
             },
         ),
-        ("state", "state", json!("ACTIVE"), |sub| sub.state = 1),
         (
             "analyticsHubSubscriptionInfo",
             "analytics_hub_subscription_info",
@@ -1582,9 +1566,26 @@ async fn assert_subscription_matrix(
         "{id}"
     );
     assert!(!grpc_get.retain_acked_messages, "{id}");
-    assert!(grpc_get.message_retention_duration.is_none(), "{id}");
+    // The recorded production defaults, the same as the REST body above.
+    assert_eq!(
+        grpc_get.message_retention_duration,
+        Some(prost_types::Duration {
+            seconds: 604_800,
+            nanos: 0
+        }),
+        "{id}"
+    );
     assert!(grpc_get.labels.is_empty(), "{id}");
-    assert!(grpc_get.expiration_policy.is_none(), "{id}");
+    assert_eq!(
+        grpc_get.expiration_policy,
+        Some(pb::ExpirationPolicy {
+            ttl: Some(prost_types::Duration {
+                seconds: 2_678_400,
+                nanos: 0
+            })
+        }),
+        "{id}"
+    );
     assert!(!grpc_get.detached, "{id}");
     assert!(!grpc_get.enable_exactly_once_delivery, "{id}");
     assert!(grpc_get.bigquery_config.is_none(), "{id}");
@@ -1592,7 +1593,11 @@ async fn assert_subscription_matrix(
     assert!(grpc_get.bigtable_config.is_none(), "{id}");
     assert!(grpc_get.message_transforms.is_empty(), "{id}");
     assert!(grpc_get.tags.is_empty(), "{id}");
-    assert_eq!(grpc_get.state, 0, "{id}");
+    assert_eq!(
+        grpc_get.state,
+        pb::subscription::State::Active as i32,
+        "{id}"
+    );
     let push = grpc_get.push_config.as_ref().unwrap();
     assert!(push.attributes.is_empty(), "{id}");
     assert!(push.authentication_method.is_none(), "{id}");

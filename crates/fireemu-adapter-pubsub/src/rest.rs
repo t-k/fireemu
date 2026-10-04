@@ -11,8 +11,9 @@ use axum::response::Response;
 use base64::engine::general_purpose::STANDARD as BASE64;
 use base64::Engine;
 use fireemu_core_pubsub::subscription::{
-    DeadLetterPolicy, PushConfig, RetryPolicy, DEFAULT_ACK_DEADLINE_SECONDS,
-    DEFAULT_RETRY_MINIMUM_BACKOFF_SECONDS, MAX_RETRY_BACKOFF_SECONDS,
+    DeadLetterPolicy, ExpirationPolicy, PushConfig, RetryPolicy, DEFAULT_ACK_DEADLINE_SECONDS,
+    DEFAULT_EXPIRATION_TTL_SECONDS, DEFAULT_RETRY_MINIMUM_BACKOFF_SECONDS,
+    MAX_RETRY_BACKOFF_SECONDS,
 };
 use fireemu_core_pubsub::{
     Code, Filter, PubSubError, PubSubState, PubsubMessage, ReceivedMessage, Snapshot,
@@ -23,7 +24,7 @@ use serde_json::{json, Map, Value};
 
 use crate::convert::{
     is_declared_subscription_field, is_declared_topic_field, validate_subscription_update_paths,
-    validate_topic_options, SUPPORTED_SUBSCRIPTION_FIELDS,
+    validate_topic_options, DEFAULT_MESSAGE_RETENTION_SECONDS, SUPPORTED_SUBSCRIPTION_FIELDS,
 };
 use crate::{PubSubHandle, MAX_MESSAGE_BYTES};
 use fireemu_proto_pubsub::google::pubsub::v1 as pb;
@@ -485,6 +486,11 @@ fn create_subscription(
     let message_retention_duration = field(body, "messageRetentionDuration")
         .map(parse_duration)
         .transpose()?;
+    let labels = object_strings(body, "labels")?;
+    let expiration_policy = field(body, "expirationPolicy")
+        .map(parse_expiration_policy)
+        .transpose()?;
+    ignore_output_only_state(body)?;
     let config = SubscriptionConfig {
         retain_acked_messages,
         message_retention_duration,
@@ -496,6 +502,8 @@ fn create_subscription(
         dead_letter_policy,
         retry_policy,
         push_config,
+        labels,
+        expiration_policy,
     };
     let mut state = handle.state();
     state
@@ -678,6 +686,39 @@ fn parse_retry_policy(value: &Value) -> Result<RetryPolicy, RestError> {
             .transpose()?
             .unwrap_or_else(|| LogicalDuration::from_seconds(MAX_RETRY_BACKOFF_SECONDS)),
     })
+}
+
+/// `state` is output only: a client may send the state a GET returned, and any state it names is
+/// ignored. Only a state name is accepted.
+fn ignore_output_only_state(body: &Value) -> Result<(), RestError> {
+    match field(body, "state") {
+        None => Ok(()),
+        Some(state)
+            if matches!(
+                state.as_str(),
+                Some("STATE_UNSPECIFIED" | "ACTIVE" | "RESOURCE_ERROR")
+            ) =>
+        {
+            Ok(())
+        }
+        Some(_) => Err(RestError::invalid(
+            "state must be STATE_UNSPECIFIED, ACTIVE or RESOURCE_ERROR",
+        )),
+    }
+}
+
+fn parse_expiration_policy(value: &Value) -> Result<ExpirationPolicy, RestError> {
+    let object = value
+        .as_object()
+        .ok_or_else(|| RestError::invalid("expirationPolicy must be an object"))?;
+    reject_duplicate_spellings("expirationPolicy", object)?;
+    if let Some(key) = object.keys().find(|key| key.as_str() != "ttl") {
+        return Err(RestError::invalid(format!(
+            "unknown expirationPolicy field {key}"
+        )));
+    }
+    let ttl = object.get("ttl").map(parse_duration).transpose()?;
+    Ok(ExpirationPolicy { ttl })
 }
 
 fn parse_duration(value: &Value) -> Result<LogicalDuration, RestError> {
@@ -1045,10 +1086,22 @@ fn subscription_json(state: &PubSubState, config: &SubscriptionConfig) -> Value 
         "topic": topic,
         "ackDeadlineSeconds": config.ack_deadline_seconds,
         "pushConfig": {},
-        "messageRetentionDuration": "604800s",
-        "expirationPolicy": {"ttl": "2678400s"},
+        "messageRetentionDuration": duration_json(LogicalDuration::from_seconds(
+            DEFAULT_MESSAGE_RETENTION_SECONDS,
+        )),
+        "expirationPolicy": {"ttl": duration_json(LogicalDuration::from_seconds(
+            DEFAULT_EXPIRATION_TTL_SECONDS,
+        ))},
         "state": "ACTIVE",
     });
+    if let Some(policy) = config.expiration_policy {
+        value["expirationPolicy"] = policy
+            .ttl
+            .map_or_else(|| json!({}), |ttl| json!({"ttl": duration_json(ttl)}));
+    }
+    if !config.labels.is_empty() {
+        value["labels"] = json!(config.labels);
+    }
     if config.enable_message_ordering {
         value["enableMessageOrdering"] = json!(true);
     }

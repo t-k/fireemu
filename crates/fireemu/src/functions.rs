@@ -130,6 +130,8 @@ pub fn provision_function_pubsub_resources(
                     dead_letter_policy: None,
                     retry_policy: None,
                     push_config: PushConfig::default(),
+                    labels: std::collections::BTreeMap::new(),
+                    expiration_policy: None,
                 })
                 .map_err(|error| {
                     format!(
@@ -8506,6 +8508,8 @@ mod tests {
                     dead_letter_policy: None,
                     retry_policy: None,
                     push_config: PushConfig::default(),
+                    labels: std::collections::BTreeMap::new(),
+                    expiration_policy: None,
                 })
                 .unwrap();
         }
@@ -8620,6 +8624,8 @@ mod tests {
                     }),
                     retry_policy: None,
                     push_config: PushConfig::default(),
+                    labels: std::collections::BTreeMap::new(),
+                    expiration_policy: None,
                 })
                 .unwrap();
             state
@@ -8634,6 +8640,8 @@ mod tests {
                     dead_letter_policy: None,
                     retry_policy: None,
                     push_config: PushConfig::default(),
+                    labels: std::collections::BTreeMap::new(),
+                    expiration_policy: None,
                 })
                 .unwrap();
         }
@@ -8748,6 +8756,8 @@ mod tests {
                 dead_letter_policy: None,
                 retry_policy: None,
                 push_config: PushConfig::default(),
+                labels: std::collections::BTreeMap::new(),
+                expiration_policy: None,
             })
             .unwrap();
 

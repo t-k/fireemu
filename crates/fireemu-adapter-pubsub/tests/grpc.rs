@@ -943,18 +943,6 @@ async fn grpc_rejects_unsupported_subscription_options_before_creation() {
             },
         ),
         (
-            "expiration_policy",
-            pb::Subscription {
-                expiration_policy: Some(pb::ExpirationPolicy {
-                    ttl: Some(prost_types::Duration {
-                        seconds: 86_400,
-                        nanos: 0,
-                    }),
-                }),
-                ..Default::default()
-            },
-        ),
-        (
             "detached",
             pb::Subscription {
                 detached: true,
@@ -972,13 +960,6 @@ async fn grpc_rejects_unsupported_subscription_options_before_creation() {
             "message_transforms",
             pb::Subscription {
                 message_transforms: vec![pb::MessageTransform::default()],
-                ..Default::default()
-            },
-        ),
-        (
-            "labels",
-            pb::Subscription {
-                labels: HashMap::from([(String::from("owner"), String::from("test"))]),
                 ..Default::default()
             },
         ),

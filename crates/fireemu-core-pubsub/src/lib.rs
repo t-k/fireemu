@@ -27,6 +27,6 @@ pub use message::{PubsubMessage, StoredMessage};
 pub use name::{SubscriptionName, TopicName};
 pub use state::{DeadLetterForward, PubSubState, PullResult, Snapshot};
 pub use subscription::{
-    DeadLetterPolicy, PushConfig, ReceivedMessage, RetryPolicy, SubscriptionConfig,
-    SubscriptionState,
+    DeadLetterPolicy, ExpirationPolicy, PushConfig, ReceivedMessage, RetryPolicy,
+    SubscriptionConfig, SubscriptionState,
 };

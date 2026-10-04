@@ -1463,6 +1463,8 @@ mod tests {
             dead_letter_policy: None,
             retry_policy: None,
             push_config: PushConfig::default(),
+            labels: std::collections::BTreeMap::new(),
+            expiration_policy: None,
         }
     }
 

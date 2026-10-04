@@ -4,8 +4,9 @@
 use std::collections::BTreeMap;
 
 use fireemu_core_pubsub::subscription::{
-    DeadLetterPolicy, PushConfig, RetryPolicy, DEFAULT_ACK_DEADLINE_SECONDS,
-    DEFAULT_RETRY_MINIMUM_BACKOFF_SECONDS, MAX_RETRY_BACKOFF_SECONDS, MIN_DEAD_LETTER_ATTEMPTS,
+    DeadLetterPolicy, ExpirationPolicy, PushConfig, RetryPolicy, DEFAULT_ACK_DEADLINE_SECONDS,
+    DEFAULT_EXPIRATION_TTL_SECONDS, DEFAULT_RETRY_MINIMUM_BACKOFF_SECONDS,
+    MAX_RETRY_BACKOFF_SECONDS, MIN_DEAD_LETTER_ATTEMPTS,
 };
 use fireemu_core_pubsub::{
     Code, Filter, PubSubError, PubsubMessage, ReceivedMessage, Snapshot, StoredMessage,
@@ -30,6 +31,8 @@ pub fn status(err: &PubSubError) -> tonic::Status {
 }
 
 const NANOS_PER_SEC: i128 = 1_000_000_000;
+/// The retention of a subscription whose request set none: the recorded production default (7 days).
+pub const DEFAULT_MESSAGE_RETENTION_SECONDS: i64 = 604_800;
 
 /// Converts a logical instant to a protobuf timestamp.
 #[must_use]
@@ -129,7 +132,7 @@ pub fn validate_push_config_options(push: Option<&pb::PushConfig>) -> Result<(),
 
 /// Subscription fields declared by `google.pubsub.v1.Subscription` whose value the emulator
 /// applies. Every other declared field is refused explicitly instead of being dropped.
-pub const SUPPORTED_SUBSCRIPTION_FIELDS: [&str; 10] = [
+pub const SUPPORTED_SUBSCRIPTION_FIELDS: [&str; 13] = [
     "name",
     "topic",
     "ack_deadline_seconds",
@@ -140,21 +143,21 @@ pub const SUPPORTED_SUBSCRIPTION_FIELDS: [&str; 10] = [
     "dead_letter_policy",
     "retry_policy",
     "push_config",
+    "labels",
+    "expiration_policy",
+    "state",
 ];
 
 /// Subscription fields declared by `google.pubsub.v1.Subscription` that the emulator cannot
 /// represent. Naming one of these is an explicit unsupported-feature refusal; naming anything
 /// outside both tables is an unknown field, which is an invalid argument.
-pub const UNSUPPORTED_SUBSCRIPTION_FIELDS: [&str; 12] = [
+pub const UNSUPPORTED_SUBSCRIPTION_FIELDS: [&str; 9] = [
     "bigquery_config",
     "cloud_storage_config",
     "bigtable_config",
-    "labels",
-    "expiration_policy",
     "detached",
     "enable_exactly_once_delivery",
     "topic_message_retention_duration",
-    "state",
     "analytics_hub_subscription_info",
     "message_transforms",
     "tags",
@@ -199,18 +202,12 @@ pub fn validate_subscription_options(sub: &pb::Subscription) -> Result<(), PubSu
         Some("cloud_storage_config")
     } else if sub.bigtable_config.is_some() {
         Some("bigtable_config")
-    } else if !sub.labels.is_empty() {
-        Some("labels")
-    } else if sub.expiration_policy.is_some() {
-        Some("expiration_policy")
     } else if sub.detached {
         Some("detached")
     } else if sub.enable_exactly_once_delivery {
         Some("enable_exactly_once_delivery")
     } else if sub.topic_message_retention_duration.is_some() {
         Some("topic_message_retention_duration")
-    } else if sub.state != 0 {
-        Some("state")
     } else if sub.analytics_hub_subscription_info.is_some() {
         Some("analytics_hub_subscription_info")
     } else if !sub.message_transforms.is_empty() {
@@ -369,6 +366,7 @@ pub fn subscription_from_proto(sub: &pb::Subscription) -> Result<SubscriptionCon
             ))
         })
         .transpose()?;
+    let expiration_policy = expiration_policy_from_proto(sub.expiration_policy.as_ref())?;
     Ok(SubscriptionConfig {
         retain_acked_messages: sub.retain_acked_messages,
         message_retention_duration,
@@ -380,7 +378,34 @@ pub fn subscription_from_proto(sub: &pb::Subscription) -> Result<SubscriptionCon
         dead_letter_policy,
         retry_policy,
         push_config,
+        labels: sub.labels.clone().into_iter().collect(),
+        expiration_policy,
     })
+}
+
+/// Converts an explicit wire expiration policy; an empty one (no ttl) never expires.
+fn expiration_policy_from_proto(
+    policy: Option<&pb::ExpirationPolicy>,
+) -> Result<Option<ExpirationPolicy>, PubSubError> {
+    policy
+        .map(|policy| {
+            let ttl = policy
+                .ttl
+                .as_ref()
+                .map(|duration| {
+                    if duration.seconds < 0 || !(0..1_000_000_000).contains(&duration.nanos) {
+                        return Err(PubSubError::invalid_argument(
+                            "expirationPolicy.ttl must use non-negative canonical seconds and nanos",
+                        ));
+                    }
+                    Ok(LogicalDuration::from_nanos(
+                        i128::from(duration.seconds) * NANOS_PER_SEC + i128::from(duration.nanos),
+                    ))
+                })
+                .transpose()?;
+            Ok(ExpirationPolicy { ttl })
+        })
+        .transpose()
 }
 
 /// Renders a subscription config as a wire `Subscription`, reporting `reported_topic` (which is
@@ -396,7 +421,28 @@ pub fn subscription_to_proto(
         ack_deadline_seconds: i32::try_from(config.ack_deadline_seconds).unwrap_or(10),
         enable_message_ordering: config.enable_message_ordering,
         retain_acked_messages: config.retain_acked_messages,
-        message_retention_duration: config.message_retention_duration.map(duration_to_proto),
+        // The recorded production defaults of a created subscription, unless the request set them (the
+        // REST body of `subscription_json` carries the same values): a 7-day retention, the default
+        // 31-day expiration ttl and state ACTIVE.
+        message_retention_duration: Some(duration_to_proto(
+            config.message_retention_duration.unwrap_or_else(|| {
+                LogicalDuration::from_seconds(DEFAULT_MESSAGE_RETENTION_SECONDS)
+            }),
+        )),
+        expiration_policy: Some(pb::ExpirationPolicy {
+            ttl: match config.expiration_policy {
+                None => Some(duration_to_proto(LogicalDuration::from_seconds(
+                    DEFAULT_EXPIRATION_TTL_SECONDS,
+                ))),
+                Some(policy) => policy.ttl.map(duration_to_proto),
+            },
+        }),
+        state: pb::subscription::State::Active as i32,
+        labels: config
+            .labels
+            .iter()
+            .map(|(key, value)| (key.clone(), value.clone()))
+            .collect(),
         filter: config.filter.as_str().to_owned(),
         dead_letter_policy: config
             .dead_letter_policy
@@ -409,14 +455,11 @@ pub fn subscription_to_proto(
             minimum_backoff: Some(duration_to_proto(rp.minimum_backoff)),
             maximum_backoff: Some(duration_to_proto(rp.maximum_backoff)),
         }),
-        push_config: if config.is_push() {
-            Some(pb::PushConfig {
-                push_endpoint: config.push_config.push_endpoint.clone(),
-                ..pb::PushConfig::default()
-            })
-        } else {
-            None
-        },
+        // A pull subscription carries an empty, present push config, as production's does.
+        push_config: Some(pb::PushConfig {
+            push_endpoint: config.push_config.push_endpoint.clone(),
+            ..pb::PushConfig::default()
+        }),
         ..pb::Subscription::default()
     }
 }

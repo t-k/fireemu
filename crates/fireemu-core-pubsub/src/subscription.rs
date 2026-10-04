@@ -26,6 +26,11 @@ pub const MAX_ACK_DEADLINE_SECONDS: u32 = 600;
 pub const MIN_DEAD_LETTER_ATTEMPTS: u32 = 5;
 /// Inclusive maximum `max_delivery_attempts` for a dead-letter policy.
 pub const MAX_DEAD_LETTER_ATTEMPTS: u32 = 100;
+/// The expiration ttl, in seconds, of a subscription whose request set no expiration policy: the
+/// recorded production default (31 days).
+pub const DEFAULT_EXPIRATION_TTL_SECONDS: i64 = 2_678_400;
+/// Inclusive minimum expiration ttl, in seconds (one day), as the Pub/Sub API documents it.
+pub const MIN_EXPIRATION_TTL_SECONDS: i64 = 86_400;
 /// Default retry minimum backoff when a policy omits the field.
 pub const DEFAULT_RETRY_MINIMUM_BACKOFF_SECONDS: i64 = 10;
 /// Default and maximum retry maximum backoff.
@@ -74,6 +79,14 @@ pub struct PushConfig {
     pub push_endpoint: String,
 }
 
+/// An explicit subscription expiration policy. Configuration only: the emulator stores and reports
+/// it and does not expire subscriptions.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ExpirationPolicy {
+    /// How long the subscription may be inactive before it expires; `None` means it never expires.
+    pub ttl: Option<LogicalDuration>,
+}
+
 /// Validated subscription configuration.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SubscriptionConfig {
@@ -97,6 +110,11 @@ pub struct SubscriptionConfig {
     pub retry_policy: Option<RetryPolicy>,
     /// The push configuration; empty endpoint means pull.
     pub push_config: PushConfig,
+    /// User-provided labels.
+    pub labels: BTreeMap<String, String>,
+    /// The explicitly requested expiration policy; `None` is the default policy (ttl of
+    /// [`DEFAULT_EXPIRATION_TTL_SECONDS`]).
+    pub expiration_policy: Option<ExpirationPolicy>,
 }
 
 impl SubscriptionConfig {
@@ -116,6 +134,14 @@ impl SubscriptionConfig {
             {
                 return Err(PubSubError::invalid_argument(
                     "messageRetentionDuration must be between 600 and 2678400 seconds",
+                ));
+            }
+        }
+        // The documented minimum of an expiration ttl is one day; an unset ttl never expires.
+        if let Some(ttl) = self.expiration_policy.and_then(|policy| policy.ttl) {
+            if ttl < LogicalDuration::from_seconds(MIN_EXPIRATION_TTL_SECONDS) {
+                return Err(PubSubError::invalid_argument(
+                    "expirationPolicy.ttl must be at least 86400 seconds",
                 ));
             }
         }
@@ -852,7 +878,39 @@ mod tests {
             dead_letter_policy: None,
             retry_policy: None,
             push_config: PushConfig::default(),
+            labels: BTreeMap::new(),
+            expiration_policy: None,
         }
+    }
+
+    #[test]
+    fn the_expiration_ttl_is_at_least_one_day_and_an_unset_ttl_never_expires() {
+        let with = |policy: Option<ExpirationPolicy>| SubscriptionConfig {
+            expiration_policy: policy,
+            ..cfg()
+        };
+        let ttl = |nanos: i128| {
+            Some(ExpirationPolicy {
+                ttl: Some(LogicalDuration::from_nanos(nanos)),
+            })
+        };
+        let day = 86_400 * 1_000_000_000;
+        // The default policy, a never-expiring policy and a ttl of one day or more are valid.
+        assert!(with(None).validate().is_ok());
+        assert!(with(Some(ExpirationPolicy { ttl: None }))
+            .validate()
+            .is_ok());
+        for valid in [day, day + 1, 31 * day, 365 * day] {
+            assert!(with(ttl(valid)).validate().is_ok(), "{valid} ns");
+        }
+        // Anything shorter, down to zero and below, is refused with an invalid argument.
+        for invalid in [day - 1, day / 2, 1, 0, -day] {
+            let error = with(ttl(invalid)).validate().unwrap_err();
+            assert_eq!(error.code(), crate::Code::InvalidArgument, "{invalid} ns");
+            assert!(error.message().contains("86400"), "{invalid} ns: {error}");
+        }
+        assert_eq!(DEFAULT_EXPIRATION_TTL_SECONDS, 31 * 86_400);
+        assert_eq!(MIN_EXPIRATION_TTL_SECONDS, 86_400);
     }
 
     #[test]

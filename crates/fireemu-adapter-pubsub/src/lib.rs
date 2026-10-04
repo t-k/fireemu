@@ -1681,6 +1681,8 @@ mod dispatch_tests {
                     push_config: PushConfig {
                         push_endpoint: "http://127.0.0.1:1/push".to_owned(),
                     },
+                    labels: std::collections::BTreeMap::new(),
+                    expiration_policy: None,
                 })
                 .unwrap();
         }
@@ -1764,6 +1766,8 @@ mod dispatch_tests {
                     push_config: PushConfig {
                         push_endpoint: "http://127.0.0.1:1/push".to_owned(),
                     },
+                    labels: std::collections::BTreeMap::new(),
+                    expiration_policy: None,
                 })
                 .unwrap();
             state
@@ -1836,6 +1840,8 @@ mod dispatch_tests {
             push_config: PushConfig {
                 push_endpoint: "http://127.0.0.1:1/push".to_owned(),
             },
+            labels: std::collections::BTreeMap::new(),
+            expiration_policy: None,
         };
         let state = Arc::new(Mutex::new(PubSubState::new(42)));
         let clock = Arc::new(Mutex::new(VirtualClock::new(LogicalInstant::UNIX_EPOCH)));
@@ -1956,6 +1962,8 @@ mod dispatch_tests {
                     }),
                     retry_policy: None,
                     push_config: PushConfig::default(),
+                    labels: std::collections::BTreeMap::new(),
+                    expiration_policy: None,
                 })
                 .unwrap();
             state

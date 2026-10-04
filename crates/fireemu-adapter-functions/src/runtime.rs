@@ -6343,36 +6343,28 @@ mod schedule_capacity_tests {
         // At an occurrence's own instant a manual run and the scheduler's are the same event.
         advance(&clock, 2 * 60);
         runtime.on_clock_changed();
-        let inner = runtime.inner.lock().unwrap();
-        let mut shapes: Vec<_> = inner
-            .payloads
-            .values()
-            .filter(|q| q.payload["time"] == "2026-08-29T12:10:00Z")
-            .map(|q| {
-                let mut payload = (*q.payload).clone();
-                payload.as_object_mut().unwrap().remove("id");
-                payload
-            })
-            .collect();
-        assert_eq!(shapes.len(), 1, "only the scheduler's run is at 12:10");
-        drop(inner);
         runtime.run_schedule("tick").unwrap();
-        let inner = runtime.inner.lock().unwrap();
-        shapes.extend(
-            inner
+        let shapes = |manual: bool| {
+            let inner = runtime.inner.lock().unwrap();
+            let mut found: Vec<serde_json::Value> = inner
                 .payloads
                 .values()
                 .filter(|q| q.payload["time"] == "2026-08-29T12:10:00Z")
-                .filter(|q| matches!(q.source, super::EventSource::Manual))
+                .filter(|q| matches!(q.source, super::EventSource::Manual) == manual)
                 .map(|q| {
                     let mut payload = (*q.payload).clone();
                     payload.as_object_mut().unwrap().remove("id");
                     payload
-                }),
+                })
+                .collect();
+            assert_eq!(found.len(), 1, "manual={manual}");
+            found.remove(0)
+        };
+        assert_eq!(
+            shapes(true),
+            shapes(false),
+            "same type, source, time and data"
         );
-        assert_eq!(shapes.len(), 2);
-        assert_eq!(shapes[0], shapes[1], "same type, source, time and data");
-        drop(inner);
         finish(&runtime).await;
     }
 

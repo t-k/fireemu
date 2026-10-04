@@ -2440,7 +2440,7 @@ mod tests {
         let mut state = PubSubState::new(5);
         let topic_name = topic("p", "events");
         state
-            .create_topic(topic_name.clone(), Default::default())
+            .create_topic(topic_name.clone(), BTreeMap::default())
             .unwrap();
         let now = LogicalInstant::from_unix_seconds(10);
         let published = state
@@ -2466,7 +2466,7 @@ mod tests {
         let mut state = PubSubState::new(5);
         let topic_name = topic("p", "events");
         state
-            .create_topic(topic_name.clone(), Default::default())
+            .create_topic(topic_name.clone(), BTreeMap::default())
             .unwrap();
         let now = LogicalInstant::from_unix_seconds(10);
         state.message_counter = crate::MESSAGE_ID_SPAN - 1;

@@ -2149,6 +2149,8 @@ impl FunctionsRuntime {
                 let payload = Arc::new(pubsub_event(
                     message_id,
                     &self.config.project,
+                    &function.region,
+                    &function.name,
                     topic,
                     message,
                     time,
@@ -2196,7 +2198,15 @@ impl FunctionsRuntime {
                 continue; // the message is accepted and dropped, as Pub/Sub does without a subscriber
             }
             for f in self.manifest.pubsub_matches(topic) {
-                let payload = pubsub_event(&message_id, &self.config.project, topic, message, time);
+                let payload = pubsub_event(
+                    &message_id,
+                    &self.config.project,
+                    &f.region,
+                    &f.name,
+                    topic,
+                    message,
+                    time,
+                );
                 self.enqueue_delivery(
                     &mut inner,
                     EventSource::PubSub,

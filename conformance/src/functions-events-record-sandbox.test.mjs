@@ -148,6 +148,10 @@ test("the budget fails closed on the near misses of the close line", () => {
   assert.ok(refused(close({ estimatedUsd: "0" })), "a close line with a string cost");
   assert.ok(refused(close({ estimatedUsd: -1 })), "a negative cost");
   assert.ok(refused(close({ estimatedUsd: Number.NaN })), "a cost that is not finite");
+  assert.ok(
+    refused(close({ estimatedUsd: 1 }).replace('"estimatedUsd":1}', '"estimatedUsd":1e999}')),
+    "a close cost that parses to Infinity",
+  );
   const differing = [
     ...runRows("a", { close: { estimatedUsd: 0 } }),
     costRow({ event: "cleanup-verified", runDir: "a", estimatedUsd: 1 }),
@@ -170,6 +174,12 @@ test("the budget fails closed on the near misses of the close line", () => {
     ...runRows("b", { close: { estimatedUsd: 0 } }),
   ].join("\n");
   assert.equal(headroom(unfinished), 30);
+  // the highest estimate of a run counts, whatever line comes last
+  const lower = [
+    costRow({ event: "started", runDir: "a", estimatedUsd: 4 }),
+    costRow({ event: "finished", runDir: "a", estimatedUsd: 1 }),
+  ].join("\n");
+  assert.equal(headroom(lower), 30);
   // a finished run with no close line keeps its estimate
   assert.equal(headroom(runRows("a", { reserve: 2 }).join("\n")), 32);
 });

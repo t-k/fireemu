@@ -1,3 +1,10 @@
+import { createRequire } from "node:module";
+import {
+  evaluateCurrentParent,
+  loadCurrentBinding,
+  parseStrictJson,
+} from "./production-evidence.mjs";
+export { parseStrictJson } from "./production-evidence.mjs";
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
@@ -356,64 +363,6 @@ function canonical(value) {
   return JSON.stringify(value);
 }
 
-export function parseStrictJson(input) {
-  let text;
-  try {
-    text =
-      typeof input === "string" ? input : new TextDecoder("utf-8", { fatal: true }).decode(input);
-  } catch {
-    throw new Error("JSON input must be valid UTF-8");
-  }
-  const document = JSON.parse(text);
-  let offset = 0;
-  const whitespace = () => {
-    while (/\s/.test(text[offset] ?? "") && offset < text.length) offset++;
-  };
-  const string = () => {
-    const start = offset++;
-    while (text[offset] !== '"') {
-      if (text[offset] === "\\") offset++;
-      offset++;
-    }
-    offset++;
-    return JSON.parse(text.slice(start, offset));
-  };
-  const value = () => {
-    whitespace();
-    if (text[offset] === "{") {
-      offset++;
-      const keys = new Set();
-      whitespace();
-      while (text[offset] !== "}") {
-        const key = string();
-        if (keys.has(key)) throw new Error(`duplicate JSON key ${key}`);
-        keys.add(key);
-        whitespace();
-        offset++;
-        value();
-        whitespace();
-        if (text[offset] !== ",") break;
-        offset++;
-        whitespace();
-      }
-      offset++;
-    } else if (text[offset] === "[") {
-      offset++;
-      whitespace();
-      while (text[offset] !== "]") {
-        value();
-        whitespace();
-        if (text[offset] !== ",") break;
-        offset++;
-      }
-      offset++;
-    } else if (text[offset] === '"') string();
-    else while (offset < text.length && !/[\s,}\]]/.test(text[offset])) offset++;
-  };
-  value();
-  return document;
-}
-
 function demand(condition, reason) {
   if (!condition) throw new Error(reason);
 }
@@ -547,7 +496,120 @@ export function productionEligible(facets) {
   );
 }
 
+function obligationShape(conditions) {
+  return conditions.map((condition) => ({
+    ...condition,
+    facets: condition.facets.map(({ state: _state, evidence: _evidence, ...shape }) => shape),
+  }));
+}
+
+function profileShape({ state: _state, evidence: _evidence, ...shape }) {
+  return shape;
+}
+
+function connectedConsumers(documents) {
+  const { parse } = createRequire(import.meta.url)("acorn");
+  const connected = [];
+  for (const path of CONSUMERS) {
+    const ast = parse(documents.get(path).toString(), {
+      ecmaVersion: "latest",
+      sourceType: "module",
+    });
+    const parent = path.split("/").at(-1).replace("-closure.test.mjs", "").toUpperCase();
+    const imports = ast.body.filter(
+      (node) =>
+        node.type === "ImportDeclaration" && node.source.value === "./production-closure.mjs",
+    );
+    const names = new Set(
+      imports.flatMap((node) =>
+        node.specifiers
+          .filter((s) => s.type === "ImportSpecifier" && s.local.name === s.imported.name)
+          .map((s) => s.imported.name),
+      ),
+    );
+    let actualCalls = 0;
+    let negativeCalls = 0;
+    let topLevelActualCalls = 0;
+    for (const statement of ast.body) {
+      if (statement.type !== "VariableDeclaration" || statement.kind !== "const") continue;
+      for (const declaration of statement.declarations) {
+        const call = declaration.init;
+        if (
+          declaration.id.type === "Identifier" &&
+          declaration.id.name === "admission" &&
+          call?.type === "CallExpression" &&
+          call.callee.type === "Identifier" &&
+          call.callee.name === "assertCurrentParentEvidence" &&
+          call.arguments.length === 2 &&
+          call.arguments[1].type === "Literal" &&
+          call.arguments[1].value === parent &&
+          call.arguments[0].type === "CallExpression" &&
+          call.arguments[0].callee.type === "Identifier" &&
+          call.arguments[0].callee.name === "loadRepository" &&
+          call.arguments[0].arguments.length === 1 &&
+          call.arguments[0].arguments[0].type === "Identifier" &&
+          call.arguments[0].arguments[0].name === "root"
+        )
+          topLevelActualCalls++;
+      }
+    }
+    const walk = (node) => {
+      if (!node || typeof node !== "object") return;
+      if (
+        node.type === "CallExpression" &&
+        node.callee.type === "Identifier" &&
+        node.callee.name === "assertCurrentParentEvidence" &&
+        node.arguments.length === 2 &&
+        node.arguments[1].type === "Literal" &&
+        node.arguments[1].value === parent
+      ) {
+        const input = node.arguments[0];
+        if (
+          input.type === "CallExpression" &&
+          input.callee.type === "Identifier" &&
+          input.callee.name === "loadRepository" &&
+          input.arguments.length === 1 &&
+          input.arguments[0].type === "Identifier" &&
+          input.arguments[0].name === "root"
+        )
+          actualCalls++;
+        else if (input.type === "Identifier" && input.name === "value") negativeCalls++;
+      }
+      for (const value of Object.values(node)) {
+        if (Array.isArray(value)) for (const item of value) walk(item);
+        else if (value && typeof value === "object") walk(value);
+      }
+    };
+    walk(ast);
+    demand(
+      names.has("assertCurrentParentEvidence") &&
+        names.has("loadRepository") &&
+        actualCalls === 1 &&
+        topLevelActualCalls === 1 &&
+        negativeCalls === 1,
+      `${path}: actual current consumer and negative connection missing`,
+    );
+    connected.push(path);
+  }
+  return connected;
+}
+
+/** Enforce the same actual input validation in each existing parent consumer and the CLI. */
+export function assertCurrentParentEvidence({ root, registry, documents }, parent) {
+  const row = registry.parents.find((p) => p.parent === parent);
+  demand(row?.track === "PRODUCTION_PENDING", `${parent}: current parent binding missing`);
+  return evaluateCurrentParent({
+    root,
+    parent,
+    originalInventory: parseStrictJson(documents.get(row.sourceIdentity.snapshotPath)),
+    currentInventory: parseStrictJson(documents.get(row.inventoryPath)),
+    currentBinding: row.currentBinding,
+    documents,
+  });
+}
+
 export function loadRepository(root) {
+  if (root instanceof URL) root = fileURLToPath(root);
   const documents = new Map();
   const read = (path) => {
     if (!documents.has(path)) documents.set(path, readFileSync(resolve(root, path)));
@@ -562,10 +624,18 @@ export function loadRepository(root) {
     if (pin.sourceIdentity.snapshotPath) read(pin.sourceIdentity.snapshotPath);
   }
   for (const path of CONSUMERS) documents.set(path, readFileSync(resolve(root, path)));
-  return { registry, official, documents, lock };
+  for (const path of [
+    "conformance/src/production-evidence.mjs",
+    "conformance/src/production-evidence.test.mjs",
+  ])
+    documents.set(path, readFileSync(resolve(root, path)));
+  for (const row of registry.parents)
+    if (row.track === "PRODUCTION_PENDING")
+      loadCurrentBinding(root, row.parent, row.currentBinding, documents);
+  return { root, registry, official, documents, lock };
 }
 
-export function checkProjection({ registry, official, documents, lock }) {
+export function checkProjection({ root, registry, official, documents, lock }) {
   const result = {
     problems: [],
     requiredParents: 21,
@@ -574,6 +644,7 @@ export function checkProjection({ registry, official, documents, lock }) {
     publicOriginalConditions: 0,
     unpublishedOriginalConditions: 0,
     currentProductionVerified: [],
+    currentEvidence: [],
     officialRemaining: [],
     requireAll: false,
     canonicalPins: "PENDING_ROOT_GENERATION",
@@ -614,26 +685,42 @@ export function checkProjection({ registry, official, documents, lock }) {
       sha(documents.get(OFFICIAL_PATH)) === registry.officialRegistrySha256,
       "official registry real digest differs",
     );
-    equal(
+    closed(
       registry.consumerMigration,
-      {
-        state: "PENDING_SECOND_DELTA",
-        consumers: CONSUMERS,
-        evidenceAdmission: "PENDING_SOURCE_BOUND_EVIDENCE_ADOPTION",
-      },
-      "consumer migration and evidence admission",
+      ["state", "consumers", "evidenceAdmission", "validatorPath", "validatorTestPath"],
+      "consumer migration",
+    );
+    equal(registry.consumerMigration.consumers, CONSUMERS, "consumer paths");
+    equal(
+      registry.consumerMigration.validatorPath,
+      "conformance/src/production-evidence.mjs",
+      "actual validator path",
     );
     equal(
+      registry.consumerMigration.validatorTestPath,
+      "conformance/src/production-evidence.test.mjs",
+      "actual validator test path",
+    );
+    const connections = connectedConsumers(documents);
+    result.consumerMigration =
+      connections.length === CONSUMERS.length ? "COMPLETE" : "PENDING_CONNECTIONS";
+    equal(registry.consumerMigration.state, result.consumerMigration, "actual consumer migration");
+    equal(
+      registry.consumerMigration.evidenceAdmission,
+      "FILE_BACKED_TYPED_RECORDS",
+      "evidence admission protocol",
+    );
+    closed(
       registry.globalFinalProduct,
-      {
-        state: "PENDING",
-        sourceCommit: null,
-        artifactSha256: null,
-        runnerSha256: null,
-        comparison: null,
-        independentReview: null,
-      },
-      "global final product and independent review",
+      [
+        "state",
+        "sourceCommit",
+        "artifactSha256",
+        "runnerSha256",
+        "comparison",
+        "independentReview",
+      ],
+      "global final product",
     );
     const tasks = [];
     for (const row of registry.parents) {
@@ -650,6 +737,7 @@ export function checkProjection({ registry, official, documents, lock }) {
           "conditionRegistry",
           "conditions",
           "profileContract",
+          ...(pin.track === "PRODUCTION_PENDING" ? ["currentBinding"] : []),
         ],
         label,
       );
@@ -721,11 +809,15 @@ export function checkProjection({ registry, official, documents, lock }) {
         `${label} original IDs, cases and text`,
       );
       equal(
-        row.conditions,
-        expectedConditions(label, original),
+        obligationShape(row.conditions),
+        obligationShape(expectedConditions(label, original)),
         `${label} production, mixed, local, final and review obligations`,
       );
-      equal(row.profileContract, expectedProfile(label), `${label} emulator profile contract`);
+      equal(
+        profileShape(row.profileContract),
+        profileShape(expectedProfile(label)),
+        `${label} emulator profile contract`,
+      );
       for (const selector of row.profileContract.originalSelectors)
         demand(
           pointer(original, selector) !== undefined,
@@ -733,11 +825,27 @@ export function checkProjection({ registry, official, documents, lock }) {
         );
       tasks.push(...expectedOfficial(label, original, pin.sourceIdentity));
       result.publicOriginalConditions += original.conditions.length;
-      result.remaining.push({
-        parent: label,
-        state: "PENDING_PRODUCTION_ADOPTION",
-        conditions: original.conditions.length,
-      });
+      const actual = assertCurrentParentEvidence({ root, registry, documents }, label);
+      result.currentEvidence.push(actual);
+      const assertedFacets = [...row.conditions.flatMap((c) => c.facets), row.profileContract];
+      for (const declared of assertedFacets) {
+        closed(
+          declared,
+          ["facetId", "kind", "originalSelectors", "state", "evidence"],
+          `${label} facet`,
+        );
+        const evaluated = actual.facets.find((f) => f.facetId === declared.facetId);
+        demand(evaluated, `${label}: evaluated original facet missing`);
+        equal(declared.state, evaluated.state, `${label} actual facet state`);
+        equal(declared.evidence, evaluated.evidence, `${label} actual facet evidence`);
+      }
+      if (actual.eligible) result.currentProductionVerified.push(label);
+      else
+        result.remaining.push({
+          parent: label,
+          state: actual.records.length > 0 ? "PARTIAL_RECORDED" : "UNOBSERVED",
+          conditions: original.conditions.length,
+        });
     }
     closed(official, ["schemaVersion", "policy", "historyAuthority", "tasks"], "official registry");
     equal(official.schemaVersion, 1, "official schema");
@@ -757,6 +865,32 @@ export function checkProjection({ registry, official, documents, lock }) {
       result.publicOriginalConditions === 95 && result.unpublishedOriginalConditions === 66,
       "original 95 public and 66 unpublished conditions must remain",
     );
+    const finalFacets = result.currentEvidence.flatMap((p) =>
+      p.facets.filter((f) => ["FINAL_PRODUCT", "CLEAN_REVIEW"].includes(f.kind)),
+    );
+    result.globalFinalProduct =
+      finalFacets.length > 0 &&
+      finalFacets.every((f) => f.state === "VERIFIED" && f.evidence !== null)
+        ? "VERIFIED"
+        : "PENDING";
+    equal(
+      registry.globalFinalProduct.state,
+      result.globalFinalProduct,
+      "actual global final product",
+    );
+    if (result.globalFinalProduct !== "VERIFIED")
+      for (const field of [
+        "sourceCommit",
+        "artifactSha256",
+        "runnerSha256",
+        "comparison",
+        "independentReview",
+      ])
+        equal(
+          registry.globalFinalProduct[field],
+          null,
+          `global ${field} requires an admitted actual final receipt`,
+        );
     const requiredPins = new Map([
       [REGISTRY_PATH, sha(documents.get(REGISTRY_PATH))],
       [OFFICIAL_PATH, sha(documents.get(OFFICIAL_PATH))],
@@ -764,6 +898,16 @@ export function checkProjection({ registry, official, documents, lock }) {
         .map((parent) => `spec/compatibility/closure/${parent}.json`)
         .map((path) => [path, sha(documents.get(path))]),
       ...CONSUMERS.map((path) => [path, sha(documents.get(path))]),
+      ...[
+        registry.consumerMigration.validatorPath,
+        registry.consumerMigration.validatorTestPath,
+      ].map((path) => [path, sha(documents.get(path))]),
+      ...registry.parents
+        .flatMap((p) => p.currentBinding?.records ?? [])
+        .map((ref) => [ref.recordPath, ref.recordSha256]),
+      ...registry.parents
+        .flatMap((p) => p.currentBinding?.dependencies ?? [])
+        .map((ref) => [ref.sourcePath, ref.sourceSha256]),
       ...Object.values(BASELINE_PINS)
         .filter((pin) => pin.sourceIdentity.snapshotPath)
         .map((pin) => [pin.sourceIdentity.snapshotPath, pin.sourceIdentity.rawSha256]),
@@ -775,10 +919,12 @@ export function checkProjection({ registry, official, documents, lock }) {
   } catch (error) {
     result.problems.push(error.message);
   }
+  result.currentEvidence.sort((a, b) => a.parent.localeCompare(b.parent, "en"));
+  result.currentProductionVerified.sort();
   result.historicalAccepted.sort();
   result.remaining.sort((a, b) => a.parent.localeCompare(b.parent, "en"));
   result.pendingPins.sort();
-  // This first slice admits no new evidence. Pure fixture success is not closure authority.
+  // Admission follows actual typed records; fixture success is never production authority.
   result.requireAll =
     result.problems.length === 0 &&
     result.remaining.length === 0 &&
@@ -788,23 +934,42 @@ export function checkProjection({ registry, official, documents, lock }) {
   return result;
 }
 
+function markdownTable(headers, rows, rightAligned = []) {
+  const cells = [headers, ...rows].map((row) => row.map(String));
+  const widths = headers.map((_, i) => Math.max(3, ...cells.map((row) => row[i].length)));
+  const line = (row, header = false) =>
+    `| ${row.map((value, i) => (rightAligned.includes(i) && !header ? value.padStart(widths[i]) : value.padEnd(widths[i]))).join(" | ")} |`;
+  const separator = widths.map((width, i) =>
+    rightAligned.includes(i) ? `${"-".repeat(width - 1)}:` : "-".repeat(width),
+  );
+  return [
+    line(cells[0], true),
+    `| ${separator.join(" | ")} |`,
+    ...cells.slice(1).map((row) => line(row)),
+  ];
+}
+
 export function renderStatus(result) {
   const lines = [
     "# Production parent status",
     "",
-    "Status: `IN_PROGRESS`",
+    `Status: \`${result.requireAll ? "COMPLETE" : "IN_PROGRESS"}\``,
     "",
     "This deterministic report covers the fixed 21-parent production scope. Original approvals and observations remain historical; this source integrity checkpoint issues no new production acceptance.",
     "",
     "## Resolved production gaps",
     "",
-    "None newly accepted by this checkpoint.",
+    ...(result.currentProductionVerified.length
+      ? result.currentProductionVerified.map((parent) => `- ${parent}`)
+      : ["None newly accepted by this checkpoint."]),
     "",
     "## Remaining production gaps or unobserved conditions",
     "",
-    "| Parent | Current production state | Original conditions |",
-    "| --- | --- | ---: |",
-    ...result.remaining.map((row) => `| ${row.parent} | \`${row.state}\` | ${row.conditions} |`),
+    ...markdownTable(
+      ["Parent", "Current production state", "Original conditions"],
+      result.remaining.map((row) => [row.parent, `\`${row.state}\``, row.conditions]),
+      [2],
+    ),
     "",
     `The four published pending inventories retain ${result.publicOriginalConditions} original conditions. The four unpublished frozen inventories retain ${result.unpublishedOriginalConditions} condition and case bindings with UNKNOWN publication. Their immutable source references are provenance, not public adoption.`,
     "",
@@ -814,14 +979,37 @@ export function renderStatus(result) {
     "",
     ...result.historicalAccepted.map((parent) => `- ${parent}`),
     "",
-    "Current final-artifact production verification for the remaining eight parents is incomplete. Saved partial equality, synthetic fixtures and source-only checks do not complete those conditions.",
+    `Current final-product gate: \`${result.globalFinalProduct}\`. Saved partial equality, synthetic fixtures and source-only checks do not complete original conditions.`,
     "",
+    ...markdownTable(
+      ["Parent", "Actual retained records", "Mandatory missing evidence"],
+      result.currentEvidence.map((row) => [row.parent, row.records.length, row.missing.length]),
+      [1, 2],
+    ),
+    "",
+    ...result.currentEvidence.flatMap((row) => [
+      `### ${row.parent} current evidence`,
+      "",
+      ...row.records.map(
+        (record) =>
+          `- \`${record.recordType}\`: \`${record.scope}\`; ${record.observedCases ?? record.capturedReplays ?? 0} retained cases or replays.`,
+      ),
+      ...row.dependencies.map(
+        (ref) =>
+          `- Bound public source input: \`${ref.sourcePath}\`; SHA-256 \`${ref.sourceSha256}\`.`,
+      ),
+      ...row.missing.map((reason) => `- Missing: ${reason}`),
+      "",
+    ]),
     "## Official-only remaining work",
     "",
-    "| Independent official comparison | Current state | Preserved original status |",
-    "| --- | --- | --- |",
-    ...result.officialRemaining.map(
-      (task) => `| ${task.facetId} | \`OPEN\` | \`${task.originalStatus}\` |`,
+    ...markdownTable(
+      ["Independent official comparison", "Current state", "Preserved original status"],
+      result.officialRemaining.map((task) => [
+        task.facetId,
+        "`OPEN`",
+        `\`${task.originalStatus}\``,
+      ]),
     ),
     "",
     "An official comparison may remain OPEN independently of production closure. Mixed production obligations, local product checks, final artifact and independent review requirements, and the emulator profile contract remain mandatory. Shared original text is retained in full rather than rewritten.",
@@ -830,14 +1018,14 @@ export function renderStatus(result) {
     "",
     `- Canonical projection record pins: \`${result.canonicalPins}\`; the full \`closure_records.py --check\` gate remains required.`,
     `- Existing Node consumer migration: \`${result.consumerMigration}\`.`,
-    "- New evidence admission: `PENDING_SOURCE_BOUND_EVIDENCE_ADOPTION`.",
+    "- Evidence evaluation: `FILE_BACKED_TYPED_RECORDS`; partial and historical facts are not new production acceptance.",
     `- Same final product and independent review: \`${result.globalFinalProduct}\`.`,
-    "- `--check` validates honest pending integrity. It does not certify closure; `--require-all` refuses this checkpoint.",
+    `- \`--check\` validates honest integrity; \`--require-all\` currently ${result.requireAll ? "passes" : "refuses incomplete production obligations"}.`,
     "",
-    "The original four closure JSON files, their existing Node contracts and the historical 13 approvals remain unchanged. The subsequent consumer delta and the coordinator's canonical lock generation require fresh checks on the resulting tree.",
+    "Original closure inventories, frozen history and the historical 13 approvals are preserved. All four Node consumers and this CLI use the actual record validator. The coordinator must regenerate canonical pins and repeat checks on the resulting tree before accepting new current evidence.",
     "",
   ];
-  return lines.join("\n");
+  return lines.join("\n").replace(/\n+$/, "\n");
 }
 
 function main(argv) {

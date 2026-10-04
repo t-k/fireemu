@@ -29,14 +29,16 @@
   "officialRegistryPath": "spec/compatibility/official-compatibility/registry.json",
   "officialRegistrySha256": "8ece949d30e22806ce6753d0adcb8a86a2dad1b0f157de1530064d8af2dd3a31",
   "consumerMigration": {
-    "state": "PENDING_SECOND_DELTA",
+    "state": "COMPLETE",
     "consumers": [
       "conformance/src/fs-transaction-closure.test.mjs",
       "conformance/src/storage-object-closure.test.mjs",
       "conformance/src/storage-rules-closure.test.mjs",
       "conformance/src/scheduled-functions-closure.test.mjs"
     ],
-    "evidenceAdmission": "PENDING_SOURCE_BOUND_EVIDENCE_ADOPTION"
+    "evidenceAdmission": "FILE_BACKED_TYPED_RECORDS",
+    "validatorPath": "conformance/src/production-evidence.mjs",
+    "validatorTestPath": "conformance/src/production-evidence.test.mjs"
   },
   "globalFinalProduct": {
     "state": "PENDING",
@@ -401,9 +403,7 @@
             {
               "facetId": "FS-TRANSACTION/read-write-lifecycle::production_behavior",
               "kind": "PRODUCTION_BEHAVIOR",
-              "originalSelectors": [
-                "/conditions/0"
-              ],
+              "originalSelectors": ["/conditions/0"],
               "state": "OPEN",
               "evidence": null
             }
@@ -417,9 +417,7 @@
             {
               "facetId": "FS-TRANSACTION/read-only-snapshot::production_behavior",
               "kind": "PRODUCTION_BEHAVIOR",
-              "originalSelectors": [
-                "/conditions/1"
-              ],
+              "originalSelectors": ["/conditions/1"],
               "state": "OPEN",
               "evidence": null
             }
@@ -433,9 +431,7 @@
             {
               "facetId": "FS-TRANSACTION/read-time-snapshot::production_behavior",
               "kind": "PRODUCTION_BEHAVIOR",
-              "originalSelectors": [
-                "/conditions/2"
-              ],
+              "originalSelectors": ["/conditions/2"],
               "state": "OPEN",
               "evidence": null
             }
@@ -449,9 +445,7 @@
             {
               "facetId": "FS-TRANSACTION/token-validation-and-ownership::production_behavior",
               "kind": "PRODUCTION_BEHAVIOR",
-              "originalSelectors": [
-                "/conditions/3"
-              ],
+              "originalSelectors": ["/conditions/3"],
               "state": "OPEN",
               "evidence": null
             }
@@ -465,9 +459,7 @@
             {
               "facetId": "FS-TRANSACTION/read-set-conflict::production_behavior",
               "kind": "PRODUCTION_BEHAVIOR",
-              "originalSelectors": [
-                "/conditions/4"
-              ],
+              "originalSelectors": ["/conditions/4"],
               "state": "OPEN",
               "evidence": null
             }
@@ -481,9 +473,7 @@
             {
               "facetId": "FS-TRANSACTION/write-set-atomicity::production_behavior",
               "kind": "PRODUCTION_BEHAVIOR",
-              "originalSelectors": [
-                "/conditions/5"
-              ],
+              "originalSelectors": ["/conditions/5"],
               "state": "OPEN",
               "evidence": null
             }
@@ -497,9 +487,7 @@
             {
               "facetId": "FS-TRANSACTION/query-range-lock::production_behavior",
               "kind": "PRODUCTION_BEHAVIOR",
-              "originalSelectors": [
-                "/conditions/6"
-              ],
+              "originalSelectors": ["/conditions/6"],
               "state": "OPEN",
               "evidence": null
             }
@@ -513,9 +501,7 @@
             {
               "facetId": "FS-TRANSACTION/failed-commit-and-rollback::production_behavior",
               "kind": "PRODUCTION_BEHAVIOR",
-              "originalSelectors": [
-                "/conditions/7"
-              ],
+              "originalSelectors": ["/conditions/7"],
               "state": "OPEN",
               "evidence": null
             }
@@ -529,9 +515,7 @@
             {
               "facetId": "FS-TRANSACTION/retry-token-lifecycle::production_behavior",
               "kind": "PRODUCTION_BEHAVIOR",
-              "originalSelectors": [
-                "/conditions/8"
-              ],
+              "originalSelectors": ["/conditions/8"],
               "state": "OPEN",
               "evidence": null
             }
@@ -545,9 +529,7 @@
             {
               "facetId": "FS-TRANSACTION/idle-expiry::production_behavior",
               "kind": "PRODUCTION_BEHAVIOR",
-              "originalSelectors": [
-                "/conditions/9"
-              ],
+              "originalSelectors": ["/conditions/9"],
               "state": "OPEN",
               "evidence": null
             }
@@ -561,9 +543,7 @@
             {
               "facetId": "FS-TRANSACTION/total-lifetime-expiry::production_behavior",
               "kind": "PRODUCTION_BEHAVIOR",
-              "originalSelectors": [
-                "/conditions/10"
-              ],
+              "originalSelectors": ["/conditions/10"],
               "state": "OPEN",
               "evidence": null
             }
@@ -577,9 +557,7 @@
             {
               "facetId": "FS-TRANSACTION/read-time-retention::production_behavior",
               "kind": "PRODUCTION_BEHAVIOR",
-              "originalSelectors": [
-                "/conditions/11"
-              ],
+              "originalSelectors": ["/conditions/11"],
               "state": "OPEN",
               "evidence": null
             }
@@ -593,9 +571,7 @@
             {
               "facetId": "FS-TRANSACTION/web-sdk-optimistic-retry::production_behavior",
               "kind": "PRODUCTION_BEHAVIOR",
-              "originalSelectors": [
-                "/conditions/12"
-              ],
+              "originalSelectors": ["/conditions/12"],
               "state": "OPEN",
               "evidence": null
             }
@@ -609,9 +585,7 @@
             {
               "facetId": "FS-TRANSACTION/paging-and-cancellation::production_behavior",
               "kind": "PRODUCTION_BEHAVIOR",
-              "originalSelectors": [
-                "/conditions/13"
-              ],
+              "originalSelectors": ["/conditions/13"],
               "state": "OPEN",
               "evidence": null
             }
@@ -625,9 +599,7 @@
             {
               "facetId": "FS-TRANSACTION/admin-sdk-server-retry::production_behavior",
               "kind": "PRODUCTION_BEHAVIOR",
-              "originalSelectors": [
-                "/conditions/14"
-              ],
+              "originalSelectors": ["/conditions/14"],
               "state": "OPEN",
               "evidence": null
             }
@@ -641,9 +613,7 @@
             {
               "facetId": "FS-TRANSACTION/commit-atomic-visibility::production_behavior",
               "kind": "PRODUCTION_BEHAVIOR",
-              "originalSelectors": [
-                "/conditions/15"
-              ],
+              "originalSelectors": ["/conditions/15"],
               "state": "OPEN",
               "evidence": null
             }
@@ -657,9 +627,7 @@
             {
               "facetId": "FS-TRANSACTION/final-artifact-regression::final_product",
               "kind": "FINAL_PRODUCT",
-              "originalSelectors": [
-                "/conditions/16"
-              ],
+              "originalSelectors": ["/conditions/16"],
               "state": "OPEN",
               "evidence": null
             }
@@ -673,9 +641,7 @@
             {
               "facetId": "FS-TRANSACTION/closure-review::clean_review",
               "kind": "CLEAN_REVIEW",
-              "originalSelectors": [
-                "/conditions/17"
-              ],
+              "originalSelectors": ["/conditions/17"],
               "state": "OPEN",
               "evidence": null
             }
@@ -685,11 +651,39 @@
       "profileContract": {
         "facetId": "FS-TRANSACTION::emulator-profile-contract",
         "kind": "EMULATOR_PROFILE_CONTRACT",
-        "originalSelectors": [
-          "/profileComparison"
-        ],
+        "originalSelectors": ["/profileComparison"],
         "state": "OPEN",
         "evidence": null
+      },
+      "currentBinding": {
+        "inventoryPath": "spec/compatibility/closure/FS-TRANSACTION.json",
+        "inventorySha256": "351f79ba7b5e8597d507f88f1c001cf1e304c08555f2c8799d81416b67361dbf",
+        "records": [
+          {
+            "recordType": "fs-transaction-recorded-observations-v1",
+            "recordPath": "spec/compatibility/broad-runs/fs-transaction-p13b-recorded-observations-v1.json",
+            "recordSha256": "3203503dd1bd4b42d7adcbbbefe87393aa4e479e406f52971a9d73b63fbf3ba0"
+          },
+          {
+            "recordType": "fs-transaction-recorded-comparison-preparation-v1",
+            "recordPath": "spec/compatibility/broad-runs/fs-transaction-p13b-recorded-comparison-v1.json",
+            "recordSha256": "b4c3817e5ee9578e307272a29009e05439c929f8307b268c067ac5aca7242d57"
+          }
+        ],
+        "finalProduct": null,
+        "independentReview": null,
+        "dependencies": [
+          {
+            "sourceType": "fs-transaction-p13b-comparator-source-v1",
+            "sourcePath": "tools/compat-broad/fs-write-txn/fs_txn_compare_local.py",
+            "sourceSha256": "78c5c6f3a5a77dc6e541dd7e92224b8b89db4704ba253d67295ecdb4be7a1a92"
+          },
+          {
+            "sourceType": "fs-transaction-p13b-table-source-v1",
+            "sourcePath": "tools/compat-broad/fs-write-txn/fs_txn_table_p13b.py",
+            "sourceSha256": "c15dcba233334b5dd437aa4fad955fcc6af41089973d1a1bce083769910d5c3a"
+          }
+        ]
       }
     },
     {
@@ -982,14 +976,7 @@
           "conditionId": "SCHEDULED-FUNCTIONS/overlap-policy",
           "originalPointer": "/conditions/17",
           "originalSha256": "1b078099ad36d3e2b1b650dd92058ba302c9a7c9f63951f16a424a85c2237ae9",
-          "cases": [
-            "allow",
-            "skip",
-            "queue",
-            "reject",
-            "manual-overlap",
-            "long-running-handler"
-          ],
+          "cases": ["allow", "skip", "queue", "reject", "manual-overlap", "long-running-handler"],
           "casesSha256": "be47ceffac67ed6b53111f4fd1669eda83cf80fcbce9139d6fe65b76ed894760"
         },
         {
@@ -1074,10 +1061,7 @@
           "conditionId": "SCHEDULED-FUNCTIONS/closure-review",
           "originalPointer": "/conditions/24",
           "originalSha256": "988e2abf5d68b2f241ed30b88c52fec5e4d0e213b9d3cf9d9037995c2ea3f315",
-          "cases": [
-            "independent-Opus-coordinator-review",
-            "owner-ledger-promotion-decision"
-          ],
+          "cases": ["independent-Opus-coordinator-review", "owner-ledger-promotion-decision"],
           "casesSha256": "08a5035fbd892d1c9e54e5f2eefe5eab0b37a04d8bb9d3880cc39328e76de42a"
         }
       ],
@@ -1090,9 +1074,7 @@
             {
               "facetId": "SCHEDULED-FUNCTIONS/declarations-v1-v2::production_behavior",
               "kind": "PRODUCTION_BEHAVIOR",
-              "originalSelectors": [
-                "/conditions/0"
-              ],
+              "originalSelectors": ["/conditions/0"],
               "state": "OPEN",
               "evidence": null
             }
@@ -1106,9 +1088,7 @@
             {
               "facetId": "SCHEDULED-FUNCTIONS/cron-grammar::production_behavior",
               "kind": "PRODUCTION_BEHAVIOR",
-              "originalSelectors": [
-                "/conditions/1"
-              ],
+              "originalSelectors": ["/conditions/1"],
               "state": "OPEN",
               "evidence": null
             }
@@ -1122,9 +1102,7 @@
             {
               "facetId": "SCHEDULED-FUNCTIONS/groc-grammar::production_behavior",
               "kind": "PRODUCTION_BEHAVIOR",
-              "originalSelectors": [
-                "/conditions/2"
-              ],
+              "originalSelectors": ["/conditions/2"],
               "state": "OPEN",
               "evidence": null
             }
@@ -1138,9 +1116,7 @@
             {
               "facetId": "SCHEDULED-FUNCTIONS/timezone-validation-defaults::production_behavior",
               "kind": "PRODUCTION_BEHAVIOR",
-              "originalSelectors": [
-                "/conditions/3"
-              ],
+              "originalSelectors": ["/conditions/3"],
               "state": "OPEN",
               "evidence": null
             }
@@ -1154,9 +1130,7 @@
             {
               "facetId": "SCHEDULED-FUNCTIONS/next-occurrence::production_behavior",
               "kind": "PRODUCTION_BEHAVIOR",
-              "originalSelectors": [
-                "/conditions/4"
-              ],
+              "originalSelectors": ["/conditions/4"],
               "state": "OPEN",
               "evidence": null
             }
@@ -1170,9 +1144,7 @@
             {
               "facetId": "SCHEDULED-FUNCTIONS/dst-calendar::production_behavior",
               "kind": "PRODUCTION_BEHAVIOR",
-              "originalSelectors": [
-                "/conditions/5"
-              ],
+              "originalSelectors": ["/conditions/5"],
               "state": "OPEN",
               "evidence": null
             }
@@ -1186,9 +1158,7 @@
             {
               "facetId": "SCHEDULED-FUNCTIONS/v2-http-delivery::production_behavior",
               "kind": "PRODUCTION_BEHAVIOR",
-              "originalSelectors": [
-                "/conditions/6"
-              ],
+              "originalSelectors": ["/conditions/6"],
               "state": "OPEN",
               "evidence": null
             }
@@ -1202,9 +1172,7 @@
             {
               "facetId": "SCHEDULED-FUNCTIONS/v1-pubsub-delivery::production_behavior",
               "kind": "PRODUCTION_BEHAVIOR",
-              "originalSelectors": [
-                "/conditions/7"
-              ],
+              "originalSelectors": ["/conditions/7"],
               "state": "OPEN",
               "evidence": null
             }
@@ -1218,9 +1186,7 @@
             {
               "facetId": "SCHEDULED-FUNCTIONS/forced-and-natural-invocation::production_behavior",
               "kind": "PRODUCTION_BEHAVIOR",
-              "originalSelectors": [
-                "/conditions/8"
-              ],
+              "originalSelectors": ["/conditions/8"],
               "state": "OPEN",
               "evidence": null
             }
@@ -1234,9 +1200,7 @@
             {
               "facetId": "SCHEDULED-FUNCTIONS/retry-config-validation::production_behavior",
               "kind": "PRODUCTION_BEHAVIOR",
-              "originalSelectors": [
-                "/conditions/9"
-              ],
+              "originalSelectors": ["/conditions/9"],
               "state": "OPEN",
               "evidence": null
             }
@@ -1250,9 +1214,7 @@
             {
               "facetId": "SCHEDULED-FUNCTIONS/v2-retry-limits::production_behavior",
               "kind": "PRODUCTION_BEHAVIOR",
-              "originalSelectors": [
-                "/conditions/10"
-              ],
+              "originalSelectors": ["/conditions/10"],
               "state": "OPEN",
               "evidence": null
             }
@@ -1266,9 +1228,7 @@
             {
               "facetId": "SCHEDULED-FUNCTIONS/v2-backoff::production_behavior",
               "kind": "PRODUCTION_BEHAVIOR",
-              "originalSelectors": [
-                "/conditions/11"
-              ],
+              "originalSelectors": ["/conditions/11"],
               "state": "OPEN",
               "evidence": null
             }
@@ -1282,9 +1242,7 @@
             {
               "facetId": "SCHEDULED-FUNCTIONS/v1-two-stage-retry::production_behavior",
               "kind": "PRODUCTION_BEHAVIOR",
-              "originalSelectors": [
-                "/conditions/12"
-              ],
+              "originalSelectors": ["/conditions/12"],
               "state": "OPEN",
               "evidence": null
             }
@@ -1298,9 +1256,7 @@
             {
               "facetId": "SCHEDULED-FUNCTIONS/deadline-and-overlap::production_behavior",
               "kind": "PRODUCTION_BEHAVIOR",
-              "originalSelectors": [
-                "/conditions/13"
-              ],
+              "originalSelectors": ["/conditions/13"],
               "state": "OPEN",
               "evidence": null
             }
@@ -1314,9 +1270,7 @@
             {
               "facetId": "SCHEDULED-FUNCTIONS/clock-config::local_product",
               "kind": "LOCAL_PRODUCT",
-              "originalSelectors": [
-                "/conditions/14"
-              ],
+              "originalSelectors": ["/conditions/14"],
               "state": "OPEN",
               "evidence": null
             }
@@ -1330,9 +1284,7 @@
             {
               "facetId": "SCHEDULED-FUNCTIONS/clock-forward-boundaries::local_product",
               "kind": "LOCAL_PRODUCT",
-              "originalSelectors": [
-                "/conditions/15"
-              ],
+              "originalSelectors": ["/conditions/15"],
               "state": "OPEN",
               "evidence": null
             }
@@ -1346,9 +1298,7 @@
             {
               "facetId": "SCHEDULED-FUNCTIONS/catch-up-policy::local_product",
               "kind": "LOCAL_PRODUCT",
-              "originalSelectors": [
-                "/conditions/16"
-              ],
+              "originalSelectors": ["/conditions/16"],
               "state": "OPEN",
               "evidence": null
             }
@@ -1362,9 +1312,7 @@
             {
               "facetId": "SCHEDULED-FUNCTIONS/overlap-policy::local_product",
               "kind": "LOCAL_PRODUCT",
-              "originalSelectors": [
-                "/conditions/17"
-              ],
+              "originalSelectors": ["/conditions/17"],
               "state": "OPEN",
               "evidence": null
             }
@@ -1378,9 +1326,7 @@
             {
               "facetId": "SCHEDULED-FUNCTIONS/retry-delay-fairness::local_product",
               "kind": "LOCAL_PRODUCT",
-              "originalSelectors": [
-                "/conditions/18"
-              ],
+              "originalSelectors": ["/conditions/18"],
               "state": "OPEN",
               "evidence": null
             }
@@ -1394,9 +1340,7 @@
             {
               "facetId": "SCHEDULED-FUNCTIONS/capacity-cursor::local_product",
               "kind": "LOCAL_PRODUCT",
-              "originalSelectors": [
-                "/conditions/19"
-              ],
+              "originalSelectors": ["/conditions/19"],
               "state": "OPEN",
               "evidence": null
             }
@@ -1410,9 +1354,7 @@
             {
               "facetId": "SCHEDULED-FUNCTIONS/rewind-and-token-policy::local_product",
               "kind": "LOCAL_PRODUCT",
-              "originalSelectors": [
-                "/conditions/20"
-              ],
+              "originalSelectors": ["/conditions/20"],
               "state": "OPEN",
               "evidence": null
             }
@@ -1426,9 +1368,7 @@
             {
               "facetId": "SCHEDULED-FUNCTIONS/manual-schedule::local_product",
               "kind": "LOCAL_PRODUCT",
-              "originalSelectors": [
-                "/conditions/21"
-              ],
+              "originalSelectors": ["/conditions/21"],
               "state": "OPEN",
               "evidence": null
             }
@@ -1442,9 +1382,7 @@
             {
               "facetId": "SCHEDULED-FUNCTIONS/state-lifecycle::local_product",
               "kind": "LOCAL_PRODUCT",
-              "originalSelectors": [
-                "/conditions/22"
-              ],
+              "originalSelectors": ["/conditions/22"],
               "state": "OPEN",
               "evidence": null
             }
@@ -1458,9 +1396,7 @@
             {
               "facetId": "SCHEDULED-FUNCTIONS/final-artifact-regression::final_product",
               "kind": "FINAL_PRODUCT",
-              "originalSelectors": [
-                "/conditions/23"
-              ],
+              "originalSelectors": ["/conditions/23"],
               "state": "OPEN",
               "evidence": null
             }
@@ -1474,9 +1410,7 @@
             {
               "facetId": "SCHEDULED-FUNCTIONS/closure-review::clean_review",
               "kind": "CLEAN_REVIEW",
-              "originalSelectors": [
-                "/conditions/24"
-              ],
+              "originalSelectors": ["/conditions/24"],
               "state": "OPEN",
               "evidence": null
             }
@@ -1486,11 +1420,17 @@
       "profileContract": {
         "facetId": "SCHEDULED-FUNCTIONS::emulator-profile-contract",
         "kind": "EMULATOR_PROFILE_CONTRACT",
-        "originalSelectors": [
-          "/conditions/23/cases/3"
-        ],
+        "originalSelectors": ["/conditions/23/cases/3"],
         "state": "OPEN",
         "evidence": null
+      },
+      "currentBinding": {
+        "inventoryPath": "spec/compatibility/closure/SCHEDULED-FUNCTIONS.json",
+        "inventorySha256": "cc2218eb413d53db064f807b956a44ec81236aa6f2e662bd9acff6b45bcc1983",
+        "records": [],
+        "finalProduct": null,
+        "independentReview": null,
+        "dependencies": []
       }
     },
     {
@@ -1713,9 +1653,7 @@
             {
               "facetId": "STORAGE-OBJECT/firebase-simple-upload::production_behavior",
               "kind": "PRODUCTION_BEHAVIOR",
-              "originalSelectors": [
-                "/conditions/0"
-              ],
+              "originalSelectors": ["/conditions/0"],
               "state": "OPEN",
               "evidence": null
             }
@@ -1729,9 +1667,7 @@
             {
               "facetId": "STORAGE-OBJECT/firebase-multipart-upload::production_behavior",
               "kind": "PRODUCTION_BEHAVIOR",
-              "originalSelectors": [
-                "/conditions/1"
-              ],
+              "originalSelectors": ["/conditions/1"],
               "state": "OPEN",
               "evidence": null
             }
@@ -1745,9 +1681,7 @@
             {
               "facetId": "STORAGE-OBJECT/firebase-resumable-upload::production_behavior",
               "kind": "PRODUCTION_BEHAVIOR",
-              "originalSelectors": [
-                "/conditions/2"
-              ],
+              "originalSelectors": ["/conditions/2"],
               "state": "OPEN",
               "evidence": null
             }
@@ -1761,9 +1695,7 @@
             {
               "facetId": "STORAGE-OBJECT/firebase-download::production_behavior",
               "kind": "PRODUCTION_BEHAVIOR",
-              "originalSelectors": [
-                "/conditions/3"
-              ],
+              "originalSelectors": ["/conditions/3"],
               "state": "OPEN",
               "evidence": null
             }
@@ -1777,9 +1709,7 @@
             {
               "facetId": "STORAGE-OBJECT/firebase-download-tokens::production_behavior",
               "kind": "PRODUCTION_BEHAVIOR",
-              "originalSelectors": [
-                "/conditions/4"
-              ],
+              "originalSelectors": ["/conditions/4"],
               "state": "OPEN",
               "evidence": null
             }
@@ -1793,9 +1723,7 @@
             {
               "facetId": "STORAGE-OBJECT/firebase-metadata::production_behavior",
               "kind": "PRODUCTION_BEHAVIOR",
-              "originalSelectors": [
-                "/conditions/5"
-              ],
+              "originalSelectors": ["/conditions/5"],
               "state": "OPEN",
               "evidence": null
             }
@@ -1809,9 +1737,7 @@
             {
               "facetId": "STORAGE-OBJECT/firebase-delete::production_behavior",
               "kind": "PRODUCTION_BEHAVIOR",
-              "originalSelectors": [
-                "/conditions/6"
-              ],
+              "originalSelectors": ["/conditions/6"],
               "state": "OPEN",
               "evidence": null
             }
@@ -1825,9 +1751,7 @@
             {
               "facetId": "STORAGE-OBJECT/firebase-list::production_behavior",
               "kind": "PRODUCTION_BEHAVIOR",
-              "originalSelectors": [
-                "/conditions/7"
-              ],
+              "originalSelectors": ["/conditions/7"],
               "state": "OPEN",
               "evidence": null
             }
@@ -1841,9 +1765,7 @@
             {
               "facetId": "STORAGE-OBJECT/firebase-overwrite::production_behavior",
               "kind": "PRODUCTION_BEHAVIOR",
-              "originalSelectors": [
-                "/conditions/8"
-              ],
+              "originalSelectors": ["/conditions/8"],
               "state": "OPEN",
               "evidence": null
             }
@@ -1857,9 +1779,7 @@
             {
               "facetId": "STORAGE-OBJECT/gcs-simple-multipart-upload::production_behavior",
               "kind": "PRODUCTION_BEHAVIOR",
-              "originalSelectors": [
-                "/conditions/9"
-              ],
+              "originalSelectors": ["/conditions/9"],
               "state": "OPEN",
               "evidence": null
             }
@@ -1873,9 +1793,7 @@
             {
               "facetId": "STORAGE-OBJECT/gcs-resumable-upload::production_behavior",
               "kind": "PRODUCTION_BEHAVIOR",
-              "originalSelectors": [
-                "/conditions/10"
-              ],
+              "originalSelectors": ["/conditions/10"],
               "state": "OPEN",
               "evidence": null
             }
@@ -1889,9 +1807,7 @@
             {
               "facetId": "STORAGE-OBJECT/gcs-download::production_behavior",
               "kind": "PRODUCTION_BEHAVIOR",
-              "originalSelectors": [
-                "/conditions/11"
-              ],
+              "originalSelectors": ["/conditions/11"],
               "state": "OPEN",
               "evidence": null
             }
@@ -1905,9 +1821,7 @@
             {
               "facetId": "STORAGE-OBJECT/gcs-metadata::production_behavior",
               "kind": "PRODUCTION_BEHAVIOR",
-              "originalSelectors": [
-                "/conditions/12"
-              ],
+              "originalSelectors": ["/conditions/12"],
               "state": "OPEN",
               "evidence": null
             }
@@ -1921,9 +1835,7 @@
             {
               "facetId": "STORAGE-OBJECT/gcs-delete::production_behavior",
               "kind": "PRODUCTION_BEHAVIOR",
-              "originalSelectors": [
-                "/conditions/13"
-              ],
+              "originalSelectors": ["/conditions/13"],
               "state": "OPEN",
               "evidence": null
             }
@@ -1937,9 +1849,7 @@
             {
               "facetId": "STORAGE-OBJECT/gcs-list::production_behavior",
               "kind": "PRODUCTION_BEHAVIOR",
-              "originalSelectors": [
-                "/conditions/14"
-              ],
+              "originalSelectors": ["/conditions/14"],
               "state": "OPEN",
               "evidence": null
             }
@@ -1953,9 +1863,7 @@
             {
               "facetId": "STORAGE-OBJECT/gcs-copy-rewrite::production_behavior",
               "kind": "PRODUCTION_BEHAVIOR",
-              "originalSelectors": [
-                "/conditions/15"
-              ],
+              "originalSelectors": ["/conditions/15"],
               "state": "OPEN",
               "evidence": null
             }
@@ -1969,9 +1877,7 @@
             {
               "facetId": "STORAGE-OBJECT/generation-preconditions::production_behavior",
               "kind": "PRODUCTION_BEHAVIOR",
-              "originalSelectors": [
-                "/conditions/16"
-              ],
+              "originalSelectors": ["/conditions/16"],
               "state": "OPEN",
               "evidence": null
             }
@@ -1985,9 +1891,7 @@
             {
               "facetId": "STORAGE-OBJECT/metageneration-preconditions::production_behavior",
               "kind": "PRODUCTION_BEHAVIOR",
-              "originalSelectors": [
-                "/conditions/17"
-              ],
+              "originalSelectors": ["/conditions/17"],
               "state": "OPEN",
               "evidence": null
             }
@@ -2001,9 +1905,7 @@
             {
               "facetId": "STORAGE-OBJECT/checksums::production_behavior",
               "kind": "PRODUCTION_BEHAVIOR",
-              "originalSelectors": [
-                "/conditions/18"
-              ],
+              "originalSelectors": ["/conditions/18"],
               "state": "OPEN",
               "evidence": null
             }
@@ -2017,9 +1919,7 @@
             {
               "facetId": "STORAGE-OBJECT/missing-object-errors::production_behavior",
               "kind": "PRODUCTION_BEHAVIOR",
-              "originalSelectors": [
-                "/conditions/19"
-              ],
+              "originalSelectors": ["/conditions/19"],
               "state": "OPEN",
               "evidence": null
             }
@@ -2033,9 +1933,7 @@
             {
               "facetId": "STORAGE-OBJECT/authorization-errors::production_behavior",
               "kind": "PRODUCTION_BEHAVIOR",
-              "originalSelectors": [
-                "/conditions/20"
-              ],
+              "originalSelectors": ["/conditions/20"],
               "state": "OPEN",
               "evidence": null
             }
@@ -2049,9 +1947,7 @@
             {
               "facetId": "STORAGE-OBJECT/invalid-object-name-errors::production_behavior",
               "kind": "PRODUCTION_BEHAVIOR",
-              "originalSelectors": [
-                "/conditions/21"
-              ],
+              "originalSelectors": ["/conditions/21"],
               "state": "OPEN",
               "evidence": null
             }
@@ -2065,9 +1961,7 @@
             {
               "facetId": "STORAGE-OBJECT/invalid-range-errors::production_behavior",
               "kind": "PRODUCTION_BEHAVIOR",
-              "originalSelectors": [
-                "/conditions/22"
-              ],
+              "originalSelectors": ["/conditions/22"],
               "state": "OPEN",
               "evidence": null
             }
@@ -2081,9 +1975,7 @@
             {
               "facetId": "STORAGE-OBJECT/admin-credential::production_behavior",
               "kind": "PRODUCTION_BEHAVIOR",
-              "originalSelectors": [
-                "/conditions/23"
-              ],
+              "originalSelectors": ["/conditions/23"],
               "state": "OPEN",
               "evidence": null
             }
@@ -2097,9 +1989,7 @@
             {
               "facetId": "STORAGE-OBJECT/firebase-id-token::production_behavior",
               "kind": "PRODUCTION_BEHAVIOR",
-              "originalSelectors": [
-                "/conditions/24"
-              ],
+              "originalSelectors": ["/conditions/24"],
               "state": "OPEN",
               "evidence": null
             }
@@ -2113,9 +2003,7 @@
             {
               "facetId": "STORAGE-OBJECT/cross-dialect-state::production_behavior",
               "kind": "PRODUCTION_BEHAVIOR",
-              "originalSelectors": [
-                "/conditions/25"
-              ],
+              "originalSelectors": ["/conditions/25"],
               "state": "OPEN",
               "evidence": null
             }
@@ -2129,18 +2017,14 @@
             {
               "facetId": "STORAGE-OBJECT/final-artifact-regression::final_product",
               "kind": "FINAL_PRODUCT",
-              "originalSelectors": [
-                "/conditions/26"
-              ],
+              "originalSelectors": ["/conditions/26"],
               "state": "OPEN",
               "evidence": null
             },
             {
               "facetId": "STORAGE-OBJECT/final-artifact-regression::official_comparison",
               "kind": "OFFICIAL_COMPARISON",
-              "originalSelectors": [
-                "/conditions/26"
-              ],
+              "originalSelectors": ["/conditions/26"],
               "state": "OPEN",
               "evidence": null
             }
@@ -2154,9 +2038,7 @@
             {
               "facetId": "STORAGE-OBJECT/closure-review::clean_review",
               "kind": "CLEAN_REVIEW",
-              "originalSelectors": [
-                "/conditions/27"
-              ],
+              "originalSelectors": ["/conditions/27"],
               "state": "OPEN",
               "evidence": null
             }
@@ -2166,11 +2048,17 @@
       "profileContract": {
         "facetId": "STORAGE-OBJECT::emulator-profile-contract",
         "kind": "EMULATOR_PROFILE_CONTRACT",
-        "originalSelectors": [
-          "/observationContract"
-        ],
+        "originalSelectors": ["/observationContract"],
         "state": "OPEN",
         "evidence": null
+      },
+      "currentBinding": {
+        "inventoryPath": "spec/compatibility/closure/STORAGE-OBJECT.json",
+        "inventorySha256": "0857ad38cdbd7655d1d46a8f72a233994dc38da20774ae4b339909279c8c162e",
+        "records": [],
+        "finalProduct": null,
+        "independentReview": null,
+        "dependencies": []
       }
     },
     {
@@ -2365,9 +2253,7 @@
             {
               "facetId": "STORAGE-RULES/method-grants::production_behavior",
               "kind": "PRODUCTION_BEHAVIOR",
-              "originalSelectors": [
-                "/conditions/0"
-              ],
+              "originalSelectors": ["/conditions/0"],
               "state": "OPEN",
               "evidence": null
             }
@@ -2381,9 +2267,7 @@
             {
               "facetId": "STORAGE-RULES/list-v2::production_behavior",
               "kind": "PRODUCTION_BEHAVIOR",
-              "originalSelectors": [
-                "/conditions/1"
-              ],
+              "originalSelectors": ["/conditions/1"],
               "state": "OPEN",
               "evidence": null
             }
@@ -2397,9 +2281,7 @@
             {
               "facetId": "STORAGE-RULES/anonymous-and-id-token::production_behavior",
               "kind": "PRODUCTION_BEHAVIOR",
-              "originalSelectors": [
-                "/conditions/2"
-              ],
+              "originalSelectors": ["/conditions/2"],
               "state": "OPEN",
               "evidence": null
             }
@@ -2413,9 +2295,7 @@
             {
               "facetId": "STORAGE-RULES/token-claims::production_behavior",
               "kind": "PRODUCTION_BEHAVIOR",
-              "originalSelectors": [
-                "/conditions/3"
-              ],
+              "originalSelectors": ["/conditions/3"],
               "state": "OPEN",
               "evidence": null
             }
@@ -2429,9 +2309,7 @@
             {
               "facetId": "STORAGE-RULES/token-refusal::production_behavior",
               "kind": "PRODUCTION_BEHAVIOR",
-              "originalSelectors": [
-                "/conditions/4"
-              ],
+              "originalSelectors": ["/conditions/4"],
               "state": "OPEN",
               "evidence": null
             }
@@ -2445,9 +2323,7 @@
             {
               "facetId": "STORAGE-RULES/upload-request-resource::production_behavior",
               "kind": "PRODUCTION_BEHAVIOR",
-              "originalSelectors": [
-                "/conditions/5"
-              ],
+              "originalSelectors": ["/conditions/5"],
               "state": "OPEN",
               "evidence": null
             }
@@ -2461,9 +2337,7 @@
             {
               "facetId": "STORAGE-RULES/metadata-request-resource::production_behavior",
               "kind": "PRODUCTION_BEHAVIOR",
-              "originalSelectors": [
-                "/conditions/6"
-              ],
+              "originalSelectors": ["/conditions/6"],
               "state": "OPEN",
               "evidence": null
             }
@@ -2477,9 +2351,7 @@
             {
               "facetId": "STORAGE-RULES/stored-resource::production_behavior",
               "kind": "PRODUCTION_BEHAVIOR",
-              "originalSelectors": [
-                "/conditions/7"
-              ],
+              "originalSelectors": ["/conditions/7"],
               "state": "OPEN",
               "evidence": null
             }
@@ -2493,9 +2365,7 @@
             {
               "facetId": "STORAGE-RULES/create-update-delete-state::production_behavior",
               "kind": "PRODUCTION_BEHAVIOR",
-              "originalSelectors": [
-                "/conditions/8"
-              ],
+              "originalSelectors": ["/conditions/8"],
               "state": "OPEN",
               "evidence": null
             }
@@ -2509,9 +2379,7 @@
             {
               "facetId": "STORAGE-RULES/request-time::production_behavior",
               "kind": "PRODUCTION_BEHAVIOR",
-              "originalSelectors": [
-                "/conditions/9"
-              ],
+              "originalSelectors": ["/conditions/9"],
               "state": "OPEN",
               "evidence": null
             }
@@ -2525,9 +2393,7 @@
             {
               "facetId": "STORAGE-RULES/path-variables::production_behavior",
               "kind": "PRODUCTION_BEHAVIOR",
-              "originalSelectors": [
-                "/conditions/10"
-              ],
+              "originalSelectors": ["/conditions/10"],
               "state": "OPEN",
               "evidence": null
             }
@@ -2541,9 +2407,7 @@
             {
               "facetId": "STORAGE-RULES/recursive-wildcard::production_behavior",
               "kind": "PRODUCTION_BEHAVIOR",
-              "originalSelectors": [
-                "/conditions/11"
-              ],
+              "originalSelectors": ["/conditions/11"],
               "state": "OPEN",
               "evidence": null
             }
@@ -2557,9 +2421,7 @@
             {
               "facetId": "STORAGE-RULES/storage-service-compile::production_behavior",
               "kind": "PRODUCTION_BEHAVIOR",
-              "originalSelectors": [
-                "/conditions/12"
-              ],
+              "originalSelectors": ["/conditions/12"],
               "state": "OPEN",
               "evidence": null
             }
@@ -2573,9 +2435,7 @@
             {
               "facetId": "STORAGE-RULES/firestore-get::production_behavior",
               "kind": "PRODUCTION_BEHAVIOR",
-              "originalSelectors": [
-                "/conditions/13"
-              ],
+              "originalSelectors": ["/conditions/13"],
               "state": "OPEN",
               "evidence": null
             }
@@ -2589,9 +2449,7 @@
             {
               "facetId": "STORAGE-RULES/firestore-exists::production_behavior",
               "kind": "PRODUCTION_BEHAVIOR",
-              "originalSelectors": [
-                "/conditions/14"
-              ],
+              "originalSelectors": ["/conditions/14"],
               "state": "OPEN",
               "evidence": null
             }
@@ -2605,9 +2463,7 @@
             {
               "facetId": "STORAGE-RULES/firestore-access-budget::production_behavior",
               "kind": "PRODUCTION_BEHAVIOR",
-              "originalSelectors": [
-                "/conditions/15"
-              ],
+              "originalSelectors": ["/conditions/15"],
               "state": "OPEN",
               "evidence": null
             }
@@ -2621,9 +2477,7 @@
             {
               "facetId": "STORAGE-RULES/firebase-denial-shape::production_behavior",
               "kind": "PRODUCTION_BEHAVIOR",
-              "originalSelectors": [
-                "/conditions/16"
-              ],
+              "originalSelectors": ["/conditions/16"],
               "state": "OPEN",
               "evidence": null
             }
@@ -2637,9 +2491,7 @@
             {
               "facetId": "STORAGE-RULES/denial-precedence::production_behavior",
               "kind": "PRODUCTION_BEHAVIOR",
-              "originalSelectors": [
-                "/conditions/17"
-              ],
+              "originalSelectors": ["/conditions/17"],
               "state": "OPEN",
               "evidence": null
             }
@@ -2653,9 +2505,7 @@
             {
               "facetId": "STORAGE-RULES/gcs-admin-boundary::production_behavior",
               "kind": "PRODUCTION_BEHAVIOR",
-              "originalSelectors": [
-                "/conditions/18"
-              ],
+              "originalSelectors": ["/conditions/18"],
               "state": "OPEN",
               "evidence": null
             }
@@ -2669,9 +2519,7 @@
             {
               "facetId": "STORAGE-RULES/download-token-boundary::production_behavior",
               "kind": "PRODUCTION_BEHAVIOR",
-              "originalSelectors": [
-                "/conditions/19"
-              ],
+              "originalSelectors": ["/conditions/19"],
               "state": "OPEN",
               "evidence": null
             }
@@ -2685,9 +2533,7 @@
             {
               "facetId": "STORAGE-RULES/release-switch::production_behavior",
               "kind": "PRODUCTION_BEHAVIOR",
-              "originalSelectors": [
-                "/conditions/20"
-              ],
+              "originalSelectors": ["/conditions/20"],
               "state": "OPEN",
               "evidence": null
             }
@@ -2701,9 +2547,7 @@
             {
               "facetId": "STORAGE-RULES/no-release::production_behavior",
               "kind": "PRODUCTION_BEHAVIOR",
-              "originalSelectors": [
-                "/conditions/21"
-              ],
+              "originalSelectors": ["/conditions/21"],
               "state": "OPEN",
               "evidence": null
             }
@@ -2717,18 +2561,14 @@
             {
               "facetId": "STORAGE-RULES/final-artifact-regression::final_product",
               "kind": "FINAL_PRODUCT",
-              "originalSelectors": [
-                "/conditions/22"
-              ],
+              "originalSelectors": ["/conditions/22"],
               "state": "OPEN",
               "evidence": null
             },
             {
               "facetId": "STORAGE-RULES/final-artifact-regression::official_comparison",
               "kind": "OFFICIAL_COMPARISON",
-              "originalSelectors": [
-                "/conditions/22"
-              ],
+              "originalSelectors": ["/conditions/22"],
               "state": "OPEN",
               "evidence": null
             }
@@ -2742,9 +2582,7 @@
             {
               "facetId": "STORAGE-RULES/closure-review::clean_review",
               "kind": "CLEAN_REVIEW",
-              "originalSelectors": [
-                "/conditions/23"
-              ],
+              "originalSelectors": ["/conditions/23"],
               "state": "OPEN",
               "evidence": null
             }
@@ -2754,11 +2592,23 @@
       "profileContract": {
         "facetId": "STORAGE-RULES::emulator-profile-contract",
         "kind": "EMULATOR_PROFILE_CONTRACT",
-        "originalSelectors": [
-          "/observationContract"
-        ],
+        "originalSelectors": ["/observationContract"],
         "state": "OPEN",
         "evidence": null
+      },
+      "currentBinding": {
+        "inventoryPath": "spec/compatibility/closure/STORAGE-RULES.json",
+        "inventorySha256": "30d6f6f8b28cdebec4b2e1b8cc2aa6bb2aeaa0d86a2bcd58aa9e05a8b43379d8",
+        "records": [
+          {
+            "recordType": "storage-rules-comparison-v1",
+            "recordPath": "spec/compatibility/closure/evidence/STORAGE-RULES-comparison.json",
+            "recordSha256": "5bb9c7c00a6f685eaef3ada03c334bf772c3edb3ec3c82a7dbb30f63843a7fa9"
+          }
+        ],
+        "finalProduct": null,
+        "independentReview": null,
+        "dependencies": []
       }
     },
     {
@@ -2902,64 +2752,42 @@
           "conditionId": "FUNCTIONS-EVENTS/firestore-created",
           "originalPointer": "/conditions/0",
           "originalSha256": "b273e83825901350815ef17157d8c34a03f9c9b92997b597ab54df2ea2413c92",
-          "cases": [
-            "new-document",
-            "before-absent",
-            "after-present"
-          ],
+          "cases": ["new-document", "before-absent", "after-present"],
           "casesSha256": "12f0f2397a682963e15769aa8948a7e52d24f0c39d58e660a6bd21bb0bbdb02a"
         },
         {
           "conditionId": "FUNCTIONS-EVENTS/firestore-updated",
           "originalPointer": "/conditions/1",
           "originalSha256": "9dcde493d8dda28a68b26b3f6905e323ff4891c4387bcab1a7988ce631e9b2bc",
-          "cases": [
-            "changed-field",
-            "before-present",
-            "after-present"
-          ],
+          "cases": ["changed-field", "before-present", "after-present"],
           "casesSha256": "8923b8f7c778c25de494a6d0d8aa8d9dad0bef3833887ffe23c22184dac8b51a"
         },
         {
           "conditionId": "FUNCTIONS-EVENTS/firestore-deleted",
           "originalPointer": "/conditions/2",
           "originalSha256": "a577f8d9737ffbfc43604f949a22d54d94b8cb862b286fc196ac4dae52f1307a",
-          "cases": [
-            "deleted-document",
-            "before-present",
-            "after-absent"
-          ],
+          "cases": ["deleted-document", "before-present", "after-absent"],
           "casesSha256": "1d6df8fa6d97ba92d0b623f2a6413cef331b2dacf252c8cd844ad5ae8cc36627"
         },
         {
           "conditionId": "FUNCTIONS-EVENTS/firestore-written",
           "originalPointer": "/conditions/3",
           "originalSha256": "a7afff47ed39ffb8cc1d16adce9edffcf78d3f854478a3b800ddbffd5a05b6b4",
-          "cases": [
-            "create",
-            "update",
-            "delete"
-          ],
+          "cases": ["create", "update", "delete"],
           "casesSha256": "a5003c0e63c68914bd84a07e880915bc493972ee9cf81d9a8d06bfd6264846c8"
         },
         {
           "conditionId": "FUNCTIONS-EVENTS/firestore-noop",
           "originalPointer": "/conditions/4",
           "originalSha256": "67519a1cd391498ab71e646cb9caa550c37f823c77fd46c9ced3cfaa55f1e003",
-          "cases": [
-            "same-value-write-no-event"
-          ],
+          "cases": ["same-value-write-no-event"],
           "casesSha256": "2f5ec1290fd0895a97e71e5ea422acf3c9eff14ec7c8c0e59143a928e5cdda5b"
         },
         {
           "conditionId": "FUNCTIONS-EVENTS/firestore-routing-params",
           "originalPointer": "/conditions/5",
           "originalSha256": "e9798d4f3d884bb3470db91678d63ddb731f22e6e680a36e9f8f3056c7bce6b4",
-          "cases": [
-            "matching-path",
-            "nonmatching-path",
-            "wildcard-param"
-          ],
+          "cases": ["matching-path", "nonmatching-path", "wildcard-param"],
           "casesSha256": "7835e90630e2b8ffd870da4a50a32eff236a1de8ed68f5b6db64692fc84d8b04"
         },
         {
@@ -2979,52 +2807,35 @@
           "conditionId": "FUNCTIONS-EVENTS/firestore-auth-context",
           "originalPointer": "/conditions/7",
           "originalSha256": "bea2f39ef4b7aeadb51873e60f684fc80112b7f2fc776d34875aa3a1333c330f",
-          "cases": [
-            "authenticated-write",
-            "admin-write",
-            "auth-type-and-id"
-          ],
+          "cases": ["authenticated-write", "admin-write", "auth-type-and-id"],
           "casesSha256": "1d90b0a8ea797d0aa4afbff20b425aa78b99cd1616ed65a5e0b65531963fd2d1"
         },
         {
           "conditionId": "FUNCTIONS-EVENTS/storage-finalized",
           "originalPointer": "/conditions/8",
           "originalSha256": "c123f75036d7c05a35edbf762841239cefc9a73c2d05110725be9d70cf36ecbc",
-          "cases": [
-            "new-object",
-            "overwritten-generation",
-            "failed-upload-no-event"
-          ],
+          "cases": ["new-object", "overwritten-generation", "failed-upload-no-event"],
           "casesSha256": "dca58f210bdb42cabddb00276cdb9f134002a467d934808f2187d44b2a87ae73"
         },
         {
           "conditionId": "FUNCTIONS-EVENTS/storage-deleted",
           "originalPointer": "/conditions/9",
           "originalSha256": "b51f0c94089071c23b0a4e4289917b14c71ebcc8cd1916cf2d3c444464a99ffe",
-          "cases": [
-            "live-object-delete",
-            "no-event-for-missing-object"
-          ],
+          "cases": ["live-object-delete", "no-event-for-missing-object"],
           "casesSha256": "aca9feca998e4232037c66f1dd703f9d8769ee5175b87c5092bacbbabbde1065"
         },
         {
           "conditionId": "FUNCTIONS-EVENTS/storage-metadata-updated",
           "originalPointer": "/conditions/10",
           "originalSha256": "e6cc48679c43afe04923baab81f833506d034a6d823c2488d1ea906f6559cde6",
-          "cases": [
-            "custom-metadata-change",
-            "metageneration"
-          ],
+          "cases": ["custom-metadata-change", "metageneration"],
           "casesSha256": "1a399b927dff7a5338c24248d368f84ae06643725791d4c95d81ba3478eec75f"
         },
         {
           "conditionId": "FUNCTIONS-EVENTS/storage-archived",
           "originalPointer": "/conditions/11",
           "originalSha256": "f5d467f960fe1310f49a6ef17d695c68c12bb8163a4175f772d34d6e5a722c79",
-          "cases": [
-            "versioned-overwrite",
-            "archived-generation"
-          ],
+          "cases": ["versioned-overwrite", "archived-generation"],
           "casesSha256": "91d1db01f1a8eeea9bb93976a6dea8d40d8e9e9078ee6cd5698cb5188a82e894"
         },
         {
@@ -3044,69 +2855,42 @@
           "conditionId": "FUNCTIONS-EVENTS/storage-bucket-routing",
           "originalPointer": "/conditions/13",
           "originalSha256": "3ee9ae120dcedd447b4c43028f6201349928b22cdfc0cad1e0d24c6e5b358bf1",
-          "cases": [
-            "matching-bucket",
-            "nonmatching-bucket",
-            "same-bucket-other-prefix-delivered"
-          ],
+          "cases": ["matching-bucket", "nonmatching-bucket", "same-bucket-other-prefix-delivered"],
           "casesSha256": "40352434e9acf2f795cc96d6f6e5e5e4687de6ab3691c0d2358bb0191e476f9d"
         },
         {
           "conditionId": "FUNCTIONS-EVENTS/auth-created",
           "originalPointer": "/conditions/14",
           "originalSha256": "dc7130f074fcc6a459320e9d569076fc08577cb38d3535cb1d1b24832f81b54c",
-          "cases": [
-            "admin-create",
-            "email-password-create",
-            "repeat-sign-in-no-event"
-          ],
+          "cases": ["admin-create", "email-password-create", "repeat-sign-in-no-event"],
           "casesSha256": "64356e84b25a7dbe96bef498cabed3cf94247d17d3d7a9ce76dd111d91b86868"
         },
         {
           "conditionId": "FUNCTIONS-EVENTS/auth-deleted",
           "originalPointer": "/conditions/15",
           "originalSha256": "f8fa70e9a1b80b96b009fabefc047e8fcf0f5a03305965af789e197c26cafcd0",
-          "cases": [
-            "single-user-delete",
-            "bulk-delete-no-event"
-          ],
+          "cases": ["single-user-delete", "bulk-delete-no-event"],
           "casesSha256": "b95884e09ba7dc1b8d11c5b275f21f2e7f84036a5cbfab9e2179223acdd366f9"
         },
         {
           "conditionId": "FUNCTIONS-EVENTS/auth-payload",
           "originalPointer": "/conditions/16",
           "originalSha256": "1c0f341aa0cb26b5a9148fb039cf8cb02bfbfe917612bad1bb84a19a882cdda3",
-          "cases": [
-            "handler-envelope",
-            "uid",
-            "email",
-            "empty-provider-data",
-            "event-metadata"
-          ],
+          "cases": ["handler-envelope", "uid", "email", "empty-provider-data", "event-metadata"],
           "casesSha256": "4012f5f5501c315d2085cdb49f1f339d1001bc6bc2875b61b87a01cc9f11c9ec"
         },
         {
           "conditionId": "FUNCTIONS-EVENTS/pubsub-published",
           "originalPointer": "/conditions/17",
           "originalSha256": "07538a144c44b2989d357e4abbedec767b363ee9dd032b66dc52b4f72c134e8a",
-          "cases": [
-            "handler-envelope",
-            "base64-data",
-            "attributes",
-            "message-id",
-            "publish-time"
-          ],
+          "cases": ["handler-envelope", "base64-data", "attributes", "message-id", "publish-time"],
           "casesSha256": "3e87c94548466e500fbb9341f51612a200ad39f117c44decf7f1c73e5170ef1b"
         },
         {
           "conditionId": "FUNCTIONS-EVENTS/pubsub-topic-routing",
           "originalPointer": "/conditions/18",
           "originalSha256": "ed00b2e33c106f7cf23b2e1c36b1da06ce9bba1c916dc932a38e65eb56222200",
-          "cases": [
-            "matching-topic",
-            "nonmatching-topic",
-            "ordering-key"
-          ],
+          "cases": ["matching-topic", "nonmatching-topic", "ordering-key"],
           "casesSha256": "48d9308c070696798f09b75f5a68ab0ec48d27299057d0119e44606c94a78026"
         },
         {
@@ -3136,9 +2920,7 @@
           "conditionId": "FUNCTIONS-EVENTS/closure-review",
           "originalPointer": "/conditions/21",
           "originalSha256": "2c4afd5b2982c12e683ff11232dcc72480641c08dd96fffce4f23c07ac5a521b",
-          "cases": [
-            "independent-coordinator-approval"
-          ],
+          "cases": ["independent-coordinator-approval"],
           "casesSha256": "e1af64c5561b912078f34c17ded5a444565139ca6770ad58942f79c9e87b6187"
         }
       ],
@@ -3191,11 +2973,7 @@
           "conditionId": "PUBSUB/list-pagination",
           "originalPointer": "/conditions/2",
           "originalSha256": "1a36090a15377275a288010a165613ca8f9966fa1bb921f6db8492a8a2d4336d",
-          "cases": [
-            "page-traversal",
-            "invalid-page-token",
-            "owned-resources-only"
-          ],
+          "cases": ["page-traversal", "invalid-page-token", "owned-resources-only"],
           "casesSha256": "36c1d94fc9110a5d49cbe3205e357fe768f8106984d81c6d035a704763e5ef26"
         },
         {
@@ -3420,9 +3198,7 @@
           "conditionId": "PUBSUB/closure-review",
           "originalPointer": "/conditions/17",
           "originalSha256": "d14938da0d9d776c05bea51c4f6b8c92b84595532d821850c7778f4c9561662b",
-          "cases": [
-            "independent-approval"
-          ],
+          "cases": ["independent-approval"],
           "casesSha256": "a16ae54f4629a1671e44cb0f124ae057a68e403fdcdcb38fb9515dd03b2f0b7e"
         }
       ],
@@ -3558,10 +3334,7 @@
           "conditionId": "EVENTARC/delivery-retry-identity",
           "originalPointer": "/conditions/7",
           "originalSha256": "56a14da30f9898404513013fcfbe7117fa1464d30f0604ca5eeb2fef7c97cd74",
-          "cases": [
-            "fail-then-succeed",
-            "stable-id-and-data"
-          ],
+          "cases": ["fail-then-succeed", "stable-id-and-data"],
           "casesSha256": "9e9f4d306a676fbf9439450cfaa5e5e88814f8f5ca31f49bfe838b0a8db8c09b"
         },
         {
@@ -3596,9 +3369,7 @@
           "conditionId": "EVENTARC/closure-review",
           "originalPointer": "/conditions/10",
           "originalSha256": "6c36a23bf89cd1ee5756dff05ff969cc720baaf988383457b89cfcb97481ae38",
-          "cases": [
-            "independent-approval"
-          ],
+          "cases": ["independent-approval"],
           "casesSha256": "a16ae54f4629a1671e44cb0f124ae057a68e403fdcdcb38fb9515dd03b2f0b7e"
         }
       ],

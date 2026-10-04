@@ -1,7 +1,11 @@
+import { assertCurrentParentEvidence, loadRepository } from "./production-closure.mjs";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
+
+const root = new URL("../../", import.meta.url);
+const admission = assertCurrentParentEvidence(loadRepository(root), "SCHEDULED-FUNCTIONS");
 
 const readRepo = (path) =>
   JSON.parse(readFileSync(new URL(`../../${path}`, import.meta.url), "utf8"));
@@ -110,6 +114,7 @@ function validateInventory(closure) {
 
 test("SCHEDULED-FUNCTIONS preserves the approved inventory and evidence boundaries", () => {
   validateInventory(readRepo(closurePath));
+  assert.equal(readRepo(closurePath).parentStatus === "COMPAT_VERIFIED", admission.eligible);
 });
 
 test("pending SCHEDULED-FUNCTIONS cannot be promoted", () => {
@@ -136,3 +141,14 @@ if (process.env.FIREEMU_REQUIRE_SCHEDULED_CLOSURE === "1") {
     assert.equal(closure.parentStatus, "COMPAT_VERIFIED", "closure remains unfinished");
   });
 }
+
+test("SCHEDULED-FUNCTIONS rejects an actual current inventory byte mismatch", () => {
+  const value = loadRepository(root);
+  value.registry.parents.find(
+    (p) => p.parent === "SCHEDULED-FUNCTIONS",
+  ).currentBinding.inventorySha256 = "0".repeat(64);
+  assert.throws(
+    () => assertCurrentParentEvidence(value, "SCHEDULED-FUNCTIONS"),
+    /current inventory bytes differ/,
+  );
+});

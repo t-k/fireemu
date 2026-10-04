@@ -1,8 +1,11 @@
+import { assertCurrentParentEvidence, loadRepository } from "./production-closure.mjs";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
 
 const root = new URL("../../", import.meta.url);
+const admission = assertCurrentParentEvidence(loadRepository(root), "STORAGE-RULES");
+
 const closurePath = new URL("spec/compatibility/closure/STORAGE-RULES.json", root);
 const load = () => JSON.parse(readFileSync(closurePath, "utf8"));
 
@@ -99,10 +102,15 @@ test("scope decisions cite the recorded owner or delegated decisions", () => {
 
 test("COMPAT_VERIFIED requires every condition and independent closure review", () => {
   const closure = load();
-  const eligible =
-    closure.inventoryState === "FROZEN" &&
-    closure.scopeDecisions.every(({ status }) => status === "APPROVED") &&
-    closure.conditions.every(({ status }) => status === "VERIFIED") &&
-    closure.closureReview.decision === "APPROVED";
-  assert.equal(closure.parentStatus === "COMPAT_VERIFIED", eligible);
+  assert.equal(closure.parentStatus === "COMPAT_VERIFIED", admission.eligible);
+});
+
+test("STORAGE-RULES rejects an actual current inventory byte mismatch", () => {
+  const value = loadRepository(root);
+  value.registry.parents.find((p) => p.parent === "STORAGE-RULES").currentBinding.inventorySha256 =
+    "0".repeat(64);
+  assert.throws(
+    () => assertCurrentParentEvidence(value, "STORAGE-RULES"),
+    /current inventory bytes differ/,
+  );
 });

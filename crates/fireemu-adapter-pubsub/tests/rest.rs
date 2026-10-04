@@ -911,7 +911,7 @@ async fn grpc_create_uses_the_same_policy_defaults_and_retry_bounds_as_rest() {
     assert_eq!(error.code(), tonic::Code::InvalidArgument);
 }
 
-/// One unsupported subscription option: its JSON name, its protobuf name, the JSON value a REST
+/// One subscription option unsupported on update (and, except retention, on create): its JSON name, its protobuf name, the JSON value a REST
 /// client sends and the protobuf field a gRPC client sets.
 type UnsupportedOption = (&'static str, &'static str, Value, fn(&mut pb::Subscription));
 
@@ -1042,8 +1042,12 @@ async fn both_transports_refuse_every_declared_but_unsupported_subscription_opti
     assert_eq!(status, 200);
     let mut subscriber = SubscriberClient::new(grpc_channel(address).await);
 
-    for (index, (json_field, proto_field, value, set)) in
-        unsupported_subscription_options().into_iter().enumerate()
+    for (index, (json_field, proto_field, value, set)) in unsupported_subscription_options()
+        .into_iter()
+        .filter(|(_, field, _, _)| {
+            !["retain_acked_messages", "message_retention_duration"].contains(field)
+        })
+        .enumerate()
     {
         let rest_id = format!("matrix-rest-{index}");
         let rest_path = format!("/v1/projects/demo-app/subscriptions/{rest_id}");

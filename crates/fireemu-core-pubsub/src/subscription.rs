@@ -83,6 +83,10 @@ pub struct SubscriptionConfig {
     pub topic: TopicName,
     /// Ack deadline, in seconds.
     pub ack_deadline_seconds: u32,
+    /// Whether acknowledged-message retention was requested. Configuration only; the retention window and replay behavior are not enforced by the delivery state machine yet.
+    pub retain_acked_messages: bool,
+    /// The explicitly requested retention window; `None` preserves an omitted request without synthesizing a resolved production default. Expiry enforcement is not implemented yet.
+    pub message_retention_duration: Option<LogicalDuration>,
     /// Whether ordering keys are honoured.
     pub enable_message_ordering: bool,
     /// The attribute filter; [`Filter::always`] when unset.
@@ -104,6 +108,16 @@ impl SubscriptionConfig {
             return Err(PubSubError::invalid_argument(format!(
                 "ackDeadlineSeconds must be {MIN_ACK_DEADLINE_SECONDS}..={MAX_ACK_DEADLINE_SECONDS}"
             )));
+        }
+        // The Subscription API schema bounds the requested window to 10 minutes through 31 days.
+        if let Some(duration) = self.message_retention_duration {
+            if duration < LogicalDuration::from_seconds(600)
+                || duration > LogicalDuration::from_seconds(31 * 24 * 60 * 60)
+            {
+                return Err(PubSubError::invalid_argument(
+                    "messageRetentionDuration must be between 600 and 2678400 seconds",
+                ));
+            }
         }
         if let Some(dl) = &self.dead_letter_policy {
             if dl.max_delivery_attempts < MIN_DEAD_LETTER_ATTEMPTS
@@ -828,6 +842,8 @@ mod tests {
 
     fn cfg() -> SubscriptionConfig {
         SubscriptionConfig {
+            retain_acked_messages: false,
+            message_retention_duration: None,
             name: SubscriptionName::new("demo-app", "sub-one").unwrap(),
             topic: TopicName::new("demo-app", "topic-one").unwrap(),
             ack_deadline_seconds: DEFAULT_ACK_DEADLINE_SECONDS,

@@ -6,6 +6,7 @@ use std::sync::Arc;
 
 use bytes::Bytes;
 use fireemu_adapter_support::connection::{DrainBounds, GracefulClose};
+use http_body_util::combinators::BoxBody;
 use http_body_util::{BodyExt, Full};
 use hyper::body::Incoming;
 use hyper::server::conn::http1;
@@ -276,7 +277,61 @@ fn cors(
 }
 
 /// The refusal a body that was not accepted turns into.
-fn body_error_response(e: BodyError, origin: Option<&str>) -> Response<Full<Bytes>> {
+/// The body of every Storage answer.
+type StorageBody = BoxBody<Bytes, std::convert::Infallible>;
+
+fn plain(bytes: Bytes) -> StorageBody {
+    Full::new(bytes).boxed()
+}
+
+/// An empty body that tells hyper its length is known to be zero. hyper drops a `Content-Length: 0`
+/// from a `204` whose body is already at its end, and production's JSON API object delete sends one
+/// (recorded); a body that still has one (empty) frame to give keeps the header on the wire.
+struct ZeroLength {
+    sent: bool,
+}
+
+impl hyper::body::Body for ZeroLength {
+    type Data = Bytes;
+    type Error = std::convert::Infallible;
+
+    fn poll_frame(
+        mut self: std::pin::Pin<&mut Self>,
+        _context: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Option<Result<hyper::body::Frame<Bytes>, Self::Error>>> {
+        if self.sent {
+            return std::task::Poll::Ready(None);
+        }
+        self.sent = true;
+        std::task::Poll::Ready(Some(Ok(hyper::body::Frame::data(Bytes::new()))))
+    }
+
+    fn is_end_stream(&self) -> bool {
+        self.sent
+    }
+
+    fn size_hint(&self) -> hyper::body::SizeHint {
+        hyper::body::SizeHint::with_exact(0)
+    }
+}
+
+/// The body of `response`: [`ZeroLength`] for the one shape that needs it (an empty `204` that
+/// carries an explicit `Content-Length: 0`), the plain bytes for every other answer.
+fn body_of(response: &crate::storage::StorageResponse) -> StorageBody {
+    let explicit_zero = response.status == 204
+        && response.body.is_empty()
+        && response
+            .headers
+            .iter()
+            .any(|(name, value)| name.eq_ignore_ascii_case("content-length") && value == "0");
+    if explicit_zero {
+        ZeroLength { sent: false }.boxed()
+    } else {
+        plain(response.body.clone())
+    }
+}
+
+fn body_error_response(e: BodyError, origin: Option<&str>) -> Response<StorageBody> {
     let (status, message, retry_after) = match e {
         BodyError::TooLarge => (413, &b"payload too large"[..], false),
         BodyError::BudgetExhausted => (503, &b"storage upload memory budget exhausted"[..], true),
@@ -287,8 +342,8 @@ fn body_error_response(e: BodyError, origin: Option<&str>) -> Response<Full<Byte
         builder = builder.header("retry-after", "1");
     }
     builder
-        .body(Full::new(Bytes::from_static(message)))
-        .unwrap_or_else(|_| Response::new(Full::new(Bytes::new())))
+        .body(plain(Bytes::from_static(message)))
+        .unwrap_or_else(|_| Response::new(plain(Bytes::new())))
 }
 
 fn handler_error_response(
@@ -296,14 +351,14 @@ fn handler_error_response(
     message: &'static [u8],
     origin: Option<&str>,
     retry: bool,
-) -> Response<Full<Bytes>> {
+) -> Response<StorageBody> {
     let mut builder = cors(Response::builder().status(status), origin);
     if retry {
         builder = builder.header("retry-after", "1");
     }
     builder
-        .body(Full::new(Bytes::from_static(message)))
-        .unwrap_or_else(|_| Response::new(Full::new(Bytes::new())))
+        .body(plain(Bytes::from_static(message)))
+        .unwrap_or_else(|_| Response::new(plain(Bytes::new())))
 }
 
 #[allow(clippy::too_many_lines)]
@@ -311,7 +366,7 @@ async fn respond(
     state: Arc<StorageState>,
     budget: &'static BodyBudget,
     req: Request<Incoming>,
-) -> Result<Response<Full<Bytes>>, std::io::Error> {
+) -> Result<Response<StorageBody>, std::io::Error> {
     let origin = req
         .headers()
         .get("origin")
@@ -320,8 +375,8 @@ async fn respond(
     if origin.as_deref().is_some_and(|o| !origin_is_local(o)) {
         return Ok(Response::builder()
             .status(StatusCode::FORBIDDEN)
-            .body(Full::new(Bytes::from_static(b"forbidden origin")))
-            .unwrap_or_else(|_| Response::new(Full::new(Bytes::new()))));
+            .body(plain(Bytes::from_static(b"forbidden origin")))
+            .unwrap_or_else(|_| Response::new(plain(Bytes::new()))));
     }
     if req.method() == hyper::Method::OPTIONS {
         // The preflight the official emulator's `cors` middleware answers: the requested
@@ -357,8 +412,8 @@ async fn respond(
             builder = builder.header("access-control-allow-headers", requested.to_owned());
         }
         return Ok(builder
-            .body(Full::new(Bytes::new()))
-            .unwrap_or_else(|_| Response::new(Full::new(Bytes::new()))));
+            .body(plain(Bytes::new()))
+            .unwrap_or_else(|_| Response::new(plain(Bytes::new()))));
     }
     let method = req.method().as_str().to_owned();
     let path = req.uri().path().to_owned();
@@ -497,10 +552,11 @@ async fn respond(
             origin.as_deref(),
         );
     }
+    let body = body_of(&response);
     for (k, v) in response.headers {
         builder = builder.header(k, v);
     }
-    match builder.body(Full::new(response.body)) {
+    match builder.body(body) {
         Ok(response) => Ok(response),
         // A header value the handler built is not a valid HTTP header (a metadata string with
         // a control character reached `Builder::header`). The input boundary rejects those, so
@@ -511,10 +567,10 @@ async fn respond(
             .status(StatusCode::INTERNAL_SERVER_ERROR)
             .header("content-type", "text/plain; charset=utf-8")
             .header("x-content-type-options", "nosniff")
-            .body(Full::new(Bytes::from_static(
+            .body(plain(Bytes::from_static(
                 b"internal error building response",
             )))
-            .unwrap_or_else(|_| Response::new(Full::new(Bytes::new())))),
+            .unwrap_or_else(|_| Response::new(plain(Bytes::new())))),
     }
 }
 
@@ -567,5 +623,77 @@ mod handler_error_tests {
         let busy = handler_error_response(StatusCode::SERVICE_UNAVAILABLE, b"busy", None, true);
         assert_eq!(busy.status(), StatusCode::SERVICE_UNAVAILABLE);
         assert_eq!(busy.headers().get("retry-after").unwrap(), "1");
+    }
+}
+
+#[cfg(test)]
+mod zero_length_tests {
+    use super::*;
+    use crate::storage::StorageResponse;
+    use hyper::body::Body as _;
+
+    fn answer(status: u16, headers: &[(&str, &str)], body: &'static [u8]) -> StorageResponse {
+        StorageResponse {
+            status,
+            headers: headers
+                .iter()
+                .map(|(name, value)| ((*name).to_owned(), (*value).to_owned()))
+                .collect(),
+            body: Bytes::from_static(body),
+        }
+    }
+
+    /// Whether the body of `response` is the zero-length one: it has a frame left to give, where the
+    /// plain body of an empty answer is already at its end.
+    fn is_zero_length(response: &StorageResponse) -> bool {
+        let body = body_of(response);
+        !body.is_end_stream() && body.size_hint().exact() == Some(0)
+    }
+
+    #[test]
+    fn only_an_empty_204_with_an_explicit_zero_length_gets_the_zero_length_body() {
+        let zero = [("content-length", "0")];
+        assert!(is_zero_length(&answer(204, &zero, b"")));
+        assert!(is_zero_length(&answer(
+            204,
+            &[("Content-Length", "0")],
+            b""
+        )));
+        // Each condition alone is not enough.
+        assert!(!is_zero_length(&answer(200, &zero, b"")), "another status");
+        assert!(
+            !is_zero_length(&answer(204, &[], b"")),
+            "no explicit length"
+        );
+        assert!(
+            !is_zero_length(&answer(204, &[("content-length", "1")], b"")),
+            "another length"
+        );
+        assert!(
+            !is_zero_length(&answer(204, &[("x-other", "0")], b"")),
+            "another header"
+        );
+        assert!(!is_zero_length(&answer(204, &zero, b"x")), "a body");
+        assert!(!is_zero_length(&answer(404, &[], b"gone")));
+    }
+
+    #[test]
+    fn the_zero_length_body_gives_one_empty_frame_then_ends() {
+        use std::task::{Context, Poll, Waker};
+        let mut body = ZeroLength { sent: false };
+        assert!(!body.is_end_stream());
+        assert_eq!(body.size_hint().exact(), Some(0));
+        let mut context = Context::from_waker(Waker::noop());
+        let first = std::pin::Pin::new(&mut body).poll_frame(&mut context);
+        let Poll::Ready(Some(Ok(frame))) = first else {
+            panic!("an empty frame first");
+        };
+        assert_eq!(frame.into_data().unwrap().len(), 0);
+        assert!(body.is_end_stream());
+        assert_eq!(body.size_hint().exact(), Some(0));
+        assert!(matches!(
+            std::pin::Pin::new(&mut body).poll_frame(&mut context),
+            Poll::Ready(None)
+        ));
     }
 }

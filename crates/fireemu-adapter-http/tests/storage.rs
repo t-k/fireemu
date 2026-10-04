@@ -6726,9 +6726,18 @@ fn strict_json_api_answers_carry_exactly_the_recorded_header_names() {
     );
     let delete = handle(strict, req("DELETE", &object, &owner, b""));
     assert_eq!(delete.status, 204);
+    // `content-length: 0` is in the stage 3 v9 recordings of this delete (recipes c and d); the
+    // STORAGE-OBJECT lean-v5 captures list no content length for any answer, so they cannot show it.
     assert_eq!(
         header_names(&delete),
-        ["cache-control", "content-type", "expires", "pragma", "vary"]
+        [
+            "cache-control",
+            "content-length",
+            "content-type",
+            "expires",
+            "pragma",
+            "vary"
+        ]
     );
 }
 
@@ -8292,6 +8301,99 @@ async fn an_abandoned_glob_scan_gives_its_slot_back_when_its_client_has_gone() {
     assert!(text.contains("plain.txt"), "{text}");
     println!("answered {:?} after the clients left", started.elapsed());
     server.abort();
+}
+
+/// Production answers a JSON API object delete with `204` and `Content-Length: 0` (recorded in both
+/// stage 3 v9 recordings, recipes c and d, and compared byte for byte by the management comparison).
+/// hyper drops a content length from a `204` unless the body reports a known length, so this is
+/// judged on the bytes of the wire. Both profiles send it (it is a header that production sends and
+/// refuses nothing). The official emulator's `res.sendStatus(204)` sends none. Every other `204` is
+/// not recorded and stays as it was: the Firebase dialect's object delete has no content length.
+#[tokio::test]
+async fn a_json_api_object_delete_sends_content_length_zero_on_the_wire_and_other_204s_do_not() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    static BUDGET: BodyBudget = BodyBudget::new(1_572_864);
+    for acceptance in BOTH_PROFILES {
+        let state = state_with(Some(ALLOW_ALL_RULES), acceptance);
+        put_names(
+            &state,
+            &[
+                "gone.txt".to_owned(),
+                "gone2.txt".to_owned(),
+                "kept.txt".to_owned(),
+            ],
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = tokio::spawn(serve_storage_with_budget(
+            listener,
+            Arc::new(state),
+            &BUDGET,
+        ));
+        let wire = |request: String| async move {
+            let mut stream = tokio::net::TcpStream::connect(addr).await.unwrap();
+            stream.write_all(request.as_bytes()).await.unwrap();
+            let mut raw = Vec::new();
+            stream.read_to_end(&mut raw).await.unwrap();
+            String::from_utf8_lossy(&raw).into_owned()
+        };
+        let delete = |path: String| {
+            wire(format!(
+                "DELETE {path} HTTP/1.1\r\nHost: 127.0.0.1\r\nAuthorization: Bearer owner\r\nConnection: close\r\n\r\n"
+            ))
+        };
+        let head_of = |raw: &str| {
+            raw.split("\r\n\r\n")
+                .next()
+                .unwrap_or("")
+                .to_ascii_lowercase()
+        };
+        // The value of the `content-length` header line, whatever else the head says (the exposed
+        // headers name `x-goog-upload-header-content-length`).
+        let length_of = |head: &str| {
+            head.split("\r\n")
+                .find_map(|line| line.strip_prefix("content-length:"))
+                .map(|value| value.trim().to_owned())
+        };
+        // The JSON API object delete, in both spellings of the route: 204, a zero length, no body.
+        for path in [
+            format!("/storage/v1/b/{BUCKET}/o/gone.txt"),
+            format!("/b/{BUCKET}/o/gone2.txt"),
+        ] {
+            let raw = delete(path.clone()).await;
+            let head = head_of(&raw);
+            assert!(
+                head.starts_with("http/1.1 204"),
+                "{acceptance:?} {path}: {raw}"
+            );
+            assert!(
+                head.contains("content-length: 0"),
+                "{acceptance:?} {path}: {raw}"
+            );
+            assert!(
+                raw.ends_with("\r\n\r\n"),
+                "{acceptance:?} {path}: a body followed: {raw}"
+            );
+        }
+        // Near misses: the Firebase dialect's delete of an object is a 204 without a length; a delete
+        // of an object that is not there is the ordinary 404 with its own length and body.
+        let firebase = delete(format!("/v0/b/{BUCKET}/o/kept.txt")).await;
+        let head = head_of(&firebase);
+        assert!(
+            head.starts_with("http/1.1 204"),
+            "{acceptance:?} {firebase}"
+        );
+        assert_eq!(length_of(&head), None, "{acceptance:?} {firebase}");
+        let missing = delete(format!("/storage/v1/b/{BUCKET}/o/not-there.txt")).await;
+        let head = head_of(&missing);
+        assert!(head.starts_with("http/1.1 404"), "{acceptance:?} {missing}");
+        assert_ne!(
+            length_of(&head).as_deref(),
+            Some("0"),
+            "{acceptance:?} {missing}"
+        );
+        server.abort();
+    }
 }
 
 /// An unauthenticated list can carry any `matchGlob`: a pathological one is answered on a thread

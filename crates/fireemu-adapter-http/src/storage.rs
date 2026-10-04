@@ -4681,7 +4681,10 @@ fn gcs_object(
                 return Ok(gcs_no_such_object(bucket, name, false));
             }
             store.delete(&b, &n, pre).map_err(gcs_core_err)?;
-            Ok(StorageResponse::empty(204))
+            // Production's JSON API object delete is a 204 with an explicit `Content-Length: 0`
+            // (recorded, stage 3 v9 recordings c and d); the official emulator's
+            // `res.sendStatus(204)` sends none. Both profiles send it: it refuses nothing.
+            Ok(StorageResponse::empty(204).with_header("content-length", "0"))
         }
         _ => Ok(plain_status(501)),
     }

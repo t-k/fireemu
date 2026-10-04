@@ -2263,7 +2263,8 @@ fn idle_candidate_allowance_is_strict_only() {
                 if accepted {
                     result.unwrap();
                 } else {
-                    assert!(matches!(result, Err(FirestoreError::Aborted(_))));
+                    // refused: the official emulator answers the first request after an idle expiry INVALID_ARGUMENT
+                    assert!(matches!(result, Err(FirestoreError::InvalidArgument(_))));
                 }
             }
         }
@@ -2347,8 +2348,9 @@ fn the_official_emulator_profile_keeps_the_nominal_idle_budget() {
             if accepted {
                 result.unwrap();
             } else {
+                // the official emulator answers the first request after an idle expiry INVALID_ARGUMENT (native gRPC, measured 2026-10-02)
                 assert!(
-                    matches!(result, Err(FirestoreError::Aborted(_))),
+                    matches!(result, Err(FirestoreError::InvalidArgument(_))),
                     "{millis} ms"
                 );
             }

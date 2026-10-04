@@ -640,6 +640,13 @@ struct Transaction {
     /// lifetime `INVALID_ARGUMENT` "no longer valid", a Commit `ABORTED` with the same text, and accepts
     /// a Rollback. Only that order (read, Commit, Rollback) is measured there.
     lifetime_expired: bool,
+    /// The transaction was finished by its idle limit and no request has been answered about it yet (emulator profile).
+    ///
+    /// Official emulator (v1.22.0, native gRPC, measured 2026-10-02): the first request that finds an idle-expired token, of any kind, answers
+    /// `INVALID_ARGUMENT` "no longer valid", whether the token had been touched since its begin or not and however long ago it expired; every read and Commit
+    /// after it answers `ABORTED`, and a Rollback is accepted. Maintenance can finish the token before any request does, so the answer is owed to the
+    /// token rather than to the request that happens to find the deadline passed.
+    idle_expiry_unanswered: bool,
     /// The time of the transaction's first read: its snapshot time for a read-only transaction. The
     /// empty commit of a transaction that has read answers this time and uses up no commit time
     /// (production, P01 REST read-write and P02 both transports); one that has not read answers none
@@ -2350,6 +2357,7 @@ impl FirestoreState {
             waiting_to_commit: false,
             snapshot_pending: false,
             lifetime_expired: false,
+            idle_expiry_unanswered: false,
             first_read_time: None,
         };
         self.active_transaction_deadlines.insert((
@@ -2386,6 +2394,8 @@ impl FirestoreState {
             }
             transaction.state = TransactionState::Finished;
             transaction.lifetime_expired = deadline == transaction_lineage_deadline(transaction);
+            transaction.idle_expiry_unanswered =
+                self.limit_scope == LimitScope::OfficialEmulator && !transaction.lifetime_expired;
             self.active_transaction_conflict_ledger_bytes = self
                 .active_transaction_conflict_ledger_bytes
                 .saturating_sub(transaction.conflict_ledger_bytes);
@@ -2429,6 +2439,14 @@ impl FirestoreState {
         }
         self.evict_finished_transactions();
         changed
+    }
+
+    /// Uses up the answer an idle-expired token owes (emulator profile): whether the token finished by its idle limit has not been answered about yet.
+    /// Whatever the kind of the request that asks, the answer is spent, so the requests after it get the answers of a finished token.
+    fn take_idle_expiry_answer(&mut self, id: &TransactionId) -> bool {
+        self.transactions
+            .get_mut(id)
+            .is_some_and(|transaction| std::mem::take(&mut transaction.idle_expiry_unanswered))
     }
 
     /// An active transaction found past its total lifetime by a request (emulator profile): keep it, finished, for the
@@ -2642,6 +2660,11 @@ impl FirestoreState {
         if self.limit_scope == LimitScope::Production && self.prune_transactions(now) {
             self.compact(now);
         }
+        if self.take_idle_expiry_answer(id) {
+            return Err(FirestoreError::InvalidArgument(
+                TRANSACTION_NO_LONGER_VALID.into(),
+            ));
+        }
         if let Err(error) = self.transaction(id) {
             // The emulator profile answers a read after the total lifetime `INVALID_ARGUMENT`.
             return Err(self.read_error_after_lifetime(id, error));
@@ -2655,7 +2678,8 @@ impl FirestoreState {
             self.finish_transaction(id, TransactionState::Finished);
             let lifetime = self.keep_lifetime_expired_transaction(id, previous_deadline);
             self.compact(now);
-            if lifetime {
+            // The emulator profile answers the first request after an idle expiry `INVALID_ARGUMENT` too (see `idle_expiry_unanswered`).
+            if lifetime || self.limit_scope == LimitScope::OfficialEmulator {
                 return Err(FirestoreError::InvalidArgument(
                     TRANSACTION_NO_LONGER_VALID.into(),
                 ));
@@ -3635,6 +3659,9 @@ impl FirestoreState {
     /// Rolls back without maintenance; [`Self::rollback_at`] first forgets the transactions whose retention has
     /// ended at `now`.
     pub fn rollback(&mut self, id: &TransactionId) -> Result<(), FirestoreError> {
+        // A Rollback is the request that uses the idle-expiry answer up (the official emulator answers it `INVALID_ARGUMENT` there; the Rollback itself is
+        // accepted here), so the reads and Commits after it answer as the ones after any first request do.
+        self.take_idle_expiry_answer(id);
         if self.transactions.get(id).is_some_and(|transaction| {
             matches!(
                 transaction.state,
@@ -3929,13 +3956,24 @@ impl FirestoreState {
         if self.limit_scope == LimitScope::Production {
             self.prune_transactions(now);
         }
+        if self.take_idle_expiry_answer(id) {
+            return Err(FirestoreError::InvalidArgument(
+                TRANSACTION_NO_LONGER_VALID.into(),
+            ));
+        }
         self.transaction(id)?;
         let transaction = self.transaction(id)?;
         let deadline = transaction_deadline(transaction, self.limit_scope);
         if now >= deadline {
             self.finish_transaction(id, TransactionState::Finished);
-            self.keep_lifetime_expired_transaction(id, deadline);
+            let lifetime = self.keep_lifetime_expired_transaction(id, deadline);
             self.compact(now);
+            // An idle expiry found by a Commit answers `INVALID_ARGUMENT` in the emulator profile; a lifetime expiry keeps `ABORTED`.
+            if !lifetime && self.limit_scope == LimitScope::OfficialEmulator {
+                return Err(FirestoreError::InvalidArgument(
+                    TRANSACTION_NO_LONGER_VALID.into(),
+                ));
+            }
             return Err(FirestoreError::Aborted(TRANSACTION_NO_LONGER_VALID.into()));
         }
         let transaction = self.transaction(id)?;

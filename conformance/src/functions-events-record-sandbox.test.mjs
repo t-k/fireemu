@@ -148,8 +148,12 @@ test("the budget fails closed on the near misses of the close line", () => {
   assert.ok(refused(close({ estimatedUsd: "0" })), "a close line with a string cost");
   assert.ok(refused(close({ estimatedUsd: -1 })), "a negative cost");
   assert.ok(refused(close({ estimatedUsd: Number.NaN })), "a cost that is not finite");
-  assert.ok(
-    refused(close({ estimatedUsd: 1 }).replace('"estimatedUsd":1}', '"estimatedUsd":1e999}')),
+  assert.match(
+    sandbox.budgetProblems(
+      close({ estimatedUsd: 1 }).replace('"estimatedUsd":1}', '"estimatedUsd":1e999}'),
+      { reserve: 0 },
+    )[0],
+    /not a number/,
     "a close cost that parses to Infinity",
   );
   const differing = [
@@ -168,6 +172,9 @@ test("the budget fails closed on the near misses of the close line", () => {
     costRow({ event: "note", runDir: "a", estimatedUsd: 0 }),
   ].join("\n");
   assert.equal(headroom(notClosing), 30);
+  // lines that share an empty run directory are not one run, so a close line among them overrides nothing
+  const empty = runRows("", { reserve: 4, close: { estimatedUsd: 0 } }).join("\n");
+  assert.equal(headroom(empty), 30);
   // a run with a started line and nothing after counts at its reserve; another run's close line does not help it
   const unfinished = [
     costRow({ event: "started", runDir: "a", estimatedUsd: 4 }),

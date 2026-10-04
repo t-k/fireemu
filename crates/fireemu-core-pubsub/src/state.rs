@@ -1067,10 +1067,14 @@ impl PubSubState {
         let mut next_message_counter = initial_message_counter;
         let mut published = Vec::with_capacity(messages.len());
         for message in messages {
-            next_message_counter = next_message_counter.checked_add(1).ok_or_else(|| {
-                PubSubError::resource_exhausted("Pub/Sub message identifier space exhausted")
-            })?;
-            let message_id = next_message_counter.to_string();
+            // The ids repeat after `SPAN` messages, so the space ends there.
+            next_message_counter = next_message_counter
+                .checked_add(1)
+                .filter(|counter| *counter <= crate::message_id::SPAN)
+                .ok_or_else(|| {
+                    PubSubError::resource_exhausted("Pub/Sub message identifier space exhausted")
+                })?;
+            let message_id = crate::pubsub_message_id(next_message_counter);
             published.push(Arc::new(StoredMessage {
                 message_id,
                 publish_time: now,
@@ -2420,12 +2424,52 @@ mod tests {
         let published = state
             .publish_shared(&topic_name, vec![data(b"accepted")], now)
             .unwrap();
-        assert_eq!(published[0].message_id, "2");
+        assert_eq!(published[0].message_id, crate::pubsub_message_id(2));
         for observer in &observers {
             let received = state.pull(observer, 10, now).unwrap();
             assert_eq!(received.len(), 1);
             assert_eq!(received[0].message.message.data, b"accepted");
         }
+    }
+
+    #[test]
+    fn published_messages_get_the_seventeen_digit_ids_production_gives() {
+        // Production ids are seventeen-digit decimal strings, not a count (FUNCTIONS-EVENTS formal
+        // record 2026-10-04, `messageId` of frames 6ac2a47f0000967f445e8b09 and 6ac2a51c000844422b7986d1:
+        // 22254343790642112 and 22256683947060623).
+        let mut state = PubSubState::new(5);
+        let topic_name = topic("p", "events");
+        state.create_topic(topic_name.clone(), Default::default()).unwrap();
+        let now = LogicalInstant::from_unix_seconds(10);
+        let published = state
+            .publish_shared(&topic_name, vec![data(b"a"), data(b"b"), data(b"c")], now)
+            .unwrap();
+        let ids: Vec<&str> = published.iter().map(|m| m.message_id.as_str()).collect();
+        assert_eq!(
+            ids,
+            [
+                crate::pubsub_message_id(1),
+                crate::pubsub_message_id(2),
+                crate::pubsub_message_id(3)
+            ]
+        );
+        for id in ids {
+            assert_eq!(id.len(), 17);
+            assert!(id.bytes().all(|byte| byte.is_ascii_digit()));
+        }
+    }
+
+    #[test]
+    fn the_id_space_ends_before_two_messages_could_share_an_id() {
+        let mut state = PubSubState::new(5);
+        let topic_name = topic("p", "events");
+        state.create_topic(topic_name.clone(), Default::default()).unwrap();
+        let now = LogicalInstant::from_unix_seconds(10);
+        state.message_counter = crate::message_id::SPAN - 1;
+        let last = state.publish_shared(&topic_name, vec![data(b"a")], now).unwrap();
+        assert_eq!(last[0].message_id, crate::pubsub_message_id(crate::message_id::SPAN - 1 + 1));
+        let error = state.publish_shared(&topic_name, vec![data(b"b")], now).unwrap_err();
+        assert_eq!(error.code(), crate::error::Code::ResourceExhausted);
     }
 
     #[test]

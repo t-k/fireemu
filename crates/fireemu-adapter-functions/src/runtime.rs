@@ -6605,6 +6605,64 @@ mod schedule_capacity_tests {
     }
 
     #[tokio::test]
+    async fn real_time_passing_without_a_clock_move_produces_no_run() {
+        // The scheduler is driven by the virtual clock alone: starting at 12:04:59 with 12:05
+        // one second ahead, real time passing makes nothing due.
+        let (runtime, _clock) = runtime_with(
+            CatchUpPolicy::All,
+            super::OverlapPolicy::Allow,
+            100_000,
+            START + 238,
+        )
+        .await;
+        tokio::time::sleep(Duration::from_millis(1_500)).await;
+        runtime.on_clock_changed();
+        assert!(admitted(&runtime).is_empty());
+        assert!(runtime.is_idle());
+        finish(&runtime).await;
+    }
+
+    #[tokio::test]
+    async fn a_run_held_for_capacity_survives_a_reload_and_is_admitted_once() {
+        use super::CodebaseSpec;
+        let (runtime, clock) = runtime(CatchUpPolicy::All).await;
+        set_room(&runtime, 0);
+        advance(&clock, 5 * 60);
+        runtime.on_clock_changed();
+        assert!(pending(&runtime), "12:05 is refused and held due");
+        let spec = SpawnSpec {
+            command: vec![
+                "python3".to_owned(),
+                concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fake_runner.py").to_owned(),
+            ],
+            cwd: None,
+            env: Vec::new(),
+            hello_timeout: Duration::from_secs(60),
+        };
+        let replacement = Arc::new(Runner::spawn_spec(&spec).await.unwrap());
+        runtime
+            .reload_codebase(CodebaseSpec {
+                name: "default".to_owned(),
+                manifest: runtime.manifest().clone(),
+                runner: replacement,
+                spawn: Some(spec),
+                cleanup_dir: None,
+            })
+            .unwrap();
+        assert!(pending(&runtime), "the reload keeps the backlog");
+        assert!(admitted(&runtime).is_empty());
+        set_room(&runtime, 10);
+        runtime.on_clock_changed();
+        runtime.on_clock_changed();
+        assert_eq!(
+            admitted(&runtime),
+            vec![run("tick", "2026-08-29T12:05:00Z")],
+            "admitted once, after the reload"
+        );
+        finish(&runtime).await;
+    }
+
+    #[tokio::test]
     async fn the_session_is_not_idle_while_only_the_backlog_remains() {
         let (runtime, clock) = runtime(CatchUpPolicy::All).await;
         set_room(&runtime, 0);

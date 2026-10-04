@@ -9246,8 +9246,8 @@ mod tests {
         const MIDNIGHT_UTC: i64 = 1_791_158_400; // 2026-10-05T00:00:00Z
         let occurrence = |default: Option<&str>| {
             let mut manifest = json!({"functions": [
-                {"name": "daily", "trigger": {"type": "schedule", "schedule": "0 9 * * *"}},
-                {"name": "pinned", "trigger": {"type": "schedule", "schedule": "0 9 * * *", "timeZone": "UTC"}},
+                {"name": "daily", "generation": 2, "trigger": {"type": "schedule", "schedule": "0 9 * * *"}},
+                {"name": "pinned", "generation": 2, "trigger": {"type": "schedule", "schedule": "0 9 * * *", "timeZone": "UTC"}},
             ]});
             if let Some(zone) = default {
                 super::apply_default_time_zone(&mut manifest, zone);
@@ -9281,7 +9281,7 @@ mod tests {
                 ("daily".to_owned(), at(9 * 3600)),
                 ("pinned".to_owned(), at(9 * 3600))
             ],
-            "without a configured default a schedule that names no zone runs in UTC",
+            "without a configured default a v2 schedule that names no zone runs in UTC (production's v2 default)",
         );
     }
 

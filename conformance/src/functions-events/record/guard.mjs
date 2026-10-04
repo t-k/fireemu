@@ -224,6 +224,14 @@ export const RULES = [
   rule("oauth-token", "POST", "oauth2.googleapis.com", "/token"),
 ];
 
+// Which destinations get `x-goog-user-project`. The header names the quota project of the owner's
+// authorized-user credential, which these API calls need; it is wrong on the calls that do not carry
+// that credential (the two client sign-in calls use the API key, the token refresh has none), and
+// some Google endpoints refuse it outright (oauth2/v2/userinfo answers 403 USER_PROJECT_DENIED), so the
+// decision is made per rule here and pinned by a test, never for every request.
+const WITHOUT_QUOTA_PROJECT = new Set(["auth-sign-up", "auth-sign-in", "oauth-token"]);
+export const quotaProjectFor = (ruleName) => !WITHOUT_QUOTA_PROJECT.has(ruleName);
+
 /** The rule a resolved request (no placeholders left) matches, or a reason it may not be sent. */
 export function destination({ method, url, mutation }) {
   let parsed;
@@ -260,7 +268,7 @@ export function destination({ method, url, mutation }) {
         problem: `${entry.name}: the request says mutation=${Boolean(mutation)} but the rule says ${entry.mutation}`,
       };
     }
-    return { rule: entry.name };
+    return { rule: entry.name, quotaProject: quotaProjectFor(entry.name) };
   }
   return { problem: `no rule allows ${method} ${parsed.hostname}${parsed.pathname}` };
 }

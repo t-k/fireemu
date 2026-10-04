@@ -124,13 +124,12 @@ export function createTransport({
     }
     const headers = { accept: "application/json", ...resolved.headers };
     let url = resolved.url;
-    // The owner's authorized-user credential is billed and quota-checked against the sandbox project, not the client project of the gcloud login.
-    if (resolved.auth === "oauth")
-      Object.assign(headers, {
-        authorization: `Bearer ${await token()}`,
-        "x-goog-user-project": PROJECT,
-      });
-    else if (resolved.auth === "idtoken")
+    // The owner's credential is quota-checked against the sandbox project, not the gcloud login's
+    // client project; which destinations take the header is decided per rule in guard.mjs.
+    if (resolved.auth === "oauth") {
+      headers.authorization = `Bearer ${await token()}`;
+      if (answer.quotaProject) headers["x-goog-user-project"] = PROJECT;
+    } else if (resolved.auth === "idtoken")
       headers.authorization = `Bearer ${resolveText("${idToken}", vars)}`;
     else if (resolved.auth === "apikey")
       url += `${url.includes("?") ? "&" : "?"}key=${encodeURIComponent(apiKey)}`;

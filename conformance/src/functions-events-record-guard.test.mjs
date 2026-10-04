@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { RULES, destination } from "./functions-events/record/guard.mjs";
+import { RULES, destination, quotaProjectFor } from "./functions-events/record/guard.mjs";
 import {
   CONTROL_BUCKET,
   PRIMARY_BUCKET,
@@ -211,6 +211,34 @@ test("the API key goes only to the two client sign-in calls", () => {
     destination({
       method: "POST",
       url: `https://identitytoolkit.googleapis.com/v1/projects/${PROJECT}/accounts:lookup?key=abc`,
+      mutation: false,
+    }).problem,
+  );
+});
+
+test("x-goog-user-project is decided per destination and pinned: every API rule takes it, the client sign-in calls and the token refresh do not", () => {
+  const without = RULES.filter(({ name }) => !quotaProjectFor(name)).map(({ name }) => name);
+  assert.deepEqual(without.toSorted(), ["auth-sign-in", "auth-sign-up", "oauth-token"]);
+  for (const rule of RULES) assert.equal(typeof quotaProjectFor(rule.name), "boolean", rule.name);
+  const answer = destination({
+    method: "POST",
+    url: "https://identitytoolkit.googleapis.com/v1/accounts:signUp",
+    mutation: true,
+  });
+  assert.equal(answer.quotaProject, false);
+  assert.equal(
+    destination({
+      method: "GET",
+      url: `https://firestore.googleapis.com/v1/projects/${PROJECT}/databases/(default)`,
+      mutation: false,
+    }).quotaProject,
+    true,
+  );
+  // no rule reaches the userinfo endpoint, which refuses the header
+  assert.ok(
+    destination({
+      method: "GET",
+      url: "https://www.googleapis.com/oauth2/v2/userinfo",
       mutation: false,
     }).problem,
   );

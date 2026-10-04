@@ -228,7 +228,8 @@ test("an unreadable list and a list that never ends are errors, not empty lists"
   assert.deepEqual((await run(unreadable)).errors, ["listChannels us-central1: unknown answer"]);
   const endless = fakeService({ channels: [], endless: true });
   const stuck = await run(endless);
-  assert.equal(endless.calls.length, PAGE_LIMIT);
+  assert.equal(PAGE_LIMIT, 20);
+  assert.equal(endless.calls.length, 20);
   assert.ok(
     endless.calls[0].includes("pageSize=100") && endless.calls[1].includes("pageToken=more"),
   );
@@ -369,4 +370,50 @@ test("replay on the recorded answers: the empty channel list and the 404 of chan
     "projects/fireemu-oracle-idp/locations/us-central1/channels/firebase",
   );
   assert.deepEqual([answer.ok, answer.code, answer.status], [false, "NOT_FOUND", 404]);
+});
+
+test("a channel that is absent when read by name is settled as absent, and a refused deletion is not read back", async () => {
+  const gone = mine("absent");
+  issue(gone, "unknown");
+  const denied = mine("denied-readback");
+  issue(denied, "ok");
+  const service = fakeService({
+    channels: [denied],
+    deleteFault: () => ({
+      status: 403,
+      body: { error: { status: "PERMISSION_DENIED" } },
+      unknown: false,
+    }),
+  });
+  const report = await run(service);
+  assert.deepEqual(report.settled, [{ name: gone, how: "absent" }]);
+  assert.deepEqual(report.alreadyGone, [gone]);
+  const after = service.calls.slice(
+    service.calls.findIndex((call) => call.startsWith("DELETE")) + 1,
+  );
+  assert.equal(
+    after.some((call) => call.includes("denied-readback")),
+    false,
+    "no read-back after a refusal",
+  );
+  assert.deepEqual(report.unsettled, [denied]);
+});
+
+test("an operation that never finishes is read eight times by default with two seconds between, and as often as it is asked for", async () => {
+  const name = mine("never-done");
+  const defaultReads = fakeService({ channels: [name], doneAfter: 99 });
+  own.channel("us-central1", "seed");
+  const sleeps = [];
+  const report = await run(defaultReads, { sleep: async (ms) => sleeps.push(ms) });
+  assert.equal([...defaultReads.operations.values()][0].reads, 8);
+  assert.deepEqual(sleeps.slice(0, 7), Array(7).fill(2000));
+  assert.ok(report.errors.some((error) => error.endsWith("not done")));
+  ledger = createLedger();
+  const three = fakeService({ channels: [mine("three")], doneAfter: 99 });
+  await run(three, { pollAttempts: 3 });
+  assert.equal([...three.operations.values()][0].reads, 3);
+  ledger = createLedger();
+  const one = fakeService({ channels: [mine("one")], doneAfter: 99 });
+  await run(one, { pollAttempts: 1 });
+  assert.equal([...one.operations.values()][0].reads, 1);
 });

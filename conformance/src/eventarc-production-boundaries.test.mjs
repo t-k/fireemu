@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { createOwnership } from "./eventarc-production/names.mjs";
-import { CaseLimit } from "./eventarc-production/runner.mjs";
+import { CaseLimit, exitCodeOf } from "./eventarc-production/runner.mjs";
 import { createSdk } from "./eventarc-production/sdk.mjs";
 import { main, parseArgs } from "./eventarc-production/record.mjs";
 import {
@@ -26,6 +26,7 @@ const RUN = "0123456789ab";
 
 test("the project of a run is an ID of 6 to 30 characters and a channel ID is at most 63 characters", () => {
   const make = (project) => createOwnership({ project, runId: RUN });
+  make("abcdef");
   make("abcde-f");
   assert.throws(() => make("abcde"), /not a project ID/);
   make(`a${"b".repeat(28)}c`);
@@ -333,8 +334,110 @@ test("the SDK forwarder: every forwarded request is counted for its case, a body
   const refused = await sdk.publish({
     caseId: "c",
     channel: "projects/demo-project/locations/us-central1/channels/x",
-    events: { type: "t", source: "//s", data: 5, [long]: "v" },
+    events: { type: "t", source: "//s", data: "x", [long]: 5 },
   });
   assert.equal(refused.threw, true);
-  assert.ok(refused.error.message.length <= 300);
+  assert.equal(refused.error.message.length, 300);
+});
+
+test("the ceiling error and the outcomes of an abort and of a spent budget are recorded with their reasons", async () => {
+  const { CaseAbort } = await import("./eventarc-production/cases/support.mjs");
+  const { BudgetExceeded } = await import("./pubsub-production/capture.mjs");
+  assert.equal(new CaseLimit(2).name, "CaseLimit");
+  const ownership = createOwnership({ project: "demo-project", runId: RUN });
+  const capture = createCapture({ journal: { write() {} } });
+  const transport = {
+    name: "rest",
+    request: async () => ({ status: 200, body: {}, unknown: false }),
+  };
+  const cleanupClient = createClient({
+    transports: {
+      eventarc: {
+        name: "rest",
+        request: async (call) =>
+          call.path.includes("/channels?")
+            ? { status: 200, body: {}, unknown: false }
+            : { status: 404, body: { error: { status: "NOT_FOUND" } }, unknown: false },
+      },
+    },
+    ownership,
+    caseId: "cleanup",
+    usageProject: "p",
+  });
+  const common = {
+    transports: { eventarc: transport, publishing: transport, usage: transport },
+    cleanupClient,
+    ownership,
+    capture,
+    options: {
+      production: false,
+      location: "us-central1",
+      usageProject: "p",
+      publishPrefix: "/v1",
+    },
+    sleep: async () => {},
+  };
+  const aborted = await runCases({
+    ...common,
+    cases: [
+      {
+        id: "a",
+        short: "a1",
+        requests: 1,
+        async run() {
+          throw new CaseAbort("a step", { code: "NOT_FOUND" });
+        },
+      },
+    ],
+  });
+  assert.deepEqual(
+    aborted.cases.map((c) => [c.outcome, c.reason]),
+    [["aborted", "a step did not succeed (NOT_FOUND)"]],
+  );
+  assert.equal(aborted.stopped, null);
+  const spent = await runCases({
+    ...common,
+    cases: [
+      {
+        id: "b",
+        short: "b1",
+        requests: 1,
+        async run() {
+          throw new BudgetExceeded(7);
+        },
+      },
+      {
+        id: "c",
+        short: "c1",
+        requests: 1,
+        async run() {
+          throw new Error("must not run");
+        },
+      },
+    ],
+  });
+  assert.deepEqual(
+    spent.cases.map((c) => [c.outcome, c.reason]),
+    [["budget", "the request budget of 7 is spent"]],
+  );
+  assert.equal(spent.stopped, "the request budget of 7 is spent");
+  assert.equal(exitCodeOf(spent), 4);
+  // A probe in another location is listed unless it says it cannot exist.
+  const other = createOwnership({ project: "demo-project", runId: RUN });
+  await runCases({
+    ...common,
+    ownership: other,
+    cases: [
+      {
+        id: "p",
+        short: "p1",
+        requests: 1,
+        async run(ctx) {
+          ctx.probe("x", { location: "europe-west1" });
+          ctx.probe("y", { location: "nowhere1", listable: false });
+        },
+      },
+    ],
+  });
+  assert.deepEqual(other.locations(), ["europe-west1"]);
 });

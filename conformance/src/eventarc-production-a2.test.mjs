@@ -233,3 +233,39 @@ test("the later run is not closable while a channel stays, and reports it", asyn
     [false, [stuck], [stuck]],
   );
 });
+
+test("the later run lists the location of the run, so a prefixed channel the ledger does not name is found and deleted", async (t) => {
+  const unnamed = mine("listed-only");
+  // This server lists the channel, which the ledger does not name.
+  const present = new Set([unnamed]);
+  const seen = [];
+  const server = createServer((request, response) => {
+    const path = decodeURIComponent(request.url.split("?")[0].replace(/^\/v1\//, ""));
+    seen.push(`${request.method} ${path}`);
+    response.setHeader("content-type", "application/json");
+    if (request.method === "GET" && path.endsWith("/channels"))
+      return response.end(JSON.stringify({ channels: [...present].map((name) => ({ name })) }));
+    if (request.method === "GET" && path.includes("/operations/"))
+      return response.end(JSON.stringify({ name: path, done: true }));
+    if (request.method === "GET" && present.has(path))
+      return response.end(JSON.stringify({ name: path }));
+    if (request.method === "DELETE" && present.has(path)) {
+      present.delete(path);
+      return response.end(
+        JSON.stringify({
+          name: `projects/${PROJECT}/locations/us-central1/operations/op-1`,
+          done: true,
+        }),
+      );
+    }
+    response.statusCode = 404;
+    response.end('{"error":{"status":"NOT_FOUND"}}');
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  t.after(() => server.close());
+  const dir = recording([]);
+  const host = `http://127.0.0.1:${server.address().port}`;
+  assert.equal(await main(a2(dir, host), {}, io(), deps()), 0);
+  assert.deepEqual(summaryOf(dir).cleanup.deleted, [unnamed]);
+  assert.equal(present.size, 0);
+});

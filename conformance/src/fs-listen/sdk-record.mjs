@@ -135,7 +135,13 @@ export async function sweepDocuments({ client, project, run, accounts }) {
  * One SDK recording. `target` is { kind: "production", project, token, web } or
  * { kind: "local", project, firestore: { host, port }, auth: "http://host:port" }.
  */
-export async function recordSdk({ target, run, log = () => {}, runDriverImpl = runDriver }) {
+export async function recordSdk({
+  target,
+  run,
+  log = () => {},
+  runDriverImpl = runDriver,
+  makeNative = createNativeClient,
+}) {
   const startedAt = new Date().toISOString();
   const production = target.kind === "production";
   const accountClient = createAccountClient({
@@ -148,7 +154,7 @@ export async function recordSdk({ target, run, log = () => {}, runDriverImpl = r
       : { authorization: "Bearer owner" },
   });
   const session = createAccountSession({ client: accountClient, run });
-  const native = createNativeClient({
+  const native = makeNative({
     project: target.project,
     target: production ? { kind: "production" } : { kind: "local", ...target.firestore },
     token: target.token,

@@ -250,3 +250,221 @@ test("compareRecordings needs exactly two production recordings", () => {
     /two production recordings/,
   );
 });
+
+const plain = { conditions: [], end: null, timedOut: false };
+
+test("canonicalRow keeps what a row says and drops the conditions", () => {
+  assert.deepEqual(canonicalRow({ ...plain, rows: [] }), { rows: [], end: null });
+  assert.deepEqual(
+    canonicalRow({ ...plain, observed: [1], failures: ["f"], invariantViolations: [2] }),
+    {
+      observed: [1],
+      failures: ["f"],
+      invariantViolations: [2],
+      end: null,
+    },
+  );
+  assert.deepEqual(
+    canonicalRow({ ...plain, end: { reason: "error", code: 3, details: "x", at: 9 } }).end,
+    {
+      reason: "error",
+      code: 3,
+    },
+  );
+  assert.deepEqual(canonicalRow({ ...plain, end: { reason: "ended" } }).end, {
+    reason: "ended",
+    code: null,
+  });
+  assert.deepEqual(
+    canonicalRow({ ...plain, groups: [{ docs: ["b", "a"], sameUpdateTime: false }] }).groups,
+    [{ docs: ["a", "b"], sameUpdateTime: false }],
+  );
+  assert.equal("rows" in canonicalRow({ ...plain, observed: [] }), false);
+  assert.equal("groups" in canonicalRow({ ...plain, rows: [] }), false);
+});
+
+test("each part of a row is compared: observed, failures, violations and the end code", () => {
+  const base = { ...plain, observed: [{ a: 1 }], failures: [], invariantViolations: [] };
+  assert.equal(classifyRow(base, structuredClone(base)), "MATCH");
+  assert.equal(classifyRow(base, { ...base, observed: [{ a: 2 }] }), "DIFFER");
+  assert.equal(classifyRow(base, { ...base, failures: ["x"] }), "DIFFER");
+  assert.equal(classifyRow(base, { ...base, invariantViolations: [{ invariant: "x" }] }), "DIFFER");
+  assert.equal(
+    classifyRow(
+      { ...base, end: { reason: "error", code: 3 } },
+      { ...base, end: { reason: "error", code: 4 } },
+    ),
+    "DIFFER",
+  );
+  assert.equal(
+    classifyRow(
+      { ...base, end: { reason: "error", code: 3 } },
+      { ...base, end: { reason: "ended", code: 3 } },
+    ),
+    "DIFFER",
+  );
+  // An absent code and a null code are the same.
+  assert.equal(
+    classifyRow(
+      { ...base, end: { reason: "ended" } },
+      { ...base, end: { reason: "ended", code: null } },
+    ),
+    "MATCH",
+  );
+  assert.equal(
+    classifyRow({ ...base, end: null }, { ...base, end: { reason: "ended" } }),
+    "DIFFER",
+  );
+});
+
+test("documents compare as a set only inside one run between non-document rows", () => {
+  const d = (doc, kind = "documentChange") => ({ kind, doc, removedTargetIds: [] });
+  const t = {
+    kind: "targetChange",
+    type: "CURRENT",
+    targetIds: [1],
+    cause: null,
+    resumeToken: true,
+  };
+  const withRows = (rows) => ({ ...plain, rows });
+  assert.equal(
+    classifyRow(
+      withRows([d("a"), d("b", "documentDelete"), t]),
+      withRows([d("b", "documentDelete"), d("a"), t]),
+    ),
+    "MATCH",
+  );
+  assert.equal(classifyRow(withRows([d("a"), t, d("b")]), withRows([d("b"), t, d("a")])), "DIFFER");
+  assert.equal(classifyRow(withRows([t, d("a")]), withRows([d("a"), t])), "DIFFER");
+  // Permuting three documents never changes the row.
+  const trio = [d("a"), d("b"), d("c")];
+  for (const order of [
+    [0, 1, 2],
+    [0, 2, 1],
+    [1, 0, 2],
+    [1, 2, 0],
+    [2, 0, 1],
+    [2, 1, 0],
+  ])
+    assert.equal(
+      classifyRow(withRows([...trio, t]), withRows([...order.map((i) => trio[i]), t])),
+      "MATCH",
+    );
+  assert.equal(classifyRow(withRows([d("a"), d("a")]), withRows([d("a")])), "DIFFER");
+});
+
+test("an unfinished stream is INDETERMINATE on either side, and a finished one is not", () => {
+  const done = { ...plain, rows: [] };
+  assert.equal(classifyRow({ ...done, end: { reason: "frame-cap" } }, done), "INDETERMINATE");
+  assert.equal(classifyRow(done, { ...done, end: { reason: "frame-cap" } }), "INDETERMINATE");
+  assert.equal(
+    classifyRow({ ...done, end: { reason: "ended" } }, { ...done, end: { reason: "ended" } }),
+    "MATCH",
+  );
+  assert.equal(
+    classifyRow({ ...done, timedOut: false }, { ...done, timedOut: undefined }),
+    "MATCH",
+  );
+});
+
+test("recordingProblems says what is wrong, in order, and nothing when the recording is clean", () => {
+  const clean = recording({});
+  assert.deepEqual(recordingProblems(clean), []);
+  assert.deepEqual(recordingProblems({ ...clean, version: 7 }), ["unknown recording version 7"]);
+  assert.deepEqual(recordingProblems({ ...clean, cleanup: undefined }), [
+    "cleanup was not complete",
+  ]);
+  assert.deepEqual(recordingProblems({ ...clean, cleanup: { complete: "yes" } }), [
+    "cleanup was not complete",
+  ]);
+  assert.deepEqual(recordingProblems({ ...clean, errors: undefined }), []);
+  assert.deepEqual(
+    recordingProblems({ version: 2, cleanup: { complete: false }, errors: { a: "x", b: "y" } }),
+    ["unknown recording version 2", "cleanup was not complete", "a: x", "b: y"],
+  );
+});
+
+test("compareRecordings: every status, one row at a time", () => {
+  const p = (rows) => recording(rows);
+  const timedOut = { ...row(1), timedOut: true };
+  const run = ({ prod1 = {}, prod2 = prod1, local = {}, divergences } = {}) =>
+    compareRecordings({ productions: [p(prod1), p(prod2)], local: p(local), divergences });
+  assert.equal(run({ prod1: { r: row(1) }, local: { r: row(1) } }).rows.r.status, "MATCH");
+  assert.equal(run({ prod1: { r: row(1) }, local: { r: row(0) } }).rows.r.status, "MISMATCH");
+  assert.equal(run({ prod1: { r: row(1) } }).rows.r.status, "MISSING");
+  assert.equal(
+    run({ prod1: { r: row(1) }, prod2: { r: row(0) }, local: { r: row(1) } }).rows.r.status,
+    "NONDETERMINISTIC",
+  );
+  assert.equal(
+    run({ prod1: { r: timedOut }, local: { r: row(1) } }).rows.r.status,
+    "INDETERMINATE",
+  );
+  assert.equal(
+    run({ prod1: { r: row(1) }, local: { r: timedOut } }).rows.r.status,
+    "INDETERMINATE",
+  );
+  assert.equal(run({ local: { r: row(1) } }).rows.r.status, "EXTRA");
+  assert.equal(
+    run({ prod1: { r: row(1) }, prod2: {}, local: {} }).rows.r.status,
+    "PRODUCTION_MISSING",
+  );
+  assert.equal(
+    run({ prod1: { r: row(1) }, prod2: {}, local: { r: row(1) } }).rows.r.status,
+    "EXTRA",
+  );
+  assert.equal(
+    run({ prod1: {}, prod2: { r: row(1) }, local: {} }).rows.r.status,
+    "PRODUCTION_MISSING",
+  );
+  // Rows come out sorted, and the summary counts them.
+  const out = run({ prod1: { b: row(1), a: row(1) }, local: { a: row(1), b: row(0) } });
+  assert.deepEqual(Object.keys(out.rows), ["a", "b"]);
+  assert.deepEqual(out.summary, { MATCH: 1, MISMATCH: 1 });
+});
+
+test("compareRecordings: known divergences count as good, an unfit local recording does not", () => {
+  const ok = compareRecordings({
+    productions: [recording({ r: row(1) }), recording({ r: row(1) })],
+    local: recording({ r: row(0) }),
+    divergences: { r: "owner decision D1" },
+  });
+  assert.equal(ok.ok, true);
+  assert.deepEqual(ok.localProblems, []);
+  const dirty = compareRecordings({
+    productions: [recording({ r: row(1) }), recording({ r: row(1) })],
+    local: recording({ r: row(1) }, { cleanup: { complete: false } }),
+  });
+  assert.equal(dirty.ok, false);
+  assert.deepEqual(dirty.localProblems, ["cleanup was not complete"]);
+  for (const reason of ["", "   ", undefined, 7])
+    assert.throws(
+      () =>
+        compareRecordings({
+          productions: [recording({}), recording({})],
+          local: recording({}),
+          divergences: { r: reason },
+        }),
+      /needs a reason/,
+    );
+  assert.throws(
+    () =>
+      compareRecordings({
+        productions: [recording({}), recording({}, { errors: { x: "y" } })],
+        local: recording({}),
+      }),
+    /not clean: x: y/,
+  );
+  assert.throws(
+    () => compareRecordings({ productions: [], local: recording({}) }),
+    /two production/,
+  );
+  assert.throws(
+    () =>
+      compareRecordings({
+        productions: [recording({}), recording({}), recording({})],
+        local: recording({}),
+      }),
+    /two production/,
+  );
+});

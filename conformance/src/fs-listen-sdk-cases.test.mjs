@@ -2,7 +2,13 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
 
-import { EXTRA_CASES, MOVED_CASES, sdkCases } from "./fs-listen/sdk-cases.mjs";
+import {
+  EXTRA_CASES,
+  MOVED_CASES,
+  OWNER_COLLECTION,
+  PUBLIC_COLLECTION,
+  sdkCases,
+} from "./fs-listen/sdk-cases.mjs";
 import { conditionsOf } from "./fs-listen/sdk-record.mjs";
 
 const closure = JSON.parse(
@@ -79,4 +85,76 @@ test("a grouped write names a group of at least two, and every member agrees on 
       assert.equal(sizes.length, sizes[0], `${spec.caseId}: ${id} members`);
     }
   }
+});
+
+test("sdkCases puts a case that signs in or needs rules after the plain ones, keeping 106N early", () => {
+  const spec = (caseId, extra = {}) => ({
+    caseId,
+    requiresRules: false,
+    steps: [{ kind: "seed" }],
+    listeners: [],
+    ...extra,
+  });
+  const fake = {
+    cases: [
+      spec("FS-LISTEN-SDK-901", { requiresRules: true }),
+      spec("FS-LISTEN-SDK-902"),
+      spec("FS-LISTEN-SDK-903", { steps: [{ kind: "signIn" }] }),
+      spec("FS-LISTEN-SDK-106N", { requiresRules: true }),
+      spec("FS-LISTEN-SDK-106"),
+      spec("FS-LISTEN-SDK-904"),
+    ],
+  };
+  const ids = sdkCases(fake).map((c) => c.caseId);
+  const extras = EXTRA_CASES.map((c) => c.caseId);
+  assert.deepEqual(ids, [
+    "FS-LISTEN-SDK-902",
+    "FS-LISTEN-SDK-106N",
+    "FS-LISTEN-SDK-904",
+    ...extras,
+    "FS-LISTEN-SDK-901",
+    "FS-LISTEN-SDK-903",
+  ]);
+});
+
+test("the three extra cases carry what the step machine reads", () => {
+  assert.deepEqual(
+    EXTRA_CASES.map((c) => c.caseId),
+    ["FS-LISTEN-SDK-103L", "FS-LISTEN-SDK-103T", "FS-LISTEN-SDK-111"],
+  );
+  const [limitToLast, grouped, offline] = EXTRA_CASES;
+  assert.equal(limitToLast.listeners[0].limitToLast, true);
+  assert.equal(limitToLast.listeners[0].limit, 2);
+  assert.equal(grouped.listeners[0].includeMetadataChanges, false);
+  assert.equal(grouped.collapseMetadataOnly, false);
+  assert.equal(offline.comparison, "aggregate-changes");
+  assert.deepEqual(offline.invariants, ["from-cache-true-then-false-across-break"]);
+  for (const c of EXTRA_CASES) {
+    assert.equal(c.listeners[0].name, "primary");
+    assert.equal(c.listeners[0].kind, "query");
+    assert.deepEqual(c.listeners[0].where, ["rank", "<", 10]);
+  }
+  // The transaction case writes two documents of one group, then ungrouped ones.
+  const writes = grouped.steps.filter((s) => s.kind === "write");
+  assert.deepEqual(
+    writes.map((s) => Boolean(s.fields.__txn)),
+    [true, true, false, false],
+  );
+  assert.ok(writes.every((s) => s.client === "witness"));
+  // The offline case breaks and resumes the primary client around the witness's changes.
+  const kinds = offline.steps.map((s) => s.kind);
+  assert.ok(
+    kinds.indexOf("break") < kinds.indexOf("delete") &&
+      kinds.indexOf("delete") < kinds.indexOf("resume"),
+  );
+});
+
+test("the collections are the ones the deployed Rules allow", () => {
+  assert.equal(PUBLIC_COLLECTION, "conf_listen");
+  assert.equal(OWNER_COLLECTION, "conf_rules_owner");
+  assert.deepEqual([...MOVED_CASES].toSorted(), [
+    "FS-LISTEN-SDK-106",
+    "FS-LISTEN-SDK-109",
+    "FS-LISTEN-SDK-109C",
+  ]);
 });

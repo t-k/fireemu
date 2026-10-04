@@ -129,3 +129,107 @@ test("makeDeps: a plain write is shifted into the band; a grouped write waits fo
   assert.equal(log.at(-1)[0], "runTransaction");
   assert.equal(log.filter(([name]) => name === "runTransaction").length, 1);
 });
+
+test("bandOf: stable, in range, a multiple of 100 above 1000, and different for different runs", () => {
+  assert.equal(bandOf("na1"), bandOf("na1"));
+  const ids = Array.from(
+    { length: 200 },
+    (_, i) => `n${(1_700_000_000_000 + i * 60_000).toString(36)}`,
+  );
+  const bands = ids.map(bandOf);
+  for (const band of bands)
+    assert.ok(band % 100 === 0 && band >= 1000 && band < 1000 + 100_000_000, band);
+  assert.ok(new Set(bands).size >= 199, "different runs rarely share a band");
+  // The first band is the hash of the run id itself, not of its length or its last character.
+  assert.notEqual(bandOf("na1"), bandOf("na2"));
+  assert.notEqual(bandOf("ab"), bandOf("ba"));
+  assert.equal(bandOf(5), bandOf("5"));
+});
+
+test("queryConstraints: defaults, the bound moves with the base, and limit or limitToLast ends the list", () => {
+  const spec = { where: ["rank", "<", 3] };
+  assert.deepEqual(queryConstraints(spec, 100), [
+    ["where", "rank", ">=", 100],
+    ["where", "rank", "<", 103],
+    ["orderBy", "rank", "asc"],
+    ["limit", 10],
+  ]);
+  assert.deepEqual(queryConstraints({ ...spec, orderBy: ["rank", "desc"], limit: 4 }, 0).slice(2), [
+    ["orderBy", "rank", "desc"],
+    ["limit", 4],
+  ]);
+  assert.deepEqual(queryConstraints({ ...spec, limitToLast: true, limit: 2 }, 0).at(-1), [
+    "limitToLast",
+    2,
+  ]);
+  assert.deepEqual(queryConstraints({ ...spec, limitToLast: false }, 0).at(-1), ["limit", 10]);
+  assert.throws(
+    () => queryConstraints({ where: ["rank", ">", 1] }, 0),
+    /unsupported listener filter/,
+  );
+  assert.throws(() => queryConstraints({ where: ["x", "<", 1] }, 0), /unsupported listener filter/);
+});
+
+test("inBand: a public document with a numeric rank moves; everything else is the same object", () => {
+  const fields = { rank: 0, value: "x" };
+  assert.deepEqual(inBand("conf_listen/a", fields, 7), { rank: 7, value: "x" });
+  assert.deepEqual(fields, { rank: 0, value: "x" }, "the input is not changed");
+  const text = { rank: "1" };
+  assert.equal(inBand("conf_listen/a", text, 7), text);
+  const outside = { rank: 1 };
+  assert.equal(inBand("conf_listenx/a", outside, 7), outside);
+  assert.equal(inBand("conf_listen", outside, 7), outside);
+  const none = { value: 1 };
+  assert.equal(inBand("conf_listen/a", none, 7), none);
+});
+
+test("makeDeps: the listener gets its options and error callback; the query is on the named client's db", () => {
+  const log = [];
+  const sdk = fakeSdk(log);
+  const clients = { primary: { db: { id: "primary" } }, witness: { db: { id: "witness" } } };
+  const deps = makeDeps({ sdk, clients, base: 1 });
+  let failed;
+  const stop = deps.firestore.onQuerySnapshot(
+    "witness",
+    { where: ["rank", "<", 10], limit: 10 },
+    { includeMetadataChanges: false },
+    () => {},
+    (error) => {
+      failed = error;
+    },
+  );
+  const [, , options] = log.find(([name]) => name === "onSnapshot");
+  assert.deepEqual(options, { includeMetadataChanges: false });
+  stop();
+  assert.deepEqual(log.at(-1), ["unsubscribe"]);
+  assert.equal(failed, undefined);
+});
+
+test("makeDeps: a plain write to another collection is not shifted, and groups are kept apart by id", async () => {
+  const log = [];
+  const clients = { primary: { db: {} }, witness: { db: {} } };
+  const deps = makeDeps({ sdk: fakeSdk(log), clients, base: 5000 });
+  await deps.firestore.setDoc("primary", "conf_rules_owner/u", { rank: 1, value: "x" });
+  assert.deepEqual(log.at(-1), ["setDoc", "conf_rules_owner/u", { rank: 1, value: "x" }]);
+  await deps.firestore.setDoc("witness", "conf_listen/a", {
+    rank: 1,
+    __txn: { id: "g1", size: 2 },
+  });
+  await deps.firestore.setDoc("witness", "conf_listen/b", {
+    rank: 2,
+    __txn: { id: "g2", size: 2 },
+  });
+  assert.equal(log.filter(([name]) => name === "runTransaction").length, 0);
+  await deps.firestore.setDoc("witness", "conf_listen/c", {
+    rank: 3,
+    __txn: { id: "g1", size: 2 },
+  });
+  const [name, sets] = log.at(-1);
+  assert.equal(name, "runTransaction");
+  assert.deepEqual(
+    sets.map(([path]) => path),
+    ["conf_listen/a", "conf_listen/c"],
+  );
+  // The group member's marker is not written.
+  assert.deepEqual(sets[0][1], { rank: 5001 });
+});

@@ -1,7 +1,13 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { cleanupNative, runNative, targetFor } from "./fs-listen/native-run.mjs";
+import {
+  cleanupNative,
+  runNative,
+  targetFor,
+  toFields,
+  waitHolds,
+} from "./fs-listen/native-run.mjs";
 
 const PROJECT = "p1";
 const RUN = "r1";
@@ -295,4 +301,353 @@ test("cleanup is incomplete when a document is still there after the delete", as
   });
   assert.equal(report.complete, false);
   assert.deepEqual(report.stillPresent, [`${ROOT}/lsn/${RUN}-a`]);
+});
+
+test("toFields writes each supported JS value as its Firestore Value and refuses the rest", () => {
+  assert.deepEqual(toFields({ a: null, b: true, c: false, d: 3, e: -4, f: 1.5, g: "x", h: "" }), {
+    a: { nullValue: "NULL_VALUE" },
+    b: { booleanValue: true },
+    c: { booleanValue: false },
+    d: { integerValue: "3" },
+    e: { integerValue: "-4" },
+    f: { doubleValue: 1.5 },
+    g: { stringValue: "x" },
+    h: { stringValue: "" },
+  });
+  assert.deepEqual(toFields({}), {});
+  assert.throws(() => toFields({ a: [1] }), /unsupported field value \[1\]/);
+  assert.throws(() => toFields({ a: undefined }), /unsupported/);
+});
+
+test("targetFor: one filter is a field filter, several are AND, a number is an integer value", () => {
+  const ctx = { root: ROOT, run: RUN, tokens: new Map(), docs: {} };
+  const one = targetFor({ id: 1, query: { collection: "c", where: [["n", 5]] } }, ctx);
+  assert.deepEqual(one.query.structuredQuery.where, {
+    fieldFilter: { field: { fieldPath: "n" }, op: "EQUAL", value: { integerValue: "5" } },
+  });
+  assert.equal(one.query.structuredQuery.orderBy, undefined);
+  const many = targetFor(
+    {
+      id: 1,
+      query: {
+        collection: "c",
+        where: [
+          ["n", 5],
+          ["g", "x"],
+        ],
+      },
+    },
+    ctx,
+  );
+  assert.deepEqual(many.query.structuredQuery.where, {
+    compositeFilter: {
+      op: "AND",
+      filters: [
+        { fieldFilter: { field: { fieldPath: "n" }, op: "EQUAL", value: { integerValue: "5" } } },
+        { fieldFilter: { field: { fieldPath: "g" }, op: "EQUAL", value: { stringValue: "x" } } },
+      ],
+    },
+  });
+  const none = targetFor({ id: 1, query: { collection: "c" } }, ctx);
+  assert.equal(none.query.structuredQuery.where, undefined);
+  // A collection-group target takes its filters from the target itself.
+  const group = targetFor({ id: 2, collectionGroup: "k", where: [["g", "x"]] }, ctx);
+  assert.equal(group.query.structuredQuery.where.fieldFilter.value.stringValue, "x");
+  assert.equal(group.once, undefined);
+  assert.equal(targetFor({ id: 2, collectionGroup: "k", once: true }, ctx).once, true);
+});
+
+test("targetFor refuses a read time that was not saved or has none", () => {
+  const ctx = {
+    root: ROOT,
+    run: RUN,
+    docs: { a: "lsn/{run}-a" },
+    tokens: new Map([["t", { token: Buffer.from("x") }]]),
+  };
+  assert.throws(
+    () => targetFor({ id: 1, doc: "a", readTimeFrom: "t" }, ctx),
+    /no saved read time t/,
+  );
+  assert.throws(
+    () => targetFor({ id: 1, doc: "a", readTimeFrom: "zz" }, ctx),
+    /no saved read time zz/,
+  );
+  const noToken = { ...ctx, tokens: new Map([["t", { readTime: { seconds: "1" } }]]) };
+  assert.throws(() => targetFor({ id: 1, doc: "a", resume: "t" }, noToken), /no saved token t/);
+});
+
+const change = (type, ids, extra = {}) => targetChange(type, ids, extra);
+const docChange = { kind: "documentChange", documentChange: { document: { name: "x" } } };
+
+test("waitHolds judges each condition on the frames it is given", () => {
+  const frames = [change("ADD", [1]), docChange, change("CURRENT", [1])];
+  assert.equal(waitHolds({ current: 1 }, frames, undefined), true);
+  assert.equal(waitHolds({ current: 2 }, frames, undefined), false);
+  assert.equal(waitHolds({ current: 1 }, [change("ADD", [1])], undefined), false);
+  assert.equal(waitHolds({ current: 1 }, [change("CURRENT", [])], undefined), false);
+  assert.equal(waitHolds({ type: "REMOVE", id: 1 }, [change("REMOVE", [1])], undefined), true);
+  assert.equal(waitHolds({ type: "REMOVE", id: 1 }, [change("REMOVE", [2])], undefined), false);
+  assert.equal(waitHolds({ type: "REMOVE", id: 1 }, [change("ADD", [1])], undefined), false);
+  assert.equal(waitHolds({ type: "REMOVE", id: 1 }, [change("REMOVE", [])], undefined), false);
+  assert.equal(waitHolds({ docChanges: 1 }, [docChange], undefined), true);
+  assert.equal(waitHolds({ docChanges: 2 }, [docChange], undefined), false);
+  assert.equal(waitHolds({ docChanges: 2 }, [docChange, docChange], undefined), true);
+  assert.equal(waitHolds({ docChanges: 1 }, [change("ADD", [1])], undefined), false);
+  assert.equal(waitHolds({ frames: 3 }, frames, undefined), true);
+  assert.equal(waitHolds({ frames: 4 }, frames, undefined), false);
+  assert.equal(waitHolds({ ended: true }, [], { reason: "ended" }), true);
+  assert.equal(waitHolds({ ended: true }, frames, undefined), false);
+  // A wait for a frame is not satisfied by an ended stream.
+  assert.equal(waitHolds({ current: 1 }, [], { reason: "ended" }), false);
+  assert.throws(() => waitHolds({ nothing: 1 }, [], undefined), /unknown wait condition/);
+});
+
+/** Runs steps against a client whose streams answer by request index; returns the run and its log. */
+async function runSteps(
+  steps,
+  script = {},
+  { docs = { a: "lsn/{run}-a", b: "lsn/{run}-b" }, ...options } = {},
+) {
+  const { client, log, streams, clock } = fakeClient(script);
+  const out = await runNative([{ id: "native/t", conditions: ["x"], docs, steps }], {
+    client,
+    project: PROJECT,
+    run: RUN,
+    sleep: async (ms) => {
+      clock.t += ms;
+    },
+    now: () => clock.t,
+    ...options,
+  });
+  return { out, log, streams, clock };
+}
+
+test("runNative: delete, add, remove, settle and sleep do what they say", async () => {
+  const { log, streams, clock } = await runSteps([
+    { do: "delete", doc: "a" },
+    { do: "open", stream: "s", targets: [{ id: 1, doc: "a" }] },
+    { do: "add", stream: "s", target: { id: 2, doc: "b" } },
+    { do: "remove", stream: "s", id: 1 },
+    { do: "settle", ms: 700 },
+    { do: "settle" },
+    { do: "sleep", ms: 300 },
+    { do: "close", stream: "s" },
+  ]);
+  assert.deepEqual(log[0], ["commit", [`del ${ROOT}/lsn/${RUN}-a`], null]);
+  const sent = streams[0].sent;
+  assert.deepEqual(
+    sent.map((r) => Object.keys(r).toSorted()),
+    [
+      ["addTarget", "database"],
+      ["addTarget", "database"],
+      ["database", "removeTarget"],
+    ],
+  );
+  assert.equal(sent[1].addTarget.targetId, 2);
+  assert.equal(sent[2].removeTarget, 1);
+  assert.equal(sent[0].database, `projects/${PROJECT}/databases/(default)`);
+  assert.equal(clock.t, 700 + 1500 + 300);
+});
+
+test("runNative: a step that does not exist is an error of its program, and the run goes on", async () => {
+  const { out } = await runSteps([{ do: "teleport" }]);
+  assert.match(out.errors["native/t"], /unknown step teleport/);
+  assert.deepEqual(out.rows, {});
+});
+
+test("runNative stops a program at the request ceiling and says which step reached it", async () => {
+  const steps = [
+    { do: "write", doc: "a", fields: { n: 1 } },
+    { do: "write", doc: "a", fields: { n: 2 } },
+    { do: "write", doc: "a", fields: { n: 3 } },
+  ];
+  const { out, log } = await runSteps(steps, {}, { maxRequests: 2 });
+  assert.match(out.errors["native/t"], /request ceiling 2 reached at write/);
+  assert.equal(log.filter(([name]) => name === "commit").length, 2);
+  assert.equal(out.requests, 3);
+  const exact = await runSteps(steps, {}, { maxRequests: 3 });
+  assert.deepEqual(exact.out.errors, {});
+});
+
+test("runNative: an open stream, a begin and a commit each count as a request", async () => {
+  const { out } = await runSteps([
+    { do: "open", stream: "s", targets: [{ id: 1, doc: "a" }] },
+    { do: "txn", writes: [{ doc: "a", fields: { n: 1 } }] },
+    { do: "close", stream: "s" },
+  ]);
+  assert.equal(out.requests, 3);
+});
+
+test("runNative: record keeps the frames since the last record, the end, and resets the timeout flag", async () => {
+  const { out } = await runSteps(
+    [
+      { do: "open", stream: "s", targets: [{ id: 1, doc: "a" }] },
+      { do: "wait", stream: "s", until: { current: 9 }, timeoutMs: 100, settleMs: 0 },
+      { do: "record", row: "native/t/first", stream: "s" },
+      { do: "record", row: "native/t/second", stream: "s" },
+      { do: "close", stream: "s" },
+    ],
+    { 0: [change("ADD", [1])] },
+  );
+  assert.equal(out.rows["native/t/first"].timedOut, true);
+  assert.equal(out.rows["native/t/first"].rows.length, 1);
+  assert.equal(out.rows["native/t/second"].timedOut, false);
+  assert.deepEqual(out.rows["native/t/second"].rows, []);
+  assert.equal(out.rows["native/t/first"].end, null);
+});
+
+test("runNative: a stream that ended shows its reason and code in the row, and ends a wait early", async () => {
+  const { client, clock } = fakeClient({});
+  const open = client.openStream;
+  client.openStream = () => {
+    const stream = open();
+    stream.ended = () => ({ reason: "error", code: 3 });
+    return stream;
+  };
+  const out = await runNative(
+    [
+      {
+        id: "native/t",
+        conditions: ["x"],
+        docs: { a: "lsn/{run}-a" },
+        steps: [
+          { do: "open", stream: "s", targets: [{ id: 1, doc: "a" }] },
+          { do: "wait", stream: "s", until: { current: 1 }, timeoutMs: 100000, settleMs: 0 },
+          { do: "record", row: "native/t/x", stream: "s", groups: true },
+        ],
+      },
+    ],
+    {
+      client,
+      project: PROJECT,
+      run: RUN,
+      sleep: async (ms) => {
+        clock.t += ms;
+      },
+      now: () => clock.t,
+    },
+  );
+  assert.deepEqual(out.rows["native/t/x"].end, { reason: "error", code: 3 });
+  assert.equal(out.rows["native/t/x"].timedOut, true);
+  assert.deepEqual(out.rows["native/t/x"].groups, []);
+  assert.ok(clock.t < 100000, "an ended stream does not wait out the deadline");
+});
+
+test("runNative: save keeps token and read time apart, and the same name for both when asked", async () => {
+  const frames = [
+    change("CURRENT", [1], {
+      resumeToken: Buffer.from("T1"),
+      readTime: { seconds: "4", nanos: 5 },
+    }),
+    change("NO_CHANGE", [], { resumeToken: Buffer.from("T2") }),
+    change("CURRENT", [2], {
+      resumeToken: Buffer.from("OTHER"),
+      readTime: { seconds: "9", nanos: 9 },
+    }),
+  ];
+  const { streams } = await runSteps(
+    [
+      { do: "open", stream: "s", targets: [{ id: 1, doc: "a" }] },
+      { do: "save", stream: "s", id: 1, token: "tok", time: "when" },
+      {
+        do: "open",
+        stream: "r",
+        targets: [{ id: 1, doc: "a", resume: "tok", readTimeFrom: "when" }],
+      },
+    ],
+    { 0: frames },
+  );
+  const sent = streams[1].sent[0].addTarget;
+  assert.deepEqual(sent.resumeToken, Buffer.from("T2"));
+  assert.deepEqual(sent.readTime, { seconds: "4", nanos: 5 });
+  // A token sent as the base64 text describeFrame writes is turned back into bytes.
+  const text = await runSteps(
+    [
+      { do: "open", stream: "s", targets: [{ id: 1, doc: "a" }] },
+      { do: "save", stream: "s", id: 1, token: "tok" },
+      { do: "open", stream: "r", targets: [{ id: 1, doc: "a", resume: "tok" }] },
+    ],
+    { 0: [change("CURRENT", [1], { resumeToken: Buffer.from("hello").toString("base64") })] },
+  );
+  assert.deepEqual(text.streams[1].sent[0].addTarget.resumeToken, Buffer.from("hello"));
+  const plain = await runSteps(
+    [
+      { do: "open", stream: "s", targets: [{ id: 1, doc: "a" }] },
+      { do: "save", stream: "s", id: 1, token: "tok" },
+      { do: "open", stream: "r", targets: [{ id: 1, doc: "a", resume: "tok" }] },
+    ],
+    { 0: [change("CURRENT", [1], { resumeToken: { type: "Buffer", data: [1, 2, 3] } })] },
+  );
+  assert.deepEqual(plain.streams[1].sent[0].addTarget.resumeToken, Buffer.from([1, 2, 3]));
+});
+
+test("runNative: a program that fails closes its streams; the next program still runs", async () => {
+  const { client, streams, log } = fakeClient({});
+  const programs = [
+    {
+      id: "native/one",
+      conditions: ["x"],
+      docs: { a: "lsn/{run}-a" },
+      steps: [{ do: "open", stream: "s", targets: [{ id: 1, doc: "a" }] }, { do: "teleport" }],
+    },
+    {
+      id: "native/two",
+      conditions: ["x"],
+      docs: { a: "lsn/{run}-b" },
+      steps: [{ do: "seed", doc: "a", fields: { n: 1 } }],
+    },
+  ];
+  const out = await runNative(programs, {
+    client,
+    project: PROJECT,
+    run: RUN,
+    sleep: async () => {},
+    now: () => 0,
+  });
+  assert.ok(out.errors["native/one"]);
+  assert.equal(out.errors["native/two"], undefined);
+  assert.equal(streams[0].ended().reason, "closed-by-harness");
+  assert.deepEqual(log.at(-1), ["commit", [`${ROOT}/lsn/${RUN}-b`], null]);
+});
+
+test("cleanup deletes only what exists, in batches of at most 100, and reports what it checked", async () => {
+  const { client, docs, log } = fakeClient();
+  const template = {};
+  for (let i = 0; i < 230; i += 1) {
+    template[`d${i}`] = `lsn/{run}-d${i}`;
+    docs.set(`${ROOT}/lsn/${RUN}-d${i}`, {});
+  }
+  template.absent = "lsn/{run}-nope";
+  const report = await cleanupNative([{ docs: template }], {
+    client,
+    project: PROJECT,
+    run: RUN,
+    sweep: [],
+  });
+  assert.equal(report.checked, 231);
+  assert.equal(report.deleted.length, 230);
+  assert.deepEqual(
+    log.filter(([name]) => name === "commit").map(([, deletes]) => deletes.length),
+    [100, 100, 30],
+  );
+  assert.equal(report.complete, true);
+});
+
+test("cleanup asks the client to sweep with the run as the prefix and deletes what it finds", async () => {
+  const { client, docs } = fakeClient();
+  docs.set(`${ROOT}/c/${RUN}-lost`, {});
+  const asked = [];
+  client.listIds = async (request) => {
+    asked.push(request);
+    return [`${ROOT}/c/${RUN}-lost`];
+  };
+  const report = await cleanupNative([{ docs: {} }], {
+    client,
+    project: PROJECT,
+    run: RUN,
+    sweep: [{ parent: ROOT, collectionId: "c" }],
+  });
+  assert.deepEqual(asked, [{ parent: ROOT, collectionId: "c", prefix: RUN }]);
+  assert.deepEqual(report.deleted, [`${ROOT}/c/${RUN}-lost`]);
+  assert.equal(docs.size, 0);
 });

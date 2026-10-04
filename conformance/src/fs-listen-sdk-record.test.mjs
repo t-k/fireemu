@@ -1,4 +1,6 @@
 import assert from "node:assert/strict";
+import { EventEmitter } from "node:events";
+import { PassThrough } from "node:stream";
 import { test } from "node:test";
 
 import {
@@ -7,6 +9,7 @@ import {
   ranOut,
   recordSdk,
   rowsFromReceipt,
+  runDriver,
   sweepDocuments,
 } from "./fs-listen/sdk-record.mjs";
 
@@ -173,6 +176,143 @@ test("recordSdk: a driver that fails leaves an error row and still cleans up the
       calls.includes("accounts:delete"),
       "the accounts are deleted even though the driver failed",
     );
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+});
+
+/** A child process stand-in: stdout lines are fed by the test, stdin is captured. */
+function fakeChild() {
+  const child = new EventEmitter();
+  child.stdout = new PassThrough();
+  child.stdin = new PassThrough();
+  child.written = [];
+  child.stdin.on("data", (chunk) => child.written.push(String(chunk)));
+  child.killed = [];
+  child.kill = (signal) => {
+    child.killed.push(signal);
+    child.emit("close", null);
+  };
+  child.say = (event) => child.stdout.write(`${JSON.stringify(event)}\n`);
+  child.end = (code) => setImmediate(() => child.emit("close", code));
+  return child;
+}
+
+test("runDriver sends its input as one line and resolves with the receipt and the wire counts", async () => {
+  const child = fakeChild();
+  const pending = runDriver({
+    config: { mode: "local" },
+    input: { run: "r1" },
+    spawnImpl: (cmd, args, options) => {
+      assert.equal(cmd, process.execPath);
+      assert.match(args[0], /sdk-driver\.mjs$/);
+      assert.equal(JSON.parse(options.env.AFC_SDK_CONFIG).mode, "local");
+      return child;
+    },
+  });
+  child.say({ event: "wire", n: 1 });
+  child.say({ event: "wire", n: 2 });
+  child.say({ event: "connection", n: 1 });
+  child.stdout.write("not json\n");
+  child.say({ event: "receipt", receipt: { cases: [] } });
+  child.end(0);
+  const out = await pending;
+  assert.deepEqual(out, { receipt: { cases: [] }, wire: 2, connections: 1, refused: undefined });
+  assert.deepEqual(child.written, ['{"run":"r1"}\n']);
+});
+
+test("runDriver rejects with the driver's own reason when no receipt came", async () => {
+  const a = fakeChild();
+  const pa = runDriver({ config: {}, input: {}, spawnImpl: () => a });
+  a.say({ event: "driver-error", message: "kaboom" });
+  a.end(1);
+  await assert.rejects(pa, /ended \(1\) without a receipt: kaboom/);
+  const b = fakeChild();
+  const pb = runDriver({ config: {}, input: {}, spawnImpl: () => b });
+  b.say({ event: "wire-refused", reason: "request cap 1500 reached" });
+  b.end(3);
+  await assert.rejects(pb, /without a receipt: request cap 1500 reached/);
+  const c = fakeChild();
+  const pc = runDriver({ config: {}, input: {}, spawnImpl: () => c });
+  c.end(0);
+  await assert.rejects(pc, /without a receipt: no reason/);
+});
+
+test("runDriver kills a driver that outlives its deadline", async () => {
+  const child = fakeChild();
+  const pending = runDriver({ config: {}, input: {}, timeoutMs: 10, spawnImpl: () => child });
+  await assert.rejects(pending, /without a receipt/);
+  assert.deepEqual(child.killed, ["SIGKILL"]);
+});
+
+test("recordSdk: a clean run keeps the receipt's rows and counts, and the cleanup is complete only when every part is", async () => {
+  const receipt = (extra = {}) => ({
+    thrown: null,
+    cleanup: { complete: true },
+    teardown: [{ client: "primary", closed: true }],
+    cases: [
+      {
+        caseId: "FS-LISTEN-SDK-101",
+        comparedFields: null,
+        observed: [],
+        failures: [],
+        invariantViolations: [],
+      },
+    ],
+    ...extra,
+  });
+  const native = (stillPresent = false) => ({
+    close() {},
+    async listIds() {
+      return [];
+    },
+    async missing(names) {
+      return names.map((name) => ({ name, exists: stillPresent }));
+    },
+    async commit() {},
+  });
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = async (url) => ({
+    status: 200,
+    json: async () => (url.endsWith("/accounts") ? { localId: `u${Math.random()}` } : {}),
+  });
+  const target = {
+    kind: "local",
+    project: "demo",
+    firestore: { host: "127.0.0.1", port: 1 },
+    auth: "http://127.0.0.1:2",
+  };
+  try {
+    const run = (driverReceipt, nativeClient) =>
+      recordSdk({
+        target,
+        run: "r1",
+        runDriverImpl: async () => ({ receipt: driverReceipt, wire: 7, connections: 3 }),
+        makeNative: () => nativeClient,
+      });
+    const clean = await run(receipt(), native());
+    assert.equal(clean.requests, 7);
+    assert.equal(clean.connections, 3);
+    assert.equal(clean.kind, "sdk");
+    assert.equal(clean.version, 1);
+    assert.deepEqual(Object.keys(clean.rows), ["sdk/101"]);
+    assert.deepEqual(clean.errors, {});
+    assert.equal(clean.cleanup.complete, true);
+    assert.equal(clean.cleanup.clientsClosed, true);
+    assert.deepEqual(clean.cleanup.sdk, { complete: true });
+    // Each part alone makes the cleanup incomplete.
+    assert.equal(
+      (await run(receipt({ cleanup: { complete: false } }), native())).cleanup.complete,
+      false,
+    );
+    assert.equal((await run(receipt(), native(true))).cleanup.complete, false);
+    assert.equal(
+      (await run(receipt({ teardown: [{ client: "primary", closed: false }] }), native())).cleanup
+        .complete,
+      false,
+    );
+    const thrown = await run(receipt({ thrown: "boom" }), native());
+    assert.equal(thrown.errors["sdk/driver"], "boom");
   } finally {
     globalThis.fetch = realFetch;
   }

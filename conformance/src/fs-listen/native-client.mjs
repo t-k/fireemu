@@ -16,6 +16,13 @@ const SERVICE = "/google.firestore.v1.Firestore";
 /** The frames a stream may record before it is closed as over its cap. */
 export const FRAME_CAP = 500;
 
+/** Where a target's Firestore lives: production over TLS, local on a loopback port. */
+export function grpcAddress(target) {
+  return target.kind === "production"
+    ? { address: "firestore.googleapis.com:443", secure: true }
+    : { address: `${target.host}:${target.port}`, secure: false };
+}
+
 export function createNativeClient({
   project,
   target,
@@ -29,11 +36,13 @@ export function createNativeClient({
   let requests = 0;
   const protos = new v1.FirestoreClient({ projectId: project })._protos.google.firestore.v1;
   const database = `projects/${project}/databases/(default)`;
+  const where = grpcAddress(target);
   const grpcClient =
     injected ??
-    (target.kind === "production"
-      ? new grpc.Client("firestore.googleapis.com:443", grpc.credentials.createSsl())
-      : new grpc.Client(`${target.host}:${target.port}`, grpc.credentials.createInsecure()));
+    new grpc.Client(
+      where.address,
+      where.secure ? grpc.credentials.createSsl() : grpc.credentials.createInsecure(),
+    );
   const metadata = () => {
     const meta = new grpc.Metadata();
     meta.set("authorization", `Bearer ${target.kind === "production" ? bearer : "owner"}`);

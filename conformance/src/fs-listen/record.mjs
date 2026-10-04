@@ -127,7 +127,6 @@ export async function recordNative({
 /** The read-only admission of a production recording: this envelope's lock is held, no other run is open, the spacing has passed. */
 export async function admit(options) {
   if (!options.ledger) throw new Error("--ledger <sandbox-ledger.jsonl> is required");
-  if (!options.envelope) throw new Error("--envelope <envelope id> is required");
   const admitted = await checkAdmission({
     ledger: options.ledger,
     project: options.project,
@@ -138,7 +137,7 @@ export async function admit(options) {
 }
 
 /** The journal of a production run: created (0600) and headed with the run id before any request. */
-function openJournal(options, kind, run) {
+export function openJournal(options, kind, run) {
   const journal = createJournal(`${options.out}.journal.jsonl`);
   journal.append({
     type: "run",
@@ -158,6 +157,8 @@ const PRODUCTION_DEPS = {
   accessToken: () => accessToken(),
   newRunId: () => newRunId(),
   openJournal,
+  programProblems,
+  createAccountClient,
   createClient: createNativeClient,
   recordNative,
   loadApiKey,
@@ -173,7 +174,7 @@ export async function nativeProduction(options, deps = {}) {
   const d = { ...PRODUCTION_DEPS, ...deps };
   d.checkProject("native", options.project);
   await d.admit(options);
-  const problems = programProblems([...NATIVE_PROGRAMS, ...LONG_PROGRAMS]);
+  const problems = d.programProblems([...NATIVE_PROGRAMS, ...LONG_PROGRAMS]);
   if (problems.length) throw new Error(`the programs are malformed:\n${problems.join("\n")}`);
   const token = await d.accessToken();
   const run = d.newRunId();
@@ -316,7 +317,7 @@ export async function readbackProduction(options, deps = {}) {
   });
   const accountClient =
     run.kind === "sdk"
-      ? createAccountClient({
+      ? d.createAccountClient({
           base: "https://identitytoolkit.googleapis.com",
           project: options.project,
           headers: { authorization: `Bearer ${token}`, "x-goog-user-project": options.project },

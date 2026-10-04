@@ -437,3 +437,66 @@ test("files are read as text", async () => {
   });
   assert.deepEqual(seen, ["utf8", "utf8", "utf8"]);
 });
+
+test("a note, change or progress row of the same task does not end an open run", async () => {
+  for (const event of ["note", "change", "progress", "config-change", "GO-no", "project-deleted"]) {
+    const ledger = [
+      row("fireemu-oracle-query", "started", 120, { taskId: "T" }),
+      row("fireemu-oracle-query", event, 100, { taskId: "T" }),
+    ].join("\n");
+    await assert.rejects(admit({ [LOCK]: HOLDER, [LEDGER]: ledger }), /has no end/, event);
+  }
+});
+
+test("a row with neither an event nor an outcome is a plain row: it opens nothing, ends nothing, and counts for the spacing", async () => {
+  const bare = JSON.stringify({
+    ts: minutesAgo(100),
+    project: "fireemu-oracle-query",
+    taskId: "T",
+  });
+  await admit({ [LOCK]: HOLDER, [LEDGER]: bare });
+  const open = row("fireemu-oracle-query", "started", 120, { taskId: "T" });
+  await assert.rejects(admit({ [LOCK]: HOLDER, [LEDGER]: [open, bare].join("\n") }), /has no end/);
+  const recent = JSON.stringify({ ts: minutesAgo(1), project: "fireemu-oracle-query" });
+  await assert.rejects(admit({ [LOCK]: HOLDER, [LEDGER]: recent }), /only 1 minutes old/);
+});
+
+test("the refusal for an open run names its task, its event or outcome and its time", async () => {
+  const project = "fireemu-oracle-query";
+  await assert.rejects(
+    admit({ [LOCK]: HOLDER, [LEDGER]: row(project, "started", 120, { taskId: "T-1" }) }),
+    (error) => error.message.includes("T-1, started") && error.message.includes(minutesAgo(120)),
+  );
+  const noTask = JSON.stringify({ ts: minutesAgo(120), project, event: "started" });
+  await assert.rejects(admit({ [LOCK]: HOLDER, [LEDGER]: noTask }), (error) =>
+    /\(no task, started\)/.test(error.message),
+  );
+  const outcomeOnly = JSON.stringify({
+    ts: minutesAgo(120),
+    project,
+    outcome: "reserved",
+    task: "X",
+  });
+  await assert.rejects(admit({ [LOCK]: HOLDER, [LEDGER]: outcomeOnly }), (error) =>
+    /\(X, reserved\)/.test(error.message),
+  );
+});
+
+test("two starts of this very envelope are two open runs: neither is the allowed one", async () => {
+  const project = "fireemu-oracle-query";
+  await assert.rejects(
+    admit({ [LOCK]: HOLDER, [LEDGER]: [ownStart(project, 50), ownStart(project, 40)].join("\n") }),
+    /has no end/,
+  );
+  // One own start alone is fine, and the earlier row decides the spacing.
+  const out = await admit({
+    [LOCK]: HOLDER,
+    [LEDGER]: [row(project, "finished", 45), ownStart(project, 0)].join("\n"),
+  });
+  assert.equal(out.latestRowAt, minutesAgo(45));
+});
+
+test("when nothing else counts, the latest row is reported as undefined and the run is admitted", async () => {
+  const out = await admit({ [LOCK]: HOLDER, [LEDGER]: ownStart("fireemu-oracle-query", 0) });
+  assert.equal(out.latestRowAt, undefined);
+});

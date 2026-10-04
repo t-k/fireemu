@@ -145,12 +145,11 @@ export async function checkAdmission({
   if (text === undefined) throw new Error(`the ledger ${ledger} cannot be read`);
   const { entries, open } = projectRows(text, project);
   // The coordinator's own `started` row of this envelope is the one open row that is allowed.
-  const own = open
-    .filter(
-      ({ row }) =>
-        row.event === "started" && taskOf(row) === TASK_ID && row.envelopeId === envelope,
-    )
-    .reduce((latest, entry) => (!latest || entry.time >= latest.time ? entry : latest), undefined);
+  // A second start of this envelope is not allowed: only one may be open.
+  const starts = open.filter(
+    ({ row }) => row.event === "started" && taskOf(row) === TASK_ID && row.envelopeId === envelope,
+  );
+  const own = starts.length === 1 ? starts[0] : undefined;
   const others = open.filter((entry) => entry !== own);
   if (others.length > 0) {
     const { row } = others[0];
@@ -158,7 +157,7 @@ export async function checkAdmission({
       `a run of ${project} (${taskOf(row) || "no task"}, ${row.event ?? row.outcome}) opened at ${row.ts ?? row.issuedAt} and has no end in the ledger`,
     );
   }
-  const latest = latestCounting(entries, new Set(own ? [own] : []));
+  const latest = latestCounting(entries, new Set([own]));
   if (latest) {
     const ago = now() - latest.time;
     if (ago < MIN_SPACING_MS)

@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -10,6 +10,7 @@ import {
   checkProject,
   nativeProduction,
   newRunId,
+  openJournal,
   parseArgs,
   readbackProduction,
   recordNative,
@@ -479,7 +480,6 @@ test("a crash during the third Commit leaves a journal that names the run and ev
   const path = join(dir, "run.journal.jsonl");
   const journal = createJournal(path);
   journal.append({ type: "run", runId: "r1", kind: "native", project: "p" });
-  const { readFileSync } = await import("node:fs");
   const docs = new Set();
   let snapshot;
   let commits = 0;
@@ -520,4 +520,261 @@ test("a crash during the third Commit leaves a journal that names the run and ev
     "a name the run created is still there and the read-back says so",
   );
   assert.ok(report.names.some((entry) => entry.exists));
+});
+
+// ---- the arguments the wiring passes, the published messages and the read-back wiring ----
+
+function argDeps(order) {
+  const base = deps(order);
+  const seen = {};
+  return {
+    seen,
+    d: {
+      ...base,
+      checkProject: (kind, project) => {
+        seen.checked = [kind, project];
+        order.push("checkProject");
+      },
+      loadApiKey: async (path) => {
+        seen.keyPath = path;
+        return "KEYKEYKEYKEYKEYKEYKEYKEYKEY";
+      },
+      openJournal: (options, kind, run) => {
+        seen.journal = [options.out, kind, run];
+        return { append() {}, close() {} };
+      },
+      programProblems: (programs) => {
+        seen.programs = programs.length;
+        return seen.problems ?? [];
+      },
+      recordNative: async (args) => {
+        seen.native = args;
+        return {};
+      },
+      recordSdk: async (args) => {
+        seen.sdk = args;
+        return {};
+      },
+    },
+  };
+}
+
+test("native production hands the recorder its client, project, run id, programs and journal; the project is checked as native", async () => {
+  const { d, seen } = argDeps([]);
+  await nativeProduction({ ...NATIVE_OPTIONS, "include-long": "yes" }, d);
+  assert.deepEqual(seen.checked, ["native", "fireemu-oracle-txn"]);
+  assert.deepEqual(seen.journal, ["o.json", "native", "rid"]);
+  assert.equal(seen.native.project, "fireemu-oracle-txn");
+  assert.equal(seen.native.run, "rid");
+  assert.ok(seen.native.client);
+  assert.ok(seen.native.journal);
+  assert.equal(typeof seen.native.log, "function");
+  assert.equal(seen.native.programs.length, 6, "the long program is included");
+  assert.ok(seen.programs > 0, "the programs were checked");
+});
+
+test("malformed programs stop the run before a token is requested, with the problems listed", async () => {
+  const order = [];
+  const { d, seen } = argDeps(order);
+  seen.problems = ["p1 is bad", "p2 is bad"];
+  await assert.rejects(nativeProduction(NATIVE_OPTIONS, d), /malformed:\np1 is bad\np2 is bad/);
+  assert.ok(!order.includes("accessToken"));
+});
+
+test("native production does not return before the recording finishes, and closes after it", async () => {
+  const order = [];
+  const { d } = argDeps(order);
+  d.recordNative = async () => {
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    order.push("recorded");
+    return {};
+  };
+  await nativeProduction(NATIVE_OPTIONS, d);
+  assert.ok(order.indexOf("recorded") < order.indexOf("client.close"));
+});
+
+test("sdk production reads the key file named by --api-key-file and hands the recorder the production target", async () => {
+  const { d, seen } = argDeps([]);
+  await sdkProduction(SDK_OPTIONS, d);
+  assert.deepEqual(seen.checked, ["sdk", "fireemu-oracle-query"]);
+  assert.equal(seen.keyPath, "K");
+  assert.deepEqual(seen.journal, ["o.json", "sdk", "rid"]);
+  assert.deepEqual(seen.sdk.target, {
+    kind: "production",
+    project: "fireemu-oracle-query",
+    token: "TOKEN",
+    web: {
+      apiKey: "KEYKEYKEYKEYKEYKEYKEYKEYKEY",
+      authDomain: "fireemu-oracle-query.firebaseapp.com",
+      projectId: "fireemu-oracle-query",
+    },
+  });
+  assert.equal(seen.sdk.run, "rid");
+  assert.ok(seen.sdk.journal);
+  assert.equal(typeof seen.sdk.log, "function");
+});
+
+test("sdk production does not close the journal before the recording finishes", async () => {
+  const order = [];
+  const { d } = argDeps(order);
+  d.openJournal = () => ({ append() {}, close: () => order.push("journal.close") });
+  d.recordSdk = async () => {
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    order.push("recorded");
+    return {};
+  };
+  await sdkProduction(SDK_OPTIONS, d);
+  assert.deepEqual(order.slice(-2), ["recorded", "journal.close"]);
+});
+
+test("admit prints which task holds the lock and for which envelope", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "admit-msg-"));
+  const ledger = join(dir, "sandbox-ledger.jsonl");
+  mkdirSync(join(dir, "sandbox-locks"));
+  writeFileSync(ledger, "");
+  writeFileSync(
+    join(dir, "sandbox-locks", "fireemu-oracle-txn.lock"),
+    JSON.stringify({ taskId: "FS-LISTEN-SDK-SANDBOX", envelopeId: "E1" }),
+  );
+  const lines = [];
+  const original = console.error;
+  console.error = (line) => lines.push(line);
+  try {
+    await admit({ project: "fireemu-oracle-txn", ledger, envelope: "E1" });
+  } finally {
+    console.error = original;
+  }
+  assert.deepEqual(lines, ["admitted: lock held by FS-LISTEN-SDK-SANDBOX for E1"]);
+});
+
+test("openJournal creates <out>.journal.jsonl, heads it with the run and prints the run id", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "open-journal-"));
+  const out = join(dir, "rec.json");
+  const lines = [];
+  const original = console.error;
+  console.error = (line) => lines.push(line);
+  let journal;
+  try {
+    journal = openJournal({ out, project: "fireemu-oracle-txn", envelope: "E1" }, "native", "rid");
+  } finally {
+    console.error = original;
+  }
+  journal.close();
+  assert.deepEqual(lines, ["run rid"]);
+  const header = JSON.parse(readFileSync(`${out}.journal.jsonl`, "utf8").trim());
+  assert.equal(header.type, "run");
+  assert.equal(header.runId, "rid");
+  assert.equal(header.kind, "native");
+  assert.equal(header.project, "fireemu-oracle-txn");
+  assert.equal(header.envelopeId, "E1");
+  assert.ok(Number.isFinite(Date.parse(header.startedAt)));
+  assert.equal(statSync(`${out}.journal.jsonl`).mode & 0o777, 0o600);
+});
+
+const journalOf = (run, extra = []) => {
+  const dir = mkdtempSync(join(tmpdir(), "rbj-"));
+  const path = join(dir, "j.jsonl");
+  writeFileSync(path, [run, ...extra].map((r) => JSON.stringify(r)).join("\n"));
+  return path;
+};
+
+test("readback refuses a journal of another kind's project before asking for a token, and one of another project", async () => {
+  let tokenAsked = false;
+  const d = { accessToken: async () => (tokenAsked = true), createClient: () => ({ close() {} }) };
+  // kind native may address txn only: --project query is refused by the allowlist.
+  const nativeJournal = journalOf({
+    type: "run",
+    runId: "r",
+    kind: "native",
+    project: "fireemu-oracle-txn",
+  });
+  await assert.rejects(
+    readbackProduction({ journal: nativeJournal, project: "fireemu-oracle-query" }, d),
+    /native recordings may address only fireemu-oracle-txn/,
+  );
+  // The journal says another project than --project although the allowlist is satisfied.
+  const odd = journalOf({
+    type: "run",
+    runId: "r",
+    kind: "native",
+    project: "fireemu-oracle-query",
+  });
+  await assert.rejects(
+    readbackProduction({ journal: odd, project: "fireemu-oracle-txn" }, d),
+    /another project than --project/,
+  );
+  assert.equal(tokenAsked, false);
+});
+
+test("readback waits for the read before it closes the client, asks with the token and builds the right clients", async () => {
+  const order = [];
+  const seen = {};
+  const sdkJournal = journalOf(
+    { type: "run", runId: "r", kind: "sdk", project: "fireemu-oracle-query" },
+    [
+      { type: "names", phase: "before", names: [{ name: "n/a", op: "create" }] },
+      {
+        type: "account",
+        phase: "after",
+        name: "a",
+        email: "a@example.com",
+        state: "created",
+        uid: "u1",
+      },
+    ],
+  );
+  const d = {
+    accessToken: async () => "TOK",
+    createClient: (options) => {
+      seen.client = options;
+      return {
+        missing: async (names) => {
+          await new Promise((resolve) => setTimeout(resolve, 5));
+          order.push("missing");
+          return names.map((name) => ({ name, exists: false }));
+        },
+        close: () => order.push("close"),
+      };
+    },
+    createAccountClient: (options) => {
+      seen.account = options;
+      return {
+        lookup: async () => {
+          order.push("lookup");
+          return [];
+        },
+      };
+    },
+  };
+  const report = await readbackProduction(
+    { journal: sdkJournal, project: "fireemu-oracle-query" },
+    d,
+  );
+  assert.equal(report.clean, true);
+  assert.deepEqual(order, ["missing", "lookup", "lookup", "close"]);
+  assert.deepEqual(seen.client, {
+    project: "fireemu-oracle-query",
+    target: { kind: "production" },
+    token: "TOK",
+  });
+  assert.deepEqual(seen.account, {
+    base: "https://identitytoolkit.googleapis.com",
+    project: "fireemu-oracle-query",
+    headers: { authorization: "Bearer TOK", "x-goog-user-project": "fireemu-oracle-query" },
+  });
+});
+
+test("a native journal lists no accounts: one that does is refused, not looked up", async () => {
+  const bad = journalOf(
+    { type: "run", runId: "r", kind: "native", project: "fireemu-oracle-txn" },
+    [{ type: "account", phase: "before", name: "a", email: "a@example.com" }],
+  );
+  const d = {
+    accessToken: async () => "TOK",
+    createClient: () => ({ missing: async () => [], close() {} }),
+  };
+  await assert.rejects(
+    readbackProduction({ journal: bad, project: "fireemu-oracle-txn" }, d),
+    /lists no accounts/,
+  );
 });

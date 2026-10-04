@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
 import { test } from "node:test";
 
-import { FRAME_CAP, createNativeClient } from "./fs-listen/native-client.mjs";
+import { FRAME_CAP, createNativeClient, grpcAddress } from "./fs-listen/native-client.mjs";
 
 const PROJECT = "fireemu-oracle-txn";
 const ROOT = `projects/${PROJECT}/databases/(default)/documents`;
@@ -16,11 +16,14 @@ const name = (n) => `${ROOT}/lsn_native/r1-${n}`;
 function fakeGrpc({ unary = {}, serverStream = {} } = {}) {
   const calls = [];
   const bidi = [];
+  const paths = [];
   return {
     calls,
+    paths,
     bidi,
     close: () => calls.push(["close"]),
     makeUnaryRequest(path, serialize, deserialize, request, metadata, options, callback) {
+      paths.push(path);
       const method = path.split("/").at(-1);
       calls.push([method, request, metadata, options]);
       setImmediate(() => {
@@ -31,9 +34,10 @@ function fakeGrpc({ unary = {}, serverStream = {} } = {}) {
         }
       });
     },
-    makeServerStreamRequest(path, serialize, deserialize, request, metadata) {
+    makeServerStreamRequest(path, serialize, deserialize, request, metadata, options) {
+      paths.push(path);
       const method = path.split("/").at(-1);
-      calls.push([method, request, metadata]);
+      calls.push([method, request, metadata, options]);
       const stream = new EventEmitter();
       setImmediate(() => {
         const answer = serverStream[method](request);
@@ -312,4 +316,88 @@ test("close closes the gRPC client", () => {
   const grpcClient = fakeGrpc();
   client(grpcClient).close();
   assert.deepEqual(grpcClient.calls, [["close"]]);
+});
+
+test("the frame cap is 500, and a target maps to its address and transport security", () => {
+  assert.equal(FRAME_CAP, 500);
+  assert.deepEqual(grpcAddress({ kind: "production" }), {
+    address: "firestore.googleapis.com:443",
+    secure: true,
+  });
+  assert.deepEqual(grpcAddress({ kind: "local", host: "127.0.0.1", port: 8080 }), {
+    address: "127.0.0.1:8080",
+    secure: false,
+  });
+});
+
+test("every unary call goes to the Firestore service path with its own method and a 30 s deadline", async () => {
+  const paths = [];
+  const grpcClient = fakeGrpc({
+    unary: {
+      Commit: () => ({}),
+      BeginTransaction: () => ({ transaction: Buffer.from("t") }),
+      ListDocuments: () => ({}),
+    },
+    serverStream: { BatchGetDocuments: (r) => r.documents.map((n) => ({ missing: n })) },
+  });
+  const c = client(grpcClient);
+  const before = Date.now();
+  await c.commit({ writes: [] });
+  await c.beginTransaction();
+  await c.listIds({ parent: ROOT, collectionId: "x", prefix: "" });
+  await c.missing([name("a")]);
+  const after = Date.now();
+  for (const [method, , , options] of grpcClient.calls) {
+    paths.push(method);
+    const deadline = options.deadline.getTime();
+    assert.ok(deadline >= before + 29_000 && deadline <= after + 31_000, `${method} deadline`);
+  }
+  assert.deepEqual(paths, ["Commit", "BeginTransaction", "ListDocuments", "BatchGetDocuments"]);
+  assert.ok(grpcClient.paths.every((path) => path.startsWith("/google.firestore.v1.Firestore/")));
+  assert.deepEqual(
+    grpcClient.paths.map((p) => p.split("/").at(-1)),
+    paths,
+  );
+});
+
+test("the request bodies: a Commit carries the database, the writes and the transaction only when there is one", async () => {
+  const database = `projects/${PROJECT}/databases/(default)`;
+  const grpcClient = fakeGrpc({
+    unary: {
+      Commit: () => ({}),
+      BeginTransaction: () => ({ transaction: Buffer.from("tx") }),
+      ListDocuments: () => ({}),
+    },
+  });
+  const c = client(grpcClient);
+  await c.commit({ writes: [{ delete: "n" }] });
+  await c.commit({ writes: [], transaction: Buffer.from("tx") });
+  assert.deepEqual(grpcClient.calls[0][1], { database, writes: [{ delete: "n" }] });
+  assert.deepEqual(grpcClient.calls[1][1], {
+    database,
+    writes: [],
+    transaction: Buffer.from("tx"),
+  });
+  const txn = await c.beginTransaction();
+  assert.deepEqual(txn, Buffer.from("tx"));
+  assert.deepEqual(grpcClient.calls[2][1], { database, options: { readWrite: {} } });
+  await c.listIds({ parent: ROOT, collectionId: "x", prefix: "" });
+  assert.equal(grpcClient.calls[3][1].pageSize, 300);
+});
+
+test("the routing header names the database, URL-encoded", async () => {
+  const grpcClient = fakeGrpc({ unary: { Commit: () => ({}) } });
+  await client(grpcClient).commit({ writes: [] });
+  assert.deepEqual(grpcClient.calls[0][2].get("x-goog-request-params"), [
+    `database=${encodeURIComponent(`projects/${PROJECT}/databases/(default)`)}`,
+  ]);
+});
+
+test("a stream's end is timed from when it was opened", async () => {
+  let t = 1000;
+  const grpcClient = fakeGrpc();
+  const stream = client(grpcClient, { now: () => t }).openStream();
+  t = 1750;
+  grpcClient.bidi[0].emit("status", { code: 0, details: "" });
+  assert.equal(stream.ended().at, 750);
 });

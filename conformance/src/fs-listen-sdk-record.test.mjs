@@ -1161,3 +1161,80 @@ test("runDriver's rejection carries the wire and connection counts it saw", asyn
   child.emit("close", 1);
   await assert.rejects(promise, (error) => error.wire === 2 && error.connections === 1);
 });
+
+test("preflightKey reports each read through onRequest when it starts, even one that fails", async () => {
+  let counted = 0;
+  const onRequest = () => {
+    counted += 1;
+  };
+  await preflight(preflightFetch(), { onRequest });
+  assert.equal(counted, 2);
+  counted = 0;
+  await assert.rejects(preflight(preflightFetch({ toolkit: [500, {}] }), { onRequest }));
+  assert.equal(counted, 1, "the read that failed was counted, the second never started");
+});
+
+test("productionRequests: an early stop counts only what was sent; a driver without a wire count adds none", async () => {
+  // Stopped by a non-empty conf_listen: 0 preflight + 0 accounts + 1 native list + 0 wire... and the sweep.
+  let natives = 0;
+  const { recording } = await recordWith(PROD, {
+    native: emptyNative({
+      requestCount: () => 3,
+      listIds: async () => ["projects/p/databases/(default)/documents/conf_listen/x"],
+    }),
+  });
+  assert.equal(recording.productionRequests, 3);
+  assert.equal(natives, 0);
+  // A driver result with no wire field, and a driver error with none either.
+  const noWire = await recordWith(PROD, {
+    driver: { receipt: OKDRIVER.receipt, connections: 0 },
+    native: emptyNative(),
+  });
+  assert.equal(noWire.recording.productionRequests, 6);
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = async () => ({ status: 200, json: async () => ({ localId: "u" }) });
+  try {
+    const died = await recordSdk({
+      target: PROD,
+      run: "r1",
+      preflightImpl: async () => {},
+      runDriverImpl: async () => {
+        throw new Error("died");
+      },
+      makeNative: () => emptyNative(),
+    });
+    assert.equal(died.productionRequests, 6);
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+});
+
+test("a native client without a request counter adds nothing to productionRequests", async () => {
+  const { recording } = await recordWith(PROD, { driver: OKDRIVER, native: emptyNative() });
+  assert.equal(recording.productionRequests, 6 + 5);
+});
+
+test("the journaled names are marked as to be created, before the driver, with the journal's phase", async () => {
+  const lines = [];
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = async (url, init) => ({
+    status: 200,
+    json: async () =>
+      url.endsWith("/accounts") ? { localId: `u-${JSON.parse(init.body).email}` } : {},
+  });
+  try {
+    await recordSdk({
+      target: PROD,
+      run: "r1",
+      journal: { append: (record) => lines.push(record), close() {} },
+      preflightImpl: async () => {},
+      runDriverImpl: async () => OKDRIVER,
+      makeNative: () => emptyNative(),
+    });
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+  const names = lines.find((line) => line.type === "names");
+  assert.equal(names.phase, "before");
+  assert.ok(names.names.every((entry) => entry.op === "create"));
+});

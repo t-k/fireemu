@@ -145,3 +145,49 @@ test("readback is not clean when a name or an account is present, or a lookup is
     false,
   );
 });
+
+test("a line of an unknown type never marks the run ended", () => {
+  const issued = issuedFromJournal(`${sample}\n{"type":"note","text":"x"}\n`);
+  assert.equal(issued.ended, false);
+});
+
+test("readback of a journal with no names reads no names, and a uid found alone makes it unclean", async () => {
+  const noNames = [
+    { type: "run", runId: "r1", kind: "sdk", project: "p" },
+    {
+      type: "account",
+      phase: "after",
+      name: "a",
+      email: "a@example.com",
+      state: "created",
+      uid: "u1",
+    },
+  ]
+    .map((r) => JSON.stringify(r))
+    .join("\n");
+  const calls = [];
+  const client = {
+    missing: async (names) => {
+      calls.push(names);
+      return [];
+    },
+  };
+  const byUid = { lookup: async (selector) => (selector.localId ? ["u1"] : []) };
+  const report = await readbackJournal({ text: noNames, client, accountClient: byUid });
+  assert.deepEqual(calls, [], "no names, no BatchGet");
+  assert.equal(report.clean, false);
+  const byEmail = { lookup: async (selector) => (selector.email ? ["u1"] : []) };
+  assert.equal(
+    (await readbackJournal({ text: noNames, client, accountClient: byEmail })).clean,
+    false,
+  );
+  const none = { lookup: async () => [] };
+  const clean = await readbackJournal({
+    text: noNames,
+    client,
+    accountClient: none,
+    now: () => new Date("2026-10-05T10:00:00.000Z"),
+  });
+  assert.equal(clean.clean, true);
+  assert.equal(clean.readAt, "2026-10-05T10:00:00.000Z");
+});

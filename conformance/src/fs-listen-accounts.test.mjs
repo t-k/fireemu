@@ -653,3 +653,52 @@ test("the account client counts every request it sends, whatever the answer", as
   await client.remove("u");
   assert.equal(client.requestCount(), 4, "remove sends a delete and a lookup");
 });
+
+test("journal lines of an account carry their type and phase in every path", async () => {
+  const journal = memoryJournal();
+  const s = createAccountSession({
+    client: {
+      async create() {
+        throw new Error("boom");
+      },
+      async lookup() {
+        return ["uf"];
+      },
+      async remove() {
+        return { settled: true, unknownDelete: false, why: null };
+      },
+    },
+    run: "rr",
+    journal,
+  });
+  await assert.rejects(s.create(["a"]), /boom/);
+  assert.deepEqual(
+    journal.lines.map((l) => [l.type, l.phase, l.state]),
+    [
+      ["account", "before", undefined],
+      ["account", "after", "unknown"],
+    ],
+  );
+  await s.cleanup();
+  const found = journal.lines.find((l) => l.state === "found-by-email");
+  assert.equal(found.type, "account");
+  assert.equal(found.phase, "after");
+  assert.equal(found.uid, "uf");
+});
+
+test("a refused create is journaled without a uid", async () => {
+  const journal = memoryJournal();
+  const s = createAccountSession({
+    client: {
+      async create() {
+        return { kind: "refused", status: 400 };
+      },
+    },
+    run: "rr",
+    journal,
+  });
+  await assert.rejects(s.create(["a"]), /refused/);
+  const after = journal.lines.at(-1);
+  assert.equal(after.state, "refused");
+  assert.equal("uid" in after, false);
+});

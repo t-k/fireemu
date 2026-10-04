@@ -161,6 +161,16 @@ const OPERATIONS = {
     grpc: ["Subscriber", "DeleteSnapshot", { snapshot: name }],
     changes: [name],
   }),
+  // The IAM methods are REST only: the google.iam protos are not part of the Pub/Sub package.
+  getIamPolicy: (resource) => ({
+    rest: ["GET", `/v1/${encodeName(resource)}:getIamPolicy`],
+    grpc: null,
+  }),
+  setIamPolicy: (resource, policy) => ({
+    rest: ["POST", `/v1/${encodeName(resource)}:setIamPolicy`, { policy }],
+    grpc: null,
+    changes: [resource],
+  }),
   seek: (subscription, target) => ({
     rest: ["POST", `/v1/${encodeName(subscription)}:seek`, target],
     grpc: ["Subscriber", "Seek", { subscription, ...target }],
@@ -178,6 +188,8 @@ export function createClient({ transport, ownership, pushState, caseId }) {
   let step = 0;
   const run = async (operation, args, options = {}) => {
     const spec = OPERATIONS[operation](...args);
+    if (spec.grpc === null && transport.name !== "rest")
+      throw new Error(`${operation} is only available over REST`);
     for (const name of spec.changes ?? []) if (name !== undefined) ownership.assertOwned(name);
     if (spec.publishes !== undefined && pushState.topics.has(spec.publishes))
       throw new PushPublishRefused(spec.publishes);

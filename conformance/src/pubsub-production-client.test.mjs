@@ -142,6 +142,11 @@ const REST_EXPECTED = {
     ["GET", "/v1/projects/demo-project/snapshots?pageSize=5", undefined],
   ],
   deleteSnapshot: [[N], ["DELETE", `/v1/${N}`, undefined]],
+  getIamPolicy: [[T], ["GET", `/v1/${T}:getIamPolicy`, undefined]],
+  setIamPolicy: [
+    [T, { bindings: [] }],
+    ["POST", `/v1/${T}:setIamPolicy`, { policy: { bindings: [] } }],
+  ],
   seek: [
     [S, { snapshot: N }],
     ["POST", `/v1/${S}:seek`, { snapshot: N }],
@@ -211,6 +216,12 @@ test("every operation is the REST request the API documents", async () => {
 test("every operation is the gRPC call of the same request", async () => {
   for (const [operation, [args]] of Object.entries(REST_EXPECTED)) {
     const { transport, client } = grpc();
+    if (!(operation in GRPC_EXPECTED)) {
+      // The IAM methods have no gRPC form here: they refuse before anything is sent.
+      await assert.rejects(client[operation](...args), /only available over REST/);
+      assert.equal(transport.calls.length, 0, operation);
+      continue;
+    }
     await client[operation](...args);
     const [service, method, request] = GRPC_EXPECTED[operation];
     assert.deepEqual(
@@ -295,8 +306,8 @@ test("a changing operation on a resource that is not the run's is refused before
       () => client.seek(S, { snapshot: "projects/demo-project/snapshots/other" }),
       () => client.seek(foreign, { time: "2026-10-05T00:00:00Z" }),
     ];
-    for (const [index, attempt] of refused.entries())
-      await assert.rejects(attempt(), /not a resource of this run/, `refused[${index}]`);
+    for (const [position, attempt] of refused.entries())
+      await assert.rejects(attempt(), /not a resource of this run/, `refused[${position}]`);
     assert.equal(transport.calls.length, 0, `${transport.name}: nothing was sent`);
     // Reads of anything are allowed, and a registered probe may be changed.
     await client.getTopic(other);
@@ -371,4 +382,14 @@ test("a topic with a push subscription is never published to, on either transpor
   );
   assert.equal(restTransport.calls.filter((call) => call.op === "publish").length, 2);
   assert.equal(grpcTransport.calls.filter((call) => call.op === "publish").length, 0);
+});
+
+test("an IAM policy is only changed on a resource of the run", async () => {
+  const { transport, client } = rest();
+  await assert.rejects(
+    client.setIamPolicy("projects/demo-project/topics/other", { bindings: [] }),
+    /not a resource of this run/,
+  );
+  await client.getIamPolicy("projects/demo-project/topics/other");
+  assert.equal(transport.calls.length, 1);
 });

@@ -524,7 +524,10 @@ function runCli(files, args) {
   const made = Object.fromEntries(
     Object.entries(files).map(([name, value]) => [name, path(name, value)]),
   );
-  const out = spawnSync(process.execPath, [COMPARE, ...args(made)], { encoding: "utf8" });
+  const out = spawnSync(process.execPath, [COMPARE, ...args(made)], {
+    encoding: "utf8",
+    env: { ...process.env, NODE_OPTIONS: "" },
+  });
   return { code: out.status, stdout: out.stdout, stderr: out.stderr };
 }
 

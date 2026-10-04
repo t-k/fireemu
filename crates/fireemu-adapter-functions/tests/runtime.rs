@@ -853,6 +853,31 @@ async fn shutdown_cancels_pending_tasks_and_closes_admission() {
 }
 
 #[tokio::test]
+async fn shutdown_closes_the_manual_and_the_clock_driven_schedule_paths() {
+    use fireemu_adapter_functions::runtime::ScheduleRunError;
+    let (runtime, clock) = start().await;
+    runtime.shutdown().await;
+    assert!(runtime.is_idle());
+
+    // A manual run is refused like every other admission after shutdown began.
+    let refused = runtime.run_schedule("tick");
+    assert!(
+        matches!(&refused, Err(ScheduleRunError::Refused(m)) if m.contains("shutting down")),
+        "{refused:?}"
+    );
+
+    // A clock change enqueues no schedule run into a dispatcher that has stopped.
+    clock
+        .lock()
+        .unwrap()
+        .advance(LogicalDuration::from_seconds(15 * 60))
+        .unwrap();
+    runtime.on_clock_changed();
+    assert!(runtime.is_idle(), "{}", runtime.status());
+    assert!(runtime.history().is_empty());
+}
+
+#[tokio::test]
 async fn shutdown_aborts_an_active_task_and_its_retry_lifecycle() {
     let dir = std::env::temp_dir().join(format!(
         "fireemu-functions-task-active-shutdown-{}",

@@ -2727,6 +2727,11 @@ impl FunctionsRuntime {
     /// change, carrying a count that is exact up to the cap and "at least" beyond it.
     #[allow(clippy::too_many_lines)]
     pub fn on_clock_changed(&self) {
+        // Once shutdown began the dispatcher is stopping: a run enqueued now would never be
+        // delivered and would keep the session busy.
+        if self.shutting_down.load(std::sync::atomic::Ordering::SeqCst) {
+            return;
+        }
         let now = self.now();
         let Ok(mut inner) = self.inner.lock() else {
             return;
@@ -2988,6 +2993,11 @@ impl FunctionsRuntime {
         let Ok(mut inner) = self.inner.lock() else {
             return Err(ScheduleRunError::Refused("runtime poisoned".into()));
         };
+        if self.shutting_down.load(std::sync::atomic::Ordering::SeqCst) {
+            return Err(ScheduleRunError::Refused(
+                "the functions runtime is shutting down".into(),
+            ));
+        }
         if !self.admit_scheduled_run(&mut inner, function) {
             return Err(ScheduleRunError::Refused(format!(
                 "a run of {function:?} is already queued or running (scheduler.overlap = {:?})",

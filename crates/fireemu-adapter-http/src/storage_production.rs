@@ -3,7 +3,7 @@
 //!
 //! Everything here comes from the two lean-v5 production recordings of STORAGE-OBJECT (and the
 //! lean-v4 and probe-v4 recordings behind them), read through the normalized fixture of the
-//! comparison tool: the header names and constant values of 2,446 exchanges per recording, the
+//! comparison tool, plus the saved Storage Rules c/d object metadata responses: the header names and constant values of 2,446 exchanges per recording, the
 //! `bodyBytes` of each JSON body (the recorder stores a compact re-serialization, so the layout is
 //! the recorded length minus the compact length) and the member order of every JSON object.
 //! The emulator profile never reaches this module: it keeps the official emulator's headers and
@@ -452,8 +452,9 @@ const FIREBASE_ORDER: &[&str] = &[
 /// The JSON API ends its bodies with a line feed and the Firebase dialect does not (recorded:
 /// the layout overhead of all 1,042 JSON API and 592 v0 JSON bodies). Both indent by two spaces.
 /// Keys follow the recorded order of the dialect, then any other key alphabetically; the maps
-/// under `metadata` and `owner` stay alphabetical, so a user's key can never take a recorded
-/// key's place.
+/// under `metadata` and `owner` stay alphabetical, except for the observed JSON API root object
+/// metadata containing exactly the string keys `owner` and `firebaseStorageDownloadTokens`:
+/// production writes `owner` first. Other custom maps and nested values retain their order.
 #[must_use]
 pub fn layout_json(wire: Wire, body: &[u8]) -> Option<Vec<u8>> {
     let value: Value = serde_json::from_slice(body).ok()?;
@@ -472,14 +473,33 @@ fn layout_value(wire: Wire, body: &[u8], value: &Value) -> Option<Vec<u8>> {
         Wire::Firebase => FIREBASE_ORDER,
     };
     let mut out = Vec::with_capacity(body.len() * 2);
-    write_value(&mut out, value, 0, order, true);
+    let observed_metadata = wire == Wire::Gcs
+        && value.get("kind").and_then(Value::as_str) == Some("storage#object")
+        && value
+            .get("metadata")
+            .and_then(Value::as_object)
+            .is_some_and(|metadata| {
+                metadata.len() == 2
+                    && metadata.get("owner").is_some_and(Value::is_string)
+                    && metadata
+                        .get("firebaseStorageDownloadTokens")
+                        .is_some_and(Value::is_string)
+            });
+    write_value(&mut out, value, 0, order, true, observed_metadata);
     if wire == Wire::Gcs {
         out.push(b'\n');
     }
     Some(out)
 }
 
-fn write_value(out: &mut Vec<u8>, value: &Value, indent: usize, order: &[&str], ranked: bool) {
+fn write_value(
+    out: &mut Vec<u8>,
+    value: &Value,
+    indent: usize,
+    order: &[&str],
+    ranked: bool,
+    observed_metadata: bool,
+) {
     match value {
         Value::Object(map) if map.is_empty() => out.extend_from_slice(b"{}"),
         Value::Object(map) => {
@@ -491,6 +511,9 @@ fn write_value(out: &mut Vec<u8>, value: &Value, indent: usize, order: &[&str], 
                         .position(|known| known == key)
                         .unwrap_or(order.len())
                 });
+            } else if observed_metadata {
+                // Only the direct, exact two-string-key map observed in production reaches here.
+                entries.reverse();
             }
             out.extend_from_slice(b"{\n");
             for (index, (key, member)) in entries.iter().enumerate() {
@@ -502,7 +525,14 @@ fn write_value(out: &mut Vec<u8>, value: &Value, indent: usize, order: &[&str], 
                 );
                 out.extend_from_slice(b": ");
                 let member_ranked = ranked && !matches!(key.as_str(), "metadata" | "owner");
-                write_value(out, member, indent + 1, order, member_ranked);
+                write_value(
+                    out,
+                    member,
+                    indent + 1,
+                    order,
+                    member_ranked,
+                    observed_metadata && indent == 0 && key.as_str() == "metadata",
+                );
                 out.extend_from_slice(if index + 1 == entries.len() {
                     b"\n"
                 } else {
@@ -517,7 +547,7 @@ fn write_value(out: &mut Vec<u8>, value: &Value, indent: usize, order: &[&str], 
             out.extend_from_slice(b"[\n");
             for (index, item) in items.iter().enumerate() {
                 push_indent(out, indent + 1);
-                write_value(out, item, indent + 1, order, ranked);
+                write_value(out, item, indent + 1, order, ranked, false);
                 out.extend_from_slice(if index + 1 == items.len() {
                     b"\n"
                 } else {
@@ -918,6 +948,57 @@ mod tests {
         assert_eq!(layout_json(Wire::Gcs, b"{\n  \"kind\": \"x\"\n}\n"), None);
         assert_eq!(layout_json(Wire::Firebase, b"not json"), None);
         assert_eq!(layout_json(Wire::Gcs, b"\"a string\""), None);
+    }
+
+    #[test]
+    fn gcs_observed_owner_token_metadata_has_the_production_raw_order() {
+        // Saved production object responses put these exact two custom string keys in this order.
+        let body = r#"{"metadata":{"firebaseStorageDownloadTokens":"generic-token","owner":"probe"},"name":"object","kind":"storage#object"}"#;
+        let expected = b"{\n  \"kind\": \"storage#object\",\n  \"name\": \"object\",\n  \"metadata\": {\n    \"owner\": \"probe\",\n    \"firebaseStorageDownloadTokens\": \"generic-token\"\n  }\n}\n";
+        let answered = frame(&shape(Wire::Gcs, "GET"), response(200, JSON, body, &[]));
+        assert_eq!(answered.body.as_ref(), expected);
+        assert_eq!(layout_json(Wire::Gcs, body.as_bytes()).unwrap(), expected);
+    }
+
+    #[test]
+    fn observed_metadata_order_leaves_root_iam_owner_alphabetical() {
+        let body = br#"{"kind":"storage#object","metadata":{"owner":"o","firebaseStorageDownloadTokens":"t"},"owner":{"owner":"iam","firebaseStorageDownloadTokens":"custom"}}"#;
+        let expected = b"{\n  \"kind\": \"storage#object\",\n  \"metadata\": {\n    \"owner\": \"o\",\n    \"firebaseStorageDownloadTokens\": \"t\"\n  },\n  \"owner\": {\n    \"firebaseStorageDownloadTokens\": \"custom\",\n    \"owner\": \"iam\"\n  }\n}\n";
+        assert_eq!(layout_json(Wire::Gcs, body).unwrap(), expected);
+    }
+
+    #[test]
+    fn gcs_owner_token_order_does_not_extend_to_unobserved_metadata_shapes() {
+        for body in [
+            r#"{"metadata":{"owner":"o","firebaseStorageDownloadTokens":"t"}}"#,
+            r#"{"kind":"storage#objects","metadata":{"owner":"o","firebaseStorageDownloadTokens":"t"}}"#,
+            r#"{"kind":"storage#object","metadata":{"owner":"o","firebaseStorageDownloadTokens":"t","extra":"e"}}"#,
+            r#"{"kind":"storage#object","metadata":{"owner":"o","other":"t"}}"#,
+            r#"{"kind":"storage#object","metadata":{"other":"o","firebaseStorageDownloadTokens":"t"}}"#,
+            r#"{"kind":"storage#object","metadata":{"firebaseStorageDownloadTokens":"t"}}"#,
+            r#"{"kind":"storage#object","metadata":{"owner":null,"firebaseStorageDownloadTokens":"t"}}"#,
+            r#"{"kind":"storage#object","metadata":{"owner":"o","firebaseStorageDownloadTokens":false}}"#,
+            r#"{"kind":"storage#object","metadata":{"owner":{"owner":"o","firebaseStorageDownloadTokens":"t"},"firebaseStorageDownloadTokens":"t"}}"#,
+            r#"{"kind":"storage#object","metadata":{"owner":"o","firebaseStorageDownloadTokens":["t","o"]}}"#,
+            r#"{"kind":"storage#object","owner":{"owner":"o","firebaseStorageDownloadTokens":"t"}}"#,
+            r#"{"kind":"storage#object","metadata":{"nested":{"owner":"o","firebaseStorageDownloadTokens":"t"}}}"#,
+            r#"[{"kind":"storage#object","metadata":{"owner":"o","firebaseStorageDownloadTokens":"t"}}]"#,
+            r#"{"nested":{"kind":"storage#object","metadata":{"owner":"o","firebaseStorageDownloadTokens":"t"}}}"#,
+        ] {
+            let value: Value = serde_json::from_str(body).unwrap();
+            let expected = format!("{}\n", serde_json::to_string_pretty(&value).unwrap());
+            assert_eq!(
+                layout_json(Wire::Gcs, body.as_bytes()).unwrap(),
+                expected.as_bytes(),
+                "{body}"
+            );
+        }
+        let body = br#"{"metadata":{"owner":"o","firebaseStorageDownloadTokens":"t"}}"#;
+        let value: Value = serde_json::from_slice(body).unwrap();
+        assert_eq!(
+            layout_json(Wire::Firebase, body).unwrap(),
+            serde_json::to_vec_pretty(&value).unwrap()
+        );
     }
 
     #[test]
@@ -1623,10 +1704,73 @@ mod tests {
                 .collect()
         }
 
+        /// An independent raw reference: JSON pretty-printing keeps these custom maps alphabetical,
+        /// with one explicit owner-first replacement for the recorded direct JSON API shape.
+        fn owner_token_reference(value: &Value, wire: Wire, observed: bool) -> String {
+            let mut expected = serde_json::to_string_pretty(value).unwrap();
+            if wire == Wire::Firebase {
+                // The only recorded root key in these generated resources is metadata.
+                let kind = serde_json::to_string(&value["kind"]).unwrap();
+                let metadata = serde_json::to_string_pretty(&value["metadata"]).unwrap();
+                let metadata = metadata.replace('\n', "\n  ");
+                expected = format!("{{\n  \"metadata\": {metadata},\n  \"kind\": {kind}\n}}");
+            }
+            if observed {
+                let owner = serde_json::to_string(&value["metadata"]["owner"]).unwrap();
+                let token =
+                    serde_json::to_string(&value["metadata"]["firebaseStorageDownloadTokens"])
+                        .unwrap();
+                expected = format!(
+                    "{{\n  \"kind\": \"storage#object\",\n  \"metadata\": {{\n    \"owner\": {owner},\n    \"firebaseStorageDownloadTokens\": {token}\n  }}\n}}"
+                );
+            }
+            if wire == Wire::Gcs {
+                expected.push('\n');
+            }
+            expected
+        }
+
+        proptest! {
+            #![proptest_config(ProptestConfig::with_cases(1024))]
+
+            #[test]
+            fn owner_token_metadata_order_is_conditional_and_preserves_escaped_values(
+                owner in any::<String>(),
+                token in any::<String>(),
+                extra in any::<String>(),
+                metadata_shape in 0u8..8,
+                kind_shape in 0u8..3,
+                gcs in any::<bool>(),
+            ) {
+                let wire = if gcs { Wire::Gcs } else { Wire::Firebase };
+                let mut metadata = serde_json::json!({"owner": owner, "firebaseStorageDownloadTokens": token});
+                match metadata_shape {
+                    0 => {},
+                    1 => { metadata["extra"] = Value::String(extra); },
+                    2 => { metadata.as_object_mut().unwrap().remove("owner"); },
+                    3 => { metadata.as_object_mut().unwrap().remove("firebaseStorageDownloadTokens"); },
+                    4 => { metadata["owner"] = serde_json::json!({"owner": "o", "firebaseStorageDownloadTokens": "t"}); },
+                    5 => { metadata["firebaseStorageDownloadTokens"] = Value::Null; },
+                    6 => { metadata.as_object_mut().unwrap().remove("owner"); metadata["Owner"] = Value::String(extra); },
+                    _ => { metadata = serde_json::json!({"other": owner, "z": token}); },
+                }
+                let kind = match kind_shape { 0 => "storage#object", 1 => "storage#objects", _ => "other" };
+                let value = serde_json::json!({"kind": kind, "metadata": metadata});
+                let compact = serde_json::to_vec(&value).unwrap();
+                let observed = gcs && metadata_shape == 0 && kind_shape == 0;
+                let expected = owner_token_reference(&value, wire, observed);
+                let laid_out = layout_json(wire, &compact).unwrap();
+                prop_assert_eq!(&laid_out, expected.as_bytes());
+                prop_assert_eq!(serde_json::from_slice::<Value>(&laid_out).unwrap(), value);
+                prop_assert_eq!(layout_json(wire, &laid_out), None);
+            }
+        }
+
         proptest! {
             /// Laying a body out never changes its value, is idempotent, ends with a line feed on
             /// the JSON API only, and writes the recorded keys in the recorded order with unknown
-            /// keys after them and the maps under `metadata` left alphabetical.
+            /// keys after them. Custom maps remain alphabetical except for the saved production
+            /// root JSON API object's exact owner/token string pair.
             #[test]
             fn layout_preserves_the_value_and_writes_the_recorded_order(
                 gcs in resource(GCS_ORDER),
@@ -1661,7 +1805,14 @@ mod tests {
                             .take_while(|line| line.starts_with("    "))
                             .filter_map(|line| Some(line.trim_start().strip_prefix('"')?.split_once("\": ")?.0.to_owned()))
                             .collect();
-                        let expected: Vec<String> = metadata.keys().cloned().collect();
+                        let mut expected: Vec<String> = metadata.keys().cloned().collect();
+                        if wire == Wire::Gcs
+                            && value.get("kind").and_then(Value::as_str) == Some("storage#object")
+                            && expected == ["firebaseStorageDownloadTokens", "owner"]
+                            && metadata.values().all(Value::is_string)
+                        {
+                            expected.reverse();
+                        }
                         prop_assert_eq!(inner, expected);
                     }
                 }

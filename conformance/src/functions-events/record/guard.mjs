@@ -80,6 +80,7 @@ export const RULES = [
   rule("project-read", "GET", "cloudresourcemanager.googleapis.com", `/v1/projects/${P}`),
   rule("services-read", "GET", "serviceusage.googleapis.com", `/v1/projects/${P}/services`, { query: ["filter", "pageSize", "pageToken"] }),
   rule("rules-release-read", "GET", "firebaserules.googleapis.com", `/v1/projects/${P}/releases/cloud\\.firestore`),
+  rule("rules-ruleset-read", "GET", "firebaserules.googleapis.com", `/v1/projects/${P}/rulesets/[A-Za-z0-9-]+`),
   rule("oauth-token", "POST", "oauth2.googleapis.com", "/token"),
 ];
 

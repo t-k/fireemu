@@ -947,12 +947,7 @@ test("the command line reports, writes with --write, and says what is wrong with
     JSON.parse(readFileSync(join(dir, "evidence/out.json"), "utf8")),
   );
   assert.equal(readFileSync(join(dir, "evidence/build.json"), "utf8"), JSON.stringify(buildOf()));
-  for (const args of [
-    ["--nonsense"],
-    ["--comparison"],
-    [...base.slice(0, 6)],
-    ["comparison", "x"],
-  ]) {
+  for (const args of [["--nonsense"], ["--comparison"], base.slice(0, 6), ["comparison", "x"]]) {
     const failed = run(args);
     assert.equal(failed.status, 1, args.join(" "));
     assert.ok(failed.stderr.length > 0);

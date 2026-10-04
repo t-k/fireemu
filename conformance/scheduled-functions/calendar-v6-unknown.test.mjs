@@ -639,3 +639,61 @@ test("the retry budget is ten: it runs out exactly after the ninth retry and the
     ["cr05-delete"],
   );
 });
+
+test("a repeated DELETE is refused exactly when no retry is left, and a settle read in another layout is named", async () => {
+  const busyJobs = ["cr01", "cr02", "cr03"].map((id) => [
+    key("DELETE", JOB(id)),
+    async () => busy(JOB(id)),
+  ]);
+  // One retry unit is left after three busy jobs. A DELETE answered 503 that changed nothing takes
+  // it for its settle read, which shows the job still there: no repeated DELETE may follow.
+  const stillThere = fakeServer({
+    refuse: refuseSecond,
+    hooks: {
+      ...Object.fromEntries(busyJobs),
+      [key("DELETE", JOB("cr04"))]: async () => error(503, "later"),
+    },
+  });
+  const a = await run(stillThere);
+  const idsA = a.journal
+    .filter((r) => r.state === "before-send" && r.id.startsWith("cr04-"))
+    .map((r) => r.id);
+  assert.ok(!idsA.includes("cr04-delete-retry-1"), idsA.join());
+  assert.ok(idsA.includes("cr04-settle-delete-0"), idsA.join());
+  // With one unit left, a busy first answer still allows one repeated DELETE; its 503 then finds
+  // nothing left for a settle read.
+  let calls = 0;
+  const lastUnit = fakeServer({
+    refuse: refuseSecond,
+    hooks: {
+      ...Object.fromEntries(busyJobs),
+      [key("DELETE", JOB("cr04"))]: async () => {
+        calls++;
+        if (calls === 1) return busy(JOB("cr04"));
+        return calls === 2 ? error(503, "later") : undefined;
+      },
+    },
+  });
+  const b = await run(lastUnit);
+  const idsB = b.journal
+    .filter((r) => r.state === "before-send" && /^cr04-(delete|settle)/.test(r.id))
+    .map((r) => r.id);
+  assert.deepEqual(idsB, ["cr04-delete", "cr04-delete-retry-1"]);
+  // A settle read that is the right class in another layout is named in the review list.
+  let gets = 0;
+  const layout = fakeServer({
+    refuse: refuseSecond,
+    hooks: {
+      [key("DELETE", JOB("cr01"))]: async ({ state }) => {
+        state.jobs.delete(JOB("cr01"));
+        return error(503, "later");
+      },
+      [key("GET", JOB("cr01"))]: async () =>
+        ++gets === 1
+          ? compact({ error: { code: 404, message: "Job not found.", status: "NOT_FOUND" } }, 404)
+          : undefined,
+    },
+  });
+  const c = await run(layout);
+  assert.ok(c.result.layoutUnrecorded.includes("cr01-settle-delete-0"));
+});

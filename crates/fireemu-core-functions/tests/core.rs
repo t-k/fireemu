@@ -792,3 +792,102 @@ fn an_occurrence_is_in_the_window_that_ends_at_it_and_not_in_one_that_ends_a_nan
         );
     }
 }
+
+#[test]
+fn a_restricted_month_or_day_is_found_across_months_years_and_leap_days() {
+    let utc = FixedOffset(0);
+    let next = |text: &str, after: &str| {
+        Schedule::parse(text)
+            .unwrap()
+            .next_after_in(t(after), &utc)
+            .unwrap_or_else(|| panic!("{text} after {after} has no run"))
+    };
+    // A month later in the same year, the same run exactly at the instant, and the next year.
+    assert_eq!(
+        next("0 9 1 6 *", "2026-01-15T00:00:00Z"),
+        t("2026-06-01T09:00:00Z")
+    );
+    assert_eq!(
+        next("0 9 1 6 *", "2026-06-01T08:59:59Z"),
+        t("2026-06-01T09:00:00Z")
+    );
+    assert_eq!(
+        next("0 9 1 6 *", "2026-06-01T09:00:00Z"),
+        t("2027-06-01T09:00:00Z")
+    );
+    // The search wraps over the year end (December to a month early in the next year).
+    assert_eq!(
+        next("0 9 1 6 *", "2026-12-31T10:00:00Z"),
+        t("2027-06-01T09:00:00Z")
+    );
+    assert_eq!(
+        next("0 0 1 1,7 *", "2026-07-01T00:00:00Z"),
+        t("2027-01-01T00:00:00Z")
+    );
+    assert_eq!(
+        next("0 0 1 1,7 *", "2026-12-15T00:00:00Z"),
+        t("2027-01-01T00:00:00Z")
+    );
+    // A day some months lack, and a leap day years ahead.
+    assert_eq!(
+        next("0 9 31 * *", "2026-04-15T00:00:00Z"),
+        t("2026-05-31T09:00:00Z")
+    );
+    assert_eq!(
+        next("0 0 29 2 *", "2026-03-01T00:00:00Z"),
+        t("2028-02-29T00:00:00Z")
+    );
+}
+
+#[test]
+fn a_window_over_a_restricted_schedule_lists_counts_and_ends_on_the_right_runs() {
+    let utc = FixedOffset(0);
+    let june_first = Schedule::parse("0 9 1 6,12 *").unwrap();
+    assert_eq!(
+        june_first.runs_between_in(
+            t("2026-01-01T00:00:00Z"),
+            t("2027-12-31T00:00:00Z"),
+            &utc,
+            100
+        ),
+        vec![
+            t("2026-06-01T09:00:00Z"),
+            t("2026-12-01T09:00:00Z"),
+            t("2027-06-01T09:00:00Z"),
+            t("2027-12-01T09:00:00Z"),
+        ]
+    );
+    // Seven Junes in the window: counted exactly, the newest is the latest, and the work done
+    // is more than nothing (the counter is what the bounded-work assertions read).
+    let june = Schedule::parse("0 9 1 6 *").unwrap();
+    let all = june.window_in(
+        t("2020-01-01T00:00:00Z"),
+        t("2026-12-31T00:00:00Z"),
+        &utc,
+        100,
+    );
+    assert_eq!(all.count, RunCount::Exact(7));
+    assert_eq!(all.latest, Some(t("2026-06-01T09:00:00Z")));
+    assert!(all.steps >= 7, "{} steps for seven runs", all.steps);
+    // A cap below the number of runs stops the count there and says so.
+    let capped = june.window_in(
+        t("2020-01-01T00:00:00Z"),
+        t("2026-12-31T00:00:00Z"),
+        &utc,
+        5,
+    );
+    assert!(!capped.count.is_exact());
+    assert_eq!(capped.count.value(), 5);
+    assert_eq!(capped.latest, Some(t("2026-06-01T09:00:00Z")));
+    // Three nights in a window that ends before the fourth.
+    let nightly = Schedule::parse("0 3 * * *").unwrap();
+    let nights = nightly.window_in(
+        t("2026-08-29T12:01:00Z"),
+        t("2026-09-01T04:00:00Z"),
+        &utc,
+        100,
+    );
+    assert_eq!(nights.count, RunCount::Exact(3));
+    assert_eq!(nights.latest, Some(t("2026-09-01T03:00:00Z")));
+    assert!(nights.steps >= 3, "{} steps", nights.steps);
+}

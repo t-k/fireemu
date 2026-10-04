@@ -6100,6 +6100,60 @@ mod schedule_capacity_tests {
     }
 
     #[tokio::test]
+    async fn a_cap_filled_exactly_leaves_no_backlog_and_one_more_run_leaves_one() {
+        use super::OverlapPolicy;
+        // Cap 3, three runs of `tick` due (12:05, 12:10, 12:15): exactly the room, so nothing
+        // stays due and the cursor moves on to the current time.
+        let (runtime, clock) =
+            runtime_with(CatchUpPolicy::All, OverlapPolicy::Allow, 3, START).await;
+        advance(&clock, 15 * 60);
+        runtime.on_clock_changed();
+        assert_eq!(times_of(&admitted(&runtime), "tick").len(), 3);
+        assert!(!pending(&runtime), "nothing is left over");
+        finish(&runtime).await;
+        // A fourth run (12:20) does not fit: it stays due.
+        let (runtime, clock) =
+            runtime_with(CatchUpPolicy::All, OverlapPolicy::Allow, 3, START).await;
+        advance(&clock, 20 * 60);
+        runtime.on_clock_changed();
+        assert_eq!(times_of(&admitted(&runtime), "tick").len(), 3);
+        assert!(pending(&runtime), "12:20 stays due");
+        finish(&runtime).await;
+    }
+
+    #[tokio::test]
+    async fn latest_and_none_also_answer_a_schedule_written_as_cron_fields() {
+        // `nightly` and `failSchedule` are `0 3 * * *`: three occurrences (08-30, 08-31, 09-01)
+        // lie in the window, counted exactly.
+        let (latest, latest_clock) = runtime(CatchUpPolicy::Latest).await;
+        advance_to(&latest_clock, "2026-09-01T04:00:00Z");
+        latest.on_clock_changed();
+        let admitted_runs = admitted(&latest);
+        assert_eq!(
+            times_of(&admitted_runs, "nightly"),
+            vec!["2026-09-01T03:00:00Z"]
+        );
+        assert_eq!(
+            times_of(&admitted_runs, "failSchedule"),
+            vec!["2026-09-01T03:00:00Z"]
+        );
+        assert_eq!(
+            outcomes(&latest, "nightly"),
+            vec!["skipped: catch-up latest (2 runs)".to_owned()]
+        );
+        finish(&latest).await;
+        let (none, none_clock) = runtime(CatchUpPolicy::None).await;
+        advance_to(&none_clock, "2026-09-01T04:00:00Z");
+        none.on_clock_changed();
+        assert!(times_of(&admitted(&none), "nightly").is_empty());
+        assert_eq!(
+            outcomes(&none, "nightly"),
+            vec!["skipped: catch-up none (3 runs)".to_owned()]
+        );
+        finish(&none).await;
+    }
+
+    #[tokio::test]
     async fn a_small_cap_applies_per_job_so_one_backlog_cannot_starve_another() {
         use super::OverlapPolicy;
         let (runtime, clock) =

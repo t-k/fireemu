@@ -37,7 +37,7 @@ test("a prepared project passes and every preflight request is a read the guard 
     assert.equal(spec.mutation, false, spec.id);
     const url = spec.url.replace("${rulesetId}", vars.rulesetId ?? "x");
     assert.equal(
-      destination({ method: spec.method, url, mutation: false }).problem,
+      destination({ method: spec.method, url, mutation: false, body: spec.body }).problem,
       undefined,
       spec.id,
     );
@@ -109,13 +109,13 @@ const broken = [
     "a function of ours already deployed (Gen1)",
     "preflight.functions-v1",
     { json: { functions: [{ name: "projects/p/locations/l/functions/fsCreatedV1" }] } },
-    /Gen1 functions already deployed/,
+    /Gen1 functions already exist/,
   ],
   [
     "a function of ours already deployed (Gen2)",
     "preflight.functions-v2",
     { json: { functions: [{ name: "projects/p/locations/l/functions/fscreatedv2" }] } },
-    /Gen2 functions already deployed/,
+    /Gen2 functions already exist/,
   ],
   [
     "a Cloud Run service of ours",
@@ -159,9 +159,79 @@ test("a step that gets no usable answer is a problem, not a pass", async () => {
   assert.equal(problems.length, PREFLIGHT.length);
 });
 
-test("an unrelated function in the region does not stop the preflight", async () => {
-  assert.deepEqual((await runWith(healthy())).problems, []);
+test("any function in the region stops the preflight, not only ours (the CLI's name filters are prefix matches)", async () => {
+  const bodies = healthy();
+  bodies["preflight.functions-v2"] = {
+    status: 200,
+    json: { functions: [{ name: "projects/p/locations/l/functions/unrelated" }] },
+  };
+  const { problems } = await runWith(bodies);
+  assert.ok(
+    problems.some((p) => p.startsWith("preflight.functions-v2") && /already exist/.test(p)),
+  );
 });
+
+const namespace = [
+  [
+    "objects under fe-events/",
+    "preflight.objects-fe-events",
+    { json: { items: [{ name: "fe-events/x.txt" }] } },
+    /objects under fe-events\/ in the primary bucket already exist/,
+  ],
+  [
+    "objects under other/",
+    "preflight.objects-other",
+    { json: { items: [{ name: "other/x.txt" }] } },
+    /already exist/,
+  ],
+  [
+    "a second page of objects",
+    "preflight.objects-other",
+    { json: { nextPageToken: "t" } },
+    /more than one page/,
+  ],
+  [
+    "a document in the primary collection",
+    "preflight.collection-fe_events_primary",
+    { json: [{ document: { name: "x" } }] },
+    /not empty/,
+  ],
+  [
+    "a marker document",
+    "preflight.collection-fe_events_retry_markers",
+    { json: [{ document: { name: "x" } }] },
+    /not empty/,
+  ],
+  [
+    "a query that does not answer with a list",
+    "preflight.collection-fe_events_control",
+    { json: { error: "x" } },
+    /did not answer with a list/,
+  ],
+  [
+    "an API key of another project",
+    "preflight.api-key-project",
+    { json: { projectId: "another-project" } },
+    /does not belong to the sandbox project/,
+  ],
+  [
+    "an API key read that names no project",
+    "preflight.api-key-project",
+    { json: {} },
+    /does not belong/,
+  ],
+];
+for (const [label, id, change, pattern] of namespace) {
+  test(`the preflight stops for ${label}`, async () => {
+    const bodies = healthy();
+    bodies[id] = { status: 200, ...change };
+    const { problems } = await runWith(bodies);
+    assert.ok(
+      problems.some((p) => p.startsWith(id) && pattern.test(p)),
+      JSON.stringify(problems),
+    );
+  });
+}
 
 test("IAM pairs redact user accounts and the diff names what was added and removed", () => {
   const before = {

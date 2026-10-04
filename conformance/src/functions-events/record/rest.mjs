@@ -11,10 +11,10 @@ import { PROJECT } from "./script.mjs";
 
 export const TIMEOUT_MS = 60_000;
 export const MAX_BODY_BYTES = 1024 * 1024;
-export const TOKEN_LIFETIME_MS = 50 * 60 * 1000;
 
 export class GuardRefused extends Error {}
 export class BudgetExhausted extends Error {}
+export class TokenFailure extends Error {}
 
 /** `unknown` is the answer class a change may not be settled on: no answer, a timeout, a redirect, below 200, 5xx, an unreadable body. */
 export function classify({ status, error, bodyReadable }) {
@@ -83,6 +83,7 @@ export function createTransport({
 }) {
   mkdirSync(join(directory, "responses"), { recursive: true, mode: 0o700 });
   const journal = join(directory, "journal.jsonl");
+  const observers = [onSent];
   const state = { sent: 0, refused: 0, sequence: 0, vars: {}, ceiling };
   const line = (entry) => appendFileSync(journal, `${JSON.stringify(entry)}\n`, { mode: 0o600 });
 
@@ -98,50 +99,76 @@ export function createTransport({
       return { id: spec.id, skipped: true };
     }
     const resolved = { ...spec, url: resolveText(spec.url, vars) };
+    // The body is resolved first: the guard checks values and bodies, not only the shape of the URL.
+    const bodyValue =
+      resolved.body === undefined
+        ? undefined
+        : resolved.contentType
+          ? String(resolved.body)
+          : resolveDeep(resolved.body, vars);
+    const refuse = (problem, Error_ = GuardRefused, message = `${spec.id}: ${problem}`) => {
+      line({
+        ts: new Date(now()).toISOString(),
+        id: spec.id,
+        state: "refused-before-send",
+        problem,
+      });
+      throw new Error_(message);
+    };
     const answer = destination({
       method: resolved.method,
       url: resolved.url,
       mutation: resolved.mutation,
+      body: bodyValue,
+      headers: resolved.headers,
     });
     if (answer.problem) {
       state.refused += 1;
-      line({
-        ts: new Date(now()).toISOString(),
-        id: spec.id,
-        state: "refused-before-send",
-        problem: answer.problem,
-      });
-      throw new GuardRefused(`${spec.id}: ${answer.problem}`);
-    }
-    if (state.sent >= state.ceiling) {
-      line({
-        ts: new Date(now()).toISOString(),
-        id: spec.id,
-        state: "refused-before-send",
-        problem: "request ceiling reached",
-      });
-      throw new BudgetExhausted(`${spec.id}: the ceiling of ${state.ceiling} requests is used`);
+      refuse(answer.problem);
     }
     const headers = { accept: "application/json", ...resolved.headers };
     let url = resolved.url;
     // The owner's credential is quota-checked against the sandbox project, not the gcloud login's
     // client project; which destinations take the header is decided per rule in guard.mjs.
     if (resolved.auth === "oauth") {
-      headers.authorization = `Bearer ${await token()}`;
+      let accessToken;
+      try {
+        accessToken = await token();
+      } catch (error) {
+        const failure = new TokenFailure(`${spec.id}: no access token (${error.message})`, {
+          cause: error,
+        });
+        line({
+          ts: new Date(now()).toISOString(),
+          id: spec.id,
+          state: "refused-before-send",
+          problem: "no access token",
+        });
+        throw failure;
+      }
+      headers.authorization = `Bearer ${accessToken}`;
       if (answer.quotaProject) headers["x-goog-user-project"] = PROJECT;
-    } else if (resolved.auth === "idtoken")
+    } else if (resolved.auth === "idtoken") {
       headers.authorization = `Bearer ${resolveText("${idToken}", vars)}`;
-    else if (resolved.auth === "apikey")
+    } else if (resolved.auth === "apikey") {
       url += `${url.includes("?") ? "&" : "?"}key=${encodeURIComponent(apiKey)}`;
-    // auth "none" (the token refresh itself) sends no credential header.
+    }
+    // The ceiling is checked last, after the credential, so nothing can pass it on the way.
+    if (state.sent >= state.ceiling) {
+      refuse(
+        "request ceiling reached",
+        BudgetExhausted,
+        `${spec.id}: the ceiling of ${state.ceiling} requests is used`,
+      );
+    }
     let body;
-    if (resolved.body !== undefined) {
+    if (bodyValue !== undefined) {
       if (resolved.contentType) {
         headers["content-type"] = resolved.contentType;
-        body = String(resolved.body);
+        body = bodyValue;
       } else {
         headers["content-type"] = "application/json";
-        body = JSON.stringify(resolveDeep(resolved.body, vars));
+        body = JSON.stringify(bodyValue);
       }
     }
     const sequence = (state.sequence += 1);
@@ -157,7 +184,8 @@ export function createTransport({
       bodySha256: body === undefined ? null : createHash("sha256").update(body).digest("hex"),
     });
     state.sent += 1;
-    onSent(spec);
+    for (const watch of observers)
+      watch({ id: spec.id, method: resolved.method, url: resolved.url, body: bodyValue });
     let status;
     let text = "";
     let error;
@@ -182,7 +210,8 @@ export function createTransport({
       try {
         json = JSON.parse(text);
       } catch {
-        if (status >= 200 && status < 300 && resolved.method !== "DELETE") bodyReadable = false;
+        // a body that is not JSON is unreadable whatever the status: a 4xx page from a front end settles nothing
+        bodyReadable = false;
       }
     }
     const kind = classify({ status, error, bodyReadable });
@@ -224,6 +253,7 @@ export function createTransport({
     request,
     state,
     line,
+    observe: (watch) => observers.push(watch),
     setCeiling: (n) => {
       state.ceiling = n;
     },

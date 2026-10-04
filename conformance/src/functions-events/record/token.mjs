@@ -1,41 +1,21 @@
-// The OAuth access token of the owner's authorized-user credential, refreshed through the same
-// guarded transport as every other request (so the refresh is counted, journaled and never stored).
+// The OAuth access token of the owner's application-default credential, taken from
+// `gcloud auth application-default print-access-token` (ledger 809(1), sandbox-oracles.md). The
+// recorder never reads the credential file, the refresh token or the client secret; it asks the same
+// command again when the token is nearly out of date. `printToken()` runs the command and returns
+// its output; a token that does not look like one is refused.
 
-import { TOKEN_LIFETIME_MS } from "./rest.mjs";
+export const TOKEN_LIFETIME_MS = 45 * 60 * 1000;
+const SHAPE = /^[A-Za-z0-9._~+/=-]{20,4096}$/;
 
-export function createTokenSource({ adc, request, now = () => Date.now() }) {
-  for (const key of ["client_id", "client_secret", "refresh_token"]) {
-    if (typeof adc?.[key] !== "string" || !adc[key])
-      throw new Error("the owner's authorized-user credential is incomplete");
-  }
-  if (adc.type !== "authorized_user")
-    throw new Error("the credential is not an authorized-user credential");
+export function createTokenSource({ printToken, now = () => Date.now() }) {
   let token;
   let issuedAt = -Infinity;
-  let counter = 0;
   return async () => {
     if (token && now() - issuedAt < TOKEN_LIFETIME_MS) return token;
-    counter += 1;
-    const body = new URLSearchParams({
-      client_id: adc.client_id,
-      client_secret: adc.client_secret,
-      refresh_token: adc.refresh_token,
-      grant_type: "refresh_token",
-    }).toString();
-    const answer = await request({
-      id: `oauth.${counter}`,
-      role: "token",
-      method: "POST",
-      url: "https://oauth2.googleapis.com/token",
-      auth: "none",
-      mutation: false,
-      expect: [200],
-      contentType: "application/x-www-form-urlencoded",
-      body,
-    });
-    if (answer.kind !== "success" || typeof answer.json?.access_token !== "string")
-      throw new Error("the token refresh did not return an access token");
-    token = answer.json.access_token;
+    const printed = String(await printToken()).trim();
+    if (!SHAPE.test(printed))
+      throw new Error("the credential command did not print an access token");
+    token = printed;
     issuedAt = now();
     return token;
   };

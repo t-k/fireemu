@@ -50,7 +50,12 @@ test("the filter names every origin, the window and the marker; the request pass
   );
   const request = listRequest({ start: "a", end: "b" });
   assert.equal(
-    destination({ method: request.method, url: request.url, mutation: request.mutation }).rule,
+    destination({
+      method: request.method,
+      url: request.url,
+      mutation: request.mutation,
+      body: request.body,
+    }).rule,
     "logging-list",
   );
   assert.deepEqual(request.body.resourceNames, ["projects/fireemu-oracle-events"]);

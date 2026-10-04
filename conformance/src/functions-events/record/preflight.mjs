@@ -2,10 +2,11 @@
 // IAM binding, changes Rules or initializes Auth; it checks that they are there and stops when they are
 // not. Every check is a pure function of the parsed answer, so each can be tested on its own.
 
-import { HANDLERS } from "./logs.mjs";
 import {
   CONTROL_BUCKET,
+  CONTROL_COLLECTION,
   CONTROL_TOPIC,
+  MARKER_COLLECTION,
   PRIMARY_BUCKET,
   PRIMARY_COLLECTION,
   PRIMARY_TOPIC,
@@ -49,12 +50,17 @@ const post = (id, url, body) => ({
   body,
 });
 const region = `projects/${PROJECT}/locations/${REGION}`;
-const lowerNames = HANDLERS.map(({ name }) => name.toLowerCase());
 const lastSegment = (name) =>
   String(name ?? "")
     .split("/")
     .at(-1);
 const ok = () => ({ ok: true });
+const emptyList = (json, key, label) =>
+  json?.nextPageToken
+    ? bad(`the ${label} list has more than one page`)
+    : (json?.[key] ?? []).length
+      ? bad(`${label} already exist`)
+      : ok();
 const bad = (reason) => ({ ok: false, reason });
 
 /** The preflight steps in order. `check(answer, context)` returns {ok, reason}; it may add to `context`. */
@@ -75,9 +81,10 @@ export const PREFLIGHT = [
       "services",
       `https://serviceusage.googleapis.com/v1/projects/${PROJECT}/services?filter=state:ENABLED&pageSize=200`,
     ),
-    check: ({ json }) => {
+    check: ({ json }, context) => {
       if (json?.nextPageToken) return bad("the enabled-services list has more than one page");
       const enabled = new Set((json?.services ?? []).map((s) => s?.config?.name));
+      context.servicesBefore = [...enabled];
       const missing = REQUIRED_APIS.filter((api) => !enabled.has(api));
       return missing.length ? bad(`APIs not enabled: ${missing.join(", ")}`) : ok();
     },
@@ -197,41 +204,68 @@ export const PREFLIGHT = [
         : bad("the released Rules do not mention the primary collection and request.auth");
     },
   },
-  {
-    ...get("functions-v1", `https://cloudfunctions.googleapis.com/v1/${region}/functions`),
+  // The region and the run's namespaces must be empty: the cleanup and the CLI's name filters (prefix matches) then cannot touch anything that is not the run's.
+  ...[
+    [
+      "functions-v1",
+      `https://cloudfunctions.googleapis.com/v1/${region}/functions`,
+      "functions",
+      "Gen1 functions",
+    ],
+    [
+      "functions-v2",
+      `https://cloudfunctions.googleapis.com/v2/${region}/functions`,
+      "functions",
+      "Gen2 functions",
+    ],
+    [
+      "run-services",
+      `https://run.googleapis.com/v2/${region}/services`,
+      "services",
+      "Cloud Run services",
+    ],
+    [
+      "eventarc-triggers",
+      `https://eventarc.googleapis.com/v1/${region}/triggers`,
+      "triggers",
+      "Eventarc triggers",
+    ],
+  ].map(([id, url, key, label]) => ({
+    ...get(id, url),
+    check: ({ json }) => emptyList(json, key, label),
+  })),
+  ...["fe-events/", "other/"].map((prefix) => ({
+    ...get(
+      `objects-${prefix.replace("/", "")}`,
+      `https://storage.googleapis.com/storage/v1/b/${encodeURIComponent(PRIMARY_BUCKET)}/o?versions=true&prefix=${encodeURIComponent(prefix)}`,
+    ),
+    check: ({ json }) => emptyList(json, "items", `objects under ${prefix} in the primary bucket`),
+  })),
+  ...[PRIMARY_COLLECTION, CONTROL_COLLECTION, MARKER_COLLECTION].map((collection) => ({
+    ...post(
+      `collection-${collection}`,
+      `https://firestore.googleapis.com/v1/projects/${PROJECT}/databases/(default)/documents:runQuery`,
+      { structuredQuery: { from: [{ collectionId: collection }], limit: 1 } },
+    ),
     check: ({ json }) => {
-      const ours = (json?.functions ?? [])
-        .map((f) => lastSegment(f?.name))
-        .filter((n) => HANDLERS.some((h) => h.name === n));
-      return ours.length ? bad(`Gen1 functions already deployed: ${ours.join(", ")}`) : ok();
+      const found = Array.isArray(json) ? json.filter((row) => row?.document) : null;
+      if (found === null) return bad(`the ${collection} query did not answer with a list`);
+      return found.length ? bad(`the ${collection} collection is not empty`) : ok();
     },
-  },
+  })),
+  // The browser API key belongs to the sandbox project (it is read with the key, no credential).
   {
-    ...get("functions-v2", `https://cloudfunctions.googleapis.com/v2/${region}/functions`),
-    check: ({ json }) => {
-      const ours = (json?.functions ?? [])
-        .map((f) => lastSegment(f?.name))
-        .filter((n) => lowerNames.includes(n.toLowerCase()));
-      return ours.length ? bad(`Gen2 functions already deployed: ${ours.join(", ")}`) : ok();
-    },
-  },
-  {
-    ...get("run-services", `https://run.googleapis.com/v2/${region}/services`),
-    check: ({ json }) => {
-      const ours = (json?.services ?? [])
-        .map((s) => lastSegment(s?.name))
-        .filter((n) => lowerNames.includes(n));
-      return ours.length ? bad(`Cloud Run services already exist: ${ours.join(", ")}`) : ok();
-    },
-  },
-  {
-    ...get("eventarc-triggers", `https://eventarc.googleapis.com/v1/${region}/triggers`),
-    check: ({ json }) => {
-      const ours = (json?.triggers ?? [])
-        .map((t) => lastSegment(t?.name))
-        .filter((n) => lowerNames.some((l) => n.startsWith(`${l}-`)));
-      return ours.length ? bad(`Eventarc triggers already exist: ${ours.join(", ")}`) : ok();
-    },
+    id: "preflight.api-key-project",
+    role: "preflight",
+    method: "GET",
+    url: "https://identitytoolkit.googleapis.com/v1/projects",
+    auth: "apikey",
+    mutation: false,
+    expect: [200],
+    check: ({ json }) =>
+      json?.projectId === PROJECT
+        ? ok()
+        : bad("the API key does not belong to the sandbox project"),
   },
 ];
 
@@ -268,6 +302,7 @@ export async function runPreflight(request) {
     problems,
     projectNumber: context.projectNumber ?? null,
     iamBefore: context.iamBefore ?? null,
+    servicesBefore: context.servicesBefore ?? null,
   };
 }
 

@@ -1,5 +1,12 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync, existsSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -7,7 +14,12 @@ import { execFileSync } from "node:child_process";
 
 import { createTransport } from "./functions-events/record/rest.mjs";
 import {
+  PINNED_DEPENDENCIES,
   cliPlan,
+  dependencyProblems,
+  discoverEndpoints,
+  runCli,
+  sourceProblems,
   dotenvSha256,
   dotenvText,
   prepareSource,
@@ -106,4 +118,73 @@ test("a list that cannot be read is incomplete, so neither ready nor absent can 
   const summary = summarize(await readLists(worldTransport(world)));
   assert.equal(summary.complete, false);
   assert.equal(summary.absent, false);
+});
+
+const depsDir = new URL("../functions-events/fixtures/node_modules", import.meta.url).pathname;
+const haveDeps = existsSync(depsDir);
+
+test(
+  "the source copy carries a verified dependency tree and the SDK discovers exactly the 22 handlers offline",
+  { skip: !haveDeps && "the fixture dependencies are not installed here" },
+  () => {
+    const commit = execFileSync("git", ["-C", repoRoot, "rev-parse", "HEAD"]).toString().trim();
+    const target = mkdtempSync(join(tmpdir(), "fe-src-"));
+    const { fixtureDir } = prepareSource({ repoRoot, commit, target, depsDir });
+    assert.deepEqual(dependencyProblems(fixtureDir), []);
+    const directory = mkdtempSync(join(tmpdir(), "fe-disc-"));
+    assert.deepEqual(sourceProblems({ fixtureDir, node: process.execPath, directory }), []);
+    assert.deepEqual(
+      discoverEndpoints({ fixtureDir, node: process.execPath, directory }).toSorted(),
+      formalHandlers.toSorted(),
+    );
+  },
+);
+
+test("a copy without dependencies, with the wrong version or with a link out of the tree is a problem", () => {
+  const commit = execFileSync("git", ["-C", repoRoot, "rev-parse", "HEAD"]).toString().trim();
+  const bare = prepareSource({ repoRoot, commit, target: mkdtempSync(join(tmpdir(), "fe-src-")) });
+  assert.ok(dependencyProblems(bare.fixtureDir).some((p) => p.includes("cannot be resolved")));
+  assert.ok(
+    sourceProblems({
+      fixtureDir: bare.fixtureDir,
+      node: process.execPath,
+      directory: mkdtempSync(join(tmpdir(), "fe-disc-")),
+    }).length > 0,
+  );
+  // a tree with the right names and the wrong version, and one with a link to the outside
+  const fake = mkdtempSync(join(tmpdir(), "fe-fake-"));
+  mkdirSync(join(fake, "node_modules"), { recursive: true });
+  writeFileSync(join(fake, "package.json"), "{}");
+  for (const name of Object.keys(PINNED_DEPENDENCIES)) {
+    mkdirSync(join(fake, "node_modules", name), { recursive: true });
+    writeFileSync(join(fake, "node_modules", name, "index.js"), "");
+    writeFileSync(
+      join(fake, "node_modules", name, "package.json"),
+      JSON.stringify({
+        name,
+        main: "index.js",
+        version: name === "firebase-admin" ? "1.0.0" : PINNED_DEPENDENCIES[name],
+      }),
+    );
+  }
+  assert.deepEqual(dependencyProblems(fake), ["firebase-admin is 1.0.0, not 14.3.0"]);
+  symlinkSync("/tmp", join(fake, "node_modules", "outside"));
+  assert.ok(dependencyProblems(fake).some((p) => p.includes("leave the tree")));
+});
+
+test("a CLI that ignores SIGTERM is killed after the grace period and the run goes on", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "fe-cli-"));
+  const script = join(directory, "stubborn.js");
+  writeFileSync(script, 'process.on("SIGTERM", () => {}); setInterval(() => {}, 1000);');
+  const result = await runCli({
+    action: "deploy",
+    plan: { args: [], cwd: directory, env: { PATH: "/usr/bin" } },
+    firebaseJs: script,
+    node: process.execPath,
+    directory,
+    timeoutMs: 300,
+    killGraceMs: 300,
+  });
+  assert.equal(result.timedOut, true);
+  assert.equal(result.signal, "SIGKILL");
 });

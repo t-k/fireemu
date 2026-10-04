@@ -1,6 +1,15 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  statSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -57,6 +66,9 @@ test("the harness digest covers the recorder, the fixture and the dotenv, and is
   assert.ok(a.lines.some((l) => l.startsWith("conformance/src/functions-events/record/run.mjs ")));
   assert.ok(a.lines.some((l) => l.startsWith("conformance/functions-events/fixtures/index.js ")));
   assert.ok(a.lines.some((l) => l.startsWith("dotenv ")));
+  const withTree = harnessDigest(root, { git: () => "t".repeat(40) });
+  assert.ok(withTree.lines.includes(`tree ${"t".repeat(40)}`));
+  assert.notEqual(withTree.digest, a.digest);
 });
 
 function arrange({ approve = true } = {}) {
@@ -71,7 +83,9 @@ function arrange({ approve = true } = {}) {
     `${JSON.stringify({ ts: "2026-10-01T08:30:00Z", event: "finished", taskId: "FUNCTIONS-EVENTS-SANDBOX", project: "fireemu-oracle-events", outcome: "prepared", lockRetained: false, runDir: "old", estimatedUsd: 2 })}\n`,
   );
   const packetSha256 = execFileSync("shasum", ["-a", "256", packet]).toString().split(" ")[0];
-  const { digest } = harnessDigest(root);
+  const { digest } = harnessDigest(root, {
+    git: (args) => (args[0] === "rev-parse" ? head : ""),
+  });
   const ownerPath = join(dir, "owner.md");
   writeFileSync(
     ownerPath,
@@ -87,12 +101,12 @@ function arrange({ approve = true } = {}) {
     env: { PATH: "/usr/bin", HOME: dir },
     log: () => {},
     fetch: world.fetch,
-    readCredential: () => ({
-      type: "authorized_user",
-      client_id: "i",
-      client_secret: "s",
-      refresh_token: "r",
-    }),
+    printAccessToken: async () => "ya29.synthetic-token-aaaaaaaaaaaaaaaaaaaa",
+    prepareSource: ({ target }) => {
+      mkdirSync(join(target, "fixtures"), { recursive: true });
+      return { configPath: join(target, "firebase.json"), fixtureDir: join(target, "fixtures") };
+    },
+    sourceProblems: () => [],
     runCli: async ({ action }) => {
       cliCalls.push(action);
       if (action === "deploy") world.deploy();
@@ -224,4 +238,69 @@ test("a dirty tree, another HEAD, a set credential variable or a held lock refus
     );
     assert.equal(deps.fetchCalled, undefined);
   }
+});
+
+test("a local preparation failure leaves no lock, no started line and no run directory", async () => {
+  for (const [label, change] of [
+    [
+      "the credential command fails",
+      (d) =>
+        (d.printAccessToken = async () => {
+          throw new Error("gcloud exited 1");
+        }),
+    ],
+    [
+      "the credential command prints no token",
+      (d) => (d.printAccessToken = async () => "ERROR: reauthentication needed"),
+    ],
+    [
+      "the source copy cannot be made",
+      (d) =>
+        (d.prepareSource = () => {
+          throw new Error("git archive failed");
+        }),
+    ],
+    [
+      "the source copy has no dependencies",
+      (d) => (d.sourceProblems = () => ["firebase-functions cannot be resolved from the fixture"]),
+    ],
+  ]) {
+    const { deps, argv, ledgerPath, dir, world } = arrange();
+    change(deps);
+    const before = readFileSync(ledgerPath, "utf8");
+    const result = await main(argv("record"), deps);
+    assert.equal(result.ok, false, label);
+    assert.equal(readFileSync(ledgerPath, "utf8"), before, label);
+    assert.equal(existsSync(join(dir, "locks", "fireemu-oracle-events.lock")), false, label);
+    assert.equal(world.requests.length, 0, label);
+    assert.deepEqual(
+      existsSync(join(dir, "runs")) ? readdirSync(join(dir, "runs")) : [],
+      [],
+      label,
+    );
+  }
+});
+
+test("check refuses a source copy without its dependencies", async () => {
+  const { deps, argv } = arrange();
+  deps.sourceProblems = () => ["firebase-functions cannot be resolved from the fixture"];
+  const result = await main(argv("check"), deps);
+  assert.equal(result.ok, false);
+  assert.ok(result.problems.some((p) => p.includes("cannot be resolved")));
+});
+
+test("SHA256SUMS skips node_modules and does not follow links, even a loop", async () => {
+  const { deps, argv } = arrange();
+  deps.prepareSource = ({ target }) => {
+    mkdirSync(join(target, "fixtures/node_modules/pkg"), { recursive: true });
+    writeFileSync(join(target, "fixtures/node_modules/pkg/index.js"), "x");
+    symlinkSync("..", join(target, "fixtures/node_modules/pkg/loop"));
+    symlinkSync(".", join(target, "fixtures/self"));
+    return { configPath: join(target, "firebase.json"), fixtureDir: join(target, "fixtures") };
+  };
+  const result = await main(argv("record"), deps);
+  assert.equal(result.outcome, "recorded", JSON.stringify(result));
+  const sums = readFileSync(join(result.runDir, "SHA256SUMS"), "utf8");
+  assert.ok(!sums.includes("node_modules") && !sums.includes("self"));
+  assert.ok(sums.includes("production-run.json"));
 });

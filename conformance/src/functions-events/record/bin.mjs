@@ -6,8 +6,8 @@
 // Run it inside tmux (or with stdout and stderr redirected to a file) so a closed terminal cannot cut
 // the cleanup short. A first SIGINT, SIGTERM or SIGHUP stops at the next step and runs the cleanup.
 
-import { readFileSync } from "node:fs";
-import { homedir } from "node:os";
+import { execFileSync } from "node:child_process";
+import { existsSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
@@ -17,17 +17,27 @@ import { main } from "./main.mjs";
 
 const root = resolve(fileURLToPath(new URL("../../../..", import.meta.url)));
 const shared = process.env.FIREEMU_SHARED_ROOT ?? root;
+if (!existsSync(join(shared, "docs.local/runs/sandbox-ledger.jsonl"))) {
+  console.error(
+    "set FIREEMU_SHARED_ROOT to the checkout that holds docs.local (the ledger, the owner decisions and the run directories live there)",
+  );
+  process.exit(2);
+}
 
-function readCredential() {
-  const path = join(homedir(), ".config/gcloud/application_default_credentials.json");
-  return JSON.parse(readFileSync(path, "utf8"));
+// The access token comes from the command the sandbox notes name, never from the credential file.
+function printAccessToken() {
+  return execFileSync("gcloud", ["auth", "application-default", "print-access-token"], {
+    encoding: "utf8",
+    timeout: 30_000,
+    env: { PATH: process.env.PATH, HOME: process.env.HOME },
+  });
 }
 
 const deps = {
   root,
   env: process.env,
   fetch,
-  readCredential,
+  printAccessToken,
   runCli,
   sleep: (seconds) => delay(seconds * 1000),
   now: () => Date.now(),

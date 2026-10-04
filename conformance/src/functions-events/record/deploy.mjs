@@ -6,8 +6,19 @@
 import { spawn } from "node:child_process";
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { closeSync, mkdirSync, openSync, readFileSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import {
+  closeSync,
+  cpSync,
+  lstatSync,
+  mkdirSync,
+  openSync,
+  readdirSync,
+  readFileSync,
+  realpathSync,
+  writeFileSync,
+} from "node:fs";
+import { createRequire } from "node:module";
+import { dirname, join } from "node:path";
 
 import { formalHandlers, buildCanaryBatchCli } from "../canary-cli.mjs";
 import { HANDLERS } from "./logs.mjs";
@@ -33,11 +44,68 @@ export function dotenvText() {
 }
 export const dotenvSha256 = () => createHash("sha256").update(dotenvText()).digest("hex");
 
+// The dependencies the offline discovery loads; the functions framework is installed by Cloud Build from
+// the pinned lockfile (a harness input), not from this copy.
+export const PINNED_DEPENDENCIES = {
+  "firebase-functions": "7.3.2",
+  "firebase-admin": "14.3.0",
+};
+
+/** Every entry of a tree is inside it: no symlink leaves `root`. Returns the entries that do. */
+export function escapingLinks(root) {
+  const base = realpathSync(root);
+  const escaped = [];
+  const walk = (dir) => {
+    for (const entry of readdirSync(dir)) {
+      const path = join(dir, entry);
+      const stat = lstatSync(path);
+      if (stat.isSymbolicLink()) {
+        let real;
+        try {
+          real = realpathSync(path);
+        } catch {
+          escaped.push(path);
+          continue;
+        }
+        if (real !== base && !real.startsWith(`${base}/`)) escaped.push(path);
+      } else if (stat.isDirectory()) walk(path);
+    }
+  };
+  walk(root);
+  return escaped;
+}
+
+/** Problems with the dependency tree the deploy will upload against: the pinned versions, resolvable from the fixture, no link out of the tree. */
+export function dependencyProblems(fixtureDir) {
+  const problems = [];
+  const require_ = createRequire(join(fixtureDir, "package.json"));
+  for (const [name, version] of Object.entries(PINNED_DEPENDENCIES)) {
+    try {
+      require_.resolve(name);
+      const found = JSON.parse(
+        readFileSync(join(fixtureDir, "node_modules", name, "package.json"), "utf8"),
+      );
+      if (found.version !== version) problems.push(`${name} is ${found.version}, not ${version}`);
+    } catch {
+      problems.push(`${name} cannot be resolved from the fixture`);
+    }
+  }
+  try {
+    const escaped = escapingLinks(join(fixtureDir, "node_modules"));
+    if (escaped.length) problems.push(`${escaped.length} links in node_modules leave the tree`);
+  } catch {
+    problems.push("node_modules cannot be read");
+  }
+  return problems;
+}
+
 /**
  * Copies the tracked files of `conformance/functions-events` at `commit` into `target` (git archive,
- * so nothing untracked and no node_modules comes along) and writes the dotenv. Returns the paths the CLI needs.
+ * so nothing untracked comes along), writes the dotenv, and copies the installed dependency tree
+ * `depsDir` (a pnpm node_modules, symlinks kept relative) next to the fixture: firebase-tools resolves
+ * firebase-functions from the source directory before it creates anything. Returns the paths the CLI needs.
  */
-export function prepareSource({ repoRoot, commit, target }) {
+export function prepareSource({ repoRoot, commit, target, depsDir }) {
   if (!/^[0-9a-f]{40}$/.test(commit)) throw new Error("the source commit must be a full SHA");
   mkdirSync(target, { recursive: true, mode: 0o700 });
   const archive = execFileSync(
@@ -48,7 +116,62 @@ export function prepareSource({ repoRoot, commit, target }) {
   execFileSync("tar", ["-x", "-C", target], { input: archive });
   const fixtureDir = join(target, "conformance/functions-events/fixtures");
   writeFileSync(join(fixtureDir, `.env.${PROJECT}`), dotenvText(), { mode: 0o600 });
+  if (depsDir)
+    cpSync(realpathSync(depsDir), join(fixtureDir, "node_modules"), {
+      recursive: true,
+      verbatimSymlinks: true,
+    });
   return { configPath: join(target, "conformance/functions-events/firebase.json"), fixtureDir };
+}
+
+/**
+ * The SDK's own discovery of the fixture, offline, with the production environment: returns the names
+ * of the endpoints it finds. A missing dependency, a refused environment or a handler that does not load
+ * shows up here, before anything is sent.
+ */
+export function discoverEndpoints({ fixtureDir, node, directory }) {
+  mkdirSync(directory, { recursive: true, mode: 0o700 });
+  const manifest = join(directory, "functions-manifest.json");
+  const env = {
+    PATH: dirname(node),
+    HOME: directory,
+    FUNCTIONS_MANIFEST_OUTPUT_PATH: manifest,
+    GCLOUD_PROJECT: PROJECT,
+    FIREBASE_CONFIG: JSON.stringify({ projectId: PROJECT }),
+    ...Object.fromEntries(
+      dotenvText()
+        .split("\n")
+        .filter(Boolean)
+        .map((line) => line.split("=")),
+    ),
+  };
+  execFileSync(
+    node,
+    [join(fixtureDir, "node_modules/firebase-functions/lib/bin/firebase-functions.js"), fixtureDir],
+    { env, cwd: fixtureDir, timeout: 60_000, stdio: ["ignore", "ignore", "pipe"] },
+  );
+  return Object.keys(JSON.parse(readFileSync(manifest, "utf8")).endpoints ?? {});
+}
+
+/** Everything about the source copy that can be checked offline: the dependencies and the 22 discovered endpoints. */
+export function sourceProblems({ fixtureDir, node, directory }) {
+  const problems = dependencyProblems(fixtureDir);
+  if (problems.length) return problems;
+  let found;
+  try {
+    found = discoverEndpoints({ fixtureDir, node, directory });
+  } catch (error) {
+    return [
+      `the SDK discovery of the fixture failed: ${String(error.stderr ?? error.message).slice(0, 300)}`,
+    ];
+  }
+  const missing = formalHandlers.filter((name) => !found.includes(name));
+  const extra = found.filter((name) => !formalHandlers.includes(name));
+  if (missing.length || extra.length)
+    return [
+      `the fixture exports ${found.length} endpoints (missing: ${missing.join(", ") || "none"}; extra: ${extra.join(", ") || "none"})`,
+    ];
+  return [];
 }
 
 /** The CLI invocation (args, cwd, env) for deploy or delete of the formal set, from the reviewed helper. */
@@ -67,7 +190,16 @@ export function cliPlan(action, { configHome, configPath, workDir, home, path })
  * Runs the pinned firebase-tools once. stdout and stderr go to private files in `directory`. Never
  * retried; a timeout stops the process group. Returns what happened, judging nothing.
  */
-export function runCli({ action, plan, firebaseJs, node, directory, spawnFn = spawn, timeoutMs }) {
+export function runCli({
+  action,
+  plan,
+  firebaseJs,
+  node,
+  directory,
+  spawnFn = spawn,
+  timeoutMs,
+  killGraceMs = 60_000,
+}) {
   mkdirSync(directory, { recursive: true, mode: 0o700 });
   const out = openSync(join(directory, `cli-${action}-stdout.txt`), "wx", 0o600);
   const err = openSync(join(directory, `cli-${action}-stderr.txt`), "wx", 0o600);
@@ -80,17 +212,13 @@ export function runCli({ action, plan, firebaseJs, node, directory, spawnFn = sp
       detached: true,
     });
     let timedOut = false;
-    const timer = setTimeout(
-      () => {
-        timedOut = true;
-        try {
-          process.kill(-child.pid, "SIGTERM");
-        } catch {}
-      },
-      timeoutMs ?? (action === "deploy" ? DEPLOY_TIMEOUT_MS : DELETE_TIMEOUT_MS),
-    );
+    let killTimer;
+    let settled = false;
     const finish = (exitCode, signal, error) => {
+      if (settled) return;
+      settled = true;
       clearTimeout(timer);
+      clearTimeout(killTimer);
       closeSync(out);
       closeSync(err);
       resolve({
@@ -102,6 +230,25 @@ export function runCli({ action, plan, firebaseJs, node, directory, spawnFn = sp
         durationMs: Date.now() - startedAt,
       });
     };
+    const timer = setTimeout(
+      () => {
+        timedOut = true;
+        try {
+          process.kill(-child.pid, "SIGTERM");
+        } catch {}
+        // A CLI that ignores SIGTERM is killed, so the cleanup that follows always runs.
+        killTimer = setTimeout(() => {
+          try {
+            process.kill(-child.pid, "SIGKILL");
+          } catch {}
+          setTimeout(
+            () => finish(null, "SIGKILL", new Error("the CLI had to be killed")),
+            killGraceMs,
+          );
+        }, killGraceMs);
+      },
+      timeoutMs ?? (action === "deploy" ? DEPLOY_TIMEOUT_MS : DELETE_TIMEOUT_MS),
+    );
     child.on("error", (error) => finish(null, null, error));
     child.on("exit", (code, signal) => finish(code, signal));
   });
@@ -217,9 +364,11 @@ export async function waitReady({
   sleep,
   polls = READY_MAX_POLLS,
   everySeconds = READY_POLL_SECONDS,
+  shouldStop = () => false,
 }) {
   let summary;
   for (let i = 1; i <= polls; i += 1) {
+    if (shouldStop()) return { ...summary, polls: i - 1, stopped: true };
     const v1 = await readList(transport, "v1");
     const v2 = await readList(transport, "v2");
     summary = summarize({ v1, v2, run: NOT_READ, eventarc: NOT_READ });

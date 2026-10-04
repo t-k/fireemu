@@ -6,6 +6,7 @@ import test from "node:test";
 
 import {
   BudgetExhausted,
+  TokenFailure,
   GuardRefused,
   classify,
   createTransport,
@@ -138,7 +139,7 @@ test("captures feed later requests, secrets never reach the stored answer, and a
       url: "https://identitytoolkit.googleapis.com/v1/accounts:signUp",
       auth: "apikey",
       mutation: true,
-      body: { email: "x@example.test" },
+      body: { email: "x@example.test", password: "p", returnSecureToken: true },
       capture: { idToken: "$.idToken", uid: "$.localId" },
     }),
   );
@@ -182,11 +183,57 @@ test("the OAuth requests name the sandbox project as the quota project; the API-
       url: "https://identitytoolkit.googleapis.com/v1/accounts:signUp",
       auth: "apikey",
       mutation: true,
-      body: {},
+      body: { email: "x@example.test", password: "p", returnSecureToken: true },
       capture: { idToken: "$.idToken" },
     }),
   );
   assert.equal(calls[1].init.headers["x-goog-user-project"], undefined);
   await transport.request(spec({ id: "i", auth: "idtoken" }));
   assert.equal(calls[2].init.headers["x-goog-user-project"], undefined);
+});
+
+test("a 4xx whose body is not JSON is unknown, never a refusal", async () => {
+  const { transport } = setup({ replies: [fakeResponse(404, "<html>not found</html>")] });
+  assert.equal((await transport.request(spec())).kind, "unknown");
+});
+
+test("a failing credential command stops before anything is sent, with its own error type", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "fe-rest-"));
+  let sent = 0;
+  const transport = createTransport({
+    directory,
+    ceiling: 5,
+    token: async () => {
+      throw new Error("gcloud exited 1");
+    },
+    apiKey: "k",
+    fetch: async () => {
+      sent += 1;
+      return fakeResponse(200, {});
+    },
+  });
+  await assert.rejects(transport.request(spec()), TokenFailure);
+  assert.equal(sent, 0);
+  assert.equal(transport.state.sent, 0);
+});
+
+test("the ceiling is checked after the credential arrives, so nothing can pass it on the way", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "fe-rest-"));
+  let sent = 0;
+  let transport;
+  transport = createTransport({
+    directory,
+    ceiling: 3,
+    token: async () => {
+      transport.state.sent = 3; // other requests used the last of the ceiling while the token was fetched
+      return "t";
+    },
+    apiKey: "k",
+    fetch: async () => {
+      sent += 1;
+      return fakeResponse(200, {});
+    },
+  });
+  await assert.rejects(transport.request(spec()), BudgetExhausted);
+  assert.equal(sent, 0);
 });

@@ -3,11 +3,20 @@
 // runs the whole entry against an in-memory world.
 
 import { createHash, randomBytes } from "node:crypto";
-import { mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
+import {
+  lstatSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
 import { dirname, join, relative } from "node:path";
 import { execFileSync } from "node:child_process";
 
-import { cliPlan, dotenvSha256, prepareSource } from "./deploy.mjs";
+import { cliPlan, dotenvSha256, prepareSource, sourceProblems } from "./deploy.mjs";
 import { createTransport } from "./rest.mjs";
 import { record as recordRun } from "./run.mjs";
 import * as sandbox from "./sandbox.mjs";
@@ -50,10 +59,12 @@ export function harnessFiles(root) {
     ),
   ];
 }
-export function harnessDigest(root) {
+export function harnessDigest(root, { git } = {}) {
   const lines = harnessFiles(root).map(
     (path) => `${path} ${sha256(readFileSync(join(root, path)))}`,
   );
+  // the whole deployed tree (pnpm-workspace.yaml and .gitignore ride along without being listed above)
+  if (git) lines.push(`tree ${git(["rev-parse", "HEAD:conformance/functions-events"])}`);
   lines.push(`dotenv ${dotenvSha256()}`);
   return { digest: sha256(lines.join("\n")), lines };
 }
@@ -96,6 +107,7 @@ export function localChecks({
   readLedger,
   readOwner,
   readTools,
+  checkSource,
   now,
   git,
 }) {
@@ -112,8 +124,9 @@ export function localChecks({
     tools = undefined;
   }
   problems.push(...firebaseToolsProblems(tools));
+  problems.push(...checkSource());
   const packetSha256 = sha256(readFileSync(options.packet));
-  const { digest: harnessSha256 } = harnessDigest(root);
+  const { digest: harnessSha256 } = harnessDigest(root, { git });
   const ledger = readLedger();
   const owner = readOwner();
   problems.push(...sandbox.ledgerProblems(ledger, now()), ...sandbox.budgetProblems(ledger));
@@ -141,6 +154,7 @@ export async function main(argv, deps) {
       execFileSync("git", ["-C", root, ...args])
         .toString()
         .trim());
+  const depsDir = deps.depsDir ?? join(root, "conformance/functions-events/fixtures/node_modules");
   const readTools =
     deps.readTools ??
     (() =>
@@ -155,6 +169,27 @@ export async function main(argv, deps) {
     readLedger: () => readFileSync(deps.ledgerPath, "utf8"),
     readOwner: () => readFileSync(deps.ownerPath, "utf8"),
     readTools,
+    checkSource: () => {
+      // The prepared copy must carry the dependencies and the SDK must discover the 22 handlers from it, offline.
+      const scratch = mkdtempSync(join(tmpdir(), "fe-source-check-"));
+      try {
+        const copy = (deps.prepareSource ?? prepareSource)({
+          repoRoot: root,
+          commit: options["source-commit"],
+          target: scratch,
+          depsDir,
+        });
+        return (deps.sourceProblems ?? sourceProblems)({
+          fixtureDir: copy.fixtureDir,
+          node: process.execPath,
+          directory: join(scratch, "discovery"),
+        });
+      } catch (error) {
+        return [`the source copy could not be prepared: ${error.message}`];
+      } finally {
+        rmSync(scratch, { recursive: true, force: true });
+      }
+    },
     now: deps.now,
     git,
   });
@@ -170,14 +205,44 @@ export async function main(argv, deps) {
     };
   if (checks.problems.length) return { ok: false, problems: checks.problems };
 
-  const apiKey = readKey(options["api-key-file"]);
+  // Local preparation first: nothing is locked or written to the ledger until the key, the credential
+  // command and the source copy are all good, so a failure here leaves no lock and no `started` line.
+  let apiKey;
+  try {
+    apiKey = readKey(options["api-key-file"]);
+  } catch (error) {
+    return { ok: false, problems: [`the API key file cannot be read: ${error.message}`] };
+  }
   if (!apiKey) return { ok: false, problems: ["the API key file holds no key"] };
-  const adc = deps.readCredential();
+  const tokenSource = createTokenSource({ printToken: deps.printAccessToken, now: deps.now });
+  try {
+    await tokenSource();
+  } catch (error) {
+    return { ok: false, problems: [`no access token: ${error.message}`] };
+  }
   const runDir = join(
     deps.runsDir,
     `functions-events-formal-${new Date(deps.now()).toISOString().replace(/[-:.]/g, "").slice(0, 15)}Z-${randomBytes(8).toString("hex")}`,
   );
   mkdirSync(runDir, { recursive: true, mode: 0o700 });
+  let source;
+  try {
+    source = (deps.prepareSource ?? prepareSource)({
+      repoRoot: root,
+      commit: options["source-commit"],
+      target: join(runDir, "source"),
+      depsDir,
+    });
+    const found = (deps.sourceProblems ?? sourceProblems)({
+      fixtureDir: source.fixtureDir,
+      node: process.execPath,
+      directory: join(runDir, "discovery"),
+    });
+    if (found.length) throw new Error(found.join("; "));
+  } catch (error) {
+    rmSync(runDir, { recursive: true, force: true });
+    return { ok: false, problems: [`the source copy is not usable: ${error.message}`] };
+  }
   const lock = sandbox.acquireLock({
     lockDir: deps.lockDir,
     legacyLock: deps.legacyLock,
@@ -199,21 +264,13 @@ export async function main(argv, deps) {
       }),
     );
     const transportDir = join(runDir, "transport");
-    let tokenSource;
     const transport = createTransport({
       fetch: deps.fetch,
-      token: () => tokenSource(),
+      token: tokenSource,
       apiKey,
       directory: transportDir,
       ceiling: sandbox.MAX_REQUESTS,
       now: deps.now,
-    });
-    tokenSource = createTokenSource({ adc, request: transport.request, now: deps.now });
-
-    const source = prepareSource({
-      repoRoot: root,
-      commit: options["source-commit"],
-      target: join(runDir, "source"),
     });
     const cliAttempts = { deploy: 0, delete: 0 };
     const cli = async (action) => {
@@ -317,8 +374,11 @@ export async function main(argv, deps) {
 function readdirSyncRecursive(dir, base = dir) {
   const out = [];
   for (const entry of readdirSync(dir)) {
+    if (entry === "node_modules") continue;
     const path = join(dir, entry);
-    if (statSync(path).isDirectory()) out.push(...readdirSyncRecursive(path, base));
+    const stat = lstatSync(path);
+    if (stat.isSymbolicLink()) continue;
+    if (stat.isDirectory()) out.push(...readdirSyncRecursive(path, base));
     else out.push(relative(base, path));
   }
   return out;

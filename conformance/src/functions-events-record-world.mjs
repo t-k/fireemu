@@ -63,11 +63,23 @@ export const healthy = () => ({
       },
     },
   },
-  "preflight.functions-v1": { status: 200, json: {} },
-  "preflight.functions-v2": {
+  "preflight.objects-fe-events": { status: 200, json: {} },
+  "preflight.objects-other": { status: 200, json: {} },
+  "preflight.collection-fe_events_primary": {
     status: 200,
-    json: { functions: [{ name: "projects/p/locations/l/functions/unrelated" }] },
+    json: [{ readTime: "2026-10-04T00:00:00Z" }],
   },
+  "preflight.collection-fe_events_control": {
+    status: 200,
+    json: [{ readTime: "2026-10-04T00:00:00Z" }],
+  },
+  "preflight.collection-fe_events_retry_markers": {
+    status: 200,
+    json: [{ readTime: "2026-10-04T00:00:00Z" }],
+  },
+  "preflight.api-key-project": { status: 200, json: { projectId: PROJECT } },
+  "preflight.functions-v1": { status: 200, json: {} },
+  "preflight.functions-v2": { status: 200, json: {} },
   "preflight.run-services": { status: 200, json: {} },
   "preflight.eventarc-triggers": { status: 200, json: {} },
 });
@@ -238,9 +250,10 @@ export function createWorld({ now, rulesAllow = true }) {
         return json(200, healthy()["preflight.firestore-database"].json);
       if (path.endsWith("/documents:runQuery")) {
         const filter = parsed.structuredQuery.where?.fieldFilter?.value?.stringValue;
+        const collection = parsed.structuredQuery.from[0].collectionId;
         const hits = [...world.docs].filter(
           ([p, f]) =>
-            p.startsWith(`${MARKER_COLLECTION}/`) &&
+            p.startsWith(`${collection}/`) &&
             (filter === undefined || f.documentPath?.stringValue === filter),
         );
         return json(
@@ -286,6 +299,13 @@ export function createWorld({ now, rulesAllow = true }) {
     }
     // ---- Storage
     if (u.hostname === "storage.googleapis.com") {
+      if (method === "GET" && path === "/storage/v1/b") {
+        const prefix = u.searchParams.get("prefix") ?? "";
+        const items = [...world.buckets.keys()]
+          .filter((name) => name.startsWith(prefix))
+          .map((name) => ({ name }));
+        return json(200, items.length ? { items } : {});
+      }
       if (method === "POST" && path === "/storage/v1/b") {
         world.buckets.set(parsed.name, { versioning: false });
         return json(200, { name: parsed.name });
@@ -408,6 +428,7 @@ export function createWorld({ now, rulesAllow = true }) {
     }
     // ---- Auth
     if (u.hostname === "identitytoolkit.googleapis.com") {
+      if (path === "/v1/projects" && method === "GET") return json(200, { projectId: PROJECT });
       if (path === "/v1/accounts:signUp") {
         const uid = `signup-${next()}`;
         world.users.set(uid, { email: parsed.email });
@@ -424,17 +445,14 @@ export function createWorld({ now, rulesAllow = true }) {
           ? json(200, { idToken: "synthetic-id-token", localId: entry[0] })
           : json(400, { error: { code: 400 } });
       }
-      if (path.endsWith("/accounts:lookup"))
-        return json(
-          200,
-          parsed.localId.some((id) => world.users.has(id))
-            ? {
-                users: parsed.localId
-                  .filter((id) => world.users.has(id))
-                  .map((localId) => ({ localId })),
-              }
-            : {},
-        );
+      if (path.endsWith("/accounts:lookup")) {
+        const found = parsed.localId
+          ? parsed.localId.filter((id) => world.users.has(id))
+          : [...world.users]
+              .filter(([, user]) => parsed.email.includes(user.email))
+              .map(([id]) => id);
+        return json(200, found.length ? { users: found.map((localId) => ({ localId })) } : {});
+      }
       if (path.endsWith("/accounts:delete")) {
         world.users.delete(parsed.localId);
         emit(["authDeletedV1"], "auth", {
@@ -576,21 +594,26 @@ export function createWorld({ now, rulesAllow = true }) {
     throw new Error(`the world has no route for ${method} ${u.hostname}${path}`);
   }
 
+  world.hooks = [];
   world.fetch = async (url, init = {}) => {
     const method = init.method ?? "GET";
     world.requests.push({ method, url });
-    for (const failure of world.failures) {
-      if (failure.match(method, url) && (failure.times === undefined || failure.times-- > 0)) {
-        if (failure.error) throw Object.assign(new Error("injected"), { name: failure.error });
-        return json(failure.status, {});
-      }
-    }
-    return route(method, url, {
+    for (const hook of world.hooks) hook(method, url, init);
+    const normalized = {
       ...init,
       headers: Object.fromEntries(
         Object.entries(init.headers ?? {}).map(([k, v]) => [k.toLowerCase(), v]),
       ),
-    });
+    };
+    for (const failure of world.failures) {
+      if (failure.match(method, url) && (failure.times === undefined || failure.times-- > 0)) {
+        if (failure.error) throw Object.assign(new Error("injected"), { name: failure.error });
+        // `after`: the service did the work and the answer was lost (the status is what the caller sees)
+        if (failure.after) await route(method, url, normalized);
+        return json(failure.status, {});
+      }
+    }
+    return route(method, url, normalized);
   };
   world.deploy = () => {
     world.deployed = true;

@@ -70,7 +70,7 @@ export function listRequest({ start, end, pageToken }) {
       resourceNames: [`projects/${PROJECT}`],
       filter: logFilter({ start, end }),
       orderBy: "timestamp asc",
-      pageSize: 1000,
+      pageSize: 200,
       ...(pageToken ? { pageToken } : {}),
     },
   };

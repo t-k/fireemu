@@ -29,6 +29,17 @@ const asked = (request) => ({
   method: request.method,
   url: resolve(request.url),
   mutation: request.mutation,
+  body:
+    request.body === undefined
+      ? undefined
+      : JSON.parse(
+          resolve(
+            typeof request.body === "string"
+              ? JSON.stringify(request.body)
+              : JSON.stringify(request.body),
+          ),
+        ),
+  headers: request.headers,
 });
 
 test("every request of the script, the setup and the cleanup matches exactly one rule", () => {
@@ -198,32 +209,317 @@ for (const [label, request] of refused) {
   });
 }
 
-test("the API key goes only to the two client sign-in calls", () => {
+test("the API key goes only to the two client sign-in calls and the key's project read", () => {
+  const body = { email: "e1@example.test", password: "p", returnSecureToken: true };
   for (const tail of ["signUp", "signInWithPassword"]) {
     const answer = destination({
       method: "POST",
       url: `https://identitytoolkit.googleapis.com/v1/accounts:${tail}?key=abc`,
       mutation: true,
+      body,
     });
     assert.ok(answer.rule, tail);
   }
+  assert.equal(
+    destination({
+      method: "GET",
+      url: "https://identitytoolkit.googleapis.com/v1/projects?key=abc",
+      mutation: false,
+    }).rule,
+    "auth-key-project",
+  );
   assert.ok(
     destination({
       method: "POST",
       url: `https://identitytoolkit.googleapis.com/v1/projects/${PROJECT}/accounts:lookup?key=abc`,
       mutation: false,
+      body: { localId: ["u"] },
     }).problem,
   );
 });
 
+const BUCKET = `https://storage.googleapis.com/storage/v1/b`;
+const refusedByValue = [
+  [
+    "a bucket created in another project",
+    {
+      method: "POST",
+      url: `${BUCKET}?project=other-project`,
+      mutation: true,
+      body: { name: CONTROL_BUCKET, location: "US-CENTRAL1" },
+    },
+  ],
+  [
+    "a bucket created under another name",
+    {
+      method: "POST",
+      url: `${BUCKET}?project=${PROJECT}`,
+      mutation: true,
+      body: { name: "elsewhere", location: "US-CENTRAL1" },
+    },
+  ],
+  [
+    "a bucket created with extra settings",
+    {
+      method: "POST",
+      url: `${BUCKET}?project=${PROJECT}`,
+      mutation: true,
+      body: {
+        name: CONTROL_BUCKET,
+        location: "US-CENTRAL1",
+        iamConfiguration: { uniformBucketLevelAccess: { enabled: false } },
+      },
+    },
+  ],
+  [
+    "a bucket patch that is not the versioning field",
+    {
+      method: "PATCH",
+      url: `${BUCKET}/${PRIMARY_BUCKET}?fields=versioning`,
+      mutation: true,
+      body: { acl: [], versioning: { enabled: true } },
+    },
+  ],
+  [
+    "a bucket patch without the fields parameter",
+    {
+      method: "PATCH",
+      url: `${BUCKET}/${PRIMARY_BUCKET}`,
+      mutation: true,
+      body: { versioning: { enabled: true } },
+    },
+  ],
+  [
+    "a bucket patch that sets retention",
+    {
+      method: "PATCH",
+      url: `${BUCKET}/${PRIMARY_BUCKET}?fields=versioning`,
+      mutation: true,
+      body: { retentionPolicy: { retentionPeriod: "1" } },
+    },
+  ],
+  [
+    "an upload outside the owned prefixes",
+    {
+      method: "POST",
+      url: `https://storage.googleapis.com/upload/storage/v1/b/${PRIMARY_BUCKET}/o?uploadType=media&name=secrets%2Fx.txt`,
+      mutation: true,
+      body: "t",
+    },
+  ],
+  [
+    "an upload with another precondition",
+    {
+      method: "POST",
+      url: `https://storage.googleapis.com/upload/storage/v1/b/${PRIMARY_BUCKET}/o?uploadType=media&name=fe-events%2Fx.txt&ifGenerationMatch=5`,
+      mutation: true,
+      body: "t",
+    },
+  ],
+  [
+    "an upload that is not media",
+    {
+      method: "POST",
+      url: `https://storage.googleapis.com/upload/storage/v1/b/${PRIMARY_BUCKET}/o?uploadType=resumable&name=fe-events%2Fx.txt`,
+      mutation: true,
+      body: "t",
+    },
+  ],
+  [
+    "an object patch of another member",
+    {
+      method: "PATCH",
+      url: `${BUCKET}/${PRIMARY_BUCKET}/o/fe-events%2Fx.txt`,
+      mutation: true,
+      body: { acl: [] },
+    },
+  ],
+  [
+    "an object list without an owned prefix",
+    { method: "GET", url: `${BUCKET}/${PRIMARY_BUCKET}/o?versions=true&prefix=`, mutation: false },
+  ],
+  [
+    "a bucket list of another prefix",
+    { method: "GET", url: `${BUCKET}?project=${PROJECT}&prefix=fireemu`, mutation: false },
+  ],
+  [
+    "a log read of another project",
+    {
+      method: "POST",
+      url: "https://logging.googleapis.com/v2/entries:list",
+      mutation: false,
+      body: { resourceNames: ["projects/other"], filter: "x", pageSize: 100 },
+    },
+  ],
+  [
+    "a log page over 200",
+    {
+      method: "POST",
+      url: "https://logging.googleapis.com/v2/entries:list",
+      mutation: false,
+      body: { resourceNames: [`projects/${PROJECT}`], filter: "x", pageSize: 1000 },
+    },
+  ],
+  [
+    "a log read with a member outside the declared ones",
+    {
+      method: "POST",
+      url: "https://logging.googleapis.com/v2/entries:list",
+      mutation: false,
+      body: { resourceNames: [`projects/${PROJECT}`], projectIds: ["x"] },
+    },
+  ],
+  [
+    "an account with a real-looking email",
+    {
+      method: "POST",
+      url: `https://identitytoolkit.googleapis.com/v1/projects/${PROJECT}/accounts`,
+      mutation: true,
+      body: { localId: "u", email: "someone@gmail.com", password: "p" },
+    },
+  ],
+  [
+    "an account with an admin claim",
+    {
+      method: "POST",
+      url: `https://identitytoolkit.googleapis.com/v1/projects/${PROJECT}/accounts`,
+      mutation: true,
+      body: {
+        localId: "u",
+        email: "u@example.test",
+        password: "p",
+        customAttributes: '{"admin":true}',
+      },
+    },
+  ],
+  [
+    "a batch delete without force or with too many ids",
+    {
+      method: "POST",
+      url: `https://identitytoolkit.googleapis.com/v1/projects/${PROJECT}/accounts:batchDelete`,
+      mutation: true,
+      body: { localIds: Array.from({ length: 11 }, (_, i) => `u${i}`), force: true },
+    },
+  ],
+  [
+    "a document with a field outside the fixture's",
+    {
+      method: "POST",
+      url: `https://firestore.googleapis.com/v1/projects/${PROJECT}/databases/(default)/documents/fe_events_primary?documentId=e1`,
+      mutation: true,
+      body: { fields: { admin: { stringValue: "x" } } },
+    },
+  ],
+  [
+    "a patch without currentDocument.exists",
+    {
+      method: "PATCH",
+      url: `https://firestore.googleapis.com/v1/projects/${PROJECT}/databases/(default)/documents/fe_events_primary/e1`,
+      mutation: true,
+      body: { fields: { value: { stringValue: "x" } } },
+    },
+  ],
+  [
+    "a query of another collection",
+    {
+      method: "POST",
+      url: `https://firestore.googleapis.com/v1/projects/${PROJECT}/databases/(default)/documents:runQuery`,
+      mutation: false,
+      body: { structuredQuery: { from: [{ collectionId: "users" }] } },
+    },
+  ],
+  [
+    "a publish of two messages",
+    {
+      method: "POST",
+      url: `https://pubsub.googleapis.com/v1/projects/${PROJECT}/topics/fe-events-primary:publish`,
+      mutation: true,
+      body: { messages: [{ data: "a" }, { data: "b" }] },
+    },
+  ],
+  [
+    "a topic created with settings",
+    {
+      method: "PUT",
+      url: `https://pubsub.googleapis.com/v1/projects/${PROJECT}/topics/fe-events-primary`,
+      mutation: true,
+      body: { messageRetentionDuration: "1s" },
+    },
+  ],
+  [
+    "a body on a read",
+    {
+      method: "GET",
+      url: `https://firestore.googleapis.com/v1/projects/${PROJECT}/databases/(default)/documents/fe_events_primary/e1`,
+      mutation: false,
+      body: {},
+    },
+  ],
+  [
+    "an IAM read with a body",
+    {
+      method: "POST",
+      url: `https://cloudresourcemanager.googleapis.com/v1/projects/${PROJECT}:getIamPolicy`,
+      mutation: false,
+      body: { options: { requestedPolicyVersion: 3 } },
+    },
+  ],
+];
+for (const [label, request] of refusedByValue) {
+  test(`the guard refuses ${label}`, () => {
+    assert.ok(destination(request).problem, label);
+  });
+}
+
+test("the legitimate forms of those requests are still allowed", () => {
+  const ok = [
+    {
+      method: "POST",
+      url: `${BUCKET}?project=${PROJECT}`,
+      mutation: true,
+      body: { name: CONTROL_BUCKET, location: "US-CENTRAL1" },
+    },
+    {
+      method: "PATCH",
+      url: `${BUCKET}/${PRIMARY_BUCKET}?fields=versioning`,
+      mutation: true,
+      body: { versioning: { enabled: true } },
+    },
+    {
+      method: "GET",
+      url: `${BUCKET}?project=${PROJECT}&prefix=${CONTROL_BUCKET}`,
+      mutation: false,
+    },
+    {
+      method: "GET",
+      url: `${BUCKET}/${PRIMARY_BUCKET}/o?versions=true&prefix=fe-events%2F`,
+      mutation: false,
+    },
+    {
+      method: "POST",
+      url: "https://logging.googleapis.com/v2/entries:list",
+      mutation: false,
+      body: {
+        resourceNames: [`projects/${PROJECT}`],
+        filter: "x",
+        orderBy: "timestamp asc",
+        pageSize: 200,
+      },
+    },
+  ];
+  for (const request of ok)
+    assert.equal(destination(request).problem, undefined, JSON.stringify(request).slice(0, 80));
+});
+
 test("x-goog-user-project is decided per destination and pinned: every API rule takes it, the client sign-in calls and the token refresh do not", () => {
   const without = RULES.filter(({ name }) => !quotaProjectFor(name)).map(({ name }) => name);
-  assert.deepEqual(without.toSorted(), ["auth-sign-in", "auth-sign-up", "oauth-token"]);
+  assert.deepEqual(without.toSorted(), ["auth-key-project", "auth-sign-in", "auth-sign-up"]);
   for (const rule of RULES) assert.equal(typeof quotaProjectFor(rule.name), "boolean", rule.name);
   const answer = destination({
     method: "POST",
     url: "https://identitytoolkit.googleapis.com/v1/accounts:signUp",
     mutation: true,
+    body: { email: "e1@example.test", password: "p", returnSecureToken: true },
   });
   assert.equal(answer.quotaProject, false);
   assert.equal(

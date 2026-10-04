@@ -8,7 +8,7 @@ import { PROPAGATION_WAIT_SECONDS, waitReady } from "./deploy.mjs";
 import { runCleanup } from "./cleanup.mjs";
 import { listRequest, parseEntries } from "./logs.mjs";
 import { iamPairs, runPreflight } from "./preflight.mjs";
-import { resolveText } from "./rest.mjs";
+import { BudgetExhausted, GuardRefused, TokenFailure, resolveText } from "./rest.mjs";
 import { STEP_GAP_SECONDS, buildPass, runSetupRequests } from "./script.mjs";
 
 export const NORMAL_CEILING = 480;
@@ -18,6 +18,7 @@ export const CAPTURE_EVERY_SECONDS = 120;
 export const SLEEP_CHUNK_SECONDS = 60;
 export const FINAL_WINDOW_SECONDS = 120;
 export const MAX_PAGES = 5;
+export const FULL_READ_PAGES = 20;
 
 const micro = (ms) => new Date(ms).toISOString().replace("Z", "000Z");
 
@@ -29,34 +30,42 @@ function createCapture({ transport, now, startedAt }) {
   let incomplete = 0;
   let lastEnd = startedAt;
   let lastPollAt = startedAt;
-  async function poll() {
-    lastPollAt = now();
-    const start = Math.max(startedAt, lastEnd - 30_000);
+  async function readWindow(from, pages) {
     const end = now();
     let pageToken;
-    for (let page = 0; page < MAX_PAGES; page += 1) {
+    for (let page = 0; page < pages; page += 1) {
       polls += 1;
       const answer = await transport.request(
-        listRequest({ start: micro(start), end: micro(end), pageToken }),
+        listRequest({ start: micro(from), end: micro(end), pageToken }),
       );
       if (answer.kind !== "success") {
         incomplete += 1;
-        return;
+        return false;
       }
       const parsed = parseEntries(answer.json, { readAt: new Date(now()).toISOString(), seen });
       frames.push(...parsed.frames);
       for (const [key, count] of Object.entries(parsed.ignored))
         ignored[key] = (ignored[key] ?? 0) + count;
       pageToken = parsed.nextPageToken;
-      if (!pageToken) {
-        lastEnd = end;
-        return;
-      }
+      if (!pageToken) return end;
     }
     incomplete += 1;
+    return false;
+  }
+  async function poll() {
+    lastPollAt = now();
+    const end = await readWindow(Math.max(startedAt, lastEnd - 30_000), MAX_PAGES);
+    if (end) lastEnd = end;
+  }
+  // The last read covers the whole run, so the negative cases and the per-handler checks rest on one
+  // complete read, whatever the earlier polls missed (a page that did not read, a late-ingested entry).
+  async function pollRun() {
+    lastPollAt = now();
+    return readWindow(startedAt, FULL_READ_PAGES);
   }
   return {
     poll,
+    pollRun,
     frames,
     sincePoll: () => now() - lastPollAt,
     stats: () => ({ polls, incompletePolls: incomplete, ignored }),
@@ -100,7 +109,7 @@ export async function record({
 
   async function waitAndCapture(seconds) {
     let left = seconds;
-    while (left > 0) {
+    while (left > 0 && !signal.aborted) {
       const chunk = Math.min(SLEEP_CHUNK_SECONDS, left);
       await sleep(chunk);
       left -= chunk;
@@ -108,28 +117,32 @@ export async function record({
     }
   }
 
-  async function runPass(pass) {
-    const record_ = { pass, startedAt: iso(now), endedAt: null, operations: [] };
-    run.passes.push(record_);
-    for (const step of buildPass({ pass, newId }).steps) {
-      if (signal.aborted) {
-        run.stops.push(`a stop signal arrived before ${step.scenarioId} of pass ${pass}`);
-        return false;
-      }
-      transport.state.vars = {};
-      const op = {
-        scenarioId: step.scenarioId,
-        role: step.role,
-        sourceResult: null,
-        startedAt: null,
-        endedAt: null,
-        matchKey: null,
-        readback: [],
-        windowSeconds: step.settleSeconds,
-        requests: [],
-      };
-      record_.operations.push(op);
-      let subject;
+  // What the run may have made in Auth: uids and emails (a sign-up whose answer was lost may still have made a user).
+  const owned = { uids: new Set(), emails: new Set() };
+  transport.observe(({ method, url, body }) => {
+    const { hostname, pathname } = new URL(url);
+    if (hostname !== "identitytoolkit.googleapis.com" || method !== "POST") return;
+    if (!pathname.endsWith("/accounts") && !pathname.endsWith("/accounts:signUp")) return;
+    if (typeof body?.email === "string") owned.emails.add(body.email);
+    if (typeof body?.localId === "string") owned.uids.add(body.localId);
+  });
+
+  async function runStep(step, record_) {
+    transport.state.vars = {};
+    const op = {
+      scenarioId: step.scenarioId,
+      role: step.role,
+      sourceResult: null,
+      startedAt: null,
+      endedAt: null,
+      matchKey: null,
+      readback: [],
+      windowSeconds: step.settleSeconds,
+      requests: [],
+    };
+    record_.operations.push(op);
+    let subject;
+    try {
       let windowDone = false;
       let previous = null;
       for (const request of step.requests) {
@@ -142,6 +155,7 @@ export async function record({
         const isSubject = step.subject.includes(request.id);
         if (isSubject) op.startedAt = iso(now);
         const answer = await transport.request(request);
+        if (transport.state.vars.uid) owned.uids.add(String(transport.state.vars.uid));
         if (isSubject) {
           op.endedAt = iso(now);
           subject = answer;
@@ -159,25 +173,48 @@ export async function record({
         previous = request;
       }
       if (!windowDone) await waitAndCapture(step.settleSeconds);
-      op.sourceResult =
-        subject?.kind === "success"
-          ? "typed-success"
-          : subject?.kind === "refusal"
-            ? "typed-refusal"
-            : "unknown";
-      const vars = transport.state.vars;
-      const resolve = (text) => {
-        try {
-          return resolveText(text, vars);
-        } catch {
-          return null;
-        }
-      };
-      op.matchKey = {
-        ...step.matchKey,
-        value: resolve(step.matchKey.value),
-        ...(step.matchKey.values ? { values: step.matchKey.values } : {}),
-      };
+    } catch (error) {
+      // The guard, the ceiling and the credential end the passes; any other error is this step's: it is
+      // recorded as unknown, and the final sweep removes whatever the step made.
+      if (
+        error instanceof GuardRefused ||
+        error instanceof BudgetExhausted ||
+        error instanceof TokenFailure
+      )
+        throw error;
+      op.error = `${error.constructor.name}: ${error.message}`;
+      run.stops.push(`${step.scenarioId} (${step.role}) of pass ${record_.pass}: ${op.error}`);
+    }
+    op.sourceResult =
+      subject?.kind === "success"
+        ? "typed-success"
+        : subject?.kind === "refusal"
+          ? "typed-refusal"
+          : "unknown";
+    const vars = transport.state.vars;
+    const resolve = (text) => {
+      try {
+        return resolveText(text, vars);
+      } catch {
+        return null;
+      }
+    };
+    op.matchKey = {
+      ...step.matchKey,
+      value: resolve(step.matchKey.value),
+      ...(step.matchKey.values ? { values: step.matchKey.values } : {}),
+    };
+  }
+
+  async function runPass(pass) {
+    const record_ = { pass, startedAt: iso(now), endedAt: null, operations: [] };
+    run.passes.push(record_);
+    for (const step of buildPass({ pass, newId }).steps) {
+      if (signal.aborted) {
+        run.stops.push(`a stop signal arrived before ${step.scenarioId} of pass ${pass}`);
+        return false;
+      }
+      await runStep(step, record_);
       await waitAndCapture(STEP_GAP_SECONDS);
     }
     record_.endedAt = iso(now);
@@ -186,13 +223,19 @@ export async function record({
 
   let passesComplete = false;
   let iamBefore = null;
+  let servicesBefore = null;
   try {
     const pre = await runPreflight((spec, vars) => transport.request(spec, vars));
     iamBefore = pre.iamBefore;
+    servicesBefore = pre.servicesBefore;
     run.preflight = { problems: pre.problems, iamBefore: iamPairs(pre.iamBefore) };
     if (pre.problems.length) {
       run.stops.push("the preflight found problems; nothing was written");
       run.cleanup = null;
+      return finish("stopped-clean");
+    }
+    if (signal.aborted) {
+      run.stops.push("a stop signal arrived before anything was created");
       return finish("stopped-clean");
     }
     ran.created = true;
@@ -205,21 +248,30 @@ export async function record({
     }));
     if (setup.some((answer) => answer.kind !== "success")) {
       run.stops.push("a resource of the run could not be created; the deploy was not started");
+    } else if (signal.aborted) {
+      run.stops.push("a stop signal arrived before the deploy; nothing was deployed");
     } else {
       log("deploy");
       ran.deployStarted = true;
       run.deploy.cli = await cli("deploy");
-      run.deploy.readiness = await waitReady({ transport, sleep });
+      const cliFailed = run.deploy.cli?.exitCode !== 0 || run.deploy.cli?.timedOut;
+      run.deploy.readiness = await waitReady({
+        transport,
+        sleep,
+        polls: cliFailed ? 2 : undefined,
+        shouldStop: () => signal.aborted,
+      });
     }
     if (run.stops.length > 0) {
       // nothing more is sent before the cleanup
+    } else if (signal.aborted) {
+      run.stops.push("a stop signal arrived while the deploy settled; the passes were skipped");
     } else if (!run.deploy.readiness.ready) {
       run.stops.push("the 22 handlers did not become active; the passes were skipped");
     } else {
       await waitAndCapture(PROPAGATION_WAIT_SECONDS);
       passesComplete = (await runPass(1)) && (await runPass(2));
       if (passesComplete) await waitAndCapture(FINAL_WINDOW_SECONDS);
-      await capture.poll();
     }
   } catch (error) {
     run.stops.push(`${error.constructor.name}: ${error.message}`);
@@ -231,11 +283,20 @@ export async function record({
   // The cleanup runs after any stop once something was created.
   transport.setCeiling(CLEANUP_CEILING);
   try {
-    run.cleanup = await runCleanup({ transport, cli, sleep, ran, iamBefore });
+    run.cleanup = await runCleanup({
+      transport,
+      cli,
+      sleep,
+      ran,
+      iamBefore,
+      servicesBefore,
+      owned,
+    });
   } catch (error) {
     run.cleanup = { verified: false, problems: [`cleanup: ${error.message}`], steps: {} };
   }
-  await capture.poll().catch(() => {});
+  // One last read of the whole run window, after the cleanup (late entries included).
+  await capture.pollRun().catch(() => {});
   const outcome = run.cleanup.verified
     ? passesComplete && run.stops.length === 0
       ? "recorded"
@@ -247,6 +308,7 @@ export async function record({
     run.frames = capture.frames;
     run.capture = capture.stats();
     run.requestsSent = transport.state.sent;
+    run.owned = { uids: owned.uids.size, emails: owned.emails.size };
     run.endedAt = iso(now);
     return { outcome: finalOutcome, run };
   }

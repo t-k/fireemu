@@ -757,3 +757,31 @@ test("duplicate deliveries of one subject must agree with each other to pick a r
     "emulator: 2 local fsCreatedV1 frames differ from each other",
   ]);
 });
+
+test("ledger 840 reaches the derivation of volatile paths too: production passes that differ only in field-map order derive no volatile order there", () => {
+  const w = world();
+  const pass2 = (generation) =>
+    w.run.frames.find(
+      (entry) =>
+        entry.handler === `fsCreatedV${generation}` &&
+        JSON.stringify(entry.frame).includes(docId(201)),
+    );
+  for (const generation of [1, 2]) {
+    const entry = pass2(generation);
+    entry.frame.event.data.data = Object.fromEntries(
+      Object.entries(entry.frame.event.data.data).reverse(),
+    );
+  }
+  const result = compare(w);
+  const v2 = rowById(result, "functions-events/firestore/create#new-document#v2");
+  assert.equal(v2.status, "MATCH", v2.reasons.join("; "));
+  const volatile2 = result.volatilePaths["fsCreatedV2/fs-create"];
+  assert.equal(
+    "$.frame.event.data.data" in volatile2,
+    false,
+    "a Gen2 field map is not volatile in order",
+  );
+  // Gen1 keeps the order feature: production's own passes differ in order there, so it is volatile (and not a DIFF)
+  const volatile1 = result.volatilePaths["fsCreatedV1/fs-create"];
+  assert.deepEqual(volatile1["$.frame.event.data.data"], ["order"]);
+});

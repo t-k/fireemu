@@ -162,3 +162,47 @@ test("both sessions must name the same binary, and it must be the artifact", () 
     /different tree states/,
   );
 });
+
+test("the two sessions must have run the same runner: its path, its file and its tree, each on its own", () => {
+  for (const change of [
+    { runnerPath: "/other/tools/runner-node/index.mjs" },
+    { runnerSha256: "8".repeat(64) },
+    { runnerTree: "6".repeat(40) },
+  ])
+    assert.throws(
+      () =>
+        checkSessionIdentities(
+          { emulator: session({ ...good, ...change }), strict: session(good) },
+          HEX64,
+        ),
+      /different runners/,
+      JSON.stringify(change),
+    );
+  // each runner field is required in each session
+  for (const key of ["runnerPath", "runnerSha256", "runnerTree"]) {
+    const without = { ...good };
+    delete without[key];
+    for (const sessions of [
+      { emulator: session(without), strict: session(good) },
+      { emulator: session(good), strict: session(without) },
+    ])
+      assert.throws(() => checkSessionIdentities(sessions, HEX64), /binary identity/, key);
+  }
+  for (const [key, value] of [
+    ["runnerPath", "relative/index.mjs"],
+    ["runnerSha256", "z".repeat(64)],
+    ["runnerTree", "z".repeat(40)],
+  ])
+    assert.throws(
+      () =>
+        checkSessionIdentities(
+          {
+            emulator: session({ ...good, [key]: value }),
+            strict: session({ ...good, [key]: value }),
+          },
+          HEX64,
+        ),
+      /binary identity/,
+      key,
+    );
+});

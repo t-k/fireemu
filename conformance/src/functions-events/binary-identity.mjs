@@ -93,6 +93,12 @@ function ownIdentity(session, profile) {
     refuse(`the ${profile} session's source commit is not a commit`);
   if (typeof found.dirty !== "boolean")
     refuse(`the ${profile} session's tree state is not a boolean`);
+  if (typeof found.runnerPath !== "string" || !isAbsolute(found.runnerPath))
+    refuse(`the ${profile} session's runner path is missing or not absolute`);
+  if (!HEX64.test(found.runnerSha256 ?? ""))
+    refuse(`the ${profile} session's runner sha256 is not lowercase hex`);
+  if (!HEX40.test(found.runnerTree ?? ""))
+    refuse(`the ${profile} session's runner tree is not a git tree`);
   return found;
 }
 

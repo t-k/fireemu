@@ -76,6 +76,57 @@ test("placeholders replace in values and keys in one pass, never inside an inser
   });
 });
 
+test("a short or digit-only role value is replaced only as a whole string or a whole path segment", () => {
+  // The local Pub/Sub emulator numbers its messages "1", "2", ...: that must not rewrite every "1" of the frame.
+  const table = placeholderTable({
+    matchKey: { kind: "pubsub", value: "1" },
+    project: "demo-conformance",
+  });
+  const out = applyPlaceholders(
+    {
+      id: "1",
+      specversion: "1.0",
+      type: "google.cloud.pubsub.topic.v1.messagePublished",
+      handler: "pubsubPublishedV1",
+      data: "ZXZlbnRzLWZpeHR1cmU=",
+      path: "topics/1/x",
+      tail: "topics/1",
+      two: "11",
+      key1: { 1: "kept", 11: "kept" },
+      list: ["1", "1.1", "a1"],
+    },
+    table,
+  );
+  assert.deepEqual(out, {
+    id: "<key.value>",
+    specversion: "1.0",
+    type: "google.cloud.pubsub.topic.v1.messagePublished",
+    handler: "pubsubPublishedV1",
+    data: "ZXZlbnRzLWZpeHR1cmU=",
+    path: "topics/<key.value>/x",
+    tail: "topics/<key.value>",
+    two: "11",
+    key1: { "<key.value>": "kept", 11: "kept" },
+    list: ["<key.value>", "1.1", "a1"],
+  });
+  // A long digit-only value (a production message id) is whole-string only too.
+  const long = [["22254343790642112", "<key.value>"]];
+  assert.equal(applyPlaceholders("22254343790642112", long), "<key.value>");
+  assert.equal(applyPlaceholders("x22254343790642112y", long), "x22254343790642112y");
+  assert.equal(applyPlaceholders("a/22254343790642112/b", long), "a/<key.value>/b");
+  // A three-character value is short, a four-character one is replaced anywhere.
+  assert.equal(applyPlaceholders("xabcx", [["abc", "<t>"]]), "xabcx");
+  assert.equal(applyPlaceholders("xabcdx", [["abcd", "<t>"]]), "x<t>x");
+  // A short role and a long role in one table keep their own rules.
+  assert.equal(
+    applyPlaceholders("1 eabc-1", [
+      ["eabc", "<id>"],
+      ["1", "<one>"],
+    ]),
+    "1 <id>-1",
+  );
+});
+
 test("splitting the production-only listing removes only the four named members and keeps names", () => {
   const frame = {
     handler: "h",
@@ -247,7 +298,7 @@ test("placeholder edge cases: no empty source, one token per source, literal mat
   ]);
   assert.equal(applyPlaceholders("p", shared), "<key.bucket>");
 
-  assert.equal(applyPlaceholders("axb a.b", [["a.b", "<x>"]]), "axb <x>");
+  assert.equal(applyPlaceholders("aaxbb aa.bb", [["aa.bb", "<x>"]]), "aaxbb <x>");
   assert.deepEqual(applyPlaceholders({ a: ["x", 1] }, []), { a: ["x", 1] });
 });
 

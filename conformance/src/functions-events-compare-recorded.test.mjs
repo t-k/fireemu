@@ -7,6 +7,7 @@ import { parseTimeMs } from "./functions-events/compare/adapters.mjs";
 import { compareRuns } from "./functions-events/compare/compare.mjs";
 import {
   LOCAL_PROJECT,
+  PRODUCTION_PROJECT as PRODUCTION,
   frameEntry,
   iso,
   localOp,
@@ -322,4 +323,131 @@ test("recorded production-only listing members are ignored for local comparison 
     assert.equal(text.includes(raw), false, raw);
   }
   assert.equal(iso(0), "1970-01-01T00:00:00.000Z");
+});
+
+// The shapes of the FE v5 production run for Pub/Sub (ids and the subscription hash replaced), against a local frame whose
+// message id is the emulator's counter "1": every "1" of the local frame used to be replaced by the id's placeholder.
+function pubsubWorld() {
+  const topic = (project) => `projects/${project}/topics/fe-events-primary`;
+  const v1 = (project, id, time, data) => ({
+    handler: "pubsubPublishedV1",
+    generation: 1,
+    source: "pubsub",
+    event: {
+      context: {
+        eventId: id,
+        timestamp: time,
+        eventType: "google.pubsub.topic.publish",
+        resource: {
+          name: topic(project),
+          service: "pubsub.googleapis.com",
+          type: "type.googleapis.com/google.pubsub.v1.PubsubMessage",
+        },
+        params: {},
+        authType: null,
+        authId: null,
+      },
+      data: { data, attributes: { probe: "p" } },
+    },
+  });
+  const v2 = (project, id, time, data, subscription) => ({
+    handler: "pubsubPublishedV2",
+    generation: 2,
+    source: "pubsub",
+    event: {
+      id,
+      time,
+      type: "google.cloud.pubsub.topic.v1.messagePublished",
+      source: `//pubsub.googleapis.com/${topic(project)}`,
+      subject: null,
+      specversion: "1.0",
+      datacontenttype: null,
+      params: null,
+      authType: null,
+      authId: null,
+      data: {
+        message: { messageId: id, data, publishTime: time, attributes: { probe: "p" } },
+        subscription,
+      },
+    },
+  });
+  const time = "2026-10-04T19:09:46.102Z";
+  const data = "ZWNmNTBhODZhMTQzMzY0ZmQ1NGZjZTUxNm0yNg==";
+  const subscription =
+    "projects/fireemu-oracle-events/subscriptions/eventarc-us-central1-pubsubpublishedv2-000000-sub-000";
+  const start = parseTimeMs(time) - 300;
+  const production = (id, shift) => [
+    frameEntry(v1(PRODUCTION, id, iso(parseTimeMs(time) + shift), data), start + shift + 2000),
+    frameEntry(
+      v2(PRODUCTION, id, iso(parseTimeMs(time) + shift), data, subscription),
+      start + shift + 2000,
+    ),
+  ];
+  const ids = ["22254343790642112", "22254564432090315"];
+  const run = productionRun(
+    [
+      op({
+        scenarioId: "pubsub-publish",
+        start,
+        matchKey: { kind: "pubsub", value: ids[0], topic: "fe-events-primary" },
+        readback: { topicExists: true },
+      }),
+    ],
+    [
+      op({
+        scenarioId: "pubsub-publish",
+        start: start + 3_600_000,
+        matchKey: { kind: "pubsub", value: ids[1], topic: "fe-events-primary" },
+        readback: { topicExists: true },
+      }),
+    ],
+    [...production(ids[0], 0), ...production(ids[1], 3_600_000)],
+  );
+  const local = () =>
+    localSession([
+      {
+        recipeId: "functions-events/pubsub/publish",
+        operations: [
+          localOp({
+            scenarioId: "pubsub-publish",
+            matchKey: { kind: "pubsub", value: "1", topic: "fe-events-primary" },
+            readback: { topicExists: true },
+            v1: [v1(LOCAL_PROJECT, "1", "2026-10-04T19:09:46.102000000Z", data)],
+            v2: [
+              v2(
+                LOCAL_PROJECT,
+                "1",
+                "2026-10-04T19:09:46.102000000Z",
+                data,
+                "projects/demo-conformance/subscriptions/emulator-sub-fe-events-primary",
+              ),
+            ],
+          }),
+        ],
+      },
+    ]);
+  return { run, emulator: local(), strict: local() };
+}
+
+test("a local Pub/Sub message id that is a counter does not rewrite specversion, type, handler or the data length", () => {
+  const rows = rowsOf(compare(pubsubWorld()), "functions-events/pubsub/publish");
+  const reasons = rows
+    .filter(({ status }) => status !== "INCOMPLETE")
+    .flatMap((row) => row.reasons);
+  assert.ok(reasons.length > 0, "the shapes differ in time kind, datacontenttype and subscription");
+  for (const reason of reasons) {
+    assert.doesNotMatch(
+      reason,
+      /specversion|\.type |frame\.handler|message\.data|\.data length/,
+      reason,
+    );
+  }
+  assert.ok(
+    reasons.some(
+      (reason) =>
+        reason.includes("datacontenttype") ||
+        reason.includes("subscription") ||
+        reason.includes("time"),
+    ),
+  );
 });

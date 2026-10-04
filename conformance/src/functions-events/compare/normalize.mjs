@@ -50,10 +50,18 @@ export function placeholderTable({ matchKey, project }) {
 
 const escapeRegExp = (text) => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
+// A role value that is digit-only or shorter than this is replaced only as a whole string or a whole path segment: the local
+// Pub/Sub emulator numbers its messages "1", "2", ..., and replacing every "1" would rewrite "1.0", "v1" and a base64 body.
+export const MIN_SUBSTRING_ROLE_LENGTH = 4;
+
+const wholeOnly = (source) => /^\d+$/.test(source) || source.length < MIN_SUBSTRING_ROLE_LENGTH;
+
 function replacer(table) {
   if (table.length === 0) return (text) => text;
   const tokens = new Map(table);
-  const pattern = new RegExp(table.map(([source]) => escapeRegExp(source)).join("|"), "g");
+  const alternative = ([source]) =>
+    wholeOnly(source) ? `(?<![^/])${escapeRegExp(source)}(?![^/])` : escapeRegExp(source);
+  const pattern = new RegExp(table.map(alternative).join("|"), "g");
   return (text) => text.replace(pattern, (match) => tokens.get(match));
 }
 

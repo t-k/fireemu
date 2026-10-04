@@ -211,15 +211,49 @@ async function sdkInsideFireemu() {
   });
 }
 
+/**
+ * Runs `args` (a node script) inside the official Firestore emulator (firebase-tools, the
+ * oracle of the emulator profile) and resolves with the script's exit code.
+ */
+export async function withOfficialEmulator({ script, args, rules, auth = false }) {
+  const dir = await mkdtemp(join(tmpdir(), "fs-listen-official-"));
+  await writeFile(
+    join(dir, "firebase.json"),
+    JSON.stringify({
+      ...(rules ? { firestore: { rules } } : {}),
+      emulators: {
+        firestore: { host: "127.0.0.1", port: 0 },
+        ...(auth ? { auth: { host: "127.0.0.1", port: 0 } } : {}),
+        ui: { enabled: false },
+      },
+    }),
+  );
+  const command = [process.execPath, script, ...args].map((part) => JSON.stringify(part)).join(" ");
+  const child = spawn(
+    join(dirname(HERE), "../../node_modules/.bin/firebase"),
+    [
+      "emulators:exec",
+      "--only",
+      auth ? "auth,firestore" : "firestore",
+      "--project",
+      "demo-fs-listen",
+      "--config",
+      join(dir, "firebase.json"),
+      command,
+    ],
+    { cwd: dir, stdio: ["ignore", "inherit", "inherit"], env: process.env },
+  );
+  return new Promise((resolve) => child.once("exit", resolve));
+}
+
 /** Runs `command` of this file inside a fireemu session and returns the recording it wrote. */
 async function inFireemu(options, command, { rules } = {}) {
   const tmp = join(await mkdtemp(join(tmpdir(), "fs-listen-out-")), "recording.json");
-  const code = await withFireemu({
-    profile: options.profile ?? "strict",
-    script: HERE,
-    args: [command, "--out", tmp],
-    rules,
-  });
+  const args = [command, "--out", tmp];
+  const code =
+    options.target === "official"
+      ? await withOfficialEmulator({ script: HERE, args, rules, auth: command.startsWith("sdk") })
+      : await withFireemu({ profile: options.profile ?? "strict", script: HERE, args, rules });
   let text;
   try {
     text = await readFile(tmp, "utf8");
@@ -235,13 +269,13 @@ async function main(argv) {
   let recording;
   if (options.command === "native" && options.target === "production") {
     recording = await nativeProduction(options);
-  } else if (options.command === "native" && options.target === "local") {
+  } else if (options.command === "native" && ["local", "official"].includes(options.target)) {
     recording = await inFireemu(options, "native-in-fireemu");
   } else if (options.command === "native-in-fireemu") {
     recording = await nativeInsideFireemu(options);
   } else if (options.command === "sdk" && options.target === "production") {
     recording = await sdkProduction(options);
-  } else if (options.command === "sdk" && options.target === "local") {
+  } else if (options.command === "sdk" && ["local", "official"].includes(options.target)) {
     recording = await inFireemu(options, "sdk-in-fireemu", {
       rules: join(dirname(HERE), "../../firestore.rules"),
     });

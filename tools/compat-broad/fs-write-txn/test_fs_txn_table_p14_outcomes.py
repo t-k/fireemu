@@ -193,3 +193,13 @@ def test_an_unknown_creator_whose_document_the_recovery_cannot_find_stays_owed_a
     assert receipt["unknownCommits"] == [site]
     assert receipt["cleanup"]["absent"] is False
     assert receipt["documents"][role]["status"] == "possibly-owned"
+
+
+def test_a_write_set_writer_that_times_out_without_applying_ends_unrecovered_with_the_holder_rolled_back():
+    # writer-ab names a and b (created by the setup and acknowledged); its timeout is an unknown outcome, and the recovery releases the holder
+    receipt, _service = run(unknown_writes_to=("a",))
+    assert receipt["complete"] is False and receipt["unrecovered"] is True
+    assert receipt["unknownCommits"] == ["rest/w/writer-ab"]
+    assert receipt["openTokens"] == [] and receipt["tokens"]["rest-w"]["state"] == "rolled-back"
+    # the documents the run created and acknowledged are deleted and verified absent (the recovery's own reads); unknownCommits alone calls the A2 handling
+    assert receipt["cleanup"] == {"absent": True}

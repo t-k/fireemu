@@ -25,7 +25,8 @@ fn rfc3339(t: LogicalInstant) -> String {
 /// An object timestamp as production writes it: RFC 3339 UTC with exactly three fractional
 /// digits, the extra ones cut and not rounded (recorded in the object resource of the Storage
 /// REST API and again in the object a finalize event carries, 2026-10-01:
-/// `2026-10-01T08:49:26.486Z`). The Storage REST writer applies the same rule.
+/// `2026-10-01T08:49:26.486Z`). The Storage REST writer applies the same rule, and so does the
+/// `context.timestamp` of an Auth v1 event (`2026-10-04T18:44:34.537Z`, see [`auth_event`]).
 fn object_time(t: LogicalInstant) -> String {
     let full = rfc3339(t);
     let Some(seconds) = full.strip_suffix('Z') else {
@@ -341,21 +342,89 @@ pub fn pubsub_event(
     })
 }
 
-/// The v1 `UserRecord` wire shape.
+/// An Auth wire timestamp as production prints it: RFC 3339 UTC cut to the whole second, with
+/// no fraction (recorded in the `metadata` of the Auth v1 events of the FUNCTIONS-EVENTS formal
+/// record `functions-events-formal-20261004T182904Z-a9621bfae74fe9bc`, 2026-10-04, e.g.
+/// `2026-10-04T18:44:34Z` for a creation at `18:44:34.537`).
+fn whole_second_time(t: LogicalInstant) -> String {
+    let nanos = t.as_nanos();
+    rfc3339(LogicalInstant::from_nanos(
+        nanos - nanos.rem_euclid(1_000_000_000),
+    ))
+}
+
+/// One `providerData` entry of the Auth v1 wire: the members that are set. Production's entry of
+/// a password account has `email`, `providerId` and `uid` only (record above, frame 55), so an
+/// unset profile member is absent, not `null`.
+fn provider_entry(
+    uid: &str,
+    provider_id: &str,
+    email: Option<&str>,
+    display_name: Option<&str>,
+    photo_url: Option<&str>,
+) -> Value {
+    let mut entry = Map::new();
+    entry.insert("uid".to_owned(), json!(uid));
+    entry.insert("providerId".to_owned(), json!(provider_id));
+    for (key, value) in [
+        ("email", email),
+        ("displayName", display_name),
+        ("photoURL", photo_url),
+    ] {
+        if let Some(value) = value {
+            entry.insert(key.to_owned(), json!(value));
+        }
+    }
+    Value::Object(entry)
+}
+
+/// The v1 `UserRecord` wire shape, as the recorded production events carry it (frames 55, 66,
+/// 121-132, 192, 203 and 258-269 of the record named at [`whole_second_time`]):
+///
+/// - `metadata.creationTime` and `metadata.lastSignInTime` are cut to the whole second, and
+///   `lastSignInTime` is absent while the account never signed in (an account an admin created
+///   has none; one signed up through `accounts:signUp` has it equal to the creation, and a later
+///   sign-in shows in the delete event);
+/// - `tokensValidAfterTime` is `null` for every recorded account, none of which had its tokens
+///   revoked. A revoked account keeps printing the revocation second (unrecorded);
+/// - a `providerData` entry carries the members that are set and no `null` placeholders.
 #[must_use]
 pub fn user_record_json(u: &UserRecord) -> Value {
     let mut providers: Vec<Value> = Vec::new();
     if let Some(email) = &u.email {
-        providers.push(json!({"uid": email, "providerId": "password", "email": email, "displayName": u.display_name, "photoURL": u.photo_url}));
+        providers.push(provider_entry(
+            email,
+            "password",
+            Some(email),
+            u.display_name.as_deref(),
+            u.photo_url.as_deref(),
+        ));
     }
     if let Some(phone) = &u.phone_number {
         providers.push(json!({"uid": phone, "providerId": "phone", "phoneNumber": phone}));
     }
     for f in &u.federated {
-        providers.push(json!({"uid": f.raw_id, "providerId": f.provider_id, "email": f.email, "displayName": f.display_name, "photoURL": f.photo_url}));
+        providers.push(provider_entry(
+            &f.raw_id,
+            &f.provider_id,
+            f.email.as_deref(),
+            f.display_name.as_deref(),
+            f.photo_url.as_deref(),
+        ));
     }
     let claims: Value =
         serde_json::from_str(&u.custom_claims.canonical_json()).unwrap_or(json!({}));
+    let mut metadata = Map::new();
+    metadata.insert(
+        "creationTime".to_owned(),
+        json!(whole_second_time(u.created_at)),
+    );
+    if let Some(signed_in) = u.last_sign_in_at {
+        metadata.insert(
+            "lastSignInTime".to_owned(),
+            json!(whole_second_time(signed_in)),
+        );
+    }
     json!({
         "uid": u.local_id.as_str(),
         "email": u.email,
@@ -364,17 +433,18 @@ pub fn user_record_json(u: &UserRecord) -> Value {
         "photoURL": u.photo_url,
         "phoneNumber": u.phone_number,
         "disabled": u.disabled,
-        "metadata": {
-            "creationTime": rfc3339(u.created_at),
-            "lastSignInTime": u.last_sign_in_at.map(rfc3339),
-        },
+        "metadata": metadata,
         "providerData": providers,
         "customClaims": claims,
-        "tokensValidAfterTime": rfc3339(u.tokens_valid_after),
+        "tokensValidAfterTime": u.tokens_revoked.then(|| rfc3339(u.tokens_valid_after)),
     })
 }
 
-/// An Auth user event (`data` is the v1 `UserRecord`).
+/// An Auth user event (`data` is the v1 `UserRecord`). The runner hands `id` and `time` to the
+/// 1st gen handler as `context.eventId` and `context.timestamp`; production prints the first as
+/// a UUID and the second with exactly three fractional digits (frames 55 and 66 of the record
+/// named at [`whole_second_time`]: `bfcfc370-9507-435b-9ad0-9143ff05c8db`,
+/// `2026-10-04T18:44:34.537Z`).
 #[must_use]
 pub fn auth_event(
     id: &str,
@@ -386,10 +456,10 @@ pub fn auth_event(
     let attrs = auth_attributes(project, kind);
     json!({
         "specversion": "1.0",
-        "id": id,
+        "id": event_id_uuid(id),
         "source": attrs.source,
         "type": attrs.event_type,
-        "time": rfc3339(time),
+        "time": object_time(time),
         "datacontenttype": "application/json",
         "data": user_record_json(user),
     })
@@ -815,6 +885,365 @@ mod tests {
                     let parsed = LogicalInstant::parse_rfc3339(&time).unwrap().as_nanos();
                     prop_assert_eq!(parsed, at - at.rem_euclid(1_000));
                 }
+            }
+        }
+    }
+}
+
+/// The Auth v1 event wire against the production frames of the FUNCTIONS-EVENTS formal record
+/// `functions-events-formal-20261004T182904Z-a9621bfae74fe9bc` (`production-run.json`, `frames`
+/// array, 0-based indexes quoted per test). The function receives this wire through the
+/// firebase-functions v1 `userRecordConstructor`, so the tests replay the wire through a copy of
+/// that constructor's `toJSON` and compare what the handler sees.
+#[cfg(test)]
+mod auth_event_shapes {
+    use super::{auth_event, event_id_uuid, user_record_json};
+    use fireemu_core_auth::mfa::TotpPolicy;
+    use fireemu_core_auth::store::{AuthStore, NewUser, UserRecord};
+    use fireemu_core_functions::manifest::AuthEvent;
+    use fireemu_core_types::determinism::SplitMix64;
+    use fireemu_core_types::time::LogicalInstant;
+    use proptest::prelude::*;
+    use serde_json::{json, Map, Value};
+
+    /// 2026-10-04T18:44:34Z, the whole second of the creation in frame 55.
+    const FRAME_55_SECOND: i64 = 1_791_139_474;
+
+    fn at(seconds: i64, nanos: i128) -> LogicalInstant {
+        LogicalInstant::from_nanos(i128::from(seconds) * 1_000_000_000 + nanos)
+    }
+
+    fn password_user(email: &str, created: LogicalInstant) -> UserRecord {
+        let mut store = AuthStore::new("demo-app", SplitMix64::new(1), TotpPolicy::default());
+        let uid = store.create_user(NewUser::email(email), created).unwrap();
+        let mut user = store.user(&uid).unwrap().clone();
+        user.created_at = created;
+        user
+    }
+
+    /// `userRecordConstructor(wire).toJSON()` of firebase-functions 7.3.2
+    /// (`lib/common/providers/identity.js`, lines 56-104), which is the function that produced
+    /// the recorded frames: the falsey defaults fill members the wire lacks, `metadata` is
+    /// passed through member by member (an absent member is `undefined` and `JSON.stringify`
+    /// drops it, a `null` stays), and each provider entry is copied as it is.
+    fn sdk_user_json(wire: &Value) -> Value {
+        let mut record = Map::new();
+        for (key, default) in [
+            ("email", Value::Null),
+            ("emailVerified", json!(false)),
+            ("displayName", Value::Null),
+            ("photoURL", Value::Null),
+            ("phoneNumber", Value::Null),
+            ("disabled", json!(false)),
+            ("providerData", json!([])),
+            ("customClaims", json!({})),
+            ("passwordSalt", Value::Null),
+            ("passwordHash", Value::Null),
+            ("tokensValidAfterTime", Value::Null),
+        ] {
+            record.insert(key.to_owned(), default);
+        }
+        for (key, value) in wire.as_object().unwrap() {
+            record.insert(key.clone(), value.clone());
+        }
+        let meta = record.get("metadata").and_then(Value::as_object).cloned();
+        let mut metadata = Map::new();
+        if let Some(meta) = meta {
+            if let Some(created) = meta
+                .get("createdAt")
+                .or_else(|| meta.get("creationTime"))
+                .filter(|v| !v.is_null())
+            {
+                metadata.insert("creationTime".to_owned(), created.clone());
+            } else {
+                metadata.insert("creationTime".to_owned(), Value::Null);
+            }
+            let signed_in = meta
+                .get("lastSignedInAt")
+                .or_else(|| meta.get("lastSignInTime"))
+                .filter(|v| !v.is_null());
+            match signed_in {
+                Some(value) => {
+                    metadata.insert("lastSignInTime".to_owned(), value.clone());
+                }
+                // `meta.lastSignedInAt || meta.lastSignInTime`: a null member gives null, an
+                // absent one gives `undefined`, which the JSON drops.
+                None if meta.get("lastSignInTime").is_some_and(Value::is_null) => {
+                    metadata.insert("lastSignInTime".to_owned(), Value::Null);
+                }
+                None => {}
+            }
+        } else {
+            metadata.insert("creationTime".to_owned(), Value::Null);
+            metadata.insert("lastSignInTime".to_owned(), Value::Null);
+        }
+        let mut out = Map::new();
+        for key in [
+            "uid",
+            "email",
+            "emailVerified",
+            "displayName",
+            "photoURL",
+            "phoneNumber",
+            "disabled",
+            "passwordHash",
+            "passwordSalt",
+            "tokensValidAfterTime",
+        ] {
+            out.insert(
+                key.to_owned(),
+                record.get(key).cloned().unwrap_or(Value::Null),
+            );
+        }
+        out.insert("metadata".to_owned(), Value::Object(metadata));
+        out.insert("customClaims".to_owned(), record["customClaims"].clone());
+        out.insert("providerData".to_owned(), record["providerData"].clone());
+        Value::Object(out)
+    }
+
+    fn is_uuid_v4(text: &str) -> bool {
+        let parts: Vec<&str> = text.split('-').collect();
+        parts.iter().map(|p| p.len()).collect::<Vec<_>>() == [8, 4, 4, 4, 12]
+            && text
+                .chars()
+                .all(|c| c == '-' || c.is_ascii_digit() || ('a'..='f').contains(&c))
+            && text.as_bytes()[14] == b'4'
+            && matches!(text.as_bytes()[19], b'8' | b'9' | b'a' | b'b')
+    }
+
+    #[test]
+    fn the_event_id_is_a_uuid_as_in_frames_55_66_121_and_122() {
+        // Production: `context.eventId` "bfcfc370-9507-435b-9ad0-9143ff05c8db" (frame 55),
+        // "27180876-bd2b-4b59-8af9-e2f9db23b344" (frame 66, the delete of the same account).
+        let user = password_user("a@example.test", at(FRAME_55_SECOND, 0));
+        for kind in [AuthEvent::Created, AuthEvent::Deleted] {
+            let event = auth_event("42-7", "demo-app", kind, &user, at(FRAME_55_SECOND, 0));
+            let id = event["id"].as_str().unwrap();
+            assert!(is_uuid_v4(id), "{id}");
+            assert_eq!(id, event_id_uuid("42-7"));
+        }
+    }
+
+    #[test]
+    fn the_context_timestamp_has_three_fraction_digits_cut_not_rounded_as_in_frame_55() {
+        // Production: `context.timestamp` "2026-10-04T18:44:34.537Z" (frame 55) and
+        // "2026-10-04T18:45:09.903Z" (frame 66); every recorded value has exactly three digits.
+        let user = password_user("a@example.test", at(FRAME_55_SECOND, 0));
+        let event = auth_event(
+            "42-1",
+            "demo-app",
+            AuthEvent::Created,
+            &user,
+            at(FRAME_55_SECOND, 537_999_999),
+        );
+        assert_eq!(event["time"], "2026-10-04T18:44:34.537Z");
+        let whole = auth_event(
+            "42-1",
+            "demo-app",
+            AuthEvent::Created,
+            &user,
+            at(FRAME_55_SECOND, 0),
+        );
+        assert_eq!(whole["time"], "2026-10-04T18:44:34.000Z");
+    }
+
+    #[test]
+    fn an_account_an_admin_created_has_no_last_sign_in_member_as_in_frames_121_and_122() {
+        // Frame 121 (create) and 122 (delete): `metadata` is {"creationTime":
+        // "2026-10-04T19:01:43Z"} and nothing else, the creation cut to the second.
+        let created = at(1_791_140_503, 528_123_456); // 19:01:43.528...
+        let user = password_user("e1046da69e0e78a784a9514ddu19@example.test", created);
+        assert_eq!(user.last_sign_in_at, None);
+        for kind in [AuthEvent::Created, AuthEvent::Deleted] {
+            let wire = auth_event("42-1", "demo-app", kind, &user, created)["data"].clone();
+            let seen = sdk_user_json(&wire);
+            assert_eq!(
+                seen["metadata"],
+                json!({"creationTime": "2026-10-04T19:01:43Z"})
+            );
+        }
+    }
+
+    #[test]
+    fn a_signed_up_account_shows_its_sign_in_cut_to_the_second_as_in_frame_55() {
+        // Frame 55: creationTime and lastSignInTime are both "2026-10-04T18:44:34Z".
+        let created = at(FRAME_55_SECOND, 537_000_000);
+        let mut user = password_user("e4585e5442efa3439b570ce10f7@example.test", created);
+        user.last_sign_in_at = Some(created);
+        let wire =
+            auth_event("42-1", "demo-app", AuthEvent::Created, &user, created)["data"].clone();
+        assert_eq!(
+            sdk_user_json(&wire)["metadata"],
+            json!({"creationTime": "2026-10-04T18:44:34Z", "lastSignInTime": "2026-10-04T18:44:34Z"})
+        );
+    }
+
+    #[test]
+    fn a_later_sign_in_shows_in_the_delete_event_as_in_frame_126() {
+        // Frame 125 (create, no lastSignInTime) then 126 (delete after a sign-in 20 s later):
+        // creationTime "2026-10-04T19:03:17Z", lastSignInTime "2026-10-04T19:03:37Z".
+        let created = at(1_791_140_597, 289_000_000);
+        let mut user = password_user("ea5f2cb63a8734b61feadd712u21@example.test", created);
+        let create = auth_event("42-1", "demo-app", AuthEvent::Created, &user, created);
+        assert!(sdk_user_json(&create["data"])["metadata"]
+            .get("lastSignInTime")
+            .is_none());
+        user.last_sign_in_at = Some(at(1_791_140_617, 804_000_000));
+        let delete = auth_event("42-2", "demo-app", AuthEvent::Deleted, &user, created);
+        assert_eq!(
+            sdk_user_json(&delete["data"])["metadata"],
+            json!({"creationTime": "2026-10-04T19:03:17Z", "lastSignInTime": "2026-10-04T19:03:37Z"})
+        );
+    }
+
+    #[test]
+    fn a_password_provider_entry_has_exactly_email_provider_id_and_uid_as_in_frame_55() {
+        // Frame 55 `providerData[0]`: {"email", "providerId": "password", "uid": <the email>}.
+        // No displayName or photoURL member, null or otherwise, for an account without them.
+        let user = password_user(
+            "e4585e5442efa3439b570ce10f7@example.test",
+            at(FRAME_55_SECOND, 0),
+        );
+        let wire = user_record_json(&user);
+        let entry = wire["providerData"][0].as_object().unwrap();
+        let mut keys: Vec<&str> = entry.keys().map(String::as_str).collect();
+        keys.sort_unstable();
+        assert_eq!(keys, ["email", "providerId", "uid"]);
+        assert_eq!(entry["uid"], "e4585e5442efa3439b570ce10f7@example.test");
+    }
+
+    #[test]
+    fn a_password_provider_entry_keeps_a_display_name_and_photo_the_account_has() {
+        // Unrecorded: no recorded account had a profile. The members are kept when set
+        // (firebase-admin prints them for a profile), only the null placeholders go.
+        let mut user = password_user("a@example.test", at(FRAME_55_SECOND, 0));
+        user.display_name = Some("Ada".to_owned());
+        user.photo_url = Some("https://example.test/a.png".to_owned());
+        let wire = user_record_json(&user);
+        assert_eq!(wire["providerData"][0]["displayName"], "Ada");
+        assert_eq!(
+            wire["providerData"][0]["photoURL"],
+            "https://example.test/a.png"
+        );
+    }
+
+    #[test]
+    fn tokens_valid_after_time_is_null_for_the_recorded_never_revoked_accounts() {
+        // Frames 55, 121, 125, 131 ...: `tokensValidAfterTime` is null for an admin-created and
+        // for a signed-up account alike.
+        let created = at(FRAME_55_SECOND, 537_000_000);
+        for signed_up in [false, true] {
+            let mut user = password_user("a@example.test", created);
+            if signed_up {
+                user.last_sign_in_at = Some(created);
+            }
+            assert!(!user.tokens_revoked);
+            let wire =
+                auth_event("42-1", "demo-app", AuthEvent::Created, &user, created)["data"].clone();
+            assert_eq!(sdk_user_json(&wire)["tokensValidAfterTime"], Value::Null);
+        }
+    }
+
+    #[test]
+    fn a_revoked_account_keeps_printing_the_revocation_second() {
+        // Unrecorded: no recorded account had its tokens revoked, so the member keeps the form
+        // it had (RFC 3339, whole second).
+        let created = at(FRAME_55_SECOND, 537_000_000);
+        let mut user = password_user("a@example.test", created);
+        user.tokens_revoked = true;
+        user.tokens_valid_after = at(FRAME_55_SECOND + 5, 0);
+        let wire = user_record_json(&user);
+        assert_eq!(wire["tokensValidAfterTime"], "2026-10-04T18:44:39Z");
+    }
+
+    #[test]
+    fn the_handler_sees_the_whole_recorded_user_of_frame_121() {
+        // Frame 121 `data`, member by member, for an admin-created account.
+        let created = at(1_791_140_503, 528_000_000);
+        let email = "e1046da69e0e78a784a9514ddu19@example.test";
+        let user = password_user(email, created);
+        let wire =
+            auth_event("42-1", "demo-app", AuthEvent::Created, &user, created)["data"].clone();
+        let seen = sdk_user_json(&wire);
+        let mut expected = json!({
+            "uid": "<uid>",
+            "email": email,
+            "emailVerified": false,
+            "displayName": null,
+            "photoURL": null,
+            "phoneNumber": null,
+            "disabled": false,
+            "passwordHash": null,
+            "passwordSalt": null,
+            "tokensValidAfterTime": null,
+            "metadata": {"creationTime": "2026-10-04T19:01:43Z"},
+            "customClaims": {},
+            "providerData": [{"email": email, "providerId": "password", "uid": email}],
+        });
+        expected["uid"] = Value::String(user.local_id.as_str().to_owned());
+        assert_eq!(seen, expected);
+    }
+
+    proptest! {
+        #[test]
+        fn the_event_id_is_always_a_uuid_and_a_function_of_the_seed(seed in ".*") {
+            let user = password_user("a@example.test", at(FRAME_55_SECOND, 0));
+            let event = auth_event(&seed, "demo-app", AuthEvent::Created, &user, at(FRAME_55_SECOND, 0));
+            let id = event["id"].as_str().unwrap();
+            prop_assert!(is_uuid_v4(id), "{}", id);
+            prop_assert_eq!(id, event_id_uuid(&seed));
+        }
+
+        #[test]
+        fn the_context_time_has_three_digits_and_is_cut_not_rounded(
+            nanos in -4_000_000_000_000_000_000_i128..4_000_000_000_000_000_000
+        ) {
+            let instant = LogicalInstant::from_nanos(i128::from(FRAME_55_SECOND) * 1_000_000_000 + nanos);
+            let user = password_user("a@example.test", at(FRAME_55_SECOND, 0));
+            let event = auth_event("42-1", "demo-app", AuthEvent::Created, &user, instant);
+            let text = event["time"].as_str().unwrap();
+            let fraction = text.strip_suffix('Z').unwrap().rsplit('.').next().unwrap();
+            prop_assert_eq!(fraction.len(), 3, "{}", text);
+            prop_assert_eq!(text.len(), 24);
+            let parsed = LogicalInstant::parse_rfc3339(text).unwrap().as_nanos();
+            prop_assert_eq!(parsed, instant.as_nanos() - instant.as_nanos().rem_euclid(1_000_000));
+        }
+
+        #[test]
+        fn creation_and_sign_in_times_are_the_instant_cut_to_the_whole_second(
+            created in 0_i128..4_000_000_000_000_000_000,
+            signed_in in proptest::option::of(0_i128..4_000_000_000_000_000_000),
+        ) {
+            let mut user = password_user("a@example.test", LogicalInstant::from_nanos(created));
+            user.last_sign_in_at = signed_in.map(LogicalInstant::from_nanos);
+            let wire = user_record_json(&user);
+            let whole = |n: i128| n - n.rem_euclid(1_000_000_000);
+            let creation = wire["metadata"]["creationTime"].as_str().unwrap();
+            prop_assert_eq!(creation.len(), 20);
+            prop_assert_eq!(LogicalInstant::parse_rfc3339(creation).unwrap().as_nanos(), whole(created));
+            match signed_in {
+                Some(n) => {
+                    let text = wire["metadata"]["lastSignInTime"].as_str().unwrap();
+                    prop_assert_eq!(text.len(), 20);
+                    prop_assert_eq!(LogicalInstant::parse_rfc3339(text).unwrap().as_nanos(), whole(n));
+                }
+                None => prop_assert!(wire["metadata"].get("lastSignInTime").is_none()),
+            }
+        }
+
+        #[test]
+        fn tokens_valid_after_time_is_present_exactly_when_tokens_were_revoked(
+            revoked in any::<bool>(),
+            valid_after in 0_i64..4_000_000_000,
+        ) {
+            let mut user = password_user("a@example.test", at(FRAME_55_SECOND, 0));
+            user.tokens_revoked = revoked;
+            user.tokens_valid_after = at(valid_after, 0);
+            let wire = user_record_json(&user);
+            if revoked {
+                prop_assert!(wire["tokensValidAfterTime"].is_string());
+            } else {
+                prop_assert!(wire["tokensValidAfterTime"].is_null());
             }
         }
     }

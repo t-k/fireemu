@@ -32,6 +32,17 @@ test("newRunId is a lower-case document id that differs between moments", () => 
   assert.notEqual(newRunId(1_700_000_000_000), newRunId(1_700_000_000_001));
 });
 
+/** A clock only sleeping moves, so a wait that nothing satisfies runs out at once. */
+function fakeClock() {
+  const state = { t: 0 };
+  return {
+    sleep: async (ms) => {
+      state.t += ms;
+    },
+    now: () => state.t,
+  };
+}
+
 /** A client whose first write fails: the programs end in errors, the cleanup must still run. */
 function failingClient() {
   const calls = [];
@@ -60,7 +71,7 @@ function failingClient() {
 
 test("recordNative reports a failing program and still cleans up and reads back", async () => {
   const client = failingClient();
-  const recording = await recordNative({ client, project: "p", run: "r1" });
+  const recording = await recordNative({ client, project: "p", run: "r1", clock: fakeClock() });
   assert.equal(recording.version, 1);
   assert.equal(recording.kind, "native");
   assert.ok(Object.keys(recording.errors).length > 0);
@@ -77,7 +88,7 @@ test("recordNative marks the cleanup incomplete when the read-back itself fails"
   client.missing = async () => {
     throw new Error("read-back unavailable");
   };
-  const recording = await recordNative({ client, project: "p", run: "r1" });
+  const recording = await recordNative({ client, project: "p", run: "r1", clock: fakeClock() });
   assert.equal(recording.cleanup.complete, false);
   assert.match(recording.cleanup.error, /read-back unavailable/);
 });

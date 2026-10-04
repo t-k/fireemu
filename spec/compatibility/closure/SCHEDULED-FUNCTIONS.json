@@ -532,7 +532,11 @@
   "limitations": [
     "The inventory is frozen; all evidence remains pending and the parent is IMPLEMENTING.",
     "DST repeated delivery is not proven by future next-time metadata.",
-    "General Cloud Scheduler resource API is not claimed."
+    "General Cloud Scheduler resource API is not claimed.",
+    "The Fireemu-only conditions are bound to local tests and claim no production behaviour.",
+    "A snapshot restore that is rolled back because a later hook refuses it resets the functions runtime a second time: the schedule queue from before the restore is discarded and every schedule cursor stays at the restored time, so occurrences can repeat or be skipped. Known; not fixed here.",
+    "With scheduler.catchUp all and scheduler.overlap skip or reject, one clock move over several occurrences of a function overlaps itself (skip keeps the oldest, reject counts the rest). The behaviour is pinned by a test, not endorsed.",
+    "scheduler.clock wall is declared in the config schema and refused at load as not implemented."
   ],
   "frozenOn": "2026-09-30",
   "freezeAuthority": "docs.local/instructions/owner-decisions.md (2026-09-30 SCHEDULED-FUNCTIONS scope: coordinator rulings)"

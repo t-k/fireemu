@@ -89,6 +89,7 @@ export function createTransport({ fetch: send = fetch, token, apiKey, directory,
     if (resolved.auth === "oauth") headers.authorization = `Bearer ${await token()}`;
     else if (resolved.auth === "idtoken") headers.authorization = `Bearer ${resolveText("${idToken}", vars)}`;
     else if (resolved.auth === "apikey") url += `${url.includes("?") ? "&" : "?"}key=${encodeURIComponent(apiKey)}`;
+    // auth "none" (the token refresh itself) sends no credential header.
     let body;
     if (resolved.body !== undefined) {
       if (resolved.contentType) {

@@ -693,6 +693,95 @@ mod tests {
         fireemu_core_firestore::field_path::FieldPath::parse(name).expect("field")
     }
 
+    /// A functions runtime over the fake runner the adapter's tests use, on `clock`.
+    async fn functions_runtime(
+        clock: Arc<std::sync::Mutex<fireemu_core_session::clock::VirtualClock>>,
+    ) -> Arc<fireemu_adapter_functions::runtime::FunctionsRuntime> {
+        use fireemu_adapter_functions::manifest_json::parse_manifest;
+        use fireemu_adapter_functions::runner::{Runner, SpawnSpec};
+        use fireemu_adapter_functions::runtime::{
+            CatchUpPolicy, FunctionsConfig, FunctionsRuntime, OverlapPolicy,
+        };
+        let spec = SpawnSpec {
+            command: vec![
+                "python3".to_owned(),
+                concat!(
+                    env!("CARGO_MANIFEST_DIR"),
+                    "/../fireemu-adapter-functions/tests/fake_runner.py"
+                )
+                .to_owned(),
+            ],
+            cwd: None,
+            env: Vec::new(),
+            hello_timeout: std::time::Duration::from_secs(60),
+        };
+        let runner = Runner::spawn_spec(&spec).await.expect("fake runner");
+        let manifest = parse_manifest(runner.hello().manifest.as_ref().expect("manifest"))
+            .expect("manifest parses");
+        FunctionsRuntime::new(
+            manifest,
+            FunctionsConfig {
+                project: "demo-app".to_owned(),
+                default_bucket: "demo-app.appspot.com".to_owned(),
+                location: "nam5".to_owned(),
+                session: fireemu_core_types::ids::SessionId::new(7),
+                max_running: 4,
+                debug_mode: false,
+                retry_attempts: 1,
+                max_catch_up_runs: 1000,
+                runner_secret: "test-secret".to_owned(),
+                overlap: OverlapPolicy::Allow,
+                catch_up: CatchUpPolicy::All,
+                functions_host: Some("127.0.0.1:5001".to_owned()),
+            },
+            clock,
+            Arc::new(runner),
+            Some(spec),
+        )
+    }
+
+    /// A snapshot keeps no schedule state: restoring it resets the functions runtime. The clock
+    /// hook restores first (it is registered first), so the reset starts every schedule at the
+    /// restored time, and the occurrences the session had already passed are due again once,
+    /// not twice, and nothing queued before the restore is delivered into the restored session.
+    #[tokio::test]
+    async fn a_restore_resets_the_schedule_to_the_restored_clock() {
+        use fireemu_core_session::clock::VirtualClock;
+        use fireemu_core_types::time::LogicalDuration;
+        let clock = Arc::new(std::sync::Mutex::new(VirtualClock::new(AT)));
+        let runtime = functions_runtime(clock.clone()).await;
+        let scope = Scope::AllExcept(BTreeSet::new());
+        let clock_hook = super::SessionClock(clock.clone());
+        let functions = super::Functions::new(runtime.clone(), Arc::new(std::sync::Mutex::new(())));
+        let captured_clock = clock_hook.capture(&scope).unwrap();
+        let captured = functions.capture(&scope).unwrap();
+        let ten_minutes = LogicalDuration::from_seconds(10 * 60);
+
+        clock.lock().unwrap().advance(ten_minutes).unwrap();
+        runtime.on_clock_changed();
+        assert_eq!(runtime.status()["pending"], 2, "12:05 and 12:10 are queued");
+
+        clock_hook.restore(&scope, &captured_clock).unwrap();
+        functions.restore(&scope, &captured).unwrap();
+        assert_eq!(runtime.now(), AT);
+        assert_eq!(
+            runtime.status()["pending"],
+            0,
+            "the queued runs were dropped"
+        );
+        assert_eq!(runtime.status()["epoch"], 1);
+        assert!(runtime.is_idle());
+
+        clock.lock().unwrap().advance(ten_minutes).unwrap();
+        runtime.on_clock_changed();
+        assert_eq!(
+            runtime.status()["pending"],
+            2,
+            "the schedule restarted at the restored time: 12:05 and 12:10, once each"
+        );
+        runtime.shutdown().await;
+    }
+
     #[test]
     fn a_restore_brings_back_the_time_to_live_policies_the_capture_held() {
         let backend = backend();

@@ -35,6 +35,16 @@ async fn rest_request(
     path: &str,
     body: Value,
 ) -> (u16, Value) {
+    let (status, body) = rest_request_raw(address, method, path, body).await;
+    (status, serde_json::from_slice(&body).unwrap())
+}
+
+async fn rest_request_raw(
+    address: std::net::SocketAddr,
+    method: &str,
+    path: &str,
+    body: Value,
+) -> (u16, Vec<u8>) {
     let mut stream = tokio::net::TcpStream::connect(address).await.unwrap();
     let body = serde_json::to_vec(&body).unwrap();
     let request = format!(
@@ -66,7 +76,7 @@ async fn rest_request(
         .unwrap()
         .parse()
         .unwrap();
-    (status, serde_json::from_slice(body).unwrap())
+    (status, body.to_vec())
 }
 
 async fn grpc_channel(address: std::net::SocketAddr) -> tonic::transport::Channel {
@@ -1093,9 +1103,9 @@ async fn both_transports_refuse_every_declared_but_unsupported_subscription_opti
     .await;
     assert_eq!(status, 200);
     assert_eq!(
-        listed["subscriptions"].as_array().unwrap().len(),
-        0,
-        "a refused option must not leave a listed subscription: {listed}"
+        listed,
+        json!({}),
+        "a refused option must not leave a listed subscription"
     );
 }
 
@@ -2058,4 +2068,85 @@ async fn rest_snapshot_creation_separates_unknown_names_from_unsupported_fields(
     .await;
     assert_eq!(status, 200, "{snapshot}");
     assert_eq!(snapshot["labels"]["owner"], "test");
+}
+
+#[tokio::test]
+async fn rest_collection_fields_follow_cardinality_on_the_pubsub_listener() {
+    let clock = Arc::new(Mutex::new(VirtualClock::new(
+        LogicalInstant::from_unix_seconds(1_700_000_000),
+    )));
+    let handle = PubSubHandle::new(Arc::new(Mutex::new(PubSubState::new(99))), clock, None);
+    let port = std::env::var("PORT").unwrap_or_else(|_| "0".to_owned());
+    let listener = tokio::net::TcpListener::bind(format!("127.0.0.1:{port}"))
+        .await
+        .unwrap();
+    let address = listener.local_addr().unwrap();
+    let server = tokio::spawn(serve_pubsub(listener, handle));
+
+    // Exhaust a small cardinality model and sample larger collections reproducibly.
+    let generated_counts = (0..12).scan(0x5eed_u64, |seed, _| {
+        *seed = seed.wrapping_mul(6_364_136_223_846_793_005).wrapping_add(1);
+        Some(((*seed >> 32) % 8) as usize)
+    });
+    for (case, count) in (0..=3).chain(generated_counts).enumerate() {
+        let project = format!("list-cardinality-{case}");
+        let topics_path = format!("/v1/projects/{project}/topics");
+        let subscriptions_path = format!("/v1/projects/{project}/subscriptions");
+        for path in [&topics_path, &subscriptions_path] {
+            let (status, body) = rest_request_raw(address, "GET", path, json!({})).await;
+            assert_eq!(status, 200);
+            assert_eq!(body, b"{}", "fresh collection: {path}");
+        }
+        for id in 0..count {
+            let topic_name = format!("projects/{project}/topics/topic-{id}");
+            let (status, _) =
+                rest_request(address, "PUT", &format!("/v1/{topic_name}"), json!({})).await;
+            assert_eq!(status, 200);
+            let (status, _) = rest_request(
+                address,
+                "PUT",
+                &format!("{subscriptions_path}/sub-{id}"),
+                json!({"topic": topic_name}),
+            )
+            .await;
+            assert_eq!(status, 200);
+        }
+        for (path, field, prefix) in [
+            (&topics_path, "topics", "topic"),
+            (&subscriptions_path, "subscriptions", "sub"),
+        ] {
+            let (status, response) = rest_request(address, "GET", path, json!({})).await;
+            assert_eq!(status, 200);
+            let object = response.as_object().unwrap();
+            assert!(!object.contains_key("nextPageToken"));
+            if count == 0 {
+                assert!(object.is_empty());
+            } else {
+                assert_eq!(object.len(), 1);
+                let resources = response[field].as_array().unwrap();
+                assert_eq!(resources.len(), count);
+                for id in 0..count {
+                    let name = format!("projects/{project}/{field}/{prefix}-{id}");
+                    assert!(resources.iter().any(|resource| resource["name"] == name));
+                }
+            }
+        }
+        for id in 0..count {
+            for path in [
+                format!("{subscriptions_path}/sub-{id}"),
+                format!("{topics_path}/topic-{id}"),
+            ] {
+                let (status, _) = rest_request(address, "DELETE", &path, json!({})).await;
+                assert_eq!(status, 200);
+            }
+        }
+        for path in [&topics_path, &subscriptions_path] {
+            let (status, body) = rest_request_raw(address, "GET", path, json!({})).await;
+            assert_eq!(status, 200);
+            assert_eq!(body, b"{}", "deleted collection: {path}");
+        }
+    }
+    server.abort();
+    assert!(server.await.unwrap_err().is_cancelled());
+    assert!(tokio::net::TcpStream::connect(address).await.is_err());
 }

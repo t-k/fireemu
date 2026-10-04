@@ -352,3 +352,15 @@ test("volatile kind, length and order are not compared; a stable kind is reporte
     ["x: extra-field $.o.c"],
   );
 });
+
+test("a format feature production never had is reported as none, not hidden", () => {
+  const mixed = deriveVolatile(flatten({ v: "123" }), flatten({ v: "12a" })).volatile;
+  assert.deepEqual(
+    compareObservation(flatten({ v: "123" }), mixed, flatten({ v: "2026-10-01T00:00:00.5Z" }), "x"),
+    [
+      "x: format $.v fractionDigits (production none, local 1)",
+      "x: format $.v length (production 3, local 22)",
+      "x: format $.v zone (production none, local Z)",
+    ],
+  );
+});

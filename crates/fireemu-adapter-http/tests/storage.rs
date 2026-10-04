@@ -6341,9 +6341,11 @@ service firebase.storage {
                 let stale = upload(&expired);
                 assert_eq!((stale.status, r.status), (401, 401));
                 assert_eq!(r.headers, stale.headers);
+                // The strict Firebase dialect answers in the production error layout (pretty-printed,
+                // as the headers work records it); the message is unchanged.
                 assert_eq!(
                     String::from_utf8_lossy(&r.body),
-                    r#"{"error":{"code":401,"message":"invalid ID token: malformed token","status":"UNAUTHENTICATED"}}"#
+                    "{\n  \"error\": {\n    \"code\": 401,\n    \"message\": \"invalid ID token: malformed token\",\n    \"status\": \"UNAUTHENTICATED\"\n  }\n}"
                 );
             }
             TokenAcceptance::EmulatorMock => {

@@ -4,7 +4,7 @@
 //! Production gives every published message a decimal id of seventeen digits, with no relation to
 //! the order of publication. The four ids of the FUNCTIONS-EVENTS formal record of 2026-10-04 (run
 //! `a9621bfae74fe9bc`, frames `6ac2a47f0000967f445e8b09`, `6ac2a51c000844422b7986d1`,
-//! `6ac2ad01000c911a5d434439` and `6ac2ada10008c5a7380c87c6`, the `id` of a 2nd gen CloudEvent,
+//! `6ac2ad01000c911a5d434439` and `6ac2ada10008c5a7380c87c6`, the `id` of a 2nd gen `CloudEvent`,
 //! which is also the `messageId`) are `22254343790642112`, `22256683947060623`,
 //! `22254564432090315` and `22255693239595822`: all in `2225e13..2226e13`. The counter of the
 //! emulator's state is mapped into the same range by a fixed permutation, so a recorded run replays

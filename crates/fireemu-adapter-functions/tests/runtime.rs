@@ -3168,6 +3168,8 @@ exports.customV2=require(join(SDK,'lib/v2/providers/eventarc.js')).onCustomEvent
     let mut topic = fireemu_adapter_functions::events::pubsub_event(
         "topic-source",
         "demo-app",
+        "us-central1",
+        "topicFn",
         "t",
         &json!({"data":"aGVsbG8=","attributes":{"key":"value"}}),
         START,
@@ -3575,7 +3577,15 @@ fn pubsub_and_auth_events_carry_the_shapes_the_sdk_decodes() {
     use fireemu_core_functions::manifest::{AuthEvent, DocumentEvent};
     use fireemu_core_types::determinism::SplitMix64;
     let msg = serde_json::json!({"data": "aGVsbG8=", "attributes": {"k": "v"}, "orderingKey": "o"});
-    let e = pubsub_event("m1", "demo-app", "jobs", &msg, START);
+    let e = pubsub_event(
+        "m1",
+        "demo-app",
+        "us-central1",
+        "onJob",
+        "jobs",
+        &msg,
+        START,
+    );
     assert_eq!(e["type"], "google.cloud.pubsub.topic.v1.messagePublished");
     assert_eq!(
         e["source"],
@@ -3585,9 +3595,20 @@ fn pubsub_and_auth_events_carry_the_shapes_the_sdk_decodes() {
     assert_eq!(e["data"]["message"]["data"], "aGVsbG8=");
     assert_eq!(e["data"]["message"]["attributes"]["k"], "v");
     assert_eq!(e["data"]["message"]["orderingKey"], "o");
+    // Eventarc's own subscription for the function, in the form production names it.
+    let subscription = e["data"]["subscription"].as_str().unwrap();
+    let id = subscription
+        .strip_prefix("projects/demo-app/subscriptions/")
+        .unwrap();
+    assert!(id.starts_with("eventarc-us-central1-onjob-"), "{id}");
+    assert!(id.ends_with(|c: char| c.is_ascii_digit()), "{id}");
     assert_eq!(
-        e["data"]["subscription"],
-        "projects/demo-app/subscriptions/emulator-sub-jobs"
+        id,
+        fireemu_adapter_functions::events::eventarc_subscription_id(
+            "demo-app",
+            "us-central1",
+            "onJob"
+        )
     );
     let mut store = AuthStore::new("demo-app", SplitMix64::new(1), TotpPolicy::default());
     let uid = store

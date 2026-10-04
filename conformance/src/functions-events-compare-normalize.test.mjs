@@ -117,6 +117,12 @@ test("a short or digit-only role value is replaced only as a whole string or a w
   // A three-character value is short, a four-character one is replaced anywhere.
   assert.equal(applyPlaceholders("xabcx", [["abc", "<t>"]]), "xabcx");
   assert.equal(applyPlaceholders("xabcdx", [["abcd", "<t>"]]), "x<t>x");
+  // Only a value that is digits from end to end is whole-only; a long value with a digit at either end is replaced anywhere.
+  assert.equal(applyPlaceholders("xeabc1x", [["eabc1", "<t>"]]), "x<t>x");
+  assert.equal(applyPlaceholders("x1eabcx", [["1eabc", "<t>"]]), "x<t>x");
+  // A whole-only value is matched literally, not as a pattern.
+  assert.equal(applyPlaceholders("axb", [["a.b", "<t>"]]), "axb");
+  assert.equal(applyPlaceholders("a.b", [["a.b", "<t>"]]), "<t>");
   // A short role and a long role in one table keep their own rules.
   assert.equal(
     applyPlaceholders("1 eabc-1", [

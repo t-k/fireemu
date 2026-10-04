@@ -880,3 +880,26 @@ fn an_empty_bucket_named_in_firebase_json_exists_so_versioning_can_be_enabled_fi
         assert_eq!(versions["items"].as_array().unwrap().len(), 2, "{versions}");
     }
 }
+
+#[test]
+fn an_empty_bucket_a_registered_session_project_declared_exists() {
+    for acceptance in PROFILES {
+        let (mut s, _) = state(acceptance);
+        let mut tenancy = fireemu_core_session::tenancy::Tenancy::new("demo-app");
+        tenancy
+            .register("other-project", &["other-secondary".to_owned()], &[])
+            .unwrap();
+        s.tenancy = Some(Arc::new(std::sync::RwLock::new(tenancy)));
+        let get = |name: &str| call(&s, "GET", &format!("/storage/v1/b/{name}"), b"");
+        assert_eq!(get("other-secondary").status, 200, "declared, though empty");
+        assert_eq!(
+            get("other-project.appspot.com").status,
+            200,
+            "its default bucket"
+        );
+        assert_eq!(get("other-project.firebasestorage.app").status, 200);
+        assert_eq!(get("undeclared-bucket").status, 404);
+        // The default project's own default buckets still exist, and its undeclared ones do not.
+        assert_eq!(get(BUCKET).status, 200);
+    }
+}

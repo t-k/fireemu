@@ -1,0 +1,371 @@
+[
+  {
+    "id": "cr01",
+    "conditionId": "SCHEDULED-FUNCTIONS/cron-grammar",
+    "case": "wildcard",
+    "schedule": "30 * * * *",
+    "timeZone": "UTC"
+  },
+  {
+    "id": "cr02",
+    "conditionId": "SCHEDULED-FUNCTIONS/cron-grammar",
+    "case": "list",
+    "schedule": "0 9 1,15 * *",
+    "timeZone": "UTC"
+  },
+  {
+    "id": "cr03",
+    "conditionId": "SCHEDULED-FUNCTIONS/cron-grammar",
+    "case": "range",
+    "schedule": "0 9-17 * * 1-5",
+    "timeZone": "UTC"
+  },
+  {
+    "id": "cr04",
+    "conditionId": "SCHEDULED-FUNCTIONS/cron-grammar",
+    "case": "step",
+    "schedule": "*/15 9-17 * * *",
+    "timeZone": "UTC"
+  },
+  {
+    "id": "cr05",
+    "conditionId": "SCHEDULED-FUNCTIONS/cron-grammar",
+    "case": "named-month-weekday",
+    "schedule": "0 9 * jan-mar mon-fri",
+    "timeZone": "UTC"
+  },
+  {
+    "id": "cr06",
+    "conditionId": "SCHEDULED-FUNCTIONS/cron-grammar",
+    "case": "sunday-0-7",
+    "schedule": "0 9 * * 7",
+    "timeZone": "UTC"
+  },
+  {
+    "id": "cr07",
+    "conditionId": "SCHEDULED-FUNCTIONS/cron-grammar",
+    "case": "day-of-month-or-weekday",
+    "schedule": "0 9 13 * 5",
+    "timeZone": "UTC",
+    "note": "Vixie OR: the next run is a Friday, not the 13th that is also a Friday"
+  },
+  {
+    "id": "cr08",
+    "conditionId": "SCHEDULED-FUNCTIONS/cron-grammar",
+    "case": "field-bounds",
+    "schedule": "0 24 * * *",
+    "timeZone": "UTC"
+  },
+  {
+    "id": "cr09",
+    "conditionId": "SCHEDULED-FUNCTIONS/cron-grammar",
+    "case": "wrong-field-count",
+    "schedule": "0 0 1 *",
+    "timeZone": "UTC"
+  },
+  {
+    "id": "cr10",
+    "conditionId": "SCHEDULED-FUNCTIONS/cron-grammar",
+    "case": "unsupported-special-token",
+    "schedule": "0 0 L * *",
+    "timeZone": "UTC"
+  },
+  {
+    "id": "cr11",
+    "conditionId": "SCHEDULED-FUNCTIONS/cron-grammar",
+    "case": "cron-alias",
+    "schedule": "@daily",
+    "timeZone": "UTC"
+  },
+  {
+    "id": "cr12",
+    "conditionId": "SCHEDULED-FUNCTIONS/cron-grammar",
+    "case": "numeric-slash-step",
+    "schedule": "5/15 * * * *",
+    "timeZone": "UTC"
+  },
+  {
+    "id": "cr13",
+    "conditionId": "SCHEDULED-FUNCTIONS/cron-grammar",
+    "case": "impossible-date",
+    "schedule": "0 0 30 2 *",
+    "timeZone": "UTC"
+  },
+  {
+    "id": "gr01",
+    "conditionId": "SCHEDULED-FUNCTIONS/groc-grammar",
+    "case": "every-minute",
+    "schedule": "every minute",
+    "timeZone": "UTC"
+  },
+  {
+    "id": "gr02",
+    "conditionId": "SCHEDULED-FUNCTIONS/groc-grammar",
+    "case": "every-N-minutes",
+    "schedule": "every 10 minutes",
+    "timeZone": "UTC"
+  },
+  {
+    "id": "gr03",
+    "conditionId": "SCHEDULED-FUNCTIONS/groc-grammar",
+    "case": "every-N-hours",
+    "schedule": "every 3 hours",
+    "timeZone": "UTC"
+  },
+  {
+    "id": "gr04",
+    "conditionId": "SCHEDULED-FUNCTIONS/groc-grammar",
+    "case": "every-day-at-time",
+    "schedule": "every day 9:00",
+    "timeZone": "UTC"
+  },
+  {
+    "id": "gr05",
+    "conditionId": "SCHEDULED-FUNCTIONS/groc-grammar",
+    "case": "weekday-list",
+    "schedule": "every mon,wed,fri 09:00",
+    "timeZone": "UTC"
+  },
+  {
+    "id": "gr06",
+    "conditionId": "SCHEDULED-FUNCTIONS/groc-grammar",
+    "case": "ordinal-weekday",
+    "schedule": "1st friday of quarter 9:00",
+    "timeZone": "UTC",
+    "mustHave": "quarter-after-the-first-friday-of-october",
+    "note": "created after 2026-10-02: every-month gives 2026-11-06, Jan/Apr/Jul/Oct gives 2027-01-01"
+  },
+  {
+    "id": "gr07",
+    "conditionId": "SCHEDULED-FUNCTIONS/groc-grammar",
+    "case": "month-calendar",
+    "schedule": "1,15 of jan,jul 12:34",
+    "timeZone": "UTC"
+  },
+  {
+    "id": "gr08",
+    "conditionId": "SCHEDULED-FUNCTIONS/groc-grammar",
+    "case": "interval-over-one-day",
+    "schedule": "every 25 hours",
+    "timeZone": "UTC"
+  },
+  {
+    "id": "gr09",
+    "conditionId": "SCHEDULED-FUNCTIONS/groc-grammar",
+    "case": "invalid-interval",
+    "schedule": "every 0 minutes",
+    "timeZone": "UTC"
+  },
+  {
+    "id": "gr10",
+    "conditionId": "SCHEDULED-FUNCTIONS/groc-grammar",
+    "case": "invalid-calendar",
+    "schedule": "32 of month 09:00",
+    "timeZone": "UTC"
+  },
+  {
+    "id": "gr11",
+    "conditionId": "SCHEDULED-FUNCTIONS/groc-grammar",
+    "case": "invalid-weekday-prefix",
+    "schedule": "every mond 09:00",
+    "timeZone": "UTC"
+  },
+  {
+    "id": "gr12",
+    "conditionId": "SCHEDULED-FUNCTIONS/groc-grammar",
+    "case": "interval-phase-versus-creation-anchor",
+    "schedule": "every 7 minutes",
+    "timeZone": "UTC",
+    "note": "epoch-aligned multiples of 7 minutes versus creation plus 7 minutes"
+  },
+  {
+    "id": "gr13",
+    "conditionId": "SCHEDULED-FUNCTIONS/groc-grammar",
+    "case": "synchronized-window",
+    "schedule": "every 20 minutes synchronized",
+    "timeZone": "UTC"
+  },
+  {
+    "id": "tz01",
+    "conditionId": "SCHEDULED-FUNCTIONS/timezone-validation-defaults",
+    "case": "explicit-UTC",
+    "schedule": "0 9 * * *",
+    "timeZone": "UTC"
+  },
+  {
+    "id": "tz02",
+    "conditionId": "SCHEDULED-FUNCTIONS/timezone-validation-defaults",
+    "case": "Asia-Tokyo",
+    "schedule": "0 9 * * *",
+    "timeZone": "Asia/Tokyo"
+  },
+  {
+    "id": "tz03",
+    "conditionId": "SCHEDULED-FUNCTIONS/timezone-validation-defaults",
+    "case": "America-New-York",
+    "schedule": "0 9 * * *",
+    "timeZone": "America/New_York"
+  },
+  {
+    "id": "tz04",
+    "conditionId": "SCHEDULED-FUNCTIONS/timezone-validation-defaults",
+    "case": "invalid-zone",
+    "schedule": "0 9 * * *",
+    "timeZone": "Asia/Tokio"
+  },
+  {
+    "id": "nx01",
+    "conditionId": "SCHEDULED-FUNCTIONS/next-occurrence",
+    "case": "strictly-after-anchor",
+    "schedule": "*/5 * * * *",
+    "timeZone": "UTC",
+    "timing": {
+      "kind": "after-run",
+      "everyMinutes": 5,
+      "afterMs": 500
+    },
+    "note": "created half a second after a run instant: the next run is five minutes later, not now"
+  },
+  {
+    "id": "nx02",
+    "conditionId": "SCHEDULED-FUNCTIONS/next-occurrence",
+    "case": "minute-boundary",
+    "schedule": "* * * * *",
+    "timeZone": "UTC",
+    "timing": {
+      "kind": "before-minute-boundary",
+      "leadMs": 1500
+    },
+    "mustHave": "create-just-before-a-minute-boundary",
+    "note": "dispatch about 1.5 s before a minute so the request window straddles it (as v5 c01)"
+  },
+  {
+    "id": "nx03",
+    "conditionId": "SCHEDULED-FUNCTIONS/next-occurrence",
+    "case": "day-month-year-rollover",
+    "schedule": "59 23 31 12 *",
+    "timeZone": "UTC"
+  },
+  {
+    "id": "nx04",
+    "conditionId": "SCHEDULED-FUNCTIONS/next-occurrence",
+    "case": "leap-day",
+    "schedule": "0 0 29 2 *",
+    "timeZone": "UTC"
+  },
+  {
+    "id": "nx05",
+    "conditionId": "SCHEDULED-FUNCTIONS/next-occurrence",
+    "case": "sparse-calendar",
+    "schedule": "0 0 31 * *",
+    "timeZone": "UTC"
+  },
+  {
+    "id": "ds01",
+    "conditionId": "SCHEDULED-FUNCTIONS/dst-calendar",
+    "case": "spring-gap-next-time",
+    "schedule": "2nd sun of mar 2:30",
+    "timeZone": "America/New_York",
+    "mustHave": "dst-groc",
+    "note": "the second Sunday of March is the spring-forward day, so 2:30 does not exist"
+  },
+  {
+    "id": "ds02",
+    "conditionId": "SCHEDULED-FUNCTIONS/dst-calendar",
+    "case": "fall-fold-next-time",
+    "schedule": "1st sun of nov 1:30",
+    "timeZone": "America/New_York",
+    "mustHave": "dst-groc",
+    "note": "2026-11-01 is the fall-back day, so 1:30 happens twice"
+  },
+  {
+    "id": "ds03",
+    "conditionId": "SCHEDULED-FUNCTIONS/dst-calendar",
+    "case": "UTC-control",
+    "schedule": "30 1 1 11 *",
+    "timeZone": "UTC"
+  },
+  {
+    "id": "ds04",
+    "conditionId": "SCHEDULED-FUNCTIONS/dst-calendar",
+    "case": "non-DST-zone-control",
+    "schedule": "30 2 14 3 *",
+    "timeZone": "Asia/Tokyo"
+  },
+  {
+    "id": "rt01",
+    "conditionId": "SCHEDULED-FUNCTIONS/retry-config-validation",
+    "case": "omitted-options",
+    "schedule": "0 9 * * *",
+    "timeZone": "UTC"
+  },
+  {
+    "id": "rt02",
+    "conditionId": "SCHEDULED-FUNCTIONS/retry-config-validation",
+    "case": "explicit-zero",
+    "schedule": "0 9 * * *",
+    "timeZone": "UTC",
+    "retryConfig": {
+      "retryCount": 0
+    }
+  },
+  {
+    "id": "rt03",
+    "conditionId": "SCHEDULED-FUNCTIONS/retry-config-validation",
+    "case": "retryCount-boundary",
+    "schedule": "0 9 * * *",
+    "timeZone": "UTC",
+    "retryConfig": {
+      "retryCount": 6
+    }
+  },
+  {
+    "id": "rt04",
+    "conditionId": "SCHEDULED-FUNCTIONS/retry-config-validation",
+    "case": "min-backoff",
+    "schedule": "0 9 * * *",
+    "timeZone": "UTC",
+    "retryConfig": {
+      "minBackoffDuration": "0s"
+    }
+  },
+  {
+    "id": "rt05",
+    "conditionId": "SCHEDULED-FUNCTIONS/retry-config-validation",
+    "case": "max-backoff",
+    "schedule": "0 9 * * *",
+    "timeZone": "UTC",
+    "retryConfig": {
+      "minBackoffDuration": "100s",
+      "maxBackoffDuration": "50s"
+    }
+  },
+  {
+    "id": "rt06",
+    "conditionId": "SCHEDULED-FUNCTIONS/retry-config-validation",
+    "case": "max-doublings",
+    "schedule": "0 9 * * *",
+    "timeZone": "UTC",
+    "retryConfig": {
+      "maxDoublings": 20
+    }
+  },
+  {
+    "id": "rt07",
+    "conditionId": "SCHEDULED-FUNCTIONS/retry-config-validation",
+    "case": "max-retry-duration",
+    "schedule": "0 9 * * *",
+    "timeZone": "UTC",
+    "retryConfig": {
+      "maxRetryDuration": "1s"
+    }
+  },
+  {
+    "id": "rt08",
+    "conditionId": "SCHEDULED-FUNCTIONS/retry-config-validation",
+    "case": "attemptDeadline-boundary",
+    "schedule": "0 9 * * *",
+    "timeZone": "UTC",
+    "attemptDeadline": "10s"
+  }
+]

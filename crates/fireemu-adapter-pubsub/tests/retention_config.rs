@@ -117,6 +117,9 @@ impl Harness {
             .unwrap()
             .into_inner();
         assert_eq!(from_get.retain_acked_messages, retain);
+        // Known divergence from production, not a parity claim: gRPC leaves an unset retention unset,
+        // while production's gRPC response carries the same defaults as its REST transcoding (see
+        // docs.local/issues/open/pubsub-grpc-subscription-lacks-the-recorded-production-defaults.md).
         assert_eq!(from_get.message_retention_duration, duration);
         assert_eq!(from_get.ack_deadline_seconds, ack);
         let list = grpc
@@ -147,8 +150,12 @@ impl Harness {
                 format!("{}.{:09}s", d.seconds, d.nanos)
             }
         });
-        // An unset retention is reported by REST as the recorded default of seven days (the shape of
-        // a created subscription in the recorded bootstrap responses); gRPC leaves the field unset.
+        // An unset retention is reported by REST as the recorded production default of seven days (the
+        // shape of a created subscription in the recorded bootstrap responses, see `subscription_json`).
+        // gRPC still leaves the field unset: a known divergence from production, whose gRPC response
+        // carries the same defaults as its REST transcoding. Tracked in
+        // docs.local/issues/open/pubsub-grpc-subscription-lacks-the-recorded-production-defaults.md;
+        // this assertion is not a claim that the two transports should differ.
         assert_eq!(
             from_rest
                 .get("messageRetentionDuration")

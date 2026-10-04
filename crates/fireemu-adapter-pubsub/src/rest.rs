@@ -1032,6 +1032,14 @@ fn subscription_json(state: &PubSubState, config: &SubscriptionConfig) -> Value 
     let topic = state
         .reported_topic(&config.name)
         .unwrap_or_else(|| config.topic.to_full());
+    // The defaults below are the recorded production REST response of a created pull subscription
+    // (capture-only evidence, not closure evidence): fireemu-oracle-idp run
+    // shape-001-6a666e3ffa9444cc80de18944b38ae36, subscription-create.json and subscription-get.json
+    // (recorded 2026-09-30T13:13:53Z, status 200, 372 bytes, sha256
+    // e744f1e67909fc9abd1931ae547e8eb3aecf15dd98184542b884cd8ed086bf8f; docs.local/runs/codex-lane7/),
+    // and fireemu-oracle-sbx, docs.local/runs/codex-lane8/recorded-shape-responses/create-subscription.json
+    // (resource fe-scheduled-shape-96db1cb7ca5fcb35, the same defaults). They apply when the request set
+    // no retention, ordering, retain-acked or push configuration; explicit values override them below.
     let mut value = json!({
         "name": config.name.to_full(),
         "topic": topic,

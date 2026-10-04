@@ -103,6 +103,9 @@ async fn recorded_rest_bootstrap_empty_lists_omit_default_fields() {
     }
 }
 
+/// The exact defaults are the recorded production REST response of a created pull subscription: see
+/// `subscription_json` in `src/rest.rs` for the captures (run shape-001-6a666e3ffa9444cc80de18944b38ae36
+/// on fireemu-oracle-idp, and the fireemu-oracle-sbx recorded-shape-responses). Capture-only evidence.
 #[tokio::test]
 async fn recorded_rest_bootstrap_pull_subscription_has_exact_defaults() {
     let address = start().await;

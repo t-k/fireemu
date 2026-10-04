@@ -13,8 +13,8 @@ use fireemu_core_storage::store::{
 use fireemu_core_types::time::LogicalInstant;
 use serde_json::Value;
 
-/// The keys of the `data` of a recorded Finalized, Deleted (live generation) and MetadataUpdated
-/// payload (the last adds `metadata`).
+/// The keys of the `data` of a recorded Finalized and Deleted (live generation) payload; a
+/// `MetadataUpdated` one adds `metadata`.
 const FINALIZED_KEYS: [&str; 17] = [
     "bucket",
     "contentType",

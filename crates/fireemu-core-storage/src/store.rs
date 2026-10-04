@@ -522,10 +522,12 @@ pub enum StorageEvent {
     /// Metadata changed (new metageneration).
     MetadataUpdated(ObjectMetadata),
     /// A live generation became noncurrent in a versioned bucket: it was overwritten, or deleted
-    /// without naming its generation. UNRECORDED (the FE recording decides): the event shape
-    /// (the object as it was, plus the time it stopped being live), its order before the
-    /// Finalized event of an overwrite, and whether a plain delete of a live object also
-    /// announces a Deleted event (it does not here). Change them in `plan_put` and
+    /// without naming its generation. RECORDED (FE v5, `functions-events-formal-20261004T182904Z`,
+    /// v1 and v2, two passes): the payload is the object as it was plus `timeDeleted`, and the
+    /// event's own time is the instant of the overwrite. OBSERVED ORDER: delivered after the
+    /// Finalized event of the overwrite in 4 of 4 (see `put_events`). UNRECORDED: whether a plain
+    /// delete of a live object (no generation named) also announces a Deleted event (it does not
+    /// here; the documentation says it is not announced as Deleted). Change them in `plan_put` and
     /// `delete_with_admission`, the only places that build this event.
     Archived {
         /// The generation that became noncurrent, as it was.
@@ -1641,29 +1643,33 @@ impl StorageState {
         })
     }
 
-    /// The events of a planned write, in the order they are admitted and announced: Archived
-    /// (the generation made noncurrent) or Deleted (the generation replaced for good) before
-    /// Finalized (the new one). The order is UNRECORDED. DOCUMENTED, UNRECORDED: an overwrite
-    /// announces the replaced generation as deleted ("Sent when an object has been permanently
-    /// deleted. This includes objects that are overwritten",
-    /// <https://firebase.google.com/docs/functions/gcp-storage-events>), unless the bucket is
-    /// versioned, where the event "is not sent when an object is archived". The official
-    /// emulator announces Finalized only.
+    /// The events of a planned write, in the order they are admitted and announced. OBSERVED
+    /// ORDER (FE v5, `functions-events-formal-20261004T182904Z`): production does not order these
+    /// deliveries; Finalized came before Archived in 4 of 4 observations (v1 and v2, two passes),
+    /// and on an unversioned overwrite Deleted came before Finalized in 3 of 4 (the fourth, v1 in
+    /// the second pass, delivered Finalized first). The local default follows the majority. The
+    /// overwrite of an unversioned bucket announces the replaced generation as deleted ("Sent when
+    /// an object has been permanently deleted. This includes objects that are overwritten",
+    /// <https://firebase.google.com/docs/functions/gcp-storage-events>; RECORDED in FE v5), stamped
+    /// with the creation instant of the replacement and carrying no `timeDeleted`; in a versioned
+    /// bucket the old generation is announced as Archived instead, with no Deleted event. The
+    /// official emulator announces Finalized only.
     fn put_events(plan: &PlannedPut) -> Vec<StorageEvent> {
         let mut events = Vec::with_capacity(2);
+        if let Some(old) = &plan.replaced {
+            events.push(StorageEvent::Deleted {
+                object: old.clone(),
+                time_deleted: None,
+                at: Some(plan.meta.time_created),
+            });
+        }
+        events.push(StorageEvent::Finalized(plan.meta.clone()));
         if let Some(version) = &plan.archive {
             events.push(StorageEvent::Archived {
                 object: version.object.clone(),
                 time_deleted: version.time_deleted,
             });
-        } else if let Some(old) = &plan.replaced {
-            events.push(StorageEvent::Deleted {
-                object: old.clone(),
-                time_deleted: None,
-                at: None,
-            });
         }
-        events.push(StorageEvent::Finalized(plan.meta.clone()));
         events
     }
 
@@ -1955,7 +1961,8 @@ impl StorageState {
             .ok_or(StorageError::NotFound)?;
         if self.versioning(bucket) {
             // A versioned bucket keeps the generation: it becomes noncurrent and is announced as
-            // Archived, with no Deleted event (UNRECORDED, see `StorageEvent::Archived`).
+            // Archived, with no Deleted event (not exercised by the FE v5 recording: UNRECORDED,
+            // see `StorageEvent::Archived`).
             let version = NoncurrentVersion {
                 object: meta.clone(),
                 time_deleted: now,
@@ -2029,15 +2036,17 @@ impl StorageState {
             return Ok((meta, reservation));
         }
         let version_key = (bucket.clone(), name.clone(), generation);
-        let meta = self
+        let (meta, archived_at) = self
             .noncurrent
             .get(&version_key)
-            .map(|version| version.object.clone())
+            .map(|version| (version.object.clone(), version.time_deleted))
             .ok_or(StorageError::NotFound)?;
         Self::check(Some(&meta), pre)?;
+        // RECORDED (FE v5): the Deleted payload of a noncurrent generation carries `timeDeleted`,
+        // the instant it stopped being live; the event itself is stamped with the deletion.
         let event = StorageEvent::Deleted {
             object: meta.clone(),
-            time_deleted: None,
+            time_deleted: Some(archived_at),
             at: None,
         };
         let reservation = admit(std::slice::from_ref(&event))?;

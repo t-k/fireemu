@@ -168,6 +168,16 @@ impl StorageRulesRegistry {
         }
     }
 
+    /// Whether `bucket` is named by a target-based configuration (the storage targets of
+    /// `firebase.json`). The object form names no bucket.
+    #[must_use]
+    pub fn declares_bucket(&self, bucket: &str) -> bool {
+        self.mode.read().is_ok_and(|mode| match &*mode {
+            StorageRulesMode::Global(_) => false,
+            StorageRulesMode::PerBucket(slots) => slots.contains_key(bucket),
+        })
+    }
+
     /// Selects the immutable slot associated with `bucket`.
     fn slot_for_bucket(&self, bucket: &str) -> Result<Option<Arc<RulesetSlot>>, String> {
         let mode = self
@@ -1733,10 +1743,12 @@ fn firebase_json(m: &ObjectMetadata) -> Value {
 /// inside `metadata.firebaseStorageDownloadTokens`, and the member is dropped when there is
 /// nothing to carry.
 /// [`gcs_json`] for a generation that may be noncurrent: `timeDeleted` marks one that is.
-/// The object resource of one generation. `timeDeleted` is a field of the documented GCS object
-/// resource, set on a noncurrent version; UNRECORDED: no production body of a noncurrent version
-/// (its time format, the rest of its fields) was observed, so it is the live resource's shape plus
-/// `timeDeleted` printed like the other times.
+/// The object resource of one generation. `timeDeleted` is a field of the GCS object resource, set
+/// on a noncurrent version. RECORDED (FE v5, `functions-events-formal-20261004T182904Z`, a
+/// `versions=true` listing): the noncurrent item is the live resource's shape plus `timeDeleted`
+/// (three fractional digits) between `updated` and `timeStorageClassUpdated`, and `timeFinalized`
+/// equals its own `timeCreated`. UNRECORDED: the page token of a listing and a plain read of a
+/// noncurrent generation by number.
 fn gcs_json_version(m: &ObjectMetadata, time_deleted: Option<LogicalInstant>, host: &str) -> Value {
     let mut v = gcs_json(m, host);
     if let Some(at) = time_deleted {
@@ -3973,10 +3985,13 @@ fn finalize_resumable(
 // ------------------------------------------------------------------------------------------
 
 /// The bucket resource the JSON API answers with. Only `versioning` is real state: the other
-/// fields are the stub the bucket listing has always served. `versioning` is present when it is
-/// enabled; whether production also answers `{"enabled": false}` for a bucket that was never
-/// configured is unrecorded.
-fn bucket_resource(name: &str, versioning: bool, now: &str, host: &str) -> Value {
+/// fields are the stub the bucket listing has always served (the full resource of a GET was not
+/// recorded: FE v5 read `fields=versioning` only, and its bucket-create answer differs from this
+/// stub). `versioning` is a tri-state, RECORDED in FE v5 (`functions-events-formal-20261004T182904Z`):
+/// a bucket never configured has no `versioning` member (`{}` under `fields=versioning`), an
+/// enabled one answers `{"enabled": true}`, and one whose versioning was disabled keeps answering
+/// `{"enabled": false}` on the PATCH and on every later read.
+fn bucket_resource(name: &str, versioning: Option<bool>, now: &str, host: &str) -> Value {
     let mut resource = json!({
         "kind": "storage#bucket",
         "name": name,
@@ -3991,8 +4006,8 @@ fn bucket_resource(name: &str, versioning: bool, now: &str, host: &str) -> Value
         "etag": "====",
         "locationType": "multi-region",
     });
-    if versioning {
-        resource["versioning"] = json!({"enabled": true});
+    if let Some(enabled) = versioning {
+        resource["versioning"] = json!({ "enabled": enabled });
     }
     resource
 }
@@ -4010,7 +4025,9 @@ fn gcs_list_buckets(state: &StorageState, host: &str) -> Outcome {
     let items: Vec<Value> = names
         .iter()
         .map(|name| {
-            let versioning = bucket_name(name).is_ok_and(|bucket| store.versioning(&bucket));
+            let versioning = bucket_name(name)
+                .ok()
+                .and_then(|bucket| store.versioning_state(&bucket));
             bucket_resource(name, versioning, &now, host)
         })
         .collect();
@@ -4020,15 +4037,24 @@ fn gcs_list_buckets(state: &StorageState, host: &str) -> Outcome {
     ))
 }
 
-/// Whether the local store knows `bucket`: the project's default buckets always exist, any other
-/// bucket exists once it holds an object or was configured. The store has no bucket registry, so
-/// this is the local model of "the bucket exists": production answers 404 for a bucket that does
-/// not (the status is production's; the message is UNRECORDED), and an empty bucket nobody
-/// configured is unknown here, so enabling versioning on one is a 404 until it holds an object.
+/// Whether `bucket` exists: the default buckets of its project always do, a bucket declared in
+/// `firebase.json` (a storage target, which becomes a per-bucket rules entry, or a bucket a
+/// registered session project declared) does though it is empty, and any other bucket exists once
+/// it holds an object or was configured for versioning. The store has no bucket registry, so this
+/// is the local model of "the bucket exists": production answers 404 for a bucket that does not
+/// (RECORDED in FE v5: `The specified bucket does not exist.`, reason `notFound`, pretty layout),
+/// and an empty bucket nobody declared or configured is unknown here.
 fn bucket_exists(state: &StorageState, store: &ObjectStore, bucket: &BucketName) -> bool {
     let name = bucket.as_str();
-    name == format!("{}.appspot.com", state.project)
-        || name == format!("{}.firebasestorage.app", state.project)
+    let project = state.project_of_bucket(name);
+    name == format!("{project}.appspot.com")
+        || name == format!("{project}.firebasestorage.app")
+        || state.rules.declares_bucket(name)
+        || state
+            .tenancy
+            .as_ref()
+            .and_then(|tenancy| tenancy.read().ok())
+            .is_some_and(|tenancy| tenancy.declared_buckets(&project).iter().any(|b| b == name))
         || store.bucket_known(bucket)
 }
 
@@ -4095,7 +4121,7 @@ fn gcs_bucket(
             state.store()?.set_versioning(&b, enabled);
         }
     }
-    let versioning = state.store()?.versioning(&b);
+    let versioning = state.store()?.versioning_state(&b);
     let resource = bucket_resource(bucket, versioning, &rfc3339(state.now()), host);
     let resource = match params.get("fields") {
         Some(fields) => project_fields(&resource, &FieldMask::parse(fields)),
@@ -4375,9 +4401,10 @@ fn gcs_object(
     match method {
         "GET" => {
             let store = state.store()?;
-            // A generation by number may be a noncurrent version of a versioned bucket
-            // (UNRECORDED: production's answer for a noncurrent generation was not observed; the
-            // live generation by number is recorded, lean-v4).
+            // A generation by number may be a noncurrent version of a versioned bucket (UNRECORDED:
+            // a read of a noncurrent generation by number was not observed; the live generation
+            // by number is recorded, lean-v4, and the noncurrent item of a `versions=true`
+            // listing is recorded in FE v5).
             let (meta, time_deleted) = match u64_param(params, "generation")? {
                 Some(generation) => store
                     .generation(&b, &n, generation)

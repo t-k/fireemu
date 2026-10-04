@@ -48,8 +48,10 @@ fn storage_time(
 ) -> String {
     let instant = match kind {
         ObjectEvent::Finalized => object.time_created,
-        // UNRECORDED: the event of a generation that became noncurrent is stamped with the instant
-        // it stopped being live (the FE recording decides).
+        // RECORDED (FE v5, `functions-events-formal-20261004T182904Z`, v2 `time` to the
+        // microsecond): the event of a generation that became noncurrent is stamped with the
+        // instant it stopped being live, which is the creation instant of the generation that
+        // replaced it, the same microsecond as that Finalized event.
         ObjectEvent::Archived => time_deleted.unwrap_or(admitted),
         _ => admitted,
     };
@@ -308,7 +310,11 @@ pub struct StorageEventParts<'a> {
 pub fn storage_event_parts(event: &StorageEvent) -> StorageEventParts<'_> {
     let (kind, object, time_deleted, at) = match event {
         StorageEvent::Finalized(m) => (ObjectEvent::Finalized, m, None, None),
-        StorageEvent::Deleted { object, .. } => (ObjectEvent::Deleted, object, None, None),
+        StorageEvent::Deleted {
+            object,
+            time_deleted,
+            at,
+        } => (ObjectEvent::Deleted, object, *time_deleted, *at),
         StorageEvent::MetadataUpdated(m) => (ObjectEvent::MetadataUpdated, m, None, None),
         StorageEvent::Archived {
             object,
@@ -336,8 +342,10 @@ pub fn storage_event(
 ) -> Value {
     let attrs = storage_attributes(object.bucket.as_str(), object.name.as_str(), kind);
     let mut data = object_json(object);
-    // UNRECORDED: the object resource of an Archived event carries `timeDeleted`, the instant the
-    // generation stopped being live.
+    // RECORDED (FE v5, v1 and v2): the object resource of an Archived event carries `timeDeleted`,
+    // the instant the generation stopped being live (three fractional digits), and so does the
+    // Deleted event of a noncurrent generation deleted by number, whose own `time` is the
+    // deletion instant, not that one. The Deleted event of an overwrite carries none.
     if let Some(at) = time_deleted {
         data["timeDeleted"] = Value::String(object_time(at));
     }

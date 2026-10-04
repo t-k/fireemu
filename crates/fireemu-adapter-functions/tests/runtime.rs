@@ -4860,7 +4860,8 @@ fn a_schedule_run_refusal_displays_its_message() {
 
 /// An Archived event (a generation of a versioned bucket became noncurrent) carries the time it
 /// stopped being live: as `timeDeleted` in the object resource and as the `CloudEvent` time. The
-/// shape is UNRECORDED (the FE recording decides); the Archived event is the only one that has it.
+/// shape is RECORDED (FE v5); the Archived event and the Deleted event of a noncurrent generation
+/// are the only ones that carry `timeDeleted`.
 #[test]
 fn an_archived_event_carries_the_time_the_generation_stopped_being_live() {
     let mut store = StorageState::new(1);
@@ -4904,7 +4905,8 @@ fn an_archived_event_carries_the_time_the_generation_stopped_being_live() {
 }
 
 /// Archived events reach the functions that subscribed to them and only those; the Finalized
-/// events of the same overwrite reach the finalize ones. The overwrite announces Archived first.
+/// events of the same overwrite reach the finalize ones. The overwrite announces Finalized first
+/// (the observed order, FE v5).
 #[tokio::test]
 async fn archived_events_reach_archived_functions_and_finalized_events_finalized_ones() {
     let (runtime, _clock) = start_with_policies_and_manifest(
@@ -4963,7 +4965,7 @@ async fn archived_events_reach_archived_functions_and_finalized_events_finalized
 
 /// The real `firebase-functions` 7.3.2 SDK's `onArchive` (v1) and `onObjectArchived` (v2) handlers
 /// receive an Archived event with the object resource, `timeDeleted` included. The Archived event
-/// shape is UNRECORDED; this pins what the local runtime delivers to the real handlers.
+/// shape is RECORDED in FE v5; this pins what the local runtime delivers to the real handlers.
 #[tokio::test]
 #[allow(clippy::too_many_lines)]
 async fn real_sdk_archived_handlers_receive_the_archived_event() {

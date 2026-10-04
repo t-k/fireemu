@@ -781,6 +781,11 @@ fn a_bucket_is_known_when_it_holds_an_object_or_was_configured() {
             Precondition::default(),
         )
         .unwrap();
+    assert!(
+        store.bucket_known(&other),
+        "a bucket that was configured stays known, disabled or not"
+    );
+    store.remove_bucket(&other);
     assert!(!store.bucket_known(&other), "nothing left");
 }
 

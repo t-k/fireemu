@@ -15,6 +15,7 @@ import { execFileSync } from "node:child_process";
 import { createTransport } from "./functions-events/record/rest.mjs";
 import {
   PINNED_DEPENDENCIES,
+  CLI_TIMEOUT_MS,
   cliPlan,
   dependencyProblems,
   discoverEndpoints,
@@ -56,6 +57,14 @@ test("the CLI plan deploys and deletes the 22 handlers once each, in stdout capt
   assert.equal(deploy.args[deploy.args.indexOf("--only") + 1].split(",").length, 22);
   assert.equal(deploy.env.FE_EVENTS_CAPTURE_MODE, "stdout");
   assert.deepEqual(cliPlan("delete", options).args.slice(1, 23), formalHandlers);
+});
+
+test("each CLI action has its own timeout: the dry run is the shortest, the deploy the longest", () => {
+  assert.deepEqual(CLI_TIMEOUT_MS, {
+    deploy: 40 * 60_000,
+    "dry-run": 10 * 60_000,
+    delete: 20 * 60_000,
+  });
 });
 
 test("the deploy carries --force, the dry run is the same command with --dry-run appended, the delete is as before", () => {

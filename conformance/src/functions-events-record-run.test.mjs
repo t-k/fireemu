@@ -279,11 +279,12 @@ test("the CLI dry run comes after the preflight and before anything is created",
       seen.push({ writes: writes(world).length, requests: world.requests.length });
     return cli(action);
   };
-  const { outcome } = await record(deps);
+  const { outcome, run } = await record(deps);
   assert.equal(outcome, "recorded");
   assert.deepEqual(calls, ["dry-run", "deploy", "delete"]);
   assert.equal(seen.length, 1);
   assert.equal(seen[0].writes, 0, "nothing was written before the dry run");
+  assert.equal(run.deploy.dryRun.exitCode, 0, "the dry run is in the run record");
   assert.ok(seen[0].requests > 0, "the preflight reads came first");
 });
 

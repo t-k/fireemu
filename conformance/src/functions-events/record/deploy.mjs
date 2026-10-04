@@ -27,6 +27,11 @@ import { PRIMARY_BUCKET, PRIMARY_COLLECTION, PRIMARY_TOPIC, PROJECT, REGION } fr
 export const DEPLOY_TIMEOUT_MS = 40 * 60 * 1000;
 export const DELETE_TIMEOUT_MS = 20 * 60 * 1000;
 export const DRY_RUN_TIMEOUT_MS = 10 * 60 * 1000;
+export const CLI_TIMEOUT_MS = {
+  deploy: DEPLOY_TIMEOUT_MS,
+  "dry-run": DRY_RUN_TIMEOUT_MS,
+  delete: DELETE_TIMEOUT_MS,
+};
 export const READY_POLL_SECONDS = 30;
 export const READY_MAX_POLLS = 40;
 export const PROPAGATION_WAIT_SECONDS = 300;
@@ -235,28 +240,22 @@ export function runCli({
         durationMs: Date.now() - startedAt,
       });
     };
-    const timer = setTimeout(
-      () => {
-        timedOut = true;
+    const timer = setTimeout(() => {
+      timedOut = true;
+      try {
+        process.kill(-child.pid, "SIGTERM");
+      } catch {}
+      // A CLI that ignores SIGTERM is killed, so the cleanup that follows always runs.
+      killTimer = setTimeout(() => {
         try {
-          process.kill(-child.pid, "SIGTERM");
+          process.kill(-child.pid, "SIGKILL");
         } catch {}
-        // A CLI that ignores SIGTERM is killed, so the cleanup that follows always runs.
-        killTimer = setTimeout(() => {
-          try {
-            process.kill(-child.pid, "SIGKILL");
-          } catch {}
-          setTimeout(
-            () => finish(null, "SIGKILL", new Error("the CLI had to be killed")),
-            killGraceMs,
-          );
-        }, killGraceMs);
-      },
-      timeoutMs ??
-        { deploy: DEPLOY_TIMEOUT_MS, "dry-run": DRY_RUN_TIMEOUT_MS, delete: DELETE_TIMEOUT_MS }[
-          action
-        ],
-    );
+        setTimeout(
+          () => finish(null, "SIGKILL", new Error("the CLI had to be killed")),
+          killGraceMs,
+        );
+      }, killGraceMs);
+    }, timeoutMs ?? CLI_TIMEOUT_MS[action]);
     child.on("error", (error) => finish(null, null, error));
     child.on("exit", (code, signal) => finish(code, signal));
   });

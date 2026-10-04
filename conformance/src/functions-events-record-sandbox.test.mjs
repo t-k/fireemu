@@ -301,6 +301,19 @@ const nearMisses = [
   ["CLI attempts that are not known", { finished: { cliAttempts: null } }],
   ["CLI attempts that are missing", { finished: { cliAttempts: undefined } }],
   ["a CLI count that is not a number", { finished: { cliAttempts: { deploy: "0", delete: 0 } } }],
+  ["a CLI dry run", { finished: { cliAttempts: { dryRun: 1, deploy: 0, delete: 0 } } }],
+  [
+    "a CLI attempt of a kind we do not know",
+    { finished: { cliAttempts: { deploy: 0, delete: 0, other: 1 } } },
+  ],
+  [
+    "a dry-run count that is not a number",
+    { finished: { cliAttempts: { dryRun: "0", deploy: 0, delete: 0 } } },
+  ],
+  [
+    "a dry-run count that is null",
+    { finished: { cliAttempts: { dryRun: null, deploy: 0, delete: 0 } } },
+  ],
   ["a kept lock", { finished: { lockRetained: true } }],
   ["a lock flag that is missing", { finished: { lockRetained: undefined } }],
   ["an outcome of needs-recovery", { finished: { outcome: "needs-recovery", lockRetained: true } }],
@@ -379,6 +392,18 @@ test("a journal that hides a change behind a repeated sequence number or a secon
         readJournal: () => Buffer.from(journal()),
       }),
     ),
+  );
+});
+
+test("a run of the v4 recorder that stopped before any CLI attempt is exempt too (all three counts are zero)", () => {
+  const finished = { ...realFinished, cliAttempts: { dryRun: 0, deploy: 0, delete: 0 } };
+  assert.deepEqual(
+    sandbox.ledgerProblems(
+      ledgerOf(realStarted, finished, realClosed),
+      after,
+      journalOf(journal()),
+    ),
+    [],
   );
 });
 

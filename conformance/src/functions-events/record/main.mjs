@@ -69,6 +69,22 @@ export function harnessDigest(root, { git } = {}) {
   return { digest: sha256(lines.join("\n")), lines };
 }
 
+/** The CLI is run at most once per action (dry run, deploy, delete); a second call is refused, never re-sent. */
+export function cliAttemptCounter() {
+  const attempts = { dryRun: 0, deploy: 0, delete: 0 };
+  const keys = { "dry-run": "dryRun", deploy: "deploy", delete: "delete" };
+  return {
+    attempts,
+    count(action) {
+      const key = keys[action];
+      if (key === undefined) throw new Error(`unknown CLI action ${action}`);
+      if (attempts[key] >= 1)
+        throw new Error(`the CLI ${action} was already run once; never re-sent`);
+      attempts[key] += 1;
+    },
+  };
+}
+
 export function parseArgs(argv) {
   const [command, ...rest] = argv;
   if (!["check", "record"].includes(command))
@@ -277,14 +293,9 @@ export async function main(argv, deps) {
       ceiling: sandbox.MAX_REQUESTS,
       now: deps.now,
     });
-    const cliAttempts = { dryRun: 0, deploy: 0, delete: 0 };
-    const attemptKey = { "dry-run": "dryRun", deploy: "deploy", delete: "delete" };
+    const { attempts: cliAttempts, count: countCliAttempt } = cliAttemptCounter();
     const cli = async (action) => {
-      const key = attemptKey[action];
-      if (key === undefined) throw new Error(`unknown CLI action ${action}`);
-      if (cliAttempts[key] >= 1)
-        throw new Error(`the CLI ${action} was already run once; never re-sent`);
-      cliAttempts[key] += 1;
+      countCliAttempt(action);
       const configHome = join(runDir, `config-${action}`);
       mkdirSync(configHome, { mode: 0o700 });
       const plan = cliPlan(action, {

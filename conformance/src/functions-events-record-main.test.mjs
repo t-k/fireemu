@@ -17,6 +17,7 @@ import { join } from "node:path";
 import test from "node:test";
 
 import {
+  cliAttemptCounter,
   envProblems,
   firebaseToolsProblems,
   harnessDigest,
@@ -49,6 +50,24 @@ test("the environment, Node and firebase-tools checks", () => {
   assert.deepEqual(firebaseToolsProblems({ version: "15.28.2" }), []);
   assert.equal(firebaseToolsProblems({ version: "15.29.0" }).length, 1);
   assert.equal(firebaseToolsProblems(undefined).length, 1);
+});
+
+test("the CLI runs at most once per action, the dry run included, and counts each attempt", () => {
+  const { attempts, count } = cliAttemptCounter();
+  assert.deepEqual(attempts, { dryRun: 0, deploy: 0, delete: 0 });
+  for (const [action, key] of [
+    ["dry-run", "dryRun"],
+    ["deploy", "deploy"],
+    ["delete", "delete"],
+  ]) {
+    count(action);
+    assert.equal(attempts[key], 1, action);
+    assert.throws(() => count(action), /already run once/, action);
+    assert.equal(attempts[key], 1, `${action} is not counted twice`);
+  }
+  assert.deepEqual(attempts, { dryRun: 1, deploy: 1, delete: 1 });
+  assert.throws(() => cliAttemptCounter().count("dryRun"), /unknown CLI action/);
+  assert.throws(() => cliAttemptCounter().count("functions:delete"), /unknown CLI action/);
 });
 
 test("the arguments are strict", () => {

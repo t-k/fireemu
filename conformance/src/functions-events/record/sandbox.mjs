@@ -96,7 +96,7 @@ export function journalFacts(text) {
  * wrote nothing and left nothing behind, so the next run need not wait out the spacing. Every condition
  * must hold; anything missing or unreadable is a no:
  *   - exactly three lines: `started`, `finished`, `cleanup-verified`, of this task, in that time order;
- *   - the closing line says `stopped-clean`, no lock kept, no CLI deploy or delete attempt, a request count;
+ *   - the closing line says `stopped-clean`, no lock kept, no CLI attempt of any kind (deploy, delete, dry run), a request count;
  *   - the close line says the sandbox is at its baseline, no unknown answers, the same request count;
  *   - the run's own journal agrees: that many sends, none of them mutating, none without a usable answer.
  */
@@ -112,7 +112,9 @@ function writesNothing(rows, readJournal) {
     return false;
   const cli = finished.cliAttempts;
   if (finished.outcome !== "stopped-clean" || finished.lockRetained !== false) return false;
+  // every CLI attempt counts, the dry run too (a run before it had only `deploy` and `delete`)
   if (!cli || cli.deploy !== 0 || cli.delete !== 0 || !isCount(finished.requests)) return false;
+  if (Object.values(cli).some((attempts) => attempts !== 0)) return false;
   if (closed.sandboxAtBaseline !== true || closed.unknownAnswers !== 0) return false;
   if (closed.requests !== finished.requests) return false;
   let facts;

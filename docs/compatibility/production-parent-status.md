@@ -54,7 +54,7 @@ Current final-product gate: `PENDING`. Saved partial equality, synthetic fixture
 
 - `fs-transaction-recorded-comparison-preparation-v1`: `PARTIAL`; 0 retained cases or replays.
 - `fs-transaction-recorded-observations-v1`: `PARTIAL`; 8 retained cases or replays.
-- Bound public source input: `tools/compat-broad/fs-write-txn/fs_txn_compare_local.py`; SHA-256 `9fab208ef9e30a0332d78e061a12563355bc519611d7ed9e8ae0e1685493848f`.
+- Bound public source input: `tools/compat-broad/fs-write-txn/fs_txn_compare_local.py`; SHA-256 `78c5c6f3a5a77dc6e541dd7e92224b8b89db4704ba253d67295ecdb4be7a1a92`.
 - Bound public source input: `tools/compat-broad/fs-write-txn/fs_txn_table_p13b.py`; SHA-256 `c15dcba233334b5dd437aa4fad955fcc6af41089973d1a1bce083769910d5c3a`.
 - Missing: FS-TRANSACTION/admin-sdk-server-retry::production_behavior: complete production_behavior evidence missing
 - Missing: FS-TRANSACTION/closure-review::clean_review: complete clean_review evidence missing
@@ -191,7 +191,7 @@ An official comparison may remain OPEN independently of production closure. Mixe
 
 ## Integration conditions
 
-- Canonical projection record pins: `PENDING_ROOT_GENERATION`; the full `closure_records.py --check` gate remains required.
+- Canonical projection record pins: `CURRENT`; the full `closure_records.py --check` gate remains required.
 - Existing Node consumer migration: `COMPLETE`.
 - Evidence evaluation: `FILE_BACKED_TYPED_RECORDS`; partial and historical facts are not new production acceptance.
 - Same final product and independent review: `PENDING`.

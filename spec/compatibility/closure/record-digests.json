@@ -14,10 +14,12 @@
     "conformance/fs-data-write-production-supplements/partial-7bfd51026a2ac56617d81504.json": "4867fbf7837f16ecd3e4ada73aa91655686e9c37bcafb36c171ab491ed5a2582",
     "conformance/fs-query-index.indexes.json": "0a99c09201678e42eb398bb012b6f4666dc4a2806b6436abc61d8206b679cbcd",
     "conformance/src/fs-query-index/run.mjs": "1f412122591d56e21fdb389b666f1b85eb73a33354670acfeb6e168003f998a8",
-    "conformance/src/fs-transaction-closure.test.mjs": "ca91b260ebf069c713561115d9ee7a455b8803c39ab6574253e06a6e6de02196",
-    "conformance/src/scheduled-functions-closure.test.mjs": "120cac3e42ea7bbd716571f2f4b033d1dbf6964f6068dccb7651632755fa79ee",
-    "conformance/src/storage-object-closure.test.mjs": "540ffd94fe78ce175114e813a9dd6cbe6b12d3e7e2f92870db0f5106b3cab12d",
-    "conformance/src/storage-rules-closure.test.mjs": "e07467441cbb2ede9560ed530af66f7808af89bca5e3dc0c197ab4f1b5c5aa15",
+    "conformance/src/fs-transaction-closure.test.mjs": "4d6458f5a8e050f91000e14e018a085d5c99b3ea9d7af123bc40bd955047be8f",
+    "conformance/src/production-evidence.mjs": "2708b3e75dd06e1876fc907e0380a6f43abba738cb73fdd454bbe6da167c7c45",
+    "conformance/src/production-evidence.test.mjs": "6884fde4f01e7198f5a6004ffd44fec43b053931d56af3bd9c131bd430074d3e",
+    "conformance/src/scheduled-functions-closure.test.mjs": "5044f9f1cdac3d794fbf6ce66add4d86fd6620e9105dbb6ae5a830b1bac93267",
+    "conformance/src/storage-object-closure.test.mjs": "fb5e9199b82d0e4198943038fe2316783c4adaf2e0db9486b489be9f618045ff",
+    "conformance/src/storage-rules-closure.test.mjs": "fae86706d4b53d076b984802d61f2df94bfd58c0a1d2d1a9e106e5561bba7c80",
     "spec/compatibility/broad-runs/fs-aggregate-string-3d7ceabb8-saved-comparison.json": "3b1f0df878fb02959d95215db01e119dd5637128bc5cd0a1b60503fa6a0ae9e4",
     "spec/compatibility/broad-runs/fs-batch-duplicate-document-3d7ceabb8-saved-comparison.json": "1715ee8467fdcabaf8ad5769d918296fe0c74b631271a6b640b9f2b030481937",
     "spec/compatibility/broad-runs/fs-batch-malformed-middle-3d7ceabb8-saved-comparison.json": "3d6be2459422db7a68de9300207099bdcbd1ad3c4aacb206e983bcb5174e9177",
@@ -130,7 +132,9 @@
     "spec/compatibility/official-compatibility/history/e57a78e0/STORAGE-OBJECT.json": "0857ad38cdbd7655d1d46a8f72a233994dc38da20774ae4b339909279c8c162e",
     "spec/compatibility/official-compatibility/history/e57a78e0/STORAGE-RULES.json": "30d6f6f8b28cdebec4b2e1b8cc2aa6bb2aeaa0d86a2bcd58aa9e05a8b43379d8",
     "spec/compatibility/official-compatibility/registry.json": "8ece949d30e22806ce6753d0adcb8a86a2dad1b0f157de1530064d8af2dd3a31",
-    "spec/compatibility/production-parent-registry.json": "2bdd31e3e584e41bcd845b15d0a4eeb42630bb113eb2e204a591c60220b90099",
-    "spec/limits/firestore-standard-2026-08-25.json": "a5c9da71bd74c7341da1cb3d25542db3aecb935b2387d4a61c8cb43857055fa4"
+    "spec/compatibility/production-parent-registry.json": "6b0d4457cb304a3a27394797ad5c93615c0c55f718d324c2e673b056d41c1eb8",
+    "spec/limits/firestore-standard-2026-08-25.json": "a5c9da71bd74c7341da1cb3d25542db3aecb935b2387d4a61c8cb43857055fa4",
+    "tools/compat-broad/fs-write-txn/fs_txn_compare_local.py": "78c5c6f3a5a77dc6e541dd7e92224b8b89db4704ba253d67295ecdb4be7a1a92",
+    "tools/compat-broad/fs-write-txn/fs_txn_table_p13b.py": "c15dcba233334b5dd437aa4fad955fcc6af41089973d1a1bce083769910d5c3a"
   }
 }

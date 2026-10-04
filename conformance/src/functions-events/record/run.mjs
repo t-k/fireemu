@@ -196,12 +196,24 @@ export async function record({
       return finish("stopped-clean");
     }
     ran.created = true;
-    for (const request of runSetupRequests()) await transport.request(request);
-    log("deploy");
-    ran.deployStarted = true;
-    run.deploy.cli = await cli("deploy");
-    run.deploy.readiness = await waitReady({ transport, sleep });
-    if (!run.deploy.readiness.ready) {
+    const setup = [];
+    for (const request of runSetupRequests()) setup.push(await transport.request(request));
+    run.setup = setup.map(({ id, status, kind }) => ({
+      id,
+      status: status ?? null,
+      kind: kind ?? null,
+    }));
+    if (setup.some((answer) => answer.kind !== "success")) {
+      run.stops.push("a resource of the run could not be created; the deploy was not started");
+    } else {
+      log("deploy");
+      ran.deployStarted = true;
+      run.deploy.cli = await cli("deploy");
+      run.deploy.readiness = await waitReady({ transport, sleep });
+    }
+    if (run.stops.length > 0) {
+      // nothing more is sent before the cleanup
+    } else if (!run.deploy.readiness.ready) {
       run.stops.push("the 22 handlers did not become active; the passes were skipped");
     } else {
       await waitAndCapture(PROPAGATION_WAIT_SECONDS);
@@ -212,6 +224,9 @@ export async function record({
   } catch (error) {
     run.stops.push(`${error.constructor.name}: ${error.message}`);
   }
+
+  // Nothing was created: there is nothing of the run's to clean up, and a delete must never touch a resource the run did not make.
+  if (!ran.created) return finish("stopped-clean");
 
   // The cleanup runs after any stop once something was created.
   transport.setCeiling(CLEANUP_CEILING);

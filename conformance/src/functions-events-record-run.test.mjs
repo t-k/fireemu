@@ -186,3 +186,28 @@ test("the run says which IAM bindings the deploy added or removed, with user acc
   assert.ok(run.preflight.iamBefore.every((p) => !p.includes("@example.com")));
   assert.ok(Array.isArray(step.iamAfter));
 });
+
+test("an error before anything is created sends no delete at all", async () => {
+  const { deps, world } = setup();
+  world.failures.push({
+    match: (m, u) => u.includes("cloudresourcemanager"),
+    error: "TimeoutError",
+  });
+  const { outcome, run } = await record(deps);
+  assert.equal(outcome, "stopped-clean");
+  assert.ok(run.preflight.problems.length > 0);
+  assert.ok(!world.requests.some((r) => r.method === "DELETE"));
+});
+
+test("a resource that cannot be created stops before the deploy and the cleanup still runs", async () => {
+  const { deps, world, calls } = setup();
+  world.failures.push({
+    match: (m, u) => m === "PUT" && u.includes("fe-events-primary"),
+    status: 503,
+  });
+  const { outcome, run } = await record(deps);
+  assert.equal(outcome, "incomplete-clean");
+  assert.deepEqual(calls, []);
+  assert.ok(run.stops.some((s) => s.includes("could not be created")));
+  assert.equal(run.cleanup.verified, true);
+});

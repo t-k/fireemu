@@ -4,7 +4,7 @@ import { createCapture } from "./pubsub-production/capture.mjs";
 import { StopClean, must } from "./pubsub-production/cases/support.mjs";
 import { createClient, newPushState } from "./pubsub-production/client.mjs";
 import { createOwnership } from "./pubsub-production/names.mjs";
-import { parseArgs } from "./pubsub-production/record.mjs";
+import { parseArgs, summarize } from "./pubsub-production/record.mjs";
 import { exitCodeOf, runCases, selectCases } from "./pubsub-production/runner.mjs";
 import { CASES } from "./pubsub-production/cases/index.mjs";
 
@@ -338,4 +338,36 @@ test("the dead-letter case stops clean on production without a service agent, be
   assert.equal(summary.cases[0].outcome, "stopped");
   assert.match(summary.stopped, /service agent project number was not supplied/);
   assert.equal(transports.rest.calls.length, 0);
+});
+
+test("a run is closable only with no unknown answer, no stop and a clean cleanup; the unknown ones are listed", () => {
+  const journal = { write() {} };
+  const clean = { stopped: null, cleanup: { deleted: [], leftover: [], errors: [] }, cases: [] };
+  const options = { runId: RUN, target: "emulator", project: "demo-project" };
+  const none = createCapture({ journal });
+  none.record({ case: "a/rest", step: "01", op: "getTopic" });
+  const ready = summarize({ options, capture: none, summary: clean });
+  assert.equal(ready.closureReady, true);
+  assert.deepEqual([ready.requests, ready.unknownAnswers, ready.unknowns], [1, 0, []]);
+  const some = createCapture({ journal });
+  some.record({ case: "a/rest", step: "01", op: "createTopic", unknown: true });
+  some.record({ case: "a/grpc", step: "02", op: "publish", unknown: true });
+  const unsettled = summarize({ options, capture: some, summary: clean });
+  assert.equal(unsettled.closureReady, false);
+  assert.deepEqual(unsettled.unknowns, [
+    { n: 1, case: "a/rest", step: "01", op: "createTopic" },
+    { n: 2, case: "a/grpc", step: "02", op: "publish" },
+  ]);
+  for (const summary of [
+    { ...clean, stopped: "x" },
+    { ...clean, cleanup: { ...clean.cleanup, leftover: ["x"] } },
+    { ...clean, cleanup: { ...clean.cleanup, errors: ["x"] } },
+  ])
+    assert.equal(summarize({ options, capture: none, summary }).closureReady, false);
+  // The list is bounded, the count is not.
+  const many = createCapture({ journal });
+  for (let i = 0; i < 150; i += 1)
+    many.record({ case: "a/rest", step: "01", op: "x", unknown: true });
+  assert.equal(many.unknownCount(), 150);
+  assert.equal(many.unknowns().length, 100);
 });

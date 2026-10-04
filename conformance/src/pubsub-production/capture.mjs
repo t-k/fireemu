@@ -31,6 +31,7 @@ export function createBudget(max) {
 }
 
 export const OMIT_ABOVE = 4096;
+const MAX_UNKNOWNS_LISTED = 100;
 
 /** The value with every string longer than OMIT_ABOVE characters replaced by its length and digest. */
 export function sanitize(value) {
@@ -65,11 +66,16 @@ export function createFileJournal(path) {
 export function createCapture({ journal, now = () => new Date() }) {
   let n = 0;
   let unknown = 0;
+  const unknowns = [];
   const cases = new Map();
   return Object.freeze({
     record(entry) {
       n += 1;
-      if (entry.unknown === true) unknown += 1;
+      if (entry.unknown === true) {
+        unknown += 1;
+        if (unknowns.length < MAX_UNKNOWNS_LISTED)
+          unknowns.push({ n, case: entry.case, step: entry.step, op: entry.op });
+      }
       const line = { n, at: now().toISOString(), ...sanitize(entry) };
       journal.write(line);
       if (typeof entry.case === "string") cases.set(entry.case, (cases.get(entry.case) ?? 0) + 1);
@@ -82,6 +88,8 @@ export function createCapture({ journal, now = () => new Date() }) {
     count: () => n,
     /** How many exchanges had an answer that does not say what was done. */
     unknownCount: () => unknown,
+    /** The first exchanges with such an answer, for the read-back that has to settle each. */
+    unknowns: () => structuredClone(unknowns),
     perCase: () => Object.fromEntries(cases),
   });
 }

@@ -78,6 +78,26 @@ export function parseArgs(argv, env = {}) {
   return options;
 }
 
+/** What a run leaves behind: the counts, the unknown answers, and whether the run can be closed. */
+export function summarize({ options, capture, summary }) {
+  return {
+    runId: options.runId,
+    target: options.target,
+    project: options.project,
+    requests: capture.count(),
+    unknownAnswers: capture.unknownCount(),
+    unknowns: capture.unknowns(),
+    // An unknown answer to a creation or a deletion is only settled by a separate read-back later.
+    closureReady:
+      capture.unknownCount() === 0 &&
+      summary.stopped === null &&
+      summary.cleanup.leftover.length === 0 &&
+      summary.cleanup.errors.length === 0,
+    perCase: capture.perCase(),
+    ...summary,
+  };
+}
+
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 export async function main(argv, env = process.env) {
@@ -152,15 +172,7 @@ export async function main(argv, env = process.env) {
   } finally {
     grpc.close();
   }
-  const result = {
-    runId: options.runId,
-    target: options.target,
-    project: options.project,
-    requests: capture.count(),
-    unknownAnswers: capture.unknownCount(),
-    perCase: capture.perCase(),
-    ...summary,
-  };
+  const result = summarize({ options, capture, summary });
   capture.note("run-end", { requests: result.requests, stopped: result.stopped });
   journal.close();
   writeFileSync(

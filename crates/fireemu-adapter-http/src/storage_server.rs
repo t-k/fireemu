@@ -1,7 +1,7 @@
 //! hyper glue for the Storage surface: raw bodies (uploads), CORS for the browser SDK,
 //! loopback-only origins.
 
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
 
 use bytes::Bytes;
@@ -16,7 +16,7 @@ use tokio::net::TcpListener;
 use tokio::sync::Semaphore;
 
 use crate::identity_toolkit::origin_is_local;
-use crate::storage::{handle, StorageRequest, StorageState};
+use crate::storage::{handle_framed, StorageRequest, StorageState};
 
 /// Maximum accepted upload body (object limit plus multipart overhead).
 pub const MAX_STORAGE_BODY_BYTES: usize = 260 * 1024 * 1024;
@@ -40,6 +40,22 @@ pub static BODY_BUDGET: BodyBudget = BodyBudget::new(DEFAULT_BODY_BUDGET_BYTES);
 /// lock. Body collection does not hold a slot, so slow clients cannot occupy the pool.
 const BLOCKING_HANDLER_LIMIT: usize = 16;
 static BLOCKING_HANDLER_SLOTS: Semaphore = Semaphore::const_new(BLOCKING_HANDLER_LIMIT);
+
+/// Bounds the list requests that carry a `matchGlob`, whose cost depends on a pattern the caller
+/// writes. A request waits for one of these slots before it takes a handler slot, and waits
+/// without holding a thread, so a flood of them leaves the handler slots to the other requests.
+const GLOB_HANDLER_LIMIT: usize = 2;
+static GLOB_HANDLER_SLOTS: Semaphore = Semaphore::const_new(GLOB_HANDLER_LIMIT);
+
+/// Sets its flag when dropped: the request future that owns it was dropped (the client has gone) or
+/// has finished.
+struct SetOnDrop(Arc<AtomicBool>);
+
+impl Drop for SetOnDrop {
+    fn drop(&mut self) {
+        self.0.store(true, Ordering::Relaxed);
+    }
+}
 
 /// An admission budget for the request bodies buffered in memory at the same time.
 ///
@@ -241,7 +257,7 @@ const FORWARDED_HEADERS: &[&str] = &[
 ];
 
 /// The header set the official emulator's `cors` middleware exposes, verbatim.
-const EXPOSED_HEADERS: &str = "content-type,x-firebase-storage-version,X-Goog-Upload-Size-Received,x-goog-upload-url,x-goog-upload-command,x-gupload-uploadid,x-goog-upload-header-content-length,x-goog-upload-header-content-type,x-goog-upload-protocol,x-goog-upload-status,x-goog-upload-chunk-granularity,x-goog-upload-control-url";
+pub(crate) const EXPOSED_HEADERS: &str = "content-type,x-firebase-storage-version,X-Goog-Upload-Size-Received,x-goog-upload-url,x-goog-upload-command,x-gupload-uploadid,x-goog-upload-header-content-length,x-goog-upload-header-content-type,x-goog-upload-protocol,x-goog-upload-status,x-goog-upload-chunk-granularity,x-goog-upload-control-url";
 
 /// The CORS headers of an ordinary (non-preflight) response, as the official emulator's
 /// `cors({origin: true, exposedHeaders})` middleware stamps them: the origin reflected when
@@ -393,6 +409,17 @@ async fn respond(
         Ok(buffer) => buffer,
         Err(e) => return Ok(body_error_response(e, origin.as_deref())),
     };
+    let glob_permit = if crate::storage::uses_match_glob(state.is_strict(), &method, &path, &query)
+    {
+        Some(
+            GLOB_HANDLER_SLOTS
+                .acquire()
+                .await
+                .expect("storage glob semaphore is never closed"),
+        )
+    } else {
+        None
+    };
     let permit = BLOCKING_HANDLER_SLOTS
         .acquire()
         .await
@@ -404,24 +431,32 @@ async fn respond(
         query.clone(),
         buffer.bytes.len(),
     );
+    // hyper drops this future when the client closes its connection (even while the handler works),
+    // which sets the flag: a glob scan stops, mid-name, instead of working through the bucket for
+    // nobody, and gives its glob slot back.
+    let client_gone = Arc::new(AtomicBool::new(false));
+    let _gone_on_drop = SetOnDrop(Arc::clone(&client_gone));
     let response = tokio::task::spawn_blocking(move || {
         let _permit = permit;
+        let _glob_permit = glob_permit;
         let body = buffer.take();
-        handle(
-            &state,
-            StorageRequest {
-                method,
-                path,
-                query,
-                host,
-                headers,
-                app_check,
-                body,
-            },
-        )
+        crate::storage::with_cancellation(client_gone, || {
+            handle_framed(
+                &state,
+                StorageRequest {
+                    method,
+                    path,
+                    query,
+                    host,
+                    headers,
+                    app_check,
+                    body,
+                },
+            )
+        })
     })
     .await;
-    let Ok(response) = response else {
+    let Ok((response, framed)) = response else {
         return Ok(handler_error_response(
             StatusCode::INTERNAL_SERVER_ERROR,
             b"storage handler failed",
@@ -448,18 +483,20 @@ async fn respond(
         // A `dropConnection` fault: the connection closes without a response.
         return Err(std::io::Error::other("fault plan: connection dropped"));
     }
-    let mut builder = cors(
-        Response::builder()
-            .status(
-                StatusCode::from_u16(response.status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR),
-            )
+    // A response the strict profile framed carries production's own header set; every other
+    // response gets the official emulator's CORS and `nosniff` stamps.
+    let mut builder = Response::builder()
+        .status(StatusCode::from_u16(response.status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR));
+    if !framed {
+        builder = cors(
             // Defence in depth: a body typed text/plain that happens to look like markup is
             // never sniffed as HTML on this origin. It does not change how an explicit
             // text/html content-type renders, so it is not a substitute for typing
             // caller-influenced bodies as text/plain -- see storage::gcs_no_such_object.
-            .header("x-content-type-options", "nosniff"),
-        origin.as_deref(),
-    );
+            builder.header("x-content-type-options", "nosniff"),
+            origin.as_deref(),
+        );
+    }
     for (k, v) in response.headers {
         builder = builder.header(k, v);
     }

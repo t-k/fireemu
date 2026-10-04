@@ -10547,7 +10547,18 @@ fn user_json(store: &AuthStore, uid: &LocalId) -> Value {
         "passwordHash": has_password.then_some(REDACTED_PASSWORD_HASH),
         "passwordUpdatedAt": store.password_updated_at(uid).map(|t| t.as_nanos() / 1_000_000),
         "createdAt": (u.created_at.as_nanos() / 1_000_000).to_string(),
-        "lastRefreshAt": u.last_refresh_at.and_then(|t| LogicalInstant::to_rfc3339(t).ok()),
+        "lastRefreshAt": u.last_refresh_at.map(|at| {
+            // Millisecond precision: `toISOString` (always three digits) as the official emulator
+            // writes it, a protobuf Timestamp (the fewest digits) as production answers it
+            // (recorded, lean-v5 lookups: 24 characters).
+            let truncated =
+                LogicalInstant::from_nanos(at.as_nanos().div_euclid(1_000_000) * 1_000_000);
+            if store.second_factor_rules_are_production() {
+                proto_timestamp(truncated)
+            } else {
+                millisecond_timestamp(truncated)
+            }
+        }),
         "lastLoginAt": u.last_sign_in_at.map(|t| (t.as_nanos() / 1_000_000).to_string()),
         "validSince": valid_since.map(|t| (t.as_nanos() / 1_000_000_000).to_string()),
         "customAuth": u.custom_auth.then_some(true),
@@ -13361,6 +13372,18 @@ fn mfa_info(store: &AuthStore, uid: &LocalId, redacted: bool) -> Vec<Value> {
     }));
     entries.sort_by_key(|(at, _)| *at);
     entries.into_iter().map(|(_, entry)| entry).collect()
+}
+
+/// An instant as the official emulator writes `lastRefreshAt` (`new Date().toISOString()`) and
+/// production answers it (recorded, STORAGE-OBJECT lean-v5 lookups: 24 characters): RFC 3339 with
+/// exactly three fraction digits.
+fn millisecond_timestamp(at: LogicalInstant) -> String {
+    let full = LogicalInstant::to_rfc3339(at).unwrap_or_default();
+    let Some(body) = full.strip_suffix('Z') else {
+        return full;
+    };
+    let (seconds, fraction) = body.split_once('.').unwrap_or((body, ""));
+    format!("{seconds}.{fraction:0<3.3}Z")
 }
 
 /// An instant as protobuf's JSON Timestamp: RFC 3339 with 0, 3, 6 or 9 fraction digits, the

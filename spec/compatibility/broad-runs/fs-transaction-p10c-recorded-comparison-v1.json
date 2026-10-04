@@ -15,7 +15,7 @@
     "binarySha256": "d0d8d43726a808b600f702f1f6be26c4863fc48dd7b4971a519adcae9ce01888"
   },
   "comparer": {
-    "sha256": "cd788ad83279453792d9518aaa73e1a898c3ef7433c6ed9ed50cf0baef203eab",
+    "sha256": "100c27ec76a81224d06ed579996abb684a86e967f7525434a95b7eacb1403c09",
     "replayClock": "virtual"
   },
   "recordings": [
@@ -414,6 +414,44 @@
           },
           "match": true
         }
+      ],
+      "achievedAges": [
+        {
+          "site": "idle-75/commit",
+          "production": 75.54478920809925,
+          "local": 75.5472980835475,
+          "difference": 0.003
+        },
+        {
+          "site": "idle-80/commit",
+          "production": 80.54263466689736,
+          "local": 80.54508587531745,
+          "difference": 0.002
+        },
+        {
+          "site": "idle-90/commit",
+          "production": 90.5372149576433,
+          "local": 90.54037350043654,
+          "difference": 0.003
+        },
+        {
+          "site": "idle-100/commit",
+          "production": 100.57502075005323,
+          "local": 100.5779821248725,
+          "difference": 0.003
+        },
+        {
+          "site": "idle-110/commit",
+          "production": 110.70263441698626,
+          "local": 110.7060296246782,
+          "difference": 0.003
+        },
+        {
+          "site": "idle-120/commit",
+          "production": 120.58235350018367,
+          "local": 120.58648558380082,
+          "difference": 0.004
+        }
       ]
     },
     {
@@ -811,6 +849,44 @@
           },
           "match": true
         }
+      ],
+      "achievedAges": [
+        {
+          "site": "idle-75/commit",
+          "production": 75.53686833335087,
+          "local": 75.53940329235047,
+          "difference": 0.003
+        },
+        {
+          "site": "idle-80/commit",
+          "production": 80.58147504134104,
+          "local": 80.58329083397985,
+          "difference": 0.002
+        },
+        {
+          "site": "idle-90/commit",
+          "production": 90.54689441714436,
+          "local": 90.54935820912942,
+          "difference": 0.002
+        },
+        {
+          "site": "idle-100/commit",
+          "production": 100.59563058288768,
+          "local": 100.59920645924285,
+          "difference": 0.004
+        },
+        {
+          "site": "idle-110/commit",
+          "production": 110.57723133312538,
+          "local": 110.58103741751984,
+          "difference": 0.004
+        },
+        {
+          "site": "idle-120/commit",
+          "production": 120.54281183285639,
+          "local": 120.54720941605046,
+          "difference": 0.004
+        }
       ]
     }
   ],
@@ -823,6 +899,6 @@
     "Raw REST bodyBytes, content-length and member-order layout were not retained; the record proves decoded response semantics, not wire layout.",
     "The closure review and the final-artifact regression are separate conditions and stay open.",
     "The artifact is the strict profile of the commit named; a later source change needs a new replay.",
-    "Idle and lifetime boundaries are judged by the intervals production narrowed: the idle threshold lies in [110.70, 122.96) s and the age at which an expired token is forgotten in (298.7, 302.2] s; strict's values (a 120 s idle limit, a 270 s total lifetime, 300 s of memory) lie inside them. The replay runs on the emulator's virtual clock and reproduces each recorded idle (the least the production token idled before the request) and each recorded token age, so a row at a boundary is compared at the measured production value, not at the nominal wait."
+    "Idle and lifetime boundaries: the idle threshold is judged by the interval production narrowed, [110.70, 122.96) s (ledger 809 (5)), and strict's 120 s idle limit lies inside it; the age at which an expired token is forgotten is judged by (298.7, 302.2] s, which holds strict's 300 s of memory. Strict's 270 s total lifetime is supported by the rows themselves, not by an interval: live reads at token ages up to 253.3 s answered 0 and the first refusals came at 280.4 s, so production's lifetime lies in about (253.3, 280.4] s and 270 s lies inside it. The replay runs on the emulator's virtual clock, advanced by exactly each wait, and reproduces each recorded idle (the least the production token idled before the request) and each recorded token age; the idle or age each wait reached is published beside the recorded one (achievedAges), so a row at a boundary is compared at the measured production value, not at the nominal wait."
   ]
 }

@@ -1,0 +1,1039 @@
+{
+  "schemaVersion": 1,
+  "kind": "fs-transaction-expiry-retry-04-release-replay-v1",
+  "parent": "FS-TRANSACTION",
+  "campaign": "FS-TRANSACTION-EXPIRY-RETRY-04",
+  "profile": "strict",
+  "productionRequests": 0,
+  "authorizesProduction": false,
+  "artifact": {
+    "sourceCommit": "774a9f24c62abdd7381c66797d6202ed03f24666",
+    "binarySha256": "d0d8d43726a808b600f702f1f6be26c4863fc48dd7b4971a519adcae9ce01888"
+  },
+  "replay": {
+    "tool": "tools/compat-broad/fs-write-txn/fs_txn_expiry_idle_replay.py",
+    "idleWaitSeconds": 121,
+    "idleCases": [
+      "idle-expiry/commit-after-idle",
+      "idle-expiry/rollback-after-idle",
+      "idle-expiry/lock-released-after-idle"
+    ],
+    "localIdleSeconds": {
+      "idle/commit-before": 20.0,
+      "idle/commit-after": 121.0,
+      "idle/rollback-after": 121.0,
+      "idle/lock-released": 121.0
+    },
+    "casesFileBlob": "ea3b31c0653112119ac7afbfd3a5fb7a4b8b522c",
+    "note": "The campaign's case table with its three idle waits changed from 90 s to 121 s and nothing else. Each idle observation was made after the idle in localIdleSeconds on the control clock, inside the interval [110.70, 122.96) s production narrowed for the idle threshold (ledger 809 (5)); the lock-release case idled 125.2 s in production, also past strict's 120 s limit, so the same refusal is decided directly. The other cases are replayed unchanged."
+  },
+  "recordings": [
+    {
+      "recording": 1,
+      "productionFileSha256": "c3b64980550f9818475f8094202a3b31c3625d02f22b3bf7fb1266ea6aa35fe0",
+      "rows": [
+        {
+          "caseId": "finished-token/rollback-after-begin",
+          "production": {
+            "code": 0,
+            "status": "OK",
+            "message": null,
+            "rpc": "Rollback",
+            "role": null
+          },
+          "local": {
+            "code": 0,
+            "status": "OK",
+            "message": null,
+            "rpc": "Rollback",
+            "role": null
+          },
+          "match": true
+        },
+        {
+          "caseId": "finished-token/rollback-after-commit",
+          "production": {
+            "code": 10,
+            "status": "ABORTED",
+            "message": "The referenced transaction has expired or is no longer valid.",
+            "rpc": "Rollback",
+            "role": null
+          },
+          "local": {
+            "code": 10,
+            "status": "ABORTED",
+            "message": "The referenced transaction has expired or is no longer valid.",
+            "rpc": "Rollback",
+            "role": null
+          },
+          "match": true
+        },
+        {
+          "caseId": "finished-token/rollback-after-rollback",
+          "production": {
+            "code": 0,
+            "status": "OK",
+            "message": null,
+            "rpc": "Rollback",
+            "role": null
+          },
+          "local": {
+            "code": 0,
+            "status": "OK",
+            "message": null,
+            "rpc": "Rollback",
+            "role": null
+          },
+          "match": true
+        },
+        {
+          "caseId": "idle-expiry/commit-after-idle",
+          "production": {
+            "code": 10,
+            "status": "ABORTED",
+            "message": "The referenced transaction has expired or is no longer valid.",
+            "rpc": "Commit",
+            "role": "locked-a"
+          },
+          "local": {
+            "code": 10,
+            "status": "ABORTED",
+            "message": "The referenced transaction has expired or is no longer valid.",
+            "rpc": "Commit",
+            "role": "locked-a"
+          },
+          "match": true
+        },
+        {
+          "caseId": "idle-expiry/commit-after-idle#postState",
+          "production": {
+            "role": "locked-a",
+            "document": {
+              "code": 0,
+              "exists": true,
+              "fields": {
+                "nonce": {
+                  "stringValue": "<fireemu:o3-txn-expiry:token>"
+                },
+                "owner": {
+                  "stringValue": "<fireemu:o3-txn-expiry:owner>"
+                },
+                "role": {
+                  "stringValue": "locked-a"
+                },
+                "state": {
+                  "stringValue": "created"
+                }
+              },
+              "name": "<fireemu:o3-txn-expiry:resource>",
+              "updateTime": "<fireemu:o3-txn-expiry:token>",
+              "updateTimeOrdinal": 0
+            }
+          },
+          "local": {
+            "role": "locked-a",
+            "document": {
+              "code": 0,
+              "exists": true,
+              "fields": {
+                "nonce": {
+                  "stringValue": "<fireemu:o3-txn-expiry:token>"
+                },
+                "owner": {
+                  "stringValue": "<fireemu:o3-txn-expiry:owner>"
+                },
+                "role": {
+                  "stringValue": "locked-a"
+                },
+                "state": {
+                  "stringValue": "created"
+                }
+              },
+              "name": "<fireemu:o3-txn-expiry:resource>",
+              "updateTime": "<fireemu:o3-txn-expiry:token>",
+              "updateTimeOrdinal": 0
+            }
+          },
+          "match": true
+        },
+        {
+          "caseId": "idle-expiry/commit-before-idle",
+          "production": {
+            "code": 0,
+            "status": "OK",
+            "message": null,
+            "rpc": "Commit",
+            "role": "locked-d"
+          },
+          "local": {
+            "code": 0,
+            "status": "OK",
+            "message": null,
+            "rpc": "Commit",
+            "role": "locked-d"
+          },
+          "match": true
+        },
+        {
+          "caseId": "idle-expiry/commit-before-idle#postState",
+          "production": {
+            "role": "locked-d",
+            "document": {
+              "code": 0,
+              "exists": true,
+              "fields": {
+                "nonce": {
+                  "stringValue": "<fireemu:o3-txn-expiry:token>"
+                },
+                "owner": {
+                  "stringValue": "<fireemu:o3-txn-expiry:owner>"
+                },
+                "role": {
+                  "stringValue": "locked-d"
+                },
+                "state": {
+                  "stringValue": "committed-before-idle"
+                }
+              },
+              "name": "<fireemu:o3-txn-expiry:resource>",
+              "updateTime": "<fireemu:o3-txn-expiry:token>",
+              "updateTimeOrdinal": 1
+            }
+          },
+          "local": {
+            "role": "locked-d",
+            "document": {
+              "code": 0,
+              "exists": true,
+              "fields": {
+                "nonce": {
+                  "stringValue": "<fireemu:o3-txn-expiry:token>"
+                },
+                "owner": {
+                  "stringValue": "<fireemu:o3-txn-expiry:owner>"
+                },
+                "role": {
+                  "stringValue": "locked-d"
+                },
+                "state": {
+                  "stringValue": "committed-before-idle"
+                }
+              },
+              "name": "<fireemu:o3-txn-expiry:resource>",
+              "updateTime": "<fireemu:o3-txn-expiry:token>",
+              "updateTimeOrdinal": 1
+            }
+          },
+          "match": true
+        },
+        {
+          "caseId": "idle-expiry/lock-held-before-idle",
+          "production": {
+            "code": 10,
+            "status": "ABORTED",
+            "message": "Too much contention on these documents. Please try again.",
+            "rpc": "Commit",
+            "role": "locked-c"
+          },
+          "local": {
+            "code": 10,
+            "status": "ABORTED",
+            "message": "Too much contention on these documents. Please try again.",
+            "rpc": "Commit",
+            "role": "locked-c"
+          },
+          "match": true
+        },
+        {
+          "caseId": "idle-expiry/lock-held-before-idle#postState",
+          "production": {
+            "role": "locked-c",
+            "document": {
+              "code": 0,
+              "exists": true,
+              "fields": {
+                "nonce": {
+                  "stringValue": "<fireemu:o3-txn-expiry:token>"
+                },
+                "owner": {
+                  "stringValue": "<fireemu:o3-txn-expiry:owner>"
+                },
+                "role": {
+                  "stringValue": "locked-c"
+                },
+                "state": {
+                  "stringValue": "created"
+                }
+              },
+              "name": "<fireemu:o3-txn-expiry:resource>",
+              "updateTime": "<fireemu:o3-txn-expiry:token>",
+              "updateTimeOrdinal": 0
+            }
+          },
+          "local": {
+            "role": "locked-c",
+            "document": {
+              "code": 0,
+              "exists": true,
+              "fields": {
+                "nonce": {
+                  "stringValue": "<fireemu:o3-txn-expiry:token>"
+                },
+                "owner": {
+                  "stringValue": "<fireemu:o3-txn-expiry:owner>"
+                },
+                "role": {
+                  "stringValue": "locked-c"
+                },
+                "state": {
+                  "stringValue": "created"
+                }
+              },
+              "name": "<fireemu:o3-txn-expiry:resource>",
+              "updateTime": "<fireemu:o3-txn-expiry:token>",
+              "updateTimeOrdinal": 0
+            }
+          },
+          "match": true
+        },
+        {
+          "caseId": "idle-expiry/lock-released-after-idle",
+          "production": {
+            "code": 0,
+            "status": "OK",
+            "message": null,
+            "rpc": "Commit",
+            "role": "locked-a"
+          },
+          "local": {
+            "code": 0,
+            "status": "OK",
+            "message": null,
+            "rpc": "Commit",
+            "role": "locked-a"
+          },
+          "match": true
+        },
+        {
+          "caseId": "idle-expiry/lock-released-after-idle#postState",
+          "production": {
+            "role": "locked-a",
+            "document": {
+              "code": 0,
+              "exists": true,
+              "fields": {
+                "nonce": {
+                  "stringValue": "<fireemu:o3-txn-expiry:token>"
+                },
+                "owner": {
+                  "stringValue": "<fireemu:o3-txn-expiry:owner>"
+                },
+                "role": {
+                  "stringValue": "locked-a"
+                },
+                "state": {
+                  "stringValue": "written-after-expiry"
+                }
+              },
+              "name": "<fireemu:o3-txn-expiry:resource>",
+              "updateTime": "<fireemu:o3-txn-expiry:token>",
+              "updateTimeOrdinal": 1
+            }
+          },
+          "local": {
+            "role": "locked-a",
+            "document": {
+              "code": 0,
+              "exists": true,
+              "fields": {
+                "nonce": {
+                  "stringValue": "<fireemu:o3-txn-expiry:token>"
+                },
+                "owner": {
+                  "stringValue": "<fireemu:o3-txn-expiry:owner>"
+                },
+                "role": {
+                  "stringValue": "locked-a"
+                },
+                "state": {
+                  "stringValue": "written-after-expiry"
+                }
+              },
+              "name": "<fireemu:o3-txn-expiry:resource>",
+              "updateTime": "<fireemu:o3-txn-expiry:token>",
+              "updateTimeOrdinal": 1
+            }
+          },
+          "match": true
+        },
+        {
+          "caseId": "idle-expiry/rollback-after-idle",
+          "production": {
+            "code": 0,
+            "status": "OK",
+            "message": null,
+            "rpc": "Rollback",
+            "role": "locked-b"
+          },
+          "local": {
+            "code": 0,
+            "status": "OK",
+            "message": null,
+            "rpc": "Rollback",
+            "role": "locked-b"
+          },
+          "match": true
+        },
+        {
+          "caseId": "idle-expiry/rollback-after-idle#postState",
+          "production": {
+            "role": "locked-b",
+            "document": {
+              "code": 0,
+              "exists": true,
+              "fields": {
+                "nonce": {
+                  "stringValue": "<fireemu:o3-txn-expiry:token>"
+                },
+                "owner": {
+                  "stringValue": "<fireemu:o3-txn-expiry:owner>"
+                },
+                "role": {
+                  "stringValue": "locked-b"
+                },
+                "state": {
+                  "stringValue": "created"
+                }
+              },
+              "name": "<fireemu:o3-txn-expiry:resource>",
+              "updateTime": "<fireemu:o3-txn-expiry:token>",
+              "updateTimeOrdinal": 0
+            }
+          },
+          "local": {
+            "role": "locked-b",
+            "document": {
+              "code": 0,
+              "exists": true,
+              "fields": {
+                "nonce": {
+                  "stringValue": "<fireemu:o3-txn-expiry:token>"
+                },
+                "owner": {
+                  "stringValue": "<fireemu:o3-txn-expiry:owner>"
+                },
+                "role": {
+                  "stringValue": "locked-b"
+                },
+                "state": {
+                  "stringValue": "created"
+                }
+              },
+              "name": "<fireemu:o3-txn-expiry:resource>",
+              "updateTime": "<fireemu:o3-txn-expiry:token>",
+              "updateTimeOrdinal": 0
+            }
+          },
+          "match": true
+        },
+        {
+          "caseId": "retry-token/retry-with-committed-previous",
+          "production": {
+            "code": 0,
+            "status": "OK",
+            "message": null,
+            "rpc": "BeginTransaction",
+            "role": null
+          },
+          "local": {
+            "code": 0,
+            "status": "OK",
+            "message": null,
+            "rpc": "BeginTransaction",
+            "role": null
+          },
+          "match": true
+        },
+        {
+          "caseId": "retry-token/retry-with-malformed-previous",
+          "production": {
+            "code": 3,
+            "status": "INVALID_ARGUMENT",
+            "message": "Invalid value at 'options.read_write.retry_transaction' (TYPE_BYTES), Base64 decoding failed for \"not base64!\"",
+            "rpc": "BeginTransaction",
+            "role": null
+          },
+          "local": {
+            "code": 3,
+            "status": "INVALID_ARGUMENT",
+            "message": "Invalid value at 'options.read_write.retry_transaction' (TYPE_BYTES), Base64 decoding failed for \"not base64!\"",
+            "rpc": "BeginTransaction",
+            "role": null
+          },
+          "match": true
+        },
+        {
+          "caseId": "retry-token/retry-with-read-only-previous",
+          "production": {
+            "code": 3,
+            "status": "INVALID_ARGUMENT",
+            "message": "Cannot retry a read-only transaction",
+            "rpc": "BeginTransaction",
+            "role": null
+          },
+          "local": {
+            "code": 3,
+            "status": "INVALID_ARGUMENT",
+            "message": "Cannot retry a read-only transaction",
+            "rpc": "BeginTransaction",
+            "role": null
+          },
+          "match": true
+        },
+        {
+          "caseId": "retry-token/retry-with-rolled-back-previous",
+          "production": {
+            "code": 0,
+            "status": "OK",
+            "message": null,
+            "rpc": "BeginTransaction",
+            "role": null
+          },
+          "local": {
+            "code": 0,
+            "status": "OK",
+            "message": null,
+            "rpc": "BeginTransaction",
+            "role": null
+          },
+          "match": true
+        },
+        {
+          "caseId": "retry-token/retry-with-unissued-previous",
+          "production": {
+            "code": 3,
+            "status": "INVALID_ARGUMENT",
+            "message": "Invalid transaction.",
+            "rpc": "BeginTransaction",
+            "role": null
+          },
+          "local": {
+            "code": 3,
+            "status": "INVALID_ARGUMENT",
+            "message": "Invalid transaction.",
+            "rpc": "BeginTransaction",
+            "role": null
+          },
+          "match": true
+        }
+      ],
+      "mismatches": 0
+    },
+    {
+      "recording": 2,
+      "productionFileSha256": "d19becdca8890a9c5e46d1b4959eb35e8104d76717e2a83d3f7f356d1102f1b7",
+      "rows": [
+        {
+          "caseId": "finished-token/rollback-after-begin",
+          "production": {
+            "code": 0,
+            "status": "OK",
+            "message": null,
+            "rpc": "Rollback",
+            "role": null
+          },
+          "local": {
+            "code": 0,
+            "status": "OK",
+            "message": null,
+            "rpc": "Rollback",
+            "role": null
+          },
+          "match": true
+        },
+        {
+          "caseId": "finished-token/rollback-after-commit",
+          "production": {
+            "code": 10,
+            "status": "ABORTED",
+            "message": "The referenced transaction has expired or is no longer valid.",
+            "rpc": "Rollback",
+            "role": null
+          },
+          "local": {
+            "code": 10,
+            "status": "ABORTED",
+            "message": "The referenced transaction has expired or is no longer valid.",
+            "rpc": "Rollback",
+            "role": null
+          },
+          "match": true
+        },
+        {
+          "caseId": "finished-token/rollback-after-rollback",
+          "production": {
+            "code": 0,
+            "status": "OK",
+            "message": null,
+            "rpc": "Rollback",
+            "role": null
+          },
+          "local": {
+            "code": 0,
+            "status": "OK",
+            "message": null,
+            "rpc": "Rollback",
+            "role": null
+          },
+          "match": true
+        },
+        {
+          "caseId": "idle-expiry/commit-after-idle",
+          "production": {
+            "code": 10,
+            "status": "ABORTED",
+            "message": "The referenced transaction has expired or is no longer valid.",
+            "rpc": "Commit",
+            "role": "locked-a"
+          },
+          "local": {
+            "code": 10,
+            "status": "ABORTED",
+            "message": "The referenced transaction has expired or is no longer valid.",
+            "rpc": "Commit",
+            "role": "locked-a"
+          },
+          "match": true
+        },
+        {
+          "caseId": "idle-expiry/commit-after-idle#postState",
+          "production": {
+            "role": "locked-a",
+            "document": {
+              "code": 0,
+              "exists": true,
+              "fields": {
+                "nonce": {
+                  "stringValue": "<fireemu:o3-txn-expiry:token>"
+                },
+                "owner": {
+                  "stringValue": "<fireemu:o3-txn-expiry:owner>"
+                },
+                "role": {
+                  "stringValue": "locked-a"
+                },
+                "state": {
+                  "stringValue": "created"
+                }
+              },
+              "name": "<fireemu:o3-txn-expiry:resource>",
+              "updateTime": "<fireemu:o3-txn-expiry:token>",
+              "updateTimeOrdinal": 0
+            }
+          },
+          "local": {
+            "role": "locked-a",
+            "document": {
+              "code": 0,
+              "exists": true,
+              "fields": {
+                "nonce": {
+                  "stringValue": "<fireemu:o3-txn-expiry:token>"
+                },
+                "owner": {
+                  "stringValue": "<fireemu:o3-txn-expiry:owner>"
+                },
+                "role": {
+                  "stringValue": "locked-a"
+                },
+                "state": {
+                  "stringValue": "created"
+                }
+              },
+              "name": "<fireemu:o3-txn-expiry:resource>",
+              "updateTime": "<fireemu:o3-txn-expiry:token>",
+              "updateTimeOrdinal": 0
+            }
+          },
+          "match": true
+        },
+        {
+          "caseId": "idle-expiry/commit-before-idle",
+          "production": {
+            "code": 0,
+            "status": "OK",
+            "message": null,
+            "rpc": "Commit",
+            "role": "locked-d"
+          },
+          "local": {
+            "code": 0,
+            "status": "OK",
+            "message": null,
+            "rpc": "Commit",
+            "role": "locked-d"
+          },
+          "match": true
+        },
+        {
+          "caseId": "idle-expiry/commit-before-idle#postState",
+          "production": {
+            "role": "locked-d",
+            "document": {
+              "code": 0,
+              "exists": true,
+              "fields": {
+                "nonce": {
+                  "stringValue": "<fireemu:o3-txn-expiry:token>"
+                },
+                "owner": {
+                  "stringValue": "<fireemu:o3-txn-expiry:owner>"
+                },
+                "role": {
+                  "stringValue": "locked-d"
+                },
+                "state": {
+                  "stringValue": "committed-before-idle"
+                }
+              },
+              "name": "<fireemu:o3-txn-expiry:resource>",
+              "updateTime": "<fireemu:o3-txn-expiry:token>",
+              "updateTimeOrdinal": 1
+            }
+          },
+          "local": {
+            "role": "locked-d",
+            "document": {
+              "code": 0,
+              "exists": true,
+              "fields": {
+                "nonce": {
+                  "stringValue": "<fireemu:o3-txn-expiry:token>"
+                },
+                "owner": {
+                  "stringValue": "<fireemu:o3-txn-expiry:owner>"
+                },
+                "role": {
+                  "stringValue": "locked-d"
+                },
+                "state": {
+                  "stringValue": "committed-before-idle"
+                }
+              },
+              "name": "<fireemu:o3-txn-expiry:resource>",
+              "updateTime": "<fireemu:o3-txn-expiry:token>",
+              "updateTimeOrdinal": 1
+            }
+          },
+          "match": true
+        },
+        {
+          "caseId": "idle-expiry/lock-held-before-idle",
+          "production": {
+            "code": 10,
+            "status": "ABORTED",
+            "message": "Too much contention on these documents. Please try again.",
+            "rpc": "Commit",
+            "role": "locked-c"
+          },
+          "local": {
+            "code": 10,
+            "status": "ABORTED",
+            "message": "Too much contention on these documents. Please try again.",
+            "rpc": "Commit",
+            "role": "locked-c"
+          },
+          "match": true
+        },
+        {
+          "caseId": "idle-expiry/lock-held-before-idle#postState",
+          "production": {
+            "role": "locked-c",
+            "document": {
+              "code": 0,
+              "exists": true,
+              "fields": {
+                "nonce": {
+                  "stringValue": "<fireemu:o3-txn-expiry:token>"
+                },
+                "owner": {
+                  "stringValue": "<fireemu:o3-txn-expiry:owner>"
+                },
+                "role": {
+                  "stringValue": "locked-c"
+                },
+                "state": {
+                  "stringValue": "created"
+                }
+              },
+              "name": "<fireemu:o3-txn-expiry:resource>",
+              "updateTime": "<fireemu:o3-txn-expiry:token>",
+              "updateTimeOrdinal": 0
+            }
+          },
+          "local": {
+            "role": "locked-c",
+            "document": {
+              "code": 0,
+              "exists": true,
+              "fields": {
+                "nonce": {
+                  "stringValue": "<fireemu:o3-txn-expiry:token>"
+                },
+                "owner": {
+                  "stringValue": "<fireemu:o3-txn-expiry:owner>"
+                },
+                "role": {
+                  "stringValue": "locked-c"
+                },
+                "state": {
+                  "stringValue": "created"
+                }
+              },
+              "name": "<fireemu:o3-txn-expiry:resource>",
+              "updateTime": "<fireemu:o3-txn-expiry:token>",
+              "updateTimeOrdinal": 0
+            }
+          },
+          "match": true
+        },
+        {
+          "caseId": "idle-expiry/lock-released-after-idle",
+          "production": {
+            "code": 0,
+            "status": "OK",
+            "message": null,
+            "rpc": "Commit",
+            "role": "locked-a"
+          },
+          "local": {
+            "code": 0,
+            "status": "OK",
+            "message": null,
+            "rpc": "Commit",
+            "role": "locked-a"
+          },
+          "match": true
+        },
+        {
+          "caseId": "idle-expiry/lock-released-after-idle#postState",
+          "production": {
+            "role": "locked-a",
+            "document": {
+              "code": 0,
+              "exists": true,
+              "fields": {
+                "nonce": {
+                  "stringValue": "<fireemu:o3-txn-expiry:token>"
+                },
+                "owner": {
+                  "stringValue": "<fireemu:o3-txn-expiry:owner>"
+                },
+                "role": {
+                  "stringValue": "locked-a"
+                },
+                "state": {
+                  "stringValue": "written-after-expiry"
+                }
+              },
+              "name": "<fireemu:o3-txn-expiry:resource>",
+              "updateTime": "<fireemu:o3-txn-expiry:token>",
+              "updateTimeOrdinal": 1
+            }
+          },
+          "local": {
+            "role": "locked-a",
+            "document": {
+              "code": 0,
+              "exists": true,
+              "fields": {
+                "nonce": {
+                  "stringValue": "<fireemu:o3-txn-expiry:token>"
+                },
+                "owner": {
+                  "stringValue": "<fireemu:o3-txn-expiry:owner>"
+                },
+                "role": {
+                  "stringValue": "locked-a"
+                },
+                "state": {
+                  "stringValue": "written-after-expiry"
+                }
+              },
+              "name": "<fireemu:o3-txn-expiry:resource>",
+              "updateTime": "<fireemu:o3-txn-expiry:token>",
+              "updateTimeOrdinal": 1
+            }
+          },
+          "match": true
+        },
+        {
+          "caseId": "idle-expiry/rollback-after-idle",
+          "production": {
+            "code": 0,
+            "status": "OK",
+            "message": null,
+            "rpc": "Rollback",
+            "role": "locked-b"
+          },
+          "local": {
+            "code": 0,
+            "status": "OK",
+            "message": null,
+            "rpc": "Rollback",
+            "role": "locked-b"
+          },
+          "match": true
+        },
+        {
+          "caseId": "idle-expiry/rollback-after-idle#postState",
+          "production": {
+            "role": "locked-b",
+            "document": {
+              "code": 0,
+              "exists": true,
+              "fields": {
+                "nonce": {
+                  "stringValue": "<fireemu:o3-txn-expiry:token>"
+                },
+                "owner": {
+                  "stringValue": "<fireemu:o3-txn-expiry:owner>"
+                },
+                "role": {
+                  "stringValue": "locked-b"
+                },
+                "state": {
+                  "stringValue": "created"
+                }
+              },
+              "name": "<fireemu:o3-txn-expiry:resource>",
+              "updateTime": "<fireemu:o3-txn-expiry:token>",
+              "updateTimeOrdinal": 0
+            }
+          },
+          "local": {
+            "role": "locked-b",
+            "document": {
+              "code": 0,
+              "exists": true,
+              "fields": {
+                "nonce": {
+                  "stringValue": "<fireemu:o3-txn-expiry:token>"
+                },
+                "owner": {
+                  "stringValue": "<fireemu:o3-txn-expiry:owner>"
+                },
+                "role": {
+                  "stringValue": "locked-b"
+                },
+                "state": {
+                  "stringValue": "created"
+                }
+              },
+              "name": "<fireemu:o3-txn-expiry:resource>",
+              "updateTime": "<fireemu:o3-txn-expiry:token>",
+              "updateTimeOrdinal": 0
+            }
+          },
+          "match": true
+        },
+        {
+          "caseId": "retry-token/retry-with-committed-previous",
+          "production": {
+            "code": 0,
+            "status": "OK",
+            "message": null,
+            "rpc": "BeginTransaction",
+            "role": null
+          },
+          "local": {
+            "code": 0,
+            "status": "OK",
+            "message": null,
+            "rpc": "BeginTransaction",
+            "role": null
+          },
+          "match": true
+        },
+        {
+          "caseId": "retry-token/retry-with-malformed-previous",
+          "production": {
+            "code": 3,
+            "status": "INVALID_ARGUMENT",
+            "message": "Invalid value at 'options.read_write.retry_transaction' (TYPE_BYTES), Base64 decoding failed for \"not base64!\"",
+            "rpc": "BeginTransaction",
+            "role": null
+          },
+          "local": {
+            "code": 3,
+            "status": "INVALID_ARGUMENT",
+            "message": "Invalid value at 'options.read_write.retry_transaction' (TYPE_BYTES), Base64 decoding failed for \"not base64!\"",
+            "rpc": "BeginTransaction",
+            "role": null
+          },
+          "match": true
+        },
+        {
+          "caseId": "retry-token/retry-with-read-only-previous",
+          "production": {
+            "code": 3,
+            "status": "INVALID_ARGUMENT",
+            "message": "Cannot retry a read-only transaction",
+            "rpc": "BeginTransaction",
+            "role": null
+          },
+          "local": {
+            "code": 3,
+            "status": "INVALID_ARGUMENT",
+            "message": "Cannot retry a read-only transaction",
+            "rpc": "BeginTransaction",
+            "role": null
+          },
+          "match": true
+        },
+        {
+          "caseId": "retry-token/retry-with-rolled-back-previous",
+          "production": {
+            "code": 0,
+            "status": "OK",
+            "message": null,
+            "rpc": "BeginTransaction",
+            "role": null
+          },
+          "local": {
+            "code": 0,
+            "status": "OK",
+            "message": null,
+            "rpc": "BeginTransaction",
+            "role": null
+          },
+          "match": true
+        },
+        {
+          "caseId": "retry-token/retry-with-unissued-previous",
+          "production": {
+            "code": 3,
+            "status": "INVALID_ARGUMENT",
+            "message": "Invalid transaction.",
+            "rpc": "BeginTransaction",
+            "role": null
+          },
+          "local": {
+            "code": 3,
+            "status": "INVALID_ARGUMENT",
+            "message": "Invalid transaction.",
+            "rpc": "BeginTransaction",
+            "role": null
+          },
+          "match": true
+        }
+      ],
+      "mismatches": 0
+    }
+  ],
+  "summary": {
+    "recordings": 2,
+    "rows": 36,
+    "mismatches": 0
+  }
+}

@@ -15,12 +15,8 @@
     "binarySha256": "d0d8d43726a808b600f702f1f6be26c4863fc48dd7b4971a519adcae9ce01888"
   },
   "comparer": {
-    "sha256": "3313d77fb70da7695817d36b0485ed7cfcacabcd5beddf5201c74d2278d598f5",
+    "sha256": "be5f9a992ee79be2fb27219ed0b9e6711f653812121f1c14cfc9f0b97480cf7f",
     "replayClock": "virtual"
-  },
-  "table": {
-    "path": "tools/compat-broad/fs-write-txn/fs_txn_table_p12.py",
-    "sha256": "a1716bebb46fc407bdcaff0a1453551e06bf7d778d0848f40375d59d5d4de043"
   },
   "asRecorded": [
     {
@@ -500,6 +496,128 @@
           },
           "match": true
         }
+      ],
+      "achievedAges": [
+        {
+          "site": "rest/c/keepalive-1",
+          "production": 25.88109895819798,
+          "local": 25.883611666969955,
+          "difference": 0.003
+        },
+        {
+          "site": "rest/c/keepalive-2",
+          "production": 25.151395332999527,
+          "local": 25.154773500282317,
+          "difference": 0.003
+        },
+        {
+          "site": "rest/c/keepalive-3",
+          "production": 25.81810220889747,
+          "local": 25.820817375089973,
+          "difference": 0.003
+        },
+        {
+          "site": "rest/c/keepalive-4",
+          "production": 25.861122041009367,
+          "local": 25.864459165837616,
+          "difference": 0.003
+        },
+        {
+          "site": "rest/c/keepalive-5",
+          "production": 25.751461000181735,
+          "local": 25.75536558404565,
+          "difference": 0.004
+        },
+        {
+          "site": "rest/c/keepalive-6",
+          "production": 25.795254374854267,
+          "local": 25.798536457587034,
+          "difference": 0.003
+        },
+        {
+          "site": "rest/c/keepalive-7",
+          "production": 26.364711333997548,
+          "local": 26.3681569583714,
+          "difference": 0.003
+        },
+        {
+          "site": "rest/c/keepalive-8",
+          "production": 26.25701554119587,
+          "local": 26.26030237507075,
+          "difference": 0.003
+        },
+        {
+          "site": "rest/c/keepalive-9",
+          "production": 25.87387766689062,
+          "local": 25.878097166772932,
+          "difference": 0.004
+        },
+        {
+          "site": "rest/c/commit-first",
+          "production": 91.91246891673654,
+          "local": 91.91704483283684,
+          "difference": 0.005
+        },
+        {
+          "site": "rest/r/keepalive-1",
+          "production": 25.71184145892039,
+          "local": 25.718106125481427,
+          "difference": 0.006
+        },
+        {
+          "site": "rest/r/keepalive-2",
+          "production": 26.23688641609624,
+          "local": 26.2430470418185,
+          "difference": 0.006
+        },
+        {
+          "site": "rest/r/keepalive-3",
+          "production": 25.805519208777696,
+          "local": 25.81705499999225,
+          "difference": 0.012
+        },
+        {
+          "site": "rest/r/keepalive-4",
+          "production": 26.013070416171104,
+          "local": 26.019986916333437,
+          "difference": 0.007
+        },
+        {
+          "site": "rest/r/keepalive-5",
+          "production": 26.694775249809027,
+          "local": 26.700831916648895,
+          "difference": 0.006
+        },
+        {
+          "site": "rest/r/keepalive-6",
+          "production": 26.067193417344242,
+          "local": 26.07290408294648,
+          "difference": 0.006
+        },
+        {
+          "site": "rest/r/keepalive-7",
+          "production": 26.010116667021066,
+          "local": 26.016393625177443,
+          "difference": 0.006
+        },
+        {
+          "site": "rest/r/keepalive-8",
+          "production": 26.234803332947195,
+          "local": 26.24186870874837,
+          "difference": 0.007
+        },
+        {
+          "site": "rest/r/keepalive-9",
+          "production": 26.070081332698464,
+          "local": 26.076410499867052,
+          "difference": 0.006
+        },
+        {
+          "site": "rest/r/rollback-first",
+          "production": 92.02052054228261,
+          "local": 92.02778983302414,
+          "difference": 0.007
+        }
       ]
     },
     {
@@ -971,6 +1089,128 @@
           },
           "match": true
         }
+      ],
+      "achievedAges": [
+        {
+          "site": "rest/c/keepalive-1",
+          "production": 26.037535124924034,
+          "local": 26.039875708520412,
+          "difference": 0.002
+        },
+        {
+          "site": "rest/c/keepalive-2",
+          "production": 25.78233362501487,
+          "local": 25.785386291332543,
+          "difference": 0.003
+        },
+        {
+          "site": "rest/c/keepalive-3",
+          "production": 25.039890500251204,
+          "local": 25.04283841745928,
+          "difference": 0.003
+        },
+        {
+          "site": "rest/c/keepalive-4",
+          "production": 25.788630709052086,
+          "local": 25.791814915835857,
+          "difference": 0.003
+        },
+        {
+          "site": "rest/c/keepalive-5",
+          "production": 26.290737790986896,
+          "local": 26.294669874943793,
+          "difference": 0.004
+        },
+        {
+          "site": "rest/c/keepalive-6",
+          "production": 25.861755999736488,
+          "local": 25.865681416820735,
+          "difference": 0.004
+        },
+        {
+          "site": "rest/c/keepalive-7",
+          "production": 25.73411375004798,
+          "local": 25.737601458095014,
+          "difference": 0.003
+        },
+        {
+          "site": "rest/c/keepalive-8",
+          "production": 26.099385417066514,
+          "local": 26.10387900006026,
+          "difference": 0.004
+        },
+        {
+          "site": "rest/c/keepalive-9",
+          "production": 25.800332417245954,
+          "local": 25.80484158406034,
+          "difference": 0.005
+        },
+        {
+          "site": "rest/c/commit-first",
+          "production": 91.74339045770466,
+          "local": 91.7479405826889,
+          "difference": 0.005
+        },
+        {
+          "site": "rest/r/keepalive-1",
+          "production": 25.940906709060073,
+          "local": 25.94605120830238,
+          "difference": 0.005
+        },
+        {
+          "site": "rest/r/keepalive-2",
+          "production": 25.9956391248852,
+          "local": 26.001455499324948,
+          "difference": 0.006
+        },
+        {
+          "site": "rest/r/keepalive-3",
+          "production": 25.85395475011319,
+          "local": 25.859710208605975,
+          "difference": 0.006
+        },
+        {
+          "site": "rest/r/keepalive-4",
+          "production": 25.848035499919206,
+          "local": 25.85607891716063,
+          "difference": 0.008
+        },
+        {
+          "site": "rest/r/keepalive-5",
+          "production": 25.996569707989693,
+          "local": 26.00273187458515,
+          "difference": 0.006
+        },
+        {
+          "site": "rest/r/keepalive-6",
+          "production": 25.80501208314672,
+          "local": 25.811294541694224,
+          "difference": 0.006
+        },
+        {
+          "site": "rest/r/keepalive-7",
+          "production": 25.919587042182684,
+          "local": 25.92505650036037,
+          "difference": 0.005
+        },
+        {
+          "site": "rest/r/keepalive-8",
+          "production": 25.788822332862765,
+          "local": 25.795538499951363,
+          "difference": 0.007
+        },
+        {
+          "site": "rest/r/keepalive-9",
+          "production": 25.822222374845296,
+          "local": 25.82872658316046,
+          "difference": 0.007
+        },
+        {
+          "site": "rest/r/rollback-first",
+          "production": 91.76284466683865,
+          "local": 91.76880041696131,
+          "difference": 0.006
+        }
       ]
     }
   ],
@@ -983,7 +1223,7 @@
     "Raw REST bodyBytes, content-length and member-order layout were not retained; the record proves decoded response semantics, not wire layout.",
     "The closure review and the final-artifact regression are separate conditions and stay open.",
     "The artifact is the strict profile of the commit named; a later source change needs a new replay.",
-    "Idle and lifetime boundaries are judged by the intervals production narrowed: the idle threshold lies in [110.70, 122.96) s and the age at which an expired token is forgotten in (298.7, 302.2] s; strict's values (a 120 s idle limit, a 270 s total lifetime, 300 s of memory) lie inside them. The replay runs on the emulator's virtual clock and reproduces each recorded idle (the least the production token idled before the request) and each recorded token age, so a row at a boundary is compared at the measured production value, not at the nominal wait.",
+    "Idle and lifetime boundaries: the idle threshold is judged by the interval production narrowed, [110.70, 122.96) s (ledger 809 (5)), and strict's 120 s idle limit lies inside it; the age at which an expired token is forgotten is judged by (298.7, 302.2] s, which holds strict's 300 s of memory. Strict's 270 s total lifetime is supported by the rows themselves, not by an interval: live reads at token ages up to 253.3 s answered 0 and the first refusals came at 280.4 s, so production's lifetime lies in about (253.3, 280.4] s and 270 s lies inside it. The replay runs on the emulator's virtual clock, advanced by exactly each wait, and reproduces each recorded idle (the least the production token idled before the request) and each recorded token age; the idle or age each wait reached is published beside the recorded one (achievedAges), so a row at a boundary is compared at the measured production value, not at the nominal wait.",
     "Replayed with the files named in asRecorded as they were when the recording was made (git show <commit>:<path>); the files in the repository today differ from them."
   ]
 }

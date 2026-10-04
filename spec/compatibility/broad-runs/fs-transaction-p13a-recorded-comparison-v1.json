@@ -16,12 +16,8 @@
     "binarySha256": "d0d8d43726a808b600f702f1f6be26c4863fc48dd7b4971a519adcae9ce01888"
   },
   "comparer": {
-    "sha256": "3313d77fb70da7695817d36b0485ed7cfcacabcd5beddf5201c74d2278d598f5",
+    "sha256": "be5f9a992ee79be2fb27219ed0b9e6711f653812121f1c14cfc9f0b97480cf7f",
     "replayClock": "virtual"
-  },
-  "table": {
-    "path": "tools/compat-broad/fs-write-txn/fs_txn_table_p13a.py",
-    "sha256": "c476dacd79f7067eb8c33276d10901a3a678dfd7e408c7bac089ab85283bbfec"
   },
   "asRecorded": [
     {
@@ -623,6 +619,170 @@
           },
           "match": true
         }
+      ],
+      "achievedAges": [
+        {
+          "site": "rest/uc/keepalive-1",
+          "production": 25.809826541226357,
+          "local": 25.81313074985519,
+          "difference": 0.003
+        },
+        {
+          "site": "rest/uc/keepalive-2",
+          "production": 25.946114708669484,
+          "local": 25.94908016687259,
+          "difference": 0.003
+        },
+        {
+          "site": "rest/uc/keepalive-3",
+          "production": 25.927188833244145,
+          "local": 25.930490958038718,
+          "difference": 0.003
+        },
+        {
+          "site": "rest/uc/keepalive-4",
+          "production": 26.218496874906123,
+          "local": 26.22222008416429,
+          "difference": 0.004
+        },
+        {
+          "site": "rest/uc/keepalive-5",
+          "production": 25.77724187495187,
+          "local": 25.78094062488526,
+          "difference": 0.004
+        },
+        {
+          "site": "rest/uc/keepalive-6",
+          "production": 25.957234249915928,
+          "local": 25.96059108292684,
+          "difference": 0.003
+        },
+        {
+          "site": "rest/uc/keepalive-7",
+          "production": 25.856046500150114,
+          "local": 25.860658207908273,
+          "difference": 0.005
+        },
+        {
+          "site": "rest/uc/keepalive-8",
+          "production": 25.856741500087082,
+          "local": 25.86081329220906,
+          "difference": 0.004
+        },
+        {
+          "site": "rest/uc/keepalive-9",
+          "production": 25.89881758298725,
+          "local": 25.904385833069682,
+          "difference": 0.006
+        },
+        {
+          "site": "rest/uc/live-read",
+          "production": 13.906230624765158,
+          "local": 13.91165608400479,
+          "difference": 0.005
+        },
+        {
+          "site": "rest/uc/first-commit",
+          "production": 34.01510583423078,
+          "local": 34.01996254082769,
+          "difference": 0.005
+        },
+        {
+          "site": "rest/ur/keepalive-1",
+          "production": 25.798026875127107,
+          "local": 25.80349816614762,
+          "difference": 0.005
+        },
+        {
+          "site": "rest/ur/keepalive-2",
+          "production": 25.77851599967107,
+          "local": 25.7852561250329,
+          "difference": 0.007
+        },
+        {
+          "site": "rest/ur/keepalive-3",
+          "production": 25.874888374935836,
+          "local": 25.880277375224978,
+          "difference": 0.005
+        },
+        {
+          "site": "rest/ur/keepalive-4",
+          "production": 25.91994291730225,
+          "local": 25.926117583643645,
+          "difference": 0.006
+        },
+        {
+          "site": "rest/ur/keepalive-5",
+          "production": 25.894613583106548,
+          "local": 25.901405249722302,
+          "difference": 0.007
+        },
+        {
+          "site": "rest/ur/keepalive-6",
+          "production": 25.858229791745543,
+          "local": 25.8646485414356,
+          "difference": 0.006
+        },
+        {
+          "site": "rest/ur/keepalive-7",
+          "production": 26.070964667014778,
+          "local": 26.07689908379689,
+          "difference": 0.006
+        },
+        {
+          "site": "rest/ur/keepalive-8",
+          "production": 26.01632724981755,
+          "local": 26.024011625442654,
+          "difference": 0.008
+        },
+        {
+          "site": "rest/ur/keepalive-9",
+          "production": 25.819584333337843,
+          "local": 25.82642445806414,
+          "difference": 0.007
+        },
+        {
+          "site": "rest/ur/live-read",
+          "production": 13.906486582942307,
+          "local": 13.913563957437873,
+          "difference": 0.007
+        },
+        {
+          "site": "rest/ur/first-rollback",
+          "production": 33.867658583913,
+          "local": 33.87621495919302,
+          "difference": 0.009
+        },
+        {
+          "site": "rest/i1/idle-read",
+          "production": 131.73350633261725,
+          "local": 131.73969608405605,
+          "difference": 0.006
+        },
+        {
+          "site": "rest/i1/memory-read",
+          "production": 101.8590312502347,
+          "local": 101.8667190829292,
+          "difference": 0.008
+        },
+        {
+          "site": "rest/i1/late-rollback",
+          "production": 51.88598291715607,
+          "local": 51.893136417493224,
+          "difference": 0.007
+        },
+        {
+          "site": "rest/i2/idle-read",
+          "production": 131.82588812476024,
+          "local": 131.8326517501846,
+          "difference": 0.007
+        },
+        {
+          "site": "rest/i2/late-read",
+          "production": 176.85309458291158,
+          "local": 176.860575332772,
+          "difference": 0.007
+        }
       ]
     },
     {
@@ -1216,6 +1376,170 @@
           },
           "match": true
         }
+      ],
+      "achievedAges": [
+        {
+          "site": "rest/uc/keepalive-1",
+          "production": 25.801032707560807,
+          "local": 25.803898292127997,
+          "difference": 0.003
+        },
+        {
+          "site": "rest/uc/keepalive-2",
+          "production": 25.785998709034175,
+          "local": 25.789470000192523,
+          "difference": 0.003
+        },
+        {
+          "site": "rest/uc/keepalive-3",
+          "production": 25.796115166042,
+          "local": 25.800032290630043,
+          "difference": 0.004
+        },
+        {
+          "site": "rest/uc/keepalive-4",
+          "production": 25.861129167024046,
+          "local": 25.865563083905727,
+          "difference": 0.004
+        },
+        {
+          "site": "rest/uc/keepalive-5",
+          "production": 26.357698667328805,
+          "local": 26.361275958362967,
+          "difference": 0.004
+        },
+        {
+          "site": "rest/uc/keepalive-6",
+          "production": 25.96148445783183,
+          "local": 25.96482704207301,
+          "difference": 0.003
+        },
+        {
+          "site": "rest/uc/keepalive-7",
+          "production": 25.73987695807591,
+          "local": 25.744452249724418,
+          "difference": 0.005
+        },
+        {
+          "site": "rest/uc/keepalive-8",
+          "production": 26.064495499711484,
+          "local": 26.069130916148424,
+          "difference": 0.005
+        },
+        {
+          "site": "rest/uc/keepalive-9",
+          "production": 25.85543395904824,
+          "local": 25.86057879170403,
+          "difference": 0.005
+        },
+        {
+          "site": "rest/uc/live-read",
+          "production": 13.825318250339478,
+          "local": 13.830730916932225,
+          "difference": 0.005
+        },
+        {
+          "site": "rest/uc/first-commit",
+          "production": 33.83638499956578,
+          "local": 33.84066329104826,
+          "difference": 0.004
+        },
+        {
+          "site": "rest/ur/keepalive-1",
+          "production": 25.850622416939586,
+          "local": 25.85517958411947,
+          "difference": 0.005
+        },
+        {
+          "site": "rest/ur/keepalive-2",
+          "production": 25.882124582771212,
+          "local": 25.887709707953036,
+          "difference": 0.006
+        },
+        {
+          "site": "rest/ur/keepalive-3",
+          "production": 25.239725292194635,
+          "local": 25.246357291936874,
+          "difference": 0.007
+        },
+        {
+          "site": "rest/ur/keepalive-4",
+          "production": 25.844852457754314,
+          "local": 25.851519958116114,
+          "difference": 0.007
+        },
+        {
+          "site": "rest/ur/keepalive-5",
+          "production": 25.92654462531209,
+          "local": 25.9334675418213,
+          "difference": 0.007
+        },
+        {
+          "site": "rest/ur/keepalive-6",
+          "production": 25.814672583714128,
+          "local": 25.821333582978696,
+          "difference": 0.007
+        },
+        {
+          "site": "rest/ur/keepalive-7",
+          "production": 25.93926450004801,
+          "local": 25.9458929579705,
+          "difference": 0.007
+        },
+        {
+          "site": "rest/ur/keepalive-8",
+          "production": 25.93706616619602,
+          "local": 25.944807333871722,
+          "difference": 0.008
+        },
+        {
+          "site": "rest/ur/keepalive-9",
+          "production": 25.702513166703284,
+          "local": 25.709354041609913,
+          "difference": 0.007
+        },
+        {
+          "site": "rest/ur/live-read",
+          "production": 13.84249895811081,
+          "local": 13.849859291687608,
+          "difference": 0.007
+        },
+        {
+          "site": "rest/ur/first-rollback",
+          "production": 33.79739774996415,
+          "local": 33.805322874803096,
+          "difference": 0.008
+        },
+        {
+          "site": "rest/i1/idle-read",
+          "production": 131.75949141709134,
+          "local": 131.76626604236662,
+          "difference": 0.007
+        },
+        {
+          "site": "rest/i1/memory-read",
+          "production": 102.35105883330107,
+          "local": 102.35795691702515,
+          "difference": 0.007
+        },
+        {
+          "site": "rest/i1/late-rollback",
+          "production": 51.82106329174712,
+          "local": 51.828792582731694,
+          "difference": 0.008
+        },
+        {
+          "site": "rest/i2/idle-read",
+          "production": 132.04051758442074,
+          "local": 132.0468319589272,
+          "difference": 0.006
+        },
+        {
+          "site": "rest/i2/late-read",
+          "production": 176.89093941589817,
+          "local": 176.89907883293927,
+          "difference": 0.008
+        }
       ]
     }
   ],
@@ -1228,7 +1552,7 @@
     "Raw REST bodyBytes, content-length and member-order layout were not retained; the record proves decoded response semantics, not wire layout.",
     "The closure review and the final-artifact regression are separate conditions and stay open.",
     "The artifact is the strict profile of the commit named; a later source change needs a new replay.",
-    "Idle and lifetime boundaries are judged by the intervals production narrowed: the idle threshold lies in [110.70, 122.96) s and the age at which an expired token is forgotten in (298.7, 302.2] s; strict's values (a 120 s idle limit, a 270 s total lifetime, 300 s of memory) lie inside them. The replay runs on the emulator's virtual clock and reproduces each recorded idle (the least the production token idled before the request) and each recorded token age, so a row at a boundary is compared at the measured production value, not at the nominal wait.",
+    "Idle and lifetime boundaries: the idle threshold is judged by the interval production narrowed, [110.70, 122.96) s (ledger 809 (5)), and strict's 120 s idle limit lies inside it; the age at which an expired token is forgotten is judged by (298.7, 302.2] s, which holds strict's 300 s of memory. Strict's 270 s total lifetime is supported by the rows themselves, not by an interval: live reads at token ages up to 253.3 s answered 0 and the first refusals came at 280.4 s, so production's lifetime lies in about (253.3, 280.4] s and 270 s lies inside it. The replay runs on the emulator's virtual clock, advanced by exactly each wait, and reproduces each recorded idle (the least the production token idled before the request) and each recorded token age; the idle or age each wait reached is published beside the recorded one (achievedAges), so a row at a boundary is compared at the measured production value, not at the nominal wait.",
     "Replayed with the files named in asRecorded as they were when the recording was made (git show <commit>:<path>); the files in the repository today differ from them."
   ]
 }

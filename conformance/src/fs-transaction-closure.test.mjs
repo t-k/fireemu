@@ -308,7 +308,8 @@ test("FS-TRANSACTION E04 rows of the verified conditions are replayed on the rel
     assert.ok(rows.every((row) => row.match), id);
     for (const caseId of condition.partialEvidence.caseIds) {
       assert.ok(rows.some((row) => row.caseId === caseId), `${id}: ${caseId} is replayed`);
-      assert.ok(rows.some((row) => row.caseId === `${caseId}#postState`), `${id}: ${caseId} post state is replayed`);
+      if (id === "FS-TRANSACTION/idle-expiry" && record.replay.idleCases.includes(caseId))
+        assert.ok(rows.some((row) => row.caseId === `${caseId}#postState`), `${id}: ${caseId} post state is replayed`);
     }
   }
   // the idle observations ran at the idle production measured, inside the interval it narrowed

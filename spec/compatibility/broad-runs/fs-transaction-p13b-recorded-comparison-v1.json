@@ -15,12 +15,8 @@
     "binarySha256": "d0d8d43726a808b600f702f1f6be26c4863fc48dd7b4971a519adcae9ce01888"
   },
   "comparer": {
-    "sha256": "3313d77fb70da7695817d36b0485ed7cfcacabcd5beddf5201c74d2278d598f5",
+    "sha256": "be5f9a992ee79be2fb27219ed0b9e6711f653812121f1c14cfc9f0b97480cf7f",
     "replayClock": "virtual"
-  },
-  "table": {
-    "path": "tools/compat-broad/fs-write-txn/fs_txn_table_p13b.py",
-    "sha256": "6716e049745af5532b837e7c9c06c199f92c8f253c2cb7341dbf7b4a299ce468"
   },
   "asRecorded": [
     {
@@ -410,6 +406,86 @@
           },
           "match": true
         }
+      ],
+      "achievedAges": [
+        {
+          "site": "rest/rt2/retry-idle",
+          "production": 131.64170062495396,
+          "local": 131.6458044173196,
+          "difference": 0.004
+        },
+        {
+          "site": "rest/rt3/rollback-idle",
+          "production": 131.70157079212368,
+          "local": 131.70458604069427,
+          "difference": 0.003
+        },
+        {
+          "site": "rest/rt4/keepalive-1",
+          "production": 25.824159792158753,
+          "local": 25.828391959425062,
+          "difference": 0.004
+        },
+        {
+          "site": "rest/rt4/keepalive-2",
+          "production": 25.771247749682516,
+          "local": 25.776136290747672,
+          "difference": 0.005
+        },
+        {
+          "site": "rest/rt4/keepalive-3",
+          "production": 25.833163166884333,
+          "local": 25.838968249969184,
+          "difference": 0.006
+        },
+        {
+          "site": "rest/rt4/keepalive-4",
+          "production": 25.663481916300952,
+          "local": 25.667810624931008,
+          "difference": 0.004
+        },
+        {
+          "site": "rest/rt4/keepalive-5",
+          "production": 26.141047624871135,
+          "local": 26.14554470870644,
+          "difference": 0.004
+        },
+        {
+          "site": "rest/rt4/keepalive-6",
+          "production": 25.644244167022407,
+          "local": 25.650375375058502,
+          "difference": 0.006
+        },
+        {
+          "site": "rest/rt4/keepalive-7",
+          "production": 25.835530375130475,
+          "local": 25.841405958402902,
+          "difference": 0.006
+        },
+        {
+          "site": "rest/rt4/keepalive-8",
+          "production": 25.628448207862675,
+          "local": 25.632257541641593,
+          "difference": 0.004
+        },
+        {
+          "site": "rest/rt4/keepalive-9",
+          "production": 25.727305416949093,
+          "local": 25.731360250152647,
+          "difference": 0.004
+        },
+        {
+          "site": "rest/rt4/live-read",
+          "production": 13.860568957868963,
+          "local": 13.865323750302196,
+          "difference": 0.005
+        },
+        {
+          "site": "rest/rt4/retry-lifetime",
+          "production": 33.74179341737181,
+          "local": 33.74739116569981,
+          "difference": 0.006
+        }
       ]
     },
     {
@@ -791,6 +867,86 @@
           },
           "match": true
         }
+      ],
+      "achievedAges": [
+        {
+          "site": "rest/rt2/retry-idle",
+          "production": 131.76126716611907,
+          "local": 131.76382620772347,
+          "difference": 0.003
+        },
+        {
+          "site": "rest/rt3/rollback-idle",
+          "production": 131.75968629214913,
+          "local": 131.76302274968475,
+          "difference": 0.003
+        },
+        {
+          "site": "rest/rt4/keepalive-1",
+          "production": 25.79050000011921,
+          "local": 25.79570575011894,
+          "difference": 0.005
+        },
+        {
+          "site": "rest/rt4/keepalive-2",
+          "production": 25.67910191603005,
+          "local": 25.684240834321827,
+          "difference": 0.005
+        },
+        {
+          "site": "rest/rt4/keepalive-3",
+          "production": 25.722948874812573,
+          "local": 25.727569832466543,
+          "difference": 0.005
+        },
+        {
+          "site": "rest/rt4/keepalive-4",
+          "production": 25.76536991726607,
+          "local": 25.770059125032276,
+          "difference": 0.005
+        },
+        {
+          "site": "rest/rt4/keepalive-5",
+          "production": 25.749527957756072,
+          "local": 25.7541397921741,
+          "difference": 0.005
+        },
+        {
+          "site": "rest/rt4/keepalive-6",
+          "production": 25.827978500165045,
+          "local": 25.83346337499097,
+          "difference": 0.005
+        },
+        {
+          "site": "rest/rt4/keepalive-7",
+          "production": 26.17462958395481,
+          "local": 26.17924316599965,
+          "difference": 0.005
+        },
+        {
+          "site": "rest/rt4/keepalive-8",
+          "production": 25.782634625211358,
+          "local": 25.78679854189977,
+          "difference": 0.004
+        },
+        {
+          "site": "rest/rt4/keepalive-9",
+          "production": 25.705689415801316,
+          "local": 25.71069991728291,
+          "difference": 0.005
+        },
+        {
+          "site": "rest/rt4/live-read",
+          "production": 13.030635166913271,
+          "local": 13.035759082995355,
+          "difference": 0.005
+        },
+        {
+          "site": "rest/rt4/retry-lifetime",
+          "production": 33.81448600022122,
+          "local": 33.81948579195887,
+          "difference": 0.005
+        }
       ]
     }
   ],
@@ -803,7 +959,7 @@
     "Raw REST bodyBytes, content-length and member-order layout were not retained; the record proves decoded response semantics, not wire layout.",
     "The closure review and the final-artifact regression are separate conditions and stay open.",
     "The artifact is the strict profile of the commit named; a later source change needs a new replay.",
-    "Idle and lifetime boundaries are judged by the intervals production narrowed: the idle threshold lies in [110.70, 122.96) s and the age at which an expired token is forgotten in (298.7, 302.2] s; strict's values (a 120 s idle limit, a 270 s total lifetime, 300 s of memory) lie inside them. The replay runs on the emulator's virtual clock and reproduces each recorded idle (the least the production token idled before the request) and each recorded token age, so a row at a boundary is compared at the measured production value, not at the nominal wait.",
+    "Idle and lifetime boundaries: the idle threshold is judged by the interval production narrowed, [110.70, 122.96) s (ledger 809 (5)), and strict's 120 s idle limit lies inside it; the age at which an expired token is forgotten is judged by (298.7, 302.2] s, which holds strict's 300 s of memory. Strict's 270 s total lifetime is supported by the rows themselves, not by an interval: live reads at token ages up to 253.3 s answered 0 and the first refusals came at 280.4 s, so production's lifetime lies in about (253.3, 280.4] s and 270 s lies inside it. The replay runs on the emulator's virtual clock, advanced by exactly each wait, and reproduces each recorded idle (the least the production token idled before the request) and each recorded token age; the idle or age each wait reached is published beside the recorded one (achievedAges), so a row at a boundary is compared at the measured production value, not at the nominal wait.",
     "Replayed with the files named in asRecorded as they were when the recording was made (git show <commit>:<path>); the files in the repository today differ from them."
   ]
 }

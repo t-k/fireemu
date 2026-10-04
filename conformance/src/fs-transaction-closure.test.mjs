@@ -55,7 +55,7 @@ const recordedConditions = new Map([
   ["FS-TRANSACTION/total-lifetime-expiry", ["P11", "P12", "P13A"]],
 ]);
 
-test("FS-TRANSACTION published records cover eight conditions and promote none", () => {
+test("FS-TRANSACTION published records verify eight conditions and not the parent", () => {
   const closure = JSON.parse(readFileSync(closureUrl, "utf8"));
   const root = new URL("../../", import.meta.url);
   for (const condition of closure.conditions) {
@@ -64,7 +64,7 @@ test("FS-TRANSACTION published records cover eight conditions and promote none",
       assert.equal(condition.recordedComparison, undefined, condition.conditionId);
       continue;
     }
-    assert.equal(condition.status, "PRODUCTION_RECORDED", condition.conditionId);
+    assert.equal(condition.status, "VERIFIED", condition.conditionId);
     assert.equal(condition.productionObservation, "RECORDED_TWICE_STRICT_COMPARED");
     const recorded = condition.recordedComparison;
     assert.equal(recorded.profile, "strict");
@@ -95,6 +95,25 @@ test("FS-TRANSACTION published records cover eight conditions and promote none",
     }
     if (["FS-TRANSACTION/idle-expiry", "FS-TRANSACTION/total-lifetime-expiry"].includes(condition.conditionId))
       assert.match(recorded.boundaryRuling, /110\.70, 122\.96.*298\.7, 302\.2/);
+    // the evidence block names the recordings, the one artifact and exactly the records above
+    const { evidence } = condition;
+    assert.deepEqual(
+      evidence.productionRecordings.map(({ program }) => program),
+      recorded.programs.map(({ program }) => program),
+    );
+    for (const run of evidence.productionRecordings) {
+      assert.equal(run.recordings, 2, run.program);
+      assert.match(run.project, /^fireemu-oracle-(sbx|txn)$/, run.program);
+    }
+    assert.deepEqual(evidence.comparisonPaths, recorded.programs.map(({ comparisonPath }) => comparisonPath));
+    assert.deepEqual(evidence.rows, { MATCH: recorded.programs.reduce((sum, { rows }) => sum + rows, 0) });
+    assert.match(evidence.finalArtifactSha256, /^[0-9a-f]{64}$/);
+    assert.match(evidence.sourceCommit, /^[0-9a-f]{40}$/);
+    for (const entry of recorded.programs) {
+      const { artifact } = JSON.parse(readFileSync(new URL(entry.comparisonPath, root), "utf8"));
+      assert.equal(artifact.binarySha256, evidence.finalArtifactSha256, entry.program);
+      assert.equal(artifact.sourceCommit, evidence.sourceCommit, entry.program);
+    }
     assert.match(condition.note, /not COMPAT_VERIFIED/);
     assert.doesNotMatch(condition.note, /not a published redacted record yet/i);
   }
@@ -112,7 +131,7 @@ test("FS-TRANSACTION published records cover eight conditions and promote none",
   assert.equal(artifacts.size, 1);
 });
 
-test("FS-TRANSACTION recorded REST subset leaves every frozen condition open", () => {
+test("FS-TRANSACTION recorded REST subset leaves the other frozen conditions open", () => {
   const closure = JSON.parse(readFileSync(closureUrl, "utf8"));
   const partial = new Map([
     ["FS-TRANSACTION/idle-expiry", 5],
@@ -123,9 +142,9 @@ test("FS-TRANSACTION recorded REST subset leaves every frozen condition open", (
     "spec/compatibility/broad-runs/fs-transaction-expiry-retry-04-recorded-comparison-v1.json";
   const observed = [];
   for (const condition of closure.conditions) {
-    assert.notEqual(condition.status, "VERIFIED");
+    assert.equal(condition.status === "VERIFIED", recordedConditions.has(condition.conditionId), condition.conditionId);
     if (partial.has(condition.conditionId)) {
-      assert.equal(condition.status, "PRODUCTION_RECORDED");
+      assert.equal(condition.status, "VERIFIED");
       assert.equal(condition.partialEvidence.coverage, "PARTIAL");
       assert.equal(condition.partialEvidence.reference, reference);
       assert.equal(condition.partialEvidence.transport, "rest");

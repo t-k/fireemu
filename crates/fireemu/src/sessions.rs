@@ -478,6 +478,8 @@ pub(crate) mod tests {
         pubsub.create_topic(topic.clone(), BTreeMap::new()).unwrap();
         pubsub
             .create_subscription(SubscriptionConfig {
+                retain_acked_messages: false,
+                message_retention_duration: None,
                 name: subscription.clone(),
                 topic: topic.clone(),
                 ack_deadline_seconds: 10,

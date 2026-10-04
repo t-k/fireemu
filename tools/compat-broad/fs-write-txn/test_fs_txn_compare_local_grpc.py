@@ -64,3 +64,16 @@ def test_a_projection_without_conditional_steps_has_no_skipped_list():
     bare = {"cases": [case()], "reads": []}
     cases, reads, skipped, idle = tool.compare(bare, dict(bare))
     assert cases[0]["match"] is True and reads == [] and skipped == [] and idle == []
+
+
+def test_a_missing_diagnostic_is_an_empty_one():
+    assert tool.role_project(None) == ""
+    assert tool.role_project("") == ""
+
+
+def test_a_skipped_step_that_differs_is_a_mismatch():
+    row = {"site": "s", "basis": "definitive-earlier-begin-refusal", "tokenRole": "t"}
+    _cases, _reads, skipped, _idle = tool.compare(projection(skipped=[row]), projection(skipped=[{**row, "tokenRole": "u"}]))
+    assert skipped[0]["match"] is False
+    _cases, _reads, skipped, _idle = tool.compare(projection(skipped=[row]), projection(skipped=[dict(row)]))
+    assert skipped[0]["match"] is True

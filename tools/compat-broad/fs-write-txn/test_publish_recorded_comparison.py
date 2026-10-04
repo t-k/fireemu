@@ -96,3 +96,101 @@ def test_the_replay_clock_is_recorded_and_must_agree(tmp_path):
     results = [result(paths[0], metadata={**result(paths[0])["metadata"], "clock": "virtual"}), result(paths[1])]
     with pytest.raises(ValueError):
         build(tmp_path, results=results, paths=paths)
+
+
+def git(repo, *args):
+    import subprocess
+
+    env = {"PATH": "/usr/bin:/bin", "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@example.invalid", "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@example.invalid"}
+    return subprocess.run(["git", "-C", str(repo), *args], check=True, capture_output=True, text=True, env=env).stdout.strip()
+
+
+def commit_files(repo, files, parent=None):
+    """A commit made with plumbing (write-tree and commit-tree), so the fixture does not depend on the user's commit settings."""
+    for name, text in files.items():
+        (repo / name).parent.mkdir(parents=True, exist_ok=True)
+        (repo / name).write_text(text)
+    git(repo, "add", "-A")
+    tree = git(repo, "write-tree")
+    commit = git(repo, "commit-tree", tree, *(["-p", parent] if parent else []), "-m", "fixture")
+    git(repo, "update-ref", "HEAD", commit)
+    return commit
+
+
+@pytest.fixture
+def repo(tmp_path):
+    root = tmp_path / "repo"
+    root.mkdir()
+    git(root, "init", "-q")
+    first = commit_files(root, {"tools/table.py": "v1\n"})
+    commit_files(root, {"tools/table.py": "v2\n"}, parent=first)
+    return root, first
+
+
+def test_an_as_recorded_file_is_named_by_commit_blob_and_digest(repo, tmp_path):
+    root, first = repo
+    used = tmp_path / "table.py"
+    used.write_text("v1\n")
+    entry = publish.as_recorded_entry(root, "tools/table.py", first, used)
+    assert entry == {"path": "tools/table.py", "commit": first, "blob": git(root, "rev-parse", f"{first}:tools/table.py"), "sha256": hashlib.sha256(b"v1\n").hexdigest()}
+
+
+def test_a_replayed_file_that_is_not_the_committed_one_is_refused(repo, tmp_path):
+    root, first = repo
+    used = tmp_path / "table.py"
+    used.write_text("v1 edited\n")
+    with pytest.raises(ValueError):
+        publish.as_recorded_entry(root, "tools/table.py", first, used)
+
+
+def test_a_commit_that_is_not_in_the_history_is_refused(repo, tmp_path):
+    root, first = repo
+    head = git(root, "rev-parse", "HEAD")
+    # a commit on the side: made from the first one, never reachable from HEAD
+    side = commit_files(root, {"tools/table.py": "side\n"}, parent=first)
+    git(root, "update-ref", "HEAD", head)
+    used = tmp_path / "table.py"
+    used.write_text("side\n")
+    with pytest.raises(ValueError):
+        publish.as_recorded_entry(root, "tools/table.py", side, used)
+
+
+def test_the_as_recorded_files_are_published_with_the_comparison(tmp_path):
+    paths = [write(tmp_path, 1), write(tmp_path, 2)]
+    entry = {"path": "tools/table.py", "commit": "d" * 40, "blob": "e" * 40, "sha256": "f" * 64}
+    _observations, comparison = publish.build(program="P", key="p01", conditions=["FS-TRANSACTION/x"], recordings=paths, results=[result(path) for path in paths],
+                                              projections=[projection(), projection()], identities=[NONCE], as_recorded=[entry])
+    assert comparison["asRecorded"] == [entry]
+
+
+def test_fewer_than_two_projections_are_refused_as_a_value_error(tmp_path):
+    paths = [write(tmp_path, 1), write(tmp_path, 2)]
+    with pytest.raises(ValueError, match="two recordings"):
+        publish.build(program="P", key="p01", conditions=["FS-TRANSACTION/x"], recordings=paths, results=[result(path) for path in paths], projections=[projection()], identities=[NONCE])
+
+
+def test_a_replay_with_a_failure_is_refused_even_when_it_says_complete(tmp_path):
+    paths = [write(tmp_path, 1), write(tmp_path, 2)]
+    with pytest.raises(ValueError):
+        build(tmp_path, results=[result(paths[0]), result(paths[1], failure="ValueError")], paths=paths)
+
+
+def test_a_replay_whose_plan_is_not_the_recordings_corpus_is_refused(tmp_path):
+    paths = [write(tmp_path, 1), write(tmp_path, 2)]
+    other = result(paths[1])
+    other["metadata"]["planCorpusDigest"] = "5" * 64
+    with pytest.raises(ValueError):
+        build(tmp_path, results=[result(paths[0]), other], paths=paths)
+
+
+def test_a_missing_identity_is_ignored_rather_than_matched(tmp_path):
+    paths = [write(tmp_path, 1), write(tmp_path, 2)]
+    publish.build(program="P", key="p01", conditions=["FS-TRANSACTION/x"], recordings=paths, results=[result(path) for path in paths], projections=[projection(), projection()],
+                  identities=[None, "", NONCE])
+
+
+def test_the_records_authorize_no_production_request_and_number_the_recordings(tmp_path):
+    observations, comparison = build(tmp_path)
+    assert observations["authorizesProduction"] is False and comparison["authorizesProduction"] is False
+    assert comparison["productionRequests"] == 0
+    assert [entry["recording"] for entry in comparison["recordings"]] == [1, 2]

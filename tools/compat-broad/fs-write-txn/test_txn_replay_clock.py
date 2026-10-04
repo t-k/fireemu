@@ -70,3 +70,25 @@ def test_a_paced_grpc_wait_stretches_the_idle_and_still_records_the_declared_sec
     assert paced.calls == [("idle-120/commit", pytest.approx(120.54)), ("idle-65/commit", 65), ("other", 7)]
     # what the projection derives from is the declared seconds
     assert [wait["seconds"] for wait in paced.waits] == [120, 65, 7]
+
+
+def test_a_site_repeated_later_in_the_recording_is_refused():
+    with pytest.raises(ValueError):
+        clock.production_age_steps([row("x", 1.0, 2.0), row("b", 3.0, 4.0), row("c", 5.0, 6.0), row("b", 7.0, 8.0)])
+
+
+def test_a_response_before_its_own_dispatch_is_refused_but_a_zero_duration_is_not():
+    with pytest.raises(ValueError):
+        clock.production_age_steps([row("a", 1.0, 2.0), row("b", 5.0, 4.0)])
+    assert clock.production_age_steps([row("a", 1.0, 2.0), row("b", 5.0, 5.0)]) == {"b": pytest.approx(4.0)}
+
+
+def test_two_dispatches_at_the_same_instant_are_a_zero_step():
+    assert clock.production_age_steps([row("a", 1.0, 2.0), row("b", 1.0, 1.5)]) == {"b": 0.0}
+    assert clock.production_idle_gaps([row("a", 1.0, 2.0), row("b", 2.0, 3.0)]) == {"b": 0.0}
+
+
+def test_the_bound_on_a_wait_is_inclusive():
+    assert clock.paced_wait(declared=24, production_step=clock.MAX_WAIT_SECONDS, local_duration=0.0) == clock.MAX_WAIT_SECONDS
+    with pytest.raises(ValueError):
+        clock.paced_wait(declared=24, production_step=clock.MAX_WAIT_SECONDS + 0.01, local_duration=0.0)

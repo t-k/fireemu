@@ -83,3 +83,10 @@ def test_a_table_for_the_free_tier_project_is_replayed_and_normalised_under_that
     # under the default project name the same pair differs
     cases, _reads, _times = tool.compare(production, local, None, {})
     assert cases[0]["match"] is False
+
+
+def test_the_published_local_diagnostic_is_the_normalised_one():
+    production = projection(code=5, details='Document "projects/fireemu-oracle-txn/x" not found')
+    local = projection(code=5, details='Document "projects/demo-program/x" not found')
+    cases, _reads, _times = tool.compare(production, local, None, {}, project="fireemu-oracle-txn")
+    assert cases[0]["local"]["details"] == 'Document "projects/fireemu-oracle-txn/x" not found'

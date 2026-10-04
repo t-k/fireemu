@@ -22,6 +22,14 @@
     "path": "tools/compat-broad/fs-write-txn/fs_txn_table_p13b.py",
     "sha256": "6716e049745af5532b837e7c9c06c199f92c8f253c2cb7341dbf7b4a299ce468"
   },
+  "asRecorded": [
+    {
+      "path": "tools/compat-broad/fs-write-txn/fs_txn_table_p13b.py",
+      "commit": "a04d5215568cd37f1adf60a23280325048e45659",
+      "blob": "c8ae99c81767870c533ecd0af85958aaedf958d9",
+      "sha256": "6716e049745af5532b837e7c9c06c199f92c8f253c2cb7341dbf7b4a299ce468"
+    }
+  ],
   "recordings": [
     {
       "recording": 1,
@@ -796,6 +804,6 @@
     "The closure review and the final-artifact regression are separate conditions and stay open.",
     "The artifact is the strict profile of the commit named; a later source change needs a new replay.",
     "Idle and lifetime boundaries are judged by the intervals production narrowed: the idle threshold lies in [110.70, 122.96) s and the age at which an expired token is forgotten in (298.7, 302.2] s; strict's values (a 120 s idle limit, a 270 s total lifetime, 300 s of memory) lie inside them. The replay runs on the emulator's virtual clock and reproduces each recorded idle (the least the production token idled before the request) and each recorded token age, so a row at a boundary is compared at the measured production value, not at the nominal wait.",
-    "Replayed with fs_txn_table_p13b.py as recorded (its digest is the recording's source digest); the file in the repository today differs from it."
+    "Replayed with the files named in asRecorded as they were when the recording was made (git show <commit>:<path>); the files in the repository today differ from them."
   ]
 }

@@ -955,3 +955,171 @@ test("the command line reports, writes with --write, and says what is wrong with
   assert.match(run(["--nonsense"]).stderr, /bad argument: --nonsense/);
   assert.match(run(["--comparison"]).stderr, /bad argument: --comparison/);
 });
+
+// ---- near misses the first mutation run found --------------------------------------------------------------
+
+test("each part of the summary is checked on its own, a row without a condition is named, and only five stray rows are listed", () => {
+  const good = comparisonOf();
+  for (const [key, pattern] of [
+    ["rows", /summary is not its rows' count/],
+    ["match", /summary/],
+    ["diff", /summary/],
+    ["incomplete", /summary/],
+  ])
+    asRefusal(
+      () =>
+        checkComparison({ ...good, summary: { ...good.summary, [key]: good.summary[key] + 1 } }),
+      pattern,
+    );
+  const withDiff = comparisonOf({
+    over: { "functions-events/auth/create#admin-create#v1": { status: "DIFF", reasons: ["x"] } },
+  });
+  checkComparison(withDiff);
+  asRefusal(
+    () => checkComparison({ ...withDiff, summary: { ...withDiff.summary, diff: 0 } }),
+    /summary/,
+  );
+  const noCondition = {
+    ...good,
+    rows: [{ ...good.rows[0], conditionId: undefined }, ...good.rows.slice(1)],
+  };
+  asRefusal(() => checkComparison(noCondition), /no row id or condition/);
+  const strays = Array.from({ length: 7 }, (_, i) => ({
+    row: `functions-events/other/thing#c${i}#v1`,
+    conditionId: "X/y",
+    case: `c${i}`,
+    generation: 1,
+    status: "MATCH",
+    reasons: [],
+  }));
+  const message = (() => {
+    try {
+      mapConditions(closure(), checkComparison(comparisonOf({ extra: strays })));
+    } catch (error) {
+      return error.message;
+    }
+    return "";
+  })();
+  assert.match(message, /thing#c4#v1/);
+  assert.doesNotMatch(message, /thing#c5#v1/);
+});
+
+test("two passes at one time are refused even when the first pass is instantaneous; a build record with a renamed key is wrong", () => {
+  const run = runOf();
+  const instantaneous = {
+    ...run,
+    passes: [
+      { ...run.passes[0], endedAt: run.passes[0].startedAt },
+      { ...run.passes[1], startedAt: run.passes[0].startedAt },
+    ],
+  };
+  asRefusal(() => recordingsFromRun(instantaneous), /start at the same time/);
+  const { locked, ...rest } = buildOf();
+  asRefusal(() => checkBuildRecord({ ...rest, lockedBy: locked }, comparisonOf()), /wrong fields/);
+});
+
+test("the final-artifact gate needs the build record; INCOMPLETE rows and the source commit are written into the evidence", () => {
+  const checked = checkComparison(
+    comparisonOf({
+      over: {
+        "functions-events/storage/delete#live-object-delete#v2": {
+          status: "INCOMPLETE",
+          reasons: ["no frame"],
+        },
+      },
+    }),
+  );
+  const mapping = mapConditions(closure(), checked);
+  const base = {
+    closure: closure(),
+    mapping,
+    comparison: checked,
+    recordings: recordingsFromRun(runOf()),
+    comparisonPath: "p",
+    finalArtifact: buildOf(),
+    workspace: receiptOf(),
+  };
+  const withBuild = applyClosure(base);
+  const condition = withBuild.conditions.find((c) => c.conditionId.endsWith("/storage-deleted"));
+  assert.equal(condition.status, "PRODUCTION_RECORDED");
+  assert.deepEqual(condition.evidence.incompleteRows, [
+    { row: "functions-events/storage/delete#live-object-delete#v2", reasons: ["no frame"] },
+  ]);
+  assert.equal(condition.evidence.sourceCommit, COMMIT);
+  assert.equal(
+    withBuild.conditions.find((c) => c.conditionId.endsWith("/firestore-created")).evidence
+      .sourceCommit,
+    COMMIT,
+  );
+  const full = checkComparison(comparisonOf());
+  const noBuild = applyClosure({
+    ...base,
+    mapping: mapConditions(closure(), full),
+    comparison: { ...full, rows: [...full.rows, ...gateRows()] },
+    finalArtifact: undefined,
+  });
+  assert.equal(status(noBuild, "/final-artifact-regression"), "PENDING_CORPUS");
+  assert.equal(
+    noBuild.conditions.find((c) => c.conditionId.endsWith("/firestore-created")).evidence
+      .sourceCommit,
+    undefined,
+  );
+});
+
+test("the report says whether the comparison is preliminary, lists only conditions that are not VERIFIED, and a write without a receipt adds no gate rows", () => {
+  const preliminary = comparisonOf({ execution: "preliminary (closure-base 774a9f24c)" });
+  assert.equal(
+    buildReport({
+      comparison: preliminary,
+      mapping: mapConditions(closure(), checkComparison(preliminary)),
+    }).preliminary,
+    true,
+  );
+  assert.equal(
+    buildReport({
+      comparison: comparisonOf(),
+      mapping: mapConditions(closure(), checkComparison(comparisonOf())),
+    }).preliminary,
+    false,
+  );
+  const comparison = checkComparison(
+    comparisonOf({
+      over: { "functions-events/auth/create#admin-create#v1": { status: "DIFF", reasons: ["r"] } },
+    }),
+  );
+  const text = reportText(
+    buildReport({ comparison, mapping: mapConditions(closure(), comparison) }),
+  );
+  assert.doesNotMatch(text, /VERIFIED FUNCTIONS-EVENTS\/firestore-deleted/);
+  assert.match(text, /^closure report of d{64}|^closure report of [0-9a-f]{64} \(/);
+  const preText = reportText(
+    buildReport({
+      comparison: checkComparison(preliminary),
+      mapping: mapConditions(closure(), checkComparison(preliminary)),
+    }),
+  );
+  assert.match(preText, /\[preliminary\]/);
+  const opts = writing();
+  delete opts["workspace-regression"];
+  const files = commandFiles();
+  const { evidence } = closureEvidenceCommand(opts, files.io);
+  assert.equal(
+    evidence.rows.some((r) => r.row.startsWith("functions-events/gate#")),
+    false,
+  );
+  assert.equal(
+    JSON.parse(files.written.get("evidence.json")).rows.length,
+    comparisonOf().rows.length,
+  );
+  assert.equal(gateRows().length, 3);
+});
+
+test("the command line names a word that is no flag", async () => {
+  const { spawnSync } = await import("node:child_process");
+  const script = fileURLToPath(
+    new URL("./functions-events/compare/closure-evidence.mjs", import.meta.url),
+  );
+  const failed = spawnSync(process.execPath, [script, "comparison", "x"], { encoding: "utf8" });
+  assert.equal(failed.status, 1);
+  assert.match(failed.stderr, /bad argument: comparison/);
+});

@@ -160,3 +160,83 @@ test("lastRunEnd reads the latest end and the open start of one project", () => 
   });
   assert.deepEqual(lastRunEnd("", "p"), { end: undefined, openStart: undefined });
 });
+
+test("rows at the same instant: the later line decides an end, and an end beats a start at that instant", async () => {
+  const stop = row("fireemu-oracle-query", "finished", 2, {
+    outcome: "stopped-clean",
+    readOnlyStop: true,
+  });
+  const recovery = row("fireemu-oracle-query", "needs-recovery", 2);
+  // The exempt stop first, then a needs-recovery at the same instant: the later line decides.
+  await assert.rejects(
+    admit({ [LOCK]: HOLDER, [LEDGER]: [stop, recovery].join("\n") }),
+    /only 2 minutes ago/,
+  );
+  // The other order: the exempt stop is the later line and decides.
+  await admit({ [LOCK]: HOLDER, [LEDGER]: [recovery, stop].join("\n") });
+  // A start and an end at the same instant: the run has ended.
+  const at = (event) => row("fireemu-oracle-query", event, 60);
+  await admit({ [LOCK]: HOLDER, [LEDGER]: [at("started"), at("finished")].join("\n") });
+  await admit({ [LOCK]: HOLDER, [LEDGER]: [at("finished"), at("started")].join("\n") });
+  // Two starts at the same instant after an end are still one open start.
+  assert.equal(
+    lastRunEnd(
+      [
+        row("p", "finished", 90),
+        row("p", "started", 60, { n: 1 }),
+        row("p", "started", 60, { n: 2 }),
+      ].join("\n"),
+      "p",
+    ).openStart.n,
+    2,
+  );
+});
+
+test("rows that are not starts never open a run: notes and changes after the end do not block", async () => {
+  for (const event of ["note", "change", "config-change", "reserved", "progress"]) {
+    const ledger = [
+      row("fireemu-oracle-query", "finished", 90),
+      row("fireemu-oracle-query", event, 1),
+    ].join("\n");
+    await admit({ [LOCK]: HOLDER, [LEDGER]: ledger });
+    await admit({ [LOCK]: HOLDER, [LEDGER]: row("fireemu-oracle-query", event, 1) });
+  }
+});
+
+test("a file that cannot be read for another reason than being absent is an error, not an absence", async () => {
+  const failing = (path, code) => ({
+    readFile: async (p) => {
+      if (p === path) throw Object.assign(new Error("denied"), { code });
+      if (p === LOCK) return HOLDER;
+      if (p === LEDGER) return "";
+      throw Object.assign(new Error("no file"), { code: "ENOENT" });
+    },
+  });
+  for (const path of [LOCK, LEDGER, `${LEDGER}.lock`])
+    await assert.rejects(
+      checkAdmission({
+        ledger: LEDGER,
+        project: "fireemu-oracle-query",
+        now: () => NOW,
+        ...failing(path, "EACCES"),
+      }),
+      /denied/,
+      path,
+    );
+});
+
+test("files are read as text", async () => {
+  const seen = [];
+  await checkAdmission({
+    ledger: LEDGER,
+    project: "fireemu-oracle-query",
+    now: () => NOW,
+    readFile: async (path, encoding) => {
+      seen.push(encoding);
+      if (path === LOCK) return HOLDER;
+      if (path === LEDGER) return "";
+      throw Object.assign(new Error("no file"), { code: "ENOENT" });
+    },
+  });
+  assert.deepEqual(seen, ["utf8", "utf8", "utf8"]);
+});

@@ -50,7 +50,7 @@ test("a full run records two passes of every scenario, captures the deliveries, 
   assert.equal(run.passes.length, 2);
   for (const pass of run.passes)
     assert.deepEqual(
-      pass.operations.map((o) => o.scenarioId),
+      pass.operations.filter((o) => o.role === "subject").map((o) => o.scenarioId),
       SCENARIO_ORDER,
     );
   assert.ok(run.frames.length > 40, `${run.frames.length} frames`);
@@ -66,7 +66,7 @@ test("the request count stays inside the ceiling the design gives", async () => 
   assert.ok(run.requestsSent <= CLEANUP_CEILING, `${run.requestsSent}`);
   assert.ok(run.requestsSent >= 250 && run.requestsSent <= 420, `${run.requestsSent}`);
   const writes = passSummary(buildPass({ pass: 1, newId: (r) => r })).mutations * 2;
-  assert.ok(writes === 116);
+  assert.ok(writes === 124);
 });
 
 test("the source results follow what the calls returned, and a refusal is recorded as a refusal", async () => {

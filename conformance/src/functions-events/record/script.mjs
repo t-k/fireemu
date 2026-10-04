@@ -150,15 +150,16 @@ const md5 = (text) => createHash("md5").update(text).digest("base64");
 const PASSWORD = "fe-events-recording-password-1";
 
 class Builder {
-  constructor(scenarioId, newId) {
+  constructor(scenarioId, newId, prefix = scenarioId) {
     this.scenarioId = scenarioId;
+    this.prefix = prefix;
     this.newId = newId;
     this.requests = [];
     this.subject = [];
   }
 
   add(role, spec, { subject = false } = {}) {
-    const id = `${this.scenarioId}.${this.requests.length + 1}`;
+    const id = `${this.prefix}.${this.requests.length + 1}`;
     const request = {
       id,
       role,
@@ -196,8 +197,8 @@ const docGet = (b, collection, id, expect = [200], role = "readback") =>
 const docDelete_ = (b, collection, id, role = "cleanup") =>
   b.add(role, { method: "DELETE", url: `${documents}/${collection}/${id}`, expect: [200, 404] });
 
-function firestoreStep(scenarioId, newId) {
-  const b = new Builder(scenarioId, newId);
+function firestoreStep(scenarioId, newId, prefix = scenarioId) {
+  const b = new Builder(scenarioId, newId, prefix);
   const id = newId("fs");
   const collection = scenarioId === "fs-other-path" ? CONTROL_COLLECTION : PRIMARY_COLLECTION;
   const path = `${collection}/${id}`;
@@ -373,8 +374,8 @@ const setVersioning = (b, bucket, enabled, role) =>
     body: { versioning: { enabled } },
   });
 
-function storageStep(scenarioId, newId) {
-  const b = new Builder(scenarioId, newId);
+function storageStep(scenarioId, newId, prefix = scenarioId) {
+  const b = new Builder(scenarioId, newId, prefix);
   const id = newId("obj");
   const bucket = scenarioId === "storage-other-bucket" ? CONTROL_BUCKET : PRIMARY_BUCKET;
   const name = objectName(scenarioId, id);
@@ -513,8 +514,8 @@ const accountCreate = (b, uid, email, role, subject = false) =>
 const accountDelete = (b, uid, role = "cleanup") =>
   b.add(role, { method: "POST", url: `${identity}/accounts:delete`, body: { localId: uid } });
 
-function authStep(scenarioId, newId) {
-  const b = new Builder(scenarioId, newId);
+function authStep(scenarioId, newId, prefix = scenarioId) {
+  const b = new Builder(scenarioId, newId, prefix);
   const uid = newId("user");
   const email = `${uid}@example.test`;
   let seed = false;
@@ -613,8 +614,8 @@ const publish = (b, topic, text, extra = {}) =>
     { subject: true },
   );
 
-function pubsubStep(scenarioId, newId) {
-  const b = new Builder(scenarioId, newId);
+function pubsubStep(scenarioId, newId, prefix = scenarioId) {
+  const b = new Builder(scenarioId, newId, prefix);
   const id = newId("msg");
   let topic = PRIMARY_TOPIC;
   let extra = {};
@@ -646,12 +647,25 @@ const BUILDERS = { fs: firestoreStep, storage: storageStep, auth: authStep, pubs
  * source, a test a counter. A step carries its requests in order, which of them is the observed
  * source call (`subject`), what that call should return, and how long the capture keeps watching.
  */
+/**
+ * Positive controls the delivering scenarios cannot provide on their own: the only scenario that
+ * delivers to the delete handlers is the one a negative follows, so it runs once more after the
+ * negative, as an operation of its own with the role `positive-control-after` (the local driver's
+ * vocabulary).
+ */
+export const CONTROL_AFTER = {
+  "storage-delete-missing": "storage-delete",
+  "auth-bulk-delete": "auth-delete",
+};
+
 export function buildPass({ pass, newId }) {
-  const steps = SCENARIO_ORDER.map((scenarioId) => {
-    const built = BUILDERS[scenarioId.split("-")[0]](scenarioId, newId);
-    return {
+  const steps = [];
+  const add = (scenarioId, role) => {
+    const prefix = role === "subject" ? scenarioId : `${scenarioId}~${role}`;
+    const built = BUILDERS[scenarioId.split("-")[0]](scenarioId, newId, prefix);
+    steps.push({
       scenarioId,
-      role: "subject",
+      role,
       family: FAMILY(scenarioId),
       requests: built.b.requests,
       subject: built.b.subject,
@@ -659,8 +673,12 @@ export function buildPass({ pass, newId }) {
       expectedSourceResult: built.sourceResult,
       seedWaitSeconds: built.seed ? SEED_WAIT_SECONDS : 0,
       settleSeconds: built.settle,
-    };
-  });
+    });
+  };
+  for (const scenarioId of SCENARIO_ORDER) {
+    add(scenarioId, "subject");
+    if (CONTROL_AFTER[scenarioId]) add(CONTROL_AFTER[scenarioId], "positive-control-after");
+  }
   return { pass, steps };
 }
 

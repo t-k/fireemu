@@ -30,8 +30,18 @@ test("the pass runs every frozen scenario of the corpus exactly once", () => {
   assert.deepEqual(SCENARIO_ORDER.toSorted(), corpus.scenarios.map(({ id }) => id).toSorted());
   assert.equal(new Set(SCENARIO_ORDER).size, SCENARIO_ORDER.length);
   assert.deepEqual(
-    pass1().steps.map((step) => step.scenarioId),
+    pass1()
+      .steps.filter((step) => step.role === "subject")
+      .map((step) => step.scenarioId),
     SCENARIO_ORDER,
+  );
+  const controls = pass1().steps.filter((step) => step.role !== "subject");
+  assert.deepEqual(
+    controls.map((step) => [step.scenarioId, step.role]),
+    [
+      ["storage-delete", "positive-control-after"],
+      ["auth-delete", "positive-control-after"],
+    ],
   );
 });
 
@@ -124,14 +134,14 @@ test("the pass sizes match the design (writes and all requests per pass)", () =>
   const summary = passSummary(pass1());
   assert.deepEqual(summary.perFamily.mutations, {
     firestore: 21,
-    storage: 22,
-    auth: 12,
+    storage: 24,
+    auth: 14,
     pubsub: 3,
   });
-  assert.equal(summary.mutations, 58);
-  assert.equal(summary.requests, 101);
+  assert.equal(summary.mutations, 62);
+  assert.equal(summary.requests, 108);
   assert.ok(
-    summary.minutes >= 25 && summary.minutes <= 40,
+    summary.minutes >= 25 && summary.minutes <= 42,
     `pass takes ${summary.minutes} minutes`,
   );
 });

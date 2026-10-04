@@ -101,14 +101,15 @@ export function createWorld({ now, rulesAllow = true }) {
     if (!world.deployed) return;
     for (const handler of handlerNames(names)) {
       const id = `ev-${next()}`;
-      const when = now() + delay;
+      const when = now() + delay; // when the log line is written; the event itself happened when the source call committed
+      const committed = now();
       const o = origin(handler);
       const event =
         handler.generation === 1
           ? {
               context: {
                 eventId: id,
-                timestamp: iso(when),
+                timestamp: iso(committed),
                 eventType: `${source}.event`,
                 resource: { name: data.resource ?? "r" },
                 params: {},
@@ -119,7 +120,7 @@ export function createWorld({ now, rulesAllow = true }) {
             }
           : {
               id,
-              time: iso(when),
+              time: iso(committed),
               type: `google.cloud.${source}.event`,
               source: `//${source}`,
               subject: data.resource ?? null,

@@ -239,3 +239,201 @@ test("collector retains object and release baseline absence and final prefix emp
     assert.equal(result.rows.find((r) => r.id === id)?.effect.absent, true);
   assert.equal(result.rows.find((r) => r.id === "management/prefix-empty")?.response.status, 200);
 });
+
+/** Runs the collector over the state model, letting `override(action, model)` answer first. */
+async function collectWith(override, { profile = "strict", transport } = {}) {
+  const model = stateTransport();
+  const wrapped = async (action) => (await override(action, model)) ?? model.transport(action);
+  return {
+    model,
+    result: await collectManagement({
+      binding,
+      profile,
+      provenance,
+      transport: transport ?? wrapped,
+    }),
+  };
+}
+const errorMessages = (result) => result.errors.map((e) => `${e.kind}: ${e.message ?? ""}`);
+
+test("collector refuses unusable input before any request is sent", async () => {
+  const model = stateTransport();
+  for (const bad of [
+    { binding: { ...binding, bucket: "" } },
+    { binding: { ...binding, prefix: "" } },
+    { profile: "other" },
+    { profile: undefined },
+    { transport: undefined },
+    { transport: "not a function" },
+  ])
+    await assert.rejects(
+      collectManagement({
+        binding,
+        profile: "strict",
+        provenance,
+        transport: model.transport,
+        ...bad,
+      }),
+      /binding|invalid local management input/i,
+      JSON.stringify(Object.keys(bad)),
+    );
+  assert.equal(model.calls.length, 0, "nothing was sent");
+  const emulator = await collectManagement({
+    binding,
+    profile: "emulator",
+    provenance,
+    transport: model.transport,
+  });
+  assert.deepEqual(emulator.errors, [], "the emulator profile is accepted too");
+});
+
+test("collector fails closed on each unusable answer and still cleans up", async () => {
+  let installed = null;
+  const cases = [
+    [
+      "an unavailable rules snapshot",
+      (a) => (a.kind === "snapshot" ? wireResponse(500, "down") : undefined),
+      /COLLECTION_FAILED: rules snapshot unavailable/,
+    ],
+    [
+      "an activation that did not load the rules",
+      async (a, m) => {
+        if (a.kind === "activate") installed = a.source;
+        if (a.kind === "snapshot" && installed !== null)
+          return wireResponse(200, JSON.stringify({ loaded: false, source: installed }));
+        return undefined;
+      },
+      /COLLECTION_FAILED: source identity failed compile\//,
+    ],
+    [
+      "a refused activation whose source is nevertheless installed",
+      async (a, m) => {
+        if (a.kind === "activate" && !a.source.includes("allow get: if ;")) {
+          await m.transport(a);
+          return wireResponse(500, "refused");
+        }
+        return undefined;
+      },
+      /COLLECTION_FAILED: source identity failed compile\//,
+    ],
+    [
+      "an owned object that exists before the seed",
+      (a, m) =>
+        a.kind === "storage" && a.name && !a.method?.startsWith("DELETE") && m.objects.size === 0
+          ? wireResponse(200, JSON.stringify({ name: a.name, generation: "1" }))
+          : undefined,
+      /COLLECTION_FAILED: owned object not initially absent/,
+    ],
+    [
+      "a refused seed",
+      (a) => (a.kind === "seed" ? wireResponse(403, "no") : undefined),
+      /COLLECTION_FAILED: seed refused/,
+    ],
+  ];
+  for (const [label, override, expected] of cases) {
+    installed = null;
+    const { result } = await collectWith(override);
+    assert.match(errorMessages(result).join("\n"), expected, label);
+    assert.ok(
+      result.errors.some((e) => e.kind === "COLLECTION_FAILED"),
+      `${label}: the collection is marked failed`,
+    );
+  }
+});
+
+test("owned cleanup reports a refused delete and an object that is still present", async () => {
+  const refused = await collectWith((a) =>
+    a.kind === "storage" && a.method === "DELETE" ? wireResponse(403, "no") : undefined,
+  );
+  assert.match(
+    errorMessages(refused.result).join("\n"),
+    /OWNED_CLEANUP_FAILED: owned cleanup delete refused/,
+  );
+  const present = await collectWith((a) => {
+    if (a.kind === "storage" && a.method === "DELETE") return wireResponse(204, "");
+    return undefined;
+  });
+  assert.match(
+    errorMessages(present.result).join("\n"),
+    /OWNED_CLEANUP_FAILED: owned cleanup absence unavailable/,
+  );
+});
+
+test("an absence row says the rules are loaded when the snapshot says so", async () => {
+  let first = true;
+  const { result } = await collectWith((a) => {
+    if (a.kind === "snapshot" && first) {
+      first = false;
+      return wireResponse(200, JSON.stringify({ loaded: true, source: "x" }));
+    }
+    return undefined;
+  });
+  const rows = result.rows.filter((r) => r.id.startsWith("preflight/release/entry/"));
+  assert.equal(rows[0].effect.absent, false, "the first snapshot reported loaded rules");
+  assert.equal(rows[1].effect.absent, true);
+});
+
+test("transport validates every host, the control endpoint and both tokens", () => {
+  const base = {
+    storageHost: "127.0.0.1:1234",
+    controlUrl: "http://127.0.0.1:1235/",
+    controlToken: "test-control",
+    userToken: "test-user",
+    binding,
+  };
+  assert.doesNotThrow(() => localTransport(base));
+  assert.doesNotThrow(() => localTransport({ ...base, authHost: "[::1]:1236" }));
+  for (const authHost of ["example.com:1236", "localhost:1236", "127.0.0.1:1/x"])
+    assert.throws(() => localTransport({ ...base, authHost }), /loopback/, authHost);
+  for (const controlUrl of ["https://127.0.0.1:1235/", "http://user:pw@127.0.0.1:1235/"])
+    assert.throws(() => localTransport({ ...base, controlUrl }), /control/, controlUrl);
+  for (const patch of [{ controlToken: "" }, { controlToken: undefined }, { userToken: "" }])
+    assert.throws(() => localTransport({ ...base, ...patch }), /control\/token/);
+});
+
+test("transport sends the control, seed and list requests as the management runner expects", async () => {
+  const calls = [];
+  const transport = localTransport({
+    storageHost: "127.0.0.1:1234",
+    controlUrl: "http://127.0.0.1:1235/",
+    controlToken: "test-control",
+    userToken: "test-user",
+    binding,
+    fetchImpl: async (url, init) => {
+      calls.push({ url: new URL(String(url)), init });
+      return new Response("{}", { status: 200 });
+    },
+  });
+  await transport({ kind: "snapshot" });
+  await transport({ kind: "clear" });
+  await transport({ kind: "activate", source: "rules" });
+  await transport({ kind: "list" });
+  await transport({ kind: "seed", name: `${binding.prefix}seed.bin` });
+  const [snapshot, clear, activate, list, seed] = calls;
+  assert.equal(snapshot.init.method, "GET");
+  assert.equal(clear.init.method, "DELETE", "clear removes the rules");
+  for (const control of [snapshot, clear]) {
+    assert.equal(control.url.pathname, "/storage/rules");
+    assert.equal(control.init.headers.authorization, "Bearer test-control");
+  }
+  assert.equal(activate.init.method, "PUT");
+  assert.equal(activate.url.pathname, "/internal/setRules");
+  assert.deepEqual(JSON.parse(activate.init.body), {
+    rules: { files: [{ name: "storage.rules", content: "rules" }] },
+  });
+  assert.equal(list.url.pathname, `/storage/v1/b/${binding.bucket}/o`);
+  assert.equal(list.url.searchParams.get("prefix"), binding.prefix);
+  assert.equal(list.url.searchParams.get("maxResults"), "1", "the prefix check lists one entry");
+  assert.equal(list.init.headers.authorization, "Bearer owner");
+  assert.equal(seed.init.method, "POST");
+  assert.equal(seed.url.pathname, `/upload/storage/v1/b/${binding.bucket}/o`);
+  assert.equal(seed.url.searchParams.get("uploadType"), "media");
+  assert.equal(seed.url.searchParams.get("name"), `${binding.prefix}seed.bin`);
+  assert.equal(
+    seed.url.searchParams.get("ifGenerationMatch"),
+    "0",
+    "a seed never overwrites an existing object",
+  );
+  assert.equal(seed.init.headers["content-type"], "text/plain");
+  assert.equal(seed.init.body, "next");
+});

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -443,8 +443,9 @@ test("a closure whose recipe was not compared, a malformed path or malformed rec
   refuses(() => applyClosure({ ...base, closure: { ...closure(), conditions: [] } }), /condition/i);
 });
 
-test("the command writes the evidence and the closure from the files, and writes nothing when the comparison is incomplete", () => {
+test("the command writes the evidence and the closure from the files, and writes nothing when the comparison is incomplete", (t) => {
   const dir = mkdtempSync(join(tmpdir(), "closure-evidence-"));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
   const write = (name, value) => {
     const path = join(dir, name);
     mkdirSync(join(path, ".."), { recursive: true });
@@ -585,7 +586,7 @@ test("a condition needs a compared recipe, whatever its size", () => {
   refuses(() => applyClosure({ ...base, closure: empty }), /no recipe was compared/);
 });
 
-test("the command line writes the files from a comparison of the committed fixture, and refuses with a message and exit code 1", () => {
+test("the command line writes the files from a comparison of the committed fixture, and refuses with a message and exit code 1", (t) => {
   const fixtureDirectory = fileURLToPath(
     new URL("../fixtures/storage-object-production/", import.meta.url),
   );
@@ -615,6 +616,7 @@ test("the command line writes the files from a comparison of the committed fixtu
     })),
   };
   const dir = mkdtempSync(join(tmpdir(), "closure-evidence-cli-"));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
   const file = (name, value) => {
     const path = join(dir, name);
     writeFileSync(path, typeof value === "string" ? value : `${JSON.stringify(value)}\n`);
@@ -921,8 +923,9 @@ test("the final artifact condition gets its evidence only with a build record, a
   );
 });
 
-test("the command copies the build record next to the evidence, pins its digest and sets the gate, or writes nothing", () => {
+test("the command copies the build record next to the evidence, pins its digest and sets the gate, or writes nothing", (t) => {
   const dir = mkdtempSync(join(tmpdir(), "closure-evidence-gate-"));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
   const write = (name, value) => {
     const path = join(dir, name);
     writeFileSync(path, typeof value === "string" ? value : `${JSON.stringify(value)}\n`);

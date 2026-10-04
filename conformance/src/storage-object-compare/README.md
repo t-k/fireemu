@@ -79,3 +79,18 @@ reached are then counted as `NOT_RUN`). The fireemu commit is an operator's stat
 it against the binary.
 
 The recorder checkout and its pinned files are not part of this tool and are not changed by it.
+
+## Closure evidence
+
+`closure-evidence.mjs` turns a finished comparison into the evidence of `spec/compatibility/closure/STORAGE-OBJECT.json`. It needs the compare report (`compare --report`), the rehearsal receipt, the fixture, and the sandbox ledger, which names the two recordings:
+
+```
+node src/storage-object-compare/closure-evidence.mjs --report <report.json> --receipt <receipt.json> \
+  --fixture fixtures/storage-object-production --sandbox-ledger <docs.local/runs/sandbox-ledger.jsonl> \
+  --closure ../spec/compatibility/closure/STORAGE-OBJECT.json \
+  --out ../spec/compatibility/closure/evidence/STORAGE-OBJECT-comparison.json \
+  --comparison-path spec/compatibility/closure/evidence/STORAGE-OBJECT-comparison.json \
+  [--hold STORAGE-OBJECT/<condition>]
+```
+
+It refuses anything but a MATCH of every fixture row, with the report, the receipt and the fixture naming the same binary, commit, recorder and fixture. It writes one evidence row for each compared exchange (bound to the binary's SHA-256) and sets `VERIFIED` and the evidence on every recipe condition that is not held, rewriting only those condition lines of the closure file. The final-artifact and review conditions are never touched. A note on a condition stays, so the command can be run again for another binary: the evidence of every condition moves together. Afterwards run `tools/compat-inventory/closure_records.py --write` and `--check`.

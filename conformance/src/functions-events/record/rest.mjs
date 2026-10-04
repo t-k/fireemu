@@ -64,7 +64,7 @@ const mask = (value) =>
 export function createTransport({ fetch: send = fetch, token, apiKey, directory, ceiling, now = () => Date.now(), onSent = () => {} }) {
   mkdirSync(join(directory, "responses"), { recursive: true, mode: 0o700 });
   const journal = join(directory, "journal.jsonl");
-  const state = { sent: 0, refused: 0, sequence: 0, vars: {} };
+  const state = { sent: 0, refused: 0, sequence: 0, vars: {}, ceiling };
   const line = (entry) => appendFileSync(journal, `${JSON.stringify(entry)}\n`, { mode: 0o600 });
 
   async function request(spec, extraVars = {}) {
@@ -80,9 +80,9 @@ export function createTransport({ fetch: send = fetch, token, apiKey, directory,
       line({ ts: new Date(now()).toISOString(), id: spec.id, state: "refused-before-send", problem: answer.problem });
       throw new GuardRefused(`${spec.id}: ${answer.problem}`);
     }
-    if (state.sent >= ceiling) {
+    if (state.sent >= state.ceiling) {
       line({ ts: new Date(now()).toISOString(), id: spec.id, state: "refused-before-send", problem: "request ceiling reached" });
-      throw new BudgetExhausted(`${spec.id}: the ceiling of ${ceiling} requests is used`);
+      throw new BudgetExhausted(`${spec.id}: the ceiling of ${state.ceiling} requests is used`);
     }
     const headers = { accept: "application/json", ...(resolved.headers ?? {}) };
     let url = resolved.url;
@@ -136,5 +136,5 @@ export function createTransport({ fetch: send = fetch, token, apiKey, directory,
     return { id: spec.id, status, kind, json, text, expected: status === undefined ? false : spec.expect.includes(status), file };
   }
 
-  return { request, state, line };
+  return { request, state, line, setCeiling: (n) => { state.ceiling = n; } };
 }

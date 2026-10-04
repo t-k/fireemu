@@ -354,3 +354,16 @@ test("the attribution tolerance is a parameter of the comparison", () => {
   assert.equal(row(compare(w, { toleranceMs: 2000 }), CREATE_V1).status, "INCOMPLETE");
   assert.match(row(compare(w, { toleranceMs: 2000 }), CREATE_V1).reasons[0], /within 2000 ms/);
 });
+
+test("a local frame printed in the stdout capture mode has its listing ignored too", () => {
+  const w = world();
+  const entry = w.emulator.programs[0].operations[0].framesByGeneration.v2[0];
+  const frame = JSON.parse(entry.rawJson);
+  frame.event.eventKeys = ["data", "id"];
+  frame.event.extensionAttributes = { traceparent: "00-local" };
+  entry.rawJson = JSON.stringify(frame);
+  assert.equal(
+    row(compare(w), "functions-events/firestore/create#new-document#v2").status,
+    "MATCH",
+  );
+});

@@ -130,6 +130,15 @@ export function plannedRequests(cases, transportNames = REST_AND_GRPC) {
   return cases.reduce((sum, item) => sum + item.requests * transportNames.length, 0);
 }
 
+/** A run that would stop on its budget is not started. */
+export function assertBudgetCovers(cases, transportNames, maxRequests) {
+  const planned = plannedRequests(cases, transportNames);
+  if (planned > maxRequests)
+    throw new Error(
+      `the selected cases may send ${planned} requests, over --max-requests ${maxRequests}`,
+    );
+}
+
 export function exitCodeOf(summary) {
   if (summary.cleanup.leftover.length > 0 || summary.cleanup.errors.length > 0) return 1;
   if (summary.stopped !== null) return summary.stopped.includes("budget") ? 4 : 3;

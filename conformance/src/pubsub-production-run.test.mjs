@@ -8,7 +8,13 @@ import { StopClean, must } from "./pubsub-production/cases/support.mjs";
 import { createClient, newPushState } from "./pubsub-production/client.mjs";
 import { createOwnership } from "./pubsub-production/names.mjs";
 import { DEFAULT_MAX_REQUESTS, main, parseArgs, summarize } from "./pubsub-production/record.mjs";
-import { exitCodeOf, plannedRequests, runCases, selectCases } from "./pubsub-production/runner.mjs";
+import {
+  assertBudgetCovers,
+  exitCodeOf,
+  plannedRequests,
+  runCases,
+  selectCases,
+} from "./pubsub-production/runner.mjs";
 import { CASES } from "./pubsub-production/cases/index.mjs";
 
 const RUN = "0123456789ab";
@@ -434,4 +440,15 @@ test("a case that sends more than it declared is flagged in the summary", async 
   );
   const fine = setup([{ ...item, requests: 2 }]);
   assert.equal((await fine.run()).cases[0].overDeclared, undefined);
+});
+
+test("a budget equal to the plan is enough, one request less is not", () => {
+  const cases = [{ requests: 10 }, { requests: 5 }];
+  assertBudgetCovers(cases, ["rest", "grpc"], 30);
+  assertBudgetCovers(cases, ["rest"], 15);
+  assert.throws(
+    () => assertBudgetCovers(cases, ["rest", "grpc"], 29),
+    /may send 30 requests, over --max-requests 29/,
+  );
+  assert.throws(() => assertBudgetCovers(cases, ["rest"], 14), /may send 15/);
 });

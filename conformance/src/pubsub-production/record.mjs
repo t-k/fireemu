@@ -17,7 +17,7 @@ import { createClient, newPushState } from "./client.mjs";
 import { createGrpc } from "./grpc.mjs";
 import { createOwnership, isRunId, newRunId } from "./names.mjs";
 import { createRest } from "./rest.mjs";
-import { exitCodeOf, plannedRequests, runCases, selectCases } from "./runner.mjs";
+import { assertBudgetCovers, exitCodeOf, runCases, selectCases } from "./runner.mjs";
 import { createTokenProvider } from "./token.mjs";
 
 const PRODUCTION = { rest: "https://pubsub.googleapis.com", grpc: "pubsub.googleapis.com:443" };
@@ -111,12 +111,7 @@ export async function main(
     options = parseArgs(argv, env);
     if (!options.cleanupOnly) {
       cases = selectCases(options.only);
-      // The budget must cover what the selected cases may send: a run that would stop on it is not started.
-      const planned = plannedRequests(cases, options.transports);
-      if (planned > options.maxRequests)
-        throw new Error(
-          `the selected cases may send ${planned} requests, over --max-requests ${options.maxRequests}`,
-        );
+      assertBudgetCovers(cases, options.transports, options.maxRequests);
     }
   } catch (error) {
     io.stderr.write(`${error.message}\n`);

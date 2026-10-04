@@ -79,6 +79,13 @@ jobs:
       - uses: taiki-e/install-action@v2
         with:
           tool: cargo-nextest@0.9.143
+      # The Functions runtime tests load the pinned real firebase-functions SDK from the conformance
+      # install (crates/fireemu-adapter-functions/tests/runtime.rs, FE_SOURCE_SDK_ROOT overrides it).
+      - uses: pnpm/action-setup@v4
+        with:
+          version: "10.32.1"
+      - name: the pinned real SDK for the Functions runtime tests
+        run: pnpm -C conformance install --frozen-lockfile
       - name: tests (profile pr, retries 0)
         run: cargo nextest run --workspace --profile pr
       - name: limit catalog matches generated constants
@@ -169,6 +176,15 @@ jobs:
       - name: fetch locked dependency graph for offline authority checks
         if: runner.os == 'macOS'
         run: cargo fetch --locked
+      # The Functions runtime tests load the pinned real firebase-functions SDK from the conformance
+      # install (crates/fireemu-adapter-functions/tests/runtime.rs); Windows runs the lib tests only.
+      - uses: pnpm/action-setup@v4
+        if: runner.os == 'macOS'
+        with:
+          version: "10.32.1"
+      - name: the pinned real SDK for the Functions runtime tests
+        if: runner.os == 'macOS'
+        run: pnpm -C conformance install --frozen-lockfile
       # The process-census integration suites shell out to `ps` and `kill` to prove that a
       # daemon leaves nothing running; they are POSIX-only by construction, so Windows runs the
       # in-crate unit tests. Making them portable is tracked in the distribution issue.

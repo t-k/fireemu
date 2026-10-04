@@ -1,11 +1,13 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import {
+  appendFileSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
   readdirSync,
+  rmSync,
   statSync,
   symlinkSync,
   writeFileSync,
@@ -145,6 +147,60 @@ test("check reads locally, sends nothing, and says what it pinned", async () => 
   assert.equal(result.ok, true);
   assert.equal(world.requests.length, 0);
   assert.match(result.pins.packetSha256, /^[0-9a-f]{64}$/);
+});
+
+/** The lines and the journal of a run that wrote nothing, finished ten minutes before the check (t = 12:00Z). */
+function quietRun(dir, { mutation = false } = {}) {
+  const runDir = join(dir, "runs", "quiet");
+  mkdirSync(join(runDir, "transport"), { recursive: true });
+  const send = (seq) => [
+    { seq, state: "before-send", mutation },
+    { seq, state: "response-persisted", kind: "success" },
+  ];
+  writeFileSync(
+    join(runDir, "transport", "journal.jsonl"),
+    [...send(1), ...send(2)].map((entry) => JSON.stringify(entry)).join("\n"),
+  );
+  const line = (ts, over) =>
+    JSON.stringify({
+      ts,
+      taskId: "FUNCTIONS-EVENTS-SANDBOX",
+      project: "fireemu-oracle-events",
+      runDir,
+      ...over,
+    });
+  return [
+    line("2026-10-04T11:49:00Z", { event: "started" }),
+    line("2026-10-04T11:49:10Z", {
+      event: "finished",
+      outcome: "stopped-clean",
+      requests: 2,
+      cliAttempts: { deploy: 0, delete: 0 },
+      lockRetained: false,
+    }),
+    line("2026-10-04T11:50:00Z", {
+      event: "cleanup-verified",
+      sandboxAtBaseline: true,
+      requests: 2,
+      unknownAnswers: 0,
+    }),
+  ].join("\n");
+}
+
+test("check does not wait out the spacing after a run that wrote nothing, and does after one that did", async () => {
+  const quiet = arrange();
+  appendFileSync(quiet.ledgerPath, `${quietRun(quiet.dir)}\n`);
+  const ok = await main(quiet.argv("check"), quiet.deps);
+  assert.deepEqual(ok.problems, []);
+  const wrote = arrange();
+  appendFileSync(wrote.ledgerPath, `${quietRun(wrote.dir, { mutation: true })}\n`);
+  const refused = await main(wrote.argv("check"), wrote.deps);
+  assert.ok(refused.problems.some((p) => p.includes("30 minutes")));
+  const gone = arrange();
+  appendFileSync(gone.ledgerPath, `${quietRun(gone.dir)}\n`);
+  rmSync(join(gone.dir, "runs", "quiet", "transport"), { recursive: true });
+  const unreadable = await main(gone.argv("check"), gone.deps);
+  assert.ok(unreadable.problems.some((p) => p.includes("30 minutes")));
 });
 
 test("check refuses without the approval lines", async () => {

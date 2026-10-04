@@ -171,7 +171,7 @@ export async function main(argv, deps) {
     env,
     nodeVersion: deps.nodeVersion ?? process.versions.node,
     readLedger: () => readFileSync(deps.ledgerPath, "utf8"),
-    readJournal: (runDir) => sandbox.readRunJournal(dirname(deps.ledgerPath), runDir),
+    readJournal: (runDir) => sandbox.readRunJournal(deps.runsDir, runDir),
     readOwner: () => readFileSync(deps.ownerPath, "utf8"),
     readTools,
     checkSource: () => {

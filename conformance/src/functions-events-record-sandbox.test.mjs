@@ -352,6 +352,18 @@ for (const [label, change] of nearMisses) {
   });
 }
 
+test("lines with no run directory are never taken for a run that wrote nothing", () => {
+  const bare = [realStarted, realFinished, realClosed].map(({ runDir: _runDir, ...rest }) => rest);
+  let asked = 0;
+  const problems = sandbox.ledgerProblems(ledgerOf(...bare), after, {
+    readJournal: () => (asked++, journal()),
+  });
+  assert.ok(spaced(problems), JSON.stringify(problems));
+  assert.equal(asked, 0);
+  const empty = [realStarted, realFinished, realClosed].map((r) => ({ ...r, runDir: "" }));
+  assert.ok(spaced(sandbox.ledgerProblems(ledgerOf(...empty), after, journalOf(journal()))));
+});
+
 test("the run the exemption is built from still passes with the same inputs (guards the table above)", () => {
   assert.deepEqual(
     sandbox.ledgerProblems(

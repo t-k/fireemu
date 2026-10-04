@@ -110,7 +110,13 @@ function p13bDigest(value) {
     .digest("hex");
 }
 
-function assertP13bPreparation(observed, compared, closure) {
+function assertP13bPreparation(observed, compared, closure, preparationBytes) {
+  assert.equal(
+    createHash("sha256").update(preparationBytes).digest("hex"),
+    "b4c3817e5ee9578e307272a29009e05439c929f8307b268c067ac5aca7242d57",
+    "immutable historical P13b preparation",
+  );
+  assert.deepEqual(compared, JSON.parse(preparationBytes), "actual preparation object binding");
   for (const record of [observed, compared]) {
     assert.equal(record.coverage, "PARTIAL");
     assert.equal(record.authorizesProduction, false);
@@ -328,18 +334,36 @@ function assertP13bPreparation(observed, compared, closure) {
     assert.equal(replay.productionFileSha256, corpus.recordings[replay.recording - 1].sha256);
   assert.equal(
     compared.producer.sha256,
-    createHash("sha256")
-      .update(readFileSync(new URL(`../../${compared.producer.path}`, import.meta.url)))
-      .digest("hex"),
+    "9fab208ef9e30a0332d78e061a12563355bc519611d7ed9e8ae0e1685493848f",
+    "historical P13b producer",
   );
   assert.equal(compared.producer.tableSha256, corpus.tableSourceDigest);
   assert.equal(compared.producer.tableSourceCommit, corpus.sourceCommit);
   assert.equal(
     compared.producer.currentTableSha256,
+    "c15dcba233334b5dd437aa4fad955fcc6af41089973d1a1bce083769910d5c3a",
+    "historical preparation-time table",
+  );
+  const currentPreparation = admission.records.find(
+    (record) => record.recordType === compared.kind,
+  );
+  assert.equal(currentPreparation.sourceScope, "HISTORICAL_PREPARATION");
+  assert.equal(
+    currentPreparation.currentComparatorSha256,
+    createHash("sha256")
+      .update(readFileSync(new URL(`../../${compared.producer.path}`, import.meta.url)))
+      .digest("hex"),
+  );
+  assert.equal(
+    currentPreparation.currentTableSha256,
     createHash("sha256")
       .update(readFileSync(new URL(`../../${corpus.table}`, import.meta.url)))
       .digest("hex"),
   );
+  assert.equal(currentPreparation.currentCapturedReplays, 0);
+  assert.equal(currentPreparation.currentRequiredReplays, 4);
+  assert.equal(admission.eligible, false);
+  assert.ok(admission.facets.every((facet) => facet.state === "OPEN" && facet.evidence === null));
   assert.notEqual(compared.producer.currentTableSha256, corpus.tableSourceDigest);
   const retry = closure.conditions.find(({ conditionId }) =>
     conditionId.endsWith("/retry-token-lifecycle"),
@@ -369,11 +393,68 @@ test("P13b saved retry observations publish source-bound partial proof with a pe
   const comparedUrl = new URL("fs-transaction-p13b-recorded-comparison-v1.json", base);
   assert.ok(existsSync(observedUrl), "P13b decoded observations must be published");
   assert.ok(existsSync(comparedUrl), "P13b comparison preparation must be published");
+  const preparationBytes = readFileSync(comparedUrl);
   assertP13bPreparation(
     JSON.parse(readFileSync(observedUrl)),
-    JSON.parse(readFileSync(comparedUrl)),
+    JSON.parse(preparationBytes),
     JSON.parse(readFileSync(closureUrl)),
+    preparationBytes,
   );
+});
+
+test("P13b historical preparation consumer refuses altered bytes and relabeled producer", () => {
+  const base = new URL("../../spec/compatibility/broad-runs/", import.meta.url);
+  const observed = JSON.parse(
+    readFileSync(new URL("fs-transaction-p13b-recorded-observations-v1.json", base)),
+  );
+  const bytes = readFileSync(new URL("fs-transaction-p13b-recorded-comparison-v1.json", base));
+  const compared = JSON.parse(bytes);
+  const closure = JSON.parse(readFileSync(closureUrl));
+  assertP13bPreparation(observed, compared, closure, bytes);
+  assert.throws(
+    () =>
+      assertP13bPreparation(
+        observed,
+        compared,
+        closure,
+        Buffer.concat([bytes, Buffer.from(" \n")]),
+      ),
+    /immutable historical P13b preparation/,
+  );
+  let seed = 0xb4c39fab;
+  const visited = new Set();
+  const changes = [
+    (record) => {
+      record.producer.sha256 = admission.records.find(
+        (item) => item.sourceScope === "HISTORICAL_PREPARATION",
+      ).currentComparatorSha256;
+    },
+    (record) => {
+      record.producer.currentTableSha256 = "0".repeat(64);
+    },
+    (record) => {
+      record.capturedReplays = 4;
+    },
+    (record) => {
+      record.promotionReady = true;
+    },
+  ];
+  for (let i = 0; i < 64; i++) {
+    seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0;
+    const axis = (seed >>> 8) % changes.length;
+    visited.add(axis);
+    const altered = structuredClone(compared);
+    changes[axis](altered);
+    assert.throws(
+      () => assertP13bPreparation(observed, altered, closure, bytes),
+      /actual preparation object binding/,
+    );
+    assert.throws(
+      () => assertP13bPreparation(observed, altered, closure, Buffer.from(JSON.stringify(altered))),
+      /immutable historical P13b preparation/,
+    );
+  }
+  assert.equal(visited.size, changes.length);
 });
 
 test("FS-TRANSACTION proposal names every acceptance boundary without claiming closure", () => {
@@ -479,22 +560,126 @@ test("FS-TRANSACTION proposal names every acceptance boundary without claiming c
   assert.equal(closure.parentStatus === "COMPAT_VERIFIED", admission.eligible);
 });
 
+const historicalComparisons = Object.freeze({
+  "fs-transaction-p02-recorded-comparison-v1":
+    "98906db6c9f50ebba9e3edd36383fbfc2ab9680a3426e43e52a3ba099f7f5f4f",
+  "fs-transaction-recorded-comparison-v1":
+    "404c55b0cfb5d5d8950d6581bb30b3b876d35fac783db08ee64f8baa67b91841",
+});
+function assertHistoricalComparisonProducer(compared, comparisonBytes) {
+  assert.ok(
+    Object.hasOwn(historicalComparisons, compared.kind),
+    "exact historical comparison kind",
+  );
+  assert.equal(
+    createHash("sha256").update(comparisonBytes).digest("hex"),
+    historicalComparisons[compared.kind],
+    "immutable historical comparison bytes",
+  );
+  assert.deepEqual(
+    compared,
+    JSON.parse(comparisonBytes),
+    "actual historical comparison object binding",
+  );
+  assert.equal(
+    compared.producer.sha256,
+    "9fab208ef9e30a0332d78e061a12563355bc519611d7ed9e8ae0e1685493848f",
+    "historical comparison producer",
+  );
+  const current = admission.dependencies.find(
+    (ref) => ref.sourceType === "fs-transaction-p13b-comparator-source-v1",
+  );
+  assert.equal(current.sourcePath, compared.producer.path);
+  assert.equal(
+    current.sourceSha256,
+    createHash("sha256")
+      .update(readFileSync(new URL(`../../${current.sourcePath}`, import.meta.url)))
+      .digest("hex"),
+    "actual current comparator bytes",
+  );
+  assert.equal(admission.eligible, false);
+}
+
+test("P02 historical consumer rejects producer relabeling and caller re-pinned bytes", () => {
+  const bytes = readFileSync(
+    new URL(
+      "../../spec/compatibility/broad-runs/fs-transaction-p02-recorded-comparison-v1.json",
+      import.meta.url,
+    ),
+  );
+  const compared = JSON.parse(bytes);
+  assertHistoricalComparisonProducer(compared, bytes);
+  assert.throws(
+    () => assertHistoricalComparisonProducer(compared, Buffer.concat([bytes, Buffer.from(" \n")])),
+    /immutable historical comparison bytes/,
+  );
+  for (let i = 0; i < 32; i++) {
+    const altered = structuredClone(compared);
+    altered.producer.sha256 =
+      i % 2
+        ? admission.dependencies.find((ref) => ref.sourceType.includes("comparator")).sourceSha256
+        : i.toString(16).padStart(64, "0");
+    assert.throws(
+      () => assertHistoricalComparisonProducer(altered, bytes),
+      /actual historical comparison object binding/,
+    );
+    assert.throws(
+      () => assertHistoricalComparisonProducer(altered, Buffer.from(JSON.stringify(altered))),
+      /immutable historical comparison bytes/,
+    );
+  }
+});
+
+test("historical comparison consumer admits only exact P02 and P08 bytes and kinds", () => {
+  for (const name of ["p02", "p08"]) {
+    const bytes = readFileSync(
+      new URL(
+        `../../spec/compatibility/broad-runs/fs-transaction-${name}-recorded-comparison-v1.json`,
+        import.meta.url,
+      ),
+    );
+    const compared = JSON.parse(bytes);
+    assertHistoricalComparisonProducer(compared, bytes);
+    for (const kind of ["constructor", "toString", "unknown", null, 42]) {
+      const altered = structuredClone(compared);
+      altered.kind = kind;
+      assert.throws(
+        () => assertHistoricalComparisonProducer(altered, bytes),
+        /exact historical comparison kind/,
+      );
+    }
+    const altered = structuredClone(compared);
+    altered.producer.sha256 = admission.dependencies.find((ref) =>
+      ref.sourceType.includes("comparator"),
+    ).sourceSha256;
+    assert.throws(
+      () => assertHistoricalComparisonProducer(altered, Buffer.from(JSON.stringify(altered))),
+      /immutable historical comparison bytes/,
+    );
+    assert.throws(
+      () =>
+        assertHistoricalComparisonProducer(compared, Buffer.concat([bytes, Buffer.from(" \n")])),
+      /immutable historical comparison bytes/,
+    );
+  }
+});
+
 test("P02/P02b retained read-only evidence preserves all steps and current profile differences without closure", () => {
   const base = new URL("../../spec/compatibility/broad-runs/", import.meta.url);
   const observed = JSON.parse(
     readFileSync(new URL("fs-transaction-p02-recorded-observations-v1.json", base), "utf8"),
   );
-  const compared = JSON.parse(
-    readFileSync(new URL("fs-transaction-p02-recorded-comparison-v1.json", base), "utf8"),
+  const comparisonBytes = readFileSync(
+    new URL("fs-transaction-p02-recorded-comparison-v1.json", base),
   );
+  const compared = JSON.parse(comparisonBytes);
   const closure = JSON.parse(readFileSync(closureUrl, "utf8"));
   assert.equal(observed.authorizesProduction, false);
   assert.equal(observed.coverage, "PARTIAL");
   assert.equal(compared.promotionReady, false);
   assert.equal(compared.productionRequests, 0);
   assert.equal(compared.coverage, "PARTIAL");
-  const producerBytes = readFileSync(new URL(`../../${compared.producer.path}`, import.meta.url));
-  assert.equal(compared.producer.sha256, createHash("sha256").update(producerBytes).digest("hex"));
+  assertHistoricalComparisonProducer(compared, comparisonBytes);
   assert.equal(compared.corpora.length, 2);
   for (const [index, corpus] of observed.corpora.entries()) {
     const steps = index === 0 ? 35 : 42;
@@ -573,9 +758,10 @@ test("P08 retained refusal chains preserve decoded partial evidence and normal r
   const observed = JSON.parse(
     readFileSync(new URL("fs-transaction-p08-recorded-observations-v1.json", base), "utf8"),
   );
-  const compared = JSON.parse(
-    readFileSync(new URL("fs-transaction-p08-recorded-comparison-v1.json", base), "utf8"),
+  const comparisonBytes = readFileSync(
+    new URL("fs-transaction-p08-recorded-comparison-v1.json", base),
   );
+  const compared = JSON.parse(comparisonBytes);
   const closure = JSON.parse(readFileSync(closureUrl, "utf8"));
   for (const record of [observed, compared]) {
     assert.equal(record.coverage, "PARTIAL");
@@ -878,12 +1064,7 @@ test("P08 retained refusal chains preserve decoded partial evidence and normal r
       assert.match(replay[key], /^[a-f0-9]{64}$/);
   }
   assert.match(compared.remainingBoundaries.join(" "), /final whole-tree/);
-  assert.equal(
-    compared.producer.sha256,
-    createHash("sha256")
-      .update(readFileSync(new URL(`../../${compared.producer.path}`, import.meta.url)))
-      .digest("hex"),
-  );
+  assertHistoricalComparisonProducer(compared, comparisonBytes);
   assert.equal(compared.producer.tableSha256, corpus.tableSourceDigest);
   assert.equal(
     corpus.tableSourceDigest,

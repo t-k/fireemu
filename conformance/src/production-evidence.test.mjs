@@ -90,6 +90,23 @@ const replaceRecord = (value, path, change) => {
   value.documents.set(path, bytes);
   value.currentBinding.records.find((ref) => ref.recordPath === path).recordSha256 = sha(bytes);
 };
+const withFileBackedFixture = (value, change, check) => {
+  const directory = mkdtempSync(resolve(tmpdir(), "fireemu-production-history-"));
+  try {
+    for (const [path, bytes] of value.documents) {
+      const target = resolve(directory, path);
+      mkdirSync(dirname(target), { recursive: true });
+      writeFileSync(target, bytes);
+    }
+    change(directory);
+    value.root = directory;
+    value.documents = new Map();
+    loadFixtureBinding(directory, value.parent, value.currentBinding, value.documents);
+    check(value);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+};
 
 test("actual P13b files expose native partial coverage and four missing current replays", async () => {
   const { evaluateCurrentParent } = await api();
@@ -107,6 +124,273 @@ test("actual P13b files expose native partial coverage and four missing current 
   assert.ok(result.missing.some((reason) => reason.includes("final product")));
   assert.ok(result.missing.some((reason) => reason.includes("independent review")));
   assert.ok(result.facets.every((facet) => facet.state === "OPEN"));
+});
+
+test("immutable P13b preparation retains historical identity beside the current comparator", async () => {
+  const value = fixture();
+  assert.equal(
+    sha(value.documents.get(paths.preparation)),
+    "b4c3817e5ee9578e307272a29009e05439c929f8307b268c067ac5aca7242d57",
+  );
+  const result = (await api()).evaluateCurrentParent(value);
+  const preparation = result.records.find(
+    (record) => record.recordType === "fs-transaction-recorded-comparison-preparation-v1",
+  );
+  assert.equal(preparation.scope, "PARTIAL");
+  assert.equal(preparation.sourceScope, "HISTORICAL_PREPARATION");
+  assert.equal(preparation.historicalRecordSha256, sha(value.documents.get(paths.preparation)));
+  assert.equal(
+    preparation.historicalProducerSha256,
+    "9fab208ef9e30a0332d78e061a12563355bc519611d7ed9e8ae0e1685493848f",
+  );
+  assert.equal(
+    preparation.currentComparatorSha256,
+    value.currentBinding.dependencies.find(
+      (ref) => ref.sourceType === "fs-transaction-p13b-comparator-source-v1",
+    ).sourceSha256,
+  );
+  assert.notEqual(preparation.historicalProducerSha256, preparation.currentComparatorSha256);
+  assert.equal(
+    preparation.historicalTableSha256,
+    "c15dcba233334b5dd437aa4fad955fcc6af41089973d1a1bce083769910d5c3a",
+  );
+  assert.equal(
+    preparation.frozenTableSha256,
+    "6716e049745af5532b837e7c9c06c199f92c8f253c2cb7341dbf7b4a299ce468",
+  );
+  assert.equal(preparation.capturedReplays, 0);
+  assert.equal(preparation.requiredReplays, 4);
+  assert.equal(preparation.currentCapturedReplays, 0);
+  assert.equal(preparation.currentRequiredReplays, 4);
+  assert.equal(result.eligible, false);
+  assert.ok(result.facets.every((facet) => facet.state === "OPEN" && facet.evidence === null));
+  assert.equal(value.currentBinding.finalProduct, null);
+  assert.equal(value.currentBinding.independentReview, null);
+});
+
+for (const sourceType of [
+  "fs-transaction-p13b-comparator-source-v1",
+  "fs-transaction-p13b-table-source-v1",
+]) {
+  test(`file-backed current ${sourceType} remains distinct from historical preparation`, async () => {
+    const value = fixture();
+    const ref = value.currentBinding.dependencies.find(
+      (dependency) => dependency.sourceType === sourceType,
+    );
+    const originalSha256 = ref.sourceSha256;
+    const { evaluateCurrentParent } = await api();
+    withFileBackedFixture(
+      value,
+      (directory) => {
+        const path = resolve(directory, ref.sourcePath);
+        const bytes = Buffer.concat([
+          readFileSync(path),
+          Buffer.from("\n# current source fixture\n"),
+        ]);
+        writeFileSync(path, bytes);
+        ref.sourceSha256 = sha(bytes);
+      },
+      (loaded) => {
+        const result = evaluateCurrentParent(loaded);
+        const preparation = result.records.find(
+          (record) => record.sourceScope === "HISTORICAL_PREPARATION",
+        );
+        assert.notEqual(ref.sourceSha256, originalSha256);
+        assert.equal(
+          sourceType.includes("comparator")
+            ? preparation.currentComparatorSha256
+            : preparation.currentTableSha256,
+          ref.sourceSha256,
+        );
+        assert.equal(
+          preparation.historicalProducerSha256,
+          "9fab208ef9e30a0332d78e061a12563355bc519611d7ed9e8ae0e1685493848f",
+        );
+        assert.equal(
+          preparation.historicalTableSha256,
+          "c15dcba233334b5dd437aa4fad955fcc6af41089973d1a1bce083769910d5c3a",
+        );
+        assert.equal(preparation.currentCapturedReplays, 0);
+        assert.equal(result.eligible, false);
+      },
+    );
+  });
+}
+
+test("caller re-pinning cannot rewrite immutable preparation bytes", async () => {
+  const value = fixture();
+  const bytes = Buffer.concat([value.documents.get(paths.preparation), Buffer.from(" \n")]);
+  value.documents.set(paths.preparation, bytes);
+  value.currentBinding.records.find((ref) => ref.recordPath === paths.preparation).recordSha256 =
+    sha(bytes);
+  const { evaluateCurrentParent } = await api();
+  assert.throws(() => evaluateCurrentParent(value), /immutable preparation bytes/);
+});
+
+test("historical producer cannot be relabeled with the actual current comparator digest", async () => {
+  const value = fixture();
+  const current = value.currentBinding.dependencies.find((ref) =>
+    ref.sourceType.includes("comparator"),
+  );
+  replaceRecord(value, paths.preparation, (record) => {
+    record.producer.sha256 = current.sourceSha256;
+  });
+  const { evaluateCurrentParent } = await api();
+  assert.throws(() => evaluateCurrentParent(value), /historical preparation producer/);
+});
+
+test("historical producer and table anchors reject caller-selected identities", async () => {
+  const { evaluateCurrentParent } = await api();
+  for (const [field, identity, expected] of [
+    ["sha256", "0".repeat(64), /historical preparation producer/],
+    ["currentTableSha256", "0".repeat(64), /historical preparation table/],
+  ]) {
+    const value = fixture();
+    replaceRecord(value, paths.preparation, (record) => {
+      record.producer[field] = identity;
+    });
+    assert.throws(() => evaluateCurrentParent(value), expected);
+  }
+});
+
+test("historical digests cannot replace actual current dependency bytes", async () => {
+  const { loadCurrentBinding, evaluateCurrentParent } = await api();
+  for (const [type, historicalSha256] of [
+    [
+      "fs-transaction-p13b-comparator-source-v1",
+      "9fab208ef9e30a0332d78e061a12563355bc519611d7ed9e8ae0e1685493848f",
+    ],
+    [
+      "fs-transaction-p13b-table-source-v1",
+      "6716e049745af5532b837e7c9c06c199f92c8f253c2cb7341dbf7b4a299ce468",
+    ],
+  ]) {
+    const value = fixture();
+    value.currentBinding.dependencies.find((ref) => ref.sourceType === type).sourceSha256 =
+      historicalSha256;
+    assert.throws(
+      () => loadCurrentBinding(root, value.parent, value.currentBinding, new Map()),
+      /loaded dependency SHA-256 mismatch/,
+    );
+    assert.throws(() => evaluateCurrentParent(value), /actual dependency bytes differ/);
+  }
+});
+
+test("loaded current document mutation cannot borrow a historical trust anchor", async () => {
+  const { evaluateCurrentParent } = await api();
+  for (const type of ["comparator", "table"]) {
+    const value = fixture();
+    const ref = value.currentBinding.dependencies.find((dependency) =>
+      dependency.sourceType.includes(type),
+    );
+    const bytes = Buffer.concat([
+      value.documents.get(ref.sourcePath),
+      Buffer.from("\n# injected caller bytes\n"),
+    ]);
+    value.documents.set(ref.sourcePath, bytes);
+    ref.sourceSha256 = sha(bytes);
+    assert.throws(() => evaluateCurrentParent(value), /loaded dependency SHA-256 mismatch/);
+  }
+});
+
+test("current dependency bytes remain checked after an authentic load", async () => {
+  const { evaluateCurrentParent } = await api();
+  for (const type of ["comparator", "table"]) {
+    const value = fixture();
+    const ref = value.currentBinding.dependencies.find((dependency) =>
+      dependency.sourceType.includes(type),
+    );
+    value.documents.set(
+      ref.sourcePath,
+      Buffer.concat([value.documents.get(ref.sourcePath), Buffer.from("\n# changed after load\n")]),
+    );
+    assert.throws(() => evaluateCurrentParent(value), /actual dependency bytes differ/);
+  }
+});
+
+test("historical preparation rejects wrong types, missing bytes and path or symlink replacement", async () => {
+  const { evaluateCurrentParent } = await api();
+  for (const badProducer of [null, [], "historical", 1, false]) {
+    const value = fixture();
+    replaceRecord(value, paths.preparation, (record) => {
+      record.producer = badProducer;
+    });
+    assert.throws(() => evaluateCurrentParent(value));
+  }
+  const missing = fixture();
+  missing.documents.delete(paths.preparation);
+  assert.throws(() => evaluateCurrentParent(missing), /actual record bytes missing/);
+  const alternate = fixture();
+  alternate.currentBinding.records.find((ref) => ref.recordPath === paths.preparation).recordPath +=
+    ".copy";
+  assert.throws(() => evaluateCurrentParent(alternate), /admitted public producer type/);
+  const symlink = fixture();
+  assert.throws(
+    () =>
+      withFileBackedFixture(
+        symlink,
+        (directory) => {
+          const original = resolve(directory, paths.preparation);
+          const copy = resolve(directory, "preparation-copy.json");
+          writeFileSync(copy, readFileSync(original));
+          rmSync(original);
+          symlinkSync(copy, original);
+        },
+        () => assert.fail("symlink must not reach evaluation"),
+      ),
+    /regular file/,
+  );
+});
+
+test("bounded generated histories preserve current admission and reject altered historical bytes", async () => {
+  const { evaluateCurrentParent } = await api();
+  let seed = 0x9fab78c5;
+  const mutations = [
+    (record) => {
+      record.producer.sha256 = "f".repeat(64);
+    },
+    (record) => {
+      record.producer.currentTableSha256 = "a".repeat(64);
+    },
+    (record) => {
+      record.capturedReplays = 4;
+    },
+    (record) => {
+      record.artifact = { approved: true };
+    },
+    (record) => {
+      record.promotionReady = true;
+    },
+    (record) => {
+      record.authorizesProduction = true;
+    },
+    (record) => {
+      record.producer.approval = "VERIFIED";
+    },
+    (record) => {
+      record.plannedReplays[0].recording = 2;
+    },
+  ];
+  const visited = new Set();
+  for (let index = 0; index < 128; index++) {
+    seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0;
+    const value = fixture();
+    if (seed & 1) value.currentBinding.records.reverse();
+    if (seed & 2) value.currentBinding.dependencies.reverse();
+    const result = evaluateCurrentParent(value);
+    assert.equal(result.eligible, false);
+    assert.ok(result.facets.every((facet) => facet.state === "OPEN" && facet.evidence === null));
+    const preparation = result.records.find(
+      (record) => record.sourceScope === "HISTORICAL_PREPARATION",
+    );
+    assert.equal(preparation.currentCapturedReplays, 0);
+    assert.equal(preparation.currentRequiredReplays, 4);
+    const axis = (seed >>> 8) % mutations.length;
+    visited.add(axis);
+    replaceRecord(value, paths.preparation, mutations[axis]);
+    assert.throws(() => evaluateCurrentParent(value));
+  }
+  assert.equal(visited.size, mutations.length);
 });
 
 test("actual old Storage rows retain their scope and cannot stand in for the current final product", async () => {

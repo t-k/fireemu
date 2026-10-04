@@ -10,6 +10,13 @@ const dependencyTypes = {
     "tools/compat-broad/fs-write-txn/fs_txn_compare_local.py",
   "fs-transaction-p13b-table-source-v1": "tools/compat-broad/fs-write-txn/fs_txn_table_p13b.py",
 };
+// The published v1 preparation identifies historical producer bytes, not today's dependency.
+// These immutable anchors are independent of caller references and current source digests.
+const historicalP13bPreparation = Object.freeze({
+  recordSha256: "b4c3817e5ee9578e307272a29009e05439c929f8307b268c067ac5aca7242d57",
+  producerSha256: "9fab208ef9e30a0332d78e061a12563355bc519611d7ed9e8ae0e1685493848f",
+  preparationTableSha256: "c15dcba233334b5dd437aa4fad955fcc6af41089973d1a1bce083769910d5c3a",
+});
 const loadedDocuments = new WeakMap();
 const supported = {
   "fs-transaction-recorded-observations-v1": {
@@ -487,7 +494,7 @@ function verifyP13bObservations(observed) {
   return corpus;
 }
 
-function verifyP13bPreparation(compared, corpus, dependencies) {
+function verifyP13bPreparation(compared, corpus, bytes) {
   closed(
     compared,
     [
@@ -569,11 +576,20 @@ function verifyP13bPreparation(compared, corpus, dependencies) {
   );
   for (const replay of compared.plannedReplays)
     assert.equal(replay.productionFileSha256, corpus.recordings[replay.recording - 1].sha256);
-  assert.equal(compared.producer.sha256, dependencies.get(compared.producer.path));
+  assert.equal(
+    compared.producer.sha256,
+    historicalP13bPreparation.producerSha256,
+    "historical preparation producer",
+  );
   assert.equal(compared.producer.tableSha256, corpus.tableSourceDigest);
   assert.equal(compared.producer.tableSourceCommit, corpus.sourceCommit);
-  assert.equal(compared.producer.currentTableSha256, dependencies.get(corpus.table));
+  assert.equal(
+    compared.producer.currentTableSha256,
+    historicalP13bPreparation.preparationTableSha256,
+    "historical preparation table",
+  );
   assert.notEqual(compared.producer.currentTableSha256, corpus.tableSourceDigest);
+  assert.equal(sha(bytes), historicalP13bPreparation.recordSha256, "immutable preparation bytes");
 }
 
 function verifyHistoricalRules(comparison) {
@@ -751,6 +767,7 @@ export function evaluateCurrentParent({
           `original ${condition.conditionId}/${field}`,
         );
   const loaded = new Map();
+  const loadedBytes = new Map();
   for (const ref of currentBinding.records) {
     const bytes = documents.get(ref.recordPath);
     assert.ok(bytes, `${ref.recordPath}: actual record bytes missing`);
@@ -758,6 +775,7 @@ export function evaluateCurrentParent({
     const record = parseStrictJson(bytes);
     assert.equal(record.kind, ref.recordType, "actual record kind differs");
     loaded.set(ref.recordType, record);
+    loadedBytes.set(ref.recordType, bytes);
   }
   const records = [];
   const missing = [];
@@ -779,16 +797,23 @@ export function evaluateCurrentParent({
       `P13b historical installed runtime currency: ${corpus.historicalInstalledRuntimeInputsValidated}`,
     );
     if (prepared) {
-      verifyP13bPreparation(prepared, corpus, dependencies);
+      verifyP13bPreparation(prepared, corpus, loadedBytes.get(prepared.kind));
       records.push({
         recordType: prepared.kind,
         scope: prepared.coverage,
+        sourceScope: "HISTORICAL_PREPARATION",
+        historicalRecordSha256: historicalP13bPreparation.recordSha256,
+        historicalProducerSha256: prepared.producer.sha256,
+        historicalTableSha256: prepared.producer.currentTableSha256,
+        frozenTableSha256: prepared.producer.tableSha256,
+        currentComparatorSha256: dependencies.get(prepared.producer.path),
+        currentTableSha256: dependencies.get(corpus.table),
         capturedReplays: prepared.capturedReplays,
         requiredReplays: prepared.requiredReplays,
+        currentCapturedReplays: 0,
+        currentRequiredReplays: 4,
       });
-      missing.push(
-        `P13b current source-bound comparisons: ${prepared.capturedReplays}/${prepared.requiredReplays}`,
-      );
+      missing.push("P13b current source-bound comparisons: 0/4");
     } else missing.push("P13b current source-bound comparison record missing");
   } else if (prepared) throw new Error("P13b preparation requires the recorded observations");
   const rules = loaded.get("storage-rules-comparison-v1");

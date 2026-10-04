@@ -13,7 +13,7 @@ import re
 import threading
 import time
 
-from txn_program_program import LITERAL_TOKENS, GraphCursor, canonical_token, compile_plan, corpus_digest, marker_fields, outcome_class, request_for_step, same_request, source_digest, validate_plan
+from txn_program_program import LITERAL_TOKENS, GraphCursor, canonical_token, compile_plan, corpus_digest, marker_fields, outcome_class, request_for_step, same_request, source_digest, step_outcome_class, validate_plan
 
 RECEIPT_KIND = "txn-program-receipt-v1"
 RECORDING_KIND = "txn-program-recording-v1"
@@ -261,11 +261,11 @@ class Ledger:
                 if write["state"] not in doc["possible"]:
                     doc["possible"].append(write["state"])
 
-    def _check_receipt(self, transport, method, result):
+    def _check_receipt(self, transport, method, result, step=None):
         if not isinstance(result, dict) or result.get("kind") != RECEIPT_KIND or result.get("transport") != transport:
             raise ValueError("native receipt differs from the dispatch")
         code = result.get("code")
-        if type(code) is not int or not 0 <= code <= 16 or type(result.get("dispatchedRequests")) is not int or result["dispatchedRequests"] != 1 or result.get("complete") is not True or result.get("childReaped") is not True or outcome_class(code) == "UNKNOWN":
+        if type(code) is not int or not 0 <= code <= 16 or type(result.get("dispatchedRequests")) is not int or result["dispatchedRequests"] != 1 or result.get("complete") is not True or result.get("childReaped") is not True or step_outcome_class(step or {}, code) == "UNKNOWN":
             raise ValueError("native outcome is indeterminate")
         if not isinstance(result.get("details"), str) or len(result["details"].encode()) > 16384:
             raise ValueError("native details are malformed")
@@ -274,9 +274,11 @@ class Ledger:
             raise ValueError("HTTP status disagrees with the transport or the code")
         if code == 0 and not isinstance(result.get("response"), dict):
             raise ValueError("native success has no typed response")
+        if code == 1 and (step is None or "cancelAfter" not in step or not isinstance(result.get("response"), dict) or not isinstance(result["response"].get("responses"), list)):
+            raise ValueError("a client cancel is recorded only for a step that cancels, with the frames it received")
 
     def after(self, site, transport, method, request, step, result, timing):
-        self._check_receipt(transport, method, result)
+        self._check_receipt(transport, method, result, step)
         code = result["code"]
         self._apply(site, transport, method, request, step, result, timing, code)
         if step is not None and code not in step["allow"]:
@@ -365,6 +367,40 @@ class Ledger:
             self._read(site, transport, request, result, code, step)
         elif method == "BatchGetDocuments":
             self._batch(transport, request, result, code, step, timing)
+        elif method == "RunQuery":
+            self._query(transport, result, code)
+
+    def _query_frames(self, transport, result, code):
+        """The documents a query answered, by role, after the ownership check; a refusal answers none. A frame names a document of this run or is nothing but a read time."""
+        if code not in (0, 1):
+            return {}
+        frames = result["response"].get("responses")
+        if not isinstance(frames, list):
+            raise ValueError("query answer is not a list of frames")
+        documents = {}
+        for frame in frames:
+            if not isinstance(frame, dict) or set(frame) - {"document", "readTime", "skippedResults", "done", "explainMetrics", "result"}:
+                raise ValueError("query frame carries something a query does not answer with")
+            if _present(frame, "transaction"):
+                raise ValueError("query frame carries an unrequested transaction")
+            if not _present(frame, "document"):
+                continue
+            document = frame["document"]
+            name = document.get("name") if isinstance(document, dict) else None
+            role = next((role for role, owned in self.plan["documents"].items() if owned == name), None)
+            if role is None or role in documents:
+                raise ValueError("query frame names a document that is not this run's, or repeats")
+            # Only the owner marker and a state this recording tried are checked: what a query shows is the observation, not a verdict.
+            self._owned(role, document, transport, set(self.tried[role]) | set(self.history[role]))
+            documents[role] = document["fields"]["state"]["stringValue"]
+        return documents
+
+    def _query(self, transport, result, code):
+        self._query_frames(transport, result, code)
+
+    def query_states(self, transport, result):
+        """The state each queried document showed, by role."""
+        return self._query_frames(transport, result, result["code"])
 
     def _batch(self, transport, request, result, code, step, timing):
         """One entry per requested document, each found with its acknowledged marker or reported missing."""
@@ -546,7 +582,8 @@ class Collector:
 
     def _rpc(self, site, transport, method, request, phase, *, step=None):
         context = self._begin_rpc(site, transport, method, request, phase, step=step)
-        result = self.wire.send(transport, method, request, nonce=self.plan["nonce"], owner_id=self.plan["ownerId"], bearer=self.bearer, deadline_ms=context["deadlineMs"])
+        extra = {"cancel_after": step["cancelAfter"]} if step and "cancelAfter" in step else {}
+        result = self.wire.send(transport, method, request, nonce=self.plan["nonce"], owner_id=self.plan["ownerId"], bearer=self.bearer, deadline_ms=context["deadlineMs"], **extra)
         return self._end_rpc(context, result)
 
     def _begin_rpc(self, site, transport, method, request, phase, *, step=None, concurrent=False):
@@ -598,7 +635,7 @@ class Collector:
         except (Exception, KeyboardInterrupt):
             self._persist()
             raise
-        row["outcomeClass"] = outcome_class(result["code"])
+        row["outcomeClass"] = step_outcome_class(step or {}, result["code"])
         if concurrent:
             self.pending_concurrent = None
         else:
@@ -680,7 +717,7 @@ class Collector:
             if "waitSeconds" in step:
                 self._wait(step)
                 previous = self.rows[-1]
-            request = request_for_step(self.plan, step, self.ledger.token_values(), self.table, self.ledger.times(), now=_utc_seconds(self.utc()))
+            request = request_for_step(self.plan, step, self.ledger.token_values(), self.table, self.ledger.times(), now=_utc_seconds(self.utc()) if "readAgoSeconds" in step else None)
             self._rpc(step["id"], step["transport"], step["rpc"], request, "observation", step=step)
             if "waitSeconds" in step:
                 self.waits.append(wait_entry(step, previous, self.rows[-1]["timing"], self.ledger.tokens))
@@ -807,7 +844,7 @@ def projection(receipt, table):
                 raise ValueError("concurrent request graph differs")
             check_concurrent_order(before_anchor, row["timing"])
             ledger.after(site, transport, method, request, following, result, row["timing"])
-            if row.get("outcomeClass") != outcome_class(result["code"]):
+            if row.get("outcomeClass") != step_outcome_class(following, result["code"]):
                 raise ValueError("outcome class differs from its code")
             if following["caseId"]:
                 observations.append(row)
@@ -838,7 +875,7 @@ def projection(receipt, table):
                 if index == 0:
                     raise ValueError("a wait needs a preceding request")
                 waits.append(wait_entry(declared, steps[index - 1], row["timing"], ledger.tokens))
-            if row.get("outcomeClass") != outcome_class(result["code"]):
+            if row.get("outcomeClass") != step_outcome_class(declared, result["code"]):
                 raise ValueError("outcome class differs from its code")
             if declared["caseId"]:
                 observations.append(row)
@@ -848,6 +885,8 @@ def projection(receipt, table):
                 reads.append({"site": site, "code": result["code"], "state": None})
             if method == "BatchGetDocuments":
                 reads.append({"site": site, "code": result["code"], "documents": ledger.batch_states(request, result) if result["code"] == 0 else None})
+            if method == "RunQuery":
+                reads.append({"site": site, "code": result["code"], "documents": ledger.query_states(transport, result) if result["code"] in (0, 1) else None})
             owed = ledger.pending_release(declared)
             index += 1
         elif row.get("phase") == "tokenCleanup":
@@ -885,11 +924,12 @@ def projection(receipt, table):
             value = value.replace(entry["value"], f"<token:{role}>")
         return value.replace(receipt["nonce"], "<nonce>").replace(receipt["ownerId"], "<owner>")
 
+    steps_by_site = {declared["id"]: declared for declared in plan["steps"]}
     return {
         "program": plan["program"],
         "packetName": plan["packetName"],
         "corpusDigest": plan["corpusDigest"],
-        "cases": [{"caseId": row["caseId"], "transport": row["transport"], "rpc": row["rpc"], "code": row["result"]["code"], "outcomeClass": outcome_class(row["result"]["code"]), "details": details(row)} for row in observations],
+        "cases": [{"caseId": row["caseId"], "transport": row["transport"], "rpc": row["rpc"], "code": row["result"]["code"], "outcomeClass": step_outcome_class(steps_by_site[row["site"]], row["result"]["code"]), "details": details(row)} for row in observations],
         "reads": reads,
         "tokens": {role: {"transport": entry["transport"], "state": entry["state"]} for role, entry in ledger.tokens.items()},
         "expectedStates": {role: doc["state"] for role, doc in ledger.docs.items() if doc["state"] is not None},

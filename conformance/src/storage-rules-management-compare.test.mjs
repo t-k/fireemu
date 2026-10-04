@@ -794,7 +794,15 @@ test("generated JSON graph boundaries preserve the serialized projection without
         return value;
       },
     ],
-    [false, () => new Array(1)],
+    [
+      false,
+      () => {
+        // A sparse array of length 1 (a hole, not an undefined element).
+        const sparse = [];
+        sparse.length = 1;
+        return sparse;
+      },
+    ],
     [false, () => ({ toJSON: () => ({ native: true }) })],
   ];
   let seed = 758747;

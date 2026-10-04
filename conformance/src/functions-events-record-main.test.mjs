@@ -189,9 +189,10 @@ function quietRun(runs, { mutation = false } = {}) {
       ...over,
     });
   return [
-    line("2026-10-04T11:49:00Z", { event: "started" }),
+    line("2026-10-04T11:49:00Z", { event: "started", estimatedUsd: 4 }),
     line("2026-10-04T11:49:10Z", {
       event: "finished",
+      estimatedUsd: 4,
       outcome: "stopped-clean",
       requests: 2,
       cliAttempts: { deploy: 0, delete: 0 },
@@ -202,6 +203,7 @@ function quietRun(runs, { mutation = false } = {}) {
       sandboxAtBaseline: true,
       requests: 2,
       unknownAnswers: 0,
+      estimatedUsd: 0,
     }),
   ].join("\n");
 }

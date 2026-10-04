@@ -128,7 +128,9 @@ test("a run the coordinator closed counts at the close line's cost, not at its r
   const costly = runRows("a", { reserve: 4, close: { estimatedUsd: 5 } }).join("\n");
   assert.equal(headroom(costly), 29);
   // the close line is final even when it comes first in the file
-  const first = [...runRows("a", { close: { estimatedUsd: 0 } }).toReversed()].join("\n");
+  const first = runRows("a", { close: { estimatedUsd: 0 } })
+    .toReversed()
+    .join("\n");
   assert.equal(headroom(first), 34);
   // two close lines with the same cost are one cost
   const twice = [

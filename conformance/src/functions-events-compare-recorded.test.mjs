@@ -20,9 +20,12 @@ const readJson = (path) => JSON.parse(readFileSync(new URL(path, import.meta.url
 const corpus = readJson("../functions-events/corpus.json");
 const programs = readJson("../functions-events/programs.json");
 const shapes = readJson("./functions-events/compare/fixtures/recorded-shapes.json");
-const localStorageSession = readJson("./functions-events/compare/fixtures/local-emulator-storage-finalize.json");
+const localStorageSession = readJson(
+  "./functions-events/compare/fixtures/local-emulator-storage-finalize.json",
+);
 
-const rowsOf = (result, recipeId) => result.rows.filter(({ row }) => row.startsWith(`${recipeId}#`));
+const rowsOf = (result, recipeId) =>
+  result.rows.filter(({ row }) => row.startsWith(`${recipeId}#`));
 const rowById = (result, id) => result.rows.find(({ row }) => row === id);
 const reasonHeads = (row) => row.reasons.map((reason) => reason.split(" (")[0]);
 
@@ -47,8 +50,22 @@ function firestoreWorld({ localTimes = (frame) => frame } = {}) {
     frameEntry(rekey(v2, pass2Pairs), start + 3_600_000 + 2000),
   ];
   const run = productionRun(
-    [op({ scenarioId: "fs-create", start, matchKey, readback: { exists: true, path: matchKey.value } })],
-    [op({ scenarioId: "fs-create", start: parseTimeMs("2026-09-30T13:03:19.512845Z") - 300, matchKey: { kind: "firestore", value: pass2Path }, readback: { exists: true, path: pass2Path } })],
+    [
+      op({
+        scenarioId: "fs-create",
+        start,
+        matchKey,
+        readback: { exists: true, path: matchKey.value },
+      }),
+    ],
+    [
+      op({
+        scenarioId: "fs-create",
+        start: parseTimeMs("2026-09-30T13:03:19.512845Z") - 300,
+        matchKey: { kind: "firestore", value: pass2Path },
+        readback: { exists: true, path: pass2Path },
+      }),
+    ],
     frames,
   );
   const local = (n) => {
@@ -81,7 +98,13 @@ function firestoreWorld({ localTimes = (frame) => frame } = {}) {
 }
 
 const compare = (w) =>
-  compareRuns({ corpus, programs, productionRun: w.run, localSessions: { emulator: w.emulator, strict: w.strict }, localProject: LOCAL_PROJECT });
+  compareRuns({
+    corpus,
+    programs,
+    productionRun: w.run,
+    localSessions: { emulator: w.emulator, strict: w.strict },
+    localProject: LOCAL_PROJECT,
+  });
 
 test("recorded Firestore created shapes (attempt 011): a local frame of the same shape MATCHes", () => {
   const result = compare(firestoreWorld());
@@ -114,7 +137,10 @@ test("recorded Firestore created shapes: snapshot times printed as strings local
     data.updateTime = "2026-10-04T00:00:01.100200Z";
     return copy;
   };
-  const row = rowById(compare(firestoreWorld({ localTimes: asText })), "functions-events/firestore/create#new-document#v2");
+  const row = rowById(
+    compare(firestoreWorld({ localTimes: asText })),
+    "functions-events/firestore/create#new-document#v2",
+  );
   assert.equal(row.status, "DIFF");
   assert.deepEqual(reasonHeads(row), [
     "emulator: type $.frame.event.data.createTime",
@@ -159,28 +185,64 @@ function storageWorld() {
   });
   const passes = [[], []];
   const frames = [];
-  const keyOf = (frame) => ({ kind: "storage", value: frame.event.data.name, bucket: matchKey.bucket });
+  const keyOf = (frame) => ({
+    kind: "storage",
+    value: frame.event.data.name,
+    bucket: matchKey.bucket,
+  });
   [
     { pass: 1, shift: 0, upload: [], control: variant("2026-10-01T08:51:46", 3) },
-    { pass: 2, shift: 3_600_000, upload: variant("2026-10-01T09:49:26", 5), control: variant("2026-10-01T09:51:46", 7) },
+    {
+      pass: 2,
+      shift: 3_600_000,
+      upload: variant("2026-10-01T09:49:26", 5),
+      control: variant("2026-10-01T09:51:46", 7),
+    },
   ].forEach(({ pass, shift, upload, control }) => {
     const s = start + shift;
     const subject = [rekey(v1, upload), rekey(v2, upload)];
     const after = [rekey(v1, control), rekey(v2, control)];
     const failedName = `fe-events/e${String(pass).repeat(32)}.txt`;
     passes[pass - 1].push(
-      op({ scenarioId: "storage-upload", start: s, matchKey: keyOf(subject[0]), readback: readback(subject[0]) }),
-      op({ scenarioId: "storage-failed-upload", sourceResult: "typed-refusal", start: s + 10_000, end: s + 10_500, matchKey: { kind: "storage", value: failedName, bucket: matchKey.bucket }, readback: { exists: false, bucket: matchKey.bucket, name: failedName } }),
-      op({ scenarioId: "storage-upload", role: "positive-control-after", start: s + 140_000, matchKey: keyOf(after[0]), readback: readback(after[0]) }),
+      op({
+        scenarioId: "storage-upload",
+        start: s,
+        matchKey: keyOf(subject[0]),
+        readback: readback(subject[0]),
+      }),
+      op({
+        scenarioId: "storage-failed-upload",
+        sourceResult: "typed-refusal",
+        start: s + 10_000,
+        end: s + 10_500,
+        matchKey: { kind: "storage", value: failedName, bucket: matchKey.bucket },
+        readback: { exists: false, bucket: matchKey.bucket, name: failedName },
+      }),
+      op({
+        scenarioId: "storage-upload",
+        role: "positive-control-after",
+        start: s + 140_000,
+        matchKey: keyOf(after[0]),
+        readback: readback(after[0]),
+      }),
     );
-    frames.push(...subject.map((frame) => frameEntry(frame, s + 1100)), ...after.map((frame) => frameEntry(frame, s + 141_100)));
+    frames.push(
+      ...subject.map((frame) => frameEntry(frame, s + 1100)),
+      ...after.map((frame) => frameEntry(frame, s + 141_100)),
+    );
   });
-  return { run: productionRun(passes[0], passes[1], frames), emulator: localStorageSession, strict: localStorageSession };
+  return {
+    run: productionRun(passes[0], passes[1], frames),
+    emulator: localStorageSession,
+    strict: localStorageSession,
+  };
 }
 
 test("recorded Storage finalized shapes (attempt 012) against a real fireemu session report the real DIFFs", () => {
   const result = compare(storageWorld());
-  const rows = Object.fromEntries(rowsOf(result, "functions-events/storage/finalize").map((row) => [row.row, row]));
+  const rows = Object.fromEntries(
+    rowsOf(result, "functions-events/storage/finalize").map((row) => [row.row, row]),
+  );
   const expectedV1 = [
     "format $.frame.event.data.etag length",
     "format $.frame.event.data.generation length",
@@ -188,21 +250,36 @@ test("recorded Storage finalized shapes (attempt 012) against a real fireemu ses
     "format $.frame.event.data.mediaLink length",
     "format $.readback.generation length",
   ];
-  const both = (heads) => ["emulator", "strict"].flatMap((profile) => heads.map((head) => `${profile}: ${head}`));
+  const both = (heads) =>
+    ["emulator", "strict"].flatMap((profile) => heads.map((head) => `${profile}: ${head}`));
   const v1 = rows["functions-events/storage/finalize#new-object#v1"];
   assert.equal(v1.status, "DIFF");
   assert.deepEqual(reasonHeads(v1), both(expectedV1));
-  assert.ok(v1.reasons.includes("emulator: format $.frame.event.data.generation length (production 16, local 1)"));
+  assert.ok(
+    v1.reasons.includes(
+      "emulator: format $.frame.event.data.generation length (production 16, local 1)",
+    ),
+  );
   const v2 = rows["functions-events/storage/finalize#new-object#v2"];
   assert.equal(v2.status, "DIFF");
-  assert.deepEqual(reasonHeads(v2), both([...expectedV1.slice(0, 4), "type $.frame.event.datacontenttype", expectedV1[4]]));
-  assert.ok(v2.reasons.includes("strict: type $.frame.event.datacontenttype (production null, local string)"));
+  assert.deepEqual(
+    reasonHeads(v2),
+    both([...expectedV1.slice(0, 4), "type $.frame.event.datacontenttype", expectedV1[4]]),
+  );
+  assert.ok(
+    v2.reasons.includes(
+      "strict: type $.frame.event.datacontenttype (production null, local string)",
+    ),
+  );
 
   const overwrite = rows["functions-events/storage/finalize#overwritten-generation#v1"];
   assert.equal(overwrite.status, "INCOMPLETE");
-  assert.ok(overwrite.reasons.includes("production pass 1: 0 subject operations for storage-overwrite"));
+  assert.ok(
+    overwrite.reasons.includes("production pass 1: 0 subject operations for storage-overwrite"),
+  );
   for (const generation of [1, 2]) {
-    const negative = rows[`functions-events/storage/finalize#failed-upload-no-event#v${generation}`];
+    const negative =
+      rows[`functions-events/storage/finalize#failed-upload-no-event#v${generation}`];
     assert.equal(negative.status, "MATCH", negative.reasons.join("; "));
   }
   assert.equal(result.conditions["FUNCTIONS-EVENTS/storage-finalized"], "DIFF");
@@ -210,16 +287,39 @@ test("recorded Storage finalized shapes (attempt 012) against a real fireemu ses
 
 test("recorded production-only listing members are ignored for local comparison but reported by name", () => {
   const result = compare(storageWorld());
-  assert.deepEqual(rowById(result, "functions-events/storage/finalize#new-object#v1").productionOnly, {
-    "$.event.context.contextExtras": [],
-    "$.event.context.contextKeys": ["eventId", "eventType", "params", "resource", "timestamp"],
-  });
-  assert.deepEqual(rowById(result, "functions-events/storage/finalize#new-object#v2").productionOnly, {
-    "$.event.eventKeys": ["bucket", "context", "data", "id", "object", "source", "specversion", "subject", "time", "traceparent", "type"],
-    "$.event.extensionAttributes": ["bucket", "context", "object", "traceparent"],
-  });
+  assert.deepEqual(
+    rowById(result, "functions-events/storage/finalize#new-object#v1").productionOnly,
+    {
+      "$.event.context.contextExtras": [],
+      "$.event.context.contextKeys": ["eventId", "eventType", "params", "resource", "timestamp"],
+    },
+  );
+  assert.deepEqual(
+    rowById(result, "functions-events/storage/finalize#new-object#v2").productionOnly,
+    {
+      "$.event.eventKeys": [
+        "bucket",
+        "context",
+        "data",
+        "id",
+        "object",
+        "source",
+        "specversion",
+        "subject",
+        "time",
+        "traceparent",
+        "type",
+      ],
+      "$.event.extensionAttributes": ["bucket", "context", "object", "traceparent"],
+    },
+  );
   const text = JSON.stringify(result);
-  for (const raw of ["0123456789abcdef0123456789abcdef", shapes.storageFinalized.matchKey.bucket, "demo-conformance-events-primary", shapes.storageFinalized.v1.event.data.generation]) {
+  for (const raw of [
+    "0123456789abcdef0123456789abcdef",
+    shapes.storageFinalized.matchKey.bucket,
+    "demo-conformance-events-primary",
+    shapes.storageFinalized.v1.event.data.generation,
+  ]) {
     assert.equal(text.includes(raw), false, raw);
   }
   assert.equal(iso(0), "1970-01-01T00:00:00.000Z");

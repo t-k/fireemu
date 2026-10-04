@@ -62,7 +62,8 @@ function operationIssues(op) {
   const issues = [];
   if (typeof op.scenarioId !== "string") issues.push("operation scenarioId is not a string");
   if (typeof op.role !== "string") issues.push("operation role is not a string");
-  if (!SOURCE_RESULTS.has(op.sourceResult)) issues.push("operation sourceResult is not a typed result");
+  if (!SOURCE_RESULTS.has(op.sourceResult))
+    issues.push("operation sourceResult is not a typed result");
   const startMs = parseTimeMs(op.startedAt);
   const endMs = parseTimeMs(op.endedAt);
   if (startMs === null) issues.push("operation startedAt is not an ISO time");
@@ -83,7 +84,8 @@ function frameIssues(entry) {
   const logMs = parseTimeMs(entry.logTimestamp);
   if (logMs === null) issues.push("frame logTimestamp is not an ISO time");
   if (!isText(entry.handler)) issues.push("frame handler is missing");
-  if (entry.generation !== 1 && entry.generation !== 2) issues.push("frame generation is not 1 or 2");
+  if (entry.generation !== 1 && entry.generation !== 2)
+    issues.push("frame generation is not 1 or 2");
   if (!isObject(entry.frame)) {
     issues.push("frame is not a JSON object");
   } else {
@@ -157,7 +159,13 @@ export function fromProductionRun(record) {
     }
     frames.push(frame);
   }
-  return { project: record.project, corpusDigest: record.corpusDigest, passes, frames, duplicateFrames };
+  return {
+    project: record.project,
+    corpusDigest: record.corpusDigest,
+    passes,
+    frames,
+    duplicateFrames,
+  };
 }
 
 function localFrames(op, issues) {
@@ -195,7 +203,8 @@ export function fromLocalSession(session) {
   if (!isObject(session)) throw new TypeError("local session must be a JSON object");
   if (session.schemaVersion !== 1) throw new TypeError("local session schemaVersion must be 1");
   if (session.authority !== "LOCAL_ONLY") throw new TypeError("local session must be LOCAL_ONLY");
-  if (!Array.isArray(session.programs)) throw new TypeError("local session programs must be an array");
+  if (!Array.isArray(session.programs))
+    throw new TypeError("local session programs must be an array");
   const programs = new Map();
   for (const program of session.programs) {
     if (!isObject(program) || !isText(program.recipeId)) {
@@ -212,9 +221,11 @@ export function fromLocalSession(session) {
       operations: program.operations.map((op, index) => {
         const raw = isObject(op) ? op : {};
         const issues = [];
-        if (typeof raw.scenarioId !== "string") issues.push("local operation scenarioId is not a string");
+        if (typeof raw.scenarioId !== "string")
+          issues.push("local operation scenarioId is not a string");
         if (typeof raw.role !== "string") issues.push("local operation role is not a string");
-        if (!validMatchKey(raw.matchKey)) issues.push("local operation matchKey is not a valid role key");
+        if (!validMatchKey(raw.matchKey))
+          issues.push("local operation matchKey is not a valid role key");
         const frames = localFrames(raw, issues);
         return {
           index,

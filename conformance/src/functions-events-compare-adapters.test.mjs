@@ -47,8 +47,18 @@ function run(overrides = {}) {
     corpusDigest: DIGEST,
     recordedAt: "2026-10-04T00:00:00.000Z",
     passes: [
-      { pass: 1, startedAt: "2026-10-04T00:00:00.000Z", endedAt: "2026-10-04T00:10:00.000Z", operations: [operation()] },
-      { pass: 2, startedAt: "2026-10-04T00:15:00.000Z", endedAt: "2026-10-04T00:25:00.000Z", operations: [] },
+      {
+        pass: 1,
+        startedAt: "2026-10-04T00:00:00.000Z",
+        endedAt: "2026-10-04T00:10:00.000Z",
+        operations: [operation()],
+      },
+      {
+        pass: 2,
+        startedAt: "2026-10-04T00:15:00.000Z",
+        endedAt: "2026-10-04T00:25:00.000Z",
+        operations: [],
+      },
     ],
     frames: [
       {
@@ -78,9 +88,15 @@ test("times keep sub-millisecond precision and offsets; anything else is unparse
 });
 
 test("event time is the v1 context timestamp or the v2 time, chosen by generation", () => {
-  assert.equal(eventTimeMs({ generation: 1, event: { context: { timestamp: "1970-01-01T00:00:02Z" } } }), 2000);
+  assert.equal(
+    eventTimeMs({ generation: 1, event: { context: { timestamp: "1970-01-01T00:00:02Z" } } }),
+    2000,
+  );
   assert.equal(eventTimeMs({ generation: 2, event: { time: "1970-01-01T00:00:03Z" } }), 3000);
-  assert.equal(eventTimeMs({ generation: 2, event: { context: { timestamp: "1970-01-01T00:00:02Z" } } }), null);
+  assert.equal(
+    eventTimeMs({ generation: 2, event: { context: { timestamp: "1970-01-01T00:00:02Z" } } }),
+    null,
+  );
   assert.equal(eventTimeMs({ generation: 1, event: { time: "1970-01-01T00:00:03Z" } }), null);
   assert.equal(eventTimeMs({ generation: 3, event: {} }), null);
 });
@@ -177,7 +193,9 @@ test("frames read twice are counted once; a conflicting duplicate insertId is an
   });
   const read = fromProductionRun(conflict);
   assert.equal(read.frames.length, 2);
-  assert.ok(read.frames.every((frame) => frame.issues.includes("insertId read with different content")));
+  assert.ok(
+    read.frames.every((frame) => frame.issues.includes("insertId read with different content")),
+  );
 });
 
 function localSession(frames, overrides = {}) {
@@ -212,7 +230,9 @@ function localSession(frames, overrides = {}) {
 test("a local session is read from the exact rawJson of each frame", () => {
   const raw = JSON.stringify(v2Frame("fe_events_primary/eloc", "2026-10-04T00:00:00.5Z"));
   const local = fromLocalSession(
-    localSession({ v2: [{ sequence: 4, receivedAt: "x", rawJson: raw, frame: { ignored: true } }] }),
+    localSession({
+      v2: [{ sequence: 4, receivedAt: "x", rawJson: raw, frame: { ignored: true } }],
+    }),
   );
   const [op] = local.programs.get("functions-events/firestore/create").operations;
   assert.deepEqual(op.issues, []);
@@ -243,7 +263,10 @@ test("an unreadable or foreign local frame is an operation issue", () => {
 });
 
 test("a local session that is not LOCAL_ONLY or repeats a program is refused", () => {
-  assert.throws(() => fromLocalSession(localSession({}, { authority: "PRODUCTION" })), /LOCAL_ONLY/);
+  assert.throws(
+    () => fromLocalSession(localSession({}, { authority: "PRODUCTION" })),
+    /LOCAL_ONLY/,
+  );
   assert.throws(() => fromLocalSession(localSession({}, { schemaVersion: 2 })), /schemaVersion/);
   const twice = localSession({});
   twice.programs.push(twice.programs[0]);

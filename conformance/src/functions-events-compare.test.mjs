@@ -38,21 +38,74 @@ function world() {
     const retry = `fe_events_primary/${docId(n + 4)}`;
     const ops = passes[pass - 1];
     ops.push(
-      op({ scenarioId: "fs-create", start: s, matchKey: { kind: "firestore", value: create }, readback: { exists: true, path: create } }),
-      op({ scenarioId: "fs-other-path", start: s + 10_000, matchKey: { kind: "firestore", value: other }, readback: { exists: true, path: other } }),
-      op({ scenarioId: "fs-auth-admin", start: s + 140_000, matchKey: { kind: "firestore", value: after }, readback: { exists: true, path: after } }),
-      op({ scenarioId: "fs-retry", start: s + 200_000, matchKey: { kind: "firestore", value: retry }, readback: { exists: true, path: retry }, windowSeconds: 600 }),
+      op({
+        scenarioId: "fs-create",
+        start: s,
+        matchKey: { kind: "firestore", value: create },
+        readback: { exists: true, path: create },
+      }),
+      op({
+        scenarioId: "fs-other-path",
+        start: s + 10_000,
+        matchKey: { kind: "firestore", value: other },
+        readback: { exists: true, path: other },
+      }),
+      op({
+        scenarioId: "fs-auth-admin",
+        start: s + 140_000,
+        matchKey: { kind: "firestore", value: after },
+        readback: { exists: true, path: after },
+      }),
+      op({
+        scenarioId: "fs-retry",
+        start: s + 200_000,
+        matchKey: { kind: "firestore", value: retry },
+        readback: { exists: true, path: retry },
+        windowSeconds: 600,
+      }),
     );
-    for (const [generation, handler] of [[1, "fsCreatedV1"], [2, "fsCreatedV2"]]) {
+    for (const [generation, handler] of [
+      [1, "fsCreatedV1"],
+      [2, "fsCreatedV2"],
+    ]) {
       frames.push(
-        frameEntry(firestoreFrame({ handler, generation, project: PRODUCTION_PROJECT, path: create, eventId: uuid(n + 10 + generation), timeMs: s + 500.123 }), s + 2000),
-        frameEntry(firestoreFrame({ handler, generation, project: PRODUCTION_PROJECT, path: after, eventId: uuid(n + 20 + generation), timeMs: s + 140_400.5 }), s + 142_000),
+        frameEntry(
+          firestoreFrame({
+            handler,
+            generation,
+            project: PRODUCTION_PROJECT,
+            path: create,
+            eventId: uuid(n + 10 + generation),
+            timeMs: s + 500.123,
+          }),
+          s + 2000,
+        ),
+        frameEntry(
+          firestoreFrame({
+            handler,
+            generation,
+            project: PRODUCTION_PROJECT,
+            path: after,
+            eventId: uuid(n + 20 + generation),
+            timeMs: s + 140_400.5,
+          }),
+          s + 142_000,
+        ),
       );
     }
     for (const fixtureAttempt of ["failed", "succeeded"]) {
       frames.push(
         frameEntry(
-          firestoreFrame({ handler: "fsRetryV2", generation: 2, project: PRODUCTION_PROJECT, path: retry, eventId: uuid(n + 30), timeMs: s + 200_300.25, data: { fixtureKind: "retry" }, fixtureAttempt }),
+          firestoreFrame({
+            handler: "fsRetryV2",
+            generation: 2,
+            project: PRODUCTION_PROJECT,
+            path: retry,
+            eventId: uuid(n + 30),
+            timeMs: s + 200_300.25,
+            data: { fixtureKind: "retry" },
+            fixtureAttempt,
+          }),
           s + (fixtureAttempt === "failed" ? 202_000 : 215_000),
         ),
       );
@@ -66,21 +119,60 @@ function world() {
     const after = `fe_events_primary/${docId(salt + 4)}`;
     const retry = `fe_events_primary/${docId(salt + 5)}`;
     const both = (path, base, timeMs) => ({
-      v1: [firestoreFrame({ handler: "fsCreatedV1", generation: 1, project: LOCAL_PROJECT, path, eventId: uuid(base + 1), timeMs })],
-      v2: [firestoreFrame({ handler: "fsCreatedV2", generation: 2, project: LOCAL_PROJECT, path, eventId: uuid(base + 2), timeMs })],
+      v1: [
+        firestoreFrame({
+          handler: "fsCreatedV1",
+          generation: 1,
+          project: LOCAL_PROJECT,
+          path,
+          eventId: uuid(base + 1),
+          timeMs,
+        }),
+      ],
+      v2: [
+        firestoreFrame({
+          handler: "fsCreatedV2",
+          generation: 2,
+          project: LOCAL_PROJECT,
+          path,
+          eventId: uuid(base + 2),
+          timeMs,
+        }),
+      ],
     });
     const key = (path) => ({ kind: "firestore", value: path });
     const subject = () =>
-      localOp({ scenarioId: "fs-create", matchKey: key(create), readback: { exists: true, path: create }, ...both(create, salt + 10, T0 + 7.5) });
+      localOp({
+        scenarioId: "fs-create",
+        matchKey: key(create),
+        readback: { exists: true, path: create },
+        ...both(create, salt + 10, T0 + 7.5),
+      });
     return localSession([
       { recipeId: "functions-events/firestore/create", operations: [subject()] },
       {
         recipeId: "functions-events/firestore/routing",
         operations: [
           subject(),
-          localOp({ scenarioId: "fs-create", role: "positive-control-before", matchKey: key(before), readback: { exists: true, path: before }, ...both(before, salt + 20, T0 + 9.25) }),
-          localOp({ scenarioId: "fs-other-path", matchKey: key(other), readback: { exists: true, path: other } }),
-          localOp({ scenarioId: "fs-create", role: "positive-control-after", matchKey: key(after), readback: { exists: true, path: after }, ...both(after, salt + 30, T0 + 11.5) }),
+          localOp({
+            scenarioId: "fs-create",
+            role: "positive-control-before",
+            matchKey: key(before),
+            readback: { exists: true, path: before },
+            ...both(before, salt + 20, T0 + 9.25),
+          }),
+          localOp({
+            scenarioId: "fs-other-path",
+            matchKey: key(other),
+            readback: { exists: true, path: other },
+          }),
+          localOp({
+            scenarioId: "fs-create",
+            role: "positive-control-after",
+            matchKey: key(after),
+            readback: { exists: true, path: after },
+            ...both(after, salt + 30, T0 + 11.5),
+          }),
         ],
       },
       {
@@ -91,7 +183,16 @@ function world() {
             matchKey: key(retry),
             readback: { exists: true, path: retry },
             v2: ["failed", "succeeded"].map((fixtureAttempt) =>
-              firestoreFrame({ handler: "fsRetryV2", generation: 2, project: LOCAL_PROJECT, path: retry, eventId: uuid(salt + 40), timeMs: T0 + 13.75, data: { fixtureKind: "retry" }, fixtureAttempt }),
+              firestoreFrame({
+                handler: "fsRetryV2",
+                generation: 2,
+                project: LOCAL_PROJECT,
+                path: retry,
+                eventId: uuid(salt + 40),
+                timeMs: T0 + 13.75,
+                data: { fixtureKind: "retry" },
+                fixtureAttempt,
+              }),
             ),
           }),
         ],
@@ -120,7 +221,10 @@ test("rows cover every frozen case id once, named recipe#case#vN for the closure
   const result = compare(world());
   const caseIds = programs.programs.flatMap((program) => program.caseIds);
   assert.equal(result.rows.length, caseIds.length);
-  assert.deepEqual(result.rows.map(({ caseId }) => caseId), caseIds);
+  assert.deepEqual(
+    result.rows.map(({ caseId }) => caseId),
+    caseIds,
+  );
   for (const row of result.rows) {
     const program = programs.programs.find((candidate) => candidate.caseIds.includes(row.caseId));
     assert.equal(row.row, `${program.recipeId}#${row.case}#v${row.generation}`);
@@ -137,8 +241,13 @@ test("rows cover every frozen case id once, named recipe#case#vN for the closure
 
 test("agreeing production passes and local profiles MATCH; volatile paths come from the passes", () => {
   const result = compare(world());
-  for (const recipe of ["functions-events/firestore/create", "functions-events/firestore/routing", "functions-events/delivery/retry"]) {
-    for (const row of rowsOf(result, recipe)) assert.equal(row.status, "MATCH", `${row.row}: ${row.reasons.join("; ")}`);
+  for (const recipe of [
+    "functions-events/firestore/create",
+    "functions-events/firestore/routing",
+    "functions-events/delivery/retry",
+  ]) {
+    for (const row of rowsOf(result, recipe))
+      assert.equal(row.status, "MATCH", `${row.row}: ${row.reasons.join("; ")}`);
   }
   assert.deepEqual(result.volatilePaths["fsCreatedV2/fs-create"], {
     "$.frame.event.data.createTime._seconds": ["value"],
@@ -155,17 +264,27 @@ test("a case with no production observation is INCOMPLETE with a reason, never M
   const row = rowById(result, "functions-events/firestore/update#changed-field#v1");
   assert.equal(row.status, "INCOMPLETE");
   assert.ok(row.reasons.includes("production pass 1: 0 subject operations for fs-update"));
-  assert.ok(row.reasons.includes("emulator: local session has no functions-events/firestore/update program"));
+  assert.ok(
+    row.reasons.includes(
+      "emulator: local session has no functions-events/firestore/update program",
+    ),
+  );
 });
 
 test("Gen1 and Gen2 are compared per generation, never against each other", () => {
   const w = world();
-  w.run.frames = w.run.frames.filter((entry) => !(entry.handler === "fsCreatedV2" && entry.frame.event.subject.endsWith(docId(101))));
+  w.run.frames = w.run.frames.filter(
+    (entry) => !(entry.handler === "fsCreatedV2" && entry.frame.event.subject.endsWith(docId(101))),
+  );
   const result = compare(w);
   const rows = statuses(rowsOf(result, "functions-events/firestore/create"));
   assert.equal(rows["functions-events/firestore/create#new-document#v1"], "MATCH");
   assert.equal(rows["functions-events/firestore/create#new-document#v2"], "INCOMPLETE");
-  assert.ok(rowById(result, "functions-events/firestore/create#new-document#v2").reasons.includes("production pass 1: no fsCreatedV2 frame in the 120 s window"));
+  assert.ok(
+    rowById(result, "functions-events/firestore/create#new-document#v2").reasons.includes(
+      "production pass 1: no fsCreatedV2 frame in the 120 s window",
+    ),
+  );
 });
 
 test("a deterministic local difference is a DIFF naming the path, profile by profile", () => {
@@ -183,8 +302,14 @@ test("a deterministic local difference is a DIFF naming the path, profile by pro
   const v1 = rowById(result, "functions-events/firestore/create#new-document#v1");
   assert.equal(v1.status, "DIFF");
   assert.equal(v1.reasons.length, 1);
-  assert.match(v1.reasons[0], /^strict: value \$\.frame\.event\.context\.eventType \(production string#[0-9a-f]{12}, local string#[0-9a-f]{12}\)$/);
-  assert.equal(rowById(result, "functions-events/firestore/create#new-document#v2").status, "MATCH");
+  assert.match(
+    v1.reasons[0],
+    /^strict: value \$\.frame\.event\.context\.eventType \(production string#[0-9a-f]{12}, local string#[0-9a-f]{12}\)$/,
+  );
+  assert.equal(
+    rowById(result, "functions-events/firestore/create#new-document#v2").status,
+    "MATCH",
+  );
   assert.equal(result.conditions["FUNCTIONS-EVENTS/firestore-created"], "DIFF");
 });
 
@@ -197,12 +322,19 @@ test("a local frame with a field production never showed is a DIFF, not silently
   subject.framesByGeneration.v2[0].rawJson = JSON.stringify(frame);
   const row = rowById(compare(w), "functions-events/firestore/create#new-document#v2");
   assert.equal(row.status, "DIFF");
-  assert.deepEqual(row.reasons, ["emulator: extra-field $.frame.event.data.extra", "emulator: missing-field $.frame.event.datacontenttype"]);
+  assert.deepEqual(row.reasons, [
+    "emulator: extra-field $.frame.event.data.extra",
+    "emulator: missing-field $.frame.event.datacontenttype",
+  ]);
 });
 
 test("production passes that disagree on presence or type make the row INCOMPLETE", () => {
   const w = world();
-  const pass2 = w.run.frames.find((entry) => entry.handler === "fsCreatedV1" && entry.frame.event.context.resource.name.endsWith(docId(201)));
+  const pass2 = w.run.frames.find(
+    (entry) =>
+      entry.handler === "fsCreatedV1" &&
+      entry.frame.event.context.resource.name.endsWith(docId(201)),
+  );
   pass2.frame.event.context.authType = "ADMIN";
   pass2.frame.event.data.data.count = "1";
   const row = rowById(compare(w), "functions-events/firestore/create#new-document#v1");
@@ -218,7 +350,11 @@ test("a source call that did not return the corpus result is INCOMPLETE; a local
   w.run.passes[1].operations[0].sourceResult = "typed-refusal";
   const row = rowById(compare(w), "functions-events/firestore/create#new-document#v1");
   assert.equal(row.status, "INCOMPLETE");
-  assert.ok(row.reasons.includes("production pass 2: source call returned typed-refusal, the corpus expects typed-success"));
+  assert.ok(
+    row.reasons.includes(
+      "production pass 2: source call returned typed-refusal, the corpus expects typed-success",
+    ),
+  );
 
   const local = world();
   local.emulator.programs[0].operations[0].sourceResult = "typed-absent";
@@ -229,11 +365,19 @@ test("a source call that did not return the corpus result is INCOMPLETE; a local
 
 test("a positive frame after the window is a DIFF, not a pass", () => {
   const w = world();
-  const entry = w.run.frames.find((frame) => frame.handler === "fsCreatedV1" && frame.frame.event.context.resource.name.endsWith(docId(101)));
+  const entry = w.run.frames.find(
+    (frame) =>
+      frame.handler === "fsCreatedV1" &&
+      frame.frame.event.context.resource.name.endsWith(docId(101)),
+  );
   entry.logTimestamp = new Date(T0 + 60_000 + 1000 + 120_001).toISOString();
   const row = rowById(compare(w), "functions-events/firestore/create#new-document#v1");
   assert.equal(row.status, "DIFF");
-  assert.ok(row.reasons.includes("production pass 1: 1 fsCreatedV1 frame(s) arrived after the 120 s window"));
+  assert.ok(
+    row.reasons.includes(
+      "production pass 1: 1 fsCreatedV1 frame(s) arrived after the 120 s window",
+    ),
+  );
 });
 
 test("negative case: a production delivery anywhere after the call is a DIFF, late or not", () => {
@@ -241,40 +385,92 @@ test("negative case: a production delivery anywhere after the call is a DIFF, la
     const w = world();
     const s = T0 + 60_000;
     w.run.frames.push(
-      frameEntry(firestoreFrame({ handler: "fsCreatedV2", generation: 2, project: PRODUCTION_PROJECT, path: `fe_events_control/${docId(102)}`, eventId: uuid(7), timeMs: s + 10_500 }), s + 10_000 + logOffset),
+      frameEntry(
+        firestoreFrame({
+          handler: "fsCreatedV2",
+          generation: 2,
+          project: PRODUCTION_PROJECT,
+          path: `fe_events_control/${docId(102)}`,
+          eventId: uuid(7),
+          timeMs: s + 10_500,
+        }),
+        s + 10_000 + logOffset,
+      ),
     );
-    w.run.passes[0].operations[1].matchKey = { kind: "firestore", value: `fe_events_control/${docId(102)}` };
+    w.run.passes[0].operations[1].matchKey = {
+      kind: "firestore",
+      value: `fe_events_control/${docId(102)}`,
+    };
     const row = rowById(compare(w), "functions-events/firestore/routing#nonmatching-path#v2");
     assert.equal(row.status, "DIFF", `${logOffset}`);
-    assert.ok(row.reasons.includes("production pass 1: fsCreatedV2 delivered 1 frame(s) on a no-event case"));
-    assert.equal(rowById(compare(w), "functions-events/firestore/routing#nonmatching-path#v1").status, "MATCH");
+    assert.ok(
+      row.reasons.includes(
+        "production pass 1: fsCreatedV2 delivered 1 frame(s) on a no-event case",
+      ),
+    );
+    assert.equal(
+      rowById(compare(w), "functions-events/firestore/routing#nonmatching-path#v1").status,
+      "MATCH",
+    );
   }
 });
 
 test("negative case: positive controls before the operation and after the window are required", () => {
   const before = world();
-  before.run.frames = before.run.frames.filter((entry) => !(entry.handler === "fsCreatedV2" && entry.frame.event.subject.endsWith(docId(101))));
-  const missingBefore = rowById(compare(before), "functions-events/firestore/routing#nonmatching-path#v2");
+  before.run.frames = before.run.frames.filter(
+    (entry) => !(entry.handler === "fsCreatedV2" && entry.frame.event.subject.endsWith(docId(101))),
+  );
+  const missingBefore = rowById(
+    compare(before),
+    "functions-events/firestore/routing#nonmatching-path#v2",
+  );
   assert.equal(missingBefore.status, "INCOMPLETE");
-  assert.ok(missingBefore.reasons.includes("production pass 1: no positive fsCreatedV2 frame before the operation"));
+  assert.ok(
+    missingBefore.reasons.includes(
+      "production pass 1: no positive fsCreatedV2 frame before the operation",
+    ),
+  );
 
   const after = world();
-  const control = after.run.frames.find((entry) => entry.handler === "fsCreatedV2" && entry.frame.event.subject.endsWith(docId(103)));
+  const control = after.run.frames.find(
+    (entry) => entry.handler === "fsCreatedV2" && entry.frame.event.subject.endsWith(docId(103)),
+  );
   control.logTimestamp = new Date(T0 + 60_000 + 11_000 + 120_000).toISOString();
-  const missingAfter = rowById(compare(after), "functions-events/firestore/routing#nonmatching-path#v2");
+  const missingAfter = rowById(
+    compare(after),
+    "functions-events/firestore/routing#nonmatching-path#v2",
+  );
   assert.equal(missingAfter.status, "INCOMPLETE");
-  assert.ok(missingAfter.reasons.includes("production pass 1: no positive fsCreatedV2 frame after the window"));
+  assert.ok(
+    missingAfter.reasons.includes(
+      "production pass 1: no positive fsCreatedV2 frame after the window",
+    ),
+  );
 });
 
 test("negative case: a frame of the handler that correlates with no operation leaves the absence unproven", () => {
   const w = world();
   const s = T0 + 60_000;
   w.run.frames.push(
-    frameEntry(firestoreFrame({ handler: "fsCreatedV1", generation: 1, project: PRODUCTION_PROJECT, path: "fe_events_primary/unknown", eventId: uuid(8), timeMs: s + 50_000 }), s + 51_000),
+    frameEntry(
+      firestoreFrame({
+        handler: "fsCreatedV1",
+        generation: 1,
+        project: PRODUCTION_PROJECT,
+        path: "fe_events_primary/unknown",
+        eventId: uuid(8),
+        timeMs: s + 50_000,
+      }),
+      s + 51_000,
+    ),
   );
   const row = rowById(compare(w), "functions-events/firestore/routing#nonmatching-path#v1");
   assert.equal(row.status, "INCOMPLETE");
-  assert.ok(row.reasons.includes("production pass 1: 1 fsCreatedV1 frame(s) correlate with no operation during or after the observation"));
+  assert.ok(
+    row.reasons.includes(
+      "production pass 1: 1 fsCreatedV1 frame(s) correlate with no operation during or after the observation",
+    ),
+  );
   assert.equal(compare(w).frameAccounting.foreign, 1);
 });
 
@@ -283,20 +479,57 @@ test("frames of the subject resource from other mutations are not the subject's;
   const s = T0 + 60_000;
   const path = `fe_events_primary/${docId(101)}`;
   cleanup.run.frames.push(
-    frameEntry(firestoreFrame({ handler: "fsCreatedV1", generation: 1, project: PRODUCTION_PROJECT, path, eventId: uuid(9), timeMs: s - 30_000 }), s - 29_000),
-    frameEntry(firestoreFrame({ handler: "fsCreatedV1", generation: 1, project: PRODUCTION_PROJECT, path, eventId: uuid(10), timeMs: s + 600_000 }), s + 601_000),
+    frameEntry(
+      firestoreFrame({
+        handler: "fsCreatedV1",
+        generation: 1,
+        project: PRODUCTION_PROJECT,
+        path,
+        eventId: uuid(9),
+        timeMs: s - 30_000,
+      }),
+      s - 29_000,
+    ),
+    frameEntry(
+      firestoreFrame({
+        handler: "fsCreatedV1",
+        generation: 1,
+        project: PRODUCTION_PROJECT,
+        path,
+        eventId: uuid(10),
+        timeMs: s + 600_000,
+      }),
+      s + 601_000,
+    ),
   );
   const lifecycle = compare(cleanup);
-  assert.equal(rowById(lifecycle, "functions-events/firestore/create#new-document#v1").status, "MATCH");
+  assert.equal(
+    rowById(lifecycle, "functions-events/firestore/create#new-document#v1").status,
+    "MATCH",
+  );
   assert.equal(lifecycle.frameAccounting.lifecycle, 2);
 
   const near = world();
   near.run.frames.push(
-    frameEntry(firestoreFrame({ handler: "fsCreatedV1", generation: 1, project: PRODUCTION_PROJECT, path, eventId: uuid(11), timeMs: s - 400 }), s + 1500),
+    frameEntry(
+      firestoreFrame({
+        handler: "fsCreatedV1",
+        generation: 1,
+        project: PRODUCTION_PROJECT,
+        path,
+        eventId: uuid(11),
+        timeMs: s - 400,
+      }),
+      s + 1500,
+    ),
   );
   const row = rowById(compare(near), "functions-events/firestore/create#new-document#v1");
   assert.equal(row.status, "INCOMPLETE");
-  assert.ok(row.reasons.includes("production pass 1: 1 fsCreatedV1 frame(s) of the subject cannot be attributed (no event time, or within 1000 ms of the source call)"));
+  assert.ok(
+    row.reasons.includes(
+      "production pass 1: 1 fsCreatedV1 frame(s) of the subject cannot be attributed (no event time, or within 1000 ms of the source call)",
+    ),
+  );
 });
 
 test("negative case: a local delivery is a DIFF and a missing local control is INCOMPLETE", () => {
@@ -304,17 +537,29 @@ test("negative case: a local delivery is a DIFF and a missing local control is I
   const routing = delivered.emulator.programs[1].operations;
   routing[2].framesByGeneration.v1 = routing[0].framesByGeneration.v1.map((entry) => ({
     ...entry,
-    rawJson: entry.rawJson.split(docId(901)).join(docId(903)).split("fe_events_primary").join("fe_events_control"),
+    rawJson: entry.rawJson
+      .split(docId(901))
+      .join(docId(903))
+      .split("fe_events_primary")
+      .join("fe_events_control"),
   }));
-  const diff = rowById(compare(delivered), "functions-events/firestore/routing#nonmatching-path#v1");
+  const diff = rowById(
+    compare(delivered),
+    "functions-events/firestore/routing#nonmatching-path#v1",
+  );
   assert.equal(diff.status, "DIFF");
   assert.ok(diff.reasons.includes("emulator: fsCreatedV1 delivered 1 frame(s) on a no-event case"));
 
   const control = world();
   control.strict.programs[1].operations[3].framesByGeneration.v2 = [];
-  const incomplete = rowById(compare(control), "functions-events/firestore/routing#nonmatching-path#v2");
+  const incomplete = rowById(
+    compare(control),
+    "functions-events/firestore/routing#nonmatching-path#v2",
+  );
   assert.equal(incomplete.status, "INCOMPLETE");
-  assert.ok(incomplete.reasons.includes("strict: no positive fsCreatedV2 control after the operation"));
+  assert.ok(
+    incomplete.reasons.includes("strict: no positive fsCreatedV2 control after the operation"),
+  );
 });
 
 test("retry compares event identity across the failed and succeeded frames (E9)", () => {
@@ -327,14 +572,26 @@ test("retry compares event identity across the failed and succeeded frames (E9)"
   assert.equal(rows.length, 4);
   for (const row of rows) {
     assert.equal(row.status, "DIFF");
-    assert.ok(row.reasons.some((reason) => reason.startsWith("emulator: value $.retry.sameEventId ")), row.reasons.join("; "));
+    assert.ok(
+      row.reasons.some((reason) => reason.startsWith("emulator: value $.retry.sameEventId ")),
+      row.reasons.join("; "),
+    );
   }
 
   const unfinished = world();
-  unfinished.run.frames = unfinished.run.frames.filter((entry) => !(entry.handler === "fsRetryV2" && entry.frame.event.data.fixtureAttempt === "succeeded" && entry.frame.event.subject.endsWith(docId(204))));
+  unfinished.run.frames = unfinished.run.frames.filter(
+    (entry) =>
+      !(
+        entry.handler === "fsRetryV2" &&
+        entry.frame.event.data.fixtureAttempt === "succeeded" &&
+        entry.frame.event.subject.endsWith(docId(204))
+      ),
+  );
   for (const row of rowsOf(compare(unfinished), "functions-events/delivery/retry")) {
     assert.equal(row.status, "INCOMPLETE");
-    assert.ok(row.reasons.includes("production pass 2: no succeeded fsRetryV2 attempt in the 600 s window"));
+    assert.ok(
+      row.reasons.includes("production pass 2: no succeeded fsRetryV2 attempt in the 600 s window"),
+    );
   }
 });
 
@@ -359,7 +616,16 @@ test("the condition result is the worst row of its cases", () => {
 
 test("the result never carries a raw id or time from either side", () => {
   const text = JSON.stringify(compare(world()));
-  for (const raw of [docId(101), docId(201), docId(901), uuid(111), uuid(912), "2026-10-04T00:01:00.500123Z", PRODUCTION_PROJECT, LOCAL_PROJECT]) {
+  for (const raw of [
+    docId(101),
+    docId(201),
+    docId(901),
+    uuid(111),
+    uuid(912),
+    "2026-10-04T00:01:00.500123Z",
+    PRODUCTION_PROJECT,
+    LOCAL_PROJECT,
+  ]) {
     assert.equal(text.includes(raw), false, raw);
   }
 });
@@ -369,15 +635,35 @@ test("inconsistent frozen inputs are refused", () => {
   const bad = structuredClone(programs);
   bad.programs[0].caseIds.push("FUNCTIONS-EVENTS/firestore-created#unknown#v1");
   assert.throws(
-    () => compareRuns({ corpus, programs: bad, productionRun: w.run, localSessions: { emulator: w.emulator, strict: w.strict }, localProject: LOCAL_PROJECT }),
+    () =>
+      compareRuns({
+        corpus,
+        programs: bad,
+        productionRun: w.run,
+        localSessions: { emulator: w.emulator, strict: w.strict },
+        localProject: LOCAL_PROJECT,
+      }),
     /unknown case/,
   );
   assert.throws(
-    () => compareRuns({ corpus, programs, productionRun: w.run, localSessions: { emulator: w.emulator, strict: w.strict } }),
+    () =>
+      compareRuns({
+        corpus,
+        programs,
+        productionRun: w.run,
+        localSessions: { emulator: w.emulator, strict: w.strict },
+      }),
     /localProject/,
   );
   assert.throws(
-    () => compareRuns({ corpus, programs, productionRun: w.run, localSessions: { emulator: w.emulator }, localProject: LOCAL_PROJECT }),
+    () =>
+      compareRuns({
+        corpus,
+        programs,
+        productionRun: w.run,
+        localSessions: { emulator: w.emulator },
+        localProject: LOCAL_PROJECT,
+      }),
     /strict/,
   );
 });

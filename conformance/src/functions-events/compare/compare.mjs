@@ -43,7 +43,10 @@ function attribute(production, toleranceMs) {
         entry.nearOf.push(op);
       } else if (frame.eventMs >= op.startMs && frame.eventMs <= op.endMs) {
         entry.subjectOf.push(op);
-      } else if (frame.eventMs >= op.startMs - toleranceMs && frame.eventMs <= op.endMs + toleranceMs) {
+      } else if (
+        frame.eventMs >= op.startMs - toleranceMs &&
+        frame.eventMs <= op.endMs + toleranceMs
+      ) {
         entry.nearOf.push(op);
       }
     }
@@ -54,14 +57,16 @@ function attribute(production, toleranceMs) {
 const byLogTime = (a, b) => a.logMs - b.logMs || byText(a.insertId, b.insertId);
 
 function retryObservation(frames, label, handler, windowSeconds, frameOf) {
-  const attempts = (kind) => frames.filter((frame) => frameOf(frame).event?.data?.fixtureAttempt === kind);
+  const attempts = (kind) =>
+    frames.filter((frame) => frameOf(frame).event?.data?.fixtureAttempt === kind);
   const failed = attempts("failed");
   const succeeded = attempts("succeeded");
   if (failed.length + succeeded.length !== frames.length) {
     return incomplete(`${label}: ${handler} frame(s) without a fixture attempt`);
   }
   const missing = [];
-  if (failed.length === 0) missing.push(`${label}: no failed ${handler} attempt in the ${windowSeconds} s window`);
+  if (failed.length === 0)
+    missing.push(`${label}: no failed ${handler} attempt in the ${windowSeconds} s window`);
   if (succeeded.length === 0) {
     missing.push(`${label}: no succeeded ${handler} attempt in the ${windowSeconds} s window`);
   }
@@ -83,7 +88,15 @@ function retryObservation(frames, label, handler, windowSeconds, frameOf) {
   });
 }
 
-function observeProductionPass({ production, attribution, pass, row, scenario, handler, toleranceMs }) {
+function observeProductionPass({
+  production,
+  attribution,
+  pass,
+  row,
+  scenario,
+  handler,
+  toleranceMs,
+}) {
   const label = `production pass ${pass.pass}`;
   const subjects = pass.operations.filter(
     (op) => op.scenarioId === scenario.id && op.role === "subject",
@@ -121,12 +134,15 @@ function observeProductionPass({ production, attribution, pass, row, scenario, h
 
   if (row.delivery === NEGATIVE) {
     if (subject.length > 0) {
-      return result("DIFF", [`${label}: ${handler} delivered ${subject.length} frame(s) on a no-event case`]);
+      return result("DIFF", [
+        `${label}: ${handler} delivered ${subject.length} frame(s) on a no-event case`,
+      ]);
     }
     if (reasons.length > 0) return incomplete([...new Set(reasons)]);
     const foreign = handlerFrames.filter(
       (frame) =>
-        attribution.get(frame).resourceOf.length === 0 && !(frame.logMs !== null && frame.logMs < op.startMs),
+        attribution.get(frame).resourceOf.length === 0 &&
+        !(frame.logMs !== null && frame.logMs < op.startMs),
     );
     if (foreign.length > 0) {
       reasons.push(
@@ -145,7 +161,9 @@ function observeProductionPass({ production, attribution, pass, row, scenario, h
       reasons.push(`${label}: no positive ${handler} frame after the window`);
     }
     if (reasons.length > 0) return incomplete(reasons);
-    return result("OK", [], { observation: applyPlaceholders({ ...base, delivered: false }, table) });
+    return result("OK", [], {
+      observation: applyPlaceholders({ ...base, delivered: false }, table),
+    });
   }
 
   const late = subject.filter((frame) => frame.logMs > windowEnd);
@@ -214,26 +232,36 @@ function observeLocal({ local, profile, row, scenario, handler, localProject }) 
   const table = placeholderTable({ matchKey: op.matchKey, project: localProject });
   if (row.delivery === NEGATIVE) {
     if (frames.length > 0) {
-      return result("DIFF", [`${profile}: ${handler} delivered ${frames.length} frame(s) on a no-event case`]);
+      return result("DIFF", [
+        `${profile}: ${handler} delivered ${frames.length} frame(s) on a no-event case`,
+      ]);
     }
     const reasons = [];
-    if (!localControl(program.operations, op.index, -1, "positive-control-before", row.generation)) {
+    if (
+      !localControl(program.operations, op.index, -1, "positive-control-before", row.generation)
+    ) {
       reasons.push(`${profile}: no positive ${handler} control before the operation`);
     }
     if (!localControl(program.operations, op.index, 1, "positive-control-after", row.generation)) {
       reasons.push(`${profile}: no positive ${handler} control after the operation`);
     }
     if (reasons.length > 0) return incomplete(reasons);
-    return result("OK", [], { observation: applyPlaceholders({ ...base, delivered: false }, table) });
+    return result("OK", [], {
+      observation: applyPlaceholders({ ...base, delivered: false }, table),
+    });
   }
   if (frames.length === 0) return incomplete(`${profile}: no local ${handler} frame`);
   const strip = ({ frame }) => splitProductionOnly(frame).frame;
   if (row.delivery === RETRY) {
     const retry = retryObservation(frames, profile, handler, row.window.maximumSeconds, strip);
     if (retry.status !== "OK") return retry;
-    return result("OK", [], { observation: applyPlaceholders({ ...base, ...retry.observation }, table) });
+    return result("OK", [], {
+      observation: applyPlaceholders({ ...base, ...retry.observation }, table),
+    });
   }
-  return result("OK", [], { observation: applyPlaceholders({ ...base, frame: strip(frames[0]) }, table) });
+  return result("OK", [], {
+    observation: applyPlaceholders({ ...base, frame: strip(frames[0]) }, table),
+  });
 }
 
 function mergeListings(listings) {
@@ -247,7 +275,9 @@ function mergeListings(listings) {
 }
 
 function plainVolatile(volatile) {
-  return Object.fromEntries([...volatile.entries()].map(([path, features]) => [path, [...features]]));
+  return Object.fromEntries(
+    [...volatile.entries()].map(([path, features]) => [path, [...features]]),
+  );
 }
 
 function frozenCases({ corpus, programs }) {
@@ -290,11 +320,14 @@ export function compareRuns({
     throw new TypeError("localProject (the project id of the local sessions) is required");
   }
   for (const profile of PROFILES) {
-    if (!localSessions?.[profile]) throw new TypeError(`local session for profile ${profile} is required`);
+    if (!localSessions?.[profile])
+      throw new TypeError(`local session for profile ${profile} is required`);
   }
   const frozen = frozenCases({ corpus, programs });
   const production = fromProductionRun(productionRun);
-  const locals = Object.fromEntries(PROFILES.map((profile) => [profile, fromLocalSession(localSessions[profile])]));
+  const locals = Object.fromEntries(
+    PROFILES.map((profile) => [profile, fromLocalSession(localSessions[profile])]),
+  );
   const attribution = attribute(production, toleranceMs);
   const volatilePaths = {};
   const rows = frozen.map(({ row, handler, scenario }) => {
@@ -323,7 +356,12 @@ export function compareRuns({
       } else {
         PROFILES.forEach((profile, index) => {
           if (localResults[index].status !== "OK") return;
-          const found = compareObservation(reference, volatile, flatten(localResults[index].observation), profile);
+          const found = compareObservation(
+            reference,
+            volatile,
+            flatten(localResults[index].observation),
+            profile,
+          );
           if (found.length > 0) {
             statuses.push("DIFF");
             reasons.push(...found);
@@ -348,25 +386,40 @@ export function compareRuns({
   });
 
   const conditions = {};
-  for (const row of rows) conditions[row.conditionId] = worstStatus([conditions[row.conditionId] ?? "MATCH", row.status]);
+  for (const row of rows)
+    conditions[row.conditionId] = worstStatus([conditions[row.conditionId] ?? "MATCH", row.status]);
   const count = (status) => rows.filter((row) => row.status === status).length;
-  const handlers = new Set(programs.programs.flatMap((program) => Object.values(program.handlerExports)));
+  const handlers = new Set(
+    programs.programs.flatMap((program) => Object.values(program.handlerExports)),
+  );
   const entries = production.frames.map((frame) => attribution.get(frame));
   return {
     rows,
-    summary: { rows: rows.length, match: count("MATCH"), diff: count("DIFF"), incomplete: count("INCOMPLETE") },
-    volatilePaths: Object.fromEntries(Object.entries(volatilePaths).sort(([a], [b]) => byText(a, b))),
+    summary: {
+      rows: rows.length,
+      match: count("MATCH"),
+      diff: count("DIFF"),
+      incomplete: count("INCOMPLETE"),
+    },
+    volatilePaths: Object.fromEntries(
+      Object.entries(volatilePaths).sort(([a], [b]) => byText(a, b)),
+    ),
     conditions: Object.fromEntries(Object.entries(conditions).sort(([a], [b]) => byText(a, b))),
     frameAccounting: {
       frames: production.frames.length,
       duplicateReads: production.duplicateFrames,
       withIssues: production.frames.filter((frame) => frame.issues.length > 0).length,
-      unknownHandlers: [...new Set(production.frames.map((frame) => frame.handler).filter((name) => !handlers.has(name)))]
+      unknownHandlers: [
+        ...new Set(
+          production.frames.map((frame) => frame.handler).filter((name) => !handlers.has(name)),
+        ),
+      ]
         .map(String)
         .sort(byText),
       foreign: entries.filter((entry) => entry.resourceOf.length === 0).length,
       lifecycle: entries.filter(
-        (entry) => entry.resourceOf.length > 0 && entry.subjectOf.length === 0 && entry.nearOf.length === 0,
+        (entry) =>
+          entry.resourceOf.length > 0 && entry.subjectOf.length === 0 && entry.nearOf.length === 0,
       ).length,
       unattributable: entries.filter((entry) => entry.nearOf.length > 0).length,
       multiplyAttributed: entries.filter((entry) => entry.subjectOf.length > 1).length,

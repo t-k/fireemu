@@ -103,11 +103,14 @@ function sameFormatVariant(random, value) {
 }
 
 function varyPaths(random, value, chosen, path = "$") {
-  if (Array.isArray(value)) return value.map((child, i) => varyPaths(random, child, chosen, `${path}[${i}]`));
+  if (Array.isArray(value))
+    return value.map((child, i) => varyPaths(random, child, chosen, `${path}[${i}]`));
   if (value !== null && typeof value === "object") {
     const out = {};
     for (const [key, child] of Object.entries(value)) {
-      const next = /^[A-Za-z_][A-Za-z0-9_]*$/.test(key) ? `${path}.${key}` : `${path}[${JSON.stringify(key)}]`;
+      const next = /^[A-Za-z_][A-Za-z0-9_]*$/.test(key)
+        ? `${path}.${key}`
+        : `${path}[${JSON.stringify(key)}]`;
       out[key] = varyPaths(random, child, chosen, next);
     }
     return out;
@@ -116,7 +119,9 @@ function varyPaths(random, value, chosen, path = "$") {
 }
 
 function primitivePaths(leaves) {
-  return [...leaves].filter(([, leaf]) => leaf.type !== "object" && leaf.type !== "array").map(([path]) => path);
+  return [...leaves]
+    .filter(([, leaf]) => leaf.type !== "object" && leaf.type !== "array")
+    .map(([path]) => path);
 }
 
 function forEachCase(name, body) {
@@ -151,12 +156,17 @@ test("property: placeholder replacement never hides, adds or retypes a field", (
 test("property: splitting the listing removes exactly the listing subtrees", () => {
   const listingRoots = PRODUCTION_ONLY_PATHS.map((segments) => `$.${segments.join(".")}`);
   const underListing = (path) =>
-    listingRoots.some((root) => path === root || path.startsWith(`${root}.`) || path.startsWith(`${root}[`));
+    listingRoots.some(
+      (root) => path === root || path.startsWith(`${root}.`) || path.startsWith(`${root}[`),
+    );
   forEachCase("listing", (random) => {
     const { frame } = randomFrame(random);
     const all = [...flatten(frame).keys()];
     const kept = [...flatten(splitProductionOnly(frame).frame).keys()];
-    assert.deepEqual(kept, all.filter((path) => !underListing(path)));
+    assert.deepEqual(
+      kept,
+      all.filter((path) => !underListing(path)),
+    );
   });
 });
 
@@ -177,7 +187,10 @@ test("property: MATCH and DIFF are symmetric between the two sides", () => {
     if (random() < 0.5) b.event.extra = random() < 0.5 ? 1 : "x";
     const la = flatten(a);
     const lb = flatten(b);
-    const volatile = deriveVolatile(la, flatten(varyPaths(random, a, new Set(primitivePaths(la).filter(() => random() < 0.3))))).volatile;
+    const volatile = deriveVolatile(
+      la,
+      flatten(varyPaths(random, a, new Set(primitivePaths(la).filter(() => random() < 0.3)))),
+    ).volatile;
     const forward = compareObservation(la, volatile, lb, "x");
     const backward = compareObservation(lb, volatile, la, "x");
     assert.equal(forward.length === 0, backward.length === 0);
@@ -187,7 +200,10 @@ test("property: MATCH and DIFF are symmetric between the two sides", () => {
         .replace("missing-field", "extra-field#")
         .replace(/^x: extra-field /, "x: missing-field ")
         .replace("extra-field#", "extra-field");
-    assert.deepEqual(new Set(forward.map(mirror)), new Set(backward.map((reason) => reason.replace(/ \(.*\)$/, ""))));
+    assert.deepEqual(
+      new Set(forward.map(mirror)),
+      new Set(backward.map((reason) => reason.replace(/ \(.*\)$/, ""))),
+    );
   });
 });
 
@@ -210,17 +226,26 @@ test("property: masking a volatile value never hides a missing field or a change
     const pass1 = randomFrame(random).frame;
     const leaves = flatten(pass1);
     const primitives = primitivePaths(leaves);
-    const { volatile } = deriveVolatile(leaves, flatten(varyPaths(random, pass1, new Set(primitives))));
+    const { volatile } = deriveVolatile(
+      leaves,
+      flatten(varyPaths(random, pass1, new Set(primitives))),
+    );
     const removed = new Map(leaves);
-    const victim = pick(random, [...leaves.keys()].filter((path) => path !== "$"));
+    const victim = pick(
+      random,
+      [...leaves.keys()].filter((path) => path !== "$"),
+    );
     if (!victim) return;
-    for (const path of [...removed.keys()]) {
-      if (path === victim || path.startsWith(`${victim}.`) || path.startsWith(`${victim}[`)) removed.delete(path);
+    for (const path of removed.keys()) {
+      if (path === victim || path.startsWith(`${victim}.`) || path.startsWith(`${victim}[`))
+        removed.delete(path);
     }
     const reasons = compareObservation(leaves, volatile, removed, "emulator");
     assert.ok(reasons.includes(`emulator: missing-field ${victim}`), `${victim} hidden`);
 
-    const strings = primitives.filter((path) => leaves.get(path).type === "string" && volatile.has(path));
+    const strings = primitives.filter(
+      (path) => leaves.get(path).type === "string" && volatile.has(path),
+    );
     if (strings.length === 0) return;
     const target = pick(random, strings);
     const longer = new Map(leaves);
@@ -228,8 +253,14 @@ test("property: masking a volatile value never hides a missing field or a change
     const features = volatile.get(target);
     const lengthStable = !features.has("length") && !features.has("kind");
     const changed = compareObservation(leaves, volatile, longer, "emulator");
-    if (lengthStable && formatOf(`${leaves.get(target).value}9`).kind === formatOf(leaves.get(target).value).kind) {
-      assert.ok(changed.some((reason) => reason.startsWith(`emulator: format ${target} length`)), `${target} length hidden`);
+    if (
+      lengthStable &&
+      formatOf(`${leaves.get(target).value}9`).kind === formatOf(leaves.get(target).value).kind
+    ) {
+      assert.ok(
+        changed.some((reason) => reason.startsWith(`emulator: format ${target} length`)),
+        `${target} length hidden`,
+      );
     } else {
       assert.ok(changed.length > 0 || features.has("length") || features.has("kind"));
     }

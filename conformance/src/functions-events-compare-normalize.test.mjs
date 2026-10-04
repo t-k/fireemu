@@ -22,7 +22,11 @@ test("placeholder table covers the matchKey roles, the project and their URI for
   ]);
 
   const storage = placeholderTable({
-    matchKey: { kind: "storage", value: "fe-events/e1.txt", bucket: "demo-conformance-events-primary" },
+    matchKey: {
+      kind: "storage",
+      value: "fe-events/e1.txt",
+      bucket: "demo-conformance-events-primary",
+    },
     project: "demo-conformance",
   });
   assert.deepEqual(
@@ -42,8 +46,12 @@ test("placeholder table covers the matchKey roles, the project and their URI for
 });
 
 test("placeholder table refuses an empty or missing role value", () => {
-  assert.throws(() => placeholderTable({ matchKey: { kind: "firestore", value: "" }, project: "p" }));
-  assert.throws(() => placeholderTable({ matchKey: { kind: "firestore", value: "a/b" }, project: "" }));
+  assert.throws(() =>
+    placeholderTable({ matchKey: { kind: "firestore", value: "" }, project: "p" }),
+  );
+  assert.throws(() =>
+    placeholderTable({ matchKey: { kind: "firestore", value: "a/b" }, project: "" }),
+  );
   assert.throws(() => placeholderTable({ matchKey: null, project: "p" }));
 });
 
@@ -98,16 +106,10 @@ test("splitting the production-only listing removes only the four named members 
 
 test("flatten records every path with its type, object member order and array length", () => {
   const leaves = flatten({ b: 1, a: { "x.y": [true, null] }, e: {}, s: "t" });
-  assert.deepEqual([...leaves.keys()], [
-    "$",
-    "$.b",
-    "$.a",
-    '$.a["x.y"]',
-    '$.a["x.y"][0]',
-    '$.a["x.y"][1]',
-    "$.e",
-    "$.s",
-  ]);
+  assert.deepEqual(
+    [...leaves.keys()],
+    ["$", "$.b", "$.a", '$.a["x.y"]', '$.a["x.y"][0]', '$.a["x.y"][1]', "$.e", "$.s"],
+  );
   assert.deepEqual(leaves.get("$"), { type: "object", keys: ["b", "a", "e", "s"] });
   assert.deepEqual(leaves.get('$.a["x.y"]'), { type: "array", length: 2 });
   assert.deepEqual(leaves.get('$.a["x.y"][1]'), { type: "null", value: null });
@@ -142,8 +144,18 @@ test("format descriptors keep precision, length and kind but not the value", () 
 });
 
 test("volatile paths come only from values that differ between the two production passes", () => {
-  const pass1 = flatten({ id: "111", time: "2026-01-01T00:00:00.123Z", kind: "k", n: { a: 1, b: 2 } });
-  const pass2 = flatten({ id: "222", time: "2026-01-01T00:00:01.456Z", kind: "k", n: { b: 2, a: 1 } });
+  const pass1 = flatten({
+    id: "111",
+    time: "2026-01-01T00:00:00.123Z",
+    kind: "k",
+    n: { a: 1, b: 2 },
+  });
+  const pass2 = flatten({
+    id: "222",
+    time: "2026-01-01T00:00:01.456Z",
+    kind: "k",
+    n: { b: 2, a: 1 },
+  });
   const { disagreements, volatile } = deriveVolatile(pass1, pass2);
   assert.deepEqual(disagreements, []);
   assert.deepEqual(
@@ -186,20 +198,33 @@ test("local comparison reports deterministic value, presence, type, format and o
     flatten({ id: "4444", kind: "other", gen: "1", n: { b: 2, a: 1 }, extra: true }),
     "strict",
   );
-  assert.deepEqual(reasons.map((reason) => reason.split(" (")[0]), [
-    "strict: extra-field $.extra",
-    "strict: format $.gen length",
-    "strict: format $.id length",
-    "strict: value $.kind",
-    "strict: order $.n",
-  ]);
+  assert.deepEqual(
+    reasons.map((reason) => reason.split(" (")[0]),
+    [
+      "strict: extra-field $.extra",
+      "strict: format $.gen length",
+      "strict: format $.id length",
+      "strict: value $.kind",
+      "strict: order $.n",
+    ],
+  );
   for (const reason of reasons) {
     assert.equal(reason.includes("other"), false, "raw values never appear in a reason");
     assert.equal(reason.includes("1790844566471739"), false);
   }
 
-  const missing = compareObservation(production, volatile, flatten({ kind: "k", gen: "1790844566471999", n: { a: 1, b: 2 } }), "emulator");
+  const missing = compareObservation(
+    production,
+    volatile,
+    flatten({ kind: "k", gen: "1790844566471999", n: { a: 1, b: 2 } }),
+    "emulator",
+  );
   assert.deepEqual(missing, ["emulator: missing-field $.id"]);
-  const typed = compareObservation(production, volatile, flatten({ id: 333, kind: "k", gen: "1790844566471999", n: { a: 1, b: 2 } }), "emulator");
+  const typed = compareObservation(
+    production,
+    volatile,
+    flatten({ id: 333, kind: "k", gen: "1790844566471999", n: { a: 1, b: 2 } }),
+    "emulator",
+  );
   assert.deepEqual(typed, ["emulator: type $.id (production string, local number)"]);
 });

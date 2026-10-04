@@ -105,3 +105,13 @@ test("a body over the limit or not JSON on a 2xx is unreadable and therefore unk
   assert.equal((await transport.request(spec())).kind, "unknown");
   assert.equal((await transport.request(spec({ id: "t.2" }))).kind, "unknown");
 });
+
+test("the OAuth requests name the sandbox project as the quota project; the API-key and ID-token calls do not", async () => {
+  const { transport, calls } = setup({ replies: [fakeResponse(200, {}), fakeResponse(200, { localId: "u", idToken: "I" }), fakeResponse(200, {})] });
+  await transport.request(spec());
+  assert.equal(calls[0].init.headers["x-goog-user-project"], PROJECT);
+  await transport.request(spec({ id: "k", method: "POST", url: "https://identitytoolkit.googleapis.com/v1/accounts:signUp", auth: "apikey", mutation: true, body: {}, capture: { idToken: "$.idToken" } }));
+  assert.equal(calls[1].init.headers["x-goog-user-project"], undefined);
+  await transport.request(spec({ id: "i", auth: "idtoken" }));
+  assert.equal(calls[2].init.headers["x-goog-user-project"], undefined);
+});

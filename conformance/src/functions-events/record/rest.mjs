@@ -7,6 +7,7 @@ import { appendFileSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 import { destination } from "./guard.mjs";
+import { PROJECT } from "./script.mjs";
 
 export const TIMEOUT_MS = 60_000;
 export const MAX_BODY_BYTES = 1024 * 1024;
@@ -86,7 +87,8 @@ export function createTransport({ fetch: send = fetch, token, apiKey, directory,
     }
     const headers = { accept: "application/json", ...(resolved.headers ?? {}) };
     let url = resolved.url;
-    if (resolved.auth === "oauth") headers.authorization = `Bearer ${await token()}`;
+    // The owner's authorized-user credential is billed and quota-checked against the sandbox project, not the client project of the gcloud login.
+    if (resolved.auth === "oauth") Object.assign(headers, { authorization: `Bearer ${await token()}`, "x-goog-user-project": PROJECT });
     else if (resolved.auth === "idtoken") headers.authorization = `Bearer ${resolveText("${idToken}", vars)}`;
     else if (resolved.auth === "apikey") url += `${url.includes("?") ? "&" : "?"}key=${encodeURIComponent(apiKey)}`;
     // auth "none" (the token refresh itself) sends no credential header.

@@ -42,7 +42,7 @@ use fireemu_core_storage::name::{BucketName, ObjectName};
 use fireemu_core_storage::store::{
     CustomMetadataPatch, MetadataPatch, NewMetadata, ObjectMetadata, Precondition, PreparedObject,
     StorageError, StorageEvent, StorageState as ObjectStore, UploadAdmission, UploadId,
-    UploadOptions, UploadPhase, DEFAULT_LIST_PAGE_SIZE,
+    UploadOptions, UploadPhase, VersionsCursor, DEFAULT_LIST_PAGE_SIZE,
 };
 use fireemu_core_types::determinism::Clock;
 use fireemu_core_types::ids::ProjectId;
@@ -411,6 +411,31 @@ impl StoreGuard<'_> {
         Ok(metadata)
     }
 
+    /// Updates the metadata of one generation by number through the source/outbox publication
+    /// boundary (a noncurrent version announces nothing).
+    pub fn update_generation_metadata(
+        &mut self,
+        bucket: &BucketName,
+        name: &ObjectName,
+        generation: u64,
+        patch: &MetadataPatch,
+        pre: Precondition,
+        now: LogicalInstant,
+    ) -> Result<ObjectMetadata, StorageError> {
+        let sink = self.sink.cloned();
+        let (metadata, publication) = self.guard.update_generation_metadata_with_admission(
+            bucket,
+            name,
+            generation,
+            patch,
+            pre,
+            now,
+            |events| Self::reserve_event(sink.as_ref(), events),
+        )?;
+        publication.publish();
+        Ok(metadata)
+    }
+
     /// Adds a download token through the source/outbox publication boundary.
     pub fn add_download_token(
         &mut self,
@@ -503,6 +528,29 @@ impl StoreGuard<'_> {
                 .copy_with_admission(source, destination, metadata, pre, now, |events| {
                     Self::reserve_event(sink.as_ref(), events)
                 })?;
+        publication.publish();
+        Ok(metadata)
+    }
+
+    /// Copies one generation of an object (the live one or a noncurrent version) through the
+    /// source/outbox publication boundary.
+    pub fn copy_generation(
+        &mut self,
+        source: (&BucketName, &ObjectName, Option<u64>),
+        destination: (&BucketName, &ObjectName),
+        metadata: Option<NewMetadata>,
+        pre: Precondition,
+        now: LogicalInstant,
+    ) -> Result<ObjectMetadata, StorageError> {
+        let sink = self.sink.cloned();
+        let (metadata, publication) = self.guard.copy_generation_with_admission(
+            source,
+            destination,
+            metadata,
+            pre,
+            now,
+            |events| Self::reserve_event(sink.as_ref(), events),
+        )?;
         publication.publish();
         Ok(metadata)
     }
@@ -1685,6 +1733,10 @@ fn firebase_json(m: &ObjectMetadata) -> Value {
 /// inside `metadata.firebaseStorageDownloadTokens`, and the member is dropped when there is
 /// nothing to carry.
 /// [`gcs_json`] for a generation that may be noncurrent: `timeDeleted` marks one that is.
+/// The object resource of one generation. `timeDeleted` is a field of the documented GCS object
+/// resource, set on a noncurrent version; UNRECORDED: no production body of a noncurrent version
+/// (its time format, the rest of its fields) was observed, so it is the live resource's shape plus
+/// `timeDeleted` printed like the other times.
 fn gcs_json_version(m: &ObjectMetadata, time_deleted: Option<LogicalInstant>, host: &str) -> Value {
     let mut v = gcs_json(m, host);
     if let Some(at) = time_deleted {
@@ -2420,19 +2472,6 @@ fn u64_param(params: &BTreeMap<String, String>, key: &str) -> Result<Option<u64>
             .parse::<u64>()
             .map(Some)
             .map_err(|_| gcs_json_error(400, &format!("invalid {key}: {v:?}"), "invalid")),
-    }
-}
-
-/// Applies a `generation` / `sourceGeneration` selector (JSON API only): a generation other
-/// than the current one is not available (historical versions are not kept).
-fn select_generation(
-    meta: Option<ObjectMetadata>,
-    params: &BTreeMap<String, String>,
-    key: &str,
-) -> Result<Option<ObjectMetadata>, StorageResponse> {
-    match u64_param(params, key)? {
-        Some(g) => Ok(meta.filter(|m| m.generation == g)),
-        None => Ok(meta),
     }
 }
 
@@ -3981,10 +4020,24 @@ fn gcs_list_buckets(state: &StorageState, host: &str) -> Outcome {
     ))
 }
 
+/// Whether the local store knows `bucket`: the project's default buckets always exist, any other
+/// bucket exists once it holds an object or was configured. The store has no bucket registry, so
+/// this is the local model of "the bucket exists": production answers 404 for a bucket that does
+/// not (the status is production's; the message is UNRECORDED), and an empty bucket nobody
+/// configured is unknown here, so enabling versioning on one is a 404 until it holds an object.
+fn bucket_exists(state: &StorageState, store: &ObjectStore, bucket: &BucketName) -> bool {
+    let name = bucket.as_str();
+    name == format!("{}.appspot.com", state.project)
+        || name == format!("{}.firebasestorage.app", state.project)
+        || store.bucket_known(bucket)
+}
+
 /// `GET` and `PATCH /storage/v1/b/{bucket}`: the bucket resource with its `versioning`. `PATCH`
 /// accepts `versioning.enabled` only; any other field is refused rather than ignored, so a caller
-/// never believes it configured something this store does not model. `fields` narrows the answer
-/// to the named top-level fields.
+/// never believes it configured something this store does not model (a strict over-refusal:
+/// production accepts `labels`, `lifecycle` and more). UNRECORDED: the 400 bodies of those
+/// refusals and the 404 of a bucket that does not exist. `fields` narrows the answer as the JSON
+/// API's partial-response syntax does: `a,b`, `a/b` and `a(b,c)`.
 fn gcs_bucket(
     state: &StorageState,
     bucket: &str,
@@ -3994,6 +4047,17 @@ fn gcs_bucket(
     host: &str,
 ) -> Outcome {
     let b = bucket_name(bucket)?;
+    let exists = {
+        let store = state.store()?;
+        bucket_exists(state, &store, &b)
+    };
+    if !exists {
+        return Err(gcs_json_error(
+            404,
+            "The specified bucket does not exist.",
+            "notFound",
+        ));
+    }
     if method == "PATCH" {
         let body: Value = if req.body.is_empty() {
             Value::Object(Map::new())
@@ -4034,21 +4098,97 @@ fn gcs_bucket(
     let versioning = state.store()?.versioning(&b);
     let resource = bucket_resource(bucket, versioning, &rfc3339(state.now()), host);
     let resource = match params.get("fields") {
-        Some(fields) => {
-            let wanted: Vec<&str> = fields.split(',').map(str::trim).collect();
-            Value::Object(
-                resource
-                    .as_object()
-                    .into_iter()
-                    .flatten()
-                    .filter(|(key, _)| wanted.contains(&key.as_str()))
-                    .map(|(key, value)| (key.clone(), value.clone()))
-                    .collect(),
-            )
-        }
+        Some(fields) => project_fields(&resource, &FieldMask::parse(fields)),
         None => resource,
     };
     Ok(StorageResponse::json(200, &resource))
+}
+
+/// A `fields` partial-response selector: each name keeps its whole value (`None`) or only the
+/// selected parts of an object (`Some`). `*` selects every name at its level.
+#[derive(Default)]
+struct FieldMask(BTreeMap<String, Option<FieldMask>>);
+
+impl FieldMask {
+    fn parse(spec: &str) -> Self {
+        let mut mask = Self::default();
+        for selector in split_top_level(spec) {
+            mask.add(selector.trim());
+        }
+        mask
+    }
+
+    fn add(&mut self, selector: &str) {
+        let Some(at) = selector.find(['/', '(']) else {
+            if !selector.is_empty() {
+                self.0.insert(selector.to_owned(), None);
+            }
+            return;
+        };
+        let (name, rest) = selector.split_at(at);
+        let mut sub = match self.0.remove(name.trim()) {
+            // A name selected whole stays whole.
+            Some(None) => {
+                self.0.insert(name.trim().to_owned(), None);
+                return;
+            }
+            Some(Some(existing)) => existing,
+            None => Self::default(),
+        };
+        if let Some(inner) = rest.strip_prefix('(') {
+            let inner = inner.strip_suffix(')').unwrap_or(inner);
+            for part in split_top_level(inner) {
+                sub.add(part.trim());
+            }
+        } else {
+            sub.add(rest[1..].trim());
+        }
+        self.0.insert(name.trim().to_owned(), Some(sub));
+    }
+}
+
+/// Splits `spec` at the commas outside parentheses.
+fn split_top_level(spec: &str) -> Vec<&str> {
+    let mut parts = Vec::new();
+    let (mut depth, mut start) = (0usize, 0usize);
+    for (index, c) in spec.char_indices() {
+        match c {
+            '(' => depth += 1,
+            ')' => depth = depth.saturating_sub(1),
+            ',' if depth == 0 => {
+                parts.push(&spec[start..index]);
+                start = index + 1;
+            }
+            _ => {}
+        }
+    }
+    parts.push(&spec[start..]);
+    parts
+}
+
+fn project_fields(value: &Value, mask: &FieldMask) -> Value {
+    match value {
+        Value::Object(map) => Value::Object(
+            map.iter()
+                .filter_map(|(key, inner)| {
+                    let selected = mask.0.get(key).or_else(|| mask.0.get("*"))?;
+                    Some((
+                        key.clone(),
+                        selected
+                            .as_ref()
+                            .map_or_else(|| inner.clone(), |sub| project_fields(inner, sub)),
+                    ))
+                })
+                .collect(),
+        ),
+        Value::Array(items) => Value::Array(
+            items
+                .iter()
+                .map(|item| project_fields(item, mask))
+                .collect(),
+        ),
+        other => other.clone(),
+    }
 }
 
 fn gcs_list(
@@ -4101,7 +4241,7 @@ fn gcs_list(
     }
     let store = state.store()?;
     if params.get("versions").map(String::as_str) == Some("true") {
-        return Ok(list_versions_page(
+        return list_versions_page(
             &store,
             &b,
             &prefix,
@@ -4109,7 +4249,7 @@ fn gcs_list(
             page_token.as_deref(),
             max_results,
             host,
-        ));
+        );
     }
     let page = store.list(
         &b,
@@ -4133,8 +4273,10 @@ fn gcs_list(
 
 /// `versions=true`: every generation, live and noncurrent, ordered by name then generation, with
 /// `timeDeleted` on the noncurrent ones. Delimiter folding and paging follow the live listing's
-/// shape; the page token here is an opaque offset into the folded sequence (production's token
-/// is unrecorded).
+/// shape. UNRECORDED: production's page token for a versions listing. Here it is a cursor naming
+/// the first entry of the next page (`i:<generation>:<name>` or `p:<prefix>`), so a write between
+/// two pages never makes the listing skip or repeat an entry; a token that does not read is a 400
+/// (also unrecorded: the body is invented), where the live listing restarts at the top.
 fn list_versions_page(
     store: &ObjectStore,
     bucket: &BucketName,
@@ -4143,56 +4285,72 @@ fn list_versions_page(
     page_token: Option<&str>,
     max_results: Option<usize>,
     host: &str,
-) -> StorageResponse {
-    enum Entry {
-        Item(usize),
-        Prefix(String),
-    }
-    let versions = store.list_versions(bucket, prefix);
-    let mut sequence: Vec<Entry> = Vec::new();
-    for (index, version) in versions.iter().enumerate() {
-        let rest = &version.object.name.as_str()[prefix.len()..];
-        match (!delimiter.is_empty())
-            .then(|| rest.find(delimiter))
-            .flatten()
-        {
-            Some(at) => {
-                let folded = format!("{prefix}{}{delimiter}", &rest[..at]);
-                if !matches!(sequence.last(), Some(Entry::Prefix(last)) if *last == folded) {
-                    sequence.push(Entry::Prefix(folded));
-                }
-            }
-            None => sequence.push(Entry::Item(index)),
-        }
-    }
+) -> Outcome {
+    let from = page_token
+        .filter(|token| !token.is_empty())
+        .map(versions_cursor)
+        .transpose()?;
     let size = max_results.unwrap_or(1000).min(1000);
-    let start = page_token
-        .and_then(|token| token.parse::<usize>().ok())
-        .unwrap_or(0)
-        .min(sequence.len());
-    let end = start.saturating_add(size).min(sequence.len());
+    let page = store.list_versions_page(bucket, prefix, delimiter, from.as_ref(), size);
     let mut body = json!({"kind": "storage#objects"});
-    if end < sequence.len() {
-        body["nextPageToken"] = Value::String(end.to_string());
+    if let Some(next) = &page.next {
+        body["nextPageToken"] = Value::String(versions_token(next));
     }
-    let mut items = Vec::new();
-    let mut prefixes = Vec::new();
-    for entry in &sequence[start..end] {
-        match entry {
-            Entry::Item(index) => {
-                let version = &versions[*index];
-                items.push(gcs_json_version(version.object, version.time_deleted, host));
-            }
-            Entry::Prefix(folded) => prefixes.push(folded.clone()),
-        }
+    if !page.prefixes.is_empty() {
+        body["prefixes"] = json!(page.prefixes);
     }
-    if !prefixes.is_empty() {
-        body["prefixes"] = json!(prefixes);
+    if !page.items.is_empty() {
+        body["items"] = Value::Array(
+            page.items
+                .iter()
+                .map(|version| gcs_json_version(version.object, version.time_deleted, host))
+                .collect(),
+        );
     }
-    if !items.is_empty() {
-        body["items"] = Value::Array(items);
+    Ok(StorageResponse::json(200, &body))
+}
+
+fn versions_token(cursor: &VersionsCursor) -> String {
+    match cursor {
+        VersionsCursor::Item { name, generation } => format!("i:{generation}:{name}"),
+        VersionsCursor::Prefix(prefix) => format!("p:{prefix}"),
     }
-    StorageResponse::json(200, &body)
+}
+
+fn versions_cursor(token: &str) -> Result<VersionsCursor, StorageResponse> {
+    let cursor = if let Some(prefix) = token.strip_prefix("p:") {
+        Some(VersionsCursor::Prefix(prefix.to_owned()))
+    } else {
+        token
+            .strip_prefix("i:")
+            .and_then(|rest| rest.split_once(':'))
+            .and_then(|(generation, name)| {
+                Some(VersionsCursor::Item {
+                    name: name.to_owned(),
+                    generation: generation.parse().ok()?,
+                })
+            })
+    };
+    cursor.ok_or_else(|| gcs_json_error(400, "Invalid pageToken", "invalid"))
+}
+
+/// The generation a `PATCH` / `PUT` changes. A `generation` names the version to change, live or
+/// noncurrent (a noncurrent one leaves the live object alone). An unknown generation is not found
+/// in the strict profile; the official emulator never reads the selector and patches the live
+/// object, which the emulator profile keeps doing rather than refuse what it completes.
+fn patch_target(
+    state: &StorageState,
+    store: &ObjectStore,
+    (bucket, name): (&str, &str),
+    (b, n): (&BucketName, &ObjectName),
+    params: &BTreeMap<String, String>,
+) -> Result<u64, StorageResponse> {
+    let live = store.get(b, n).map(|live| live.generation);
+    match u64_param(params, "generation")? {
+        Some(generation) if store.generation(b, n, generation).is_some() => Ok(generation),
+        Some(_) if state.is_strict() => Err(gcs_no_such_object(bucket, name, false)),
+        _ => live.ok_or_else(|| gcs_no_such_object(bucket, name, false)),
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -4217,7 +4375,9 @@ fn gcs_object(
     match method {
         "GET" => {
             let store = state.store()?;
-            // A generation by number may be a noncurrent version of a versioned bucket.
+            // A generation by number may be a noncurrent version of a versioned bucket
+            // (UNRECORDED: production's answer for a noncurrent generation was not observed; the
+            // live generation by number is recorded, lean-v4).
             let (meta, time_deleted) = match u64_param(params, "generation")? {
                 Some(generation) => store
                     .generation(&b, &n, generation)
@@ -4284,13 +4444,11 @@ fn gcs_object(
             };
             let pre = precondition(state, params)?;
             let mut store = state.store()?;
-            if store.get(&b, &n).is_none() {
-                return Ok(gcs_no_such_object(bucket, name, false));
-            }
+            let target = patch_target(state, &store, (bucket, name), (&b, &n), params)?;
             let patch = patch_from_json(&body, method == "PUT")
                 .map_err(|e| gcs_json_error(400, &e, "invalid"))?;
             let m = store
-                .update_metadata(&b, &n, &patch, pre, now)
+                .update_generation_metadata(&b, &n, target, &patch, pre, now)
                 .map_err(gcs_core_err)?;
             Ok(StorageResponse::json(200, &gcs_json(&m, host)))
         }
@@ -4317,6 +4475,22 @@ fn gcs_object(
             Ok(StorageResponse::empty(204))
         }
         _ => Ok(plain_status(501)),
+    }
+}
+
+/// The object a copy reads: the live one, or the generation `sourceGeneration` names (a noncurrent
+/// version of a versioned bucket is a valid source).
+fn copy_source(
+    store: &ObjectStore,
+    bucket: &BucketName,
+    name: &ObjectName,
+    generation: Option<u64>,
+) -> Option<ObjectMetadata> {
+    match generation {
+        Some(generation) => store
+            .generation(bucket, name, generation)
+            .map(|(object, _)| object.clone()),
+        None => store.get(bucket, name).cloned(),
     }
 }
 
@@ -4350,8 +4524,10 @@ fn gcs_copy(
     let mut store = state.store()?;
     let source_pre = precondition_named(state, params, "ifSource")?;
     let pre = precondition(state, params)?;
-    let selected = select_generation(store.get(&b, &n).cloned(), params, "sourceGeneration")?;
-    let Some(src) = selected else {
+    // The source may be a noncurrent version of a versioned bucket: restoring an old generation
+    // is a copy of it over the live name. A generation that is neither is not found.
+    let source_generation = u64_param(params, "sourceGeneration")?;
+    let Some(src) = copy_source(&store, &b, &n, source_generation) else {
         return Ok(gcs_no_such_object(bucket, name, false));
     };
     source_pre.check(Some(&src)).map_err(gcs_core_err)?;
@@ -4418,11 +4594,22 @@ fn gcs_copy(
             .insert(TOKENS_KEY.to_owned(), src.download_tokens.join(","));
     }
     let m = store
-        .copy((&b, &n), (&db, &dn), Some(meta), pre, now)
+        .copy_generation(
+            (&b, &n, source_generation),
+            (&db, &dn),
+            Some(meta),
+            pre,
+            now,
+        )
         .map_err(gcs_core_err)?;
-    let resource = gcs_json(&m, host);
+    Ok(copy_response(rewrite, &m, host))
+}
+
+/// The answer of a copy (the object resource) or a rewrite (a finished `storage#rewriteResponse`).
+fn copy_response(rewrite: bool, m: &ObjectMetadata, host: &str) -> StorageResponse {
+    let resource = gcs_json(m, host);
     if rewrite {
-        Ok(StorageResponse::json(
+        StorageResponse::json(
             200,
             &json!({
                 "kind": "storage#rewriteResponse",
@@ -4431,9 +4618,9 @@ fn gcs_copy(
                 "done": true,
                 "resource": resource,
             }),
-        ))
+        )
     } else {
-        Ok(StorageResponse::json(200, &resource))
+        StorageResponse::json(200, &resource)
     }
 }
 

@@ -170,9 +170,11 @@ fn generations_metagenerations_and_preconditions() {
             StorageEvent::Archived { .. } => "archived",
         })
         .collect();
+    // The overwrite announces the replaced generation as deleted before the new one is
+    // finalized (documented, unrecorded; see `put_events`).
     assert_eq!(
         events,
-        vec!["finalized", "metadata", "finalized", "deleted"]
+        vec!["finalized", "metadata", "deleted", "finalized", "deleted"]
     );
 }
 

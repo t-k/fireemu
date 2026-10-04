@@ -669,7 +669,8 @@ fn a_bucket_that_does_not_exist_is_not_found_and_patching_it_stores_nothing() {
         assert_eq!(call(&s, "GET", ghost, b"").status, 404);
         let r = call(&s, "PATCH", ghost, br#"{"versioning":{"enabled":true}}"#);
         assert_eq!(r.status, 404, "{}", String::from_utf8_lossy(&r.body));
-        assert_eq!(body(&r)["error"]["status"], "NOT_FOUND");
+        assert_eq!(body(&r)["error"]["code"], 404);
+        assert_eq!(body(&r)["error"]["errors"][0]["reason"], "notFound");
         assert_eq!(
             call(&s, "GET", ghost, b"").status,
             404,

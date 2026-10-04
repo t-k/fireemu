@@ -8,7 +8,8 @@ use std::collections::BTreeMap;
 
 use fireemu_core_storage::name::{BucketName, ObjectName};
 use fireemu_core_storage::store::{
-    NewMetadata, ObjectMetadata, Precondition, StorageError, StorageEvent, StorageState,
+    MetadataPatch, NewMetadata, ObjectMetadata, Precondition, StorageError, StorageEvent,
+    StorageState, VersionsCursor,
 };
 use fireemu_core_types::time::LogicalInstant;
 use proptest::prelude::*;
@@ -589,4 +590,349 @@ fn the_resource_gauges_count_noncurrent_bytes_and_a_bucket_that_holds_only_versi
     assert_eq!(gauge(&store, "objects.bytes"), 12);
     let roots = store.resources(|_| true, RootBudget::DEFAULT).roots;
     assert_eq!(roots.total, 1, "the bucket is still reported: {roots:?}");
+}
+
+#[test]
+fn a_noncurrent_generation_can_be_the_source_of_a_copy() {
+    let mut store = StorageState::new(1);
+    let b = bucket();
+    store.set_versioning(&b, true);
+    let one = put(&mut store, &b, "o.txt", "one", 1);
+    let two = put(&mut store, &b, "o.txt", "two", 2);
+    let _ = store.drain_events();
+    let (restored, ()) = store
+        .copy_generation_with_admission(
+            (&b, &name("o.txt"), Some(one.generation)),
+            (&b, &name("o.txt")),
+            None,
+            Precondition::default(),
+            t(3),
+            |_| Ok(()),
+        )
+        .unwrap();
+    assert_eq!(store.bytes(&restored), b"one");
+    assert!(restored.generation > two.generation);
+    assert_eq!(
+        kinds(&store.drain_events()),
+        vec![
+            ("archived", two.generation),
+            ("finalized", restored.generation)
+        ]
+    );
+    // The live generation by number is the plain copy; an unknown one is not found and the
+    // admission closure never runs.
+    let live = store
+        .copy_generation_with_admission(
+            (&b, &name("o.txt"), Some(restored.generation)),
+            (&b, &name("live.txt")),
+            None,
+            Precondition::default(),
+            t(4),
+            |_| Ok(()),
+        )
+        .unwrap()
+        .0;
+    assert_eq!(store.bytes(&live), b"one");
+    let mut asked = false;
+    let missing = store.copy_generation_with_admission(
+        (&b, &name("o.txt"), Some(424_242)),
+        (&b, &name("x.txt")),
+        None,
+        Precondition::default(),
+        t(5),
+        |_| {
+            asked = true;
+            Ok(())
+        },
+    );
+    assert_eq!(missing.err(), Some(StorageError::NotFound));
+    assert!(!asked);
+}
+
+#[test]
+fn patching_a_noncurrent_generation_leaves_the_live_object_and_announces_nothing() {
+    let mut store = StorageState::new(1);
+    let b = bucket();
+    store.set_versioning(&b, true);
+    let one = put(&mut store, &b, "o.txt", "one", 1);
+    let two = put(&mut store, &b, "o.txt", "two", 2);
+    let _ = store.drain_events();
+    let patch = MetadataPatch {
+        content_type: Some(Some("text/x-old".to_owned())),
+        ..MetadataPatch::default()
+    };
+    let mut batch_len = None;
+    let (patched, ()) = store
+        .update_generation_metadata_with_admission(
+            &b,
+            &name("o.txt"),
+            one.generation,
+            &patch,
+            Precondition::default(),
+            t(3),
+            |events| {
+                batch_len = Some(events.len());
+                Ok(())
+            },
+        )
+        .unwrap();
+    assert_eq!(batch_len, Some(0), "nothing is announced");
+    assert_eq!(patched.generation, one.generation);
+    assert_eq!(patched.metageneration, one.metageneration + 1);
+    assert_eq!(patched.content_type, "text/x-old");
+    assert_eq!(patched.updated, t(3));
+    let live = store.get(&b, &name("o.txt")).unwrap();
+    assert_eq!(live.generation, two.generation);
+    assert_eq!(live.metageneration, two.metageneration);
+    assert_eq!(live.content_type, two.content_type);
+    let (kept, deleted_at) = store
+        .generation(&b, &name("o.txt"), one.generation)
+        .unwrap();
+    assert_eq!(kept.content_type, "text/x-old");
+    assert_eq!(
+        deleted_at,
+        Some(t(2)),
+        "it stopped being live at the overwrite"
+    );
+    assert!(store.drain_events().is_empty());
+    // A precondition on the noncurrent generation is checked against it.
+    let stale = store.update_generation_metadata_with_admission(
+        &b,
+        &name("o.txt"),
+        one.generation,
+        &patch,
+        Precondition {
+            if_metageneration_match: Some(1),
+            ..Precondition::default()
+        },
+        t(4),
+        |_| Ok(()),
+    );
+    assert!(stale.is_err(), "the metageneration moved to 2");
+    // The live generation by number is a plain metadata update; an unknown one is not found.
+    let (live_patched, ()) = store
+        .update_generation_metadata_with_admission(
+            &b,
+            &name("o.txt"),
+            two.generation,
+            &patch,
+            Precondition::default(),
+            t(5),
+            |_| Ok(()),
+        )
+        .unwrap();
+    assert_eq!(live_patched.metageneration, two.metageneration + 1);
+    assert_eq!(
+        kinds(&store.drain_events()),
+        vec![("metadata", two.generation)]
+    );
+    assert_eq!(
+        store
+            .update_generation_metadata_with_admission(
+                &b,
+                &name("o.txt"),
+                424_242,
+                &patch,
+                Precondition::default(),
+                t(6),
+                |_| Ok(()),
+            )
+            .err(),
+        Some(StorageError::NotFound)
+    );
+}
+
+#[test]
+fn a_bucket_is_known_when_it_holds_an_object_or_was_configured() {
+    let mut store = StorageState::new(1);
+    let b = bucket();
+    let other = BucketName::try_new("other-bucket").unwrap();
+    assert!(!store.bucket_known(&b));
+    put(&mut store, &b, "o.txt", "x", 1);
+    assert!(store.bucket_known(&b));
+    assert!(!store.bucket_known(&other), "another bucket is not known");
+    // A bucket whose only content is noncurrent versions is still known.
+    store.set_versioning(&other, true);
+    assert!(store.bucket_known(&other), "configured");
+    put(&mut store, &other, "o.txt", "x", 2);
+    store
+        .delete(&other, &name("o.txt"), Precondition::default(), t(3))
+        .unwrap();
+    store.set_versioning(&other, false);
+    assert!(store.get(&other, &name("o.txt")).is_none());
+    assert!(
+        store.bucket_known(&other),
+        "holds a noncurrent version only"
+    );
+    store
+        .delete_generation(
+            &other,
+            &name("o.txt"),
+            store.noncurrent_versions(&other, &name("o.txt"))[0]
+                .object
+                .generation,
+            Precondition::default(),
+        )
+        .unwrap();
+    assert!(!store.bucket_known(&other), "nothing left");
+}
+
+/// Pages through a versions listing and returns the pages' entries as strings:
+/// `name#generation` for an item, the prefix itself for a folded prefix.
+fn page_through(
+    store: &StorageState,
+    b: &BucketName,
+    prefix: &str,
+    delimiter: &str,
+    size: usize,
+) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut cursor: Option<VersionsCursor> = None;
+    for _ in 0..1000 {
+        let page = store.list_versions_page(b, prefix, delimiter, cursor.as_ref(), size);
+        assert!(page.items.len() + page.prefixes.len() <= size);
+        // Items and prefixes are separate lists; rebuild the order the page was cut in (by name,
+        // then by generation).
+        let mut entries: Vec<(String, u64, String)> = page
+            .items
+            .iter()
+            .map(|v| {
+                (
+                    v.object.name.as_str().to_owned(),
+                    v.object.generation,
+                    format!("{}#{}", v.object.name.as_str(), v.object.generation),
+                )
+            })
+            .chain(page.prefixes.iter().map(|p| (p.clone(), 0, p.clone())))
+            .collect();
+        entries.sort();
+        out.extend(entries.into_iter().map(|(_, _, entry)| entry));
+        match page.next {
+            Some(next) => cursor = Some(next),
+            None => return out,
+        }
+    }
+    panic!("a listing that never ends");
+}
+
+#[test]
+fn a_versions_page_resumes_at_its_cursor_through_prefixes_and_generations() {
+    let mut store = StorageState::new(1);
+    let b = bucket();
+    store.set_versioning(&b, true);
+    let a1 = put(&mut store, &b, "dir/a.txt", "1", 1);
+    let a2 = put(&mut store, &b, "dir/a.txt", "22", 2);
+    let b1 = put(&mut store, &b, "dir/b.txt", "3", 3);
+    let top1 = put(&mut store, &b, "top.txt", "4", 4);
+    let top2 = put(&mut store, &b, "top.txt", "5", 5);
+    // Unfolded: every generation, in order.
+    let all = vec![
+        format!("dir/a.txt#{}", a1.generation),
+        format!("dir/a.txt#{}", a2.generation),
+        format!("dir/b.txt#{}", b1.generation),
+        format!("top.txt#{}", top1.generation),
+        format!("top.txt#{}", top2.generation),
+    ];
+    for size in 1..=6 {
+        assert_eq!(page_through(&store, &b, "", "", size), all, "size {size}");
+    }
+    // Folded at `/`: the prefix once, however many generations it hides, and never again on a
+    // later page.
+    let folded = vec![
+        "dir/".to_owned(),
+        format!("top.txt#{}", top1.generation),
+        format!("top.txt#{}", top2.generation),
+    ];
+    for size in 1..=4 {
+        assert_eq!(
+            page_through(&store, &b, "", "/", size),
+            folded,
+            "size {size}"
+        );
+    }
+    // A prefix filter, with a cursor in the middle of an object's generations.
+    assert_eq!(
+        page_through(&store, &b, "top", "", 1),
+        vec![
+            format!("top.txt#{}", top1.generation),
+            format!("top.txt#{}", top2.generation)
+        ]
+    );
+    let first = store.list_versions_page(&b, "", "", None, 2);
+    assert_eq!(
+        first.next,
+        Some(VersionsCursor::Item {
+            name: "dir/b.txt".to_owned(),
+            generation: b1.generation
+        })
+    );
+    // A page of size zero names the first entry and holds nothing.
+    let empty = store.list_versions_page(&b, "", "", None, 0);
+    assert!(empty.items.is_empty() && empty.prefixes.is_empty());
+    assert!(empty.next.is_some());
+    // The listing of an empty bucket, and one past the end.
+    let nobody = BucketName::try_new("nobody").unwrap();
+    assert_eq!(
+        store.list_versions_page(&nobody, "", "", None, 5),
+        fireemu_core_storage::store::VersionsPage {
+            items: Vec::new(),
+            prefixes: Vec::new(),
+            next: None
+        }
+    );
+    let past = VersionsCursor::Item {
+        name: "zzz".to_owned(),
+        generation: 1,
+    };
+    assert!(store
+        .list_versions_page(&b, "", "", Some(&past), 5)
+        .items
+        .is_empty());
+}
+
+proptest! {
+    /// Paging a versions listing with any page size yields exactly what one big page yields, and
+    /// that equals the folded `list_versions` sequence, for any prefix and delimiter.
+    #[test]
+    fn paging_a_versions_listing_equals_one_listing(
+        writes in proptest::collection::vec((0u8..6, 0u8..3), 1..30),
+        prefix_len in 0usize..3,
+        delimit in any::<bool>(),
+        size in 1usize..7,
+    ) {
+        let mut store = StorageState::new(5);
+        let b = bucket();
+        store.set_versioning(&b, true);
+        let names = ["a", "a/x", "a/y", "b", "b/z/w", "c"];
+        for (step, (n, kind)) in writes.into_iter().enumerate() {
+            let key = names[usize::from(n)];
+            let now = t(i64::try_from(step).unwrap() + 1);
+            if kind == 0 {
+                let _ = store.delete(&b, &name(key), Precondition::default(), now);
+            } else {
+                store
+                    .put(&b, &name(key), vec![b'x'; usize::from(kind)], NewMetadata::default(), Precondition::default(), now)
+                    .unwrap();
+            }
+        }
+        let prefix = &"abc"[..prefix_len.min(1)];
+        let delimiter = if delimit { "/" } else { "" };
+        // The reference: fold `list_versions` the way the listing defines.
+        let mut expected: Vec<String> = Vec::new();
+        for entry in store.list_versions(&b, prefix) {
+            let n = entry.object.name.as_str();
+            let rest = &n[prefix.len()..];
+            match (!delimiter.is_empty()).then(|| rest.find(delimiter)).flatten() {
+                Some(at) => {
+                    let folded = format!("{prefix}{}{delimiter}", &rest[..at]);
+                    if expected.last() != Some(&folded) {
+                        expected.push(folded);
+                    }
+                }
+                None => expected.push(format!("{n}#{}", entry.object.generation)),
+            }
+        }
+        prop_assert_eq!(page_through(&store, &b, prefix, delimiter, size), expected.clone());
+        prop_assert_eq!(page_through(&store, &b, prefix, delimiter, 1000), expected);
+    }
 }

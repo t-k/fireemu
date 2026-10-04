@@ -3031,7 +3031,10 @@ impl RuntimeConfig {
             cfg.pubsub_addr = format!("127.0.0.1:{port}");
             cfg.pubsub_enabled = true;
         }
-        if let Some(start) = d.get("clockStart").and_then(Value::as_str) {
+        if let Some(start) = d.get("clockStart") {
+            let start = start.as_str().ok_or_else(|| {
+                ConfigError("daemon.clockStart must be an RFC 3339 time string".to_owned())
+            })?;
             cfg.clock_start_pinned = true;
             cfg.clock_start = LogicalInstant::parse_rfc3339(start)
                 .map_err(|e| ConfigError(format!("daemon.clockStart: {e}")))?;
@@ -3181,13 +3184,19 @@ impl RuntimeConfig {
             }
             text.clone_into(&mut cfg.scheduler_catch_up);
         }
-        match s.get("clock").and_then(Value::as_str) {
-            None | Some("virtual") => {}
-            Some(other) => {
-                return Err(ConfigError(format!(
-                    "scheduler.clock {other:?} is declared but not implemented; use \"virtual\""
-                )))
+        match s.get("clock") {
+            None => {}
+            Some(Value::String(mode)) if mode == "virtual" => {}
+            Some(Value::String(mode)) if mode == "wall" => {
+                return Err(ConfigError(
+                    "scheduler.clock \"wall\" is declared but not implemented; use \"virtual\""
+                        .to_owned(),
+                ))
             }
+            Some(_) => return Err(ConfigError(
+                "scheduler.clock must be \"virtual\" (\"wall\" is declared but not implemented)"
+                    .to_owned(),
+            )),
         }
         if let Some(v) = s.get("maxCatchUpRuns") {
             let n = v
@@ -3200,7 +3209,10 @@ impl RuntimeConfig {
                 })?;
             cfg.scheduler_max_catch_up_runs = usize::try_from(n).unwrap_or(1000);
         }
-        if let Some(tz) = s.get("defaultTimeZone").and_then(Value::as_str) {
+        if let Some(tz) = s.get("defaultTimeZone") {
+            let tz = tz.as_str().ok_or_else(|| {
+                ConfigError("scheduler.defaultTimeZone must be a time zone name".to_owned())
+            })?;
             fireemu_adapter_functions::zone::resolve(Some(tz))
                 .map_err(|e| ConfigError(format!("scheduler.defaultTimeZone: {e}")))?;
             cfg.scheduler_default_time_zone = Some(tz.to_owned());
@@ -3582,8 +3594,11 @@ impl RuntimeConfig {
                 }
             }
         }
-        if let Some(d) = obj.get("daemon").and_then(Value::as_object) {
-            Self::parse_daemon(d, &mut cfg)?;
+        if let Some(daemon) = obj.get("daemon") {
+            let daemon = daemon
+                .as_object()
+                .ok_or_else(|| ConfigError("daemon must be an object".to_owned()))?;
+            Self::parse_daemon(daemon, &mut cfg)?;
         }
         if let Some(rules) = obj.get("rules").and_then(Value::as_object) {
             Self::parse_rules(rules, &mut cfg)?;
@@ -3611,7 +3626,10 @@ impl RuntimeConfig {
         if let Some(pubsub) = obj.get("pubsub").and_then(Value::as_object) {
             Self::parse_pubsub(pubsub, &mut cfg)?;
         }
-        if let Some(scheduler) = obj.get("scheduler").and_then(Value::as_object) {
+        if let Some(scheduler) = obj.get("scheduler") {
+            let scheduler = scheduler
+                .as_object()
+                .ok_or_else(|| ConfigError("scheduler must be an object".to_owned()))?;
             Self::parse_scheduler(scheduler, &mut cfg)?;
         }
         if let Some(auth) = obj.get("auth") {
@@ -4170,6 +4188,191 @@ mod tests {
                 "{bad}: {error:?}"
             );
         }
+    }
+
+    #[test]
+    fn daemon_clock_start_pins_the_clock_and_refuses_what_is_not_a_time() {
+        let parse = |daemon: Value| {
+            RuntimeConfig::from_json(&json!({"schemaVersion": 1, "daemon": daemon}))
+        };
+        let unset = parse(json!({})).unwrap();
+        assert!(
+            !unset.clock_start_pinned,
+            "unset: the daemon starts at the wall clock"
+        );
+        assert_eq!(unset.clock_start, RuntimeConfig::default().clock_start);
+        let pinned = parse(json!({"clockStart": "2026-08-29T12:01:00.123456789Z"})).unwrap();
+        assert!(pinned.clock_start_pinned);
+        assert_eq!(
+            pinned.clock_start,
+            LogicalInstant::parse_rfc3339("2026-08-29T12:01:00.123456789Z").unwrap(),
+            "the sub-second part survives"
+        );
+        for bad in [
+            json!("not-a-time"),
+            json!("2026-08-29"),
+            json!(1_788_004_860),
+            json!(null),
+            json!(true),
+        ] {
+            let error = parse(json!({"clockStart": bad})).unwrap_err();
+            assert!(error.0.contains("daemon.clockStart"), "{bad}: {error:?}");
+        }
+    }
+
+    #[test]
+    fn scheduler_clock_accepts_virtual_and_refuses_wall_and_everything_else() {
+        let parse = |scheduler: Value| {
+            RuntimeConfig::from_json(&json!({"schemaVersion": 1, "scheduler": scheduler}))
+        };
+        parse(json!({})).unwrap();
+        parse(json!({"clock": "virtual"})).unwrap();
+        let wall = parse(json!({"clock": "wall"})).unwrap_err();
+        assert!(
+            wall.0
+                .contains("scheduler.clock \"wall\" is declared but not implemented"),
+            "{wall:?}"
+        );
+        for bad in [json!("real"), json!(""), json!(5), json!(null), json!(true)] {
+            let error = parse(json!({"clock": bad})).unwrap_err();
+            assert!(error.0.contains("scheduler.clock"), "{bad}: {error:?}");
+        }
+    }
+
+    #[test]
+    fn scheduler_default_time_zone_is_validated_and_kept() {
+        let parse = |scheduler: Value| {
+            RuntimeConfig::from_json(&json!({"schemaVersion": 1, "scheduler": scheduler}))
+        };
+        assert_eq!(parse(json!({})).unwrap().scheduler_default_time_zone, None);
+        for zone in ["Asia/Tokyo", "America/New_York", "UTC"] {
+            assert_eq!(
+                parse(json!({"defaultTimeZone": zone}))
+                    .unwrap()
+                    .scheduler_default_time_zone
+                    .as_deref(),
+                Some(zone)
+            );
+        }
+        for bad in [json!("Mars/Base"), json!(""), json!(5), json!(null)] {
+            let error = parse(json!({"defaultTimeZone": bad})).unwrap_err();
+            assert!(
+                error.0.contains("scheduler.defaultTimeZone"),
+                "{bad}: {error:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn scheduler_catch_up_overlap_and_cap_have_documented_defaults_and_bounds() {
+        let parse = |scheduler: Value| {
+            RuntimeConfig::from_json(&json!({"schemaVersion": 1, "scheduler": scheduler}))
+        };
+        let default = parse(json!({})).unwrap();
+        assert_eq!(default.scheduler_catch_up, "all");
+        assert_eq!(default.scheduler_overlap, "allow");
+        assert_eq!(default.scheduler_max_catch_up_runs, 1000);
+        for policy in ["all", "latest", "none"] {
+            assert_eq!(
+                parse(json!({"catchUp": policy}))
+                    .unwrap()
+                    .scheduler_catch_up,
+                policy
+            );
+        }
+        for policy in ["allow", "skip", "queue", "reject"] {
+            assert_eq!(
+                parse(json!({"overlap": policy})).unwrap().scheduler_overlap,
+                policy
+            );
+        }
+        for bad in [json!("some"), json!(""), json!(1), json!(null)] {
+            let catch_up = parse(json!({"catchUp": bad})).unwrap_err();
+            assert!(
+                catch_up.0.contains("scheduler.catchUp"),
+                "{bad}: {catch_up:?}"
+            );
+            let overlap = parse(json!({"overlap": bad})).unwrap_err();
+            assert!(
+                overlap.0.contains("scheduler.overlap"),
+                "{bad}: {overlap:?}"
+            );
+        }
+        for ok in [1u64, 1000, 100_000] {
+            assert_eq!(
+                parse(json!({"maxCatchUpRuns": ok}))
+                    .unwrap()
+                    .scheduler_max_catch_up_runs,
+                usize::try_from(ok).unwrap()
+            );
+        }
+        for bad in [
+            json!(0),
+            json!(100_001),
+            json!(-1),
+            json!(1.5),
+            json!("5"),
+            json!(null),
+        ] {
+            let error = parse(json!({"maxCatchUpRuns": bad})).unwrap_err();
+            assert!(
+                error.0.contains("scheduler.maxCatchUpRuns"),
+                "{bad}: {error:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn scheduler_and_clock_settings_in_the_wrong_place_are_refused() {
+        for (config, expected) in [
+            (
+                json!({"scheduler": {"clockStart": "2026-08-29T12:01:00Z"}}),
+                "unknown config key scheduler.clockStart",
+            ),
+            (
+                json!({"daemon": {"clock": "virtual"}}),
+                "unknown config key daemon.clock",
+            ),
+            (
+                json!({"daemon": {"defaultTimeZone": "UTC"}}),
+                "unknown config key daemon.defaultTimeZone",
+            ),
+            (
+                json!({"clockStart": "2026-08-29T12:01:00Z"}),
+                "unknown config key \"clockStart\"",
+            ),
+            (
+                json!({"functions": {"scheduler": {}}}),
+                "unknown config key functions.scheduler",
+            ),
+            (
+                json!({"scheduler": "virtual"}),
+                "scheduler must be an object",
+            ),
+            (json!({"scheduler": []}), "scheduler must be an object"),
+            (json!({"scheduler": null}), "scheduler must be an object"),
+            (
+                json!({"daemon": "2026-08-29T12:01:00Z"}),
+                "daemon must be an object",
+            ),
+            (json!({"daemon": null}), "daemon must be an object"),
+        ] {
+            let mut full = json!({"schemaVersion": 1});
+            full.as_object_mut()
+                .unwrap()
+                .extend(config.as_object().unwrap().clone());
+            let error = RuntimeConfig::from_json(&full).unwrap_err();
+            assert!(error.0.contains(expected), "{config}: {error:?}");
+        }
+    }
+
+    #[test]
+    fn the_config_schema_agrees_with_the_scheduler_cap_bounds() {
+        let schema: Value =
+            serde_json::from_str(include_str!("../../../spec/config/fireemu.schema.json")).unwrap();
+        let cap = &schema["properties"]["scheduler"]["properties"]["maxCatchUpRuns"];
+        assert_eq!(cap["minimum"], 1, "the parser refuses 0");
+        assert_eq!(cap["maximum"], 100_000);
     }
 
     #[test]

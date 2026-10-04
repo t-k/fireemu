@@ -1,4 +1,7 @@
 {
   "schemaVersion": 1,
-  "profile": "strict"
+  "profile": "strict",
+  "rules": {
+    "source": "conformance/functions-events/firestore.rules"
+  }
 }

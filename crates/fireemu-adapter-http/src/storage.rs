@@ -1943,7 +1943,7 @@ impl StorageState {
     }
 
     /// Whether this is the strict profile, which answers as production does.
-    fn is_strict(&self) -> bool {
+    pub(crate) fn is_strict(&self) -> bool {
         self.token_acceptance != TokenAcceptance::EmulatorMock
     }
 
@@ -4322,37 +4322,24 @@ fn gcs_list(
     // batches, each read under the store lock and tested after the lock is released, and the
     // scan stops as soon as the page is complete (one entry past `maxResults`), so a request
     // neither holds the lock for the cost of a pattern nor reads more of a large bucket than its
-    // page needs. The names kept are the ones the page can show: at most one per entry.
+    // page needs. The page is made from the entries the scan found, not from a second walk.
     let page = if let Some(glob) = &glob {
         let max = max_results
             .unwrap_or(fireemu_core_storage::store::DEFAULT_LIST_PAGE_SIZE)
             .min(fireemu_core_storage::store::DEFAULT_LIST_PAGE_SIZE);
-        let mut token = page_token.as_deref();
-        let mut scan = glob_scan(
+        glob_page(
             state,
             &b,
-            &prefix,
-            &delimiter,
-            token,
-            max,
-            glob,
-            &in_offsets,
-        )?;
-        if token.is_some() && scan.first_entry.as_deref() != token {
-            // A token that names no entry starts the listing over, as it does without a glob.
-            token = None;
-            scan = glob_scan(state, &b, &prefix, &delimiter, None, max, glob, &in_offsets)?;
-        }
-        let store = state.store()?;
-        store.list_matching_until(
-            &b,
-            &prefix,
-            Some(delimiter.as_str()),
-            token,
-            max_results,
-            &|name| scan.allowed.contains(name),
-            scan.until.as_deref(),
-        )
+            &GlobQuery {
+                prefix: &prefix,
+                delimiter: &delimiter,
+                token: page_token.as_deref(),
+                max,
+                glob,
+                in_offsets: &in_offsets,
+            },
+            &|| {},
+        )?
     } else {
         let store = state.store()?;
         store.list_matching(
@@ -4381,17 +4368,62 @@ fn gcs_list(
 #[doc(hidden)]
 pub const GLOB_BATCH: usize = 256;
 
+/// One entry of a listing: an object name, or the prefix its names fold into.
+#[doc(hidden)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GlobEntry {
+    /// The name of the object, or the prefix (which ends with the delimiter).
+    pub key: String,
+    /// Whether the entry is an object.
+    pub is_item: bool,
+}
+
 /// What a glob listing found before its page was complete (public, hidden from the documentation,
 /// so that the tests can pin how much of a bucket a page reads and keeps).
 #[doc(hidden)]
 pub struct GlobScan {
-    /// The names that matched, one for each entry (an item, or one name of a folded prefix).
-    pub allowed: std::collections::HashSet<String>,
-    /// The last name read, so that the listing walks no further than the scan did.
+    /// The entries in name order, up to one past the page: each entry once, however many names
+    /// fold into it, so what is kept is bounded by the page and not by the bucket.
+    pub entries: Vec<GlobEntry>,
+    /// The last name read, so that a test can see how far the scan went.
     pub until: Option<String>,
-    /// The first entry found, which is what tells a token that names an entry from one that
-    /// does not.
-    pub first_entry: Option<String>,
+}
+
+/// The parts of a glob listing that decide its page.
+#[doc(hidden)]
+pub struct GlobQuery<'a> {
+    pub prefix: &'a str,
+    pub delimiter: &'a str,
+    pub token: Option<&'a str>,
+    pub max: usize,
+    pub glob: &'a fireemu_core_storage::glob::Glob,
+    pub in_offsets: &'a dyn Fn(&str) -> bool,
+}
+
+thread_local! {
+    /// The flag of the request this thread is answering, set when its client has gone.
+    static CANCELLED: std::cell::RefCell<Option<std::sync::Arc<std::sync::atomic::AtomicBool>>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// Runs `work` as the answer to a request whose client may go away: a glob scan stops between names
+/// once `flag` is set, instead of working through the bucket for nobody.
+pub fn with_cancellation<T>(
+    flag: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    work: impl FnOnce() -> T,
+) -> T {
+    CANCELLED.with(|slot| *slot.borrow_mut() = Some(flag));
+    let result = work();
+    CANCELLED.with(|slot| *slot.borrow_mut() = None);
+    result
+}
+
+fn is_cancelled() -> bool {
+    CANCELLED.with(|slot| {
+        slot.borrow()
+            .as_ref()
+            .is_some_and(|flag| flag.load(std::sync::atomic::Ordering::Relaxed))
+    })
 }
 
 /// The entry a name belongs to under `delimiter`: the prefix it folds into, or `None` for an item.
@@ -4404,31 +4436,23 @@ fn fold_entry(prefix: &str, delimiter: &str, name: &str) -> Option<String> {
         .map(|index| format!("{prefix}{}{delimiter}", &rest[..index]))
 }
 
-/// Reads the names under `prefix` from `token` (or the start) on, a batch per lock acquisition,
-/// and keeps those `glob` and `in_offsets` accept, until they make `max + 1` entries (the page
-/// and the entry that tells there is a next one) or the names run out.
-#[allow(clippy::too_many_arguments)]
+/// Reads the names under the prefix from `token` (or the start) on, a batch per lock acquisition,
+/// and keeps the entries the glob and the offsets accept, until they are one more than the page
+/// holds or the names run out.
 #[doc(hidden)]
 pub fn glob_scan(
     state: &StorageState,
     bucket: &fireemu_core_storage::name::BucketName,
-    prefix: &str,
-    delimiter: &str,
+    query: &GlobQuery<'_>,
     token: Option<&str>,
-    max: usize,
-    glob: &fireemu_core_storage::glob::Glob,
-    in_offsets: &dyn Fn(&str) -> bool,
 ) -> Result<GlobScan, StorageResponse> {
     use std::ops::Bound;
     let mut start: Bound<String> =
         token.map_or(Bound::Unbounded, |token| Bound::Included(token.to_owned()));
     let mut scan = GlobScan {
-        allowed: std::collections::HashSet::new(),
+        entries: Vec::new(),
         until: None,
-        first_entry: None,
     };
-    let mut entries = 0usize;
-    let mut last_entry: Option<String> = None;
     loop {
         let batch = {
             let store = state.store()?;
@@ -4437,26 +4461,49 @@ pub fn glob_scan(
                 Bound::Included(name) => Bound::Included(name.as_str()),
                 Bound::Excluded(name) => Bound::Excluded(name.as_str()),
             };
-            store.object_names_from(bucket, prefix, bound, GLOB_BATCH)
+            store.object_names_from(bucket, query.prefix, bound, GLOB_BATCH)
         };
         let Some(last) = batch.last() else {
             return Ok(scan);
         };
         scan.until = Some(last.clone());
         for name in &batch {
-            if !in_offsets(name) || !glob.matches(name) {
+            let gone = || {
+                // The client is gone: nobody reads the answer.
+                Err(StorageResponse {
+                    status: 499,
+                    headers: Vec::new(),
+                    body: bytes::Bytes::new(),
+                })
+            };
+            if is_cancelled() {
+                return gone();
+            }
+            if !(query.in_offsets)(name) {
                 continue;
             }
-            let folded = fold_entry(prefix, delimiter, name);
-            let entry = folded.as_deref().unwrap_or(name);
-            if folded.is_some() && last_entry.as_deref() == Some(entry) {
-                continue;
+            match query.glob.matches_unless(name, &is_cancelled) {
+                None => return gone(),
+                Some(false) => continue,
+                Some(true) => {}
             }
-            last_entry = Some(entry.to_owned());
-            scan.first_entry.get_or_insert_with(|| entry.to_owned());
-            scan.allowed.insert(name.clone());
-            entries += 1;
-            if entries > max {
+            let folded = fold_entry(query.prefix, query.delimiter, name);
+            if let Some(prefix) = &folded {
+                if scan.entries.last().is_some_and(|last| &last.key == prefix) {
+                    continue;
+                }
+            }
+            scan.entries.push(match folded {
+                Some(prefix) => GlobEntry {
+                    key: prefix,
+                    is_item: false,
+                },
+                None => GlobEntry {
+                    key: name.clone(),
+                    is_item: true,
+                },
+            });
+            if scan.entries.len() > query.max {
                 return Ok(scan);
             }
         }
@@ -4464,11 +4511,55 @@ pub fn glob_scan(
     }
 }
 
-/// Whether a request is a JSON API list that carries a `matchGlob`, which costs more than any
-/// other Storage request and is admitted through its own small set of slots by the server.
+/// The page of a glob listing, made from the entries the scan found. A name that is deleted while
+/// the page is made leaves the page and nothing else does: the next-page token is the entry after
+/// the page and a prefix stays while any name under it exists. `after_scan` runs between the scan
+/// and the page (the tests delete names there).
+#[doc(hidden)]
+pub fn glob_page(
+    state: &StorageState,
+    bucket: &fireemu_core_storage::name::BucketName,
+    query: &GlobQuery<'_>,
+    after_scan: &dyn Fn(),
+) -> Result<fireemu_core_storage::store::ListPage, StorageResponse> {
+    let mut scan = glob_scan(state, bucket, query, query.token)?;
+    if query.token.is_some() && scan.entries.first().map(|e| e.key.as_str()) != query.token {
+        // A token that names no entry starts the listing over, as it does without a glob.
+        scan = glob_scan(state, bucket, query, None)?;
+    }
+    after_scan();
+    let next_page_token = scan.entries.get(query.max).map(|entry| entry.key.clone());
+    let shown = &scan.entries[..scan.entries.len().min(query.max)];
+    let store = state.store()?;
+    let mut items = Vec::new();
+    let mut prefixes = Vec::new();
+    for entry in shown {
+        if entry.is_item {
+            let found = fireemu_core_storage::name::ObjectName::try_new(&entry.key)
+                .ok()
+                .and_then(|name| store.get(bucket, &name).cloned());
+            items.extend(found);
+        } else {
+            prefixes.push(entry.key.clone());
+        }
+    }
+    Ok(fireemu_core_storage::store::ListPage {
+        items,
+        prefixes,
+        next_page_token,
+    })
+}
+
+/// Whether a request is a JSON API list that evaluates a `matchGlob`, which costs more than any
+/// other Storage request: only under strict (the emulator profile ignores the parameter) and only
+/// on the list route of the Google-fronted dialect. The server admits these through a small set of
+/// slots of their own.
 #[must_use]
-pub fn uses_match_glob(method: &str, query: &str) -> bool {
-    method == "GET" && query_params(query).contains_key("matchGlob")
+pub fn uses_match_glob(strict: bool, method: &str, path: &str, query: &str) -> bool {
+    strict
+        && method == "GET"
+        && matches!(route(method, path), Ok(Route::GcsList { .. }))
+        && query_params(query).contains_key("matchGlob")
 }
 
 #[allow(clippy::too_many_arguments)]

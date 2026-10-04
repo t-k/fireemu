@@ -1180,40 +1180,31 @@ proptest! {
     }
 }
 
-proptest! {
-    #![proptest_config(ProptestConfig::with_cases(256))]
-
-    /// A listing bounded at a name is the listing of a store that holds only the names up to it,
-    /// page after page.
-    #[test]
-    fn a_bounded_listing_equals_the_listing_of_the_names_up_to_the_bound(
-        names in names(),
-        cut in 0usize..=24,
-        max in 1usize..=4,
-        delimiter in proptest::option::of(Just("/")),
-        prefix in proptest::collection::vec(proptest::sample::select(SEGMENTS), 0..=1)
-            .prop_map(|segments| segments.join("/"))
-    ) {
-        let Some(until) = names.iter().nth(cut % names.len().max(1)).cloned() else {
-            return Ok(());
-        };
-        let kept: BTreeSet<String> = names.iter().filter(|name| **name <= until).cloned().collect();
-        let bounded = store_with(&names);
-        let reference = store_with(&kept);
-        let mut token_bounded: Option<String> = None;
-        let mut token_reference: Option<String> = None;
-        for _ in 0..8 {
-            let a = bounded.list_matching_until(
-                &bucket(), &prefix, delimiter, token_bounded.as_deref(), Some(max), &|_| true, Some(&until),
-            );
-            let b = reference.list(&bucket(), &prefix, delimiter, token_reference.as_deref(), Some(max));
-            prop_assert_eq!(entries(&a), entries(&b));
-            prop_assert_eq!(&a.next_page_token, &b.next_page_token);
-            token_bounded = a.next_page_token;
-            token_reference = b.next_page_token;
-            if token_reference.is_none() {
-                break;
-            }
-        }
+/// A match that is told to stop stops after the character it is at; one that is not told gives the
+/// same answer as `matches`.
+#[test]
+fn a_match_can_be_stopped_between_the_characters_of_the_name() {
+    use fireemu_core_storage::glob::Glob;
+    use std::cell::Cell;
+    let glob = Glob::new("**a");
+    let name = "b".repeat(1_000);
+    // Never stopped: the same answer as `matches`, for a hit and for a miss.
+    for candidate in [name.as_str(), "bbba", "", "a"] {
+        assert_eq!(
+            glob.matches_unless(candidate, &|| false),
+            Some(glob.matches(candidate))
+        );
     }
+    // Stopped before the first character: nothing is matched.
+    assert_eq!(glob.matches_unless(&name, &|| true), None);
+    // Stopped after three questions: the fourth ends it, and no more are asked.
+    let asked = Cell::new(0usize);
+    let result = glob.matches_unless(&name, &|| {
+        asked.set(asked.get() + 1);
+        asked.get() > 3
+    });
+    assert_eq!(result, None);
+    assert_eq!(asked.get(), 4);
+    // An empty name has no character to stop at.
+    assert_eq!(glob.matches_unless("", &|| true), Some(false));
 }

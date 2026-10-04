@@ -1,7 +1,7 @@
 //! hyper glue for the Storage surface: raw bodies (uploads), CORS for the browser SDK,
 //! loopback-only origins.
 
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
 
 use bytes::Bytes;
@@ -45,6 +45,16 @@ static BLOCKING_HANDLER_SLOTS: Semaphore = Semaphore::const_new(BLOCKING_HANDLER
 /// without holding a thread, so a flood of them leaves the handler slots to the other requests.
 const GLOB_HANDLER_LIMIT: usize = 2;
 static GLOB_HANDLER_SLOTS: Semaphore = Semaphore::const_new(GLOB_HANDLER_LIMIT);
+
+/// Sets its flag when dropped: the request future that owns it was dropped (the client has gone) or
+/// has finished.
+struct SetOnDrop(Arc<AtomicBool>);
+
+impl Drop for SetOnDrop {
+    fn drop(&mut self) {
+        self.0.store(true, Ordering::Relaxed);
+    }
+}
 
 /// An admission budget for the request bodies buffered in memory at the same time.
 ///
@@ -398,7 +408,8 @@ async fn respond(
         Ok(buffer) => buffer,
         Err(e) => return Ok(body_error_response(e, origin.as_deref())),
     };
-    let glob_permit = if crate::storage::uses_match_glob(&method, &query) {
+    let glob_permit = if crate::storage::uses_match_glob(state.is_strict(), &method, &path, &query)
+    {
         Some(
             GLOB_HANDLER_SLOTS
                 .acquire()
@@ -419,22 +430,29 @@ async fn respond(
         query.clone(),
         buffer.bytes.len(),
     );
+    // hyper drops this future when the client closes its connection (even while the handler works),
+    // which sets the flag: a glob scan stops, mid-name, instead of working through the bucket for
+    // nobody, and gives its glob slot back.
+    let client_gone = Arc::new(AtomicBool::new(false));
+    let _gone_on_drop = SetOnDrop(Arc::clone(&client_gone));
     let response = tokio::task::spawn_blocking(move || {
         let _permit = permit;
         let _glob_permit = glob_permit;
         let body = buffer.take();
-        handle_framed(
-            &state,
-            StorageRequest {
-                method,
-                path,
-                query,
-                host,
-                headers,
-                app_check,
-                body,
-            },
-        )
+        crate::storage::with_cancellation(client_gone, || {
+            handle_framed(
+                &state,
+                StorageRequest {
+                    method,
+                    path,
+                    query,
+                    host,
+                    headers,
+                    app_check,
+                    body,
+                },
+            )
+        })
     })
     .await;
     let Ok((response, framed)) = response else {

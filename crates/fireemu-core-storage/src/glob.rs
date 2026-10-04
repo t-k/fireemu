@@ -77,12 +77,23 @@ impl Glob {
     /// Whether `name` matches the pattern in full.
     #[must_use]
     pub fn matches(&self, name: &str) -> bool {
+        self.matches_unless(name, &|| false).unwrap_or(false)
+    }
+
+    /// [`Self::matches`], or `None` as soon as `stop` returns true. `stop` is asked before each
+    /// character of `name`, so a caller whose client has gone can abandon a match that would take
+    /// long (a long pattern against a long name) after one more step, not after the name.
+    #[must_use]
+    pub fn matches_unless(&self, name: &str, stop: &dyn Fn() -> bool) -> Option<bool> {
         let mut current = Threads::new(self.program.len());
         let mut next = Threads::new(self.program.len());
         current.add(&self.program, 0);
         for c in name.chars() {
+            if stop() {
+                return None;
+            }
             if current.list.is_empty() {
-                return false;
+                return Some(false);
             }
             for &pc in &current.list {
                 let steps = match &self.program[pc] {
@@ -102,10 +113,12 @@ impl Glob {
             std::mem::swap(&mut current, &mut next);
             next.clear();
         }
-        current
-            .list
-            .iter()
-            .any(|&pc| self.program[pc] == Inst::Match)
+        Some(
+            current
+                .list
+                .iter()
+                .any(|&pc| self.program[pc] == Inst::Match),
+        )
     }
 }
 

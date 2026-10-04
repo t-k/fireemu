@@ -22,6 +22,7 @@ use fireemu_core_storage::store::StorageState as ObjectStore;
 use fireemu_core_storage::store::{NewMetadata, Precondition, StorageEvent};
 use fireemu_core_types::determinism::SplitMix64;
 use fireemu_core_types::time::LogicalInstant;
+use proptest::prelude::Strategy as _;
 use serde_json::{json, Value};
 
 const START: LogicalInstant = LogicalInstant::from_unix_seconds(1_788_004_860);
@@ -7473,45 +7474,289 @@ fn a_glob_listing_in_batches_equals_the_filtered_listing_page_by_page() {
     assert_eq!(with_glob, without_token);
 }
 
+/// A page reflects names as they are when it is read: a name deleted while the page is being made
+/// leaves the page, and nothing else does. The listing never ends early (a next-page token stays
+/// while matching names remain after the page), and a prefix stays listed while any name under it
+/// exists, even when the one name that stood for it is deleted. A writer deletes and re-creates one
+/// name of the first page while a reader lists that page again and again.
+#[test]
+fn a_glob_listing_keeps_its_token_and_prefixes_while_a_name_of_the_page_is_deleted_and_recreated() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    let bucket = BucketName::try_new(BUCKET).unwrap();
+    for (delimiter, victim) in [("", "a/00005.txt"), ("/", "d00/f0")] {
+        let state = Arc::new(state_with(Some(ALLOW_ALL_RULES), TokenAcceptance::Verified));
+        let names: Vec<String> = if delimiter.is_empty() {
+            (0..1_500).map(|n| format!("a/{n:05}.txt")).collect()
+        } else {
+            (0..120)
+                .flat_map(|d| (0..3).map(move |f| format!("d{d:02}/f{f}")))
+                .collect()
+        };
+        put_names(&state, &names);
+        let stop = Arc::new(AtomicBool::new(false));
+        let writer = {
+            let (state, stop, bucket) = (Arc::clone(&state), Arc::clone(&stop), bucket.clone());
+            let victim = ObjectName::try_new(victim).unwrap();
+            std::thread::spawn(move || {
+                while !stop.load(Ordering::Relaxed) {
+                    let _ = state.store.lock().unwrap().delete(
+                        &bucket,
+                        &victim,
+                        Precondition::default(),
+                    );
+                    std::thread::yield_now();
+                    put_names(&state, &[victim.as_str().to_owned()]);
+                    std::thread::yield_now();
+                }
+            })
+        };
+        let (mut without_token, mut without_prefix) = (0, 0);
+        for _ in 0..1_000 {
+            let answered = handle(
+                &state,
+                req(
+                    "GET",
+                    &format!(
+                        "/storage/v1/b/{BUCKET}/o?matchGlob=%2A%2A&maxResults=10&delimiter={}",
+                        if delimiter.is_empty() { "" } else { "%2F" }
+                    ),
+                    &[("authorization", "Bearer owner")],
+                    b"",
+                ),
+            );
+            let body = json_body(&answered);
+            without_token += usize::from(body.get("nextPageToken").is_none());
+            if !delimiter.is_empty() {
+                without_prefix += usize::from(
+                    !body["prefixes"]
+                        .as_array()
+                        .is_some_and(|p| p.iter().any(|v| v == "d00/")),
+                );
+            }
+        }
+        stop.store(true, Ordering::Relaxed);
+        writer.join().unwrap();
+        assert_eq!(
+            without_token, 0,
+            "pages that lost the token ({delimiter:?})"
+        );
+        assert_eq!(without_prefix, 0, "pages that lost d00/ ({delimiter:?})");
+    }
+}
+
+/// Deletes `names` from the bucket of `state` (what a client does between the scan of a glob listing
+/// and the page it makes).
+fn delete_names(state: &StorageState, names: &[&str]) {
+    let bucket = BucketName::try_new(BUCKET).unwrap();
+    for name in names {
+        let _ = state.store.lock().unwrap().delete(
+            &bucket,
+            &ObjectName::try_new(*name).unwrap(),
+            Precondition::default(),
+        );
+    }
+}
+
+/// The page of a glob listing with `delete` run between the scan and the page.
+fn glob_page_after(
+    state: &StorageState,
+    glob: &str,
+    delimiter: &str,
+    max: usize,
+    delete: &[&str],
+) -> fireemu_core_storage::store::ListPage {
+    use fireemu_adapter_http::storage::{glob_page, GlobQuery};
+    let bucket = BucketName::try_new(BUCKET).unwrap();
+    let glob = fireemu_core_storage::glob::Glob::new(glob);
+    let anything = |_: &str| true;
+    glob_page(
+        state,
+        &bucket,
+        &GlobQuery {
+            prefix: "",
+            delimiter,
+            token: None,
+            max,
+            glob: &glob,
+            in_offsets: &anything,
+        },
+        &|| delete_names(state, delete),
+    )
+    .unwrap()
+}
+
+/// The three ways a deletion between the scan and the page used to end a listing early (found by
+/// the reviews of round 3): the name that stood for a folded prefix, the entry after the page, and
+/// an item of the page itself.
+#[test]
+fn a_name_deleted_between_the_scan_and_the_page_neither_ends_the_listing_nor_hides_a_prefix() {
+    let state = state_with(Some(ALLOW_ALL_RULES), TokenAcceptance::Verified);
+    let mut names: Vec<String> = (0..300).map(|n| format!("a/{n:03}")).collect();
+    names.push("z".to_owned());
+    put_names(&state, &names);
+    // `a/000` stood for the prefix `a/`; its 299 siblings remain.
+    let page = glob_page_after(&state, "**", "/", 1, &["a/000"]);
+    assert_eq!(page.prefixes, ["a/"]);
+    assert_eq!(page.next_page_token.as_deref(), Some("z"));
+
+    let state = state_with(Some(ALLOW_ALL_RULES), TokenAcceptance::Verified);
+    put_names(&state, &["a".to_owned(), "b".to_owned(), "c".to_owned()]);
+    // `b` was the entry after the page of one: it leaves nothing behind, and `c` is still next.
+    let page = glob_page_after(&state, "**", "", 1, &["b"]);
+    assert_eq!(
+        page.items
+            .iter()
+            .map(|m| m.name.as_str())
+            .collect::<Vec<_>>(),
+        ["a"]
+    );
+    assert_eq!(page.next_page_token.as_deref(), Some("b"));
+
+    let state = state_with(Some(ALLOW_ALL_RULES), TokenAcceptance::Verified);
+    let names: Vec<String> = (0..2_000).map(|n| format!("a/{n:05}.txt")).collect();
+    put_names(&state, &names);
+    // An item of the page itself is gone: the page shows the nine that remain and the token stays.
+    let page = glob_page_after(&state, "**", "", 10, &["a/00005.txt"]);
+    assert_eq!(page.items.len(), 9);
+    assert!(page.items.iter().all(|m| m.name.as_str() != "a/00005.txt"));
+    assert_eq!(page.next_page_token.as_deref(), Some("a/00010.txt"));
+}
+
+proptest::proptest! {
+    #![proptest_config(proptest::prelude::ProptestConfig::with_cases(200))]
+
+
+    /// For any names, glob, delimiter and page size, a page made while a subset of its names is
+    /// deleted is the page of the store before the deletion minus the deleted items: the same
+    /// prefixes and the same next-page token, whatever was deleted.
+    #[test]
+    fn a_glob_page_made_during_deletions_is_the_page_before_them_minus_the_deleted_items(
+        leaves in proptest::collection::btree_set(
+            proptest::collection::vec(proptest::sample::select(vec!["a", "b", "c", "x.txt", "y.bin"]), 1..=3)
+                .prop_map(|parts| parts.join("/")),
+            1..=30,
+        ),
+        glob in proptest::sample::select(vec!["**", "*", "a/**", "**.txt", "{a,b}/*", "*/*"]),
+        delimiter in proptest::sample::select(vec!["", "/"]),
+        max in 1usize..=4,
+        doomed in proptest::collection::vec(0usize..30, 0..=8),
+    ) {
+        // A name cannot be both an object and a prefix of another in the listing's folding, but the
+        // store allows it; the reference below uses the same store, so it holds either way.
+        let state = state_with(Some(ALLOW_ALL_RULES), TokenAcceptance::Verified);
+        let names: Vec<String> = leaves.iter().cloned().collect();
+        put_names(&state, &names);
+        let bucket = BucketName::try_new(BUCKET).unwrap();
+        let matcher = fireemu_core_storage::glob::Glob::new(glob);
+        let expected = state.store.lock().unwrap().list_matching(
+            &bucket, "", Some(delimiter), None, Some(max), &|name| matcher.matches(name),
+        );
+        let deleted: Vec<&str> = doomed.iter().filter_map(|i| names.get(*i).map(String::as_str)).collect();
+        let page = glob_page_after(&state, glob, delimiter, max, &deleted);
+        proptest::prop_assert_eq!(&page.prefixes, &expected.prefixes);
+        proptest::prop_assert_eq!(&page.next_page_token, &expected.next_page_token);
+        let want: Vec<&str> = expected.items.iter().map(|m| m.name.as_str()).filter(|n| !deleted.contains(n)).collect();
+        let got: Vec<&str> = page.items.iter().map(|m| m.name.as_str()).collect();
+        proptest::prop_assert_eq!(got, want);
+    }
+}
+
+/// Only a list that evaluates a glob goes through the slots of its own: strict, the Google-fronted
+/// list route, a GET that carries `matchGlob`. The emulator profile ignores the parameter, and a
+/// read or a Firebase list that carries it evaluates nothing.
+#[test]
+fn only_a_strict_json_api_list_with_a_match_glob_is_admitted_through_the_glob_slots() {
+    use fireemu_adapter_http::storage::uses_match_glob;
+    let list = format!("/storage/v1/b/{BUCKET}/o");
+    assert!(uses_match_glob(true, "GET", &list, "matchGlob=%2A%2A"));
+    assert!(uses_match_glob(
+        true,
+        "GET",
+        &format!("/b/{BUCKET}/o"),
+        "prefix=a&matchGlob=a"
+    ));
+    assert!(!uses_match_glob(false, "GET", &list, "matchGlob=%2A%2A"));
+    assert!(!uses_match_glob(true, "GET", &list, "prefix=a"));
+    assert!(!uses_match_glob(true, "POST", &list, "matchGlob=a"));
+    assert!(!uses_match_glob(
+        true,
+        "GET",
+        &format!("/v0/b/{BUCKET}/o"),
+        "matchGlob=a"
+    ));
+    assert!(!uses_match_glob(
+        true,
+        "GET",
+        &format!("{list}/object.txt"),
+        "matchGlob=a"
+    ));
+    assert!(!uses_match_glob(
+        true,
+        "GET",
+        &format!("/storage/v1/b/{BUCKET}"),
+        "matchGlob=a"
+    ));
+}
+
 /// How much of a large bucket a glob page reads and keeps: the names kept are one per entry of the
 /// page (and the one past it), not one per name that matched, and the scan stops after the batch
 /// that completes the page instead of walking the bucket.
 #[test]
 fn a_glob_page_reads_and_keeps_a_bounded_part_of_a_large_bucket() {
-    use fireemu_adapter_http::storage::{glob_scan, GLOB_BATCH};
+    use fireemu_adapter_http::storage::{glob_scan, GlobQuery, GLOB_BATCH};
     let state = state_with(Some(ALLOW_ALL_RULES), TokenAcceptance::Verified);
     let names: Vec<String> = (0..20_000).map(|n| format!("a/{n:05}.txt")).collect();
     put_names(&state, &names);
     let bucket = BucketName::try_new(BUCKET).unwrap();
     let all = fireemu_core_storage::glob::Glob::new("**");
+    let none = fireemu_core_storage::glob::Glob::new("nothing*");
     let anything = |_: &str| true;
+    let query = |delimiter, token, glob| GlobQuery {
+        prefix: "",
+        delimiter,
+        token,
+        max: 10,
+        glob,
+        in_offsets: &anything,
+    };
 
-    // A page of 10 items: 11 names kept, and the scan ends inside the first batch.
-    let scan = glob_scan(&state, &bucket, "", "", None, 10, &all, &anything).unwrap();
-    assert_eq!(scan.allowed.len(), 11);
+    // A page of 10 items: 11 entries kept, and the scan ends inside the first batch.
+    let scan = glob_scan(&state, &bucket, &query("", None, &all), None).unwrap();
+    assert_eq!(scan.entries.len(), 11);
     assert_eq!(scan.until.as_deref(), Some(names[GLOB_BATCH - 1].as_str()));
 
-    // With a delimiter every name folds into one entry: one name kept for 20,000 matches, and the
+    // With a delimiter every name folds into one entry: one entry kept for 20,000 matches, and the
     // scan has to read them all to know there is no second entry.
-    let scan = glob_scan(&state, &bucket, "", "/", None, 10, &all, &anything).unwrap();
-    assert_eq!(scan.allowed.len(), 1);
+    let scan = glob_scan(&state, &bucket, &query("/", None, &all), None).unwrap();
+    assert_eq!(scan.entries.len(), 1);
+    assert_eq!(
+        (scan.entries[0].key.as_str(), scan.entries[0].is_item),
+        ("a/", false)
+    );
     assert_eq!(scan.until.as_deref(), Some(names[19_999].as_str()));
 
     // From a token the scan starts there: the first entry it finds is the token's.
     let token = names[10_000].clone();
-    let scan = glob_scan(&state, &bucket, "", "", Some(&token), 10, &all, &anything).unwrap();
-    assert_eq!(scan.first_entry.as_deref(), Some(token.as_str()));
-    assert_eq!(scan.allowed.len(), 11);
+    let scan = glob_scan(
+        &state,
+        &bucket,
+        &query("", Some(&token), &all),
+        Some(&token),
+    )
+    .unwrap();
+    assert_eq!(
+        scan.entries.first().map(|e| e.key.as_str()),
+        Some(token.as_str())
+    );
+    assert_eq!(scan.entries.len(), 11);
     assert_eq!(
         scan.until.as_deref(),
         Some(names[10_000 + GLOB_BATCH - 1].as_str())
     );
 
     // A glob nothing matches keeps nothing, whatever the bucket size.
-    let none = fireemu_core_storage::glob::Glob::new("nothing*");
-    let scan = glob_scan(&state, &bucket, "", "", None, 10, &none, &anything).unwrap();
-    assert!(scan.allowed.is_empty());
-    assert_eq!(scan.first_entry, None);
+    let scan = glob_scan(&state, &bucket, &query("", None, &none), None).unwrap();
+    assert!(scan.entries.is_empty());
 }
 
 /// A flood of list requests that carry an expensive `matchGlob` (more than the handler slots, each
@@ -7575,6 +7820,69 @@ async fn a_flood_of_expensive_glob_lists_leaves_the_handler_slots_to_other_reque
     assert!(String::from_utf8_lossy(&raw).starts_with("HTTP/1.1 200"));
     assert!(started.elapsed() < std::time::Duration::from_secs(5));
     drop(flood);
+    server.abort();
+}
+
+/// A glob list whose client has gone stops at the next name and gives its slot back: with both glob
+/// slots held by expensive lists, a short glob list that waits behind them is answered soon after
+/// the two clients disconnect, not when the abandoned scans would have ended.
+#[tokio::test]
+async fn an_abandoned_glob_scan_gives_its_slot_back_when_its_client_has_gone() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    static BUDGET: BodyBudget = BodyBudget::new(1_572_864);
+    let state = state_with(Some(ALLOW_ALL_RULES), TokenAcceptance::Verified);
+    let mut names: Vec<String> = (0..12)
+        .map(|n| format!("{n:03}{}", "x".repeat(990)))
+        .collect();
+    names.push("plain.txt".to_owned());
+    put_names(&state, &names);
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let server = tokio::spawn(serve_storage_with_budget(
+        listener,
+        Arc::new(state),
+        &BUDGET,
+    ));
+    let pattern: String =
+        format!("{}z", "*{,}".repeat(3_000))
+            .bytes()
+            .fold(String::new(), |mut out, byte| {
+                use std::fmt::Write as _;
+                let _ = write!(out, "%{byte:02X}");
+                out
+            });
+    // A browser keeps its connection alive: the server learns of its going from the closed socket.
+    let send = |query: String, close: &'static str| async move {
+        let mut stream = tokio::net::TcpStream::connect(addr).await.unwrap();
+        stream
+            .write_all(
+                format!("GET /storage/v1/b/{BUCKET}/o?{query} HTTP/1.1\r\nHost: 127.0.0.1\r\nAuthorization: Bearer owner\r\n{close}\r\n").as_bytes(),
+            )
+            .await
+            .unwrap();
+        stream
+    };
+    let hostile = vec![
+        send(format!("matchGlob={pattern}"), "").await,
+        send(format!("matchGlob={pattern}"), "").await,
+    ];
+    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+    let mut waiting = send("matchGlob=plain.%2A".to_owned(), "Connection: close\r\n").await;
+    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    let started = std::time::Instant::now();
+    drop(hostile);
+    let mut raw = Vec::new();
+    tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        waiting.read_to_end(&mut raw),
+    )
+    .await
+    .expect("the glob list waited for scans whose clients had gone")
+    .unwrap();
+    let text = String::from_utf8_lossy(&raw).into_owned();
+    assert!(text.starts_with("HTTP/1.1 200"), "{text}");
+    assert!(text.contains("plain.txt"), "{text}");
+    println!("answered {:?} after the clients left", started.elapsed());
     server.abort();
 }
 

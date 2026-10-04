@@ -6341,8 +6341,14 @@ service firebase.storage {
                 let stale = upload(&expired);
                 assert_eq!((stale.status, r.status), (401, 401));
                 assert_eq!(r.headers, stale.headers);
-                // The strict Firebase dialect answers in the production error layout (pretty-printed,
-                // as the headers work records it); the message is unchanged.
+                // The strict Firebase dialect writes its JSON bodies in the two-space layout without a
+                // final line feed (`storage_production.rs`, taken from the lean-v5 rows of the other
+                // Firebase-dialect answers). NO recorded production row covers a future-dated, or any
+                // invalid, ID token on a `/v0` Storage route: this body, its layout and its message
+                // ("invalid ID token: malformed token", the fail-closed text of the clock-rewind
+                // issue) are UNRECORDED. They are asserted as the strict profile writes them, not as
+                // production's. Follow-up:
+                // docs.local/issues/open/storage-strict-firebase-401-body-for-an-invalid-token-is-unrecorded.md.
                 assert_eq!(
                     String::from_utf8_lossy(&r.body),
                     "{\n  \"error\": {\n    \"code\": 401,\n    \"message\": \"invalid ID token: malformed token\",\n    \"status\": \"UNAUTHENTICATED\"\n  }\n}"

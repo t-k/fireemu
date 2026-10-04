@@ -174,3 +174,34 @@ test("the Gen1 finalize frame stamped +1611 ms after the call is the call's by i
   });
   assert.deepEqual(attributionOf([previous])[0], { subject: [], near: 0 });
 });
+
+test("a frame exactly at the end of one window belongs to that operation even when another is near", () => {
+  const [one] = attributionOf(
+    [storageFrame("storageDeletedV1", { time: iso(END) })],
+    [
+      { start: START, end: END },
+      { start: END + 200, end: END + 500 },
+    ],
+  );
+  assert.deepEqual(one, { subject: [0], near: 1 });
+});
+
+test("an operation whose times are unknown could own the frame too, so a frame near another operation stays unattributed", () => {
+  const known = op({
+    scenarioId: "storage-upload",
+    start: START,
+    end: END,
+    matchKey,
+    readback: {},
+  });
+  const unknown = { ...known, startedAt: "unknown", endedAt: "unknown" };
+  const run = productionRun(
+    [known, unknown],
+    [],
+    [frameEntry(storageFrame("storageDeletedV1", { time: iso(END + 22) }), START + 2000)],
+  );
+  const production = fromProductionRun(run);
+  const entry = attribute(production, 1000).get(production.frames[0]);
+  assert.equal(entry.subjectOf.length, 0);
+  assert.equal(entry.nearOf.length, 2);
+});

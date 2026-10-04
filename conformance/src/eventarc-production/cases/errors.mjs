@@ -4,7 +4,7 @@ import { cloudEvent, createOwnedChannel } from "./support.mjs";
 export const authErrors = {
   id: "auth-errors",
   short: "ae",
-  requests: 14,
+  requests: 20,
   async run(ctx) {
     const c = ctx.client;
     const channel = (await createOwnedChannel(ctx, "auth")) ?? ctx.channel("auth-absent");

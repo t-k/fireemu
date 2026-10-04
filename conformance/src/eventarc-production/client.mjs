@@ -5,6 +5,7 @@
 // Pub/Sub client does: a canonical code, `ok`, and the step number the capture carries.
 
 import { restCode } from "../pubsub-production/client.mjs";
+import { createLedger, kindOf } from "../pubsub-production/ledger.mjs";
 
 export const PUBLISHING_API = "eventarcpublishing.googleapis.com";
 
@@ -40,6 +41,10 @@ const operations = ({ usageProject, publishPrefix }) => ({
     path: `/v1/projects/${project}/locations/${location}/channels?channelId=${encodeURIComponent(channelId)}`,
     body,
     changes: [`projects/${project}/locations/${location}/channels/${channelId}`],
+    ledger: {
+      action: "create",
+      name: `projects/${project}/locations/${location}/channels/${channelId}`,
+    },
   }),
   getChannel: (name) => ({ host: "eventarc", method: "GET", path: `/v1/${encodeName(name)}` }),
   listChannels: (project, location, page) => ({
@@ -52,6 +57,7 @@ const operations = ({ usageProject, publishPrefix }) => ({
     method: "DELETE",
     path: `/v1/${encodeName(name)}`,
     changes: [name],
+    ledger: { action: "delete", name },
   }),
   publishEvents: (channel, body) => ({
     host: "publishing",
@@ -72,6 +78,7 @@ export function createClient({
   caseId,
   usageProject,
   publishPrefix = "/v1",
+  ledger = createLedger(),
 }) {
   const table = operations({ usageProject, publishPrefix });
   let step = 0;
@@ -83,6 +90,10 @@ export function createClient({
     if (transport === undefined) throw new Error(`no transport for ${spec.host}`);
     step += 1;
     const label = { case: caseId, step: String(step).padStart(2, "0") };
+    // The ledger line is written before the request is sent: a run that dies in the middle of it still
+    // names the channel that may have been created or deleted.
+    const entry = spec.ledger && { ...spec.ledger, transport: "rest" };
+    if (entry) ledger.sent(entry);
     const reply = await transport.request({
       label,
       op: operation,
@@ -92,7 +103,15 @@ export function createClient({
       ...options,
     });
     const code = restCode(reply.status, reply.body);
-    return { ...reply, code, ok: code === "OK", step: label.step };
+    // A 2xx whose body cannot be read does not say what was done, so it is not a success.
+    const result = {
+      ...reply,
+      code,
+      ok: code === "OK" && reply.unknown !== true,
+      step: label.step,
+    };
+    if (entry) ledger.answered({ ...entry, kind: kindOf(result) });
+    return result;
   };
   const methods = (options) =>
     Object.fromEntries(

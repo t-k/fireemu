@@ -100,14 +100,28 @@ test("bad arguments are refused, and the numbers have their values", () => {
     [["--only"], /needs a value/],
     [["stray"], /unexpected argument/],
     [["--cleanup-only"], /12 hex/],
+    [["--cleanup-only", "--run-id", RUN], /needs --from-capture/],
+    [
+      ["--cleanup-only", "--run-id", RUN, "--from-capture", "/x/capture-ffffffffffff.jsonl"],
+      /must be capture-<run ID>\.jsonl of that run/,
+    ],
+    [["--from-capture", `/x/capture-${RUN}.jsonl`], /is for --cleanup-only/],
   ])
     assert.throws(() => parseArgs([...base, ...extra]), pattern, extra.join(" "));
-  assert.equal(parseArgs([...base, "--cleanup-only", "--run-id", RUN]).cleanupOnly, true);
+  const later = parseArgs([
+    ...base,
+    "--cleanup-only",
+    "--run-id",
+    RUN,
+    "--from-capture",
+    `/x/y/capture-${RUN}.jsonl`,
+  ]);
+  assert.deepEqual([later.cleanupOnly, later.ledgerPath], [true, `/x/y/issued-${RUN}.jsonl`]);
   assert.equal(parseArgs([...base, "--max-requests", "1"]).maxRequests, 1);
   assert.equal(parseArgs([...base, "--project-number", "1".repeat(20)]).usageProject.length, 20);
   assert.throws(() => parseArgs([...base, "--project-number", "1".repeat(21)]), /digits/);
-  assert.equal(DEFAULT_MAX_REQUESTS, 140);
-  assert.equal(CLEANUP_BUDGET, 60);
+  assert.equal(DEFAULT_MAX_REQUESTS, 190);
+  assert.equal(CLEANUP_BUDGET, 150);
 });
 
 test("the cases are unique, in the order that records the disabled state first, and fit the default budget", () => {
@@ -153,11 +167,10 @@ function setup(cases, { answer, options = {}, stopping } = {}) {
     transports: {
       eventarc: {
         name: "rest",
-        request: async ({ path }) => ({
-          status: 200,
-          body: path.includes("/channels?") ? {} : { error: { status: "NOT_FOUND" } },
-          unknown: false,
-        }),
+        request: async ({ path }) =>
+          path.includes("/channels?")
+            ? { status: 200, body: {}, unknown: false }
+            : { status: 404, body: { error: { status: "NOT_FOUND" } }, unknown: false },
       },
     },
     ownership,
@@ -218,7 +231,7 @@ test("a case gets names that carry the prefix, probes registered before they are
   assert.equal(exitCodeOf(summary), 0);
 });
 
-test("an error in a case is recorded and the run goes on; StopClean stops after cleaning up; a ceiling that was passed is flagged", async () => {
+test("an error in a case is recorded and the run goes on; StopClean stops after cleaning up; a ceiling is a maximum", async () => {
   const broken = {
     id: "x",
     short: "x1",
@@ -255,13 +268,14 @@ test("an error in a case is recorded and the run goes on; StopClean stops after 
   const { run } = setup([broken, over, stop, never]);
   const summary = await run();
   assert.deepEqual(
-    summary.cases.map((c) => [c.id, c.outcome, c.reason ?? null, c.overDeclared ?? null]),
+    summary.cases.map((c) => [c.id, c.outcome, c.reason ?? null, c.requests]),
     [
-      ["x", "error", "TypeError: boom", null],
-      ["o", "completed", null, 1],
-      ["s", "stopped", "stop here", null],
+      ["x", "error", "TypeError: boom", 0],
+      ["o", "limit", "the case reached its limit of 1 requests", 1],
+      ["s", "stopped", "stop here", 0],
     ],
   );
+  assert.deepEqual(summary.limited, ["o"]);
   assert.equal(summary.stopped, "stop here");
   assert.equal(exitCodeOf(summary), 3);
   assert.equal(
@@ -394,7 +408,12 @@ test("replay on the recorded service body: DISABLED takes the disabled branch in
 });
 
 test("a run is closable only with no unknown answer, no stop and a clean cleanup", () => {
-  const clean = { stopped: null, cleanup: { deleted: [], leftover: [], errors: [] }, cases: [] };
+  const clean = {
+    stopped: null,
+    limited: [],
+    cleanup: { deleted: [], leftover: [], errors: [], unsettled: [] },
+    cases: [],
+  };
   const options = { runId: RUN, target: "emulator", project: "demo-project" };
   const capture = createCapture({ journal: { write() {} } });
   capture.record({ case: "a", step: "01", op: "getChannel" });
@@ -409,6 +428,8 @@ test("a run is closable only with no unknown answer, no stop and a clean cleanup
     { ...clean, stopped: "x" },
     { ...clean, cleanup: { ...clean.cleanup, leftover: ["x"] } },
     { ...clean, cleanup: { ...clean.cleanup, errors: ["x"] } },
+    { ...clean, cleanup: { ...clean.cleanup, unsettled: ["x"] } },
+    { ...clean, limited: ["x"] },
   ])
     assert.equal(
       summarize({ options, capture: createCapture({ journal: { write() {} } }), summary })
@@ -438,7 +459,7 @@ const io = (errors = []) => ({
   stderr: { write: (text) => errors.push(text) },
 });
 
-test("main: a usage error exits 2, a budget below the plan is refused before anything is created, and a signal-free cleanup-only run writes its files", async (t) => {
+test("main: a usage error exits 2, a budget below the plan is refused before anything is created", async (t) => {
   const service = await emptyServer();
   t.after(service.close);
   const errors = [];
@@ -472,29 +493,6 @@ test("main: a usage error exits 2, a budget below the plan is refused before any
     2,
   );
   assert.throws(() => readdirSync(out), "nothing was created");
-  const code = await main(
-    [
-      "--target",
-      "emulator",
-      "--emulator-host",
-      service.host,
-      "--out",
-      out,
-      "--cleanup-only",
-      "--run-id",
-      RUN,
-    ],
-    {},
-    io(),
-  );
-  assert.equal(code, 0);
-  assert.deepEqual(readdirSync(out).toSorted(), [`capture-${RUN}.jsonl`, `summary-${RUN}.json`]);
-  const summary = JSON.parse(readFileSync(join(out, `summary-${RUN}.json`), "utf8"));
-  assert.deepEqual(
-    [summary.closureReady, summary.requests, summary.cleanup.listed],
-    [true, 1, ["us-central1"]],
-  );
-  assert.ok(service.seen.every((entry) => entry.authorization === undefined));
 });
 
 test("main: a case run through the SDK and the transports, against a service that has nothing, completes and cleans up", async (t) => {
@@ -534,4 +532,48 @@ test("main: a case run through the SDK and the transports, against a service tha
   assert.ok(
     lines.some((l) => l.note === "sdk-outcome" && l.name === "missing-source" && l.requests === 0),
   );
+});
+
+/** The most requests a case sends against five kinds of service, with no ceiling in the way. */
+async function worstCase(item) {
+  const operation = {
+    name: "projects/demo-project/locations/us-central1/operations/op-1",
+    done: false,
+  };
+  const modes = {
+    // Everything answers 200 with an empty body.
+    empty: () => ({ status: 200, body: {}, unknown: false }),
+    // Everything is refused as missing.
+    missing: () => ({ status: 404, body: { error: { status: "NOT_FOUND" } }, unknown: false }),
+    // Every answer is an unknown one.
+    unknown: () => ({ status: 503, body: {}, unknown: true }),
+    // Every change is a long-running operation that never finishes, and the API is disabled.
+    pending: (call) =>
+      call.op === "getService"
+        ? { status: 200, body: { state: "DISABLED" }, unknown: false }
+        : call.method === "GET" && call.op !== "getOperation"
+          ? { status: 404, body: { error: { status: "NOT_FOUND" } }, unknown: false }
+          : { status: 200, body: operation, unknown: false },
+    // Every channel exists and every operation finishes.
+    exists: (call) =>
+      call.op === "getService"
+        ? { status: 200, body: { state: "DISABLED" }, unknown: false }
+        : { status: 200, body: { name: "x", done: true }, unknown: false },
+  };
+  let worst = 0;
+  for (const answer of Object.values(modes)) {
+    const { run } = setup([{ ...item, requests: Infinity }], { answer: (call) => answer(call) });
+    const summary = await run();
+    worst = Math.max(worst, ...summary.cases.map((entry) => entry.requests));
+  }
+  return worst;
+}
+
+test("every case's ceiling covers the most it can send against a service that answers empty, missing, unknown, pending or existing", async () => {
+  const measured = {};
+  for (const item of CASES) measured[item.id] = await worstCase(item);
+  const over = Object.entries(measured).filter(
+    ([id, worst]) => worst > CASES.find((item) => item.id === id).requests,
+  );
+  assert.deepEqual(over, [], `measured worst cases: ${JSON.stringify(measured)}`);
 });

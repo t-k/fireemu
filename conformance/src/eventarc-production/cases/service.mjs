@@ -6,7 +6,7 @@ import { cloudEvent, defaultChannelAbsent, waitOperation } from "./support.mjs";
 export const serviceState = {
   id: "service-state",
   short: "sv",
-  requests: 16,
+  requests: 20,
   async run(ctx) {
     const c = ctx.client;
     const before = await c.getService();

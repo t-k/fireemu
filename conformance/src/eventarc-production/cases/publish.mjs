@@ -16,7 +16,7 @@ async function channelOrName(ctx, key) {
 export const publishEnvelope = {
   id: "publish-envelope",
   short: "pe",
-  requests: 26,
+  requests: 32,
   async run(ctx) {
     const c = ctx.client;
     const channel = await channelOrName(ctx, "env");
@@ -67,7 +67,7 @@ export const publishEnvelope = {
 export const publishContent = {
   id: "publish-content",
   short: "pc",
-  requests: 15,
+  requests: 24,
   async run(ctx) {
     const c = ctx.client;
     const channel = await channelOrName(ctx, "content");
@@ -115,7 +115,7 @@ const MiB = KiB * KiB;
 export const publishLimits = {
   id: "publish-limits",
   short: "pl",
-  requests: 16,
+  requests: 24,
   async run(ctx) {
     const c = ctx.client;
     const channel = await channelOrName(ctx, "limits");

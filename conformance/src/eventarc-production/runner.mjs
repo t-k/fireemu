@@ -7,6 +7,7 @@ import { CaseAbort, StopClean } from "./cases/support.mjs";
 import { CASES } from "./cases/index.mjs";
 import { cleanup } from "./cleanup.mjs";
 import { createClient } from "./client.mjs";
+import { createLedger } from "../pubsub-production/ledger.mjs";
 
 export function selectCases(only) {
   if (only === undefined) return CASES;
@@ -14,6 +15,26 @@ export function selectCases(only) {
   const known = new Set(CASES.map((item) => item.id));
   for (const id of wanted) if (!known.has(id)) throw new Error(`unknown case ${id}`);
   return CASES.filter((item) => wanted.has(item.id));
+}
+
+/** A case reached the number of requests it declared: its ceiling is a maximum, not a hint. */
+export class CaseLimit extends Error {
+  constructor(limit) {
+    super(`the case reached its limit of ${limit} requests`);
+    this.name = "CaseLimit";
+  }
+}
+
+/** The same transport, refusing (before the budget is touched) the request after the case's limit. */
+function limited(transport, meter, limit) {
+  return {
+    ...transport,
+    request: (call) => {
+      if (meter.used >= limit) throw new CaseLimit(limit);
+      meter.used += 1;
+      return transport.request(call);
+    },
+  };
 }
 
 export const plannedRequests = (cases) => cases.reduce((sum, item) => sum + item.requests, 0);
@@ -27,8 +48,15 @@ export function assertBudgetCovers(cases, maxRequests) {
     );
 }
 
-function createContext({ item, transports, ownership, capture, options, sleep, sdk }) {
+function createContext({ item, transports, ownership, capture, options, sleep, sdk, ledger }) {
   const caseId = item.id;
+  const meter = { used: 0 };
+  const guarded = Object.fromEntries(
+    Object.entries(transports).map(([name, transport]) => [
+      name,
+      limited(transport, meter, item.requests),
+    ]),
+  );
   return {
     caseId,
     project: ownership.project,
@@ -37,7 +65,8 @@ function createContext({ item, transports, ownership, capture, options, sleep, s
     ownership,
     sdk,
     client: createClient({
-      transports,
+      ledger,
+      transports: guarded,
       ownership,
       caseId,
       usageProject: options.usageProject,
@@ -71,9 +100,10 @@ export async function runCases({
   options,
   sleep,
   sdk = null,
+  ledger = createLedger(),
   isStopping = () => false,
 }) {
-  const summary = { cases: [], stopped: null, cleanup: null };
+  const summary = { cases: [], stopped: null, limited: [], cleanup: null };
   const stoppable = async (ms) => {
     if (isStopping()) throw new StopClean("stopped by a signal");
     await sleep(ms);
@@ -88,7 +118,16 @@ export async function runCases({
     capture.note("case-start", { case: item.id });
     try {
       await item.run(
-        createContext({ item, transports, ownership, capture, options, sleep: stoppable, sdk }),
+        createContext({
+          item,
+          transports,
+          ownership,
+          capture,
+          options,
+          sleep: stoppable,
+          sdk,
+          ledger,
+        }),
       );
     } catch (error) {
       if (error instanceof CaseAbort) {
@@ -98,6 +137,10 @@ export async function runCases({
         entry.outcome = "stopped";
         entry.reason = error.message;
         summary.stopped = error.message;
+      } else if (error instanceof CaseLimit) {
+        entry.outcome = "limit";
+        entry.reason = error.message;
+        summary.limited.push(item.id);
       } else if (error instanceof BudgetExceeded) {
         entry.outcome = "budget";
         entry.reason = error.message;
@@ -108,7 +151,6 @@ export async function runCases({
       }
     }
     entry.requests = capture.count() - before;
-    if (entry.requests > item.requests) entry.overDeclared = item.requests;
     capture.note("case-end", { case: item.id, ...entry });
     summary.cases.push(entry);
     if (summary.stopped !== null && entry.outcome !== "aborted") break;
@@ -117,6 +159,7 @@ export async function runCases({
     client: cleanupClient,
     ownership,
     project: ownership.project,
+    ledger,
     sleep,
   });
   return summary;

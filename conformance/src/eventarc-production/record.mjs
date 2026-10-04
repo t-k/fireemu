@@ -10,9 +10,15 @@
 //
 // Exit codes: 0 done, 1 cleanup left something, 2 usage, 3 stopped clean (a signal), 4 the budget was spent.
 
-import { mkdirSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { basename, dirname, join } from "node:path";
 import { createBudget, createCapture, createFileJournal } from "../pubsub-production/capture.mjs";
+import {
+  createLedger,
+  maybeCreated,
+  maybeDeleting,
+  readLedger,
+} from "../pubsub-production/ledger.mjs";
 import { createRest } from "../pubsub-production/rest.mjs";
 import { createTokenProvider } from "../pubsub-production/token.mjs";
 import { cleanup } from "./cleanup.mjs";
@@ -26,8 +32,10 @@ const PRODUCTION = {
   publishing: "https://eventarcpublishing.googleapis.com",
   usage: "https://serviceusage.googleapis.com",
 };
-export const DEFAULT_MAX_REQUESTS = 140;
-export const CLEANUP_BUDGET = 60;
+export const DEFAULT_MAX_REQUESTS = 190;
+export const CLEANUP_BUDGET = 150;
+/** The later --cleanup-only run starts at least this long after the recording's last line. */
+export const MIN_A2_WAIT_MS = 10 * 60 * 1000;
 
 export function parseArgs(argv, env = {}) {
   const options = { maxRequests: DEFAULT_MAX_REQUESTS };
@@ -68,9 +76,19 @@ export function parseArgs(argv, env = {}) {
   options.location = take("location") ?? "us-central1";
   if (!/^[a-z][a-z0-9-]{1,40}$/.test(options.location))
     throw new Error("--location is not a location");
+  options.fromCapture = take("from-capture");
   options.runId = take("run-id") ?? (options.cleanupOnly ? undefined : newRunId());
   if (options.runId === undefined || !isRunId(options.runId))
     throw new Error("--run-id must be 12 hex digits (required with --cleanup-only)");
+  if (options.cleanupOnly) {
+    // The later run reads what the recording issued: its capture (for the time) and the ledger beside it.
+    if (options.fromCapture === undefined)
+      throw new Error("--cleanup-only needs --from-capture <the recording's capture file>");
+    if (basename(options.fromCapture) !== `capture-${options.runId}.jsonl`)
+      throw new Error("--from-capture must be capture-<run ID>.jsonl of that run");
+    options.ledgerPath = join(dirname(options.fromCapture), `issued-${options.runId}.jsonl`);
+  } else if (options.fromCapture !== undefined)
+    throw new Error("--from-capture is for --cleanup-only");
   options.host = take("emulator-host") ?? env.CLOUD_EVENTARC_EMULATOR_HOST;
   if (!options.production && !/^(https?:\/\/)?[^/\s]+:\d+$/.test(options.host ?? ""))
     throw new Error(
@@ -94,8 +112,10 @@ export function summarize({ options, capture, summary }) {
     closureReady:
       capture.unknownCount() === 0 &&
       summary.stopped === null &&
+      (summary.limited ?? []).length === 0 &&
       summary.cleanup.leftover.length === 0 &&
-      summary.cleanup.errors.length === 0,
+      summary.cleanup.errors.length === 0 &&
+      summary.cleanup.unsettled.length === 0,
     perCase: capture.perCase(),
     ...summary,
   };
@@ -103,26 +123,57 @@ export function summarize({ options, capture, summary }) {
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
+/** The time of the last line of a capture, which the later run waits from. */
+function lastLineTime(path) {
+  const lines = readFileSync(path, "utf8")
+    .split("\n")
+    .filter((line) => line.trim() !== "");
+  const at = Date.parse(JSON.parse(lines.at(-1) ?? "{}").at);
+  if (Number.isNaN(at)) throw new Error("the capture has no readable last line");
+  return at;
+}
+
+const stamp = (ms) => new Date(ms).toISOString().replace(/[-:]/g, "").replace(/\.\d+/, "");
+
 export async function main(
   argv,
   env = process.env,
   io = { stdout: process.stdout, stderr: process.stderr },
+  deps = { now: Date.now },
 ) {
+  const wait = deps.sleep ?? sleep;
   let options;
   let cases = [];
+  let issued = null;
+  let suffix = "";
   try {
     options = parseArgs(argv, env);
     if (!options.cleanupOnly) {
       cases = selectCases(options.only);
       assertBudgetCovers(cases, options.maxRequests);
+    } else {
+      // The later run reads the channels the recording issued, and waits for the service to settle.
+      issued = readLedger(options.ledgerPath, {});
+      const waited = deps.now() - lastLineTime(options.fromCapture);
+      if (waited < MIN_A2_WAIT_MS)
+        throw new Error(
+          `--cleanup-only runs at least ${MIN_A2_WAIT_MS / 60000} minutes after the recording (${Math.ceil(waited / 1000)} s so far)`,
+        );
+      suffix = `-a2-${stamp(deps.now())}`;
     }
   } catch (error) {
     io.stderr.write(`${error.message}\n`);
     return 2;
   }
   mkdirSync(options.out, { recursive: true, mode: 0o700 });
-  const journal = createFileJournal(join(options.out, `capture-${options.runId}.jsonl`));
+  const journal = createFileJournal(join(options.out, `capture-${options.runId}${suffix}.jsonl`));
   const capture = createCapture({ journal });
+  const ledgerJournal = createFileJournal(
+    join(options.out, `issued-${options.runId}${suffix}.jsonl`),
+  );
+  // The later run keeps the names it read, and adds what it sends.
+  const ledger =
+    issued === null ? createLedger({ journal: ledgerJournal }) : issued.withJournal(ledgerJournal);
   const token = options.production ? createTokenProvider() : null;
   const getToken = token === null ? null : () => token.get();
   const base = (key) =>
@@ -142,12 +193,22 @@ export async function main(
   const transports = makeTransports(budget);
   const cleanupTransports = makeTransports(createBudget(CLEANUP_BUDGET));
   const ownership = createOwnership({ project: options.project, runId: options.runId });
+  if (issued !== null) {
+    // A name that is not the run's by prefix (a probe) is changeable only if the run's own creation of
+    // it, or of its deletion, may have happened; a conflict or a refusal never makes it ours.
+    for (const [name, item] of issued.state())
+      if (!ownership.isOwned(name) && (maybeCreated(item) || maybeDeleting(item)))
+        ownership.registerProbe(name);
+    // The location the run records in is listed too, whatever the ledger names.
+    ownership.channel(options.location, "cleanup-only");
+  }
   const cleanupClient = createClient({
     transports: cleanupTransports,
     ownership,
     caseId: "cleanup",
     usageProject: options.usageProject,
     publishPrefix: options.publishPrefix,
+    ledger,
   });
   let stopping = false;
   for (const signal of ["SIGINT", "SIGTERM"]) process.once(signal, () => (stopping = true));
@@ -162,16 +223,16 @@ export async function main(
   let sdk = null;
   try {
     if (options.cleanupOnly) {
-      // The cleanup names the locations of the run; a later cleanup-only run has none, so it lists the one given.
-      ownership.channel(options.location, "cleanup-only");
       summary = {
         cases: [],
         stopped: null,
+        limited: [],
         cleanup: await cleanup({
           client: cleanupClient,
           ownership,
           project: options.project,
-          sleep,
+          ledger,
+          sleep: wait,
         }),
       };
     } else {
@@ -189,8 +250,9 @@ export async function main(
         ownership,
         capture,
         options,
-        sleep,
+        sleep: wait,
         sdk,
+        ledger,
         isStopping: () => stopping,
       });
     }
@@ -200,15 +262,14 @@ export async function main(
   const result = summarize({ options, capture, summary });
   capture.note("run-end", { requests: result.requests, stopped: result.stopped });
   journal.close();
+  ledgerJournal.close();
   writeFileSync(
-    join(options.out, `summary-${options.runId}.json`),
+    join(options.out, `summary-${options.runId}${suffix}.json`),
     `${JSON.stringify(result, null, 2)}\n`,
-    {
-      mode: 0o600,
-    },
+    { mode: 0o600 },
   );
   io.stdout.write(
-    `${JSON.stringify({ runId: result.runId, requests: result.requests, stopped: result.stopped, cleanup: { deleted: summary.cleanup.deleted.length, leftover: summary.cleanup.leftover, errors: summary.cleanup.errors } })}\n`,
+    `${JSON.stringify({ runId: result.runId, requests: result.requests, stopped: result.stopped, closureReady: result.closureReady, cleanup: { deleted: summary.cleanup.deleted.length, leftover: summary.cleanup.leftover, errors: summary.cleanup.errors, unsettled: summary.cleanup.unsettled } })}\n`,
   );
   return exitCodeOf(summary);
 }

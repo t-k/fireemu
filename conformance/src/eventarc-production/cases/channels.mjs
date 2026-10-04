@@ -5,7 +5,7 @@ import { waitOperation } from "./support.mjs";
 export const channelLifecycle = {
   id: "channel-lifecycle",
   short: "cl",
-  requests: 34,
+  requests: 52,
   async run(ctx) {
     const c = ctx.client;
     const name = ctx.channel("c1");

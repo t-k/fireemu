@@ -437,7 +437,8 @@ async fn an_expiration_ttl_under_one_day_is_refused_on_both_transports_and_creat
 }
 
 #[tokio::test]
-async fn a_grpc_expiration_ttl_keeps_its_nanos_and_a_non_canonical_one_is_refused_for_that_reason() {
+async fn a_grpc_expiration_ttl_keeps_its_nanos_and_a_non_canonical_one_is_refused_for_that_reason()
+{
     let h = Harness::new().await;
     h.topic("demo").await;
     let mut grpc = h.grpc().await;
@@ -450,7 +451,11 @@ async fn a_grpc_expiration_ttl_keeps_its_nanos_and_a_non_canonical_one_is_refuse
         }),
         ..base("nanos")
     };
-    let created = grpc.create_subscription(with_nanos).await.unwrap().into_inner();
+    let created = grpc
+        .create_subscription(with_nanos)
+        .await
+        .unwrap()
+        .into_inner();
     let ttl = created.expiration_policy.unwrap().ttl.unwrap();
     assert_eq!((ttl.seconds, ttl.nanos), (86_400, 500_000_000));
     // Each refusal says why: not canonical, or under a day.
@@ -470,7 +475,11 @@ async fn a_grpc_expiration_ttl_keeps_its_nanos_and_a_non_canonical_one_is_refuse
             .create_subscription(refused(seconds, nanos))
             .await
             .unwrap_err();
-        assert_eq!(error.code(), tonic::Code::InvalidArgument, "{seconds} {nanos}");
+        assert_eq!(
+            error.code(),
+            tonic::Code::InvalidArgument,
+            "{seconds} {nanos}"
+        );
         assert!(
             error.message().contains(reason),
             "{seconds} {nanos}: {}",

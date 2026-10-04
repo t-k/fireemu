@@ -13,7 +13,9 @@ import { STEP_GAP_SECONDS, buildPass, runSetupRequests } from "./script.mjs";
 
 export const NORMAL_CEILING = 480;
 export const CLEANUP_CEILING = 520;
-export const CAPTURE_EVERY_SECONDS = 30;
+// The log entries persist, so the capture only needs to read often enough that no entry waits long: a poll covers everything since the last one.
+export const CAPTURE_EVERY_SECONDS = 120;
+export const SLEEP_CHUNK_SECONDS = 60;
 export const FINAL_WINDOW_SECONDS = 120;
 export const MAX_PAGES = 5;
 
@@ -26,7 +28,9 @@ function createCapture({ transport, now, startedAt }) {
   let polls = 0;
   let incomplete = 0;
   let lastEnd = startedAt;
+  let lastPollAt = startedAt;
   async function poll() {
+    lastPollAt = now();
     const start = Math.max(startedAt, lastEnd - 30_000);
     const end = now();
     let pageToken;
@@ -48,7 +52,7 @@ function createCapture({ transport, now, startedAt }) {
     }
     incomplete += 1;
   }
-  return { poll, frames, stats: () => ({ polls, incompletePolls: incomplete, ignored }) };
+  return { poll, frames, sincePoll: () => now() - lastPollAt, stats: () => ({ polls, incompletePolls: incomplete, ignored }) };
 }
 
 const iso = (now) => new Date(now()).toISOString();
@@ -67,10 +71,10 @@ export async function record({ transport, cli, sleep, now, newId, corpusDigest, 
   async function waitAndCapture(seconds) {
     let left = seconds;
     while (left > 0) {
-      const chunk = Math.min(CAPTURE_EVERY_SECONDS, left);
+      const chunk = Math.min(SLEEP_CHUNK_SECONDS, left);
       await sleep(chunk);
       left -= chunk;
-      await capture.poll();
+      if (capture.sincePoll() >= CAPTURE_EVERY_SECONDS * 1000) await capture.poll();
     }
   }
 
@@ -145,6 +149,7 @@ export async function record({ transport, cli, sleep, now, newId, corpusDigest, 
       await waitAndCapture(PROPAGATION_WAIT_SECONDS);
       passesComplete = (await runPass(1)) && (await runPass(2));
       if (passesComplete) await waitAndCapture(FINAL_WINDOW_SECONDS);
+      await capture.poll();
     }
   } catch (error) {
     run.stops.push(`${error.constructor.name}: ${error.message}`);

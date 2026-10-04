@@ -53,7 +53,7 @@ test("the request count stays inside the ceiling the design gives", async () => 
   const { deps, transport } = setup();
   const { run } = await record(deps);
   assert.ok(run.requestsSent <= CLEANUP_CEILING, `${run.requestsSent}`);
-  assert.ok(run.requestsSent >= 300, `${run.requestsSent}`);
+  assert.ok(run.requestsSent >= 250 && run.requestsSent <= 420, `${run.requestsSent}`);
   const writes = passSummary(buildPass({ pass: 1, newId: (r) => r })).mutations * 2;
   assert.ok(writes === 116);
 });
@@ -110,7 +110,7 @@ test("a stop signal ends the passes at the next step, and the cleanup still runs
   let sleeps = 0;
   deps.sleep = async (s) => {
     sleeps += 1;
-    if (sleeps === 80) signal.aborted = true;
+    if (sleeps === 40) signal.aborted = true;
     return original(s);
   };
   const { outcome, run } = await record({ ...deps, signal });

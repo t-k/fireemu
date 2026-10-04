@@ -135,12 +135,23 @@ export async function readLists(transport) {
   return out;
 }
 
-/** Polls the four lists until the 22 handlers are active or the polls run out. Returns the last summary and the number of polls. */
+const NOT_READ = { items: [], complete: true };
+
+/**
+ * Polls until the 22 handlers are active or the polls run out. A poll reads the two function lists;
+ * only when all 22 are active does it read the Run and Eventarc lists to confirm. Returns the last
+ * summary and the number of polls.
+ */
 export async function waitReady({ transport, sleep, polls = READY_MAX_POLLS, everySeconds = READY_POLL_SECONDS }) {
   let summary;
   for (let i = 1; i <= polls; i += 1) {
-    summary = summarize(await readLists(transport));
-    if (summary.ready) return { ...summary, polls: i };
+    const v1 = await readList(transport, "v1");
+    const v2 = await readList(transport, "v2");
+    summary = summarize({ v1, v2, run: NOT_READ, eventarc: NOT_READ });
+    if (summary.functionsActive.length === HANDLERS.length) {
+      summary = summarize({ v1, v2, run: await readList(transport, "run"), eventarc: await readList(transport, "eventarc") });
+      if (summary.ready) return { ...summary, polls: i };
+    }
     if (i < polls) await sleep(everySeconds);
   }
   return { ...summary, polls };

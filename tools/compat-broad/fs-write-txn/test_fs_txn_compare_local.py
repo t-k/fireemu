@@ -71,3 +71,15 @@ def test_the_first_line_of_a_diagnostic_decides_and_the_project_id_is_normalised
 def test_a_missing_local_row_is_a_mismatch():
     cases, reads, times = tool.compare(projection(), {"cases": [], "reads": []}, {"s": {"commitTime": True, "relation": None}}, {})
     assert not cases[0]["match"] and not reads[0]["match"] and not times[0]["match"]
+
+
+def test_a_table_for_the_free_tier_project_is_replayed_and_normalised_under_that_project():
+    assert tool.table_project({"project": "fireemu-oracle-txn"}) == "fireemu-oracle-txn"
+    assert tool.table_project({}) == "fireemu-oracle-sbx"
+    production = projection(code=5, details='Document "projects/fireemu-oracle-txn/x" not found')
+    local = projection(code=5, details='Document "projects/demo-program/x" not found')
+    cases, _reads, _times = tool.compare(production, local, None, {}, project="fireemu-oracle-txn")
+    assert cases[0]["match"] is True
+    # under the default project name the same pair differs
+    cases, _reads, _times = tool.compare(production, local, None, {})
+    assert cases[0]["match"] is False

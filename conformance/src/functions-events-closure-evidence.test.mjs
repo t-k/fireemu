@@ -94,14 +94,25 @@ function comparisonOf({
     for (const id of expectedRows(condition)) {
       if (drop.includes(id)) continue;
       const [, name, version] = id.split("#");
-      const { only, status = "MATCH", reasons = [], ...rest } = over[id] ?? {};
+      const {
+        only,
+        production = { status: "MATCH", reasons: [] },
+        status = "MATCH",
+        reasons = [],
+        ...rest
+      } = over[id] ?? {};
+      const rank0 = { MATCH: 0, INCOMPLETE: 1, DIFF: 2 };
       const profile = (side) => {
-        if (only) {
-          return only[side] === undefined
+        const own = only
+          ? only[side] === undefined
             ? { status: "MATCH", reasons: [] }
-            : { status: only[side], reasons: reasons.map((r) => `${side}: ${r}`) };
-        }
-        return { status, reasons };
+            : { status: only[side], reasons: reasons.map((r) => `${side}: ${r}`) }
+          : { status, reasons };
+        // the production side counts against both profiles, with its reasons
+        return {
+          status: rank0[production.status] > rank0[own.status] ? production.status : own.status,
+          reasons: [...production.reasons, ...own.reasons],
+        };
       };
       const profiles = { emulator: profile("emulator"), strict: profile("strict") };
       const rank = { MATCH: 0, INCOMPLETE: 1, DIFF: 2 };
@@ -116,6 +127,7 @@ function comparisonOf({
         generation: Number(version.slice(1)),
         status: combined,
         reasons: [...profiles.emulator.reasons, ...profiles.strict.reasons],
+        production,
         profiles,
         ...rest,
       });
@@ -347,6 +359,7 @@ test("a row the comparison lacks is MISSING; a row of another condition, a stray
     generation: 1,
     status: "MATCH",
     reasons: [],
+    production: { status: "MATCH", reasons: [] },
     profiles: {
       emulator: { status: "MATCH", reasons: [] },
       strict: { status: "MATCH", reasons: [] },
@@ -1087,6 +1100,7 @@ test("each part of the summary is checked on its own, a row without a condition 
     generation: 1,
     status: "MATCH",
     reasons: [],
+    production: { status: "MATCH", reasons: [] },
     profiles: {
       emulator: { status: "MATCH", reasons: [] },
       strict: { status: "MATCH", reasons: [] },
@@ -1280,6 +1294,7 @@ test("a comparison without the per-profile status of every row is refused, even 
         strip((row) => ({
           ...row,
           status: "DIFF",
+          production: { status: "MATCH", reasons: [] },
           profiles: {
             emulator: { status: "MATCH", reasons: [] },
             strict: { status: "MATCH", reasons: [] },
@@ -1509,4 +1524,94 @@ test("M2: the local sessions must have run the artifact, from a clean tree of th
 test("S1: --sandbox-ledger is required with --write, and the report mode does not need it", () => {
   refusedWrite({}, { "sandbox-ledger": undefined }, /--sandbox-ledger is required with --write/);
   closureEvidenceCommand(options(), commandFiles().io);
+});
+
+test("S2: a production-side fault counts against both profiles; one attributed to a single profile is refused", () => {
+  const fault = { status: "INCOMPLETE", reasons: ["production pass 1: no frame in the window"] };
+  const row = (change) => {
+    const good = comparisonOf();
+    return { ...good, rows: [change(good.rows[0]), ...good.rows.slice(1)] };
+  };
+  // the comparator's own shape: both profiles carry the production fault
+  const id = "functions-events/firestore/create#new-document#v1";
+  const both = comparisonOf({ over: { [id]: { production: fault } } });
+  checkComparison(both);
+  const faulty = both.rows.find((r) => r.row === id);
+  assert.deepEqual(faulty.production, fault);
+  for (const side of ["emulator", "strict"]) {
+    assert.equal(faulty.profiles[side].status, "INCOMPLETE");
+    assert.deepEqual(faulty.profiles[side].reasons, fault.reasons);
+  }
+  const verified = (comparison) =>
+    mapConditions(closure(), checkComparison(comparison)).find((e) =>
+      e.conditionId.endsWith("/firestore-created"),
+    ).status;
+  assert.equal(verified(both), "PRODUCTION_RECORDED");
+  // attributed to the emulator profile only: strict MATCH would verify a condition with a faulty recording
+  const emulatorOnly = (r) => ({
+    ...r,
+    status: "INCOMPLETE",
+    reasons: fault.reasons,
+    production: fault,
+    profiles: {
+      emulator: { status: "INCOMPLETE", reasons: fault.reasons },
+      strict: { status: "MATCH", reasons: [] },
+    },
+  });
+  const forged = row(emulatorOnly);
+  asRefusal(
+    () => checkComparison(forged),
+    /strict status is better than the production-side status, which counts against both profiles/,
+  );
+  asRefusal(
+    () => closureEvidenceCommand(writing(), commandFiles({ comparison: forged }).io),
+    /strict status is better than the production-side status/,
+  );
+  // attributed to strict only: the emulator profile must carry it as well
+  asRefusal(
+    () =>
+      checkComparison(
+        row((r) => ({
+          ...r,
+          status: "INCOMPLETE",
+          reasons: fault.reasons,
+          production: fault,
+          profiles: {
+            emulator: { status: "MATCH", reasons: [] },
+            strict: { status: "INCOMPLETE", reasons: fault.reasons },
+          },
+        })),
+      ),
+    /emulator status is better than the production-side status/,
+  );
+  // the status is right but the reasons were dropped from a profile
+  asRefusal(
+    () =>
+      checkComparison(
+        row((r) => ({
+          ...r,
+          status: "INCOMPLETE",
+          reasons: fault.reasons,
+          production: fault,
+          profiles: {
+            emulator: { status: "INCOMPLETE", reasons: fault.reasons },
+            strict: { status: "INCOMPLETE", reasons: ["strict: something else"] },
+          },
+        })),
+      ),
+    /strict reasons lack the production-side reasons/,
+  );
+  // no production-side entry at all, or a bad one
+  const noProduction = /has no production-side status/;
+  asRefusal(() => checkComparison(row(({ production, ...r }) => r)), noProduction);
+  asRefusal(
+    () => checkComparison(row((r) => ({ ...r, production: { status: "PASS", reasons: [] } }))),
+    noProduction,
+  );
+  asRefusal(
+    () => checkComparison(row((r) => ({ ...r, production: { status: "MATCH" } }))),
+    noProduction,
+  );
+  // a worse profile than the production side is fine: a local DIFF with a MATCH production
+  checkComparison(comparisonOf({ over: { [id]: { only: { strict: "DIFF" }, reasons: ["x"] } } }));
 });

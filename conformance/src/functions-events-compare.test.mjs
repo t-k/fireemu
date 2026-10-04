@@ -144,6 +144,7 @@ test("every row carries a status and the reasons of each profile; production-sid
       }
   const result = compare(w);
   const diff = rowById(result, "functions-events/firestore/create#new-document#v1");
+  assert.deepEqual(diff.production, { status: "MATCH", reasons: [] });
   assert.deepEqual(Object.keys(diff.profiles), ["emulator", "strict"]);
   assert.deepEqual(diff.profiles.emulator, { status: "MATCH", reasons: [] });
   assert.equal(diff.profiles.strict.status, "DIFF");
@@ -181,6 +182,10 @@ test("a production-side INCOMPLETE is INCOMPLETE in both profiles, with its reas
     assert.equal(row.profiles[profile].status, "INCOMPLETE", profile);
     assert.deepEqual(row.profiles[profile].reasons, row.reasons, profile);
   }
+  // the production side is its own entry: its status and reasons, which both profiles include
+  assert.equal(row.production.status, "INCOMPLETE");
+  assert.deepEqual(row.production.reasons, row.reasons);
+  assert.ok(row.production.reasons.every((r) => r.startsWith("production passes disagree")));
   // a local-driver problem of one profile stays that profile's, next to the production reasons
   const m = world();
   const update = rowById(compare(m), "functions-events/firestore/update#changed-field#v1");
@@ -194,6 +199,11 @@ test("a production-side INCOMPLETE is INCOMPLETE in both profiles, with its reas
       "strict: local session has no functions-events/firestore/update program",
     ),
   );
+  assert.equal(update.production.status, "INCOMPLETE");
+  assert.deepEqual(update.production.reasons, [
+    "production pass 1: 0 subject operations for fs-update",
+    "production pass 2: 0 subject operations for fs-update",
+  ]);
   assert.ok(!update.profiles.strict.reasons.some((r) => r.startsWith("emulator:")));
   assert.ok(!update.profiles.emulator.reasons.some((r) => r.startsWith("strict:")));
 });

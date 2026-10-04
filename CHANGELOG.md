@@ -15,6 +15,7 @@ Each release is a Git tag; the binaries and the npm packages are built from that
 
 ### Changed
 
+- Both profiles: the Cloud Storage JSON API object delete (`DELETE /storage/v1/b/<bucket>/o/<object>` and the short spelling) answers `204` with `Content-Length: 0`, as production does (recorded in the two stage 3 v9 recordings and compared byte for byte by the management comparison); it sent no content length before. The official emulator sends none (firebase-tools 15.28.2: Express `sendStatus(204)`), but the header refuses nothing, so the emulator profile sends it too. The Firebase dialect's object delete and every other `204` are not recorded and keep their answers.
 - An `--import` above a Firestore history limit or above `storage.maxStoredBytes` now starts with a `warning:` line naming the database or the stored bytes, the limit, and which writes are refused until data is deleted. The import is still not refused. A session snapshot restore through the control API that leaves a database or the store above a limit logs the same line.
 - A Firestore export writes each database's live documents straight from the store, one record at a time, instead of first copying every database (its indexes and every document) into a snapshot and then into export rows. The artifact is byte-for-byte the same.
 - The Firestore scope indexes and the listing trie share one allocation of each retained document path instead of holding three copies. 300,000 small documents take about 591 MiB instead of 711 MiB (macOS arm64, release build). Results are unchanged.

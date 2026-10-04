@@ -274,8 +274,8 @@ class Ledger:
             raise ValueError("HTTP status disagrees with the transport or the code")
         if code == 0 and not isinstance(result.get("response"), dict):
             raise ValueError("native success has no typed response")
-        # a code 1 on a step that did not ask for a cancel is refused above (unknown); on one that did, it must carry the frames received before the cancel
-        if code == 1 and (not isinstance(result.get("response"), dict) or not isinstance(result["response"].get("responses"), list)):
+        # a code 1 on a step that did not ask for a cancel is refused above (unknown); on one that did, it carries the frames received before the cancel (their shape is checked with the others')
+        if code == 1 and not isinstance(result.get("response"), dict):
             raise ValueError("a client cancel carries the frames it received")
 
     def after(self, site, transport, method, request, step, result, timing):

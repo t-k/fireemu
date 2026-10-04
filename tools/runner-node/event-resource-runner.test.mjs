@@ -499,3 +499,54 @@ test('v2 explicit database/document and bucket filters are not interpreted as v1
   assert.equal(f.manifest.functions[1].trigger.bucket, 'assets.example');
   assert.equal(f.manifest.functions.every(x => x.generation === 2), true);
 });
+
+// Storage event shapes of the FE v5 production recording (run functions-events-formal-20261004T182904Z-a9621bfae74fe9bc,
+// 2026-10-04): the handler prints what it receives, so the member order is the order the handler was handed.
+const v5Storage = JSON.parse(await readFile(new URL('../../crates/fireemu-adapter-functions/tests/fixtures/production-storage-v5-frames.json', import.meta.url), 'utf8'));
+const v5Frame = insertId => v5Storage.frames.find(f => f.insertId === insertId);
+const alphabetical = value => Object.fromEntries(Object.entries(value).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)));
+
+test('v1: a Storage legacy context lists its resource members in the order production hands them over: name, service, type (v5 frame 6ac29fb70006ad918ea2a73d)', { timeout: 10000 }, async t => {
+  const recorded = v5Frame('6ac29fb70006ad918ea2a73d').frame;
+  assert.deepEqual(Object.keys(recorded.context.resource), ['name', 'service', 'type']);
+  const bucket = recorded.data.bucket;
+  const f = await start(t, [stEntry('onFinalize', `projects/_/buckets/${bucket}`, 'endpoint')]);
+  const event = { id: '22252774326123787', type: 'google.cloud.storage.object.v1.finalized', time: '2026-10-04T18:49:25.459311Z', source: `//storage.googleapis.com/projects/_/buckets/${bucket}`, data: alphabetical(recorded.data) };
+  assert.equal((await f.invoke('onFinalize', 'storage', event, { admittedAt: '2026-10-04T18:49:25.526Z' })).ok, true);
+  const [call] = await f.calls();
+  assert.deepEqual(Object.keys(call.context.resource), ['name', 'service', 'type']);
+  assert.deepEqual(call.context.resource, { ...recorded.context.resource, name: call.context.resource.name });
+  assert.equal(call.context.resource.name, `projects/_/buckets/${bucket}/objects/${recorded.data.name}`);
+});
+
+for (const [handler, insertId, eventType] of [
+  ['storageFinalizedV2', '6ac29fb7000987a59af4b7f6', 'finalized'],
+  ['storageDeletedV2', '6ac29fd70001a0e4d85cfd12', 'deleted'],
+  ['storageMetadataUpdatedV2', '6ac2a0a80000b3d27b4b1db3', 'metadataUpdated'],
+]) {
+  test(`v2: a Storage ${eventType} handler is handed the object members in the recorded order (v5 frame ${insertId})`, { timeout: 10000 }, async t => {
+    const recorded = v5Frame(insertId).frame;
+    assert.equal(v5Frame(insertId).handler, handler);
+    const bucket = recorded.data.bucket;
+    const f = await start(t, [{ name: 'object', __endpoint: { platform: 'gcfv2', eventTrigger: { eventType: `google.cloud.storage.object.v1.${eventType}`, eventFilters: { bucket } } } }]);
+    // The runtime's JSON has its members sorted by name; the handler must see the recorded order.
+    const event = { id: recorded.id, type: recorded.type, time: recorded.time, source: recorded.source, subject: recorded.subject, specversion: '1.0', bucket, data: alphabetical(recorded.data) };
+    assert.equal((await f.invoke('object', 'storage', event)).ok, true);
+    const [call] = await f.calls();
+    assert.deepEqual(Object.keys(call.data.data), Object.keys(recorded.data));
+    assert.deepEqual(call.data.data, recorded.data);
+    // The envelope is not reordered or reshaped.
+    assert.deepEqual(Object.keys(call.data).filter(key => key !== 'data').sort(), Object.keys(event).filter(key => key !== 'data').sort());
+  });
+}
+
+test('v2: members of a Storage object that the recordings never showed follow the recorded ones in name order, and an unknown member is kept', { timeout: 10000 }, async t => {
+  const recorded = v5Frame('6ac29fb7000987a59af4b7f6').frame;
+  const bucket = recorded.data.bucket;
+  const f = await start(t, [{ name: 'object', __endpoint: { platform: 'gcfv2', eventTrigger: { eventType: 'google.cloud.storage.object.v1.finalized', eventFilters: { bucket } } } }]);
+  const extras = { cacheControl: 'no-cache', contentEncoding: 'gzip', zzz: 1, aaa: 2 };
+  const event = { id: recorded.id, type: recorded.type, time: recorded.time, source: recorded.source, subject: recorded.subject, specversion: '1.0', bucket, data: alphabetical({ ...recorded.data, ...extras }) };
+  assert.equal((await f.invoke('object', 'storage', event)).ok, true);
+  const [call] = await f.calls();
+  assert.deepEqual(Object.keys(call.data.data), [...Object.keys(recorded.data), 'aaa', 'cacheControl', 'contentEncoding', 'zzz']);
+});

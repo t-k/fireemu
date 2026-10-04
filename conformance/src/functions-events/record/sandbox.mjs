@@ -12,11 +12,12 @@ import {
   mkdirSync,
   openSync,
   readFileSync,
+  realpathSync,
   statSync,
   unlinkSync,
   writeSync,
 } from "node:fs";
-import { join } from "node:path";
+import { isAbsolute, join, relative } from "node:path";
 
 export const TASK_ID = "FUNCTIONS-EVENTS-SANDBOX";
 export const PROJECT = "fireemu-oracle-events";
@@ -52,12 +53,100 @@ const cleanClose = (row) =>
     row.event === "cleanup-verified" ||
     (["prepared", "recorded"].includes(row.outcome) && row.lockRetained === false));
 
+const isCount = (value) => Number.isInteger(value) && value >= 0;
+const time = (row) => Date.parse(row.ts);
+
+/**
+ * What a run's transport journal says about what was sent, or undefined when it cannot be trusted:
+ * a line that does not parse, a state or a kind we do not know, a repeated or orphaned sequence number.
+ * `mutating` counts every send whose `mutation` flag is not exactly false; `unknown` counts every send
+ * with no answer and every answer that is not a success or a refusal.
+ */
+export function journalFacts(text) {
+  const sends = new Map();
+  for (const line of text.split("\n")) {
+    if (!line.trim()) continue;
+    let entry;
+    try {
+      entry = JSON.parse(line);
+    } catch {
+      return undefined;
+    }
+    if (!entry || typeof entry !== "object" || !Number.isInteger(entry.seq)) return undefined;
+    if (entry.state === "before-send") {
+      if (sends.has(entry.seq)) return undefined;
+      sends.set(entry.seq, { mutation: entry.mutation, kind: undefined });
+    } else if (entry.state === "response-persisted") {
+      const send = sends.get(entry.seq);
+      if (!send || send.kind !== undefined || typeof entry.kind !== "string") return undefined;
+      send.kind = entry.kind;
+    } else return undefined;
+  }
+  let mutating = 0;
+  let unknown = 0;
+  for (const send of sends.values()) {
+    if (send.mutation !== false) mutating += 1;
+    if (send.kind !== "success" && send.kind !== "refusal") unknown += 1;
+  }
+  return { sent: sends.size, mutating, unknown };
+}
+
+/**
+ * Whether the rows of one run (all lines of the project that name its run directory) show a run that
+ * wrote nothing and left nothing behind, so the next run need not wait out the spacing. Every condition
+ * must hold; anything missing or unreadable is a no:
+ *   - exactly three lines: `started`, `finished`, `cleanup-verified`, of this task, in that time order;
+ *   - the closing line says `stopped-clean`, no lock kept, no CLI deploy or delete attempt, a request count;
+ *   - the close line says the sandbox is at its baseline, no unknown answers, the same request count;
+ *   - the run's own journal agrees: that many sends, none of them mutating, none without a usable answer.
+ */
+function writesNothing(rows, readJournal) {
+  if (typeof readJournal !== "function" || rows.length !== 3) return false;
+  const [started, finished, closed] = ["started", "finished", "cleanup-verified"].map((event) =>
+    rows.find((row) => row.event === event),
+  );
+  if (!started || !finished || !closed) return false;
+  if (!rows.every((row) => row.taskId === TASK_ID)) return false;
+  const [t0, t1, t2] = [started, finished, closed].map(time);
+  if (!(Number.isFinite(t0) && Number.isFinite(t1) && Number.isFinite(t2) && t0 <= t1 && t1 <= t2))
+    return false;
+  const cli = finished.cliAttempts;
+  if (finished.outcome !== "stopped-clean" || finished.lockRetained !== false) return false;
+  if (!cli || cli.deploy !== 0 || cli.delete !== 0 || !isCount(finished.requests)) return false;
+  if (closed.sandboxAtBaseline !== true || closed.unknownAnswers !== 0) return false;
+  if (closed.requests !== finished.requests) return false;
+  let facts;
+  try {
+    const text = readJournal(started.runDir);
+    facts = typeof text === "string" ? journalFacts(text) : undefined;
+  } catch {
+    return false;
+  }
+  return facts?.mutating === 0 && facts.unknown === 0 && facts.sent === finished.requests;
+}
+
+/** The lines that belong to a run that wrote nothing (see `writesNothing`); they do not hold the spacing. */
+function spacingExempt(rows, readJournal) {
+  const byRun = new Map();
+  for (const row of rows) {
+    if (typeof row.runDir !== "string" || row.runDir === "") continue;
+    byRun.set(row.runDir, [...(byRun.get(row.runDir) ?? []), row]);
+  }
+  const exempt = new Set();
+  for (const group of byRun.values())
+    if (writesNothing(group, readJournal)) for (const row of group) exempt.add(row);
+  return exempt;
+}
+
 /**
  * Why a run may not start on the events project now: no clean closing line to start from, a run of
  * any task left open after the latest one (a `started` or `needs-recovery` line with no later clean
  * closing line), the last line of the project in the last 30 minutes, or a line whose time cannot be read.
+ * The spacing runs from the latest line that does not belong to a run that wrote nothing: such a run
+ * (`readJournal(runDir)` returns its transport journal) leaves the project as it was and does not hold it.
+ * Without a journal reader every run holds the spacing.
  */
-export function ledgerProblems(ledgerText, now = Date.now()) {
+export function ledgerProblems(ledgerText, now = Date.now(), { readJournal } = {}) {
   const problems = [];
   const rows = ledgerEntries(ledgerText).filter((row) => row.project === PROJECT);
   for (const row of rows) {
@@ -81,8 +170,10 @@ export function ledgerProblems(ledgerText, now = Date.now()) {
   }
   for (const [task, row] of open)
     problems.push(`${task} has a run that did not end cleanly (${row.event} at ${row.ts})`);
+  const exempt = spacingExempt(rows, readJournal);
   const last = rows
-    .map((row) => Date.parse(row.ts))
+    .filter((row) => !exempt.has(row))
+    .map(time)
     .filter(Number.isFinite)
     .toSorted((a, b) => b - a)[0];
   if (last !== undefined && now - last < SPACING_MINUTES * 60_000)
@@ -235,6 +326,22 @@ export function releaseLock(lock) {
   if (sha256(readFileSync(lock.path, "utf8")) !== lock.sha256)
     throw new Error("the lock was rewritten; left in place");
   unlinkSync(lock.path);
+}
+
+/**
+ * The transport journal of a run directory under `runsDir`, for the spacing check. Throws for a run
+ * directory outside `runsDir`, a journal that is not a plain file, or one that cannot be read.
+ */
+export function readRunJournal(runsDir, runDir) {
+  const base = realpathSync(runsDir);
+  const dir = realpathSync(runDir);
+  const rel = relative(base, dir);
+  if (rel === "" || rel.startsWith("..") || isAbsolute(rel))
+    throw new Error("the run directory is outside the runs directory");
+  const path = join(dir, "transport", "journal.jsonl");
+  const stat = lstatSync(path);
+  if (!stat.isFile() || stat.isSymbolicLink()) throw new Error("the journal is not a plain file");
+  return readFileSync(path, "utf8");
 }
 
 // ---- ledger lines ------------------------------------------------------------------------------

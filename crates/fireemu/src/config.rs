@@ -4382,6 +4382,55 @@ mod tests {
         assert_eq!(cap["maximum"], 100_000);
     }
 
+    mod scheduler_setting_properties {
+        use super::{json, RuntimeConfig, Value};
+        use proptest::prelude::*;
+
+        /// Any JSON value that is not a string.
+        fn not_a_string() -> impl Strategy<Value = Value> {
+            prop_oneof![
+                any::<i64>().prop_map(|n| json!(n)),
+                any::<bool>().prop_map(|b| json!(b)),
+                Just(Value::Null),
+                proptest::collection::vec(any::<i64>(), 0..3).prop_map(|v| json!(v)),
+                proptest::collection::btree_map("[a-z]{1,4}", any::<i64>(), 0..3)
+                    .prop_map(|m| json!(m)),
+            ]
+        }
+
+        proptest! {
+            /// A value that is not a string is refused for every setting that takes a string,
+            /// with the setting's own key named, and never silently ignored.
+            #[test]
+            fn a_scheduler_or_clock_setting_that_is_not_a_string_is_refused(value in not_a_string()) {
+                for (section, key, expected) in [
+                    ("daemon", "clockStart", "daemon.clockStart"),
+                    ("scheduler", "clock", "scheduler.clock"),
+                    ("scheduler", "defaultTimeZone", "scheduler.defaultTimeZone"),
+                ] {
+                    let config = json!({"schemaVersion": 1, section: {key: value.clone()}});
+                    let error = RuntimeConfig::from_json(&config).unwrap_err();
+                    prop_assert!(error.0.contains(expected), "{config}: {error:?}");
+                }
+            }
+
+            /// A scheduler or daemon section that is not an object is refused, never ignored.
+            #[test]
+            fn a_section_that_is_not_an_object_is_refused(
+                value in prop_oneof![not_a_string().prop_filter("not an object", |v| !v.is_object()), "[a-z]{0,6}".prop_map(|s| json!(s))]
+            ) {
+                for section in ["daemon", "scheduler"] {
+                    let config = json!({"schemaVersion": 1, section: value.clone()});
+                    let error = RuntimeConfig::from_json(&config).unwrap_err();
+                    prop_assert!(
+                        error.0.contains(&format!("{section} must be an object")),
+                        "{config}: {error:?}"
+                    );
+                }
+            }
+        }
+    }
+
     #[test]
     fn the_profile_sets_the_defaults_it_owns_and_strict_is_the_default_profile() {
         // fireemu exists to match production, so a configuration that names no profile at

@@ -266,3 +266,21 @@ def test_a_local_query_is_rebased_to_the_local_project_and_its_frames_are_named_
     assert result['response']['responses'][0]['document']['name'] == f'{PARENT}/txn-toy/a'
     assert result['localWireResponse']['responses'][0]['document']['name'] == local_name
     assert result['response']['responses'][1] == {'readTime': {'seconds': '1', 'nanos': 0}}
+
+
+def test_only_a_code_1_cancel_is_a_complete_cancel(runtime, monkeypatch):
+    wire = NodeWire(runtime, SCOPE)
+    # a deadline (4) that says it is a cancel is still an unknown outcome claimed complete
+    monkeypatch.setattr(wire, '_child', lambda spec, timeout: (receipt(code=4, details=CANCELLED, response={'responses': []}), {'childReaped': True}))
+    with pytest.raises(ValueError, match='indeterminate'):
+        wire.send('grpc', 'RunQuery', QUERY, nonce=NONCE, owner_id=OWNER, bearer='private-credential', cancel_after=1)
+
+
+def test_the_frames_of_a_local_cancel_are_named_as_production_would(runtime, monkeypatch):
+    wire = NodeWire(runtime, SCOPE, target={'kind': 'local', 'host': '127.0.0.1', 'port': 1})
+    local_name = f'projects/demo-program/databases/(default)/documents/oracle/{NONCE}/txn-toy/a'
+    frames = {'responses': [{'document': {'name': local_name, 'fields': {}}}]}
+    monkeypatch.setattr(wire, '_child', lambda spec, timeout: (receipt(code=1, details=CANCELLED, response=frames), {'childReaped': True}))
+    result = wire.send('grpc', 'RunQuery', QUERY, nonce=NONCE, owner_id=OWNER, bearer='private-credential', cancel_after=1)
+    assert result['code'] == 1 and result['response']['responses'][0]['document']['name'] == f'{PARENT}/txn-toy/a'
+    assert result['localWireResponse']['responses'][0]['document']['name'] == local_name

@@ -108,7 +108,49 @@ def test_a_recording_with_queries_completes_and_replays(program=program):
 
 def test_a_frame_for_a_document_the_run_does_not_own_stops_the_recording():
     receipt, _wire, _value = run(foreign=True)
-    assert receipt["complete"] is False
+    assert receipt["complete"] is False and receipt["failureType"] == "ValueError"
+
+
+def test_a_query_that_names_the_same_document_twice_stops_the_recording():
+    class Twice(QueryWire):
+        def send(self, transport, method, request, **kwargs):
+            result = super().send(transport, method, request, **kwargs)
+            if method == "RunQuery" and result["code"] == 0 and request["structuredQuery"].get("where") is None and transport == "rest":
+                frames = result["response"]["responses"]
+                result["response"]["responses"] = [frames[0], frames[0]] + frames[1:]
+            return result
+    value = table()
+    collector, service, _budget, _journal, _clock, plan = collector_tests.fixture(value)
+    collector.wire = Twice(service, plan=plan)
+    receipt = collector.run()
+    assert receipt["complete"] is False and receipt["failureType"] == "ValueError"
+
+
+def test_a_cancel_answer_without_the_frames_it_received_stops_the_recording():
+    class Bare(QueryWire):
+        def send(self, transport, method, request, **kwargs):
+            result = super().send(transport, method, request, **kwargs)
+            if kwargs.get("cancel_after") is not None:
+                result["response"] = None
+            return result
+    value = table()
+    collector, service, _budget, _journal, _clock, plan = collector_tests.fixture(value)
+    collector.wire = Bare(service, plan=plan)
+    receipt = collector.run()
+    assert receipt["complete"] is False and receipt["failureType"] == "ValueError"
+
+
+def test_a_cancel_answer_whose_frames_are_not_a_list_stops_the_recording():
+    class Odd(QueryWire):
+        def send(self, transport, method, request, **kwargs):
+            result = super().send(transport, method, request, **kwargs)
+            if kwargs.get("cancel_after") is not None:
+                result["response"] = {"responses": "not a list"}
+            return result
+    value = table()
+    collector, service, _budget, _journal, _clock, plan = collector_tests.fixture(value)
+    collector.wire = Odd(service, plan=plan)
+    assert collector.run()["failureType"] == "ValueError"
 
 
 def test_a_frame_that_carries_a_transaction_nobody_asked_for_stops_the_recording():

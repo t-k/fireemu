@@ -304,3 +304,85 @@ test("documents of the run in both collections are removed and read back", async
   assert.equal(world.docs.size, 0);
   assert.equal(result.steps.documents.removed, 2);
 });
+
+test("two functions left behind: the second delete is sent only after the first operation is done, each wait is ten seconds", async () => {
+  const { world, transport, sleep, slept } = setup();
+  world.deploy();
+  world.operationPolls = 2;
+  const seen = [];
+  world.hooks.push((method, url) => {
+    if (method === "DELETE" && url.includes("/functions/"))
+      seen.push([url.split("/").at(-1), [...world.removed]]);
+  });
+  const cli = async (action) => {
+    world.undeploy({ stuck: ["storageArchivedV2", "fsCreatedV2"] });
+    return { action, exitCode: 0 };
+  };
+  const result = await runCleanup({ transport, cli, sleep, ran: { deployStarted: true } });
+  assert.equal(result.verified, true, JSON.stringify(result.problems));
+  assert.equal(seen.length, 2);
+  assert.deepEqual(seen[0][1], [], "the first delete finds nothing removed yet");
+  assert.deepEqual(
+    seen[1][1],
+    [seen[0][0]],
+    "the second delete is sent only after the first operation finished",
+  );
+  assert.equal(
+    slept.filter((s) => s === 10).length,
+    4,
+    "two waits of ten seconds for each operation",
+  );
+  assert.equal(
+    result.steps.functions.rest.every((r) => r.polls === 3),
+    true,
+  );
+});
+
+test("a REST delete is sent only from a complete list, and a delete answer that names no operation of this project is not polled", async () => {
+  const { restDeleteLeftovers } = await import("./functions-events/record/cleanup.mjs");
+  const sent = [];
+  const request = async (spec) => {
+    sent.push(spec.id);
+    return {
+      kind: "success",
+      status: 200,
+      json: { name: "projects/other/locations/us-central1/operations/x" },
+    };
+  };
+  const item = {
+    name: "projects/fireemu-oracle-events/locations/us-central1/functions/fsCreatedV2",
+  };
+  assert.deepEqual(
+    await restDeleteLeftovers({
+      request,
+      sleep: async () => {},
+      lists: { v2: { items: [item], complete: false } },
+    }),
+    [],
+  );
+  assert.deepEqual(
+    await restDeleteLeftovers({ request, sleep: async () => {}, lists: undefined }),
+    [],
+  );
+  assert.deepEqual(sent, []);
+  const done = await restDeleteLeftovers({
+    request,
+    sleep: async () => {},
+    lists: {
+      v2: {
+        items: [
+          item,
+          { name: "projects/p/locations/us-central1/functions/fsCreatedV1" },
+          { name: "projects/p/locations/us-central1/functions/other" },
+        ],
+        complete: true,
+      },
+    },
+  });
+  assert.deepEqual(
+    sent,
+    ["cleanup.function-delete-fsCreatedV2"],
+    "one delete, no poll of a foreign operation, Gen1 and unknown names ignored",
+  );
+  assert.equal(done[0].polls, undefined);
+});

@@ -404,3 +404,43 @@ test("a log page asks for at most 200 entries", async () => {
   await record(deps);
   assert.ok(sizes.length > 0 && sizes.every((n) => n <= 200));
 });
+
+test("a deploy that exits 0 but says N Functions Errored is a failed CLI: readiness is read at most twice", async () => {
+  const { deps } = setup();
+  deps.cli = async (action) => ({ action, exitCode: 0, errored: action === "deploy" ? 1 : 0 });
+  const { run } = await record(deps);
+  assert.equal(run.deploy.readiness.polls, 2);
+  const clean = setup();
+  clean.deps.cli = async (action) => ({ action, exitCode: 0, errored: 0 });
+  const { run: other } = await record(clean.deps);
+  assert.ok(other.deploy.readiness.polls > 2, "a clean summary leaves the full polling");
+});
+
+test("a dry run that exits 0 but names errored functions stops clean, nothing created", async () => {
+  const { deps, calls, world } = setup();
+  deps.cli = async (action) => {
+    calls.push(action);
+    return { action, exitCode: 0, errored: 2 };
+  };
+  const { outcome, run } = await record(deps);
+  assert.equal(outcome, "stopped-clean");
+  assert.deepEqual(calls, ["dry-run"]);
+  assert.ok(run.stops.some((s) => s.includes("dry run failed")));
+  assert.ok(!world.requests.some((r) => r.method === "PUT" || r.method === "DELETE"));
+});
+
+test("the v4 run's cleanup case end to end: the CLI delete leaves storageArchivedV2, the REST delete takes it, the run ends verified", async () => {
+  const { deps, world, calls } = setup();
+  deps.cli = async (action) => {
+    calls.push(action);
+    if (action === "deploy") world.deploy();
+    else if (action === "delete") world.undeploy({ stuck: ["storageArchivedV2"] });
+    return { action, exitCode: 0, errored: action === "delete" ? 1 : 0 };
+  };
+  const { outcome, run } = await record(deps);
+  assert.equal(outcome, "recorded", JSON.stringify([run.stops, run.cleanup?.problems]));
+  assert.deepEqual(calls, ["dry-run", "deploy", "delete"], "no second CLI delete");
+  assert.deepEqual(world.restDeletes, ["storageArchivedV2"]);
+  assert.equal(run.cleanup.verified, true);
+  assert.equal(run.cleanup.steps.functions.cli.errored, 1);
+});

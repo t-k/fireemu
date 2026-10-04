@@ -373,3 +373,62 @@ test(
     );
   },
 );
+
+test("sourceProblems on the working-tree fixture is empty, and on the v4 fixture (no region on pubsubPublishedV2) names it", async () => {
+  const { sourceProblems, prepareSource } = await import("./functions-events/record/deploy.mjs");
+  const { execFileSync } = await import("node:child_process");
+  const root = execFileSync("git", ["rev-parse", "--show-toplevel"], { cwd: import.meta.dirname })
+    .toString()
+    .trim();
+  const fixtureDir = join(root, "conformance/functions-events/fixtures");
+  if (!existsSync(join(fixtureDir, "node_modules"))) return;
+  assert.deepEqual(
+    sourceProblems({
+      fixtureDir,
+      node: process.execPath,
+      directory: mkdtempSync(join(tmpdir(), "fe-disc-")),
+    }),
+    [],
+  );
+  const copy = prepareSource({
+    repoRoot: root,
+    commit: "4af75c8fa7997adb48ede9403248775cacb0577d",
+    target: mkdtempSync(join(tmpdir(), "fe-v4-")),
+    depsDir: join(fixtureDir, "node_modules"),
+  });
+  const problems = sourceProblems({
+    fixtureDir: copy.fixtureDir,
+    node: process.execPath,
+    directory: mkdtempSync(join(tmpdir(), "fe-disc-")),
+  });
+  assert.equal(problems.length, 1, JSON.stringify(problems));
+  assert.match(problems[0], /^pubsubPublishedV2: no region is set/);
+});
+
+test("a region of null is no region, and the summary is read from the end of a long output", async () => {
+  assert.deepEqual(regionProblems({ x: { platform: "gcfv1", region: null } }), []);
+  assert.equal(
+    regionProblems({
+      x: {
+        platform: "gcfv2",
+        region: null,
+        eventTrigger: { eventType: "google.cloud.pubsub.topic.v1.messagePublished" },
+      },
+    }).length,
+    1,
+  );
+  const directory = mkdtempSync(join(tmpdir(), "fe-cli-"));
+  const script = join(directory, "long.js");
+  writeFileSync(
+    script,
+    'process.stdout.write("x".repeat(200000) + "\\n[t] 4 Functions Errored\\n");',
+  );
+  const result = await runCli({
+    action: "delete",
+    plan: { args: [], cwd: directory, env: { PATH: "/usr/bin" } },
+    firebaseJs: script,
+    node: process.execPath,
+    directory,
+  });
+  assert.equal(result.errored, 4);
+});

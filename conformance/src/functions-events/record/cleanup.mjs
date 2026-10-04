@@ -64,7 +64,7 @@ const lastSegment = (name) =>
  * operation is polled to done before the next function. A function whose delete has no usable answer stops the
  * rest (never re-sent). Gen1 leftovers and anything outside the 11 names are left for the recovery.
  */
-async function restDeleteLeftovers({ request, sleep, lists }) {
+export async function restDeleteLeftovers({ request, sleep, lists }) {
   const done = [];
   if (!lists?.v2?.complete) return done;
   const names = lists.v2.items

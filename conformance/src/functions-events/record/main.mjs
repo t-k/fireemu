@@ -105,6 +105,7 @@ export function localChecks({
   env,
   nodeVersion,
   readLedger,
+  readJournal,
   readOwner,
   readTools,
   checkSource,
@@ -129,7 +130,10 @@ export function localChecks({
   const { digest: harnessSha256 } = harnessDigest(root, { git });
   const ledger = readLedger();
   const owner = readOwner();
-  problems.push(...sandbox.ledgerProblems(ledger, now()), ...sandbox.budgetProblems(ledger));
+  problems.push(
+    ...sandbox.ledgerProblems(ledger, now(), { readJournal }),
+    ...sandbox.budgetProblems(ledger),
+  );
   if (sandbox.packetUsed(ledger, packetSha256))
     problems.push("a run of this packet already started");
   const approved = sandbox.approval(owner, {
@@ -167,6 +171,7 @@ export async function main(argv, deps) {
     env,
     nodeVersion: deps.nodeVersion ?? process.versions.node,
     readLedger: () => readFileSync(deps.ledgerPath, "utf8"),
+    readJournal: (runDir) => sandbox.readRunJournal(dirname(deps.ledgerPath), runDir),
     readOwner: () => readFileSync(deps.ownerPath, "utf8"),
     readTools,
     checkSource: () => {

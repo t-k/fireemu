@@ -1,5 +1,12 @@
 import assert from "node:assert/strict";
-import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -187,3 +194,296 @@ test("the ledger lines carry the packet, the envelope and the reserve; a kept lo
   sandbox.appendLedger(path, finished);
   assert.equal(readFileSync(path, "utf8").trim().split("\n").length, 2);
 });
+
+// ---- the spacing after a run that wrote nothing -------------------------------------------------
+
+const RUN = "/runs/functions-events-formal-20261004T145510Z-3827f1195f825ed4";
+// rows 579-581 of the shared ledger (the 14:55Z run of envelope 001), with the run directory shortened
+const realStarted = {
+  ts: "2026-10-04T14:55:11.429Z",
+  event: "started",
+  taskId: "FUNCTIONS-EVENTS-SANDBOX",
+  project: "fireemu-oracle-events",
+  database: "(default)",
+  phase: "formal-record",
+  runDir: RUN,
+  envelopeId: "FUNCTIONS-EVENTS-FORMAL-001",
+  maxRequests: 520,
+  cliMax: 2,
+  estimatedUsd: 4,
+};
+const realFinished = {
+  ts: "2026-10-04T14:55:26.646Z",
+  event: "finished",
+  taskId: "FUNCTIONS-EVENTS-SANDBOX",
+  project: "fireemu-oracle-events",
+  database: "(default)",
+  phase: "formal-record",
+  runDir: RUN,
+  outcome: "stopped-clean",
+  requests: 22,
+  cliAttempts: { deploy: 0, delete: 0 },
+  estimatedUsd: 4,
+  lockRetained: false,
+};
+const realClosed = {
+  ts: "2026-10-04T14:56:22.709811Z",
+  event: "cleanup-verified",
+  taskId: "FUNCTIONS-EVENTS-SANDBOX",
+  project: "fireemu-oracle-events",
+  database: "(default)",
+  phase: "formal-record",
+  runDir: RUN,
+  sandboxAtBaseline: true,
+  requests: 22,
+  readbackRequests: 0,
+  unknownAnswers: 0,
+  estimatedUsd: 0,
+  lockReleased: "by the recorder",
+};
+/** The journal layout of the transport: a before-send line and a response-persisted line per request. */
+const journal = (n = 22, { mutation = false, kind = "success", skip } = {}) =>
+  Array.from({ length: n }, (_, i) => i + 1)
+    .flatMap((seq) => [
+      { ts: "t", seq, id: `s${seq}`, state: "before-send", method: "GET", url: "u", mutation },
+      ...(seq === skip
+        ? []
+        : [{ ts: "t", seq, id: `s${seq}`, state: "response-persisted", status: 200, kind }]),
+    ])
+    .map((entry) => JSON.stringify(entry))
+    .join("\n");
+const ledgerOf = (...rows) => [clean, ...rows.map((r) => JSON.stringify(r))].join("\n");
+const after = Date.parse("2026-10-04T15:00:00Z");
+const journalOf = (text) => ({ readJournal: () => text });
+const spaced = (problems) => problems.some((p) => p.includes("30 minutes"));
+
+test("the run of 14:55Z that wrote nothing no longer holds the spacing; without its journal it does", () => {
+  const text = ledgerOf(realStarted, realFinished, realClosed);
+  assert.deepEqual(sandbox.ledgerProblems(text, after, journalOf(journal())), []);
+  assert.ok(spaced(sandbox.ledgerProblems(text, after)));
+  assert.ok(spaced(sandbox.ledgerProblems(text, after, {})));
+  // the journal is asked for the run directory of the lines
+  const asked = [];
+  sandbox.ledgerProblems(text, after, { readJournal: (dir) => (asked.push(dir), journal()) });
+  assert.deepEqual(asked, [RUN]);
+});
+
+const nearMisses = [
+  ["one mutating send", { journal: journal(22).replace('"mutation":false', '"mutation":true') }],
+  ["a send without a mutation flag", { journal: journal(22).replace('"mutation":false', '"x":1') }],
+  [
+    "a mutation flag that is not a boolean",
+    { journal: journal(22).replace('"mutation":false', '"mutation":"no"') },
+  ],
+  ["a send with no answer", { journal: journal(22, { skip: 7 }) }],
+  ["an answer of the unknown kind", { journal: journal(22, { kind: "unknown" }) }],
+  ["an answer of a kind we do not know", { journal: journal(22, { kind: "ok" }) }],
+  ["a journal of fewer sends than the line says", { journal: journal(21) }],
+  ["a journal of more sends than the line says", { journal: journal(23) }],
+  ["a journal line that does not parse", { journal: `${journal()}\n{nope` }],
+  ["a repeated sequence number", { journal: `${journal(1)}\n${journal(1)}` }],
+  ["a state we do not know", { journal: `${journal()}\n{"seq":1,"state":"response-headers"}` }],
+  [
+    "an answer with no send",
+    { journal: `{"seq":9,"state":"response-persisted","kind":"success"}` },
+  ],
+  [
+    "a journal that cannot be read",
+    {
+      reader: () => {
+        throw new Error("ENOENT");
+      },
+    },
+  ],
+  ["a journal that is not text", { reader: () => undefined }],
+  ["a CLI deploy attempt", { finished: { cliAttempts: { deploy: 1, delete: 0 } } }],
+  ["a CLI delete attempt", { finished: { cliAttempts: { deploy: 0, delete: 1 } } }],
+  ["CLI attempts that are not known", { finished: { cliAttempts: null } }],
+  ["CLI attempts that are missing", { finished: { cliAttempts: undefined } }],
+  ["a CLI count that is not a number", { finished: { cliAttempts: { deploy: "0", delete: 0 } } }],
+  ["a kept lock", { finished: { lockRetained: true } }],
+  ["a lock flag that is missing", { finished: { lockRetained: undefined } }],
+  ["an outcome of needs-recovery", { finished: { outcome: "needs-recovery", lockRetained: true } }],
+  ["an outcome of recorded", { finished: { outcome: "recorded" } }],
+  ["an outcome that is missing", { finished: { outcome: undefined } }],
+  [
+    "a request count that is not a number",
+    { finished: { requests: "22" }, closed: { requests: "22" } },
+  ],
+  ["a request count that is missing", { finished: { requests: null }, closed: { requests: null } }],
+  ["a close line with another request count", { closed: { requests: 21 } }],
+  ["unknown answers on the close line", { closed: { unknownAnswers: 1 } }],
+  ["unknown answers missing on the close line", { closed: { unknownAnswers: undefined } }],
+  ["unknown answers as a string", { closed: { unknownAnswers: "0" } }],
+  ["a sandbox not at its baseline", { closed: { sandboxAtBaseline: false } }],
+  ["a baseline that is not stated", { closed: { sandboxAtBaseline: undefined } }],
+  ["an unreadable time on the closing line", { finished: { ts: "later" } }],
+  ["a closing line before the start", { finished: { ts: "2026-10-04T14:00:00Z" } }],
+  ["a close line before the closing line", { closed: { ts: "2026-10-04T14:55:20Z" } }],
+  ["a start line of another task", { started: { taskId: "OTHER-TASK" } }],
+  ["no close line", { drop: "closed" }],
+  ["no closing line", { drop: "finished" }],
+  ["no start line", { drop: "started" }],
+  [
+    "a recovery line of the same run directory",
+    { extra: { event: "needs-recovery", ts: "2026-10-04T14:57:00Z" } },
+  ],
+  ["a note of the same run directory", { extra: { event: "note", ts: "2026-10-04T14:57:00Z" } }],
+  [
+    "a foreign line of the same run directory",
+    { extra: { event: "note", taskId: "OTHER-TASK", ts: "2026-10-04T14:57:00Z" } },
+  ],
+  ["a second close line", { extra: { ...realClosed, ts: "2026-10-04T14:58:00Z" } }],
+];
+for (const [label, change] of nearMisses) {
+  test(`the spacing holds for ${label}`, () => {
+    const rows = {
+      started: { ...realStarted, ...change.started },
+      finished: { ...realFinished, ...change.finished },
+      closed: { ...realClosed, ...change.closed },
+    };
+    const lines = Object.entries(rows)
+      .filter(([name]) => name !== change.drop)
+      .map(([, entry]) => entry);
+    if (change.extra) lines.push({ ...realClosed, ...change.extra });
+    const reader = change.reader ?? (() => change.journal ?? journal());
+    const problems = sandbox.ledgerProblems(ledgerOf(...lines), after, { readJournal: reader });
+    assert.ok(spaced(problems), JSON.stringify(problems));
+  });
+}
+
+test("the run the exemption is built from still passes with the same inputs (guards the table above)", () => {
+  assert.deepEqual(
+    sandbox.ledgerProblems(
+      ledgerOf(realStarted, realFinished, realClosed),
+      after,
+      journalOf(journal()),
+    ),
+    [],
+  );
+});
+
+test("a line that is not part of the run still holds the spacing from its own time", () => {
+  const exempt = [realStarted, realFinished, realClosed];
+  const note = (ts, extra) => ({
+    ts,
+    event: "note",
+    taskId: "SANDBOX-CONFIG",
+    project: "fireemu-oracle-events",
+    ...extra,
+  });
+  const recent = ledgerOf(...exempt, note("2026-10-04T15:20:00Z"));
+  const at = Date.parse("2026-10-04T15:40:00Z");
+  assert.ok(spaced(sandbox.ledgerProblems(recent, at, journalOf(journal()))));
+  const later = Date.parse("2026-10-04T15:51:00Z");
+  assert.deepEqual(sandbox.ledgerProblems(recent, later, journalOf(journal())), []);
+  // a different run directory is a different run, even one with the same shape
+  const other = { ...realFinished, runDir: `${RUN}-2`, ts: "2026-10-04T15:25:00Z" };
+  assert.ok(spaced(sandbox.ledgerProblems(ledgerOf(...exempt, other), at, journalOf(journal()))));
+  // a run left open after the exempt one is still reported
+  const open = ledgerOf(...exempt, {
+    ...realStarted,
+    taskId: "OTHER-TASK",
+    runDir: "x",
+    ts: "2026-10-04T15:01:00Z",
+  });
+  assert.ok(
+    sandbox.ledgerProblems(open, later, journalOf(journal())).some((p) => p.includes("OTHER-TASK")),
+  );
+});
+
+test("the journal facts count what was sent, what could be a change and what has no usable answer", () => {
+  assert.deepEqual(sandbox.journalFacts(journal(3)), { sent: 3, mutating: 0, unknown: 0 });
+  assert.deepEqual(sandbox.journalFacts(""), { sent: 0, mutating: 0, unknown: 0 });
+  assert.deepEqual(sandbox.journalFacts(journal(3, { mutation: true })), {
+    sent: 3,
+    mutating: 3,
+    unknown: 0,
+  });
+  assert.deepEqual(sandbox.journalFacts(journal(3, { kind: "refusal" })), {
+    sent: 3,
+    mutating: 0,
+    unknown: 0,
+  });
+  assert.deepEqual(sandbox.journalFacts(journal(3, { skip: 2 })), {
+    sent: 3,
+    mutating: 0,
+    unknown: 1,
+  });
+  assert.equal(sandbox.journalFacts("[]"), undefined);
+  assert.equal(sandbox.journalFacts('{"seq":"1","state":"before-send"}'), undefined);
+});
+
+test("the journal is read only from a plain file under the runs directory", () => {
+  const runs = mkdtempSync(join(tmpdir(), "fe-spacing-"));
+  const dir = join(runs, "run-1");
+  mkdirSync(join(dir, "transport"), { recursive: true });
+  writeFileSync(join(dir, "transport", "journal.jsonl"), journal(2));
+  assert.equal(sandbox.readRunJournal(runs, dir), journal(2));
+  assert.throws(() => sandbox.readRunJournal(runs, runs), /outside/);
+  assert.throws(() => sandbox.readRunJournal(runs, tmpdir()), /outside/);
+  assert.throws(() => sandbox.readRunJournal(runs, join(runs, "missing")));
+  const linked = join(runs, "run-2");
+  mkdirSync(join(linked, "transport"), { recursive: true });
+  symlinkSync(join(dir, "transport", "journal.jsonl"), join(linked, "transport", "journal.jsonl"));
+  assert.throws(() => sandbox.readRunJournal(runs, linked), /plain file/);
+  const away = mkdtempSync(join(tmpdir(), "fe-away-"));
+  symlinkSync(away, join(runs, "run-3"));
+  assert.throws(() => sandbox.readRunJournal(runs, join(runs, "run-3")), /outside/);
+});
+
+// The shared ledger itself (untracked): the real rows, when this checkout can see them.
+const realRuns =
+  process.env.FE_SANDBOX_RUNS ?? join(import.meta.dirname, "../../../../docs.local/runs");
+const realLedger = join(realRuns, "sandbox-ledger.jsonl");
+const realRun = join(realRuns, "functions-events-formal-20261004T145510Z-3827f1195f825ed4");
+const haveReal = existsSync(realLedger) && existsSync(join(realRun, "transport", "journal.jsonl"));
+const realRows = (from, to) =>
+  readFileSync(realLedger, "utf8")
+    .split("\n")
+    .slice(from - 1, to)
+    .join("\n");
+
+test(
+  "real ledger: rows 579-581 (the 14:55Z run) are exempt, the FE 012 stage 2 run is not",
+  { skip: !haveReal },
+  () => {
+    const readJournal = (dir) => sandbox.readRunJournal(realRuns, dir);
+    const today = realRows(1, 581);
+    assert.deepEqual(
+      sandbox.ledgerProblems(today, Date.parse("2026-10-04T15:00:00Z"), { readJournal }),
+      [],
+    );
+    assert.ok(spaced(sandbox.ledgerProblems(today, Date.parse("2026-10-04T15:00:00Z"))));
+    const fe012 = realRows(1, 566);
+    const when = Date.parse("2026-10-01T08:55:00Z");
+    assert.ok(spaced(sandbox.ledgerProblems(fe012, when, { readJournal })));
+    assert.ok(spaced(sandbox.ledgerProblems(fe012, when, journalOf(journal(84)))));
+  },
+);
+
+test(
+  "real ledger: the same rows with one mutation or one CLI attempt are not exempt",
+  { skip: !haveReal },
+  () => {
+    const at = Date.parse("2026-10-04T15:00:00Z");
+    const readJournal = (dir) => sandbox.readRunJournal(realRuns, dir);
+    const mutated = (text) => ({ readJournal: (dir) => text(readJournal(dir)) });
+    const rows = realRows(1, 581);
+    assert.ok(
+      spaced(
+        sandbox.ledgerProblems(
+          rows,
+          at,
+          mutated((t) => t.replace('"mutation":false', '"mutation":true')),
+        ),
+      ),
+    );
+    const cli = rows.replace(
+      '"cliAttempts":{"deploy":0,"delete":0}',
+      '"cliAttempts":{"deploy":1,"delete":0}',
+    );
+    assert.notEqual(cli, rows);
+    assert.ok(spaced(sandbox.ledgerProblems(cli, at, { readJournal })));
+  },
+);

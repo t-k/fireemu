@@ -121,9 +121,9 @@ export function createRecoverWorld({
         for (const [k] of state.triggers)
           if (k.startsWith(`${region}/${low}-`)) state.triggers.delete(k);
         if (eventarcCleans) {
-          for (const k of [...state.subscriptions.keys()])
+          for (const k of state.subscriptions.keys())
             if (k.includes(low)) state.subscriptions.delete(k);
-          for (const k of [...state.topics.keys()]) if (k.includes(low)) state.topics.delete(k);
+          for (const k of state.topics.keys()) if (k.includes(low)) state.topics.delete(k);
         }
         if (errorButRemoved.includes(op.fn))
           return json(200, {

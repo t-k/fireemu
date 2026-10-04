@@ -322,7 +322,7 @@ test("a read-back that cannot be read is not complete, so nothing is settled by 
 });
 
 test("a list that comes in pages is read to the end, and a list of more than five pages is not complete", async () => {
-  const { world, transport, sleep } = setup();
+  const { world, sleep } = setup();
   const original = world.fetch;
   const pages = new Map();
   world.fetch = async (url, init) => {

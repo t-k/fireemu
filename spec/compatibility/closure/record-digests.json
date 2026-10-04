@@ -87,6 +87,7 @@
     "spec/compatibility/closure/evidence/FS-RULES-comparison.json": "e492410720a2c1c626a422e0c6f4852af0a54c530d514fe5f4c7fc6e4525125a",
     "spec/compatibility/closure/evidence/FS-RULES-fs-query-index-regression.json": "5220c029a10cedf0fea5e7789f778110ac2293c2dab20f1532d23a054558c5a2",
     "spec/compatibility/closure/evidence/FUNCTIONS-HTTP-comparison.json": "659186bb0bcf4e0a1bb655fcf7cf9b32309c5a76d52cd9a76e6269e5504169d2",
+    "spec/compatibility/closure/evidence/SCHEDULED-FUNCTIONS-local-comparison.json": "9c8608ac884cee3da38fb43bae42e79cdff830a8a512c7ee2e90088466226d3c",
     "spec/compatibility/closure/evidence/STORAGE-OBJECT-build.json": "989011a238b2eb677ba6d9360637799615a8453df11db6b8ee95ff0e3ef2d1bc",
     "spec/compatibility/closure/evidence/STORAGE-OBJECT-comparison.json": "0782a4c7e7b8f4a93d69a0187a00c5bcc7508bfb033e2e8deb10890736867540",
     "spec/compatibility/closure/evidence/STORAGE-RULES-comparison.json": "de9ece3550b1578f2fcfb857842fd36db2c19c920db421ac2e637aa91b80907c",

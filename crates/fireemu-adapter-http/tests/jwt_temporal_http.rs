@@ -624,3 +624,100 @@ fn a_revocation_on_a_rewound_clock_does_not_revoke_tokens_issued_later() {
         }
     }
 }
+
+fn sign_in(state: &AuthState) -> Value {
+    let response = handle(
+        state,
+        "POST",
+        "/identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key=k",
+        &json!({
+            "email": "temporal@example.invalid",
+            "password": "password1",
+            "returnSecureToken": true
+        }),
+    );
+    assert_eq!(response.status, 200, "{}", response.body);
+    response.body
+}
+
+/// A rewind below the account's creation makes even a new sign-in's token count as revoked: its
+/// `auth_time` is before the account's `validSince`, which starts at the creation second. Moving
+/// the clock forward again does not help, because the token's own `auth_time` stays below it.
+/// (README and the control API header document this; it holds in both profiles.)
+#[test]
+fn a_rewind_below_the_account_creation_makes_a_new_sign_in_count_as_revoked() {
+    for profile in [Profile::Emulator, Profile::Strict] {
+        let (state, _, _, _) = setup_with(profile, true);
+        let control = control_over(state.clock.clone());
+        assert_eq!(set_clock(&control, at_offset(600_000_000_000), false), 200);
+        assert_eq!(set_clock(&control, at_offset(-60_000_000_000), true), 200);
+        let fresh = sign_in(&state);
+        let token = fresh["idToken"].as_str().unwrap().to_owned();
+        for (clock, when) in [(-60, "at the rewound time"), (1, "once the clock moves on")] {
+            if clock > 0 {
+                assert_eq!(set_clock(&control, at_offset(1_000_000_000), false), 200);
+            }
+            let looked_up = handle(&state, "POST", LOOKUP, &json!({"idToken": token}));
+            assert_eq!(
+                looked_up.status, 400,
+                "{profile:?} {when}: {}",
+                looked_up.body
+            );
+            assert_eq!(
+                looked_up.body["error"]["message"], "TOKEN_EXPIRED",
+                "{profile:?} {when}"
+            );
+        }
+    }
+}
+
+/// After a rewind a fresh sign-in is usable at once in both profiles. The token held from the
+/// later time, and a refresh of it (a refreshed token keeps the original `auth_time`), are usable
+/// in the emulator profile and refused by strict until the clock reaches that issue time.
+#[test]
+fn a_token_issued_after_a_rewind_is_usable_beside_the_held_future_token() {
+    for profile in [Profile::Emulator, Profile::Strict] {
+        let strict = profile == Profile::Strict;
+        let usable_now = if strict { 400 } else { 200 };
+        let (state, _, _, _) = setup_with(profile, true);
+        let control = control_over(state.clock.clone());
+        assert_eq!(set_clock(&control, at_offset(600_000_000_000), false), 200);
+        let held_session = sign_in(&state);
+        let held = held_session["idToken"].as_str().unwrap().to_owned();
+        let refresh = held_session["refreshToken"].as_str().unwrap().to_owned();
+
+        assert_eq!(set_clock(&control, at_offset(300_000_000_000), true), 200);
+        let fresh_session = sign_in(&state);
+        let fresh = fresh_session["idToken"].as_str().unwrap().to_owned();
+        assert_eq!(
+            lookup_status(&state, &fresh),
+            200,
+            "{profile:?}: issued at the rewound time"
+        );
+        assert_eq!(
+            lookup_status(&state, &held),
+            usable_now,
+            "{profile:?}: the held future token"
+        );
+
+        let refreshed = handle(
+            &state,
+            "POST",
+            "/securetoken.googleapis.com/v1/token",
+            &json!({"grant_type": "refresh_token", "refresh_token": refresh}),
+        );
+        assert_eq!(refreshed.status, 200, "{profile:?}: {}", refreshed.body);
+        let refreshed = refreshed.body["id_token"].as_str().unwrap().to_owned();
+        assert_eq!(
+            lookup_status(&state, &refreshed),
+            usable_now,
+            "{profile:?}: the refresh keeps the original auth_time"
+        );
+
+        // The clock catches up with the held token's issue time: both are usable again.
+        assert_eq!(set_clock(&control, at_offset(601_000_000_000), false), 200);
+        assert_eq!(lookup_status(&state, &held), 200, "{profile:?}");
+        assert_eq!(lookup_status(&state, &refreshed), 200, "{profile:?}");
+        assert_eq!(lookup_status(&state, &fresh), 200, "{profile:?}");
+    }
+}

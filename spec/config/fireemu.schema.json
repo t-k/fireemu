@@ -729,7 +729,7 @@
         "clock": { "enum": ["virtual", "wall"] },
         "defaultTimeZone": { "type": "string" },
         "catchUp": { "enum": ["all", "latest", "none"] },
-        "maxCatchUpRuns": { "type": "integer", "minimum": 0 },
+        "maxCatchUpRuns": { "type": "integer", "minimum": 1, "maximum": 100000 },
         "overlap": { "enum": ["allow", "skip", "queue", "reject"] }
       }
     },

@@ -13,7 +13,7 @@ import re
 import threading
 import time
 
-from txn_program_program import GraphCursor, canonical_token, compile_plan, corpus_digest, marker_fields, outcome_class, request_for_step, source_digest, validate_plan
+from txn_program_program import LITERAL_TOKENS, GraphCursor, canonical_token, compile_plan, corpus_digest, marker_fields, outcome_class, request_for_step, source_digest, validate_plan
 
 RECEIPT_KIND = "txn-program-receipt-v1"
 RECORDING_KIND = "txn-program-recording-v1"
@@ -224,8 +224,10 @@ class Ledger:
                 raise ValueError("a prior chain's token is unresolved")
         elif method == "Rollback":
             _role, entry = self._token_for(request["transaction"])
-            if entry is None:
+            if entry is None and request["transaction"] not in LITERAL_TOKENS.values():
                 raise ValueError("rollback names no issued token")
+            if entry is None:
+                return   # a declared literal token is a probe: no token of ours is named
             # A declared rollback of a token an answer already finished is a probe; only an open token is released.
             if step is None and entry["state"] != "open":
                 raise ValueError("token release cannot repeat")
@@ -237,7 +239,9 @@ class Ledger:
             self.unknown_starts.add(site)
         elif method == "Rollback":
             role, entry = self._token_for(request["transaction"])
-            if entry["state"] == "open":
+            if entry is None:
+                self._probes.add(site)   # a literal token the table never issued: nothing of ours to release
+            elif entry["state"] == "open":
                 self.unknown_rollbacks.add(role)
                 entry["state"] = "unconfirmed-release"
             else:

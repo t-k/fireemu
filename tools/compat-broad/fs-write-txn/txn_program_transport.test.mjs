@@ -247,11 +247,12 @@ test('a native version delete is admitted over gRPC only', async () => {
   assert.throws(() => validateCall(spec('ListDocuments', { name: name('a') }, 'grpc')));
 });
 
-test('a 30 second deadline is admitted for an outside writer alone and nothing longer', async () => {
+test('a 90 second deadline is admitted for an outside writer alone and nothing longer', async () => {
   const { validateCall } = await module();
   for (const transport of ['rest', 'grpc']) {
     validateCall(spec('Commit', commit([write('a', 'moved')], false), transport, { deadlineMs: 30000 }));
-    assert.throws(() => validateCall(spec('Commit', commit([write('a', 'moved')], false), transport, { deadlineMs: 30001 })));
+    validateCall(spec('Commit', commit([write('a', 'moved')], false), transport, { deadlineMs: 90000 }));
+    assert.throws(() => validateCall(spec('Commit', commit([write('a', 'moved')], false), transport, { deadlineMs: 90001 })));
     // A transactional commit and every other call stop at 10 s.
     assert.throws(() => validateCall(spec('Commit', commit([write('a', 'moved')], true), transport, { deadlineMs: 30000 })));
     assert.throws(() => validateCall(spec('Rollback', { database, transaction: token }, transport, { deadlineMs: 30000 })));
@@ -448,4 +449,46 @@ test('the real REST exchange makes one bounded request with the credential and n
     assert.equal(seen.headers.authorization, 'Bearer owner'); assert.equal(seen.headers['x-goog-user-project'], undefined);
     assert.equal(seen.body, JSON.stringify({ options: { readWrite: {} } }));
   } finally { server.close(); }
+});
+
+const MALFORMED = 'not base64!';
+const UNKNOWN = 'ZmlyZWVtdS11bmlzc3VlZC10eG4tdG9rZW4=';
+
+for (const transport of ['rest', 'grpc']) {
+  test(`${transport}: an unknown (well-formed, never issued) token is admitted on a read, a batch read, a commit and a rollback`, async () => {
+    const { validateCall } = await module();
+    validateCall(spec('GetDocument', { name: name('a'), transaction: UNKNOWN }, transport));
+    validateCall(spec('BatchGetDocuments', { database, documents: [name('a')], transaction: UNKNOWN }, transport));
+    validateCall(spec('Commit', { database, writes: [write('a', 'held')], transaction: UNKNOWN }, transport));
+    validateCall(spec('Rollback', { database, transaction: UNKNOWN }, transport));
+  });
+
+  test(`${transport}: a token that is neither issued-looking nor one of the two declared literals is still refused`, async () => {
+    const { validateCall } = await module();
+    for (const bad of ['not canonical', 'AAAA=', '', 'not base64', MALFORMED + ' ']) {
+      assert.throws(() => validateCall(spec('GetDocument', { name: name('a'), transaction: bad }, transport)), undefined, JSON.stringify(bad));
+    }
+  });
+}
+
+test('rest: the malformed literal is admitted on every call that names a token', async () => {
+  const { validateCall } = await module();
+  validateCall(spec('GetDocument', { name: name('a'), transaction: MALFORMED }, 'rest'));
+  validateCall(spec('BatchGetDocuments', { database, documents: [name('a')], transaction: MALFORMED }, 'rest'));
+  validateCall(spec('Commit', { database, writes: [write('a', 'held')], transaction: MALFORMED }, 'rest'));
+  validateCall(spec('Rollback', { database, transaction: MALFORMED }, 'rest'));
+});
+
+test('grpc: the malformed literal is refused, a native client cannot send bytes that do not decode', async () => {
+  const { validateCall } = await module();
+  assert.throws(() => validateCall(spec('GetDocument', { name: name('a'), transaction: MALFORMED }, 'grpc')));
+  assert.throws(() => validateCall(spec('Rollback', { database, transaction: MALFORMED }, 'grpc')));
+});
+
+test('rest: the malformed literal travels in the request body as the plain string', async () => {
+  const { restRequest } = await module();
+  const prepared = restRequest(spec('Rollback', { database, transaction: MALFORMED }, 'rest'));
+  assert.equal(prepared.body.transaction, MALFORMED);
+  const read = restRequest(spec('GetDocument', { name: name('a'), transaction: MALFORMED }, 'rest'));
+  assert.ok(read.path.includes(encodeURIComponent(MALFORMED)));
 });

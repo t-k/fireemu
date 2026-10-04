@@ -85,8 +85,11 @@ def test_the_ipc_deadline_follows_the_step_deadline(runtime, monkeypatch):
     rollback(wire)
     wire.send('grpc', 'Commit', writer, nonce=NONCE, owner_id=OWNER, bearer='private-credential', deadline_ms=30000)
     assert seen[0] < seen[1] and seen[1] >= 30 + 2
+    # an outside writer held by a lock may wait up to 90 s (P06 stopped at 30 s on its second recording)
+    wire.send('grpc', 'Commit', writer, nonce=NONCE, owner_id=OWNER, bearer='private-credential', deadline_ms=90000)
+    assert seen[-1] >= 90 + 2
     with pytest.raises(ValueError, match='deadline'):
-        wire.send('grpc', 'Commit', writer, nonce=NONCE, owner_id=OWNER, bearer='private-credential', deadline_ms=30001)
+        wire.send('grpc', 'Commit', writer, nonce=NONCE, owner_id=OWNER, bearer='private-credential', deadline_ms=90001)
     with pytest.raises(ValueError, match='deadline'):
         rollback(wire, deadline_ms=0)
     with pytest.raises(ValueError, match='deadline'):

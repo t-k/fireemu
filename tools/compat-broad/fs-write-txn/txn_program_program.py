@@ -30,14 +30,18 @@ PHASES = ("observation", "tokenCleanup", "documentCleanup", "management", "crede
 UNKNOWN_CODES = (1, 2, 4, 13, 14)
 REFUSED_CODES = (3, 5, 9, 10)
 DEFAULT_DEADLINE_MS = 10000
-WRITER_DEADLINE_MS = 30000
+# An outside writer held by a lock may wait this long: P06 recording 2 was still held at 30 s.
+WRITER_DEADLINE_MS = 90000
 _IDENTITY = re.compile(r"[a-f0-9]{32}\Z")
 _LABEL = re.compile(r"[a-z0-9][a-z0-9-]{0,47}\Z")
 MAX_DOCUMENTS = 8
 MAX_WAIT_SECONDS = 600
 MAX_STATES = 32
 _STEP_KEYS = ("id", "transport", "rpc", "document", "tokenInput", "tokenOutput", "writes", "caseId", "role", "allow")
-_OPTIONAL_STEP_KEYS = ("deadlineMs", "documents", "mode", "readAt", "newTransaction", "waitSeconds", "sinceBegin", "concurrentWith", "retryOf")
+_OPTIONAL_STEP_KEYS = ("deadlineMs", "documents", "mode", "readAt", "newTransaction", "waitSeconds", "sinceBegin", "concurrentWith", "retryOf", "tokenLiteral")
+# Transaction tokens the table never issued. "malformed" does not decode as base64 (a REST request only: a gRPC client cannot send it); "unknown" decodes and
+# was never issued by any transaction.
+LITERAL_TOKENS = {"malformed": "not base64!", "unknown": "ZmlyZWVtdS11bmlzc3VlZC10eG4tdG9rZW4="}
 
 
 def outcome_class(code):
@@ -76,10 +80,14 @@ def _step(row):
         step["readAt"] = dict(row["readAt"]) if isinstance(row["readAt"], dict) else _bad("readAt is not a mapping")
     if "newTransaction" in row:
         step["newTransaction"] = row["newTransaction"]
+    if "tokenLiteral" in row:
+        step["tokenLiteral"] = row["tokenLiteral"]
     if "sinceBegin" in row:
         # A read-write transaction's first read may show any state acknowledged since its begin (the snapshot may be taken
         # at the begin or at the read); only present on that read.
         step["sinceBegin"] = row["sinceBegin"]
+    if "tokenLiteral" in row:
+        step["tokenLiteral"] = row["tokenLiteral"]
     if "retryOf" in row:
         # A read-write begin that names an earlier token of the same table as the attempt it retries (REST `retryTransaction`);
         # only present on that begin. The named token is released after this begin, not before it.
@@ -175,6 +183,12 @@ def _validate_table(table):
             _bad(f"{step['id']} names a transaction mode on a request that does not begin one")
         if rpc == "BeginTransaction" and step.get("mode", "readWrite") not in ("readWrite", "readOnly"):
             _bad(f"{step['id']} names an unknown transaction mode")
+        if "tokenLiteral" in step:
+            # A token the table never issued: on a read, a commit or a rollback that names no issued token; never a control, a post-state read or a writer.
+            if step["tokenLiteral"] not in LITERAL_TOKENS or step["tokenInput"] is not None or rpc not in ("GetDocument", "BatchGetDocuments", "Commit", "Rollback") or step["role"] != "observation":
+                _bad(f"{step['id']} names a literal token that is not allowed here")
+            if step["tokenLiteral"] == "malformed" and step["transport"] != "rest":
+                _bad(f"{step['id']} sends a malformed token over gRPC, which a native client cannot")
         if "readAt" in step:
             at = step["readAt"]
             if set(at) != {"document", "commit"} or not isinstance(at["commit"], str) or at["document"] not in acked.get(at["commit"], ()):
@@ -230,10 +244,10 @@ def _validate_table(table):
                     _bad(f"{step['id']} touches {step['document']} before an absence probe")
                 probed.add(step["document"])
         elif rpc == "Rollback":
-            if step["tokenInput"] is None or step["document"] is not None or step["writes"]:
+            if (step["tokenInput"] is None and "tokenLiteral" not in step) or step["document"] is not None or step["writes"]:
                 _bad(f"{step['id']} is not a rollback of an issued token")
         else:
-            if step["document"] is not None or (not step["writes"] and (step["tokenInput"] is None or step["role"] == "outside-writer")):
+            if step["document"] is not None or (not step["writes"] and ((step["tokenInput"] is None and "tokenLiteral" not in step) or step["role"] == "outside-writer")):
                 _bad(f"{step['id']} commits no writes outside a transaction")
             if step["role"] == "outside-writer" and step["tokenInput"] is not None:
                 _bad(f"{step['id']} is an outside writer that carries a token")
@@ -351,7 +365,9 @@ def request_for_step(value, step, tokens, table, times=None):
     if step not in value["steps"] or not isinstance(tokens, dict):
         raise ValueError("declared step and token bindings required")
     token = None
-    if step["tokenInput"]:
+    if "tokenLiteral" in step:
+        token = LITERAL_TOKENS[step["tokenLiteral"]]
+    elif step["tokenInput"]:
         if step["tokenInput"] not in tokens:
             raise ValueError("step has no earlier issued token")
         token = canonical_token(tokens[step["tokenInput"]])

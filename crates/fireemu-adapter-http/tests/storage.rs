@@ -744,16 +744,16 @@ fn firebase_resumable_upload_protocol() {
 fn json_api_dialect_for_the_admin_sdk() {
     let s = state(None);
     let owner = [("authorization", "Bearer owner")];
-    // The official emulator serves no bucket metadata: the path falls into its XML-style
-    // fallback and answers the missing-object envelope.
-    assert_eq!(
-        handle(
-            &s,
-            req("GET", &format!("/storage/v1/b/{BUCKET}"), &owner, b"")
-        )
-        .status,
-        404
+    // The official emulator serves no bucket metadata (its XML-style fallback answers the
+    // missing-object envelope). fireemu serves the bucket resource, with `versioning` only, in both
+    // profiles: production answers it, and the Admin SDK's `bucket.getMetadata()` needs it. This is
+    // an extension that refuses nothing the official emulator completes.
+    let bucket = handle(
+        &s,
+        req("GET", &format!("/storage/v1/b/{BUCKET}"), &owner, b""),
     );
+    assert_eq!(bucket.status, 200);
+    assert_eq!(json_body(&bucket)["kind"], "storage#bucket");
     let (ct, body) = multipart(
         &json!({"name": "a/b.txt", "contentType": "text/plain", "metadata": {"owner": "x"}}),
         "text/plain",

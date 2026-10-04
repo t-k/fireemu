@@ -438,3 +438,71 @@ fn copy_resumable_and_multipart_overwrites_archive_too() {
         vec![("archived", gen(&dst2)), ("finalized", gen(&dst3))]
     );
 }
+
+#[test]
+fn a_versions_listing_folds_prefixes_and_pages_through_every_generation() {
+    for acceptance in PROFILES {
+        let (s, _) = state(acceptance);
+        set_versioning(&s, true);
+        let d1 = upload(&s, "dir/a.txt", "1");
+        let d2 = upload(&s, "dir/a.txt", "22");
+        let d3 = upload(&s, "dir/b.txt", "3");
+        let top = upload(&s, "top.txt", "4");
+        // Folded: both generations of `dir/a.txt` and `dir/b.txt` fold into one prefix.
+        let folded = body(&call(
+            &s,
+            "GET",
+            &format!("/storage/v1/b/{BUCKET}/o?versions=true&delimiter=/"),
+            b"",
+        ));
+        assert_eq!(folded["prefixes"], json!(["dir/"]), "{folded}");
+        let items = folded["items"].as_array().unwrap();
+        assert_eq!(items.len(), 1);
+        assert_eq!(gen(&items[0]), gen(&top));
+        // Paged: every generation exactly once, in order, across pages of two.
+        let mut seen = Vec::new();
+        let mut token: Option<String> = None;
+        for _ in 0..10 {
+            let query = token
+                .as_ref()
+                .map_or(String::new(), |t| format!("&pageToken={t}"));
+            let page = body(&call(
+                &s,
+                "GET",
+                &format!("/storage/v1/b/{BUCKET}/o?versions=true&maxResults=2{query}"),
+                b"",
+            ));
+            for item in page["items"].as_array().cloned().unwrap_or_default() {
+                seen.push(gen(&item));
+            }
+            token = page["nextPageToken"].as_str().map(str::to_owned);
+            if token.is_none() {
+                break;
+            }
+        }
+        assert_eq!(seen, vec![gen(&d1), gen(&d2), gen(&d3), gen(&top)]);
+    }
+}
+
+#[test]
+fn deleting_an_unknown_generation_is_not_found_and_changes_nothing() {
+    let (s, seen) = state(TokenAcceptance::Verified);
+    set_versioning(&s, true);
+    let live = upload(&s, "o.txt", "data");
+    let _ = drain(&seen);
+    let r = call(
+        &s,
+        "DELETE",
+        &format!("/storage/v1/b/{BUCKET}/o/o.txt?generation=424242"),
+        b"",
+    );
+    assert_eq!(r.status, 404);
+    assert!(drain(&seen).is_empty());
+    let still = call(
+        &s,
+        "GET",
+        &format!("/storage/v1/b/{BUCKET}/o/o.txt?generation={}", gen(&live)),
+        b"",
+    );
+    assert_eq!(still.status, 200);
+}

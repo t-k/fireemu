@@ -175,6 +175,7 @@ function runCase(index) {
   const where = `case ${index} (seed ${seed}${collisions ? ", collisions" : ""})`;
 
   let state = openOwnership({ path, runId: "prop", io, now: NOW });
+  events.length = 0; // the directory fsync of a new ledger is not a row
   const reopen = (tear) => {
     closeOwnership(state);
     if (tear) fs.appendFileSync(path, '{"v":1,"runId":"prop","seq":99999,"phase":"intent","na');

@@ -25,7 +25,7 @@ recordAnswer(state, t, answer);
 recordRead(state, { name, transport: "rest", answer: { status, bodyReadable, bodyName } });
 
 // At the end of the run.
-const { closureReady, reasons } = closureReport(state);
+const { closureReady, reasons, details } = closureReport(state); // details: what each unsettled name waits for, and why
 ```
 
 Report every answer with what you observed: `status` (HTTP; map a gRPC code to its HTTP equivalent: OK 200, ALREADY_EXISTS 409, NOT_FOUND 404, INVALID_ARGUMENT 400, UNAVAILABLE 503, DEADLINE_EXCEEDED 504), `bodyReadable: true` only when the body was read (an empty body is readable; leave it out and the answer is unknown), `transportError` for a timeout, reset or refused connection, and `operationPending: true` for a long-running operation you have not read as done. `bodyName`, when given on a GET, must equal the name asked for.

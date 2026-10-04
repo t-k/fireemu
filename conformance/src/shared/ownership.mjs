@@ -116,7 +116,6 @@ function blankName() {
     via: null,
     open: null,
     unsettled: null,
-    deleted: false,
     deleteUnknown: false,
   };
 }
@@ -154,7 +153,6 @@ function applyAnswer(state, row) {
       st.owned = true;
       st.created = true;
       st.via = "create";
-      st.deleted = false;
     } else if (klass === "unknown") {
       st.unsettled = { action: "create", ticket: row.ticket, reason: row.reason ?? "unknown" };
     }
@@ -162,7 +160,6 @@ function applyAnswer(state, row) {
   }
   if (klass === "ok" || klass === "notFound") {
     st.owned = false;
-    st.deleted = true;
   } else if (klass === "unknown") {
     st.unsettled = { action: "delete", ticket: row.ticket, reason: row.reason ?? "unknown" };
     st.deleteUnknown = true;
@@ -181,14 +178,12 @@ function applyRead(state, row) {
       st.owned = true;
       st.created = true;
       st.via = "settled-read";
-      st.deleted = false;
     }
     return;
   }
   // An unknown delete: the name is still there (still ours) or it is gone.
   if (row.observed === "absent") {
     st.owned = false;
-    st.deleted = true;
   }
 }
 
@@ -271,7 +266,6 @@ function newState(runId, now, io) {
     now,
     io,
     fd: null,
-    path: null,
     rowSeq: 0,
     ticket: 0,
     names: new Map(),
@@ -294,7 +288,6 @@ export function openOwnership({ path, runId, now = Date.now, io = { writeSync, f
     );
   }
   const state = newState(runId, now, io);
-  state.path = path;
   let dropped = 0;
   const existed = existsSync(path);
   if (existed) {
@@ -310,7 +303,7 @@ export function openOwnership({ path, runId, now = Date.now, io = { writeSync, f
   if (!existed) {
     const parent = openSync(dirname(path), "r");
     try {
-      fsyncSync(parent);
+      io.fsyncSync(parent);
     } finally {
       closeSync(parent);
     }
@@ -318,7 +311,7 @@ export function openOwnership({ path, runId, now = Date.now, io = { writeSync, f
     // Cut the unfinished row off so the next row starts on a line of its own.
     const keep = readFileSync(path).length - dropped;
     ftruncateSync(state.fd, keep);
-    fsyncSync(state.fd);
+    io.fsyncSync(state.fd);
   }
   if (existed) {
     append(state, { phase: "resume", droppedTailBytes: dropped });
@@ -477,6 +470,13 @@ export function unsettledNames(state) {
     .toSorted();
 }
 
+function unsettledDetails(state) {
+  return [...state.names]
+    .filter(([, st]) => st.unsettled)
+    .map(([name, st]) => ({ name, action: st.unsettled.action, reason: st.unsettled.reason }))
+    .toSorted((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
+}
+
 /**
  * Whether the run may be called closed on ownership grounds: nothing in flight, nothing unsettled,
  * nothing created and not yet deleted, and no unknown DELETE answer ever (a settled one counts:
@@ -499,6 +499,8 @@ export function closureReport(state) {
       .map(([name]) => name)
       .toSorted(),
     unsettled: unsettledNames(state),
+    // What each unsettled name is waiting for, and why it is unknown.
+    details: unsettledDetails(state),
   };
 }
 

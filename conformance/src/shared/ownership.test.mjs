@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, it } from "node:test";
 import * as fs from "node:fs";
 
 import {
+  ANSWER_CLASSES,
   beginCreate,
   beginDelete,
   classifyAnswer,
@@ -78,6 +79,7 @@ beforeEach(() => {
   dir = mkdtempSync(join(tmpdir(), "ownership-"));
   events = [];
   state = open();
+  events.length = 0;
 });
 
 afterEach(() => {
@@ -579,6 +581,7 @@ describe("closure", () => {
       unknownDeletes: 0,
       owned: [],
       unsettled: [],
+      details: [],
     });
   });
 
@@ -727,5 +730,241 @@ describe("resuming a ledger", () => {
       reason: "unknown-delete-not-resent",
     });
     assert.equal(closureReport(state).closureReady, false);
+  });
+});
+
+/** Writes a ledger file from rows, as a crashed or damaged run might have left it. */
+function ledgerFile(name, rows, runId = "run1") {
+  const path = join(dir, name);
+  const text = rows
+    .map((row, index) =>
+      JSON.stringify({ v: 1, runId, seq: index + 1, at: "2026-09-06T10:40:00.000Z", ...row }),
+    )
+    .join("\n");
+  writeFileSync(path, `${text}\n`);
+  return path;
+}
+
+const intent = (ticket, action, name) => ({
+  phase: "intent",
+  ticket,
+  action,
+  name,
+  transport: "rest",
+});
+const answerRow = (ticket, action, name, extra = {}) => ({
+  phase: "answer",
+  ticket,
+  action,
+  name,
+  transport: "rest",
+  class: "ok",
+  status: 200,
+  ...extra,
+});
+
+describe("what the answer classes, errors and reports expose", () => {
+  it("lists the answer classes, and every class an answer can have is one of them", () => {
+    assert.deepEqual([...ANSWER_CLASSES], ["ok", "conflict", "notFound", "refused", "unknown"]);
+    const seen = new Set();
+    for (const status of [0, 100, 200, 204, 301, 400, 404, 409, 429, 500, 600]) {
+      for (const bodyReadable of [true, false]) {
+        seen.add(classifyAnswer({ status, bodyReadable }).class);
+      }
+    }
+    seen.add(classifyAnswer({ transportError: true }).class);
+    assert.deepEqual([...seen].toSorted(), [...ANSWER_CLASSES].toSorted());
+    assert.throws(() => {
+      ANSWER_CLASSES.push("x");
+    });
+  });
+
+  it("raises errors that name themselves and carry their code", () => {
+    try {
+      beginDelete(state, { name: "never", transport: "rest" });
+      assert.fail("expected a refusal");
+    } catch (error) {
+      assert.equal(error.name, "OwnershipError");
+      assert.ok(error instanceof Error);
+      assert.equal(error.code, "not-owned");
+      assert.match(error.message, /never may not be deleted: not-owned/u);
+    }
+  });
+
+  it("says what each unsettled name waits for and why", () => {
+    create("b", { status: 503, bodyReadable: true });
+    create("a", TIMEOUT);
+    create("d", OK);
+    remove("d", { status: 200, bodyReadable: false });
+    assert.deepEqual(closureReport(state).details, [
+      { name: "a", action: "create", reason: "transport-error" },
+      { name: "b", action: "create", reason: "server-error" },
+      { name: "d", action: "delete", reason: "unreadable-body" },
+    ]);
+  });
+
+  it("lists the reasons of a closure in name order, however the names were created", () => {
+    for (const name of ["c", "a", "b"]) create(name, OK);
+    assert.deepEqual(closureReport(state).reasons, [
+      "owned-not-deleted:a",
+      "owned-not-deleted:b",
+      "owned-not-deleted:c",
+    ]);
+    assert.deepEqual(closureReport(state).owned, ["a", "b", "c"]);
+    remove("b", OK);
+    assert.deepEqual(closureReport(state).owned, ["a", "c"]);
+  });
+
+  it("answers the guard with in-flight while a request of that name is open", () => {
+    create("a", OK);
+    beginDelete(state, { name: "a", transport: "rest" });
+    assert.deepEqual(mayDelete(state, "a"), { allowed: false, reason: "in-flight" });
+  });
+
+  it("writes nothing for an answer it refuses", () => {
+    const ticket = beginCreate(state, { name: "a", transport: "rest" });
+    recordAnswer(state, ticket, OK);
+    const before = readFileSync(join(dir, "ledger.jsonl"), "utf8");
+    assert.equal(
+      refusal(() => recordAnswer(state, ticket, OK)),
+      "stale-ticket",
+    );
+    assert.equal(
+      refusal(() =>
+        recordAnswer(state, { ticket: 9, action: "create", name: "zzz", transport: "rest" }, OK),
+      ),
+      "stale-ticket",
+    );
+    assert.equal(readFileSync(join(dir, "ledger.jsonl"), "utf8"), before);
+  });
+
+  it("records the status of a read, and the reason and class of a mismatched one", () => {
+    read("a", OK);
+    create("b", TIMEOUT);
+    assert.equal(read("b", { ...OK, bodyName: "other" }), "unknown");
+    assert.equal(read("b", { status: 503, bodyReadable: true, bodyName: "other" }), "unknown");
+    const rows = readLedger(join(dir, "ledger.jsonl"), "run1").rows.filter(
+      (row) => row.phase === "read",
+    );
+    assert.deepEqual(
+      rows.map((row) => [row.name, row.status, row.class, row.observed, row.reason]),
+      [
+        ["a", 200, "ok", "present", undefined],
+        ["b", 200, "unknown", "unknown", "name-mismatch"],
+        ["b", 503, "unknown", "unknown", "server-error"],
+      ],
+    );
+  });
+
+  it("records the action of a refused delete as a delete", () => {
+    refusal(() => beginDelete(state, { name: "x", transport: "rest" }));
+    const guard = readLedger(join(dir, "ledger.jsonl"), "run1").rows.at(-1);
+    assert.deepEqual(
+      [guard.phase, guard.action, guard.name, guard.allowed],
+      ["guard", "delete", "x", false],
+    );
+  });
+});
+
+describe("a damaged ledger", () => {
+  it("refuses two intents for one name, an answer with no intent, and an answer that does not match its intent", () => {
+    const open2 = (name, rows) => {
+      closeOwnership(state);
+      const path = ledgerFile(name, rows);
+      try {
+        openOwnership({ path, runId: "run1" });
+        assert.fail("expected a refusal");
+      } catch (error) {
+        return error;
+      } finally {
+        state = open("fresh.jsonl");
+      }
+      return null;
+    };
+    const twice = open2("twice.jsonl", [intent(1, "create", "a"), intent(2, "create", "a")]);
+    assert.equal(twice.code, "in-flight");
+    assert.match(twice.message, /already in flight/u);
+    assert.equal(open2("orphan.jsonl", [answerRow(1, "create", "a")]).code, "stale-ticket");
+    assert.equal(
+      open2("ticket.jsonl", [intent(1, "create", "a"), answerRow(2, "create", "a")]).code,
+      "stale-ticket",
+    );
+    assert.equal(
+      open2("action.jsonl", [intent(1, "create", "a"), answerRow(1, "delete", "a")]).code,
+      "stale-ticket",
+    );
+    assert.equal(
+      open2("both.jsonl", [intent(1, "create", "a"), answerRow(2, "delete", "a")]).code,
+      "stale-ticket",
+    );
+  });
+
+  it("refuses a row that is not an object, and says which line is not JSON", () => {
+    closeOwnership(state);
+    const path = join(dir, "bad.jsonl");
+    writeFileSync(path, "null\n");
+    assert.throws(
+      () => openOwnership({ path, runId: "run1" }),
+      (error) => error.code === "corrupt-ledger",
+    );
+    writeFileSync(path, "42\n");
+    assert.throws(
+      () => openOwnership({ path, runId: "run1" }),
+      (error) => error.code === "corrupt-ledger",
+    );
+    writeFileSync(path, '{"v":1,"runId":"run1","seq":1,"phase":"intent"}\n{broken\n');
+    assert.throws(
+      () => openOwnership({ path, runId: "run1" }),
+      (error) => error.code === "corrupt-ledger" && /line 2 is not JSON/u.test(error.message),
+    );
+    state = open("fresh.jsonl");
+  });
+
+  it("keeps an unknown answer without a reason unsettled, with the reason unknown", () => {
+    closeOwnership(state);
+    const path = ledgerFile("noreason.jsonl", [
+      intent(1, "create", "a"),
+      answerRow(1, "create", "a", { class: "unknown", status: null }),
+      intent(2, "create", "b"),
+      answerRow(2, "create", "b"),
+      intent(3, "delete", "b"),
+      answerRow(3, "delete", "b", { class: "unknown", status: null }),
+    ]);
+    state = openOwnership({ path, runId: "run1" });
+    assert.deepEqual(closureReport(state).details, [
+      { name: "a", action: "create", reason: "unknown" },
+      { name: "b", action: "delete", reason: "unknown" },
+    ]);
+    assert.equal(closureReport(state).unknownDeletes, 1);
+  });
+});
+
+describe("the files and descriptors it uses", () => {
+  const openFds = () => fs.readdirSync("/dev/fd").length;
+
+  it("fsyncs the directory of a new ledger, and the file when it cuts a torn row", () => {
+    closeOwnership(state);
+    events = [];
+    state = open("fresh-dir.jsonl");
+    assert.deepEqual(events, ["fsync"], "the new file's directory entry is made durable");
+    create("a", OK);
+    closeOwnership(state);
+    fs.appendFileSync(join(dir, "fresh-dir.jsonl"), '{"torn');
+    events = [];
+    state = open("fresh-dir.jsonl");
+    assert.deepEqual(events, ["fsync", "write", "fsync"], "the cut, then the resume row");
+  });
+
+  it("closes what it opens", () => {
+    closeOwnership(state);
+    const before = openFds();
+    const fresh = open("fds.jsonl");
+    closeOwnership(fresh);
+    assert.equal(openFds(), before, "no descriptor is left open after a close");
+    assert.throws(
+      () => fs.writeSync(fresh.fd, "x"),
+      (error) => error.code === "EBADF",
+    );
+    state = open("fds2.jsonl");
   });
 });

@@ -366,9 +366,19 @@
         "unsupported-wall-mode",
         "invalid-config-location"
       ],
-      "status": "PENDING_LOCAL_VERIFICATION",
-      "coverageStatus": "debt",
-      "evidence": null,
+      "status": "VERIFIED",
+      "coverageStatus": "covered",
+      "evidence": {
+        "evidenceType": "fireemu-only",
+        "sourceCommit": "305b6a2d07cbe68f1b43eb7f3de65eae338f32f5",
+        "finalArtifactSha256": "fdbecf5a452ac9deb2f3cf1968c2087d0a2ca3a4cda7c977d9668d988e440303",
+        "runnerSha256": "56280f3e549ad5f47447f5e96feba2ae64a2af77eadc4b2bfd0e835d33dbe56a",
+        "comparisonPath": "spec/compatibility/closure/evidence/SCHEDULED-FUNCTIONS-local-comparison.json",
+        "comparisonSha256": "f21076e364a6a8d485978600215cdc4140451975804a78075ef093a94c58554b",
+        "rows": {
+          "PASS": 5
+        }
+      },
       "obligation": "Fireemu configuration contract, not a production wall-clock implementation claim",
       "source": "spec/compatibility/contract.json#FN-CLAIM-SCHEDULE and crates/fireemu-adapter-functions/src/runtime.rs and crates/fireemu-core-session/src/clock.rs"
     },
@@ -384,9 +394,19 @@
         "exact-minute",
         "boundary-before-after"
       ],
-      "status": "PENDING_LOCAL_VERIFICATION",
-      "coverageStatus": "debt",
-      "evidence": null,
+      "status": "VERIFIED",
+      "coverageStatus": "covered",
+      "evidence": {
+        "evidenceType": "fireemu-only",
+        "sourceCommit": "305b6a2d07cbe68f1b43eb7f3de65eae338f32f5",
+        "finalArtifactSha256": "fdbecf5a452ac9deb2f3cf1968c2087d0a2ca3a4cda7c977d9668d988e440303",
+        "runnerSha256": "56280f3e549ad5f47447f5e96feba2ae64a2af77eadc4b2bfd0e835d33dbe56a",
+        "comparisonPath": "spec/compatibility/closure/evidence/SCHEDULED-FUNCTIONS-local-comparison.json",
+        "comparisonSha256": "f21076e364a6a8d485978600215cdc4140451975804a78075ef093a94c58554b",
+        "rows": {
+          "PASS": 6
+        }
+      },
       "obligation": "Logical clock operations produce documented schedule occurrences",
       "source": "spec/compatibility/contract.json#FN-CLAIM-SCHEDULE and crates/fireemu-adapter-functions/src/runtime.rs and crates/fireemu-core-session/src/clock.rs"
     },
@@ -404,9 +424,19 @@
         "repeated-notification",
         "multiple-jobs"
       ],
-      "status": "PENDING_LOCAL_VERIFICATION",
-      "coverageStatus": "debt",
-      "evidence": null,
+      "status": "VERIFIED",
+      "coverageStatus": "covered",
+      "evidence": {
+        "evidenceType": "fireemu-only",
+        "sourceCommit": "305b6a2d07cbe68f1b43eb7f3de65eae338f32f5",
+        "finalArtifactSha256": "fdbecf5a452ac9deb2f3cf1968c2087d0a2ca3a4cda7c977d9668d988e440303",
+        "runnerSha256": "56280f3e549ad5f47447f5e96feba2ae64a2af77eadc4b2bfd0e835d33dbe56a",
+        "comparisonPath": "spec/compatibility/closure/evidence/SCHEDULED-FUNCTIONS-local-comparison.json",
+        "comparisonSha256": "f21076e364a6a8d485978600215cdc4140451975804a78075ef093a94c58554b",
+        "rows": {
+          "PASS": 8
+        }
+      },
       "obligation": "Explicit policy and bounded occurrence admission",
       "source": "spec/compatibility/contract.json#FN-CLAIM-SCHEDULE and crates/fireemu-adapter-functions/src/runtime.rs and crates/fireemu-core-session/src/clock.rs"
     },
@@ -415,9 +445,19 @@
       "evidenceType": "fireemu-only",
       "recipeIds": ["scheduled-functions/local/overlap"],
       "cases": ["allow", "skip", "queue", "reject", "manual-overlap", "long-running-handler"],
-      "status": "PENDING_LOCAL_VERIFICATION",
-      "coverageStatus": "debt",
-      "evidence": null,
+      "status": "VERIFIED",
+      "coverageStatus": "covered",
+      "evidence": {
+        "evidenceType": "fireemu-only",
+        "sourceCommit": "305b6a2d07cbe68f1b43eb7f3de65eae338f32f5",
+        "finalArtifactSha256": "fdbecf5a452ac9deb2f3cf1968c2087d0a2ca3a4cda7c977d9668d988e440303",
+        "runnerSha256": "56280f3e549ad5f47447f5e96feba2ae64a2af77eadc4b2bfd0e835d33dbe56a",
+        "comparisonPath": "spec/compatibility/closure/evidence/SCHEDULED-FUNCTIONS-local-comparison.json",
+        "comparisonSha256": "f21076e364a6a8d485978600215cdc4140451975804a78075ef093a94c58554b",
+        "rows": {
+          "PASS": 6
+        }
+      },
       "obligation": "Document local suppression/queuing; distinguish overlapping functions from Scheduler attempts",
       "source": "spec/compatibility/contract.json#FN-CLAIM-SCHEDULE and crates/fireemu-adapter-functions/src/runtime.rs and crates/fireemu-core-session/src/clock.rs"
     },
@@ -431,9 +471,19 @@
         "completion-reentry",
         "awaitIdle-settles"
       ],
-      "status": "PENDING_LOCAL_VERIFICATION",
-      "coverageStatus": "debt",
-      "evidence": null,
+      "status": "VERIFIED",
+      "coverageStatus": "covered",
+      "evidence": {
+        "evidenceType": "fireemu-only",
+        "sourceCommit": "305b6a2d07cbe68f1b43eb7f3de65eae338f32f5",
+        "finalArtifactSha256": "fdbecf5a452ac9deb2f3cf1968c2087d0a2ca3a4cda7c977d9668d988e440303",
+        "runnerSha256": "56280f3e549ad5f47447f5e96feba2ae64a2af77eadc4b2bfd0e835d33dbe56a",
+        "comparisonPath": "spec/compatibility/closure/evidence/SCHEDULED-FUNCTIONS-local-comparison.json",
+        "comparisonSha256": "f21076e364a6a8d485978600215cdc4140451975804a78075ef093a94c58554b",
+        "rows": {
+          "PASS": 4
+        }
+      },
       "obligation": "Regression for catch-up early-return starvation",
       "source": "spec/compatibility/contract.json#FN-CLAIM-SCHEDULE and crates/fireemu-adapter-functions/src/runtime.rs and crates/fireemu-core-session/src/clock.rs"
     },
@@ -447,9 +497,19 @@
         "manual-refusal-is-visible",
         "per-job-fairness"
       ],
-      "status": "PENDING_LOCAL_VERIFICATION",
-      "coverageStatus": "debt",
-      "evidence": null,
+      "status": "VERIFIED",
+      "coverageStatus": "covered",
+      "evidence": {
+        "evidenceType": "fireemu-only",
+        "sourceCommit": "305b6a2d07cbe68f1b43eb7f3de65eae338f32f5",
+        "finalArtifactSha256": "fdbecf5a452ac9deb2f3cf1968c2087d0a2ca3a4cda7c977d9668d988e440303",
+        "runnerSha256": "56280f3e549ad5f47447f5e96feba2ae64a2af77eadc4b2bfd0e835d33dbe56a",
+        "comparisonPath": "spec/compatibility/closure/evidence/SCHEDULED-FUNCTIONS-local-comparison.json",
+        "comparisonSha256": "f21076e364a6a8d485978600215cdc4140451975804a78075ef093a94c58554b",
+        "rows": {
+          "PASS": 4
+        }
+      },
       "obligation": "No silent schedule loss on admission refusal; only schedule/manual ownership",
       "source": "spec/compatibility/contract.json#FN-CLAIM-SCHEDULE and crates/fireemu-adapter-functions/src/runtime.rs and crates/fireemu-core-session/src/clock.rs"
     },
@@ -464,9 +524,19 @@
         "future-issued-held-token",
         "token-after-new-issuance"
       ],
-      "status": "PENDING_LOCAL_VERIFICATION",
-      "coverageStatus": "debt",
-      "evidence": null,
+      "status": "VERIFIED",
+      "coverageStatus": "covered",
+      "evidence": {
+        "evidenceType": "fireemu-only",
+        "sourceCommit": "305b6a2d07cbe68f1b43eb7f3de65eae338f32f5",
+        "finalArtifactSha256": "fdbecf5a452ac9deb2f3cf1968c2087d0a2ca3a4cda7c977d9668d988e440303",
+        "runnerSha256": "56280f3e549ad5f47447f5e96feba2ae64a2af77eadc4b2bfd0e835d33dbe56a",
+        "comparisonPath": "spec/compatibility/closure/evidence/SCHEDULED-FUNCTIONS-local-comparison.json",
+        "comparisonSha256": "f21076e364a6a8d485978600215cdc4140451975804a78075ef093a94c58554b",
+        "rows": {
+          "PASS": 5
+        }
+      },
       "obligation": "Explicit rewind policy and fail-closed future-claim behavior",
       "source": "spec/compatibility/contract.json#FN-CLAIM-SCHEDULE and crates/fireemu-adapter-functions/src/runtime.rs and crates/fireemu-core-session/src/clock.rs"
     },
@@ -481,9 +551,19 @@
         "does-not-silently-consume-natural-occurrence",
         "admission-refusal"
       ],
-      "status": "PENDING_LOCAL_VERIFICATION",
-      "coverageStatus": "debt",
-      "evidence": null,
+      "status": "VERIFIED",
+      "coverageStatus": "covered",
+      "evidence": {
+        "evidenceType": "fireemu-only",
+        "sourceCommit": "305b6a2d07cbe68f1b43eb7f3de65eae338f32f5",
+        "finalArtifactSha256": "fdbecf5a452ac9deb2f3cf1968c2087d0a2ca3a4cda7c977d9668d988e440303",
+        "runnerSha256": "56280f3e549ad5f47447f5e96feba2ae64a2af77eadc4b2bfd0e835d33dbe56a",
+        "comparisonPath": "spec/compatibility/closure/evidence/SCHEDULED-FUNCTIONS-local-comparison.json",
+        "comparisonSha256": "f21076e364a6a8d485978600215cdc4140451975804a78075ef093a94c58554b",
+        "rows": {
+          "PASS": 5
+        }
+      },
       "obligation": "Fireemu manual control semantics independently documented",
       "source": "spec/compatibility/contract.json#FN-CLAIM-SCHEDULE and crates/fireemu-adapter-functions/src/runtime.rs and crates/fireemu-core-session/src/clock.rs"
     },
@@ -492,9 +572,19 @@
       "evidenceType": "fireemu-only",
       "recipeIds": ["scheduled-functions/local/lifecycle"],
       "cases": ["snapshot-restore", "reset", "reload", "runner-shutdown", "pending-job-retention"],
-      "status": "PENDING_LOCAL_VERIFICATION",
-      "coverageStatus": "debt",
-      "evidence": null,
+      "status": "VERIFIED",
+      "coverageStatus": "covered",
+      "evidence": {
+        "evidenceType": "fireemu-only",
+        "sourceCommit": "305b6a2d07cbe68f1b43eb7f3de65eae338f32f5",
+        "finalArtifactSha256": "fdbecf5a452ac9deb2f3cf1968c2087d0a2ca3a4cda7c977d9668d988e440303",
+        "runnerSha256": "56280f3e549ad5f47447f5e96feba2ae64a2af77eadc4b2bfd0e835d33dbe56a",
+        "comparisonPath": "spec/compatibility/closure/evidence/SCHEDULED-FUNCTIONS-local-comparison.json",
+        "comparisonSha256": "f21076e364a6a8d485978600215cdc4140451975804a78075ef093a94c58554b",
+        "rows": {
+          "PASS": 5
+        }
+      },
       "obligation": "Scheduled cursor/outbox consistency across supported lifecycle boundaries",
       "source": "spec/compatibility/contract.json#FN-CLAIM-SCHEDULE and crates/fireemu-adapter-functions/src/runtime.rs and crates/fireemu-core-session/src/clock.rs"
     },
@@ -530,7 +620,7 @@
     }
   ],
   "limitations": [
-    "The inventory is frozen; all evidence remains pending and the parent is IMPLEMENTING.",
+    "The inventory is frozen. The nine Fireemu-only conditions are verified locally; the production-parity conditions and the closure gates remain pending and the parent is IMPLEMENTING.",
     "DST repeated delivery is not proven by future next-time metadata.",
     "General Cloud Scheduler resource API is not claimed.",
     "The Fireemu-only conditions are bound to local tests and claim no production behaviour.",

@@ -329,8 +329,15 @@ test("cleanup of a refused create needs no read; a created account is removed th
   const report = await s.cleanup();
   assert.deepEqual(calls, [["remove", "ua"]]);
   assert.deepEqual(report.rows, [
-    { name: "a", settled: true, unknownDelete: false, why: null },
-    { name: "b", settled: true, why: "refused" },
+    {
+      name: "a",
+      email: "fsl-rr-a@example.com",
+      uid: "ua",
+      settled: true,
+      unknownDelete: false,
+      why: null,
+    },
+    { name: "b", email: "fsl-rr-b@example.com", settled: true, why: "refused" },
   ]);
   assert.equal(report.complete, true);
 });
@@ -353,7 +360,12 @@ test("cleanup keeps going after an account it cannot settle, and reports every a
   await assert.rejects(s.create(["a"]), /unknown transport/);
   const report = await s.cleanup();
   assert.deepEqual(report.rows, [
-    { name: "a", settled: false, why: "create-unknown-lookup-unknown" },
+    {
+      name: "a",
+      email: "fsl-rr-a@example.com",
+      settled: false,
+      why: "create-unknown-lookup-unknown",
+    },
   ]);
   assert.equal(report.complete, false);
 });
@@ -525,4 +537,119 @@ test("the account client reads the recorded production answers: create, delete, 
     unknownDelete: false,
     why: null,
   });
+});
+
+const memoryJournal = () => {
+  const lines = [];
+  return { lines, append: (record) => lines.push(record), close() {} };
+};
+
+test("the journal gets the email before the create and the uid after it, then the delete before and after", async () => {
+  const journal = memoryJournal();
+  const seenBeforeCreate = [];
+  const client = {
+    async create() {
+      seenBeforeCreate.push(journal.lines.map((l) => [l.type, l.phase, l.email]));
+      return { kind: "created", uid: "ua" };
+    },
+    async lookup() {
+      return [];
+    },
+    async remove() {
+      return { settled: true, unknownDelete: false, why: null };
+    },
+  };
+  const s = createAccountSession({ client, run: "rr", journal });
+  await s.create(["a"]);
+  assert.deepEqual(seenBeforeCreate, [[["account", "before", "fsl-rr-a@example.com"]]]);
+  await s.cleanup();
+  assert.deepEqual(
+    journal.lines.map((l) => [l.type, l.phase, l.state ?? l.outcome]),
+    [
+      ["account", "before", undefined],
+      ["account", "after", "created"],
+      ["account-delete", "before", undefined],
+      ["account-delete", "after", "answered"],
+    ],
+  );
+  assert.equal(journal.lines[1].uid, "ua");
+  assert.equal(journal.lines[2].uid, "ua");
+  const text = JSON.stringify(journal.lines);
+  assert.ok(!text.includes("Fsl-rr-a-"), "the password never reaches the journal");
+});
+
+test("a create that throws is journaled as unknown, and an unknown delete as unknown", async () => {
+  const journal = memoryJournal();
+  const throwing = createAccountSession({
+    client: {
+      async create() {
+        throw new Error("boom");
+      },
+    },
+    run: "rr",
+    journal,
+  });
+  await assert.rejects(throwing.create(["a"]), /boom/);
+  assert.equal(journal.lines.at(-1).state, "unknown");
+  const deleting = memoryJournal();
+  const s = createAccountSession({
+    client: {
+      async create() {
+        return { kind: "created", uid: "ua" };
+      },
+      async remove() {
+        return { settled: true, unknownDelete: true, why: null };
+      },
+    },
+    run: "rr",
+    journal: deleting,
+  });
+  await s.create(["a"]);
+  await s.cleanup();
+  assert.equal(deleting.lines.at(-1).outcome, "unknown");
+});
+
+test("an unknown create found by email journals the uid it learned, and every cleanup row names email and uid", async () => {
+  const journal = memoryJournal();
+  const client = {
+    async create() {
+      return { kind: "unknown", why: "transport" };
+    },
+    async lookup() {
+      return ["uf"];
+    },
+    async remove(uid) {
+      return { settled: false, unknownDelete: true, why: "still-present", uid };
+    },
+  };
+  const s = createAccountSession({ client, run: "rr", journal });
+  await assert.rejects(s.create(["a"]), /unknown transport/);
+  const report = await s.cleanup();
+  assert.ok(journal.lines.some((l) => l.state === "found-by-email" && l.uid === "uf"));
+  assert.deepEqual(report.rows[0].uid, "uf");
+  assert.deepEqual(report.rows[0].email, "fsl-rr-a@example.com");
+  const notFound = createAccountSession({
+    client: { ...client, lookup: async () => [] },
+    run: "rr",
+  });
+  await assert.rejects(notFound.create(["a"]), /unknown/);
+  const rows = (await notFound.cleanup()).rows;
+  assert.equal(rows[0].why, "create-unknown-not-found");
+  assert.equal(rows[0].email, "fsl-rr-a@example.com");
+  assert.ok(!("uid" in rows[0]));
+});
+
+test("the account client counts every request it sends, whatever the answer", async () => {
+  const { fetchImpl } = scripted({
+    "/accounts": [[200, { localId: "u" }]],
+    "/accounts:lookup": ["throw"],
+    "/accounts:delete": [[500, {}]],
+  });
+  const client = createAccountClient({ base: "https://x", project: "p", headers: {}, fetchImpl });
+  assert.equal(client.requestCount(), 0);
+  await client.create({ email: "e", password: "p" });
+  await client.lookup({ localId: ["u"] });
+  assert.equal(client.requestCount(), 2);
+  await client.remove("u");
+  assert.equal(client.requestCount(), 4, "remove sends a delete and a lookup");
 });

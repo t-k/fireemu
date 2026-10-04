@@ -3,13 +3,19 @@
 // resource is named with the run id and deleted by that prefix with a read-back, and the program
 // only records rows. Whether a row is right is decided offline (compare.mjs).
 //
-//   node src/fs-listen/record.mjs native --target production --project fireemu-oracle-txn --ledger L --out F
+//   node src/fs-listen/record.mjs native --target production --project fireemu-oracle-txn --envelope E --ledger L --out F
 //   node src/fs-listen/record.mjs native --target local [--profile strict|emulator] --out F
-//   (L: the sandbox ledger; a production run is admitted only if the coordinator holds the project's
-//   lock and its last run ended 30 minutes ago. Add `--include-long yes` to also record the expired-token program: about 35 minutes of waiting)
+//   (L: the sandbox ledger; E: the envelope id. A production run is admitted only if the coordinator
+//   holds the project's lock for E, no other run of the project is open, and the latest ledger row
+//   of the project is 30 minutes old. Add `--include-long yes` to also record the expired-token
+//   program: about 35 minutes of waiting. The run id is printed as `run <id>` and, with every name
+//   the run issues, written to `<F>.journal.jsonl` (0600, fsynced) before the first request.)
 //   node src/fs-listen/record.mjs sdk --target production --project fireemu-oracle-query \
-//        --ledger L --api-key-file KEY --out F     (KEY: a 0600 file holding only the web app's API key;
-//                                         the key is bound to the project before anything is made)
+//        --envelope E --ledger L --api-key-file KEY --out F     (KEY: a 0600 file holding only the
+//                                         web app's API key; the key is bound to the project
+//                                         before anything is made)
+//   node src/fs-listen/record.mjs readback --journal J --project P --out F
+//        (the coordinator's A2 read-back: reads every name and account the journal lists, read-only)
 //   node src/fs-listen/record.mjs sdk --target local [--profile strict|emulator] --out F
 //
 // `--target local` starts fireemu itself (`fireemu exec`) and runs the same programs inside it.
@@ -24,6 +30,8 @@ import { promisify } from "node:util";
 import { resolveFireemuBinary } from "../evidence.mjs";
 import { createNativeClient } from "./native-client.mjs";
 import { checkAdmission } from "./admission.mjs";
+import { createAccountClient } from "./accounts.mjs";
+import { NULL_JOURNAL, createJournal, issuedFromJournal, readbackJournal } from "./journal.mjs";
 import { createLedger, settleNames } from "./native-ledger.mjs";
 import { LONG_PROGRAMS, NATIVE_PROGRAMS, programProblems } from "./native-programs.mjs";
 import { runNative } from "./native-run.mjs";
@@ -53,13 +61,17 @@ export function parseArgs(argv) {
   return options;
 }
 
-async function accessToken() {
-  const { stdout } = await execFileAsync("gcloud", [
-    "auth",
-    "application-default",
-    "print-access-token",
-  ]);
-  return stdout.trim();
+/** The token from the command's output; an empty or odd output is refused, and never printed. */
+export function validToken(stdout) {
+  const token = String(stdout ?? "").trim();
+  if (token === "" || /\s/.test(token))
+    throw new Error("the access token command gave an empty or malformed token");
+  return token;
+}
+
+export async function accessToken(run = execFileAsync) {
+  const { stdout } = await run("gcloud", ["auth", "application-default", "print-access-token"]);
+  return validToken(stdout);
 }
 
 /** The run id: lower-case letters and digits, valid in a document id. */
@@ -77,66 +89,113 @@ export async function recordNative({
   log = () => {},
   clock = {},
   programs = NATIVE_PROGRAMS,
+  journal = NULL_JOURNAL,
 }) {
   const startedAt = new Date().toISOString();
   const root = `projects/${project}/databases/(default)/documents`;
   // The ledger outlives a run that fails: cleanup works from the names issued, however it ended.
-  const ledger = createLedger();
+  const ledger = createLedger({ journal });
   let cleanup;
   let outcome;
   try {
     outcome = await runNative(programs, { client, project, run, log, ledger, ...clock });
   } finally {
     try {
-      cleanup = await settleNames({ issued: ledger.entries(), client, root, run });
+      cleanup = await settleNames({ issued: ledger.entries(), client, root, run, journal });
     } catch (error) {
       cleanup = { complete: false, error: String(error?.message ?? error) };
     }
   }
+  const productionRequests = client.requestCount?.() ?? null;
+  journal.append({ type: "end", productionRequests });
   return {
     version: 1,
     kind: "native",
+    run,
     startedAt,
+    endedAt: new Date().toISOString(),
     node: process.version,
     requests: outcome.requests,
+    productionRequests,
+    issued: ledger.entries().map(([name]) => name),
     errors: outcome.errors,
     cleanup,
     rows: outcome.rows,
   };
 }
 
-/** The read-only admission of a production recording: the project's lock is held and the spacing has passed. */
-async function admit(options) {
+/** The read-only admission of a production recording: this envelope's lock is held, no other run is open, the spacing has passed. */
+export async function admit(options) {
   if (!options.ledger) throw new Error("--ledger <sandbox-ledger.jsonl> is required");
+  if (!options.envelope) throw new Error("--envelope <envelope id> is required");
   const admitted = await checkAdmission({
     ledger: options.ledger,
     project: options.project,
+    envelope: options.envelope,
     readFile,
   });
-  console.error(`admitted: lock held by ${admitted.holder.taskId}`);
+  console.error(`admitted: lock held by ${admitted.holder.taskId} for ${options.envelope}`);
 }
 
-async function nativeProduction(options) {
-  checkProject("native", options.project);
-  await admit(options);
+/** The journal of a production run: created (0600) and headed with the run id before any request. */
+function openJournal(options, kind, run) {
+  const journal = createJournal(`${options.out}.journal.jsonl`);
+  journal.append({
+    type: "run",
+    runId: run,
+    kind,
+    project: options.project,
+    envelopeId: options.envelope,
+    startedAt: new Date().toISOString(),
+  });
+  console.error(`run ${run}`);
+  return journal;
+}
+
+const PRODUCTION_DEPS = {
+  checkProject,
+  admit,
+  accessToken: () => accessToken(),
+  newRunId: () => newRunId(),
+  openJournal,
+  createClient: createNativeClient,
+  recordNative,
+  loadApiKey,
+  recordSdk,
+};
+
+/**
+ * The order of a production recording is the safety property: project check, then admission, then
+ * (for the SDK) the key file, then the token, then the run id and journal, and only then the first
+ * request. `deps` replaces the effects in tests.
+ */
+export async function nativeProduction(options, deps = {}) {
+  const d = { ...PRODUCTION_DEPS, ...deps };
+  d.checkProject("native", options.project);
+  await d.admit(options);
   const problems = programProblems([...NATIVE_PROGRAMS, ...LONG_PROGRAMS]);
   if (problems.length) throw new Error(`the programs are malformed:\n${problems.join("\n")}`);
-  const client = createNativeClient({
+  const token = await d.accessToken();
+  const run = d.newRunId();
+  const journal = d.openJournal(options, "native", run);
+  const client = d.createClient({
     project: options.project,
     target: { kind: "production" },
-    token: await accessToken(),
-    refreshToken: accessToken,
+    token,
+    refreshToken: d.accessToken,
   });
   try {
-    return await recordNative({
+    return await d.recordNative({
       client,
       project: options.project,
-      run: newRunId(),
+      run,
       log: (line) => console.error(line),
       programs: programsFor(options),
+      journal,
     });
   } finally {
     client.close();
+    journal.close();
   }
 }
 
@@ -210,22 +269,68 @@ export async function withFireemu({ profile, script, args, env, rules }) {
   return new Promise((resolve) => child.once("exit", resolve));
 }
 
-async function sdkProduction(options) {
-  checkProject("sdk", options.project);
-  await admit(options);
+export async function sdkProduction(options, deps = {}) {
+  const d = { ...PRODUCTION_DEPS, ...deps };
+  d.checkProject("sdk", options.project);
+  await d.admit(options);
   if (!options["api-key-file"]) throw new Error("--api-key-file <file> is required");
-  const apiKey = await loadApiKey(options["api-key-file"]);
-  const token = await accessToken();
-  return recordSdk({
-    target: {
-      kind: "production",
-      project: options.project,
-      token,
-      web: { apiKey, authDomain: `${options.project}.firebaseapp.com`, projectId: options.project },
-    },
-    run: newRunId(),
-    log: (line) => console.error(line),
+  const apiKey = await d.loadApiKey(options["api-key-file"]);
+  const token = await d.accessToken();
+  const run = d.newRunId();
+  const journal = d.openJournal(options, "sdk", run);
+  try {
+    return await d.recordSdk({
+      target: {
+        kind: "production",
+        project: options.project,
+        token,
+        web: {
+          apiKey,
+          authDomain: `${options.project}.firebaseapp.com`,
+          projectId: options.project,
+        },
+      },
+      run,
+      log: (line) => console.error(line),
+      journal,
+    });
+  } finally {
+    journal.close();
+  }
+}
+
+/** The coordinator's A2 read-back of a journal: read-only, nothing is deleted. */
+export async function readbackProduction(options, deps = {}) {
+  const d = { ...PRODUCTION_DEPS, accessToken: () => accessToken(), ...deps };
+  if (!options.journal) throw new Error("--journal <file> is required");
+  const text = await readFile(options.journal, "utf8");
+  const { run } = issuedFromJournal(text);
+  d.checkProject(run.kind, options.project);
+  if (run.project !== options.project)
+    throw new Error("the journal is of another project than --project");
+  const token = await d.accessToken();
+  const client = d.createClient({
+    project: options.project,
+    target: { kind: "production" },
+    token,
   });
+  const accountClient =
+    run.kind === "sdk"
+      ? createAccountClient({
+          base: "https://identitytoolkit.googleapis.com",
+          project: options.project,
+          headers: { authorization: `Bearer ${token}`, "x-goog-user-project": options.project },
+        })
+      : {
+          lookup: async () => {
+            throw new Error("a native journal lists no accounts");
+          },
+        };
+  try {
+    return await readbackJournal({ text, client, accountClient });
+  } finally {
+    client.close();
+  }
 }
 
 /** Inside `fireemu exec`: the emulator's Firestore and Auth addresses come from the environment. */
@@ -302,6 +407,14 @@ async function inFireemu(options, command, { rules } = {}) {
 async function main(argv) {
   const options = parseArgs(argv);
   if (!options.out) throw new Error("--out <file> is required");
+  if (options.command === "readback") {
+    const report = await readbackProduction(options);
+    await mkdir(dirname(options.out), { recursive: true });
+    await writeFile(options.out, `${JSON.stringify(report, null, 2)}\n`);
+    console.error(`readback ${report.run}: ${report.clean ? "clean" : "NOT CLEAN"}`);
+    if (!report.clean) process.exitCode = 2;
+    return;
+  }
   let recording;
   if (options.command === "native" && options.target === "production") {
     recording = await nativeProduction(options);

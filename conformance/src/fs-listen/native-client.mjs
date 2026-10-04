@@ -22,14 +22,18 @@ export function createNativeClient({
   token,
   refreshToken,
   now = () => Date.now(),
+  grpcClient: injected,
 }) {
   let bearer = token;
+  // Every RPC sent to the target, counted when it starts (the close rows need the exact number).
+  let requests = 0;
   const protos = new v1.FirestoreClient({ projectId: project })._protos.google.firestore.v1;
   const database = `projects/${project}/databases/(default)`;
   const grpcClient =
-    target.kind === "production"
+    injected ??
+    (target.kind === "production"
       ? new grpc.Client("firestore.googleapis.com:443", grpc.credentials.createSsl())
-      : new grpc.Client(`${target.host}:${target.port}`, grpc.credentials.createInsecure());
+      : new grpc.Client(`${target.host}:${target.port}`, grpc.credentials.createInsecure()));
   const metadata = () => {
     const meta = new grpc.Metadata();
     meta.set("authorization", `Bearer ${target.kind === "production" ? bearer : "owner"}`);
@@ -40,6 +44,7 @@ export function createNativeClient({
   };
   const unary = (method, request, responseType = `${method}Response`) =>
     new Promise((resolve, reject) => {
+      requests += 1;
       grpcClient.makeUnaryRequest(
         `${SERVICE}/${method}`,
         (message) => protos[`${method}Request`].serialize(message),
@@ -52,6 +57,7 @@ export function createNativeClient({
     });
   const serverStream = (method, request) =>
     new Promise((resolve, reject) => {
+      requests += 1;
       const messages = [];
       const stream = grpcClient.makeServerStreamRequest(
         `${SERVICE}/${method}`,
@@ -69,6 +75,9 @@ export function createNativeClient({
   return {
     close: () => grpcClient.close(),
 
+    /** How many RPCs this client has sent (unary, server-streaming and Listen streams). */
+    requestCount: () => requests,
+
     /** A new access token for later calls (a recording that waits longer than a token lives). */
     async refresh() {
       if (refreshToken) bearer = await refreshToken();
@@ -84,6 +93,7 @@ export function createNativeClient({
     },
 
     openStream() {
+      requests += 1;
       const opened = now();
       const frames = [];
       let end;
@@ -119,7 +129,10 @@ export function createNativeClient({
           finish({ reason: "error", code: status.code, details: String(status.details ?? "") });
         else finish({ reason: "ended", code: 0 });
       });
-      stream.on("end", () => finish({ reason: "ended", code: 0 }));
+      // grpc-js emits `status` before `end`; an end that no status preceded is not an OK status.
+      stream.on("end", () =>
+        setImmediate(() => finish({ reason: "ended-without-status", code: null })),
+      );
       return {
         frames,
         ended: () => end,

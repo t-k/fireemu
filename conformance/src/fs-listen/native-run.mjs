@@ -127,12 +127,13 @@ export async function runNative(
   const errors = {};
   /** One Commit whose answer is recorded in the ledger as ok or unknown (a definite refusal applied nothing). */
   const commitTracked = async (request) => {
+    ledger.sending(request.writes);
     try {
       const answer = await client.commit(request);
       ledger.answered(request.writes, "ok");
       return answer;
     } catch (error) {
-      if (!isDefinitiveRefusal(error)) ledger.answered(request.writes, "unknown");
+      ledger.answered(request.writes, isDefinitiveRefusal(error) ? "refused" : "unknown");
       throw error;
     }
   };
@@ -220,6 +221,7 @@ export async function runNative(
             marks.set(step.stream, stream.frames.length);
             const end = stream.ended();
             rows[step.row] = {
+              program: program.id,
               conditions: program.conditions,
               rows: frameRows(frames, { names, project, run }),
               ...(step.groups ? { groups: commitGroups(frames, { names }) } : {}),

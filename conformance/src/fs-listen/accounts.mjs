@@ -4,12 +4,16 @@
 // positive read: a create by finding the account (then it is deleted), a delete by a lookup that
 // finds no user. Absence of an answer, or a 404, never settles anything.
 
+import { NULL_JOURNAL } from "./journal.mjs";
+
 const TIMEOUT_MS = 30_000;
 
 /** `base` is the Identity Toolkit root of the target: production or the local Auth emulator. */
 export function createAccountClient({ base, project, headers, fetchImpl = globalThis.fetch }) {
   const root = `${base}/v1/projects/${project}`;
+  let requests = 0;
   async function call(route, body) {
+    requests += 1;
     let response;
     try {
       response = await fetchImpl(`${root}${route}`, {
@@ -39,6 +43,9 @@ export function createAccountClient({ base, project, headers, fetchImpl = global
   }
 
   return {
+    /** How many requests this client has sent (every create, lookup and delete). */
+    requestCount: () => requests,
+
     /** Creates the account; the result says whether it exists, is refused, or is unknown. */
     async create({ email, password }) {
       const answer = await call("/accounts", { email, password, emailVerified: true });
@@ -79,7 +86,7 @@ export function createAccountClient({ base, project, headers, fetchImpl = global
  * made: a created one is removed and read back; an unknown create is looked up by email and, if
  * found, removed; if not found it stays unsettled (a later create might still land).
  */
-export function createAccountSession({ client, run }) {
+export function createAccountSession({ client, run, journal = NULL_JOURNAL }) {
   const made = [];
   const email = (name) => `fsl-${run}-${name}@example.com`;
   return {
@@ -93,9 +100,31 @@ export function createAccountSession({ client, run }) {
           state: "pending",
         };
         made.push(entry);
-        const result = await client.create(entry);
+        // The email is journaled before the create goes out, the uid when the answer brings it.
+        journal.append({ type: "account", phase: "before", name, email: entry.email });
+        let result;
+        try {
+          result = await client.create(entry);
+        } catch (error) {
+          journal.append({
+            type: "account",
+            phase: "after",
+            name,
+            email: entry.email,
+            state: "unknown",
+          });
+          throw error;
+        }
         entry.state = result.kind;
         entry.uid = result.uid;
+        journal.append({
+          type: "account",
+          phase: "after",
+          name,
+          email: entry.email,
+          state: result.kind,
+          ...(result.uid ? { uid: result.uid } : {}),
+        });
         if (result.kind !== "created")
           throw new Error(
             `account ${name} was not created: ${result.kind} ${result.status ?? result.why ?? ""}`,
@@ -108,30 +137,56 @@ export function createAccountSession({ client, run }) {
     async cleanup() {
       const rows = [];
       for (const entry of made) {
+        // Every row names the account (email, and uid when known) so the later read-back (A2)
+        // can look an unsettled one up.
+        const named = (row) => ({
+          name: entry.name,
+          email: entry.email,
+          ...(entry.uid ? { uid: entry.uid } : {}),
+          ...row,
+        });
         let uid = entry.uid;
         if (!uid && entry.state !== "refused") {
           const found = await client.lookup({ email: [entry.email] });
           if (found === null) {
-            rows.push({ name: entry.name, settled: false, why: "create-unknown-lookup-unknown" });
+            rows.push(named({ settled: false, why: "create-unknown-lookup-unknown" }));
             continue;
           }
           if (found.length === 0) {
-            rows.push({ name: entry.name, settled: false, why: "create-unknown-not-found" });
+            rows.push(named({ settled: false, why: "create-unknown-not-found" }));
             continue;
           }
           [uid] = found;
+          entry.uid = uid;
+          journal.append({
+            type: "account",
+            phase: "after",
+            name: entry.name,
+            email: entry.email,
+            state: "found-by-email",
+            uid,
+          });
         }
         if (!uid) {
-          rows.push({ name: entry.name, settled: true, why: "refused" });
+          rows.push(named({ settled: true, why: "refused" }));
           continue;
         }
+        journal.append({ type: "account-delete", phase: "before", uid });
         const removed = await client.remove(uid);
-        rows.push({
-          name: entry.name,
+        journal.append({
+          type: "account-delete",
+          phase: "after",
+          uid,
+          outcome: removed.unknownDelete ? "unknown" : "answered",
           settled: removed.settled,
-          unknownDelete: removed.unknownDelete,
-          why: removed.why,
         });
+        rows.push(
+          named({
+            settled: removed.settled,
+            unknownDelete: removed.unknownDelete,
+            why: removed.why,
+          }),
+        );
       }
       // An unknown delete is sticky: the account reads as gone now, but only the separate
       // read-back at least ten minutes later closes it.

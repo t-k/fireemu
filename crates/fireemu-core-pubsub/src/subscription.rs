@@ -855,6 +855,32 @@ mod tests {
         }
     }
 
+    #[test]
+    fn the_retention_window_is_bounded_to_ten_minutes_through_thirty_one_days() {
+        const DAY: i64 = 24 * 60 * 60;
+        let with = |window: LogicalDuration| SubscriptionConfig {
+            message_retention_duration: Some(window),
+            ..cfg()
+        };
+        let seconds = LogicalDuration::from_seconds;
+        for inside in [600, 601, DAY, 31 * DAY] {
+            assert!(with(seconds(inside)).validate().is_ok(), "{inside} s");
+        }
+        for outside in [0, 1, 599, 31 * DAY + 1, 365 * DAY] {
+            assert!(with(seconds(outside)).validate().is_err(), "{outside} s");
+        }
+        // One nanosecond either side of the bounds.
+        let nanos = |value: i128| LogicalDuration::from_nanos(value);
+        assert!(with(nanos(600_000_000_000 - 1)).validate().is_err());
+        assert!(with(nanos(600_000_000_000)).validate().is_ok());
+        assert!(with(nanos(31 * 86_400 * 1_000_000_000)).validate().is_ok());
+        assert!(with(nanos(31 * 86_400 * 1_000_000_000 + 1))
+            .validate()
+            .is_err());
+        // An unset window is not validated against the bounds.
+        assert!(cfg().validate().is_ok());
+    }
+
     fn stored(id: &str, data: &[u8], t: i64) -> StoredMessage {
         StoredMessage {
             message_id: id.to_owned(),

@@ -284,12 +284,19 @@ async fn retention_config_invalid_input_is_atomic_and_aliases_are_checked() {
             404
         );
     }
-    for invalid in [
-        duration(600, -1),
-        duration(600, 1_000_000_000),
-        duration(-600, 0),
-        duration(599, 999_999_999),
-        duration(2_678_400, 1),
+    // A malformed duration (a negative second count, nanos outside 0..1e9) is refused as such; a
+    // well-formed one outside ten minutes through thirty-one days is refused with the range.
+    let malformed = "non-negative canonical";
+    let out_of_range = "between 600 and 2678400 seconds";
+    for (invalid, expected) in [
+        (duration(600, -1), malformed),
+        (duration(600, 1_000_000_000), malformed),
+        (duration(-600, 0), malformed),
+        (duration(-1, 0), malformed),
+        (duration(0, 0), out_of_range),
+        (duration(0, 1), out_of_range),
+        (duration(599, 999_999_999), out_of_range),
+        (duration(2_678_400, 1), out_of_range),
     ] {
         let mut grpc = h.grpc().await;
         let error = grpc
@@ -302,6 +309,11 @@ async fn retention_config_invalid_input_is_atomic_and_aliases_are_checked() {
             .await
             .unwrap_err();
         assert_eq!(error.code(), tonic::Code::InvalidArgument);
+        assert!(
+            error.message().contains(expected),
+            "{invalid:?}: {}",
+            error.message()
+        );
         assert_eq!(
             grpc.get_subscription(pb::GetSubscriptionRequest {
                 subscription: name.into()

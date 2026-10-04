@@ -69,3 +69,9 @@ def test_the_record_counts_rows_and_mismatches_and_names_the_artifact():
     assert [entry["mismatches"] for entry in record["recordings"]] == [0, 1]
     assert record["replay"]["idleWaitSeconds"] == 121 and record["replay"]["localIdleSeconds"] == {"idle/commit-after": 121.0}
     assert record["productionRequests"] == 0 and record["authorizesProduction"] is False
+
+
+def test_a_case_that_reads_no_document_back_has_no_post_state_row():
+    one = {"projection": {"c1": {"code": 10}, "c2": {"code": 0}}, "postStates": {"c1": {"state": "created"}}}
+    rows = tool.compare_rows(one, one)
+    assert [row["caseId"] for row in rows] == ["c1", "c1#postState", "c2"]

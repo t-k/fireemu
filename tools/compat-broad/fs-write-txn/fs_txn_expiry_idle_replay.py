@@ -52,7 +52,8 @@ def compare_rows(production, local):
     rows = []
     for case in sorted(production["projection"]):
         rows.append({"caseId": case, "production": production["projection"][case], "local": local["projection"][case], "match": production["projection"][case] == local["projection"][case]})
-        rows.append({"caseId": case + "#postState", "production": production["postStates"][case], "local": local["postStates"][case], "match": production["postStates"][case] == local["postStates"][case]})
+        if case in production["postStates"]:   # only some cases read a document back
+            rows.append({"caseId": case + "#postState", "production": production["postStates"][case], "local": local["postStates"][case], "match": production["postStates"][case] == local["postStates"][case]})
     return rows
 
 

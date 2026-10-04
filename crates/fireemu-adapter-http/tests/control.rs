@@ -2208,6 +2208,158 @@ fn storage_rules_control_still_requires_a_string_source() {
     );
 }
 
+/// A functions hook that counts how often the control API told it the clock moved.
+struct ClockCounting(AtomicUsize);
+
+impl ClockCounting {
+    fn moves(&self) -> usize {
+        self.0.load(Ordering::SeqCst)
+    }
+}
+
+impl fireemu_adapter_http::control::FunctionsHook for ClockCounting {
+    fn on_clock_changed(&self) {
+        self.0.fetch_add(1, Ordering::SeqCst);
+    }
+    fn run_schedule(
+        &self,
+        _function: &str,
+    ) -> Result<(), fireemu_adapter_http::control::RunScheduleError> {
+        Ok(())
+    }
+    fn is_idle(&self) -> bool {
+        true
+    }
+    fn idle_notify(&self) -> Arc<tokio::sync::Notify> {
+        Arc::new(tokio::sync::Notify::new())
+    }
+    fn status(&self) -> Value {
+        json!({})
+    }
+    fn publish(&self, _topic: &str, _messages: &[Value]) -> Result<Vec<String>, String> {
+        Err("not used".to_owned())
+    }
+    fn project(&self) -> String {
+        "demo-app".to_owned()
+    }
+}
+
+/// Every clock route that moves the clock tells the functions runtime once, so schedules come
+/// due; a refused move changes nothing and tells nobody. Only `clock:set` can opt in to going
+/// backwards, and each opt-in rewind is counted in `backwardsSets`.
+#[test]
+fn the_clock_routes_notify_functions_on_success_only_and_count_rewinds() {
+    let functions = Arc::new(ClockCounting(AtomicUsize::new(0)));
+    let mut s = state(Arc::new(AtomicUsize::new(0)));
+    s.functions = Some(functions.clone());
+    let post = |action: &str, body: Value| {
+        handle(&s, "POST", &format!("/v1/sessions/default/{action}"), &body)
+    };
+    let clock = |response: &fireemu_adapter_http::identity_toolkit::JsonResponse| {
+        response.body["clock"].as_str().unwrap().to_owned()
+    };
+
+    let advanced = post("clock:advance", json!({"seconds": 60}));
+    assert_eq!(advanced.status, 200, "{}", advanced.body);
+    assert_eq!(clock(&advanced), "2026-08-29T12:02:00Z");
+    assert_eq!(advanced.body["backwardsSets"], 0);
+    assert_eq!(functions.moves(), 1);
+    let millis = post("clock:advance", json!({"millis": 500}));
+    assert_eq!(
+        LogicalInstant::parse_rfc3339(&clock(&millis)).unwrap(),
+        LogicalInstant::parse_rfc3339("2026-08-29T12:02:00.5Z").unwrap()
+    );
+    assert_eq!(functions.moves(), 2);
+
+    let forward = post(
+        "clock:advanceTo",
+        json!({"instant": "2026-08-29T12:10:00Z"}),
+    );
+    assert_eq!(forward.status, 200, "{}", forward.body);
+    assert_eq!(clock(&forward), "2026-08-29T12:10:00Z");
+    assert_eq!(functions.moves(), 3);
+    let same = post(
+        "clock:advanceTo",
+        json!({"instant": "2026-08-29T12:10:00Z"}),
+    );
+    assert_eq!(
+        same.status, 200,
+        "an advance to the current instant is accepted"
+    );
+    assert_eq!(functions.moves(), 4);
+
+    // Refused moves: the clock stays, the counter stays, nobody is told.
+    let refusals = [
+        post(
+            "clock:advanceTo",
+            json!({"instant": "2026-08-29T12:00:00Z"}),
+        ),
+        // advanceTo has no opt-in, so allowBackwards is ignored there.
+        post(
+            "clock:advanceTo",
+            json!({"instant": "2026-08-29T12:00:00Z", "allowBackwards": true}),
+        ),
+        post("clock:set", json!({"instant": "2026-08-29T12:00:00Z"})),
+        // Only a JSON boolean opts in.
+        post(
+            "clock:set",
+            json!({"instant": "2026-08-29T12:00:00Z", "allowBackwards": "true"}),
+        ),
+        post("clock:advance", json!({"seconds": -1})),
+        post("clock:advance", json!({})),
+        post("clock:set", json!({})),
+        post("clock:advanceTo", json!({"instant": "yesterday"})),
+    ];
+    for (i, refusal) in refusals.iter().enumerate() {
+        assert_eq!(refusal.status, 400, "refusal {i}: {}", refusal.body);
+        assert!(refusal.body.to_string().contains("INVALID_ARGUMENT"), "{i}");
+    }
+    assert_eq!(functions.moves(), 4);
+    let unchanged = handle(&s, "GET", "/v1/sessions/default", &json!({}));
+    assert_eq!(unchanged.body["clock"]["clock"], "2026-08-29T12:10:00Z");
+    assert_eq!(unchanged.body["clock"]["backwardsSets"], 0);
+
+    // An opt-in rewind moves the clock, is counted, and tells the functions runtime.
+    let rewound = post(
+        "clock:set",
+        json!({"instant": "2026-08-29T12:01:00Z", "allowBackwards": true}),
+    );
+    assert_eq!(rewound.status, 200, "{}", rewound.body);
+    assert_eq!(clock(&rewound), "2026-08-29T12:01:00Z");
+    assert_eq!(rewound.body["backwardsSets"], 1);
+    assert_eq!(functions.moves(), 5);
+    // An opt-in set to a later instant is not a rewind.
+    let later = post(
+        "clock:set",
+        json!({"instant": "2026-08-29T12:30:00Z", "allowBackwards": true}),
+    );
+    assert_eq!(later.body["backwardsSets"], 1);
+    assert_eq!(functions.moves(), 6);
+    let again = post(
+        "clock:set",
+        json!({"instant": "2026-08-29T12:20:00Z", "allowBackwards": true}),
+    );
+    assert_eq!(again.body["backwardsSets"], 2);
+    let session = handle(&s, "GET", "/v1/sessions/default", &json!({}));
+    assert_eq!(session.body["clock"]["clock"], "2026-08-29T12:20:00Z");
+    assert_eq!(session.body["clock"]["backwardsSets"], 2);
+}
+
+/// An empty function name is not a run request at all, and an unknown name is refused as a
+/// bad request (the manual control is fireemu's own, not production's `jobs.run`).
+#[test]
+fn a_manual_run_route_without_a_name_is_not_found() {
+    let mut s = state(Arc::new(AtomicUsize::new(0)));
+    s.functions = Some(Arc::new(FakeFunctions(Mutex::new(Vec::new()))));
+    let nameless = handle(
+        &s,
+        "POST",
+        "/v1/sessions/default/functions/:run",
+        &json!({}),
+    );
+    assert_eq!(nameless.status, 404, "{}", nameless.body);
+}
+
 /// A manual schedule run refused because the event queue is full answers 429
 /// `RESOURCE_EXHAUSTED`, as the other local capacity refusals do, and claims nothing was
 /// enqueued; a run the function or its overlap policy refuses stays 400 `INVALID_ARGUMENT`.

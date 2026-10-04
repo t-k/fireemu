@@ -82,6 +82,13 @@ test("every operation is the request the API documents, on its host", async () =
   const expected = {
     getService: [[], "usage", "GET", `/v1/projects/123/services/${PUBLISHING_API}`, undefined],
     enableService: [[], "usage", "POST", `/v1/projects/123/services/${PUBLISHING_API}:enable`, {}],
+    listEnabledServices: [
+      [{ pageToken: "a b" }],
+      "usage",
+      "GET",
+      "/v1/projects/123/services?filter=state%3AENABLED&pageSize=200&pageToken=a%20b",
+      undefined,
+    ],
     getOperation: [
       ["eventarc", "projects/p/locations/l/operations/op-1"],
       "eventarc",

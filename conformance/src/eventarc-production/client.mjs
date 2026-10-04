@@ -34,6 +34,13 @@ const operations = ({ usageProject, publishPrefix }) => ({
     path: `/v1/projects/${usageProject}/services/${PUBLISHING_API}:enable`,
     body: {},
   }),
+  // The services that are enabled, a page at a time: read before and after the enabling, so that a
+  // dependent API the enabling turns on is recorded.
+  listEnabledServices: (page = {}) => ({
+    host: "usage",
+    method: "GET",
+    path: `/v1/projects/${usageProject}/services?filter=${encodeURIComponent("state:ENABLED")}&pageSize=200${page.pageToken ? `&pageToken=${encodeURIComponent(page.pageToken)}` : ""}`,
+  }),
   getOperation: (host, name) => ({ host, method: "GET", path: `/v1/${encodeName(name)}` }),
   createChannel: (project, location, channelId, body = {}) => ({
     host: "eventarc",

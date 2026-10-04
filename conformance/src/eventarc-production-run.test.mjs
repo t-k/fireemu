@@ -120,7 +120,7 @@ test("bad arguments are refused, and the numbers have their values", () => {
   assert.equal(parseArgs([...base, "--max-requests", "1"]).maxRequests, 1);
   assert.equal(parseArgs([...base, "--project-number", "1".repeat(20)]).usageProject.length, 20);
   assert.throws(() => parseArgs([...base, "--project-number", "1".repeat(21)]), /digits/);
-  assert.equal(DEFAULT_MAX_REQUESTS, 190);
+  assert.equal(DEFAULT_MAX_REQUESTS, 200);
   assert.equal(CLEANUP_BUDGET, 150);
 });
 
@@ -327,6 +327,17 @@ test("replay on the recorded service body: DISABLED takes the disabled branch in
   const answer = ({ host, method, path }) => {
     if (host === "usage" && path.includes("/operations/"))
       return { status: 200, body: { name: "operations/acat.x", done: true }, unknown: false };
+    if (host === "usage" && path.includes("/services?"))
+      return {
+        status: 200,
+        body: {
+          services: [
+            { config: { name: "eventarc.googleapis.com" } },
+            ...(enabled ? [{ config: { name: "eventarcpublishing.googleapis.com" } }] : []),
+          ],
+        },
+        unknown: false,
+      };
     if (host === "usage" && method === "GET")
       return {
         status: 200,
@@ -354,9 +365,11 @@ test("replay on the recorded service body: DISABLED takes the disabled branch in
       "POST publishing publishEvents",
       "GET eventarc getChannel",
       "GET eventarc listChannels",
+      "GET usage listEnabledServices",
       "POST usage enableService",
       "GET usage getOperation",
       "GET usage getService",
+      "GET usage listEnabledServices",
       "POST publishing publishEvents",
     ],
   );
@@ -372,7 +385,17 @@ test("replay on the recorded service body: DISABLED takes the disabled branch in
     disabled.calls[0].path,
     `/v1/projects/123456789012/services/eventarcpublishing.googleapis.com`,
   );
-  assert.equal(summary.cases[0].requests, 10);
+  assert.equal(summary.cases[0].requests, 12);
+  assert.match(
+    disabled.calls[6].path,
+    /\/v1\/projects\/123456789012\/services\?filter=state%3AENABLED&pageSize=200$/,
+  );
+  assert.deepEqual(
+    disabled.notes
+      .filter((n) => n.note === "enabled-services")
+      .map(({ before, after, added, complete }) => ({ before, after, added, complete })),
+    [{ before: 1, after: 2, added: ["eventarcpublishing.googleapis.com"], complete: true }],
+  );
   assert.ok(
     disabled.notes.some(
       (n) =>
@@ -576,4 +599,33 @@ test("every case's ceiling covers the most it can send against a service that an
     ([id, worst]) => worst > CASES.find((item) => item.id === id).requests,
   );
   assert.deepEqual(over, [], `measured worst cases: ${JSON.stringify(measured)}`);
+});
+
+test("the enabled services are read at most three pages, and an unreadable page makes the read incomplete", async () => {
+  const run = async (answerList) => {
+    const { run: go, notes } = setup([serviceState], {
+      answer: ({ host, method, path }) => {
+        if (host === "usage" && path.includes("/services?")) return answerList(path);
+        if (host === "usage" && path.endsWith(":enable"))
+          return { status: 200, body: { name: "operations/x", done: true }, unknown: false };
+        if (host === "usage" && method === "GET")
+          return { status: 200, body: { state: "DISABLED" }, unknown: false };
+        return { status: 404, body: { error: { status: "NOT_FOUND" } }, unknown: false };
+      },
+    });
+    await go();
+    return notes.find((n) => n.note === "enabled-services");
+  };
+  const endless = await run((path) => ({
+    status: 200,
+    body: { services: [{ name: path }], nextPageToken: "more" },
+    unknown: false,
+  }));
+  assert.deepEqual([endless.before, endless.after, endless.complete], [3, 3, false]);
+  const failing = await run(() => ({
+    status: 403,
+    body: { error: { status: "PERMISSION_DENIED" } },
+    unknown: false,
+  }));
+  assert.deepEqual([failing.before, failing.after, failing.complete], [0, 0, false]);
 });

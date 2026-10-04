@@ -747,3 +747,48 @@ fn a_large_window_costs_the_same_whatever_it_holds() {
     assert!(RunCount::Exact(0).is_zero() && !RunCount::AtLeast(0).is_zero());
     assert_eq!(RunCount::AtLeast(7).value(), 7);
 }
+
+// ---------------------------------------------------------------------------------------------
+// The boundary of a run window: an occurrence belongs to `(from, to]`.
+// ---------------------------------------------------------------------------------------------
+
+#[test]
+fn an_occurrence_is_in_the_window_that_ends_at_it_and_not_in_one_that_ends_a_nanosecond_before() {
+    let utc = FixedOffset(0);
+    let from = t("2026-08-29T12:00:00Z");
+    let at = t("2026-08-29T12:05:00Z");
+    let before = |i: LogicalInstant| LogicalInstant::from_nanos(i.as_nanos() - 1);
+    let after = |i: LogicalInstant| LogicalInstant::from_nanos(i.as_nanos() + 1);
+    for text in ["every 5 minutes", "*/5 * * * *", "5 12 * * *"] {
+        let schedule = Schedule::parse(text).unwrap();
+        // Ends one nanosecond before the occurrence: nothing is due yet.
+        assert!(
+            schedule
+                .runs_between_in(from, before(at), &utc, 10)
+                .is_empty(),
+            "{text}"
+        );
+        let early = schedule.window_in(from, before(at), &utc, 10);
+        assert_eq!(early.count, RunCount::Exact(0), "{text}");
+        assert_eq!(early.latest, None, "{text}");
+        // Ends exactly at the occurrence: it is due, once.
+        assert_eq!(
+            schedule.runs_between_in(from, at, &utc, 10),
+            vec![at],
+            "{text}"
+        );
+        let on_time = schedule.window_in(from, at, &utc, 10);
+        assert_eq!(on_time.count, RunCount::Exact(1), "{text}");
+        assert_eq!(on_time.latest, Some(at), "{text}");
+        // Starts at the occurrence: it is not due a second time.
+        assert!(
+            schedule.runs_between_in(at, after(at), &utc, 10).is_empty(),
+            "{text}"
+        );
+        assert_eq!(
+            schedule.window_in(at, after(at), &utc, 10).count,
+            RunCount::Exact(0),
+            "{text}"
+        );
+    }
+}

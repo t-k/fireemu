@@ -563,6 +563,10 @@ test("a full match with the build and the workspace receipt verifies the 20 cond
   const one = next.conditions.find((c) => c.conditionId.endsWith("/firestore-created"));
   assert.deepEqual(one.evidence.rows, { MATCH: 6, DIFF: 0, INCOMPLETE: 0 });
   assert.equal(one.evidence.finalArtifactSha256, ART);
+  assert.equal(
+    one.evidence.comparisonPath,
+    "spec/compatibility/closure/evidence/FUNCTIONS-EVENTS-comparison.json",
+  );
   assert.equal(one.evidence.productionRecordings.length, 2);
   assert.equal(one.evidence.diffRows, undefined);
 });

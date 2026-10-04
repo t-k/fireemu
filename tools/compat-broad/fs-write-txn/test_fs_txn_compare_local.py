@@ -90,3 +90,34 @@ def test_the_published_local_diagnostic_is_the_normalised_one():
     local = projection(code=5, details='Document "projects/demo-program/x" not found')
     cases, _reads, _times = tool.compare(production, local, None, {}, project="fireemu-oracle-txn")
     assert cases[0]["local"]["details"] == 'Document "projects/fireemu-oracle-txn/x" not found'
+
+
+def timed(site, dispatch, response):
+    return {"site": site, "timing": {"dispatchMonotonic": dispatch, "responseMonotonic": response}}
+
+
+PLAN = {"steps": [{"id": "w/release"}, {"id": "w/writer", "concurrentWith": "w/release"}, {"id": "q/release"}, {"id": "q/writer", "concurrentWith": "q/release"}, {"id": "plain"}]}
+
+
+def test_a_writer_that_answered_before_its_anchor_was_sent_is_not_held_and_one_that_answered_after_was():
+    steps = [timed("w/writer", 10.0, 11.0), timed("w/release", 55.0, 56.0), timed("q/writer", 100.0, 160.0), timed("q/release", 105.0, 106.0)]
+    assert tool.writer_orders(steps, PLAN) == {"w/writer": "before-anchor", "q/writer": "after-anchor"}
+
+
+def test_a_writer_that_answered_at_the_instant_its_anchor_was_sent_was_held():
+    # a frozen virtual clock stamps a writer released by its anchor with the anchor's own dispatch time
+    assert tool.writer_orders([timed("w/writer", 10.0, 55.0), timed("w/release", 55.0, 55.0)], PLAN) == {"w/writer": "after-anchor"}
+
+
+def test_a_pair_with_a_missing_row_and_a_step_that_is_nobodys_writer_have_no_order():
+    assert tool.writer_orders([timed("w/writer", 1.0, 2.0)], PLAN) == {}
+    assert tool.writer_orders([timed("w/release", 1.0, 2.0), timed("plain", 3.0, 4.0)], PLAN) == {}
+
+
+def test_the_orders_of_production_and_the_local_replay_are_compared_site_by_site():
+    rows = tool.compare_orders({"w/writer": "after-anchor", "q/writer": "before-anchor"}, {"w/writer": "after-anchor", "q/writer": "after-anchor"})
+    assert rows == [{"site": "q/writer", "production": "before-anchor", "local": "after-anchor", "match": False}, {"site": "w/writer", "production": "after-anchor", "local": "after-anchor", "match": True}]
+    # a writer the local replay never answered is a mismatch, and so is one only the local replay has
+    rows = tool.compare_orders({"w/writer": "after-anchor"}, {"q/writer": "after-anchor"})
+    assert [(row["site"], row["match"]) for row in rows] == [("q/writer", False), ("w/writer", False)]
+    assert tool.compare_orders({}, {}) == []

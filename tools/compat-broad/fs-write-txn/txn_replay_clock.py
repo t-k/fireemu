@@ -56,24 +56,51 @@ def paced_wait(declared, production_step, local_duration):
 
 
 class VirtualClock:
-    """Real time plus every second the waits advanced the emulator's virtual clock."""
+    """The emulator's virtual clock as a recording sees it. Without a start it is real time plus every second the waits advanced it. A fireemu started with
+    `daemon.clockStart` has a clock that only moves when it is advanced, so given that start the recording's clocks do too: UTC is the start plus what was advanced,
+    and monotonic is a fixed origin plus what the waits advanced."""
 
-    def __init__(self, control, token):
-        self.control, self.token, self.skew = control.rstrip("/"), token, 0.0
+    def __init__(self, control, token, start=None):
+        self.control, self.token, self.start = control.rstrip("/"), token, start
+        self.skew = 0.0       # what the recording's monotonic clock was moved by
+        self.utc_skew = 0.0   # what the time it writes as now was moved by (a hidden advance moves only this)
 
     def now(self):
-        return time.monotonic() + self.skew
+        return (1000.0 if self.start else time.monotonic()) + self.skew
 
     def utc(self):
-        moment = datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(seconds=self.skew)
-        return moment.strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+        base = self.start or datetime.datetime.now(datetime.timezone.utc)
+        return (base + datetime.timedelta(seconds=self.utc_skew)).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
 
-    def sleep(self, seconds):
-        seconds = max(1, int(round(seconds)))
+    def advance(self, seconds, *, hidden=False):
+        """Move the emulator's clock. A hidden advance leaves the recording's monotonic clock alone, so its own deadlines do not see it."""
         request = urllib.request.Request(self.control + "/sessions/default/clock:advance", data=json.dumps({"seconds": seconds}).encode(),
                                          method="POST", headers={"content-type": "application/json", "authorization": "Bearer " + self.token})
         urllib.request.urlopen(request, timeout=10).read()
-        self.skew += seconds
+        self.utc_skew += seconds
+        if not hidden:
+            self.skew += seconds
+
+    def sleep(self, seconds):
+        self.advance(max(1, int(round(seconds))))
+
+
+def advancing(base, clock, seconds, after):
+    """`base` (a collector class) that advances the emulator's clock once, hidden, right after the first answer of the step `after`; `base` itself when nothing is asked for."""
+    if not seconds or not after:
+        return base
+
+    class Advancing(base):
+        moved = False
+
+        def _rpc(self, site, *args, **kwargs):
+            result = super()._rpc(site, *args, **kwargs)
+            if site == after and not self.moved:
+                self.moved = True
+                clock.advance(seconds, hidden=True)
+            return result
+
+    return Advancing
 
 
 class PacedCollector(Collector):

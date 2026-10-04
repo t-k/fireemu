@@ -92,3 +92,85 @@ def test_the_bound_on_a_wait_is_inclusive():
     assert clock.paced_wait(declared=24, production_step=clock.MAX_WAIT_SECONDS, local_duration=0.0) == clock.MAX_WAIT_SECONDS
     with pytest.raises(ValueError):
         clock.paced_wait(declared=24, production_step=clock.MAX_WAIT_SECONDS + 0.01, local_duration=0.0)
+
+
+class Control:
+    """The emulator's control endpoint: every clock advance it was asked for."""
+
+    def __init__(self):
+        self.calls = []
+
+    def __call__(self, request, timeout=None):
+        import json as _json
+
+        self.calls.append((request.full_url, _json.loads(request.data), request.get_header("Authorization")))
+
+        class Answer:
+            @staticmethod
+            def read():
+                return b"{}"
+
+        return Answer()
+
+
+@pytest.fixture
+def control(monkeypatch):
+    fake = Control()
+    monkeypatch.setattr(clock.urllib.request, "urlopen", fake)
+    return fake
+
+
+def test_a_clock_without_a_start_is_real_time_plus_every_advance(control):
+    virtual = clock.VirtualClock("http://127.0.0.1:1/v1/", "tok")
+    before = virtual.now()
+    virtual.sleep(2.4)
+    virtual.sleep(0.2)
+    # a wait advances a whole number of seconds, at least one, and the clock reads that much later
+    assert [call[1] for call in control.calls] == [{"seconds": 2}, {"seconds": 1}]
+    assert control.calls[0][0] == "http://127.0.0.1:1/v1/sessions/default/clock:advance" and control.calls[0][2] == "Bearer tok"
+    assert 3.0 <= virtual.now() - before < 4.0
+    assert virtual.utc().endswith("Z") and len(virtual.utc()) == 27
+
+
+def test_a_clock_with_a_start_moves_only_when_it_is_advanced(control):
+    import datetime
+
+    start = datetime.datetime(2026, 10, 4, tzinfo=datetime.timezone.utc)
+    virtual = clock.VirtualClock("http://c", "tok", start)
+    assert virtual.now() == virtual.now() == 1000.0 and virtual.utc() == "2026-10-04T00:00:00.000000Z"
+    virtual.sleep(5)
+    assert virtual.now() == 1005.0 and virtual.utc() == "2026-10-04T00:00:05.000000Z"
+    # a hidden advance moves the emulator's clock and what the recording writes as the time now, not the recording's own monotonic clock (its deadlines)
+    virtual.advance(3700, hidden=True)
+    assert virtual.now() == 1005.0 and virtual.utc() == "2026-10-04T01:01:45.000000Z"
+    assert [call[1] for call in control.calls] == [{"seconds": 5}, {"seconds": 3700}]
+    virtual.advance(10)
+    assert virtual.now() == 1015.0 and virtual.utc() == "2026-10-04T01:01:55.000000Z"
+
+
+def test_a_collector_that_advances_the_clock_once_after_a_named_step(control):
+    import datetime
+
+    class Base:
+        def __init__(self):
+            self.sites = []
+
+        def _rpc(self, site, *args, **kwargs):
+            self.sites.append(site)
+            return f"answer {site}"
+
+    virtual = clock.VirtualClock("http://c", "tok", datetime.datetime(2026, 10, 4, tzinfo=datetime.timezone.utc))
+    collector = clock.advancing(Base, virtual, 3700, "b")()
+    assert [collector._rpc(site) for site in ("a", "b", "c", "b")] == ["answer a", "answer b", "answer c", "answer b"]
+    assert collector.sites == ["a", "b", "c", "b"]
+    # one advance, after the first answer of the named step, and a hidden one
+    assert [call[1] for call in control.calls] == [{"seconds": 3700}] and virtual.now() == 1000.0 and virtual.utc() == "2026-10-04T01:01:40.000000Z"
+
+
+def test_no_advance_is_asked_for_without_both_a_step_and_a_length(control):
+    class Base:
+        def _rpc(self, site, *args, **kwargs):
+            return site
+
+    virtual = clock.VirtualClock("http://c", "tok")
+    assert clock.advancing(Base, virtual, 0, "b") is Base and clock.advancing(Base, virtual, 3700, None) is Base

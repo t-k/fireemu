@@ -41,7 +41,14 @@
     "access-control-allow-origin",
     "alt-svc"
    ],
-   "comparisonSha256": "3a2b1aa9160ae5fba5619e96319d903c3fe1a9e5afe40cbc5ca76ffa77aa9237"
+   "inputDigests": {
+    "local": "8e7d2050f9de410d231ed0bf0246db599c11108fbe66bf068459dda53b62b8f1",
+    "production": "471aafcdd05d2d13a53a357564ed1ec20b191e0c2d1c16c16e61bd43f52e00fc",
+    "receipt": "d99cd553d203e211ac42d20756eb19e9619002fc86f8759484c73ebfbaae5120",
+    "judgeOutput": "3a2b1aa9160ae5fba5619e96319d903c3fe1a9e5afe40cbc5ca76ffa77aa9237"
+   },
+   "comparisonSha256": "98b5eec24d7b3d40d4fac1261c5c7034a1283c2363f02d13d2a8790d9d405ee4",
+   "judgeOutputSha256": "3a2b1aa9160ae5fba5619e96319d903c3fe1a9e5afe40cbc5ca76ffa77aa9237"
   },
   {
    "runId": "stage3-20260930d",
@@ -80,8 +87,15 @@
     "access-control-allow-origin",
     "alt-svc"
    ],
-   "comparisonSha256": "3a2b1aa9160ae5fba5619e96319d903c3fe1a9e5afe40cbc5ca76ffa77aa9237"
+   "inputDigests": {
+    "local": "dfa89ef71230f9e32e6ffd66a6eb5576fe61c5d90f4d11586b4770c789c3f10c",
+    "production": "f17ff515d90d9b235234028c696a38ecbe31cd42d089fb57d6f2f8d423b19d72",
+    "receipt": "81f365e7346ca8323c853649e1037cb803bf1514dfe6161c2add06bde653eda6",
+    "judgeOutput": "3a2b1aa9160ae5fba5619e96319d903c3fe1a9e5afe40cbc5ca76ffa77aa9237"
+   },
+   "comparisonSha256": "ab552b52eccc538bc6090a6cec5f1c1215806fcece506cdbe10c191ae0e639a2",
+   "judgeOutputSha256": "3a2b1aa9160ae5fba5619e96319d903c3fe1a9e5afe40cbc5ca76ffa77aa9237"
   }
  ],
- "note": "The judge compares every storage step of the management programs (the Admin and Firebase object reads and writes around each compile, release switch and no-release step) between the local run and the production projection, whole: status, body bytes and digest, content-type, content-length, x-content-type-options and cache-control. The other step kinds are validated against the condition on each side. The judge's hard-coded gap MISSING_PRODUCTION_INVALID_INSTALLED_IDENTITY_AND_EFFECTIVE_WITNESS is not a closure condition: owner-delegated ruling 809(4) takes recording c (release absent before, invalid :test refused with 200 and issues, release absent after) as the observation that an invalid compile leaves the effective release unchanged."
+ "note": "The judge compares every storage step of the management programs (the Admin and Firebase object reads and writes around each compile, release switch and no-release step) between the local run and the production projection, whole: status, body bytes and digest, content-type, content-length, x-content-type-options and cache-control. The other step kinds are validated against the condition on each side. The judge's hard-coded gap MISSING_PRODUCTION_INVALID_INSTALLED_IDENTITY_AND_EFFECTIVE_WITNESS is not a closure condition: owner-delegated ruling 809(4) takes recording c (release absent before, invalid :test refused with 200 and issues, release absent after) as the observation that an invalid compile leaves the effective release unchanged. comparisonSha256 is the digest of the compact JSON of inputDigests (the local run, the production projection, the receipt and the judge's own output of that recording); judgeOutputSha256 is the digest of the judge's output alone, which holds only the summary and is the same for both recordings."
 }

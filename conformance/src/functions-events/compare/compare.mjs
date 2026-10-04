@@ -475,6 +475,10 @@ export function compareRuns({
         },
       ]),
     );
+    const productionSide = {
+      status: worstStatus(sides.production.statuses),
+      reasons: sides.production.reasons,
+    };
     return {
       row: `${row.recipeId}#${row.case}#v${row.generation}`,
       caseId: row.id,
@@ -486,6 +490,7 @@ export function compareRuns({
       delivery: row.delivery,
       status: worstStatus(statuses),
       reasons,
+      production: productionSide,
       profiles,
       ...(Object.keys(productionOnly).length > 0 ? { productionOnly } : {}),
     };

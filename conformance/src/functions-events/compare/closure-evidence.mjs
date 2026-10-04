@@ -62,7 +62,7 @@ const RANK = { MATCH: 0, INCOMPLETE: 1, DIFF: 2 };
 const worst = (statuses) =>
   statuses.reduce((found, status) => (RANK[status] > RANK[found] ? status : found), "MATCH");
 
-/** A row must carry the status and reasons of each profile, and its combined status must be the worse of the two. */
+/** A row must carry the status and reasons of the production side and of each profile; each profile is at least as bad as the production side, and the combined status is the worse of the two profiles. */
 function checkProfiles(row) {
   if (!plain(row.profiles) || !PROFILE_NAMES.every((name) => plain(row.profiles[name])))
     refuse(
@@ -72,6 +72,20 @@ function checkProfiles(row) {
     const profile = row.profiles[name];
     if (!STATUSES.has(profile.status) || !Array.isArray(profile.reasons))
       refuse(`row ${row.row} has a bad ${name} status or reasons`);
+  }
+  // A fault of the recording itself (a production pass) is no profile's: it counts against both. A profile whose status is
+  // better than the production side's, or that lacks its reasons, was made by a comparator that attributed it to one profile.
+  const production = row.production;
+  if (!plain(production) || !STATUSES.has(production.status) || !Array.isArray(production.reasons))
+    refuse(`row ${row.row} has no production-side status`);
+  for (const name of PROFILE_NAMES) {
+    const profile = row.profiles[name];
+    if (worst([production.status, profile.status]) !== profile.status)
+      refuse(
+        `row ${row.row}: the ${name} status is better than the production-side status, which counts against both profiles`,
+      );
+    if (!production.reasons.every((reason) => profile.reasons.includes(reason)))
+      refuse(`row ${row.row}: the ${name} reasons lack the production-side reasons`);
   }
   if (worst(PROFILE_NAMES.map((name) => row.profiles[name].status)) !== row.status)
     refuse(`row ${row.row}: the combined status is not the worse of its two profiles`);
@@ -364,6 +378,7 @@ export function gateRows() {
     conditionId: "FUNCTIONS-EVENTS/final-artifact-regression",
     status: "MATCH",
     reasons: [],
+    production: { status: "MATCH", reasons: [] },
     profiles: {
       emulator: { status: "MATCH", reasons: [] },
       strict: { status: "MATCH", reasons: [] },

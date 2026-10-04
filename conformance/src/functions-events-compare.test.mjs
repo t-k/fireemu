@@ -144,6 +144,7 @@ test("every row carries a status and the reasons of each profile; production-sid
       }
   const result = compare(w);
   const diff = rowById(result, "functions-events/firestore/create#new-document#v1");
+  assert.deepEqual(diff.production, { status: "MATCH", reasons: [] });
   assert.deepEqual(Object.keys(diff.profiles), ["emulator", "strict"]);
   assert.deepEqual(diff.profiles.emulator, { status: "MATCH", reasons: [] });
   assert.equal(diff.profiles.strict.status, "DIFF");
@@ -181,6 +182,10 @@ test("a production-side INCOMPLETE is INCOMPLETE in both profiles, with its reas
     assert.equal(row.profiles[profile].status, "INCOMPLETE", profile);
     assert.deepEqual(row.profiles[profile].reasons, row.reasons, profile);
   }
+  // the production side is its own entry: its status and reasons, which both profiles include
+  assert.equal(row.production.status, "INCOMPLETE");
+  assert.deepEqual(row.production.reasons, row.reasons);
+  assert.ok(row.production.reasons.every((r) => r.startsWith("production passes disagree")));
   // a local-driver problem of one profile stays that profile's, next to the production reasons
   const m = world();
   const update = rowById(compare(m), "functions-events/firestore/update#changed-field#v1");
@@ -194,6 +199,11 @@ test("a production-side INCOMPLETE is INCOMPLETE in both profiles, with its reas
       "strict: local session has no functions-events/firestore/update program",
     ),
   );
+  assert.equal(update.production.status, "INCOMPLETE");
+  assert.deepEqual(update.production.reasons, [
+    "production pass 1: 0 subject operations for fs-update",
+    "production pass 2: 0 subject operations for fs-update",
+  ]);
   assert.ok(!update.profiles.strict.reasons.some((r) => r.startsWith("emulator:")));
   assert.ok(!update.profiles.emulator.reasons.some((r) => r.startsWith("strict:")));
 });
@@ -746,4 +756,32 @@ test("duplicate deliveries of one subject must agree with each other to pick a r
   assert.deepEqual(localRow.reasons, [
     "emulator: 2 local fsCreatedV1 frames differ from each other",
   ]);
+});
+
+test("ledger 840 reaches the derivation of volatile paths too: production passes that differ only in field-map order derive no volatile order there", () => {
+  const w = world();
+  const pass2 = (generation) =>
+    w.run.frames.find(
+      (entry) =>
+        entry.handler === `fsCreatedV${generation}` &&
+        JSON.stringify(entry.frame).includes(docId(201)),
+    );
+  for (const generation of [1, 2]) {
+    const entry = pass2(generation);
+    entry.frame.event.data.data = Object.fromEntries(
+      Object.entries(entry.frame.event.data.data).reverse(),
+    );
+  }
+  const result = compare(w);
+  const v2 = rowById(result, "functions-events/firestore/create#new-document#v2");
+  assert.equal(v2.status, "MATCH", v2.reasons.join("; "));
+  const volatile2 = result.volatilePaths["fsCreatedV2/fs-create"];
+  assert.equal(
+    "$.frame.event.data.data" in volatile2,
+    false,
+    "a Gen2 field map is not volatile in order",
+  );
+  // Gen1 keeps the order feature: production's own passes differ in order there, so it is volatile (and not a DIFF)
+  const volatile1 = result.volatilePaths["fsCreatedV1/fs-create"];
+  assert.deepEqual(volatile1["$.frame.event.data.data"], ["order"]);
 });

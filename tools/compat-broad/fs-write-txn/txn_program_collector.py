@@ -147,6 +147,7 @@ class Ledger:
         self.docs = {role: {"status": "unexamined", "state": None, "possible": [], "stamp": None} for role in plan["documents"]}
         self.unknown_starts, self.unknown_rollbacks, self.unknown_commits = set(), set(), set()
         self._prior = {}
+        self._commit_roles = {}   # per Commit site, the documents it names (kept for the unanswered ones)
         self._probes = set()
         self.tried = {role: set() for role in plan["documents"]}
         # Not part of the recorded snapshot: every state a document was acknowledged in, and what each token could see.
@@ -249,6 +250,7 @@ class Ledger:
         elif method == "Commit":
             self.unknown_commits.add(site)
             self._prior[site] = {}
+            self._commit_roles[site] = {write["document"] for write in step["writes"]} if step else set()
             for write in step["writes"] if step else []:
                 doc = self.docs[write["document"]]
                 if not (step and step.get("concurrentWith")):
@@ -532,11 +534,16 @@ class Ledger:
             raise ValueError("a document this recording never wrote exists")
         self._owned(role, result["response"], transport, visible)
 
+    def unanswered_writer_of(self, role):
+        """Whether a Commit that names the document has no answer yet (its outcome is unknown)."""
+        return any(role in self._commit_roles.get(site, ()) for site in self.unknown_commits)
+
     def _cleanup_read(self, site, role, transport, result, code):
         doc = self.docs[role]
         if site.startswith("cleanup/read/"):
-            if code == 5 and doc["status"] == "possibly-owned":
-                # A create that was refused (or never landed): the recovery's read proves nothing exists, so nothing is owned and nothing is deleted.
+            if code == 5 and doc["status"] == "possibly-owned" and not self.unanswered_writer_of(role):
+                # A create that was refused: the recovery's read proves nothing exists, so nothing is owned and nothing is deleted.
+                # A create with no answer (a writer timeout) is not settled by absence: it may still land.
                 doc["status"] = "confirmed-absent"
                 return
             if code != 0:
@@ -918,7 +925,7 @@ def projection(receipt, table):
                 raise ValueError("cleanup request differs")
             ledger.before(site, transport, method, request, None)
             ledger.after(site, transport, method, request, None, result, row["timing"])
-            if kind == "read" and ledger.docs[role]["status"] == "confirmed-absent":
+            if kind == "read" and ledger.docs[role]["status"] == "confirmed-absent" and not ledger.unanswered_writer_of(role):
                 queue = [entry for entry in queue if entry[1] != role]   # found absent: no delete or verify follows for it
         else:
             raise ValueError("undeclared native phase")

@@ -22,9 +22,10 @@ EPOCH = dt.datetime(2026, 9, 30, tzinfo=dt.timezone.utc).timestamp()
 
 
 class P14Service(Service):
-    def __init__(self, clock, plan, *, begin_59="accept", begin_61=9, refuse_writes_to=(), **knobs):
+    def __init__(self, clock, plan, *, begin_59="accept", begin_61=9, refuse_writes_to=(), unknown_writes_to=(), **knobs):
         super().__init__(clock, **knobs)
         self.plan, self.begin_59, self.begin_61, self.refuse_writes_to = plan, begin_59, begin_61, set(refuse_writes_to)
+        self.unknown_writes_to = set(unknown_writes_to)
         self.roles = {name: role for role, name in plan["documents"].items()}
 
     def _refusal(self, transport, code, details):
@@ -42,6 +43,10 @@ class P14Service(Service):
         if read_time is not None:
             return self._read_ago(transport, method, request, read_time)
         setup = any(write["update"]["fields"]["state"]["stringValue"] == "created" for write in request.get("writes", []))   # the setup commit is never refused
+        if method == "Commit" and token is None and not setup and any(self.roles.get(write["update"]["name"]) in self.unknown_writes_to for write in request["writes"]):
+            # a writer timeout: the answer is unknown and the write was not applied
+            self.calls.append((transport, method, copy.deepcopy(request)))
+            return self._receipt(transport, 4, details="deadline", complete=False)
         if method == "Commit" and token is None and not setup and any(self.roles.get(write["update"]["name"]) in self.refuse_writes_to for write in request["writes"]):
             self.calls.append((transport, method, copy.deepcopy(request)))
             return self._refusal(transport, 10, "Too much contention on these documents. Please try again.")
@@ -178,3 +183,13 @@ def test_the_stage_2_table_states_90_seconds_and_the_earlier_tables_keep_30():
     assert authority.envelope_scope(p14.TABLE)["writerDeadlineSeconds"] == "90"
     assert authority.envelope_scope(p05.TABLE)["writerDeadlineSeconds"] == "30"
     assert authority.envelope_scope(p13b.TABLE)["writerDeadlineSeconds"] == "30"
+
+
+@pytest.mark.parametrize("role,site", [("p", "rest/q2/writer"), ("o", "rest/q1/writer"), ("c", "rest/w/writer-bc")])
+def test_an_unknown_creator_whose_document_the_recovery_cannot_find_stays_owed_and_the_receipt_does_not_claim_absence(role, site):
+    # absence alone never settles an unknown create: a writer that timed out may still land later
+    receipt, _service = run(unknown_writes_to=(role,))
+    assert receipt["complete"] is False and receipt["unrecovered"] is True
+    assert receipt["unknownCommits"] == [site]
+    assert receipt["cleanup"]["absent"] is False
+    assert receipt["documents"][role]["status"] == "possibly-owned"

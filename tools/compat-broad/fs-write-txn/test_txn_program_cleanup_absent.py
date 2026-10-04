@@ -43,3 +43,45 @@ def test_a_possibly_owned_document_read_with_any_other_refusal_is_not_settled(co
     with pytest.raises(ValueError, match="not readable"):
         read(value, "a", code)
     assert value.docs["a"]["status"] == "possibly-owned"
+
+
+def write_to(value, plan, site, role):
+    """The commit site `site` of the support table writes `role` (a dispatch that has not been answered)."""
+    step = next(step for step in plan["steps"] if step["id"] == site)
+    assert role in {write["document"] for write in step["writes"]}
+    value.before(site, step["transport"], step["rpc"], {"writes": []}, step)
+
+
+def test_a_document_named_by_an_unanswered_commit_is_not_settled_by_a_not_found_read():
+    value, plan = ledger()
+    site = next(step["id"] for step in plan["steps"] if step["rpc"] == "Commit" and step["writes"])
+    role = next(step["writes"][0]["document"] for step in plan["steps"] if step["id"] == site)
+    write_to(value, plan, site, role)
+    assert site in value.unknown_commits and value.docs[role]["status"] == "possibly-owned"
+    with pytest.raises(ValueError, match="not readable"):
+        read(value, role, 5)
+    assert value.docs[role]["status"] == "possibly-owned"
+    assert role in value.owed_documents()
+
+
+def test_once_the_commit_is_answered_as_refused_the_not_found_read_settles_the_document():
+    value, plan = ledger()
+    site = next(step["id"] for step in plan["steps"] if step["rpc"] == "Commit" and step["writes"])
+    step = next(step for step in plan["steps"] if step["id"] == site)
+    role = step["writes"][0]["document"]
+    write_to(value, plan, site, role)
+    value.unknown_commits.discard(site)   # the answer came: a refusal that published nothing
+    value.docs[role]["status"] = "possibly-owned"
+    read(value, role, 5)
+    assert value.docs[role]["status"] == "confirmed-absent"
+
+
+def test_an_unanswered_commit_that_names_another_document_does_not_hold_this_one():
+    value, plan = ledger()
+    site = next(step["id"] for step in plan["steps"] if step["rpc"] == "Commit" and step["writes"])
+    named = next(step["writes"][0]["document"] for step in plan["steps"] if step["id"] == site)
+    other = next(role for role in plan["documents"] if role != named)
+    write_to(value, plan, site, named)
+    value.docs[other]["status"] = "possibly-owned"
+    read(value, other, 5)
+    assert value.docs[other]["status"] == "confirmed-absent"

@@ -28,6 +28,7 @@ export const healthy = () => ({
   },
   "preflight.firestore-database": { status: 200, json: { type: "FIRESTORE_NATIVE" } },
   "preflight.primary-bucket": { status: 200, json: { versioning: { enabled: false } } },
+  "preflight.notification-configs": { status: 200, json: { kind: "storage#notifications" } },
   "preflight.control-bucket": { status: 404, json: { error: { code: 404 } } },
   "preflight.topics": { status: 200, json: {} },
   "preflight.artifact-repository": {
@@ -104,6 +105,7 @@ export function createWorld({ now, rulesAllow = true }) {
     topics: new Set(),
     entries: [],
     deployed: false,
+    notificationConfigs: [],
     leftover: new Set(),
     operations: new Map(),
     operationPolls: 1,
@@ -308,6 +310,13 @@ export function createWorld({ now, rulesAllow = true }) {
     }
     // ---- Storage
     if (u.hostname === "storage.googleapis.com") {
+      if (method === "GET" && path === `/storage/v1/b/${PRIMARY_BUCKET}/notificationConfigs`) {
+        // the recorded shape: `{ kind }` for none, `{ kind, items }` otherwise
+        return json(200, {
+          kind: "storage#notifications",
+          ...(world.notificationConfigs.length ? { items: world.notificationConfigs } : {}),
+        });
+      }
       if (method === "GET" && path === "/storage/v1/b") {
         const prefix = u.searchParams.get("prefix") ?? "";
         const items = [...world.buckets.keys()]

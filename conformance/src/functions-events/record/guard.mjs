@@ -155,6 +155,13 @@ export const RULES = [
         : "an object list must name an owned prefix",
   }),
   rule("storage-bucket-get", "GET", "storage.googleapis.com", storage, { query: ["fields"] }),
+  // The notification configs of the primary bucket: read before the run and after the cleanup, never written.
+  rule(
+    "storage-notification-configs",
+    "GET",
+    "storage.googleapis.com",
+    `/storage/v1/b/${PRIMARY_BUCKET.replaceAll(".", "\\.")}/notificationConfigs`,
+  ),
   rule(
     "storage-bucket-versioning",
     "PATCH",

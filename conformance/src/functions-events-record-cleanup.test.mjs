@@ -192,6 +192,11 @@ test("a Gen1 function left behind and an unreadable list are not deleted by REST
   });
   assert.equal(first.verified, false);
   assert.deepEqual(gen1.world.restDeletes, []);
+  assert.equal(
+    gen1.slept.filter((x) => x === 30).length,
+    5,
+    "no REST delete, so no second round of list reads",
+  );
   const unreadable = setup();
   unreadable.world.deploy();
   unreadable.world.failures.push({

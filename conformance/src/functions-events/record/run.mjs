@@ -224,11 +224,17 @@ export async function record({
   let passesComplete = false;
   let iamBefore = null;
   let servicesBefore = null;
+  let notificationsBefore = null;
   try {
     const pre = await runPreflight((spec, vars) => transport.request(spec, vars));
     iamBefore = pre.iamBefore;
     servicesBefore = pre.servicesBefore;
-    run.preflight = { problems: pre.problems, iamBefore: iamPairs(pre.iamBefore) };
+    notificationsBefore = pre.notificationsBefore;
+    run.preflight = {
+      problems: pre.problems,
+      iamBefore: iamPairs(pre.iamBefore),
+      notificationConfigs: pre.notificationsBefore?.map((config) => config.id) ?? null,
+    };
     if (pre.problems.length) {
       run.stops.push("the preflight found problems; nothing was written");
       run.cleanup = null;
@@ -302,6 +308,7 @@ export async function record({
       ran,
       iamBefore,
       servicesBefore,
+      notificationsBefore,
       owned,
     });
   } catch (error) {

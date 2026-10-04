@@ -11,7 +11,7 @@
 
 import { readLists, summarize } from "./deploy.mjs";
 import { HANDLERS } from "./logs.mjs";
-import { iamDiff, iamPairs } from "./preflight.mjs";
+import { iamDiff, iamPairs, notificationConfigs, notificationDiff } from "./preflight.mjs";
 import {
   CONTROL_BUCKET,
   CONTROL_COLLECTION,
@@ -176,6 +176,7 @@ export async function runCleanup({
   ran,
   iamBefore = null,
   servicesBefore = null,
+  notificationsBefore = null,
   owned = { uids: new Set(), emails: new Set() },
 }) {
   const steps = {};
@@ -406,10 +407,26 @@ export async function runCleanup({
         `https://serviceusage.googleapis.com/v1/projects/${PROJECT}/services?filter=state:ENABLED&pageSize=200`,
       ),
     );
+    // The primary bucket's notification configs, against the preflight read: only a new config is a problem (a
+    // removed or changed one is recorded, it is what a Gen1 storage deploy or delete does to the bucket we want to learn).
+    const notifications = await request(
+      read("notification-configs", `${bucketUrl(PRIMARY_BUCKET)}/notificationConfigs`),
+    );
+    const afterConfigs =
+      notifications.kind === "success" ? notificationConfigs(notifications.json) : null;
+    const notificationChange =
+      notificationsBefore && afterConfigs
+        ? notificationDiff(notificationsBefore, afterConfigs)
+        : null;
+    const notificationsOk =
+      !notificationsBefore || (afterConfigs !== null && notificationChange.added.length === 0);
     const after = new Set((services.json?.services ?? []).map((s) => s?.config?.name));
     const before = servicesBefore ? new Set(servicesBefore) : null;
     return {
-      ok: true,
+      ok: notificationsOk,
+      notificationConfigs: notificationsBefore
+        ? (notificationChange ?? { unreadable: true })
+        : null,
       packages: (packages.json?.packages ?? []).map((p) => p.name?.split("/").at(-1)),
       iamBindings: iam.json?.bindings?.length ?? null,
       iamDiff: iamBefore && iam.kind === "success" ? iamDiff(iamBefore, iam.json) : null,

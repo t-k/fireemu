@@ -63,6 +63,46 @@ const emptyList = (json, key, label) =>
       : ok();
 const bad = (reason) => ({ ok: false, reason });
 
+/**
+ * The notification configs of a bucket (`storage#notifications`: `{ kind }` for none, `{ kind, items }` otherwise,
+ * recorded on the primary bucket and on a bucket without any), as `{ id, topic, eventTypes, payloadFormat, etag }`
+ * sorted by id; `null` when the answer is not that shape. The recorder only reads them: the one config the primary bucket
+ * has is managed by Cloud Functions and is never deleted.
+ */
+export function notificationConfigs(json) {
+  if (json?.kind !== "storage#notifications") return null;
+  if (json.items === undefined) return [];
+  if (!Array.isArray(json.items)) return null;
+  const configs = [];
+  for (const item of json.items) {
+    if (!item || typeof item !== "object" || typeof item.id !== "string" || item.id === "")
+      return null;
+    configs.push({
+      id: item.id,
+      topic: item.topic ?? null,
+      eventTypes: Array.isArray(item.event_types) ? item.event_types.toSorted() : null,
+      payloadFormat: item.payload_format ?? null,
+      etag: item.etag ?? null,
+    });
+  }
+  return configs.toSorted((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+}
+
+/** What changed between two reads of the configs: new ids, ids that are gone, ids whose config differs. Only a new one is a problem. */
+export function notificationDiff(before, after) {
+  const was = new Map(before.map((config) => [config.id, config]));
+  const is = new Map(after.map((config) => [config.id, config]));
+  return {
+    before: before.map((config) => config.id),
+    after: after.map((config) => config.id),
+    added: [...is.keys()].filter((id) => !was.has(id)),
+    removed: [...was.keys()].filter((id) => !is.has(id)),
+    changed: [...is.keys()].filter(
+      (id) => was.has(id) && JSON.stringify(was.get(id)) !== JSON.stringify(is.get(id)),
+    ),
+  };
+}
+
 /** The preflight steps in order. `check(answer, context)` returns {ok, reason}; it may add to `context`. */
 export const PREFLIGHT = [
   {
@@ -108,6 +148,19 @@ export const PREFLIGHT = [
       json?.versioning?.enabled === true
         ? bad("the primary bucket already has versioning enabled (the restore would be wrong)")
         : ok(),
+  },
+  {
+    ...get(
+      "notification-configs",
+      `https://storage.googleapis.com/storage/v1/b/${encodeURIComponent(PRIMARY_BUCKET)}/notificationConfigs`,
+    ),
+    check: ({ json }, context) => {
+      const configs = notificationConfigs(json);
+      if (configs === null)
+        return bad("the primary bucket's notification configs are not a list of configs");
+      context.notificationsBefore = configs;
+      return ok();
+    },
   },
   {
     ...get(
@@ -313,6 +366,7 @@ export async function runPreflight(request) {
     projectNumber: context.projectNumber ?? null,
     iamBefore: context.iamBefore ?? null,
     servicesBefore: context.servicesBefore ?? null,
+    notificationsBefore: context.notificationsBefore ?? null,
   };
 }
 

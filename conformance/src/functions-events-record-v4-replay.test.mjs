@@ -122,6 +122,8 @@ test("erroredFunctions reads the summary line and nothing else", () => {
     "Functions Errored",
     "x Functions Errored",
     "-1 Functions Errored",
+    "3 Functions Errored but not alone",
+    "3 Functions Errored.",
   ])
     assert.equal(erroredFunctions(text), null, JSON.stringify(text));
 });
@@ -264,6 +266,15 @@ test("the recorder's rules allow the REST delete of a Gen2 function of the run a
   ];
   for (const url of refused)
     assert.ok(destination({ method: "DELETE", url, mutation: true }).problem, url);
+  for (const tail of ["", "a%2Fb", "x/y", "a.b", "a".repeat(129)])
+    assert.ok(
+      destination({
+        method: "GET",
+        url: `https://cloudfunctions.googleapis.com/v2/projects/${P}/locations/us-central1/operations/${tail}`,
+        mutation: false,
+      }).problem,
+      `operation ${tail.slice(0, 20)}`,
+    );
   assert.match(
     destination({ method: "DELETE", url: fn("us-central1", "fsCreatedV2"), mutation: false })
       .problem,

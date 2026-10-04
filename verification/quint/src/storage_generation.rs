@@ -178,7 +178,12 @@ impl StorageGenerationDriver {
     /// Deletes the current object without rewinding the allocator.
     pub fn delete(&mut self) -> Result {
         self.store
-            .delete(&self.bucket, &self.object, Precondition::default())
+            .delete(
+                &self.bucket,
+                &self.object,
+                Precondition::default(),
+                LogicalInstant::UNIX_EPOCH,
+            )
             .map_err(|error| invalid_data(&format!("delete failed: {error}")))?;
         self.record_action("Delete")
     }

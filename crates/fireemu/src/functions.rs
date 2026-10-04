@@ -3299,6 +3299,7 @@ impl fireemu_adapter_http::storage::AtomicStorageEventSink for FunctionsStorageS
             StorageEvent::Finalized(m)
             | StorageEvent::Deleted(m)
             | StorageEvent::MetadataUpdated(m) => m.bucket.as_str(),
+            StorageEvent::Archived { object, .. } => object.bucket.as_str(),
         };
         // The runtime belongs to the default session: other sessions' buckets do not
         // trigger its functions.

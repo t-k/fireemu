@@ -50,7 +50,7 @@
   ],
   "digests": {
     ".github/workflows/quint.yml": "3322397d1feaaea0a163de7b8a289a33d071650d51f4674c4a4556df6b45e972",
-    "crates/fireemu-core-storage/src/store.rs": "161938e9476d990b991e2b5394e265eb7e887b70c072c25640f6059470fe426e",
+    "crates/fireemu-core-storage/src/store.rs": "ba7b41ef23e03e57b7a8bde8bf44dc125ef6a0e6a44cbc4b711b397190b9f53c",
     "rust-toolchain.toml": "689fafb1dd9b80ee9a2a9b5e2bbb31e8f7ea4adad403717777689b35d4f861b2",
     "verification/quint/apalache.lock.json": "16cff85b68117df35e66c575244c297215a7c442bfde6e64ecb97822062c7ad3",
     "verification/quint/bin/install-apalache": "31cdb73b00aa5ee20328f83ccec467f6c9d6b740dc4e5c806269c66347cac150",
@@ -72,7 +72,7 @@
     "verification/quint/src/process.rs": "56fbdc380eb60993a038366f050f45c030b22f5dc7048971aa451f54883dbb5f",
     "verification/quint/src/publication.rs": "e4b57348c74d51585609b9f114ad56366309f90fa6e2297639546f42922e53a8",
     "verification/quint/src/server.rs": "b0d10768918bf0449419d9e6384a574e14db01f651264e6037856c3367e05c0a",
-    "verification/quint/src/storage_generation.rs": "14c6960457d875c80672618680445bfb0150adad7129bbd2a1676850c089b864",
+    "verification/quint/src/storage_generation.rs": "90e0387a96fd3ce09c5ab2290f08c2d03a5b9bc1a8bde2c1ee6e3db604247fd0",
     "verification/quint/tests/storage_generation_connect.rs": "8752e7a554a1585b52fab1533ede0c9682386c8c32a53137f8940d29001cd991"
   },
   "invariants": [

@@ -82,6 +82,19 @@ impl StorageEventPublication for NoopStorageEventPublication {
     fn publish(self: Box<Self>) {}
 }
 
+/// The reservations of the events of one mutation (an overwrite in a versioned bucket has two),
+/// published together, in order, after the object state is visible. A reservation that fails
+/// releases the ones already taken: they are dropped with the vector.
+struct BatchStorageEventPublication(Vec<Box<dyn StorageEventPublication>>);
+
+impl StorageEventPublication for BatchStorageEventPublication {
+    fn publish(self: Box<Self>) {
+        for publication in self.0 {
+            publication.publish();
+        }
+    }
+}
+
 /// Atomically selected Storage Rules configuration.
 ///
 /// A global ruleset is the object-form `firebase.json` contract. A bucket map is the
@@ -316,12 +329,21 @@ impl std::ops::DerefMut for StoreGuard<'_> {
 impl StoreGuard<'_> {
     fn reserve_event(
         sink: Option<&StorageEventSink>,
-        event: &StorageEvent,
+        events: &[StorageEvent],
     ) -> Result<Box<dyn StorageEventPublication>, StorageError> {
-        sink.map_or_else(
-            || Ok(Box::new(NoopStorageEventPublication) as Box<dyn StorageEventPublication>),
-            |sink| sink.reserve(event).map_err(StorageError::EventAdmission),
-        )
+        let Some(sink) = sink else {
+            return Ok(Box::new(NoopStorageEventPublication));
+        };
+        // The common case is one event; a batch (an Archived event with the Finalized one of an
+        // overwrite) is reserved event by event, all or none.
+        if let [event] = events {
+            return sink.reserve(event).map_err(StorageError::EventAdmission);
+        }
+        let mut reserved = Vec::with_capacity(events.len());
+        for event in events {
+            reserved.push(sink.reserve(event).map_err(StorageError::EventAdmission)?);
+        }
+        Ok(Box::new(BatchStorageEventPublication(reserved)))
     }
 
     /// Writes prepared object bytes through the source/outbox publication boundary.
@@ -343,7 +365,7 @@ impl StoreGuard<'_> {
             metadata,
             pre,
             now,
-            |event| Self::reserve_event(sink.as_ref(), event),
+            |events| Self::reserve_event(sink.as_ref(), events),
         )?;
         publication.publish();
         Ok(metadata)
@@ -363,8 +385,8 @@ impl StoreGuard<'_> {
         let sink = self.sink.cloned();
         let (metadata, publication) =
             self.guard
-                .put_with_admission(bucket, name, bytes, metadata, pre, now, |event| {
-                    Self::reserve_event(sink.as_ref(), event)
+                .put_with_admission(bucket, name, bytes, metadata, pre, now, |events| {
+                    Self::reserve_event(sink.as_ref(), events)
                 })?;
         publication.publish();
         Ok(metadata)
@@ -382,8 +404,8 @@ impl StoreGuard<'_> {
         let sink = self.sink.cloned();
         let (metadata, publication) =
             self.guard
-                .update_metadata_with_admission(bucket, name, patch, pre, now, |event| {
-                    Self::reserve_event(sink.as_ref(), event)
+                .update_metadata_with_admission(bucket, name, patch, pre, now, |events| {
+                    Self::reserve_event(sink.as_ref(), events)
                 })?;
         publication.publish();
         Ok(metadata)
@@ -399,8 +421,8 @@ impl StoreGuard<'_> {
         let sink = self.sink.cloned();
         let (metadata, publication) =
             self.guard
-                .add_download_token_with_admission(bucket, name, now, |event| {
-                    Self::reserve_event(sink.as_ref(), event)
+                .add_download_token_with_admission(bucket, name, now, |events| {
+                    Self::reserve_event(sink.as_ref(), events)
                 })?;
         publication.publish();
         Ok(metadata)
@@ -417,8 +439,8 @@ impl StoreGuard<'_> {
         let sink = self.sink.cloned();
         let (metadata, publication) =
             self.guard
-                .remove_download_token_with_admission(bucket, name, token, now, |event| {
-                    Self::reserve_event(sink.as_ref(), event)
+                .remove_download_token_with_admission(bucket, name, token, now, |events| {
+                    Self::reserve_event(sink.as_ref(), events)
                 })?;
         if let Some(publication) = publication {
             publication.publish();
@@ -432,12 +454,13 @@ impl StoreGuard<'_> {
         bucket: &BucketName,
         name: &ObjectName,
         pre: Precondition,
+        now: LogicalInstant,
     ) -> Result<ObjectMetadata, StorageError> {
         let sink = self.sink.cloned();
         let (metadata, publication) =
             self.guard
-                .delete_with_admission(bucket, name, pre, |event| {
-                    Self::reserve_event(sink.as_ref(), event)
+                .delete_with_admission(bucket, name, pre, now, |events| {
+                    Self::reserve_event(sink.as_ref(), events)
                 })?;
         publication.publish();
         Ok(metadata)
@@ -455,8 +478,8 @@ impl StoreGuard<'_> {
         let sink = self.sink.cloned();
         let (metadata, publication) =
             self.guard
-                .copy_with_admission(source, destination, metadata, pre, now, |event| {
-                    Self::reserve_event(sink.as_ref(), event)
+                .copy_with_admission(source, destination, metadata, pre, now, |events| {
+                    Self::reserve_event(sink.as_ref(), events)
                 })?;
         publication.publish();
         Ok(metadata)
@@ -471,8 +494,8 @@ impl StoreGuard<'_> {
         let sink = self.sink.cloned();
         let (metadata, publication) =
             self.guard
-                .finalize_upload_with_admission(id, now, |event| {
-                    Self::reserve_event(sink.as_ref(), event)
+                .finalize_upload_with_admission(id, now, |events| {
+                    Self::reserve_event(sink.as_ref(), events)
                 })?;
         publication.publish();
         Ok(metadata)
@@ -3462,7 +3485,7 @@ fn fb_delete(state: &StorageState, principal: &Principal, bucket: &str, name: &s
         return Ok(fb_object_not_found());
     }
     store
-        .delete(&b, &n, Precondition::default())
+        .delete(&b, &n, Precondition::default(), state.now())
         .map_err(fb_core_err)?;
     Ok(StorageResponse::empty(204))
 }
@@ -4074,7 +4097,7 @@ fn gcs_object(
             if select_generation(store.get(&b, &n).cloned(), params, "generation")?.is_none() {
                 return Ok(gcs_no_such_object(bucket, name, false));
             }
-            store.delete(&b, &n, pre).map_err(gcs_core_err)?;
+            store.delete(&b, &n, pre, now).map_err(gcs_core_err)?;
             Ok(StorageResponse::empty(204))
         }
         _ => Ok(plain_status(501)),

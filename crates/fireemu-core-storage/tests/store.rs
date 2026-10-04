@@ -62,6 +62,7 @@ fn object_names_are_opaque_utf8_and_never_normalized() {
     );
 }
 
+#[allow(clippy::too_many_lines)]
 #[test]
 fn generations_metagenerations_and_preconditions() {
     let mut s = StorageState::new(1);
@@ -153,10 +154,10 @@ fn generations_metagenerations_and_preconditions() {
         ),
         Err(StorageError::PreconditionFailed(_))
     ));
-    let deleted = s.delete(&b, &n, Precondition::default()).unwrap();
+    let deleted = s.delete(&b, &n, Precondition::default(), t(0)).unwrap();
     assert_eq!(deleted.generation, 2);
     assert_eq!(
-        s.delete(&b, &n, Precondition::default()),
+        s.delete(&b, &n, Precondition::default(), t(0)),
         Err(StorageError::NotFound)
     );
     let events: Vec<&str> = s
@@ -166,6 +167,7 @@ fn generations_metagenerations_and_preconditions() {
             StorageEvent::Finalized(_) => "finalized",
             StorageEvent::MetadataUpdated(_) => "metadata",
             StorageEvent::Deleted(_) => "deleted",
+            StorageEvent::Archived { .. } => "archived",
         })
         .collect();
     assert_eq!(
@@ -192,7 +194,7 @@ fn event_admission_refusal_keeps_storage_mutations_private() {
         .unwrap();
     let _ = store.drain_events();
 
-    let refused = |_: &StorageEvent| {
+    let refused = |_: &[StorageEvent]| {
         Err::<(), _>(StorageError::EventAdmission(
             fireemu_core_types::admission::EventAdmissionError::Capacity("outbox full".to_owned()),
         ))
@@ -251,7 +253,7 @@ fn event_admission_refusal_keeps_storage_mutations_private() {
     assert!(store.get(&b, &destination).is_none());
 
     assert!(matches!(
-        store.delete_with_admission(&b, &source, Precondition::default(), refused),
+        store.delete_with_admission(&b, &source, Precondition::default(), t(0), refused),
         Err(StorageError::EventAdmission(_))
     ));
     assert_eq!(store.get(&b, &source), Some(&source_meta));
@@ -604,7 +606,7 @@ fn not_match_preconditions_and_patch_apply() {
         ..Precondition::default()
     };
     assert!(matches!(
-        s.delete(&b, &n, not_current),
+        s.delete(&b, &n, not_current, t(0)),
         Err(StorageError::NotModified(_))
     ));
     let other = Precondition {
@@ -990,7 +992,7 @@ fn preconditions_check_both_directions_of_each_field() {
         assert_eq!(r.is_ok(), ok, "{pre:?}");
         if ok {
             // Restore the metageneration expectation for the next case.
-            s.delete(&b, &n, Precondition::default()).unwrap();
+            s.delete(&b, &n, Precondition::default(), t(0)).unwrap();
             let again = s
                 .put(
                     &b,

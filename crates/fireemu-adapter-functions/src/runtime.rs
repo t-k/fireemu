@@ -2065,6 +2065,7 @@ impl FunctionsRuntime {
             StorageEvent::Finalized(m) => (ObjectEvent::Finalized, m),
             StorageEvent::Deleted(m) => (ObjectEvent::Deleted, m),
             StorageEvent::MetadataUpdated(m) => (ObjectEvent::MetadataUpdated, m),
+            StorageEvent::Archived { object, .. } => (ObjectEvent::Archived, object),
         };
         let time = self.now();
         let mut inner = self

@@ -114,7 +114,7 @@ fn deleting_the_live_object_of_a_versioned_bucket_archives_it_and_announces_no_d
     let live = put(&mut store, &b, "o.txt", "data", 1);
     let _ = store.drain_events();
     store
-        .delete(&b, &name("o.txt"), Precondition::default())
+        .delete(&b, &name("o.txt"), Precondition::default(), t(2))
         .unwrap();
     assert!(store.get(&b, &name("o.txt")).is_none());
     let noncurrent = store.noncurrent_versions(&b, &name("o.txt"));
@@ -486,7 +486,7 @@ proptest! {
                 }
                 Op::Delete { name: n } => {
                     let key = format!("o{n}");
-                    let result = store.delete(&b, &name(&key), Precondition::default());
+                    let result = store.delete(&b, &name(&key), Precondition::default(), now);
                     match model.live.remove(&key) {
                         None => prop_assert_eq!(result.err(), Some(StorageError::NotFound)),
                         Some(old) => {
@@ -549,4 +549,38 @@ proptest! {
             prop_assert_eq!(store.versioning(&b), model.versioned);
         }
     }
+}
+
+#[test]
+fn the_resource_gauges_count_noncurrent_bytes_and_a_bucket_that_holds_only_versions() {
+    use fireemu_core_types::resources::RootBudget;
+    let mut store = StorageState::new(1);
+    let b = bucket();
+    store.set_versioning(&b, true);
+    put(&mut store, &b, "o.txt", "1234", 1);
+    put(&mut store, &b, "o.txt", "12345678", 2);
+    let gauge = |store: &StorageState, name: &str| {
+        store
+            .resources(|_| true, RootBudget::DEFAULT)
+            .gauges
+            .iter()
+            .find(|g| g.id == name)
+            .map(|g| g.current)
+            .unwrap()
+    };
+    assert_eq!(gauge(&store, "objects.count"), 1);
+    assert_eq!(gauge(&store, "objects.noncurrent"), 1);
+    assert_eq!(
+        gauge(&store, "objects.bytes"),
+        12,
+        "live and noncurrent data"
+    );
+    store
+        .delete(&b, &name("o.txt"), Precondition::default(), t(3))
+        .unwrap();
+    assert_eq!(gauge(&store, "objects.count"), 0);
+    assert_eq!(gauge(&store, "objects.noncurrent"), 2);
+    assert_eq!(gauge(&store, "objects.bytes"), 12);
+    let roots = store.resources(|_| true, RootBudget::DEFAULT).roots;
+    assert_eq!(roots.total, 1, "the bucket is still reported: {roots:?}");
 }

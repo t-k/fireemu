@@ -129,11 +129,13 @@ pub fn validate_push_config_options(push: Option<&pb::PushConfig>) -> Result<(),
 
 /// Subscription fields declared by `google.pubsub.v1.Subscription` whose value the emulator
 /// applies. Every other declared field is refused explicitly instead of being dropped.
-pub const SUPPORTED_SUBSCRIPTION_FIELDS: [&str; 8] = [
+pub const SUPPORTED_SUBSCRIPTION_FIELDS: [&str; 10] = [
     "name",
     "topic",
     "ack_deadline_seconds",
     "enable_message_ordering",
+    "retain_acked_messages",
+    "message_retention_duration",
     "filter",
     "dead_letter_policy",
     "retry_policy",
@@ -143,12 +145,10 @@ pub const SUPPORTED_SUBSCRIPTION_FIELDS: [&str; 8] = [
 /// Subscription fields declared by `google.pubsub.v1.Subscription` that the emulator cannot
 /// represent. Naming one of these is an explicit unsupported-feature refusal; naming anything
 /// outside both tables is an unknown field, which is an invalid argument.
-pub const UNSUPPORTED_SUBSCRIPTION_FIELDS: [&str; 14] = [
+pub const UNSUPPORTED_SUBSCRIPTION_FIELDS: [&str; 12] = [
     "bigquery_config",
     "cloud_storage_config",
     "bigtable_config",
-    "retain_acked_messages",
-    "message_retention_duration",
     "labels",
     "expiration_policy",
     "detached",
@@ -199,10 +199,6 @@ pub fn validate_subscription_options(sub: &pb::Subscription) -> Result<(), PubSu
         Some("cloud_storage_config")
     } else if sub.bigtable_config.is_some() {
         Some("bigtable_config")
-    } else if sub.retain_acked_messages {
-        Some("retain_acked_messages")
-    } else if sub.message_retention_duration.is_some() {
-        Some("message_retention_duration")
     } else if !sub.labels.is_empty() {
         Some("labels")
     } else if sub.expiration_policy.is_some() {
@@ -359,7 +355,23 @@ pub fn subscription_from_proto(sub: &pb::Subscription) -> Result<SubscriptionCon
         .unwrap_or_default();
     crate::push::validate_endpoint(&push_endpoint).map_err(PubSubError::invalid_argument)?;
     let push_config = PushConfig { push_endpoint };
+    let message_retention_duration = sub
+        .message_retention_duration
+        .as_ref()
+        .map(|duration| {
+            if duration.seconds < 0 || !(0..1_000_000_000).contains(&duration.nanos) {
+                return Err(PubSubError::invalid_argument(
+                    "messageRetentionDuration must use non-negative canonical seconds and nanos",
+                ));
+            }
+            Ok(LogicalDuration::from_nanos(
+                i128::from(duration.seconds) * NANOS_PER_SEC + i128::from(duration.nanos),
+            ))
+        })
+        .transpose()?;
     Ok(SubscriptionConfig {
+        retain_acked_messages: sub.retain_acked_messages,
+        message_retention_duration,
         name,
         topic,
         ack_deadline_seconds,
@@ -383,6 +395,8 @@ pub fn subscription_to_proto(
         topic: reported_topic.to_owned(),
         ack_deadline_seconds: i32::try_from(config.ack_deadline_seconds).unwrap_or(10),
         enable_message_ordering: config.enable_message_ordering,
+        retain_acked_messages: config.retain_acked_messages,
+        message_retention_duration: config.message_retention_duration.map(duration_to_proto),
         filter: config.filter.as_str().to_owned(),
         dead_letter_policy: config
             .dead_letter_policy

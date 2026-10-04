@@ -13,7 +13,7 @@ import re
 import threading
 import time
 
-from txn_program_program import LITERAL_TOKENS, GraphCursor, canonical_token, compile_plan, corpus_digest, marker_fields, outcome_class, request_for_step, source_digest, validate_plan
+from txn_program_program import LITERAL_TOKENS, GraphCursor, canonical_token, compile_plan, corpus_digest, marker_fields, outcome_class, request_for_step, same_request, source_digest, validate_plan
 
 RECEIPT_KIND = "txn-program-receipt-v1"
 RECORDING_KIND = "txn-program-recording-v1"
@@ -410,6 +410,10 @@ class Ledger:
                 raise ValueError("batch entry names a document that was not requested or repeats")
             seen.add(name)
             role = self._role_of(name)
+            if step is not None and "readAgoSeconds" in step:
+                if kind == "found":
+                    self._owned(role, frame["found"], transport, set(self.tried[role]) | set(self.history[role]))
+                continue
             visible = self._visible(role, request, step)
             if kind == "found":
                 if not visible - {None}:
@@ -481,6 +485,10 @@ class Ledger:
                 raise ValueError("document was not absent; no write admitted")
             return
         if code != 0:
+            return
+        if step is not None and "readAgoSeconds" in step:
+            # A read at a time ago is an observation of production's retention, not of a state this recording acknowledged: only the owner marker is checked.
+            self._owned(role, result["response"], transport, set(self.tried[role]) | set(self.history[role]))
             return
         visible = self._visible(role, request, step) - {None}
         if doc["state"] is None or not visible:
@@ -672,7 +680,7 @@ class Collector:
             if "waitSeconds" in step:
                 self._wait(step)
                 previous = self.rows[-1]
-            request = request_for_step(self.plan, step, self.ledger.token_values(), self.table, self.ledger.times())
+            request = request_for_step(self.plan, step, self.ledger.token_values(), self.table, self.ledger.times(), now=_utc_seconds(self.utc()))
             self._rpc(step["id"], step["transport"], step["rpc"], request, "observation", step=step)
             if "waitSeconds" in step:
                 self.waits.append(wait_entry(step, previous, self.rows[-1]["timing"], self.ledger.tokens))
@@ -816,7 +824,7 @@ def projection(receipt, table):
             if waiting is not None or owed or queue is not None or index >= len(steps) or row != steps[index]:
                 raise ValueError("observation sequence differs")
             declared = plan["steps"][index]
-            if site != declared["id"] or method != declared["rpc"] or transport != declared["transport"] or row.get("caseId") != declared["caseId"] or request != request_for_step(plan, declared, ledger.token_values(), table, ledger.times()):
+            if site != declared["id"] or method != declared["rpc"] or transport != declared["transport"] or row.get("caseId") != declared["caseId"] or not same_request(declared, request, request_for_step(plan, declared, ledger.token_values(), table, ledger.times(), now=_utc_seconds(row["timing"]["dispatchUtc"]))):
                 raise ValueError("closed request graph differs")
             following = plan["steps"][index + 1] if index + 1 < len(plan["steps"]) else None
             if following is not None and following.get("concurrentWith") == declared["id"]:

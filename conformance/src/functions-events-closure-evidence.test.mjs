@@ -4,7 +4,7 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 
@@ -32,32 +32,92 @@ const sha256 = (text) => createHash("sha256").update(text).digest("hex");
 const closure = () => JSON.parse(closureText);
 const ART = "d".repeat(64);
 const COMMIT = "a".repeat(40);
+const RUNNER_TREE = "7".repeat(40);
+const RUNNER_BYTES = "runner bytes of the build's source commit";
+const RECORDED_AT = "2026-10-05T09:59:00.000Z";
+const LOCAL = {
+  sha256: ART,
+  sourceCommit: COMMIT,
+  dirty: false,
+  runnerPath: "/repo/tools/runner-node/index.mjs",
+  runnerSha256: sha256(RUNNER_BYTES),
+  runnerTree: RUNNER_TREE,
+};
+/** git as the generator asks it: the runner tree and the runner file of the build's source commit. */
+const gitFake = (args) => {
+  if (args[0] === "rev-parse" && args[1] === `${COMMIT}:tools/runner-node`)
+    return `${RUNNER_TREE}\n`;
+  if (
+    args[0] === "cat-file" &&
+    args[1] === "blob" &&
+    args[2] === `${COMMIT}:tools/runner-node/index.mjs`
+  )
+    return Buffer.from(RUNNER_BYTES);
+  assert.fail(`unexpected git ${args.join(" ")}`);
+};
+const validLedger = (dir, commit = COMMIT) =>
+  [
+    JSON.stringify({ runDir: dir, event: "started", gitSha: commit }),
+    JSON.stringify({
+      runDir: dir,
+      event: "finished",
+      gitSha: commit,
+      outcome: "recorded",
+      lockRetained: false,
+    }),
+    JSON.stringify({ runDir: dir, event: "cleanup-verified", sandboxAtBaseline: true }),
+  ].join("\n");
 const isGate = (c) =>
   ["final-artifact-regression", "closure-review"].some((g) => c.conditionId.endsWith(`/${g}`));
 const business = () => closure().conditions.filter((c) => !isGate(c));
 
-/** A comparison with every row the closure expects, MATCH unless `over` says otherwise (row id -> { status, reasons }). */
+/**
+ * A comparison with every row the closure expects, MATCH unless `over` says otherwise (row id -> { status, reasons } for a fault of
+ * the recording or of both profiles, or { only: { strict | emulator: status }, reasons } for one profile's difference).
+ */
 function comparisonOf({
   over = {},
   drop = [],
   extra = [],
   artifact = ART,
   execution = "FUNCTIONS-EVENTS formal record (FE v5) vs local sessions x",
+  corpus = sha256(corpusText),
+  productionRun = {
+    project: "fireemu-oracle-events",
+    recordedAt: RECORDED_AT,
+    corpusDigest: sha256(corpusText),
+  },
+  localBinary = LOCAL,
 } = {}) {
   const rows = [];
   for (const condition of business())
     for (const id of expectedRows(condition)) {
       if (drop.includes(id)) continue;
       const [, name, version] = id.split("#");
+      const { only, status = "MATCH", reasons = [], ...rest } = over[id] ?? {};
+      const profile = (side) => {
+        if (only) {
+          return only[side] === undefined
+            ? { status: "MATCH", reasons: [] }
+            : { status: only[side], reasons: reasons.map((r) => `${side}: ${r}`) };
+        }
+        return { status, reasons };
+      };
+      const profiles = { emulator: profile("emulator"), strict: profile("strict") };
+      const rank = { MATCH: 0, INCOMPLETE: 1, DIFF: 2 };
+      const combined = [profiles.emulator.status, profiles.strict.status].reduce((a, b) =>
+        rank[b] > rank[a] ? b : a,
+      );
       rows.push({
         row: id,
         caseId: `${condition.conditionId}#${name}#${version}`,
         conditionId: condition.conditionId,
         case: name,
         generation: Number(version.slice(1)),
-        status: "MATCH",
-        reasons: [],
-        ...over[id],
+        status: combined,
+        reasons: [...profiles.emulator.reasons, ...profiles.strict.reasons],
+        profiles,
+        ...rest,
       });
     }
   rows.push(...extra);
@@ -66,6 +126,9 @@ function comparisonOf({
     kind: "functions-events-comparison",
     artifactSha256: artifact,
     execution,
+    corpusSha256: corpus,
+    productionRun,
+    localBinary,
     rows,
     summary: {
       rows: rows.length,
@@ -78,6 +141,7 @@ function comparisonOf({
 const runOf = (over = {}) => ({
   kind: "functions-events-production-run",
   project: "fireemu-oracle-events",
+  recordedAt: RECORDED_AT,
   corpusDigest: sha256(corpusText),
   passes: [
     {
@@ -283,6 +347,10 @@ test("a row the comparison lacks is MISSING; a row of another condition, a stray
     generation: 1,
     status: "MATCH",
     reasons: [],
+    profiles: {
+      emulator: { status: "MATCH", reasons: [] },
+      strict: { status: "MATCH", reasons: [] },
+    },
   };
   asRefusal(
     () => mapConditions(closure(), checkComparison(comparisonOf({ extra: [stray] }))),
@@ -664,13 +732,16 @@ function commandFiles({
   run = runOf(),
   build = buildOf(),
   receipt = receiptOf(),
-  ledger,
+  ledger = validLedger(resolve("run")),
+  repoCorpus = corpusText,
+  corpus = corpusText,
+  git = gitFake,
 } = {}) {
   const files = new Map([
     ["comparison.json", JSON.stringify(comparison)],
     ["run/production-run.json", JSON.stringify(run)],
     ["closure.json", closureText],
-    ["corpus.json", corpusText],
+    ["corpus.json", corpus],
     ["build.json", JSON.stringify(build)],
     ["receipt.json", JSON.stringify(receipt)],
   ]);
@@ -681,6 +752,8 @@ function commandFiles({
     read: (path) => files.get(path) ?? assert.fail(`no file ${path}`),
     write: (path, text) => written.set(path, text),
     log: (line) => logs.push(line),
+    git,
+    repoCorpus: () => repoCorpus,
   };
   return { io, written, logs };
 }
@@ -700,6 +773,7 @@ const writing = (over = {}) =>
     "build-record-out": "build-copy.json",
     "build-record-path": "spec/compatibility/closure/evidence/FUNCTIONS-EVENTS-build.json",
     "workspace-regression": "receipt.json",
+    "sandbox-ledger": "ledger.jsonl",
     ...over,
   });
 
@@ -898,13 +972,24 @@ test("the command line reports, writes with --write, and says what is wrong with
     writeFileSync(join(dir, name), typeof text === "string" ? text : JSON.stringify(text));
     return join(dir, name);
   };
+  // the real repository: the build's source commit is HEAD, and the runner the sessions used is what HEAD holds
+  const gitOut = (...args) =>
+    spawnSync("git", ["-C", fileURLToPath(new URL("../../", import.meta.url)), ...args]).stdout;
+  const head = String(gitOut("rev-parse", "HEAD")).trim();
+  const localBinary = {
+    ...LOCAL,
+    sourceCommit: head,
+    runnerTree: String(gitOut("rev-parse", "HEAD:tools/runner-node")).trim(),
+    runnerSha256: sha256(gitOut("cat-file", "blob", "HEAD:tools/runner-node/index.mjs")),
+  };
   const files = {
-    comparison: put("comparison.json", comparisonOf()),
+    comparison: put("comparison.json", comparisonOf({ localBinary })),
     run: put("run/production-run.json", runOf()),
     closure: put("closure.json", closureText),
     corpus: put("corpus.json", corpusText),
-    build: put("build.json", buildOf()),
-    receipt: put("receipt.json", receiptOf()),
+    build: put("build.json", buildOf({ sourceCommit: head })),
+    receipt: put("receipt.json", receiptOf({ sourceCommit: head })),
+    ledger: put("ledger.jsonl", validLedger(join(dir, "run"), head)),
   };
   const script = fileURLToPath(
     new URL("./functions-events/compare/closure-evidence.mjs", import.meta.url),
@@ -944,6 +1029,8 @@ test("the command line reports, writes with --write, and says what is wrong with
     "spec/compatibility/closure/evidence/FUNCTIONS-EVENTS-build.json",
     "--workspace-regression",
     files.receipt,
+    "--sandbox-ledger",
+    files.ledger,
   ]);
   assert.equal(written.status, 0, written.stderr);
   const closureAfter = JSON.parse(readFileSync(files.closure, "utf8"));
@@ -952,7 +1039,10 @@ test("the command line reports, writes with --write, and says what is wrong with
     closureAfter,
     JSON.parse(readFileSync(join(dir, "evidence/out.json"), "utf8")),
   );
-  assert.equal(readFileSync(join(dir, "evidence/build.json"), "utf8"), JSON.stringify(buildOf()));
+  assert.equal(
+    readFileSync(join(dir, "evidence/build.json"), "utf8"),
+    JSON.stringify(buildOf({ sourceCommit: head })),
+  );
   for (const args of [["--nonsense"], ["--comparison"], base.slice(0, 6), ["comparison", "x"]]) {
     const failed = run(args);
     assert.equal(failed.status, 1, args.join(" "));
@@ -997,6 +1087,10 @@ test("each part of the summary is checked on its own, a row without a condition 
     generation: 1,
     status: "MATCH",
     reasons: [],
+    profiles: {
+      emulator: { status: "MATCH", reasons: [] },
+      strict: { status: "MATCH", reasons: [] },
+    },
   }));
   const message = (() => {
     try {
@@ -1128,4 +1222,291 @@ test("the command line names a word that is no flag", async () => {
   const failed = spawnSync(process.execPath, [script, "comparison", "x"], { encoding: "utf8" });
   assert.equal(failed.status, 1);
   assert.match(failed.stderr, /bad argument: comparison/);
+});
+
+// ---- review 2026-10-05: strict-only (ledger 811), the per-profile status, M1, M2, S1 ----------------------------
+
+const written = (over = {}, filesOf = {}) =>
+  closureEvidenceCommand(writing(over), commandFiles(filesOf).io);
+const refusedWrite = (filesOf, opts, pattern) =>
+  asRefusal(() => closureEvidenceCommand(writing(opts), commandFiles(filesOf).io), pattern);
+
+test("a comparison without the per-profile status of every row is refused, even with a good combined status", () => {
+  const good = comparisonOf();
+  const strip = (change) => ({ ...good, rows: [change(good.rows[0]), ...good.rows.slice(1)] });
+  const missing = /no per-profile status: the comparison is from a comparator without/;
+  asRefusal(() => checkComparison(strip(({ profiles, ...row }) => row)), missing);
+  asRefusal(
+    () => checkComparison(strip((row) => ({ ...row, profiles: { strict: row.profiles.strict } }))),
+    missing,
+  );
+  asRefusal(
+    () =>
+      checkComparison(strip((row) => ({ ...row, profiles: { emulator: row.profiles.emulator } }))),
+    missing,
+  );
+  asRefusal(() => checkComparison(strip((row) => ({ ...row, profiles: "MATCH" }))), missing);
+  asRefusal(
+    () =>
+      checkComparison(
+        strip((row) => ({
+          ...row,
+          profiles: { ...row.profiles, strict: { status: "PASS", reasons: [] } },
+        })),
+      ),
+    /bad strict status or reasons/,
+  );
+  asRefusal(
+    () =>
+      checkComparison(
+        strip((row) => ({ ...row, profiles: { ...row.profiles, emulator: { status: "MATCH" } } })),
+      ),
+    /bad emulator status or reasons/,
+  );
+  // the combined status must be the worse of the two profiles: a MATCH combined over a strict DIFF is a forged row
+  asRefusal(
+    () =>
+      checkComparison(
+        strip((row) => ({
+          ...row,
+          profiles: { ...row.profiles, strict: { status: "DIFF", reasons: ["x"] } },
+        })),
+      ),
+    /combined status is not the worse of its two profiles/,
+  );
+  asRefusal(
+    () =>
+      checkComparison(
+        strip((row) => ({
+          ...row,
+          status: "DIFF",
+          profiles: {
+            emulator: { status: "MATCH", reasons: [] },
+            strict: { status: "MATCH", reasons: [] },
+          },
+        })),
+      ),
+    /combined status is not the worse/,
+  );
+});
+
+test("ledger 811: an emulator-profile DIFF does not block VERIFIED, a strict DIFF does, and a production-side fault blocks both", () => {
+  const id = "functions-events/firestore/create#new-document#v1";
+  const verifiedOf = (over) => {
+    const next = written({}, { comparison: comparisonOf({ over }) }).closure;
+    return next.conditions.find((c) => c.conditionId.endsWith("/firestore-created")).status;
+  };
+  assert.equal(verifiedOf({}), "VERIFIED");
+  assert.equal(
+    verifiedOf({ [id]: { only: { emulator: "DIFF" }, reasons: ["value $.x"] } }),
+    "VERIFIED",
+  );
+  assert.equal(
+    verifiedOf({ [id]: { only: { emulator: "INCOMPLETE" }, reasons: ["driver"] } }),
+    "VERIFIED",
+  );
+  assert.notEqual(
+    verifiedOf({ [id]: { only: { strict: "DIFF" }, reasons: ["value $.x"] } }),
+    "VERIFIED",
+  );
+  assert.notEqual(
+    verifiedOf({ [id]: { only: { strict: "INCOMPLETE" }, reasons: ["driver"] } }),
+    "VERIFIED",
+  );
+  // a production pass fault is in both profiles' status: it blocks
+  assert.notEqual(
+    verifiedOf({ [id]: { status: "INCOMPLETE", reasons: ["production pass 1: no frame"] } }),
+    "VERIFIED",
+  );
+  // the mapping keeps the two views apart
+  const comparison = checkComparison(
+    comparisonOf({ over: { [id]: { only: { emulator: "DIFF" }, reasons: ["value $.x"] } } }),
+  );
+  const entry = mapConditions(closure(), comparison).find((e) =>
+    e.conditionId.endsWith("/firestore-created"),
+  );
+  assert.equal(entry.status, "VERIFIED");
+  assert.equal(entry.match, entry.expected);
+  assert.deepEqual(entry.emulatorProfile.diffRows, [{ row: id, reasons: ["emulator: value $.x"] }]);
+  assert.equal(entry.emulatorProfile.match, entry.expected - 1);
+  const strictEntry = mapConditions(
+    closure(),
+    checkComparison(
+      comparisonOf({ over: { [id]: { only: { strict: "DIFF" }, reasons: ["value $.x"] } } }),
+    ),
+  ).find((e) => e.conditionId.endsWith("/firestore-created"));
+  assert.equal(strictEntry.status, "MISMATCH");
+  assert.deepEqual(strictEntry.diffRows, [{ row: id, reasons: ["strict: value $.x"] }]);
+  assert.equal(strictEntry.emulatorProfile.diffRows.length, 0);
+});
+
+test("the final-artifact gate is judged on strict rows too, and the report has its own emulator-profile section", () => {
+  const id = "functions-events/auth/create#admin-create#v1";
+  const withEmulatorDiff = comparisonOf({
+    over: { [id]: { only: { emulator: "DIFF" }, reasons: ["x"] } },
+  });
+  const { closure: next, evidence } = written({}, { comparison: withEmulatorDiff });
+  assert.equal(status(next, "/final-artifact-regression"), "VERIFIED");
+  assert.equal(evidence.rows.filter((r) => r.row.startsWith("functions-events/gate#")).length, 3);
+  const strictDiff = comparisonOf({ over: { [id]: { only: { strict: "DIFF" }, reasons: ["x"] } } });
+  const blocked = written({}, { comparison: strictDiff }).closure;
+  assert.notEqual(status(blocked, "/final-artifact-regression"), "VERIFIED");
+  // the report
+  const report = buildReport({
+    comparison: withEmulatorDiff,
+    mapping: mapConditions(closure(), checkComparison(withEmulatorDiff)),
+  });
+  assert.equal(report.judgedOn, "strict profile against production (owner ledger 811)");
+  assert.deepEqual(report.emulatorProfileVersusProduction, {
+    match: report.comparison.rows - 1,
+    diff: 1,
+    incomplete: 0,
+  });
+  assert.equal(report.conditions.verified, 20);
+  const text = reportText(report);
+  assert.match(text, /judged on: strict profile against production/);
+  assert.match(
+    text,
+    /emulator-profile versus production \(reported, not blocking\): \d+ MATCH, 1 DIFF, 0 INCOMPLETE rows/,
+  );
+  assert.match(text, /FUNCTIONS-EVENTS\/auth-created: 1 DIFF, 0 INCOMPLETE \(emulator profile\)/);
+  assert.doesNotMatch(text, /official/i);
+});
+
+test("M1: the comparison must be of the production run and the corpus it is written with", () => {
+  const other = "e".repeat(64);
+  // another corpus: the comparison's own digest, then the run's digest it claims
+  refusedWrite({ comparison: comparisonOf({ corpus: other }) }, {}, /another corpus than --corpus/);
+  refusedWrite(
+    {
+      comparison: comparisonOf({
+        productionRun: {
+          project: "fireemu-oracle-events",
+          recordedAt: RECORDED_AT,
+          corpusDigest: other,
+        },
+      }),
+    },
+    {},
+    /names another corpus than --production-run/,
+  );
+  // another run: recordedAt and project
+  refusedWrite(
+    {
+      comparison: comparisonOf({
+        productionRun: {
+          project: "fireemu-oracle-events",
+          recordedAt: "2026-10-04T10:00:00.000Z",
+          corpusDigest: sha256(corpusText),
+        },
+      }),
+    },
+    {},
+    /another production run than --production-run \(recordedAt differs\)/,
+  );
+  refusedWrite(
+    {
+      comparison: comparisonOf({
+        productionRun: {
+          project: "fireemu-other",
+          recordedAt: RECORDED_AT,
+          corpusDigest: sha256(corpusText),
+        },
+      }),
+    },
+    {},
+    /another project than --production-run/,
+  );
+  refusedWrite(
+    { comparison: { ...comparisonOf(), productionRun: undefined } },
+    {},
+    /names no production run/,
+  );
+  refusedWrite(
+    { comparison: { ...comparisonOf(), corpusSha256: undefined } },
+    {},
+    /names no corpus digest/,
+  );
+  // the run itself recorded against another corpus than the comparison's
+  refusedWrite({ run: runOf({ corpusDigest: other }) }, {}, /another corpus/);
+  // --corpus is not the repository's corpus, even when run and comparison agree with it
+  const foreign = `${corpusText} `;
+  refusedWrite(
+    {
+      run: runOf({ corpusDigest: sha256(foreign) }),
+      comparison: comparisonOf({
+        corpus: sha256(foreign),
+        productionRun: {
+          project: "fireemu-oracle-events",
+          recordedAt: RECORDED_AT,
+          corpusDigest: sha256(foreign),
+        },
+      }),
+      corpus: foreign,
+      repoCorpus: corpusText,
+    },
+    {},
+    /--corpus is not the repository's/,
+  );
+  // the good case still writes
+  written();
+});
+
+test("M2: the local sessions must have run the artifact, from a clean tree of the build's commit, with that commit's runner", () => {
+  const withLocal = (change) => ({
+    comparison: comparisonOf({ localBinary: { ...LOCAL, ...change } }),
+  });
+  refusedWrite(
+    { comparison: { ...comparisonOf(), localBinary: undefined } },
+    {},
+    /names no local binary/,
+  );
+  refusedWrite({ comparison: comparisonOf({ localBinary: null }) }, {}, /names no local binary/);
+  refusedWrite(
+    withLocal({ sha256: "e".repeat(64) }),
+    {},
+    /ran another binary than the artifact and the build record/,
+  );
+  refusedWrite(withLocal({ dirty: true }), {}, /uncommitted changes/);
+  refusedWrite(withLocal({ dirty: undefined }), {}, /uncommitted changes/);
+  refusedWrite(
+    withLocal({ sourceCommit: "b".repeat(40) }),
+    {},
+    /another commit than the build record/,
+  );
+  refusedWrite(
+    withLocal({ runnerTree: "6".repeat(40) }),
+    {},
+    /not the runner tree of the build's source commit/,
+  );
+  refusedWrite(
+    withLocal({ runnerSha256: "8".repeat(64) }),
+    {},
+    /not index\.mjs of the build's source commit/,
+  );
+  // the artifact the sessions ran must also be the build record's, not only the comparison's
+  refusedWrite({ build: buildOf({ binarySha256: "e".repeat(64) }) }, {}, /another binary/);
+  // git is asked for the build's commit, not another
+  const asked = [];
+  closureEvidenceCommand(writing(), {
+    ...commandFiles().io,
+    git: (args) => {
+      asked.push(args.join(" "));
+      return gitFake(args);
+    },
+  });
+  assert.deepEqual(asked, [
+    `rev-parse ${COMMIT}:tools/runner-node`,
+    `cat-file blob ${COMMIT}:tools/runner-node/index.mjs`,
+  ]);
+  // report mode needs none of it
+  closureEvidenceCommand(options(), {
+    ...commandFiles({ comparison: comparisonOf({ localBinary: null }) }).io,
+    git: () => assert.fail("report mode does not ask git"),
+  });
+});
+
+test("S1: --sandbox-ledger is required with --write, and the report mode does not need it", () => {
+  refusedWrite({}, { "sandbox-ledger": undefined }, /--sandbox-ledger is required with --write/);
+  closureEvidenceCommand(options(), commandFiles().io);
 });

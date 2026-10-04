@@ -696,10 +696,7 @@ fn handle_listen_request(
     };
     match &req.target_change {
         Some(pb::listen_request::TargetChange::AddTarget(target)) => {
-            let id = target.target_id;
-            if id == 0 {
-                return Err(Status::invalid_argument("target_id must be non-zero"));
-            }
+            let id = listen_target_id(ctx, target, targets)?;
             if targets.contains_key(&id) {
                 return Err(Status::invalid_argument(format!(
                     "target {id} is already active on this stream"
@@ -793,6 +790,33 @@ fn handle_listen_request(
         None => {}
     }
     Ok(())
+}
+
+/// The id a target is added under: its own, or for id 0 the one the server assigns.
+///
+/// The API documents that the server assigns an id to a target sent with id 0, and the official
+/// emulator does; the emulator profile may not refuse what it completes. Strict keeps its refusal
+/// until a production recording settles it (FS-LISTEN-SDK packet L1,
+/// `native/target-protocol/server-assigned-id`).
+fn listen_target_id(
+    ctx: &StreamContext,
+    target: &pb::Target,
+    targets: &BTreeMap<i32, TargetState>,
+) -> Result<i32, Status> {
+    if target.target_id != 0 {
+        return Ok(target.target_id);
+    }
+    if ctx.gateway.production_refusals() {
+        return Err(Status::invalid_argument("target_id must be non-zero"));
+    }
+    Ok(first_free_target_id(&targets.keys().copied().collect()))
+}
+
+/// The smallest positive id not in `used`: what the server assigns to a target sent with id 0.
+fn first_free_target_id(used: &BTreeSet<i32>) -> i32 {
+    (1..=i32::MAX)
+        .find(|id| !used.contains(id))
+        .unwrap_or(i32::MAX)
 }
 
 fn decode_target(
@@ -2053,5 +2077,37 @@ mod empty_write_tests {
 
         let closed = run(true).await;
         assert!(closed.is_empty(), "{closed:?}");
+    }
+}
+
+#[cfg(test)]
+mod assigned_target_id_tests {
+    use super::first_free_target_id;
+    use proptest::prelude::*;
+    use std::collections::BTreeSet;
+
+    #[test]
+    fn the_first_id_is_one_and_a_gap_is_filled_before_the_end() {
+        assert_eq!(first_free_target_id(&BTreeSet::new()), 1);
+        assert_eq!(first_free_target_id(&BTreeSet::from([1])), 2);
+        assert_eq!(first_free_target_id(&BTreeSet::from([2, 3])), 1);
+        assert_eq!(first_free_target_id(&BTreeSet::from([1, 3])), 2);
+        // Ids at or below zero never count: they do not occupy a positive id.
+        assert_eq!(first_free_target_id(&BTreeSet::from([-1, 0])), 1);
+        assert_eq!(first_free_target_id(&BTreeSet::from([i32::MAX])), 1);
+    }
+
+    proptest! {
+        #[test]
+        fn the_assigned_id_is_the_smallest_free_positive_one(
+            used in proptest::collection::btree_set(-3_i32..40, 0..30)
+        ) {
+            let id = first_free_target_id(&used);
+            prop_assert!(id >= 1);
+            prop_assert!(!used.contains(&id));
+            for smaller in 1..id {
+                prop_assert!(used.contains(&smaller));
+            }
+        }
     }
 }

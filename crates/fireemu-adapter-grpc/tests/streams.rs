@@ -67,6 +67,16 @@ async fn start_with_rules_source(
     FirestoreClient<tonic::transport::Channel>,
     tokio::task::JoinHandle<()>,
 ) {
+    start_configured(rules_source, IndexValidationPolicy::Production).await
+}
+
+async fn start_configured(
+    rules_source: Option<&str>,
+    policy: IndexValidationPolicy,
+) -> (
+    FirestoreClient<tonic::transport::Channel>,
+    tokio::task::JoinHandle<()>,
+) {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     let gateway = Gateway {
@@ -74,7 +84,7 @@ async fn start_with_rules_source(
         ctx: PlanningContext {
             edition: FirestoreEdition::Standard,
             api_mode: FirestoreApiMode::Native,
-            policy: IndexValidationPolicy::Production,
+            policy,
         },
         indexes: IndexSet::default(),
     };
@@ -2819,5 +2829,96 @@ async fn an_edited_partition_token_version_is_refused() {
         .partition_query(partition_request("edits", 4, 1, &first.next_page_token))
         .await
         .is_ok());
+    handle.abort();
+}
+
+
+/// The official emulator accepts a target with id 0 and assigns it an id (the API documents
+/// that the server assigns one); the emulator profile may not refuse what it completes. Strict
+/// keeps its refusal until a production recording settles it (FS-LISTEN-SDK packet L1).
+#[tokio::test]
+async fn emulator_profile_assigns_an_id_to_target_zero() {
+    let (mut client, handle) = start_configured(None, IndexValidationPolicy::Emulator).await;
+    client
+        .commit(pb::CommitRequest {
+            database: DB.to_owned(),
+            writes: vec![set_write("open/a", &[("v", s("1"))])],
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    let (tx, rx) = mpsc::channel(8);
+    let mut responses = client
+        .listen(ReceiverStream::new(rx))
+        .await
+        .unwrap()
+        .into_inner();
+    tx.send(add_query_target(0, "open")).await.unwrap();
+    let first = next_until(&mut responses, "NO_CHANGE[]").await;
+    assert_eq!(
+        first,
+        vec!["ADD[1]", "CHANGE a", "CURRENT[1]", "NO_CHANGE[]"],
+        "the first server-assigned id is 1"
+    );
+    // A second id-0 target gets the next free id, not one already in use.
+    tx.send(add_query_target(0, "open")).await.unwrap();
+    let second = next_until(&mut responses, "NO_CHANGE[]").await;
+    assert_eq!(second.first().map(String::as_str), Some("ADD[2]"));
+    // An id that was assigned is an id like any other: removing it removes that target.
+    tx.send(pb::ListenRequest {
+        database: DB.to_owned(),
+        target_change: Some(pb::listen_request::TargetChange::RemoveTarget(1)),
+        ..Default::default()
+    })
+    .await
+    .unwrap();
+    assert_eq!(next_until(&mut responses, "REMOVE[1]").await, vec!["REMOVE[1]"]);
+    // The freed id is the next one assigned.
+    tx.send(add_query_target(0, "open")).await.unwrap();
+    let third = next_until(&mut responses, "NO_CHANGE[]").await;
+    assert_eq!(third.first().map(String::as_str), Some("ADD[1]"));
+    handle.abort();
+}
+
+/// Near misses of the emulator profile's id 0: an explicit id already in use is still refused
+/// (as the official emulator does), and a stream whose id 0 target names a missing index is
+/// not special-cased.
+#[tokio::test]
+async fn emulator_profile_still_refuses_an_active_target_id() {
+    let (mut client, handle) = start_configured(None, IndexValidationPolicy::Emulator).await;
+    let (tx, rx) = mpsc::channel(8);
+    let mut responses = client
+        .listen(ReceiverStream::new(rx))
+        .await
+        .unwrap()
+        .into_inner();
+    tx.send(add_query_target(0, "open")).await.unwrap();
+    next_until(&mut responses, "NO_CHANGE[]").await;
+    tx.send(add_query_target(1, "open")).await.unwrap();
+    let refused = loop {
+        match responses.next().await {
+            Some(Err(status)) => break status,
+            Some(Ok(_)) => {}
+            None => panic!("the stream ended without a status"),
+        }
+    };
+    assert_eq!(refused.code(), tonic::Code::InvalidArgument);
+    assert!(refused.message().contains("already active"), "{}", refused.message());
+    handle.abort();
+}
+
+#[tokio::test]
+async fn strict_profile_still_refuses_target_zero() {
+    let (mut client, handle) = start(false).await;
+    let (tx, rx) = mpsc::channel(8);
+    let mut responses = client
+        .listen(ReceiverStream::new(rx))
+        .await
+        .unwrap()
+        .into_inner();
+    tx.send(add_query_target(0, "open")).await.unwrap();
+    let refused = responses.next().await.unwrap().unwrap_err();
+    assert_eq!(refused.code(), tonic::Code::InvalidArgument);
+    assert_eq!(refused.message(), "target_id must be non-zero");
     handle.abort();
 }

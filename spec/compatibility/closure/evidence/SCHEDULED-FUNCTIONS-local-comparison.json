@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "parent": "SCHEDULED-FUNCTIONS",
   "evidenceType": "fireemu-only",
-  "sourceCommit": "8218affac25038eae2f4b4aafd2cdcacc313d173",
+  "sourceCommit": "1688ee39aa424d806b47369c84702df4db6efaf2",
   "artifactSha256": "ebb87bf3c1a01006f44332c09eab34c91c1603c2b52a5ec2d108f612a3500368",
   "artifactBuiltFrom": "8218affac25038eae2f4b4aafd2cdcacc313d173",
   "artifactNote": "The release binary fireemu was built at artifactBuiltFrom. sourceCommit differs from it by test code, documentation and closure files only.",
@@ -216,7 +216,7 @@
       "note": "Every cargo-mutants run above also passes its unmutated baseline under the same command and test order (the first line of each mut-*.log)."
     },
     "killingTests": "mutants-killing-tests.json lists, for each caught mutant, the failing test names taken from its own log; timeouts have no test and are listed separately.",
-    "reviewRound": "2026-10-05 review round (M1 timezone-default binding, M2 overlap-policy back to PENDING, M3 README, S1 shutdown race, S2 coverageStatus check, S4 weak rows): the Rust changes are runtime.rs (on_clock_changed lock order, reset_at), snapshots.rs (Functions capture and restore) and tests; the two cargo-mutants runs above cover exactly those lines, base 035eba21e."
+    "reviewRound": "2026-10-05 review round (M1 timezone-default binding, M2 overlap-policy back to PENDING, M3 README, S1 shutdown race, S2 coverageStatus check, S4 weak rows): the Rust changes are runtime.rs (on_clock_changed lock order, reset_at), snapshots.rs (Functions capture and restore) and tests; the two cargo-mutants runs above cover exactly those lines, base 035eba21e. Round 3 (review approve-with-conditions R1): the no-default half of the time-zone test now uses generation 2 schedules (production's v2 default is UTC); test code only, no Rust mutant applies."
   },
   "rows": [
     {

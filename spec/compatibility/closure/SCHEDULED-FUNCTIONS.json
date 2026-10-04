@@ -370,12 +370,12 @@
       "coverageStatus": "covered",
       "evidence": {
         "evidenceType": "fireemu-only",
-        "sourceCommit": "8218affac25038eae2f4b4aafd2cdcacc313d173",
+        "sourceCommit": "1688ee39aa424d806b47369c84702df4db6efaf2",
         "finalArtifactSha256": "ebb87bf3c1a01006f44332c09eab34c91c1603c2b52a5ec2d108f612a3500368",
         "artifactBuiltFrom": "8218affac25038eae2f4b4aafd2cdcacc313d173",
         "runnerSha256": "56280f3e549ad5f47447f5e96feba2ae64a2af77eadc4b2bfd0e835d33dbe56a",
         "comparisonPath": "spec/compatibility/closure/evidence/SCHEDULED-FUNCTIONS-local-comparison.json",
-        "comparisonSha256": "d3377a0c43e4bcca747fa815ba84f6b0fe700490c3b28188ee15cd9c2c982cdf",
+        "comparisonSha256": "9c8608ac884cee3da38fb43bae42e79cdff830a8a512c7ee2e90088466226d3c",
         "rows": {
           "PASS": 5
         }
@@ -399,12 +399,12 @@
       "coverageStatus": "covered",
       "evidence": {
         "evidenceType": "fireemu-only",
-        "sourceCommit": "8218affac25038eae2f4b4aafd2cdcacc313d173",
+        "sourceCommit": "1688ee39aa424d806b47369c84702df4db6efaf2",
         "finalArtifactSha256": "ebb87bf3c1a01006f44332c09eab34c91c1603c2b52a5ec2d108f612a3500368",
         "artifactBuiltFrom": "8218affac25038eae2f4b4aafd2cdcacc313d173",
         "runnerSha256": "56280f3e549ad5f47447f5e96feba2ae64a2af77eadc4b2bfd0e835d33dbe56a",
         "comparisonPath": "spec/compatibility/closure/evidence/SCHEDULED-FUNCTIONS-local-comparison.json",
-        "comparisonSha256": "d3377a0c43e4bcca747fa815ba84f6b0fe700490c3b28188ee15cd9c2c982cdf",
+        "comparisonSha256": "9c8608ac884cee3da38fb43bae42e79cdff830a8a512c7ee2e90088466226d3c",
         "rows": {
           "PASS": 6
         }
@@ -430,12 +430,12 @@
       "coverageStatus": "covered",
       "evidence": {
         "evidenceType": "fireemu-only",
-        "sourceCommit": "8218affac25038eae2f4b4aafd2cdcacc313d173",
+        "sourceCommit": "1688ee39aa424d806b47369c84702df4db6efaf2",
         "finalArtifactSha256": "ebb87bf3c1a01006f44332c09eab34c91c1603c2b52a5ec2d108f612a3500368",
         "artifactBuiltFrom": "8218affac25038eae2f4b4aafd2cdcacc313d173",
         "runnerSha256": "56280f3e549ad5f47447f5e96feba2ae64a2af77eadc4b2bfd0e835d33dbe56a",
         "comparisonPath": "spec/compatibility/closure/evidence/SCHEDULED-FUNCTIONS-local-comparison.json",
-        "comparisonSha256": "d3377a0c43e4bcca747fa815ba84f6b0fe700490c3b28188ee15cd9c2c982cdf",
+        "comparisonSha256": "9c8608ac884cee3da38fb43bae42e79cdff830a8a512c7ee2e90088466226d3c",
         "rows": {
           "PASS": 8
         }
@@ -468,12 +468,12 @@
       "coverageStatus": "covered",
       "evidence": {
         "evidenceType": "fireemu-only",
-        "sourceCommit": "8218affac25038eae2f4b4aafd2cdcacc313d173",
+        "sourceCommit": "1688ee39aa424d806b47369c84702df4db6efaf2",
         "finalArtifactSha256": "ebb87bf3c1a01006f44332c09eab34c91c1603c2b52a5ec2d108f612a3500368",
         "artifactBuiltFrom": "8218affac25038eae2f4b4aafd2cdcacc313d173",
         "runnerSha256": "56280f3e549ad5f47447f5e96feba2ae64a2af77eadc4b2bfd0e835d33dbe56a",
         "comparisonPath": "spec/compatibility/closure/evidence/SCHEDULED-FUNCTIONS-local-comparison.json",
-        "comparisonSha256": "d3377a0c43e4bcca747fa815ba84f6b0fe700490c3b28188ee15cd9c2c982cdf",
+        "comparisonSha256": "9c8608ac884cee3da38fb43bae42e79cdff830a8a512c7ee2e90088466226d3c",
         "rows": {
           "PASS": 4
         }
@@ -495,12 +495,12 @@
       "coverageStatus": "covered",
       "evidence": {
         "evidenceType": "fireemu-only",
-        "sourceCommit": "8218affac25038eae2f4b4aafd2cdcacc313d173",
+        "sourceCommit": "1688ee39aa424d806b47369c84702df4db6efaf2",
         "finalArtifactSha256": "ebb87bf3c1a01006f44332c09eab34c91c1603c2b52a5ec2d108f612a3500368",
         "artifactBuiltFrom": "8218affac25038eae2f4b4aafd2cdcacc313d173",
         "runnerSha256": "56280f3e549ad5f47447f5e96feba2ae64a2af77eadc4b2bfd0e835d33dbe56a",
         "comparisonPath": "spec/compatibility/closure/evidence/SCHEDULED-FUNCTIONS-local-comparison.json",
-        "comparisonSha256": "d3377a0c43e4bcca747fa815ba84f6b0fe700490c3b28188ee15cd9c2c982cdf",
+        "comparisonSha256": "9c8608ac884cee3da38fb43bae42e79cdff830a8a512c7ee2e90088466226d3c",
         "rows": {
           "PASS": 4
         }
@@ -523,12 +523,12 @@
       "coverageStatus": "covered",
       "evidence": {
         "evidenceType": "fireemu-only",
-        "sourceCommit": "8218affac25038eae2f4b4aafd2cdcacc313d173",
+        "sourceCommit": "1688ee39aa424d806b47369c84702df4db6efaf2",
         "finalArtifactSha256": "ebb87bf3c1a01006f44332c09eab34c91c1603c2b52a5ec2d108f612a3500368",
         "artifactBuiltFrom": "8218affac25038eae2f4b4aafd2cdcacc313d173",
         "runnerSha256": "56280f3e549ad5f47447f5e96feba2ae64a2af77eadc4b2bfd0e835d33dbe56a",
         "comparisonPath": "spec/compatibility/closure/evidence/SCHEDULED-FUNCTIONS-local-comparison.json",
-        "comparisonSha256": "d3377a0c43e4bcca747fa815ba84f6b0fe700490c3b28188ee15cd9c2c982cdf",
+        "comparisonSha256": "9c8608ac884cee3da38fb43bae42e79cdff830a8a512c7ee2e90088466226d3c",
         "rows": {
           "PASS": 5
         }
@@ -551,12 +551,12 @@
       "coverageStatus": "covered",
       "evidence": {
         "evidenceType": "fireemu-only",
-        "sourceCommit": "8218affac25038eae2f4b4aafd2cdcacc313d173",
+        "sourceCommit": "1688ee39aa424d806b47369c84702df4db6efaf2",
         "finalArtifactSha256": "ebb87bf3c1a01006f44332c09eab34c91c1603c2b52a5ec2d108f612a3500368",
         "artifactBuiltFrom": "8218affac25038eae2f4b4aafd2cdcacc313d173",
         "runnerSha256": "56280f3e549ad5f47447f5e96feba2ae64a2af77eadc4b2bfd0e835d33dbe56a",
         "comparisonPath": "spec/compatibility/closure/evidence/SCHEDULED-FUNCTIONS-local-comparison.json",
-        "comparisonSha256": "d3377a0c43e4bcca747fa815ba84f6b0fe700490c3b28188ee15cd9c2c982cdf",
+        "comparisonSha256": "9c8608ac884cee3da38fb43bae42e79cdff830a8a512c7ee2e90088466226d3c",
         "rows": {
           "PASS": 5
         }
@@ -573,12 +573,12 @@
       "coverageStatus": "covered",
       "evidence": {
         "evidenceType": "fireemu-only",
-        "sourceCommit": "8218affac25038eae2f4b4aafd2cdcacc313d173",
+        "sourceCommit": "1688ee39aa424d806b47369c84702df4db6efaf2",
         "finalArtifactSha256": "ebb87bf3c1a01006f44332c09eab34c91c1603c2b52a5ec2d108f612a3500368",
         "artifactBuiltFrom": "8218affac25038eae2f4b4aafd2cdcacc313d173",
         "runnerSha256": "56280f3e549ad5f47447f5e96feba2ae64a2af77eadc4b2bfd0e835d33dbe56a",
         "comparisonPath": "spec/compatibility/closure/evidence/SCHEDULED-FUNCTIONS-local-comparison.json",
-        "comparisonSha256": "d3377a0c43e4bcca747fa815ba84f6b0fe700490c3b28188ee15cd9c2c982cdf",
+        "comparisonSha256": "9c8608ac884cee3da38fb43bae42e79cdff830a8a512c7ee2e90088466226d3c",
         "rows": {
           "PASS": 5
         }

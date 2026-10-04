@@ -379,7 +379,7 @@ fn provider_entry(
 }
 
 /// The v1 `UserRecord` wire shape, as the recorded production events carry it (frames 55, 66,
-/// 121-132, 192, 203 and 258-269 of the record named at [`whole_second_time`]):
+/// 121-132, 192, 203 and 258-269 of the record named at `whole_second_time`):
 ///
 /// - `metadata.creationTime` and `metadata.lastSignInTime` are cut to the whole second, and
 ///   `lastSignInTime` is absent while the account never signed in (an account an admin created
@@ -443,7 +443,7 @@ pub fn user_record_json(u: &UserRecord) -> Value {
 /// An Auth user event (`data` is the v1 `UserRecord`). The runner hands `id` and `time` to the
 /// 1st gen handler as `context.eventId` and `context.timestamp`; production prints the first as
 /// a UUID and the second with exactly three fractional digits (frames 55 and 66 of the record
-/// named at [`whole_second_time`]: `bfcfc370-9507-435b-9ad0-9143ff05c8db`,
+/// named at `whole_second_time`: `bfcfc370-9507-435b-9ad0-9143ff05c8db`,
 /// `2026-10-04T18:44:34.537Z`).
 #[must_use]
 pub fn auth_event(

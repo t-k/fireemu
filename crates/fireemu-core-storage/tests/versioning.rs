@@ -77,16 +77,17 @@ fn an_overwrite_in_a_versioned_bucket_keeps_the_old_generation_and_announces_it(
     assert_eq!(noncurrent[0].object.generation, first.generation);
     assert_eq!(noncurrent[0].time_deleted, t(2));
     assert_eq!(store.bytes(&noncurrent[0].object), b"before");
-    // Archived (the old generation, at the overwrite time) before Finalized (the new one).
+    // OBSERVED ORDER (FE v5, 4 of 4 deliveries): Finalized (the new generation) before Archived
+    // (the old one, at the overwrite time).
     let events = store.drain_events();
     assert_eq!(
         kinds(&events),
         vec![
-            ("archived", first.generation),
-            ("finalized", second.generation)
+            ("finalized", second.generation),
+            ("archived", first.generation)
         ]
     );
-    match &events[0] {
+    match &events[1] {
         StorageEvent::Archived { time_deleted, .. } => assert_eq!(*time_deleted, t(2)),
         other => panic!("{other:?}"),
     }
@@ -100,9 +101,10 @@ fn an_overwrite_in_an_unversioned_bucket_keeps_nothing() {
     let _ = store.drain_events();
     let second = put(&mut store, &b, "o.txt", "updated", 2);
     assert!(store.noncurrent_versions(&b, &name("o.txt")).is_empty());
-    // DOCUMENTED, UNRECORDED: production announces the replaced generation as deleted ("This
-    // includes objects that are overwritten", https://firebase.google.com/docs/functions/gcp-storage-events);
-    // the order of the two events is unrecorded.
+    // RECORDED (FE v5, both passes): production announces the replaced generation as deleted
+    // ("This includes objects that are overwritten",
+    // https://firebase.google.com/docs/functions/gcp-storage-events), and delivered Deleted before
+    // Finalized in 3 of 4 observations (the order is not guaranteed).
     assert_eq!(
         kinds(&store.drain_events()),
         vec![
@@ -326,8 +328,8 @@ fn copy_and_resumable_finalize_archive_the_destination_like_a_put() {
     assert_eq!(
         kinds(&store.drain_events()),
         vec![
-            ("archived", dst1.generation),
-            ("finalized", dst2.generation)
+            ("finalized", dst2.generation),
+            ("archived", dst1.generation)
         ]
     );
     assert_eq!(store.noncurrent_versions(&b, &name("dst.txt")).len(), 1);
@@ -355,8 +357,8 @@ fn copy_and_resumable_finalize_archive_the_destination_like_a_put() {
     assert_eq!(
         kinds(&store.drain_events()),
         vec![
-            ("archived", dst2.generation),
-            ("finalized", dst3.generation)
+            ("finalized", dst3.generation),
+            ("archived", dst2.generation)
         ]
     );
     assert_eq!(store.noncurrent_versions(&b, &name("dst.txt")).len(), 2);
@@ -383,10 +385,10 @@ fn a_refused_admission_leaves_the_store_and_its_versions_untouched() {
         },
     );
     assert!(refused.is_err());
-    // The admission saw the whole batch, Archived first.
+    // The admission saw the whole batch, Finalized first (the observed order).
     assert_eq!(seen.len(), 2);
-    assert_eq!(seen[0], ("archived", first.generation));
-    assert_eq!(seen[1].0, "finalized");
+    assert_eq!(seen[0].0, "finalized");
+    assert_eq!(seen[1], ("archived", first.generation));
     assert_eq!(
         store.get(&b, &name("o.txt")).unwrap().generation,
         first.generation
@@ -481,15 +483,20 @@ proptest! {
                     let meta = store.put(&b, &name(&key), data.into_bytes(), NewMetadata::default(), Precondition::default(), now).unwrap();
                     prop_assert!(meta.generation > last_generation, "generations strictly increase");
                     last_generation = meta.generation;
-                    if let Some(old) = model.live.insert(key.clone(), (meta.generation, usize::from(size))) {
-                        if model.versioned {
+                    match model.live.insert(key.clone(), (meta.generation, usize::from(size))) {
+                        // Observed order: Finalized, then Archived.
+                        Some(old) if model.versioned => {
                             model.noncurrent.entry(key).or_default().push(old);
+                            expected.push(("finalized", meta.generation));
                             expected.push(("archived", old.0));
-                        } else {
-                            expected.push(("deleted", old.0));
                         }
+                        // Observed order (3 of 4): Deleted, then Finalized.
+                        Some(old) => {
+                            expected.push(("deleted", old.0));
+                            expected.push(("finalized", meta.generation));
+                        }
+                        None => expected.push(("finalized", meta.generation)),
                     }
-                    expected.push(("finalized", meta.generation));
                 }
                 Op::Delete { name: n } => {
                     let key = format!("o{n}");
@@ -615,8 +622,8 @@ fn a_noncurrent_generation_can_be_the_source_of_a_copy() {
     assert_eq!(
         kinds(&store.drain_events()),
         vec![
-            ("archived", two.generation),
-            ("finalized", restored.generation)
+            ("finalized", restored.generation),
+            ("archived", two.generation)
         ]
     );
     // The live generation by number is the plain copy; an unknown one is not found and the
@@ -935,4 +942,100 @@ proptest! {
         prop_assert_eq!(page_through(&store, &b, prefix, delimiter, size), expected.clone());
         prop_assert_eq!(page_through(&store, &b, prefix, delimiter, 1000), expected);
     }
+}
+
+#[test]
+fn deleting_a_noncurrent_generation_carries_the_time_it_stopped_being_live() {
+    let mut store = StorageState::new(1);
+    let b = bucket();
+    store.set_versioning(&b, true);
+    let first = put(&mut store, &b, "o.txt", "one", 1);
+    let second = put(&mut store, &b, "o.txt", "two", 2);
+    let _ = store.drain_events();
+    // RECORDED (FE v5, v1 and v2, both passes): the Deleted event of a noncurrent generation
+    // carries `timeDeleted`, the archive instant; the live generation deleted by number does not.
+    store
+        .delete_generation(
+            &b,
+            &name("o.txt"),
+            first.generation,
+            Precondition::default(),
+        )
+        .unwrap();
+    match store.drain_events().as_slice() {
+        [StorageEvent::Deleted {
+            object,
+            time_deleted,
+            at,
+        }] => {
+            assert_eq!(object.generation, first.generation);
+            assert_eq!(*time_deleted, Some(t(2)), "the archive instant");
+            assert_eq!(*at, None, "the event is stamped when it is admitted");
+        }
+        other => panic!("{other:?}"),
+    }
+    store
+        .delete_generation(
+            &b,
+            &name("o.txt"),
+            second.generation,
+            Precondition::default(),
+        )
+        .unwrap();
+    match store.drain_events().as_slice() {
+        [StorageEvent::Deleted {
+            time_deleted, at, ..
+        }] => assert_eq!((*time_deleted, *at), (None, None)),
+        other => panic!("{other:?}"),
+    }
+}
+
+#[test]
+fn the_deleted_event_of_an_unversioned_overwrite_is_stamped_with_the_replacement_instant() {
+    let mut store = StorageState::new(1);
+    let b = bucket();
+    put(&mut store, &b, "o.txt", "before", 1);
+    let _ = store.drain_events();
+    let second = put(&mut store, &b, "o.txt", "updated", 5);
+    // RECORDED (FE v5): the Deleted event of the replaced generation has the creation instant of
+    // the new generation as its time, the same instant as the Finalized event; it carries no
+    // `timeDeleted`.
+    match store.drain_events().as_slice() {
+        [StorageEvent::Deleted {
+            time_deleted, at, ..
+        }, StorageEvent::Finalized(_)] => {
+            assert_eq!(*at, Some(second.time_created));
+            assert_eq!(*time_deleted, None);
+        }
+        other => panic!("{other:?}"),
+    }
+}
+
+#[test]
+fn versioning_is_a_tri_state_per_bucket() {
+    let mut store = StorageState::new(1);
+    let b = bucket();
+    let other = BucketName::try_new("other-bucket").unwrap();
+    // RECORDED (FE v5): never configured, enabled, and disabled are three different answers.
+    assert_eq!(store.versioning_state(&b), None);
+    store.set_versioning(&b, true);
+    assert_eq!(store.versioning_state(&b), Some(true));
+    store.set_versioning(&b, false);
+    assert_eq!(store.versioning_state(&b), Some(false));
+    assert!(!store.versioning(&b));
+    assert!(store.bucket_known(&b), "a configured bucket is known");
+    assert_eq!(store.versioning_state(&other), None);
+    // A snapshot carries every state of the buckets it owns; a clear drops them all.
+    store.set_versioning(&other, true);
+    let captured = store.capture_buckets(|bucket| bucket == b.as_str());
+    let mut restored = StorageState::new(1);
+    restored.restore_buckets(|bucket| bucket == b.as_str(), &captured);
+    assert_eq!(restored.versioning_state(&b), Some(false));
+    assert_eq!(restored.versioning_state(&other), None, "not owned");
+    // Removing a bucket drops its configuration, enabled or disabled.
+    store.remove_bucket(&b);
+    assert_eq!(store.versioning_state(&b), None);
+    assert_eq!(store.versioning_state(&other), Some(true));
+    store.clear();
+    assert_eq!(store.versioning_state(&other), None);
 }

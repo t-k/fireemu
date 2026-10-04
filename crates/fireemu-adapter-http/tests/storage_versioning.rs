@@ -169,9 +169,25 @@ fn the_bucket_resource_reads_and_writes_versioning_only() {
         ));
         assert_eq!(narrowed, json!({"versioning": {"enabled": true}}));
 
-        set_versioning(&s, false);
+        // RECORDED (FE v5): once versioning was disabled, the PATCH answer and every later read
+        // say so; a bucket never configured has no `versioning` member at all.
+        let r = call(
+            &s,
+            "PATCH",
+            &format!("/storage/v1/b/{BUCKET}"),
+            br#"{"versioning":{"enabled":false}}"#,
+        );
+        assert_eq!(r.status, 200);
+        assert_eq!(body(&r)["versioning"], json!({"enabled": false}));
         let off = body(&call(&s, "GET", &format!("/storage/v1/b/{BUCKET}"), b""));
-        assert_ne!(off["versioning"], json!({"enabled": true}), "{off}");
+        assert_eq!(off["versioning"], json!({"enabled": false}), "{off}");
+        let narrowed = body(&call(
+            &s,
+            "GET",
+            &format!("/storage/v1/b/{BUCKET}?fields=versioning"),
+            b"",
+        ));
+        assert_eq!(narrowed, json!({"versioning": {"enabled": false}}));
     }
 }
 
@@ -219,7 +235,7 @@ fn an_overwrite_in_a_versioned_bucket_archives_and_the_old_generation_is_readabl
         let second = upload(&s, "o.txt", "updated");
         assert_eq!(
             drain(&seen),
-            vec![("archived", gen(&first)), ("finalized", gen(&second))]
+            vec![("finalized", gen(&second)), ("archived", gen(&first))]
         );
         // Without a generation: the live one.
         let live = call(
@@ -414,7 +430,7 @@ fn copy_resumable_and_multipart_overwrites_archive_too() {
     let dst2 = body(&r);
     assert_eq!(
         drain(&seen),
-        vec![("archived", gen(&dst1)), ("finalized", gen(&dst2))]
+        vec![("finalized", gen(&dst2)), ("archived", gen(&dst1))]
     );
     assert_ne!(gen(&dst2), gen(&src));
     // The resumable upload path.
@@ -440,7 +456,7 @@ fn copy_resumable_and_multipart_overwrites_archive_too() {
     let dst3 = body(&done);
     assert_eq!(
         drain(&seen),
-        vec![("archived", gen(&dst2)), ("finalized", gen(&dst3))]
+        vec![("finalized", gen(&dst3)), ("archived", gen(&dst2))]
     );
 }
 
@@ -547,7 +563,7 @@ fn copy_and_rewrite_can_read_a_noncurrent_source_generation() {
         assert_ne!(gen(&restored), gen(&one), "a copy is a new generation");
         assert_eq!(
             drain(&seen),
-            vec![("archived", gen(&two)), ("finalized", gen(&restored))]
+            vec![("finalized", gen(&restored)), ("archived", gen(&two))]
         );
         // The source version is still there, and a rewrite reads it too.
         let r = call(
@@ -817,5 +833,50 @@ fn a_versions_page_token_is_a_cursor_that_survives_writes_between_pages() {
             next = p["nextPageToken"].as_str().map(str::to_owned);
         }
         assert_eq!(seen, vec![gen(&a2), gen(&b1), gen(&c1)]);
+    }
+}
+
+#[test]
+fn an_empty_bucket_named_in_firebase_json_exists_so_versioning_can_be_enabled_first() {
+    for acceptance in PROFILES {
+        let (mut s, _) = state(acceptance);
+        // The storage targets of firebase.json become per-bucket rules: the bucket is declared
+        // though nothing was uploaded to it.
+        s.rules = Arc::new(StorageRulesRegistry::per_bucket(BTreeMap::from([(
+            "secondary-bucket".to_owned(),
+            Arc::new(RulesetSlot::new(LoadedRules::default())),
+        )])));
+        let get = |name: &str| call(&s, "GET", &format!("/storage/v1/b/{name}"), b"");
+        assert_eq!(get("secondary-bucket").status, 200);
+        assert_eq!(get("undeclared-bucket").status, 404);
+        let r = call(
+            &s,
+            "PATCH",
+            "/storage/v1/b/secondary-bucket",
+            br#"{"versioning":{"enabled":true}}"#,
+        );
+        assert_eq!(r.status, 200, "{}", String::from_utf8_lossy(&r.body));
+        assert_eq!(body(&r)["versioning"], json!({"enabled": true}));
+        let r = call(
+            &s,
+            "POST",
+            "/upload/storage/v1/b/secondary-bucket/o?uploadType=media&name=a.txt",
+            b"one",
+        );
+        assert_eq!(r.status, 200);
+        let r = call(
+            &s,
+            "POST",
+            "/upload/storage/v1/b/secondary-bucket/o?uploadType=media&name=a.txt",
+            b"two",
+        );
+        assert_eq!(r.status, 200);
+        let versions = body(&call(
+            &s,
+            "GET",
+            "/storage/v1/b/secondary-bucket/o?versions=true",
+            b"",
+        ));
+        assert_eq!(versions["items"].as_array().unwrap().len(), 2, "{versions}");
     }
 }

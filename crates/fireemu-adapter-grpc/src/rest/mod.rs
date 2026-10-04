@@ -7,6 +7,7 @@
 #![allow(clippy::result_large_err)]
 
 pub mod coverage;
+pub(crate) mod document_response;
 pub mod json;
 pub mod json_syntax;
 pub mod transcode;
@@ -606,6 +607,64 @@ pub(crate) fn production_document_not_found(
         && error.get("status").and_then(Value::as_str) == Some("NOT_FOUND")
         && error.get("message").and_then(Value::as_str)
             == Some(format!("Document \"{name}\" not found.").as_str())
+}
+
+/// Selects only single-document success bodies from the existing production routes.
+/// This changes framing without adding any request refusal or consulting limits.
+pub(crate) fn production_document_success(
+    state: &RestState,
+    req: &RestRequest,
+    response: &RestResponse,
+) -> bool {
+    if !state.gateway.production_refusals() || response.status != 200 {
+        return false;
+    }
+    let Some(body) = response.body.as_object() else {
+        return false;
+    };
+    if body.keys().any(|key| {
+        !matches!(
+            key.as_str(),
+            "name" | "fields" | "createTime" | "updateTime"
+        )
+    }) || body.get("fields").is_some_and(|value| !value.is_object())
+        || ["createTime", "updateTime"]
+            .iter()
+            .any(|key| body.get(*key).is_some_and(|value| !value.is_string()))
+    {
+        return false;
+    }
+    let Some(name) = body.get("name").and_then(Value::as_str) else {
+        return false;
+    };
+    let Ok(Some((path, None))) = decoded_rest_route(req, true) else {
+        return false;
+    };
+    match (req.method.as_str(), classify(&path)) {
+        ("GET" | "PATCH", Ok(Target::Resource(resource))) => {
+            resource.split('/').nth(5).is_some() && name == resource
+        }
+        (
+            "POST",
+            Ok(Target::Collection {
+                parent,
+                collection_id,
+            }),
+        ) => {
+            let prefix = format!("{parent}/{collection_id}/");
+            let Some(id) = name
+                .strip_prefix(&prefix)
+                .filter(|id| !id.is_empty() && !id.contains('/'))
+            else {
+                return false;
+            };
+            let params = query_params(&req.query);
+            first(&params, "documentId")
+                .filter(|id| !id.is_empty())
+                .is_none_or(|requested| requested == id)
+        }
+        _ => false,
+    }
 }
 
 /// The caller of a REST request: its principal plus the reset epoch the request started in

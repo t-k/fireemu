@@ -227,16 +227,36 @@ const frozen = new Map(
     .map((c) => [c.conditionId, new Set(c.cases)]),
 );
 
-test("the case table has 47 uniquely named cases inside the frozen closure inventory", () => {
-  assert.equal(CASES.length, 47);
+test("the case table has 46 uniquely named cases inside the frozen closure inventory", () => {
+  assert.equal(CASES.length, 46);
   assert.equal(new Set(CASES.map((c) => c.id)).size, CASES.length);
   const seen = new Set();
   for (const c of CASES) {
     assert.ok(frozen.get(c.conditionId)?.has(c.case), c.conditionId + "#" + c.case);
-    const key = c.conditionId + "#" + c.case;
-    assert.ok(!seen.has(key), "one probe per frozen case: " + key);
-    seen.add(key);
+    for (const own of [c, ...(c.alsoCovers ?? [])]) {
+      assert.ok(frozen.get(own.conditionId)?.has(own.case), own.conditionId + "#" + own.case);
+      const key = own.conditionId + "#" + own.case;
+      assert.ok(!seen.has(key), "one probe per frozen case: " + key);
+      seen.add(key);
+    }
   }
+});
+
+test("the one merged probe is the request of both frozen cases it covers", () => {
+  const merged = CASES.filter((c) => c.alsoCovers);
+  assert.deepEqual(
+    merged.map((c) => [c.id, c.alsoCovers.map((a) => a.case)]),
+    [["tz01", ["omitted-options"]]],
+  );
+  const [tz01] = merged;
+  assert.equal(tz01.schedule, "0 9 * * *");
+  assert.equal(tz01.timeZone, "UTC");
+  assert.ok(!tz01.retryConfig && !tz01.attemptDeadline);
+  // No other case has the same create request.
+  const requests = CASES.map((c) =>
+    JSON.stringify([c.schedule, c.timeZone, c.retryConfig, c.attemptDeadline, c.timing]),
+  );
+  assert.equal(new Set(requests).size, CASES.length);
 });
 
 test("every calendar-observable frozen case is covered except the two that need a deployment", () => {
@@ -252,7 +272,11 @@ test("every calendar-observable frozen case is covered except the two that need 
     "timezone-validation-defaults#v1-default",
     "timezone-validation-defaults#v2-default",
   ]);
-  const covered = new Set(CASES.map((c) => c.conditionId.split("/")[1] + "#" + c.case));
+  const covered = new Set(
+    CASES.flatMap((c) => [c, ...(c.alsoCovers ?? [])]).map(
+      (c) => c.conditionId.split("/")[1] + "#" + c.case,
+    ),
+  );
   for (const condition of calendar)
     for (const name of frozen.get(condition)) {
       const key = condition.split("/")[1] + "#" + name;
@@ -643,7 +667,7 @@ test("importing the module sends nothing and reads no environment", () => {
   assert.ok(!/process\.env|child_process|fetch\(/.test(source));
 });
 
-test("when production accepts all 47 the run still fits the budget and cleans up", async () => {
+test("when production accepts all 46 the run still fits the budget and cleans up", async () => {
   const server = fakeServer();
   const { result } = await run(server);
   assert.ok(result.attempted <= MAX_REQUESTS, "attempted " + result.attempted);
@@ -656,7 +680,7 @@ test("a run that cannot afford to clean up another job skips it and still cleans
   const server = fakeServer({ refuse: refuseSecond });
   const { result } = await run(server, { budget: 90 });
   const skipped = result.cases.filter((c) => c.outcome === "skipped-budget");
-  assert.ok(skipped.length > 0, "a budget of 90 cannot take all 47");
+  assert.ok(skipped.length > 0, "a budget of 90 cannot take all 46");
   assert.ok(skipped.every((c) => !c.issued));
   assert.ok(result.attempted <= 90, "attempted " + result.attempted);
   // Everything it did create is gone and the topic with it.

@@ -190,7 +190,11 @@
     "conditionId": "SCHEDULED-FUNCTIONS/timezone-validation-defaults",
     "case": "explicit-UTC",
     "schedule": "0 9 * * *",
-    "timeZone": "UTC"
+    "timeZone": "UTC",
+    "alsoCovers": [
+      { "conditionId": "SCHEDULED-FUNCTIONS/retry-config-validation", "case": "omitted-options" }
+    ],
+    "note": "One create serves two frozen cases: an explicit UTC zone and no retryConfig or attemptDeadline are the same request as the omitted-options case, so a second job would add cost and no evidence"
   },
   {
     "id": "tz02",
@@ -291,13 +295,6 @@
     "case": "non-DST-zone-control",
     "schedule": "30 2 14 3 *",
     "timeZone": "Asia/Tokyo"
-  },
-  {
-    "id": "rt01",
-    "conditionId": "SCHEDULED-FUNCTIONS/retry-config-validation",
-    "case": "omitted-options",
-    "schedule": "0 9 * * *",
-    "timeZone": "UTC"
   },
   {
     "id": "rt02",

@@ -18,7 +18,7 @@ test("without --send the runner prints the plan and sends nothing", () => {
   assert.equal(out.status, 0, out.stderr);
   const plan = JSON.parse(out.stdout.slice(0, out.stdout.indexOf("}\n") + 1));
   assert.equal(plan.project, "fireemu-oracle-sbx");
-  assert.equal(plan.cases, 47);
+  assert.equal(plan.cases, 46);
   assert.match(plan.packetDigest, /^[0-9a-f]{64}$/);
   assert.match(out.stdout, /plan only: nothing was sent/);
 });

@@ -13,6 +13,7 @@ const PAGE_LIMIT = 50;
 
 async function listOwned({ client, ownership, project, kind, list, report }) {
   const found = new Set();
+  let failed = false;
   let pageToken;
   for (let page = 0; page < PAGE_LIMIT; page += 1) {
     const reply = await client[list](project, {
@@ -21,6 +22,7 @@ async function listOwned({ client, ownership, project, kind, list, report }) {
     });
     if (!reply.ok) {
       report.errors.push(`${list}: ${reply.code}`);
+      failed = true;
       break;
     }
     for (const item of reply.body?.[LIST_KEY[kind]] ?? [])
@@ -28,12 +30,12 @@ async function listOwned({ client, ownership, project, kind, list, report }) {
     pageToken = reply.body?.nextPageToken;
     if (!pageToken) break;
   }
-  return found;
+  return { found, failed };
 }
 
 /**
  * Deletes what the run created. `client` is a REST client, `known` the names the run created, which are
- * deleted even when a listing failed. Returns what was deleted, what was already gone, and what is left.
+ * tried for a kind whose listing failed. Returns what was deleted, what was already gone, and what is left.
  */
 export async function cleanup({
   client,
@@ -45,17 +47,28 @@ export async function cleanup({
 }) {
   const report = { deleted: [], alreadyGone: [], leftover: [], errors: [] };
   const probes = new Set(ownership.probes());
+  // A probe name the service refuses as invalid cannot exist: it answers INVALID_ARGUMENT to a read and
+  // to a deletion, which is as gone as NOT_FOUND.
+  const goneCodes = (name) => (probes.has(name) ? ["NOT_FOUND", "INVALID_ARGUMENT"] : ["NOT_FOUND"]);
   const kindOf = (name) => name.split("/")[2];
   for (const [kind, list, get, remove] of KINDS) {
-    const names = await listOwned({ client, ownership, project, kind, list, report });
-    for (const name of [...known, ...probes])
+    const { found: names, failed } = await listOwned({
+      client,
+      ownership,
+      project,
+      kind,
+      list,
+      report,
+    });
+    // The names the run issued are only tried when the listing could not be read.
+    for (const name of [...(failed ? known : []), ...probes])
       if (kindOf(name) === kind && ownership.isOwned(name)) names.add(name);
     for (const name of names) {
       // A probe may have been refused, so it is read before it is deleted.
       let reply = await client[remove](name);
       if (reply.unknown) reply = await client[remove](name);
       if (reply.ok) report.deleted.push(name);
-      else if (reply.code === "NOT_FOUND") report.alreadyGone.push(name);
+      else if (goneCodes(name).includes(reply.code)) report.alreadyGone.push(name);
       else {
         report.errors.push(`${remove} ${name}: ${reply.code}`);
         continue;
@@ -64,7 +77,7 @@ export async function cleanup({
       for (let attempt = 0; attempt < readBackAttempts && !gone; attempt += 1) {
         if (attempt > 0) await sleep(2000);
         const back = await client[get](name);
-        gone = back.code === "NOT_FOUND";
+        gone = goneCodes(name).includes(back.code);
       }
       if (!gone) report.leftover.push(name);
     }

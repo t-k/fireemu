@@ -135,6 +135,20 @@ test("registered probes and known names are deleted even when no listing shows t
   assert.deepEqual(report.deleted.toSorted(), [knownName, probe].toSorted());
 });
 
+test("the issued names are not tried while the listing can be read", async () => {
+  const knownName = mine("topics", "issued-but-never-created");
+  const service = fakeService({ resources: [] });
+  const report = await cleanup({
+    client: service.client,
+    ownership: own,
+    project: "demo-project",
+    known: [knownName],
+    sleep,
+  });
+  assert.deepEqual(report.deleted.concat(report.alreadyGone), []);
+  assert.equal(service.calls.filter((call) => call.method === "DELETE").length, 0);
+});
+
 test("a probe the service refused to create is already gone, not an error", async () => {
   const probe = own.registerProbe("projects/demo-project/topics/never-created");
   const service = fakeService({ resources: [] });

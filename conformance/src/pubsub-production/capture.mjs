@@ -64,10 +64,12 @@ export function createFileJournal(path) {
 /** The capture of a recording: numbers each exchange and writes it, sanitized, to the journal. */
 export function createCapture({ journal, now = () => new Date() }) {
   let n = 0;
+  let unknown = 0;
   const cases = new Map();
   return Object.freeze({
     record(entry) {
       n += 1;
+      if (entry.unknown === true) unknown += 1;
       const line = { n, at: now().toISOString(), ...sanitize(entry) };
       journal.write(line);
       if (typeof entry.case === "string") cases.set(entry.case, (cases.get(entry.case) ?? 0) + 1);
@@ -78,6 +80,8 @@ export function createCapture({ journal, now = () => new Date() }) {
       journal.write({ at: now().toISOString(), note: kind, ...sanitize(data) });
     },
     count: () => n,
+    /** How many exchanges had an answer that does not say what was done. */
+    unknownCount: () => unknown,
     perCase: () => Object.fromEntries(cases),
   });
 }

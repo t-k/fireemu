@@ -37,6 +37,7 @@ export function createOwnership({ project, runId }) {
     `^projects/${escaped(project)}/(${KINDS.join("|")})/${escaped(prefix)}[A-Za-z0-9._~+%-]*$`,
   );
   const probes = new Set();
+  const issued = new Set();
   const probePattern = new RegExp(`^projects/${escaped(project)}/(${KINDS.join("|")})/[^/]+$`);
   const isOwned = (name) => typeof name === "string" && (pattern.test(name) || probes.has(name));
   return Object.freeze({
@@ -47,8 +48,12 @@ export function createOwnership({ project, runId }) {
       if (!KINDS.includes(kind)) throw new Error(`unknown resource kind ${kind}`);
       const id = `${prefix}${key}`;
       if (id.length > 255) throw new Error("a resource ID is at most 255 characters");
-      return `projects/${project}/${kind}/${id}`;
+      const name = `projects/${project}/${kind}/${id}`;
+      issued.add(name);
+      return name;
     },
+    /** Every name `resource` gave out, whether or not the recorder ever created it. */
+    issued: () => [...issued],
     /** Names the recorder sends on purpose although they cannot carry the prefix. */
     registerProbe: (name) => {
       if (typeof name !== "string" || !probePattern.test(name))

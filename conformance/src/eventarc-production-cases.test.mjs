@@ -25,6 +25,10 @@ function channelService({
   failWith = new Map(),
   unknownDelete = false,
   deleteNeverDone = false,
+  deleteError = undefined,
+  deleteNoEffect = false,
+  deleteLate = false,
+  deleteBadAnswer = false,
   doneAfter = 1,
 } = {}) {
   const live = new Set(existing);
@@ -35,7 +39,7 @@ function channelService({
     calls,
     async request(call) {
       const { method, path, op } = call;
-      calls.push({ method, path, op });
+      calls.push({ method, path, op, caseId: call.label?.case });
       const bare = decodeURIComponent(path.split("?")[0].replace(/^\/v1\//, ""));
       if (op === "getOperation") {
         const state = operations.get(bare) ?? { reads: 0, error: undefined };
@@ -75,9 +79,18 @@ function channelService({
           live.delete(bare);
           return { status: 503, body: {}, unknown: true };
         }
+        // An unknown answer is not trusted even if its body looks like a finished operation.
+        if (deleteBadAnswer) {
+          live.delete(bare);
+          return { status: 503, body: { name: OPERATION, done: true }, unknown: true };
+        }
         if (!live.has(bare)) return NOT_FOUND;
-        operations.set(OPERATION, { reads: 0, pending: deleteNeverDone });
-        if (!deleteNeverDone) live.delete(bare);
+        operations.set(OPERATION, {
+          reads: 0,
+          pending: deleteNeverDone || deleteLate,
+          error: deleteError,
+        });
+        if ((!deleteNeverDone || deleteLate) && !deleteNoEffect) live.delete(bare);
         return { status: 200, body: { name: OPERATION, done: false }, unknown: false };
       }
       throw new Error(`unexpected ${method} ${path}`);
@@ -121,6 +134,9 @@ const posts = (service) =>
   service.calls.filter((call) => call.method === "POST").map((call) => call.path);
 const deletes = (service, suffix) =>
   service.calls.filter((call) => call.method === "DELETE" && call.path.endsWith(suffix));
+/** The deletions the case itself sent (cleanup is a separate step with its own rules). */
+const caseDeletes = (service, suffix) =>
+  deletes(service, suffix).filter((call) => call.caseId !== "cleanup");
 
 test("the lifecycle creates and deletes its channel, polls every operation, and sends the second deletion only after the recorded 404", async () => {
   const service = channelService();
@@ -330,4 +346,22 @@ test("the service-state case sends its enabled-state publish only to its own cha
     assert.equal(toFirebase, expected);
     void firebase;
   }
+});
+
+test("the second deletion needs every condition: the first answered, its operation done without an error, and the recorded 404 read back", async () => {
+  const c1 = `fe${RUN}-cl-c1`;
+  for (const [label, options] of [
+    ["an unknown answer whose body looks finished", { deleteBadAnswer: true }],
+    ["an operation done with an error, the channel gone", { deleteError: { code: 13 } }],
+    ["an operation done, the channel still there", { deleteNoEffect: true }],
+    ["an operation never done, the channel gone", { deleteLate: true }],
+  ]) {
+    const service = channelService(options);
+    await run(service);
+    assert.equal(caseDeletes(service, c1).length, 1, `${label}: the first deletion only`);
+  }
+  // Every condition met: both are sent.
+  const service = channelService();
+  await run(service);
+  assert.equal(caseDeletes(service, c1).length, 2);
 });

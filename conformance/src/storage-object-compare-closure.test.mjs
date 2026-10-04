@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -10,6 +11,7 @@ import {
   applyClosure,
   buildEvidence,
   closureEvidenceCommand,
+  finalArtifactEvidence,
   inlineJson,
   recordingsFromLedger,
   replaceConditionLines,
@@ -758,5 +760,219 @@ test("a condition is written on one line like the rest of the file, and the othe
         JSON.parse(text),
       ),
     /line|style/i,
+  );
+});
+
+const buildRecord = (over = {}) => ({
+  sourceCommit: COMMIT,
+  gitStatusOutsideBuildOutput: [],
+  cargoVersion: "cargo 1.93.0 (abcdef012 2026-01-01)",
+  locked: true,
+  binarySha256: BINARY,
+  ...over,
+});
+const gateClosure = () => {
+  const value = closure();
+  value.conditions[2].recipeIds = ["storage-object/final-artifact"];
+  return value;
+};
+const evidenceFor = () =>
+  buildEvidence({ report: report(), receipt: receipt(), fixture: fixture() }).comparison;
+
+test("the final artifact needs a build record of the compared binary: its commit, a clean tree, the cargo version, --locked and the SHA-256", () => {
+  const comparison = evidenceFor();
+  assert.deepEqual(
+    finalArtifactEvidence({ buildRecord: buildRecord(), comparison }),
+    buildRecord(),
+  );
+  const bad = {
+    "another binary": buildRecord({ binarySha256: "e".repeat(64) }),
+    "another commit": buildRecord({ sourceCommit: "e".repeat(40) }),
+    "a dirty tree": buildRecord({ gitStatusOutsideBuildOutput: [" M crates/x.rs"] }),
+    "a status that is not a list": buildRecord({ gitStatusOutsideBuildOutput: "" }),
+    "a build without --locked": buildRecord({ locked: false }),
+    "a locked flag that is not a boolean": buildRecord({ locked: "true" }),
+    "no cargo version": buildRecord({ cargoVersion: "" }),
+    "a cargo version that is not a string": buildRecord({ cargoVersion: 1 }),
+    "a malformed commit": buildRecord({ sourceCommit: "abc" }),
+    "a malformed digest": buildRecord({ binarySha256: "abc" }),
+    "an extra field": buildRecord({ extra: 1 }),
+  };
+  for (const [name, record] of Object.entries(bad))
+    refuses(
+      () => finalArtifactEvidence({ buildRecord: record, comparison }),
+      /build record/i,
+      name,
+    );
+  const missing = buildRecord();
+  delete missing.cargoVersion;
+  refuses(() => finalArtifactEvidence({ buildRecord: missing, comparison }), /build record/i);
+  for (const record of [null, [], "text", 5])
+    refuses(() => finalArtifactEvidence({ buildRecord: record, comparison }), /build record/i);
+});
+
+test("the final artifact condition gets its evidence only with a build record, and the review condition never does", () => {
+  const comparison = evidenceFor();
+  const base = {
+    closure: gateClosure(),
+    comparison,
+    recordings: recordings(),
+    comparisonPath: "cp",
+  };
+  const without = applyClosure(base);
+  assert.equal(without.conditions[2].status, "PENDING_CORPUS");
+  assert.equal(Object.hasOwn(without.conditions[2], "evidence"), false);
+  const withRecord = applyClosure({
+    ...base,
+    finalArtifact: {
+      buildRecord: buildRecord(),
+      buildRecordPath: "bp",
+      buildRecordSha256: "a".repeat(64),
+    },
+  });
+  const gate = withRecord.conditions[2];
+  assert.equal(gate.status, "VERIFIED");
+  assert.deepEqual(gate.evidence, {
+    productionRecordings: recordings(),
+    finalArtifactSha256: BINARY,
+    sourceCommit: COMMIT,
+    comparisonPath: "cp",
+    rows: { MATCH: 5 },
+    buildRecordPath: "bp",
+    buildRecordSha256: "a".repeat(64),
+  });
+  assert.equal(withRecord.conditions[3].status, "PENDING_REVIEW");
+  assert.equal(Object.hasOwn(withRecord.conditions[3], "evidence"), false);
+  refuses(
+    () =>
+      applyClosure({
+        ...base,
+        finalArtifact: {
+          buildRecord: buildRecord({ binarySha256: "e".repeat(64) }),
+          buildRecordPath: "bp",
+          buildRecordSha256: "a".repeat(64),
+        },
+      }),
+    /build record/i,
+  );
+  refuses(
+    () =>
+      applyClosure({
+        ...base,
+        finalArtifact: {
+          buildRecord: buildRecord(),
+          buildRecordPath: "",
+          buildRecordSha256: "a".repeat(64),
+        },
+      }),
+    /build record path/i,
+  );
+  refuses(
+    () =>
+      applyClosure({
+        ...base,
+        finalArtifact: {
+          buildRecord: buildRecord(),
+          buildRecordPath: "bp",
+          buildRecordSha256: "abc",
+        },
+      }),
+    /digest/i,
+  );
+  // The gate is held like any other condition.
+  const held = applyClosure({
+    ...base,
+    hold: ["STORAGE-OBJECT/final-artifact-regression"],
+    finalArtifact: {
+      buildRecord: buildRecord(),
+      buildRecordPath: "bp",
+      buildRecordSha256: "a".repeat(64),
+    },
+  });
+  assert.equal(held.conditions[2].status, "PENDING_CORPUS");
+  // A closure without a final artifact condition cannot take a build record.
+  const noGate = closure();
+  noGate.conditions = noGate.conditions.filter(
+    (c) => !c.conditionId.endsWith("/final-artifact-regression"),
+  );
+  refuses(
+    () =>
+      applyClosure({
+        ...base,
+        closure: noGate,
+        finalArtifact: {
+          buildRecord: buildRecord(),
+          buildRecordPath: "bp",
+          buildRecordSha256: "a".repeat(64),
+        },
+      }),
+    /final artifact condition/i,
+  );
+});
+
+test("the command copies the build record next to the evidence, pins its digest and sets the gate, or writes nothing", () => {
+  const dir = mkdtempSync(join(tmpdir(), "closure-evidence-gate-"));
+  const write = (name, value) => {
+    const path = join(dir, name);
+    writeFileSync(path, typeof value === "string" ? value : `${JSON.stringify(value)}\n`);
+    return path;
+  };
+  const options = (record, extra = {}) => ({
+    report: write("report.json", report()),
+    receipt: write("receipt.json", receipt()),
+    fixture: dir,
+    "sandbox-ledger": write("ledger.jsonl", `${ledgerText()}\n`),
+    closure: write("closure.json", closureText(gateClosure())),
+    out: join(dir, "comparison.json"),
+    "comparison-path": "cp",
+    "build-record": write("build.json", record),
+    "build-record-out": join(dir, "build-copy.json"),
+    "build-record-path": "bp",
+    ...extra,
+  });
+  const loadFixture = () => fixture();
+  const good = options(buildRecord());
+  closureEvidenceCommand(good, { loadFixture, log: () => {} });
+  const copy = readFileSync(good["build-record-out"], "utf8");
+  assert.equal(copy, readFileSync(good["build-record"], "utf8"));
+  const written = JSON.parse(readFileSync(good.closure, "utf8"));
+  assert.equal(written.conditions[2].status, "VERIFIED");
+  assert.equal(written.conditions[2].evidence.buildRecordPath, "bp");
+  assert.equal(
+    written.conditions[2].evidence.buildRecordSha256,
+    createHash("sha256").update(copy).digest("hex"),
+  );
+  // Without the option the gate stays as it was.
+  const plain = options(buildRecord(), {
+    "build-record": undefined,
+    "build-record-out": undefined,
+    "build-record-path": undefined,
+  });
+  closureEvidenceCommand(plain, { loadFixture, log: () => {} });
+  assert.equal(
+    JSON.parse(readFileSync(plain.closure, "utf8")).conditions[2].status,
+    "PENDING_CORPUS",
+  );
+  // The three options go together.
+  for (const name of ["build-record-out", "build-record-path"])
+    refuses(
+      () =>
+        closureEvidenceCommand(options(buildRecord(), { [name]: undefined }), {
+          loadFixture,
+          log: () => {},
+        }),
+      new RegExp(name),
+    );
+  // A record of another binary writes no file at all.
+  const bad = options(buildRecord({ binarySha256: "e".repeat(64) }), {
+    out: join(dir, "bad-comparison.json"),
+    "build-record-out": join(dir, "bad-build.json"),
+  });
+  refuses(() => closureEvidenceCommand(bad, { loadFixture, log: () => {} }), /build record/i);
+  for (const path of [bad.out, bad["build-record-out"]])
+    assert.throws(() => readFileSync(path, "utf8"), /ENOENT/);
+  assert.equal(
+    JSON.parse(readFileSync(bad.closure, "utf8")).conditions[2].status,
+    "PENDING_CORPUS",
   );
 });

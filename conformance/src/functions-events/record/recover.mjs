@@ -1,7 +1,8 @@
 // The recovery of the v4 run that ended needs-recovery: REST only, no CLI, exact names (recover-targets.mjs).
 //   1. for each of the two functions, one at a time: GET it; if a fresh 200 shows it, DELETE it once and poll the
 //      operation to done before the next;
-//   2. then the Pub/Sub objects (subscriptions first, then the topic): GET; if a fresh 200 shows one, DELETE it once;
+//   2. then the Pub/Sub objects (subscriptions first, then the topic), each only if the function that owns its trigger
+//      ended `deleted` or `absent`: GET; if a fresh 200 shows one, DELETE it once;
 //   3. read everything back in both regions: the function, Run and Eventarc lists, the project's subscription and
 //      topic lists, the two gcf-artifacts repositories and the primary bucket.
 // A DELETE is never retried. An answer that settles nothing (5xx, timeout, 3xx, unreadable) stops the deletes and goes
@@ -10,6 +11,7 @@
 
 import {
   FUNCTION_TARGETS,
+  PUBSUB_OWNER,
   RECOVERY_REGIONS,
   SUBSCRIPTION_TARGETS,
   TOPIC_TARGETS,
@@ -214,6 +216,19 @@ export async function recover({ transport, sleep, log = () => {} }) {
   ];
   for (const target of pubsub) {
     if (stop) break;
+    // An object of a trigger is deleted only after the function that owns the trigger is gone: while that function
+    // still exists, the trigger's topic and subscription stay (read back, and a problem).
+    const owner = PUBSUB_OWNER[target.id];
+    const ownerResult = record.steps.find((step) => step.resource === `function ${owner}`)?.result;
+    if (ownerResult !== "deleted" && ownerResult !== "absent") {
+      record.steps.push({
+        resource: `${target.kind} ${target.id}`,
+        result: "kept",
+        reason: `its function ${owner} is not gone (${ownerResult ?? "not processed"})`,
+      });
+      record.problems.push(`${target.kind} ${target.id}: kept, its function ${owner} is not gone`);
+      continue;
+    }
     log(`${target.kind} ${target.id}`);
     ({ stop } = await deletePubSub({ transport, record, ...target }));
   }

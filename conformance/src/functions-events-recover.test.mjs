@@ -488,3 +488,124 @@ test("the operation is polled every ten seconds, so a function that takes a minu
   );
   assert.ok(sleeps.every((s) => s === 10));
 });
+
+const PUBSUB = {
+  sub583: "eventarc-us-east1-pubsubpublishedv2-974238-sub-583",
+  sub488: "eventarc-us-central1-storagearchivedv2-494903-sub-488",
+  topic679: "eventarc-us-central1-storagearchivedv2-494903-679",
+};
+
+test("the recorded failure again: while storageArchivedV2 is still there, its trigger's subscription and topic are kept; the other function's subscription goes", async () => {
+  const { world, transport, sleep } = setup({
+    eventarcCleans: false,
+    failOperationFor: ["storageArchivedV2"],
+  });
+  const { outcome, record } = await recover({ transport, sleep });
+  assert.equal(outcome, "needs-review");
+  const deleted = deletes(world);
+  assert.ok(
+    !deleted.includes(`subscriptions/${PUBSUB.sub488}`),
+    "the subscription of the live trigger stays",
+  );
+  assert.ok(!deleted.includes(`topics/${PUBSUB.topic679}`), "the topic of the live trigger stays");
+  assert.ok(
+    !world.state.requests.some(
+      (r) => r.path.endsWith(PUBSUB.sub488) || r.path.endsWith(PUBSUB.topic679),
+    ),
+    "not even read: the owner step decides first",
+  );
+  assert.ok(
+    world.state.subscriptions.has(PUBSUB.sub488) && world.state.topics.has(PUBSUB.topic679),
+  );
+  assert.ok(
+    deleted.includes("functions/pubsubPublishedV2") &&
+      deleted.includes(`subscriptions/${PUBSUB.sub583}`),
+  );
+  const kept = record.steps.filter((s) => s.result === "kept").map((s) => s.resource);
+  assert.deepEqual(kept, [`subscription ${PUBSUB.sub488}`, `topic ${PUBSUB.topic679}`]);
+  assert.ok(
+    record.problems.some((p) => p.includes(PUBSUB.sub488) && p.includes("storageArchivedV2")),
+  );
+  assert.ok(
+    record.residue.remaining.includes(`subscription: ${PUBSUB.sub488}`),
+    "and the read-back still shows them",
+  );
+  assert.ok(record.residue.remaining.includes(`topic: ${PUBSUB.topic679}`));
+});
+
+test("each Pub/Sub object follows its own function: an owner that is deleted or already absent releases it, anything else keeps it", async () => {
+  const gone = setup({ eventarcCleans: false });
+  const first = await recover({ transport: gone.transport, sleep: gone.sleep });
+  assert.deepEqual(
+    deletes(gone.world)
+      .filter((d) => !d.startsWith("functions"))
+      .toSorted(),
+    [
+      `subscriptions/${PUBSUB.sub488}`,
+      `subscriptions/${PUBSUB.sub583}`,
+      `topics/${PUBSUB.topic679}`,
+    ].toSorted(),
+  );
+  assert.equal(first.outcome, "recovered");
+  const absent = setup({ eventarcCleans: false });
+  absent.world.state.functions.delete("us-central1/storageArchivedV2");
+  const second = await recover({ transport: absent.transport, sleep: absent.sleep });
+  assert.ok(
+    deletes(absent.world).includes(`topics/${PUBSUB.topic679}`),
+    "an absent owner releases its objects",
+  );
+  assert.equal(
+    second.record.steps.find((s) => s.resource === "function us-central1/storageArchivedV2").result,
+    "absent",
+  );
+  // the Pub/Sub function stuck: only its own subscription is kept, the storage function's objects still go
+  const stuck = setup({ eventarcCleans: false, failOperationFor: ["pubsubPublishedV2"] });
+  const third = await recover({ transport: stuck.transport, sleep: stuck.sleep });
+  assert.ok(!deletes(stuck.world).includes(`subscriptions/${PUBSUB.sub583}`));
+  assert.ok(
+    deletes(stuck.world).includes(`subscriptions/${PUBSUB.sub488}`) &&
+      deletes(stuck.world).includes(`topics/${PUBSUB.topic679}`),
+  );
+  assert.deepEqual(
+    third.record.steps.filter((s) => s.result === "kept").map((s) => s.resource),
+    [`subscription ${PUBSUB.sub583}`],
+  );
+  // an owner whose read settled nothing, or whose operation never finished, keeps its objects too
+  for (const options of [
+    {
+      eventarcCleans: false,
+      failures: [
+        { match: (m, u) => m === "GET" && u.endsWith("/functions/storageArchivedV2"), status: 503 },
+      ],
+    },
+    { eventarcCleans: false, neverDone: ["storageArchivedV2"] },
+  ]) {
+    const { world, transport, sleep } = setup(options);
+    await recover({ transport, sleep });
+    assert.ok(
+      !deletes(world).includes(`subscriptions/${PUBSUB.sub488}`) &&
+        !deletes(world).includes(`topics/${PUBSUB.topic679}`),
+      JSON.stringify(Object.keys(options)),
+    );
+  }
+});
+
+test("when a function delete has no usable answer, the later Pub/Sub objects are not even considered", async () => {
+  const { world, transport, sleep } = setup({
+    eventarcCleans: false,
+    failures: [
+      {
+        match: (m, u) => m === "DELETE" && u.endsWith("/functions/storageArchivedV2"),
+        status: 503,
+      },
+    ],
+  });
+  const { record } = await recover({ transport, sleep });
+  assert.deepEqual(deletes(world), ["functions/storageArchivedV2"]);
+  assert.equal(
+    record.steps.filter(
+      (s) => s.resource.startsWith("subscription") || s.resource.startsWith("topic"),
+    ).length,
+    0,
+  );
+});

@@ -241,10 +241,7 @@ export async function recordSdk({
   let native;
   const productionRequests = () =>
     production
-      ? preflightRequests +
-        (accountClient?.requestCount?.() ?? 0) +
-        (native?.requestCount?.() ?? 0) +
-        wire
+      ? preflightRequests + accountClient.requestCount() + (native?.requestCount?.() ?? 0) + wire
       : null;
   // The key must belong to this project before an account is made or a request is signed in.
   if (production)

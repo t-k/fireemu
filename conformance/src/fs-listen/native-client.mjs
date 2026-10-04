@@ -23,6 +23,13 @@ export function grpcAddress(target) {
     : { address: `${target.host}:${target.port}`, secure: false };
 }
 
+/** The channel credentials of a target: TLS for production, plaintext for a loopback port. */
+export function credentialsFor(target) {
+  return grpcAddress(target).secure
+    ? grpc.credentials.createSsl()
+    : grpc.credentials.createInsecure();
+}
+
 export function createNativeClient({
   project,
   target,
@@ -37,12 +44,7 @@ export function createNativeClient({
   const protos = new v1.FirestoreClient({ projectId: project })._protos.google.firestore.v1;
   const database = `projects/${project}/databases/(default)`;
   const where = grpcAddress(target);
-  const grpcClient =
-    injected ??
-    new grpc.Client(
-      where.address,
-      where.secure ? grpc.credentials.createSsl() : grpc.credentials.createInsecure(),
-    );
+  const grpcClient = injected ?? new grpc.Client(where.address, credentialsFor(target));
   const metadata = () => {
     const meta = new grpc.Metadata();
     meta.set("authorization", `Bearer ${target.kind === "production" ? bearer : "owner"}`);

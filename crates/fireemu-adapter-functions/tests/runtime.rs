@@ -3110,17 +3110,16 @@ async fn overlap_policies_skip_queue_or_reject_concurrent_schedule_runs() {
 async fn a_really_running_handler_makes_skip_and_reject_refuse_the_next_run() {
     use fireemu_adapter_functions::runtime::{CatchUpPolicy, OverlapPolicy};
     for overlap in [OverlapPolicy::Skip, OverlapPolicy::Reject] {
-        let (runtime, clock) =
-            start_with_policies_and_manifest(overlap, CatchUpPolicy::All, |m| {
-                let mut slow = parse_manifest(&json!({"functions": [{
-                    "name": "slowTick",
-                    "generation": 2,
-                    "trigger": {"type": "schedule", "schedule": "every 5 minutes"}
-                }]}))
-                .unwrap();
-                m.functions.append(&mut slow.functions);
-            })
-            .await;
+        let (runtime, clock) = start_with_policies_and_manifest(overlap, CatchUpPolicy::All, |m| {
+            let mut slow = parse_manifest(&json!({"functions": [{
+                "name": "slowTick",
+                "generation": 2,
+                "trigger": {"type": "schedule", "schedule": "every 5 minutes"}
+            }]}))
+            .unwrap();
+            m.functions.append(&mut slow.functions);
+        })
+        .await;
         runtime.run_schedule("slowTick").unwrap();
         for _ in 0..100 {
             if runtime.status()["running"].as_u64() >= Some(1) {
@@ -3128,7 +3127,11 @@ async fn a_really_running_handler_makes_skip_and_reject_refuse_the_next_run() {
             }
             tokio::time::sleep(Duration::from_millis(50)).await;
         }
-        assert_eq!(runtime.status()["running"], 1, "{overlap:?}: the handler runs");
+        assert_eq!(
+            runtime.status()["running"],
+            1,
+            "{overlap:?}: the handler runs"
+        );
         let refused = |runtime: &FunctionsRuntime| -> usize {
             let tag = match overlap {
                 OverlapPolicy::Skip => "skipped: overlap",
@@ -3152,7 +3155,11 @@ async fn a_really_running_handler_makes_skip_and_reject_refuse_the_next_run() {
             .unwrap();
         runtime.on_clock_changed();
         assert_eq!(refused(&runtime), 2, "{overlap:?}: clock-driven occurrence");
-        assert_eq!(runtime.status()["running"], 1, "{overlap:?}: still one handler");
+        assert_eq!(
+            runtime.status()["running"],
+            1,
+            "{overlap:?}: still one handler"
+        );
         runtime.shutdown().await;
     }
 }

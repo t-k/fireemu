@@ -9269,12 +9269,18 @@ mod tests {
         // 09:00 in Tokyo (UTC+9) is 00:00 UTC; 09:00 UTC is nine hours later.
         assert_eq!(
             occurrence(Some("Asia/Tokyo")),
-            [("daily".to_owned(), at(0)), ("pinned".to_owned(), at(9 * 3600))],
+            [
+                ("daily".to_owned(), at(0)),
+                ("pinned".to_owned(), at(9 * 3600))
+            ],
             "the configured default moves a schedule that names no zone and leaves a named one",
         );
         assert_eq!(
             occurrence(None),
-            [("daily".to_owned(), at(9 * 3600)), ("pinned".to_owned(), at(9 * 3600))],
+            [
+                ("daily".to_owned(), at(9 * 3600)),
+                ("pinned".to_owned(), at(9 * 3600))
+            ],
             "without a configured default a schedule that names no zone runs in UTC",
         );
     }

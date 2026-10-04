@@ -355,6 +355,9 @@ export function programProblems(programs) {
           usesStream(step.stream);
           if (step.target.doc !== undefined) usesDoc(step.target.doc);
           break;
+        case "settle":
+        case "sleep":
+          break;
         case "remove":
         case "wait":
           usesStream(step.stream);
@@ -370,9 +373,6 @@ export function programProblems(programs) {
             problems.push(`${here}: row ${step.row} must start with ${program.id}/`);
           if (rowIds.has(step.row)) problems.push(`${here}: row ${step.row} is recorded twice`);
           rowIds.add(step.row);
-          break;
-        case "settle":
-        case "sleep":
           break;
         case "close":
           usesStream(step.stream);

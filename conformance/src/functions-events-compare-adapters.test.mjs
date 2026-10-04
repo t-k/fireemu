@@ -5,6 +5,7 @@ import {
   fromLocalSession,
   fromProductionRun,
   parseTimeMs,
+  validMatchKey,
 } from "./functions-events/compare/adapters.mjs";
 
 const DIGEST = "a".repeat(64);
@@ -272,4 +273,69 @@ test("a local session that is not LOCAL_ONLY or repeats a program is refused", (
   twice.programs.push(twice.programs[0]);
   assert.throws(() => fromLocalSession(twice), /twice/);
   assert.throws(() => fromLocalSession(localSession({}, { programs: null })), /programs/);
+});
+
+test("years before 100 are refused because Date.UTC would move them to the 1900s", () => {
+  assert.equal(parseTimeMs("0050-01-01T00:00:00Z"), null);
+});
+
+test("matchKey shapes: bucket, bulk values and kinds are checked", () => {
+  assert.equal(validMatchKey({ kind: "storage", value: "o", bucket: "" }), false);
+  assert.equal(validMatchKey({ kind: "storage", value: "o", bucket: "b" }), true);
+  assert.equal(validMatchKey({ kind: "firestore", values: ["a"] }), false);
+  assert.equal(validMatchKey({ kind: "auth", values: ["a", ""] }), false);
+  assert.equal(validMatchKey({ kind: "auth", values: ["a", "b"] }), true);
+  assert.equal(validMatchKey({ kind: "ftp", value: "x" }), false);
+  assert.equal(validMatchKey(null), false);
+});
+
+test("an instant source call is valid; a missing role, handler or generation is an issue", () => {
+  const record = run();
+  record.passes[0].operations = [
+    operation({ endedAt: "2026-10-04T00:00:00.000Z" }),
+    operation({ role: undefined }),
+  ];
+  record.frames.push(
+    { ...record.frames[0], insertId: "h", handler: "" },
+    { ...record.frames[0], insertId: "g", generation: 3 },
+  );
+  const production = fromProductionRun(record);
+  assert.deepEqual(
+    production.passes[0].operations.map((op) => op.issues),
+    [[], ["operation role is not a string"]],
+  );
+  assert.deepEqual(
+    production.frames.slice(1).map((frame) => frame.issues),
+    [
+      ["frame handler is missing", "frame handler disagrees with the record handler"],
+      ["frame generation is not 1 or 2", "frame generation disagrees with the record generation"],
+    ],
+  );
+});
+
+test("the same insertId read with another log time is a conflict, not a duplicate", () => {
+  const record = run();
+  record.frames.push({ ...record.frames[0], logTimestamp: "2026-10-04T00:00:03Z" });
+  const production = fromProductionRun(record);
+  assert.equal(production.duplicateFrames, 0);
+  assert.ok(
+    production.frames.every((frame) =>
+      frame.issues.includes("insertId read with different content"),
+    ),
+  );
+});
+
+test("a local operation without a valid matchKey or scenario is an issue, never a crash", () => {
+  const raw = JSON.stringify(v2Frame("fe_events_primary/eloc", "2026-10-04T00:00:00Z"));
+  const session = localSession({ v2: [{ sequence: 1, rawJson: raw }] });
+  delete session.programs[0].operations[0].matchKey;
+  delete session.programs[0].operations[0].scenarioId;
+  const [op] = fromLocalSession(session).programs.get(
+    "functions-events/firestore/create",
+  ).operations;
+  assert.deepEqual(op.issues, [
+    "local operation scenarioId is not a string",
+    "local operation matchKey is not a valid role key",
+    "local v2 frame 1 does not match the operation matchKey",
+  ]);
 });

@@ -52,7 +52,7 @@ test("placeholder table refuses an empty or missing role value", () => {
   assert.throws(() =>
     placeholderTable({ matchKey: { kind: "firestore", value: "a/b" }, project: "" }),
   );
-  assert.throws(() => placeholderTable({ matchKey: null, project: "p" }));
+  assert.throws(() => placeholderTable({ matchKey: null, project: "p" }), /matchKey is required/);
 });
 
 test("placeholders replace in values and keys in one pass, never inside an inserted token", () => {
@@ -227,4 +227,128 @@ test("local comparison reports deterministic value, presence, type, format and o
     "emulator",
   );
   assert.deepEqual(typed, ["emulator: type $.id (production string, local number)"]);
+});
+
+test("placeholder edge cases: no empty source, one token per source, literal matching, empty table", () => {
+  const trailing = placeholderTable({
+    matchKey: { kind: "storage", value: "dir/", bucket: "b" },
+    project: "p",
+  });
+  assert.ok(trailing.every(([source]) => source.length > 0));
+  assert.equal(applyPlaceholders("x", trailing), "x");
+
+  const shared = placeholderTable({
+    matchKey: { kind: "storage", value: "o", bucket: "p" },
+    project: "p",
+  });
+  assert.deepEqual(shared, [
+    ["o", "<key.value>"],
+    ["p", "<key.bucket>"],
+  ]);
+  assert.equal(applyPlaceholders("p", shared), "<key.bucket>");
+
+  assert.equal(applyPlaceholders("axb a.b", [["a.b", "<x>"]]), "axb <x>");
+  assert.deepEqual(applyPlaceholders({ a: ["x", 1] }, []), { a: ["x", 1] });
+});
+
+test("the production-only listing keeps sorted names only, never a value", () => {
+  const { listing } = splitProductionOnly({
+    event: { eventKeys: ["id", "data"], extensionAttributes: "secret-trace" },
+  });
+  assert.deepEqual(listing, {
+    "$.event.eventKeys": ["data", "id"],
+    "$.event.extensionAttributes": [],
+  });
+  const all = splitProductionOnly({
+    event: {
+      extensionAttributes: {},
+      eventKeys: [],
+      context: { contextKeys: [], contextExtras: {} },
+    },
+  }).listing;
+  assert.deepEqual(Object.keys(all), [
+    "$.event.context.contextExtras",
+    "$.event.context.contextKeys",
+    "$.event.eventKeys",
+    "$.event.extensionAttributes",
+  ]);
+  assert.equal(JSON.stringify(listing).includes("secret"), false);
+});
+
+test("format descriptors keep the zone and treat an empty string as text", () => {
+  assert.deepEqual(formatOf("2026-10-01T08:49:26.486+09:00"), {
+    kind: "timestamp",
+    length: 29,
+    fractionDigits: 3,
+    zone: "+09:00",
+  });
+  assert.deepEqual(formatOf(""), { kind: "text", length: 0 });
+});
+
+test("a missing, extra or retyped container is reported once, not per child", () => {
+  const production = flatten({ list: [1, 2], object: { a: 1, b: [true] }, kept: 1 });
+  const none = new Map();
+  assert.deepEqual(compareObservation(production, none, flatten({ kept: 1 }), "x"), [
+    "x: missing-field $.list",
+    "x: missing-field $.object",
+  ]);
+  assert.deepEqual(compareObservation(flatten({ kept: 1 }), none, production, "x"), [
+    "x: extra-field $.list",
+    "x: extra-field $.object",
+  ]);
+  assert.deepEqual(
+    compareObservation(production, none, flatten({ list: "s", object: 1, kept: 1 }), "x"),
+    [
+      "x: type $.list (production array, local string)",
+      "x: type $.object (production object, local number)",
+    ],
+  );
+  const passOnly = deriveVolatile(production, flatten({ kept: 2, list: "s" }));
+  assert.deepEqual(passOnly.disagreements, [
+    "production-type $.list (array, string)",
+    "production-presence $.object (pass 1 only)",
+  ]);
+  assert.deepEqual([...passOnly.volatile.keys()], ["$.kept"]);
+});
+
+test("volatile kind, length and order are not compared; a stable kind is reported alone", () => {
+  const kind = deriveVolatile(flatten({ v: "123" }), flatten({ v: "12a" })).volatile;
+  assert.deepEqual([...kind.get("$.v")], ["kind", "value"]);
+  assert.deepEqual(compareObservation(flatten({ v: "123" }), kind, flatten({ v: "abc" }), "x"), []);
+
+  const stable = deriveVolatile(flatten({ v: "123" }), flatten({ v: "456" })).volatile;
+  assert.deepEqual(compareObservation(flatten({ v: "123" }), stable, flatten({ v: "abcd" }), "x"), [
+    "x: format $.v kind (production decimal, local text)",
+  ]);
+
+  const length = deriveVolatile(flatten({ v: "1" }), flatten({ v: "22" })).volatile;
+  assert.deepEqual(compareObservation(flatten({ v: "1" }), length, flatten({ v: "333" }), "x"), []);
+
+  const order = deriveVolatile(flatten({ o: { a: 1, b: 2 } }), flatten({ o: { b: 2, a: 1 } }));
+  assert.deepEqual([...order.volatile.get("$.o")], ["order"]);
+  assert.deepEqual(
+    compareObservation(
+      flatten({ o: { a: 1, b: 2 } }),
+      order.volatile,
+      flatten({ o: { b: 2, a: 1 } }),
+      "x",
+    ),
+    [],
+  );
+  const keySet = deriveVolatile(flatten({ o: { a: 1 } }), flatten({ o: { b: 1 } }));
+  assert.equal(keySet.volatile.has("$.o"), false, "a key-set change is presence, not order");
+  const grown = deriveVolatile(
+    flatten({ o: { b: 1, a: 1 } }),
+    flatten({ o: { a: 1, b: 1, c: 1 } }),
+  );
+  assert.equal(grown.volatile.has("$.o"), false, "a reordered superset is presence, not order");
+  assert.deepEqual(
+    compareObservation(
+      flatten({ o: { b: 1, a: 1 } }),
+      new Map(),
+      flatten({ o: { a: 1, b: 1, c: 1 } }),
+      "x",
+    ),
+    ["x: extra-field $.o.c"],
+  );
 });

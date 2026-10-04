@@ -209,16 +209,40 @@ const namespace = [
     /did not answer with a list/,
   ],
   [
-    "an API key of another project",
+    "an API key of another project (another project number)",
+    "preflight.api-key-project",
+    { json: { authorizedDomains: [], projectId: "999999999999" } },
+    /does not belong to the sandbox project/,
+  ],
+  [
+    "an API key answer that names the project by its id string",
+    "preflight.api-key-project",
+    { json: { projectId: "fireemu-oracle-events" } },
+    /not a project number/,
+  ],
+  [
+    "an API key answer that names another project id string",
     "preflight.api-key-project",
     { json: { projectId: "another-project" } },
-    /does not belong to the sandbox project/,
+    /not a project number/,
   ],
   [
     "an API key read that names no project",
     "preflight.api-key-project",
     { json: {} },
-    /does not belong/,
+    /not a project number/,
+  ],
+  [
+    "an API key answer whose projectId is a number, not a digit string",
+    "preflight.api-key-project",
+    { json: { projectId: 123456789012 } },
+    /not a project number/,
+  ],
+  [
+    "an API key answer with digits and a suffix",
+    "preflight.api-key-project",
+    { json: { projectId: `${NUMBER}x` } },
+    /not a project number/,
   ],
 ];
 for (const [label, id, change, pattern] of namespace) {
@@ -258,4 +282,39 @@ test("IAM pairs redact user accounts and the diff names what was added and remov
     added: ["roles/pubsub.publisher serviceAccount:b@x (conditional)"],
     removed: ["roles/run.invoker serviceAccount:a@x"],
   });
+});
+
+test("the key is bound to the project number read in the same run, never to a fixed number", async () => {
+  // the same answer is right for one run and wrong for another whose project read gives another number
+  const other = healthy();
+  other["preflight.project"] = {
+    status: 200,
+    json: { projectId: PROJECT, lifecycleState: "ACTIVE", projectNumber: "555555555555" },
+  };
+  const { problems } = await runWith(other);
+  assert.ok(
+    problems.some((p) => p.startsWith("preflight.api-key-project") && /does not belong/.test(p)),
+  );
+  other["preflight.api-key-project"] = { status: 200, json: { projectId: "555555555555" } };
+  assert.ok(
+    !(await runWith(other)).problems.some((p) => p.startsWith("preflight.api-key-project")),
+  );
+});
+
+test("without a project number from this run the key cannot be bound: fail closed", async () => {
+  for (const json of [
+    { projectId: PROJECT, lifecycleState: "ACTIVE" },
+    { projectId: PROJECT, lifecycleState: "ACTIVE", projectNumber: "not-digits" },
+    { projectId: PROJECT, lifecycleState: "DELETE_REQUESTED", projectNumber: NUMBER },
+  ]) {
+    const bodies = healthy();
+    bodies["preflight.project"] = { status: 200, json };
+    const { problems } = await runWith(bodies);
+    assert.ok(
+      problems.some(
+        (p) => p.startsWith("preflight.api-key-project") && /project number of this run/.test(p),
+      ),
+      JSON.stringify(problems),
+    );
+  }
 });

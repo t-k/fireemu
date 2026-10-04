@@ -21,6 +21,7 @@ const COLLECTION_LIST = [PRIMARY_COLLECTION, CONTROL_COLLECTION, MARKER_COLLECTI
 const COLLECTIONS = COLLECTION_LIST.join("|");
 const BUCKETS = [PRIMARY_BUCKET, CONTROL_BUCKET].map((b) => b.replaceAll(".", "\\.")).join("|");
 const TOPICS = [PRIMARY_TOPIC, CONTROL_TOPIC].join("|");
+const REPEATABLE = new Set(["updateMask.fieldPaths"]);
 const ID = "[A-Za-z0-9_-]{1,128}";
 const OBJECT = "(?:fe-events|other)%2F[A-Za-z0-9_-]{1,128}\\.txt";
 const OBJECT_NAME = /^(?:fe-events|other)\/[A-Za-z0-9_-]{1,128}\.txt$/;
@@ -408,6 +409,16 @@ export function destination({ method, url, mutation, body, headers }) {
     const keys = [...parsed.searchParams.keys()];
     if (keys.some((key) => !entry.query.has(key) && key !== "key"))
       return { problem: `${entry.name}: a query parameter is not declared` };
+    // A parameter that names one thing is sent once: the checks read the first value, and the service
+    // may read another. Only the update mask is a list.
+    const repeated = keys.find(
+      (key, index) =>
+        keys.indexOf(key) === index &&
+        parsed.searchParams.getAll(key).length > 1 &&
+        !REPEATABLE.has(key),
+    );
+    if (repeated)
+      return { problem: `${entry.name}: the query parameter ${repeated} appears more than once` };
     if (
       keys.includes("key") &&
       !["auth-sign-up", "auth-sign-in", "auth-key-project"].includes(entry.name)

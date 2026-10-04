@@ -77,7 +77,10 @@ export const healthy = () => ({
     status: 200,
     json: [{ readTime: "2026-10-04T00:00:00Z" }],
   },
-  "preflight.api-key-project": { status: 200, json: { projectId: PROJECT } },
+  "preflight.api-key-project": {
+    status: 200,
+    json: { authorizedDomains: ["localhost"], projectId: NUMBER },
+  },
   "preflight.functions-v1": { status: 200, json: {} },
   "preflight.functions-v2": { status: 200, json: {} },
   "preflight.run-services": { status: 200, json: {} },
@@ -428,7 +431,8 @@ export function createWorld({ now, rulesAllow = true }) {
     }
     // ---- Auth
     if (u.hostname === "identitytoolkit.googleapis.com") {
-      if (path === "/v1/projects" && method === "GET") return json(200, { projectId: PROJECT });
+      if (path === "/v1/projects" && method === "GET")
+        return json(200, { authorizedDomains: ["localhost"], projectId: NUMBER });
       if (path === "/v1/accounts:signUp") {
         const uid = `signup-${next()}`;
         world.users.set(uid, { email: parsed.email });

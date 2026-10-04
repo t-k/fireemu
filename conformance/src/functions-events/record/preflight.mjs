@@ -253,7 +253,7 @@ export const PREFLIGHT = [
       return found.length ? bad(`the ${collection} collection is not empty`) : ok();
     },
   })),
-  // The browser API key belongs to the sandbox project (it is read with the key, no credential).
+  // The browser API key belongs to the sandbox project (read with the key, no credential; the answer names the project number).
   {
     id: "preflight.api-key-project",
     role: "preflight",
@@ -262,10 +262,20 @@ export const PREFLIGHT = [
     auth: "apikey",
     mutation: false,
     expect: [200],
-    check: ({ json }) =>
-      json?.projectId === PROJECT
+    // Identity Toolkit answers `projectId` with the project NUMBER (a digit string); it is compared with
+    // the number the same run read from the project itself, never with a number written in the code.
+    check: ({ json }, context) => {
+      const digits = /^[0-9]{6,20}$/;
+      if (typeof context.projectNumber !== "string" || !digits.test(context.projectNumber)) {
+        return bad("the project number of this run is not known, so the API key cannot be bound");
+      }
+      if (typeof json?.projectId !== "string" || !digits.test(json.projectId)) {
+        return bad("the API key's project answer is not a project number");
+      }
+      return json.projectId === context.projectNumber
         ? ok()
-        : bad("the API key does not belong to the sandbox project"),
+        : bad("the API key does not belong to the sandbox project");
+    },
   },
 ];
 

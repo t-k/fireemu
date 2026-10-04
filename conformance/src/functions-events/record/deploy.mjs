@@ -342,7 +342,7 @@ export function summarize({ v1, v2, run, eventarc }) {
       [v1, v2, run, eventarc].every((l) => l.complete) &&
       listed.functionsListed === 0 &&
       run.items.length === 0 &&
-      listed.eventarcTriggers.length === 0,
+      eventarc.items.length === 0,
   };
 }
 

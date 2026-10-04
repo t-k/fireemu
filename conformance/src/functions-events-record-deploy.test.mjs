@@ -188,3 +188,24 @@ test("a CLI that ignores SIGTERM is killed after the grace period and the run go
   assert.equal(result.timedOut, true);
   assert.equal(result.signal, "SIGKILL");
 });
+
+test("absence needs the Eventarc list empty, not only free of our names", () => {
+  const empty = { items: [], complete: true };
+  const lists = (eventarc) => ({ v1: empty, v2: empty, run: empty, eventarc });
+  assert.equal(summarize(lists(empty)).absent, true);
+  const foreign = {
+    items: [{ name: "projects/p/locations/l/triggers/someone-elses-trigger" }],
+    complete: true,
+  };
+  assert.equal(
+    summarize(lists(foreign)).absent,
+    false,
+    "a trigger that is not ours still means the region is not empty",
+  );
+  const ours = {
+    items: [{ name: "projects/p/locations/l/triggers/fscreatedv2-123" }],
+    complete: true,
+  };
+  assert.equal(summarize(lists(ours)).absent, false);
+  assert.equal(summarize(lists({ items: [], complete: false })).absent, false);
+});

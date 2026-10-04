@@ -539,3 +539,126 @@ test("x-goog-user-project is decided per destination and pinned: every API rule 
     }).problem,
   );
 });
+
+const doubled = [
+  [
+    "documentId",
+    {
+      method: "POST",
+      url: `https://firestore.googleapis.com/v1/projects/${PROJECT}/databases/(default)/documents/fe_events_primary?documentId=e1&documentId=e2`,
+      mutation: true,
+      body: { fields: { value: { stringValue: "x" } } },
+    },
+  ],
+  [
+    "uploadType",
+    {
+      method: "POST",
+      url: `https://storage.googleapis.com/upload/storage/v1/b/${PRIMARY_BUCKET}/o?uploadType=media&uploadType=resumable&name=fe-events%2Fx.txt`,
+      mutation: true,
+      body: "t",
+    },
+  ],
+  [
+    "name",
+    {
+      method: "POST",
+      url: `https://storage.googleapis.com/upload/storage/v1/b/${PRIMARY_BUCKET}/o?uploadType=media&name=fe-events%2Fx.txt&name=secrets%2Fy.txt`,
+      mutation: true,
+      body: "t",
+    },
+  ],
+  [
+    "ifGenerationMatch",
+    {
+      method: "POST",
+      url: `https://storage.googleapis.com/upload/storage/v1/b/${PRIMARY_BUCKET}/o?uploadType=media&name=fe-events%2Fx.txt&ifGenerationMatch=0&ifGenerationMatch=5`,
+      mutation: true,
+      body: "t",
+    },
+  ],
+  [
+    "generation",
+    {
+      method: "DELETE",
+      url: `https://storage.googleapis.com/storage/v1/b/${PRIMARY_BUCKET}/o/fe-events%2Fx.txt?generation=1&generation=2`,
+      mutation: true,
+    },
+  ],
+  [
+    "fields",
+    {
+      method: "PATCH",
+      url: `https://storage.googleapis.com/storage/v1/b/${PRIMARY_BUCKET}?fields=versioning&fields=acl`,
+      mutation: true,
+      body: { versioning: { enabled: true } },
+    },
+  ],
+  [
+    "project",
+    {
+      method: "POST",
+      url: `https://storage.googleapis.com/storage/v1/b?project=${PROJECT}&project=other-project`,
+      mutation: true,
+      body: { name: CONTROL_BUCKET, location: "US-CENTRAL1" },
+    },
+  ],
+  [
+    "prefix",
+    {
+      method: "GET",
+      url: `https://storage.googleapis.com/storage/v1/b/${PRIMARY_BUCKET}/o?versions=true&prefix=fe-events%2F&prefix=secrets%2F`,
+      mutation: false,
+    },
+  ],
+  [
+    "versions",
+    {
+      method: "GET",
+      url: `https://storage.googleapis.com/storage/v1/b/${PRIMARY_BUCKET}/o?versions=true&versions=false&prefix=fe-events%2F`,
+      mutation: false,
+    },
+  ],
+  [
+    "currentDocument.exists",
+    {
+      method: "PATCH",
+      url: `https://firestore.googleapis.com/v1/projects/${PROJECT}/databases/(default)/documents/fe_events_primary/e1?currentDocument.exists=true&currentDocument.exists=false`,
+      mutation: true,
+      body: { fields: { value: { stringValue: "x" } } },
+    },
+  ],
+  [
+    "pageToken",
+    {
+      method: "GET",
+      url: `https://cloudfunctions.googleapis.com/v1/projects/${PROJECT}/locations/us-central1/functions?pageToken=a&pageToken=b`,
+      mutation: false,
+    },
+  ],
+  [
+    "key",
+    {
+      method: "POST",
+      url: "https://identitytoolkit.googleapis.com/v1/accounts:signUp?key=a&key=b",
+      mutation: true,
+      body: { email: "e1@example.test", password: "p", returnSecureToken: true },
+    },
+  ],
+];
+for (const [name, request] of doubled) {
+  test(`a repeated ${name} query parameter is refused, whichever value the check would read`, () => {
+    const answer = destination(request);
+    assert.ok(answer.problem && /more than once/.test(answer.problem), JSON.stringify(answer));
+  });
+}
+
+test("the update mask is the one parameter that may repeat", () => {
+  const answer = destination({
+    method: "PATCH",
+    url: `https://firestore.googleapis.com/v1/projects/${PROJECT}/databases/(default)/documents/fe_events_primary/e1?updateMask.fieldPaths=value&updateMask.fieldPaths=count&currentDocument.exists=true`,
+    mutation: true,
+    body: { fields: { value: { stringValue: "x" }, count: { integerValue: "2" } } },
+  });
+  assert.equal(answer.rule, "firestore-patch");
+});

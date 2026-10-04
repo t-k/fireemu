@@ -208,4 +208,17 @@ test("absence needs the Eventarc list empty, not only free of our names", () => 
   };
   assert.equal(summarize(lists(ours)).absent, false);
   assert.equal(summarize(lists({ items: [], complete: false })).absent, false);
+  // a function or a Run service that is not ours also means the region is not empty
+  const function_ = {
+    items: [{ name: "projects/p/locations/l/functions/other", status: "ACTIVE" }],
+    complete: true,
+  };
+  assert.equal(summarize({ v1: function_, v2: empty, run: empty, eventarc: empty }).absent, false);
+  assert.equal(summarize({ v1: empty, v2: function_, run: empty, eventarc: empty }).absent, false);
+  const service = { items: [{ name: "projects/p/locations/l/services/other" }], complete: true };
+  assert.equal(summarize({ v1: empty, v2: empty, run: service, eventarc: empty }).absent, false);
+  assert.equal(
+    summarize({ v1: { ...empty, complete: false }, v2: empty, run: empty, eventarc: empty }).absent,
+    false,
+  );
 });

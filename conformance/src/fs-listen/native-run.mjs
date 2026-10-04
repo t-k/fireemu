@@ -125,15 +125,14 @@ export async function runNative(
   const database = `projects/${project}/databases/(default)`;
   const rows = {};
   const errors = {};
-  /** One Commit whose names are issued first and whose answer is recorded as ok, refused or unknown. */
+  /** One Commit whose answer is recorded in the ledger as ok or unknown (a definite refusal applied nothing). */
   const commitTracked = async (request) => {
-    ledger.issue(request.writes);
     try {
       const answer = await client.commit(request);
       ledger.answered(request.writes, "ok");
       return answer;
     } catch (error) {
-      ledger.answered(request.writes, isDefinitiveRefusal(error) ? "refused" : "unknown");
+      if (!isDefinitiveRefusal(error)) ledger.answered(request.writes, "unknown");
       throw error;
     }
   };

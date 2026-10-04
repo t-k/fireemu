@@ -598,6 +598,7 @@ test("recordSdk: what it records when the driver fails, and that it closes the n
     assert.equal(out.requests, 0);
     assert.equal(out.connections, 0);
     assert.equal(out.cleanup.clientsClosed, false);
+    assert.equal(out.cleanup.writesKnown, false);
     assert.equal(out.cleanup.sdk, null);
     assert.deepEqual(out.rows, {});
     assert.equal(closed, 2);

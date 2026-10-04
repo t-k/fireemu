@@ -982,11 +982,10 @@ test("runNative reports every name it issued with what each answer said", async 
   const issued = Object.fromEntries(
     out.issued.map(([name, state]) => [name.split("-").at(-1), state]),
   );
-  // a: created (ok), then deleted (ok); b: refused (code 3); c: unknown (code 14);
+  // a: created (ok), then deleted (ok); b: refused (code 3), nothing issued; c: unknown (code 14);
   // d: only ever deleted, and the delete's answer was unknown.
   assert.deepEqual(issued, {
     a: { present: false, unknownDelete: false },
-    b: { present: false, unknownDelete: false },
     c: { present: "unknown", unknownDelete: false },
     d: { present: "unknown", unknownDelete: true },
   });
@@ -1042,4 +1041,71 @@ test("a refresh step asks the client for a new token, and a client without one i
   };
   assert.deepEqual((await run(client)).errors, {});
   assert.equal(refreshed, 1);
+});
+
+test("a confirmed create is present in the ledger, and a client that refuses definitively issues nothing", async () => {
+  const { out } = await runSteps([{ do: "seed", doc: "a", fields: {} }]);
+  assert.deepEqual(
+    out.issued.map(([, state]) => state),
+    [{ present: true, unknownDelete: false }],
+  );
+  const { client, clock } = fakeClient({});
+  client.commit = async () => {
+    throw Object.assign(new Error("denied"), { code: 7 });
+  };
+  const refused = await runNative(
+    [
+      {
+        id: "native/t",
+        conditions: ["x"],
+        docs: { a: "lsn/{run}-a" },
+        steps: [{ do: "seed", doc: "a", fields: {} }],
+      },
+    ],
+    {
+      client,
+      project: PROJECT,
+      run: RUN,
+      sleep: async (ms) => {
+        await Promise.resolve();
+        clock.t += ms;
+      },
+      now: () => clock.t,
+    },
+  );
+  assert.deepEqual(refused.issued, []);
+});
+
+test("a refresh step waits for the client's new token before the next step; a sleep step never refreshes", async () => {
+  const events = [];
+  const { client, clock } = fakeClient({});
+  client.refresh = async () => {
+    events.push("refresh:start");
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    events.push("refresh:end");
+  };
+  const commit = client.commit;
+  client.commit = async (request) => {
+    events.push("commit");
+    return commit(request);
+  };
+  const run = (steps) =>
+    runNative([{ id: "native/t", conditions: ["x"], docs: { a: "lsn/{run}-a" }, steps }], {
+      client,
+      project: PROJECT,
+      run: RUN,
+      sleep: async (ms) => {
+        await Promise.resolve();
+        clock.t += ms;
+      },
+      now: () => clock.t,
+    });
+  await run([{ do: "refresh" }, { do: "seed", doc: "a", fields: {} }]);
+  assert.deepEqual(events, ["refresh:start", "refresh:end", "commit"]);
+  events.length = 0;
+  await run([
+    { do: "sleep", ms: 5 },
+    { do: "settle", ms: 5 },
+  ]);
+  assert.deepEqual(events, [], "only a refresh step refreshes");
 });

@@ -371,6 +371,10 @@ export function programProblems(programs) {
         if (!streams.has(name)) problems.push(`${here}: stream ${name} is not open`);
       };
       switch (step.do) {
+        case "settle":
+        case "sleep":
+        case "refresh":
+          break;
         case "seed":
         case "write":
         case "delete":
@@ -395,10 +399,6 @@ export function programProblems(programs) {
         case "add":
           usesStream(step.stream);
           if (step.target.doc !== undefined) usesDoc(step.target.doc);
-          break;
-        case "settle":
-        case "sleep":
-        case "refresh":
           break;
         case "remove":
         case "wait":

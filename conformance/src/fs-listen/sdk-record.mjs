@@ -10,7 +10,7 @@ import { fileURLToPath } from "node:url";
 
 import { createAccountClient, createAccountSession } from "./accounts.mjs";
 import { createNativeClient } from "./native-client.mjs";
-import { settleNames } from "./native-ledger.mjs";
+import { createLedger, settleNames } from "./native-ledger.mjs";
 import { OWNER_COLLECTION, PUBLIC_COLLECTION } from "./sdk-cases.mjs";
 
 const DRIVER = fileURLToPath(new URL("./sdk-driver.mjs", import.meta.url));
@@ -192,11 +192,13 @@ export function issuedSdkNames({ project, run, accounts }) {
  */
 export async function sweepDocuments({ client, project, run, accounts }) {
   const root = `projects/${project}/databases/(default)/documents`;
-  const issued = issuedSdkNames({ project, run, accounts }).map((name) => [
-    name,
-    { present: true, unknownDelete: false },
-  ]);
-  return settleNames({ issued, client, root, run });
+  // Every name is treated as one the SDK may have created: a read that finds it makes it ours.
+  const ledger = createLedger();
+  ledger.answered(
+    issuedSdkNames({ project, run, accounts }).map((name) => ({ update: { name } })),
+    "ok",
+  );
+  return settleNames({ issued: ledger.entries(), client, root, run });
 }
 
 /** Whether any case recorded a step that threw: a write or delete whose outcome is then unknown. */

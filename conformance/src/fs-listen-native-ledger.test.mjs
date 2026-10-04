@@ -31,21 +31,13 @@ test("isDefinitiveRefusal separates 'not applied' codes from unknown ones", () =
 test("the ledger records what each answer says about a name", () => {
   const ledger = createLedger();
   assert.deepEqual(ledger.entries(), []);
-  ledger.issue([upd(N("a")), del(N("b"))]);
-  assert.deepEqual(ledger.entries(), [
-    [N("a"), { present: false, unknownDelete: false }],
-    [N("b"), { present: false, unknownDelete: false }],
-  ]);
-  ledger.answered([upd(N("a"))], "ok");
-  assert.equal(Object.fromEntries(ledger.entries())[N("a")].present, true);
+  ledger.answered([upd(N("a")), del(N("b"))], "ok");
+  assert.deepEqual(Object.fromEntries(ledger.entries()), {
+    [N("a")]: { present: true, unknownDelete: false },
+    [N("b")]: { present: false, unknownDelete: false },
+  });
   ledger.answered([del(N("a"))], "ok");
   assert.equal(Object.fromEntries(ledger.entries())[N("a")].present, false);
-  // A definite refusal changes nothing, but the name is issued.
-  ledger.answered([upd(N("c"))], "refused");
-  assert.deepEqual(Object.fromEntries(ledger.entries())[N("c")], {
-    present: false,
-    unknownDelete: false,
-  });
   // An unknown update leaves the name unknown; an unknown delete is sticky.
   ledger.answered([upd(N("d"))], "unknown");
   ledger.answered([del(N("e"))], "unknown");
@@ -57,9 +49,16 @@ test("the ledger records what each answer says about a name", () => {
     present: false,
     unknownDelete: true,
   });
-  // entries() hands out copies.
+  // An update after an unknown update that is then confirmed is present again.
+  ledger.answered([upd(N("d"))], "ok");
+  assert.equal(Object.fromEntries(ledger.entries())[N("d")].present, true);
+  // entries() hands out copies, in the order the names were first answered.
   ledger.entries()[0][1].present = "x";
   assert.notEqual(ledger.entries()[0][1].present, "x");
+  assert.deepEqual(
+    ledger.entries().map(([name]) => name),
+    [N("a"), N("b"), N("d"), N("e")],
+  );
 });
 
 test("collectionOf gives the collection and its parent path", () => {

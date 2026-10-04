@@ -16,6 +16,23 @@ import { applyPlaceholders, flatten, placeholderTable, splitProductionOnly } fro
 export const ATTRIBUTION_TOLERANCE_MS = 1000;
 export const PROFILES = ["emulator", "strict"];
 const RANK = { MATCH: 0, INCOMPLETE: 1, DIFF: 2 };
+// Owner ledger 840: the document field maps of a Gen2 Firestore event are compared unordered (values still exactly); Gen1 and every
+// other member keep their order comparison.
+export const GEN2_FIRESTORE_FIELD_MAPS = Object.freeze([
+  "$.frame.event.data.data",
+  "$.frame.event.data.before.data",
+  "$.frame.event.data.after.data",
+]);
+
+/** The predicate naming the objects whose member order a row does not compare, or none. */
+export function orderIgnoredFor(row, scenario) {
+  if (row.generation !== 2 || scenario.source !== "firestore") return () => false;
+  return (path) =>
+    GEN2_FIRESTORE_FIELD_MAPS.some(
+      (root) => path === root || path.startsWith(`${root}.`) || path.startsWith(`${root}[`),
+    );
+}
+
 const NEGATIVE = "none-in-window";
 const RETRY = "failed-then-succeeded-same-event";
 
@@ -392,26 +409,49 @@ export function compareRuns({
   const rows = frozen.map(({ row, handler, scenario }) => {
     const reasons = [];
     const statuses = [];
+    // What each profile's verdict rests on: the production observation (a fault of the recording counts for both profiles)
+    // and that profile's own local observation and comparison. The row keeps the combined status and reasons as before.
+    const sides = {
+      production: { statuses: [], reasons: [] },
+      ...Object.fromEntries(PROFILES.map((profile) => [profile, { statuses: [], reasons: [] }])),
+    };
     const passes = production.passes.map((pass) =>
       observeProductionPass({ production, attribution, pass, row, scenario, handler, toleranceMs }),
     );
     const localResults = PROFILES.map((profile) =>
       observeLocal({ local: locals[profile], profile, row, scenario, handler, localProject }),
     );
-    for (const observed of [...passes, ...localResults]) {
-      if (observed.status === "OK") continue;
-      statuses.push(observed.status);
-      reasons.push(...observed.reasons);
-    }
+    const note = (side, status, found) => {
+      statuses.push(status);
+      reasons.push(...found);
+      sides[side].statuses.push(status);
+      sides[side].reasons.push(...found);
+    };
+    passes.forEach((observed) => {
+      if (observed.status !== "OK") note("production", observed.status, observed.reasons);
+    });
+    localResults.forEach((observed, index) => {
+      if (observed.status !== "OK") note(PROFILES[index], observed.status, observed.reasons);
+    });
     let productionOnly = {};
     if (passes.every(({ status }) => status === "OK")) {
       productionOnly = mergeListings(passes.flatMap(({ listings }) => listings ?? []));
       const reference = flatten(passes[0].observation);
-      const { disagreements, volatile } = deriveVolatile(reference, flatten(passes[1].observation));
+      const orderIgnored = orderIgnoredFor(row, scenario);
+      const { disagreements, volatile } = deriveVolatile(
+        reference,
+        flatten(passes[1].observation),
+        {
+          orderIgnored,
+        },
+      );
       volatilePaths[`${handler}/${scenario.id}`] = plainVolatile(volatile);
       if (disagreements.length > 0) {
-        statuses.push("INCOMPLETE");
-        reasons.push(...disagreements.map((reason) => `production passes disagree: ${reason}`));
+        note(
+          "production",
+          "INCOMPLETE",
+          disagreements.map((reason) => `production passes disagree: ${reason}`),
+        );
       } else {
         PROFILES.forEach((profile, index) => {
           if (localResults[index].status !== "OK") return;
@@ -420,14 +460,21 @@ export function compareRuns({
             volatile,
             flatten(localResults[index].observation),
             profile,
+            { orderIgnored },
           );
-          if (found.length > 0) {
-            statuses.push("DIFF");
-            reasons.push(...found);
-          }
+          if (found.length > 0) note(profile, "DIFF", found);
         });
       }
     }
+    const profiles = Object.fromEntries(
+      PROFILES.map((profile) => [
+        profile,
+        {
+          status: worstStatus([...sides.production.statuses, ...sides[profile].statuses]),
+          reasons: [...sides.production.reasons, ...sides[profile].reasons],
+        },
+      ]),
+    );
     return {
       row: `${row.recipeId}#${row.case}#v${row.generation}`,
       caseId: row.id,
@@ -439,6 +486,7 @@ export function compareRuns({
       delivery: row.delivery,
       status: worstStatus(statuses),
       reasons,
+      profiles,
       ...(Object.keys(productionOnly).length > 0 ? { productionOnly } : {}),
     };
   });

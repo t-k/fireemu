@@ -162,6 +162,40 @@ test("the CLI writes the comparison in the record-schema.md shape, byte-identica
   assert.equal(await readFile(files.out, "utf8"), first);
 });
 
+test("the CLI writes the binary the sessions ran, and refuses sessions that do not name the artifact", async () => {
+  const { files, argv } = await inputs();
+  const document = await runCli(argv);
+  assert.deepEqual(document.localBinary, {
+    sha256: ARTIFACT,
+    sourceCommit: "c".repeat(40),
+    dirty: false,
+  });
+  const sessionOf = async (file) => JSON.parse(await readFile(file, "utf8"));
+  const rewrite = async (file, change) => {
+    const session = await sessionOf(file);
+    change(session);
+    await writeFile(file, JSON.stringify(session));
+  };
+  const original = await sessionOf(files.strict);
+  // no identity at all
+  await rewrite(files.strict, (session) => delete session.fireemu);
+  await assert.rejects(runCli(argv), /strict session names no binary/);
+  await writeFile(files.strict, JSON.stringify(original));
+  // the emulator session ran another binary
+  await rewrite(files.emulator, (session) => (session.fireemu.binarySha256 = "d".repeat(64)));
+  await assert.rejects(runCli(argv), /different binaries/);
+  await writeFile(files.emulator, JSON.stringify(original));
+  // both ran a binary that is not the artifact typed on the command line
+  const other = [...argv];
+  other[other.indexOf("--artifact-sha256") + 1] = "e".repeat(64);
+  await assert.rejects(runCli(other), /not the artifact the comparison names/);
+  // the harness commit differs
+  await rewrite(files.emulator, (session) => (session.fireemu.sourceCommit = "f".repeat(40)));
+  await assert.rejects(runCli(argv), /different harness commits/);
+  await writeFile(files.emulator, JSON.stringify(original));
+  await runCli(argv);
+});
+
 test("the CLI refuses a run recorded against another corpus and invalid arguments", async () => {
   const { argv } = await inputs({ corpusDigest: "c".repeat(64) });
   await assert.rejects(runCli(argv), /corpusDigest/);

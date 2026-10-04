@@ -5,6 +5,7 @@ import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promis
 import { dirname, join, resolve as resolvePath } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
+import { identityEnv, identityOf } from "./binary-identity.mjs";
 
 const repoRoot = fileURLToPath(new URL("../../../", import.meta.url));
 const fixtureDir = join(repoRoot, "conformance/functions-events/fixtures");
@@ -79,7 +80,7 @@ async function stopGroup(child) {
   }
 }
 
-async function runProfile({ profile, binary, privateRoot, onlyRecipeIds, windowMs }) {
+async function runProfile({ profile, binary, identity, privateRoot, onlyRecipeIds, windowMs }) {
   const privateDir = join(privateRoot, profile);
   await mkdir(privateDir, { recursive: true, mode: 0o700 });
   const shortRoot = await mkdtemp(join(tmpdir(), "fe-"));
@@ -105,6 +106,7 @@ async function runProfile({ profile, binary, privateRoot, onlyRecipeIds, windowM
     FE_EVENTS_MODE: "local",
     FE_EVENTS_CAPTURE_MODE: "socket",
     FE_EVENTS_CAPTURE_SOCKET: socketPath,
+    ...identityEnv(identity),
   };
   delete env.FE_EVENTS_ALLOW_PRODUCTION_ADMIN;
   let child;
@@ -162,15 +164,25 @@ async function main() {
   await mkdir(privateRoot, { recursive: true, mode: 0o700 });
   const binary = process.env.FIREEMU_BIN ?? join(repoRoot, "target/debug/fireemu");
   if (!existsSync(binary)) throw new Error("build fireemu in this worktree before the local run");
+  // The binary that runs is the one the sessions will name: hashed from the file here, not typed in later.
+  const identity = identityOf({ binary, repoRoot });
   const onlyRecipeIds = process.env.FE_EVENTS_ONLY ?? "";
   const windowMs = Number(process.env.FE_EVENTS_WINDOW_MS ?? "5000");
   const runs = {};
   for (const profile of ["emulator", "strict"]) {
-    runs[profile] = await runProfile({ profile, binary, privateRoot, onlyRecipeIds, windowMs });
+    runs[profile] = await runProfile({
+      profile,
+      binary,
+      identity,
+      privateRoot,
+      onlyRecipeIds,
+      windowMs,
+    });
   }
   const summary = {
     authority: "LOCAL_ONLY",
     productionEvidence: null,
+    fireemu: identity,
     profiles: Object.fromEntries(
       Object.entries(runs).map(([profile, result]) => [
         profile,

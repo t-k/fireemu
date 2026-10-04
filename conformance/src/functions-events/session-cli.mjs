@@ -1,5 +1,6 @@
 import { readFile, writeFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
+import { identityFromEnv } from "./binary-identity.mjs";
 import { CaptureSink, exportPublicFrames } from "./capture.mjs";
 import { validateCorpus } from "./corpus.mjs";
 import { createLiveDriver } from "./live-driver.mjs";
@@ -11,6 +12,8 @@ const readJson = async (url) =>
 const privateDir = process.env.FE_EVENTS_PRIVATE_DIR;
 const projectId = process.env.GCLOUD_PROJECT;
 if (!privateDir || !projectId) throw new Error("local event session environment is incomplete");
+// run.mjs hashed the binary it spawned; a session that does not know which binary it ran against writes nothing.
+const fireemu = identityFromEnv(process.env);
 const [closure, corpus, manifest] = await Promise.all([
   readJson("../../../spec/compatibility/closure/FUNCTIONS-EVENTS.json"),
   readJson("../../functions-events/corpus.json"),
@@ -31,10 +34,14 @@ try {
   driver = await createLiveDriver({ projectId });
   const result = await runPrograms({ manifest, corpus, capture, driver, onlyRecipeIds, windowMs });
   await capture.barrier();
-  await writeFile(`${privateDir}/session.json`, `${JSON.stringify(result, null, 2)}\n`, {
-    flag: "wx",
-    mode: 0o600,
-  });
+  await writeFile(
+    `${privateDir}/session.json`,
+    `${JSON.stringify({ ...result, fireemu }, null, 2)}\n`,
+    {
+      flag: "wx",
+      mode: 0o600,
+    },
+  );
   await writeFile(
     `${privateDir}/public.json`,
     `${JSON.stringify({ authority: "LOCAL_ONLY", frames: exportPublicFrames(capture.since(0)) }, null, 2)}\n`,

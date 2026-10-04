@@ -33,7 +33,7 @@ function blocker() {
  * (or an object's member order) differs; a format feature is volatile only when it differs as well.
  * A path present in one pass only, or with a different type, is a disagreement, never volatile.
  */
-export function deriveVolatile(pass1, pass2) {
+export function deriveVolatile(pass1, pass2, { orderIgnored = () => false } = {}) {
   const disagreements = [];
   const volatile = new Map();
   const skip = blocker();
@@ -53,7 +53,8 @@ export function deriveVolatile(pass1, pass2) {
     }
     const features = new Set();
     if (a.type === "object") {
-      if (sameMembers(a.keys, b.keys) && !sameList(a.keys, b.keys)) features.add("order");
+      if (!orderIgnored(path) && sameMembers(a.keys, b.keys) && !sameList(a.keys, b.keys))
+        features.add("order");
     } else if (isPrimitive(a) && a.value !== b.value) {
       features.add("value");
       const fa = formatOf(a.value);
@@ -88,9 +89,16 @@ function formatReasons(label, path, reference, candidate, features) {
 /**
  * Compare a local observation with production pass 1 under the derived volatile set. Presence,
  * type, deterministic values, member order and the stable format features of volatile values
- * must all agree. Returns the reasons, empty when they agree.
+ * must all agree. Returns the reasons, empty when they agree. `orderIgnored(path)` names the objects whose member order is not
+ * compared (the ruling that Gen2 Firestore document field maps are unordered); their values, presence and types still are.
  */
-export function compareObservation(reference, volatile, candidate, label) {
+export function compareObservation(
+  reference,
+  volatile,
+  candidate,
+  label,
+  { orderIgnored = () => false } = {},
+) {
   const reasons = [];
   const skip = blocker();
   for (const path of sortedUnion(reference, candidate)) {
@@ -114,7 +122,12 @@ export function compareObservation(reference, volatile, candidate, label) {
     }
     const features = volatile.get(path) ?? new Set();
     if (r.type === "object") {
-      if (!features.has("order") && sameMembers(r.keys, c.keys) && !sameList(r.keys, c.keys)) {
+      if (
+        !features.has("order") &&
+        !orderIgnored(path) &&
+        sameMembers(r.keys, c.keys) &&
+        !sameList(r.keys, c.keys)
+      ) {
         reasons.push(
           `${label}: order ${path} (production [${r.keys.join(",")}], local [${c.keys.join(",")}])`,
         );

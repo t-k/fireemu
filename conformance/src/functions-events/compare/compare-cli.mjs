@@ -7,6 +7,7 @@ import { readFile, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
+import { checkSessionIdentities } from "../binary-identity.mjs";
 import { compareRuns } from "./compare.mjs";
 
 const repoFile = (path) => fileURLToPath(new URL(`../../../${path}`, import.meta.url));
@@ -67,14 +68,17 @@ export async function runCli(argv) {
   if (productionRun?.corpusDigest !== corpusSha256) {
     throw new Error("production run corpusDigest does not match the corpus file");
   }
+  const localSessions = {
+    emulator: await readJson(values["emulator-session"]),
+    strict: await readJson(values["strict-session"]),
+  };
+  // The sessions say which binary they ran (run.mjs hashed the file it spawned); the artifact is that binary or nothing.
+  const localBinary = checkSessionIdentities(localSessions, values["artifact-sha256"]);
   const comparison = compareRuns({
     corpus: JSON.parse(corpusBytes.toString("utf8")),
     programs: await readJson(values.programs),
     productionRun,
-    localSessions: {
-      emulator: await readJson(values["emulator-session"]),
-      strict: await readJson(values["strict-session"]),
-    },
+    localSessions,
     localProject: values["local-project"],
   });
   const document = {
@@ -83,6 +87,7 @@ export async function runCli(argv) {
     execution: values.execution,
     fixtureSha256: sha256(await readFile(values.fixture)),
     corpusSha256,
+    localBinary,
     productionRun: {
       project: productionRun.project,
       recordedAt: productionRun.recordedAt,

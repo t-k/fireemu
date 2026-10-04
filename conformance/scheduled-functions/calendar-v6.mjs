@@ -158,6 +158,58 @@ export function createRefusedOther(a) {
     !createRefusedExact(a)
   );
 }
+
+// ---- class judges ---------------------------------------------------------------------------
+// Control flow (what to delete, what is settled) follows the class of an answer: its status and
+// the parsed fields. The layout-strict judges above stay as annotations: an answer that is the
+// right class in an unrecorded layout is kept as data and sent for review, never turned into a
+// recovery.
+const readable = (a) =>
+  !!a && !a.bodyUnknown && a.json !== null && a.json !== undefined && typeof a.json === "object";
+
+/**
+ * The class of an answer to a mutation. `transport` (no answer), `unreadable` (a status with no
+ * readable body) and `unknown-status` (below 200, 3xx or 5xx) are unknown: the effect may or
+ * may not have happened.
+ */
+export function answerClass(a) {
+  if (!a) return "transport";
+  if (a.bodyUnknown) return "unreadable";
+  if (a.status < 200 || (a.status >= 300 && a.status < 400) || a.status >= 500)
+    return "unknown-status";
+  return a.status < 300 ? "2xx" : "4xx";
+}
+export const isUnknownClass = (a) =>
+  ["transport", "unreadable", "unknown-status"].includes(answerClass(a));
+
+export function emptyListClass(a) {
+  return (
+    a?.status === 200 &&
+    readable(a) &&
+    !(Array.isArray(a.json.jobs) && a.json.jobs.length) &&
+    !(Array.isArray(a.json.topics) && a.json.topics.length)
+  );
+}
+export function topicOwnedClass(a, own) {
+  return a?.status === 200 && readable(a) && a.json.name === own.topic;
+}
+/** A 404 whose parsed error status is NOT_FOUND (either recorded layout, or another). */
+export function absentClass(a) {
+  return a?.status === 404 && readable(a) && a.json.error?.status === "NOT_FOUND";
+}
+/** A complete, readable 4xx answer that is none of the cases handled elsewhere. */
+export function refusedClass(a) {
+  return (
+    a?.status >= 400 &&
+    a.status < 500 &&
+    ![401, 403, 409, 429].includes(a.status) &&
+    readable(a) &&
+    typeof a.json.error?.message === "string"
+  );
+}
+/** The own job in the PAUSED state, in any layout. */
+export const pausedClass = (c, a, own) => ownJob(a, c, own, ["PAUSED"]);
+
 export function mutationBusy(a, name) {
   const error = a?.json?.error;
   return (
@@ -332,6 +384,8 @@ export function createCapture({ accessToken, save, send, clock, maxRequests, own
 
 // ---- the collector --------------------------------------------------------------------------
 
+class AuthStop extends Error {}
+
 export async function collect({
   runId,
   projectNumber,
@@ -344,7 +398,7 @@ export async function collect({
   budget = MAX_REQUESTS,
 }) {
   const own = resources(runId, cases);
-  const { capture, counts } = createCapture({
+  const { capture: rawCapture, counts } = createCapture({
     accessToken,
     save,
     send,
@@ -353,23 +407,58 @@ export async function collect({
     own,
     projectNumber,
   });
+  // A 401 or 403 on any request means the credential is no longer good (or never was). It is
+  // not a production answer to record: the run stops where it is and is left for the read-back.
+  let authStop = null;
+  const capture = async (spec) => {
+    const answer = await rawCapture(spec);
+    if (answer && (answer.status === 401 || answer.status === 403)) {
+      authStop = { id: spec.id, status: answer.status };
+      throw new AuthStop(spec.id);
+    }
+    return answer;
+  };
   let topicIssued = false;
   const jobUrl = (c) => SCHEDULER + own.jobs[c.id];
   const records = new Map(
     cases.map((c) => [c.id, { id: c.id, issued: false, outcome: "not-attempted" }]),
   );
   const topicUrl = PUBSUB + own.topic;
-  let extra = 12; // bounded settlement reads, pause checks and DELETE retries
+  // Bounded extra requests. `settle` pays for the reads that settle an unknown create and for a
+  // pause that is not confirmed; `retry` pays for every repeated DELETE and the reads that
+  // settle an unknown DELETE. They are separate so that one cannot starve the other.
+  let settle = 6;
+  let retry = 10;
+  // Every mutation answered with an unknown-class answer, kept even when a later read settles it:
+  // such a run is read back at least ten minutes later before it is closed.
+  const unknownMutations = [];
+  const unknownMutation = (id, answer) => {
+    if (isUnknownClass(answer)) unknownMutations.push({ id, class: answerClass(answer) });
+  };
+  // Answers that were the right class but not in a recorded layout: data for review.
+  const layoutUnrecorded = [];
+  const judged = (id, classOk, strictOk) => {
+    if (classOk && !strictOk) layoutUnrecorded.push(id);
+    return classOk;
+  };
   const summary = (stage, closureReady) => {
     const known = counts();
     const all = [...records.values()];
     return {
-      outcome: "calendar-v6-needs-review",
+      outcome: authStop ? "calendar-v6-auth-stop" : "calendar-v6-needs-review",
       stage,
       ...known,
+      unknownMutations: unknownMutations.length,
+      unknownMutationList: unknownMutations,
+      readBackRequired: unknownMutations.length > 0 || authStop !== null,
+      layoutUnrecorded,
+      ...(authStop ? { authStop } : {}),
       closureReady:
         closureReady &&
+        authStop === null &&
         known.unknown === 0 &&
+        unknownMutations.length === 0 &&
+        layoutUnrecorded.length === 0 &&
         all.every((r) => !r.issued || r.settled === true) &&
         all.every((r) => !["unknown-unsettled", "identity-contradiction"].includes(r.outcome)),
       cleanupVerified: false,
@@ -380,232 +469,270 @@ export async function collect({
       cases: all,
     };
   };
+  try {
+    return await body();
+  } catch (error) {
+    if (error instanceof AuthStop) return summary("auth-stop", false);
+    throw error;
+  }
 
-  // Preflight: read-only.
-  const identity = await capture({
-    id: "identity",
-    method: "GET",
-    url:
-      "https://firebaserules.googleapis.com/v1/projects/" + PROJECT + "/releases/cloud.firestore",
-  });
-  if (
-    identity?.status !== 200 ||
-    identity.json?.name !== "projects/" + PROJECT + "/releases/cloud.firestore" ||
-    !new RegExp("^projects/" + PROJECT + "/rulesets/[A-Za-z0-9_-]+$").test(
-      identity.json?.rulesetName ?? "",
-    )
-  )
-    return summary("preflight", false);
-  for (const service of ["cloudscheduler", "pubsub"]) {
-    const answer = await capture({
-      id: "service-" + service,
+  async function body() {
+    // Preflight: read-only.
+    const identity = await capture({
+      id: "identity",
       method: "GET",
       url:
-        "https://serviceusage.googleapis.com/v1/projects/" +
-        projectNumber +
-        "/services/" +
-        service +
-        ".googleapis.com",
+        "https://firebaserules.googleapis.com/v1/projects/" + PROJECT + "/releases/cloud.firestore",
     });
-    if (answer?.status !== 200 || answer.json?.state !== "ENABLED")
+    if (
+      identity?.status !== 200 ||
+      identity.json?.name !== "projects/" + PROJECT + "/releases/cloud.firestore" ||
+      !new RegExp("^projects/" + PROJECT + "/rulesets/[A-Za-z0-9_-]+$").test(
+        identity.json?.rulesetName ?? "",
+      )
+    )
       return summary("preflight", false);
-  }
-  const beforeJobs = await capture({
-    id: "before-list-jobs",
-    method: "GET",
-    url: SCHEDULER + "projects/" + PROJECT + "/locations/" + REGION + "/jobs?pageSize=500",
-  });
-  const beforeTopics = await capture({
-    id: "before-list-topics",
-    method: "GET",
-    url: PUBSUB + "projects/" + PROJECT + "/topics?pageSize=1000",
-  });
-  if (!emptyList(beforeJobs) || !emptyList(beforeTopics)) return summary("preflight", false);
-  if (!topicAbsent(await capture({ id: "before-topic", method: "GET", url: topicUrl }), own))
-    return summary("preflight", false);
-
-  // The topic.
-  await save({ id: "issue-topic", state: "issued", name: own.topic });
-  topicIssued = true;
-  const createdTopic = await capture({
-    id: "create-topic",
-    method: "PUT",
-    url: topicUrl,
-    json: {},
-  });
-  let topicProven = topicOwned(createdTopic, own);
-  const refusedTopic =
-    createdTopic &&
-    !createdTopic.bodyUnknown &&
-    createdTopic.status >= 400 &&
-    createdTopic.status < 500;
-  if (!topicProven && !refusedTopic) {
-    // Unknown or contradictory: settle by a direct GET of the name, patiently (a topic has been
-    // seen to appear ten seconds late).
-    for (let poll = 0; poll < 4 && !topicProven; poll++) {
-      if (poll > 0) await sleep(10000);
-      topicProven = topicOwned(
-        await capture({
-          id: "read-topic" + (poll ? "-poll-" + poll : ""),
-          method: "GET",
-          url: topicUrl,
-        }),
-        own,
-      );
-    }
-  }
-  if (!topicProven) return summary("topic", false);
-
-  // The jobs: untimed cases first, timed ones last (each waits for its moment).
-  const ordered = [...cases.filter((c) => !c.timing), ...cases.filter((c) => c.timing)];
-  for (const c of ordered) {
-    const rec = records.get(c.id);
-    // Never start a job the remaining budget could not clean up: each created job needs a
-    // DELETE and a read-back, each issued name a read-back, and the end needs a fixed reserve.
-    const open = [...records.values()].filter((r) => r.issued);
-    const cleanup = open.reduce((n, r) => n + (r.created && !r.deleted ? 2 : 1), 0);
-    if (counts().attempted + cleanup + 4 /* this job */ + 6 /* end */ + extra > budget) {
-      rec.outcome = "skipped-budget";
-      continue;
-    }
-    await save({ id: "issue-" + c.id, state: "issued", name: own.jobs[c.id] });
-    rec.issued = true;
-    if (c.timing) await sleep(waitFor(c.timing, clock()));
-    const answer = await capture({
-      id: c.id + "-create",
-      method: "POST",
-      url: SCHEDULER + "projects/" + PROJECT + "/locations/" + REGION + "/jobs",
-      json: createBody(c, own),
-    });
-    if (createAccepted(c, answer, own)) {
-      rec.outcome = "accepted";
-      rec.created = true;
-    } else if (createRefusedExact(answer)) {
-      rec.outcome = "refused";
-    } else if (createRefusedOther(answer)) {
-      rec.outcome = "refused-other";
-    } else if (ownJob(answer, c, own)) {
-      // Complete 200 that names the own job but not in the recorded layout: it is ours.
-      rec.outcome = "accepted-unrecorded-layout";
-      rec.created = true;
-    } else if (answer && !answer.bodyUnknown && answer.status >= 200 && answer.status < 300) {
-      rec.outcome = "identity-contradiction";
-    } else {
-      // Unknown or ambiguous: settle by a direct GET of this name.
-      rec.outcome = "unknown-unsettled";
-      for (let poll = 0; poll < 3 && extra > 0; poll++) {
-        if (poll > 0) await sleep(10000);
-        extra--;
-        const read = await capture({
-          id: c.id + "-settle-create-" + (poll + 1),
-          method: "GET",
-          url: jobUrl(c),
-        });
-        if (ownJob(read, c, own)) {
-          rec.outcome = "accepted-settled-by-get";
-          rec.created = true;
-          break;
-        }
-        if (read?.status === 200 && !read.bodyUnknown) {
-          rec.outcome = "identity-contradiction";
-          break;
-        }
-      }
-    }
-    if (rec.created) {
-      const pause = await capture({
-        id: c.id + "-pause",
-        method: "POST",
-        url: jobUrl(c) + ":pause",
-        json: {},
-      });
-      rec.paused = paused(c, pause, own);
-      if (!rec.paused && extra > 0) {
-        extra--;
-        const read = await capture({
-          id: c.id + "-read-after-pause",
-          method: "GET",
-          url: jobUrl(c),
-        });
-        rec.paused = paused(c, read, own);
-      }
-    }
-  }
-
-  // Delete only what this run created (own 2xx create, or settled by GET), after the pauses
-  // have settled: a DELETE straight after a pause is answered 409.
-  const eligible = [...records.values()].filter((r) => r.created);
-  if (eligible.length) await sleep(60000);
-  for (const rec of eligible) {
-    const c = cases.find(({ id }) => id === rec.id);
-    for (let attempt = 0; attempt < 4 && !rec.deleted; attempt++) {
+    for (const service of ["cloudscheduler", "pubsub"]) {
       const answer = await capture({
-        id: c.id + (attempt ? "-delete-retry-" + attempt : "-delete"),
-        method: "DELETE",
-        url: jobUrl(c),
+        id: "service-" + service,
+        method: "GET",
+        url:
+          "https://serviceusage.googleapis.com/v1/projects/" +
+          projectNumber +
+          "/services/" +
+          service +
+          ".googleapis.com",
       });
-      if (answer && !answer.bodyUnknown && answer.status >= 200 && answer.status < 300) {
-        rec.deleted = true;
-        break;
+      if (answer?.status !== 200 || answer.json?.state !== "ENABLED")
+        return summary("preflight", false);
+    }
+    const beforeJobs = await capture({
+      id: "before-list-jobs",
+      method: "GET",
+      url: SCHEDULER + "projects/" + PROJECT + "/locations/" + REGION + "/jobs?pageSize=500",
+    });
+    const beforeTopics = await capture({
+      id: "before-list-topics",
+      method: "GET",
+      url: PUBSUB + "projects/" + PROJECT + "/topics?pageSize=1000",
+    });
+    if (!emptyList(beforeJobs) || !emptyList(beforeTopics)) return summary("preflight", false);
+    if (!topicAbsent(await capture({ id: "before-topic", method: "GET", url: topicUrl }), own))
+      return summary("preflight", false);
+
+    // The topic.
+    await save({ id: "issue-topic", state: "issued", name: own.topic });
+    topicIssued = true;
+    const createdTopic = await capture({
+      id: "create-topic",
+      method: "PUT",
+      url: topicUrl,
+      json: {},
+    });
+    unknownMutation("create-topic", createdTopic);
+    let topicProven = judged(
+      "create-topic",
+      topicOwnedClass(createdTopic, own),
+      topicOwned(createdTopic, own),
+    );
+    const refusedTopic =
+      createdTopic &&
+      !createdTopic.bodyUnknown &&
+      createdTopic.status >= 400 &&
+      createdTopic.status < 500;
+    if (!topicProven && !refusedTopic) {
+      // Unknown or contradictory: settle by a direct GET of the name, patiently (a topic has
+      // been seen to appear ten seconds late).
+      for (let poll = 0; poll < 4 && !topicProven; poll++) {
+        if (poll > 0) await sleep(10000);
+        topicProven = topicOwnedClass(
+          await capture({
+            id: "read-topic" + (poll ? "-poll-" + poll : ""),
+            method: "GET",
+            url: topicUrl,
+          }),
+          own,
+        );
       }
-      if (mutationBusy(answer, own.jobs[c.id]) && extra > 0) {
-        extra--;
-        await sleep(60000);
+    }
+    if (!topicProven) return summary("topic", false);
+
+    // The jobs: untimed cases first, timed ones last (each waits for its moment).
+    const ordered = [...cases.filter((c) => !c.timing), ...cases.filter((c) => c.timing)];
+    for (const c of ordered) {
+      const rec = records.get(c.id);
+      // Never start a job the remaining budget could not clean up: each created job needs a
+      // DELETE and a read-back, each issued name a read-back, and the end needs a fixed reserve.
+      const open = [...records.values()].filter((r) => r.issued);
+      const cleanup = open.reduce((n, r) => n + (r.created && !r.deleted ? 2 : 1), 0);
+      if (counts().attempted + cleanup + 4 /* this job */ + 6 /* end */ + settle + retry > budget) {
+        rec.outcome = "skipped-budget";
         continue;
       }
-      if (extra <= 0) break;
-      // Unknown: settle by a direct GET of this name, never by a listing.
-      extra--;
-      const read = await capture({
-        id: c.id + "-settle-delete-" + attempt,
-        method: "GET",
-        url: jobUrl(c),
+      await save({ id: "issue-" + c.id, state: "issued", name: own.jobs[c.id] });
+      rec.issued = true;
+      if (c.timing) await sleep(waitFor(c.timing, clock()));
+      const answer = await capture({
+        id: c.id + "-create",
+        method: "POST",
+        url: SCHEDULER + "projects/" + PROJECT + "/locations/" + REGION + "/jobs",
+        json: createBody(c, own),
       });
-      if (jobAbsent(read, own.jobs[c.id])) {
-        rec.deleted = true;
-        rec.deletedSettledByGet = true;
+      if (createAccepted(c, answer, own)) {
+        rec.outcome = "accepted";
+        rec.created = true;
+      } else if (createRefusedExact(answer)) {
+        rec.outcome = "refused";
+      } else if (ownJob(answer, c, own, ["ENABLED"])) {
+        // A complete 200 that names the own job, ENABLED, in a layout that was not recorded: it
+        // is ours. The layout goes to review; it does not change what is cleaned up.
+        rec.outcome = "accepted-unrecorded-layout";
+        rec.created = true;
+        layoutUnrecorded.push(c.id + "-create");
+      } else if (refusedClass(answer)) {
+        rec.outcome = "refused-other";
+        if (!createRefusedOther(answer)) layoutUnrecorded.push(c.id + "-create");
+      } else {
+        // Anything else is unknown-class for a create (a 3xx, 5xx, below 200, a transport loss,
+        // an unreadable body, a 409 or 429, a 2xx that is not the own job): the job may exist.
+        unknownMutation(c.id + "-create", answer);
+        if (!isUnknownClass(answer))
+          unknownMutations.push({ id: c.id + "-create", class: "unexpected" });
+        if (answer && answer.status >= 200 && answer.status < 300 && !answer.bodyUnknown) {
+          rec.outcome = "identity-contradiction";
+        } else {
+          // Settle by a direct GET of this name.
+          rec.outcome = "unknown-unsettled";
+          for (let poll = 0; poll < 3 && settle > 0; poll++) {
+            if (poll > 0) await sleep(10000);
+            settle--;
+            const read = await capture({
+              id: c.id + "-settle-create-" + (poll + 1),
+              method: "GET",
+              url: jobUrl(c),
+            });
+            if (ownJob(read, c, own)) {
+              rec.outcome = "accepted-settled-by-get";
+              rec.created = true;
+              break;
+            }
+            if (read?.status === 200 && !read.bodyUnknown) {
+              rec.outcome = "identity-contradiction";
+              break;
+            }
+          }
+        }
+      }
+      if (rec.created) {
+        const pause = await capture({
+          id: c.id + "-pause",
+          method: "POST",
+          url: jobUrl(c) + ":pause",
+          json: {},
+        });
+        unknownMutation(c.id + "-pause", pause);
+        rec.paused = judged(c.id + "-pause", pausedClass(c, pause, own), paused(c, pause, own));
+        if (!rec.paused && settle > 0) {
+          settle--;
+          const read = await capture({
+            id: c.id + "-read-after-pause",
+            method: "GET",
+            url: jobUrl(c),
+          });
+          rec.paused = pausedClass(c, read, own);
+        }
       }
     }
-  }
-  // Read every issued name back directly.
-  let allAbsent = true;
-  for (const c of ordered) {
-    const rec = records.get(c.id);
-    if (!rec.issued) continue; // a skipped case has no name to read back
-    const read = await capture({ id: c.id + "-read-deleted", method: "GET", url: jobUrl(c) });
-    rec.settled = jobAbsent(read, own.jobs[c.id]) && (!rec.created || rec.deleted === true);
-    allAbsent = allAbsent && rec.settled;
-  }
-  const finalJobs = await capture({
-    id: "final-list-jobs",
-    method: "GET",
-    url: SCHEDULER + "projects/" + PROJECT + "/locations/" + REGION + "/jobs?pageSize=500",
-  });
-  const jobsClean = emptyList(finalJobs);
 
-  // The topic goes only when every job of the run is settled.
-  const unresolved = [...records.values()].some((r) =>
-    ["unknown-unsettled", "identity-contradiction"].includes(r.outcome),
-  );
-  let topicSettled = false;
-  if (allAbsent && jobsClean && !unresolved) {
-    const gone = await capture({ id: "delete-topic", method: "DELETE", url: topicUrl });
-    topicSettled = !!(gone && !gone.bodyUnknown && gone.status >= 200 && gone.status < 300);
-  }
-  const topicAfter = await capture({ id: "read-deleted-topic", method: "GET", url: topicUrl });
-  const finalTopics = await capture({
-    id: "final-list-topics",
-    method: "GET",
-    url: PUBSUB + "projects/" + PROJECT + "/topics?pageSize=1000",
-  });
-  const out = summary(
-    "done",
-    allAbsent &&
-      jobsClean &&
-      topicSettled &&
-      topicAbsent(topicAfter, own) &&
+    // Delete only what this run created (own 2xx create, or settled by GET), after the pauses
+    // have settled: a DELETE straight after a pause is answered 409.
+    const eligible = [...records.values()].filter((r) => r.created);
+    if (eligible.length) await sleep(60000);
+    for (const rec of eligible) {
+      const c = cases.find(({ id }) => id === rec.id);
+      for (let attempt = 0; attempt < 4 && !rec.deleted; attempt++) {
+        if (attempt > 0) {
+          if (retry <= 0) break;
+          retry--; // this repeated DELETE
+        }
+        const id = c.id + (attempt ? "-delete-retry-" + attempt : "-delete");
+        const answer = await capture({ id, method: "DELETE", url: jobUrl(c) });
+        unknownMutation(id, answer);
+        if (answerClass(answer) === "2xx") {
+          rec.deleted = true;
+          judged(id, true, deleted(answer));
+          break;
+        }
+        if (mutationBusy(answer, own.jobs[c.id])) {
+          await sleep(60000);
+          continue;
+        }
+        // Unknown or refused: settle by a direct GET of this name, never by a listing.
+        if (retry <= 0) break;
+        retry--;
+        const read = await capture({
+          id: c.id + "-settle-delete-" + attempt,
+          method: "GET",
+          url: jobUrl(c),
+        });
+        if (
+          judged(
+            c.id + "-settle-delete-" + attempt,
+            absentClass(read),
+            jobAbsent(read, own.jobs[c.id]),
+          )
+        ) {
+          rec.deleted = true;
+          rec.deletedSettledByGet = true;
+        }
+      }
+    }
+    // Read every issued name back directly.
+    let allAbsent = true;
+    for (const c of ordered) {
+      const rec = records.get(c.id);
+      if (!rec.issued) continue; // a skipped case has no name to read back
+      const read = await capture({ id: c.id + "-read-deleted", method: "GET", url: jobUrl(c) });
+      rec.settled =
+        judged(c.id + "-read-deleted", absentClass(read), jobAbsent(read, own.jobs[c.id])) &&
+        (!rec.created || rec.deleted === true);
+      allAbsent = allAbsent && rec.settled;
+    }
+    const finalJobs = await capture({
+      id: "final-list-jobs",
+      method: "GET",
+      url: SCHEDULER + "projects/" + PROJECT + "/locations/" + REGION + "/jobs?pageSize=500",
+    });
+    const jobsClean = judged("final-list-jobs", emptyListClass(finalJobs), emptyList(finalJobs));
+
+    // The topic goes only when every job of the run is settled.
+    const unresolved = [...records.values()].some((r) =>
+      ["unknown-unsettled", "identity-contradiction"].includes(r.outcome),
+    );
+    let topicSettled = false;
+    if (allAbsent && jobsClean && !unresolved) {
+      const gone = await capture({ id: "delete-topic", method: "DELETE", url: topicUrl });
+      unknownMutation("delete-topic", gone);
+      topicSettled = answerClass(gone) === "2xx";
+    }
+    const topicAfter = await capture({ id: "read-deleted-topic", method: "GET", url: topicUrl });
+    const finalTopics = await capture({
+      id: "final-list-topics",
+      method: "GET",
+      url: PUBSUB + "projects/" + PROJECT + "/topics?pageSize=1000",
+    });
+    const topicGone = judged(
+      "read-deleted-topic",
+      absentClass(topicAfter),
+      topicAbsent(topicAfter, own),
+    );
+    const topicsClean = judged(
+      "final-list-topics",
+      emptyListClass(finalTopics),
       emptyList(finalTopics),
-  );
-  for (const r of out.cases) if (r.issued && r.settled !== true) out.closureReady = false;
-  return out;
+    );
+    const out = summary("done", allAbsent && jobsClean && topicSettled && topicGone && topicsClean);
+    for (const r of out.cases) if (r.issued && r.settled !== true) out.closureReady = false;
+    return out;
+  }
 }

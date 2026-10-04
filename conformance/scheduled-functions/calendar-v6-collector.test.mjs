@@ -203,7 +203,7 @@ test("preflight stops before any write on a wrong identity, a disabled service o
     { [service("cloudscheduler")]: async () => reply(200, { state: "DISABLED" }) },
     "scheduler disabled",
   );
-  await stopsInPreflight({ [service("pubsub")]: async () => error(403, "no") }, "pubsub denied");
+  await stopsInPreflight({ [service("pubsub")]: async () => error(500, "no") }, "pubsub failing");
   await stopsInPreflight(
     { [key("GET", JOBS + "?pageSize=500")]: async () => reply(200, { jobs: [{ name: "other" }] }) },
     "jobs not empty",
@@ -224,7 +224,7 @@ test("preflight stops before any write on a wrong identity, a disabled service o
 // ---- the topic ------------------------------------------------------------------------------
 
 test("a topic create refused by the server stops the run with the name issued and nothing deleted", async () => {
-  const server = fakeServer({ hooks: { [key("PUT", TOPIC)]: async () => error(403, "denied") } });
+  const server = fakeServer({ hooks: { [key("PUT", TOPIC)]: async () => error(400, "refused") } });
   const { result } = await run(server);
   assert.equal(result.stage, "topic");
   assert.equal(result.closureReady, false);
@@ -463,7 +463,7 @@ test("the budget guard takes more jobs as the budget grows, in steps a formula c
   }
   assert.deepEqual(
     taken,
-    [15, 15, 15, 16, 16, 16, 16, 17, 17, 17, 17, 18, 18, 18, 18, 19, 19, 19, 19, 20, 20],
+    [14, 14, 14, 15, 15, 15, 15, 16, 16, 16, 16, 17, 17, 17, 17, 18, 18, 18, 18, 19, 19],
   );
 });
 
@@ -559,12 +559,12 @@ test("a 2xx create that is not the own job is a contradiction; a 3xx is merely u
 
 // ---- the bounded budget of settlement reads -------------------------------------------------
 
-const failFirstFour = (extra = {}) => ({
-  [key("POST", JOBS)]: async ({ body }) => (/-cr0[1-4]$/.test(body.name) ? "throw" : undefined),
+const failFirstTwo = (extra = {}) => ({
+  [key("POST", JOBS)]: async ({ body }) => (/-cr0[1-2]$/.test(body.name) ? "throw" : undefined),
   ...extra,
 });
 
-test("the settlement reads are bounded: twelve in all, however many creates are unknown", async () => {
+test("the settlement reads are bounded: six in all, however many creates are unknown", async () => {
   const server = fakeServer({
     refuse: refuseSecond,
     hooks: {
@@ -575,13 +575,13 @@ test("the settlement reads are bounded: twelve in all, however many creates are 
   const reads = journal.filter(
     (r) => r.state === "before-send" && r.id.includes("-settle-create-"),
   );
-  assert.equal(reads.length, 12);
+  assert.equal(reads.length, 6);
 });
 
 test("with the settlement budget spent, a failed pause is not read back", async () => {
   const server = fakeServer({
     refuse: refuseSecond,
-    hooks: failFirstFour({
+    hooks: failFirstTwo({
       [key("POST", JOB("cr05") + ":pause")]: async () => error(500, "later"),
     }),
   });
@@ -589,18 +589,24 @@ test("with the settlement budget spent, a failed pause is not read back", async 
   assert.ok(!journal.some((r) => r.id === "cr05-read-after-pause"));
 });
 
-test("with the settlement budget spent, a busy DELETE is tried once and not read back", async () => {
-  const name = JOB("cr05");
-  const server = fakeServer({
-    refuse: refuseSecond,
-    hooks: failFirstFour({ [key("DELETE", name)]: async () => busy(name) }),
-  });
+test("with the retry budget spent, a busy DELETE is tried once and not repeated", async () => {
+  const busyHooks = Object.fromEntries(
+    ["cr01", "cr02", "cr03", "cr04", "cr05"].map((id) => [
+      key("DELETE", JOB(id)),
+      async () => busy(JOB(id)),
+    ]),
+  );
+  const server = fakeServer({ refuse: refuseSecond, hooks: busyHooks });
   const { journal } = await run(server);
   const ids = journal
     .filter((r) => r.state === "before-send" && r.id.startsWith("cr05-"))
     .map((r) => r.id);
   assert.ok(ids.includes("cr05-delete"));
   assert.ok(!ids.some((id) => id.includes("retry") || id.includes("settle-delete")), ids.join());
+  assert.ok(
+    journal.some((r) => r.state === "before-send" && r.id === "cr01-delete-retry-3"),
+    "the first jobs use their retries",
+  );
 });
 
 // ---- settling the end -----------------------------------------------------------------------

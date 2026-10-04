@@ -62,19 +62,39 @@ const journal = openSync(join(runDir, "journal-" + runId + ".jsonl"), "a", 0o600
 const accessToken = execFileSync("gcloud", ["auth", "application-default", "print-access-token"], {
   encoding: "utf8",
 }).trim();
-const result = await collect({
-  runId,
-  projectNumber,
-  accessToken,
-  // Written and flushed before the request it describes is sent.
-  save: async (row) => {
-    writeSync(journal, JSON.stringify(row) + "\n");
-    fsyncSync(journal);
-  },
-  send: (request) => fetch(request.url, request),
-});
+let result;
+try {
+  result = await collect({
+    runId,
+    projectNumber,
+    accessToken,
+    // Written and flushed before the request it describes is sent.
+    save: async (row) => {
+      writeSync(journal, JSON.stringify(row) + "\n");
+      fsyncSync(journal);
+    },
+    send: (request) => fetch(request.url, request),
+  });
+} catch (error) {
+  // The journal holds every request sent so far; the result file says the collector stopped.
+  closeSync(journal);
+  writeFileSync(
+    join(runDir, "result-" + runId + ".json"),
+    JSON.stringify(
+      { outcome: "calendar-v6-collector-threw", message: String(error?.message) },
+      null,
+      2,
+    ) + "\n",
+    { mode: 0o600 },
+  );
+  console.error("the collector stopped: " + String(error?.message));
+  process.exit(4);
+}
 closeSync(journal);
 writeFileSync(join(runDir, "result-" + runId + ".json"), JSON.stringify(result, null, 2) + "\n", {
   mode: 0o600,
 });
 console.log(JSON.stringify({ runId, ...result, cases: undefined }, null, 2));
+// Exit 0 only for a run that may be closed; 3 means the answers need the coordinator's review or
+// a read-back first.
+process.exit(result.closureReady ? 0 : 3);

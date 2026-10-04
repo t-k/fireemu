@@ -476,6 +476,10 @@ test("a refusal that says done is not a finished operation; an error after the f
     "the residue is empty but the operation said it failed",
   );
   assert.deepEqual(second.record.residue.remaining, []);
+  assert.ok(
+    second.record.problems.some((p) => p.includes("the delete operation ended with an error")),
+    "the error itself is a problem, not only what the gate keeps",
+  );
 });
 
 test("the operation is polled every ten seconds, so a function that takes a minute to go is waited for", async () => {

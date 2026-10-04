@@ -1,8 +1,11 @@
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
+import { fileURLToPath } from "node:url";
+import { loadFixture as loadCommittedFixture } from "./storage-object-compare/run.mjs";
 import {
   applyClosure,
   buildEvidence,
@@ -484,4 +487,211 @@ test("the command writes the evidence and the closure from the files, and writes
         closureEvidenceCommand({ ...options(), [name]: undefined }, { loadFixture, log: () => {} }),
       new RegExp(name),
     );
+});
+
+test("the recordings must be two distinct runs, at one commit across both, whatever the rows around them say", () => {
+  for (const runIds of [undefined, null, "ab", [], [RUN1], [RUN1, RUN2, "x"], [RUN1, RUN1]])
+    refuses(
+      () => recordingsFromLedger(ledgerText(), runIds),
+      /two distinct recordings/,
+      JSON.stringify(runIds),
+    );
+  const other = "e".repeat(40);
+  const rows = ledgerText().split("\n");
+  const atOtherCommit = rows
+    .map((line, i) => (i === 2 || i === 3 ? line.replace(RECORDER, other) : line))
+    .join("\n");
+  refuses(() => recordingsFromLedger(atOtherCommit, [RUN1, RUN2]), /two commits/);
+});
+
+test("the binding names the binary and commit, two recordings and a fixture of its own, in these words", () => {
+  const build = (overReport, overReceipt, overFixture) =>
+    buildEvidence({
+      report: overReport ?? report(),
+      receipt: overReceipt ?? receipt(),
+      fixture: overFixture ?? fixture(),
+    });
+  const badBinary = { binarySha256: "abc", version: "x", commit: COMMIT };
+  const badCommit = { binarySha256: BINARY, version: "x", commit: "abc" };
+  refuses(
+    () => build(report({ fireemu: badBinary }), receipt({ fireemu: badBinary })),
+    /names no binary and commit/,
+  );
+  refuses(
+    () => build(report({ fireemu: badCommit }), receipt({ fireemu: badCommit })),
+    /names no binary and commit/,
+  );
+  refuses(
+    () =>
+      build(report({ fixtureRunIds: [RUN1] }), receipt(), {
+        ...fixture(),
+        index: { runIds: [RUN1] },
+      }),
+    /no two recordings/,
+  );
+  refuses(
+    () => build(report({ fixtureRunIds: undefined }), receipt(), { ...fixture(), index: {} }),
+    /no two recordings/,
+  );
+});
+
+test("a condition needs a compared recipe, whatever its size", () => {
+  const single = buildEvidence({
+    report: report({
+      total: counts(1),
+      recipes: [
+        {
+          recipeId: "storage-object/a",
+          ran: true,
+          counts: counts(1),
+          results: [{ outcome: "MATCH", n: 1 }],
+        },
+      ],
+    }),
+    receipt: receipt(),
+    fixture: fixture({ "storage-object/a": 1 }),
+  }).comparison;
+  const base = {
+    closure: closure(),
+    comparison: single,
+    recordings: recordings(),
+    comparisonPath: "p",
+    hold: ["STORAGE-OBJECT/two"],
+  };
+  const applied = applyClosure(base);
+  assert.deepEqual(applied.conditions[0].evidence.rows, { MATCH: 1 });
+  const empty = closure();
+  empty.conditions[0].recipeIds = [];
+  refuses(() => applyClosure({ ...base, closure: empty }), /no recipe was compared/);
+});
+
+test("the command line writes the files from a comparison of the committed fixture, and refuses with a message and exit code 1", () => {
+  const fixtureDirectory = fileURLToPath(
+    new URL("../fixtures/storage-object-production/", import.meta.url),
+  );
+  const real = loadCommittedFixture(fixtureDirectory);
+  const recipes = [...real.recipes.entries()];
+  const total = recipes.reduce((sum, [, rows]) => sum + rows.length, 0);
+  const realReport = {
+    fixtureRunIds: real.index.runIds,
+    fixtureIndexSha256: real.indexSha256,
+    fireemu: { binarySha256: BINARY, version: "fireemu 0.10.0", commit: COMMIT },
+    recorder: { commit: RECORDER, clean: true },
+    rehearsalResult: {
+      status: "LOCAL_COMPLETE",
+      completedRecipes: [26, 0],
+      requests: 1,
+      exitCode: 0,
+    },
+    total: counts(total),
+    layoutUnjudgedProductionRows: recipes
+      .flatMap(([, rows]) => rows)
+      .filter((entry) => !Number.isSafeInteger(entry.layout)).length,
+    recipes: recipes.map(([recipeId, rows]) => ({
+      recipeId,
+      ran: true,
+      counts: counts(rows.length),
+      results: rows.map((entry) => ({ outcome: "MATCH", n: entry.n })),
+    })),
+  };
+  const dir = mkdtempSync(join(tmpdir(), "closure-evidence-cli-"));
+  const file = (name, value) => {
+    const path = join(dir, name);
+    writeFileSync(path, typeof value === "string" ? value : `${JSON.stringify(value)}\n`);
+    return path;
+  };
+  const closureValue = {
+    parent: "STORAGE-OBJECT",
+    conditions: [
+      {
+        conditionId: "STORAGE-OBJECT/firebase-simple-upload",
+        recipeIds: ["storage-object/firebase/simple-upload"],
+        status: "PENDING_CORPUS",
+      },
+    ],
+  };
+  const ledger = [RUN1, RUN2].flatMap((runId, i) => [
+    JSON.stringify({
+      ts: `2026-09-30T23:1${i}:00.000Z`,
+      event: "started",
+      project: "fireemu-oracle-query",
+      runId,
+      gitSha: RECORDER,
+    }),
+    JSON.stringify({
+      ts: `2026-09-30T23:2${i}:00.000Z`,
+      event: "finished",
+      outcome: "recorded",
+      project: "fireemu-oracle-query",
+      runId,
+      gitSha: RECORDER,
+    }),
+  ]);
+  real.index.runIds.forEach((id, i) => {
+    ledger[i * 2] = ledger[i * 2].replace([RUN1, RUN2][i], id);
+    ledger[i * 2 + 1] = ledger[i * 2 + 1].replace([RUN1, RUN2][i], id);
+  });
+  const args = (
+    out,
+    closurePath = file("closure.json", closureValue),
+    reportPath = file("report.json", realReport),
+  ) => [
+    fileURLToPath(new URL("./storage-object-compare/closure-evidence.mjs", import.meta.url)),
+    "--report",
+    reportPath,
+    "--receipt",
+    file("receipt.json", {
+      fireemu: realReport.fireemu,
+      recorder: realReport.recorder,
+      fixtureIndexSha256: real.indexSha256,
+      result: realReport.rehearsalResult,
+    }),
+    "--fixture",
+    fixtureDirectory,
+    "--sandbox-ledger",
+    file("ledger.jsonl", `${ledger.join("\n")}\n`),
+    "--closure",
+    closurePath,
+    "--out",
+    out,
+    "--comparison-path",
+    "spec/compatibility/closure/evidence/STORAGE-OBJECT-comparison.json",
+  ];
+  const out = join(dir, "comparison.json");
+  const closurePath = file("closure.json", closureValue);
+  const ok = spawnSync(process.execPath, args(out, closurePath), { encoding: "utf8" });
+  assert.equal(ok.status, 0, ok.stderr);
+  assert.match(
+    ok.stdout,
+    new RegExp(`closure evidence: ${total} rows of ${BINARY} written; 1 conditions verified`),
+  );
+  assert.equal(JSON.parse(readFileSync(out, "utf8")).rows.length, total);
+  assert.equal(JSON.parse(readFileSync(closurePath, "utf8")).conditions[0].status, "VERIFIED");
+  // A comparison with a divergence gives a message, exit code 1 and no new files.
+  const badOut = join(dir, "bad.json");
+  const bad = spawnSync(
+    process.execPath,
+    args(
+      badOut,
+      undefined,
+      file("bad-report.json", { ...realReport, total: counts(total - 1, { DIVERGENCE: 1 }) }),
+    ),
+    { encoding: "utf8" },
+  );
+  assert.equal(bad.status, 1);
+  assert.match(bad.stderr, /not a MATCH of every row/);
+  assert.throws(() => readFileSync(badOut, "utf8"), /ENOENT/);
+  // A flag without a value, and a word that is not a flag, are refused as bad arguments.
+  for (const argv of [["--report"], ["report", "x"]]) {
+    const refused = spawnSync(
+      process.execPath,
+      [
+        fileURLToPath(new URL("./storage-object-compare/closure-evidence.mjs", import.meta.url)),
+        ...argv,
+      ],
+      { encoding: "utf8" },
+    );
+    assert.equal(refused.status, 1);
+    assert.match(refused.stderr, /bad argument/);
+  }
 });

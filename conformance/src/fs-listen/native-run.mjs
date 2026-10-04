@@ -21,11 +21,9 @@ export function toFields(fields) {
   return Object.fromEntries(Object.entries(fields).map(([key, item]) => [key, value(item)]));
 }
 
-const asBuffer = (value) => {
-  if (Buffer.isBuffer(value)) return value;
-  if (typeof value === "string") return Buffer.from(value, "base64");
-  return Buffer.from(value?.data ?? value);
-};
+/** Bytes from a Buffer, from the base64 text `describeFrame` writes, or from `{ type, data }`. */
+const asBuffer = (value) =>
+  typeof value === "string" ? Buffer.from(value, "base64") : Buffer.from(value);
 
 const fieldFilter = ([path, value]) => ({
   fieldFilter: {

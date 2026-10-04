@@ -158,3 +158,36 @@ test("the collections are the ones the deployed Rules allow", () => {
     "FS-LISTEN-SDK-109C",
   ]);
 });
+
+test("the extra cases' listeners are exactly the catalog's query listener with the stated changes", () => {
+  const base = {
+    includeMetadataChanges: true,
+    kind: "query",
+    limit: 10,
+    metadataIsCompared: false,
+    name: "primary",
+    orderBy: ["rank", "asc"],
+    target: "docs",
+    where: ["rank", "<", 10],
+  };
+  const [limitToLast, grouped, offline] = EXTRA_CASES;
+  assert.deepEqual(limitToLast.listeners, [{ ...base, limit: 2, limitToLast: true }]);
+  assert.deepEqual(grouped.listeners, [{ ...base, includeMetadataChanges: false }]);
+  assert.deepEqual(offline.listeners, [{ ...base, metadataIsCompared: true }]);
+  // The catalog's own listeners have the same fields.
+  const catalogListener = catalog.cases.find((c) => c.caseId === "FS-LISTEN-SDK-103").listeners[0];
+  assert.deepEqual(catalogListener, base);
+  for (const c of EXTRA_CASES) {
+    assert.equal(c.requiresAuth, false);
+    assert.equal(c.requiresRules, false);
+    assert.equal(c.role, "observation");
+    assert.deepEqual(c.comparedFields, [
+      "listener",
+      "snapshotKind",
+      "changes",
+      "docs",
+      "exists",
+      "error",
+    ]);
+  }
+});

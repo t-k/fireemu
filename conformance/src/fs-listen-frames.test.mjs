@@ -46,8 +46,13 @@ test("decodeValue answers the placeholder shapes and empty containers", () => {
 });
 
 test("decodeValue orders map members by name, whatever the input order", () => {
-  const names = ["m", "a", "z", "b", "k"];
-  const orders = [names, names.toReversed(), ["z", "m", "k", "b", "a"], ["b", "k", "a", "z", "m"]];
+  const members = ["m", "a", "z", "b", "k"];
+  const orders = [
+    members,
+    members.toReversed(),
+    ["z", "m", "k", "b", "a"],
+    ["b", "k", "a", "z", "m"],
+  ];
   for (const order of orders) {
     const fields = Object.fromEntries(order.map((n) => [n, { integerValue: "1" }]));
     assert.deepEqual(Object.keys(decodeValue({ mapValue: { fields } })), ["a", "b", "k", "m", "z"]);
@@ -377,4 +382,16 @@ test("commitGroups names an unnamed document, treats a missing time as none and 
     [{ docs: ["a", "b"], sameUpdateTime: true }],
   );
   assert.deepEqual(commitGroups([{ kind: "targetChange" }, close], { names }), []);
+});
+
+test("a boundary merges only into the one directly before it, not into an earlier one", () => {
+  const rows = frameRows(
+    [global(), target("ADD"), global({ resumeToken: Buffer.from("t") })],
+    OPTS,
+  );
+  assert.deepEqual(rows, [
+    { kind: "boundary", resumeToken: false },
+    { kind: "targetChange", type: "ADD", targetIds: [1], cause: null, resumeToken: false },
+    { kind: "boundary", resumeToken: true },
+  ]);
 });

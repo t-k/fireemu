@@ -10,8 +10,6 @@ import { isDeepStrictEqual } from "node:util";
 import { fileURLToPath } from "node:url";
 
 const DOCUMENT_ROWS = new Set(["documentChange", "documentDelete", "documentRemove"]);
-const text = (value) => JSON.stringify(value);
-const byText = (a, b) => (text(a) < text(b) ? -1 : text(a) > text(b) ? 1 : 0);
 
 /**
  * Documents delivered between two boundaries are one snapshot, and Listen does not order them: a
@@ -20,8 +18,14 @@ const byText = (a, b) => (text(a) < text(b) ? -1 : text(a) > text(b) ? 1 : 0);
 function sortDocumentRuns(rows) {
   const out = [];
   let run = [];
+  // A run is ordered by the text of its rows, so equal sets give equal rows.
   const flush = () => {
-    out.push(...run.toSorted(byText));
+    out.push(
+      ...run
+        .map((row) => JSON.stringify(row))
+        .toSorted()
+        .map((json) => JSON.parse(json)),
+    );
     run = [];
   };
   for (const row of rows) {

@@ -356,3 +356,106 @@ test("cleanup keeps going after an account it cannot settle, and reports every a
   ]);
   assert.equal(report.complete, false);
 });
+
+test("every status is told apart whether or not the body can be read", async () => {
+  const create = async (status, json) => {
+    const { fetchImpl } = recording(() => reply(status, json));
+    return createAccountClient({ base: "b", project: "p", headers: {}, fetchImpl }).create({
+      email: "e",
+      password: "p",
+    });
+  };
+  const unreadable = [
+    [199, { kind: "unknown", why: "status-199" }],
+    [200, { kind: "unknown", why: "unreadable-body" }],
+    [299, { kind: "unknown", why: "unreadable-body" }],
+    [300, { kind: "unknown", why: "status-300" }],
+    [399, { kind: "unknown", why: "status-399" }],
+    [400, { kind: "refused", status: 400 }],
+    [499, { kind: "refused", status: 499 }],
+    [500, { kind: "unknown", why: "status-500" }],
+  ];
+  for (const [status, expected] of unreadable)
+    assert.deepEqual(await create(status, undefined), expected, `${status}`);
+  const readable = [
+    [199, { kind: "unknown", why: "status-199" }],
+    [200, { kind: "unknown", why: "no-localId" }],
+    [299, { kind: "unknown", why: "no-localId" }],
+    [300, { kind: "unknown", why: "status-300" }],
+    [399, { kind: "unknown", why: "status-399" }],
+    [400, { kind: "refused", status: 400 }],
+    [499, { kind: "refused", status: 499 }],
+    [500, { kind: "unknown", why: "status-500" }],
+  ];
+  for (const [status, expected] of readable)
+    assert.deepEqual(await create(status, {}), expected, `${status}`);
+});
+
+test("a transport failure is unknown with the reason transport; the request carries a live deadline", async () => {
+  const failing = createAccountClient({
+    base: "b",
+    project: "p",
+    headers: {},
+    fetchImpl: async () => {
+      throw new Error("network");
+    },
+  });
+  assert.deepEqual(await failing.create({ email: "e", password: "p" }), {
+    kind: "unknown",
+    why: "transport",
+  });
+  let signal;
+  const probe = createAccountClient({
+    base: "b",
+    project: "p",
+    headers: {},
+    fetchImpl: async (url, init) => {
+      signal = init.signal;
+      return reply(200, { localId: "u" });
+    },
+  });
+  await probe.create({ email: "e", password: "p" });
+  assert.equal(signal.aborted, false, "the deadline has not already passed");
+});
+
+test("an unknown create is looked up by its email, and a refused one is not looked up at all", async () => {
+  const selectors = [];
+  const client = {
+    async create() {
+      return { kind: "unknown", why: "transport" };
+    },
+    async lookup(selector) {
+      selectors.push(selector);
+      return [];
+    },
+    async remove() {
+      throw new Error("nothing to remove");
+    },
+  };
+  const s = createAccountSession({ client, run: "rr" });
+  await assert.rejects(s.create(["a"]));
+  await s.cleanup();
+  assert.deepEqual(selectors, [{ email: ["fsl-rr-a@example.com"] }]);
+});
+
+test("a create that throws leaves the account to be looked up, like an unknown one", async () => {
+  const selectors = [];
+  const client = {
+    async create() {
+      throw new Error("surprise");
+    },
+    async lookup(selector) {
+      selectors.push(selector);
+      return ["found"];
+    },
+    async remove(uid) {
+      selectors.push(uid);
+      return { settled: true, unknownDelete: false, why: null };
+    },
+  };
+  const s = createAccountSession({ client, run: "rr" });
+  await assert.rejects(s.create(["a"]), /surprise/);
+  const report = await s.cleanup();
+  assert.deepEqual(selectors, [{ email: ["fsl-rr-a@example.com"] }, "found"]);
+  assert.equal(report.complete, true);
+});

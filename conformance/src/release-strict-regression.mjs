@@ -370,6 +370,12 @@ export const EXCLUDED_KINDS = [
       "the management comparison pairs the local answers with frozen projections of the same private production recordings and runs the management programs under a local setup of the recorded sandbox; the projections are not published and the runner has no check and export-comparison mode; the rows were compared on the closure-base binary named by the closure",
     issue: "storage-rules-management-comparison-needs-the-projections-in-the-release-job.md",
   },
+  {
+    kind: "storage-object-comparison-v1",
+    reason:
+      "the comparison is made from a rehearsal of the STORAGE-OBJECT recorder (26 recipes, 2,436 exchanges) that lives on its own branch and not in this tree, and it runs under a Rules file kept outside the repository; both must be published and the tool given a check and an export-comparison mode before the release job can rerun it; the rows were compared on the closure-base binary named by the closure",
+    issue: "storage-object-comparison-needs-the-recorder-in-the-release-job.md",
+  },
 ];
 
 /**

@@ -28,7 +28,18 @@ const statuses = new Set([
   "MISMATCH",
   "VERIFIED",
 ]);
-const requiredScopeDecisions = new Set(["L1", "L2", "L3", "L4", "L5", "L6", "OL-1", "OL-2", "OL-3", "Q1-Q4c"]);
+const requiredScopeDecisions = new Set([
+  "L1",
+  "L2",
+  "L3",
+  "L4",
+  "L5",
+  "L6",
+  "OL-1",
+  "OL-2",
+  "OL-3",
+  "Q1-Q4c",
+]);
 
 test("FS-LISTEN-SDK proposal covers its 18-case catalog and leaves unobserved paths open", () => {
   const closure = read("../../spec/compatibility/closure/FS-LISTEN-SDK.json");
@@ -37,26 +48,50 @@ test("FS-LISTEN-SDK proposal covers its 18-case catalog and leaves unobserved pa
   assert.equal(closure.inventoryStatus, "FROZEN");
   assert.equal(closure.freezeState, "FROZEN");
   assert.match(closure.frozenOn, /^\d{4}-\d{2}-\d{2}$/);
-  assert.deepEqual(new Set(closure.conditions.map(({ conditionId }) => conditionId.split("/")[1])), required);
+  assert.deepEqual(
+    new Set(closure.conditions.map(({ conditionId }) => conditionId.split("/")[1])),
+    required,
+  );
   assert.equal(closure.conditions.length, required.size);
-  const actualCases = closure.conditions.flatMap(({ recipeIds }) => recipeIds).filter((id) => /^FS-LISTEN-SDK-\d/.test(id));
+  const actualCases = closure.conditions
+    .flatMap(({ recipeIds }) => recipeIds)
+    .filter((id) => /^FS-LISTEN-SDK-\d/.test(id));
   const movedCases = closure.movedCatalogCases.map(({ caseId, movedTo }) => {
     assert.equal(movedTo, "AUTH-FS-CROSS");
     return caseId;
   });
-  assert.deepEqual(new Set([...actualCases, ...movedCases]), new Set(catalog.cases.map(({ caseId }) => caseId)));
-  assert.equal(actualCases.length, 15, "each retained catalog case belongs to one proposed condition");
-  assert.deepEqual(new Set(movedCases), new Set(["FS-LISTEN-SDK-106", "FS-LISTEN-SDK-109", "FS-LISTEN-SDK-109C"]));
-  const tab = closure.conditions.find(({ conditionId }) => conditionId === "FS-LISTEN-SDK/browser-tab-lifecycle");
-  assert.deepEqual(tab.observation.transports, ["browser-webchannel-long-polling", "browser-webchannel-streaming"]);
+  assert.deepEqual(
+    new Set([...actualCases, ...movedCases]),
+    new Set(catalog.cases.map(({ caseId }) => caseId)),
+  );
+  assert.equal(
+    actualCases.length,
+    15,
+    "each retained catalog case belongs to one proposed condition",
+  );
+  assert.deepEqual(
+    new Set(movedCases),
+    new Set(["FS-LISTEN-SDK-106", "FS-LISTEN-SDK-109", "FS-LISTEN-SDK-109C"]),
+  );
+  const tab = closure.conditions.find(
+    ({ conditionId }) => conditionId === "FS-LISTEN-SDK/browser-tab-lifecycle",
+  );
+  assert.deepEqual(tab.observation.transports, [
+    "browser-webchannel-long-polling",
+    "browser-webchannel-streaming",
+  ]);
   assert.equal(tab.verification.recordingsRequiredPerTransport, 2);
   for (const condition of closure.conditions) {
     assert.ok(condition.source && condition.observation.method);
     assert.ok(condition.note?.trim(), `${condition.conditionId}: note`);
     assert.ok(condition.verification.requiredEvidence.length);
-    assert.equal(condition.verification.recordingsRequired, condition.status === "PENDING_REVIEW" ? 0 : 2);
+    assert.equal(
+      condition.verification.recordingsRequired,
+      condition.status === "PENDING_REVIEW" ? 0 : 2,
+    );
     assert.ok(statuses.has(condition.status), `${condition.conditionId}: ${condition.status}`);
-    if (condition.status === "VERIFIED") assert.ok(condition.evidence, `${condition.conditionId}: evidence`);
+    if (condition.status === "VERIFIED")
+      assert.ok(condition.evidence, `${condition.conditionId}: evidence`);
     assert.equal(condition.localEvidence.productionExecuted, false);
   }
   assert.equal(closure.productionPlan.authorizesProduction, false);
@@ -76,8 +111,24 @@ test("FS-LISTEN-SDK proposal covers its 18-case catalog and leaves unobserved pa
     assert.match(decision.decidedOn, /^\d{4}-\d{2}-\d{2}$/);
     if (decision.id.startsWith("OL-")) assert.match(decision.decidedBy, /^owner/);
   }
-  assert.match(closure.conditions.find(({ conditionId }) => conditionId.endsWith("/query-change-order")).observation.method, /limitToLast/);
-  assert.match(closure.conditions.find(({ conditionId }) => conditionId.endsWith("/query-change-order")).observation.method, /one SDK callback/);
-  assert.match(closure.conditions.find(({ conditionId }) => conditionId.endsWith("/default-subscription")).observation.method, /includeMetadataChanges/);
-  assert.equal(closure.parentStatus === "COMPAT_VERIFIED", closure.conditions.every(({ status }) => status === "VERIFIED") && closure.closureReview.decision === "APPROVED");
+  assert.match(
+    closure.conditions.find(({ conditionId }) => conditionId.endsWith("/query-change-order"))
+      .observation.method,
+    /limitToLast/,
+  );
+  assert.match(
+    closure.conditions.find(({ conditionId }) => conditionId.endsWith("/query-change-order"))
+      .observation.method,
+    /one SDK callback/,
+  );
+  assert.match(
+    closure.conditions.find(({ conditionId }) => conditionId.endsWith("/default-subscription"))
+      .observation.method,
+    /includeMetadataChanges/,
+  );
+  assert.equal(
+    closure.parentStatus === "COMPAT_VERIFIED",
+    closure.conditions.every(({ status }) => status === "VERIFIED") &&
+      closure.closureReview.decision === "APPROVED",
+  );
 });

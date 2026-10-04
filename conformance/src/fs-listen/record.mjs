@@ -5,6 +5,9 @@
 //
 //   node src/fs-listen/record.mjs native --target production --project fireemu-oracle-txn --out F
 //   node src/fs-listen/record.mjs native --target local [--profile strict|emulator] --out F
+//   node src/fs-listen/record.mjs sdk --target production --project fireemu-oracle-query \
+//        --web-config WEB.json --out F        (WEB.json: { apiKey, authDomain, projectId })
+//   node src/fs-listen/record.mjs sdk --target local [--profile strict|emulator] --out F
 //
 // `--target local` starts fireemu itself (`fireemu exec`) and runs the same programs inside it.
 
@@ -19,6 +22,7 @@ import { resolveFireemuBinary } from "../evidence.mjs";
 import { createNativeClient } from "./native-client.mjs";
 import { NATIVE_PROGRAMS, SWEEP, programProblems } from "./native-programs.mjs";
 import { cleanupNative, runNative } from "./native-run.mjs";
+import { recordSdk } from "./sdk-record.mjs";
 
 const execFileAsync = promisify(execFile);
 const HERE = fileURLToPath(import.meta.url);
@@ -126,7 +130,7 @@ async function nativeInsideFireemu(options) {
 }
 
 /** Starts fireemu with `profile` and runs `args` (a node script) inside it. */
-export async function withFireemu({ profile, script, args, env }) {
+export async function withFireemu({ profile, script, args, env, rules }) {
   const dir = await mkdtemp(join(tmpdir(), "fs-listen-"));
   const config = join(dir, "fireemu.json");
   const firebase = join(dir, "firebase.json");
@@ -138,7 +142,10 @@ export async function withFireemu({ profile, script, args, env }) {
       auth: { idTokenSigning: "session-rsa", apiKeys: ["fake-api-key"] },
     }),
   );
-  await writeFile(firebase, JSON.stringify({ firestore: [{ database: "(default)" }] }));
+  await writeFile(
+    firebase,
+    JSON.stringify({ firestore: [{ database: "(default)", ...(rules ? { rules } : {}) }] }),
+  );
   const ports = [
     "--http-port",
     "--firestore-port",
@@ -167,8 +174,59 @@ export async function withFireemu({ profile, script, args, env }) {
     ],
     { cwd: dir, stdio: ["ignore", "inherit", "inherit"], env: { ...process.env, ...env } },
   );
-  const code = await new Promise((resolve) => child.once("exit", resolve));
-  if (code !== 0) throw new Error(`fireemu session exited ${code}`);
+  // The recording is written to its own file even when it ends not clean (exit 2): the caller
+  // reads it and reports; only a session that never wrote one is an error.
+  return new Promise((resolve) => child.once("exit", resolve));
+}
+
+async function sdkProduction(options) {
+  checkProject("sdk", options.project);
+  if (!options["web-config"]) throw new Error("--web-config <file> is required");
+  const web = JSON.parse(await readFile(options["web-config"], "utf8"));
+  if (web.projectId !== options.project || !web.apiKey || !web.authDomain)
+    throw new Error("the web config is not for this project");
+  return recordSdk({
+    target: {
+      kind: "production",
+      project: options.project,
+      token: await accessToken(),
+      web: { apiKey: web.apiKey, authDomain: web.authDomain, projectId: web.projectId },
+    },
+    run: newRunId(),
+    log: (line) => console.error(line),
+  });
+}
+
+/** Inside `fireemu exec`: the emulator's Firestore and Auth addresses come from the environment. */
+async function sdkInsideFireemu() {
+  const [host, port] = process.env.FIRESTORE_EMULATOR_HOST.split(":");
+  return recordSdk({
+    target: {
+      kind: "local",
+      project: "demo-fs-listen",
+      firestore: { host, port: Number(port) },
+      auth: `http://${process.env.FIREBASE_AUTH_EMULATOR_HOST}`,
+    },
+    run: newRunId(),
+  });
+}
+
+/** Runs `command` of this file inside a fireemu session and returns the recording it wrote. */
+async function inFireemu(options, command, { rules } = {}) {
+  const tmp = join(await mkdtemp(join(tmpdir(), "fs-listen-out-")), "recording.json");
+  const code = await withFireemu({
+    profile: options.profile ?? "strict",
+    script: HERE,
+    args: [command, "--out", tmp],
+    rules,
+  });
+  let text;
+  try {
+    text = await readFile(tmp, "utf8");
+  } catch {
+    throw new Error(`fireemu session exited ${code} without a recording`);
+  }
+  return JSON.parse(text);
 }
 
 async function main(argv) {
@@ -178,17 +236,19 @@ async function main(argv) {
   if (options.command === "native" && options.target === "production") {
     recording = await nativeProduction(options);
   } else if (options.command === "native" && options.target === "local") {
-    const tmp = join(await mkdtemp(join(tmpdir(), "fs-listen-out-")), "recording.json");
-    await withFireemu({
-      profile: options.profile ?? "strict",
-      script: HERE,
-      args: ["native-in-fireemu", "--out", tmp],
-    });
-    recording = JSON.parse(await readFile(tmp, "utf8"));
+    recording = await inFireemu(options, "native-in-fireemu");
   } else if (options.command === "native-in-fireemu") {
     recording = await nativeInsideFireemu(options);
+  } else if (options.command === "sdk" && options.target === "production") {
+    recording = await sdkProduction(options);
+  } else if (options.command === "sdk" && options.target === "local") {
+    recording = await inFireemu(options, "sdk-in-fireemu", {
+      rules: join(dirname(HERE), "../../firestore.rules"),
+    });
+  } else if (options.command === "sdk-in-fireemu") {
+    recording = await sdkInsideFireemu();
   } else {
-    throw new Error("usage: record.mjs native --target production|local --out FILE");
+    throw new Error("usage: record.mjs native|sdk --target production|local --out FILE");
   }
   await mkdir(dirname(options.out), { recursive: true });
   await writeFile(options.out, `${JSON.stringify(recording, null, 2)}\n`);

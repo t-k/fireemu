@@ -85,7 +85,7 @@ const targetProtocol = {
     { do: "close", stream: "dup" },
     // Target id 0: the server assigns one; a later target with an explicit id is refused.
     { do: "open", stream: "zero", targets: [{ id: 0, doc: "a" }] },
-    { do: "wait", stream: "zero", until: { frames: 3 }, settleMs: 2000 },
+    { do: "wait", stream: "zero", until: { frames: 3 }, settleMs: 2000, timeoutMs: 10_000 },
     { do: "record", row: "native/target-protocol/server-assigned-id", stream: "zero" },
     { do: "add", stream: "zero", target: { id: 7, doc: "b" } },
     { do: "settle" },

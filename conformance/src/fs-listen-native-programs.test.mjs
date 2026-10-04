@@ -419,3 +419,34 @@ test("the programs record exactly these rows", () => {
     "native/commit-atomic-visibility/separate-commits",
   ]);
 });
+
+test("a step on a stream that is not open is one problem, whatever the step", () => {
+  const steps = [
+    { do: "remove", stream: "q", id: 1 },
+    { do: "wait", stream: "q", until: { frames: 1 } },
+    { do: "save", stream: "q", id: 1, token: "t" },
+    { do: "record", row: "native/p/x", stream: "q" },
+    { do: "close", stream: "q" },
+    { do: "add", stream: "q", target: { id: 1, collectionGroup: "k" } },
+  ];
+  for (const step of steps)
+    assert.deepEqual(
+      problemsOf(prog([step])),
+      [`native/p#0 (${step.do}): stream q is not open`],
+      step.do,
+    );
+  // After a record the stream is still open and can be recorded and closed.
+  const open = { do: "open", stream: "s", targets: [{ id: 1, doc: "a" }] };
+  assert.deepEqual(
+    problemsOf(
+      prog([
+        open,
+        { do: "record", row: "native/p/1", stream: "s" },
+        { do: "save", stream: "s", id: 1, token: "t" },
+        { do: "close", stream: "s" },
+      ]),
+    ),
+    [],
+  );
+  assert.deepEqual(problemsOf(prog([open, { do: "settle" }, { do: "close", stream: "s" }])), []);
+});

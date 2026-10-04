@@ -16,7 +16,10 @@ export function createLedger() {
     return names.get(name);
   };
   return {
-    /** Records the answer to one Commit: `outcome` is "ok", "refused" (definite) or "unknown". */
+    /**
+     * Records the answer to one Commit: "ok" (a complete 2xx) or "unknown". A definite refusal is
+     * not recorded: it applied nothing and issued no name.
+     */
     answered(writes, outcome) {
       for (const write of writes) {
         const isDelete = write.delete !== undefined;
@@ -27,10 +30,6 @@ export function createLedger() {
           if (isDelete) state.unknownDelete = true;
         }
       }
-    },
-    /** The names issued before the answer is known, so a lost answer still has its names. */
-    issue(writes) {
-      for (const write of writes) entry(write.delete ?? write.update.name);
     },
     entries: () => [...names].map(([name, state]) => [name, { ...state }]),
   };

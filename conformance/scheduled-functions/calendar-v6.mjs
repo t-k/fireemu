@@ -172,9 +172,6 @@ export function mutationBusy(a, name) {
     error.details[0].resourceName === name
   );
 }
-export const isUnknown = (a) =>
-  !a || a.bodyUnknown || a.status < 200 || (a.status >= 300 && a.status < 400) || a.status >= 500;
-
 // ---- timing ---------------------------------------------------------------------------------
 
 /** Milliseconds to wait from `now` so that a request dispatched then meets `timing`. */

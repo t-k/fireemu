@@ -13,6 +13,7 @@ import {
   buildReport,
   checkBuildRecord,
   checkComparison,
+  checkLocalBinary,
   checkLedger,
   checkWorkspaceReceipt,
   closureEvidenceCommand,
@@ -1614,4 +1615,35 @@ test("S2: a production-side fault counts against both profiles; one attributed t
   );
   // a worse profile than the production side is fine: a local DIFF with a MATCH production
   checkComparison(comparisonOf({ over: { [id]: { only: { strict: "DIFF" }, reasons: ["x"] } } }));
+});
+
+test("checkLocalBinary stands on its own: the sessions' binary must be the artifact and the build record's, each by itself", () => {
+  const comparison = { artifactSha256: ART, localBinary: LOCAL };
+  const build = buildOf();
+  checkLocalBinary(comparison, build, { git: gitFake });
+  const other = "e".repeat(64);
+  // the artifact the comparison names is another binary than the sessions ran, although the build record agrees with the sessions
+  asRefusal(
+    () => checkLocalBinary({ ...comparison, artifactSha256: other }, build, { git: gitFake }),
+    /ran another binary than the artifact and the build record/,
+  );
+  // the build record is of another binary than the sessions ran, although the comparison's artifact agrees with them
+  asRefusal(
+    () => checkLocalBinary(comparison, buildOf({ binarySha256: other }), { git: gitFake }),
+    /ran another binary than the artifact and the build record/,
+  );
+});
+
+test("the gate rows written into the evidence carry the production side and both profiles, all MATCH", () => {
+  for (const row of gateRows()) {
+    assert.deepEqual(row.production, { status: "MATCH", reasons: [] });
+    assert.deepEqual(row.profiles, {
+      emulator: { status: "MATCH", reasons: [] },
+      strict: { status: "MATCH", reasons: [] },
+    });
+  }
+  const { evidence } = written();
+  const gate = evidence.rows.filter((r) => r.row.startsWith("functions-events/gate#"));
+  assert.equal(gate.length, 3);
+  for (const row of gate) assert.deepEqual(row.production, { status: "MATCH", reasons: [] });
 });

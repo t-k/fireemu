@@ -70,16 +70,6 @@ def test_only_the_outside_writers_deadlines_state_the_writer_deadline():
     assert authority.envelope_scope(table)["writerDeadlineSeconds"] == "5"
 
 
-def test_the_stage_2_table_states_90_seconds_and_the_earlier_tables_keep_30():
-    import fs_txn_table_p05 as p05
-    import fs_txn_table_p13b as p13b
-    import fs_txn_table_p14 as p14
-
-    assert authority.envelope_scope(p14.TABLE)["writerDeadlineSeconds"] == "90"
-    assert authority.envelope_scope(p05.TABLE)["writerDeadlineSeconds"] == "30"
-    assert authority.envelope_scope(p13b.TABLE)["writerDeadlineSeconds"] == "30"
-
-
 def test_an_envelope_that_states_the_shorter_deadline_does_not_authorize_a_table_with_the_longer_one():
     scope90 = authority.envelope_scope(_with_writer_deadlines(30000, 90000))
     assert scope90["writerDeadlineSeconds"] == "90"

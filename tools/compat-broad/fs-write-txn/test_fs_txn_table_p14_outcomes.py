@@ -9,6 +9,8 @@ import datetime as dt
 
 import pytest
 
+import txn_program_authority as authority
+
 import fs_txn_table_p14 as p14
 import txn_program_collector as collector_module
 from txn_program_program import LITERAL_TOKENS, RequestBudget, compile_plan
@@ -166,3 +168,13 @@ def test_an_accepted_61_minute_begin_is_an_honest_stop_and_the_recovery_releases
     assert codes(receipt)["rest/ret/begin-61"] == 0
     # the read-only token it minted is rolled back by the recovery: nothing is left in production
     assert receipt["tokens"]["ro-61"]["state"] == "rolled-back" and receipt["openTokens"] == [] and receipt["unknownRollbacks"] == []
+
+
+def test_the_stage_2_table_states_90_seconds_and_the_earlier_tables_keep_30():
+    import fs_txn_table_p05 as p05
+    import fs_txn_table_p13b as p13b
+    import fs_txn_table_p14 as p14
+
+    assert authority.envelope_scope(p14.TABLE)["writerDeadlineSeconds"] == "90"
+    assert authority.envelope_scope(p05.TABLE)["writerDeadlineSeconds"] == "30"
+    assert authority.envelope_scope(p13b.TABLE)["writerDeadlineSeconds"] == "30"

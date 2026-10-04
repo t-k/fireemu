@@ -1,4 +1,4 @@
-//! Schedules over the virtual clock (spec 11): Unix cron (five fields, names, ranges, lists, steps) and the App Engine text form used by `onSchedule` (`every 5 minutes`, `every day 09:00`, `every monday 09:00`). The adapter supplies IANA zone rules, including daylight saving time; this core module also provides a limited fixed-offset table.
+//! Schedules over the virtual clock (spec 11): Unix cron (five fields, names, ranges, lists, steps) and the App Engine text form used by `onSchedule` (`every 5 minutes`, `every day 09:00`, `every monday 09:00`, and the ordinal-weekday form `1st friday of quarter 9:00`). The adapter supplies IANA zone rules, including daylight saving time; this core module also provides a limited fixed-offset table.
 
 use std::fmt;
 
@@ -59,6 +59,11 @@ pub struct Schedule {
     /// (or vice versa) applies only the restricted one (Vixie cron semantics).
     dom_restricted: bool,
     dow_restricted: bool,
+    /// Ordinal-weekday form (`1st,3rd saturday of month 9:00`): bit `n` = the `n`th occurrence
+    /// of the weekday within its month (1 to 5). When set, a day matches only if its weekday is
+    /// in `days_of_week` and its occurrence number is in this set; the day-of-month field plays
+    /// no part. `None` = every other form.
+    nth_weekdays: Option<FieldSet>,
 }
 
 /// Schedule parse errors.
@@ -92,6 +97,31 @@ const MONTHS: [&str; 12] = [
     "jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec",
 ];
 const DAYS: [&str; 7] = ["sun", "mon", "tue", "wed", "thu", "fri", "sat"];
+const FULL_MONTHS: [&str; 12] = [
+    "january",
+    "february",
+    "march",
+    "april",
+    "may",
+    "june",
+    "july",
+    "august",
+    "september",
+    "october",
+    "november",
+    "december",
+];
+const FULL_DAYS: [&str; 7] = [
+    "sunday",
+    "monday",
+    "tuesday",
+    "wednesday",
+    "thursday",
+    "friday",
+    "saturday",
+];
+const ORDINALS: [&str; 5] = ["1st", "2nd", "3rd", "4th", "5th"];
+const FULL_ORDINALS: [&str; 5] = ["first", "second", "third", "fourth", "fifth"];
 
 fn parse_value(
     text: &str,
@@ -186,7 +216,11 @@ impl Schedule {
                 days_of_week: FieldSet(0),
                 dom_restricted: false,
                 dow_restricted: false,
+                nth_weekdays: None,
             });
+        }
+        if let Some(schedule) = groc_ordinal_weekday(text)? {
+            return Ok(schedule);
         }
         let expanded = match text {
             "@hourly" => "0 * * * *".to_owned(),
@@ -222,6 +256,7 @@ impl Schedule {
             days_of_week,
             dom_restricted: month_days_restricted,
             dow_restricted: weekdays_restricted,
+            nth_weekdays: None,
         })
     }
 
@@ -235,6 +270,9 @@ impl Schedule {
     /// (or vice versa) applies only the restricted one; both restricted means either matches
     /// (Vixie cron semantics).
     fn day_matches(&self, c: &Civil) -> bool {
+        if let Some(nth) = self.nth_weekdays {
+            return self.days_of_week.contains(c.weekday) && nth.contains((c.day - 1) / 7 + 1);
+        }
         let dom = self.days_of_month.contains(c.day);
         let dow = self.days_of_week.contains(c.weekday);
         match (self.dom_restricted, self.dow_restricted) {
@@ -640,6 +678,80 @@ fn app_engine_interval(text: &str) -> Result<Option<i64>, ScheduleError> {
         }
         _ => Ok(None),
     }
+}
+
+/// The bit set of a comma-separated list of names (`short` or `long` spelling, upper or lower
+/// case already folded by the caller): bit `base + index`. `None` if any item is unknown or
+/// empty.
+fn name_list(list: &str, short: &[&str], long: &[&str], base: u32) -> Option<u64> {
+    let mut set = 0u64;
+    for word in list.split(',') {
+        let index = short
+            .iter()
+            .zip(long)
+            .position(|(s, l)| *s == word || *l == word)?;
+        set |= 1 << (base + u32::try_from(index).ok()?);
+    }
+    Some(set)
+}
+
+/// `H:MM` or `HH:MM` on a 24-hour clock.
+fn groc_time(text: &str) -> Option<(u32, u32)> {
+    let (hour, minute) = text.split_once(':')?;
+    if !(1..=2).contains(&hour.len())
+        || minute.len() != 2
+        || !hour
+            .bytes()
+            .chain(minute.bytes())
+            .all(|b| b.is_ascii_digit())
+    {
+        return None;
+    }
+    let (hour, minute): (u32, u32) = (hour.parse().ok()?, minute.parse().ok()?);
+    (hour < 24 && minute < 60).then_some((hour, minute))
+}
+
+/// The App Engine ordinal-weekday form: `ORDINALS WEEKDAYS [of MONTHS] H:MM`, for example
+/// `1st friday of quarter 9:00` or `2nd,third wed,thu of feb,aug 13:50`. `MONTHS` is `month`,
+/// `quarter` (January, April, July and October) or a list of month names; without `of` every
+/// month matches. `Ok(None)` when the text does not begin with an ordinal list, so it is not
+/// this form; anything else this form does not spell out is refused, never guessed.
+fn groc_ordinal_weekday(text: &str) -> Result<Option<Schedule>, ScheduleError> {
+    let lower = text.to_ascii_lowercase();
+    let words: Vec<&str> = lower.split_whitespace().collect();
+    let begins_with_ordinal = words.first().is_some_and(|first| {
+        let head = first.split(',').next().unwrap_or("");
+        ORDINALS.contains(&head) || FULL_ORDINALS.contains(&head)
+    });
+    if !begins_with_ordinal {
+        return Ok(None);
+    }
+    let malformed = || ScheduleError::Malformed(text.to_owned());
+    let (ordinals, weekdays, months, time) = match words.as_slice() {
+        [ordinals, weekdays, time] => (ordinals, weekdays, None, time),
+        [ordinals, weekdays, "of", months, time] => (ordinals, weekdays, Some(months), time),
+        _ => return Err(malformed()),
+    };
+    let ordinals = name_list(ordinals, &ORDINALS, &FULL_ORDINALS, 1).ok_or_else(malformed)?;
+    let weekdays = name_list(weekdays, &DAYS, &FULL_DAYS, 0).ok_or_else(malformed)?;
+    let months = match months.copied() {
+        None | Some("month") => 0b1_1111_1111_1110,
+        Some("quarter") => (1 << 1) | (1 << 4) | (1 << 7) | (1 << 10),
+        Some(list) => name_list(list, &MONTHS, &FULL_MONTHS, 1).ok_or_else(malformed)?,
+    };
+    let (hour, minute) = groc_time(time).ok_or_else(malformed)?;
+    Ok(Some(Schedule {
+        source: text.to_owned(),
+        interval_seconds: None,
+        minutes: FieldSet(1 << minute),
+        hours: FieldSet(1 << hour),
+        days_of_month: FieldSet(0xFFFF_FFFE),
+        months: FieldSet(months),
+        days_of_week: FieldSet(weekdays),
+        dom_restricted: false,
+        dow_restricted: true,
+        nth_weekdays: Some(FieldSet(ordinals)),
+    }))
 }
 
 /// `every day HH:MM`, `every monday HH:MM` → cron.

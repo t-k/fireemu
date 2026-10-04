@@ -2063,7 +2063,7 @@ impl FunctionsRuntime {
         }
         let (kind, object, time_deleted) = match event {
             StorageEvent::Finalized(m) => (ObjectEvent::Finalized, m, None),
-            StorageEvent::Deleted(m) => (ObjectEvent::Deleted, m, None),
+            StorageEvent::Deleted { object, .. } => (ObjectEvent::Deleted, object, None),
             StorageEvent::MetadataUpdated(m) => (ObjectEvent::MetadataUpdated, m, None),
             StorageEvent::Archived {
                 object,

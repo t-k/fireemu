@@ -507,7 +507,18 @@ pub enum StorageEvent {
     /// A new generation was committed.
     Finalized(ObjectMetadata),
     /// A generation was deleted.
-    Deleted(ObjectMetadata),
+    Deleted {
+        /// The generation, as it was.
+        object: ObjectMetadata,
+        /// For a noncurrent version deleted by number, the instant it stopped being live: its
+        /// resource carries `timeDeleted` (RECORDED, FE v5: the Deleted payload of a noncurrent
+        /// generation has it, v1 and v2). `None` for a live generation.
+        time_deleted: Option<LogicalInstant>,
+        /// The instant of the event when it is not the instant it is admitted at: an overwrite
+        /// stamps the Deleted event of the replaced generation with the creation instant of the
+        /// replacement (RECORDED, FE v5). `None` means "when admitted".
+        at: Option<LogicalInstant>,
+    },
     /// Metadata changed (new metageneration).
     MetadataUpdated(ObjectMetadata),
     /// A live generation became noncurrent in a versioned bucket: it was overwritten, or deleted
@@ -755,8 +766,10 @@ pub struct StorageState {
     next_upload: u64,
     rng: SplitMix64,
     events: Vec<StorageEvent>,
-    /// Buckets with object versioning enabled. A bucket not listed is unversioned.
-    versioned: BTreeSet<BucketName>,
+    /// The versioning configuration of each bucket that was ever configured: `true` enabled,
+    /// `false` disabled (RECORDED, FE v5: production keeps "disabled" apart from "never
+    /// configured"). A bucket not listed was never configured and is unversioned.
+    versioning: BTreeMap<BucketName, bool>,
     /// Generations that are no longer live, by `(bucket, name, generation)`. Their blobs are in
     /// `blobs` and count toward `stored_bytes`.
     noncurrent: BTreeMap<(BucketName, ObjectName, u64), NoncurrentVersion>,
@@ -820,7 +833,7 @@ impl StorageState {
             next_upload: 0,
             rng: SplitMix64::new(seed),
             events: Vec::new(),
-            versioned: BTreeSet::new(),
+            versioning: BTreeMap::new(),
             noncurrent: BTreeMap::new(),
         }
     }
@@ -943,7 +956,7 @@ impl StorageState {
     pub fn clear(&mut self) {
         self.objects.clear();
         self.noncurrent.clear();
-        self.versioned.clear();
+        self.versioning.clear();
         self.blobs.clear();
         self.stored_bytes = 0;
         self.uploads.clear();
@@ -965,7 +978,7 @@ impl StorageState {
                 self.remove_blob(version.object.blob);
             }
         }
-        self.versioned.retain(|b| !owned(b.as_str()));
+        self.versioning.retain(|b, _| !owned(b.as_str()));
     }
 
     /// Drops every object, blob and upload of one bucket (a project's session reset);
@@ -1030,11 +1043,11 @@ impl StorageState {
             .filter_map(|m| self.blobs.get_key_value(&m.blob))
             .map(|(k, v)| (*k, Arc::clone(v)))
             .collect();
-        let versioned = self
-            .versioned
+        let versioning = self
+            .versioning
             .iter()
-            .filter(|b| owned(b.as_str()))
-            .cloned()
+            .filter(|(b, _)| owned(b.as_str()))
+            .map(|(b, enabled)| (b.clone(), *enabled))
             .collect();
         let uploads = self
             .uploads
@@ -1057,7 +1070,7 @@ impl StorageState {
             next_upload: self.next_upload,
             rng: self.rng.clone(),
             events: Vec::new(),
-            versioned,
+            versioning,
             noncurrent,
         }
     }
@@ -1083,9 +1096,9 @@ impl StorageState {
                 self.noncurrent.insert(k.clone(), v.clone());
             }
         }
-        for bucket in &captured.versioned {
+        for (bucket, enabled) in &captured.versioning {
             if owned(bucket.as_str()) {
-                self.versioned.insert(bucket.clone());
+                self.versioning.insert(bucket.clone(), *enabled);
             }
         }
         for (k, v) in &captured.uploads {
@@ -1100,7 +1113,9 @@ impl StorageState {
         self.events.retain(|event| {
             let bucket = match event {
                 StorageEvent::Finalized(metadata)
-                | StorageEvent::Deleted(metadata)
+                | StorageEvent::Deleted {
+                    object: metadata, ..
+                }
                 | StorageEvent::MetadataUpdated(metadata) => &metadata.bucket,
                 StorageEvent::Archived { object, .. } => &object.bucket,
             };
@@ -1186,17 +1201,20 @@ impl StorageState {
     /// Whether object versioning is enabled on `bucket`.
     #[must_use]
     pub fn versioning(&self, bucket: &BucketName) -> bool {
-        self.versioned.contains(bucket)
+        self.versioning.get(bucket) == Some(&true)
+    }
+
+    /// The versioning configuration of `bucket`: `None` when it was never configured, otherwise
+    /// whether versioning is enabled (a disabled bucket is `Some(false)`).
+    #[must_use]
+    pub fn versioning_state(&self, bucket: &BucketName) -> Option<bool> {
+        self.versioning.get(bucket).copied()
     }
 
     /// Enables or disables object versioning on `bucket`. Disabling keeps the noncurrent
-    /// versions that exist and stops archiving new ones.
+    /// versions that exist and stops archiving new ones, and the bucket stays configured.
     pub fn set_versioning(&mut self, bucket: &BucketName, enabled: bool) {
-        if enabled {
-            self.versioned.insert(bucket.clone());
-        } else {
-            self.versioned.remove(bucket);
-        }
+        self.versioning.insert(bucket.clone(), enabled);
     }
 
     /// The noncurrent versions of one object, in generation order.
@@ -1565,8 +1583,7 @@ impl StorageState {
         // A versioned bucket keeps the generation this write replaces, so the replacement frees
         // nothing and is charged in full.
         let archive = self
-            .versioned
-            .contains(bucket)
+            .versioning(bucket)
             .then(|| self.objects.get(&key))
             .flatten()
             .map(|live| NoncurrentVersion {
@@ -1640,7 +1657,11 @@ impl StorageState {
                 time_deleted: version.time_deleted,
             });
         } else if let Some(old) = &plan.replaced {
-            events.push(StorageEvent::Deleted(old.clone()));
+            events.push(StorageEvent::Deleted {
+                object: old.clone(),
+                time_deleted: None,
+                at: None,
+            });
         }
         events.push(StorageEvent::Finalized(plan.meta.clone()));
         events
@@ -1783,7 +1804,7 @@ impl StorageState {
     /// configured is unknown here (the HTTP layer adds the project's default buckets).
     #[must_use]
     pub fn bucket_known(&self, bucket: &BucketName) -> bool {
-        self.versioned.contains(bucket)
+        self.versioning.contains_key(bucket)
             || self
                 .objects
                 .range((bucket.clone(), ObjectName::range_start(""))..)
@@ -1932,7 +1953,7 @@ impl StorageState {
             .get(&key)
             .cloned()
             .ok_or(StorageError::NotFound)?;
-        if self.versioned.contains(bucket) {
+        if self.versioning(bucket) {
             // A versioned bucket keeps the generation: it becomes noncurrent and is announced as
             // Archived, with no Deleted event (UNRECORDED, see `StorageEvent::Archived`).
             let version = NoncurrentVersion {
@@ -1950,7 +1971,11 @@ impl StorageState {
             self.events.push(event);
             return Ok((meta, reservation));
         }
-        let event = StorageEvent::Deleted(meta.clone());
+        let event = StorageEvent::Deleted {
+            object: meta.clone(),
+            time_deleted: None,
+            at: None,
+        };
         let reservation = admit(std::slice::from_ref(&event))?;
         self.objects.remove(&key);
         self.remove_blob(meta.blob);
@@ -1992,7 +2017,11 @@ impl StorageState {
                 .get(&key)
                 .cloned()
                 .ok_or(StorageError::NotFound)?;
-            let event = StorageEvent::Deleted(meta.clone());
+            let event = StorageEvent::Deleted {
+                object: meta.clone(),
+                time_deleted: None,
+                at: None,
+            };
             let reservation = admit(std::slice::from_ref(&event))?;
             self.objects.remove(&key);
             self.remove_blob(meta.blob);
@@ -2006,7 +2035,11 @@ impl StorageState {
             .map(|version| version.object.clone())
             .ok_or(StorageError::NotFound)?;
         Self::check(Some(&meta), pre)?;
-        let event = StorageEvent::Deleted(meta.clone());
+        let event = StorageEvent::Deleted {
+            object: meta.clone(),
+            time_deleted: None,
+            at: None,
+        };
         let reservation = admit(std::slice::from_ref(&event))?;
         self.noncurrent.remove(&version_key);
         self.remove_blob(meta.blob);

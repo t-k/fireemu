@@ -3296,10 +3296,10 @@ impl fireemu_adapter_http::storage::AtomicStorageEventSink for FunctionsStorageS
     > {
         use fireemu_core_storage::store::StorageEvent;
         let bucket = match event {
-            StorageEvent::Finalized(m)
-            | StorageEvent::Deleted(m)
-            | StorageEvent::MetadataUpdated(m) => m.bucket.as_str(),
-            StorageEvent::Archived { object, .. } => object.bucket.as_str(),
+            StorageEvent::Finalized(m) | StorageEvent::MetadataUpdated(m) => m.bucket.as_str(),
+            StorageEvent::Deleted { object, .. } | StorageEvent::Archived { object, .. } => {
+                object.bucket.as_str()
+            }
         };
         // The runtime belongs to the default session: other sessions' buckets do not
         // trigger its functions.

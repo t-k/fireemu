@@ -166,7 +166,7 @@ fn generations_metagenerations_and_preconditions() {
         .map(|e| match e {
             StorageEvent::Finalized(_) => "finalized",
             StorageEvent::MetadataUpdated(_) => "metadata",
-            StorageEvent::Deleted(_) => "deleted",
+            StorageEvent::Deleted { .. } => "deleted",
             StorageEvent::Archived { .. } => "archived",
         })
         .collect();

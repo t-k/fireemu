@@ -45,7 +45,7 @@ impl AtomicStorageEventSink for Recording {
     {
         let entry = match event {
             StorageEvent::Finalized(m) => ("finalized", m.generation),
-            StorageEvent::Deleted(m) => ("deleted", m.generation),
+            StorageEvent::Deleted { object, .. } => ("deleted", object.generation),
             StorageEvent::MetadataUpdated(m) => ("metadata", m.generation),
             StorageEvent::Archived { object, .. } => ("archived", object.generation),
         };

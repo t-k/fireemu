@@ -499,3 +499,37 @@ test(
     assert.ok(spaced(sandbox.ledgerProblems(cli, at, { readJournal })));
   },
 );
+
+test("model: with a run that wrote nothing in the ledger, only the other lines of the project hold the spacing (seeded, 300 ledgers)", () => {
+  let seed = 20261005;
+  const next = (n) => {
+    seed = (Math.imul(seed, 1103515245) + 12345) >>> 0;
+    return seed % n;
+  };
+  const start = Date.parse("2026-10-04T14:00:00Z");
+  const at = (minutes) => new Date(start + minutes * 60_000).toISOString();
+  const nowMs = start + 90 * 60_000;
+  for (let i = 0; i < 300; i += 1) {
+    const extras = Array.from({ length: next(4) }, () => ({
+      ts: at(next(100)),
+      event: ["note", "started", "finished", "change"][next(4)],
+      taskId: ["SANDBOX-CONFIG", "OTHER-TASK", sandbox.TASK_ID][next(3)],
+      project: [sandbox.PROJECT, sandbox.PROJECT, "fireemu-oracle-idp"][next(3)],
+      ...(next(3) === 0 ? { runDir: RUN } : {}),
+    }));
+    const trio = [realStarted, realFinished, realClosed].map((r, k) => ({
+      ...r,
+      ts: at(60 + k),
+    }));
+    const lines = [...trio, ...extras];
+    const text = [clean, ...lines.map((r) => JSON.stringify(r))].join("\n");
+    const sharesRun = extras.some((r) => r.runDir === RUN && r.project === sandbox.PROJECT);
+    const holders = extras
+      .filter((r) => r.project === sandbox.PROJECT)
+      .map((r) => Date.parse(r.ts))
+      .concat(sharesRun ? trio.map((r) => Date.parse(r.ts)) : []);
+    const expected = holders.some((t) => nowMs - t < 30 * 60_000);
+    const problems = sandbox.ledgerProblems(text, nowMs, journalOf(journal()));
+    assert.equal(spaced(problems), expected, JSON.stringify({ extras, problems }));
+  }
+});

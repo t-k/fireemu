@@ -6491,7 +6491,7 @@ mod schedule_capacity_tests {
             let runtime = Arc::clone(&runtime);
             std::thread::spawn(move || runtime.on_clock_changed())
         };
-        tokio::time::sleep(Duration::from_millis(300)).await;
+        std::thread::sleep(Duration::from_millis(300));
         runtime
             .shutting_down
             .store(true, std::sync::atomic::Ordering::SeqCst);

@@ -2875,24 +2875,7 @@ async fn start_codebase(
         };
         let mut manifest_json = manifest_json;
         if let Some(tz) = &cfg.scheduler_default_time_zone {
-            // Schedules without a zone use the configured default.
-            if let Some(functions) = manifest_json
-                .get_mut("functions")
-                .and_then(serde_json::Value::as_array_mut)
-            {
-                for f in functions {
-                    if let Some(trigger) = f.get_mut("trigger") {
-                        if trigger.get("type").and_then(serde_json::Value::as_str)
-                            == Some("schedule")
-                            && trigger
-                                .get("timeZone")
-                                .is_none_or(serde_json::Value::is_null)
-                        {
-                            trigger["timeZone"] = serde_json::Value::String(tz.clone());
-                        }
-                    }
-                }
-            }
+            apply_default_time_zone(&mut manifest_json, tz);
         }
         let mut manifest = parse_manifest(&manifest_json)?;
         serve_blocking_events_for(cfg.profile, &mut manifest);
@@ -4830,6 +4813,30 @@ impl fireemu_adapter_http::identity_toolkit::AuthBlockingHook for BlockingAuthBr
             return Ok(None);
         }
         self.invoke_for_namespace(project, None, event, None, context)
+    }
+}
+
+/// Gives every schedule trigger that names no time zone (absent or `null`) the configured
+/// default (`scheduler.defaultTimeZone`). An explicit zone wins, and nothing but a schedule
+/// trigger is touched.
+fn apply_default_time_zone(manifest: &mut serde_json::Value, zone: &str) {
+    let Some(functions) = manifest
+        .get_mut("functions")
+        .and_then(serde_json::Value::as_array_mut)
+    else {
+        return;
+    };
+    for function in functions {
+        let Some(trigger) = function.get_mut("trigger") else {
+            continue;
+        };
+        if trigger.get("type").and_then(serde_json::Value::as_str) == Some("schedule")
+            && trigger
+                .get("timeZone")
+                .is_none_or(serde_json::Value::is_null)
+        {
+            trigger["timeZone"] = serde_json::Value::String(zone.to_owned());
+        }
     }
 }
 
@@ -9197,6 +9204,40 @@ mod tests {
             Some(root.join("tools/runner-node/index.mjs").as_path()),
         );
         std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn the_default_time_zone_goes_only_to_schedules_that_name_none() {
+        use serde_json::json;
+        let mut manifest = json!({"functions": [
+            {"name": "a", "trigger": {"type": "schedule", "schedule": "0 9 * * *"}},
+            {"name": "b", "trigger": {"type": "schedule", "schedule": "0 9 * * *", "timeZone": "UTC"}},
+            {"name": "c", "trigger": {"type": "schedule", "schedule": "0 9 * * *", "timeZone": null}},
+            {"name": "d", "trigger": {"type": "http"}},
+            {"name": "e"},
+        ]});
+        super::apply_default_time_zone(&mut manifest, "Asia/Tokyo");
+        let trigger = |i: usize| &manifest["functions"][i]["trigger"];
+        assert_eq!(
+            trigger(0)["timeZone"],
+            "Asia/Tokyo",
+            "a schedule without a zone"
+        );
+        assert_eq!(trigger(1)["timeZone"], "UTC", "an explicit zone wins");
+        assert_eq!(
+            trigger(2)["timeZone"],
+            "Asia/Tokyo",
+            "a null zone is no zone"
+        );
+        assert!(
+            trigger(3).get("timeZone").is_none(),
+            "an http trigger is untouched"
+        );
+        assert!(manifest["functions"][4].get("trigger").is_none());
+        let mut without_functions = json!({"endpoints": {}});
+        let before = without_functions.clone();
+        super::apply_default_time_zone(&mut without_functions, "Asia/Tokyo");
+        assert_eq!(without_functions, before);
     }
 
     #[test]

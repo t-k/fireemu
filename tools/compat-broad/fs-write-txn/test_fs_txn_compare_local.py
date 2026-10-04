@@ -249,3 +249,43 @@ def test_the_clock_rows_check_the_recording_and_the_replay_each_by_its_own_steps
     assert [row["match"] for row in tool.clock_rows([inside], [inside])] == [True]
     assert tool.clock_rows([outside], [inside]) == [{"site": "a", "production": False, "local": True, "match": False}]
     assert tool.clock_rows([inside], [outside]) == [{"site": "a", "production": True, "local": False, "match": False}]
+
+
+def read_projection(code, state=None, documents=None):
+    return {"cases": [], "reads": [{"site": "rest/ret/get-59", "code": code, "state": state, "documents": documents}]}
+
+
+def test_a_retention_read_row_is_judged_by_class_and_by_state_only_when_both_sides_found_the_document():
+    sites = frozenset({"rest/ret/get-59"})
+    judge = lambda production, local: tool.compare(production, local, None, {}, retention=sites)[1][0]   # noqa: E731
+    # not found against found: both accepted, the document may not have existed that long ago
+    assert judge(read_projection(5), read_projection(0, "v1"))["match"] is True
+    assert judge(read_projection(3), read_projection(9))["match"] is True
+    assert judge(read_projection(9), read_projection(0, "v1"))["match"] is False
+    assert judge(read_projection(0, "v1"), read_projection(9))["match"] is False
+    # both found: the state still has to agree
+    assert judge(read_projection(0, "v1"), read_projection(0, "v1"))["match"] is True
+    assert judge(read_projection(0, "v1"), read_projection(0, "v2"))["match"] is False
+    assert judge(read_projection(0, "v1", {"a": "v1"}), read_projection(0, "v1", {"a": "v2"}))["match"] is False
+    # the row keeps both exact answers
+    row = judge(read_projection(3), read_projection(9))
+    assert row["production"]["code"] == 3 and row["local"]["code"] == 9 and row["class"] == {"production": "refused", "local": "refused"}
+
+
+def test_a_read_that_is_not_a_retention_read_still_compares_code_and_state():
+    row = tool.compare(read_projection(3), read_projection(9), None, {}, retention=frozenset({"x"}))[1][0]
+    assert row["match"] is False and "class" not in row
+
+
+def test_a_retention_read_the_local_replay_never_answered_is_a_mismatch():
+    row = tool.compare(read_projection(5), {"cases": [], "reads": []}, None, {}, retention=frozenset({"rest/ret/get-59"}))[1][0]
+    assert row["match"] is False and row["local"] is None
+
+
+def test_the_retention_steps_of_the_p14_table_carry_the_same_name_as_their_case():
+    import fs_txn_table_p14 as p14
+
+    plan = tool.compile_plan(p14.TABLE, "a" * 32, "b" * 32)
+    steps = [step for step in plan["steps"] if "readAgoSeconds" in step]
+    assert len(steps) == 9 and all(step["id"] == step["caseId"] for step in steps)
+    assert tool.retention_cases(plan) == frozenset(step["id"] for step in steps)

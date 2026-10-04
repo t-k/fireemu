@@ -148,6 +148,12 @@ def compare(production, local, production_relations, local_relations, project=DE
     for read in production["reads"]:
         other = by_site.get(read["site"])
         row = lambda value: None if value is None else {"code": value["code"], "state": value.get("state"), "documents": value.get("documents")}  # noqa: E731
+        if read["site"] in retention:
+            # a read at a time ago: both sides accepted the read time or both refused it, and when both found the document its state agrees as well
+            classes = {"production": outcome_class(read["code"]), "local": None if other is None else outcome_class(other["code"])}
+            same = classes["production"] == classes["local"] and (read["code"] != 0 or other["code"] != 0 or row(read) == row(other))
+            reads.append({"site": read["site"], "production": row(read), "local": row(other), "match": same, "class": classes})
+            continue
         reads.append({"site": read["site"], "production": row(read), "local": row(other), "match": row(read) == row(other)})
     for site, expected in (production_relations or {}).items():
         actual = local_relations.get(site)

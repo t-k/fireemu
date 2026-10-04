@@ -370,12 +370,12 @@
       "coverageStatus": "covered",
       "evidence": {
         "evidenceType": "fireemu-only",
-        "sourceCommit": "e609246031c5348bbe82d766f89d8f7c5800eab7",
-        "finalArtifactSha256": "fdbecf5a452ac9deb2f3cf1968c2087d0a2ca3a4cda7c977d9668d988e440303",
-        "artifactBuiltFrom": "305b6a2d07cbe68f1b43eb7f3de65eae338f32f5",
+        "sourceCommit": "8218affac25038eae2f4b4aafd2cdcacc313d173",
+        "finalArtifactSha256": "ebb87bf3c1a01006f44332c09eab34c91c1603c2b52a5ec2d108f612a3500368",
+        "artifactBuiltFrom": "8218affac25038eae2f4b4aafd2cdcacc313d173",
         "runnerSha256": "56280f3e549ad5f47447f5e96feba2ae64a2af77eadc4b2bfd0e835d33dbe56a",
         "comparisonPath": "spec/compatibility/closure/evidence/SCHEDULED-FUNCTIONS-local-comparison.json",
-        "comparisonSha256": "252197fa583097b7a2e0d850fdf8b0f8f77a08fa6feddfb3044a1fc5ba40d5a7",
+        "comparisonSha256": "d3377a0c43e4bcca747fa815ba84f6b0fe700490c3b28188ee15cd9c2c982cdf",
         "rows": {
           "PASS": 5
         }
@@ -399,12 +399,12 @@
       "coverageStatus": "covered",
       "evidence": {
         "evidenceType": "fireemu-only",
-        "sourceCommit": "e609246031c5348bbe82d766f89d8f7c5800eab7",
-        "finalArtifactSha256": "fdbecf5a452ac9deb2f3cf1968c2087d0a2ca3a4cda7c977d9668d988e440303",
-        "artifactBuiltFrom": "305b6a2d07cbe68f1b43eb7f3de65eae338f32f5",
+        "sourceCommit": "8218affac25038eae2f4b4aafd2cdcacc313d173",
+        "finalArtifactSha256": "ebb87bf3c1a01006f44332c09eab34c91c1603c2b52a5ec2d108f612a3500368",
+        "artifactBuiltFrom": "8218affac25038eae2f4b4aafd2cdcacc313d173",
         "runnerSha256": "56280f3e549ad5f47447f5e96feba2ae64a2af77eadc4b2bfd0e835d33dbe56a",
         "comparisonPath": "spec/compatibility/closure/evidence/SCHEDULED-FUNCTIONS-local-comparison.json",
-        "comparisonSha256": "252197fa583097b7a2e0d850fdf8b0f8f77a08fa6feddfb3044a1fc5ba40d5a7",
+        "comparisonSha256": "d3377a0c43e4bcca747fa815ba84f6b0fe700490c3b28188ee15cd9c2c982cdf",
         "rows": {
           "PASS": 6
         }
@@ -430,12 +430,12 @@
       "coverageStatus": "covered",
       "evidence": {
         "evidenceType": "fireemu-only",
-        "sourceCommit": "e609246031c5348bbe82d766f89d8f7c5800eab7",
-        "finalArtifactSha256": "fdbecf5a452ac9deb2f3cf1968c2087d0a2ca3a4cda7c977d9668d988e440303",
-        "artifactBuiltFrom": "305b6a2d07cbe68f1b43eb7f3de65eae338f32f5",
+        "sourceCommit": "8218affac25038eae2f4b4aafd2cdcacc313d173",
+        "finalArtifactSha256": "ebb87bf3c1a01006f44332c09eab34c91c1603c2b52a5ec2d108f612a3500368",
+        "artifactBuiltFrom": "8218affac25038eae2f4b4aafd2cdcacc313d173",
         "runnerSha256": "56280f3e549ad5f47447f5e96feba2ae64a2af77eadc4b2bfd0e835d33dbe56a",
         "comparisonPath": "spec/compatibility/closure/evidence/SCHEDULED-FUNCTIONS-local-comparison.json",
-        "comparisonSha256": "252197fa583097b7a2e0d850fdf8b0f8f77a08fa6feddfb3044a1fc5ba40d5a7",
+        "comparisonSha256": "d3377a0c43e4bcca747fa815ba84f6b0fe700490c3b28188ee15cd9c2c982cdf",
         "rows": {
           "PASS": 8
         }
@@ -448,20 +448,9 @@
       "evidenceType": "fireemu-only",
       "recipeIds": ["scheduled-functions/local/overlap"],
       "cases": ["allow", "skip", "queue", "reject", "manual-overlap", "long-running-handler"],
-      "status": "VERIFIED",
-      "coverageStatus": "covered",
-      "evidence": {
-        "evidenceType": "fireemu-only",
-        "sourceCommit": "e609246031c5348bbe82d766f89d8f7c5800eab7",
-        "finalArtifactSha256": "fdbecf5a452ac9deb2f3cf1968c2087d0a2ca3a4cda7c977d9668d988e440303",
-        "artifactBuiltFrom": "305b6a2d07cbe68f1b43eb7f3de65eae338f32f5",
-        "runnerSha256": "56280f3e549ad5f47447f5e96feba2ae64a2af77eadc4b2bfd0e835d33dbe56a",
-        "comparisonPath": "spec/compatibility/closure/evidence/SCHEDULED-FUNCTIONS-local-comparison.json",
-        "comparisonSha256": "252197fa583097b7a2e0d850fdf8b0f8f77a08fa6feddfb3044a1fc5ba40d5a7",
-        "rows": {
-          "PASS": 6
-        }
-      },
+      "status": "PENDING_LOCAL_VERIFICATION",
+      "coverageStatus": "debt",
+      "evidence": null,
       "obligation": "Document local suppression/queuing; distinguish overlapping functions from Scheduler attempts",
       "source": "spec/compatibility/contract.json#FN-CLAIM-SCHEDULE and crates/fireemu-adapter-functions/src/runtime.rs and crates/fireemu-core-session/src/clock.rs"
     },
@@ -479,12 +468,12 @@
       "coverageStatus": "covered",
       "evidence": {
         "evidenceType": "fireemu-only",
-        "sourceCommit": "e609246031c5348bbe82d766f89d8f7c5800eab7",
-        "finalArtifactSha256": "fdbecf5a452ac9deb2f3cf1968c2087d0a2ca3a4cda7c977d9668d988e440303",
-        "artifactBuiltFrom": "305b6a2d07cbe68f1b43eb7f3de65eae338f32f5",
+        "sourceCommit": "8218affac25038eae2f4b4aafd2cdcacc313d173",
+        "finalArtifactSha256": "ebb87bf3c1a01006f44332c09eab34c91c1603c2b52a5ec2d108f612a3500368",
+        "artifactBuiltFrom": "8218affac25038eae2f4b4aafd2cdcacc313d173",
         "runnerSha256": "56280f3e549ad5f47447f5e96feba2ae64a2af77eadc4b2bfd0e835d33dbe56a",
         "comparisonPath": "spec/compatibility/closure/evidence/SCHEDULED-FUNCTIONS-local-comparison.json",
-        "comparisonSha256": "252197fa583097b7a2e0d850fdf8b0f8f77a08fa6feddfb3044a1fc5ba40d5a7",
+        "comparisonSha256": "d3377a0c43e4bcca747fa815ba84f6b0fe700490c3b28188ee15cd9c2c982cdf",
         "rows": {
           "PASS": 4
         }
@@ -506,12 +495,12 @@
       "coverageStatus": "covered",
       "evidence": {
         "evidenceType": "fireemu-only",
-        "sourceCommit": "e609246031c5348bbe82d766f89d8f7c5800eab7",
-        "finalArtifactSha256": "fdbecf5a452ac9deb2f3cf1968c2087d0a2ca3a4cda7c977d9668d988e440303",
-        "artifactBuiltFrom": "305b6a2d07cbe68f1b43eb7f3de65eae338f32f5",
+        "sourceCommit": "8218affac25038eae2f4b4aafd2cdcacc313d173",
+        "finalArtifactSha256": "ebb87bf3c1a01006f44332c09eab34c91c1603c2b52a5ec2d108f612a3500368",
+        "artifactBuiltFrom": "8218affac25038eae2f4b4aafd2cdcacc313d173",
         "runnerSha256": "56280f3e549ad5f47447f5e96feba2ae64a2af77eadc4b2bfd0e835d33dbe56a",
         "comparisonPath": "spec/compatibility/closure/evidence/SCHEDULED-FUNCTIONS-local-comparison.json",
-        "comparisonSha256": "252197fa583097b7a2e0d850fdf8b0f8f77a08fa6feddfb3044a1fc5ba40d5a7",
+        "comparisonSha256": "d3377a0c43e4bcca747fa815ba84f6b0fe700490c3b28188ee15cd9c2c982cdf",
         "rows": {
           "PASS": 4
         }
@@ -534,18 +523,18 @@
       "coverageStatus": "covered",
       "evidence": {
         "evidenceType": "fireemu-only",
-        "sourceCommit": "e609246031c5348bbe82d766f89d8f7c5800eab7",
-        "finalArtifactSha256": "fdbecf5a452ac9deb2f3cf1968c2087d0a2ca3a4cda7c977d9668d988e440303",
-        "artifactBuiltFrom": "305b6a2d07cbe68f1b43eb7f3de65eae338f32f5",
+        "sourceCommit": "8218affac25038eae2f4b4aafd2cdcacc313d173",
+        "finalArtifactSha256": "ebb87bf3c1a01006f44332c09eab34c91c1603c2b52a5ec2d108f612a3500368",
+        "artifactBuiltFrom": "8218affac25038eae2f4b4aafd2cdcacc313d173",
         "runnerSha256": "56280f3e549ad5f47447f5e96feba2ae64a2af77eadc4b2bfd0e835d33dbe56a",
         "comparisonPath": "spec/compatibility/closure/evidence/SCHEDULED-FUNCTIONS-local-comparison.json",
-        "comparisonSha256": "252197fa583097b7a2e0d850fdf8b0f8f77a08fa6feddfb3044a1fc5ba40d5a7",
+        "comparisonSha256": "d3377a0c43e4bcca747fa815ba84f6b0fe700490c3b28188ee15cd9c2c982cdf",
         "rows": {
           "PASS": 5
         }
       },
       "obligation": "Explicit rewind policy and fail-closed future-claim behavior",
-      "source": "spec/compatibility/contract.json#FN-CLAIM-SCHEDULE and crates/fireemu-adapter-functions/src/runtime.rs and crates/fireemu-core-session/src/clock.rs"
+      "source": "owner ledger 781 and scope decision S8 (the token response shapes are inferred from the ID-token contract and are not production parity); spec/compatibility/contract.json#FN-CLAIM-SCHEDULE and crates/fireemu-adapter-functions/src/runtime.rs and crates/fireemu-core-session/src/clock.rs"
     },
     {
       "conditionId": "SCHEDULED-FUNCTIONS/manual-schedule",
@@ -562,12 +551,12 @@
       "coverageStatus": "covered",
       "evidence": {
         "evidenceType": "fireemu-only",
-        "sourceCommit": "e609246031c5348bbe82d766f89d8f7c5800eab7",
-        "finalArtifactSha256": "fdbecf5a452ac9deb2f3cf1968c2087d0a2ca3a4cda7c977d9668d988e440303",
-        "artifactBuiltFrom": "305b6a2d07cbe68f1b43eb7f3de65eae338f32f5",
+        "sourceCommit": "8218affac25038eae2f4b4aafd2cdcacc313d173",
+        "finalArtifactSha256": "ebb87bf3c1a01006f44332c09eab34c91c1603c2b52a5ec2d108f612a3500368",
+        "artifactBuiltFrom": "8218affac25038eae2f4b4aafd2cdcacc313d173",
         "runnerSha256": "56280f3e549ad5f47447f5e96feba2ae64a2af77eadc4b2bfd0e835d33dbe56a",
         "comparisonPath": "spec/compatibility/closure/evidence/SCHEDULED-FUNCTIONS-local-comparison.json",
-        "comparisonSha256": "252197fa583097b7a2e0d850fdf8b0f8f77a08fa6feddfb3044a1fc5ba40d5a7",
+        "comparisonSha256": "d3377a0c43e4bcca747fa815ba84f6b0fe700490c3b28188ee15cd9c2c982cdf",
         "rows": {
           "PASS": 5
         }
@@ -584,12 +573,12 @@
       "coverageStatus": "covered",
       "evidence": {
         "evidenceType": "fireemu-only",
-        "sourceCommit": "e609246031c5348bbe82d766f89d8f7c5800eab7",
-        "finalArtifactSha256": "fdbecf5a452ac9deb2f3cf1968c2087d0a2ca3a4cda7c977d9668d988e440303",
-        "artifactBuiltFrom": "305b6a2d07cbe68f1b43eb7f3de65eae338f32f5",
+        "sourceCommit": "8218affac25038eae2f4b4aafd2cdcacc313d173",
+        "finalArtifactSha256": "ebb87bf3c1a01006f44332c09eab34c91c1603c2b52a5ec2d108f612a3500368",
+        "artifactBuiltFrom": "8218affac25038eae2f4b4aafd2cdcacc313d173",
         "runnerSha256": "56280f3e549ad5f47447f5e96feba2ae64a2af77eadc4b2bfd0e835d33dbe56a",
         "comparisonPath": "spec/compatibility/closure/evidence/SCHEDULED-FUNCTIONS-local-comparison.json",
-        "comparisonSha256": "252197fa583097b7a2e0d850fdf8b0f8f77a08fa6feddfb3044a1fc5ba40d5a7",
+        "comparisonSha256": "d3377a0c43e4bcca747fa815ba84f6b0fe700490c3b28188ee15cd9c2c982cdf",
         "rows": {
           "PASS": 5
         }
@@ -629,13 +618,17 @@
     }
   ],
   "limitations": [
-    "The inventory is frozen. The nine Fireemu-only conditions are verified locally; the production-parity conditions and the closure gates remain pending and the parent is IMPLEMENTING.",
+    "The inventory is frozen. Eight of the nine Fireemu-only conditions are verified locally; overlap-policy stays pending (see below), and the production-parity conditions and the closure gates remain pending. The parent is IMPLEMENTING.",
     "DST repeated delivery is not proven by future next-time metadata.",
     "General Cloud Scheduler resource API is not claimed.",
     "The Fireemu-only conditions are bound to local tests and claim no production behaviour.",
     "A snapshot restore that is rolled back because a later hook refuses it resets the functions runtime a second time: the schedule queue from before the restore is discarded and every schedule cursor stays at the restored time, so occurrences can repeat or be skipped. Known; not fixed here.",
     "With scheduler.catchUp all and scheduler.overlap skip or reject, one clock move over several occurrences of a function overlaps itself (skip keeps the oldest, reject counts the rest). The behaviour is pinned by a test, not endorsed.",
-    "scheduler.clock wall is declared in the config schema and refused at load as not implemented."
+    "scheduler.clock wall is declared in the config schema and refused at load as not implemented.",
+    "overlap-policy is not verified: its obligation says to distinguish overlapping functions from Scheduler attempts, and fireemu does not. A function counts as busy while any of its runs is queued, running or waiting to retry, so under skip and reject a retry that is still pending can suppress the next occurrence. The README states this. Whether production does the same is the production case scheduler-attempt-versus-handler-instance (deadline-and-overlap); the local rows (allow, skip, queue, reject, manual-overlap, long-running-handler) are kept in the local tests but are not claimed as this condition.",
+    "After a rewind below a schedule cursor that trails the clock (a catchUp all backlog that was cut at the cap, or a run held for room), the owed runs stay owed but do not come due again until the clock passes the cursor, and the session reports idle meanwhile. Documented in the README; no test pins it.",
+    "scheduler.defaultTimeZone is tested only for a configured value (it moves the occurrences of a schedule that names no zone). What a schedule that names no zone and has no configured default does is not claimed: firebase-tools deploys a zone-less v1 schedule as America/Los_Angeles, and the production case timezone-validation-defaults/v1-default decides it.",
+    "The token response shapes asserted after a rewind (INVALID_ID_TOKEN, the Storage 401 and the Firestore PermissionDenied in strict, TOKEN_EXPIRED for a sign-in below the account creation) are inferred from the ID-token contract by owner ledger 781 and scope decision S8. A rewound clock has no production counterpart, so they are local rulings, not production parity; AUTH-CREDENTIAL owns them."
   ],
   "frozenOn": "2026-09-30",
   "freezeAuthority": "docs.local/instructions/owner-decisions.md (2026-09-30 SCHEDULED-FUNCTIONS scope: coordinator rulings)"

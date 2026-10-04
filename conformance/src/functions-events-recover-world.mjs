@@ -179,7 +179,7 @@ export function createRecoverWorld({
     }
     if (
       hostname === "artifactregistry.googleapis.com" &&
-      /\/repositories\/gcf-artifacts$/.test(pathname)
+      pathname.endsWith("/repositories/gcf-artifacts")
     )
       return json(200, {
         name: pathname.slice(4),

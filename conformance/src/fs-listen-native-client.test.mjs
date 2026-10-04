@@ -2,7 +2,12 @@ import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
 import { test } from "node:test";
 
-import { FRAME_CAP, createNativeClient, grpcAddress } from "./fs-listen/native-client.mjs";
+import {
+  FRAME_CAP,
+  createNativeClient,
+  credentialsFor,
+  grpcAddress,
+} from "./fs-listen/native-client.mjs";
 
 const PROJECT = "fireemu-oracle-txn";
 const ROOT = `projects/${PROJECT}/databases/(default)/documents`;
@@ -400,4 +405,9 @@ test("a stream's end is timed from when it was opened", async () => {
   t = 1750;
   grpcClient.bidi[0].emit("status", { code: 0, details: "" });
   assert.equal(stream.ended().at, 750);
+});
+
+test("production gets TLS channel credentials and a loopback target gets none", () => {
+  assert.equal(credentialsFor({ kind: "production" })._isSecure(), true);
+  assert.equal(credentialsFor({ kind: "local", host: "127.0.0.1", port: 1 })._isSecure(), false);
 });

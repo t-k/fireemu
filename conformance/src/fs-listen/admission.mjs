@@ -145,11 +145,10 @@ export async function checkAdmission({
   if (text === undefined) throw new Error(`the ledger ${ledger} cannot be read`);
   const { entries, open } = projectRows(text, project);
   // The coordinator's own `started` row of this envelope is the one open row that is allowed.
-  // A second start of this envelope is not allowed: only one may be open.
-  const starts = open.filter(
+  // Only one start of this envelope is the allowed one: a second stays in `others` and refuses.
+  const own = open.find(
     ({ row }) => row.event === "started" && taskOf(row) === TASK_ID && row.envelopeId === envelope,
   );
-  const own = starts.length === 1 ? starts[0] : undefined;
   const others = open.filter((entry) => entry !== own);
   if (others.length > 0) {
     const { row } = others[0];

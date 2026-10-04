@@ -459,3 +459,19 @@ test("a create that throws leaves the account to be looked up, like an unknown o
   assert.deepEqual(selectors, [{ email: ["fsl-rr-a@example.com"] }, "found"]);
   assert.equal(report.complete, true);
 });
+
+test("the request deadline is a real one: it has not passed at once, and it passes", async () => {
+  let signal;
+  const client = createAccountClient({
+    base: "b",
+    project: "p",
+    headers: {},
+    fetchImpl: async (url, init) => {
+      signal = init.signal;
+      return reply(200, { localId: "u" });
+    },
+  });
+  await client.create({ email: "e", password: "p" });
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.equal(signal.aborted, false, "a deadline of 0 or a few ms would have passed by now");
+});

@@ -886,3 +886,180 @@ test("a token or read time that is a plain Buffer survives a save and an open un
   assert.deepEqual(streams[1].sent[0].addTarget.resumeToken, bytes);
   assert.ok(Buffer.isBuffer(streams[1].sent[0].addTarget.resumeToken));
 });
+
+/** A run whose sleep and close take a turn of the event loop, and which logs the order of things. */
+async function ordered(steps, script = {}) {
+  const events = [];
+  const { client, streams, clock } = fakeClient(script);
+  const commit = client.commit;
+  client.commit = async (request) => {
+    events.push("commit");
+    return commit(request);
+  };
+  const open = client.openStream;
+  client.openStream = () => {
+    const stream = open();
+    const close = stream.close;
+    stream.close = async () => {
+      events.push("close:start");
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      events.push("close:end");
+      return close();
+    };
+    return stream;
+  };
+  const out = await runNative(
+    [{ id: "native/t", conditions: ["x"], docs: { a: "lsn/{run}-a" }, steps }],
+    {
+      client,
+      project: PROJECT,
+      run: RUN,
+      sleep: async (ms) => {
+        events.push(`sleep:${ms}:start`);
+        await Promise.resolve();
+        clock.t += ms;
+        events.push(`sleep:${ms}:end`);
+      },
+      now: () => clock.t,
+    },
+  );
+  return { out, events, streams };
+}
+
+test("every wait, settle and sleep finishes before the next step starts; settle 0 never sleeps", async () => {
+  const frames = { 0: [change("CURRENT", [1])] };
+  const open = { do: "open", stream: "s", targets: [{ id: 1, doc: "a" }] };
+  const seed = { do: "seed", doc: "a", fields: {} };
+  const beforeClosing = (events) => {
+    const end = events.indexOf("close:start");
+    return end === -1 ? events : events.slice(0, end);
+  };
+  const waitThen = async (extra) =>
+    (
+      await ordered(
+        [open, { do: "wait", stream: "s", until: { current: 1 }, ...extra }, seed],
+        frames,
+      )
+    ).events;
+  assert.deepEqual(beforeClosing(await waitThen({ settleMs: 700 })), [
+    "sleep:700:start",
+    "sleep:700:end",
+    "commit",
+  ]);
+  assert.deepEqual(beforeClosing(await waitThen({ settleMs: 0 })), ["commit"]);
+  assert.deepEqual((await ordered([{ do: "settle", ms: 40 }, seed])).events, [
+    "sleep:40:start",
+    "sleep:40:end",
+    "commit",
+  ]);
+  assert.deepEqual((await ordered([{ do: "sleep", ms: 30 }, seed])).events, [
+    "sleep:30:start",
+    "sleep:30:end",
+    "commit",
+  ]);
+});
+
+test("a close step finishes closing before the next step, and every stream is closed when the run returns", async () => {
+  const open = (name) => ({ do: "open", stream: name, targets: [{ id: 1, doc: "a" }] });
+  const closing = await ordered([
+    open("s"),
+    { do: "close", stream: "s" },
+    { do: "seed", doc: "a", fields: {} },
+  ]);
+  assert.deepEqual(closing.events, [
+    "close:start",
+    "close:end",
+    "commit",
+    "close:start",
+    "close:end",
+  ]);
+  const left = await ordered([open("s"), open("t")]);
+  assert.deepEqual(left.events, ["close:start", "close:end", "close:start", "close:end"]);
+  assert.deepEqual(
+    left.streams.map((stream) => stream.ended()?.reason),
+    ["closed-by-harness", "closed-by-harness"],
+  );
+});
+
+test("a save leaves its stream open, and without a token or time in the frames saves nothing to resume from", async () => {
+  const { out } = await runSteps([
+    { do: "open", stream: "s", targets: [{ id: 1, doc: "a" }] },
+    { do: "save", stream: "s", id: 1, token: "t" },
+    { do: "record", row: "native/t/x", stream: "s" },
+  ]);
+  assert.equal(out.rows["native/t/x"].end, null);
+  const empty = await runSteps([
+    { do: "open", stream: "s", targets: [{ id: 1, doc: "a" }] },
+    { do: "save", stream: "s", id: 1, token: "t", time: "w" },
+    { do: "open", stream: "r", targets: [{ id: 1, doc: "a", resume: "t" }] },
+  ]);
+  assert.equal(empty.out.errors["native/t"], "no saved token t");
+  const noTime = await runSteps([
+    { do: "open", stream: "s", targets: [{ id: 1, doc: "a" }] },
+    { do: "save", stream: "s", id: 1, token: "t", time: "w" },
+    { do: "open", stream: "r", targets: [{ id: 1, doc: "a", readTimeFrom: "w" }] },
+  ]);
+  assert.equal(noTime.out.errors["native/t"], "no saved read time w");
+});
+
+test("each request step issues exactly its own requests and nothing else", async () => {
+  const one = async (step) => {
+    const { out, log } = await runSteps([step]);
+    assert.deepEqual(out.errors, {});
+    return { requests: out.requests, log: log.map(([name]) => name) };
+  };
+  assert.deepEqual(await one({ do: "seed", doc: "a", fields: {} }), {
+    requests: 1,
+    log: ["commit"],
+  });
+  assert.deepEqual(await one({ do: "write", doc: "a", fields: {} }), {
+    requests: 1,
+    log: ["commit"],
+  });
+  assert.deepEqual(await one({ do: "delete", doc: "a" }), { requests: 1, log: ["commit"] });
+  assert.deepEqual(await one({ do: "commit", writes: [{ doc: "a", fields: {} }] }), {
+    requests: 1,
+    log: ["commit"],
+  });
+  assert.deepEqual(await one({ do: "txn", writes: [{ doc: "a", fields: {} }] }), {
+    requests: 2,
+    log: ["begin", "commit"],
+  });
+  const sleeps = await runSteps([
+    { do: "sleep", ms: 5 },
+    { do: "settle", ms: 5 },
+  ]);
+  assert.deepEqual(sleeps.out.errors, {});
+});
+
+test("a record with groups lists the commit groups with the program's names; without it there is no groups key", async () => {
+  const stamped = (doc, seconds) => ({
+    kind: "documentChange",
+    documentChange: {
+      document: { name: `${ROOT}/lsn/${RUN}-${doc}`, updateTime: { seconds, nanos: 1 } },
+      targetIds: [1],
+    },
+  });
+  const frames = {
+    0: [
+      stamped("a", "5"),
+      stamped("b", "5"),
+      change("NO_CHANGE", [], { resumeToken: Buffer.from("t") }),
+    ],
+  };
+  const rec = (groups) => [
+    { do: "open", stream: "s", targets: [{ id: 1, doc: "a" }] },
+    { do: "record", row: "native/t/x", stream: "s", ...(groups ? { groups: true } : {}) },
+    { do: "close", stream: "s" },
+  ];
+  const withGroups = await runSteps(rec(true), frames);
+  assert.deepEqual(withGroups.out.rows["native/t/x"].groups, [
+    { docs: ["a", "b"], sameUpdateTime: true },
+  ]);
+  assert.deepEqual(
+    withGroups.out.rows["native/t/x"].rows.map((r) => r.doc ?? r.kind),
+    ["a", "b", "boundary"],
+  );
+  const without = await runSteps(rec(false), frames);
+  assert.equal("groups" in without.out.rows["native/t/x"], false);
+});

@@ -43,6 +43,26 @@ export function eventTimeMs(frame) {
   return null;
 }
 
+// Storage frames of these handlers are timed by their object's own `data.updated`: in the FE v5 production run a Gen1
+// finalize frame was stamped 1611 ms after the source call by its context.timestamp while its data.updated was inside the
+// call. A delete or archive frame carries the previous state's data.updated, so those keep the event time.
+const OBJECT_TIME_HANDLERS = new Set([
+  "storageFinalizedV1",
+  "storageFinalizedV2",
+  "storageMetadataUpdatedV1",
+  "storageMetadataUpdatedV2",
+]);
+
+/** The time a frame is attributed to a source operation by: the object's `updated` for finalize and metadata-update frames, else the event time. */
+export function attributionTimeMs(frame) {
+  if (!isObject(frame)) return null;
+  if (OBJECT_TIME_HANDLERS.has(frame.handler)) {
+    const updated = parseTimeMs(frame.event?.data?.updated);
+    if (updated !== null) return updated;
+  }
+  return eventTimeMs(frame);
+}
+
 /** True when a matchKey has one of the contract's role shapes. */
 export function validMatchKey(key) {
   if (!isObject(key) || !KEY_KINDS.has(key.kind)) return false;
@@ -98,7 +118,7 @@ function frameIssues(entry) {
   }
   const eventMs = eventTimeMs(entry.frame);
   if (eventMs === null) issues.push("frame has no event time for its generation");
-  return { logMs, eventMs, issues };
+  return { logMs, eventMs, attributionMs: attributionTimeMs(entry.frame), issues };
 }
 
 const frameContent = (entry) =>

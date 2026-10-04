@@ -57,8 +57,13 @@ export function resourceIdentified(frame) {
   }
 }
 
-/** For every production frame, the operations it matches by resource and by event time. */
-function attribute(production, toleranceMs) {
+/**
+ * For every production frame, the operations it matches by resource and by time (`attributionMs`). A frame inside an
+ * operation's call window is that operation's. A frame within the tolerance of a window is that operation's only when no
+ * other operation of the same resource could own it too; with two or more candidates, or no time, it is attributed to none
+ * (`nearOf`), so the ambiguity fails closed.
+ */
+export function attribute(production, toleranceMs) {
   const operations = production.passes.flatMap((pass) => pass.operations);
   const attribution = new Map();
   for (const frame of production.frames) {
@@ -66,19 +71,25 @@ function attribute(production, toleranceMs) {
     attribution.set(frame, entry);
     if (!isObject(frame.frame)) continue;
     entry.identified = resourceIdentified(frame.frame);
+    const nearByTime = [];
     for (const op of operations) {
       if (!validMatchKey(op.matchKey) || !resourceMatches(frame.frame, op.matchKey)) continue;
       entry.resourceOf.push(op);
-      if (frame.eventMs === null || op.startMs === null || op.endMs === null) {
+      if (frame.attributionMs === null || op.startMs === null || op.endMs === null) {
         entry.nearOf.push(op);
-      } else if (frame.eventMs >= op.startMs && frame.eventMs <= op.endMs) {
+      } else if (frame.attributionMs >= op.startMs && frame.attributionMs <= op.endMs) {
         entry.subjectOf.push(op);
       } else if (
-        frame.eventMs >= op.startMs - toleranceMs &&
-        frame.eventMs <= op.endMs + toleranceMs
+        frame.attributionMs >= op.startMs - toleranceMs &&
+        frame.attributionMs <= op.endMs + toleranceMs
       ) {
         entry.nearOf.push(op);
+        nearByTime.push(op);
       }
+    }
+    if (entry.subjectOf.length === 0 && entry.nearOf.length === 1 && nearByTime.length === 1) {
+      entry.subjectOf = nearByTime;
+      entry.nearOf = [];
     }
   }
   return attribution;

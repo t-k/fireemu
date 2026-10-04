@@ -50,18 +50,11 @@ const setEventTime = (entry, ms) => {
   else entry.frame.event.time = isoMicros(ms);
 };
 
-test("event times exactly on the source call bounds belong to it; on the tolerance bounds are unattributable", () => {
-  for (const at of [S, S + 1000]) {
+test("event times exactly on the source call bounds belong to it; so do those on the tolerance bounds when no other operation can own them", () => {
+  for (const at of [S, S + 1000, S - 1000, S + 2000]) {
     const w = world();
     setEventTime(createFrame(w, 1, 101), at);
     assert.equal(row(compare(w), CREATE_V1).status, "MATCH", `${at - S}`);
-  }
-  for (const at of [S - 1000, S + 2000]) {
-    const w = world();
-    setEventTime(createFrame(w, 1, 101), at);
-    const found = row(compare(w), CREATE_V1);
-    assert.equal(found.status, "INCOMPLETE", `${at - S}`);
-    assert.match(found.reasons[0], /cannot be attributed/);
   }
   for (const at of [S - 1000.001, S + 2000.001]) {
     const w = world();
@@ -116,7 +109,7 @@ test("a frame attributed to two operations is INCOMPLETE and never serves as a c
   ]);
 });
 
-test("negative case: a near frame of the subject is INCOMPLETE; controls need a clean frame logged strictly before", () => {
+test("negative case: a frame near the call and no other operation's is the subject's and a DIFF; controls need a clean frame logged strictly before", () => {
   const near = world();
   near.run.frames.push(
     frameEntry(
@@ -132,8 +125,8 @@ test("negative case: a near frame of the subject is INCOMPLETE; controls need a 
     ),
   );
   const nearRow = row(compare(near), OTHER_V2);
-  assert.equal(nearRow.status, "INCOMPLETE");
-  assert.match(nearRow.reasons[0], /cannot be attributed/);
+  assert.equal(nearRow.status, "DIFF");
+  assert.match(nearRow.reasons[0], /delivered 1 frame\(s\) on a no-event case/);
 
   const atStart = world();
   createFrame(atStart, 2, 101).logTimestamp = iso(S + 10_000);
@@ -350,9 +343,10 @@ test("a frame names its resource the way resourceMatches reads it, per source", 
 test("the attribution tolerance is a parameter of the comparison", () => {
   const w = world();
   setEventTime(createFrame(w, 1, 101), S - 1500);
-  assert.equal(row(compare(w), CREATE_V1).status, "INCOMPLETE");
-  assert.equal(row(compare(w, { toleranceMs: 2000 }), CREATE_V1).status, "INCOMPLETE");
-  assert.match(row(compare(w, { toleranceMs: 2000 }), CREATE_V1).reasons[0], /within 2000 ms/);
+  assert.deepEqual(row(compare(w), CREATE_V1).reasons, [
+    "production pass 1: no fsCreatedV1 frame in the 120 s window",
+  ]);
+  assert.equal(row(compare(w, { toleranceMs: 2000 }), CREATE_V1).status, "MATCH");
 });
 
 test("a local frame printed in the stdout capture mode has its listing ignored too", () => {

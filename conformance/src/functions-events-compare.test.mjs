@@ -8,6 +8,7 @@ import {
   T0,
   firestoreFrame,
   frameEntry,
+  op,
 } from "./functions-events/compare/fixtures/build.mjs";
 
 const readJson = (path) => JSON.parse(readFileSync(new URL(path, import.meta.url)));
@@ -316,7 +317,7 @@ test("negative case: a frame of the handler whose resource cannot be identified 
   }
 });
 
-test("frames of the subject resource from other mutations are not the subject's; near ones are INCOMPLETE", () => {
+test("frames of the subject resource from other mutations are not the subject's; a frame near two operations is INCOMPLETE", () => {
   const cleanup = world();
   const s = T0 + 60_000;
   const path = `fe_events_primary/${docId(101)}`;
@@ -352,18 +353,32 @@ test("frames of the subject resource from other mutations are not the subject's;
   assert.equal(lifecycle.frameAccounting.lifecycle, 2);
 
   const near = world();
-  near.run.frames.push(
-    frameEntry(
-      firestoreFrame({
-        handler: "fsCreatedV1",
-        generation: 1,
-        project: PRODUCTION_PROJECT,
-        path,
-        eventId: uuid(11),
-        timeMs: s - 400,
-      }),
-      s + 1500,
-    ),
+  const nearFrame = frameEntry(
+    firestoreFrame({
+      handler: "fsCreatedV1",
+      generation: 1,
+      project: PRODUCTION_PROJECT,
+      path,
+      eventId: uuid(11),
+      timeMs: s - 400,
+    }),
+    s + 1500,
+  );
+  near.run.frames.push(nearFrame);
+  // alone, the one operation of the resource owns a frame within the tolerance of its window
+  const single = rowById(compare(near), "functions-events/firestore/create#new-document#v1");
+  assert.ok(
+    !single.reasons.some((reason) => reason.includes("cannot be attributed")),
+    single.reasons.join("; "),
+  );
+  // with a second operation on the same resource whose window it is near too, the frame is nobody's: fail closed
+  near.run.passes[0].operations.push(
+    op({
+      scenarioId: "fs-update",
+      start: s - 1600,
+      end: s - 500,
+      matchKey: { kind: "firestore", value: path },
+    }),
   );
   const row = rowById(compare(near), "functions-events/firestore/create#new-document#v1");
   assert.equal(row.status, "INCOMPLETE");

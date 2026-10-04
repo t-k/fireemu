@@ -150,8 +150,8 @@ test("check reads locally, sends nothing, and says what it pinned", async () => 
 });
 
 /** The lines and the journal of a run that wrote nothing, finished ten minutes before the check (t = 12:00Z). */
-function quietRun(dir, { mutation = false } = {}) {
-  const runDir = join(dir, "runs", "quiet");
+function quietRun(runs, { mutation = false } = {}) {
+  const runDir = join(runs, "quiet");
   mkdirSync(join(runDir, "transport"), { recursive: true });
   const send = (seq) => [
     { seq, state: "before-send", mutation },
@@ -189,16 +189,20 @@ function quietRun(dir, { mutation = false } = {}) {
 
 test("check does not wait out the spacing after a run that wrote nothing, and does after one that did", async () => {
   const quiet = arrange();
-  appendFileSync(quiet.ledgerPath, `${quietRun(quiet.dir)}\n`);
+  // the runs directory is not the ledger's directory
+  quiet.deps.runsDir = mkdtempSync(join(tmpdir(), "fe-runs-"));
+  appendFileSync(quiet.ledgerPath, `${quietRun(quiet.deps.runsDir)}\n`);
   const ok = await main(quiet.argv("check"), quiet.deps);
   assert.deepEqual(ok.problems, []);
   const wrote = arrange();
-  appendFileSync(wrote.ledgerPath, `${quietRun(wrote.dir, { mutation: true })}\n`);
+  wrote.deps.runsDir = mkdtempSync(join(tmpdir(), "fe-runs-"));
+  appendFileSync(wrote.ledgerPath, `${quietRun(wrote.deps.runsDir, { mutation: true })}\n`);
   const refused = await main(wrote.argv("check"), wrote.deps);
   assert.ok(refused.problems.some((p) => p.includes("30 minutes")));
   const gone = arrange();
-  appendFileSync(gone.ledgerPath, `${quietRun(gone.dir)}\n`);
-  rmSync(join(gone.dir, "runs", "quiet", "transport"), { recursive: true });
+  gone.deps.runsDir = mkdtempSync(join(tmpdir(), "fe-runs-"));
+  appendFileSync(gone.ledgerPath, `${quietRun(gone.deps.runsDir)}\n`);
+  rmSync(join(gone.deps.runsDir, "quiet", "transport"), { recursive: true });
   const unreadable = await main(gone.argv("check"), gone.deps);
   assert.ok(unreadable.problems.some((p) => p.includes("30 minutes")));
 });

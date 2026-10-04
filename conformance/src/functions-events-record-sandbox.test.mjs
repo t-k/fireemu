@@ -352,6 +352,36 @@ for (const [label, change] of nearMisses) {
   });
 }
 
+test("a journal that hides a change behind a repeated sequence number or a second answer is refused", () => {
+  const first = JSON.parse(journal(1).split("\n")[0]);
+  const tampered = {
+    "a repeated send that overwrites a mutating one": `${JSON.stringify({ ...first, mutation: true })}\n${journal(22)}`,
+    "a second answer that replaces an unknown one": `${journal(22, { kind: "unknown" })}\n${JSON.stringify({ seq: 1, state: "response-persisted", kind: "success" })}`,
+    "an answer with no kind": `${journal(22)}`.replace('"kind":"success"', '"x":1'),
+  };
+  for (const [label, text] of Object.entries(tampered)) {
+    const problems = sandbox.ledgerProblems(
+      ledgerOf(realStarted, realFinished, realClosed),
+      after,
+      journalOf(text),
+    );
+    assert.ok(spaced(problems), label);
+  }
+  assert.equal(sandbox.journalFacts(`${journal(1)}\n${journal(1)}`), undefined);
+  assert.equal(
+    sandbox.journalFacts(`${journal(2)}\n{"seq":1,"state":"response-persisted","kind":"success"}`),
+    undefined,
+  );
+  // a reader that hands back bytes, not text, is not trusted
+  assert.ok(
+    spaced(
+      sandbox.ledgerProblems(ledgerOf(realStarted, realFinished, realClosed), after, {
+        readJournal: () => Buffer.from(journal()),
+      }),
+    ),
+  );
+});
+
 test("lines with no run directory are never taken for a run that wrote nothing", () => {
   const bare = [realStarted, realFinished, realClosed].map(({ runDir: _runDir, ...rest }) => rest);
   let asked = 0;

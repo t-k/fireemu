@@ -115,10 +115,8 @@ export function nameStates(text) {
       if (record.phase === "before") {
         // Opened again without an answer: the earlier one is unknown.
         if (pending.has(name)) answer(name, pending.get(name), "unknown");
-        if (record.maybe === true) {
-          pending.delete(name);
-          state(name);
-        } else pending.set(name, op);
+        if (record.maybe === true) state(name);
+        else pending.set(name, op);
       } else {
         pending.delete(name);
         answer(name, op, record.outcome);
@@ -161,8 +159,7 @@ export async function readbackJournal({ text, client, accountClient, now = () =>
         (a) =>
           !a.uid &&
           (a.state === undefined || a.state === "unknown") &&
-          (a.foundByEmail ?? []).length === 0 &&
-          (a.foundByUid ?? []).length === 0,
+          (a.foundByEmail ?? []).length === 0,
       )
       .map((a) => `account:${a.email}`),
   ];

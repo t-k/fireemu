@@ -396,6 +396,34 @@ test("nameStates: what each name's answers leave of its create", () => {
   const B = ["n/b", "create"];
   assert.deepEqual(unconfirmed(states(before(A, B), after("ok", A))), ["n/b"]);
   assert.deepEqual(unconfirmed(states(before(A, B), after("unknown", A, B))), ["n/a", "n/b"]);
+  // A refused delete applies nothing: it settles nothing and forgets nothing.
+  assert.deepEqual(
+    unconfirmed(states(before(A), after("unknown", A), before(D), after("refused", D))),
+    ["n/a"],
+  );
+  assert.deepEqual(
+    unconfirmed(
+      states(
+        before(A),
+        after("ok", A),
+        before(D),
+        after("refused", D),
+        before(A),
+        after("unknown", A),
+      ),
+    ),
+    [],
+  );
+  // A create opened again and refused leaves the earlier unknown create as it was.
+  assert.deepEqual(
+    unconfirmed(states(before(A), after("unknown", A), before(A), after("refused", A))),
+    ["n/a"],
+  );
+  assert.deepEqual(unconfirmed(states(before(A), after("unknown", A), before(A))), ["n/a"]);
+  // A line that is not JSON is refused here as it is by issuedFromJournal.
+  assert.throws(() => nameStates("{broken"), /cannot be read/);
+  // A maybe name is in the answer, as not unconfirmed.
+  assert.deepEqual([...states({ ...before(A), maybe: true })], [["n/a", { unconfirmed: false }]]);
   // Names the SDK marks `maybe` are names that may exist, not creates the recorder sent.
   assert.deepEqual(unconfirmed(states({ ...before(A), maybe: true })), []);
   assert.deepEqual(unconfirmed(states(before(A), { ...before(B), maybe: true })), ["n/a"]);

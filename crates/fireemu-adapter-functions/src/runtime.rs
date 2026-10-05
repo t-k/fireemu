@@ -19,9 +19,7 @@ use fireemu_core_events::outbox::Outbox;
 use fireemu_core_events::retry::RetryPolicy;
 use fireemu_core_events::state::{EventState, FailureOutcome};
 use fireemu_core_functions::cron::{RunCount, Schedule};
-use fireemu_core_functions::manifest::{
-    AuthEvent, FunctionManifest, FunctionSpec, ObjectEvent, Trigger,
-};
+use fireemu_core_functions::manifest::{AuthEvent, FunctionManifest, FunctionSpec, Trigger};
 use fireemu_core_session::clock::VirtualClock;
 use fireemu_core_storage::store::StorageEvent;
 use fireemu_core_types::determinism::Clock;
@@ -2061,12 +2059,11 @@ impl FunctionsRuntime {
         if !self.background_triggers_enabled() {
             return Ok(self.empty_event_reservation());
         }
-        let (kind, object) = match event {
-            StorageEvent::Finalized(m) => (ObjectEvent::Finalized, m),
-            StorageEvent::Deleted(m) => (ObjectEvent::Deleted, m),
-            StorageEvent::MetadataUpdated(m) => (ObjectEvent::MetadataUpdated, m),
-        };
+        let parts = crate::events::storage_event_parts(event);
+        let (kind, object, time_deleted) = (parts.kind, parts.object, parts.time_deleted);
         let time = self.now();
+        // The payload's own instant; the delivery keeps the admission instant.
+        let event_time = parts.at.unwrap_or(time);
         let mut inner = self
             .inner
             .lock()
@@ -2083,7 +2080,7 @@ impl FunctionsRuntime {
                 .and_then(|next| next.checked_add(1))
                 .ok_or(SourceEventAdmissionError::Capacity)?;
             let id = format!("{}-{next}", self.config.session.value());
-            let payload = storage_event(&id, kind, object, time);
+            let payload = storage_event(&id, kind, object, event_time, time_deleted);
             let event_type = kind.event_type().to_owned();
             let subject = format!("objects/{}", object.name.as_str());
             let copies = self.delivery_copies(&f.name, &event_type);

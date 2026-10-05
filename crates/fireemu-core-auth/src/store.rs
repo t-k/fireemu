@@ -1929,6 +1929,21 @@ impl AuthStore {
 
     /// Deletes a user and live refresh sessions, retaining only rejection digests.
     pub fn delete_user_by_id(&mut self, uid: &str) -> Result<(), AuthError> {
+        let user = self.remove_user(uid)?;
+        self.deleted_users.push(user);
+        Ok(())
+    }
+
+    /// Deletes a user as [`Self::delete_user_by_id`] does, but records no lifecycle event: the
+    /// bulk delete (`deleteUsers`, Admin `accounts:batchDelete`) does not fire the `onDelete`
+    /// trigger in production, while a single delete does.
+    pub fn delete_user_by_id_without_event(&mut self, uid: &str) -> Result<(), AuthError> {
+        self.remove_user(uid).map(drop)
+    }
+
+    /// Removes the user and everything keyed by it; the caller decides whether the deletion is
+    /// announced.
+    fn remove_user(&mut self, uid: &str) -> Result<UserRecord, AuthError> {
         let key = LocalId(uid.to_owned());
         let user = self.users.remove(&key).ok_or(AuthError::UserNotFound)?;
         if let Some(email) = &user.email {
@@ -1973,8 +1988,7 @@ impl AuthStore {
             VerificationPurpose::Enrollment { uid }
             | VerificationPurpose::MfaSignIn { uid, .. } => *uid != key,
         });
-        self.deleted_users.push(Arc::unwrap_or_clone(user));
-        Ok(())
+        Ok(Arc::unwrap_or_clone(user))
     }
 
     /// Removes every user, credential and token (session reset). The project ID and the

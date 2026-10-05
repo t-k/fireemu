@@ -3,7 +3,7 @@
 //! event log for the outbox.
 
 use core::fmt;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
 use fireemu_core_types::admission::EventAdmissionError;
@@ -507,9 +507,96 @@ pub enum StorageEvent {
     /// A new generation was committed.
     Finalized(ObjectMetadata),
     /// A generation was deleted.
-    Deleted(ObjectMetadata),
+    Deleted {
+        /// The generation, as it was.
+        object: ObjectMetadata,
+        /// For a noncurrent version deleted by number, the instant it stopped being live: its
+        /// resource carries `timeDeleted` (RECORDED, FE v5: the Deleted payload of a noncurrent
+        /// generation has it, v1 and v2). `None` for a live generation.
+        time_deleted: Option<LogicalInstant>,
+        /// The instant of the event when it is not the instant it is admitted at: an overwrite
+        /// stamps the Deleted event of the replaced generation with the creation instant of the
+        /// replacement (RECORDED, FE v5). `None` means "when admitted".
+        at: Option<LogicalInstant>,
+    },
     /// Metadata changed (new metageneration).
     MetadataUpdated(ObjectMetadata),
+    /// A live generation became noncurrent in a versioned bucket: it was overwritten, or deleted
+    /// without naming its generation. RECORDED (FE v5, `functions-events-formal-20261004T182904Z`,
+    /// v1 and v2, two passes): the payload is the object as it was plus `timeDeleted`, and the
+    /// event's own time is the instant of the overwrite. OBSERVED ORDER: delivered after the
+    /// Finalized event of the overwrite in 4 of 4 (see `put_events`). UNRECORDED: whether a plain
+    /// delete of a live object (no generation named) also announces a Deleted event (it does not
+    /// here; the documentation says it is not announced as Deleted). Change them in `plan_put` and
+    /// `delete_with_admission`, the only places that build this event.
+    Archived {
+        /// The generation that became noncurrent, as it was.
+        object: ObjectMetadata,
+        /// When it stopped being live.
+        time_deleted: LogicalInstant,
+    },
+}
+
+/// A generation that is no longer live: kept by a versioned bucket until it is deleted by number.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NoncurrentVersion {
+    /// The generation, as it was when it stopped being live.
+    pub object: ObjectMetadata,
+    /// When it stopped being live (`timeDeleted`).
+    pub time_deleted: LogicalInstant,
+}
+
+/// One entry of a versions listing: a live or a noncurrent generation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct VersionEntry<'a> {
+    /// The generation.
+    pub object: &'a ObjectMetadata,
+    /// `None` for the live generation, the time it stopped being live otherwise.
+    pub time_deleted: Option<LogicalInstant>,
+}
+
+/// Where a versions listing resumes: the first entry of the next page. A key, not an offset, so a
+/// write between two pages never makes the listing skip or repeat an entry. UNRECORDED:
+/// production's page token for a versions listing.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum VersionsCursor {
+    /// A generation of an object.
+    Item {
+        /// The object's name.
+        name: String,
+        /// The generation.
+        generation: u64,
+    },
+    /// A folded prefix (the first page entry is the prefix itself).
+    Prefix(String),
+}
+
+/// One page of a versions listing.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VersionsPage<'a> {
+    /// The generations of this page, by name and then generation.
+    pub items: Vec<VersionEntry<'a>>,
+    /// The prefixes the delimiter folded, each once.
+    pub prefixes: Vec<String>,
+    /// Where the next page starts; `None` on the last page.
+    pub next: Option<VersionsCursor>,
+}
+
+/// The order of a versions listing: by name, then by generation.
+fn version_key<'a>(entry: &VersionEntry<'a>) -> (&'a str, u64) {
+    (entry.object.name.as_str(), entry.object.generation)
+}
+
+/// What a write plans before it is admitted and applied.
+struct PlannedPut {
+    key: (BucketName, ObjectName),
+    meta: ObjectMetadata,
+    next_blob: u64,
+    next_generation: u64,
+    /// The live generation this write makes noncurrent (a versioned bucket only).
+    archive: Option<NoncurrentVersion>,
+    /// The live generation this write replaces for good (any other bucket).
+    replaced: Option<ObjectMetadata>,
 }
 
 /// Upload state (spec 9.5).
@@ -685,6 +772,13 @@ pub struct StorageState {
     /// timestamps and a minted download token is listed first. Off, generations count from 1
     /// and tokens are appended, as before.
     production_order: bool,
+    /// The versioning configuration of each bucket that was ever configured: `true` enabled,
+    /// `false` disabled (RECORDED, FE v5: production keeps "disabled" apart from "never
+    /// configured"). A bucket not listed was never configured and is unversioned.
+    versioning: BTreeMap<BucketName, bool>,
+    /// Generations that are no longer live, by `(bucket, name, generation)`. Their blobs are in
+    /// `blobs` and count toward `stored_bytes`.
+    noncurrent: BTreeMap<(BucketName, ObjectName, u64), NoncurrentVersion>,
 }
 
 fn blob_bytes(blobs: &BTreeMap<BlobId, Arc<Vec<u8>>>) -> u64 {
@@ -746,6 +840,8 @@ impl StorageState {
             rng: SplitMix64::new(seed),
             events: Vec::new(),
             production_order: false,
+            versioning: BTreeMap::new(),
+            noncurrent: BTreeMap::new(),
         }
     }
 
@@ -784,15 +880,30 @@ impl StorageState {
         let count = |value: usize| u64::try_from(value).unwrap_or(u64::MAX);
         let mut roots = Vec::new();
         let mut objects = 0u64;
+        let mut noncurrent_versions = 0u64;
         let mut object_bytes = 0u64;
-        for bucket in self.buckets() {
+        // A bucket whose live objects were all archived still holds data: it is reported too.
+        let mut reported: BTreeSet<BucketName> = self.buckets().into_iter().collect();
+        reported.extend(self.noncurrent.keys().map(|(bucket, _, _)| bucket.clone()));
+        for bucket in reported {
             if !owned(bucket.as_str()) {
                 continue;
             }
             let listed = self.objects(&bucket);
+            // Noncurrent versions hold object data too: it counts toward the bytes (and the
+            // `storage.maxStoredBytes` bound they are shown against), and they are counted apart.
+            let noncurrent: Vec<&NoncurrentVersion> = self
+                .noncurrent
+                .iter()
+                .filter(|((candidate, _, _), _)| *candidate == bucket)
+                .map(|(_, version)| version)
+                .collect();
             let bytes = listed
                 .iter()
-                .fold(0u64, |sum, meta| sum.saturating_add(meta.size));
+                .map(|meta| meta.size)
+                .chain(noncurrent.iter().map(|version| version.object.size))
+                .fold(0u64, u64::saturating_add);
+            noncurrent_versions = noncurrent_versions.saturating_add(count(noncurrent.len()));
             objects = objects.saturating_add(count(listed.len()));
             object_bytes = object_bytes.saturating_add(bytes);
             roots.push(RetentionRoot {
@@ -825,6 +936,7 @@ impl StorageState {
             service: "storage".to_owned(),
             gauges: vec![
                 Gauge::logical("objects.count", Unit::Count, objects, None),
+                Gauge::logical("objects.noncurrent", Unit::Count, noncurrent_versions, None),
                 // The bound is the store's (`storage.maxStoredBytes`), shared by every bucket.
                 Gauge::logical(
                     "objects.bytes",
@@ -859,11 +971,30 @@ impl StorageState {
     /// Drops every object, blob and upload (session reset).
     pub fn clear(&mut self) {
         self.objects.clear();
+        self.noncurrent.clear();
+        self.versioning.clear();
         self.blobs.clear();
         self.stored_bytes = 0;
         self.uploads.clear();
         self.retained_upload_bytes = 0;
         self.events.clear();
+    }
+
+    /// Drops the noncurrent versions (and their blobs) and the versioning configuration of the
+    /// buckets `owned` selects.
+    fn remove_versioning_state_where(&mut self, owned: impl Fn(&str) -> bool) {
+        let gone: Vec<(BucketName, ObjectName, u64)> = self
+            .noncurrent
+            .keys()
+            .filter(|(b, _, _)| owned(b.as_str()))
+            .cloned()
+            .collect();
+        for key in gone {
+            if let Some(version) = self.noncurrent.remove(&key) {
+                self.remove_blob(version.object.blob);
+            }
+        }
+        self.versioning.retain(|b, _| !owned(b.as_str()));
     }
 
     /// Drops every object, blob and upload of one bucket (a project's session reset);
@@ -880,6 +1011,7 @@ impl StorageState {
                 self.remove_blob(m.blob);
             }
         }
+        self.remove_versioning_state_where(|name| name == bucket.as_str());
         self.uploads.retain(|_, u| u.bucket != *bucket);
         self.refresh_retained_upload_bytes();
         gone.len()
@@ -899,6 +1031,7 @@ impl StorageState {
                 self.remove_blob(m.blob);
             }
         }
+        self.remove_versioning_state_where(&owned);
         self.uploads.retain(|_, u| !owned(u.bucket.as_str()));
         self.refresh_retained_upload_bytes();
         gone.len()
@@ -914,10 +1047,23 @@ impl StorageState {
             .filter(|((b, _), _)| owned(b.as_str()))
             .map(|(k, v)| (k.clone(), v.clone()))
             .collect();
+        let noncurrent: BTreeMap<(BucketName, ObjectName, u64), NoncurrentVersion> = self
+            .noncurrent
+            .iter()
+            .filter(|((b, _, _), _)| owned(b.as_str()))
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect();
         let blobs = objects
             .values()
+            .chain(noncurrent.values().map(|version| &version.object))
             .filter_map(|m| self.blobs.get_key_value(&m.blob))
             .map(|(k, v)| (*k, Arc::clone(v)))
+            .collect();
+        let versioning = self
+            .versioning
+            .iter()
+            .filter(|(b, _)| owned(b.as_str()))
+            .map(|(b, enabled)| (b.clone(), *enabled))
             .collect();
         let uploads = self
             .uploads
@@ -941,6 +1087,8 @@ impl StorageState {
             rng: self.rng.clone(),
             events: Vec::new(),
             production_order: self.production_order,
+            versioning,
+            noncurrent,
         }
     }
 
@@ -957,6 +1105,19 @@ impl StorageState {
                 self.objects.insert(k.clone(), v.clone());
             }
         }
+        for (k, v) in &captured.noncurrent {
+            if owned(k.0.as_str()) {
+                if let Some(bytes) = captured.blobs.get(&v.object.blob) {
+                    self.insert_blob(v.object.blob, Arc::clone(bytes));
+                }
+                self.noncurrent.insert(k.clone(), v.clone());
+            }
+        }
+        for (bucket, enabled) in &captured.versioning {
+            if owned(bucket.as_str()) {
+                self.versioning.insert(bucket.clone(), *enabled);
+            }
+        }
         for (k, v) in &captured.uploads {
             if owned(v.bucket.as_str()) {
                 self.uploads.insert(k.clone(), v.clone());
@@ -969,8 +1130,11 @@ impl StorageState {
         self.events.retain(|event| {
             let bucket = match event {
                 StorageEvent::Finalized(metadata)
-                | StorageEvent::Deleted(metadata)
+                | StorageEvent::Deleted {
+                    object: metadata, ..
+                }
                 | StorageEvent::MetadataUpdated(metadata) => &metadata.bucket,
+                StorageEvent::Archived { object, .. } => &object.bucket,
             };
             !owned(bucket.as_str())
         });
@@ -1049,6 +1213,225 @@ impl StorageState {
                     .map(|_| bytes.len() as u64)
             })
             .sum()
+    }
+
+    /// Whether object versioning is enabled on `bucket`.
+    #[must_use]
+    pub fn versioning(&self, bucket: &BucketName) -> bool {
+        self.versioning.get(bucket) == Some(&true)
+    }
+
+    /// The versioning configuration of `bucket`: `None` when it was never configured, otherwise
+    /// whether versioning is enabled (a disabled bucket is `Some(false)`).
+    #[must_use]
+    pub fn versioning_state(&self, bucket: &BucketName) -> Option<bool> {
+        self.versioning.get(bucket).copied()
+    }
+
+    /// Enables or disables object versioning on `bucket`. Disabling keeps the noncurrent
+    /// versions that exist and stops archiving new ones, and the bucket stays configured.
+    pub fn set_versioning(&mut self, bucket: &BucketName, enabled: bool) {
+        self.versioning.insert(bucket.clone(), enabled);
+    }
+
+    /// The noncurrent versions of one object, in generation order.
+    #[must_use]
+    pub fn noncurrent_versions(
+        &self,
+        bucket: &BucketName,
+        name: &ObjectName,
+    ) -> Vec<&NoncurrentVersion> {
+        self.noncurrent
+            .range((bucket.clone(), name.clone(), 0)..=(bucket.clone(), name.clone(), u64::MAX))
+            .map(|(_, version)| version)
+            .collect()
+    }
+
+    /// One generation of an object by number: the live one (`None`) or a noncurrent one (with
+    /// the time it stopped being live).
+    #[must_use]
+    pub fn generation(
+        &self,
+        bucket: &BucketName,
+        name: &ObjectName,
+        generation: u64,
+    ) -> Option<(&ObjectMetadata, Option<LogicalInstant>)> {
+        if let Some(live) = self
+            .objects
+            .get(&(bucket.clone(), name.clone()))
+            .filter(|live| live.generation == generation)
+        {
+            return Some((live, None));
+        }
+        self.noncurrent
+            .get(&(bucket.clone(), name.clone(), generation))
+            .map(|version| (&version.object, Some(version.time_deleted)))
+    }
+
+    /// Every generation of the objects whose name starts with `prefix`, live and noncurrent,
+    /// ordered by name and then generation.
+    #[must_use]
+    pub fn list_versions(&self, bucket: &BucketName, prefix: &str) -> Vec<VersionEntry<'_>> {
+        let mut entries: Vec<VersionEntry<'_>> = self
+            .objects
+            .range((bucket.clone(), ObjectName::range_start(prefix))..)
+            .take_while(|((b, name), _)| b == bucket && name.as_str().starts_with(prefix))
+            .map(|(_, object)| VersionEntry {
+                object,
+                time_deleted: None,
+            })
+            .collect();
+        entries.extend(
+            self.noncurrent
+                .range((bucket.clone(), ObjectName::range_start(prefix), 0)..)
+                .take_while(|((b, name, _), _)| b == bucket && name.as_str().starts_with(prefix))
+                .map(|(_, version)| VersionEntry {
+                    object: &version.object,
+                    time_deleted: Some(version.time_deleted),
+                }),
+        );
+        entries.sort_by(|a, b| {
+            (a.object.name.as_str(), a.object.generation)
+                .cmp(&(b.object.name.as_str(), b.object.generation))
+        });
+        entries
+    }
+
+    /// Every generation, live and noncurrent, of the objects whose name starts with `prefix` and
+    /// is at least `start`, in name and then generation order. Both maps are ordered by that
+    /// key, so the two ranges are merged lazily and nothing is rebuilt or sorted.
+    fn merged_versions<'a>(
+        &'a self,
+        bucket: &BucketName,
+        prefix: &str,
+        start: &str,
+    ) -> impl Iterator<Item = VersionEntry<'a>> + 'a {
+        let bucket = bucket.clone();
+        let prefix = prefix.to_owned();
+        let in_range = {
+            let prefix = prefix.clone();
+            move |name: &ObjectName| name.as_str().starts_with(prefix.as_str())
+        };
+        let in_range_noncurrent = in_range.clone();
+        let live = self
+            .objects
+            .range((bucket.clone(), ObjectName::range_start(start))..)
+            .take_while({
+                let bucket = bucket.clone();
+                move |((b, name), _)| *b == bucket && in_range(name)
+            })
+            .map(|(_, object)| VersionEntry {
+                object,
+                time_deleted: None,
+            });
+        let noncurrent = self
+            .noncurrent
+            .range((bucket.clone(), ObjectName::range_start(start), 0)..)
+            .take_while(move |((b, name, _), _)| *b == bucket && in_range_noncurrent(name))
+            .map(|(_, version)| VersionEntry {
+                object: &version.object,
+                time_deleted: Some(version.time_deleted),
+            });
+        let mut live = live.peekable();
+        let mut noncurrent = noncurrent.peekable();
+        std::iter::from_fn(move || {
+            let take_live = match (live.peek(), noncurrent.peek()) {
+                (Some(a), Some(b)) => version_key(a) <= version_key(b),
+                (Some(_), None) => true,
+                (None, Some(_)) => false,
+                (None, None) => return None,
+            };
+            if take_live {
+                live.next()
+            } else {
+                noncurrent.next()
+            }
+        })
+    }
+
+    /// The keys `(name, generation)` of up to `max` generations, live and noncurrent, whose name
+    /// starts with `prefix`, from `from` (inclusive) on, in name and then generation order. A
+    /// listing that tests each name outside the store lock reads the store in batches of these.
+    #[must_use]
+    pub fn version_keys_from(
+        &self,
+        bucket: &BucketName,
+        prefix: &str,
+        from: Option<(&str, u64)>,
+        max: usize,
+    ) -> Vec<(String, u64)> {
+        let start = from.map_or(prefix, |(name, _)| name).max(prefix);
+        self.merged_versions(bucket, prefix, start)
+            .map(|entry| (entry.object.name.as_str(), entry.object.generation))
+            .filter(|key| from.is_none_or(|(name, generation)| *key >= (name, generation)))
+            .take(max)
+            .map(|(name, generation)| (name.to_owned(), generation))
+            .collect()
+    }
+
+    /// One page of a versions listing: every generation, live and noncurrent, whose name starts
+    /// with `prefix`, in name and then generation order, folded at `delimiter` and resumed at
+    /// `from`. Both maps are ordered by that key, so a page costs the page plus the entries it
+    /// skips inside a folded prefix, and nothing is rebuilt or sorted per page. At most `max`
+    /// entries (items and prefixes together) are returned; `next` names the first entry left.
+    #[must_use]
+    pub fn list_versions_page(
+        &self,
+        bucket: &BucketName,
+        prefix: &str,
+        delimiter: &str,
+        from: Option<&VersionsCursor>,
+        max: usize,
+    ) -> VersionsPage<'_> {
+        let resume = match from {
+            Some(VersionsCursor::Item { name, .. } | VersionsCursor::Prefix(name)) => name.as_str(),
+            None => prefix,
+        };
+        let merged = self.merged_versions(bucket, prefix, resume.max(prefix));
+        let mut page = VersionsPage {
+            items: Vec::new(),
+            prefixes: Vec::new(),
+            next: None,
+        };
+        for entry in merged {
+            let name = entry.object.name.as_str();
+            // Entries of the generations before the cursor were on an earlier page.
+            if let Some(VersionsCursor::Item {
+                name: cursor_name,
+                generation,
+            }) = from
+            {
+                if name == cursor_name && entry.object.generation < *generation {
+                    continue;
+                }
+            }
+            let rest = &name[prefix.len()..];
+            let folded = (!delimiter.is_empty())
+                .then(|| rest.find(delimiter))
+                .flatten()
+                .map(|at| format!("{prefix}{}{delimiter}", &rest[..at]));
+            if folded
+                .as_ref()
+                .is_some_and(|folded| page.prefixes.last() == Some(folded))
+            {
+                continue;
+            }
+            if page.items.len() + page.prefixes.len() == max {
+                page.next = Some(match folded {
+                    Some(folded) => VersionsCursor::Prefix(folded),
+                    None => VersionsCursor::Item {
+                        name: name.to_owned(),
+                        generation: entry.object.generation,
+                    },
+                });
+                break;
+            }
+            match folded {
+                Some(folded) => page.prefixes.push(folded),
+                None => page.items.push(entry),
+            }
+        }
+        page
     }
 
     /// Takes the events recorded since the last call.
@@ -1175,7 +1558,7 @@ impl StorageState {
         metadata: NewMetadata,
         pre: Precondition,
         now: LogicalInstant,
-        admit: impl FnOnce(&StorageEvent) -> Result<R, StorageError>,
+        admit: impl FnOnce(&[StorageEvent]) -> Result<R, StorageError>,
     ) -> Result<(ObjectMetadata, R), StorageError> {
         if bytes.len() as u64 > MAX_OBJECT_BYTES {
             return Err(StorageError::TooLarge);
@@ -1218,13 +1601,13 @@ impl StorageState {
         metadata: NewMetadata,
         pre: Precondition,
         now: LogicalInstant,
-        admit: impl FnOnce(&StorageEvent) -> Result<R, StorageError>,
+        admit: impl FnOnce(&[StorageEvent]) -> Result<R, StorageError>,
     ) -> Result<(ObjectMetadata, R), StorageError> {
         let PreparedObject { bytes, digests } = prepared;
         if bytes.len() as u64 > MAX_OBJECT_BYTES {
             return Err(StorageError::TooLarge);
         }
-        let (key, meta, next_blob, next_generation) = self.plan_put(
+        let plan = self.plan_put(
             bucket,
             name,
             bytes.len() as u64,
@@ -1233,16 +1616,10 @@ impl StorageState {
             pre,
             now,
         )?;
-        let event = StorageEvent::Finalized(meta.clone());
-        let reservation = admit(&event)?;
-        self.apply_planned_put(
-            key,
-            &meta,
-            next_blob,
-            next_generation,
-            Arc::new(bytes),
-            event,
-        );
+        let events = Self::put_events(&plan);
+        let reservation = admit(&events)?;
+        let meta = plan.meta.clone();
+        self.apply_planned_put(plan, Arc::new(bytes), events);
         Ok((meta, reservation))
     }
 
@@ -1256,7 +1633,7 @@ impl StorageState {
         metadata: NewMetadata,
         pre: Precondition,
         now: LogicalInstant,
-    ) -> Result<((BucketName, ObjectName), ObjectMetadata, u64, u64), StorageError> {
+    ) -> Result<PlannedPut, StorageError> {
         // Download tokens ride in as the `firebaseStorageDownloadTokens` custom metadata
         // key and are lifted out of it, exactly as the official emulator's
         // `setDownloadTokensFromCustomMetadata` does. A new generation carries only the
@@ -1269,7 +1646,24 @@ impl StorageState {
         }
         let key = (bucket.clone(), name.clone());
         Self::check(self.objects.get(&key), pre)?;
-        self.check_stored_bytes(self.objects.get(&key), size)?;
+        // A versioned bucket keeps the generation this write replaces, so the replacement frees
+        // nothing and is charged in full.
+        let archive = self
+            .versioning(bucket)
+            .then(|| self.objects.get(&key))
+            .flatten()
+            .map(|live| NoncurrentVersion {
+                object: live.clone(),
+                time_deleted: now,
+            });
+        self.check_stored_bytes(
+            if archive.is_some() {
+                None
+            } else {
+                self.objects.get(&key)
+            },
+            size,
+        )?;
         let next_blob = self
             .next_blob
             .checked_add(1)
@@ -1298,26 +1692,82 @@ impl StorageState {
             download_tokens,
             blob,
         };
-        Ok((key, meta, next_blob, next_generation))
+        let replaced = if archive.is_some() {
+            None
+        } else {
+            self.objects.get(&key).cloned()
+        };
+        Ok(PlannedPut {
+            key,
+            meta,
+            next_blob,
+            next_generation,
+            archive,
+            replaced,
+        })
+    }
+
+    /// The events of a planned write, in the order they are admitted and announced. OBSERVED
+    /// ORDER (FE v5, `functions-events-formal-20261004T182904Z`): production does not order these
+    /// deliveries; Finalized came before Archived in 4 of 4 observations (v1 and v2, two passes),
+    /// and on an unversioned overwrite Deleted came before Finalized in 3 of 4 (the fourth, v1 in
+    /// the second pass, delivered Finalized first). The local default follows the majority. The
+    /// overwrite of an unversioned bucket announces the replaced generation as deleted ("Sent when
+    /// an object has been permanently deleted. This includes objects that are overwritten",
+    /// <https://firebase.google.com/docs/functions/gcp-storage-events>; RECORDED in FE v5), stamped
+    /// with the creation instant of the replacement and carrying no `timeDeleted`; in a versioned
+    /// bucket the old generation is announced as Archived instead, with no Deleted event. The
+    /// official emulator announces Finalized only.
+    fn put_events(plan: &PlannedPut) -> Vec<StorageEvent> {
+        let mut events = Vec::with_capacity(2);
+        if let Some(old) = &plan.replaced {
+            events.push(StorageEvent::Deleted {
+                object: old.clone(),
+                time_deleted: None,
+                at: Some(plan.meta.time_created),
+            });
+        }
+        events.push(StorageEvent::Finalized(plan.meta.clone()));
+        if let Some(version) = &plan.archive {
+            events.push(StorageEvent::Archived {
+                object: version.object.clone(),
+                time_deleted: version.time_deleted,
+            });
+        }
+        events
     }
 
     fn apply_planned_put(
         &mut self,
-        key: (BucketName, ObjectName),
-        meta: &ObjectMetadata,
-        next_blob: u64,
-        next_generation: u64,
+        plan: PlannedPut,
         bytes: Arc<Vec<u8>>,
-        event: StorageEvent,
+        events: Vec<StorageEvent>,
     ) {
+        let PlannedPut {
+            key,
+            meta,
+            next_blob,
+            next_generation,
+            archive,
+            replaced: _,
+        } = plan;
         let blob = meta.blob;
         self.next_blob = next_blob;
         self.next_generation = next_generation;
-        if let Some(old) = self.objects.insert(key, meta.clone()) {
-            self.remove_blob(old.blob);
+        let replaced = self.objects.insert(key, meta);
+        match (replaced, archive) {
+            // The replaced generation is kept, blob and all.
+            (Some(old), Some(version)) => {
+                self.noncurrent.insert(
+                    (old.bucket.clone(), old.name.clone(), old.generation),
+                    version,
+                );
+            }
+            (Some(old), None) => self.remove_blob(old.blob),
+            (None, _) => {}
         }
         self.insert_blob(blob, bytes);
-        self.events.push(event);
+        self.events.extend(events);
     }
 
     /// Updates metadata (bumps the metageneration; the data and generation stay).
@@ -1341,11 +1791,26 @@ impl StorageState {
         patch: &MetadataPatch,
         pre: Precondition,
         now: LogicalInstant,
-        admit: impl FnOnce(&StorageEvent) -> Result<R, StorageError>,
+        admit: impl FnOnce(&[StorageEvent]) -> Result<R, StorageError>,
     ) -> Result<(ObjectMetadata, R), StorageError> {
         let key = (bucket.clone(), name.clone());
         Self::check(self.objects.get(&key), pre)?;
         let meta = self.objects.get(&key).ok_or(StorageError::NotFound)?;
+        let next = Self::patched(meta, patch, now)?;
+        let event = StorageEvent::MetadataUpdated(next.clone());
+        let reservation = admit(std::slice::from_ref(&event))?;
+        let meta = self.objects.get_mut(&key).ok_or(StorageError::NotFound)?;
+        *meta = next.clone();
+        self.events.push(event);
+        Ok((next, reservation))
+    }
+
+    /// `meta` with `patch` applied and its metageneration bumped.
+    fn patched(
+        meta: &ObjectMetadata,
+        patch: &MetadataPatch,
+        now: LogicalInstant,
+    ) -> Result<ObjectMetadata, StorageError> {
         let mut next = patch.apply(meta);
         // A patch may write `firebaseStorageDownloadTokens`; the key is lifted into the
         // token list (merged with the tokens the object already has), never stored as
@@ -1361,12 +1826,65 @@ impl StorageState {
             .filter(|metageneration| *metageneration <= MAX_PERSISTED_IDENTITY)
             .ok_or(StorageError::IdentityExhausted)?;
         next.updated = now;
-        let event = StorageEvent::MetadataUpdated(next.clone());
-        let reservation = admit(&event)?;
-        let meta = self.objects.get_mut(&key).ok_or(StorageError::NotFound)?;
-        *meta = next.clone();
-        self.events.push(event);
+        Ok(next)
+    }
+
+    /// Updates the metadata of one generation by number: the live one exactly as
+    /// [`Self::update_metadata_with_admission`] does, or a noncurrent version, whose
+    /// metageneration moves while the live object stays untouched. UNRECORDED: a metadata change of
+    /// a noncurrent version announces nothing here, and the admission closure is told so with an
+    /// empty batch.
+    #[allow(clippy::too_many_arguments)]
+    pub fn update_generation_metadata_with_admission<R>(
+        &mut self,
+        bucket: &BucketName,
+        name: &ObjectName,
+        generation: u64,
+        patch: &MetadataPatch,
+        pre: Precondition,
+        now: LogicalInstant,
+        admit: impl FnOnce(&[StorageEvent]) -> Result<R, StorageError>,
+    ) -> Result<(ObjectMetadata, R), StorageError> {
+        let key = (bucket.clone(), name.clone());
+        if self
+            .objects
+            .get(&key)
+            .is_some_and(|live| live.generation == generation)
+        {
+            return self.update_metadata_with_admission(bucket, name, patch, pre, now, admit);
+        }
+        let version_key = (bucket.clone(), name.clone(), generation);
+        let version = self
+            .noncurrent
+            .get(&version_key)
+            .ok_or(StorageError::NotFound)?;
+        Self::check(Some(&version.object), pre)?;
+        let next = Self::patched(&version.object, patch, now)?;
+        let reservation = admit(&[])?;
+        let version = self
+            .noncurrent
+            .get_mut(&version_key)
+            .ok_or(StorageError::NotFound)?;
+        version.object = next.clone();
         Ok((next, reservation))
+    }
+
+    /// Whether `bucket` is known to the store: it holds an object, live or noncurrent, or was
+    /// configured for versioning. The store has no bucket registry, so an empty bucket nobody
+    /// configured is unknown here (the HTTP layer adds the project's default buckets).
+    #[must_use]
+    pub fn bucket_known(&self, bucket: &BucketName) -> bool {
+        self.versioning.contains_key(bucket)
+            || self
+                .objects
+                .range((bucket.clone(), ObjectName::range_start(""))..)
+                .next()
+                .is_some_and(|((b, _), _)| b == bucket)
+            || self
+                .noncurrent
+                .range((bucket.clone(), ObjectName::range_start(""), 0)..)
+                .next()
+                .is_some_and(|((b, _, _), _)| b == bucket)
     }
 
     /// Adds a Firebase download token. A token is a metadata change: the metageneration is
@@ -1388,7 +1906,7 @@ impl StorageState {
         bucket: &BucketName,
         name: &ObjectName,
         now: LogicalInstant,
-        admit: impl FnOnce(&StorageEvent) -> Result<R, StorageError>,
+        admit: impl FnOnce(&[StorageEvent]) -> Result<R, StorageError>,
     ) -> Result<(ObjectMetadata, R), StorageError> {
         let key = (bucket.clone(), name.clone());
         let meta = self.objects.get(&key).ok_or(StorageError::NotFound)?;
@@ -1414,7 +1932,7 @@ impl StorageState {
         updated.metageneration = next_metageneration;
         updated.updated = now;
         let event = StorageEvent::MetadataUpdated(updated.clone());
-        let reservation = admit(&event)?;
+        let reservation = admit(std::slice::from_ref(&event))?;
         self.rng = next_rng;
         self.objects.insert(key, updated.clone());
         self.events.push(event);
@@ -1443,7 +1961,7 @@ impl StorageState {
         name: &ObjectName,
         token: &str,
         now: LogicalInstant,
-        admit: impl FnOnce(&StorageEvent) -> Result<R, StorageError>,
+        admit: impl FnOnce(&[StorageEvent]) -> Result<R, StorageError>,
     ) -> Result<(ObjectMetadata, Option<R>), StorageError> {
         let key = (bucket.clone(), name.clone());
         let meta = self.objects.get(&key).ok_or(StorageError::NotFound)?;
@@ -1474,7 +1992,7 @@ impl StorageState {
         updated.metageneration = next_metageneration;
         updated.updated = now;
         let event = StorageEvent::MetadataUpdated(updated.clone());
-        let reservation = admit(&event)?;
+        let reservation = admit(std::slice::from_ref(&event))?;
         self.rng = next_rng;
         self.objects.insert(key, updated.clone());
         self.events.push(event);
@@ -1487,8 +2005,9 @@ impl StorageState {
         bucket: &BucketName,
         name: &ObjectName,
         pre: Precondition,
+        now: LogicalInstant,
     ) -> Result<ObjectMetadata, StorageError> {
-        self.delete_with_admission(bucket, name, pre, |_| Ok(()))
+        self.delete_with_admission(bucket, name, pre, now, |_| Ok(()))
             .map(|(metadata, ())| metadata)
     }
 
@@ -1498,7 +2017,8 @@ impl StorageState {
         bucket: &BucketName,
         name: &ObjectName,
         pre: Precondition,
-        admit: impl FnOnce(&StorageEvent) -> Result<R, StorageError>,
+        now: LogicalInstant,
+        admit: impl FnOnce(&[StorageEvent]) -> Result<R, StorageError>,
     ) -> Result<(ObjectMetadata, R), StorageError> {
         let key = (bucket.clone(), name.clone());
         Self::check(self.objects.get(&key), pre)?;
@@ -1507,9 +2027,98 @@ impl StorageState {
             .get(&key)
             .cloned()
             .ok_or(StorageError::NotFound)?;
-        let event = StorageEvent::Deleted(meta.clone());
-        let reservation = admit(&event)?;
+        if self.versioning(bucket) {
+            // A versioned bucket keeps the generation: it becomes noncurrent and is announced as
+            // Archived, with no Deleted event (not exercised by the FE v5 recording: UNRECORDED,
+            // see `StorageEvent::Archived`).
+            let version = NoncurrentVersion {
+                object: meta.clone(),
+                time_deleted: now,
+            };
+            let event = StorageEvent::Archived {
+                object: meta.clone(),
+                time_deleted: now,
+            };
+            let reservation = admit(std::slice::from_ref(&event))?;
+            self.objects.remove(&key);
+            self.noncurrent
+                .insert((key.0, key.1, meta.generation), version);
+            self.events.push(event);
+            return Ok((meta, reservation));
+        }
+        let event = StorageEvent::Deleted {
+            object: meta.clone(),
+            time_deleted: None,
+            at: None,
+        };
+        let reservation = admit(std::slice::from_ref(&event))?;
         self.objects.remove(&key);
+        self.remove_blob(meta.blob);
+        self.events.push(event);
+        Ok((meta, reservation))
+    }
+
+    /// Deletes one generation by number, for good: a noncurrent version, or the live generation
+    /// (which is then not archived). Announced as Deleted.
+    pub fn delete_generation(
+        &mut self,
+        bucket: &BucketName,
+        name: &ObjectName,
+        generation: u64,
+        pre: Precondition,
+    ) -> Result<ObjectMetadata, StorageError> {
+        self.delete_generation_with_admission(bucket, name, generation, pre, |_| Ok(()))
+            .map(|(metadata, ())| metadata)
+    }
+
+    /// Deletes one generation by number only after its Deleted event is admitted.
+    pub fn delete_generation_with_admission<R>(
+        &mut self,
+        bucket: &BucketName,
+        name: &ObjectName,
+        generation: u64,
+        pre: Precondition,
+        admit: impl FnOnce(&[StorageEvent]) -> Result<R, StorageError>,
+    ) -> Result<(ObjectMetadata, R), StorageError> {
+        let key = (bucket.clone(), name.clone());
+        if self
+            .objects
+            .get(&key)
+            .is_some_and(|live| live.generation == generation)
+        {
+            Self::check(self.objects.get(&key), pre)?;
+            let meta = self
+                .objects
+                .get(&key)
+                .cloned()
+                .ok_or(StorageError::NotFound)?;
+            let event = StorageEvent::Deleted {
+                object: meta.clone(),
+                time_deleted: None,
+                at: None,
+            };
+            let reservation = admit(std::slice::from_ref(&event))?;
+            self.objects.remove(&key);
+            self.remove_blob(meta.blob);
+            self.events.push(event);
+            return Ok((meta, reservation));
+        }
+        let version_key = (bucket.clone(), name.clone(), generation);
+        let (meta, archived_at) = self
+            .noncurrent
+            .get(&version_key)
+            .map(|version| (version.object.clone(), version.time_deleted))
+            .ok_or(StorageError::NotFound)?;
+        Self::check(Some(&meta), pre)?;
+        // RECORDED (FE v5): the Deleted payload of a noncurrent generation carries `timeDeleted`,
+        // the instant it stopped being live; the event itself is stamped with the deletion.
+        let event = StorageEvent::Deleted {
+            object: meta.clone(),
+            time_deleted: Some(archived_at),
+            at: None,
+        };
+        let reservation = admit(std::slice::from_ref(&event))?;
+        self.noncurrent.remove(&version_key);
         self.remove_blob(meta.blob);
         self.events.push(event);
         Ok((meta, reservation))
@@ -1538,13 +2147,39 @@ impl StorageState {
         metadata: Option<NewMetadata>,
         pre: Precondition,
         now: LogicalInstant,
-        admit: impl FnOnce(&StorageEvent) -> Result<R, StorageError>,
+        admit: impl FnOnce(&[StorageEvent]) -> Result<R, StorageError>,
+    ) -> Result<(ObjectMetadata, R), StorageError> {
+        self.copy_generation_with_admission(
+            (source.0, source.1, None),
+            destination,
+            metadata,
+            pre,
+            now,
+            admit,
+        )
+    }
+
+    /// Copies one generation of an object, the live one (`None`) or a noncurrent version of a
+    /// versioned bucket, only after the destination events are admitted. Restoring an old
+    /// generation is a copy of it over the live name.
+    #[allow(clippy::too_many_arguments)]
+    pub fn copy_generation_with_admission<R>(
+        &mut self,
+        source: (&BucketName, &ObjectName, Option<u64>),
+        destination: (&BucketName, &ObjectName),
+        metadata: Option<NewMetadata>,
+        pre: Precondition,
+        now: LogicalInstant,
+        admit: impl FnOnce(&[StorageEvent]) -> Result<R, StorageError>,
     ) -> Result<(ObjectMetadata, R), StorageError> {
         let (dst_bucket, dst_name) = destination;
-        let src = self
-            .get(source.0, source.1)
-            .cloned()
-            .ok_or(StorageError::NotFound)?;
+        let src = match source.2 {
+            None => self.get(source.0, source.1).cloned(),
+            Some(generation) => self
+                .generation(source.0, source.1, generation)
+                .map(|(object, _)| object.clone()),
+        }
+        .ok_or(StorageError::NotFound)?;
         // The destination is the same bytes: it shares the source allocation under a new blob
         // identity and reuses the digests the source already carries, so a copy costs nothing
         // per byte and holds the store lock for as long as a metadata write does. Each object
@@ -1564,7 +2199,7 @@ impl StorageState {
             cache_control: src.cache_control.clone(),
             custom: src.custom_defined.then(|| src.custom.clone()),
         });
-        let (key, meta, next_blob, next_generation) = self.plan_put(
+        let plan = self.plan_put(
             dst_bucket,
             dst_name,
             shared.len() as u64,
@@ -1573,9 +2208,10 @@ impl StorageState {
             pre,
             now,
         )?;
-        let event = StorageEvent::Finalized(meta.clone());
-        let reservation = admit(&event)?;
-        self.apply_planned_put(key, &meta, next_blob, next_generation, shared, event);
+        let events = Self::put_events(&plan);
+        let reservation = admit(&events)?;
+        let meta = plan.meta.clone();
+        self.apply_planned_put(plan, shared, events);
         Ok((meta, reservation))
     }
 
@@ -2255,7 +2891,7 @@ impl StorageState {
         &mut self,
         id: &UploadId,
         now: LogicalInstant,
-        admit: impl FnOnce(&StorageEvent) -> Result<R, StorageError>,
+        admit: impl FnOnce(&[StorageEvent]) -> Result<R, StorageError>,
     ) -> Result<(ObjectMetadata, R), StorageError> {
         let result = self.finalize_upload_with_admission_inner(id, now, admit);
         self.refresh_retained_upload_bytes();
@@ -2266,7 +2902,7 @@ impl StorageState {
         &mut self,
         id: &UploadId,
         now: LogicalInstant,
-        admit: impl FnOnce(&StorageEvent) -> Result<R, StorageError>,
+        admit: impl FnOnce(&[StorageEvent]) -> Result<R, StorageError>,
     ) -> Result<(ObjectMetadata, R), StorageError> {
         let (bucket, name, metadata, precondition, digests, size) = {
             let u = self.upload_mut(id, now)?;
@@ -2314,35 +2950,28 @@ impl StorageState {
                 u.received.len() as u64,
             )
         };
-        let (key, meta, next_blob, next_generation) =
-            match self.plan_put(&bucket, &name, size, digests, metadata, precondition, now) {
-                Ok(plan) => plan,
-                // The stored-byte bound is not the session's fault: it stays open, so the
-                // client can finish it once there is room, or cancel it.
-                Err(StorageError::StoredBytesLimit) => return Err(StorageError::StoredBytesLimit),
-                Err(error) => {
-                    if let Some(upload) = self.uploads.get_mut(id) {
-                        upload.state = UploadState::Aborted;
-                        upload.received = Vec::new();
-                    }
-                    return Err(error);
+        let plan = match self.plan_put(&bucket, &name, size, digests, metadata, precondition, now) {
+            Ok(plan) => plan,
+            // The stored-byte bound is not the session's fault: it stays open, so the
+            // client can finish it once there is room, or cancel it.
+            Err(StorageError::StoredBytesLimit) => return Err(StorageError::StoredBytesLimit),
+            Err(error) => {
+                if let Some(upload) = self.uploads.get_mut(id) {
+                    upload.state = UploadState::Aborted;
+                    upload.received = Vec::new();
                 }
-            };
-        let event = StorageEvent::Finalized(meta.clone());
-        let reservation = admit(&event)?;
+                return Err(error);
+            }
+        };
+        let events = Self::put_events(&plan);
+        let reservation = admit(&events)?;
         let bytes = self
             .uploads
             .get_mut(id)
             .map(|upload| std::mem::take(&mut upload.received))
             .ok_or(StorageError::UploadNotFound)?;
-        self.apply_planned_put(
-            key,
-            &meta,
-            next_blob,
-            next_generation,
-            Arc::new(bytes),
-            event,
-        );
+        let meta = plan.meta.clone();
+        self.apply_planned_put(plan, Arc::new(bytes), events);
         if let Some(u) = self.uploads.get_mut(id) {
             u.state = UploadState::Committed(Box::new(meta.clone()));
         }

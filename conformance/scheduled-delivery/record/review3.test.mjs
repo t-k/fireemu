@@ -14,6 +14,7 @@ import {
   FUNCTIONS,
   extraJobId,
   functionName,
+  jobName,
   pullSubscriptionId,
   scheduleId,
   subscriptionName,
@@ -156,13 +157,44 @@ test("a leftover function deleted through REST with a 2xx is the run's own delet
   assert.ok(names.includes("function-schedRetryV2"));
 });
 
+test("a v1 topic the CLI delete left and the run deleted with a 2xx is the run's own delete; a 404 answer to that DELETE is not", async () => {
+  const topic = scheduleId("schedOkV1");
+  const leaveTopic = async (o, w) => {
+    const real = await w.runCli(o);
+    if (o.action !== "delete") return real;
+    w.topics.add(topic);
+    return { ...real, exitCode: 1, errored: 1 };
+  };
+  const own = await go({}, {}, leaveTopic);
+  assert.equal(labels(own.result.vanishedAfterCreate).includes("topic-schedOkV1"), false);
+  assert.ok(labels(own.result.vanishedAfterCreate).includes("topic-schedFailV1"));
+  const gone = await go(
+    {
+      hooks: {
+        ["DELETE " + PUBSUB + "/topics/" + topic]: async ({ w }) => {
+          w.topics.delete(topic);
+          return notFound("topic");
+        },
+      },
+    },
+    {},
+    leaveTopic,
+  );
+  assert.ok(labels(gone.result.vanishedAfterCreate).includes("topic-schedOkV1"));
+});
+
 // ---- M2-r2: unconfirmed unknown creates ---------------------------------------------------------------------
 
 test("a subscription PUT that answers 503 and whose settle read answers 404 is unconfirmed, not settled (probe C)", async () => {
   const { result } = await go({ hooks: { ["PUT " + SUB1_URL]: async () => unavailable() } });
-  assert.deepEqual(labels(result.unconfirmedCreates), ["subscription-schedOkV1"]);
-  assert.equal(result.unconfirmedCreates[0].name, subscriptionName(SUB1));
-  assert.equal(result.unconfirmedCreates[0].class, "unknown-status");
+  assert.deepEqual(result.unconfirmedCreates, [
+    {
+      label: "subscription-schedOkV1",
+      id: "create-subscription-schedOkV1",
+      name: subscriptionName(SUB1),
+      class: "unknown-status",
+    },
+  ]);
   assert.equal(result.closureReady, false);
   assert.equal(result.readBackRequired, true);
   assert.equal(result.outcome, "calendar-delivery-needs-review");
@@ -215,7 +247,14 @@ test("an extra job POST that answers 503 and reads 404 is unconfirmed; a later 2
       [key]: async ({ body }) => (body.name.endsWith(extra) ? unavailable() : undefined),
     },
   });
-  assert.deepEqual(labels(unconfirmed.result.unconfirmedCreates), ["job-" + extra]);
+  assert.deepEqual(unconfirmed.result.unconfirmedCreates, [
+    {
+      label: "job-" + extra,
+      id: "create-extra-duration",
+      name: jobName(extra),
+      class: "unknown-status",
+    },
+  ]);
   assert.equal(unconfirmed.result.closureReady, false);
   const listed = await go({
     hooks: {
@@ -255,8 +294,87 @@ test("a timed-out deploy leaves unconfirmed exactly the CLI names no own 2xx rea
       ...FUNCTIONS.v1.map((fn) => "topic-" + fn),
     ].toSorted(),
   );
-  assert.ok(result.unconfirmedCreates.every((c) => c.class === "cli-timeout"));
+  assert.deepEqual(
+    result.unconfirmedCreates.toSorted((a, b) => a.label.localeCompare(b.label)),
+    [
+      ...ALL_FUNCTIONS.map((fn) => ["job-" + scheduleId(fn), jobName(scheduleId(fn))]),
+      ...FUNCTIONS.v1.map((fn) => ["topic-" + fn, topicName(scheduleId(fn))]),
+    ]
+      .toSorted((a, b) => a[0].localeCompare(b[0]))
+      .map(([label, name]) => ({ label, id: "cli-deploy", name, class: "cli-timeout" })),
+  );
   assert.equal(result.closureReady, false);
+});
+
+test("two unknown creates in one run are both listed", async () => {
+  const sub2 = pullSubscriptionId(RUN, "schedFailV1");
+  const { result } = await go({
+    hooks: {
+      ["PUT " + SUB1_URL]: async () => unavailable(),
+      ["PUT " + PUBSUB + "/subscriptions/" + sub2]: async () => unavailable(),
+    },
+  });
+  assert.deepEqual(labels(result.unconfirmedCreates), [
+    "subscription-schedFailV1",
+    "subscription-schedOkV1",
+  ]);
+  const extras = await go({
+    hooks: { ["POST " + JOBS]: async () => unavailable() },
+  });
+  assert.deepEqual(
+    extras.result.unconfirmedCreates.map((c) => c.id),
+    ["create-extra-zero", "create-extra-duration", "create-extra-count"],
+  );
+});
+
+test("a CLI deploy that cannot even be run leaves every CLI-made name unconfirmed as cli-error; a delete that cannot be run does not", async () => {
+  const names = [
+    ...ALL_FUNCTIONS.flatMap((fn) => ["function-" + fn, "job-" + scheduleId(fn)]),
+    ...FUNCTIONS.v1.map((fn) => "topic-" + fn),
+  ].toSorted();
+  const deployThrows = await go({}, {}, async (o, w) => {
+    if (o.action === "deploy") throw new Error("spawn failed");
+    return w.runCli(o);
+  });
+  assert.deepEqual(labels(deployThrows.result.unconfirmedCreates), names);
+  assert.ok(
+    deployThrows.result.unconfirmedCreates.every(
+      (c) => c.class === "cli-error" && c.id === "cli-deploy",
+    ),
+  );
+  assert.equal(deployThrows.result.closureReady, false);
+  const deleteThrows = await go({}, {}, async (o, w) => {
+    if (o.action === "delete") throw new Error("spawn failed");
+    return w.runCli(o);
+  });
+  assert.deepEqual(deleteThrows.result.unconfirmedCreates, []);
+});
+
+test("a name that a list showed before the run issued it is no evidence about its create", async () => {
+  const extra = extraJobId(RUN, "count");
+  const real = "cloudscheduler.googleapis.com/v1/projects/fireemu-oracle-sbx/locations/us-central1/jobs/";
+  const { result } = await go(
+    {
+      hooks: {
+        // the create is unknown, its direct reads say 404, and the later lists no longer hold it
+        ["POST " + JOBS]: async ({ body }) => (body.name.endsWith(extra) ? unavailable() : undefined),
+        ["GET " + real + extra]: async () => notFound("job"),
+        ["GET " + JOBS]: async ({ w }) => {
+          if (w.cliRuns.includes("delete")) w.jobs.delete(extra);
+          return undefined;
+        },
+      },
+    },
+    {},
+    async (o, w) => {
+      const done = await w.runCli(o);
+      // a job of that name exists when the readbacks list the jobs, before the run issues it
+      if (o.action === "deploy")
+        w.jobs.set(extra, { name: jobName(extra), state: "ENABLED", manualOnly: true });
+      return done;
+    },
+  );
+  assert.deepEqual(labels(result.unconfirmedCreates), ["job-" + extra]);
 });
 
 test("near miss: a timed-out deploy whose every name was read 200 has nothing unconfirmed (and is still an unknown answer)", async () => {
@@ -334,6 +452,7 @@ test("the read-back exits 3 and lists an unconfirmed create although every name 
     const { code, text } = await readbackExit(run);
     assert.equal(code, 3);
     assert.ok(text.includes(CREATE.name), "the name is listed");
+    assert.match(text, /a 404 never settles an unknown create, here or in the run/);
     assert.ok(text.includes('"allAbsent": true'), "the names themselves did read absent");
     const written = readdirSync(run).find((f) => f.startsWith("readback-result-"));
     assert.deepEqual(JSON.parse(readFileSync(join(run, written), "utf8")).unconfirmedCreates, [
@@ -371,6 +490,15 @@ test("a missing, unreadable or malformed run result cannot be judged: exit 3, an
       const { code, text, world } = await readbackExit(run);
       assert.equal(code, 3, String(content));
       assert.match(text, /creates cannot be judged/, String(content));
+      assert.match(
+        text,
+        content === undefined
+          ? /result file cannot be read \(ENOENT\)/
+          : content === "{not json"
+            ? /result file cannot be read \(not JSON\)/
+            : /no list of unconfirmed creates/,
+        String(content),
+      );
       assert.ok(world.calls.length > 0, "the read-only read still runs");
     } finally {
       rmSync(run, { recursive: true, force: true });

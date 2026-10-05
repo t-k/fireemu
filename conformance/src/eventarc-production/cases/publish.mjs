@@ -3,7 +3,7 @@ import {
   baseAttributes,
   CE_TYPE,
   cloudEvent,
-  requireChannel,
+  requireReadyChannel,
   without,
   withoutAttribute,
 } from "./support.mjs";
@@ -17,7 +17,7 @@ export const publishEnvelope = {
   requests: 44,
   async run(ctx) {
     const c = ctx.client;
-    const channel = await requireChannel(ctx, "env");
+    const channel = await requireReadyChannel(ctx, "env");
     const event = () => cloudEvent(ctx);
     await c.publishEvents(channel, { events: [event()] });
     await c.publishEvents(channel, { events: [event(), event(), event()] });
@@ -87,7 +87,7 @@ export const publishContent = {
   requests: 24,
   async run(ctx) {
     const c = ctx.client;
-    const channel = await requireChannel(ctx, "content");
+    const channel = await requireReadyChannel(ctx, "content");
     const json = (textData) => cloudEvent(ctx, { textData });
     await c.publishEvents(channel, { events: [json('{"a":1,"b":[true,null]}')] });
     await c.publishEvents(channel, { events: [json("1")] });
@@ -143,7 +143,7 @@ export const publishLimits = {
   requests: 40,
   async run(ctx) {
     const c = ctx.client;
-    const channel = await requireChannel(ctx, "limits");
+    const channel = await requireReadyChannel(ctx, "limits");
     const many = (n) => Array.from({ length: n }, () => cloudEvent(ctx, { textData: "1" }));
     const big = c.with({ timeoutMs: 120_000 });
     const search = async (name, start, ladder, steps, send) => {

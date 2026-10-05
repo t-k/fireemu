@@ -1,4 +1,4 @@
-import { defaultChannelAbsent, requireChannel } from "./support.mjs";
+import { defaultChannelAbsent, requireReadyChannel } from "./support.mjs";
 
 // The Admin SDK publish. `ctx.sdk.publish` reports whether the SDK threw and how many requests it sent;
 // the requests themselves are in the capture (op sdk.publishEvents), recorded as the SDK built them.
@@ -7,7 +7,7 @@ export const adminSdkPublish = {
   short: "sd",
   requests: 24,
   async run(ctx) {
-    const channel = await requireChannel(ctx, "sdk");
+    const channel = await requireReadyChannel(ctx, "sdk");
     const relative = channel.replace(`projects/${ctx.project}/`, "");
     const source = `//fireemu/recorder/${ctx.ownership.runId}`;
     const record = async (name, spec) => {

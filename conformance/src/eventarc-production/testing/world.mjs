@@ -78,6 +78,13 @@ export function createWorld({
   createAnswer = "ok",
   /** How a deletion answers: `ok`, `unknown-effective` (a 503, the channel is gone) or `unknown-noeffect`. */
   deleteAnswer = "ok",
+  /**
+   * The `state` a created channel reads as: `undefined` (no member), `ACTIVE`, or a number of reads for
+   * which it is PENDING first (`pendingReads`), and `PENDING` for good with `stuckPending`.
+   */
+  pendingReads = 0,
+  stuckPending = false,
+  withState = false,
 } = {}) {
   const channels = new Map(existing.map((name) => [name, { createTime: "2026-01-01T00:00:00Z" }]));
   const operations = new Map();
@@ -149,7 +156,14 @@ export function createWorld({
     limits,
     calls,
     async request(call) {
-      calls.push({ op: call.op, method: call.method, path: call.path, body: call.body, token: call.token });
+      calls.push({
+        op: call.op,
+        method: call.method,
+        path: call.path,
+        body: call.body,
+        token: call.token,
+        caseId: call.label?.case,
+      });
       const url = new URL(`http://world${call.path}`);
       const bare = decodeURIComponent(url.pathname.replace(/^\/v1\//, "").replace(/^\//, ""));
       if (call.op === "getService") return reply(200, { state: "ENABLED" });
@@ -163,7 +177,11 @@ export function createWorld({
       if (call.op === "createChannel") return create(call, url);
       if (call.op === "getChannel") {
         const found = channels.get(bare);
-        return found === undefined ? notFound(bare) : reply(200, { name: bare, ...found });
+        if (found === undefined) return notFound(bare);
+        if (!withState) return reply(200, { name: bare, ...found });
+        found.reads = (found.reads ?? 0) + 1;
+        const state = stuckPending || found.reads <= pendingReads ? "PENDING" : "ACTIVE";
+        return reply(200, { name: bare, ...found, reads: undefined, state });
       }
       if (call.op === "listChannels") return list(bare.replace(/\/channels$/, ""), url);
       if (call.op === "deleteChannel") {

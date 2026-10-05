@@ -1,4 +1,4 @@
-import { cloudEvent, requireChannel } from "./support.mjs";
+import { cloudEvent, requireReadyChannel } from "./support.mjs";
 
 // Credentials and the answers of a missing channel, a malformed event and a wrong project or location.
 // The token-format probes first: strict decides by shape (a `ya29.`-prefixed token or a three-part JWT is
@@ -14,7 +14,7 @@ export const authErrors = {
   requests: 30,
   async run(ctx) {
     const c = ctx.client;
-    const channel = await requireChannel(ctx, "auth");
+    const channel = await requireReadyChannel(ctx, "auth");
     for (const token of TOKEN_PROBES) {
       const t = c.with({ token });
       await t.listChannels(ctx.project, ctx.location);

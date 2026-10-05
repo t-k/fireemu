@@ -148,7 +148,7 @@ function channelService({
 
 async function run(
   service,
-  { runId = RUN, cases = [channelLifecycle], makeSdk = null, usageProject = PROJECT, scopedToken } = {},
+  { runId = RUN, cases = [channelLifecycle], makeSdk = null, usageProject = PROJECT, scopedToken, sleep } = {},
 ) {
   const ownership = createOwnership({ project: PROJECT, runId });
   const ledger = createLedger();
@@ -174,7 +174,7 @@ async function run(
       usageProject,
       publishPrefix: "/v1",
     },
-    sleep: async () => {},
+    sleep: sleep ?? (async () => {}),
     ledger,
     makeSdk,
     ...(scopedToken === undefined ? {} : { scopedToken }),
@@ -787,4 +787,45 @@ test("a limit search that gets an answer that does not say stops there and sends
     .map((call) => call.body.events.length);
   assert.equal(sent.filter((count) => count === 255).length, 1, "the 255 is not asked twice");
   assert.equal(sent.includes(256), false);
+});
+
+test("a case that publishes waits for its channel to read ACTIVE (a few reads, three seconds apart), records the state it ends with, and goes on whatever it is", async () => {
+  const sleeps = [];
+  const reads = (service, name) =>
+    service.calls.filter(
+      (call) =>
+        call.op === "getChannel" && call.caseId === "publish-envelope" && call.path.endsWith(`/${name}`),
+    );
+  const cases = { channel: `fe${RUN}-pe-env`, item: publishEnvelope };
+  // No state member: one read, nothing to wait for.
+  const none = createWorld({ project: PROJECT });
+  const first = await run(none, { cases: [cases.item] });
+  assert.equal(reads(none, cases.channel).length, 1);
+  assert.deepEqual(
+    first.notes.filter((n) => n.note === "channel-state").map((n) => n.state ?? null),
+    [null],
+  );
+  // PENDING for two reads: three reads, the publishes only after the third.
+  const slow = createWorld({ project: PROJECT, withState: true, pendingReads: 2 });
+  const second = await run(slow, { cases: [cases.item], sleep: async (ms) => sleeps.push(ms) });
+  assert.equal(reads(slow, cases.channel).length, 3);
+  assert.deepEqual(sleeps, [3000, 3000]);
+  const lastRead = slow.calls.findLastIndex(
+    (call) => call.op === "getChannel" && call.caseId === "publish-envelope",
+  );
+  const firstPublish = slow.calls.findIndex((call) => call.op === "publishEvents");
+  assert.ok(lastRead < firstPublish, "no publish before the channel read ACTIVE");
+  assert.deepEqual(
+    second.notes.filter((n) => n.note === "channel-state").map((n) => n.state),
+    ["ACTIVE"],
+  );
+  // PENDING for good: five reads at most, the case goes on and records PENDING.
+  const stuck = createWorld({ project: PROJECT, withState: true, stuckPending: true });
+  const third = await run(stuck, { cases: [cases.item] });
+  assert.equal(reads(stuck, cases.channel).length, 5);
+  assert.equal(third.summary.cases[0].outcome, "completed");
+  assert.deepEqual(
+    third.notes.filter((n) => n.note === "channel-state").map((n) => n.state),
+    ["PENDING"],
+  );
 });

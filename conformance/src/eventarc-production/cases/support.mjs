@@ -104,6 +104,29 @@ export async function requireChannel(ctx, key) {
   return name;
 }
 
+/** The reads of the channel's state before a publish: the first, and at most four more, three seconds apart. */
+const READY_READS = 5;
+const READY_WAIT_MS = 3000;
+
+/**
+ * Creates an owned channel (see `requireChannel`) and reads it until its `state` says ACTIVE, so that the
+ * publishes that follow are not sent to a channel that is still being set up. The reads stop at once when
+ * the read is not a 2xx or the channel has no `state`, and after the last read whatever the state is: the
+ * case goes on and the capture says what it was (`channel-state`).
+ */
+export async function requireReadyChannel(ctx, key) {
+  const name = await requireChannel(ctx, key);
+  let state = null;
+  for (let read = 0; read < READY_READS; read += 1) {
+    if (read > 0) await ctx.sleep(READY_WAIT_MS);
+    const reply = await ctx.client.getChannel(name);
+    state = reply.ok && typeof reply.body?.state === "string" ? reply.body.state : null;
+    if (state === null || state === "ACTIVE") break;
+  }
+  ctx.note("channel-state", { name, state });
+  return name;
+}
+
 /** True when the default channel is known not to exist (the recorded 404), so a publish to it reaches nothing. */
 export async function defaultChannelAbsent(ctx) {
   const reply = await ctx.client.getChannel(

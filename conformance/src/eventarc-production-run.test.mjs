@@ -488,56 +488,62 @@ test("main: a usage error exits 2, a budget below the plan is refused before any
   assert.throws(() => readdirSync(out), "nothing was created");
 });
 
-test("main: the whole recording through the real transport and the SDK, against the model of the service, sends only well-formed writes and cleans up", async (t) => {
-  const world = createWorld({ project: "demo-fireemu-eventarc" });
-  const service = await serveWorld(world);
-  t.after(service.close);
-  const out = join(mkdtempSync(join(tmpdir(), "eventarc-main-")), "o");
-  const code = await main(
-    ["--target", "emulator", "--emulator-host", service.host, "--out", out, "--run-id", RUN],
-    {},
-    io(),
-  );
-  const summary = JSON.parse(readFileSync(join(out, `summary-${RUN}.json`), "utf8"));
-  assert.deepEqual(
-    summary.cases.map((c) => [c.id, c.outcome]),
-    CASES.map((item) => [item.id, "completed"]),
-  );
-  assert.equal(code, 0);
-  assert.equal(summary.closureReady, true);
-  // The model refused no creation for its shape, and no publish except the two probes that send no
-  // events on purpose (an empty list and a body without the member).
-  assert.deepEqual(
-    world.refusals.map((refusal) => refusal.kind),
-    ["publish-no-events", "publish-no-events"],
-  );
-  // Nothing of the run is left, and every case stayed inside its ceiling.
-  assert.deepEqual(
-    [...world.channels.keys()].filter((name) => name.includes(`/fe${RUN}-`)),
-    [],
-  );
-  for (const entry of summary.cases)
-    assert.ok(entry.requests <= CASES.find((item) => item.id === entry.id).requests, entry.id);
-  const lines = readFileSync(join(out, `capture-${RUN}.jsonl`), "utf8")
-    .trim()
-    .split("\n")
-    .map((l) => JSON.parse(l));
-  // The raw bytes of every answer are in the capture.
-  const exchanges = lines.filter((l) => l.response?.status !== undefined);
-  assert.ok(exchanges.length > 100);
-  assert.ok(exchanges.every((l) => typeof l.response.bodyBase64 === "string"));
-  assert.ok(lines.some((l) => l.op === "sdk.publishEvents" && l.response.status === 200));
-  assert.ok(
-    lines.some((l) => l.note === "sdk-outcome" && l.name === "missing-source" && l.requests === 0),
-  );
-  // The create probe came first and every creation carried its channel's name.
-  const creates = lines.filter((l) => l.op === "createChannel");
-  assert.ok(creates.length > 5);
-  for (const line of creates) {
-    const [, parent, id] = /^(.*)\/channels\?channelId=(.*)$/.exec(line.request.path.replace(/^\/v1\//, ""));
-    if (line.tokenMode === "default") assert.equal(line.request.body.name, `${parent}/channels/${id}`);
-  }
-});
+for (const [label, extra] of [
+  ["a channel with no state", {}],
+  ["a channel that stays PENDING", { withState: true, stuckPending: true }],
+]) {
+  test(`main: the whole recording through the real transport and the SDK, against the model of the service (${label}), sends only well-formed writes and cleans up`, async (t) => {
+    const world = createWorld({ project: "demo-fireemu-eventarc", ...extra });
+    const service = await serveWorld(world);
+    t.after(service.close);
+    const out = join(mkdtempSync(join(tmpdir(), "eventarc-main-")), "o");
+    const code = await main(
+      ["--target", "emulator", "--emulator-host", service.host, "--out", out, "--run-id", RUN],
+      {},
+      io(),
+      { now: Date.now, sleep: async () => {} },
+    );
+    const summary = JSON.parse(readFileSync(join(out, `summary-${RUN}.json`), "utf8"));
+    assert.deepEqual(
+      summary.cases.map((c) => [c.id, c.outcome]),
+      CASES.map((item) => [item.id, "completed"]),
+    );
+    assert.equal(code, 0);
+    assert.equal(summary.closureReady, true);
+    // The model refused no creation for its shape, and no publish except the two probes that send no
+    // events on purpose (an empty list and a body without the member).
+    assert.deepEqual(
+      world.refusals.map((refusal) => refusal.kind),
+      ["publish-no-events", "publish-no-events"],
+    );
+    // Nothing of the run is left, and every case stayed inside its ceiling.
+    assert.deepEqual(
+      [...world.channels.keys()].filter((name) => name.includes(`/fe${RUN}-`)),
+      [],
+    );
+    for (const entry of summary.cases)
+      assert.ok(entry.requests <= CASES.find((item) => item.id === entry.id).requests, entry.id);
+    const lines = readFileSync(join(out, `capture-${RUN}.jsonl`), "utf8")
+      .trim()
+      .split("\n")
+      .map((l) => JSON.parse(l));
+    // The raw bytes of every answer are in the capture.
+    const exchanges = lines.filter((l) => l.response?.status !== undefined);
+    assert.ok(exchanges.length > 100);
+    assert.ok(exchanges.every((l) => typeof l.response.bodyBase64 === "string"));
+    assert.ok(lines.some((l) => l.op === "sdk.publishEvents" && l.response.status === 200));
+    assert.ok(
+      lines.some((l) => l.note === "sdk-outcome" && l.name === "missing-source" && l.requests === 0),
+    );
+    // The create probe came first and every creation carried its channel's name.
+    const creates = lines.filter((l) => l.op === "createChannel");
+    assert.ok(creates.length > 5);
+    for (const line of creates) {
+      const [, parent, id] = /^(.*)\/channels\?channelId=(.*)$/.exec(line.request.path.replace(/^\/v1\//, ""));
+      if (line.tokenMode === "default") assert.equal(line.request.body.name, `${parent}/channels/${id}`);
+    }
+  });
+}
 
 /** The most requests a case sends against five kinds of service, with no ceiling in the way. */
 async function worstCase(item) {

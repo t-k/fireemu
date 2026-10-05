@@ -241,3 +241,10 @@ def test_a_failed_age_row_is_refused_whatever_the_mismatch_count_says(tmp_path):
     failed = [{"site": "late-read", "production": 284.0, "emulator": 260.0, "difference": -24.0, "match": False}]
     with pytest.raises(ValueError, match="age"):
         build(tmp_path, results=[result(paths[0], tokenAges=failed), result(paths[1])], paths=paths)
+
+
+def test_an_age_row_without_a_match_flag_is_refused_too(tmp_path):
+    paths = [write(tmp_path, 1), write(tmp_path, 2)]
+    unflagged = [{"site": "late-read", "production": 284.0, "emulator": 284.0, "difference": 0.0}]
+    with pytest.raises(ValueError, match="age"):
+        build(tmp_path, results=[result(paths[0], tokenAges=unflagged), result(paths[1])], paths=paths)

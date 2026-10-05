@@ -15,7 +15,7 @@
     "binarySha256": "d0d8d43726a808b600f702f1f6be26c4863fc48dd7b4971a519adcae9ce01888"
   },
   "comparer": {
-    "sha256": "63cd6a836c0004ac9d2ec9dfa67f8356f07cbce7813687b9af01d0bd7e5fd2eb",
+    "sha256": "7b360afde62c053ae359bc786812b65578b5ef544ef8c521e21f3cf41eb4de8c",
     "replayClock": "virtual"
   },
   "asRecorded": [

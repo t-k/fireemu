@@ -111,8 +111,8 @@ def judge_token_ages(production, emulator, *, tolerance, minimum, limits=STRICT_
             continue
         seen = emulator.get(site)
         difference = None if seen is None else round(seen - recorded, 3)
-        same_side = seen is not None and all((recorded >= limit) == (seen >= limit) for limit in limits)
-        rows.append({"site": site, "production": recorded, "emulator": seen, "difference": difference, "match": difference is not None and abs(difference) <= tolerance and same_side})
+        match = seen is not None and abs(seen - recorded) <= tolerance and all((recorded >= limit) == (seen >= limit) for limit in limits)
+        rows.append({"site": site, "production": recorded, "emulator": seen, "difference": difference, "match": match})
     return rows
 
 

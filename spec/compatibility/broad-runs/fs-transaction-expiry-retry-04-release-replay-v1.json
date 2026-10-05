@@ -30,7 +30,7 @@
       "txn_expiry_comparison.py": "087d3a707b78b68d0612010fd30c95f1aea5ea0be131be875fb0d7a59367481b",
       "txn_expiry_collector.py": "5a95a377c00af79713802ffbc084785e652224204a872137d6b85e984d8d4799",
       "txn_expiry_cases.py": "c3c44d95f77d7cd1a148ef0bca3f920c131c0810101d45c9b045ece912d8ff26",
-      "fs_txn_expiry_idle_replay.py": "95283c75f78f48507cefe89a78b08ba08469856c430b245d2b16383e5c9706bd"
+      "fs_txn_expiry_idle_replay.py": "58059593906cf22f38d3abf627da665c3bb6d1f5e8fece208eeb59214f5e57a6"
     },
     "note": "The campaign's case table with its three idle waits changed from 90 s to 121 s and nothing else. Each idle observation was made after the idle in localIdleSeconds on the control clock, inside the interval [110.70, 122.96) s production narrowed for the idle threshold (ledger 809 (5)); the lock-release case idled 124.7 to 125.2 s in production, so 121 s is a lower idle there with the same outcome (strict refuses every idle above its 120 s limit): a valid sample, not the recorded idle. The other cases are replayed unchanged."
   },

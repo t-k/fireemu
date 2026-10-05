@@ -63,7 +63,7 @@ def test_the_local_idles_are_the_measured_ones_of_the_idle_steps_only():
 
 def test_the_record_counts_rows_and_mismatches_and_names_the_artifact():
     ok, bad = tool.compare_rows(side(), side()), tool.compare_rows(side(), side(code=0))
-    record = tool.build_record(commit="c" * 40, binary_sha256="b" * 64, recording_digests=["1" * 64, "2" * 64], rows_by_recording=[ok, bad], idles={"idle/commit-after": 121.0}, cases_blob="9" * 40)
+    record = tool.build_record(commit="c" * 40, binary_sha256="b" * 64, recording_digests=["1" * 64, "2" * 64], rows_by_recording=[ok, bad], idles={"idle/commit-after": 121.0}, cases_blob="9" * 40, file_digests={})
     assert record["artifact"] == {"sourceCommit": "c" * 40, "binarySha256": "b" * 64}
     assert record["summary"] == {"recordings": 2, "rows": 8, "mismatches": 1}
     assert [entry["mismatches"] for entry in record["recordings"]] == [0, 1]
@@ -75,3 +75,69 @@ def test_a_case_that_reads_no_document_back_has_no_post_state_row():
     one = {"projection": {"c1": {"code": 10}, "c2": {"code": 0}}, "postStates": {"c1": {"state": "created"}}}
     rows = tool.compare_rows(one, one)
     assert [row["caseId"] for row in rows] == ["c1", "c1#postState", "c2"]
+
+
+def test_an_existing_replay_copy_must_equal_the_tool_directory_except_for_the_case_table(tmp_path):
+    source = tmp_path / "src"
+    source.mkdir()
+    (source / "txn_expiry_cases.py").write_text(TABLE)
+    (source / "txn_expiry_shadow.py").write_text("shadow")
+    (source / "__pycache__").mkdir()
+    (source / "__pycache__" / "x.pyc").write_text("cache")
+    destination = tmp_path / "copy"
+    tool.ensure_replay_tools(source, destination)
+    assert tool.ensure_replay_tools(source, destination) == destination
+    # a stale copy of any other module is refused, not silently imported
+    (destination / "txn_expiry_shadow.py").write_text("an older shadow")
+    with pytest.raises(ValueError, match="differs"):
+        tool.ensure_replay_tools(source, destination)
+    (destination / "txn_expiry_shadow.py").write_text("shadow")
+    # a file the copy lacks, and a file only the copy has, are refused too
+    (destination / "extra.py").write_text("extra")
+    with pytest.raises(ValueError, match="differs"):
+        tool.ensure_replay_tools(source, destination)
+    (destination / "extra.py").unlink()
+    (destination / "txn_expiry_shadow.py").unlink()
+    with pytest.raises(ValueError, match="differs"):
+        tool.ensure_replay_tools(source, destination)
+    # bytecode caches are not part of the comparison
+    (destination / "txn_expiry_shadow.py").write_text("shadow")
+    (destination / "__pycache__").mkdir(exist_ok=True)
+    (destination / "__pycache__" / "other.pyc").write_text("another cache")
+    assert tool.ensure_replay_tools(source, destination) == destination
+
+
+def test_the_digests_of_the_files_the_replay_ran_are_named(tmp_path):
+    directory = tmp_path / "tools"
+    directory.mkdir()
+    for name in ("txn_expiry_shadow.py", "txn_expiry_comparison.py", "txn_expiry_collector.py", "fs_txn_expiry_idle_replay.py", "txn_expiry_cases.py"):
+        (directory / name).write_text(name)
+    digests = tool.replayed_file_digests(directory)
+    assert sorted(digests) == sorted(tool.REPLAYED_FILES)
+    assert digests["txn_expiry_shadow.py"] == __import__("hashlib").sha256(b"txn_expiry_shadow.py").hexdigest()
+    (directory / "txn_expiry_collector.py").unlink()
+    with pytest.raises(ValueError, match="missing"):
+        tool.replayed_file_digests(directory)
+
+
+def test_the_record_names_the_files_it_ran():
+    ok = tool.compare_rows(side(), side())
+    record = tool.build_record(commit="c" * 40, binary_sha256="b" * 64, recording_digests=["1" * 64, "2" * 64], rows_by_recording=[ok, ok], idles={}, cases_blob="9" * 40, file_digests={"a.py": "5" * 64})
+    assert record["replay"]["fileSha256"] == {"a.py": "5" * 64}
+
+
+def test_no_runner_built_overlay_directory_is_tracked():
+    import subprocess
+
+    tracked = subprocess.check_output(["git", "ls-files", "tools/compat-broad"], cwd=tool.HERE.parents[1], text=True).split()
+    assert [path for path in tracked if "fs-write-txn-overlay-" in path] == []
+
+
+def test_a_directory_with_no_files_but_a_cache_is_filled(tmp_path):
+    source = tmp_path / "src"
+    source.mkdir()
+    (source / "txn_expiry_cases.py").write_text(TABLE)
+    destination = tmp_path / "copy"
+    (destination / "__pycache__").mkdir(parents=True)
+    tool.ensure_replay_tools(source, destination)
+    assert (destination / "txn_expiry_cases.py").read_text() == tool.replay_cases_text(TABLE)

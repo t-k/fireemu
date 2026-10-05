@@ -32,17 +32,39 @@ def replay_cases_text(text):
     return text.replace(DECLARED_WAIT, REPLAY_WAIT)
 
 
+def _tool_files(directory):
+    return {path.name: path for path in Path(directory).iterdir() if path.is_file()}
+
+
 def ensure_replay_tools(source=HERE, destination=OVERLAY):
-    """The sibling copy of the tool directory with the replay table. An existing copy must be exactly what this would build."""
+    """The sibling copy of the tool directory with the replay table. An existing copy must be exactly what this would build: every file
+    equal to the tool directory's, except the case table, which has the replay waits (bytecode caches are not compared)."""
     source, destination = Path(source), Path(destination)
     expected = replay_cases_text((source / "txn_expiry_cases.py").read_text())
-    if destination.exists():
-        if (destination / "txn_expiry_cases.py").read_text() != expected:
-            raise ValueError("the replay copy of the case table differs from the one this tool builds")
+    if destination.exists() and _tool_files(destination):
+        have, want = _tool_files(destination), _tool_files(source)
+        if sorted(have) != sorted(want):
+            raise ValueError("the replay copy differs from the tool directory: its files are not the same")
+        for name, path in want.items():
+            current = have[name].read_text()
+            if current != (expected if name == "txn_expiry_cases.py" else path.read_text()):
+                raise ValueError(f"the replay copy differs from the tool directory in {name}")
         return destination
-    shutil.copytree(source, destination, ignore=shutil.ignore_patterns("__pycache__"))
+    shutil.copytree(source, destination, ignore=shutil.ignore_patterns("__pycache__"), dirs_exist_ok=True)   # an existing directory with no files (only caches) is filled
     (destination / "txn_expiry_cases.py").write_text(expected)
     return destination
+
+
+#: What the replay ran: the campaign's shadow, comparison and collector, its case table (with the replay waits) and this tool.
+REPLAYED_FILES = ("txn_expiry_shadow.py", "txn_expiry_comparison.py", "txn_expiry_collector.py", "txn_expiry_cases.py", "fs_txn_expiry_idle_replay.py")
+
+
+def replayed_file_digests(directory):
+    files = _tool_files(directory)
+    missing = [name for name in REPLAYED_FILES if name not in files]
+    if missing:
+        raise ValueError(f"replayed files are missing: {missing}")
+    return {name: hashlib.sha256(files[name].read_bytes()).hexdigest() for name in REPLAYED_FILES}
 
 
 def compare_rows(production, local):
@@ -62,7 +84,7 @@ def local_idles(receipt):
     return {row["slot"]: row["idleSeconds"] for row in receipt["rows"] if row.get("idleOfTransaction") and row.get("idleSeconds") is not None}
 
 
-def build_record(*, commit, binary_sha256, recording_digests, rows_by_recording, idles, cases_blob):
+def build_record(*, commit, binary_sha256, recording_digests, rows_by_recording, idles, cases_blob, file_digests):
     mismatches = sum(not row["match"] for rows in rows_by_recording for row in rows)
     return {
         "schemaVersion": 1, "kind": "fs-transaction-expiry-retry-04-release-replay-v1", "parent": "FS-TRANSACTION", "campaign": "FS-TRANSACTION-EXPIRY-RETRY-04",
@@ -70,7 +92,7 @@ def build_record(*, commit, binary_sha256, recording_digests, rows_by_recording,
         "artifact": {"sourceCommit": commit, "binarySha256": binary_sha256},
         "replay": {
             "tool": "tools/compat-broad/fs-write-txn/fs_txn_expiry_idle_replay.py", "idleWaitSeconds": IDLE_SECONDS, "idleCases": list(IDLE_CASES), "localIdleSeconds": idles,
-            "casesFileBlob": cases_blob,
+            "casesFileBlob": cases_blob, "fileSha256": file_digests,
             "note": ("The campaign's case table with its three idle waits changed from 90 s to 121 s and nothing else. Each idle observation was made after the idle in localIdleSeconds on the control clock, "
                      "inside the interval [110.70, 122.96) s production narrowed for the idle threshold (ledger 809 (5)); the lock-release case idled 125.2 s in production, also past strict's 120 s limit, "
                      "so the same refusal is decided directly. The other cases are replayed unchanged."),
@@ -109,7 +131,7 @@ def main(argv=None):
         rows.append(compare_rows({"projection": comparison._projection(value), "postStates": comparison._post_states(value)}, local))
     blob = subprocess.check_output(["git", "-C", str(HERE), "rev-parse", "HEAD:tools/compat-broad/fs-write-txn/txn_expiry_cases.py"], text=True).strip()
     record = build_record(commit=args.commit, binary_sha256=hashlib.sha256(args.binary.read_bytes()).hexdigest(), recording_digests=[hashlib.sha256(path.read_bytes()).hexdigest() for path in recordings],
-                          rows_by_recording=rows, idles=local_idles(receipt), cases_blob=blob)
+                          rows_by_recording=rows, idles=local_idles(receipt), cases_blob=blob, file_digests=replayed_file_digests(overlay))
     args.out.write_text(json.dumps(record, indent=2, ensure_ascii=False) + "\n")
     print(json.dumps(record["summary"]), json.dumps(record["replay"]["localIdleSeconds"]))
 

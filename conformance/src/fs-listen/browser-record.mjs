@@ -34,8 +34,8 @@ export const runBrowserDriver = (options) =>
 export function browserRows(modeResults) {
   const rows = {};
   for (const [mode, result] of Object.entries(modeResults)) {
-    if (!result?.receipt) continue;
-    for (const [id, row] of Object.entries(rowsFromReceipt(result.receipt)))
+    // A mode with no receipt has no rows (`rowsFromReceipt` of nothing is empty).
+    for (const [id, row] of Object.entries(rowsFromReceipt(result?.receipt)))
       rows[`browser-${mode}/${id}`] = row;
   }
   return rows;

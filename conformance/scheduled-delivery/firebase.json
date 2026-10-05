@@ -1,0 +1,7 @@
+{
+  "functions": {
+    "source": "fixture",
+    "codebase": "scheduled-delivery",
+    "runtime": "nodejs22"
+  }
+}

@@ -79,15 +79,20 @@ export function issuedFromJournal(text) {
  *   - a `refused` answer applies nothing,
  *   - a delete (the recorder's cleanup sends one only after it read the name present) settles an
  *     unknown create, and an `ok` delete forgets the confirmation,
- *   - names a `before` line marks `maybe: true` are names that may exist (the SDK cases may write
- *     them), not creates the recorder sent: they are not opened, so never unconfirmed.
+ *   - names a `before` line marks `maybe: true` are names the SDK cases may write: no create of
+ *     the recorder's, but a write of unknown outcome unless the journal says otherwise. They stay
+ *     open until a closing line for them: `known` (no write of unknown outcome) closes them,
+ *     `unknown` leaves them unconfirmed, and a journal that ends without one (a crash while the
+ *     driver ran) leaves them unconfirmed. A `known` line is not a confirmation and does nothing
+ *     to any other name.
  * Returns a Map from name to `{ unconfirmed }`.
  */
 export function nameStates(text) {
   const states = new Map();
   const pending = new Map();
   const state = (name) => {
-    if (!states.has(name)) states.set(name, { confirmed: false, unconfirmed: false });
+    if (!states.has(name))
+      states.set(name, { confirmed: false, unconfirmed: false, maybeOpen: false });
     return states.get(name);
   };
   const answer = (name, op, outcome) => {
@@ -96,9 +101,11 @@ export function nameStates(text) {
       if (outcome === "ok") {
         current.confirmed = true;
         current.unconfirmed = false;
+        current.maybeOpen = false;
       } else if (outcome !== "refused" && !current.confirmed) current.unconfirmed = true;
     } else if (outcome !== "refused") {
       current.unconfirmed = false;
+      current.maybeOpen = false;
       if (outcome === "ok") current.confirmed = false;
     }
   };
@@ -115,8 +122,14 @@ export function nameStates(text) {
       if (record.phase === "before") {
         // Opened again without an answer: the earlier one is unknown.
         if (pending.has(name)) answer(name, pending.get(name), "unknown");
-        if (record.maybe === true) state(name);
-        else pending.set(name, op);
+        if (record.maybe === true) {
+          const current = state(name);
+          if (!current.confirmed) current.maybeOpen = true;
+        } else pending.set(name, op);
+      } else if (record.outcome === "known") {
+        // The closing line of a may-exist name: no write of unknown outcome.
+        const current = states.get(name);
+        if (current) current.maybeOpen = false;
       } else {
         pending.delete(name);
         answer(name, op, record.outcome);
@@ -124,7 +137,12 @@ export function nameStates(text) {
     }
   }
   for (const [name, op] of pending) answer(name, op, "unknown");
-  return new Map([...states].map(([name, { unconfirmed }]) => [name, { unconfirmed }]));
+  return new Map(
+    [...states].map(([name, { unconfirmed, maybeOpen }]) => [
+      name,
+      { unconfirmed: unconfirmed || maybeOpen },
+    ]),
+  );
 }
 
 /**

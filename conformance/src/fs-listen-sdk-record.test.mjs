@@ -4,6 +4,8 @@ import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
 import { test } from "node:test";
 
+import { sdkCases } from "./fs-listen/sdk-cases.mjs";
+
 import {
   conditionsOf,
   issuedSdkNames,
@@ -290,15 +292,7 @@ test("recordSdk: a clean run keeps the receipt's rows and counts, and the cleanu
     thrown: null,
     cleanup: { complete: true },
     teardown: [{ client: "primary", closed: true }],
-    cases: [
-      {
-        caseId: "FS-LISTEN-SDK-101",
-        comparedFields: null,
-        observed: [],
-        failures: [],
-        invariantViolations: [],
-      },
-    ],
+    cases: completeCases(),
     ...extra,
   });
   const native = (stillPresent = false) => ({
@@ -335,7 +329,10 @@ test("recordSdk: a clean run keeps the receipt's rows and counts, and the cleanu
     assert.equal(clean.connections, 3);
     assert.equal(clean.kind, "sdk");
     assert.equal(clean.version, 1);
-    assert.deepEqual(Object.keys(clean.rows), ["sdk/101"]);
+    assert.deepEqual(
+      Object.keys(clean.rows),
+      sdkCases().map((c) => `sdk/${c.caseId.replace("FS-LISTEN-SDK-", "")}`),
+    );
     assert.deepEqual(clean.errors, {});
     assert.equal(clean.cleanup.complete, true);
     assert.equal(clean.cleanup.clientsClosed, true);
@@ -975,15 +972,7 @@ test("recordSdk: a case whose step threw makes the cleanup incomplete even when 
     thrown: null,
     cleanup: { complete: true },
     teardown: [{ client: "primary", closed: true }],
-    cases: [
-      {
-        caseId: "FS-LISTEN-SDK-101",
-        comparedFields: null,
-        observed: [],
-        failures,
-        invariantViolations: [],
-      },
-    ],
+    cases: completeCases(failures),
   });
   const clean = await recordWith(target, {
     driver: { receipt: receipt([]), wire: 1, connections: 1 },
@@ -1003,8 +992,18 @@ const PROD = {
   token: "TOK",
   web: { apiKey: "k", authDomain: "d", projectId: "fireemu-oracle-query" },
 };
+/** One record per case of the catalog, as a complete driver receipt carries; `firstFailures` is the first case's. */
+const completeCases = (firstFailures = []) =>
+  sdkCases().map((c, i) => ({
+    caseId: c.caseId,
+    comparedFields: null,
+    observed: [],
+    failures: i === 0 ? firstFailures : [],
+    invariantViolations: [],
+  }));
+
 const OKDRIVER = {
-  receipt: { thrown: null, cleanup: { complete: true }, teardown: [], cases: [] },
+  receipt: { thrown: null, cleanup: { complete: true }, teardown: [], cases: completeCases() },
   wire: 5,
   connections: 1,
 };
@@ -1324,12 +1323,22 @@ test("an SDK run whose driver died without a receipt, or threw, is just as unkno
   assert.equal((await a2(noReceipt)).clean, false);
 });
 
-test("an SDK run whose writes are all known leaves its may-exist names unjournaled as answers, and settles at A2 when they are absent", async () => {
+test("an SDK run whose writes are all known closes its may-exist names with a known line, and settles at A2 when they are absent", async () => {
   const lines = await sdkJournal(async () => OKDRIVER);
-  assert.equal(lines.filter((l) => l.type === "names" && l.phase === "after").length, 0);
+  const before = lines.find((l) => l.type === "names" && l.phase === "before");
+  const closing = lines.filter((l) => l.type === "names" && l.phase === "after");
+  assert.equal(closing.length, 1);
+  assert.equal(closing[0].outcome, "known");
+  assert.deepEqual(closing[0].names, before.names);
+  assert.ok(lines.indexOf(closing[0]) < lines.findIndex((l) => l.type === "end"));
   const report = await a2(lines);
   assert.equal(report.clean, true);
   assert.deepEqual(report.unconfirmed, []);
+  // The same run cut after the may-exist line (the recorder killed while the driver ran) is unconfirmed.
+  const cut = lines.slice(0, lines.indexOf(before) + 1);
+  const crashed = await a2(cut);
+  assert.equal(crashed.clean, false);
+  assert.deepEqual(crashed.unconfirmed.toSorted(), before.names.map((n) => n.name).toSorted());
 });
 
 test("an SDK run that stops before any name is journaled journals no answer for names either", async () => {
@@ -1349,4 +1358,45 @@ test("an SDK run that stops before any name is journaled journals no answer for 
     globalThis.fetch = realFetch;
   }
   assert.equal(lines.filter((l) => l.type === "names").length, 0);
+});
+
+test("writesKnown needs a receipt, no thrown value, every case of the catalog recorded, and no step that threw", async () => {
+  const full = (patch = {}) => ({
+    receipt: {
+      thrown: null,
+      cleanup: { complete: true },
+      teardown: [{ client: "primary", closed: true }],
+      cases: completeCases(),
+      ...patch,
+    },
+    wire: 5,
+    connections: 1,
+  });
+  const known = async (driver) =>
+    (await sdkJournal(async () => driver)).findLast(
+      (l) => l.type === "names" && l.phase === "after",
+    );
+  assert.equal((await known(full())).outcome, "known");
+  // The driver or the collector threw: a case that threw after its steps loses its record and its step-threw.
+  assert.equal((await known(full({ thrown: "unsubscribe-failed" }))).outcome, "unknown");
+  // One case record missing, with nothing recorded as thrown.
+  const missing = completeCases().slice(1);
+  assert.equal((await known(full({ cases: missing }))).outcome, "unknown");
+  // Too many records is no better than too few.
+  assert.equal(
+    (await known(full({ cases: [...completeCases(), completeCases()[0]] }))).outcome,
+    "unknown",
+  );
+  // A step that threw.
+  const threw = completeCases();
+  threw[3].failures = ["step-threw:unavailable"];
+  assert.equal((await known(full({ cases: threw }))).outcome, "unknown");
+  // And the recording says the same: writesKnown false, cleanup incomplete.
+  for (const patch of [{ thrown: "x" }, { cases: missing }]) {
+    const { recording } = await recordWith(PROD, { driver: full(patch) });
+    assert.equal(recording.cleanup.writesKnown, false);
+    assert.equal(recording.cleanup.complete, false);
+  }
+  const { recording } = await recordWith(PROD, { driver: full() });
+  assert.equal(recording.cleanup.writesKnown, true);
 });

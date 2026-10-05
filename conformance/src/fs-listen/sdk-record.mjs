@@ -12,7 +12,7 @@ import { createAccountClient, createAccountSession } from "./accounts.mjs";
 import { NULL_JOURNAL } from "./journal.mjs";
 import { createNativeClient } from "./native-client.mjs";
 import { createLedger, settleNames } from "./native-ledger.mjs";
-import { OWNER_COLLECTION, PUBLIC_COLLECTION } from "./sdk-cases.mjs";
+import { OWNER_COLLECTION, PUBLIC_COLLECTION, sdkCases } from "./sdk-cases.mjs";
 
 const DRIVER = fileURLToPath(new URL("./sdk-driver.mjs", import.meta.url));
 const WIRE_CAP = 1500;
@@ -212,6 +212,17 @@ export async function sweepDocuments({ client, project, run, accounts }) {
   return settleNames({ issued: ledger.entries(), client, root, run });
 }
 
+/**
+ * Whether no write of the run has an unknown outcome: the driver left a receipt, nothing was thrown
+ * (a case that throws after its steps loses its whole record, and the step-threw with it), every
+ * case of the catalog has its record, and no case recorded a step that threw.
+ */
+export const writesAreKnown = (receipt, expectedCases = sdkCases().length) =>
+  Boolean(receipt) &&
+  !receipt.thrown &&
+  receipt.cases.length === expectedCases &&
+  !unknownWrites(receipt);
+
 /** Whether any case recorded a step that threw: a write or delete whose outcome is then unknown. */
 export const unknownWrites = (receipt) =>
   receipt.cases.some((record) =>
@@ -312,12 +323,18 @@ export async function recordSdk({
     wire = error?.wire ?? 0;
   }
   // A write that threw has an unknown outcome, which a read that finds nothing cannot settle; so
-  // has any write of a driver that left no receipt. The names the cases may have written are then
-  // unknown creates: say so in the journal, so that absence at A2 does not settle them.
+  // has any write of a driver that left no receipt, threw, or lost a case record. The names the
+  // cases may have written are closed with `known` when no write is of unknown outcome and with
+  // `unknown` otherwise; a journal that ends without either leaves them unconfirmed at A2.
   const receipt = outcome?.receipt;
-  const writesKnown = receipt ? !unknownWrites(receipt) : false;
-  if (journaledNames && !writesKnown)
-    journal.append({ type: "names", phase: "after", outcome: "unknown", names: journaledNames });
+  const writesKnown = writesAreKnown(receipt);
+  if (journaledNames)
+    journal.append({
+      type: "names",
+      phase: "after",
+      outcome: writesKnown ? "known" : "unknown",
+      names: journaledNames,
+    });
   let documents;
   try {
     documents = await sweepDocuments({ client: native, project: target.project, run, accounts });

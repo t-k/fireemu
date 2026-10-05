@@ -441,11 +441,22 @@ test("nameStates: what each name's answers leave of its create", () => {
   assert.deepEqual(unconfirmed(states(before(A), before(A), after("refused", A))), ["n/a"]);
   // A line that is not JSON is refused here as it is by issuedFromJournal.
   assert.throws(() => nameStates("{broken"), /cannot be read/);
-  // A maybe name is in the answer, as not unconfirmed.
-  assert.deepEqual([...states({ ...before(A), maybe: true })], [["n/a", { unconfirmed: false }]]);
-  // Names the SDK marks `maybe` are names that may exist, not creates the recorder sent.
-  assert.deepEqual(unconfirmed(states({ ...before(A), maybe: true })), []);
-  assert.deepEqual(unconfirmed(states(before(A), { ...before(B), maybe: true })), ["n/a"]);
+  // A maybe name is in the answer, open (unconfirmed) until a closing line.
+  assert.deepEqual([...states({ ...before(A), maybe: true })], [["n/a", { unconfirmed: true }]]);
+  assert.deepEqual(
+    [...states({ ...before(A), maybe: true }, after("known", A))],
+    [["n/a", { unconfirmed: false }]],
+  );
+  // Names the SDK marks `maybe` are names that may exist: open until a closing line, whatever else the journal holds.
+  assert.deepEqual(unconfirmed(states({ ...before(A), maybe: true })), ["n/a"]);
+  assert.deepEqual(unconfirmed(states(before(A), { ...before(B), maybe: true })).toSorted(), [
+    "n/a",
+    "n/b",
+  ]);
+  assert.deepEqual(
+    unconfirmed(states(before(A), { ...before(B), maybe: true }, after("known", B))),
+    ["n/a"],
+  );
   // A real create left open and then listed as maybe is still an unknown create.
   assert.deepEqual(unconfirmed(states(before(B), { ...before(B), maybe: true })), ["n/b"]);
   // A maybe name answered by a confirmed create is confirmed, and a maybe after changes nothing.
@@ -490,9 +501,12 @@ test("nameStates over random journals agrees with an event-by-event oracle", () 
   }
 });
 
-test("the journal of an SDK run settles at A2 when the names it may have written read absent and its accounts are gone", async () => {
-  const text = journalOf(
-    { ...before(["n/a", "create"], ["n/b", "create"]), maybe: true },
+test("the may-exist names of an SDK or browser run stay open until a closing line: a crash leaves them unconfirmed, known settles them, unknown does not", async () => {
+  const names = [
+    ["n/a", "create"],
+    ["n/b", "create"],
+  ];
+  const account = [
     { type: "account", phase: "before", name: "a", email: "a@example.com" },
     {
       type: "account",
@@ -504,16 +518,81 @@ test("the journal of an SDK run settles at A2 when the names it may have written
     },
     { type: "account-delete", phase: "before", uid: "u1" },
     { type: "account-delete", phase: "after", uid: "u1", outcome: "answered", settled: true },
-  );
-  const report = await readbackJournal({ text, client: reads(), accountClient: noAccounts });
-  assert.equal(report.clean, true);
-  assert.deepEqual(report.unconfirmed, []);
-  // The same journal without the marker reads as unknown creates (a native crash looks like this).
-  const unmarked = text.replace(',"maybe":true', "");
-  const second = await readbackJournal({
-    text: unmarked,
+  ];
+  const opened = { ...before(...names), maybe: true };
+  const closing = (outcome) => after(outcome, ...names);
+  // A crash after the maybe line: no closing line and no end line.
+  const crashed = await readbackJournal({
+    text: journalOf(...account.slice(0, 2), opened),
     client: reads(),
     accountClient: noAccounts,
   });
-  assert.deepEqual(second.unconfirmed, ["n/a", "n/b"]);
+  assert.equal(crashed.ended, false);
+  assert.equal(crashed.clean, false);
+  assert.deepEqual(crashed.unconfirmed.toSorted(), ["n/a", "n/b"]);
+  // Known: no write of unknown outcome; absent names settle.
+  const known = await readbackJournal({
+    text: journalOf(...account, opened, closing("known"), { type: "end", productionRequests: 1 }),
+    client: reads(),
+    accountClient: noAccounts,
+  });
+  assert.equal(known.clean, true);
+  assert.deepEqual(known.unconfirmed, []);
+  // Known and present: not clean.
+  const present = await readbackJournal({
+    text: journalOf(...account, opened, closing("known")),
+    client: reads(["n/a"]),
+    accountClient: noAccounts,
+  });
+  assert.equal(present.clean, false);
+  assert.deepEqual(present.present, ["n/a"]);
+  assert.deepEqual(
+    present.unconfirmed,
+    ["n/b"].filter(() => false),
+  );
+  // Unknown: absent names are unconfirmed.
+  const unknown = await readbackJournal({
+    text: journalOf(...account, opened, closing("unknown")),
+    client: reads(),
+    accountClient: noAccounts,
+  });
+  assert.equal(unknown.clean, false);
+  assert.deepEqual(unknown.unconfirmed.toSorted(), ["n/a", "n/b"]);
+  // A closing line for only some of the names leaves the rest open.
+  const some = await readbackJournal({
+    text: journalOf(...account, opened, after("known", names[0])),
+    client: reads(),
+    accountClient: noAccounts,
+  });
+  assert.deepEqual(some.unconfirmed, ["n/b"]);
+});
+
+test("nameStates: a known closing line is not a confirmation and does not touch a name that is not a may-exist name", () => {
+  const unconfirmed = (...records) =>
+    [...nameStates(journalOf(...records))].filter(([, s]) => s.unconfirmed).map(([name]) => name);
+  const B = ["n/b", "create"];
+  assert.deepEqual(unconfirmed({ ...before(A), maybe: true }), ["n/a"]);
+  assert.deepEqual(unconfirmed({ ...before(A), maybe: true }, after("known", A)), []);
+  assert.deepEqual(unconfirmed({ ...before(A), maybe: true }, after("unknown", A)), ["n/a"]);
+  // A known line for a name that was never opened as maybe changes nothing (and is not a create answer).
+  assert.deepEqual(unconfirmed(after("known", A)), []);
+  assert.deepEqual(
+    unconfirmed(before(A), after("known", A)),
+    ["n/a"],
+    "an ordinary create is not answered by known",
+  );
+  // A later confirmed create, or a cleanup delete, settles a name still open.
+  assert.deepEqual(unconfirmed({ ...before(A), maybe: true }, before(A), after("ok", A)), []);
+  assert.deepEqual(unconfirmed({ ...before(A), maybe: true }, before(D), after("ok", D)), []);
+  // Unknown after known stays unknown; known after unknown does not clear it.
+  assert.deepEqual(
+    unconfirmed({ ...before(A), maybe: true }, after("known", A), after("unknown", A)),
+    ["n/a"],
+  );
+  assert.deepEqual(
+    unconfirmed({ ...before(A), maybe: true }, after("unknown", A), after("known", A)),
+    ["n/a"],
+  );
+  // Names are independent.
+  assert.deepEqual(unconfirmed({ ...before(A, B), maybe: true }, after("known", B)), ["n/a"]);
 });

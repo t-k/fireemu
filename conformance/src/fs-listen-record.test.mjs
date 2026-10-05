@@ -751,6 +751,7 @@ test("readback waits for the read before it closes the client, asks with the tok
     { type: "run", runId: "r", kind: "sdk", project: "fireemu-oracle-query" },
     [
       { type: "names", phase: "before", maybe: true, names: [{ name: "n/a", op: "create" }] },
+      { type: "names", phase: "after", outcome: "known", names: [{ name: "n/a", op: "create" }] },
       {
         type: "account",
         phase: "after",

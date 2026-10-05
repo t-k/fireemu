@@ -552,3 +552,22 @@ test('v2: members of a Storage object that the recordings never showed follow th
   const [call] = await f.calls();
   assert.deepEqual(Object.keys(call.data.data), [...Object.keys(recorded.data), 'aaa', 'cacheControl', 'contentEncoding', 'zzz']);
 });
+
+const v5Orders = JSON.parse(await readFile(new URL('../../crates/fireemu-adapter-functions/tests/fixtures/production-storage-v5-v2-member-orders.json', import.meta.url), 'utf8'));
+
+test('v2: every one of the 44 recorded Storage frames is handed over in its recorded member order (FE v5, finalize, delete, metadataUpdate and archive, with timeDeleted and metadata)', { timeout: 30000 }, async t => {
+  assert.equal(v5Orders.frames.length, 44);
+  const bucket = 'fireemu-oracle-events.firebasestorage.app';
+  const f = await start(t, [{ name: 'object', __endpoint: { platform: 'gcfv2', eventTrigger: { eventType: 'google.cloud.storage.object.v1.finalized', eventFilters: { bucket } } } }]);
+  for (const { insertId, members } of v5Orders.frames) {
+    // The runtime's JSON lists members by name, whatever production's order was.
+    const data = Object.fromEntries([...members].sort().map(key => [key, key === 'metadata' ? { marker: 'm' } : 'x']));
+    const event = { id: '1', type: 'google.cloud.storage.object.v1.finalized', time: '2026-10-04T18:49:25.459311Z', source: `//storage.googleapis.com/projects/_/buckets/${bucket}`, subject: 'objects/o', specversion: '1.0', bucket, data };
+    assert.equal((await f.invoke('object', 'storage', event)).ok, true, insertId);
+  }
+  const calls = await f.calls();
+  assert.equal(calls.length, 44);
+  calls.forEach((call, index) => {
+    assert.deepEqual(Object.keys(call.data.data), v5Orders.frames[index].members, v5Orders.frames[index].insertId);
+  });
+});

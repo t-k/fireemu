@@ -1064,14 +1064,15 @@ function millisecondTimestamp(time) {
 }
 
 // The members of a 2nd gen Storage event's `data` in the order production hands them over (recorded,
-// FE v5 production run functions-events-formal-20261004T182904Z-a9621bfae74fe9bc, frames of finalize,
-// delete and metadata update: kind, id, selfLink, name, bucket, generation, metageneration, contentType,
-// timeCreated, updated, storageClass, timeStorageClassUpdated, size, md5Hash, mediaLink, metadata, crc32c,
-// etag). The runtime's JSON lists members by name; a member the recordings never showed follows the
-// recorded ones in name order.
+// FE v5 production run functions-events-formal-20261004T182904Z-a9621bfae74fe9bc: kind, id, selfLink,
+// name, bucket, generation, metageneration, contentType, timeCreated, updated, [timeDeleted],
+// storageClass, timeStorageClassUpdated, size, md5Hash, mediaLink, [metadata], crc32c, etag; the order
+// of all 44 recorded v2 frames is in tests/fixtures/production-storage-v5-v2-member-orders.json).
+// The runtime's JSON lists members by name; a member the recordings never showed follows the recorded
+// ones in name order.
 const STORAGE_OBJECT_MEMBERS = [
   "kind", "id", "selfLink", "name", "bucket", "generation", "metageneration", "contentType",
-  "timeCreated", "updated", "storageClass", "timeStorageClassUpdated", "size", "md5Hash",
+  "timeCreated", "updated", "timeDeleted", "storageClass", "timeStorageClassUpdated", "size", "md5Hash",
   "mediaLink", "metadata", "crc32c", "etag",
 ];
 function storageObjectInRecordedOrder(data) {

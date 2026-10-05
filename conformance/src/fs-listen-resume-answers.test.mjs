@@ -1,0 +1,291 @@
+import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { test } from "node:test";
+
+import {
+  ANSWER_KINDS,
+  answerAgreement,
+  answerKind,
+  answerTable,
+  renderAnswerTable,
+} from "./fs-listen/resume-answers.mjs";
+
+const L1 = JSON.parse(
+  readFileSync(new URL("../fixtures/fs-listen/l1-production-rows.json", import.meta.url), "utf8"),
+).recordings;
+const recorded = (id) => L1["native-1"].rows[id];
+
+const add = { kind: "targetChange", type: "ADD", targetIds: [1], cause: null, resumeToken: false };
+const current = {
+  kind: "targetChange",
+  type: "CURRENT",
+  targetIds: [1],
+  cause: null,
+  resumeToken: true,
+};
+const bnd = { kind: "boundary", resumeToken: true };
+const doc = (name) => ({
+  kind: "documentChange",
+  doc: name,
+  fields: {},
+  targetIds: [1],
+  removedTargetIds: [],
+});
+const gone = (name) => ({ kind: "documentDelete", doc: name, removedTargetIds: [1] });
+const filter = (count, bits = { hashCount: 0, bitmapBytes: 0, padding: 0 }) => ({
+  kind: "filter",
+  targetId: 1,
+  count,
+  unchangedNames: bits,
+});
+const row = (rows, extra = {}) => ({ rows, end: null, timedOut: false, ...extra });
+const kind = (rows, extra) => answerKind(row(rows, extra));
+
+test("the recorded production answers of L1 are classified as the design note describes them", () => {
+  // Each entry: the answer in run 1 (nmuuicyas) and in run 2 (nmuukwo6n). Production answers a
+  // resume with nothing to replay with a filter in one run and none in the other (the L1 filters
+  // that only one run sent), which the kinds keep apart as filter-only and empty.
+  const expected = {
+    "native/resume-token/current": ["replay", "replay"],
+    "native/resume-token/older": ["diff+filter", "diff+filter"],
+    "native/resume-token/unchanged": ["empty", "filter-only"],
+    "native/resume-token/other-query": ["filter-only", "filter-only"],
+    "native/resume-token/invalid": ["removed", "removed"],
+    "native/existence-filter/with-expected-count": ["replay", "replay"],
+    "native/existence-filter/without-expected-count": ["filter-only", "filter-only"],
+    "native/existence-filter/no-change": ["empty", "filter-only"],
+    "native/resume-token-expired/expired": ["diff+filter", "diff+filter"],
+    "native/resume-token/first": ["diff", "diff"],
+  };
+  for (const [id, want] of Object.entries(expected))
+    ["native-1", "native-2"].forEach((run, i) =>
+      assert.equal(answerKind(L1[run].rows[id]), want[i], `${run} ${id}`),
+    );
+  // A fresh target's rows are initial snapshots, not resumes, but still classify: documents and no boundary between.
+  assert.ok(ANSWER_KINDS.includes(answerKind(recorded("native/resume-token/fresh-control"))));
+});
+
+test("answerKind: the shapes", () => {
+  assert.equal(kind([add, bnd, current, bnd]), "empty");
+  assert.equal(kind([add, bnd, doc("a"), bnd, current, bnd]), "replay");
+  assert.equal(kind([add, bnd, doc("a"), bnd, doc("b"), bnd, current, bnd]), "replay");
+  assert.equal(
+    kind([add, bnd, doc("a"), doc("b"), bnd, current, bnd]),
+    "replay",
+    "a run of two, one boundary",
+  );
+  assert.equal(kind([add, bnd, gone("a"), bnd, doc("b"), bnd, current, bnd]), "replay");
+  assert.equal(kind([add, bnd, doc("a"), doc("b"), current, bnd]), "diff");
+  assert.equal(kind([add, bnd, doc("a"), doc("b"), filter(2), current, bnd]), "diff+filter");
+  assert.equal(kind([add, bnd, doc("a"), filter(1), current, bnd]), "diff+filter");
+  assert.equal(kind([add, bnd, filter(0), current, bnd]), "filter-only");
+  // Some replayed and some not: neither shape.
+  assert.equal(kind([add, bnd, doc("a"), bnd, doc("b"), current, bnd]), "mixed");
+  assert.equal(kind([add, bnd, doc("a"), bnd, doc("b"), bnd, doc("c"), current, bnd]), "mixed");
+  assert.equal(kind([add, bnd, doc("a"), bnd, doc("b"), filter(2), current, bnd]), "mixed");
+  assert.equal(
+    kind([add, bnd, doc("a"), bnd, filter(1), current, bnd]),
+    "mixed",
+    "a filter and a replay",
+  );
+  // A RESET or a REMOVE is the answer, whatever else came.
+  const reset = {
+    kind: "targetChange",
+    type: "RESET",
+    targetIds: [1],
+    cause: null,
+    resumeToken: false,
+  };
+  const remove = {
+    kind: "targetChange",
+    type: "REMOVE",
+    targetIds: [1],
+    cause: { code: 3 },
+    resumeToken: false,
+  };
+  assert.equal(kind([add, reset, doc("a"), current, bnd]), "reset");
+  assert.equal(kind([remove]), "removed");
+  assert.equal(kind([add, remove]), "removed");
+});
+
+test("answerKind looks at what comes before CURRENT only: later filters and boundaries change nothing", () => {
+  const base = [add, bnd, doc("a"), bnd, current];
+  for (const tail of [
+    [],
+    [bnd],
+    [bnd, filter(1, { hashCount: 12, bitmapBytes: 4, padding: 7 })],
+    [bnd, filter(1), bnd, doc("z")],
+  ])
+    assert.equal(kind([...base, ...tail]), "replay", JSON.stringify(tail));
+  const diff = [add, bnd, doc("a"), doc("b"), current];
+  for (const tail of [
+    [],
+    [bnd],
+    [bnd, filter(2, { hashCount: 13, bitmapBytes: 8, padding: 3 })],
+    [bnd, doc("z"), bnd],
+  ])
+    assert.equal(kind([...diff, ...tail]), "diff", JSON.stringify(tail));
+  // A real bloom filter before CURRENT counts as a filter as well.
+  assert.equal(
+    kind([
+      add,
+      bnd,
+      doc("a"),
+      filter(1, { hashCount: 12, bitmapBytes: 4, padding: 7 }),
+      current,
+      bnd,
+    ]),
+    "diff+filter",
+  );
+});
+
+test("answerKind: an unfinished row is not an answer", () => {
+  assert.equal(kind([add, bnd], { timedOut: true }), "unfinished");
+  assert.equal(kind([add, bnd, doc("a"), bnd, current, bnd], { programError: true }), "unfinished");
+  assert.equal(kind([add, bnd, current, bnd], { end: { reason: "frame-cap" } }), "unfinished");
+  assert.equal(
+    kind([add, bnd, current, bnd], { end: { reason: "ended-without-status" } }),
+    "unfinished",
+  );
+  // A wait that ran out because the target was removed with a cause is the answer.
+  const remove = {
+    kind: "targetChange",
+    type: "REMOVE",
+    targetIds: [1],
+    cause: { code: 3 },
+    resumeToken: false,
+  };
+  assert.equal(kind([remove], { timedOut: true }), "removed");
+  // A row with no frames and no wait is empty of frames: no ADD, nothing answered.
+  assert.equal(kind([]), "unfinished");
+});
+
+// A small seeded generator, so a failing property replays.
+function prng(seed) {
+  let a = seed >>> 0;
+  return () => {
+    a = (a + 0x6d2b79f5) >>> 0;
+    let t = a;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+test("answerKind over random segments agrees with a regular-expression oracle, and ignores the order of documents inside a run", () => {
+  const random = prng(7);
+  const pick = (n) => Math.floor(random() * n);
+  const isDoc = (item) => item.kind === "documentChange" || item.kind === "documentDelete";
+  const letter = (item) => (isDoc(item) ? "D" : item.kind === "boundary" ? "B" : "F");
+  for (let round = 0; round < 600; round += 1) {
+    // Between the first boundary and CURRENT: documents, boundaries and filters in random order.
+    const segment = [];
+    for (let i = 0, n = pick(8); i < n; i += 1) {
+      const r = random();
+      if (r < 0.5) segment.push(random() < 0.3 ? gone(`d${i}`) : doc(`d${i}`));
+      else if (r < 0.85) segment.push(bnd);
+      else segment.push(filter(pick(4)));
+    }
+    const rows = [add, bnd, ...segment, current, bnd];
+    const s = segment.map(letter).join("");
+    // Oracle.
+    let want;
+    if (!s.includes("D")) want = s.includes("F") ? "filter-only" : "empty";
+    else {
+      const afterFirstDoc = s.slice(s.indexOf("D"));
+      const boundariesAfter = (afterFirstDoc.match(/B/g) ?? []).length;
+      const allClosed = !/D([^DB]|$)/.test(s);
+      if (boundariesAfter === 0) want = s.includes("F") ? "diff+filter" : "diff";
+      else if (s.includes("F")) want = "mixed";
+      else want = allClosed ? "replay" : "mixed";
+    }
+    assert.equal(answerKind(row(rows)), want, s);
+    // Reversing each maximal run of documents changes nothing.
+    const shuffled = [];
+    let run = [];
+    for (const item of rows) {
+      if (isDoc(item)) run.push(item);
+      else {
+        shuffled.push(...run.toReversed(), item);
+        run = [];
+      }
+    }
+    shuffled.push(...run.toReversed());
+    assert.equal(answerKind(row(shuffled)), want, `${s} reversed`);
+  }
+});
+
+const recording = (rows) => ({ kind: "native", rows });
+const named = (id, entry) => ({ [id]: entry });
+
+test("answerTable lists the kind of each resume-variant row and nothing else", () => {
+  const rows = {
+    ...named("native/resume-grid-g0/k1", row([add, bnd, doc("a"), bnd, current, bnd])),
+    ...named(
+      "native/resume-grid-g0/k2",
+      row([add, bnd, doc("a"), doc("b"), filter(2), current, bnd]),
+    ),
+    ...named("native/resume-token/current", row([add, bnd, current, bnd])),
+    ...named("native/resume-age/first", row([add, bnd, doc("a"), current, bnd])),
+  };
+  assert.deepEqual(answerTable(recording(rows)), {
+    "native/resume-grid-g0/k1": "replay",
+    "native/resume-grid-g0/k2": "diff+filter",
+    "native/resume-age/first": "diff",
+  });
+});
+
+test("answerAgreement says, row by row, whether two runs gave the same kind of answer; a row only one run has, or an unfinished one, is not agreement", () => {
+  const a = recording({
+    ...named("native/resume-grid-g0/k1", row([add, bnd, doc("a"), bnd, current, bnd])),
+    ...named(
+      "native/resume-grid-g0/k2",
+      row([add, bnd, doc("a"), doc("b"), filter(2), current, bnd]),
+    ),
+    ...named("native/resume-grid-g0/k3", row([add, bnd], { timedOut: true })),
+    ...named("native/resume-grid-g0/k0", row([add, bnd, current, bnd])),
+  });
+  const b = recording({
+    ...named("native/resume-grid-g0/k1", row([add, bnd, doc("a"), bnd, current, bnd])),
+    ...named("native/resume-grid-g0/k2", row([add, bnd, doc("a"), doc("b"), current, bnd])),
+    ...named("native/resume-grid-g0/k3", row([add, bnd], { timedOut: true })),
+    ...named("native/resume-grid-g0/k1-repeat", row([add, bnd, current, bnd])),
+  });
+  assert.deepEqual(answerAgreement(a, b), {
+    "native/resume-grid-g0/k0": { first: "empty", second: null, agree: false },
+    "native/resume-grid-g0/k1": { first: "replay", second: "replay", agree: true },
+    "native/resume-grid-g0/k1-repeat": { first: null, second: "empty", agree: false },
+    "native/resume-grid-g0/k2": { first: "diff+filter", second: "diff", agree: false },
+    "native/resume-grid-g0/k3": { first: "unfinished", second: "unfinished", agree: false },
+  });
+});
+
+test("renderAnswerTable prints the grids as k by token and the other programs by row, with a mark where two runs disagree", () => {
+  const rows = (kinds) =>
+    Object.fromEntries(
+      Object.entries(kinds).map(([id, k]) => [
+        id,
+        k === "replay"
+          ? row([add, bnd, doc("a"), bnd, current, bnd])
+          : row([add, bnd, doc("a"), doc("b"), filter(2), current, bnd]),
+      ]),
+    );
+  const first = recording(
+    rows({
+      "native/resume-grid-g0/k1": "replay",
+      "native/resume-grid-tc/k1": "diff+filter",
+      "native/resume-kinds/modify": "replay",
+    }),
+  );
+  const second = recording(
+    rows({
+      "native/resume-grid-g0/k1": "replay",
+      "native/resume-grid-tc/k1": "replay",
+      "native/resume-kinds/modify": "replay",
+    }),
+  );
+  const text = renderAnswerTable(first, second);
+  assert.match(text, /\| k1 \| replay \| diff\+filter \/ replay \(runs differ\) \|/);
+  assert.match(text, /native\/resume-kinds\/modify \| replay/);
+  assert.equal(text.includes("undefined"), false);
+});

@@ -239,7 +239,7 @@ function endsRemoved(row) {
  * the answer), its stream hit the frame cap or ended with no status, or its program threw (the
  * rest of that program never ran).
  */
-function isUnfinished(row) {
+export function isUnfinished(row) {
   return (
     (row.timedOut === true && !endsRemoved(row)) ||
     row.programError === true ||

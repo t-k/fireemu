@@ -649,13 +649,16 @@ describe("the delete guard", () => {
     assert.deepEqual(closureReport(state).confirmedReadsMissing, []);
   });
 
-  it("forgets a delete's read-back state when an unknown create of the name is settled as present", () => {
+  it("forgets a delete's read-back state and an old 404 when an unknown create of the name is settled as present", () => {
     create("a", OK);
+    read("a", NOT_FOUND);
     remove("a", OK);
+    read("a", NOT_FOUND);
     create("a", TIMEOUT);
     assert.equal(read("a", OK), "present");
     assert.deepEqual(closureReport(state).reasons, ["owned-not-deleted:a"]);
     assert.deepEqual(closureReport(state).deletedUnverified, []);
+    assert.deepEqual(closureReport(state).confirmedReadsMissing, []);
   });
 
   it("starts a new confirmed create with no 404 against it", () => {

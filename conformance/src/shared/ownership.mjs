@@ -197,7 +197,6 @@ function applyAnswer(state, row) {
   if (klass === "ok") {
     // Gone as far as the answer says; it counts as settled only after an own GET reads 404.
     st.owned = false;
-    st.readsMissing = false;
     st.deletePhase = "unverified";
   } else if (klass === "notFound") {
     // A 404 for a create this run confirmed is not a settlement (a read-after-write lag can hide a
@@ -259,6 +258,7 @@ function applyRead(state, row) {
     st.owned = true;
     st.created = true;
     st.via = "settled-read";
+    st.readsMissing = false;
     st.deletePhase = null;
   }
 }

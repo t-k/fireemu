@@ -3,6 +3,7 @@ import { test } from "node:test";
 
 import { NATIVE_PROGRAMS, programProblems } from "./fs-listen/native-programs.mjs";
 import { runNative } from "./fs-listen/native-run.mjs";
+import { tokenProblems } from "./fs-listen/resume-answers.mjs";
 import {
   RESUME_VARIANT_PROGRAMS,
   RESUME_VARIANT_REQUEST_CEILING,
@@ -436,6 +437,16 @@ test("each variant resumes what its name says: the commits since the token, the 
     maxRequests: RESUME_VARIANT_REQUEST_CEILING,
   });
   assert.deepEqual(out.errors, {});
+  // The tokens the programs saved are of the kinds the design names (the recording says which frame each came from).
+  assert.deepEqual(tokenProblems({ saves: out.saves }), []);
+  assert.equal(out.saves.length, 3 + 4 + 3);
+  // Every resumed row says where its token came from.
+  for (const [id, row] of Object.entries(out.rows))
+    assert.equal(
+      Array.isArray(row.resumedFrom),
+      /\/(k\d|k1-|modify|enter|leave|delete|age-)/.test(id),
+      id,
+    );
   // Every wait of every row held: no row is a wait that ran out.
   assert.deepEqual(
     Object.entries(out.rows)

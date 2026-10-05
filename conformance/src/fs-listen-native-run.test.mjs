@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { test } from "node:test";
 
 import { runNative, targetFor, toFields, waitHolds } from "./fs-listen/native-run.mjs";
@@ -1240,4 +1241,97 @@ test("save takes the token of a kind when asked: the CURRENT frame of the target
     { 0: frames },
   );
   assert.match(unknown.out.errors["native/t"], /unknown save kind latest/);
+});
+
+const sha = (text) => createHash("sha256").update(Buffer.from(text)).digest("hex");
+
+test("a save states which frame its token came from: the index, the kind, the target-change fields that identify it, and the documents delivered before it", async () => {
+  const frames = [
+    change("ADD", [1]),
+    change("NO_CHANGE", [], { resumeToken: Buffer.from("B1") }),
+    docChange,
+    change("CURRENT", [1], { resumeToken: Buffer.from("TC"), readTime: { seconds: "7", nanos: 1 } }),
+    change("NO_CHANGE", [], { resumeToken: Buffer.from("TG"), readTime: { seconds: "8", nanos: 2 } }),
+    docChange,
+    change("NO_CHANGE", [], { resumeToken: Buffer.from("G2") }),
+    change("CURRENT", [2], { resumeToken: Buffer.from("OTHER") }),
+  ];
+  const run = async (save) => {
+    const { out } = await runSteps(
+      [{ do: "open", stream: "s", targets: [{ id: 1, doc: "a" }] }, { do: "save", stream: "s", id: 1, ...save }],
+      { 0: frames },
+    );
+    return out.saves;
+  };
+  const token = (extra) => ({ bytes: 2, ...extra });
+  assert.deepEqual(await run({ token: "t", kind: "current" }), [
+    {
+      program: "native/t",
+      stream: "s",
+      id: 1,
+      name: "t",
+      timeName: null,
+      kind: "current",
+      frames: frames.length,
+      token: token({ frameIndex: 3, type: "CURRENT", targetIds: [1], sha256: sha("TC") }),
+      readTime: { frameIndex: 5 - 1, type: "NO_CHANGE", targetIds: [], seconds: "8", nanos: 2 },
+      documentChangesBefore: 1,
+    },
+  ]);
+  assert.deepEqual(await run({ token: "t", kind: "global" }), [
+    {
+      program: "native/t",
+      stream: "s",
+      id: 1,
+      name: "t",
+      timeName: null,
+      kind: "global",
+      frames: frames.length,
+      token: token({ frameIndex: 6, type: "NO_CHANGE", targetIds: [], sha256: sha("G2") }),
+      readTime: { frameIndex: 4, type: "NO_CHANGE", targetIds: [], seconds: "8", nanos: 2 },
+      documentChangesBefore: 2,
+    },
+  ]);
+  // Without a kind: the latest that covers the target (the global boundary at index 6).
+  const latest = await run({ token: "t", time: "w" });
+  assert.equal(latest[0].kind, "latest");
+  assert.equal(latest[0].timeName, "w");
+  assert.equal(latest[0].token.frameIndex, 6);
+  // Nothing to resume from: the entry says so, with no token and no frame.
+  const none = await runSteps(
+    [
+      { do: "open", stream: "s", targets: [{ id: 1, doc: "a" }] },
+      { do: "save", stream: "s", id: 1, token: "t", kind: "current" },
+    ],
+    { 0: [change("NO_CHANGE", [], { resumeToken: Buffer.from("TG") })] },
+  );
+  assert.equal(none.out.saves[0].token, null);
+  assert.equal(none.out.saves[0].readTime, null);
+  assert.equal(none.out.saves[0].documentChangesBefore, null);
+});
+
+test("a row of a stream opened with a saved token says where the token came from; other rows say nothing", async () => {
+  const frames = [
+    change("ADD", [1]),
+    change("NO_CHANGE", [], { resumeToken: Buffer.from("B1") }),
+    change("CURRENT", [1], { resumeToken: Buffer.from("TC") }),
+    change("NO_CHANGE", [], { resumeToken: Buffer.from("TG") }),
+  ];
+  const { out } = await runSteps(
+    [
+      { do: "open", stream: "s", targets: [{ id: 1, doc: "a" }] },
+      { do: "save", stream: "s", id: 1, token: "t", kind: "current" },
+      { do: "record", row: "native/t/first", stream: "s" },
+      { do: "open", stream: "r", targets: [{ id: 1, doc: "a", resume: "t" }] },
+      { do: "record", row: "native/t/resumed", stream: "r" },
+      { do: "open", stream: "x", targets: [{ id: 1, doc: "a" }] },
+      { do: "record", row: "native/t/fresh", stream: "x" },
+    ],
+    { 0: frames, 1: frames, 2: frames },
+  );
+  assert.equal(out.rows["native/t/first"].resumedFrom, undefined);
+  assert.equal(out.rows["native/t/fresh"].resumedFrom, undefined);
+  assert.deepEqual(out.rows["native/t/resumed"].resumedFrom, [
+    { name: "t", kind: "current", frameIndex: 2, type: "CURRENT", targetIds: [1], sha256: sha("TC") },
+  ]);
 });

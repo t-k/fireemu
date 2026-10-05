@@ -144,6 +144,7 @@ export async function recordNative({
     issued: ledger.entries().map(([name]) => name),
     errors: outcome.errors,
     cleanup,
+    saves: outcome.saves,
     rows: outcome.rows,
   };
 }

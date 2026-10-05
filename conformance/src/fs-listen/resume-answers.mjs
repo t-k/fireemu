@@ -129,6 +129,98 @@ export function renderAnswerTable(first, second) {
   return lines.join("\n");
 }
 
+/**
+ * The tokens the programs resume are saved by `save` steps, and a recording says which frame each
+ * one came from (`saves`). The grids differ only in the kind of token, so a recording whose tokens
+ * are not of the kind the design names would be read as a variant it is not. What each program's
+ * saves must be:
+ *   resume-grid-g0   T: a global boundary before any document change
+ *   resume-grid-tc   T: the target's CURRENT frame, before any document change
+ *   resume-grid-gc   T: a global boundary after a document change
+ *   resume-kinds     T0..T3: global boundaries
+ *   resume-age       Ta, Tb, Tc: global boundaries before any document change
+ */
+const TOKEN_SPEC = {
+  "native/resume-grid-g0": { T: { frame: "global", before: "none" } },
+  "native/resume-grid-tc": { T: { frame: "current", before: "none" } },
+  "native/resume-grid-gc": { T: { frame: "global", before: "some" } },
+  "native/resume-kinds": {
+    T0: { frame: "global" },
+    T1: { frame: "global" },
+    T2: { frame: "global" },
+    T3: { frame: "global" },
+  },
+  "native/resume-age": {
+    Ta: { frame: "global", before: "none" },
+    Tb: { frame: "global", before: "none" },
+    Tc: { frame: "global", before: "none" },
+  },
+};
+
+/** What is wrong with the saved tokens of a recording against `TOKEN_SPEC` (empty when nothing is). */
+export function tokenProblems(recording) {
+  if (!Array.isArray(recording.saves)) return ["the recording records no saved tokens"];
+  const problems = [];
+  for (const [program, names] of Object.entries(TOKEN_SPEC))
+    for (const [name, want] of Object.entries(names)) {
+      const entries = recording.saves.filter((e) => e.program === program && e.name === name);
+      if (entries.length === 0) {
+        problems.push(`${program}: no save ${name}`);
+        continue;
+      }
+      if (entries.length > 1) {
+        problems.push(`${program}: ${entries.length} saves of ${name}`);
+        continue;
+      }
+      const [entry] = entries;
+      const where = `${program} ${name}`;
+      if (entry.token === null) {
+        problems.push(`${where}: found no token`);
+        continue;
+      }
+      const isGlobal = entry.token.type === "NO_CHANGE" && entry.token.targetIds.length === 0;
+      const isCurrent = entry.token.type === "CURRENT" && entry.token.targetIds.length > 0;
+      if (want.frame === "global" && !(entry.kind === "global" && isGlobal))
+        problems.push(
+          `${where}: not a global boundary (asked ${entry.kind}, frame ${entry.token.type})`,
+        );
+      if (want.frame === "current" && !(entry.kind === "current" && isCurrent))
+        problems.push(
+          `${where}: not the target's CURRENT frame (asked ${entry.kind}, frame ${entry.token.type})`,
+        );
+      if (want.before === "none" && entry.documentChangesBefore !== 0)
+        problems.push(
+          `${where}: ${entry.documentChangesBefore} document changes before the token, expected none (a token before any document change)`,
+        );
+      if (want.before === "some" && !(entry.documentChangesBefore > 0))
+        problems.push(
+          `${where}: no document change before the token, expected one (a token after a document change)`,
+        );
+    }
+  return problems;
+}
+
+/** A markdown table of the saved tokens: which frame each came from. */
+export function renderTokenTable(recording) {
+  if (!Array.isArray(recording.saves)) return "no saved tokens recorded";
+  const cell = (value) => (value === null || value === undefined ? "-" : String(value));
+  return [
+    "| program | save | asked | frame | type | target ids | documents before |",
+    "|---|---|---|---|---|---|---|",
+    ...recording.saves.map((e) =>
+      [
+        e.program,
+        e.name,
+        e.kind,
+        cell(e.token?.frameIndex),
+        cell(e.token?.type),
+        e.token === null ? "-" : e.token.targetIds.length ? e.token.targetIds.join(",") : "-",
+        cell(e.documentChangesBefore),
+      ].reduce((line, value) => `${line} ${value} |`, "|"),
+    ),
+  ].join("\n");
+}
+
 function main(argv) {
   if (argv.length < 1 || argv.length > 2)
     throw new Error("usage: resume-answers.mjs <recording.json> [<second recording.json>]");
@@ -138,6 +230,16 @@ function main(argv) {
     if (problems.length) throw new Error(`a recording is not clean: ${problems.join("; ")}`);
   }
   console.log(renderAnswerTable(recordings[0], recordings[1] ?? recordings[0]));
+  let flagged = false;
+  recordings.forEach((recording, i) => {
+    console.log(`\ntokens of run ${i + 1}:\n${renderTokenTable(recording)}`);
+    const problems = tokenProblems(recording);
+    if (problems.length) {
+      flagged = true;
+      console.log(`\ntoken problems in run ${i + 1}:\n${problems.map((p) => `- ${p}`).join("\n")}`);
+    }
+  });
+  if (flagged) process.exitCode = 1;
 }
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {

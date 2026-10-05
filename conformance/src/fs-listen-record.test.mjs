@@ -1208,3 +1208,67 @@ test("without --programs the production recording keeps the default request ceil
   await production({ project: "fireemu-oracle-txn", envelope: "E", ledger: "L", out: "o.json" }, d);
   assert.equal(Object.hasOwn(seen.native, "clock"), false);
 });
+
+test("a recording carries the provenance of every token its programs saved, and the rows of resumed streams say where theirs came from", async () => {
+  const frames = [
+    { kind: "targetChange", targetChange: { targetChangeType: "ADD", targetIds: [1] } },
+    {
+      kind: "targetChange",
+      targetChange: { targetChangeType: "CURRENT", targetIds: [1], resumeToken: Buffer.from("TC") },
+    },
+  ];
+  const client = {
+    async commit() {},
+    async beginTransaction() {
+      return Buffer.from("t");
+    },
+    openStream() {
+      const sent = [];
+      return {
+        frames: [],
+        ended: () => undefined,
+        send(request) {
+          sent.push(request);
+          this.frames.push(...frames);
+        },
+        async close() {},
+      };
+    },
+    async missing(names) {
+      return names.map((name) => ({ name, exists: false }));
+    },
+    async listIds() {
+      return [];
+    },
+  };
+  const program = {
+    id: "native/p",
+    conditions: ["x"],
+    docs: { a: "lsn_native/{run}-p-a" },
+    steps: [
+      { do: "open", stream: "s", targets: [{ id: 1, doc: "a" }] },
+      { do: "save", stream: "s", id: 1, token: "T", kind: "current" },
+      { do: "open", stream: "r", targets: [{ id: 1, doc: "a", resume: "T" }] },
+      { do: "record", row: "native/p/r", stream: "r" },
+    ],
+  };
+  const recording = await recordNative({
+    client,
+    project: "p",
+    run: "r1",
+    clock: fakeClock(),
+    programs: [program],
+  });
+  assert.equal(recording.saves.length, 1);
+  assert.equal(recording.saves[0].kind, "current");
+  assert.equal(recording.saves[0].token.frameIndex, 1);
+  assert.equal(recording.rows["native/p/r"].resumedFrom[0].type, "CURRENT");
+  // A run with no save step still carries the (empty) list.
+  const none = await recordNative({
+    client: failingClient(3),
+    project: "p",
+    run: "r1",
+    clock: fakeClock(),
+  });
+  assert.ok(Array.isArray(none.saves));
+});

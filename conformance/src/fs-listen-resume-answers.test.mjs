@@ -12,6 +12,8 @@ import {
   answerKind,
   answerTable,
   renderAnswerTable,
+  renderTokenTable,
+  tokenProblems,
 } from "./fs-listen/resume-answers.mjs";
 
 const L1 = JSON.parse(
@@ -338,6 +340,7 @@ const clean = (rows) => ({
   kind: "native",
   cleanup: { complete: true },
   errors: {},
+  saves: goodSaves(),
   rows,
 });
 
@@ -458,4 +461,117 @@ test("a command refusal names every problem of a recording, separated by semicol
   assert.equal(imported.status, 0, imported.stderr);
   assert.equal(imported.stderr, "");
   assert.equal(imported.stdout, "");
+});
+
+// ---- the provenance of the saved tokens ----
+
+const save = (program, name, asked, type, targetIds, documentChangesBefore, frameIndex = 3) => ({
+  program,
+  stream: "first",
+  id: 1,
+  name,
+  timeName: null,
+  kind: asked,
+  frames: 6,
+  token: { frameIndex, type, targetIds, sha256: "ab".repeat(32), bytes: 32 },
+  readTime: null,
+  documentChangesBefore,
+});
+const goodSaves = () => [
+  save("native/resume-grid-g0", "T", "global", "NO_CHANGE", [], 0),
+  save("native/resume-grid-tc", "T", "current", "CURRENT", [1], 0, 2),
+  save("native/resume-grid-gc", "T", "global", "NO_CHANGE", [], 1, 5),
+  save("native/resume-kinds", "T0", "global", "NO_CHANGE", [], 0),
+  save("native/resume-kinds", "T1", "global", "NO_CHANGE", [], 1),
+  save("native/resume-kinds", "T2", "global", "NO_CHANGE", [], 1),
+  save("native/resume-kinds", "T3", "global", "NO_CHANGE", [], 1),
+  save("native/resume-age", "Ta", "global", "NO_CHANGE", [], 0),
+  save("native/resume-age", "Tb", "global", "NO_CHANGE", [], 0),
+  save("native/resume-age", "Tc", "global", "NO_CHANGE", [], 0),
+];
+
+test("tokenProblems: the saved tokens are of the kinds the design names, or the problem says which is not", () => {
+  assert.deepEqual(tokenProblems({ saves: goodSaves() }), []);
+  const change = (index, patch) => {
+    const saves = goodSaves();
+    Object.assign(saves[index], patch);
+    return saves;
+  };
+  const problemsOf = (saves) => tokenProblems({ saves }).join(" | ");
+  // g0 must be a global boundary before any document change; tc the target's CURRENT frame; gc a global boundary after a change.
+  assert.match(
+    problemsOf(change(0, { token: { ...goodSaves()[0].token, type: "CURRENT", targetIds: [1] } })),
+    /native\/resume-grid-g0 T: .*global boundary/,
+  );
+  assert.match(
+    problemsOf(change(0, { documentChangesBefore: 1 })),
+    /native\/resume-grid-g0 T: .*before any document/,
+  );
+  assert.match(
+    problemsOf(change(1, { token: { ...goodSaves()[1].token, type: "NO_CHANGE", targetIds: [] } })),
+    /native\/resume-grid-tc T: .*CURRENT frame/,
+  );
+  assert.match(
+    problemsOf(change(1, { documentChangesBefore: 2 })),
+    /native\/resume-grid-tc T: .*before any document/,
+  );
+  assert.match(
+    problemsOf(change(2, { documentChangesBefore: 0 })),
+    /native\/resume-grid-gc T: .*after a document change/,
+  );
+  assert.match(
+    problemsOf(change(2, { token: { ...goodSaves()[2].token, type: "CURRENT", targetIds: [1] } })),
+    /native\/resume-grid-gc T: .*global boundary/,
+  );
+  // The kinds program takes global boundaries; the age program three global boundaries before any change.
+  assert.match(problemsOf(change(3, { kind: "current" })), /native\/resume-kinds T0/);
+  assert.match(problemsOf(change(7, { documentChangesBefore: 1 })), /native\/resume-age Ta/);
+  // A save that found no token, a missing save, a duplicated one and a recording without the list.
+  assert.match(problemsOf(change(0, { token: null })), /native\/resume-grid-g0 T: found no token/);
+  assert.match(problemsOf(goodSaves().slice(1)), /native\/resume-grid-g0: no save/);
+  assert.match(problemsOf([...goodSaves(), goodSaves()[0]]), /native\/resume-grid-g0: 2 saves/);
+  assert.match(tokenProblems({}).join(), /records no saved tokens/);
+  assert.match(tokenProblems({ saves: "none" }).join(), /records no saved tokens/);
+  // A save of a program that is not one of the variants is not a problem and not counted.
+  assert.deepEqual(
+    tokenProblems({
+      saves: [...goodSaves(), save("native/other", "x", "global", "CURRENT", [], 7)],
+    }),
+    [],
+  );
+});
+
+test("renderTokenTable lists each saved token with its frame, its kind and the documents before it", () => {
+  const text = renderTokenTable({ saves: goodSaves().slice(0, 3) });
+  assert.equal(
+    text,
+    [
+      "| program | save | asked | frame | type | target ids | documents before |",
+      "|---|---|---|---|---|---|---|",
+      "| native/resume-grid-g0 | T | global | 3 | NO_CHANGE | - | 0 |",
+      "| native/resume-grid-tc | T | current | 2 | CURRENT | 1 | 0 |",
+      "| native/resume-grid-gc | T | global | 5 | NO_CHANGE | - | 1 |",
+    ].join("\n"),
+  );
+  assert.match(
+    renderTokenTable({ saves: [{ ...goodSaves()[0], token: null, documentChangesBefore: null }] }),
+    /\| native\/resume-grid-g0 \| T \| global \| - \| - \| - \| - \|/,
+  );
+  assert.equal(renderTokenTable({}).includes("no saved tokens"), true);
+});
+
+test("the command prints the token table after the answers and exits 1 when a token is not of the kind the design names", () => {
+  const withSaves = (saves) => ({ ...clean({}), saves });
+  const good = runCli({ a: withSaves(goodSaves()) }, (f) => [f.a]);
+  assert.equal(good.code, 0, good.stderr);
+  assert.match(
+    good.stdout,
+    /\| native\/resume-grid-gc \| T \| global \| 5 \| NO_CHANGE \| - \| 1 \|/,
+  );
+  const bad = goodSaves();
+  bad[2] = { ...bad[2], documentChangesBefore: 0 };
+  const flagged = runCli({ a: withSaves(bad) }, (f) => [f.a]);
+  assert.equal(flagged.code, 1);
+  assert.match(flagged.stdout, /token problems/);
+  assert.match(flagged.stdout, /native\/resume-grid-gc T: .*after a document change/);
 });

@@ -1034,3 +1034,57 @@ assert.equal(child.status, 0, `nested exec failed: ${child.signal}`);
         String::from_utf8_lossy(&output.stderr)
     );
 }
+
+/// A bucket a deployed Storage trigger names exists under the strict profile even when nothing
+/// was uploaded (production needs it to deploy the trigger), and its resource is served on the
+/// short spelling the Admin SDK uses. The emulator profile keeps the official emulator's answer
+/// (no bucket route: the missing-object 404). A bucket nobody named stays 404 in both.
+#[test]
+#[ignore = "requires tools/sdk-smoke dependencies; the manual SDK workflow runs this test"]
+fn a_deployed_storage_trigger_makes_its_empty_bucket_exist_under_strict_only() {
+    assert!(
+        have_sdk(),
+        "install tools/sdk-smoke dependencies before running this test"
+    );
+    for profile in ["strict", "emulator"] {
+        let dir = scratch_codebase(&format!("trigger-bucket-{profile}"));
+        write(
+            &dir,
+            "index.js",
+            r"
+const { onObjectFinalized } = require('firebase-functions/v2/storage');
+exports.fxFinalized = onObjectFinalized({ bucket: 'wired-trigger-bucket' }, () => {});
+",
+        );
+        write(
+            &dir,
+            "fireemu-profile.json",
+            &format!(
+                r#"{{"schemaVersion":1,"profile":"{profile}","firestore":{{"edition":"standard","apiMode":"native"}}}}"#
+            ),
+        );
+        let output = fireemu_exec(&dir, "demo-trigger-bucket")
+            .args(["--config", &dir.join("fireemu-profile.json").display().to_string(), "--only", "functions,storage", "--", "node", "-e", &format!(r"
+const assert = require('node:assert/strict');
+(async () => {{
+  const base = new URL(process.env.STORAGE_EMULATOR_HOST.startsWith('http') ? process.env.STORAGE_EMULATOR_HOST : 'http://' + process.env.STORAGE_EMULATOR_HOST);
+  const authorization = 'Basic ' + Buffer.from(`${{base.username}}:${{base.password}}`).toString('base64');
+  const get = async (path) => (await fetch(`http://${{base.host}}${{path}}`, {{ headers: {{ authorization }} }})).status;
+  const strict = '{profile}' === 'strict';
+  assert.equal(await get('/b/wired-trigger-bucket'), strict ? 200 : 404);
+  assert.equal(await get('/storage/v1/b/wired-trigger-bucket'), strict ? 200 : 404);
+  assert.equal(await get('/b/unnamed-bucket'), 404);
+  assert.equal(await get('/storage/v1/b/unnamed-bucket'), 404);
+}})().catch((error) => {{ console.error(error); process.exitCode = 1; }});
+")])
+            .env_remove("FIREEMU_NODE")
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{profile}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+}

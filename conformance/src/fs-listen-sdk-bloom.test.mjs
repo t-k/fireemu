@@ -2,7 +2,15 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
 
-import { SDK_VERSION, loadSdkBloom, sdkBloomVectors, sdkFilter } from "./fs-listen/sdk-bloom.mjs";
+import {
+  SDK_VERSION,
+  bloomSource,
+  checkSdkVersion,
+  findBundle,
+  loadSdkBloom,
+  sdkBloomVectors,
+  sdkFilter,
+} from "./fs-listen/sdk-bloom.mjs";
 
 const FIXTURE = new URL(
   "../../crates/fireemu-adapter-grpc/tests/fixtures/sdk-bloom-vectors.json",
@@ -30,7 +38,10 @@ test("the SDK bloom is the one the existence filter of production uses: the size
 });
 
 test("the extracted SDK filter accepts what was inserted and is deterministic", () => {
-  const names = ["projects/p/databases/(default)/documents/r/a", "projects/p/databases/(default)/documents/r/b"];
+  const names = [
+    "projects/p/databases/(default)/documents/r/a",
+    "projects/p/databases/(default)/documents/r/b",
+  ];
   const filter = sdkFilter({ hashCount: 13, bytes: 6, padding: 3 }, names);
   for (const name of names) assert.equal(filter.mightContain(name), true);
   assert.equal(filter.bitCount, 45);
@@ -39,4 +50,39 @@ test("the extracted SDK filter accepts what was inserted and is deterministic", 
   assert.equal(typeof BloomFilter, "function");
   // An empty bitmap contains nothing.
   assert.equal(new BloomFilter(new Uint8Array(0), 0, 0).mightContain("x"), false);
+});
+
+test("the extraction refuses another SDK version, a package without the bundle and a bundle that moved the class", () => {
+  checkSdkVersion("4.17.1");
+  for (const other of ["4.17.2", "4.16.1", "5.0.0", "", undefined])
+    assert.throws(() => checkSdkVersion(other), /is not 4\.17\.1/, String(other));
+  const marker = "// Hash a string using md5 hashing algorithm.";
+  const bundles = {
+    "index.js": `${marker}`,
+    "common-a.node.cjs.js": "nothing here",
+    "common-b.esm.js": marker,
+    "common-c.node.cjs.js": `x\n${marker}\ny`,
+  };
+  const names = Object.keys(bundles);
+  assert.equal(
+    findBundle(names, (name) => bundles[name]),
+    "common-c.node.cjs.js",
+  );
+  assert.throws(
+    () => findBundle(["common-a.node.cjs.js", "common-b.esm.js"], (name) => bundles[name]),
+    /bundle with the bloom filter was not found/,
+  );
+  assert.throws(() => findBundle([], () => ""), /not found/);
+  // The source runs from the first marker to the closing brace of the error class, and not a character further.
+  const text = `before\n${marker}\nfunction f() {}\nclass BloomFilterError extends Error {\n  constructor() {}\n}\nafter`;
+  assert.equal(
+    bloomSource(text),
+    `${marker}\nfunction f() {}\nclass BloomFilterError extends Error {\n  constructor() {}\n}\n`,
+  );
+  assert.throws(() => bloomSource("no markers"), /not where it was/);
+  assert.throws(
+    () => bloomSource(`class BloomFilterError extends Error {\n}\n${marker}`),
+    /not where it was/,
+  );
+  assert.throws(() => bloomSource(`${marker}\nno class`), /not where it was/);
 });

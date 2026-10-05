@@ -67,6 +67,16 @@ test("filtersBeforeCurrent lists the filters before CURRENT, with their size, an
     "no CURRENT: all",
   );
   assert.deepEqual(filtersBeforeCurrent({}), []);
+  // CURRENT as the first frame: nothing is before it. A filter that is the very first frame counts.
+  assert.deepEqual(filtersBeforeCurrent(row([current, countOnly(3)])), []);
+  assert.deepEqual(filtersBeforeCurrent(row([countOnly(3), add, current])), ["1:3:0:0:0"]);
+  // A filter without a bloom filter is read as the count-only one.
+  assert.deepEqual(
+    filtersBeforeCurrent(
+      row([add, { kind: "filter", targetId: 1, count: 3, unchangedNames: null }, current]),
+    ),
+    ["1:3:0:0:0"],
+  );
   assert.deepEqual(answerSignature(DIFF), { kind: "diff+filter", filters: ["1:3:0:0:0"] });
 });
 
@@ -134,6 +144,53 @@ test("a local answer that both runs gave is a MATCH, one of two different answer
   );
 });
 
+test("two filters are two answers, not one: keys that would run together when joined are told apart", () => {
+  const two = row([
+    add,
+    bnd,
+    doc("a"),
+    countOnly(1),
+    { ...countOnly(1), targetId: 2 },
+    current,
+    bnd,
+  ]);
+  const one = row([
+    add,
+    bnd,
+    doc("a"),
+    {
+      kind: "filter",
+      targetId: 1,
+      count: 1,
+      unchangedNames: { hashCount: 0, bitmapBytes: 0, padding: "02:1:0:0:0" },
+    },
+    current,
+    bnd,
+  ]);
+  assert.equal(statusOf(allowedOf(two), one).status, "DIFFER");
+  assert.equal(statusOf(allowedOf(one), two).status, "DIFFER");
+  assert.equal(statusOf(allowedOf(two), two).status, "MATCH");
+  assert.equal(
+    statusOf(allowedOf(two, DIFF), two).observed[0],
+    "r1: diff+filter [1:1:0:0:0 2:1:0:0:0]",
+  );
+});
+
+test("a row only one run finished is compared with that run alone", () => {
+  const one = allowedAnswers([
+    recording("r1", { [ID]: DIFF }),
+    recording("r2", { [ID]: row([add, bnd], { timedOut: true }) }),
+  ]);
+  assert.deepEqual(Object.keys(one.rows[ID]), ["r1"]);
+  const match = compareResumeVariants({ allowed: one, local: recording("l", { [ID]: DIFF }) });
+  assert.equal(match.rows[ID].status, "MATCH");
+  assert.equal(
+    compareResumeVariants({ allowed: one, local: recording("l", { [ID]: REPLAY }) }).rows[ID]
+      .status,
+    "DIFFER",
+  );
+});
+
 test("each status carries what production answered, by run, and what the local row answered", () => {
   const either = statusOf(allowedOf(DIFF, REPLAY), DIFF);
   assert.deepEqual(either.observed, ["r1: diff+filter [1:3:0:0:0]", "r2: replay"]);
@@ -156,6 +213,8 @@ test("a declared divergence is KNOWN_DIVERGENCE with its reason (as a string or 
   const missing = compareResumeVariants({ allowed: allowedOf(DIFF), local: recording("l", {}) });
   assert.equal(missing.rows[ID].status, "INDETERMINATE");
   assert.equal(missing.rows[ID].local, null);
+  assert.equal(missing.ok, false, "a row that was not answered is not ok");
+  assert.match(renderComparison(missing), /\| INDETERMINATE \| .* \| - \|/);
 });
 
 test("the report is ok only with no DIFFER and no INDETERMINATE, and lists the local rows production was never asked", () => {
@@ -280,6 +339,8 @@ test("the command builds the answers of two runs and compares a local recording 
   const out = join(dir, "allowed.json");
   assert.equal(run("build", one, two, out).status, 0);
   assert.deepEqual(JSON.parse(readFileSync(out, "utf8")), allowedOf(DIFF, REPLAY));
+  assert.ok(readFileSync(out, "utf8").startsWith('{\n  "runs": ['), "indented by two");
+  assert.ok(readFileSync(out, "utf8").endsWith("}\n"));
   const good = run("compare", out, write("good.json", recording("l", { [ID]: DIFF })));
   assert.equal(good.status, 0, good.stderr);
   assert.match(good.stdout, /MATCH_EITHER/);

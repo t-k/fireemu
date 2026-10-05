@@ -15,20 +15,37 @@ export const SDK_VERSION = "4.17.1";
 const START = "// Hash a string using md5 hashing algorithm.";
 const END = "class BloomFilterError extends Error {";
 
+/** Refuses a package that is not the version the extraction was written against. */
+export function checkSdkVersion(version) {
+  if (version !== SDK_VERSION)
+    throw new Error(`@firebase/firestore ${version} is not ${SDK_VERSION}`);
+}
+
+/** The bundle of `names` (the file names of the package's dist) that holds the bloom filter. */
+export function findBundle(names, read) {
+  const file = names.find(
+    (name) => /^common-.*\.node\.cjs\.js$/.test(name) && read(name).includes(START),
+  );
+  if (!file) throw new Error("the SDK bundle with the bloom filter was not found");
+  return file;
+}
+
+/** The source of the md5 helpers and the two classes, cut out of a bundle between the markers. */
+export function bloomSource(text) {
+  const from = text.indexOf(START);
+  const end = text.indexOf(END);
+  if (from < 0 || end < from) throw new Error("the bloom filter is not where it was");
+  const to = text.indexOf("\n}\n", end) + 3;
+  return text.slice(from, to);
+}
+
 /** The SDK's `BloomFilter` and its md5 helper, from the bundle of the installed package. */
 export function loadSdkBloom() {
   const root = dirname(require.resolve("@firebase/firestore/package.json"));
-  const version = JSON.parse(readFileSync(join(root, "package.json"), "utf8")).version;
-  if (version !== SDK_VERSION) throw new Error(`@firebase/firestore ${version} is not ${SDK_VERSION}`);
+  checkSdkVersion(JSON.parse(readFileSync(join(root, "package.json"), "utf8")).version);
   const dist = join(root, "dist");
-  const file = readdirSync(dist).find(
-    (name) => /^common-.*\.node\.cjs\.js$/.test(name) && readFileSync(join(dist, name), "utf8").includes(START),
-  );
-  if (!file) throw new Error("the SDK bundle with the bloom filter was not found");
-  const text = readFileSync(join(dist, file), "utf8");
-  const from = text.indexOf(START);
-  const to = text.indexOf("\n}\n", text.indexOf(END)) + 3;
-  const body = text.slice(from, to);
+  const file = findBundle(readdirSync(dist), (name) => readFileSync(join(dist, name), "utf8"));
+  const body = bloomSource(readFileSync(join(dist, file), "utf8"));
   const bloomBlob = require(
     require.resolve("@firebase/webchannel-wrapper/bloom-blob", { paths: [root] }),
   );

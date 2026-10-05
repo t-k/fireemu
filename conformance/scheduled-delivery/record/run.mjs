@@ -70,6 +70,23 @@ const iso = (ms) => new Date(ms).toISOString();
 export const absent = (a) =>
   a?.status === 404 && readable(a) && a.json.error?.status === "NOT_FOUND";
 
+/** The IAM members added and removed between two policy reads (recorded, not judged here). */
+export function iamChanges(before, after) {
+  const keys = (a) =>
+    a?.status === 200 && readable(a)
+      ? new Set(
+          (a.json.bindings ?? []).flatMap((b) => (b.members ?? []).map((m) => b.role + "|" + m)),
+        )
+      : null;
+  const b = keys(before);
+  const a = keys(after);
+  if (!b || !a) return null;
+  return {
+    added: [...a].filter((k) => !b.has(k)).toSorted(),
+    removed: [...b].filter((k) => !a.has(k)).toSorted(),
+  };
+}
+
 /** What a Scheduler job readback says about the job, reduced to the fields the recording is about. */
 export function jobSummary(json) {
   return {
@@ -297,6 +314,7 @@ export async function record({
 
   const deployedJobIds = ALL_FUNCTIONS.map(scheduleId);
   const extraIds = EXTRA_JOBS.map((job) => extraJobId(runId, job.key));
+  let iamBefore = null;
   let extraCreated = [];
   let subsCreated = [];
 
@@ -325,7 +343,7 @@ export async function record({
     out.servicesMissing = REQUIRED_SERVICES.filter((id) => !enabled.has(id));
     if (!(services?.status === 200 && readable(services)) || out.servicesMissing.length > 0)
       return "services";
-    await read({
+    iamBefore = await read({
       id: "iam-before",
       method: "POST",
       url: "https://cloudresourcemanager.googleapis.com/v1/projects/" + PROJECT + ":getIamPolicy",
@@ -711,13 +729,14 @@ export async function record({
     );
     out.inventory.artifactPackages =
       packages?.status === 200 ? (packages.json.packages ?? []).length : (packages?.status ?? null);
-    await read({
+    const iamAfter = await read({
       id: "iam-after",
       method: "POST",
       url: "https://cloudresourcemanager.googleapis.com/v1/projects/" + PROJECT + ":getIamPolicy",
       json: {},
       cleanup: true,
     });
+    out.inventory.iam = iamChanges(iamBefore, iamAfter);
     await sleep(FINAL_LOG_WAIT_MS);
     await pollLogs("final", { final: true });
   }

@@ -5,7 +5,7 @@ import { readFileSync } from "node:fs";
 import test from "node:test";
 import { allActive, nonePresent, summarize } from "./deploy.mjs";
 import { ALL_FUNCTIONS, functionName, runServiceId } from "./plan.mjs";
-import { absent, isBusy, jobSummary } from "./run.mjs";
+import { absent, iamChanges, isBusy, jobSummary } from "./run.mjs";
 
 const recorded = JSON.parse(
   readFileSync(new URL("../fixtures/delivery-recorded.json", import.meta.url), "utf8"),
@@ -121,4 +121,37 @@ test("the recorded 409 is not among the real answers the recorder reads, and a r
   assert.equal(recorded.schedulerJobDeleted.recordedBytes, 3);
   assert.deepEqual(recorded.schedulerJobDeleted.body, {});
   assert.equal(isBusy(answer(recorded.schedulerAbsentPlain)), false);
+});
+
+test("IAM changes are the members added and removed between two policy reads", () => {
+  const policy = (bindings) => ({ status: 200, json: { bindings } });
+  const a = policy([
+    { role: "roles/editor", members: ["serviceAccount:1-compute@developer.gserviceaccount.com"] },
+  ]);
+  const b = policy([
+    {
+      role: "roles/editor",
+      members: [
+        "serviceAccount:1-compute@developer.gserviceaccount.com",
+        "serviceAccount:2@x.iam.gserviceaccount.com",
+      ],
+    },
+    {
+      role: "roles/run.invoker",
+      members: ["serviceAccount:1-compute@developer.gserviceaccount.com"],
+    },
+  ]);
+  assert.deepEqual(iamChanges(a, b), {
+    added: [
+      "roles/editor|serviceAccount:2@x.iam.gserviceaccount.com",
+      "roles/run.invoker|serviceAccount:1-compute@developer.gserviceaccount.com",
+    ],
+    removed: [],
+  });
+  assert.deepEqual(iamChanges(b, a).added, []);
+  assert.equal(iamChanges(b, a).removed.length, 2);
+  assert.deepEqual(iamChanges(a, a), { added: [], removed: [] });
+  assert.equal(iamChanges(null, a), null);
+  assert.equal(iamChanges(a, { status: 500, json: {} }), null);
+  assert.deepEqual(iamChanges(policy([]), policy([{ role: "r" }])), { added: [], removed: [] });
 });

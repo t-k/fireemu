@@ -1,10 +1,10 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { test } from "node:test";
+import { tempDir } from "./test-tmpdir.mjs";
 
 import {
   canonicalRow,
@@ -520,7 +520,7 @@ test("an unclean production recording is refused with every problem, separated b
 const COMPARE = fileURLToPath(new URL("./fs-listen/compare.mjs", import.meta.url));
 
 function runCli(files, args) {
-  const dir = mkdtempSync(join(tmpdir(), "fs-listen-cli-"));
+  const dir = tempDir("fs-listen-cli-");
   const path = (name, value) => {
     const file = join(dir, name);
     writeFileSync(file, JSON.stringify(value));

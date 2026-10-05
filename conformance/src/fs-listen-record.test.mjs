@@ -1,17 +1,9 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import {
-  existsSync,
-  mkdirSync,
-  mkdtempSync,
-  readFileSync,
-  statSync,
-  utimesSync,
-  writeFileSync,
-} from "node:fs";
-import { tmpdir } from "node:os";
+import { existsSync, mkdirSync, readFileSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
+import { tempDir } from "./test-tmpdir.mjs";
 
 import {
   accessToken,
@@ -440,7 +432,7 @@ test("recordNative returns the run, the end time, the issued names and the reque
 });
 
 test("readback: a native journal is read through the client and nothing is deleted", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "rb-"));
+  const dir = tempDir("rb-");
   const journal = join(dir, "j.jsonl");
   writeFileSync(
     journal,
@@ -496,7 +488,7 @@ test("readback: a native journal is read through the client and nothing is delet
 });
 
 test("admit needs the ledger and the envelope, and reads the real lock and ledger files for that envelope", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "admit-"));
+  const dir = tempDir("admit-");
   const ledger = join(dir, "sandbox-ledger.jsonl");
   mkdirSync(join(dir, "sandbox-locks"));
   writeFileSync(ledger, "");
@@ -514,7 +506,7 @@ test("admit needs the ledger and the envelope, and reads the real lock and ledge
 test("a crash during the third Commit leaves a journal that names the run and every name sent, and the read-back finds them", async () => {
   const { createJournal, issuedFromJournal, readbackJournal } =
     await import("./fs-listen/journal.mjs");
-  const dir = mkdtempSync(join(tmpdir(), "crash-"));
+  const dir = tempDir("crash-");
   const path = join(dir, "run.journal.jsonl");
   const journal = createJournal(path);
   journal.append({ type: "run", runId: "r1", kind: "native", project: "p" });
@@ -666,7 +658,7 @@ test("sdk production does not close the journal before the recording finishes", 
 });
 
 test("admit prints which task holds the lock and for which envelope", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "admit-msg-"));
+  const dir = tempDir("admit-msg-");
   const ledger = join(dir, "sandbox-ledger.jsonl");
   mkdirSync(join(dir, "sandbox-locks"));
   writeFileSync(ledger, "");
@@ -686,7 +678,7 @@ test("admit prints which task holds the lock and for which envelope", async () =
 });
 
 test("openJournal creates <out>.journal.jsonl, heads it with the run and prints the run id", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "open-journal-"));
+  const dir = tempDir("open-journal-");
   const out = join(dir, "rec.json");
   const lines = [];
   const original = console.error;
@@ -710,7 +702,7 @@ test("openJournal creates <out>.journal.jsonl, heads it with the run and prints 
 });
 
 const journalOf = (run, extra = []) => {
-  const dir = mkdtempSync(join(tmpdir(), "rbj-"));
+  const dir = tempDir("rbj-");
   const path = join(dir, "j.jsonl");
   writeFileSync(path, [run, ...extra].map((r) => JSON.stringify(r)).join("\n"));
   return path;
@@ -995,7 +987,7 @@ test("localProvenance with its own defaults reads the binary, the lock file of t
   const { execFile } = await import("node:child_process");
   const { promisify } = await import("node:util");
   const root = new URL("../../", import.meta.url).pathname;
-  const dir = mkdtempSync(join(tmpdir(), "provenance-defaults-"));
+  const dir = tempDir("provenance-defaults-");
   const binary = join(dir, "fireemu");
   writeFileSync(binary, "binary bytes");
   const lock = join(root, "Cargo.lock");

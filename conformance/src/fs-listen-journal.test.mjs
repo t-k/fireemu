@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync, statSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
+import { tempDir } from "./test-tmpdir.mjs";
 
 import {
   NULL_JOURNAL,
@@ -12,7 +12,7 @@ import {
   readbackJournal,
 } from "./fs-listen/journal.mjs";
 
-const tmp = () => join(mkdtempSync(join(tmpdir(), "journal-")), "j.jsonl");
+const tmp = () => join(tempDir("journal-"), "j.jsonl");
 
 test("the journal file is created private, never overwritten, and each line is on disk when append returns", () => {
   const path = tmp();

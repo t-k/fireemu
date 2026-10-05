@@ -291,6 +291,7 @@ test("random ledgers: the deletes and the verdict follow the rules", async () =>
     const leftover =
       issued.some(([name, s]) => s.present === false && initial.has(name)) ||
       issued.some(([name, s]) => s.present === "unknown" && !initial.has(name)) ||
+      issued.some(([name, s]) => s.present === true && !initial.has(name)) ||
       issued.some(([, s]) => s.unknownDelete) ||
       strayCount > 0;
     assert.equal(report.complete, !leftover, `seed ${seed}`);
@@ -371,4 +372,34 @@ test("journal lines are of type names, whoever writes them", async () => {
   });
   assert.equal(journal.lines.length, 4);
   assert.ok(journal.lines.every((line) => line.type === "names"));
+});
+
+test("a confirmed create that reads missing is not settled (read-after-write lag can hide a live resource): only the A2 read-back settles it", async () => {
+  const w = world({ docs: [] });
+  const report = await settle([[N("a"), st(true)]], w);
+  assert.deepEqual(report.unsettled, [N("a")]);
+  assert.equal(report.complete, false);
+  assert.deepEqual(w.log.commits, [], "nothing is deleted on a read that finds nothing");
+  // The run's own delete, answered 2xx and read back missing, is the exception: complete.
+  const own = world({ docs: [N("b")] });
+  const done = await settle([[N("b"), st(true)]], own);
+  assert.equal(done.complete, true);
+  assert.deepEqual(done.unsettled, []);
+  // A name whose delete was confirmed and that reads missing is complete too.
+  assert.equal((await settle([[N("c"), st(false)]], world())).complete, true);
+});
+
+test("a name that may exist (an SDK case may have written it) is deleted when a read finds it and is no anomaly when it does not", async () => {
+  const ledger = createLedger();
+  ledger.answered([upd(N("a")), upd(N("b")), del(N("c"))], "maybe");
+  const entries = ledger.entries();
+  assert.deepEqual(
+    entries.map(([, state]) => state.present),
+    ["maybe", "maybe", false],
+  );
+  const w = world({ docs: [N("a")] });
+  const report = await settle(entries, w);
+  assert.deepEqual(w.log.commits, [[N("a")]]);
+  assert.equal(report.complete, true);
+  assert.deepEqual(report.unsettled, []);
 });

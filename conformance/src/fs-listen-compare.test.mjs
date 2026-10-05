@@ -8,7 +8,9 @@ import { test } from "node:test";
 
 import {
   canonicalRow,
+  classifyLocal,
   classifyRow,
+  describeRow,
   filterKeys,
   compareRecordings,
   recordingProblems,
@@ -980,7 +982,7 @@ test("L1 production, SDK: the two recordings agree on all 18 rows", () => {
     assert.equal(classifyRow(a.rows[id], b.rows[id]), "MATCH", id);
 });
 
-test("a declared divergence also covers a local wait that ran out for an answer production gave", () => {
+test("only an entry that opts in covers a local wait that ran out for an answer production gave", () => {
   const add = {
     kind: "targetChange",
     type: "ADD",
@@ -994,25 +996,40 @@ test("a declared divergence also covers a local wait that ran out for an answer 
     productions: [recording({ r: production }), recording({ r: production })],
     local: recording({ r: local }),
   });
-  // Without a declaration the row stays unfinished.
+  // Without a declaration the row stays unfinished, and a plain declaration (a reason alone, or an
+  // entry that does not say `coversLocalTimeout: true`) does not cover it.
   assert.equal(compareRecordings(recordings(stuck)).rows.r.status, "INDETERMINATE");
-  // With one, it is a known divergence, and the reason is carried.
+  for (const entry of [
+    "no index needed",
+    { reason: "no index needed" },
+    { reason: "no index needed", coversLocalTimeout: false },
+    { reason: "no index needed", coversLocalTimeout: "yes" },
+  ])
+    assert.equal(
+      compareRecordings({ ...recordings(stuck), divergences: { r: entry } }).rows.r.status,
+      "INDETERMINATE",
+      JSON.stringify(entry),
+    );
+  // An entry that opts in makes it a known divergence, and the reason is carried.
   const declared = compareRecordings({
     ...recordings(stuck),
-    divergences: { r: "no index needed" },
+    divergences: { r: { reason: "no index needed", coversLocalTimeout: true } },
   });
   assert.equal(declared.rows.r.status, "KNOWN_DIVERGENCE");
   assert.equal(declared.rows.r.reason, "no index needed");
   // A local wait that ran out on rows equal to production's is slow, not different.
   const slow = compareRecordings({
     ...recordings(production),
-    divergences: { r: "x" },
+    divergences: { r: { reason: "x", coversLocalTimeout: true } },
   });
   assert.equal(slow.rows.r.status, "MATCH");
   // A frame-capped or errored local row is never covered by a divergence.
   const capped = fr([add], { end: { reason: "frame-cap" } });
   assert.equal(
-    compareRecordings({ ...recordings(capped), divergences: { r: "x" } }).rows.r.status,
+    compareRecordings({
+      ...recordings(capped),
+      divergences: { r: { reason: "x", coversLocalTimeout: true } },
+    }).rows.r.status,
     "INDETERMINATE",
   );
   // An unfinished production row is not covered either.
@@ -1021,23 +1038,24 @@ test("a declared divergence also covers a local wait that ran out for an answer 
     compareRecordings({
       productions: [recording({ r: open }), recording({ r: open })],
       local: recording({ r: stuck }),
-      divergences: { r: "x" },
+      divergences: { r: { reason: "x", coversLocalTimeout: true } },
     }).rows.r.status,
     "INDETERMINATE",
   );
 });
 
-test("the divergence registers name rows of the recorded production run and give a reason that cites the runs or the official emulator", () => {
+test("the divergence registers name rows of the recorded production run, quote what both runs recorded and cite the runs or the official emulator", () => {
   const read = (name) =>
     JSON.parse(readFileSync(new URL(`../fixtures/fs-listen/${name}`, import.meta.url), "utf8"));
   const strict = read("divergences-strict.json");
   const emulator = read("divergences-emulator.json");
   const rows = new Set(Object.keys(L1["native-1"].rows));
   for (const register of [strict, emulator])
-    for (const [id, reason] of Object.entries(register)) {
+    for (const [id, entry] of Object.entries(register)) {
       assert.ok(rows.has(id), `${id} is not a row of the recorded production run`);
-      assert.ok(reason.length > 80, id);
-      assert.match(reason, /nmuuicyas|official emulator/, id);
+      assert.equal(typeof entry.reason, "string", id);
+      assert.ok(entry.reason.length > 80, id);
+      assert.match(entry.reason, /nmuuicyas|official emulator/, id);
     }
   // The emulator profile has every strict divergence and the ones the official emulator causes.
   for (const id of Object.keys(strict)) assert.ok(id in emulator, id);
@@ -1052,18 +1070,34 @@ test("the divergence registers name rows of the recorded production run and give
     ],
   );
   for (const id of Object.keys(emulator).filter((i) => !(i in strict)))
-    assert.match(emulator[id], /official emulator/, id);
-  // The strict ones say whether production was consistent, cite both runs and name the client effect.
-  for (const [id, reason] of Object.entries(strict)) {
-    assert.match(reason, /consistent across the two runs/, id);
-    assert.match(reason, /nmuuicyas/, id);
-    assert.match(reason, /nmuukwo6n/, id);
-    assert.match(reason, /Native-gRPC client effect/, id);
-    assert.match(reason, /fs-listen-resume-replay-boundaries/, id);
+    assert.match(emulator[id].reason, /official emulator/, id);
+  // The strict ones quote what production recorded (generated from the fixture, not typed): both
+  // runs say the same, the entry quotes it, and the entry says it. They cite both runs, name the
+  // client effect and the issue, and say what is not measured.
+  for (const [id, entry] of Object.entries(strict)) {
+    const [first, second] = prodRows(id);
+    assert.equal(describeRow(first), describeRow(second), `${id}: the two runs differ`);
+    assert.equal(entry.production, describeRow(first), `${id}: the quoted production sequence`);
+    assert.ok(entry.reason.includes(entry.production), id);
+    assert.match(entry.reason, /consistent across the two runs/, id);
+    assert.match(entry.reason, /nmuuicyas/, id);
+    assert.match(entry.reason, /nmuukwo6n/, id);
+    assert.match(entry.reason, /Native-gRPC client effect/, id);
+    assert.match(entry.reason, /SDK effect not measured/, id);
+    assert.match(entry.reason, /fs-listen-resume-replay-boundaries/, id);
+    assert.equal(typeof entry.fireemu, "string", id);
+    assert.notEqual(entry.fireemu, entry.production, id);
+    assert.equal(entry.coversLocalTimeout, undefined, id);
+    assert.equal(classifyRow(first, second), "MATCH", id);
   }
-  // Each strict divergence is a row on which the two production runs agree.
-  for (const id of Object.keys(strict))
-    assert.equal(classifyRow(L1["native-1"].rows[id], L1["native-2"].rows[id]), "MATCH", id);
+  // Every row on which both production runs sent an existence filter is declared, since fireemu
+  // sends none (the filter both runs sent is required of a local row).
+  const required = Object.keys(L1["native-1"].rows).filter((id) => {
+    const [first, second] = prodRows(id);
+    return filterKeys(first).some((key) => filterKeys(second).includes(key));
+  });
+  for (const id of required)
+    assert.ok(id in strict, `${id} has a filter in both runs and no declaration`);
 });
 
 test("only the boundaries a dropped filter left side by side merge, however many rows follow it", () => {
@@ -1156,4 +1190,178 @@ test("near miss: a wait that ran out with no REMOVE carrying a cause is a failur
   }
   // The same rows, finished, are compared in the ordinary way.
   assert.equal(classifyRow(fr([add, noCause]), fr([add, noCause])), "MATCH");
+});
+
+// ---- the review of the L1 comparison (M1, M2, S2): fixture-backed probes ----
+
+const prodRows = (id) => [L1["native-1"].rows[id], L1["native-2"].rows[id]];
+const withoutFilterRows = (entry) => ({
+  ...entry,
+  rows: entry.rows.filter((item) => item.kind !== "filter"),
+});
+const onlyRecording = (rows) => recording(rows);
+const verdictOf = (id, local) => {
+  const [first, second] = prodRows(id);
+  const out = compareRecordings({
+    productions: [onlyRecording({ [id]: first }), onlyRecording({ [id]: second })],
+    local: onlyRecording({ [id]: local }),
+  });
+  return out.rows[id].status;
+};
+
+test("M1: a local row that leaves out the filter both production runs sent does not match", () => {
+  for (const id of [
+    "native/existence-filter/without-expected-count",
+    "native/resume-token/older",
+    "native/resume-token/other-query",
+  ]) {
+    const [first, second] = prodRows(id);
+    assert.ok(
+      filterKeys(first).length > 0 && filterKeys(second).length > 0,
+      `${id}: both runs sent one`,
+    );
+    assert.equal(verdictOf(id, withoutFilterRows(first)), "MISMATCH", id);
+    assert.equal(verdictOf(id, first), "MATCH", `${id}: the filter itself matches`);
+  }
+});
+
+test("M1: nothing changed and two documents left the query are different answers", () => {
+  const [lost] = prodRows("native/existence-filter/without-expected-count");
+  const [unchanged] = prodRows("native/resume-token/unchanged");
+  assert.notDeepEqual(filterKeys(lost), filterKeys(unchanged));
+  // The local row of 'unchanged' is no answer to 'without-expected-count', and the other way.
+  assert.equal(verdictOf("native/existence-filter/without-expected-count", unchanged), "MISMATCH");
+});
+
+test("M1: a filter only one production run sent is optional; a local filter neither run sent is a difference", () => {
+  const id = "native/resume-token/unchanged";
+  const [first, second] = prodRows(id);
+  assert.equal(filterKeys(first).length + filterKeys(second).length > 0, true);
+  assert.equal(filterKeys(first).length === 0 || filterKeys(second).length === 0, true);
+  assert.equal(verdictOf(id, withoutFilterRows(first)), "MATCH", "optional: may be left out");
+  assert.equal(verdictOf(id, first), "MATCH");
+  assert.equal(verdictOf(id, second), "MATCH");
+  const wrong = {
+    ...first,
+    rows: [
+      ...first.rows.slice(0, 2),
+      { ...second.rows.find((r) => r.kind === "filter"), count: 0 },
+      ...first.rows.slice(2),
+    ],
+  };
+  assert.equal(verdictOf(id, wrong), "MISMATCH", "a count neither run sent");
+  const bloom = structuredClone(second);
+  bloom.rows.find((r) => r.kind === "filter").unchangedNames.hashCount += 1;
+  assert.equal(verdictOf(id, bloom), "MISMATCH", "a bloom shape neither run sent");
+});
+
+test("M2: a strict register entry can never cover a local hang or an empty local row", () => {
+  const strict = JSON.parse(
+    readFileSync(new URL("../fixtures/fs-listen/divergences-strict.json", import.meta.url), "utf8"),
+  );
+  const emulator = JSON.parse(
+    readFileSync(
+      new URL("../fixtures/fs-listen/divergences-emulator.json", import.meta.url),
+      "utf8",
+    ),
+  );
+  for (const [id, entry] of Object.entries(strict)) {
+    assert.equal(typeof entry === "string" || entry.coversLocalTimeout !== true, true, id);
+    for (const rows of [
+      [],
+      [{ kind: "targetChange", type: "ADD", targetIds: [1], cause: null, resumeToken: false }],
+    ]) {
+      const [first, second] = prodRows(id);
+      const out = compareRecordings({
+        productions: [onlyRecording({ [id]: first }), onlyRecording({ [id]: second })],
+        local: onlyRecording({ [id]: fr(rows, { timedOut: true }) }),
+        divergences: { [id]: entry },
+      });
+      assert.notEqual(out.rows[id].status, "KNOWN_DIVERGENCE", id);
+      assert.equal(out.ok, false);
+    }
+  }
+  // Only one emulator entry opts in: the missing index the official emulator serves.
+  const optIn = Object.entries(emulator).filter(([, entry]) => entry.coversLocalTimeout === true);
+  assert.deepEqual(
+    optIn.map(([id]) => id),
+    ["native/target-protocol/missing-index"],
+  );
+});
+
+test("S2: a REMOVE without a cause, with a cause that has no code, or of a target the row never added is not an answer", () => {
+  const add = {
+    kind: "targetChange",
+    type: "ADD",
+    targetIds: [1],
+    cause: null,
+    resumeToken: false,
+  };
+  const rem = (extra) => ({
+    kind: "targetChange",
+    type: "REMOVE",
+    targetIds: [1],
+    resumeToken: false,
+    ...extra,
+  });
+  const unfinished = (rows) => {
+    const waited = fr(rows, { timedOut: true });
+    return classifyRow(waited, structuredClone(waited)) === "INDETERMINATE";
+  };
+  assert.equal(unfinished([add, rem({})]), true, "no cause key");
+  assert.equal(unfinished([add, rem({ cause: null })]), true);
+  assert.equal(unfinished([add, rem({ cause: { message: "x" } })]), true, "no code");
+  assert.equal(
+    unfinished([add, rem({ cause: { code: "3", message: "x" } })]),
+    true,
+    "code not a number",
+  );
+  assert.equal(
+    unfinished([add, rem({ targetIds: [2], cause: { code: 3, message: "x" } })]),
+    true,
+    "never added",
+  );
+  assert.equal(
+    unfinished([add, rem({ targetIds: [], cause: { code: 3, message: "x" } })]),
+    true,
+    "no target",
+  );
+  assert.equal(
+    unfinished([add, rem({ targetIds: [1, 2], cause: { code: 3, message: "x" } })]),
+    true,
+    "one never added",
+  );
+  // The recorded shapes: ADD then REMOVE with a cause, and a REMOVE of a junk token on its own.
+  assert.equal(unfinished([add, rem({ cause: { code: 9, message: "x" } })]), false);
+  assert.equal(unfinished([rem({ cause: { code: 3, message: "bad resume token" } })]), false);
+  // A lone REMOVE is accepted only when it is the row's only target change.
+  assert.equal(unfinished([bnd(), rem({ cause: { code: 3, message: "x" } })]), false);
+  assert.equal(
+    unfinished([{ ...add, type: "NO_CHANGE" }, rem({ cause: { code: 3, message: "x" } })]),
+    true,
+  );
+});
+
+test("classifyLocal: the frames decide; a filter both production runs sent is required, one only a run sent is optional, one neither sent is a difference; unfinished rows are not compared", () => {
+  const withFilter = (count) => fr([current, bnd(), flt(count)]);
+  const none = fr([current, bnd()]);
+  assert.equal(classifyLocal(withFilter(2), withFilter(2), withFilter(2)), "MATCH");
+  assert.equal(classifyLocal(withFilter(2), withFilter(2), none), "DIFFER", "required");
+  assert.equal(classifyLocal(withFilter(2), none, none), "MATCH", "optional");
+  assert.equal(classifyLocal(withFilter(2), none, withFilter(2)), "MATCH");
+  assert.equal(classifyLocal(withFilter(2), none, withFilter(3)), "DIFFER", "a count neither sent");
+  assert.equal(classifyLocal(none, none, withFilter(2)), "DIFFER");
+  assert.equal(
+    classifyLocal(withFilter(2), withFilter(3), fr([current, bnd(), flt(2), flt(3)])),
+    "MATCH",
+  );
+  assert.equal(classifyLocal(withFilter(2), withFilter(3), none), "MATCH", "no filter both sent");
+  assert.equal(classifyLocal(none, none, fr([bnd()])), "DIFFER", "frames differ");
+  const waited = fr([current], { timedOut: true });
+  for (const [a, b, c] of [
+    [waited, none, none],
+    [none, waited, none],
+    [none, none, waited],
+  ])
+    assert.equal(classifyLocal(a, b, c), "INDETERMINATE");
 });

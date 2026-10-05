@@ -1370,3 +1370,37 @@ test("a row of a stream opened with a saved token says where the token came from
     },
   ]);
 });
+
+test("a save counts the documents between the target's CURRENT and its token, not the other frames, and not the initial snapshot's", async () => {
+  const frames = [
+    change("ADD", [1]),
+    docChange,
+    docChange,
+    change("CURRENT", [1], { resumeToken: Buffer.from("TC") }),
+    change("NO_CHANGE", []),
+    docChange,
+    change("NO_CHANGE", []),
+    change("NO_CHANGE", []),
+    docChange,
+    change("NO_CHANGE", [], { resumeToken: Buffer.from("TG") }),
+  ];
+  const { out } = await runSteps(
+    [
+      { do: "open", stream: "s", targets: [{ id: 1, doc: "a" }] },
+      { do: "save", stream: "s", id: 1, token: "g", kind: "global" },
+      { do: "save", stream: "s", id: 1, token: "c", kind: "current" },
+    ],
+    { 0: frames },
+  );
+  const [global, current] = out.saves;
+  assert.equal(global.token.frameIndex, 9);
+  assert.equal(global.documentChangesBefore, 4, "every document before the token");
+  assert.equal(global.documentChangesAfterCurrent, 2, "the two after CURRENT only");
+  assert.equal(current.token.frameIndex, 3);
+  assert.equal(current.documentChangesBefore, 2);
+  assert.equal(
+    current.documentChangesAfterCurrent,
+    0,
+    "the CURRENT frame itself is the end of the snapshot",
+  );
+});

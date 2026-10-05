@@ -1,6 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
 
@@ -13,6 +12,7 @@ import {
   sdkBloomVectors,
   sdkFilter,
 } from "./fs-listen/sdk-bloom.mjs";
+import { tempDir } from "./test-tmpdir.mjs";
 
 const FIXTURE = new URL(
   "../../crates/fireemu-adapter-grpc/tests/fixtures/sdk-bloom-vectors.json",
@@ -91,7 +91,7 @@ test("the extraction refuses another SDK version, a package without the bundle a
 
 test("loading the SDK bloom from a package root refuses another version and a package without the bundle", () => {
   const fake = (version, files = {}) => {
-    const root = mkdtempSync(join(tmpdir(), "sdk-bloom-"));
+    const root = tempDir("sdk-bloom-");
     writeFileSync(join(root, "package.json"), JSON.stringify({ version }));
     mkdirSync(join(root, "dist"));
     for (const [name, text] of Object.entries(files)) writeFileSync(join(root, "dist", name), text);

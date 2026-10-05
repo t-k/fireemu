@@ -17,6 +17,7 @@ import {
   pendingCreateOperations,
 } from "./eventarc-production/cleanup.mjs";
 import { createClient } from "./eventarc-production/client.mjs";
+import { CLEANUP_BUDGET } from "./eventarc-production/record.mjs";
 import { createOwnership } from "./eventarc-production/names.mjs";
 
 const RUN = "0123456789ab";
@@ -50,6 +51,7 @@ function fakeService({
   operations = {},
   goneAfter = new Map(),
   readBody = (name) => ({ name }),
+  stay = false,
 } = {}) {
   const live = new Set(channels);
   const calls = [];
@@ -85,8 +87,8 @@ function fakeService({
       }
       if (method === "DELETE") {
         if (!live.has(bare)) return NOT_FOUND;
-        live.delete(bare);
-        return { status: 200, body: { name: OPD, done: true }, unknown: false };
+        if (!stay) live.delete(bare);
+        return { status: 200, body: { name: OPD, done: !stay }, unknown: false };
       }
       throw new Error(`unexpected ${method} ${path}`);
     },
@@ -456,4 +458,18 @@ test("the operations still to read are those a creation named and nothing resolv
     pendingCreateOperations({ creates: ["confirmed", `unknown@${OP1}`], deletes: [], open: [] }),
     [],
   );
+});
+
+test("the most a cleanup sends for twelve pending creations that all exist and never finish stays inside the cleanup budget", async () => {
+  const names = Array.from({ length: 12 }, (_, index) => mine(`pending-${index}`));
+  names.forEach((name, index) =>
+    issue(name, `unknown@projects/${PROJECT}/locations/us-central1/operations/op-${index}`),
+  );
+  const service = fakeService({ channels: names, hidden: new Set(names), stay: true });
+  const report = await run(service);
+  assert.equal(report.budgetSpent, false);
+  assert.deepEqual(report.leftover.toSorted(), names.toSorted());
+  assert.ok(service.calls.length <= CLEANUP_BUDGET, `${service.calls.length} requests`);
+  // 12 x (4 operation reads, 1 read, 1 deletion, 15 polls, 3 read-backs) and one list.
+  assert.equal(service.calls.length, 12 * (OPERATION_READS + 1 + 1 + 15 + 3) + 1);
 });

@@ -562,6 +562,12 @@ fn assemble_adapters(bound: BoundStartup) -> Result<ServiceAssembly, String> {
             ),
         );
     }
+    // The buckets the deployed Storage triggers name exist for the strict profile, as in production.
+    if let Some(runtime) = &functions_runtime {
+        storage_rules
+            .registry
+            .set_trigger_buckets(functions::storage_trigger_buckets(runtime.manifest()));
+    }
     let pubsub_resources = if pubsub_listener.is_some() {
         if let Some(runtime) = &functions_runtime {
             let resources =

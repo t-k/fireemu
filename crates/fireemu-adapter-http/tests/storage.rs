@@ -1416,13 +1416,18 @@ fn client_library_emulator_paths_and_open_ended_ranges() {
     assert_eq!(json_body(&r)["items"][0]["name"], "stream.bin");
     // The official emulator has no bucket-metadata route at all: a bucket GET falls into
     // its XML-style object fallback and answers the missing-object envelope, so
-    // `bucket.exists()` is false on both emulators.
-    let r = handle(&s, req("GET", &format!("/b/{BUCKET}"), &[], b""));
+    // `bucket.exists()` is false there, and the emulator profile keeps that. Strict serves the
+    // bucket resource on this spelling too (production's bucket exists).
+    let emulator = state_with(None, TokenAcceptance::EmulatorMock);
+    let r = handle(&emulator, req("GET", &format!("/b/{BUCKET}"), &[], b""));
     assert_eq!(r.status, 404);
     assert_eq!(
         json_body(&r)["error"]["message"],
         format!("No such object: b/{BUCKET}")
     );
+    let r = handle(&s, req("GET", &format!("/b/{BUCKET}"), &[], b""));
+    assert_eq!(r.status, 200);
+    assert_eq!(json_body(&r)["kind"], "storage#bucket");
 }
 
 fn user_token(s: &StorageState) -> (String, String) {

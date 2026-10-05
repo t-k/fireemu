@@ -1305,7 +1305,7 @@ describe("the settle delay is a recorded, immutable, floored setting", () => {
 
   it("refuses values that are not a safe integer, with or without the flag", () => {
     closeOwnership(state);
-    for (const bad of [-1, 1.5, "10", Number.NaN, Infinity, null, 2 ** 60]) {
+    for (const bad of [-1, 1.5, "10", Number.NaN, Infinity, null, 2 ** 60, 2 ** 52]) {
       for (const flag of [false, true]) {
         assert.throws(
           () =>

@@ -47,6 +47,8 @@ function runDir(overrides = {}) {
     "user-agent": "Google-Cloud-Scheduler",
     "content-length": "0",
     "x-forwarded-proto": "https",
+    "accept-encoding": "gzip, deflate, br",
+    forwarded: 'for="34.98.143.13";proto=https',
   };
   const frames = [
     frameEntry("a", "schedOkV2", "2026-10-05T08:41:04.109Z", {
@@ -147,6 +149,15 @@ test("the digest keeps the deterministic headers by value and the others by name
     assert.equal(second.at, 58036);
     assert.deepEqual(Object.keys(first.headers).toSorted(), KEPT_HEADERS.toSorted());
     assert.equal(first.headers["x-cloudscheduler-scheduletime"], "2026-10-05T01:41:00-07:00");
+    // the three constant headers of every frame are kept by value too (the comparison checks them)
+    assert.equal(first.headers["accept-encoding"], "gzip, deflate, br");
+    assert.equal(first.headers["x-forwarded-proto"], "https");
+    assert.equal(first.headers.host, "us-central1-fireemu-oracle-sbx.cloudfunctions.net");
+    assert.equal(
+      "forwarded" in first.headers,
+      false,
+      "a forwarded header carries a client address",
+    );
     assert.equal(first.headerNames.includes("authorization"), true);
     assert.equal(JSON.stringify(digest).includes("<credential"), false);
     assert.equal(JSON.stringify(digest).includes("34.98.143.13"), false);

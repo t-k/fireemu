@@ -80,8 +80,10 @@ const NAME = /^[A-Za-z0-9-]+$/;
 
 /**
  * The public host of a function: `<region>-<project>.cloudfunctions.net`, from the project and location of a job's
- * resource name (recorded: `us-central1-<project>.cloudfunctions.net` in all 150 Gen2 frames). A job id alone names
- * neither, and then no host is invented.
+ * resource name (recorded: `us-central1-<project>.cloudfunctions.net` in all 76 distinct Gen2 frames of run 2 and the 3
+ * of run 1; the host is the host of the job's `httpTarget.uri`, which firebase-tools writes). Only us-central1 was
+ * recorded: for another region the host follows the same rule, unrecorded, and no handler can read it. A job id alone
+ * names neither, and then no host is invented.
  */
 function functionHost(jobName) {
   const match = /^projects\/([^/]*)\/locations\/([^/]*)\/jobs\//.exec(String(jobName));

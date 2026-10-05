@@ -239,7 +239,9 @@
         "content-length": "0",
         "x-cloudscheduler-jobname": "firebase-schedule-schedSlowV2-us-central1",
         "x-cloudscheduler-scheduletime": "2026-10-05T01:41:00-07:00",
-        "x-forwarded-proto": "https"
+        "x-forwarded-proto": "https",
+        "accept-encoding": "gzip, deflate, br",
+        "host": "us-central1-fireemu-oracle-sbx.cloudfunctions.net"
       },
       "headerNames": [
         "accept-encoding",
@@ -321,7 +323,9 @@
         "content-length": "0",
         "x-cloudscheduler-jobname": "firebase-schedule-schedOkV2-us-central1",
         "x-cloudscheduler-scheduletime": "2026-10-05T01:41:00-07:00",
-        "x-forwarded-proto": "https"
+        "x-forwarded-proto": "https",
+        "accept-encoding": "gzip, deflate, br",
+        "host": "us-central1-fireemu-oracle-sbx.cloudfunctions.net"
       },
       "headerNames": [
         "accept-encoding",
@@ -372,7 +376,9 @@
         "content-length": "0",
         "x-cloudscheduler-jobname": "firebase-schedule-schedOkV2-us-central1",
         "x-cloudscheduler-scheduletime": "2026-10-05T01:42:01.416739-07:00",
-        "x-forwarded-proto": "https"
+        "x-forwarded-proto": "https",
+        "accept-encoding": "gzip, deflate, br",
+        "host": "us-central1-fireemu-oracle-sbx.cloudfunctions.net"
       },
       "headerNames": [
         "accept-encoding",
@@ -453,7 +459,9 @@
         "content-length": "0",
         "x-cloudscheduler-jobname": "firebase-schedule-schedOkV2-us-central1",
         "x-cloudscheduler-scheduletime": "2026-10-05T01:43:01.416739-07:00",
-        "x-forwarded-proto": "https"
+        "x-forwarded-proto": "https",
+        "accept-encoding": "gzip, deflate, br",
+        "host": "us-central1-fireemu-oracle-sbx.cloudfunctions.net"
       },
       "headerNames": [
         "accept-encoding",
@@ -504,7 +512,9 @@
         "content-length": "0",
         "x-cloudscheduler-jobname": "firebase-schedule-schedRetryV2-us-central1",
         "x-cloudscheduler-scheduletime": "2026-10-05T01:45:00-07:00",
-        "x-forwarded-proto": "https"
+        "x-forwarded-proto": "https",
+        "accept-encoding": "gzip, deflate, br",
+        "host": "us-central1-fireemu-oracle-sbx.cloudfunctions.net"
       },
       "headerNames": [
         "accept-encoding",
@@ -557,7 +567,9 @@
         "content-length": "0",
         "x-cloudscheduler-jobname": "firebase-schedule-schedSlowV2-us-central1",
         "x-cloudscheduler-scheduletime": "2026-10-05T01:43:03.352477-07:00",
-        "x-forwarded-proto": "https"
+        "x-forwarded-proto": "https",
+        "accept-encoding": "gzip, deflate, br",
+        "host": "us-central1-fireemu-oracle-sbx.cloudfunctions.net"
       },
       "headerNames": [
         "accept-encoding",
@@ -609,7 +621,9 @@
         "content-length": "0",
         "x-cloudscheduler-jobname": "firebase-schedule-schedSlowV2-us-central1",
         "x-cloudscheduler-scheduletime": "2026-10-05T01:41:00-07:00",
-        "x-forwarded-proto": "https"
+        "x-forwarded-proto": "https",
+        "accept-encoding": "gzip, deflate, br",
+        "host": "us-central1-fireemu-oracle-sbx.cloudfunctions.net"
       },
       "headerNames": [
         "accept-encoding",
@@ -661,7 +675,9 @@
         "content-length": "0",
         "x-cloudscheduler-jobname": "firebase-schedule-schedRetryV2-us-central1",
         "x-cloudscheduler-scheduletime": "2026-10-05T01:45:00-07:00",
-        "x-forwarded-proto": "https"
+        "x-forwarded-proto": "https",
+        "accept-encoding": "gzip, deflate, br",
+        "host": "us-central1-fireemu-oracle-sbx.cloudfunctions.net"
       },
       "headerNames": [
         "accept-encoding",
@@ -744,7 +760,9 @@
         "content-length": "0",
         "x-cloudscheduler-jobname": "firebase-schedule-schedRetryV2-us-central1",
         "x-cloudscheduler-scheduletime": "2026-10-05T01:45:00-07:00",
-        "x-forwarded-proto": "https"
+        "x-forwarded-proto": "https",
+        "accept-encoding": "gzip, deflate, br",
+        "host": "us-central1-fireemu-oracle-sbx.cloudfunctions.net"
       },
       "headerNames": [
         "accept-encoding",
@@ -828,7 +846,9 @@
         "content-length": "0",
         "x-cloudscheduler-jobname": "fe-sd-156715222b86ea44-zero",
         "x-cloudscheduler-scheduletime": "2026-12-31T16:00:00-08:00",
-        "x-forwarded-proto": "https"
+        "x-forwarded-proto": "https",
+        "accept-encoding": "gzip, deflate, br",
+        "host": "us-central1-fireemu-oracle-sbx.cloudfunctions.net"
       },
       "headerNames": [
         "accept-encoding",
@@ -881,7 +901,9 @@
         "content-length": "0",
         "x-cloudscheduler-jobname": "fe-sd-156715222b86ea44-duration",
         "x-cloudscheduler-scheduletime": "2026-12-31T16:00:00-08:00",
-        "x-forwarded-proto": "https"
+        "x-forwarded-proto": "https",
+        "accept-encoding": "gzip, deflate, br",
+        "host": "us-central1-fireemu-oracle-sbx.cloudfunctions.net"
       },
       "headerNames": [
         "accept-encoding",
@@ -934,7 +956,9 @@
         "content-length": "0",
         "x-cloudscheduler-jobname": "firebase-schedule-schedOkV2-us-central1",
         "x-cloudscheduler-scheduletime": "2026-10-05T01:43:01.416739-07:00",
-        "x-forwarded-proto": "https"
+        "x-forwarded-proto": "https",
+        "accept-encoding": "gzip, deflate, br",
+        "host": "us-central1-fireemu-oracle-sbx.cloudfunctions.net"
       },
       "headerNames": [
         "accept-encoding",
@@ -1015,7 +1039,9 @@
         "content-length": "0",
         "x-cloudscheduler-jobname": "fe-sd-156715222b86ea44-duration",
         "x-cloudscheduler-scheduletime": "2026-12-31T16:00:00-08:00",
-        "x-forwarded-proto": "https"
+        "x-forwarded-proto": "https",
+        "accept-encoding": "gzip, deflate, br",
+        "host": "us-central1-fireemu-oracle-sbx.cloudfunctions.net"
       },
       "headerNames": [
         "accept-encoding",
@@ -1068,7 +1094,9 @@
         "content-length": "0",
         "x-cloudscheduler-jobname": "fe-sd-156715222b86ea44-retry5",
         "x-cloudscheduler-scheduletime": "2026-12-31T16:00:00-08:00",
-        "x-forwarded-proto": "https"
+        "x-forwarded-proto": "https",
+        "accept-encoding": "gzip, deflate, br",
+        "host": "us-central1-fireemu-oracle-sbx.cloudfunctions.net"
       },
       "headerNames": [
         "accept-encoding",
@@ -1121,7 +1149,9 @@
         "content-length": "0",
         "x-cloudscheduler-jobname": "firebase-schedule-schedRetryV2-us-central1",
         "x-cloudscheduler-scheduletime": "2026-10-05T01:45:00-07:00",
-        "x-forwarded-proto": "https"
+        "x-forwarded-proto": "https",
+        "accept-encoding": "gzip, deflate, br",
+        "host": "us-central1-fireemu-oracle-sbx.cloudfunctions.net"
       },
       "headerNames": [
         "accept-encoding",
@@ -1174,7 +1204,9 @@
         "content-length": "0",
         "x-cloudscheduler-jobname": "fe-sd-156715222b86ea44-retry5",
         "x-cloudscheduler-scheduletime": "2026-12-31T16:00:00-08:00",
-        "x-forwarded-proto": "https"
+        "x-forwarded-proto": "https",
+        "accept-encoding": "gzip, deflate, br",
+        "host": "us-central1-fireemu-oracle-sbx.cloudfunctions.net"
       },
       "headerNames": [
         "accept-encoding",
@@ -1227,7 +1259,9 @@
         "content-length": "0",
         "x-cloudscheduler-jobname": "fe-sd-156715222b86ea44-duration",
         "x-cloudscheduler-scheduletime": "2026-12-31T16:00:00-08:00",
-        "x-forwarded-proto": "https"
+        "x-forwarded-proto": "https",
+        "accept-encoding": "gzip, deflate, br",
+        "host": "us-central1-fireemu-oracle-sbx.cloudfunctions.net"
       },
       "headerNames": [
         "accept-encoding",
@@ -1280,7 +1314,9 @@
         "content-length": "0",
         "x-cloudscheduler-jobname": "fe-sd-156715222b86ea44-retry5",
         "x-cloudscheduler-scheduletime": "2026-12-31T16:00:00-08:00",
-        "x-forwarded-proto": "https"
+        "x-forwarded-proto": "https",
+        "accept-encoding": "gzip, deflate, br",
+        "host": "us-central1-fireemu-oracle-sbx.cloudfunctions.net"
       },
       "headerNames": [
         "accept-encoding",
@@ -1333,7 +1369,9 @@
         "content-length": "0",
         "x-cloudscheduler-jobname": "fe-sd-156715222b86ea44-duration",
         "x-cloudscheduler-scheduletime": "2026-12-31T16:00:00-08:00",
-        "x-forwarded-proto": "https"
+        "x-forwarded-proto": "https",
+        "accept-encoding": "gzip, deflate, br",
+        "host": "us-central1-fireemu-oracle-sbx.cloudfunctions.net"
       },
       "headerNames": [
         "accept-encoding",
@@ -1386,7 +1424,9 @@
         "content-length": "0",
         "x-cloudscheduler-jobname": "firebase-schedule-schedRetryV2-us-central1",
         "x-cloudscheduler-scheduletime": "2026-10-05T01:45:00-07:00",
-        "x-forwarded-proto": "https"
+        "x-forwarded-proto": "https",
+        "accept-encoding": "gzip, deflate, br",
+        "host": "us-central1-fireemu-oracle-sbx.cloudfunctions.net"
       },
       "headerNames": [
         "accept-encoding",
@@ -1439,7 +1479,9 @@
         "content-length": "0",
         "x-cloudscheduler-jobname": "fe-sd-156715222b86ea44-retry5",
         "x-cloudscheduler-scheduletime": "2026-12-31T16:00:00-08:00",
-        "x-forwarded-proto": "https"
+        "x-forwarded-proto": "https",
+        "accept-encoding": "gzip, deflate, br",
+        "host": "us-central1-fireemu-oracle-sbx.cloudfunctions.net"
       },
       "headerNames": [
         "accept-encoding",
@@ -1492,7 +1534,9 @@
         "content-length": "0",
         "x-cloudscheduler-jobname": "firebase-schedule-schedOkV2-us-central1",
         "x-cloudscheduler-scheduletime": "2026-10-05T01:44:01.416739-07:00",
-        "x-forwarded-proto": "https"
+        "x-forwarded-proto": "https",
+        "accept-encoding": "gzip, deflate, br",
+        "host": "us-central1-fireemu-oracle-sbx.cloudfunctions.net"
       },
       "headerNames": [
         "accept-encoding",
@@ -1573,7 +1617,9 @@
         "content-length": "0",
         "x-cloudscheduler-jobname": "firebase-schedule-schedSlowV2-us-central1",
         "x-cloudscheduler-scheduletime": "2026-10-05T01:43:03.352477-07:00",
-        "x-forwarded-proto": "https"
+        "x-forwarded-proto": "https",
+        "accept-encoding": "gzip, deflate, br",
+        "host": "us-central1-fireemu-oracle-sbx.cloudfunctions.net"
       },
       "headerNames": [
         "accept-encoding",
@@ -1625,7 +1671,9 @@
         "content-length": "0",
         "x-cloudscheduler-jobname": "fe-sd-156715222b86ea44-retry5",
         "x-cloudscheduler-scheduletime": "2026-12-31T16:00:00-08:00",
-        "x-forwarded-proto": "https"
+        "x-forwarded-proto": "https",
+        "accept-encoding": "gzip, deflate, br",
+        "host": "us-central1-fireemu-oracle-sbx.cloudfunctions.net"
       },
       "headerNames": [
         "accept-encoding",
@@ -1678,7 +1726,9 @@
         "content-length": "0",
         "x-cloudscheduler-jobname": "firebase-schedule-schedOkV2-us-central1",
         "x-cloudscheduler-scheduletime": "2026-10-05T01:45:01.416739-07:00",
-        "x-forwarded-proto": "https"
+        "x-forwarded-proto": "https",
+        "accept-encoding": "gzip, deflate, br",
+        "host": "us-central1-fireemu-oracle-sbx.cloudfunctions.net"
       },
       "headerNames": [
         "accept-encoding",
@@ -1759,7 +1809,9 @@
         "content-length": "0",
         "x-cloudscheduler-jobname": "firebase-schedule-schedSlowV2-us-central1",
         "x-cloudscheduler-scheduletime": "2026-10-05T01:45:03.352477-07:00",
-        "x-forwarded-proto": "https"
+        "x-forwarded-proto": "https",
+        "accept-encoding": "gzip, deflate, br",
+        "host": "us-central1-fireemu-oracle-sbx.cloudfunctions.net"
       },
       "headerNames": [
         "accept-encoding",
@@ -1811,7 +1863,9 @@
         "content-length": "0",
         "x-cloudscheduler-jobname": "fe-sd-156715222b86ea44-retry5",
         "x-cloudscheduler-scheduletime": "2026-12-31T16:00:00-08:00",
-        "x-forwarded-proto": "https"
+        "x-forwarded-proto": "https",
+        "accept-encoding": "gzip, deflate, br",
+        "host": "us-central1-fireemu-oracle-sbx.cloudfunctions.net"
       },
       "headerNames": [
         "accept-encoding",
@@ -1864,7 +1918,9 @@
         "content-length": "0",
         "x-cloudscheduler-jobname": "firebase-schedule-schedOkV2-us-central1",
         "x-cloudscheduler-scheduletime": "2026-10-05T01:46:01.416739-07:00",
-        "x-forwarded-proto": "https"
+        "x-forwarded-proto": "https",
+        "accept-encoding": "gzip, deflate, br",
+        "host": "us-central1-fireemu-oracle-sbx.cloudfunctions.net"
       },
       "headerNames": [
         "accept-encoding",
@@ -1945,7 +2001,9 @@
         "content-length": "0",
         "x-cloudscheduler-jobname": "firebase-schedule-schedSlowV2-us-central1",
         "x-cloudscheduler-scheduletime": "2026-10-05T01:45:03.352477-07:00",
-        "x-forwarded-proto": "https"
+        "x-forwarded-proto": "https",
+        "accept-encoding": "gzip, deflate, br",
+        "host": "us-central1-fireemu-oracle-sbx.cloudfunctions.net"
       },
       "headerNames": [
         "accept-encoding",
@@ -1997,7 +2055,9 @@
         "content-length": "0",
         "x-cloudscheduler-jobname": "firebase-schedule-schedOkV2-us-central1",
         "x-cloudscheduler-scheduletime": "2026-10-05T01:47:01.416739-07:00",
-        "x-forwarded-proto": "https"
+        "x-forwarded-proto": "https",
+        "accept-encoding": "gzip, deflate, br",
+        "host": "us-central1-fireemu-oracle-sbx.cloudfunctions.net"
       },
       "headerNames": [
         "accept-encoding",
@@ -2048,7 +2108,9 @@
         "content-length": "0",
         "x-cloudscheduler-jobname": "firebase-schedule-schedSlowV2-us-central1",
         "x-cloudscheduler-scheduletime": "2026-10-05T01:47:03.352477-07:00",
-        "x-forwarded-proto": "https"
+        "x-forwarded-proto": "https",
+        "accept-encoding": "gzip, deflate, br",
+        "host": "us-central1-fireemu-oracle-sbx.cloudfunctions.net"
       },
       "headerNames": [
         "accept-encoding",
@@ -2161,7 +2223,9 @@
         "content-length": "0",
         "x-cloudscheduler-jobname": "firebase-schedule-schedOkV2-us-central1",
         "x-cloudscheduler-scheduletime": "2026-10-05T01:48:01.416739-07:00",
-        "x-forwarded-proto": "https"
+        "x-forwarded-proto": "https",
+        "accept-encoding": "gzip, deflate, br",
+        "host": "us-central1-fireemu-oracle-sbx.cloudfunctions.net"
       },
       "headerNames": [
         "accept-encoding",
@@ -2212,7 +2276,9 @@
         "content-length": "0",
         "x-cloudscheduler-jobname": "firebase-schedule-schedRetryV2-us-central1",
         "x-cloudscheduler-scheduletime": "2026-10-05T01:48:01.751605-07:00",
-        "x-forwarded-proto": "https"
+        "x-forwarded-proto": "https",
+        "accept-encoding": "gzip, deflate, br",
+        "host": "us-central1-fireemu-oracle-sbx.cloudfunctions.net"
       },
       "headerNames": [
         "accept-encoding",
@@ -2295,7 +2361,9 @@
         "content-length": "0",
         "x-cloudscheduler-jobname": "firebase-schedule-schedRetryV2-us-central1",
         "x-cloudscheduler-scheduletime": "2026-10-05T01:48:01.751605-07:00",
-        "x-forwarded-proto": "https"
+        "x-forwarded-proto": "https",
+        "accept-encoding": "gzip, deflate, br",
+        "host": "us-central1-fireemu-oracle-sbx.cloudfunctions.net"
       },
       "headerNames": [
         "accept-encoding",
@@ -2348,7 +2416,9 @@
         "content-length": "0",
         "x-cloudscheduler-jobname": "firebase-schedule-schedRetryV2-us-central1",
         "x-cloudscheduler-scheduletime": "2026-10-05T01:48:01.751605-07:00",
-        "x-forwarded-proto": "https"
+        "x-forwarded-proto": "https",
+        "accept-encoding": "gzip, deflate, br",
+        "host": "us-central1-fireemu-oracle-sbx.cloudfunctions.net"
       },
       "headerNames": [
         "accept-encoding",
@@ -2401,7 +2471,9 @@
         "content-length": "0",
         "x-cloudscheduler-jobname": "firebase-schedule-schedRetryV2-us-central1",
         "x-cloudscheduler-scheduletime": "2026-10-05T01:48:01.751605-07:00",
-        "x-forwarded-proto": "https"
+        "x-forwarded-proto": "https",
+        "accept-encoding": "gzip, deflate, br",
+        "host": "us-central1-fireemu-oracle-sbx.cloudfunctions.net"
       },
       "headerNames": [
         "accept-encoding",
@@ -2454,7 +2526,9 @@
         "content-length": "0",
         "x-cloudscheduler-jobname": "firebase-schedule-schedSlowV2-us-central1",
         "x-cloudscheduler-scheduletime": "2026-10-05T01:47:03.352477-07:00",
-        "x-forwarded-proto": "https"
+        "x-forwarded-proto": "https",
+        "accept-encoding": "gzip, deflate, br",
+        "host": "us-central1-fireemu-oracle-sbx.cloudfunctions.net"
       },
       "headerNames": [
         "accept-encoding",
@@ -2506,7 +2580,9 @@
         "content-length": "0",
         "x-cloudscheduler-jobname": "firebase-schedule-schedOkV2-us-central1",
         "x-cloudscheduler-scheduletime": "2026-10-05T01:49:01.416739-07:00",
-        "x-forwarded-proto": "https"
+        "x-forwarded-proto": "https",
+        "accept-encoding": "gzip, deflate, br",
+        "host": "us-central1-fireemu-oracle-sbx.cloudfunctions.net"
       },
       "headerNames": [
         "accept-encoding",
@@ -2557,7 +2633,9 @@
         "content-length": "0",
         "x-cloudscheduler-jobname": "firebase-schedule-schedSlowV2-us-central1",
         "x-cloudscheduler-scheduletime": "2026-10-05T01:49:03.352477-07:00",
-        "x-forwarded-proto": "https"
+        "x-forwarded-proto": "https",
+        "accept-encoding": "gzip, deflate, br",
+        "host": "us-central1-fireemu-oracle-sbx.cloudfunctions.net"
       },
       "headerNames": [
         "accept-encoding",
@@ -2639,7 +2717,9 @@
         "content-length": "0",
         "x-cloudscheduler-jobname": "firebase-schedule-schedOkV2-us-central1",
         "x-cloudscheduler-scheduletime": "2026-10-05T01:50:01.416739-07:00",
-        "x-forwarded-proto": "https"
+        "x-forwarded-proto": "https",
+        "accept-encoding": "gzip, deflate, br",
+        "host": "us-central1-fireemu-oracle-sbx.cloudfunctions.net"
       },
       "headerNames": [
         "accept-encoding",
@@ -2690,7 +2770,9 @@
         "content-length": "0",
         "x-cloudscheduler-jobname": "firebase-schedule-schedRetryV2-us-central1",
         "x-cloudscheduler-scheduletime": "2026-10-05T01:53:01.751605-07:00",
-        "x-forwarded-proto": "https"
+        "x-forwarded-proto": "https",
+        "accept-encoding": "gzip, deflate, br",
+        "host": "us-central1-fireemu-oracle-sbx.cloudfunctions.net"
       },
       "headerNames": [
         "accept-encoding",
@@ -2743,7 +2825,9 @@
         "content-length": "0",
         "x-cloudscheduler-jobname": "firebase-schedule-schedSlowV2-us-central1",
         "x-cloudscheduler-scheduletime": "2026-10-05T01:49:03.352477-07:00",
-        "x-forwarded-proto": "https"
+        "x-forwarded-proto": "https",
+        "accept-encoding": "gzip, deflate, br",
+        "host": "us-central1-fireemu-oracle-sbx.cloudfunctions.net"
       },
       "headerNames": [
         "accept-encoding",
@@ -2795,7 +2879,9 @@
         "content-length": "0",
         "x-cloudscheduler-jobname": "firebase-schedule-schedRetryV2-us-central1",
         "x-cloudscheduler-scheduletime": "2026-10-05T01:53:01.751605-07:00",
-        "x-forwarded-proto": "https"
+        "x-forwarded-proto": "https",
+        "accept-encoding": "gzip, deflate, br",
+        "host": "us-central1-fireemu-oracle-sbx.cloudfunctions.net"
       },
       "headerNames": [
         "accept-encoding",
@@ -2848,7 +2934,9 @@
         "content-length": "0",
         "x-cloudscheduler-jobname": "firebase-schedule-schedOkV2-us-central1",
         "x-cloudscheduler-scheduletime": "2026-10-05T01:50:01.416739-07:00",
-        "x-forwarded-proto": "https"
+        "x-forwarded-proto": "https",
+        "accept-encoding": "gzip, deflate, br",
+        "host": "us-central1-fireemu-oracle-sbx.cloudfunctions.net"
       },
       "headerNames": [
         "accept-encoding",
@@ -2929,7 +3017,9 @@
         "content-length": "0",
         "x-cloudscheduler-jobname": "firebase-schedule-schedRetryV2-us-central1",
         "x-cloudscheduler-scheduletime": "2026-10-05T01:53:01.751605-07:00",
-        "x-forwarded-proto": "https"
+        "x-forwarded-proto": "https",
+        "accept-encoding": "gzip, deflate, br",
+        "host": "us-central1-fireemu-oracle-sbx.cloudfunctions.net"
       },
       "headerNames": [
         "accept-encoding",
@@ -3013,7 +3103,9 @@
         "content-length": "0",
         "x-cloudscheduler-jobname": "fe-sd-156715222b86ea44-zero",
         "x-cloudscheduler-scheduletime": "2026-12-31T16:00:01.731686-08:00",
-        "x-forwarded-proto": "https"
+        "x-forwarded-proto": "https",
+        "accept-encoding": "gzip, deflate, br",
+        "host": "us-central1-fireemu-oracle-sbx.cloudfunctions.net"
       },
       "headerNames": [
         "accept-encoding",
@@ -3066,7 +3158,9 @@
         "content-length": "0",
         "x-cloudscheduler-jobname": "fe-sd-156715222b86ea44-duration",
         "x-cloudscheduler-scheduletime": "2026-12-31T16:00:00.024193-08:00",
-        "x-forwarded-proto": "https"
+        "x-forwarded-proto": "https",
+        "accept-encoding": "gzip, deflate, br",
+        "host": "us-central1-fireemu-oracle-sbx.cloudfunctions.net"
       },
       "headerNames": [
         "accept-encoding",
@@ -3119,7 +3213,9 @@
         "content-length": "0",
         "x-cloudscheduler-jobname": "fe-sd-156715222b86ea44-retry5",
         "x-cloudscheduler-scheduletime": "2026-12-31T16:00:02.427285-08:00",
-        "x-forwarded-proto": "https"
+        "x-forwarded-proto": "https",
+        "accept-encoding": "gzip, deflate, br",
+        "host": "us-central1-fireemu-oracle-sbx.cloudfunctions.net"
       },
       "headerNames": [
         "accept-encoding",
@@ -3172,7 +3268,9 @@
         "content-length": "0",
         "x-cloudscheduler-jobname": "fe-sd-156715222b86ea44-duration",
         "x-cloudscheduler-scheduletime": "2026-12-31T16:00:00.024193-08:00",
-        "x-forwarded-proto": "https"
+        "x-forwarded-proto": "https",
+        "accept-encoding": "gzip, deflate, br",
+        "host": "us-central1-fireemu-oracle-sbx.cloudfunctions.net"
       },
       "headerNames": [
         "accept-encoding",
@@ -3225,7 +3323,9 @@
         "content-length": "0",
         "x-cloudscheduler-jobname": "firebase-schedule-schedRetryV2-us-central1",
         "x-cloudscheduler-scheduletime": "2026-10-05T01:53:01.751605-07:00",
-        "x-forwarded-proto": "https"
+        "x-forwarded-proto": "https",
+        "accept-encoding": "gzip, deflate, br",
+        "host": "us-central1-fireemu-oracle-sbx.cloudfunctions.net"
       },
       "headerNames": [
         "accept-encoding",
@@ -3278,7 +3378,9 @@
         "content-length": "0",
         "x-cloudscheduler-jobname": "fe-sd-156715222b86ea44-retry5",
         "x-cloudscheduler-scheduletime": "2026-12-31T16:00:02.427285-08:00",
-        "x-forwarded-proto": "https"
+        "x-forwarded-proto": "https",
+        "accept-encoding": "gzip, deflate, br",
+        "host": "us-central1-fireemu-oracle-sbx.cloudfunctions.net"
       },
       "headerNames": [
         "accept-encoding",
@@ -3331,7 +3433,9 @@
         "content-length": "0",
         "x-cloudscheduler-jobname": "fe-sd-156715222b86ea44-duration",
         "x-cloudscheduler-scheduletime": "2026-12-31T16:00:00.024193-08:00",
-        "x-forwarded-proto": "https"
+        "x-forwarded-proto": "https",
+        "accept-encoding": "gzip, deflate, br",
+        "host": "us-central1-fireemu-oracle-sbx.cloudfunctions.net"
       },
       "headerNames": [
         "accept-encoding",
@@ -3384,7 +3488,9 @@
         "content-length": "0",
         "x-cloudscheduler-jobname": "fe-sd-156715222b86ea44-retry5",
         "x-cloudscheduler-scheduletime": "2026-12-31T16:00:02.427285-08:00",
-        "x-forwarded-proto": "https"
+        "x-forwarded-proto": "https",
+        "accept-encoding": "gzip, deflate, br",
+        "host": "us-central1-fireemu-oracle-sbx.cloudfunctions.net"
       },
       "headerNames": [
         "accept-encoding",
@@ -3437,7 +3543,9 @@
         "content-length": "0",
         "x-cloudscheduler-jobname": "fe-sd-156715222b86ea44-duration",
         "x-cloudscheduler-scheduletime": "2026-12-31T16:00:00.024193-08:00",
-        "x-forwarded-proto": "https"
+        "x-forwarded-proto": "https",
+        "accept-encoding": "gzip, deflate, br",
+        "host": "us-central1-fireemu-oracle-sbx.cloudfunctions.net"
       },
       "headerNames": [
         "accept-encoding",
@@ -3490,7 +3598,9 @@
         "content-length": "0",
         "x-cloudscheduler-jobname": "firebase-schedule-schedRetryV2-us-central1",
         "x-cloudscheduler-scheduletime": "2026-10-05T01:53:01.751605-07:00",
-        "x-forwarded-proto": "https"
+        "x-forwarded-proto": "https",
+        "accept-encoding": "gzip, deflate, br",
+        "host": "us-central1-fireemu-oracle-sbx.cloudfunctions.net"
       },
       "headerNames": [
         "accept-encoding",
@@ -3543,7 +3653,9 @@
         "content-length": "0",
         "x-cloudscheduler-jobname": "firebase-schedule-schedSlowV2-us-central1",
         "x-cloudscheduler-scheduletime": "2026-10-05T01:49:03.352477-07:00",
-        "x-forwarded-proto": "https"
+        "x-forwarded-proto": "https",
+        "accept-encoding": "gzip, deflate, br",
+        "host": "us-central1-fireemu-oracle-sbx.cloudfunctions.net"
       },
       "headerNames": [
         "accept-encoding",
@@ -3595,7 +3707,9 @@
         "content-length": "0",
         "x-cloudscheduler-jobname": "fe-sd-156715222b86ea44-retry5",
         "x-cloudscheduler-scheduletime": "2026-12-31T16:00:02.427285-08:00",
-        "x-forwarded-proto": "https"
+        "x-forwarded-proto": "https",
+        "accept-encoding": "gzip, deflate, br",
+        "host": "us-central1-fireemu-oracle-sbx.cloudfunctions.net"
       },
       "headerNames": [
         "accept-encoding",
@@ -3648,7 +3762,9 @@
         "content-length": "0",
         "x-cloudscheduler-jobname": "firebase-schedule-schedOkV2-us-central1",
         "x-cloudscheduler-scheduletime": "2026-10-05T01:51:01.416739-07:00",
-        "x-forwarded-proto": "https"
+        "x-forwarded-proto": "https",
+        "accept-encoding": "gzip, deflate, br",
+        "host": "us-central1-fireemu-oracle-sbx.cloudfunctions.net"
       },
       "headerNames": [
         "accept-encoding",
@@ -3729,7 +3845,9 @@
         "content-length": "0",
         "x-cloudscheduler-jobname": "firebase-schedule-schedSlowV2-us-central1",
         "x-cloudscheduler-scheduletime": "2026-10-05T01:49:03.352477-07:00",
-        "x-forwarded-proto": "https"
+        "x-forwarded-proto": "https",
+        "accept-encoding": "gzip, deflate, br",
+        "host": "us-central1-fireemu-oracle-sbx.cloudfunctions.net"
       },
       "headerNames": [
         "accept-encoding",
@@ -3781,7 +3899,9 @@
         "content-length": "0",
         "x-cloudscheduler-jobname": "fe-sd-156715222b86ea44-retry5",
         "x-cloudscheduler-scheduletime": "2026-12-31T16:00:02.427285-08:00",
-        "x-forwarded-proto": "https"
+        "x-forwarded-proto": "https",
+        "accept-encoding": "gzip, deflate, br",
+        "host": "us-central1-fireemu-oracle-sbx.cloudfunctions.net"
       },
       "headerNames": [
         "accept-encoding",
@@ -3834,7 +3954,9 @@
         "content-length": "0",
         "x-cloudscheduler-jobname": "firebase-schedule-schedOkV2-us-central1",
         "x-cloudscheduler-scheduletime": "2026-10-05T01:52:01.416739-07:00",
-        "x-forwarded-proto": "https"
+        "x-forwarded-proto": "https",
+        "accept-encoding": "gzip, deflate, br",
+        "host": "us-central1-fireemu-oracle-sbx.cloudfunctions.net"
       },
       "headerNames": [
         "accept-encoding",
@@ -3915,7 +4037,9 @@
         "content-length": "0",
         "x-cloudscheduler-jobname": "firebase-schedule-schedSlowV2-us-central1",
         "x-cloudscheduler-scheduletime": "2026-10-05T01:52:03.352477-07:00",
-        "x-forwarded-proto": "https"
+        "x-forwarded-proto": "https",
+        "accept-encoding": "gzip, deflate, br",
+        "host": "us-central1-fireemu-oracle-sbx.cloudfunctions.net"
       },
       "headerNames": [
         "accept-encoding",
@@ -3967,7 +4091,9 @@
         "content-length": "0",
         "x-cloudscheduler-jobname": "fe-sd-156715222b86ea44-retry5",
         "x-cloudscheduler-scheduletime": "2026-12-31T16:00:02.427285-08:00",
-        "x-forwarded-proto": "https"
+        "x-forwarded-proto": "https",
+        "accept-encoding": "gzip, deflate, br",
+        "host": "us-central1-fireemu-oracle-sbx.cloudfunctions.net"
       },
       "headerNames": [
         "accept-encoding",
@@ -4020,7 +4146,9 @@
         "content-length": "0",
         "x-cloudscheduler-jobname": "firebase-schedule-schedOkV2-us-central1",
         "x-cloudscheduler-scheduletime": "2026-10-05T01:53:01.416739-07:00",
-        "x-forwarded-proto": "https"
+        "x-forwarded-proto": "https",
+        "accept-encoding": "gzip, deflate, br",
+        "host": "us-central1-fireemu-oracle-sbx.cloudfunctions.net"
       },
       "headerNames": [
         "accept-encoding",
@@ -4101,7 +4229,9 @@
         "content-length": "0",
         "x-cloudscheduler-jobname": "firebase-schedule-schedSlowV2-us-central1",
         "x-cloudscheduler-scheduletime": "2026-10-05T01:52:03.352477-07:00",
-        "x-forwarded-proto": "https"
+        "x-forwarded-proto": "https",
+        "accept-encoding": "gzip, deflate, br",
+        "host": "us-central1-fireemu-oracle-sbx.cloudfunctions.net"
       },
       "headerNames": [
         "accept-encoding",
@@ -4153,7 +4283,9 @@
         "content-length": "0",
         "x-cloudscheduler-jobname": "firebase-schedule-schedOkV2-us-central1",
         "x-cloudscheduler-scheduletime": "2026-10-05T01:54:01.416739-07:00",
-        "x-forwarded-proto": "https"
+        "x-forwarded-proto": "https",
+        "accept-encoding": "gzip, deflate, br",
+        "host": "us-central1-fireemu-oracle-sbx.cloudfunctions.net"
       },
       "headerNames": [
         "accept-encoding",
@@ -4234,7 +4366,9 @@
         "content-length": "0",
         "x-cloudscheduler-jobname": "firebase-schedule-schedSlowV2-us-central1",
         "x-cloudscheduler-scheduletime": "2026-10-05T01:54:03.352477-07:00",
-        "x-forwarded-proto": "https"
+        "x-forwarded-proto": "https",
+        "accept-encoding": "gzip, deflate, br",
+        "host": "us-central1-fireemu-oracle-sbx.cloudfunctions.net"
       },
       "headerNames": [
         "accept-encoding",
@@ -4286,7 +4420,9 @@
         "content-length": "0",
         "x-cloudscheduler-jobname": "firebase-schedule-schedRetryV2-us-central1",
         "x-cloudscheduler-scheduletime": "2026-10-05T01:55:01.751605-07:00",
-        "x-forwarded-proto": "https"
+        "x-forwarded-proto": "https",
+        "accept-encoding": "gzip, deflate, br",
+        "host": "us-central1-fireemu-oracle-sbx.cloudfunctions.net"
       },
       "headerNames": [
         "accept-encoding",
@@ -4339,7 +4475,9 @@
         "content-length": "0",
         "x-cloudscheduler-jobname": "firebase-schedule-schedOkV2-us-central1",
         "x-cloudscheduler-scheduletime": "2026-10-05T01:55:01.416739-07:00",
-        "x-forwarded-proto": "https"
+        "x-forwarded-proto": "https",
+        "accept-encoding": "gzip, deflate, br",
+        "host": "us-central1-fireemu-oracle-sbx.cloudfunctions.net"
       },
       "headerNames": [
         "accept-encoding",
@@ -4451,7 +4589,9 @@
         "content-length": "0",
         "x-cloudscheduler-jobname": "firebase-schedule-schedRetryV2-us-central1",
         "x-cloudscheduler-scheduletime": "2026-10-05T01:55:01.751605-07:00",
-        "x-forwarded-proto": "https"
+        "x-forwarded-proto": "https",
+        "accept-encoding": "gzip, deflate, br",
+        "host": "us-central1-fireemu-oracle-sbx.cloudfunctions.net"
       },
       "headerNames": [
         "accept-encoding",
@@ -4504,7 +4644,9 @@
         "content-length": "0",
         "x-cloudscheduler-jobname": "firebase-schedule-schedRetryV2-us-central1",
         "x-cloudscheduler-scheduletime": "2026-10-05T01:55:01.751605-07:00",
-        "x-forwarded-proto": "https"
+        "x-forwarded-proto": "https",
+        "accept-encoding": "gzip, deflate, br",
+        "host": "us-central1-fireemu-oracle-sbx.cloudfunctions.net"
       },
       "headerNames": [
         "accept-encoding",
@@ -4557,7 +4699,9 @@
         "content-length": "0",
         "x-cloudscheduler-jobname": "firebase-schedule-schedRetryV2-us-central1",
         "x-cloudscheduler-scheduletime": "2026-10-05T01:55:01.751605-07:00",
-        "x-forwarded-proto": "https"
+        "x-forwarded-proto": "https",
+        "accept-encoding": "gzip, deflate, br",
+        "host": "us-central1-fireemu-oracle-sbx.cloudfunctions.net"
       },
       "headerNames": [
         "accept-encoding",
@@ -4610,7 +4754,9 @@
         "content-length": "0",
         "x-cloudscheduler-jobname": "firebase-schedule-schedSlowV2-us-central1",
         "x-cloudscheduler-scheduletime": "2026-10-05T01:54:03.352477-07:00",
-        "x-forwarded-proto": "https"
+        "x-forwarded-proto": "https",
+        "accept-encoding": "gzip, deflate, br",
+        "host": "us-central1-fireemu-oracle-sbx.cloudfunctions.net"
       },
       "headerNames": [
         "accept-encoding",
@@ -4692,7 +4838,9 @@
         "content-length": "0",
         "x-cloudscheduler-jobname": "firebase-schedule-schedOkV2-us-central1",
         "x-cloudscheduler-scheduletime": "2026-10-05T01:56:01.416739-07:00",
-        "x-forwarded-proto": "https"
+        "x-forwarded-proto": "https",
+        "accept-encoding": "gzip, deflate, br",
+        "host": "us-central1-fireemu-oracle-sbx.cloudfunctions.net"
       },
       "headerNames": [
         "accept-encoding",
@@ -4743,7 +4891,9 @@
         "content-length": "0",
         "x-cloudscheduler-jobname": "firebase-schedule-schedSlowV2-us-central1",
         "x-cloudscheduler-scheduletime": "2026-10-05T01:56:03.352477-07:00",
-        "x-forwarded-proto": "https"
+        "x-forwarded-proto": "https",
+        "accept-encoding": "gzip, deflate, br",
+        "host": "us-central1-fireemu-oracle-sbx.cloudfunctions.net"
       },
       "headerNames": [
         "accept-encoding",
@@ -4795,7 +4945,9 @@
         "content-length": "0",
         "x-cloudscheduler-jobname": "firebase-schedule-schedSlowV2-us-central1",
         "x-cloudscheduler-scheduletime": "2026-10-05T01:56:03.352477-07:00",
-        "x-forwarded-proto": "https"
+        "x-forwarded-proto": "https",
+        "accept-encoding": "gzip, deflate, br",
+        "host": "us-central1-fireemu-oracle-sbx.cloudfunctions.net"
       },
       "headerNames": [
         "accept-encoding",

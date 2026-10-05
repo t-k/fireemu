@@ -69,7 +69,7 @@ test("the request is the recorded one: POST /, the scheduler headers, an empty b
     "x-cloudscheduler-scheduletime": "2026-10-05T01:45:00-07:00",
     "user-agent": "Google-Cloud-Scheduler",
     "content-length": "0",
-    // constant in all 150 recorded Gen2 frames (host: the function's public host, <region>-<project>.cloudfunctions.net)
+    // constant in all 76 distinct recorded Gen2 frames of run 2 (and the 3 of run 1) (host: the function's public host, <region>-<project>.cloudfunctions.net)
     "accept-encoding": "gzip, deflate, br",
     "x-forwarded-proto": "https",
     host: "us-central1-demo-app.cloudfunctions.net",

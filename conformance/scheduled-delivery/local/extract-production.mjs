@@ -15,6 +15,8 @@ export const KEPT_HEADERS = [
   "x-cloudscheduler-jobname",
   "x-cloudscheduler-scheduletime",
   "x-forwarded-proto",
+  "accept-encoding",
+  "host",
 ];
 
 const body = (row) => JSON.parse(Buffer.from(row.bodyBase64, "base64").toString("utf8"));

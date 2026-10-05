@@ -28,6 +28,7 @@ const NAMES = [
   "x-cloudscheduler",
   "x-cloudscheduler-jobname",
   "x-cloudscheduler-scheduletime",
+  "x-forwarded-proto",
 ];
 const jobId = (fn) => `firebase-schedule-${fn}-us-central1`;
 
@@ -44,6 +45,9 @@ function prodV2(handler, atMs, scheduleTime, job = jobId(handler)) {
       "content-length": "0",
       "x-cloudscheduler-jobname": job,
       "x-cloudscheduler-scheduletime": scheduleTime,
+      "accept-encoding": "gzip, deflate, br",
+      "x-forwarded-proto": "https",
+      host: "us-central1-fireemu-oracle-sbx.cloudfunctions.net",
     },
     headerNames: NAMES,
     rawBodyLength: null,
@@ -165,7 +169,13 @@ const localV2 = (handler, at, scheduleTime, over = {}) => ({
                   ? jobId(handler)
                   : n === "x-cloudscheduler-scheduletime"
                     ? scheduleTime
-                    : "x",
+                    : n === "accept-encoding"
+                      ? "gzip, deflate, br"
+                      : n === "x-forwarded-proto"
+                        ? "https"
+                        : n === "host"
+                          ? "us-central1-demo-app.cloudfunctions.net"
+                          : "x",
         ]),
       ),
       rawBodyLength: null,
@@ -1125,6 +1135,7 @@ const recorded = {
   naturalStartsInFlight: 0,
   occurrencesSkipped: true,
   forcedStartsInFlight: true,
+  startsOnTime: true,
 };
 
 test("cadence.in-flight-skip: production's runs skip occurrences, never start a natural one in flight, and let a forced one start inside", () => {
@@ -1150,6 +1161,7 @@ test("cadence.in-flight-skip: a local run that starts every occurrence overlaps 
     naturalStartsInFlight: 3,
     occurrencesSkipped: false,
     forcedStartsInFlight: false,
+    startsOnTime: true,
   });
   assert.equal(row.verdict, "DIVERGES");
 });
@@ -1227,8 +1239,8 @@ test("cadence.in-flight-skip: no local frames, a run that never ends, and an unf
 
 test("inFlightFacts: edges of the in-flight interval, the cadence factor and the end pairing", () => {
   const f = (start, end) => [
-    { phase: "start", at: start },
-    { phase: "end", at: end },
+    { phase: "start", at: start, scheduled: start },
+    { phase: "end", at: end, scheduled: start },
   ];
   // a start exactly at the end of a run is not inside it
   assert.equal(inFlightFacts([...f(0, 100), ...f(100, 200)], [], 60).naturalStartsInFlight, 0);
@@ -1249,6 +1261,7 @@ test("inFlightFacts: edges of the in-flight interval, the cadence factor and the
     naturalStartsInFlight: 0,
     occurrencesSkipped: false,
     forcedStartsInFlight: true,
+    startsOnTime: true,
   });
   // the same starts with the request outside the window of both: the second start is a natural one inside a run
   assert.equal(inFlightFacts(runs, [20], 60).naturalStartsInFlight, 1);
@@ -1267,6 +1280,7 @@ test("inFlightFacts: edges of the in-flight interval, the cadence factor and the
     naturalStartsInFlight: 0,
     occurrencesSkipped: false,
     forcedStartsInFlight: false,
+    startsOnTime: true,
   });
 });
 
@@ -1499,13 +1513,18 @@ const slowFacts = (p, runs, manual = []) => {
 
 test("inFlightFacts: the forced requests are matched in time order, whatever order they come in", () => {
   const f = (start, end) => [
-    { phase: "start", at: start },
-    { phase: "end", at: end },
+    { phase: "start", at: start, scheduled: start },
+    { phase: "end", at: end, scheduled: start },
   ];
   // requests at 6 and 11 each claim a start inside their window; the one at 11 could take the start at 10 that the
   // one at 6 needs, so the order they are matched in decides whether both runs are forced
   const runs = [...f(10, 100), ...f(16, 110)];
-  const both = { naturalStartsInFlight: 0, occurrencesSkipped: false, forcedStartsInFlight: true };
+  const both = {
+    naturalStartsInFlight: 0,
+    occurrencesSkipped: false,
+    forcedStartsInFlight: true,
+    startsOnTime: true,
+  };
   assert.deepEqual(inFlightFacts(runs, [11, 6], 60), both);
   assert.deepEqual(inFlightFacts(runs, [6, 11], 60), both);
 });
@@ -1662,4 +1681,98 @@ test("header names: one name each matches, and neither side having any is not a 
   // with one local name and only the declared one missing: declared
   const declared = names(["authorization", "host"], ["host"]);
   assert.match(declared.note, /^declared: not reproduced authorization /);
+});
+
+// ---- the three headers production sent in every frame: compared by value ----
+
+test("the accept-encoding, x-forwarded-proto and host values are compared; the host with only its project masked", () => {
+  const withHeader = (name, value) =>
+    mapV2(local(), (x) => ({
+      ...x,
+      value: {
+        ...x.value,
+        request: {
+          ...x.value.request,
+          headers: Object.fromEntries(
+            Object.entries(x.value.request.headers)
+              .filter(([k]) => value !== undefined || k !== name)
+              .map(([k, v]) => [k, k === name ? value : v]),
+          ),
+        },
+      },
+    }));
+  const verdict = (name, value) => headerRows(withHeader(name, value)).headers.verdict;
+  assert.equal(verdict("host", "us-central1-other-project.cloudfunctions.net"), "MATCH");
+  assert.equal(verdict("host", "europe-west1-demo-app.cloudfunctions.net"), "DIVERGES");
+  assert.equal(verdict("host", "us-central1-demo-app.example.com"), "DIVERGES");
+  assert.equal(verdict("host", "demo-app.cloudfunctions.net"), "DIVERGES");
+  assert.equal(verdict("host", undefined), "DIVERGES");
+  assert.equal(verdict("accept-encoding", "gzip"), "DIVERGES");
+  assert.equal(verdict("accept-encoding", undefined), "DIVERGES");
+  assert.equal(verdict("x-forwarded-proto", "http"), "DIVERGES");
+  assert.equal(verdict("x-forwarded-proto", undefined), "DIVERGES");
+  const forms = headerRows(local()).headers.production;
+  assert.ok(forms.every((f) => f["accept-encoding"] === "gzip, deflate, br"));
+  assert.ok(forms.every((f) => f["x-forwarded-proto"] === "https"));
+  assert.ok(forms.every((f) => f.host === "us-central1-<project>.cloudfunctions.net"));
+});
+
+// ---- cadence.in-flight-skip tells a skip from a queue ----
+
+test("cadence.in-flight-skip: a queueing model that starts each due occurrence when the running ones end diverges", () => {
+  // the reviewer's queue: nothing dropped, each occurrence waits and then starts at once (100.01 for the one due at
+  // 60 s, ...), so the starts keep their runs apart exactly as a skip does, but late against their own schedule time
+  const runs = [
+    [0, 100],
+    [100.01, 200.01],
+    [250.01, 350.01],
+    [420.01, 520.01],
+  ];
+  const due = [0, 60, 120, 180];
+  const lines = runs.flatMap(([start, end], i) => [
+    localV2("schedSlowV2", instant(T0 + start * 1000), la(T0 + due[i] * 1000), { phase: "start" }),
+    localV2("schedSlowV2", instant(T0 + end * 1000), la(T0 + due[i] * 1000), { phase: "end" }),
+  ]);
+  // the forced run [150, 250] in the middle, claimed by a manual run at 149
+  lines.push(
+    localV2("schedSlowV2", instant(T0 + 150_000), la(T0 + 150_000), { phase: "start" }),
+    localV2("schedSlowV2", instant(T0 + 250_000), la(T0 + 150_000), { phase: "end" }),
+  );
+  const row = inflightRow(
+    local({ inflight: lines, manual: [{ name: "schedSlowV2", at: instant(T0 + 149_000) }] }),
+  );
+  assert.equal(row.local.naturalStartsInFlight, 0);
+  assert.equal(row.local.occurrencesSkipped, true);
+  assert.equal(row.local.forcedStartsInFlight, true);
+  assert.equal(
+    row.local.startsOnTime,
+    false,
+    "every start after the first is late against its schedule time",
+  );
+  assert.equal(row.verdict, "DIVERGES");
+  assert.equal(row.production.startsOnTime, true);
+});
+
+test("inFlightFacts: starts are on time when their lag against their own schedule time varies by under five seconds", () => {
+  const f = (start, end, sched) => [
+    { phase: "start", at: start, scheduled: sched },
+    { phase: "end", at: end, scheduled: sched },
+  ];
+  const on = (frames) => inFlightFacts(frames, [], 60).startsOnTime;
+  // a constant lag of any size is on time (the timeline's origin is not the schedule's)
+  assert.equal(on([...f(10, 110, 0), ...f(130, 230, 120), ...f(250, 350, 240)]), true);
+  assert.equal(on([...f(10, 110, 0), ...f(134, 234, 120)]), true, "4 s of jitter");
+  assert.equal(on([...f(10, 110, 0), ...f(135, 235, 120)]), true, "exactly 5 s");
+  assert.equal(on([...f(10, 110, 0), ...f(135.01, 235, 120)]), false, "just over 5 s");
+  assert.equal(on([...f(10, 110, 0), ...f(125, 225, 120)]), true, "early by 5 s");
+  assert.equal(on([...f(10, 110, 0), ...f(124.9, 224.9, 120)]), false, "early by over 5 s");
+  // one late start among on-time ones
+  assert.equal(on([...f(10, 110, 0), ...f(130, 230, 120), ...f(300, 400, 240)]), false);
+  // a start with no schedule time is not on time; no starts, or one, is vacuously on time
+  assert.equal(on([...f(10, 110, undefined), ...f(130, 230, 120)]), false);
+  assert.equal(on([]), true);
+  assert.equal(on(f(10, 110, 0)), true);
+  // a forced run is not judged: its schedule time is the next one, in the future
+  const forced = [...f(10, 110, 0), ...f(50, 150, 500), ...f(130, 230, 120)];
+  assert.equal(inFlightFacts(forced, [49], 60).startsOnTime, true);
 });

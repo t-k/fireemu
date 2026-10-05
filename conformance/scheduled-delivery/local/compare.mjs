@@ -35,6 +35,9 @@ const v2Prod = (digest) => digest.frames.filter((f) => f.generation === 2);
 // The jobs the fixture deploys (the REST probe jobs `fe-sd-<runId>-*` carry the same handler but not the same ids).
 const DEPLOYED = /^firebase-schedule-/;
 const deployedJob = (frame) => DEPLOYED.test(frame.headers?.["x-cloudscheduler-jobname"] ?? "");
+/** A function host `<region>-<project>.cloudfunctions.net` with its project masked (the region is kept: it is recorded). */
+const maskHostProject = (host) =>
+  String(host).replace(/^([a-z]+-[a-z]+\d+)-.+(\.cloudfunctions\.net)$/, "$1-<project>$2");
 /** A job id or resource name with its project masked and nothing else: the id itself is compared by value. */
 const maskProject = (name) => String(name).replace(/^projects\/[^/]+\//, "projects/<project>/");
 const v1Prod = (digest) => digest.frames.filter((f) => f.generation === 1);
@@ -47,26 +50,31 @@ export const secondsOf = (instant) => {
 /** Seconds a forced run's first frame may trail (or, by a clock step, lead) the request that forced it. */
 const FORCED_FRAME_WINDOW = [-1, 5];
 
+/** The seconds the lag of a natural start against its own schedule time may vary by (production's varied by 0.8 s). */
+const ON_TIME_SPREAD = 5;
+
 /**
  * What a job whose handler outlasts its cadence did about overlap, from its `start` and `end` frames (`at` in
- * seconds on one timeline) and the instants its forced runs were requested. A forced run is the first unclaimed start
- * that follows a request within the window; every other start is a natural occurrence. A run is in flight from its
- * start to its end (a run never ended stays in flight), and the oldest open start is the one an end closes.
+ * seconds on one timeline, `scheduled` the schedule time of the occurrence in seconds) and the instants its forced runs
+ * were requested. A forced run is the first unclaimed start that follows a request within the window; every other start
+ * is a natural occurrence. A run is in flight from its start to its end (a run never ended stays in flight), and the
+ * oldest open start is the one an end closes.
  *
  * - `naturalStartsInFlight`: natural starts that began while another run of the job was in flight (production: none);
  * - `occurrencesSkipped`: whether two consecutive natural starts are more than one and a half cadences apart, so that
  *   an occurrence in between never started;
- * - `forcedStartsInFlight`: whether a forced run began while another run was in flight (production: yes).
+ * - `forcedStartsInFlight`: whether a forced run began while another run was in flight (production: yes);
+ * - `startsOnTime`: whether every natural start came when its own occurrence was due, to within a few seconds of the
+ *   others' lag. A queue also leaves two starts a cadence or more apart and none inside a run, but it starts each
+ *   occurrence late, after the run it waited for; a skip never delays one (production: no start more than 0.8 s off
+ *   the others' lag). A start with no schedule time is not on time.
  */
 export function inFlightFacts(frames, forcedAt, cadenceSeconds) {
-  const times = (phase) =>
-    frames
-      .filter((f) => f.phase === phase)
-      .map((f) => f.at)
-      .toSorted((a, b) => a - b);
-  const ends = times("end");
-  const runs = times("start").map((start, i) => ({
-    start,
+  const sorted = (phase) => frames.filter((f) => f.phase === phase).toSorted((a, b) => a.at - b.at);
+  const ends = sorted("end").map((f) => f.at);
+  const runs = sorted("start").map((f, i) => ({
+    start: f.at,
+    scheduled: f.scheduled,
     end: ends[i] ?? Number.POSITIVE_INFINITY,
     forced: false,
   }));
@@ -82,12 +90,15 @@ export function inFlightFacts(frames, forcedAt, cadenceSeconds) {
   const inFlight = (run) =>
     runs.some((other) => other !== run && other.start < run.start && run.start < other.end);
   const natural = runs.filter((r) => !r.forced);
+  const lags = natural.map((r) => r.start - r.scheduled);
   return {
     naturalStartsInFlight: natural.filter(inFlight).length,
     occurrencesSkipped: natural
       .slice(1)
       .some((r, i) => r.start - natural[i].start > cadenceSeconds * 1.5),
     forcedStartsInFlight: runs.some((r) => r.forced && inFlight(r)),
+    startsOnTime:
+      lags.every(Number.isFinite) && Math.max(...lags) - Math.min(...lags) <= ON_TIME_SPREAD,
   };
 }
 
@@ -185,6 +196,10 @@ export function rows(production, local) {
     "content-length",
     "x-cloudscheduler-jobname",
     "x-cloudscheduler-scheduletime",
+    // sent in every recorded frame: the front end's encodings and protocol, and the function's public host
+    "accept-encoding",
+    "x-forwarded-proto",
+    "host",
   ];
   const formOf = (headers) =>
     Object.fromEntries(
@@ -196,7 +211,9 @@ export function rows(production, local) {
             ? maskProject(headers[k])
             : k.includes("scheduletime")
               ? FORM(headers[k])
-              : headers[k],
+              : k === "host"
+                ? maskHostProject(headers[k])
+                : headers[k],
       ]),
     );
   // The recorded forms: production wrote the schedule time with a six-digit fraction on every occurrence after the
@@ -220,7 +237,7 @@ export function rows(production, local) {
     pForm,
     lForm,
     sameForms(pForm, lForm, withoutFraction),
-    "the five headers a handler can depend on; the job id is compared by value",
+    "the headers a handler can depend on, and the three production always sent (accept-encoding, x-forwarded-proto, the host with its project masked); the job id is compared by value",
   );
   // Every name production sent, against every name fireemu sends, in both directions: only the headers nothing here
   // can reproduce (the OIDC credential, the trace headers, `forwarded` and `x-forwarded-for`) are expected to be missing.
@@ -485,7 +502,7 @@ export function rows(production, local) {
   const slowFrames = (frames, atOf) =>
     frames
       .filter((f) => f.handler === SLOW && f.phase !== undefined)
-      .map((f) => ({ ...f, at: atOf(f) }));
+      .map((f) => ({ phase: f.phase, at: atOf(f), scheduled: secondsOf(f.event.scheduleTime) }));
   const pInFlight = inFlightFacts(
     slowFrames(pv2, (f) => f.at / 1000),
     (production.forced ?? [])
@@ -497,7 +514,11 @@ export function rows(production, local) {
   const lInFlight = inFlightFacts(
     inflight.lines
       .filter((l) => l.kind === "SCHED_DELIVERY_FRAME" && l.value.handler === SLOW)
-      .map((l) => ({ phase: l.value.phase, at: Date.parse(l.at) / 1000 })),
+      .map((l) => ({
+        phase: l.value.phase,
+        at: Date.parse(l.at) / 1000,
+        scheduled: secondsOf(l.value.event.scheduleTime),
+      })),
     (inflight.manual ?? []).filter((m) => m.name === SLOW).map((m) => Date.parse(m.at) / 1000),
     60,
   );

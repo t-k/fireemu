@@ -9,7 +9,7 @@
 // Exit codes: 0 done, 1 cleanup left something, 2 usage, 3 stopped clean on a missing precondition or a
 // signal, 4 the request budget was spent.
 
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import { createBudget, createCapture, createFileJournal } from "./capture.mjs";
 import { cleanup } from "./cleanup.mjs";
@@ -158,6 +158,32 @@ export async function main(
         throw new Error(
           `--cleanup-only runs at least ${MIN_A2_WAIT_MS / 60000} minutes after the recording (${Math.ceil(waited / 1000)} s so far)`,
         );
+      const originalDir = dirname(options.fromCapture);
+      const priorA2 = readdirSync(originalDir).some(
+        (file) =>
+          file.startsWith(`capture-${options.runId}-a2-`) ||
+          file.startsWith(`issued-${options.runId}-a2-`) ||
+          file === `a2-started-${options.runId}.json`,
+      );
+      if (priorA2)
+        throw new Error(
+          "A2 has already started; use a new recovery packet with the full issued history",
+        );
+      // Keep the atomic one-use marker beside the original input even if output is written elsewhere.
+      try {
+        writeFileSync(
+          join(originalDir, `a2-started-${options.runId}.json`),
+          `${JSON.stringify({ runId: options.runId, startedAt: new Date(deps.now()).toISOString() })}\n`,
+          { flag: "wx", mode: 0o600 },
+        );
+      } catch (error) {
+        if (error.code === "EEXIST")
+          throw new Error(
+            "A2 has already started; use a new recovery packet with the full issued history",
+            { cause: error },
+          );
+        throw error;
+      }
       a2ElapsedMs = waited;
       suffix = `-a2-${stamp(deps.now())}`;
     }

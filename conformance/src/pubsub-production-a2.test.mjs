@@ -235,7 +235,7 @@ test("the probe IDs of the names case come from the run, differ between runs and
 });
 
 /** An emulator that lists nothing (a lagging list) but answers a read of a name and deletes one. */
-async function service({ live = [], stuck = [] }) {
+async function service({ live = [], stuck = [], unknownDeletes = false }) {
   const present = new Set(live);
   const seen = [];
   const server = createServer((request, response) => {
@@ -251,6 +251,10 @@ async function service({ live = [], stuck = [] }) {
       return response.end(JSON.stringify({ name: path }));
     if (request.method === "DELETE" && present.has(path)) {
       if (!stuck.includes(path)) present.delete(path);
+      if (unknownDeletes) {
+        response.statusCode = 503;
+        return response.end('{"error":{"status":"UNAVAILABLE"}}');
+      }
       return response.end("{}");
     }
     response.statusCode = 404;
@@ -416,4 +420,49 @@ test("the later run is not closable while a name stays, and reports it", async (
     [summary.closureReady, summary.cleanup.leftover, summary.cleanup.unsettled],
     [false, [stuck], [stuck]],
   );
+});
+
+test("a subsequent A2 fails closed before any wire call after the first A2's unknown DELETE, including changed output dirs and early 404", async (t) => {
+  for (const remains of [true, false]) {
+    const name = mine(`a2-unknown-delete-${remains}`);
+    const svc = await service({ live: [name], stuck: remains ? [name] : [], unknownDeletes: true });
+    t.after(svc.close);
+    const dir = recording([[name, "create", "ok"]]);
+    const firstOut = mkdtempSync(join(tmpdir(), "pubsub-a2-first-"));
+    const first = await main(a2(dir, svc.host, firstOut), {}, io(), {
+      now: () => T0 + MIN_A2_WAIT_MS,
+      sleep: async () => {},
+    });
+    assert.equal(first, 1);
+    assert.equal(summaryOf(firstOut).cleanup.outstandingActions.length, 1);
+    const before = [...svc.seen];
+    const errors = [];
+    const secondOut = mkdtempSync(join(tmpdir(), "pubsub-a2-second-"));
+    const second = await main(a2(dir, svc.host, secondOut), {}, io(errors), {
+      now: () => T0 + MIN_A2_WAIT_MS + 1000,
+      sleep: async () => {},
+    });
+    assert.equal(second, 2);
+    assert.match(errors.join(""), /A2.*already.*recovery packet/i);
+    assert.deepEqual(svc.seen, before);
+    assert.deepEqual(readdirSync(secondOut), []);
+    assert.equal(svc.seen.filter((call) => call.startsWith("DELETE")).length, 1);
+  }
+});
+
+test("legacy A2 artifacts without a start marker also prevent a fresh original-only recovery", async (t) => {
+  const svc = await service({});
+  t.after(svc.close);
+  const dir = recording([]);
+  writeFileSync(join(dir, `issued-${RUN}-a2-20261005T101000Z.jsonl`), "");
+  const errors = [];
+  assert.equal(
+    await main(a2(dir, svc.host), {}, io(errors), {
+      now: () => T0 + MIN_A2_WAIT_MS + 1000,
+      sleep: async () => {},
+    }),
+    2,
+  );
+  assert.match(errors.join(""), /A2.*already.*recovery packet/i);
+  assert.deepEqual(svc.seen, []);
 });

@@ -160,6 +160,12 @@ export function createLedger({
       const item = names.get(name);
       if (ledger.unconfirmed(name)) return false;
       const requests = item?.requests ?? [];
+      if (
+        requests.length > 0 &&
+        requests.every((r) => ["rejected", "gone", "gone-a2"].includes(r.resolution)) &&
+        requests.some((r) => r.resolution === "gone" || r.resolution === "gone-a2")
+      )
+        return true;
       const aged = Number.isFinite(a2ElapsedMs) && a2ElapsedMs >= MIN_ABSENCE_WAIT_MS;
       if (
         ledger.deleting(name) &&

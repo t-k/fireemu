@@ -454,3 +454,52 @@ test("a new unknown DELETE issued inside aged A2 remains open after its immediat
   assert.equal(f.ledger.deleting(f.name), true);
   assert.equal(f.calls.filter((c) => c.method === "DELETE").length, 1);
 });
+
+test("cleanup replays settled absence idempotently but a later CREATE reopens the name", async () => {
+  const { mkdtempSync, writeFileSync, rmSync } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const { join } = await import("node:path");
+  const { readLedger } = await import("./pubsub-production/ledger.mjs");
+  const ownership = own();
+  const name = ownership.resource("topics", "durable-gone");
+  const lines = [];
+  const original = createLedger({ journal: { write: (line) => lines.push(line) } });
+  issue(original, name, "create", "ok");
+  issue(original, name, "delete", "ok");
+  assert.equal(original.settleAbsent(name, missing), true);
+  const dir = mkdtempSync(join(tmpdir(), "pubsub-cleanup-replay-"));
+  try {
+    const path = join(dir, "issued.jsonl");
+    writeFileSync(path, lines.map((line) => JSON.stringify(line)).join("\n") + "\n");
+    const ledger = readLedger(path);
+    const client = createClient({
+      ownership,
+      ledger,
+      pushState: newPushState(),
+      caseId: "cleanup",
+      transport: {
+        name: "rest",
+        request: async (call) =>
+          call.path.includes("?") ? { status: 200, body: {}, unknown: false } : missing,
+      },
+    });
+    const report = await cleanup({
+      client,
+      ledger,
+      ownership,
+      project: "demo-project",
+      sleep: async () => {},
+      a2ElapsedMs: MIN_A2_WAIT_MS,
+    });
+    assert.deepEqual(report.unsettled, []);
+    assert.deepEqual(report.outstandingActions, []);
+    issue(ledger, name, "create", "ok");
+    assert.deepEqual(
+      (await cleanup({ client, ledger, ownership, project: "demo-project", sleep: async () => {} }))
+        .unsettled,
+      [name],
+    );
+  } finally {
+    rmSync(dir, { recursive: true });
+  }
+});

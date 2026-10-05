@@ -2254,6 +2254,19 @@ mod publication_gate_tests {
         let pulled = handle.pull(&subscription, 10).unwrap();
         assert_eq!(pulled.len(), 1);
         assert_eq!(pulled[0].message.message_id, "21339796619509982");
+        // an ordinary publish still numbers its message and reports it, and reaches the bridge as well
+        let ordinary = handle
+            .publish(
+                &topic,
+                vec![PubsubMessage {
+                    data: b"x".to_vec(),
+                    ..PubsubMessage::default()
+                }],
+            )
+            .unwrap();
+        assert_eq!(ordinary.len(), 1);
+        assert_eq!(ordinary[0].message_id, "1");
+        assert_eq!(reserved.load(Ordering::SeqCst), 2);
         assert_eq!(pulled[0].message.publish_time, at);
         assert!(pulled[0].message.message.data.is_empty());
         // an unknown topic publishes nothing and reserves nothing more
@@ -2265,7 +2278,7 @@ mod publication_gate_tests {
                 at
             )
             .is_err());
-        assert_eq!(reserved.load(Ordering::SeqCst), 1);
+        assert_eq!(reserved.load(Ordering::SeqCst), 2);
     }
 
     /// PUBGATE-1: the publication gate is held across the control-plane transitions that

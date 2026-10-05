@@ -5043,6 +5043,15 @@ impl FunctionsHook for Hook {
     }
 }
 
+/// Whether a schedule's message is published to its topic: the strict profile does, as Cloud Scheduler does, when a
+/// Pub/Sub broker is served to publish into.
+pub(crate) const fn publishes_schedule_messages(
+    pubsub_served: bool,
+    profile: CompatibilityProfile,
+) -> bool {
+    pubsub_served && uses_production_scheduler_defaults(profile)
+}
+
 /// Publishes the message of a first-generation schedule run to its topic in the Pub/Sub broker, as Cloud Scheduler does
 /// in production (strict profile): the message has the attribute `scheduled: "true"` and no data, the id and the publish
 /// time the handler's context reports. The runtime still delivers the schedule event to the handler itself, so the
@@ -9090,6 +9099,65 @@ mod tests {
             ]
         );
         assert!(emulator.iter().all(|r| r.subscription.is_some()));
+    }
+
+    /// A topic that two functions declare is one resource: the diagnostics name the smaller owner whichever comes first,
+    /// and the emulator subscribes to it when any declaration is a function's own subscription (a schedule's topic that a
+    /// Pub/Sub function also listens on keeps its subscription).
+    #[test]
+    fn a_topic_declared_twice_keeps_the_smaller_owner_and_a_subscription_if_any_declaration_wants_one(
+    ) {
+        for names in [["a", "b"], ["b", "a"]] {
+            let functions: Vec<_> = names
+                .iter()
+                .map(|n| json!({"name": n, "trigger": {"type": "pubsub", "topic": "bad topic"}}))
+                .collect();
+            let manifest = parse_manifest(&json!({ "functions": functions })).unwrap();
+            let error =
+                function_pubsub_resources("demo-app", &manifest, CompatibilityProfile::Emulator)
+                    .unwrap_err();
+            assert!(error.starts_with("function \"a\" requires"), "{error}");
+        }
+        for names in [["tick", "listener"], ["listener", "tick"]] {
+            let functions: Vec<_> = names
+                .iter()
+                .map(|n| {
+                    if *n == "tick" {
+                        json!({"name": "tick", "trigger": {"type": "schedule", "schedule": "every 5 minutes"}})
+                    } else {
+                        json!({"name": "listener", "trigger": {"type": "pubsub", "topic": "firebase-schedule-tick-us-central1"}})
+                    }
+                })
+                .collect();
+            let manifest = parse_manifest(&json!({ "functions": functions })).unwrap();
+            let resources =
+                function_pubsub_resources("demo-app", &manifest, CompatibilityProfile::Strict)
+                    .unwrap();
+            assert_eq!(resources.len(), 1);
+            assert!(resources[0].subscription.is_some(), "{names:?}");
+        }
+    }
+
+    /// The strict profile publishes a schedule's message when a broker is served; the emulator profile never does.
+    #[test]
+    fn schedule_messages_are_published_by_the_strict_profile_with_a_broker_only() {
+        use super::publishes_schedule_messages;
+        assert!(publishes_schedule_messages(
+            true,
+            CompatibilityProfile::Strict
+        ));
+        assert!(!publishes_schedule_messages(
+            false,
+            CompatibilityProfile::Strict
+        ));
+        assert!(!publishes_schedule_messages(
+            true,
+            CompatibilityProfile::Emulator
+        ));
+        assert!(!publishes_schedule_messages(
+            false,
+            CompatibilityProfile::Emulator
+        ));
     }
 
     /// Provisioning a strict schedule topic creates the topic and no subscription.

@@ -7115,6 +7115,78 @@ mod schedule_capacity_tests {
         finish(&second).await;
     }
 
+    /// The ids are pinned, computed independently of the implementation: `2` followed by `(ordinal * 6364136223846793003
+    /// + session) mod 10^16` in sixteen digits.
+    #[test]
+    fn schedule_message_ids_have_the_pinned_values() {
+        for (session, ordinal, expected) in [
+            (7, 1, "24136223846793010"),
+            (7, 2, "28272447693586013"),
+            (7, 3, "22408671540379016"),
+            (0, 1, "24136223846793003"),
+            (
+                123_456_789_012_345_678_901_234_567_890,
+                5,
+                "26360020468532905",
+            ),
+            (7, 1_000_000_000_000, "23003000000000007"),
+        ] {
+            assert_eq!(
+                super::schedule_message_id(SessionId::new(session), ordinal),
+                expected,
+                "{session} {ordinal}"
+            );
+        }
+    }
+
+    /// The `id` of a queued schedule event is the session and the number the runtime gave the event, and the message id
+    /// is made from that same number: a handler's event and its message name one occurrence.
+    #[tokio::test]
+    async fn the_event_id_and_the_message_id_come_from_the_number_of_the_event() {
+        let (runtime, clock) = runtime(CatchUpPolicy::All).await;
+        let recorder = Arc::new(Recorder::default());
+        runtime.set_schedule_topic_publisher(recorder.clone());
+        advance(&clock, 5 * 60);
+        runtime.on_clock_changed();
+        runtime.run_schedule("tick").unwrap();
+        let queued: Vec<(u128, String, Option<String>)> = {
+            let inner = runtime.inner.lock().unwrap();
+            inner
+                .payloads
+                .iter()
+                .map(|(id, queued)| {
+                    (
+                        id.value(),
+                        queued.payload["id"].as_str().unwrap().to_owned(),
+                        queued.payload["data"]["messageId"]
+                            .as_str()
+                            .map(str::to_owned),
+                    )
+                })
+                .collect()
+        };
+        assert_eq!(queued.len(), 2);
+        for (number, id, message_id) in &queued {
+            assert_eq!(id, &format!("7-{number}"));
+            assert_eq!(
+                message_id.as_deref(),
+                Some(
+                    super::schedule_message_id(SessionId::new(7), u64::try_from(*number).unwrap())
+                        .as_str()
+                )
+            );
+        }
+        let published = recorded(&recorder);
+        assert_eq!(
+            published.iter().map(|p| p.1.clone()).collect::<Vec<_>>(),
+            queued
+                .iter()
+                .filter_map(|q| q.2.clone())
+                .collect::<Vec<_>>()
+        );
+        finish(&runtime).await;
+    }
+
     proptest::proptest! {
         /// A message id is 17 digits starting with 2, and no two events of one session share one.
         #[test]

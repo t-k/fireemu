@@ -575,7 +575,7 @@ fn assemble_adapters(bound: BoundStartup) -> Result<ServiceAssembly, String> {
     );
     // Under the strict profile a first-generation schedule's occurrence also puts its message on the job's topic, as Cloud
     // Scheduler does; without a Pub/Sub listener there is no topic and nothing to publish to.
-    if pubsub_listener.is_some() && functions::uses_production_scheduler_defaults(cfg.profile) {
+    if functions::publishes_schedule_messages(pubsub_listener.is_some(), cfg.profile) {
         if let Some(runtime) = &functions_runtime {
             runtime.set_schedule_topic_publisher(Arc::new(
                 functions::PubSubSchedulePublisher::new(pubsub_handle.clone(), runtime.project()),

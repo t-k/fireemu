@@ -371,3 +371,127 @@ test("the request budget stops the run instead of exceeding the cap", async () =
 test("the recorded services list is the shape the fake answers with", () => {
   assert.equal(recorded.servicesEnabledList.body.services[0].state, "ENABLED");
 });
+
+test("the project number may have thirteen digits and not fourteen", async () => {
+  // Accepted as an argument: whatever else happens with the fake, it is not this refusal.
+  await run(fakeServer(), { projectNumber: "1234567890123" }).catch((error) =>
+    assert.doesNotMatch(String(error.message), /invalid project number/),
+  );
+  await assert.rejects(
+    () => run(fakeServer(), { projectNumber: "12345678901234" }),
+    /invalid project number/,
+  );
+  await assert.rejects(
+    () => run(fakeServer(), { projectNumber: "12345678901" }),
+    /invalid project number/,
+  );
+});
+
+test("the timeouts are sixty seconds for the enable, thirty for a service list and ten for the rest", async () => {
+  const { journal } = await run(fakeServer());
+  for (const row of journal.filter((r) => r.state === "before-send")) {
+    const expected =
+      row.id === "enable-apis" ? 60000 : row.id.startsWith("services-") ? 30000 : 10000;
+    assert.equal(row.timeoutMs, expected, row.id);
+  }
+});
+
+test("a service list of exactly five pages is read and one of six is incomplete", async () => {
+  const targets = [...TARGET_SERVICES];
+  const five = fakeServer({ enabled: [...targets, ...BASE_ENABLED.slice(0, 7)], pageSize: 3 }); // 15 services
+  const a = await run(five);
+  assert.deepEqual(a.result.incompleteReads, []);
+  assert.equal(a.result.stage, "done");
+  assert.ok(ids(a.journal).includes("services-before-page-5"));
+  const six = fakeServer({ enabled: [...targets, ...BASE_ENABLED.slice(0, 8)], pageSize: 3 }); // 16 services
+  const b = await run(six);
+  assert.deepEqual(b.result.incompleteReads, [
+    { id: "services-before", class: "more-than-five-pages" },
+  ]);
+  assert.equal(b.result.stage, "preflight");
+});
+
+test("one missing service is enough to enable, and none is not", async () => {
+  const one = fakeServer({ enabled: [...BASE_ENABLED, ...TARGET_SERVICES.slice(1)] });
+  const a = await run(one);
+  assert.deepEqual(a.result.requested, [TARGET_SERVICES[0]]);
+  assert.equal(writes(one).length, 1);
+  assert.equal(a.result.closureReady, true);
+});
+
+test("an operation that failed is polled once, and one that is done at once is not polled", async () => {
+  const failed = fakeServer({
+    pendingPolls: 0,
+    hooks: {
+      "GET v1/operations/acf.p2-<number>-e627f9a7-0f50-48e6-856c-93ad311e8f0e": async () =>
+        reply(200, {
+          name: "operations/acf.p2-" + NUMBER + "-e627f9a7-0f50-48e6-856c-93ad311e8f0e",
+          done: true,
+          error: { code: 13 },
+        }),
+    },
+  });
+  const a = await run(failed);
+  assert.equal(failed.state.calls.filter((c) => c.includes("v1/operations/")).length, 1);
+  assert.equal(a.result.batchEnable.done, true);
+  const immediate = fakeServer({
+    hooks: {
+      [ENABLE]: async ({ state, body }) => {
+        for (const id of body.serviceIds) state.enabled.add(id);
+        return reply(200, {
+          name: "operations/acf.p2-" + NUMBER + "-e627f9a7-0f50-48e6-856c-93ad311e8f0e",
+          done: true,
+          response: {},
+        });
+      },
+    },
+  });
+  const b = await run(immediate);
+  assert.equal(immediate.state.calls.filter((c) => c.includes("v1/operations/")).length, 0);
+  assert.equal(b.result.batchEnable.done, true);
+  assert.equal(b.result.closureReady, true);
+});
+
+test("a 400 on an ordinary read is incomplete, and the empty-list judgement needs a 200 with no keys", async () => {
+  const bad = fakeServer({
+    hooks: {
+      [key("POST", "v1/projects/" + PROJECT + ":getIamPolicy")]: async () => error(400, "bad"),
+    },
+  });
+  const a = await run(bad);
+  assert.ok(a.result.incompleteReads.some((r) => r.id === "iam-before" && r.class === "4xx"));
+  const lists = [
+    [
+      "GET v1/projects/" + PROJECT + "/locations/us-central1/functions",
+      reply(200, { functions: [{ name: "f" }] }),
+      "functions-v1",
+      false,
+    ],
+    [
+      "GET v2/projects/" + PROJECT + "/locations/us-central1/functions",
+      error(404, "x"),
+      "functions-v2",
+      false,
+    ],
+    [
+      "GET v2/projects/" + PROJECT + "/locations/us-central1/services",
+      new Response("not json", { status: 200 }),
+      "run-services",
+      false,
+    ],
+    [
+      "GET v1/projects/" + PROJECT + "/locations/us-central1/repositories",
+      new Response("{}\n", { status: 201 }),
+      "artifact-repositories",
+      false,
+    ],
+  ];
+  const server = fakeServer({
+    hooks: Object.fromEntries(lists.map(([k, response]) => [k, async () => response.clone()])),
+  });
+  const { result } = await run(server);
+  for (const [, , id, empty] of lists) assert.equal(result.lists[id].empty, empty, id);
+  const clean = await run(fakeServer());
+  for (const id of Object.keys(clean.result.lists))
+    assert.equal(clean.result.lists[id].empty, true, id);
+});

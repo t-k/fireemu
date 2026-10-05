@@ -255,6 +255,8 @@ pub struct FunctionsConfig {
     pub functions_host: Option<String>,
     /// How the subscription of a Pub/Sub function is named (and which the events name): by profile.
     pub subscription_naming: crate::events::SubscriptionNaming,
+    /// How the writer of a Firestore event with auth context is named: by profile.
+    pub auth_context: crate::events::AuthContextNaming,
 }
 
 impl std::fmt::Debug for FunctionsConfig {
@@ -273,6 +275,7 @@ impl std::fmt::Debug for FunctionsConfig {
             .field("catch_up", &self.catch_up)
             .field("functions_host", &self.functions_host)
             .field("subscription_naming", &self.subscription_naming)
+            .field("auth_context", &self.auth_context)
             .finish()
     }
 }
@@ -2043,10 +2046,12 @@ impl FunctionsRuntime {
                     change.before.as_deref(),
                     change.after.as_deref(),
                     time,
-                    with_auth.then_some((
-                        commit.actor.auth_type.as_str(),
-                        commit.actor.auth_id.as_deref(),
-                    )),
+                    with_auth.then(|| {
+                        self.auth_context_of(
+                            &commit.actor.auth_type,
+                            commit.actor.auth_id.as_deref(),
+                        )
+                    }),
                 );
                 payload["params"] = json!(m.params);
                 let event_type = payload
@@ -2208,6 +2213,16 @@ impl FunctionsRuntime {
             message,
             time,
         )
+    }
+
+    /// The `(authtype, authid)` a Firestore event with auth context names for the actor of a
+    /// commit: by profile (see [`crate::events::auth_context_for`]).
+    fn auth_context_of<'a>(
+        &self,
+        auth_type: &'a str,
+        auth_id: Option<&'a str>,
+    ) -> (&'a str, Option<&'a str>) {
+        crate::events::auth_context_for(self.config.auth_context, auth_type, auth_id)
     }
 
     /// Reserves the complete Pub/Sub topic-trigger fan-out for broker messages that already have
@@ -5177,6 +5192,7 @@ mod task_completion_tests {
                 catch_up: super::CatchUpPolicy::All,
                 functions_host: Some("127.0.0.1:5001".to_owned()),
                 subscription_naming: crate::events::SubscriptionNaming::default(),
+                auth_context: crate::events::AuthContextNaming::default(),
             },
             Arc::new(Mutex::new(VirtualClock::new(
                 LogicalInstant::from_unix_seconds(1_788_004_860),
@@ -5251,6 +5267,132 @@ mod task_completion_tests {
             named(&emulator_runtime, &first_gen),
             "projects/demo-app/subscriptions/emulator-sub-jobs"
         );
+    }
+
+    #[tokio::test]
+    async fn the_event_names_its_writer_by_profile() {
+        use crate::events::{AuthContextNaming, OFFICIAL_AUTH_ID};
+        let runtime = runtime().await;
+        // The default is production's naming (the strict profile).
+        assert_eq!(
+            runtime.auth_context_of("app_user", Some("alice")),
+            ("api_key", Some("alice"))
+        );
+        assert_eq!(
+            runtime.auth_context_of("service_account", Some("owner")),
+            ("unknown", Some("owner"))
+        );
+        assert_eq!(runtime.auth_context_of("system", None), ("system", None));
+        // The emulator profile's: the official emulator's constants for every writer.
+        let mut config = runtime.config.clone();
+        config.auth_context = AuthContextNaming::Official;
+        let official = FunctionsRuntime::new(
+            runtime.manifest.clone(),
+            config,
+            Arc::new(Mutex::new(VirtualClock::new(
+                LogicalInstant::from_unix_seconds(1_788_004_860),
+            ))),
+            runtime.runner(),
+            None,
+        );
+        for (kind, id) in [
+            ("app_user", Some("alice")),
+            ("service_account", Some("owner")),
+            ("system", None),
+        ] {
+            assert_eq!(
+                official.auth_context_of(kind, id),
+                ("unknown", Some(OFFICIAL_AUTH_ID)),
+                "{kind}"
+            );
+        }
+    }
+
+    /// The delivered payload, not only the mapping function, names the writer by profile: a call
+    /// site that passed the commit's actor through raw would fail here (the live-daemon test of the
+    /// same behaviour is ignored by default).
+    #[tokio::test]
+    async fn the_reserved_payload_of_an_auth_context_event_names_its_writer_by_profile() {
+        use crate::events::{AuthContextNaming, OFFICIAL_AUTH_ID};
+        let base = runtime().await;
+        let commit_by = |auth_type: &str, auth_id: Option<&str>| {
+            let mut commit = created_commit();
+            commit.actor = Actor {
+                auth_type: auth_type.to_owned(),
+                auth_id: auth_id.map(str::to_owned),
+            };
+            // The fake runner's `withAuth` function listens on `audited/{id}`.
+            let path = DocumentPath::parse(
+                &ProjectId::try_new("demo-app").unwrap(),
+                &DatabaseId::try_new("(default)").unwrap(),
+                "audited/reserved",
+            )
+            .unwrap();
+            let mut change = commit.changes[0].clone();
+            change.path = path.clone();
+            if let Some(after) = change.after.as_mut() {
+                Arc::make_mut(after).path = path;
+            }
+            commit.changes = Arc::from([change]);
+            commit
+        };
+        let named = |runtime: &Arc<FunctionsRuntime>, commit: &CommitEvent| {
+            let reservation = runtime.reserve_commit_events(commit).unwrap();
+            let deliveries = reservation.deliveries.as_ref().unwrap();
+            assert_eq!(deliveries.len(), 1, "only the withAuth function listens");
+            let payload = &deliveries[0].payload.payload;
+            (
+                payload["authtype"].as_str().map(str::to_owned),
+                payload["authid"].as_str().map(str::to_owned),
+            )
+        };
+        let production =
+            |kind: &str, id: Option<&str>| (Some(kind.to_owned()), id.map(str::to_owned));
+        // Strict (the default): production's names.
+        for (actor, expected) in [
+            (
+                ("app_user", Some("alice")),
+                production("api_key", Some("alice")),
+            ),
+            (
+                ("service_account", Some("owner")),
+                production("unknown", Some("owner")),
+            ),
+            // Near miss: a principal production was not recorded with keeps its own name.
+            (
+                ("unauthenticated", None),
+                (Some("unauthenticated".to_owned()), None),
+            ),
+        ] {
+            assert_eq!(
+                named(&base, &commit_by(actor.0, actor.1)),
+                expected,
+                "{actor:?}"
+            );
+        }
+        // The emulator profile: the official emulator's constants for every writer.
+        let mut config = base.config.clone();
+        config.auth_context = AuthContextNaming::Official;
+        let official = FunctionsRuntime::new(
+            base.manifest.clone(),
+            config,
+            Arc::new(Mutex::new(VirtualClock::new(
+                LogicalInstant::from_unix_seconds(1_788_004_860),
+            ))),
+            base.runner(),
+            None,
+        );
+        for actor in [
+            ("app_user", Some("alice")),
+            ("service_account", Some("owner")),
+            ("unauthenticated", None),
+        ] {
+            assert_eq!(
+                named(&official, &commit_by(actor.0, actor.1)),
+                production("unknown", Some(OFFICIAL_AUTH_ID)),
+                "{actor:?}"
+            );
+        }
     }
 
     #[tokio::test]
@@ -5757,6 +5899,7 @@ mod schedule_capacity_tests {
                 catch_up,
                 functions_host: Some("127.0.0.1:5001".to_owned()),
                 subscription_naming: crate::events::SubscriptionNaming::default(),
+                auth_context: crate::events::AuthContextNaming::default(),
             },
             clock.clone(),
             Arc::new(runner),
@@ -7233,6 +7376,7 @@ mod storage_event_instant_tests {
                 catch_up: super::CatchUpPolicy::All,
                 functions_host: Some("127.0.0.1:5001".to_owned()),
                 subscription_naming: crate::events::SubscriptionNaming::default(),
+                auth_context: crate::events::AuthContextNaming::default(),
             },
             clock.clone(),
             Arc::new(runner),

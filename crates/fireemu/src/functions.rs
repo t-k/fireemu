@@ -48,6 +48,21 @@ pub fn subscription_naming(
     }
 }
 
+/// How the strict and the emulator profile name the writer of a Firestore event with auth context:
+/// the strict profile as production does (`api_key` for an ID-token write, `unknown` for a service
+/// credential), the emulator profile as the official emulator does (`unknown` and
+/// `fake-auth-id@gmail.com` for every writer).
+#[must_use]
+pub fn auth_context_naming(
+    profile: CompatibilityProfile,
+) -> fireemu_adapter_functions::events::AuthContextNaming {
+    use fireemu_adapter_functions::events::AuthContextNaming;
+    match profile {
+        CompatibilityProfile::Strict => AuthContextNaming::Production,
+        CompatibilityProfile::Emulator => AuthContextNaming::Official,
+    }
+}
+
 /// Derives the unique Pub/Sub resources required by Pub/Sub and scheduled functions. Under
 /// `SubscriptionNaming::Eventarc` every 2nd gen Pub/Sub function gets its own subscription, so
 /// two functions on one topic give two resources; otherwise a topic gets one `emulator-sub-<topic>`.
@@ -2590,6 +2605,7 @@ pub async fn start(
             .unwrap_or_default(),
         functions_host: hosts.functions.clone(),
         subscription_naming: subscription_naming(cfg.profile),
+        auth_context: auth_context_naming(cfg.profile),
     };
     // A function name two codebases both export is fatal here. The runners it collided
     // between are killed rather than left behind a daemon that refuses to serve them.
@@ -6348,6 +6364,7 @@ mod tests {
                 functions_host: None,
                 subscription_naming: fireemu_adapter_functions::events::SubscriptionNaming::default(
                 ),
+                auth_context: fireemu_adapter_functions::events::AuthContextNaming::default(),
             },
             clock.clone(),
             Arc::new(runner),
@@ -7597,6 +7614,7 @@ mod tests {
                 functions_host: None,
                 subscription_naming: fireemu_adapter_functions::events::SubscriptionNaming::default(
                 ),
+                auth_context: fireemu_adapter_functions::events::AuthContextNaming::default(),
             },
             Arc::new(Mutex::new(VirtualClock::new(
                 LogicalInstant::from_unix_seconds(1_788_004_860),
@@ -7659,6 +7677,7 @@ mod tests {
                 functions_host: None,
                 subscription_naming: fireemu_adapter_functions::events::SubscriptionNaming::default(
                 ),
+                auth_context: fireemu_adapter_functions::events::AuthContextNaming::default(),
             },
             Arc::new(Mutex::new(VirtualClock::new(
                 LogicalInstant::from_unix_seconds(1_788_004_860),
@@ -7870,6 +7889,7 @@ mod tests {
                 functions_host: None,
                 subscription_naming: fireemu_adapter_functions::events::SubscriptionNaming::default(
                 ),
+                auth_context: fireemu_adapter_functions::events::AuthContextNaming::default(),
             },
             Arc::new(Mutex::new(VirtualClock::new(now))),
             Arc::new(runner),
@@ -9225,6 +9245,20 @@ mod tests {
     }
 
     #[test]
+    fn the_profile_chooses_how_the_writer_of_an_auth_context_event_is_named() {
+        use crate::config::CompatibilityProfile;
+        use fireemu_adapter_functions::events::AuthContextNaming;
+        assert_eq!(
+            super::auth_context_naming(CompatibilityProfile::Strict),
+            AuthContextNaming::Production
+        );
+        assert_eq!(
+            super::auth_context_naming(CompatibilityProfile::Emulator),
+            AuthContextNaming::Official
+        );
+    }
+
+    #[test]
     fn pubsub_bridge_accepts_only_the_runtime_projects_full_topic_resource() {
         assert_eq!(
             owned_pubsub_topic("demo-app", "projects/demo-app/topics/jobs")
@@ -9274,6 +9308,7 @@ mod tests {
                 functions_host: None,
                 subscription_naming: fireemu_adapter_functions::events::SubscriptionNaming::default(
                 ),
+                auth_context: fireemu_adapter_functions::events::AuthContextNaming::default(),
             },
             clock.clone(),
             Arc::new(runner),
@@ -9379,6 +9414,7 @@ mod tests {
                 functions_host: None,
                 subscription_naming: fireemu_adapter_functions::events::SubscriptionNaming::default(
                 ),
+                auth_context: fireemu_adapter_functions::events::AuthContextNaming::default(),
             },
             clock.clone(),
             Arc::new(runner),

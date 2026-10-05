@@ -741,6 +741,7 @@ mod tests {
                 functions_host: Some("127.0.0.1:5001".to_owned()),
                 subscription_naming: fireemu_adapter_functions::events::SubscriptionNaming::default(
                 ),
+                auth_context: fireemu_adapter_functions::events::AuthContextNaming::default(),
             },
             clock,
             Arc::new(runner),

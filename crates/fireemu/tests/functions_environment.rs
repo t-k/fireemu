@@ -976,6 +976,88 @@ const assert = require('node:assert/strict');
     }
 }
 
+/// The strict profile names the writer of a Firestore event with auth context as production does
+/// (`api_key` and the uid for a write with a Firebase ID token, `unknown` and the credential's own id
+/// for the owner), the emulator profile as the official emulator does (`unknown` and
+/// `fake-auth-id@gmail.com` for every writer).
+#[test]
+#[ignore = "requires tools/sdk-smoke dependencies; the manual SDK workflow runs this test"]
+fn the_profile_names_the_writer_of_an_auth_context_event() {
+    assert!(
+        have_sdk(),
+        "install tools/sdk-smoke dependencies before running this test"
+    );
+    for profile in ["strict", "emulator"] {
+        let dir = scratch_codebase(&format!("auth-context-naming-{profile}"));
+        write(
+            &dir,
+            "index.js",
+            r"
+const { onRequest } = require('firebase-functions/v2/https');
+const { onDocumentWrittenWithAuthContext } = require('firebase-functions/v2/firestore');
+const seen = [];
+exports.fxAuthContext = onDocumentWrittenWithAuthContext('naming/{id}', (event) => {
+  seen.push({ id: event.params.id, authType: event.authType, authId: event.authId });
+});
+exports.fxSeen = onRequest((req, res) => res.json(seen));
+",
+        );
+        // The strict profile enforces Firestore rules: let every write through, so the principals
+        // of an owner write and of an ID-token write both commit.
+        write(
+            &dir,
+            "allow-all.rules",
+            "rules_version = '2';\nservice cloud.firestore { match /databases/{database}/documents { match /{document=**} { allow read, write: if true; } } }\n",
+        );
+        write(
+            &dir,
+            "fireemu-profile.json",
+            &format!(
+                r#"{{"schemaVersion":1,"profile":"{profile}","firestore":{{"edition":"standard","apiMode":"native"}},"rules":{{"source":"{}"}}}}"#,
+                dir.join("allow-all.rules").display()
+            ),
+        );
+        let output = fireemu_exec(&dir, "demo-auth-context-naming")
+            .args(["--config", dir.join("fireemu-profile.json").to_str().unwrap()])
+            .args(["--only", "auth,firestore,functions", "--", "node", "-e", r"
+const assert = require('node:assert/strict');
+(async () => {
+  const profile = process.argv[1];
+  const project = 'demo-auth-context-naming';
+  const fs = `http://${process.env.FIRESTORE_EMULATOR_HOST}/v1/projects/${project}/databases/(default)/documents`;
+  const auth = `http://${process.env.FIREBASE_AUTH_EMULATOR_HOST}/identitytoolkit.googleapis.com/v1/accounts:signUp?key=fake`;
+  const seen = `http://${process.env.FIREEMU_FUNCTIONS_HOST}/${project}/us-central1/fxSeen`;
+  const create = async (id, authorization) => {
+    const r = await fetch(`${fs}/naming?documentId=${id}`, { method: 'POST', headers: { authorization, 'content-type': 'application/json' }, body: JSON.stringify({ fields: { value: { stringValue: id } } }) });
+    assert.equal(r.status, 200, await r.text());
+  };
+  const signUp = await (await fetch(auth, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ email: 'u@example.test', password: 'local-only-password-123', returnSecureToken: true }) })).json();
+  await create('owner-write', 'Bearer owner');
+  await create('token-write', `Bearer ${signUp.idToken}`);
+  const wait = async () => { const deadline = Date.now() + 10000; for (;;) { const rows = await (await fetch(seen)).json(); if (rows.length >= 2 || Date.now() > deadline) return rows; await new Promise((resolve) => setTimeout(resolve, 50)); } };
+  const rows = Object.fromEntries((await wait()).map((row) => [row.id, row]));
+  assert.ok(rows['owner-write'] && rows['token-write'], JSON.stringify(rows));
+  if (profile === 'strict') {
+    assert.deepEqual([rows['token-write'].authType, rows['token-write'].authId], ['api_key', signUp.localId]);
+    assert.equal(rows['owner-write'].authType, 'unknown');
+    assert.equal(rows['owner-write'].authId, 'owner');
+  } else {
+    for (const row of Object.values(rows)) assert.deepEqual([row.authType, row.authId], ['unknown', 'fake-auth-id@gmail.com']);
+  }
+})().catch((error) => { console.error(error); process.exitCode = 1; });
+", profile])
+            .stdin(Stdio::null())
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{profile}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+}
+
 #[test]
 #[ignore = "requires tools/sdk-smoke dependencies; the manual SDK workflow runs this test"]
 fn unbound_pubsub_and_hub_are_absent_from_the_runner() {

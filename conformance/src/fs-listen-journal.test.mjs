@@ -546,10 +546,7 @@ test("the may-exist names of an SDK or browser run stay open until a closing lin
   });
   assert.equal(present.clean, false);
   assert.deepEqual(present.present, ["n/a"]);
-  assert.deepEqual(
-    present.unconfirmed,
-    ["n/b"].filter(() => false),
-  );
+  assert.deepEqual(present.unconfirmed, []);
   // Unknown: absent names are unconfirmed.
   const unknown = await readbackJournal({
     text: journalOf(...account, opened, closing("unknown")),

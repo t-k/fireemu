@@ -1400,3 +1400,80 @@ test("writesKnown needs a receipt, no thrown value, every case of the catalog re
   const { recording } = await recordWith(PROD, { driver: full() });
   assert.equal(recording.cleanup.writesKnown, true);
 });
+
+test("a receipt that is malformed fails closed without throwing: the names close unknown, the accounts are still cleaned up and a recording is returned", async () => {
+  for (const receipt of [
+    { thrown: null },
+    { thrown: null, cases: "none", teardown: [], cleanup: { complete: true } },
+    { thrown: null, cases: [{ caseId: "FS-LISTEN-SDK-101" }], teardown: [], cleanup: {} },
+  ]) {
+    const lines = [];
+    const urls = [];
+    const realFetch = globalThis.fetch;
+    globalThis.fetch = async (url, init) => {
+      urls.push(url);
+      return {
+        status: 200,
+        json: async () =>
+          url.endsWith("/accounts") ? { localId: `u-${JSON.parse(init.body).email}` } : {},
+      };
+    };
+    let recording;
+    try {
+      recording = await recordSdk({
+        target: PROD,
+        run: "r1",
+        journal: { append: (record) => lines.push(record), close() {} },
+        preflightImpl: async () => {},
+        runDriverImpl: async () => ({ receipt, wire: 1, connections: 1 }),
+        makeNative: () => emptyNative(),
+      });
+    } finally {
+      globalThis.fetch = realFetch;
+    }
+    const closing = lines.findLast((l) => l.type === "names" && l.phase === "after");
+    assert.equal(closing.outcome, "unknown", JSON.stringify(receipt));
+    assert.equal(recording.cleanup.writesKnown, false);
+    assert.equal(recording.cleanup.complete, false);
+    assert.ok(
+      urls.some((u) => u.includes("accounts:delete")),
+      "the accounts were deleted",
+    );
+    assert.equal((await a2(lines)).clean, false);
+  }
+});
+
+test("the cases of a receipt must be the catalog's, each once: the right count with a duplicate and a missing case is unknown", async () => {
+  const records = completeCases();
+  const duplicated = [...records.slice(0, -1), records[0]];
+  const closing = async (cases) =>
+    (
+      await sdkJournal(async () => ({ ...OKDRIVER, receipt: { ...OKDRIVER.receipt, cases } }))
+    ).findLast((l) => l.type === "names" && l.phase === "after");
+  assert.equal(duplicated.length, records.length);
+  assert.equal((await closing(duplicated)).outcome, "unknown");
+  assert.equal((await closing(records)).outcome, "known");
+  // The same cases in another order are the same cases.
+  assert.equal((await closing(records.toReversed())).outcome, "known");
+  // A record without a failures list says nothing about its steps: unknown.
+  const noFailures = completeCases();
+  delete noFailures[2].failures;
+  assert.equal((await closing(noFailures)).outcome, "unknown");
+});
+
+test("any thrown value that is not null makes the writes unknown, the empty string included", async () => {
+  const closing = async (thrown) =>
+    (
+      await sdkJournal(async () => ({ ...OKDRIVER, receipt: { ...OKDRIVER.receipt, thrown } }))
+    ).findLast((l) => l.type === "names" && l.phase === "after");
+  assert.equal((await closing("")).outcome, "unknown");
+  assert.equal((await closing("x")).outcome, "unknown");
+  assert.equal((await closing(0)).outcome, "unknown");
+  assert.equal((await closing(null)).outcome, "known");
+  assert.equal((await closing(undefined)).outcome, "known");
+  // The recording names the thrown value, also when it is empty.
+  const { recording } = await recordWith(PROD, {
+    driver: { ...OKDRIVER, receipt: { ...OKDRIVER.receipt, thrown: "" } },
+  });
+  assert.equal(recording.errors["sdk/driver"], "");
+});

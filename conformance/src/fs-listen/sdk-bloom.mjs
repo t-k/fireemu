@@ -73,8 +73,8 @@ const ROOT = "projects/vectors/databases/(default)/documents";
  */
 const SIZES = [
   { hashCount: 12, bytes: 3, padding: 7 },
-  { hashCount: 13, bytes: 6, padding: 3 },
-  { hashCount: 14, bytes: 9, padding: 5 },
+  { hashCount: 13, bytes: 5, padding: 3 },
+  { hashCount: 14, bytes: 8, padding: 5 },
   { hashCount: 1, bytes: 1, padding: 0 },
   { hashCount: 7, bytes: 2, padding: 3 },
   { hashCount: 20, bytes: 16, padding: 0 },

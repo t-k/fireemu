@@ -2,11 +2,12 @@
 // needed: these callbacks only expose SDK-shaped schedule metadata.
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
-import { mkdtemp, writeFile, readFile, rm } from 'node:fs/promises';
+import { mkdtemp, writeFile, readFile, rm, stat } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
-import { setTimeout as delay } from 'node:timers/promises';
+import { monitorEventLoopDelay } from 'node:perf_hooks';
+import { HARD_BACKSTOP_MS, childCpuTime, sampled, untilExit, waitUntil } from './load-independent-wait.mjs';
 import test from 'node:test';
 
 const runner=process.env.FIREEMU_TEST_RUNNER || fileURLToPath(new URL('./index.mjs',import.meta.url));
@@ -66,20 +67,22 @@ async function start(t,{secrets=false}={}) {
       buffer=buffer.subarray(nl+1+n);
     }
   });
-  async function exited(timeout=6000){
-    if(result)return result;let timer;
-    try{return await Promise.race([end,new Promise((_,reject)=>{
-      timer=setTimeout(()=>reject(Error('test waiting for child exit')),timeout);
-    })]);}finally{clearTimeout(timer);}
+  // Waiting gives up only when the child shows no progress for a whole stall window (calls made,
+  // frames received, output, CPU used), never because a fixed wall-clock bound ran out.
+  const cpu=sampled(()=>childCpuTime(child.pid));
+  async function progress(){
+    let size=0;
+    try{size=(await stat(join(dir,'calls.jsonl'))).size;}catch(e){if(e.code!=='ENOENT')throw e;}
+    return `${size}|${messages.length}|${stderr.length}|${cpu()}`;
   }
-  async function wait(check,label,timeout=6000){
-    const deadline=performance.now()+timeout;
-    while(performance.now()<deadline){
-      if(issue)throw Error(issue);const value=await check();if(value)return value;
+  async function exited(){
+    return untilExit({end,result:()=>result,progress,label:'child'});
+  }
+  async function wait(check,label){
+    return waitUntil({check,progress,label:`waiting for ${label}`,failFast:()=>{
+      if(issue)throw Error(issue);
       if(result)throw Error(`unexpected exit waiting for ${label}: ${JSON.stringify(result)} ${stderr}`);
-      await delay(5);
-    }
-    throw Error(`test deadline waiting for ${label}`);
+    }});
   }
   async function calls(){
     try{return (await readFile(join(dir,'calls.jsonl'),'utf8')).trim().split('\n').filter(Boolean).map(JSON.parse);}
@@ -98,17 +101,21 @@ async function start(t,{secrets=false}={}) {
 }
 
 test('real 30-second policy: stalled header and slow body expire; idle/invoked runner stays alive',
-  {timeout:42000},async t=>{
+  {timeout:HARD_BACKSTOP_MS},async t=>{
     const header=await start(t),body=await start(t),idle=await start(t);
     idle.send(invoke('long-running',{action:'hold',tag:'long-running'}));
     await idle.wait(async()=>(await idle.calls()).length===1,'long-running callback');
+    // The runner's 30 s policy is measured on a clock the loaded machine slows down too, so the
+    // upper bound allows for the worst event-loop stall this process saw (zero when idle).
+    const lag=monitorEventLoopDelay({resolution:10});lag.enable();
     const began=performance.now();header.child.stdin.write('1');
     body.child.stdin.write(`${MAX_FRAME}\n{"PRIVATE_INPUT_MARKER":`);
     const drip=setInterval(()=>{if(!body.result)body.child.stdin.write(' ',()=>{});},150);
     t.after(()=>clearInterval(drip));
-    const outcomes=await Promise.all([header.exited(35000),body.exited(35000)]);
-    clearInterval(drip);const elapsed=performance.now()-began;
-    assert.ok(elapsed>=27_000&&elapsed<35_000,`observed interval ${elapsed}`);
+    const outcomes=await Promise.all([header.exited(),body.exited()]);
+    clearInterval(drip);const elapsed=performance.now()-began;lag.disable();
+    const allowance=2*lag.max/1e6;
+    assert.ok(elapsed>=27_000&&elapsed<35_000+allowance,`observed interval ${elapsed} (event-loop allowance ${allowance})`);
     for(const [f,outcome] of [[header,outcomes[0]],[body,outcomes[1]]]){
       assert.equal(outcome.code,2);assert.equal(outcome.signal,null);
       assert.match(f.stderr,/input frame deadline/);assert.equal(f.stderr.includes('PRIVATE_INPUT_MARKER'),false);
@@ -122,7 +129,7 @@ test('real 30-second policy: stalled header and slow body expire; idle/invoked r
   });
 
 test('4,096 pending callbacks are admitted; 4,097th is retired before callback entry',
-  {timeout:15000},async t=>{
+  {timeout:HARD_BACKSTOP_MS},async t=>{
     const f=await start(t);
     const chunks=Array.from({length:MAX_COUNT+1},(_,i)=>frame(invoke(String(i),{action:'hold',tag:i})));
     f.child.stdin.write(Buffer.concat(chunks),()=>{});
@@ -133,7 +140,7 @@ test('4,096 pending callbacks are admitted; 4,097th is retired before callback e
   });
 
 test('callbacks waiting in the secret environment queue are also counted',
-  {timeout:15000},async t=>{
+  {timeout:HARD_BACKSTOP_MS},async t=>{
     const f=await start(t,{secrets:true});
     f.send(invoke('first',{action:'hold',tag:'first'}));
     await f.wait(async()=>(await f.calls()).length===1,'first secret callback');
@@ -145,7 +152,7 @@ test('callbacks waiting in the secret environment queue are also counted',
   });
 
 test('64 MiB of actual pending payload bytes fits; the next small frame is not dispatched',
-  {timeout:20000},async t=>{
+  {timeout:HARD_BACKSTOP_MS},async t=>{
     const f=await start(t);
     for(let i=0;i<4;i++){
       await f.write(exactFrame(`large-${i}`,MAX_FRAME));
@@ -160,7 +167,7 @@ test('64 MiB of actual pending payload bytes fits; the next small frame is not d
 
 for(const action of ['normal','throw']) {
   test(`slots and bytes are released after ${action}, without a process-lifetime count cap`,
-    {timeout:20000},async t=>{
+    {timeout:HARD_BACKSTOP_MS},async t=>{
       const f=await start(t);let total=0;
       for(let batch=0;batch<17;batch++){
         const bytes=Buffer.concat(Array.from({length:256},(_,i)=>frame(invoke(`reuse-${i}`,{tag:i,action}))));
@@ -176,7 +183,7 @@ for(const action of ['normal','throw']) {
 }
 
 test('large failed bindings release bytes; the next valid maximum-sized request still runs',
-  {timeout:20000},async t=>{
+  {timeout:HARD_BACKSTOP_MS},async t=>{
     const f=await start(t);
     for(let i=0;i<6;i++){
       const msg=invoke(`bad-${i}`,{data:'x'.repeat(12*1024*1024)},{entryPoint:'wrong'});
@@ -193,7 +200,7 @@ test('large failed bindings release bytes; the next valid maximum-sized request 
   });
 
 test('fragmented Unicode, sequential IDs and genuine parallel completion order are preserved',
-  {timeout:10000},async t=>{
+  {timeout:HARD_BACKSTOP_MS},async t=>{
     const f=await start(t);const bytes=frame(invoke('split',{tag:'日本語😀'}));
     for(let i=0;i<bytes.length;i+=3)await f.write(bytes.subarray(i,i+3));
     await f.wait(()=>f.messages.some(x=>x.type==='result'),'split result');

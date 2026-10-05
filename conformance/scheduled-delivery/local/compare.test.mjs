@@ -2033,3 +2033,111 @@ test("the emulator profile has no job topic: every published-message row diverge
     assert.equal(row.emulator.verdict, "DIVERGES", id);
   }
 });
+
+// ---- the published-message rows: the values they compare, and what they ignore ----
+
+const rowOf = (p, l, id) => rows(p, l).find((r) => r.id === id);
+
+test("the published-message rows compare the recorded values, not only equal ones", () => {
+  const p = productionWithMessages();
+  const l = localWithMessages();
+  assert.deepEqual(rowOf(p, l, "v1.published.topic").production, [
+    "schedFailV1",
+    "schedOkV1",
+    "schedRetryV1",
+  ]);
+  assert.deepEqual(rowOf(p, l, "v1.published.topic").local, [
+    "schedFailV1",
+    "schedOkV1",
+    "schedRetryV1",
+  ]);
+  assert.deepEqual(rowOf(p, l, "v1.published.data").production, [false]);
+  assert.deepEqual(rowOf(p, l, "v1.published.attributes").production, [{ scheduled: "true" }]);
+  assert.deepEqual(rowOf(p, l, "v1.published.messageId").production, [
+    { form: "<17 digits>", namedByAHandler: true },
+  ]);
+  assert.deepEqual(rowOf(p, l, "v1.published.messageId").local, [
+    { form: "<17 digits>", namedByAHandler: true },
+  ]);
+  assert.deepEqual(rowOf(p, l, "v1.published.publishTime").production, [true]);
+  assert.deepEqual(rowOf(p, l, "v1.published.publishTime").local, [true]);
+  assert.deepEqual(rowOf(p, l, "v1.retry-declaration-no-retry").production, [1]);
+  assert.deepEqual(rowOf(p, l, "v1.retry-declaration-no-retry").local, [1]);
+});
+
+test("a recording with a single pulled message still has the rows", () => {
+  const p = productionWithMessages();
+  const one = { ...p, published: [p.published[0]] };
+  const l = localWithMessages({
+    pulled: [
+      {
+        ...localWithMessages().natural.pulled[0],
+        messages: [localWithMessages().natural.pulled[0].messages[1]],
+      },
+    ],
+  });
+  const v = verdicts(one, l);
+  for (const id of PUBLISHED_ROWS) assert.equal(v[id], "MATCH", id);
+});
+
+test("a topic that is not the job's, or that did not answer 200, adds nothing to what the local run published", () => {
+  const p = productionWithMessages();
+  const good = localWithMessages().natural.pulled;
+  const message = {
+    messageId: "27999999999999999",
+    publishTime: "2026-10-05T08:41:09Z",
+    attributes: { other: "1" },
+    data: "YQ==",
+  };
+  const extra = [
+    { topic: "firebase-schedule-schedOkV1", status: 200, messages: [message] }, // the official emulator's name
+    {
+      topic: jobId("schedFailV1").replace("schedFailV1", "ghost"),
+      status: 404,
+      messages: [message],
+    }, // refused
+  ];
+  const v = verdicts(p, localWithMessages({ pulled: [...good, ...extra] }));
+  for (const id of PUBLISHED_ROWS) assert.equal(v[id], "MATCH", id);
+});
+
+test("v1.published.messageId: an id of 16 or 18 digits is another form even when a handler reports it", () => {
+  const p = productionWithMessages();
+  for (const id of ["2744000000000001", "274400000000000001"]) {
+    const base = localWithMessages();
+    const lines = base.natural.lines.map((line) =>
+      line.value.handler === "schedRetryV1" && line.value.context.eventId === "27440000000000002"
+        ? { ...line, value: { ...line.value, context: { ...line.value.context, eventId: id } } }
+        : line,
+    );
+    const pulled = base.natural.pulled.map((t) => ({
+      ...t,
+      messages: t.messages.map((m) =>
+        m.messageId === "27440000000000002" ? { ...m, messageId: id } : m,
+      ),
+    }));
+    assert.equal(
+      verdicts(p, localWithMessages({ lines, pulled }))["v1.published.messageId"],
+      "DIVERGES",
+      id,
+    );
+  }
+});
+
+test("v1.retry-declaration-no-retry counts schedRetryV1 only: another Gen1 handler's repeated message id does not change it", () => {
+  const p = productionWithMessages();
+  const twice = {
+    ...p,
+    frames: [...p.frames, prodV1("schedOkV1", 9000, "22257109111563910", "2026-10-05T08:41:02.5Z")],
+  };
+  assert.deepEqual(
+    rowOf(twice, localWithMessages(), "v1.retry-declaration-no-retry").production,
+    [1],
+  );
+});
+
+test("the recording has no schedRetryV1 frame: that row is not made", () => {
+  const p = productionWithMessages();
+  const without = { ...p, frames: p.frames.filter((f) => f.handler !== "schedRetryV1") };
+  assert.equal(rowOf(without, localWithMessages(), "v1.retry-declaration-no-retry"), undefined);
+});

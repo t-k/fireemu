@@ -460,3 +460,33 @@ test("a run with no pulled message has an empty published list", () => {
   assert.deepEqual(extract(dir).published, []);
   rmSync(dir, { recursive: true, force: true });
 });
+
+test("only a persisted 200 answer of a pull counts: another state, another status or another request does not", () => {
+  const dir = runDir();
+  const received = {
+    receivedMessages: [
+      {
+        ackId: "a",
+        message: {
+          messageId: "21111111111111111",
+          publishTime: "2026-10-05T08:41:10.000Z",
+          attributes: {},
+        },
+      },
+    ],
+  };
+  const body = (id, extra) => ({ id, ...row(id, received), ...extra });
+  const journalFile = join(dir, `journal-${RUN}.jsonl`);
+  const extra = [
+    body("pull-pass1-1-schedOkV1", { state: "response-headers" }), // not persisted
+    body("pull-pass1-2-schedOkV1", { status: 503 }), // not a 200
+    body("ack-pass1-3-schedOkV1", {}), // not a pull
+    body("xpull-pass1-4-schedOkV1", {}), // an id that only contains pull-
+  ];
+  writeFileSync(
+    journalFile,
+    readFileSync(journalFile, "utf8") + extra.map((r) => JSON.stringify(r)).join("\n") + "\n",
+  );
+  assert.deepEqual(extract(dir).published, []);
+  rmSync(dir, { recursive: true, force: true });
+});

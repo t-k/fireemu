@@ -349,12 +349,15 @@ test("without pull topics it makes no Pub/Sub call and prints no SUBSCRIBED or P
   }
 });
 
-test("pull topics need the project and the Pub/Sub host", async () => {
-  const { code, output } = await runChild({
-    LOCAL_START: "2026-10-05T08:40:30Z",
-    LOCAL_SECONDS: "1",
-    LOCAL_PULL_TOPICS: "t",
-  });
-  assert.notEqual(code, 0);
-  assert.match(output, /LOCAL_PROJECT|PUBSUB_EMULATOR_HOST/);
+test("pull topics need the project and the Pub/Sub host, each of them", async () => {
+  const base = { LOCAL_START: "2026-10-05T08:40:30Z", LOCAL_SECONDS: "1", LOCAL_PULL_TOPICS: "t" };
+  for (const env of [
+    {},
+    { LOCAL_PROJECT: "demo-sched" },
+    { PUBSUB_EMULATOR_HOST: "127.0.0.1:1" },
+  ]) {
+    const { code, output } = await runChild({ ...base, ...env });
+    assert.notEqual(code, 0, JSON.stringify(env));
+    assert.match(output, /pull topics need LOCAL_PROJECT and PUBSUB_EMULATOR_HOST/);
+  }
 });

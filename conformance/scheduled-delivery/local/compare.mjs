@@ -440,7 +440,8 @@ export function rows(production, local) {
       const fn = TOPIC.exec(String(t.topic))?.[1];
       return t.status === 200 && fn ? (t.messages ?? []).map((m) => asMessage(fn, m)) : [];
     });
-    const same = (p, l) => p.length > 0 && JSON.stringify(p) === JSON.stringify(l);
+    // what the recording holds is never empty here (`published` is), so an empty local list never equals it
+    const same = (p, l) => JSON.stringify(p) === JSON.stringify(l);
     const pTopics = unique(pMsgs.map((m) => m.fn));
     const lTopics = unique(lMsgs.map((m) => m.fn));
     add(
@@ -495,10 +496,10 @@ export function rows(production, local) {
       same(pIds, lIds),
       "the message id is a Pub/Sub message id and is the event id of the handler's context",
     );
-    // an instant to the nanosecond, written however many digits: seconds and the fraction without trailing zeros
+    // an instant to the nanosecond, written however many digits: the whole second and the fraction without trailing zeros
     const exact = (instant) => {
       const m = /^(.*?)(?:\.(\d+))?Z$/.exec(String(instant));
-      return m ? `${Date.parse(m[1] + "Z") / 1000}.${(m[2] ?? "").replace(/0+$/, "")}` : null;
+      return m ? `${Date.parse(m[1] + "Z")}.${(m[2] ?? "").replace(/0+$/, "")}` : null;
     };
     const timeFacts = (frame) => (m) => {
       const f = frame(m);

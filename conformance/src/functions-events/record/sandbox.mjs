@@ -21,7 +21,8 @@ import { isAbsolute, join, relative } from "node:path";
 
 export const TASK_ID = "FUNCTIONS-EVENTS-SANDBOX";
 export const PROJECT = "fireemu-oracle-events";
-export const TASK_CAP_USD = 34;
+// The task cap: US$34 until owner ledger 843, which raised it to US$40 (the counted 32.60 plus the v6 reserve of 4.00 is 36.60).
+export const TASK_CAP_USD = 40;
 export const RESERVE_USD = 4;
 export const MAX_REQUESTS = 520;
 export const CLI_MAX = 3;

@@ -90,9 +90,28 @@ test("the budget counts each run once and refuses a reserve that passes the cap"
       row({ event: "started", runDir: "b", estimatedUsd: usd }),
     ].join("\n");
   assert.deepEqual(sandbox.budgetProblems(spent(26)), []);
-  assert.equal(sandbox.budgetProblems(spent(28.5)).length, 1);
+  assert.deepEqual(
+    sandbox.budgetProblems(spent(34)),
+    [],
+    "2 + 34 + the reserve 4 is exactly the cap of 40",
+  );
+  assert.equal(sandbox.budgetProblems(spent(34.5)).length, 1);
   assert.equal(sandbox.budgetProblems(row({ event: "started", estimatedUsd: -1 })).length, 1);
   assert.equal(sandbox.budgetProblems(row({ event: "started", estimatedUsd: "2" })).length, 1);
+});
+
+test("owner ledger 843: the task cap is US$40; the v6 run (32.60 counted + 4.00 = 36.60) fits and a total above 40 is refused", () => {
+  assert.equal(sandbox.TASK_CAP_USD, 40);
+  assert.equal(sandbox.RESERVE_USD, 4);
+  const counted = (usd) => [row({ event: "started", runDir: "a", estimatedUsd: usd })].join("\n");
+  // 32.60 counted before v6, then this run's reserve of 4.00
+  assert.deepEqual(sandbox.budgetProblems(counted(32.6)), []);
+  assert.deepEqual(sandbox.budgetProblems(counted(36)), [], "36 + 4 is exactly the cap");
+  const refused = sandbox.budgetProblems(counted(36.01));
+  assert.equal(refused.length, 1);
+  assert.match(refused[0], /cap of US\$40/);
+  assert.equal(sandbox.budgetProblems(counted(32.6), { reserve: 7.41 }).length, 1);
+  assert.deepEqual(sandbox.budgetProblems(counted(32.6), { reserve: 7.4 }), []);
 });
 
 // ---- the budget with the coordinator's close line (owner ledger 823) ---------------------------------
@@ -122,22 +141,22 @@ const headroom = (text) => {
 
 test("a run the coordinator closed counts at the close line's cost, not at its reserve", () => {
   const open = runRows("a", { reserve: 4 }).join("\n");
-  assert.equal(headroom(open), 30);
+  assert.equal(headroom(open), 36);
   const closed = runRows("a", { reserve: 4, close: { estimatedUsd: 0 } }).join("\n");
-  assert.equal(headroom(closed), 34);
+  assert.equal(headroom(closed), 40);
   const costly = runRows("a", { reserve: 4, close: { estimatedUsd: 5 } }).join("\n");
-  assert.equal(headroom(costly), 29);
+  assert.equal(headroom(costly), 35);
   // the close line is final even when it comes first in the file
   const first = runRows("a", { close: { estimatedUsd: 0 } })
     .toReversed()
     .join("\n");
-  assert.equal(headroom(first), 34);
+  assert.equal(headroom(first), 40);
   // two close lines with the same cost are one cost
   const twice = [
     ...runRows("a", { close: { estimatedUsd: 1 } }),
     costRow({ event: "cleanup-verified", runDir: "a", estimatedUsd: 1 }),
   ].join("\n");
-  assert.equal(headroom(twice), 33);
+  assert.equal(headroom(twice), 39);
 });
 
 test("the budget fails closed on the near misses of the close line", () => {
@@ -171,24 +190,24 @@ test("the budget fails closed on the near misses of the close line", () => {
     costRow({ event: "cleanup-verified", runDir: "a", taskId: "OTHER-TASK", estimatedUsd: 0 }),
     costRow({ event: "note", runDir: "a", estimatedUsd: 0 }),
   ].join("\n");
-  assert.equal(headroom(notClosing), 30);
+  assert.equal(headroom(notClosing), 36);
   // lines that share an empty run directory are not one run, so a close line among them overrides nothing
   const empty = runRows("", { reserve: 4, close: { estimatedUsd: 0 } }).join("\n");
-  assert.equal(headroom(empty), 30);
+  assert.equal(headroom(empty), 36);
   // a run with a started line and nothing after counts at its reserve; another run's close line does not help it
   const unfinished = [
     costRow({ event: "started", runDir: "a", estimatedUsd: 4 }),
     ...runRows("b", { close: { estimatedUsd: 0 } }),
   ].join("\n");
-  assert.equal(headroom(unfinished), 30);
+  assert.equal(headroom(unfinished), 36);
   // the highest estimate of a run counts, whatever line comes last
   const lower = [
     costRow({ event: "started", runDir: "a", estimatedUsd: 4 }),
     costRow({ event: "finished", runDir: "a", estimatedUsd: 1 }),
   ].join("\n");
-  assert.equal(headroom(lower), 30);
+  assert.equal(headroom(lower), 36);
   // a finished run with no close line keeps its estimate
-  assert.equal(headroom(runRows("a", { reserve: 2 }).join("\n")), 32);
+  assert.equal(headroom(runRows("a", { reserve: 2 }).join("\n")), 38);
 });
 
 test("the budget counts the 14:55Z and 15:26Z runs at 0 and a run without a close line at its estimate (rows 579-584 and 565-566)", () => {
@@ -233,7 +252,7 @@ test("the budget counts the 14:55Z and 15:26Z runs at 0 and a run without a clos
       estimatedUsd: 0,
     }),
   ].join("\n");
-  assert.equal(headroom(text), 32, "only the FE 012 run's 2.00 is spent");
+  assert.equal(headroom(text), 38, "only the FE 012 run's 2.00 is spent");
   assert.deepEqual(sandbox.budgetProblems(text), []);
   assert.equal(
     headroom(
@@ -241,7 +260,7 @@ test("the budget counts the 14:55Z and 15:26Z runs at 0 and a run without a clos
         .replaceAll('"estimatedUsd":0,', '"estimatedUsd":4,')
         .replaceAll('"estimatedUsd":0}', '"estimatedUsd":4}'),
     ),
-    24,
+    30,
     "with the old rule the two runs would count 4 each",
   );
 });
@@ -743,13 +762,13 @@ test("model: with a run that wrote nothing in the ledger, only the other lines o
 });
 
 test(
-  "real ledger: spent is US$24.50 with the close lines, so the v4 reserve fits (28.50 of 34)",
+  "real ledger: spent is US$24.50 with the close lines, so the v4 reserve fits (28.50 of 40)",
   { skip: !haveReal },
   () => {
     // the first 584 lines: the ledger as it was when the close lines of the 14:55Z and 15:26Z runs were written
     const text = readFileSync(realLedger, "utf8").split("\n").slice(0, 584).join("\n");
     assert.deepEqual(sandbox.budgetProblems(text), []);
-    assert.equal(headroom(text), 9.5, "24.50 spent, headroom to the cap of 34");
+    assert.equal(headroom(text), 15.5, "24.50 spent, headroom to the cap of 40");
     // without the close lines of the 14:55Z and 15:26Z runs the two reserves would count (the owner's old rule)
     const noClose = text
       .split("\n")
@@ -759,6 +778,6 @@ test(
           !/functions-events-formal-2026100[4]T1(45|52)/.test(line),
       )
       .join("\n");
-    assert.equal(headroom(noClose), 1.5);
+    assert.equal(headroom(noClose), 7.5);
   },
 );

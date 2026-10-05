@@ -1,0 +1,12 @@
+{
+  "name": "fireemu-scheduled-delivery-fixture",
+  "private": true,
+  "main": "index.js",
+  "dependencies": {
+    "@google-cloud/functions-framework": "5.0.5",
+    "firebase-functions": "7.3.2"
+  },
+  "engines": {
+    "node": "22"
+  }
+}

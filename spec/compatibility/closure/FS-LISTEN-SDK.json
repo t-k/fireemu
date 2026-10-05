@@ -1,0 +1,764 @@
+{
+  "schemaVersion": 1,
+  "parent": "FS-LISTEN-SDK",
+  "parentStatus": "IMPLEMENTING",
+  "inventoryStatus": "FROZEN",
+  "freezeState": "FROZEN",
+  "oracleTrack": "disposable-sandbox",
+  "closureReview": {
+    "decision": "PENDING",
+    "note": "The current 18-case catalog is local-only. No case is VERIFIED and no production permission is granted."
+  },
+  "scopeDecisions": [
+    {
+      "id": "L1",
+      "status": "DECIDED",
+      "recommendation": "Use firebase 12.18.0 Web SDK in Node gRPC and a real browser in both WebChannel modes. Mobile SDKs are outside the declared matrix; the public parent row reflects that boundary.",
+      "ownerDecisionRequired": false,
+      "source": "docs/compatibility/emulator-scope.md#profiles-and-sdks",
+      "decision": "The declared Web SDK matrix covers Node and browser paths; mobile SDKs are outside this parent.",
+      "decidedBy": "owner via OL-1",
+      "decidedOn": "2026-09-27"
+    },
+    {
+      "id": "L2",
+      "status": "DECIDED",
+      "recommendation": "Assign Auth state changes to AUTH-FS-CROSS; keep static two-principal cases 108/108C and initial unauthenticated refusal 106N here. Static cross-tenant listener authorization is covered by FS-RULES/tenant together with case 108.",
+      "ownerDecisionRequired": false,
+      "decision": "Auth state changes belong to AUTH-FS-CROSS; static listener principals and initial refusal belong here.",
+      "decidedBy": "coordinator applying FS-RULES R2",
+      "decidedOn": "2026-09-27"
+    },
+    {
+      "id": "L3",
+      "status": "DECIDED",
+      "recommendation": "Keep direct gRPC raw resume-token behavior as a separate condition; SDK-managed resume cannot establish it.",
+      "ownerDecisionRequired": false,
+      "decision": "RAW_RESUME_SEPARATE",
+      "decidedBy": "coordinator",
+      "decidedOn": "2026-09-27"
+    },
+    {
+      "id": "L4",
+      "status": "DECIDED",
+      "recommendation": "Keep real browser tab lifecycle as a separate condition because the 18-case browser shadows do not close or reload a tab.",
+      "ownerDecisionRequired": false,
+      "decision": "BACKEND_VISIBLE_TAB_LIFECYCLE_ONLY",
+      "decidedBy": "coordinator",
+      "decidedOn": "2026-09-27"
+    },
+    {
+      "id": "L5",
+      "status": "DECIDED",
+      "recommendation": "AUTH-FS-CROSS owns the production observation of case 109 and the comparison of revocation behavior; this parent retains no revocation state-change condition.",
+      "ownerDecisionRequired": false,
+      "decision": "REVOCATION_MOVED_TO_AUTH_FS_CROSS_PENDING_PRODUCTION",
+      "decidedBy": "coordinator",
+      "decidedOn": "2026-09-27"
+    },
+    {
+      "id": "L6",
+      "status": "DECIDED",
+      "recommendation": "Use fireemu-oracle-query/(default), deployed conformance/firestore.rules, public conf_listen and owner-only conf_rules_owner. Do not change Rules; serialize with STORAGE and FUNCTIONS through the shared lock.",
+      "ownerDecisionRequired": false,
+      "decision": "Use query/(default) with existing Rules and no Rules change.",
+      "decidedBy": "owner via OL-3",
+      "decidedOn": "2026-09-27"
+    },
+    {
+      "id": "OL-1",
+      "status": "DECIDED",
+      "decision": "MOBILE_SDK_EXCLUDED",
+      "decidedBy": "owner",
+      "decidedOn": "2026-09-27",
+      "decisionRef": "owner-decisions.md#FS-LISTEN-SDK-OL-1"
+    },
+    {
+      "id": "OL-2",
+      "status": "DECIDED",
+      "decision": "SDK_INTERNAL_CACHE_EXCLUDED_BACKEND_CACHE_INCLUDED",
+      "decidedBy": "owner",
+      "decidedOn": "2026-09-27",
+      "decisionRef": "owner-decisions.md#FS-LISTEN-SDK-OL-2"
+    },
+    {
+      "id": "OL-3",
+      "status": "DECIDED",
+      "decision": "QUERY_DEFAULT_CONF_COLLECTIONS_NO_RULES_CHANGE",
+      "decidedBy": "owner",
+      "decidedOn": "2026-09-27",
+      "decisionRef": "owner-decisions.md#FS-LISTEN-SDK-OL-3"
+    },
+    {
+      "id": "Q1-Q4c",
+      "status": "DECIDED",
+      "decision": "limitToLast, backend-mediated cache and native Listen targets belong to FS-LISTEN-SDK.",
+      "decidedBy": "owner via FS-QUERY-INDEX Q1 and Q4c",
+      "decidedOn": "2026-09-24"
+    },
+    {
+      "id": "L7",
+      "status": "DECIDED",
+      "recommendation": "Run the native gRPC Listen programs (native-target-protocol, raw-resume-token, existence-filter-reconnect, and FS-TRANSACTION/commit-atomic-visibility) on fireemu-oracle-txn with the owner access token. An IAM-authenticated Listen is not subject to Rules, so no Rules release is needed there. The Node SDK, browser and Auth-dependent recordings stay on fireemu-oracle-query/(default) under the deployed Rules (OL-3).",
+      "decision": "NATIVE_GRPC_ON_TXN",
+      "decidedBy": "owner via ledger 824 (2)",
+      "decidedOn": "2026-10-05",
+      "decisionRef": "owner-decisions.md ledger 824"
+    },
+    {
+      "id": "L8",
+      "status": "DECIDED",
+      "recommendation": "Use the AUTH-FS-CROSS stage-2 fixture (conformance/auth-fs-cross-stage2-production.json, two production recordings on fireemu-oracle-idp) as Listen evidence for: a listener started after sign-out is refused (initial-unauthenticated-refusal; rows n-out/listen-signed-out and b-out/listen-signed-out), another principal's listener on a private document is refused (cross-principal-rules; rows n-ab/as-alice, n-ab/after-switch and the b-ab rows), and a native gRPC Listen resumed with the current token (raw-resume-token; row resume/open). Differences to state wherever the evidence is cited: project (idp, not query), Rules (the cross2 ruleset, not conformance/firestore.rules), principals made by the administrator, a state change in one client instead of two static clients, and the browser rows in the browser's default WebChannel mode.",
+      "decision": "AUTH_FS_CROSS_STAGE2_FIXTURE_REUSED",
+      "decidedBy": "owner via ledger 824 (1)",
+      "decidedOn": "2026-10-05",
+      "decisionRef": "owner-decisions.md ledger 824"
+    }
+  ],
+  "conditions": [
+    {
+      "conditionId": "FS-LISTEN-SDK/document-event-order",
+      "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
+      "recipeIds": [
+        "FS-LISTEN-SDK-101",
+        "FS-LISTEN-SDK-101C"
+      ],
+      "recipeStatus": "EXISTING_CATALOG_PROPOSED_MAPPING",
+      "status": "PENDING_RECORDING",
+      "observation": {
+        "method": "Existing and absent document snapshots, server barrier and callback order.",
+        "transports": [
+          "node-grpc",
+          "browser-webchannel-long-polling",
+          "browser-webchannel-streaming"
+        ],
+        "sdkVersion": "firebase 12.18.0",
+        "credentials": "Two throwaway Firebase Auth users for private-owner cases; unauthenticated client for public conf_listen cases."
+      },
+      "localEvidence": {
+        "references": [
+          "spec/compatibility/fs-listen-sdk-local-shadow.json",
+          "spec/compatibility/fs-listen-sdk-browser-local-shadow.json",
+          "docs/compatibility/fs-listen-sdk-campaign-preparation.md"
+        ],
+        "productionExecuted": false,
+        "note": "Existing local shadows bind the historical o6_listen catalog paths; they are not evidence for the conf_* migration or production."
+      },
+      "verification": {
+        "recordingsRequiredPerTransport": 2,
+        "requiredEvidence": [
+          "Two complete, independently recorded sandbox receipts for each required transport and case/control pair.",
+          "Bounded all-wire request accounting, closed listeners/clients, deleted and absent owned documents and accounts.",
+          "A final source-bound artifact comparison with no unexplained mismatch."
+        ],
+        "recordingsRequired": 2
+      },
+      "note": "Existing local receipts use the historical catalog. New conf_* sandbox recordings, complete cleanup and final-artifact comparison are still required."
+    },
+    {
+      "conditionId": "FS-LISTEN-SDK/pending-writes",
+      "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
+      "recipeIds": [
+        "FS-LISTEN-SDK-102",
+        "FS-LISTEN-SDK-102C"
+      ],
+      "recipeStatus": "EXISTING_CATALOG_PROPOSED_MAPPING",
+      "status": "PENDING_RECORDING",
+      "observation": {
+        "method": "Local pending-write metadata before acknowledgement versus a second-client write with no local pending flag.",
+        "transports": [
+          "node-grpc",
+          "browser-webchannel-long-polling",
+          "browser-webchannel-streaming"
+        ],
+        "sdkVersion": "firebase 12.18.0",
+        "credentials": "Two throwaway Firebase Auth users for private-owner cases; unauthenticated client for public conf_listen cases."
+      },
+      "localEvidence": {
+        "references": [
+          "spec/compatibility/fs-listen-sdk-local-shadow.json",
+          "spec/compatibility/fs-listen-sdk-browser-local-shadow.json",
+          "docs/compatibility/fs-listen-sdk-campaign-preparation.md"
+        ],
+        "productionExecuted": false,
+        "note": "Existing local shadows bind the historical o6_listen catalog paths; they are not evidence for the conf_* migration or production."
+      },
+      "verification": {
+        "recordingsRequiredPerTransport": 2,
+        "requiredEvidence": [
+          "Two complete, independently recorded sandbox receipts for each required transport and case/control pair.",
+          "Bounded all-wire request accounting, closed listeners/clients, deleted and absent owned documents and accounts.",
+          "A final source-bound artifact comparison with no unexplained mismatch."
+        ],
+        "recordingsRequired": 2
+      },
+      "note": "Existing local receipts use the historical catalog. New conf_* sandbox recordings, complete cleanup and final-artifact comparison are still required."
+    },
+    {
+      "conditionId": "FS-LISTEN-SDK/query-change-order",
+      "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
+      "recipeIds": [
+        "FS-LISTEN-SDK-103",
+        "FS-LISTEN-SDK-103C"
+      ],
+      "recipeStatus": "EXISTING_CATALOG_PROPOSED_MAPPING",
+      "status": "PENDING_RECORDING",
+      "observation": {
+        "method": "Query added, modified, reordered and removed changes with old/new indexes versus an outside-predicate silent control. Include limitToLast reversal and its document change indexes after a bounded update. Compare one multi-document transaction commit delivered in one SDK callback against separate commits that produce distinct callbacks.",
+        "transports": [
+          "node-grpc",
+          "browser-webchannel-long-polling",
+          "browser-webchannel-streaming"
+        ],
+        "sdkVersion": "firebase 12.18.0",
+        "credentials": "Two throwaway Firebase Auth users for private-owner cases; unauthenticated client for public conf_listen cases."
+      },
+      "localEvidence": {
+        "references": [
+          "spec/compatibility/fs-listen-sdk-local-shadow.json",
+          "spec/compatibility/fs-listen-sdk-browser-local-shadow.json",
+          "docs/compatibility/fs-listen-sdk-campaign-preparation.md"
+        ],
+        "productionExecuted": false,
+        "note": "Existing local shadows bind the historical o6_listen catalog paths; they are not evidence for the conf_* migration or production."
+      },
+      "verification": {
+        "recordingsRequiredPerTransport": 2,
+        "requiredEvidence": [
+          "Two complete, independently recorded sandbox receipts for each required transport and case/control pair.",
+          "Bounded all-wire request accounting, closed listeners/clients, deleted and absent owned documents and accounts.",
+          "A final source-bound artifact comparison with no unexplained mismatch."
+        ],
+        "recordingsRequired": 2
+      },
+      "note": "Existing local receipts use the historical catalog. New conf_* sandbox recordings, complete cleanup and final-artifact comparison are still required."
+    },
+    {
+      "conditionId": "FS-LISTEN-SDK/reconnect-resume",
+      "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
+      "recipeIds": [
+        "FS-LISTEN-SDK-104",
+        "FS-LISTEN-SDK-104C"
+      ],
+      "recipeStatus": "EXISTING_CATALOG_PROPOSED_MAPPING",
+      "status": "PENDING_RECORDING",
+      "observation": {
+        "method": "Forced stream break, cache-served interval and complete resumed document set versus uninterrupted delivery.",
+        "transports": [
+          "node-grpc",
+          "browser-webchannel-long-polling",
+          "browser-webchannel-streaming"
+        ],
+        "sdkVersion": "firebase 12.18.0",
+        "credentials": "Two throwaway Firebase Auth users for private-owner cases; unauthenticated client for public conf_listen cases."
+      },
+      "localEvidence": {
+        "references": [
+          "spec/compatibility/fs-listen-sdk-local-shadow.json",
+          "spec/compatibility/fs-listen-sdk-browser-local-shadow.json",
+          "docs/compatibility/fs-listen-sdk-campaign-preparation.md"
+        ],
+        "productionExecuted": false,
+        "note": "Existing local shadows bind the historical o6_listen catalog paths; they are not evidence for the conf_* migration or production."
+      },
+      "verification": {
+        "recordingsRequiredPerTransport": 2,
+        "requiredEvidence": [
+          "Two complete, independently recorded sandbox receipts for each required transport and case/control pair.",
+          "Bounded all-wire request accounting, closed listeners/clients, deleted and absent owned documents and accounts.",
+          "A final source-bound artifact comparison with no unexplained mismatch."
+        ],
+        "recordingsRequired": 2
+      },
+      "note": "Existing local receipts use the historical catalog. New conf_* sandbox recordings, complete cleanup and final-artifact comparison are still required."
+    },
+    {
+      "conditionId": "FS-LISTEN-SDK/unsubscribe",
+      "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
+      "recipeIds": [
+        "FS-LISTEN-SDK-105",
+        "FS-LISTEN-SDK-105C"
+      ],
+      "recipeStatus": "EXISTING_CATALOG_PROPOSED_MAPPING",
+      "status": "PENDING_RECORDING",
+      "observation": {
+        "method": "Unsubscribed callback silence while an active witness receives the write versus two active listeners.",
+        "transports": [
+          "node-grpc",
+          "browser-webchannel-long-polling",
+          "browser-webchannel-streaming"
+        ],
+        "sdkVersion": "firebase 12.18.0",
+        "credentials": "Two throwaway Firebase Auth users for private-owner cases; unauthenticated client for public conf_listen cases."
+      },
+      "localEvidence": {
+        "references": [
+          "spec/compatibility/fs-listen-sdk-local-shadow.json",
+          "spec/compatibility/fs-listen-sdk-browser-local-shadow.json",
+          "docs/compatibility/fs-listen-sdk-campaign-preparation.md"
+        ],
+        "productionExecuted": false,
+        "note": "Existing local shadows bind the historical o6_listen catalog paths; they are not evidence for the conf_* migration or production."
+      },
+      "verification": {
+        "recordingsRequiredPerTransport": 2,
+        "requiredEvidence": [
+          "Two complete, independently recorded sandbox receipts for each required transport and case/control pair.",
+          "Bounded all-wire request accounting, closed listeners/clients, deleted and absent owned documents and accounts.",
+          "A final source-bound artifact comparison with no unexplained mismatch."
+        ],
+        "recordingsRequired": 2
+      },
+      "note": "Existing local receipts use the historical catalog. New conf_* sandbox recordings, complete cleanup and final-artifact comparison are still required."
+    },
+    {
+      "conditionId": "FS-LISTEN-SDK/initial-unauthenticated-refusal",
+      "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
+      "recipeIds": [
+        "FS-LISTEN-SDK-106N"
+      ],
+      "recipeStatus": "EXISTING_CATALOG_PROPOSED_MAPPING",
+      "status": "PENDING_RECORDING",
+      "observation": {
+        "method": "A listener started after sign-out refuses its initial target; no in-flight Auth state change is tested here. Case 106 belongs to AUTH-FS-CROSS.",
+        "transports": [
+          "node-grpc",
+          "browser-webchannel-long-polling",
+          "browser-webchannel-streaming"
+        ],
+        "sdkVersion": "firebase 12.18.0",
+        "credentials": "Two throwaway Firebase Auth users for private-owner cases; unauthenticated client for public conf_listen cases."
+      },
+      "localEvidence": {
+        "references": [
+          "spec/compatibility/fs-listen-sdk-local-shadow.json",
+          "spec/compatibility/fs-listen-sdk-browser-local-shadow.json",
+          "docs/compatibility/fs-listen-sdk-campaign-preparation.md"
+        ],
+        "productionExecuted": false,
+        "note": "Existing local shadows bind the historical o6_listen catalog paths; they are not evidence for the conf_* migration or production."
+      },
+      "verification": {
+        "recordingsRequiredPerTransport": 2,
+        "requiredEvidence": [
+          "Two complete, independently recorded sandbox receipts for each required transport and case/control pair.",
+          "Bounded all-wire request accounting, closed listeners/clients, deleted and absent owned documents and accounts.",
+          "A final source-bound artifact comparison with no unexplained mismatch."
+        ],
+        "recordingsRequired": 2
+      },
+      "note": "Existing local receipts use the historical catalog. New conf_* sandbox recordings, complete cleanup and final-artifact comparison are still required.",
+      "fixtureEvidence": {
+        "fixture": "conformance/auth-fs-cross-stage2-production.json",
+        "decisionRef": "L8",
+        "rows": [
+          "n-out/listen-signed-out",
+          "b-out/listen-signed-out"
+        ],
+        "covers": "A listener started after sign-out ends permission-denied with no server snapshot, over the Node SDK and the browser SDK (default transport).",
+        "recordings": 2,
+        "status": "RECORDED_NOT_COMPARED"
+      }
+    },
+    {
+      "conditionId": "FS-LISTEN-SDK/default-subscription",
+      "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
+      "recipeIds": [
+        "FS-LISTEN-SDK-107",
+        "FS-LISTEN-SDK-107C"
+      ],
+      "recipeStatus": "EXISTING_CATALOG_PROPOSED_MAPPING",
+      "status": "PENDING_RECORDING",
+      "observation": {
+        "method": "Raw callback count without metadata-change subscription, including a same-data silent control. Compare includeMetadataChanges: true with the default false case 107; record backend CURRENT and NO_CHANGE timing.",
+        "transports": [
+          "node-grpc",
+          "browser-webchannel-long-polling",
+          "browser-webchannel-streaming"
+        ],
+        "sdkVersion": "firebase 12.18.0",
+        "credentials": "Two throwaway Firebase Auth users for private-owner cases; unauthenticated client for public conf_listen cases."
+      },
+      "localEvidence": {
+        "references": [
+          "spec/compatibility/fs-listen-sdk-local-shadow.json",
+          "spec/compatibility/fs-listen-sdk-browser-local-shadow.json",
+          "docs/compatibility/fs-listen-sdk-campaign-preparation.md"
+        ],
+        "productionExecuted": false,
+        "note": "Existing local shadows bind the historical o6_listen catalog paths; they are not evidence for the conf_* migration or production."
+      },
+      "verification": {
+        "recordingsRequiredPerTransport": 2,
+        "requiredEvidence": [
+          "Two complete, independently recorded sandbox receipts for each required transport and case/control pair.",
+          "Bounded all-wire request accounting, closed listeners/clients, deleted and absent owned documents and accounts.",
+          "A final source-bound artifact comparison with no unexplained mismatch."
+        ],
+        "recordingsRequired": 2
+      },
+      "note": "Existing local receipts use the historical catalog. New conf_* sandbox recordings, complete cleanup and final-artifact comparison are still required."
+    },
+    {
+      "conditionId": "FS-LISTEN-SDK/cross-principal-rules",
+      "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
+      "recipeIds": [
+        "FS-LISTEN-SDK-108",
+        "FS-LISTEN-SDK-108C"
+      ],
+      "recipeStatus": "EXISTING_CATALOG_PROPOSED_MAPPING",
+      "status": "PENDING_RECORDING",
+      "observation": {
+        "method": "Default-tenant owner and nonowner listeners on a private document, with server snapshot and permission-denied ordering. Use two static principals only; Auth state changes belong to AUTH-FS-CROSS.",
+        "transports": [
+          "node-grpc",
+          "browser-webchannel-long-polling",
+          "browser-webchannel-streaming"
+        ],
+        "sdkVersion": "firebase 12.18.0",
+        "credentials": "Two throwaway Firebase Auth users for private-owner cases; unauthenticated client for public conf_listen cases."
+      },
+      "localEvidence": {
+        "references": [
+          "spec/compatibility/fs-listen-sdk-local-shadow.json",
+          "spec/compatibility/fs-listen-sdk-browser-local-shadow.json",
+          "docs/compatibility/fs-listen-sdk-campaign-preparation.md"
+        ],
+        "productionExecuted": false,
+        "note": "Existing local shadows bind the historical o6_listen catalog paths; they are not evidence for the conf_* migration or production."
+      },
+      "verification": {
+        "recordingsRequiredPerTransport": 2,
+        "requiredEvidence": [
+          "Two complete, independently recorded sandbox receipts for each required transport and case/control pair.",
+          "Bounded all-wire request accounting, closed listeners/clients, deleted and absent owned documents and accounts.",
+          "A final source-bound artifact comparison with no unexplained mismatch."
+        ],
+        "recordingsRequired": 2
+      },
+      "note": "Existing local receipts use the historical catalog. New conf_* sandbox recordings, complete cleanup and final-artifact comparison are still required.",
+      "fixtureEvidence": {
+        "fixture": "conformance/auth-fs-cross-stage2-production.json",
+        "decisionRef": "L8",
+        "rows": [
+          "n-ab/as-alice",
+          "n-ab/after-switch",
+          "b-ab/as-alice",
+          "b-ab/after-switch"
+        ],
+        "covers": "The owner receives the private document; with the other principal's token the listener on it ends permission-denied.",
+        "recordings": 2,
+        "status": "RECORDED_NOT_COMPARED"
+      }
+    },
+    {
+      "conditionId": "FS-LISTEN-SDK/raw-resume-token",
+      "source": "docs/compatibility/fs-listen-sdk-campaign-preparation.md#what-remains-unobserved",
+      "recipeIds": [
+        "fs-listen-sdk/raw-resume-token"
+      ],
+      "recipeStatus": "PROPOSED",
+      "status": "PENDING_CORPUS",
+      "observation": {
+        "method": "Direct gRPC Listen with chosen current, stale and invalid resume tokens, RESET/TargetChange and a fresh-target control.",
+        "transports": [
+          "native-grpc"
+        ],
+        "credentials": "Two throwaway Firebase Auth users for private-owner cases; unauthenticated client for public conf_listen cases."
+      },
+      "localEvidence": {
+        "references": [
+          "docs/compatibility/fs-listen-sdk-campaign-preparation.md"
+        ],
+        "productionExecuted": false,
+        "note": "Existing local shadows bind the historical o6_listen catalog paths; they are not evidence for the conf_* migration or production."
+      },
+      "verification": {
+        "recordingsRequiredPerTransport": 2,
+        "requiredEvidence": [
+          "Frozen direct gRPC corpus and two sandbox recordings of token and control outcomes.",
+          "Final-artifact comparison with complete target state and cleanup."
+        ],
+        "recordingsRequired": 2
+      },
+      "note": "Existing local receipts use the historical catalog. New conf_* sandbox recordings, complete cleanup and final-artifact comparison are still required. Stale is read as both an older token that is still inside the resume window and a token aged past it (about 30 minutes): packet L1 records both (rows native/resume-token/older and native/resume-token-expired/expired), beside the invalid-bytes, other-query and fresh-target rows.",
+      "fixtureEvidence": {
+        "fixture": "conformance/auth-fs-cross-stage2-production.json",
+        "decisionRef": "L8",
+        "rows": [
+          "resume/open"
+        ],
+        "covers": "A native gRPC Listen resumed with the current resume token, by the principal that got it and by another one: the frames that follow.",
+        "recordings": 2,
+        "status": "RECORDED_NOT_COMPARED"
+      }
+    },
+    {
+      "conditionId": "FS-LISTEN-SDK/browser-tab-lifecycle",
+      "source": "docs/compatibility/fs-listen-sdk-campaign-preparation.md#what-remains-unobserved",
+      "recipeIds": [
+        "fs-listen-sdk/browser-tab-lifecycle"
+      ],
+      "recipeStatus": "PROPOSED",
+      "status": "PENDING_CORPUS",
+      "observation": {
+        "method": "In a real browser, observe backend-visible WebChannel terminate on tab close and the first server snapshot in a new session after reload or a new tab, with a no-reload control and complete process cleanup.",
+        "transports": [
+          "browser-webchannel-long-polling",
+          "browser-webchannel-streaming"
+        ],
+        "credentials": "Two throwaway Firebase Auth users for private-owner cases; unauthenticated client for public conf_listen cases."
+      },
+      "localEvidence": {
+        "references": [
+          "docs/compatibility/fs-listen-sdk-campaign-preparation.md"
+        ],
+        "productionExecuted": false,
+        "note": "Existing local shadows bind the historical o6_listen catalog paths; they are not evidence for the conf_* migration or production."
+      },
+      "verification": {
+        "recordingsRequiredPerTransport": 2,
+        "requiredEvidence": [
+          "A frozen real-browser lifecycle corpus and two sandbox recordings in each of long-polling and streaming WebChannel modes.",
+          "Final-artifact comparison of server-backed state after reconnect, with complete listener, client and tab cleanup."
+        ],
+        "recordingsRequired": 2
+      },
+      "note": "Existing local receipts use the historical catalog. New conf_* sandbox recordings, complete cleanup and final-artifact comparison are still required."
+    },
+    {
+      "conditionId": "FS-LISTEN-SDK/existence-filter-reconnect",
+      "source": "docs/compatibility/fs-listen-sdk-campaign-preparation.md#what-remains-unobserved",
+      "recipeIds": [
+        "fs-listen-sdk/existence-filter-reconnect"
+      ],
+      "recipeStatus": "PROPOSED",
+      "status": "PENDING_CORPUS",
+      "observation": {
+        "method": "On native gRPC and SDK reconnection, delete a document while disconnected; observe ExistenceFilter count, BloomFilter unchanged_names and SDK removal of the stale document, with a no-deletion control.",
+        "transports": [
+          "native-grpc",
+          "node-grpc",
+          "browser-webchannel-long-polling",
+          "browser-webchannel-streaming"
+        ],
+        "credentials": "Unauthenticated public conf_listen target unless the case explicitly needs a Firebase Auth user."
+      },
+      "localEvidence": {
+        "references": [],
+        "productionExecuted": false
+      },
+      "verification": {
+        "recordingsRequiredPerTransport": 2,
+        "requiredEvidence": [
+          "Frozen direct gRPC corpus and two sandbox recordings of token and control outcomes.",
+          "Final-artifact comparison with complete target state and cleanup."
+        ],
+        "recordingsRequired": 2
+      },
+      "note": "A finite sandbox corpus, two recordings per declared transport, complete cleanup and final-artifact comparison remain required."
+    },
+    {
+      "conditionId": "FS-LISTEN-SDK/backend-cache-transitions",
+      "source": "docs/compatibility/fs-listen-sdk-campaign-preparation.md#what-remains-unobserved",
+      "recipeIds": [
+        "fs-listen-sdk/backend-cache-transitions"
+      ],
+      "recipeStatus": "PROPOSED",
+      "status": "PENDING_CORPUS",
+      "observation": {
+        "method": "Observe fromCache-to-server snapshot timing and a persistent-cache resume after browser restart: compare backend resume token and read-time response with a cold-cache control. SDK-internal-only cache behavior is excluded.",
+        "transports": [
+          "browser-webchannel-long-polling",
+          "browser-webchannel-streaming"
+        ],
+        "credentials": "Unauthenticated public conf_listen target unless the case explicitly needs a Firebase Auth user."
+      },
+      "localEvidence": {
+        "references": [],
+        "productionExecuted": false
+      },
+      "verification": {
+        "recordingsRequiredPerTransport": 2,
+        "requiredEvidence": [
+          "Frozen direct gRPC corpus and two sandbox recordings of token and control outcomes.",
+          "Final-artifact comparison with complete target state and cleanup."
+        ],
+        "recordingsRequired": 2
+      },
+      "note": "A finite sandbox corpus, two recordings per declared transport, complete cleanup and final-artifact comparison remain required."
+    },
+    {
+      "conditionId": "FS-LISTEN-SDK/native-target-protocol",
+      "source": "docs/compatibility/fs-listen-sdk-campaign-preparation.md#what-remains-unobserved",
+      "recipeIds": [
+        "fs-listen-sdk/native-target-protocol"
+      ],
+      "recipeStatus": "PROPOSED",
+      "status": "PENDING_CORPUS",
+      "observation": {
+        "method": "On one native gRPC Listen stream, test AddTarget and RemoveTarget, duplicate and invalid target_id, once, read_time, expected_count, missing-index refusal and a collection-group target; include valid controls and exact target lifecycle.",
+        "transports": [
+          "native-grpc"
+        ],
+        "credentials": "Unauthenticated public conf_listen target unless the case explicitly needs a Firebase Auth user."
+      },
+      "localEvidence": {
+        "references": [],
+        "productionExecuted": false
+      },
+      "verification": {
+        "recordingsRequiredPerTransport": 2,
+        "requiredEvidence": [
+          "Frozen direct gRPC corpus and two sandbox recordings of token and control outcomes.",
+          "Final-artifact comparison with complete target state and cleanup."
+        ],
+        "recordingsRequired": 2
+      },
+      "note": "A finite sandbox corpus, two recordings per declared transport, complete cleanup and final-artifact comparison remain required."
+    },
+    {
+      "conditionId": "FS-LISTEN-SDK/final-artifact-regression",
+      "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
+      "recipeIds": [
+        "fs-listen-sdk/final-artifact-regression"
+      ],
+      "recipeStatus": "PROPOSED",
+      "status": "PENDING_REVIEW",
+      "observation": {
+        "method": "Replay every saved and new Listen recipe against one final source-bound artifact on all declared transports.",
+        "credentials": "N/A: no production request."
+      },
+      "localEvidence": {
+        "references": [],
+        "productionExecuted": false
+      },
+      "verification": {
+        "recordingsRequiredPerTransport": 0,
+        "requiredEvidence": [
+          "Complete source-bound comparisons and independent approval before parent promotion."
+        ],
+        "recordingsRequired": 0
+      },
+      "note": "Final-artifact or independent closure review has no production request and remains open until its own evidence is approved."
+    },
+    {
+      "conditionId": "FS-LISTEN-SDK/closure-review",
+      "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
+      "recipeIds": [
+        "fs-listen-sdk/closure-review"
+      ],
+      "recipeStatus": "PROPOSED",
+      "status": "PENDING_REVIEW",
+      "observation": {
+        "method": "Independent review of the exact condition map, scope decisions, receipts, divergences, request accounting and cleanup.",
+        "credentials": "N/A: no production request."
+      },
+      "localEvidence": {
+        "references": [],
+        "productionExecuted": false
+      },
+      "verification": {
+        "recordingsRequiredPerTransport": 0,
+        "requiredEvidence": [
+          "Complete source-bound comparisons and independent approval before parent promotion."
+        ],
+        "recordingsRequired": 0
+      },
+      "note": "Final-artifact or independent closure review has no production request and remains open until its own evidence is approved."
+    }
+  ],
+  "productionPlan": {
+    "status": "PROPOSAL_ONLY",
+    "authorizesProduction": false,
+    "selectedProject": "fireemu-oracle-query",
+    "candidateProject": "fireemu-oracle-query",
+    "database": "(default)",
+    "projectSelectionReason": "Owner OL-3 selected query/(default), deployed conformance/firestore.rules and existing Auth. Serialize with STORAGE and FUNCTIONS via shared lock.",
+    "historicalManifestProject": "fireemu-35fe6",
+    "existingAdaptersRejectProduction": true,
+    "catalogCases": 18,
+    "recordingsPerMode": 2,
+    "modes": [
+      "node-grpc",
+      "browser-webchannel-long-polling",
+      "browser-webchannel-streaming"
+    ],
+    "estimatedExecutions": 6,
+    "existingLogicalCapsPerExecution": {
+      "reads": 600,
+      "writes": 60,
+      "deletes": 80,
+      "listenerRegistrations": 40,
+      "cleanupReads": 300,
+      "cleanupDeletes": 150,
+      "observationSeconds": 600,
+      "cleanupSeconds": 180
+    },
+    "browserWireBaselineForTwoRecordings": 2776,
+    "browserWireBaselineExplanation": "One local receipt per browser mode used 915 long-polling and 473 streaming WebChannel requests. Doubling their sum gives a 2776-request baseline for the proposed two recordings per mode; Node, Auth, Rules, setup and cleanup requests are additional.",
+    "totalWireRequestCapRequired": true,
+    "totalWireRequestCap": null,
+    "provisionalExistingPerExecutionCostCeilingUsd": 0.5,
+    "provisionalSixExecutionCeilingUsd": 3,
+    "additionalCorpusEstimate": "ExistenceFilter/BloomFilter, backend-mediated cache, native target protocol, metadata changes, limitToLast and browser tab lifecycle remain unestimated until finite runners and controls are defined.",
+    "cleanup": "Close every listener, client and browser process; conditionally delete owned conf_* documents and both throwaway accounts, then read back typed absence and preserve unknown resources for recovery. Deployed Rules are unchanged.",
+    "prerequisites": [
+      "FS-DATA-WRITE closure and exclusive query/(default) scheduling with STORAGE and FUNCTIONS",
+      "Migrate the catalog and all local adapters to conf_listen and conf_rules_owner without changing deployed Rules; preserve historical receipts",
+      "Production-capable source-bound SDK and browser adapters with all-wire accounting and finite request cap",
+      "Finite native target, cache, ExistenceFilter, metadata and limitToLast corpus with local shadow and clean-context review",
+      "Twice-recorded sandbox packet, JSONL ledger admission and owner permission"
+    ],
+    "productionExecuted": false,
+    "project": "fireemu-oracle-query",
+    "changesRules": false,
+    "rulesCollections": [
+      "conf_listen",
+      "conf_rules_owner"
+    ],
+    "retainedCatalogCases": 15,
+    "movedCatalogCases": 3,
+    "nativeProject": "fireemu-oracle-txn",
+    "nativeProjectReason": "L7: native gRPC Listen with the owner access token needs no Rules and costs nothing on the unbilled txn project."
+  },
+  "note": "The shared 18-case catalog uses case IDs as recipe IDs; 15 belong to this parent and 106, 109 and 109C belong to AUTH-FS-CROSS under R2. Additional recipes use fs-listen-sdk/<condition>. Historical local shadows bind the old o6_listen paths and remain immutable. No production recording or closure is claimed.",
+  "profileComparison": {
+    "profile": "strict",
+    "localOutcome": "Strict revocation and tenant deletion listeners end on refresh; emulator profile listeners continue in focused local checks.",
+    "officialEmulatorComparison": "PENDING",
+    "productionComparison": "PENDING",
+    "note": "A strict-only refusal is not yet a production compatibility claim. AUTH-FS-CROSS owns the state-change observations."
+  },
+  "movedCatalogCases": [
+    {
+      "caseId": "FS-LISTEN-SDK-106",
+      "movedTo": "AUTH-FS-CROSS",
+      "decisionRef": "FS-RULES R2",
+      "status": "MOVED"
+    },
+    {
+      "caseId": "FS-LISTEN-SDK-109",
+      "movedTo": "AUTH-FS-CROSS",
+      "decisionRef": "FS-RULES R2",
+      "status": "MOVED"
+    },
+    {
+      "caseId": "FS-LISTEN-SDK-109C",
+      "movedTo": "AUTH-FS-CROSS",
+      "decisionRef": "FS-RULES R2",
+      "status": "MOVED"
+    }
+  ],
+  "frozenOn": "2026-09-27",
+  "oracle": {
+    "project": "fireemu-oracle-query",
+    "database": "(default)",
+    "credentials": "Unauthenticated Web SDK for public conf_listen cases and two throwaway Email/Password Firebase Auth accounts for conf_rules_owner cases.",
+    "productionExecuted": false,
+    "nativeProject": "fireemu-oracle-txn",
+    "nativeCredentials": "Owner access token (gcloud auth application-default print-access-token); no end-user credential."
+  },
+  "amendedOn": "2026-10-05",
+  "amendment": "Owner ledger 824 (2026-10-05) and the coordinator: native gRPC Listen recordings run on fireemu-oracle-txn (L7) and the AUTH-FS-CROSS stage-2 fixture serves as Listen evidence for three behaviours (L8). The 15 conditions, the frozen catalog mapping and every other scope decision are unchanged."
+}

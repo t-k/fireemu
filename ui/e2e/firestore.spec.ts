@@ -799,7 +799,8 @@ test.describe("Firestore data browser", () => {
     await gotoApp(page, "/firestore/paged-delete");
     await page.getByTestId("collection-delete").click();
     await page.getByTestId("collection-delete-confirm").click();
-    await expect(page).toHaveURL(/\/ui\/firestore\/?\?db=/);
+    // Deleting 601 subcollections recursively can outlast the default expect timeout on CI.
+    await expect(page).toHaveURL(/\/ui\/firestore\/?\?db=/, { timeout: 60_000 });
     const ids = (await api(request, "POST", DOCS + ":listCollectionIds", {})) as {
       collectionIds?: string[];
     };

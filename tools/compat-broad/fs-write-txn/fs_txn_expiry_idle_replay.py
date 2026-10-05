@@ -3,9 +3,10 @@
 The campaign's table waits 90 s for its three idle observations (commit, rollback and lock release after an idle expiry); strict's idle limit is 120 s, so
 that replay was superseded (see `supersededForStrict` in the 04 record). Here the same shadow and projections run from a sibling copy of this directory
 (`fs-write-txn-overlay-idle`, untracked, built by this tool) whose three waits are `IDLE_SECONDS` (121 s): inside the interval production narrowed for the idle
-threshold ([110.70, 122.96) s, ledger 809 (5)); production's own idles were 120.35 to 121.15 s for the commit, 120.60 to 121.06 s for the rollback and 124.68 to 125.22 s for the lock release. 121 s is inside the first two; for the lock release it is a lower idle with the same outcome (strict refuses every idle above 120 s), a valid sample and not the recorded idle.
-The local idle of each is then 121 s on the emulator's control clock. Every case and post state of the replay is compared with both production recordings by the
-campaign's own projections.
+threshold ([110.70, 122.96) s, ledger 809 (5)). Production's own idles were 120.35 to 121.15 s for the commit, 120.60 to 121.06 s for the rollback and 124.68 to
+125.22 s for the lock release: 121 s is inside the first two; for the lock release it is a lower idle with the same outcome (strict refuses every idle above 120 s), a
+valid sample and not the recorded idle. The local idle of each is 121 s on the emulator's control clock. Every case and post state of the replay is compared with both
+production recordings by the campaign's own projections.
 
     python fs_txn_expiry_idle_replay.py --binary <fireemu> --commit <sha of its source> --recordings <E04 run dir> --out <record.json> [--keep <receipt dir>]
 """
@@ -94,8 +95,8 @@ def build_record(*, commit, binary_sha256, recording_digests, rows_by_recording,
             "tool": "tools/compat-broad/fs-write-txn/fs_txn_expiry_idle_replay.py", "idleWaitSeconds": IDLE_SECONDS, "idleCases": list(IDLE_CASES), "localIdleSeconds": idles,
             "casesFileBlob": cases_blob, "fileSha256": file_digests,
             "note": ("The campaign's case table with its three idle waits changed from 90 s to 121 s and nothing else. Each idle observation was made after the idle in localIdleSeconds on the control clock, "
-                     "inside the interval [110.70, 122.96) s production narrowed for the idle threshold (ledger 809 (5)); the lock-release case idled 125.2 s in production, also past strict's 120 s limit, "
-                     "so the same refusal is decided directly. The other cases are replayed unchanged."),
+                     "inside the interval [110.70, 122.96) s production narrowed for the idle threshold (ledger 809 (5)); the lock-release case idled 124.7 to 125.2 s in production, so 121 s is a lower idle there with the same outcome (strict refuses every idle above its 120 s limit): "
+                     "a valid sample, not the recorded idle. The other cases are replayed unchanged."),
         },
         "recordings": [{"recording": index + 1, "productionFileSha256": digest, "rows": rows, "mismatches": sum(not row["match"] for row in rows)}
                        for index, (digest, rows) in enumerate(zip(recording_digests, rows_by_recording, strict=True))],

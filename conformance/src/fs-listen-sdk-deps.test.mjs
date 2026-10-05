@@ -261,3 +261,10 @@ test("makeDeps hands the revoke function to the adapter's auth dependencies", as
   const without = makeDeps({ sdk: fakeSdk([]), clients, base: 1 });
   await assert.rejects(without.auth.revoke("primary"), /revocation is unavailable/);
 });
+
+test("sdk-deps-core.mjs runs in a browser page: it imports nothing", async () => {
+  const { readFileSync } = await import("node:fs");
+  const source = readFileSync(new URL("./fs-listen/sdk-deps-core.mjs", import.meta.url), "utf8");
+  assert.equal(/^\s*import\s/m.test(source), false);
+  assert.equal(/node:/.test(source), false);
+});

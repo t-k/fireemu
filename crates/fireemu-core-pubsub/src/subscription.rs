@@ -1388,7 +1388,7 @@ mod tests {
                     prop_assert_eq!(sub.acknowledge(&ids),selected.len());
                     for index in selected {reference[index]=2;}
                 }
-                prop_assert_eq!(sub.outstanding_count(),reference.iter().filter(|state|**state==1).count());
+                prop_assert_eq!(sub.outstanding_count(),reference.iter().fold(0, |count, state| count + usize::from(*state == 1)));
             }
         }
     }

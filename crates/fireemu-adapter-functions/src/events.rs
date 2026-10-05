@@ -1028,14 +1028,46 @@ mod tests {
     #[test]
     fn the_subscription_id_is_stable_and_names_the_function_the_project_and_the_region() {
         let id = eventarc_subscription_id("demo-app", "us-central1", "onJob");
-        assert_eq!(id, eventarc_subscription_id("demo-app", "us-central1", "onJob"));
+        assert_eq!(
+            id,
+            eventarc_subscription_id("demo-app", "us-central1", "onJob")
+        );
         assert!(id.starts_with("eventarc-us-central1-onjob-"), "{id}");
         // Another function, region or project is another subscription.
-        assert_ne!(id, eventarc_subscription_id("demo-app", "us-central1", "onJob2"));
-        assert_ne!(id, eventarc_subscription_id("demo-app", "europe-west1", "onJob"));
-        assert_ne!(id, eventarc_subscription_id("other-app", "us-central1", "onJob"));
+        assert_ne!(
+            id,
+            eventarc_subscription_id("demo-app", "us-central1", "onJob2")
+        );
+        assert_ne!(
+            id,
+            eventarc_subscription_id("demo-app", "europe-west1", "onJob")
+        );
+        assert_ne!(
+            id,
+            eventarc_subscription_id("other-app", "us-central1", "onJob")
+        );
         // The parts are separated: moving a character between them changes the hash.
         assert_ne!(stable_hash(&["ab", "c"]), stable_hash(&["a", "bc"]));
+    }
+
+    #[test]
+    fn the_subscription_ids_are_pinned_so_that_a_deployment_keeps_its_name_across_releases() {
+        // FNV-1a over the parts, each followed by a zero byte: these values are the algorithm.
+        assert_eq!(
+            stable_hash(&["demo-app", "us-central1", "onJob"]),
+            7_612_220_917_531_147_373
+        );
+        assert_eq!(stable_hash(&["ab", "c"]), 12_475_682_555_102_643_973);
+        assert_eq!(stable_hash(&["a", "bc"]), 4_618_443_601_942_399_609);
+        assert_eq!(stable_hash(&[""]), 12_638_153_115_695_167_455);
+        assert_eq!(
+            eventarc_subscription_id("demo-app", "us-central1", "onJob"),
+            "eventarc-us-central1-onjob-147373-sub-531"
+        );
+        assert_eq!(
+            eventarc_subscription_id("fireemu-oracle-events", "us-central1", "pubsubPublishedV2"),
+            "eventarc-us-central1-pubsubpublishedv2-147205-sub-779"
+        );
     }
 
     #[test]

@@ -150,21 +150,33 @@ test("the recorded IAM policy against itself differs by nothing, and added princ
   assert.equal(iamDiff({ status: 500, json: {} }, policy, NUMBER), null);
 });
 
-test("an expected principal is a Google service account that names this project number", () => {
+test("an expected principal is one of the known Google forms for this project", () => {
   const ok = [
     "serviceAccount:" + NUMBER + "-compute@developer.gserviceaccount.com",
     "serviceAccount:service-" + NUMBER + "@gcp-sa-run.iam.gserviceaccount.com",
+    "serviceAccount:service-" + NUMBER + "@compute-system.iam.gserviceaccount.com",
+    "serviceAccount:service-" + NUMBER + "@gcf-admin-robot.iam.gserviceaccount.com",
     "serviceAccount:" + NUMBER + "@cloudservices.gserviceaccount.com",
+    "serviceAccount:" + NUMBER + "@cloudbuild.gserviceaccount.com",
+    "serviceAccount:" + PROJECT + "@appspot.gserviceaccount.com",
   ];
   for (const member of ok) assert.equal(expectedPrincipal(member, NUMBER), true, member);
   const refused = [
     "user:a@example.com",
     "group:g@example.com",
+    "allUsers",
     "serviceAccount:" + NUMBER + "-compute@developer.gserviceaccount.com.evil.example",
     "serviceAccount:999999999999-compute@developer.gserviceaccount.com",
-    "serviceAccount:" + PROJECT + "@appspot.gserviceaccount.com",
+    "serviceAccount:x" + NUMBER + "@other.iam.gserviceaccount.com", // another project's account that contains the number
+    "serviceAccount:service-" + NUMBER + "@evil.example",
+    "serviceAccount:service-" + NUMBER + "@a.b.iam.gserviceaccount.com",
+    "serviceAccount:service-999999999999@gcp-sa-run.iam.gserviceaccount.com",
+    "serviceAccount:" + NUMBER + "@appspot.gserviceaccount.com",
+    "serviceAccount:other-project@appspot.gserviceaccount.com",
+    "serviceAccount:" + PROJECT + "@appspot.gserviceaccount.com.evil.example",
     "serviceAccount:x@" + PROJECT + ".iam.gserviceaccount.com",
-    "allUsers",
+    "serviceAccount:" + NUMBER + "@gmail.com",
+    "service-" + NUMBER + "@gcp-sa-run.iam.gserviceaccount.com", // no serviceAccount: prefix
   ];
   for (const member of refused) assert.equal(expectedPrincipal(member, NUMBER), false, member);
 });

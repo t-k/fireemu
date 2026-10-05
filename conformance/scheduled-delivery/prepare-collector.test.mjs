@@ -38,6 +38,7 @@ test("a clean run enables the eight services once, reads before and after, and m
     "enable-poll-1",
     "enable-poll-2",
     "services-after",
+    "logging-read-after",
     "iam-after",
     "list-functions-v1",
     "list-functions-v2",
@@ -258,7 +259,10 @@ test("an observation that gets no answer leaves the run open", async () => {
     hooks: { [key("POST", "v2/entries:list")]: async () => "throw" },
   });
   const { result } = await run(server);
-  assert.deepEqual(result.incompleteReads, [{ id: "logging-read", class: "transport" }]);
+  assert.deepEqual(result.incompleteReads, [
+    { id: "logging-read", class: "transport" },
+    { id: "logging-read-after", class: "transport" },
+  ]);
   assert.equal(result.closureReady, false);
 });
 
@@ -494,4 +498,71 @@ test("a 400 on an ordinary read is incomplete, and the empty-list judgement need
   const clean = await run(fakeServer());
   for (const id of Object.keys(clean.result.lists))
     assert.equal(clean.result.lists[id].empty, true, id);
+});
+
+test("an operation that never reports done does not close the run even when the services read ENABLED", async () => {
+  const enableNow = async ({ state, body }) => {
+    for (const id of body.serviceIds) state.enabled.add(id);
+    return undefined;
+  };
+  const never = fakeServer({
+    pendingPolls: 99,
+    hooks: {
+      [ENABLE]: enableNow,
+      "GET v1/operations/acf.p2-<number>-e627f9a7-0f50-48e6-856c-93ad311e8f0e": async () =>
+        reply(200, {
+          name: "operations/acf.p2-" + NUMBER + "-e627f9a7-0f50-48e6-856c-93ad311e8f0e",
+        }),
+    },
+  });
+  const a = await run(never);
+  assert.deepEqual(a.result.missingAfter, [], "every service reads ENABLED");
+  assert.equal(a.result.batchEnable.done, false);
+  assert.equal(a.result.closureReady, false);
+  assert.equal(a.result.unknownMutations, 0, "the answer was known; the operation is what is open");
+});
+
+test("a 2xx batchEnable that is not an operation does not close the run", async () => {
+  const server = fakeServer({
+    hooks: {
+      [ENABLE]: async ({ state, body }) => {
+        for (const id of body.serviceIds) state.enabled.add(id);
+        return reply(200, { unrelated: true });
+      },
+    },
+  });
+  const { result } = await run(server);
+  assert.deepEqual(result.missingAfter, []);
+  assert.equal(result.batchEnable.done, undefined);
+  assert.equal(result.closureReady, false);
+});
+
+test("Logging is read again after the enable, and what the services list says is reported", async () => {
+  const server = fakeServer();
+  const { result, journal } = await run(server);
+  const order = ids(journal);
+  assert.ok(order.indexOf("logging-read") < order.indexOf("enable-apis"));
+  assert.ok(order.indexOf("enable-apis") < order.indexOf("logging-read-after"));
+  assert.deepEqual(result.loggingAfter, { status: 200, canRead: true, entries: 0 });
+  assert.equal(result.loggingEnabledAfter, false, "the fake's services list does not name logging");
+  const enabled = fakeServer({ enabled: [...BASE_ENABLED, "logging.googleapis.com"] });
+  assert.equal((await run(enabled)).result.loggingEnabledAfter, true);
+  const denied = fakeServer({
+    hooks: { [key("POST", "v2/entries:list")]: async () => error(403, "denied") },
+  });
+  const d = await run(denied);
+  assert.deepEqual(d.result.loggingAfter, { status: 403, canRead: false });
+  assert.deepEqual(d.result.incompleteReads, [], "a 403 on the observation is the answer");
+});
+
+test("an enabled service whose list cannot be read leaves loggingEnabledAfter unknown", async () => {
+  const server = fakeServer({
+    hooks: {
+      [key("GET", SERVICES)]: async ({ state }) =>
+        state.polls === 0 ? undefined : error(500, "later"),
+    },
+  });
+  const { result } = await run(server);
+  assert.equal(result.loggingEnabledAfter, null);
+  assert.equal(result.closureReady, false);
 });

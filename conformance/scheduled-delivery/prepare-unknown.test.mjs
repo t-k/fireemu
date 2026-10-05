@@ -103,6 +103,10 @@ test("generated: the mutation is sent at most once, unknown is never closed, a c
       closed++;
       assert.equal(result.unknownMutations, 0, label);
       assert.deepEqual(result.missingAfter, [], label);
+      assert.ok(
+        result.batchEnable === null || result.batchEnable.done === true,
+        label + ": an enable closes only when its operation is done",
+      );
       assert.deepEqual(result.incompleteReads, [], label);
       assert.deepEqual(result.iam.unexpected, [], label);
       assert.ok(!result.authStop, label);

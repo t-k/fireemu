@@ -16,13 +16,14 @@ import { AuthStop, answerClass, createCapture, isUnknownClass, readable } from "
 export const PROJECT = "fireemu-oracle-sbx";
 export const REGION = "us-central1";
 export const MAX_REQUESTS = 60;
+const esc = (text) => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 const SERVICEUSAGE = "https://serviceusage.googleapis.com/v1/";
 
 /**
  * The APIs the deploy needs and the sandbox does not have (the sandbox already has cloudscheduler,
  * pubsub and appengine). Chosen from firebase-tools 15.28.2 `deploy/functions/prepare.js`: the
  * standard APIs of a Cloud Functions deploy plus, for a v2 function, Run, Eventarc, Pub/Sub and
- * Storage; Firebase Extensions is enabled by the CLI on a v2 deploy; Compute Engine creates the
+ * Storage; Firebase Extensions is needed by every deploy (the SDK always emits an empty extensions section, so the CLI prepares dynamic extensions, which enables the API); Compute Engine creates the
  * default service account the v2 Scheduler job and the Run invoker binding use (the same owner
  * decision as on the events project, ledger 305). Already-enabled ones are not an error.
  */
@@ -121,12 +122,26 @@ export const operationDone = (a) =>
   a?.status === 200 && readable(a) && OPERATION.test(a.json.name ?? "") && a.json.done === true;
 export const operationFailed = (a) => operationDone(a) && !!a.json.error;
 
-/** A Google-managed principal that enabling an API may add: a service agent or a default account. */
+/**
+ * A Google-managed principal that enabling an API may add: only the known forms. A service agent
+ * (`service-<number>@<name>.iam.gserviceaccount.com`), the Cloud Build and Google APIs accounts
+ * (`<number>@cloudbuild.gserviceaccount.com`, `<number>@cloudservices.gserviceaccount.com`), the default
+ * Compute Engine account (`<number>-compute@developer.gserviceaccount.com`), and the project's own App Engine
+ * default account (`<project id>@appspot.gserviceaccount.com`, which Google grants Editor when an API such
+ * as Compute Engine is enabled). Any other principal, including a service account of another project whose
+ * name merely contains the number, is a reason to review.
+ */
 export function expectedPrincipal(member, projectNumber) {
   const m = /^serviceAccount:(.+)$/.exec(member);
   if (!m) return false;
   const email = m[1];
-  return email.endsWith(".gserviceaccount.com") && email.includes(projectNumber);
+  const n = esc(projectNumber);
+  return [
+    new RegExp(`^service-${n}@[a-z0-9-]+\\.iam\\.gserviceaccount\\.com$`),
+    new RegExp(`^${n}@(?:cloudbuild|cloudservices)\\.gserviceaccount\\.com$`),
+    new RegExp(`^${n}-compute@developer\\.gserviceaccount\\.com$`),
+    new RegExp(`^${esc(PROJECT)}@appspot\\.gserviceaccount\\.com$`),
+  ].some((re) => re.test(email));
 }
 
 const memberKeys = (policy) =>
@@ -358,6 +373,15 @@ export async function collect({
     }
     out.stage = "after";
     const after = await listEnabled("services-after");
+    const loggingAfter = await read({
+      id: "logging-read-after",
+      method: "POST",
+      observe: true,
+      url: "https://logging.googleapis.com/v2/entries:list",
+      json: { resourceNames: ["projects/" + PROJECT], orderBy: "timestamp desc", pageSize: 1 },
+    });
+    out.loggingAfter = loggingSummary(loggingAfter);
+    out.loggingEnabledAfter = after ? after.has("logging.googleapis.com") : null;
     const iamAfter = await read({
       id: "iam-after",
       method: "POST",
@@ -417,7 +441,9 @@ export async function collect({
       out.iam !== null &&
       out.iam.unexpected.length === 0 &&
       out.iam.removed.length === 0 &&
-      (out.batchEnable === null || !out.batchEnable.failed);
+      // An enable that was sent closes only when its operation reported done without an error: services
+      // that read ENABLED while the operation is still pending can be followed by service agents and grants.
+      (out.batchEnable === null || (out.batchEnable.done === true && !out.batchEnable.failed));
     return summary("done", ok);
   }
 }

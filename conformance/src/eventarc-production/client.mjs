@@ -28,12 +28,15 @@ export function isRecordedNotFound(reply) {
  * The kind of an answer to a channel creation or deletion: a 2xx whose long-running operation is not
  * known to be done (or is done with an error) is not "ok" yet. It is `unknown` until the operation is
  * read (see `settleOperation`), because the 2xx alone does not say that this run created (or removed)
- * the channel: an operation can end with ALREADY_EXISTS.
+ * the channel: an operation can end with ALREADY_EXISTS. When the 2xx names the operation, the kind
+ * carries its name (`unknown@<operation>`): that operation, and no other request for the same channel
+ * (the deliberate duplicate creation, for one), is what settles this answer.
  */
 function kindOfAnswer(result) {
   const kind = kindOf(result);
   if (kind !== "ok") return kind;
-  return result.body?.done === true && result.body?.error === undefined ? "ok" : "unknown";
+  if (result.body?.done === true && result.body?.error === undefined) return "ok";
+  return typeof result.body?.name === "string" ? `unknown@${result.body.name}` : "unknown";
 }
 
 /** The kind the final read of an operation settles a creation or deletion to. */
@@ -165,9 +168,18 @@ export function createClient({
     /**
      * Writes into the ledger what the last read of the operation of a creation or deletion says: `ok`
      * when it is done without an error, `conflict` for ALREADY_EXISTS, `error` for another error, and
-     * `unknown` when it was not read as done.
+     * `unknown` when it was not read as done. The kind carries the name of the operation (`ok@<operation>`),
+     * so that it settles that request and no other.
      */
-    settleOperation: (name, action, operation) =>
-      ledger.answered({ name, action, transport: "rest", kind: kindOfOperation(operation) }),
+    settleOperation: (name, action, operation, operationName) =>
+      ledger.answered({
+        name,
+        action,
+        transport: "rest",
+        kind:
+          typeof operationName === "string"
+            ? `${kindOfOperation(operation)}@${operationName}`
+            : kindOfOperation(operation),
+      }),
   });
 }

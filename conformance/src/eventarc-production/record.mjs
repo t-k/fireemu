@@ -10,8 +10,8 @@
 //
 // Exit codes: 0 done, 1 cleanup left something, 2 usage, 3 stopped clean (a signal), 4 the budget was spent.
 
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { basename, dirname, join } from "node:path";
+import { mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { basename, dirname, join, resolve as resolvePath } from "node:path";
 import { createBudget, createCapture, createFileJournal } from "../pubsub-production/capture.mjs";
 import { createLedger } from "../pubsub-production/ledger.mjs";
 import { createRest } from "../pubsub-production/rest.mjs";
@@ -97,6 +97,10 @@ export function parseArgs(argv, env = {}) {
       throw new Error("--cleanup-only needs --from-capture <the recording's capture file>");
     if (basename(options.fromCapture) !== `capture-${options.runId}.jsonl`)
       throw new Error("--from-capture must be capture-<run ID>.jsonl of that run");
+    // The later run reads the ledgers of the recording and of every earlier later run from the directory
+    // of the capture, and writes its own beside them: a different --out would hide the earlier ones.
+    if (resolvePath(options.out) !== resolvePath(dirname(options.fromCapture)))
+      throw new Error("--out must be the directory of --from-capture (the recording's directory)");
     options.ledgerPath = join(dirname(options.fromCapture), `issued-${options.runId}.jsonl`);
   } else if (options.fromCapture !== undefined)
     throw new Error("--from-capture is for --cleanup-only");
@@ -134,7 +138,7 @@ export function summarize({ options, capture, summary }) {
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
-/** The time of the last line of a capture, which the later run waits from. */
+/** The time of the last line of a capture. */
 function lastLineTime(path) {
   const lines = readFileSync(path, "utf8")
     .split("\n")
@@ -142,6 +146,16 @@ function lastLineTime(path) {
   const at = Date.parse(JSON.parse(lines.at(-1) ?? "{}").at);
   if (Number.isNaN(at)) throw new Error("the capture has no readable last line");
   return at;
+}
+
+/**
+ * The time of the last line of the newest capture of the run in the directory (the recording's, or an
+ * earlier later run's), which the later run waits from.
+ */
+function newestCaptureTime(directory, runId) {
+  const pattern = new RegExp(`^capture-${runId}(-a2-\\d{8}T\\d{6}Z)?\\.jsonl$`);
+  const files = readdirSync(directory).filter((name) => pattern.test(name));
+  return Math.max(...files.map((name) => lastLineTime(join(directory, name))));
 }
 
 const stamp = (ms) => new Date(ms).toISOString().replace(/[-:]/g, "").replace(/\.\d+/, "");
@@ -166,10 +180,11 @@ export async function main(
       // The later run reads the channels the recording issued, and waits for the service to settle.
       // The recording's ledger and those of the later runs before this one.
       issued = readLedgerFiles(ledgerFilesOf(directoryOf(options.fromCapture), options.runId), {});
-      const waited = deps.now() - lastLineTime(options.fromCapture);
+      const waited =
+        deps.now() - newestCaptureTime(directoryOf(options.fromCapture), options.runId);
       if (waited < MIN_A2_WAIT_MS)
         throw new Error(
-          `--cleanup-only runs at least ${MIN_A2_WAIT_MS / 60000} minutes after the recording (${Math.ceil(waited / 1000)} s so far)`,
+          `--cleanup-only runs at least ${MIN_A2_WAIT_MS / 60000} minutes after the recording and the earlier later runs (${Math.ceil(waited / 1000)} s so far)`,
         );
       suffix = `-a2-${stamp(deps.now())}`;
     }
@@ -283,7 +298,7 @@ export async function main(
     { mode: 0o600 },
   );
   io.stdout.write(
-    `${JSON.stringify({ runId: result.runId, requests: result.requests, stopped: result.stopped, closureReady: result.closureReady, cleanup: { deleted: summary.cleanup.deleted.length, leftover: summary.cleanup.leftover, errors: summary.cleanup.errors, unsettled: summary.cleanup.unsettled } })}\n`,
+    `${JSON.stringify({ runId: result.runId, requests: result.requests, stopped: result.stopped, closureReady: result.closureReady, cleanup: { deleted: summary.cleanup.deleted.length, leftover: summary.cleanup.leftover, errors: summary.cleanup.errors, unsettled: summary.cleanup.unsettled, unconfirmed: summary.cleanup.unconfirmed } })}\n`,
   );
   return exitCodeOf(summary);
 }

@@ -429,7 +429,7 @@ test("an operation that never finishes is read fifteen times by default with two
 
 const later = { mode: "later" };
 
-test("a creation that is still unknown is not settled by a 404 inside the recording, but by the later run's own 404", async () => {
+test("a creation that is still unknown is not settled by a 404, in the recording or in the later run; once its operation is read as done a 404 settles it", async () => {
   // The POST answered 2xx and the operation was never read as done: `unknown`, not `ok`.
   const pending = mine("pending");
   issue(pending, "unknown");
@@ -439,22 +439,36 @@ test("a creation that is still unknown is not settled by a 404 inside the record
   assert.deepEqual(inRecording.unsettled, [pending]);
   assert.deepEqual(inRecording.settled, []);
   assert.deepEqual(inRecording.alreadyGone, [pending]);
+  assert.deepEqual(inRecording.unconfirmed, [pending]);
   const afterwards = await run(fakeService({ channels: [] }), later);
-  assert.deepEqual(afterwards.unsettled, []);
-  assert.deepEqual(afterwards.settled, [{ name: pending, how: "absent" }]);
+  assert.deepEqual(
+    afterwards.unsettled,
+    [pending],
+    "the later run does not settle it by absence either",
+  );
+  assert.deepEqual(afterwards.settled, []);
   // Once the operation is read as done and the channel is ours, a 404 settles it.
   ledger = createLedger();
   const proven = mine("proven");
   issue(proven, "unknown");
   issue(proven, "ok");
   const second = await run(fakeService({ channels: [] }));
-  assert.deepEqual(second.settled, [{ name: proven, how: "absent" }]);
+  assert.deepEqual(
+    second.unsettled,
+    [proven],
+    "a plain unknown stays pending, whatever came after",
+  );
+  ledger = createLedger();
+  issue(proven, "unknown@op-1");
+  issue(proven, "ok@op-1");
+  const third = await run(fakeService({ channels: [] }));
+  assert.deepEqual(third.settled, [{ name: proven, how: "absent" }]);
 });
 
 test("a creation whose operation ended with ALREADY_EXISTS is a conflict and the channel is never deleted", async () => {
   const taken = own.registerProbe("projects/demo-project/locations/us-central1/channels/taken");
-  issue(taken, "unknown");
-  issue(taken, "conflict");
+  issue(taken, "unknown@op-1");
+  issue(taken, "conflict@op-1");
   const service = fakeService({ channels: [taken] });
   const report = await run(service);
   assert.equal(service.calls.length > 0, true);
@@ -475,13 +489,15 @@ test("after an unknown deletion nothing is sent again inside the recording; the 
   assert.equal(deletes(inRecording).length, 0, "read-backs only");
   assert.deepEqual(recorded.leftover, [name]);
   assert.deepEqual(recorded.unsettled, [name]);
-  // The deletion was applied after all: a read-back settles it.
+  // The deletion was applied after all: inside the recording nothing settles it, the later run's read does.
   let applied;
   applied = fakeService({ channels: [name] });
   applied.live.delete(name);
-  const settledBack = await run(applied);
-  assert.deepEqual(settledBack.settled, [{ name, how: "absent" }]);
+  const stillOpen = await run(applied);
+  assert.deepEqual([stillOpen.settled, stillOpen.unsettled], [[], [name]]);
   assert.equal(deletes(applied).length, 0);
+  const settledBack = await run(fakeService({ channels: [] }), later);
+  assert.deepEqual(settledBack.settled, [{ name, how: "absent" }]);
   // The later run: one DELETE after its own read.
   const afterwards = fakeService({ channels: [name] });
   const one = await run(afterwards, later);
@@ -505,7 +521,7 @@ test("a deletion answered 2xx whose operation did not finish is written into the
   const facts = ledger.state().get(name);
   assert.deepEqual(
     facts.deletes,
-    ["unknown", "unknown"],
+    Array(2).fill("unknown@projects/demo-project/locations/us-central1/operations/op-0"),
     "the 2xx, then the operation that was not done",
   );
   // A second cleanup of the same run sends nothing more.
@@ -539,7 +555,8 @@ test("a target in a location that cannot exist is read by name and its location 
     "projects/demo-project/locations/no-such-location1/channels/nowhere",
     { listable: false },
   );
-  issue(nowhere, "unknown");
+  issue(nowhere, "unknown@op-1");
+  issue(nowhere, "ok@op-1");
   const service = fakeService({ channels: [] });
   const report = await run(service, later);
   assert.equal(
@@ -569,16 +586,23 @@ test("what the ledger says of a channel: nothing for a name it never saw, and ea
     deleteSent: true,
     deletePending: true,
   });
-  // A later definite answer resolves an unknown: nothing is pending, the deletion was still sent.
+  // A later definite answer resolves an unknown deletion, but not an unknown creation: the creation is
+  // settled only by its own operation (or an own 2xx read), never by another request.
   assert.deepEqual(
     ledgerFacts({ creates: ["unknown", "ok"], deletes: ["unknown", "ok"], open: [] }),
     {
       mayExist: true,
-      createPending: false,
+      createPending: true,
       deleteSent: true,
       deletePending: false,
     },
   );
+  assert.deepEqual(ledgerFacts({ creates: ["unknown@op", "ok@op"], deletes: [], open: [] }), {
+    mayExist: true,
+    createPending: false,
+    deleteSent: false,
+    deletePending: false,
+  });
   // An unknown after the definite answer is pending again.
   assert.equal(
     ledgerFacts({ creates: ["ok", "unknown"], deletes: [], open: [] }).createPending,

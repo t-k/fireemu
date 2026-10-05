@@ -63,7 +63,7 @@ export async function waitOperation(ctx, host, reply, { attempts = 10, settle } 
     }
   }
   if (settle !== undefined && reply?.ok)
-    ctx.client.settleOperation(settle.name, settle.action, last);
+    ctx.client.settleOperation(settle.name, settle.action, last, name);
   return last;
 }
 

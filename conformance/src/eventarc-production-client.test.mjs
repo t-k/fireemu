@@ -6,6 +6,7 @@ import {
   createClient,
   kindOfOperation,
 } from "./eventarc-production/client.mjs";
+import { createLedger } from "./pubsub-production/ledger.mjs";
 import { createOwnership } from "./eventarc-production/names.mjs";
 
 const RUN = "0123456789ab";
@@ -241,4 +242,81 @@ test("an operation is settled by what it says: done without an error is ok, ALRE
   assert.equal(kindOfOperation(read({})), "unknown");
   assert.equal(kindOfOperation(read({ done: true }, false)), "unknown");
   assert.equal(kindOfOperation(undefined), "unknown");
+});
+
+test("an answer that names an operation carries its name in the ledger kind, so that only that operation settles it", async () => {
+  const ownership = own();
+  const name = ownership.channel("us-central1", "k");
+  const id = name.split("/").at(-1);
+  const op = "projects/demo-project/locations/us-central1/operations/op-9";
+  const kinds = async (reply, action) => {
+    const ledger = createLedger();
+    const { transports } = fakeTransports(reply);
+    const client = createClient({ transports, ownership, caseId: "c", usageProject: "p", ledger });
+    if (action === "create") await client.createChannel("demo-project", "us-central1", id, {});
+    else await client.deleteChannel(name);
+    return ledger.state().get(name)[action === "create" ? "creates" : "deletes"];
+  };
+  for (const action of ["create", "delete"]) {
+    // Accepted, the operation not done: unknown, but named.
+    assert.deepEqual(
+      await kinds({ status: 200, body: { name: op, done: false }, unknown: false }, action),
+      [`unknown@${op}`],
+    );
+    // Done with an error in the answer itself: still unknown until the operation is settled, and named.
+    assert.deepEqual(
+      await kinds(
+        { status: 200, body: { name: op, done: true, error: { code: 6 } }, unknown: false },
+        action,
+      ),
+      [`unknown@${op}`],
+    );
+    // Done without an error: ok, with no operation left to read.
+    assert.deepEqual(
+      await kinds({ status: 200, body: { name: op, done: true }, unknown: false }, action),
+      ["ok"],
+    );
+    // A name that is not a string, or no name: plain unknown. An unreadable answer is plain unknown too.
+    assert.deepEqual(
+      await kinds({ status: 200, body: { name: 5, done: false }, unknown: false }, action),
+      ["unknown"],
+    );
+    assert.deepEqual(await kinds({ status: 200, body: { done: false }, unknown: false }, action), [
+      "unknown",
+    ]);
+    assert.deepEqual(
+      await kinds({ status: 200, body: { name: op, done: false }, unknown: true }, action),
+      ["unknown"],
+    );
+    assert.deepEqual(
+      await kinds(
+        { status: 409, body: { error: { status: "ALREADY_EXISTS" } }, unknown: false },
+        action,
+      ),
+      ["conflict"],
+    );
+  }
+});
+
+test("settling an operation writes what it says, with the operation's name when it is given", () => {
+  const ownership = own();
+  const name = ownership.channel("us-central1", "k");
+  const ledger = createLedger();
+  const { transports } = fakeTransports();
+  const client = createClient({ transports, ownership, caseId: "c", usageProject: "p", ledger });
+  const op = "projects/demo-project/locations/us-central1/operations/op-9";
+  const read = (body, ok = true) => ({ ok, body });
+  client.settleOperation(name, "create", read({ done: true }), op);
+  client.settleOperation(name, "create", read({ done: true, error: { code: 6 } }), op);
+  client.settleOperation(name, "create", read({ done: false }), op);
+  client.settleOperation(name, "create", read({ done: true }));
+  client.settleOperation(name, "delete", read({ done: true, error: { code: 13 } }), op);
+  client.settleOperation(name, "delete", read({}, false));
+  assert.deepEqual(ledger.state().get(name).creates, [
+    `ok@${op}`,
+    `conflict@${op}`,
+    `unknown@${op}`,
+    "ok",
+  ]);
+  assert.deepEqual(ledger.state().get(name).deletes, [`error@${op}`, "unknown"]);
 });

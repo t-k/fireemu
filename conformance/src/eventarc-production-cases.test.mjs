@@ -14,6 +14,7 @@ import { adminSdkPublish } from "./eventarc-production/cases/sdk.mjs";
 import { serviceState } from "./eventarc-production/cases/service.mjs";
 import { createClient } from "./eventarc-production/client.mjs";
 import { createOwnership } from "./eventarc-production/names.mjs";
+import { ledgerFacts } from "./eventarc-production/cleanup.mjs";
 import { runCases } from "./eventarc-production/runner.mjs";
 
 const RUN = "0123456789ab";
@@ -37,8 +38,12 @@ function channelService({
   deleteLate = false,
   deleteBadAnswer = false,
   doneAfter = 1,
+  createNeverDone = false,
+  duplicate409 = false,
+  createInvisible = false,
 } = {}) {
   const live = new Set(existing);
+  const accepted = new Set();
   const calls = [];
   const operations = new Map();
   return {
@@ -73,8 +78,18 @@ function channelService({
         // A name that cannot exist is refused, as it is read (400).
         if (refuse.has(id) || /^(GOOG|a[0-9a-f]$)/.test(id))
           return { status: 400, body: { error: { status: "INVALID_ARGUMENT" } }, unknown: false };
-        // A creation of a name that exists ends with ALREADY_EXISTS inside its operation.
-        const existed = live.has(name);
+        // A creation of a name that exists ends with ALREADY_EXISTS inside its operation, or is answered 409.
+        const existed = live.has(name) || accepted.has(name);
+        if (existed && duplicate409)
+          return { status: 409, body: { error: { status: "ALREADY_EXISTS" } }, unknown: false };
+        // An operation that never finishes, with a name of its own.
+        if (createNeverDone && !existed) {
+          accepted.add(name);
+          const own = `${OPERATION}-create-${id}`;
+          operations.set(own, { reads: 0, pending: true });
+          if (!createInvisible) live.add(name);
+          return { status: 200, body: { name: own, done: false }, unknown: false };
+        }
         operations.set(OPERATION, {
           reads: 0,
           error: failWith.get(id) ?? (existed ? { code: 6 } : undefined),
@@ -138,6 +153,7 @@ async function run(service, { runId = RUN, cases = [channelLifecycle], makeSdk =
   return { summary, ledger, notes, ownership };
 }
 
+const ledgerFactsOf = (ledger, name) => ledgerFacts(ledger.state().get(name));
 const posts = (service) =>
   service.calls.filter((call) => call.method === "POST").map((call) => call.path);
 const deletes = (service, suffix) =>
@@ -162,14 +178,82 @@ test("the lifecycle creates and deletes its channel, polls every operation, and 
   const name = `projects/${PROJECT}/locations/us-central1/channels/${c1}`;
   assert.deepEqual(
     ledger.state().get(name).creates.at(-1),
-    "conflict",
-    "the repetition of the creation ended with a conflict",
+    `conflict@${OPERATION}`,
+    "the repetition of the creation ended with a conflict in its operation",
   );
-  assert.ok(ledger.state().get(name).creates.includes("ok"));
-  assert.ok(ledger.state().get(name).deletes.includes("ok"));
+  assert.ok(ledger.state().get(name).creates.includes(`ok@${OPERATION}`));
+  assert.ok(ledger.state().get(name).deletes.includes(`ok@${OPERATION}`));
   // Every creation that was accepted had its operation read.
   assert.ok(service.calls.filter((call) => call.op === "getOperation").length >= 3);
   assert.deepEqual(summary.cleanup.unsettled, []);
+});
+
+test("V2-M1(a) replayed: a creation whose operation never finishes, then the deliberate duplicate answered 409, leaves the channel to be read and cleaned up, never closed by the 409", async () => {
+  const c1 = `fe${RUN}-cl-c1`;
+  const name = `projects/${PROJECT}/locations/us-central1/channels/${c1}`;
+  // The channel appeared: the cleanup reads it by name (the list is empty), confirms and deletes it.
+  const present = channelService({ createNeverDone: true, duplicate409: true });
+  const first = await run(present);
+  assert.equal(
+    present.calls.filter((call) => call.method === "POST" && call.path.includes(`channelId=${c1}`))
+      .length,
+    2,
+    "the deliberate duplicate was sent",
+  );
+  assert.ok(
+    ledgerFactsOf(first.ledger, name).mayExist,
+    "a 409 never un-ledgers the first creation",
+  );
+  assert.equal(present.live.has(name), false, "the channel was read, confirmed and deleted");
+  assert.ok(
+    first.summary.cleanup.settled.some((item) => item.name === name && item.how === "deleted"),
+  );
+  assert.ok(first.ledger.state().get(name).creates.includes("confirmed"));
+  // The channel never showed: a 404 does not settle the creation, so the run is not closable.
+  const invisible = channelService({
+    createNeverDone: true,
+    duplicate409: true,
+    createInvisible: true,
+  });
+  const second = await run(invisible);
+  assert.ok(second.summary.cleanup.unsettled.includes(name));
+  assert.ok(second.summary.cleanup.unconfirmed.includes(name));
+  assert.ok(!second.summary.cleanup.settled.some((item) => item.name === name));
+  assert.equal(
+    invisible.calls.some((call) => call.method === "DELETE" && call.path.endsWith(`/${c1}`)),
+    false,
+  );
+});
+
+test("V2-M1(a) replayed: a duplicate whose own operation ends with ALREADY_EXISTS does not settle the first creation either", async () => {
+  const c1 = `fe${RUN}-cl-c1`;
+  const name = `projects/${PROJECT}/locations/us-central1/channels/${c1}`;
+  // The second creation of c1 is accepted and ends with ALREADY_EXISTS in its own operation.
+  const service = channelService({ createNeverDone: true, createInvisible: true });
+  const { summary, ledger } = await run(service);
+  const creates = ledger.state().get(name).creates;
+  assert.ok(
+    creates.some((kind) => kind === `conflict@${OPERATION}`),
+    "the duplicate settled itself",
+  );
+  assert.ok(summary.cleanup.unsettled.includes(name), "and not the first creation");
+  assert.ok(summary.cleanup.unconfirmed.includes(name));
+});
+
+test("V2-M1(b) replayed: a deletion whose operation is never read as done and a 404 afterwards stay unsettled in the recording", async () => {
+  const c1 = `fe${RUN}-cl-c1`;
+  const name = `projects/${PROJECT}/locations/us-central1/channels/${c1}`;
+  const { summary, ledger } = await run(channelService({ deleteLate: true }));
+  assert.ok(ledgerFactsOf(ledger, name).deletePending);
+  assert.deepEqual(
+    summary.cleanup.settled.filter((item) => item.name === name),
+    [],
+  );
+  assert.ok(summary.cleanup.unsettled.includes(name));
+  // Near miss: an operation read as done settles by the 404 as before.
+  const finished = await run(channelService());
+  assert.ok(finished.summary.cleanup.settled.some((item) => item.name === name));
+  assert.ok(!finished.summary.cleanup.unsettled.includes(name));
 });
 
 test("the probes are derived from the run, differ between runs, and are read before they are created", async () => {
@@ -248,7 +332,10 @@ test("a probe whose operation ends with ALREADY_EXISTS is a conflict: it is neve
     return reads(call);
   };
   const { ledger, summary } = await run(service);
-  assert.deepEqual(ledger.state().get(name).creates, ["unknown", "conflict"]);
+  assert.deepEqual(ledger.state().get(name).creates, [
+    `unknown@${OPERATION}`,
+    `conflict@${OPERATION}`,
+  ]);
   assert.equal(
     service.calls.some((call) => call.method === "DELETE" && call.path.endsWith(`/${id}`)),
     false,
@@ -271,7 +358,7 @@ test("after an unknown first deletion, or one whose operation never finishes, no
   const name = `projects/${PROJECT}/locations/us-central1/channels/${c1}`;
   assert.deepEqual(
     ledger.state().get(name).deletes.slice(0, 2),
-    ["unknown", "unknown"],
+    [`unknown@${OPERATION}`, `unknown@${OPERATION}`],
     "the 2xx and the operation that was not done",
   );
 });

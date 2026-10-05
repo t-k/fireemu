@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
-import { mkdirSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import test from "node:test";
 import { createClient } from "./eventarc-production/client.mjs";
 import { createLedger } from "./pubsub-production/ledger.mjs";
@@ -41,14 +41,17 @@ test("the client writes the ledger line before a channel creation or deletion is
   assert.deepEqual(ledger.state().get(name).creates, ["conflict"]);
   for (const [reply, expected] of [
     [{ status: 200, body: { name: "operations/o", done: true }, unknown: false }, "ok"],
-    [{ status: 200, body: { name: "operations/o", done: false }, unknown: false }, "unknown"],
+    [
+      { status: 200, body: { name: "operations/o", done: false }, unknown: false },
+      "unknown@operations/o",
+    ],
     [
       {
         status: 200,
         body: { name: "operations/o", done: true, error: { code: 6 } },
         unknown: false,
       },
-      "unknown",
+      "unknown@operations/o",
     ],
     [{ status: 200, body: {}, unknown: false }, "unknown"],
     [{ status: 400, body: { error: { status: "INVALID_ARGUMENT" } }, unknown: false }, "error"],
@@ -159,7 +162,10 @@ test("the later run refuses to start before ten minutes, and without the ledger 
     await main(a2(dir, svc.host), {}, io(errors), deps({ now: () => T0 + MIN_A2_WAIT_MS - 1000 })),
     2,
   );
-  assert.match(errors.join(""), /at least 10 minutes after the recording \(599 s so far\)/);
+  assert.match(
+    errors.join(""),
+    /at least 10 minutes after the recording and the earlier later runs \(599 s so far\)/,
+  );
   assert.deepEqual(readdirSync(dir).toSorted(), [`capture-${RUN}.jsonl`, `issued-${RUN}.jsonl`]);
   assert.equal(svc.seen.length, 0);
   const empty = mkdtempSync(join(tmpdir(), "eventarc-a2-"));
@@ -172,6 +178,7 @@ test("the later run refuses to start before ten minutes, and without the ledger 
 
 test("the later run works in the recording's own directory and settles by name: an unknown create that is absent, one that exists, an unknown delete, and a probe that was a conflict", async (t) => {
   const absent = mine("unknown-absent");
+  const absentOperation = `projects/${PROJECT}/locations/us-central1/operations/op-absent`;
   const present = mine("unknown-present");
   const created = mine("created");
   const deleting = mine("deleting");
@@ -180,7 +187,7 @@ test("the later run works in the recording's own directory and settles by name: 
   const svc = await service({ live: [present, created, probeOk, probeConflict] });
   t.after(svc.close);
   const dir = recording([
-    [absent, "create", "unknown"],
+    [absent, "create", `unknown@${absentOperation}`],
     [present, "create", "unknown"],
     [created, "create", "ok"],
     [deleting, "create", "ok"],
@@ -234,10 +241,8 @@ test("the later run is not closable while a channel stays, and reports it", asyn
   const svc = await service({ live: [stuck], stuck: [stuck] });
   t.after(svc.close);
   const dir = recording([[stuck, "create", "ok"]]);
-  const out = join(mkdtempSync(join(tmpdir(), "eventarc-a2-out-")), "a2");
-  mkdirSync(out, { recursive: true });
-  assert.equal(await main(a2(dir, svc.host, out), {}, io(), deps()), 1);
-  const summary = summaryOf(out);
+  assert.equal(await main(a2(dir, svc.host), {}, io(), deps()), 1);
+  const summary = summaryOf(dir);
   assert.deepEqual(
     [summary.closureReady, summary.cleanup.leftover, summary.cleanup.unsettled],
     [false, [stuck], [stuck]],
@@ -283,7 +288,9 @@ test("the later run lists the location of the run, so a prefixed channel the led
 test("the later run never lists a location that cannot exist, and a probe there is settled by its own recorded 404", async () => {
   const nowhere = channel(`nowhere-${RUN}`, "no-such-location1");
   const svc = await service({});
-  const dir = recording([[nowhere, "create", "unknown"]]);
+  const dir = recording([
+    [nowhere, "create", `unknown@projects/${PROJECT}/locations/no-such-location1/operations/op-n`],
+  ]);
   const code = await main(a2(dir, svc.host), {}, io(), deps());
   svc.close();
   assert.equal(code, 0);
@@ -313,8 +320,7 @@ test("the ledgers of the earlier later runs are read too: a channel an earlier l
     join(dir, `issued-${RUN}-a2-20261005T101500Z.jsonl`),
     `${JSON.stringify({ at: "x", phase: "sent", name, action: "delete", transport: "rest" })}\n${JSON.stringify({ at: "x", phase: "answered", name, action: "delete", transport: "rest", kind: "unknown" })}\n`,
   );
-  const out = join(mkdtempSync(join(tmpdir(), "eventarc-a2-out-")), "second");
-  const code = await main(a2(dir, svc.host, out), {}, io(), deps());
+  const code = await main(a2(dir, svc.host), {}, io(), deps());
   svc.close();
   assert.equal(code, 1);
   assert.equal(
@@ -322,7 +328,7 @@ test("the ledgers of the earlier later runs are read too: a channel an earlier l
     false,
     "no DELETE was sent",
   );
-  const summary = summaryOf(out);
+  const summary = summaryOf(dir);
   assert.deepEqual([summary.cleanup.leftover, summary.closureReady], [[name], false]);
 });
 
@@ -342,4 +348,108 @@ test("the capture notes the quota project of a request that carried the header, 
   assert.ok(entries.length > 0);
   // Against an emulator no quota project is sent: the field is absent.
   assert.ok(entries.every((entry) => entry.quotaProject === undefined));
+});
+
+test("S3-v2: the later run reads a pending creation's operation first; absence alone does not settle an unknown creation", async (t) => {
+  const taken = channel("probe-taken");
+  const plain = mine("plain-unknown");
+  const operation = (key) => `projects/${PROJECT}/locations/us-central1/operations/op-${key}`;
+  // An operation that ends with ALREADY_EXISTS settles its creation: nothing was created.
+  const svc = await service({ live: [taken] });
+  const empty = await service({});
+  t.after(() => (svc.close(), empty.close()));
+  const dir = recording([[taken, "create", `unknown@${operation("taken")}`]]);
+  const origin = svc.seen.length;
+  // This service says every operation is done without an error: the creation is confirmed, and a probe
+  // that is there is ours to delete.
+  assert.equal(await main(a2(dir, svc.host), {}, io(), deps()), 0);
+  const first = svc.seen.slice(origin)[0];
+  assert.match(
+    first,
+    /^GET projects\/demo-fireemu-eventarc\/locations\/us-central1\/operations\/op-taken$/,
+  );
+  assert.equal(summaryOf(dir).closureReady, true);
+  // An unknown creation with no operation to read, absent: not closable, reported as unconfirmed.
+  const second = recording([[plain, "create", "unknown"]]);
+  // The exit code says nothing was left or refused; the summary says it is not closable.
+  assert.equal(await main(a2(second, empty.host), {}, io(), deps()), 0);
+  const summary = summaryOf(second);
+  assert.deepEqual(
+    [summary.closureReady, summary.cleanup.unsettled, summary.cleanup.unconfirmed],
+    [false, [plain], [plain]],
+  );
+  assert.deepEqual(summary.cleanup.settled, []);
+});
+
+test("S1-v2: the later run refuses an --out that is not the recording's directory, so that it sees every earlier later run", async (t) => {
+  const svc = await service({});
+  t.after(svc.close);
+  const dir = recording([]);
+  const elsewhere = join(mkdtempSync(join(tmpdir(), "eventarc-a2-out-")), "a2-1");
+  const errors = [];
+  assert.equal(await main(a2(dir, svc.host, elsewhere), {}, io(errors), deps()), 2);
+  assert.match(errors.join(""), /--out must be the directory of --from-capture/);
+  assert.equal(svc.seen.length, 0);
+  assert.equal(readdirSync(dir).length, 2, "nothing was written beside the recording");
+  assert.throws(() => readdirSync(elsewhere), /ENOENT/, "and nothing was created elsewhere");
+  // The same directory spelled another way is accepted.
+  assert.equal(await main(a2(dir, svc.host, `${dir}/`), {}, io(), deps()), 0);
+  assert.equal(
+    await main(
+      a2(dir, svc.host, join(dir, "..", basename(dir))),
+      {},
+      io(),
+      deps({ now: () => T0 + 2 * MIN_A2_WAIT_MS + 1000 }),
+    ),
+    0,
+  );
+});
+
+test("S1-v2: a second later run sees the first one's deletion and does not send it again", async (t) => {
+  const name = mine("stuck-after-delete");
+  const svc = await service({ live: [name], stuck: [name] });
+  t.after(svc.close);
+  const dir = recording([
+    [name, "create", "ok"],
+    [name, "delete", "unknown"],
+  ]);
+  assert.equal(await main(a2(dir, svc.host), {}, io(), deps()), 1);
+  assert.equal(svc.seen.filter((line) => line.startsWith("DELETE")).length, 1);
+  // The second later run, in the same directory, starts ten minutes after the first.
+  const later = deps({ now: () => T0 + 2 * MIN_A2_WAIT_MS + 2000 });
+  assert.equal(await main(a2(dir, svc.host), {}, io(), later), 1);
+  assert.equal(
+    svc.seen.filter((line) => line.startsWith("DELETE")).length,
+    1,
+    "the first later run's DELETE is not repeated",
+  );
+});
+
+test("S2-v2: the ten minutes are counted from the newest capture of the run, a later run's included", async (t) => {
+  const svc = await service({});
+  t.after(svc.close);
+  const dir = recording([]);
+  const first = new Date(T0 + MIN_A2_WAIT_MS + 5000).toISOString();
+  writeFileSync(
+    join(dir, `capture-${RUN}-a2-20261005T101000Z.jsonl`),
+    `${JSON.stringify({ at: first, note: "run-end" })}\n`,
+  );
+  const errors = [];
+  const tooSoon = deps({ now: () => T0 + MIN_A2_WAIT_MS + 5000 + MIN_A2_WAIT_MS - 1000 });
+  assert.equal(await main(a2(dir, svc.host), {}, io(errors), tooSoon), 2);
+  assert.match(
+    errors.join(""),
+    /at least 10 minutes after the recording and the earlier later runs \(599 s so far\)/,
+  );
+  assert.equal(svc.seen.length, 0);
+  const enough = deps({ now: () => T0 + MIN_A2_WAIT_MS + 5000 + MIN_A2_WAIT_MS });
+  assert.equal(await main(a2(dir, svc.host), {}, io(), enough), 0);
+  // The captures of another run in the directory do not count.
+  const other = "ffffffffffff";
+  writeFileSync(
+    join(dir, `capture-${other}-a2-20261005T130000Z.jsonl`),
+    `${JSON.stringify({ at: new Date(T0 + 99 * MIN_A2_WAIT_MS).toISOString(), note: "x" })}\n`,
+  );
+  const next = deps({ now: () => T0 + 3 * MIN_A2_WAIT_MS + 6000 });
+  assert.equal(await main(a2(dir, svc.host), {}, io(), next), 0);
 });

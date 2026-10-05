@@ -109,8 +109,43 @@ test("bad arguments are refused, and the numbers have their values", () => {
     [["--from-capture", `/x/capture-${RUN}.jsonl`], /is for --cleanup-only/],
   ])
     assert.throws(() => parseArgs([...base, ...extra]), pattern, extra.join(" "));
+  // The later run works in the recording's directory, so that it sees the ledgers of every earlier one.
+  assert.throws(
+    () =>
+      parseArgs([
+        ...base,
+        "--cleanup-only",
+        "--run-id",
+        RUN,
+        "--from-capture",
+        `/x/y/capture-${RUN}.jsonl`,
+      ]),
+    /--out must be the directory of --from-capture/,
+  );
+  assert.throws(
+    () =>
+      parseArgs([
+        "--target",
+        "production",
+        "--project",
+        "sandbox-project",
+        "--out",
+        "/x/y/a2-1",
+        "--cleanup-only",
+        "--run-id",
+        RUN,
+        "--from-capture",
+        `/x/y/capture-${RUN}.jsonl`,
+      ]),
+    /--out must be the directory of --from-capture/,
+  );
   const later = parseArgs([
-    ...base,
+    "--target",
+    "production",
+    "--project",
+    "sandbox-project",
+    "--out",
+    "/x/y/",
     "--cleanup-only",
     "--run-id",
     RUN,

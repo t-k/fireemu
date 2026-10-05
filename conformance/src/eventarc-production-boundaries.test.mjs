@@ -80,7 +80,8 @@ function fakeCtx(replies) {
           replies.shift() ?? { ok: true, body: { name, done: false } }
         ),
         createChannel: async () => replies.created,
-        settleOperation: (name, action, operation) => settled.push([name, action, operation]),
+        settleOperation: (name, action, operation, operationName) =>
+          settled.push([name, action, operation, operationName]),
       },
     },
   };
@@ -120,12 +121,16 @@ test("waiting for an operation: no wait for what is done or refused, one read ea
   const finished = await waitOperation(settling.ctx, "eventarc", pending, {
     settle: { name: "c", action: "create" },
   });
-  assert.deepEqual(settling.settled, [["c", "create", finished]]);
+  assert.deepEqual(
+    settling.settled,
+    [["c", "create", finished, "operations/o"]],
+    "the settlement names the operation the creation was answered with",
+  );
   const immediate = fakeCtx([]);
   await waitOperation(immediate.ctx, "eventarc", ready, {
     settle: { name: "c", action: "delete" },
   });
-  assert.deepEqual(immediate.settled, [["c", "delete", ready]]);
+  assert.deepEqual(immediate.settled, [["c", "delete", ready, "operations/o"]]);
   await waitOperation(immediate.ctx, "eventarc", refused, {
     settle: { name: "c", action: "create" },
   });

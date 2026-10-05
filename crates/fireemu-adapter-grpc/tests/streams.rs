@@ -3677,3 +3677,271 @@ mod count_filter_properties {
         }
     }
 }
+
+/// A model of the client of a resume: what it holds at its token, what the replay makes it hold,
+/// and what the SDK compares to the filter's count.
+mod resume_client_model {
+    use super::*;
+    use proptest::prelude::*;
+    use std::collections::{BTreeMap, BTreeSet};
+
+    /// The query of the listened target.
+    #[derive(Debug, Clone, Copy)]
+    enum Shape {
+        /// `state == "included"`.
+        Filtered,
+        /// All documents ordered by `v` ascending (then name), limited.
+        Limit(i32),
+    }
+
+    #[derive(Debug, Clone)]
+    enum Step {
+        /// Write document `d<i>` with `state` included or not and the ordering value `v`.
+        Set(u8, bool, u8),
+        Delete(u8),
+    }
+
+    fn shapes() -> impl Strategy<Value = Shape> {
+        prop_oneof![Just(Shape::Filtered), (1_i32..4).prop_map(Shape::Limit),]
+    }
+
+    fn steps() -> impl Strategy<Value = Vec<Step>> {
+        proptest::collection::vec(
+            prop_oneof![
+                3 => (0_u8..5, any::<bool>(), 0_u8..3).prop_map(|(i, state, v)| Step::Set(i, state, v)),
+                1 => (0_u8..5).prop_map(Step::Delete),
+            ],
+            0..9,
+        )
+    }
+
+    type Present = BTreeMap<String, (bool, u8)>;
+
+    fn apply(present: &mut Present, step: &Step) -> pb::Write {
+        match step {
+            Step::Set(i, included, v) => {
+                present.insert(format!("d{i}"), (*included, *v));
+                set_write(
+                    &format!("q/d{i}"),
+                    &[
+                        ("state", s(if *included { "included" } else { "excluded" })),
+                        ("v", s(&v.to_string())),
+                    ],
+                )
+            }
+            Step::Delete(i) => {
+                present.remove(&format!("d{i}"));
+                delete_write(&format!("q/d{i}"))
+            }
+        }
+    }
+
+    /// The documents the query matches over `present`.
+    fn matching(shape: Shape, present: &Present) -> BTreeSet<String> {
+        match shape {
+            Shape::Filtered => present
+                .iter()
+                .filter(|(_, (included, _))| *included)
+                .map(|(name, _)| name.clone())
+                .collect(),
+            Shape::Limit(limit) => {
+                let mut ordered: Vec<(&u8, &String)> =
+                    present.iter().map(|(name, (_, v))| (v, name)).collect();
+                ordered.sort();
+                ordered
+                    .into_iter()
+                    .take(usize::try_from(limit).unwrap())
+                    .map(|(_, name)| name.clone())
+                    .collect()
+            }
+        }
+    }
+
+    fn target_for(id: i32, shape: Shape) -> pb::ListenRequest {
+        match shape {
+            Shape::Filtered => add_filtered_query_target(id, "q"),
+            Shape::Limit(limit) => {
+                let mut request = add_limited_query_target(id, "q");
+                let Some(pb::listen_request::TargetChange::AddTarget(target)) =
+                    &mut request.target_change
+                else {
+                    unreachable!();
+                };
+                let Some(pb::target::TargetType::Query(target)) = &mut target.target_type else {
+                    unreachable!();
+                };
+                let Some(pb::target::query_target::QueryType::StructuredQuery(query)) =
+                    &mut target.query_type
+                else {
+                    unreachable!();
+                };
+                query.limit = Some(limit);
+                request
+            }
+        }
+    }
+
+    fn name_of(path: &str) -> String {
+        path.rsplit('/').next().unwrap_or("").to_owned()
+    }
+
+    /// Reads until `target` is CURRENT and the global boundary after it has come.
+    async fn read_through_current<S>(stream: &mut S, target: i32) -> Vec<pb::ListenResponse>
+    where
+        S: tokio_stream::Stream<Item = Result<pb::ListenResponse, tonic::Status>> + Unpin,
+    {
+        let mut out = Vec::new();
+        let mut current = false;
+        loop {
+            let item = tokio::time::timeout(std::time::Duration::from_secs(5), stream.next())
+                .await
+                .expect("listen response within 5 s")
+                .expect("stream open")
+                .unwrap();
+            let mut boundary = false;
+            if let Some(pb::listen_response::ResponseType::TargetChange(t)) = &item.response_type {
+                if t.target_change_type == 3 && t.target_ids.contains(&target) {
+                    current = true;
+                } else if t.target_change_type == 0 && t.target_ids.is_empty() {
+                    boundary = true;
+                }
+            }
+            out.push(item);
+            if current && boundary {
+                return out;
+            }
+        }
+    }
+
+    /// What a client holding `held` for `target` holds after applying the document messages.
+    fn applied(
+        held: &BTreeSet<String>,
+        target: i32,
+        items: &[pb::ListenResponse],
+    ) -> BTreeSet<String> {
+        use pb::listen_response::ResponseType as R;
+        let mut held = held.clone();
+        for item in items {
+            match &item.response_type {
+                Some(R::DocumentChange(d)) => {
+                    let name = d
+                        .document
+                        .as_ref()
+                        .map(|d| name_of(&d.name))
+                        .unwrap_or_default();
+                    if d.target_ids.contains(&target) {
+                        held.insert(name.clone());
+                    }
+                    if d.removed_target_ids.contains(&target) {
+                        held.remove(&name);
+                    }
+                }
+                Some(R::DocumentDelete(d)) if d.removed_target_ids.contains(&target) => {
+                    held.remove(&name_of(&d.document));
+                }
+                Some(R::DocumentRemove(d)) if d.removed_target_ids.contains(&target) => {
+                    held.remove(&name_of(&d.document));
+                }
+                _ => {}
+            }
+        }
+        held
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(48))]
+
+        /// Whenever the strict resume fires its count-only filter (token honoured, no expected
+        /// count), whatever happened before and after the token (including to the documents the
+        /// client holds, and for limit queries where documents leave by being pushed out), the
+        /// filter's count is what the query matches now, and the client the replay leaves, which
+        /// holds what it held at the token plus what the replay delivered, finds that count equal
+        /// to its own exactly when no document it held has left: then it takes no action, and
+        /// otherwise its set exceeds the count by exactly the departed documents (which the SDK
+        /// resets over, as production's answer to the same resume intends). A second target of
+        /// the stream, added fresh, never gets a filter, and ends up holding exactly its matches.
+        #[test]
+        fn the_filter_of_a_resume_leaves_the_client_with_nothing_to_repair_unless_a_held_document_left(
+            shape in shapes(),
+            before in steps(),
+            after in steps(),
+        ) {
+            let runtime = tokio::runtime::Runtime::new().unwrap();
+            runtime.block_on(async {
+                let (mut client, handle) = start(false).await;
+                let mut present = Present::new();
+                for step in &before {
+                    let write = apply(&mut present, step);
+                    commit_writes(&mut client, vec![write]).await;
+                }
+                // The client's first listen: what it holds at its token is the initial snapshot.
+                let (held, token) = {
+                    let (tx, rx) = mpsc::channel(8);
+                    let mut listen = client.listen(ReceiverStream::new(rx)).await.unwrap().into_inner();
+                    tx.send(target_for(1, shape)).await.unwrap();
+                    let items = read_through_current(&mut listen, 1).await;
+                    let token = items
+                        .iter()
+                        .rev()
+                        .find_map(|item| match &item.response_type {
+                            Some(pb::listen_response::ResponseType::TargetChange(t))
+                                if !t.resume_token.is_empty() => Some(t.resume_token.clone()),
+                            _ => None,
+                        })
+                        .expect("a token after CURRENT");
+                    (applied(&BTreeSet::new(), 1, &items), token)
+                };
+                prop_assert_eq!(&held, &matching(shape, &present), "the initial snapshot");
+                for step in &after {
+                    let write = apply(&mut present, step);
+                    commit_writes(&mut client, vec![write]).await;
+                }
+                let now = matching(shape, &present);
+                let departed: BTreeSet<String> = held.difference(&now).cloned().collect();
+
+                let (tx, rx) = mpsc::channel(8);
+                let mut listen = client.listen(ReceiverStream::new(rx)).await.unwrap().into_inner();
+                let mut request = target_for(2, shape);
+                if let Some(pb::listen_request::TargetChange::AddTarget(t)) = &mut request.target_change {
+                    t.resume_type = Some(pb::target::ResumeType::ResumeToken(token));
+                }
+                tx.send(request).await.unwrap();
+                let replay = read_through_current(&mut listen, 2).await;
+                tx.send(target_for(3, shape)).await.unwrap();
+                let fresh = read_through_current(&mut listen, 3).await;
+
+                let filters: Vec<&pb::ExistenceFilter> = replay
+                    .iter()
+                    .chain(fresh.iter())
+                    .filter_map(|item| match &item.response_type {
+                        Some(pb::listen_response::ResponseType::Filter(f)) => Some(f),
+                        _ => None,
+                    })
+                    .collect();
+                prop_assert_eq!(filters.len(), 1, "one filter, for the resumed target only");
+                prop_assert_eq!(filters[0].target_id, 2);
+                let in_replay = replay.iter().any(|item| matches!(&item.response_type, Some(pb::listen_response::ResponseType::Filter(_))));
+                prop_assert!(in_replay, "the filter is in the resumed target's replay");
+                let count = usize::try_from(filters[0].count).unwrap();
+                prop_assert_eq!(count, now.len(), "the count is what the query matches now");
+
+                let after_replay = applied(&held, 2, &replay);
+                prop_assert!(now.is_subset(&after_replay), "the replay delivers every matching document");
+                if departed.is_empty() {
+                    prop_assert_eq!(after_replay.len(), count, "nothing left: the SDK finds its count equal");
+                    prop_assert_eq!(&after_replay, &now);
+                } else {
+                    prop_assert_eq!(
+                        after_replay.len() - count,
+                        departed.len(),
+                        "the SDK's set exceeds the count by exactly the departed documents"
+                    );
+                    prop_assert_eq!(&after_replay, &now.union(&departed).cloned().collect::<BTreeSet<_>>());
+                }
+                prop_assert_eq!(applied(&BTreeSet::new(), 3, &fresh), now, "the fresh target holds its matches");
+                handle.abort();
+                Ok(())
+            })?;
+        }
+    }
+}

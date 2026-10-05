@@ -766,6 +766,30 @@ fn clock_maintenance_excludes_new_data_requests_until_it_finishes() {
 }
 
 #[test]
+fn moving_the_clock_does_not_start_a_new_reset_epoch() {
+    // A request that started before the move keeps its credentials and intent: only a reset
+    // invalidates them, so a writer waiting for a lock across a clock advance is not refused.
+    let mut control = state(Arc::new(AtomicUsize::new(0)));
+    let barrier = Arc::new(fireemu_core_session::barrier::AdmissionBarrier::new());
+    control.barrier = Some(barrier.clone());
+    let before = barrier.epoch();
+    for (action, body) in [
+        ("clock:advance", json!({"seconds": 1})),
+        ("clock:advanceTo", json!({"instant": "2031-01-01T00:00:00Z"})),
+    ] {
+        let response = handle(
+            &control,
+            "POST",
+            &format!("/v1/sessions/default/{action}"),
+            &body,
+        );
+        assert_eq!(response.status, 200, "{action}: {}", response.body);
+    }
+    assert_eq!(barrier.epoch(), before);
+    assert!(barrier.admit_since(before).is_ok());
+}
+
+#[test]
 fn sessions_are_created_listed_reset_and_deleted_per_project() {
     let log = Arc::new(ProjectLog::new());
     let counter = Arc::new(AtomicUsize::new(0));

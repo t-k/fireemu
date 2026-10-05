@@ -59,8 +59,12 @@ const count = (journal, re) => ids(journal).filter((id) => re.test(id)).length;
 
 test("a clean run reports no cleanup flag in its summary, an empty IAM change and exact observation counts", async () => {
   const { result, journal } = await go();
-  assert.equal(result.cleanupVerified, false);
-  assert.deepEqual(result.inventory, { artifactPackages: 0, iam: { added: [], removed: [] } });
+  assert.equal("cleanupVerified" in result, false);
+  assert.deepEqual(result.inventory, {
+    artifactPackages: 0,
+    iam: { added: [], removed: [] },
+    services: { added: [], removed: [] },
+  });
   assert.deepEqual(result.framesIgnored, { notFrame: 0, unparsed: 0, foreignOrigin: 0 });
   assert.equal(result.jobs.schedOkV2.target, "http");
   assert.equal(result.jobs.schedOkV1.target, "pubsub");

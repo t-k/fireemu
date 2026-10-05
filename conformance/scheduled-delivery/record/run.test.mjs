@@ -313,7 +313,7 @@ test("a forced run answered 503 is an unknown mutation: the run still cleans up 
   assert.equal(world.jobs.size, 0);
 });
 
-test("a 401 anywhere stops the run at once: no further request, no CLI delete", async () => {
+test("a 401 anywhere stops the REST requests at once, and the one CLI delete still runs after a deploy", async () => {
   const { world, result } = await go({
     hooks: {
       ["POST /v1/projects/fireemu-oracle-sbx/locations/us-central1/jobs/" +
@@ -327,8 +327,8 @@ test("a 401 anywhere stops the run at once: no further request, no CLI delete", 
   assert.equal(result.closureReady, false);
   assert.deepEqual(
     world.cliRuns,
-    ["dry-run", "deploy"],
-    "no delete after the stop: the run is left for the read-back",
+    ["dry-run", "deploy", "delete"],
+    "the CLI has its own credential: the one delete runs, once, and is not retried",
   );
   assert.equal(
     world.calls.at(-1).includes(":run"),
@@ -347,14 +347,22 @@ test("a 403 on a write stops the run, and a 403 on the optional reads is data", 
   assert.equal(stopped.result.outcome, "calendar-delivery-auth-stop");
   const data = await go({
     hooks: {
-      "GET firebase.googleapis.com/v1beta1/projects/fireemu-oracle-sbx/adminSdkConfig": async () =>
-        error(403, "PERMISSION_DENIED"),
       "GET appengine.googleapis.com/v1/apps/fireemu-oracle-sbx": async () =>
         error(403, "PERMISSION_DENIED"),
     },
   });
-  assert.equal(data.result.adminSdkConfig.status, 403);
+  assert.equal(data.result.appEngine.status, 403);
   assert.equal(data.result.outcome, "calendar-delivery-recorded");
+  // The project's location is read by firebase-tools too: an unreadable adminSdkConfig is a stop, not "no location".
+  const config = await go({
+    hooks: {
+      "GET firebase.googleapis.com/v1beta1/projects/fireemu-oracle-sbx/adminSdkConfig": async () =>
+        error(403, "PERMISSION_DENIED"),
+    },
+  });
+  assert.equal(config.result.stoppedBecause, "admin-sdk-config");
+  assert.equal(config.result.adminSdkConfig.status, 403);
+  assert.deepEqual(config.world.cliRuns, []);
 });
 
 // ---- cleanup -------------------------------------------------------------------------------------

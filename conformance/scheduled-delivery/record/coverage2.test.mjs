@@ -506,7 +506,7 @@ test("the first line says what is about to run, indented by two, and a failed ch
     assert.equal(
       failing.lines[0][1],
       JSON.stringify(
-        { project: P, command: "check", maxRequests: 420, packetDigest: "d".repeat(64) },
+        { project: P, command: "check", maxRequests: 500, packetDigest: "d".repeat(64) },
         null,
         2,
       ),

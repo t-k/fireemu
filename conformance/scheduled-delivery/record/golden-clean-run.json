@@ -162,6 +162,7 @@
     "final-run-services",
     "inventory-packages",
     "iam-after",
+    "services-after",
     "logs-final-frames",
     "logs-final-scheduler"
   ],
@@ -189,6 +190,6 @@
     3000, 3000, 3000, 3000, 3000, 3000, 3000, 3000, 60000, 60000, 60000, 60000, 60000, 60000, 60000,
     120000
   ],
-  "attempted": 164,
+  "attempted": 165,
   "note": "The request ids, the issued names and the sleeps of a clean run of the recorder against the in-memory world (two passes, six minutes of natural fires each). A reviewer can read it as the recording's plan; the test compares a fresh run with it."
 }

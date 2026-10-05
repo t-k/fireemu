@@ -42,7 +42,7 @@ import {
 } from "./plan.mjs";
 
 export const NORMAL_CEILING = 330;
-export const CLEANUP_CEILING = 90;
+export const CLEANUP_CEILING = 170;
 export const MAX_REQUESTS = NORMAL_CEILING + CLEANUP_CEILING;
 export const PASSES = 2;
 export const NATURAL_WINDOW_MS = 6 * 60_000;
@@ -121,8 +121,13 @@ export async function record({
   passes = PASSES,
   naturalWindowMs = NATURAL_WINDOW_MS,
   normalCeiling = NORMAL_CEILING,
+  signal = { aborted: false },
 }) {
   const guard = createGuard(runId, projectNumber);
+  const SERVICES_URL =
+    "https://serviceusage.googleapis.com/v1/projects/" +
+    projectNumber +
+    "/services?filter=state:ENABLED&pageSize=200";
   const { capture, counts, authStop } = createCapture({
     accessToken,
     save,
@@ -163,6 +168,7 @@ export async function record({
 
   // ---- request helpers -------------------------------------------------------------------------
   const normal = async (spec) => {
+    if (signal.aborted && !spec.cleanup) throw new BudgetError("stopped by a signal");
     if (counts().attempted >= normalCeiling && !spec.cleanup)
       throw new BudgetError("the normal request ceiling is reached");
     return capture(spec);
@@ -177,6 +183,27 @@ export async function record({
     const answer = await normal(spec);
     if (isUnknownClass(answer)) unknownMutations.push({ id: spec.id, class: answerClass(answer) });
     return answer;
+  };
+  /** Why a CLI run's effect is unknown: it timed out, was killed, or could not be run at all. */
+  const cliUnknownClass = (result) =>
+    result?.timedOut
+      ? "cli-timeout"
+      : result?.error
+        ? "cli-error"
+        : result?.signal
+          ? "cli-signal"
+          : null;
+  const cli = async (action) => {
+    let result;
+    try {
+      result = await runCli({ action });
+    } catch (error) {
+      unknownMutations.push({ id: "cli-" + action, class: "cli-error" });
+      throw error;
+    }
+    const why = cliUnknownClass(result);
+    if (why) unknownMutations.push({ id: "cli-" + action, class: why });
+    return result;
   };
   const list = async (id, url, key) => {
     const items = [];
@@ -235,7 +262,6 @@ export async function record({
         known.unknown === 0 &&
         unknownMutations.length === 0 &&
         incompleteReads.length === 0,
-      cleanupVerified: false,
     };
   };
 
@@ -315,6 +341,8 @@ export async function record({
   const deployedJobIds = ALL_FUNCTIONS.map(scheduleId);
   const extraIds = EXTRA_JOBS.map((job) => extraJobId(runId, job.key));
   let iamBefore = null;
+  let enabledBefore = null;
+  let cliDeleteStarted = false;
   let extraCreated = [];
   let subsCreated = [];
 
@@ -334,13 +362,11 @@ export async function record({
     const services = await normal({
       id: "services-before",
       method: "GET",
-      url:
-        "https://serviceusage.googleapis.com/v1/projects/" +
-        projectNumber +
-        "/services?filter=state:ENABLED&pageSize=200",
+      url: SERVICES_URL,
     });
     const enabled = new Set((services?.json?.services ?? []).map((s) => s.config?.name));
     out.servicesMissing = REQUIRED_SERVICES.filter((id) => !enabled.has(id));
+    enabledBefore = [...enabled].toSorted();
     if (!(services?.status === 200 && readable(services)) || out.servicesMissing.length > 0)
       return "services";
     iamBefore = await read({
@@ -358,6 +384,8 @@ export async function record({
       { observe: true },
     );
     out.adminSdkConfig = { status: sdk?.status ?? null, locationId: sdk?.json?.locationId ?? null };
+    // firebase-tools reads the same config itself to place a v1 job: one that cannot be read is not "no location".
+    if (!(sdk?.status === 200 && readable(sdk))) return "admin-sdk-config";
     // Where firebase-tools puts a v1 scheduled job: the App Engine location the project names, "us-central" becoming
     // "us-central1" (`functionsConfig.js` getAppEngineLocation), or us-central1 when the project names none.
     const named = sdk?.json?.locationId;
@@ -422,7 +450,7 @@ export async function record({
         transport: "cli",
       });
     created = true;
-    out.cli.deploy = await runCli({ action: "deploy" });
+    out.cli.deploy = await cli("deploy");
     await save({ id: "cli-deploy", state: "cli-result", result: out.cli.deploy });
     const polls = cliFailed(out.cli.deploy) ? 2 : READY_MAX_POLLS;
     for (let poll = 1; poll <= polls; poll++) {
@@ -563,109 +591,142 @@ export async function record({
   }
 
   // ---- cleanup ----------------------------------------------------------------------------------
+  /**
+   * The one CLI delete. Never repeated: whoever gets here first (the cleanup, or the stop after a rejected
+   * credential, whose REST token is no use but whose CLI has its own) runs it and records its result.
+   */
+  async function cliDelete() {
+    if (cliDeleteStarted) return;
+    cliDeleteStarted = true;
+    out.cli.delete = await cli("delete");
+    await save({ id: "cli-delete", state: "cli-result", result: out.cli.delete });
+  }
+
   async function cleanup() {
     stopped = "cleanup";
-    if (created) {
-      out.cli.delete = await runCli({ action: "delete" });
-      await save({ id: "cli-delete", state: "cli-result", result: out.cli.delete });
-    }
+    // Every step stands alone: a refused request, an exhausted cap or a throw in one of them is recorded and the
+    // next step still runs. Only a rejected credential ends the cleanup (and never re-sends anything).
+    const step = async (name, fn) => {
+      try {
+        return await fn();
+      } catch (error) {
+        if (error instanceof AuthStop) throw error;
+        (out.cleanup.errors ??= []).push({ step: name, message: String(error?.message) });
+        out.cleanup.error ??= String(error?.message);
+        return undefined;
+      }
+    };
     let found = null;
-    for (let poll = 1; poll <= 6; poll++) {
-      found = await lists("cleanup-" + poll);
-      if (found.v1 && found.v2 && found.run && nonePresent(summarize(found))) break;
-      await sleep(30_000);
-    }
+    const settled = () => found?.v1 && found?.v2 && found?.run && nonePresent(summarize(found));
+    await step("cli-delete", () => cliDelete());
+    await step("project-lists", async () => {
+      for (let poll = 1; poll <= 6; poll++) {
+        found = await lists("cleanup-" + poll);
+        if (settled()) break;
+        await sleep(30_000);
+      }
+    });
     // Leftover functions: once each, after a complete fresh list shows them, case-exact, with no resend.
     if (found?.v1 && found?.v2 && found?.run) {
       const left = summarize(found);
       for (const fn of ALL_FUNCTIONS) {
         if (!left[fn].present) continue;
-        const v = FUNCTIONS.v1.includes(fn) ? "v1" : "v2";
-        const answer = await mutate({
-          id: "leftover-delete-" + fn,
-          method: "DELETE",
-          url: GCF + v + "/" + functionName(fn),
-          cleanup: true,
-        });
-        if (
-          answerClass(answer) === "2xx" &&
-          typeof answer.json?.name === "string" &&
-          !answer.json.done
-        ) {
-          const operation = answer.json.name.startsWith("operations/")
-            ? GCF + "v1/" + answer.json.name
-            : GCF + "v2/" + answer.json.name;
-          for (let poll = 0; poll < 12; poll++) {
-            await sleep(10_000);
-            const op = await read(
-              {
-                id: `leftover-operation-${fn}-${poll + 1}`,
-                method: "GET",
-                url: operation,
-                cleanup: true,
-              },
-              { observe: true },
-            );
-            if (op?.json?.done === true) break;
+        await step("leftover-" + fn, async () => {
+          const v = FUNCTIONS.v1.includes(fn) ? "v1" : "v2";
+          const answer = await mutate({
+            id: "leftover-delete-" + fn,
+            method: "DELETE",
+            url: GCF + v + "/" + functionName(fn),
+            cleanup: true,
+          });
+          if (
+            answerClass(answer) === "2xx" &&
+            typeof answer.json?.name === "string" &&
+            !answer.json.done
+          ) {
+            const operation = answer.json.name.startsWith("operations/")
+              ? GCF + "v1/" + answer.json.name
+              : GCF + "v2/" + answer.json.name;
+            for (let poll = 0; poll < 12; poll++) {
+              await sleep(10_000);
+              const op = await read(
+                {
+                  id: `leftover-operation-${fn}-${poll + 1}`,
+                  method: "GET",
+                  url: operation,
+                  cleanup: true,
+                },
+                { observe: true },
+              );
+              if (op?.json?.done === true) break;
+            }
           }
+        });
+      }
+      await step("after-leftovers", async () => {
+        for (let poll = 1; poll <= 4; poll++) {
+          found = await lists("after-leftovers-" + poll);
+          if (settled()) break;
+          await sleep(30_000);
         }
-      }
-      for (let poll = 1; poll <= 4; poll++) {
-        found = await lists("after-leftovers-" + poll);
-        if (found.v1 && found.v2 && found.run && nonePresent(summarize(found))) break;
-        await sleep(30_000);
-      }
+      });
     }
-    out.cleanup.functionsGone = Boolean(
-      found?.v1 && found?.v2 && found?.run && nonePresent(summarize(found)),
-    );
+    out.cleanup.functionsGone = Boolean(settled());
     // The run's own jobs and subscriptions, then the v1 topics (only once their function is gone).
-    const jobsLeft = await list("cleanup-jobs", SCHEDULER + "?pageSize=500", "jobs");
+    const jobsLeft = await step("jobs-list", () =>
+      list("cleanup-jobs", SCHEDULER + "?pageSize=500", "jobs"),
+    );
     for (const job of jobsLeft?.jobs ?? []) {
       const id = String(job.name).split("/").at(-1);
       if (![...deployedJobIds, ...extraIds].includes(id)) continue;
-      let deleted = false;
-      for (let attempt = 0; attempt < 4 && !deleted; attempt++) {
-        const answer = await mutate({
-          id: `delete-job-${attempt}-${id.replace(/^firebase-schedule-/, "").replace(runId, "run")}`,
-          method: "DELETE",
-          url: SCHEDULER + "/" + id,
-          cleanup: true,
-        });
-        if (answerClass(answer) === "2xx") deleted = true;
-        else if (isBusy(answer)) await sleep(60_000);
-        else break;
-      }
+      await step("job-" + id, async () => {
+        let deleted = false;
+        for (let attempt = 0; attempt < 4 && !deleted; attempt++) {
+          const answer = await mutate({
+            id: `delete-job-${attempt}-${id.replace(/^firebase-schedule-/, "").replace(runId, "run")}`,
+            method: "DELETE",
+            url: SCHEDULER + "/" + id,
+            cleanup: true,
+          });
+          if (answerClass(answer) === "2xx") deleted = true;
+          else if (isBusy(answer)) await sleep(60_000);
+          else break;
+        }
+      });
     }
     for (const fn of subsCreated) {
-      await mutate({
-        id: "delete-subscription-" + fn,
-        method: "DELETE",
-        url: PUBSUB + "/subscriptions/" + pullSubscriptionId(runId, fn),
-        cleanup: true,
-      });
+      await step("subscription-" + fn, () =>
+        mutate({
+          id: "delete-subscription-" + fn,
+          method: "DELETE",
+          url: PUBSUB + "/subscriptions/" + pullSubscriptionId(runId, fn),
+          cleanup: true,
+        }),
+      );
     }
     if (out.cleanup.functionsGone) {
       for (const fn of FUNCTIONS.v1) {
-        const topic = await read(
-          {
-            id: "topic-present-" + fn,
-            method: "GET",
-            url: PUBSUB + "/topics/" + scheduleId(fn),
-            cleanup: true,
-          },
-          { observe: true },
-        );
-        if (topic?.status === 200)
-          await mutate({
-            id: "delete-topic-" + fn,
-            method: "DELETE",
-            url: PUBSUB + "/topics/" + scheduleId(fn),
-            cleanup: true,
-          });
+        await step("topic-" + fn, async () => {
+          const topic = await read(
+            {
+              id: "topic-present-" + fn,
+              method: "GET",
+              url: PUBSUB + "/topics/" + scheduleId(fn),
+              cleanup: true,
+            },
+            { observe: true },
+          );
+          if (topic?.status === 200)
+            await mutate({
+              id: "delete-topic-" + fn,
+              method: "DELETE",
+              url: PUBSUB + "/topics/" + scheduleId(fn),
+              cleanup: true,
+            });
+        });
       }
     }
-    // Read every name back directly. Only a direct read of an absence counts.
+    // Read every name back directly. Only a direct read of an absence counts; a name that was not read is not absent.
     const names = [
       ...ALL_FUNCTIONS.map((fn) => [
         "function-" + fn,
@@ -679,69 +740,109 @@ export async function record({
         PUBSUB + "/subscriptions/" + pullSubscriptionId(runId, fn),
       ]),
     ];
-    const readBack = {};
+    const readBack = Object.fromEntries(names.map(([label]) => [label, false]));
+    out.cleanup.readBack = readBack;
     for (const [label, url] of names) {
-      const answer = await read(
+      await step("readback-" + label, async () => {
+        const answer = await read(
+          {
+            id: "readback-gone-" + label.replace(/^job-/, "job-").replace(runId, "run"),
+            method: "GET",
+            url,
+            cleanup: true,
+          },
+          { observe: true },
+        );
+        readBack[label] = absent(answer);
+      });
+    }
+    out.cleanup.listsEmpty = false;
+    await step("final-lists", async () => {
+      const finalLists = {
+        jobs: await list("final-jobs", SCHEDULER + "?pageSize=500", "jobs"),
+        topics: await list("final-topics", PUBSUB + "/topics?pageSize=1000", "topics"),
+        subscriptions: await list(
+          "final-subscriptions",
+          PUBSUB + "/subscriptions?pageSize=1000",
+          "subscriptions",
+        ),
+      };
+      const finalFns = await lists("final");
+      out.cleanup.listsEmpty =
+        Boolean(finalLists.jobs && finalLists.topics && finalLists.subscriptions) &&
+        finalLists.jobs.jobs.length === 0 &&
+        finalLists.topics.topics.length === 0 &&
+        finalLists.subscriptions.subscriptions.length === 0 &&
+        Boolean(finalFns.v1 && finalFns.v2 && finalFns.run) &&
+        nonePresent(summarize(finalFns));
+    });
+    out.cleanup.verified =
+      out.cleanup.listsEmpty && Object.values(readBack).every((v) => v === true);
+    // Read-only inventory: what the deploy left that this recorder does not delete, and what it changed.
+    await step("inventory", async () => {
+      const packages = await read(
         {
-          id: "readback-gone-" + label.replace(/^job-/, "job-").replace(runId, "run"),
+          id: "inventory-packages",
           method: "GET",
-          url,
+          url:
+            "https://artifactregistry.googleapis.com/v1/projects/" +
+            PROJECT +
+            "/locations/" +
+            REGION +
+            "/repositories/gcf-artifacts/packages?pageSize=100",
           cleanup: true,
         },
         { observe: true },
       );
-      readBack[label] = absent(answer);
-    }
-    out.cleanup.readBack = readBack;
-    const finalLists = {
-      jobs: await list("final-jobs", SCHEDULER + "?pageSize=500", "jobs"),
-      topics: await list("final-topics", PUBSUB + "/topics?pageSize=1000", "topics"),
-      subscriptions: await list(
-        "final-subscriptions",
-        PUBSUB + "/subscriptions?pageSize=1000",
-        "subscriptions",
-      ),
-    };
-    const finalFns = await lists("final");
-    out.cleanup.listsEmpty =
-      Boolean(finalLists.jobs && finalLists.topics && finalLists.subscriptions) &&
-      finalLists.jobs.jobs.length === 0 &&
-      finalLists.topics.topics.length === 0 &&
-      finalLists.subscriptions.subscriptions.length === 0 &&
-      Boolean(finalFns.v1 && finalFns.v2 && finalFns.run) &&
-      nonePresent(summarize(finalFns));
-    out.cleanup.verified =
-      out.cleanup.listsEmpty && Object.values(readBack).every((v) => v === true);
-    // Read-only inventory: what the deploy left that this recorder does not delete.
-    const packages = await read(
-      {
-        id: "inventory-packages",
-        method: "GET",
-        url:
-          "https://artifactregistry.googleapis.com/v1/projects/" +
-          PROJECT +
-          "/locations/" +
-          REGION +
-          "/repositories/gcf-artifacts/packages?pageSize=100",
-        cleanup: true,
-      },
-      { observe: true },
-    );
-    out.inventory.artifactPackages =
-      packages?.status === 200 ? (packages.json.packages ?? []).length : (packages?.status ?? null);
-    const iamAfter = await read({
-      id: "iam-after",
-      method: "POST",
-      url: "https://cloudresourcemanager.googleapis.com/v1/projects/" + PROJECT + ":getIamPolicy",
-      json: {},
-      cleanup: true,
+      out.inventory.artifactPackages =
+        packages?.status === 200
+          ? (packages.json.packages ?? []).length
+          : (packages?.status ?? null);
     });
-    out.inventory.iam = iamChanges(iamBefore, iamAfter);
-    await sleep(FINAL_LOG_WAIT_MS);
-    await pollLogs("final", { final: true });
+    await step("iam-after", async () => {
+      const iamAfter = await read({
+        id: "iam-after",
+        method: "POST",
+        url: "https://cloudresourcemanager.googleapis.com/v1/projects/" + PROJECT + ":getIamPolicy",
+        json: {},
+        cleanup: true,
+      });
+      out.inventory.iam = iamChanges(iamBefore, iamAfter);
+    });
+    await step("services-after", async () => {
+      const after = await read({
+        id: "services-after",
+        method: "GET",
+        url: SERVICES_URL,
+        cleanup: true,
+      });
+      const names = new Set((after?.json?.services ?? []).map((svc) => svc.config?.name));
+      out.inventory.services =
+        after?.status === 200 && readable(after) && enabledBefore
+          ? {
+              added: [...names].filter((n) => !enabledBefore.includes(n)).toSorted(),
+              removed: enabledBefore.filter((n) => !names.has(n)),
+            }
+          : null;
+    });
+    await step("final-logs", async () => {
+      await sleep(FINAL_LOG_WAIT_MS);
+      await pollLogs("final", { final: true });
+    });
   }
 
   // ---- the run ----------------------------------------------------------------------------------
+  /** A rejected credential: the REST requests end here, but the one CLI delete still runs if a deploy began. */
+  const authStopped = async () => {
+    if (created) {
+      try {
+        await cliDelete();
+      } catch {
+        // recorded as an unknown CLI answer; nothing more to do without a credential
+      }
+    }
+    return summary("auth-stop", false);
+  };
   try {
     const problem = await preflight();
     if (problem) {
@@ -750,7 +851,7 @@ export async function record({
       return summary("preflight", false);
     }
     out.stage = "dry-run";
-    out.cli.dryRun = await runCli({ action: "dry-run" });
+    out.cli.dryRun = await cli("dry-run");
     await save({ id: "cli-dry-run", state: "cli-result", result: out.cli.dryRun });
     if (cliFailed(out.cli.dryRun)) {
       out.outcome = "calendar-delivery-stopped-clean";
@@ -772,7 +873,7 @@ export async function record({
       await pauseAll();
     }
   } catch (error) {
-    if (error instanceof AuthStop) return summary("auth-stop", false);
+    if (error instanceof AuthStop) return authStopped();
     if (!(error instanceof BudgetError)) {
       out.stoppedBecause = String(error?.message);
       if (!created) throw error;
@@ -783,8 +884,8 @@ export async function record({
       out.stage = "cleanup";
       await cleanup();
     } catch (error) {
-      if (error instanceof AuthStop) return summary("auth-stop", false);
-      out.cleanup.error = String(error?.message);
+      if (!(error instanceof AuthStop)) throw error;
+      return authStopped();
     }
   }
   for (const entry of allFrames)
@@ -793,11 +894,13 @@ export async function record({
   out.pulledMessages = pulledMessages.length;
   const complete =
     out.passes.length === passes && out.passes.every((p) => p.complete) && !out.stoppedBecause;
-  out.outcome = out.cleanup.verified
-    ? complete
-      ? "calendar-delivery-recorded"
-      : "calendar-delivery-incomplete-clean"
-    : "calendar-delivery-needs-recovery";
+  out.outcome = !created
+    ? "calendar-delivery-stopped-clean"
+    : out.cleanup.verified
+      ? complete
+        ? "calendar-delivery-recorded"
+        : "calendar-delivery-incomplete-clean"
+      : "calendar-delivery-needs-recovery";
   out.stage = "done";
-  return summary("done", out.cleanup.verified && complete);
+  return summary("done", out.cleanup.verified && complete && !out.cleanup.errors);
 }

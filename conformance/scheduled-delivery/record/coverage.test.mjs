@@ -61,8 +61,8 @@ const SHORT = { passes: 1, naturalWindowMs: 60_000 };
 
 test("the constants are the ones the packet states", () => {
   assert.equal(NORMAL_CEILING, 330);
-  assert.equal(CLEANUP_CEILING, 90);
-  assert.equal(MAX_REQUESTS, 420);
+  assert.equal(CLEANUP_CEILING, 170);
+  assert.equal(MAX_REQUESTS, 500);
   assert.equal(PASSES, 2);
   assert.equal(NATURAL_WINDOW_MS, 360_000);
   assert.equal(PROPAGATION_WAIT_MS, 60_000);

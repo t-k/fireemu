@@ -73,16 +73,17 @@ test("the client writes the ledger line before a channel creation or deletion is
 });
 
 /** An Eventarc that lists nothing (a late list) but answers a read of a channel and deletes one. */
-async function service({ live = [], stuck = [] }) {
+async function service({ live = [], stuck = [], pendingOperations = false }) {
   const present = new Set(live);
   const seen = [];
+  const state = { pendingOperations };
   const server = createServer((request, response) => {
     const path = decodeURIComponent(request.url.split("?")[0].replace(/^\/v1\//, ""));
     seen.push(`${request.method} ${path}`);
     response.setHeader("content-type", "application/json");
     if (request.method === "GET" && path.endsWith("/channels")) return response.end("{}");
     if (request.method === "GET" && path.includes("/operations/"))
-      return response.end(JSON.stringify({ name: path, done: true }));
+      return response.end(JSON.stringify({ name: path, done: !state.pendingOperations }));
     if (request.method === "GET" && present.has(path))
       return response.end(JSON.stringify({ name: path }));
     if (request.method === "DELETE" && present.has(path)) {
@@ -100,6 +101,7 @@ async function service({ live = [], stuck = [] }) {
   await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
   return {
     seen,
+    state,
     present,
     host: `http://127.0.0.1:${server.address().port}`,
     close: () => server.close(),
@@ -459,4 +461,50 @@ test("S2-v2: the ten minutes are counted from the newest capture of the run, a l
   );
   const next = deps({ now: () => T0 + 3 * MIN_A2_WAIT_MS + 6000 });
   assert.equal(await main(a2(dir, svc.host), {}, io(), next), 0);
+});
+
+test("V2-M1(c) replayed: a probe creation answered 2xx whose operation never finishes is not closed by a 404 in any later run; an own 2xx read then DELETE and 404 settles it", async (t) => {
+  const probe = channel("probe-pending");
+  const operation = `projects/${PROJECT}/locations/us-central1/operations/op-pending`;
+  const svc = await service({ pendingOperations: true });
+  t.after(svc.close);
+  const dir = recording([[probe, "create", `unknown@${operation}`]]);
+  const printed = [];
+  // The first later run, then another ten minutes on: the probe reads 404 each time.
+  for (const [index, now] of [T0 + MIN_A2_WAIT_MS, T0 + 2 * MIN_A2_WAIT_MS + 5000].entries()) {
+    printed.length = 0;
+    assert.equal(await main(a2(dir, svc.host), {}, io([], printed), deps({ now: () => now })), 0);
+    const line = JSON.parse(printed.join(""));
+    assert.deepEqual(
+      [line.closureReady, line.cleanup.unsettled, line.cleanup.unconfirmed],
+      [false, [probe], [probe]],
+      `later run ${index + 1}`,
+    );
+  }
+  const summaries = readdirSync(dir).filter((name) => /^summary-.*-a2-/.test(name));
+  assert.equal(summaries.length, 2);
+  for (const name of summaries) {
+    const summary = JSON.parse(readFileSync(join(dir, name), "utf8"));
+    assert.deepEqual(summary.cleanup.settled, []);
+    assert.equal(summary.closureReady, false);
+  }
+  // The probe appears: an own 2xx read shows it, it is deleted, and the 404 settles it.
+  svc.present.add(probe);
+  svc.state.pendingOperations = false;
+  printed.length = 0;
+  assert.equal(
+    await main(
+      a2(dir, svc.host),
+      {},
+      io([], printed),
+      deps({ now: () => T0 + 3 * MIN_A2_WAIT_MS + 9000 }),
+    ),
+    0,
+  );
+  const last = JSON.parse(printed.join(""));
+  assert.deepEqual(
+    [last.closureReady, last.cleanup.unsettled, last.cleanup.unconfirmed],
+    [true, [], []],
+  );
+  assert.equal(last.cleanup.deleted, 1);
 });

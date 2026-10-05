@@ -69,6 +69,7 @@ export async function preflightKey({
   token,
   fetchImpl = globalThis.fetch,
   onRequest = () => {},
+  origin,
 }) {
   const read = async (url, headers, what) => {
     onRequest();
@@ -91,9 +92,11 @@ export async function preflightKey({
     }
   };
   const isNumber = (value) => typeof value === "string" && /^[0-9]+$/.test(value);
+  // A browser at `origin` reads the key with that origin as its referer (the key may be
+  // restricted to it), and needs the origin's domain among the project's authorized domains.
   const keyed = await read(
     `https://identitytoolkit.googleapis.com/v1/projects?key=${encodeURIComponent(apiKey)}`,
-    {},
+    origin === undefined ? {} : { referer: `${origin}/` },
     "key read",
   );
   const owned = await read(
@@ -107,6 +110,11 @@ export async function preflightKey({
   if (owned.lifecycleState !== "ACTIVE") throw new Error("the project is not ACTIVE");
   if (keyed.projectId !== owned.projectNumber)
     throw new Error("the API key belongs to a different project");
+  if (origin !== undefined) {
+    const domains = keyed.authorizedDomains;
+    if (!Array.isArray(domains) || !domains.includes(new URL(origin).hostname))
+      throw new Error("the origin's domain is not among the project's authorized domains");
+  }
   return { projectNumber: owned.projectNumber };
 }
 
@@ -148,9 +156,15 @@ export function rowsFromReceipt(receipt) {
 }
 
 /** Runs the driver; resolves with its receipt and the counts of its wire records. */
-export function runDriver({ config, input, timeoutMs = DRIVER_TIMEOUT_MS, spawnImpl = spawn }) {
+export function runDriver({
+  config,
+  input,
+  timeoutMs = DRIVER_TIMEOUT_MS,
+  spawnImpl = spawn,
+  script = DRIVER,
+}) {
   return new Promise((resolve, reject) => {
-    const child = spawnImpl(process.execPath, [DRIVER], {
+    const child = spawnImpl(process.execPath, [script], {
       env: { ...process.env, AFC_SDK_CONFIG: JSON.stringify(config) },
       stdio: ["pipe", "pipe", "inherit"],
     });
@@ -159,6 +173,8 @@ export function runDriver({ config, input, timeoutMs = DRIVER_TIMEOUT_MS, spawnI
     let wire = 0;
     let connections = 0;
     let refused;
+    // What the page reported besides the counts: a failed request or a page error (at most 50).
+    const diagnostics = [];
     createInterface({ input: child.stdout }).on("line", (line) => {
       let event;
       try {
@@ -171,18 +187,23 @@ export function runDriver({ config, input, timeoutMs = DRIVER_TIMEOUT_MS, spawnI
       else if (event.event === "wire") wire += 1;
       else if (event.event === "connection") connections += 1;
       else if (event.event === "wire-refused") refused = event;
+      else if (
+        (event.event === "request-failed" || event.event === "page-error") &&
+        diagnostics.length < 50
+      )
+        diagnostics.push(event);
     });
     const timer = setTimeout(() => child.kill("SIGKILL"), timeoutMs);
     child.once("close", (code) => {
       clearTimeout(timer);
-      if (receipt) resolve({ receipt, wire, connections, refused });
+      if (receipt) resolve({ receipt, wire, connections, refused, diagnostics });
       else
         reject(
           Object.assign(
             new Error(
               `sdk driver ended (${code}) without a receipt: ${driverError ?? refused?.reason ?? "no reason"}`,
             ),
-            { wire, connections },
+            { wire, connections, diagnostics },
           ),
         );
     });

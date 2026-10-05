@@ -49,12 +49,21 @@ export function orderIgnoredFor(row, scenario) {
 //    <6 digits>-sub-<3 digits>`; production draws the two numbers per deployment (FE v5 834054/834, FE v7 293232/576: fixed within
 //    a deployment, so the two passes of one run cannot show it varying) and fireemu derives its own, so the numbers are masked and
 //    the rest, the shape, is compared;
-//  - the `authId` of an auth-context write is the id of the credential that wrote: production prints the recorder's own (its email
-//    for the user credential, a uid for an ID-token write), which a local session cannot have, so only that a non-empty string is
-//    present is compared (the `authType` beside it is compared exactly).
+//  - the `authId` of an auth-context write is the id of the credential that wrote: production prints the recorder's own (its
+//    email for the user credential, the 28-character uid for an ID-token write), which a local session cannot have. The value is
+//    masked and its format class is compared (an email, a 28-character alphanumeric id, any other id; an empty string stays
+//    empty), so a missing id, an empty one or one of another format is still a DIFF (owner ruling of the coordinator, 2026-10-05:
+//    the operator's email is environment state; presence, type and format stay compared). The `authType` beside it is compared
+//    exactly.
 const maskSubscription = (value) =>
   value.replace(/-\d{6}-sub-\d{3}$/, "-<6 digits>-sub-<3 digits>");
-const maskPresent = (value) => (value.length > 0 ? "<present>" : value);
+const EMAIL = /^[^@\s]+@[^@\s]+\.[^@\s]+$/;
+const UID_28 = /^[A-Za-z0-9]{28}$/;
+export const maskIdentity = (value) => {
+  if (value.length === 0) return value;
+  if (EMAIL.test(value)) return "<email>";
+  return UID_28.test(value) ? "<28-character id>" : "<other id>";
+};
 
 /** The declared masks of a row: `{ path, mask }` entries (see above), or none. */
 export function declaredMasksFor(row, scenario) {
@@ -62,7 +71,7 @@ export function declaredMasksFor(row, scenario) {
   if (row.generation === 2 && scenario.source === "pubsub")
     masks.push({ path: "$.frame.event.data.subscription", mask: maskSubscription });
   if (row.recipeId === "functions-events/firestore/auth-context" && scenario.source === "firestore")
-    masks.push({ path: "$.frame.event.authId", mask: maskPresent });
+    masks.push({ path: "$.frame.event.authId", mask: maskIdentity });
   return masks;
 }
 

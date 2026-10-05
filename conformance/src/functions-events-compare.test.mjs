@@ -935,9 +935,9 @@ test("the Pub/Sub v2 subscription is compared by its shape: the two per-deployme
   );
 });
 
-test("the id of the credential behind an auth-context write is compared as a present string, and its type still is", () => {
-  // Production prints the recorder's own credential (its email for the user credential, a uid for an ID-token write); a local
-  // session has no such identity, so only that it is a non-empty string is compared. authType is compared exactly.
+test("the id of the credential behind an auth-context write is compared by its format class, and its type still is", () => {
+  // Production prints the recorder's own credential (its email for the user credential, the 28-character uid for an ID-token
+  // write); a local session cannot have the email. The value is masked and its format class compared; authType exactly.
   const row = { generation: 2, recipeId: "functions-events/firestore/auth-context" };
   const masks = masksFor(row, FIRESTORE);
   assert.deepEqual(
@@ -955,23 +955,34 @@ test("the id of the credential behind an auth-context write is compared as a pre
       "strict",
     );
   };
-  assert.deepEqual(compareAuth(["unknown", "operator@example.test"], ["unknown", "owner"]), []);
+  const UID = "Mw39BUiBmgXKwPUHFjsCEJSwPws2";
+  // Another value of the same class matches: another operator's email, another user's uid.
   assert.deepEqual(
-    compareAuth(["api_key", "Mw39BUiBmgXKwPUHFjsCEJSwPws2"], ["api_key", "alice"]),
+    compareAuth(["unknown", "operator@example.test"], ["unknown", "someone@example.org"]),
     [],
   );
+  assert.deepEqual(compareAuth(["api_key", UID], ["api_key", "bGxurlr9aM4QB709E3Demg1hnXQx"]), []);
+  // Another class does not: an email against a plain id, a uid against a short id, a 27 or 29 character id.
+  assert.equal(compareAuth(["unknown", "operator@example.test"], ["unknown", "owner"]).length, 1);
+  assert.equal(compareAuth(["api_key", UID], ["api_key", "alice"]).length, 1);
+  assert.equal(compareAuth(["api_key", UID], ["api_key", UID.slice(1)]).length, 1);
+  assert.equal(compareAuth(["api_key", UID], ["api_key", `${UID}x`]).length, 1);
+  assert.equal(compareAuth(["api_key", UID], ["api_key", "operator@example.test"]).length, 1);
+  assert.equal(compareAuth(["unknown", "operator@example.test"], ["unknown", "a@b"]).length, 1);
+  // The type is still exact.
   assert.equal(
-    compareAuth(["unknown", "operator@example.test"], ["service_account", "owner"]).length,
+    compareAuth(["unknown", "operator@example.test"], ["service_account", "someone@example.org"])
+      .length,
     1,
   );
-  assert.equal(compareAuth(["api_key", "x"], ["app_user", "x"]).length, 1);
-  // Any non-empty id is present, even a single character; the masked value is what is compared.
-  assert.deepEqual(compareAuth(["unknown", "x"], ["unknown", "y"]), []);
-  assert.equal(
-    applyDeclaredMasks(observation("unknown", "x"), masks).get("$.frame.event.authId").value,
-    "<present>",
-  );
-  // A missing or empty id is not a present string.
+  assert.equal(compareAuth(["api_key", UID], ["app_user", UID]).length, 1);
+  // The masked values are the class names; an empty id stays empty and a missing one is missing.
+  const masked = (id) =>
+    applyDeclaredMasks(observation("unknown", id), masks).get("$.frame.event.authId").value;
+  assert.equal(masked("operator@example.test"), "<email>");
+  assert.equal(masked(UID), "<28-character id>");
+  assert.equal(masked("owner"), "<other id>");
+  assert.equal(masked(""), "");
   assert.equal(compareAuth(["unknown", "operator@example.test"], ["unknown", null]).length, 1);
   assert.equal(compareAuth(["unknown", "operator@example.test"], ["unknown", ""]).length, 1);
   assert.deepEqual(

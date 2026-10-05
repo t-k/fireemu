@@ -915,6 +915,12 @@ test("the Pub/Sub v2 subscription is compared by its shape: the two per-deployme
     "emulator-sub-fe-events-primary",
   ])
     assert.equal(compareNames(v7, wrong).length, 1, wrong);
+  // What the mask writes: the shape, with the two numbers named by their widths.
+  assert.equal(
+    applyDeclaredMasks(subscriptionObservation(v7), masksFor(row, scenario)).get(SUBSCRIPTION)
+      .value,
+    "projects/p/subscriptions/eventarc-us-central1-pubsubpublishedv2-<6 digits>-sub-<3 digits>",
+  );
   // Only that path of the Pub/Sub v2 rows is masked.
   assert.deepEqual(
     masksFor(row, scenario).map(({ path }) => path),
@@ -959,6 +965,12 @@ test("the id of the credential behind an auth-context write is compared as a pre
     1,
   );
   assert.equal(compareAuth(["api_key", "x"], ["app_user", "x"]).length, 1);
+  // Any non-empty id is present, even a single character; the masked value is what is compared.
+  assert.deepEqual(compareAuth(["unknown", "x"], ["unknown", "y"]), []);
+  assert.equal(
+    applyDeclaredMasks(observation("unknown", "x"), masks).get("$.frame.event.authId").value,
+    "<present>",
+  );
   // A missing or empty id is not a present string.
   assert.equal(compareAuth(["unknown", "operator@example.test"], ["unknown", null]).length, 1);
   assert.equal(compareAuth(["unknown", "operator@example.test"], ["unknown", ""]).length, 1);

@@ -68,7 +68,6 @@ export function declaredMasksFor(row, scenario) {
 
 /** A copy of a flattened observation with the declared masks applied to the string values at their paths. */
 export function applyDeclaredMasks(observation, masks) {
-  if (masks.length === 0) return observation;
   const masked = new Map(observation);
   for (const { path, mask } of masks) {
     const leaf = masked.get(path);

@@ -146,7 +146,7 @@ const summarizeMasks = (rows) => {
 };
 
 /** The distinct `{ mask, path, reason }` entries of a list, in a fixed order. */
-const distinctMasks = (entries) =>
+export const distinctMasks = (entries) =>
   [
     ...new Map(entries.map((entry) => [`${entry.mask}\u0000${entry.path}`, entry])).values(),
   ].toSorted((a, b) => byText(a.mask, b.mask) || byText(a.path, b.path));

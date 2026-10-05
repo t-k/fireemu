@@ -8,6 +8,7 @@ import {
   compareRuns,
   DECLARED_MASK_REASONS,
   declaredMasksFor,
+  distinctMasks,
   orderIgnoredFor,
   unorderedRootsUsed,
 } from "./functions-events/compare/compare.mjs";
@@ -1143,4 +1144,23 @@ test("a one-character unknown id is recorded as masked, and the masks of a row a
     assert.deepEqual(keys, keys.toSorted(), row.row);
     assert.equal(new Set(keys).size, keys.length, `${row.row}: no duplicates`);
   }
+});
+
+test("the masks of a row are distinct by name and path and ordered by name, then by path", () => {
+  const entry = (mask, path) => ({ mask, path, reason: DECLARED_MASK_REASONS[mask] });
+  const A = "firestore-field-maps-unordered";
+  const B = "authId-unknown-present";
+  assert.deepEqual(
+    distinctMasks([
+      entry(A, "$.b"),
+      entry(A, "$.a"),
+      entry(B, "$.z"),
+      entry(A, "$.b"),
+      entry(B, "$.z"),
+    ]),
+    [entry(B, "$.z"), entry(A, "$.a"), entry(A, "$.b")],
+  );
+  assert.deepEqual(distinctMasks([]), []);
+  // The same path under two names is two entries.
+  assert.equal(distinctMasks([entry(A, "$.a"), entry(B, "$.a")]).length, 2);
 });

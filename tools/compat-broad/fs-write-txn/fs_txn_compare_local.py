@@ -183,11 +183,11 @@ def main():
     if os.environ.get("COMPARE_CLOCK") == "frozen":
         # the emulator was started with `daemon.clockStart` (COMPARE_CLOCK_START): its clock moves only when advanced, so the waits advance it and nothing else does;
         # COMPARE_ADVANCE_SECONDS moves it once more, hidden, after the step COMPARE_ADVANCE_AFTER (a read an hour back needs a database older than that)
-        from txn_replay_clock import VirtualClock, advancing
+        from txn_replay_clock import CONCURRENT_SETTLE_SECONDS, VirtualClock, advancing, settling
 
         start = datetime.datetime.fromisoformat(os.environ["COMPARE_CLOCK_START"].replace("Z", "+00:00"))
         clock = VirtualClock(os.environ["FIREEMU_CONTROL_URL"], os.environ["FIREEMU_CONTROL_TOKEN"], start)
-        runner = advancing(Collector, clock, int(os.environ.get("COMPARE_ADVANCE_SECONDS", "0")), os.environ.get("COMPARE_ADVANCE_AFTER"))
+        runner = settling(advancing(Collector, clock, int(os.environ.get("COMPARE_ADVANCE_SECONDS", "0")), os.environ.get("COMPARE_ADVANCE_AFTER")), float(os.environ.get("COMPARE_SETTLE_SECONDS", CONCURRENT_SETTLE_SECONDS)))
         receipt = runner(plan, table, RequestBudget(plan, table), wire, "owner", save=lambda _state: None, monotonic=clock.now, utc=clock.utc, sleep=clock.sleep).run()
     elif os.environ.get("COMPARE_CLOCK") == "virtual":
         # the waits advance the emulator's virtual clock and reproduce the production token ages (see txn_replay_clock)

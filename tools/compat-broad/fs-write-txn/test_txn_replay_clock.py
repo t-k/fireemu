@@ -470,3 +470,29 @@ def test_applying_the_age_rows_stores_them_and_counts_every_failed_row_as_a_mism
     clean = {"mismatches": 0}
     clock.apply_age_rows(clean, [])
     assert clean == {"mismatches": 0, "tokenAges": []}   # a replay with no long-lived token still says it checked
+
+
+# --- a concurrent writer is given real time to reach the emulator before the frozen clock moves ---
+
+def test_a_settling_collector_gives_a_concurrent_writer_real_time_after_it_starts_and_not_before():
+    events = []
+
+    class Base:
+        def _start_concurrent(self, step):
+            events.append(("start", step))
+
+        def _rpc(self, site):
+            events.append(("rpc", site))
+
+    collector = clock.settling(Base, 3.5, sleep=lambda seconds: events.append(("sleep", seconds)))()
+    collector._rpc("a")
+    collector._start_concurrent("writer")
+    collector._rpc("release")
+    assert events == [("rpc", "a"), ("start", "writer"), ("sleep", 3.5), ("rpc", "release")]
+
+
+def test_a_collector_that_settles_for_no_time_is_the_base_itself():
+    class Base:
+        pass
+
+    assert clock.settling(Base, 0) is Base

@@ -228,6 +228,25 @@ def advancing(base, clock, seconds, after):
     return Advancing
 
 
+#: Real seconds a concurrent outside writer is given to reach the emulator (its worker starts a process and connects) before the replay moves the frozen clock: a clock that
+#: moves faster than the writer arrives would release the holder before the writer ever met its locks.
+CONCURRENT_SETTLE_SECONDS = 5.0
+
+
+def settling(base, seconds=CONCURRENT_SETTLE_SECONDS, sleep=time.sleep):
+    """`base` (a collector class) that, right after it sends a concurrent writer, waits `seconds` of real time (the emulator's clock is frozen: nothing ages) before it goes on."""
+    if not seconds:
+        return base
+
+    class Settling(base):
+        def _start_concurrent(self, step):
+            result = super()._start_concurrent(step)
+            sleep(seconds)
+            return result
+
+    return Settling
+
+
 class PacedCollector(Collector):
     """The framework collector with each wait stretched to the production step; everything else is the framework's."""
 

@@ -12,6 +12,7 @@ import {
   classifyRow,
   describeRow,
   filterKeys,
+  filterSites,
   compareRecordings,
   recordingProblems,
   settlementProblems,
@@ -1195,10 +1196,16 @@ test("near miss: a wait that ran out with no REMOVE carrying a cause is a failur
 // ---- the review of the L1 comparison (M1, M2, S2): fixture-backed probes ----
 
 const prodRows = (id) => [L1["native-1"].rows[id], L1["native-2"].rows[id]];
-const withoutFilterRows = (entry) => ({
-  ...entry,
-  rows: entry.rows.filter((item) => item.kind !== "filter"),
-});
+/** A local row as fireemu would send it without the filters: the boundaries they split are one. */
+const withoutFilterRows = (entry) => {
+  const rows = [];
+  for (const item of entry.rows) {
+    if (item.kind === "filter") continue;
+    if (item.kind === "boundary" && rows.at(-1)?.kind === "boundary") continue;
+    rows.push(item);
+  }
+  return { ...entry, rows };
+};
 const onlyRecording = (rows) => recording(rows);
 const verdictOf = (id, local) => {
   const [first, second] = prodRows(id);
@@ -1442,4 +1449,173 @@ test("a production pair that is unfinished stays INDETERMINATE even when no loca
     local: recording({}),
   });
   assert.equal(out.rows.r.status, "INDETERMINATE");
+});
+
+// ---- v3: a required filter is matched by place; one that repeats a known count carries nothing ----
+
+const REQUIRED_ROWS = [
+  "native/resume-token/older",
+  "native/resume-token/other-query",
+  "native/existence-filter/without-expected-count",
+  "native/resume-token-expired/expired",
+];
+
+/** `entry` with its first filter taken out and put back before frame `index` of the rest. */
+function movedFilter(entry, index) {
+  const at = entry.rows.findIndex((item) => item.kind === "filter");
+  const filter = entry.rows[at];
+  const rest = entry.rows.filter((_, i) => i !== at);
+  return { ...entry, rows: [...rest.slice(0, index), filter, ...rest.slice(index)] };
+}
+
+test("M4: the filters both production runs sent are required where they were sent: dropping one, or moving it across CURRENT or after the last boundary, does not match", () => {
+  for (const id of REQUIRED_ROWS) {
+    const [first, second] = prodRows(id);
+    const sites = (entry) => filterSites(entry).filter((site) => !site.redundant);
+    assert.ok(sites(first).length > 0 && sites(second).length > 0, `${id}: informative in both`);
+    assert.equal(verdictOf(id, first), "MATCH", id);
+    assert.equal(verdictOf(id, withoutFilterRows(first)), "MISMATCH", `${id}: dropped`);
+    const filterAt = first.rows.findIndex((item) => item.kind === "filter");
+    const currentAt = first.rows.findIndex(
+      (item) => item.kind === "targetChange" && item.type === "CURRENT",
+    );
+    // The first filter moved to just after CURRENT, and to the very end.
+    const rest = first.rows.length - 1;
+    for (const index of [currentAt + 1 - (filterAt < currentAt ? 1 : 0), rest]) {
+      const moved = movedFilter(first, index);
+      if (JSON.stringify(moved.rows) === JSON.stringify(first.rows)) continue;
+      assert.equal(verdictOf(id, moved), "MISMATCH", `${id}: moved to ${index}`);
+    }
+  }
+});
+
+test("M4: older's filter before CURRENT does not match one after the final boundary", () => {
+  const [first] = prodRows("native/resume-token/older");
+  const atEnd = {
+    ...first,
+    rows: [
+      ...first.rows.filter((item) => item.kind !== "filter"),
+      first.rows.find((item) => item.kind === "filter"),
+    ],
+  };
+  assert.equal(verdictOf("native/resume-token/older", atEnd), "MISMATCH");
+  assert.deepEqual(
+    filterSites(first).map((site) => site.place),
+    ["4|targetChange:CURRENT"].map((place) => place),
+  );
+  assert.notEqual(filterSites(atEnd)[0].place, filterSites(first)[0].place);
+});
+
+test("a filter that repeats a count the row already says carries nothing: on a fresh target after CURRENT, or after a filter of the same count", () => {
+  for (const id of [
+    "native/target-protocol/collection-group",
+    "native/resume-token-expired/fresh-control",
+  ]) {
+    const [first, second] = prodRows(id);
+    assert.ok(
+      filterSites(first).every((site) => site.redundant),
+      `${id}: redundant`,
+    );
+    assert.equal(verdictOf(id, first), "MATCH", id);
+    assert.equal(verdictOf(id, withoutFilterRows(first)), "MATCH", `${id}: may be left out`);
+    // Sent with the wrong count it says something the row contradicts: a difference.
+    const wrong = structuredClone(first);
+    wrong.rows.find((item) => item.kind === "filter").count += 1;
+    assert.equal(verdictOf(id, wrong), "MISMATCH", `${id}: a count the row does not hold`);
+    assert.ok(second);
+  }
+  // The second filter of expired/expired repeats the first one's count; other-query's too.
+  for (const id of ["native/resume-token-expired/expired", "native/resume-token/other-query"]) {
+    const [, second] = prodRows(id);
+    const sites = filterSites(second);
+    assert.equal(sites.at(-1).redundant, true, `${id}: the last filter is a repeat`);
+    assert.equal(sites[0].redundant, false, `${id}: the first one is information`);
+  }
+});
+
+test("filterSites: places, redundancy by held documents, by an earlier count, and only after CURRENT", () => {
+  const add = {
+    kind: "targetChange",
+    type: "ADD",
+    targetIds: [1],
+    cause: null,
+    resumeToken: false,
+  };
+  const change = (doc, extra = {}) => ({
+    kind: "documentChange",
+    doc,
+    fields: {},
+    targetIds: [1],
+    removedTargetIds: [],
+    ...extra,
+  });
+  const del = (doc) => ({ kind: "documentDelete", doc, removedTargetIds: [1] });
+  const sites = (rows) => filterSites(fr(rows));
+  // A fresh target holding two documents: a filter of 2 after CURRENT is a repeat, of 3 is not.
+  const fresh = [add, change("a"), change("b"), current, bnd()];
+  assert.deepEqual(
+    sites([...fresh, flt(2)]).map((s) => s.redundant),
+    [true],
+  );
+  assert.deepEqual(
+    sites([...fresh, flt(3)]).map((s) => s.redundant),
+    [false],
+  );
+  // A document taken back is not held.
+  assert.deepEqual(
+    sites([add, change("a"), change("b"), del("b"), current, flt(1)]).map((s) => s.redundant),
+    [true],
+  );
+  assert.deepEqual(
+    sites([add, change("a"), change("b"), del("b"), current, flt(2)]).map((s) => s.redundant),
+    [false],
+  );
+  assert.deepEqual(
+    sites([
+      add,
+      change("a"),
+      change("a", { targetIds: [], removedTargetIds: [1] }),
+      current,
+      flt(0),
+    ]).map((s) => s.redundant),
+    [true],
+    "a change that took the document out of the target",
+  );
+  // Before CURRENT a filter is information, fresh or not.
+  assert.deepEqual(
+    sites([add, change("a"), flt(1), current]).map((s) => s.redundant),
+    [false],
+  );
+  // A resumed target (a boundary right after ADD) holds what the client held: only a repeated count is redundant.
+  const resumed = [add, bnd(), change("a"), flt(1), current, bnd()];
+  assert.deepEqual(
+    sites([...resumed, flt(1)]).map((s) => s.redundant),
+    [false, true],
+  );
+  assert.deepEqual(
+    sites([...resumed, flt(2)]).map((s) => s.redundant),
+    [false, false],
+  );
+  // A filter without a bloom filter is not a site.
+  assert.deepEqual(sites([add, bare(1), current]), []);
+  // Places: the frames before it (filters dropped, boundaries merged) and the frame after it.
+  assert.deepEqual(
+    sites([add, bnd(), flt(0), flt(0), bnd(), current, bnd(), flt(0), bnd()]).map((s) => s.place),
+    ["2|boundary", "2|boundary", "4|boundary"],
+  );
+  assert.deepEqual(
+    sites([add, flt(0)]).map((s) => s.place),
+    ["1|end"],
+  );
+  assert.deepEqual(sites([]), []);
+  assert.deepEqual(filterSites({}), []);
+});
+
+test("two rows that both have a filter in the same place must say the same; one only a row has is optional", () => {
+  const a = fr([current, flt(2), bnd()]);
+  const b = fr([current, flt(3), bnd()]);
+  assert.equal(classifyRow(a, b), "DIFFER");
+  assert.equal(classifyRow(a, fr([current, bnd()])), "MATCH");
+  assert.equal(classifyRow(a, fr([current, bnd(), flt(3)])), "MATCH", "another place");
+  assert.equal(classifyRow(a, structuredClone(a)), "MATCH");
 });

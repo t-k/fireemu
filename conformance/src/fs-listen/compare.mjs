@@ -72,9 +72,9 @@ function withoutFilters(rows) {
 }
 
 /**
- * The optional existence filters of a row, as the sorted set of what they say: the target, the
- * count and the shape of the bloom filter of unchanged names. A filter without that bloom filter
- * is not optional: it stays in the row and is compared with it.
+ * The existence filters of a row (those with a bloom filter of unchanged names), as the sorted set
+ * of what they say: the target, the count and the shape of the bloom filter. A filter without that
+ * bloom filter stays in the row and is compared there.
  */
 export function filterKeys(row) {
   const keys = (row.rows ?? [])
@@ -84,6 +84,82 @@ export function filterKeys(row) {
         `${targetId}:${count}:${bloom.hashCount}:${bloom.bitmapBytes}:${bloom.padding}`,
     );
   return [...new Set(keys)].toSorted();
+}
+
+const keyOf = ({ targetId, count, unchangedNames: bloom }) =>
+  `${targetId}:${count}:${bloom.hashCount}:${bloom.bitmapBytes}:${bloom.padding}`;
+
+/**
+ * Where each existence filter of a row is, what it says, and whether it carries information.
+ *
+ * A place is the number of frames (filters dropped, boundaries they left side by side merged)
+ * before the filter, and the frame that follows it: `targetChange:CURRENT`, `boundary`, `end`...
+ * so a filter before CURRENT and one after the last boundary are different places.
+ *
+ * A filter after the target's CURRENT carries no information when its count equals what the row
+ * already says the target holds: the count of an earlier filter of the row, or, for a target
+ * added fresh (the frame after its ADD is not a boundary), the number of documents the row
+ * delivered and did not take back. The server then only repeats the count; it can disagree with
+ * the client only when the count differs. Every other filter is information: a client holding
+ * documents from before a resume compares its set with the count.
+ */
+export function filterSites(row) {
+  const frames = row.rows ?? [];
+  const sites = [];
+  let kept = 0;
+  let dropped = false;
+  let lastKind;
+  let afterAdd = false;
+  let fresh = false;
+  let current = false;
+  const held = new Set();
+  const counts = [];
+  for (const [index, item] of frames.entries()) {
+    if (afterAdd) {
+      fresh = item.kind !== "boundary";
+      afterAdd = false;
+    }
+    if (item.kind === "targetChange" && item.type === "ADD") afterAdd = true;
+    if (item.kind === "targetChange" && item.type === "CURRENT") current = true;
+    if (item.kind === "documentChange") {
+      if ((item.targetIds ?? []).length > 0) held.add(item.doc);
+      else if ((item.removedTargetIds ?? []).length > 0) held.delete(item.doc);
+    }
+    if (item.kind === "documentDelete" || item.kind === "documentRemove") held.delete(item.doc);
+    if (isOptionalFilter(item)) {
+      const next = frames.slice(index + 1).find((later) => !isOptionalFilter(later));
+      const following = next
+        ? next.kind === "targetChange"
+          ? `targetChange:${next.type}`
+          : next.kind
+        : "end";
+      const redundant =
+        current && (counts.includes(item.count) || (fresh && held.size === item.count));
+      sites.push({ key: keyOf(item), place: `${kept}|${following}`, redundant });
+      counts.push(item.count);
+      dropped = true;
+      continue;
+    }
+    if (!(dropped && item.kind === "boundary" && lastKind === "boundary")) kept += 1;
+    lastKind = item.kind;
+    dropped = false;
+  }
+  return sites;
+}
+
+/** The informative filters of a row, as `place#key` strings. */
+const informative = (row) =>
+  filterSites(row)
+    .filter((site) => !site.redundant)
+    .map((site) => `${site.place}#${site.key}`);
+
+/** The informative filters of a row by place: place to the set of keys said there. */
+function byPlace(row) {
+  const places = new Map();
+  for (const site of filterSites(row))
+    if (!site.redundant)
+      places.set(site.place, new Set([...(places.get(site.place) ?? []), site.key]));
+  return places;
 }
 
 /** What a row says when compared: no conditions, no timings, document runs as sets. */
@@ -160,10 +236,14 @@ function isUnfinished(row) {
 export function classifyRow(a, b) {
   if (isUnfinished(a) || isUnfinished(b)) return "INDETERMINATE";
   if (!isDeepStrictEqual(canonicalRow(a), canonicalRow(b))) return "DIFFER";
-  // Filters are optional, but two that came must say the same.
-  const [keysA, keysB] = [filterKeys(a), filterKeys(b)];
-  const comparable = keysA.length > 0 && keysB.length > 0;
-  return comparable && !isDeepStrictEqual(keysA, keysB) ? "DIFFER" : "MATCH";
+  // A filter only one of the rows has is optional (production shows it both ways); two rows that
+  // both have a filter in the same place must say the same.
+  const [placesA, placesB] = [byPlace(a), byPlace(b)];
+  for (const [place, keys] of placesA) {
+    const other = placesB.get(place);
+    if (other && !isDeepStrictEqual([...keys].toSorted(), [...other].toSorted())) return "DIFFER";
+  }
+  return "MATCH";
 }
 
 const SETTLEMENT_MIN_AGE_MS = 10 * 60_000;
@@ -244,18 +324,20 @@ function divergenceOf(entry) {
 /**
  * MATCH, DIFFER or INDETERMINATE for a local row against the two production rows of the same id
  * (which agree, `classifyRow`). The frames compare as in `classifyRow`. An existence filter that
- * both production runs sent is required of the local row: it carries what the client acts on,
- * and a filter only one run sent is optional. A filter the local row sends that neither production
- * run sent is a difference.
+ * both production runs sent in the same place (see `filterSites`) and that carries information is
+ * required of the local row, in that place: it carries what the client acts on. A filter only one
+ * run sent is optional, and a filter that repeats a count the row already says (`redundant`) is
+ * ignored. An informative filter the local row sends that neither production run sent there is a
+ * difference.
  */
 export function classifyLocal(first, second, local) {
   if (isUnfinished(first) || isUnfinished(second) || isUnfinished(local)) return "INDETERMINATE";
   if (!isDeepStrictEqual(canonicalRow(first), canonicalRow(local))) return "DIFFER";
-  const [keysFirst, keysSecond, keysLocal] = [first, second, local].map(filterKeys);
-  const required = keysFirst.filter((key) => keysSecond.includes(key));
-  const allowed = new Set([...keysFirst, ...keysSecond]);
-  const complete = required.every((key) => keysLocal.includes(key));
-  return complete && keysLocal.every((key) => allowed.has(key)) ? "MATCH" : "DIFFER";
+  const [sitesFirst, sitesSecond, sitesLocal] = [first, second, local].map(informative);
+  const required = sitesFirst.filter((site) => sitesSecond.includes(site));
+  const allowed = new Set([...sitesFirst, ...sitesSecond]);
+  const complete = required.every((site) => sitesLocal.includes(site));
+  return complete && sitesLocal.every((site) => allowed.has(site)) ? "MATCH" : "DIFFER";
 }
 
 /**

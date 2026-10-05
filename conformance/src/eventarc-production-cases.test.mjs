@@ -633,7 +633,7 @@ test("the case ceilings are the ones the plan was measured against, in the order
       ["channel-delete", 41],
       ["channel-order", 96],
       ["channel-busy", 66],
-      ["channel-ids", 76],
+      ["channel-ids", 57],
       ["locations", 15],
       ["publish-envelope", 42],
       ["publish-content", 31],

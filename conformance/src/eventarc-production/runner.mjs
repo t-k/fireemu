@@ -51,7 +51,6 @@ export function assertBudgetCovers(cases, maxRequests) {
 }
 
 function createContext({
-  foreign,
   item,
   transports,
   ownership,
@@ -123,8 +122,6 @@ function createContext({
       ),
     sleep,
     note,
-    /** Channels the run did not name that appeared from one of its requests: reported, never touched. */
-    foreign,
   };
   return { context, closeSdk: async () => forwarder?.close() };
 }
@@ -142,7 +139,7 @@ export async function runCases({
   ledger = createLedger(),
   isStopping = () => false,
 }) {
-  const summary = { cases: [], stopped: null, limited: [], foreign: [], cleanup: null };
+  const summary = { cases: [], stopped: null, limited: [], cleanup: null };
   const stoppable = async (ms) => {
     if (isStopping()) throw new StopClean("stopped by a signal");
     await sleep(ms);
@@ -156,7 +153,6 @@ export async function runCases({
     const entry = { id: item.id, outcome: "completed" };
     capture.note("case-start", { case: item.id });
     const { context, closeSdk } = createContext({
-      foreign: summary.foreign,
       item,
       transports,
       ownership,
@@ -209,7 +205,6 @@ export async function runCases({
 
 export function exitCodeOf(summary) {
   if (summary.cleanup.leftover.length > 0 || summary.cleanup.errors.length > 0) return 1;
-  if (summary.foreign?.length > 0) return 1;
   if (summary.stopped !== null) return summary.stopped.includes("budget") ? 4 : 3;
   return 0;
 }

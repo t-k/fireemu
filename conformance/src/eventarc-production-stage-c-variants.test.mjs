@@ -1,8 +1,9 @@
-// Stage C: the two creations that deviate from the official request on purpose (the body names another
-// channel than the path's ID; the path has no channelId). They are the only requests whose body or query is
-// not firebase-tools 15.28.2's `createChannel`, so each is a named variant with its own tests: an unknown
-// variant is refused before anything is sent, both names a variant may create are owned (or probes) and
-// ledgered, and the model of production lists them as the refusals they are.
+// Stage C: the one creation that deviates from the official request on purpose (the body names another
+// channel than the path's ID). It is the only request whose body or query is not firebase-tools 15.28.2's
+// `createChannel`, so it is a named variant with its own tests: an unknown variant is refused before anything
+// is sent, both names it may create are owned (or probes) and ledgered, and the model of production lists it
+// as the refusal it is. A creation without a `channelId` (the other variant of the first version of stage C)
+// is gone: a run never creates a resource it cannot name.
 
 import assert from "node:assert/strict";
 import test from "node:test";
@@ -56,18 +57,23 @@ test("name-mismatch: the path's channelId is one owned channel and the body's na
   );
 });
 
-test("no-channel-id: the path has no channelId and the body names one owned channel", async () => {
-  const { world, ownership, ledger, client } = setup();
-  const one = ownership.channel(LOCATION, "v-c");
-  await client.createChannelVariant(PROJECT, LOCATION, "no-channel-id", one.split("/").at(-1));
-  const sent = world.calls.at(-1);
-  assert.equal(sent.path, `/v1/projects/${PROJECT}/locations/${LOCATION}/channels`);
-  assert.deepEqual(sent.body, { name: one });
-  assert.deepEqual([...ledger.state().keys()], [one]);
-  assert.deepEqual(
-    world.refusals.map((refusal) => refusal.kind),
-    ["create-name-mismatch"],
+test("a creation without a channelId can no longer be built: a run never creates a resource it cannot name (coordinator ruling 2026-10-05)", async () => {
+  const { world, ownership, client } = setup();
+  const one = ownership.channel(LOCATION, "v-c").split("/").at(-1);
+  await assert.rejects(
+    () => client.createChannelVariant(PROJECT, LOCATION, "no-channel-id", one),
+    /unknown createChannel variant/,
   );
+  assert.deepEqual(world.calls, [], "nothing was sent");
+  // The variant that is left is sent with a channelId in its path.
+  await client.createChannelVariant(
+    PROJECT,
+    LOCATION,
+    "name-mismatch",
+    one,
+    ownership.channel(LOCATION, "v-h").split("/").at(-1),
+  );
+  assert.ok(world.calls.every((call) => call.path.includes("channelId=")));
 });
 
 test("an unknown variant, a name that is not the run's, and a surplus argument are refused before anything is sent", async () => {
@@ -83,19 +89,11 @@ test("an unknown variant, a name that is not the run's, and a surplus argument a
     /other/,
   );
   await assert.rejects(
-    () => client.createChannelVariant(PROJECT, LOCATION, "no-channel-id", own, own),
-    /no other/,
-  );
-  await assert.rejects(
     () => client.createChannelVariant(PROJECT, LOCATION, "name-mismatch", stranger, own),
     /not a channel of this run/,
   );
   await assert.rejects(
     () => client.createChannelVariant(PROJECT, LOCATION, "name-mismatch", own, stranger),
-    /not a channel of this run/,
-  );
-  await assert.rejects(
-    () => client.createChannelVariant(PROJECT, LOCATION, "no-channel-id", stranger),
     /not a channel of this run/,
   );
   // One surplus argument is one too many for each variant, and a body cannot be smuggled in as one.
@@ -107,10 +105,6 @@ test("an unknown variant, a name that is not the run's, and a surplus argument a
   await assert.rejects(
     () => client.createChannelVariant(PROJECT, LOCATION, "name-mismatch", own, other, "x", "y"),
     /no more arguments/,
-  );
-  await assert.rejects(
-    () => client.createChannelVariant(PROJECT, LOCATION, "no-channel-id", own, undefined, {}),
-    /no other argument/,
   );
   assert.deepEqual(world.calls, [], "nothing was sent");
 });

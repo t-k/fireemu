@@ -84,11 +84,11 @@ const operations = ({ usageProject, publishPrefix }) => ({
       ledger: { action: "create", name },
     };
   },
-  // The two creations that deviate from the official request on purpose (stage C), each a named variant that
-  // is the official request but for one thing. `name-mismatch`: the path's `channelId` is `channelId` and the
-  // body names `otherId`; `no-channel-id`: the path has no `channelId` and the body names `channelId`. Every
-  // name the request might create is owned (or a registered probe) and is ledgered, so that a creation of
-  // either is settled and removed like any other.
+  // The one creation that deviates from the official request on purpose (stage C), a named variant that is the
+  // official request but for one thing. `name-mismatch`: the path's `channelId` is `channelId` and the body
+  // names `otherId`. Both names the request might create are owned (or a registered probe) and are ledgered,
+  // so that a creation of either is settled and removed like any other. A creation without a `channelId` is not
+  // built: a run never creates a resource it cannot name.
   createChannelVariant: (project, location, variant, channelId, otherId, ...rest) => {
     const named = (id) => `projects/${project}/locations/${location}/channels/${id}`;
     const parent = `projects/${project}/locations/${location}/channels`;
@@ -104,19 +104,6 @@ const operations = ({ usageProject, publishPrefix }) => ({
         body: { name: named(otherId) },
         changes: names,
         ledger: names.map((name) => ({ action: "create", name })),
-      };
-    }
-    if (variant === "no-channel-id") {
-      if (otherId !== undefined || rest.length > 0)
-        throw new Error("no-channel-id takes no other channel ID: it takes no other argument");
-      return {
-        host: "eventarc",
-        op: "createChannel",
-        method: "POST",
-        path: `/v1/${parent}`,
-        body: { name: named(channelId) },
-        changes: [named(channelId)],
-        ledger: [{ action: "create", name: named(channelId) }],
       };
     }
     throw new Error(`unknown createChannel variant ${String(variant)}`);

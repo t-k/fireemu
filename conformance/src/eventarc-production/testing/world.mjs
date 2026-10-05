@@ -106,9 +106,9 @@ export function createWorld({
    */
   busy = "off",
   /**
-   * The two deliberate variants of a creation (a body that names another channel than the path's ID, a path
-   * with no `channelId`) are accepted and create the channel the body names, with an operation (the most
-   * requests a run can send), instead of being refused.
+   * The deliberate variant of a creation (a body that names another channel than the path's ID) is accepted and
+   * creates the channel the body names, with an operation (the most requests a run can send), instead of being
+   * refused.
    */
   acceptVariants = false,
   /** Every ID is accepted, so that every ID probe creates a channel (the most requests a run can send). */

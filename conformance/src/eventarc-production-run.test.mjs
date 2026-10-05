@@ -158,7 +158,7 @@ test("bad arguments are refused, and the numbers have their values", () => {
   assert.equal(parseArgs([...base, "--max-requests", "1"]).maxRequests, 1);
   assert.equal(parseArgs([...base, "--project-number", "1".repeat(20)]).usageProject.length, 20);
   assert.throws(() => parseArgs([...base, "--project-number", "1".repeat(21)]), /digits/);
-  assert.equal(DEFAULT_MAX_REQUESTS, 710);
+  assert.equal(DEFAULT_MAX_REQUESTS, 690);
   assert.equal(CLEANUP_BUDGET, 850);
 });
 
@@ -423,11 +423,6 @@ test("a run is closable only with no unknown answer, no stop and a clean cleanup
   const capture = createCapture({ journal: { write() {} } });
   capture.record({ case: "a", step: "01", op: "getChannel" });
   assert.equal(summarize({ options, capture, summary: clean }).closureReady, true);
-  assert.equal(
-    summarize({ options, capture, summary: { ...clean, foreign: [] } }).closureReady,
-    true,
-    "an empty foreign list is clean",
-  );
   capture.record({ case: "a", step: "02", op: "publishEvents", unknown: true });
   const unsettled = summarize({ options, capture, summary: clean });
   assert.deepEqual(
@@ -440,9 +435,6 @@ test("a run is closable only with no unknown answer, no stop and a clean cleanup
     { ...clean, cleanup: { ...clean.cleanup, errors: ["x"] } },
     { ...clean, cleanup: { ...clean.cleanup, unsettled: ["x"] } },
     { ...clean, limited: ["x"] },
-    // A channel the run did not name that appeared from one of its requests (stage C): never touched,
-    // reported, and the run is not closable.
-    { ...clean, foreign: ["projects/p/locations/l/channels/auto"] },
   ])
     assert.equal(
       summarize({ options, capture: createCapture({ journal: { write() {} } }), summary })
@@ -530,12 +522,12 @@ for (const [label, extra] of [
     );
     assert.equal(code, 0);
     assert.equal(summary.closureReady, true);
-    // The model refused no creation for its shape except the two deliberate variants of channel-ids (a
-    // body that names another channel, a path without a channelId), and no publish except the two probes
+    // The model refused no creation for its shape except the deliberate variant of channel-ids (a
+    // body that names another channel), and no publish except the two probes
     // that send no events on purpose (an empty list and a body without the member).
     assert.deepEqual(
       world.refusals.map((refusal) => refusal.kind),
-      ["create-name-mismatch", "create-name-mismatch", "publish-no-events", "publish-no-events"],
+      ["create-name-mismatch", "publish-no-events", "publish-no-events"],
     );
     // Nothing of the run is left, and every case stayed inside its ceiling.
     assert.deepEqual(
@@ -564,26 +556,23 @@ for (const [label, extra] of [
         (l) => l.note === "sdk-outcome" && l.name === "missing-source" && l.requests === 0,
       ),
     );
-    // The create probe came first and every creation carried its channel's name, except the two variants
-    // of channel-ids that deviate on purpose (a body that names another channel, a path without a
-    // channelId): exactly those two, in that case, and nothing else.
+    // The create probe came first and every creation carried its channel's name, except the variant
+    // of channel-ids that deviates on purpose (a body that names another channel): exactly that one, in that
+    // case, and nothing else. No creation lacks a channelId: a run never creates a resource it cannot name.
     const creates = lines.filter((l) => l.op === "createChannel");
     assert.ok(creates.length > 5);
     const deviating = [];
     for (const line of creates) {
       const path = line.request.path.replace(/^\/v1\//, "");
       const found = /^(.*)\/channels\?channelId=(.*)$/.exec(path);
-      if (found === null || line.request.body.name !== `${found[1]}/channels/${found[2]}`)
-        deviating.push(line);
+      assert.notEqual(found, null, `a creation without a channelId: ${path}`);
+      if (line.request.body.name !== `${found[1]}/channels/${found[2]}`) deviating.push(line);
       else if (line.tokenMode === "default")
         assert.equal(line.request.body.name, `${found[1]}/channels/${found[2]}`);
     }
     assert.deepEqual(
-      deviating.map((line) => [line.case, line.request.path.includes("channelId=")]),
-      [
-        ["channel-ids", true],
-        ["channel-ids", false],
-      ],
+      deviating.map((line) => line.case),
+      ["channel-ids"],
     );
   });
 }

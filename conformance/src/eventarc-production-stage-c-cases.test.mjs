@@ -14,7 +14,7 @@ import { channelOrder } from "./eventarc-production/cases/order.mjs";
 import { publishBoundaries } from "./eventarc-production/cases/boundaries.mjs";
 import { createClient } from "./eventarc-production/client.mjs";
 import { createOwnership } from "./eventarc-production/names.mjs";
-import { exitCodeOf, runCases } from "./eventarc-production/runner.mjs";
+import { runCases } from "./eventarc-production/runner.mjs";
 import { createWorld } from "./eventarc-production/testing/world.mjs";
 
 const RUN = "0123456789ab";
@@ -227,30 +227,17 @@ test("channel-ids: the one-character ID, the final hyphen, a leading hyphen and 
     calls.indexOf("getChannel a") >= 0 &&
       calls.indexOf("getChannel a") < calls.indexOf("createChannel a"),
   );
-  // The two variants, once each, refused by the model as the mismatches they are.
+  // The one variant, once, refused by the model as the mismatch it is; and every creation of the case has a
+  // channelId in its path: nothing is created that the run could not name.
   assert.deepEqual(
     world.refusals.map((refusal) => refusal.kind),
-    ["create-name-mismatch", "create-name-mismatch"],
+    ["create-name-mismatch"],
   );
-});
-
-test("channel-ids: a channel that appears from the creation without a channelId is reported as foreign, never touched, and fails the exit code", async () => {
-  const wrap = (request, world) => async (call) => {
-    const reply = await request(call);
-    if (call.op === "createChannel" && !call.path.includes("channelId="))
-      world.channels.set(`${PARENT}/channels/auto-generated-1`, {
-        createTime: "2026-10-05T00:00:00Z",
-      });
-    return reply;
-  };
-  const { summary, world, notes } = await runOne(channelIds, { acceptAnyId: true }, { wrap });
-  assert.deepEqual(summary.foreign, [`${PARENT}/channels/auto-generated-1`]);
-  assert.ok(
-    world.channels.has(`${PARENT}/channels/auto-generated-1`),
-    "it is not deleted: it is not the run's",
+  assert.equal(
+    inCase.filter((call) => call.op === "createChannel" && !call.path.includes("channelId="))
+      .length,
+    0,
   );
-  assert.ok(notes.some((line) => JSON.stringify(line).includes("foreign-channel-appeared")));
-  assert.equal(exitCodeOf(summary), 1);
 });
 
 test("locations: only reads are sent, to real and invented locations, and the operations that were never issued", async () => {
@@ -560,40 +547,6 @@ test("channel-busy: a second deletion is sent only after a 2xx that names its op
     ["op", "get", "sleep:2000", "get", "sleep:2000", "get"],
     "three reads, two seconds between them, none before the first (the operation's last read comes right before it)",
   );
-});
-
-test("channel-ids: a foreign channel needs to be neither listed before nor the run's; a failed list is reported unavailable", async () => {
-  // Others existed before and the variants create channels of the run: nothing is foreign.
-  const existing = Array.from({ length: 3 }, (_, i) => `${PARENT}/channels/other-${i}`);
-  const clean = await runOne(channelIds, { acceptAnyId: true, acceptVariants: true, existing });
-  assert.deepEqual(clean.summary.foreign, []);
-  assert.equal(
-    clean.notes.some((line) => line.note === "foreign-channel-appeared"),
-    false,
-  );
-  assert.equal(
-    clean.notes.some((line) => line.note === "foreign-check-unavailable"),
-    false,
-  );
-  // A list that fails ends the check with a note that says which list: the first only, then the second only.
-  for (const [failing, expected] of [
-    [1, { before: false, after: true }],
-    [2, { before: true, after: false }],
-  ]) {
-    let lists = 0;
-    const wrap = (request) => async (call) => {
-      if (call.op === "listChannels" && call.path.includes("pageSize=100")) {
-        lists += 1;
-        if (lists === failing) return { status: 503, body: {}, unknown: true };
-      }
-      return request(call);
-    };
-    const run = await runOne(channelIds, { acceptAnyId: true }, { wrap });
-    const note = run.notes.find((line) => line.note === "foreign-check-unavailable");
-    assert.ok(note, `list ${failing}`);
-    assert.deepEqual({ before: note.before, after: note.after }, expected);
-    assert.deepEqual(run.summary.foreign, []);
-  }
 });
 
 test("channel-ids: a variant the service accepts is settled for both names by its own operation", async () => {

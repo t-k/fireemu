@@ -195,20 +195,3 @@ export async function settleCreation(ctx, reply, names) {
     for (const name of rest) ctx.client.settleOperation(name, "create", last, reply.body.name);
   return last;
 }
-
-/** The names a location lists, in pages of 100 for at most `pages` requests (a location with more channels than that is not checked); null when a list did not answer. */
-export async function listNames(ctx, location, pages = 3) {
-  const names = [];
-  let pageToken;
-  for (let page = 0; page < pages; page += 1) {
-    const reply = await ctx.client.listChannels(ctx.project, location, {
-      pageSize: 100,
-      ...(pageToken === undefined ? {} : { pageToken }),
-    });
-    if (!reply.ok) return null;
-    for (const item of reply.body?.channels ?? []) names.push(item.name);
-    pageToken = reply.body?.nextPageToken;
-    if (typeof pageToken !== "string" || pageToken === "") return names;
-  }
-  return null;
-}

@@ -228,11 +228,11 @@ test("the ceilings fit the run's budget, and the cleanup's budget covers every n
 
 test("the cleanup budget is derived from the bounds: every name a run can ledger, at the cleanup's own worst per name", () => {
   // The names a run can ledger: the run's channels (stage B: p1, c1, c2, d1, d2, env, content, limits, sdk,
-  // auth; stage C: six of channel-order, two of channel-busy, five of channel-ids (a final hyphen, 63
-  // characters, the two of the mismatch, the one of the creation without a channelId) and one of
+  // auth; stage C: six of channel-order, two of channel-busy, four of channel-ids (a final hyphen, 63
+  // characters, the two of the mismatch) and one of
   // publish-boundaries) and the ID probes (six; the one-character one and the leading-hyphen one; and the
   // location that cannot exist).
-  const names = 10 + 6 + 2 + 5 + 1 + (6 + 2 + 1);
+  const names = 10 + 6 + 2 + 4 + 1 + (6 + 2 + 1);
   // Per name, at most: 4 reads of a pending creation's operation, 1 read by name, 1 deletion, 15 polls of
   // its operation and 3 read-backs; and two lists of a location.
   const perName = 4 + 1 + 1 + 15 + 3;

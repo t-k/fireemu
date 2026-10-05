@@ -29,7 +29,7 @@ const PRODUCTION = {
   publishing: "https://eventarcpublishing.googleapis.com",
   usage: "https://serviceusage.googleapis.com",
 };
-export const DEFAULT_MAX_REQUESTS = 710;
+export const DEFAULT_MAX_REQUESTS = 690;
 export const CLEANUP_BUDGET = 850;
 /** The later --cleanup-only run starts at least this long after the recording's last line. */
 export const MIN_A2_WAIT_MS = 10 * 60 * 1000;
@@ -129,7 +129,6 @@ export function summarize({ options, capture, summary }) {
       capture.unknownCount() === 0 &&
       summary.stopped === null &&
       (summary.limited ?? []).length === 0 &&
-      (summary.foreign ?? []).length === 0 &&
       summary.cleanup.leftover.length === 0 &&
       summary.cleanup.errors.length === 0 &&
       summary.cleanup.unsettled.length === 0,
@@ -301,7 +300,7 @@ export async function main(
     { mode: 0o600 },
   );
   io.stdout.write(
-    `${JSON.stringify({ runId: result.runId, requests: result.requests, stopped: result.stopped, closureReady: result.closureReady, foreign: result.foreign ?? [], cleanup: { deleted: summary.cleanup.deleted.length, leftover: summary.cleanup.leftover, errors: summary.cleanup.errors, unsettled: summary.cleanup.unsettled, unconfirmed: summary.cleanup.unconfirmed } })}\n`,
+    `${JSON.stringify({ runId: result.runId, requests: result.requests, stopped: result.stopped, closureReady: result.closureReady, cleanup: { deleted: summary.cleanup.deleted.length, leftover: summary.cleanup.leftover, errors: summary.cleanup.errors, unsettled: summary.cleanup.unsettled, unconfirmed: summary.cleanup.unconfirmed } })}\n`,
   );
   return exitCodeOf(summary);
 }

@@ -1627,6 +1627,113 @@ test("filterSites: places, redundancy by held documents, by an earlier count, an
   assert.deepEqual(filterSites({}), []);
 });
 
+test("filterSites: a target that was never added is not fresh; a resumed one is not either; a frame that adds or removes nothing keeps its document", () => {
+  const add = {
+    kind: "targetChange",
+    type: "ADD",
+    targetIds: [1],
+    cause: null,
+    resumeToken: false,
+  };
+  const change = (doc, extra = {}) => ({
+    kind: "documentChange",
+    doc,
+    fields: {},
+    targetIds: [1],
+    removedTargetIds: [],
+    ...extra,
+  });
+  const redundant = (rows) => filterSites(fr(rows)).map((site) => site.redundant);
+  // No ADD in the row: nothing says the target started empty, so a repeated document count is information.
+  assert.deepEqual(redundant([change("a"), current, flt(1)]), [false]);
+  // A target resumed (a boundary right after its ADD) is not fresh whatever follows.
+  assert.deepEqual(redundant([add, bnd(), change("a"), current, flt(1)]), [false]);
+  assert.deepEqual(redundant([add, bnd(), change("a"), current, bnd(), flt(1)]), [false]);
+  // The same target added fresh: the count repeats what the row delivered.
+  assert.deepEqual(redundant([add, change("a"), current, flt(1)]), [true]);
+  // A change that names no target either way leaves the document held; a documentRemove takes it out.
+  assert.deepEqual(
+    redundant([
+      add,
+      change("a"),
+      change("a", { targetIds: [], removedTargetIds: [] }),
+      current,
+      flt(1),
+    ]),
+    [true],
+  );
+  assert.deepEqual(
+    redundant([
+      add,
+      change("a"),
+      change("a", { targetIds: [], removedTargetIds: [] }),
+      current,
+      flt(0),
+    ]),
+    [false],
+  );
+  assert.deepEqual(
+    redundant([
+      add,
+      change("a"),
+      { kind: "documentRemove", doc: "a", removedTargetIds: [1] },
+      current,
+      flt(0),
+    ]),
+    [true],
+  );
+  assert.deepEqual(
+    redundant([
+      add,
+      change("a"),
+      change("b", { targetIds: [], removedTargetIds: [1] }),
+      current,
+      flt(1),
+    ]),
+    [true],
+    "a document never held that leaves the target",
+  );
+});
+
+test("filterSites: only the boundaries a dropped filter left side by side merge into one place", () => {
+  const places = (rows) => filterSites(fr(rows)).map((site) => site.place);
+  // Two boundaries nothing was between stay two frames.
+  assert.deepEqual(places([bnd(), bnd(), flt(0), current]), ["2|targetChange:CURRENT"]);
+  // A filter between two boundaries: they are one frame.
+  assert.deepEqual(places([bnd(), flt(0), bnd(), flt(0)]), ["1|boundary", "1|end"]);
+  // A boundary and a document after a dropped filter are two frames.
+  assert.deepEqual(places([bnd(), flt(0), current, flt(0)]), ["1|targetChange:CURRENT", "2|end"]);
+  // The merge applies once: a boundary after the merged pair counts again.
+  assert.deepEqual(places([flt(0), bnd(), bnd(), flt(0)]), ["0|boundary", "2|end"]);
+  assert.deepEqual(places([bnd(), flt(0), bnd(), bnd(), flt(0)]), ["1|boundary", "2|end"]);
+});
+
+test("a repeated count is not information: two runs with different redundant filters in one place still match", () => {
+  const add = {
+    kind: "targetChange",
+    type: "ADD",
+    targetIds: [1],
+    cause: null,
+    resumeToken: false,
+  };
+  const doc = {
+    kind: "documentChange",
+    doc: "a",
+    fields: {},
+    targetIds: [1],
+    removedTargetIds: [],
+  };
+  const other = { ...flt(1), unchangedNames: { hashCount: 13, bitmapBytes: 8, padding: 3 } };
+  const base = [add, doc, current, bnd()];
+  assert.equal(classifyRow(fr([...base, flt(1)]), fr([...base, other])), "MATCH");
+  // The same filters before CURRENT are information and must agree.
+  const early = [add, doc];
+  assert.equal(
+    classifyRow(fr([...early, flt(1), current]), fr([...early, other, current])),
+    "DIFFER",
+  );
+});
+
 test("two rows that both have a filter in the same place must say the same; one only a row has is optional", () => {
   const a = fr([current, flt(2), bnd()]);
   const b = fr([current, flt(3), bnd()]);

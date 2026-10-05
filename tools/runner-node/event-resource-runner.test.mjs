@@ -545,7 +545,9 @@ test('v2: members of a Storage object that the recordings never showed follow th
   const bucket = recorded.data.bucket;
   const f = await start(t, [{ name: 'object', __endpoint: { platform: 'gcfv2', eventTrigger: { eventType: 'google.cloud.storage.object.v1.finalized', eventFilters: { bucket } } } }]);
   const extras = { cacheControl: 'no-cache', contentEncoding: 'gzip', zzz: 1, aaa: 2 };
-  const event = { id: recorded.id, type: recorded.type, time: recorded.time, source: recorded.source, subject: recorded.subject, specversion: '1.0', bucket, data: alphabetical({ ...recorded.data, ...extras }) };
+  // The extras arrive in reverse name order: the rule is name order, not arrival order.
+  const reversed = Object.fromEntries(Object.entries(alphabetical({ ...recorded.data, ...extras })).reverse());
+  const event = { id: recorded.id, type: recorded.type, time: recorded.time, source: recorded.source, subject: recorded.subject, specversion: '1.0', bucket, data: reversed };
   assert.equal((await f.invoke('object', 'storage', event)).ok, true);
   const [call] = await f.calls();
   assert.deepEqual(Object.keys(call.data.data), [...Object.keys(recorded.data), 'aaa', 'cacheControl', 'contentEncoding', 'zzz']);

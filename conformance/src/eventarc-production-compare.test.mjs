@@ -948,6 +948,13 @@ test("the metadata of an ErrorInfo is compared as a set only when both sides are
   assert.equal(sameJson(info({}), info("x")), false);
   assert.equal(sameJson(info(["a"]), info(["a"])), true);
   assert.equal(sameJson(info(1), info(2)), false);
+  assert.equal(
+    sameJson(info(""), info({})),
+    false,
+    "an empty text has no members, an empty object has none either",
+  );
+  assert.equal(sameJson(info({}), info("")), false);
+  assert.equal(sameJson(info([]), info({})), false);
   assert.equal(sameJson(info({ a: null }), info({ a: null })), true);
   assert.equal(sameJson(info({ a: 1 }), info({ b: 1 })), false);
 });

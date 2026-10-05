@@ -277,7 +277,7 @@ test("FS-TRANSACTION proposal names every acceptance boundary without claiming c
 
 test("FS-TRANSACTION notes of VERIFIED conditions do not call the condition open", () => {
   const closure = JSON.parse(readFileSync(closureUrl, "utf8"));
-  const stale = /remains open|remain required|no status change|gRPC is not recorded|until local shadow v5/i;
+  const stale = /remains open|remain required|no status change|gRPC is not recorded|until local shadow v5|older strict/i;
   for (const condition of closure.conditions.filter(({ status }) => status === "VERIFIED")) {
     assert.doesNotMatch(condition.note, stale, condition.conditionId);
     for (const item of condition.partialEvidence?.remainingBoundaries ?? [])
@@ -285,7 +285,7 @@ test("FS-TRANSACTION notes of VERIFIED conditions do not call the condition open
   }
 });
 
-test("FS-TRANSACTION E04 rows of the verified conditions are replayed on the release binary at the recorded idle", () => {
+test("FS-TRANSACTION E04 rows of the verified conditions are replayed on the release binary, the idle cases at 121 s of idle", () => {
   const closure = JSON.parse(readFileSync(closureUrl, "utf8"));
   const root = new URL("../../", import.meta.url);
   const prefixes = new Map([
@@ -312,7 +312,8 @@ test("FS-TRANSACTION E04 rows of the verified conditions are replayed on the rel
         assert.ok(rows.some((row) => row.caseId === `${caseId}#postState`), `${id}: ${caseId} post state is replayed`);
     }
   }
-  // the idle observations ran at the idle production measured, inside the interval it narrowed
+  // the idle observations ran at 121 s of idle on the control clock, inside the interval production narrowed for the idle threshold (the commit and the rollback were recorded at 120.35 to 121.15 s;
+  // the lock release at 124.7 to 125.2 s, which strict refuses as it refuses every idle above 120 s)
   const record = JSON.parse(
     readFileSync(new URL("spec/compatibility/broad-runs/fs-transaction-expiry-retry-04-release-replay-v1.json", root), "utf8"),
   );

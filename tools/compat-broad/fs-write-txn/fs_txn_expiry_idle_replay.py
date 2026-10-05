@@ -1,9 +1,9 @@
-"""Replay the 13 cases of the E04 campaign on a strict binary with the three REST idle waits at the idle production measured, and publish the comparison.
+"""Replay the 13 cases of the E04 campaign on a strict binary with the three REST idle waits at 121 s, and publish the comparison.
 
 The campaign's table waits 90 s for its three idle observations (commit, rollback and lock release after an idle expiry); strict's idle limit is 120 s, so
 that replay was superseded (see `supersededForStrict` in the 04 record). Here the same shadow and projections run from a sibling copy of this directory
 (`fs-write-txn-overlay-idle`, untracked, built by this tool) whose three waits are `IDLE_SECONDS` (121 s): inside the interval production narrowed for the idle
-threshold ([110.70, 122.96) s, ledger 809 (5)); production's own idles were 120.3 to 121.2 s for the commit and the rollback and 125.2 s for the lock release.
+threshold ([110.70, 122.96) s, ledger 809 (5)); production's own idles were 120.35 to 121.15 s for the commit, 120.60 to 121.06 s for the rollback and 124.68 to 125.22 s for the lock release. 121 s is inside the first two; for the lock release it is a lower idle with the same outcome (strict refuses every idle above 120 s), a valid sample and not the recorded idle.
 The local idle of each is then 121 s on the emulator's control clock. Every case and post state of the replay is compared with both production recordings by the
 campaign's own projections.
 

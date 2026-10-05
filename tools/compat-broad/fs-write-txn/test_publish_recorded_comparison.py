@@ -217,3 +217,11 @@ def test_a_table_file_that_was_replayed_as_recorded_is_named_once_by_its_as_reco
     assert publish.build(table=table, **kwargs)[1]["table"] == table
     other = {**entry, "path": "tools/compat-broad/fs-write-txn/other.py"}
     assert publish.build(table=table, as_recorded=[other], **kwargs)[1]["table"] == table
+
+
+def test_the_token_ages_the_emulator_saw_are_published_beside_the_rows(tmp_path):
+    paths = [write(tmp_path, 1), write(tmp_path, 2)]
+    ages = [{"site": "late-read", "production": 284.0, "emulator": 283.2, "difference": -0.8, "match": True}]
+    _o, comparison = build(tmp_path, results=[result(paths[0], tokenAges=ages), result(paths[1])], paths=paths)
+    assert comparison["recordings"][0]["tokenAges"] == ages and "tokenAges" not in comparison["recordings"][1]
+    assert comparison["summary"] == {"recordings": 2, "rows": 4, "mismatches": 0}

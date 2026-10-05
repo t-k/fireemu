@@ -27,6 +27,9 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, os.environ.get("SMOKE_TOOLS", str(HERE)))
 
+# A replay is refused when the idle of a request of at least TOKEN_AGE_MINIMUM seconds, as the emulator saw it, differs from the recorded idle by more than TOKEN_AGE_TOLERANCE seconds.
+TOKEN_AGE_MINIMUM = 100.0
+TOKEN_AGE_TOLERANCE = 4.0
 FAMILIES = ("txn_retry_grpc", "txn_idle_grpc", "txn_boundary_grpc")
 PROJECT_IN_NAME = re.compile(r"projects/[^/\s\"]+/databases")
 
@@ -89,10 +92,11 @@ def main():
         # the waits advance the emulator's virtual clock and keep the idle the production token had (see txn_replay_clock)
         from txn_replay_clock import VirtualClock, paced_grpc, production_idle_gaps
 
-        clock = VirtualClock(os.environ["FIREEMU_CONTROL_URL"], os.environ["FIREEMU_CONTROL_TOKEN"])
+        clock = VirtualClock(os.environ["FIREEMU_CONTROL_URL"], os.environ["FIREEMU_CONTROL_TOKEN"], frozen=True)
         gaps = production_idle_gaps(source["steps"])
-        receipt = paced_grpc(collector.Collector)(gaps, plan, program.RequestBudget(plan), wire, "owner", save=lambda _state: None, monotonic=clock.now, utc=clock.utc,
-                                                  sleep=clock.sleep, timing_mode="control-clock").run()
+        paced = paced_grpc(collector.Collector)(gaps, plan, program.RequestBudget(plan), wire, "owner", save=lambda _state: None, monotonic=clock.now, utc=clock.utc,
+                                                sleep=clock.sleep, timing_mode="control-clock", emulator_clock=clock.emulator_now)
+        receipt = paced.run()
     else:
         receipt = collector.Collector(plan, program.RequestBudget(plan), wire, "owner", save=lambda _state: None).run()
     out = Path(sys.argv[2])
@@ -116,6 +120,12 @@ def main():
 
             sites = {row["site"] for row in production.get("idleCandidates", [])}
             result["achievedAges"] = achieved_ages(production_idle_gaps(source["steps"]), production_idle_gaps(receipt["steps"]), sites=sites)
+            # the idle the emulator itself saw before each long-idle request, beside the recorded one: a replay whose emulator-side idle is off is refused
+            from txn_replay_clock import idle_before, judge_token_ages
+
+            result["tokenAges"] = judge_token_ages({site: gap for site, gap in production_idle_gaps(source["steps"]).items() if site in sites}, idle_before(paced.marks, sites),
+                                                   tolerance=TOKEN_AGE_TOLERANCE, minimum=TOKEN_AGE_MINIMUM)
+            result["mismatches"] += sum(not row["match"] for row in result["tokenAges"])
         if not result["skipped"]:
             result["skipped"] = None
     out.write_text(json.dumps(result, indent=1))

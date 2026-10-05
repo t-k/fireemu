@@ -94,7 +94,8 @@ def build(*, program, key, conditions, recordings, results, projections, identit
         **({"asRecorded": list(as_recorded)} if as_recorded else {}),
         "recordings": [{"recording": index + 1, "productionFileSha256": result["metadata"]["productionFileSha256"], "mismatches": 0,
                         **{section: result[section] for section in ROW_SECTIONS if result.get(section) is not None},
-                        **({"achievedAges": result["achievedAges"]} if result.get("achievedAges") else {})} for index, result in enumerate(results)],
+                        **({"achievedAges": result["achievedAges"]} if result.get("achievedAges") else {}),
+                        **({"tokenAges": result["tokenAges"]} if result.get("tokenAges") else {})} for index, result in enumerate(results)],
         "summary": {"recordings": 2, "rows": sum(_rows(result) for result in results), "mismatches": 0},
         "remainingBoundaries": [*OBSERVATION_LIMITS, "The artifact is the strict profile of the commit named; a later source change needs a new replay.", *limits],
     }

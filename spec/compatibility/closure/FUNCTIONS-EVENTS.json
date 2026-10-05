@@ -93,6 +93,18 @@
       "decidedBy": "owner",
       "decidedOn": "2026-09-25",
       "decisionRef": "docs.local/instructions/owner-decisions.md (2026-09-25 FUNCTIONS-EVENTS E9)"
+    },
+    {
+      "id": "E10",
+      "decision": "The authId of a 2nd gen Firestore event with auth context is a declared difference in value only, and only for authType unknown. Production prints the writer's own credential identity there (the recorder's user credential: its email); a local session cannot reproduce it, because the local owner bearer has no identity and strict prints owner (a principal that carries an identity prints it). The comparison masks the value of that id for unknown rows and compares its presence; it compares authType exactly; for authType api_key (a write with a Firebase ID token) the id is the user's uid, which a local session reproduces, so its 28-character alphanumeric shape is compared and any other value is a difference. Nothing else is masked by this decision.",
+      "rationale": "The operator's email is environment state. Masking the value for unknown and not for api_key keeps a regression that sends the wrong id with an ID token a difference.",
+      "reason": "Production's value is the operator's own credential identity; a local owner token carries none.",
+      "evidence": "FE v5 (functions-events-formal-20261004T182904Z-a9621bfae74fe9bc) and FE v7 (functions-events-formal-20261005T041505Z-d3fd3faa3e0dc702): handler fsWrittenWithAuthContextV2, 16 frames over two runs, identical in both: an Admin write by the user credential is unknown with the operator's email, a client write with an ID token is api_key with the user's uid. Official emulator (firebase-tools 15.28.2, Firestore emulator jar 1.22.0): unknown and fake-auth-id@gmail.com for every writer, the emulator profile's value.",
+      "review": "PENDING (the closure review)",
+      "status": "APPROVED",
+      "decidedBy": "coordinator (delegated)",
+      "decidedOn": "2026-10-05",
+      "decisionRef": "docs.local/runs/ownership-lane/coordinator-rulings.md (2026-10-05 15:12Z, admin-write authId and the register) and the review of work/fe-auth-context-strict and work/fe-closure-evidence-r3 (2026-10-05, M-B1)"
     }
   ],
   "conditions": [

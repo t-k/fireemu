@@ -138,12 +138,23 @@ function validateClosure(closure) {
   }
   assert.deepEqual(
     new Set(closure.scopeDecisions.map(({ id }) => id)),
-    new Set(["E1", "E2", "E3", "E4", "E5", "E6", "E7", "E8", "E9"]),
+    new Set(["E1", "E2", "E3", "E4", "E5", "E6", "E7", "E8", "E9", "E10"]),
   );
   for (const decision of closure.scopeDecisions) {
     assert.ok(decision.decision && decision.rationale, decision.id);
-    assert.equal(decision.status, "FROZEN", decision.id);
     assert.ok(decision.decidedBy && decision.decidedOn && decision.decisionRef, decision.id);
+    if (decision.id === "E10") {
+      // The accepted difference of the authId (coordinator, 2026-10-05): it states its reason, its evidence and its review,
+      // and is limited to the one field it declares.
+      assert.equal(decision.status, "APPROVED", decision.id);
+      assert.equal(decision.decidedBy, "coordinator (delegated)", decision.id);
+      assert.ok(decision.reason && decision.evidence && decision.review, decision.id);
+      assert.match(decision.decision, /authId/, decision.id);
+      assert.match(decision.decision, /only for authType unknown/, decision.id);
+      assert.match(decision.decision, /Nothing else is masked/, decision.id);
+    } else {
+      assert.equal(decision.status, "FROZEN", decision.id);
+    }
   }
   for (const condition of closure.conditions) {
     const label = condition.conditionId;
@@ -244,6 +255,16 @@ test("FUNCTIONS-EVENTS inventory rejects a missing event case and false evidence
     () => validateClosure(falseEvidence),
     /pending condition cannot claim production evidence/,
   );
+
+  // The accepted difference needs its reason, evidence and review, and may not widen into other fields.
+  for (const field of ["reason", "evidence", "review"]) {
+    const noField = readClosure();
+    delete noField.scopeDecisions.find(({ id }) => id === "E10")[field];
+    assert.throws(() => validateClosure(noField), /E10/, field);
+  }
+  const widened = readClosure();
+  widened.scopeDecisions.find(({ id }) => id === "E10").decision = "authId is masked.";
+  assert.throws(() => validateClosure(widened), /E10/);
 
   const falsePromotion = readClosure();
   falsePromotion.parentStatus = "COMPAT_VERIFIED";

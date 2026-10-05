@@ -129,6 +129,7 @@ export function summarize({ options, capture, summary }) {
       capture.unknownCount() === 0 &&
       summary.stopped === null &&
       (summary.limited ?? []).length === 0 &&
+      (summary.foreign ?? []).length === 0 &&
       summary.cleanup.leftover.length === 0 &&
       summary.cleanup.errors.length === 0 &&
       summary.cleanup.unsettled.length === 0,
@@ -300,7 +301,7 @@ export async function main(
     { mode: 0o600 },
   );
   io.stdout.write(
-    `${JSON.stringify({ runId: result.runId, requests: result.requests, stopped: result.stopped, closureReady: result.closureReady, cleanup: { deleted: summary.cleanup.deleted.length, leftover: summary.cleanup.leftover, errors: summary.cleanup.errors, unsettled: summary.cleanup.unsettled, unconfirmed: summary.cleanup.unconfirmed } })}\n`,
+    `${JSON.stringify({ runId: result.runId, requests: result.requests, stopped: result.stopped, closureReady: result.closureReady, foreign: result.foreign ?? [], cleanup: { deleted: summary.cleanup.deleted.length, leftover: summary.cleanup.leftover, errors: summary.cleanup.errors, unsettled: summary.cleanup.unsettled, unconfirmed: summary.cleanup.unconfirmed } })}\n`,
   );
   return exitCodeOf(summary);
 }

@@ -423,6 +423,11 @@ test("a run is closable only with no unknown answer, no stop and a clean cleanup
   const capture = createCapture({ journal: { write() {} } });
   capture.record({ case: "a", step: "01", op: "getChannel" });
   assert.equal(summarize({ options, capture, summary: clean }).closureReady, true);
+  assert.equal(
+    summarize({ options, capture, summary: { ...clean, foreign: [] } }).closureReady,
+    true,
+    "an empty foreign list is clean",
+  );
   capture.record({ case: "a", step: "02", op: "publishEvents", unknown: true });
   const unsettled = summarize({ options, capture, summary: clean });
   assert.deepEqual(
@@ -435,6 +440,9 @@ test("a run is closable only with no unknown answer, no stop and a clean cleanup
     { ...clean, cleanup: { ...clean.cleanup, errors: ["x"] } },
     { ...clean, cleanup: { ...clean.cleanup, unsettled: ["x"] } },
     { ...clean, limited: ["x"] },
+    // A channel the run did not name that appeared from one of its requests (stage C): never touched,
+    // reported, and the run is not closable.
+    { ...clean, foreign: ["projects/p/locations/l/channels/auto"] },
   ])
     assert.equal(
       summarize({ options, capture: createCapture({ journal: { write() {} } }), summary })

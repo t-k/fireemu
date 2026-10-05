@@ -70,7 +70,11 @@ test("FS-TRANSACTION published records verify eight conditions and not the paren
     assert.equal(recorded.profile, "strict");
     assert.equal(recorded.recordings, 2);
     const programs = recorded.programs.map(({ program }) =>
-      program.replace(/^FS-TRANSACTION-/, "").split("-").slice(0, program.includes("P10-") ? 2 : 1).join("-"),
+      program
+        .replace(/^FS-TRANSACTION-/, "")
+        .split("-")
+        .slice(0, program.includes("P10-") ? 2 : 1)
+        .join("-"),
     );
     assert.deepEqual(programs, expected, condition.conditionId);
     for (const entry of recorded.programs) {
@@ -93,7 +97,11 @@ test("FS-TRANSACTION published records verify eight conditions and not the paren
       assert.match(comparison.artifact.binarySha256, /^[0-9a-f]{64}$/);
       assert.ok(existsSync(new URL(entry.comparisonPath, root)));
     }
-    if (["FS-TRANSACTION/idle-expiry", "FS-TRANSACTION/total-lifetime-expiry"].includes(condition.conditionId))
+    if (
+      ["FS-TRANSACTION/idle-expiry", "FS-TRANSACTION/total-lifetime-expiry"].includes(
+        condition.conditionId,
+      )
+    )
       assert.match(recorded.boundaryRuling, /110\.70, 122\.96.*298\.7, 302\.2/);
     // the evidence block names the recordings, the one artifact and exactly the records above
     const { evidence } = condition;
@@ -105,8 +113,13 @@ test("FS-TRANSACTION published records verify eight conditions and not the paren
       assert.equal(run.recordings, 2, run.program);
       assert.match(run.project, /^fireemu-oracle-(sbx|txn)$/, run.program);
     }
-    assert.deepEqual(evidence.comparisonPaths, recorded.programs.map(({ comparisonPath }) => comparisonPath));
-    assert.deepEqual(evidence.rows, { MATCH: recorded.programs.reduce((sum, { rows }) => sum + rows, 0) });
+    assert.deepEqual(
+      evidence.comparisonPaths,
+      recorded.programs.map(({ comparisonPath }) => comparisonPath),
+    );
+    assert.deepEqual(evidence.rows, {
+      MATCH: recorded.programs.reduce((sum, { rows }) => sum + rows, 0),
+    });
     assert.match(evidence.finalArtifactSha256, /^[0-9a-f]{64}$/);
     assert.match(evidence.sourceCommit, /^[0-9a-f]{40}$/);
     for (const entry of recorded.programs) {
@@ -142,7 +155,11 @@ test("FS-TRANSACTION recorded REST subset leaves the other frozen conditions ope
     "spec/compatibility/broad-runs/fs-transaction-expiry-retry-04-recorded-comparison-v1.json";
   const observed = [];
   for (const condition of closure.conditions) {
-    assert.equal(condition.status === "VERIFIED", recordedConditions.has(condition.conditionId), condition.conditionId);
+    assert.equal(
+      condition.status === "VERIFIED",
+      recordedConditions.has(condition.conditionId),
+      condition.conditionId,
+    );
     if (partial.has(condition.conditionId)) {
       assert.equal(condition.status, "VERIFIED");
       assert.equal(condition.partialEvidence.coverage, "PARTIAL");
@@ -277,7 +294,8 @@ test("FS-TRANSACTION proposal names every acceptance boundary without claiming c
 
 test("FS-TRANSACTION notes of VERIFIED conditions do not call the condition open", () => {
   const closure = JSON.parse(readFileSync(closureUrl, "utf8"));
-  const stale = /remains open|remain required|no status change|gRPC is not recorded|until local shadow v5|older strict/i;
+  const stale =
+    /remains open|remain required|no status change|gRPC is not recorded|until local shadow v5|older strict/i;
   for (const condition of closure.conditions.filter(({ status }) => status === "VERIFIED")) {
     assert.doesNotMatch(condition.note, stale, condition.conditionId);
     for (const item of condition.partialEvidence?.remainingBoundaries ?? [])
@@ -303,21 +321,40 @@ test("FS-TRANSACTION E04 rows of the verified conditions are replayed on the rel
     assert.equal(record.artifact.binarySha256, condition.evidence.finalArtifactSha256, id);
     assert.equal(record.artifact.sourceCommit, condition.evidence.sourceCommit, id);
     assert.equal(record.summary.mismatches, 0);
-    const rows = record.recordings.flatMap((entry) => entry.rows).filter((row) => row.caseId.startsWith(prefix));
+    const rows = record.recordings
+      .flatMap((entry) => entry.rows)
+      .filter((row) => row.caseId.startsWith(prefix));
     assert.equal(releaseReplay.rows.MATCH, rows.length, id);
-    assert.ok(rows.every((row) => row.match), id);
+    assert.ok(
+      rows.every((row) => row.match),
+      id,
+    );
     for (const caseId of condition.partialEvidence.caseIds) {
-      assert.ok(rows.some((row) => row.caseId === caseId), `${id}: ${caseId} is replayed`);
+      assert.ok(
+        rows.some((row) => row.caseId === caseId),
+        `${id}: ${caseId} is replayed`,
+      );
       if (id === "FS-TRANSACTION/idle-expiry" && record.replay.idleCases.includes(caseId))
-        assert.ok(rows.some((row) => row.caseId === `${caseId}#postState`), `${id}: ${caseId} post state is replayed`);
+        assert.ok(
+          rows.some((row) => row.caseId === `${caseId}#postState`),
+          `${id}: ${caseId} post state is replayed`,
+        );
     }
   }
   // the idle observations ran at 121 s of idle on the control clock, inside the interval production narrowed for the idle threshold (the commit and the rollback were recorded at 120.35 to 121.15 s;
   // the lock release at 124.7 to 125.2 s, which strict refuses as it refuses every idle above 120 s)
   const record = JSON.parse(
-    readFileSync(new URL("spec/compatibility/broad-runs/fs-transaction-expiry-retry-04-release-replay-v1.json", root), "utf8"),
+    readFileSync(
+      new URL(
+        "spec/compatibility/broad-runs/fs-transaction-expiry-retry-04-release-replay-v1.json",
+        root,
+      ),
+      "utf8",
+    ),
   );
   assert.equal(record.replay.idleCases.length, 3);
   const idles = Object.values(record.replay.localIdleSeconds);
-  assert.ok(idles.length >= 3 && idles.every((idle) => idle >= 110.7 && idle < 122.96 || idle === 20));
+  assert.ok(
+    idles.length >= 3 && idles.every((idle) => (idle >= 110.7 && idle < 122.96) || idle === 20),
+  );
 });

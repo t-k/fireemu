@@ -98,6 +98,20 @@ test("an unknown variant, a name that is not the run's, and a surplus argument a
     () => client.createChannelVariant(PROJECT, LOCATION, "no-channel-id", stranger),
     /not a channel of this run/,
   );
+  // One surplus argument is one too many for each variant, and a body cannot be smuggled in as one.
+  const other = ownership.channel(LOCATION, "v-g").split("/").at(-1);
+  await assert.rejects(
+    () => client.createChannelVariant(PROJECT, LOCATION, "name-mismatch", own, other, {}),
+    /no more arguments/,
+  );
+  await assert.rejects(
+    () => client.createChannelVariant(PROJECT, LOCATION, "name-mismatch", own, other, "x", "y"),
+    /no more arguments/,
+  );
+  await assert.rejects(
+    () => client.createChannelVariant(PROJECT, LOCATION, "no-channel-id", own, undefined, {}),
+    /no other argument/,
+  );
   assert.deepEqual(world.calls, [], "nothing was sent");
 });
 

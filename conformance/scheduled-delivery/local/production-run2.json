@@ -129,6 +129,88 @@
       ]
     }
   ],
+  "forced": [
+    {
+      "pass": 1,
+      "job": "firebase-schedule-schedOkV2-us-central1",
+      "atMs": 89760
+    },
+    {
+      "pass": 1,
+      "job": "firebase-schedule-schedRetryV2-us-central1",
+      "atMs": 94210
+    },
+    {
+      "pass": 1,
+      "job": "firebase-schedule-schedSlowV2-us-central1",
+      "atMs": 98735
+    },
+    {
+      "pass": 1,
+      "job": "firebase-schedule-schedOkV1-us-central1",
+      "atMs": 102542
+    },
+    {
+      "pass": 1,
+      "job": "firebase-schedule-schedFailV1-us-central1",
+      "atMs": 107157
+    },
+    {
+      "pass": 1,
+      "job": "fe-sd-<runId>-zero",
+      "atMs": 111813
+    },
+    {
+      "pass": 1,
+      "job": "fe-sd-<runId>-duration",
+      "atMs": 118200
+    },
+    {
+      "pass": 1,
+      "job": "fe-sd-<runId>-retry5",
+      "atMs": 121947
+    },
+    {
+      "pass": 2,
+      "job": "firebase-schedule-schedOkV2-us-central1",
+      "atMs": 524053
+    },
+    {
+      "pass": 2,
+      "job": "firebase-schedule-schedRetryV2-us-central1",
+      "atMs": 528729
+    },
+    {
+      "pass": 2,
+      "job": "firebase-schedule-schedSlowV2-us-central1",
+      "atMs": 533274
+    },
+    {
+      "pass": 2,
+      "job": "firebase-schedule-schedOkV1-us-central1",
+      "atMs": 537837
+    },
+    {
+      "pass": 2,
+      "job": "firebase-schedule-schedFailV1-us-central1",
+      "atMs": 542451
+    },
+    {
+      "pass": 2,
+      "job": "fe-sd-<runId>-zero",
+      "atMs": 547094
+    },
+    {
+      "pass": 2,
+      "job": "fe-sd-<runId>-duration",
+      "atMs": 551709
+    },
+    {
+      "pass": 2,
+      "job": "fe-sd-<runId>-retry5",
+      "atMs": 556245
+    }
+  ],
   "schedulerEntryTypes": {
     "AttemptFinished|PUB_SUB||": 22,
     "AttemptStarted|PUB_SUB||": 22,

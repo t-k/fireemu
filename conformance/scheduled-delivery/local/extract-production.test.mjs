@@ -101,6 +101,18 @@ function runDir(overrides = {}) {
     row("logs-pass1-1-frames", { entries: frames }),
     row("logs-pass1-1-scheduler", { entries }),
     { id: "other", state: "before-send" },
+    // the forced runs' requests (the journal rows `run-<pass>-<job id without its prefix>`): when each was sent
+    {
+      id: "run-1-fe-sd-run-zero",
+      state: "before-send",
+      dispatchAt: "2026-10-05T08:41:03.609Z",
+    },
+    { id: "run-1-fe-sd-run-zero", state: "response-headers", responseAt: "2026-10-05T08:41:04.0Z" },
+    {
+      id: "run-1-schedOkV2-us-central1",
+      state: "before-send",
+      dispatchAt: "2026-10-05T08:41:05.109Z",
+    },
   ];
   writeFileSync(
     join(dir, `journal-${RUN}.jsonl`),
@@ -287,6 +299,30 @@ test("the command line writes the digest, one space indentation and a final newl
     assert.match(text, /\n "schemaVersion": 1,\n/);
     assert.equal(JSON.parse(text).schemaVersion, 1);
     assert.equal(JSON.parse(text).frames.length, 2);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("each forced run is kept with the instant it was requested, from the first frame, and the run id is masked", () => {
+  const dir = runDir();
+  try {
+    const digest = extract(dir);
+    assert.deepEqual(digest.forced, [
+      { pass: 1, job: "fe-sd-<runId>-zero", atMs: -500 },
+      { pass: 1, job: "firebase-schedule-schedOkV2-us-central1", atMs: 1000 },
+    ]);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("a forced run whose request the journal does not hold is an error, not a guess", () => {
+  const dir = runDir({
+    passes: [{ number: 1, forced: [{ id: "firebase-schedule-schedGoneV2-us-central1" }] }],
+  });
+  try {
+    assert.throws(() => extract(dir), /no journal row for the forced run/);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

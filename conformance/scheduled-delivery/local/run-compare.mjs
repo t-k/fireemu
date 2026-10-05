@@ -7,6 +7,7 @@ import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { compareProfiles, loadDigest } from "./compare.mjs";
+import { INFLIGHT_RUN, logicalSlowHandler } from "./inflight.mjs";
 import { runLocal } from "./local-run.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -29,7 +30,8 @@ const common = {
   start: "2026-10-05T08:40:30Z",
 };
 let results = {};
-// `--cache <file>` keeps the local timelines (the runs take minutes): an existing file is read instead of running.
+// `--cache <file>` keeps the local timelines (the runs take minutes): an existing file is read instead of running. A
+// cache written before the in-flight scenario holds no timeline for it, and the row then diverges.
 if (args.cache && existsSync(args.cache)) results = JSON.parse(readFileSync(args.cache, "utf8"));
 else
   for (const profile of ["strict", "emulator"]) {
@@ -40,6 +42,14 @@ else
         fixtureDir: join(here, "..", "fixture"),
         seconds: 700,
         patch,
+      }),
+      // The slow job's handler lasts 100 logical seconds, so an occurrence can fall inside a running handler.
+      inflight: await runLocal({
+        ...common,
+        profile,
+        fixtureDir: join(here, "..", "fixture"),
+        patch: logicalSlowHandler,
+        ...INFLIGHT_RUN,
       }),
       // A failing handler's retry chain waits on the logical clock: do not wait for the runtime to be idle.
       probe: await runLocal({

@@ -5,6 +5,7 @@ import test from "node:test";
 import {
   FORM,
   compareProfiles,
+  inFlightFacts,
   localChains,
   productionChains,
   rows,
@@ -85,9 +86,9 @@ const CHAINS = {
 };
 function production() {
   const frames = [];
-  // schedOkV2: every 60 s with a fractional anchor
+  // schedOkV2: every 60 s with a fractional anchor, the first occurrence on the minute (as recorded)
   for (let i = 0; i < 5; i++)
-    frames.push(prodV2("schedOkV2", i * 60_000, la(T0 + i * 60_000, ".416739")));
+    frames.push(prodV2("schedOkV2", i * 60_000, la(T0 + i * 60_000, i === 0 ? "" : ".416739")));
   // five-minute job, two occurrences off the boundary
   frames.push(
     prodV2(
@@ -117,7 +118,29 @@ function production() {
   frames.push(prodV1("schedOkV1", 2000, "22257109111563908", "2026-10-05T08:41:01.359Z"));
   frames.push(prodV1("schedFailV1", 4000, "22256732696405721", "2026-10-05T08:42:50.384Z"));
   frames.push(prodV1("schedFailV1", 300_000, "22256732696405722", "2026-10-05T08:47:05.447Z"));
-  return { run: { id: "x" }, frames };
+  // `every 1 minutes` with a 100 s handler: natural runs at 0, 120, 300 and 420 s (the occurrences between never
+  // started), and a forced run at 150 s inside the one that began at 120 s; the occurrence at 240 s fell inside the
+  // forced run, so the next natural run is at 300 s.
+  for (const [start, forced] of [
+    [0, false],
+    [120, false],
+    [150, true],
+    [300, false],
+    [420, false],
+  ]) {
+    const scheduleTime = la(T0 + (forced ? 360 : start) * 1000, ".352477");
+    frames.push({ ...prodV2("schedSlowV2", start * 1000, scheduleTime), phase: "start" });
+    frames.push({ ...prodV2("schedSlowV2", (start + 100) * 1000, scheduleTime), phase: "end" });
+  }
+  return {
+    run: { id: "x" },
+    frames,
+    // the forced requests: one of the slow job (a second before its frame), one of another job
+    forced: [
+      { pass: 1, job: jobId("schedSlowV2"), atMs: 149_000 },
+      { pass: 1, job: jobId("schedOkV2"), atMs: 29_000 },
+    ],
+  };
 }
 
 const localV2 = (handler, at, scheduleTime, over = {}) => ({
@@ -195,6 +218,7 @@ function local(over = {}) {
   lines.push(
     localV2("schedRetryV2", instant(T0 + 15 * 60_000), la(T0 + 15 * 60_000 + 1751, ".751605")),
   );
+  lines.push(localV2("schedSlowV2", instant(T0), la(T0, ".352477")));
   lines.push(localV1("schedOkV1", instant(T0), "21060470636220959", "2026-10-05T08:41:01.359Z"));
   lines.push(
     localV1("schedFailV1", instant(T0 + 1000), "27203228007418468", "2026-10-05T08:42:50.384Z"),
@@ -212,9 +236,32 @@ function local(over = {}) {
   for (const [name, offsets] of Object.entries(local))
     for (const o of offsets)
       probe.push({ at: instant(T0 + o * 1000), kind: "PROBE", value: { handler: name } });
+  // the in-flight scenario: the same runs as the recording's slow job, the forced one placed by a manual run
+  const inflight = [];
+  for (const [start, scheduleTime] of [
+    [0, 0],
+    [120, 120],
+    [150, 150],
+    [300, 300],
+    [420, 420],
+  ]) {
+    for (const [phase, at] of [
+      ["start", start],
+      ["end", start + 100],
+    ])
+      inflight.push(
+        localV2("schedSlowV2", instant(T0 + at * 1000), la(T0 + scheduleTime * 1000), { phase }),
+      );
+  }
   return {
     natural: { lines: over.lines ?? lines, unplaced: 0, state: null },
     probe: { lines: over.probe ?? probe, unplaced: 0, state: null },
+    inflight: {
+      lines: over.inflight ?? inflight,
+      manual: over.manual ?? [{ name: "schedSlowV2", at: instant(T0 + 149_000) }],
+      unplaced: 0,
+      state: null,
+    },
   };
 }
 const byId = (list) => Object.fromEntries(list.map((r) => [r.id, r]));
@@ -227,13 +274,17 @@ test("a local run built like the recording matches every comparable row, and a f
   );
   assert.deepEqual(notMatching, []);
   assert.equal(v["forced-run"], "NOT_COMPARABLE");
-  assert.equal(Object.keys(v).length, 24);
+  assert.equal(Object.keys(v).length, 25);
 });
 
-test("FORM keeps the shape of a time and drops its fraction", () => {
-  assert.equal(FORM("2026-10-05T01:42:01.416739-07:00"), "dddd-dd-ddTdd:dd:dd-dd:dd");
+test("FORM keeps the shape of a time, its fraction's length and a trailing zero, and masks the digits", () => {
+  assert.equal(FORM("2026-10-05T01:42:01.416739-07:00"), "dddd-dd-ddTdd:dd:dd.dddddd-dd:dd");
   assert.equal(FORM("2026-10-05T01:42:01-07:00"), "dddd-dd-ddTdd:dd:dd-dd:dd");
   assert.equal(FORM("2026-10-05T08:41:00Z"), "dddd-dd-ddTdd:dd:ddZ");
+  assert.equal(FORM("2026-10-05T01:42:01.4167390-07:00"), "dddd-dd-ddTdd:dd:dd.ddddddz-dd:dd");
+  assert.equal(FORM("2026-10-05T01:42:01.416739123-07:00"), "dddd-dd-ddTdd:dd:dd.ddddddddd-dd:dd");
+  assert.equal(FORM("2026-10-05T01:42:01.5Z"), "dddd-dd-ddTdd:dd:dd.dZ");
+  assert.equal(FORM("2026-10-05T01:42:01.0Z"), "dddd-dd-ddTdd:dd:dd.zZ");
 });
 
 const breaking = [
@@ -418,9 +469,12 @@ for (const [id, change] of breaking) {
     // Rows that read the same field move together: the job name is also the context's event id, the context also
     // carries the parameters.
     const coupled =
-      { "v2.event.jobName": ["v2.event.context"], "v2.event.context": ["v2.event.context-values"] }[
-        id
-      ] ?? [];
+      {
+        "v2.event.jobName": ["v2.event.context"],
+        "v2.event.context": ["v2.event.context-values"],
+        // every Gen1 frame given one message id reads as a retry of one occurrence
+        "v1.context.eventId": ["v1.failure-no-retry"],
+      }[id] ?? [];
     const others = Object.entries(v).filter(
       ([k, verdict]) =>
         k !== id && !coupled.includes(k) && verdict !== "MATCH" && k !== "forced-run",
@@ -429,12 +483,25 @@ for (const [id, change] of breaking) {
   });
 }
 
-test("v1.failure-no-retry: a second attempt of the same occurrence diverges", () => {
-  const l = local();
-  l.natural.lines.push(
+test("v1.failure-no-retry: a second attempt of the same occurrence diverges, at the same instant or some seconds later", () => {
+  for (const seconds of [0, 6, 90]) {
+    const l = local();
+    l.natural.lines.push(
+      localV1(
+        "schedFailV1",
+        instant(T0 + 1000 + seconds * 1000),
+        "27203228007418468",
+        "2026-10-05T08:42:50.384Z",
+      ),
+    );
+    assert.equal(verdicts(production(), l)["v1.failure-no-retry"], "DIVERGES", `+${seconds}s`);
+  }
+  // another occurrence (its own message id) is not a retry, whenever it comes
+  const other = local();
+  other.natural.lines.push(
     localV1("schedFailV1", instant(T0 + 1000), "27203228007418469", "2026-10-05T08:42:50.384Z"),
   );
-  assert.equal(verdicts(production(), l)["v1.failure-no-retry"], "DIVERGES");
+  assert.equal(verdicts(production(), other)["v1.failure-no-retry"], "MATCH");
 });
 
 test("cadence: a different spacing, whole-minute phase and a five-minute boundary diverge, each by itself", () => {
@@ -571,6 +638,24 @@ test("parseTimeline places a handler line on the step that follows it and keeps 
   assert.deepEqual(t.state, { pending: 0 });
   assert.deepEqual(parseTimeline("").lines, []);
   assert.equal(parseTimeline("").state, null);
+  assert.deepEqual(parseTimeline("").manual, []);
+});
+
+test("parseTimeline keeps each manual run with the logical instant it was made at, and ignores a line it cannot read", () => {
+  const output = [
+    'MANUAL schedSlowV2 2026-10-05T08:40:30Z {"status":200,"json":{}}',
+    "STEP 2026-10-05T08:40:31Z",
+    'MANUAL other 2026-10-05T08:43:50Z {"status":400}',
+    "MANUAL",
+    "MANUAL onlyaname",
+    "STEP 2026-10-05T08:43:51Z",
+  ].join("\n");
+  assert.deepEqual(parseTimeline(output).manual, [
+    { name: "schedSlowV2", at: "2026-10-05T08:40:30Z", status: 200 },
+    { name: "other", at: "2026-10-05T08:43:50Z", status: 400 },
+  ]);
+  // a manual run is not a handler line and does not become one
+  assert.deepEqual(parseTimeline(output).lines, []);
 });
 
 test("secondsOf reads an instant with an offset and a fraction of up to nine digits, exactly", () => {
@@ -755,10 +840,17 @@ test("the values the matching rows compare are the recorded ones, not only equal
   assert.deepEqual(value(table, "retry.retryFive").production, CHAINS.retryFive);
   assert.deepEqual(value(table, "retry.retryZero").local, [0]);
   assert.equal(value(table, "forced-run").verdict, "NOT_COMPARABLE");
-  const headers = value(table, "v2.request.headers").production[0];
-  assert.equal(headers["x-cloudscheduler-jobname"], "<job id>");
-  assert.equal(headers["x-cloudscheduler-scheduletime"], "dddd-dd-ddTdd:dd:dd-dd:dd");
-  assert.equal(headers["content-length"], "0");
+  const forms = value(table, "v2.request.headers").production;
+  assert.deepEqual([...new Set(forms.map((f) => f["x-cloudscheduler-jobname"]))].toSorted(), [
+    "firebase-schedule-schedOkV2-us-central1",
+    "firebase-schedule-schedRetryV2-us-central1",
+    "firebase-schedule-schedSlowV2-us-central1",
+  ]);
+  assert.deepEqual([...new Set(forms.map((f) => f["x-cloudscheduler-scheduletime"]))].toSorted(), [
+    "dddd-dd-ddTdd:dd:dd-dd:dd",
+    "dddd-dd-ddTdd:dd:dd.dddddd-dd:dd",
+  ]);
+  assert.ok(forms.every((f) => f["content-length"] === "0"));
 });
 
 test("a recording with no frames of a generation is refused, not matched vacuously", () => {
@@ -882,10 +974,15 @@ test("the v2 context row's values are the recorded ones", () => {
 test("frames and lines may arrive in any order: the rows do not change", () => {
   const p = production();
   const l = local();
-  const reversedProduction = { ...p, frames: [...p.frames].reverse() };
+  const reversedProduction = {
+    ...p,
+    frames: [...p.frames].reverse(),
+    forced: [...p.forced].reverse(),
+  };
   const reversedLocal = {
     natural: { ...l.natural, lines: [...l.natural.lines].reverse() },
     probe: { ...l.probe, lines: [...l.probe.lines].reverse() },
+    inflight: { ...l.inflight, lines: [...l.inflight.lines].reverse() },
   };
   assert.deepEqual(rows(reversedProduction, reversedLocal), rows(p, l));
 });
@@ -986,4 +1083,366 @@ test("the lower edge of the retry tolerance is inclusive: half a second earlier 
       ),
     );
   assert.equal(value(rows(p, l), "retry.retryDuration").verdict, "DIVERGES");
+});
+
+// ---- cadence.in-flight-skip (production: run 156715222b86ea44, schedSlowV2) ----
+
+const slowLocal = (runs) =>
+  runs.flatMap(([start, end]) => [
+    localV2("schedSlowV2", instant(T0 + start * 1000), la(T0 + start * 1000), { phase: "start" }),
+    localV2("schedSlowV2", instant(T0 + end * 1000), la(T0 + start * 1000), { phase: "end" }),
+  ]);
+const inflightRow = (l, p = production()) => value(rows(p, l), "cadence.in-flight-skip");
+const recorded = {
+  naturalStartsInFlight: 0,
+  occurrencesSkipped: true,
+  forcedStartsInFlight: true,
+};
+
+test("cadence.in-flight-skip: production's runs skip occurrences, never start a natural one in flight, and let a forced one start inside", () => {
+  const row = inflightRow(local());
+  assert.deepEqual(row.production, recorded);
+  assert.deepEqual(row.local, recorded);
+  assert.equal(row.verdict, "MATCH");
+});
+
+test("cadence.in-flight-skip: a local run that starts every occurrence overlaps itself and diverges", () => {
+  // a 100 s handler started every 60 s: each natural start is inside the previous run
+  const l = local({
+    inflight: slowLocal([
+      [0, 100],
+      [60, 160],
+      [120, 220],
+      [180, 280],
+    ]),
+    manual: [],
+  });
+  const row = inflightRow(l);
+  assert.deepEqual(row.local, {
+    naturalStartsInFlight: 3,
+    occurrencesSkipped: false,
+    forcedStartsInFlight: false,
+  });
+  assert.equal(row.verdict, "DIVERGES");
+});
+
+test("cadence.in-flight-skip: one natural start inside a run diverges, and so does a run that never skips an occurrence", () => {
+  // the skipping is right but the third natural run starts 30 s before the second ends
+  const inside = local({
+    inflight: slowLocal([
+      [0, 100],
+      [120, 220],
+      [150, 250],
+      [200, 300],
+      [420, 520],
+    ]),
+    manual: [{ name: "schedSlowV2", at: instant(T0 + 149_000) }],
+  });
+  assert.equal(inflightRow(inside).local.naturalStartsInFlight, 1);
+  assert.equal(inflightRow(inside).verdict, "DIVERGES");
+  // a short handler: every occurrence starts, none is skipped (the near miss of "skipped")
+  const quick = local({
+    inflight: slowLocal([
+      [0, 10],
+      [60, 70],
+      [120, 130],
+      [180, 190],
+    ]),
+    manual: [],
+  });
+  assert.equal(inflightRow(quick).local.occurrencesSkipped, false);
+  assert.equal(inflightRow(quick).verdict, "DIVERGES");
+});
+
+test("cadence.in-flight-skip: a forced run is told from a natural one by its request, and a forced run refused or not started diverges", () => {
+  // without the manual run recorded the run at 150 s is a natural start inside a run
+  const unrecorded = local({ manual: [] });
+  assert.equal(inflightRow(unrecorded).local.naturalStartsInFlight, 1);
+  assert.equal(inflightRow(unrecorded).verdict, "DIVERGES");
+  // a request claims a start from one second before it to five seconds after it: the run at 150 s is claimed by a
+  // request between 145 s and 151 s, and not by one at 144 s or 152 s
+  for (const [at, claimed] of [
+    [149_000, true],
+    [150_000, true],
+    [151_000, true],
+    [145_000, true],
+    [144_000, false],
+    [152_000, false],
+  ]) {
+    const l = local({ manual: [{ name: "schedSlowV2", at: instant(T0 + at) }] });
+    assert.equal(inflightRow(l).local.forcedStartsInFlight, claimed, `manual at ${at}`);
+  }
+  // another job's manual run does not claim the slow job's start
+  const other = local({ manual: [{ name: "schedOkV2", at: instant(T0 + 149_000) }] });
+  assert.equal(inflightRow(other).verdict, "DIVERGES");
+  // production: the forced request of another job does not claim a slow start, so the run at 150 s is natural
+  const p = production();
+  p.forced = p.forced.filter((f) => !f.job.includes("schedSlowV2"));
+  assert.equal(inflightRow(local(), p).production.naturalStartsInFlight, 1);
+});
+
+test("cadence.in-flight-skip: no local frames, a run that never ends, and an unfinished first run are not a match", () => {
+  const none = local({ inflight: [], manual: [] });
+  assert.equal(inflightRow(none).verdict, "DIVERGES");
+  const withoutInflight = local();
+  delete withoutInflight.inflight;
+  assert.equal(inflightRow(withoutInflight).verdict, "DIVERGES");
+  // the first run never ends: every later natural start is inside it
+  const endless = local({
+    inflight: slowLocal([[0, 100]])
+      .filter((l) => l.value.phase === "start")
+      .concat(slowLocal([[120, 220]])),
+    manual: [],
+  });
+  assert.ok(inflightRow(endless).local.naturalStartsInFlight >= 1);
+});
+
+test("inFlightFacts: edges of the in-flight interval, the cadence factor and the end pairing", () => {
+  const f = (start, end) => [
+    { phase: "start", at: start },
+    { phase: "end", at: end },
+  ];
+  // a start exactly at the end of a run is not inside it
+  assert.equal(inFlightFacts([...f(0, 100), ...f(100, 200)], [], 60).naturalStartsInFlight, 0);
+  // a start exactly at the start of another is not inside it either (both begin together)
+  assert.equal(inFlightFacts([...f(0, 100), ...f(0, 100)], [], 60).naturalStartsInFlight, 0);
+  // one second inside
+  assert.equal(inFlightFacts([...f(0, 100), ...f(99, 199)], [], 60).naturalStartsInFlight, 1);
+  // a gap of exactly one and a half cadences is not a skip; one second more is
+  assert.equal(inFlightFacts([...f(0, 10), ...f(90, 100)], [], 60).occurrencesSkipped, false);
+  assert.equal(inFlightFacts([...f(0, 10), ...f(91, 100)], [], 60).occurrencesSkipped, true);
+  // frames in any order: ends close the oldest start
+  const shuffled = [...f(120, 220), ...f(0, 100)].reverse();
+  assert.equal(inFlightFacts(shuffled, [], 60).naturalStartsInFlight, 0);
+  assert.equal(inFlightFacts(shuffled, [], 60).occurrencesSkipped, true);
+  // a forced request claims the first start inside its window, once
+  const runs = [...f(0, 100), ...f(50, 150)];
+  assert.deepEqual(inFlightFacts(runs, [49], 60), {
+    naturalStartsInFlight: 0,
+    occurrencesSkipped: false,
+    forcedStartsInFlight: true,
+  });
+  // the same starts with the request outside the window of both: the second start is a natural one inside a run
+  assert.equal(inFlightFacts(runs, [20], 60).naturalStartsInFlight, 1);
+  // two requests claim two starts
+  assert.equal(
+    inFlightFacts([...f(0, 100), ...f(50, 150), ...f(60, 160)], [49, 59], 60).naturalStartsInFlight,
+    0,
+  );
+  // one request claims one start only
+  assert.equal(
+    inFlightFacts([...f(0, 100), ...f(50, 150), ...f(51, 151)], [49], 60).naturalStartsInFlight,
+    1,
+  );
+  // no frames: nothing in flight, nothing skipped
+  assert.deepEqual(inFlightFacts([], [], 60), {
+    naturalStartsInFlight: 0,
+    occurrencesSkipped: false,
+    forcedStartsInFlight: false,
+  });
+});
+
+// ---- the header rows (strict must send exactly the recorded headers, and the recorded forms) ----
+
+const headerRows = (l) => {
+  const table = rows(production(), l);
+  return {
+    names: value(table, "v2.request.header-names"),
+    headers: value(table, "v2.request.headers"),
+    time: value(table, "v2.event.scheduleTime-form"),
+    job: value(table, "v2.event.jobName"),
+  };
+};
+const mapV2 = (l, change) => {
+  const copy = local();
+  copy.natural.lines = l.natural.lines.map((x) => (x.value.generation === 2 ? change(x) : x));
+  return copy;
+};
+
+test("v2.request.header-names: an extra header fails, a missing one beyond the unreproducible ones fails, and only the declared missing set is excused", () => {
+  const base = local();
+  assert.equal(headerRows(base).names.verdict, "MATCH");
+  assert.equal(headerRows(base).names.note, "");
+  const extra = mapV2(base, (x) => ({
+    ...x,
+    value: {
+      ...x.value,
+      request: {
+        ...x.value.request,
+        headers: { ...x.value.request.headers, "x-extra": "1" },
+      },
+    },
+  }));
+  const extraRow = headerRows(extra).names;
+  assert.equal(extraRow.verdict, "DIVERGES");
+  assert.match(extraRow.note, /^UNEXPECTED: missing none; extra x-extra$/);
+  // only the OIDC, trace and forwarding headers missing: declared
+  const without = (names) =>
+    mapV2(base, (x) => ({
+      ...x,
+      value: {
+        ...x.value,
+        request: {
+          ...x.value.request,
+          headers: Object.fromEntries(
+            Object.entries(x.value.request.headers).filter(([name]) => !names.includes(name)),
+          ),
+        },
+      },
+    }));
+  const declared = headerRows(without(["authorization"])).names;
+  assert.equal(declared.verdict, "DIVERGES");
+  assert.match(declared.note, /^declared: not reproduced authorization /);
+  // a header production sends that is not one of the unreproducible ones: unexpected
+  const unexpected = headerRows(without(["user-agent"])).names;
+  assert.equal(unexpected.verdict, "DIVERGES");
+  assert.match(unexpected.note, /^UNEXPECTED: missing user-agent; extra none$/);
+  // missing the declared one and carrying an extra one is unexpected, not declared
+  const both = headerRows(
+    mapV2(without(["authorization"]), (x) => ({
+      ...x,
+      value: {
+        ...x.value,
+        request: {
+          ...x.value.request,
+          headers: { ...x.value.request.headers, "x-extra": "1" },
+        },
+      },
+    })),
+  ).names;
+  assert.match(both.note, /^UNEXPECTED: missing authorization; extra x-extra$/);
+  // no local request at all is unexpected, not declared
+  const none = headerRows(mapV2(base, (x) => ({ ...x, value: { ...x.value, request: null } })));
+  assert.equal(none.names.verdict, "DIVERGES");
+  assert.match(none.names.note, /^UNEXPECTED/);
+});
+
+test("v2.request.header-names: every distinct recorded name set counts, not the first", () => {
+  const p = production();
+  // a frame of another job that carried one more header: the union is what a handler could see
+  p.frames.push({
+    ...prodV2("schedOkV2", 5_000_000, la(T0, ".416739")),
+    headerNames: [...NAMES, "x-late"],
+  });
+  const table = rows(p, local());
+  const row = value(table, "v2.request.header-names");
+  assert.ok(row.production.includes("x-late"));
+  assert.equal(row.verdict, "DIVERGES");
+  assert.match(row.note, /missing x-late/);
+});
+
+test("the schedule time keeps its precision: nine digits and a trailing zero diverge, no fraction still matches", () => {
+  const withTime = (time) =>
+    mapV2(local(), (x) =>
+      x.value.handler === "schedOkV2"
+        ? {
+            ...x,
+            value: {
+              ...x.value,
+              event: { ...x.value.event, scheduleTime: time },
+              request: {
+                ...x.value.request,
+                headers: { ...x.value.request.headers, "x-cloudscheduler-scheduletime": time },
+              },
+            },
+          }
+        : x,
+    );
+  for (const [time, verdict] of [
+    ["2026-10-05T01:41:00-07:00", "MATCH"],
+    ["2026-10-05T01:41:00.416739-07:00", "MATCH"],
+    ["2026-10-05T01:41:00.416739123-07:00", "DIVERGES"],
+    ["2026-10-05T01:41:00.4167390-07:00", "DIVERGES"],
+    ["2026-10-05T01:41:00.4-07:00", "DIVERGES"],
+    ["2026-10-05T01:41:00Z", "DIVERGES"],
+  ]) {
+    const r = headerRows(withTime(time));
+    assert.equal(r.time.verdict, verdict, `event ${time}`);
+    assert.equal(r.headers.verdict, verdict, `header ${time}`);
+  }
+});
+
+test("the job id is compared by value, with only the project masked", () => {
+  const renamed = (name) =>
+    mapV2(local(), (x) =>
+      x.value.handler === "schedOkV2"
+        ? {
+            ...x,
+            value: {
+              ...x.value,
+              event: { ...x.value.event, jobName: name },
+              request: {
+                ...x.value.request,
+                headers: { ...x.value.request.headers, "x-cloudscheduler-jobname": name },
+              },
+            },
+          }
+        : x,
+    );
+  assert.equal(headerRows(renamed("firebase-schedule-schedOkV2-us-central1")).job.verdict, "MATCH");
+  for (const name of [
+    "firebase-schedule-schedOkV2-europe-west1",
+    "schedOkV2",
+    "projects/demo/locations/us-central1/jobs/firebase-schedule-schedOkV2-us-central1",
+  ]) {
+    const r = headerRows(renamed(name));
+    assert.equal(r.job.verdict, "DIVERGES", name);
+    assert.equal(r.headers.verdict, "DIVERGES", name);
+  }
+});
+
+// ---- daylight-saving changes: the times are ordered by the instant they name, not by their text ----
+
+test("the cadence rows order times across the November change: -07:00 and -08:00 times sort by instant", () => {
+  // 2026-11-01 01:59 PDT (08:59Z) is followed by 01:00 PST (09:00Z); their text sorts the other way round
+  const crossing = (handler) =>
+    [
+      ["2026-11-01T01:59:00-07:00", 0],
+      ["2026-11-01T01:00:00-08:00", 60_000],
+    ].map(([time, at]) => prodV2(handler, at, time));
+  const p = production();
+  p.frames = p.frames.filter((f) => f.handler !== "schedOkV2").concat(crossing("schedOkV2"));
+  const l = local();
+  l.natural.lines = l.natural.lines
+    .filter((x) => x.value.handler !== "schedOkV2")
+    .concat(
+      [
+        ["2026-11-01T01:59:00-07:00", 0],
+        ["2026-11-01T01:00:00-08:00", 60_000],
+      ].map(([time, at]) => localV2("schedOkV2", instant(T0 + at), time)),
+    );
+  const spacing = value(rows(p, l), "cadence.every-1-minutes.spacing");
+  assert.equal(spacing.production, 60);
+  assert.equal(spacing.local, 60);
+  assert.equal(spacing.verdict, "MATCH");
+  // the five-minute alignment drops the first occurrence by instant: the one at 01:59 PDT is off the boundary and
+  // the two after it are on it, and text order would drop an on-boundary one instead
+  const five = (times) =>
+    times.map((time, i) => prodV2("schedRetryV2", i * 1000, time, jobId("schedRetryV2")));
+  const times = [
+    "2026-11-01T01:00:00-08:00",
+    "2026-11-01T01:59:00-07:00",
+    "2026-11-01T01:05:00-08:00",
+  ];
+  const q = production();
+  q.frames = q.frames
+    .filter(
+      (f) =>
+        !(
+          f.handler === "schedRetryV2" &&
+          f.headers["x-cloudscheduler-jobname"].startsWith("firebase-schedule-")
+        ),
+    )
+    .concat(five(times));
+  const m = local();
+  m.natural.lines = m.natural.lines
+    .filter((x) => x.value.handler !== "schedRetryV2")
+    .concat(
+      ["2026-11-01T01:00:00-08:00", "2026-11-01T01:05:00-08:00"].map((time, i) =>
+        localV2("schedRetryV2", instant(T0 + i * 1000), time),
+      ),
+    );
+  const alignment = value(rows(q, m), "cadence.every-5-minutes.alignment");
+  assert.deepEqual(alignment.production, ["five-minute boundary"]);
+  assert.equal(alignment.verdict, "MATCH");
 });

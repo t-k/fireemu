@@ -24,7 +24,20 @@ export function parseTimeline(output) {
   const pending = [];
   const lines = [];
   const state = [];
+  const manual = [];
   for (const line of String(output).split("\n")) {
+    // `MANUAL <name> <instant> <answer>`: a run made by hand, at the logical instant the child printed
+    const hand = /^MANUAL (\S+) (\S+) (\{.*)$/.exec(line);
+    if (hand) {
+      let status = null;
+      try {
+        status = JSON.parse(hand[3]).status ?? null;
+      } catch {
+        // an answer the child cut: the run is still recorded
+      }
+      manual.push({ name: hand[1], at: hand[2], status });
+      continue;
+    }
     const frame = FRAME.exec(line);
     if (frame) {
       try {
@@ -41,7 +54,7 @@ export function parseTimeline(output) {
     }
     if (line.startsWith("STATE ")) state.push(JSON.parse(line.slice(6)));
   }
-  return { lines, unplaced: pending.length, state: state.at(-1) ?? null };
+  return { lines, unplaced: pending.length, state: state.at(-1) ?? null, manual };
 }
 
 const freePort = () =>
@@ -62,9 +75,11 @@ const freePort = () =>
  * @param {string} options.start the logical start instant, RFC 3339 UTC
  * @param {number} options.seconds logical seconds to advance, one at a time
  * @param {string[]} [options.manual] functions to run by hand before the clock moves
+ * @param {{name: string, afterSeconds: number}[]} [options.manualAt] functions to run by hand right after a step
+ * @param {boolean} [options.clockFile] keep the logical epoch seconds in a file for a handler that lasts logical time
  * @param {boolean} [options.awaitIdle] wait for the runtime to be idle after each step
  * @param {number} [options.pauseMs] real milliseconds to wait after each step
- * @param {(source: string) => string} [options.patch] a rewrite of the copied `index.js`
+ * @param {(source: string, context: {clockFile?: string}) => string} [options.patch] a rewrite of the copied `index.js`
  */
 export async function runLocal({
   fireemu,
@@ -75,15 +90,18 @@ export async function runLocal({
   start,
   seconds,
   manual = [],
+  manualAt = [],
+  clockFile = false,
   awaitIdle = true,
   pauseMs = 40,
-  patch = (source) => source,
+  patch = (source, _context) => source,
 }) {
   const work = mkdtempSync(join(tmpdir(), "fireemu-local-delivery-"));
   try {
     cpSync(fixtureDir, join(work, "fixture"), { recursive: true });
     const index = join(work, "fixture", "index.js");
-    writeFileSync(index, patch(readFileSync(index, "utf8")));
+    const clockPath = clockFile ? join(work, "clock.txt") : undefined;
+    writeFileSync(index, patch(readFileSync(index, "utf8"), { clockFile: clockPath }));
     symlinkSync(depsDir, join(work, "fixture", "node_modules"));
     writeFileSync(
       join(work, "fireemu.json"),
@@ -126,6 +144,10 @@ export async function runLocal({
       LOCAL_AWAIT_IDLE: awaitIdle ? "1" : "0",
       LOCAL_PAUSE_MS: String(pauseMs),
       LOCAL_MANUAL: manual.join(","),
+      ...(manualAt.length
+        ? { LOCAL_MANUAL_AT: manualAt.map((m) => `${m.name}@${m.afterSeconds}`).join(",") }
+        : {}),
+      ...(clockPath ? { LOCAL_CLOCK_FILE: clockPath } : {}),
     };
     const child = spawn(fireemu, args, { env, stdio: ["ignore", "pipe", "pipe"] });
     let output = "";

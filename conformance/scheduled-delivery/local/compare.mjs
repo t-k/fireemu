@@ -8,7 +8,17 @@
 // profile (see `local-run.mjs`).
 import { readFileSync } from "node:fs";
 
-export const FORM = (value) => String(value).replace(/\.\d+/, "").replace(/\d/g, "d");
+/**
+ * The shape of an instant: every digit is `d`, the fraction is kept (its length shows, and a trailing zero is `z`), so
+ * that precision and presence are compared and only the values are masked.
+ */
+export const FORM = (value) =>
+  String(value)
+    .replace(
+      /\.(\d+)/,
+      (_, digits) => "." + "d".repeat(digits.length - 1) + (digits.endsWith("0") ? "z" : "d"),
+    )
+    .replace(/\d/g, "d");
 const unique = (values) =>
   [...new Set(values.map((v) => JSON.stringify(v ?? null)))].toSorted().map((v) => JSON.parse(v));
 const handlerLines = (timeline, handler) =>
@@ -22,12 +32,64 @@ const v1Local = (timeline) =>
     .filter((l) => l.kind === "SCHED_DELIVERY_FRAME" && l.value.generation === 1)
     .map((l) => l.value);
 const v2Prod = (digest) => digest.frames.filter((f) => f.generation === 2);
+// The jobs the fixture deploys (the REST probe jobs `fe-sd-<runId>-*` carry the same handler but not the same ids).
+const DEPLOYED = /^firebase-schedule-/;
+const deployedJob = (frame) => DEPLOYED.test(frame.headers?.["x-cloudscheduler-jobname"] ?? "");
+/** A job id or resource name with its project masked and nothing else: the id itself is compared by value. */
+const maskProject = (name) => String(name).replace(/^projects\/[^/]+\//, "projects/<project>/");
 const v1Prod = (digest) => digest.frames.filter((f) => f.generation === 1);
 /** An RFC 3339 instant (with an offset, and a fraction of up to nine digits) as seconds since the epoch. */
 export const secondsOf = (instant) => {
   const fraction = /\.(\d+)/.exec(instant)?.[1] ?? "";
   return Date.parse(instant.replace(/\.\d+/, "")) / 1000 + (fraction ? Number("0." + fraction) : 0);
 };
+
+/** Seconds a forced run's first frame may trail (or, by a clock step, lead) the request that forced it. */
+const FORCED_FRAME_WINDOW = [-1, 5];
+
+/**
+ * What a job whose handler outlasts its cadence did about overlap, from its `start` and `end` frames (`at` in
+ * seconds on one timeline) and the instants its forced runs were requested. A forced run is the first unclaimed start
+ * that follows a request within the window; every other start is a natural occurrence. A run is in flight from its
+ * start to its end (a run never ended stays in flight), and the oldest open start is the one an end closes.
+ *
+ * - `naturalStartsInFlight`: natural starts that began while another run of the job was in flight (production: none);
+ * - `occurrencesSkipped`: whether two consecutive natural starts are more than one and a half cadences apart, so that
+ *   an occurrence in between never started;
+ * - `forcedStartsInFlight`: whether a forced run began while another run was in flight (production: yes).
+ */
+export function inFlightFacts(frames, forcedAt, cadenceSeconds) {
+  const times = (phase) =>
+    frames
+      .filter((f) => f.phase === phase)
+      .map((f) => f.at)
+      .toSorted((a, b) => a - b);
+  const ends = times("end");
+  const runs = times("start").map((start, i) => ({
+    start,
+    end: ends[i] ?? Number.POSITIVE_INFINITY,
+    forced: false,
+  }));
+  for (const requested of forcedAt.toSorted((a, b) => a - b)) {
+    const run = runs.find(
+      (r) =>
+        !r.forced &&
+        r.start >= requested + FORCED_FRAME_WINDOW[0] &&
+        r.start <= requested + FORCED_FRAME_WINDOW[1],
+    );
+    if (run) run.forced = true;
+  }
+  const inFlight = (run) =>
+    runs.some((other) => other !== run && other.start < run.start && run.start < other.end);
+  const natural = runs.filter((r) => !r.forced);
+  return {
+    naturalStartsInFlight: natural.filter(inFlight).length,
+    occurrencesSkipped: natural
+      .slice(1)
+      .some((r, i) => r.start - natural[i].start > cadenceSeconds * 1.5),
+    forcedStartsInFlight: runs.some((r) => r.forced && inFlight(r)),
+  };
+}
 
 /** The recorded retry chains: the attempt offsets (seconds from the first attempt) of each job's first chain. */
 export function productionChains(digest) {
@@ -128,44 +190,69 @@ export function rows(production, local) {
     Object.fromEntries(
       kept.map((k) => [
         k,
-        k.includes("jobname")
-          ? headers?.[k] === undefined
-            ? undefined
-            : headers[k].includes("/")
-              ? "<resource name>"
-              : "<job id>"
-          : headers?.[k] === undefined
-            ? undefined
+        headers?.[k] === undefined
+          ? undefined
+          : k.includes("jobname")
+            ? maskProject(headers[k])
             : k.includes("scheduletime")
               ? FORM(headers[k])
               : headers[k],
       ]),
     );
-  const pForm = unique(pv2.map((f) => formOf(f.headers)));
+  // The recorded forms: production wrote the schedule time with a six-digit fraction on every occurrence after the
+  // first of a job (its phase, compared by `cadence.every-1-minutes.phase`) and without one on the first. A local form
+  // must be one of those exactly (a nine-digit fraction, a trailing zero, a missing header all are not), and the forms
+  // with their fraction set aside must be the same set.
+  const pForm = unique(pv2.filter(deployedJob).map((f) => formOf(f.headers)));
   const lForm = unique(lv2Requests.map((r) => formOf(r.headers)));
-  // The production scheduleTime form varies with the fraction (digits dropped by FORM); compare the set of forms.
+  const sameForms = (recorded, produced, strip) =>
+    produced.length > 0 &&
+    produced.every((form) => recorded.some((r) => JSON.stringify(r) === JSON.stringify(form))) &&
+    JSON.stringify(unique(recorded.map(strip))) === JSON.stringify(unique(produced.map(strip)));
+  const withoutFraction = (form) => ({
+    ...form,
+    "x-cloudscheduler-scheduletime": form["x-cloudscheduler-scheduletime"]?.replace(/\.[dz]+/, ""),
+  });
   add(
     "v2.request.headers",
     "v2-http-delivery",
     "jobName-header",
     pForm,
     lForm,
-    JSON.stringify(pForm) === JSON.stringify(lForm),
-    "the five headers a handler can depend on",
+    sameForms(pForm, lForm, withoutFraction),
+    "the five headers a handler can depend on; the job id is compared by value",
   );
-  const pNames = unique(pv2.map((f) => f.headerNames))[0] ?? [];
-  const lNames = unique(lv2Requests.map((r) => Object.keys(r.headers).toSorted()))[0] ?? [];
+  // Every name production sent, against every name fireemu sends, in both directions: only the headers nothing here
+  // can reproduce (the OIDC credential, the trace and the forwarding headers) are expected to be missing.
+  const UNREPRODUCIBLE = [
+    "authorization",
+    "forwarded",
+    "traceparent",
+    "x-cloud-trace-context",
+    "x-forwarded-for",
+  ];
+  const nameSet = (lists) => [...new Set(lists.flat())].toSorted();
+  const pNames = nameSet(unique(pv2.map((f) => f.headerNames)));
+  const lNames = nameSet(unique(lv2Requests.map((r) => Object.keys(r.headers).toSorted())));
   const missing = pNames.filter((n) => !lNames.includes(n));
+  const extra = lNames.filter((n) => !pNames.includes(n));
+  const declared =
+    lNames.length > 0 &&
+    extra.length === 0 &&
+    missing.length > 0 &&
+    missing.every((n) => UNREPRODUCIBLE.includes(n));
   add(
     "v2.request.header-names",
     "v2-http-delivery",
     "scheduleTime-header",
     pNames,
     lNames,
-    missing.length === 0,
-    missing.length
-      ? `not reproduced: ${missing.join(", ")} (the OIDC credential, trace and forwarding headers; nothing here can sign for Google)`
-      : "",
+    missing.length === 0 && extra.length === 0 && lNames.length > 0,
+    missing.length === 0 && extra.length === 0 && lNames.length > 0
+      ? ""
+      : declared
+        ? `declared: not reproduced ${missing.join(", ")} (the OIDC credential, trace and forwarding headers; nothing here can sign for Google)`
+        : `UNEXPECTED: missing ${missing.join(", ") || "none"}; extra ${extra.join(", ") || "none"}`,
   );
   const pLengths = unique(pv2.map((f) => f.rawBodyLength));
   const lLengths = unique(lv2Requests.map((r) => r.rawBodyLength));
@@ -190,9 +277,8 @@ export function rows(production, local) {
     lKeys,
     JSON.stringify(pKeys) === JSON.stringify(lKeys),
   );
-  const jobForm = (name) => (String(name).includes("/") ? "<resource name>" : "<job id>");
-  const pJob = unique(pv2.map((f) => jobForm(f.event.jobName)));
-  const lJob = unique(lv2.map((f) => jobForm(f.event.jobName)));
+  const pJob = unique(pv2.filter(deployedJob).map((f) => maskProject(f.event.jobName)));
+  const lJob = unique(lv2.map((f) => maskProject(f.event.jobName)));
   add(
     "v2.event.jobName",
     "v2-http-delivery",
@@ -200,18 +286,22 @@ export function rows(production, local) {
     pJob,
     lJob,
     JSON.stringify(pJob) === JSON.stringify(lJob),
-    "production hands the job's id, not its resource name",
+    "production hands the job's id (`firebase-schedule-<name>-<region>`), not its resource name; compared by value",
   );
   const pTime = unique(pv2.map((f) => FORM(f.event.scheduleTime)));
   const lTime = unique(lv2.map((f) => FORM(f.event.scheduleTime)));
+  const timeWithoutFraction = (form) => form.replace(/\.[dz]+/, "");
   add(
     "v2.event.scheduleTime-form",
     "v2-http-delivery",
     "scheduleTime-header",
     pTime,
     lTime,
-    JSON.stringify(pTime) === JSON.stringify(lTime),
-    "production writes it in America/Los_Angeles with its offset, whatever the job's zone",
+    lTime.length > 0 &&
+      lTime.every((form) => pTime.includes(form)) &&
+      JSON.stringify(unique(pTime.map(timeWithoutFraction))) ===
+        JSON.stringify(unique(lTime.map(timeWithoutFraction))),
+    "production writes it in America/Los_Angeles with its offset, whatever the job's zone, and with a six-digit fraction after the first occurrence of an interval job (its phase)",
   );
   const ctx = (f) => ({
     property: f.contextProperty,
@@ -307,6 +397,7 @@ export function rows(production, local) {
   );
 
   // ---- failure handling ----
+  // An occurrence is told by its message id, which a redelivery keeps: a retry some seconds later is the same one.
   const perOccurrence = (frames, key) => {
     const counts = new Map();
     for (const f of frames) counts.set(key(f), (counts.get(key(f)) ?? 0) + 1);
@@ -314,9 +405,12 @@ export function rows(production, local) {
   };
   const pFail = perOccurrence(
     pv1.filter((f) => f.handler === "schedFailV1"),
-    (f) => f.at,
+    (f) => f.context.eventId,
   );
-  const lFail = perOccurrence(handlerLines(local.natural, "schedFailV1"), (line) => line.at);
+  const lFail = perOccurrence(
+    handlerLines(local.natural, "schedFailV1"),
+    (line) => line.value.context.eventId,
+  );
   add(
     "v1.failure-no-retry",
     "v1-two-stage-retry",
@@ -360,7 +454,7 @@ export function rows(production, local) {
     pPhase,
     lPhase,
     JSON.stringify(pPhase) === JSON.stringify(lPhase),
-    "production anchors an interval to the job's creation instant, with sub-second drift; fireemu runs it on the minute",
+    "production's first occurrence was on the minute and every later one kept one fraction of a second per job (.416739 across 15 occurrences); the anchor is not determined by the recording and does not follow the job's creation instant; fireemu runs the interval on the minute",
   );
   const pFive = unique(
     pv2
@@ -384,6 +478,36 @@ export function rows(production, local) {
     alignedFive(lFive),
     JSON.stringify(alignedFive(pFive.slice(1))) === JSON.stringify(alignedFive(lFive)),
     "production's `every 5 minutes` job ran off the five-minute boundary after forced runs, and the 08:53 occurrence is missing: not determined by the recording",
+  );
+  // ---- a handler outlasting its cadence ----
+  const SLOW = "schedSlowV2";
+  const slowFrames = (frames, atOf) =>
+    frames
+      .filter((f) => f.handler === SLOW && f.phase !== undefined)
+      .map((f) => ({ ...f, at: atOf(f) }));
+  const pInFlight = inFlightFacts(
+    slowFrames(pv2, (f) => f.at / 1000),
+    (production.forced ?? [])
+      .filter((f) => f.job.startsWith(`firebase-schedule-${SLOW}-`))
+      .map((f) => f.atMs / 1000),
+    60,
+  );
+  const inflight = local.inflight ?? { lines: [], manual: [] };
+  const lInFlight = inFlightFacts(
+    inflight.lines
+      .filter((l) => l.kind === "SCHED_DELIVERY_FRAME" && l.value.handler === SLOW)
+      .map((l) => ({ phase: l.value.phase, at: Date.parse(l.at) / 1000 })),
+    (inflight.manual ?? []).filter((m) => m.name === SLOW).map((m) => Date.parse(m.at) / 1000),
+    60,
+  );
+  add(
+    "cadence.in-flight-skip",
+    "natural-scheduled-run",
+    "deadline-and-overlap",
+    pInFlight,
+    lInFlight,
+    JSON.stringify(pInFlight) === JSON.stringify(lInFlight),
+    "`every 1 minutes` with a 100 s handler: production never started a natural occurrence while a run of the job was in flight (it ran every 2 to 3 minutes) and a forced run did start inside one; the recording does not say whether in flight ends at the 504 or at the handler's end",
   );
   add(
     "forced-run",

@@ -9,6 +9,7 @@ import { dirname, join } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 import { loadDigest, rows } from "./compare.mjs";
+import { INFLIGHT_RUN, logicalSlowHandler } from "./inflight.mjs";
 import { runLocal } from "./local-run.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -78,3 +79,41 @@ live(
       assert.equal(verdicts[id], "MATCH", id);
   },
 );
+
+const inflight = (profile) =>
+  runLocal({
+    fireemu,
+    node,
+    depsDir,
+    fixtureDir: join(here, "..", "fixture"),
+    profile,
+    start: "2026-10-05T08:40:30Z",
+    patch: logicalSlowHandler,
+    ...INFLIGHT_RUN,
+  });
+const inflightRow = (result) =>
+  rows(production, {
+    natural: { lines: [] },
+    probe: { lines: [] },
+    inflight: result,
+  }).find((r) => r.id === "cadence.in-flight-skip");
+
+live(
+  "strict: an occurrence is skipped while the slow handler runs, and a manual run still starts",
+  async () => {
+    const result = await inflight("strict");
+    assert.equal(result.exitCode, 0, result.output.slice(-800));
+    const row = inflightRow(result);
+    assert.deepEqual(row.local, row.production, JSON.stringify(row.local));
+    assert.equal(row.verdict, "MATCH");
+  },
+);
+
+live("emulator: occurrences overlap a running handler, as before", async () => {
+  const result = await inflight("emulator");
+  assert.equal(result.exitCode, 0, result.output.slice(-800));
+  const row = inflightRow(result);
+  assert.ok(row.local.naturalStartsInFlight > 0, JSON.stringify(row.local));
+  assert.equal(row.local.occurrencesSkipped, false);
+  assert.equal(row.verdict, "DIVERGES");
+});

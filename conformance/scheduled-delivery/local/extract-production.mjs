@@ -113,6 +113,21 @@ export function extract(runDir) {
       number: p.number,
       forced: p.forced.map((f) => f.id.replace(result.runId, "<runId>")),
     })),
+    // when each forced run was requested, on the frames' timeline (a forced run is no natural occurrence)
+    forced: result.passes.flatMap((p) =>
+      p.forced.map((f) => {
+        // the recorder names the request `run-<pass>-<job id>` with the deployed jobs' prefix and the run id shortened
+        const label = `run-${p.number}-${f.id.replace(result.runId, "run").replace(/^firebase-schedule-/, "")}`;
+        const sent = rows.find((r) => r.id === label && r.state === "before-send");
+        if (!sent?.dispatchAt)
+          throw new Error(`no journal row for the forced run of ${f.id} in pass ${p.number}`);
+        return {
+          pass: p.number,
+          job: f.id.replace(result.runId, "<runId>"),
+          atMs: Date.parse(sent.dispatchAt) - origin,
+        };
+      }),
+    ),
     schedulerEntryTypes: types,
     frameCounts: result.frames,
     frames: handled,

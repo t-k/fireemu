@@ -176,3 +176,75 @@ test("a daemon that exits non-zero is reported with its output, and the work dir
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test("manual runs at a step and a clock file are passed to the child, and the patch is told where the clock file is", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "local-run-test-"));
+  try {
+    const deps = join(dir, "deps");
+    mkdirSync(deps);
+    let told;
+    const result = await runLocal({
+      fireemu: fake(
+        dir,
+        'console.log("MANUAL slow 2026-10-05T08:43:50Z {\\"status\\":200}");\nconsole.log("STEP 2026-10-05T08:43:51Z");',
+      ),
+      node: "/usr/local/bin/node22",
+      depsDir: deps,
+      fixtureDir: fixtureDir(dir),
+      profile: "strict",
+      start: "2026-10-05T08:40:30Z",
+      seconds: 3,
+      manualAt: [
+        { name: "slow", afterSeconds: 200 },
+        { name: "other", afterSeconds: 7 },
+      ],
+      clockFile: true,
+      patch: (source, context) => {
+        told = context;
+        return source.replace("100_000", JSON.stringify(context.clockFile));
+      },
+    });
+    const env = JSON.parse(field(result.output, "ENV"));
+    assert.equal(env.LOCAL_MANUAL_AT, "slow@200,other@7");
+    assert.match(env.LOCAL_CLOCK_FILE, /clock\.txt$/);
+    assert.equal(told.clockFile, env.LOCAL_CLOCK_FILE);
+    assert.equal(
+      JSON.parse(field(result.output, "INDEX")),
+      `setTimeout(resolve, ${JSON.stringify(env.LOCAL_CLOCK_FILE)});\n`,
+    );
+    assert.deepEqual(result.manual, [{ name: "slow", at: "2026-10-05T08:43:50Z", status: 200 }]);
+    // the clock file lives in the work directory, which is gone
+    assert.equal(existsSync(env.LOCAL_CLOCK_FILE), false);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("without manualAt and clockFile the child is given neither, and the patch gets no clock file", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "local-run-test-"));
+  try {
+    const deps = join(dir, "deps");
+    mkdirSync(deps);
+    let told;
+    const result = await runLocal({
+      fireemu: fake(dir),
+      node: "/usr/local/bin/node22",
+      depsDir: deps,
+      fixtureDir: fixtureDir(dir),
+      profile: "strict",
+      start: "2026-10-05T08:40:30Z",
+      seconds: 1,
+      patch: (source, context) => {
+        told = context;
+        return source;
+      },
+    });
+    const env = JSON.parse(field(result.output, "ENV"));
+    assert.equal("LOCAL_MANUAL_AT" in env, false);
+    assert.equal("LOCAL_CLOCK_FILE" in env, false);
+    assert.deepEqual(told, { clockFile: undefined });
+    assert.deepEqual(result.manual, []);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

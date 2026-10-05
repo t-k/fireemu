@@ -1,0 +1,11 @@
+{
+  "native/resume-grid-tc/k1-repeat": {
+    "reason": "Production answered a replay (a boundary after the changed document, no filter) in both runs (nmuv70w0y, nmuv8dk6e) when the CURRENT-frame token was resumed a second time after one commit; strict answers the diff and the count-only filter (rule R), the answer production gave to the same one-commit modification in other rows (grid-g0/k1-repeat in both runs, grid-gc/k1-repeat in nmuv8dk6e). What decides between the two answers is not recorded (docs.local/submissions/listen-l1b/reading-l1b-final.md); the replay of a one-commit modification is not implemented (ruling: only a one-commit leave or delete is)."
+  },
+  "native/resume-grid-tc/k1-expected": {
+    "reason": "Production answered a replay with no filter in both runs (nmuv70w0y, nmuv8dk6e) to the CURRENT-frame token resumed with an expected count after one commit; strict answers the diff and the bloom filter, which production gave to an expected-count resume in other rows (grid-g0/k1-expected in both runs, grid-gc/k1-expected in nmuv8dk6e). The replay of a one-commit modification is not implemented (ruling: only a one-commit leave or delete is)."
+  },
+  "native/resume-grid-gc/k0": {
+    "reason": "A resume with nothing to replay: production sent no filter in both runs (nmuv70w0y, nmuv8dk6e) for this row, and sent the count-only filter in grid-g0/k0 (both runs) and grid-tc/k0 (nmuv70w0y); strict sends the count-only filter (rule R). The filter on a resume with nothing to replay is optional in production, as the L1 `unchanged` row showed (a filter in one run, none in the other); strict keeps one answer."
+  }
+}

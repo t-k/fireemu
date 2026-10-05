@@ -9,6 +9,7 @@ import { test } from "node:test";
 import {
   canonicalRow,
   classifyRow,
+  filterKeys,
   compareRecordings,
   recordingProblems,
   settlementProblems,
@@ -814,4 +815,167 @@ test("a settlement that does not settle keeps the production recording refused, 
       }),
     /cleanup was not complete; the read-back is not clean/,
   );
+});
+
+// ---- optional existence filters, and a wait that ran out because the target was removed ----
+
+const bnd = (resumeToken = true) => ({ kind: "boundary", resumeToken });
+const flt = (count, targetId = 1) => ({
+  kind: "filter",
+  targetId,
+  count,
+  unchangedNames: { hashCount: 12, bitmapBytes: 4, padding: 7 },
+});
+const current = {
+  kind: "targetChange",
+  type: "CURRENT",
+  targetIds: [1],
+  cause: null,
+  resumeToken: true,
+};
+const fr = (rows, extra = {}) => ({
+  conditions: ["x"],
+  rows,
+  end: null,
+  timedOut: false,
+  ...extra,
+});
+
+test("an existence filter is optional: rows that differ only by one (and the boundary run it splits) match", () => {
+  // The recorded pairs of L1 (runs nmuuicyas and nmuukwo6n).
+  const withFilter = fr([current, bnd(), flt(2), bnd()]);
+  const without = fr([current, bnd()]);
+  assert.equal(classifyRow(withFilter, without), "MATCH");
+  assert.equal(classifyRow(without, withFilter), "MATCH");
+  assert.equal(
+    classifyRow(fr([bnd(), flt(3), current, bnd()]), fr([bnd(), current, bnd()])),
+    "MATCH",
+  );
+  assert.equal(classifyRow(fr([current, bnd(), flt(1)]), fr([current, bnd()])), "MATCH");
+  assert.deepEqual(canonicalRow(withFilter).rows, [current, bnd()]);
+});
+
+test("a filter does not hide another difference, and two filters must agree", () => {
+  assert.equal(classifyRow(fr([current, bnd(), flt(2), bnd()]), fr([bnd()])), "DIFFER");
+  assert.equal(classifyRow(fr([current, flt(2)]), fr([current, flt(3)])), "DIFFER");
+  assert.equal(classifyRow(fr([current, flt(2)]), fr([current, flt(2, 2)])), "DIFFER");
+  assert.equal(classifyRow(fr([current, flt(2)]), fr([current, bnd(), flt(2)])), "DIFFER");
+  assert.equal(classifyRow(fr([current, flt(2), flt(2)]), fr([current, flt(2)])), "MATCH");
+  assert.deepEqual(filterKeys(fr([flt(2), flt(1), flt(2), current])), ["1:1", "1:2"]);
+  assert.deepEqual(filterKeys(fr([current])), []);
+  assert.deepEqual(filterKeys({}), []);
+});
+
+test("dropping a filter merges only the boundaries it left side by side", () => {
+  const twoBoundaries = fr([bnd(false), bnd(true)]);
+  assert.equal(canonicalRow(twoBoundaries).rows.length, 2, "recorded as two, kept as two");
+  assert.deepEqual(canonicalRow(fr([bnd(false), flt(1), bnd(true)])).rows, [bnd(true)]);
+  assert.deepEqual(canonicalRow(fr([bnd(true), flt(1), bnd(false)])).rows, [bnd(true)]);
+  assert.deepEqual(canonicalRow(fr([bnd(false), flt(1), flt(2), bnd(false)])).rows, [bnd(false)]);
+  assert.deepEqual(canonicalRow(fr([flt(1), bnd(true)])).rows, [bnd(true)]);
+});
+
+const removed = (code = 3) => ({
+  kind: "targetChange",
+  type: "REMOVE",
+  targetIds: [1],
+  cause: { code, message: "bad resume token" },
+  resumeToken: false,
+});
+
+test("a wait that ran out after the target was removed with a cause is a final answer, not a missing one", () => {
+  const add = {
+    kind: "targetChange",
+    type: "ADD",
+    targetIds: [1],
+    cause: null,
+    resumeToken: false,
+  };
+  const gone = fr([add, removed()], { timedOut: true });
+  assert.equal(classifyRow(gone, structuredClone(gone)), "MATCH");
+  assert.equal(classifyRow(gone, fr([add, removed(9)], { timedOut: true })), "DIFFER");
+  // Anything else that ran out stays unfinished.
+  assert.equal(
+    classifyRow(fr([add], { timedOut: true }), fr([add], { timedOut: true })),
+    "INDETERMINATE",
+  );
+  assert.equal(
+    classifyRow(fr([removed(), add], { timedOut: true }), fr([removed(), add], { timedOut: true })),
+    "INDETERMINATE",
+  );
+  assert.equal(
+    classifyRow(
+      fr([add, removed(), current], { timedOut: true }),
+      fr([add, removed(), current], { timedOut: true }),
+    ),
+    "INDETERMINATE",
+  );
+  const plainRemove = { ...removed(), cause: null };
+  assert.equal(
+    classifyRow(
+      fr([add, plainRemove], { timedOut: true }),
+      fr([add, plainRemove], { timedOut: true }),
+    ),
+    "INDETERMINATE",
+  );
+  assert.equal(
+    classifyRow(fr([], { timedOut: true }), fr([], { timedOut: true })),
+    "INDETERMINATE",
+  );
+  assert.equal(
+    classifyRow({ timedOut: true, end: null }, { timedOut: true, end: null }),
+    "INDETERMINATE",
+  );
+});
+
+// ---- the production recordings of L1, replayed ----
+
+const L1 = JSON.parse(
+  readFileSync(new URL("../fixtures/fs-listen/l1-production-rows.json", import.meta.url), "utf8"),
+).recordings;
+
+test("L1 production, native: the two recordings agree on every row once optional filters are set aside, and each is fit to compare", () => {
+  const [a, b] = [L1["native-1"], L1["native-2"]];
+  assert.deepEqual(recordingProblems(a), []);
+  assert.deepEqual(recordingProblems(b), []);
+  const verdicts = Object.keys(a.rows).map((id) => [id, classifyRow(a.rows[id], b.rows[id])]);
+  assert.equal(verdicts.length, 35);
+  assert.deepEqual(
+    verdicts.filter(([, verdict]) => verdict !== "MATCH"),
+    [],
+  );
+});
+
+test("L1 production, native: exactly seven rows carry a filter in one recording and not (or elsewhere) in the other (the evidence for the rule)", () => {
+  const [a, b] = [L1["native-1"], L1["native-2"]];
+  const shape = (row) => JSON.stringify(row.rows.map((item) => item.kind));
+  const ids = Object.keys(a.rows).filter((id) => shape(a.rows[id]) !== shape(b.rows[id]));
+  assert.deepEqual(ids.toSorted(), [
+    "native/existence-filter/no-change",
+    "native/resume-token-expired/first",
+    "native/resume-token/first",
+    "native/resume-token/fresh-control",
+    "native/resume-token/other-query",
+    "native/resume-token/unchanged",
+    "native/target-protocol/equality-only-query",
+  ]);
+  for (const id of ids) {
+    const filters = (row) => row.rows.filter((item) => item.kind === "filter").length;
+    assert.ok(filters(a.rows[id]) + filters(b.rows[id]) > 0, id);
+    const strip = (row) => row.rows.filter((item) => item.kind !== "filter").map((i) => i.kind);
+    // Apart from filters (and the boundary they split) the frames are the same.
+    assert.deepEqual(
+      strip(a.rows[id]).filter((k) => k !== "boundary"),
+      strip(b.rows[id]).filter((k) => k !== "boundary"),
+      id,
+    );
+  }
+});
+
+test("L1 production, SDK: the two recordings agree on all 18 rows", () => {
+  const [a, b] = [L1["sdk-1"], L1["sdk-2"]];
+  assert.deepEqual(recordingProblems(a), []);
+  assert.equal(Object.keys(a.rows).length, 18);
+  for (const id of Object.keys(a.rows))
+    assert.equal(classifyRow(a.rows[id], b.rows[id]), "MATCH", id);
 });

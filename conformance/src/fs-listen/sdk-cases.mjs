@@ -14,8 +14,7 @@ export const MOVED_CASES = new Set([
   "FS-LISTEN-SDK-109C",
 ]);
 
-export const PUBLIC_COLLECTION = "conf_listen";
-export const OWNER_COLLECTION = "conf_rules_owner";
+export { OWNER_COLLECTION, PUBLIC_COLLECTION } from "./sdk-deps-core.mjs";
 
 const CATALOG = fileURLToPath(
   new URL("../../../spec/compatibility/fs-listen-sdk-cases.json", import.meta.url),

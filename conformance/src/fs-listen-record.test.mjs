@@ -7,10 +7,12 @@ import { test } from "node:test";
 import {
   accessToken,
   admit,
+  browserProduction,
   checkProject,
   nativeProduction,
   newRunId,
   openJournal,
+  originPortOf,
   parseArgs,
   readbackProduction,
   recordNative,
@@ -777,4 +779,129 @@ test("a native journal lists no accounts: one that does is refused, not looked u
     readbackProduction({ journal: bad, project: "fireemu-oracle-txn" }, d),
     /lists no accounts/,
   );
+});
+
+const BROWSER_OPTIONS = {
+  project: "fireemu-oracle-query",
+  envelope: "E",
+  ledger: "L",
+  out: "o.json",
+  "api-key-file": "K",
+  "origin-port": "47853",
+};
+
+test("a browser recording may address only the query sandbox", () => {
+  checkProject("browser", "fireemu-oracle-query");
+  for (const project of ["fireemu-oracle-txn", "fireemu-35fe6", "fireemu-oracle-idp", ""])
+    assert.throws(() => checkProject("browser", project), /may address only/, project);
+});
+
+test("originPortOf: the key is restricted to http://localhost:<port>, so the port is required, whole and unprivileged", () => {
+  assert.equal(originPortOf({ "origin-port": "47853" }), 47853);
+  assert.equal(originPortOf({ "origin-port": "1024" }), 1024);
+  assert.equal(originPortOf({ "origin-port": "65535" }), 65535);
+  for (const bad of [undefined, "", "0", "80", "1023", "65536", "4.5", "abc", "-5", "47853x"])
+    assert.throws(() => originPortOf({ "origin-port": bad }), /--origin-port/, String(bad));
+});
+
+test("browser production: project, admission, key file, port, token, run id, journal, then the recording", async () => {
+  const order = [];
+  const d = deps(order);
+  let seen;
+  d.recordBrowser = async (args) => {
+    order.push("recordBrowser");
+    seen = args;
+    return {};
+  };
+  await browserProduction(BROWSER_OPTIONS, d);
+  assert.deepEqual(order, [
+    "checkProject",
+    "admit",
+    "loadApiKey",
+    "accessToken",
+    "newRunId",
+    "openJournal:browser:rid",
+    "recordBrowser",
+    "journal.close",
+  ]);
+  assert.deepEqual(seen.target, {
+    kind: "production",
+    project: "fireemu-oracle-query",
+    token: "TOKEN",
+    originPort: 47853,
+    web: {
+      apiKey: "KEYKEYKEYKEYKEYKEYKEYKEYKEY",
+      authDomain: "fireemu-oracle-query.firebaseapp.com",
+      projectId: "fireemu-oracle-query",
+    },
+  });
+  assert.equal(seen.run, "rid");
+  assert.ok(seen.journal);
+  assert.equal(typeof seen.log, "function");
+});
+
+test("browser production: a refusal at any step makes no later call; a missing key file or port is refused after admission and before any token", async () => {
+  for (const refuse of ["checkProject", "admit", "loadApiKey", "accessToken", "openJournal"]) {
+    const order = [];
+    const d = deps(order, { refuse });
+    d.recordBrowser = async () => order.push("recordBrowser");
+    await assert.rejects(browserProduction(BROWSER_OPTIONS, d), /refused at/);
+    assert.ok(!order.includes("recordBrowser"), refuse);
+    if (refuse === "checkProject" || refuse === "admit")
+      assert.ok(!order.includes("loadApiKey") && !order.includes("accessToken"), refuse);
+  }
+  for (const [options, pattern] of [
+    [{ ...BROWSER_OPTIONS, "api-key-file": undefined }, /--api-key-file/],
+    [{ ...BROWSER_OPTIONS, "origin-port": undefined }, /--origin-port/],
+  ]) {
+    const order = [];
+    await assert.rejects(browserProduction(options, deps(order)), pattern);
+    assert.ok(!order.includes("accessToken") && !order.includes("loadApiKey"));
+  }
+});
+
+test("browser production closes the journal after the recording, and when it throws", async () => {
+  const order = [];
+  const d = deps(order);
+  d.recordBrowser = async () => {
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    order.push("recorded");
+    throw new Error("boom");
+  };
+  await assert.rejects(browserProduction(BROWSER_OPTIONS, d), /boom/);
+  assert.deepEqual(order.slice(-2), ["recorded", "journal.close"]);
+});
+
+test("readback of a browser journal looks accounts up like an SDK journal", async () => {
+  const path = journalOf(
+    { type: "run", runId: "r", kind: "browser", project: "fireemu-oracle-query" },
+    [
+      { type: "names", phase: "before", names: [{ name: "n/a", op: "create" }] },
+      {
+        type: "account",
+        phase: "after",
+        name: "a",
+        email: "a@example.com",
+        state: "created",
+        uid: "u1",
+      },
+    ],
+  );
+  const looked = [];
+  const report = await readbackProduction(
+    { journal: path, project: "fireemu-oracle-query" },
+    {
+      accessToken: async () => "TOK",
+      createClient: () => ({
+        missing: async (names) => names.map((name) => ({ name, exists: false })),
+        close() {},
+      }),
+      createAccountClient: (options) => {
+        looked.push(options.project);
+        return { lookup: async () => [] };
+      },
+    },
+  );
+  assert.equal(report.clean, true);
+  assert.deepEqual(looked, ["fireemu-oracle-query"]);
 });

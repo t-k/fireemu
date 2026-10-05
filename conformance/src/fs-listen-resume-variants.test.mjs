@@ -595,3 +595,11 @@ test("each program's documents are named with its own tag, so a leftover is foun
       id,
     );
 });
+
+test("every save names the one target of its stream, id 1", () => {
+  for (const program of RESUME_VARIANT_PROGRAMS)
+    for (const step of program.steps.filter((s) => s.do === "save"))
+      assert.equal(step.id, 1, `${program.id}: ${step.token}`);
+  const saves = RESUME_VARIANT_PROGRAMS.flatMap((p) => p.steps.filter((s) => s.do === "save"));
+  assert.equal(saves.length, 3 + 4 + 3);
+});

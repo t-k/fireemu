@@ -215,7 +215,7 @@ mod tests {
                 let expected: Vec<_> = model.iter().cloned().collect();
                 let mut actual = Vec::new();
                 let mut token = String::new();
-                loop {
+                for _ in 0..=expected.len() {
                     let page = paginate(expected.clone(), size, &token, PagingPolicy::Strict, Clone::clone).unwrap();
                     actual.extend(page.resources);
                     token = page.next_page_token;

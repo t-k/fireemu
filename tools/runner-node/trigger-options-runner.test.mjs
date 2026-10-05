@@ -263,6 +263,16 @@ test('a schedule with a retry window and no retry count retries (recorded: run 1
   assert.equal(f.spec('counted')?.retry,true);
 });
 
+test('a first-generation schedule with only a retry window does not retry its handler (its job targets Pub/Sub; nothing recorded)',async t=>{
+  const f=await start(t,`define('v1Window','gcfv1',{scheduleTrigger:{schedule:'every 5 minutes',retryConfig:{retryCount:0,maxRetrySeconds:30,minBackoffSeconds:4,maxBackoffSeconds:10}}});define('v1WindowOnly','gcfv1',{scheduleTrigger:{schedule:'every 5 minutes',retryConfig:{maxRetrySeconds:30}}});define('legacyWindow','legacy',{eventTrigger:{eventType:'google.pubsub.topic.publish'},schedule:{schedule:'every 5 minutes',retryConfig:{maxRetryDuration:'30s'}}});define('v1Counted','gcfv1',{scheduleTrigger:{schedule:'every 5 minutes',retryConfig:{retryCount:2,maxRetrySeconds:30}}});define('v2Window','gcfv2',{scheduleTrigger:{schedule:'every 5 minutes',retryConfig:{maxRetrySeconds:30}}});`);
+  assert.equal(f.spec('v1Window')?.retry,false);
+  assert.equal(f.spec('v1WindowOnly')?.retry,false);
+  assert.equal(f.spec('legacyWindow')?.retry,false);
+  // the count rule is shared by both generations and out of this change's scope
+  assert.equal(f.spec('v1Counted')?.retry,true);
+  assert.equal(f.spec('v2Window')?.retry,true);
+});
+
 test('schedule/task retry metadata is detached and cannot replace its JSON envelope',async t=>{
   const f=await start(t,`const retry={retryCount:3};define('subject','gcfv2',{scheduleTrigger:{schedule:'every 5 minutes',retryConfig:retry}});const later=define('later','gcfv2',{taskQueueTrigger:{}});Object.defineProperty(later.__endpoint,'omit',{get(){retry.retryCount=0;return false;}});`);
   assert.equal(f.spec('subject')?.retry,true);assert.equal(f.spec('subject')?.trigger.retryConfig.retryCount,3);

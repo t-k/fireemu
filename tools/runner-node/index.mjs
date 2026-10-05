@@ -622,8 +622,12 @@ function describeSchedule(base, value) {
     ...base,
     // Production retries a job with a retry window and no count until the window ends (a job with
     // `maxRetryDuration: 30s` and no `retryCount` was attempted four times in run 156715222b86ea44), so a window
-    // alone is a retry declaration too.
-    retry: (retryConfig.retryCount ?? 0) > 0 || (retryConfig.maxRetrySeconds ?? 0) > 0,
+    // alone is a retry declaration too. That job targeted HTTP, which is what a second-generation schedule is; a
+    // first-generation schedule's job targets Pub/Sub, so Cloud Scheduler's retry covers the publish and not the
+    // handler, and no handler retry was recorded for a window there.
+    retry:
+      (retryConfig.retryCount ?? 0) > 0 ||
+      (base.generation !== 1 && (retryConfig.maxRetrySeconds ?? 0) > 0),
     trigger: { type: "schedule", schedule, timeZone, retryConfig },
   };
 }

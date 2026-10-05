@@ -5,9 +5,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { createGuard } from "./guard.mjs";
-import { EXTRA_JOBS, REGION, extraJobId, functionName, scheduleId } from "./plan.mjs";
+import { EXTRA_JOBS, REGION, extraJobId, functionName } from "./plan.mjs";
 import { record } from "./run.mjs";
-import { NUMBER, createWorld, reply } from "./world.mjs";
+import { NUMBER, createWorld } from "./world.mjs";
 
 const RUN = "0123456789abcdef";
 const SHORT = { passes: 1, naturalWindowMs: 60_000 };

@@ -1,5 +1,7 @@
 """The comparison tool's pure parts: commit-time relations and the row comparison."""
 
+import pytest
+
 import fs_txn_compare_local as tool
 
 
@@ -304,3 +306,26 @@ def test_the_retention_steps_of_the_p14_table_carry_the_same_name_as_their_case(
     steps = [step for step in plan["steps"] if "readAgoSeconds" in step]
     assert len(steps) == 9 and all(step["id"] == step["caseId"] for step in steps)
     assert tool.retention_cases(plan) == frozenset(step["id"] for step in steps)
+
+
+# ---- which replays judge the clock rows --------------------------------------------------------------------------------------------------------------------
+
+def _writes(stamp_nanos):
+    window = {"dispatchUtc": "2026-10-04T00:00:10.000000Z", "responseUtc": "2026-10-04T00:00:11.000000Z"}
+    return [{"site": "s", "rpc": "Commit", "transport": "grpc", "result": {"code": 0, "response": {"writeResults": [{"updateTime": {"seconds": "1791072010", "nanos": stamp_nanos}}]}}, "timing": window}]
+
+
+@pytest.mark.parametrize("mode", ["real", "virtual", None, ""])
+def test_a_replay_that_is_not_on_the_frozen_clock_has_no_clock_rows(mode):
+    # the emulator's clock is the recording's clock only when the replay froze it at a start both agree on; any other replay's server times say nothing about the window
+    assert tool.clock_rows_for(mode, True, _writes(0), _writes(0)) is None
+
+
+def test_a_frozen_replay_of_a_recording_judges_the_clock_rows():
+    rows = tool.clock_rows_for("frozen", True, _writes(0), _writes(0))
+    assert [row["site"] for row in rows] == ["s"] and all(row["match"] for row in rows)
+    assert tool.clock_rows_for("frozen", True, _writes(0), [{**_writes(0)[0], "result": {"code": 0, "response": {"writeResults": [{"updateTime": {"seconds": "1", "nanos": 0}}]}}}])[0]["match"] is False
+
+
+def test_a_frozen_replay_of_a_freeze_file_has_no_clock_rows():
+    assert tool.clock_rows_for("frozen", False, _writes(0), _writes(0)) is None

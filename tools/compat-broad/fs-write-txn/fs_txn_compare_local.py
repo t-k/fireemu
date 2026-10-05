@@ -131,6 +131,12 @@ def clock_rows(production_steps, local_steps):
     return compare_clock(clock_evidence(production_steps), clock_evidence(local_steps))
 
 
+def clock_rows_for(mode, recorded, production_steps, local_steps):
+    """The clock rows of a replay, or None. Only a replay on the frozen clock has a recording clock that is the emulator's own (both start at the one start the replay names),
+    so only there does the window around a request say where the server's update time must lie; and only a recording has the rows to compare."""
+    return clock_rows(production_steps, local_steps) if recorded and mode == "frozen" else None
+
+
 def compare_clock(production, local):
     return [{"site": site, "production": production.get(site), "local": local.get(site), "match": production.get(site) is True and local.get(site) is True}
             for site in sorted(set(production) | set(local))]
@@ -221,7 +227,7 @@ def main():
         local_relations = commit_relations(receipt["steps"])
         result["cases"], result["reads"], result["commitTimes"] = compare(production, local, production_relations, local_relations, project, retention_cases(plan))
         result["orders"] = compare_orders(writer_orders(source["steps"], plan), writer_orders(receipt["steps"], plan)) if recorded else None
-        result["clock"] = clock_rows(source["steps"], receipt["steps"]) if recorded else None
+        result["clock"] = clock_rows_for(os.environ.get("COMPARE_CLOCK"), recorded, source["steps"] if recorded else None, receipt["steps"])
         rows = result["cases"] + result["reads"] + (result["commitTimes"] or []) + (result["orders"] or []) + (result["clock"] or [])
         result["mismatches"] = sum(not row["match"] for row in rows)
         if os.environ.get("COMPARE_CLOCK") == "virtual" and recorded:

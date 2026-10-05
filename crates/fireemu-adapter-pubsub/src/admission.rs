@@ -19,23 +19,21 @@ pub(crate) fn ack_deadline(value: i64) -> Result<u32> {
     Ok(u32::try_from(value).expect("checked ack deadline"))
 }
 
-pub(crate) fn ack_ids(ids: &[String]) -> Result<()> {
+pub(crate) fn ack_ids(ids: &[String]) -> Result<Vec<String>> {
     if ids.is_empty() {
         return Err(PubSubError::invalid_argument(
             "You have not specified an ack ID in the request.",
         ));
     }
-    // Ack IDs are owned by this broker. A well-formed issued ID remains valid after expiry.
-    for id in ids {
-        if !id.strip_prefix("ack-").is_some_and(|suffix| {
-            suffix.len() == 16 && suffix.bytes().all(|byte| byte.is_ascii_hexdigit())
-        }) {
-            return Err(PubSubError::invalid_argument(format!(
-                "You have passed an invalid ack ID to the service (ack_id={id})."
-            )));
-        }
-    }
-    Ok(())
+    ids.iter()
+        .map(|id| {
+            crate::ack_token::decode(id).ok_or_else(|| {
+                PubSubError::invalid_argument(format!(
+                    "You have passed an invalid ack ID to the service (ack_id={id})."
+                ))
+            })
+        })
+        .collect()
 }
 
 pub(crate) fn message_count(value: usize) -> Result<()> {
@@ -78,7 +76,7 @@ mod tests {
 
         #[test]
         fn ack_id_near_misses_do_not_admit_foreign_shapes(value in any::<u64>(), wrong in "[a-z]{1,18}") {
-            let id = format!("ack-{value:016x}");
+            let id = crate::ack_token::wire(&format!("ack-{value:016x}"),crate::PagingPolicy::Strict);
             prop_assert!(ack_ids(&[id]).is_ok());
             prop_assert!(ack_ids(&[]).is_err());
             prop_assert!(ack_ids(&[wrong]).is_err());

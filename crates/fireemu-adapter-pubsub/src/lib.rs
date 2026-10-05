@@ -18,6 +18,7 @@
 //! redelivery therefore advance only when the control API advances the clock, and message /
 //! ack ids come from the daemon seed, so a run reproduces and `await-idle` stays deterministic.
 
+mod ack_token;
 mod admission;
 mod convert;
 mod publisher;

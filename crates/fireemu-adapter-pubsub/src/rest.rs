@@ -419,7 +419,7 @@ fn dispatch_subscription(
         let subscriptions = state
             .list_subscriptions(project)
             .into_iter()
-            .map(|config| subscription_json(&state, &config))
+            .map(|config| subscription_json(&state, &config, handle.paging_policy))
             .collect::<Vec<_>>();
         return Ok((
             StatusCode::OK,
@@ -711,7 +711,7 @@ fn create_subscription(
         .subscription_config(subscription)
         .map_err(RestError::from_core)?
         .clone();
-    let mut response = subscription_json(&state, &config);
+    let mut response = subscription_json(&state, &config, handle.paging_policy);
     if config.is_push() && handle.paging_policy == crate::PagingPolicy::Strict {
         response["pushConfig"]["attributes"]["x-goog-version"] = json!("v1");
     }
@@ -730,7 +730,10 @@ fn get_subscription(
     let config = state
         .subscription_config(&subscription)
         .map_err(|error| RestError::from_resource_get(error, subscription.subscription()))?;
-    Ok((StatusCode::OK, subscription_json(&state, config)))
+    Ok((
+        StatusCode::OK,
+        subscription_json(&state, config, handle.paging_policy),
+    ))
 }
 
 #[allow(clippy::needless_pass_by_value)]
@@ -796,7 +799,10 @@ fn update_subscription(
             .subscription_config(&subscription)
             .map_err(RestError::from_core)?
             .clone();
-        (config.topic.clone(), subscription_json(&state, &config))
+        (
+            config.topic.clone(),
+            subscription_json(&state, &config, handle.paging_policy),
+        )
     };
     if strict {
         response["pushConfig"]["attributes"]["x-goog-version"] = json!("v1");
@@ -1069,7 +1075,7 @@ fn pull(
     if !received.is_empty() {
         body["receivedMessages"] = json!(received
             .iter()
-            .map(|message| received_json(message, report_attempt))
+            .map(|message| received_json(message, report_attempt, handle.paging_policy))
             .collect::<Vec<_>>());
     }
     Ok((StatusCode::OK, body))
@@ -1081,9 +1087,9 @@ fn acknowledge(
     body: &Value,
     handle: &PubSubHandle,
 ) -> Result<(StatusCode, Value), RestError> {
-    let ack_ids = string_array(body, "ackIds")?;
+    let mut ack_ids = string_array(body, "ackIds")?;
     if handle.paging_policy == crate::PagingPolicy::Strict {
-        crate::admission::ack_ids(&ack_ids).map_err(RestError::from_core)?;
+        ack_ids = crate::admission::ack_ids(&ack_ids).map_err(RestError::from_core)?;
     }
     handle
         .acknowledge(&subscription, &ack_ids)
@@ -1097,10 +1103,10 @@ fn modify_ack_deadline(
     body: &Value,
     handle: &PubSubHandle,
 ) -> Result<(StatusCode, Value), RestError> {
-    let ack_ids = string_array(body, "ackIds")?;
+    let mut ack_ids = string_array(body, "ackIds")?;
     let seconds =
         if handle.paging_policy == crate::PagingPolicy::Strict {
-            crate::admission::ack_ids(&ack_ids).map_err(RestError::from_core)?;
+            ack_ids = crate::admission::ack_ids(&ack_ids).map_err(RestError::from_core)?;
             let value = field(body, "ackDeadlineSeconds")
                 .map_or(Some(0), Value::as_i64)
                 .ok_or_else(|| RestError::invalid("ackDeadlineSeconds must be an integer"))?;
@@ -1391,7 +1397,11 @@ fn snake_case_field(field: &str) -> String {
     normalized
 }
 
-fn subscription_json(state: &PubSubState, config: &SubscriptionConfig) -> Value {
+fn subscription_json(
+    state: &PubSubState,
+    config: &SubscriptionConfig,
+    policy: crate::PagingPolicy,
+) -> Value {
     let topic = state
         .reported_topic(&config.name)
         .unwrap_or_else(|| config.topic.to_full());
@@ -1435,7 +1445,9 @@ fn subscription_json(state: &PubSubState, config: &SubscriptionConfig) -> Value 
             .push_config
             .attributes
             .iter()
-            .filter(|(key, _)| key.as_str() != "x-goog-version")
+            .filter(|(key, _)| {
+                policy == crate::PagingPolicy::Emulator || key.as_str() != "x-goog-version"
+            })
             .collect::<BTreeMap<_, _>>();
         if !attributes.is_empty() {
             value["pushConfig"]["attributes"] = json!(attributes);
@@ -1488,9 +1500,12 @@ fn snapshot_json(snapshot: &Snapshot) -> Value {
     value
 }
 
-fn received_json(received: &ReceivedMessage, report_attempt: bool) -> Value {
-    let mut value =
-        json!({"ackId":received.ack_id,"message":stored_message_json(&received.message)});
+fn received_json(
+    received: &ReceivedMessage,
+    report_attempt: bool,
+    policy: crate::PagingPolicy,
+) -> Value {
+    let mut value = json!({"ackId":crate::ack_token::wire(&received.ack_id,policy),"message":stored_message_json(&received.message)});
     if report_attempt {
         value["deliveryAttempt"] = json!(received.delivery_attempt);
     }
@@ -1577,6 +1592,50 @@ fn error_response(error: RestError) -> Response {
 mod production_shape_tests {
     use super::*;
     use proptest::prelude::*;
+
+    #[test]
+    fn emulator_rest_push_get_preserves_version_attributes() {
+        let topic = TopicName::new("demo-app", "push-attributes").unwrap();
+        let config = crate::convert::subscription_from_proto_with_policy(
+            &pb::Subscription {
+                name: "projects/demo-app/subscriptions/push-attributes".to_owned(),
+                topic: topic.to_full(),
+                push_config: Some(pb::PushConfig {
+                    push_endpoint: "https://example.com/push".to_owned(),
+                    attributes: [("x-goog-version".to_owned(), "v1".to_owned())].into(),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            },
+            crate::PagingPolicy::Emulator,
+        )
+        .unwrap();
+        let mut state = PubSubState::new(1);
+        state.create_topic(topic, BTreeMap::new()).unwrap();
+        state.create_subscription(config.clone()).unwrap();
+        assert_eq!(
+            subscription_json(&state, &config, crate::PagingPolicy::Emulator)["pushConfig"]
+                ["attributes"]["x-goog-version"],
+            "v1"
+        );
+    }
+
+    proptest! {
+        #[test]
+        fn push_attributes_serialize_by_profile(version in "[a-z0-9]{1,12}") {
+            let config = crate::convert::subscription_from_proto_with_policy(&pb::Subscription {
+                name:"projects/demo-app/subscriptions/push-property".to_owned(),
+                topic:"projects/demo-app/topics/push-property".to_owned(),
+                push_config:Some(pb::PushConfig {push_endpoint:"https://example.com/push".to_owned(),attributes:[("x-goog-version".to_owned(),version.clone())].into(),..Default::default()}),
+                ..Default::default()
+            },crate::PagingPolicy::Emulator).unwrap();
+            let state = PubSubState::new(1);
+            let permissive = subscription_json(&state,&config,crate::PagingPolicy::Emulator);
+            let strict = subscription_json(&state,&config,crate::PagingPolicy::Strict);
+            prop_assert_eq!(permissive["pushConfig"]["attributes"]["x-goog-version"].as_str(),Some(version.as_str()));
+            prop_assert!(strict["pushConfig"].get("attributes").is_none());
+        }
+    }
 
     proptest! {
         #[test]

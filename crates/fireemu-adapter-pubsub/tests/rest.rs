@@ -2899,3 +2899,172 @@ async fn strict_mixed_invalid_ack_is_atomic_and_stale_issued_ack_is_accepted() {
     assert_eq!(code, 200);
     assert_eq!(empty, json!({}));
 }
+
+#[tokio::test]
+#[allow(clippy::too_many_lines)]
+async fn recorded_opaque_ack_ids_roundtrip_across_both_wires_and_profiles() {
+    for policy in [
+        fireemu_adapter_pubsub::PagingPolicy::Strict,
+        fireemu_adapter_pubsub::PagingPolicy::Emulator,
+    ] {
+        let address = start_policy(policy).await;
+        let topic = "projects/demo-app/topics/wire-ack";
+        let subscription = "projects/demo-app/subscriptions/wire-ack";
+        assert_eq!(
+            rest_request(address, "PUT", &format!("/v1/{topic}"), json!({}))
+                .await
+                .0,
+            200
+        );
+        assert_eq!(
+            rest_request(
+                address,
+                "PUT",
+                &format!("/v1/{subscription}"),
+                json!({"topic":topic})
+            )
+            .await
+            .0,
+            200
+        );
+        assert_eq!(
+            rest_request(
+                address,
+                "POST",
+                &format!("/v1/{topic}:publish"),
+                json!({"messages":[{"data":"AQ=="}]})
+            )
+            .await
+            .0,
+            200
+        );
+        let mut subscriber = SubscriberClient::new(grpc_channel(address).await);
+        let first = subscriber
+            .pull(pb::PullRequest {
+                subscription: subscription.to_owned(),
+                max_messages: 1,
+                ..Default::default()
+            })
+            .await
+            .unwrap()
+            .into_inner()
+            .received_messages;
+        let issued = &first[0].ack_id;
+        let expected_length = if policy == fireemu_adapter_pubsub::PagingPolicy::Strict {
+            196
+        } else {
+            20
+        };
+        assert_eq!(issued.len(), expected_length);
+        assert!(issued
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-' || byte == b'_'));
+        assert_eq!(
+            rest_request(
+                address,
+                "POST",
+                &format!("/v1/{subscription}:modifyAckDeadline"),
+                json!({"ackIds":[issued],"ackDeadlineSeconds":0})
+            )
+            .await
+            .0,
+            200
+        );
+        let (code, second) = rest_request(
+            address,
+            "POST",
+            &format!("/v1/{subscription}:pull"),
+            json!({"maxMessages":1}),
+        )
+        .await;
+        assert_eq!(code, 200);
+        let renewed = second["receivedMessages"][0]["ackId"].as_str().unwrap();
+        assert_eq!(renewed.len(), expected_length);
+        assert_ne!(renewed, issued);
+        assert_eq!(
+            second["receivedMessages"][0]["message"]["messageId"],
+            first[0].message.as_ref().unwrap().message_id
+        );
+        subscriber
+            .acknowledge(pb::AcknowledgeRequest {
+                subscription: subscription.to_owned(),
+                ack_ids: vec![issued.clone()],
+            })
+            .await
+            .unwrap();
+        subscriber
+            .acknowledge(pb::AcknowledgeRequest {
+                subscription: subscription.to_owned(),
+                ack_ids: vec![renewed.to_owned()],
+            })
+            .await
+            .unwrap();
+        let (_, empty) = rest_request(
+            address,
+            "POST",
+            &format!("/v1/{subscription}:pull"),
+            json!({"maxMessages":1}),
+        )
+        .await;
+        assert!(empty.get("receivedMessages").is_none());
+    }
+}
+
+#[tokio::test]
+async fn emulator_push_attributes_roundtrip_through_create_get_and_list_on_both_wires() {
+    let address = start_policy(fireemu_adapter_pubsub::PagingPolicy::Emulator).await;
+    let mut publisher = PublisherClient::new(grpc_channel(address).await);
+    let mut subscriber = SubscriberClient::new(grpc_channel(address).await);
+    let topic = "projects/demo-app/topics/push-roundtrip";
+    publisher
+        .create_topic(pb::Topic {
+            name: topic.to_owned(),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    for (index, native) in [true, false].into_iter().enumerate() {
+        let name = format!("projects/demo-app/subscriptions/push-roundtrip-{index}");
+        if native {
+            subscriber
+                .create_subscription(pb::Subscription {
+                    name: name.clone(),
+                    topic: topic.to_owned(),
+                    push_config: Some(pb::PushConfig {
+                        push_endpoint: "https://example.com/push".to_owned(),
+                        attributes: [("x-goog-version".to_owned(), "v1".to_owned())].into(),
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                })
+                .await
+                .unwrap();
+        } else {
+            assert_eq!(rest_request(address,"PUT",&format!("/v1/{name}"),json!({"topic":topic,"pushConfig":{"pushEndpoint":"https://example.com/push","attributes":{"x-goog-version":"v1"}}})).await.0,200);
+        }
+        let native = subscriber
+            .get_subscription(pb::GetSubscriptionRequest {
+                subscription: name.clone(),
+            })
+            .await
+            .unwrap()
+            .into_inner();
+        assert_eq!(
+            native.push_config.unwrap().attributes["x-goog-version"],
+            "v1"
+        );
+        let (_, rest) = rest_request(address, "GET", &format!("/v1/{name}"), json!({})).await;
+        assert_eq!(rest["pushConfig"]["attributes"]["x-goog-version"], "v1");
+    }
+    let (_, list) = rest_request(
+        address,
+        "GET",
+        "/v1/projects/demo-app/subscriptions",
+        json!({}),
+    )
+    .await;
+    assert_eq!(list["subscriptions"].as_array().unwrap().len(), 2);
+    for item in list["subscriptions"].as_array().unwrap() {
+        assert_eq!(item["pushConfig"]["attributes"]["x-goog-version"], "v1");
+    }
+}

@@ -96,7 +96,12 @@ fn apply_stream_request(
     req: &pb::StreamingPullRequest,
 ) {
     if !req.ack_ids.is_empty() {
-        let _ = handle.acknowledge(sub, &req.ack_ids);
+        let ids: Vec<_> = req
+            .ack_ids
+            .iter()
+            .map(|id| crate::ack_token::internal(id, handle.paging_policy))
+            .collect();
+        let _ = handle.acknowledge(sub, &ids);
     }
     let now = handle.now();
     let mut state = handle.state();
@@ -106,7 +111,8 @@ fn apply_stream_request(
         .zip(req.modify_deadline_seconds.iter())
     {
         let s = u32::try_from(*secs).unwrap_or(0);
-        let _ = state.modify_ack_deadline(sub, std::slice::from_ref(id), s, now);
+        let id = crate::ack_token::internal(id, handle.paging_policy);
+        let _ = state.modify_ack_deadline(sub, std::slice::from_ref(&id), s, now);
     }
 }
 
@@ -309,10 +315,11 @@ impl Subscriber for SubscriberService {
         &self,
         request: Request<pb::ModifyAckDeadlineRequest>,
     ) -> Result<Response<()>, Status> {
-        let req = request.into_inner();
+        let mut req = request.into_inner();
         let name = SubscriptionName::parse(&req.subscription).map_err(|e| status(&e))?;
         let secs = if self.handle.paging_policy == crate::PagingPolicy::Strict {
-            crate::admission::ack_ids(&req.ack_ids).map_err(|error| status(&error))?;
+            req.ack_ids =
+                crate::admission::ack_ids(&req.ack_ids).map_err(|error| status(&error))?;
             crate::admission::ack_deadline(i64::from(req.ack_deadline_seconds))
                 .map_err(|error| status(&error))?
         } else {
@@ -331,10 +338,11 @@ impl Subscriber for SubscriberService {
         &self,
         request: Request<pb::AcknowledgeRequest>,
     ) -> Result<Response<()>, Status> {
-        let req = request.into_inner();
+        let mut req = request.into_inner();
         let name = SubscriptionName::parse(&req.subscription).map_err(|e| status(&e))?;
         if self.handle.paging_policy == crate::PagingPolicy::Strict {
-            crate::admission::ack_ids(&req.ack_ids).map_err(|error| status(&error))?;
+            req.ack_ids =
+                crate::admission::ack_ids(&req.ack_ids).map_err(|error| status(&error))?;
         }
         self.handle
             .acknowledge(&name, &req.ack_ids)
@@ -378,7 +386,9 @@ impl Subscriber for SubscriberService {
         Ok(Response::new(pb::PullResponse {
             received_messages: received
                 .iter()
-                .map(|message| received_to_proto(message, report_attempt))
+                .map(|message| {
+                    received_to_proto(message, report_attempt, self.handle.paging_policy)
+                })
                 .collect(),
         }))
     }
@@ -432,7 +442,7 @@ impl Subscriber for SubscriberService {
                         match pulled {
                             Ok(msgs) if !msgs.is_empty() => {
                                 let resp = pb::StreamingPullResponse {
-                                    received_messages: msgs.iter().map(|message|received_to_proto(message,report_attempt)).collect(),
+                                    received_messages: msgs.iter().map(|message|received_to_proto(message,report_attempt,handle.paging_policy)).collect(),
                                     ..pb::StreamingPullResponse::default()
                                 };
                                 if tx.send(Ok(resp)).await.is_err() {
@@ -603,5 +613,73 @@ impl Subscriber for SubscriberService {
                 "seek requires a time or a snapshot",
             )),
         }
+    }
+}
+
+#[cfg(test)]
+mod ack_wire_tests {
+    use super::*;
+    use fireemu_core_pubsub::{PubSubState, PubsubMessage, TopicName};
+    use fireemu_core_session::clock::VirtualClock;
+    use fireemu_core_types::time::LogicalInstant;
+    use std::sync::{Arc, Mutex};
+
+    #[test]
+    fn streaming_frames_decode_issued_opaque_ids() {
+        let now = LogicalInstant::from_unix_seconds(1_700_000_000);
+        let handle = PubSubHandle::new(
+            Arc::new(Mutex::new(PubSubState::new(99))),
+            Arc::new(Mutex::new(VirtualClock::new(now))),
+            None,
+        )
+        .with_paging_policy(crate::PagingPolicy::Strict);
+        let topic = TopicName::new("demo-app", "stream-ack").unwrap();
+        let config = crate::convert::subscription_from_proto(&pb::Subscription {
+            name: "projects/demo-app/subscriptions/stream-ack".to_owned(),
+            topic: topic.to_full(),
+            ..Default::default()
+        })
+        .unwrap();
+        let sub = config.name.clone();
+        handle
+            .state()
+            .create_topic(topic.clone(), std::collections::BTreeMap::new())
+            .unwrap();
+        handle.state().create_subscription(config).unwrap();
+        handle
+            .state()
+            .publish(
+                &topic,
+                vec![PubsubMessage {
+                    data: vec![1],
+                    ..Default::default()
+                }],
+                now,
+            )
+            .unwrap();
+        let first = handle.pull(&sub, 1).unwrap();
+        let issued = crate::ack_token::wire(&first[0].ack_id, handle.paging_policy);
+        apply_stream_request(
+            &handle,
+            &sub,
+            &pb::StreamingPullRequest {
+                modify_deadline_ack_ids: vec![issued.clone()],
+                modify_deadline_seconds: vec![0],
+                ..Default::default()
+            },
+        );
+        let renewed = handle.pull(&sub, 1).unwrap();
+        assert_eq!(renewed.len(), 1);
+        assert_eq!(renewed[0].message.message_id, first[0].message.message_id);
+        let current = crate::ack_token::wire(&renewed[0].ack_id, handle.paging_policy);
+        apply_stream_request(
+            &handle,
+            &sub,
+            &pb::StreamingPullRequest {
+                ack_ids: vec![issued, current],
+                ..Default::default()
+            },
+        );
+        assert!(handle.pull(&sub, 1).unwrap().is_empty());
     }
 }

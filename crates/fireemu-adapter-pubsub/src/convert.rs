@@ -99,9 +99,13 @@ pub fn message_to_proto(stored: &StoredMessage) -> pb::PubsubMessage {
 
 /// Renders a delivered message as a wire `ReceivedMessage`.
 #[must_use]
-pub fn received_to_proto(r: &ReceivedMessage, report_attempt: bool) -> pb::ReceivedMessage {
+pub fn received_to_proto(
+    r: &ReceivedMessage,
+    report_attempt: bool,
+    policy: crate::PagingPolicy,
+) -> pb::ReceivedMessage {
     pb::ReceivedMessage {
-        ack_id: r.ack_id.clone(),
+        ack_id: crate::ack_token::wire(&r.ack_id, policy),
         message: Some(message_to_proto(&r.message)),
         delivery_attempt: if report_attempt {
             i32::try_from(r.delivery_attempt).unwrap_or(i32::MAX)

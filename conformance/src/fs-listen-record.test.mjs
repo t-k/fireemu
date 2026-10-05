@@ -447,6 +447,7 @@ test("readback: a native journal is read through the client and nothing is delet
     [
       { type: "run", runId: "r1", kind: "native", project: "fireemu-oracle-txn" },
       { type: "names", phase: "before", names: [{ name: "n/a", op: "create" }] },
+      { type: "names", phase: "after", outcome: "ok", names: [{ name: "n/a", op: "create" }] },
     ]
       .map((r) => JSON.stringify(r))
       .join("\n"),
@@ -466,6 +467,21 @@ test("readback: a native journal is read through the client and nothing is delet
   const report = await readbackProduction({ journal, project: "fireemu-oracle-txn" }, d);
   assert.equal(report.clean, true);
   assert.deepEqual(calls, [["missing", ["n/a"]], ["close"]]);
+  assert.deepEqual(report.unconfirmed, []);
+  // The same journal with no answer line (a crash in the Commit) is an unknown create: absence does not settle it.
+  const crashed = join(dir, "crashed.jsonl");
+  writeFileSync(
+    crashed,
+    [
+      { type: "run", runId: "r1", kind: "native", project: "fireemu-oracle-txn" },
+      { type: "names", phase: "before", names: [{ name: "n/a", op: "create" }] },
+    ]
+      .map((r) => JSON.stringify(r))
+      .join("\n"),
+  );
+  const open = await readbackProduction({ journal: crashed, project: "fireemu-oracle-txn" }, d);
+  assert.equal(open.clean, false);
+  assert.deepEqual(open.unconfirmed, ["n/a"]);
   // The journal's own project and kind decide: another project is refused before any token.
   let tokenAsked = false;
   await assert.rejects(
@@ -734,7 +750,8 @@ test("readback waits for the read before it closes the client, asks with the tok
   const sdkJournal = journalOf(
     { type: "run", runId: "r", kind: "sdk", project: "fireemu-oracle-query" },
     [
-      { type: "names", phase: "before", names: [{ name: "n/a", op: "create" }] },
+      { type: "names", phase: "before", maybe: true, names: [{ name: "n/a", op: "create" }] },
+      { type: "names", phase: "after", outcome: "known", names: [{ name: "n/a", op: "create" }] },
       {
         type: "account",
         phase: "after",
@@ -1118,4 +1135,141 @@ test("buildInputsDigest is invariant under any order and any test-only noise, ov
     );
     assert.notEqual(buildInputsDigest(touched.join("\n")), buildInputsDigest(inputs.join("\n")));
   }
+});
+
+test("--programs resume-variants selects the L1b programs alone, holds them to their request ceiling, and refuses another name or a mix with the long program", async () => {
+  const { programsFor, requestCeilingFor } = await import("./fs-listen/record.mjs");
+  const { RESUME_VARIANT_PROGRAMS, RESUME_VARIANT_REQUEST_CEILING } =
+    await import("./fs-listen/native-resume-variants.mjs");
+  assert.deepEqual(programsFor({ programs: "resume-variants" }), RESUME_VARIANT_PROGRAMS);
+  assert.deepEqual(
+    programsFor({ programs: "resume-variants", "include-long": "no" }),
+    RESUME_VARIANT_PROGRAMS,
+  );
+  assert.throws(
+    () => programsFor({ programs: "resume-variants", "include-long": "yes" }),
+    /cannot be combined/,
+  );
+  for (const bad of ["", "all", "Resume-Variants", "resume-variants "])
+    assert.throws(() => programsFor({ programs: bad }), /--programs/, JSON.stringify(bad));
+  assert.equal(requestCeilingFor({ programs: "resume-variants" }), RESUME_VARIANT_REQUEST_CEILING);
+  assert.equal(requestCeilingFor({}), undefined);
+  assert.equal(requestCeilingFor({ "include-long": "yes" }), undefined);
+});
+
+test("a production recording of the resume variants checks every program, records only them, and runs under their ceiling", async () => {
+  const { nativeProduction: production } = await import("./fs-listen/record.mjs");
+  const { RESUME_VARIANT_PROGRAMS, RESUME_VARIANT_REQUEST_CEILING } =
+    await import("./fs-listen/native-resume-variants.mjs");
+  const order = [];
+  const { d, seen } = argDeps(order);
+  const checked = [];
+  d.programProblems = (programs) => {
+    checked.push(...programs.map((p) => p.id));
+    return [];
+  };
+  await production(
+    {
+      project: "fireemu-oracle-txn",
+      envelope: "E",
+      ledger: "L",
+      out: "o.json",
+      programs: "resume-variants",
+    },
+    d,
+  );
+  assert.deepEqual(seen.native.programs, RESUME_VARIANT_PROGRAMS);
+  assert.equal(seen.native.clock.maxRequests, RESUME_VARIANT_REQUEST_CEILING);
+  for (const program of RESUME_VARIANT_PROGRAMS)
+    assert.ok(checked.includes(program.id), program.id);
+  // A malformed variant program stops the run before a token is read.
+  const stopped = [];
+  const refusing = argDeps(stopped);
+  refusing.d.programProblems = () => ["native/resume-grid-g0#3 (save): unknown save kind x"];
+  await assert.rejects(
+    production(
+      {
+        project: "fireemu-oracle-txn",
+        envelope: "E",
+        ledger: "L",
+        out: "o.json",
+        programs: "resume-variants",
+      },
+      refusing.d,
+    ),
+    /malformed/,
+  );
+  assert.ok(!stopped.includes("accessToken"));
+});
+
+test("without --programs the production recording keeps the default request ceiling of the runner", async () => {
+  const { nativeProduction: production } = await import("./fs-listen/record.mjs");
+  const order = [];
+  const { d, seen } = argDeps(order);
+  await production({ project: "fireemu-oracle-txn", envelope: "E", ledger: "L", out: "o.json" }, d);
+  assert.equal(Object.hasOwn(seen.native, "clock"), false);
+});
+
+test("a recording carries the provenance of every token its programs saved, and the rows of resumed streams say where theirs came from", async () => {
+  const frames = [
+    { kind: "targetChange", targetChange: { targetChangeType: "ADD", targetIds: [1] } },
+    {
+      kind: "targetChange",
+      targetChange: { targetChangeType: "CURRENT", targetIds: [1], resumeToken: Buffer.from("TC") },
+    },
+  ];
+  const client = {
+    async commit() {},
+    async beginTransaction() {
+      return Buffer.from("t");
+    },
+    openStream() {
+      const sent = [];
+      return {
+        frames: [],
+        ended: () => undefined,
+        send(request) {
+          sent.push(request);
+          this.frames.push(...frames);
+        },
+        async close() {},
+      };
+    },
+    async missing(names) {
+      return names.map((name) => ({ name, exists: false }));
+    },
+    async listIds() {
+      return [];
+    },
+  };
+  const program = {
+    id: "native/p",
+    conditions: ["x"],
+    docs: { a: "lsn_native/{run}-p-a" },
+    steps: [
+      { do: "open", stream: "s", targets: [{ id: 1, doc: "a" }] },
+      { do: "save", stream: "s", id: 1, token: "T", kind: "current" },
+      { do: "open", stream: "r", targets: [{ id: 1, doc: "a", resume: "T" }] },
+      { do: "record", row: "native/p/r", stream: "r" },
+    ],
+  };
+  const recording = await recordNative({
+    client,
+    project: "p",
+    run: "r1",
+    clock: fakeClock(),
+    programs: [program],
+  });
+  assert.equal(recording.saves.length, 1);
+  assert.equal(recording.saves[0].kind, "current");
+  assert.equal(recording.saves[0].token.frameIndex, 1);
+  assert.equal(recording.rows["native/p/r"].resumedFrom[0].type, "CURRENT");
+  // A run with no save step still carries the (empty) list.
+  const none = await recordNative({
+    client: failingClient(3),
+    project: "p",
+    run: "r1",
+    clock: fakeClock(),
+  });
+  assert.ok(Array.isArray(none.saves));
 });

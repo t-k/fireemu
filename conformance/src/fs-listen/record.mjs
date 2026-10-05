@@ -35,6 +35,10 @@ import { createAccountClient } from "./accounts.mjs";
 import { NULL_JOURNAL, createJournal, issuedFromJournal, readbackJournal } from "./journal.mjs";
 import { createLedger, settleNames } from "./native-ledger.mjs";
 import { LONG_PROGRAMS, NATIVE_PROGRAMS, programProblems } from "./native-programs.mjs";
+import {
+  RESUME_VARIANT_PROGRAMS,
+  RESUME_VARIANT_REQUEST_CEILING,
+} from "./native-resume-variants.mjs";
 import { runNative } from "./native-run.mjs";
 import { loadApiKey, recordSdk } from "./sdk-record.mjs";
 
@@ -78,9 +82,28 @@ export async function accessToken(run = execFileAsync) {
 /** The run id: lower-case letters and digits, valid in a document id. */
 export const newRunId = (now = Date.now()) => `n${now.toString(36)}`;
 
-/** The programs a run records: the short ones, and the long ones too with `--include-long yes`. */
-export const programsFor = (options) =>
-  options["include-long"] === "yes" ? [...NATIVE_PROGRAMS, ...LONG_PROGRAMS] : NATIVE_PROGRAMS;
+/**
+ * The programs a run records: the short ones, and the long ones too with `--include-long yes`; or
+ * with `--programs resume-variants` the programs of packet L1b alone.
+ */
+export function programsFor(options) {
+  if (options.programs !== undefined) {
+    if (options.programs !== "resume-variants")
+      throw new Error(
+        `--programs must be resume-variants, not ${JSON.stringify(options.programs)}`,
+      );
+    if (options["include-long"] === "yes")
+      throw new Error("--programs resume-variants cannot be combined with --include-long yes");
+    return RESUME_VARIANT_PROGRAMS;
+  }
+  return options["include-long"] === "yes"
+    ? [...NATIVE_PROGRAMS, ...LONG_PROGRAMS]
+    : NATIVE_PROGRAMS;
+}
+
+/** The request ceiling a program set is held to (none for the L1 default, which the runner sets). */
+export const requestCeilingFor = (options) =>
+  options.programs === "resume-variants" ? RESUME_VARIANT_REQUEST_CEILING : undefined;
 
 /** Records the native programs once with `client`, then settles every name issued; returns the recording. */
 export async function recordNative({
@@ -121,6 +144,7 @@ export async function recordNative({
     issued: ledger.entries().map(([name]) => name),
     errors: outcome.errors,
     cleanup,
+    saves: outcome.saves,
     rows: outcome.rows,
   };
 }
@@ -175,7 +199,12 @@ export async function nativeProduction(options, deps = {}) {
   const d = { ...PRODUCTION_DEPS, ...deps };
   d.checkProject("native", options.project);
   await d.admit(options);
-  const problems = d.programProblems([...NATIVE_PROGRAMS, ...LONG_PROGRAMS]);
+  const programs = programsFor(options);
+  const problems = d.programProblems([
+    ...NATIVE_PROGRAMS,
+    ...LONG_PROGRAMS,
+    ...RESUME_VARIANT_PROGRAMS,
+  ]);
   if (problems.length) throw new Error(`the programs are malformed:\n${problems.join("\n")}`);
   const token = await d.accessToken();
   const run = d.newRunId();
@@ -192,7 +221,8 @@ export async function nativeProduction(options, deps = {}) {
       project: options.project,
       run,
       log: (line) => console.error(line),
-      programs: programsFor(options),
+      programs,
+      ...(requestCeilingFor(options) ? { clock: { maxRequests: requestCeilingFor(options) } } : {}),
       journal,
     });
   } finally {
@@ -215,6 +245,7 @@ async function nativeInsideFireemu(options) {
       project,
       run: newRunId(),
       programs: programsFor(options),
+      ...(requestCeilingFor(options) ? { clock: { maxRequests: requestCeilingFor(options) } } : {}),
     });
   } finally {
     client.close();
@@ -499,6 +530,7 @@ async function inFireemu(options, command, { rules } = {}) {
     "--out",
     tmp,
     ...(options["include-long"] ? ["--include-long", options["include-long"]] : []),
+    ...(options.programs ? ["--programs", options.programs] : []),
   ];
   const code =
     options.target === "official"

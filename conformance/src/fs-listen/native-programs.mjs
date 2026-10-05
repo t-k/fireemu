@@ -17,16 +17,16 @@ export const COLLECTION = "lsn_native";
 export const CHILD_COLLECTION = "lsn_native_child";
 
 /** Each program owns its documents (the tag is in every name) and its own `g` group. */
-const docsFor = (tag) => ({
+export const docsFor = (tag) => ({
   a: `${COLLECTION}/{run}-${tag}-a`,
   b: `${COLLECTION}/{run}-${tag}-b`,
   c: `${COLLECTION}/{run}-${tag}-c`,
   d: `${COLLECTION}/{run}-${tag}-d`,
 });
-const inGroup = (g) => ({ collection: COLLECTION, where: [["g", g]] });
+export const inGroup = (g) => ({ collection: COLLECTION, where: [["g", g]] });
 
 /** Open a stream on `targets` and wait for every target's CURRENT. */
-const openAndWait = (stream, targets, rowName) => [
+export const openAndWait = (stream, targets, rowName) => [
   { do: "open", stream, targets },
   ...targets
     .filter((t) => !t.once)
@@ -352,6 +352,9 @@ export const NATIVE_PROGRAMS = [
 /** The programs only an explicit request runs, after the others. */
 export const LONG_PROGRAMS = [resumeTokenExpired];
 
+/** The kinds of token a `save` step can ask for (see native-run.mjs). */
+const SAVE_KINDS = new Set(["current", "global"]);
+
 /** Checks a program list is well formed; returns the problems (empty when it is). */
 export function programProblems(programs) {
   const problems = [];
@@ -406,6 +409,8 @@ export function programProblems(programs) {
           break;
         case "save":
           usesStream(step.stream);
+          if (step.kind !== undefined && !SAVE_KINDS.has(step.kind))
+            problems.push(`${here}: unknown save kind ${step.kind}`);
           tokens.add(step.token);
           tokens.add(step.time);
           break;

@@ -239,7 +239,7 @@ function endsRemoved(row) {
  * the answer), its stream hit the frame cap or ended with no status, or its program threw (the
  * rest of that program never ran).
  */
-function isUnfinished(row) {
+export function isUnfinished(row) {
   return (
     (row.timedOut === true && !endsRemoved(row)) ||
     row.programError === true ||
@@ -275,6 +275,11 @@ export function settlementProblems(recording, settlement) {
   if (typeof recording.run !== "string" || settlement.run !== recording.run)
     problems.push("the read-back is for another run");
   if (settlement.clean !== true) problems.push("the read-back is not clean");
+  // Absence never settles an unknown create: any create the journal left unconfirmed stays open.
+  if (!Array.isArray(settlement.unconfirmed))
+    problems.push("the read-back does not say which creates are unconfirmed");
+  else if (settlement.unconfirmed.length > 0)
+    problems.push(`the read-back leaves unconfirmed creates: ${settlement.unconfirmed.join(", ")}`);
   const age = Date.parse(settlement.readAt) - Date.parse(recording.endedAt);
   if (!Number.isFinite(age) || age < SETTLEMENT_MIN_AGE_MS)
     problems.push("the read-back is not at least 10 minutes after the run ended");

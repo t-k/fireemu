@@ -4,6 +4,8 @@
 // `timedOut`, never as an absence). Effects go through the injected `client`, so the executor is
 // tested with a scripted one.
 
+import { createHash } from "node:crypto";
+
 import { commitGroups, frameRows } from "./frames.mjs";
 import { createLedger, isDefinitiveRefusal } from "./native-ledger.mjs";
 
@@ -125,6 +127,7 @@ export async function runNative(
   const database = `projects/${project}/databases/(default)`;
   const rows = {};
   const errors = {};
+  const saves = [];
   /** One Commit whose answer is recorded in the ledger as ok or unknown (a definite refusal applied nothing). */
   const commitTracked = async (request) => {
     ledger.sending(request.writes);
@@ -150,6 +153,8 @@ export async function runNative(
     const marks = new Map();
     const timedOut = new Map();
     const tokens = new Map();
+    const provenances = new Map();
+    const resumes = new Map();
     const ctx = { root, run, docs: program.docs ?? {}, tokens };
     const writeOf = (w) =>
       w.delete
@@ -184,8 +189,11 @@ export async function runNative(
             const stream = client.openStream();
             streams.set(step.stream, stream);
             marks.set(step.stream, 0);
-            for (const spec of step.targets)
+            for (const spec of step.targets) {
               stream.send({ database, addTarget: targetFor(spec, ctx) });
+              if (spec.resume !== undefined)
+                resumes.set(step.stream, [...(resumes.get(step.stream) ?? []), spec.resume]);
+            }
             break;
           }
           case "add":
@@ -227,20 +235,99 @@ export async function runNative(
               ...(step.groups ? { groups: commitGroups(frames, { names }) } : {}),
               end: end ? { reason: end.reason, code: end.code ?? null } : null,
               timedOut: timedOut.get(step.stream) === true,
+              // Where the token this stream resumed came from (only a resumed stream has it).
+              ...(resumes.has(step.stream)
+                ? {
+                    resumedFrom: resumes.get(step.stream).map((name) => {
+                      const { kind, token } = provenances.get(name);
+                      return {
+                        name,
+                        kind,
+                        frameIndex: token.frameIndex,
+                        type: token.type,
+                        targetIds: token.targetIds,
+                        sha256: token.sha256,
+                      };
+                    }),
+                  }
+                : {}),
             };
             timedOut.set(step.stream, false);
             break;
           }
           case "save": {
             const frames = streams.get(step.stream).frames;
-            const changes = targetChanges(frames).filter((c) => covers(c, step.id));
+            // The target-change frames that cover the target, each with its index in the stream.
+            const covering = frames
+              .map((frame, index) => ({ frame, index }))
+              .filter(({ frame }) => frame.kind === "targetChange")
+              .map(({ frame, index }) => ({ index, change: frame.targetChange ?? {} }))
+              .filter(({ change }) => covers(change, step.id));
             const saved = {};
-            const withToken = changes.findLast((c) => c.resumeToken);
-            if (withToken) saved.token = asBuffer(withToken.resumeToken);
-            const withTime = changes.findLast((c) => c.readTime);
-            if (withTime) saved.readTime = withTime.readTime;
+            // `kind` picks which token: the CURRENT frame of the target itself, or the last global
+            // boundary (a frame that names no target); without it, the latest that covers the target.
+            const ofKind = {
+              current: (c) =>
+                c.targetChangeType === "CURRENT" && (c.targetIds ?? []).includes(step.id),
+              global: (c) => (c.targetIds ?? []).length === 0,
+            };
+            if (step.kind !== undefined && !Object.hasOwn(ofKind, step.kind))
+              throw new Error(`unknown save kind ${step.kind}`);
+            const withToken = covering
+              .filter(({ change }) => step.kind === undefined || ofKind[step.kind](change))
+              .findLast(({ change }) => change.resumeToken);
+            if (withToken) saved.token = asBuffer(withToken.change.resumeToken);
+            const firstCurrent = covering.find(({ change }) => ofKind.current(change))?.index;
+            const withTime = covering.findLast(({ change }) => change.readTime);
+            if (withTime) saved.readTime = withTime.change.readTime;
+            // Which frame each saved value came from: a recording that varies the kind of token
+            // must say what kind it resumed, not only what it asked for.
+            const identify = ({ index, change }) => ({
+              frameIndex: index,
+              type: change.targetChangeType,
+              targetIds: change.targetIds ?? [],
+            });
+            const provenance = {
+              program: program.id,
+              stream: step.stream,
+              id: step.id,
+              name: step.token ?? null,
+              timeName: step.time ?? null,
+              kind: step.kind ?? "latest",
+              frames: frames.length,
+              token: withToken
+                ? {
+                    ...identify(withToken),
+                    sha256: createHash("sha256").update(saved.token).digest("hex"),
+                    bytes: saved.token.length,
+                  }
+                : null,
+              readTime: withTime
+                ? {
+                    ...identify(withTime),
+                    seconds: withTime.change.readTime.seconds,
+                    nanos: withTime.change.readTime.nanos,
+                  }
+                : null,
+              documentChangesBefore: withToken
+                ? frames.filter((f, i) => f.kind === "documentChange" && i < withToken.index).length
+                : null,
+              // The documents delivered after the target's CURRENT and before the token: the ones
+              // of the initial snapshot are not counted (a token taken at the initial snapshot has 0).
+              documentChangesAfterCurrent:
+                withToken && firstCurrent !== undefined
+                  ? frames.filter(
+                      (f, i) =>
+                        f.kind === "documentChange" && i > firstCurrent && i < withToken.index,
+                    ).length
+                  : null,
+            };
+            saves.push(provenance);
             for (const name of [step.token, step.time])
-              if (name !== undefined) tokens.set(name, saved);
+              if (name !== undefined) {
+                tokens.set(name, saved);
+                provenances.set(name, provenance);
+              }
             break;
           }
           case "close":
@@ -263,5 +350,5 @@ export async function runNative(
       for (const stream of streams.values()) await stream.close();
     }
   }
-  return { rows, errors, requests, issued: ledger.entries() };
+  return { rows, errors, requests, issued: ledger.entries(), saves };
 }

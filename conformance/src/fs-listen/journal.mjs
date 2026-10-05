@@ -70,12 +70,94 @@ export function issuedFromJournal(text) {
 }
 
 /**
+ * What the journal says about each name's create, folded from the `names` lines in order. A
+ * `before` line opens each of its names; the `after` line that names it answers it (`ok`, a
+ * definite `refused`, or `unknown`); a name that is opened again, or never answered (a crash in the
+ * Commit), is answered `unknown`. Per name:
+ *   - an `ok` create confirms it (until a later `ok` delete),
+ *   - an `unknown` create of a name that is not confirmed leaves it `unconfirmed`,
+ *   - a `refused` answer applies nothing,
+ *   - a delete (the recorder's cleanup sends one only after it read the name present) settles an
+ *     unknown create, and an `ok` delete forgets the confirmation,
+ *   - names a `before` line marks `maybe: true` are names the SDK cases may write: no create of
+ *     the recorder's, but a write of unknown outcome unless the journal says otherwise. They stay
+ *     open until a closing line for them: `known` (no write of unknown outcome) closes them,
+ *     `unknown` leaves them unconfirmed, and a journal that ends without one (a crash while the
+ *     driver ran) leaves them unconfirmed. A `known` line is not a confirmation and does nothing
+ *     to any other name.
+ * Returns a Map from name to `{ unconfirmed }`.
+ */
+export function nameStates(text) {
+  const states = new Map();
+  const pending = new Map();
+  const state = (name) => {
+    if (!states.has(name))
+      states.set(name, { confirmed: false, unconfirmed: false, maybeOpen: false });
+    return states.get(name);
+  };
+  const answer = (name, op, outcome) => {
+    const current = state(name);
+    if (op === "create") {
+      if (outcome === "ok") {
+        current.confirmed = true;
+        current.unconfirmed = false;
+        current.maybeOpen = false;
+      } else if (outcome !== "refused" && !current.confirmed) current.unconfirmed = true;
+    } else if (outcome !== "refused") {
+      current.unconfirmed = false;
+      current.maybeOpen = false;
+      if (outcome === "ok") current.confirmed = false;
+    }
+  };
+  for (const line of text.split("\n")) {
+    if (line.trim() === "") continue;
+    let record;
+    try {
+      record = JSON.parse(line);
+    } catch {
+      throw new Error("a journal line cannot be read");
+    }
+    if (record.type !== "names") continue;
+    for (const { name, op } of record.names) {
+      if (record.phase === "before") {
+        // Opened again without an answer: the earlier one is unknown.
+        if (pending.has(name)) answer(name, pending.get(name), "unknown");
+        if (record.maybe === true) {
+          const current = state(name);
+          if (!current.confirmed) current.maybeOpen = true;
+        } else pending.set(name, op);
+      } else if (record.outcome === "known") {
+        // The closing line of a may-exist name: no write of unknown outcome.
+        const current = states.get(name);
+        if (current) current.maybeOpen = false;
+      } else {
+        pending.delete(name);
+        answer(name, op, record.outcome);
+      }
+    }
+  }
+  for (const [name, op] of pending) answer(name, op, "unknown");
+  return new Map(
+    [...states].map(([name, { unconfirmed, maybeOpen }]) => [
+      name,
+      { unconfirmed: unconfirmed || maybeOpen },
+    ]),
+  );
+}
+
+/**
  * The A2 read-back from a journal: every name read with a complete answer, and every account
  * looked up by its uid and by its email. Read-only; it never deletes. `client.missing` and
  * `accountClient.lookup` are the recorder's own readers.
+ *
+ * Absence settles a confirmed create and an unknown delete, and never an unknown create (checklist
+ * section 3): a name or an account whose create the journal leaves unknown and that reads absent is
+ * listed in `unconfirmed` and the read-back is not clean. A name that reads present is listed in
+ * `present` (the read-back is not clean either); nothing is deleted.
  */
 export async function readbackJournal({ text, client, accountClient, now = () => new Date() }) {
   const issued = issuedFromJournal(text);
+  const states = nameStates(text);
   const names = issued.names.length ? await client.missing(issued.names) : [];
   const accounts = [];
   for (const account of issued.accounts) {
@@ -88,12 +170,25 @@ export async function readbackJournal({ text, client, accountClient, now = () =>
   const accountsPresent = accounts.some(
     (a) => (a.foundByEmail ?? []).length > 0 || (a.foundByUid ?? []).length > 0,
   );
+  const unconfirmed = [
+    ...names.filter((n) => !n.exists && states.get(n.name)?.unconfirmed).map((n) => n.name),
+    ...accounts
+      .filter(
+        (a) =>
+          !a.uid &&
+          (a.state === undefined || a.state === "unknown") &&
+          (a.foundByEmail ?? []).length === 0,
+      )
+      .map((a) => `account:${a.email}`),
+  ];
   return {
     run: issued.run.runId,
     readAt: now().toISOString(),
     ended: issued.ended,
     names,
     accounts,
-    clean: !unreadable && present.length === 0 && !accountsPresent,
+    present,
+    unconfirmed,
+    clean: !unreadable && present.length === 0 && !accountsPresent && unconfirmed.length === 0,
   };
 }

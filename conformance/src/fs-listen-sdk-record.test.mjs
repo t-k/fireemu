@@ -4,6 +4,8 @@ import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
 import { test } from "node:test";
 
+import { sdkCases } from "./fs-listen/sdk-cases.mjs";
+
 import {
   conditionsOf,
   issuedSdkNames,
@@ -290,15 +292,7 @@ test("recordSdk: a clean run keeps the receipt's rows and counts, and the cleanu
     thrown: null,
     cleanup: { complete: true },
     teardown: [{ client: "primary", closed: true }],
-    cases: [
-      {
-        caseId: "FS-LISTEN-SDK-101",
-        comparedFields: null,
-        observed: [],
-        failures: [],
-        invariantViolations: [],
-      },
-    ],
+    cases: completeCases(),
     ...extra,
   });
   const native = (stillPresent = false) => ({
@@ -335,7 +329,10 @@ test("recordSdk: a clean run keeps the receipt's rows and counts, and the cleanu
     assert.equal(clean.connections, 3);
     assert.equal(clean.kind, "sdk");
     assert.equal(clean.version, 1);
-    assert.deepEqual(Object.keys(clean.rows), ["sdk/101"]);
+    assert.deepEqual(
+      Object.keys(clean.rows),
+      sdkCases().map((c) => `sdk/${c.caseId.replace("FS-LISTEN-SDK-", "")}`),
+    );
     assert.deepEqual(clean.errors, {});
     assert.equal(clean.cleanup.complete, true);
     assert.equal(clean.cleanup.clientsClosed, true);
@@ -975,15 +972,7 @@ test("recordSdk: a case whose step threw makes the cleanup incomplete even when 
     thrown: null,
     cleanup: { complete: true },
     teardown: [{ client: "primary", closed: true }],
-    cases: [
-      {
-        caseId: "FS-LISTEN-SDK-101",
-        comparedFields: null,
-        observed: [],
-        failures,
-        invariantViolations: [],
-      },
-    ],
+    cases: completeCases(failures),
   });
   const clean = await recordWith(target, {
     driver: { receipt: receipt([]), wire: 1, connections: 1 },
@@ -1003,8 +992,18 @@ const PROD = {
   token: "TOK",
   web: { apiKey: "k", authDomain: "d", projectId: "fireemu-oracle-query" },
 };
+/** One record per case of the catalog, as a complete driver receipt carries; `firstFailures` is the first case's. */
+const completeCases = (firstFailures = []) =>
+  sdkCases().map((c, i) => ({
+    caseId: c.caseId,
+    comparedFields: null,
+    observed: [],
+    failures: i === 0 ? firstFailures : [],
+    invariantViolations: [],
+  }));
+
 const OKDRIVER = {
-  receipt: { thrown: null, cleanup: { complete: true }, teardown: [], cases: [] },
+  receipt: { thrown: null, cleanup: { complete: true }, teardown: [], cases: completeCases() },
   wire: 5,
   connections: 1,
 };
@@ -1237,4 +1236,277 @@ test("the journaled names are marked as to be created, before the driver, with t
   const names = lines.find((line) => line.type === "names");
   assert.equal(names.phase, "before");
   assert.ok(names.names.every((entry) => entry.op === "create"));
+  // These are names the SDK cases may write, not creates the recorder sent: the A2 read-back
+  // must not read a missing answer line as an unknown create.
+  assert.equal(names.maybe, true);
+});
+
+// ---- the A2 read-back of an SDK run whose writes are not known ----
+
+/** Runs recordSdk with a fake accounts API and returns the journal lines it wrote. */
+async function sdkJournal(runDriverImpl) {
+  const lines = [];
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = async (url, init) => ({
+    status: 200,
+    json: async () =>
+      url.endsWith("/accounts") ? { localId: `u-${JSON.parse(init.body).email}` } : {},
+  });
+  try {
+    await recordSdk({
+      target: PROD,
+      run: "r1",
+      journal: { append: (record) => lines.push(record), close() {} },
+      preflightImpl: async () => {},
+      runDriverImpl,
+      makeNative: () => emptyNative(),
+    });
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+  return lines;
+}
+
+const a2 = async (lines) => {
+  const { readbackJournal } = await import("./fs-listen/journal.mjs");
+  const text = [{ type: "run", runId: "r1", kind: "sdk", project: "p", envelopeId: "E" }, ...lines]
+    .map((line) => JSON.stringify(line))
+    .join("\n");
+  return readbackJournal({
+    text,
+    client: { missing: async (names) => names.map((name) => ({ name, exists: false })) },
+    accountClient: { lookup: async () => [] },
+  });
+};
+
+const THREW = {
+  receipt: {
+    thrown: null,
+    cleanup: { complete: true },
+    teardown: [{ client: "primary", closed: true }],
+    cases: [
+      {
+        caseId: "FS-LISTEN-SDK-101",
+        comparedFields: null,
+        observed: [],
+        failures: ["step-threw:unavailable"],
+        invariantViolations: [],
+      },
+    ],
+  },
+  wire: 5,
+  connections: 1,
+};
+
+test("an SDK run whose writes are not known cannot be settled at A2 by finding its names absent: they are unconfirmed", async () => {
+  const lines = await sdkJournal(async () => THREW);
+  const after = lines.find((line) => line.type === "names" && line.phase === "after");
+  assert.equal(after.outcome, "unknown");
+  assert.notEqual(after.maybe, true);
+  const before = lines.find((line) => line.type === "names" && line.phase === "before");
+  assert.deepEqual(after.names, before.names, "every name the cases may have written");
+  assert.ok(after.names.length > 0 && after.names.every((n) => n.op === "create"));
+  assert.ok(lines.indexOf(after) < lines.findIndex((l) => l.type === "end"), "before the end line");
+  const report = await a2(lines);
+  assert.equal(report.clean, false);
+  assert.deepEqual(report.unconfirmed.toSorted(), before.names.map((n) => n.name).toSorted());
+});
+
+test("an SDK run whose driver died without a receipt, or threw, is just as unknown", async () => {
+  const dead = await sdkJournal(async () => {
+    throw new Error("driver died");
+  });
+  assert.equal(dead.filter((l) => l.type === "names" && l.phase === "after").length, 1);
+  assert.equal((await a2(dead)).clean, false);
+  const noReceipt = await sdkJournal(async () => ({ wire: 1, connections: 1 }));
+  assert.equal(noReceipt.filter((l) => l.type === "names" && l.phase === "after").length, 1);
+  assert.equal((await a2(noReceipt)).clean, false);
+});
+
+test("an SDK run whose writes are all known closes its may-exist names with a known line, and settles at A2 when they are absent", async () => {
+  const lines = await sdkJournal(async () => OKDRIVER);
+  const before = lines.find((l) => l.type === "names" && l.phase === "before");
+  const closing = lines.filter((l) => l.type === "names" && l.phase === "after");
+  assert.equal(closing.length, 1);
+  assert.equal(closing[0].outcome, "known");
+  assert.deepEqual(closing[0].names, before.names);
+  assert.ok(lines.indexOf(closing[0]) < lines.findIndex((l) => l.type === "end"));
+  const report = await a2(lines);
+  assert.equal(report.clean, true);
+  assert.deepEqual(report.unconfirmed, []);
+  // The same run cut after the may-exist line (the recorder killed while the driver ran) is unconfirmed.
+  const cut = lines.slice(0, lines.indexOf(before) + 1);
+  const crashed = await a2(cut);
+  assert.equal(crashed.clean, false);
+  assert.deepEqual(crashed.unconfirmed.toSorted(), before.names.map((n) => n.name).toSorted());
+});
+
+test("an SDK run that stops before any name is journaled journals no answer for names either", async () => {
+  const lines = [];
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = async () => ({ status: 400, json: async () => ({}) });
+  try {
+    await recordSdk({
+      target: PROD,
+      run: "r1",
+      journal: { append: (record) => lines.push(record), close() {} },
+      preflightImpl: async () => {},
+      runDriverImpl: async () => OKDRIVER,
+      makeNative: () => emptyNative(),
+    });
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+  assert.equal(lines.filter((l) => l.type === "names").length, 0);
+});
+
+test("writesKnown needs a receipt, no thrown value, every case of the catalog recorded, and no step that threw", async () => {
+  const full = (patch = {}) => ({
+    receipt: {
+      thrown: null,
+      cleanup: { complete: true },
+      teardown: [{ client: "primary", closed: true }],
+      cases: completeCases(),
+      ...patch,
+    },
+    wire: 5,
+    connections: 1,
+  });
+  const known = async (driver) =>
+    (await sdkJournal(async () => driver)).findLast(
+      (l) => l.type === "names" && l.phase === "after",
+    );
+  assert.equal((await known(full())).outcome, "known");
+  // The driver or the collector threw: a case that threw after its steps loses its record and its step-threw.
+  assert.equal((await known(full({ thrown: "unsubscribe-failed" }))).outcome, "unknown");
+  // One case record missing, with nothing recorded as thrown.
+  const missing = completeCases().slice(1);
+  assert.equal((await known(full({ cases: missing }))).outcome, "unknown");
+  // Too many records is no better than too few.
+  assert.equal(
+    (await known(full({ cases: [...completeCases(), completeCases()[0]] }))).outcome,
+    "unknown",
+  );
+  // A step that threw.
+  const threw = completeCases();
+  threw[3].failures = ["step-threw:unavailable"];
+  assert.equal((await known(full({ cases: threw }))).outcome, "unknown");
+  // And the recording says the same: writesKnown false, cleanup incomplete.
+  for (const patch of [{ thrown: "x" }, { cases: missing }]) {
+    const { recording } = await recordWith(PROD, { driver: full(patch) });
+    assert.equal(recording.cleanup.writesKnown, false);
+    assert.equal(recording.cleanup.complete, false);
+  }
+  const { recording } = await recordWith(PROD, { driver: full() });
+  assert.equal(recording.cleanup.writesKnown, true);
+});
+
+test("a receipt that is malformed fails closed without throwing: the names close unknown, the accounts are still cleaned up and a recording is returned", async () => {
+  for (const receipt of [
+    { thrown: null },
+    { thrown: null, cases: "none", teardown: [], cleanup: { complete: true } },
+    { thrown: null, cases: [{ caseId: "FS-LISTEN-SDK-101" }], teardown: [], cleanup: {} },
+  ]) {
+    const lines = [];
+    const urls = [];
+    const realFetch = globalThis.fetch;
+    globalThis.fetch = async (url, init) => {
+      urls.push(url);
+      return {
+        status: 200,
+        json: async () =>
+          url.endsWith("/accounts") ? { localId: `u-${JSON.parse(init.body).email}` } : {},
+      };
+    };
+    let recording;
+    try {
+      recording = await recordSdk({
+        target: PROD,
+        run: "r1",
+        journal: { append: (record) => lines.push(record), close() {} },
+        preflightImpl: async () => {},
+        runDriverImpl: async () => ({ receipt, wire: 1, connections: 1 }),
+        makeNative: () => emptyNative(),
+      });
+    } finally {
+      globalThis.fetch = realFetch;
+    }
+    const closing = lines.findLast((l) => l.type === "names" && l.phase === "after");
+    assert.equal(closing.outcome, "unknown", JSON.stringify(receipt));
+    assert.equal(recording.cleanup.writesKnown, false);
+    assert.equal(recording.cleanup.complete, false);
+    assert.ok(
+      urls.some((u) => u.includes("accounts:delete")),
+      "the accounts were deleted",
+    );
+    assert.equal((await a2(lines)).clean, false);
+  }
+});
+
+test("the cases of a receipt must be the catalog's, each once: the right count with a duplicate and a missing case is unknown", async () => {
+  const records = completeCases();
+  const duplicated = [...records.slice(0, -1), records[0]];
+  const closing = async (cases) =>
+    (
+      await sdkJournal(async () => ({ ...OKDRIVER, receipt: { ...OKDRIVER.receipt, cases } }))
+    ).findLast((l) => l.type === "names" && l.phase === "after");
+  assert.equal(duplicated.length, records.length);
+  assert.equal((await closing(duplicated)).outcome, "unknown");
+  assert.equal((await closing(records)).outcome, "known");
+  // The same cases in another order are the same cases.
+  assert.equal((await closing(records.toReversed())).outcome, "known");
+  // A record without a failures list says nothing about its steps: unknown.
+  const noFailures = completeCases();
+  delete noFailures[2].failures;
+  assert.equal((await closing(noFailures)).outcome, "unknown");
+});
+
+test("any thrown value that is not null makes the writes unknown, the empty string included", async () => {
+  const closing = async (thrown) =>
+    (
+      await sdkJournal(async () => ({ ...OKDRIVER, receipt: { ...OKDRIVER.receipt, thrown } }))
+    ).findLast((l) => l.type === "names" && l.phase === "after");
+  assert.equal((await closing("")).outcome, "unknown");
+  assert.equal((await closing("x")).outcome, "unknown");
+  assert.equal((await closing(0)).outcome, "unknown");
+  assert.equal((await closing(null)).outcome, "known");
+  assert.equal((await closing(undefined)).outcome, "known");
+  // The recording names the thrown value, also when it is empty.
+  const { recording } = await recordWith(PROD, {
+    driver: { ...OKDRIVER, receipt: { ...OKDRIVER.receipt, thrown: "" } },
+  });
+  assert.equal(recording.errors["sdk/driver"], "");
+});
+
+test("rowsFromReceipt keeps what a record says, skips a record that is not one, and fills in nothing it was not told", () => {
+  const rows = rowsFromReceipt({
+    cases: [
+      {
+        caseId: "FS-LISTEN-SDK-101",
+        comparedFields: null,
+        observed: [{ a: 1 }],
+        failures: ["step-timeout"],
+        invariantViolations: ["order"],
+      },
+      { caseId: "FS-LISTEN-SDK-102" },
+      null,
+      { observed: [] },
+      { caseId: 7 },
+    ],
+  });
+  assert.deepEqual(Object.keys(rows), ["sdk/101", "sdk/102"]);
+  assert.deepEqual(rows["sdk/101"].invariantViolations, ["order"]);
+  assert.deepEqual(rows["sdk/101"].failures, ["step-timeout"]);
+  assert.deepEqual(rows["sdk/101"].observed, [{ a: 1 }]);
+  assert.equal(rows["sdk/101"].timedOut, true);
+  assert.deepEqual(rows["sdk/102"], {
+    conditions: rows["sdk/102"].conditions,
+    observed: [],
+    failures: [],
+    invariantViolations: [],
+    end: null,
+    timedOut: false,
+  });
+  assert.deepEqual(rowsFromReceipt({}), {});
+  assert.deepEqual(rowsFromReceipt(undefined), {});
 });

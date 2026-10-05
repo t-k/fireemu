@@ -476,3 +476,20 @@ test("the programs ask for target id 0 twice on one stream, beside an explicit i
   assert.equal(zeros.length, 2);
   assert.ok(steps.some((s) => s.target?.id === 7));
 });
+
+test("programProblems: a save names a known kind of token or none", () => {
+  const open = { do: "open", stream: "s", targets: [{ id: 1, doc: "a" }] };
+  const close = { do: "close", stream: "s" };
+  for (const kind of [undefined, "current", "global"])
+    assert.deepEqual(
+      problemsOf(prog([open, { do: "save", stream: "s", id: 1, token: "t", ...(kind ? { kind } : {}) }, close])),
+      [],
+      String(kind),
+    );
+  for (const kind of ["latest", "", "Global", null])
+    assert.match(
+      problemsOf(prog([open, { do: "save", stream: "s", id: 1, token: "t", kind }, close])).join(),
+      /unknown save kind/,
+      String(kind),
+    );
+});

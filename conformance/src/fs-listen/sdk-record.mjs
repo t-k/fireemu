@@ -12,7 +12,7 @@ import { createAccountClient, createAccountSession } from "./accounts.mjs";
 import { NULL_JOURNAL } from "./journal.mjs";
 import { createNativeClient } from "./native-client.mjs";
 import { createLedger, settleNames } from "./native-ledger.mjs";
-import { OWNER_COLLECTION, PUBLIC_COLLECTION } from "./sdk-cases.mjs";
+import { OWNER_COLLECTION, PUBLIC_COLLECTION, sdkCases } from "./sdk-cases.mjs";
 
 const DRIVER = fileURLToPath(new URL("./sdk-driver.mjs", import.meta.url));
 const WIRE_CAP = 1500;
@@ -126,14 +126,22 @@ export function projectEvent(event, comparedFields) {
 /** The rows of a recording, from the driver's receipt. */
 export function rowsFromReceipt(receipt) {
   const rows = {};
-  for (const record of receipt.cases) {
+  const cases = Array.isArray(receipt?.cases) ? receipt.cases : [];
+  for (const record of cases) {
+    // A record that is not shaped like one says nothing: no row (the writes are then not known).
+    if (typeof record?.caseId !== "string") continue;
+    const failures = Array.isArray(record.failures) ? record.failures : [];
     rows[`sdk/${record.caseId.replace("FS-LISTEN-SDK-", "")}`] = {
       conditions: conditionsOf(record.caseId),
-      observed: record.observed.map((event) => projectEvent(event, record.comparedFields)),
-      failures: record.failures,
-      invariantViolations: record.invariantViolations,
+      observed: (Array.isArray(record.observed) ? record.observed : []).map((event) =>
+        projectEvent(event, record.comparedFields),
+      ),
+      failures,
+      invariantViolations: Array.isArray(record.invariantViolations)
+        ? record.invariantViolations
+        : [],
       end: null,
-      timedOut: ranOut(record.failures),
+      timedOut: ranOut(failures),
     };
   }
   return rows;
@@ -212,6 +220,25 @@ export async function sweepDocuments({ client, project, run, accounts }) {
   return settleNames({ issued: ledger.entries(), client, root, run });
 }
 
+/**
+ * Whether no write of the run has an unknown outcome: the driver left a receipt, nothing was thrown
+ * (a case that throws after its steps loses its whole record, and the step-threw with it; the
+ * empty string is a thrown value too), the receipt carries exactly the catalog's cases, each once,
+ * every record says what its steps did, and no case recorded a step that threw. A receipt that is
+ * not shaped like that is not a receipt of known writes, and is not an error either.
+ */
+export const writesAreKnown = (receipt, expectedIds = sdkCases().map((c) => c.caseId)) =>
+  Boolean(receipt) &&
+  receipt.thrown == null &&
+  Array.isArray(receipt.cases) &&
+  receipt.cases.every((record) => Array.isArray(record?.failures)) &&
+  receipt.cases.length === expectedIds.length &&
+  receipt.cases
+    .map((record) => record.caseId)
+    .toSorted()
+    .join("\n") === expectedIds.toSorted().join("\n") &&
+  !unknownWrites(receipt);
+
 /** Whether any case recorded a step that threw: a write or delete whose outcome is then unknown. */
 export const unknownWrites = (receipt) =>
   receipt.cases.some((record) =>
@@ -272,6 +299,7 @@ export async function recordSdk({
   let accounts = {};
   let outcome;
   let confListenBefore;
+  let journaledNames;
   const root = `projects/${target.project}/databases/(default)/documents`;
   try {
     // Ledger 330: the query cases read conf_listen as empty before the run; if it is not, stop
@@ -287,14 +315,14 @@ export async function recordSdk({
     }
     accounts = await session.create(["a", "b"]);
     log("accounts created");
-    journal.append({
-      type: "names",
-      phase: "before",
-      names: issuedSdkNames({ project: target.project, run, accounts }).map((name) => ({
-        name,
-        op: "create",
-      })),
-    });
+    // Names the cases may write: marked `maybe` so that the A2 read-back does not read the missing
+    // answer line as an unknown create. A run whose writes turn out not to be known gets its answer
+    // line (unknown) below.
+    journaledNames = issuedSdkNames({ project: target.project, run, accounts }).map((name) => ({
+      name,
+      op: "create",
+    }));
+    journal.append({ type: "names", phase: "before", maybe: true, names: journaledNames });
     const config = {
       mode: production ? "production" : "local",
       wireCap: WIRE_CAP,
@@ -310,6 +338,19 @@ export async function recordSdk({
     errors["sdk/run"] = String(error?.message ?? error);
     wire = error?.wire ?? 0;
   }
+  // A write that threw has an unknown outcome, which a read that finds nothing cannot settle; so
+  // has any write of a driver that left no receipt, threw, or lost a case record. The names the
+  // cases may have written are closed with `known` when no write is of unknown outcome and with
+  // `unknown` otherwise; a journal that ends without either leaves them unconfirmed at A2.
+  const receipt = outcome?.receipt;
+  const writesKnown = writesAreKnown(receipt);
+  if (journaledNames)
+    journal.append({
+      type: "names",
+      phase: "after",
+      outcome: writesKnown ? "known" : "unknown",
+      names: journaledNames,
+    });
   let documents;
   try {
     documents = await sweepDocuments({ client: native, project: target.project, run, accounts });
@@ -333,11 +374,8 @@ export async function recordSdk({
   } catch (error) {
     accountReport = { complete: false, error: String(error?.message ?? error) };
   }
-  const receipt = outcome?.receipt;
-  if (receipt?.thrown) errors["sdk/driver"] = String(receipt.thrown);
-  const clientsClosed = receipt ? receipt.teardown.every((t) => t.closed) : false;
-  // A write that threw has an unknown outcome, which a read that finds nothing cannot settle.
-  const writesKnown = receipt ? !unknownWrites(receipt) : false;
+  if (receipt?.thrown != null) errors["sdk/driver"] = String(receipt.thrown);
+  const clientsClosed = Array.isArray(receipt?.teardown) && receipt.teardown.every((t) => t.closed);
   const total = productionRequests();
   journal.append({ type: "end", productionRequests: total });
   return {
@@ -361,7 +399,7 @@ export async function recordSdk({
         clientsClosed &&
         writesKnown,
       writesKnown,
-      sdk: receipt ? { complete: receipt.cleanup.complete } : null,
+      sdk: receipt ? { complete: Boolean(receipt.cleanup?.complete) } : null,
       documents,
       accounts: accountReport,
       clientsClosed,

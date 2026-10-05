@@ -23,14 +23,29 @@ const PREFIX = `fe${RUN}-`;
 const PARENT = `projects/${PROJECT}/locations/us-central1`;
 
 /** One case through the real runner against the model, with its ceiling lifted. */
-async function runOne(item, worldOptions = {}, { wrap = (request) => request, log = [] } = {}) {
+async function runOne(
+  item,
+  worldOptions = {},
+  { wrap = (request) => request, log = [], onCleanup = () => {} } = {},
+) {
   const sleeps = [];
   const world = createWorld({ project: PROJECT, ...worldOptions });
   const ownership = createOwnership({ project: PROJECT, runId: RUN });
   const ledger = createLedger();
   const notes = [];
   const capture = createCapture({ journal: { write: (line) => notes.push(line) } });
-  const transport = { name: "rest", request: wrap((call) => world.request(call), world) };
+  let cleaning = false;
+  const inner = wrap((call) => world.request(call), world);
+  const transport = {
+    name: "rest",
+    request: (call) => {
+      if (!cleaning && call.label?.case === "cleanup") {
+        cleaning = true;
+        onCleanup(ledger);
+      }
+      return inner(call);
+    },
+  };
   const cleanupClient = createClient({
     transports: { eventarc: transport },
     ownership,
@@ -549,15 +564,23 @@ test("channel-busy: a second deletion is sent only after a 2xx that names its op
   );
 });
 
-test("channel-ids: a variant the service accepts is settled for both names by its own operation", async () => {
-  const { ledger } = await runOne(channelIds, {
-    acceptAnyId: true,
-    acceptVariants: true,
-    doneAfter: 2,
-  });
+test("channel-ids: a variant the service accepts is settled for both names by its own operation, before any cleanup", async () => {
+  // The ledger at the moment the cleanup starts: the case itself has settled both names (the cleanup would
+  // otherwise settle a creation that is still pending, by reading its operation).
+  let atCleanup = null;
+  await runOne(
+    channelIds,
+    { acceptAnyId: true, acceptVariants: true, doneAfter: 2 },
+    {
+      onCleanup: (ledger) => {
+        atCleanup = new Map([...ledger.state()].map(([name, item]) => [name, [...item.creates]]));
+      },
+    },
+  );
+  assert.ok(atCleanup, "the cleanup started");
   for (const key of ["mm-a", "mm-b"]) {
     const name = `${PARENT}/channels/${PREFIX}id-${key}`;
-    const kinds = ledger.state().get(name)?.creates ?? [];
+    const kinds = atCleanup.get(name) ?? [];
     assert.ok(
       kinds.some((kind) => kind.startsWith("ok@")),
       `${name}: ${kinds.join()}`,

@@ -80,6 +80,7 @@ async fn start_in(profile: Option<FunctionsHttpProfile>, project: &str) -> Liste
             overlap: fireemu_adapter_functions::runtime::OverlapPolicy::Allow,
             catch_up: fireemu_adapter_functions::runtime::CatchUpPolicy::All,
             functions_host: None,
+            subscription_naming: fireemu_adapter_functions::events::SubscriptionNaming::default(),
         },
         Arc::new(Mutex::new(VirtualClock::new(START))),
         Arc::new(runner),

@@ -112,12 +112,12 @@ export function createWorld({
     if (channels.has(name)) {
       if (duplicate === "409")
         return reply(409, { error: { code: 409, status: "ALREADY_EXISTS", message: "already exists" } });
-      return reply(200, operation(parent[0], { error: { code: 6, message: "already exists" } }));
+      return reply(200, operation(`projects/${parent[1]}/locations/${parent[2]}`, { error: { code: 6, message: "already exists" } }));
     }
     if (createAnswer === "unknown-absent") return { status: 503, body: {}, unknown: true };
     if (createAnswer !== "invisible") channels.set(name, { createTime: "2026-10-05T00:00:00Z" });
     if (createAnswer === "unknown-appears") return { status: 503, body: {}, unknown: true };
-    return reply(200, operation(parent[0], {}));
+    return reply(200, operation(`projects/${parent[1]}/locations/${parent[2]}`, {}));
   };
   const publish = (call, name) => {
     const events = call.body?.events;

@@ -4,6 +4,7 @@
 // accepted `{}` hid it for three review rounds.
 
 import assert from "node:assert/strict";
+import { createRequire } from "node:module";
 import test from "node:test";
 import { createCapture } from "./pubsub-production/capture.mjs";
 import { createLedger } from "./pubsub-production/ledger.mjs";
@@ -150,4 +151,75 @@ test("every write the recorder can build is checked: the creation's body is the 
     ],
   );
   assert.deepEqual(world.refusals, []);
+});
+
+// The request firebase-tools 15.28.2 builds, taken from its own module: `lib/gcp/eventarc.js` is run with
+// the HTTP client's methods replaced by recorders, so that nothing is sent and nothing is copied by hand.
+async function officialRequests(fn) {
+  const require = createRequire(import.meta.url);
+  const eventarc = require("firebase-tools/lib/gcp/eventarc");
+  const { Client } = require("firebase-tools/lib/apiv2");
+  const seen = [];
+  const original = { post: Client.prototype.post, get: Client.prototype.get, delete: Client.prototype.delete };
+  Client.prototype.post = async function (path, body, options) {
+    seen.push({ method: "POST", path, body, query: options?.queryParams });
+    return { body: {} };
+  };
+  Client.prototype.get = async function (path) {
+    seen.push({ method: "GET", path });
+    return { status: 200, body: {} };
+  };
+  Client.prototype.delete = async function (path) {
+    seen.push({ method: "DELETE", path });
+    return { body: {} };
+  };
+  try {
+    await fn(eventarc);
+  } finally {
+    Object.assign(Client.prototype, original);
+  }
+  return seen;
+}
+
+test("differential: the creation, the read and the deletion are the requests firebase-tools 15.28.2 builds, for any project, location and channel ID", async () => {
+  let seed = 19;
+  const next = (n) => {
+    seed = (seed * 1103515245 + 12345) & 0x7fffffff;
+    return seed % n;
+  };
+  const pick = (alphabet, length) =>
+    Array.from({ length }, () => alphabet[next(alphabet.length)]).join("");
+  for (let round = 0; round < 60; round += 1) {
+    const project = `p${pick("abcdefghij0123456789-", 6 + next(10))}x`;
+    const location = ["us-central1", "europe-west1", "asia-east1", "-"][next(4)];
+    const id = `fe${RUN}-${pick("abcdefghijklmnopqrstuvwxyz0123456789-", 1 + next(30))}`;
+    const full = `projects/${project}/locations/${location}/channels/${id}`;
+    const official = await officialRequests(async (eventarc) => {
+      await eventarc.createChannel({ name: full });
+      await eventarc.getChannel(full);
+      await eventarc.deleteChannel(full);
+    });
+    const sent = [];
+    const transport = {
+      name: "rest",
+      request: async (call) => (sent.push(call), { status: 200, body: {}, unknown: false }),
+    };
+    const ownership = createOwnership({ project, runId: RUN });
+    ownership.registerProbe(full, { listable: false });
+    const client = createClient({
+      transports: { eventarc: transport },
+      ownership,
+      caseId: "differential",
+      usageProject: project,
+      ledger: createLedger(),
+    });
+    await client.createChannel(project, location, id);
+    await client.getChannel(full);
+    await client.deleteChannel(full);
+    assert.deepEqual(
+      sent.map((call) => ({ method: call.method, path: call.path.split("?")[0].replace(/^\/v1\//, ""), query: call.path.includes("?") ? Object.fromEntries(new URLSearchParams(call.path.split("?")[1])) : undefined, body: call.body })),
+      official.map((call) => ({ method: call.method, path: call.path.replace(/^\//, ""), query: call.query, body: call.body })),
+      full,
+    );
+  }
 });

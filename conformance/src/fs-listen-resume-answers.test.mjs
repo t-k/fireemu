@@ -361,3 +361,99 @@ test("the command prints the table of two runs, of one run twice when given one,
   const three = runCli({ a }, (f) => [f.a, f.a, f.a]);
   assert.equal(three.code, 2);
 });
+
+test("the answer kinds are exactly these nine", () => {
+  assert.deepEqual(ANSWER_KINDS, [
+    "empty",
+    "filter-only",
+    "replay",
+    "diff",
+    "diff+filter",
+    "mixed",
+    "reset",
+    "removed",
+    "unfinished",
+  ]);
+});
+
+test("answerKind: documentRemove is a document; only the boundary right after the ADD is set aside", () => {
+  const dropped = { kind: "documentRemove", doc: "a", removedTargetIds: [1] };
+  assert.equal(kind([add, bnd, dropped, bnd, current, bnd]), "replay");
+  assert.equal(kind([add, bnd, dropped, current, bnd]), "diff");
+  // A segment that starts with a document (no boundary after the ADD): nothing is set aside.
+  assert.equal(kind([add, doc("a"), bnd, current, bnd]), "replay");
+  assert.equal(kind([add, doc("a"), current, bnd]), "diff");
+  assert.equal(kind([add, filter(1), current, bnd]), "filter-only");
+  assert.equal(kind([add, current, bnd]), "empty");
+  // A second boundary at the start is a boundary of the segment, before any document: it changes nothing.
+  assert.equal(kind([add, bnd, bnd, doc("a"), bnd, current, bnd]), "replay");
+  assert.equal(kind([add, bnd, bnd, doc("a"), current, bnd]), "diff");
+  assert.equal(kind([add, bnd, bnd, current, bnd]), "empty");
+  // A boundary between a document and the next, with the first boundary being the one set aside.
+  assert.equal(kind([add, bnd, doc("a"), bnd, bnd, doc("b"), bnd, current]), "replay");
+  // The segment ends at the first CURRENT; a CURRENT before the ADD is no answer.
+  assert.equal(kind([current, add, bnd, doc("a"), bnd]), "unfinished");
+  assert.equal(kind([add, bnd, doc("a"), bnd, current, doc("z"), current]), "replay");
+});
+
+test("renderAnswerTable prints exactly this table", () => {
+  const replayRow = row([add, bnd, doc("a"), bnd, current, bnd]);
+  const diffRow = row([add, bnd, doc("a"), doc("b"), filter(2), current, bnd]);
+  const text = renderAnswerTable(
+    recording({
+      "native/resume-grid-g0/k0": replayRow,
+      "native/resume-grid-tc/k0": diffRow,
+      "native/resume-grid-gc/k3": diffRow,
+      "native/resume-age/age-30s-k1": replayRow,
+      "native/resume-kinds/leave": diffRow,
+    }),
+    recording({
+      "native/resume-grid-g0/k0": replayRow,
+      "native/resume-grid-tc/k0": replayRow,
+      "native/resume-grid-gc/k3": diffRow,
+      "native/resume-age/age-30s-k1": replayRow,
+    }),
+  );
+  assert.equal(
+    text,
+    [
+      "| row | g0 | tc | gc |",
+      "|---|---|---|---|",
+      "| first | - | - | - |",
+      "| k0 | replay | diff+filter / replay (runs differ) | - |",
+      "| k1 | - | - | - |",
+      "| k1-repeat | - | - | - |",
+      "| k1-expected | - | - | - |",
+      "| k2 | - | - | - |",
+      "| k2-expected | - | - | - |",
+      "| k2-wrong | - | - | - |",
+      "| k3 | - | - | diff+filter |",
+      "",
+      "| row | answer |",
+      "|---|---|",
+      "| native/resume-age/age-30s-k1 | replay |",
+      "| native/resume-kinds/leave | diff+filter / - (runs differ) |",
+    ].join("\n"),
+  );
+});
+
+test("a command refusal names every problem of a recording, separated by semicolons; importing the module runs nothing", () => {
+  const bad = {
+    version: 1,
+    kind: "native",
+    cleanup: { complete: false },
+    errors: { "sdk/x": "boom" },
+    rows: {},
+  };
+  const out = runCli({ bad }, (f) => [f.bad]);
+  assert.equal(out.code, 2);
+  assert.match(out.stderr, /a recording is not clean: cleanup was not complete; sdk\/x: boom/);
+  const imported = spawnSync(
+    process.execPath,
+    ["--input-type=module", "-e", `await import(${JSON.stringify(CLI)})`],
+    { encoding: "utf8", env: { ...process.env, NODE_OPTIONS: "" } },
+  );
+  assert.equal(imported.status, 0, imported.stderr);
+  assert.equal(imported.stderr, "");
+  assert.equal(imported.stdout, "");
+});

@@ -67,7 +67,16 @@ test("each grid resumes one saved token at 0, 1, 1 (again), 1, 2, 2, 2 and 3 com
     const saves = program.steps.filter((s) => s.do === "save");
     assert.equal(saves.length, 1, id);
     const token = saves[0].token;
-    for (const name of ["k0", "k1", "k1-repeat", "k1-expected", "k2", "k2-expected", "k2-wrong", "k3"])
+    for (const name of [
+      "k0",
+      "k1",
+      "k1-repeat",
+      "k1-expected",
+      "k2",
+      "k2-expected",
+      "k2-wrong",
+      "k3",
+    ])
       assert.equal(at(name).target.resume, token, `${id}/${name}`);
     // The expected count: absent, or the 3 documents the query holds, or a wrong 4.
     for (const name of ["k0", "k1", "k1-repeat", "k2", "k3"])
@@ -107,7 +116,12 @@ test("the three grids differ only in the token: the CURRENT frame's, the global 
   // Only the "after a change" grid writes and waits for the change before it saves.
   const before = (id) => {
     const steps = byId(id).steps;
-    return steps.slice(0, steps.findIndex((s) => s.do === "save")).map((s) => s.do);
+    return steps
+      .slice(
+        0,
+        steps.findIndex((s) => s.do === "save"),
+      )
+      .map((s) => s.do);
   };
   assert.ok(!before("native/resume-grid-g0").includes("write"));
   assert.ok(!before("native/resume-grid-tc").includes("write"));
@@ -122,10 +136,7 @@ test("the three grids differ only in the token: the CURRENT frame's, the global 
       .steps.filter((s) => !(s.do === "save"))
       .map((s) => s.do);
   assert.equal(strip("native/resume-grid-gc").length, strip("native/resume-grid-g0").length + 2);
-  assert.deepEqual(
-    strip("native/resume-grid-tc"),
-    strip("native/resume-grid-g0"),
-  );
+  assert.deepEqual(strip("native/resume-grid-tc"), strip("native/resume-grid-g0"));
 });
 
 test("the change-kinds program resumes after exactly one change each: modify, enter, leave and delete, each from the token of the stream before", () => {
@@ -138,7 +149,8 @@ test("the change-kinds program resumes after exactly one change each: modify, en
   kinds.forEach((kind, i) => {
     assert.equal(row(kind).target.resume, saves[i].token, kind);
     assert.equal(row(kind).target.expectedCount, undefined, kind);
-    const from = i === 0 ? program.steps.findIndex((s) => s === saves[0]) : program.steps.indexOf(saves[i]);
+    const from =
+      i === 0 ? program.steps.findIndex((s) => s === saves[0]) : program.steps.indexOf(saves[i]);
     // One change between the save the resume uses and the record of its row.
     const changes = program.steps
       .slice(program.steps.indexOf(saves[i]), row(kind).index)
@@ -212,7 +224,11 @@ function scriptedClient() {
             { kind: "documentChange", documentChange: { document: { name: "x" } } },
             {
               kind: "targetChange",
-              targetChange: { targetChangeType: "NO_CHANGE", targetIds: [], resumeToken: token("G") },
+              targetChange: {
+                targetChangeType: "NO_CHANGE",
+                targetIds: [],
+                resumeToken: token("G"),
+              },
             },
           );
         return {};
@@ -280,7 +296,8 @@ test("run against a scripted client: every resume sends the token of its program
   const resumes = sent.filter((target) => target.resumeToken);
   assert.equal(resumes.length, 3 * 8 + 4 + 3);
   const text = (target) => target.resumeToken.toString();
-  const grid = (g) => resumes.filter((t) => t.query?.structuredQuery.where.fieldFilter.value.stringValue === g);
+  const grid = (g) =>
+    resumes.filter((t) => t.query?.structuredQuery.where.fieldFilter.value.stringValue === g);
   assert.ok(grid("tc").every((t) => text(t).startsWith("C")));
   assert.ok(grid("g0").every((t) => text(t).startsWith("G")));
   assert.ok(grid("gc").every((t) => text(t).startsWith("G")));
@@ -294,4 +311,253 @@ test("run against a scripted client: every resume sends the token of its program
 
 test("the resume-variant request count is far under the ceiling a production recording of them is held to", () => {
   assert.equal(RESUME_VARIANT_REQUEST_CEILING, 90);
+});
+
+// ---- the meaning of the programs, against a small model of Firestore --------------------------
+
+/**
+ * A model client: documents with fields and a version that each Commit bumps, a snapshot of the
+ * documents at each version, and streams whose targets are equality queries on `g`. A target opened
+ * with a token resumes from the version the token names; the model records what each open saw:
+ * the query, the version it resumed from, the expected count and what changed since.
+ */
+function modelClient() {
+  const docs = new Map();
+  const history = [new Map()];
+  const opens = [];
+  const clock = { t: 0 };
+  const live = [];
+  const snapshot = () =>
+    history.push(new Map([...docs].map(([name, fields]) => [name, { ...fields }])));
+  const valueOf = (field) => field.stringValue ?? Number(field.integerValue);
+  const plain = (fields) =>
+    Object.fromEntries(Object.entries(fields).map(([k, v]) => [k, valueOf(v)]));
+  const matches = (version, g) =>
+    new Map([...history[version]].filter(([, fields]) => fields.g === g));
+  return {
+    opens,
+    clock,
+    version: () => history.length - 1,
+    client: {
+      async commit({ writes }) {
+        for (const write of writes) {
+          if (write.delete) docs.delete(write.delete);
+          else docs.set(write.update.name, plain(write.update.fields));
+        }
+        snapshot();
+        // A live stream hears of the commit: a document change and a boundary with a later token.
+        for (const stream of live)
+          stream.frames.push(
+            { kind: "documentChange", documentChange: { document: { name: "x" } } },
+            {
+              kind: "targetChange",
+              targetChange: {
+                targetChangeType: "NO_CHANGE",
+                targetIds: [],
+                resumeToken: Buffer.from(`v${history.length - 1}`),
+              },
+            },
+          );
+        return {};
+      },
+      async beginTransaction() {
+        return Buffer.from("tx");
+      },
+      openStream() {
+        const frames = [];
+        let end;
+        const stream = {
+          frames,
+          ended: () => end,
+          send({ addTarget: target }) {
+            const g = target.query.structuredQuery.where.fieldFilter.value.stringValue;
+            const now = history.length - 1;
+            const from = target.resumeToken ? Number(target.resumeToken.toString().slice(1)) : null;
+            const before = from === null ? new Map() : matches(from, g);
+            const after = matches(now, g);
+            const changed = [...after].filter(
+              ([name, f]) =>
+                before.has(name) && JSON.stringify(before.get(name)) !== JSON.stringify(f),
+            );
+            opens.push({
+              targetId: target.targetId,
+              g,
+              from,
+              now,
+              expectedCount: target.expectedCount?.value ?? null,
+              heldAtToken: before.size,
+              matchesNow: after.size,
+              modified: changed.length,
+              entered: [...after.keys()].filter((n) => from !== null && !before.has(n)).length,
+              left: [...before.keys()].filter((n) => !after.has(n)).length,
+              targets: 1,
+            });
+            const token = Buffer.from(`v${now}`);
+            const change = (type, ids, extra = {}) => ({
+              kind: "targetChange",
+              targetChange: { targetChangeType: type, targetIds: ids, ...extra },
+            });
+            frames.push(
+              change("ADD", [target.targetId]),
+              change("NO_CHANGE", [], { resumeToken: token }),
+              change("CURRENT", [target.targetId], { resumeToken: token }),
+              change("NO_CHANGE", [], { resumeToken: token }),
+            );
+          },
+          async close() {
+            end ??= { reason: "closed-by-harness" };
+            live.splice(live.indexOf(stream), 1);
+          },
+        };
+        live.push(stream);
+        return stream;
+      },
+      async missing(names) {
+        return names.map((name) => ({ name, exists: docs.has(name) }));
+      },
+      async listIds() {
+        return [];
+      },
+    },
+  };
+}
+
+test("each variant resumes what its name says: the commits since the token, the kinds of change, the expected counts and the ages", async () => {
+  const model = modelClient();
+  const out = await runNative(RESUME_VARIANT_PROGRAMS, {
+    client: model.client,
+    project: "p1",
+    run: "r1",
+    sleep: async (ms) => {
+      await Promise.resolve();
+      model.clock.t += ms;
+    },
+    now: () => model.clock.t,
+    maxRequests: RESUME_VARIANT_REQUEST_CEILING,
+  });
+  assert.deepEqual(out.errors, {});
+  // The i-th stream opened is the i-th open step of the programs, in run order.
+  const openSteps = RESUME_VARIANT_PROGRAMS.flatMap((program) =>
+    program.steps
+      .map((step, index) => ({ program, step, index }))
+      .filter(({ step }) => step.do === "open"),
+  );
+  assert.equal(model.opens.length, openSteps.length);
+  const byStream = new Map(
+    openSteps.map(({ program, step }, i) => [`${program.id}:${step.stream}`, model.opens[i]]),
+  );
+  const seen = (program, stream) => byStream.get(`${program}:${stream}`);
+  // Every target is the one target of its stream, with id 1.
+  for (const open of model.opens) {
+    assert.equal(open.targetId, 1);
+    assert.equal(open.targets, 1);
+  }
+  const shape = (open) => [open.modified, open.entered, open.left];
+  for (const [name, tag] of [
+    ["g0", "g0"],
+    ["tc", "tc"],
+    ["gc", "gc"],
+  ]) {
+    const id = `native/resume-grid-${name}`;
+    const rows = {
+      first: ["first", [0, 0, 0]],
+      k0: ["k0", [0, 0, 0]],
+      k1: ["k1", [1, 0, 0]],
+      "k1-repeat": ["k1r", [1, 0, 0]],
+      "k1-expected": ["k1e", [1, 0, 0]],
+      k2: ["k2", [2, 0, 0]],
+      "k2-expected": ["k2e", [2, 0, 0]],
+      "k2-wrong": ["k2w", [2, 0, 0]],
+      k3: ["k3", [2, 0, 1]],
+    };
+    for (const [row, [stream, want]] of Object.entries(rows)) {
+      const open = seen(id, stream);
+      assert.equal(open.g, tag, `${id}/${row}: the group of the query`);
+      assert.deepEqual(shape(open), want, `${id}/${row}: modified, entered, left since the token`);
+    }
+    // The client holds the 3 documents of its query at the token; the right count is that number, the wrong one is not.
+    for (const stream of ["k0", "k1", "k1r", "k1e", "k2", "k2e", "k2w", "k3"])
+      assert.equal(seen(id, stream).heldAtToken, 3, `${id}/${stream}`);
+    assert.deepEqual(
+      ["k0", "k1", "k1r", "k1e", "k2", "k2e", "k2w", "k3"].map((s) => seen(id, s).expectedCount),
+      [null, null, null, 3, null, 3, 4, null],
+      id,
+    );
+    // The resumes are of one token: the version it names is the same in every resume of the grid.
+    const versions = new Set(
+      ["k0", "k1", "k1r", "k1e", "k2", "k2e", "k2w", "k3"].map((s) => seen(id, s).from),
+    );
+    assert.equal(versions.size, 1, id);
+    // The initial snapshot is a fresh listen (no token) of the 3 documents.
+    assert.equal(seen(id, "first").from, null);
+    assert.equal(seen(id, "first").matchesNow, 3);
+  }
+  // Commits since the token, by version: 0, 1, 1, 1, 2, 2, 2, 3 in every grid (the "after a change" grid's token is of its own, later, version).
+  for (const name of ["g0", "tc", "gc"])
+    assert.deepEqual(
+      ["k0", "k1", "k1r", "k1e", "k2", "k2e", "k2w", "k3"].map((s) => {
+        const open = seen(`native/resume-grid-${name}`, s);
+        return open.now - open.from;
+      }),
+      [0, 1, 1, 1, 2, 2, 2, 3],
+      name,
+    );
+  // Each kind of change, one at a time from the token of the stream before.
+  const kinds = (stream) => seen("native/resume-kinds", stream);
+  assert.deepEqual(shape(kinds("modify")), [1, 0, 0]);
+  assert.deepEqual(shape(kinds("enter")), [0, 1, 0]);
+  assert.deepEqual(shape(kinds("leave")), [0, 0, 1]);
+  assert.deepEqual(shape(kinds("delete")), [0, 0, 1]);
+  for (const stream of ["modify", "enter", "leave", "delete"]) {
+    assert.equal(kinds(stream).g, "kinds");
+    assert.equal(kinds(stream).expectedCount, null);
+    assert.equal(
+      kinds(stream).now - kinds(stream).from,
+      1,
+      `${stream}: one commit since its token`,
+    );
+  }
+  assert.deepEqual(
+    ["modify", "enter", "leave", "delete"].map((s) => kinds(s).heldAtToken),
+    [3, 3, 4, 3],
+  );
+  // The three ages.
+  const age = (stream) => seen("native/resume-age", stream);
+  assert.deepEqual(shape(age("ra")), [1, 0, 0]);
+  assert.deepEqual(shape(age("rb")), [1, 0, 0]);
+  assert.deepEqual(shape(age("rc")), [2, 0, 0]);
+  for (const stream of ["ra", "rb", "rc"]) {
+    assert.equal(age(stream).g, "age");
+    assert.equal(age(stream).heldAtToken, 3);
+    assert.equal(age(stream).expectedCount, null);
+  }
+  assert.deepEqual(
+    ["ra", "rb", "rc"].map((s) => age(s).now - age(s).from),
+    [1, 1, 2],
+  );
+  assert.equal(
+    new Set(["ra", "rb", "rc"].map((s) => age(s).from)).size,
+    1,
+    "the three tokens were taken together",
+  );
+  // The ages: tokens were taken at t = 0 of the sleeps, 30 s and 300 s before the resumes.
+  assert.ok(model.clock.t >= 300_000);
+});
+
+test("the streams of each program are named as the design names them", () => {
+  const names = (id) =>
+    byId(id)
+      .steps.filter((s) => s.do === "open")
+      .map((s) => s.stream);
+  for (const id of GRIDS)
+    assert.deepEqual(names(id), ["first", "k0", "k1", "k1r", "k1e", "k2", "k2e", "k2w", "k3"], id);
+  assert.deepEqual(names("native/resume-kinds"), ["first", "modify", "enter", "leave", "delete"]);
+  assert.deepEqual(names("native/resume-age"), ["f1", "f2", "f3", "ra", "rb", "rc"]);
+  // The age waits.
+  assert.deepEqual(
+    byId("native/resume-age")
+      .steps.filter((s) => s.do === "sleep")
+      .map((s) => s.ms),
+    [30_000, 270_000],
+  );
 });

@@ -1122,12 +1122,17 @@ test("buildInputsDigest is invariant under any order and any test-only noise, ov
 
 test("--programs resume-variants selects the L1b programs alone, holds them to their request ceiling, and refuses another name or a mix with the long program", async () => {
   const { programsFor, requestCeilingFor } = await import("./fs-listen/record.mjs");
-  const { RESUME_VARIANT_PROGRAMS, RESUME_VARIANT_REQUEST_CEILING } = await import(
-    "./fs-listen/native-resume-variants.mjs"
-  );
+  const { RESUME_VARIANT_PROGRAMS, RESUME_VARIANT_REQUEST_CEILING } =
+    await import("./fs-listen/native-resume-variants.mjs");
   assert.deepEqual(programsFor({ programs: "resume-variants" }), RESUME_VARIANT_PROGRAMS);
-  assert.deepEqual(programsFor({ programs: "resume-variants", "include-long": "no" }), RESUME_VARIANT_PROGRAMS);
-  assert.throws(() => programsFor({ programs: "resume-variants", "include-long": "yes" }), /cannot be combined/);
+  assert.deepEqual(
+    programsFor({ programs: "resume-variants", "include-long": "no" }),
+    RESUME_VARIANT_PROGRAMS,
+  );
+  assert.throws(
+    () => programsFor({ programs: "resume-variants", "include-long": "yes" }),
+    /cannot be combined/,
+  );
   for (const bad of ["", "all", "Resume-Variants", "resume-variants "])
     assert.throws(() => programsFor({ programs: bad }), /--programs/, JSON.stringify(bad));
   assert.equal(requestCeilingFor({ programs: "resume-variants" }), RESUME_VARIANT_REQUEST_CEILING);
@@ -1137,9 +1142,8 @@ test("--programs resume-variants selects the L1b programs alone, holds them to t
 
 test("a production recording of the resume variants checks every program, records only them, and runs under their ceiling", async () => {
   const { nativeProduction } = await import("./fs-listen/record.mjs");
-  const { RESUME_VARIANT_PROGRAMS, RESUME_VARIANT_REQUEST_CEILING } = await import(
-    "./fs-listen/native-resume-variants.mjs"
-  );
+  const { RESUME_VARIANT_PROGRAMS, RESUME_VARIANT_REQUEST_CEILING } =
+    await import("./fs-listen/native-resume-variants.mjs");
   const order = [];
   const { d, seen } = argDeps(order);
   const checked = [];
@@ -1148,19 +1152,32 @@ test("a production recording of the resume variants checks every program, record
     return [];
   };
   await nativeProduction(
-    { project: "fireemu-oracle-txn", envelope: "E", ledger: "L", out: "o.json", programs: "resume-variants" },
+    {
+      project: "fireemu-oracle-txn",
+      envelope: "E",
+      ledger: "L",
+      out: "o.json",
+      programs: "resume-variants",
+    },
     d,
   );
   assert.deepEqual(seen.native.programs, RESUME_VARIANT_PROGRAMS);
   assert.equal(seen.native.clock.maxRequests, RESUME_VARIANT_REQUEST_CEILING);
-  for (const program of RESUME_VARIANT_PROGRAMS) assert.ok(checked.includes(program.id), program.id);
+  for (const program of RESUME_VARIANT_PROGRAMS)
+    assert.ok(checked.includes(program.id), program.id);
   // A malformed variant program stops the run before a token is read.
   const stopped = [];
   const refusing = argDeps(stopped);
   refusing.d.programProblems = () => ["native/resume-grid-g0#3 (save): unknown save kind x"];
   await assert.rejects(
     nativeProduction(
-      { project: "fireemu-oracle-txn", envelope: "E", ledger: "L", out: "o.json", programs: "resume-variants" },
+      {
+        project: "fireemu-oracle-txn",
+        envelope: "E",
+        ledger: "L",
+        out: "o.json",
+        programs: "resume-variants",
+      },
       refusing.d,
     ),
     /malformed/,
@@ -1172,6 +1189,9 @@ test("without --programs the production recording keeps the default request ceil
   const { nativeProduction } = await import("./fs-listen/record.mjs");
   const order = [];
   const { d, seen } = argDeps(order);
-  await nativeProduction({ project: "fireemu-oracle-txn", envelope: "E", ledger: "L", out: "o.json" }, d);
-  assert.equal(seen.native.clock?.maxRequests, undefined);
+  await nativeProduction(
+    { project: "fireemu-oracle-txn", envelope: "E", ledger: "L", out: "o.json" },
+    d,
+  );
+  assert.equal(Object.hasOwn(seen.native, "clock"), false);
 });

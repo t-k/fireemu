@@ -353,3 +353,228 @@ test("retry5 and the control answers are reported with their status", () => {
   });
   assert.equal(analyzeRun3(d).retry5.contradictsRun2, true);
 });
+
+// ---- the survivors of the first mutation pass ----
+
+const countJob = (over = {}, requested = {}) => ({
+  count: {
+    status: 200,
+    message: null,
+    requested: {
+      retryCount: 3,
+      maxRetryDuration: "20s",
+      minBackoffDuration: "4s",
+      maxBackoffDuration: "10s",
+      ...requested,
+    },
+    effective: effective({
+      retryCount: 3,
+      maxRetryDuration: "20s",
+      minBackoffDuration: "4s",
+      maxBackoffDuration: "10s",
+      ...over,
+    }),
+  },
+});
+const count = (extraJobs, frames = {}) => analyzeRun3(digest({ extraJobs, ...frames })).count;
+
+test("the control: its tolerance, its length, and which chain sets the offsets", () => {
+  const withControl = (offsets) => {
+    const d = digest();
+    d.frames = d.frames.filter(
+      (f) => !f.headers?.["x-cloudscheduler-jobname"]?.endsWith("-duration"),
+    );
+    d.frames.push(...chain("duration", 100, offsets));
+    return analyzeRun3(d).count.controlReproduced;
+  };
+  assert.equal(withControl([0, 4.6, 13.2, 24.5]), true, "0.8 s off the recorded 23.7");
+  assert.equal(withControl([0, 4.6, 13.2, 25.5]), false, "1.8 s off");
+  assert.equal(
+    withControl([0, 4.6, 13.2]),
+    false,
+    "three attempts that fit are still not the recorded four",
+  );
+  assert.equal(withControl([0, 4.6, 13.2, 23.7, 34.2]), false, "five");
+  // one control chain is enough to reproduce it (the second pass may be absent)
+  assert.equal(withControl([0, 4.6, 13.2, 23.7]), true);
+  // the first control chain sets the offsets the window is read against: 24.5 s against a window of 24 s is three
+  const d = digest({ extraJobs: countJob({ maxRetryDuration: "24s" }) });
+  d.frames = d.frames.filter(
+    (f) => !f.headers?.["x-cloudscheduler-jobname"]?.endsWith("-duration"),
+  );
+  d.frames.push(
+    ...chain("duration", 100, [0, 4.6, 13.2, 23.7]),
+    ...chain("duration", 700, [0, 4.6, 13.2, 24.5]),
+  );
+  assert.deepEqual(analyzeRun3(d).count.predicted, { firstLimit: 4, bothLimits: 4 });
+});
+
+test("count: the window parsed from the answer, its absence, one pass, no chain and the limits that coincide", () => {
+  assert.equal(count(countJob()).status, 200);
+  assert.equal(count(countJob()).normalised, false, "the answer equals the request");
+  // a request without a retryCount equals an answer without one (zero)
+  const bare = countJob({ retryCount: undefined }, { retryCount: undefined });
+  bare.count.effective = effective({
+    maxRetryDuration: "20s",
+    minBackoffDuration: "4s",
+    maxBackoffDuration: "10s",
+  });
+  delete bare.count.requested.retryCount;
+  assert.equal(count(bare).normalised, false);
+  // no window in the answer (a zero or an absent one): the count alone decides
+  assert.deepEqual(count(countJob({ maxRetryDuration: "0s" })).predicted, {
+    firstLimit: 4,
+    bothLimits: 4,
+  });
+  const absent = countJob();
+  delete absent.count.effective.maxRetryDuration;
+  assert.deepEqual(count(absent).predicted, { firstLimit: 4, bothLimits: 4 });
+  // a window of one second, and a window exactly on an attempt (13.2 s): inclusive
+  assert.deepEqual(count(countJob({ maxRetryDuration: "1s" })).predicted, {
+    firstLimit: 1,
+    bothLimits: 4,
+  });
+  assert.deepEqual(count(countJob({ maxRetryDuration: "13.2s" })).predicted, {
+    firstLimit: 3,
+    bothLimits: 4,
+  });
+  // a single chain (one pass) is read, not "other"
+  assert.equal(count(countJob(), { count2: [] }).reading, "first-limit (window binds)");
+  assert.equal(
+    count(countJob(), { count: chain("count", 200, [0, 4.6, 13.2, 23.7]), count2: [] }).reading,
+    "both-limits (retries continue until count and window are used up)",
+  );
+  // no chain of the job at all
+  assert.equal(count(countJob(), { count: [], count2: [] }).reading, "no chain recorded");
+  // limits that coincide (a window of 30 s, as if the answer rounded 20 s up) and four attempts
+  const same = count(countJob({ maxRetryDuration: "30s" }), {
+    count: chain("count", 200, [0, 4.6, 13.2, 23.7]),
+    count2: chain("count", 800, [0, 4.6, 13.2, 23.7]),
+  });
+  assert.equal(same.reading, "limits coincide (first-limit and both-limits agree)");
+  // four attempts where only the first-limit reading would predict three
+  assert.equal(
+    count(countJob({ maxRetryDuration: "30s" })).reading,
+    "other",
+    "three attempts where both limits say four",
+  );
+});
+
+test("zero backoff: what counts as normalised, the gaps, the window edge, and the absent job", () => {
+  const zb = (over, frames) =>
+    analyzeRun3(
+      digest({
+        extraJobs: {
+          zerobackoff: {
+            status: 200,
+            message: null,
+            requested: {
+              maxRetryDuration: "10s",
+              minBackoffDuration: "0s",
+              maxBackoffDuration: "0s",
+            },
+            effective: effective({
+              maxRetryDuration: "10s",
+              minBackoffDuration: "0s",
+              maxBackoffDuration: "0s",
+              ...over,
+            }),
+          },
+        },
+        ...(frames ? { zero: frames } : {}),
+      }),
+    ).zerobackoff;
+  assert.equal(zb({}).status, 200);
+  assert.equal(zb({ minBackoffDuration: "5s" }).normalised, true, "only the minimum normalised");
+  assert.equal(zb({ maxBackoffDuration: "3600s" }).normalised, true, "only the maximum normalised");
+  assert.equal(zb({}).normalised, false);
+  // the smallest gap is not the first: 0, 2, 2.5, 3 has gaps of 2, 0.5 and 0.5
+  assert.equal(zb({}, chain("zerobackoff", 300, [0, 2, 2.5, 3.5])).minGapSeconds, 0.5);
+  assert.equal(zb({}, chain("zerobackoff", 300, [0, 2, 4, 5])).minGapSeconds, 1);
+  // the window edge: one second of slack
+  assert.equal(zb({}, chain("zerobackoff", 300, [0, 11])).withinWindow, true);
+  assert.equal(zb({}, chain("zerobackoff", 300, [0, 11.5])).withinWindow, false);
+  assert.equal(
+    zb({ maxRetryDuration: "20s" }, chain("zerobackoff", 300, [0, 9.5])).withinWindow,
+    true,
+  );
+  assert.equal(
+    zb({ maxRetryDuration: "5s" }, chain("zerobackoff", 300, [0, 5.5])).withinWindow,
+    true,
+  );
+  assert.equal(
+    zb({ maxRetryDuration: "5s" }, chain("zerobackoff", 300, [0, 6.5])).withinWindow,
+    false,
+  );
+  // no chain, or no window: not judged
+  assert.equal(zb({}, []).withinWindow, null);
+  assert.equal(zb({ maxRetryDuration: "0s" }).withinWindow, null);
+  assert.equal(zb({}, []).minGapSeconds, null);
+  // an absent job
+  const d = digest();
+  delete d.extraJobs.zerobackoff;
+  assert.deepEqual(analyzeRun3(d).zerobackoff, {
+    status: null,
+    text: null,
+    normalised: null,
+    attempts: [],
+  });
+});
+
+test("chains: out-of-order frames, another handler's frames and a deployed job's retry frames are not mixed in", () => {
+  const d = digest({ zero: chain("zerobackoff", 300, [3, 0, 1.5]) });
+  assert.deepEqual(chainsOf(d).zerobackoff, [[0, 1.5, 3]]);
+  const noisy = digest();
+  noisy.frames.push(
+    {
+      handler: "schedOkV2",
+      generation: 2,
+      at: 1,
+      headers: { "x-cloudscheduler-jobname": `fe-sd-${RUN}-count` },
+    },
+    {
+      handler: "schedRetryV2",
+      generation: 2,
+      at: 2,
+      headers: { "x-cloudscheduler-jobname": "firebase-schedule-schedRetryV2-us-central1" },
+    },
+  );
+  const chains = chainsOf(noisy);
+  assert.deepEqual(Object.keys(chains).toSorted(), ["count", "duration", "zerobackoff"]);
+  assert.deepEqual(chains.count, [
+    [0, 4.6, 13.2],
+    [0, 4.6, 13.2],
+  ]);
+});
+
+test("the Gen1 probe counts the attempts that started, not the ones that finished", () => {
+  const d = digest();
+  d.attempts["firebase-schedule-schedRetryV1-us-central1"].push({
+    kind: "AttemptStarted",
+    at: 900_000,
+  });
+  const probe = analyzeRun3(d).gen1Probe;
+  assert.equal(probe.schedulerAttempts, 4);
+  assert.equal(probe.finishedWithError, 0);
+});
+
+test("the command prints the analysis of a digest file, one space of indentation", async () => {
+  const { execFileSync } = await import("node:child_process");
+  const { mkdtempSync, rmSync, writeFileSync } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const { join } = await import("node:path");
+  const { fileURLToPath } = await import("node:url");
+  const dir = mkdtempSync(join(tmpdir(), "run3-analysis-"));
+  try {
+    const file = join(dir, "digest.json");
+    writeFileSync(file, JSON.stringify(digest()));
+    const out = execFileSync(
+      process.execPath,
+      [fileURLToPath(new URL("./run3-analysis.mjs", import.meta.url)), file],
+      { encoding: "utf8" },
+    );
+    assert.equal(out, JSON.stringify(analyzeRun3(digest()), null, 1) + "\n");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

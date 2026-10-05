@@ -3,6 +3,13 @@ import test from "node:test";
 import { createCapture } from "./pubsub-production/capture.mjs";
 import { createLedger } from "./pubsub-production/ledger.mjs";
 import { channelLifecycle } from "./eventarc-production/cases/channels.mjs";
+import { CASES } from "./eventarc-production/cases/index.mjs";
+import { authErrors } from "./eventarc-production/cases/errors.mjs";
+import {
+  publishContent,
+  publishEnvelope,
+  publishLimits,
+} from "./eventarc-production/cases/publish.mjs";
 import { adminSdkPublish } from "./eventarc-production/cases/sdk.mjs";
 import { serviceState } from "./eventarc-production/cases/service.mjs";
 import { createClient } from "./eventarc-production/client.mjs";
@@ -39,7 +46,7 @@ function channelService({
     calls,
     async request(call) {
       const { method, path, op } = call;
-      calls.push({ method, path, op, caseId: call.label?.case });
+      calls.push({ method, path, op, caseId: call.label?.case, body: call.body });
       const bare = decodeURIComponent(path.split("?")[0].replace(/^\/v1\//, ""));
       if (op === "getOperation") {
         const state = operations.get(bare) ?? { reads: 0, error: undefined };
@@ -53,6 +60,7 @@ function channelService({
         };
       }
       if (op === "listChannels") return { status: 200, body: {}, unknown: false };
+      if (op === "publishEvents") return { status: 200, body: {}, unknown: false };
       if (op === "getChannel") {
         if (live.has(bare)) return { status: 200, body: { name: bare }, unknown: false };
         if (/channels\/(GOOG|a[0-9]$)/.test(bare))
@@ -344,6 +352,10 @@ test("the service-state case sends its enabled-state publish only to its own cha
       (call) => call.op === "publishEvents" && call.path.includes("/channels/firebase:"),
     );
     assert.equal(toFirebase, expected);
+    assert.ok(
+      calls.some((call) => call.op === "listChannels" && /[?&]pageSize=10($|&)/.test(call.path)),
+      "the list while disabled asks for pages of 10",
+    );
     void firebase;
   }
 });
@@ -364,4 +376,143 @@ test("the second deletion needs every condition: the first answered, its operati
   const service = channelService();
   await run(service);
   assert.equal(caseDeletes(service, c1).length, 2);
+});
+
+const published = (service) =>
+  service.calls.filter((call) => call.op === "publishEvents").map((call) => call.body.events ?? []);
+
+test("the case ceilings are the ones the plan was measured against, in the order the cases run", () => {
+  assert.deepEqual(
+    CASES.map(({ id, requests }) => [id, requests]),
+    [
+      ["service-state", 36],
+      ["channel-lifecycle", 110],
+      ["publish-envelope", 34],
+      ["publish-content", 26],
+      ["publish-limits", 26],
+      ["admin-sdk-publish", 16],
+      ["auth-errors", 22],
+    ],
+  );
+});
+
+test("the publish limits are a ladder: the counts, the sizes, the request sizes, the attributes and the mixed batch", async () => {
+  const service = channelService();
+  const { summary } = await run(service, { cases: [publishLimits] });
+  assert.deepEqual(
+    summary.cases.map((c) => c.outcome),
+    ["completed"],
+  );
+  const KiB = 1024;
+  const calls = published(service);
+  const text = (event) => event.textData?.length;
+  assert.deepEqual(
+    calls.slice(0, 9).map((events) => [events.length, text(events[0])]),
+    [
+      [256, 1],
+      [257, 1],
+      [1000, 1],
+      [1, 256 * KiB],
+      [1, KiB * KiB],
+      [1, 4 * KiB * KiB],
+      [1, 10 * KiB * KiB],
+      [8, 128 * KiB],
+      [8, KiB * KiB],
+    ],
+  );
+  assert.deepEqual(
+    calls.slice(9).map((events) => events.length),
+    [1, 1, 3],
+  );
+  // Every event of a ladder step has the same text size.
+  for (const events of calls.slice(0, 9)) {
+    assert.equal(new Set(events.map(text)).size, 1);
+  }
+  // Attributes: 100 extra ones (plus the base ones), then one name of 256 characters.
+  const base = Object.keys(calls[0][0].attributes).length;
+  assert.equal(Object.keys(calls[9][0].attributes).length, base + 100);
+  const names = Object.keys(calls[10][0].attributes).filter((name) => name.length > 100);
+  assert.deepEqual(
+    names.map((name) => name.length),
+    [256],
+  );
+  // The mixed batch: the second event has no type.
+  assert.deepEqual(
+    calls[11].map((event) => event.type !== undefined),
+    [true, false, true],
+  );
+});
+
+test("the content case sends the bytes 0, 1, 2, 255 as base64, and the envelope case a member the service does not know", async () => {
+  const service = channelService();
+  await run(service, { cases: [publishContent, publishEnvelope] });
+  const events = published(service).flat();
+  const binary = events.filter(
+    (event) => event.binaryData !== undefined && event.binaryData !== "***not base64***",
+  );
+  const decoded = binary.map((event) => Array.from(Buffer.from(event.binaryData, "base64")));
+  assert.deepEqual(decoded[0], [0, 1, 2, 255]);
+  assert.equal(decoded.length, 2, "the second is the event that has both text and binary data");
+  assert.deepEqual(
+    events.filter((event) => "noSuchMember" in event).map((event) => event.noSuchMember),
+    [1],
+  );
+});
+
+test("a channel that cannot exist is never listed, in the lifecycle and in the errors case, and the lists use the page sizes of the plan", async () => {
+  for (const [item, name] of [
+    [channelLifecycle, "nowhere"],
+    [authErrors, "nowhere-pub"],
+  ]) {
+    const service = channelService();
+    await run(service, { cases: [item] });
+    const lists = service.calls.filter((call) => call.op === "listChannels");
+    assert.equal(
+      lists.some((call) => call.path.includes("no-such-location1")),
+      false,
+      name,
+    );
+  }
+  const service = channelService();
+  await run(service, { cases: [channelLifecycle] });
+  const lists = service.calls
+    .filter((call) => call.op === "listChannels" && call.caseId === "channel-lifecycle")
+    .map((call) => call.path);
+  assert.ok(lists.some((path) => path.endsWith("/locations/us-central1/channels?pageSize=1")));
+  assert.ok(lists.some((path) => path.endsWith("/locations/-/channels?pageSize=5")));
+});
+
+test("the enabled-services note says complete only when both reads were", async () => {
+  const run1 = async (afterEnableToken) => {
+    let enabled = false;
+    const service = {
+      request: async (call) => {
+        if (call.op === "getService")
+          return {
+            status: 200,
+            body: { state: enabled ? "ENABLED" : "DISABLED" },
+            unknown: false,
+          };
+        if (call.op === "listEnabledServices")
+          return {
+            status: 200,
+            body: {
+              services: [{ name: "a" }],
+              ...(enabled && afterEnableToken ? { nextPageToken: "more" } : {}),
+            },
+            unknown: false,
+          };
+        if (call.op === "enableService") {
+          enabled = true;
+          return { status: 200, body: { name: "operations/x", done: true }, unknown: false };
+        }
+        if (call.op === "listChannels") return { status: 200, body: {}, unknown: false };
+        return NOT_FOUND;
+      },
+    };
+    const { notes } = await run(service, { cases: [serviceState] });
+    return notes.find((entry) => entry.note === "enabled-services");
+  };
+  assert.equal((await run1(false)).complete, true);
+  assert.equal((await run1(true)).complete, false);
 });

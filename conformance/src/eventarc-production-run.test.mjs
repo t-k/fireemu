@@ -7,9 +7,11 @@ import test from "node:test";
 import { createCapture } from "./pubsub-production/capture.mjs";
 import { CASES } from "./eventarc-production/cases/index.mjs";
 import { StopClean } from "./eventarc-production/cases/support.mjs";
-import { serviceState } from "./eventarc-production/cases/service.mjs";
+import { preconditions } from "./eventarc-production/cases/service.mjs";
 import { createClient } from "./eventarc-production/client.mjs";
 import { createOwnership } from "./eventarc-production/names.mjs";
+import { createWorld } from "./eventarc-production/testing/world.mjs";
+import { serveWorld } from "./eventarc-production/testing/world-server.mjs";
 import {
   CLEANUP_BUDGET,
   DEFAULT_MAX_REQUESTS,
@@ -160,15 +162,18 @@ test("bad arguments are refused, and the numbers have their values", () => {
   assert.equal(CLEANUP_BUDGET, 300);
 });
 
-test("the cases are unique, in the order that records the disabled state first, and fit the default budget", () => {
-  assert.equal(CASES[0].id, "service-state");
+test("the cases are unique, start with the preconditions and the create probe, and fit the default budget", () => {
+  assert.deepEqual(
+    CASES.slice(0, 2).map((item) => item.id),
+    ["preconditions", "create-probe"],
+  );
   assert.equal(new Set(CASES.map((item) => item.id)).size, CASES.length);
   assert.equal(new Set(CASES.map((item) => item.short)).size, CASES.length);
   assert.ok(CASES.every((item) => Number.isInteger(item.requests) && item.requests > 0));
   assert.ok(plannedRequests(CASES) <= DEFAULT_MAX_REQUESTS);
   assert.deepEqual(
-    selectCases(["auth-errors", "service-state"]).map((item) => item.id),
-    ["service-state", "auth-errors"],
+    selectCases(["auth-errors", "preconditions"]).map((item) => item.id),
+    ["preconditions", "auth-errors"],
   );
   assert.throws(() => selectCases(["nope"]), /unknown case nope/);
   assertBudgetCovers([{ requests: 10 }, { requests: 5 }], 15);
@@ -246,7 +251,7 @@ test("a case gets names that carry the prefix, probes registered before they are
         ctx.probe("nowhere", { location: "no-such-location1", listable: false }),
       );
       await ctx.client.getChannel(ctx.channel("k"));
-      await ctx.client.createChannel(ctx.project, ctx.location, "goog-x", {});
+      await ctx.client.createChannel(ctx.project, ctx.location, "goog-x");
       ctx.note("hello", { n: 1 });
     },
   };
@@ -354,115 +359,44 @@ test("a signal between cases stops the run, and a sleep during one is refused", 
   assert.deepEqual([none.cases, none.stopped], [[], "signal"]);
 });
 
-test("replay on the recorded service body: DISABLED takes the disabled branch in order, ENABLED records only the state", async () => {
+test("replay on the recorded service body: DISABLED stops the run with nothing sent that changes anything, ENABLED lets it go on", async () => {
   const recorded = fixture("service-eventarcpublishing.json");
   const service = JSON.parse(recorded.body);
   assert.equal(service.state, "DISABLED");
   const firebase = fixture("channel-firebase-404.json");
-  let enabled = false;
-  const answer = ({ host, method, path }) => {
-    if (host === "usage" && path.includes("/operations/"))
-      return { status: 200, body: { name: "operations/acat.x", done: true }, unknown: false };
-    if (host === "usage" && path.includes("/services?"))
-      return {
-        status: 200,
-        body: {
-          services: [
-            { config: { name: "eventarc.googleapis.com" } },
-            ...(enabled ? [{ config: { name: "eventarcpublishing.googleapis.com" } }] : []),
-          ],
-        },
-        unknown: false,
-      };
-    if (host === "usage" && method === "GET")
-      return {
-        status: 200,
-        body: enabled ? { ...service, state: "ENABLED" } : service,
-        unknown: false,
-      };
-    if (host === "usage" && path.endsWith(":enable")) {
-      enabled = true;
-      return { status: 200, body: { name: "operations/acat.x", done: false }, unknown: false };
-    }
-    if (host === "usage")
-      return { status: 200, body: { name: "operations/acat.x", done: true }, unknown: false };
-    if (path.endsWith("/channels/firebase"))
-      return { status: firebase.status, body: JSON.parse(firebase.body), unknown: false };
-    return { status: 404, body: { error: { status: "NOT_FOUND" } }, unknown: false };
-  };
-  const disabled = setup([serviceState], { answer, options: { usageProject: "123456789012" } });
-  const summary = await disabled.run();
+  const answer =
+    (state) =>
+    ({ host, path }) => {
+      if (host === "usage")
+        return { status: 200, body: { ...service, state }, unknown: false };
+      if (path.endsWith("/channels/firebase"))
+        return { status: firebase.status, body: JSON.parse(firebase.body), unknown: false };
+      return { status: 404, body: { error: { status: "NOT_FOUND" } }, unknown: false };
+    };
+  const disabled = setup([preconditions], { answer: answer("DISABLED"), options: { usageProject: "123456789012" } });
+  const stopped = await disabled.run();
+  assert.deepEqual(
+    stopped.cases.map((c) => [c.outcome, c.reason]),
+    [["stopped", "the publishing API is DISABLED: stage B does not enable it, nothing was created"]],
+  );
   assert.deepEqual(
     disabled.calls.map((c) => `${c.method} ${c.host} ${c.op}`),
-    [
-      "GET usage getService",
-      "POST publishing publishEvents",
-      "GET eventarc getChannel",
-      "POST publishing publishEvents",
-      "GET eventarc getChannel",
-      "GET eventarc listChannels",
-      "GET usage listEnabledServices",
-      "POST usage enableService",
-      "GET usage getOperation",
-      "GET usage getService",
-      "GET usage listEnabledServices",
-      "POST publishing publishEvents",
-    ],
+    ["GET usage getService"],
   );
-  assert.match(
-    disabled.calls[1].path,
-    /\/v1\/projects\/demo-project\/locations\/us-central1\/channels\/fe0123456789ab-sv-never-created:publishEvents$/,
-  );
-  assert.ok(
-    disabled.calls[3].path.endsWith("/channels/firebase:publishEvents"),
-    "the default channel only after it was read as absent",
-  );
-  assert.equal(
-    disabled.calls[0].path,
-    `/v1/projects/123456789012/services/eventarcpublishing.googleapis.com`,
-  );
-  assert.equal(summary.cases[0].requests, 12);
-  assert.match(
-    disabled.calls[6].path,
-    /\/v1\/projects\/123456789012\/services\?filter=state%3AENABLED&pageSize=200$/,
+  assert.equal(disabled.calls[0].path, "/v1/projects/123456789012/services/eventarcpublishing.googleapis.com");
+  const enabled = setup([preconditions], { answer: answer("ENABLED") });
+  const summary = await enabled.run();
+  assert.deepEqual(
+    summary.cases.map((c) => c.outcome),
+    ["completed"],
   );
   assert.deepEqual(
-    disabled.notes
-      .filter((n) => n.note === "enabled-services")
-      .map(({ before, after, added, complete }) => ({ before, after, added, complete })),
-    [{ before: 1, after: 2, added: ["eventarcpublishing.googleapis.com"], complete: true }],
+    enabled.calls.map((c) => `${c.method} ${c.host} ${c.op}`),
+    ["GET usage getService", "GET eventarc getChannel"],
   );
   assert.ok(
-    disabled.notes.some(
-      (n) =>
-        n.note === "service-state" && n.before === "DISABLED" && n.disabledStateRecorded === true,
-    ),
-  );
-  // Already enabled: the state and one publish, nothing is enabled again.
-  const already = setup([serviceState], {
-    answer: ({ host, method }) =>
-      host === "usage" && method === "GET"
-        ? { status: 200, body: { ...service, state: "ENABLED" }, unknown: false }
-        : { status: 404, body: { error: { status: "NOT_FOUND" } }, unknown: false },
-  });
-  await already.run();
-  assert.deepEqual(
-    already.calls.map((c) => c.op),
-    ["getService", "publishEvents"],
-  );
-  // The default channel exists: nothing is published to it.
-  const exists = setup([serviceState], {
-    answer: ({ host, method, path }) =>
-      host === "usage" && method === "GET"
-        ? { status: 200, body: service, unknown: false }
-        : path.endsWith("/channels/firebase")
-          ? { status: 200, body: { name: "x" }, unknown: false }
-          : { status: 200, body: { name: "operations/o", done: true }, unknown: false },
-  });
-  await exists.run();
-  assert.equal(
-    exists.calls.some((c) => c.op === "publishEvents" && c.path.includes("/channels/firebase:")),
-    false,
+    enabled.notes.some((n) => n.note === "default-channel" && n.absent === true && n.status === 404),
+    "the recorded 404 of the default channel is read as absent",
   );
 });
 
@@ -554,43 +488,55 @@ test("main: a usage error exits 2, a budget below the plan is refused before any
   assert.throws(() => readdirSync(out), "nothing was created");
 });
 
-test("main: a case run through the SDK and the transports, against a service that has nothing, completes and cleans up", async (t) => {
-  const service = await emptyServer();
+test("main: the whole recording through the real transport and the SDK, against the model of the service, sends only well-formed writes and cleans up", async (t) => {
+  const world = createWorld({ project: "demo-fireemu-eventarc" });
+  const service = await serveWorld(world);
   t.after(service.close);
   const out = join(mkdtempSync(join(tmpdir(), "eventarc-main-")), "o");
   const code = await main(
-    [
-      "--target",
-      "emulator",
-      "--emulator-host",
-      service.host,
-      "--out",
-      out,
-      "--only",
-      "auth-errors,admin-sdk-publish",
-      "--run-id",
-      RUN,
-    ],
+    ["--target", "emulator", "--emulator-host", service.host, "--out", out, "--run-id", RUN],
     {},
     io(),
   );
   const summary = JSON.parse(readFileSync(join(out, `summary-${RUN}.json`), "utf8"));
   assert.deepEqual(
     summary.cases.map((c) => [c.id, c.outcome]),
-    [
-      ["admin-sdk-publish", "completed"],
-      ["auth-errors", "completed"],
-    ],
+    CASES.map((item) => [item.id, "completed"]),
   );
   assert.equal(code, 0);
+  assert.equal(summary.closureReady, true);
+  // The model refused no creation for its shape, and no publish except the two probes that send no
+  // events on purpose (an empty list and a body without the member).
+  assert.deepEqual(
+    world.refusals.map((refusal) => refusal.kind),
+    ["publish-no-events", "publish-no-events"],
+  );
+  // Nothing of the run is left, and every case stayed inside its ceiling.
+  assert.deepEqual(
+    [...world.channels.keys()].filter((name) => name.includes(`/fe${RUN}-`)),
+    [],
+  );
+  for (const entry of summary.cases)
+    assert.ok(entry.requests <= CASES.find((item) => item.id === entry.id).requests, entry.id);
   const lines = readFileSync(join(out, `capture-${RUN}.jsonl`), "utf8")
     .trim()
     .split("\n")
     .map((l) => JSON.parse(l));
-  assert.ok(lines.some((l) => l.op === "sdk.publishEvents" && l.response.status === 404));
+  // The raw bytes of every answer are in the capture.
+  const exchanges = lines.filter((l) => l.response?.status !== undefined);
+  assert.ok(exchanges.length > 100);
+  assert.ok(exchanges.every((l) => typeof l.response.bodyBase64 === "string"));
+  assert.ok(lines.some((l) => l.op === "sdk.publishEvents" && l.response.status === 200));
   assert.ok(
     lines.some((l) => l.note === "sdk-outcome" && l.name === "missing-source" && l.requests === 0),
   );
+  // The create probe came first and every creation carried its channel's name.
+  const creates = lines.filter((l) => l.op === "createChannel");
+  assert.ok(creates.length > 5);
+  for (const line of creates) {
+    const [, parent, id] = /^(.*)\/channels\?channelId=(.*)$/.exec(line.request.path.replace(/^\/v1\//, ""));
+    if (line.tokenMode === "default") assert.equal(line.request.body.name, `${parent}/channels/${id}`);
+  }
 });
 
 /** The most requests a case sends against five kinds of service, with no ceiling in the way. */
@@ -644,110 +590,6 @@ test("every case's ceiling covers the most it can send against a service that an
     ([id, worst]) => worst > CASES.find((item) => item.id === id).requests,
   );
   assert.deepEqual(over, [], `measured worst cases: ${JSON.stringify(measured)}`);
-});
-
-/** The service-state case against a service whose usage answers are given by the arguments. */
-async function serviceRun({
-  list,
-  states,
-  enable = { status: 200, body: { name: "operations/x", done: true }, unknown: false },
-}) {
-  const sleeps = [];
-  let reads = 0;
-  const {
-    run: go,
-    notes,
-    calls,
-  } = setup([serviceState], {
-    answer: ({ host, method, path, op }) => {
-      if (host === "usage" && path.includes("/services?")) return list(path);
-      if (host === "usage" && path.endsWith(":enable")) return enable;
-      if (host === "usage" && method === "GET" && op === "getService") {
-        const state = states[Math.min(reads, states.length - 1)];
-        reads += 1;
-        return { status: 200, body: { state }, unknown: false };
-      }
-      return { status: 404, body: { error: { status: "NOT_FOUND" } }, unknown: false };
-    },
-  });
-  const summary = await go({ sleep: async (ms) => sleeps.push(ms) });
-  return { summary, notes, calls, sleeps };
-}
-
-const page = (path) => ({ status: 200, body: { services: [{ name: path }] }, unknown: false });
-
-test("the enabled services are read at most three pages: an incomplete list before the enabling stops the run before the enable is sent", async () => {
-  const endless = await serviceRun({
-    list: (path) => ({
-      ...page(path),
-      body: { services: [{ name: path }], nextPageToken: "more" },
-    }),
-    states: ["DISABLED"],
-  });
-  assert.equal(
-    endless.calls.some((call) => call.op === "enableService"),
-    false,
-    "no enable was sent",
-  );
-  assert.deepEqual(
-    endless.summary.cases.map((c) => [c.outcome, c.reason]),
-    [
-      [
-        "stopped",
-        "the list of enabled services before the enabling is incomplete: the enabling was not sent",
-      ],
-    ],
-  );
-  assert.deepEqual(endless.calls.filter((call) => call.op === "listEnabledServices").length, 3);
-  assert.ok(endless.notes.some((n) => n.note === "enable-skipped"));
-  const failing = await serviceRun({
-    list: () => ({ status: 403, body: { error: { status: "PERMISSION_DENIED" } }, unknown: false }),
-    states: ["DISABLED"],
-  });
-  assert.equal(
-    failing.calls.some((call) => call.op === "enableService"),
-    false,
-  );
-  assert.equal(failing.summary.stopped !== null, true);
-});
-
-test("after the enabling the state is read until it says ENABLED, ten seconds apart, and the cases that follow start only then", async () => {
-  const slow = await serviceRun({
-    list: page,
-    states: ["DISABLED", "DISABLED", "DISABLED", "ENABLED"],
-  });
-  const reads = slow.calls.filter((call) => call.op === "getService");
-  // The first read is the one that finds DISABLED; then three polls, the last one says ENABLED.
-  assert.equal(reads.length, 4);
-  assert.deepEqual(slow.sleeps, [10_000, 10_000]);
-  assert.deepEqual(
-    slow.notes.filter((n) => n.note === "enable-state").map((n) => n.state),
-    ["ENABLED"],
-  );
-  assert.equal(
-    slow.calls.at(-1).op,
-    "publishEvents",
-    "the publish of the enabled state comes last",
-  );
-  const after = slow.calls.findIndex((call) => call.op === "enableService");
-  assert.ok(slow.calls.slice(after).some((call) => call.op === "listEnabledServices"));
-  assert.equal(slow.summary.stopped, null);
-  const never = await serviceRun({ list: page, states: ["DISABLED"] });
-  assert.equal(
-    never.calls.filter((call) => call.op === "getService").length,
-    13,
-    "the first read and twelve polls",
-  );
-  assert.equal(never.sleeps.length, 11);
-  assert.deepEqual(
-    never.summary.cases.map((c) => c.reason),
-    ["the publishing API did not report ENABLED within 12 reads after the enabling"],
-  );
-  assert.equal(
-    never.calls.filter((call) => call.op === "publishEvents").length,
-    2,
-    "only the two publishes of the disabled state were sent",
-  );
 });
 
 test("a production run sends the quota project of the run on every request and the capture notes it; an emulator run sends none", () => {

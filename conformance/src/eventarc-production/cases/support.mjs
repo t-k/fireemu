@@ -1,6 +1,7 @@
 // Helpers the cases share. A case never judges an answer: it records it. It only reads an answer to
 // decide the next step (the operation to poll, whether a channel exists before something is published to it).
 
+import { CaseAbort } from "../../pubsub-production/cases/support.mjs";
 import { isRecordedNotFound } from "../client.mjs";
 
 export { CaseAbort, StopClean, must } from "../../pubsub-production/cases/support.mjs";
@@ -70,12 +71,12 @@ export async function waitOperation(ctx, host, reply, { attempts = 10, settle } 
 /**
  * Creates the channel `name` and waits for its operation, writing the outcome into the ledger.
  * Returns `{ created, settled, owned }`: `owned` is true only when the operation is done without an
- * error (a 2xx alone does not prove that this run created the channel).
+ * error (a 2xx alone does not prove that this run created the channel). The body is built by the client.
  */
-export async function createAndWait(ctx, name, body = {}) {
+export async function createAndWait(ctx, name) {
   const id = name.split("/").at(-1);
   const location = name.split("/")[3];
-  const created = await ctx.client.createChannel(ctx.project, location, id, body);
+  const created = await ctx.client.createChannel(ctx.project, location, id);
   const settled = await waitOperation(ctx, "eventarc", created, {
     settle: { name, action: "create" },
   });
@@ -84,10 +85,23 @@ export async function createAndWait(ctx, name, body = {}) {
   return { created, settled, owned };
 }
 
-/** Creates an owned channel and waits for the creation; returns its name, or null if it is not proven ours. */
-export async function createOwnedChannel(ctx, key, body = {}) {
+/**
+ * Creates an owned channel and returns its name. A case that needs the channel stops here, with the
+ * reason, when the creation was refused or is not confirmed by its operation: its dependent steps are
+ * skipped explicitly and nothing is sent to a name that may not exist (stage A went on and published to
+ * a name it had never created).
+ */
+export async function requireChannel(ctx, key) {
   const name = ctx.channel(key);
-  return (await createAndWait(ctx, name, body)).owned ? name : null;
+  const { created, owned } = await createAndWait(ctx, name);
+  if (!owned) {
+    ctx.note("channel-not-confirmed", { name, status: created.status });
+    throw new CaseAbort(
+      `the creation of ${key}`,
+      created.ok ? { code: "its operation did not finish without an error" } : created,
+    );
+  }
+  return name;
 }
 
 /** True when the default channel is known not to exist (the recorded 404), so a publish to it reaches nothing. */

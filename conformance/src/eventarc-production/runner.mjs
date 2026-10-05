@@ -48,7 +48,17 @@ export function assertBudgetCovers(cases, maxRequests) {
     );
 }
 
-function createContext({ item, transports, ownership, capture, options, sleep, makeSdk, ledger }) {
+function createContext({
+  item,
+  transports,
+  ownership,
+  capture,
+  options,
+  sleep,
+  makeSdk,
+  ledger,
+  scopedToken,
+}) {
   const caseId = item.id;
   const meter = { used: 0 };
   const guarded = Object.fromEntries(
@@ -79,6 +89,11 @@ function createContext({ item, transports, ownership, capture, options, sleep, m
     project: ownership.project,
     location: options.location,
     production: options.production,
+    // The project number in the path of a call, given at run time and never written down (null when the
+    // run was given none): the usage project is the number when `--project-number` was passed.
+    projectNumber: options.usageProject === ownership.project ? null : options.usageProject,
+    /** A real token of `scope`, or null when none can be had: it is never recorded. */
+    scopedToken,
     ownership,
     sdk,
     client: createClient({
@@ -118,6 +133,7 @@ export async function runCases({
   options,
   sleep,
   makeSdk = null,
+  scopedToken = async () => null,
   ledger = createLedger(),
   isStopping = () => false,
 }) {
@@ -143,6 +159,7 @@ export async function runCases({
       sleep: stoppable,
       makeSdk,
       ledger,
+      scopedToken,
     });
     try {
       await item.run(context);

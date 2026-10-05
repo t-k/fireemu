@@ -1,14 +1,18 @@
-import { channelLifecycle } from "./channels.mjs";
+import { channelDelete, channelLifecycle } from "./channels.mjs";
+import { createProbe } from "./create-probe.mjs";
 import { authErrors } from "./errors.mjs";
 import { publishContent, publishEnvelope, publishLimits } from "./publish.mjs";
 import { adminSdkPublish } from "./sdk.mjs";
-import { serviceState } from "./service.mjs";
+import { preconditions } from "./service.mjs";
 
-// The order matters: the service-state case is first because it records the answers of the disabled
-// publishing API before it enables it, which can only be recorded once.
+// The order matters. The preconditions come first (the publishing API is enabled, and the recording does
+// not enable it). The create probe is second: it stops the whole run, cleanly, when a creation with a name
+// is refused, so that nothing that needs a channel is sent without one.
 export const CASES = Object.freeze([
-  serviceState,
+  preconditions,
+  createProbe,
   channelLifecycle,
+  channelDelete,
   publishEnvelope,
   publishContent,
   publishLimits,

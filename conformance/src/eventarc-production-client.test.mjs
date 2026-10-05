@@ -87,14 +87,6 @@ test("every operation is the request the API documents, on its host", async () =
   const channel = ownership.channel("us-central1", "c");
   const expected = {
     getService: [[], "usage", "GET", `/v1/projects/123/services/${PUBLISHING_API}`, undefined],
-    enableService: [[], "usage", "POST", `/v1/projects/123/services/${PUBLISHING_API}:enable`, {}],
-    listEnabledServices: [
-      [{ pageToken: "a b" }],
-      "usage",
-      "GET",
-      "/v1/projects/123/services?filter=state%3AENABLED&pageSize=200&pageToken=a%20b",
-      undefined,
-    ],
     getOperation: [
       ["eventarc", "projects/p/locations/l/operations/op-1"],
       "eventarc",
@@ -103,11 +95,11 @@ test("every operation is the request the API documents, on its host", async () =
       undefined,
     ],
     createChannel: [
-      ["demo-project", "us-central1", "fe0123456789ab-c", { a: 1 }],
+      ["demo-project", "us-central1", "fe0123456789ab-c"],
       "eventarc",
       "POST",
       "/v1/projects/demo-project/locations/us-central1/channels?channelId=fe0123456789ab-c",
-      { a: 1 },
+      { name: "projects/demo-project/locations/us-central1/channels/fe0123456789ab-c" },
     ],
     getChannel: [[channel], "eventarc", "GET", `/v1/${channel}`, undefined],
     listChannels: [
@@ -127,6 +119,11 @@ test("every operation is the request the API documents, on its host", async () =
     ],
   };
   assert.deepEqual(OPERATION_NAMES.toSorted(), Object.keys(expected).toSorted());
+  assert.equal(
+    OPERATION_NAMES.some((name) => /enable|disable/i.test(name)),
+    false,
+    "stage B changes no service",
+  );
   for (const [operation, [args, host, method, path, body]] of Object.entries(expected)) {
     const { calls, transports } = fakeTransports();
     const client = createClient({ transports, ownership, caseId: "c", usageProject: "123" });
@@ -163,11 +160,11 @@ test("a changing operation on a channel that is not the run's is refused before 
   await assert.rejects(client.deleteChannel(foreign), /not a channel of this run/);
   await assert.rejects(client.publishEvents(foreign, {}), /not a channel of this run/);
   await assert.rejects(
-    client.createChannel("demo-project", "us-central1", "firebase", {}),
+    client.createChannel("demo-project", "us-central1", "firebase"),
     /not a channel of this run/,
   );
   await assert.rejects(
-    client.createChannel("other-project", "us-central1", "fe0123456789ab-x", {}),
+    client.createChannel("other-project", "us-central1", "fe0123456789ab-x"),
     /not a channel of this run/,
   );
   assert.equal(calls.length, 0);
@@ -253,7 +250,7 @@ test("an answer that names an operation carries its name in the ledger kind, so 
     const ledger = createLedger();
     const { transports } = fakeTransports(reply);
     const client = createClient({ transports, ownership, caseId: "c", usageProject: "p", ledger });
-    if (action === "create") await client.createChannel("demo-project", "us-central1", id, {});
+    if (action === "create") await client.createChannel("demo-project", "us-central1", id);
     else await client.deleteChannel(name);
     return ledger.state().get(name)[action === "create" ? "creates" : "deletes"];
   };

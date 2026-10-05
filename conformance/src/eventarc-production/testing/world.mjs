@@ -1,0 +1,181 @@
+// A model of the Eventarc channel service for the tests of the recorder: a stateful transport that
+// answers like production where production was recorded, and refuses what production refuses.
+//
+// What is recorded (stage A, r2 rows 4, 5, 28 and 29; `fixtures/stage-b-world/recorded-refusals.json`)
+// is returned byte for byte: a create whose body has no `name` is a 400 `channel.name is empty`, a
+// publish without events is a 400 `No events provided.`, a missing channel is a 404. What is not
+// recorded yet (the success answers, the operation of a create, a duplicate, a name that does not match
+// the path, the pages of a list) is a flow model only: it has the shape the recorder needs to follow
+// the request, and it is never evidence of production's answer.
+//
+// The model refuses a write whose required fields are missing, as production does (checklist section 2,
+// "Request shapes"): `world.refusals` lists every such refusal, so that a test can assert that the
+// recorder sent none of them except the probes it names on purpose.
+
+import { readFileSync } from "node:fs";
+
+const RECORDED = JSON.parse(
+  readFileSync(new URL("../fixtures/stage-b-world/recorded-refusals.json", import.meta.url), "utf8"),
+).rows;
+
+/** The recorded answers, as `{ status, body }` copies. */
+export const recorded = (key) => structuredClone(RECORDED[key].response);
+
+const reply = (status, body) => ({ status, body, unknown: false });
+const invalid = (message) =>
+  reply(400, { error: { code: 400, message, status: "INVALID_ARGUMENT" } });
+const notFound = (name) =>
+  reply(404, {
+    error: {
+      code: 404,
+      message: `Resource '${name}' was not found`,
+      status: "NOT_FOUND",
+      details: [{ "@type": "type.googleapis.com/google.rpc.ResourceInfo", resourceName: name }],
+    },
+  });
+
+const CHANNEL_ID = /^[a-z][a-z0-9-]{2,62}$/;
+const CHANNEL_PATH = /^projects\/([^/]+)\/locations\/([^/]+)\/channels\/([^/]+)$/;
+const CREATE_PATH = /^projects\/([^/]+)\/locations\/([^/]+)\/channels$/;
+
+/**
+ * What production refuses about the shape of a channel creation, or null: a body that is not an object, or
+ * whose `name` is missing, empty or not a string (the recorded 400 `channel.name is empty`), or whose
+ * name is not the full resource name of the path's parent and `channelId` (a 400 whose wording is a model).
+ */
+export function createShapeRefusal({ path, body }) {
+  const url = new URL(`http://world${path}`);
+  const parent = url.pathname.replace(/^\/v1\//, "").replace(/\/channels$/, "");
+  const id = url.searchParams.get("channelId");
+  if (typeof body !== "object" || body === null || Array.isArray(body))
+    return { kind: "create-no-body", answer: recorded("createChannel-no-name") };
+  if (typeof body.name !== "string" || body.name === "")
+    return { kind: "create-no-name", answer: recorded("createChannel-no-name") };
+  if (id === null || body.name !== `${parent}/channels/${id}`)
+    return {
+      kind: "create-name-mismatch",
+      answer: invalid("The request was invalid: channel.name does not match the parent and channelId"),
+    };
+  return null;
+}
+
+export function createWorld({
+  project,
+  locations = ["us-central1", "europe-west1"],
+  doneAfter = 1,
+  /** How a second create of a name answers: a 409, or a 200 whose operation ends with ALREADY_EXISTS. */
+  duplicate = "operation",
+  /** Names that exist before the run (not created by it). */
+  existing = [],
+  /** The most events in one publish and the longest text of one event (the model's limits, not production's). */
+  eventLimit = 255,
+  textLimit = 600_000,
+  /**
+   * How a creation of a name answers: `ok` (a 200 operation), `unknown-appears` (a 503, and the channel
+   * exists), `unknown-absent` (a 503, and it does not), `invisible` (a 200 operation done without an
+   * error, and the channel never shows: read-after-write lag or a channel that is gone).
+   */
+  createAnswer = "ok",
+  /** How a deletion answers: `ok`, `unknown-effective` (a 503, the channel is gone) or `unknown-noeffect`. */
+  deleteAnswer = "ok",
+} = {}) {
+  const channels = new Map(existing.map((name) => [name, { createTime: "2026-01-01T00:00:00Z" }]));
+  const operations = new Map();
+  const refusals = [];
+  const calls = [];
+  let counter = 0;
+  const refuse = (call, kind, answer) => {
+    refusals.push({ kind, case: call.label?.case, step: call.label?.step, op: call.op });
+    return answer;
+  };
+  const limits = [];
+  const limited = (call, kind, answer) => {
+    limits.push({ kind, case: call.label?.case, op: call.op });
+    return answer;
+  };
+  const operation = (parent, outcome) => {
+    counter += 1;
+    const name = `${parent}/operations/operation-${counter}`;
+    operations.set(name, { reads: 0, ...outcome });
+    return { name, done: false, metadata: { "@type": "type.googleapis.com/google.cloud.eventarc.v1.OperationMetadata" } };
+  };
+  const create = (call, url) => {
+    const parent = CREATE_PATH.exec(decodeURIComponent(url.pathname.replace(/^\/v1\//, "")));
+    const id = url.searchParams.get("channelId");
+    if (parent === null) return invalid("The request was invalid: malformed parent");
+    if (parent[1] !== project || !locations.includes(parent[2])) return reply(403, { error: { code: 403, status: "PERMISSION_DENIED", message: "Location is not supported" } });
+    const shape = createShapeRefusal(call);
+    if (shape !== null) return refuse(call, shape.kind, shape.answer);
+    const name = `${parent[0]}/${id}`;
+    if (!CHANNEL_ID.test(id) || id.startsWith("goog"))
+      return invalid("The request was invalid: invalid channel ID");
+    if (channels.has(name)) {
+      if (duplicate === "409")
+        return reply(409, { error: { code: 409, status: "ALREADY_EXISTS", message: "already exists" } });
+      return reply(200, operation(parent[0], { error: { code: 6, message: "already exists" } }));
+    }
+    if (createAnswer === "unknown-absent") return { status: 503, body: {}, unknown: true };
+    if (createAnswer !== "invisible") channels.set(name, { createTime: "2026-10-05T00:00:00Z" });
+    if (createAnswer === "unknown-appears") return { status: 503, body: {}, unknown: true };
+    return reply(200, operation(parent[0], {}));
+  };
+  const publish = (call, name) => {
+    const events = call.body?.events;
+    if (!Array.isArray(events) || events.length === 0)
+      return refuse(call, "publish-no-events", recorded(Array.isArray(events) ? "publishEvents-empty-list" : "publishEvents-no-events-member"));
+    if (events.length > eventLimit)
+      return limited(call, "publish-too-many", reply(400, { error: { code: 400, status: "OUT_OF_RANGE", message: "Too many events." } }));
+    if (events.some((event) => (event?.textData?.length ?? 0) > textLimit))
+      return limited(call, "publish-too-large", reply(400, { error: { code: 400, status: "INVALID_ARGUMENT", message: "Event too large." } }));
+    if (!channels.has(name))
+      return reply(404, { error: { code: 404, status: "NOT_FOUND", message: "Associated channel does not exist." } });
+    return reply(200, {});
+  };
+  const list = (parent, url) => {
+    const size = Number(url.searchParams.get("pageSize") ?? 50);
+    const after = url.searchParams.get("pageToken");
+    const names = [...channels.keys()].filter((n) => n.startsWith(`${parent}/channels/`)).toSorted();
+    const from = after === null ? 0 : names.findIndex((n) => n > Buffer.from(after, "base64url").toString()) ;
+    if (from < 0 && after !== null) return reply(200, {});
+    const page = names.slice(from, from + size);
+    const next = from + size < names.length ? Buffer.from(page.at(-1)).toString("base64url") : undefined;
+    if (page.length === 0) return reply(200, {});
+    return reply(200, { channels: page.map((n) => Object.assign({ name: n }, channels.get(n))), ...(next ? { nextPageToken: next } : {}) });
+  };
+  return {
+    channels,
+    refusals,
+    /** The publishes the model refused for a limit (not for a missing required field). */
+    limits,
+    calls,
+    async request(call) {
+      calls.push({ op: call.op, method: call.method, path: call.path, body: call.body, token: call.token });
+      const url = new URL(`http://world${call.path}`);
+      const bare = decodeURIComponent(url.pathname.replace(/^\/v1\//, "").replace(/^\//, ""));
+      if (call.op === "getService") return reply(200, { state: "ENABLED" });
+      if (call.op === "getOperation") {
+        const state = operations.get(bare);
+        if (state === undefined) return notFound(bare);
+        state.reads += 1;
+        const done = state.reads >= doneAfter;
+        return reply(200, { name: bare, ...(done ? { done: true, ...(state.error ? { error: state.error } : { response: {} }) } : { done: false }) });
+      }
+      if (call.op === "createChannel") return create(call, url);
+      if (call.op === "getChannel") {
+        const found = channels.get(bare);
+        return found === undefined ? notFound(bare) : reply(200, { name: bare, ...found });
+      }
+      if (call.op === "listChannels") return list(bare.replace(/\/channels$/, ""), url);
+      if (call.op === "deleteChannel") {
+        if (!CHANNEL_PATH.test(bare) || !channels.has(bare)) return notFound(bare);
+        if (deleteAnswer === "unknown-noeffect") return { status: 503, body: {}, unknown: true };
+        channels.delete(bare);
+        if (deleteAnswer === "unknown-effective") return { status: 503, body: {}, unknown: true };
+        return reply(200, operation(bare.replace(/\/channels\/[^/]+$/, ""), {}));
+      }
+      if (call.op === "publishEvents" || call.op === "sdk.publishEvents")
+        return publish(call, bare.replace(/:publishEvents$/, ""));
+      throw new Error(`the world does not know ${call.op}`);
+    },
+  };
+}

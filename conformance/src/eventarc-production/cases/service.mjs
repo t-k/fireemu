@@ -1,82 +1,24 @@
-import { StopClean, cloudEvent, defaultChannelAbsent, waitOperation } from "./support.mjs";
+import { StopClean, isRecordedNotFound } from "./support.mjs";
 
-/** How long the state is polled after the enabling: 12 reads, 10 seconds apart. */
-const STATE_POLLS = 12;
-const STATE_POLL_MS = 10_000;
-
-/** The names of the enabled services, read a page at a time (at most 3 pages), and whether the read was complete. */
-async function enabledServices(ctx) {
-  const names = [];
-  let pageToken;
-  for (let page = 0; page < 3; page += 1) {
-    const reply = await ctx.client.listEnabledServices(pageToken ? { pageToken } : {});
-    if (!reply.ok) return { names, complete: false };
-    for (const item of reply.body?.services ?? []) names.push(item.config?.name ?? item.name);
-    pageToken = reply.body?.nextPageToken;
-    if (!pageToken) return { names, complete: true };
-  }
-  return { names, complete: false };
-}
-
-// The publishing API is disabled in the sandbox until this case enables it. While it is disabled, the
-// answers of a publish and of the channel calls are recorded once; then the API is enabled and left
-// enabled (the owner's decision), which is a change to the project that the send's change log names.
-export const serviceState = {
-  id: "service-state",
-  short: "sv",
-  requests: 36,
+// What stage B needs of the project before anything is created: the publishing API is enabled (stage A
+// enabled it and left it enabled; this recording never changes a service). The default channel is read, so
+// that the recording says whether production created it in the meantime.
+export const preconditions = {
+  id: "preconditions",
+  short: "pr",
+  requests: 3,
   async run(ctx) {
     const c = ctx.client;
-    const before = await c.getService();
-    const disabled = before.body?.state === "DISABLED";
-    ctx.note("service-state", {
-      before: before.body?.state ?? null,
-      disabledStateRecorded: disabled,
-    });
-    if (disabled) {
-      // The publish answers while the API is disabled: an owned channel that was never created, and the
-      // default channel (only if it does not exist, so that nothing reaches a real channel).
-      const never = ctx.channel("never-created");
-      await c.publishEvents(never, { events: [cloudEvent(ctx)] });
-      if (await defaultChannelAbsent(ctx))
-        await c.publishEvents(ctx.publishTarget("firebase"), { events: [cloudEvent(ctx)] });
-      // The Eventarc API itself is enabled: its calls while the publishing API is disabled.
-      await c.getChannel(never);
-      await c.listChannels(ctx.project, ctx.location, { pageSize: 10 });
-      const listedBefore = await enabledServices(ctx);
-      // The dependent APIs the enabling turns on are only knowable from a complete list before it.
-      if (!listedBefore.complete) {
-        ctx.note("enable-skipped", {
-          why: "the list of enabled services before the enabling is incomplete",
-        });
-        throw new StopClean(
-          "the list of enabled services before the enabling is incomplete: the enabling was not sent",
-        );
-      }
-      const enabled = await c.enableService();
-      await waitOperation(ctx, "usage", enabled);
-      // A publish can still answer SERVICE_DISABLED for a while after the operation is done: the state is
-      // read until it says ENABLED, and the cases that follow start only then.
-      let state = null;
-      for (let poll = 0; poll < STATE_POLLS && state !== "ENABLED"; poll += 1) {
-        if (poll > 0) await ctx.sleep(STATE_POLL_MS);
-        state = (await c.getService()).body?.state ?? null;
-      }
-      ctx.note("enable-state", { state, polls: STATE_POLLS });
-      if (state !== "ENABLED")
-        throw new StopClean(
-          `the publishing API did not report ENABLED within ${STATE_POLLS} reads after the enabling`,
-        );
-      const listedAfter = await enabledServices(ctx);
-      // What the enabling turned on besides the publishing API (a dependency of it).
-      ctx.note("enabled-services", {
-        before: listedBefore.names.length,
-        after: listedAfter.names.length,
-        added: listedAfter.names.filter((name) => !listedBefore.names.includes(name)),
-        complete: listedBefore.complete && listedAfter.complete,
-      });
-    }
-    // The state after, and the first publish with the API enabled (an owned channel that was never created).
-    await c.publishEvents(ctx.channel("never-created"), { events: [cloudEvent(ctx)] });
+    const service = await c.getService();
+    const state = service.body?.state ?? null;
+    ctx.note("service-state", { state });
+    if (state !== "ENABLED")
+      throw new StopClean(
+        `the publishing API is ${String(state)}: stage B does not enable it, nothing was created`,
+      );
+    const channel = await c.getChannel(
+      `projects/${ctx.project}/locations/${ctx.location}/channels/firebase`,
+    );
+    ctx.note("default-channel", { absent: isRecordedNotFound(channel), status: channel.status });
   },
 };

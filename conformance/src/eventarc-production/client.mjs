@@ -1,5 +1,6 @@
 // The operations of a recording, over the three hosts they live on: Eventarc (channels and their
-// operations), Eventarc Publishing (publishEvents) and Service Usage (the state of the publishing API).
+// operations), Eventarc Publishing (publishEvents) and Service Usage (the state of the publishing API,
+// read only: stage A enabled it, and the client of stage B cannot enable or change any service).
 // Every changing operation on a channel names a channel of the run (or a probe registered before it was
 // sent) and is refused before anything is sent otherwise. The client normalizes each answer like the
 // Pub/Sub client does: a canonical code, `ok`, and the step number the capture carries.
@@ -66,31 +67,23 @@ const operations = ({ usageProject, publishPrefix }) => ({
     method: "GET",
     path: `/v1/projects/${usageProject}/services/${PUBLISHING_API}`,
   }),
-  enableService: () => ({
-    host: "usage",
-    method: "POST",
-    path: `/v1/projects/${usageProject}/services/${PUBLISHING_API}:enable`,
-    body: {},
-  }),
-  // The services that are enabled, a page at a time: read before and after the enabling, so that a
-  // dependent API the enabling turns on is recorded.
-  listEnabledServices: (page = {}) => ({
-    host: "usage",
-    method: "GET",
-    path: `/v1/projects/${usageProject}/services?filter=${encodeURIComponent("state:ENABLED")}&pageSize=200${page.pageToken ? `&pageToken=${encodeURIComponent(page.pageToken)}` : ""}`,
-  }),
   getOperation: (host, name) => ({ host, method: "GET", path: `/v1/${encodeName(name)}` }),
-  createChannel: (project, location, channelId, body = {}) => ({
-    host: "eventarc",
-    method: "POST",
-    path: `/v1/projects/${project}/locations/${location}/channels?channelId=${encodeURIComponent(channelId)}`,
-    body,
-    changes: [`projects/${project}/locations/${location}/channels/${channelId}`],
-    ledger: {
-      action: "create",
-      name: `projects/${project}/locations/${location}/channels/${channelId}`,
-    },
-  }),
+  // The body is the whole `Channel` with its full resource name, as firebase-tools 15.28.2 posts it
+  // (`lib/gcp/eventarc.js` createChannel) and as production requires it: a body without `name` is a 400
+  // `channel.name is empty` (stage A, r2 row 4: all 28 creations of the first two recordings). It is
+  // built here from the path and the ID, and no caller may pass one.
+  createChannel: (project, location, channelId, ...rest) => {
+    if (rest.length > 0) throw new Error("createChannel builds the body itself: it takes no body");
+    const name = `projects/${project}/locations/${location}/channels/${channelId}`;
+    return {
+      host: "eventarc",
+      method: "POST",
+      path: `/v1/projects/${project}/locations/${location}/channels?channelId=${encodeURIComponent(channelId)}`,
+      body: { name },
+      changes: [name],
+      ledger: { action: "create", name },
+    };
+  },
   getChannel: (name) => ({ host: "eventarc", method: "GET", path: `/v1/${encodeName(name)}` }),
   listChannels: (project, location, page) => ({
     host: "eventarc",

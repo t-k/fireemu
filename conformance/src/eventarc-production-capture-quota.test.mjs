@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { createServer } from "node:http";
 import test from "node:test";
 import { createBudget, createCapture } from "./pubsub-production/capture.mjs";
-import { createRest } from "./pubsub-production/rest.mjs";
+import { createRawRest as createRest } from "./eventarc-production/rest.mjs";
 
 async function server() {
   const http = createServer((_, response) => response.end("{}"));

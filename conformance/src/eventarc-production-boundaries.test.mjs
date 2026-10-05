@@ -13,7 +13,7 @@ import {
   CE_TYPE,
   baseAttributes,
   cloudEvent,
-  createOwnedChannel,
+  requireChannel,
   waitOperation,
   without,
   withoutAttribute,
@@ -74,6 +74,7 @@ function fakeCtx(replies) {
       location: "us-central1",
       channel: (key) => `projects/demo-project/locations/us-central1/channels/fe-${key}`,
       sleep: async (ms) => sleeps.push(ms),
+      note: () => {},
       client: {
         getOperation: async (host, name) => (
           reads.push([host, name]),
@@ -141,22 +142,24 @@ test("an owned channel is proven only when the creation's operation is done with
   const outcome = async (created, settledReply) => {
     const { ctx, settled } = fakeCtx([settledReply]);
     ctx.client.createChannel = async () => created;
-    const name = await createOwnedChannel(ctx, "k");
+    const name = await requireChannel(ctx, "k").catch((error) => error);
     return { name, settled };
   };
   const op = (extra = {}) => ({ ok: true, body: { name: "operations/o", done: true, ...extra } });
   const wanted = "projects/demo-project/locations/us-central1/channels/fe-k";
   assert.equal((await outcome(op(), op())).name, wanted);
-  assert.equal((await outcome({ ok: false, body: {} }, op())).name, null);
-  assert.equal((await outcome(op({ done: false }), { ok: false, body: {} })).name, null);
-  assert.equal((await outcome(op({ done: false }), op({ error: { code: 3 } }))).name, null);
-  assert.equal((await outcome(op({ error: { code: 3 } }), op())).name, null);
-  // A creation that is still pending when the reads stop is not proven either.
-  assert.equal(
-    (await outcome(op({ done: false }), { ok: true, body: { name: "operations/o", done: false } }))
-      .name,
-    null,
-  );
+  for (const [created, settledReply] of [
+    [{ ok: false, body: {} }, op()],
+    [op({ done: false }), { ok: false, body: {} }],
+    [op({ done: false }), op({ error: { code: 3 } })],
+    [op({ error: { code: 3 } }), op()],
+    // A creation that is still pending when the reads stop is not proven either.
+    [op({ done: false }), { ok: true, body: { name: "operations/o", done: false } }],
+  ]) {
+    const { name } = await outcome(created, settledReply);
+    assert.equal(name.name, "CaseAbort", "the case stops, with the reason, and returns no name");
+    assert.match(name.message, /^the creation of k did not succeed \(/);
+  }
   const { settled } = await outcome(op({ done: false }), op());
   assert.equal(settled.length, 1);
   assert.deepEqual(settled[0].slice(0, 2), [wanted, "create"]);
@@ -292,7 +295,7 @@ test("main: a signal during a case run stops it between cases, after which the c
       "--out",
       out,
       "--only",
-      "service-state,auth-errors",
+      "publish-envelope,auth-errors",
       "--run-id",
       RUN,
     ],
@@ -303,7 +306,7 @@ test("main: a signal during a case run stops it between cases, after which the c
   assert.equal(summary.stopped, "signal");
   assert.deepEqual(
     summary.cases.map((c) => c.id),
-    ["service-state"],
+    ["publish-envelope"],
   );
   const lines = readFileSync(join(out, `capture-${RUN}.jsonl`), "utf8")
     .trim()

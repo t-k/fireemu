@@ -1,8 +1,8 @@
-// The plain production recorder for the stage A of Eventarc, without any deploy: the state of the
-// publishing API and its enabling, channel lifecycle, publishEvents (envelope, content, limits), the Admin
-// SDK publish and the credential errors, over REST. Every exchange is captured as it happens, and every
-// channel the run created is deleted by prefix at the end with the long-running operation polled to done
-// and the 404 read back.
+// The plain production recorder for the stage B of Eventarc, without any deploy: the channel created with
+// its name, its lifecycle, publishEvents to a channel that exists (envelope, content, limits), the Admin
+// SDK publish and the credential errors, over REST, with the raw bytes of every answer. Every exchange is
+// captured as it happens, and every channel the run created is deleted by prefix at the end with the
+// long-running operation polled to done and the 404 read back.
 //
 //   node record.mjs --target emulator --out <dir>                    (CLOUD_EVENTARC_EMULATOR_HOST)
 //   node record.mjs --target production --project <id> --out <dir> [--project-number <n>]
@@ -14,11 +14,12 @@ import { mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { basename, dirname, join, resolve as resolvePath } from "node:path";
 import { createBudget, createCapture, createFileJournal } from "../pubsub-production/capture.mjs";
 import { createLedger } from "../pubsub-production/ledger.mjs";
-import { createRest } from "../pubsub-production/rest.mjs";
 import { createTokenProvider } from "../pubsub-production/token.mjs";
 import { cleanup, ledgerFacts } from "./cleanup.mjs";
 import { createClient } from "./client.mjs";
 import { createOwnership, isRunId, newRunId } from "./names.mjs";
+import { createRawRest } from "./rest.mjs";
+import { createScopedToken } from "./scoped-token.mjs";
 import { assertBudgetCovers, exitCodeOf, runCases, selectCases } from "./runner.mjs";
 import { directoryOf, ledgerFilesOf, readLedgerFiles } from "./ledger-files.mjs";
 import { createSdk } from "./sdk.mjs";
@@ -215,7 +216,7 @@ export async function main(
     Object.fromEntries(
       ["eventarc", "publishing", "usage"].map((key) => [
         key,
-        createRest({
+        createRawRest({
           base: base(key),
           budget,
           capture,
@@ -285,6 +286,7 @@ export async function main(
         options,
         sleep: wait,
         makeSdk,
+        scopedToken: options.production ? createScopedToken() : async () => null,
         ledger,
         isStopping: () => stopping,
       });

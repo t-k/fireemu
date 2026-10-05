@@ -1,0 +1,120 @@
+{
+ "source": "EVENTARC stage A recording r2 (run 9e560c404162), capture rows by n; the answers are production's",
+ "rows": {
+  "createChannel-no-name": {
+   "n": 4,
+   "request": {
+    "method": "POST",
+    "path": "/v1/projects/fireemu-oracle-idp/locations/us-central1/channels?channelId=fe9e560c404162-cl-c1",
+    "body": {}
+   },
+   "response": {
+    "status": 400,
+    "body": {
+     "error": {
+      "code": 400,
+      "message": "The request was invalid: channel.name is empty",
+      "status": "INVALID_ARGUMENT",
+      "details": [
+       {
+        "@type": "type.googleapis.com/google.rpc.BadRequest",
+        "fieldViolations": [
+         {
+          "field": "channel.name"
+         }
+        ]
+       },
+       {
+        "@type": "type.googleapis.com/google.rpc.RequestInfo",
+        "requestId": "5f67a4c3b18aff11"
+       }
+      ]
+     }
+    }
+   }
+  },
+  "getChannel-missing": {
+   "n": 5,
+   "request": {
+    "method": "GET",
+    "path": "/v1/projects/fireemu-oracle-idp/locations/us-central1/channels/fe9e560c404162-cl-c1"
+   },
+   "response": {
+    "status": 404,
+    "body": {
+     "error": {
+      "code": 404,
+      "message": "Resource 'projects/fireemu-oracle-idp/locations/us-central1/channels/fe9e560c404162-cl-c1' was not found",
+      "status": "NOT_FOUND",
+      "details": [
+       {
+        "@type": "type.googleapis.com/google.rpc.ResourceInfo",
+        "resourceName": "projects/fireemu-oracle-idp/locations/us-central1/channels/fe9e560c404162-cl-c1"
+       }
+      ]
+     }
+    }
+   }
+  },
+  "publishEvents-empty-list": {
+   "n": 28,
+   "request": {
+    "method": "POST",
+    "path": "/v1/projects/fireemu-oracle-idp/locations/us-central1/channels/fe9e560c404162-pe-env-absent:publishEvents",
+    "body": {
+     "events": []
+    }
+   },
+   "response": {
+    "status": 400,
+    "body": {
+     "error": {
+      "code": 400,
+      "message": "No events provided.",
+      "status": "INVALID_ARGUMENT",
+      "details": [
+       {
+        "@type": "type.googleapis.com/google.rpc.BadRequest",
+        "fieldViolations": [
+         {
+          "field": "events",
+          "description": "No events provided."
+         }
+        ]
+       }
+      ]
+     }
+    }
+   }
+  },
+  "publishEvents-no-events-member": {
+   "n": 29,
+   "request": {
+    "method": "POST",
+    "path": "/v1/projects/fireemu-oracle-idp/locations/us-central1/channels/fe9e560c404162-pe-env-absent:publishEvents",
+    "body": {}
+   },
+   "response": {
+    "status": 400,
+    "body": {
+     "error": {
+      "code": 400,
+      "message": "No events provided.",
+      "status": "INVALID_ARGUMENT",
+      "details": [
+       {
+        "@type": "type.googleapis.com/google.rpc.BadRequest",
+        "fieldViolations": [
+         {
+          "field": "events",
+          "description": "No events provided."
+         }
+        ]
+       }
+      ]
+     }
+    }
+   }
+  }
+ }
+}

@@ -35,7 +35,7 @@ test("the client writes the ledger line before a channel creation or deletion is
     usageProject: "p",
     ledger,
   });
-  await client.createChannel("demo-project", "us-central1", name.split("/").at(-1), {});
+  await client.createChannel("demo-project", "us-central1", name.split("/").at(-1));
   await client.getChannel(name);
   assert.deepEqual(seen, ["sent", "transport", "answered", "transport"]);
   assert.deepEqual(ledger.state().get(name).creates, ["conflict"]);

@@ -31,8 +31,10 @@ from txn_program_program import RequestBudget, compile_plan  # noqa: E402
 
 DEFAULT_PROJECT = "fireemu-oracle-sbx"
 
-# A replay is refused when the age of a token of at least TOKEN_AGE_MINIMUM seconds, as the emulator saw it, differs from the recorded age by more than TOKEN_AGE_TOLERANCE seconds:
-# the nearest strict limit (idle 120 s, lifetime 270 s) is about 9 s from the nearest recorded boundary row, and steps the replay does not pace lag by about 2 s per chain.
+# A replay is refused when the age of a token of at least TOKEN_AGE_MINIMUM seconds, as the emulator saw it, differs from the recorded age by more than TOKEN_AGE_TOLERANCE
+# seconds, or lies on the other side of one of strict's limits (120 s idle, 270 s lifetime, 300 s memory) than the recorded one: a boundary row can sit well inside the
+# tolerance (P10-C's refused 120 s Commit was recorded at 120.54 to 120.58 s, 0.54 s from the limit), so the side counts, not the distance. The tolerance only has to
+# cover the steps the replay does not pace (about 2 s per chain) and the begin's own production duration (about 1.2 s).
 TOKEN_AGE_MINIMUM = 100.0
 TOKEN_AGE_TOLERANCE = 4.0
 
@@ -132,11 +134,10 @@ def main():
             waited = {step["id"] for step in plan["steps"] if "waitSeconds" in step}
             result["achievedAges"] = achieved_ages(dispatch_gaps(source["steps"], waited), dispatch_gaps(receipt["steps"], waited))
             # the age the emulator itself saw at every request of a long-lived token, beside the recorded one: a replay whose emulator-side age is off is refused
-            from txn_replay_clock import judge_token_ages, production_token_ages, token_ages
+            from txn_replay_clock import apply_age_rows, judge_token_ages, production_token_ages, token_ages
 
-            result["tokenAges"] = judge_token_ages(production_token_ages(plan["steps"], source["steps"]), token_ages(plan["steps"], paced.marks.before_times, paced.marks.after_times),
-                                                   tolerance=TOKEN_AGE_TOLERANCE, minimum=TOKEN_AGE_MINIMUM)
-            result["mismatches"] += sum(not row["match"] for row in result["tokenAges"])
+            apply_age_rows(result, judge_token_ages(production_token_ages(plan["steps"], source["steps"]), token_ages(plan["steps"], paced.marks.before_times, paced.marks.after_times),
+                                                    tolerance=TOKEN_AGE_TOLERANCE, minimum=TOKEN_AGE_MINIMUM))
     out.write_text(json.dumps(result, indent=1))
     print("complete", receipt["complete"], receipt["failureType"], "mismatches", result.get("mismatches"))
     for row in (result["cases"] or []) + (result["reads"] or []) + (result["commitTimes"] or []):

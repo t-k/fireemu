@@ -98,16 +98,28 @@ def production_token_ages(plan_steps, steps):
     return ages
 
 
-def judge_token_ages(production, emulator, *, tolerance, minimum):
-    """A row per recorded token age of at least `minimum` seconds: the emulator's age must lie within `tolerance` of it (inclusive), else the replay is refused."""
+#: Strict's limits a token's age (or an idle) can fall on either side of: the idle limit, the total lifetime and the memory of an expired token.
+STRICT_AGE_LIMITS = (120.0, 270.0, 300.0)
+
+
+def judge_token_ages(production, emulator, *, tolerance, minimum, limits=STRICT_AGE_LIMITS):
+    """A row per recorded token age of at least `minimum` seconds. It matches only when the emulator's age lies within `tolerance` of the recorded one (inclusive) and
+    on the same side of every strict limit (a recorded age at a limit is over it): an age that would flip a row's answer is refused whatever its distance."""
     rows = []
     for site, recorded in production.items():
         if recorded < minimum:
             continue
         seen = emulator.get(site)
         difference = None if seen is None else round(seen - recorded, 3)
-        rows.append({"site": site, "production": recorded, "emulator": seen, "difference": difference, "match": difference is not None and abs(difference) <= tolerance})
+        same_side = seen is not None and all((recorded >= limit) == (seen >= limit) for limit in limits)
+        rows.append({"site": site, "production": recorded, "emulator": seen, "difference": difference, "match": difference is not None and abs(difference) <= tolerance and same_side})
     return rows
+
+
+def apply_age_rows(result, rows):
+    """Store the judged age rows in a replay's result and count every failed one as a mismatch: a replay whose age is off is refused like one whose answers differ."""
+    result["tokenAges"] = rows
+    result["mismatches"] += sum(not row["match"] for row in rows)
 
 
 def idle_before(marks, sites):

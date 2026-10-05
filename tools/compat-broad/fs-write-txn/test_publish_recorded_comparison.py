@@ -225,3 +225,19 @@ def test_the_token_ages_the_emulator_saw_are_published_beside_the_rows(tmp_path)
     _o, comparison = build(tmp_path, results=[result(paths[0], tokenAges=ages), result(paths[1])], paths=paths)
     assert comparison["recordings"][0]["tokenAges"] == ages and "tokenAges" not in comparison["recordings"][1]
     assert comparison["summary"] == {"recordings": 2, "rows": 4, "mismatches": 0}
+
+
+def test_a_virtual_clock_replay_without_its_age_rows_is_refused_and_an_empty_list_is_kept(tmp_path):
+    paths = [write(tmp_path, 1), write(tmp_path, 2)]
+    virtual = lambda path, **extra: {**result(path, **extra), "metadata": {**result(path)["metadata"], "clock": "virtual"}}   # noqa: E731
+    with pytest.raises(ValueError, match="age"):
+        build(tmp_path, results=[virtual(paths[0]), virtual(paths[1], tokenAges=[])], paths=paths)
+    _o, comparison = build(tmp_path, results=[virtual(paths[0], tokenAges=[]), virtual(paths[1], tokenAges=[])], paths=paths)
+    assert [entry["tokenAges"] for entry in comparison["recordings"]] == [[], []]
+
+
+def test_a_failed_age_row_is_refused_whatever_the_mismatch_count_says(tmp_path):
+    paths = [write(tmp_path, 1), write(tmp_path, 2)]
+    failed = [{"site": "late-read", "production": 284.0, "emulator": 260.0, "difference": -24.0, "match": False}]
+    with pytest.raises(ValueError, match="age"):
+        build(tmp_path, results=[result(paths[0], tokenAges=failed), result(paths[1])], paths=paths)

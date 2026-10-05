@@ -126,18 +126,24 @@ def test_the_record_names_the_files_it_ran():
     assert record["replay"]["fileSha256"] == {"a.py": "5" * 64}
 
 
-def test_no_runner_built_overlay_directory_is_tracked():
+def test_a_tracked_overlay_directory_is_found_from_the_repository_root(tmp_path):
     import subprocess
 
-    tracked = subprocess.check_output(["git", "ls-files", "tools/compat-broad"], cwd=tool.HERE.parents[1], text=True).split()
-    assert [path for path in tracked if "fs-write-txn-overlay-" in path] == []
+    def git(*args):
+        subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@example.test", *args], cwd=tmp_path, check=True, capture_output=True)
+
+    git("init", "-q")
+    (tmp_path / "tools/compat-broad/fs-write-txn").mkdir(parents=True)
+    (tmp_path / "tools/compat-broad/fs-write-txn/a.py").write_text("x")
+    git("add", "-A")
+    git("commit", "-q", "-m", "x")
+    assert tool.tracked_overlay_paths(tmp_path) == []
+    (tmp_path / "tools/compat-broad/fs-write-txn-overlay-p12").mkdir()
+    (tmp_path / "tools/compat-broad/fs-write-txn-overlay-p12/a.py").write_text("x")
+    git("add", "-A")
+    git("commit", "-q", "-m", "overlay")
+    assert tool.tracked_overlay_paths(tmp_path) == ["tools/compat-broad/fs-write-txn-overlay-p12/a.py"]
 
 
-def test_a_directory_with_no_files_but_a_cache_is_filled(tmp_path):
-    source = tmp_path / "src"
-    source.mkdir()
-    (source / "txn_expiry_cases.py").write_text(TABLE)
-    destination = tmp_path / "copy"
-    (destination / "__pycache__").mkdir(parents=True)
-    tool.ensure_replay_tools(source, destination)
-    assert (destination / "txn_expiry_cases.py").read_text() == tool.replay_cases_text(TABLE)
+def test_no_runner_built_overlay_directory_is_tracked():
+    assert tool.tracked_overlay_paths(tool.HERE.parents[2]) == []

@@ -27,7 +27,8 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, os.environ.get("SMOKE_TOOLS", str(HERE)))
 
-# A replay is refused when the idle of a request of at least TOKEN_AGE_MINIMUM seconds, as the emulator saw it, differs from the recorded idle by more than TOKEN_AGE_TOLERANCE seconds.
+# A replay is refused when the idle of a request of at least TOKEN_AGE_MINIMUM seconds, as the emulator saw it, differs from the recorded idle by more than
+# TOKEN_AGE_TOLERANCE seconds or lies on the other side of one of strict's limits (see fs_txn_compare_local.py): the refused 120 s Commit of P10-C was recorded 0.54 s over the limit.
 TOKEN_AGE_MINIMUM = 100.0
 TOKEN_AGE_TOLERANCE = 4.0
 FAMILIES = ("txn_retry_grpc", "txn_idle_grpc", "txn_boundary_grpc")
@@ -121,11 +122,10 @@ def main():
             sites = {row["site"] for row in production.get("idleCandidates", [])}
             result["achievedAges"] = achieved_ages(production_idle_gaps(source["steps"]), production_idle_gaps(receipt["steps"]), sites=sites)
             # the idle the emulator itself saw before each long-idle request, beside the recorded one: a replay whose emulator-side idle is off is refused
-            from txn_replay_clock import idle_before, judge_token_ages
+            from txn_replay_clock import apply_age_rows, idle_before, judge_token_ages
 
-            result["tokenAges"] = judge_token_ages({site: gap for site, gap in production_idle_gaps(source["steps"]).items() if site in sites}, idle_before(paced.marks, sites),
-                                                   tolerance=TOKEN_AGE_TOLERANCE, minimum=TOKEN_AGE_MINIMUM)
-            result["mismatches"] += sum(not row["match"] for row in result["tokenAges"])
+            apply_age_rows(result, judge_token_ages({site: gap for site, gap in production_idle_gaps(source["steps"]).items() if site in sites}, idle_before(paced.marks, sites),
+                                                    tolerance=TOKEN_AGE_TOLERANCE, minimum=TOKEN_AGE_MINIMUM))
         if not result["skipped"]:
             result["skipped"] = None
     out.write_text(json.dumps(result, indent=1))

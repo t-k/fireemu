@@ -33,6 +33,12 @@ def replay_cases_text(text):
     return text.replace(DECLARED_WAIT, REPLAY_WAIT)
 
 
+def tracked_overlay_paths(root):
+    """The runner-built overlay copies that are tracked by git under `root` (there must be none): asked from the repository root, where the pathspec means something."""
+    listed = subprocess.check_output(["git", "ls-files", "tools/compat-broad"], cwd=root, text=True).split()
+    return [path for path in listed if "fs-write-txn-overlay-" in path]
+
+
 def _tool_files(directory):
     return {path.name: path for path in Path(directory).iterdir() if path.is_file()}
 

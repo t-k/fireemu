@@ -348,3 +348,36 @@ def test_a_recorded_age_of_exactly_the_minimum_is_judged_and_the_difference_is_r
     assert [row["site"] for row in rows] == ["a"] and rows[0]["difference"] == 0.0
     rows = clock.judge_token_ages({"a": 200.0}, {"a": 200.123456789}, tolerance=2.0, minimum=100.0)
     assert rows[0]["difference"] == 0.123
+
+
+# --- the emulator-side age must fall on the same side of strict's limits as the recorded one, and a failed age row is a mismatch ---
+
+def test_an_age_on_the_other_side_of_a_strict_limit_is_refused_even_inside_the_tolerance():
+    # recorded 120.54 s (refused in production, over the 120 s idle limit); the emulator saw 119.9 s: 0.64 s apart, but it would accept
+    rows = clock.judge_token_ages({"commit": 120.54, "keep": 110.7, "life": 283.0, "memory": 305.0}, {"commit": 119.9, "keep": 110.8, "life": 269.5, "memory": 299.0}, tolerance=4.0, minimum=100.0)
+    assert [(row["site"], row["match"]) for row in rows] == [("commit", False), ("keep", True), ("life", False), ("memory", False)]
+    # the same side keeps them
+    rows = clock.judge_token_ages({"commit": 120.54, "life": 283.0, "memory": 305.0}, {"commit": 120.58, "life": 284.2, "memory": 305.5}, tolerance=4.0, minimum=100.0)
+    assert all(row["match"] for row in rows)
+
+
+def test_the_limits_are_the_idle_lifetime_and_memory_of_strict_and_a_recorded_age_at_a_limit_is_over_it():
+    assert clock.STRICT_AGE_LIMITS == (120.0, 270.0, 300.0)
+    rows = clock.judge_token_ages({"a": 120.0, "b": 270.0}, {"a": 120.0, "b": 269.999}, tolerance=4.0, minimum=100.0)
+    assert [row["match"] for row in rows] == [True, False]   # at the limit counts as over; the emulator a hair under it does not
+
+
+def test_the_limits_can_be_replaced_for_a_program_with_others():
+    rows = clock.judge_token_ages({"a": 50.0}, {"a": 49.0}, tolerance=4.0, minimum=10.0, limits=(49.5,))
+    assert [row["match"] for row in rows] == [False]
+    assert clock.judge_token_ages({"a": 50.0}, {"a": 49.0}, tolerance=4.0, minimum=10.0, limits=())[0]["match"] is True
+
+
+def test_applying_the_age_rows_stores_them_and_counts_every_failed_row_as_a_mismatch():
+    result = {"mismatches": 2}
+    rows = [{"match": True}, {"match": False}, {"match": False}]
+    clock.apply_age_rows(result, rows)
+    assert result["tokenAges"] == rows and result["mismatches"] == 4
+    clean = {"mismatches": 0}
+    clock.apply_age_rows(clean, [])
+    assert clean == {"mismatches": 0, "tokenAges": []}   # a replay with no long-lived token still says it checked

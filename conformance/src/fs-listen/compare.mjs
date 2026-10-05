@@ -187,6 +187,20 @@ function withProgramErrors(recording) {
   );
 }
 
+/**
+ * Whether a declared divergence may cover this row: it differs, or the local wait ran out for an
+ * answer that production gave (the production rows are finished, the local stream is a loopback
+ * port, and the rows differ), which the divergence's reason then has to explain.
+ */
+function isKnownDivergence(verdict, production, local) {
+  if (verdict === "DIFFER") return true;
+  return (
+    verdict === "INDETERMINATE" &&
+    local.timedOut === true &&
+    !isDeepStrictEqual(canonicalRow(production), canonicalRow(local))
+  );
+}
+
 const GOOD = new Set(["MATCH", "KNOWN_DIVERGENCE"]);
 
 /**
@@ -226,7 +240,7 @@ export function compareRecordings({ productions, local, divergences = {}, settle
     else if (!l) rows[id] = { status: "MISSING" };
     else {
       const verdict = classifyRow(p1, l);
-      if (verdict === "DIFFER" && Object.hasOwn(divergences, id))
+      if (isKnownDivergence(verdict, p1, l) && Object.hasOwn(divergences, id))
         rows[id] = { status: "KNOWN_DIVERGENCE", reason: divergences[id] };
       else rows[id] = { status: verdict === "DIFFER" ? "MISMATCH" : verdict };
     }

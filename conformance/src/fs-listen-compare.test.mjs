@@ -960,9 +960,9 @@ test("L1 production, native: exactly seven rows carry a filter in one recording 
     "native/target-protocol/equality-only-query",
   ]);
   for (const id of ids) {
-    const filters = (row) => row.rows.filter((item) => item.kind === "filter").length;
+    const filters = (entry) => entry.rows.filter((item) => item.kind === "filter").length;
     assert.ok(filters(a.rows[id]) + filters(b.rows[id]) > 0, id);
-    const strip = (row) => row.rows.filter((item) => item.kind !== "filter").map((i) => i.kind);
+    const strip = (entry) => entry.rows.filter((item) => item.kind !== "filter").map((i) => i.kind);
     // Apart from filters (and the boundary they split) the frames are the same.
     assert.deepEqual(
       strip(a.rows[id]).filter((k) => k !== "boundary"),
@@ -978,4 +978,79 @@ test("L1 production, SDK: the two recordings agree on all 18 rows", () => {
   assert.equal(Object.keys(a.rows).length, 18);
   for (const id of Object.keys(a.rows))
     assert.equal(classifyRow(a.rows[id], b.rows[id]), "MATCH", id);
+});
+
+test("a declared divergence also covers a local wait that ran out for an answer production gave", () => {
+  const add = {
+    kind: "targetChange",
+    type: "ADD",
+    targetIds: [1],
+    cause: null,
+    resumeToken: false,
+  };
+  const production = fr([add, removed(9)], { timedOut: true });
+  const stuck = fr([add], { timedOut: true });
+  const recordings = (local) => ({
+    productions: [recording({ r: production }), recording({ r: production })],
+    local: recording({ r: local }),
+  });
+  // Without a declaration the row stays unfinished.
+  assert.equal(compareRecordings(recordings(stuck)).rows.r.status, "INDETERMINATE");
+  // With one, it is a known divergence, and the reason is carried.
+  const declared = compareRecordings({
+    ...recordings(stuck),
+    divergences: { r: "no index needed" },
+  });
+  assert.equal(declared.rows.r.status, "KNOWN_DIVERGENCE");
+  assert.equal(declared.rows.r.reason, "no index needed");
+  // A local wait that ran out on rows equal to production's is slow, not different.
+  const slow = compareRecordings({
+    ...recordings(production),
+    divergences: { r: "x" },
+  });
+  assert.equal(slow.rows.r.status, "MATCH");
+  // A frame-capped or errored local row is never covered by a divergence.
+  const capped = fr([add], { end: { reason: "frame-cap" } });
+  assert.equal(
+    compareRecordings({ ...recordings(capped), divergences: { r: "x" } }).rows.r.status,
+    "INDETERMINATE",
+  );
+  // An unfinished production row is not covered either.
+  const open = fr([add], { timedOut: true });
+  assert.equal(
+    compareRecordings({
+      productions: [recording({ r: open }), recording({ r: open })],
+      local: recording({ r: stuck }),
+      divergences: { r: "x" },
+    }).rows.r.status,
+    "INDETERMINATE",
+  );
+});
+
+test("the divergence registers name rows of the recorded production run and give a reason that cites the runs or the official emulator", () => {
+  const read = (name) =>
+    JSON.parse(readFileSync(new URL(`../fixtures/fs-listen/${name}`, import.meta.url), "utf8"));
+  const strict = read("divergences-strict.json");
+  const emulator = read("divergences-emulator.json");
+  const rows = new Set(Object.keys(L1["native-1"].rows));
+  for (const register of [strict, emulator])
+    for (const [id, reason] of Object.entries(register)) {
+      assert.ok(rows.has(id), `${id} is not a row of the recorded production run`);
+      assert.ok(reason.length > 80, id);
+      assert.match(reason, /nmuuicyas|official emulator|Production/, id);
+    }
+  // The emulator profile has every strict divergence and the ones the official emulator causes.
+  for (const id of Object.keys(strict)) assert.ok(id in emulator, id);
+  assert.deepEqual(
+    Object.keys(emulator)
+      .filter((id) => !(id in strict))
+      .toSorted(),
+    [
+      "native/resume-token/invalid",
+      "native/target-protocol/id-after-assigned",
+      "native/target-protocol/missing-index",
+    ],
+  );
+  for (const id of Object.keys(emulator).filter((i) => !(i in strict)))
+    assert.match(emulator[id], /official emulator/, id);
 });

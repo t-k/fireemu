@@ -1819,9 +1819,9 @@ test("the committed production rows: a post-CURRENT filter moved to a target the
   ]) {
     const [first, second] = prodRows(id);
     assert.equal(classifyLocal(first, second, first), "MATCH", id);
-    const foreign = (row) => ({
-      ...row,
-      rows: row.rows.map((item) => (item.kind === "filter" ? { ...item, targetId: 9 } : item)),
+    const foreign = (entry) => ({
+      ...entry,
+      rows: entry.rows.map((item) => (item.kind === "filter" ? { ...item, targetId: 9 } : item)),
     });
     assert.equal(classifyLocal(first, second, foreign(first)), "DIFFER", `${id}: a foreign target`);
   }

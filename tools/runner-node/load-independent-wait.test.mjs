@@ -76,7 +76,7 @@ test('an async check and an async progress are awaited', async () => {
   assert.equal(value, true);
 });
 
-test('untilExit returns the known result at once, and polls every 50 ms by default', async () => {
+test('untilExit returns the known result at once, and polls every 50 ms by default', {timeout: 20_000}, async () => {
   const known = {code: 7, signal: null};
   assert.equal(await untilExit({end: Promise.resolve({code: 0}), result: () => known, label: 'known'}), known);
   const c = clock();
@@ -87,7 +87,7 @@ test('untilExit returns the known result at once, and polls every 50 ms by defau
   assert.equal(c.t, 1000);
 });
 
-test('untilExit takes a resolved end whose result is not recorded yet, and passes on a rejected end', async () => {
+test('untilExit takes a resolved end whose result is not recorded yet, and passes on a rejected end', {timeout: 20_000}, async () => {
   const c = clock();
   assert.deepEqual(await untilExit({end: Promise.resolve({code: 1}), result: () => null, label: 'late record', ...c}), {code: 1});
   await assert.rejects(
@@ -101,9 +101,9 @@ test('untilExit resolves with the exit, or rejects only after a stall', {timeout
   let result = null;
   const end = new Promise(resolve => setTimeout(() => resolve((result = {code: 2, signal: null})), 20));
   assert.deepEqual(await untilExit({end, result: () => result, label: 'child', stallMs: 1000, sleepMs: 5}), {code: 2, signal: null});
-  const never = new Promise(() => {});
+  const stuck = clock();
   await assert.rejects(
-    untilExit({end: never, result: () => null, progress: () => 1, label: 'stuck child', stallMs: 200, sleepMs: 10}),
+    untilExit({end: new Promise(() => {}), result: () => null, progress: () => 1, label: 'stuck child', stallMs: 200, sleepMs: 10, ...stuck}),
     /stuck child/,
   );
   // While progress changes, the same child may take as long as it likes.

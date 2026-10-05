@@ -4984,9 +4984,10 @@ fn list_versions_page(
                 let found = ObjectName::try_new(name)
                     .ok()
                     .and_then(|name| store.generation(bucket, &name, *generation));
-                items.extend(found.map(|(object, time_deleted)| {
-                    gcs_json_version(object, time_deleted, host)
-                }));
+                items
+                    .extend(found.map(|(object, time_deleted)| {
+                        gcs_json_version(object, time_deleted, host)
+                    }));
             }
         }
     }
@@ -5025,7 +5026,9 @@ fn versions_scan(
             store.version_keys_from(
                 bucket,
                 query.prefix,
-                start.as_ref().map(|(name, generation)| (name.as_str(), *generation)),
+                start
+                    .as_ref()
+                    .map(|(name, generation)| (name.as_str(), *generation)),
                 GLOB_BATCH,
             )
         };

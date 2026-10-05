@@ -998,7 +998,7 @@ fn strict_versions_listing_honours_start_offset_end_offset_and_match_glob_on_eve
         );
         assert_eq!(
             listing("&startOffset=b.txt&endOffset=zz.txt"),
-            expected_versions(&generations, |n| n >= "b.txt" && n < "zz.txt"),
+            expected_versions(&generations, |n| ("b.txt".."zz.txt").contains(&n)),
             "both offsets{paging}"
         );
         assert_eq!(
@@ -1008,7 +1008,7 @@ fn strict_versions_listing_honours_start_offset_end_offset_and_match_glob_on_eve
         );
         assert_eq!(
             listing("&matchGlob=**.txt&startOffset=b&endOffset=dir2/"),
-            expected_versions(&generations, |n| n >= "b" && n < "dir2/"),
+            expected_versions(&generations, |n| ("b".."dir2/").contains(&n)),
             "glob and offsets{paging}"
         );
     }
@@ -1059,7 +1059,9 @@ fn a_filtered_versions_page_token_resumes_inside_the_filtered_listing() {
     let second = body(&call(
         &s,
         "GET",
-        &format!("/storage/v1/b/{BUCKET}/o?versions=true&matchGlob=dir/*&maxResults=1&pageToken={token}"),
+        &format!(
+            "/storage/v1/b/{BUCKET}/o?versions=true&matchGlob=dir/*&maxResults=1&pageToken={token}"
+        ),
         b"",
     ));
     assert_eq!(gen(&second["items"][0]), c[1]);
@@ -1116,7 +1118,8 @@ mod listing_properties {
 
     /// Glob patterns with a reference matcher written independently of the implementation:
     /// `*` stops at `/`, `**` does not.
-    const GLOBS: [(&str, fn(&str) -> bool); 6] = [
+    type Glob = (&'static str, fn(&str) -> bool);
+    const GLOBS: [Glob; 6] = [
         ("*", |n| !n.contains('/')),
         ("**", |_| true),
         ("a*", |n| n.starts_with('a') && !n.contains('/')),
@@ -1124,7 +1127,12 @@ mod listing_properties {
             n.strip_prefix("dir/").is_some_and(|r| !r.contains('/'))
         }),
         ("dir/**", |n| n.starts_with("dir/")),
-        ("*.txt", |n| n.ends_with(".txt") && !n.contains('/')),
+        ("*.txt", |n| {
+            std::path::Path::new(n)
+                .extension()
+                .is_some_and(|ext| ext == "txt")
+                && !n.contains('/')
+        }),
     ];
 
     #[derive(Debug, Clone)]
@@ -1182,11 +1190,12 @@ mod listing_properties {
                 model
             };
             let (strict_model, emulator_model) = (build(&strict), build(&emulator));
-            let mut extra = format!("&maxResults={}", case.page);
-            if let Some(i) = case.start { extra += &format!("&startOffset={}", POOL[i]); }
-            if let Some(i) = case.end { extra += &format!("&endOffset={}", POOL[i]); }
-            if let Some(i) = case.glob { extra += &format!("&matchGlob={}", GLOBS[i].0.replace('*', "%2A")); }
-            if case.folded { extra += "&delimiter=/"; }
+            let mut parts = vec![format!("&maxResults={}", case.page)];
+            parts.extend(case.start.map(|i| format!("&startOffset={}", POOL[i])));
+            parts.extend(case.end.map(|i| format!("&endOffset={}", POOL[i])));
+            parts.extend(case.glob.map(|i| format!("&matchGlob={}", GLOBS[i].0.replace('*', "%2A"))));
+            parts.extend(case.folded.then(|| "&delimiter=/".to_owned()));
+            let extra = parts.concat();
             let reference = |model: &BTreeMap<&str, Vec<u64>>, filtered: bool| {
                 let mut items = Vec::new();
                 let mut prefixes: Vec<String> = Vec::new();

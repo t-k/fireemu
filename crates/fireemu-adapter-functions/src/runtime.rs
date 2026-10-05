@@ -6937,11 +6937,20 @@ mod storage_event_instant_tests {
             .unwrap();
         let archived = payloads(&runtime, archived_event);
         assert_eq!(archived.len(), 1, "{archived:?}");
-        assert_eq!(archived[0].1["data"]["generation"], first.generation.to_string());
-        let time_deleted = archived[0].1["data"]["timeDeleted"].as_str().unwrap();
-        assert!(time_deleted.starts_with("2026-08-29T12:01:05"), "{time_deleted}");
         assert_eq!(
-            archived[0].1["time"].as_str().unwrap().trim_end_matches('Z')[..19],
+            archived[0].1["data"]["generation"],
+            first.generation.to_string()
+        );
+        let time_deleted = archived[0].1["data"]["timeDeleted"].as_str().unwrap();
+        assert!(
+            time_deleted.starts_with("2026-08-29T12:01:05"),
+            "{time_deleted}"
+        );
+        assert_eq!(
+            archived[0].1["time"]
+                .as_str()
+                .unwrap()
+                .trim_end_matches('Z')[..19],
             time_deleted.trim_end_matches('Z')[..19]
         );
         // Deleting the noncurrent generation by number.
@@ -6952,9 +6961,15 @@ mod storage_event_instant_tests {
         let deleted_event = store.drain_events().remove(0);
         let deleted = payloads(&runtime, &deleted_event);
         assert_eq!(deleted.len(), 1, "{deleted:?}");
-        assert_eq!(deleted[0].1["data"]["timeDeleted"], archived[0].1["data"]["timeDeleted"]);
+        assert_eq!(
+            deleted[0].1["data"]["timeDeleted"],
+            archived[0].1["data"]["timeDeleted"]
+        );
         assert!(
-            deleted[0].1["time"].as_str().unwrap().starts_with("2026-08-29T12:11"),
+            deleted[0].1["time"]
+                .as_str()
+                .unwrap()
+                .starts_with("2026-08-29T12:11"),
             "the deletion instant is the admission instant: {}",
             deleted[0].1["time"]
         );

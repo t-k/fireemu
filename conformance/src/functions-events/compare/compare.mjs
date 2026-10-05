@@ -120,7 +120,7 @@ export function applyDeclaredMasks(observation, masks, applied) {
 }
 
 /** The paths of the unordered field maps (ledger 840) a row's observation holds, as the roots, or none. */
-function unorderedRootsUsed(row, scenario, observation) {
+export function unorderedRootsUsed(row, scenario, observation) {
   if (row.generation !== 2 || scenario.source !== "firestore") return [];
   const roots =
     row.recipeId === RETRY_RECIPE ? RETRY_FIRESTORE_FIELD_MAPS : GEN2_FIRESTORE_FIELD_MAPS;

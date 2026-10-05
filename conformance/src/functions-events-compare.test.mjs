@@ -9,6 +9,7 @@ import {
   DECLARED_MASK_REASONS,
   declaredMasksFor,
   orderIgnoredFor,
+  unorderedRootsUsed,
 } from "./functions-events/compare/compare.mjs";
 import { flatten } from "./functions-events/compare/normalize.mjs";
 import { compareObservation, deriveVolatile } from "./functions-events/compare/diff.mjs";
@@ -1066,13 +1067,11 @@ test("a comparison lists the masks of each row and, in its summary, every mask u
   );
   assert.deepEqual(
     result.summary.declaredMasks,
-    [...usedByRows.keys()]
-      .toSorted()
-      .map((mask) => ({
-        mask,
-        reason: DECLARED_MASK_REASONS[mask],
-        rows: usedByRows.get(mask).size,
-      })),
+    [...usedByRows.keys()].toSorted().map((mask) => ({
+      mask,
+      reason: DECLARED_MASK_REASONS[mask],
+      rows: usedByRows.get(mask).size,
+    })),
   );
   // A Gen1 row compares its maps in order, so it records no mask; the Gen2 create row records the three roots it holds.
   const gen1 = rowById(result, "functions-events/firestore/create#new-document#v1");
@@ -1085,4 +1084,63 @@ test("a comparison lists the masks of each row and, in its summary, every mask u
   assert.ok(gen2.declaredMasks.every(({ mask }) => mask === "firestore-field-maps-unordered"));
   // The recording is deterministic: a second comparison of the same inputs gives the same masks.
   assert.deepEqual(compare(world()).summary.declaredMasks, result.summary.declaredMasks);
+});
+
+test("the unordered roots a row used are the field maps its observation holds, by exact path, dotted member or index, and no near-by name", () => {
+  const gen2 = { generation: 2, recipeId: "functions-events/firestore/create" };
+  const firestore = { source: "firestore" };
+  const AFTER = "$.frame.event.data.after.data";
+  const leaf = (path) => [path, { type: "string", value: "x" }];
+  const observed = (...paths) => new Map(paths.map(leaf));
+  assert.deepEqual(unorderedRootsUsed(gen2, firestore, observed(`${AFTER}.count`)), [AFTER]);
+  assert.deepEqual(unorderedRootsUsed(gen2, firestore, observed(AFTER)), [AFTER]);
+  assert.deepEqual(unorderedRootsUsed(gen2, firestore, observed(`${AFTER}[0]`)), [AFTER]);
+  assert.deepEqual(
+    unorderedRootsUsed(gen2, firestore, observed(`${AFTER}.a`, "$.frame.event.data.before.data.b")),
+    ["$.frame.event.data.before.data", AFTER]
+      .toSorted((a, b) => (a < b ? -1 : 1))
+      .toSorted(
+        (a, b) => GEN2_FIRESTORE_FIELD_MAPS.indexOf(a) - GEN2_FIRESTORE_FIELD_MAPS.indexOf(b),
+      ),
+  );
+  // Near misses: a name that only starts with the root, another member, a Gen1 row, another source, the retry roots for a retry row.
+  assert.deepEqual(
+    unorderedRootsUsed(gen2, firestore, observed(`${AFTER}X`, "$.frame.event.data.other")),
+    [],
+  );
+  assert.deepEqual(
+    unorderedRootsUsed({ ...gen2, generation: 1 }, firestore, observed(`${AFTER}.a`)),
+    [],
+  );
+  assert.deepEqual(unorderedRootsUsed(gen2, { source: "pubsub" }, observed(`${AFTER}.a`)), []);
+  const retry = { generation: 2, recipeId: "functions-events/delivery/retry" };
+  assert.deepEqual(unorderedRootsUsed(retry, firestore, observed(`${AFTER}.a`)), []);
+  assert.deepEqual(
+    unorderedRootsUsed(retry, firestore, observed("$.failed.event.data.after.data.a")),
+    ["$.failed.event.data.after.data"],
+  );
+});
+
+test("a one-character unknown id is recorded as masked, and the masks of a row are listed by name then path", () => {
+  const masks = declaredMasksFor(
+    { generation: 2, recipeId: "functions-events/firestore/auth-context" },
+    { source: "firestore" },
+  );
+  const applied = [];
+  applyDeclaredMasks(
+    flatten({ frame: { event: { authType: "unknown", authId: "x" } } }),
+    masks,
+    applied,
+  );
+  assert.deepEqual(applied, [
+    { mask: "authId-unknown-present", path: "$.frame.event.authId", reason: "E10" },
+  ]);
+  const result = compare(world());
+  const multi = result.rows.filter((row) => (row.declaredMasks ?? []).length > 1);
+  assert.ok(multi.length > 0, "an update row holds two field maps");
+  for (const row of multi) {
+    const keys = row.declaredMasks.map(({ mask, path }) => `${mask}\u0000${path}`);
+    assert.deepEqual(keys, keys.toSorted(), row.row);
+    assert.equal(new Set(keys).size, keys.length, `${row.row}: no duplicates`);
+  }
 });

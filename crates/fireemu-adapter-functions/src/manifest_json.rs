@@ -57,6 +57,49 @@ fn non_negative_u64(n: f64) -> u64 {
     n.max(0.0).min(u64::MAX as f64) as u64
 }
 
+/// What production Cloud Scheduler answers (HTTP 400, `INVALID_ARGUMENT`) to a job whose `maxRetryDuration` has a
+/// fractional second. Recorded in the second delivery recording (run `156715222b86ea44`, 2026-10-05): the REST job
+/// create with `maxRetryDuration: "20.5s"` (with `minBackoffDuration: "2.5s"`, `maxBackoffDuration: "20s"`,
+/// `retryCount: 3`, `maxDoublings: 1`) was refused with this message; `maxRetryDuration: "30s"` was accepted.
+/// firebase-tools writes a schedule's `maxRetrySeconds` as `` `${seconds}s` ``, so a fractional `maxRetrySeconds`
+/// reaches production in the same shape. Only `maxRetryDuration` is claimed: the message names it alone, and a
+/// fractional minimum or maximum backoff was not sent separately.
+pub const SCHEDULER_MAX_RETRY_NANOS_REFUSAL: &str =
+    "retryConfig.max_retry_duration.nanos cannot be set: invalid argument";
+
+/// The scheduled functions of a manifest document whose `retryConfig.maxRetrySeconds` has a fractional part, by name
+/// and in manifest order, each with production's message. Pure: the profile decides what to do with it.
+#[must_use]
+pub fn scheduler_fractional_retry_refusals(v: &Value) -> Vec<(String, &'static str)> {
+    v.get("functions")
+        .and_then(Value::as_array)
+        .map_or(&[][..], Vec::as_slice)
+        .iter()
+        .filter(|f| {
+            f.get("trigger")
+                .and_then(|t| t.get("type"))
+                .and_then(Value::as_str)
+                == Some("schedule")
+        })
+        .filter_map(|f| {
+            let seconds = f
+                .get("trigger")?
+                .get("retryConfig")?
+                .get("maxRetrySeconds")?
+                .as_f64()?;
+            (seconds.is_finite() && seconds.fract() != 0.0).then(|| {
+                (
+                    f.get("name")
+                        .and_then(Value::as_str)
+                        .unwrap_or("")
+                        .to_owned(),
+                    SCHEDULER_MAX_RETRY_NANOS_REFUSAL,
+                )
+            })
+        })
+        .collect()
+}
+
 /// Parses the canonical manifest JSON.
 pub fn parse_manifest(v: &Value) -> Result<FunctionManifest, String> {
     let functions = v

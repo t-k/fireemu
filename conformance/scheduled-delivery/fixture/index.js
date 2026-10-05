@@ -88,14 +88,16 @@ exports.schedOkV2 = observed(
 );
 
 // Fails while the attempt is within twenty seconds of the scheduled time, so a retry chain fails a few
-// times and then succeeds. Retry declared with every option the SDK has but maxRetrySeconds.
+// times and then succeeds. Retry declared with every option the SDK has but maxRetrySeconds. retryCount is 4, the
+// largest value Cloud Scheduler accepts: it refused 6 (run e0ec2f41, 400 "invalid retry count. The retry_count must be
+// a positive integer less than 5").
 exports.schedRetryV2 = observed(
   onSchedule(
     {
       schedule: "every 5 minutes",
       timeZone: "Asia/Tokyo",
       region: REGION,
-      retryCount: 6,
+      retryCount: 4,
       minBackoffSeconds: 4,
       maxBackoffSeconds: 50,
       maxDoublings: 2,

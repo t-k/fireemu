@@ -47,6 +47,8 @@ export function createWorld({
     functionsV1: new Map(),
     functionsV2: new Map(),
     runServices: new Set(),
+    builds: new Map(),
+    buildLogs: new Map(),
     jobs: new Map(),
     topics: new Set(),
     subs: new Map(),
@@ -262,6 +264,10 @@ export function createWorld({
         });
       }
     }
+    if (url.hostname === "cloudbuild.googleapis.com") {
+      const id = path.split("/").at(-1);
+      return w.builds.has(id) ? reply(200, w.builds.get(id)) : notFound("build");
+    }
     if (url.hostname === "run.googleapis.com")
       return page(
         [...w.runServices].map((id) => ({
@@ -344,6 +350,13 @@ export function createWorld({
       const filter = body.filter;
       const from = /timestamp>="([^"]+)"/.exec(filter)?.[1];
       const to = /timestamp<="([^"]+)"/.exec(filter)?.[1];
+      const build = /^resource\.type="build" AND resource\.labels\.build_id="([^"]+)"$/.exec(
+        filter,
+      );
+      if (build) {
+        const entries = w.buildLogs.get(build[1]) ?? [];
+        return reply(200, entries.length ? { entries } : {});
+      }
       const wantScheduler = filter.startsWith('resource.type="cloud_scheduler_job"');
       const hits = w.entries.filter((e) => {
         const at = Date.parse(e.timestamp);

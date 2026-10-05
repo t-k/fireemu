@@ -32,7 +32,7 @@ export const DECLARED = Object.freeze({
     platform: "gcfv2",
     schedule: "every 5 minutes",
     timeZone: "Asia/Tokyo",
-    retryConfig: { retryCount: 6, minBackoffSeconds: 4, maxBackoffSeconds: 50, maxDoublings: 2 },
+    retryConfig: { retryCount: 4, minBackoffSeconds: 4, maxBackoffSeconds: 50, maxDoublings: 2 },
   },
   schedSlowV2: { platform: "gcfv2", schedule: "every 1 minutes", timeoutSeconds: 90 },
   schedOkV1: { platform: "gcfv1", schedule: "every 1 minutes", timeZone: "Asia/Tokyo" },

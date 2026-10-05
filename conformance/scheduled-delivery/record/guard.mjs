@@ -20,6 +20,7 @@ export const pullIds = (runId) => FUNCTIONS.v1.map((fn) => pullSubscriptionId(ru
 export const v1TopicIds = () => FUNCTIONS.v1.map(scheduleId);
 
 const OPERATION_ID = "[A-Za-z0-9._-]+";
+const BUILD_ID = "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}";
 
 /**
  * Rules for one run. `projectNumber` is for the Service Usage reads only. A rule is
@@ -117,6 +118,16 @@ export function rules(runId, projectNumber) {
       "GET",
       gcf,
       `^/v2/projects/${P}/locations/${R}/operations/${OPERATION_ID}$`,
+      q({}),
+      nothing,
+      false,
+    ],
+    // Cloud Build: the one build of a function that did not become active (a read; the id is read from the
+    // function's own list entry)
+    [
+      "GET",
+      "cloudbuild.googleapis.com",
+      `^/v1/projects/${esc(projectNumber)}/locations/${R}/builds/${BUILD_ID}$`,
       q({}),
       nothing,
       false,

@@ -215,7 +215,7 @@ const declared = () => ({
     scheduleTrigger: {
       schedule: "every 5 minutes",
       timeZone: "Asia/Tokyo",
-      retryConfig: { retryCount: 6, minBackoffSeconds: 4, maxBackoffSeconds: 50, maxDoublings: 2 },
+      retryConfig: { retryCount: 4, minBackoffSeconds: 4, maxBackoffSeconds: 50, maxDoublings: 2 },
     },
   },
   schedSlowV2: {
@@ -258,7 +258,7 @@ test("the declarations are the ones the packet states, and each departure is nam
       e.schedOkV1.scheduleTrigger.timeZone = undefined;
     },
     (e) => {
-      e.schedRetryV2.scheduleTrigger.retryConfig.retryCount = 5;
+      e.schedRetryV2.scheduleTrigger.retryConfig.retryCount = 6;
     },
     (e) => {
       e.schedSlowV2.timeoutSeconds = 60;
@@ -280,7 +280,7 @@ test("the declarations are the ones the packet states, and each departure is nam
   reordered.schedRetryV2.scheduleTrigger.retryConfig = {
     maxDoublings: 2,
     maxBackoffSeconds: 50,
-    retryCount: 6,
+    retryCount: 4,
     minBackoffSeconds: 4,
   };
   assert.deepEqual(declarationProblems(reordered), [], "key order does not matter");

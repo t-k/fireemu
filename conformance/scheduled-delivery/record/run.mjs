@@ -587,13 +587,73 @@ export async function record({
       responseAt: iso(clock()),
     });
     const polls = cliFailed(out.cli.deploy) ? 2 : READY_MAX_POLLS;
+    let found = null;
     for (let poll = 1; poll <= polls; poll++) {
-      const found = await lists("ready-" + poll);
+      found = await lists("ready-" + poll);
       out.ready = found.v1 && found.v2 && found.run ? summarize(found) : null;
       if (out.ready && allActive(out.ready)) return true;
       if (poll < polls) await sleep(READY_POLL_SECONDS * 1000);
     }
+    await diagnoseBuilds(found);
     return false;
+  }
+
+  /**
+   * Why a function did not become active: for each of this run's functions whose list entry is not ACTIVE and names
+   * a Cloud Build build, one GET of that build (its status, failure info and step statuses) and one Cloud Logging
+   * read of that build's log lines. Reads only; 403 and 404 are data; at most one pair per function. Recorded as
+   * `buildDiagnostics`; it judges nothing and never blocks the close (run e0ec2f41: a Gen1 build failed with "Build
+   * error details not available" and nothing in the packet could say why).
+   */
+  async function diagnoseBuilds(found) {
+    const entries = [
+      ...(found?.v1?.functions ?? []).map((item) => ({ item, active: item.status === "ACTIVE" })),
+      ...(found?.v2?.functions ?? []).map((item) => ({ item, active: item.state === "ACTIVE" })),
+    ].filter(
+      ({ item, active }) => !active && ALL_FUNCTIONS.some((fn) => functionName(fn) === item.name),
+    );
+    const diagnostics = [];
+    for (const { item } of entries) {
+      const fn = String(item.name).split("/").at(-1);
+      const build =
+        /\/builds\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/.exec(
+          String(item.buildName ?? item.buildConfig?.build ?? ""),
+        );
+      if (!build) {
+        diagnostics.push({ function: fn, buildId: null });
+        continue;
+      }
+      const buildId = build[1];
+      const got = await normal({
+        id: "diagnose-build-" + fn,
+        method: "GET",
+        url: `https://cloudbuild.googleapis.com/v1/projects/${projectNumber}/locations/${REGION}/builds/${buildId}`,
+        observe: true,
+      });
+      const logs = await normal({
+        ...listRequest({
+          id: "diagnose-build-logs-" + fn,
+          filter: `resource.type="build" AND resource.labels.build_id="${buildId}"`,
+        }),
+        observe: true,
+      });
+      const json = got?.status === 200 && readable(got) ? got.json : {};
+      diagnostics.push({
+        function: fn,
+        buildId,
+        buildStatus: got?.status ?? null,
+        status: json.status ?? null,
+        statusDetail: json.statusDetail ?? null,
+        failureInfo: json.failureInfo ?? null,
+        steps: Array.isArray(json.steps)
+          ? json.steps.map((step) => ({ name: step.name ?? null, status: step.status ?? null }))
+          : null,
+        logsStatus: logs?.status ?? null,
+        logEntries:
+          logs?.status === 200 && readable(logs) ? (logs.json.entries ?? []).length : null,
+      });
+    }
+    out.buildDiagnostics = diagnostics;
   }
 
   async function readbacks() {

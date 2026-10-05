@@ -89,7 +89,7 @@ maybe("the declared schedules, time zones and retry options are what the packet 
     assert.equal(e.schedRetryV2.scheduleTrigger.schedule, "every 5 minutes");
     assert.equal(e.schedRetryV2.scheduleTrigger.timeZone, "Asia/Tokyo");
     assert.deepEqual(e.schedRetryV2.scheduleTrigger.retryConfig, {
-      retryCount: 6,
+      retryCount: 4,
       minBackoffSeconds: 4,
       maxBackoffSeconds: 50,
       maxDoublings: 2,

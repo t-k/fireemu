@@ -324,10 +324,20 @@ test("property: for any limits inside the recorded brackets every search pins it
     seed = (seed * 1103515245 + 12345) & 0x7fffffff;
     return low + (seed % (high - low + 1));
   };
+  // The first rounds are the edges of every bracket, the others are random. The shortest key limit that
+  // still admits the recorder's own events is 18 (`ce-datacontenttype`).
+  const edges = [
+    [524_032, 6, 18],
+    [524_799, 105, 258],
+    [524_032, 105, 18],
+    [524_799, 6, 258],
+  ];
   for (let round = 0; round < 25; round += 1) {
-    const textLimit = next(524_032, 524_799);
-    const attributeLimit = next(6, 105);
-    const keyLimit = next(4, 258);
+    const [textLimit, attributeLimit, keyLimit] = edges[round] ?? [
+      next(524_032, 524_799),
+      next(6, 105),
+      next(4, 258),
+    ];
     const { summary, notes, inCase } = await runOne(publishBoundaries, {
       textLimit,
       attributeLimit,
@@ -340,7 +350,9 @@ test("property: for any limits inside the recorded brackets every search pins it
     for (const [name, accepted] of [
       ["event-text-length", textLimit],
       ["extra-attributes", attributeLimit - 6],
-      ["attribute-name-length", keyLimit - 3],
+      // With a limit of 6 attributes an event with one more attribute is refused for the count, so the
+      // search for the name's length cannot run (it reports that its bracket moved).
+      ...(attributeLimit >= 7 ? [["attribute-name-length", keyLimit - 3]] : []),
     ]) {
       const note = noteOf(notes, "limit-boundary", name);
       assert.deepEqual(
@@ -532,6 +544,7 @@ test("channel-busy: a second deletion is sent only after a 2xx that names its op
   let seen = 0;
   const log = [];
   const stays = (request) => async (call) => {
+    if (call.op === "getOperation" && call.label?.case === "channel-busy") log.push("op");
     if (call.op !== "getChannel" || !call.path.endsWith("-bz-b")) return request(call);
     // Only the case's own reads: the cleanup after it reads the name too, from the same transport.
     if (call.label?.case === "channel-busy") {
@@ -543,9 +556,9 @@ test("channel-busy: a second deletion is sent only after a 2xx that names its op
   await runOne(channelBusy, { busy: "reject", duplicate: "409" }, { wrap: stays, log });
   assert.equal(seen, 1 + 3, "one read while the deletion runs, three in the read-back");
   assert.deepEqual(
-    log.slice(0, log.lastIndexOf("get") + 1).slice(-5),
-    ["get", "sleep:2000", "get", "sleep:2000", "get"],
-    "three reads, two seconds between them, none before the first",
+    log.slice(0, log.lastIndexOf("get") + 1).slice(-6),
+    ["op", "get", "sleep:2000", "get", "sleep:2000", "get"],
+    "three reads, two seconds between them, none before the first (the operation's last read comes right before it)",
   );
 });
 

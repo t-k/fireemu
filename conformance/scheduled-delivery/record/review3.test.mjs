@@ -352,12 +352,14 @@ test("a CLI deploy that cannot even be run leaves every CLI-made name unconfirme
 
 test("a name that a list showed before the run issued it is no evidence about its create", async () => {
   const extra = extraJobId(RUN, "count");
-  const real = "cloudscheduler.googleapis.com/v1/projects/fireemu-oracle-sbx/locations/us-central1/jobs/";
+  const real =
+    "cloudscheduler.googleapis.com/v1/projects/fireemu-oracle-sbx/locations/us-central1/jobs/";
   const { result } = await go(
     {
       hooks: {
         // the create is unknown, its direct reads say 404, and the later lists no longer hold it
-        ["POST " + JOBS]: async ({ body }) => (body.name.endsWith(extra) ? unavailable() : undefined),
+        ["POST " + JOBS]: async ({ body }) =>
+          body.name.endsWith(extra) ? unavailable() : undefined,
         ["GET " + real + extra]: async () => notFound("job"),
         ["GET " + JOBS]: async ({ w }) => {
           if (w.cliRuns.includes("delete")) w.jobs.delete(extra);

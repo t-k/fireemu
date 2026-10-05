@@ -7,14 +7,15 @@ import test from "node:test";
 import { createClient } from "./eventarc-production/client.mjs";
 import { createLedger } from "./pubsub-production/ledger.mjs";
 import { createOwnership } from "./eventarc-production/names.mjs";
+import { installVirtualClock } from "./eventarc-production/testing/virtual-clock.mjs";
 import { MIN_A2_WAIT_MS, main } from "./eventarc-production/record.mjs";
 
 const RUN = "0123456789ab";
 const PROJECT = "demo-fireemu-eventarc";
-// The synthetic recordings are a year ahead of the wall clock, so that they are always newer than the
-// captures a real recording writes in the same test, whatever the date the suite runs on. A fixed date
-// made four tests fail once the wall clock passed it (aged-clock control, 2026-10-05).
-const T0 = Date.now() + 365 * 24 * 60 * 60 * 1000;
+// The test's own virtual clock: the captures a real recording and a later run write are stamped by it, and
+// the later run's clock is the `now` the test gives it (`deps`), so nothing here reads the wall clock.
+const T0 = Date.parse("2030-01-01T00:00:00.000Z");
+const clock = installVirtualClock(T0);
 const channel = (id, location = "us-central1") =>
   `projects/${PROJECT}/locations/${location}/channels/${id}`;
 const mine = (key) => channel(`fe${RUN}-${key}`);
@@ -112,6 +113,7 @@ async function service({ live = [], stuck = [], pendingOperations = false }) {
 }
 
 function recording(rows) {
+  clock.set(T0);
   const dir = mkdtempSync(join(tmpdir(), "eventarc-a2-"));
   writeFileSync(
     join(dir, `capture-${RUN}.jsonl`),
@@ -131,7 +133,18 @@ const io = (errors = [], out = []) => ({
   stdout: { write: (text) => (out.push(text), true) },
   stderr: { write: (text) => errors.push(text) },
 });
-const deps = (extra = {}) => ({ now: () => T0 + MIN_A2_WAIT_MS, sleep: async () => {}, ...extra });
+const deps = (extra = {}) => {
+  const given = { now: () => T0 + MIN_A2_WAIT_MS, sleep: async () => {}, ...extra };
+  return {
+    ...given,
+    // The later run's clock is also the clock that stamps what it writes.
+    now: () => {
+      const instant = given.now();
+      clock.set(instant);
+      return instant;
+    },
+  };
+};
 const a2 = (dir, host, out = dir) => [
   "--target",
   "emulator",

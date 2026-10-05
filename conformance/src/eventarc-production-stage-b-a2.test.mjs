@@ -9,15 +9,21 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { MIN_A2_WAIT_MS, main } from "./eventarc-production/record.mjs";
+import { installVirtualClock } from "./eventarc-production/testing/virtual-clock.mjs";
 import { createWorld } from "./eventarc-production/testing/world.mjs";
 import { serveWorld } from "./eventarc-production/testing/world-server.mjs";
 
 const RUN = "0123456789ab";
 const PROJECT = "demo-fireemu-eventarc";
 const P1 = `projects/${PROJECT}/locations/us-central1/channels/fe${RUN}-cp-p1`;
+// The test's own clock: the recording is stamped by it and the A2 is given a later instant, so that no
+// decision here reads the wall clock.
+const START = Date.parse("2030-01-01T00:00:00.000Z");
+const clock = installVirtualClock(START);
 const io = () => ({ stdout: { write: () => true }, stderr: { write: () => true } });
 
 async function record(t, options) {
+  clock.set(START);
   const world = createWorld({ project: PROJECT, ...options });
   const service = await serveWorld(world);
   t.after(service.close);
@@ -60,7 +66,14 @@ async function readBack({ dir, service }, { before = 0 } = {}) {
     ],
     {},
     io(),
-    { now: () => Date.now() + MIN_A2_WAIT_MS - before + 1000, sleep: async () => {} },
+    {
+      now: () => {
+        const instant = START + MIN_A2_WAIT_MS - before + 1000;
+        clock.set(instant);
+        return instant;
+      },
+      sleep: async () => {},
+    },
   );
   const name = readdirSync(dir).find((file) => /^summary-.*-a2-.*\.json$/.test(file));
   return { code, summary: name ? JSON.parse(readFileSync(join(dir, name), "utf8")) : null };

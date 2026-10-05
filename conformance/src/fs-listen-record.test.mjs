@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { mkdirSync, mkdtempSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -928,62 +929,145 @@ test("browser production checks the project as a browser recording and reads the
   assert.deepEqual(seen.journal, ["o.json", "browser", "rid"]);
 });
 
-test("localProvenance names the source commit and the digest of the binary, and none for the official emulator", async () => {
-  const { createHash } = await import("node:crypto");
-  const bytes = Buffer.from("binary bytes");
-  const expected = createHash("sha256").update(bytes).digest("hex");
+/** A fake git that answers by the arguments it is given. */
+const fakeGit =
+  (answers) =>
+  async (...args) => {
+    const key = args.join(" ");
+    if (!(key in answers)) throw new Error(`unexpected git ${key}`);
+    const value = answers[key];
+    if (value instanceof Error) throw value;
+    return value;
+  };
+const GIT = {
+  "rev-parse HEAD": "abc123",
+  "rev-parse HEAD:crates": "tree456",
+  "status --porcelain -- crates Cargo.toml Cargo.lock": "",
+  "log -1 --format=%ct -- crates Cargo.toml Cargo.lock": "1000",
+};
+
+test("localProvenance binds a binary to the inputs of its build: the commit, the tree of crates, the lock file, whether they are clean, and whether the binary is newer than their last change", async () => {
+  const bytes = { "/b/fireemu": Buffer.from("binary bytes"), "/r/Cargo.lock": Buffer.from("lock") };
+  const sha = (buffer) => createHashHex(buffer);
   const read = [];
   const fireemu = await localProvenance({
     target: "local",
     binaryPath: "/b/fireemu",
+    lockPath: "/r/Cargo.lock",
     readBytes: async (path) => {
       read.push(path);
-      return bytes;
+      return bytes[path];
     },
-    headOf: async () => "abc123",
+    git: fakeGit(GIT),
+    mtimeSecondsOf: async () => 1000,
   });
-  assert.deepEqual(fireemu, { sourceCommit: "abc123", binarySha256: expected, target: "local" });
-  assert.deepEqual(read, ["/b/fireemu"]);
+  assert.deepEqual(fireemu, {
+    target: "local",
+    sourceCommit: "abc123",
+    buildInputs: {
+      cratesTree: "tree456",
+      cargoLockSha256: sha(bytes["/r/Cargo.lock"]),
+      dirty: false,
+    },
+    binarySha256: sha(bytes["/b/fireemu"]),
+    binaryBuiltAfterSource: true,
+  });
+  assert.deepEqual(read.toSorted(), ["/b/fireemu", "/r/Cargo.lock"]);
+  // A binary older than the last change of the sources cannot be of them; a change not yet
+  // committed is reported.
+  const stale = await localProvenance({
+    target: "local",
+    binaryPath: "/b/fireemu",
+    lockPath: "/r/Cargo.lock",
+    readBytes: async (path) => bytes[path],
+    git: fakeGit({
+      ...GIT,
+      "status --porcelain -- crates Cargo.toml Cargo.lock": " M crates/x.rs",
+    }),
+    mtimeSecondsOf: async () => 999,
+  });
+  assert.equal(stale.binaryBuiltAfterSource, false);
+  assert.equal(stale.buildInputs.dirty, true);
+  // Newer by a second is newer; equal is built after (the commit time has second resolution).
+  assert.equal(
+    (
+      await localProvenance({
+        target: "local",
+        binaryPath: "/b/fireemu",
+        lockPath: "/r/Cargo.lock",
+        readBytes: async (path) => bytes[path],
+        git: fakeGit(GIT),
+        mtimeSecondsOf: async () => 1001,
+      })
+    ).binaryBuiltAfterSource,
+    true,
+  );
+});
+
+test("localProvenance for the official emulator has no binary, and outside a git tree names no commit", async () => {
   const official = await localProvenance({
     target: "official",
     binaryPath: null,
+    lockPath: "/r/Cargo.lock",
     readBytes: async () => {
-      throw new Error("must not read");
+      throw new Error("no lock here");
     },
-    headOf: async () => "abc123",
+    git: fakeGit(GIT),
+    mtimeSecondsOf: async () => {
+      throw new Error("must not stat");
+    },
   });
-  assert.deepEqual(official, { sourceCommit: "abc123", binarySha256: null, target: "official" });
-  // Outside a git tree the commit is null, and the digest is still taken.
+  assert.equal(official.binarySha256, null);
+  assert.equal(official.binaryBuiltAfterSource, null);
+  assert.equal(official.buildInputs.cargoLockSha256, null);
+  assert.equal(official.sourceCommit, "abc123");
   const outside = await localProvenance({
     target: "local",
     binaryPath: "/b/fireemu",
-    readBytes: async () => bytes,
-    headOf: async () => {
+    lockPath: "/r/Cargo.lock",
+    readBytes: async () => Buffer.from("x"),
+    git: async () => {
       throw new Error("not a git tree");
     },
+    mtimeSecondsOf: async () => 5,
+  });
+  assert.deepEqual(outside.buildInputs, {
+    cratesTree: null,
+    cargoLockSha256: createHashHex("x"),
+    dirty: null,
   });
   assert.equal(outside.sourceCommit, null);
-  assert.equal(outside.binarySha256, expected);
+  assert.equal(outside.binaryBuiltAfterSource, null);
+  assert.equal(outside.binarySha256, createHashHex("x"));
 });
 
-test("localProvenance asks git for the commit of this tree (none outside a git tree), and the digest is of the bytes read", async () => {
+function createHashHex(text) {
+  return createHash("sha256").update(text).digest("hex");
+}
+
+test("localProvenance asks the real git of this tree for the same answers the commands give (none outside a git tree)", async () => {
   const { execFile } = await import("node:child_process");
   const { promisify } = await import("node:util");
-  let expected = null;
+  const root = new URL("../../", import.meta.url).pathname;
+  let head = null;
   try {
-    expected = (
-      await promisify(execFile)("git", ["rev-parse", "HEAD"], {
-        cwd: new URL("./fs-listen/", import.meta.url).pathname,
-      })
-    ).stdout.trim();
+    head = (await promisify(execFile)("git", ["rev-parse", "HEAD"], { cwd: root })).stdout.trim();
   } catch {
-    // Not a git tree (the mutation harness runs a copy): the commit is null.
+    // Not a git tree (the mutation harness runs a copy): everything is null.
   }
   const out = await localProvenance({
     target: "local",
     binaryPath: "/b/fireemu",
     readBytes: async () => Buffer.from("x"),
+    mtimeSecondsOf: async () => 4_000_000_000,
   });
-  assert.equal(out.sourceCommit, expected);
-  if (expected !== null) assert.match(out.sourceCommit, /^[0-9a-f]{40}$/);
+  assert.equal(out.sourceCommit, head);
+  if (head !== null) {
+    const tree = (
+      await promisify(execFile)("git", ["rev-parse", "HEAD:crates"], { cwd: root })
+    ).stdout.trim();
+    assert.equal(out.buildInputs.cratesTree, tree);
+    assert.equal(out.binaryBuiltAfterSource, true);
+    assert.equal(typeof out.buildInputs.dirty, "boolean");
+  }
 });

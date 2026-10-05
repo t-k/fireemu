@@ -1327,3 +1327,189 @@ fn a_copy_or_rewrite_names_its_owner_in_strict_only() {
         }
     }
 }
+
+// ---- the short spelling of the bucket resource and the buckets a deployed trigger names ----------
+//
+// The Admin SDK reaches a local Storage endpoint on the short spelling (`/b/{bucket}`), where the
+// official emulator (firebase-tools 15.28.2, `gcloud.js`) has no bucket route: a GET falls to the
+// object read (`No such object: b/{bucket}`, 404) and a PATCH to the 501 catch-all. Strict serves
+// the same resource as the long spelling (shape recorded in FE v5; the spelling has no production
+// counterpart, the SDK sends the long one to production); the emulator profile keeps the official
+// answers.
+
+const TRIGGER_BUCKET: &str = "trigger-bucket";
+
+#[test]
+fn strict_serves_the_bucket_resource_on_the_short_spelling_and_the_emulator_profile_keeps_the_official_answers(
+) {
+    let (strict, _) = state(TokenAcceptance::Verified);
+    let long = call(&strict, "GET", &format!("/storage/v1/b/{BUCKET}"), b"");
+    let short = call(&strict, "GET", &format!("/b/{BUCKET}"), b"");
+    assert_eq!(
+        short.status,
+        200,
+        "{}",
+        String::from_utf8_lossy(&short.body)
+    );
+    assert_eq!(body(&short), body(&long));
+    let r = call(
+        &strict,
+        "PATCH",
+        &format!("/b/{BUCKET}"),
+        br#"{"versioning":{"enabled":true}}"#,
+    );
+    assert_eq!(r.status, 200, "{}", String::from_utf8_lossy(&r.body));
+    assert_eq!(body(&r)["versioning"], json!({"enabled": true}));
+    let read = call(
+        &strict,
+        "GET",
+        &format!("/storage/v1/b/{BUCKET}?fields=versioning"),
+        b"",
+    );
+    assert_eq!(
+        body(&read),
+        json!({"versioning": {"enabled": true}}),
+        "the spellings share state"
+    );
+    // Near miss: a bucket nobody created still reads the recorded 404 on the short spelling.
+    let ghost = call(&strict, "GET", "/b/ghost-bucket", b"");
+    assert_eq!(ghost.status, 404);
+    assert_eq!(
+        body(&ghost)["error"]["message"],
+        "The specified bucket does not exist."
+    );
+    assert_eq!(
+        call(
+            &strict,
+            "PATCH",
+            "/b/ghost-bucket",
+            br#"{"versioning":{"enabled":true}}"#
+        )
+        .status,
+        404
+    );
+
+    // The emulator profile: the official emulator's answers.
+    let (emulator, _) = state(TokenAcceptance::EmulatorMock);
+    let get = call(&emulator, "GET", &format!("/b/{BUCKET}"), b"");
+    assert_eq!(get.status, 404);
+    assert_eq!(
+        body(&get)["error"]["message"],
+        format!("No such object: b/{BUCKET}")
+    );
+    let patch = call(
+        &emulator,
+        "PATCH",
+        &format!("/b/{BUCKET}"),
+        br#"{"versioning":{"enabled":true}}"#,
+    );
+    assert_eq!(patch.status, 501);
+    // And nothing was stored by the refused PATCH.
+    let read = body(&call(
+        &emulator,
+        "GET",
+        &format!("/storage/v1/b/{BUCKET}"),
+        b"",
+    ));
+    assert!(read.get("versioning").is_none(), "{read}");
+}
+
+#[test]
+fn a_bucket_a_deployed_trigger_names_exists_when_empty_in_strict_only() {
+    for acceptance in PROFILES {
+        let strict = acceptance != TokenAcceptance::EmulatorMock;
+        let (s, _) = state(acceptance);
+        let long = |name: &str| call(&s, "GET", &format!("/storage/v1/b/{name}"), b"");
+        assert_eq!(
+            long(TRIGGER_BUCKET).status,
+            404,
+            "before a deployment names it"
+        );
+        s.rules.set_trigger_buckets([TRIGGER_BUCKET.to_owned()]);
+        assert_eq!(long(TRIGGER_BUCKET).status, if strict { 200 } else { 404 });
+        // Near miss: another name is still unknown, in both profiles.
+        assert_eq!(long("another-bucket").status, 404);
+        if strict {
+            let r = call(
+                &s,
+                "PATCH",
+                &format!("/b/{TRIGGER_BUCKET}"),
+                br#"{"versioning":{"enabled":true}}"#,
+            );
+            assert_eq!(r.status, 200, "{}", String::from_utf8_lossy(&r.body));
+            // The bucket takes uploads and keeps the noncurrent generation.
+            upload_to(&s, TRIGGER_BUCKET, "a.txt", "one");
+            upload_to(&s, TRIGGER_BUCKET, "a.txt", "two");
+            let versions = body(&call(
+                &s,
+                "GET",
+                &format!("/storage/v1/b/{TRIGGER_BUCKET}/o?versions=true"),
+                b"",
+            ));
+            assert_eq!(versions["items"].as_array().unwrap().len(), 2, "{versions}");
+        }
+        // A replacement of the set drops the earlier names.
+        s.rules
+            .set_trigger_buckets(["other-trigger-bucket".to_owned()]);
+        assert_eq!(
+            long("other-trigger-bucket").status,
+            if strict { 200 } else { 404 }
+        );
+        if strict {
+            // It still holds an object, so it exists anyway; an empty one would not.
+            assert_eq!(long(TRIGGER_BUCKET).status, 200);
+        }
+    }
+}
+
+fn upload_to(s: &StorageState, bucket: &str, name: &str, data: &str) {
+    let r = call(
+        s,
+        "POST",
+        &format!("/upload/storage/v1/b/{bucket}/o?uploadType=media&name={name}"),
+        data.as_bytes(),
+    );
+    assert_eq!(r.status, 200, "{}", String::from_utf8_lossy(&r.body));
+}
+
+mod bucket_existence_properties {
+    use super::*;
+    use proptest::prelude::*;
+
+    proptest! {
+        // In strict the two spellings answer a bucket resource read alike, for every bucket name
+        // (declared by a trigger or not), and exactly the declared and default buckets exist.
+        #[test]
+        fn the_spellings_agree_and_only_declared_buckets_exist(
+            name in "[a-z][a-z0-9-]{2,20}",
+            declared in proptest::bool::ANY,
+        ) {
+            let (s, _) = state(TokenAcceptance::Verified);
+            if declared {
+                s.rules.set_trigger_buckets([name.clone()]);
+            }
+            let long = call(&s, "GET", &format!("/storage/v1/b/{name}"), b"");
+            let short = call(&s, "GET", &format!("/b/{name}"), b"");
+            prop_assert_eq!(long.status, short.status);
+            prop_assert_eq!(body(&long), body(&short));
+            prop_assert_eq!(long.status, if declared { 200 } else { 404 });
+        }
+
+        // The emulator profile never serves the short spelling, declared or not.
+        #[test]
+        fn the_emulator_profile_never_serves_the_short_spelling(
+            name in "[a-z][a-z0-9-]{2,20}",
+            declared in proptest::bool::ANY,
+        ) {
+            let (s, _) = state(TokenAcceptance::EmulatorMock);
+            if declared {
+                s.rules.set_trigger_buckets([name.clone()]);
+            }
+            prop_assert_eq!(call(&s, "GET", &format!("/b/{name}"), b"").status, 404);
+            prop_assert_eq!(
+                call(&s, "PATCH", &format!("/b/{name}"), br#"{"versioning":{"enabled":true}}"#).status,
+                501
+            );
+        }
+    }
+}

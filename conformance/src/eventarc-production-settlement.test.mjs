@@ -533,3 +533,15 @@ test("the ledger says whether a deletion was read done", () => {
   );
   assert.equal(facts(["ok"], ["delete"]), false);
 });
+
+test("a name the run only tried to delete (no creation in the ledger) is settled by a 404 unless that deletion is unknown or open", async () => {
+  const refused = mine("only-refused");
+  issue(refused, "error", "delete");
+  const unknown = mine("only-unknown");
+  issue(unknown, "unknown", "delete");
+  const report = await run(fakeService({ channels: [] }));
+  assert.deepEqual(report.settled, [{ name: refused, how: "absent" }]);
+  assert.deepEqual(report.unsettled, [unknown]);
+  const afterwards = await run(fakeService({ channels: [] }), { mode: "later" });
+  assert.ok(afterwards.settled.some((item) => item.name === unknown && item.how === "absent"));
+});

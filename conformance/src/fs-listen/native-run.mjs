@@ -235,7 +235,18 @@ export async function runNative(
             const frames = streams.get(step.stream).frames;
             const changes = targetChanges(frames).filter((c) => covers(c, step.id));
             const saved = {};
-            const withToken = changes.findLast((c) => c.resumeToken);
+            // `kind` picks which token: the CURRENT frame of the target itself, or the last global
+            // boundary (a frame that names no target); without it, the latest that covers the target.
+            const ofKind = {
+              current: (c) =>
+                c.targetChangeType === "CURRENT" && (c.targetIds ?? []).includes(step.id),
+              global: (c) => (c.targetIds ?? []).length === 0,
+            };
+            if (step.kind !== undefined && !Object.hasOwn(ofKind, step.kind))
+              throw new Error(`unknown save kind ${step.kind}`);
+            const withToken = changes
+              .filter((c) => step.kind === undefined || ofKind[step.kind](c))
+              .findLast((c) => c.resumeToken);
             if (withToken) saved.token = asBuffer(withToken.resumeToken);
             const withTime = changes.findLast((c) => c.readTime);
             if (withTime) saved.readTime = withTime.readTime;

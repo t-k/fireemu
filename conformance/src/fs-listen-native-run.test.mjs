@@ -1179,3 +1179,65 @@ test("a definite refusal is journaled as refused and an unknown answer as unknow
     assert.equal(lines.at(-1).outcome, outcome, `${code}`);
   }
 });
+
+test("save takes the token of a kind when asked: the CURRENT frame of the target, or the last global boundary, apart from the latest of either", async () => {
+  const frames = [
+    change("CURRENT", [1], { resumeToken: Buffer.from("TC") }),
+    change("NO_CHANGE", [], { resumeToken: Buffer.from("TG") }),
+    change("NO_CHANGE", [1], { resumeToken: Buffer.from("TN") }),
+    change("CURRENT", [2], { resumeToken: Buffer.from("OTHER") }),
+    change("NO_CHANGE", [], {}),
+  ];
+  const tokenFor = async (kind) => {
+    const { streams } = await runSteps(
+      [
+        { do: "open", stream: "s", targets: [{ id: 1, doc: "a" }] },
+        { do: "save", stream: "s", id: 1, token: "tok", ...(kind ? { kind } : {}) },
+        { do: "open", stream: "r", targets: [{ id: 1, doc: "a", resume: "tok" }] },
+      ],
+      { 0: frames },
+    );
+    return streams[1].sent[0].addTarget.resumeToken;
+  };
+  assert.deepEqual(await tokenFor(undefined), Buffer.from("TN"), "the latest covering the target");
+  assert.deepEqual(await tokenFor("current"), Buffer.from("TC"));
+  assert.deepEqual(await tokenFor("global"), Buffer.from("TG"));
+  // A kind the frames do not hold saves nothing to resume from.
+  const none = await runSteps(
+    [
+      { do: "open", stream: "s", targets: [{ id: 1, doc: "a" }] },
+      { do: "save", stream: "s", id: 1, token: "tok", kind: "current" },
+      { do: "open", stream: "r", targets: [{ id: 1, doc: "a", resume: "tok" }] },
+    ],
+    { 0: [change("NO_CHANGE", [], { resumeToken: Buffer.from("TG") })] },
+  );
+  assert.equal(none.out.errors["native/t"], "no saved token tok");
+  const noGlobal = await runSteps(
+    [
+      { do: "open", stream: "s", targets: [{ id: 1, doc: "a" }] },
+      { do: "save", stream: "s", id: 1, token: "tok", kind: "global" },
+      { do: "open", stream: "r", targets: [{ id: 1, doc: "a", resume: "tok" }] },
+    ],
+    { 0: [change("CURRENT", [1], { resumeToken: Buffer.from("TC") })] },
+  );
+  assert.equal(noGlobal.out.errors["native/t"], "no saved token tok");
+  // The CURRENT frame must be the target's own: another target's CURRENT token is not it.
+  const other = await runSteps(
+    [
+      { do: "open", stream: "s", targets: [{ id: 1, doc: "a" }] },
+      { do: "save", stream: "s", id: 1, token: "tok", kind: "current" },
+      { do: "open", stream: "r", targets: [{ id: 1, doc: "a", resume: "tok" }] },
+    ],
+    { 0: [change("CURRENT", [2], { resumeToken: Buffer.from("OTHER") })] },
+  );
+  assert.equal(other.out.errors["native/t"], "no saved token tok");
+  // An unknown kind is refused, not read as the default.
+  const unknown = await runSteps(
+    [
+      { do: "open", stream: "s", targets: [{ id: 1, doc: "a" }] },
+      { do: "save", stream: "s", id: 1, token: "tok", kind: "latest" },
+    ],
+    { 0: frames },
+  );
+  assert.match(unknown.out.errors["native/t"], /unknown save kind latest/);
+});

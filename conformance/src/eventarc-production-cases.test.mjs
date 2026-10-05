@@ -968,8 +968,8 @@ test("the ladders send the values the plan names, in order, and the searches use
   const count = notes.find((n) => n.note === "limit-boundary" && n.name === "event-count");
   assert.deepEqual([count.accepted, count.refused], [1, 2]);
   const size = notes.find((n) => n.note === "limit-boundary" && n.name === "event-text-length");
-  assert.ok(size.accepted >= 1 && size.accepted <= 1 + 1, "the text-length search starts from one character");
-  assert.equal(size.refused - size.accepted <= 1 + Math.ceil(262144 / 1024), true);
+  assert.equal(size.accepted, 1, "the text-length search starts from one character, which a limit of 1 accepts");
+  assert.ok(size.refused > 1 && size.refused - size.accepted <= Math.ceil(262144 / 1024));
 });
 
 test("the extension attributes of the envelope case carry the values the plan names", async () => {

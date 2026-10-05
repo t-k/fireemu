@@ -1157,7 +1157,7 @@ test("--programs resume-variants selects the L1b programs alone, holds them to t
 });
 
 test("a production recording of the resume variants checks every program, records only them, and runs under their ceiling", async () => {
-  const { nativeProduction } = await import("./fs-listen/record.mjs");
+  const { nativeProduction: production } = await import("./fs-listen/record.mjs");
   const { RESUME_VARIANT_PROGRAMS, RESUME_VARIANT_REQUEST_CEILING } =
     await import("./fs-listen/native-resume-variants.mjs");
   const order = [];
@@ -1167,7 +1167,7 @@ test("a production recording of the resume variants checks every program, record
     checked.push(...programs.map((p) => p.id));
     return [];
   };
-  await nativeProduction(
+  await production(
     {
       project: "fireemu-oracle-txn",
       envelope: "E",
@@ -1186,7 +1186,7 @@ test("a production recording of the resume variants checks every program, record
   const refusing = argDeps(stopped);
   refusing.d.programProblems = () => ["native/resume-grid-g0#3 (save): unknown save kind x"];
   await assert.rejects(
-    nativeProduction(
+    production(
       {
         project: "fireemu-oracle-txn",
         envelope: "E",
@@ -1202,12 +1202,9 @@ test("a production recording of the resume variants checks every program, record
 });
 
 test("without --programs the production recording keeps the default request ceiling of the runner", async () => {
-  const { nativeProduction } = await import("./fs-listen/record.mjs");
+  const { nativeProduction: production } = await import("./fs-listen/record.mjs");
   const order = [];
   const { d, seen } = argDeps(order);
-  await nativeProduction(
-    { project: "fireemu-oracle-txn", envelope: "E", ledger: "L", out: "o.json" },
-    d,
-  );
+  await production({ project: "fireemu-oracle-txn", envelope: "E", ledger: "L", out: "o.json" }, d);
   assert.equal(Object.hasOwn(seen.native, "clock"), false);
 });

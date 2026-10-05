@@ -66,6 +66,23 @@ const SCHEDULER =
 const PUBSUB = "https://pubsub.googleapis.com/v1/projects/" + PROJECT;
 const iso = (ms) => new Date(ms).toISOString();
 
+/** A direct read of a name that shows it is gone: a 404 whose parsed error status is NOT_FOUND, in any layout. */
+export const absent = (a) =>
+  a?.status === 404 && readable(a) && a.json.error?.status === "NOT_FOUND";
+
+/** What a Scheduler job readback says about the job, reduced to the fields the recording is about. */
+export function jobSummary(json) {
+  return {
+    state: json.state ?? null,
+    schedule: json.schedule ?? null,
+    timeZone: json.timeZone ?? null,
+    retryConfig: json.retryConfig ?? null,
+    attemptDeadline: json.attemptDeadline ?? null,
+    target: json.httpTarget ? "http" : json.pubsubTarget ? "pubsub" : null,
+    name: json.name ?? null,
+  };
+}
+
 class BudgetError extends Error {}
 
 /** The recorded 409 a job DELETE gets right after a pause or run (`sync mutate calls cannot be queued`). */
@@ -392,18 +409,6 @@ export async function record({
     return false;
   }
 
-  function jobSummary(json) {
-    return {
-      state: json.state ?? null,
-      schedule: json.schedule ?? null,
-      timeZone: json.timeZone ?? null,
-      retryConfig: json.retryConfig ?? null,
-      attemptDeadline: json.attemptDeadline ?? null,
-      target: json.httpTarget ? "http" : json.pubsubTarget ? "pubsub" : null,
-      name: json.name ?? null,
-    };
-  }
-
   async function readbacks() {
     await sleep(PROPAGATION_WAIT_MS);
     await read({ id: "readback-jobs", method: "GET", url: SCHEDULER + "?pageSize=500" });
@@ -636,7 +641,6 @@ export async function record({
       }
     }
     // Read every name back directly. Only a direct read of an absence counts.
-    const absent = (a) => a?.status === 404 && readable(a) && a.json.error?.status === "NOT_FOUND";
     const names = [
       ...ALL_FUNCTIONS.map((fn) => [
         "function-" + fn,

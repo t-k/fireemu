@@ -1,0 +1,333 @@
+{
+  "provenance": "Real bodies: the FE formal v5 recording (lists of Cloud Functions v1 and v2 and of Cloud Run services, events project, 2026-10-04), the calendar v5 recording (Cloud Scheduler, sandbox, 2026-10-01) and the calendar shape run (Pub/Sub, sandbox, 2026-09-30). Project numbers are replaced.",
+  "trimmed": {
+    "gcfV1List": "each function reduced to name and status",
+    "gcfV2List": "each function reduced to name, state and environment",
+    "runServicesList": "each service reduced to name"
+  },
+  "answers": {
+    "gcfV1List": {
+      "status": 200,
+      "recordedBytes": 25092,
+      "body": {
+        "functions": [
+          {
+            "name": "projects/fireemu-oracle-events/locations/us-central1/functions/storageArchivedV1",
+            "status": "ACTIVE"
+          },
+          {
+            "name": "projects/fireemu-oracle-events/locations/us-central1/functions/fsUpdatedV1",
+            "status": "ACTIVE"
+          },
+          {
+            "name": "projects/fireemu-oracle-events/locations/us-central1/functions/storageFinalizedV1",
+            "status": "ACTIVE"
+          },
+          {
+            "name": "projects/fireemu-oracle-events/locations/us-central1/functions/authDeletedV1",
+            "status": "ACTIVE"
+          },
+          {
+            "name": "projects/fireemu-oracle-events/locations/us-central1/functions/authCreatedV1",
+            "status": "ACTIVE"
+          },
+          {
+            "name": "projects/fireemu-oracle-events/locations/us-central1/functions/fsWrittenV1",
+            "status": "ACTIVE"
+          },
+          {
+            "name": "projects/fireemu-oracle-events/locations/us-central1/functions/fsCreatedV1",
+            "status": "ACTIVE"
+          },
+          {
+            "name": "projects/fireemu-oracle-events/locations/us-central1/functions/storageDeletedV1",
+            "status": "ACTIVE"
+          },
+          {
+            "name": "projects/fireemu-oracle-events/locations/us-central1/functions/fsDeletedV1",
+            "status": "ACTIVE"
+          },
+          {
+            "name": "projects/fireemu-oracle-events/locations/us-central1/functions/storageMetadataUpdatedV1",
+            "status": "ACTIVE"
+          },
+          {
+            "name": "projects/fireemu-oracle-events/locations/us-central1/functions/pubsubPublishedV1",
+            "status": "ACTIVE"
+          }
+        ]
+      }
+    },
+    "gcfV2List": {
+      "status": 200,
+      "recordedBytes": 73683,
+      "body": {
+        "functions": [
+          {
+            "name": "projects/fireemu-oracle-events/locations/us-central1/functions/storageArchivedV1",
+            "state": "ACTIVE",
+            "environment": "GEN_1"
+          },
+          {
+            "name": "projects/fireemu-oracle-events/locations/us-central1/functions/storageArchivedV2",
+            "state": "ACTIVE",
+            "environment": "GEN_2"
+          },
+          {
+            "name": "projects/fireemu-oracle-events/locations/us-central1/functions/fsUpdatedV2",
+            "state": "ACTIVE",
+            "environment": "GEN_2"
+          },
+          {
+            "name": "projects/fireemu-oracle-events/locations/us-central1/functions/fsUpdatedV1",
+            "state": "ACTIVE",
+            "environment": "GEN_1"
+          },
+          {
+            "name": "projects/fireemu-oracle-events/locations/us-central1/functions/fsRetryV2",
+            "state": "ACTIVE",
+            "environment": "GEN_2"
+          },
+          {
+            "name": "projects/fireemu-oracle-events/locations/us-central1/functions/storageFinalizedV1",
+            "state": "ACTIVE",
+            "environment": "GEN_1"
+          },
+          {
+            "name": "projects/fireemu-oracle-events/locations/us-central1/functions/storageFinalizedV2",
+            "state": "ACTIVE",
+            "environment": "GEN_2"
+          },
+          {
+            "name": "projects/fireemu-oracle-events/locations/us-central1/functions/authDeletedV1",
+            "state": "ACTIVE",
+            "environment": "GEN_1"
+          },
+          {
+            "name": "projects/fireemu-oracle-events/locations/us-central1/functions/fsWrittenWithAuthContextV2",
+            "state": "ACTIVE",
+            "environment": "GEN_2"
+          },
+          {
+            "name": "projects/fireemu-oracle-events/locations/us-central1/functions/authCreatedV1",
+            "state": "ACTIVE",
+            "environment": "GEN_1"
+          },
+          {
+            "name": "projects/fireemu-oracle-events/locations/us-central1/functions/fsWrittenV2",
+            "state": "ACTIVE",
+            "environment": "GEN_2"
+          },
+          {
+            "name": "projects/fireemu-oracle-events/locations/us-central1/functions/fsWrittenV1",
+            "state": "ACTIVE",
+            "environment": "GEN_1"
+          },
+          {
+            "name": "projects/fireemu-oracle-events/locations/us-central1/functions/fsCreatedV2",
+            "state": "ACTIVE",
+            "environment": "GEN_2"
+          },
+          {
+            "name": "projects/fireemu-oracle-events/locations/us-central1/functions/fsCreatedV1",
+            "state": "ACTIVE",
+            "environment": "GEN_1"
+          },
+          {
+            "name": "projects/fireemu-oracle-events/locations/us-central1/functions/storageDeletedV1",
+            "state": "ACTIVE",
+            "environment": "GEN_1"
+          },
+          {
+            "name": "projects/fireemu-oracle-events/locations/us-central1/functions/storageDeletedV2",
+            "state": "ACTIVE",
+            "environment": "GEN_2"
+          },
+          {
+            "name": "projects/fireemu-oracle-events/locations/us-central1/functions/fsDeletedV1",
+            "state": "ACTIVE",
+            "environment": "GEN_1"
+          },
+          {
+            "name": "projects/fireemu-oracle-events/locations/us-central1/functions/fsDeletedV2",
+            "state": "ACTIVE",
+            "environment": "GEN_2"
+          },
+          {
+            "name": "projects/fireemu-oracle-events/locations/us-central1/functions/storageMetadataUpdatedV2",
+            "state": "ACTIVE",
+            "environment": "GEN_2"
+          },
+          {
+            "name": "projects/fireemu-oracle-events/locations/us-central1/functions/storageMetadataUpdatedV1",
+            "state": "ACTIVE",
+            "environment": "GEN_1"
+          },
+          {
+            "name": "projects/fireemu-oracle-events/locations/us-central1/functions/pubsubPublishedV1",
+            "state": "ACTIVE",
+            "environment": "GEN_1"
+          },
+          {
+            "name": "projects/fireemu-oracle-events/locations/us-central1/functions/pubsubPublishedV2",
+            "state": "ACTIVE",
+            "environment": "GEN_2"
+          }
+        ]
+      }
+    },
+    "runServicesList": {
+      "status": 200,
+      "recordedBytes": 75540,
+      "body": {
+        "services": [
+          {
+            "name": "projects/fireemu-oracle-events/locations/us-central1/services/fswrittenv2"
+          },
+          {
+            "name": "projects/fireemu-oracle-events/locations/us-central1/services/storagedeletedv2"
+          },
+          {
+            "name": "projects/fireemu-oracle-events/locations/us-central1/services/fsretryv2"
+          },
+          {
+            "name": "projects/fireemu-oracle-events/locations/us-central1/services/storagemetadataupdatedv2"
+          },
+          {
+            "name": "projects/fireemu-oracle-events/locations/us-central1/services/fswrittenwithauthcontextv2"
+          },
+          {
+            "name": "projects/fireemu-oracle-events/locations/us-central1/services/pubsubpublishedv2"
+          },
+          {
+            "name": "projects/fireemu-oracle-events/locations/us-central1/services/storagefinalizedv2"
+          },
+          {
+            "name": "projects/fireemu-oracle-events/locations/us-central1/services/fsdeletedv2"
+          },
+          {
+            "name": "projects/fireemu-oracle-events/locations/us-central1/services/storagearchivedv2"
+          },
+          {
+            "name": "projects/fireemu-oracle-events/locations/us-central1/services/fsupdatedv2"
+          },
+          {
+            "name": "projects/fireemu-oracle-events/locations/us-central1/services/fscreatedv2"
+          }
+        ]
+      }
+    },
+    "emptyList": {
+      "status": 200,
+      "recordedBytes": 3,
+      "body": {}
+    },
+    "schedulerAbsentPlain": {
+      "status": 404,
+      "recordedBytes": 97,
+      "body": {
+        "error": {
+          "code": 404,
+          "message": "Job not found.",
+          "status": "NOT_FOUND"
+        }
+      }
+    },
+    "schedulerAbsentDetailed": {
+      "status": 404,
+      "recordedBytes": 433,
+      "body": {
+        "error": {
+          "code": 404,
+          "message": "Resource 'projects/fireemu-oracle-sbx/locations/us-central1/jobs/fe-scheduled-calendar-5a73ba99b7014cfd-c07' was not found",
+          "status": "NOT_FOUND",
+          "details": [
+            {
+              "@type": "type.googleapis.com/google.rpc.ResourceInfo",
+              "resourceName": "projects/fireemu-oracle-sbx/locations/us-central1/jobs/fe-scheduled-calendar-5a73ba99b7014cfd-c07"
+            }
+          ]
+        }
+      }
+    },
+    "schedulerJobCreated": {
+      "status": 200,
+      "recordedBytes": 457,
+      "body": {
+        "name": "projects/fireemu-oracle-sbx/locations/us-central1/jobs/fe-scheduled-calendar-5a73ba99b7014cfd-c01",
+        "pubsubTarget": {
+          "topicName": "projects/fireemu-oracle-sbx/topics/fe-scheduled-calendar-5a73ba99b7014cfd",
+          "data": "c2VlZC1vbmx5"
+        },
+        "userUpdateTime": "2026-10-01T05:19:59.866550Z",
+        "state": "ENABLED",
+        "status": {
+          "code": -1
+        },
+        "scheduleTime": "2026-10-01T05:21:00Z",
+        "schedule": "* * * * *",
+        "timeZone": "UTC"
+      }
+    },
+    "schedulerJobPaused": {
+      "status": 200,
+      "recordedBytes": 414,
+      "body": {
+        "name": "projects/fireemu-oracle-sbx/locations/us-central1/jobs/fe-scheduled-calendar-5a73ba99b7014cfd-c01",
+        "pubsubTarget": {
+          "topicName": "projects/fireemu-oracle-sbx/topics/fe-scheduled-calendar-5a73ba99b7014cfd",
+          "data": "c2VlZC1vbmx5"
+        },
+        "userUpdateTime": "2026-10-01T05:20:01.825670Z",
+        "state": "PAUSED",
+        "status": {
+          "code": -1
+        },
+        "schedule": "* * * * *",
+        "timeZone": "UTC"
+      }
+    },
+    "schedulerJobDeleted": {
+      "status": 200,
+      "recordedBytes": 3,
+      "body": {}
+    },
+    "topicAbsent": {
+      "status": 404,
+      "recordedBytes": 149,
+      "body": {
+        "error": {
+          "code": 404,
+          "message": "Resource not found (resource=fe-scheduled-shape-96db1cb7ca5fcb35).",
+          "status": "NOT_FOUND"
+        }
+      }
+    },
+    "subscriptionAbsent": {
+      "status": 404,
+      "recordedBytes": 149,
+      "body": {
+        "error": {
+          "code": 404,
+          "message": "Resource not found (resource=fe-scheduled-shape-96db1cb7ca5fcb35).",
+          "status": "NOT_FOUND"
+        }
+      }
+    },
+    "subscriptionCreated": {
+      "status": 200,
+      "recordedBytes": 340,
+      "body": {
+        "name": "projects/fireemu-oracle-sbx/subscriptions/fe-scheduled-shape-96db1cb7ca5fcb35",
+        "topic": "projects/fireemu-oracle-sbx/topics/fe-scheduled-shape-96db1cb7ca5fcb35",
+        "pushConfig": {},
+        "ackDeadlineSeconds": 10,
+        "messageRetentionDuration": "604800s",
+        "expirationPolicy": {
+          "ttl": "2678400s"
+        },
+        "state": "ACTIVE"
+      }
+    }
+  }
+}

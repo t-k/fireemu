@@ -381,7 +381,7 @@ test("replay on the recorded answers: the empty channel list and the 404 of chan
   assert.deepEqual([answer.ok, answer.code, answer.status], [false, "NOT_FOUND", 404]);
 });
 
-test("a channel that is absent when read by name is settled as absent, and a refused deletion is not read back", async () => {
+test("a created channel that is absent when read by name is settled as absent only by the later run, and a refused deletion is not read back", async () => {
   const gone = mine("absent");
   issue(gone, "ok");
   const denied = mine("denied-readback");
@@ -395,8 +395,14 @@ test("a channel that is absent when read by name is settled as absent, and a ref
     }),
   });
   const report = await run(service);
-  assert.deepEqual(report.settled, [{ name: gone, how: "absent" }]);
+  assert.deepEqual(
+    report.settled,
+    [],
+    "inside the recording a created channel that reads 404 may be lag",
+  );
   assert.deepEqual(report.alreadyGone, [gone]);
+  const afterwards = await run(fakeService({ channels: [] }), { mode: "later" });
+  assert.ok(afterwards.settled.some((item) => item.name === gone && item.how === "absent"));
   const after = service.calls.slice(
     service.calls.findIndex((call) => call.startsWith("DELETE")) + 1,
   );
@@ -405,7 +411,7 @@ test("a channel that is absent when read by name is settled as absent, and a ref
     false,
     "no read-back after a refusal",
   );
-  assert.deepEqual(report.unsettled, [denied]);
+  assert.deepEqual(report.unsettled, [gone, denied]);
 });
 
 test("an operation that never finishes is read fifteen times by default with two seconds between, and as often as it is asked for", async () => {
@@ -461,7 +467,7 @@ test("a creation that is still unknown is not settled by a 404, in the recording
   ledger = createLedger();
   issue(proven, "unknown@op-1");
   issue(proven, "ok@op-1");
-  const third = await run(fakeService({ channels: [] }));
+  const third = await run(fakeService({ channels: [] }), later);
   assert.deepEqual(third.settled, [{ name: proven, how: "absent" }]);
 });
 
@@ -569,7 +575,13 @@ test("a target in a location that cannot exist is read by name and its location 
 });
 
 test("what the ledger says of a channel: nothing for a name it never saw, and each open request counted for what it is", () => {
-  const none = { mayExist: false, createPending: false, deleteSent: false, deletePending: false };
+  const none = {
+    mayExist: false,
+    createPending: false,
+    deleteSent: false,
+    deletePending: false,
+    deleteDone: false,
+  };
   assert.deepEqual(ledgerFacts(undefined), none);
   // An item with nothing in it says nothing either: no creation is pending and no deletion was sent.
   assert.deepEqual(ledgerFacts({ creates: [], deletes: [], open: [] }), none);
@@ -579,12 +591,14 @@ test("what the ledger says of a channel: nothing for a name it never saw, and ea
     createPending: true,
     deleteSent: false,
     deletePending: false,
+    deleteDone: false,
   });
   assert.deepEqual(ledgerFacts({ creates: [], deletes: [], open: ["delete"] }), {
     mayExist: false,
     createPending: false,
     deleteSent: true,
     deletePending: true,
+    deleteDone: false,
   });
   // A later definite answer resolves an unknown deletion, but not an unknown creation: the creation is
   // settled only by its own operation (or an own 2xx read), never by another request.
@@ -595,6 +609,7 @@ test("what the ledger says of a channel: nothing for a name it never saw, and ea
       createPending: true,
       deleteSent: true,
       deletePending: false,
+      deleteDone: true,
     },
   );
   assert.deepEqual(ledgerFacts({ creates: ["unknown@op", "ok@op"], deletes: [], open: [] }), {
@@ -602,6 +617,7 @@ test("what the ledger says of a channel: nothing for a name it never saw, and ea
     createPending: false,
     deleteSent: false,
     deletePending: false,
+    deleteDone: false,
   });
   // An unknown after the definite answer is pending again.
   assert.equal(

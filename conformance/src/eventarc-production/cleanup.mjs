@@ -119,7 +119,13 @@ export function pendingCreateOperations(item) {
  */
 export function ledgerFacts(item) {
   if (item === undefined)
-    return { mayExist: false, createPending: false, deleteSent: false, deletePending: false };
+    return {
+      mayExist: false,
+      createPending: false,
+      deleteSent: false,
+      deletePending: false,
+      deleteDone: false,
+    };
   const creates = createsOf(item);
   const deletes = [
     ...item.deletes,
@@ -131,13 +137,15 @@ export function ledgerFacts(item) {
     !confirmed &&
     (creates.some(({ base, operation }) => base === "unknown" && operation === null) ||
       unsettledOperations(creates).length > 0);
+  const deletePending =
+    lastIndex(deletes, "unknown") > Math.max(lastIndex(deletes, "ok"), lastIndex(deletes, "error"));
   return {
     mayExist: createdOk || createPending,
     createPending,
     deleteSent: deletes.length > 0,
-    deletePending:
-      lastIndex(deletes, "unknown") >
-      Math.max(lastIndex(deletes, "ok"), lastIndex(deletes, "error")),
+    deletePending,
+    // A deletion whose operation was read done without an error, and no unknown deletion after it.
+    deleteDone: deletes.includes("ok") && !deletePending,
   };
 }
 
@@ -226,6 +234,10 @@ export async function cleanup({
         // A deletion that was sent and not proven (unknown, or a 2xx whose operation was not read as done)
         // is not settled inside the recording by anything the channel reads as: only the later run closes it.
         const open = facts.deletePending && !later;
+        // Inside the recording a 404 read by name proves absence only for a channel whose own deletion was
+        // read done: a channel the run created (or may have created) that reads 404 may be read-after-write
+        // lag, and only the later run's read, at least ten minutes on, settles it as gone.
+        const absenceUnproven = open || (!later && facts.mayExist && !facts.deleteDone);
         let confirmedBy = found.has(name) ? "list" : null;
         if (!found.has(name)) {
           // Not shown by a fresh list: read it by name before anything is sent to delete it.
@@ -234,7 +246,7 @@ export async function cleanup({
             report.alreadyGone.push(name);
             // A creation that is still unknown is not settled by absence, in the recording or later.
             if (facts.createPending) report.unconfirmed.push(name);
-            else if (!open) {
+            else if (!absenceUnproven) {
               settled.add(name);
               report.settled.push({ name, how: "absent" });
             }

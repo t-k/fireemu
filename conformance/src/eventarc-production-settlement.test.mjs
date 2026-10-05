@@ -132,6 +132,7 @@ test("V2-M1(a): a duplicate creation answered 409 does not settle the first crea
     createPending: true,
     deleteSent: false,
     deletePending: false,
+    deleteDone: false,
   });
   // The channel exists but the list does not show it yet: it is read by name, confirmed by that 2xx
   // read and then deleted.
@@ -181,11 +182,16 @@ test("a pending creation is settled by its own operation read as done: ok confir
   const first = await run(confirmed);
   assert.deepEqual(first.settled, [{ name: made, how: "deleted" }]);
   assert.deepEqual(ledger.state().get(made).creates, [`unknown@${OP1}`, `ok@${OP1}`]);
-  // Done without an error, and the channel is gone: the creation is confirmed, so absence settles.
+  // Done without an error, and the channel is gone: the creation is confirmed, so absence settles it in
+  // the later run (inside the recording it may be lag: it stays unsettled, but not unconfirmed).
   ledger = createLedger();
   const gone = mine("gone");
   issue(gone, `unknown@${OP1}`);
-  const absent = await run(fakeService({ channels: [], operations: { [OP1]: done() } }));
+  const lag = await run(fakeService({ channels: [], operations: { [OP1]: done() } }));
+  assert.deepEqual([lag.settled, lag.unsettled, lag.unconfirmed], [[], [gone], []]);
+  const absent = await run(fakeService({ channels: [], operations: { [OP1]: done() } }), {
+    mode: "later",
+  });
   assert.deepEqual(absent.settled, [{ name: gone, how: "absent" }]);
   assert.deepEqual([absent.unsettled, absent.unconfirmed], [[], []]);
   // Done with ALREADY_EXISTS or another error: nothing was created by this run. The channel is not read,
@@ -408,6 +414,7 @@ function specification(creates, deletes) {
     createPending: !confirmed && open,
     deleteSent: deletes.length > 0,
     deletePending: last("unknown") > Math.max(last("ok"), last("error")),
+    deleteDone: bases.includes("ok") && !(last("unknown") > Math.max(last("ok"), last("error"))),
   };
 }
 
@@ -477,4 +484,52 @@ test("the most a cleanup sends for twelve pending creations that all exist and n
   assert.ok(service.calls.length <= CLEANUP_BUDGET, `${service.calls.length} requests`);
   // 12 x (4 operation reads, 1 read, 1 deletion, 15 polls, 3 read-backs) and one list.
   assert.equal(service.calls.length, 12 * (OPERATION_READS + 1 + 1 + 15 + 3) + 1);
+});
+
+test("a creation confirmed by its operation that then reads 404 inside the recording is not settled as gone (it may be read-after-write lag); only the later run's 404 settles it", async () => {
+  for (const creates of [["ok"], [`unknown@${OP1}`, `ok@${OP1}`], ["unknown", "confirmed"]]) {
+    ledger = createLedger();
+    const name = mine("lagging");
+    for (const kind of creates) issue(name, kind);
+    const inRecording = await run(fakeService({ channels: [] }));
+    assert.deepEqual(inRecording.settled, [], creates.join());
+    assert.deepEqual(inRecording.unsettled, [name]);
+    assert.deepEqual(inRecording.alreadyGone, [name]);
+    assert.deepEqual(
+      inRecording.unconfirmed,
+      [],
+      "its creation is known; only its absence is unproven",
+    );
+    const afterwards = await run(fakeService({ channels: [] }), { mode: "later" });
+    assert.deepEqual(afterwards.settled, [{ name, how: "absent" }], creates.join());
+    assert.deepEqual(afterwards.unsettled, []);
+  }
+});
+
+test("near misses: a creation whose own deletion was read done is settled by the 404 inside the recording; a deletion that was refused is not", async () => {
+  const deleted = mine("deleted");
+  issue(deleted, "ok");
+  issue(deleted, `unknown@${OPD}`, "delete");
+  issue(deleted, `ok@${OPD}`, "delete");
+  const refused = mine("refused");
+  issue(refused, "ok");
+  issue(refused, "error", "delete");
+  const report = await run(fakeService({ channels: [] }));
+  assert.deepEqual(report.settled, [{ name: deleted, how: "absent" }]);
+  assert.deepEqual(report.unsettled, [refused]);
+});
+
+test("the ledger says whether a deletion was read done", () => {
+  const facts = (deletes, open = []) => ledgerFacts({ creates: ["ok"], deletes, open }).deleteDone;
+  assert.equal(facts([]), false);
+  assert.equal(facts(["ok"]), true);
+  assert.equal(facts([`unknown@${OPD}`, `ok@${OPD}`]), true);
+  assert.equal(facts(["unknown"]), false);
+  assert.equal(facts(["error"]), false);
+  assert.equal(
+    facts(["ok", "unknown"]),
+    false,
+    "an unknown deletion after a done one is open again",
+  );
+  assert.equal(facts(["ok"], ["delete"]), false);
 });

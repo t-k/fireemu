@@ -322,3 +322,29 @@ def test_the_emulator_clock_is_read_from_the_control_session_document(monkeypatc
     # a bare timestamp is read too
     body = json.dumps({"clock": "2026-08-29T12:01:00.500Z"}).encode()
     assert clock.VirtualClock("http://127.0.0.1:1", "t").emulator_now() == 1788004860.5
+
+
+def test_a_token_that_was_begun_again_is_aged_from_its_latest_begin_and_a_step_that_replaces_it_from_the_one_before():
+    steps = [
+        {"id": "begin-1", "tokenInput": None, "tokenOutput": "t"},
+        {"id": "read-1", "tokenInput": "t", "tokenOutput": None},
+        {"id": "begin-2", "tokenInput": None, "tokenOutput": "t"},
+        {"id": "read-2", "tokenInput": "t", "tokenOutput": None},
+        {"id": "retry", "tokenInput": "t", "tokenOutput": "t"},
+        {"id": "read-3", "tokenInput": "t", "tokenOutput": None},
+    ]
+    before = {"read-1": 10.0, "read-2": 100.0, "retry": 150.0, "read-3": 200.0}
+    after = {"begin-1": 1.0, "begin-2": 50.0, "retry": 160.0}
+    assert clock.token_ages(steps, before, after) == {"read-1": 9.0, "read-2": 50.0, "retry": 100.0, "read-3": 40.0}
+
+
+def test_the_recorded_age_of_a_step_whose_begin_was_not_recorded_is_left_out_rather_than_refused():
+    steps = [{"site": "read", "timing": {"dispatchMonotonic": 50.0, "responseMonotonic": 51.0}}]
+    assert clock.production_token_ages(PLAN_STEPS, steps) == {}
+
+
+def test_a_recorded_age_of_exactly_the_minimum_is_judged_and_the_difference_is_rounded_to_milliseconds():
+    rows = clock.judge_token_ages({"a": 100.0, "b": 99.999}, {"a": 100.0004, "b": 99.0}, tolerance=2.0, minimum=100.0)
+    assert [row["site"] for row in rows] == ["a"] and rows[0]["difference"] == 0.0
+    rows = clock.judge_token_ages({"a": 200.0}, {"a": 200.123456789}, tolerance=2.0, minimum=100.0)
+    assert rows[0]["difference"] == 0.123

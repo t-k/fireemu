@@ -173,6 +173,11 @@ test("scheduler entries are counted by kind, target, status and debug info, and 
       attempts.map((a) => a.kind),
       ["AttemptStarted", "AttemptFinished"],
     );
+    // timed from the first frame (08:41:04.109): the start 109 ms before it, the finish 891 ms after it
+    assert.deepEqual(
+      attempts.map((a) => a.at),
+      [-109, 891],
+    );
     assert.ok(attempts[0].at < attempts[1].at);
   } finally {
     rmSync(dir, { recursive: true, force: true });

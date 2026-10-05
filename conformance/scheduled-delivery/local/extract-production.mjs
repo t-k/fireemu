@@ -119,11 +119,8 @@ export function extract(runDir) {
     attempts,
   };
   const text = JSON.stringify(digest);
-  if (
-    NUMBER_LIKE.test(
-      text.replace(/\d{4}-\d\d-\d\dT[\d:.Z+-]+/g, "").replace(/messageId|"eventId":"\d+"/g, ""),
-    )
-  )
+  // A project number is twelve digits between non-word characters: timestamps, message ids and run ids are not.
+  if (NUMBER_LIKE.test(text))
     throw new Error("the digest holds a twelve-digit number: refusing to write it");
   return digest;
 }

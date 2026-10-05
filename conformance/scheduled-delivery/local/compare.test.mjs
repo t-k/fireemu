@@ -111,7 +111,10 @@ function production() {
     for (const o of offsets)
       frames.push(prodV2(keys[name][0], base + Math.round(o * 1000), scheduleTime, keys[name][1]));
   }
+  // a forced run between two natural ones, and two Gen1 handlers at the same instant
+  frames.push(prodV2("schedOkV2", 30_000, la(T0 + 30_000, ".416739")));
   frames.push(prodV1("schedOkV1", 2000, "22257109111563907", "2026-10-05T08:41:01.359Z"));
+  frames.push(prodV1("schedOkV1", 2000, "22257109111563908", "2026-10-05T08:41:01.359Z"));
   frames.push(prodV1("schedFailV1", 4000, "22256732696405721", "2026-10-05T08:42:50.384Z"));
   frames.push(prodV1("schedFailV1", 300_000, "22256732696405722", "2026-10-05T08:47:05.447Z"));
   return { run: { id: "x" }, frames };
@@ -851,4 +854,136 @@ test("the phase of a time: a fraction beyond half a millisecond is a fraction, a
   assert.deepEqual(phase(".0004"), ["whole minute"]);
   assert.deepEqual(phase(""), ["whole minute"]);
   assert.deepEqual(phase(".5"), ["fractional second"]);
+});
+
+test("the production gaps are a mode, not the first gap: a forced run between two natural ones does not set the spacing", () => {
+  const table = rows(production(), local());
+  assert.equal(value(table, "cadence.every-1-minutes.spacing").production, 60);
+});
+
+test("a Gen1 failure is counted for schedFailV1 only: two other Gen1 frames at one instant do not change it", () => {
+  const table = rows(production(), local());
+  assert.deepEqual(value(table, "v1.failure-no-retry").production, [1]);
+});
+
+test("the v2 context row's values are the recorded ones", () => {
+  const row = value(rows(production(), local()), "v2.event.context");
+  assert.deepEqual(row.production, [
+    {
+      property: { enumerable: false, configurable: false, hasGetter: true },
+      eventIdIsJobId: true,
+      topic: true,
+      type: "google.pubsub.topic.publish",
+    },
+  ]);
+  assert.deepEqual(row.local, row.production);
+});
+
+test("frames and lines may arrive in any order: the rows do not change", () => {
+  const p = production();
+  const l = local();
+  const reversedProduction = { ...p, frames: [...p.frames].reverse() };
+  const reversedLocal = {
+    natural: { ...l.natural, lines: [...l.natural.lines].reverse() },
+    probe: { ...l.probe, lines: [...l.probe.lines].reverse() },
+  };
+  assert.deepEqual(rows(reversedProduction, reversedLocal), rows(p, l));
+});
+
+test("the five-minute alignment reads the schedRetryV2 times only, whatever the other handlers' times are", () => {
+  const p = production();
+  // every schedRetryV2 time on a five-minute boundary (two of them), while the other handlers' times stay off it
+  const boundaries = ["2026-10-05T01:45:00-07:00", "2026-10-05T01:50:00-07:00"];
+  let n = 0;
+  const onBoundary = {
+    ...p,
+    frames: p.frames.map((f) => {
+      if (
+        f.handler !== "schedRetryV2" ||
+        !f.headers["x-cloudscheduler-jobname"].startsWith("firebase-schedule-")
+      )
+        return f;
+      const scheduleTime = boundaries[n++ % 2];
+      return {
+        ...f,
+        event: { ...f.event, scheduleTime },
+        headers: { ...f.headers, "x-cloudscheduler-scheduletime": scheduleTime },
+      };
+    }),
+  };
+  const l = local();
+  let m = 0;
+  l.natural.lines = l.natural.lines.map((x) =>
+    x.value.handler === "schedRetryV2"
+      ? {
+          ...x,
+          value: { ...x.value, event: { ...x.value.event, scheduleTime: boundaries[m++ % 2] } },
+        }
+      : x,
+  );
+  l.natural.lines.push(localV2("schedRetryV2", instant(T0 + 600_000), "2026-10-05T01:55:00-07:00"));
+  const aligned = value(rows(onBoundary, l), "cadence.every-5-minutes.alignment");
+  assert.deepEqual(aligned.production, ["five-minute boundary"]);
+  assert.deepEqual(aligned.local, ["five-minute boundary"]);
+  assert.equal(aligned.verdict, "MATCH");
+});
+
+test("localChains keeps the earliest occurrence, the first of equal starts, and sorts a descending occurrence", () => {
+  const line = (handler, scheduleTime, seconds) => ({
+    at: instant(T0 + seconds * 1000),
+    kind: "PROBE",
+    value: { handler, scheduleTime },
+  });
+  // later occurrence first, then an earlier one that starts before it but ends after it
+  const both = [line("h", "A", 10), line("h", "A", 20), line("h", "B", 5), line("h", "B", 30)];
+  assert.deepEqual(localChains({ lines: both }).h, [0, 25]);
+  assert.deepEqual(localChains({ lines: [...both].reverse() }).h, [0, 25]);
+  // equal starts: the first one met wins
+  const tie = [line("h", "A", 0), line("h", "A", 4), line("h", "B", 0), line("h", "B", 9)];
+  assert.deepEqual(localChains({ lines: tie }).h, [0, 4]);
+  // an occurrence listed in descending time order is read ascending
+  assert.deepEqual(
+    localChains({ lines: [line("h", "A", 12), line("h", "A", 4), line("h", "A", 0)] }).h,
+    [0, 4, 12],
+  );
+});
+
+test("the lower edge of the retry tolerance is inclusive: half a second earlier than local still matches", () => {
+  const p = production();
+  // retryDuration in production: 0, 4.6, 13.2, 23.7; give it offsets exactly half a second earlier than local
+  p.frames = p.frames.filter(
+    (f) => !f.headers?.["x-cloudscheduler-jobname"]?.endsWith("-duration"),
+  );
+  const base = 90_000_000;
+  for (const o of [0, 4.5, 13.5, 24.5])
+    p.frames.push(
+      prodV2(
+        "schedRetryV2",
+        base + o * 1000,
+        "2026-12-31T16:00:00-08:00",
+        "fe-sd-0123456789abcdef-duration",
+      ),
+    );
+  const l = local();
+  l.probe.lines = l.probe.lines.filter((x) => x.value.handler !== "retryDuration");
+  for (const o of [0, 5, 14, 25])
+    l.probe.lines.push({
+      at: instant(T0 + o * 1000),
+      kind: "PROBE",
+      value: { handler: "retryDuration" },
+    });
+  assert.equal(value(rows(p, l), "retry.retryDuration").verdict, "MATCH");
+  p.frames = p.frames.filter(
+    (f) => !f.headers?.["x-cloudscheduler-jobname"]?.endsWith("-duration"),
+  );
+  for (const o of [0, 4.4, 13.5, 24.5])
+    p.frames.push(
+      prodV2(
+        "schedRetryV2",
+        base + o * 1000,
+        "2026-12-31T16:00:00-08:00",
+        "fe-sd-0123456789abcdef-duration",
+      ),
+    );
+  assert.equal(value(rows(p, l), "retry.retryDuration").verdict, "DIVERGES");
 });

@@ -167,18 +167,15 @@ export function rows(production, local) {
       ? `not reproduced: ${missing.join(", ")} (the OIDC credential, trace and forwarding headers; nothing here can sign for Google)`
       : "",
   );
-  const pBody = unique(pv2.map((f) => [f.rawBodyLength, f.event ? "event" : null]));
-  const lBody = unique(lv2Requests.map((r) => [r.rawBodyLength, "event"]));
+  const pLengths = unique(pv2.map((f) => f.rawBodyLength));
+  const lLengths = unique(lv2Requests.map((r) => r.rawBodyLength));
   add(
     "v2.request.body",
     "v2-http-delivery",
     "body",
-    unique(pv2.map((f) => f.rawBodyLength)),
-    unique(lv2Requests.map((r) => r.rawBodyLength)),
-    JSON.stringify(unique(pv2.map((f) => f.rawBodyLength))) ===
-      JSON.stringify(unique(lv2Requests.map((r) => r.rawBodyLength))) &&
-      pBody.length > 0 &&
-      lBody.length > 0,
+    pLengths,
+    lLengths,
+    JSON.stringify(pLengths) === JSON.stringify(lLengths),
     "an empty body (no content)",
   );
 
@@ -353,13 +350,7 @@ export function rows(production, local) {
     "consecutive occurrences of `every 1 minutes`",
   );
   const phase = (times) =>
-    unique(
-      times.map((t) =>
-        Math.round((t % 60) * 1e6) / 1e6 > 0 && Math.abs(t % 60) > 0.0005
-          ? "fractional second"
-          : "whole minute",
-      ),
-    );
+    unique(times.map((t) => (Math.abs(t % 60) > 0.0005 ? "fractional second" : "whole minute")));
   const pPhase = phase(pOk.slice(1));
   const lPhase = phase(lOk);
   add(

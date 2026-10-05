@@ -102,7 +102,7 @@ test("an unknown variant, a name that is not the run's, and a surplus argument a
 });
 
 test("a variant the service accepts is a 2xx with an operation: the ledger holds it unknown until the operation is read, for both names", async () => {
-  const { world, ownership, ledger, client } = setup();
+  const { world, ownership, ledger } = setup();
   const one = ownership.channel(LOCATION, "v-e");
   const other = ownership.channel(LOCATION, "v-f");
   // A service that accepts the body whatever the path says (the model's answer is a refusal, so the answer is replaced).

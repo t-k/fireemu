@@ -6,7 +6,6 @@
 import assert from "node:assert/strict";
 import { createRequire } from "node:module";
 import test from "node:test";
-import { createCapture } from "./pubsub-production/capture.mjs";
 import { createLedger } from "./pubsub-production/ledger.mjs";
 import { createClient } from "./eventarc-production/client.mjs";
 import { createOwnership } from "./eventarc-production/names.mjs";

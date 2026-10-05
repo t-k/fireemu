@@ -180,6 +180,40 @@ test("an error status from the service is thrown by the SDK with that status, an
   assert.equal(calls.length, 1);
 });
 
+test("an error of any kind is reported with its message cut to 300 characters, and a non-error is reported as text", async (t) => {
+  for (const [thrown, expected] of [
+    [new TypeError("z".repeat(1000)), "z".repeat(300)],
+    ["a plain string".repeat(40), "a plain string".repeat(40).slice(0, 300)],
+  ]) {
+    const sdk = await createSdk({
+      project: "demo-project",
+      runId: RUN,
+      caseId: "admin-sdk-publish",
+      getToken: async () => "t",
+      transport: { name: "rest", request: async () => ({ status: 200, body: {}, unknown: false }) },
+      ownership: own(),
+      publishPrefix: "/v1",
+      importer: async (name) =>
+        name === "firebase-admin/app"
+          ? { initializeApp: () => ({}), deleteApp: async () => {} }
+          : {
+              getEventarc: () => ({
+                channel: () => ({
+                  publish: async () => {
+                    throw thrown;
+                  },
+                }),
+              }),
+            },
+    });
+    t.after(() => sdk.close());
+    const outcome = await sdk.publish({ channel: CHANNEL, events: { type: "t" } });
+    assert.equal(outcome.threw, true);
+    assert.equal(outcome.error.message, expected);
+    assert.equal(outcome.error.name, thrown instanceof Error ? "TypeError" : "Error");
+  }
+});
+
 test("a 503 is forwarded once: the SDK's retry is answered here with a 409, never sent, noted, and ends the SDK's attempts", async (t) => {
   const { sdk, calls, notes } = await setup({ status: 503, body: {}, unknown: true });
   t.after(() => sdk.close());

@@ -637,6 +637,27 @@ describe("the delete guard", () => {
     assert.equal(report.closureReady, true);
   });
 
+  it("has no 404 against a name settled by a read, or created again without a delete between", () => {
+    create("u", TIMEOUT);
+    read("u", OK);
+    assert.deepEqual(closureReport(state).confirmedReadsMissing, []);
+    assert.deepEqual(closureReport(state).reasons, ["owned-not-deleted:u"]);
+    create("a", OK);
+    read("a", NOT_FOUND);
+    assert.deepEqual(closureReport(state).confirmedReadsMissing, ["a"]);
+    create("a", OK); // a second 2xx create of the same name, with no delete between
+    assert.deepEqual(closureReport(state).confirmedReadsMissing, []);
+  });
+
+  it("forgets a delete's read-back state when an unknown create of the name is settled as present", () => {
+    create("a", OK);
+    remove("a", OK);
+    create("a", TIMEOUT);
+    assert.equal(read("a", OK), "present");
+    assert.deepEqual(closureReport(state).reasons, ["owned-not-deleted:a"]);
+    assert.deepEqual(closureReport(state).deletedUnverified, []);
+  });
+
   it("starts a new confirmed create with no 404 against it", () => {
     create("topics/a", OK);
     read("topics/a", NOT_FOUND);
@@ -1976,6 +1997,15 @@ describe("the A2 read-back starts after the last request", () => {
     assert.ok(report.a2NotBefore > report.unknownAnswers[0].eligibleForA2At);
   });
 
+  it("keeps the latest time when the clock steps back", () => {
+    advance(5000);
+    create("a", OK);
+    advance(-4000);
+    read("a", OK);
+    create("b", OK);
+    assert.equal(closureReport(state).lastRequestAt, new Date(START + 5000).toISOString());
+  });
+
   it("is not moved by an audit row, a resume or a synthetic answer", () => {
     create("a", OK);
     beginCreate(state, { name: "b", transport: "rest" });
@@ -2133,12 +2163,20 @@ describe("accepting an unconfirmed create", () => {
     state = open("fresh.jsonl");
   });
 
-  it("is refused by a closed or failed state", () => {
+  it("is refused by a closed or failed state, before anything else is judged", () => {
     create("a", TIMEOUT);
     lateAbsent("a");
     closeOwnership(state);
     assert.equal(
       refusal(() => ask("a", "ledger 901")),
+      "closed",
+    );
+    assert.equal(
+      refusal(() => ask("a", "")),
+      "closed",
+    );
+    assert.equal(
+      refusal(() => ask("nobody", "ledger 901")),
       "closed",
     );
     state = open("second.jsonl");

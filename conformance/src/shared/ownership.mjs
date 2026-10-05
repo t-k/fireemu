@@ -136,7 +136,7 @@ function blankName() {
     unsettled: null,
     deleteUnknown: false,
     // Reads or delete answers of 404 for a create this run confirmed and did not delete.
-    missingReads: 0,
+    readsMissing: false,
     // After this run's own DELETE answered 2xx: null (none), "unverified" (no own GET read it back
     // yet), "verified" (the last own GET answered 404) or "present" (the last own GET showed it).
     deletePhase: null,
@@ -187,7 +187,7 @@ function applyAnswer(state, row) {
       st.owned = true;
       st.created = true;
       st.via = "create";
-      st.missingReads = 0; // a new confirmed create starts with no 404 against it
+      st.readsMissing = false; // a new confirmed create starts with no 404 against it
       st.deletePhase = null;
     } else if (klass === "unknown") {
       st.unsettled = unknownAnswer(state, row);
@@ -197,12 +197,12 @@ function applyAnswer(state, row) {
   if (klass === "ok") {
     // Gone as far as the answer says; it counts as settled only after an own GET reads 404.
     st.owned = false;
-    st.missingReads = 0;
+    st.readsMissing = false;
     st.deletePhase = "unverified";
   } else if (klass === "notFound") {
     // A 404 for a create this run confirmed is not a settlement (a read-after-write lag can hide a
     // live resource): only this run's own DELETE answered 2xx, or the coordinator's A2, settles it.
-    if (st.owned) st.missingReads += 1;
+    if (st.owned) st.readsMissing = true;
   } else if (klass === "unknown") {
     st.unsettled = unknownAnswer(state, row);
     st.deleteUnknown = true;
@@ -237,7 +237,7 @@ function applyRead(state, row) {
     if (row.observed === "absent") {
       // A create this run confirmed that reads 404 stays open (a lag can hide a live resource); a
       // name this run deleted with a 2xx is read back by this 404.
-      if (st.owned) st.missingReads += 1;
+      if (st.owned) st.readsMissing = true;
       else if (st.deletePhase !== null) st.deletePhase = "verified";
     } else if (st.deletePhase !== null) {
       st.deletePhase = "present";
@@ -855,7 +855,7 @@ export function closureReport(state) {
     if (st.unsettled?.action === "create" && st.unsettled.absentReads.length > 0)
       reasons.push(`unknown-create-absent-unconfirmed:${name}`);
     if (st.owned) reasons.push(`owned-not-deleted:${name}`);
-    if (st.owned && st.missingReads > 0) reasons.push(`confirmed-create-reads-404:${name}`);
+    if (st.owned && st.readsMissing) reasons.push(`confirmed-create-reads-404:${name}`);
     // Our own DELETE answered 2xx; it settles only once an own GET reads the name as 404.
     if (st.deletePhase === "unverified") reasons.push(`deleted-unverified:${name}`);
     if (st.deletePhase === "present") reasons.push(`deleted-but-present:${name}`);
@@ -889,7 +889,7 @@ export function closureReport(state) {
         : new Date(state.lastRequestAt + state.settleAbsentAfterMs).toISOString(),
     // Created names that read 404 before this run deleted them: open until the A2 read-back.
     confirmedReadsMissing: [...state.names]
-      .filter(([, st]) => st.owned && st.missingReads > 0)
+      .filter(([, st]) => st.owned && st.readsMissing)
       .map(([name]) => name)
       .toSorted(),
     // What each unsettled name is waiting for, and why it is unknown.

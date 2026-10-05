@@ -10,7 +10,7 @@ import txn_expiry_cases as cases
 import txn_expiry_comparison as comparison
 import txn_expiry_plan as plan
 from broad_contract import digest
-from evidence_common import BINARY_INPUTS_SCHEME, binary_inputs, binary_inputs_at_commit
+from evidence_common import BINARY_INPUTS_SCHEME, binary_inputs, binary_inputs_at_commit, source_files_including_test_only_trees
 
 ROOT = Path(__file__).resolve().parents[3]
 PATH = ROOT / "spec/compatibility/broad-runs/fs-transaction-expiry-retry-04-recorded-comparison-v1.json"
@@ -63,6 +63,14 @@ def test_current_recorded_artifact_has_a_successful_build_and_current_rust_input
     assert current == binary_inputs_at_commit(artifact["sourceCommit"], ROOT)
     assert artifact["runtimeInputsDigest"] == digest(current)
     assert artifact["runtimeInputCount"] == len(current)
+    # what the build read: no file of an excluded tree (the dependency-info file of the build, checked by the step that made the receipt), and no built user interface
+    assert artifact["dependencyInfoInExcludedTrees"] == [] and artifact["dependencyInfoWorkspaceFiles"] > 100
+    assert artifact["uiBundled"] is False
+
+
+def test_no_bound_source_can_pull_a_file_of_an_excluded_tree_into_the_binary():
+    # the guard that keeps `binary_inputs` sound: this runs in the compat-broad shards
+    assert source_files_including_test_only_trees(ROOT) == []
 
 
 def test_both_profiles_match_every_case_in_both_production_recordings():

@@ -65,8 +65,11 @@ from evidence_common import (
     BINARY_INPUTS_SCHEME,
     binary_inputs,
     binary_inputs_at_commit,
+    dependency_info_in_test_only_trees,
+    dependency_info_paths,
     runtime_inputs,
     source_files_including_test_only_trees,
+    ui_bundled,
 )
 
 FILES = {
@@ -74,7 +77,7 @@ FILES = {
     "Cargo.lock": "lock",
     "rust-toolchain.toml": "toolchain",
     ".cargo/config.toml": "cargo config",
-    "crates/a/Cargo.toml": "crate a",
+    "crates/a/Cargo.toml": '[package]\nname = "a"\n',
     "crates/a/build.rs": "build script",
     "crates/a/src/lib.rs": "library",
     "crates/a/src/lib_tests.rs": "a test-only module that stays bound (it may be inline code)",
@@ -140,22 +143,94 @@ def test_the_binary_inputs_say_which_definition_they_are():
     assert BINARY_INPUTS_SCHEME == "binary-v1"
 
 
-def test_a_source_file_that_includes_a_test_only_tree_is_reported(tmp_path):
-    files = {**FILES, "crates/a/src/lib.rs": 'const D: &str = include_str!("../tests/fixtures/data.json");'}
-    root = repo(tmp_path, files)
-    assert source_files_including_test_only_trees(root) == ["crates/a/src/lib.rs"]
-    for text in ('include_bytes!("../benches/x")', '#[path = "../examples/e.rs"] mod e;', 'include!(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/x.rs"))', "include_str!(\"../proptest-regressions/it.txt\")"):
-        other = tmp_path / "crates/b/src/main.rs"
-        other.write_text(text)
-        assert "crates/b/src/main.rs" in source_files_including_test_only_trees(root)
-    # a module path gated on a test build is that build's own
-    other.write_text('#[cfg(all(test, unix))]\n#[path = "../../../tests/support/helper.rs"]\npub(crate) mod helper;')
-    assert "crates/b/src/main.rs" not in source_files_including_test_only_trees(root)
-    # but a gate that is not about tests does not excuse it
-    other.write_text('#[cfg(unix)]\n#[path = "../../../tests/support/helper.rs"]\npub(crate) mod helper;')
-    assert "crates/b/src/main.rs" in source_files_including_test_only_trees(root)
-    other.write_text('include_str!("generated/UPSTREAM_COMMIT"); // tests are fine to mention')
-    assert "crates/b/src/main.rs" not in source_files_including_test_only_trees(root)
+def guard(tmp_path, files):
+    """The guard's report for a repository with `files` added to the fixture's crates (each path relative to the root)."""
+    root = repo(tmp_path, {**FILES, **files})
+    return source_files_including_test_only_trees(root)
+
+
+def test_a_one_line_include_of_a_test_only_tree_is_reported(tmp_path):
+    assert guard(tmp_path, {"crates/a/src/lib.rs": 'const D: &str = include_str!("../tests/fixtures/data.json");'}) == ["crates/a/src/lib.rs"]
+    for text in ('include_bytes!("../benches/x")', 'include!("../examples/e.rs");', 'include_str!("../proptest-regressions/it.txt")'):
+        assert guard(tmp_path / text.split("!")[0], {"crates/b/src/main.rs": text}) == ["crates/b/src/main.rs"], text
+
+
+def test_an_include_whose_path_is_on_another_line_than_its_macro_is_reported(tmp_path):
+    source = 'const D: &str = include_str!(\n    concat!(env!("CARGO_MANIFEST_DIR"), "/tests/data.rs"),\n);'
+    assert guard(tmp_path, {"crates/a/src/multi.rs": source}) == ["crates/a/src/multi.rs"]
+    assert guard(tmp_path / "again", {"crates/a/src/multi.rs": source.replace("tests", "docs")}) == []
+
+
+def test_other_embedding_macros_and_attributes_are_reported_too(tmp_path):
+    for text in ('static D: Dir = include_dir!("$CARGO_MANIFEST_DIR/tests");', '#[derive(RustEmbed)]\n#[folder = "tests/"]\nstruct Assets;', 'embed_file!("../tests/a.bin")'):
+        assert guard(tmp_path / str(abs(hash(text))), {"crates/a/src/lib.rs": text}) == ["crates/a/src/lib.rs"], text
+
+
+def test_a_module_path_into_a_test_only_tree_is_reported_unless_a_positive_test_gate_excuses_it(tmp_path):
+    path = '#[path = "../../../tests/support/helper.rs"]\npub(crate) mod helper;'
+    assert guard(tmp_path, {"crates/a/src/lib.rs": path}) == ["crates/a/src/lib.rs"]
+    for gate in ("#[cfg(test)]", "#[cfg(all(test, unix))]", "#[cfg(all(unix, test))]"):
+        assert guard(tmp_path / gate, {"crates/a/src/lib.rs": f"{gate}\n{path}"}) == [], gate
+    for gate in ("#[cfg(not(test))]", "#[cfg(any(test, feature = \"fixtures\"))]", "#[cfg(unix)]", "#[cfg(not(all(test, unix)))]", "#[cfg_attr(not(test), path = \"../tests/x.rs\")]"):
+        text = f"{gate}\n{path}" if "cfg_attr" not in gate else f"{gate}\nmod x;"
+        assert guard(tmp_path / gate, {"crates/a/src/lib.rs": text}) == ["crates/a/src/lib.rs"], gate
+
+
+def test_an_include_inside_a_test_gated_module_is_excused_and_one_outside_it_is_not(tmp_path):
+    inside = '#[cfg(test)]\nmod tests {\n    fn f() {\n        let _ = include!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../tests/support/x.rs"));\n    }\n}\n'
+    assert guard(tmp_path, {"crates/a/src/lib.rs": inside}) == []
+    outside = inside + 'const D: &str = include_str!("../tests/y");\n'
+    assert guard(tmp_path / "out", {"crates/a/src/lib.rs": outside}) == ["crates/a/src/lib.rs"]
+    before = 'const D: &str = include_str!("../tests/y");\n' + inside
+    assert guard(tmp_path / "before", {"crates/a/src/lib.rs": before}) == ["crates/a/src/lib.rs"]
+    ungated = inside.replace("#[cfg(test)]\n", "")
+    assert guard(tmp_path / "ungated", {"crates/a/src/lib.rs": ungated}) == ["crates/a/src/lib.rs"]
+    negated = inside.replace("#[cfg(test)]", "#[cfg(not(test))]")
+    assert guard(tmp_path / "negated", {"crates/a/src/lib.rs": negated}) == ["crates/a/src/lib.rs"]
+
+
+def test_braces_in_strings_and_comments_do_not_end_a_test_module_early(tmp_path):
+    body = '#[cfg(test)]\nmod tests {\n    // a stray } in a comment\n    const S: &str = "}";\n    const C: char = \'}\';\n    fn f<\'a>(x: &\'a str) {\n        let _ = include_str!("../../../tests/a");\n    }\n}\n'
+    assert guard(tmp_path, {"crates/a/src/lib.rs": body}) == []
+
+
+def test_a_build_script_that_names_a_test_only_tree_is_reported(tmp_path):
+    script = 'fn main() {\n    let data = std::fs::read("tests/data.rs").unwrap();\n    println!("cargo:rerun-if-changed=tests/data.rs");\n}\n'
+    assert guard(tmp_path, {"crates/a/build.rs": script}) == ["crates/a/build.rs"]
+    assert guard(tmp_path / "ok", {"crates/a/build.rs": "fn main() { println!(\"cargo:rerun-if-changed=build.rs\"); }"}) == []
+
+
+def test_a_manifest_that_points_a_target_or_the_build_script_into_a_test_only_tree_is_reported(tmp_path):
+    for manifest in ('[package]\nname = "a"\nbuild = "tests/build.rs"\n', '[lib]\npath = "tests/lib.rs"\n', '[[bin]]\nname = "a"\npath = "benches/main.rs"\n', '[[bin]]\nname = "a"\npath = "src/../tests/main.rs"\n'):
+        assert guard(tmp_path / str(abs(hash(manifest))), {"crates/a/Cargo.toml": manifest}) == ["crates/a/Cargo.toml"], manifest
+    # the test, bench and example targets of a crate are the trees themselves: their paths are fine
+    assert guard(tmp_path / "targets", {"crates/a/Cargo.toml": '[package]\nname = "a"\n[[bench]]\nname = "b"\npath = "benches/b.rs"\n[[test]]\nname = "t"\npath = "tests/t.rs"\n[lib]\npath = "src/lib.rs"\n'}) == []
+
+
+def test_a_dependency_info_file_that_lists_a_test_only_tree_is_refused(tmp_path):
+    root = repo(tmp_path)
+    info = f"{root}/target/debug/fireemu: {root}/crates/a/src/lib.rs {root}/crates/a/tests/it.rs {root}/crates/b/src/main.rs {root}/crates/a/benches/b.rs /elsewhere/registry/src/x.rs\n"
+    assert dependency_info_in_test_only_trees(info, root) == ["crates/a/benches/b.rs", "crates/a/tests/it.rs"]
+    clean = f"{root}/target/debug/fireemu: {root}/crates/a/src/lib.rs {root}/crates/b/src/main.rs \\\n  {root}/crates/a/src/lib_tests.rs\n"
+    assert dependency_info_in_test_only_trees(clean, root) == []
+    # a path with an escaped space and a `..` is normalized before it is compared
+    assert dependency_info_in_test_only_trees(f"x: {root}/crates/a/src/../tests/it.rs", root) == ["crates/a/tests/it.rs"]
+
+
+def test_the_paths_a_dependency_info_file_lists_are_the_workspace_files_normalized(tmp_path):
+    root = repo(tmp_path)
+    info = f"{root}/target/debug/fireemu: {root}/crates/b/src/main.rs {root}/crates/a/src/../src/lib.rs /registry/x.rs {root}/crates/b/src/main.rs\n"
+    assert dependency_info_paths(info, root) == ["crates/a/src/lib.rs", "crates/b/src/main.rs"]
+    assert dependency_info_paths("", root) == []
+
+
+def test_a_built_user_interface_bundle_is_noticed(tmp_path):
+    root = repo(tmp_path)
+    assert ui_bundled(root) is False
+    (root / "ui/dist").mkdir(parents=True)
+    assert ui_bundled(root) is False   # a directory without its entry page is not a bundle: the build script embeds nothing then
+    (root / "ui/dist/index.html").write_text("<html></html>")
+    assert ui_bundled(root) is True
 
 
 def test_no_source_file_of_this_repository_includes_a_test_only_tree():

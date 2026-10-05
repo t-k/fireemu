@@ -152,7 +152,10 @@ export async function createSdk({
       closed = true;
       active = null;
       await deleteApp(app);
-      await new Promise((resolve) => server.close(resolve));
+      // An idle keep-alive connection must not hold the forwarder open after its case.
+      const closing = new Promise((resolve) => server.close(resolve));
+      server.closeAllConnections();
+      await closing;
     },
   });
 }

@@ -317,3 +317,56 @@ test("while a publish is in progress, a request under another token, with anothe
   release();
   assert.deepEqual(await publishing, { threw: false, requests: 1, suppressed: 1 });
 });
+
+test("the forwarder answers only the publish route of the project while a publish is in progress, as JSON, and says why it refused", async (t) => {
+  let release;
+  const gate = new Promise((resolve) => (release = resolve));
+  let seen;
+  const hostSeen = new Promise((resolve) => (seen = resolve));
+  const { sdk, notes } = await setup(async () => {
+    seen(process.env.CLOUD_EVENTARC_EMULATOR_HOST);
+    await gate;
+    return { status: 200, body: {}, unknown: false };
+  });
+  t.after(() => sdk.close());
+  const publishing = sdk.publish({
+    channel: CHANNEL,
+    events: { type: "t", source: "//s", data: "x" },
+  });
+  const host = await hostSeen;
+  const base = host;
+  const route = (project) =>
+    `${base}/projects/${project}/locations/us-central1/channels/fe0123456789ab-sd-sdk:publishEvents`;
+  const probe = async (url, init) => {
+    const response = await fetch(url, init);
+    return {
+      status: response.status,
+      type: response.headers.get("content-type"),
+      body: await response.json(),
+    };
+  };
+  // A wrong method on the route and the route of another project are refused with a reason.
+  const getMethod = await probe(route("demo-project"), { method: "GET" });
+  assert.equal(getMethod.status, 404);
+  assert.equal(getMethod.type, "application/json");
+  assert.match(getMethod.body.error.message, /not the publish route of this forwarder/);
+  const otherProject = await probe(route("other-project"), { method: "POST", body: "{}" });
+  assert.equal(otherProject.status, 404);
+  assert.match(otherProject.body.error.message, /not a publish route of the project/);
+  // Outside the forwarder's own path (no token) nothing is served.
+  const bare = await probe(`${new URL(host).origin}/projects/demo-project`, { method: "POST" });
+  assert.equal(bare.status, 404);
+  release();
+  const outcome = await publishing;
+  assert.equal(outcome.threw, false);
+  // With no publish in progress the forwarder refuses everything.
+  const idle = await probe(route("demo-project"), { method: "POST", body: "{}" });
+  assert.equal(idle.status, 403);
+  assert.equal(idle.type, "application/json");
+  assert.match(idle.body.error.message, /no publish is in progress/);
+  const reasons = new Set(
+    notes.filter(([kind]) => kind === "sdk-refused").map(([, data]) => data.why),
+  );
+  assert.ok(reasons.has("not the publish route of this forwarder"));
+  assert.ok(reasons.has("not a publish route of the project"));
+});

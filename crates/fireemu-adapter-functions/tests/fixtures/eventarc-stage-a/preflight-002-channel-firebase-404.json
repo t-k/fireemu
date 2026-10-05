@@ -1,0 +1,9 @@
+{
+  "id": "firebase-channel",
+  "method": "GET",
+  "url": "https://eventarc.googleapis.com/v1/projects/fireemu-oracle-idp/locations/us-central1/channels/firebase",
+  "status": 404,
+  "body": "{\n  \"error\": {\n    \"code\": 404,\n    \"message\": \"Resource 'projects/fireemu-oracle-idp/locations/us-central1/channels/firebase' was not found\",\n    \"status\": \"NOT_FOUND\",\n    \"details\": [\n      {\n        \"@type\": \"type.googleapis.com/google.rpc.ResourceInfo\",\n        \"resourceName\": \"projects/fireemu-oracle-idp/locations/us-central1/channels/firebase\"\n      }\n    ]\n  }\n}\n",
+  "contentType": "application/json; charset=UTF-8",
+  "recordedAt": "2026-09-30T09:46:12.807Z"
+}

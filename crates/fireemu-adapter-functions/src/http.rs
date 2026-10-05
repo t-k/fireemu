@@ -1199,23 +1199,21 @@ fn request_id() -> String {
     )
 }
 
-/// Whether a request carries `Authorization: Bearer <token>` with a token. The token is not verified:
-/// whether an OAuth access token is valid is Google's state, which a local listener does not have.
-fn has_bearer_credential(headers: &hyper::HeaderMap) -> bool {
-    headers
-        .get(hyper::header::AUTHORIZATION)
-        .and_then(|value| value.to_str().ok())
-        .and_then(|value| value.split_once(' '))
-        .is_some_and(|(scheme, token)| {
-            scheme.eq_ignore_ascii_case("bearer") && !token.trim().is_empty()
-        })
+/// The token of an `Authorization: Bearer <token>` header (the scheme is case-insensitive), or `None` when
+/// there is no such header or its token is empty. The token is not verified here: see
+/// `eventarc_strict::classify_token` for what is judged and what is left to Google.
+fn bearer_token(headers: &hyper::HeaderMap) -> Option<String> {
+    let value = headers.get(hyper::header::AUTHORIZATION)?.to_str().ok()?;
+    let (scheme, token) = value.split_once(' ')?;
+    let token = token.trim();
+    (scheme.eq_ignore_ascii_case("bearer") && !token.is_empty()).then(|| token.to_owned())
 }
 
 fn json_answer(answer: &crate::eventarc_strict::Answer) -> Response<OutBody> {
     typed(
         StatusCode::from_u16(answer.status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR),
         "application/json; charset=UTF-8",
-        &answer.body.to_string(),
+        &answer.text(),
     )
 }
 
@@ -1245,7 +1243,7 @@ fn deliver_strict(
                 "[functions] eventarc: {} event(s) on {channel} reached {delivered} function(s)",
                 published.len()
             );
-            typed(StatusCode::OK, "application/json; charset=UTF-8", "{}")
+            typed(StatusCode::OK, "application/json; charset=UTF-8", "{}\n")
         }
         Err(crate::runtime::EventarcPublishError::Capacity) => {
             json_answer(&crate::eventarc_strict::failure(
@@ -1273,7 +1271,7 @@ async fn respond_eventarc_strict(
 ) -> Response<OutBody> {
     use crate::eventarc_strict::{evaluate, Input, Outcome, World};
 
-    let authorized = has_bearer_credential(req.headers());
+    let bearer = bearer_token(req.headers());
     let query = req.uri().query().map(str::to_owned);
     let body = match collect_body(req.into_body(), body_limit).await {
         Ok(body) => body,
@@ -1292,7 +1290,7 @@ async fn respond_eventarc_strict(
     let input = Input {
         route: &route,
         query: query.as_deref(),
-        authorized,
+        bearer: bearer.as_deref(),
         body: &body,
     };
     match evaluate(&input, &world) {
@@ -2217,7 +2215,7 @@ mod streaming_tests {
 
 #[cfg(test)]
 mod strict_eventarc_tests {
-    use super::{format_request_id, has_bearer_credential, request_id};
+    use super::{bearer_token, format_request_id, request_id};
     use hyper::header::{HeaderMap, HeaderValue, AUTHORIZATION};
 
     fn headers(value: Option<&str>) -> HeaderMap {
@@ -2230,14 +2228,18 @@ mod strict_eventarc_tests {
 
     #[test]
     fn a_credential_is_a_bearer_scheme_with_a_token_and_nothing_else() {
-        for fine in [
-            "Bearer abc",
-            "bearer abc",
-            "BEARER abc",
-            "Bearer  spaced ",
-            "Bearer a b",
+        for (value, token) in [
+            ("Bearer abc", "abc"),
+            ("bearer abc", "abc"),
+            ("BEARER abc", "abc"),
+            ("Bearer  spaced ", "spaced"),
+            ("Bearer a b", "a b"),
         ] {
-            assert!(has_bearer_credential(&headers(Some(fine))), "{fine:?}");
+            assert_eq!(
+                bearer_token(&headers(Some(value))).as_deref(),
+                Some(token),
+                "{value:?}"
+            );
         }
         for refused in [
             "Bearer",
@@ -2249,19 +2251,17 @@ mod strict_eventarc_tests {
             "Bearerabc",
             "",
         ] {
-            assert!(
-                !has_bearer_credential(&headers(Some(refused))),
-                "{refused:?}"
-            );
+            assert_eq!(bearer_token(&headers(Some(refused))), None, "{refused:?}");
         }
-        assert!(!has_bearer_credential(&headers(None)));
+        assert_eq!(bearer_token(&headers(None)), None);
         let mut opaque = HeaderMap::new();
         opaque.insert(
             AUTHORIZATION,
             HeaderValue::from_bytes(b"Bearer \xff\xfe").unwrap(),
         );
-        assert!(
-            !has_bearer_credential(&opaque),
+        assert_eq!(
+            bearer_token(&opaque),
+            None,
             "a value that is not text is no credential"
         );
     }

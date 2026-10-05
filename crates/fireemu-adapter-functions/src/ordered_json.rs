@@ -55,6 +55,139 @@ impl Ordered {
             _ => None,
         }
     }
+
+    /// The member of an object with this name (the first, if it is repeated).
+    #[must_use]
+    pub fn get(&self, name: &str) -> Option<&Self> {
+        self.members()?
+            .iter()
+            .find(|(key, _)| key == name)
+            .map(|(_, value)| value)
+    }
+
+    /// The text of a string.
+    #[must_use]
+    pub fn as_str(&self) -> Option<&str> {
+        match self {
+            Self::String(text) => Some(text),
+            _ => None,
+        }
+    }
+
+    /// The items of an array.
+    #[must_use]
+    pub fn as_array(&self) -> Option<&[Self]> {
+        match self {
+            Self::Array(items) => Some(items),
+            _ => None,
+        }
+    }
+
+    /// An object from its members, in the order given.
+    #[must_use]
+    pub fn object<const N: usize>(members: [(&str, Self); N]) -> Self {
+        Self::Object(
+            members
+                .into_iter()
+                .map(|(name, value)| (name.to_owned(), value))
+                .collect(),
+        )
+    }
+
+    /// A string.
+    #[must_use]
+    pub fn text(value: impl Into<String>) -> Self {
+        Self::String(value.into())
+    }
+
+    /// An unsigned integer.
+    #[must_use]
+    pub fn unsigned(value: u64) -> Self {
+        Self::Number(value.into())
+    }
+
+    /// The text production writes: two-space indentation, `"name": value`, one member or item to a line,
+    /// an empty object as `{}` and an empty array as `[]`, and no trailing newline (the caller adds it).
+    #[must_use]
+    pub fn to_pretty(&self) -> String {
+        let mut out = String::new();
+        self.write_pretty(&mut out, 0);
+        out
+    }
+
+    fn write_pretty(&self, out: &mut String, depth: usize) {
+        let indent = |out: &mut String, depth: usize| out.push_str(&"  ".repeat(depth));
+        match self {
+            Self::Null => out.push_str("null"),
+            Self::Bool(value) => out.push_str(if *value { "true" } else { "false" }),
+            Self::Number(value) => out.push_str(&value.to_string()),
+            Self::String(value) => {
+                out.push_str(&serde_json::to_string(value).unwrap_or_else(|_| "\"\"".to_owned()));
+            }
+            Self::Array(items) if items.is_empty() => out.push_str("[]"),
+            Self::Array(items) => {
+                out.push_str("[\n");
+                for (index, item) in items.iter().enumerate() {
+                    indent(out, depth + 1);
+                    item.write_pretty(out, depth + 1);
+                    out.push_str(if index + 1 == items.len() {
+                        "\n"
+                    } else {
+                        ",\n"
+                    });
+                }
+                indent(out, depth);
+                out.push(']');
+            }
+            Self::Object(members) if members.is_empty() => out.push_str("{}"),
+            Self::Object(members) => {
+                out.push_str("{\n");
+                for (index, (name, value)) in members.iter().enumerate() {
+                    indent(out, depth + 1);
+                    out.push_str(
+                        &serde_json::to_string(name).unwrap_or_else(|_| "\"\"".to_owned()),
+                    );
+                    out.push_str(": ");
+                    value.write_pretty(out, depth + 1);
+                    out.push_str(if index + 1 == members.len() {
+                        "\n"
+                    } else {
+                        ",\n"
+                    });
+                }
+                indent(out, depth);
+                out.push('}');
+            }
+        }
+    }
+}
+
+impl std::ops::Index<&str> for Ordered {
+    type Output = Ordered;
+
+    /// The member of an object, or `Null` when there is none (as `serde_json::Value` indexes).
+    fn index(&self, name: &str) -> &Self::Output {
+        static NULL: Ordered = Ordered::Null;
+        self.get(name).unwrap_or(&NULL)
+    }
+}
+
+impl std::ops::Index<usize> for Ordered {
+    type Output = Ordered;
+
+    /// The item of an array, or `Null` when there is none.
+    fn index(&self, at: usize) -> &Self::Output {
+        static NULL: Ordered = Ordered::Null;
+        self.as_array()
+            .and_then(|items| items.get(at))
+            .unwrap_or(&NULL)
+    }
+}
+
+impl PartialEq<&str> for Ordered {
+    fn eq(&self, other: &&str) -> bool {
+        self.as_str() == Some(*other)
+    }
 }
 
 /// Parses one JSON document, or says why it is not one.
@@ -267,6 +400,60 @@ mod tests {
         assert_eq!(parse(deep.as_bytes()).unwrap_err(), "nesting is too deep");
         let fine = format!("{}{}", "[".repeat(60), "]".repeat(60));
         assert!(parse(fine.as_bytes()).is_ok());
+    }
+
+    #[test]
+    fn production_layout_is_two_spaces_one_member_to_a_line_and_empty_containers_inline() {
+        let value = parse(
+            br#"{"a":{"b":[1,{"c":"x \"q\" \u00e9"},[],{}],"d":null,"e":true,"f":-2.5},"g":[]}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            value.to_pretty(),
+            "{\n  \"a\": {\n    \"b\": [\n      1,\n      {\n        \"c\": \"x \\\"q\\\" \u{e9}\"\n      },\n      [],\n      {}\n    ],\n    \"d\": null,\n    \"e\": true,\n    \"f\": -2.5\n  },\n  \"g\": []\n}"
+        );
+        assert_eq!(Ordered::Object(vec![]).to_pretty(), "{}");
+        assert_eq!(Ordered::Array(vec![]).to_pretty(), "[]");
+        assert_eq!(Ordered::Bool(false).to_pretty(), "false");
+        assert_eq!(Ordered::text("a\nb").to_pretty(), "\"a\\nb\"");
+        assert_eq!(Ordered::unsigned(404).to_pretty(), "404");
+        // What is written reads back as the same value, in the same order.
+        assert_eq!(parse(value.to_pretty().as_bytes()).unwrap(), value);
+    }
+
+    #[test]
+    fn a_value_is_read_by_name_by_position_and_by_kind() {
+        let value = Ordered::object([
+            ("a", Ordered::text("x")),
+            (
+                "b",
+                Ordered::Array(vec![Ordered::unsigned(1), Ordered::text("y")]),
+            ),
+            ("a", Ordered::text("again")),
+        ]);
+        assert_eq!(
+            value.get("a"),
+            Some(&Ordered::text("x")),
+            "the first of a repeated name"
+        );
+        assert_eq!(value.get("zz"), None);
+        assert_eq!(Ordered::Null.get("a"), None);
+        assert_eq!(value["b"][1], "y");
+        assert_eq!(value["b"][0].as_str(), None);
+        assert_eq!(value["b"].as_array().map(<[Ordered]>::len), Some(2));
+        assert_eq!(value["a"].as_array(), None);
+        assert_eq!(value["missing"], Ordered::Null);
+        assert_eq!(value["b"][9], Ordered::Null);
+        assert_eq!(
+            Ordered::text("x")[0],
+            Ordered::Null,
+            "an index into a string is null"
+        );
+        assert!(value["a"] == "x");
+        assert!(value["a"] != "other");
+        assert!(Ordered::unsigned(1) != "1");
+        assert_eq!(value.members().map(<[(String, Ordered)]>::len), Some(3));
+        assert_eq!(Ordered::Null.members(), None);
     }
 
     #[test]

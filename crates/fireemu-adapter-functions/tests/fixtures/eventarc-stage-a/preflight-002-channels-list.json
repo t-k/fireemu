@@ -1,0 +1,9 @@
+{
+  "id": "channels",
+  "method": "GET",
+  "url": "https://eventarc.googleapis.com/v1/projects/fireemu-oracle-idp/locations/us-central1/channels?pageSize=100",
+  "status": 200,
+  "body": "{}\n",
+  "contentType": "application/json; charset=UTF-8",
+  "recordedAt": "2026-09-30T09:46:11.760Z"
+}

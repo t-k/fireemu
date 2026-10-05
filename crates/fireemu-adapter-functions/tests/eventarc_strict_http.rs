@@ -33,6 +33,11 @@ struct Listener {
 }
 
 async fn start(profile: Option<FunctionsHttpProfile>) -> Listener {
+    start_in(profile, PROJECT).await
+}
+
+/// The same listener for another project (the recorded project, for the tests that pin production's bytes).
+async fn start_in(profile: Option<FunctionsHttpProfile>, project: &str) -> Listener {
     let dir = std::env::temp_dir().join(format!(
         "fireemu-eventarc-strict-{}-{}",
         std::process::id(),
@@ -63,7 +68,7 @@ async fn start(profile: Option<FunctionsHttpProfile>) -> Listener {
     let runtime = FunctionsRuntime::new(
         manifest,
         FunctionsConfig {
-            project: PROJECT.into(),
+            project: project.into(),
             default_bucket: "demo-app.appspot.com".into(),
             location: "nam5".into(),
             session: SessionId::new(7),
@@ -104,6 +109,13 @@ async fn start(profile: Option<FunctionsHttpProfile>) -> Listener {
     }
 }
 
+/// One answer: the status, the header block and the body bytes (as text).
+struct Exchange {
+    status: u16,
+    head: String,
+    body: String,
+}
+
 impl Listener {
     async fn stop(self) {
         self.server.abort();
@@ -111,7 +123,8 @@ impl Listener {
         let _ = std::fs::remove_dir_all(&self.scratch);
     }
 
-    /// One HTTP/1.1 exchange: the status and the body text.
+    /// One HTTP/1.1 exchange: the status and the body text. `bearer` sends the token shape a real client
+    /// sends (an access token).
     async fn send(
         &self,
         method: &str,
@@ -131,12 +144,24 @@ impl Listener {
         body: Option<&str>,
         extra: &str,
     ) -> (u16, String) {
+        let token = bearer.then_some("ya29.a-token");
+        let exchange = self.exchange(method, target, token, body, extra).await;
+        (exchange.status, exchange.body)
+    }
+
+    /// The whole answer for a request with this bearer token (or none).
+    async fn exchange(
+        &self,
+        method: &str,
+        target: &str,
+        token: Option<&str>,
+        body: Option<&str>,
+        extra: &str,
+    ) -> Exchange {
         let mut stream = TcpStream::connect(self.addr).await.expect("connect");
-        let auth = if bearer {
-            "authorization: Bearer a-token\r\n"
-        } else {
-            ""
-        };
+        let auth = token.map_or_else(String::new, |token| {
+            format!("authorization: Bearer {token}\r\n")
+        });
         let payload = body.unwrap_or("");
         let request = format!(
             "{method} {target} HTTP/1.1\r\nhost: localhost\r\n{auth}{extra}content-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{payload}",
@@ -152,7 +177,11 @@ impl Listener {
             .nth(1)
             .and_then(|s| s.parse().ok())
             .expect("a status line");
-        (status, body.to_owned())
+        Exchange {
+            status,
+            head: head.to_owned(),
+            body: body.to_owned(),
+        }
     }
 
     async fn delivered(&self) -> usize {
@@ -213,7 +242,7 @@ async fn strict_refuses_a_request_without_a_credential_and_serves_the_production
     // production path and on the path the Admin SDK writes to an emulator host.
     for target in [publish.clone(), format!("/{CUSTOM}:publishEvents")] {
         let (status, answer) = server.send("POST", &target, true, Some(&body)).await;
-        assert_eq!((status, answer.as_str()), (200, "{}"), "{target}");
+        assert_eq!((status, answer.as_str()), (200, "{}\n"), "{target}");
     }
     assert!(server.delivered().await > 0, "the handler was invoked");
     server.stop().await;
@@ -272,7 +301,7 @@ async fn strict_answers_a_channel_nothing_declares_as_production_answers_a_missi
             None,
         )
         .await;
-    assert_eq!((status, answer.as_str()), (200, "{}"));
+    assert_eq!((status, answer.as_str()), (200, "{}\n"));
     let (status, answer) = server
         .send(
             "GET",
@@ -399,4 +428,145 @@ async fn both_profiles_refuse_a_foreign_origin_before_anything_else() {
         assert_eq!(local, plain, "{profile:?}");
         server.stop().await;
     }
+}
+
+/// The two raw bodies of preflight 002 (the fixtures of the lane), through the socket: the bytes, the
+/// content type and the content length.
+#[tokio::test]
+async fn strict_writes_the_bytes_production_wrote() {
+    let server = start_in(Some(FunctionsHttpProfile::Strict), "fireemu-oracle-idp").await;
+    let raw = |name: &str| {
+        let text = std::fs::read_to_string(format!(
+            "{}/tests/fixtures/eventarc-stage-a/{name}",
+            env!("CARGO_MANIFEST_DIR")
+        ))
+        .expect("the fixture exists");
+        let fixture: Value = serde_json::from_str(&text).expect("JSON");
+        fixture["body"].as_str().expect("a body").to_owned()
+    };
+    let missing = raw("preflight-002-channel-firebase-404.json");
+    assert_eq!(missing.len(), 373);
+    let list = raw("preflight-002-channels-list.json");
+    for (target, expected) in [
+        (
+            "/v1/projects/fireemu-oracle-idp/locations/us-central1/channels/firebase",
+            &missing,
+        ),
+        // The body of an empty list does not name its location; us-central1 holds the declared channel here.
+        (
+            "/v1/projects/fireemu-oracle-idp/locations/europe-west1/channels",
+            &list,
+        ),
+        (
+            "/projects/fireemu-oracle-idp/locations/us-central1/channels/firebase",
+            &missing,
+        ),
+    ] {
+        let exchange = server
+            .exchange("GET", target, Some("ya29.a-token"), None, "")
+            .await;
+        assert_eq!(&exchange.body, expected, "{target}");
+        let head = exchange.head.to_ascii_lowercase();
+        assert!(
+            head.contains("content-type: application/json; charset=utf-8"),
+            "{head}"
+        );
+        assert!(
+            head.contains(&format!("content-length: {}", expected.len())),
+            "{head}"
+        );
+    }
+    server.stop().await;
+}
+
+#[tokio::test]
+async fn strict_refuses_a_bearer_value_that_is_neither_an_access_token_nor_a_jwt_in_shape() {
+    let server = start(Some(FunctionsHttpProfile::Strict)).await;
+    let target = "/v1/projects/demo-app/locations/europe-west1/channels";
+    for fine in [
+        "ya29.A",
+        "ya29.a0AfH6SMB-x_y",
+        "h.p.s",
+        "eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiJ4In0.c2ln",
+    ] {
+        let exchange = server.exchange("GET", target, Some(fine), None, "").await;
+        assert_eq!(
+            (exchange.status, exchange.body.as_str()),
+            (200, "{}\n"),
+            "{fine}"
+        );
+    }
+    for bad in [
+        "invalid-token-for-the-recording",
+        "owner",
+        "ya29",
+        "ya29x",
+        "ya29.",
+        "a.b",
+        "a.b.c.d",
+        "a..c",
+        "..",
+        "Ya29.A",
+    ] {
+        let exchange = server.exchange("GET", target, Some(bad), None, "").await;
+        assert_eq!(exchange.status, 401, "{bad}");
+        let error = error_of(&exchange.body);
+        assert!(
+            error["message"]
+                .as_str()
+                .unwrap()
+                .starts_with("Request had invalid authentication credentials."),
+            "{bad}"
+        );
+        let info = &error["details"][0];
+        assert_eq!(info["reason"], "CREDENTIALS_MISSING");
+        assert!(
+            info.get("domain").is_none(),
+            "no domain on the invalid one: {bad}"
+        );
+        assert_eq!(
+            info["metadata"]["method"],
+            "google.cloud.eventarc.v1.Eventarc.ListChannels"
+        );
+    }
+    // No credential is the other 401, with a domain.
+    let exchange = server.exchange("GET", target, None, None, "").await;
+    assert_eq!(exchange.status, 401);
+    assert!(error_of(&exchange.body)["message"]
+        .as_str()
+        .unwrap()
+        .starts_with("Request is missing required authentication credential."));
+    assert_eq!(
+        error_of(&exchange.body)["details"][0]["domain"],
+        "googleapis.com"
+    );
+    server.stop().await;
+}
+
+#[tokio::test]
+async fn the_emulator_profile_ignores_the_credential_as_the_official_emulator_does() {
+    let server = start(Some(FunctionsHttpProfile::Emulator)).await;
+    let body = publish_body(&[event("eu")]);
+    for token in [
+        None,
+        Some("invalid-token-for-the-recording"),
+        Some("owner"),
+        Some("ya29.x"),
+    ] {
+        let exchange = server
+            .exchange(
+                "POST",
+                &format!("/{CUSTOM}:publishEvents"),
+                token,
+                Some(&body),
+                "",
+            )
+            .await;
+        assert_eq!(
+            (exchange.status, exchange.body.as_str()),
+            (200, "OK"),
+            "{token:?}"
+        );
+    }
+    server.stop().await;
 }

@@ -24,7 +24,7 @@
 //! makes firebase-tools create its channel in production, and the Functions emulator registers the same
 //! channel in its trigger table.
 
-use serde_json::{json, Map, Value};
+use serde_json::Value;
 
 use crate::ordered_json::{parse, Ordered};
 
@@ -41,13 +41,24 @@ const MAX_ECHO: usize = 1024;
 const EVENTARC_SERVICE: &str = "eventarc.googleapis.com";
 const PUBLISHING_SERVICE: &str = "eventarcpublishing.googleapis.com";
 
-/// A JSON answer.
+/// A JSON answer. The body keeps production's member order and is written the way production writes it
+/// (see `Answer::text`): the order and the layout were recorded and are part of what is reproduced.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Answer {
     /// The HTTP status.
     pub status: u16,
     /// The JSON body.
-    pub body: Value,
+    pub body: Ordered,
+}
+
+impl Answer {
+    /// The body as production writes it: pretty-printed with two-space indentation and a final newline
+    /// (the 373-byte 404 of `channels/firebase` and the 3-byte `{}` + newline of an empty list of
+    /// preflight 002 are reproduced exactly).
+    #[must_use]
+    pub fn text(&self) -> String {
+        format!("{}\n", self.body.to_pretty())
+    }
 }
 
 /// Where a request points: the project and the location of its path.
@@ -165,8 +176,8 @@ pub struct Input<'a> {
     pub route: &'a Route,
     /// The query string, without the `?`.
     pub query: Option<&'a str>,
-    /// Whether the request carried an `Authorization: Bearer` credential.
-    pub authorized: bool,
+    /// The token of the `Authorization: Bearer` header, if there was one.
+    pub bearer: Option<&'a str>,
     /// The body.
     pub body: &'a [u8],
 }
@@ -198,35 +209,59 @@ pub enum Outcome {
     },
 }
 
-fn answer(status: u16, body: Value) -> Outcome {
+fn answer(status: u16, body: Ordered) -> Outcome {
     Outcome::Answer(Answer { status, body })
 }
 
-fn error(status: u16, canonical: &str, message: &str, details: Vec<Value>) -> Outcome {
-    let mut error = Map::new();
-    error.insert("code".to_owned(), json!(status));
-    error.insert("message".to_owned(), json!(message));
-    error.insert("status".to_owned(), json!(canonical));
-    if !details.is_empty() {
-        error.insert("details".to_owned(), Value::Array(details));
-    }
-    answer(status, json!({ "error": error }))
+fn text(value: &str) -> Ordered {
+    Ordered::text(value)
 }
 
-fn bad_request_detail(violations: &[(Option<&str>, Option<&str>)]) -> Value {
-    json!({
-        "@type": "type.googleapis.com/google.rpc.BadRequest",
-        "fieldViolations": violations.iter().map(|(field, description)| {
-            let mut violation = Map::new();
-            if let Some(field) = field {
-                violation.insert("field".to_owned(), json!(field));
-            }
-            if let Some(description) = description {
-                violation.insert("description".to_owned(), json!(description));
-            }
-            Value::Object(violation)
-        }).collect::<Vec<_>>(),
-    })
+fn error(status: u16, canonical: &str, message: &str, details: Vec<Ordered>) -> Outcome {
+    let mut members = vec![
+        ("code", Ordered::unsigned(u64::from(status))),
+        ("message", text(message)),
+        ("status", text(canonical)),
+    ];
+    if !details.is_empty() {
+        members.push(("details", Ordered::Array(details)));
+    }
+    answer(
+        status,
+        Ordered::object([(
+            "error",
+            Ordered::Object(
+                members
+                    .into_iter()
+                    .map(|(name, value)| (name.to_owned(), value))
+                    .collect(),
+            ),
+        )]),
+    )
+}
+
+fn bad_request_detail(violations: &[(Option<&str>, Option<&str>)]) -> Ordered {
+    Ordered::object([
+        ("@type", text("type.googleapis.com/google.rpc.BadRequest")),
+        (
+            "fieldViolations",
+            Ordered::Array(
+                violations
+                    .iter()
+                    .map(|(field, description)| {
+                        let mut members = Vec::new();
+                        if let Some(field) = field {
+                            members.push(("field".to_owned(), text(field)));
+                        }
+                        if let Some(description) = description {
+                            members.push(("description".to_owned(), text(description)));
+                        }
+                        Ordered::Object(members)
+                    })
+                    .collect(),
+            ),
+        ),
+    ])
 }
 
 /// A canonical JSON error with no details.
@@ -258,18 +293,82 @@ fn echo(text: &str) -> String {
     format!("{}...", &text[..end])
 }
 
-fn missing_credential(route: &Route) -> Outcome {
-    error(
-        401,
-        "UNAUTHENTICATED",
-        "Request is missing required authentication credential. Expected OAuth 2 access token, login cookie or other valid authentication credential. See https://developers.google.com/identity/sign-in/web/devconsole-project.",
-        vec![json!({
-            "@type": "type.googleapis.com/google.rpc.ErrorInfo",
-            "reason": "CREDENTIALS_MISSING",
-            "domain": "googleapis.com",
-            "metadata": {"service": route.service(), "method": route.method()},
-        })],
-    )
+/// The credential of a request.
+///
+/// An OAuth access token that Google issues starts with `ya29.`, and a token a Firebase client holds is a
+/// JWT; production refuses a bearer value that is neither with "invalid authentication credentials". Whether
+/// a well-formed token is valid is Google's state, which a local listener does not have, so it is accepted.
+/// INFERRED: the boundary (`ya29.` and the three-part JWT) is the shape of the recorded invalid token
+/// (`invalid-token-for-the-recording`) against the shapes a real client sends; stage B probes it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Credential {
+    /// No `Authorization: Bearer` header, or an empty token.
+    Missing,
+    /// A bearer value that is neither an access token nor a JWT in shape.
+    Malformed,
+    /// A bearer value in the shape of an access token or a JWT.
+    WellFormed,
+}
+
+/// Classifies the token of an `Authorization: Bearer` header.
+#[must_use]
+pub fn classify_token(token: Option<&str>) -> Credential {
+    let Some(token) = token.filter(|token| !token.trim().is_empty()) else {
+        return Credential::Missing;
+    };
+    let access_token = token
+        .strip_prefix("ya29.")
+        .is_some_and(|rest| !rest.is_empty() && rest.bytes().all(|b| b.is_ascii_graphic()));
+    let base64url = |part: &str| {
+        !part.is_empty()
+            && part
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_' || b == b'=')
+    };
+    let parts: Vec<&str> = token.split('.').collect();
+    let jwt = parts.len() == 3 && parts.iter().all(|part| base64url(part));
+    if access_token || jwt {
+        Credential::WellFormed
+    } else {
+        Credential::Malformed
+    }
+}
+
+fn credential_refusal(route: &Route, credential: Credential) -> Outcome {
+    // Recorded: the missing credential names the service first; the invalid one has no `domain`.
+    let (message, info) = if credential == Credential::Missing {
+        (
+            "Request is missing required authentication credential. Expected OAuth 2 access token, login cookie or other valid authentication credential. See https://developers.google.com/identity/sign-in/web/devconsole-project.",
+            Ordered::object([
+                ("@type", text("type.googleapis.com/google.rpc.ErrorInfo")),
+                ("reason", text("CREDENTIALS_MISSING")),
+                ("domain", text("googleapis.com")),
+                (
+                    "metadata",
+                    Ordered::object([
+                        ("service", text(route.service())),
+                        ("method", text(route.method())),
+                    ]),
+                ),
+            ]),
+        )
+    } else {
+        (
+            "Request had invalid authentication credentials. Expected OAuth 2 access token, login cookie or other valid authentication credential. See https://developers.google.com/identity/sign-in/web/devconsole-project.",
+            Ordered::object([
+                ("@type", text("type.googleapis.com/google.rpc.ErrorInfo")),
+                ("reason", text("CREDENTIALS_MISSING")),
+                (
+                    "metadata",
+                    Ordered::object([
+                        ("method", text(route.method())),
+                        ("service", text(route.service())),
+                    ]),
+                ),
+            ]),
+        )
+    };
+    error(401, "UNAUTHENTICATED", message, vec![info])
 }
 
 /// The project the caller may not use. INFERRED for the creation and the publication.
@@ -281,30 +380,43 @@ fn consumer_invalid(route: &Route) -> Outcome {
         "PERMISSION_DENIED",
         &message,
         vec![
-            json!({
-                "@type": "type.googleapis.com/google.rpc.ErrorInfo",
-                "reason": "CONSUMER_INVALID",
-                "domain": "googleapis.com",
-                "metadata": {
-                    "containerInfo": project,
-                    "consumer": format!("projects/{project}"),
-                    "service": route.service(),
-                },
-            }),
-            json!({
-                "@type": "type.googleapis.com/google.rpc.LocalizedMessage",
-                "locale": "en-US",
-                "message": message,
-            }),
-            json!({
-                "@type": "type.googleapis.com/google.rpc.Help",
-                "links": [{
-                    "description": "Google developers console",
-                    "url": "https://console.developers.google.com",
-                }],
-            }),
+            Ordered::object([
+                ("@type", text("type.googleapis.com/google.rpc.ErrorInfo")),
+                ("reason", text("CONSUMER_INVALID")),
+                ("domain", text("googleapis.com")),
+                (
+                    "metadata",
+                    Ordered::object([
+                        ("containerInfo", text(project)),
+                        ("consumer", text(&format!("projects/{project}"))),
+                        ("service", text(route.service())),
+                    ]),
+                ),
+            ]),
+            localized_message(&message),
+            Ordered::object([
+                ("@type", text("type.googleapis.com/google.rpc.Help")),
+                (
+                    "links",
+                    Ordered::Array(vec![Ordered::object([
+                        ("description", text("Google developers console")),
+                        ("url", text("https://console.developers.google.com")),
+                    ])]),
+                ),
+            ]),
         ],
     )
+}
+
+fn localized_message(message: &str) -> Ordered {
+    Ordered::object([
+        (
+            "@type",
+            text("type.googleapis.com/google.rpc.LocalizedMessage"),
+        ),
+        ("locale", text("en-US")),
+        ("message", text(message)),
+    ])
 }
 
 /// Whether a location can exist. INFERRED: only the shape of a region ID (`us-central1`,
@@ -340,21 +452,20 @@ fn location_not_found(route: &Route) -> Outcome {
                 "PERMISSION_DENIED",
                 &message,
                 vec![
-                    json!({
-                        "@type": "type.googleapis.com/google.rpc.ErrorInfo",
-                        "reason": "LOCATION_POLICY_VIOLATED",
-                        "domain": "googleapis.com",
-                        "metadata": {
-                            "location": location,
-                            "consumer": format!("projects/{project}"),
-                            "service": EVENTARC_SERVICE,
-                        },
-                    }),
-                    json!({
-                        "@type": "type.googleapis.com/google.rpc.LocalizedMessage",
-                        "locale": "en-US",
-                        "message": message,
-                    }),
+                    Ordered::object([
+                        ("@type", text("type.googleapis.com/google.rpc.ErrorInfo")),
+                        ("reason", text("LOCATION_POLICY_VIOLATED")),
+                        ("domain", text("googleapis.com")),
+                        (
+                            "metadata",
+                            Ordered::object([
+                                ("location", text(location)),
+                                ("consumer", text(&format!("projects/{project}"))),
+                                ("service", text(EVENTARC_SERVICE)),
+                            ]),
+                        ),
+                    ]),
+                    localized_message(&message),
                 ],
             )
         }
@@ -382,8 +493,9 @@ fn unobserved(what: &str) -> Outcome {
 #[must_use]
 pub fn evaluate(input: &Input<'_>, world: &World<'_>) -> Outcome {
     let route = input.route;
-    if !input.authorized {
-        return missing_credential(route);
+    let credential = classify_token(input.bearer);
+    if credential != Credential::WellFormed {
+        return credential_refusal(route, credential);
     }
     if route.project() != world.project {
         return consumer_invalid(route);
@@ -403,10 +515,10 @@ pub fn evaluate(input: &Input<'_>, world: &World<'_>) -> Outcome {
                 404,
                 "NOT_FOUND",
                 &format!("Resource '{name}' was not found"),
-                vec![json!({
-                    "@type": "type.googleapis.com/google.rpc.ResourceInfo",
-                    "resourceName": name,
-                })],
+                vec![Ordered::object([
+                    ("@type", text("type.googleapis.com/google.rpc.ResourceInfo")),
+                    ("resourceName", text(&name)),
+                ])],
             )
         }
         Route::ListChannels(Place { project, location }) => {
@@ -427,7 +539,7 @@ pub fn evaluate(input: &Input<'_>, world: &World<'_>) -> Outcome {
             if (world.declared_in)(project, location) {
                 return unobserved("a list of existing channels");
             }
-            answer(200, json!({}))
+            answer(200, Ordered::Object(Vec::new()))
         }
         Route::CreateChannel(_) => create_channel(route, input, world),
     }
@@ -461,10 +573,10 @@ fn create_channel(route: &Route, input: &Input<'_>, world: &World<'_>) -> Outcom
             "The request was invalid: channel.name is empty",
             vec![
                 bad_request_detail(&[(Some("channel.name"), None)]),
-                json!({
-                    "@type": "type.googleapis.com/google.rpc.RequestInfo",
-                    "requestId": world.request_id,
-                }),
+                Ordered::object([
+                    ("@type", text("type.googleapis.com/google.rpc.RequestInfo")),
+                    ("requestId", text(world.request_id)),
+                ]),
             ],
         );
     }
@@ -951,7 +1063,7 @@ mod tests {
             &Input {
                 route: &route,
                 query,
-                authorized,
+                bearer: authorized.then_some("ya29.a-token"),
                 body: body.as_bytes(),
             },
             &world(&declared_channel, &declared_in),
@@ -1152,6 +1264,66 @@ mod tests {
         assert_eq!(
             (status, message.as_str()),
             (404, "Associated channel does not exist.")
+        );
+    }
+
+    #[test]
+    fn a_token_is_missing_malformed_or_well_formed_by_its_shape() {
+        for missing in [None, Some(""), Some("   ")] {
+            assert_eq!(classify_token(missing), Credential::Missing, "{missing:?}");
+        }
+        for fine in [
+            "ya29.A",
+            "ya29.a0AfH6SMBx_y-z",
+            "ya29.c.b0Aaek~x/y+z=",
+            "a.b.c",
+            "eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiJ4In0.c2ln-_=",
+        ] {
+            assert_eq!(classify_token(Some(fine)), Credential::WellFormed, "{fine}");
+        }
+        for malformed in [
+            "invalid-token-for-the-recording",
+            "owner",
+            "ya29",
+            "ya29x",
+            "ya29.",
+            "Ya29.A",
+            "ya29.a b",
+            "ya29.a\u{e9}",
+            "a.b",
+            "a.b.c.d",
+            "a..c",
+            ".b.c",
+            "a.b.",
+            "..",
+            "a.b.c d",
+            "a.b.c!",
+        ] {
+            assert_eq!(
+                classify_token(Some(malformed)),
+                Credential::Malformed,
+                "{malformed}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_two_refusals_of_a_credential_are_the_recorded_ones() {
+        let route = route("GET", "/v1/projects/demo/locations/l1/channels").unwrap();
+        let wanted = |outcome: Outcome| match outcome {
+            Outcome::Answer(answer) => answer,
+            Outcome::Deliver { .. } => panic!("an answer"),
+        };
+        let missing = wanted(credential_refusal(&route, Credential::Missing));
+        let malformed = wanted(credential_refusal(&route, Credential::Malformed));
+        assert_eq!((missing.status, malformed.status), (401, 401));
+        assert_eq!(
+            missing.text(),
+            "{\n  \"error\": {\n    \"code\": 401,\n    \"message\": \"Request is missing required authentication credential. Expected OAuth 2 access token, login cookie or other valid authentication credential. See https://developers.google.com/identity/sign-in/web/devconsole-project.\",\n    \"status\": \"UNAUTHENTICATED\",\n    \"details\": [\n      {\n        \"@type\": \"type.googleapis.com/google.rpc.ErrorInfo\",\n        \"reason\": \"CREDENTIALS_MISSING\",\n        \"domain\": \"googleapis.com\",\n        \"metadata\": {\n          \"service\": \"eventarc.googleapis.com\",\n          \"method\": \"google.cloud.eventarc.v1.Eventarc.ListChannels\"\n        }\n      }\n    ]\n  }\n}\n"
+        );
+        assert_eq!(
+            malformed.text(),
+            "{\n  \"error\": {\n    \"code\": 401,\n    \"message\": \"Request had invalid authentication credentials. Expected OAuth 2 access token, login cookie or other valid authentication credential. See https://developers.google.com/identity/sign-in/web/devconsole-project.\",\n    \"status\": \"UNAUTHENTICATED\",\n    \"details\": [\n      {\n        \"@type\": \"type.googleapis.com/google.rpc.ErrorInfo\",\n        \"reason\": \"CREDENTIALS_MISSING\",\n        \"metadata\": {\n          \"method\": \"google.cloud.eventarc.v1.Eventarc.ListChannels\",\n          \"service\": \"eventarc.googleapis.com\"\n        }\n      }\n    ]\n  }\n}\n"
         );
     }
 

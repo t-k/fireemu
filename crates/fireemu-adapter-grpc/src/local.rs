@@ -6980,6 +6980,24 @@ mod lock_tests {
         assert!(backend.await_any_release_until(seen, &deadline).await);
     }
 
+    #[test]
+    fn a_contended_writer_sleeps_until_a_release_and_does_not_spin() {
+        let clock = pinned_clock();
+        let backend = contention_backend_waiting(&clock, false, Duration::from_millis(600));
+        let attempts = std::cell::Cell::new(0_u32);
+        let started = std::time::Instant::now();
+        let status = backend
+            .retry_on_contention(&contention_parent(), None, &[], || {
+                attempts.set(attempts.get() + 1);
+                Err::<(), Status>(Status::aborted(fireemu_core_firestore::store::TOO_MUCH_CONTENTION))
+            })
+            .unwrap_err();
+        assert!(LocalBackend::is_contention(&status));
+        assert!(started.elapsed() >= Duration::from_millis(550), "waited out the wall bound");
+        // one attempt, one sleep until the bound: not an attempt per spin of the loop
+        assert!(attempts.get() <= 3, "{} attempts", attempts.get());
+    }
+
     const CONTENTION_DATABASE: &str = "projects/demo-app/databases/(default)";
 
     /// A transaction that holds the read lock on `contended/doc`, and a thread that writes that document and reports how its commit ended.

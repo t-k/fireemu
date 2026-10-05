@@ -53,7 +53,7 @@ export const DECLARED = Object.freeze({
 });
 
 /**
- * The extra Scheduler jobs the recorder itself creates (never deployed), up to three, each aimed at the
+ * The extra Scheduler jobs the recorder itself creates (never deployed), up to five, each aimed at the
  * `schedRetryV2` function so that a retry rule is observed without deploying another function. Their
  * names carry the run id. The target (uri and OIDC account) is copied from the deployed job's readback
  * at run time, so these differ from it only in the retry rule and the schedule.
@@ -73,9 +73,29 @@ export const EXTRA_JOBS = Object.freeze([
     timeZone: "UTC",
     retryConfig: { maxRetryDuration: "30s", minBackoffDuration: "4s", maxBackoffDuration: "10s" },
   },
+  // The interaction of a count and a window, with whole seconds only (run 156715222b86ea44 sent a fractional window
+  // here and was refused, so the interaction was never observed). The backoff is the recorded one of the `duration`
+  // job (min 4 s, max 10 s: gaps of about 4, 8 and 10 s, attempts at 0, 4.6, 13.2 and 23.7 s). A count of 3 allows four
+  // attempts and a window of 20 s allows three (the fourth would be at about 23.7 s), so an observed chain of three
+  // shows the window binds and one of four shows the count does. Never accepted by production before.
   {
     key: "count",
-    cases: ["count-and-duration-interaction", "fractional-retry-duration"],
+    cases: ["count-and-duration-interaction"],
+    schedule: "0 0 1 1 *",
+    timeZone: "UTC",
+    retryConfig: {
+      retryCount: 3,
+      maxRetryDuration: "20s",
+      minBackoffDuration: "4s",
+      maxBackoffDuration: "10s",
+    },
+  },
+  // The refused body of run 156715222b86ea44, sent once more: one POST, an expected 400
+  // (`retryConfig.max_retry_duration.nanos cannot be set`, 158 bytes) and nothing else. A 2xx would be a surprise and
+  // is handled as any created extra job.
+  {
+    key: "fraction",
+    cases: ["fractional-retry-duration"],
     schedule: "0 0 1 1 *",
     timeZone: "UTC",
     retryConfig: {

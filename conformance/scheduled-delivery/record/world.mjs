@@ -248,7 +248,22 @@ export function createWorld({
       const v = path.startsWith("/v1/") ? w.functionsV1 : w.functionsV2;
       if (path.includes("/operations/"))
         return reply(200, { name: path.split("/").slice(-1)[0], done: true });
-      if (path.endsWith("/functions")) return page([...v.values()], "functions", url);
+      if (path.endsWith("/functions")) {
+        // The v2 list also carries the first-generation functions (environment GEN_1), as production's does.
+        const gen1 =
+          v === w.functionsV2
+            ? [...w.functionsV1.values()].map((f) => ({
+                name: f.name,
+                state: f.status,
+                environment: "GEN_1",
+                buildConfig: {
+                  build:
+                    f.buildName ?? `projects/${NUMBER}/locations/${REGION}/builds/${f.buildId}`,
+                },
+              }))
+            : [];
+        return page([...v.values(), ...gen1], "functions", url);
+      }
       const name = path.slice(path.indexOf("/projects/") + 1);
       if (method === "GET") return v.has(name) ? reply(200, v.get(name)) : notFound(name);
       if (method === "DELETE") {
@@ -283,6 +298,26 @@ export function createWorld({
         return page([...w.jobs.values()], "jobs", url);
       if (path.endsWith("/jobs") && method === "POST") {
         const id = body.name.split("/").at(-1);
+        // What production answered (runs e0ec2f41 and 156715222b86ea44): a count of 6 or more, and a fractional
+        // second in the retry window, are refused with HTTP 400.
+        const retry = body.retryConfig ?? {};
+        if (Number(retry.retryCount) >= 6)
+          return reply(400, {
+            error: {
+              code: 400,
+              message:
+                "invalid retry count. The retry_count must be a positive integer less than 5: invalid argument",
+              status: "INVALID_ARGUMENT",
+            },
+          });
+        if (/\./.test(String(retry.maxRetryDuration ?? "")))
+          return reply(400, {
+            error: {
+              code: 400,
+              message: "retryConfig.max_retry_duration.nanos cannot be set: invalid argument",
+              status: "INVALID_ARGUMENT",
+            },
+          });
         w.creates.push(id);
         w.jobs.set(id, { ...body, state: "ENABLED", manualOnly: true });
         return reply(200, w.jobs.get(id));

@@ -97,7 +97,7 @@ test("every name that is created is journaled as issued before the request that 
   const { journal } = await go();
   const issued = journal.filter((r) => r.state === "issued");
   assert.equal(issued.filter((r) => r.kind === "function").length, 6);
-  assert.equal(issued.filter((r) => r.kind === "job").length, 10);
+  assert.equal(issued.filter((r) => r.kind === "job").length, 11);
   assert.equal(issued.filter((r) => r.kind === "topic").length, 3);
   assert.equal(issued.filter((r) => r.kind === "subscription").length, 3);
   for (const row of issued.filter((r) => r.transport === "rest")) {
@@ -512,7 +512,7 @@ test("the extra jobs copy the deployed retry job's target and differ only in the
   const creates = journal.filter(
     (r) => r.state === "before-send" && r.id.startsWith("create-extra-"),
   );
-  assert.equal(creates.length, 4);
+  assert.equal(creates.length, 5);
   for (const row of creates) {
     assert.deepEqual(row.json.httpTarget, {
       uri: "https://schedretryv2-abc-uc.a.run.app",
@@ -526,6 +526,7 @@ test("the extra jobs copy the deployed retry job's target and differ only in the
     [
       ["retryCount"],
       ["maxRetryDuration", "minBackoffDuration", "maxBackoffDuration"],
+      ["retryCount", "maxRetryDuration", "minBackoffDuration", "maxBackoffDuration"],
       [
         "retryCount",
         "maxRetryDuration",

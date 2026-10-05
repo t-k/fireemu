@@ -188,6 +188,15 @@ test("the extra jobs and the subscription name are exactly what the packet state
         "count",
         {
           retryCount: 3,
+          maxRetryDuration: "20s",
+          minBackoffDuration: "4s",
+          maxBackoffDuration: "10s",
+        },
+      ],
+      [
+        "fraction",
+        {
+          retryCount: 3,
           maxRetryDuration: "20.5s",
           minBackoffDuration: "2.5s",
           maxBackoffDuration: "20s",

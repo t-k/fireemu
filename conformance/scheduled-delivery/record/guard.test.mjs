@@ -23,8 +23,8 @@ const FN = "/projects/" + P + "/locations/us-central1/functions";
 const yes = (r) => assert.equal(guard.allow(r), true, r.method + " " + r.url);
 const no = (r) => assert.equal(guard.allow(r), false, r.method + " " + r.url);
 
-test("the ids the recorder may touch: six deployed jobs, four extra jobs, three pull subscriptions", () => {
-  assert.equal(jobIds(RUN).length, 10);
+test("the ids the recorder may touch: six deployed jobs, five extra jobs, three pull subscriptions", () => {
+  assert.equal(jobIds(RUN).length, 11);
   assert.deepEqual(
     jobIds(RUN)
       .slice(0, 6)
@@ -367,5 +367,5 @@ test("mutations are the writes and the pull; reads are not", () => {
     false,
   );
   assert.equal(m(spec("GET", "https://example.com/")), false);
-  assert.equal(EXTRA_JOBS.length, 4);
+  assert.equal(EXTRA_JOBS.length, 5);
 });

@@ -39,6 +39,8 @@
     "create-extra-zero",
     "create-extra-duration",
     "create-extra-count",
+    "create-extra-fraction",
+    "settle-extra-fraction",
     "create-extra-retry5",
     "run-1-schedOkV2-us-central1",
     "run-1-schedRetryV2-us-central1",
@@ -182,6 +184,7 @@
     "readback-gone-job-fe-sd-run-zero",
     "readback-gone-job-fe-sd-run-duration",
     "readback-gone-job-fe-sd-run-count",
+    "readback-gone-job-fe-sd-run-fraction",
     "readback-gone-job-fe-sd-run-retry5",
     "readback-gone-topic-schedOkV1",
     "readback-gone-topic-schedFailV1",
@@ -223,6 +226,7 @@
     "issue-extra-zero",
     "issue-extra-duration",
     "issue-extra-count",
+    "issue-extra-fraction",
     "issue-extra-retry5"
   ],
   "sleeps": [
@@ -230,6 +234,6 @@
     60000, 60000, 3000, 3000, 3000, 3000, 3000, 3000, 3000, 3000, 3000, 3000, 60000, 60000, 60000,
     60000, 60000, 60000, 60000, 120000
   ],
-  "attempted": 200,
+  "attempted": 203,
   "note": "The request ids, the issued names and the sleeps of a clean run of the recorder against the in-memory world (two passes, six minutes of natural fires each). A reviewer can read it as the recording's plan; the test compares a fresh run with it."
 }

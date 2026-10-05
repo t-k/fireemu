@@ -33,6 +33,19 @@ export const CLEANUP_BUDGET = 300;
 /** The later --cleanup-only run starts at least this long after the recording's last line. */
 export const MIN_A2_WAIT_MS = 10 * 60 * 1000;
 
+/**
+ * The names of a ledger that a later run may change although they carry no run prefix: the run's own
+ * creation of one, or a deletion of one, may have happened (a conflict or a refusal never makes it ours).
+ */
+export function probesToRegister(state, ownership) {
+  const names = [];
+  for (const [name, item] of state) {
+    const facts = ledgerFacts(item);
+    if (!ownership.isOwned(name) && (facts.mayExist || facts.deleteSent)) names.push(name);
+  }
+  return names;
+}
+
 export function parseArgs(argv, env = {}) {
   const options = { maxRequests: DEFAULT_MAX_REQUESTS };
   const flags = new Map();
@@ -204,11 +217,8 @@ export async function main(
     // A name that is not the run's by prefix (a probe) is changeable only if the run's own creation of
     // it, or of its deletion, may have happened; a conflict or a refusal never makes it ours. None is
     // listed: only the location the run records in is.
-    for (const [name, item] of issued.ledger.state()) {
-      const facts = ledgerFacts(item);
-      if (!ownership.isOwned(name) && (facts.mayExist || facts.deleteSent))
-        ownership.registerProbe(name, { listable: false });
-    }
+    for (const name of probesToRegister(issued.ledger.state(), ownership))
+      ownership.registerProbe(name, { listable: false });
     ownership.channel(options.location, "cleanup-only");
   }
   const cleanupClient = createClient({

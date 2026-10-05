@@ -16,6 +16,7 @@ import {
   main,
   parseArgs,
   summarize,
+  probesToRegister,
 } from "./eventarc-production/record.mjs";
 import {
   assertBudgetCovers,
@@ -723,4 +724,23 @@ test("a production run sends the quota project of the run on every request and t
       .quotaProject,
     undefined,
   );
+});
+
+test("a later run registers as probes only the names whose creation or deletion may have happened, and never a name the run owns by prefix", () => {
+  const ownership = createOwnership({ project: "demo-project", runId: "0123456789ab" });
+  const channel = (id) => `projects/demo-project/locations/us-central1/channels/${id}`;
+  const item = (creates, deletes = [], open = []) => ({ creates, deletes, open });
+  const state = new Map([
+    [channel("goog-0123456789ab"), item(["ok"])],
+    [channel("1-0123456789ab"), item(["conflict"])],
+    [channel("nowhere-0123456789ab"), item(["unknown"])],
+    [channel("a0"), item([], [], ["delete"])],
+    [channel("zz-0123456789ab"), item(["error"])],
+    [channel("fe0123456789ab-cl-c1"), item(["ok"], ["ok"])],
+  ]);
+  assert.deepEqual(probesToRegister(state, ownership), [
+    channel("goog-0123456789ab"),
+    channel("nowhere-0123456789ab"),
+    channel("a0"),
+  ]);
 });

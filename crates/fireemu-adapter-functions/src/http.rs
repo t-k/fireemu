@@ -2207,3 +2207,76 @@ mod streaming_tests {
             .unwrap();
     }
 }
+
+#[cfg(test)]
+mod strict_eventarc_tests {
+    use super::{has_bearer_credential, request_id};
+    use hyper::header::{HeaderMap, HeaderValue, AUTHORIZATION};
+
+    fn headers(value: Option<&str>) -> HeaderMap {
+        let mut map = HeaderMap::new();
+        if let Some(value) = value {
+            map.insert(AUTHORIZATION, HeaderValue::from_str(value).unwrap());
+        }
+        map
+    }
+
+    #[test]
+    fn a_credential_is_a_bearer_scheme_with_a_token_and_nothing_else() {
+        for fine in [
+            "Bearer abc",
+            "bearer abc",
+            "BEARER abc",
+            "Bearer  spaced ",
+            "Bearer a b",
+        ] {
+            assert!(has_bearer_credential(&headers(Some(fine))), "{fine:?}");
+        }
+        for refused in [
+            "Bearer",
+            "Bearer ",
+            "Bearer    ",
+            "Basic abc",
+            "abc",
+            "Token abc",
+            "Bearerabc",
+            "",
+        ] {
+            assert!(
+                !has_bearer_credential(&headers(Some(refused))),
+                "{refused:?}"
+            );
+        }
+        assert!(!has_bearer_credential(&headers(None)));
+        let mut opaque = HeaderMap::new();
+        opaque.insert(
+            AUTHORIZATION,
+            HeaderValue::from_bytes(b"Bearer \xff\xfe").unwrap(),
+        );
+        assert!(
+            !has_bearer_credential(&opaque),
+            "a value that is not text is no credential"
+        );
+    }
+
+    #[test]
+    fn a_request_id_is_sixteen_lower_case_hex_digits_and_each_is_new() {
+        let ids: Vec<String> = (0..2000).map(|_| request_id()).collect();
+        for id in &ids {
+            assert_eq!(id.len(), 16, "{id}");
+            assert!(
+                id.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f')),
+                "{id}"
+            );
+        }
+        let mut unique = ids.clone();
+        unique.sort();
+        unique.dedup();
+        assert_eq!(unique.len(), ids.len(), "no two ids are alike");
+        assert!(
+            ids.iter()
+                .any(|id| id.as_bytes()[0] != ids[0].as_bytes()[0]),
+            "the high digits move too"
+        );
+    }
+}

@@ -270,6 +270,27 @@ mod tests {
     }
 
     #[test]
+    fn nesting_is_bounded_at_exactly_sixty_five_levels_for_arrays_and_for_objects() {
+        let arrays = |levels: usize| format!("{}{}", "[".repeat(levels), "]".repeat(levels));
+        assert!(parse(arrays(65).as_bytes()).is_ok());
+        assert_eq!(
+            parse(arrays(66).as_bytes()).unwrap_err(),
+            "nesting is too deep"
+        );
+        let objects =
+            |levels: usize| format!("{}null{}", "{\"a\":".repeat(levels), "}".repeat(levels));
+        assert!(parse(objects(64).as_bytes()).is_ok());
+        assert_eq!(
+            parse(objects(66).as_bytes()).unwrap_err(),
+            "nesting is too deep"
+        );
+        assert_eq!(
+            parse(objects(200).as_bytes()).unwrap_err(),
+            "nesting is too deep"
+        );
+    }
+
+    #[test]
     fn empty_containers_and_whitespace_are_fine() {
         assert_eq!(parse(b" { } ").unwrap(), Ordered::Object(vec![]));
         assert_eq!(parse(b"[ ]").unwrap(), Ordered::Array(vec![]));

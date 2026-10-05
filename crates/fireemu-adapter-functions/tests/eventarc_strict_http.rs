@@ -119,6 +119,18 @@ impl Listener {
         bearer: bool,
         body: Option<&str>,
     ) -> (u16, String) {
+        self.send_with(method, target, bearer, body, "").await
+    }
+
+    /// The same, with extra header lines (each ending in CRLF).
+    async fn send_with(
+        &self,
+        method: &str,
+        target: &str,
+        bearer: bool,
+        body: Option<&str>,
+        extra: &str,
+    ) -> (u16, String) {
         let mut stream = TcpStream::connect(self.addr).await.expect("connect");
         let auth = if bearer {
             "authorization: Bearer a-token\r\n"
@@ -127,7 +139,7 @@ impl Listener {
         };
         let payload = body.unwrap_or("");
         let request = format!(
-            "{method} {target} HTTP/1.1\r\nhost: localhost\r\n{auth}content-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{payload}",
+            "{method} {target} HTTP/1.1\r\nhost: localhost\r\n{auth}{extra}content-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{payload}",
             payload.len()
         );
         stream.write_all(request.as_bytes()).await.expect("write");
@@ -347,6 +359,44 @@ async fn the_emulator_profile_and_the_default_entry_are_unchanged() {
             let (status, answer) = server.send(method, &target, true, Some(&body)).await;
             assert_eq!((status, answer.as_str()), (404, "Not Found"), "{target}");
         }
+        server.stop().await;
+    }
+}
+
+#[tokio::test]
+async fn both_profiles_refuse_a_foreign_origin_before_anything_else() {
+    for profile in [
+        Some(FunctionsHttpProfile::Strict),
+        Some(FunctionsHttpProfile::Emulator),
+    ] {
+        let server = start(profile).await;
+        let target = "/v1/projects/demo-app/locations/us-central1/channels";
+        let (status, answer) = server
+            .send_with(
+                "GET",
+                target,
+                true,
+                None,
+                "origin: https://evil.example\r\n",
+            )
+            .await;
+        assert_eq!(
+            (status, answer.as_str()),
+            (403, "forbidden origin"),
+            "{profile:?}"
+        );
+        // A local origin is served as the request would be without one.
+        let (local, _) = server
+            .send_with(
+                "GET",
+                target,
+                true,
+                None,
+                "origin: http://localhost:3000\r\n",
+            )
+            .await;
+        let (plain, _) = server.send("GET", target, true, None).await;
+        assert_eq!(local, plain, "{profile:?}");
         server.stop().await;
     }
 }

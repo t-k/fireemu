@@ -1066,7 +1066,7 @@ test("buildInputsDigest: a test-only change does not move it, any other change, 
   );
   assert.equal(digest(base.filter((l) => !l.includes("tests/"))), reference);
   // Order does not matter.
-  assert.equal(digest([...base].reverse()), reference);
+  assert.equal(digest(base.toReversed()), reference);
   // A source, a manifest, the lock, a rename or a removed or added input does.
   for (const changed of [
     base.map((l) => (l.includes("lib.rs") ? entry("zz", "crates/x/src/lib.rs") : l)),

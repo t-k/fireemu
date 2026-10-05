@@ -313,3 +313,27 @@ test("the classes of an answer", () => {
   assert.equal(readable({ status: 200, json: "x" }), false);
   assert.equal(readable({ status: 200, bodyUnknown: true, json: {} }), false);
 });
+
+test("a one-character location id still counts as present, and an empty one does not", () => {
+  const summary = (locationId) =>
+    adminSdkConfigSummary({ status: 200, json: { projectId: PROJECT, locationId } });
+  assert.equal(summary("x").locationIdPresent, true);
+  assert.equal(summary("").locationIdPresent, false);
+  assert.equal(summary(undefined).locationIdPresent, false);
+  assert.equal(summary(5).locationIdPresent, false);
+});
+
+test("a batchEnable of one target service is allowed", () => {
+  assert.equal(
+    allowedRequest(
+      {
+        id: "t",
+        method: "POST",
+        url: "https://serviceusage.googleapis.com/v1/projects/" + NUMBER + "/services:batchEnable",
+        json: { serviceIds: ["run.googleapis.com"] },
+      },
+      NUMBER,
+    ),
+    true,
+  );
+});

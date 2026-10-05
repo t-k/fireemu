@@ -135,6 +135,9 @@ test("storage-failed-upload seeds first, then writes with a failing precondition
   assert.equal(result.readback.exists, true);
   assert.equal(result.readback.generation, "g1", "the seed generation is still the object's");
   assert.equal(result.matchKey.kind, "storage");
+  // the production script names this scenario's object with a 28-character id: fe-events/<28>.txt is 42 characters
+  assert.equal(result.matchKey.value.length, 42);
+  assert.match(result.matchKey.value, /^fe-events\/e[0-9a-f]{24}o\d+\.txt$/);
 });
 
 test("storage-failed-upload where the write completes is a typed success with the new generation (the official emulator's behaviour)", async () => {

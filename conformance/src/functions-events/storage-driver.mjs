@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
-import { randomUUID } from "node:crypto";
 import { setTimeout as delay } from "node:timers/promises";
+import { resourceId } from "./resource-id.mjs";
 
 const primaryBucket = "demo-conformance-events-primary";
 const controlBucket = "demo-conformance-events-control";
@@ -94,7 +94,7 @@ export async function attemptPreconditionUpload({ host, bucket, name, request = 
 export async function runStorageScenario({ scenario, capture, storage, request = fetch }) {
   const bucketName = scenario.resource === "bucket-control" ? controlBucket : primaryBucket;
   const bucket = storage.bucket(bucketName);
-  const id = `e${randomUUID().replaceAll("-", "")}`;
+  const id = resourceId(scenario.id, "obj");
   const name = scenario.objectRole === "other-prefix" ? `other/${id}.txt` : `fe-events/${id}.txt`;
   const file = bucket.file(name);
   let originalVersioning = null;

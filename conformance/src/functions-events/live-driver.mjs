@@ -1,8 +1,9 @@
 import assert from "node:assert/strict";
-import { randomBytes, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import { createRequire } from "node:module";
 import { setTimeout as delay } from "node:timers/promises";
 import { pubsubPublication } from "./record/script.mjs";
+import { resourceId } from "./resource-id.mjs";
 import { runStorageScenario } from "./storage-driver.mjs";
 
 const require = createRequire(import.meta.url);
@@ -140,7 +141,7 @@ async function waitForAuthCreate(capture, cursor, uid) {
 }
 
 async function runAuthScenario({ scenario, capture, auth }) {
-  const id = `e${randomUUID().replaceAll("-", "")}`;
+  const id = resourceId(scenario.id, "user");
   const email = `${id}@example.test`;
   const password = "local-only-password-123";
   const owned = new Set();
@@ -162,7 +163,7 @@ async function runAuthScenario({ scenario, capture, auth }) {
       owned.add(uid);
       await waitForAuthCreate(capture, seedCursor, uid);
       if (scenario.id === "auth-bulk-delete") {
-        const second = `${id}b`;
+        const second = resourceId(scenario.id, "user", { offset: 1 });
         const secondCursor = (await capture.barrier()).cursor;
         await auth.createUser({ uid: second, email: `${second}@example.test`, password });
         owned.add(second);
@@ -231,12 +232,9 @@ export async function ensureLocalTopic(topic) {
   return { created: !existed, existed };
 }
 
-// The message id of the production script: "e", 24 hex digits, the role letter and a counter.
-let messageCounter = 0;
-
 /** Publishes exactly what the production script publishes (`pubsubPublication`), under a message text of its own. */
 export async function runPubsubScenario({ scenario, capture, pubsub }) {
-  const text = `e${randomBytes(12).toString("hex")}m${(messageCounter += 1)}`;
+  const text = resourceId(scenario.id, "msg");
   const publication = pubsubPublication(scenario.id, text);
   const topicName = publication.topic;
   const topic = pubsub.topic(topicName, { messageOrdering: scenario.id === "pubsub-ordering" });
@@ -298,7 +296,7 @@ async function clientFirestoreCreate(host, projectId, path, data, idToken) {
 }
 
 async function runFirestoreScenario({ scenario, program, capture, firestore, auth, projectId }) {
-  const id = `e${randomUUID().replaceAll("-", "")}`;
+  const id = resourceId(scenario.id, "fs");
   const collection =
     scenario.resource === "collection-control" ? "fe_events_control" : "fe_events_primary";
   const reference = firestore.doc(`${collection}/${id}`);

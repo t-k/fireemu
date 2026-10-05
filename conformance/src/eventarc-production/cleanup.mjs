@@ -144,8 +144,7 @@ export async function cleanup({
       for (const name of targets) if (locationOf(name) === location) names.add(name);
       for (const name of names) {
         const facts = ledgerFacts(ledger.state().get(name));
-        let exists = found.has(name);
-        if (!exists) {
+        if (!found.has(name)) {
           // Not shown by a fresh list: read it by name before anything is sent to delete it.
           const read = await client.getChannel(name);
           if (isRecordedNotFound(read)) {
@@ -162,7 +161,6 @@ export async function cleanup({
             );
             continue;
           }
-          exists = true;
         }
         // A deletion that was sent and not proven (unknown, or a 2xx whose operation was not read as done)
         // is not sent again inside the recording; the later run sends one after its own 2xx read.

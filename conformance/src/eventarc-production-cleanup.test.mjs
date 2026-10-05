@@ -4,7 +4,7 @@ import test, { beforeEach } from "node:test";
 import { BudgetExceeded, createBudget, createCapture } from "./pubsub-production/capture.mjs";
 import { createLedger } from "./pubsub-production/ledger.mjs";
 import { createRest } from "./pubsub-production/rest.mjs";
-import { PAGE_LIMIT, cleanup } from "./eventarc-production/cleanup.mjs";
+import { PAGE_LIMIT, cleanup, ledgerFacts } from "./eventarc-production/cleanup.mjs";
 import { createClient } from "./eventarc-production/client.mjs";
 import { createOwnership } from "./eventarc-production/names.mjs";
 
@@ -549,4 +549,39 @@ test("a target in a location that cannot exist is read by name and its location 
   assert.deepEqual(report.listed, []);
   assert.deepEqual(report.settled, [{ name: nowhere, how: "absent" }]);
   assert.deepEqual(report.errors, []);
+});
+
+test("what the ledger says of a channel: nothing for a name it never saw, and each open request counted for what it is", () => {
+  const none = { mayExist: false, createPending: false, deleteSent: false, deletePending: false };
+  assert.deepEqual(ledgerFacts(undefined), none);
+  // An item with nothing in it says nothing either: no creation is pending and no deletion was sent.
+  assert.deepEqual(ledgerFacts({ creates: [], deletes: [], open: [] }), none);
+  // An open creation is an unknown creation; an open deletion is an unknown deletion, and not the other way round.
+  assert.deepEqual(ledgerFacts({ creates: [], deletes: [], open: ["create"] }), {
+    mayExist: true,
+    createPending: true,
+    deleteSent: false,
+    deletePending: false,
+  });
+  assert.deepEqual(ledgerFacts({ creates: [], deletes: [], open: ["delete"] }), {
+    mayExist: false,
+    createPending: false,
+    deleteSent: true,
+    deletePending: true,
+  });
+  // A later definite answer resolves an unknown: nothing is pending, the deletion was still sent.
+  assert.deepEqual(
+    ledgerFacts({ creates: ["unknown", "ok"], deletes: ["unknown", "ok"], open: [] }),
+    {
+      mayExist: true,
+      createPending: false,
+      deleteSent: true,
+      deletePending: false,
+    },
+  );
+  // An unknown after the definite answer is pending again.
+  assert.equal(
+    ledgerFacts({ creates: ["ok", "unknown"], deletes: [], open: [] }).createPending,
+    true,
+  );
 });

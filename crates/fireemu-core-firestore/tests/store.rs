@@ -1281,6 +1281,164 @@ fn a_query_in_a_transaction_locks_its_range() {
     assert!(s.commit(&[set("other/y", &[])], Some(&txn2), t(5)).is_ok());
 }
 
+fn delete_write(p: &str) -> Write {
+    Write {
+        op: WriteOp::Delete { path: path(p) },
+        precondition: None,
+        transforms: vec![],
+    }
+}
+
+fn state_is(value: &str) -> fireemu_core_firestore::query::FilterExpr {
+    use fireemu_core_firestore::query::{FieldOp, FilterExpr};
+    FilterExpr::Field {
+        field: FieldPath::parse("state").unwrap(),
+        op: FieldOp::Equal,
+        value: Value::String(value.into()),
+    }
+}
+
+/// A transaction that ran `state == "in"` over `rg` and read nothing else, with `rg/inside`
+/// (state in) and `rg/outside` (state out) already stored.
+fn filtered_range_lock() -> (FirestoreState, TransactionId) {
+    use fireemu_core_firestore::query::{Query, QueryScope};
+    use fireemu_core_types::ids::CollectionId;
+    let mut s = FirestoreState::new();
+    s.commit(
+        &[
+            set("rg/inside", &[("state", Value::String("in".into()))]),
+            set("rg/outside", &[("state", Value::String("out".into()))]),
+        ],
+        None,
+        t(0),
+    )
+    .unwrap();
+    let q = Query::new(QueryScope::collection(
+        None,
+        CollectionId::try_new("rg").unwrap(),
+    ))
+    .with_filter(state_is("in"))
+    .canonicalize()
+    .unwrap();
+    let txn = s.begin_transaction(false, t(1)).unwrap();
+    assert_eq!(s.run_query_in_transaction(&txn, &q).unwrap().len(), 1);
+    (s, txn)
+}
+
+fn assert_refused(s: &mut FirestoreState, writes: &[Write], what: &str) {
+    let refused = s.commit(writes, None, t(2)).unwrap_err();
+    assert!(
+        matches!(&refused, FirestoreError::Aborted(m) if m == TOO_MUCH_CONTENTION),
+        "{what}: {refused}"
+    );
+}
+
+#[test]
+fn a_filtered_query_locks_only_the_documents_that_match_its_filter() {
+    let (mut s, _txn) = filtered_range_lock();
+    // a phantom (a new document in the range) and a change of a member are blocked ...
+    assert_refused(
+        &mut s,
+        &[set("rg/new-in", &[("state", Value::String("in".into()))])],
+        "a new document in the range",
+    );
+    assert_refused(
+        &mut s,
+        &[set("rg/inside", &[("state", Value::String("in".into()))])],
+        "a rewrite of a member",
+    );
+    assert_refused(
+        &mut s,
+        &[set("rg/inside", &[("state", Value::String("out".into()))])],
+        "a member leaving the range",
+    );
+    assert_refused(
+        &mut s,
+        &[set("rg/outside", &[("state", Value::String("in".into()))])],
+        "a document entering the range",
+    );
+    assert_refused(&mut s, &[delete_write("rg/inside")], "a delete of a member");
+    // ... and a write that touches nothing in the range is not
+    assert!(s
+        .commit(
+            &[set("rg/new-out", &[("state", Value::String("out".into()))])],
+            None,
+            t(3)
+        )
+        .is_ok());
+    assert!(s
+        .commit(
+            &[set("rg/outside", &[("state", Value::String("still-out".into()))])],
+            None,
+            t(3)
+        )
+        .is_ok());
+    assert!(s.commit(&[delete_write("rg/outside")], None, t(3)).is_ok());
+    assert!(s
+        .commit(&[set("rg/no-state", &[("other", Value::Integer(1))])], None, t(3))
+        .is_ok());
+}
+
+#[test]
+fn the_holders_listed_for_a_write_are_the_ones_whose_range_it_touches() {
+    let (s, txn) = filtered_range_lock();
+    let outside = [set("rg/new-out", &[("state", Value::String("out".into()))])];
+    let inside = [set("rg/new-in", &[("state", Value::String("in".into()))])];
+    assert!(s.lock_holders(&outside, None).is_empty());
+    assert_eq!(s.lock_holders(&inside, None), vec![txn.clone()]);
+    // the holder's own writes never wait on itself
+    assert!(s.lock_holders(&inside, Some(&txn)).is_empty());
+}
+
+#[test]
+fn an_unfiltered_query_and_an_unsupported_filter_still_lock_the_whole_collection() {
+    use fireemu_core_firestore::query::{Query, QueryScope};
+    use fireemu_core_types::ids::CollectionId;
+    let mut s = FirestoreState::new();
+    let q = Query::new(QueryScope::collection(
+        None,
+        CollectionId::try_new("rg").unwrap(),
+    ))
+    .canonicalize()
+    .unwrap();
+    let _txn = s.begin_transaction(false, t(0)).unwrap();
+    assert!(s.run_query_in_transaction(&_txn, &q).unwrap().is_empty());
+    assert_refused(
+        &mut s,
+        &[set("rg/any", &[("state", Value::String("out".into()))])],
+        "no filter: every document of the collection is in the range",
+    );
+}
+
+#[test]
+fn a_disjunction_locks_every_document_matching_either_side() {
+    use fireemu_core_firestore::query::{FilterExpr, Query, QueryScope};
+    use fireemu_core_types::ids::CollectionId;
+    let mut s = FirestoreState::new();
+    let q = Query::new(QueryScope::collection(
+        None,
+        CollectionId::try_new("rg").unwrap(),
+    ))
+    .with_filter(FilterExpr::Or(vec![state_is("a"), state_is("b")]))
+    .canonicalize()
+    .unwrap();
+    let txn = s.begin_transaction(false, t(0)).unwrap();
+    assert!(s.run_query_in_transaction(&txn, &q).unwrap().is_empty());
+    assert_refused(
+        &mut s,
+        &[set("rg/x", &[("state", Value::String("a".into()))])],
+        "left side",
+    );
+    assert_refused(
+        &mut s,
+        &[set("rg/y", &[("state", Value::String("b".into()))])],
+        "right side",
+    );
+    assert!(s
+        .commit(&[set("rg/z", &[("state", Value::String("c".into()))])], None, t(3))
+        .is_ok());
+}
+
 #[test]
 fn a_transaction_nearest_query_replays_with_vector_semantics_after_conflict() {
     use fireemu_core_firestore::query::{DistanceMeasure, FindNearest, Query, QueryScope};

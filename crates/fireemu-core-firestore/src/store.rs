@@ -3970,6 +3970,46 @@ impl FirestoreState {
         Ok(())
     }
 
+    /// Whether the locks `holder` took cover `write`: a document it read, or a document in the
+    /// range of a query it ran (see [`Self::range_covers_write`]).
+    fn holder_locks_write(&self, holder: &Transaction, write: &Write) -> bool {
+        holder.read_set.contains_key(write.op.path())
+            || holder
+                .queries
+                .iter()
+                .any(|entry| self.range_covers_write(&entry.query, write))
+    }
+
+    /// Whether a query's lock covers `write`. Production locks the index range a query scans, so
+    /// a write that touches no document of that range does not wait: a write is covered when it
+    /// targets a document in the query's scope whose stored version, or the version the write
+    /// would store, passes the query's filter (a phantom entering the range, a member changed or
+    /// leaving it, a member deleted). A query without a filter locks its whole scope. The range
+    /// is judged by the filter alone: ordering, cursors, offset and limit are ignored, so the
+    /// lock is never narrower than the scan; a write whose result depends on a transform, or a
+    /// filter that cannot be evaluated, is covered too.
+    fn range_covers_write(&self, query: &Query, write: &Write) -> bool {
+        let path = write.op.path();
+        if !path_in_scope(path, &query.scope) {
+            return false;
+        }
+        let Some(filter) = query.filter.as_ref() else {
+            return true;
+        };
+        if !write.transforms.is_empty() {
+            return true;
+        }
+        let passes = |document: &Document| eval_filter(filter, document).unwrap_or(true);
+        let before = self.get(path);
+        if before.is_some_and(passes) {
+            return true;
+        }
+        match Self::preview_from(before, write, LogicalInstant::UNIX_EPOCH) {
+            Ok(after) => after.is_some_and(|document| passes(&document)),
+            Err(_) => true,
+        }
+    }
+
     /// Pessimistic locking, as production runs it (`concurrencyMode: PESSIMISTIC`, measured
     /// in conformance/firestore-production-matrix.json, transactions/lifecycle): every
     /// document an active read-write transaction read, and every query range it executed,
@@ -4003,14 +4043,9 @@ impl FirestoreState {
                     && !holder.read_only
                     && holder.read_version >= floor
                     && own != Some(*id)
-                    && writes.iter().any(|write| {
-                        let path = write.op.path();
-                        holder.read_set.contains_key(path)
-                            || holder
-                                .queries
-                                .iter()
-                                .any(|entry| path_in_scope(path, &entry.query.scope))
-                    })
+                    && writes
+                        .iter()
+                        .any(|write| self.holder_locks_write(holder, write))
             })
             .map(|(_, holder)| holder.waiting_to_commit)
             .collect();
@@ -4042,14 +4077,9 @@ impl FirestoreState {
                     && !holder.read_only
                     && holder.read_version >= self.compaction_floor
                     && own != Some(*id)
-                    && writes.iter().any(|write| {
-                        let path = write.op.path();
-                        holder.read_set.contains_key(path)
-                            || holder
-                                .queries
-                                .iter()
-                                .any(|entry| path_in_scope(path, &entry.query.scope))
-                    })
+                    && writes
+                        .iter()
+                        .any(|write| self.holder_locks_write(holder, write))
             })
             .map(|(id, _)| id.clone())
             .collect()

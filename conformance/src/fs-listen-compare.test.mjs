@@ -1695,6 +1695,126 @@ test("filterSites: a target that was never added is not fresh; a resumed one is 
   );
 });
 
+test("filterSites keeps its state per target: another target's count, documents or CURRENT excuse nothing, and a target the row never added is never excused", () => {
+  const addT = (...ids) => ({
+    kind: "targetChange",
+    type: "ADD",
+    targetIds: ids,
+    cause: null,
+    resumeToken: false,
+  });
+  const currentT = (...ids) => ({ ...current, targetIds: ids });
+  const docFor = (doc, ...ids) => ({
+    kind: "documentChange",
+    doc,
+    fields: {},
+    targetIds: ids,
+    removedTargetIds: [],
+  });
+  const redundant = (rows) => filterSites(fr(rows)).map((site) => site.redundant);
+  // The reviewer's probe: target 1 fresh with 2 documents repeats its count; target 2 was resumed
+  // (a boundary right after its ADD) and its filter of the same count is information.
+  assert.deepEqual(
+    redundant([
+      addT(1),
+      docFor("a", 1),
+      docFor("b", 1),
+      currentT(1),
+      bnd(),
+      flt(2, 1),
+      bnd(),
+      addT(2),
+      bnd(),
+      currentT(2),
+      bnd(),
+      flt(2, 2),
+      bnd(),
+    ]),
+    [true, false],
+  );
+  // A repeated count of another target is not this target's earlier count.
+  assert.deepEqual(redundant([addT(1), addT(2), currentT(1, 2), flt(5, 1), flt(5, 2)]), [
+    false,
+    false,
+  ]);
+  assert.deepEqual(
+    redundant([addT(1), addT(2), currentT(1, 2), flt(5, 1), flt(5, 1)]),
+    [false, true],
+    "the same target repeating its own count",
+  );
+  // Documents delivered to target 2 are not held by target 1.
+  assert.deepEqual(redundant([addT(1), addT(2), docFor("a", 2), currentT(1, 2), flt(1, 1)]), [
+    false,
+  ]);
+  assert.deepEqual(redundant([addT(1), addT(2), docFor("a", 2), currentT(1, 2), flt(1, 2)]), [
+    true,
+  ]);
+  // Another target's CURRENT does not make this one's earlier filter redundant.
+  assert.deepEqual(redundant([addT(1), docFor("a", 1), addT(2), currentT(2), flt(1, 1)]), [false]);
+  // A change that adds to one target and takes the document out of another.
+  assert.deepEqual(
+    redundant([
+      addT(1),
+      addT(2),
+      docFor("a", 1, 2),
+      { ...docFor("a", 2), removedTargetIds: [1] },
+      currentT(1, 2),
+      flt(0, 1),
+      flt(1, 2),
+    ]),
+    [true, true],
+  );
+  // A delete names the targets it leaves; one that names none leaves every target.
+  const gone = (removedTargetIds) => ({ kind: "documentDelete", doc: "a", removedTargetIds });
+  assert.deepEqual(
+    redundant([
+      addT(1),
+      addT(2),
+      docFor("a", 1, 2),
+      gone([2]),
+      currentT(1, 2),
+      flt(1, 1),
+      flt(0, 2),
+    ]),
+    [true, true],
+  );
+  assert.deepEqual(
+    redundant([
+      addT(1),
+      addT(2),
+      docFor("a", 1, 2),
+      gone([]),
+      currentT(1, 2),
+      flt(0, 1),
+      flt(0, 2),
+    ]),
+    [true, true],
+  );
+  assert.deepEqual(
+    redundant([addT(1), addT(2), docFor("a", 1, 2), gone([2]), currentT(1, 2), flt(0, 1)]),
+    [false],
+    "target 1 still holds the document",
+  );
+  // A filter of a target the row never added is information, whatever it repeats.
+  assert.deepEqual(redundant([addT(1), docFor("a", 1), currentT(1), flt(1, 9)]), [false]);
+  assert.deepEqual(redundant([flt(1, 9), currentT(9), flt(1, 9)]), [false, false]);
+});
+
+test("the committed production rows: a post-CURRENT filter moved to a target the row never added is not excused", () => {
+  for (const id of [
+    "native/target-protocol/collection-group",
+    "native/resume-token-expired/fresh-control",
+  ]) {
+    const [first, second] = prodRows(id);
+    assert.equal(classifyLocal(first, second, first), "MATCH", id);
+    const foreign = (row) => ({
+      ...row,
+      rows: row.rows.map((item) => (item.kind === "filter" ? { ...item, targetId: 9 } : item)),
+    });
+    assert.equal(classifyLocal(first, second, foreign(first)), "DIFFER", `${id}: a foreign target`);
+  }
+});
+
 test("filterSites: only the boundaries a dropped filter left side by side merge into one place", () => {
   const places = (rows) => filterSites(fr(rows)).map((site) => site.place);
   // Two boundaries nothing was between stay two frames.

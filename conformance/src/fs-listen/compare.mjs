@@ -97,9 +97,11 @@ const keyOf = ({ targetId, count, unchangedNames: bloom }) =>
  * so a filter before CURRENT and one after the last boundary are different places.
  *
  * A filter after the target's CURRENT carries no information when its count equals what the row
- * already says the target holds: the count of an earlier filter of the row, or, for a target
- * added fresh (the frame after its ADD is not a boundary), the number of documents the row
- * delivered and did not take back. The server then only repeats the count; it can disagree with
+ * already says that target holds: the count of an earlier filter of the same target, or, for a
+ * target the row added fresh (the frame after its ADD is not a boundary), the number of documents
+ * the row delivered to it and did not take back. All of it is kept per target: another target's
+ * count, documents or CURRENT excuse nothing, and a filter for a target the row never added is
+ * information. The server then only repeats the count; it can disagree with
  * the client only when the count differs. Every other filter is information: a client holding
  * documents from before a resume compares its set with the count.
  */
@@ -109,23 +111,34 @@ export function filterSites(row) {
   let kept = 0;
   let dropped = false;
   let lastKind;
-  let afterAdd = false;
-  let fresh = false;
-  let current = false;
-  const held = new Set();
-  const counts = [];
+  // What the row says about each target it added, by target id: whether the target started empty
+  // (the frame after its ADD is not a boundary), whether it is CURRENT, the documents it holds
+  // from what the row delivered and the counts of the filters it already carried. A filter for a
+  // target the row never added, or one still before that target's CURRENT, is never redundant.
+  const targets = new Map();
+  let justAdded = [];
+  const everyTarget = () => [...targets.values()];
+  const named = (ids) => (ids?.length > 0 ? ids.map((id) => targets.get(id)).filter(Boolean) : []);
   for (const [index, item] of frames.entries()) {
-    if (afterAdd) {
-      fresh = item.kind !== "boundary";
-      afterAdd = false;
+    for (const id of justAdded) targets.get(id).fresh = item.kind !== "boundary";
+    justAdded = [];
+    if (item.kind === "targetChange" && item.type === "ADD") {
+      for (const id of item.targetIds ?? []) {
+        targets.set(id, { fresh: false, current: false, held: new Set(), counts: [] });
+        justAdded.push(id);
+      }
     }
-    if (item.kind === "targetChange" && item.type === "ADD") afterAdd = true;
-    if (item.kind === "targetChange" && item.type === "CURRENT") current = true;
+    if (item.kind === "targetChange" && item.type === "CURRENT")
+      for (const target of named(item.targetIds)) target.current = true;
     if (item.kind === "documentChange") {
-      if ((item.targetIds ?? []).length > 0) held.add(item.doc);
-      else if ((item.removedTargetIds ?? []).length > 0) held.delete(item.doc);
+      for (const target of named(item.targetIds)) target.held.add(item.doc);
+      for (const target of named(item.removedTargetIds)) target.held.delete(item.doc);
     }
-    if (item.kind === "documentDelete" || item.kind === "documentRemove") held.delete(item.doc);
+    if (item.kind === "documentDelete" || item.kind === "documentRemove") {
+      const leaving =
+        item.removedTargetIds?.length > 0 ? named(item.removedTargetIds) : everyTarget();
+      for (const target of leaving) target.held.delete(item.doc);
+    }
     if (isOptionalFilter(item)) {
       const next = frames.slice(index + 1).find((later) => !isOptionalFilter(later));
       const following = next
@@ -133,10 +146,13 @@ export function filterSites(row) {
           ? `targetChange:${next.type}`
           : next.kind
         : "end";
+      const target = targets.get(item.targetId);
       const redundant =
-        current && (counts.includes(item.count) || (fresh && held.size === item.count));
+        target !== undefined &&
+        target.current &&
+        (target.counts.includes(item.count) || (target.fresh && target.held.size === item.count));
       sites.push({ key: keyOf(item), place: `${kept}|${following}`, redundant });
-      counts.push(item.count);
+      target?.counts.push(item.count);
       dropped = true;
       continue;
     }

@@ -343,6 +343,8 @@ test("two recordings are aligned by case, operation and position, and a row in o
     ["publish-envelope/createChannel#0", "unpaired"],
   ]);
   assert.equal(kinds(["ENABLED", "ENABLED"])[2][1], "unpaired");
+  assert.equal(kinds(["DISABLED", null])[2][1], "unpaired", "the other recording has no state");
+  assert.equal(kinds([null, "ENABLED"])[2][1], "unpaired");
   assert.equal(kinds(undefined)[2][1], "unpaired", "no state recorded: not claimed");
   const rows = comparePair(a, b, "aaaaaaaaaaaa", "bbbbbbbbbbbb", ["DISABLED", "ENABLED"]);
   assert.deepEqual(rows[0].a, 1);
@@ -907,4 +909,45 @@ test("the pair command takes the state each recording found the project in from 
     `${JSON.stringify({ at: "x", note: "run-start", runId: "dddddddddddd" })}\n`,
   );
   assert.equal(serviceStateOf(join(dir, "none.jsonl")), null);
+});
+
+test("the state a recording found is read only from its service-state note, and only when it is a string", () => {
+  const dir = mkdtempSync(join(tmpdir(), "eventarc-compare-note-"));
+  const write = (name, notes) => {
+    const path = join(dir, name);
+    writeFileSync(path, `${notes.map((note) => JSON.stringify(note)).join("\n")}\n`);
+    return path;
+  };
+  assert.equal(serviceStateOf(write("none.jsonl", [{ note: "service-state" }])), null);
+  assert.equal(
+    serviceStateOf(write("other.jsonl", [{ note: "enable-state", before: "ENABLED" }])),
+    null,
+  );
+  assert.equal(
+    serviceStateOf(write("number.jsonl", [{ note: "service-state", before: 55 }])),
+    null,
+  );
+  assert.equal(
+    serviceStateOf(
+      write("late.jsonl", [{ note: "x" }, { note: "service-state", before: "DISABLED" }]),
+    ),
+    "DISABLED",
+  );
+});
+
+test("the metadata of an ErrorInfo is compared as a set only when both sides are objects", () => {
+  const info = (metadata) => ({
+    "@type": "type.googleapis.com/google.rpc.ErrorInfo",
+    metadata,
+  });
+  assert.equal(sameJson(info(null), info(null)), true);
+  assert.equal(sameJson(info(null), info({})), false);
+  assert.equal(sameJson(info({}), info(null)), false);
+  assert.equal(sameJson(info("x"), info("x")), true);
+  assert.equal(sameJson(info("x"), info({})), false);
+  assert.equal(sameJson(info({}), info("x")), false);
+  assert.equal(sameJson(info(["a"]), info(["a"])), true);
+  assert.equal(sameJson(info(1), info(2)), false);
+  assert.equal(sameJson(info({ a: null }), info({ a: null })), true);
+  assert.equal(sameJson(info({ a: 1 }), info({ b: 1 })), false);
 });

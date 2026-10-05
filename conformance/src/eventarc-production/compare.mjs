@@ -410,7 +410,10 @@ const isProjectState = (row) => isServiceUsageRow(row) || isServiceDisabled(row)
  * recordings found the project in different states (one took the disabled branch, the other did not).
  */
 const unpairedKind = (row, states) =>
-  row.case === "service-state" && states[0] !== null && states[0] !== states[1]
+  row.case === "service-state" &&
+  states[0] !== null &&
+  states[1] !== null &&
+  states[0] !== states[1]
     ? "state"
     : "unpaired";
 

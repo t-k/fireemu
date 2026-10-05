@@ -325,11 +325,10 @@ fn blocking_auth_selection(
     }
 }
 
-/// How `signInWithIdp` assertions are verified (AUTH-FEDERATION owner decision O4). Strict
-/// verifies signed OIDC ID tokens with the `auth.idpSigners` keys, and refuses every `IdP`
-/// sign-in without them; the emulator profile keeps the fixture `IdP` and ignores the keys.
-/// How long a writer held behind a read lock waits before it is refused, and whether the wait also runs on the virtual clock. Strict follows what production showed (20 s, counted
-/// on the virtual clock as well as the wall clock: see `STRICT_CONTENTION_WAIT`); the emulator profile keeps the 15 s wall-clock wait it has always had.
+/// How long a writer held behind a read lock waits before it is refused, and whether the wait
+/// also runs on the virtual clock. Strict follows what production showed (20 s, counted on the
+/// virtual clock as well as the wall clock: see `STRICT_CONTENTION_WAIT`); the emulator profile
+/// keeps the 15 s wall-clock wait it has always had.
 const fn contention_for(
     profile: crate::config::CompatibilityProfile,
 ) -> (std::time::Duration, bool) {
@@ -343,6 +342,9 @@ const fn contention_for(
     }
 }
 
+/// How `signInWithIdp` assertions are verified (AUTH-FEDERATION owner decision O4). Strict
+/// verifies signed OIDC ID tokens with the `auth.idpSigners` keys, and refuses every `IdP`
+/// sign-in without them; the emulator profile keeps the fixture `IdP` and ignores the keys.
 fn idp_assertion_policy(
     profile: crate::config::CompatibilityProfile,
     signers: Option<&serde_json::Map<String, serde_json::Value>>,

@@ -7107,7 +7107,7 @@ mod tests {
             pubsub: None,
             hub: None,
         };
-        let cache = Arc::new(NodeProbeCache::default());
+        let cache = Arc::new(super::NodeProbeCache::default());
         for (retry, refused_text) in [
             (json!({"retryCount": 6}), Some(COUNT_TEXT)),
             (json!({"maxRetrySeconds": 20.5}), Some(NANOS_TEXT)),

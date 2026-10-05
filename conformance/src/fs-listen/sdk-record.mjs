@@ -272,6 +272,7 @@ export async function recordSdk({
   let accounts = {};
   let outcome;
   let confListenBefore;
+  let journaledNames;
   const root = `projects/${target.project}/databases/(default)/documents`;
   try {
     // Ledger 330: the query cases read conf_listen as empty before the run; if it is not, stop
@@ -287,17 +288,14 @@ export async function recordSdk({
     }
     accounts = await session.create(["a", "b"]);
     log("accounts created");
-    journal.append({
-      type: "names",
-      phase: "before",
-      // Names the cases may write: no answer line follows, and the A2 read-back must not read the
-      // missing one as an unknown create.
-      maybe: true,
-      names: issuedSdkNames({ project: target.project, run, accounts }).map((name) => ({
-        name,
-        op: "create",
-      })),
-    });
+    // Names the cases may write: marked `maybe` so that the A2 read-back does not read the missing
+    // answer line as an unknown create. A run whose writes turn out not to be known gets its answer
+    // line (unknown) below.
+    journaledNames = issuedSdkNames({ project: target.project, run, accounts }).map((name) => ({
+      name,
+      op: "create",
+    }));
+    journal.append({ type: "names", phase: "before", maybe: true, names: journaledNames });
     const config = {
       mode: production ? "production" : "local",
       wireCap: WIRE_CAP,
@@ -313,6 +311,13 @@ export async function recordSdk({
     errors["sdk/run"] = String(error?.message ?? error);
     wire = error?.wire ?? 0;
   }
+  // A write that threw has an unknown outcome, which a read that finds nothing cannot settle; so
+  // has any write of a driver that left no receipt. The names the cases may have written are then
+  // unknown creates: say so in the journal, so that absence at A2 does not settle them.
+  const receipt = outcome?.receipt;
+  const writesKnown = receipt ? !unknownWrites(receipt) : false;
+  if (journaledNames && !writesKnown)
+    journal.append({ type: "names", phase: "after", outcome: "unknown", names: journaledNames });
   let documents;
   try {
     documents = await sweepDocuments({ client: native, project: target.project, run, accounts });
@@ -336,11 +341,8 @@ export async function recordSdk({
   } catch (error) {
     accountReport = { complete: false, error: String(error?.message ?? error) };
   }
-  const receipt = outcome?.receipt;
   if (receipt?.thrown) errors["sdk/driver"] = String(receipt.thrown);
   const clientsClosed = receipt ? receipt.teardown.every((t) => t.closed) : false;
-  // A write that threw has an unknown outcome, which a read that finds nothing cannot settle.
-  const writesKnown = receipt ? !unknownWrites(receipt) : false;
   const total = productionRequests();
   journal.append({ type: "end", productionRequests: total });
   return {

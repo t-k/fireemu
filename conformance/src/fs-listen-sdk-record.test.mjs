@@ -1241,3 +1241,112 @@ test("the journaled names are marked as to be created, before the driver, with t
   // must not read a missing answer line as an unknown create.
   assert.equal(names.maybe, true);
 });
+
+// ---- the A2 read-back of an SDK run whose writes are not known ----
+
+/** Runs recordSdk with a fake accounts API and returns the journal lines it wrote. */
+async function sdkJournal(runDriverImpl) {
+  const lines = [];
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = async (url, init) => ({
+    status: 200,
+    json: async () =>
+      url.endsWith("/accounts") ? { localId: `u-${JSON.parse(init.body).email}` } : {},
+  });
+  try {
+    await recordSdk({
+      target: PROD,
+      run: "r1",
+      journal: { append: (record) => lines.push(record), close() {} },
+      preflightImpl: async () => {},
+      runDriverImpl,
+      makeNative: () => emptyNative(),
+    });
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+  return lines;
+}
+
+const a2 = async (lines) => {
+  const { readbackJournal } = await import("./fs-listen/journal.mjs");
+  const text = [{ type: "run", runId: "r1", kind: "sdk", project: "p", envelopeId: "E" }, ...lines]
+    .map((line) => JSON.stringify(line))
+    .join("\n");
+  return readbackJournal({
+    text,
+    client: { missing: async (names) => names.map((name) => ({ name, exists: false })) },
+    accountClient: { lookup: async () => [] },
+  });
+};
+
+const THREW = {
+  receipt: {
+    thrown: null,
+    cleanup: { complete: true },
+    teardown: [{ client: "primary", closed: true }],
+    cases: [
+      {
+        caseId: "FS-LISTEN-SDK-101",
+        comparedFields: null,
+        observed: [],
+        failures: ["step-threw:unavailable"],
+        invariantViolations: [],
+      },
+    ],
+  },
+  wire: 5,
+  connections: 1,
+};
+
+test("an SDK run whose writes are not known cannot be settled at A2 by finding its names absent: they are unconfirmed", async () => {
+  const lines = await sdkJournal(async () => THREW);
+  const after = lines.find((line) => line.type === "names" && line.phase === "after");
+  assert.equal(after.outcome, "unknown");
+  assert.notEqual(after.maybe, true);
+  const before = lines.find((line) => line.type === "names" && line.phase === "before");
+  assert.deepEqual(after.names, before.names, "every name the cases may have written");
+  assert.ok(after.names.length > 0 && after.names.every((n) => n.op === "create"));
+  assert.ok(lines.indexOf(after) < lines.findIndex((l) => l.type === "end"), "before the end line");
+  const report = await a2(lines);
+  assert.equal(report.clean, false);
+  assert.deepEqual(report.unconfirmed.toSorted(), before.names.map((n) => n.name).toSorted());
+});
+
+test("an SDK run whose driver died without a receipt, or threw, is just as unknown", async () => {
+  const dead = await sdkJournal(async () => {
+    throw new Error("driver died");
+  });
+  assert.equal(dead.filter((l) => l.type === "names" && l.phase === "after").length, 1);
+  assert.equal((await a2(dead)).clean, false);
+  const noReceipt = await sdkJournal(async () => ({ wire: 1, connections: 1 }));
+  assert.equal(noReceipt.filter((l) => l.type === "names" && l.phase === "after").length, 1);
+  assert.equal((await a2(noReceipt)).clean, false);
+});
+
+test("an SDK run whose writes are all known leaves its may-exist names unjournaled as answers, and settles at A2 when they are absent", async () => {
+  const lines = await sdkJournal(async () => OKDRIVER);
+  assert.equal(lines.filter((l) => l.type === "names" && l.phase === "after").length, 0);
+  const report = await a2(lines);
+  assert.equal(report.clean, true);
+  assert.deepEqual(report.unconfirmed, []);
+});
+
+test("an SDK run that stops before any name is journaled journals no answer for names either", async () => {
+  const lines = [];
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = async () => ({ status: 400, json: async () => ({}) });
+  try {
+    await recordSdk({
+      target: PROD,
+      run: "r1",
+      journal: { append: (record) => lines.push(record), close() {} },
+      preflightImpl: async () => {},
+      runDriverImpl: async () => OKDRIVER,
+      makeNative: () => emptyNative(),
+    });
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+  assert.equal(lines.filter((l) => l.type === "names").length, 0);
+});

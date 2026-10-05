@@ -31,6 +31,7 @@ const request = (headers) => ({
 const row = (id, answer) => ({
   id,
   state: "response-persisted",
+  status: 200,
   bodyBase64: Buffer.from(JSON.stringify(answer)).toString("base64"),
 });
 
@@ -114,6 +115,25 @@ function runDir(overrides = {}) {
       id: "run-1-schedOkV2-us-central1",
       state: "before-send",
       dispatchAt: "2026-10-05T08:41:05.109Z",
+    },
+    // the creates of the extra REST jobs: the request, and the answer (a job with its effective retryConfig, or a 400)
+    {
+      id: "create-extra-zero",
+      state: "before-send",
+      json: { name: "projects/p/locations/l/jobs/fe-sd-run-zero", retryConfig: { retryCount: 0 } },
+    },
+    row("create-extra-zero", {
+      name: "projects/p/locations/l/jobs/fe-sd-run-zero",
+      retryConfig: { retryCount: 0, minBackoffDuration: "5s", maxBackoffDuration: "3600s" },
+    }),
+    {
+      id: "create-extra-fraction",
+      state: "before-send",
+      json: { name: "x", retryConfig: { maxRetryDuration: "20.5s" } },
+    },
+    {
+      ...row("create-extra-fraction", { error: { code: 400, message: "nanos refused" } }),
+      status: 400,
     },
   ];
   writeFileSync(
@@ -334,6 +354,39 @@ test("a forced run whose request the journal does not hold is an error, not a gu
   });
   try {
     assert.throws(() => extract(dir), /no journal row for the forced run/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("each extra REST job is kept with its answer, the retryConfig it was asked for and the one the answer carries", () => {
+  const dir = runDir();
+  try {
+    const { extraJobs } = extract(dir);
+    assert.deepEqual(Object.keys(extraJobs).toSorted(), ["fraction", "zero"]);
+    assert.deepEqual(extraJobs.zero, {
+      status: 200,
+      message: null,
+      requested: { retryCount: 0 },
+      effective: { retryCount: 0, minBackoffDuration: "5s", maxBackoffDuration: "3600s" },
+    });
+    // a refusal has no job: no effective retryConfig, and the message is kept whole
+    assert.deepEqual(extraJobs.fraction, {
+      status: 400,
+      message: "nanos refused",
+      requested: { maxRetryDuration: "20.5s" },
+      effective: null,
+    });
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("a run with no extra job create has an empty extraJobs, and the recording date is the first frame's day", () => {
+  const dir = runDir();
+  try {
+    const digest = extract(dir);
+    assert.equal(digest.run.recordedOn, "2026-10-05");
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

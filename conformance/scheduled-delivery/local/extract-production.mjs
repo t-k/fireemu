@@ -101,16 +101,34 @@ export function extract(runDir) {
       });
   }
   for (const list of Object.values(attempts)) list.sort((a, b) => a.at - b.at);
+  // The extra REST jobs the recorder created: its request, and what the answer says (the job with the retryConfig
+  // Cloud Scheduler stored, which can differ from the request: a zero or an omitted value may be read back as a
+  // default), or the refusal's message.
+  const extraJobs = {};
+  for (const sent of rows.filter(
+    (r) => r.id.startsWith("create-extra-") && r.state === "before-send",
+  )) {
+    const key = sent.id.replace(/^create-extra-/, "");
+    const answered = rows.find((r) => r.id === sent.id && r.state === "response-persisted");
+    const answer = answered ? body(answered) : null;
+    extraJobs[key] = {
+      status: answered?.status ?? null,
+      message: answer?.error?.message ?? null,
+      requested: sent.json?.retryConfig ?? null,
+      effective: answered?.status === 200 ? (answer?.retryConfig ?? null) : null,
+    };
+  }
   const digest = {
     schemaVersion: 1,
     run: {
       id: result.runId,
       project: "fireemu-oracle-sbx",
       region: "us-central1",
-      recordedOn: "2026-10-05",
+      recordedOn: new Date(origin).toISOString().slice(0, 10),
     },
     jobs: result.jobs,
     extraAnswers: result.extraAnswers,
+    extraJobs,
     passes: result.passes.map((p) => ({
       number: p.number,
       forced: p.forced.map((f) => f.id.replace(result.runId, "<runId>")),

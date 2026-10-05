@@ -1252,7 +1252,7 @@ test("a comparison without the per-profile status of every row is refused, even 
   const good = comparisonOf();
   const strip = (change) => ({ ...good, rows: [change(good.rows[0]), ...good.rows.slice(1)] });
   const missing = /no per-profile status: the comparison is from a comparator without/;
-  asRefusal(() => checkComparison(strip(({ profiles, ...row }) => row)), missing);
+  asRefusal(() => checkComparison(strip(({ profiles: _profiles, ...row }) => row)), missing);
   asRefusal(
     () => checkComparison(strip((row) => ({ ...row, profiles: { strict: row.profiles.strict } }))),
     missing,
@@ -1606,7 +1606,7 @@ test("S2: a production-side fault counts against both profiles; one attributed t
   );
   // no production-side entry at all, or a bad one
   const noProduction = /has no production-side status/;
-  asRefusal(() => checkComparison(row(({ production, ...r }) => r)), noProduction);
+  asRefusal(() => checkComparison(row(({ production: _production, ...r }) => r)), noProduction);
   asRefusal(
     () => checkComparison(row((r) => ({ ...r, production: { status: "PASS", reasons: [] } }))),
     noProduction,

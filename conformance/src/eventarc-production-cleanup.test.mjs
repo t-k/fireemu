@@ -600,18 +600,26 @@ test("what the ledger says of a channel: nothing for a name it never saw, and ea
     deletePending: true,
     deleteDone: false,
   });
-  // A later definite answer resolves an unknown deletion, but not an unknown creation: the creation is
-  // settled only by its own operation (or an own 2xx read), never by another request.
+  // A later definite answer resolves neither an unknown creation nor an unknown deletion: each is settled only
+  // by its own operation (or an own 2xx read for a creation), never by another request (stage C: a plain
+  // unknown deletion is sticky; one that named an operation is settled by that operation: `unknown@op`, `ok@op`).
   assert.deepEqual(
     ledgerFacts({ creates: ["unknown", "ok"], deletes: ["unknown", "ok"], open: [] }),
     {
       mayExist: true,
       createPending: true,
       deleteSent: true,
-      deletePending: false,
-      deleteDone: true,
+      deletePending: true,
+      deleteDone: false,
     },
   );
+  assert.deepEqual(ledgerFacts({ creates: ["ok"], deletes: ["unknown@op", "ok@op"], open: [] }), {
+    mayExist: true,
+    createPending: false,
+    deleteSent: true,
+    deletePending: false,
+    deleteDone: true,
+  });
   assert.deepEqual(ledgerFacts({ creates: ["unknown@op", "ok@op"], deletes: [], open: [] }), {
     mayExist: true,
     createPending: false,

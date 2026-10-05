@@ -63,6 +63,12 @@ const MODES = {
         (_, i) => `projects/${PROJECT}/locations/us-central1/channels/other-${i}`,
       ),
     },
+  "operations still running, an in-flight duplicate creation answered with a running operation, a second deletion started":
+    {
+      doneAfter: OPERATION_READS_MAX,
+      busy: "accept",
+      acceptAnyId: true,
+    },
   "operations still running when the next request is sent, a second deletion refused": {
     doneAfter: OPERATION_READS_MAX,
     busy: "reject",

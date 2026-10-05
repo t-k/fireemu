@@ -171,9 +171,12 @@ export function createWorld({
     if (createAnswer === "unknown-appears") return { status: 503, body: {}, unknown: true };
     const parentName = `projects/${parent[1]}/locations/${parent[2]}`;
     if (busy === "off" || createAnswer === "invisible")
-      return reply(200, operation(parentName, {}));
+      return reply(200, operation(parentName, { response: { name } }));
     phases.set(name, "creating");
-    return reply(200, operation(parentName, { onDone: () => phases.delete(name) }));
+    return reply(
+      200,
+      operation(parentName, { response: { name }, onDone: () => phases.delete(name) }),
+    );
   };
   const publish = (call, name) => {
     const events = call.body?.events;
@@ -278,7 +281,10 @@ export function createWorld({
         return reply(200, {
           name: bare,
           ...(done
-            ? { done: true, ...(state.error ? { error: state.error } : { response: {} }) }
+            ? {
+                done: true,
+                ...(state.error ? { error: state.error } : { response: state.response ?? {} }),
+              }
             : { done: false }),
         });
       }

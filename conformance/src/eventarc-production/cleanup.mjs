@@ -68,8 +68,6 @@ async function settle({ client, name, sleep, attempts }) {
   return { done: false, last };
 }
 
-const lastIndex = (kinds, kind) => kinds.lastIndexOf(kind);
-
 /** A ledger kind is `<kind>` or `<kind>@<operation>` (the operation of the request it answers). */
 const parseKind = (kind) => {
   const at = kind.indexOf("@");
@@ -134,23 +132,34 @@ export function ledgerFacts(item) {
     ...item.deletes,
     ...item.open.filter((action) => action === "delete").map(() => "unknown"),
   ]
-    .map((kind) => parseKind(kind).base)
-    .filter((base) => base !== UNSENT);
+    .map(parseKind)
+    .filter(({ base }) => base !== UNSENT);
   const confirmed = creates.some(({ base }) => base === "confirmed");
   const createdOk = confirmed || creates.some(({ base }) => base === "ok");
   const createPending =
     !confirmed &&
     (creates.some(({ base, operation }) => base === "unknown" && operation === null) ||
       unsettledOperations(creates).length > 0);
-  const deletePending =
-    lastIndex(deletes, "unknown") > Math.max(lastIndex(deletes, "ok"), lastIndex(deletes, "error"));
+  // A deletion is settled by its own operation, never by the kind or the position of another request's answer
+  // (stage C: `channel-busy` has two outstanding at once). An answer that names an operation (`unknown@<op>`)
+  // is pending until a settlement of that operation (`ok@<op>`, `error@<op>`, `conflict@<op>`); a plain
+  // unknown answer (a 5xx, a timeout: no operation) is sticky, and only the later run's read-back closes it.
+  const settledDeletes = new Set(
+    deletes
+      .filter(({ base, operation }) => operation !== null && DEFINITE.has(base))
+      .map(({ operation }) => operation),
+  );
+  const deletePending = deletes.some(
+    ({ base, operation }) =>
+      base === "unknown" && (operation === null || !settledDeletes.has(operation)),
+  );
   return {
     mayExist: createdOk || createPending,
     createPending,
     deleteSent: deletes.length > 0,
     deletePending,
-    // A deletion whose operation was read done without an error, and no unknown deletion after it.
-    deleteDone: deletes.includes("ok") && !deletePending,
+    // A deletion whose operation was read done without an error, and no deletion still pending.
+    deleteDone: !deletePending && deletes.some(({ base }) => base === "ok"),
   };
 }
 

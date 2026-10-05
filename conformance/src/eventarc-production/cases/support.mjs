@@ -182,16 +182,26 @@ export async function listPages(ctx, project, location, pageSize, pages) {
 }
 
 /**
- * Waits for the operation a creation named and settles each name the creation may have made: the first with
- * the wait itself, the others with the same last read (a request that names two channels is settled for
- * both by its own operation, and by nothing else).
+ * Waits for the operation a request that may have created one of several channels named, and settles each name
+ * by that operation (and by nothing else). When the operation is done without an error and its response names
+ * the channel it created (the location and the ID are compared; the project may be spelled by number), only that
+ * name is a creation and every other name is settled as `error@<operation>`: the operation is positive evidence
+ * of what was made, so the name that was not made is not a confirmed creation that reads 404, and no A2 is forced
+ * for it. A response that names none of the names, or none, settles every name by the operation as a whole.
  */
 export async function settleCreation(ctx, reply, names) {
-  const [first, ...rest] = names;
-  const last = await waitOperation(ctx, "eventarc", reply, {
-    settle: { name: first, action: "create" },
-  });
-  if (reply?.ok && typeof reply.body?.name === "string")
-    for (const name of rest) ctx.client.settleOperation(name, "create", last, reply.body.name);
+  const last = await waitOperation(ctx, "eventarc", reply);
+  if (!(reply?.ok && typeof reply.body?.name === "string")) return last;
+  const operation = reply.body.name;
+  const done = last?.ok && last.body?.done === true && last.body?.error === undefined;
+  const created = done ? last.body?.response?.name : undefined;
+  const tail = (name) => name.split("/").slice(2).join("/");
+  const made =
+    typeof created === "string" ? names.filter((name) => tail(name) === tail(created)) : [];
+  for (const name of names) {
+    if (made.length > 0 && !made.includes(name))
+      ctx.client.settleAs(name, "create", "error", operation);
+    else ctx.client.settleOperation(name, "create", last, operation);
+  }
   return last;
 }

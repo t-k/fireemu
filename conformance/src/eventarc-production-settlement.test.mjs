@@ -407,14 +407,21 @@ function specification(creates, deletes) {
     ([base, op]) => base === "unknown" && (op === null || !resolvedOperations.has(op)),
   );
   const createdOk = parsed.some(([base]) => base === "ok" || base === "confirmed");
-  const bases = deletes.map((kind) => parse(kind)[0]);
-  const last = (kind) => bases.lastIndexOf(kind);
+  const removals = deletes.map(parse);
+  const settledDeletes = new Set(
+    removals
+      .filter(([base, op]) => op !== null && ["ok", "conflict", "error"].includes(base))
+      .map(([, op]) => op),
+  );
+  const deletePending = removals.some(
+    ([base, op]) => base === "unknown" && (op === null || !settledDeletes.has(op)),
+  );
   return {
     mayExist: createdOk || (!confirmed && open),
     createPending: !confirmed && open,
     deleteSent: deletes.length > 0,
-    deletePending: last("unknown") > Math.max(last("ok"), last("error")),
-    deleteDone: bases.includes("ok") && !(last("unknown") > Math.max(last("ok"), last("error"))),
+    deletePending,
+    deleteDone: !deletePending && removals.some(([base]) => base === "ok"),
   };
 }
 

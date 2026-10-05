@@ -11,7 +11,7 @@ import { cloudEvent, isRecordedNotFound, requireChannel, waitOperation } from ".
 export const channelBusy = {
   id: "channel-busy",
   short: "bz",
-  requests: 66,
+  requests: 76,
   async run(ctx) {
     const c = ctx.client;
     const name = ctx.channel("a");

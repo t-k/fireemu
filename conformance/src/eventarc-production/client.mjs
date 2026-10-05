@@ -193,6 +193,13 @@ export function createClient({
     ...methods(),
     with: (options) => methods(options),
     /**
+     * Writes into the ledger that the operation `operationName` settled this request as `kind` (`ok`, `conflict`
+     * or `error`), for a name the operation's own response shows it did not make: the kind carries the
+     * operation's name, so it settles that request and no other.
+     */
+    settleAs: (name, action, kind, operationName) =>
+      ledger.answered({ name, action, transport: "rest", kind: `${kind}@${operationName}` }),
+    /**
      * Writes into the ledger what the last read of the operation of a creation or deletion says: `ok`
      * when it is done without an error, `conflict` for ALREADY_EXISTS, `error` for another error, and
      * `unknown` when it was not read as done. The kind carries the name of the operation (`ok@<operation>`),

@@ -158,7 +158,7 @@ test("bad arguments are refused, and the numbers have their values", () => {
   assert.equal(parseArgs([...base, "--max-requests", "1"]).maxRequests, 1);
   assert.equal(parseArgs([...base, "--project-number", "1".repeat(20)]).usageProject.length, 20);
   assert.throws(() => parseArgs([...base, "--project-number", "1".repeat(21)]), /digits/);
-  assert.equal(DEFAULT_MAX_REQUESTS, 690);
+  assert.equal(DEFAULT_MAX_REQUESTS, 700);
   assert.equal(CLEANUP_BUDGET, 850);
 });
 

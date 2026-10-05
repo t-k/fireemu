@@ -564,7 +564,7 @@ test("channel-busy: a second deletion is sent only after a 2xx that names its op
   );
 });
 
-test("channel-ids: a variant the service accepts is settled for both names by its own operation, before any cleanup", async () => {
+test("channel-ids: a variant the service accepts is settled for both names by its own operation, before any cleanup: the channel its response names is created, the other is not", async () => {
   // The ledger at the moment the cleanup starts: the case itself has settled both names (the cleanup would
   // otherwise settle a creation that is still pending, by reading its operation).
   let atCleanup = null;
@@ -578,11 +578,15 @@ test("channel-ids: a variant the service accepts is settled for both names by it
     },
   );
   assert.ok(atCleanup, "the cleanup started");
-  for (const key of ["mm-a", "mm-b"]) {
+  // The model creates the channel the body names (`mm-b`) and its operation's response says so.
+  for (const [key, settled] of [
+    ["mm-a", "error@"],
+    ["mm-b", "ok@"],
+  ]) {
     const name = `${PARENT}/channels/${PREFIX}id-${key}`;
     const kinds = atCleanup.get(name) ?? [];
     assert.ok(
-      kinds.some((kind) => kind.startsWith("ok@")),
+      kinds.some((kind) => kind.startsWith(settled)),
       `${name}: ${kinds.join()}`,
     );
   }

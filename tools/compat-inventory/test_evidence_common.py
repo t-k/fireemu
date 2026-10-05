@@ -78,6 +78,7 @@ FILES = {
     "crates/a/build.rs": "build script",
     "crates/a/src/lib.rs": "library",
     "crates/a/src/lib_tests.rs": "a test-only module that stays bound (it may be inline code)",
+    "crates/a/src/service/tests/mod.rs": "a directory named tests inside src stays bound too",
     "crates/a/proto/x.proto": "proto",
     "crates/a/tests/it.rs": "integration test",
     "crates/a/tests/fixtures/data.json": "fixture",
@@ -111,6 +112,7 @@ def test_the_binary_inputs_are_the_runtime_inputs_without_the_test_only_trees(tm
     assert binary_inputs(root) == {name: value for name, value in runtime_inputs(root).items() if name not in TEST_ONLY}
     # a source file that only looks like a test stays bound: it may be inline code of the binary
     assert "crates/a/src/lib_tests.rs" in binary_inputs(root)
+    assert "crates/a/src/service/tests/mod.rs" in binary_inputs(root)
 
 
 def test_a_change_to_a_test_tree_does_not_move_the_binary_inputs_and_any_other_change_does(tmp_path):

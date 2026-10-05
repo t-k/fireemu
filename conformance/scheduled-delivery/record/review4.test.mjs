@@ -355,3 +355,11 @@ test("near misses: names an own read showed, a failure without such a write, and
   });
   assert.ok(timeout.result.unconfirmedCreates.every((c) => c.class === "cli-timeout"));
 });
+
+test("unknownWrites: the status boundaries are exact", () => {
+  const flagged = (status) => unknownWrites(line("POST", SCHED, status)).length === 1;
+  for (const status of [100, 199, 300, 301, 399, 500, 599])
+    assert.equal(flagged(status), true, String(status));
+  for (const status of [200, 201, 299, 400, 404, 499])
+    assert.equal(flagged(status), false, String(status));
+});

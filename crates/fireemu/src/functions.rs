@@ -2880,6 +2880,7 @@ async fn start_codebase(
             apply_default_time_zone(&mut manifest_json, tz);
         }
         let mut manifest = parse_manifest(&manifest_json)?;
+        check_scheduler_refusals_for(cfg.profile, &manifest)?;
         serve_blocking_events_for(cfg.profile, &mut manifest);
         // Before anything is served: every export the runner could not serve is either named in a
         // refusal or printed, one line each.
@@ -2920,6 +2921,30 @@ async fn start_codebase(
         runner.kill_now();
     }
     configured
+}
+
+/// Refuses, under the strict profile, a scheduled function whose job production Cloud Scheduler refuses to create,
+/// with production's own message: `retryCount` 5 or more (HTTP 400 `INVALID_ARGUMENT`, recorded by the production
+/// deploy `e0ec2f416f5ea7e8`, 2026-10-05). The official emulator never creates a Scheduler job and reads no retry
+/// configuration of a schedule trigger, so the emulator profile refuses nothing here.
+fn check_scheduler_refusals_for(
+    profile: CompatibilityProfile,
+    manifest: &fireemu_core_functions::manifest::FunctionManifest,
+) -> Result<(), String> {
+    if !refuses_scheduler_limits(profile) {
+        return Ok(());
+    }
+    match manifest.scheduler_refusals().first() {
+        None => Ok(()),
+        Some((function, why)) => Err(format!(
+            "manifest: function {function:?}: Cloud Scheduler refuses this schedule's job (HTTP 400 INVALID_ARGUMENT): {why}"
+        )),
+    }
+}
+
+/// Whether `profile` refuses what production Cloud Scheduler refuses: the strict profile does, as production does.
+pub(crate) const fn refuses_scheduler_limits(profile: CompatibilityProfile) -> bool {
+    matches!(profile, CompatibilityProfile::Strict)
 }
 
 /// Leaves in service the blocking functions `profile` serves: the strict profile serves every
@@ -6674,6 +6699,100 @@ mod tests {
         let error =
             super::check_blocking_auth_selections(&manifest, &explicit("missing")).unwrap_err();
         assert!(error.contains("missing"), "{error}");
+    }
+
+    /// The production refusal of a Cloud Scheduler job whose `retryCount` is 5 or more (run
+    /// `e0ec2f416f5ea7e8`, HTTP 400 `INVALID_ARGUMENT`): the strict profile refuses with production's
+    /// text, the emulator profile (the official emulator creates no Scheduler job) refuses nothing.
+    #[test]
+    fn strict_refuses_a_schedule_whose_retry_count_cloud_scheduler_refuses() {
+        const TEXT: &str = "invalid retry count. The retry_count must be a positive integer less than 5: invalid argument";
+        // The declaration of the recorded run, with its refused count of 6, for each generation.
+        for generation in [1, 2] {
+            let manifest = parse_manifest(&json!({"functions": [
+                {"name": "ok", "generation": generation, "trigger": {"type": "schedule", "schedule": "every 1 minutes"}},
+                {"name": "schedRetryV2", "generation": generation, "trigger": {"type": "schedule", "schedule": "every 5 minutes", "timeZone": "Asia/Tokyo",
+                    "retryConfig": {"retryCount": 6, "minBackoffSeconds": 4, "maxBackoffSeconds": 50, "maxDoublings": 2}}},
+            ]}))
+            .unwrap();
+            assert_eq!(
+                super::check_scheduler_refusals_for(super::CompatibilityProfile::Strict, &manifest),
+                Err(format!(
+                    "manifest: function \"schedRetryV2\": Cloud Scheduler refuses this schedule's job (HTTP 400 INVALID_ARGUMENT): {TEXT}"
+                )),
+                "generation {generation}"
+            );
+            assert_eq!(
+                super::check_scheduler_refusals_for(
+                    super::CompatibilityProfile::Emulator,
+                    &manifest
+                ),
+                Ok(()),
+                "the emulator profile completes what the official emulator completes"
+            );
+        }
+    }
+
+    /// Near misses: the largest accepted count, no retry configuration, a count of zero and other
+    /// triggers are accepted by both profiles; the message's own boundary (5) is refused by strict.
+    #[test]
+    fn the_scheduler_retry_count_boundary_is_four() {
+        let with = |count: serde_json::Value| {
+            parse_manifest(&json!({"functions": [
+                {"name": "job", "trigger": {"type": "schedule", "schedule": "every 1 minutes", "retryConfig": {"retryCount": count}}},
+            ]}))
+            .unwrap()
+        };
+        for profile in [
+            super::CompatibilityProfile::Strict,
+            super::CompatibilityProfile::Emulator,
+        ] {
+            for count in [json!(0), json!(1), json!(4)] {
+                assert_eq!(
+                    super::check_scheduler_refusals_for(profile, &with(count.clone())),
+                    Ok(()),
+                    "{count}"
+                );
+            }
+        }
+        for count in [json!(5), json!(6), json!(1000)] {
+            assert!(
+                super::check_scheduler_refusals_for(
+                    super::CompatibilityProfile::Strict,
+                    &with(count.clone())
+                )
+                .is_err(),
+                "{count}"
+            );
+            assert!(
+                super::check_scheduler_refusals_for(
+                    super::CompatibilityProfile::Emulator,
+                    &with(count.clone())
+                )
+                .is_ok(),
+                "{count}"
+            );
+        }
+        let other = parse_manifest(&json!({"functions": [
+            {"name": "h", "trigger": {"type": "http"}},
+            {"name": "plain", "trigger": {"type": "schedule", "schedule": "every 1 minutes"}},
+        ]}))
+        .unwrap();
+        assert_eq!(
+            super::check_scheduler_refusals_for(super::CompatibilityProfile::Strict, &other),
+            Ok(())
+        );
+    }
+
+    /// The profile switch itself: only strict refuses what Cloud Scheduler refuses.
+    #[test]
+    fn only_the_strict_profile_refuses_scheduler_limits() {
+        assert!(super::refuses_scheduler_limits(
+            super::CompatibilityProfile::Strict
+        ));
+        assert!(!super::refuses_scheduler_limits(
+            super::CompatibilityProfile::Emulator
+        ));
     }
 
     /// The emulator profile keeps the email and SMS functions in the ignored inventory, with

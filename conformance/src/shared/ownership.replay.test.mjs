@@ -302,6 +302,15 @@ describe("replays of recorded production answers", () => {
     }
   });
 
+  it("extract.py's decisions pass their own tests (synthetic captures, no private record needed)", () => {
+    const run = spawnSync("python3", ["-m", "unittest", "test_extract"], {
+      cwd: fileURLToPath(FIXTURES),
+      encoding: "utf8",
+      env: { ...process.env, PYTHONDONTWRITEBYTECODE: "1" },
+    });
+    assert.equal(run.status, 0, run.stderr);
+  });
+
   const runs = privateRunsDir();
   const skip = runs === null ? "docs.local/runs is not here (a clean checkout or CI)" : false;
 

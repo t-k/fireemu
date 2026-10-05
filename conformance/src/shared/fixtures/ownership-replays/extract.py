@@ -15,12 +15,14 @@ that is not complete (its last line is not the run-end note, or its request coun
 refused, as is a gRPC code the table below does not know.
 
 Usage: extract.py <docs.local/runs directory> <output directory>
+
+The decisions are plain functions (pubsub_ops, scheduler_ops, grpc_status, shows_name); test_extract.py
+runs them on small synthetic captures. Importing this module reads nothing.
 """
 import base64, hashlib, json, re, sys, urllib.parse
 from pathlib import Path
 
-RUNS = Path(sys.argv[1])
-OUT = Path(sys.argv[2])
+RUNS = OUT = None  # set by main()
 # The canonical gRPC code to HTTP status mapping (google.rpc.Code).
 GRPC = {"OK": 200, "CANCELLED": 499, "UNKNOWN": 500, "INVALID_ARGUMENT": 400,
         "DEADLINE_EXCEEDED": 504, "NOT_FOUND": 404, "ALREADY_EXISTS": 409,
@@ -68,10 +70,9 @@ def write(name, source, ops, note, skipped=None):
 
 
 # ---- PUBSUB (run 148026092d56, production, REST and gRPC) ----
-def pubsub():
-    source = "pubsub-production-20261005-r1/capture-148026092d56.jsonl"
-    rows = [json.loads(line) for line in (RUNS / source).read_text().splitlines()]
-    last = rows[-1]
+def pubsub_ops(rows, source="the capture"):
+    """The ledger operations of a complete capture, and the number of list requests skipped."""
+    last = rows[-1] if rows else {}
     requests = [r for r in rows if "n" in r]
     if last.get("note") != "run-end" or last.get("requests") != len(requests):
         sys.exit(f"extract.py: {source} is not a complete capture (no run-end note, or a short count)")
@@ -103,9 +104,17 @@ def pubsub():
         if response.get("unknown"):
             entry["transportError"] = response.get("error", "unknown")
         body = response.get("body")
-        if m.group(1) == "get" and 200 <= (status or 0) < 300 and isinstance(body, dict) and "name" in body:
+        if m.group(1) == "get" and status is not None and 200 <= status < 300 \
+                and isinstance(body, dict) and "name" in body:
             entry["bodyName"] = short(body["name"])
         ops.append(entry)
+    return ops, collections
+
+
+def pubsub():
+    source = "pubsub-production-20261005-r1/capture-148026092d56.jsonl"
+    rows = [json.loads(line) for line in (RUNS / source).read_text().splitlines()]
+    ops, collections = pubsub_ops(rows, source)
     return write("pubsub-r1.json", source, ops,
                  "Pub/Sub lifecycle, name probes and cleanup, REST and gRPC, the complete run; one real create timed out (a transport error) and was still there 40 minutes later.",
                  {"collectionGets": collections})
@@ -113,8 +122,12 @@ def pubsub():
 
 # ---- calendar (Cloud Scheduler) and the scheduled shape run ----
 def journal(path):
+    return journal_rows(path.read_text().splitlines())
+
+
+def journal_rows(lines):
     before, out = {}, []
-    for line in path.read_text().splitlines():
+    for line in lines:
         r = json.loads(line)
         if r["state"] == "before-send":
             before[r["id"]] = r
@@ -133,11 +146,11 @@ def shows_name(b, r):
     return isinstance(body, dict) and isinstance(body.get("name"), str) and body["name"].rsplit("/", 1)[-1] == asked
 
 
-def scheduler():
+def scheduler_ops(shape_entries, calendar_entries):
+    """Operations of the scheduled shape run and of calendar v5, from their journal entries."""
     ops = []
-    shape = "codex-lane8/shape-96db1cb7ca5fcb35/requests.jsonl"
     names = {"topic": "topics/shape", "subscription": "subscriptions/shape", "job": "jobs/shape"}
-    for rid, b, r in journal(RUNS / shape):
+    for rid, b, r in shape_entries:
         m = re.match(r"(create|delete)-(topic|subscription|job)$", rid)
         if m:
             ops.append({"action": m.group(1), "transport": "rest", "name": names[m.group(2)],
@@ -149,13 +162,19 @@ def scheduler():
             if 200 <= r["status"] < 300 and shows_name(b, r):
                 op["bodyName"] = op["name"]
             ops.append(op)
-    cal = "codex-lane8/calendar-5a73ba99b7014cfd/requests.jsonl"
-    for rid, b, r in journal(RUNS / cal):
+    for rid, b, r in calendar_entries:
         m = re.match(r"(?:(c\d\d)-)?(create|delete)(?:-(topic))?$", rid)
         if m:
             name = "topics/calendar" if m.group(3) else f"jobs/{m.group(1)}"
             ops.append({"action": m.group(2), "transport": "rest", "name": name,
                         "status": r["status"], "bodyReadable": True})
+    return ops
+
+
+def scheduler():
+    shape = "codex-lane8/shape-96db1cb7ca5fcb35/requests.jsonl"
+    cal = "codex-lane8/calendar-5a73ba99b7014cfd/requests.jsonl"
+    ops = scheduler_ops(journal(RUNS / shape), journal(RUNS / cal))
     return write("scheduler.json", [shape, cal], ops,
                  "Scheduled shape run (delete of a paused job answered 409) and calendar v5 (two creates answered 400).")
 
@@ -200,6 +219,12 @@ def fe():
                  "FE v5 storage objects, topics and the control bucket: creates 200, deletes 204 or 200, one delete of a missing object 404.")
 
 
-if __name__ == "__main__":
+def main(argv):
+    global RUNS, OUT
+    RUNS, OUT = Path(argv[1]), Path(argv[2])
     OUT.mkdir(parents=True, exist_ok=True)
     pubsub(); scheduler(); fe()
+
+
+if __name__ == "__main__":
+    main(sys.argv)

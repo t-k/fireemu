@@ -52,22 +52,54 @@ test("the environment, Node and firebase-tools checks", () => {
   assert.equal(firebaseToolsProblems(undefined).length, 1);
 });
 
-test("the CLI runs at most once per action, the dry run included, and counts each attempt", () => {
+const ATTEMPT_KEYS = {
+  dryRun: 0,
+  deploy: 0,
+  deployStorageFinalizedV1: 0,
+  deployStorageDeletedV1: 0,
+  deployStorageMetadataUpdatedV1: 0,
+  deployStorageArchivedV1: 0,
+  delete: 0,
+};
+
+test("the CLI runs at most once per action and once per Gen1 Storage function, the dry run included, and counts each attempt", () => {
   const { attempts, count } = cliAttemptCounter();
-  assert.deepEqual(attempts, { dryRun: 0, deploy: 0, delete: 0 });
-  for (const [action, key] of [
-    ["dry-run", "dryRun"],
-    ["deploy", "deploy"],
-    ["delete", "delete"],
+  assert.deepEqual(attempts, ATTEMPT_KEYS);
+  for (const [action, name, key] of [
+    ["dry-run", undefined, "dryRun"],
+    ["deploy", undefined, "deploy"],
+    ["deploy-one", "storageFinalizedV1", "deployStorageFinalizedV1"],
+    ["deploy-one", "storageDeletedV1", "deployStorageDeletedV1"],
+    ["deploy-one", "storageMetadataUpdatedV1", "deployStorageMetadataUpdatedV1"],
+    ["deploy-one", "storageArchivedV1", "deployStorageArchivedV1"],
+    ["delete", undefined, "delete"],
   ]) {
-    count(action);
-    assert.equal(attempts[key], 1, action);
-    assert.throws(() => count(action), /already run once/, action);
-    assert.equal(attempts[key], 1, `${action} is not counted twice`);
+    count(action, name);
+    assert.equal(attempts[key], 1, `${action} ${name ?? ""}`);
+    assert.throws(() => count(action, name), /already run once/, `${action} ${name ?? ""}`);
+    assert.equal(attempts[key], 1, `${action} ${name ?? ""} is not counted twice`);
   }
-  assert.deepEqual(attempts, { dryRun: 1, deploy: 1, delete: 1 });
+  assert.deepEqual(attempts, Object.fromEntries(Object.keys(ATTEMPT_KEYS).map((key) => [key, 1])));
+  // 7 CLI runs in all: the dry run, the main deploy, four single deploys, the delete
+  assert.equal(
+    Object.values(attempts).reduce((a, b) => a + b, 0),
+    7,
+  );
   assert.throws(() => cliAttemptCounter().count("dryRun"), /unknown CLI action/);
   assert.throws(() => cliAttemptCounter().count("functions:delete"), /unknown CLI action/);
+  // a single deploy names one of the four, nothing else
+  for (const name of [
+    undefined,
+    "fsCreatedV1",
+    "storageFinalizedV2",
+    "storageFinalizedV1,storageDeletedV1",
+  ])
+    assert.throws(() => cliAttemptCounter().count("deploy-one", name), /unknown CLI action/);
+  // the other actions take no name
+  assert.throws(
+    () => cliAttemptCounter().count("deploy", "storageFinalizedV1"),
+    /unknown CLI action/,
+  );
 });
 
 test("the arguments are strict", () => {
@@ -111,7 +143,7 @@ function arrange({ approve = true } = {}) {
   writeFileSync(
     ownerPath,
     approve
-      ? `- 2026-10-04 | ${ENVELOPE_TOPIC} | envelopeId=E1; project=fireemu-oracle-events; maxRequests=520; cliMax=3; reserveUsd=4.00; retries=none | オーナー | x\n- 2026-10-04 | ${TOPIC} | decision=APPROVE; envelopeId=E1; packetSha256=${packetSha256}; harnessSha256=${digest}; sourceCommit=${head} | Claude（委任 | y\n`
+      ? `- 2026-10-04 | ${ENVELOPE_TOPIC} | envelopeId=E1; project=fireemu-oracle-events; maxRequests=520; cliMax=7; reserveUsd=4.00; retries=none | オーナー | x\n- 2026-10-04 | ${TOPIC} | decision=APPROVE; envelopeId=E1; packetSha256=${packetSha256}; harnessSha256=${digest}; sourceCommit=${head} | Claude（委任 | y\n`
       : "",
   );
   let t = Date.parse("2026-10-04T12:00:00Z");
@@ -239,7 +271,15 @@ test("record runs end to end: lock, started line, the run, SHA256SUMS, finished 
   const { deps, argv, cliCalls, ledgerPath, dir } = arrange();
   const result = await main(argv("record"), deps);
   assert.equal(result.outcome, "recorded", JSON.stringify(result));
-  assert.deepEqual(cliCalls, ["dry-run", "deploy", "delete"]);
+  assert.deepEqual(cliCalls, [
+    "dry-run",
+    "deploy",
+    "deploy-storageFinalizedV1",
+    "deploy-storageDeletedV1",
+    "deploy-storageMetadataUpdatedV1",
+    "deploy-storageArchivedV1",
+    "delete",
+  ]);
   const rows = readFileSync(ledgerPath, "utf8")
     .trim()
     .split("\n")
@@ -250,8 +290,11 @@ test("record runs end to end: lock, started line, the run, SHA256SUMS, finished 
   );
   assert.equal(rows.at(-1).outcome, "recorded");
   assert.equal(rows.at(-1).lockRetained, false);
-  assert.deepEqual(rows.at(-1).cliAttempts, { dryRun: 1, deploy: 1, delete: 1 });
-  assert.equal(rows.at(-2).cliMax, 3);
+  assert.deepEqual(
+    rows.at(-1).cliAttempts,
+    Object.fromEntries(Object.keys(ATTEMPT_KEYS).map((key) => [key, 1])),
+  );
+  assert.equal(rows.at(-2).cliMax, 7);
   assert.equal(existsSync(join(dir, "locks", "fireemu-oracle-events.lock")), false);
   assert.equal(statSync(join(result.runDir, "production-run.json")).mode & 0o077, 0);
   assert.ok(existsSync(join(result.runDir, "SHA256SUMS")));
@@ -279,7 +322,7 @@ test("a CLI dry run that fails stops the run with nothing written, and the ledge
   const last = JSON.parse(readFileSync(ledgerPath, "utf8").trim().split("\n").at(-1));
   assert.equal(last.outcome, "stopped-clean");
   assert.equal(last.lockRetained, false);
-  assert.deepEqual(last.cliAttempts, { dryRun: 1, deploy: 0, delete: 0 });
+  assert.deepEqual(last.cliAttempts, { ...ATTEMPT_KEYS, dryRun: 1 });
   assert.equal(existsSync(join(dir, "locks", "fireemu-oracle-events.lock")), false);
   assert.ok(
     world.requests.every(

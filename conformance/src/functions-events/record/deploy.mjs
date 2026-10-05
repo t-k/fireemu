@@ -20,15 +20,17 @@ import {
 import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
 
-import { formalHandlers, buildCanaryBatchCli } from "../canary-cli.mjs";
+import { buildCanaryBatchCli, formalHandlers, mainDeployHandlers } from "../canary-cli.mjs";
 import { HANDLERS } from "./logs.mjs";
 import { PRIMARY_BUCKET, PRIMARY_COLLECTION, PRIMARY_TOPIC, PROJECT, REGION } from "./script.mjs";
 
 export const DEPLOY_TIMEOUT_MS = 40 * 60 * 1000;
 export const DELETE_TIMEOUT_MS = 20 * 60 * 1000;
 export const DRY_RUN_TIMEOUT_MS = 10 * 60 * 1000;
+export const DEPLOY_ONE_TIMEOUT_MS = 20 * 60 * 1000;
 export const CLI_TIMEOUT_MS = {
   deploy: DEPLOY_TIMEOUT_MS,
+  "deploy-one": DEPLOY_ONE_TIMEOUT_MS,
   "dry-run": DRY_RUN_TIMEOUT_MS,
   delete: DELETE_TIMEOUT_MS,
 };
@@ -220,20 +222,34 @@ export function sourceProblems({ fixtureDir, node, directory }) {
   return regionProblems(manifest);
 }
 
-/** The CLI invocation (args, cwd, env) for deploy or delete of the formal set, from the reviewed helper. */
-export function cliPlan(action, { configHome, configPath, workDir, home, path }) {
-  // `dry-run` is the exact deploy command with `--dry-run` appended; the deploy carries `--force`
-  // (a deploy that retries a failed event is refused without it). The delete is unchanged.
-  if (!["deploy", "dry-run", "delete"].includes(action)) throw new Error("unknown CLI action");
-  return buildCanaryBatchCli(action === "dry-run" ? "deploy" : action, PROJECT, formalHandlers, {
-    configHome,
-    configPath,
-    workDir,
-    home,
-    path,
+/**
+ * The CLI invocation (args, cwd, env) from the reviewed helper. `dry-run` validates the whole set of 22 (the deploy command with
+ * `--dry-run` appended); `deploy` deploys the main set (the 18 functions that are not Gen1 Storage); `deploy-one` deploys exactly
+ * one of the four Gen1 Storage functions (`options.name`), one command each, after the main deploy (v7: v6's single deploy of
+ * all 22 failed three of the four, which contend on the bucket's notification configuration); `delete` deletes the 22.
+ * Deploys carry `--force` (a deploy that retries a failed event is refused without it); the delete is unchanged.
+ */
+export function cliPlan(action, { name, ...options }) {
+  if (!["deploy", "deploy-one", "dry-run", "delete"].includes(action))
+    throw new Error("unknown CLI action");
+  const common = {
+    configHome: options.configHome,
+    configPath: options.configPath,
+    workDir: options.workDir,
+    home: options.home,
+    path: options.path,
     captureMode: "stdout",
-    ...(action === "delete" ? {} : { force: true, dryRun: action === "dry-run" }),
-  });
+  };
+  if (action === "delete") return buildCanaryBatchCli("delete", PROJECT, formalHandlers, common);
+  if (action === "dry-run")
+    return buildCanaryBatchCli("deploy", PROJECT, formalHandlers, {
+      ...common,
+      force: true,
+      dryRun: true,
+    });
+  // `deploy-one` takes the name as given: the helper refuses everything but the four reviewed single functions
+  const names = action === "deploy-one" ? [name] : mainDeployHandlers;
+  return buildCanaryBatchCli("deploy", PROJECT, names, { ...common, force: true, dryRun: false });
 }
 
 /**

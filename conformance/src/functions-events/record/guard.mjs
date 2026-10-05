@@ -348,6 +348,24 @@ export const RULES = [
     "cloudfunctions.googleapis.com",
     `/v2${region}/operations/[A-Za-z0-9_-]{1,128}`,
   ),
+  // v7: the same for a Gen1 function the CLI delete left behind (the Gen1 Storage triggers contend on the bucket's metadata): the
+  // eleven Gen1 names of the run, case-exact, and the operation read the delete's answer names (`operations/<id>`, an id of
+  // base64 characters as the CLI's own debug log recorded, 159 of them; no project or region in the path).
+  rule(
+    "functions-v1-delete",
+    "DELETE",
+    "cloudfunctions.googleapis.com",
+    `/v1${region}/functions/(?:${HANDLERS.filter((h) => h.generation === 1)
+      .map((h) => h.name)
+      .join("|")})`,
+    { mutation: true },
+  ),
+  rule(
+    "functions-v1-operation-get",
+    "GET",
+    "cloudfunctions.googleapis.com",
+    "/v1/operations/[A-Za-z0-9_-]{1,256}",
+  ),
   rule("run-services-list", "GET", "run.googleapis.com", `/v2${region}/services`, {
     query: ["pageToken"],
   }),

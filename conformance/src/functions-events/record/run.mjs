@@ -4,6 +4,7 @@
 // ready, a signal, the request ceiling, and a guard refusal. After any of them, if something was
 // created, the cleanup still runs.
 
+import { gen1StorageDeployOrder } from "../canary-cli.mjs";
 import { PROPAGATION_WAIT_SECONDS, cliFailed as failed, waitReady } from "./deploy.mjs";
 import { runCleanup } from "./cleanup.mjs";
 import { listRequest, parseEntries } from "./logs.mjs";
@@ -98,7 +99,7 @@ export async function record({
     passes: [],
     frames: [],
     preflight: null,
-    deploy: { dryRun: null, cli: null, readiness: null },
+    deploy: { dryRun: null, cli: null, single: null, readiness: null },
     cleanup: null,
     capture: null,
     stops: [],
@@ -272,11 +273,32 @@ export async function record({
       log("deploy");
       ran.deployStarted = true;
       run.deploy.cli = await cli("deploy");
-      const cliFailed = failed(run.deploy.cli);
+      let deployFailed = failed(run.deploy.cli);
+      // v7: the four Gen1 Storage functions deploy one command each, one after the other, only after a main deploy that
+      // succeeded; the first single deploy that fails (exit code, a timeout, "N Functions Errored") stops the sequence, with no
+      // retry, and the cleanup runs. v6 deployed all 22 in one command and three of the four contended on the bucket.
+      run.deploy.single = [];
+      if (!deployFailed) {
+        for (const name of gen1StorageDeployOrder) {
+          if (signal.aborted) {
+            run.stops.push(`a stop signal arrived before the single deploy of ${name}`);
+            deployFailed = true;
+            break;
+          }
+          log(`deploy ${name}`);
+          const result = await cli("deploy-one", name);
+          run.deploy.single.push({ name, ...result });
+          if (failed(result)) {
+            run.stops.push(`the single deploy of ${name} failed; no retry, the cleanup runs`);
+            deployFailed = true;
+            break;
+          }
+        }
+      }
       run.deploy.readiness = await waitReady({
         transport,
         sleep,
-        polls: cliFailed ? 2 : undefined,
+        polls: deployFailed ? 2 : undefined,
         shouldStop: () => signal.aborted,
       });
     }

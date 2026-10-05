@@ -232,7 +232,7 @@ test("ledger 840: a Gen2 Firestore field map in another order is a MATCH, a diff
   const changed = rowById(compare(valued), "functions-events/firestore/create#new-document#v2");
   assert.equal(changed.status, "DIFF");
   assert.ok(
-    changed.reasons.some((r) => /^strict: value \$\.frame\.event\.data\.data\.count /.test(r)),
+    changed.reasons.some((r) => r.startsWith("strict: value $.frame.event.data.data.count ")),
     changed.reasons.join("; "),
   );
   assert.ok(!changed.reasons.some((r) => r.includes(": order ")));

@@ -239,7 +239,7 @@ test("regionProblems: a set region must be exactly us-central1, and an unset one
 
 // ---- the REST delete rules -----------------------------------------------------------------------
 
-test("the recorder's rules allow the REST delete of a Gen2 function of the run and the operation reads, nothing broader", () => {
+test("the recorder's rules allow the REST delete of a Gen2 function of the run and the operation reads, nothing broader (v7 also allows the Gen1 names under /v1, see the guard tests)", () => {
   const P = "fireemu-oracle-events";
   const fn = (region, name) =>
     `https://cloudfunctions.googleapis.com/v2/projects/${P}/locations/${region}/functions/${name}`;
@@ -261,7 +261,7 @@ test("the recorder's rules allow the REST delete of a Gen2 function of the run a
     fn("us-central1", "other"),
     `${fn("us-central1", "fsCreatedV2")}?force=true`,
     `${fn("us-central1", "fsCreatedV2")}/`,
-    `https://cloudfunctions.googleapis.com/v1/projects/${P}/locations/us-central1/functions/fsCreatedV1`,
+    `https://cloudfunctions.googleapis.com/v1/projects/${P}/locations/us-central1/functions/fsCreatedV2`,
     `https://cloudfunctions.googleapis.com/v2/projects/other/locations/us-central1/functions/fsCreatedV2`,
   ];
   for (const url of refused)
@@ -285,9 +285,12 @@ test("the recorder's rules allow the REST delete of a Gen2 function of the run a
     3,
     "the list, the delete and the operation read",
   );
-  assert.equal(
-    RULES.filter((r) => r.method === "DELETE" && r.host === "cloudfunctions.googleapis.com").length,
-    1,
+  assert.deepEqual(
+    RULES.filter((r) => r.method === "DELETE" && r.host === "cloudfunctions.googleapis.com").map(
+      (r) => r.name,
+    ),
+    ["functions-v2-delete", "functions-v1-delete"],
+    "v7: one delete rule for each generation, nothing else",
   );
 });
 

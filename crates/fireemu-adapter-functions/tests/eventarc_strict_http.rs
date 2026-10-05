@@ -81,6 +81,7 @@ async fn start_in(profile: Option<FunctionsHttpProfile>, project: &str) -> Liste
             catch_up: fireemu_adapter_functions::runtime::CatchUpPolicy::All,
             functions_host: None,
             subscription_naming: fireemu_adapter_functions::events::SubscriptionNaming::default(),
+            auth_context: fireemu_adapter_functions::events::AuthContextNaming::default(),
         },
         Arc::new(Mutex::new(VirtualClock::new(START))),
         Arc::new(runner),

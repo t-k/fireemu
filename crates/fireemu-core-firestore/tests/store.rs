@@ -1368,14 +1368,21 @@ fn a_filtered_query_locks_only_the_documents_that_match_its_filter() {
         .is_ok());
     assert!(s
         .commit(
-            &[set("rg/outside", &[("state", Value::String("still-out".into()))])],
+            &[set(
+                "rg/outside",
+                &[("state", Value::String("still-out".into()))]
+            )],
             None,
             t(3)
         )
         .is_ok());
     assert!(s.commit(&[delete_write("rg/outside")], None, t(3)).is_ok());
     assert!(s
-        .commit(&[set("rg/no-state", &[("other", Value::Integer(1))])], None, t(3))
+        .commit(
+            &[set("rg/no-state", &[("other", Value::Integer(1))])],
+            None,
+            t(3)
+        )
         .is_ok());
 }
 
@@ -1401,8 +1408,8 @@ fn an_unfiltered_query_and_an_unsupported_filter_still_lock_the_whole_collection
     ))
     .canonicalize()
     .unwrap();
-    let _txn = s.begin_transaction(false, t(0)).unwrap();
-    assert!(s.run_query_in_transaction(&_txn, &q).unwrap().is_empty());
+    let txn = s.begin_transaction(false, t(0)).unwrap();
+    assert!(s.run_query_in_transaction(&txn, &q).unwrap().is_empty());
     assert_refused(
         &mut s,
         &[set("rg/any", &[("state", Value::String("out".into()))])],
@@ -1435,7 +1442,11 @@ fn a_disjunction_locks_every_document_matching_either_side() {
         "right side",
     );
     assert!(s
-        .commit(&[set("rg/z", &[("state", Value::String("c".into()))])], None, t(3))
+        .commit(
+            &[set("rg/z", &[("state", Value::String("c".into()))])],
+            None,
+            t(3)
+        )
         .is_ok());
 }
 

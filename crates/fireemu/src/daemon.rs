@@ -330,10 +330,16 @@ fn blocking_auth_selection(
 /// sign-in without them; the emulator profile keeps the fixture `IdP` and ignores the keys.
 /// How long a writer held behind a read lock waits before it is refused, and whether the wait also runs on the virtual clock. Strict follows what production showed (20 s, counted
 /// on the virtual clock as well as the wall clock: see `STRICT_CONTENTION_WAIT`); the emulator profile keeps the 15 s wall-clock wait it has always had.
-const fn contention_for(profile: crate::config::CompatibilityProfile) -> (std::time::Duration, bool) {
+const fn contention_for(
+    profile: crate::config::CompatibilityProfile,
+) -> (std::time::Duration, bool) {
     match profile {
-        crate::config::CompatibilityProfile::Strict => (fireemu_adapter_grpc::local::STRICT_CONTENTION_WAIT, true),
-        crate::config::CompatibilityProfile::Emulator => (fireemu_adapter_grpc::local::DEFAULT_CONTENTION_WAIT, false),
+        crate::config::CompatibilityProfile::Strict => {
+            (fireemu_adapter_grpc::local::STRICT_CONTENTION_WAIT, true)
+        }
+        crate::config::CompatibilityProfile::Emulator => {
+            (fireemu_adapter_grpc::local::DEFAULT_CONTENTION_WAIT, false)
+        }
     }
 }
 
@@ -1860,11 +1866,18 @@ pub(super) fn run(options: Options, exec: Option<ExecPlan>) -> ExitCode {
 #[cfg(test)]
 mod tests {
     #[test]
-    fn the_strict_profile_waits_20_s_on_both_clocks_and_the_emulator_profile_15_s_on_the_wall_clock() {
+    fn the_strict_profile_waits_20_s_on_both_clocks_and_the_emulator_profile_15_s_on_the_wall_clock(
+    ) {
         use crate::config::CompatibilityProfile::{Emulator, Strict};
 
-        assert_eq!(super::contention_for(Strict), (std::time::Duration::from_secs(20), true));
-        assert_eq!(super::contention_for(Emulator), (std::time::Duration::from_secs(15), false));
+        assert_eq!(
+            super::contention_for(Strict),
+            (std::time::Duration::from_secs(20), true)
+        );
+        assert_eq!(
+            super::contention_for(Emulator),
+            (std::time::Duration::from_secs(15), false)
+        );
     }
 
     use std::sync::{Arc, Mutex};

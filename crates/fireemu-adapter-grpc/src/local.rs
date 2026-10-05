@@ -729,7 +729,10 @@ pub fn contention_expired(
 pub struct ContentionDeadline {
     started: std::time::Instant,
     wait: std::time::Duration,
-    virtual_clock: Option<(Arc<Mutex<VirtualClock>>, fireemu_core_types::time::LogicalInstant)>,
+    virtual_clock: Option<(
+        Arc<Mutex<VirtualClock>>,
+        fireemu_core_types::time::LogicalInstant,
+    )>,
 }
 
 impl ContentionDeadline {
@@ -738,7 +741,9 @@ impl ContentionDeadline {
     pub fn expired(&self) -> bool {
         let virtual_elapsed = self.virtual_clock.as_ref().map(|(clock, start)| {
             let now = clock.lock().map_or(*start, |clock| clock.now());
-            std::time::Duration::from_nanos(u64::try_from((now.as_nanos() - start.as_nanos()).max(0)).unwrap_or(u64::MAX))
+            std::time::Duration::from_nanos(
+                u64::try_from((now.as_nanos() - start.as_nanos()).max(0)).unwrap_or(u64::MAX),
+            )
         });
         contention_expired(self.started.elapsed(), virtual_elapsed, self.wait)
     }
@@ -1890,7 +1895,10 @@ impl LocalBackend {
             started: std::time::Instant::now(),
             wait: self.contention_wait,
             virtual_clock: self.virtual_contention.then(|| {
-                let start = self.clock.lock().map_or(fireemu_core_types::time::LogicalInstant::UNIX_EPOCH, |clock| clock.now());
+                let start = self.clock.lock().map_or(
+                    fireemu_core_types::time::LogicalInstant::UNIX_EPOCH,
+                    |clock| clock.now(),
+                );
                 (Arc::clone(&self.clock), start)
             }),
         }
@@ -6831,9 +6839,17 @@ mod lock_tests {
         assert!(contention_expired(Duration::from_secs(20), None, wait));
         // the virtual clock counts only when the wait follows it
         assert!(!contention_expired(Duration::ZERO, None, wait));
-        assert!(!contention_expired(Duration::ZERO, Some(Duration::from_millis(19_999)), wait));
+        assert!(!contention_expired(
+            Duration::ZERO,
+            Some(Duration::from_millis(19_999)),
+            wait
+        ));
         assert!(contention_expired(Duration::ZERO, Some(wait), wait));
-        assert!(contention_expired(Duration::from_secs(21), Some(Duration::ZERO), wait));
+        assert!(contention_expired(
+            Duration::from_secs(21),
+            Some(Duration::ZERO),
+            wait
+        ));
     }
 
     proptest::proptest! {
@@ -6859,7 +6875,11 @@ mod lock_tests {
         contention_backend_waiting(clock, strict, Duration::from_secs(20))
     }
 
-    fn contention_backend_waiting(clock: &Arc<Mutex<VirtualClock>>, strict: bool, wait: Duration) -> Arc<LocalBackend> {
+    fn contention_backend_waiting(
+        clock: &Arc<Mutex<VirtualClock>>,
+        strict: bool,
+        wait: Duration,
+    ) -> Arc<LocalBackend> {
         let backend = LocalBackend::new(backend().gateway.clone(), Arc::clone(clock), 7)
             .with_contention_wait(wait);
         Arc::new(if strict {
@@ -6870,14 +6890,18 @@ mod lock_tests {
     }
 
     fn pinned_clock() -> Arc<Mutex<VirtualClock>> {
-        Arc::new(Mutex::new(VirtualClock::new(LogicalInstant::from_unix_seconds(1_788_004_860))))
+        Arc::new(Mutex::new(VirtualClock::new(
+            LogicalInstant::from_unix_seconds(1_788_004_860),
+        )))
     }
 
     fn move_clock(clock: &Arc<Mutex<VirtualClock>>, seconds: i64) {
         clock
             .lock()
             .unwrap()
-            .advance(fireemu_core_types::time::LogicalDuration::from_seconds(seconds))
+            .advance(fireemu_core_types::time::LogicalDuration::from_seconds(
+                seconds,
+            ))
             .unwrap();
     }
 
@@ -6903,7 +6927,10 @@ mod lock_tests {
         let before = std::time::Instant::now();
         let wake = virtual_deadline.wake_at();
         let after = std::time::Instant::now();
-        assert!(wake >= before + VIRTUAL_CLOCK_POLL && wake <= after + VIRTUAL_CLOCK_POLL, "a poll from now");
+        assert!(
+            wake >= before + VIRTUAL_CLOCK_POLL && wake <= after + VIRTUAL_CLOCK_POLL,
+            "a poll from now"
+        );
         assert!(wake < virtual_deadline.started + virtual_deadline.wait);
         // near the end of the wall wait the wake never goes past it
         let mut late = virtual_deadline.clone();
@@ -6915,22 +6942,27 @@ mod lock_tests {
         crate::decode::parse_parent("projects/demo-app/databases/(default)/documents").unwrap()
     }
 
-    async fn contended_attempt(backend: &Arc<LocalBackend>) -> tokio::task::JoinHandle<Result<(), Status>> {
+    fn contended_attempt(
+        backend: &Arc<LocalBackend>,
+    ) -> tokio::task::JoinHandle<Result<(), Status>> {
         let waiting = Arc::clone(backend);
         tokio::spawn(async move {
             waiting
                 .retry_on_contention_async(&contention_parent(), None, &[], || {
-                    Err::<(), Status>(Status::aborted(fireemu_core_firestore::store::TOO_MUCH_CONTENTION))
+                    Err::<(), Status>(Status::aborted(
+                        fireemu_core_firestore::store::TOO_MUCH_CONTENTION,
+                    ))
                 })
                 .await
         })
     }
 
     #[tokio::test]
-    async fn the_async_wait_for_a_contended_writer_ends_on_the_strict_virtual_bound_and_not_before() {
+    async fn the_async_wait_for_a_contended_writer_ends_on_the_strict_virtual_bound_and_not_before()
+    {
         let clock = pinned_clock();
         let backend = contention_backend(&clock, true);
-        let attempt = contended_attempt(&backend).await;
+        let attempt = contended_attempt(&backend);
         tokio::time::sleep(Duration::from_millis(150)).await;
         move_clock(&clock, 19);
         tokio::time::sleep(Duration::from_millis(150)).await;
@@ -6949,7 +6981,7 @@ mod lock_tests {
         let clock = pinned_clock();
         // a short wall wait, so the blocking wait ends soon after the test does; it is far longer than the 450 ms the test looks for an answer
         let backend = contention_backend_waiting(&clock, false, Duration::from_millis(1500));
-        let attempt = contended_attempt(&backend).await;
+        let attempt = contended_attempt(&backend);
         tokio::time::sleep(Duration::from_millis(150)).await;
         move_clock(&clock, 100);
         tokio::time::sleep(Duration::from_millis(300)).await;
@@ -6989,11 +7021,16 @@ mod lock_tests {
         let status = backend
             .retry_on_contention(&contention_parent(), None, &[], || {
                 attempts.set(attempts.get() + 1);
-                Err::<(), Status>(Status::aborted(fireemu_core_firestore::store::TOO_MUCH_CONTENTION))
+                Err::<(), Status>(Status::aborted(
+                    fireemu_core_firestore::store::TOO_MUCH_CONTENTION,
+                ))
             })
             .unwrap_err();
         assert!(LocalBackend::is_contention(&status));
-        assert!(started.elapsed() >= Duration::from_millis(550), "waited out the wall bound");
+        assert!(
+            started.elapsed() >= Duration::from_millis(550),
+            "waited out the wall bound"
+        );
         // one attempt, one sleep until the bound: not an attempt per spin of the loop
         assert!(attempts.get() <= 3, "{} attempts", attempts.get());
     }
@@ -7003,10 +7040,7 @@ mod lock_tests {
     /// A transaction that holds the read lock on `contended/doc`, and a thread that writes that document and reports how its commit ended.
     fn hold_and_write(
         backend: &Arc<LocalBackend>,
-    ) -> (
-        Vec<u8>,
-        std::sync::mpsc::Receiver<Result<(), Status>>,
-    ) {
+    ) -> (Vec<u8>, std::sync::mpsc::Receiver<Result<(), Status>>) {
         let document = format!("{CONTENTION_DATABASE}/documents/contended/doc");
         let transaction = backend
             .begin_transaction(&pb::BeginTransactionRequest {
@@ -7018,9 +7052,11 @@ mod lock_tests {
             .get_document(
                 &pb::GetDocumentRequest {
                     name: document.clone(),
-                    consistency_selector: Some(pb::get_document_request::ConsistencySelector::Transaction(
-                        transaction.clone(),
-                    )),
+                    consistency_selector: Some(
+                        pb::get_document_request::ConsistencySelector::Transaction(
+                            transaction.clone(),
+                        ),
+                    ),
                     ..Default::default()
                 },
                 &crate::rules::allow_all_reads,
@@ -7055,7 +7091,10 @@ mod lock_tests {
         // still held while the clock has moved less than the wait
         std::thread::sleep(Duration::from_millis(100));
         move_clock(&clock, 19);
-        assert!(writer.recv_timeout(Duration::from_millis(300)).is_err(), "held");
+        assert!(
+            writer.recv_timeout(Duration::from_millis(300)).is_err(),
+            "held"
+        );
         move_clock(&clock, 2);
         let status = writer
             .recv_timeout(Duration::from_secs(5))
@@ -7065,13 +7104,17 @@ mod lock_tests {
     }
 
     #[test]
-    fn a_held_writer_under_the_emulator_profile_waits_for_the_release_whatever_the_virtual_clock_does() {
+    fn a_held_writer_under_the_emulator_profile_waits_for_the_release_whatever_the_virtual_clock_does(
+    ) {
         let clock = pinned_clock();
         let backend = contention_backend(&clock, false);
         let (holder, writer) = hold_and_write(&backend);
         std::thread::sleep(Duration::from_millis(100));
         move_clock(&clock, 100);
-        assert!(writer.recv_timeout(Duration::from_millis(400)).is_err(), "still held");
+        assert!(
+            writer.recv_timeout(Duration::from_millis(400)).is_err(),
+            "still held"
+        );
         backend
             .rollback(&pb::RollbackRequest {
                 database: CONTENTION_DATABASE.to_owned(),

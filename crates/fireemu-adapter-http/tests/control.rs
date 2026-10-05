@@ -775,7 +775,10 @@ fn moving_the_clock_does_not_start_a_new_reset_epoch() {
     let before = barrier.epoch();
     for (action, body) in [
         ("clock:advance", json!({"seconds": 1})),
-        ("clock:advanceTo", json!({"instant": "2031-01-01T00:00:00Z"})),
+        (
+            "clock:advanceTo",
+            json!({"instant": "2031-01-01T00:00:00Z"}),
+        ),
     ] {
         let response = handle(
             &control,

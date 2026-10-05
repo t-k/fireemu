@@ -19,6 +19,7 @@ use fireemu_core_functions::manifest::{
 };
 use fireemu_core_functions::manifest::{DocumentEvent, FunctionGeneration, ObjectEvent};
 use fireemu_core_session::clock::VirtualClock;
+use fireemu_core_storage::etag::production_etag;
 use fireemu_core_storage::name::{BucketName, ObjectName};
 use fireemu_core_storage::store::{NewMetadata, Precondition, StorageEvent, StorageState};
 use fireemu_core_types::ids::SessionId;
@@ -2753,7 +2754,7 @@ fn a_firestore_create_event_matches_the_recorded_production_delivery() {
 /// The frames a production 1st and 2nd gen Cloud Storage onFinalize handler printed for one object
 /// create (recorded 2026-10-01). Each field of the `CloudEvent` the runtime builds for an object
 /// with the same bytes, name and times is compared with the recorded one; the `etag` and the
-/// `generation` forms are known divergences of the Storage surface, pinned here.
+/// `generation` forms are the known divergences of the Storage surface, pinned here.
 #[test]
 fn a_storage_finalize_event_matches_the_recorded_production_delivery() {
     let fixture: serde_json::Value = serde_json::from_str(include_str!(
@@ -2786,9 +2787,8 @@ fn a_storage_finalize_event_matches_the_recorded_production_delivery() {
         assert_eq!(event[key], gen2[key], "{key}");
     }
     // The CloudEvent carries the recorded members: the framework adds `context` and `object` on
-    // the way to a handler. Two known divergences: the delivery's `traceparent` (the runtime
-    // sends none) and `datacontenttype` (the runtime sets `application/json`; production's
-    // Storage event carries none, as the recorded `eventKeys` and the null member show).
+    // the way to a handler. One known divergence: the delivery's `traceparent` (the runtime sends
+    // none). Production's Storage event carries no `datacontenttype`, nor does the runtime's.
     let mut recorded_keys: Vec<String> = gen2["eventKeys"]
         .as_array()
         .unwrap()
@@ -2796,13 +2796,12 @@ fn a_storage_finalize_event_matches_the_recorded_production_delivery() {
         .map(|key| key.as_str().unwrap().to_owned())
         .filter(|key| !["context", "object", "traceparent"].contains(&key.as_str()))
         .collect();
-    recorded_keys.push("datacontenttype".to_owned());
     recorded_keys.sort();
     let mut local_keys: Vec<String> = event.as_object().unwrap().keys().cloned().collect();
     local_keys.sort();
     assert_eq!(local_keys, recorded_keys);
     assert!(gen2["datacontenttype"].is_null());
-    assert_eq!(event["datacontenttype"], "application/json");
+    assert!(event.get("datacontenttype").is_none());
     assert_eq!(event["bucket"], gen2["extensionAttributes"]["bucket"]);
     // The event time is the object's creation instant with the microseconds production prints,
     // not the moment the runtime admitted the event.
@@ -2859,10 +2858,15 @@ fn a_storage_finalize_event_matches_the_recorded_production_delivery() {
         .as_str()
         .unwrap()
         .contains(&format!("generation={}", meta.generation)));
-    // Known divergence: production's etag is the base64 of the protobuf of the generation and
-    // the metageneration (`CLuI7vG3mJcDEAE=`); the local one is the quoted `<generation>-<n>`.
+    // Production's etag is the base64 of the protobuf of the generation and the metageneration
+    // (`CLuI7vG3mJcDEAE=`); the runtime encodes the same two numbers, its own generation here.
     assert_eq!(recorded["etag"], "CLuI7vG3mJcDEAE=");
-    assert_eq!(local["etag"], format!("\"{}-1\"", meta.generation));
+    let recorded_generation: u64 = recorded["generation"].as_str().unwrap().parse().unwrap();
+    assert_eq!(production_etag(recorded_generation, 1), recorded["etag"]);
+    assert_eq!(
+        local["etag"],
+        production_etag(meta.generation, meta.metageneration)
+    );
 }
 
 /// A Storage delivery's runner frame carries the instant the runtime admitted the event as

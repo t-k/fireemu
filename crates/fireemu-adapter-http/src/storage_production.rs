@@ -277,29 +277,7 @@ fn reflect_origin(shape: &Shape, response: &mut StorageResponse) {
     }
 }
 
-/// An object's `etag` as production writes it: the standard base64 of a protobuf message with the
-/// generation as field 1 and the metageneration as field 2, both varints (recorded, lean-v4: the
-/// generation 1790789164648913 at metageneration 2 is `CNGTm8DplpcDEAI=`, at 3 `CNGTm8DplpcDEAM=`).
-#[must_use]
-pub fn production_etag(generation: u64, metageneration: u64) -> String {
-    fn varint(mut value: u64, out: &mut Vec<u8>) {
-        // A 64-bit value takes at most ten bytes, so at most nine continuation bytes precede the
-        // last; the bound keeps a broken shift from growing the buffer without end.
-        for _ in 0..9 {
-            if value < 0x80 {
-                break;
-            }
-            out.push(u8::try_from(value & 0x7f).unwrap_or(0) | 0x80);
-            value >>= 7;
-        }
-        out.push(u8::try_from(value).unwrap_or(0));
-    }
-    let mut message = vec![0x08];
-    varint(generation, &mut message);
-    message.push(0x10);
-    varint(metageneration, &mut message);
-    fireemu_core_storage::hash::base64(&message)
-}
+pub use fireemu_core_storage::etag::production_etag;
 
 /// Rewrites the `etag` of every object resource in `value` (an object, a list of objects or a
 /// rewrite response) to production's.
@@ -1271,46 +1249,6 @@ mod tests {
         assert_eq!(header(&answered, "cache-control"), Some(PRIVATE));
         assert_eq!(header(&answered, "pragma"), None);
         assert_eq!(header(&answered, "content-disposition"), None);
-    }
-
-    #[test]
-    fn the_etag_is_the_protobuf_of_generation_and_metageneration() {
-        // Recorded, lean-v4: the resource of tokens.bin after create_token and delete_token.
-        assert_eq!(
-            production_etag(1_790_789_164_648_913, 2),
-            "CNGTm8DplpcDEAI="
-        );
-        assert_eq!(
-            production_etag(1_790_789_164_648_913, 3),
-            "CNGTm8DplpcDEAM="
-        );
-        assert_eq!(production_etag(1, 1), "CAEQAQ==");
-    }
-
-    #[test]
-    fn the_etag_varints_hold_at_every_length_up_to_ten_bytes() {
-        // Values on either side of each seven-bit boundary and both ends of the 64-bit range,
-        // computed with an independent encoder.
-        for (generation, metageneration, expected) in [
-            (127, 128, "CH8QgAE="),
-            (16_383, 16_384, "CP9/EICAAQ=="),
-            // One more byte at each power of 128: lengths 4 to 9 of the generation.
-            (1_u64 << 21, 1, "CICAgAEQAQ=="),
-            (1_u64 << 28, 1, "CICAgIABEAE="),
-            (1_u64 << 35, 1, "CICAgICAARAB"),
-            (1_u64 << 42, 1, "CICAgICAgAEQAQ=="),
-            (1_u64 << 49, 1, "CICAgICAgIABEAE="),
-            (1_u64 << 56, 1, "CICAgICAgICAARAB"),
-            (1_u64 << 63, 2, "CICAgICAgICAgAEQAg=="),
-            (u64::MAX, 1, "CP///////////wEQAQ=="),
-            (1, u64::MAX, "CAEQ////////////AQ=="),
-        ] {
-            assert_eq!(
-                production_etag(generation, metageneration),
-                expected,
-                "{generation} {metageneration}"
-            );
-        }
     }
 
     #[test]

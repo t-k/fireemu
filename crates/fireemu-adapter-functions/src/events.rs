@@ -1,7 +1,7 @@
 //! `CloudEvents` JSON for Firestore document changes, Storage object events and scheduled
 //! runs, in the shapes the `firebase-functions` v2 SDK decodes with
 //! `datacontenttype: application/json` (the SDK's Firestore JSON path requires it and removes
-//! it before a handler runs; a production Storage event carries none, a known divergence).
+//! it before a handler runs; a production Storage event carries none, and neither does ours).
 
 use fireemu_adapter_grpc::encode::encode_document;
 use fireemu_adapter_grpc::rest::json::{document_to_json, shorten_fraction};
@@ -12,6 +12,7 @@ use fireemu_core_functions::event::{
     storage_attributes, with_auth_context,
 };
 use fireemu_core_functions::manifest::{AuthEvent, DocumentEvent, ObjectEvent};
+use fireemu_core_storage::etag::production_etag;
 use fireemu_core_storage::store::ObjectMetadata;
 use fireemu_core_types::time::LogicalInstant;
 use serde_json::{json, Map, Value};
@@ -238,7 +239,7 @@ pub fn object_json(m: &ObjectMetadata) -> Value {
         "size": m.size.to_string(),
         "md5Hash": m.md5_base64(),
         "crc32c": m.crc32c_base64(),
-        "etag": m.etag(),
+        "etag": production_etag(m.generation, m.metageneration),
         "timeCreated": object_time(m.time_created),
         "updated": object_time(m.updated),
         "timeStorageClassUpdated": object_time(m.time_created),
@@ -299,7 +300,6 @@ pub fn storage_event(
         "subject": attrs.subject,
         "type": attrs.event_type,
         "time": storage_time(kind, object, time),
-        "datacontenttype": "application/json",
         "data": object_json(object),
     });
     for (k, v) in attrs.extensions {
@@ -496,7 +496,9 @@ pub fn schedule_event(
 
 #[cfg(test)]
 mod tests {
-    use super::{event_id_uuid, firestore_time, object_json, storage_event_id, storage_time};
+    use super::{
+        event_id_uuid, firestore_time, object_json, storage_event, storage_event_id, storage_time,
+    };
     use fireemu_core_functions::manifest::ObjectEvent;
     use fireemu_core_storage::name::{BucketName, ObjectName};
     use fireemu_core_storage::store::{NewMetadata, ObjectMetadata, Precondition, StorageState};
@@ -702,6 +704,54 @@ mod tests {
 
     const SECOND: i128 = 1_790_844_566 * 1_000_000_000;
 
+    /// A Storage `CloudEvent` carries no `datacontenttype`, in either profile (FE v5 production run
+    /// functions-events-formal-20261004T182904Z-a9621bfae74fe9bc, frames 6ac29fb7000987a59af4b7f6,
+    /// 6ac29fd70001a0e4d85cfd12 and 6ac2a0a80000b3d27b4b1db3: the recorded `eventKeys` lack it and
+    /// the printed member is null). The Firestore SDK path needs one, so the other events keep it.
+    #[test]
+    fn a_storage_event_carries_no_datacontenttype_whatever_its_kind() {
+        let object = object_created_at(SECOND);
+        for kind in [
+            ObjectEvent::Finalized,
+            ObjectEvent::Deleted,
+            ObjectEvent::MetadataUpdated,
+            ObjectEvent::Archived,
+        ] {
+            let event = storage_event("42-1", kind, &object, LogicalInstant::from_nanos(SECOND));
+            assert!(event.get("datacontenttype").is_none(), "{kind:?}: {event}");
+            // The other members the recording lists are all there.
+            for key in [
+                "specversion",
+                "id",
+                "source",
+                "subject",
+                "type",
+                "time",
+                "data",
+                "bucket",
+            ] {
+                assert!(event.get(key).is_some(), "{kind:?} {key}");
+            }
+        }
+    }
+
+    /// The object resource's `etag` is production's protobuf form, not `"<generation>-<n>"`
+    /// (FE v5 frame 6ac29fb70006ad918ea2a73d: generation 1791139765427541 at metageneration 1 is
+    /// `CNW62MuDoZcDEAE=`, sixteen characters in both the 1st and the 2nd gen frames).
+    #[test]
+    fn the_object_resource_etag_is_the_production_protobuf_of_its_generation() {
+        let mut object = object_created_at(SECOND);
+        object.generation = 1_791_139_765_427_541;
+        object.metageneration = 1;
+        assert_eq!(object_json(&object)["etag"], "CNW62MuDoZcDEAE=");
+        object.metageneration = 2;
+        assert_eq!(
+            object_json(&object)["etag"],
+            fireemu_core_storage::etag::production_etag(1_791_139_765_427_541, 2)
+        );
+        assert_eq!(object_json(&object)["etag"].as_str().unwrap().len(), 16);
+    }
+
     #[test]
     fn storage_times_cut_at_the_boundaries_of_the_calendar_and_the_epoch() {
         // (instant in nanoseconds since the epoch, finalize CloudEvent time, object resource time)
@@ -855,6 +905,18 @@ mod tests {
                 prop_assert_ne!(
                     storage_event_id(&format!("{session}-{n}")),
                     storage_event_id(&format!("{session}-{m}"))
+                );
+            }
+
+            #[test]
+            fn the_object_resource_etag_is_always_the_production_etag_of_the_generations(generation in any::<u64>(), metageneration in any::<u64>()) {
+                let mut object = object_created_at(SECOND);
+                object.generation = generation;
+                object.metageneration = metageneration;
+                let json = object_json(&object);
+                prop_assert_eq!(
+                    json["etag"].as_str().unwrap(),
+                    fireemu_core_storage::etag::production_etag(generation, metageneration)
                 );
             }
 

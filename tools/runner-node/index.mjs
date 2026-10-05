@@ -1063,6 +1063,30 @@ function millisecondTimestamp(time) {
   return Number.isNaN(parsed.getTime()) ? time : parsed.toISOString();
 }
 
+// The members of a 2nd gen Storage event's `data` in the order production hands them over (recorded,
+// FE v5 production run functions-events-formal-20261004T182904Z-a9621bfae74fe9bc: kind, id, selfLink,
+// name, bucket, generation, metageneration, contentType, timeCreated, updated, [timeDeleted],
+// storageClass, timeStorageClassUpdated, size, md5Hash, mediaLink, [metadata], crc32c, etag; the order
+// of all 44 recorded v2 frames is in tests/fixtures/production-storage-v5-v2-member-orders.json).
+// The runtime's JSON lists members by name; a member the recordings never showed follows the recorded
+// ones in name order.
+const STORAGE_OBJECT_MEMBERS = [
+  "kind", "id", "selfLink", "name", "bucket", "generation", "metageneration", "contentType",
+  "timeCreated", "updated", "timeDeleted", "storageClass", "timeStorageClassUpdated", "size", "md5Hash",
+  "mediaLink", "metadata", "crc32c", "etag",
+];
+function storageObjectInRecordedOrder(data) {
+  if (data === null || typeof data !== "object" || Array.isArray(data)) return data;
+  const ordered = {};
+  for (const key of STORAGE_OBJECT_MEMBERS) {
+    if (Object.hasOwn(data, key)) ordered[key] = data[key];
+  }
+  for (const key of Object.keys(data).sort()) {
+    if (!Object.hasOwn(ordered, key)) ordered[key] = data[key];
+  }
+  return ordered;
+}
+
 function v1Context(msg) {
   const event = msg.event;
   switch (msg.trigger) {
@@ -1113,9 +1137,11 @@ function v1Context(msg) {
         }[event.type],
         // The official emulator's legacy storage event resource: no generation suffix, and
         // a `type` member (its createLegacyEventRequestBody).
+        // Members in the order production hands them over (recorded, FE v5, 2026-10-04: name,
+        // service, type; the order is observable through Object.keys and JSON.stringify).
         resource: {
-          service: "storage.googleapis.com",
           name: `projects/_/buckets/${o.bucket}/objects/${o.name}`,
+          service: "storage.googleapis.com",
           type: "storage#object",
         },
         params: {},
@@ -1448,6 +1474,8 @@ async function invoke(functions, manifest, msg) {
           await fn(writtenFirestoreEvent(msg.event));
           return;
         case "storage":
+          await fn({ ...msg.event, data: storageObjectInRecordedOrder(msg.event.data) });
+          return;
         case "pubsub":
         // A custom event reaches the handler as the CloudEvent itself, exactly as the official
         // Eventarc emulator POSTs it to the functions emulator.

@@ -4,8 +4,11 @@
 //! job of a function declared with `retryCount: 6`; Cloud Scheduler answered HTTP 400 `INVALID_ARGUMENT` with the
 //! message pinned here. Only the count 6 was observed; the boundary at 5 is the message's own statement.
 
+use fireemu_core_functions::cron::Schedule;
 use fireemu_core_functions::manifest::{
-    ScheduleRetryConfig, SCHEDULER_MAX_RETRY_COUNT, SCHEDULER_RETRY_COUNT_REFUSAL,
+    ConsumeAppCheckToken, FunctionGeneration, FunctionManifest, FunctionSpec, PlatformOptions,
+    ScheduleRetryConfig, Trigger, DEFAULT_REGION, DEFAULT_TIMEOUT_SECONDS,
+    SCHEDULER_MAX_RETRY_COUNT, SCHEDULER_RETRY_COUNT_REFUSAL,
 };
 use proptest::prelude::*;
 
@@ -77,4 +80,75 @@ proptest! {
             prop_assert_eq!(why, RECORDED);
         }
     }
+}
+
+fn function(name: &str, generation: FunctionGeneration, trigger: Trigger) -> FunctionSpec {
+    FunctionSpec {
+        name: name.to_owned(),
+        region: DEFAULT_REGION.to_owned(),
+        entry_point: name.to_owned(),
+        trigger,
+        timeout_seconds: DEFAULT_TIMEOUT_SECONDS,
+        retry: false,
+        generation,
+        concurrency: None,
+        platform_options: PlatformOptions::default(),
+    }
+}
+
+fn http(callable: bool) -> Trigger {
+    Trigger::Http {
+        callable,
+        enforce_app_check: false,
+        consume_app_check_token: ConsumeAppCheckToken::Undetermined,
+    }
+}
+
+fn scheduled(name: &str, generation: FunctionGeneration, retry_count: u32) -> FunctionSpec {
+    function(
+        name,
+        generation,
+        Trigger::Schedule {
+            schedule: Schedule::parse("every 5 minutes").unwrap(),
+            time_zone: None,
+            retry: with_count(retry_count),
+        },
+    )
+}
+
+#[test]
+fn a_manifest_lists_each_refused_schedule_by_name_in_order_for_both_generations() {
+    let manifest = FunctionManifest {
+        functions: vec![
+            scheduled("accepted", FunctionGeneration::Second, 4),
+            scheduled("refusedSecond", FunctionGeneration::Second, 6),
+            function("other", FunctionGeneration::First, http(false)),
+            scheduled("zero", FunctionGeneration::First, 0),
+            scheduled("refusedFirst", FunctionGeneration::First, 5),
+        ],
+        ignored: vec![],
+    };
+    assert_eq!(
+        manifest.scheduler_refusals(),
+        vec![("refusedSecond", RECORDED), ("refusedFirst", RECORDED)]
+    );
+}
+
+#[test]
+fn a_manifest_of_accepted_schedules_and_other_triggers_has_no_refusal() {
+    let manifest = FunctionManifest {
+        functions: vec![
+            scheduled("a", FunctionGeneration::Second, 4),
+            scheduled("b", FunctionGeneration::First, 0),
+            function("c", FunctionGeneration::Second, http(true)),
+        ],
+        ignored: vec![],
+    };
+    assert!(manifest.scheduler_refusals().is_empty());
+    assert!(FunctionManifest {
+        functions: vec![],
+        ignored: vec![]
+    }
+    .scheduler_refusals()
+    .is_empty());
 }

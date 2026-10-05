@@ -38,7 +38,13 @@ function transport(base, extra = {}) {
   return { rest, lines, budget };
 }
 const get = (rest, extra = {}) =>
-  rest.request({ label: { case: "c", step: "01" }, op: "getChannel", method: "GET", path: "/v1/x", ...extra });
+  rest.request({
+    label: { case: "c", step: "01" },
+    op: "getChannel",
+    method: "GET",
+    path: "/v1/x",
+    ...extra,
+  });
 
 test("the raw bytes of an answer are captured as base64 with their length, whatever their layout", async (t) => {
   // Pretty-printed with two-space indentation, a non-ASCII character, and a final newline.
@@ -126,10 +132,23 @@ test("every credential mode sends what its name says, and no capture line carrie
   assert.equal(auth[6], "Bearer ya29.scoped-secret-value");
   assert.deepEqual(
     lines.map((line) => line.tokenMode),
-    ["default", "none", "invalid", "ya29-garbage", "jwt-garbage", "jwt-expired-unsigned", "wrong-scope"],
+    [
+      "default",
+      "none",
+      "invalid",
+      "ya29-garbage",
+      "jwt-garbage",
+      "jwt-expired-unsigned",
+      "wrong-scope",
+    ],
   );
   const text = JSON.stringify(lines);
-  for (const secret of ["the-default-token-value", "scoped-secret-value", "authorization", "Bearer"])
+  for (const secret of [
+    "the-default-token-value",
+    "scoped-secret-value",
+    "authorization",
+    "Bearer",
+  ])
     assert.equal(text.includes(secret), false, secret);
   assert.deepEqual(Object.keys(TOKEN_MODES).toSorted(), [
     "invalid",
@@ -216,8 +235,20 @@ test("a body is sent as JSON with its content type, and a request without a body
 
 test("the base must be an origin: a path, a missing scheme and a non-string are refused", () => {
   const make = (base) => () =>
-    createRawRest({ base, budget: createBudget(1), capture: createCapture({ journal: { write() {} } }) });
-  for (const base of ["http://127.0.0.1:1/path", "127.0.0.1:1", "ftp://host", "", undefined, 5, null])
+    createRawRest({
+      base,
+      budget: createBudget(1),
+      capture: createCapture({ journal: { write() {} } }),
+    });
+  for (const base of [
+    "http://127.0.0.1:1/path",
+    "127.0.0.1:1",
+    "ftp://host",
+    "",
+    undefined,
+    5,
+    null,
+  ])
     assert.throws(make(base), /must be an origin/, String(base));
   assert.doesNotThrow(make("https://eventarc.googleapis.com"));
   assert.doesNotThrow(make("http://127.0.0.1:1"));
@@ -236,8 +267,14 @@ test("a labelled bearer needs a label of 1 to 40 lower-case characters, digits a
       /unknown credential mode/,
       String(label),
     );
-  await assert.rejects(() => get(rest, { token: { label: "ok", bearer: "" } }), /unknown credential mode/);
-  await assert.rejects(() => get(rest, { token: { label: "ok", bearer: 5 } }), /unknown credential mode/);
+  await assert.rejects(
+    () => get(rest, { token: { label: "ok", bearer: "" } }),
+    /unknown credential mode/,
+  );
+  await assert.rejects(
+    () => get(rest, { token: { label: "ok", bearer: 5 } }),
+    /unknown credential mode/,
+  );
   await assert.rejects(() => get(rest, { token: null }), /unknown credential mode/);
   assert.equal(budget.used(), used, "a refused mode never touches the budget");
 });
@@ -259,14 +296,20 @@ test("the elapsed time of a request is recorded, and an unknown answer is counte
   });
   await get(rest);
   await get(rest);
-  assert.deepEqual(lines.map((line) => line.ms), [7, 7]);
+  assert.deepEqual(
+    lines.map((line) => line.ms),
+    [7, 7],
+  );
   assert.equal(capture.unknownCount(), 1, "only the 503 is unknown");
   assert.equal(lines[0].unknown, true);
   assert.equal(lines[1].unknown, undefined);
 });
 
 test("a body over 4 KiB is captured whole, in parts, with its length and SHA-256: the byte layout is never truncated", async (t) => {
-  const items = Array.from({ length: 200 }, (_, i) => ({ name: `projects/p/locations/l/channels/c${i}`, state: "ACTIVE" }));
+  const items = Array.from({ length: 200 }, (_, i) => ({
+    name: `projects/p/locations/l/channels/c${i}`,
+    state: "ACTIVE",
+  }));
   const raw = Buffer.from(`${JSON.stringify({ channels: items }, null, 2)}\n`, "utf8");
   assert.ok(raw.length > 8000);
   const s = await server((_, response) => {
@@ -290,9 +333,15 @@ test("a body over 4 KiB is captured whole, in parts, with its length and SHA-256
   await get(again.rest);
   assert.equal(again.lines[0].response.bodyBase64, Buffer.from("{}\n").toString("base64"));
   assert.equal(again.lines[0].response.bodyBase64Parts, undefined);
-  assert.equal(again.lines[0].response.bodySha256, createHash("sha256").update("{}\n").digest("hex"));
+  assert.equal(
+    again.lines[0].response.bodySha256,
+    createHash("sha256").update("{}\n").digest("hex"),
+  );
   // The edge: exactly 4096 base64 characters stay one string, one more becomes parts.
-  for (const [bytes, parts] of [[3072, false], [3073, true]]) {
+  for (const [bytes, parts] of [
+    [3072, false],
+    [3073, true],
+  ]) {
     const edge = await server((_, response) => response.end(Buffer.alloc(bytes, 65)));
     t.after(edge.close);
     const run = transport(edge.base);

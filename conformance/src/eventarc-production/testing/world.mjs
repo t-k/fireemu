@@ -15,7 +15,10 @@
 import { readFileSync } from "node:fs";
 
 const RECORDED = JSON.parse(
-  readFileSync(new URL("../fixtures/stage-b-world/recorded-refusals.json", import.meta.url), "utf8"),
+  readFileSync(
+    new URL("../fixtures/stage-b-world/recorded-refusals.json", import.meta.url),
+    "utf8",
+  ),
 ).rows;
 
 /** The recorded answers, as `{ status, body }` copies. */
@@ -54,7 +57,9 @@ export function createShapeRefusal({ path, body }) {
   if (id === null || body.name !== `${parent}/channels/${id}`)
     return {
       kind: "create-name-mismatch",
-      answer: invalid("The request was invalid: channel.name does not match the parent and channelId"),
+      answer: invalid(
+        "The request was invalid: channel.name does not match the parent and channelId",
+      ),
     };
   return null;
 }
@@ -106,13 +111,20 @@ export function createWorld({
     counter += 1;
     const name = `${parent}/operations/operation-${counter}`;
     operations.set(name, { reads: 0, ...outcome });
-    return { name, done: false, metadata: { "@type": "type.googleapis.com/google.cloud.eventarc.v1.OperationMetadata" } };
+    return {
+      name,
+      done: false,
+      metadata: { "@type": "type.googleapis.com/google.cloud.eventarc.v1.OperationMetadata" },
+    };
   };
   const create = (call, url) => {
     const parent = CREATE_PATH.exec(decodeURIComponent(url.pathname.replace(/^\/v1\//, "")));
     const id = url.searchParams.get("channelId");
     if (parent === null) return invalid("The request was invalid: malformed parent");
-    if (parent[1] !== project || !locations.includes(parent[2])) return reply(403, { error: { code: 403, status: "PERMISSION_DENIED", message: "Location is not supported" } });
+    if (parent[1] !== project || !locations.includes(parent[2]))
+      return reply(403, {
+        error: { code: 403, status: "PERMISSION_DENIED", message: "Location is not supported" },
+      });
     const shape = createShapeRefusal(call);
     if (shape !== null) return refuse(call, shape.kind, shape.answer);
     const name = `${parent[0]}/${id}`;
@@ -120,8 +132,15 @@ export function createWorld({
       return invalid("The request was invalid: invalid channel ID");
     if (channels.has(name)) {
       if (duplicate === "409")
-        return reply(409, { error: { code: 409, status: "ALREADY_EXISTS", message: "already exists" } });
-      return reply(200, operation(`projects/${parent[1]}/locations/${parent[2]}`, { error: { code: 6, message: "already exists" } }));
+        return reply(409, {
+          error: { code: 409, status: "ALREADY_EXISTS", message: "already exists" },
+        });
+      return reply(
+        200,
+        operation(`projects/${parent[1]}/locations/${parent[2]}`, {
+          error: { code: 6, message: "already exists" },
+        }),
+      );
     }
     if (createAnswer === "unknown-absent") return { status: 503, body: {}, unknown: true };
     if (createAnswer !== "invisible") channels.set(name, { createTime: "2026-10-05T00:00:00Z" });
@@ -131,25 +150,46 @@ export function createWorld({
   const publish = (call, name) => {
     const events = call.body?.events;
     if (!Array.isArray(events) || events.length === 0)
-      return refuse(call, "publish-no-events", recorded(Array.isArray(events) ? "publishEvents-empty-list" : "publishEvents-no-events-member"));
+      return refuse(
+        call,
+        "publish-no-events",
+        recorded(
+          Array.isArray(events) ? "publishEvents-empty-list" : "publishEvents-no-events-member",
+        ),
+      );
     if (events.length > eventLimit)
-      return limited(call, "publish-too-many", { ...recorded("publishEvents-too-many-events"), unknown: false });
+      return limited(call, "publish-too-many", {
+        ...recorded("publishEvents-too-many-events"),
+        unknown: false,
+      });
     if (events.some((event) => (event?.textData?.length ?? 0) > textLimit))
-      return limited(call, "publish-too-large", { ...recorded("publishEvents-event-too-large"), unknown: false });
+      return limited(call, "publish-too-large", {
+        ...recorded("publishEvents-event-too-large"),
+        unknown: false,
+      });
     if (!channels.has(name))
-      return reply(404, { error: { code: 404, status: "NOT_FOUND", message: "Associated channel does not exist." } });
+      return reply(404, {
+        error: { code: 404, status: "NOT_FOUND", message: "Associated channel does not exist." },
+      });
     return reply(200, {});
   };
   const list = (parent, url) => {
     const size = Number(url.searchParams.get("pageSize") ?? 50);
     const after = url.searchParams.get("pageToken");
-    const names = [...channels.keys()].filter((n) => n.startsWith(`${parent}/channels/`)).toSorted();
-    const from = after === null ? 0 : names.findIndex((n) => n > Buffer.from(after, "base64url").toString()) ;
+    const names = [...channels.keys()]
+      .filter((n) => n.startsWith(`${parent}/channels/`))
+      .toSorted();
+    const from =
+      after === null ? 0 : names.findIndex((n) => n > Buffer.from(after, "base64url").toString());
     if (from < 0 && after !== null) return reply(200, {});
     const page = names.slice(from, from + size);
-    const next = from + size < names.length ? Buffer.from(page.at(-1)).toString("base64url") : undefined;
+    const next =
+      from + size < names.length ? Buffer.from(page.at(-1)).toString("base64url") : undefined;
     if (page.length === 0) return reply(200, {});
-    return reply(200, { channels: page.map((n) => Object.assign({ name: n }, channels.get(n))), ...(next ? { nextPageToken: next } : {}) });
+    return reply(200, {
+      channels: page.map((n) => Object.assign({ name: n }, channels.get(n))),
+      ...(next ? { nextPageToken: next } : {}),
+    });
   };
   return {
     channels,
@@ -174,7 +214,12 @@ export function createWorld({
         if (state === undefined) return notFound(bare);
         state.reads += 1;
         const done = state.reads >= doneAfter;
-        return reply(200, { name: bare, ...(done ? { done: true, ...(state.error ? { error: state.error } : { response: {} }) } : { done: false }) });
+        return reply(200, {
+          name: bare,
+          ...(done
+            ? { done: true, ...(state.error ? { error: state.error } : { response: {} }) }
+            : { done: false }),
+        });
       }
       if (call.op === "createChannel") return create(call, url);
       if (call.op === "getChannel") {

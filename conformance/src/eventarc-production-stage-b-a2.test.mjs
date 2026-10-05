@@ -109,7 +109,11 @@ test("an unknown create followed by an own positive read settles: the channel is
 test("a confirmed create that reads 404 in the run stays open; only the A2 read-back, ten minutes later, settles it", async (t) => {
   const state = await record(t, { createAnswer: "invisible" });
   assert.deepEqual(state.first.cleanup.unsettled, [P1], "open in the run");
-  assert.deepEqual(state.first.cleanup.unconfirmed, [], "confirmed by its operation, so not unconfirmed");
+  assert.deepEqual(
+    state.first.cleanup.unconfirmed,
+    [],
+    "confirmed by its operation, so not unconfirmed",
+  );
   assert.equal(state.first.closureReady, false);
   assert.equal(
     state.world.calls.some((call) => call.op === "deleteChannel"),
@@ -161,7 +165,8 @@ import { runCases } from "./eventarc-production/runner.mjs";
 import { createRawRest } from "./eventarc-production/rest.mjs";
 
 const UNSENT_RUN = "0123456789ab";
-const unsentName = (id) => `projects/${PROJECT}/locations/us-central1/channels/fe${UNSENT_RUN}-${id}`;
+const unsentName = (id) =>
+  `projects/${PROJECT}/locations/us-central1/channels/fe${UNSENT_RUN}-${id}`;
 
 test("a creation or a deletion refused by the case ceiling before it was sent is written as unsent: no open entry, nothing to settle", async () => {
   const ownership = createOwnership({ project: PROJECT, runId: UNSENT_RUN });
@@ -173,7 +178,11 @@ test("a creation or a deletion refused by the case ceiling before it was sent is
     return {
       name: "rest",
       request: (call) => {
-        if (used >= limit) throw Object.assign(new Error(`the case reached its limit of ${limit} requests`), { name: "CaseLimit", unsent: true });
+        if (used >= limit)
+          throw Object.assign(new Error(`the case reached its limit of ${limit} requests`), {
+            name: "CaseLimit",
+            unsent: true,
+          });
         used += 1;
         calls.push(call.op);
         return world.request(call);
@@ -190,7 +199,9 @@ test("a creation or a deletion refused by the case ceiling before it was sent is
     });
   const created = make(0);
   const id = `fe${UNSENT_RUN}-a`;
-  await assert.rejects(() => created.createChannel(PROJECT, "us-central1", id), { name: "CaseLimit" });
+  await assert.rejects(() => created.createChannel(PROJECT, "us-central1", id), {
+    name: "CaseLimit",
+  });
   const item = ledger.state().get(unsentName("a"));
   assert.deepEqual(item.open, []);
   assert.deepEqual(item.creates, ["unsent"]);
@@ -211,7 +222,9 @@ test("a creation or a deletion refused by the case ceiling before it was sent is
   // A request that was sent is still an answer: the next one after the limit is the one refused.
   const two = make(1);
   await two.createChannel(PROJECT, "us-central1", `fe${UNSENT_RUN}-c`);
-  await assert.rejects(() => two.createChannel(PROJECT, "us-central1", `fe${UNSENT_RUN}-d`), { name: "CaseLimit" });
+  await assert.rejects(() => two.createChannel(PROJECT, "us-central1", `fe${UNSENT_RUN}-d`), {
+    name: "CaseLimit",
+  });
   assert.equal(ledger.state().get(unsentName("c")).creates.length, 1);
   assert.notEqual(ledger.state().get(unsentName("c")).creates[0], "unsent");
   assert.deepEqual(ledger.state().get(unsentName("d")).creates, ["unsent"]);
@@ -229,7 +242,12 @@ test("a creation refused by the run's budget, or by a credential that cannot be 
     capture,
     fetchImpl: async (url, init) => {
       const path = url.slice(base.length);
-      const answer = await world.request({ op: init.method === "POST" ? "createChannel" : "getChannel", method: init.method, path, body: init.body === undefined ? undefined : JSON.parse(init.body) });
+      const answer = await world.request({
+        op: init.method === "POST" ? "createChannel" : "getChannel",
+        method: init.method,
+        path,
+        body: init.body === undefined ? undefined : JSON.parse(init.body),
+      });
       return new Response(JSON.stringify(answer.body), { status: answer.status });
     },
     getToken: async () => {
@@ -238,16 +256,39 @@ test("a creation refused by the run's budget, or by a credential that cannot be 
   });
   const ownership = createOwnership({ project: PROJECT, runId: UNSENT_RUN });
   const ledger = createLedger();
-  const client = createClient({ transports: { eventarc: rest }, ownership, caseId: "b", usageProject: PROJECT, ledger });
+  const client = createClient({
+    transports: { eventarc: rest },
+    ownership,
+    caseId: "b",
+    usageProject: PROJECT,
+    ledger,
+  });
   // No credential: nothing is sent, the creation is unsent.
-  await assert.rejects(() => client.createChannel(PROJECT, "us-central1", `fe${UNSENT_RUN}-a`), /gcloud could not print/);
+  await assert.rejects(
+    () => client.createChannel(PROJECT, "us-central1", `fe${UNSENT_RUN}-a`),
+    /gcloud could not print/,
+  );
   assert.deepEqual(ledger.state().get(unsentName("a")).creates, ["unsent"]);
   assert.equal(budget.used(), 0, "the budget was not touched either");
   // With a credential: the first request uses the budget of one, the second is refused by it, unsent.
-  const second = createRawRest({ base, budget, capture, fetchImpl: async () => new Response("{}", { status: 200 }) });
-  const withBudget = createClient({ transports: { eventarc: second }, ownership, caseId: "b", usageProject: PROJECT, ledger });
+  const second = createRawRest({
+    base,
+    budget,
+    capture,
+    fetchImpl: async () => new Response("{}", { status: 200 }),
+  });
+  const withBudget = createClient({
+    transports: { eventarc: second },
+    ownership,
+    caseId: "b",
+    usageProject: PROJECT,
+    ledger,
+  });
   await withBudget.getChannel(unsentName("zz"));
-  await assert.rejects(() => withBudget.createChannel(PROJECT, "us-central1", `fe${UNSENT_RUN}-e`), { name: "BudgetExceeded" });
+  await assert.rejects(
+    () => withBudget.createChannel(PROJECT, "us-central1", `fe${UNSENT_RUN}-e`),
+    { name: "BudgetExceeded" },
+  );
   assert.deepEqual(ledger.state().get(unsentName("e")).creates, ["unsent"]);
   assert.deepEqual(ledger.state().get(unsentName("e")).open, []);
 });
@@ -260,7 +301,13 @@ test("end to end: a case that reaches its ceiling at a creation leaves a run tha
   const notes = [];
   const capture = createCapture({ journal: { write: (line) => notes.push(line) } });
   const transport = { name: "rest", request: (call) => world.request(call) };
-  const cleanupClient = createClient({ transports: { eventarc: transport }, ownership, caseId: "cleanup", usageProject: PROJECT, ledger });
+  const cleanupClient = createClient({
+    transports: { eventarc: transport },
+    ownership,
+    caseId: "cleanup",
+    usageProject: PROJECT,
+    ledger,
+  });
   const item = {
     id: "tight",
     short: "ti",
@@ -279,7 +326,12 @@ test("end to end: a case that reaches its ceiling at a creation leaves a run tha
     cleanupClient,
     ownership,
     capture,
-    options: { production: false, location: "us-central1", usageProject: PROJECT, publishPrefix: "/v1" },
+    options: {
+      production: false,
+      location: "us-central1",
+      usageProject: PROJECT,
+      publishPrefix: "/v1",
+    },
     sleep: async () => {},
     ledger,
   });
@@ -287,7 +339,10 @@ test("end to end: a case that reaches its ceiling at a creation leaves a run tha
   const y = ledger.state().get(unsentName("ti-y"));
   assert.deepEqual([y.open, y.creates], [[], ["unsent"]]);
   assert.deepEqual(summary.cleanup.unconfirmed, []);
-  assert.ok(!summary.cleanup.unsettled.includes(unsentName("ti-y")), "nothing to settle for a request that never left");
+  assert.ok(
+    !summary.cleanup.unsettled.includes(unsentName("ti-y")),
+    "nothing to settle for a request that never left",
+  );
   // x: sent, answered 2xx with an operation never read (the case stopped): it is deleted by the cleanup.
   assert.equal(world.channels.has(unsentName("ti-x")), false);
   void t;
@@ -295,24 +350,59 @@ test("end to end: a case that reaches its ceiling at a creation leaves a run tha
 
 test("only a request refused before it was sent is unsent: a read leaves no ledger line, any other failure leaves the request open, and a credential mode that does not exist is unsent", async () => {
   const ownership = createOwnership({ project: PROJECT, runId: UNSENT_RUN });
-  const refusing = (error) => ({ name: "rest", request: () => { throw error; } });
+  const refusing = (error) => ({
+    name: "rest",
+    request: () => {
+      throw error;
+    },
+  });
   const clientOf = (transport, ledger) =>
-    createClient({ transports: { eventarc: transport }, ownership, caseId: "k", usageProject: PROJECT, ledger });
+    createClient({
+      transports: { eventarc: transport },
+      ownership,
+      caseId: "k",
+      usageProject: PROJECT,
+      ledger,
+    });
   // A read refused by the ceiling: nothing is ledgered, and the refusal is raised unchanged.
   const reads = createLedger();
   const refused = Object.assign(new Error("limit"), { name: "CaseLimit", unsent: true });
-  await assert.rejects(() => clientOf(refusing(refused), reads).getChannel(unsentName("r")), { name: "CaseLimit" });
+  await assert.rejects(() => clientOf(refusing(refused), reads).getChannel(unsentName("r")), {
+    name: "CaseLimit",
+  });
   assert.equal(reads.state().size, 0);
   // Any other failure of a creation (it may have been sent): the request stays open, so it is unknown.
   const other = createLedger();
-  await assert.rejects(() => clientOf(refusing(new TypeError("boom")), other).createChannel(PROJECT, "us-central1", `fe${UNSENT_RUN}-f`), TypeError);
-  assert.deepEqual([other.state().get(unsentName("f")).open, other.state().get(unsentName("f")).creates], [["create"], []]);
+  await assert.rejects(
+    () =>
+      clientOf(refusing(new TypeError("boom")), other).createChannel(
+        PROJECT,
+        "us-central1",
+        `fe${UNSENT_RUN}-f`,
+      ),
+    TypeError,
+  );
+  assert.deepEqual(
+    [other.state().get(unsentName("f")).open, other.state().get(unsentName("f")).creates],
+    [["create"], []],
+  );
   assert.equal(ledgerFacts(other.state().get(unsentName("f"))).createPending, true);
   // A credential mode that does not exist stops the request before the budget: unsent.
   const modes = createLedger();
   const budget = createBudget(5);
-  const rest = createRawRest({ base: "http://127.0.0.1:9", budget, capture: createCapture({ journal: { write() {} } }), fetchImpl: async () => new Response("{}") });
-  await assert.rejects(() => clientOf(rest, modes).with({ token: "no-such-mode" }).createChannel(PROJECT, "us-central1", `fe${UNSENT_RUN}-g`), /unknown credential mode/);
+  const rest = createRawRest({
+    base: "http://127.0.0.1:9",
+    budget,
+    capture: createCapture({ journal: { write() {} } }),
+    fetchImpl: async () => new Response("{}"),
+  });
+  await assert.rejects(
+    () =>
+      clientOf(rest, modes)
+        .with({ token: "no-such-mode" })
+        .createChannel(PROJECT, "us-central1", `fe${UNSENT_RUN}-g`),
+    /unknown credential mode/,
+  );
   assert.deepEqual(modes.state().get(unsentName("g")).creates, ["unsent"]);
   assert.equal(budget.used(), 0);
 });

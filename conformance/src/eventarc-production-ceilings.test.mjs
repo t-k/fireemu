@@ -30,7 +30,10 @@ const MODES = {
     withState: true,
     pendingReads: READY_READS - 1,
     acceptAnyId: true,
-    existing: Array.from({ length: 8 }, (_, i) => `projects/${PROJECT}/locations/us-central1/channels/other-${i}`),
+    existing: Array.from(
+      { length: 8 },
+      (_, i) => `projects/${PROJECT}/locations/us-central1/channels/other-${i}`,
+    ),
   },
   "fast operations, every ID probe accepted": { acceptAnyId: true },
   "duplicate creates answered 409, limits in the middle of the ladders": {
@@ -70,7 +73,10 @@ async function measure(item, worldOptions) {
   const capture = createCapture({ journal: { write() {} } });
   const transport = {
     name: "rest",
-    request: (call) => (capture.record({ case: call.label?.case, op: call.op }), world.request(call)),
+    request: (call) => (
+      capture.record({ case: call.label?.case, op: call.op }),
+      world.request(call)
+    ),
   };
   const cleanupClient = createClient({
     transports: { eventarc: transport },
@@ -85,12 +91,20 @@ async function measure(item, worldOptions) {
     cleanupClient,
     ownership,
     capture,
-    options: { production: false, location: "us-central1", usageProject: PROJECT, publishPrefix: "/v1" },
+    options: {
+      production: false,
+      location: "us-central1",
+      usageProject: PROJECT,
+      publishPrefix: "/v1",
+    },
     sleep: async () => {},
     makeSdk: sdkUpperBound,
     ledger,
   });
-  return { requests: summary.cases.reduce((sum, entry) => sum + entry.requests, 0), cleanup: capture.count() - summary.cases.reduce((sum, entry) => sum + entry.requests, 0) };
+  return {
+    requests: summary.cases.reduce((sum, entry) => sum + entry.requests, 0),
+    cleanup: capture.count() - summary.cases.reduce((sum, entry) => sum + entry.requests, 0),
+  };
 }
 
 test("every case's ceiling covers its worst case under the recorder's own poll bounds", async () => {
@@ -101,18 +115,26 @@ test("every case's ceiling covers its worst case under the recorder's own poll b
       if (requests > worst[item.id].requests) worst[item.id] = { requests, mode };
     }
   const over = CASES.filter((item) => worst[item.id].requests > item.requests).map(
-    (item) => `${item.id}: worst ${worst[item.id].requests} (${worst[item.id].mode}) > ceiling ${item.requests}`,
+    (item) =>
+      `${item.id}: worst ${worst[item.id].requests} (${worst[item.id].mode}) > ceiling ${item.requests}`,
   );
-  assert.deepEqual(over, [], JSON.stringify(Object.fromEntries(Object.entries(worst).map(([id, w]) => [id, w.requests]))));
+  assert.deepEqual(
+    over,
+    [],
+    JSON.stringify(Object.fromEntries(Object.entries(worst).map(([id, w]) => [id, w.requests]))),
+  );
   // A ceiling is not slack for its own sake: at most a tenth and three requests above the measured worst.
-  const loose = CASES.filter((item) => item.requests > Math.ceil(worst[item.id].requests * 1.1) + 3).map(
-    (item) => `${item.id}: ceiling ${item.requests} for a worst of ${worst[item.id].requests}`,
-  );
+  const loose = CASES.filter(
+    (item) => item.requests > Math.ceil(worst[item.id].requests * 1.1) + 3,
+  ).map((item) => `${item.id}: ceiling ${item.requests} for a worst of ${worst[item.id].requests}`);
   assert.deepEqual(loose, []);
 });
 
 test("the ceilings fit the run's budget, and the cleanup's budget covers every name a run can ledger in the slow modes", async () => {
-  assert.ok(plannedRequests(CASES) <= DEFAULT_MAX_REQUESTS, `${plannedRequests(CASES)} > ${DEFAULT_MAX_REQUESTS}`);
+  assert.ok(
+    plannedRequests(CASES) <= DEFAULT_MAX_REQUESTS,
+    `${plannedRequests(CASES)} > ${DEFAULT_MAX_REQUESTS}`,
+  );
   // A whole recording, every case in order, in each mode: the cleanup that follows must fit its budget.
   for (const [mode, options] of Object.entries(MODES)) {
     const world = createWorld({ project: PROJECT, ...options });
@@ -120,17 +142,31 @@ test("the ceilings fit the run's budget, and the cleanup's budget covers every n
     const ledger = createLedger();
     const capture = createCapture({ journal: { write() {} } });
     const transport = {
-    name: "rest",
-    request: (call) => (capture.record({ case: call.label?.case, op: call.op }), world.request(call)),
-  };
-    const cleanupClient = createClient({ transports: { eventarc: transport }, ownership, caseId: "cleanup", usageProject: PROJECT, ledger });
+      name: "rest",
+      request: (call) => (
+        capture.record({ case: call.label?.case, op: call.op }),
+        world.request(call)
+      ),
+    };
+    const cleanupClient = createClient({
+      transports: { eventarc: transport },
+      ownership,
+      caseId: "cleanup",
+      usageProject: PROJECT,
+      ledger,
+    });
     const summary = await runCases({
       cases: CASES,
       transports: { eventarc: transport, publishing: transport, usage: transport },
       cleanupClient,
       ownership,
       capture,
-      options: { production: false, location: "us-central1", usageProject: PROJECT, publishPrefix: "/v1" },
+      options: {
+        production: false,
+        location: "us-central1",
+        usageProject: PROJECT,
+        publishPrefix: "/v1",
+      },
       sleep: async () => {},
       makeSdk: sdkUpperBound,
       ledger,
@@ -140,7 +176,10 @@ test("the ceilings fit the run's budget, and the cleanup's budget covers every n
     assert.deepEqual(summary.limited, [], mode);
     assert.equal(summary.cleanup.budgetSpent, false, mode);
     assert.ok(inCases <= DEFAULT_MAX_REQUESTS, `${mode}: ${inCases}`);
-    assert.ok(cleanupRequests <= CLEANUP_BUDGET, `${mode}: cleanup ${cleanupRequests} > ${CLEANUP_BUDGET}`);
+    assert.ok(
+      cleanupRequests <= CLEANUP_BUDGET,
+      `${mode}: cleanup ${cleanupRequests} > ${CLEANUP_BUDGET}`,
+    );
   }
 });
 
@@ -151,5 +190,8 @@ test("the cleanup budget is derived from the bounds: every name a run can ledger
   // Per name, at most: 4 reads of a pending creation's operation, 1 read by name, 1 deletion, 15 polls of
   // its operation and 3 read-backs; and two lists of a location.
   const perName = 4 + 1 + 1 + 15 + 3;
-  assert.ok(CLEANUP_BUDGET >= names * perName + 2 * 20, `${CLEANUP_BUDGET} < ${names * perName + 40}`);
+  assert.ok(
+    CLEANUP_BUDGET >= names * perName + 2 * 20,
+    `${CLEANUP_BUDGET} < ${names * perName + 40}`,
+  );
 });

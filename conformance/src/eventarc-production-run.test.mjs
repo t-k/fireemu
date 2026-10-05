@@ -367,23 +367,33 @@ test("replay on the recorded service body: DISABLED stops the run with nothing s
   const answer =
     (state) =>
     ({ host, path }) => {
-      if (host === "usage")
-        return { status: 200, body: { ...service, state }, unknown: false };
+      if (host === "usage") return { status: 200, body: { ...service, state }, unknown: false };
       if (path.endsWith("/channels/firebase"))
         return { status: firebase.status, body: JSON.parse(firebase.body), unknown: false };
       return { status: 404, body: { error: { status: "NOT_FOUND" } }, unknown: false };
     };
-  const disabled = setup([preconditions], { answer: answer("DISABLED"), options: { usageProject: "123456789012" } });
+  const disabled = setup([preconditions], {
+    answer: answer("DISABLED"),
+    options: { usageProject: "123456789012" },
+  });
   const stopped = await disabled.run();
   assert.deepEqual(
     stopped.cases.map((c) => [c.outcome, c.reason]),
-    [["stopped", "the publishing API is DISABLED: stage B does not enable it, nothing was created"]],
+    [
+      [
+        "stopped",
+        "the publishing API is DISABLED: stage B does not enable it, nothing was created",
+      ],
+    ],
   );
   assert.deepEqual(
     disabled.calls.map((c) => `${c.method} ${c.host} ${c.op}`),
     ["GET usage getService"],
   );
-  assert.equal(disabled.calls[0].path, "/v1/projects/123456789012/services/eventarcpublishing.googleapis.com");
+  assert.equal(
+    disabled.calls[0].path,
+    "/v1/projects/123456789012/services/eventarcpublishing.googleapis.com",
+  );
   const enabled = setup([preconditions], { answer: answer("ENABLED") });
   const summary = await enabled.run();
   assert.deepEqual(
@@ -395,7 +405,9 @@ test("replay on the recorded service body: DISABLED stops the run with nothing s
     ["GET usage getService", "GET eventarc getChannel"],
   );
   assert.ok(
-    enabled.notes.some((n) => n.note === "default-channel" && n.absent === true && n.status === 404),
+    enabled.notes.some(
+      (n) => n.note === "default-channel" && n.absent === true && n.status === 404,
+    ),
     "the recorded 404 of the default channel is read as absent",
   );
 });
@@ -539,14 +551,19 @@ for (const [label, extra] of [
     assert.ok(exchanges.every((l) => /^[0-9a-f]{64}$/.test(l.response.bodySha256)));
     assert.ok(lines.some((l) => l.op === "sdk.publishEvents" && l.response.status === 200));
     assert.ok(
-      lines.some((l) => l.note === "sdk-outcome" && l.name === "missing-source" && l.requests === 0),
+      lines.some(
+        (l) => l.note === "sdk-outcome" && l.name === "missing-source" && l.requests === 0,
+      ),
     );
     // The create probe came first and every creation carried its channel's name.
     const creates = lines.filter((l) => l.op === "createChannel");
     assert.ok(creates.length > 5);
     for (const line of creates) {
-      const [, parent, id] = /^(.*)\/channels\?channelId=(.*)$/.exec(line.request.path.replace(/^\/v1\//, ""));
-      if (line.tokenMode === "default") assert.equal(line.request.body.name, `${parent}/channels/${id}`);
+      const [, parent, id] = /^(.*)\/channels\?channelId=(.*)$/.exec(
+        line.request.path.replace(/^\/v1\//, ""),
+      );
+      if (line.tokenMode === "default")
+        assert.equal(line.request.body.name, `${parent}/channels/${id}`);
     }
   });
 }

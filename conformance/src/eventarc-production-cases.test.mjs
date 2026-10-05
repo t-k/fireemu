@@ -148,7 +148,14 @@ function channelService({
 
 async function run(
   service,
-  { runId = RUN, cases = [channelLifecycle], makeSdk = null, usageProject = PROJECT, scopedToken, sleep } = {},
+  {
+    runId = RUN,
+    cases = [channelLifecycle],
+    makeSdk = null,
+    usageProject = PROJECT,
+    scopedToken,
+    sleep,
+  } = {},
 ) {
   const ownership = createOwnership({ project: PROJECT, runId });
   const ledger = createLedger();
@@ -202,7 +209,11 @@ test("the create probe creates a channel with its name, reads it, lists it, dele
     ["completed"],
   );
   assert.deepEqual(service.shapeRefusals, [], "every creation carried the channel's name");
-  assert.equal(deletes(service, P1).length, 2, "the deletion and its repetition after the read-back");
+  assert.equal(
+    deletes(service, P1).length,
+    2,
+    "the deletion and its repetition after the read-back",
+  );
   const name = nameOf(P1);
   assert.deepEqual(ledger.state().get(name).creates, [`unknown@${OPERATION}`, `ok@${OPERATION}`]);
   assert.ok(ledger.state().get(name).deletes.includes(`ok@${OPERATION}`));
@@ -247,7 +258,8 @@ test("a creation that is refused or not confirmed stops the whole run cleanly: n
       label,
     );
     assert.equal(
-      service.calls.filter((call) => call.caseId === "create-probe" && call.method === "DELETE").length,
+      service.calls.filter((call) => call.caseId === "create-probe" && call.method === "DELETE")
+        .length,
       0,
       `${label}: nothing is deleted by the case`,
     );
@@ -262,7 +274,9 @@ test("an unknown create is never settled by a 404: the case stops, the cleanup r
   assert.equal(first.summary.cases[0].outcome, "stopped");
   const name = nameOf(P1);
   assert.ok(ledgerFactsOf(first.ledger, name).mayExist);
-  assert.ok(first.summary.cleanup.settled.some((item) => item.name === name && item.how === "deleted"));
+  assert.ok(
+    first.summary.cleanup.settled.some((item) => item.name === name && item.how === "deleted"),
+  );
   assert.equal(present.live.has(name), false);
   // Near miss: the channel never shows, only 404s: the name stays unsettled and unconfirmed.
   const absent = channelService({ createUnknown: true });
@@ -304,7 +318,10 @@ test("the lifecycle creates two channels, follows the pages of a list, and delet
   assert.equal(deletes(service, c1).length, 1, "once, by the cleanup");
   assert.ok(ledger.state().get(nameOf(c1)).creates.includes(`ok@${OPERATION}`));
   assert.ok(
-    ledger.state().get(nameOf(c1)).creates.some((kind) => kind === `conflict@${OPERATION}`),
+    ledger
+      .state()
+      .get(nameOf(c1))
+      .creates.some((kind) => kind === `conflict@${OPERATION}`),
     "the repetition of the creation ended with a conflict in its operation",
   );
   assert.deepEqual(summary.cleanup.unsettled, []);
@@ -325,7 +342,9 @@ test("V2-M1(a) replayed: a duplicate whose own operation ends with ALREADY_EXIST
 
 test("V2-M1(b) replayed: a deletion whose operation is never read as done and a 404 afterwards stay unsettled in the recording", async () => {
   const name = nameOf(P1);
-  const { summary, ledger } = await run(channelService({ deleteLate: true }), { cases: [createProbe] });
+  const { summary, ledger } = await run(channelService({ deleteLate: true }), {
+    cases: [createProbe],
+  });
   assert.ok(ledgerFactsOf(ledger, name).deletePending);
   assert.deepEqual(
     summary.cleanup.settled.filter((item) => item.name === name),
@@ -470,8 +489,17 @@ test("a creation of the lifecycle that is refused stops that case with its reaso
 });
 
 test("a case that needs a channel never sends to a name it did not create (publish, SDK, errors)", async () => {
-  for (const item of [publishEnvelope, publishContent, publishLimits, adminSdkPublish, authErrors]) {
-    const service = channelService({ refuse: new Set(["fe0123456789ab-x"]), createNeverDone: true });
+  for (const item of [
+    publishEnvelope,
+    publishContent,
+    publishLimits,
+    adminSdkPublish,
+    authErrors,
+  ]) {
+    const service = channelService({
+      refuse: new Set(["fe0123456789ab-x"]),
+      createNeverDone: true,
+    });
     const makeSdk = async () => ({
       publish: async () => assert.fail("the SDK was used"),
       close: async () => {},
@@ -534,7 +562,9 @@ test("the preconditions stop the run, with nothing created, unless the publishin
       String(state),
     );
     assert.deepEqual(
-      calls.filter((call) => call.method !== "GET" && (stops || call.label.case === "preconditions")),
+      calls.filter(
+        (call) => call.method !== "GET" && (stops || call.label.case === "preconditions"),
+      ),
       [],
       "the preconditions send nothing that changes anything, and nothing follows a refusal",
     );
@@ -543,7 +573,9 @@ test("the preconditions stop the run, with nothing created, unless the publishin
       false,
     );
     if (!stops)
-      assert.ok(notes.some((n) => n.note === "default-channel" && n.absent === true && n.status === 404));
+      assert.ok(
+        notes.some((n) => n.note === "default-channel" && n.absent === true && n.status === 404),
+      );
   }
 });
 
@@ -572,7 +604,9 @@ test("the delete case reads the channel back, lists, publishes to the name after
   const service = channelService();
   const { summary } = await run(service, { cases: [channelDelete] });
   assert.equal(summary.cases[0].outcome, "completed");
-  const ops = service.calls.filter((call) => call.caseId === "channel-delete").map((call) => call.op);
+  const ops = service.calls
+    .filter((call) => call.caseId === "channel-delete")
+    .map((call) => call.op);
   const afterDelete = ops.slice(ops.indexOf("deleteChannel"));
   assert.deepEqual(afterDelete, [
     "deleteChannel",
@@ -626,13 +660,25 @@ test("the envelope case adds the handler-side checks of an existing channel: a d
   const service = channelService();
   await run(service, { cases: [publishEnvelope] });
   const requests = published(service);
-  const duplicated = requests.find((events) => events.length === 2 && events[0].id === events[1].id);
+  const duplicated = requests.find(
+    (events) => events.length === 2 && events[0].id === events[1].id,
+  );
   assert.ok(duplicated, "the same id twice in one request");
   assert.ok(requests.some((events) => events.length === 1 && Object.keys(events[0]).length === 1));
   const kinds = requests
     .flat()
-    .flatMap((event) => Object.values(event.attributes ?? {}).flatMap((value) => Object.keys(value)));
-  for (const kind of ["ceBoolean", "ceInteger", "ceUri", "ceUriRef", "ceBytes", "ceString", "ceTimestamp"])
+    .flatMap((event) =>
+      Object.values(event.attributes ?? {}).flatMap((value) => Object.keys(value)),
+    );
+  for (const kind of [
+    "ceBoolean",
+    "ceInteger",
+    "ceUri",
+    "ceUriRef",
+    "ceBytes",
+    "ceString",
+    "ceTimestamp",
+  ])
     assert.ok(kinds.includes(kind), kind);
 });
 
@@ -728,7 +774,9 @@ test("the credential probes: each token mode and the quota project of one call r
   };
   const calls = (await modes(async () => null)).calls;
   const sent = (call) => call.token ?? "default";
-  const tokenCalls = calls.filter((call) => call.caseId === "auth-errors" && ["listChannels", "publishEvents"].includes(call.op));
+  const tokenCalls = calls.filter(
+    (call) => call.caseId === "auth-errors" && ["listChannels", "publishEvents"].includes(call.op),
+  );
   assert.deepEqual(
     [...new Set(tokenCalls.map(sent))].filter((mode) => mode !== "default"),
     ["none", "invalid", "ya29-garbage", "jwt-garbage", "jwt-expired-unsigned"],
@@ -775,7 +823,10 @@ test("a limit search that gets an answer that does not say stops there and sends
       ? { status: 503, body: {}, unknown: true }
       : answer;
   };
-  const { notes } = await run({ request: unreadable, calls: world.calls, live: new Set() }, { cases: [publishLimits] });
+  const { notes } = await run(
+    { request: unreadable, calls: world.calls, live: new Set() },
+    { cases: [publishLimits] },
+  );
   const bracket = notes.find((n) => n.note === "limit-bracket" && n.name === "event-count");
   assert.deepEqual([bracket.low, bracket.high, bracket.unknown], [8, null, true]);
   assert.equal(
@@ -794,7 +845,9 @@ test("a case that publishes waits for its channel to read ACTIVE (a few reads, t
   const reads = (service, name) =>
     service.calls.filter(
       (call) =>
-        call.op === "getChannel" && call.caseId === "publish-envelope" && call.path.endsWith(`/${name}`),
+        call.op === "getChannel" &&
+        call.caseId === "publish-envelope" &&
+        call.path.endsWith(`/${name}`),
     );
   const cases = { channel: `fe${RUN}-pe-env`, item: publishEnvelope };
   // No state member: one read, nothing to wait for.
@@ -831,13 +884,17 @@ test("a case that publishes waits for its channel to read ACTIVE (a few reads, t
 });
 
 const listPathsOf = (service, caseId) =>
-  service.calls.filter((call) => call.op === "listChannels" && call.caseId === caseId).map((call) => call.path);
+  service.calls
+    .filter((call) => call.op === "listChannels" && call.caseId === caseId)
+    .map((call) => call.path);
 
 test("the lifecycle follows the pages of a list one token at a time and stops after three pages", async () => {
   // Two channels of the run: the page of one has a token, the second page has none.
   const two = createWorld({ project: PROJECT });
   await run(two);
-  const pages = listPathsOf(two, "channel-lifecycle").filter((path) => /pageSize=1(&|$)/.test(path));
+  const pages = listPathsOf(two, "channel-lifecycle").filter((path) =>
+    /pageSize=1(&|$)/.test(path),
+  );
   assert.equal(pages.length, 2);
   assert.ok(pages[0].endsWith("channels?pageSize=1"), "the first page carries no token");
   assert.match(pages[1], /channels\?pageSize=1&pageToken=[A-Za-z0-9_-]+$/);
@@ -845,9 +902,13 @@ test("the lifecycle follows the pages of a list one token at a time and stops af
   const existing = Array.from({ length: 8 }, (_, i) => nameOf(`other-${i}`));
   const many = createWorld({ project: PROJECT, existing });
   await run(many);
-  const long = listPathsOf(many, "channel-lifecycle").filter((path) => /pageSize=1(&|$)/.test(path));
+  const long = listPathsOf(many, "channel-lifecycle").filter((path) =>
+    /pageSize=1(&|$)/.test(path),
+  );
   assert.equal(long.length, 3, "three pages at most");
-  const tokens = long.slice(1).map((path) => new URL(`http://x${path}`).searchParams.get("pageToken"));
+  const tokens = long
+    .slice(1)
+    .map((path) => new URL(`http://x${path}`).searchParams.get("pageToken"));
   assert.equal(new Set(tokens).size, 2, "each page asks for a different token");
   // A token that is not a non-empty string ends the list.
   const odd = channelService();
@@ -861,7 +922,11 @@ test("the lifecycle follows the pages of a list one token at a time and stops af
         : answer;
     };
     await run(odd);
-    assert.equal(listPathsOf(odd, "channel-lifecycle").filter((path) => /pageSize=1(&|$)/.test(path)).length, 1, String(token));
+    assert.equal(
+      listPathsOf(odd, "channel-lifecycle").filter((path) => /pageSize=1(&|$)/.test(path)).length,
+      1,
+      String(token),
+    );
   }
   // A page that is not a 2xx ends the list too, whatever its body says.
   odd.request = async (call) => {
@@ -872,15 +937,26 @@ test("the lifecycle follows the pages of a list one token at a time and stops af
   };
   odd.calls.length = 0;
   await run(odd);
-  assert.equal(listPathsOf(odd, "channel-lifecycle").filter((path) => /pageSize=1(&|$)/.test(path)).length, 1);
+  assert.equal(
+    listPathsOf(odd, "channel-lifecycle").filter((path) => /pageSize=1(&|$)/.test(path)).length,
+    1,
+  );
 });
 
 test("a probe is created only after the recorded 404 or a 400, never after another refusal or an unknown read", async () => {
   const id = `1-${RUN}`;
   for (const [label, reply, created] of [
     ["the recorded 404", NOT_FOUND, true],
-    ["a 400", { status: 400, body: { error: { status: "INVALID_ARGUMENT" } }, unknown: false }, true],
-    ["a 403", { status: 403, body: { error: { status: "PERMISSION_DENIED" } }, unknown: false }, false],
+    [
+      "a 400",
+      { status: 400, body: { error: { status: "INVALID_ARGUMENT" } }, unknown: false },
+      true,
+    ],
+    [
+      "a 403",
+      { status: 403, body: { error: { status: "PERMISSION_DENIED" } }, unknown: false },
+      false,
+    ],
     ["a 500", { status: 500, body: { error: { status: "INTERNAL" } }, unknown: false }, false],
     ["an unknown 400", { status: 400, body: {}, unknown: true }, false],
     ["an unknown 503", { status: 503, body: {}, unknown: true }, false],
@@ -890,9 +966,15 @@ test("a probe is created only after the recorded 404 or a 400, never after anoth
     service.request = async (call) =>
       call.op === "getChannel" && call.path.endsWith(`/${id}`) ? reply : handler(call);
     const { notes } = await run(service);
-    const sent = service.calls.some((call) => call.op === "createChannel" && call.path.includes(`channelId=${id}`));
+    const sent = service.calls.some(
+      (call) => call.op === "createChannel" && call.path.includes(`channelId=${id}`),
+    );
     assert.equal(sent, created, label);
-    if (!created) assert.ok(notes.some((n) => n.note === "probe-read-unclear" && n.name === nameOf(id)), label);
+    if (!created)
+      assert.ok(
+        notes.some((n) => n.note === "probe-read-unclear" && n.name === nameOf(id)),
+        label,
+      );
   }
 });
 
@@ -904,7 +986,10 @@ test("the number path is not read when no number was given, and the paths never 
     false,
   );
   const listsOfTheProject = service.calls.filter(
-    (call) => call.op === "listChannels" && call.caseId === "channel-lifecycle" && call.path.startsWith(`/v1/projects/${PROJECT}/`),
+    (call) =>
+      call.op === "listChannels" &&
+      call.caseId === "channel-lifecycle" &&
+      call.path.startsWith(`/v1/projects/${PROJECT}/`),
   );
   assert.ok(listsOfTheProject.length >= 6);
 });
@@ -938,7 +1023,10 @@ test("the preconditions note the state they read, and a channel's state is only 
       ? { status: 503, body: { state: "PENDING" }, unknown: true }
       : handler(call);
   const sleeps = [];
-  const result = await run(flaky, { cases: [publishEnvelope], sleep: async (ms) => sleeps.push(ms) });
+  const result = await run(flaky, {
+    cases: [publishEnvelope],
+    sleep: async (ms) => sleeps.push(ms),
+  });
   assert.deepEqual(sleeps, []);
   assert.deepEqual(
     result.notes.filter((n) => n.note === "channel-state").map((n) => n.state),
@@ -957,18 +1045,30 @@ test("the ladders send the values the plan names, in order, and the searches use
   const wide = createWorld({ project: PROJECT, textLimit: 100 * KiB * KiB });
   await run(wide, { cases: [publishLimits] });
   assert.deepEqual(sizes(wide).slice(0, 3), [256 * KiB, KiB * KiB, 4 * KiB * KiB]);
-  assert.equal(sizes(wide).filter((length) => length >= 4 * KiB * KiB).length, 1, "no search above the last value");
+  assert.equal(
+    sizes(wide).filter((length) => length >= 4 * KiB * KiB).length,
+    1,
+    "no search above the last value",
+  );
   // A limit between 256 KiB and 1 MiB: the bisection takes at most ten steps and no more.
   const mid = createWorld({ project: PROJECT, textLimit: 600_000 });
   await run(mid, { cases: [publishLimits] });
-  assert.equal(sizes(mid).length, 2 + 10 + 0, "two bracket values, then ten bisection steps (the first value above 1 MiB is not sent)");
+  assert.equal(
+    sizes(mid).length,
+    2 + 10 + 0,
+    "two bracket values, then ten bisection steps (the first value above 1 MiB is not sent)",
+  );
   // A count limit of one: the first ladder value is refused and the search starts from one event.
   const tiny = createWorld({ project: PROJECT, eventLimit: 1, textLimit: 1 });
   const { notes } = await run(tiny, { cases: [publishLimits] });
   const count = notes.find((n) => n.note === "limit-boundary" && n.name === "event-count");
   assert.deepEqual([count.accepted, count.refused], [1, 2]);
   const size = notes.find((n) => n.note === "limit-boundary" && n.name === "event-text-length");
-  assert.equal(size.accepted, 1, "the text-length search starts from one character, which a limit of 1 accepts");
+  assert.equal(
+    size.accepted,
+    1,
+    "the text-length search starts from one character, which a limit of 1 accepts",
+  );
   assert.ok(size.refused > 1 && size.refused - size.accepted <= Math.ceil(262144 / 1024));
 });
 
@@ -979,7 +1079,11 @@ test("the extension attributes of the envelope case carry the values the plan na
     .flat()
     .find((candidate) => candidate.attributes?.flag !== undefined);
   assert.deepEqual(
-    Object.fromEntries(Object.entries(event.attributes).filter(([key]) => key !== "time" && key !== "datacontenttype")),
+    Object.fromEntries(
+      Object.entries(event.attributes).filter(
+        ([key]) => key !== "time" && key !== "datacontenttype",
+      ),
+    ),
     {
       flag: { ceBoolean: true },
       count: { ceInteger: 1 },
@@ -992,16 +1096,40 @@ test("the extension attributes of the envelope case carry the values the plan na
 
 test("a limit search ends on an answer that is not the recorded limit answer: a 404 or a 403 is not a boundary", async () => {
   for (const answer of [
-    { status: 404, body: { error: { code: 404, status: "NOT_FOUND", message: "Associated channel does not exist." } }, unknown: false },
-    { status: 403, body: { error: { code: 403, status: "PERMISSION_DENIED", message: "denied" } }, unknown: false },
-    { status: 400, body: { error: { code: 400, status: "INVALID_ARGUMENT", message: "some other problem" } }, unknown: false },
+    {
+      status: 404,
+      body: {
+        error: { code: 404, status: "NOT_FOUND", message: "Associated channel does not exist." },
+      },
+      unknown: false,
+    },
+    {
+      status: 403,
+      body: { error: { code: 403, status: "PERMISSION_DENIED", message: "denied" } },
+      unknown: false,
+    },
+    {
+      status: 400,
+      body: { error: { code: 400, status: "INVALID_ARGUMENT", message: "some other problem" } },
+      unknown: false,
+    },
   ]) {
     const world = createWorld({ project: PROJECT });
     const odd = async (call) =>
       call.op === "publishEvents" && call.body.events.length === 255 ? answer : world.request(call);
-    const { notes } = await run({ request: odd, calls: world.calls, live: new Set() }, { cases: [publishLimits] });
+    const { notes } = await run(
+      { request: odd, calls: world.calls, live: new Set() },
+      { cases: [publishLimits] },
+    );
     const bracket = notes.find((n) => n.note === "limit-bracket" && n.name === "event-count");
-    assert.deepEqual([bracket.low, bracket.high, bracket.unknown], [8, null, true], JSON.stringify(answer.status));
-    assert.equal(notes.some((n) => n.note === "limit-boundary" && n.name === "event-count"), false);
+    assert.deepEqual(
+      [bracket.low, bracket.high, bracket.unknown],
+      [8, null, true],
+      JSON.stringify(answer.status),
+    );
+    assert.equal(
+      notes.some((n) => n.note === "limit-boundary" && n.name === "event-count"),
+      false,
+    );
   }
 });

@@ -55,7 +55,12 @@ export const withoutAttribute = (event, name) => ({
 /** The reads of one operation: the bound every case ceiling is derived from (with `READY_READS`). */
 export const OPERATION_READS_MAX = 10;
 
-export async function waitOperation(ctx, host, reply, { attempts = OPERATION_READS_MAX, settle } = {}) {
+export async function waitOperation(
+  ctx,
+  host,
+  reply,
+  { attempts = OPERATION_READS_MAX, settle } = {},
+) {
   const name = reply?.body?.name;
   let last = reply;
   const finished = () => !last?.ok || last.body?.done === true;

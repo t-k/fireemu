@@ -4,7 +4,14 @@
 
 import assert from "node:assert/strict";
 import test from "node:test";
-import { acceptance, bisect, bracket, isCountRefusal, isSizeRefusal, stepsNeeded } from "./eventarc-production/bisect.mjs";
+import {
+  acceptance,
+  bisect,
+  bracket,
+  isCountRefusal,
+  isSizeRefusal,
+  stepsNeeded,
+} from "./eventarc-production/bisect.mjs";
 import { recorded } from "./eventarc-production/testing/world.mjs";
 
 function random(seed) {
@@ -35,7 +42,10 @@ test("it finds the boundary of a monotone limit between an accepted and a refuse
     assert.equal(result.refused, limit + 1);
     assert.equal(result.unknown, false);
     assert.equal(new Set(asked).size, asked.length, "no value is sent twice");
-    assert.ok(asked.every((n) => n > low && n < high), "only values between the two known ones");
+    assert.ok(
+      asked.every((n) => n > low && n < high),
+      "only values between the two known ones",
+    );
     assert.ok(asked.length <= stepsNeeded(high - low));
   }
 });
@@ -74,10 +84,21 @@ test("an answer that is neither accepted nor refused ends the search at once and
 });
 
 test("neighbours need no request, and a degenerate interval is refused", async () => {
-  const result = await bisect({ low: 5, high: 6, maxSteps: 5, accepts: async () => assert.fail("asked") });
+  const result = await bisect({
+    low: 5,
+    high: 6,
+    maxSteps: 5,
+    accepts: async () => assert.fail("asked"),
+  });
   assert.deepEqual(result, { accepted: 5, refused: 6, steps: 0, unknown: false });
-  await assert.rejects(() => bisect({ low: 6, high: 6, maxSteps: 5, accepts: async () => true }), /low must be below high/);
-  await assert.rejects(() => bisect({ low: 1, high: 9, maxSteps: 0, accepts: async () => true }), /maxSteps/);
+  await assert.rejects(
+    () => bisect({ low: 6, high: 6, maxSteps: 5, accepts: async () => true }),
+    /low must be below high/,
+  );
+  await assert.rejects(
+    () => bisect({ low: 1, high: 9, maxSteps: 0, accepts: async () => true }),
+    /maxSteps/,
+  );
 });
 
 test("stepsNeeded is the number of halvings of an interval", () => {
@@ -104,7 +125,18 @@ test("acceptance: a 2xx is accepted, only the recorded limit answer is a refusal
   assert.equal(acceptance(sizeLimit, isCountRefusal), null);
   // Any other 4xx is not the limit: it ends the search (a missing channel, a permission, a malformed event).
   for (const status of [400, 401, 403, 404, 409, 413, 422])
-    assert.equal(acceptance({ status, body: { error: { status: "NOT_FOUND", message: "Associated channel does not exist." } }, unknown: false }, isCountRefusal), null, String(status));
+    assert.equal(
+      acceptance(
+        {
+          status,
+          body: { error: { status: "NOT_FOUND", message: "Associated channel does not exist." } },
+          unknown: false,
+        },
+        isCountRefusal,
+      ),
+      null,
+      String(status),
+    );
   // The limit's status and message must both match, with the recorded status code.
   const wrongStatus = structuredClone(countLimit);
   wrongStatus.status = 404;
@@ -118,7 +150,8 @@ test("acceptance: a 2xx is accepted, only the recorded limit answer is a refusal
   const wrongSize = structuredClone(sizeLimit);
   wrongSize.body.error.message = "The event size is too large.";
   assert.equal(acceptance(wrongSize, isSizeRefusal), null);
-  for (const status of [408, 429, 500, 503, 301, 100, 501, null]) assert.equal(acceptance({ status, unknown: false }, isCountRefusal), null, String(status));
+  for (const status of [408, 429, 500, 503, 301, 100, 501, null])
+    assert.equal(acceptance({ status, unknown: false }, isCountRefusal), null, String(status));
   assert.equal(acceptance({ status: 200, unknown: true }, isCountRefusal), null);
   assert.equal(acceptance({ ...countLimit, unknown: true }, isCountRefusal), null);
   assert.equal(acceptance(undefined, isCountRefusal), null);
@@ -148,7 +181,10 @@ test("bracket: the ladder stops at the first refused value and names the last ac
     assert.equal(result.high, firstRefused);
     assert.equal(result.low, values.filter((n) => n <= limit).at(-1) ?? 0);
     assert.equal(result.unknown, false);
-    assert.deepEqual(asked, firstRefused === null ? values : values.slice(0, values.indexOf(firstRefused) + 1));
+    assert.deepEqual(
+      asked,
+      firstRefused === null ? values : values.slice(0, values.indexOf(firstRefused) + 1),
+    );
   }
 });
 
@@ -167,8 +203,14 @@ test("bracket: an answer that does not say ends the ladder and is not asked agai
 });
 
 test("bracket: values must rise above the start", async () => {
-  await assert.rejects(() => bracket({ start: 5, values: [5, 6], accepts: async () => true }), /rise/);
-  await assert.rejects(() => bracket({ start: 0, values: [3, 2], accepts: async () => true }), /rise/);
+  await assert.rejects(
+    () => bracket({ start: 5, values: [5, 6], accepts: async () => true }),
+    /rise/,
+  );
+  await assert.rejects(
+    () => bracket({ start: 0, values: [3, 2], accepts: async () => true }),
+    /rise/,
+  );
   await assert.rejects(() => bracket({ start: 0, values: [], accepts: async () => true }), /rise/);
 });
 
@@ -177,8 +219,14 @@ test("boundaries of the guards: one step is allowed, equal ladder values do not 
   assert.deepEqual(one, { accepted: 1, refused: 2, steps: 1, unknown: false });
   assert.equal(acceptance({ status: 299, unknown: false }, isCountRefusal), true);
   assert.equal(acceptance({ status: 300, unknown: false }, isCountRefusal), null);
-  await assert.rejects(() => bracket({ start: 0, values: [3, 3], accepts: async () => true }), /rise/);
-  await assert.rejects(() => bracket({ start: 0, values: [1, 3, 3], accepts: async () => true }), /rise/);
+  await assert.rejects(
+    () => bracket({ start: 0, values: [3, 3], accepts: async () => true }),
+    /rise/,
+  );
+  await assert.rejects(
+    () => bracket({ start: 0, values: [1, 3, 3], accepts: async () => true }),
+    /rise/,
+  );
   const ok = await bracket({ start: 0, values: [1, 2], accepts: async () => true });
   assert.deepEqual(ok, { low: 2, high: null, unknown: false });
 });

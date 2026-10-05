@@ -151,7 +151,12 @@ export const publishLimits = {
       const bracketed = await bracket({ start, values: ladder, accepts });
       ctx.note("limit-bracket", { name, ...bracketed });
       if (bracketed.unknown || bracketed.high === null) return;
-      const found = await bisect({ low: bracketed.low, high: bracketed.high, accepts, maxSteps: steps });
+      const found = await bisect({
+        low: bracketed.low,
+        high: bracketed.high,
+        accepts,
+        maxSteps: steps,
+      });
       ctx.note("limit-boundary", { name, ...found });
     };
     // The count of events in one request: one event is accepted (the envelope case), 256 was refused.

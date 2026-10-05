@@ -64,7 +64,9 @@ export const channelLifecycle = {
     // The project number in the path (given at run time, only when it differs from the ID).
     if (ctx.projectNumber !== null) {
       await c.listChannels(ctx.projectNumber, ctx.location);
-      await c.getChannel(name.replace(`projects/${ctx.project}/`, `projects/${ctx.projectNumber}/`));
+      await c.getChannel(
+        name.replace(`projects/${ctx.project}/`, `projects/${ctx.projectNumber}/`),
+      );
     }
     // A second creation of the same ID.
     const duplicate = await c.createChannel(ctx.project, ctx.location, id);

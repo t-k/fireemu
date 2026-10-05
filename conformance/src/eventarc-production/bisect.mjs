@@ -17,7 +17,8 @@ export function stepsNeeded(width) {
 export async function bisect({ low, high, accepts, maxSteps }) {
   if (!(Number.isSafeInteger(low) && Number.isSafeInteger(high) && low < high))
     throw new Error("low must be below high");
-  if (!Number.isSafeInteger(maxSteps) || maxSteps < 1) throw new Error("maxSteps must be at least 1");
+  if (!Number.isSafeInteger(maxSteps) || maxSteps < 1)
+    throw new Error("maxSteps must be at least 1");
   let accepted = low;
   let refused = high;
   let steps = 0;

@@ -56,13 +56,17 @@ test("the model refuses a creation whose name is missing, empty, not a string, o
     [{ name: null }, "create-no-name"],
     [{ provider: "projects/p/locations/l/providers/x" }, "create-no-name"],
     [{ name: `${full}-other` }, "create-name-mismatch"],
-    [{ name: `projects/${PROJECT}/locations/europe-west1/channels/fe${RUN}-x` }, "create-name-mismatch"],
+    [
+      { name: `projects/${PROJECT}/locations/europe-west1/channels/fe${RUN}-x` },
+      "create-name-mismatch",
+    ],
   ];
   for (const [body, kind] of bodies) {
     const answer = await world.request({ op: "createChannel", method: "POST", path, body });
     assert.equal(answer.status, 400, JSON.stringify(body));
     // The first seven are the recorded 400 itself, byte for byte; the mismatch is a modelled wording.
-    if (kind !== "create-name-mismatch") assert.deepEqual(answer.body, recorded("createChannel-no-name").body);
+    if (kind !== "create-name-mismatch")
+      assert.deepEqual(answer.body, recorded("createChannel-no-name").body);
     assert.equal(world.refusals.at(-1).kind, kind, JSON.stringify(body));
   }
   assert.equal(world.channels.size, 0);
@@ -118,14 +122,20 @@ test("property: for any location and channel ID the builder produces a body the 
   };
   const alphabet = "abcdefghijklmnopqrstuvwxyz0123456789-";
   for (let round = 0; round < 200; round += 1) {
-    const world = createWorld({ project: PROJECT, locations: ["us-central1", "europe-west1", "asia-east1"] });
+    const world = createWorld({
+      project: PROJECT,
+      locations: ["us-central1", "europe-west1", "asia-east1"],
+    });
     const { client } = clientOn(world);
     const location = ["us-central1", "europe-west1", "asia-east1"][next(3)];
     let id = `fe${RUN}-`;
     for (let i = next(20) + 1; i > 0; i -= 1) id += alphabet[next(alphabet.length)];
     const answer = await client.createChannel(PROJECT, location, id.slice(0, 63));
     assert.equal(answer.status, 200, id);
-    assert.equal(world.calls[0].body.name, `projects/${PROJECT}/locations/${location}/channels/${id.slice(0, 63)}`);
+    assert.equal(
+      world.calls[0].body.name,
+      `projects/${PROJECT}/locations/${location}/channels/${id.slice(0, 63)}`,
+    );
     assert.deepEqual(world.refusals, []);
   }
 });
@@ -156,7 +166,10 @@ test("every write the recorder can build is checked: the creation's body is the 
   await client.createChannel(PROJECT, "us-central1", name.split("/").at(-1));
   await client.deleteChannel(name);
   assert.deepEqual(
-    world.calls.map((call) => [call.op, call.body === undefined ? "no body" : Object.keys(call.body)]),
+    world.calls.map((call) => [
+      call.op,
+      call.body === undefined ? "no body" : Object.keys(call.body),
+    ]),
     [
       ["createChannel", ["name"]],
       ["deleteChannel", "no body"],
@@ -172,7 +185,11 @@ async function officialRequests(fn) {
   const eventarc = require("firebase-tools/lib/gcp/eventarc");
   const { Client } = require("firebase-tools/lib/apiv2");
   const seen = [];
-  const original = { post: Client.prototype.post, get: Client.prototype.get, delete: Client.prototype.delete };
+  const original = {
+    post: Client.prototype.post,
+    get: Client.prototype.get,
+    delete: Client.prototype.delete,
+  };
   Client.prototype.post = async function (path, body, options) {
     seen.push({ method: "POST", path, body, query: options?.queryParams });
     return { body: {} };
@@ -229,8 +246,20 @@ test("differential: the creation, the read and the deletion are the requests fir
     await client.getChannel(full);
     await client.deleteChannel(full);
     assert.deepEqual(
-      sent.map((call) => ({ method: call.method, path: call.path.split("?")[0].replace(/^\/v1\//, ""), query: call.path.includes("?") ? Object.fromEntries(new URLSearchParams(call.path.split("?")[1])) : undefined, body: call.body })),
-      official.map((call) => ({ method: call.method, path: call.path.replace(/^\//, ""), query: call.query, body: call.body })),
+      sent.map((call) => ({
+        method: call.method,
+        path: call.path.split("?")[0].replace(/^\/v1\//, ""),
+        query: call.path.includes("?")
+          ? Object.fromEntries(new URLSearchParams(call.path.split("?")[1]))
+          : undefined,
+        body: call.body,
+      })),
+      official.map((call) => ({
+        method: call.method,
+        path: call.path.replace(/^\//, ""),
+        query: call.query,
+        body: call.body,
+      })),
       full,
     );
   }
@@ -241,20 +270,33 @@ test("the model names the operation of a creation and of a deletion under the lo
   const { client, ownership } = clientOn(world);
   const names = ["a", "b", "c"].map((key) => ownership.channel("us-central1", key));
   const created = [];
-  for (const name of names) created.push(await client.createChannel(PROJECT, "us-central1", name.split("/").at(-1)));
+  for (const name of names)
+    created.push(await client.createChannel(PROJECT, "us-central1", name.split("/").at(-1)));
   for (const answer of created)
-    assert.match(answer.body.name, new RegExp(`^projects/${PROJECT}/locations/us-central1/operations/operation-\\d+$`));
+    assert.match(
+      answer.body.name,
+      new RegExp(`^projects/${PROJECT}/locations/us-central1/operations/operation-\\d+$`),
+    );
   const deleted = await client.deleteChannel(names[0]);
-  assert.match(deleted.body.name, new RegExp(`^projects/${PROJECT}/locations/us-central1/operations/operation-\\d+$`));
+  assert.match(
+    deleted.body.name,
+    new RegExp(`^projects/${PROJECT}/locations/us-central1/operations/operation-\\d+$`),
+  );
   const seen = [];
   let token;
   for (let page = 0; page < 5; page += 1) {
-    const answer = await client.listChannels(PROJECT, "us-central1", { pageSize: 1, ...(token ? { pageToken: token } : {}) });
+    const answer = await client.listChannels(PROJECT, "us-central1", {
+      pageSize: 1,
+      ...(token ? { pageToken: token } : {}),
+    });
     seen.push(...(answer.body.channels ?? []).map((channel) => channel.name));
     token = answer.body.nextPageToken;
     if (!token) break;
   }
   assert.deepEqual(seen, names.slice(1), "every channel once, in order, the deleted one gone");
-  const empty = await client.listChannels(PROJECT, "us-central1", { pageSize: 5, pageToken: Buffer.from(names[2]).toString("base64url") });
+  const empty = await client.listChannels(PROJECT, "us-central1", {
+    pageSize: 5,
+    pageToken: Buffer.from(names[2]).toString("base64url"),
+  });
   assert.deepEqual(empty.body, {});
 });

@@ -272,3 +272,21 @@ test("sdk-run.mjs and the core import nothing, so a page can load them", () => {
     assert.equal(/node:/.test(source), false);
   }
 });
+
+test("teardownClients waits for deleteApp too: a client whose app cannot be deleted is not closed", async () => {
+  const sdk = {
+    async terminate() {},
+    async deleteApp(app) {
+      await Promise.resolve();
+      if (app === "bad") throw new Error("x");
+    },
+  };
+  const out = await teardownClients(sdk, {
+    primary: { db: "d1", app: "bad" },
+    witness: { db: "d2", app: "a2" },
+  });
+  assert.deepEqual(out, [
+    { client: "primary", closed: false },
+    { client: "witness", closed: true },
+  ]);
+});

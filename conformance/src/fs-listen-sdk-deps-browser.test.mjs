@@ -6,14 +6,25 @@ import { createDeps } from "../../tools/compat-broad/fs-listen-resume/listen_sdk
 import { createPageDeps } from "./fs-listen/sdk-deps-browser.mjs";
 
 /** A fake SDK that logs every call with its arguments and answers with fixed shapes. */
-function fakeSdk(log, { owner = "o1", exists = true } = {}) {
+function fakeSdk(
+  log,
+  { owner = "o1", exists = true, fromCache = false, pending = false, reject = [] } = {},
+) {
   const note = (name, ...args) => log.push([name, ...args.map((a) => (a?.ref ? a.ref : a))]);
   const snapshot = (path) => ({
     ref: path,
     exists: () => exists,
     data: () => ({ owner }),
-    metadata: { fromCache: false, hasPendingWrites: false },
+    metadata: { fromCache, hasPendingWrites: pending },
   });
+  // Every asynchronous call finishes a tick later and logs that it did, or rejects: a dependency
+  // that does not wait for it shows in the log, or answers where the other one rejects.
+  const later = async (name, ...args) => {
+    note(name, ...args);
+    await Promise.resolve();
+    log.push([`${name}:done`]);
+    if (reject.includes(name)) throw new Error(`${name} rejected`);
+  };
   return {
     doc: (db, path) => ({ ref: `${db.name}:${path}` }),
     collection: (db, path) => ({ ref: `${db.name}:${path}` }),
@@ -24,13 +35,13 @@ function fakeSdk(log, { owner = "o1", exists = true } = {}) {
       ref: `query(${collection.ref};${constraints.map((c) => c.ref)})`,
     }),
     async setDoc(ref, fields) {
-      note("setDoc", ref, fields);
+      await later("setDoc", ref, fields);
     },
     async deleteDoc(ref) {
-      note("deleteDoc", ref);
+      await later("deleteDoc", ref);
     },
     async getDocFromServer(ref) {
-      note("getDocFromServer", ref);
+      await later("getDocFromServer", ref);
       return snapshot(ref.ref);
     },
     onSnapshot(target, options, observer) {
@@ -47,7 +58,7 @@ function fakeSdk(log, { owner = "o1", exists = true } = {}) {
       return () => note("unsubscribe");
     },
     async runTransaction(db, fn, options) {
-      note("runTransaction", db.name, options);
+      await later("runTransaction", db.name, options);
       const transaction = {
         get: async (ref) => {
           note("txn.get", ref);
@@ -58,24 +69,24 @@ function fakeSdk(log, { owner = "o1", exists = true } = {}) {
       return fn(transaction);
     },
     async disableNetwork(db) {
-      note("disableNetwork", db.name);
+      await later("disableNetwork", db.name);
     },
     async enableNetwork(db) {
-      note("enableNetwork", db.name);
+      await later("enableNetwork", db.name);
     },
     async signInWithEmailAndPassword(auth, email, password) {
-      note("signIn", auth.name, email, password);
+      await later("signIn", auth.name, email, password);
     },
     async signOut(auth) {
-      note("signOut", auth.name);
+      await later("signOut", auth.name);
     },
   };
 }
 
-const clients = () => ({
+const clients = (currentUser = { uid: "u1" }) => ({
   primary: {
     db: { name: "db1" },
-    auth: { name: "auth1", currentUser: { uid: "u1" } },
+    auth: { name: "auth1", currentUser },
     account: { name: "throwaway", email: "e@example.com", password: "p" },
   },
 });
@@ -88,7 +99,7 @@ async function drive(deps) {
     try {
       out.push([label, await promise]);
     } catch (error) {
-      out.push([label, `threw: ${error.message}`]);
+      out.push([label, `threw: ${error.message} ${error.code ?? ""}`.trimEnd()]);
     }
   };
   await keep("setDoc", deps.firestore.setDoc("primary", "x/1", { a: 1 }));
@@ -101,6 +112,12 @@ async function drive(deps) {
     "deleteOwned extra",
     deps.firestore.deleteOwnedDoc("primary", "x/1", { owner: "o", z: 1 }),
   );
+  for (const [label, condition] of [
+    ["null", null],
+    ["number owner", { owner: 5 }],
+    ["empty owner", { owner: "" }],
+  ])
+    await keep(`deleteOwned ${label}`, deps.firestore.deleteOwnedDoc("primary", "x/1", condition));
   await keep("getDoc", deps.firestore.getDoc("primary", "x/1"));
   const unsubscribeDoc = deps.firestore.onDocSnapshot(
     "primary",
@@ -131,6 +148,7 @@ async function drive(deps) {
   await keep("signIn unknown", deps.auth.signIn("primary", "stranger"));
   await keep("signOut", deps.auth.signOut("primary"));
   await keep("revoke", deps.auth.revoke("primary"));
+  await keep("revoke again", deps.auth.revoke("primary"));
   out.push(["events", events]);
   out.push(["now", Number.isInteger(deps.now())]);
   await keep("sleep", deps.sleep(1));
@@ -147,13 +165,47 @@ test("the page dependencies make the same SDK calls and give the same answers as
     assert.ok(nodeLog.length > 10, "the sequence exercised the calls");
   }
   // A transaction that finds the owner marker changed, and a document that is not there.
-  for (const options of [{ owner: "other" }, { exists: false }]) {
+  for (const options of [
+    { owner: "other" },
+    { exists: false },
+    { exists: "yes" },
+    { fromCache: true },
+    { pending: true },
+    { reject: ["setDoc"] },
+    { reject: ["deleteDoc"] },
+    { reject: ["disableNetwork"] },
+    { reject: ["enableNetwork"] },
+    { reject: ["signIn"] },
+    { reject: ["signOut"] },
+    { reject: ["getDocFromServer"] },
+  ]) {
     const [nodeLog, pageLog] = [[], []];
     const nodeOut = await drive(createDeps(fakeSdk(nodeLog, options), clients()));
     const pageOut = await drive(createPageDeps(fakeSdk(pageLog, options), clients()));
-    assert.deepEqual(pageLog, nodeLog);
-    assert.deepEqual(pageOut, nodeOut);
+    assert.deepEqual(pageLog, nodeLog, JSON.stringify(options));
+    assert.deepEqual(pageOut, nodeOut, JSON.stringify(options));
   }
+  // A client with nobody signed in cannot revoke.
+  for (const user of [null, { uid: "" }, { uid: 7 }]) {
+    const [nodeLog, pageLog] = [[], []];
+    const revoke = async (uid) => uid;
+    const nodeOut = await drive(createDeps(fakeSdk(nodeLog), clients(user), { revoke }));
+    const pageOut = await drive(createPageDeps(fakeSdk(pageLog), clients(user), { revoke }));
+    assert.deepEqual(pageOut, nodeOut);
+    assert.deepEqual(
+      pageOut.filter(([label]) => label.startsWith("revoke")).map(([, value]) => value),
+      ["threw: revoke needs a signed-in client", "threw: revoke needs a signed-in client"],
+    );
+  }
+  // The revoke function itself is awaited, and what it throws comes through.
+  const failing = async () => {
+    throw new Error("revoke failed");
+  };
+  const [a, b] = [[], []];
+  assert.deepEqual(
+    await drive(createPageDeps(fakeSdk(b), clients(), { revoke: failing })),
+    await drive(createDeps(fakeSdk(a), clients(), { revoke: failing })),
+  );
 });
 
 test("the page dependencies import nothing, so a page can load them", () => {

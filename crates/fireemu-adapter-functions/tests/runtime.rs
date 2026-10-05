@@ -2466,7 +2466,24 @@ async fn a_crash_fault_still_kills_a_runner_that_cannot_be_respawned() {
 
 #[tokio::test]
 async fn schedule_retry_options_control_attempts_and_logical_backoff() {
-    let (runtime, clock) = start().await;
+    // a second-generation schedule: a first-generation handler is never retried
+    let (runtime, clock) = start_runtime(
+        fireemu_adapter_functions::runtime::OverlapPolicy::Allow,
+        fireemu_adapter_functions::runtime::CatchUpPolicy::All,
+        4,
+        false,
+        Vec::new(),
+        1000,
+        |manifest| {
+            manifest
+                .functions
+                .iter_mut()
+                .find(|f| f.name == "failSchedule")
+                .unwrap()
+                .generation = FunctionGeneration::Second;
+        },
+    )
+    .await;
     runtime.run_schedule("failSchedule").unwrap();
     let _ = runtime.await_idle(Duration::from_millis(200)).await;
     assert_eq!(
@@ -2512,6 +2529,288 @@ async fn schedule_retry_options_control_attempts_and_logical_backoff() {
         .dead_letters()
         .iter()
         .any(|record| record.function == "failSchedule" && record.attempt == 3));
+    runtime.runner().shutdown().await;
+}
+
+/// Recorded (run `156715222b86ea44`): a job with `maxRetryDuration: 30s`, no retry count, `minBackoff 4s` and
+/// `maxBackoff 10s` was attempted at 0, 4.6, 13.2 and 23.7 seconds and then stopped, the next attempt being past the
+/// window. That job targeted HTTP (second generation). The logical clock has no dispatch latency, so the attempts
+/// are at 0, 4, 12 and 22.
+#[tokio::test]
+async fn a_second_generation_retry_window_without_a_count_retries_until_the_window_ends() {
+    use fireemu_core_functions::manifest::{ScheduleRetryConfig, Trigger};
+    let (runtime, clock) = start_runtime(
+        fireemu_adapter_functions::runtime::OverlapPolicy::Allow,
+        fireemu_adapter_functions::runtime::CatchUpPolicy::All,
+        4,
+        false,
+        Vec::new(),
+        1000,
+        |manifest| {
+            let spec = manifest
+                .functions
+                .iter_mut()
+                .find(|f| f.name == "failSchedule")
+                .unwrap();
+            let Trigger::Schedule {
+                schedule,
+                time_zone,
+                ..
+            } = spec.trigger.clone()
+            else {
+                panic!("failSchedule is scheduled");
+            };
+            spec.trigger = Trigger::Schedule {
+                schedule,
+                time_zone,
+                retry: ScheduleRetryConfig {
+                    retry_count: 0,
+                    max_retry_seconds: 30,
+                    max_backoff_seconds: 10,
+                    max_doublings: 5,
+                    min_backoff_seconds: 4,
+                },
+            };
+            spec.retry = true;
+            spec.generation = FunctionGeneration::Second;
+        },
+    )
+    .await;
+    let attempts = |runtime: &FunctionsRuntime| -> Vec<u32> {
+        runtime
+            .history()
+            .iter()
+            .filter(|record| record.function == "failSchedule")
+            .map(|record| record.attempt)
+            .collect()
+    };
+    runtime.run_schedule("failSchedule").unwrap();
+    let _ = runtime.await_idle(Duration::from_millis(300)).await;
+    assert_eq!(attempts(&runtime), vec![1]);
+    // 4, 8 and then the 10 s cap: attempts 2, 3 and 4 at 4, 12 and 22 seconds.
+    for (advance, expected) in [(3, 1), (1, 2), (7, 2), (1, 3), (9, 3), (1, 4)] {
+        clock
+            .lock()
+            .unwrap()
+            .advance(LogicalDuration::from_seconds(advance))
+            .unwrap();
+        runtime.on_clock_changed();
+        let _ = runtime.await_idle(Duration::from_millis(300)).await;
+        assert_eq!(attempts(&runtime).len(), expected, "after +{advance}s");
+    }
+    // The fifth attempt would be at 32 seconds, past the 30 second window: none, however far the clock goes.
+    clock
+        .lock()
+        .unwrap()
+        .advance(LogicalDuration::from_seconds(600))
+        .unwrap();
+    runtime.on_clock_changed();
+    let _ = runtime.await_idle(Duration::from_millis(300)).await;
+    assert_eq!(attempts(&runtime), vec![1, 2, 3, 4]);
+    assert!(runtime
+        .dead_letters()
+        .iter()
+        .any(|record| record.function == "failSchedule" && record.attempt == 4));
+    runtime.runner().shutdown().await;
+}
+
+/// A retry window with no backoff at all (not recorded: production's answer to `minBackoffDuration: "0s"` is unknown) is
+/// not a hot loop: one retry is released per clock change, so a failing handler is attempted once per clock move until
+/// the window ends, and never after it.
+#[tokio::test]
+async fn a_zero_backoff_window_retries_once_per_clock_change_until_the_window_ends() {
+    use fireemu_core_functions::manifest::{ScheduleRetryConfig, Trigger};
+    let (runtime, clock) = start_runtime(
+        fireemu_adapter_functions::runtime::OverlapPolicy::Allow,
+        fireemu_adapter_functions::runtime::CatchUpPolicy::All,
+        4,
+        false,
+        Vec::new(),
+        1000,
+        |manifest| {
+            let spec = manifest
+                .functions
+                .iter_mut()
+                .find(|f| f.name == "failSchedule")
+                .unwrap();
+            let Trigger::Schedule {
+                schedule,
+                time_zone,
+                ..
+            } = spec.trigger.clone()
+            else {
+                panic!("failSchedule is scheduled");
+            };
+            spec.trigger = Trigger::Schedule {
+                schedule,
+                time_zone,
+                retry: ScheduleRetryConfig {
+                    retry_count: 0,
+                    max_retry_seconds: 5,
+                    max_backoff_seconds: 0,
+                    max_doublings: 0,
+                    min_backoff_seconds: 0,
+                },
+            };
+            spec.retry = true;
+            spec.generation = FunctionGeneration::Second;
+        },
+    )
+    .await;
+    let attempts = |runtime: &FunctionsRuntime| -> usize {
+        runtime
+            .history()
+            .iter()
+            .filter(|record| record.function == "failSchedule")
+            .count()
+    };
+    runtime.run_schedule("failSchedule").unwrap();
+    let _ = runtime.await_idle(Duration::from_millis(300)).await;
+    assert_eq!(attempts(&runtime), 1);
+    let mut counts = vec![1];
+    for _ in 0..9 {
+        clock
+            .lock()
+            .unwrap()
+            .advance(LogicalDuration::from_seconds(1))
+            .unwrap();
+        runtime.on_clock_changed();
+        let _ = runtime.await_idle(Duration::from_millis(300)).await;
+        counts.push(attempts(&runtime));
+    }
+    // One more attempt per one-second move, then none, however many moves follow. The retry that the attempt at 5 s
+    // decides (5 + 0 <= 5, inside the window) is released by the next move, at 6 s; its failure decides none. Pins
+    // today's behaviour, which is not necessarily the intended one: the last attempt runs one move past the window.
+    assert_eq!(counts, vec![1, 2, 3, 4, 5, 6, 7, 7, 7, 7]);
+    runtime.runner().shutdown().await;
+}
+
+/// A first-generation schedule's job targets Pub/Sub, so Cloud Scheduler's retry covers the publish, not the handler:
+/// no handler retry was recorded for it (the window was recorded for an HTTP target only). A window alone is one
+/// attempt, however far the clock goes.
+#[tokio::test]
+async fn a_first_generation_retry_window_without_a_count_is_one_attempt() {
+    use fireemu_core_functions::manifest::{ScheduleRetryConfig, Trigger};
+    let (runtime, clock) = start_runtime(
+        fireemu_adapter_functions::runtime::OverlapPolicy::Allow,
+        fireemu_adapter_functions::runtime::CatchUpPolicy::All,
+        4,
+        false,
+        Vec::new(),
+        1000,
+        |manifest| {
+            let spec = manifest
+                .functions
+                .iter_mut()
+                .find(|f| f.name == "failSchedule")
+                .unwrap();
+            let Trigger::Schedule {
+                schedule,
+                time_zone,
+                ..
+            } = spec.trigger.clone()
+            else {
+                panic!("failSchedule is scheduled");
+            };
+            spec.trigger = Trigger::Schedule {
+                schedule,
+                time_zone,
+                retry: ScheduleRetryConfig {
+                    retry_count: 0,
+                    max_retry_seconds: 30,
+                    max_backoff_seconds: 10,
+                    max_doublings: 5,
+                    min_backoff_seconds: 4,
+                },
+            };
+            spec.retry = true;
+            spec.generation = FunctionGeneration::First;
+        },
+    )
+    .await;
+    runtime.run_schedule("failSchedule").unwrap();
+    let _ = runtime.await_idle(Duration::from_millis(300)).await;
+    for advance in [5, 10, 600] {
+        clock
+            .lock()
+            .unwrap()
+            .advance(LogicalDuration::from_seconds(advance))
+            .unwrap();
+        runtime.on_clock_changed();
+        let _ = runtime.await_idle(Duration::from_millis(300)).await;
+    }
+    let attempts: Vec<u32> = runtime
+        .history()
+        .iter()
+        .filter(|record| record.function == "failSchedule")
+        .map(|record| record.attempt)
+        .collect();
+    assert_eq!(attempts, vec![1]);
+    runtime.runner().shutdown().await;
+}
+
+/// A first-generation schedule's job targets Pub/Sub, so Cloud Scheduler's retry covers the publish, not the handler.
+/// A count alone (here 3, no window) is one attempt, however far the clock goes: schedFailV1's handler ran once per
+/// occurrence and its Scheduler attempts all finished without an error although the handler threw. (The window-only
+/// case is `a_first_generation_retry_window_without_a_count_is_one_attempt`.)
+#[tokio::test]
+async fn a_first_generation_retry_count_is_one_attempt() {
+    use fireemu_core_functions::manifest::{ScheduleRetryConfig, Trigger};
+    let (runtime, clock) = start_runtime(
+        fireemu_adapter_functions::runtime::OverlapPolicy::Allow,
+        fireemu_adapter_functions::runtime::CatchUpPolicy::All,
+        4,
+        false,
+        Vec::new(),
+        1000,
+        |manifest| {
+            let spec = manifest
+                .functions
+                .iter_mut()
+                .find(|f| f.name == "failSchedule")
+                .unwrap();
+            let Trigger::Schedule {
+                schedule,
+                time_zone,
+                ..
+            } = spec.trigger.clone()
+            else {
+                panic!("failSchedule is scheduled");
+            };
+            spec.trigger = Trigger::Schedule {
+                schedule,
+                time_zone,
+                retry: ScheduleRetryConfig {
+                    retry_count: 3,
+                    max_retry_seconds: 0,
+                    max_backoff_seconds: 10,
+                    max_doublings: 5,
+                    min_backoff_seconds: 4,
+                },
+            };
+            spec.retry = true;
+            spec.generation = FunctionGeneration::First;
+        },
+    )
+    .await;
+    runtime.run_schedule("failSchedule").unwrap();
+    let _ = runtime.await_idle(Duration::from_millis(300)).await;
+    for advance in [5, 10, 600] {
+        clock
+            .lock()
+            .unwrap()
+            .advance(LogicalDuration::from_seconds(advance))
+            .unwrap();
+        runtime.on_clock_changed();
+        let _ = runtime.await_idle(Duration::from_millis(300)).await;
+    }
+    let attempts: Vec<u32> = runtime
+        .history()
+        .iter()
+        .filter(|record| record.function == "failSchedule")
+        .map(|record| record.attempt)
+        .collect();
+    assert_eq!(attempts, vec![1]);
     runtime.runner().shutdown().await;
 }
 

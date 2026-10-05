@@ -1,0 +1,842 @@
+{
+  "provenance": "Real bodies recorded on the sandbox (calendar shape run 96db1cb7, 2026-09-30) and on the events project (FE formal v5, 2026-10-04). Project numbers and the owner's address are replaced.",
+  "trimmed": {
+    "servicesEnabledList": "each service reduced to name, config.name, config.title, state, parent",
+    "batchEnableDone": "response.services reduced to name and state",
+    "functionsV1List": "each function reduced to name and status"
+  },
+  "answers": {
+    "servicesEnabledList": {
+      "status": 200,
+      "recordedBytes": 191873,
+      "body": {
+        "services": [
+          {
+            "name": "projects/123456789012/services/analyticshub.googleapis.com",
+            "config": {
+              "name": "analyticshub.googleapis.com",
+              "title": "Analytics Hub API"
+            },
+            "state": "ENABLED",
+            "parent": "projects/123456789012"
+          },
+          {
+            "name": "projects/123456789012/services/appengine.googleapis.com",
+            "config": {
+              "name": "appengine.googleapis.com",
+              "title": "App Engine Admin API"
+            },
+            "state": "ENABLED",
+            "parent": "projects/123456789012"
+          },
+          {
+            "name": "projects/123456789012/services/apptopology.googleapis.com",
+            "config": {
+              "name": "apptopology.googleapis.com",
+              "title": "App Topology API"
+            },
+            "state": "ENABLED",
+            "parent": "projects/123456789012"
+          },
+          {
+            "name": "projects/123456789012/services/artifactregistry.googleapis.com",
+            "config": {
+              "name": "artifactregistry.googleapis.com",
+              "title": "Artifact Registry API"
+            },
+            "state": "ENABLED",
+            "parent": "projects/123456789012"
+          },
+          {
+            "name": "projects/123456789012/services/bigquery.googleapis.com",
+            "config": {
+              "name": "bigquery.googleapis.com",
+              "title": "BigQuery API"
+            },
+            "state": "ENABLED",
+            "parent": "projects/123456789012"
+          },
+          {
+            "name": "projects/123456789012/services/bigqueryconnection.googleapis.com",
+            "config": {
+              "name": "bigqueryconnection.googleapis.com",
+              "title": "BigQuery Connection API"
+            },
+            "state": "ENABLED",
+            "parent": "projects/123456789012"
+          },
+          {
+            "name": "projects/123456789012/services/bigquerydatapolicy.googleapis.com",
+            "config": {
+              "name": "bigquerydatapolicy.googleapis.com",
+              "title": "BigQuery Data Policy API"
+            },
+            "state": "ENABLED",
+            "parent": "projects/123456789012"
+          },
+          {
+            "name": "projects/123456789012/services/bigquerydatatransfer.googleapis.com",
+            "config": {
+              "name": "bigquerydatatransfer.googleapis.com",
+              "title": "BigQuery Data Transfer API"
+            },
+            "state": "ENABLED",
+            "parent": "projects/123456789012"
+          },
+          {
+            "name": "projects/123456789012/services/bigquerymigration.googleapis.com",
+            "config": {
+              "name": "bigquerymigration.googleapis.com",
+              "title": "BigQuery Migration API"
+            },
+            "state": "ENABLED",
+            "parent": "projects/123456789012"
+          },
+          {
+            "name": "projects/123456789012/services/bigqueryreservation.googleapis.com",
+            "config": {
+              "name": "bigqueryreservation.googleapis.com",
+              "title": "BigQuery Reservation API"
+            },
+            "state": "ENABLED",
+            "parent": "projects/123456789012"
+          },
+          {
+            "name": "projects/123456789012/services/bigquerystorage.googleapis.com",
+            "config": {
+              "name": "bigquerystorage.googleapis.com",
+              "title": "BigQuery Storage API"
+            },
+            "state": "ENABLED",
+            "parent": "projects/123456789012"
+          },
+          {
+            "name": "projects/123456789012/services/billingbudgets.googleapis.com",
+            "config": {
+              "name": "billingbudgets.googleapis.com",
+              "title": "Cloud Billing Budget API"
+            },
+            "state": "ENABLED",
+            "parent": "projects/123456789012"
+          },
+          {
+            "name": "projects/123456789012/services/cloudapis.googleapis.com",
+            "config": {
+              "name": "cloudapis.googleapis.com",
+              "title": "Google Cloud APIs"
+            },
+            "state": "ENABLED",
+            "parent": "projects/123456789012"
+          },
+          {
+            "name": "projects/123456789012/services/cloudbilling.googleapis.com",
+            "config": {
+              "name": "cloudbilling.googleapis.com",
+              "title": "Cloud Billing API"
+            },
+            "state": "ENABLED",
+            "parent": "projects/123456789012"
+          },
+          {
+            "name": "projects/123456789012/services/cloudbuild.googleapis.com",
+            "config": {
+              "name": "cloudbuild.googleapis.com",
+              "title": "Cloud Build API"
+            },
+            "state": "ENABLED",
+            "parent": "projects/123456789012"
+          },
+          {
+            "name": "projects/123456789012/services/cloudfunctions.googleapis.com",
+            "config": {
+              "name": "cloudfunctions.googleapis.com",
+              "title": "Cloud Functions API"
+            },
+            "state": "ENABLED",
+            "parent": "projects/123456789012"
+          },
+          {
+            "name": "projects/123456789012/services/cloudresourcemanager.googleapis.com",
+            "config": {
+              "name": "cloudresourcemanager.googleapis.com",
+              "title": "Cloud Resource Manager API"
+            },
+            "state": "ENABLED",
+            "parent": "projects/123456789012"
+          },
+          {
+            "name": "projects/123456789012/services/cloudsecuritycompliance.googleapis.com",
+            "config": {
+              "name": "cloudsecuritycompliance.googleapis.com",
+              "title": "Cloud Security Compliance API"
+            },
+            "state": "ENABLED",
+            "parent": "projects/123456789012"
+          },
+          {
+            "name": "projects/123456789012/services/cloudtrace.googleapis.com",
+            "config": {
+              "name": "cloudtrace.googleapis.com",
+              "title": "Cloud Trace API"
+            },
+            "state": "ENABLED",
+            "parent": "projects/123456789012"
+          },
+          {
+            "name": "projects/123456789012/services/compute.googleapis.com",
+            "config": {
+              "name": "compute.googleapis.com",
+              "title": "Compute Engine API"
+            },
+            "state": "ENABLED",
+            "parent": "projects/123456789012"
+          },
+          {
+            "name": "projects/123456789012/services/containeranalysis.googleapis.com",
+            "config": {
+              "name": "containeranalysis.googleapis.com",
+              "title": "Container Analysis API"
+            },
+            "state": "ENABLED",
+            "parent": "projects/123456789012"
+          },
+          {
+            "name": "projects/123456789012/services/containerregistry.googleapis.com",
+            "config": {
+              "name": "containerregistry.googleapis.com",
+              "title": "Container Registry API"
+            },
+            "state": "ENABLED",
+            "parent": "projects/123456789012"
+          },
+          {
+            "name": "projects/123456789012/services/dataform.googleapis.com",
+            "config": {
+              "name": "dataform.googleapis.com",
+              "title": "Dataform API"
+            },
+            "state": "ENABLED",
+            "parent": "projects/123456789012"
+          },
+          {
+            "name": "projects/123456789012/services/dataplex.googleapis.com",
+            "config": {
+              "name": "dataplex.googleapis.com",
+              "title": "Cloud Dataplex API"
+            },
+            "state": "ENABLED",
+            "parent": "projects/123456789012"
+          },
+          {
+            "name": "projects/123456789012/services/datastore.googleapis.com",
+            "config": {
+              "name": "datastore.googleapis.com",
+              "title": "Cloud Datastore API"
+            },
+            "state": "ENABLED",
+            "parent": "projects/123456789012"
+          },
+          {
+            "name": "projects/123456789012/services/deploymentmanager.googleapis.com",
+            "config": {
+              "name": "deploymentmanager.googleapis.com",
+              "title": "Cloud Deployment Manager V2 API"
+            },
+            "state": "ENABLED",
+            "parent": "projects/123456789012"
+          },
+          {
+            "name": "projects/123456789012/services/eventarc.googleapis.com",
+            "config": {
+              "name": "eventarc.googleapis.com",
+              "title": "Eventarc API"
+            },
+            "state": "ENABLED",
+            "parent": "projects/123456789012"
+          },
+          {
+            "name": "projects/123456789012/services/fcm.googleapis.com",
+            "config": {
+              "name": "fcm.googleapis.com",
+              "title": "Firebase Cloud Messaging API"
+            },
+            "state": "ENABLED",
+            "parent": "projects/123456789012"
+          },
+          {
+            "name": "projects/123456789012/services/fcmregistrations.googleapis.com",
+            "config": {
+              "name": "fcmregistrations.googleapis.com",
+              "title": "FCM Registration API"
+            },
+            "state": "ENABLED",
+            "parent": "projects/123456789012"
+          },
+          {
+            "name": "projects/123456789012/services/firebase.googleapis.com",
+            "config": {
+              "name": "firebase.googleapis.com",
+              "title": "Firebase Management API"
+            },
+            "state": "ENABLED",
+            "parent": "projects/123456789012"
+          },
+          {
+            "name": "projects/123456789012/services/firebaseappdistribution.googleapis.com",
+            "config": {
+              "name": "firebaseappdistribution.googleapis.com",
+              "title": "Firebase App Distribution API"
+            },
+            "state": "ENABLED",
+            "parent": "projects/123456789012"
+          },
+          {
+            "name": "projects/123456789012/services/firebaseextensions.googleapis.com",
+            "config": {
+              "name": "firebaseextensions.googleapis.com",
+              "title": "Firebase Extensions API"
+            },
+            "state": "ENABLED",
+            "parent": "projects/123456789012"
+          },
+          {
+            "name": "projects/123456789012/services/firebasehosting.googleapis.com",
+            "config": {
+              "name": "firebasehosting.googleapis.com",
+              "title": "Firebase Hosting API"
+            },
+            "state": "ENABLED",
+            "parent": "projects/123456789012"
+          },
+          {
+            "name": "projects/123456789012/services/firebaseinstallations.googleapis.com",
+            "config": {
+              "name": "firebaseinstallations.googleapis.com",
+              "title": "Firebase Installations API"
+            },
+            "state": "ENABLED",
+            "parent": "projects/123456789012"
+          },
+          {
+            "name": "projects/123456789012/services/firebaseremoteconfig.googleapis.com",
+            "config": {
+              "name": "firebaseremoteconfig.googleapis.com",
+              "title": "Firebase Remote Config API"
+            },
+            "state": "ENABLED",
+            "parent": "projects/123456789012"
+          },
+          {
+            "name": "projects/123456789012/services/firebaseremoteconfigrealtime.googleapis.com",
+            "config": {
+              "name": "firebaseremoteconfigrealtime.googleapis.com",
+              "title": "Firebase Remote Config Realtime API"
+            },
+            "state": "ENABLED",
+            "parent": "projects/123456789012"
+          },
+          {
+            "name": "projects/123456789012/services/firebaserules.googleapis.com",
+            "config": {
+              "name": "firebaserules.googleapis.com",
+              "title": "Firebase Rules API"
+            },
+            "state": "ENABLED",
+            "parent": "projects/123456789012"
+          },
+          {
+            "name": "projects/123456789012/services/firebasestorage.googleapis.com",
+            "config": {
+              "name": "firebasestorage.googleapis.com",
+              "title": "Cloud Storage for Firebase API"
+            },
+            "state": "ENABLED",
+            "parent": "projects/123456789012"
+          },
+          {
+            "name": "projects/123456789012/services/firestore.googleapis.com",
+            "config": {
+              "name": "firestore.googleapis.com",
+              "title": "Cloud Firestore API"
+            },
+            "state": "ENABLED",
+            "parent": "projects/123456789012"
+          },
+          {
+            "name": "projects/123456789012/services/iam.googleapis.com",
+            "config": {
+              "name": "iam.googleapis.com",
+              "title": "Identity and Access Management (IAM) API"
+            },
+            "state": "ENABLED",
+            "parent": "projects/123456789012"
+          },
+          {
+            "name": "projects/123456789012/services/iamcredentials.googleapis.com",
+            "config": {
+              "name": "iamcredentials.googleapis.com",
+              "title": "IAM Service Account Credentials API"
+            },
+            "state": "ENABLED",
+            "parent": "projects/123456789012"
+          },
+          {
+            "name": "projects/123456789012/services/identitytoolkit.googleapis.com",
+            "config": {
+              "name": "identitytoolkit.googleapis.com",
+              "title": "Identity Toolkit API"
+            },
+            "state": "ENABLED",
+            "parent": "projects/123456789012"
+          },
+          {
+            "name": "projects/123456789012/services/logging.googleapis.com",
+            "config": {
+              "name": "logging.googleapis.com",
+              "title": "Cloud Logging API"
+            },
+            "state": "ENABLED",
+            "parent": "projects/123456789012"
+          },
+          {
+            "name": "projects/123456789012/services/monitoring.googleapis.com",
+            "config": {
+              "name": "monitoring.googleapis.com",
+              "title": "Cloud Monitoring API"
+            },
+            "state": "ENABLED",
+            "parent": "projects/123456789012"
+          },
+          {
+            "name": "projects/123456789012/services/oslogin.googleapis.com",
+            "config": {
+              "name": "oslogin.googleapis.com",
+              "title": "Cloud OS Login API"
+            },
+            "state": "ENABLED",
+            "parent": "projects/123456789012"
+          },
+          {
+            "name": "projects/123456789012/services/pubsub.googleapis.com",
+            "config": {
+              "name": "pubsub.googleapis.com",
+              "title": "Cloud Pub/Sub API"
+            },
+            "state": "ENABLED",
+            "parent": "projects/123456789012"
+          },
+          {
+            "name": "projects/123456789012/services/run.googleapis.com",
+            "config": {
+              "name": "run.googleapis.com",
+              "title": "Cloud Run Admin API"
+            },
+            "state": "ENABLED",
+            "parent": "projects/123456789012"
+          },
+          {
+            "name": "projects/123456789012/services/runtimeconfig.googleapis.com",
+            "config": {
+              "name": "runtimeconfig.googleapis.com",
+              "title": "Cloud Runtime Configuration API"
+            },
+            "state": "ENABLED",
+            "parent": "projects/123456789012"
+          },
+          {
+            "name": "projects/123456789012/services/securetoken.googleapis.com",
+            "config": {
+              "name": "securetoken.googleapis.com",
+              "title": "Token Service API"
+            },
+            "state": "ENABLED",
+            "parent": "projects/123456789012"
+          },
+          {
+            "name": "projects/123456789012/services/servicemanagement.googleapis.com",
+            "config": {
+              "name": "servicemanagement.googleapis.com",
+              "title": "Service Management API"
+            },
+            "state": "ENABLED",
+            "parent": "projects/123456789012"
+          },
+          {
+            "name": "projects/123456789012/services/serviceusage.googleapis.com",
+            "config": {
+              "name": "serviceusage.googleapis.com",
+              "title": "Service Usage API"
+            },
+            "state": "ENABLED",
+            "parent": "projects/123456789012"
+          },
+          {
+            "name": "projects/123456789012/services/source.googleapis.com",
+            "config": {
+              "name": "source.googleapis.com",
+              "title": "Legacy Cloud Source Repositories API"
+            },
+            "state": "ENABLED",
+            "parent": "projects/123456789012"
+          },
+          {
+            "name": "projects/123456789012/services/sql-component.googleapis.com",
+            "config": {
+              "name": "sql-component.googleapis.com",
+              "title": "Cloud SQL"
+            },
+            "state": "ENABLED",
+            "parent": "projects/123456789012"
+          },
+          {
+            "name": "projects/123456789012/services/storage-api.googleapis.com",
+            "config": {
+              "name": "storage-api.googleapis.com",
+              "title": "Google Cloud Storage JSON API"
+            },
+            "state": "ENABLED",
+            "parent": "projects/123456789012"
+          },
+          {
+            "name": "projects/123456789012/services/storage-component.googleapis.com",
+            "config": {
+              "name": "storage-component.googleapis.com",
+              "title": "Cloud Storage"
+            },
+            "state": "ENABLED",
+            "parent": "projects/123456789012"
+          },
+          {
+            "name": "projects/123456789012/services/storage.googleapis.com",
+            "config": {
+              "name": "storage.googleapis.com",
+              "title": "Cloud Storage API"
+            },
+            "state": "ENABLED",
+            "parent": "projects/123456789012"
+          },
+          {
+            "name": "projects/123456789012/services/telemetry.googleapis.com",
+            "config": {
+              "name": "telemetry.googleapis.com",
+              "title": "Telemetry API"
+            },
+            "state": "ENABLED",
+            "parent": "projects/123456789012"
+          },
+          {
+            "name": "projects/123456789012/services/testing.googleapis.com",
+            "config": {
+              "name": "testing.googleapis.com",
+              "title": "Cloud Testing API"
+            },
+            "state": "ENABLED",
+            "parent": "projects/123456789012"
+          }
+        ]
+      }
+    },
+    "batchEnableAccepted": {
+      "status": 200,
+      "recordedBytes": 355,
+      "body": {
+        "name": "operations/acf.p2-123456789012-e627f9a7-0f50-48e6-856c-93ad311e8f0e",
+        "metadata": {
+          "@type": "type.googleapis.com/google.api.serviceusage.v1.OperationMetadata",
+          "resourceNames": [
+            "services/pubsub.googleapis.com/projectSettings/123456789012",
+            "services/appengine.googleapis.com/projectSettings/123456789012"
+          ]
+        }
+      }
+    },
+    "batchEnableDone": {
+      "status": 200,
+      "recordedBytes": 3192,
+      "body": {
+        "name": "operations/acf.p2-123456789012-e627f9a7-0f50-48e6-856c-93ad311e8f0e",
+        "metadata": {
+          "@type": "type.googleapis.com/google.protobuf.Empty"
+        },
+        "done": true,
+        "response": {
+          "@type": "type.googleapis.com/google.api.serviceusage.v1.BatchEnableServicesResponse",
+          "services": [
+            {
+              "name": "projects/123456789012/services/cloudscheduler.googleapis.com",
+              "state": "ENABLED"
+            },
+            {
+              "name": "projects/123456789012/services/pubsub.googleapis.com",
+              "state": "ENABLED"
+            },
+            {
+              "name": "projects/123456789012/services/appengine.googleapis.com",
+              "state": "ENABLED"
+            }
+          ]
+        }
+      }
+    },
+    "appEngineAbsent": {
+      "status": 404,
+      "recordedBytes": 391,
+      "body": {
+        "error": {
+          "code": 404,
+          "message": "Resource 'projects/fireemu-oracle-sbx/locations/global/applications/fireemu-oracle-sbx' was not found",
+          "status": "NOT_FOUND",
+          "details": [
+            {
+              "@type": "type.googleapis.com/google.rpc.ResourceInfo",
+              "resourceName": "projects/fireemu-oracle-sbx/locations/global/applications/fireemu-oracle-sbx"
+            }
+          ]
+        }
+      }
+    },
+    "iamPolicy": {
+      "status": 200,
+      "recordedBytes": 4404,
+      "body": {
+        "version": 1,
+        "etag": "BwZdBN/KBu0=",
+        "bindings": [
+          {
+            "role": "roles/artifactregistry.serviceAgent",
+            "members": [
+              "serviceAccount:service-123456789012@gcp-sa-artifactregistry.iam.gserviceaccount.com"
+            ]
+          },
+          {
+            "role": "roles/cloudbuild.builds.builder",
+            "members": [
+              "serviceAccount:123456789012@cloudbuild.gserviceaccount.com"
+            ]
+          },
+          {
+            "role": "roles/cloudbuild.serviceAgent",
+            "members": [
+              "serviceAccount:service-123456789012@gcp-sa-cloudbuild.iam.gserviceaccount.com"
+            ]
+          },
+          {
+            "role": "roles/cloudfunctions.standardServiceAgent",
+            "members": [
+              "serviceAccount:service-123456789012@gcf-admin-robot.iam.gserviceaccount.com"
+            ]
+          },
+          {
+            "role": "roles/cloudsecuritycompliance.serviceAgent",
+            "members": [
+              "serviceAccount:service-123456789012@gcp-sa-csc-hpsa.iam.gserviceaccount.com"
+            ]
+          },
+          {
+            "role": "roles/compute.instanceGroupManagerServiceAgent",
+            "members": [
+              "serviceAccount:123456789012@cloudservices.gserviceaccount.com"
+            ]
+          },
+          {
+            "role": "roles/compute.serviceAgent",
+            "members": [
+              "serviceAccount:service-123456789012@compute-system.iam.gserviceaccount.com"
+            ]
+          },
+          {
+            "role": "roles/containerregistry.ServiceAgent",
+            "members": [
+              "serviceAccount:service-123456789012@containerregistry.iam.gserviceaccount.com"
+            ]
+          },
+          {
+            "role": "roles/editor",
+            "members": [
+              "serviceAccount:123456789012-compute@developer.gserviceaccount.com",
+              "serviceAccount:123456789012@cloudservices.gserviceaccount.com",
+              "serviceAccount:fireemu-oracle-events@appspot.gserviceaccount.com"
+            ]
+          },
+          {
+            "role": "roles/eventarc.eventReceiver",
+            "members": [
+              "serviceAccount:123456789012-compute@developer.gserviceaccount.com"
+            ]
+          },
+          {
+            "role": "roles/eventarc.serviceAgent",
+            "members": [
+              "serviceAccount:service-123456789012@gcp-sa-eventarc.iam.gserviceaccount.com"
+            ]
+          },
+          {
+            "role": "roles/firebase.managementServiceAgent",
+            "members": [
+              "serviceAccount:service-123456789012@gcp-sa-firebase.iam.gserviceaccount.com"
+            ]
+          },
+          {
+            "role": "roles/firebase.sdkAdminServiceAgent",
+            "members": [
+              "serviceAccount:firebase-adminsdk-fbsvc@fireemu-oracle-events.iam.gserviceaccount.com"
+            ]
+          },
+          {
+            "role": "roles/firebaseauth.admin",
+            "members": [
+              "serviceAccount:firebase-adminsdk-fbsvc@fireemu-oracle-events.iam.gserviceaccount.com"
+            ]
+          },
+          {
+            "role": "roles/firebasemods.serviceAgent",
+            "members": [
+              "serviceAccount:service-123456789012@gcp-sa-firebasemods.iam.gserviceaccount.com"
+            ]
+          },
+          {
+            "role": "roles/firebaserules.system",
+            "members": [
+              "serviceAccount:service-123456789012@firebase-rules.iam.gserviceaccount.com"
+            ]
+          },
+          {
+            "role": "roles/firebasestorage.serviceAgent",
+            "members": [
+              "serviceAccount:service-123456789012@gcp-sa-firebasestorage.iam.gserviceaccount.com"
+            ]
+          },
+          {
+            "role": "roles/firestore.serviceAgent",
+            "members": [
+              "serviceAccount:service-123456789012@gcp-sa-firestore.iam.gserviceaccount.com"
+            ]
+          },
+          {
+            "role": "roles/iam.serviceAccountTokenCreator",
+            "members": [
+              "serviceAccount:firebase-adminsdk-fbsvc@fireemu-oracle-events.iam.gserviceaccount.com",
+              "serviceAccount:service-123456789012@gcp-sa-pubsub.iam.gserviceaccount.com"
+            ]
+          },
+          {
+            "role": "roles/owner",
+            "members": [
+              "user:owner@example.com"
+            ]
+          },
+          {
+            "role": "roles/pubsub.publisher",
+            "members": [
+              "serviceAccount:service-123456789012@gs-project-accounts.iam.gserviceaccount.com"
+            ]
+          },
+          {
+            "role": "roles/pubsub.serviceAgent",
+            "members": [
+              "serviceAccount:service-123456789012@gcp-sa-pubsub.iam.gserviceaccount.com"
+            ]
+          },
+          {
+            "role": "roles/run.invoker",
+            "members": [
+              "serviceAccount:123456789012-compute@developer.gserviceaccount.com"
+            ]
+          },
+          {
+            "role": "roles/run.serviceAgent",
+            "members": [
+              "serviceAccount:service-123456789012@serverless-robot-prod.iam.gserviceaccount.com"
+            ]
+          }
+        ]
+      }
+    },
+    "emptyList": {
+      "status": 200,
+      "recordedBytes": 3,
+      "body": {}
+    },
+    "artifactRepository": {
+      "status": 200,
+      "recordedBytes": 828,
+      "body": {
+        "name": "projects/fireemu-oracle-events/locations/us-central1/repositories/gcf-artifacts",
+        "format": "DOCKER",
+        "createTime": "2026-09-28T14:06:59.273768Z",
+        "updateTime": "2026-10-04T16:34:38.936896Z",
+        "mode": "STANDARD_REPOSITORY",
+        "cleanupPolicies": {
+          "firebase-functions-cleanup": {
+            "id": "firebase-functions-cleanup",
+            "action": "DELETE",
+            "condition": {
+              "tagState": "ANY",
+              "olderThan": "86400s"
+            }
+          }
+        },
+        "sizeBytes": "624619584",
+        "vulnerabilityScanningConfig": {
+          "lastEnableTime": "2026-09-28T14:06:47.979630259Z",
+          "enablementState": "SCANNING_DISABLED",
+          "enablementStateReason": "API containerscanning.googleapis.com is not enabled."
+        },
+        "satisfiesPzi": true,
+        "registryUri": "us-central1-docker.pkg.dev/fireemu-oracle-events/gcf-artifacts"
+      }
+    },
+    "functionsV1List": {
+      "status": 200,
+      "recordedBytes": 25092,
+      "body": {
+        "functions": [
+          {
+            "name": "projects/fireemu-oracle-events/locations/us-central1/functions/storageArchivedV1",
+            "status": "ACTIVE"
+          },
+          {
+            "name": "projects/fireemu-oracle-events/locations/us-central1/functions/fsUpdatedV1",
+            "status": "ACTIVE"
+          },
+          {
+            "name": "projects/fireemu-oracle-events/locations/us-central1/functions/storageFinalizedV1",
+            "status": "ACTIVE"
+          },
+          {
+            "name": "projects/fireemu-oracle-events/locations/us-central1/functions/authDeletedV1",
+            "status": "ACTIVE"
+          },
+          {
+            "name": "projects/fireemu-oracle-events/locations/us-central1/functions/authCreatedV1",
+            "status": "ACTIVE"
+          },
+          {
+            "name": "projects/fireemu-oracle-events/locations/us-central1/functions/fsWrittenV1",
+            "status": "ACTIVE"
+          },
+          {
+            "name": "projects/fireemu-oracle-events/locations/us-central1/functions/fsCreatedV1",
+            "status": "ACTIVE"
+          },
+          {
+            "name": "projects/fireemu-oracle-events/locations/us-central1/functions/storageDeletedV1",
+            "status": "ACTIVE"
+          },
+          {
+            "name": "projects/fireemu-oracle-events/locations/us-central1/functions/fsDeletedV1",
+            "status": "ACTIVE"
+          },
+          {
+            "name": "projects/fireemu-oracle-events/locations/us-central1/functions/storageMetadataUpdatedV1",
+            "status": "ACTIVE"
+          },
+          {
+            "name": "projects/fireemu-oracle-events/locations/us-central1/functions/pubsubPublishedV1",
+            "status": "ACTIVE"
+          }
+        ]
+      }
+    }
+  }
+}

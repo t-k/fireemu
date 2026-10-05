@@ -7,7 +7,7 @@
 //! backoff in virtual time) or `DeadLettered`. `await-idle` waits until no event is
 //! pending / leased / running / retry-waiting and no schedule is due.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -171,6 +171,59 @@ pub struct BlockingAuthTarget {
     owner: usize,
 }
 
+/// The retry policy of a scheduled function: `retryCount` further attempts after the first, spaced by Cloud
+/// Scheduler's bounded exponential backoff, and `maxRetrySeconds` as the window the chain must end inside.
+///
+/// A window with no count (`retryCount` 0, `maxRetrySeconds` positive) retries until the window ends: production
+/// attempted a job with `maxRetryDuration: 30s` and no count four times, at 0, 4.6, 13.2 and 23.7 seconds, the next
+/// attempt being past the window (second delivery recording, run `156715222b86ea44`). With both a count and a window
+/// (not recorded: production refused that job) the chain stops at whichever limit comes first. Neither is one attempt.
+///
+/// A first-generation schedule is one attempt, whatever it declares. Its job targets Pub/Sub, so Cloud Scheduler's
+/// retry covers the publish and never the handler: in the same recording `schedFailV1`'s handler threw at each of its 4
+/// occurrences and ran exactly once per occurrence (4 frames, 4 message ids), and every Scheduler attempt of its job
+/// finished without an error although the handler had failed. (That job declared no `retryCount`; a Gen1 job with a
+/// count has not been recorded, but a failed handler never marks an attempt failed, so there is nothing to retry.) The
+/// official emulator never retries a scheduled function.
+///
+/// The strongest reason does not depend on a recording: firebase-tools 15.28.2 deploys a first-generation schedule as
+/// a GCF v1 function with only an `eventTrigger` on the job's topic (no `failurePolicy`; `cloudfunctions.js` sets none
+/// for a schedule trigger) and a Scheduler job with a `pubsubTarget` carrying the retry configuration, so a failed
+/// handler has no redelivery to wait for and the job's retry has nothing to retry once the publish is acknowledged.
+#[must_use]
+pub fn schedule_retry_policy(
+    retry: &fireemu_core_functions::manifest::ScheduleRetryConfig,
+    generation: fireemu_core_functions::manifest::FunctionGeneration,
+) -> RetryPolicy {
+    let seconds =
+        |value: u64| LogicalDuration::from_seconds(i64::try_from(value).unwrap_or(i64::MAX));
+    let minimum = seconds(retry.min_backoff_seconds);
+    let maximum = seconds(retry.max_backoff_seconds.max(retry.min_backoff_seconds));
+    let attempts = if generation == fireemu_core_functions::manifest::FunctionGeneration::First {
+        1
+    } else if retry.retry_count == 0 && retry.max_retry_seconds > 0 {
+        u32::MAX
+    } else {
+        retry.retry_count.saturating_add(1)
+    };
+    RetryPolicy::try_with_limits(
+        attempts,
+        minimum,
+        maximum,
+        retry.max_doublings,
+        (retry.max_retry_seconds > 0).then(|| seconds(retry.max_retry_seconds)),
+    )
+    .unwrap_or_else(|_| {
+        // Unreachable for a validated manifest (`minimum <= maximum`, attempts >= 1); one attempt is the safe answer.
+        RetryPolicy::try_new(
+            1,
+            LogicalDuration::from_seconds(0),
+            LogicalDuration::from_seconds(0),
+        )
+        .expect("one attempt with no backoff is a valid policy")
+    })
+}
+
 /// Static runtime configuration.
 #[derive(Clone)]
 pub struct FunctionsConfig {
@@ -271,6 +324,11 @@ pub enum OverlapPolicy {
     Queue,
     /// Treat the overlap as a test failure: the run is dead-lettered and counted.
     Reject,
+    /// Drop a due scheduler occurrence while a handler of the function that was started before this clock
+    /// move is still executing (recorded in the history as skipped); a manual run is never refused. This is what
+    /// production's Cloud Scheduler did: run `156715222b86ea44` shows the `every 1 minutes` job whose handler ran
+    /// 100 s starting only every 2 to 3 minutes, never while one was in flight.
+    SkipInFlight,
 }
 
 impl OverlapPolicy {
@@ -282,6 +340,7 @@ impl OverlapPolicy {
             "skip" => Some(Self::Skip),
             "queue" => Some(Self::Queue),
             "reject" => Some(Self::Reject),
+            "skip-in-flight" => Some(Self::SkipInFlight),
             _ => None,
         }
     }
@@ -2872,7 +2931,19 @@ impl FunctionsRuntime {
         // the sweep stops at the first capacity refusal, so freed capacity always goes to the
         // oldest due run, whatever its job and however many copies it needs.
         runs.sort_by_key(|(_, _, at)| at.as_nanos());
+        // The handlers executing before this sweep: under `skip-in-flight` only these suppress an occurrence, never a
+        // run this same sweep admitted (a jump over several occurrences runs each, as each would have run when it came).
+        let executing: BTreeSet<String> = inner.running.values().cloned().collect();
         for (index, (function, region, at)) in runs.iter().enumerate() {
+            if self.config.overlap == OverlapPolicy::SkipInFlight && executing.contains(function) {
+                inner.record_invocation(InvocationRecord {
+                    event_id: 0,
+                    function: function.clone(),
+                    attempt: 0,
+                    outcome: "skipped: in flight".to_owned(),
+                });
+                continue;
+            }
             if !self.admit_scheduled_run(&mut inner, function) {
                 continue;
             }
@@ -3015,7 +3086,8 @@ impl FunctionsRuntime {
             OverlapPolicy::Allow
             | OverlapPolicy::Queue
             | OverlapPolicy::Skip
-            | OverlapPolicy::Reject => true,
+            | OverlapPolicy::Reject
+            | OverlapPolicy::SkipInFlight => true,
         }
     }
 
@@ -4876,20 +4948,7 @@ impl FunctionsRuntime {
             let policy = if retry {
                 self.manifest.get(function).map_or(self.retry, |spec| {
                     if let Trigger::Schedule { retry, .. } = &spec.trigger {
-                        let seconds = |value: u64| {
-                            LogicalDuration::from_seconds(i64::try_from(value).unwrap_or(i64::MAX))
-                        };
-                        let minimum = seconds(retry.min_backoff_seconds);
-                        let maximum =
-                            seconds(retry.max_backoff_seconds.max(retry.min_backoff_seconds));
-                        RetryPolicy::try_with_limits(
-                            retry.retry_count.saturating_add(1),
-                            minimum,
-                            maximum,
-                            retry.max_doublings,
-                            (retry.max_retry_seconds > 0).then(|| seconds(retry.max_retry_seconds)),
-                        )
-                        .unwrap_or(self.retry)
+                        schedule_retry_policy(retry, spec.generation)
                     } else {
                         self.retry
                     }
@@ -6585,6 +6644,235 @@ mod schedule_capacity_tests {
             vec![run("tick", "2026-08-29T12:15:00Z")]
         );
         finish(&runtime).await;
+    }
+
+    /// Marks `function` as executing a handler, as the dispatch loop does while an invocation runs.
+    fn start_running(runtime: &FunctionsRuntime, key: &str, function: &str) {
+        runtime
+            .inner
+            .lock()
+            .unwrap()
+            .running
+            .insert(key.to_owned(), function.to_owned());
+    }
+
+    fn stop_running(runtime: &FunctionsRuntime, key: &str) {
+        runtime.inner.lock().unwrap().running.remove(key);
+    }
+
+    /// Recorded (run `156715222b86ea44`): the `every 1 minutes` job whose handler ran 100 s started its occurrences
+    /// 2 to 3 minutes apart, none while one was in flight. The occurrences that fall inside a running handler are
+    /// dropped, and the schedule keeps moving.
+    #[tokio::test]
+    async fn skip_in_flight_drops_an_occurrence_while_a_handler_is_running() {
+        use super::OverlapPolicy;
+        let (runtime, clock) = runtime_with(
+            CatchUpPolicy::All,
+            OverlapPolicy::SkipInFlight,
+            100_000,
+            START,
+        )
+        .await;
+        advance(&clock, 5 * 60);
+        runtime.on_clock_changed();
+        assert_eq!(
+            admitted(&runtime),
+            vec![run("tick", "2026-08-29T12:05:00Z")]
+        );
+        // That run starts (leaves the queue, executes), and the next occurrence falls inside it.
+        runtime.inner.lock().unwrap().payloads.clear();
+        start_running(&runtime, "k1", "tick");
+        advance(&clock, 5 * 60);
+        runtime.on_clock_changed();
+        assert!(
+            admitted(&runtime).is_empty(),
+            "nothing runs inside a running handler"
+        );
+        assert_eq!(
+            outcomes(&runtime, "tick"),
+            vec!["skipped: in flight".to_owned()]
+        );
+        assert!(
+            !pending(&runtime),
+            "a skipped occurrence is dropped, not kept due"
+        );
+        // Once the handler is done the next occurrence runs: the schedule kept moving.
+        stop_running(&runtime, "k1");
+        advance(&clock, 5 * 60);
+        runtime.on_clock_changed();
+        assert_eq!(
+            admitted(&runtime),
+            vec![run("tick", "2026-08-29T12:15:00Z")]
+        );
+        finish(&runtime).await;
+    }
+
+    /// An occurrence another function's handler overlaps is not skipped: in flight is per function.
+    #[tokio::test]
+    async fn skip_in_flight_looks_only_at_the_same_function() {
+        use super::OverlapPolicy;
+        let (runtime, clock) = runtime_with(
+            CatchUpPolicy::All,
+            OverlapPolicy::SkipInFlight,
+            100_000,
+            START,
+        )
+        .await;
+        start_running(&runtime, "k1", "somethingElse");
+        advance(&clock, 5 * 60);
+        runtime.on_clock_changed();
+        assert_eq!(
+            times_of(&admitted(&runtime), "tick"),
+            vec!["2026-08-29T12:05:00Z".to_owned()]
+        );
+        finish(&runtime).await;
+    }
+
+    /// A run that is queued or waiting to be retried is not an executing handler: production's skip is recorded
+    /// only against a running one, so the next occurrence runs.
+    #[tokio::test]
+    async fn skip_in_flight_does_not_count_a_queued_run() {
+        use super::OverlapPolicy;
+        let (runtime, clock) = runtime_with(
+            CatchUpPolicy::All,
+            OverlapPolicy::SkipInFlight,
+            100_000,
+            START,
+        )
+        .await;
+        advance(&clock, 5 * 60);
+        runtime.on_clock_changed();
+        advance(&clock, 5 * 60);
+        runtime.on_clock_changed();
+        assert_eq!(
+            admitted(&runtime),
+            vec![
+                run("tick", "2026-08-29T12:05:00Z"),
+                run("tick", "2026-08-29T12:10:00Z")
+            ]
+        );
+        assert!(outcomes(&runtime, "tick").is_empty());
+        finish(&runtime).await;
+    }
+
+    /// Occurrences of one clock move are not in flight against each other: with `catchUp: all` a jump over several
+    /// of them runs each, as production would have run each when it came (the handler being quick).
+    #[tokio::test]
+    async fn skip_in_flight_keeps_every_occurrence_of_one_clock_move() {
+        use super::OverlapPolicy;
+        let (runtime, clock) = runtime_with(
+            CatchUpPolicy::All,
+            OverlapPolicy::SkipInFlight,
+            100_000,
+            START,
+        )
+        .await;
+        advance(&clock, 15 * 60);
+        runtime.on_clock_changed();
+        assert_eq!(
+            times_of(&admitted(&runtime), "tick"),
+            vec![
+                "2026-08-29T12:05:00Z".to_owned(),
+                "2026-08-29T12:10:00Z".to_owned(),
+                "2026-08-29T12:15:00Z".to_owned()
+            ]
+        );
+        assert!(outcomes(&runtime, "tick").is_empty());
+        finish(&runtime).await;
+    }
+
+    /// A manual run is fireemu's own control, not an occurrence: production's forced run started while a natural run
+    /// was in flight (run `156715222b86ea44`, frame 535404 inside the run begun at 482655), so it is not refused.
+    #[tokio::test]
+    async fn skip_in_flight_never_refuses_a_manual_run() {
+        use super::OverlapPolicy;
+        let (runtime, _clock) = runtime_with(
+            CatchUpPolicy::All,
+            OverlapPolicy::SkipInFlight,
+            100_000,
+            START,
+        )
+        .await;
+        start_running(&runtime, "k1", "tick");
+        assert_eq!(runtime.run_schedule("tick"), Ok(()));
+        assert_eq!(admitted(&runtime).len(), 1);
+        assert_eq!(runtime.status()["overlapRejected"], 0);
+        finish(&runtime).await;
+    }
+
+    #[test]
+    fn the_overlap_policies_parse_by_name() {
+        use super::OverlapPolicy;
+        for (text, policy) in [
+            ("allow", OverlapPolicy::Allow),
+            ("skip", OverlapPolicy::Skip),
+            ("queue", OverlapPolicy::Queue),
+            ("reject", OverlapPolicy::Reject),
+            ("skip-in-flight", OverlapPolicy::SkipInFlight),
+        ] {
+            assert_eq!(OverlapPolicy::parse(text), Some(policy), "{text}");
+        }
+        for bad in ["", "Skip", "skip_in_flight", "skipInFlight", "in-flight"] {
+            assert_eq!(OverlapPolicy::parse(bad), None, "{bad:?}");
+        }
+    }
+
+    proptest::proptest! {
+        #![proptest_config(proptest::test_runner::Config {
+            cases: 32,
+            ..proptest::test_runner::Config::default()
+        })]
+
+        /// Model: under any sequence of clock moves, each with a handler running or not, a move over the occurrences
+        /// of `tick` (every five minutes) runs all of them when no handler was running and none when one was, and
+        /// every dropped occurrence is recorded exactly once.
+        #[test]
+        fn skip_in_flight_matches_a_reference_of_the_running_handler(
+            steps in proptest::collection::vec((1i64..=20, proptest::bool::ANY), 1..10),
+        ) {
+            let tokio = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .unwrap();
+            tokio.block_on(async {
+                let (runtime, clock) = runtime_with(
+                    CatchUpPolicy::All,
+                    super::OverlapPolicy::SkipInFlight,
+                    100_000,
+                    START,
+                )
+                .await;
+                let mut now = START;
+                let mut expected_runs = Vec::new();
+                let mut expected_skips = 0usize;
+                for (minutes, running) in &steps {
+                    let next = now + minutes * 60;
+                    // the occurrences in (now, next]: multiples of 300 s
+                    let due: Vec<i64> = (now / 300 + 1..=next / 300).map(|n| n * 300).collect();
+                    if *running {
+                        start_running(&runtime, "k", "tick");
+                        expected_skips += due.len();
+                    } else {
+                        stop_running(&runtime, "k");
+                        expected_runs.extend(due);
+                    }
+                    advance(&clock, minutes * 60);
+                    runtime.on_clock_changed();
+                    now = next;
+                }
+                let admitted_times: Vec<i64> = times_of(&admitted(&runtime), "tick")
+                    .iter()
+                    .map(|time| seconds(time))
+                    .collect();
+                proptest::prop_assert_eq!(admitted_times, expected_runs);
+                proptest::prop_assert_eq!(
+                    outcomes(&runtime, "tick").iter().filter(|o| *o == "skipped: in flight").count(),
+                    expected_skips
+                );
+                finish(&runtime).await;
+                Ok(())
+            })?;
+        }
     }
 
     #[tokio::test]

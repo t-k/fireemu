@@ -2,7 +2,14 @@
 // time: each row must say MATCH for the matching pair and DIVERGES for its own near miss, and nothing else.
 import assert from "node:assert/strict";
 import test from "node:test";
-import { FORM, compareProfiles, localChains, productionChains, rows } from "./compare.mjs";
+import {
+  FORM,
+  compareProfiles,
+  localChains,
+  productionChains,
+  rows,
+  secondsOf,
+} from "./compare.mjs";
 import { parseTimeline } from "./local-run.mjs";
 
 const T0 = Date.parse("2026-10-05T08:41:00Z");
@@ -561,4 +568,287 @@ test("parseTimeline places a handler line on the step that follows it and keeps 
   assert.deepEqual(t.state, { pending: 0 });
   assert.deepEqual(parseTimeline("").lines, []);
   assert.equal(parseTimeline("").state, null);
+});
+
+test("secondsOf reads an instant with an offset and a fraction of up to nine digits, exactly", () => {
+  assert.equal(secondsOf("2026-10-05T08:41:00Z"), Date.parse("2026-10-05T08:41:00Z") / 1000);
+  assert.equal(secondsOf("2026-10-05T01:41:00-07:00"), Date.parse("2026-10-05T08:41:00Z") / 1000);
+  assert.ok(
+    Math.abs(
+      secondsOf("2026-10-05T01:42:01.416739-07:00") -
+        (Date.parse("2026-10-05T08:42:01Z") / 1000 + 0.416739),
+    ) < 1e-6,
+  );
+  assert.ok(
+    Math.abs(
+      secondsOf("2026-10-05T08:42:01.5Z") - (Date.parse("2026-10-05T08:42:01Z") / 1000 + 0.5),
+    ) < 1e-9,
+  );
+  assert.ok(
+    Math.abs(
+      secondsOf("2026-10-05T08:42:01.000000123Z") -
+        (Date.parse("2026-10-05T08:42:01Z") / 1000 + 1.23e-7),
+    ) < 1e-9,
+  );
+  assert.equal(secondsOf("2026-10-05T08:42:01.000Z"), Date.parse("2026-10-05T08:42:01Z") / 1000);
+});
+
+test("productionChains sorts the attempts, keeps the longest chain of a job and the first of equal length", () => {
+  const frame = (job, at, scheduleTime) => ({
+    handler: "schedRetryV2",
+    generation: 2,
+    at,
+    headers: { "x-cloudscheduler-jobname": job, "x-cloudscheduler-scheduletime": scheduleTime },
+  });
+  const digest = {
+    frames: [
+      frame("fe-sd-0123456789abcdef-zero", 9000, "A"),
+      frame("fe-sd-0123456789abcdef-zero", 3000, "A"),
+      frame("fe-sd-0123456789abcdef-zero", 6000, "A"),
+      frame("fe-sd-0123456789abcdef-zero", 100, "B"),
+      frame("fe-sd-0123456789abcdef-zero", 4100, "B"),
+      frame("fe-sd-0123456789abcdef-zero", 8100, "B"),
+      frame("fe-sd-0123456789abcdef-duration", 1000, "A"),
+      frame("fe-sd-0123456789abcdef-duration", 2000, "A"),
+      frame("fe-sd-0123456789abcdef-duration", 500, "B"),
+      frame("unknown-job", 1, "A"),
+    ],
+  };
+  const chains = productionChains(digest);
+  assert.deepEqual(
+    chains.retryZero,
+    [0, 3, 6],
+    "unsorted frames are sorted, and of two chains of three the first wins",
+  );
+  assert.deepEqual(chains.retryDuration, [0, 1], "the longest of two chains");
+  assert.deepEqual(Object.keys(chains).toSorted(), ["retryDuration", "retryZero"]);
+  // a chain must not be replaced by an equal-length one
+  const equal = {
+    frames: [
+      frame("fe-sd-0123456789abcdef-zero", 0, "A"),
+      frame("fe-sd-0123456789abcdef-zero", 1000, "A"),
+      frame("fe-sd-0123456789abcdef-zero", 5000, "B"),
+      frame("fe-sd-0123456789abcdef-zero", 9000, "B"),
+    ],
+  };
+  assert.deepEqual(productionChains(equal).retryZero, [0, 1]);
+});
+
+test("the row forms: a message id of another length, a timestamp with a trailing zero or four digits, and the first of equal chains", () => {
+  const eighteen = local();
+  eighteen.natural.lines = eighteen.natural.lines.map((x) =>
+    x.value.generation === 1
+      ? {
+          ...x,
+          value: { ...x.value, context: { ...x.value.context, eventId: "210604706362209599" } },
+        }
+      : x,
+  );
+  assert.equal(verdicts(production(), eighteen)["v1.context.eventId"], "DIVERGES");
+  for (const bad of [
+    "2026-10-05T08:41:01.3590Z",
+    "2026-10-05T08:41:01.3591Z",
+    "2026-10-05T08:41:01.350Z",
+    "2026-10-05T08:41:01.0Z",
+  ]) {
+    const l = local();
+    l.natural.lines = l.natural.lines.map((x) =>
+      x.value.generation === 1
+        ? { ...x, value: { ...x.value, context: { ...x.value.context, timestamp: bad } } }
+        : x,
+    );
+    assert.equal(verdicts(production(), l)["v1.context.timestamp"], "DIVERGES", bad);
+  }
+  for (const good of [
+    "2026-10-05T08:41:01.359Z",
+    "2026-10-05T08:41:01.5Z",
+    "2026-10-05T08:41:01Z",
+    "2026-10-05T08:41:01.05Z",
+  ]) {
+    const l = local();
+    l.natural.lines = l.natural.lines.map((x) =>
+      x.value.generation === 1
+        ? { ...x, value: { ...x.value, context: { ...x.value.context, timestamp: good } } }
+        : x,
+    );
+    assert.equal(verdicts(production(), l)["v1.context.timestamp"], "MATCH", good);
+  }
+});
+
+test("the retry tolerance: latency of a second per attempt is allowed, earlier or much later is not", () => {
+  const chain = (offsets) =>
+    offsets.map((o) => ({
+      at: instant(T0 + o * 1000),
+      kind: "PROBE",
+      value: { handler: "retryFour" },
+    }));
+  const withFour = (offsets) => {
+    const l = local();
+    l.probe.lines = [
+      ...l.probe.lines.filter((x) => x.value.handler !== "retryFour"),
+      ...chain(offsets),
+    ];
+    return verdicts(production(), l)["retry.retryFour"];
+  };
+  // production 0, 4.6, 13.2, 29.7, 48.2: the first offset must be zero and later ones may trail by up to 1.2 s per attempt plus 1 s
+  assert.equal(withFour([0, 4, 12, 28, 48]), "MATCH");
+  assert.equal(withFour([0, 4.6, 13.2, 29.7, 48.2]), "MATCH");
+  assert.equal(withFour([0, 4.2, 12.4, 28.9, 47.9]), "MATCH");
+  assert.equal(
+    withFour([0, 5, 13.5, 30, 48.5]),
+    "MATCH",
+    "production may be earlier than local by half a second",
+  );
+  assert.equal(
+    withFour([0, 6, 13.2, 29.7, 48.2]),
+    "DIVERGES",
+    "local later than production by more than half a second",
+  );
+  assert.equal(
+    withFour([0, 2, 12, 28, 48]),
+    "DIVERGES",
+    "more than 1.2 s per attempt plus 1 s later",
+  );
+  assert.equal(
+    withFour([0, 3, 12, 28, 48]),
+    "MATCH",
+    "1.6 s later on the first retry is within 2.2 s",
+  );
+  assert.equal(
+    withFour([0, 4, 12, 28, 40]),
+    "DIVERGES",
+    "the last attempt: production 8 s later than local, beyond 5.8 s",
+  );
+  assert.equal(withFour([0, 4, 12, 28, 43]), "MATCH", "5.2 s later is inside 5.8 s");
+});
+
+const value = (rowsList, id) => rowsList.find((r) => r.id === id);
+
+test("the values the matching rows compare are the recorded ones, not only equal to each other", () => {
+  const table = rows(production(), local());
+  assert.deepEqual(
+    [value(table, "v1.failure-no-retry").production, value(table, "v1.failure-no-retry").local],
+    [[1], [1]],
+  );
+  assert.deepEqual(
+    [
+      value(table, "cadence.every-1-minutes.spacing").production,
+      value(table, "cadence.every-1-minutes.spacing").local,
+    ],
+    [60, 60],
+  );
+  assert.deepEqual(value(table, "cadence.every-1-minutes.phase").production, ["fractional second"]);
+  assert.deepEqual(value(table, "cadence.every-5-minutes.alignment").production, [
+    "off the boundary",
+  ]);
+  assert.deepEqual(value(table, "v2.request.method").production, ["POST"]);
+  assert.deepEqual(value(table, "v2.request.url").local, ["/"]);
+  assert.deepEqual(value(table, "v2.request.body").production, [null]);
+  assert.deepEqual(value(table, "v1.argumentCount").production, [1]);
+  assert.deepEqual(value(table, "v1.context.eventId").production, ["<17 digits>"]);
+  assert.deepEqual(value(table, "v1.context.keys").production, [
+    ["eventId", "eventType", "params", "resource", "timestamp"],
+  ]);
+  assert.deepEqual(value(table, "retry.retryFive").production, CHAINS.retryFive);
+  assert.deepEqual(value(table, "retry.retryZero").local, [0]);
+  assert.equal(value(table, "forced-run").verdict, "NOT_COMPARABLE");
+  const headers = value(table, "v2.request.headers").production[0];
+  assert.equal(headers["x-cloudscheduler-jobname"], "<job id>");
+  assert.equal(headers["x-cloudscheduler-scheduletime"], "dddd-dd-ddTdd:dd:dd-dd:dd");
+  assert.equal(headers["content-length"], "0");
+});
+
+test("a recording with no frames of a generation is refused, not matched vacuously", () => {
+  const p = production();
+  assert.throws(
+    () => rows({ ...p, frames: p.frames.filter((f) => f.generation === 2) }, local()),
+    /nothing to compare/,
+  );
+  assert.throws(
+    () => rows({ ...p, frames: p.frames.filter((f) => f.generation === 1) }, local()),
+    /nothing to compare/,
+  );
+});
+
+test("a missing header and a context that disagrees with the job id each diverge on their own row", () => {
+  const noAgent = local();
+  noAgent.natural.lines = noAgent.natural.lines.map((x) => {
+    if (x.value.generation !== 2) return x;
+    const headers = Object.fromEntries(
+      Object.entries(x.value.request.headers).filter(([name]) => name !== "user-agent"),
+    );
+    return { ...x, value: { ...x.value, request: { ...x.value.request, headers } } };
+  });
+  assert.equal(verdicts(production(), noAgent)["v2.request.headers"], "DIVERGES");
+  const eventId = local();
+  eventId.natural.lines = eventId.natural.lines.map((x) =>
+    x.value.generation === 2
+      ? { ...x, value: { ...x.value, context: { ...x.value.context, eventId: "other" } } }
+      : x,
+  );
+  assert.equal(verdicts(production(), eventId)["v2.event.context"], "DIVERGES");
+  const topic = local();
+  topic.natural.lines = topic.natural.lines.map((x) =>
+    x.value.generation === 2
+      ? {
+          ...x,
+          value: {
+            ...x.value,
+            context: {
+              ...x.value.context,
+              resource: { ...x.value.context.resource, name: "projects/demo/topics/other" },
+            },
+          },
+        }
+      : x,
+  );
+  assert.equal(verdicts(production(), topic)["v2.event.context"], "DIVERGES");
+  const job = local();
+  job.natural.lines = job.natural.lines.map((x) =>
+    x.value.generation === 1
+      ? {
+          ...x,
+          value: {
+            ...x.value,
+            context: {
+              ...x.value.context,
+              resource: {
+                ...x.value.context.resource,
+                name: x.value.context.resource.name.replace("/topics/", "/jobs/"),
+              },
+            },
+          },
+        }
+      : x,
+  );
+  assert.equal(
+    verdicts(production(), job)["v1.context.resource"],
+    "DIVERGES",
+    "a job path with the right keys is still not the topic",
+  );
+});
+
+test("the phase of a time: a fraction beyond half a millisecond is a fraction, a smaller one is not", () => {
+  const phase = (fraction) => {
+    const l = local();
+    l.natural.lines = l.natural.lines.map((x) =>
+      x.value.handler === "schedOkV2"
+        ? {
+            ...x,
+            value: {
+              ...x.value,
+              event: {
+                ...x.value.event,
+                scheduleTime: x.value.event.scheduleTime.replace(".416739", fraction),
+              },
+            },
+          }
+        : x,
+    );
+    return value(rows(production(), l), "cadence.every-1-minutes.phase").local;
+  };
+  assert.deepEqual(phase(".0006"), ["fractional second"]);
+  assert.deepEqual(phase(".0004"), ["whole minute"]);
+  assert.deepEqual(phase(""), ["whole minute"]);
+  assert.deepEqual(phase(".5"), ["fractional second"]);
 });

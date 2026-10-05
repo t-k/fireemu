@@ -23,9 +23,11 @@ const v1Local = (timeline) =>
     .map((l) => l.value);
 const v2Prod = (digest) => digest.frames.filter((f) => f.generation === 2);
 const v1Prod = (digest) => digest.frames.filter((f) => f.generation === 1);
-const secondsOf = (instant) =>
-  Date.parse(instant.replace(/(\.\d{3})\d+/, "$1")) / 1000 +
-  Number(/\.(\d+)/.exec(instant)?.[1]?.padEnd(9, "0").slice(3, 9) ?? 0) / 1e6;
+/** An RFC 3339 instant (with an offset, and a fraction of up to nine digits) as seconds since the epoch. */
+export const secondsOf = (instant) => {
+  const fraction = /\.(\d+)/.exec(instant)?.[1] ?? "";
+  return Date.parse(instant.replace(/\.\d+/, "")) / 1000 + (fraction ? Number("0." + fraction) : 0);
+};
 
 /** The recorded retry chains: the attempt offsets (seconds from the first attempt) of each job's first chain. */
 export function productionChains(digest) {
@@ -88,6 +90,9 @@ export function rows(production, local) {
       note,
     });
   const pv2 = v2Prod(production);
+  // A recording with no Gen2 or no Gen1 frame would let every row match vacuously.
+  if (pv2.length === 0 || v1Prod(production).length === 0)
+    throw new Error("the recording holds no frames of one generation: nothing to compare");
   const lv2 = v2Local(local.natural);
   const lv2Requests = lv2.map((f) => f.request).filter(Boolean);
 

@@ -150,6 +150,35 @@ test("the Gen1 context names the topic and the message, as recorded for pubsub.s
   assert.throws(() => v1ScheduleContext({ ...event, data: { jobName: "" } }), /job name/);
 });
 
+test("the instant check: nine fractional digits at most, the calendar must agree, and the message names the value", () => {
+  assert.equal(schedulerTimestamp("2026-10-05T08:42:01.123456789Z"), "2026-10-05T01:42:01.123456789-07:00");
+  assert.throws(() => schedulerTimestamp("2026-10-05T08:42:01.1234567890Z"), /scheduled time/);
+  // The calendar: a day that does not exist, a leap day that does, a year Date.UTC would move into the 1900s.
+  for (const bad of ["2026-02-30T00:00:00Z", "2026-02-29T00:00:00Z", "2026-10-05T24:00:00Z", "2026-10-05T08:60:00Z", "2026-10-05T08:00:60Z", "0099-01-01T00:00:00Z"])
+    assert.throws(() => schedulerTimestamp(bad), /scheduled time/, bad);
+  assert.equal(schedulerTimestamp("2028-02-29T12:00:00Z"), "2028-02-29T04:00:00-08:00");
+  assert.throws(() => schedulerTimestamp("2026-10-05"), new Error("the scheduled time is not an RFC 3339 UTC instant: 2026-10-05"));
+  assert.throws(() => schedulerTimestamp("2026-02-30T00:00:00Z"), new Error("the scheduled time is not an RFC 3339 UTC instant: 2026-02-30T00:00:00Z"));
+  assert.throws(() => v1ScheduleContext({ id: "x", time: "nope", data: { jobName: JOB } }), new Error("the publish time is not an RFC 3339 UTC instant: nope"));
+});
+
+test("an answer of exactly 400 fails, 399 does not, and sendStatus sets the status", async () => {
+  const data = { jobName: JOB, scheduleTime: "2026-10-05T08:45:00Z" };
+  await assert.rejects(deliverSchedule(async (_req, res) => res.status(400).send(), data), /answered 400/);
+  await assert.rejects(deliverSchedule(async (_req, res) => res.sendStatus(500), data), /answered 500/);
+  await assert.rejects(deliverSchedule(async (_req, res) => res.sendStatus(404), data), /answered 404/);
+  await deliverSchedule(async (_req, res) => res.status(399).send(), data);
+  await deliverSchedule(async (_req, res) => res.sendStatus(200), data);
+  // an answer with no status at all is a 200
+  await deliverSchedule(async (_req, res) => res.send(), data);
+});
+
+test("message ids are pinned, including one whose sixteen digits start with a zero", () => {
+  assert.equal(pubsubMessageId("42-3"), "21060470636220959");
+  assert.equal(pubsubMessageId("probe-8"), "20480968339137279");
+  assert.equal(pubsubMessageId("1-1"), "25940261599779572");
+});
+
 // ---- against the real SDK -----------------------------------------------------------------------------------
 
 const sdkRoot = process.env.FE_SOURCE_SDK_ROOT;

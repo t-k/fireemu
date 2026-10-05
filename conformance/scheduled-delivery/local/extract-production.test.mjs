@@ -1,9 +1,11 @@
 // The extraction of the public digest from a (synthetic) private run directory.
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import test from "node:test";
+import { fileURLToPath } from "node:url";
 import { KEPT_HEADERS, extract } from "./extract-production.mjs";
 
 const RUN = "0123456789abcdef";
@@ -196,6 +198,90 @@ test("a directory without a journal or a result is an error, not an empty digest
   const dir = mkdtempSync(join(tmpdir(), "extract-production-empty-"));
   try {
     assert.throws(() => extract(dir));
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("only persisted answers of the log reads count, frames come out in the order they were received, and only attempts are timed", () => {
+  const dir = runDir();
+  try {
+    const journalPath = join(dir, `journal-${RUN}.jsonl`);
+    const early = frameEntry("early", "schedOkV2", "2026-10-05T08:40:59.000Z", {
+      request: request({ "x-cloudscheduler": "true" }),
+      event: { jobName: "j", scheduleTime: "t" },
+      eventKeys: [],
+      contextProperty: null,
+      context: null,
+    });
+    const stray = frameEntry("stray", "schedOkV2", "2026-10-05T08:30:00.000Z", {
+      request: request({}),
+      event: {},
+      eventKeys: [],
+      contextProperty: null,
+      context: null,
+    });
+    const scheduler = [
+      {
+        insertId: "x1",
+        timestamp: "2026-10-05T08:41:04.500Z",
+        resource: { type: "cloud_scheduler_job", labels: {} },
+        jsonPayload: {
+          "@type": "type.googleapis.com/google.cloud.scheduler.logging.AttemptStarted",
+        },
+      },
+      {
+        insertId: "x2",
+        timestamp: "2026-10-05T08:41:04.600Z",
+        resource: { type: "cloud_scheduler_job", labels: { job_id: "j" } },
+        jsonPayload: { "@type": "type.googleapis.com/google.cloud.scheduler.logging.JobUpdated" },
+      },
+    ];
+    const extra = [
+      row("logs-pass1-2-frames", { entries: [early] }),
+      // not persisted answers (a request that got no body) and reads that are not log reads carry no frames
+      {
+        id: "logs-pass1-3-frames",
+        state: "response-headers",
+        bodyBase64: row("x", { entries: [stray] }).bodyBase64,
+      },
+      row("pull-pass1-1-schedOkV1", { entries: [stray] }),
+      row("logs-pass1-2-scheduler", { entries: scheduler }),
+    ];
+    writeFileSync(
+      journalPath,
+      readFileSync(journalPath, "utf8") + extra.map((r) => JSON.stringify(r)).join("\n") + "\n",
+    );
+    const digest = extract(dir);
+    assert.deepEqual(
+      digest.frames.map((f) => f.at),
+      [0, 5109, 63145],
+    );
+    assert.equal(
+      digest.frames.some((f) => f.at < 0),
+      false,
+    );
+    // the stray frames (an unpersisted answer, a pull row) are not in the digest: three frames only
+    assert.equal(digest.frames.length, 3);
+    assert.equal(digest.attempts["j"], undefined, "a job update is not an attempt");
+    assert.equal(Object.keys(digest.attempts).length, 1);
+    assert.equal(digest.schedulerEntryTypes["AttemptStarted|||"], 1);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("the command line writes the digest, one space indentation and a final newline", () => {
+  const dir = runDir();
+  const out = join(dir, "digest.json");
+  try {
+    const here = dirname(fileURLToPath(import.meta.url));
+    execFileSync(process.execPath, [join(here, "extract-production.mjs"), dir, out]);
+    const text = readFileSync(out, "utf8");
+    assert.equal(text.endsWith("}\n"), true);
+    assert.match(text, /\n "schemaVersion": 1,\n/);
+    assert.equal(JSON.parse(text).schemaVersion, 1);
+    assert.equal(JSON.parse(text).frames.length, 2);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

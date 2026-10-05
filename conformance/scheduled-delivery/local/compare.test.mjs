@@ -2329,3 +2329,25 @@ test("another recording's extra chains join the rows when the main recording has
   const table = compareProfiles(main, localWithDoubles(), localWithDoubles(), [also]);
   assert.equal(table.find((r) => r.id === "retry.retryDouble1").strict.verdict, "MATCH");
 });
+
+test("another recording's chain never replaces the main recording's own, and its non-optional chains are not joined", () => {
+  const main = productionWithRun3Chains();
+  // a second recording with a different `count` chain (a gap of 20 s: it would diverge) and its own deployed retry job
+  const frame = (job, at) => prodV2("schedRetryV2", at, "2026-12-31T16:00:00-08:00", job);
+  const other = {
+    ...production(),
+    frames: [
+      ...production().frames,
+      ...[0, 20_000].map((o) => frame("fe-sd-fedcba9876543210-count", 80_000_000 + o)),
+      ...[0, 90_000].map((o) =>
+        frame("firebase-schedule-schedRetryV2-us-central1", 90_000_000 + o),
+      ),
+    ],
+  };
+  const withOther = Object.fromEntries(
+    rows(main, localWithRun3Chains(), [other]).map((r) => [r.id, r.verdict]),
+  );
+  const alone = Object.fromEntries(rows(main, localWithRun3Chains()).map((r) => [r.id, r.verdict]));
+  assert.deepEqual(withOther, alone);
+  assert.equal(withOther["retry.retryCountWindow"], "MATCH");
+});

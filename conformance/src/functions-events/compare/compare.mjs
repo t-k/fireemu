@@ -24,13 +24,57 @@ export const GEN2_FIRESTORE_FIELD_MAPS = Object.freeze([
   "$.frame.event.data.after.data",
 ]);
 
+// The retry rows carry the same Gen2 Firestore document field maps under the attempt they belong to (observeProductionPass and
+// observeLocal build `$.failed` and `$.succeeded` from the failed and the succeeded frame), so the ruling covers them there.
+const RETRY_RECIPE = "functions-events/delivery/retry";
+export const RETRY_FIRESTORE_FIELD_MAPS = Object.freeze(
+  ["failed", "succeeded"].flatMap((attempt) =>
+    ["data", "before.data", "after.data"].map((map) => `$.${attempt}.event.data.${map}`),
+  ),
+);
+
 /** The predicate naming the objects whose member order a row does not compare, or none. */
 export function orderIgnoredFor(row, scenario) {
   if (row.generation !== 2 || scenario.source !== "firestore") return () => false;
+  const roots =
+    row.recipeId === RETRY_RECIPE ? RETRY_FIRESTORE_FIELD_MAPS : GEN2_FIRESTORE_FIELD_MAPS;
   return (path) =>
-    GEN2_FIRESTORE_FIELD_MAPS.some(
+    roots.some(
       (root) => path === root || path.startsWith(`${root}.`) || path.startsWith(`${root}[`),
     );
+}
+
+// Values a row compares by shape, not by value (declared, with the reason):
+//  - the Pub/Sub v2 `data.subscription` names the subscription Eventarc made for the deployment, `eventarc-<region>-<function>-
+//    <6 digits>-sub-<3 digits>`; production draws the two numbers per deployment (FE v5 834054/834, FE v7 293232/576: fixed within
+//    a deployment, so the two passes of one run cannot show it varying) and fireemu derives its own, so the numbers are masked and
+//    the rest, the shape, is compared;
+//  - the `authId` of an auth-context write is the id of the credential that wrote: production prints the recorder's own (its email
+//    for the user credential, a uid for an ID-token write), which a local session cannot have, so only that a non-empty string is
+//    present is compared (the `authType` beside it is compared exactly).
+const maskSubscription = (value) =>
+  value.replace(/-\d{6}-sub-\d{3}$/, "-<6 digits>-sub-<3 digits>");
+const maskPresent = (value) => (value.length > 0 ? "<present>" : value);
+
+/** The declared masks of a row: `{ path, mask }` entries (see above), or none. */
+export function declaredMasksFor(row, scenario) {
+  const masks = [];
+  if (row.generation === 2 && scenario.source === "pubsub")
+    masks.push({ path: "$.frame.event.data.subscription", mask: maskSubscription });
+  if (row.recipeId === "functions-events/firestore/auth-context" && scenario.source === "firestore")
+    masks.push({ path: "$.frame.event.authId", mask: maskPresent });
+  return masks;
+}
+
+/** A copy of a flattened observation with the declared masks applied to the string values at their paths. */
+export function applyDeclaredMasks(observation, masks) {
+  if (masks.length === 0) return observation;
+  const masked = new Map(observation);
+  for (const { path, mask } of masks) {
+    const leaf = masked.get(path);
+    if (leaf?.type === "string") masked.set(path, { ...leaf, value: mask(leaf.value) });
+  }
+  return masked;
 }
 
 const NEGATIVE = "none-in-window";
@@ -436,11 +480,12 @@ export function compareRuns({
     let productionOnly = {};
     if (passes.every(({ status }) => status === "OK")) {
       productionOnly = mergeListings(passes.flatMap(({ listings }) => listings ?? []));
-      const reference = flatten(passes[0].observation);
+      const masks = declaredMasksFor(row, scenario);
+      const reference = applyDeclaredMasks(flatten(passes[0].observation), masks);
       const orderIgnored = orderIgnoredFor(row, scenario);
       const { disagreements, volatile } = deriveVolatile(
         reference,
-        flatten(passes[1].observation),
+        applyDeclaredMasks(flatten(passes[1].observation), masks),
         {
           orderIgnored,
         },
@@ -458,7 +503,7 @@ export function compareRuns({
           const found = compareObservation(
             reference,
             volatile,
-            flatten(localResults[index].observation),
+            applyDeclaredMasks(flatten(localResults[index].observation), masks),
             profile,
             { orderIgnored },
           );

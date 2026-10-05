@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import {
   attemptInvalidChecksumUpload,
+  readBucketMetadata,
   runStorageScenario,
 } from "./functions-events/storage-driver.mjs";
 
@@ -34,19 +35,109 @@ test("invalid checksum upload stays on loopback and returns a typed refusal", as
   assert.equal(calls.length, 1);
 });
 
+const notFound = () => Object.assign(new Error("bucket absent"), { code: 404 });
+
+test("a bucket nobody created is created, once, before its metadata is read (the strict profile answers 404 for it)", async () => {
+  const calls = [];
+  let exists = false;
+  const bucket = {
+    async getMetadata() {
+      calls.push("getMetadata");
+      if (!exists) throw notFound();
+      return [{ versioning: { enabled: false } }];
+    },
+    async create() {
+      calls.push("create");
+      exists = true;
+    },
+  };
+  assert.deepEqual(await readBucketMetadata(bucket), { versioning: { enabled: false } });
+  assert.deepEqual(calls, ["getMetadata", "create", "getMetadata"]);
+});
+
+test("a bucket that exists is read without being created", async () => {
+  const calls = [];
+  const bucket = {
+    async getMetadata() {
+      calls.push("getMetadata");
+      return [{ versioning: { enabled: true } }];
+    },
+    async create() {
+      calls.push("create");
+    },
+  };
+  assert.deepEqual(await readBucketMetadata(bucket), { versioning: { enabled: true } });
+  assert.deepEqual(calls, ["getMetadata"]);
+});
+
+test("only an absent bucket is created: any other failure of the read is the unavailable readback, with nothing created", async () => {
+  for (const failure of [
+    Object.assign(new Error("denied"), { code: 403 }),
+    Object.assign(new Error("server"), { code: 500 }),
+    new Error("no code"),
+  ]) {
+    const calls = [];
+    const bucket = {
+      async getMetadata() {
+        calls.push("getMetadata");
+        throw failure;
+      },
+      async create() {
+        calls.push("create");
+      },
+    };
+    await assert.rejects(
+      readBucketMetadata(bucket),
+      /versioning configuration readback is unavailable/,
+      failure.message,
+    );
+    assert.deepEqual(calls, ["getMetadata"], failure.message);
+  }
+});
+
+test("a bucket that cannot be created, or still cannot be read after it is, is the unavailable readback", async () => {
+  for (const [label, create, again] of [
+    [
+      "create fails",
+      async () => {
+        throw new Error("create refused");
+      },
+      notFound,
+    ],
+    ["still absent", async () => {}, notFound],
+  ]) {
+    const calls = [];
+    const bucket = {
+      async getMetadata() {
+        calls.push("getMetadata");
+        throw again();
+      },
+      async create() {
+        calls.push("create");
+        return create();
+      },
+    };
+    await assert.rejects(
+      readBucketMetadata(bucket),
+      /versioning configuration readback is unavailable/,
+      label,
+    );
+    assert.deepEqual(calls.slice(0, 2), ["getMetadata", "create"], label);
+  }
+});
+
 test("archive stops before mutation when bucket versioning cannot be read back", async () => {
   const mutations = [];
-  const missing = Object.assign(new Error("bucket absent"), { code: 404 });
   const bucket = {
     file() {
       return {
         async getMetadata() {
-          throw missing;
+          throw notFound();
         },
       };
     },
     async getMetadata() {
-      throw missing;
+      throw notFound();
     },
     async getFiles() {
       return [[]];
@@ -66,5 +157,6 @@ test("archive stops before mutation when bucket versioning cannot be read back",
     }),
     /versioning configuration readback is unavailable/,
   );
-  assert.deepEqual(mutations, []);
+  // The absent bucket was created for the readback; versioning was never touched.
+  assert.deepEqual(mutations, ["create"]);
 });

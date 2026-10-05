@@ -88,6 +88,30 @@ export async function attemptInvalidChecksumUpload({ host, bucket, name, request
   throw new Error(`local invalid-checksum upload was not refused (HTTP ${response.status})`);
 }
 
+/**
+ * The metadata of the primary bucket, for the versioning readback of the archive scenario. The bucket has to exist: production's
+ * does, and the strict profile answers 404 for a bucket nobody created (the recorded production shape), so an absent bucket is
+ * created here, once, and read again. Any other failure of the read, a failed create, or a read that still fails afterwards is
+ * the unavailable readback (the scenario stops before it mutates anything).
+ */
+export async function readBucketMetadata(bucket) {
+  const unavailable = () =>
+    new Error("Storage archive versioning configuration readback is unavailable");
+  try {
+    const [metadata] = await bucket.getMetadata();
+    return metadata;
+  } catch (error) {
+    if (error?.code !== 404) throw unavailable();
+  }
+  try {
+    await bucket.create();
+    const [metadata] = await bucket.getMetadata();
+    return metadata;
+  } catch {
+    throw unavailable();
+  }
+}
+
 export async function runStorageScenario({ scenario, capture, storage }) {
   const bucketName = scenario.resource === "bucket-control" ? controlBucket : primaryBucket;
   const bucket = storage.bucket(bucketName);
@@ -114,12 +138,7 @@ export async function runStorageScenario({ scenario, capture, storage }) {
   try {
     assert.equal(await metadataOrNull(file), null, "owned object must start absent");
     if (scenario.id === "storage-archive") {
-      let metadata;
-      try {
-        [metadata] = await bucket.getMetadata();
-      } catch {
-        throw new Error("Storage archive versioning configuration readback is unavailable");
-      }
+      const metadata = await readBucketMetadata(bucket);
       originalVersioning = { enabled: Boolean(metadata.versioning?.enabled) };
       await bucket.setMetadata({ versioning: { enabled: true } });
       versioningChanged = true;

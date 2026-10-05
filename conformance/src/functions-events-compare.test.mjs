@@ -3,9 +3,14 @@ import { readFileSync } from "node:fs";
 import { test } from "node:test";
 import {
   GEN2_FIRESTORE_FIELD_MAPS,
+  RETRY_FIRESTORE_FIELD_MAPS,
+  applyDeclaredMasks,
   compareRuns,
+  declaredMasksFor,
   orderIgnoredFor,
 } from "./functions-events/compare/compare.mjs";
+import { flatten } from "./functions-events/compare/normalize.mjs";
+import { compareObservation, deriveVolatile } from "./functions-events/compare/diff.mjs";
 import {
   LOCAL_PROJECT,
   PRODUCTION_PROJECT,
@@ -784,4 +789,181 @@ test("ledger 840 reaches the derivation of volatile paths too: production passes
   // Gen1 keeps the order feature: production's own passes differ in order there, so it is volatile (and not a DIFF)
   const volatile1 = result.volatilePaths["fsCreatedV1/fs-create"];
   assert.deepEqual(volatile1["$.frame.event.data.data"], ["order"]);
+});
+
+// ---- round 3: the retry rows' field maps, the per-deployment Pub/Sub subscription, the credential's id ----
+
+const RETRY_ROW = { generation: 2, recipeId: "functions-events/delivery/retry" };
+const FIRESTORE = { source: "firestore" };
+
+test("order is also ignored in the retry rows' Gen2 Firestore field maps, under $.failed and $.succeeded, and nowhere else", () => {
+  // The ruling of owner ledger 840 is about the document field maps of a Gen2 Firestore event; the retry rows carry the same
+  // maps (event.data.data, before.data, after.data) under the attempt they belong to.
+  assert.equal(RETRY_FIRESTORE_FIELD_MAPS.length, 6);
+  const ignored = orderIgnoredFor(RETRY_ROW, FIRESTORE);
+  for (const attempt of ["failed", "succeeded"])
+    for (const map of ["data", "before.data", "after.data"]) {
+      const root = `$.${attempt}.event.data.${map}`;
+      assert.equal(ignored(root), true, root);
+      assert.equal(ignored(`${root}.nested`), true, root);
+      assert.equal(ignored(`${root}[0]`), true, root);
+      assert.equal(ignored(`${root}x`), false, `${root}x`);
+    }
+  for (const path of [
+    "$.failed.event",
+    "$.failed.event.data",
+    "$.failed.event.data.after",
+    "$.failed.event.data.before",
+    "$.succeeded.event.data.value.data",
+    "$.retry.sameEventId",
+    "$.frame.event.data.after.data",
+  ])
+    assert.equal(ignored(path), false, path);
+  // The retry maps belong to the retry rows: another recipe's rows ignore the frame maps only, a Gen1 row nothing.
+  const other = orderIgnoredFor(
+    { generation: 2, recipeId: "functions-events/firestore/create" },
+    FIRESTORE,
+  );
+  assert.equal(other("$.failed.event.data.after.data"), false);
+  assert.equal(other("$.frame.event.data.after.data"), true);
+  for (const [row, scenario] of [
+    [{ ...RETRY_ROW, generation: 1 }, FIRESTORE],
+    [RETRY_ROW, { source: "storage" }],
+  ])
+    assert.equal(orderIgnoredFor(row, scenario)("$.failed.event.data.after.data"), false);
+});
+
+function reorderRetryMaps(entries, mapOf) {
+  for (const entry of entries) {
+    const frame = JSON.parse(entry.rawJson);
+    frame.event.data.after = { data: mapOf(), exists: true };
+    entry.rawJson = JSON.stringify(frame);
+  }
+}
+
+test("a retry row MATCHes when only the order of its document field maps differs, and DIFFs when another member's order does", () => {
+  const forward = () => ({ fixtureKind: "retry", value: "v", count: 1 });
+  const backward = () => ({ count: 1, value: "v", fixtureKind: "retry" });
+  const w = world();
+  reorderRetryMaps(
+    w.run.frames
+      .filter((entry) => entry.handler === "fsRetryV2")
+      .map((entry) => ({
+        get rawJson() {
+          return JSON.stringify(entry.frame);
+        },
+        set rawJson(value) {
+          entry.frame = JSON.parse(value);
+        },
+      })),
+    forward,
+  );
+  for (const profile of ["emulator", "strict"])
+    reorderRetryMaps(w[profile].programs[2].operations[0].framesByGeneration.v2, backward);
+  for (const row of rowsOf(compare(w), "functions-events/delivery/retry"))
+    assert.equal(row.status, "MATCH", `${row.row}: ${row.reasons.join("; ")}`);
+  // The same difference one level up (the order of `data` and `exists` inside `after`) is still a DIFF.
+  for (const profile of ["emulator", "strict"])
+    for (const entry of w[profile].programs[2].operations[0].framesByGeneration.v2) {
+      const frame = JSON.parse(entry.rawJson);
+      frame.event.data.after = { exists: true, data: frame.event.data.after.data };
+      entry.rawJson = JSON.stringify(frame);
+    }
+  for (const row of rowsOf(compare(w), "functions-events/delivery/retry")) {
+    assert.equal(row.status, "DIFF", row.row);
+    assert.ok(
+      row.reasons.some((reason) => reason.startsWith("strict: order $.failed.event.data.after (")),
+      row.reasons.join("; "),
+    );
+  }
+});
+
+const SUBSCRIPTION = "$.frame.event.data.subscription";
+const subscriptionObservation = (name) =>
+  flatten({ frame: { event: { data: { subscription: `projects/p/subscriptions/${name}` } } } });
+const masksFor = (row, scenario) => declaredMasksFor(row, scenario);
+
+test("the Pub/Sub v2 subscription is compared by its shape: the two per-deployment numbers are masked, nothing else", () => {
+  // Recorded: FE v5 (run a9621bfae74fe9bc, frames 134, 136, 271, 273) eventarc-us-central1-pubsubpublishedv2-834054-sub-834 and
+  // FE v7 (run d3fd3faa3e0dc702, frames 136, 138, 275, 277) eventarc-us-central1-pubsubpublishedv2-293232-sub-576.
+  const row = { generation: 2, recipeId: "functions-events/pubsub/publish" };
+  const scenario = { source: "pubsub" };
+  const compareNames = (production, local) => {
+    const masks = masksFor(row, scenario);
+    const reference = applyDeclaredMasks(subscriptionObservation(production), masks);
+    const { volatile } = deriveVolatile(reference, reference);
+    return compareObservation(
+      reference,
+      volatile,
+      applyDeclaredMasks(subscriptionObservation(local), masks),
+      "strict",
+    );
+  };
+  const v5 = "eventarc-us-central1-pubsubpublishedv2-834054-sub-834";
+  const v7 = "eventarc-us-central1-pubsubpublishedv2-293232-sub-576";
+  assert.deepEqual(compareNames(v7, "eventarc-us-central1-pubsubpublishedv2-702214-sub-322"), []);
+  assert.deepEqual(compareNames(v5, v7), []);
+  // The shape is checked: a number of the wrong width, another function, another region and the emulator's name differ.
+  for (const wrong of [
+    "eventarc-us-central1-pubsubpublishedv2-83405-sub-834",
+    "eventarc-us-central1-pubsubpublishedv2-8340545-sub-834",
+    "eventarc-us-central1-pubsubpublishedv2-834054-sub-83",
+    "eventarc-us-central1-pubsubpublishedv2-834054-sub-8341",
+    "eventarc-us-central1-pubsubpublishedv2-83405a-sub-834",
+    "eventarc-us-central1-otherfunction-834054-sub-834",
+    "eventarc-europe-west1-pubsubpublishedv2-834054-sub-834",
+    "emulator-sub-fe-events-primary",
+  ])
+    assert.equal(compareNames(v7, wrong).length, 1, wrong);
+  // Only that path of the Pub/Sub v2 rows is masked.
+  assert.deepEqual(
+    masksFor(row, scenario).map(({ path }) => path),
+    [SUBSCRIPTION],
+  );
+  assert.deepEqual(masksFor({ ...row, generation: 1 }, scenario), []);
+  assert.deepEqual(
+    masksFor(row, { source: "firestore" })
+      .map(({ path }) => path)
+      .includes(SUBSCRIPTION),
+    false,
+  );
+});
+
+test("the id of the credential behind an auth-context write is compared as a present string, and its type still is", () => {
+  // Production prints the recorder's own credential (its email for the user credential, a uid for an ID-token write); a local
+  // session has no such identity, so only that it is a non-empty string is compared. authType is compared exactly.
+  const row = { generation: 2, recipeId: "functions-events/firestore/auth-context" };
+  const masks = masksFor(row, FIRESTORE);
+  assert.deepEqual(
+    masks.map(({ path }) => path),
+    ["$.frame.event.authId"],
+  );
+  const observation = (authType, authId) => flatten({ frame: { event: { authType, authId } } });
+  const compareAuth = (production, local) => {
+    const reference = applyDeclaredMasks(observation(...production), masks);
+    const { volatile } = deriveVolatile(reference, reference);
+    return compareObservation(
+      reference,
+      volatile,
+      applyDeclaredMasks(observation(...local), masks),
+      "strict",
+    );
+  };
+  assert.deepEqual(compareAuth(["unknown", "operator@example.test"], ["unknown", "owner"]), []);
+  assert.deepEqual(
+    compareAuth(["api_key", "Mw39BUiBmgXKwPUHFjsCEJSwPws2"], ["api_key", "alice"]),
+    [],
+  );
+  assert.equal(
+    compareAuth(["unknown", "operator@example.test"], ["service_account", "owner"]).length,
+    1,
+  );
+  assert.equal(compareAuth(["api_key", "x"], ["app_user", "x"]).length, 1);
+  // A missing or empty id is not a present string.
+  assert.equal(compareAuth(["unknown", "operator@example.test"], ["unknown", null]).length, 1);
+  assert.equal(compareAuth(["unknown", "operator@example.test"], ["unknown", ""]).length, 1);
+  assert.deepEqual(
+    masksFor({ ...row, recipeId: "functions-events/firestore/create" }, FIRESTORE),
+    [],
+  );
 });

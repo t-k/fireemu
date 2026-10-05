@@ -101,10 +101,44 @@
       "reason": "Production's value is the operator's own credential identity; a local owner token carries none.",
       "evidence": "FE v5 (functions-events-formal-20261004T182904Z-a9621bfae74fe9bc) and FE v7 (functions-events-formal-20261005T041505Z-d3fd3faa3e0dc702): handler fsWrittenWithAuthContextV2, 16 frames over two runs, identical in both: an Admin write by the user credential is unknown with the operator's email, a client write with an ID token is api_key with the user's uid. Official emulator (firebase-tools 15.28.2, Firestore emulator jar 1.22.0): unknown and fake-auth-id@gmail.com for every writer, the emulator profile's value.",
       "review": "PENDING (the closure review)",
+      "masks": [
+        "authId-unknown-present",
+        "authId-api_key-uid"
+      ],
       "status": "APPROVED",
       "decidedBy": "coordinator (delegated)",
       "decidedOn": "2026-10-05",
       "decisionRef": "docs.local/runs/ownership-lane/coordinator-rulings.md (2026-10-05 15:12Z, admin-write authId and the register) and the review of work/fe-auth-context-strict and work/fe-closure-evidence-r3 (2026-10-05, M-B1)"
+    },
+    {
+      "id": "E11",
+      "decision": "The two numbers in the name of the subscription Eventarc makes for a 2nd gen Pub/Sub function (`eventarc-<region>-<function>-<6 digits>-sub-<3 digits>`) are a declared difference in value only: production draws them at random per deployment and fireemu derives its own. The comparison masks the two numbers and compares the rest of the name, so the shape, the region, the function name and the digit counts stay compared; nothing else is masked by this decision.",
+      "rationale": "Recorded nondeterminism between deployments: FE v5 834054 and 834, FE v7 293232 and 576, each fixed within a deployment, so the two passes of one run cannot show it varying.",
+      "reason": "Per-deployment random numbers.",
+      "evidence": "FE v5 (functions-events-formal-20261004T182904Z-a9621bfae74fe9bc) and FE v7 (functions-events-formal-20261005T041505Z-d3fd3faa3e0dc702): every v2 Pub/Sub frame of a run names the same subscription, the two runs differ in the numbers.",
+      "review": "PENDING (the closure review)",
+      "masks": [
+        "pubsub-subscription-numbers"
+      ],
+      "status": "APPROVED",
+      "decidedBy": "coordinator (delegated)",
+      "decidedOn": "2026-10-05",
+      "decisionRef": "docs.local/runs/ownership-lane/coordinator-rulings.md (2026-10-05, closure comparison ruling 2) and the delta review of work/fe-closure-evidence-r3 (2026-10-06, M-B2)"
+    },
+    {
+      "id": "E12",
+      "decision": "The document field maps of a 2nd gen Firestore event (`data`, `before.data` and `after.data`, also under the retry rows' failed and succeeded attempts) are compared without regard to member order; their values are still compared exactly. The member order of every other object, and of 1st gen events, is compared as before.",
+      "rationale": "The protobuf map has no defined order, and production's REST answers swap the field order of one document between answers (FE v5 transport responses 0036 and 0037, 0043 to 0045).",
+      "reason": "Ledger 840 (coordinator judgment, 2026-10-05): the member order of a Gen2 Firestore document map is not part of the contract.",
+      "evidence": "Ledger line 840 of the owner-decisions ledger (FE v5 transport responses 0036, 0037, 0043 to 0045); the retry rows carry the same maps under the attempt that delivered them (FE v5 and FE v7 fsRetryV2, a Gen2 Firestore trigger).",
+      "review": "PENDING (the closure review)",
+      "masks": [
+        "firestore-field-maps-unordered"
+      ],
+      "status": "APPROVED",
+      "decidedBy": "coordinator (delegated)",
+      "decidedOn": "2026-10-05",
+      "decisionRef": "docs.local/instructions/owner-decisions.md (2026-10-05, FUNCTIONS-EVENTS Firestore Gen2 map member order, ledger line 840)"
     }
   ],
   "conditions": [
@@ -123,7 +157,8 @@
       "generations": [
         1,
         2
-      ]
+      ],
+      "note": "Accepted difference (scope decision E12, ledger line 840): the document field maps of a 2nd gen event are compared without regard to member order (`firestore-field-maps-unordered`); values are compared exactly."
     },
     {
       "conditionId": "FUNCTIONS-EVENTS/firestore-updated",
@@ -140,7 +175,8 @@
       "generations": [
         1,
         2
-      ]
+      ],
+      "note": "Accepted difference (scope decision E12, ledger line 840): the document field maps of a 2nd gen event are compared without regard to member order (`firestore-field-maps-unordered`); values are compared exactly."
     },
     {
       "conditionId": "FUNCTIONS-EVENTS/firestore-deleted",
@@ -157,7 +193,8 @@
       "generations": [
         1,
         2
-      ]
+      ],
+      "note": "Accepted difference (scope decision E12, ledger line 840): the document field maps of a 2nd gen event are compared without regard to member order (`firestore-field-maps-unordered`); values are compared exactly."
     },
     {
       "conditionId": "FUNCTIONS-EVENTS/firestore-written",
@@ -174,7 +211,8 @@
       "generations": [
         1,
         2
-      ]
+      ],
+      "note": "Accepted difference (scope decision E12, ledger line 840): the document field maps of a 2nd gen event are compared without regard to member order (`firestore-field-maps-unordered`); values are compared exactly."
     },
     {
       "conditionId": "FUNCTIONS-EVENTS/firestore-noop",
@@ -189,7 +227,8 @@
       "generations": [
         1,
         2
-      ]
+      ],
+      "note": "Accepted difference (scope decision E12, ledger line 840): the document field maps of a 2nd gen event are compared without regard to member order (`firestore-field-maps-unordered`); values are compared exactly."
     },
     {
       "conditionId": "FUNCTIONS-EVENTS/firestore-routing-params",
@@ -206,7 +245,8 @@
       "generations": [
         1,
         2
-      ]
+      ],
+      "note": "Accepted difference (scope decision E12, ledger line 840): the document field maps of a 2nd gen event are compared without regard to member order (`firestore-field-maps-unordered`); values are compared exactly."
     },
     {
       "conditionId": "FUNCTIONS-EVENTS/firestore-payload",
@@ -225,7 +265,8 @@
       "generations": [
         1,
         2
-      ]
+      ],
+      "note": "Accepted difference (scope decision E12, ledger line 840): the document field maps of a 2nd gen event are compared without regard to member order (`firestore-field-maps-unordered`); values are compared exactly."
     },
     {
       "conditionId": "FUNCTIONS-EVENTS/firestore-auth-context",
@@ -241,7 +282,8 @@
       "status": "PENDING_CORPUS",
       "generations": [
         2
-      ]
+      ],
+      "note": "Accepted difference (scope decision E10, coordinator rulings of 2026-10-05 15:12Z and 16:25Z). In an admin write, production's authId is the writing credential's own identity (the recorder operator's email; authType unknown), and the local owner principal has none and prints `owner`. Only its presence is compared for authType unknown (the value is masked as `authId-unknown-present`); authType is compared exactly, and an ID-token write (api_key) compares the user's uid by its 28-character shape (`authId-api_key-uid`), so a wrong id there is still a difference. The comparison records each mask it used and the promotion refuses an undeclared one."
     },
     {
       "conditionId": "FUNCTIONS-EVENTS/storage-finalized",
@@ -410,7 +452,8 @@
       "generations": [
         1,
         2
-      ]
+      ],
+      "note": "Accepted difference (scope decision E11): the two per-deployment numbers of the Eventarc subscription name in data.subscription of a 2nd gen event are masked (`pubsub-subscription-numbers`); the rest of the name is compared."
     },
     {
       "conditionId": "FUNCTIONS-EVENTS/pubsub-topic-routing",
@@ -427,7 +470,8 @@
       "generations": [
         1,
         2
-      ]
+      ],
+      "note": "Accepted difference (scope decision E11): the two per-deployment numbers of the Eventarc subscription name in data.subscription of a 2nd gen event are masked (`pubsub-subscription-numbers`); the rest of the name is compared."
     },
     {
       "conditionId": "FUNCTIONS-EVENTS/delivery-retry-identity",
@@ -447,7 +491,8 @@
       ],
       "sources": [
         "firestore"
-      ]
+      ],
+      "note": "Accepted difference (scope decision E12, ledger line 840): the document field maps of the Gen2 Firestore retry events are compared without regard to member order (`firestore-field-maps-unordered`); values are compared exactly."
     },
     {
       "conditionId": "FUNCTIONS-EVENTS/final-artifact-regression",

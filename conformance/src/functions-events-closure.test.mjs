@@ -138,20 +138,23 @@ function validateClosure(closure) {
   }
   assert.deepEqual(
     new Set(closure.scopeDecisions.map(({ id }) => id)),
-    new Set(["E1", "E2", "E3", "E4", "E5", "E6", "E7", "E8", "E9", "E10"]),
+    new Set(["E1", "E2", "E3", "E4", "E5", "E6", "E7", "E8", "E9", "E10", "E11", "E12"]),
   );
   for (const decision of closure.scopeDecisions) {
     assert.ok(decision.decision && decision.rationale, decision.id);
     assert.ok(decision.decidedBy && decision.decidedOn && decision.decisionRef, decision.id);
-    if (decision.id === "E10") {
-      // The accepted difference of the authId (coordinator, 2026-10-05): it states its reason, its evidence and its review,
+    if (["E10", "E11", "E12"].includes(decision.id)) {
+      // An accepted difference (E10 the authId, E11 the subscription numbers, E12 the unordered field maps): it states its reason, its evidence and its review,
       // and is limited to the one field it declares.
       assert.equal(decision.status, "APPROVED", decision.id);
-      assert.equal(decision.decidedBy, "coordinator (delegated)", decision.id);
+      assert.match(decision.decidedBy, /^(coordinator \(delegated\)|owner)$/, decision.id);
       assert.ok(decision.reason && decision.evidence && decision.review, decision.id);
-      assert.match(decision.decision, /authId/, decision.id);
-      assert.match(decision.decision, /only for authType unknown/, decision.id);
-      assert.match(decision.decision, /Nothing else is masked/, decision.id);
+      assert.ok(Array.isArray(decision.masks) && decision.masks.length > 0, decision.id);
+      if (decision.id === "E10") {
+        assert.match(decision.decision, /authId/, decision.id);
+        assert.match(decision.decision, /only for authType unknown/, decision.id);
+        assert.match(decision.decision, /Nothing else is masked/, decision.id);
+      }
     } else {
       assert.equal(decision.status, "FROZEN", decision.id);
     }

@@ -13,6 +13,7 @@ import {
   buildReport,
   checkBuildRecord,
   checkComparison,
+  checkDeclaredMasks,
   checkLocalBinary,
   checkLedger,
   checkWorkspaceReceipt,
@@ -73,6 +74,14 @@ const isGate = (c) =>
   ["final-artifact-regression", "closure-review"].some((g) => c.conditionId.endsWith(`/${g}`));
 const business = () => closure().conditions.filter((c) => !isGate(c));
 
+// The masks a real comparison uses, with the scope decision of the closure record that declares each.
+const USED_MASKS = [
+  { mask: "authId-api_key-uid", reason: "E10", rows: 1 },
+  { mask: "authId-unknown-present", reason: "E10", rows: 1 },
+  { mask: "firestore-field-maps-unordered", reason: "E12", rows: 20 },
+  { mask: "pubsub-subscription-numbers", reason: "E11", rows: 7 },
+];
+
 /**
  * A comparison with every row the closure expects, MATCH unless `over` says otherwise (row id -> { status, reasons } for a fault of
  * the recording or of both profiles, or { only: { strict | emulator: status }, reasons } for one profile's difference).
@@ -90,6 +99,7 @@ function comparisonOf({
     corpusDigest: sha256(corpusText),
   },
   localBinary = LOCAL,
+  declaredMasks = USED_MASKS,
 } = {}) {
   const rows = [];
   for (const condition of business())
@@ -149,6 +159,7 @@ function comparisonOf({
       match: count("MATCH"),
       diff: count("DIFF"),
       incomplete: count("INCOMPLETE"),
+      declaredMasks,
     },
   };
 }
@@ -1646,4 +1657,118 @@ test("the gate rows written into the evidence carry the production side and both
   const gate = evidence.rows.filter((r) => r.row.startsWith("functions-events/gate#"));
   assert.equal(gate.length, 3);
   for (const row of gate) assert.deepEqual(row.production, { status: "MATCH", reasons: [] });
+});
+
+// ---- the masks a comparison used must be declared by the closure record (review M-B2 (c)) -----------------------------------
+
+const MASKS = [
+  "authId-api_key-uid",
+  "authId-unknown-present",
+  "firestore-field-maps-unordered",
+  "pubsub-subscription-numbers",
+];
+
+test("the closure record declares every mask a comparison can use: E10 the authId, E11 the subscription numbers, E12 the unordered field maps", () => {
+  const declared = new Map();
+  for (const decision of closure().scopeDecisions) {
+    if (decision.status !== "APPROVED") continue;
+    for (const mask of decision.masks ?? []) declared.set(mask, decision.id);
+  }
+  assert.deepEqual(Object.fromEntries([...declared].toSorted()), {
+    "authId-api_key-uid": "E10",
+    "authId-unknown-present": "E10",
+    "firestore-field-maps-unordered": "E12",
+    "pubsub-subscription-numbers": "E11",
+  });
+  // The accepted difference of the admin-write id is on its condition too, in STORAGE-OBJECT's form: a note that says what is
+  // not judged, why and under which ruling.
+  const note = closure().conditions.find((c) =>
+    c.conditionId.endsWith("/firestore-auth-context"),
+  ).note;
+  assert.match(note, /admin write/i);
+  assert.match(note, /operator/i);
+  assert.match(note, /only its presence is compared/i);
+  assert.match(note, /authType is compared exactly/i);
+  assert.match(note, /E10/);
+  for (const suffix of ["pubsub-published", "pubsub-topic-routing"])
+    assert.match(
+      closure().conditions.find((c) => c.conditionId.endsWith(`/${suffix}`)).note,
+      /E11/,
+    );
+});
+
+test("a comparison that used only declared masks passes, and one that does not record its masks, used an undeclared one, or cites the wrong decision is refused", () => {
+  const ok = comparisonOf();
+  assert.doesNotThrow(() => checkDeclaredMasks(ok, closure()));
+  assert.doesNotThrow(() => checkDeclaredMasks(comparisonOf({ declaredMasks: [] }), closure()));
+  // It must say which masks it used, even none.
+  const silent = comparisonOf();
+  delete silent.summary.declaredMasks;
+  asRefusal(() => checkDeclaredMasks(silent, closure()), /does not record the masks it used/);
+  // An undeclared mask, and a declared one under another decision.
+  asRefusal(
+    () =>
+      checkDeclaredMasks(
+        comparisonOf({ declaredMasks: [{ mask: "authId-any-string", reason: "E10", rows: 1 }] }),
+        closure(),
+      ),
+    /undeclared mask authId-any-string/,
+  );
+  asRefusal(
+    () =>
+      checkDeclaredMasks(
+        comparisonOf({
+          declaredMasks: [{ mask: "authId-unknown-present", reason: "E11", rows: 1 }],
+        }),
+        closure(),
+      ),
+    /authId-unknown-present.*E10/,
+  );
+  // A mask of a row that the summary does not list.
+  const rowOnly = comparisonOf();
+  rowOnly.rows[0].declaredMasks = [{ mask: "authId-any-string", path: "$.x", reason: "E10" }];
+  asRefusal(() => checkDeclaredMasks(rowOnly, closure()), /undeclared mask authId-any-string/);
+  // The record side: a decision that is not APPROVED, one that is missing, and one that lists no masks declare nothing.
+  for (const edit of [
+    (c) => (c.scopeDecisions.find((d) => d.id === "E10").status = "PENDING"),
+    (c) => (c.scopeDecisions = c.scopeDecisions.filter((d) => d.id !== "E10")),
+    (c) => delete c.scopeDecisions.find((d) => d.id === "E10").masks,
+  ]) {
+    const record = closure();
+    edit(record);
+    asRefusal(() => checkDeclaredMasks(comparisonOf(), record), /undeclared mask authId/);
+  }
+  for (const mask of MASKS)
+    assert.doesNotThrow(() =>
+      checkDeclaredMasks(
+        comparisonOf({ declaredMasks: [{ mask, reason: DECLARED_REASON[mask], rows: 1 }] }),
+        closure(),
+      ),
+    );
+});
+
+const DECLARED_REASON = {
+  "authId-api_key-uid": "E10",
+  "authId-unknown-present": "E10",
+  "firestore-field-maps-unordered": "E12",
+  "pubsub-subscription-numbers": "E11",
+};
+
+test("the report and the promotion both refuse a comparison that used an undeclared mask or records none", () => {
+  const undeclared = comparisonOf({
+    declaredMasks: [{ mask: "authId-any-string", reason: "E10", rows: 1 }],
+  });
+  asRefusal(
+    () => closureEvidenceCommand(options(), commandFiles({ comparison: undeclared }).io),
+    /undeclared mask authId-any-string/,
+  );
+  const silent = comparisonOf();
+  delete silent.summary.declaredMasks;
+  asRefusal(
+    () => closureEvidenceCommand(writing(), commandFiles({ comparison: silent }).io),
+    /does not record the masks it used/,
+  );
+  const files = commandFiles({ comparison: undeclared });
+  asRefusal(() => closureEvidenceCommand(writing(), files.io), /undeclared mask/);
+  assert.equal(files.written.size, 0, "nothing is written for a refused promotion");
 });

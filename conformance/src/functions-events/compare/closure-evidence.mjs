@@ -125,6 +125,43 @@ export function checkComparison(comparison) {
   return comparison;
 }
 
+/**
+ * The masks a comparison used, against the masks the closure record declares, or a refusal. A mask is declared by an APPROVED scope
+ * decision that lists it in `masks`; the comparison names the decision it cites for each mask, and the two must agree. A comparison
+ * that does not record its masks (summary.declaredMasks, even an empty list) cannot be judged and is refused too: an undeclared
+ * mask would otherwise turn a difference into a MATCH with nothing in the record to say so.
+ */
+export function checkDeclaredMasks(comparison, closure) {
+  const used = comparison.summary?.declaredMasks;
+  if (!Array.isArray(used))
+    refuse("the comparison does not record the masks it used (summary.declaredMasks)");
+  const declaredBy = new Map();
+  for (const decision of closure.scopeDecisions ?? []) {
+    if (decision?.status !== "APPROVED" || !Array.isArray(decision.masks)) continue;
+    for (const mask of decision.masks) declaredBy.set(mask, decision.id);
+  }
+  const check = (mask, reason) => {
+    if (!declaredBy.has(mask))
+      refuse(
+        `the comparison used an undeclared mask ${mask}: no approved scope decision of the closure record lists it`,
+      );
+    if (reason !== declaredBy.get(mask))
+      refuse(
+        `the comparison cites ${reason} for the mask ${mask}, which the closure record declares under ${declaredBy.get(mask)}`,
+      );
+  };
+  for (const { mask, reason } of used) check(mask, reason);
+  const listed = new Set(used.map(({ mask }) => mask));
+  for (const row of comparison.rows)
+    for (const { mask, reason } of row.declaredMasks ?? []) {
+      check(mask, reason);
+      if (!listed.has(mask))
+        refuse(
+          `row ${row.row} used the mask ${mask}, which the comparison's summary does not list`,
+        );
+    }
+}
+
 /** The ids of the rows that settle a condition: every recipe x case x generation (a condition without generations has none). */
 export function expectedRows(condition) {
   const generations = condition.generations ?? [];
@@ -526,6 +563,7 @@ export function closureEvidenceCommand(
   const comparison = checkComparison(JSON.parse(read(options.comparison)));
   const closureText = read(options.closure);
   const closure = JSON.parse(closureText);
+  checkDeclaredMasks(comparison, closure);
   const mapping = mapConditions(closure, comparison);
   const report = buildReport({ comparison, mapping });
   if (options["report-out"]) write(options["report-out"], `${JSON.stringify(report, null, 2)}\n`);

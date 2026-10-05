@@ -953,9 +953,37 @@ test("the production gaps are a mode, not the first gap: a forced run between tw
   assert.equal(value(table, "cadence.every-1-minutes.spacing").production, 60);
 });
 
-test("a Gen1 failure is counted for schedFailV1 only: two other Gen1 frames at one instant do not change it", () => {
+test("a Gen1 failure is counted for schedFailV1 only: two other Gen1 frames with one message id do not change it", () => {
   const table = rows(production(), local());
   assert.deepEqual(value(table, "v1.failure-no-retry").production, [1]);
+  // schedOkV1 delivered twice with one id (a redelivery of a handler that does not fail) is not a failure retried
+  const p = production();
+  p.frames.push(prodV1("schedOkV1", 3000, "22257109111563907", "2026-10-05T08:41:01.359Z"));
+  const l = local();
+  l.natural.lines.push(
+    localV1("schedOkV1", instant(T0 + 3000), "21060470636220959", "2026-10-05T08:41:01.359Z"),
+  );
+  const row = value(rows(p, l), "v1.failure-no-retry");
+  assert.deepEqual(row.production, [1]);
+  assert.deepEqual(row.local, [1]);
+  assert.equal(row.verdict, "MATCH");
+});
+
+test("the phase compares every occurrence after the first: a second one on the minute is a whole-minute phase", () => {
+  const p = production();
+  p.frames = p.frames.map((f) =>
+    f.handler === "schedOkV2" && f.at === 60_000
+      ? {
+          ...f,
+          event: { ...f.event, scheduleTime: la(T0 + 60_000) },
+          headers: { ...f.headers, "x-cloudscheduler-scheduletime": la(T0 + 60_000) },
+        }
+      : f,
+  );
+  assert.deepEqual(value(rows(p, local()), "cadence.every-1-minutes.phase").production, [
+    "fractional second",
+    "whole minute",
+  ]);
 });
 
 test("the v2 context row's values are the recorded ones", () => {

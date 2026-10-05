@@ -236,10 +236,12 @@ export function rows(production, local) {
   const lNames = nameSet(unique(lv2Requests.map((r) => Object.keys(r.headers).toSorted())));
   const missing = pNames.filter((n) => !lNames.includes(n));
   const extra = lNames.filter((n) => !pNames.includes(n));
+  const same = missing.length === 0 && extra.length === 0 && lNames.length > 0;
+  // Only a local request that sent something, and only the unreproducible headers missing, is the declared difference.
   const declared =
+    !same &&
     lNames.length > 0 &&
     extra.length === 0 &&
-    missing.length > 0 &&
     missing.every((n) => UNREPRODUCIBLE.includes(n));
   add(
     "v2.request.header-names",
@@ -247,8 +249,8 @@ export function rows(production, local) {
     "scheduleTime-header",
     pNames,
     lNames,
-    missing.length === 0 && extra.length === 0 && lNames.length > 0,
-    missing.length === 0 && extra.length === 0 && lNames.length > 0
+    same,
+    same
       ? ""
       : declared
         ? `declared: not reproduced ${missing.join(", ")} (the OIDC credential, trace headers, forwarded and x-forwarded-for; nothing here can sign for Google)`
@@ -297,8 +299,7 @@ export function rows(production, local) {
     "scheduleTime-header",
     pTime,
     lTime,
-    lTime.length > 0 &&
-      lTime.every((form) => pTime.includes(form)) &&
+    lTime.every((form) => pTime.includes(form)) &&
       JSON.stringify(unique(pTime.map(timeWithoutFraction))) ===
         JSON.stringify(unique(lTime.map(timeWithoutFraction))),
     "production writes it in America/Los_Angeles with its offset, whatever the job's zone, and with a six-digit fraction after the first occurrence of an interval job (its phase)",

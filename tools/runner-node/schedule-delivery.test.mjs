@@ -225,6 +225,12 @@ test("the host is the function's public host from the job's project and region, 
     host("projects/other-app/locations/asia-northeast1/jobs/firebase-schedule-x-asia-northeast1"),
     "asia-northeast1-other-app.cloudfunctions.net",
   );
+  // digits and a dash are plain name characters, all ten of them
+  assert.equal(
+    host("projects/app-0123456789/locations/europe-west9/jobs/firebase-schedule-x-europe-west9"),
+    "europe-west9-app-0123456789.cloudfunctions.net",
+  );
+  assert.equal(host("projects/Z-a/locations/us-east4/jobs/x"), "us-east4-Z-a.cloudfunctions.net");
   // a bare job id names no project or region: no host is invented
   assert.equal(host("firebase-schedule-x-us-central1"), undefined);
   assert.equal(

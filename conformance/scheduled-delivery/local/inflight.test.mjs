@@ -1,6 +1,7 @@
 // The slow-handler scenario helpers: the patch that makes the recorded fixture's 100 s handler last 100 logical
 // seconds (read from the clock file the local child keeps), and the shape of the run.
 import assert from "node:assert/strict";
+import { spawn } from "node:child_process";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -17,8 +18,9 @@ test("the recorded fixture holds the sleep the patch replaces, exactly once", ()
   assert.equal(fixtureSource.split(SLEEP).length - 1, 1);
 });
 
-test("the patched handler lasts 100 logical seconds of the clock file, not real time", async () => {
+test("the patched handler lasts 100 logical seconds of the clock file, not real time, and leaves nothing running", async () => {
   const dir = mkdtempSync(join(tmpdir(), "inflight-test-"));
+  let child;
   try {
     const clockFile = join(dir, "clock.txt");
     writeFileSync(clockFile, "1000");
@@ -26,31 +28,34 @@ test("the patched handler lasts 100 logical seconds of the clock file, not real 
     assert.ok(patched.startsWith("before\n  "));
     assert.ok(patched.endsWith("\nafter"));
     assert.ok(!patched.includes("100_000"));
-    // the patched statement, run on its own
+    // the patched statement, run on its own in a process of its own: a timer it left running would keep that process
+    // alive, and a handler that never ends would never print
     const statement = patched.slice("before\n  ".length, -"\nafter".length);
-    const handler = new Function(
-      "require",
-      `return (async () => { ${statement} return "done"; })();`,
+    child = spawn(
+      process.execPath,
+      ["-e", `(async () => { ${statement} console.log("ENDED"); })();`],
+      {
+        stdio: ["ignore", "pipe", "inherit"],
+      },
     );
-    let finished = false;
-    const running = handler(() => ({ readFileSync })).then(() => (finished = true));
-    await new Promise((resolve) => setTimeout(resolve, 50));
-    assert.equal(finished, false, "no logical time has passed");
+    let output = "";
+    child.stdout.on("data", (d) => (output += d));
+    const exited = new Promise((resolve) => child.on("exit", resolve));
+    const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+    await sleep(300);
+    assert.equal(output, "", "no logical time has passed");
     writeFileSync(clockFile, "1099");
-    await new Promise((resolve) => setTimeout(resolve, 50));
-    assert.equal(finished, false, "99 s is not 100 s");
+    await sleep(300);
+    assert.equal(output, "", "99 s is not 100 s");
     writeFileSync(clockFile, "1100");
-    // a handler that never ends is a failure of the test, not a hang of the run
-    await Promise.race([
-      running,
-      new Promise((_, reject) =>
-        setTimeout(() => reject(new Error("the handler never ended")), 2000),
-      ),
+    const code = await Promise.race([
+      exited,
+      sleep(4000).then(() => "the handler never ended or left a timer running"),
     ]);
-    assert.equal(finished, true);
-    // and it stays ended: the poll is cleared, so a later change of the file starts nothing
-    writeFileSync(clockFile, "9999");
+    assert.equal(code, 0, String(code));
+    assert.equal(output.trim(), "ENDED");
   } finally {
+    child?.kill("SIGKILL");
     rmSync(dir, { recursive: true, force: true });
   }
 });

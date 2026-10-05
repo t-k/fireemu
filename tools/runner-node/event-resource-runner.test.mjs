@@ -376,7 +376,7 @@ for (const form of ['endpoint', 'legacy']) {
     const data = { oldValue: { fields: { x: { integerValue: '1' } } }, value: { fields: { x: { integerValue: '2' } } } };
     const event = { id: 'evt', type: 'google.cloud.firestore.document.v1.updated', time: '2026-01-01T00:00:00Z', source, params: { id: '日本語' }, data };
     assert.equal((await f.invoke('onDocument', 'firestore', event)).ok, true);
-    assert.deepEqual(await f.calls(), [{ name: 'onDocument', data, context: { eventId: 'evt-0', timestamp: event.time, eventType: 'providers/cloud.firestore/eventTypes/document.update', resource: source, params: event.params } }]);
+    assert.deepEqual(await f.calls(), [{ name: 'onDocument', data, context: { eventId: 'evt-0', timestamp: event.time, eventType: 'providers/cloud.firestore/eventTypes/document.update', resource: source, params: event.params, notSupported: {} } }]);
   });
 
   test(`v1 ${form}: a Firestore legacy event id is the event id plus the trigger index suffix`, { timeout: 10000 }, async t => {
@@ -414,6 +414,37 @@ for (const form of ['endpoint', 'legacy']) {
     assert.deepEqual(calls.map(call => call.context.eventId), events.map(() => id));
     // Storage prints its legacy timestamp with exactly three fraction digits (observed 2026-10-01).
     assert.deepEqual(calls.map(call => call.context.timestamp), ['2026-09-30T12:03:18.846Z', time, time]);
+  });
+
+  test(`v1 ${form}: a Firestore and an Auth legacy context carry the empty notSupported member production sends, Storage and Pub/Sub do not`, { timeout: 10000 }, async t => {
+    // Production (formal record functions-events-formal-20261004T182904Z-a9621bfae74fe9bc, production-run.json `frames`): every
+    // Gen1 Firestore frame (fsCreatedV1 frame 1, fsWrittenV1 4, fsDeletedV1 7, fsUpdatedV1 29: 60 of 60) and every Gen1 Auth frame
+    // (authCreatedV1 frame 55, authDeletedV1 66: 28 of 28) has `notSupported` among its context keys, an empty object; the 48
+    // Gen1 Storage and Pub/Sub frames (storageFinalizedV1 79, storageDeletedV1 81, storageMetadataUpdatedV1 95, storageArchivedV1
+    // 115, pubsubPublishedV1 133) have none.
+    const time = '2026-09-30T12:03:18.846431Z';
+    const kinds = { created: 'create', updated: 'update', deleted: 'delete', written: 'write' };
+    const f = await start(t, [
+      ...Object.values(kinds).map(kind => fsEntry(`on_${kind}`, 'projects/demo/databases/(default)/documents/orders/{id}', form, kind)),
+      stEntry('onFinalize', 'projects/_/buckets/assets.example', form),
+      entry('onPublish', 'google.pubsub.topic.publish', 'projects/demo/topics/t', form),
+      entry('onUserCreate', 'providers/firebase.auth/eventTypes/user.create', 'projects/demo', form),
+      entry('onUserDelete', 'providers/firebase.auth/eventTypes/user.delete', 'projects/demo', form),
+    ]);
+    const events = [
+      ...Object.entries(kinds).map(([type, kind]) => [`on_${kind}`, 'firestore', { id: 'dc880941-8bb2-410f-9b10-51c47560a33a', type: `google.cloud.firestore.document.v1.${type}`, time, source: 'projects/demo/databases/(default)/documents/orders/1', params: { id: '1' }, data: {} }, true]),
+      ['onFinalize', 'storage', { id: 'e1', type: 'google.cloud.storage.object.v1.finalized', time, source: '//storage.googleapis.com/projects/_/buckets/assets.example', data: { bucket: 'assets.example', name: 'a.txt' } }, false],
+      ['onPublish', 'pubsub', { id: 'e2', type: 'google.cloud.pubsub.topic.v1.messagePublished', time, source: '//pubsub.googleapis.com/projects/demo/topics/t', data: { message: { data: '', attributes: {}, messageId: 'm1' } } }, false],
+      ['onUserCreate', 'auth', { id: 'e3', type: 'google.firebase.auth.user.v1.created', time, source: '//firebaseauth.googleapis.com/projects/demo', data: { uid: 'u1' } }, true],
+      ['onUserDelete', 'auth', { id: 'e4', type: 'google.firebase.auth.user.v1.deleted', time, source: '//firebaseauth.googleapis.com/projects/demo', data: { uid: 'u1' } }, true],
+    ];
+    for (const [name, trigger, event] of events) assert.equal((await f.invoke(name, trigger, event)).ok, true, name);
+    const calls = await f.calls();
+    assert.equal(calls.length, events.length);
+    events.forEach(([name, , , carries], index) => {
+      if (carries) assert.deepEqual(calls[index].context.notSupported, {}, name);
+      else assert.equal(Object.hasOwn(calls[index].context, 'notSupported'), false, name);
+    });
   });
 
   test(`v1 ${form}: a Storage legacy context has the members and forms of the recorded production context`, { timeout: 10000 }, async t => {

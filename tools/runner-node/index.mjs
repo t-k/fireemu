@@ -1091,6 +1091,8 @@ function v1Context(msg) {
           ? `projects/${event.project}/databases/${event.database}/documents/${event.document}`
           : event.source,
         params: event.params || {},
+        // Production's Gen1 Firestore context has an empty `notSupported` member (all 60 recorded frames).
+        notSupported: {},
       };
     }
     case "storage": {
@@ -1153,6 +1155,8 @@ function v1Context(msg) {
             : "providers/firebase.auth/eventTypes/user.create",
         resource: project,
         params: {},
+        // As Firestore's: all 28 recorded Gen1 Auth frames carry an empty `notSupported` member.
+        notSupported: {},
       };
     }
     default:

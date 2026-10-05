@@ -23,7 +23,7 @@ const PREFIX = `fe${RUN}-`;
 const PARENT = `projects/${PROJECT}/locations/us-central1`;
 
 /** One case through the real runner against the model, with its ceiling lifted. */
-async function runOne(item, worldOptions = {}, { wrap = (request) => request } = {}) {
+async function runOne(item, worldOptions = {}, { wrap = (request) => request, log = [] } = {}) {
   const sleeps = [];
   const world = createWorld({ project: PROJECT, ...worldOptions });
   const ownership = createOwnership({ project: PROJECT, runId: RUN });
@@ -52,6 +52,7 @@ async function runOne(item, worldOptions = {}, { wrap = (request) => request } =
     },
     sleep: async (ms) => {
       sleeps.push(ms);
+      log.push(`sleep:${ms}`);
     },
     ledger,
   });
@@ -325,7 +326,7 @@ test("property: for any limits inside the recorded brackets every search pins it
   };
   for (let round = 0; round < 25; round += 1) {
     const textLimit = next(524_032, 524_799);
-    const attributeLimit = next(7, 105);
+    const attributeLimit = next(6, 105);
     const keyLimit = next(4, 258);
     const { summary, notes, inCase } = await runOne(publishBoundaries, {
       textLimit,
@@ -529,18 +530,22 @@ test("channel-busy: a second deletion is sent only after a 2xx that names its op
   assert.equal(new Set(sent).size, sent.length, "no name is deleted twice");
   // A channel that still reads as there: the read-back runs to its end, three reads two seconds apart.
   let seen = 0;
+  const log = [];
   const stays = (request) => async (call) => {
     if (call.op !== "getChannel" || !call.path.endsWith("-bz-b")) return request(call);
     // Only the case's own reads: the cleanup after it reads the name too, from the same transport.
-    if (call.label?.case === "channel-busy") seen += 1;
+    if (call.label?.case === "channel-busy") {
+      seen += 1;
+      log.push("get");
+    }
     return { status: 200, body: { name: call.path.replace(/^\/v1\//, "") }, unknown: false };
   };
-  const slow = await runOne(channelBusy, { busy: "reject", duplicate: "409" }, { wrap: stays });
+  await runOne(channelBusy, { busy: "reject", duplicate: "409" }, { wrap: stays, log });
   assert.equal(seen, 1 + 3, "one read while the deletion runs, three in the read-back");
   assert.deepEqual(
-    slow.sleeps.slice(-2),
-    [2000, 2000],
-    "two waits of two seconds between the three reads",
+    log.slice(0, log.lastIndexOf("get") + 1).slice(-5),
+    ["get", "sleep:2000", "get", "sleep:2000", "get"],
+    "three reads, two seconds between them, none before the first",
   );
 });
 
@@ -635,6 +640,15 @@ test("publish-boundaries: the exact values every search asks for, in order, and 
   const names = bodies.filter((events) => events.length === 1 && nameLength(events) !== undefined);
   const wantedNames = reference(1, 256, 253, { askLow: false });
   assert.deepEqual(names.slice(0, wantedNames.length).map(nameLength), wantedNames);
+  // Nothing else is asked: the ends and the bisections, and the eight events with two defects. The low ends
+  // of the two attribute brackets (no extra attribute, a name of one character) are not asked again.
+  assert.equal(
+    bodies.length,
+    reference(524_032, 524_800, 524_500, { askLow: true }).length +
+      wanted.length +
+      wantedNames.length +
+      8,
+  );
   // 101 events, each without a type.
   const many = bodies.find((events) => events.length === 101);
   assert.ok(many && many.every((event) => event.type === undefined));

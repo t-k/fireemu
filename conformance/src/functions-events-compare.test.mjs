@@ -935,9 +935,10 @@ test("the Pub/Sub v2 subscription is compared by its shape: the two per-deployme
   );
 });
 
-test("the id of the credential behind an auth-context write is compared as a present string, and its type still is", () => {
-  // Production prints the recorder's own credential (its email for the user credential, a uid for an ID-token write); a local
-  // session has no such identity, so only that it is a non-empty string is compared. authType is compared exactly.
+test("the id behind an auth-context write is masked as present for unknown and compared by its uid shape for api_key, and its type still is", () => {
+  // `unknown`: production prints the recorder's own credential (an operator's email), which a local session cannot have, so only
+  // that the id is a non-empty string is compared. `api_key`: the id is a Firebase uid, which a local session reproduces in
+  // format, so its 28-character shape is compared and any other value is a DIFF. authType is compared exactly.
   const row = { generation: 2, recipeId: "functions-events/firestore/auth-context" };
   const masks = masksFor(row, FIRESTORE);
   assert.deepEqual(
@@ -955,25 +956,45 @@ test("the id of the credential behind an auth-context write is compared as a pre
       "strict",
     );
   };
+  const UID = "Mw39BUiBmgXKwPUHFjsCEJSwPws2";
+  const LOCAL_UID = "bGxurlr9aM4QB709E3Demg1hnXQx";
+  // unknown: the operator's email against the local owner id, or any other non-empty string, matches.
   assert.deepEqual(compareAuth(["unknown", "operator@example.test"], ["unknown", "owner"]), []);
-  assert.deepEqual(
-    compareAuth(["api_key", "Mw39BUiBmgXKwPUHFjsCEJSwPws2"], ["api_key", "alice"]),
-    [],
-  );
+  assert.deepEqual(compareAuth(["unknown", "x"], ["unknown", "y"]), []);
+  // api_key: another uid of the same shape matches.
+  assert.deepEqual(compareAuth(["api_key", UID], ["api_key", LOCAL_UID]), []);
+  // Near misses: an api_key id that is not a 28-character alphanumeric uid is a DIFF.
+  for (const wrong of [
+    "alice",
+    "owner",
+    "fake-auth-id@gmail.com",
+    "operator@example.test",
+    UID.slice(1),
+    `${UID}x`,
+    `${UID.slice(1)}-`,
+    "",
+    null,
+  ]) {
+    assert.equal(compareAuth(["api_key", UID], ["api_key", wrong]).length, 1, String(wrong));
+  }
+  // A missing or empty id is not a present string for unknown either.
+  assert.equal(compareAuth(["unknown", "operator@example.test"], ["unknown", null]).length, 1);
+  assert.equal(compareAuth(["unknown", "operator@example.test"], ["unknown", ""]).length, 1);
+  // The type is still exact.
   assert.equal(
     compareAuth(["unknown", "operator@example.test"], ["service_account", "owner"]).length,
     1,
   );
-  assert.equal(compareAuth(["api_key", "x"], ["app_user", "x"]).length, 1);
-  // Any non-empty id is present, even a single character; the masked value is what is compared.
-  assert.deepEqual(compareAuth(["unknown", "x"], ["unknown", "y"]), []);
-  assert.equal(
-    applyDeclaredMasks(observation("unknown", "x"), masks).get("$.frame.event.authId").value,
-    "<present>",
-  );
-  // A missing or empty id is not a present string.
-  assert.equal(compareAuth(["unknown", "operator@example.test"], ["unknown", null]).length, 1);
-  assert.equal(compareAuth(["unknown", "operator@example.test"], ["unknown", ""]).length, 1);
+  // A local type other than api_key is a DIFF of the type, and its id is no longer a uid for the mask: two differences.
+  assert.equal(compareAuth(["api_key", UID], ["app_user", UID]).length, 2);
+  assert.equal(compareAuth(["api_key", UID], ["unknown", LOCAL_UID]).length >= 1, true);
+  // The masked values.
+  const masked = (type, id) =>
+    applyDeclaredMasks(observation(type, id), masks).get("$.frame.event.authId").value;
+  assert.equal(masked("unknown", "x"), "<present>");
+  assert.equal(masked("unknown", ""), "");
+  assert.equal(masked("api_key", UID), "<uid>");
+  assert.equal(masked("api_key", "alice"), "alice");
   assert.deepEqual(
     masksFor({ ...row, recipeId: "functions-events/firestore/create" }, FIRESTORE),
     [],

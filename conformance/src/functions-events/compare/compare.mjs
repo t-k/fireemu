@@ -49,12 +49,22 @@ export function orderIgnoredFor(row, scenario) {
 //    <6 digits>-sub-<3 digits>`; production draws the two numbers per deployment (FE v5 834054/834, FE v7 293232/576: fixed within
 //    a deployment, so the two passes of one run cannot show it varying) and fireemu derives its own, so the numbers are masked and
 //    the rest, the shape, is compared;
-//  - the `authId` of an auth-context write is the id of the credential that wrote: production prints the recorder's own (its email
-//    for the user credential, a uid for an ID-token write), which a local session cannot have, so only that a non-empty string is
-//    present is compared (the `authType` beside it is compared exactly).
+//  - the `authId` of an auth-context write is the id of the credential that wrote, and the mask depends on its `authType` beside
+//    it (compared exactly): for `unknown`, production prints the recorder's own credential (its email, an operator's OAuth login),
+//    which a local session cannot have and which differs from the local owner id in value and in format, so only that a non-empty
+//    string is present is compared; for `api_key`, the id is the Firebase uid of the user who wrote, which a local session does
+//    reproduce in format, so a 28-character alphanumeric id is masked to `<uid>` and any other value is left alone (it stays a
+//    DIFF against production's `<uid>`). Value-only, as the coordinator ruled on 2026-10-05; the format of an ID-token write's id
+//    is not masked.
 const maskSubscription = (value) =>
   value.replace(/-\d{6}-sub-\d{3}$/, "-<6 digits>-sub-<3 digits>");
-const maskPresent = (value) => (value.length > 0 ? "<present>" : value);
+const UID_28 = /^[A-Za-z0-9]{28}$/;
+const AUTH_TYPE_PATH = "$.frame.event.authType";
+export const maskAuthId = (value, observation) => {
+  if (observation.get(AUTH_TYPE_PATH)?.value === "api_key")
+    return UID_28.test(value) ? "<uid>" : value;
+  return value.length > 0 ? "<present>" : value;
+};
 
 /** The declared masks of a row: `{ path, mask }` entries (see above), or none. */
 export function declaredMasksFor(row, scenario) {
@@ -62,7 +72,7 @@ export function declaredMasksFor(row, scenario) {
   if (row.generation === 2 && scenario.source === "pubsub")
     masks.push({ path: "$.frame.event.data.subscription", mask: maskSubscription });
   if (row.recipeId === "functions-events/firestore/auth-context" && scenario.source === "firestore")
-    masks.push({ path: "$.frame.event.authId", mask: maskPresent });
+    masks.push({ path: "$.frame.event.authId", mask: maskAuthId });
   return masks;
 }
 
@@ -71,7 +81,8 @@ export function applyDeclaredMasks(observation, masks) {
   const masked = new Map(observation);
   for (const { path, mask } of masks) {
     const leaf = masked.get(path);
-    if (leaf?.type === "string") masked.set(path, { ...leaf, value: mask(leaf.value) });
+    if (leaf?.type === "string")
+      masked.set(path, { ...leaf, value: mask(leaf.value, observation) });
   }
   return masked;
 }

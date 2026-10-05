@@ -15,7 +15,7 @@
     "binarySha256": "d0d8d43726a808b600f702f1f6be26c4863fc48dd7b4971a519adcae9ce01888"
   },
   "comparer": {
-    "sha256": "100c27ec76a81224d06ed579996abb684a86e967f7525434a95b7eacb1403c09",
+    "sha256": "f4c1b8669b4e25b49fd8380386cf18234fc943c991b6a62f6750422194a78624",
     "replayClock": "virtual"
   },
   "recordings": [
@@ -399,26 +399,26 @@
         {
           "site": "live/commit",
           "production": 55.43151512509212,
-          "local": 55.43319841613993,
-          "difference": 0.002
+          "local": 55.4320000000298,
+          "difference": 0.0
         },
         {
           "site": "expired/commit",
           "production": 65.4212901671417,
-          "local": 65.42294383328408,
-          "difference": 0.002
+          "local": 65.42199999978766,
+          "difference": 0.001
         },
         {
           "site": "rollback-first/rollback",
           "production": 65.45797316683456,
-          "local": 65.4603829588741,
-          "difference": 0.002
+          "local": 65.45800000010058,
+          "difference": 0.0
         },
         {
           "site": "get-first/expired-read",
           "production": 65.41514516668394,
-          "local": 65.41821420751512,
-          "difference": 0.003
+          "local": 65.4159999997355,
+          "difference": 0.001
         }
       ]
     },
@@ -802,26 +802,26 @@
         {
           "site": "live/commit",
           "production": 55.41688908310607,
-          "local": 55.418263459112495,
-          "difference": 0.001
+          "local": 55.41699999989942,
+          "difference": 0.0
         },
         {
           "site": "expired/commit",
           "production": 65.45075808279216,
-          "local": 65.45251862471923,
-          "difference": 0.002
+          "local": 65.45099999988452,
+          "difference": 0.0
         },
         {
           "site": "rollback-first/rollback",
           "production": 65.46266591595486,
-          "local": 65.46575295832008,
-          "difference": 0.003
+          "local": 65.46299999998882,
+          "difference": 0.0
         },
         {
           "site": "get-first/expired-read",
           "production": 65.4406768749468,
-          "local": 65.44494987512007,
-          "difference": 0.004
+          "local": 65.44099999964237,
+          "difference": 0.0
         }
       ]
     }

@@ -15,7 +15,7 @@
     "binarySha256": "d0d8d43726a808b600f702f1f6be26c4863fc48dd7b4971a519adcae9ce01888"
   },
   "comparer": {
-    "sha256": "100c27ec76a81224d06ed579996abb684a86e967f7525434a95b7eacb1403c09",
+    "sha256": "f4c1b8669b4e25b49fd8380386cf18234fc943c991b6a62f6750422194a78624",
     "replayClock": "virtual"
   },
   "asRecorded": [
@@ -433,38 +433,38 @@
         {
           "site": "idle-65/commit",
           "production": 65.56068637501448,
-          "local": 65.56331004202366,
-          "difference": 0.003
+          "local": 65.56100000021979,
+          "difference": 0.0
         },
         {
           "site": "idle-66/commit",
           "production": 66.55626545799896,
-          "local": 66.55926799960434,
-          "difference": 0.003
+          "local": 66.5570000000298,
+          "difference": 0.001
         },
         {
           "site": "idle-67/commit",
           "production": 67.55235754232854,
-          "local": 67.55546462489292,
-          "difference": 0.003
+          "local": 67.55299999983981,
+          "difference": 0.001
         },
         {
           "site": "idle-68/commit",
           "production": 68.5634797909297,
-          "local": 68.56631008302793,
-          "difference": 0.003
+          "local": 68.56399999978021,
+          "difference": 0.001
         },
         {
           "site": "idle-69/commit",
           "production": 69.53711812524125,
-          "local": 69.5415776250884,
-          "difference": 0.004
+          "local": 69.53799999970943,
+          "difference": 0.001
         },
         {
           "site": "idle-70/commit",
           "production": 70.5606082919985,
-          "local": 70.56615816708654,
-          "difference": 0.006
+          "local": 70.56099999975413,
+          "difference": 0.0
         }
       ]
     },
@@ -868,38 +868,38 @@
         {
           "site": "idle-65/commit",
           "production": 65.58237929223105,
-          "local": 65.58449808415025,
-          "difference": 0.002
+          "local": 65.58300000010058,
+          "difference": 0.001
         },
         {
           "site": "idle-66/commit",
           "production": 66.51777708297595,
-          "local": 66.52108937501907,
-          "difference": 0.003
+          "local": 66.51800000015646,
+          "difference": 0.0
         },
         {
           "site": "idle-67/commit",
           "production": 67.52705987496302,
-          "local": 67.53112145792693,
-          "difference": 0.004
+          "local": 67.52799999993294,
+          "difference": 0.001
         },
         {
           "site": "idle-68/commit",
           "production": 68.56423995876685,
-          "local": 68.56779550015926,
-          "difference": 0.004
+          "local": 68.56499999994412,
+          "difference": 0.001
         },
         {
           "site": "idle-69/commit",
           "production": 69.52697674976662,
-          "local": 69.53189024981111,
-          "difference": 0.005
+          "local": 69.52699999976903,
+          "difference": 0.0
         },
         {
           "site": "idle-70/commit",
           "production": 70.52834725007415,
-          "local": 70.53276750026271,
-          "difference": 0.004
+          "local": 70.5289999996312,
+          "difference": 0.001
         }
       ]
     }

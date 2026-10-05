@@ -1728,6 +1728,15 @@ test("a comparison that used only declared masks passes, and one that does not r
   const rowOnly = comparisonOf();
   rowOnly.rows[0].declaredMasks = [{ mask: "authId-any-string", path: "$.x", reason: "E10" }];
   asRefusal(() => checkDeclaredMasks(rowOnly, closure()), /undeclared mask authId-any-string/);
+  // A declared mask a row used that the summary leaves out is refused, and one the summary lists is fine.
+  const unlisted = comparisonOf({ declaredMasks: [] });
+  unlisted.rows[0].declaredMasks = [
+    { mask: "authId-unknown-present", path: "$.frame.event.authId", reason: "E10" },
+  ];
+  asRefusal(() => checkDeclaredMasks(unlisted, closure()), /summary does not list/);
+  const listed = comparisonOf();
+  listed.rows[0].declaredMasks = unlisted.rows[0].declaredMasks;
+  assert.doesNotThrow(() => checkDeclaredMasks(listed, closure()));
   // The record side: a decision that is not APPROVED, one that is missing, and one that lists no masks declare nothing.
   for (const edit of [
     (c) => (c.scopeDecisions.find((d) => d.id === "E10").status = "PENDING"),

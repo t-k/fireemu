@@ -47,7 +47,7 @@ The frozen inventory (`spec/compatibility/closure/SCHEDULED-FUNCTIONS.json`) has
 | timezone-validation-defaults | production-parity | 6 | 6 (UTC, Asia/Tokyo, America/New_York, the v1 and v2 defaults, an invalid zone) | zones and defaults match (strict) | the second recording |
 | next-occurrence | production-parity | 5 | 3 of the calendar cases | the calendar pins (`calendar_v5_pins.rs`) | the sparse and leap-day cases; interval phase (see above); the second recording |
 | dst-calendar | production-parity | 4 | 3 (spring gap, fall fold, UTC control) | the calendar pins | a non-DST zone control; repeated-hour delivery is not shown by next-time metadata; the second recording |
-| v2-http-delivery | production-parity | 9 | 9 | 8 rows MATCH; the OIDC and trace headers are not reproduced | the second recording; the headers |
+| v2-http-delivery | production-parity | 9 | 9 | the request, the event and the context rows MATCH; the OIDC and trace headers are not reproduced | the second recording; the headers |
 | v1-pubsub-delivery | production-parity | 7 | 7 | the handler's context matches; the published message (empty data, `scheduled: "true"`) is not materialized | publish into the local Pub/Sub emulator; the second recording |
 | forced-and-natural-invocation | production-parity | 4 | 4 | natural cadence spacing matches; the phase of an interval and a run-now's schedule time differ | decide the run-now question (Fireemu control is distinct); the second recording |
 | retry-config-validation | production-parity | 8 | 7 (defaults, zero, the count boundary 0 to 6, min and max backoff, doublings, a retry window, the fractional window refusal) | strict refuses what production refused | the attemptDeadline boundary; the second recording |

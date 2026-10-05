@@ -739,6 +739,7 @@ mod tests {
                 overlap: OverlapPolicy::Allow,
                 catch_up: CatchUpPolicy::All,
                 functions_host: Some("127.0.0.1:5001".to_owned()),
+                auth_context: fireemu_adapter_functions::events::AuthContextNaming::default(),
             },
             clock,
             Arc::new(runner),

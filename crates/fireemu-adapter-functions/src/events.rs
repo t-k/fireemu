@@ -182,6 +182,44 @@ fn update_mask(before: &Document, after: &Document) -> Vec<String> {
     paths
 }
 
+/// How the principal behind a Firestore write is named in the `authtype` and `authid` of a 2nd gen
+/// event with auth context, by profile.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum AuthContextNaming {
+    /// Production's naming (the strict profile), recorded in FE v5 and v7: a write with a Firebase
+    /// ID token is `api_key` with the user's uid; a write with a service credential (the owner
+    /// principal here) is `unknown` with the credential's own id.
+    #[default]
+    Production,
+    /// The official emulator's (the emulator profile): its Firestore emulator
+    /// (`cloud-firestore-emulator-v1.22.0.jar`, `FunctionsEmulatorEventPublisher`) sends the
+    /// constants `unknown` and `fake-auth-id@gmail.com` whoever wrote.
+    Official,
+}
+
+/// The `authid` the official emulator sends for every writer.
+pub const OFFICIAL_AUTH_ID: &str = "fake-auth-id@gmail.com";
+
+/// The `(authtype, authid)` an event names for the actor `(auth_type, auth_id)` of a commit.
+/// Under [`AuthContextNaming::Production`] an `app_user` is `api_key` and a `service_account` is
+/// `unknown`, each keeping its id; the principals production was not recorded with (`unauthenticated`
+/// and `system`) are named as they are.
+#[must_use]
+pub fn auth_context_for<'a>(
+    naming: AuthContextNaming,
+    auth_type: &'a str,
+    auth_id: Option<&'a str>,
+) -> (&'a str, Option<&'a str>) {
+    match naming {
+        AuthContextNaming::Official => ("unknown", Some(OFFICIAL_AUTH_ID)),
+        AuthContextNaming::Production => match auth_type {
+            "app_user" => ("api_key", auth_id),
+            "service_account" => ("unknown", auth_id),
+            other => (other, auth_id),
+        },
+    }
+}
+
 /// A Firestore document event (`type` follows `kind`; `Written` triggers receive the
 /// concrete kind's data with the written type). `id` seeds the event's UUID-shaped `id`
 /// ([`event_id_uuid`]) and `time` prints in [`firestore_time`]'s form.

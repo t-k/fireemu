@@ -199,6 +199,8 @@ pub struct FunctionsConfig {
     /// `defaultUri` is the function's public URL, so the runtime has to know its own address
     /// to build one and to recognise a task that named it explicitly.
     pub functions_host: Option<String>,
+    /// How the writer of a Firestore event with auth context is named: by profile.
+    pub auth_context: crate::events::AuthContextNaming,
 }
 
 impl std::fmt::Debug for FunctionsConfig {
@@ -216,6 +218,7 @@ impl std::fmt::Debug for FunctionsConfig {
             .field("overlap", &self.overlap)
             .field("catch_up", &self.catch_up)
             .field("functions_host", &self.functions_host)
+            .field("auth_context", &self.auth_context)
             .finish()
     }
 }
@@ -1980,10 +1983,12 @@ impl FunctionsRuntime {
                     change.before.as_deref(),
                     change.after.as_deref(),
                     time,
-                    with_auth.then_some((
-                        commit.actor.auth_type.as_str(),
-                        commit.actor.auth_id.as_deref(),
-                    )),
+                    with_auth.then(|| {
+                        self.auth_context_of(
+                            &commit.actor.auth_type,
+                            commit.actor.auth_id.as_deref(),
+                        )
+                    }),
                 );
                 payload["params"] = json!(m.params);
                 let event_type = payload
@@ -2120,6 +2125,16 @@ impl FunctionsRuntime {
         if let Ok(reservation) = self.reserve_storage_event(event) {
             reservation.publish();
         }
+    }
+
+    /// The `(authtype, authid)` a Firestore event with auth context names for the actor of a
+    /// commit: by profile (see [`crate::events::auth_context_for`]).
+    fn auth_context_of<'a>(
+        &self,
+        auth_type: &'a str,
+        auth_id: Option<&'a str>,
+    ) -> (&'a str, Option<&'a str>) {
+        crate::events::auth_context_for(self.config.auth_context, auth_type, auth_id)
     }
 
     /// Reserves the complete Pub/Sub topic-trigger fan-out for broker messages that already have
@@ -5074,6 +5089,7 @@ mod task_completion_tests {
                 overlap: super::OverlapPolicy::Allow,
                 catch_up: super::CatchUpPolicy::All,
                 functions_host: Some("127.0.0.1:5001".to_owned()),
+                auth_context: crate::events::AuthContextNaming::default(),
             },
             Arc::new(Mutex::new(VirtualClock::new(
                 LogicalInstant::from_unix_seconds(1_788_004_860),
@@ -5081,6 +5097,45 @@ mod task_completion_tests {
             Arc::new(runner),
             Some(spec),
         )
+    }
+
+    #[tokio::test]
+    async fn the_event_names_its_writer_by_profile() {
+        use crate::events::{AuthContextNaming, OFFICIAL_AUTH_ID};
+        let runtime = runtime().await;
+        // The default is production's naming (the strict profile).
+        assert_eq!(
+            runtime.auth_context_of("app_user", Some("alice")),
+            ("api_key", Some("alice"))
+        );
+        assert_eq!(
+            runtime.auth_context_of("service_account", Some("owner")),
+            ("unknown", Some("owner"))
+        );
+        assert_eq!(runtime.auth_context_of("system", None), ("system", None));
+        // The emulator profile's: the official emulator's constants for every writer.
+        let mut config = runtime.config.clone();
+        config.auth_context = AuthContextNaming::Official;
+        let official = FunctionsRuntime::new(
+            runtime.manifest.clone(),
+            config,
+            Arc::new(Mutex::new(VirtualClock::new(
+                LogicalInstant::from_unix_seconds(1_788_004_860),
+            ))),
+            runtime.runner(),
+            None,
+        );
+        for (kind, id) in [
+            ("app_user", Some("alice")),
+            ("service_account", Some("owner")),
+            ("system", None),
+        ] {
+            assert_eq!(
+                official.auth_context_of(kind, id),
+                ("unknown", Some(OFFICIAL_AUTH_ID)),
+                "{kind}"
+            );
+        }
     }
 
     #[tokio::test]
@@ -5586,6 +5641,7 @@ mod schedule_capacity_tests {
                 overlap,
                 catch_up,
                 functions_host: Some("127.0.0.1:5001".to_owned()),
+                auth_context: crate::events::AuthContextNaming::default(),
             },
             clock.clone(),
             Arc::new(runner),
@@ -6832,6 +6888,7 @@ mod storage_event_instant_tests {
                 overlap: super::OverlapPolicy::Allow,
                 catch_up: super::CatchUpPolicy::All,
                 functions_host: Some("127.0.0.1:5001".to_owned()),
+                auth_context: crate::events::AuthContextNaming::default(),
             },
             clock.clone(),
             Arc::new(runner),

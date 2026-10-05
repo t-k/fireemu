@@ -1177,12 +1177,136 @@ fn eventarc_mutation_response(result: Result<(), String>) -> Response<OutBody> {
     }
 }
 
+/// A fresh 16-hex ID for the answers that carry a `requestId`: the clock and a counter, mixed.
+fn request_id() -> String {
+    static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |elapsed| elapsed.as_nanos());
+    let mut state = u64::try_from(nanos & u128::from(u64::MAX)).unwrap_or(0)
+        ^ COUNTER
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+            .wrapping_mul(0x9E37_79B9_7F4A_7C15);
+    state = (state ^ (state >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+    state = (state ^ (state >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+    format!("{:016x}", state ^ (state >> 31))
+}
+
+/// Whether a request carries `Authorization: Bearer <token>` with a token. The token is not verified:
+/// whether an OAuth access token is valid is Google's state, which a local listener does not have.
+fn has_bearer_credential(headers: &hyper::HeaderMap) -> bool {
+    headers
+        .get(hyper::header::AUTHORIZATION)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.split_once(' '))
+        .is_some_and(|(scheme, token)| {
+            scheme.eq_ignore_ascii_case("bearer") && !token.trim().is_empty()
+        })
+}
+
+fn json_answer(answer: &crate::eventarc_strict::Answer) -> Response<OutBody> {
+    typed(
+        StatusCode::from_u16(answer.status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR),
+        "application/json; charset=UTF-8",
+        &answer.body.to_string(),
+    )
+}
+
+/// Hands the events of a valid publication to the emulator's delivery, which converts them to what a
+/// handler receives and enqueues them.
+fn deliver_strict(
+    runtime: &FunctionsRuntime,
+    channel: &str,
+    events: &[serde_json::Value],
+) -> Response<OutBody> {
+    let mut published = Vec::with_capacity(events.len());
+    for event in events {
+        match crate::eventarc::convert(event) {
+            Ok(event) => published.push(event),
+            Err(why) => {
+                return json_answer(&crate::eventarc_strict::failure(
+                    400,
+                    "INVALID_ARGUMENT",
+                    &why,
+                ));
+            }
+        }
+    }
+    match runtime.publish_registered_custom_events(channel, &published) {
+        Ok(delivered) => {
+            eprintln!(
+                "[functions] eventarc: {} event(s) on {channel} reached {delivered} function(s)",
+                published.len()
+            );
+            typed(StatusCode::OK, "application/json; charset=UTF-8", "{}")
+        }
+        Err(crate::runtime::EventarcPublishError::Capacity) => {
+            json_answer(&crate::eventarc_strict::failure(
+                429,
+                "RESOURCE_EXHAUSTED",
+                "Eventarc delivery capacity exceeded",
+            ))
+        }
+        Err(crate::runtime::EventarcPublishError::InvalidEvent) => json_answer(
+            &crate::eventarc_strict::failure(400, "INVALID_ARGUMENT", "Invalid event"),
+        ),
+        Err(crate::runtime::EventarcPublishError::Unavailable) => json_answer(
+            &crate::eventarc_strict::failure(500, "INTERNAL", "Eventarc registry unavailable"),
+        ),
+    }
+}
+
+/// The strict profile's production routes (`/v1/projects/...` and the same paths the Admin SDK writes
+/// to an emulator host).
+async fn respond_eventarc_strict(
+    runtime: &FunctionsRuntime,
+    req: Request<Incoming>,
+    route: crate::eventarc_strict::Route,
+    body_limit: usize,
+) -> Response<OutBody> {
+    use crate::eventarc_strict::{evaluate, Input, Outcome, World};
+
+    let authorized = has_bearer_credential(req.headers());
+    let query = req.uri().query().map(str::to_owned);
+    let body = match collect_body(req.into_body(), body_limit).await {
+        Ok(body) => body,
+        Err(answer) => return *answer,
+    };
+    let request_id = request_id();
+    let declared_channel = |channel: &str| runtime.eventarc_channel_declared(channel);
+    let declared_in =
+        |project: &str, location: &str| runtime.eventarc_channels_declared_in(project, location);
+    let world = World {
+        project: runtime.project(),
+        request_id: &request_id,
+        declared_channel: &declared_channel,
+        declared_in: &declared_in,
+    };
+    let input = Input {
+        route: &route,
+        query: query.as_deref(),
+        authorized,
+        body: &body,
+    };
+    match evaluate(&input, &world) {
+        Outcome::Answer(answer) => json_answer(&answer),
+        Outcome::Deliver { channel, events } => deliver_strict(runtime, &channel, &events),
+    }
+}
+
 async fn respond_eventarc_surface(
     runtime: &FunctionsRuntime,
     req: Request<Incoming>,
     body_limit: usize,
+    profile: FunctionsHttpProfile,
     origin: Option<&str>,
 ) -> Response<OutBody> {
+    if profile == FunctionsHttpProfile::Strict {
+        if let Some(route) = crate::eventarc_strict::route(req.method().as_str(), req.uri().path())
+        {
+            return respond_eventarc_strict(runtime, req, route, body_limit).await;
+        }
+    }
     let Some(route) = crate::eventarc::route(req.uri().path()) else {
         drain_refused_body(req.into_body()).await;
         return simple(StatusCode::NOT_FOUND, "Not Found");
@@ -1255,11 +1379,14 @@ async fn respond_support_surface(
     req: Request<Incoming>,
     body_limit: usize,
     surface: HttpSurface,
+    profile: FunctionsHttpProfile,
     origin: Option<&str>,
 ) -> Response<OutBody> {
     let path = req.uri().path().to_owned();
     match surface {
-        HttpSurface::Eventarc => respond_eventarc_surface(&runtime, req, body_limit, origin).await,
+        HttpSurface::Eventarc => {
+            respond_eventarc_surface(&runtime, req, body_limit, profile, origin).await
+        }
         HttpSurface::Tasks => {
             let Some(route) = crate::tasks::route(&path) else {
                 drain_refused_body(req.into_body()).await;
@@ -1374,6 +1501,35 @@ async fn invoke_runner(
     }
 }
 
+/// A request to one of the support listeners (Eventarc, Cloud Tasks): the origin check, then the surface.
+async fn respond_support_request(
+    runtime: Arc<FunctionsRuntime>,
+    req: Request<Incoming>,
+    body_limit: usize,
+    surface: HttpSurface,
+    profile: FunctionsHttpProfile,
+) -> Response<OutBody> {
+    let origin = match request_origin(req.headers()) {
+        Ok(origin) => origin,
+        Err(refusal) => return *refusal,
+    };
+    if origin
+        .as_deref()
+        .is_some_and(|value| !origin_is_local(value))
+    {
+        return simple(StatusCode::FORBIDDEN, "forbidden origin");
+    }
+    respond_support_surface(
+        runtime,
+        req,
+        body_limit,
+        surface,
+        profile,
+        origin.as_deref(),
+    )
+    .await
+}
+
 async fn respond(
     runtime: Arc<FunctionsRuntime>,
     req: Request<Incoming>,
@@ -1385,19 +1541,7 @@ async fn respond(
     let path = req.uri().path().to_owned();
     let query = req.uri().query().map(str::to_owned);
     if surface != HttpSurface::Functions {
-        let origin = match request_origin(req.headers()) {
-            Ok(origin) => origin,
-            Err(refusal) => return Ok(*refusal),
-        };
-        if origin
-            .as_deref()
-            .is_some_and(|value| !origin_is_local(value))
-        {
-            return Ok(simple(StatusCode::FORBIDDEN, "forbidden origin"));
-        }
-        return Ok(
-            respond_support_surface(runtime, req, body_limit, surface, origin.as_deref()).await,
-        );
+        return Ok(respond_support_request(runtime, req, body_limit, surface, profile).await);
     }
     let (_region, function, target) = match resolve_route(&runtime, &path) {
         Ok(resolved) => resolved,
@@ -1580,14 +1724,19 @@ pub async fn serve_eventarc(
     runtime: Arc<FunctionsRuntime>,
     admission: HttpAdmission,
 ) -> std::io::Result<()> {
-    serve_surface(
-        listener,
-        runtime,
-        HttpSurface::Eventarc,
-        admission,
-        FunctionsHttpProfile::Emulator,
-    )
-    .await
+    serve_eventarc_with_profile(listener, runtime, admission, FunctionsHttpProfile::Emulator).await
+}
+
+/// Serves the Eventarc listener with an explicit compatibility profile: the emulator profile is the
+/// official emulator's routes; the strict profile also serves the production Eventarc and Eventarc
+/// Publishing paths (`/v1/projects/...`) with the answers production gave to the stage A recordings.
+pub async fn serve_eventarc_with_profile(
+    listener: TcpListener,
+    runtime: Arc<FunctionsRuntime>,
+    admission: HttpAdmission,
+    profile: FunctionsHttpProfile,
+) -> std::io::Result<()> {
+    serve_surface(listener, runtime, HttpSurface::Eventarc, admission, profile).await
 }
 
 /// Serves only the Cloud Tasks queue routes on the official Tasks listener.

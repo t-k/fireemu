@@ -1,0 +1,4160 @@
+[
+ {
+  "recording": "r2",
+  "n": 2,
+  "case": "service-state",
+  "op": "publishEvents",
+  "token": "default",
+  "request": {
+   "method": "POST",
+   "path": "/v1/projects/fireemu-oracle-idp/locations/us-central1/channels/fe9e560c404162-sv-never-created:publishEvents",
+   "body": {
+    "events": [
+     {
+      "@type": "type.googleapis.com/io.cloudevents.v1.CloudEvent",
+      "id": "fe9e560c404162-evt-1",
+      "source": "//fireemu/recorder/9e560c404162",
+      "specVersion": "1.0",
+      "type": "fireemu.recorder.v1.probe",
+      "attributes": {
+       "time": {
+        "ceTimestamp": "2026-10-05T06:16:34.836Z"
+       },
+       "datacontenttype": {
+        "ceString": "application/json"
+       }
+      },
+      "textData": "{\"probe\":true}"
+     }
+    ]
+   }
+  },
+  "response": {
+   "status": 404,
+   "body": {
+    "error": {
+     "code": 404,
+     "message": "Associated channel does not exist.",
+     "status": "NOT_FOUND"
+    }
+   }
+  }
+ },
+ {
+  "recording": "r2",
+  "n": 3,
+  "case": "channel-lifecycle",
+  "op": "getChannel",
+  "token": "default",
+  "request": {
+   "method": "GET",
+   "path": "/v1/projects/fireemu-oracle-idp/locations/us-central1/channels/fe9e560c404162-cl-c1"
+  },
+  "response": {
+   "status": 404,
+   "body": {
+    "error": {
+     "code": 404,
+     "message": "Resource 'projects/fireemu-oracle-idp/locations/us-central1/channels/fe9e560c404162-cl-c1' was not found",
+     "status": "NOT_FOUND",
+     "details": [
+      {
+       "@type": "type.googleapis.com/google.rpc.ResourceInfo",
+       "resourceName": "projects/fireemu-oracle-idp/locations/us-central1/channels/fe9e560c404162-cl-c1"
+      }
+     ]
+    }
+   }
+  }
+ },
+ {
+  "recording": "r2",
+  "n": 4,
+  "case": "channel-lifecycle",
+  "op": "createChannel",
+  "token": "default",
+  "request": {
+   "method": "POST",
+   "path": "/v1/projects/fireemu-oracle-idp/locations/us-central1/channels?channelId=fe9e560c404162-cl-c1",
+   "body": {}
+  },
+  "response": {
+   "status": 400,
+   "body": {
+    "error": {
+     "code": 400,
+     "message": "The request was invalid: channel.name is empty",
+     "status": "INVALID_ARGUMENT",
+     "details": [
+      {
+       "@type": "type.googleapis.com/google.rpc.BadRequest",
+       "fieldViolations": [
+        {
+         "field": "channel.name"
+        }
+       ]
+      },
+      {
+       "@type": "type.googleapis.com/google.rpc.RequestInfo",
+       "requestId": "5f67a4c3b18aff11"
+      }
+     ]
+    }
+   }
+  }
+ },
+ {
+  "recording": "r2",
+  "n": 5,
+  "case": "channel-lifecycle",
+  "op": "getChannel",
+  "token": "default",
+  "request": {
+   "method": "GET",
+   "path": "/v1/projects/fireemu-oracle-idp/locations/us-central1/channels/fe9e560c404162-cl-c1"
+  },
+  "response": {
+   "status": 404,
+   "body": {
+    "error": {
+     "code": 404,
+     "message": "Resource 'projects/fireemu-oracle-idp/locations/us-central1/channels/fe9e560c404162-cl-c1' was not found",
+     "status": "NOT_FOUND",
+     "details": [
+      {
+       "@type": "type.googleapis.com/google.rpc.ResourceInfo",
+       "resourceName": "projects/fireemu-oracle-idp/locations/us-central1/channels/fe9e560c404162-cl-c1"
+      }
+     ]
+    }
+   }
+  }
+ },
+ {
+  "recording": "r2",
+  "n": 6,
+  "case": "channel-lifecycle",
+  "op": "listChannels",
+  "token": "default",
+  "request": {
+   "method": "GET",
+   "path": "/v1/projects/fireemu-oracle-idp/locations/us-central1/channels"
+  },
+  "response": {
+   "status": 200,
+   "body": {}
+  }
+ },
+ {
+  "recording": "r2",
+  "n": 7,
+  "case": "channel-lifecycle",
+  "op": "listChannels",
+  "token": "default",
+  "request": {
+   "method": "GET",
+   "path": "/v1/projects/fireemu-oracle-idp/locations/us-central1/channels?pageSize=1"
+  },
+  "response": {
+   "status": 200,
+   "body": {}
+  }
+ },
+ {
+  "recording": "r2",
+  "n": 8,
+  "case": "channel-lifecycle",
+  "op": "listChannels",
+  "token": "default",
+  "request": {
+   "method": "GET",
+   "path": "/v1/projects/fireemu-oracle-idp/locations/us-central1/channels?pageToken=garbage"
+  },
+  "response": {
+   "status": 400,
+   "body": {
+    "error": {
+     "code": 400,
+     "message": "The request was invalid: invalid page token",
+     "status": "INVALID_ARGUMENT",
+     "details": [
+      {
+       "@type": "type.googleapis.com/google.rpc.BadRequest",
+       "fieldViolations": [
+        {
+         "field": "pageToken",
+         "description": "invalid page token"
+        }
+       ]
+      }
+     ]
+    }
+   }
+  }
+ },
+ {
+  "recording": "r2",
+  "n": 9,
+  "case": "channel-lifecycle",
+  "op": "listChannels",
+  "token": "default",
+  "request": {
+   "method": "GET",
+   "path": "/v1/projects/fireemu-oracle-idp/locations/-/channels?pageSize=5"
+  },
+  "response": {
+   "status": 200,
+   "body": {}
+  }
+ },
+ {
+  "recording": "r2",
+  "n": 10,
+  "case": "channel-lifecycle",
+  "op": "createChannel",
+  "token": "default",
+  "request": {
+   "method": "POST",
+   "path": "/v1/projects/fireemu-oracle-idp/locations/us-central1/channels?channelId=fe9e560c404162-cl-c1",
+   "body": {}
+  },
+  "response": {
+   "status": 400,
+   "body": {
+    "error": {
+     "code": 400,
+     "message": "The request was invalid: channel.name is empty",
+     "status": "INVALID_ARGUMENT",
+     "details": [
+      {
+       "@type": "type.googleapis.com/google.rpc.BadRequest",
+       "fieldViolations": [
+        {
+         "field": "channel.name"
+        }
+       ]
+      },
+      {
+       "@type": "type.googleapis.com/google.rpc.RequestInfo",
+       "requestId": "d720c541b19ee602"
+      }
+     ]
+    }
+   }
+  }
+ },
+ {
+  "recording": "r2",
+  "n": 11,
+  "case": "channel-lifecycle",
+  "op": "getChannel",
+  "token": "default",
+  "request": {
+   "method": "GET",
+   "path": "/v1/projects/fireemu-oracle-idp/locations/us-central1/channels/GOOG-9E560C404162"
+  },
+  "response": {
+   "status": 404,
+   "body": {
+    "error": {
+     "code": 404,
+     "message": "Resource 'projects/fireemu-oracle-idp/locations/us-central1/channels/GOOG-9E560C404162' was not found",
+     "status": "NOT_FOUND",
+     "details": [
+      {
+       "@type": "type.googleapis.com/google.rpc.ResourceInfo",
+       "resourceName": "projects/fireemu-oracle-idp/locations/us-central1/channels/GOOG-9E560C404162"
+      }
+     ]
+    }
+   }
+  }
+ },
+ {
+  "recording": "r2",
+  "n": 12,
+  "case": "channel-lifecycle",
+  "op": "createChannel",
+  "token": "default",
+  "request": {
+   "method": "POST",
+   "path": "/v1/projects/fireemu-oracle-idp/locations/us-central1/channels?channelId=GOOG-9E560C404162",
+   "body": {}
+  },
+  "response": {
+   "status": 400,
+   "body": {
+    "error": {
+     "code": 400,
+     "message": "The request was invalid: channel.name is empty",
+     "status": "INVALID_ARGUMENT",
+     "details": [
+      {
+       "@type": "type.googleapis.com/google.rpc.BadRequest",
+       "fieldViolations": [
+        {
+         "field": "channel.name"
+        }
+       ]
+      },
+      {
+       "@type": "type.googleapis.com/google.rpc.RequestInfo",
+       "requestId": "500ee8e6d145536a"
+      }
+     ]
+    }
+   }
+  }
+ },
+ {
+  "recording": "r2",
+  "n": 13,
+  "case": "channel-lifecycle",
+  "op": "getChannel",
+  "token": "default",
+  "request": {
+   "method": "GET",
+   "path": "/v1/projects/fireemu-oracle-idp/locations/us-central1/channels/a9"
+  },
+  "response": {
+   "status": 404,
+   "body": {
+    "error": {
+     "code": 404,
+     "message": "Resource 'projects/fireemu-oracle-idp/locations/us-central1/channels/a9' was not found",
+     "status": "NOT_FOUND",
+     "details": [
+      {
+       "@type": "type.googleapis.com/google.rpc.ResourceInfo",
+       "resourceName": "projects/fireemu-oracle-idp/locations/us-central1/channels/a9"
+      }
+     ]
+    }
+   }
+  }
+ },
+ {
+  "recording": "r2",
+  "n": 14,
+  "case": "channel-lifecycle",
+  "op": "createChannel",
+  "token": "default",
+  "request": {
+   "method": "POST",
+   "path": "/v1/projects/fireemu-oracle-idp/locations/us-central1/channels?channelId=a9",
+   "body": {}
+  },
+  "response": {
+   "status": 400,
+   "body": {
+    "error": {
+     "code": 400,
+     "message": "The request was invalid: channel.name is empty",
+     "status": "INVALID_ARGUMENT",
+     "details": [
+      {
+       "@type": "type.googleapis.com/google.rpc.BadRequest",
+       "fieldViolations": [
+        {
+         "field": "channel.name"
+        }
+       ]
+      },
+      {
+       "@type": "type.googleapis.com/google.rpc.RequestInfo",
+       "requestId": "ebb929b384667907"
+      }
+     ]
+    }
+   }
+  }
+ },
+ {
+  "recording": "r2",
+  "n": 15,
+  "case": "channel-lifecycle",
+  "op": "getChannel",
+  "token": "default",
+  "request": {
+   "method": "GET",
+   "path": "/v1/projects/fireemu-oracle-idp/locations/us-central1/channels/goog-9e560c404162"
+  },
+  "response": {
+   "status": 404,
+   "body": {
+    "error": {
+     "code": 404,
+     "message": "Resource 'projects/fireemu-oracle-idp/locations/us-central1/channels/goog-9e560c404162' was not found",
+     "status": "NOT_FOUND",
+     "details": [
+      {
+       "@type": "type.googleapis.com/google.rpc.ResourceInfo",
+       "resourceName": "projects/fireemu-oracle-idp/locations/us-central1/channels/goog-9e560c404162"
+      }
+     ]
+    }
+   }
+  }
+ },
+ {
+  "recording": "r2",
+  "n": 16,
+  "case": "channel-lifecycle",
+  "op": "createChannel",
+  "token": "default",
+  "request": {
+   "method": "POST",
+   "path": "/v1/projects/fireemu-oracle-idp/locations/us-central1/channels?channelId=goog-9e560c404162",
+   "body": {}
+  },
+  "response": {
+   "status": 400,
+   "body": {
+    "error": {
+     "code": 400,
+     "message": "The request was invalid: channel.name is empty",
+     "status": "INVALID_ARGUMENT",
+     "details": [
+      {
+       "@type": "type.googleapis.com/google.rpc.BadRequest",
+       "fieldViolations": [
+        {
+         "field": "channel.name"
+        }
+       ]
+      },
+      {
+       "@type": "type.googleapis.com/google.rpc.RequestInfo",
+       "requestId": "0a849834cf6fc801"
+      }
+     ]
+    }
+   }
+  }
+ },
+ {
+  "recording": "r2",
+  "n": 17,
+  "case": "channel-lifecycle",
+  "op": "getChannel",
+  "token": "default",
+  "request": {
+   "method": "GET",
+   "path": "/v1/projects/fireemu-oracle-idp/locations/us-central1/channels/1-9e560c404162"
+  },
+  "response": {
+   "status": 404,
+   "body": {
+    "error": {
+     "code": 404,
+     "message": "Resource 'projects/fireemu-oracle-idp/locations/us-central1/channels/1-9e560c404162' was not found",
+     "status": "NOT_FOUND",
+     "details": [
+      {
+       "@type": "type.googleapis.com/google.rpc.ResourceInfo",
+       "resourceName": "projects/fireemu-oracle-idp/locations/us-central1/channels/1-9e560c404162"
+      }
+     ]
+    }
+   }
+  }
+ },
+ {
+  "recording": "r2",
+  "n": 18,
+  "case": "channel-lifecycle",
+  "op": "createChannel",
+  "token": "default",
+  "request": {
+   "method": "POST",
+   "path": "/v1/projects/fireemu-oracle-idp/locations/us-central1/channels?channelId=1-9e560c404162",
+   "body": {}
+  },
+  "response": {
+   "status": 400,
+   "body": {
+    "error": {
+     "code": 400,
+     "message": "The request was invalid: channel.name is empty",
+     "status": "INVALID_ARGUMENT",
+     "details": [
+      {
+       "@type": "type.googleapis.com/google.rpc.BadRequest",
+       "fieldViolations": [
+        {
+         "field": "channel.name"
+        }
+       ]
+      },
+      {
+       "@type": "type.googleapis.com/google.rpc.RequestInfo",
+       "requestId": "8184549074677bd0"
+      }
+     ]
+    }
+   }
+  }
+ },
+ {
+  "recording": "r2",
+  "n": 19,
+  "case": "channel-lifecycle",
+  "op": "getChannel",
+  "token": "default",
+  "request": {
+   "method": "GET",
+   "path": "/v1/projects/fireemu-oracle-idp/locations/us-central1/channels/fe9e560c404162-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+  },
+  "response": {
+   "status": 404,
+   "body": {
+    "error": {
+     "code": 404,
+     "message": "Resource 'projects/fireemu-oracle-idp/locations/us-central1/channels/fe9e560c404162-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx' was not found",
+     "status": "NOT_FOUND",
+     "details": [
+      {
+       "@type": "type.googleapis.com/google.rpc.ResourceInfo",
+       "resourceName": "projects/fireemu-oracle-idp/locations/us-central1/channels/fe9e560c404162-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+      }
+     ]
+    }
+   }
+  }
+ },
+ {
+  "recording": "r2",
+  "n": 20,
+  "case": "channel-lifecycle",
+  "op": "createChannel",
+  "token": "default",
+  "request": {
+   "method": "POST",
+   "path": "/v1/projects/fireemu-oracle-idp/locations/us-central1/channels?channelId=fe9e560c404162-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+   "body": {}
+  },
+  "response": {
+   "status": 400,
+   "body": {
+    "error": {
+     "code": 400,
+     "message": "The request was invalid: channel.name is empty",
+     "status": "INVALID_ARGUMENT",
+     "details": [
+      {
+       "@type": "type.googleapis.com/google.rpc.BadRequest",
+       "fieldViolations": [
+        {
+         "field": "channel.name"
+        }
+       ]
+      },
+      {
+       "@type": "type.googleapis.com/google.rpc.RequestInfo",
+       "requestId": "bdf1c29f64a2ae39"
+      }
+     ]
+    }
+   }
+  }
+ },
+ {
+  "recording": "r2",
+  "n": 21,
+  "case": "channel-lifecycle",
+  "op": "createChannel",
+  "token": "default",
+  "request": {
+   "method": "POST",
+   "path": "/v1/projects/fireemu-oracle-idp/locations/no-such-location1/channels?channelId=nowhere-9e560c404162",
+   "body": {}
+  },
+  "response": {
+   "status": 403,
+   "body": {
+    "error": {
+     "code": 403,
+     "message": "Permission denied on 'locations/no-such-location1' (or it may not exist).",
+     "status": "PERMISSION_DENIED",
+     "details": [
+      {
+       "@type": "type.googleapis.com/google.rpc.ErrorInfo",
+       "reason": "LOCATION_POLICY_VIOLATED",
+       "domain": "googleapis.com",
+       "metadata": {
+        "location": "no-such-location1",
+        "consumer": "projects/fireemu-oracle-idp",
+        "service": "eventarc.googleapis.com"
+       }
+      },
+      {
+       "@type": "type.googleapis.com/google.rpc.LocalizedMessage",
+       "locale": "en-US",
+       "message": "Permission denied on 'locations/no-such-location1' (or it may not exist)."
+      }
+     ]
+    }
+   }
+  }
+ },
+ {
+  "recording": "r2",
+  "n": 22,
+  "case": "channel-lifecycle",
+  "op": "getChannel",
+  "token": "default",
+  "request": {
+   "method": "GET",
+   "path": "/v1/projects/fireemu-oracle-idp/locations/no-such-location1/channels/nowhere-9e560c404162"
+  },
+  "response": {
+   "status": 403,
+   "body": {
+    "error": {
+     "code": 403,
+     "message": "Location no-such-location1 is not found or access is unauthorized.",
+     "status": "PERMISSION_DENIED"
+    }
+   }
+  }
+ },
+ {
+  "recording": "r2",
+  "n": 23,
+  "case": "channel-lifecycle",
+  "op": "getChannel",
+  "token": "default",
+  "request": {
+   "method": "GET",
+   "path": "/v1/projects/fireemu-no-such-project-0/locations/us-central1/channels/x"
+  },
+  "response": {
+   "status": 403,
+   "body": {
+    "error": {
+     "code": 403,
+     "message": "Permission denied on resource project fireemu-no-such-project-0.",
+     "status": "PERMISSION_DENIED",
+     "details": [
+      {
+       "@type": "type.googleapis.com/google.rpc.ErrorInfo",
+       "reason": "CONSUMER_INVALID",
+       "domain": "googleapis.com",
+       "metadata": {
+        "containerInfo": "fireemu-no-such-project-0",
+        "consumer": "projects/fireemu-no-such-project-0",
+        "service": "eventarc.googleapis.com"
+       }
+      },
+      {
+       "@type": "type.googleapis.com/google.rpc.LocalizedMessage",
+       "locale": "en-US",
+       "message": "Permission denied on resource project fireemu-no-such-project-0."
+      },
+      {
+       "@type": "type.googleapis.com/google.rpc.Help",
+       "links": [
+        {
+         "description": "Google developers console",
+         "url": "https://console.developers.google.com"
+        }
+       ]
+      }
+     ]
+    }
+   }
+  }
+ },
+ {
+  "recording": "r2",
+  "n": 24,
+  "case": "channel-lifecycle",
+  "op": "listChannels",
+  "token": "default",
+  "request": {
+   "method": "GET",
+   "path": "/v1/projects/fireemu-no-such-project-0/locations/us-central1/channels"
+  },
+  "response": {
+   "status": 403,
+   "body": {
+    "error": {
+     "code": 403,
+     "message": "Permission denied on resource project fireemu-no-such-project-0.",
+     "status": "PERMISSION_DENIED",
+     "details": [
+      {
+       "@type": "type.googleapis.com/google.rpc.ErrorInfo",
+       "reason": "CONSUMER_INVALID",
+       "domain": "googleapis.com",
+       "metadata": {
+        "containerInfo": "fireemu-no-such-project-0",
+        "service": "eventarc.googleapis.com",
+        "consumer": "projects/fireemu-no-such-project-0"
+       }
+      },
+      {
+       "@type": "type.googleapis.com/google.rpc.LocalizedMessage",
+       "locale": "en-US",
+       "message": "Permission denied on resource project fireemu-no-such-project-0."
+      },
+      {
+       "@type": "type.googleapis.com/google.rpc.Help",
+       "links": [
+        {
+         "description": "Google developers console",
+         "url": "https://console.developers.google.com"
+        }
+       ]
+      }
+     ]
+    }
+   }
+  }
+ },
+ {
+  "recording": "r2",
+  "n": 25,
+  "case": "publish-envelope",
+  "op": "createChannel",
+  "token": "default",
+  "request": {
+   "method": "POST",
+   "path": "/v1/projects/fireemu-oracle-idp/locations/us-central1/channels?channelId=fe9e560c404162-pe-env",
+   "body": {}
+  },
+  "response": {
+   "status": 400,
+   "body": {
+    "error": {
+     "code": 400,
+     "message": "The request was invalid: channel.name is empty",
+     "status": "INVALID_ARGUMENT",
+     "details": [
+      {
+       "@type": "type.googleapis.com/google.rpc.BadRequest",
+       "fieldViolations": [
+        {
+         "field": "channel.name"
+        }
+       ]
+      },
+      {
+       "@type": "type.googleapis.com/google.rpc.RequestInfo",
+       "requestId": "1a0d0a2463f8365d"
+      }
+     ]
+    }
+   }
+  }
+ },
+ {
+  "recording": "r2",
+  "n": 26,
+  "case": "publish-envelope",
+  "op": "publishEvents",
+  "token": "default",
+  "request": {
+   "method": "POST",
+   "path": "/v1/projects/fireemu-oracle-idp/locations/us-central1/channels/fe9e560c404162-pe-env-absent:publishEvents",
+   "body": {
+    "events": [
+     {
+      "@type": "type.googleapis.com/io.cloudevents.v1.CloudEvent",
+      "id": "fe9e560c404162-evt-2",
+      "source": "//fireemu/recorder/9e560c404162",
+      "specVersion": "1.0",
+      "type": "fireemu.recorder.v1.probe",
+      "attributes": {
+       "time": {
+        "ceTimestamp": "2026-10-05T06:17:05.523Z"
+       },
+       "datacontenttype": {
+        "ceString": "application/json"
+       }
+      },
+      "textData": "{\"probe\":true}"
+     }
+    ]
+   }
+  },
+  "response": {
+   "status": 404,
+   "body": {
+    "error": {
+     "code": 404,
+     "message": "Associated channel does not exist.",
+     "status": "NOT_FOUND"
+    }
+   }
+  }
+ },
+ {
+  "recording": "r2",
+  "n": 27,
+  "case": "publish-envelope",
+  "op": "publishEvents",
+  "token": "default",
+  "request": {
+   "method": "POST",
+   "path": "/v1/projects/fireemu-oracle-idp/locations/us-central1/channels/fe9e560c404162-pe-env-absent:publishEvents",
+   "body": {
+    "events": [
+     {
+      "@type": "type.googleapis.com/io.cloudevents.v1.CloudEvent",
+      "id": "fe9e560c404162-evt-3",
+      "source": "//fireemu/recorder/9e560c404162",
+      "specVersion": "1.0",
+      "type": "fireemu.recorder.v1.probe",
+      "attributes": {
+       "time": {
+        "ceTimestamp": "2026-10-05T06:17:06.651Z"
+       },
+       "datacontenttype": {
+        "ceString": "application/json"
+       }
+      },
+      "textData": "{\"probe\":true}"
+     },
+     {
+      "@type": "type.googleapis.com/io.cloudevents.v1.CloudEvent",
+      "id": "fe9e560c404162-evt-4",
+      "source": "//fireemu/recorder/9e560c404162",
+      "specVersion": "1.0",
+      "type": "fireemu.recorder.v1.probe",
+      "attributes": {
+       "time": {
+        "ceTimestamp": "2026-10-05T06:17:06.651Z"
+       },
+       "datacontenttype": {
+        "ceString": "application/json"
+       }
+      },
+      "textData": "{\"probe\":true}"
+     },
+     {
+      "@type": "type.googleapis.com/io.cloudevents.v1.CloudEvent",
+      "id": "fe9e560c404162-evt-5",
+      "source": "//fireemu/recorder/9e560c404162",
+      "specVersion": "1.0",
+      "type": "fireemu.recorder.v1.probe",
+      "attributes": {
+       "time": {
+        "ceTimestamp": "2026-10-05T06:17:06.651Z"
+       },
+       "datacontenttype": {
+        "ceString": "application/json"
+       }
+      },
+      "textData": "{\"probe\":true}"
+     }
+    ]
+   }
+  },
+  "response": {
+   "status": 404,
+   "body": {
+    "error": {
+     "code": 404,
+     "message": "Associated channel does not exist.",
+     "status": "NOT_FOUND"
+    }
+   }
+  }
+ },
+ {
+  "recording": "r2",
+  "n": 28,
+  "case": "publish-envelope",
+  "op": "publishEvents",
+  "token": "default",
+  "request": {
+   "method": "POST",
+   "path": "/v1/projects/fireemu-oracle-idp/locations/us-central1/channels/fe9e560c404162-pe-env-absent:publishEvents",
+   "body": {
+    "events": []
+   }
+  },
+  "response": {
+   "status": 400,
+   "body": {
+    "error": {
+     "code": 400,
+     "message": "No events provided.",
+     "status": "INVALID_ARGUMENT",
+     "details": [
+      {
+       "@type": "type.googleapis.com/google.rpc.BadRequest",
+       "fieldViolations": [
+        {
+         "field": "events",
+         "description": "No events provided."
+        }
+       ]
+      }
+     ]
+    }
+   }
+  }
+ },
+ {
+  "recording": "r2",
+  "n": 29,
+  "case": "publish-envelope",
+  "op": "publishEvents",
+  "token": "default",
+  "request": {
+   "method": "POST",
+   "path": "/v1/projects/fireemu-oracle-idp/locations/us-central1/channels/fe9e560c404162-pe-env-absent:publishEvents",
+   "body": {}
+  },
+  "response": {
+   "status": 400,
+   "body": {
+    "error": {
+     "code": 400,
+     "message": "No events provided.",
+     "status": "INVALID_ARGUMENT",
+     "details": [
+      {
+       "@type": "type.googleapis.com/google.rpc.BadRequest",
+       "fieldViolations": [
+        {
+         "field": "events",
+         "description": "No events provided."
+        }
+       ]
+      }
+     ]
+    }
+   }
+  }
+ },
+ {
+  "recording": "r2",
+  "n": 30,
+  "case": "publish-envelope",
+  "op": "publishEvents",
+  "token": "default",
+  "request": {
+   "method": "POST",
+   "path": "/v1/projects/fireemu-oracle-idp/locations/us-central1/channels/fe9e560c404162-pe-env-absent:publishEvents",
+   "body": {
+    "events": [
+     {
+      "@type": "type.googleapis.com/io.cloudevents.v1.CloudEvent",
+      "source": "//fireemu/recorder/9e560c404162",
+      "specVersion": "1.0",
+      "type": "fireemu.recorder.v1.probe",
+      "attributes": {
+       "time": {
+        "ceTimestamp": "2026-10-05T06:17:09.999Z"
+       },
+       "datacontenttype": {
+        "ceString": "application/json"
+       }
+      },
+      "textData": "{\"probe\":true}"
+     }
+    ]
+   }
+  },
+  "response": {
+   "status": 404,
+   "body": {
+    "error": {
+     "code": 404,
+     "message": "Associated channel does not exist.",
+     "status": "NOT_FOUND"
+    }
+   }
+  }
+ },
+ {
+  "recording": "r2",
+  "n": 31,
+  "case": "publish-envelope",
+  "op": "publishEvents",
+  "token": "default",
+  "request": {
+   "method": "POST",
+   "path": "/v1/projects/fireemu-oracle-idp/locations/us-central1/channels/fe9e560c404162-pe-env-absent:publishEvents",
+   "body": {
+    "events": [
+     {
+      "@type": "type.googleapis.com/io.cloudevents.v1.CloudEvent",
+      "id": "fe9e560c404162-evt-7",
+      "source": "//fireemu/recorder/9e560c404162",
+      "specVersion": "1.0",
+      "attributes": {
+       "time": {
+        "ceTimestamp": "2026-10-05T06:17:11.179Z"
+       },
+       "datacontenttype": {
+        "ceString": "application/json"
+       }
+      },
+      "textData": "{\"probe\":true}"
+     }
+    ]
+   }
+  },
+  "response": {
+   "status": 404,
+   "body": {
+    "error": {
+     "code": 404,
+     "message": "Associated channel does not exist.",
+     "status": "NOT_FOUND"
+    }
+   }
+  }
+ },
+ {
+  "recording": "r2",
+  "n": 32,
+  "case": "publish-envelope",
+  "op": "publishEvents",
+  "token": "default",
+  "request": {
+   "method": "POST",
+   "path": "/v1/projects/fireemu-oracle-idp/locations/us-central1/channels/fe9e560c404162-pe-env-absent:publishEvents",
+   "body": {
+    "events": [
+     {
+      "@type": "type.googleapis.com/io.cloudevents.v1.CloudEvent",
+      "id": "fe9e560c404162-evt-8",
+      "specVersion": "1.0",
+      "type": "fireemu.recorder.v1.probe",
+      "attributes": {
+       "time": {
+        "ceTimestamp": "2026-10-05T06:17:12.196Z"
+       },
+       "datacontenttype": {
+        "ceString": "application/json"
+       }
+      },
+      "textData": "{\"probe\":true}"
+     }
+    ]
+   }
+  },
+  "response": {
+   "status": 404,
+   "body": {
+    "error": {
+     "code": 404,
+     "message": "Associated channel does not exist.",
+     "status": "NOT_FOUND"
+    }
+   }
+  }
+ },
+ {
+  "recording": "r2",
+  "n": 33,
+  "case": "publish-envelope",
+  "op": "publishEvents",
+  "token": "default",
+  "request": {
+   "method": "POST",
+   "path": "/v1/projects/fireemu-oracle-idp/locations/us-central1/channels/fe9e560c404162-pe-env-absent:publishEvents",
+   "body": {
+    "events": [
+     {
+      "@type": "type.googleapis.com/io.cloudevents.v1.CloudEvent",
+      "id": "fe9e560c404162-evt-9",
+      "source": "//fireemu/recorder/9e560c404162",
+      "type": "fireemu.recorder.v1.probe",
+      "attributes": {
+       "time": {
+        "ceTimestamp": "2026-10-05T06:17:13.383Z"
+       },
+       "datacontenttype": {
+        "ceString": "application/json"
+       }
+      },
+      "textData": "{\"probe\":true}"
+     }
+    ]
+   }
+  },
+  "response": {
+   "status": 404,
+   "body": {
+    "error": {
+     "code": 404,
+     "message": "Associated channel does not exist.",
+     "status": "NOT_FOUND"
+    }
+   }
+  }
+ },
+ {
+  "recording": "r2",
+  "n": 34,
+  "case": "publish-envelope",
+  "op": "publishEvents",
+  "token": "default",
+  "request": {
+   "method": "POST",
+   "path": "/v1/projects/fireemu-oracle-idp/locations/us-central1/channels/fe9e560c404162-pe-env-absent:publishEvents",
+   "body": {
+    "events": [
+     {
+      "@type": "type.googleapis.com/io.cloudevents.v1.CloudEvent",
+      "id": "fe9e560c404162-evt-10",
+      "source": "//fireemu/recorder/9e560c404162",
+      "specVersion": "1.0",
+      "type": "fireemu.recorder.v1.probe",
+      "attributes": {
+       "datacontenttype": {
+        "ceString": "application/json"
+       }
+      },
+      "textData": "{\"probe\":true}"
+     }
+    ]
+   }
+  },
+  "response": {
+   "status": 404,
+   "body": {
+    "error": {
+     "code": 404,
+     "message": "Associated channel does not exist.",
+     "status": "NOT_FOUND"
+    }
+   }
+  }
+ },
+ {
+  "recording": "r2",
+  "n": 35,
+  "case": "publish-envelope",
+  "op": "publishEvents",
+  "token": "default",
+  "request": {
+   "method": "POST",
+   "path": "/v1/projects/fireemu-oracle-idp/locations/us-central1/channels/fe9e560c404162-pe-env-absent:publishEvents",
+   "body": {
+    "events": [
+     {
+      "@type": "type.googleapis.com/io.cloudevents.v1.CloudEvent",
+      "id": "fe9e560c404162-evt-11",
+      "source": "//fireemu/recorder/9e560c404162",
+      "specVersion": "1.0",
+      "type": "fireemu.recorder.v1.probe",
+      "attributes": {
+       "time": {
+        "ceTimestamp": "2026-10-05T06:17:15.497Z"
+       }
+      },
+      "textData": "{\"probe\":true}"
+     }
+    ]
+   }
+  },
+  "response": {
+   "status": 404,
+   "body": {
+    "error": {
+     "code": 404,
+     "message": "Associated channel does not exist.",
+     "status": "NOT_FOUND"
+    }
+   }
+  }
+ },
+ {
+  "recording": "r2",
+  "n": 36,
+  "case": "publish-envelope",
+  "op": "publishEvents",
+  "token": "default",
+  "request": {
+   "method": "POST",
+   "path": "/v1/projects/fireemu-oracle-idp/locations/us-central1/channels/fe9e560c404162-pe-env-absent:publishEvents",
+   "body": {
+    "events": [
+     {
+      "@type": "type.googleapis.com/io.cloudevents.v1.CloudEvent",
+      "id": "fe9e560c404162-evt-12",
+      "source": "//fireemu/recorder/9e560c404162",
+      "specVersion": "1.0",
+      "type": "fireemu.recorder.v1.probe",
+      "attributes": {
+       "time": {
+        "ceString": "2026-10-05T00:00:00Z"
+       },
+       "datacontenttype": {
+        "ceString": "application/json"
+       }
+      },
+      "textData": "{\"probe\":true}"
+     }
+    ]
+   }
+  },
+  "response": {
+   "status": 404,
+   "body": {
+    "error": {
+     "code": 404,
+     "message": "Associated channel does not exist.",
+     "status": "NOT_FOUND"
+    }
+   }
+  }
+ },
+ {
+  "recording": "r2",
+  "n": 37,
+  "case": "publish-envelope",
+  "op": "publishEvents",
+  "token": "default",
+  "request": {
+   "method": "POST",
+   "path": "/v1/projects/fireemu-oracle-idp/locations/us-central1/channels/fe9e560c404162-pe-env-absent:publishEvents",
+   "body": {
+    "events": [
+     {
+      "@type": "type.googleapis.com/io.cloudevents.v1.CloudEvent",
+      "id": "fe9e560c404162-evt-13",
+      "source": "//fireemu/recorder/9e560c404162",
+      "specVersion": "1.0",
+      "type": "fireemu.recorder.v1.probe",
+      "attributes": {
+       "time": {
+        "ceTimestamp": "2026-10-05T06:17:17.731Z"
+       },
+       "datacontenttype": {
+        "ceString": "application/json"
+       },
+       "extra": {
+        "ceFoo": "x"
+       }
+      },
+      "textData": "{\"probe\":true}"
+     }
+    ]
+   }
+  },
+  "response": {
+   "status": 400,
+   "body": {
+    "error": {
+     "code": 400,
+     "message": "Invalid JSON payload received. Unknown name \"ceFoo\" at 'attributes[2].value': Cannot find field.",
+     "status": "INVALID_ARGUMENT",
+     "details": [
+      {
+       "@type": "type.googleapis.com/google.rpc.BadRequest",
+       "fieldViolations": [
+        {
+         "field": "attributes[2].value",
+         "description": "Invalid JSON payload received. Unknown name \"ceFoo\" at 'attributes[2].value': Cannot find field."
+        }
+       ]
+      }
+     ]
+    }
+   }
+  }
+ },
+ {
+  "recording": "r2",
+  "n": 38,
+  "case": "publish-envelope",
+  "op": "publishEvents",
+  "token": "default",
+  "request": {
+   "method": "POST",
+   "path": "/v1/projects/fireemu-oracle-idp/locations/us-central1/channels/fe9e560c404162-pe-env-absent:publishEvents",
+   "body": {
+    "events": [
+     {
+      "@type": "type.googleapis.com/io.cloudevents.v1.CloudEvent",
+      "id": "fe9e560c404162-evt-14",
+      "source": "//fireemu/recorder/9e560c404162",
+      "specVersion": "1.0",
+      "type": "fireemu.recorder.v1.probe",
+      "attributes": {
+       "time": {
+        "ceTimestamp": "not-a-time"
+       },
+       "datacontenttype": {
+        "ceString": "application/json"
+       }
+      },
+      "textData": "{\"probe\":true}"
+     }
+    ]
+   }
+  },
+  "response": {
+   "status": 400,
+   "body": {
+    "error": {
+     "code": 400,
+     "message": "Invalid value at 'attributes[0].value.ce_timestamp' (type.googleapis.com/google.protobuf.Timestamp), Field 'ceTimestamp', Illegal timestamp format; timestamps must end with 'Z' or have a valid timezone offset.",
+     "status": "INVALID_ARGUMENT",
+     "details": [
+      {
+       "@type": "type.googleapis.com/google.rpc.BadRequest",
+       "fieldViolations": [
+        {
+         "field": "attributes[0].value.ce_timestamp",
+         "description": "Invalid value at 'attributes[0].value.ce_timestamp' (type.googleapis.com/google.protobuf.Timestamp), Field 'ceTimestamp', Illegal timestamp format; timestamps must end with 'Z' or have a valid timezone offset."
+        }
+       ]
+      }
+     ]
+    }
+   }
+  }
+ },
+ {
+  "recording": "r2",
+  "n": 39,
+  "case": "publish-envelope",
+  "op": "publishEvents",
+  "token": "default",
+  "request": {
+   "method": "POST",
+   "path": "/v1/projects/fireemu-oracle-idp/locations/us-central1/channels/fe9e560c404162-pe-env-absent:publishEvents",
+   "body": {
+    "events": [
+     {
+      "@type": "type.googleapis.com/google.protobuf.Empty",
+      "id": "fe9e560c404162-evt-15",
+      "source": "//fireemu/recorder/9e560c404162",
+      "specVersion": "1.0",
+      "type": "fireemu.recorder.v1.probe",
+      "attributes": {
+       "time": {
+        "ceTimestamp": "2026-10-05T06:17:19.887Z"
+       },
+       "datacontenttype": {
+        "ceString": "application/json"
+       }
+      },
+      "textData": "{\"probe\":true}"
+     }
+    ]
+   }
+  },
+  "response": {
+   "status": 400,
+   "body": {
+    "error": {
+     "code": 400,
+     "message": "Invalid value at 'events[0]' (Any), Invalid type URL, unknown type: google.protobuf.Empty",
+     "status": "INVALID_ARGUMENT",
+     "details": [
+      {
+       "@type": "type.googleapis.com/google.rpc.BadRequest",
+       "fieldViolations": [
+        {
+         "field": "events[0]",
+         "description": "Invalid value at 'events[0]' (Any), Invalid type URL, unknown type: google.protobuf.Empty"
+        }
+       ]
+      }
+     ]
+    }
+   }
+  }
+ },
+ {
+  "recording": "r2",
+  "n": 40,
+  "case": "publish-envelope",
+  "op": "publishEvents",
+  "token": "default",
+  "request": {
+   "method": "POST",
+   "path": "/v1/projects/fireemu-oracle-idp/locations/us-central1/channels/fe9e560c404162-pe-env-absent:publishEvents",
+   "body": {
+    "events": [
+     {
+      "id": "fe9e560c404162-evt-16",
+      "source": "//fireemu/recorder/9e560c404162",
+      "specVersion": "1.0",
+      "type": "fireemu.recorder.v1.probe",
+      "attributes": {
+       "time": {
+        "ceTimestamp": "2026-10-05T06:17:20.940Z"
+       },
+       "datacontenttype": {
+        "ceString": "application/json"
+       }
+      },
+      "textData": "{\"probe\":true}"
+     }
+    ]
+   }
+  },
+  "response": {
+   "status": 400,
+   "body": {
+    "error": {
+     "code": 400,
+     "message": "Invalid value at 'events[0]' (Any), Missing @type for any field in google.cloud.eventarc.publishing.v1.PublishEventsRequest",
+     "status": "INVALID_ARGUMENT",
+     "details": [
+      {
+       "@type": "type.googleapis.com/google.rpc.BadRequest",
+       "fieldViolations": [
+        {
+         "field": "events[0]",
+         "description": "Invalid value at 'events[0]' (Any), Missing @type for any field in google.cloud.eventarc.publishing.v1.PublishEventsRequest"
+        }
+       ]
+      }
+     ]
+    }
+   }
+  }
+ },
+ {
+  "recording": "r2",
+  "n": 41,
+  "case": "publish-envelope",
+  "op": "publishEvents",
+  "token": "default",
+  "request": {
+   "method": "POST",
+   "path": "/v1/projects/fireemu-oracle-idp/locations/us-central1/channels/fe9e560c404162-pe-env-absent:publishEvents",
+   "body": {
+    "events": [
+     {
+      "@type": "type.googleapis.com/io.cloudevents.v1.CloudEvent",
+      "id": "fe9e560c404162-evt-17",
+      "source": "//fireemu/recorder/9e560c404162",
+      "specVersion": "1.0",
+      "type": "fireemu.recorder.v1.probe",
+      "attributes": {
+       "time": {
+        "ceTimestamp": "2026-10-05T06:17:22.170Z"
+       },
+       "datacontenttype": {
+        "ceString": "application/json"
+       }
+      },
+      "textData": "{\"probe\":true}",
+      "noSuchMember": 1
+     }
+    ]
+   }
+  },
+  "response": {
+   "status": 400,
+   "body": {
+    "error": {
+     "code": 400,
+     "message": "Invalid JSON payload received. Unknown name \"noSuchMember\": Cannot find field.",
+     "status": "INVALID_ARGUMENT",
+     "details": [
+      {
+       "@type": "type.googleapis.com/google.rpc.BadRequest",
+       "fieldViolations": [
+        {
+         "description": "Invalid JSON payload received. Unknown name \"noSuchMember\": Cannot find field."
+        }
+       ]
+      }
+     ]
+    }
+   }
+  }
+ },
+ {
+  "recording": "r2",
+  "n": 42,
+  "case": "publish-envelope",
+  "op": "publishEvents",
+  "token": "default",
+  "request": {
+   "method": "POST",
+   "path": "/v1/projects/fireemu-oracle-idp/locations/us-central1/channels/fe9e560c404162-pe-env-absent:publishEvents",
+   "body": {
+    "events": [
+     {
+      "@type": "type.googleapis.com/io.cloudevents.v1.CloudEvent",
+      "id": "fe9e560c404162-evt-18",
+      "source": "//fireemu/recorder/9e560c404162",
+      "specVersion": "1.0",
+      "type": "fireemu.recorder.v1.probe",
+      "attributes": {
+       "time": {
+        "ceTimestamp": "2026-10-05T06:17:23.194Z"
+       },
+       "datacontenttype": {
+        "ceString": "application/json"
+       },
+       "subject": {
+        "ceString": "s"
+       },
+       "extra": {
+        "ceString": "x"
+       }
+      },
+      "textData": "{\"probe\":true}"
+     }
+    ]
+   }
+  },
+  "response": {
+   "status": 404,
+   "body": {
+    "error": {
+     "code": 404,
+     "message": "Associated channel does not exist.",
+     "status": "NOT_FOUND"
+    }
+   }
+  }
+ },
+ {
+  "recording": "r2",
+  "n": 43,
+  "case": "publish-envelope",
+  "op": "publishEvents",
+  "token": "default",
+  "request": {
+   "method": "POST",
+   "path": "/v1/projects/fireemu-oracle-idp/locations/us-central1/channels/fe9e560c404162-pe-env-absent:publishEvents",
+   "body": {
+    "events": [
+     {
+      "@type": "type.googleapis.com/io.cloudevents.v1.CloudEvent",
+      "id": "fe9e560c404162-evt-19",
+      "source": "//fireemu/recorder/9e560c404162",
+      "specVersion": "1.0",
+      "type": "fireemu.recorder.v1.probe",
+      "attributes": {
+       "time": {
+        "ceTimestamp": "2026-10-05T06:17:24.368Z"
+       },
+       "datacontenttype": {
+        "ceString": "application/json"
+       }
+      },
+      "textData": "{\"probe\":true}"
+     }
+    ]
+   }
+  },
+  "response": {
+   "status": 404,
+   "body": {
+    "error": {
+     "code": 404,
+     "message": "Associated channel does not exist.",
+     "status": "NOT_FOUND"
+    }
+   }
+  }
+ },
+ {
+  "recording": "r2",
+  "n": 44,
+  "case": "publish-envelope",
+  "op": "publishEvents",
+  "token": "default",
+  "request": {
+   "method": "POST",
+   "path": "/v1/projects/fireemu-oracle-idp/locations/us-central1/channels/fe9e560c404162-pe-env-absent:publishEvents",
+   "body": {
+    "events": [
+     {
+      "@type": "type.googleapis.com/io.cloudevents.v1.CloudEvent",
+      "id": "fe9e560c404162-evt-19",
+      "source": "//fireemu/recorder/9e560c404162",
+      "specVersion": "1.0",
+      "type": "fireemu.recorder.v1.probe",
+      "attributes": {
+       "time": {
+        "ceTimestamp": "2026-10-05T06:17:24.368Z"
+       },
+       "datacontenttype": {
+        "ceString": "application/json"
+       }
+      },
+      "textData": "{\"probe\":true}"
+     }
+    ]
+   }
+  },
+  "response": {
+   "status": 404,
+   "body": {
+    "error": {
+     "code": 404,
+     "message": "Associated channel does not exist.",
+     "status": "NOT_FOUND"
+    }
+   }
+  }
+ },
+ {
+  "recording": "r2",
+  "n": 45,
+  "case": "publish-content",
+  "op": "createChannel",
+  "token": "default",
+  "request": {
+   "method": "POST",
+   "path": "/v1/projects/fireemu-oracle-idp/locations/us-central1/channels?channelId=fe9e560c404162-pc-content",
+   "body": {}
+  },
+  "response": {
+   "status": 400,
+   "body": {
+    "error": {
+     "code": 400,
+     "message": "The request was invalid: channel.name is empty",
+     "status": "INVALID_ARGUMENT",
+     "details": [
+      {
+       "@type": "type.googleapis.com/google.rpc.BadRequest",
+       "fieldViolations": [
+        {
+         "field": "channel.name"
+        }
+       ]
+      },
+      {
+       "@type": "type.googleapis.com/google.rpc.RequestInfo",
+       "requestId": "cb229f5056a46a82"
+      }
+     ]
+    }
+   }
+  }
+ },
+ {
+  "recording": "r2",
+  "n": 46,
+  "case": "publish-content",
+  "op": "publishEvents",
+  "token": "default",
+  "request": {
+   "method": "POST",
+   "path": "/v1/projects/fireemu-oracle-idp/locations/us-central1/channels/fe9e560c404162-pc-content-absent:publishEvents",
+   "body": {
+    "events": [
+     {
+      "@type": "type.googleapis.com/io.cloudevents.v1.CloudEvent",
+      "id": "fe9e560c404162-evt-20",
+      "source": "//fireemu/recorder/9e560c404162",
+      "specVersion": "1.0",
+      "type": "fireemu.recorder.v1.probe",
+      "attributes": {
+       "time": {
+        "ceTimestamp": "2026-10-05T06:17:28.278Z"
+       },
+       "datacontenttype": {
+        "ceString": "application/json"
+       }
+      },
+      "textData": "{\"a\":1,\"b\":[true,null]}"
+     }
+    ]
+   }
+  },
+  "response": {
+   "status": 404,
+   "body": {
+    "error": {
+     "code": 404,
+     "message": "Associated channel does not exist.",
+     "status": "NOT_FOUND"
+    }
+   }
+  }
+ },
+ {
+  "recording": "r2",
+  "n": 47,
+  "case": "publish-content",
+  "op": "publishEvents",
+  "token": "default",
+  "request": {
+   "method": "POST",
+   "path": "/v1/projects/fireemu-oracle-idp/locations/us-central1/channels/fe9e560c404162-pc-content-absent:publishEvents",
+   "body": {
+    "events": [
+     {
+      "@type": "type.googleapis.com/io.cloudevents.v1.CloudEvent",
+      "id": "fe9e560c404162-evt-21",
+      "source": "//fireemu/recorder/9e560c404162",
+      "specVersion": "1.0",
+      "type": "fireemu.recorder.v1.probe",
+      "attributes": {
+       "time": {
+        "ceTimestamp": "2026-10-05T06:17:29.363Z"
+       },
+       "datacontenttype": {
+        "ceString": "application/json"
+       }
+      },
+      "textData": "1"
+     }
+    ]
+   }
+  },
+  "response": {
+   "status": 404,
+   "body": {
+    "error": {
+     "code": 404,
+     "message": "Associated channel does not exist.",
+     "status": "NOT_FOUND"
+    }
+   }
+  }
+ },
+ {
+  "recording": "r2",
+  "n": 48,
+  "case": "publish-content",
+  "op": "publishEvents",
+  "token": "default",
+  "request": {
+   "method": "POST",
+   "path": "/v1/projects/fireemu-oracle-idp/locations/us-central1/channels/fe9e560c404162-pc-content-absent:publishEvents",
+   "body": {
+    "events": [
+     {
+      "@type": "type.googleapis.com/io.cloudevents.v1.CloudEvent",
+      "id": "fe9e560c404162-evt-22",
+      "source": "//fireemu/recorder/9e560c404162",
+      "specVersion": "1.0",
+      "type": "fireemu.recorder.v1.probe",
+      "attributes": {
+       "time": {
+        "ceTimestamp": "2026-10-05T06:17:30.509Z"
+       },
+       "datacontenttype": {
+        "ceString": "application/json"
+       }
+      },
+      "textData": "null"
+     }
+    ]
+   }
+  },
+  "response": {
+   "status": 404,
+   "body": {
+    "error": {
+     "code": 404,
+     "message": "Associated channel does not exist.",
+     "status": "NOT_FOUND"
+    }
+   }
+  }
+ },
+ {
+  "recording": "r2",
+  "n": 49,
+  "case": "publish-content",
+  "op": "publishEvents",
+  "token": "default",
+  "request": {
+   "method": "POST",
+   "path": "/v1/projects/fireemu-oracle-idp/locations/us-central1/channels/fe9e560c404162-pc-content-absent:publishEvents",
+   "body": {
+    "events": [
+     {
+      "@type": "type.googleapis.com/io.cloudevents.v1.CloudEvent",
+      "id": "fe9e560c404162-evt-23",
+      "source": "//fireemu/recorder/9e560c404162",
+      "specVersion": "1.0",
+      "type": "fireemu.recorder.v1.probe",
+      "attributes": {
+       "time": {
+        "ceTimestamp": "2026-10-05T06:17:31.527Z"
+       },
+       "datacontenttype": {
+        "ceString": "application/json"
+       }
+      },
+      "textData": "[1,2,3]"
+     }
+    ]
+   }
+  },
+  "response": {
+   "status": 404,
+   "body": {
+    "error": {
+     "code": 404,
+     "message": "Associated channel does not exist.",
+     "status": "NOT_FOUND"
+    }
+   }
+  }
+ },
+ {
+  "recording": "r2",
+  "n": 50,
+  "case": "publish-content",
+  "op": "publishEvents",
+  "token": "default",
+  "request": {
+   "method": "POST",
+   "path": "/v1/projects/fireemu-oracle-idp/locations/us-central1/channels/fe9e560c404162-pc-content-absent:publishEvents",
+   "body": {
+    "events": [
+     {
+      "@type": "type.googleapis.com/io.cloudevents.v1.CloudEvent",
+      "id": "fe9e560c404162-evt-24",
+      "source": "//fireemu/recorder/9e560c404162",
+      "specVersion": "1.0",
+      "type": "fireemu.recorder.v1.probe",
+      "attributes": {
+       "time": {
+        "ceTimestamp": "2026-10-05T06:17:32.662Z"
+       },
+       "datacontenttype": {
+        "ceString": "application/json"
+       }
+      },
+      "textData": "{"
+     }
+    ]
+   }
+  },
+  "response": {
+   "status": 404,
+   "body": {
+    "error": {
+     "code": 404,
+     "message": "Associated channel does not exist.",
+     "status": "NOT_FOUND"
+    }
+   }
+  }
+ },
+ {
+  "recording": "r2",
+  "n": 51,
+  "case": "publish-content",
+  "op": "publishEvents",
+  "token": "default",
+  "request": {
+   "method": "POST",
+   "path": "/v1/projects/fireemu-oracle-idp/locations/us-central1/channels/fe9e560c404162-pc-content-absent:publishEvents",
+   "body": {
+    "events": [
+     {
+      "@type": "type.googleapis.com/io.cloudevents.v1.CloudEvent",
+      "id": "fe9e560c404162-evt-25",
+      "source": "//fireemu/recorder/9e560c404162",
+      "specVersion": "1.0",
+      "type": "fireemu.recorder.v1.probe",
+      "attributes": {
+       "time": {
+        "ceTimestamp": "2026-10-05T06:17:33.935Z"
+       },
+       "datacontenttype": {
+        "ceString": "text/plain"
+       }
+      },
+      "textData": "plain text"
+     }
+    ]
+   }
+  },
+  "response": {
+   "status": 404,
+   "body": {
+    "error": {
+     "code": 404,
+     "message": "Associated channel does not exist.",
+     "status": "NOT_FOUND"
+    }
+   }
+  }
+ },
+ {
+  "recording": "r2",
+  "n": 52,
+  "case": "publish-content",
+  "op": "publishEvents",
+  "token": "default",
+  "request": {
+   "method": "POST",
+   "path": "/v1/projects/fireemu-oracle-idp/locations/us-central1/channels/fe9e560c404162-pc-content-absent:publishEvents",
+   "body": {
+    "events": [
+     {
+      "@type": "type.googleapis.com/io.cloudevents.v1.CloudEvent",
+      "id": "fe9e560c404162-evt-26",
+      "source": "//fireemu/recorder/9e560c404162",
+      "specVersion": "1.0",
+      "type": "fireemu.recorder.v1.probe",
+      "attributes": {
+       "time": {
+        "ceTimestamp": "2026-10-05T06:17:35.021Z"
+       },
+       "datacontenttype": {
+        "ceString": "application/octet-stream"
+       }
+      },
+      "binaryData": "AAEC/w=="
+     }
+    ]
+   }
+  },
+  "response": {
+   "status": 404,
+   "body": {
+    "error": {
+     "code": 404,
+     "message": "Associated channel does not exist.",
+     "status": "NOT_FOUND"
+    }
+   }
+  }
+ },
+ {
+  "recording": "r2",
+  "n": 53,
+  "case": "publish-content",
+  "op": "publishEvents",
+  "token": "default",
+  "request": {
+   "method": "POST",
+   "path": "/v1/projects/fireemu-oracle-idp/locations/us-central1/channels/fe9e560c404162-pc-content-absent:publishEvents",
+   "body": {
+    "events": [
+     {
+      "@type": "type.googleapis.com/io.cloudevents.v1.CloudEvent",
+      "id": "fe9e560c404162-evt-27",
+      "source": "//fireemu/recorder/9e560c404162",
+      "specVersion": "1.0",
+      "type": "fireemu.recorder.v1.probe",
+      "attributes": {
+       "time": {
+        "ceTimestamp": "2026-10-05T06:17:36.094Z"
+       },
+       "datacontenttype": {
+        "ceString": "application/json"
+       }
+      },
+      "binaryData": "***not base64***"
+     }
+    ]
+   }
+  },
+  "response": {
+   "status": 400,
+   "body": {
+    "error": {
+     "code": 400,
+     "message": "Invalid value at 'binary_data' (TYPE_BYTES), Base64 decoding failed for \"***not base64***\"",
+     "status": "INVALID_ARGUMENT",
+     "details": [
+      {
+       "@type": "type.googleapis.com/google.rpc.BadRequest",
+       "fieldViolations": [
+        {
+         "field": "binary_data",
+         "description": "Invalid value at 'binary_data' (TYPE_BYTES), Base64 decoding failed for \"***not base64***\""
+        }
+       ]
+      }
+     ]
+    }
+   }
+  }
+ },
+ {
+  "recording": "r2",
+  "n": 54,
+  "case": "publish-content",
+  "op": "publishEvents",
+  "token": "default",
+  "request": {
+   "method": "POST",
+   "path": "/v1/projects/fireemu-oracle-idp/locations/us-central1/channels/fe9e560c404162-pc-content-absent:publishEvents",
+   "body": {
+    "events": [
+     {
+      "@type": "type.googleapis.com/io.cloudevents.v1.CloudEvent",
+      "id": "fe9e560c404162-evt-28",
+      "source": "//fireemu/recorder/9e560c404162",
+      "specVersion": "1.0",
+      "type": "fireemu.recorder.v1.probe",
+      "attributes": {
+       "time": {
+        "ceTimestamp": "2026-10-05T06:17:37.248Z"
+       },
+       "datacontenttype": {
+        "ceString": "application/json"
+       }
+      },
+      "textData": "{\"probe\":true}",
+      "binaryData": "eA=="
+     }
+    ]
+   }
+  },
+  "response": {
+   "status": 400,
+   "body": {
+    "error": {
+     "code": 400,
+     "message": "Invalid value (oneof), oneof field 'data' is already set. Cannot set 'binaryData'",
+     "status": "INVALID_ARGUMENT",
+     "details": [
+      {
+       "@type": "type.googleapis.com/google.rpc.BadRequest",
+       "fieldViolations": [
+        {
+         "description": "Invalid value (oneof), oneof field 'data' is already set. Cannot set 'binaryData'"
+        }
+       ]
+      }
+     ]
+    }
+   }
+  }
+ },
+ {
+  "recording": "r2",
+  "n": 55,
+  "case": "publish-content",
+  "op": "publishEvents",
+  "token": "default",
+  "request": {
+   "method": "POST",
+   "path": "/v1/projects/fireemu-oracle-idp/locations/us-central1/channels/fe9e560c404162-pc-content-absent:publishEvents",
+   "body": {
+    "events": [
+     {
+      "@type": "type.googleapis.com/io.cloudevents.v1.CloudEvent",
+      "id": "fe9e560c404162-evt-29",
+      "source": "//fireemu/recorder/9e560c404162",
+      "specVersion": "1.0",
+      "type": "fireemu.recorder.v1.probe",
+      "attributes": {
+       "time": {
+        "ceTimestamp": "2026-10-05T06:17:38.282Z"
+       },
+       "datacontenttype": {
+        "ceString": "application/json"
+       }
+      }
+     }
+    ]
+   }
+  },
+  "response": {
+   "status": 404,
+   "body": {
+    "error": {
+     "code": 404,
+     "message": "Associated channel does not exist.",
+     "status": "NOT_FOUND"
+    }
+   }
+  }
+ },
+ {
+  "recording": "r2",
+  "n": 56,
+  "case": "publish-content",
+  "op": "publishEvents",
+  "token": "default",
+  "request": {
+   "method": "POST",
+   "path": "/v1/projects/fireemu-oracle-idp/locations/us-central1/channels/fe9e560c404162-pc-content-absent:publishEvents",
+   "body": {
+    "events": [
+     {
+      "@type": "type.googleapis.com/io.cloudevents.v1.CloudEvent",
+      "id": "fe9e560c404162-evt-30",
+      "source": "//fireemu/recorder/9e560c404162",
+      "specVersion": "1.0",
+      "type": "fireemu.recorder.v1.probe",
+      "attributes": {
+       "time": {
+        "ceTimestamp": "2026-10-05T06:17:39.338Z"
+       },
+       "datacontenttype": {
+        "ceString": "text/plain"
+       }
+      },
+      "textData": ""
+     }
+    ]
+   }
+  },
+  "response": {
+   "status": 404,
+   "body": {
+    "error": {
+     "code": 404,
+     "message": "Associated channel does not exist.",
+     "status": "NOT_FOUND"
+    }
+   }
+  }
+ },
+ {
+  "recording": "r2",
+  "n": 57,
+  "case": "publish-content",
+  "op": "publishEvents",
+  "token": "default",
+  "request": {
+   "method": "POST",
+   "path": "/v1/projects/fireemu-oracle-idp/locations/us-central1/channels/fe9e560c404162-pc-content-absent:publishEvents",
+   "body": {
+    "events": [
+     {
+      "@type": "type.googleapis.com/io.cloudevents.v1.CloudEvent",
+      "id": "fe9e560c404162-evt-31",
+      "source": "//fireemu/recorder/9e560c404162",
+      "specVersion": "1.0",
+      "type": "fireemu.recorder.v1.probe",
+      "attributes": {
+       "time": {
+        "ceTimestamp": "2026-10-05T06:17:40.376Z"
+       },
+       "datacontenttype": {
+        "ceString": "application/xml"
+       }
+      },
+      "textData": "x"
+     }
+    ]
+   }
+  },
+  "response": {
+   "status": 404,
+   "body": {
+    "error": {
+     "code": 404,
+     "message": "Associated channel does not exist.",
+     "status": "NOT_FOUND"
+    }
+   }
+  }
+ },
+ {
+  "recording": "r2",
+  "n": 58,
+  "case": "publish-limits",
+  "op": "createChannel",
+  "token": "default",
+  "request": {
+   "method": "POST",
+   "path": "/v1/projects/fireemu-oracle-idp/locations/us-central1/channels?channelId=fe9e560c404162-pl-limits",
+   "body": {}
+  },
+  "response": {
+   "status": 400,
+   "body": {
+    "error": {
+     "code": 400,
+     "message": "The request was invalid: channel.name is empty",
+     "status": "INVALID_ARGUMENT",
+     "details": [
+      {
+       "@type": "type.googleapis.com/google.rpc.BadRequest",
+       "fieldViolations": [
+        {
+         "field": "channel.name"
+        }
+       ]
+      },
+      {
+       "@type": "type.googleapis.com/google.rpc.RequestInfo",
+       "requestId": "8a7f2760ad19dd50"
+      }
+     ]
+    }
+   }
+  }
+ },
+ {
+  "recording": "r2",
+  "n": 59,
+  "case": "publish-limits",
+  "op": "publishEvents",
+  "token": "default",
+  "request": {
+   "method": "POST",
+   "path": "/v1/projects/fireemu-oracle-idp/locations/us-central1/channels/fe9e560c404162-pl-limits-absent:publishEvents",
+   "body": {
+    "events": {
+     "$repeat": {
+      "count": 256,
+      "template": {
+       "@type": "type.googleapis.com/io.cloudevents.v1.CloudEvent",
+       "id": "fe9e560c404162-evt-32",
+       "source": "//fireemu/recorder/9e560c404162",
+       "specVersion": "1.0",
+       "type": "fireemu.recorder.v1.probe",
+       "attributes": {
+        "time": {
+         "ceTimestamp": "2026-10-05T06:17:43.370Z"
+        },
+        "datacontenttype": {
+         "ceString": "application/json"
+        }
+       },
+       "textData": "1"
+      }
+     }
+    }
+   }
+  },
+  "response": {
+   "status": 400,
+   "body": {
+    "error": {
+     "code": 400,
+     "message": "Too many events.",
+     "status": "OUT_OF_RANGE",
+     "details": [
+      {
+       "@type": "type.googleapis.com/google.rpc.BadRequest",
+       "fieldViolations": [
+        {
+         "field": "events",
+         "description": "Too many events."
+        }
+       ]
+      }
+     ]
+    }
+   }
+  }
+ },
+ {
+  "recording": "r2",
+  "n": 60,
+  "case": "publish-limits",
+  "op": "publishEvents",
+  "token": "default",
+  "request": {
+   "method": "POST",
+   "path": "/v1/projects/fireemu-oracle-idp/locations/us-central1/channels/fe9e560c404162-pl-limits-absent:publishEvents",
+   "body": {
+    "events": {
+     "$repeat": {
+      "count": 257,
+      "template": {
+       "@type": "type.googleapis.com/io.cloudevents.v1.CloudEvent",
+       "id": "fe9e560c404162-evt-288",
+       "source": "//fireemu/recorder/9e560c404162",
+       "specVersion": "1.0",
+       "type": "fireemu.recorder.v1.probe",
+       "attributes": {
+        "time": {
+         "ceTimestamp": "2026-10-05T06:17:44.920Z"
+        },
+        "datacontenttype": {
+         "ceString": "application/json"
+        }
+       },
+       "textData": "1"
+      }
+     }
+    }
+   }
+  },
+  "response": {
+   "status": 400,
+   "body": {
+    "error": {
+     "code": 400,
+     "message": "Too many events.",
+     "status": "OUT_OF_RANGE",
+     "details": [
+      {
+       "@type": "type.googleapis.com/google.rpc.BadRequest",
+       "fieldViolations": [
+        {
+         "field": "events",
+         "description": "Too many events."
+        }
+       ]
+      }
+     ]
+    }
+   }
+  }
+ },
+ {
+  "recording": "r2",
+  "n": 61,
+  "case": "publish-limits",
+  "op": "publishEvents",
+  "token": "default",
+  "request": {
+   "method": "POST",
+   "path": "/v1/projects/fireemu-oracle-idp/locations/us-central1/channels/fe9e560c404162-pl-limits-absent:publishEvents",
+   "body": {
+    "events": {
+     "$repeat": {
+      "count": 1000,
+      "template": {
+       "@type": "type.googleapis.com/io.cloudevents.v1.CloudEvent",
+       "id": "fe9e560c404162-evt-545",
+       "source": "//fireemu/recorder/9e560c404162",
+       "specVersion": "1.0",
+       "type": "fireemu.recorder.v1.probe",
+       "attributes": {
+        "time": {
+         "ceTimestamp": "2026-10-05T06:17:46.176Z"
+        },
+        "datacontenttype": {
+         "ceString": "application/json"
+        }
+       },
+       "textData": "1"
+      }
+     }
+    }
+   }
+  },
+  "response": {
+   "status": 400,
+   "body": {
+    "error": {
+     "code": 400,
+     "message": "Too many events.",
+     "status": "OUT_OF_RANGE",
+     "details": [
+      {
+       "@type": "type.googleapis.com/google.rpc.BadRequest",
+       "fieldViolations": [
+        {
+         "field": "events",
+         "description": "Too many events."
+        }
+       ]
+      }
+     ]
+    }
+   }
+  }
+ },
+ {
+  "recording": "r2",
+  "n": 62,
+  "case": "publish-limits",
+  "op": "publishEvents",
+  "token": "default",
+  "request": {
+   "method": "POST",
+   "path": "/v1/projects/fireemu-oracle-idp/locations/us-central1/channels/fe9e560c404162-pl-limits-absent:publishEvents",
+   "body": {
+    "events": [
+     {
+      "@type": "type.googleapis.com/io.cloudevents.v1.CloudEvent",
+      "id": "fe9e560c404162-evt-1545",
+      "source": "//fireemu/recorder/9e560c404162",
+      "specVersion": "1.0",
+      "type": "fireemu.recorder.v1.probe",
+      "attributes": {
+       "time": {
+        "ceTimestamp": "2026-10-05T06:17:48.679Z"
+       },
+       "datacontenttype": {
+        "ceString": "application/json"
+       }
+      },
+      "textData": {
+       "omitted": {
+        "length": 262144,
+        "sha256": "932b4f73150e66f729e02758780d5891a07712d208a9151fe7ea69363260e419"
+       }
+      }
+     }
+    ]
+   }
+  },
+  "response": {
+   "status": 404,
+   "body": {
+    "error": {
+     "code": 404,
+     "message": "Associated channel does not exist.",
+     "status": "NOT_FOUND"
+    }
+   }
+  }
+ },
+ {
+  "recording": "r2",
+  "n": 63,
+  "case": "publish-limits",
+  "op": "publishEvents",
+  "token": "default",
+  "request": {
+   "method": "POST",
+   "path": "/v1/projects/fireemu-oracle-idp/locations/us-central1/channels/fe9e560c404162-pl-limits-absent:publishEvents",
+   "body": {
+    "events": [
+     {
+      "@type": "type.googleapis.com/io.cloudevents.v1.CloudEvent",
+      "id": "fe9e560c404162-evt-1546",
+      "source": "//fireemu/recorder/9e560c404162",
+      "specVersion": "1.0",
+      "type": "fireemu.recorder.v1.probe",
+      "attributes": {
+       "time": {
+        "ceTimestamp": "2026-10-05T06:17:50.896Z"
+       },
+       "datacontenttype": {
+        "ceString": "application/json"
+       }
+      },
+      "textData": {
+       "omitted": {
+        "length": 1048576,
+        "sha256": "9a0a2a51df0699027c0a68f2854ed250e4005dc0cfbe0ecfb6bff016dbd26b06"
+       }
+      }
+     }
+    ]
+   }
+  },
+  "response": {
+   "status": 400,
+   "body": {
+    "error": {
+     "code": 400,
+     "message": "The event size (1048883 bytes) is too large. The maximum size is 524288 bytes.",
+     "status": "INVALID_ARGUMENT",
+     "details": [
+      {
+       "@type": "type.googleapis.com/google.rpc.BadRequest",
+       "fieldViolations": [
+        {
+         "field": "events[0]",
+         "description": "The event size (1048883 bytes) is too large. The maximum size is 524288 bytes."
+        }
+       ]
+      }
+     ]
+    }
+   }
+  }
+ },
+ {
+  "recording": "r2",
+  "n": 64,
+  "case": "publish-limits",
+  "op": "publishEvents",
+  "token": "default",
+  "request": {
+   "method": "POST",
+   "path": "/v1/projects/fireemu-oracle-idp/locations/us-central1/channels/fe9e560c404162-pl-limits-absent:publishEvents",
+   "body": {
+    "events": [
+     {
+      "@type": "type.googleapis.com/io.cloudevents.v1.CloudEvent",
+      "id": "fe9e560c404162-evt-1547",
+      "source": "//fireemu/recorder/9e560c404162",
+      "specVersion": "1.0",
+      "type": "fireemu.recorder.v1.probe",
+      "attributes": {
+       "time": {
+        "ceTimestamp": "2026-10-05T06:17:56.927Z"
+       },
+       "datacontenttype": {
+        "ceString": "application/json"
+       }
+      },
+      "textData": {
+       "omitted": {
+        "length": 4194304,
+        "sha256": "0d0185c357a7bf84cb1c36a28fb7f5e13e2b4a1125a56685ded7fc03072dc6c4"
+       }
+      }
+     }
+    ]
+   }
+  },
+  "response": {
+   "status": 400,
+   "body": {
+    "error": {
+     "code": 400,
+     "message": "The event size (4194614 bytes) is too large. The maximum size is 524288 bytes.",
+     "status": "INVALID_ARGUMENT",
+     "details": [
+      {
+       "@type": "type.googleapis.com/google.rpc.BadRequest",
+       "fieldViolations": [
+        {
+         "field": "events[0]",
+         "description": "The event size (4194614 bytes) is too large. The maximum size is 524288 bytes."
+        }
+       ]
+      }
+     ]
+    }
+   }
+  }
+ },
+ {
+  "recording": "r2",
+  "n": 65,
+  "case": "publish-limits",
+  "op": "publishEvents",
+  "token": "default",
+  "request": {
+   "method": "POST",
+   "path": "/v1/projects/fireemu-oracle-idp/locations/us-central1/channels/fe9e560c404162-pl-limits-absent:publishEvents",
+   "body": {
+    "events": [
+     {
+      "@type": "type.googleapis.com/io.cloudevents.v1.CloudEvent",
+      "id": "fe9e560c404162-evt-1548",
+      "source": "//fireemu/recorder/9e560c404162",
+      "specVersion": "1.0",
+      "type": "fireemu.recorder.v1.probe",
+      "attributes": {
+       "time": {
+        "ceTimestamp": "2026-10-05T06:18:18.398Z"
+       },
+       "datacontenttype": {
+        "ceString": "application/json"
+       }
+      },
+      "textData": {
+       "omitted": {
+        "length": 10485760,
+        "sha256": "0c2055ce39d7e1b19f14fac6a47268a2293992ae3b62c1a3359df888e6421422"
+       }
+      }
+     }
+    ]
+   }
+  },
+  "response": {
+   "status": 400,
+   "body": {
+    "error": {
+     "code": 400,
+     "message": "The event size (10486070 bytes) is too large. The maximum size is 524288 bytes.",
+     "status": "INVALID_ARGUMENT",
+     "details": [
+      {
+       "@type": "type.googleapis.com/google.rpc.BadRequest",
+       "fieldViolations": [
+        {
+         "field": "events[0]",
+         "description": "The event size (10486070 bytes) is too large. The maximum size is 524288 bytes."
+        }
+       ]
+      }
+     ]
+    }
+   }
+  }
+ },
+ {
+  "recording": "r2",
+  "n": 66,
+  "case": "publish-limits",
+  "op": "publishEvents",
+  "token": "default",
+  "request": {
+   "method": "POST",
+   "path": "/v1/projects/fireemu-oracle-idp/locations/us-central1/channels/fe9e560c404162-pl-limits-absent:publishEvents",
+   "body": {
+    "events": [
+     {
+      "@type": "type.googleapis.com/io.cloudevents.v1.CloudEvent",
+      "id": "fe9e560c404162-evt-1549",
+      "source": "//fireemu/recorder/9e560c404162",
+      "specVersion": "1.0",
+      "type": "fireemu.recorder.v1.probe",
+      "attributes": {
+       "time": {
+        "ceTimestamp": "2026-10-05T06:19:07.409Z"
+       },
+       "datacontenttype": {
+        "ceString": "application/json"
+       }
+      },
+      "textData": {
+       "omitted": {
+        "length": 131072,
+        "sha256": "27dd208701abee92a42a0dcfb3d8cafc4ba2a91c2e549c6edd788642708ed09b"
+       }
+      }
+     },
+     {
+      "@type": "type.googleapis.com/io.cloudevents.v1.CloudEvent",
+      "id": "fe9e560c404162-evt-1550",
+      "source": "//fireemu/recorder/9e560c404162",
+      "specVersion": "1.0",
+      "type": "fireemu.recorder.v1.probe",
+      "attributes": {
+       "time": {
+        "ceTimestamp": "2026-10-05T06:19:07.409Z"
+       },
+       "datacontenttype": {
+        "ceString": "application/json"
+       }
+      },
+      "textData": {
+       "omitted": {
+        "length": 131072,
+        "sha256": "27dd208701abee92a42a0dcfb3d8cafc4ba2a91c2e549c6edd788642708ed09b"
+       }
+      }
+     },
+     {
+      "@type": "type.googleapis.com/io.cloudevents.v1.CloudEvent",
+      "id": "fe9e560c404162-evt-1551",
+      "source": "//fireemu/recorder/9e560c404162",
+      "specVersion": "1.0",
+      "type": "fireemu.recorder.v1.probe",
+      "attributes": {
+       "time": {
+        "ceTimestamp": "2026-10-05T06:19:07.409Z"
+       },
+       "datacontenttype": {
+        "ceString": "application/json"
+       }
+      },
+      "textData": {
+       "omitted": {
+        "length": 131072,
+        "sha256": "27dd208701abee92a42a0dcfb3d8cafc4ba2a91c2e549c6edd788642708ed09b"
+       }
+      }
+     },
+     {
+      "@type": "type.googleapis.com/io.cloudevents.v1.CloudEvent",
+      "id": "fe9e560c404162-evt-1552",
+      "source": "//fireemu/recorder/9e560c404162",
+      "specVersion": "1.0",
+      "type": "fireemu.recorder.v1.probe",
+      "attributes": {
+       "time": {
+        "ceTimestamp": "2026-10-05T06:19:07.410Z"
+       },
+       "datacontenttype": {
+        "ceString": "application/json"
+       }
+      },
+      "textData": {
+       "omitted": {
+        "length": 131072,
+        "sha256": "27dd208701abee92a42a0dcfb3d8cafc4ba2a91c2e549c6edd788642708ed09b"
+       }
+      }
+     },
+     {
+      "@type": "type.googleapis.com/io.cloudevents.v1.CloudEvent",
+      "id": "fe9e560c404162-evt-1553",
+      "source": "//fireemu/recorder/9e560c404162",
+      "specVersion": "1.0",
+      "type": "fireemu.recorder.v1.probe",
+      "attributes": {
+       "time": {
+        "ceTimestamp": "2026-10-05T06:19:07.410Z"
+       },
+       "datacontenttype": {
+        "ceString": "application/json"
+       }
+      },
+      "textData": {
+       "omitted": {
+        "length": 131072,
+        "sha256": "27dd208701abee92a42a0dcfb3d8cafc4ba2a91c2e549c6edd788642708ed09b"
+       }
+      }
+     },
+     {
+      "@type": "type.googleapis.com/io.cloudevents.v1.CloudEvent",
+      "id": "fe9e560c404162-evt-1554",
+      "source": "//fireemu/recorder/9e560c404162",
+      "specVersion": "1.0",
+      "type": "fireemu.recorder.v1.probe",
+      "attributes": {
+       "time": {
+        "ceTimestamp": "2026-10-05T06:19:07.410Z"
+       },
+       "datacontenttype": {
+        "ceString": "application/json"
+       }
+      },
+      "textData": {
+       "omitted": {
+        "length": 131072,
+        "sha256": "27dd208701abee92a42a0dcfb3d8cafc4ba2a91c2e549c6edd788642708ed09b"
+       }
+      }
+     },
+     {
+      "@type": "type.googleapis.com/io.cloudevents.v1.CloudEvent",
+      "id": "fe9e560c404162-evt-1555",
+      "source": "//fireemu/recorder/9e560c404162",
+      "specVersion": "1.0",
+      "type": "fireemu.recorder.v1.probe",
+      "attributes": {
+       "time": {
+        "ceTimestamp": "2026-10-05T06:19:07.410Z"
+       },
+       "datacontenttype": {
+        "ceString": "application/json"
+       }
+      },
+      "textData": {
+       "omitted": {
+        "length": 131072,
+        "sha256": "27dd208701abee92a42a0dcfb3d8cafc4ba2a91c2e549c6edd788642708ed09b"
+       }
+      }
+     },
+     {
+      "@type": "type.googleapis.com/io.cloudevents.v1.CloudEvent",
+      "id": "fe9e560c404162-evt-1556",
+      "source": "//fireemu/recorder/9e560c404162",
+      "specVersion": "1.0",
+      "type": "fireemu.recorder.v1.probe",
+      "attributes": {
+       "time": {
+        "ceTimestamp": "2026-10-05T06:19:07.410Z"
+       },
+       "datacontenttype": {
+        "ceString": "application/json"
+       }
+      },
+      "textData": {
+       "omitted": {
+        "length": 131072,
+        "sha256": "27dd208701abee92a42a0dcfb3d8cafc4ba2a91c2e549c6edd788642708ed09b"
+       }
+      }
+     }
+    ]
+   }
+  },
+  "response": {
+   "status": 404,
+   "body": {
+    "error": {
+     "code": 404,
+     "message": "Associated channel does not exist.",
+     "status": "NOT_FOUND"
+    }
+   }
+  }
+ },
+ {
+  "recording": "r2",
+  "n": 67,
+  "case": "publish-limits",
+  "op": "publishEvents",
+  "token": "default",
+  "request": {
+   "method": "POST",
+   "path": "/v1/projects/fireemu-oracle-idp/locations/us-central1/channels/fe9e560c404162-pl-limits-absent:publishEvents",
+   "body": {
+    "events": [
+     {
+      "@type": "type.googleapis.com/io.cloudevents.v1.CloudEvent",
+      "id": "fe9e560c404162-evt-1557",
+      "source": "//fireemu/recorder/9e560c404162",
+      "specVersion": "1.0",
+      "type": "fireemu.recorder.v1.probe",
+      "attributes": {
+       "time": {
+        "ceTimestamp": "2026-10-05T06:19:12.931Z"
+       },
+       "datacontenttype": {
+        "ceString": "application/json"
+       }
+      },
+      "textData": {
+       "omitted": {
+        "length": 1048576,
+        "sha256": "9a0a2a51df0699027c0a68f2854ed250e4005dc0cfbe0ecfb6bff016dbd26b06"
+       }
+      }
+     },
+     {
+      "@type": "type.googleapis.com/io.cloudevents.v1.CloudEvent",
+      "id": "fe9e560c404162-evt-1558",
+      "source": "//fireemu/recorder/9e560c404162",
+      "specVersion": "1.0",
+      "type": "fireemu.recorder.v1.probe",
+      "attributes": {
+       "time": {
+        "ceTimestamp": "2026-10-05T06:19:12.932Z"
+       },
+       "datacontenttype": {
+        "ceString": "application/json"
+       }
+      },
+      "textData": {
+       "omitted": {
+        "length": 1048576,
+        "sha256": "9a0a2a51df0699027c0a68f2854ed250e4005dc0cfbe0ecfb6bff016dbd26b06"
+       }
+      }
+     },
+     {
+      "@type": "type.googleapis.com/io.cloudevents.v1.CloudEvent",
+      "id": "fe9e560c404162-evt-1559",
+      "source": "//fireemu/recorder/9e560c404162",
+      "specVersion": "1.0",
+      "type": "fireemu.recorder.v1.probe",
+      "attributes": {
+       "time": {
+        "ceTimestamp": "2026-10-05T06:19:12.932Z"
+       },
+       "datacontenttype": {
+        "ceString": "application/json"
+       }
+      },
+      "textData": {
+       "omitted": {
+        "length": 1048576,
+        "sha256": "9a0a2a51df0699027c0a68f2854ed250e4005dc0cfbe0ecfb6bff016dbd26b06"
+       }
+      }
+     },
+     {
+      "@type": "type.googleapis.com/io.cloudevents.v1.CloudEvent",
+      "id": "fe9e560c404162-evt-1560",
+      "source": "//fireemu/recorder/9e560c404162",
+      "specVersion": "1.0",
+      "type": "fireemu.recorder.v1.probe",
+      "attributes": {
+       "time": {
+        "ceTimestamp": "2026-10-05T06:19:12.933Z"
+       },
+       "datacontenttype": {
+        "ceString": "application/json"
+       }
+      },
+      "textData": {
+       "omitted": {
+        "length": 1048576,
+        "sha256": "9a0a2a51df0699027c0a68f2854ed250e4005dc0cfbe0ecfb6bff016dbd26b06"
+       }
+      }
+     },
+     {
+      "@type": "type.googleapis.com/io.cloudevents.v1.CloudEvent",
+      "id": "fe9e560c404162-evt-1561",
+      "source": "//fireemu/recorder/9e560c404162",
+      "specVersion": "1.0",
+      "type": "fireemu.recorder.v1.probe",
+      "attributes": {
+       "time": {
+        "ceTimestamp": "2026-10-05T06:19:12.933Z"
+       },
+       "datacontenttype": {
+        "ceString": "application/json"
+       }
+      },
+      "textData": {
+       "omitted": {
+        "length": 1048576,
+        "sha256": "9a0a2a51df0699027c0a68f2854ed250e4005dc0cfbe0ecfb6bff016dbd26b06"
+       }
+      }
+     },
+     {
+      "@type": "type.googleapis.com/io.cloudevents.v1.CloudEvent",
+      "id": "fe9e560c404162-evt-1562",
+      "source": "//fireemu/recorder/9e560c404162",
+      "specVersion": "1.0",
+      "type": "fireemu.recorder.v1.probe",
+      "attributes": {
+       "time": {
+        "ceTimestamp": "2026-10-05T06:19:12.934Z"
+       },
+       "datacontenttype": {
+        "ceString": "application/json"
+       }
+      },
+      "textData": {
+       "omitted": {
+        "length": 1048576,
+        "sha256": "9a0a2a51df0699027c0a68f2854ed250e4005dc0cfbe0ecfb6bff016dbd26b06"
+       }
+      }
+     },
+     {
+      "@type": "type.googleapis.com/io.cloudevents.v1.CloudEvent",
+      "id": "fe9e560c404162-evt-1563",
+      "source": "//fireemu/recorder/9e560c404162",
+      "specVersion": "1.0",
+      "type": "fireemu.recorder.v1.probe",
+      "attributes": {
+       "time": {
+        "ceTimestamp": "2026-10-05T06:19:12.934Z"
+       },
+       "datacontenttype": {
+        "ceString": "application/json"
+       }
+      },
+      "textData": {
+       "omitted": {
+        "length": 1048576,
+        "sha256": "9a0a2a51df0699027c0a68f2854ed250e4005dc0cfbe0ecfb6bff016dbd26b06"
+       }
+      }
+     },
+     {
+      "@type": "type.googleapis.com/io.cloudevents.v1.CloudEvent",
+      "id": "fe9e560c404162-evt-1564",
+      "source": "//fireemu/recorder/9e560c404162",
+      "specVersion": "1.0",
+      "type": "fireemu.recorder.v1.probe",
+      "attributes": {
+       "time": {
+        "ceTimestamp": "2026-10-05T06:19:12.935Z"
+       },
+       "datacontenttype": {
+        "ceString": "application/json"
+       }
+      },
+      "textData": {
+       "omitted": {
+        "length": 1048576,
+        "sha256": "9a0a2a51df0699027c0a68f2854ed250e4005dc0cfbe0ecfb6bff016dbd26b06"
+       }
+      }
+     }
+    ]
+   }
+  },
+  "response": {
+   "status": 400,
+   "body": {
+    "error": {
+     "code": 400,
+     "message": "The event size (8390420 bytes) is too large. The maximum size is 524288 bytes.",
+     "status": "INVALID_ARGUMENT",
+     "details": [
+      {
+       "@type": "type.googleapis.com/google.rpc.BadRequest",
+       "fieldViolations": [
+        {
+         "field": "events[0]",
+         "description": "The event size (8390420 bytes) is too large. The maximum size is 524288 bytes."
+        },
+        {
+         "field": "events[1]",
+         "description": "The event size (8390420 bytes) is too large. The maximum size is 524288 bytes."
+        },
+        {
+         "field": "events[2]",
+         "description": "The event size (8390420 bytes) is too large. The maximum size is 524288 bytes."
+        },
+        {
+         "field": "events[3]",
+         "description": "The event size (8390420 bytes) is too large. The maximum size is 524288 bytes."
+        },
+        {
+         "field": "events[4]",
+         "description": "The event size (8390420 bytes) is too large. The maximum size is 524288 bytes."
+        },
+        {
+         "field": "events[5]",
+         "description": "The event size (8390420 bytes) is too large. The maximum size is 524288 bytes."
+        },
+        {
+         "field": "events[6]",
+         "description": "The event size (8390420 bytes) is too large. The maximum size is 524288 bytes."
+        },
+        {
+         "field": "events[7]",
+         "description": "The event size (8390420 bytes) is too large. The maximum size is 524288 bytes."
+        }
+       ]
+      }
+     ]
+    }
+   }
+  }
+ },
+ {
+  "recording": "r2",
+  "n": 68,
+  "case": "publish-limits",
+  "op": "publishEvents",
+  "token": "default",
+  "request": {
+   "method": "POST",
+   "path": "/v1/projects/fireemu-oracle-idp/locations/us-central1/channels/fe9e560c404162-pl-limits-absent:publishEvents",
+   "body": {
+    "events": [
+     {
+      "@type": "type.googleapis.com/io.cloudevents.v1.CloudEvent",
+      "id": "fe9e560c404162-evt-1565",
+      "source": "//fireemu/recorder/9e560c404162",
+      "specVersion": "1.0",
+      "type": "fireemu.recorder.v1.probe",
+      "attributes": {
+       "time": {
+        "ceTimestamp": "2026-10-05T06:19:58.984Z"
+       },
+       "datacontenttype": {
+        "ceString": "application/json"
+       },
+       "ext0": {
+        "ceString": "v"
+       },
+       "ext1": {
+        "ceString": "v"
+       },
+       "ext2": {
+        "ceString": "v"
+       },
+       "ext3": {
+        "ceString": "v"
+       },
+       "ext4": {
+        "ceString": "v"
+       },
+       "ext5": {
+        "ceString": "v"
+       },
+       "ext6": {
+        "ceString": "v"
+       },
+       "ext7": {
+        "ceString": "v"
+       },
+       "ext8": {
+        "ceString": "v"
+       },
+       "ext9": {
+        "ceString": "v"
+       },
+       "ext10": {
+        "ceString": "v"
+       },
+       "ext11": {
+        "ceString": "v"
+       },
+       "ext12": {
+        "ceString": "v"
+       },
+       "ext13": {
+        "ceString": "v"
+       },
+       "ext14": {
+        "ceString": "v"
+       },
+       "ext15": {
+        "ceString": "v"
+       },
+       "ext16": {
+        "ceString": "v"
+       },
+       "ext17": {
+        "ceString": "v"
+       },
+       "ext18": {
+        "ceString": "v"
+       },
+       "ext19": {
+        "ceString": "v"
+       },
+       "ext20": {
+        "ceString": "v"
+       },
+       "ext21": {
+        "ceString": "v"
+       },
+       "ext22": {
+        "ceString": "v"
+       },
+       "ext23": {
+        "ceString": "v"
+       },
+       "ext24": {
+        "ceString": "v"
+       },
+       "ext25": {
+        "ceString": "v"
+       },
+       "ext26": {
+        "ceString": "v"
+       },
+       "ext27": {
+        "ceString": "v"
+       },
+       "ext28": {
+        "ceString": "v"
+       },
+       "ext29": {
+        "ceString": "v"
+       },
+       "ext30": {
+        "ceString": "v"
+       },
+       "ext31": {
+        "ceString": "v"
+       },
+       "ext32": {
+        "ceString": "v"
+       },
+       "ext33": {
+        "ceString": "v"
+       },
+       "ext34": {
+        "ceString": "v"
+       },
+       "ext35": {
+        "ceString": "v"
+       },
+       "ext36": {
+        "ceString": "v"
+       },
+       "ext37": {
+        "ceString": "v"
+       },
+       "ext38": {
+        "ceString": "v"
+       },
+       "ext39": {
+        "ceString": "v"
+       },
+       "ext40": {
+        "ceString": "v"
+       },
+       "ext41": {
+        "ceString": "v"
+       },
+       "ext42": {
+        "ceString": "v"
+       },
+       "ext43": {
+        "ceString": "v"
+       },
+       "ext44": {
+        "ceString": "v"
+       },
+       "ext45": {
+        "ceString": "v"
+       },
+       "ext46": {
+        "ceString": "v"
+       },
+       "ext47": {
+        "ceString": "v"
+       },
+       "ext48": {
+        "ceString": "v"
+       },
+       "ext49": {
+        "ceString": "v"
+       },
+       "ext50": {
+        "ceString": "v"
+       },
+       "ext51": {
+        "ceString": "v"
+       },
+       "ext52": {
+        "ceString": "v"
+       },
+       "ext53": {
+        "ceString": "v"
+       },
+       "ext54": {
+        "ceString": "v"
+       },
+       "ext55": {
+        "ceString": "v"
+       },
+       "ext56": {
+        "ceString": "v"
+       },
+       "ext57": {
+        "ceString": "v"
+       },
+       "ext58": {
+        "ceString": "v"
+       },
+       "ext59": {
+        "ceString": "v"
+       },
+       "ext60": {
+        "ceString": "v"
+       },
+       "ext61": {
+        "ceString": "v"
+       },
+       "ext62": {
+        "ceString": "v"
+       },
+       "ext63": {
+        "ceString": "v"
+       },
+       "ext64": {
+        "ceString": "v"
+       },
+       "ext65": {
+        "ceString": "v"
+       },
+       "ext66": {
+        "ceString": "v"
+       },
+       "ext67": {
+        "ceString": "v"
+       },
+       "ext68": {
+        "ceString": "v"
+       },
+       "ext69": {
+        "ceString": "v"
+       },
+       "ext70": {
+        "ceString": "v"
+       },
+       "ext71": {
+        "ceString": "v"
+       },
+       "ext72": {
+        "ceString": "v"
+       },
+       "ext73": {
+        "ceString": "v"
+       },
+       "ext74": {
+        "ceString": "v"
+       },
+       "ext75": {
+        "ceString": "v"
+       },
+       "ext76": {
+        "ceString": "v"
+       },
+       "ext77": {
+        "ceString": "v"
+       },
+       "ext78": {
+        "ceString": "v"
+       },
+       "ext79": {
+        "ceString": "v"
+       },
+       "ext80": {
+        "ceString": "v"
+       },
+       "ext81": {
+        "ceString": "v"
+       },
+       "ext82": {
+        "ceString": "v"
+       },
+       "ext83": {
+        "ceString": "v"
+       },
+       "ext84": {
+        "ceString": "v"
+       },
+       "ext85": {
+        "ceString": "v"
+       },
+       "ext86": {
+        "ceString": "v"
+       },
+       "ext87": {
+        "ceString": "v"
+       },
+       "ext88": {
+        "ceString": "v"
+       },
+       "ext89": {
+        "ceString": "v"
+       },
+       "ext90": {
+        "ceString": "v"
+       },
+       "ext91": {
+        "ceString": "v"
+       },
+       "ext92": {
+        "ceString": "v"
+       },
+       "ext93": {
+        "ceString": "v"
+       },
+       "ext94": {
+        "ceString": "v"
+       },
+       "ext95": {
+        "ceString": "v"
+       },
+       "ext96": {
+        "ceString": "v"
+       },
+       "ext97": {
+        "ceString": "v"
+       },
+       "ext98": {
+        "ceString": "v"
+       },
+       "ext99": {
+        "ceString": "v"
+       }
+      },
+      "textData": "{\"probe\":true}"
+     }
+    ]
+   }
+  },
+  "response": {
+   "status": 404,
+   "body": {
+    "error": {
+     "code": 404,
+     "message": "Associated channel does not exist.",
+     "status": "NOT_FOUND"
+    }
+   }
+  }
+ },
+ {
+  "recording": "r2",
+  "n": 69,
+  "case": "publish-limits",
+  "op": "publishEvents",
+  "token": "default",
+  "request": {
+   "method": "POST",
+   "path": "/v1/projects/fireemu-oracle-idp/locations/us-central1/channels/fe9e560c404162-pl-limits-absent:publishEvents",
+   "body": {
+    "events": [
+     {
+      "@type": "type.googleapis.com/io.cloudevents.v1.CloudEvent",
+      "id": "fe9e560c404162-evt-1566",
+      "source": "//fireemu/recorder/9e560c404162",
+      "specVersion": "1.0",
+      "type": "fireemu.recorder.v1.probe",
+      "attributes": {
+       "time": {
+        "ceTimestamp": "2026-10-05T06:19:59.986Z"
+       },
+       "datacontenttype": {
+        "ceString": "application/json"
+       },
+       "naaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa": {
+        "ceString": "v"
+       }
+      },
+      "textData": "{\"probe\":true}"
+     }
+    ]
+   }
+  },
+  "response": {
+   "status": 404,
+   "body": {
+    "error": {
+     "code": 404,
+     "message": "Associated channel does not exist.",
+     "status": "NOT_FOUND"
+    }
+   }
+  }
+ },
+ {
+  "recording": "r2",
+  "n": 70,
+  "case": "publish-limits",
+  "op": "publishEvents",
+  "token": "default",
+  "request": {
+   "method": "POST",
+   "path": "/v1/projects/fireemu-oracle-idp/locations/us-central1/channels/fe9e560c404162-pl-limits-absent:publishEvents",
+   "body": {
+    "events": [
+     {
+      "@type": "type.googleapis.com/io.cloudevents.v1.CloudEvent",
+      "id": "fe9e560c404162-evt-1567",
+      "source": "//fireemu/recorder/9e560c404162",
+      "specVersion": "1.0",
+      "type": "fireemu.recorder.v1.probe",
+      "attributes": {
+       "time": {
+        "ceTimestamp": "2026-10-05T06:20:01.077Z"
+       },
+       "datacontenttype": {
+        "ceString": "application/json"
+       }
+      },
+      "textData": "{\"probe\":true}"
+     },
+     {
+      "@type": "type.googleapis.com/io.cloudevents.v1.CloudEvent",
+      "id": "fe9e560c404162-evt-1568",
+      "source": "//fireemu/recorder/9e560c404162",
+      "specVersion": "1.0",
+      "attributes": {
+       "time": {
+        "ceTimestamp": "2026-10-05T06:20:01.077Z"
+       },
+       "datacontenttype": {
+        "ceString": "application/json"
+       }
+      },
+      "textData": "{\"probe\":true}"
+     },
+     {
+      "@type": "type.googleapis.com/io.cloudevents.v1.CloudEvent",
+      "id": "fe9e560c404162-evt-1569",
+      "source": "//fireemu/recorder/9e560c404162",
+      "specVersion": "1.0",
+      "type": "fireemu.recorder.v1.probe",
+      "attributes": {
+       "time": {
+        "ceTimestamp": "2026-10-05T06:20:01.077Z"
+       },
+       "datacontenttype": {
+        "ceString": "application/json"
+       }
+      },
+      "textData": "{\"probe\":true}"
+     }
+    ]
+   }
+  },
+  "response": {
+   "status": 404,
+   "body": {
+    "error": {
+     "code": 404,
+     "message": "Associated channel does not exist.",
+     "status": "NOT_FOUND"
+    }
+   }
+  }
+ },
+ {
+  "recording": "r2",
+  "n": 71,
+  "case": "admin-sdk-publish",
+  "op": "createChannel",
+  "token": "default",
+  "request": {
+   "method": "POST",
+   "path": "/v1/projects/fireemu-oracle-idp/locations/us-central1/channels?channelId=fe9e560c404162-sd-sdk",
+   "body": {}
+  },
+  "response": {
+   "status": 400,
+   "body": {
+    "error": {
+     "code": 400,
+     "message": "The request was invalid: channel.name is empty",
+     "status": "INVALID_ARGUMENT",
+     "details": [
+      {
+       "@type": "type.googleapis.com/google.rpc.BadRequest",
+       "fieldViolations": [
+        {
+         "field": "channel.name"
+        }
+       ]
+      },
+      {
+       "@type": "type.googleapis.com/google.rpc.RequestInfo",
+       "requestId": "97bf3680b82ec003"
+      }
+     ]
+    }
+   }
+  }
+ },
+ {
+  "recording": "r2",
+  "n": 72,
+  "case": "admin-sdk-publish",
+  "op": "sdk.publishEvents",
+  "token": "default",
+  "request": {
+   "method": "POST",
+   "path": "/v1/projects/fireemu-oracle-idp/locations/us-central1/channels/fe9e560c404162-sd-sdk-absent:publishEvents",
+   "body": {
+    "events": [
+     {
+      "@type": "type.googleapis.com/io.cloudevents.v1.CloudEvent",
+      "id": "1a25bb57-6821-4cd0-8e21-4257b53f7860",
+      "type": "fireemu.recorder.v1.sdk",
+      "specVersion": "1.0",
+      "source": "//fireemu/recorder/9e560c404162",
+      "attributes": {
+       "time": {
+        "ceTimestamp": "2026-10-05T06:20:04.006Z"
+       },
+       "datacontenttype": {
+        "ceString": "application/json"
+       }
+      },
+      "textData": "{\"probe\":true}"
+     }
+    ]
+   }
+  },
+  "response": {
+   "status": 404,
+   "body": {
+    "error": {
+     "code": 404,
+     "message": "Associated channel does not exist.",
+     "status": "NOT_FOUND"
+    }
+   }
+  }
+ },
+ {
+  "recording": "r2",
+  "n": 73,
+  "case": "admin-sdk-publish",
+  "op": "sdk.publishEvents",
+  "token": "default",
+  "request": {
+   "method": "POST",
+   "path": "/v1/projects/fireemu-oracle-idp/locations/us-central1/channels/fe9e560c404162-sd-sdk-absent:publishEvents",
+   "body": {
+    "events": [
+     {
+      "@type": "type.googleapis.com/io.cloudevents.v1.CloudEvent",
+      "id": "21db79a4-5e40-4093-b0da-01cd8d00dd5b",
+      "type": "fireemu.recorder.v1.sdk",
+      "specVersion": "1.0",
+      "source": "//fireemu/recorder/9e560c404162",
+      "attributes": {
+       "time": {
+        "ceTimestamp": "2026-10-05T06:20:05.103Z"
+       },
+       "datacontenttype": {
+        "ceString": "application/json"
+       }
+      },
+      "textData": "{\"probe\":true}"
+     }
+    ]
+   }
+  },
+  "response": {
+   "status": 404,
+   "body": {
+    "error": {
+     "code": 404,
+     "message": "Associated channel does not exist.",
+     "status": "NOT_FOUND"
+    }
+   }
+  }
+ },
+ {
+  "recording": "r2",
+  "n": 74,
+  "case": "admin-sdk-publish",
+  "op": "sdk.publishEvents",
+  "token": "default",
+  "request": {
+   "method": "POST",
+   "path": "/v1/projects/fireemu-oracle-idp/locations/us-central1/channels/fe9e560c404162-sd-sdk-absent:publishEvents",
+   "body": {
+    "events": [
+     {
+      "@type": "type.googleapis.com/io.cloudevents.v1.CloudEvent",
+      "id": "c8cf53dd-7bd7-4499-b422-a764338871b5",
+      "type": "fireemu.recorder.v1.sdk",
+      "specVersion": "1.0",
+      "source": "//fireemu/recorder/9e560c404162",
+      "attributes": {
+       "time": {
+        "ceTimestamp": "2026-10-05T06:20:06.206Z"
+       },
+       "datacontenttype": {
+        "ceString": "application/json"
+       }
+      },
+      "textData": "{\"probe\":true}"
+     },
+     {
+      "@type": "type.googleapis.com/io.cloudevents.v1.CloudEvent",
+      "id": "e22a07a1-89c4-48ac-96f5-536c9b1e26ab",
+      "type": "fireemu.recorder.v1.sdk",
+      "specVersion": "1.0",
+      "source": "//fireemu/recorder/9e560c404162",
+      "attributes": {
+       "time": {
+        "ceTimestamp": "2026-10-05T06:20:06.206Z"
+       },
+       "datacontenttype": {
+        "ceString": "text/plain"
+       }
+      },
+      "textData": "text"
+     }
+    ]
+   }
+  },
+  "response": {
+   "status": 404,
+   "body": {
+    "error": {
+     "code": 404,
+     "message": "Associated channel does not exist.",
+     "status": "NOT_FOUND"
+    }
+   }
+  }
+ },
+ {
+  "recording": "r2",
+  "n": 75,
+  "case": "admin-sdk-publish",
+  "op": "sdk.publishEvents",
+  "token": "default",
+  "request": {
+   "method": "POST",
+   "path": "/v1/projects/fireemu-oracle-idp/locations/us-central1/channels/fe9e560c404162-sd-sdk-absent:publishEvents",
+   "body": {
+    "events": [
+     {
+      "@type": "type.googleapis.com/io.cloudevents.v1.CloudEvent",
+      "id": "fc83dea6-d792-492e-be78-a388ab4e300b",
+      "type": "fireemu.recorder.v1.sdk",
+      "specVersion": "1.0",
+      "source": "//fireemu/recorder/9e560c404162",
+      "attributes": {
+       "time": {
+        "ceTimestamp": "2026-10-05T06:20:07.299Z"
+       },
+       "datacontenttype": {
+        "ceString": "application/json"
+       }
+      },
+      "textData": "{\"probe\":true}"
+     }
+    ]
+   }
+  },
+  "response": {
+   "status": 404,
+   "body": {
+    "error": {
+     "code": 404,
+     "message": "Associated channel does not exist.",
+     "status": "NOT_FOUND"
+    }
+   }
+  }
+ },
+ {
+  "recording": "r2",
+  "n": 76,
+  "case": "admin-sdk-publish",
+  "op": "sdk.publishEvents",
+  "token": "default",
+  "request": {
+   "method": "POST",
+   "path": "/v1/projects/fireemu-oracle-idp/locations/us-central1/channels/fe9e560c404162-sd-sdk-absent:publishEvents",
+   "body": {
+    "events": [
+     {
+      "@type": "type.googleapis.com/io.cloudevents.v1.CloudEvent",
+      "id": "fe9e560c404162-sdk-id",
+      "type": "fireemu.recorder.v1.sdk",
+      "specVersion": "1.0",
+      "source": "//fireemu/recorder/9e560c404162",
+      "attributes": {
+       "time": {
+        "ceTimestamp": "2026-10-05T01:02:03.000Z"
+       },
+       "datacontenttype": {
+        "ceString": "application/json"
+       },
+       "subject": {
+        "ceString": "sdk-subject"
+       },
+       "custom": {
+        "ceString": "extension"
+       }
+      },
+      "textData": "{\"probe\":true}"
+     }
+    ]
+   }
+  },
+  "response": {
+   "status": 404,
+   "body": {
+    "error": {
+     "code": 404,
+     "message": "Associated channel does not exist.",
+     "status": "NOT_FOUND"
+    }
+   }
+  }
+ },
+ {
+  "recording": "r2",
+  "n": 77,
+  "case": "admin-sdk-publish",
+  "op": "getChannel",
+  "token": "default",
+  "request": {
+   "method": "GET",
+   "path": "/v1/projects/fireemu-oracle-idp/locations/us-central1/channels/firebase"
+  },
+  "response": {
+   "status": 404,
+   "body": {
+    "error": {
+     "code": 404,
+     "message": "Resource 'projects/fireemu-oracle-idp/locations/us-central1/channels/firebase' was not found",
+     "status": "NOT_FOUND",
+     "details": [
+      {
+       "@type": "type.googleapis.com/google.rpc.ResourceInfo",
+       "resourceName": "projects/fireemu-oracle-idp/locations/us-central1/channels/firebase"
+      }
+     ]
+    }
+   }
+  }
+ },
+ {
+  "recording": "r2",
+  "n": 78,
+  "case": "admin-sdk-publish",
+  "op": "sdk.publishEvents",
+  "token": "default",
+  "request": {
+   "method": "POST",
+   "path": "/v1/projects/fireemu-oracle-idp/locations/us-central1/channels/firebase:publishEvents",
+   "body": {
+    "events": [
+     {
+      "@type": "type.googleapis.com/io.cloudevents.v1.CloudEvent",
+      "id": "aadb3485-c3de-4dd2-8315-3a1eaed2953a",
+      "type": "fireemu.recorder.v1.sdk",
+      "specVersion": "1.0",
+      "source": "//fireemu/recorder/9e560c404162",
+      "attributes": {
+       "time": {
+        "ceTimestamp": "2026-10-05T06:20:10.662Z"
+       },
+       "datacontenttype": {
+        "ceString": "application/json"
+       }
+      },
+      "textData": "{\"probe\":true}"
+     }
+    ]
+   }
+  },
+  "response": {
+   "status": 404,
+   "body": {
+    "error": {
+     "code": 404,
+     "message": "Associated channel does not exist.",
+     "status": "NOT_FOUND"
+    }
+   }
+  }
+ },
+ {
+  "recording": "r2",
+  "n": 79,
+  "case": "auth-errors",
+  "op": "createChannel",
+  "token": "default",
+  "request": {
+   "method": "POST",
+   "path": "/v1/projects/fireemu-oracle-idp/locations/us-central1/channels?channelId=fe9e560c404162-ae-auth",
+   "body": {}
+  },
+  "response": {
+   "status": 400,
+   "body": {
+    "error": {
+     "code": 400,
+     "message": "The request was invalid: channel.name is empty",
+     "status": "INVALID_ARGUMENT",
+     "details": [
+      {
+       "@type": "type.googleapis.com/google.rpc.BadRequest",
+       "fieldViolations": [
+        {
+         "field": "channel.name"
+        }
+       ]
+      },
+      {
+       "@type": "type.googleapis.com/google.rpc.RequestInfo",
+       "requestId": "9e00c6a8451f0faf"
+      }
+     ]
+    }
+   }
+  }
+ },
+ {
+  "recording": "r2",
+  "n": 80,
+  "case": "auth-errors",
+  "op": "listChannels",
+  "token": "none",
+  "request": {
+   "method": "GET",
+   "path": "/v1/projects/fireemu-oracle-idp/locations/us-central1/channels"
+  },
+  "response": {
+   "status": 401,
+   "body": {
+    "error": {
+     "code": 401,
+     "message": "Request is missing required authentication credential. Expected OAuth 2 access token, login cookie or other valid authentication credential. See https://developers.google.com/identity/sign-in/web/devconsole-project.",
+     "status": "UNAUTHENTICATED",
+     "details": [
+      {
+       "@type": "type.googleapis.com/google.rpc.ErrorInfo",
+       "reason": "CREDENTIALS_MISSING",
+       "domain": "googleapis.com",
+       "metadata": {
+        "service": "eventarc.googleapis.com",
+        "method": "google.cloud.eventarc.v1.Eventarc.ListChannels"
+       }
+      }
+     ]
+    }
+   }
+  }
+ },
+ {
+  "recording": "r2",
+  "n": 81,
+  "case": "auth-errors",
+  "op": "publishEvents",
+  "token": "none",
+  "request": {
+   "method": "POST",
+   "path": "/v1/projects/fireemu-oracle-idp/locations/us-central1/channels/fe9e560c404162-ae-auth-absent:publishEvents",
+   "body": {
+    "events": [
+     {
+      "@type": "type.googleapis.com/io.cloudevents.v1.CloudEvent",
+      "id": "fe9e560c404162-evt-1570",
+      "source": "//fireemu/recorder/9e560c404162",
+      "specVersion": "1.0",
+      "type": "fireemu.recorder.v1.probe",
+      "attributes": {
+       "time": {
+        "ceTimestamp": "2026-10-05T06:20:14.483Z"
+       },
+       "datacontenttype": {
+        "ceString": "application/json"
+       }
+      },
+      "textData": "{\"probe\":true}"
+     }
+    ]
+   }
+  },
+  "response": {
+   "status": 401,
+   "body": {
+    "error": {
+     "code": 401,
+     "message": "Request is missing required authentication credential. Expected OAuth 2 access token, login cookie or other valid authentication credential. See https://developers.google.com/identity/sign-in/web/devconsole-project.",
+     "status": "UNAUTHENTICATED",
+     "details": [
+      {
+       "@type": "type.googleapis.com/google.rpc.ErrorInfo",
+       "reason": "CREDENTIALS_MISSING",
+       "domain": "googleapis.com",
+       "metadata": {
+        "method": "google.cloud.eventarc.publishing.v1.Publisher.PublishEvents",
+        "service": "eventarcpublishing.googleapis.com"
+       }
+      }
+     ]
+    }
+   }
+  }
+ },
+ {
+  "recording": "r2",
+  "n": 82,
+  "case": "auth-errors",
+  "op": "listChannels",
+  "token": "invalid",
+  "request": {
+   "method": "GET",
+   "path": "/v1/projects/fireemu-oracle-idp/locations/us-central1/channels"
+  },
+  "response": {
+   "status": 401,
+   "body": {
+    "error": {
+     "code": 401,
+     "message": "Request had invalid authentication credentials. Expected OAuth 2 access token, login cookie or other valid authentication credential. See https://developers.google.com/identity/sign-in/web/devconsole-project.",
+     "status": "UNAUTHENTICATED",
+     "details": [
+      {
+       "@type": "type.googleapis.com/google.rpc.ErrorInfo",
+       "reason": "CREDENTIALS_MISSING",
+       "metadata": {
+        "method": "google.cloud.eventarc.v1.Eventarc.ListChannels",
+        "service": "eventarc.googleapis.com"
+       }
+      }
+     ]
+    }
+   }
+  }
+ },
+ {
+  "recording": "r2",
+  "n": 83,
+  "case": "auth-errors",
+  "op": "publishEvents",
+  "token": "invalid",
+  "request": {
+   "method": "POST",
+   "path": "/v1/projects/fireemu-oracle-idp/locations/us-central1/channels/fe9e560c404162-ae-auth-absent:publishEvents",
+   "body": {
+    "events": [
+     {
+      "@type": "type.googleapis.com/io.cloudevents.v1.CloudEvent",
+      "id": "fe9e560c404162-evt-1571",
+      "source": "//fireemu/recorder/9e560c404162",
+      "specVersion": "1.0",
+      "type": "fireemu.recorder.v1.probe",
+      "attributes": {
+       "time": {
+        "ceTimestamp": "2026-10-05T06:20:16.574Z"
+       },
+       "datacontenttype": {
+        "ceString": "application/json"
+       }
+      },
+      "textData": "{\"probe\":true}"
+     }
+    ]
+   }
+  },
+  "response": {
+   "status": 401,
+   "body": {
+    "error": {
+     "code": 401,
+     "message": "Request had invalid authentication credentials. Expected OAuth 2 access token, login cookie or other valid authentication credential. See https://developers.google.com/identity/sign-in/web/devconsole-project.",
+     "status": "UNAUTHENTICATED",
+     "details": [
+      {
+       "@type": "type.googleapis.com/google.rpc.ErrorInfo",
+       "reason": "CREDENTIALS_MISSING",
+       "metadata": {
+        "method": "google.cloud.eventarc.publishing.v1.Publisher.PublishEvents",
+        "service": "eventarcpublishing.googleapis.com"
+       }
+      }
+     ]
+    }
+   }
+  }
+ },
+ {
+  "recording": "r2",
+  "n": 84,
+  "case": "auth-errors",
+  "op": "createChannel",
+  "token": "none",
+  "request": {
+   "method": "POST",
+   "path": "/v1/projects/fireemu-oracle-idp/locations/us-central1/channels?channelId=fe9e560c404162-ae-auth-absent-x",
+   "body": {}
+  },
+  "response": {
+   "status": 401,
+   "body": {
+    "error": {
+     "code": 401,
+     "message": "Request is missing required authentication credential. Expected OAuth 2 access token, login cookie or other valid authentication credential. See https://developers.google.com/identity/sign-in/web/devconsole-project.",
+     "status": "UNAUTHENTICATED",
+     "details": [
+      {
+       "@type": "type.googleapis.com/google.rpc.ErrorInfo",
+       "reason": "CREDENTIALS_MISSING",
+       "domain": "googleapis.com",
+       "metadata": {
+        "service": "eventarc.googleapis.com",
+        "method": "google.cloud.eventarc.v1.Eventarc.CreateChannel"
+       }
+      }
+     ]
+    }
+   }
+  }
+ },
+ {
+  "recording": "r2",
+  "n": 85,
+  "case": "auth-errors",
+  "op": "publishEvents",
+  "token": "default",
+  "request": {
+   "method": "POST",
+   "path": "/v1/projects/fireemu-oracle-idp/locations/us-central1/channels/fe9e560c404162-ae-never-created:publishEvents",
+   "body": {
+    "events": [
+     {
+      "@type": "type.googleapis.com/io.cloudevents.v1.CloudEvent",
+      "id": "fe9e560c404162-evt-1572",
+      "source": "//fireemu/recorder/9e560c404162",
+      "specVersion": "1.0",
+      "type": "fireemu.recorder.v1.probe",
+      "attributes": {
+       "time": {
+        "ceTimestamp": "2026-10-05T06:20:18.706Z"
+       },
+       "datacontenttype": {
+        "ceString": "application/json"
+       }
+      },
+      "textData": "{\"probe\":true}"
+     }
+    ]
+   }
+  },
+  "response": {
+   "status": 404,
+   "body": {
+    "error": {
+     "code": 404,
+     "message": "Associated channel does not exist.",
+     "status": "NOT_FOUND"
+    }
+   }
+  }
+ },
+ {
+  "recording": "r2",
+  "n": 86,
+  "case": "auth-errors",
+  "op": "publishEvents",
+  "token": "default",
+  "request": {
+   "method": "POST",
+   "path": "/v1/projects/fireemu-oracle-idp/locations/no-such-location1/channels/nowhere-pub:publishEvents",
+   "body": {
+    "events": [
+     {
+      "@type": "type.googleapis.com/io.cloudevents.v1.CloudEvent",
+      "id": "fe9e560c404162-evt-1573",
+      "source": "//fireemu/recorder/9e560c404162",
+      "specVersion": "1.0",
+      "type": "fireemu.recorder.v1.probe",
+      "attributes": {
+       "time": {
+        "ceTimestamp": "2026-10-05T06:20:19.763Z"
+       },
+       "datacontenttype": {
+        "ceString": "application/json"
+       }
+      },
+      "textData": "{\"probe\":true}"
+     }
+    ]
+   }
+  },
+  "response": {
+   "status": 404,
+   "body": {
+    "error": {
+     "code": 404,
+     "message": "Associated channel does not exist.",
+     "status": "NOT_FOUND"
+    }
+   }
+  }
+ },
+ {
+  "recording": "r2",
+  "n": 87,
+  "case": "auth-errors",
+  "op": "getChannel",
+  "token": "default",
+  "request": {
+   "method": "GET",
+   "path": "/v1/projects/fireemu-no-such-project-0/locations/us-central1/channels/x"
+  },
+  "response": {
+   "status": 403,
+   "body": {
+    "error": {
+     "code": 403,
+     "message": "Permission denied on resource project fireemu-no-such-project-0.",
+     "status": "PERMISSION_DENIED",
+     "details": [
+      {
+       "@type": "type.googleapis.com/google.rpc.ErrorInfo",
+       "reason": "CONSUMER_INVALID",
+       "domain": "googleapis.com",
+       "metadata": {
+        "service": "eventarc.googleapis.com",
+        "containerInfo": "fireemu-no-such-project-0",
+        "consumer": "projects/fireemu-no-such-project-0"
+       }
+      },
+      {
+       "@type": "type.googleapis.com/google.rpc.LocalizedMessage",
+       "locale": "en-US",
+       "message": "Permission denied on resource project fireemu-no-such-project-0."
+      },
+      {
+       "@type": "type.googleapis.com/google.rpc.Help",
+       "links": [
+        {
+         "description": "Google developers console",
+         "url": "https://console.developers.google.com"
+        }
+       ]
+      }
+     ]
+    }
+   }
+  }
+ },
+ {
+  "recording": "r2",
+  "n": 88,
+  "case": "cleanup",
+  "op": "listChannels",
+  "token": "default",
+  "request": {
+   "method": "GET",
+   "path": "/v1/projects/fireemu-oracle-idp/locations/us-central1/channels?pageSize=100"
+  },
+  "response": {
+   "status": 200,
+   "body": {}
+  }
+ }
+]

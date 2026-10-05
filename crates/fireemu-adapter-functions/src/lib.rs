@@ -9,10 +9,12 @@
 
 pub mod callable;
 pub mod eventarc;
+pub mod eventarc_strict;
 pub mod events;
 pub mod http;
 pub mod manifest_json;
 pub mod node_selection;
+pub mod ordered_json;
 pub mod protocol;
 pub mod runner;
 pub mod runtime;

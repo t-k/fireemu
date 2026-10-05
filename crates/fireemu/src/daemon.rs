@@ -1193,10 +1193,11 @@ async fn serve_suite(
     if let (Some(listener), Some(runtime)) = (eventarc_listener, functions_runtime.clone()) {
         spawn_server!(
             "Eventarc",
-            fireemu_adapter_functions::http::serve_eventarc(
+            fireemu_adapter_functions::http::serve_eventarc_with_profile(
                 listener,
                 runtime,
                 functions_http_admission.clone(),
+                functions_http_profile,
             )
         );
     }

@@ -16,6 +16,7 @@ import {
   comparePair,
   diffPaths,
   isServiceDisabled,
+  isServiceUsageRow,
   loadRows,
   main,
   maskEcho,
@@ -27,6 +28,7 @@ import {
   replay,
   requestBody,
   runIdOf,
+  serviceStateOf,
   sameJson,
   sizesFollowRequest,
   skipReason,
@@ -135,7 +137,8 @@ test("omitted text is rebuilt from its length and refused unless it matches the 
   assert.equal(requestBody({ request: { method: "GET", path: "/x" } }), undefined);
   assert.equal(
     skipReason({ op: "createChannel", request: { body: bad.request.body }, response: {} }),
-    "unreplayable-body",
+    null,
+    "an unreplayable body is not a skip",
   );
   assert.equal(requestBody({ request: { body: { a: [1, { b: "c" }] } } }).a[1].b, "c");
 });
@@ -178,10 +181,11 @@ test("the masks hide the request ID, the run ID in either case, a byte count and
   ]);
   assert.equal(maskRun(answer, RUN).error.message, "Resource 'x-<run>-y' and <RUN> (12 bytes) c1");
   assert.equal(maskSizes(answer).error.message.includes("(<size> bytes)"), true);
-  assert.equal(maskEcho("a c1 b", "c1"), "a <id> b");
-  assert.equal(maskEcho("a c1 b", null), "a c1 b");
-  assert.equal(maskEcho("a c1 b", ""), "a c1 b");
-  assert.equal(maskEcho(["c1", { k: "c1" }], "c1")[1].k, "<id>");
+  assert.equal(maskEcho("a channels/c1 b", "c1"), "a channels/<id> b");
+  assert.equal(maskEcho("a channels/c1 b", null), "a channels/c1 b");
+  assert.equal(maskEcho("a channels/c1 b", ""), "a channels/c1 b");
+  assert.equal(maskEcho(["channels/c1", { k: "'c1'" }], "c1")[1].k, "'<id>'");
+  assert.equal(maskEcho(5, "c1"), 5);
   assert.equal(maskRun(5, RUN), 5);
   assert.equal(channelIdOf({ path: "/v1/projects/p/locations/l/channels?channelId=abc" }), "abc");
   assert.equal(
@@ -191,8 +195,37 @@ test("the masks hide the request ID, the run ID in either case, a byte count and
   assert.equal(channelIdOf({ path: "/v1/projects/p/locations/l/channels" }), null);
 });
 
-test("JSON equality ignores member order, and the differing paths are named", () => {
-  assert.equal(sameJson({ a: 1, b: [1, { c: 2 }] }, { b: [1, { c: 2 }], a: 1 }), true);
+test("JSON equality checks member order, except in the metadata of an ErrorInfo, and the differing paths are named", () => {
+  assert.equal(sameJson({ a: 1, b: [1, { c: 2 }] }, { a: 1, b: [1, { c: 2 }] }), true);
+  assert.equal(sameJson({ a: 1, b: 2 }, { b: 2, a: 1 }), false, "a swapped order is a difference");
+  assert.equal(sameJson({ a: { x: 1, y: 2 } }, { a: { y: 2, x: 1 } }), false, "at any depth");
+  assert.equal(sameJson([{ a: 1, b: 2 }], [{ b: 2, a: 1 }]), false, "inside an array");
+  const info = (metadata) => ({
+    error: {
+      details: [{ "@type": "type.googleapis.com/google.rpc.ErrorInfo", reason: "R", metadata }],
+    },
+  });
+  assert.equal(sameJson(info({ a: "1", b: "2" }), info({ b: "2", a: "1" })), true, "a proto map");
+  assert.equal(sameJson(info({ a: "1", b: "2" }), info({ a: "1", b: "3" })), false);
+  assert.equal(sameJson(info({ a: "1", b: "2" }), info({ a: "1", c: "2" })), false);
+  assert.equal(sameJson(info({ a: "1", b: "2" }), info({ a: "1" })), false);
+  const other = (metadata) => ({ "@type": "type.googleapis.com/google.rpc.Help", metadata });
+  assert.equal(
+    sameJson(other({ a: 1, b: 2 }), other({ b: 2, a: 1 })),
+    false,
+    "only an ErrorInfo's",
+  );
+  const reorderedInfo = {
+    error: {
+      details: [{ "@type": "type.googleapis.com/google.rpc.ErrorInfo", metadata: {}, reason: "R" }],
+    },
+  };
+  assert.equal(
+    sameJson(info({}), reorderedInfo),
+    false,
+    "the members of an ErrorInfo keep their order",
+  );
+  assert.deepEqual(diffPaths({ a: 1, b: 2 }, { b: 2, a: 1 }), ["$#order"]);
   assert.equal(sameJson({ a: 1 }, { a: 1, b: 2 }), false);
   assert.equal(sameJson([1], { 0: 1 }), false);
   assert.equal(sameJson(null, {}), false);
@@ -239,15 +272,46 @@ test("two rows are identical, masked, different because of the state of the proj
     classifyPair(run("aaaaaaaaaaaa"), run("bbbbbbbbbbbb"), "aaaaaaaaaaaa", "bbbbbbbbbbbb").kind,
     "identical",
   );
-  const enabled = entry({
+  // The state of the project: a Service Usage read, or a publish answered while the API was disabled.
+  const usage = (state) =>
+    entry({
+      case: "service-state",
+      op: "getService",
+      request: { method: "GET", path: "/v1/projects/1/services/x" },
+      response: answered(200, { state }),
+    });
+  assert.equal(
+    classifyPair(usage("DISABLED"), usage("ENABLED"), "aaaaaaaaaaaa", "bbbbbbbbbbbb").kind,
+    "state",
+  );
+  const disabledPublish = entry({
     case: "service-state",
-    response: answered(403, { error: { code: 403 } }),
+    op: "publishEvents",
+    response: answered(403, { error: { details: [{ reason: "SERVICE_DISABLED" }] } }),
   });
-  const disabled = entry({
+  const absentChannel = entry({
     case: "service-state",
+    op: "publishEvents",
     response: answered(404, { error: { code: 404 } }),
   });
-  assert.equal(classifyPair(enabled, disabled, "aaaaaaaaaaaa", "bbbbbbbbbbbb").kind, "state");
+  assert.equal(
+    classifyPair(disabledPublish, absentChannel, "aaaaaaaaaaaa", "bbbbbbbbbbbb").kind,
+    "state",
+  );
+  assert.equal(
+    classifyPair(absentChannel, disabledPublish, "aaaaaaaaaaaa", "bbbbbbbbbbbb").kind,
+    "state",
+  );
+  // A difference in the same case that is neither is a difference.
+  const unrelated = entry({
+    case: "service-state",
+    op: "publishEvents",
+    response: answered(404, { error: { code: 404, message: "other" } }),
+  });
+  assert.equal(
+    classifyPair(absentChannel, unrelated, "aaaaaaaaaaaa", "bbbbbbbbbbbb").kind,
+    "different",
+  );
   const apart = entry({ response: answered(404, { error: { code: 404 } }) });
   assert.equal(classifyPair(entry({}), apart, "aaaaaaaaaaaa", "bbbbbbbbbbbb").kind, "different");
   // Byte counts that follow their own requests are masked; a count that does not is a difference.
@@ -268,23 +332,39 @@ test("two recordings are aligned by case, operation and position, and a row in o
     entry({ n: 3, case: "service-state", op: "getChannel" }),
   ];
   const b = [entry({ n: 1 }), entry({ n: 2, case: "publish-envelope" })];
-  const rows = comparePair(a, b, "aaaaaaaaaaaa", "bbbbbbbbbbbb");
-  assert.deepEqual(
-    rows.map((item) => [item.key, item.kind]),
-    [
-      ["channel-lifecycle/createChannel#0", "identical"],
-      ["channel-lifecycle/createChannel#1", "unpaired"],
-      ["service-state/getChannel#0", "state"],
-      ["publish-envelope/createChannel#0", "unpaired"],
-    ],
-  );
+  // The service-state rows only one recording has are state rows when the recordings found the project in
+  // different states (one took the disabled branch); otherwise they are unpaired.
+  const kinds = (states) =>
+    comparePair(a, b, "aaaaaaaaaaaa", "bbbbbbbbbbbb", states).map((item) => [item.key, item.kind]);
+  assert.deepEqual(kinds(["DISABLED", "ENABLED"]), [
+    ["channel-lifecycle/createChannel#0", "identical"],
+    ["channel-lifecycle/createChannel#1", "unpaired"],
+    ["service-state/getChannel#0", "state"],
+    ["publish-envelope/createChannel#0", "unpaired"],
+  ]);
+  assert.equal(kinds(["ENABLED", "ENABLED"])[2][1], "unpaired");
+  assert.equal(kinds(undefined)[2][1], "unpaired", "no state recorded: not claimed");
+  const rows = comparePair(a, b, "aaaaaaaaaaaa", "bbbbbbbbbbbb", ["DISABLED", "ENABLED"]);
   assert.deepEqual(rows[0].a, 1);
   assert.equal(rows[3].a, null);
+  const reversed = comparePair(b, a, "bbbbbbbbbbbb", "aaaaaaaaaaaa", ["ENABLED", "DISABLED"]);
+  assert.equal(reversed.find((item) => item.key.startsWith("service-state")).kind, "state");
 });
 
 test("the Service Usage rows and the publishes answered while the API was disabled are skipped, not replayed", () => {
-  for (const op of ["getService", "enableService", "listEnabledServices", "getOperation"])
+  for (const op of ["getService", "enableService", "listEnabledServices"])
     assert.equal(skipReason({ op, request: {}, response: {} }), "service-usage");
+  // An operation is Service Usage's when its path is `/v1/operations/...`; an Eventarc operation (the
+  // channel create and delete of stage B) lives under a project and a location and is replayed.
+  const operation = (path) => ({
+    op: "getOperation",
+    request: { method: "GET", path },
+    response: {},
+  });
+  assert.equal(skipReason(operation("/v1/operations/acat.p2-1")), "service-usage");
+  assert.equal(skipReason(operation("/v1/projects/p/locations/us-central1/operations/op-1")), null);
+  assert.equal(isServiceUsageRow(operation("/v1/operations/acat.p2-1")), true);
+  assert.equal(isServiceUsageRow(operation("/v1/projects/p/locations/l/operations/o")), false);
   const disabled = {
     op: "publishEvents",
     request: { body: {} },
@@ -434,14 +514,14 @@ test("a replay sends each row with its credential, skips what a local listener d
   assert.deepEqual(
     server.seen.map((item) => item.authorization),
     [
-      "Bearer replay-token",
+      "Bearer ya29.replay-token",
       undefined,
       undefined,
       "Bearer invalid-token-for-the-recording",
       "Bearer invalid-token-for-the-recording",
       undefined,
-      "Bearer replay-token",
-      "Bearer replay-token",
+      "Bearer ya29.replay-token",
+      "Bearer ya29.replay-token",
     ],
   );
   assert.equal(server.seen.at(-1).body, "{}");
@@ -709,4 +789,122 @@ test("run as a program, the tool takes its command from the first argument", () 
   const refused = spawnSync(process.execPath, [program], { encoding: "utf8" });
   assert.equal(refused.status, 2);
   assert.match(refused.stderr, /usage: compare.mjs pair\|replay/);
+});
+
+test("a row whose body cannot be rebuilt is a divergence to review, never a silent skip", async (t) => {
+  const server = await listener(() => ({ status: 200, text: "{}" }));
+  t.after(server.close);
+  const unreplayable = entry({
+    n: 7,
+    request: {
+      method: "POST",
+      path: "/p",
+      body: { events: [{ textData: { omitted: { length: 10, sha256: "0".repeat(64) } } }] },
+    },
+  });
+  const results = await replay([unreplayable], { base: server.base });
+  assert.deepEqual(
+    [results[0].verdict, results[0].reason, results[0].n],
+    ["diverge", "unreplayable-body", 7],
+  );
+  assert.equal(server.seen.length, 0, "nothing was sent for it");
+  assert.deepEqual(summarize(results).total, { diverge: 1 });
+});
+
+test("the echoed channel ID is masked only as a whole name, in a row that names one", () => {
+  // Whole tokens: after `channels/`, and quoted.
+  const id = "ad";
+  const answer = {
+    error: {
+      message: "Resource 'projects/p/locations/l/channels/ad' was not found",
+      details: [{ resourceName: "projects/p/locations/l/channels/ad" }, { name: "ad" }],
+    },
+  };
+  const masked = maskEcho(answer, id);
+  assert.equal(
+    masked.error.message,
+    "Resource 'projects/p/locations/l/channels/<id>' was not found",
+  );
+  assert.equal(masked.error.details[0].resourceName, "projects/p/locations/l/channels/<id>");
+  assert.equal(
+    masked.error.details[1].name,
+    "ad",
+    "a bare member value is not a name of the channel",
+  );
+  // Near misses: the ID inside a word, after another prefix, or as the start of a longer name.
+  for (const text of [
+    "the dad was here",
+    "ad hoc",
+    "load",
+    "projects/ad/locations/l",
+    "channels/adx",
+    "channels/ad-x",
+    "channels/ad_x",
+    "channels/xad",
+    "'adx'",
+  ])
+    assert.equal(maskEcho(text, id), text, text);
+  assert.equal(maskEcho("channels/ad:publishEvents", id), "channels/<id>:publishEvents");
+  assert.equal(maskEcho("channels/ad?x=1", id), "channels/<id>?x=1");
+  assert.equal(maskEcho("channels/ad/y", id), "channels/<id>/y");
+  assert.equal(maskEcho('"ad"', id), '"<id>"');
+  assert.equal(maskEcho("channels/ad", id), "channels/<id>");
+  // An ID with regular-expression characters is matched literally.
+  assert.equal(maskEcho("channels/a.b", "a.b"), "channels/<id>");
+  assert.equal(maskEcho("channels/axb", "a.b"), "channels/axb");
+});
+
+test("the size of an event whose text was not rebuilt is not computed", () => {
+  const event = { id: "a", source: "b", specVersion: "1.0", type: "t" };
+  assert.equal(
+    cloudEventSize({ ...event, textData: { omitted: { length: 5, sha256: "0" } } }),
+    null,
+  );
+  assert.equal(cloudEventSize({ ...event, textData: "xyz" }), 14 + 5);
+  assert.equal(
+    cloudEventSize({ ...event, attributes: { k: { ceString: { omitted: { length: 1 } } } } }),
+    null,
+  );
+});
+
+test("a replay sends a bearer token of the shape of a real access token", async (t) => {
+  const server = await listener(() => ({ status: 200, text: "{}" }));
+  t.after(server.close);
+  await replay([entry({ request: { method: "GET", path: "/p" } })], { base: server.base });
+  assert.match(server.seen[0].authorization, /^Bearer ya29\.[!-~]+$/);
+});
+
+test("the pair command takes the state each recording found the project in from its service-state note", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "eventarc-compare-state-"));
+  const capture = (runId, before, rows) => {
+    const path = join(dir, `capture-${runId}.jsonl`);
+    const lines = [
+      { at: "x", note: "run-start", runId },
+      { at: "x", note: "service-state", before },
+      ...rows,
+    ];
+    writeFileSync(path, `${lines.map((line) => JSON.stringify(line)).join("\n")}\n`);
+    return path;
+  };
+  const only = entry({ n: 2, case: "service-state", op: "getChannel" });
+  const a = capture("aaaaaaaaaaaa", "DISABLED", [entry({ n: 1 }), only]);
+  const b = capture("bbbbbbbbbbbb", "ENABLED", [entry({ n: 1 })]);
+  const same = capture("cccccccccccc", "DISABLED", [entry({ n: 1 })]);
+  let printed = "";
+  const io = {
+    stdout: { write: (text) => (printed += text) },
+    stderr: { write: (text) => (printed += text) },
+  };
+  assert.equal(await main(["pair", "--a", a, "--b", b], io), 0);
+  assert.deepEqual(JSON.parse(printed).counts, { identical: 1, state: 1 });
+  printed = "";
+  assert.equal(await main(["pair", "--a", a, "--b", same], io), 0);
+  assert.deepEqual(JSON.parse(printed).counts, { identical: 1, unpaired: 1 });
+  assert.equal(serviceStateOf(a), "DISABLED");
+  assert.equal(serviceStateOf(join(dir, "capture-cccccccccccc.jsonl")), "DISABLED");
+  writeFileSync(
+    join(dir, "none.jsonl"),
+    `${JSON.stringify({ at: "x", note: "run-start", runId: "dddddddddddd" })}\n`,
+  );
+  assert.equal(serviceStateOf(join(dir, "none.jsonl")), null);
 });

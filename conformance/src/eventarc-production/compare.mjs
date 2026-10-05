@@ -19,13 +19,22 @@
 import { createHash } from "node:crypto";
 import { readFileSync, writeFileSync } from "node:fs";
 
-/** The operations of Service Usage: not part of the Eventarc surface a local listener serves. */
-export const SERVICE_USAGE_OPS = new Set([
-  "getService",
-  "enableService",
-  "listEnabledServices",
-  "getOperation",
-]);
+/**
+ * The operations that are Service Usage's whatever their path: not part of the Eventarc surface a local
+ * listener serves. `getOperation` is not among them, because the recorder uses that name for the operations
+ * of both products: see `isServiceUsageRow`.
+ */
+export const SERVICE_USAGE_OPS = new Set(["getService", "enableService", "listEnabledServices"]);
+
+/**
+ * Whether a row is a Service Usage exchange. A Service Usage operation is read at `/v1/operations/<name>`; an
+ * Eventarc one (the create and delete of a channel, in stage B) lives under a project and a location and is
+ * replayed like any other row.
+ */
+export function isServiceUsageRow(row) {
+  if (SERVICE_USAGE_OPS.has(row.op)) return true;
+  return row.op === "getOperation" && !String(row.request?.path ?? "").startsWith("/v1/projects/");
+}
 
 /**
  * The credentials of the first six requests of the auth-errors case, which the capture does not record: the
@@ -34,7 +43,8 @@ export const SERVICE_USAGE_OPS = new Set([
  */
 const AUTH_ERRORS_TOKENS = ["default", "none", "none", "invalid", "invalid", "none"];
 const INVALID_TOKEN = "invalid-token-for-the-recording";
-const DEFAULT_TOKEN = "replay-token";
+/** The shape of a Google access token: what a real client sends, and what the strict listener accepts. */
+const DEFAULT_TOKEN = "ya29.replay-token";
 const REQUEST_ID = /^[0-9a-f]{16}$/;
 const SIZE_IN_TEXT = /\((\d+) bytes\)/g;
 const ANY_TYPE_URL = "type.googleapis.com/io.cloudevents.v1.CloudEvent";
@@ -56,6 +66,19 @@ export function runIdOf(path) {
     if (entry.note === "run-start") return entry.runId;
   }
   throw new Error(`${path} has no run-start note`);
+}
+
+/**
+ * The state of the publishing API a recording found (`DISABLED` or `ENABLED`), from the `before` member of its
+ * service-state note, or null when the recording has no such note.
+ */
+export function serviceStateOf(path) {
+  for (const line of readFileSync(path, "utf8").split("\n")) {
+    if (line.trim() === "") continue;
+    const entry = JSON.parse(line);
+    if (entry.note === "service-state" && typeof entry.before === "string") return entry.before;
+  }
+  return null;
 }
 
 /** The credential each row was sent with: see `AUTH_ERRORS_TOKENS` for the first rows of auth-errors, otherwise default. */
@@ -110,10 +133,7 @@ const varintLength = (n) => {
   return length;
 };
 const field = (length) => 1 + varintLength(length) + length; // a tag below 16 and a length-delimited value
-const textLength = (value) =>
-  typeof value === "object" && value !== null
-    ? value.omitted.length
-    : Buffer.byteLength(value, "utf8");
+const textLength = (value) => Buffer.byteLength(value, "utf8");
 
 function timestampLength(text) {
   const match = /^(\d{4})-(\d\d)-(\d\d)T(\d\d):(\d\d):(\d\d)(?:\.(\d{1,9}))?Z$/.exec(text);
@@ -145,8 +165,11 @@ export function cloudEventSize(event) {
     const entry = field(Buffer.byteLength(key, "utf8")) + field(inner);
     size += field(entry);
   }
-  if (event.textData !== undefined) size += field(textLength(event.textData));
-  else if (event.binaryData !== undefined) return null;
+  if (event.textData !== undefined) {
+    // A text the capture omitted and the caller did not rebuild is not a text: its size is not known.
+    if (typeof event.textData !== "string") return null;
+    size += field(textLength(event.textData));
+  } else if (event.binaryData !== undefined) return null;
   return size;
 }
 
@@ -224,13 +247,11 @@ export function sizesFollowRequest(row) {
   return size !== null && named.every((text) => text === `(${size} bytes)`);
 }
 
-/** Deep equality of parsed JSON, member order ignored. */
-export function sameJson(a, b) {
-  if (a === b) return true;
-  if (a === null || b === null || typeof a !== "object" || typeof b !== "object") return false;
-  if (Array.isArray(a) !== Array.isArray(b)) return false;
-  if (Array.isArray(a))
-    return a.length === b.length && a.every((item, index) => sameJson(item, b[index]));
+const ERROR_INFO = "type.googleapis.com/google.rpc.ErrorInfo";
+
+/** Whether two objects have the same members with the same values, in any order. */
+function sameMembers(a, b) {
+  if (a === null || b === null || typeof a !== "object" || typeof b !== "object") return a === b;
   const keys = Object.keys(a);
   return (
     keys.length === Object.keys(b).length &&
@@ -238,7 +259,32 @@ export function sameJson(a, b) {
   );
 }
 
-/** The paths at which two JSON values differ. */
+/**
+ * Deep equality of parsed JSON, member order included: production's order is recorded (the recorder keeps
+ * the order of the parsed body) and is part of what a listener reproduces. The one exemption is the
+ * `metadata` of an `ErrorInfo`, a proto map whose order varies between answers of the same request
+ * (six places of r1 against r2).
+ */
+export function sameJson(a, b) {
+  if (a === b) return true;
+  if (a === null || b === null || typeof a !== "object" || typeof b !== "object") return false;
+  if (Array.isArray(a) !== Array.isArray(b)) return false;
+  if (Array.isArray(a))
+    return a.length === b.length && a.every((item, index) => sameJson(item, b[index]));
+  const keys = Object.keys(a);
+  const other = Object.keys(b);
+  const info = a["@type"] === ERROR_INFO;
+  return (
+    keys.length === other.length &&
+    keys.every(
+      (key, index) =>
+        key === other[index] &&
+        (info && key === "metadata" ? sameMembers(a[key], b[key]) : sameJson(a[key], b[key])),
+    )
+  );
+}
+
+/** The paths at which two JSON values differ; the path of an object whose members only changed order ends in `#order`. */
 export function diffPaths(a, b, path = "$") {
   if (sameJson(a, b)) return [];
   if (
@@ -250,7 +296,8 @@ export function diffPaths(a, b, path = "$") {
   )
     return [path];
   const keys = [...new Set([...Object.keys(a), ...Object.keys(b)])].toSorted();
-  return keys.flatMap((key) => diffPaths(a[key], b[key], `${path}.${key}`));
+  const paths = keys.flatMap((key) => diffPaths(a[key], b[key], `${path}.${key}`));
+  return paths.length === 0 ? [`${path}#order`] : paths;
 }
 
 // --- classes of rows -----------------------------------------------------------------------------------
@@ -263,11 +310,14 @@ export function isServiceDisabled(row) {
   );
 }
 
-/** Why a row is not replayed, or null when it is. */
+/**
+ * Why a row is not replayed, or null when it is: the project's state (Service Usage, a publish answered while
+ * the API was disabled). A body that cannot be rebuilt is not a reason to skip: `replay` reports it as a
+ * divergence to review.
+ */
 export function skipReason(row) {
-  if (SERVICE_USAGE_OPS.has(row.op)) return "service-usage";
+  if (isServiceUsageRow(row)) return "service-usage";
   if (isServiceDisabled(row)) return "service-disabled";
-  if (requestBody(row) === null) return "unreplayable-body";
   return null;
 }
 
@@ -305,7 +355,10 @@ export function classifyPair(rowA, rowB, runA, runB) {
   const echoA = maskEcho(maskedA, channelIdOf(rowA.request));
   const echoB = maskEcho(maskedB, channelIdOf(rowB.request));
   if (sameJson(echoA, echoB)) return { kind: "masked", paths: diffPaths(answerA, answerB) };
-  if (rowA.case === "service-state") return { kind: "state", paths: diffPaths(answerA, answerB) };
+  // A difference in the service-state case is the state of the project only when one of the two rows is a
+  // Service Usage exchange or a publish answered while the API was disabled.
+  if (rowA.case === "service-state" && (isProjectState(rowA) || isProjectState(rowB)))
+    return { kind: "state", paths: diffPaths(answerA, answerB) };
   return { kind: "different", paths: diffPaths(answerA, answerB) };
 }
 
@@ -318,16 +371,24 @@ export function channelIdOf(request) {
   return match === null ? null : match[1];
 }
 
-/** Replaces the channel ID of the request wherever an answer echoes it. */
+const escapeRegExp = (text) => text.replaceAll(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+/**
+ * Replaces the channel ID of the request where an answer echoes it as a whole name: after `channels/`, or
+ * quoted. An ID inside a word, or the start of a longer name, is not touched.
+ */
 export function maskEcho(value, id) {
   if (id === null || id === "") return value;
-  if (typeof value === "string") return value.split(id).join("<id>");
-  if (Array.isArray(value)) return value.map((item) => maskEcho(item, id));
-  if (value !== null && typeof value === "object")
-    return Object.fromEntries(
-      Object.entries(value).map(([key, item]) => [key, maskEcho(item, id)]),
-    );
-  return value;
+  const name = escapeRegExp(id);
+  const pattern = new RegExp(`(?<=channels/)${name}(?![\\w-])|(?<=['"])${name}(?=['"])`, "g");
+  const walk = (item) => {
+    if (typeof item === "string") return item.replaceAll(pattern, "<id>");
+    if (Array.isArray(item)) return item.map(walk);
+    if (item !== null && typeof item === "object")
+      return Object.fromEntries(Object.entries(item).map(([key, member]) => [key, walk(member)]));
+    return item;
+  };
+  return walk(value);
 }
 
 /** The key that aligns the rows of two recordings: the case, the operation and the position in that case. */
@@ -342,10 +403,19 @@ function alignKey(rows) {
 }
 
 /** A row only one recording has: the state of the publishing API when it is in the service-state case. */
-const unpairedKind = (row) => (row.case === "service-state" ? "state" : "unpaired");
+const isProjectState = (row) => isServiceUsageRow(row) || isServiceDisabled(row);
+
+/**
+ * A row only one recording has. In the service-state case it is a row of the project's state when the two
+ * recordings found the project in different states (one took the disabled branch, the other did not).
+ */
+const unpairedKind = (row, states) =>
+  row.case === "service-state" && states[0] !== null && states[0] !== states[1]
+    ? "state"
+    : "unpaired";
 
 /** Aligns two recordings and classifies every pair; rows present in only one are `unpaired`. */
-export function comparePair(rowsA, rowsB, runA, runB) {
+export function comparePair(rowsA, rowsB, runA, runB, states = [null, null]) {
   const keysA = alignKey(rowsA);
   const keysB = alignKey(rowsB);
   const byKeyB = new Map(keysB.map((key, index) => [key, rowsB[index]]));
@@ -354,7 +424,13 @@ export function comparePair(rowsA, rowsB, runA, runB) {
   rowsA.forEach((row, index) => {
     const other = byKeyB.get(keysA[index]);
     if (other === undefined) {
-      rows.push({ key: keysA[index], a: row.n, b: null, kind: unpairedKind(row), paths: [] });
+      rows.push({
+        key: keysA[index],
+        a: row.n,
+        b: null,
+        kind: unpairedKind(row, states),
+        paths: [],
+      });
       return;
     }
     used.add(keysA[index]);
@@ -363,7 +439,13 @@ export function comparePair(rowsA, rowsB, runA, runB) {
   });
   keysB.forEach((key, index) => {
     if (!used.has(key))
-      rows.push({ key, a: null, b: rowsB[index].n, kind: unpairedKind(rowsB[index]), paths: [] });
+      rows.push({
+        key,
+        a: null,
+        b: rowsB[index].n,
+        kind: unpairedKind(rowsB[index], states),
+        paths: [],
+      });
   });
   return rows;
 }
@@ -425,6 +507,11 @@ export async function replay(rows, options) {
       op: row.op,
       family: answerFamily(row.response),
     };
+    if (skipped === null && requestBody(row) === null) {
+      // Not a skip: coverage that is lost silently is coverage nobody notices is gone.
+      results.push({ ...common, verdict: "diverge", reason: "unreplayable-body", paths: [] });
+      continue;
+    }
     if (skipped !== null) {
       results.push({ ...common, verdict: "skipped", reason: skipped, paths: [] });
       continue;
@@ -483,7 +570,10 @@ export async function main(argv, io = { stdout: process.stdout, stderr: process.
       io.stderr.write("pair needs --a and --b\n");
       return 2;
     }
-    const rows = comparePair(loadRows(pathA), loadRows(pathB), runIdOf(pathA), runIdOf(pathB));
+    const rows = comparePair(loadRows(pathA), loadRows(pathB), runIdOf(pathA), runIdOf(pathB), [
+      serviceStateOf(pathA),
+      serviceStateOf(pathB),
+    ]);
     const counts = {};
     for (const row of rows) counts[row.kind] = (counts[row.kind] ?? 0) + 1;
     report = {

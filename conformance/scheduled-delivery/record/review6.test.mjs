@@ -129,11 +129,11 @@ test("the allowlist lets the probe be created and refuses a name that is not an 
     assert.equal(guard.allow(create(bad)), false, bad);
 });
 
-test("a clean run stays far inside the request ceiling with the probe (203 requests, 23 names issued)", async () => {
+test("a clean run stays far inside the request ceiling with the probe (209 requests, 24 names issued)", async () => {
   const { result, journal } = await go({}, { passes: 2, naturalWindowMs: 360_000 });
-  assert.equal(result.attempted, 203);
+  assert.equal(result.attempted, 209);
   assert.ok(result.attempted < NORMAL_CEILING / 1.5);
-  assert.equal(journal.filter((r) => r.state === "issued").length, 23);
+  assert.equal(journal.filter((r) => r.state === "issued").length, 24);
 });
 
 test("a long refusal message is kept to 300 characters in the result (the journal has it whole)", async () => {

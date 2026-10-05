@@ -49,7 +49,7 @@ test("the fixture exports the probe: Gen1, retryCount 1, always failing, one fra
   assert.match(block, /throw new Error/);
 });
 
-test("a clean run deploys six functions, makes three topics and pull subscriptions, forces ten jobs a pass, and the guard allows each", async () => {
+test("a clean run deploys six functions, makes three topics and pull subscriptions, forces eleven jobs a pass, and the guard allows each", async () => {
   const world = createWorld();
   const journal = [];
   const result = await record({
@@ -71,5 +71,5 @@ test("a clean run deploys six functions, makes three topics and pull subscriptio
   assert.ok(ids.has("run-1-schedRetryV1-us-central1"));
   const forced = result.passes[0].forced.map((f) => f.id);
   assert.ok(forced.includes(scheduleId("schedRetryV1")));
-  assert.equal(forced.length, 10);
+  assert.equal(forced.length, 11);
 });

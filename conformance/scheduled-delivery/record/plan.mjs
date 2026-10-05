@@ -53,7 +53,7 @@ export const DECLARED = Object.freeze({
 });
 
 /**
- * The extra Scheduler jobs the recorder itself creates (never deployed), up to five, each aimed at the
+ * The extra Scheduler jobs the recorder itself creates (never deployed), up to six, each aimed at the
  * `schedRetryV2` function so that a retry rule is observed without deploying another function. Their
  * names carry the run id. The target (uri and OIDC account) is copied from the deployed job's readback
  * at run time, so these differ from it only in the retry rule and the schedule.
@@ -104,6 +104,21 @@ export const EXTRA_JOBS = Object.freeze([
       minBackoffDuration: "2.5s",
       maxBackoffDuration: "20s",
       maxDoublings: 1,
+    },
+  },
+  // What Cloud Scheduler does with a zero minimum backoff (the local model releases one retry per clock change;
+  // production's answer was never recorded: a refusal, or a chain with no gap). The window is the shortest the packet
+  // sends, so a chain with no gap is bounded to ten seconds whatever production does. The handler fails for every
+  // attempt of a forced run (its schedule time is in the future).
+  {
+    key: "zerobackoff",
+    cases: ["zero-min-backoff"],
+    schedule: "0 0 1 1 *",
+    timeZone: "UTC",
+    retryConfig: {
+      maxRetryDuration: "10s",
+      minBackoffDuration: "0s",
+      maxBackoffDuration: "0s",
     },
   },
   // The boundary probe: Cloud Scheduler's message says "less than 5" and it refused 6 (run e0ec2f41), but 5 was

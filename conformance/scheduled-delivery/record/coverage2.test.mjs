@@ -203,6 +203,10 @@ test("the extra jobs and the subscription name are exactly what the packet state
           maxDoublings: 1,
         },
       ],
+      [
+        "zerobackoff",
+        { maxRetryDuration: "10s", minBackoffDuration: "0s", maxBackoffDuration: "0s" },
+      ],
       ["retry5", { retryCount: 5 }],
     ],
   );

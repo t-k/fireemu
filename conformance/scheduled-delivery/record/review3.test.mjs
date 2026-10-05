@@ -328,6 +328,7 @@ test("two unknown creates in one run are both listed", async () => {
       "create-extra-duration",
       "create-extra-count",
       "create-extra-fraction",
+      "create-extra-zerobackoff",
       "create-extra-retry5",
     ],
   );

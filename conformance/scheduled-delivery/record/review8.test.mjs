@@ -55,7 +55,7 @@ const post = (world, retryConfig, id = "fe-sd-0123456789abcdef-probe") =>
 test("the extra jobs: the count job is integer-valued with a window, the fraction job has the refused body", () => {
   assert.deepEqual(
     EXTRA_JOBS.map((job) => job.key),
-    ["zero", "duration", "count", "fraction", "retry5"],
+    ["zero", "duration", "count", "fraction", "zerobackoff", "retry5"],
   );
   const by = Object.fromEntries(EXTRA_JOBS.map((job) => [job.key, job]));
   assert.deepEqual(by.count.retryConfig, {
@@ -176,7 +176,7 @@ test("a clean run: the count job is created, run, paused and deleted; the fracti
   assert.equal(result.closureReady, true);
   assert.equal(result.outcome, "calendar-delivery-recorded");
   assert.equal(
-    result.passes.every((p) => p.forced.length === 10),
+    result.passes.every((p) => p.forced.length === 11),
     true,
   );
 });

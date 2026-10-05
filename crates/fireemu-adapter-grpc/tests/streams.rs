@@ -3614,5 +3614,66 @@ mod count_filter_properties {
                 Ok(())
             })?;
         }
+
+        /// A listener that gives the expected count its token was taken with (as the SDKs do)
+        /// gets no filter, and applying what the replay says to what it held leaves it holding
+        /// exactly the documents the query matches now: nothing for it to repair.
+        #[test]
+        fn a_listener_that_gave_its_count_ends_up_holding_exactly_the_matching_documents(history in steps()) {
+            let runtime = tokio::runtime::Runtime::new().unwrap();
+            runtime.block_on(async {
+                let (mut client, handle) = start(false).await;
+                let token = {
+                    commit_writes(&mut client, vec![set_write("q/seed", &[("state", s("included"))])]).await;
+                    let (tx, rx) = mpsc::channel(8);
+                    let mut listen = client.listen(ReceiverStream::new(rx)).await.unwrap().into_inner();
+                    tx.send(add_filtered_query_target(1, "q")).await.unwrap();
+                    trace_and_token(&mut listen, "NO_CHANGE[]").await.1
+                };
+                let mut present: std::collections::BTreeMap<String, bool> = std::collections::BTreeMap::new();
+                present.insert("seed".to_owned(), true);
+                for step in &history {
+                    match step {
+                        Step::Set(i, included) => {
+                            let value = if *included { "included" } else { "excluded" };
+                            commit_writes(&mut client, vec![set_write(&format!("q/d{i}"), &[("state", s(value))])]).await;
+                            present.insert(format!("d{i}"), *included);
+                        }
+                        Step::Delete(i) => {
+                            commit_writes(&mut client, vec![delete_write(&format!("q/d{i}"))]).await;
+                            present.remove(&format!("d{i}"));
+                        }
+                    }
+                }
+                let mut request = add_filtered_query_target(2, "q");
+                if let Some(pb::listen_request::TargetChange::AddTarget(t)) = &mut request.target_change {
+                    t.resume_type = Some(pb::target::ResumeType::ResumeToken(token));
+                    t.expected_count = Some(1);
+                }
+                let trace = resumed_trace(&mut client, request).await;
+                let lines = described(&trace);
+                prop_assert!(!lines.iter().any(|l| l.starts_with("FILTER")), "{:?}", lines);
+                let mut held: std::collections::BTreeSet<String> = ["seed".to_owned()].into();
+                for line in &lines {
+                    if let Some(name) = line.strip_prefix("CHANGE ") {
+                        held.insert(name.to_owned());
+                    } else if let Some(name) = line
+                        .strip_prefix("LEAVE ")
+                        .or_else(|| line.strip_prefix("DELETE "))
+                        .or_else(|| line.strip_prefix("REMOVE "))
+                    {
+                        held.remove(name);
+                    }
+                }
+                let matching: std::collections::BTreeSet<String> = present
+                    .into_iter()
+                    .filter(|(_, included)| *included)
+                    .map(|(name, _)| name)
+                    .collect();
+                prop_assert_eq!(held, matching, "{:?}", lines);
+                handle.abort();
+                Ok(())
+            })?;
+        }
     }
 }

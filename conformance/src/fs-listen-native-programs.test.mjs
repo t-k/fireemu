@@ -482,7 +482,13 @@ test("programProblems: a save names a known kind of token or none", () => {
   const close = { do: "close", stream: "s" };
   for (const kind of [undefined, "current", "global"])
     assert.deepEqual(
-      problemsOf(prog([open, { do: "save", stream: "s", id: 1, token: "t", ...(kind ? { kind } : {}) }, close])),
+      problemsOf(
+        prog([
+          open,
+          { do: "save", stream: "s", id: 1, token: "t", ...(kind ? { kind } : {}) },
+          close,
+        ]),
+      ),
       [],
       String(kind),
     );

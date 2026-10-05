@@ -246,3 +246,13 @@ test("page sizes: a negative or fractional size is a 400, zero is the default, a
   assert.equal((await list("?pageSize=100000")).body.channels.length, 1000);
   assert.equal((await list("")).body.channels.length, 50);
 });
+
+test("the key refusal is recognised only as a whole sentence at the start of the message", () => {
+  const key = answer(recorded("publishEvents-key-too-large"));
+  const prefixed = {
+    ...key,
+    body: { error: { ...key.body.error, message: `x ${key.body.error.message}` } },
+  };
+  assert.equal(isAttributeKeyRefusal(key), true);
+  assert.equal(isAttributeKeyRefusal(prefixed), false);
+});

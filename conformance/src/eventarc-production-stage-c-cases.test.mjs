@@ -24,6 +24,7 @@ const PARENT = `projects/${PROJECT}/locations/us-central1`;
 
 /** One case through the real runner against the model, with its ceiling lifted. */
 async function runOne(item, worldOptions = {}, { wrap = (request) => request } = {}) {
+  const sleeps = [];
   const world = createWorld({ project: PROJECT, ...worldOptions });
   const ownership = createOwnership({ project: PROJECT, runId: RUN });
   const ledger = createLedger();
@@ -49,11 +50,13 @@ async function runOne(item, worldOptions = {}, { wrap = (request) => request } =
       usageProject: PROJECT,
       publishPrefix: "/v1",
     },
-    sleep: async () => {},
+    sleep: async (ms) => {
+      sleeps.push(ms);
+    },
     ledger,
   });
   const inCase = world.calls.filter((call) => call.caseId === item.id);
-  return { world, summary, ledger, notes, inCase, ownership };
+  return { world, summary, ledger, notes, inCase, ownership, sleeps };
 }
 
 const idOf = (path) =>
@@ -434,4 +437,230 @@ test("property: an unknown deletion is never re-sent, whatever else the service 
         perName.set(call.path, (perName.get(call.path) ?? 0) + 1);
       for (const [path, count] of perName) assert.equal(count, 1, `${label} ${path}`);
     }
+});
+
+// ---- Tests that kill the survivors of the first Node mutation pass (each named for what it pins) ----
+
+/** The query of a list request, with the token replaced by `<token>`: the sequence a case sends. */
+const listQueries = (calls, location = "us-central1") =>
+  calls
+    .filter(
+      (call) =>
+        call.op === "listChannels" &&
+        call.path.startsWith(`/v1/projects/${PROJECT}/locations/${location}/`),
+    )
+    .map((call) => call.path.split("/channels")[1].replace(/pageToken=[^&]+/, "pageToken=<token>"));
+
+test("channel-order: the exact list requests, for six channels", async () => {
+  const { inCase } = await runOne(channelOrder);
+  assert.deepEqual(listQueries(inCase), [
+    "",
+    "",
+    // pages of one: six pages, the last has no token
+    "?pageSize=1",
+    ...Array.from({ length: 5 }, () => "?pageSize=1&pageToken=<token>"),
+    "?pageSize=2",
+    "?pageSize=2&pageToken=<token>",
+    "?pageSize=2&pageToken=<token>",
+    "?pageSize=3",
+    "?pageSize=3&pageToken=<token>",
+    "?pageSize=0",
+    "?pageSize=-1",
+    "?pageSize=1001",
+    "?pageSize=100000",
+    "?pageSize=2&pageToken=<token>",
+  ]);
+  const other = inCase.filter(
+    (call) => call.op === "listChannels" && !call.path.startsWith(`/v1/${PARENT}/`),
+  );
+  assert.deepEqual(
+    other.map((call) => call.path.replace(/pageToken=[^&]+/, "pageToken=<token>")),
+    [
+      "/v1/projects/demo-project/locations/-/channels?pageSize=100",
+      "/v1/projects/demo-project/locations/europe-west1/channels?pageSize=1&pageToken=<token>",
+      "/v1/projects/fireemu-no-such-project-0/locations/us-central1/channels?pageSize=1&pageToken=<token>",
+      "/v1/projects/demo-project/locations/-/channels?pageSize=1&pageToken=<token>",
+    ],
+  );
+});
+
+test("channel-order: the pages are bounded (8 of one, 5 of two, 4 of three) in a location with many channels", async () => {
+  const existing = Array.from({ length: 60 }, (_, i) => `${PARENT}/channels/other-${i}`);
+  const { inCase } = await runOne(channelOrder, { existing });
+  const queries = listQueries(inCase);
+  const sized = (size) =>
+    queries.filter(
+      (query) => query === `?pageSize=${size}` || query.startsWith(`?pageSize=${size}&`),
+    );
+  assert.equal(sized(1).length, 8 + 0, "eight pages of one");
+  assert.equal(
+    sized(2).length,
+    5 + 1,
+    "five pages of two, and the token carried to the same location",
+  );
+  assert.equal(sized(3).length, 4, "four pages of three");
+});
+
+test("channel-order: a list that carries no token ends the case with a note, and sends no token", async () => {
+  const wrap = (request) => async (call) => {
+    const reply = await request(call);
+    if (call.op === "listChannels" && reply.body?.nextPageToken !== undefined) {
+      const rest = { ...reply.body };
+      delete rest.nextPageToken;
+      return { ...reply, body: rest };
+    }
+    return reply;
+  };
+  const { notes, inCase } = await runOne(channelOrder, {}, { wrap });
+  assert.ok(notes.some((line) => line.note === "no-page-token" && line.pages === 0));
+  assert.equal(inCase.filter((call) => call.path.includes("pageToken=")).length, 0);
+});
+
+test("channel-busy: a second deletion is sent only after a 2xx that names its operation, and the read-back is three reads two seconds apart", async () => {
+  // A deletion answered 2xx with no operation (and no done) is not a running operation: nothing is sent again.
+  const sent = [];
+  const wrap = (request) => async (call) => {
+    if (call.op !== "deleteChannel") return request(call);
+    sent.push(call.path);
+    return { status: 200, body: {}, unknown: false };
+  };
+  await runOne(channelBusy, { busy: "reject", duplicate: "409" }, { wrap });
+  assert.equal(sent.length >= 2, true);
+  assert.equal(new Set(sent).size, sent.length, "no name is deleted twice");
+  // A channel that still reads as there: the read-back runs to its end, three reads two seconds apart.
+  let seen = 0;
+  const stays = (request) => async (call) => {
+    if (call.op !== "getChannel" || !call.path.endsWith("-bz-b")) return request(call);
+    // Only the case's own reads: the cleanup after it reads the name too, from the same transport.
+    if (call.label?.case === "channel-busy") seen += 1;
+    return { status: 200, body: { name: call.path.replace(/^\/v1\//, "") }, unknown: false };
+  };
+  const slow = await runOne(channelBusy, { busy: "reject", duplicate: "409" }, { wrap: stays });
+  assert.equal(seen, 1 + 3, "one read while the deletion runs, three in the read-back");
+  assert.deepEqual(
+    slow.sleeps.slice(-2),
+    [2000, 2000],
+    "two waits of two seconds between the three reads",
+  );
+});
+
+test("channel-ids: a foreign channel needs to be neither listed before nor the run's; a failed list is reported unavailable", async () => {
+  // Others existed before and the variants create channels of the run: nothing is foreign.
+  const existing = Array.from({ length: 3 }, (_, i) => `${PARENT}/channels/other-${i}`);
+  const clean = await runOne(channelIds, { acceptAnyId: true, acceptVariants: true, existing });
+  assert.deepEqual(clean.summary.foreign, []);
+  assert.equal(
+    clean.notes.some((line) => line.note === "foreign-channel-appeared"),
+    false,
+  );
+  assert.equal(
+    clean.notes.some((line) => line.note === "foreign-check-unavailable"),
+    false,
+  );
+  // A list that fails ends the check with a note that says which list: the first only, then the second only.
+  for (const [failing, expected] of [
+    [1, { before: false, after: true }],
+    [2, { before: true, after: false }],
+  ]) {
+    let lists = 0;
+    const wrap = (request) => async (call) => {
+      if (call.op === "listChannels" && call.path.includes("pageSize=100")) {
+        lists += 1;
+        if (lists === failing) return { status: 503, body: {}, unknown: true };
+      }
+      return request(call);
+    };
+    const run = await runOne(channelIds, { acceptAnyId: true }, { wrap });
+    const note = run.notes.find((line) => line.note === "foreign-check-unavailable");
+    assert.ok(note, `list ${failing}`);
+    assert.deepEqual({ before: note.before, after: note.after }, expected);
+    assert.deepEqual(run.summary.foreign, []);
+  }
+});
+
+test("channel-ids: a variant the service accepts is settled for both names by its own operation", async () => {
+  const { ledger } = await runOne(channelIds, {
+    acceptAnyId: true,
+    acceptVariants: true,
+    doneAfter: 2,
+  });
+  for (const key of ["mm-a", "mm-b"]) {
+    const name = `${PARENT}/channels/${PREFIX}id-${key}`;
+    const kinds = ledger.state().get(name)?.creates ?? [];
+    assert.ok(
+      kinds.some((kind) => kind.startsWith("ok@")),
+      `${name}: ${kinds.join()}`,
+    );
+  }
+});
+
+/** The values a search asks for, by an independent bisection: the ends first, then the middle of what is left. */
+function reference(low, high, limit, { askLow }) {
+  const asked = askLow ? [low, high] : [high];
+  let accepted = low;
+  let refused = high;
+  while (refused - accepted > 1) {
+    const middle = accepted + Math.floor((refused - accepted) / 2);
+    asked.push(middle);
+    if (middle <= limit) accepted = middle;
+    else refused = middle;
+  }
+  return asked;
+}
+
+test("publish-boundaries: the exact values every search asks for, in order, and the pairs' shapes", async () => {
+  const limits = { textLimit: 524_500, attributeLimit: 100, keyLimit: 256 };
+  const { inCase } = await runOne(publishBoundaries, limits);
+  const bodies = inCase
+    .filter((call) => call.op === "publishEvents")
+    .map((call) => call.body.events);
+  const sizeOf = (events) => events[0].textData?.length;
+  const sent = bodies.filter(
+    (events) => events.length === 1 && sizeOf(events) > 100_000 && events[0].id !== undefined,
+  );
+  // The ends of the text bracket, then the bisection between them.
+  assert.deepEqual(
+    sent.slice(0, reference(524_032, 524_800, 524_500, { askLow: true }).length).map(sizeOf),
+    reference(524_032, 524_800, 524_500, { askLow: true }),
+  );
+  const extrasOf = (events) =>
+    Object.keys(events[0].attributes ?? {}).filter((key) => key.startsWith("ext")).length;
+  const extras = bodies.filter((events) => (events.length === 1 && extrasOf(events) > 0) || false);
+  const wanted = reference(0, 100, 94, { askLow: false });
+  assert.deepEqual(extras.slice(0, wanted.length).map(extrasOf), wanted);
+  const nameLength = (events) =>
+    Object.keys(events[0].attributes ?? {}).find(
+      (key) => key.startsWith("n") && key.length > 3 && !key.startsWith("ext"),
+    )?.length;
+  const names = bodies.filter((events) => events.length === 1 && nameLength(events) !== undefined);
+  const wantedNames = reference(1, 256, 253, { askLow: false });
+  assert.deepEqual(names.slice(0, wantedNames.length).map(nameLength), wantedNames);
+  // 101 events, each without a type.
+  const many = bodies.find((events) => events.length === 101);
+  assert.ok(many && many.every((event) => event.type === undefined));
+  assert.equal(bodies.filter((events) => events.length > 100).length, 1);
+});
+
+test("publish-boundaries: a high end answered with no verdict (a 503) ends that search with the note, and an accepted one too", async () => {
+  for (const [answer, expected] of [
+    [{ status: 503, body: {}, unknown: true }, null],
+    [{ status: 200, body: {}, unknown: false }, true],
+  ]) {
+    const wrap = (request) => async (call) => {
+      const size = call.body?.events?.[0]?.textData?.length;
+      if (call.op === "publishEvents" && size === 524_800) return answer;
+      return request(call);
+    };
+    const { notes } = await runOne(
+      publishBoundaries,
+      { textLimit: 524_500, attributeLimit: 100, keyLimit: 256 },
+      { wrap },
+    );
+    const moved = notes.find(
+      (line) => line.note === "bracket-moved" && line.name === "event-text-length",
+    );
+    assert.ok(moved, String(expected));
+    assert.deepEqual([moved.lowAccepted, moved.highAccepted], [true, expected]);
+    assert.equal(noteOf(notes, "limit-boundary", "event-text-length"), undefined);
+  }
 });

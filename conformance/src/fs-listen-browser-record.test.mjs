@@ -808,3 +808,22 @@ test("a browser run whose writes are not known (a mode failed or had no result, 
   assert.equal(lines.findLast((l) => l.type === "names").outcome, "unknown");
   assert.equal((await browserA2(lines)).clean, false);
 });
+
+test("a browser run that stops before its names are journaled journals no closing line either", async () => {
+  const lines = [];
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = async () => ({ status: 400, json: async () => ({}) });
+  try {
+    await recordBrowser({
+      target: PROD,
+      run: "r1",
+      journal: { append: (entry) => lines.push(entry), close() {} },
+      preflightImpl: async () => {},
+      runDriverImpl: async () => ({ receipt: { modes: {} }, wire: 0, connections: 0 }),
+      makeNative: () => emptyNative(),
+    });
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+  assert.equal(lines.filter((l) => l.type === "names").length, 0);
+});

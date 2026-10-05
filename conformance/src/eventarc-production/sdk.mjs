@@ -116,7 +116,8 @@ export async function createSdk({
     async publish({ channel, channelOptions, events, source }) {
       if (closed) throw new Error("the SDK forwarder of this case is closed");
       counter += 1;
-      active = { number: counter, forwarded: 0, suppressed: 0, error: null };
+      const mine = { number: counter, forwarded: 0, suppressed: 0, error: null };
+      active = mine;
       const previousHost = process.env.CLOUD_EVENTARC_EMULATOR_HOST;
       const previousSource = process.env.EVENTARC_CLOUD_EVENT_SOURCE;
       process.env.CLOUD_EVENTARC_EMULATOR_HOST = host;
@@ -142,17 +143,17 @@ export async function createSdk({
         if (previousSource === undefined) delete process.env.EVENTARC_CLOUD_EVENT_SOURCE;
         else process.env.EVENTARC_CLOUD_EVENT_SOURCE = previousSource;
       }
-      const finished = active;
-      active = null;
-      if (finished.error !== null) throw finished.error;
-      return { ...outcome, requests: finished.forwarded, suppressed: finished.suppressed };
+      if (active === mine) active = null;
+      if (mine.error !== null) throw mine.error;
+      return { ...outcome, requests: mine.forwarded, suppressed: mine.suppressed };
     },
     async close() {
       if (closed) return;
       closed = true;
       active = null;
       await deleteApp(app);
-      // An idle keep-alive connection must not hold the forwarder open after its case.
+      // A connection still open (a request in flight, an idle keep-alive one) must not hold the forwarder
+      // open after its case; the publish that was waiting on it ends with its error.
       const closing = new Promise((resolve) => server.close(resolve));
       server.closeAllConnections();
       await closing;

@@ -214,6 +214,25 @@ test("an error of any kind is reported with its message cut to 300 characters, a
   }
 });
 
+test("closing the forwarder does not wait for a request that is still in flight", async (t) => {
+  let started;
+  const inFlight = new Promise((resolve) => (started = resolve));
+  const { sdk } = await setup(() => {
+    started();
+    return new Promise(() => {});
+  });
+  t.after(() => sdk.close());
+  const publishing = sdk.publish({
+    channel: CHANNEL,
+    events: { type: "t", source: "//s", data: "x" },
+  });
+  await inFlight;
+  await sdk.close();
+  // The SDK's own connection was cut, so its publish ends with an error instead of hanging.
+  const outcome = await publishing;
+  assert.equal(outcome.threw, true);
+});
+
 test("a 503 is forwarded once: the SDK's retry is answered here with a 409, never sent, noted, and ends the SDK's attempts", async (t) => {
   const { sdk, calls, notes } = await setup({ status: 503, body: {}, unknown: true });
   t.after(() => sdk.close());

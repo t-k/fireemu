@@ -56,7 +56,7 @@ async function listOwned({ client, ownership, project, location, report }) {
   return { found, listed: false };
 }
 
-/** Polls an operation of a deletion until it is done: true, false when it never was, null on a failure. */
+/** Polls an operation until it is done: true, false when it never was, null on a failure. */
 async function settle({ client, name, sleep, attempts }) {
   let last;
   for (let attempt = 0; attempt < attempts; attempt += 1) {
@@ -208,10 +208,7 @@ export async function cleanup({
     targets = ledgerTargets(ledger, ownership);
     everything = new Set(targets);
     for (const name of initial)
-      if (!targets.has(name)) {
-        settled.add(name);
-        report.settled.push({ name, how: "operation" });
-      }
+      if (!targets.has(name)) report.settled.push({ name, how: "operation" });
     // Only the locations the run lists are listed: a target elsewhere (a location that cannot exist) is
     // read by name only.
     const listedLocations = new Set(ownership.locations());

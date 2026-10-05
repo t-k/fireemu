@@ -18,19 +18,6 @@ def test_a_table_that_does_not_have_exactly_three_untouched_waits_is_refused(tex
         tool.replay_cases_text(text)
 
 
-def test_the_replay_copy_is_built_once_and_a_copy_that_differs_is_refused(tmp_path):
-    source = tmp_path / "src"
-    source.mkdir()
-    (source / "txn_expiry_cases.py").write_text(TABLE)
-    destination = tmp_path / "copy"
-    tool.ensure_replay_tools(source, destination)
-    assert (destination / "txn_expiry_cases.py").read_text() == tool.replay_cases_text(TABLE)
-    assert tool.ensure_replay_tools(source, destination) == destination
-    (destination / "txn_expiry_cases.py").write_text(TABLE)
-    with pytest.raises(ValueError, match="differs"):
-        tool.ensure_replay_tools(source, destination)
-
-
 def side(code=10, state="created"):
     return {"projection": {"c1": {"code": code}, "c2": {"code": 0}}, "postStates": {"c1": {"state": state}, "c2": {"state": "x"}}}
 
@@ -77,36 +64,6 @@ def test_a_case_that_reads_no_document_back_has_no_post_state_row():
     assert [row["caseId"] for row in rows] == ["c1", "c1#postState", "c2"]
 
 
-def test_an_existing_replay_copy_must_equal_the_tool_directory_except_for_the_case_table(tmp_path):
-    source = tmp_path / "src"
-    source.mkdir()
-    (source / "txn_expiry_cases.py").write_text(TABLE)
-    (source / "txn_expiry_shadow.py").write_text("shadow")
-    (source / "__pycache__").mkdir()
-    (source / "__pycache__" / "x.pyc").write_text("cache")
-    destination = tmp_path / "copy"
-    tool.ensure_replay_tools(source, destination)
-    assert tool.ensure_replay_tools(source, destination) == destination
-    # a stale copy of any other module is refused, not silently imported
-    (destination / "txn_expiry_shadow.py").write_text("an older shadow")
-    with pytest.raises(ValueError, match="differs"):
-        tool.ensure_replay_tools(source, destination)
-    (destination / "txn_expiry_shadow.py").write_text("shadow")
-    # a file the copy lacks, and a file only the copy has, are refused too
-    (destination / "extra.py").write_text("extra")
-    with pytest.raises(ValueError, match="differs"):
-        tool.ensure_replay_tools(source, destination)
-    (destination / "extra.py").unlink()
-    (destination / "txn_expiry_shadow.py").unlink()
-    with pytest.raises(ValueError, match="differs"):
-        tool.ensure_replay_tools(source, destination)
-    # bytecode caches are not part of the comparison
-    (destination / "txn_expiry_shadow.py").write_text("shadow")
-    (destination / "__pycache__").mkdir(exist_ok=True)
-    (destination / "__pycache__" / "other.pyc").write_text("another cache")
-    assert tool.ensure_replay_tools(source, destination) == destination
-
-
 def test_the_digests_of_the_files_the_replay_ran_are_named(tmp_path):
     directory = tmp_path / "tools"
     directory.mkdir()
@@ -147,3 +104,33 @@ def test_a_tracked_overlay_directory_is_found_from_the_repository_root(tmp_path)
 
 def test_no_runner_built_overlay_directory_is_tracked():
     assert tool.tracked_overlay_paths(tool.HERE.parents[2]) == []
+
+
+def test_the_replay_copy_is_built_from_the_tool_directory_with_only_the_case_table_changed(tmp_path):
+    source = tmp_path / "src"
+    source.mkdir()
+    (source / "txn_expiry_cases.py").write_text(TABLE)
+    (source / "txn_expiry_shadow.py").write_text("shadow")
+    (source / "__pycache__").mkdir()
+    (source / "__pycache__" / "x.pyc").write_text("cache")
+    destination = tmp_path / "copy"
+    assert tool.ensure_replay_tools(source, destination) == destination
+    assert sorted(path.name for path in destination.iterdir()) == ["txn_expiry_cases.py", "txn_expiry_shadow.py"]
+    assert (destination / "txn_expiry_cases.py").read_text() == tool.replay_cases_text(TABLE)
+    assert (destination / "txn_expiry_shadow.py").read_text() == "shadow"
+
+
+def test_a_stale_or_tampered_copy_is_replaced_never_imported(tmp_path):
+    source = tmp_path / "src"
+    source.mkdir()
+    (source / "txn_expiry_cases.py").write_text(TABLE)
+    (source / "txn_expiry_shadow.py").write_text("shadow")
+    destination = tmp_path / "copy"
+    tool.ensure_replay_tools(source, destination)
+    (destination / "txn_expiry_shadow.py").write_text("an older shadow")
+    (destination / "extra.py").write_text("extra")
+    (destination / "txn_expiry_cases.py").write_text(TABLE)
+    tool.ensure_replay_tools(source, destination)
+    assert sorted(path.name for path in destination.iterdir()) == ["txn_expiry_cases.py", "txn_expiry_shadow.py"]
+    assert (destination / "txn_expiry_shadow.py").read_text() == "shadow"
+    assert (destination / "txn_expiry_cases.py").read_text() == tool.replay_cases_text(TABLE)

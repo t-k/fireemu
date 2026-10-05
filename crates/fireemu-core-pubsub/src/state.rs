@@ -290,8 +290,7 @@ impl PubSubState {
         }
     }
 
-    /// Drops every topic and subscription (session reset). The seed and counters are reset so
-    /// that a fresh run after a reset reproduces the same identifiers.
+    /// Drops every topic and subscription (session reset). Identifier generators reset for deterministic fresh runs; topic incarnations remain monotonic to reject stale preparations.
     pub fn clear(&mut self) {
         self.topics.clear();
         self.subscriptions.clear();
@@ -304,7 +303,7 @@ impl PubSubState {
         self.message_counter = 10_000_000_000_000_000;
         self.ack_rng = SplitMix64::new(self.seed ^ 0x5053_5542_4143_4b5f);
         self.snapshot_counter = 0;
-        self.topic_counter = 0;
+        // Incarnations stay monotonic so reset cannot revive a prepared publication.
     }
 
     /// Drops one project's topics and subscriptions without disturbing other sessions.
@@ -1697,6 +1696,27 @@ mod tests {
                     proptest::prop_assert!(message.message_id.bytes().all(|byte|byte.is_ascii_digit()));
                     proptest::prop_assert_eq!(message.message_id.parse::<u64>().unwrap(),10_000_000_000_000_000+u64::try_from(index).unwrap()+1);
                 }
+                state.clear();
+            }
+        }
+    }
+
+    proptest::proptest! {
+        #[test]
+        fn reset_refuses_prepared_publications_from_previous_topic_incarnations(resets in 1usize..8, seed in proptest::prelude::any::<u64>()) {
+            let mut state=PubSubState::new(seed);let name=topic("demo-app","reset-publication");
+            let now=LogicalInstant::from_unix_seconds(100);
+            for _ in 0..resets {
+                state.create_topic(name.clone(),BTreeMap::new()).unwrap();
+                let config=sub_cfg("demo-app","reset-sub","reset-publication",Filter::always());let subscription=config.name.clone();
+                state.create_subscription(config.clone()).unwrap();
+                let prepared=state.prepare_publish(&name,vec![data(b"old")],now).unwrap();
+                state.clear();state.create_topic(name.clone(),BTreeMap::new()).unwrap();state.create_subscription(config).unwrap();
+                let error=state.commit_prepared(prepared,now).unwrap_err();
+                proptest::prop_assert_eq!(error.code(),crate::Code::FailedPrecondition);
+                proptest::prop_assert!(state.pull(&subscription,10,now).unwrap().is_empty());
+                let ids=state.publish(&name,vec![data(b"new")],now).unwrap();
+                proptest::prop_assert_eq!(ids,vec!["10000000000000001".to_owned()]);
                 state.clear();
             }
         }

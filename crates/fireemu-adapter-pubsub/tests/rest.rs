@@ -15,11 +15,15 @@ use serde_json::{json, Value};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 async fn start() -> std::net::SocketAddr {
+    start_policy(fireemu_adapter_pubsub::PagingPolicy::Strict).await
+}
+
+async fn start_policy(policy: fireemu_adapter_pubsub::PagingPolicy) -> std::net::SocketAddr {
     let clock = Arc::new(Mutex::new(VirtualClock::new(
         LogicalInstant::from_unix_seconds(1_700_000_000),
     )));
     let state = Arc::new(Mutex::new(PubSubState::new(99)));
-    let handle = PubSubHandle::new(state, clock, None);
+    let handle = PubSubHandle::new(state, clock, None).with_paging_policy(policy);
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
     tokio::spawn(async move {
@@ -2255,4 +2259,321 @@ async fn rest_collection_fields_follow_cardinality_on_the_pubsub_listener() {
     server.abort();
     assert!(server.await.unwrap_err().is_cancelled());
     assert!(tokio::net::TcpStream::connect(address).await.is_err());
+}
+
+#[tokio::test]
+async fn recorded_rest_paging_omits_empty_snapshots_and_validates_size_and_token() {
+    let address = start().await;
+    let (status, body) = rest_request(
+        address,
+        "GET",
+        "/v1/projects/demo-app/snapshots?pageSize=1",
+        json!({}),
+    )
+    .await;
+    assert_eq!(status, 200);
+    assert_eq!(body, json!({}));
+    for collection in ["topics", "subscriptions"] {
+        let (status, body) = rest_request(
+            address,
+            "GET",
+            &format!("/v1/projects/demo-app/{collection}?pageSize=-1"),
+            json!({}),
+        )
+        .await;
+        assert_eq!(status, 400);
+        assert_eq!(body["error"]["message"], "The value for page_size is out of bounds. You passed -1 in the request, but the value must be between 0 and 1000.");
+        let (status, body) = rest_request(
+            address,
+            "GET",
+            &format!("/v1/projects/demo-app/{collection}?pageToken=garbage"),
+            json!({}),
+        )
+        .await;
+        assert_eq!(status, 400);
+        assert_eq!(
+            body["error"]["message"],
+            "Invalid page token given (token=garbage)."
+        );
+    }
+}
+
+#[tokio::test]
+async fn recorded_rest_topic_subscriptions_share_cursor_with_grpc_project_list() {
+    let address = start().await;
+    let topic = "projects/demo-app/topics/paging";
+    assert_eq!(
+        rest_request(address, "PUT", &format!("/v1/{topic}"), json!({}))
+            .await
+            .0,
+        200
+    );
+    for suffix in ["a", "b", "c"] {
+        assert_eq!(
+            rest_request(
+                address,
+                "PUT",
+                &format!("/v1/projects/demo-app/subscriptions/paging-{suffix}"),
+                json!({"topic":topic})
+            )
+            .await
+            .0,
+            200
+        );
+    }
+    let (status, first) = rest_request(
+        address,
+        "GET",
+        &format!("/v1/{topic}/subscriptions?pageSize=2"),
+        json!({}),
+    )
+    .await;
+    assert_eq!(status, 200);
+    assert_eq!(first["subscriptions"].as_array().unwrap().len(), 2);
+    let token = first["nextPageToken"].as_str().unwrap();
+    assert!((22..=26).contains(&token.len()));
+    assert!(token
+        .bytes()
+        .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-'));
+    let mut subscriber = SubscriberClient::new(grpc_channel(address).await);
+    let second = subscriber
+        .list_subscriptions(pb::ListSubscriptionsRequest {
+            project: "projects/demo-app".into(),
+            page_size: 2,
+            page_token: token.into(),
+        })
+        .await
+        .unwrap()
+        .into_inner();
+    assert_eq!(second.subscriptions.len(), 1);
+    assert_eq!(
+        second.subscriptions[0].name,
+        "projects/demo-app/subscriptions/paging-c"
+    );
+    assert!(second.next_page_token.is_empty());
+    let (status, all) = rest_request(
+        address,
+        "GET",
+        &format!("/v1/{topic}/subscriptions?pageSize=0"),
+        json!({}),
+    )
+    .await;
+    assert_eq!(status, 200);
+    assert_eq!(all["subscriptions"].as_array().unwrap().len(), 3);
+    assert!(all.get("nextPageToken").is_none());
+}
+
+#[tokio::test]
+#[allow(clippy::too_many_lines)] // One partition check per list route and both wire profiles.
+async fn both_profiles_page_all_five_lists_and_preserve_deleted_topic_marker() {
+    for policy in [
+        fireemu_adapter_pubsub::PagingPolicy::Strict,
+        fireemu_adapter_pubsub::PagingPolicy::Emulator,
+    ] {
+        let address = start_policy(policy).await;
+        let mut publisher = PublisherClient::new(grpc_channel(address).await);
+        let mut subscriber = SubscriberClient::new(grpc_channel(address).await);
+        let topic = "projects/demo-app/topics/paging-topic";
+        publisher
+            .create_topic(pb::Topic {
+                name: topic.into(),
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        for suffix in ["a", "b", "c"] {
+            publisher
+                .create_topic(pb::Topic {
+                    name: format!("{topic}-{suffix}"),
+                    ..Default::default()
+                })
+                .await
+                .unwrap();
+            let name = format!("projects/demo-app/subscriptions/paging-{suffix}");
+            subscriber
+                .create_subscription(pb::Subscription {
+                    name: name.clone(),
+                    topic: topic.into(),
+                    ..Default::default()
+                })
+                .await
+                .unwrap();
+            subscriber
+                .create_snapshot(pb::CreateSnapshotRequest {
+                    name: format!("projects/demo-app/snapshots/paging-{suffix}"),
+                    subscription: name,
+                    ..Default::default()
+                })
+                .await
+                .unwrap();
+        }
+        let routes = [
+            ("projects/demo-app/topics".to_owned(), "topics", 4usize),
+            (
+                "projects/demo-app/subscriptions".to_owned(),
+                "subscriptions",
+                3,
+            ),
+            ("projects/demo-app/snapshots".to_owned(), "snapshots", 3),
+            (format!("{topic}/subscriptions"), "subscriptions", 3),
+            (format!("{topic}/snapshots"), "snapshots", 3),
+        ];
+        for (route, field, count) in routes {
+            let (status, all) = rest_request(
+                address,
+                "GET",
+                &format!("/v1/{route}?pageSize=0"),
+                json!({}),
+            )
+            .await;
+            assert_eq!(status, 200);
+            let expected = all[field].as_array().unwrap().clone();
+            assert_eq!(expected.len(), count);
+            let mut actual = Vec::new();
+            let mut token = String::new();
+            for _ in 0..count {
+                let (status, page) = rest_request(
+                    address,
+                    "GET",
+                    &format!("/v1/{route}?pageSize=1&pageToken={token}"),
+                    json!({}),
+                )
+                .await;
+                assert_eq!(status, 200);
+                actual.extend(page[field].as_array().unwrap().clone());
+                token = page
+                    .get("nextPageToken")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_owned();
+                if token.is_empty() {
+                    break;
+                }
+            }
+            assert_eq!(actual, expected, "{policy:?} {route}");
+        }
+        let topics = publisher
+            .list_topics(pb::ListTopicsRequest {
+                project: "projects/demo-app".into(),
+                page_size: 1,
+                ..Default::default()
+            })
+            .await
+            .unwrap()
+            .into_inner();
+        assert_eq!(topics.topics.len(), 1);
+        assert!(!topics.next_page_token.is_empty());
+        let subscriptions = subscriber
+            .list_subscriptions(pb::ListSubscriptionsRequest {
+                project: "projects/demo-app".into(),
+                page_size: 1,
+                ..Default::default()
+            })
+            .await
+            .unwrap()
+            .into_inner();
+        assert_eq!(subscriptions.subscriptions.len(), 1);
+        let topic_subs = publisher
+            .list_topic_subscriptions(pb::ListTopicSubscriptionsRequest {
+                topic: topic.into(),
+                page_size: 1,
+                ..Default::default()
+            })
+            .await
+            .unwrap()
+            .into_inner();
+        assert_eq!(topic_subs.subscriptions.len(), 1);
+        assert_eq!(subscriptions.next_page_token, topic_subs.next_page_token);
+        let snapshots = subscriber
+            .list_snapshots(pb::ListSnapshotsRequest {
+                project: "projects/demo-app".into(),
+                page_size: 1,
+                ..Default::default()
+            })
+            .await
+            .unwrap()
+            .into_inner();
+        assert_eq!(snapshots.snapshots.len(), 1);
+        let topic_snaps = publisher
+            .list_topic_snapshots(pb::ListTopicSnapshotsRequest {
+                topic: topic.into(),
+                page_size: 1,
+                ..Default::default()
+            })
+            .await
+            .unwrap()
+            .into_inner();
+        assert_eq!(topic_snaps.snapshots.len(), 1);
+        assert_eq!(snapshots.next_page_token, topic_snaps.next_page_token);
+        let negative = publisher
+            .list_topics(pb::ListTopicsRequest {
+                project: "projects/demo-app".into(),
+                page_size: -1,
+                ..Default::default()
+            })
+            .await;
+        if policy == fireemu_adapter_pubsub::PagingPolicy::Strict {
+            let error = negative.unwrap_err();
+            assert_eq!(error.code(), tonic::Code::InvalidArgument);
+            assert_eq!(error.message(),"The value for page_size is out of bounds. You passed -1 in the request, but the value must be between 0 and 1000.");
+            let error = publisher
+                .list_topics(pb::ListTopicsRequest {
+                    project: "projects/demo-app".into(),
+                    page_token: "garbage".into(),
+                    ..Default::default()
+                })
+                .await
+                .unwrap_err();
+            assert_eq!(error.message(), "Invalid page token given (token=garbage).");
+        } else {
+            assert_eq!(negative.unwrap().into_inner().topics.len(), 4);
+            assert!(publisher
+                .list_topics(pb::ListTopicsRequest {
+                    project: "projects/demo-app".into(),
+                    page_token: "garbage".into(),
+                    ..Default::default()
+                })
+                .await
+                .is_ok());
+        }
+        publisher
+            .delete_topic(pb::DeleteTopicRequest {
+                topic: topic.into(),
+            })
+            .await
+            .unwrap();
+        let subscription = subscriber
+            .get_subscription(pb::GetSubscriptionRequest {
+                subscription: "projects/demo-app/subscriptions/paging-a".into(),
+            })
+            .await
+            .unwrap()
+            .into_inner();
+        assert_eq!(subscription.topic, "_deleted-topic_");
+        publisher
+            .create_topic(pb::Topic {
+                name: topic.into(),
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        let (status, subscription) = rest_request(
+            address,
+            "GET",
+            "/v1/projects/demo-app/subscriptions/paging-a",
+            json!({}),
+        )
+        .await;
+        assert_eq!(status, 200);
+        assert_eq!(subscription["topic"], "_deleted-topic_");
+        let detached = publisher
+            .list_topic_subscriptions(pb::ListTopicSubscriptionsRequest {
+                topic: topic.into(),
+                ..Default::default()
+            })
+            .await
+            .unwrap()
+            .into_inner();
+        assert!(detached.subscriptions.is_empty());
+    }
 }

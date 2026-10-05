@@ -18,6 +18,7 @@ pub mod error;
 pub mod filter;
 pub mod message;
 pub mod name;
+pub mod pagination;
 pub mod state;
 pub mod subscription;
 

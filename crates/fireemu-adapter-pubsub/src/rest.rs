@@ -10,6 +10,7 @@ use axum::http::{Method, Request, StatusCode};
 use axum::response::Response;
 use base64::engine::general_purpose::STANDARD as BASE64;
 use base64::Engine;
+use fireemu_core_pubsub::pagination::paginate;
 use fireemu_core_pubsub::subscription::{
     DeadLetterPolicy, PushConfig, RetryPolicy, DEFAULT_ACK_DEADLINE_SECONDS,
     DEFAULT_RETRY_MINIMUM_BACKOFF_SECONDS, MAX_RETRY_BACKOFF_SECONDS,
@@ -100,6 +101,7 @@ impl RestError {
 pub(crate) async fn handle(request: Request<Body>, handle: PubSubHandle) -> Response {
     let method = request.method().clone();
     let path = request.uri().path().to_owned();
+    let query = request.uri().query().unwrap_or_default().to_owned();
     let body = match to_bytes(request.into_body(), MAX_JSON_BYTES).await {
         Ok(body) => body,
         Err(error) => {
@@ -121,7 +123,7 @@ pub(crate) async fn handle(request: Request<Body>, handle: PubSubHandle) -> Resp
         }
     };
 
-    match dispatch(&method, &path, &value, &handle) {
+    match dispatch(&method, &path, &query, &value, &handle) {
         Ok((status, response)) => json_response(status, response),
         Err(error) => error_response(error),
     }
@@ -130,6 +132,7 @@ pub(crate) async fn handle(request: Request<Body>, handle: PubSubHandle) -> Resp
 fn dispatch(
     method: &Method,
     path: &str,
+    query: &str,
     body: &Value,
     handle: &PubSubHandle,
 ) -> Result<(StatusCode, Value), RestError> {
@@ -143,13 +146,13 @@ fn dispatch(
     }
     let project = parts[1];
     if parts[2] == "topics" {
-        return dispatch_topic(method, &parts[3..], project, body, handle);
+        return dispatch_topic(method, &parts[3..], project, query, body, handle);
     }
     if parts[2] == "subscriptions" {
-        return dispatch_subscription(method, &parts[3..], project, body, handle);
+        return dispatch_subscription(method, &parts[3..], project, query, body, handle);
     }
     if parts[2] == "snapshots" {
-        return dispatch_snapshot(method, &parts[3..], project, body, handle);
+        return dispatch_snapshot(method, &parts[3..], project, query, body, handle);
     }
     Err(RestError::not_found("unknown Pub/Sub REST resource"))
 }
@@ -158,6 +161,7 @@ fn dispatch_topic(
     method: &Method,
     parts: &[&str],
     project: &str,
+    query: &str,
     body: &Value,
     handle: &PubSubHandle,
 ) -> Result<(StatusCode, Value), RestError> {
@@ -174,7 +178,40 @@ fn dispatch_topic(
                 topic_json(&name, &labels)
             })
             .collect::<Vec<_>>();
-        return Ok((StatusCode::OK, collection_json("topics", topics)));
+        return Ok((
+            StatusCode::OK,
+            paged_collection_json("topics", topics, query, handle)?,
+        ));
+    }
+    if parts.len() == 2
+        && *method == Method::GET
+        && matches!(parts[1], "subscriptions" | "snapshots")
+    {
+        let topic = TopicName::new(project, parts[0]).map_err(RestError::from_core)?;
+        let now = handle.now();
+        let mut state = handle.state();
+        let names = if parts[1] == "subscriptions" {
+            if !state.topic_exists(&topic) && handle.paging_policy == crate::PagingPolicy::Strict {
+                return Err(RestError::not_found(format!(
+                    "Resource not found (resource={}).",
+                    parts[0]
+                )));
+            }
+            state.topic_subscriptions(&topic)
+        } else if !state.topic_exists(&topic)
+            && handle.paging_policy == crate::PagingPolicy::Emulator
+        {
+            Vec::new()
+        } else {
+            state
+                .list_topic_snapshots(&topic, now)
+                .map_err(RestError::from_core)?
+        };
+        let resources = names.into_iter().map(Value::String).collect();
+        return Ok((
+            StatusCode::OK,
+            paged_collection_json(parts[1], resources, query, handle)?,
+        ));
     }
     if parts.len() != 1 {
         return Err(RestError::not_found("invalid topic resource path"));
@@ -229,6 +266,66 @@ fn collection_json(field: &str, resources: Vec<Value>) -> Value {
     Value::Object(response)
 }
 
+fn paged_collection_json(
+    field: &str,
+    resources: Vec<Value>,
+    query: &str,
+    handle: &PubSubHandle,
+) -> Result<Value, RestError> {
+    let mut size = 0;
+    let mut token = String::new();
+    for pair in query.split('&').filter(|pair| !pair.is_empty()) {
+        let (key, value) = pair.split_once('=').unwrap_or((pair, ""));
+        let key = decode_query(key)?;
+        let value = decode_query(value)?;
+        match key.as_str() {
+            "pageSize" | "page_size" => {
+                size = value
+                    .parse()
+                    .map_err(|_| RestError::invalid("pageSize must be an integer"))?;
+            }
+            "pageToken" | "page_token" => token = value,
+            _ => {}
+        }
+    }
+    let page = paginate(resources, size, &token, handle.paging_policy, |resource| {
+        resource
+            .as_str()
+            .or_else(|| resource.get("name").and_then(Value::as_str))
+            .unwrap_or_default()
+            .to_owned()
+    })
+    .map_err(RestError::from_core)?;
+    let mut response = collection_json(field, page.resources);
+    if !page.next_page_token.is_empty() {
+        response.as_object_mut().expect("collection object").insert(
+            "nextPageToken".to_owned(),
+            Value::String(page.next_page_token),
+        );
+    }
+    Ok(response)
+}
+
+fn decode_query(value: &str) -> Result<String, RestError> {
+    let mut decoded = Vec::with_capacity(value.len());
+    let mut bytes = value.bytes();
+    while let Some(byte) = bytes.next() {
+        decoded.push(match byte {
+            b'+' => b' ',
+            b'%' => {
+                let high = bytes.next().and_then(|b| char::from(b).to_digit(16));
+                let low = bytes.next().and_then(|b| char::from(b).to_digit(16));
+                let (Some(high), Some(low)) = (high, low) else {
+                    return Err(RestError::invalid("invalid percent encoding in query"));
+                };
+                u8::try_from(high * 16 + low).expect("decoded byte")
+            }
+            other => other,
+        });
+    }
+    String::from_utf8(decoded).map_err(|_| RestError::invalid("query must be UTF-8"))
+}
+
 fn update_topic(topic: &TopicName, body: &Value) -> Result<(StatusCode, Value), RestError> {
     let topic_body = field(body, "topic").unwrap_or(body);
     let topic_options = topic_from_json(topic, topic_body)?;
@@ -253,6 +350,7 @@ fn dispatch_subscription(
     method: &Method,
     parts: &[&str],
     project: &str,
+    query: &str,
     body: &Value,
     handle: &PubSubHandle,
 ) -> Result<(StatusCode, Value), RestError> {
@@ -268,7 +366,7 @@ fn dispatch_subscription(
             .collect::<Vec<_>>();
         return Ok((
             StatusCode::OK,
-            collection_json("subscriptions", subscriptions),
+            paged_collection_json("subscriptions", subscriptions, query, handle)?,
         ));
     }
     if parts.len() != 1 {
@@ -305,6 +403,7 @@ fn dispatch_snapshot(
     method: &Method,
     parts: &[&str],
     project: &str,
+    query: &str,
     body: &Value,
     handle: &PubSubHandle,
 ) -> Result<(StatusCode, Value), RestError> {
@@ -320,7 +419,7 @@ fn dispatch_snapshot(
             .collect::<Vec<_>>();
         return Ok((
             StatusCode::OK,
-            json!({"snapshots": snapshots, "nextPageToken": ""}),
+            paged_collection_json("snapshots", snapshots, query, handle)?,
         ));
     }
     if parts.len() != 1 {

@@ -27,6 +27,8 @@ mod subscriber;
 use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
 use std::sync::{Arc, Mutex};
 
+pub use fireemu_core_pubsub::pagination::PagingPolicy;
+
 use fireemu_core_pubsub::{
     DeadLetterForward, PubSubError, PubSubState, PubsubMessage, ReceivedMessage, StoredMessage,
     SubscriptionName, TopicName,
@@ -397,6 +399,7 @@ pub trait TopicDelivery: Send + Sync {
 /// optional Functions bridge.
 #[derive(Clone)]
 pub struct PubSubHandle {
+    paging_policy: PagingPolicy,
     state: Arc<Mutex<PubSubState>>,
     clock: Arc<Mutex<VirtualClock>>,
     bridge: Option<Arc<dyn TopicDelivery>>,
@@ -420,6 +423,7 @@ impl PubSubHandle {
         bridge: Option<Arc<dyn TopicDelivery>>,
     ) -> Self {
         Self {
+            paging_policy: PagingPolicy::Emulator,
             state,
             clock,
             bridge,
@@ -433,6 +437,13 @@ impl PubSubHandle {
             push_clock_notify: Arc::new(Notify::new()),
             dead_letter_cancel_notify: Arc::new(Notify::new()),
         }
+    }
+
+    /// Selects the list policy. The default follows the official emulator.
+    #[must_use]
+    pub fn with_paging_policy(mut self, policy: PagingPolicy) -> Self {
+        self.paging_policy = policy;
+        self
     }
 
     /// The current virtual-clock instant.

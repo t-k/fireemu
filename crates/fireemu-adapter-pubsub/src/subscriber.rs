@@ -8,6 +8,7 @@ use std::time::Duration;
 use tokio_stream::wrappers::ReceiverStream;
 use tonic::{Request, Response, Status};
 
+use fireemu_core_pubsub::pagination::paginate;
 use fireemu_core_pubsub::subscription::DEFAULT_ACK_DEADLINE_SECONDS;
 use fireemu_core_pubsub::{PushConfig, SubscriptionName};
 use fireemu_proto_pubsub::google::pubsub::v1 as pb;
@@ -180,7 +181,7 @@ impl Subscriber for SubscriberService {
         let req = request.into_inner();
         let project = project_of(&req.project)?;
         let state = self.handle.state();
-        let subscriptions = state
+        let subscriptions: Vec<_> = state
             .list_subscriptions(project)
             .iter()
             .map(|c| {
@@ -190,9 +191,17 @@ impl Subscriber for SubscriberService {
                 subscription_to_proto(c, &reported)
             })
             .collect();
-        Ok(Response::new(pb::ListSubscriptionsResponse {
+        let page = paginate(
             subscriptions,
-            next_page_token: String::new(),
+            req.page_size,
+            &req.page_token,
+            self.handle.paging_policy,
+            |subscription| subscription.name.clone(),
+        )
+        .map_err(|e| status(&e))?;
+        Ok(Response::new(pb::ListSubscriptionsResponse {
+            subscriptions: page.resources,
+            next_page_token: page.next_page_token,
         }))
     }
 
@@ -363,16 +372,24 @@ impl Subscriber for SubscriberService {
     ) -> Result<Response<pb::ListSnapshotsResponse>, Status> {
         let req = request.into_inner();
         let project = project_of(&req.project)?;
-        let snapshots = self
+        let snapshots: Vec<_> = self
             .handle
             .state()
             .list_snapshots(project, self.handle.now())
             .iter()
             .map(snapshot_to_proto)
             .collect();
-        Ok(Response::new(pb::ListSnapshotsResponse {
+        let page = paginate(
             snapshots,
-            next_page_token: String::new(),
+            req.page_size,
+            &req.page_token,
+            self.handle.paging_policy,
+            |snapshot| snapshot.name.clone(),
+        )
+        .map_err(|e| status(&e))?;
+        Ok(Response::new(pb::ListSnapshotsResponse {
+            snapshots: page.resources,
+            next_page_token: page.next_page_token,
         }))
     }
 

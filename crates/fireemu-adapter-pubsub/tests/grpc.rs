@@ -80,7 +80,8 @@ async fn start_with_bridge(bridge: Option<Arc<dyn TopicDelivery>>) -> Harness {
         LogicalInstant::from_unix_seconds(1_700_000_000),
     )));
     let state = Arc::new(Mutex::new(PubSubState::new(42)));
-    let handle = PubSubHandle::new(state.clone(), clock.clone(), bridge);
+    let handle = PubSubHandle::new(state.clone(), clock.clone(), bridge)
+        .with_paging_policy(fireemu_adapter_pubsub::PagingPolicy::Strict);
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     let server_handle = handle.clone();

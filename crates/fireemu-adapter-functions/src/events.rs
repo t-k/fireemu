@@ -345,7 +345,10 @@ pub fn pubsub_event(
 /// An Auth wire timestamp as production prints it: RFC 3339 UTC cut to the whole second, with
 /// no fraction (recorded in the `metadata` of the Auth v1 events of the FUNCTIONS-EVENTS formal
 /// record `functions-events-formal-20261004T182904Z-a9621bfae74fe9bc`, 2026-10-04, e.g.
-/// `2026-10-04T18:44:34Z` for a creation at `18:44:34.537`).
+/// `metadata.creationTime` `2026-10-04T18:44:34Z` in frame 55, whose own `context.timestamp` is
+/// `2026-10-04T18:44:34.537Z`). The record shows the whole-second form only; that the seconds
+/// are cut and not rounded is a choice (as the store's `whole_second`), because the creation
+/// instant behind a recorded time is not recorded.
 fn whole_second_time(t: LogicalInstant) -> String {
     let nanos = t.as_nanos();
     rfc3339(LogicalInstant::from_nanos(
@@ -355,7 +358,9 @@ fn whole_second_time(t: LogicalInstant) -> String {
 
 /// One `providerData` entry of the Auth v1 wire: the members that are set. Production's entry of
 /// a password account has `email`, `providerId` and `uid` only (record above, frame 55), so an
-/// unset profile member is absent, not `null`.
+/// unset profile member is absent, not `null`. A federated entry is built the same way by
+/// inference, not recording: it is the same Identity Toolkit `ProviderUserInfo` message as the
+/// password entry, and no recorded account was federated (ledger 869).
 fn provider_entry(
     uid: &str,
     provider_id: &str,
@@ -1128,9 +1133,39 @@ mod auth_event_shapes {
     }
 
     #[test]
+    fn creation_and_sign_in_at_a_second_boundary_each_print_their_own_second() {
+        // Near miss: the cut is per time, never shared. 18:44:34.999999999 cuts to :34 and the
+        // next instant, 18:44:35.000000000, to :35 (rounding would make the first :35).
+        let created = at(FRAME_55_SECOND, 999_999_999);
+        let mut user = password_user("a@example.test", created);
+        user.last_sign_in_at = Some(at(FRAME_55_SECOND + 1, 0));
+        let wire = user_record_json(&user);
+        assert_eq!(wire["metadata"]["creationTime"], "2026-10-04T18:44:34Z");
+        assert_eq!(wire["metadata"]["lastSignInTime"], "2026-10-04T18:44:35Z");
+    }
+
+    #[test]
+    fn a_password_provider_entry_is_serialized_in_the_recorded_member_order() {
+        // Frame 55 `providerData[0]` lists `email`, `providerId`, `uid` in that order. `Value`
+        // equality ignores order, so this reads the serialized wire string (it would catch a
+        // workspace-wide `serde_json/preserve_order`).
+        let user = password_user(
+            "e4585e5442efa3439b570ce10f7@example.test",
+            at(FRAME_55_SECOND, 0),
+        );
+        let text = serde_json::to_string(&user_record_json(&user)["providerData"][0]).unwrap();
+        assert_eq!(
+            text,
+            r#"{"email":"e4585e5442efa3439b570ce10f7@example.test","providerId":"password","uid":"e4585e5442efa3439b570ce10f7@example.test"}"#
+        );
+    }
+
+    #[test]
     fn a_federated_provider_entry_carries_the_members_it_has_and_no_placeholders() {
         // Unrecorded (no recorded account was federated): the entry keeps the members the
-        // identity has, and a member it lacks is absent like the password entry's.
+        // identity has, and a member it lacks is absent like the password entry's. That is an
+        // inference from the recorded password entry (same `ProviderUserInfo` message), accepted
+        // in ledger 869; before this change the lacking members were `null`.
         use fireemu_core_auth::store::FederatedIdentity;
         let mut user = password_user("a@example.test", at(FRAME_55_SECOND, 0));
         user.federated = vec![
@@ -1242,6 +1277,7 @@ mod auth_event_shapes {
             prop_assert_eq!(parsed, instant.as_nanos() - instant.as_nanos().rem_euclid(1_000_000));
         }
 
+        // That the seconds are cut and not rounded is a choice: the record shows the format only.
         #[test]
         fn creation_and_sign_in_times_are_the_instant_cut_to_the_whole_second(
             created in -4_000_000_000_000_000_000_i128..4_000_000_000_000_000_000,

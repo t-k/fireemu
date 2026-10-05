@@ -45,13 +45,19 @@ export function extract(runDir) {
     .map(({ frame }) => frame)
     .sort((a, b) => Date.parse(a.receivedAt) - Date.parse(b.receivedAt))
     .map((frame) => {
-      const out = { handler: frame.handler, generation: frame.generation, at: Date.parse(frame.receivedAt) - origin };
+      const out = {
+        handler: frame.handler,
+        generation: frame.generation,
+        at: Date.parse(frame.receivedAt) - origin,
+      };
       if (frame.generation === 2) {
         const headers = frame.request?.headers ?? {};
         Object.assign(out, {
           method: frame.request?.method ?? null,
           url: frame.request?.url ?? null,
-          headers: Object.fromEntries(KEPT_HEADERS.filter((k) => k in headers).map((k) => [k, headers[k]])),
+          headers: Object.fromEntries(
+            KEPT_HEADERS.filter((k) => k in headers).map((k) => [k, headers[k]]),
+          ),
           headerNames: Object.keys(headers).toSorted(),
           rawBodyLength: frame.request?.rawBodyLength ?? null,
           event: frame.event,
@@ -73,27 +79,51 @@ export function extract(runDir) {
   const types = {};
   for (const { entry } of entries.map((e) => ({ entry: e.entry ?? e }))) {
     const payload = entry.jsonPayload ?? {};
-    const kind = String(payload["@type"] ?? "").split(".").at(-1);
-    const key = [kind, payload.targetType ?? "", payload.status ?? "", payload.debugInfo ?? ""].join("|");
+    const kind = String(payload["@type"] ?? "")
+      .split(".")
+      .at(-1);
+    const key = [
+      kind,
+      payload.targetType ?? "",
+      payload.status ?? "",
+      payload.debugInfo ?? "",
+    ].join("|");
     types[key] = (types[key] ?? 0) + 1;
     const job = entry.resource?.labels?.job_id;
     if (job && (kind === "AttemptStarted" || kind === "AttemptFinished"))
-      (attempts[job] ??= []).push({ kind, at: Date.parse(entry.timestamp) - origin, status: payload.status ?? null, debugInfo: payload.debugInfo ?? null });
+      (attempts[job] ??= []).push({
+        kind,
+        at: Date.parse(entry.timestamp) - origin,
+        status: payload.status ?? null,
+        debugInfo: payload.debugInfo ?? null,
+      });
   }
   for (const list of Object.values(attempts)) list.sort((a, b) => a.at - b.at);
   const digest = {
     schemaVersion: 1,
-    run: { id: result.runId, project: "fireemu-oracle-sbx", region: "us-central1", recordedOn: "2026-10-05" },
+    run: {
+      id: result.runId,
+      project: "fireemu-oracle-sbx",
+      region: "us-central1",
+      recordedOn: "2026-10-05",
+    },
     jobs: result.jobs,
     extraAnswers: result.extraAnswers,
-    passes: result.passes.map((p) => ({ number: p.number, forced: p.forced.map((f) => f.id.replace(result.runId, "<runId>")) })),
+    passes: result.passes.map((p) => ({
+      number: p.number,
+      forced: p.forced.map((f) => f.id.replace(result.runId, "<runId>")),
+    })),
     schedulerEntryTypes: types,
     frameCounts: result.frames,
     frames: handled,
     attempts,
   };
   const text = JSON.stringify(digest);
-  if (NUMBER_LIKE.test(text.replace(/\d{4}-\d\d-\d\dT[\d:.Z+-]+/g, "").replace(/messageId|"eventId":"\d+"/g, "")))
+  if (
+    NUMBER_LIKE.test(
+      text.replace(/\d{4}-\d\d-\d\dT[\d:.Z+-]+/g, "").replace(/messageId|"eventId":"\d+"/g, ""),
+    )
+  )
     throw new Error("the digest holds a twelve-digit number: refusing to write it");
   return digest;
 }

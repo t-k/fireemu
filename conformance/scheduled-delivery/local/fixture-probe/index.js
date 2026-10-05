@@ -15,11 +15,24 @@ const failing = (name) => async (event) => {
 };
 
 exports.retryFour = onSchedule(
-  { schedule: "every 5 minutes", timeZone: "Asia/Tokyo", retryCount: 4, minBackoffSeconds: 4, maxBackoffSeconds: 50, maxDoublings: 2 },
+  {
+    schedule: "every 5 minutes",
+    timeZone: "Asia/Tokyo",
+    retryCount: 4,
+    minBackoffSeconds: 4,
+    maxBackoffSeconds: 50,
+    maxDoublings: 2,
+  },
   failing("retryFour"),
 );
-exports.retryZero = onSchedule({ schedule: "every 5 minutes", retryCount: 0 }, failing("retryZero"));
-exports.retryFive = onSchedule({ schedule: "every 5 minutes", retryCount: 5 }, failing("retryFive"));
+exports.retryZero = onSchedule(
+  { schedule: "every 5 minutes", retryCount: 0 },
+  failing("retryZero"),
+);
+exports.retryFive = onSchedule(
+  { schedule: "every 5 minutes", retryCount: 5 },
+  failing("retryFive"),
+);
 exports.retryDuration = onSchedule(
   { schedule: "every 5 minutes", maxRetrySeconds: 30, minBackoffSeconds: 4, maxBackoffSeconds: 10 },
   failing("retryDuration"),

@@ -1,0 +1,5837 @@
+{
+  "schemaVersion": 1,
+  "run": {
+    "id": "156715222b86ea44",
+    "project": "fireemu-oracle-sbx",
+    "region": "us-central1",
+    "recordedOn": "2026-10-05"
+  },
+  "jobs": {
+    "schedOkV2": {
+      "state": "ENABLED",
+      "schedule": "every 1 minutes",
+      "timeZone": "UTC",
+      "retryConfig": {
+        "maxRetryDuration": "0s",
+        "minBackoffDuration": "5s",
+        "maxBackoffDuration": "3600s",
+        "maxDoublings": 5
+      },
+      "attemptDeadline": "180s",
+      "target": "http",
+      "name": "projects/fireemu-oracle-sbx/locations/us-central1/jobs/firebase-schedule-schedOkV2-us-central1"
+    },
+    "schedRetryV2": {
+      "state": "ENABLED",
+      "schedule": "every 5 minutes",
+      "timeZone": "Asia/Tokyo",
+      "retryConfig": {
+        "retryCount": 4,
+        "maxRetryDuration": "0s",
+        "minBackoffDuration": "4s",
+        "maxBackoffDuration": "50s",
+        "maxDoublings": 2
+      },
+      "attemptDeadline": "180s",
+      "target": "http",
+      "name": "projects/fireemu-oracle-sbx/locations/us-central1/jobs/firebase-schedule-schedRetryV2-us-central1"
+    },
+    "schedSlowV2": {
+      "state": "ENABLED",
+      "schedule": "every 1 minutes",
+      "timeZone": "UTC",
+      "retryConfig": {
+        "maxRetryDuration": "0s",
+        "minBackoffDuration": "5s",
+        "maxBackoffDuration": "3600s",
+        "maxDoublings": 5
+      },
+      "attemptDeadline": "180s",
+      "target": "http",
+      "name": "projects/fireemu-oracle-sbx/locations/us-central1/jobs/firebase-schedule-schedSlowV2-us-central1"
+    },
+    "schedOkV1": {
+      "state": "ENABLED",
+      "schedule": "every 1 minutes",
+      "timeZone": "Asia/Tokyo",
+      "retryConfig": {
+        "maxRetryDuration": "0s",
+        "minBackoffDuration": "5s",
+        "maxBackoffDuration": "3600s",
+        "maxDoublings": 5
+      },
+      "attemptDeadline": null,
+      "target": "pubsub",
+      "name": "projects/fireemu-oracle-sbx/locations/us-central1/jobs/firebase-schedule-schedOkV1-us-central1"
+    },
+    "schedFailV1": {
+      "state": "ENABLED",
+      "schedule": "every 5 minutes",
+      "timeZone": "America/Los_Angeles",
+      "retryConfig": {
+        "maxRetryDuration": "0s",
+        "minBackoffDuration": "5s",
+        "maxBackoffDuration": "3600s",
+        "maxDoublings": 5
+      },
+      "attemptDeadline": null,
+      "target": "pubsub",
+      "name": "projects/fireemu-oracle-sbx/locations/us-central1/jobs/firebase-schedule-schedFailV1-us-central1"
+    }
+  },
+  "extraAnswers": {
+    "zero": {
+      "status": 200,
+      "class": "2xx",
+      "message": null
+    },
+    "duration": {
+      "status": 200,
+      "class": "2xx",
+      "message": null
+    },
+    "count": {
+      "status": 400,
+      "class": "4xx",
+      "message": "retryConfig.max_retry_duration.nanos cannot be set: invalid argument"
+    },
+    "retry5": {
+      "status": 200,
+      "class": "2xx",
+      "message": null
+    }
+  },
+  "passes": [
+    {
+      "number": 1,
+      "forced": [
+        "firebase-schedule-schedOkV2-us-central1",
+        "firebase-schedule-schedRetryV2-us-central1",
+        "firebase-schedule-schedSlowV2-us-central1",
+        "firebase-schedule-schedOkV1-us-central1",
+        "firebase-schedule-schedFailV1-us-central1",
+        "fe-sd-<runId>-zero",
+        "fe-sd-<runId>-duration",
+        "fe-sd-<runId>-retry5"
+      ]
+    },
+    {
+      "number": 2,
+      "forced": [
+        "firebase-schedule-schedOkV2-us-central1",
+        "firebase-schedule-schedRetryV2-us-central1",
+        "firebase-schedule-schedSlowV2-us-central1",
+        "firebase-schedule-schedOkV1-us-central1",
+        "firebase-schedule-schedFailV1-us-central1",
+        "fe-sd-<runId>-zero",
+        "fe-sd-<runId>-duration",
+        "fe-sd-<runId>-retry5"
+      ]
+    }
+  ],
+  "schedulerEntryTypes": {
+    "AttemptFinished|PUB_SUB||": 22,
+    "AttemptStarted|PUB_SUB||": 22,
+    "AttemptFinished|HTTP||URL_CRAWLED. Original HTTP response code number = 200": 20,
+    "AttemptStarted|HTTP||": 66,
+    "AttemptFinished|HTTP|DEADLINE_EXCEEDED|URL_UNREACHABLE-UNREACHABLE_5xx. Original HTTP response code number = 504": 9,
+    "AttemptFinished|HTTP|INTERNAL|URL_UNREACHABLE-UNREACHABLE_5xx. Original HTTP response code number = 500": 38
+  },
+  "frameCounts": {
+    "schedSlowV2": 18,
+    "schedOkV1": 17,
+    "schedOkV2": 18,
+    "schedRetryV2": 40,
+    "schedFailV1": 4
+  },
+  "frames": [
+    {
+      "handler": "schedSlowV2",
+      "generation": 2,
+      "at": 0,
+      "method": "POST",
+      "url": "/",
+      "headers": {
+        "x-cloudscheduler": "true",
+        "user-agent": "Google-Cloud-Scheduler",
+        "content-length": "0",
+        "x-cloudscheduler-jobname": "firebase-schedule-schedSlowV2-us-central1",
+        "x-cloudscheduler-scheduletime": "2026-10-05T01:41:00-07:00",
+        "x-forwarded-proto": "https"
+      },
+      "headerNames": [
+        "accept-encoding",
+        "authorization",
+        "content-length",
+        "forwarded",
+        "host",
+        "traceparent",
+        "user-agent",
+        "x-cloud-trace-context",
+        "x-cloudscheduler",
+        "x-cloudscheduler-jobname",
+        "x-cloudscheduler-scheduletime",
+        "x-forwarded-for",
+        "x-forwarded-proto"
+      ],
+      "rawBodyLength": null,
+      "event": {
+        "jobName": "firebase-schedule-schedSlowV2-us-central1",
+        "scheduleTime": "2026-10-05T01:41:00-07:00"
+      },
+      "eventKeys": ["jobName", "scheduleTime"],
+      "contextProperty": {
+        "enumerable": false,
+        "configurable": false,
+        "hasGetter": true
+      },
+      "context": {
+        "eventId": "firebase-schedule-schedSlowV2-us-central1",
+        "timestamp": "2026-10-05T01:41:00-07:00",
+        "eventType": "google.pubsub.topic.publish",
+        "resource": {
+          "service": "pubsub.googleapis.com",
+          "name": "projects/fireemu-oracle-sbx/topics/firebase-schedule-schedSlowV2-us-central1"
+        },
+        "params": {}
+      },
+      "phase": "start"
+    },
+    {
+      "handler": "schedOkV1",
+      "generation": 1,
+      "at": 1622,
+      "argumentCount": 1,
+      "arguments": [
+        {
+          "eventId": "22257109111563907",
+          "eventType": "google.pubsub.topic.publish",
+          "resource": {
+            "name": "projects/fireemu-oracle-sbx/topics/firebase-schedule-schedOkV1-us-central1",
+            "service": "pubsub.googleapis.com",
+            "type": "type.googleapis.com/google.pubsub.v1.PubsubMessage"
+          },
+          "timestamp": "2026-10-05T08:41:01.359Z",
+          "params": {}
+        }
+      ],
+      "context": {
+        "eventId": "22257109111563907",
+        "eventType": "google.pubsub.topic.publish",
+        "resource": {
+          "name": "projects/fireemu-oracle-sbx/topics/firebase-schedule-schedOkV1-us-central1",
+          "service": "pubsub.googleapis.com",
+          "type": "type.googleapis.com/google.pubsub.v1.PubsubMessage"
+        },
+        "timestamp": "2026-10-05T08:41:01.359Z",
+        "params": {}
+      }
+    },
+    {
+      "handler": "schedOkV2",
+      "generation": 2,
+      "at": 3250,
+      "method": "POST",
+      "url": "/",
+      "headers": {
+        "x-cloudscheduler": "true",
+        "user-agent": "Google-Cloud-Scheduler",
+        "content-length": "0",
+        "x-cloudscheduler-jobname": "firebase-schedule-schedOkV2-us-central1",
+        "x-cloudscheduler-scheduletime": "2026-10-05T01:41:00-07:00",
+        "x-forwarded-proto": "https"
+      },
+      "headerNames": [
+        "accept-encoding",
+        "authorization",
+        "content-length",
+        "forwarded",
+        "host",
+        "traceparent",
+        "user-agent",
+        "x-cloud-trace-context",
+        "x-cloudscheduler",
+        "x-cloudscheduler-jobname",
+        "x-cloudscheduler-scheduletime",
+        "x-forwarded-for",
+        "x-forwarded-proto"
+      ],
+      "rawBodyLength": null,
+      "event": {
+        "jobName": "firebase-schedule-schedOkV2-us-central1",
+        "scheduleTime": "2026-10-05T01:41:00-07:00"
+      },
+      "eventKeys": ["jobName", "scheduleTime"],
+      "contextProperty": {
+        "enumerable": false,
+        "configurable": false,
+        "hasGetter": true
+      },
+      "context": {
+        "eventId": "firebase-schedule-schedOkV2-us-central1",
+        "timestamp": "2026-10-05T01:41:00-07:00",
+        "eventType": "google.pubsub.topic.publish",
+        "resource": {
+          "service": "pubsub.googleapis.com",
+          "name": "projects/fireemu-oracle-sbx/topics/firebase-schedule-schedOkV2-us-central1"
+        },
+        "params": {}
+      }
+    },
+    {
+      "handler": "schedOkV2",
+      "generation": 2,
+      "at": 61286,
+      "method": "POST",
+      "url": "/",
+      "headers": {
+        "x-cloudscheduler": "true",
+        "user-agent": "Google-Cloud-Scheduler",
+        "content-length": "0",
+        "x-cloudscheduler-jobname": "firebase-schedule-schedOkV2-us-central1",
+        "x-cloudscheduler-scheduletime": "2026-10-05T01:42:01.416739-07:00",
+        "x-forwarded-proto": "https"
+      },
+      "headerNames": [
+        "accept-encoding",
+        "authorization",
+        "content-length",
+        "forwarded",
+        "host",
+        "traceparent",
+        "user-agent",
+        "x-cloud-trace-context",
+        "x-cloudscheduler",
+        "x-cloudscheduler-jobname",
+        "x-cloudscheduler-scheduletime",
+        "x-forwarded-for",
+        "x-forwarded-proto"
+      ],
+      "rawBodyLength": null,
+      "event": {
+        "jobName": "firebase-schedule-schedOkV2-us-central1",
+        "scheduleTime": "2026-10-05T01:42:01.416739-07:00"
+      },
+      "eventKeys": ["jobName", "scheduleTime"],
+      "contextProperty": {
+        "enumerable": false,
+        "configurable": false,
+        "hasGetter": true
+      },
+      "context": {
+        "eventId": "firebase-schedule-schedOkV2-us-central1",
+        "timestamp": "2026-10-05T01:42:01.416739-07:00",
+        "eventType": "google.pubsub.topic.publish",
+        "resource": {
+          "service": "pubsub.googleapis.com",
+          "name": "projects/fireemu-oracle-sbx/topics/firebase-schedule-schedOkV2-us-central1"
+        },
+        "params": {}
+      }
+    },
+    {
+      "handler": "schedOkV1",
+      "generation": 1,
+      "at": 62886,
+      "argumentCount": 1,
+      "arguments": [
+        {
+          "eventId": "22257112145313863",
+          "eventType": "google.pubsub.topic.publish",
+          "resource": {
+            "name": "projects/fireemu-oracle-sbx/topics/firebase-schedule-schedOkV1-us-central1",
+            "service": "pubsub.googleapis.com",
+            "type": "type.googleapis.com/google.pubsub.v1.PubsubMessage"
+          },
+          "timestamp": "2026-10-05T08:42:03.1Z",
+          "params": {}
+        }
+      ],
+      "context": {
+        "eventId": "22257112145313863",
+        "eventType": "google.pubsub.topic.publish",
+        "resource": {
+          "name": "projects/fireemu-oracle-sbx/topics/firebase-schedule-schedOkV1-us-central1",
+          "service": "pubsub.googleapis.com",
+          "type": "type.googleapis.com/google.pubsub.v1.PubsubMessage"
+        },
+        "timestamp": "2026-10-05T08:42:03.1Z",
+        "params": {}
+      }
+    },
+    {
+      "handler": "schedOkV2",
+      "generation": 2,
+      "at": 91755,
+      "method": "POST",
+      "url": "/",
+      "headers": {
+        "x-cloudscheduler": "true",
+        "user-agent": "Google-Cloud-Scheduler",
+        "content-length": "0",
+        "x-cloudscheduler-jobname": "firebase-schedule-schedOkV2-us-central1",
+        "x-cloudscheduler-scheduletime": "2026-10-05T01:43:01.416739-07:00",
+        "x-forwarded-proto": "https"
+      },
+      "headerNames": [
+        "accept-encoding",
+        "authorization",
+        "content-length",
+        "forwarded",
+        "host",
+        "traceparent",
+        "user-agent",
+        "x-cloud-trace-context",
+        "x-cloudscheduler",
+        "x-cloudscheduler-jobname",
+        "x-cloudscheduler-scheduletime",
+        "x-forwarded-for",
+        "x-forwarded-proto"
+      ],
+      "rawBodyLength": null,
+      "event": {
+        "jobName": "firebase-schedule-schedOkV2-us-central1",
+        "scheduleTime": "2026-10-05T01:43:01.416739-07:00"
+      },
+      "eventKeys": ["jobName", "scheduleTime"],
+      "contextProperty": {
+        "enumerable": false,
+        "configurable": false,
+        "hasGetter": true
+      },
+      "context": {
+        "eventId": "firebase-schedule-schedOkV2-us-central1",
+        "timestamp": "2026-10-05T01:43:01.416739-07:00",
+        "eventType": "google.pubsub.topic.publish",
+        "resource": {
+          "service": "pubsub.googleapis.com",
+          "name": "projects/fireemu-oracle-sbx/topics/firebase-schedule-schedOkV2-us-central1"
+        },
+        "params": {}
+      }
+    },
+    {
+      "handler": "schedRetryV2",
+      "generation": 2,
+      "at": 96188,
+      "method": "POST",
+      "url": "/",
+      "headers": {
+        "x-cloudscheduler": "true",
+        "user-agent": "Google-Cloud-Scheduler",
+        "content-length": "0",
+        "x-cloudscheduler-jobname": "firebase-schedule-schedRetryV2-us-central1",
+        "x-cloudscheduler-scheduletime": "2026-10-05T01:45:00-07:00",
+        "x-forwarded-proto": "https"
+      },
+      "headerNames": [
+        "accept-encoding",
+        "authorization",
+        "content-length",
+        "forwarded",
+        "host",
+        "traceparent",
+        "user-agent",
+        "x-cloud-trace-context",
+        "x-cloudscheduler",
+        "x-cloudscheduler-jobname",
+        "x-cloudscheduler-scheduletime",
+        "x-forwarded-for",
+        "x-forwarded-proto"
+      ],
+      "rawBodyLength": null,
+      "event": {
+        "jobName": "firebase-schedule-schedRetryV2-us-central1",
+        "scheduleTime": "2026-10-05T01:45:00-07:00"
+      },
+      "eventKeys": ["jobName", "scheduleTime"],
+      "contextProperty": {
+        "enumerable": false,
+        "configurable": false,
+        "hasGetter": true
+      },
+      "context": {
+        "eventId": "firebase-schedule-schedRetryV2-us-central1",
+        "timestamp": "2026-10-05T01:45:00-07:00",
+        "eventType": "google.pubsub.topic.publish",
+        "resource": {
+          "service": "pubsub.googleapis.com",
+          "name": "projects/fireemu-oracle-sbx/topics/firebase-schedule-schedRetryV2-us-central1"
+        },
+        "params": {}
+      },
+      "failing": true,
+      "elapsedMs": -142954
+    },
+    {
+      "handler": "schedSlowV2",
+      "generation": 2,
+      "at": 99522,
+      "method": "POST",
+      "url": "/",
+      "headers": {
+        "x-cloudscheduler": "true",
+        "user-agent": "Google-Cloud-Scheduler",
+        "content-length": "0",
+        "x-cloudscheduler-jobname": "firebase-schedule-schedSlowV2-us-central1",
+        "x-cloudscheduler-scheduletime": "2026-10-05T01:43:03.352477-07:00",
+        "x-forwarded-proto": "https"
+      },
+      "headerNames": [
+        "accept-encoding",
+        "authorization",
+        "content-length",
+        "forwarded",
+        "host",
+        "traceparent",
+        "user-agent",
+        "x-cloud-trace-context",
+        "x-cloudscheduler",
+        "x-cloudscheduler-jobname",
+        "x-cloudscheduler-scheduletime",
+        "x-forwarded-for",
+        "x-forwarded-proto"
+      ],
+      "rawBodyLength": null,
+      "event": {
+        "jobName": "firebase-schedule-schedSlowV2-us-central1",
+        "scheduleTime": "2026-10-05T01:43:03.352477-07:00"
+      },
+      "eventKeys": ["jobName", "scheduleTime"],
+      "contextProperty": {
+        "enumerable": false,
+        "configurable": false,
+        "hasGetter": true
+      },
+      "context": {
+        "eventId": "firebase-schedule-schedSlowV2-us-central1",
+        "timestamp": "2026-10-05T01:43:03.352477-07:00",
+        "eventType": "google.pubsub.topic.publish",
+        "resource": {
+          "service": "pubsub.googleapis.com",
+          "name": "projects/fireemu-oracle-sbx/topics/firebase-schedule-schedSlowV2-us-central1"
+        },
+        "params": {}
+      },
+      "phase": "start"
+    },
+    {
+      "handler": "schedSlowV2",
+      "generation": 2,
+      "at": 100014,
+      "method": "POST",
+      "url": "/",
+      "headers": {
+        "x-cloudscheduler": "true",
+        "user-agent": "Google-Cloud-Scheduler",
+        "content-length": "0",
+        "x-cloudscheduler-jobname": "firebase-schedule-schedSlowV2-us-central1",
+        "x-cloudscheduler-scheduletime": "2026-10-05T01:41:00-07:00",
+        "x-forwarded-proto": "https"
+      },
+      "headerNames": [
+        "accept-encoding",
+        "authorization",
+        "content-length",
+        "forwarded",
+        "host",
+        "traceparent",
+        "user-agent",
+        "x-cloud-trace-context",
+        "x-cloudscheduler",
+        "x-cloudscheduler-jobname",
+        "x-cloudscheduler-scheduletime",
+        "x-forwarded-for",
+        "x-forwarded-proto"
+      ],
+      "rawBodyLength": null,
+      "event": {
+        "jobName": "firebase-schedule-schedSlowV2-us-central1",
+        "scheduleTime": "2026-10-05T01:41:00-07:00"
+      },
+      "eventKeys": ["jobName", "scheduleTime"],
+      "contextProperty": {
+        "enumerable": false,
+        "configurable": false,
+        "hasGetter": true
+      },
+      "context": {
+        "eventId": "firebase-schedule-schedSlowV2-us-central1",
+        "timestamp": "2026-10-05T01:41:00-07:00",
+        "eventType": "google.pubsub.topic.publish",
+        "resource": {
+          "service": "pubsub.googleapis.com",
+          "name": "projects/fireemu-oracle-sbx/topics/firebase-schedule-schedSlowV2-us-central1"
+        },
+        "params": {}
+      },
+      "phase": "end"
+    },
+    {
+      "handler": "schedRetryV2",
+      "generation": 2,
+      "at": 100772,
+      "method": "POST",
+      "url": "/",
+      "headers": {
+        "x-cloudscheduler": "true",
+        "user-agent": "Google-Cloud-Scheduler",
+        "content-length": "0",
+        "x-cloudscheduler-jobname": "firebase-schedule-schedRetryV2-us-central1",
+        "x-cloudscheduler-scheduletime": "2026-10-05T01:45:00-07:00",
+        "x-forwarded-proto": "https"
+      },
+      "headerNames": [
+        "accept-encoding",
+        "authorization",
+        "content-length",
+        "forwarded",
+        "host",
+        "traceparent",
+        "user-agent",
+        "x-cloud-trace-context",
+        "x-cloudscheduler",
+        "x-cloudscheduler-jobname",
+        "x-cloudscheduler-scheduletime",
+        "x-forwarded-for",
+        "x-forwarded-proto"
+      ],
+      "rawBodyLength": null,
+      "event": {
+        "jobName": "firebase-schedule-schedRetryV2-us-central1",
+        "scheduleTime": "2026-10-05T01:45:00-07:00"
+      },
+      "eventKeys": ["jobName", "scheduleTime"],
+      "contextProperty": {
+        "enumerable": false,
+        "configurable": false,
+        "hasGetter": true
+      },
+      "context": {
+        "eventId": "firebase-schedule-schedRetryV2-us-central1",
+        "timestamp": "2026-10-05T01:45:00-07:00",
+        "eventType": "google.pubsub.topic.publish",
+        "resource": {
+          "service": "pubsub.googleapis.com",
+          "name": "projects/fireemu-oracle-sbx/topics/firebase-schedule-schedRetryV2-us-central1"
+        },
+        "params": {}
+      },
+      "failing": true,
+      "elapsedMs": -138369
+    },
+    {
+      "handler": "schedOkV1",
+      "generation": 1,
+      "at": 105706,
+      "argumentCount": 1,
+      "arguments": [
+        {
+          "eventId": "22256502903442198",
+          "eventType": "google.pubsub.topic.publish",
+          "resource": {
+            "name": "projects/fireemu-oracle-sbx/topics/firebase-schedule-schedOkV1-us-central1",
+            "service": "pubsub.googleapis.com",
+            "type": "type.googleapis.com/google.pubsub.v1.PubsubMessage"
+          },
+          "timestamp": "2026-10-05T08:42:45.957Z",
+          "params": {}
+        }
+      ],
+      "context": {
+        "eventId": "22256502903442198",
+        "eventType": "google.pubsub.topic.publish",
+        "resource": {
+          "name": "projects/fireemu-oracle-sbx/topics/firebase-schedule-schedOkV1-us-central1",
+          "service": "pubsub.googleapis.com",
+          "type": "type.googleapis.com/google.pubsub.v1.PubsubMessage"
+        },
+        "timestamp": "2026-10-05T08:42:45.957Z",
+        "params": {}
+      }
+    },
+    {
+      "handler": "schedRetryV2",
+      "generation": 2,
+      "at": 109394,
+      "method": "POST",
+      "url": "/",
+      "headers": {
+        "x-cloudscheduler": "true",
+        "user-agent": "Google-Cloud-Scheduler",
+        "content-length": "0",
+        "x-cloudscheduler-jobname": "firebase-schedule-schedRetryV2-us-central1",
+        "x-cloudscheduler-scheduletime": "2026-10-05T01:45:00-07:00",
+        "x-forwarded-proto": "https"
+      },
+      "headerNames": [
+        "accept-encoding",
+        "authorization",
+        "content-length",
+        "forwarded",
+        "host",
+        "traceparent",
+        "user-agent",
+        "x-cloud-trace-context",
+        "x-cloudscheduler",
+        "x-cloudscheduler-jobname",
+        "x-cloudscheduler-scheduletime",
+        "x-forwarded-for",
+        "x-forwarded-proto"
+      ],
+      "rawBodyLength": null,
+      "event": {
+        "jobName": "firebase-schedule-schedRetryV2-us-central1",
+        "scheduleTime": "2026-10-05T01:45:00-07:00"
+      },
+      "eventKeys": ["jobName", "scheduleTime"],
+      "contextProperty": {
+        "enumerable": false,
+        "configurable": false,
+        "hasGetter": true
+      },
+      "context": {
+        "eventId": "firebase-schedule-schedRetryV2-us-central1",
+        "timestamp": "2026-10-05T01:45:00-07:00",
+        "eventType": "google.pubsub.topic.publish",
+        "resource": {
+          "service": "pubsub.googleapis.com",
+          "name": "projects/fireemu-oracle-sbx/topics/firebase-schedule-schedRetryV2-us-central1"
+        },
+        "params": {}
+      },
+      "failing": true,
+      "elapsedMs": -129747
+    },
+    {
+      "handler": "schedFailV1",
+      "generation": 1,
+      "at": 110235,
+      "argumentCount": 1,
+      "arguments": [
+        {
+          "eventId": "22256732696405721",
+          "eventType": "google.pubsub.topic.publish",
+          "resource": {
+            "name": "projects/fireemu-oracle-sbx/topics/firebase-schedule-schedFailV1-us-central1",
+            "service": "pubsub.googleapis.com",
+            "type": "type.googleapis.com/google.pubsub.v1.PubsubMessage"
+          },
+          "timestamp": "2026-10-05T08:42:50.384Z",
+          "params": {}
+        }
+      ],
+      "context": {
+        "eventId": "22256732696405721",
+        "eventType": "google.pubsub.topic.publish",
+        "resource": {
+          "name": "projects/fireemu-oracle-sbx/topics/firebase-schedule-schedFailV1-us-central1",
+          "service": "pubsub.googleapis.com",
+          "type": "type.googleapis.com/google.pubsub.v1.PubsubMessage"
+        },
+        "timestamp": "2026-10-05T08:42:50.384Z",
+        "params": {}
+      },
+      "failing": true
+    },
+    {
+      "handler": "schedRetryV2",
+      "generation": 2,
+      "at": 114082,
+      "method": "POST",
+      "url": "/",
+      "headers": {
+        "x-cloudscheduler": "true",
+        "user-agent": "Google-Cloud-Scheduler",
+        "content-length": "0",
+        "x-cloudscheduler-jobname": "fe-sd-156715222b86ea44-zero",
+        "x-cloudscheduler-scheduletime": "2026-12-31T16:00:00-08:00",
+        "x-forwarded-proto": "https"
+      },
+      "headerNames": [
+        "accept-encoding",
+        "authorization",
+        "content-length",
+        "forwarded",
+        "host",
+        "traceparent",
+        "user-agent",
+        "x-cloud-trace-context",
+        "x-cloudscheduler",
+        "x-cloudscheduler-jobname",
+        "x-cloudscheduler-scheduletime",
+        "x-forwarded-for",
+        "x-forwarded-proto"
+      ],
+      "rawBodyLength": null,
+      "event": {
+        "jobName": "fe-sd-156715222b86ea44-zero",
+        "scheduleTime": "2026-12-31T16:00:00-08:00"
+      },
+      "eventKeys": ["jobName", "scheduleTime"],
+      "contextProperty": {
+        "enumerable": false,
+        "configurable": false,
+        "hasGetter": true
+      },
+      "context": {
+        "eventId": "fe-sd-156715222b86ea44-zero",
+        "timestamp": "2026-12-31T16:00:00-08:00",
+        "eventType": "google.pubsub.topic.publish",
+        "resource": {
+          "service": "pubsub.googleapis.com",
+          "name": "projects/fireemu-oracle-sbx/topics/fe-sd-156715222b86ea44-zero"
+        },
+        "params": {}
+      },
+      "failing": true,
+      "elapsedMs": -7571825059
+    },
+    {
+      "handler": "schedRetryV2",
+      "generation": 2,
+      "at": 118879,
+      "method": "POST",
+      "url": "/",
+      "headers": {
+        "x-cloudscheduler": "true",
+        "user-agent": "Google-Cloud-Scheduler",
+        "content-length": "0",
+        "x-cloudscheduler-jobname": "fe-sd-156715222b86ea44-duration",
+        "x-cloudscheduler-scheduletime": "2026-12-31T16:00:00-08:00",
+        "x-forwarded-proto": "https"
+      },
+      "headerNames": [
+        "accept-encoding",
+        "authorization",
+        "content-length",
+        "forwarded",
+        "host",
+        "traceparent",
+        "user-agent",
+        "x-cloud-trace-context",
+        "x-cloudscheduler",
+        "x-cloudscheduler-jobname",
+        "x-cloudscheduler-scheduletime",
+        "x-forwarded-for",
+        "x-forwarded-proto"
+      ],
+      "rawBodyLength": null,
+      "event": {
+        "jobName": "fe-sd-156715222b86ea44-duration",
+        "scheduleTime": "2026-12-31T16:00:00-08:00"
+      },
+      "eventKeys": ["jobName", "scheduleTime"],
+      "contextProperty": {
+        "enumerable": false,
+        "configurable": false,
+        "hasGetter": true
+      },
+      "context": {
+        "eventId": "fe-sd-156715222b86ea44-duration",
+        "timestamp": "2026-12-31T16:00:00-08:00",
+        "eventType": "google.pubsub.topic.publish",
+        "resource": {
+          "service": "pubsub.googleapis.com",
+          "name": "projects/fireemu-oracle-sbx/topics/fe-sd-156715222b86ea44-duration"
+        },
+        "params": {}
+      },
+      "failing": true,
+      "elapsedMs": -7571820262
+    },
+    {
+      "handler": "schedOkV2",
+      "generation": 2,
+      "at": 120761,
+      "method": "POST",
+      "url": "/",
+      "headers": {
+        "x-cloudscheduler": "true",
+        "user-agent": "Google-Cloud-Scheduler",
+        "content-length": "0",
+        "x-cloudscheduler-jobname": "firebase-schedule-schedOkV2-us-central1",
+        "x-cloudscheduler-scheduletime": "2026-10-05T01:43:01.416739-07:00",
+        "x-forwarded-proto": "https"
+      },
+      "headerNames": [
+        "accept-encoding",
+        "authorization",
+        "content-length",
+        "forwarded",
+        "host",
+        "traceparent",
+        "user-agent",
+        "x-cloud-trace-context",
+        "x-cloudscheduler",
+        "x-cloudscheduler-jobname",
+        "x-cloudscheduler-scheduletime",
+        "x-forwarded-for",
+        "x-forwarded-proto"
+      ],
+      "rawBodyLength": null,
+      "event": {
+        "jobName": "firebase-schedule-schedOkV2-us-central1",
+        "scheduleTime": "2026-10-05T01:43:01.416739-07:00"
+      },
+      "eventKeys": ["jobName", "scheduleTime"],
+      "contextProperty": {
+        "enumerable": false,
+        "configurable": false,
+        "hasGetter": true
+      },
+      "context": {
+        "eventId": "firebase-schedule-schedOkV2-us-central1",
+        "timestamp": "2026-10-05T01:43:01.416739-07:00",
+        "eventType": "google.pubsub.topic.publish",
+        "resource": {
+          "service": "pubsub.googleapis.com",
+          "name": "projects/fireemu-oracle-sbx/topics/firebase-schedule-schedOkV2-us-central1"
+        },
+        "params": {}
+      }
+    },
+    {
+      "handler": "schedOkV1",
+      "generation": 1,
+      "at": 123356,
+      "argumentCount": 1,
+      "arguments": [
+        {
+          "eventId": "22256515161412451",
+          "eventType": "google.pubsub.topic.publish",
+          "resource": {
+            "name": "projects/fireemu-oracle-sbx/topics/firebase-schedule-schedOkV1-us-central1",
+            "service": "pubsub.googleapis.com",
+            "type": "type.googleapis.com/google.pubsub.v1.PubsubMessage"
+          },
+          "timestamp": "2026-10-05T08:43:03.63Z",
+          "params": {}
+        }
+      ],
+      "context": {
+        "eventId": "22256515161412451",
+        "eventType": "google.pubsub.topic.publish",
+        "resource": {
+          "name": "projects/fireemu-oracle-sbx/topics/firebase-schedule-schedOkV1-us-central1",
+          "service": "pubsub.googleapis.com",
+          "type": "type.googleapis.com/google.pubsub.v1.PubsubMessage"
+        },
+        "timestamp": "2026-10-05T08:43:03.63Z",
+        "params": {}
+      }
+    },
+    {
+      "handler": "schedRetryV2",
+      "generation": 2,
+      "at": 123514,
+      "method": "POST",
+      "url": "/",
+      "headers": {
+        "x-cloudscheduler": "true",
+        "user-agent": "Google-Cloud-Scheduler",
+        "content-length": "0",
+        "x-cloudscheduler-jobname": "fe-sd-156715222b86ea44-duration",
+        "x-cloudscheduler-scheduletime": "2026-12-31T16:00:00-08:00",
+        "x-forwarded-proto": "https"
+      },
+      "headerNames": [
+        "accept-encoding",
+        "authorization",
+        "content-length",
+        "forwarded",
+        "host",
+        "traceparent",
+        "user-agent",
+        "x-cloud-trace-context",
+        "x-cloudscheduler",
+        "x-cloudscheduler-jobname",
+        "x-cloudscheduler-scheduletime",
+        "x-forwarded-for",
+        "x-forwarded-proto"
+      ],
+      "rawBodyLength": null,
+      "event": {
+        "jobName": "fe-sd-156715222b86ea44-duration",
+        "scheduleTime": "2026-12-31T16:00:00-08:00"
+      },
+      "eventKeys": ["jobName", "scheduleTime"],
+      "contextProperty": {
+        "enumerable": false,
+        "configurable": false,
+        "hasGetter": true
+      },
+      "context": {
+        "eventId": "fe-sd-156715222b86ea44-duration",
+        "timestamp": "2026-12-31T16:00:00-08:00",
+        "eventType": "google.pubsub.topic.publish",
+        "resource": {
+          "service": "pubsub.googleapis.com",
+          "name": "projects/fireemu-oracle-sbx/topics/fe-sd-156715222b86ea44-duration"
+        },
+        "params": {}
+      },
+      "failing": true,
+      "elapsedMs": -7571815628
+    },
+    {
+      "handler": "schedRetryV2",
+      "generation": 2,
+      "at": 124485,
+      "method": "POST",
+      "url": "/",
+      "headers": {
+        "x-cloudscheduler": "true",
+        "user-agent": "Google-Cloud-Scheduler",
+        "content-length": "0",
+        "x-cloudscheduler-jobname": "fe-sd-156715222b86ea44-retry5",
+        "x-cloudscheduler-scheduletime": "2026-12-31T16:00:00-08:00",
+        "x-forwarded-proto": "https"
+      },
+      "headerNames": [
+        "accept-encoding",
+        "authorization",
+        "content-length",
+        "forwarded",
+        "host",
+        "traceparent",
+        "user-agent",
+        "x-cloud-trace-context",
+        "x-cloudscheduler",
+        "x-cloudscheduler-jobname",
+        "x-cloudscheduler-scheduletime",
+        "x-forwarded-for",
+        "x-forwarded-proto"
+      ],
+      "rawBodyLength": null,
+      "event": {
+        "jobName": "fe-sd-156715222b86ea44-retry5",
+        "scheduleTime": "2026-12-31T16:00:00-08:00"
+      },
+      "eventKeys": ["jobName", "scheduleTime"],
+      "contextProperty": {
+        "enumerable": false,
+        "configurable": false,
+        "hasGetter": true
+      },
+      "context": {
+        "eventId": "fe-sd-156715222b86ea44-retry5",
+        "timestamp": "2026-12-31T16:00:00-08:00",
+        "eventType": "google.pubsub.topic.publish",
+        "resource": {
+          "service": "pubsub.googleapis.com",
+          "name": "projects/fireemu-oracle-sbx/topics/fe-sd-156715222b86ea44-retry5"
+        },
+        "params": {}
+      },
+      "failing": true,
+      "elapsedMs": -7571814656
+    },
+    {
+      "handler": "schedRetryV2",
+      "generation": 2,
+      "at": 125882,
+      "method": "POST",
+      "url": "/",
+      "headers": {
+        "x-cloudscheduler": "true",
+        "user-agent": "Google-Cloud-Scheduler",
+        "content-length": "0",
+        "x-cloudscheduler-jobname": "firebase-schedule-schedRetryV2-us-central1",
+        "x-cloudscheduler-scheduletime": "2026-10-05T01:45:00-07:00",
+        "x-forwarded-proto": "https"
+      },
+      "headerNames": [
+        "accept-encoding",
+        "authorization",
+        "content-length",
+        "forwarded",
+        "host",
+        "traceparent",
+        "user-agent",
+        "x-cloud-trace-context",
+        "x-cloudscheduler",
+        "x-cloudscheduler-jobname",
+        "x-cloudscheduler-scheduletime",
+        "x-forwarded-for",
+        "x-forwarded-proto"
+      ],
+      "rawBodyLength": null,
+      "event": {
+        "jobName": "firebase-schedule-schedRetryV2-us-central1",
+        "scheduleTime": "2026-10-05T01:45:00-07:00"
+      },
+      "eventKeys": ["jobName", "scheduleTime"],
+      "contextProperty": {
+        "enumerable": false,
+        "configurable": false,
+        "hasGetter": true
+      },
+      "context": {
+        "eventId": "firebase-schedule-schedRetryV2-us-central1",
+        "timestamp": "2026-10-05T01:45:00-07:00",
+        "eventType": "google.pubsub.topic.publish",
+        "resource": {
+          "service": "pubsub.googleapis.com",
+          "name": "projects/fireemu-oracle-sbx/topics/firebase-schedule-schedRetryV2-us-central1"
+        },
+        "params": {}
+      },
+      "failing": true,
+      "elapsedMs": -113259
+    },
+    {
+      "handler": "schedRetryV2",
+      "generation": 2,
+      "at": 130119,
+      "method": "POST",
+      "url": "/",
+      "headers": {
+        "x-cloudscheduler": "true",
+        "user-agent": "Google-Cloud-Scheduler",
+        "content-length": "0",
+        "x-cloudscheduler-jobname": "fe-sd-156715222b86ea44-retry5",
+        "x-cloudscheduler-scheduletime": "2026-12-31T16:00:00-08:00",
+        "x-forwarded-proto": "https"
+      },
+      "headerNames": [
+        "accept-encoding",
+        "authorization",
+        "content-length",
+        "forwarded",
+        "host",
+        "traceparent",
+        "user-agent",
+        "x-cloud-trace-context",
+        "x-cloudscheduler",
+        "x-cloudscheduler-jobname",
+        "x-cloudscheduler-scheduletime",
+        "x-forwarded-for",
+        "x-forwarded-proto"
+      ],
+      "rawBodyLength": null,
+      "event": {
+        "jobName": "fe-sd-156715222b86ea44-retry5",
+        "scheduleTime": "2026-12-31T16:00:00-08:00"
+      },
+      "eventKeys": ["jobName", "scheduleTime"],
+      "contextProperty": {
+        "enumerable": false,
+        "configurable": false,
+        "hasGetter": true
+      },
+      "context": {
+        "eventId": "fe-sd-156715222b86ea44-retry5",
+        "timestamp": "2026-12-31T16:00:00-08:00",
+        "eventType": "google.pubsub.topic.publish",
+        "resource": {
+          "service": "pubsub.googleapis.com",
+          "name": "projects/fireemu-oracle-sbx/topics/fe-sd-156715222b86ea44-retry5"
+        },
+        "params": {}
+      },
+      "failing": true,
+      "elapsedMs": -7571809022
+    },
+    {
+      "handler": "schedRetryV2",
+      "generation": 2,
+      "at": 132101,
+      "method": "POST",
+      "url": "/",
+      "headers": {
+        "x-cloudscheduler": "true",
+        "user-agent": "Google-Cloud-Scheduler",
+        "content-length": "0",
+        "x-cloudscheduler-jobname": "fe-sd-156715222b86ea44-duration",
+        "x-cloudscheduler-scheduletime": "2026-12-31T16:00:00-08:00",
+        "x-forwarded-proto": "https"
+      },
+      "headerNames": [
+        "accept-encoding",
+        "authorization",
+        "content-length",
+        "forwarded",
+        "host",
+        "traceparent",
+        "user-agent",
+        "x-cloud-trace-context",
+        "x-cloudscheduler",
+        "x-cloudscheduler-jobname",
+        "x-cloudscheduler-scheduletime",
+        "x-forwarded-for",
+        "x-forwarded-proto"
+      ],
+      "rawBodyLength": null,
+      "event": {
+        "jobName": "fe-sd-156715222b86ea44-duration",
+        "scheduleTime": "2026-12-31T16:00:00-08:00"
+      },
+      "eventKeys": ["jobName", "scheduleTime"],
+      "contextProperty": {
+        "enumerable": false,
+        "configurable": false,
+        "hasGetter": true
+      },
+      "context": {
+        "eventId": "fe-sd-156715222b86ea44-duration",
+        "timestamp": "2026-12-31T16:00:00-08:00",
+        "eventType": "google.pubsub.topic.publish",
+        "resource": {
+          "service": "pubsub.googleapis.com",
+          "name": "projects/fireemu-oracle-sbx/topics/fe-sd-156715222b86ea44-duration"
+        },
+        "params": {}
+      },
+      "failing": true,
+      "elapsedMs": -7571807040
+    },
+    {
+      "handler": "schedRetryV2",
+      "generation": 2,
+      "at": 140769,
+      "method": "POST",
+      "url": "/",
+      "headers": {
+        "x-cloudscheduler": "true",
+        "user-agent": "Google-Cloud-Scheduler",
+        "content-length": "0",
+        "x-cloudscheduler-jobname": "fe-sd-156715222b86ea44-retry5",
+        "x-cloudscheduler-scheduletime": "2026-12-31T16:00:00-08:00",
+        "x-forwarded-proto": "https"
+      },
+      "headerNames": [
+        "accept-encoding",
+        "authorization",
+        "content-length",
+        "forwarded",
+        "host",
+        "traceparent",
+        "user-agent",
+        "x-cloud-trace-context",
+        "x-cloudscheduler",
+        "x-cloudscheduler-jobname",
+        "x-cloudscheduler-scheduletime",
+        "x-forwarded-for",
+        "x-forwarded-proto"
+      ],
+      "rawBodyLength": null,
+      "event": {
+        "jobName": "fe-sd-156715222b86ea44-retry5",
+        "scheduleTime": "2026-12-31T16:00:00-08:00"
+      },
+      "eventKeys": ["jobName", "scheduleTime"],
+      "contextProperty": {
+        "enumerable": false,
+        "configurable": false,
+        "hasGetter": true
+      },
+      "context": {
+        "eventId": "fe-sd-156715222b86ea44-retry5",
+        "timestamp": "2026-12-31T16:00:00-08:00",
+        "eventType": "google.pubsub.topic.publish",
+        "resource": {
+          "service": "pubsub.googleapis.com",
+          "name": "projects/fireemu-oracle-sbx/topics/fe-sd-156715222b86ea44-retry5"
+        },
+        "params": {}
+      },
+      "failing": true,
+      "elapsedMs": -7571798372
+    },
+    {
+      "handler": "schedRetryV2",
+      "generation": 2,
+      "at": 142620,
+      "method": "POST",
+      "url": "/",
+      "headers": {
+        "x-cloudscheduler": "true",
+        "user-agent": "Google-Cloud-Scheduler",
+        "content-length": "0",
+        "x-cloudscheduler-jobname": "fe-sd-156715222b86ea44-duration",
+        "x-cloudscheduler-scheduletime": "2026-12-31T16:00:00-08:00",
+        "x-forwarded-proto": "https"
+      },
+      "headerNames": [
+        "accept-encoding",
+        "authorization",
+        "content-length",
+        "forwarded",
+        "host",
+        "traceparent",
+        "user-agent",
+        "x-cloud-trace-context",
+        "x-cloudscheduler",
+        "x-cloudscheduler-jobname",
+        "x-cloudscheduler-scheduletime",
+        "x-forwarded-for",
+        "x-forwarded-proto"
+      ],
+      "rawBodyLength": null,
+      "event": {
+        "jobName": "fe-sd-156715222b86ea44-duration",
+        "scheduleTime": "2026-12-31T16:00:00-08:00"
+      },
+      "eventKeys": ["jobName", "scheduleTime"],
+      "contextProperty": {
+        "enumerable": false,
+        "configurable": false,
+        "hasGetter": true
+      },
+      "context": {
+        "eventId": "fe-sd-156715222b86ea44-duration",
+        "timestamp": "2026-12-31T16:00:00-08:00",
+        "eventType": "google.pubsub.topic.publish",
+        "resource": {
+          "service": "pubsub.googleapis.com",
+          "name": "projects/fireemu-oracle-sbx/topics/fe-sd-156715222b86ea44-duration"
+        },
+        "params": {}
+      },
+      "failing": true,
+      "elapsedMs": -7571796521
+    },
+    {
+      "handler": "schedRetryV2",
+      "generation": 2,
+      "at": 144432,
+      "method": "POST",
+      "url": "/",
+      "headers": {
+        "x-cloudscheduler": "true",
+        "user-agent": "Google-Cloud-Scheduler",
+        "content-length": "0",
+        "x-cloudscheduler-jobname": "firebase-schedule-schedRetryV2-us-central1",
+        "x-cloudscheduler-scheduletime": "2026-10-05T01:45:00-07:00",
+        "x-forwarded-proto": "https"
+      },
+      "headerNames": [
+        "accept-encoding",
+        "authorization",
+        "content-length",
+        "forwarded",
+        "host",
+        "traceparent",
+        "user-agent",
+        "x-cloud-trace-context",
+        "x-cloudscheduler",
+        "x-cloudscheduler-jobname",
+        "x-cloudscheduler-scheduletime",
+        "x-forwarded-for",
+        "x-forwarded-proto"
+      ],
+      "rawBodyLength": null,
+      "event": {
+        "jobName": "firebase-schedule-schedRetryV2-us-central1",
+        "scheduleTime": "2026-10-05T01:45:00-07:00"
+      },
+      "eventKeys": ["jobName", "scheduleTime"],
+      "contextProperty": {
+        "enumerable": false,
+        "configurable": false,
+        "hasGetter": true
+      },
+      "context": {
+        "eventId": "firebase-schedule-schedRetryV2-us-central1",
+        "timestamp": "2026-10-05T01:45:00-07:00",
+        "eventType": "google.pubsub.topic.publish",
+        "resource": {
+          "service": "pubsub.googleapis.com",
+          "name": "projects/fireemu-oracle-sbx/topics/firebase-schedule-schedRetryV2-us-central1"
+        },
+        "params": {}
+      },
+      "failing": true,
+      "elapsedMs": -94709
+    },
+    {
+      "handler": "schedRetryV2",
+      "generation": 2,
+      "at": 161275,
+      "method": "POST",
+      "url": "/",
+      "headers": {
+        "x-cloudscheduler": "true",
+        "user-agent": "Google-Cloud-Scheduler",
+        "content-length": "0",
+        "x-cloudscheduler-jobname": "fe-sd-156715222b86ea44-retry5",
+        "x-cloudscheduler-scheduletime": "2026-12-31T16:00:00-08:00",
+        "x-forwarded-proto": "https"
+      },
+      "headerNames": [
+        "accept-encoding",
+        "authorization",
+        "content-length",
+        "forwarded",
+        "host",
+        "traceparent",
+        "user-agent",
+        "x-cloud-trace-context",
+        "x-cloudscheduler",
+        "x-cloudscheduler-jobname",
+        "x-cloudscheduler-scheduletime",
+        "x-forwarded-for",
+        "x-forwarded-proto"
+      ],
+      "rawBodyLength": null,
+      "event": {
+        "jobName": "fe-sd-156715222b86ea44-retry5",
+        "scheduleTime": "2026-12-31T16:00:00-08:00"
+      },
+      "eventKeys": ["jobName", "scheduleTime"],
+      "contextProperty": {
+        "enumerable": false,
+        "configurable": false,
+        "hasGetter": true
+      },
+      "context": {
+        "eventId": "fe-sd-156715222b86ea44-retry5",
+        "timestamp": "2026-12-31T16:00:00-08:00",
+        "eventType": "google.pubsub.topic.publish",
+        "resource": {
+          "service": "pubsub.googleapis.com",
+          "name": "projects/fireemu-oracle-sbx/topics/fe-sd-156715222b86ea44-retry5"
+        },
+        "params": {}
+      },
+      "failing": true,
+      "elapsedMs": -7571777866
+    },
+    {
+      "handler": "schedOkV2",
+      "generation": 2,
+      "at": 181463,
+      "method": "POST",
+      "url": "/",
+      "headers": {
+        "x-cloudscheduler": "true",
+        "user-agent": "Google-Cloud-Scheduler",
+        "content-length": "0",
+        "x-cloudscheduler-jobname": "firebase-schedule-schedOkV2-us-central1",
+        "x-cloudscheduler-scheduletime": "2026-10-05T01:44:01.416739-07:00",
+        "x-forwarded-proto": "https"
+      },
+      "headerNames": [
+        "accept-encoding",
+        "authorization",
+        "content-length",
+        "forwarded",
+        "host",
+        "traceparent",
+        "user-agent",
+        "x-cloud-trace-context",
+        "x-cloudscheduler",
+        "x-cloudscheduler-jobname",
+        "x-cloudscheduler-scheduletime",
+        "x-forwarded-for",
+        "x-forwarded-proto"
+      ],
+      "rawBodyLength": null,
+      "event": {
+        "jobName": "firebase-schedule-schedOkV2-us-central1",
+        "scheduleTime": "2026-10-05T01:44:01.416739-07:00"
+      },
+      "eventKeys": ["jobName", "scheduleTime"],
+      "contextProperty": {
+        "enumerable": false,
+        "configurable": false,
+        "hasGetter": true
+      },
+      "context": {
+        "eventId": "firebase-schedule-schedOkV2-us-central1",
+        "timestamp": "2026-10-05T01:44:01.416739-07:00",
+        "eventType": "google.pubsub.topic.publish",
+        "resource": {
+          "service": "pubsub.googleapis.com",
+          "name": "projects/fireemu-oracle-sbx/topics/firebase-schedule-schedOkV2-us-central1"
+        },
+        "params": {}
+      }
+    },
+    {
+      "handler": "schedOkV1",
+      "generation": 1,
+      "at": 182421,
+      "argumentCount": 1,
+      "arguments": [
+        {
+          "eventId": "22254249676271318",
+          "eventType": "google.pubsub.topic.publish",
+          "resource": {
+            "name": "projects/fireemu-oracle-sbx/topics/firebase-schedule-schedOkV1-us-central1",
+            "service": "pubsub.googleapis.com",
+            "type": "type.googleapis.com/google.pubsub.v1.PubsubMessage"
+          },
+          "timestamp": "2026-10-05T08:44:02.68Z",
+          "params": {}
+        }
+      ],
+      "context": {
+        "eventId": "22254249676271318",
+        "eventType": "google.pubsub.topic.publish",
+        "resource": {
+          "name": "projects/fireemu-oracle-sbx/topics/firebase-schedule-schedOkV1-us-central1",
+          "service": "pubsub.googleapis.com",
+          "type": "type.googleapis.com/google.pubsub.v1.PubsubMessage"
+        },
+        "timestamp": "2026-10-05T08:44:02.68Z",
+        "params": {}
+      }
+    },
+    {
+      "handler": "schedSlowV2",
+      "generation": 2,
+      "at": 199523,
+      "method": "POST",
+      "url": "/",
+      "headers": {
+        "x-cloudscheduler": "true",
+        "user-agent": "Google-Cloud-Scheduler",
+        "content-length": "0",
+        "x-cloudscheduler-jobname": "firebase-schedule-schedSlowV2-us-central1",
+        "x-cloudscheduler-scheduletime": "2026-10-05T01:43:03.352477-07:00",
+        "x-forwarded-proto": "https"
+      },
+      "headerNames": [
+        "accept-encoding",
+        "authorization",
+        "content-length",
+        "forwarded",
+        "host",
+        "traceparent",
+        "user-agent",
+        "x-cloud-trace-context",
+        "x-cloudscheduler",
+        "x-cloudscheduler-jobname",
+        "x-cloudscheduler-scheduletime",
+        "x-forwarded-for",
+        "x-forwarded-proto"
+      ],
+      "rawBodyLength": null,
+      "event": {
+        "jobName": "firebase-schedule-schedSlowV2-us-central1",
+        "scheduleTime": "2026-10-05T01:43:03.352477-07:00"
+      },
+      "eventKeys": ["jobName", "scheduleTime"],
+      "contextProperty": {
+        "enumerable": false,
+        "configurable": false,
+        "hasGetter": true
+      },
+      "context": {
+        "eventId": "firebase-schedule-schedSlowV2-us-central1",
+        "timestamp": "2026-10-05T01:43:03.352477-07:00",
+        "eventType": "google.pubsub.topic.publish",
+        "resource": {
+          "service": "pubsub.googleapis.com",
+          "name": "projects/fireemu-oracle-sbx/topics/firebase-schedule-schedSlowV2-us-central1"
+        },
+        "params": {}
+      },
+      "phase": "end"
+    },
+    {
+      "handler": "schedRetryV2",
+      "generation": 2,
+      "at": 201780,
+      "method": "POST",
+      "url": "/",
+      "headers": {
+        "x-cloudscheduler": "true",
+        "user-agent": "Google-Cloud-Scheduler",
+        "content-length": "0",
+        "x-cloudscheduler-jobname": "fe-sd-156715222b86ea44-retry5",
+        "x-cloudscheduler-scheduletime": "2026-12-31T16:00:00-08:00",
+        "x-forwarded-proto": "https"
+      },
+      "headerNames": [
+        "accept-encoding",
+        "authorization",
+        "content-length",
+        "forwarded",
+        "host",
+        "traceparent",
+        "user-agent",
+        "x-cloud-trace-context",
+        "x-cloudscheduler",
+        "x-cloudscheduler-jobname",
+        "x-cloudscheduler-scheduletime",
+        "x-forwarded-for",
+        "x-forwarded-proto"
+      ],
+      "rawBodyLength": null,
+      "event": {
+        "jobName": "fe-sd-156715222b86ea44-retry5",
+        "scheduleTime": "2026-12-31T16:00:00-08:00"
+      },
+      "eventKeys": ["jobName", "scheduleTime"],
+      "contextProperty": {
+        "enumerable": false,
+        "configurable": false,
+        "hasGetter": true
+      },
+      "context": {
+        "eventId": "fe-sd-156715222b86ea44-retry5",
+        "timestamp": "2026-12-31T16:00:00-08:00",
+        "eventType": "google.pubsub.topic.publish",
+        "resource": {
+          "service": "pubsub.googleapis.com",
+          "name": "projects/fireemu-oracle-sbx/topics/fe-sd-156715222b86ea44-retry5"
+        },
+        "params": {}
+      },
+      "failing": true,
+      "elapsedMs": -7571737361
+    },
+    {
+      "handler": "schedOkV2",
+      "generation": 2,
+      "at": 241288,
+      "method": "POST",
+      "url": "/",
+      "headers": {
+        "x-cloudscheduler": "true",
+        "user-agent": "Google-Cloud-Scheduler",
+        "content-length": "0",
+        "x-cloudscheduler-jobname": "firebase-schedule-schedOkV2-us-central1",
+        "x-cloudscheduler-scheduletime": "2026-10-05T01:45:01.416739-07:00",
+        "x-forwarded-proto": "https"
+      },
+      "headerNames": [
+        "accept-encoding",
+        "authorization",
+        "content-length",
+        "forwarded",
+        "host",
+        "traceparent",
+        "user-agent",
+        "x-cloud-trace-context",
+        "x-cloudscheduler",
+        "x-cloudscheduler-jobname",
+        "x-cloudscheduler-scheduletime",
+        "x-forwarded-for",
+        "x-forwarded-proto"
+      ],
+      "rawBodyLength": null,
+      "event": {
+        "jobName": "firebase-schedule-schedOkV2-us-central1",
+        "scheduleTime": "2026-10-05T01:45:01.416739-07:00"
+      },
+      "eventKeys": ["jobName", "scheduleTime"],
+      "contextProperty": {
+        "enumerable": false,
+        "configurable": false,
+        "hasGetter": true
+      },
+      "context": {
+        "eventId": "firebase-schedule-schedOkV2-us-central1",
+        "timestamp": "2026-10-05T01:45:01.416739-07:00",
+        "eventType": "google.pubsub.topic.publish",
+        "resource": {
+          "service": "pubsub.googleapis.com",
+          "name": "projects/fireemu-oracle-sbx/topics/firebase-schedule-schedOkV2-us-central1"
+        },
+        "params": {}
+      }
+    },
+    {
+      "handler": "schedOkV1",
+      "generation": 1,
+      "at": 241406,
+      "argumentCount": 1,
+      "arguments": [
+        {
+          "eventId": "22257626908212499",
+          "eventType": "google.pubsub.topic.publish",
+          "resource": {
+            "name": "projects/fireemu-oracle-sbx/topics/firebase-schedule-schedOkV1-us-central1",
+            "service": "pubsub.googleapis.com",
+            "type": "type.googleapis.com/google.pubsub.v1.PubsubMessage"
+          },
+          "timestamp": "2026-10-05T08:45:01.591Z",
+          "params": {}
+        }
+      ],
+      "context": {
+        "eventId": "22257626908212499",
+        "eventType": "google.pubsub.topic.publish",
+        "resource": {
+          "name": "projects/fireemu-oracle-sbx/topics/firebase-schedule-schedOkV1-us-central1",
+          "service": "pubsub.googleapis.com",
+          "type": "type.googleapis.com/google.pubsub.v1.PubsubMessage"
+        },
+        "timestamp": "2026-10-05T08:45:01.591Z",
+        "params": {}
+      }
+    },
+    {
+      "handler": "schedSlowV2",
+      "generation": 2,
+      "at": 242882,
+      "method": "POST",
+      "url": "/",
+      "headers": {
+        "x-cloudscheduler": "true",
+        "user-agent": "Google-Cloud-Scheduler",
+        "content-length": "0",
+        "x-cloudscheduler-jobname": "firebase-schedule-schedSlowV2-us-central1",
+        "x-cloudscheduler-scheduletime": "2026-10-05T01:45:03.352477-07:00",
+        "x-forwarded-proto": "https"
+      },
+      "headerNames": [
+        "accept-encoding",
+        "authorization",
+        "content-length",
+        "forwarded",
+        "host",
+        "traceparent",
+        "user-agent",
+        "x-cloud-trace-context",
+        "x-cloudscheduler",
+        "x-cloudscheduler-jobname",
+        "x-cloudscheduler-scheduletime",
+        "x-forwarded-for",
+        "x-forwarded-proto"
+      ],
+      "rawBodyLength": null,
+      "event": {
+        "jobName": "firebase-schedule-schedSlowV2-us-central1",
+        "scheduleTime": "2026-10-05T01:45:03.352477-07:00"
+      },
+      "eventKeys": ["jobName", "scheduleTime"],
+      "contextProperty": {
+        "enumerable": false,
+        "configurable": false,
+        "hasGetter": true
+      },
+      "context": {
+        "eventId": "firebase-schedule-schedSlowV2-us-central1",
+        "timestamp": "2026-10-05T01:45:03.352477-07:00",
+        "eventType": "google.pubsub.topic.publish",
+        "resource": {
+          "service": "pubsub.googleapis.com",
+          "name": "projects/fireemu-oracle-sbx/topics/firebase-schedule-schedSlowV2-us-central1"
+        },
+        "params": {}
+      },
+      "phase": "start"
+    },
+    {
+      "handler": "schedRetryV2",
+      "generation": 2,
+      "at": 282459,
+      "method": "POST",
+      "url": "/",
+      "headers": {
+        "x-cloudscheduler": "true",
+        "user-agent": "Google-Cloud-Scheduler",
+        "content-length": "0",
+        "x-cloudscheduler-jobname": "fe-sd-156715222b86ea44-retry5",
+        "x-cloudscheduler-scheduletime": "2026-12-31T16:00:00-08:00",
+        "x-forwarded-proto": "https"
+      },
+      "headerNames": [
+        "accept-encoding",
+        "authorization",
+        "content-length",
+        "forwarded",
+        "host",
+        "traceparent",
+        "user-agent",
+        "x-cloud-trace-context",
+        "x-cloudscheduler",
+        "x-cloudscheduler-jobname",
+        "x-cloudscheduler-scheduletime",
+        "x-forwarded-for",
+        "x-forwarded-proto"
+      ],
+      "rawBodyLength": null,
+      "event": {
+        "jobName": "fe-sd-156715222b86ea44-retry5",
+        "scheduleTime": "2026-12-31T16:00:00-08:00"
+      },
+      "eventKeys": ["jobName", "scheduleTime"],
+      "contextProperty": {
+        "enumerable": false,
+        "configurable": false,
+        "hasGetter": true
+      },
+      "context": {
+        "eventId": "fe-sd-156715222b86ea44-retry5",
+        "timestamp": "2026-12-31T16:00:00-08:00",
+        "eventType": "google.pubsub.topic.publish",
+        "resource": {
+          "service": "pubsub.googleapis.com",
+          "name": "projects/fireemu-oracle-sbx/topics/fe-sd-156715222b86ea44-retry5"
+        },
+        "params": {}
+      },
+      "failing": true,
+      "elapsedMs": -7571656682
+    },
+    {
+      "handler": "schedOkV2",
+      "generation": 2,
+      "at": 301445,
+      "method": "POST",
+      "url": "/",
+      "headers": {
+        "x-cloudscheduler": "true",
+        "user-agent": "Google-Cloud-Scheduler",
+        "content-length": "0",
+        "x-cloudscheduler-jobname": "firebase-schedule-schedOkV2-us-central1",
+        "x-cloudscheduler-scheduletime": "2026-10-05T01:46:01.416739-07:00",
+        "x-forwarded-proto": "https"
+      },
+      "headerNames": [
+        "accept-encoding",
+        "authorization",
+        "content-length",
+        "forwarded",
+        "host",
+        "traceparent",
+        "user-agent",
+        "x-cloud-trace-context",
+        "x-cloudscheduler",
+        "x-cloudscheduler-jobname",
+        "x-cloudscheduler-scheduletime",
+        "x-forwarded-for",
+        "x-forwarded-proto"
+      ],
+      "rawBodyLength": null,
+      "event": {
+        "jobName": "firebase-schedule-schedOkV2-us-central1",
+        "scheduleTime": "2026-10-05T01:46:01.416739-07:00"
+      },
+      "eventKeys": ["jobName", "scheduleTime"],
+      "contextProperty": {
+        "enumerable": false,
+        "configurable": false,
+        "hasGetter": true
+      },
+      "context": {
+        "eventId": "firebase-schedule-schedOkV2-us-central1",
+        "timestamp": "2026-10-05T01:46:01.416739-07:00",
+        "eventType": "google.pubsub.topic.publish",
+        "resource": {
+          "service": "pubsub.googleapis.com",
+          "name": "projects/fireemu-oracle-sbx/topics/firebase-schedule-schedOkV2-us-central1"
+        },
+        "params": {}
+      }
+    },
+    {
+      "handler": "schedOkV1",
+      "generation": 1,
+      "at": 303407,
+      "argumentCount": 1,
+      "arguments": [
+        {
+          "eventId": "21338193174527531",
+          "eventType": "google.pubsub.topic.publish",
+          "resource": {
+            "name": "projects/fireemu-oracle-sbx/topics/firebase-schedule-schedOkV1-us-central1",
+            "service": "pubsub.googleapis.com",
+            "type": "type.googleapis.com/google.pubsub.v1.PubsubMessage"
+          },
+          "timestamp": "2026-10-05T08:46:03.699Z",
+          "params": {}
+        }
+      ],
+      "context": {
+        "eventId": "21338193174527531",
+        "eventType": "google.pubsub.topic.publish",
+        "resource": {
+          "name": "projects/fireemu-oracle-sbx/topics/firebase-schedule-schedOkV1-us-central1",
+          "service": "pubsub.googleapis.com",
+          "type": "type.googleapis.com/google.pubsub.v1.PubsubMessage"
+        },
+        "timestamp": "2026-10-05T08:46:03.699Z",
+        "params": {}
+      }
+    },
+    {
+      "handler": "schedSlowV2",
+      "generation": 2,
+      "at": 342884,
+      "method": "POST",
+      "url": "/",
+      "headers": {
+        "x-cloudscheduler": "true",
+        "user-agent": "Google-Cloud-Scheduler",
+        "content-length": "0",
+        "x-cloudscheduler-jobname": "firebase-schedule-schedSlowV2-us-central1",
+        "x-cloudscheduler-scheduletime": "2026-10-05T01:45:03.352477-07:00",
+        "x-forwarded-proto": "https"
+      },
+      "headerNames": [
+        "accept-encoding",
+        "authorization",
+        "content-length",
+        "forwarded",
+        "host",
+        "traceparent",
+        "user-agent",
+        "x-cloud-trace-context",
+        "x-cloudscheduler",
+        "x-cloudscheduler-jobname",
+        "x-cloudscheduler-scheduletime",
+        "x-forwarded-for",
+        "x-forwarded-proto"
+      ],
+      "rawBodyLength": null,
+      "event": {
+        "jobName": "firebase-schedule-schedSlowV2-us-central1",
+        "scheduleTime": "2026-10-05T01:45:03.352477-07:00"
+      },
+      "eventKeys": ["jobName", "scheduleTime"],
+      "contextProperty": {
+        "enumerable": false,
+        "configurable": false,
+        "hasGetter": true
+      },
+      "context": {
+        "eventId": "firebase-schedule-schedSlowV2-us-central1",
+        "timestamp": "2026-10-05T01:45:03.352477-07:00",
+        "eventType": "google.pubsub.topic.publish",
+        "resource": {
+          "service": "pubsub.googleapis.com",
+          "name": "projects/fireemu-oracle-sbx/topics/firebase-schedule-schedSlowV2-us-central1"
+        },
+        "params": {}
+      },
+      "phase": "end"
+    },
+    {
+      "handler": "schedOkV2",
+      "generation": 2,
+      "at": 361411,
+      "method": "POST",
+      "url": "/",
+      "headers": {
+        "x-cloudscheduler": "true",
+        "user-agent": "Google-Cloud-Scheduler",
+        "content-length": "0",
+        "x-cloudscheduler-jobname": "firebase-schedule-schedOkV2-us-central1",
+        "x-cloudscheduler-scheduletime": "2026-10-05T01:47:01.416739-07:00",
+        "x-forwarded-proto": "https"
+      },
+      "headerNames": [
+        "accept-encoding",
+        "authorization",
+        "content-length",
+        "forwarded",
+        "host",
+        "traceparent",
+        "user-agent",
+        "x-cloud-trace-context",
+        "x-cloudscheduler",
+        "x-cloudscheduler-jobname",
+        "x-cloudscheduler-scheduletime",
+        "x-forwarded-for",
+        "x-forwarded-proto"
+      ],
+      "rawBodyLength": null,
+      "event": {
+        "jobName": "firebase-schedule-schedOkV2-us-central1",
+        "scheduleTime": "2026-10-05T01:47:01.416739-07:00"
+      },
+      "eventKeys": ["jobName", "scheduleTime"],
+      "contextProperty": {
+        "enumerable": false,
+        "configurable": false,
+        "hasGetter": true
+      },
+      "context": {
+        "eventId": "firebase-schedule-schedOkV2-us-central1",
+        "timestamp": "2026-10-05T01:47:01.416739-07:00",
+        "eventType": "google.pubsub.topic.publish",
+        "resource": {
+          "service": "pubsub.googleapis.com",
+          "name": "projects/fireemu-oracle-sbx/topics/firebase-schedule-schedOkV2-us-central1"
+        },
+        "params": {}
+      }
+    },
+    {
+      "handler": "schedSlowV2",
+      "generation": 2,
+      "at": 362737,
+      "method": "POST",
+      "url": "/",
+      "headers": {
+        "x-cloudscheduler": "true",
+        "user-agent": "Google-Cloud-Scheduler",
+        "content-length": "0",
+        "x-cloudscheduler-jobname": "firebase-schedule-schedSlowV2-us-central1",
+        "x-cloudscheduler-scheduletime": "2026-10-05T01:47:03.352477-07:00",
+        "x-forwarded-proto": "https"
+      },
+      "headerNames": [
+        "accept-encoding",
+        "authorization",
+        "content-length",
+        "forwarded",
+        "host",
+        "traceparent",
+        "user-agent",
+        "x-cloud-trace-context",
+        "x-cloudscheduler",
+        "x-cloudscheduler-jobname",
+        "x-cloudscheduler-scheduletime",
+        "x-forwarded-for",
+        "x-forwarded-proto"
+      ],
+      "rawBodyLength": null,
+      "event": {
+        "jobName": "firebase-schedule-schedSlowV2-us-central1",
+        "scheduleTime": "2026-10-05T01:47:03.352477-07:00"
+      },
+      "eventKeys": ["jobName", "scheduleTime"],
+      "contextProperty": {
+        "enumerable": false,
+        "configurable": false,
+        "hasGetter": true
+      },
+      "context": {
+        "eventId": "firebase-schedule-schedSlowV2-us-central1",
+        "timestamp": "2026-10-05T01:47:03.352477-07:00",
+        "eventType": "google.pubsub.topic.publish",
+        "resource": {
+          "service": "pubsub.googleapis.com",
+          "name": "projects/fireemu-oracle-sbx/topics/firebase-schedule-schedSlowV2-us-central1"
+        },
+        "params": {}
+      },
+      "phase": "start"
+    },
+    {
+      "handler": "schedOkV1",
+      "generation": 1,
+      "at": 362925,
+      "argumentCount": 1,
+      "arguments": [
+        {
+          "eventId": "22255480548879981",
+          "eventType": "google.pubsub.topic.publish",
+          "resource": {
+            "name": "projects/fireemu-oracle-sbx/topics/firebase-schedule-schedOkV1-us-central1",
+            "service": "pubsub.googleapis.com",
+            "type": "type.googleapis.com/google.pubsub.v1.PubsubMessage"
+          },
+          "timestamp": "2026-10-05T08:47:03.048Z",
+          "params": {}
+        }
+      ],
+      "context": {
+        "eventId": "22255480548879981",
+        "eventType": "google.pubsub.topic.publish",
+        "resource": {
+          "name": "projects/fireemu-oracle-sbx/topics/firebase-schedule-schedOkV1-us-central1",
+          "service": "pubsub.googleapis.com",
+          "type": "type.googleapis.com/google.pubsub.v1.PubsubMessage"
+        },
+        "timestamp": "2026-10-05T08:47:03.048Z",
+        "params": {}
+      }
+    },
+    {
+      "handler": "schedFailV1",
+      "generation": 1,
+      "at": 365230,
+      "argumentCount": 1,
+      "arguments": [
+        {
+          "eventId": "21337977721212352",
+          "eventType": "google.pubsub.topic.publish",
+          "resource": {
+            "name": "projects/fireemu-oracle-sbx/topics/firebase-schedule-schedFailV1-us-central1",
+            "service": "pubsub.googleapis.com",
+            "type": "type.googleapis.com/google.pubsub.v1.PubsubMessage"
+          },
+          "timestamp": "2026-10-05T08:47:05.447Z",
+          "params": {}
+        }
+      ],
+      "context": {
+        "eventId": "21337977721212352",
+        "eventType": "google.pubsub.topic.publish",
+        "resource": {
+          "name": "projects/fireemu-oracle-sbx/topics/firebase-schedule-schedFailV1-us-central1",
+          "service": "pubsub.googleapis.com",
+          "type": "type.googleapis.com/google.pubsub.v1.PubsubMessage"
+        },
+        "timestamp": "2026-10-05T08:47:05.447Z",
+        "params": {}
+      },
+      "failing": true
+    },
+    {
+      "handler": "schedOkV2",
+      "generation": 2,
+      "at": 420761,
+      "method": "POST",
+      "url": "/",
+      "headers": {
+        "x-cloudscheduler": "true",
+        "user-agent": "Google-Cloud-Scheduler",
+        "content-length": "0",
+        "x-cloudscheduler-jobname": "firebase-schedule-schedOkV2-us-central1",
+        "x-cloudscheduler-scheduletime": "2026-10-05T01:48:01.416739-07:00",
+        "x-forwarded-proto": "https"
+      },
+      "headerNames": [
+        "accept-encoding",
+        "authorization",
+        "content-length",
+        "forwarded",
+        "host",
+        "traceparent",
+        "user-agent",
+        "x-cloud-trace-context",
+        "x-cloudscheduler",
+        "x-cloudscheduler-jobname",
+        "x-cloudscheduler-scheduletime",
+        "x-forwarded-for",
+        "x-forwarded-proto"
+      ],
+      "rawBodyLength": null,
+      "event": {
+        "jobName": "firebase-schedule-schedOkV2-us-central1",
+        "scheduleTime": "2026-10-05T01:48:01.416739-07:00"
+      },
+      "eventKeys": ["jobName", "scheduleTime"],
+      "contextProperty": {
+        "enumerable": false,
+        "configurable": false,
+        "hasGetter": true
+      },
+      "context": {
+        "eventId": "firebase-schedule-schedOkV2-us-central1",
+        "timestamp": "2026-10-05T01:48:01.416739-07:00",
+        "eventType": "google.pubsub.topic.publish",
+        "resource": {
+          "service": "pubsub.googleapis.com",
+          "name": "projects/fireemu-oracle-sbx/topics/firebase-schedule-schedOkV2-us-central1"
+        },
+        "params": {}
+      }
+    },
+    {
+      "handler": "schedRetryV2",
+      "generation": 2,
+      "at": 421818,
+      "method": "POST",
+      "url": "/",
+      "headers": {
+        "x-cloudscheduler": "true",
+        "user-agent": "Google-Cloud-Scheduler",
+        "content-length": "0",
+        "x-cloudscheduler-jobname": "firebase-schedule-schedRetryV2-us-central1",
+        "x-cloudscheduler-scheduletime": "2026-10-05T01:48:01.751605-07:00",
+        "x-forwarded-proto": "https"
+      },
+      "headerNames": [
+        "accept-encoding",
+        "authorization",
+        "content-length",
+        "forwarded",
+        "host",
+        "traceparent",
+        "user-agent",
+        "x-cloud-trace-context",
+        "x-cloudscheduler",
+        "x-cloudscheduler-jobname",
+        "x-cloudscheduler-scheduletime",
+        "x-forwarded-for",
+        "x-forwarded-proto"
+      ],
+      "rawBodyLength": null,
+      "event": {
+        "jobName": "firebase-schedule-schedRetryV2-us-central1",
+        "scheduleTime": "2026-10-05T01:48:01.751605-07:00"
+      },
+      "eventKeys": ["jobName", "scheduleTime"],
+      "contextProperty": {
+        "enumerable": false,
+        "configurable": false,
+        "hasGetter": true
+      },
+      "context": {
+        "eventId": "firebase-schedule-schedRetryV2-us-central1",
+        "timestamp": "2026-10-05T01:48:01.751605-07:00",
+        "eventType": "google.pubsub.topic.publish",
+        "resource": {
+          "service": "pubsub.googleapis.com",
+          "name": "projects/fireemu-oracle-sbx/topics/firebase-schedule-schedRetryV2-us-central1"
+        },
+        "params": {}
+      },
+      "failing": true,
+      "elapsedMs": 926
+    },
+    {
+      "handler": "schedOkV1",
+      "generation": 1,
+      "at": 422274,
+      "argumentCount": 1,
+      "arguments": [
+        {
+          "eventId": "22256342815330638",
+          "eventType": "google.pubsub.topic.publish",
+          "resource": {
+            "name": "projects/fireemu-oracle-sbx/topics/firebase-schedule-schedOkV1-us-central1",
+            "service": "pubsub.googleapis.com",
+            "type": "type.googleapis.com/google.pubsub.v1.PubsubMessage"
+          },
+          "timestamp": "2026-10-05T08:48:02.512Z",
+          "params": {}
+        }
+      ],
+      "context": {
+        "eventId": "22256342815330638",
+        "eventType": "google.pubsub.topic.publish",
+        "resource": {
+          "name": "projects/fireemu-oracle-sbx/topics/firebase-schedule-schedOkV1-us-central1",
+          "service": "pubsub.googleapis.com",
+          "type": "type.googleapis.com/google.pubsub.v1.PubsubMessage"
+        },
+        "timestamp": "2026-10-05T08:48:02.512Z",
+        "params": {}
+      }
+    },
+    {
+      "handler": "schedRetryV2",
+      "generation": 2,
+      "at": 426404,
+      "method": "POST",
+      "url": "/",
+      "headers": {
+        "x-cloudscheduler": "true",
+        "user-agent": "Google-Cloud-Scheduler",
+        "content-length": "0",
+        "x-cloudscheduler-jobname": "firebase-schedule-schedRetryV2-us-central1",
+        "x-cloudscheduler-scheduletime": "2026-10-05T01:48:01.751605-07:00",
+        "x-forwarded-proto": "https"
+      },
+      "headerNames": [
+        "accept-encoding",
+        "authorization",
+        "content-length",
+        "forwarded",
+        "host",
+        "traceparent",
+        "user-agent",
+        "x-cloud-trace-context",
+        "x-cloudscheduler",
+        "x-cloudscheduler-jobname",
+        "x-cloudscheduler-scheduletime",
+        "x-forwarded-for",
+        "x-forwarded-proto"
+      ],
+      "rawBodyLength": null,
+      "event": {
+        "jobName": "firebase-schedule-schedRetryV2-us-central1",
+        "scheduleTime": "2026-10-05T01:48:01.751605-07:00"
+      },
+      "eventKeys": ["jobName", "scheduleTime"],
+      "contextProperty": {
+        "enumerable": false,
+        "configurable": false,
+        "hasGetter": true
+      },
+      "context": {
+        "eventId": "firebase-schedule-schedRetryV2-us-central1",
+        "timestamp": "2026-10-05T01:48:01.751605-07:00",
+        "eventType": "google.pubsub.topic.publish",
+        "resource": {
+          "service": "pubsub.googleapis.com",
+          "name": "projects/fireemu-oracle-sbx/topics/firebase-schedule-schedRetryV2-us-central1"
+        },
+        "params": {}
+      },
+      "failing": true,
+      "elapsedMs": 5512
+    },
+    {
+      "handler": "schedRetryV2",
+      "generation": 2,
+      "at": 435137,
+      "method": "POST",
+      "url": "/",
+      "headers": {
+        "x-cloudscheduler": "true",
+        "user-agent": "Google-Cloud-Scheduler",
+        "content-length": "0",
+        "x-cloudscheduler-jobname": "firebase-schedule-schedRetryV2-us-central1",
+        "x-cloudscheduler-scheduletime": "2026-10-05T01:48:01.751605-07:00",
+        "x-forwarded-proto": "https"
+      },
+      "headerNames": [
+        "accept-encoding",
+        "authorization",
+        "content-length",
+        "forwarded",
+        "host",
+        "traceparent",
+        "user-agent",
+        "x-cloud-trace-context",
+        "x-cloudscheduler",
+        "x-cloudscheduler-jobname",
+        "x-cloudscheduler-scheduletime",
+        "x-forwarded-for",
+        "x-forwarded-proto"
+      ],
+      "rawBodyLength": null,
+      "event": {
+        "jobName": "firebase-schedule-schedRetryV2-us-central1",
+        "scheduleTime": "2026-10-05T01:48:01.751605-07:00"
+      },
+      "eventKeys": ["jobName", "scheduleTime"],
+      "contextProperty": {
+        "enumerable": false,
+        "configurable": false,
+        "hasGetter": true
+      },
+      "context": {
+        "eventId": "firebase-schedule-schedRetryV2-us-central1",
+        "timestamp": "2026-10-05T01:48:01.751605-07:00",
+        "eventType": "google.pubsub.topic.publish",
+        "resource": {
+          "service": "pubsub.googleapis.com",
+          "name": "projects/fireemu-oracle-sbx/topics/firebase-schedule-schedRetryV2-us-central1"
+        },
+        "params": {}
+      },
+      "failing": true,
+      "elapsedMs": 14245
+    },
+    {
+      "handler": "schedRetryV2",
+      "generation": 2,
+      "at": 451767,
+      "method": "POST",
+      "url": "/",
+      "headers": {
+        "x-cloudscheduler": "true",
+        "user-agent": "Google-Cloud-Scheduler",
+        "content-length": "0",
+        "x-cloudscheduler-jobname": "firebase-schedule-schedRetryV2-us-central1",
+        "x-cloudscheduler-scheduletime": "2026-10-05T01:48:01.751605-07:00",
+        "x-forwarded-proto": "https"
+      },
+      "headerNames": [
+        "accept-encoding",
+        "authorization",
+        "content-length",
+        "forwarded",
+        "host",
+        "traceparent",
+        "user-agent",
+        "x-cloud-trace-context",
+        "x-cloudscheduler",
+        "x-cloudscheduler-jobname",
+        "x-cloudscheduler-scheduletime",
+        "x-forwarded-for",
+        "x-forwarded-proto"
+      ],
+      "rawBodyLength": null,
+      "event": {
+        "jobName": "firebase-schedule-schedRetryV2-us-central1",
+        "scheduleTime": "2026-10-05T01:48:01.751605-07:00"
+      },
+      "eventKeys": ["jobName", "scheduleTime"],
+      "contextProperty": {
+        "enumerable": false,
+        "configurable": false,
+        "hasGetter": true
+      },
+      "context": {
+        "eventId": "firebase-schedule-schedRetryV2-us-central1",
+        "timestamp": "2026-10-05T01:48:01.751605-07:00",
+        "eventType": "google.pubsub.topic.publish",
+        "resource": {
+          "service": "pubsub.googleapis.com",
+          "name": "projects/fireemu-oracle-sbx/topics/firebase-schedule-schedRetryV2-us-central1"
+        },
+        "params": {}
+      },
+      "failing": false,
+      "elapsedMs": 30875
+    },
+    {
+      "handler": "schedSlowV2",
+      "generation": 2,
+      "at": 462740,
+      "method": "POST",
+      "url": "/",
+      "headers": {
+        "x-cloudscheduler": "true",
+        "user-agent": "Google-Cloud-Scheduler",
+        "content-length": "0",
+        "x-cloudscheduler-jobname": "firebase-schedule-schedSlowV2-us-central1",
+        "x-cloudscheduler-scheduletime": "2026-10-05T01:47:03.352477-07:00",
+        "x-forwarded-proto": "https"
+      },
+      "headerNames": [
+        "accept-encoding",
+        "authorization",
+        "content-length",
+        "forwarded",
+        "host",
+        "traceparent",
+        "user-agent",
+        "x-cloud-trace-context",
+        "x-cloudscheduler",
+        "x-cloudscheduler-jobname",
+        "x-cloudscheduler-scheduletime",
+        "x-forwarded-for",
+        "x-forwarded-proto"
+      ],
+      "rawBodyLength": null,
+      "event": {
+        "jobName": "firebase-schedule-schedSlowV2-us-central1",
+        "scheduleTime": "2026-10-05T01:47:03.352477-07:00"
+      },
+      "eventKeys": ["jobName", "scheduleTime"],
+      "contextProperty": {
+        "enumerable": false,
+        "configurable": false,
+        "hasGetter": true
+      },
+      "context": {
+        "eventId": "firebase-schedule-schedSlowV2-us-central1",
+        "timestamp": "2026-10-05T01:47:03.352477-07:00",
+        "eventType": "google.pubsub.topic.publish",
+        "resource": {
+          "service": "pubsub.googleapis.com",
+          "name": "projects/fireemu-oracle-sbx/topics/firebase-schedule-schedSlowV2-us-central1"
+        },
+        "params": {}
+      },
+      "phase": "end"
+    },
+    {
+      "handler": "schedOkV2",
+      "generation": 2,
+      "at": 481252,
+      "method": "POST",
+      "url": "/",
+      "headers": {
+        "x-cloudscheduler": "true",
+        "user-agent": "Google-Cloud-Scheduler",
+        "content-length": "0",
+        "x-cloudscheduler-jobname": "firebase-schedule-schedOkV2-us-central1",
+        "x-cloudscheduler-scheduletime": "2026-10-05T01:49:01.416739-07:00",
+        "x-forwarded-proto": "https"
+      },
+      "headerNames": [
+        "accept-encoding",
+        "authorization",
+        "content-length",
+        "forwarded",
+        "host",
+        "traceparent",
+        "user-agent",
+        "x-cloud-trace-context",
+        "x-cloudscheduler",
+        "x-cloudscheduler-jobname",
+        "x-cloudscheduler-scheduletime",
+        "x-forwarded-for",
+        "x-forwarded-proto"
+      ],
+      "rawBodyLength": null,
+      "event": {
+        "jobName": "firebase-schedule-schedOkV2-us-central1",
+        "scheduleTime": "2026-10-05T01:49:01.416739-07:00"
+      },
+      "eventKeys": ["jobName", "scheduleTime"],
+      "contextProperty": {
+        "enumerable": false,
+        "configurable": false,
+        "hasGetter": true
+      },
+      "context": {
+        "eventId": "firebase-schedule-schedOkV2-us-central1",
+        "timestamp": "2026-10-05T01:49:01.416739-07:00",
+        "eventType": "google.pubsub.topic.publish",
+        "resource": {
+          "service": "pubsub.googleapis.com",
+          "name": "projects/fireemu-oracle-sbx/topics/firebase-schedule-schedOkV2-us-central1"
+        },
+        "params": {}
+      }
+    },
+    {
+      "handler": "schedSlowV2",
+      "generation": 2,
+      "at": 482655,
+      "method": "POST",
+      "url": "/",
+      "headers": {
+        "x-cloudscheduler": "true",
+        "user-agent": "Google-Cloud-Scheduler",
+        "content-length": "0",
+        "x-cloudscheduler-jobname": "firebase-schedule-schedSlowV2-us-central1",
+        "x-cloudscheduler-scheduletime": "2026-10-05T01:49:03.352477-07:00",
+        "x-forwarded-proto": "https"
+      },
+      "headerNames": [
+        "accept-encoding",
+        "authorization",
+        "content-length",
+        "forwarded",
+        "host",
+        "traceparent",
+        "user-agent",
+        "x-cloud-trace-context",
+        "x-cloudscheduler",
+        "x-cloudscheduler-jobname",
+        "x-cloudscheduler-scheduletime",
+        "x-forwarded-for",
+        "x-forwarded-proto"
+      ],
+      "rawBodyLength": null,
+      "event": {
+        "jobName": "firebase-schedule-schedSlowV2-us-central1",
+        "scheduleTime": "2026-10-05T01:49:03.352477-07:00"
+      },
+      "eventKeys": ["jobName", "scheduleTime"],
+      "contextProperty": {
+        "enumerable": false,
+        "configurable": false,
+        "hasGetter": true
+      },
+      "context": {
+        "eventId": "firebase-schedule-schedSlowV2-us-central1",
+        "timestamp": "2026-10-05T01:49:03.352477-07:00",
+        "eventType": "google.pubsub.topic.publish",
+        "resource": {
+          "service": "pubsub.googleapis.com",
+          "name": "projects/fireemu-oracle-sbx/topics/firebase-schedule-schedSlowV2-us-central1"
+        },
+        "params": {}
+      },
+      "phase": "start"
+    },
+    {
+      "handler": "schedOkV1",
+      "generation": 1,
+      "at": 482784,
+      "argumentCount": 1,
+      "arguments": [
+        {
+          "eventId": "22256184136762975",
+          "eventType": "google.pubsub.topic.publish",
+          "resource": {
+            "name": "projects/fireemu-oracle-sbx/topics/firebase-schedule-schedOkV1-us-central1",
+            "service": "pubsub.googleapis.com",
+            "type": "type.googleapis.com/google.pubsub.v1.PubsubMessage"
+          },
+          "timestamp": "2026-10-05T08:49:03.598Z",
+          "params": {}
+        }
+      ],
+      "context": {
+        "eventId": "22256184136762975",
+        "eventType": "google.pubsub.topic.publish",
+        "resource": {
+          "name": "projects/fireemu-oracle-sbx/topics/firebase-schedule-schedOkV1-us-central1",
+          "service": "pubsub.googleapis.com",
+          "type": "type.googleapis.com/google.pubsub.v1.PubsubMessage"
+        },
+        "timestamp": "2026-10-05T08:49:03.598Z",
+        "params": {}
+      }
+    },
+    {
+      "handler": "schedOkV2",
+      "generation": 2,
+      "at": 525638,
+      "method": "POST",
+      "url": "/",
+      "headers": {
+        "x-cloudscheduler": "true",
+        "user-agent": "Google-Cloud-Scheduler",
+        "content-length": "0",
+        "x-cloudscheduler-jobname": "firebase-schedule-schedOkV2-us-central1",
+        "x-cloudscheduler-scheduletime": "2026-10-05T01:50:01.416739-07:00",
+        "x-forwarded-proto": "https"
+      },
+      "headerNames": [
+        "accept-encoding",
+        "authorization",
+        "content-length",
+        "forwarded",
+        "host",
+        "traceparent",
+        "user-agent",
+        "x-cloud-trace-context",
+        "x-cloudscheduler",
+        "x-cloudscheduler-jobname",
+        "x-cloudscheduler-scheduletime",
+        "x-forwarded-for",
+        "x-forwarded-proto"
+      ],
+      "rawBodyLength": null,
+      "event": {
+        "jobName": "firebase-schedule-schedOkV2-us-central1",
+        "scheduleTime": "2026-10-05T01:50:01.416739-07:00"
+      },
+      "eventKeys": ["jobName", "scheduleTime"],
+      "contextProperty": {
+        "enumerable": false,
+        "configurable": false,
+        "hasGetter": true
+      },
+      "context": {
+        "eventId": "firebase-schedule-schedOkV2-us-central1",
+        "timestamp": "2026-10-05T01:50:01.416739-07:00",
+        "eventType": "google.pubsub.topic.publish",
+        "resource": {
+          "service": "pubsub.googleapis.com",
+          "name": "projects/fireemu-oracle-sbx/topics/firebase-schedule-schedOkV2-us-central1"
+        },
+        "params": {}
+      }
+    },
+    {
+      "handler": "schedRetryV2",
+      "generation": 2,
+      "at": 530877,
+      "method": "POST",
+      "url": "/",
+      "headers": {
+        "x-cloudscheduler": "true",
+        "user-agent": "Google-Cloud-Scheduler",
+        "content-length": "0",
+        "x-cloudscheduler-jobname": "firebase-schedule-schedRetryV2-us-central1",
+        "x-cloudscheduler-scheduletime": "2026-10-05T01:53:01.751605-07:00",
+        "x-forwarded-proto": "https"
+      },
+      "headerNames": [
+        "accept-encoding",
+        "authorization",
+        "content-length",
+        "forwarded",
+        "host",
+        "traceparent",
+        "user-agent",
+        "x-cloud-trace-context",
+        "x-cloudscheduler",
+        "x-cloudscheduler-jobname",
+        "x-cloudscheduler-scheduletime",
+        "x-forwarded-for",
+        "x-forwarded-proto"
+      ],
+      "rawBodyLength": null,
+      "event": {
+        "jobName": "firebase-schedule-schedRetryV2-us-central1",
+        "scheduleTime": "2026-10-05T01:53:01.751605-07:00"
+      },
+      "eventKeys": ["jobName", "scheduleTime"],
+      "contextProperty": {
+        "enumerable": false,
+        "configurable": false,
+        "hasGetter": true
+      },
+      "context": {
+        "eventId": "firebase-schedule-schedRetryV2-us-central1",
+        "timestamp": "2026-10-05T01:53:01.751605-07:00",
+        "eventType": "google.pubsub.topic.publish",
+        "resource": {
+          "service": "pubsub.googleapis.com",
+          "name": "projects/fireemu-oracle-sbx/topics/firebase-schedule-schedRetryV2-us-central1"
+        },
+        "params": {}
+      },
+      "failing": true,
+      "elapsedMs": -190015
+    },
+    {
+      "handler": "schedSlowV2",
+      "generation": 2,
+      "at": 535404,
+      "method": "POST",
+      "url": "/",
+      "headers": {
+        "x-cloudscheduler": "true",
+        "user-agent": "Google-Cloud-Scheduler",
+        "content-length": "0",
+        "x-cloudscheduler-jobname": "firebase-schedule-schedSlowV2-us-central1",
+        "x-cloudscheduler-scheduletime": "2026-10-05T01:49:03.352477-07:00",
+        "x-forwarded-proto": "https"
+      },
+      "headerNames": [
+        "accept-encoding",
+        "authorization",
+        "content-length",
+        "forwarded",
+        "host",
+        "traceparent",
+        "user-agent",
+        "x-cloud-trace-context",
+        "x-cloudscheduler",
+        "x-cloudscheduler-jobname",
+        "x-cloudscheduler-scheduletime",
+        "x-forwarded-for",
+        "x-forwarded-proto"
+      ],
+      "rawBodyLength": null,
+      "event": {
+        "jobName": "firebase-schedule-schedSlowV2-us-central1",
+        "scheduleTime": "2026-10-05T01:49:03.352477-07:00"
+      },
+      "eventKeys": ["jobName", "scheduleTime"],
+      "contextProperty": {
+        "enumerable": false,
+        "configurable": false,
+        "hasGetter": true
+      },
+      "context": {
+        "eventId": "firebase-schedule-schedSlowV2-us-central1",
+        "timestamp": "2026-10-05T01:49:03.352477-07:00",
+        "eventType": "google.pubsub.topic.publish",
+        "resource": {
+          "service": "pubsub.googleapis.com",
+          "name": "projects/fireemu-oracle-sbx/topics/firebase-schedule-schedSlowV2-us-central1"
+        },
+        "params": {}
+      },
+      "phase": "start"
+    },
+    {
+      "handler": "schedRetryV2",
+      "generation": 2,
+      "at": 535468,
+      "method": "POST",
+      "url": "/",
+      "headers": {
+        "x-cloudscheduler": "true",
+        "user-agent": "Google-Cloud-Scheduler",
+        "content-length": "0",
+        "x-cloudscheduler-jobname": "firebase-schedule-schedRetryV2-us-central1",
+        "x-cloudscheduler-scheduletime": "2026-10-05T01:53:01.751605-07:00",
+        "x-forwarded-proto": "https"
+      },
+      "headerNames": [
+        "accept-encoding",
+        "authorization",
+        "content-length",
+        "forwarded",
+        "host",
+        "traceparent",
+        "user-agent",
+        "x-cloud-trace-context",
+        "x-cloudscheduler",
+        "x-cloudscheduler-jobname",
+        "x-cloudscheduler-scheduletime",
+        "x-forwarded-for",
+        "x-forwarded-proto"
+      ],
+      "rawBodyLength": null,
+      "event": {
+        "jobName": "firebase-schedule-schedRetryV2-us-central1",
+        "scheduleTime": "2026-10-05T01:53:01.751605-07:00"
+      },
+      "eventKeys": ["jobName", "scheduleTime"],
+      "contextProperty": {
+        "enumerable": false,
+        "configurable": false,
+        "hasGetter": true
+      },
+      "context": {
+        "eventId": "firebase-schedule-schedRetryV2-us-central1",
+        "timestamp": "2026-10-05T01:53:01.751605-07:00",
+        "eventType": "google.pubsub.topic.publish",
+        "resource": {
+          "service": "pubsub.googleapis.com",
+          "name": "projects/fireemu-oracle-sbx/topics/firebase-schedule-schedRetryV2-us-central1"
+        },
+        "params": {}
+      },
+      "failing": true,
+      "elapsedMs": -185424
+    },
+    {
+      "handler": "schedOkV2",
+      "generation": 2,
+      "at": 541350,
+      "method": "POST",
+      "url": "/",
+      "headers": {
+        "x-cloudscheduler": "true",
+        "user-agent": "Google-Cloud-Scheduler",
+        "content-length": "0",
+        "x-cloudscheduler-jobname": "firebase-schedule-schedOkV2-us-central1",
+        "x-cloudscheduler-scheduletime": "2026-10-05T01:50:01.416739-07:00",
+        "x-forwarded-proto": "https"
+      },
+      "headerNames": [
+        "accept-encoding",
+        "authorization",
+        "content-length",
+        "forwarded",
+        "host",
+        "traceparent",
+        "user-agent",
+        "x-cloud-trace-context",
+        "x-cloudscheduler",
+        "x-cloudscheduler-jobname",
+        "x-cloudscheduler-scheduletime",
+        "x-forwarded-for",
+        "x-forwarded-proto"
+      ],
+      "rawBodyLength": null,
+      "event": {
+        "jobName": "firebase-schedule-schedOkV2-us-central1",
+        "scheduleTime": "2026-10-05T01:50:01.416739-07:00"
+      },
+      "eventKeys": ["jobName", "scheduleTime"],
+      "contextProperty": {
+        "enumerable": false,
+        "configurable": false,
+        "hasGetter": true
+      },
+      "context": {
+        "eventId": "firebase-schedule-schedOkV2-us-central1",
+        "timestamp": "2026-10-05T01:50:01.416739-07:00",
+        "eventType": "google.pubsub.topic.publish",
+        "resource": {
+          "service": "pubsub.googleapis.com",
+          "name": "projects/fireemu-oracle-sbx/topics/firebase-schedule-schedOkV2-us-central1"
+        },
+        "params": {}
+      }
+    },
+    {
+      "handler": "schedOkV1",
+      "generation": 1,
+      "at": 542193,
+      "argumentCount": 1,
+      "arguments": [
+        {
+          "eventId": "22256644576377052",
+          "eventType": "google.pubsub.topic.publish",
+          "resource": {
+            "name": "projects/fireemu-oracle-sbx/topics/firebase-schedule-schedOkV1-us-central1",
+            "service": "pubsub.googleapis.com",
+            "type": "type.googleapis.com/google.pubsub.v1.PubsubMessage"
+          },
+          "timestamp": "2026-10-05T08:50:02.312Z",
+          "params": {}
+        }
+      ],
+      "context": {
+        "eventId": "22256644576377052",
+        "eventType": "google.pubsub.topic.publish",
+        "resource": {
+          "name": "projects/fireemu-oracle-sbx/topics/firebase-schedule-schedOkV1-us-central1",
+          "service": "pubsub.googleapis.com",
+          "type": "type.googleapis.com/google.pubsub.v1.PubsubMessage"
+        },
+        "timestamp": "2026-10-05T08:50:02.312Z",
+        "params": {}
+      }
+    },
+    {
+      "handler": "schedRetryV2",
+      "generation": 2,
+      "at": 544000,
+      "method": "POST",
+      "url": "/",
+      "headers": {
+        "x-cloudscheduler": "true",
+        "user-agent": "Google-Cloud-Scheduler",
+        "content-length": "0",
+        "x-cloudscheduler-jobname": "firebase-schedule-schedRetryV2-us-central1",
+        "x-cloudscheduler-scheduletime": "2026-10-05T01:53:01.751605-07:00",
+        "x-forwarded-proto": "https"
+      },
+      "headerNames": [
+        "accept-encoding",
+        "authorization",
+        "content-length",
+        "forwarded",
+        "host",
+        "traceparent",
+        "user-agent",
+        "x-cloud-trace-context",
+        "x-cloudscheduler",
+        "x-cloudscheduler-jobname",
+        "x-cloudscheduler-scheduletime",
+        "x-forwarded-for",
+        "x-forwarded-proto"
+      ],
+      "rawBodyLength": null,
+      "event": {
+        "jobName": "firebase-schedule-schedRetryV2-us-central1",
+        "scheduleTime": "2026-10-05T01:53:01.751605-07:00"
+      },
+      "eventKeys": ["jobName", "scheduleTime"],
+      "contextProperty": {
+        "enumerable": false,
+        "configurable": false,
+        "hasGetter": true
+      },
+      "context": {
+        "eventId": "firebase-schedule-schedRetryV2-us-central1",
+        "timestamp": "2026-10-05T01:53:01.751605-07:00",
+        "eventType": "google.pubsub.topic.publish",
+        "resource": {
+          "service": "pubsub.googleapis.com",
+          "name": "projects/fireemu-oracle-sbx/topics/firebase-schedule-schedRetryV2-us-central1"
+        },
+        "params": {}
+      },
+      "failing": true,
+      "elapsedMs": -176892
+    },
+    {
+      "handler": "schedFailV1",
+      "generation": 1,
+      "at": 546238,
+      "argumentCount": 1,
+      "arguments": [
+        {
+          "eventId": "22254560663881698",
+          "eventType": "google.pubsub.topic.publish",
+          "resource": {
+            "name": "projects/fireemu-oracle-sbx/topics/firebase-schedule-schedFailV1-us-central1",
+            "service": "pubsub.googleapis.com",
+            "type": "type.googleapis.com/google.pubsub.v1.PubsubMessage"
+          },
+          "timestamp": "2026-10-05T08:50:06.42Z",
+          "params": {}
+        }
+      ],
+      "context": {
+        "eventId": "22254560663881698",
+        "eventType": "google.pubsub.topic.publish",
+        "resource": {
+          "name": "projects/fireemu-oracle-sbx/topics/firebase-schedule-schedFailV1-us-central1",
+          "service": "pubsub.googleapis.com",
+          "type": "type.googleapis.com/google.pubsub.v1.PubsubMessage"
+        },
+        "timestamp": "2026-10-05T08:50:06.42Z",
+        "params": {}
+      },
+      "failing": true
+    },
+    {
+      "handler": "schedRetryV2",
+      "generation": 2,
+      "at": 548688,
+      "method": "POST",
+      "url": "/",
+      "headers": {
+        "x-cloudscheduler": "true",
+        "user-agent": "Google-Cloud-Scheduler",
+        "content-length": "0",
+        "x-cloudscheduler-jobname": "fe-sd-156715222b86ea44-zero",
+        "x-cloudscheduler-scheduletime": "2026-12-31T16:00:01.731686-08:00",
+        "x-forwarded-proto": "https"
+      },
+      "headerNames": [
+        "accept-encoding",
+        "authorization",
+        "content-length",
+        "forwarded",
+        "host",
+        "traceparent",
+        "user-agent",
+        "x-cloud-trace-context",
+        "x-cloudscheduler",
+        "x-cloudscheduler-jobname",
+        "x-cloudscheduler-scheduletime",
+        "x-forwarded-for",
+        "x-forwarded-proto"
+      ],
+      "rawBodyLength": null,
+      "event": {
+        "jobName": "fe-sd-156715222b86ea44-zero",
+        "scheduleTime": "2026-12-31T16:00:01.731686-08:00"
+      },
+      "eventKeys": ["jobName", "scheduleTime"],
+      "contextProperty": {
+        "enumerable": false,
+        "configurable": false,
+        "hasGetter": true
+      },
+      "context": {
+        "eventId": "fe-sd-156715222b86ea44-zero",
+        "timestamp": "2026-12-31T16:00:01.731686-08:00",
+        "eventType": "google.pubsub.topic.publish",
+        "resource": {
+          "service": "pubsub.googleapis.com",
+          "name": "projects/fireemu-oracle-sbx/topics/fe-sd-156715222b86ea44-zero"
+        },
+        "params": {}
+      },
+      "failing": true,
+      "elapsedMs": -7571392184
+    },
+    {
+      "handler": "schedRetryV2",
+      "generation": 2,
+      "at": 553733,
+      "method": "POST",
+      "url": "/",
+      "headers": {
+        "x-cloudscheduler": "true",
+        "user-agent": "Google-Cloud-Scheduler",
+        "content-length": "0",
+        "x-cloudscheduler-jobname": "fe-sd-156715222b86ea44-duration",
+        "x-cloudscheduler-scheduletime": "2026-12-31T16:00:00.024193-08:00",
+        "x-forwarded-proto": "https"
+      },
+      "headerNames": [
+        "accept-encoding",
+        "authorization",
+        "content-length",
+        "forwarded",
+        "host",
+        "traceparent",
+        "user-agent",
+        "x-cloud-trace-context",
+        "x-cloudscheduler",
+        "x-cloudscheduler-jobname",
+        "x-cloudscheduler-scheduletime",
+        "x-forwarded-for",
+        "x-forwarded-proto"
+      ],
+      "rawBodyLength": null,
+      "event": {
+        "jobName": "fe-sd-156715222b86ea44-duration",
+        "scheduleTime": "2026-12-31T16:00:00.024193-08:00"
+      },
+      "eventKeys": ["jobName", "scheduleTime"],
+      "contextProperty": {
+        "enumerable": false,
+        "configurable": false,
+        "hasGetter": true
+      },
+      "context": {
+        "eventId": "fe-sd-156715222b86ea44-duration",
+        "timestamp": "2026-12-31T16:00:00.024193-08:00",
+        "eventType": "google.pubsub.topic.publish",
+        "resource": {
+          "service": "pubsub.googleapis.com",
+          "name": "projects/fireemu-oracle-sbx/topics/fe-sd-156715222b86ea44-duration"
+        },
+        "params": {}
+      },
+      "failing": true,
+      "elapsedMs": -7571385432
+    },
+    {
+      "handler": "schedRetryV2",
+      "generation": 2,
+      "at": 558241,
+      "method": "POST",
+      "url": "/",
+      "headers": {
+        "x-cloudscheduler": "true",
+        "user-agent": "Google-Cloud-Scheduler",
+        "content-length": "0",
+        "x-cloudscheduler-jobname": "fe-sd-156715222b86ea44-retry5",
+        "x-cloudscheduler-scheduletime": "2026-12-31T16:00:02.427285-08:00",
+        "x-forwarded-proto": "https"
+      },
+      "headerNames": [
+        "accept-encoding",
+        "authorization",
+        "content-length",
+        "forwarded",
+        "host",
+        "traceparent",
+        "user-agent",
+        "x-cloud-trace-context",
+        "x-cloudscheduler",
+        "x-cloudscheduler-jobname",
+        "x-cloudscheduler-scheduletime",
+        "x-forwarded-for",
+        "x-forwarded-proto"
+      ],
+      "rawBodyLength": null,
+      "event": {
+        "jobName": "fe-sd-156715222b86ea44-retry5",
+        "scheduleTime": "2026-12-31T16:00:02.427285-08:00"
+      },
+      "eventKeys": ["jobName", "scheduleTime"],
+      "contextProperty": {
+        "enumerable": false,
+        "configurable": false,
+        "hasGetter": true
+      },
+      "context": {
+        "eventId": "fe-sd-156715222b86ea44-retry5",
+        "timestamp": "2026-12-31T16:00:02.427285-08:00",
+        "eventType": "google.pubsub.topic.publish",
+        "resource": {
+          "service": "pubsub.googleapis.com",
+          "name": "projects/fireemu-oracle-sbx/topics/fe-sd-156715222b86ea44-retry5"
+        },
+        "params": {}
+      },
+      "failing": true,
+      "elapsedMs": -7571383327
+    },
+    {
+      "handler": "schedRetryV2",
+      "generation": 2,
+      "at": 558347,
+      "method": "POST",
+      "url": "/",
+      "headers": {
+        "x-cloudscheduler": "true",
+        "user-agent": "Google-Cloud-Scheduler",
+        "content-length": "0",
+        "x-cloudscheduler-jobname": "fe-sd-156715222b86ea44-duration",
+        "x-cloudscheduler-scheduletime": "2026-12-31T16:00:00.024193-08:00",
+        "x-forwarded-proto": "https"
+      },
+      "headerNames": [
+        "accept-encoding",
+        "authorization",
+        "content-length",
+        "forwarded",
+        "host",
+        "traceparent",
+        "user-agent",
+        "x-cloud-trace-context",
+        "x-cloudscheduler",
+        "x-cloudscheduler-jobname",
+        "x-cloudscheduler-scheduletime",
+        "x-forwarded-for",
+        "x-forwarded-proto"
+      ],
+      "rawBodyLength": null,
+      "event": {
+        "jobName": "fe-sd-156715222b86ea44-duration",
+        "scheduleTime": "2026-12-31T16:00:00.024193-08:00"
+      },
+      "eventKeys": ["jobName", "scheduleTime"],
+      "contextProperty": {
+        "enumerable": false,
+        "configurable": false,
+        "hasGetter": true
+      },
+      "context": {
+        "eventId": "fe-sd-156715222b86ea44-duration",
+        "timestamp": "2026-12-31T16:00:00.024193-08:00",
+        "eventType": "google.pubsub.topic.publish",
+        "resource": {
+          "service": "pubsub.googleapis.com",
+          "name": "projects/fireemu-oracle-sbx/topics/fe-sd-156715222b86ea44-duration"
+        },
+        "params": {}
+      },
+      "failing": true,
+      "elapsedMs": -7571380818
+    },
+    {
+      "handler": "schedRetryV2",
+      "generation": 2,
+      "at": 560547,
+      "method": "POST",
+      "url": "/",
+      "headers": {
+        "x-cloudscheduler": "true",
+        "user-agent": "Google-Cloud-Scheduler",
+        "content-length": "0",
+        "x-cloudscheduler-jobname": "firebase-schedule-schedRetryV2-us-central1",
+        "x-cloudscheduler-scheduletime": "2026-10-05T01:53:01.751605-07:00",
+        "x-forwarded-proto": "https"
+      },
+      "headerNames": [
+        "accept-encoding",
+        "authorization",
+        "content-length",
+        "forwarded",
+        "host",
+        "traceparent",
+        "user-agent",
+        "x-cloud-trace-context",
+        "x-cloudscheduler",
+        "x-cloudscheduler-jobname",
+        "x-cloudscheduler-scheduletime",
+        "x-forwarded-for",
+        "x-forwarded-proto"
+      ],
+      "rawBodyLength": null,
+      "event": {
+        "jobName": "firebase-schedule-schedRetryV2-us-central1",
+        "scheduleTime": "2026-10-05T01:53:01.751605-07:00"
+      },
+      "eventKeys": ["jobName", "scheduleTime"],
+      "contextProperty": {
+        "enumerable": false,
+        "configurable": false,
+        "hasGetter": true
+      },
+      "context": {
+        "eventId": "firebase-schedule-schedRetryV2-us-central1",
+        "timestamp": "2026-10-05T01:53:01.751605-07:00",
+        "eventType": "google.pubsub.topic.publish",
+        "resource": {
+          "service": "pubsub.googleapis.com",
+          "name": "projects/fireemu-oracle-sbx/topics/firebase-schedule-schedRetryV2-us-central1"
+        },
+        "params": {}
+      },
+      "failing": true,
+      "elapsedMs": -160345
+    },
+    {
+      "handler": "schedRetryV2",
+      "generation": 2,
+      "at": 563766,
+      "method": "POST",
+      "url": "/",
+      "headers": {
+        "x-cloudscheduler": "true",
+        "user-agent": "Google-Cloud-Scheduler",
+        "content-length": "0",
+        "x-cloudscheduler-jobname": "fe-sd-156715222b86ea44-retry5",
+        "x-cloudscheduler-scheduletime": "2026-12-31T16:00:02.427285-08:00",
+        "x-forwarded-proto": "https"
+      },
+      "headerNames": [
+        "accept-encoding",
+        "authorization",
+        "content-length",
+        "forwarded",
+        "host",
+        "traceparent",
+        "user-agent",
+        "x-cloud-trace-context",
+        "x-cloudscheduler",
+        "x-cloudscheduler-jobname",
+        "x-cloudscheduler-scheduletime",
+        "x-forwarded-for",
+        "x-forwarded-proto"
+      ],
+      "rawBodyLength": null,
+      "event": {
+        "jobName": "fe-sd-156715222b86ea44-retry5",
+        "scheduleTime": "2026-12-31T16:00:02.427285-08:00"
+      },
+      "eventKeys": ["jobName", "scheduleTime"],
+      "contextProperty": {
+        "enumerable": false,
+        "configurable": false,
+        "hasGetter": true
+      },
+      "context": {
+        "eventId": "fe-sd-156715222b86ea44-retry5",
+        "timestamp": "2026-12-31T16:00:02.427285-08:00",
+        "eventType": "google.pubsub.topic.publish",
+        "resource": {
+          "service": "pubsub.googleapis.com",
+          "name": "projects/fireemu-oracle-sbx/topics/fe-sd-156715222b86ea44-retry5"
+        },
+        "params": {}
+      },
+      "failing": true,
+      "elapsedMs": -7571377802
+    },
+    {
+      "handler": "schedRetryV2",
+      "generation": 2,
+      "at": 566965,
+      "method": "POST",
+      "url": "/",
+      "headers": {
+        "x-cloudscheduler": "true",
+        "user-agent": "Google-Cloud-Scheduler",
+        "content-length": "0",
+        "x-cloudscheduler-jobname": "fe-sd-156715222b86ea44-duration",
+        "x-cloudscheduler-scheduletime": "2026-12-31T16:00:00.024193-08:00",
+        "x-forwarded-proto": "https"
+      },
+      "headerNames": [
+        "accept-encoding",
+        "authorization",
+        "content-length",
+        "forwarded",
+        "host",
+        "traceparent",
+        "user-agent",
+        "x-cloud-trace-context",
+        "x-cloudscheduler",
+        "x-cloudscheduler-jobname",
+        "x-cloudscheduler-scheduletime",
+        "x-forwarded-for",
+        "x-forwarded-proto"
+      ],
+      "rawBodyLength": null,
+      "event": {
+        "jobName": "fe-sd-156715222b86ea44-duration",
+        "scheduleTime": "2026-12-31T16:00:00.024193-08:00"
+      },
+      "eventKeys": ["jobName", "scheduleTime"],
+      "contextProperty": {
+        "enumerable": false,
+        "configurable": false,
+        "hasGetter": true
+      },
+      "context": {
+        "eventId": "fe-sd-156715222b86ea44-duration",
+        "timestamp": "2026-12-31T16:00:00.024193-08:00",
+        "eventType": "google.pubsub.topic.publish",
+        "resource": {
+          "service": "pubsub.googleapis.com",
+          "name": "projects/fireemu-oracle-sbx/topics/fe-sd-156715222b86ea44-duration"
+        },
+        "params": {}
+      },
+      "failing": true,
+      "elapsedMs": -7571372200
+    },
+    {
+      "handler": "schedRetryV2",
+      "generation": 2,
+      "at": 574389,
+      "method": "POST",
+      "url": "/",
+      "headers": {
+        "x-cloudscheduler": "true",
+        "user-agent": "Google-Cloud-Scheduler",
+        "content-length": "0",
+        "x-cloudscheduler-jobname": "fe-sd-156715222b86ea44-retry5",
+        "x-cloudscheduler-scheduletime": "2026-12-31T16:00:02.427285-08:00",
+        "x-forwarded-proto": "https"
+      },
+      "headerNames": [
+        "accept-encoding",
+        "authorization",
+        "content-length",
+        "forwarded",
+        "host",
+        "traceparent",
+        "user-agent",
+        "x-cloud-trace-context",
+        "x-cloudscheduler",
+        "x-cloudscheduler-jobname",
+        "x-cloudscheduler-scheduletime",
+        "x-forwarded-for",
+        "x-forwarded-proto"
+      ],
+      "rawBodyLength": null,
+      "event": {
+        "jobName": "fe-sd-156715222b86ea44-retry5",
+        "scheduleTime": "2026-12-31T16:00:02.427285-08:00"
+      },
+      "eventKeys": ["jobName", "scheduleTime"],
+      "contextProperty": {
+        "enumerable": false,
+        "configurable": false,
+        "hasGetter": true
+      },
+      "context": {
+        "eventId": "fe-sd-156715222b86ea44-retry5",
+        "timestamp": "2026-12-31T16:00:02.427285-08:00",
+        "eventType": "google.pubsub.topic.publish",
+        "resource": {
+          "service": "pubsub.googleapis.com",
+          "name": "projects/fireemu-oracle-sbx/topics/fe-sd-156715222b86ea44-retry5"
+        },
+        "params": {}
+      },
+      "failing": true,
+      "elapsedMs": -7571367179
+    },
+    {
+      "handler": "schedRetryV2",
+      "generation": 2,
+      "at": 577606,
+      "method": "POST",
+      "url": "/",
+      "headers": {
+        "x-cloudscheduler": "true",
+        "user-agent": "Google-Cloud-Scheduler",
+        "content-length": "0",
+        "x-cloudscheduler-jobname": "fe-sd-156715222b86ea44-duration",
+        "x-cloudscheduler-scheduletime": "2026-12-31T16:00:00.024193-08:00",
+        "x-forwarded-proto": "https"
+      },
+      "headerNames": [
+        "accept-encoding",
+        "authorization",
+        "content-length",
+        "forwarded",
+        "host",
+        "traceparent",
+        "user-agent",
+        "x-cloud-trace-context",
+        "x-cloudscheduler",
+        "x-cloudscheduler-jobname",
+        "x-cloudscheduler-scheduletime",
+        "x-forwarded-for",
+        "x-forwarded-proto"
+      ],
+      "rawBodyLength": null,
+      "event": {
+        "jobName": "fe-sd-156715222b86ea44-duration",
+        "scheduleTime": "2026-12-31T16:00:00.024193-08:00"
+      },
+      "eventKeys": ["jobName", "scheduleTime"],
+      "contextProperty": {
+        "enumerable": false,
+        "configurable": false,
+        "hasGetter": true
+      },
+      "context": {
+        "eventId": "fe-sd-156715222b86ea44-duration",
+        "timestamp": "2026-12-31T16:00:00.024193-08:00",
+        "eventType": "google.pubsub.topic.publish",
+        "resource": {
+          "service": "pubsub.googleapis.com",
+          "name": "projects/fireemu-oracle-sbx/topics/fe-sd-156715222b86ea44-duration"
+        },
+        "params": {}
+      },
+      "failing": true,
+      "elapsedMs": -7571361559
+    },
+    {
+      "handler": "schedRetryV2",
+      "generation": 2,
+      "at": 579096,
+      "method": "POST",
+      "url": "/",
+      "headers": {
+        "x-cloudscheduler": "true",
+        "user-agent": "Google-Cloud-Scheduler",
+        "content-length": "0",
+        "x-cloudscheduler-jobname": "firebase-schedule-schedRetryV2-us-central1",
+        "x-cloudscheduler-scheduletime": "2026-10-05T01:53:01.751605-07:00",
+        "x-forwarded-proto": "https"
+      },
+      "headerNames": [
+        "accept-encoding",
+        "authorization",
+        "content-length",
+        "forwarded",
+        "host",
+        "traceparent",
+        "user-agent",
+        "x-cloud-trace-context",
+        "x-cloudscheduler",
+        "x-cloudscheduler-jobname",
+        "x-cloudscheduler-scheduletime",
+        "x-forwarded-for",
+        "x-forwarded-proto"
+      ],
+      "rawBodyLength": null,
+      "event": {
+        "jobName": "firebase-schedule-schedRetryV2-us-central1",
+        "scheduleTime": "2026-10-05T01:53:01.751605-07:00"
+      },
+      "eventKeys": ["jobName", "scheduleTime"],
+      "contextProperty": {
+        "enumerable": false,
+        "configurable": false,
+        "hasGetter": true
+      },
+      "context": {
+        "eventId": "firebase-schedule-schedRetryV2-us-central1",
+        "timestamp": "2026-10-05T01:53:01.751605-07:00",
+        "eventType": "google.pubsub.topic.publish",
+        "resource": {
+          "service": "pubsub.googleapis.com",
+          "name": "projects/fireemu-oracle-sbx/topics/firebase-schedule-schedRetryV2-us-central1"
+        },
+        "params": {}
+      },
+      "failing": true,
+      "elapsedMs": -141796
+    },
+    {
+      "handler": "schedSlowV2",
+      "generation": 2,
+      "at": 582657,
+      "method": "POST",
+      "url": "/",
+      "headers": {
+        "x-cloudscheduler": "true",
+        "user-agent": "Google-Cloud-Scheduler",
+        "content-length": "0",
+        "x-cloudscheduler-jobname": "firebase-schedule-schedSlowV2-us-central1",
+        "x-cloudscheduler-scheduletime": "2026-10-05T01:49:03.352477-07:00",
+        "x-forwarded-proto": "https"
+      },
+      "headerNames": [
+        "accept-encoding",
+        "authorization",
+        "content-length",
+        "forwarded",
+        "host",
+        "traceparent",
+        "user-agent",
+        "x-cloud-trace-context",
+        "x-cloudscheduler",
+        "x-cloudscheduler-jobname",
+        "x-cloudscheduler-scheduletime",
+        "x-forwarded-for",
+        "x-forwarded-proto"
+      ],
+      "rawBodyLength": null,
+      "event": {
+        "jobName": "firebase-schedule-schedSlowV2-us-central1",
+        "scheduleTime": "2026-10-05T01:49:03.352477-07:00"
+      },
+      "eventKeys": ["jobName", "scheduleTime"],
+      "contextProperty": {
+        "enumerable": false,
+        "configurable": false,
+        "hasGetter": true
+      },
+      "context": {
+        "eventId": "firebase-schedule-schedSlowV2-us-central1",
+        "timestamp": "2026-10-05T01:49:03.352477-07:00",
+        "eventType": "google.pubsub.topic.publish",
+        "resource": {
+          "service": "pubsub.googleapis.com",
+          "name": "projects/fireemu-oracle-sbx/topics/firebase-schedule-schedSlowV2-us-central1"
+        },
+        "params": {}
+      },
+      "phase": "end"
+    },
+    {
+      "handler": "schedRetryV2",
+      "generation": 2,
+      "at": 594955,
+      "method": "POST",
+      "url": "/",
+      "headers": {
+        "x-cloudscheduler": "true",
+        "user-agent": "Google-Cloud-Scheduler",
+        "content-length": "0",
+        "x-cloudscheduler-jobname": "fe-sd-156715222b86ea44-retry5",
+        "x-cloudscheduler-scheduletime": "2026-12-31T16:00:02.427285-08:00",
+        "x-forwarded-proto": "https"
+      },
+      "headerNames": [
+        "accept-encoding",
+        "authorization",
+        "content-length",
+        "forwarded",
+        "host",
+        "traceparent",
+        "user-agent",
+        "x-cloud-trace-context",
+        "x-cloudscheduler",
+        "x-cloudscheduler-jobname",
+        "x-cloudscheduler-scheduletime",
+        "x-forwarded-for",
+        "x-forwarded-proto"
+      ],
+      "rawBodyLength": null,
+      "event": {
+        "jobName": "fe-sd-156715222b86ea44-retry5",
+        "scheduleTime": "2026-12-31T16:00:02.427285-08:00"
+      },
+      "eventKeys": ["jobName", "scheduleTime"],
+      "contextProperty": {
+        "enumerable": false,
+        "configurable": false,
+        "hasGetter": true
+      },
+      "context": {
+        "eventId": "fe-sd-156715222b86ea44-retry5",
+        "timestamp": "2026-12-31T16:00:02.427285-08:00",
+        "eventType": "google.pubsub.topic.publish",
+        "resource": {
+          "service": "pubsub.googleapis.com",
+          "name": "projects/fireemu-oracle-sbx/topics/fe-sd-156715222b86ea44-retry5"
+        },
+        "params": {}
+      },
+      "failing": true,
+      "elapsedMs": -7571346613
+    },
+    {
+      "handler": "schedOkV2",
+      "generation": 2,
+      "at": 601694,
+      "method": "POST",
+      "url": "/",
+      "headers": {
+        "x-cloudscheduler": "true",
+        "user-agent": "Google-Cloud-Scheduler",
+        "content-length": "0",
+        "x-cloudscheduler-jobname": "firebase-schedule-schedOkV2-us-central1",
+        "x-cloudscheduler-scheduletime": "2026-10-05T01:51:01.416739-07:00",
+        "x-forwarded-proto": "https"
+      },
+      "headerNames": [
+        "accept-encoding",
+        "authorization",
+        "content-length",
+        "forwarded",
+        "host",
+        "traceparent",
+        "user-agent",
+        "x-cloud-trace-context",
+        "x-cloudscheduler",
+        "x-cloudscheduler-jobname",
+        "x-cloudscheduler-scheduletime",
+        "x-forwarded-for",
+        "x-forwarded-proto"
+      ],
+      "rawBodyLength": null,
+      "event": {
+        "jobName": "firebase-schedule-schedOkV2-us-central1",
+        "scheduleTime": "2026-10-05T01:51:01.416739-07:00"
+      },
+      "eventKeys": ["jobName", "scheduleTime"],
+      "contextProperty": {
+        "enumerable": false,
+        "configurable": false,
+        "hasGetter": true
+      },
+      "context": {
+        "eventId": "firebase-schedule-schedOkV2-us-central1",
+        "timestamp": "2026-10-05T01:51:01.416739-07:00",
+        "eventType": "google.pubsub.topic.publish",
+        "resource": {
+          "service": "pubsub.googleapis.com",
+          "name": "projects/fireemu-oracle-sbx/topics/firebase-schedule-schedOkV2-us-central1"
+        },
+        "params": {}
+      }
+    },
+    {
+      "handler": "schedOkV1",
+      "generation": 1,
+      "at": 601982,
+      "argumentCount": 1,
+      "arguments": [
+        {
+          "eventId": "22257408224277932",
+          "eventType": "google.pubsub.topic.publish",
+          "resource": {
+            "name": "projects/fireemu-oracle-sbx/topics/firebase-schedule-schedOkV1-us-central1",
+            "service": "pubsub.googleapis.com",
+            "type": "type.googleapis.com/google.pubsub.v1.PubsubMessage"
+          },
+          "timestamp": "2026-10-05T08:51:02.269Z",
+          "params": {}
+        }
+      ],
+      "context": {
+        "eventId": "22257408224277932",
+        "eventType": "google.pubsub.topic.publish",
+        "resource": {
+          "name": "projects/fireemu-oracle-sbx/topics/firebase-schedule-schedOkV1-us-central1",
+          "service": "pubsub.googleapis.com",
+          "type": "type.googleapis.com/google.pubsub.v1.PubsubMessage"
+        },
+        "timestamp": "2026-10-05T08:51:02.269Z",
+        "params": {}
+      }
+    },
+    {
+      "handler": "schedSlowV2",
+      "generation": 2,
+      "at": 635405,
+      "method": "POST",
+      "url": "/",
+      "headers": {
+        "x-cloudscheduler": "true",
+        "user-agent": "Google-Cloud-Scheduler",
+        "content-length": "0",
+        "x-cloudscheduler-jobname": "firebase-schedule-schedSlowV2-us-central1",
+        "x-cloudscheduler-scheduletime": "2026-10-05T01:49:03.352477-07:00",
+        "x-forwarded-proto": "https"
+      },
+      "headerNames": [
+        "accept-encoding",
+        "authorization",
+        "content-length",
+        "forwarded",
+        "host",
+        "traceparent",
+        "user-agent",
+        "x-cloud-trace-context",
+        "x-cloudscheduler",
+        "x-cloudscheduler-jobname",
+        "x-cloudscheduler-scheduletime",
+        "x-forwarded-for",
+        "x-forwarded-proto"
+      ],
+      "rawBodyLength": null,
+      "event": {
+        "jobName": "firebase-schedule-schedSlowV2-us-central1",
+        "scheduleTime": "2026-10-05T01:49:03.352477-07:00"
+      },
+      "eventKeys": ["jobName", "scheduleTime"],
+      "contextProperty": {
+        "enumerable": false,
+        "configurable": false,
+        "hasGetter": true
+      },
+      "context": {
+        "eventId": "firebase-schedule-schedSlowV2-us-central1",
+        "timestamp": "2026-10-05T01:49:03.352477-07:00",
+        "eventType": "google.pubsub.topic.publish",
+        "resource": {
+          "service": "pubsub.googleapis.com",
+          "name": "projects/fireemu-oracle-sbx/topics/firebase-schedule-schedSlowV2-us-central1"
+        },
+        "params": {}
+      },
+      "phase": "end"
+    },
+    {
+      "handler": "schedRetryV2",
+      "generation": 2,
+      "at": 635570,
+      "method": "POST",
+      "url": "/",
+      "headers": {
+        "x-cloudscheduler": "true",
+        "user-agent": "Google-Cloud-Scheduler",
+        "content-length": "0",
+        "x-cloudscheduler-jobname": "fe-sd-156715222b86ea44-retry5",
+        "x-cloudscheduler-scheduletime": "2026-12-31T16:00:02.427285-08:00",
+        "x-forwarded-proto": "https"
+      },
+      "headerNames": [
+        "accept-encoding",
+        "authorization",
+        "content-length",
+        "forwarded",
+        "host",
+        "traceparent",
+        "user-agent",
+        "x-cloud-trace-context",
+        "x-cloudscheduler",
+        "x-cloudscheduler-jobname",
+        "x-cloudscheduler-scheduletime",
+        "x-forwarded-for",
+        "x-forwarded-proto"
+      ],
+      "rawBodyLength": null,
+      "event": {
+        "jobName": "fe-sd-156715222b86ea44-retry5",
+        "scheduleTime": "2026-12-31T16:00:02.427285-08:00"
+      },
+      "eventKeys": ["jobName", "scheduleTime"],
+      "contextProperty": {
+        "enumerable": false,
+        "configurable": false,
+        "hasGetter": true
+      },
+      "context": {
+        "eventId": "fe-sd-156715222b86ea44-retry5",
+        "timestamp": "2026-12-31T16:00:02.427285-08:00",
+        "eventType": "google.pubsub.topic.publish",
+        "resource": {
+          "service": "pubsub.googleapis.com",
+          "name": "projects/fireemu-oracle-sbx/topics/fe-sd-156715222b86ea44-retry5"
+        },
+        "params": {}
+      },
+      "failing": true,
+      "elapsedMs": -7571305998
+    },
+    {
+      "handler": "schedOkV2",
+      "generation": 2,
+      "at": 660740,
+      "method": "POST",
+      "url": "/",
+      "headers": {
+        "x-cloudscheduler": "true",
+        "user-agent": "Google-Cloud-Scheduler",
+        "content-length": "0",
+        "x-cloudscheduler-jobname": "firebase-schedule-schedOkV2-us-central1",
+        "x-cloudscheduler-scheduletime": "2026-10-05T01:52:01.416739-07:00",
+        "x-forwarded-proto": "https"
+      },
+      "headerNames": [
+        "accept-encoding",
+        "authorization",
+        "content-length",
+        "forwarded",
+        "host",
+        "traceparent",
+        "user-agent",
+        "x-cloud-trace-context",
+        "x-cloudscheduler",
+        "x-cloudscheduler-jobname",
+        "x-cloudscheduler-scheduletime",
+        "x-forwarded-for",
+        "x-forwarded-proto"
+      ],
+      "rawBodyLength": null,
+      "event": {
+        "jobName": "firebase-schedule-schedOkV2-us-central1",
+        "scheduleTime": "2026-10-05T01:52:01.416739-07:00"
+      },
+      "eventKeys": ["jobName", "scheduleTime"],
+      "contextProperty": {
+        "enumerable": false,
+        "configurable": false,
+        "hasGetter": true
+      },
+      "context": {
+        "eventId": "firebase-schedule-schedOkV2-us-central1",
+        "timestamp": "2026-10-05T01:52:01.416739-07:00",
+        "eventType": "google.pubsub.topic.publish",
+        "resource": {
+          "service": "pubsub.googleapis.com",
+          "name": "projects/fireemu-oracle-sbx/topics/firebase-schedule-schedOkV2-us-central1"
+        },
+        "params": {}
+      }
+    },
+    {
+      "handler": "schedOkV1",
+      "generation": 1,
+      "at": 662370,
+      "argumentCount": 1,
+      "arguments": [
+        {
+          "eventId": "22254197448693872",
+          "eventType": "google.pubsub.topic.publish",
+          "resource": {
+            "name": "projects/fireemu-oracle-sbx/topics/firebase-schedule-schedOkV1-us-central1",
+            "service": "pubsub.googleapis.com",
+            "type": "type.googleapis.com/google.pubsub.v1.PubsubMessage"
+          },
+          "timestamp": "2026-10-05T08:52:02.608Z",
+          "params": {}
+        }
+      ],
+      "context": {
+        "eventId": "22254197448693872",
+        "eventType": "google.pubsub.topic.publish",
+        "resource": {
+          "name": "projects/fireemu-oracle-sbx/topics/firebase-schedule-schedOkV1-us-central1",
+          "service": "pubsub.googleapis.com",
+          "type": "type.googleapis.com/google.pubsub.v1.PubsubMessage"
+        },
+        "timestamp": "2026-10-05T08:52:02.608Z",
+        "params": {}
+      }
+    },
+    {
+      "handler": "schedSlowV2",
+      "generation": 2,
+      "at": 662684,
+      "method": "POST",
+      "url": "/",
+      "headers": {
+        "x-cloudscheduler": "true",
+        "user-agent": "Google-Cloud-Scheduler",
+        "content-length": "0",
+        "x-cloudscheduler-jobname": "firebase-schedule-schedSlowV2-us-central1",
+        "x-cloudscheduler-scheduletime": "2026-10-05T01:52:03.352477-07:00",
+        "x-forwarded-proto": "https"
+      },
+      "headerNames": [
+        "accept-encoding",
+        "authorization",
+        "content-length",
+        "forwarded",
+        "host",
+        "traceparent",
+        "user-agent",
+        "x-cloud-trace-context",
+        "x-cloudscheduler",
+        "x-cloudscheduler-jobname",
+        "x-cloudscheduler-scheduletime",
+        "x-forwarded-for",
+        "x-forwarded-proto"
+      ],
+      "rawBodyLength": null,
+      "event": {
+        "jobName": "firebase-schedule-schedSlowV2-us-central1",
+        "scheduleTime": "2026-10-05T01:52:03.352477-07:00"
+      },
+      "eventKeys": ["jobName", "scheduleTime"],
+      "contextProperty": {
+        "enumerable": false,
+        "configurable": false,
+        "hasGetter": true
+      },
+      "context": {
+        "eventId": "firebase-schedule-schedSlowV2-us-central1",
+        "timestamp": "2026-10-05T01:52:03.352477-07:00",
+        "eventType": "google.pubsub.topic.publish",
+        "resource": {
+          "service": "pubsub.googleapis.com",
+          "name": "projects/fireemu-oracle-sbx/topics/firebase-schedule-schedSlowV2-us-central1"
+        },
+        "params": {}
+      },
+      "phase": "start"
+    },
+    {
+      "handler": "schedRetryV2",
+      "generation": 2,
+      "at": 716354,
+      "method": "POST",
+      "url": "/",
+      "headers": {
+        "x-cloudscheduler": "true",
+        "user-agent": "Google-Cloud-Scheduler",
+        "content-length": "0",
+        "x-cloudscheduler-jobname": "fe-sd-156715222b86ea44-retry5",
+        "x-cloudscheduler-scheduletime": "2026-12-31T16:00:02.427285-08:00",
+        "x-forwarded-proto": "https"
+      },
+      "headerNames": [
+        "accept-encoding",
+        "authorization",
+        "content-length",
+        "forwarded",
+        "host",
+        "traceparent",
+        "user-agent",
+        "x-cloud-trace-context",
+        "x-cloudscheduler",
+        "x-cloudscheduler-jobname",
+        "x-cloudscheduler-scheduletime",
+        "x-forwarded-for",
+        "x-forwarded-proto"
+      ],
+      "rawBodyLength": null,
+      "event": {
+        "jobName": "fe-sd-156715222b86ea44-retry5",
+        "scheduleTime": "2026-12-31T16:00:02.427285-08:00"
+      },
+      "eventKeys": ["jobName", "scheduleTime"],
+      "contextProperty": {
+        "enumerable": false,
+        "configurable": false,
+        "hasGetter": true
+      },
+      "context": {
+        "eventId": "fe-sd-156715222b86ea44-retry5",
+        "timestamp": "2026-12-31T16:00:02.427285-08:00",
+        "eventType": "google.pubsub.topic.publish",
+        "resource": {
+          "service": "pubsub.googleapis.com",
+          "name": "projects/fireemu-oracle-sbx/topics/fe-sd-156715222b86ea44-retry5"
+        },
+        "params": {}
+      },
+      "failing": true,
+      "elapsedMs": -7571225214
+    },
+    {
+      "handler": "schedOkV2",
+      "generation": 2,
+      "at": 720689,
+      "method": "POST",
+      "url": "/",
+      "headers": {
+        "x-cloudscheduler": "true",
+        "user-agent": "Google-Cloud-Scheduler",
+        "content-length": "0",
+        "x-cloudscheduler-jobname": "firebase-schedule-schedOkV2-us-central1",
+        "x-cloudscheduler-scheduletime": "2026-10-05T01:53:01.416739-07:00",
+        "x-forwarded-proto": "https"
+      },
+      "headerNames": [
+        "accept-encoding",
+        "authorization",
+        "content-length",
+        "forwarded",
+        "host",
+        "traceparent",
+        "user-agent",
+        "x-cloud-trace-context",
+        "x-cloudscheduler",
+        "x-cloudscheduler-jobname",
+        "x-cloudscheduler-scheduletime",
+        "x-forwarded-for",
+        "x-forwarded-proto"
+      ],
+      "rawBodyLength": null,
+      "event": {
+        "jobName": "firebase-schedule-schedOkV2-us-central1",
+        "scheduleTime": "2026-10-05T01:53:01.416739-07:00"
+      },
+      "eventKeys": ["jobName", "scheduleTime"],
+      "contextProperty": {
+        "enumerable": false,
+        "configurable": false,
+        "hasGetter": true
+      },
+      "context": {
+        "eventId": "firebase-schedule-schedOkV2-us-central1",
+        "timestamp": "2026-10-05T01:53:01.416739-07:00",
+        "eventType": "google.pubsub.topic.publish",
+        "resource": {
+          "service": "pubsub.googleapis.com",
+          "name": "projects/fireemu-oracle-sbx/topics/firebase-schedule-schedOkV2-us-central1"
+        },
+        "params": {}
+      }
+    },
+    {
+      "handler": "schedOkV1",
+      "generation": 1,
+      "at": 723168,
+      "argumentCount": 1,
+      "arguments": [
+        {
+          "eventId": "22256810585145453",
+          "eventType": "google.pubsub.topic.publish",
+          "resource": {
+            "name": "projects/fireemu-oracle-sbx/topics/firebase-schedule-schedOkV1-us-central1",
+            "service": "pubsub.googleapis.com",
+            "type": "type.googleapis.com/google.pubsub.v1.PubsubMessage"
+          },
+          "timestamp": "2026-10-05T08:53:03.685Z",
+          "params": {}
+        }
+      ],
+      "context": {
+        "eventId": "22256810585145453",
+        "eventType": "google.pubsub.topic.publish",
+        "resource": {
+          "name": "projects/fireemu-oracle-sbx/topics/firebase-schedule-schedOkV1-us-central1",
+          "service": "pubsub.googleapis.com",
+          "type": "type.googleapis.com/google.pubsub.v1.PubsubMessage"
+        },
+        "timestamp": "2026-10-05T08:53:03.685Z",
+        "params": {}
+      }
+    },
+    {
+      "handler": "schedSlowV2",
+      "generation": 2,
+      "at": 762686,
+      "method": "POST",
+      "url": "/",
+      "headers": {
+        "x-cloudscheduler": "true",
+        "user-agent": "Google-Cloud-Scheduler",
+        "content-length": "0",
+        "x-cloudscheduler-jobname": "firebase-schedule-schedSlowV2-us-central1",
+        "x-cloudscheduler-scheduletime": "2026-10-05T01:52:03.352477-07:00",
+        "x-forwarded-proto": "https"
+      },
+      "headerNames": [
+        "accept-encoding",
+        "authorization",
+        "content-length",
+        "forwarded",
+        "host",
+        "traceparent",
+        "user-agent",
+        "x-cloud-trace-context",
+        "x-cloudscheduler",
+        "x-cloudscheduler-jobname",
+        "x-cloudscheduler-scheduletime",
+        "x-forwarded-for",
+        "x-forwarded-proto"
+      ],
+      "rawBodyLength": null,
+      "event": {
+        "jobName": "firebase-schedule-schedSlowV2-us-central1",
+        "scheduleTime": "2026-10-05T01:52:03.352477-07:00"
+      },
+      "eventKeys": ["jobName", "scheduleTime"],
+      "contextProperty": {
+        "enumerable": false,
+        "configurable": false,
+        "hasGetter": true
+      },
+      "context": {
+        "eventId": "firebase-schedule-schedSlowV2-us-central1",
+        "timestamp": "2026-10-05T01:52:03.352477-07:00",
+        "eventType": "google.pubsub.topic.publish",
+        "resource": {
+          "service": "pubsub.googleapis.com",
+          "name": "projects/fireemu-oracle-sbx/topics/firebase-schedule-schedSlowV2-us-central1"
+        },
+        "params": {}
+      },
+      "phase": "end"
+    },
+    {
+      "handler": "schedOkV2",
+      "generation": 2,
+      "at": 780760,
+      "method": "POST",
+      "url": "/",
+      "headers": {
+        "x-cloudscheduler": "true",
+        "user-agent": "Google-Cloud-Scheduler",
+        "content-length": "0",
+        "x-cloudscheduler-jobname": "firebase-schedule-schedOkV2-us-central1",
+        "x-cloudscheduler-scheduletime": "2026-10-05T01:54:01.416739-07:00",
+        "x-forwarded-proto": "https"
+      },
+      "headerNames": [
+        "accept-encoding",
+        "authorization",
+        "content-length",
+        "forwarded",
+        "host",
+        "traceparent",
+        "user-agent",
+        "x-cloud-trace-context",
+        "x-cloudscheduler",
+        "x-cloudscheduler-jobname",
+        "x-cloudscheduler-scheduletime",
+        "x-forwarded-for",
+        "x-forwarded-proto"
+      ],
+      "rawBodyLength": null,
+      "event": {
+        "jobName": "firebase-schedule-schedOkV2-us-central1",
+        "scheduleTime": "2026-10-05T01:54:01.416739-07:00"
+      },
+      "eventKeys": ["jobName", "scheduleTime"],
+      "contextProperty": {
+        "enumerable": false,
+        "configurable": false,
+        "hasGetter": true
+      },
+      "context": {
+        "eventId": "firebase-schedule-schedOkV2-us-central1",
+        "timestamp": "2026-10-05T01:54:01.416739-07:00",
+        "eventType": "google.pubsub.topic.publish",
+        "resource": {
+          "service": "pubsub.googleapis.com",
+          "name": "projects/fireemu-oracle-sbx/topics/firebase-schedule-schedOkV2-us-central1"
+        },
+        "params": {}
+      }
+    },
+    {
+      "handler": "schedOkV1",
+      "generation": 1,
+      "at": 781857,
+      "argumentCount": 1,
+      "arguments": [
+        {
+          "eventId": "21323412302904948",
+          "eventType": "google.pubsub.topic.publish",
+          "resource": {
+            "name": "projects/fireemu-oracle-sbx/topics/firebase-schedule-schedOkV1-us-central1",
+            "service": "pubsub.googleapis.com",
+            "type": "type.googleapis.com/google.pubsub.v1.PubsubMessage"
+          },
+          "timestamp": "2026-10-05T08:54:02.188Z",
+          "params": {}
+        }
+      ],
+      "context": {
+        "eventId": "21323412302904948",
+        "eventType": "google.pubsub.topic.publish",
+        "resource": {
+          "name": "projects/fireemu-oracle-sbx/topics/firebase-schedule-schedOkV1-us-central1",
+          "service": "pubsub.googleapis.com",
+          "type": "type.googleapis.com/google.pubsub.v1.PubsubMessage"
+        },
+        "timestamp": "2026-10-05T08:54:02.188Z",
+        "params": {}
+      }
+    },
+    {
+      "handler": "schedSlowV2",
+      "generation": 2,
+      "at": 783413,
+      "method": "POST",
+      "url": "/",
+      "headers": {
+        "x-cloudscheduler": "true",
+        "user-agent": "Google-Cloud-Scheduler",
+        "content-length": "0",
+        "x-cloudscheduler-jobname": "firebase-schedule-schedSlowV2-us-central1",
+        "x-cloudscheduler-scheduletime": "2026-10-05T01:54:03.352477-07:00",
+        "x-forwarded-proto": "https"
+      },
+      "headerNames": [
+        "accept-encoding",
+        "authorization",
+        "content-length",
+        "forwarded",
+        "host",
+        "traceparent",
+        "user-agent",
+        "x-cloud-trace-context",
+        "x-cloudscheduler",
+        "x-cloudscheduler-jobname",
+        "x-cloudscheduler-scheduletime",
+        "x-forwarded-for",
+        "x-forwarded-proto"
+      ],
+      "rawBodyLength": null,
+      "event": {
+        "jobName": "firebase-schedule-schedSlowV2-us-central1",
+        "scheduleTime": "2026-10-05T01:54:03.352477-07:00"
+      },
+      "eventKeys": ["jobName", "scheduleTime"],
+      "contextProperty": {
+        "enumerable": false,
+        "configurable": false,
+        "hasGetter": true
+      },
+      "context": {
+        "eventId": "firebase-schedule-schedSlowV2-us-central1",
+        "timestamp": "2026-10-05T01:54:03.352477-07:00",
+        "eventType": "google.pubsub.topic.publish",
+        "resource": {
+          "service": "pubsub.googleapis.com",
+          "name": "projects/fireemu-oracle-sbx/topics/firebase-schedule-schedSlowV2-us-central1"
+        },
+        "params": {}
+      },
+      "phase": "start"
+    },
+    {
+      "handler": "schedRetryV2",
+      "generation": 2,
+      "at": 841115,
+      "method": "POST",
+      "url": "/",
+      "headers": {
+        "x-cloudscheduler": "true",
+        "user-agent": "Google-Cloud-Scheduler",
+        "content-length": "0",
+        "x-cloudscheduler-jobname": "firebase-schedule-schedRetryV2-us-central1",
+        "x-cloudscheduler-scheduletime": "2026-10-05T01:55:01.751605-07:00",
+        "x-forwarded-proto": "https"
+      },
+      "headerNames": [
+        "accept-encoding",
+        "authorization",
+        "content-length",
+        "forwarded",
+        "host",
+        "traceparent",
+        "user-agent",
+        "x-cloud-trace-context",
+        "x-cloudscheduler",
+        "x-cloudscheduler-jobname",
+        "x-cloudscheduler-scheduletime",
+        "x-forwarded-for",
+        "x-forwarded-proto"
+      ],
+      "rawBodyLength": null,
+      "event": {
+        "jobName": "firebase-schedule-schedRetryV2-us-central1",
+        "scheduleTime": "2026-10-05T01:55:01.751605-07:00"
+      },
+      "eventKeys": ["jobName", "scheduleTime"],
+      "contextProperty": {
+        "enumerable": false,
+        "configurable": false,
+        "hasGetter": true
+      },
+      "context": {
+        "eventId": "firebase-schedule-schedRetryV2-us-central1",
+        "timestamp": "2026-10-05T01:55:01.751605-07:00",
+        "eventType": "google.pubsub.topic.publish",
+        "resource": {
+          "service": "pubsub.googleapis.com",
+          "name": "projects/fireemu-oracle-sbx/topics/firebase-schedule-schedRetryV2-us-central1"
+        },
+        "params": {}
+      },
+      "failing": true,
+      "elapsedMs": 223
+    },
+    {
+      "handler": "schedOkV2",
+      "generation": 2,
+      "at": 841326,
+      "method": "POST",
+      "url": "/",
+      "headers": {
+        "x-cloudscheduler": "true",
+        "user-agent": "Google-Cloud-Scheduler",
+        "content-length": "0",
+        "x-cloudscheduler-jobname": "firebase-schedule-schedOkV2-us-central1",
+        "x-cloudscheduler-scheduletime": "2026-10-05T01:55:01.416739-07:00",
+        "x-forwarded-proto": "https"
+      },
+      "headerNames": [
+        "accept-encoding",
+        "authorization",
+        "content-length",
+        "forwarded",
+        "host",
+        "traceparent",
+        "user-agent",
+        "x-cloud-trace-context",
+        "x-cloudscheduler",
+        "x-cloudscheduler-jobname",
+        "x-cloudscheduler-scheduletime",
+        "x-forwarded-for",
+        "x-forwarded-proto"
+      ],
+      "rawBodyLength": null,
+      "event": {
+        "jobName": "firebase-schedule-schedOkV2-us-central1",
+        "scheduleTime": "2026-10-05T01:55:01.416739-07:00"
+      },
+      "eventKeys": ["jobName", "scheduleTime"],
+      "contextProperty": {
+        "enumerable": false,
+        "configurable": false,
+        "hasGetter": true
+      },
+      "context": {
+        "eventId": "firebase-schedule-schedOkV2-us-central1",
+        "timestamp": "2026-10-05T01:55:01.416739-07:00",
+        "eventType": "google.pubsub.topic.publish",
+        "resource": {
+          "service": "pubsub.googleapis.com",
+          "name": "projects/fireemu-oracle-sbx/topics/firebase-schedule-schedOkV2-us-central1"
+        },
+        "params": {}
+      }
+    },
+    {
+      "handler": "schedOkV1",
+      "generation": 1,
+      "at": 842275,
+      "argumentCount": 1,
+      "arguments": [
+        {
+          "eventId": "22256546353576756",
+          "eventType": "google.pubsub.topic.publish",
+          "resource": {
+            "name": "projects/fireemu-oracle-sbx/topics/firebase-schedule-schedOkV1-us-central1",
+            "service": "pubsub.googleapis.com",
+            "type": "type.googleapis.com/google.pubsub.v1.PubsubMessage"
+          },
+          "timestamp": "2026-10-05T08:55:02.496Z",
+          "params": {}
+        }
+      ],
+      "context": {
+        "eventId": "22256546353576756",
+        "eventType": "google.pubsub.topic.publish",
+        "resource": {
+          "name": "projects/fireemu-oracle-sbx/topics/firebase-schedule-schedOkV1-us-central1",
+          "service": "pubsub.googleapis.com",
+          "type": "type.googleapis.com/google.pubsub.v1.PubsubMessage"
+        },
+        "timestamp": "2026-10-05T08:55:02.496Z",
+        "params": {}
+      }
+    },
+    {
+      "handler": "schedFailV1",
+      "generation": 1,
+      "at": 844948,
+      "argumentCount": 1,
+      "arguments": [
+        {
+          "eventId": "22256726934741515",
+          "eventType": "google.pubsub.topic.publish",
+          "resource": {
+            "name": "projects/fireemu-oracle-sbx/topics/firebase-schedule-schedFailV1-us-central1",
+            "service": "pubsub.googleapis.com",
+            "type": "type.googleapis.com/google.pubsub.v1.PubsubMessage"
+          },
+          "timestamp": "2026-10-05T08:55:05.218Z",
+          "params": {}
+        }
+      ],
+      "context": {
+        "eventId": "22256726934741515",
+        "eventType": "google.pubsub.topic.publish",
+        "resource": {
+          "name": "projects/fireemu-oracle-sbx/topics/firebase-schedule-schedFailV1-us-central1",
+          "service": "pubsub.googleapis.com",
+          "type": "type.googleapis.com/google.pubsub.v1.PubsubMessage"
+        },
+        "timestamp": "2026-10-05T08:55:05.218Z",
+        "params": {}
+      },
+      "failing": true
+    },
+    {
+      "handler": "schedRetryV2",
+      "generation": 2,
+      "at": 845615,
+      "method": "POST",
+      "url": "/",
+      "headers": {
+        "x-cloudscheduler": "true",
+        "user-agent": "Google-Cloud-Scheduler",
+        "content-length": "0",
+        "x-cloudscheduler-jobname": "firebase-schedule-schedRetryV2-us-central1",
+        "x-cloudscheduler-scheduletime": "2026-10-05T01:55:01.751605-07:00",
+        "x-forwarded-proto": "https"
+      },
+      "headerNames": [
+        "accept-encoding",
+        "authorization",
+        "content-length",
+        "forwarded",
+        "host",
+        "traceparent",
+        "user-agent",
+        "x-cloud-trace-context",
+        "x-cloudscheduler",
+        "x-cloudscheduler-jobname",
+        "x-cloudscheduler-scheduletime",
+        "x-forwarded-for",
+        "x-forwarded-proto"
+      ],
+      "rawBodyLength": null,
+      "event": {
+        "jobName": "firebase-schedule-schedRetryV2-us-central1",
+        "scheduleTime": "2026-10-05T01:55:01.751605-07:00"
+      },
+      "eventKeys": ["jobName", "scheduleTime"],
+      "contextProperty": {
+        "enumerable": false,
+        "configurable": false,
+        "hasGetter": true
+      },
+      "context": {
+        "eventId": "firebase-schedule-schedRetryV2-us-central1",
+        "timestamp": "2026-10-05T01:55:01.751605-07:00",
+        "eventType": "google.pubsub.topic.publish",
+        "resource": {
+          "service": "pubsub.googleapis.com",
+          "name": "projects/fireemu-oracle-sbx/topics/firebase-schedule-schedRetryV2-us-central1"
+        },
+        "params": {}
+      },
+      "failing": true,
+      "elapsedMs": 4723
+    },
+    {
+      "handler": "schedRetryV2",
+      "generation": 2,
+      "at": 854146,
+      "method": "POST",
+      "url": "/",
+      "headers": {
+        "x-cloudscheduler": "true",
+        "user-agent": "Google-Cloud-Scheduler",
+        "content-length": "0",
+        "x-cloudscheduler-jobname": "firebase-schedule-schedRetryV2-us-central1",
+        "x-cloudscheduler-scheduletime": "2026-10-05T01:55:01.751605-07:00",
+        "x-forwarded-proto": "https"
+      },
+      "headerNames": [
+        "accept-encoding",
+        "authorization",
+        "content-length",
+        "forwarded",
+        "host",
+        "traceparent",
+        "user-agent",
+        "x-cloud-trace-context",
+        "x-cloudscheduler",
+        "x-cloudscheduler-jobname",
+        "x-cloudscheduler-scheduletime",
+        "x-forwarded-for",
+        "x-forwarded-proto"
+      ],
+      "rawBodyLength": null,
+      "event": {
+        "jobName": "firebase-schedule-schedRetryV2-us-central1",
+        "scheduleTime": "2026-10-05T01:55:01.751605-07:00"
+      },
+      "eventKeys": ["jobName", "scheduleTime"],
+      "contextProperty": {
+        "enumerable": false,
+        "configurable": false,
+        "hasGetter": true
+      },
+      "context": {
+        "eventId": "firebase-schedule-schedRetryV2-us-central1",
+        "timestamp": "2026-10-05T01:55:01.751605-07:00",
+        "eventType": "google.pubsub.topic.publish",
+        "resource": {
+          "service": "pubsub.googleapis.com",
+          "name": "projects/fireemu-oracle-sbx/topics/firebase-schedule-schedRetryV2-us-central1"
+        },
+        "params": {}
+      },
+      "failing": true,
+      "elapsedMs": 13254
+    },
+    {
+      "handler": "schedRetryV2",
+      "generation": 2,
+      "at": 870698,
+      "method": "POST",
+      "url": "/",
+      "headers": {
+        "x-cloudscheduler": "true",
+        "user-agent": "Google-Cloud-Scheduler",
+        "content-length": "0",
+        "x-cloudscheduler-jobname": "firebase-schedule-schedRetryV2-us-central1",
+        "x-cloudscheduler-scheduletime": "2026-10-05T01:55:01.751605-07:00",
+        "x-forwarded-proto": "https"
+      },
+      "headerNames": [
+        "accept-encoding",
+        "authorization",
+        "content-length",
+        "forwarded",
+        "host",
+        "traceparent",
+        "user-agent",
+        "x-cloud-trace-context",
+        "x-cloudscheduler",
+        "x-cloudscheduler-jobname",
+        "x-cloudscheduler-scheduletime",
+        "x-forwarded-for",
+        "x-forwarded-proto"
+      ],
+      "rawBodyLength": null,
+      "event": {
+        "jobName": "firebase-schedule-schedRetryV2-us-central1",
+        "scheduleTime": "2026-10-05T01:55:01.751605-07:00"
+      },
+      "eventKeys": ["jobName", "scheduleTime"],
+      "contextProperty": {
+        "enumerable": false,
+        "configurable": false,
+        "hasGetter": true
+      },
+      "context": {
+        "eventId": "firebase-schedule-schedRetryV2-us-central1",
+        "timestamp": "2026-10-05T01:55:01.751605-07:00",
+        "eventType": "google.pubsub.topic.publish",
+        "resource": {
+          "service": "pubsub.googleapis.com",
+          "name": "projects/fireemu-oracle-sbx/topics/firebase-schedule-schedRetryV2-us-central1"
+        },
+        "params": {}
+      },
+      "failing": false,
+      "elapsedMs": 29806
+    },
+    {
+      "handler": "schedSlowV2",
+      "generation": 2,
+      "at": 883415,
+      "method": "POST",
+      "url": "/",
+      "headers": {
+        "x-cloudscheduler": "true",
+        "user-agent": "Google-Cloud-Scheduler",
+        "content-length": "0",
+        "x-cloudscheduler-jobname": "firebase-schedule-schedSlowV2-us-central1",
+        "x-cloudscheduler-scheduletime": "2026-10-05T01:54:03.352477-07:00",
+        "x-forwarded-proto": "https"
+      },
+      "headerNames": [
+        "accept-encoding",
+        "authorization",
+        "content-length",
+        "forwarded",
+        "host",
+        "traceparent",
+        "user-agent",
+        "x-cloud-trace-context",
+        "x-cloudscheduler",
+        "x-cloudscheduler-jobname",
+        "x-cloudscheduler-scheduletime",
+        "x-forwarded-for",
+        "x-forwarded-proto"
+      ],
+      "rawBodyLength": null,
+      "event": {
+        "jobName": "firebase-schedule-schedSlowV2-us-central1",
+        "scheduleTime": "2026-10-05T01:54:03.352477-07:00"
+      },
+      "eventKeys": ["jobName", "scheduleTime"],
+      "contextProperty": {
+        "enumerable": false,
+        "configurable": false,
+        "hasGetter": true
+      },
+      "context": {
+        "eventId": "firebase-schedule-schedSlowV2-us-central1",
+        "timestamp": "2026-10-05T01:54:03.352477-07:00",
+        "eventType": "google.pubsub.topic.publish",
+        "resource": {
+          "service": "pubsub.googleapis.com",
+          "name": "projects/fireemu-oracle-sbx/topics/firebase-schedule-schedSlowV2-us-central1"
+        },
+        "params": {}
+      },
+      "phase": "end"
+    },
+    {
+      "handler": "schedOkV1",
+      "generation": 1,
+      "at": 900802,
+      "argumentCount": 1,
+      "arguments": [
+        {
+          "eventId": "22255696979787229",
+          "eventType": "google.pubsub.topic.publish",
+          "resource": {
+            "name": "projects/fireemu-oracle-sbx/topics/firebase-schedule-schedOkV1-us-central1",
+            "service": "pubsub.googleapis.com",
+            "type": "type.googleapis.com/google.pubsub.v1.PubsubMessage"
+          },
+          "timestamp": "2026-10-05T08:56:01.623Z",
+          "params": {}
+        }
+      ],
+      "context": {
+        "eventId": "22255696979787229",
+        "eventType": "google.pubsub.topic.publish",
+        "resource": {
+          "name": "projects/fireemu-oracle-sbx/topics/firebase-schedule-schedOkV1-us-central1",
+          "service": "pubsub.googleapis.com",
+          "type": "type.googleapis.com/google.pubsub.v1.PubsubMessage"
+        },
+        "timestamp": "2026-10-05T08:56:01.623Z",
+        "params": {}
+      }
+    },
+    {
+      "handler": "schedOkV2",
+      "generation": 2,
+      "at": 901301,
+      "method": "POST",
+      "url": "/",
+      "headers": {
+        "x-cloudscheduler": "true",
+        "user-agent": "Google-Cloud-Scheduler",
+        "content-length": "0",
+        "x-cloudscheduler-jobname": "firebase-schedule-schedOkV2-us-central1",
+        "x-cloudscheduler-scheduletime": "2026-10-05T01:56:01.416739-07:00",
+        "x-forwarded-proto": "https"
+      },
+      "headerNames": [
+        "accept-encoding",
+        "authorization",
+        "content-length",
+        "forwarded",
+        "host",
+        "traceparent",
+        "user-agent",
+        "x-cloud-trace-context",
+        "x-cloudscheduler",
+        "x-cloudscheduler-jobname",
+        "x-cloudscheduler-scheduletime",
+        "x-forwarded-for",
+        "x-forwarded-proto"
+      ],
+      "rawBodyLength": null,
+      "event": {
+        "jobName": "firebase-schedule-schedOkV2-us-central1",
+        "scheduleTime": "2026-10-05T01:56:01.416739-07:00"
+      },
+      "eventKeys": ["jobName", "scheduleTime"],
+      "contextProperty": {
+        "enumerable": false,
+        "configurable": false,
+        "hasGetter": true
+      },
+      "context": {
+        "eventId": "firebase-schedule-schedOkV2-us-central1",
+        "timestamp": "2026-10-05T01:56:01.416739-07:00",
+        "eventType": "google.pubsub.topic.publish",
+        "resource": {
+          "service": "pubsub.googleapis.com",
+          "name": "projects/fireemu-oracle-sbx/topics/firebase-schedule-schedOkV2-us-central1"
+        },
+        "params": {}
+      }
+    },
+    {
+      "handler": "schedSlowV2",
+      "generation": 2,
+      "at": 902938,
+      "method": "POST",
+      "url": "/",
+      "headers": {
+        "x-cloudscheduler": "true",
+        "user-agent": "Google-Cloud-Scheduler",
+        "content-length": "0",
+        "x-cloudscheduler-jobname": "firebase-schedule-schedSlowV2-us-central1",
+        "x-cloudscheduler-scheduletime": "2026-10-05T01:56:03.352477-07:00",
+        "x-forwarded-proto": "https"
+      },
+      "headerNames": [
+        "accept-encoding",
+        "authorization",
+        "content-length",
+        "forwarded",
+        "host",
+        "traceparent",
+        "user-agent",
+        "x-cloud-trace-context",
+        "x-cloudscheduler",
+        "x-cloudscheduler-jobname",
+        "x-cloudscheduler-scheduletime",
+        "x-forwarded-for",
+        "x-forwarded-proto"
+      ],
+      "rawBodyLength": null,
+      "event": {
+        "jobName": "firebase-schedule-schedSlowV2-us-central1",
+        "scheduleTime": "2026-10-05T01:56:03.352477-07:00"
+      },
+      "eventKeys": ["jobName", "scheduleTime"],
+      "contextProperty": {
+        "enumerable": false,
+        "configurable": false,
+        "hasGetter": true
+      },
+      "context": {
+        "eventId": "firebase-schedule-schedSlowV2-us-central1",
+        "timestamp": "2026-10-05T01:56:03.352477-07:00",
+        "eventType": "google.pubsub.topic.publish",
+        "resource": {
+          "service": "pubsub.googleapis.com",
+          "name": "projects/fireemu-oracle-sbx/topics/firebase-schedule-schedSlowV2-us-central1"
+        },
+        "params": {}
+      },
+      "phase": "start"
+    },
+    {
+      "handler": "schedSlowV2",
+      "generation": 2,
+      "at": 1002940,
+      "method": "POST",
+      "url": "/",
+      "headers": {
+        "x-cloudscheduler": "true",
+        "user-agent": "Google-Cloud-Scheduler",
+        "content-length": "0",
+        "x-cloudscheduler-jobname": "firebase-schedule-schedSlowV2-us-central1",
+        "x-cloudscheduler-scheduletime": "2026-10-05T01:56:03.352477-07:00",
+        "x-forwarded-proto": "https"
+      },
+      "headerNames": [
+        "accept-encoding",
+        "authorization",
+        "content-length",
+        "forwarded",
+        "host",
+        "traceparent",
+        "user-agent",
+        "x-cloud-trace-context",
+        "x-cloudscheduler",
+        "x-cloudscheduler-jobname",
+        "x-cloudscheduler-scheduletime",
+        "x-forwarded-for",
+        "x-forwarded-proto"
+      ],
+      "rawBodyLength": null,
+      "event": {
+        "jobName": "firebase-schedule-schedSlowV2-us-central1",
+        "scheduleTime": "2026-10-05T01:56:03.352477-07:00"
+      },
+      "eventKeys": ["jobName", "scheduleTime"],
+      "contextProperty": {
+        "enumerable": false,
+        "configurable": false,
+        "hasGetter": true
+      },
+      "context": {
+        "eventId": "firebase-schedule-schedSlowV2-us-central1",
+        "timestamp": "2026-10-05T01:56:03.352477-07:00",
+        "eventType": "google.pubsub.topic.publish",
+        "resource": {
+          "service": "pubsub.googleapis.com",
+          "name": "projects/fireemu-oracle-sbx/topics/firebase-schedule-schedSlowV2-us-central1"
+        },
+        "params": {}
+      },
+      "phase": "end"
+    }
+  ],
+  "attempts": {
+    "firebase-schedule-schedOkV1-us-central1": [
+      {
+        "kind": "AttemptFinished",
+        "at": 1613,
+        "status": null,
+        "debugInfo": null
+      },
+      {
+        "kind": "AttemptStarted",
+        "at": 2142,
+        "status": null,
+        "debugInfo": null
+      },
+      {
+        "kind": "AttemptFinished",
+        "at": 64961,
+        "status": null,
+        "debugInfo": null
+      },
+      {
+        "kind": "AttemptStarted",
+        "at": 65413,
+        "status": null,
+        "debugInfo": null
+      },
+      {
+        "kind": "AttemptStarted",
+        "at": 109362,
+        "status": null,
+        "debugInfo": null
+      },
+      {
+        "kind": "AttemptFinished",
+        "at": 109378,
+        "status": null,
+        "debugInfo": null
+      },
+      {
+        "kind": "AttemptStarted",
+        "at": 125082,
+        "status": null,
+        "debugInfo": null
+      },
+      {
+        "kind": "AttemptFinished",
+        "at": 125106,
+        "status": null,
+        "debugInfo": null
+      },
+      {
+        "kind": "AttemptFinished",
+        "at": 182519,
+        "status": null,
+        "debugInfo": null
+      },
+      {
+        "kind": "AttemptStarted",
+        "at": 182599,
+        "status": null,
+        "debugInfo": null
+      },
+      {
+        "kind": "AttemptStarted",
+        "at": 241572,
+        "status": null,
+        "debugInfo": null
+      },
+      {
+        "kind": "AttemptFinished",
+        "at": 241898,
+        "status": null,
+        "debugInfo": null
+      },
+      {
+        "kind": "AttemptFinished",
+        "at": 304107,
+        "status": null,
+        "debugInfo": null
+      },
+      {
+        "kind": "AttemptStarted",
+        "at": 304921,
+        "status": null,
+        "debugInfo": null
+      },
+      {
+        "kind": "AttemptStarted",
+        "at": 365117,
+        "status": null,
+        "debugInfo": null
+      },
+      {
+        "kind": "AttemptFinished",
+        "at": 365139,
+        "status": null,
+        "debugInfo": null
+      },
+      {
+        "kind": "AttemptStarted",
+        "at": 425341,
+        "status": null,
+        "debugInfo": null
+      },
+      {
+        "kind": "AttemptFinished",
+        "at": 425361,
+        "status": null,
+        "debugInfo": null
+      },
+      {
+        "kind": "AttemptFinished",
+        "at": 486894,
+        "status": null,
+        "debugInfo": null
+      },
+      {
+        "kind": "AttemptStarted",
+        "at": 486934,
+        "status": null,
+        "debugInfo": null
+      },
+      {
+        "kind": "AttemptStarted",
+        "at": 541568,
+        "status": null,
+        "debugInfo": null
+      },
+      {
+        "kind": "AttemptFinished",
+        "at": 541692,
+        "status": null,
+        "debugInfo": null
+      },
+      {
+        "kind": "AttemptStarted",
+        "at": 607035,
+        "status": null,
+        "debugInfo": null
+      },
+      {
+        "kind": "AttemptFinished",
+        "at": 607046,
+        "status": null,
+        "debugInfo": null
+      },
+      {
+        "kind": "AttemptFinished",
+        "at": 665223,
+        "status": null,
+        "debugInfo": null
+      },
+      {
+        "kind": "AttemptStarted",
+        "at": 665247,
+        "status": null,
+        "debugInfo": null
+      },
+      {
+        "kind": "AttemptStarted",
+        "at": 729366,
+        "status": null,
+        "debugInfo": null
+      },
+      {
+        "kind": "AttemptFinished",
+        "at": 729928,
+        "status": null,
+        "debugInfo": null
+      },
+      {
+        "kind": "AttemptStarted",
+        "at": 785512,
+        "status": null,
+        "debugInfo": null
+      },
+      {
+        "kind": "AttemptFinished",
+        "at": 785529,
+        "status": null,
+        "debugInfo": null
+      },
+      {
+        "kind": "AttemptStarted",
+        "at": 845397,
+        "status": null,
+        "debugInfo": null
+      },
+      {
+        "kind": "AttemptFinished",
+        "at": 846040,
+        "status": null,
+        "debugInfo": null
+      },
+      {
+        "kind": "AttemptFinished",
+        "at": 903244,
+        "status": null,
+        "debugInfo": null
+      },
+      {
+        "kind": "AttemptStarted",
+        "at": 903277,
+        "status": null,
+        "debugInfo": null
+      },
+      {
+        "kind": "AttemptFinished",
+        "at": 965456,
+        "status": null,
+        "debugInfo": null
+      },
+      {
+        "kind": "AttemptStarted",
+        "at": 965582,
+        "status": null,
+        "debugInfo": null
+      }
+    ],
+    "firebase-schedule-schedOkV2-us-central1": [
+      {
+        "kind": "AttemptFinished",
+        "at": 7225,
+        "status": null,
+        "debugInfo": "URL_CRAWLED. Original HTTP response code number = 200"
+      },
+      {
+        "kind": "AttemptStarted",
+        "at": 7859,
+        "status": null,
+        "debugInfo": null
+      },
+      {
+        "kind": "AttemptStarted",
+        "at": 67168,
+        "status": null,
+        "debugInfo": null
+      },
+      {
+        "kind": "AttemptFinished",
+        "at": 67196,
+        "status": null,
+        "debugInfo": "URL_CRAWLED. Original HTTP response code number = 200"
+      },
+      {
+        "kind": "AttemptStarted",
+        "at": 101881,
+        "status": null,
+        "debugInfo": null
+      },
+      {
+        "kind": "AttemptFinished",
+        "at": 102280,
+        "status": null,
+        "debugInfo": "URL_CRAWLED. Original HTTP response code number = 200"
+      },
+      {
+        "kind": "AttemptFinished",
+        "at": 125726,
+        "status": null,
+        "debugInfo": "URL_CRAWLED. Original HTTP response code number = 200"
+      },
+      {
+        "kind": "AttemptStarted",
+        "at": 125765,
+        "status": null,
+        "debugInfo": null
+      },
+      {
+        "kind": "AttemptStarted",
+        "at": 189379,
+        "status": null,
+        "debugInfo": null
+      },
+      {
+        "kind": "AttemptFinished",
+        "at": 189417,
+        "status": null,
+        "debugInfo": "URL_CRAWLED. Original HTTP response code number = 200"
+      },
+      {
+        "kind": "AttemptFinished",
+        "at": 249318,
+        "status": null,
+        "debugInfo": "URL_CRAWLED. Original HTTP response code number = 200"
+      },
+      {
+        "kind": "AttemptStarted",
+        "at": 249342,
+        "status": null,
+        "debugInfo": null
+      },
+      {
+        "kind": "AttemptFinished",
+        "at": 301596,
+        "status": null,
+        "debugInfo": "URL_CRAWLED. Original HTTP response code number = 200"
+      },
+      {
+        "kind": "AttemptStarted",
+        "at": 301662,
+        "status": null,
+        "debugInfo": null
+      },
+      {
+        "kind": "AttemptStarted",
+        "at": 369304,
+        "status": null,
+        "debugInfo": null
+      },
+      {
+        "kind": "AttemptFinished",
+        "at": 369341,
+        "status": null,
+        "debugInfo": "URL_CRAWLED. Original HTTP response code number = 200"
+      },
+      {
+        "kind": "AttemptStarted",
+        "at": 421625,
+        "status": null,
+        "debugInfo": null
+      },
+      {
+        "kind": "AttemptFinished",
+        "at": 421661,
+        "status": null,
+        "debugInfo": "URL_CRAWLED. Original HTTP response code number = 200"
+      },
+      {
+        "kind": "AttemptStarted",
+        "at": 489332,
+        "status": null,
+        "debugInfo": null
+      },
+      {
+        "kind": "AttemptFinished",
+        "at": 489382,
+        "status": null,
+        "debugInfo": "URL_CRAWLED. Original HTTP response code number = 200"
+      },
+      {
+        "kind": "AttemptStarted",
+        "at": 531574,
+        "status": null,
+        "debugInfo": null
+      },
+      {
+        "kind": "AttemptFinished",
+        "at": 531588,
+        "status": null,
+        "debugInfo": "URL_CRAWLED. Original HTTP response code number = 200"
+      },
+      {
+        "kind": "AttemptFinished",
+        "at": 544748,
+        "status": null,
+        "debugInfo": "URL_CRAWLED. Original HTTP response code number = 200"
+      },
+      {
+        "kind": "AttemptStarted",
+        "at": 546352,
+        "status": null,
+        "debugInfo": null
+      },
+      {
+        "kind": "AttemptStarted",
+        "at": 603564,
+        "status": null,
+        "debugInfo": null
+      },
+      {
+        "kind": "AttemptFinished",
+        "at": 603792,
+        "status": null,
+        "debugInfo": "URL_CRAWLED. Original HTTP response code number = 200"
+      },
+      {
+        "kind": "AttemptStarted",
+        "at": 666039,
+        "status": null,
+        "debugInfo": null
+      },
+      {
+        "kind": "AttemptFinished",
+        "at": 666082,
+        "status": null,
+        "debugInfo": "URL_CRAWLED. Original HTTP response code number = 200"
+      },
+      {
+        "kind": "AttemptFinished",
+        "at": 726104,
+        "status": null,
+        "debugInfo": "URL_CRAWLED. Original HTTP response code number = 200"
+      },
+      {
+        "kind": "AttemptStarted",
+        "at": 727108,
+        "status": null,
+        "debugInfo": null
+      },
+      {
+        "kind": "AttemptStarted",
+        "at": 783996,
+        "status": null,
+        "debugInfo": null
+      },
+      {
+        "kind": "AttemptFinished",
+        "at": 784026,
+        "status": null,
+        "debugInfo": "URL_CRAWLED. Original HTTP response code number = 200"
+      },
+      {
+        "kind": "AttemptStarted",
+        "at": 846112,
+        "status": null,
+        "debugInfo": null
+      },
+      {
+        "kind": "AttemptFinished",
+        "at": 846204,
+        "status": null,
+        "debugInfo": "URL_CRAWLED. Original HTTP response code number = 200"
+      },
+      {
+        "kind": "AttemptStarted",
+        "at": 901614,
+        "status": null,
+        "debugInfo": null
+      },
+      {
+        "kind": "AttemptFinished",
+        "at": 901657,
+        "status": null,
+        "debugInfo": "URL_CRAWLED. Original HTTP response code number = 200"
+      }
+    ],
+    "firebase-schedule-schedSlowV2-us-central1": [
+      {
+        "kind": "AttemptStarted",
+        "at": 9842,
+        "status": null,
+        "debugInfo": null
+      },
+      {
+        "kind": "AttemptFinished",
+        "at": 99878,
+        "status": "DEADLINE_EXCEEDED",
+        "debugInfo": "URL_UNREACHABLE-UNREACHABLE_5xx. Original HTTP response code number = 504"
+      },
+      {
+        "kind": "AttemptStarted",
+        "at": 109898,
+        "status": null,
+        "debugInfo": null
+      },
+      {
+        "kind": "AttemptFinished",
+        "at": 199393,
+        "status": "DEADLINE_EXCEEDED",
+        "debugInfo": "URL_UNREACHABLE-UNREACHABLE_5xx. Original HTTP response code number = 504"
+      },
+      {
+        "kind": "AttemptStarted",
+        "at": 244959,
+        "status": null,
+        "debugInfo": null
+      },
+      {
+        "kind": "AttemptFinished",
+        "at": 339430,
+        "status": "DEADLINE_EXCEEDED",
+        "debugInfo": "URL_UNREACHABLE-UNREACHABLE_5xx. Original HTTP response code number = 504"
+      },
+      {
+        "kind": "AttemptStarted",
+        "at": 365107,
+        "status": null,
+        "debugInfo": null
+      },
+      {
+        "kind": "AttemptFinished",
+        "at": 459411,
+        "status": "DEADLINE_EXCEEDED",
+        "debugInfo": "URL_UNREACHABLE-UNREACHABLE_5xx. Original HTTP response code number = 504"
+      },
+      {
+        "kind": "AttemptStarted",
+        "at": 486886,
+        "status": null,
+        "debugInfo": null
+      },
+      {
+        "kind": "AttemptStarted",
+        "at": 539409,
+        "status": null,
+        "debugInfo": null
+      },
+      {
+        "kind": "AttemptFinished",
+        "at": 579441,
+        "status": "DEADLINE_EXCEEDED",
+        "debugInfo": "URL_UNREACHABLE-UNREACHABLE_5xx. Original HTTP response code number = 504"
+      },
+      {
+        "kind": "AttemptFinished",
+        "at": 629431,
+        "status": "DEADLINE_EXCEEDED",
+        "debugInfo": "URL_UNREACHABLE-UNREACHABLE_5xx. Original HTTP response code number = 504"
+      },
+      {
+        "kind": "AttemptStarted",
+        "at": 666142,
+        "status": null,
+        "debugInfo": null
+      },
+      {
+        "kind": "AttemptFinished",
+        "at": 759436,
+        "status": "DEADLINE_EXCEEDED",
+        "debugInfo": "URL_UNREACHABLE-UNREACHABLE_5xx. Original HTTP response code number = 504"
+      },
+      {
+        "kind": "AttemptStarted",
+        "at": 786345,
+        "status": null,
+        "debugInfo": null
+      },
+      {
+        "kind": "AttemptFinished",
+        "at": 881608,
+        "status": "DEADLINE_EXCEEDED",
+        "debugInfo": "URL_UNREACHABLE-UNREACHABLE_5xx. Original HTTP response code number = 504"
+      },
+      {
+        "kind": "AttemptStarted",
+        "at": 905859,
+        "status": null,
+        "debugInfo": null
+      },
+      {
+        "kind": "AttemptFinished",
+        "at": 999393,
+        "status": "DEADLINE_EXCEEDED",
+        "debugInfo": "URL_UNREACHABLE-UNREACHABLE_5xx. Original HTTP response code number = 504"
+      }
+    ],
+    "firebase-schedule-schedRetryV2-us-central1": [
+      {
+        "kind": "AttemptStarted",
+        "at": 99328,
+        "status": null,
+        "debugInfo": null
+      },
+      {
+        "kind": "AttemptFinished",
+        "at": 99882,
+        "status": "INTERNAL",
+        "debugInfo": "URL_UNREACHABLE-UNREACHABLE_5xx. Original HTTP response code number = 500"
+      },
+      {
+        "kind": "AttemptStarted",
+        "at": 102078,
+        "status": null,
+        "debugInfo": null
+      },
+      {
+        "kind": "AttemptFinished",
+        "at": 102283,
+        "status": "INTERNAL",
+        "debugInfo": "URL_UNREACHABLE-UNREACHABLE_5xx. Original HTTP response code number = 500"
+      },
+      {
+        "kind": "AttemptStarted",
+        "at": 119844,
+        "status": null,
+        "debugInfo": null
+      },
+      {
+        "kind": "AttemptFinished",
+        "at": 119846,
+        "status": "INTERNAL",
+        "debugInfo": "URL_UNREACHABLE-UNREACHABLE_5xx. Original HTTP response code number = 500"
+      },
+      {
+        "kind": "AttemptStarted",
+        "at": 129359,
+        "status": null,
+        "debugInfo": null
+      },
+      {
+        "kind": "AttemptFinished",
+        "at": 129890,
+        "status": "INTERNAL",
+        "debugInfo": "URL_UNREACHABLE-UNREACHABLE_5xx. Original HTTP response code number = 500"
+      },
+      {
+        "kind": "AttemptStarted",
+        "at": 151557,
+        "status": null,
+        "debugInfo": null
+      },
+      {
+        "kind": "AttemptFinished",
+        "at": 151562,
+        "status": "INTERNAL",
+        "debugInfo": "URL_UNREACHABLE-UNREACHABLE_5xx. Original HTTP response code number = 500"
+      },
+      {
+        "kind": "AttemptFinished",
+        "at": 429342,
+        "status": "INTERNAL",
+        "debugInfo": "URL_UNREACHABLE-UNREACHABLE_5xx. Original HTTP response code number = 500"
+      },
+      {
+        "kind": "AttemptStarted",
+        "at": 429381,
+        "status": null,
+        "debugInfo": null
+      },
+      {
+        "kind": "AttemptFinished",
+        "at": 429432,
+        "status": "INTERNAL",
+        "debugInfo": "URL_UNREACHABLE-UNREACHABLE_5xx. Original HTTP response code number = 500"
+      },
+      {
+        "kind": "AttemptStarted",
+        "at": 429649,
+        "status": null,
+        "debugInfo": null
+      },
+      {
+        "kind": "AttemptFinished",
+        "at": 441583,
+        "status": "INTERNAL",
+        "debugInfo": "URL_UNREACHABLE-UNREACHABLE_5xx. Original HTTP response code number = 500"
+      },
+      {
+        "kind": "AttemptStarted",
+        "at": 441617,
+        "status": null,
+        "debugInfo": null
+      },
+      {
+        "kind": "AttemptStarted",
+        "at": 459320,
+        "status": null,
+        "debugInfo": null
+      },
+      {
+        "kind": "AttemptFinished",
+        "at": 459360,
+        "status": null,
+        "debugInfo": "URL_CRAWLED. Original HTTP response code number = 200"
+      },
+      {
+        "kind": "AttemptFinished",
+        "at": 539331,
+        "status": "INTERNAL",
+        "debugInfo": "URL_UNREACHABLE-UNREACHABLE_5xx. Original HTTP response code number = 500"
+      },
+      {
+        "kind": "AttemptStarted",
+        "at": 539393,
+        "status": null,
+        "debugInfo": null
+      },
+      {
+        "kind": "AttemptStarted",
+        "at": 541674,
+        "status": null,
+        "debugInfo": null
+      },
+      {
+        "kind": "AttemptFinished",
+        "at": 545064,
+        "status": "INTERNAL",
+        "debugInfo": "URL_UNREACHABLE-UNREACHABLE_5xx. Original HTTP response code number = 500"
+      },
+      {
+        "kind": "AttemptFinished",
+        "at": 545526,
+        "status": "INTERNAL",
+        "debugInfo": "URL_UNREACHABLE-UNREACHABLE_5xx. Original HTTP response code number = 500"
+      },
+      {
+        "kind": "AttemptFinished",
+        "at": 569358,
+        "status": "INTERNAL",
+        "debugInfo": "URL_UNREACHABLE-UNREACHABLE_5xx. Original HTTP response code number = 500"
+      },
+      {
+        "kind": "AttemptStarted",
+        "at": 569370,
+        "status": null,
+        "debugInfo": null
+      },
+      {
+        "kind": "AttemptStarted",
+        "at": 581653,
+        "status": null,
+        "debugInfo": null
+      },
+      {
+        "kind": "AttemptFinished",
+        "at": 581674,
+        "status": "INTERNAL",
+        "debugInfo": "URL_UNREACHABLE-UNREACHABLE_5xx. Original HTTP response code number = 500"
+      },
+      {
+        "kind": "AttemptStarted",
+        "at": 844051,
+        "status": null,
+        "debugInfo": null
+      },
+      {
+        "kind": "AttemptFinished",
+        "at": 844329,
+        "status": "INTERNAL",
+        "debugInfo": "URL_UNREACHABLE-UNREACHABLE_5xx. Original HTTP response code number = 500"
+      },
+      {
+        "kind": "AttemptFinished",
+        "at": 849511,
+        "status": "INTERNAL",
+        "debugInfo": "URL_UNREACHABLE-UNREACHABLE_5xx. Original HTTP response code number = 500"
+      },
+      {
+        "kind": "AttemptStarted",
+        "at": 849532,
+        "status": null,
+        "debugInfo": null
+      },
+      {
+        "kind": "AttemptStarted",
+        "at": 855562,
+        "status": null,
+        "debugInfo": null
+      },
+      {
+        "kind": "AttemptFinished",
+        "at": 855579,
+        "status": "INTERNAL",
+        "debugInfo": "URL_UNREACHABLE-UNREACHABLE_5xx. Original HTTP response code number = 500"
+      },
+      {
+        "kind": "AttemptFinished",
+        "at": 879403,
+        "status": null,
+        "debugInfo": "URL_CRAWLED. Original HTTP response code number = 200"
+      },
+      {
+        "kind": "AttemptStarted",
+        "at": 879446,
+        "status": null,
+        "debugInfo": null
+      }
+    ],
+    "firebase-schedule-schedFailV1-us-central1": [
+      {
+        "kind": "AttemptFinished",
+        "at": 111565,
+        "status": null,
+        "debugInfo": null
+      },
+      {
+        "kind": "AttemptStarted",
+        "at": 111579,
+        "status": null,
+        "debugInfo": null
+      },
+      {
+        "kind": "AttemptFinished",
+        "at": 366836,
+        "status": null,
+        "debugInfo": null
+      },
+      {
+        "kind": "AttemptStarted",
+        "at": 366897,
+        "status": null,
+        "debugInfo": null
+      },
+      {
+        "kind": "AttemptStarted",
+        "at": 549329,
+        "status": null,
+        "debugInfo": null
+      },
+      {
+        "kind": "AttemptFinished",
+        "at": 549940,
+        "status": null,
+        "debugInfo": null
+      },
+      {
+        "kind": "AttemptFinished",
+        "at": 850475,
+        "status": null,
+        "debugInfo": null
+      },
+      {
+        "kind": "AttemptStarted",
+        "at": 850504,
+        "status": null,
+        "debugInfo": null
+      }
+    ],
+    "fe-sd-156715222b86ea44-zero": [
+      {
+        "kind": "AttemptFinished",
+        "at": 119342,
+        "status": "INTERNAL",
+        "debugInfo": "URL_UNREACHABLE-UNREACHABLE_5xx. Original HTTP response code number = 500"
+      },
+      {
+        "kind": "AttemptStarted",
+        "at": 119427,
+        "status": null,
+        "debugInfo": null
+      },
+      {
+        "kind": "AttemptFinished",
+        "at": 551627,
+        "status": "INTERNAL",
+        "debugInfo": "URL_UNREACHABLE-UNREACHABLE_5xx. Original HTTP response code number = 500"
+      },
+      {
+        "kind": "AttemptStarted",
+        "at": 551653,
+        "status": null,
+        "debugInfo": null
+      }
+    ],
+    "fe-sd-156715222b86ea44-duration": [
+      {
+        "kind": "AttemptFinished",
+        "at": 121560,
+        "status": "INTERNAL",
+        "debugInfo": "URL_UNREACHABLE-UNREACHABLE_5xx. Original HTTP response code number = 500"
+      },
+      {
+        "kind": "AttemptStarted",
+        "at": 121668,
+        "status": null,
+        "debugInfo": null
+      },
+      {
+        "kind": "AttemptStarted",
+        "at": 129394,
+        "status": null,
+        "debugInfo": null
+      },
+      {
+        "kind": "AttemptFinished",
+        "at": 129874,
+        "status": "INTERNAL",
+        "debugInfo": "URL_UNREACHABLE-UNREACHABLE_5xx. Original HTTP response code number = 500"
+      },
+      {
+        "kind": "AttemptFinished",
+        "at": 141564,
+        "status": "INTERNAL",
+        "debugInfo": "URL_UNREACHABLE-UNREACHABLE_5xx. Original HTTP response code number = 500"
+      },
+      {
+        "kind": "AttemptStarted",
+        "at": 142112,
+        "status": null,
+        "debugInfo": null
+      },
+      {
+        "kind": "AttemptStarted",
+        "at": 149361,
+        "status": null,
+        "debugInfo": null
+      },
+      {
+        "kind": "AttemptFinished",
+        "at": 149373,
+        "status": "INTERNAL",
+        "debugInfo": "URL_UNREACHABLE-UNREACHABLE_5xx. Original HTTP response code number = 500"
+      },
+      {
+        "kind": "AttemptStarted",
+        "at": 558479,
+        "status": null,
+        "debugInfo": null
+      },
+      {
+        "kind": "AttemptFinished",
+        "at": 558509,
+        "status": "INTERNAL",
+        "debugInfo": "URL_UNREACHABLE-UNREACHABLE_5xx. Original HTTP response code number = 500"
+      },
+      {
+        "kind": "AttemptFinished",
+        "at": 560800,
+        "status": "INTERNAL",
+        "debugInfo": "URL_UNREACHABLE-UNREACHABLE_5xx. Original HTTP response code number = 500"
+      },
+      {
+        "kind": "AttemptStarted",
+        "at": 560827,
+        "status": null,
+        "debugInfo": null
+      },
+      {
+        "kind": "AttemptFinished",
+        "at": 571589,
+        "status": "INTERNAL",
+        "debugInfo": "URL_UNREACHABLE-UNREACHABLE_5xx. Original HTTP response code number = 500"
+      },
+      {
+        "kind": "AttemptStarted",
+        "at": 571599,
+        "status": null,
+        "debugInfo": null
+      },
+      {
+        "kind": "AttemptStarted",
+        "at": 579396,
+        "status": null,
+        "debugInfo": null
+      },
+      {
+        "kind": "AttemptFinished",
+        "at": 579441,
+        "status": "INTERNAL",
+        "debugInfo": "URL_UNREACHABLE-UNREACHABLE_5xx. Original HTTP response code number = 500"
+      }
+    ],
+    "fe-sd-156715222b86ea44-retry5": [
+      {
+        "kind": "AttemptStarted",
+        "at": 125150,
+        "status": null,
+        "debugInfo": null
+      },
+      {
+        "kind": "AttemptFinished",
+        "at": 125194,
+        "status": "INTERNAL",
+        "debugInfo": "URL_UNREACHABLE-UNREACHABLE_5xx. Original HTTP response code number = 500"
+      },
+      {
+        "kind": "AttemptFinished",
+        "at": 139395,
+        "status": "INTERNAL",
+        "debugInfo": "URL_UNREACHABLE-UNREACHABLE_5xx. Original HTTP response code number = 500"
+      },
+      {
+        "kind": "AttemptStarted",
+        "at": 139912,
+        "status": null,
+        "debugInfo": null
+      },
+      {
+        "kind": "AttemptFinished",
+        "at": 149280,
+        "status": "INTERNAL",
+        "debugInfo": "URL_UNREACHABLE-UNREACHABLE_5xx. Original HTTP response code number = 500"
+      },
+      {
+        "kind": "AttemptStarted",
+        "at": 149837,
+        "status": null,
+        "debugInfo": null
+      },
+      {
+        "kind": "AttemptFinished",
+        "at": 169270,
+        "status": "INTERNAL",
+        "debugInfo": "URL_UNREACHABLE-UNREACHABLE_5xx. Original HTTP response code number = 500"
+      },
+      {
+        "kind": "AttemptStarted",
+        "at": 169814,
+        "status": null,
+        "debugInfo": null
+      },
+      {
+        "kind": "AttemptStarted",
+        "at": 211554,
+        "status": null,
+        "debugInfo": null
+      },
+      {
+        "kind": "AttemptFinished",
+        "at": 211572,
+        "status": "INTERNAL",
+        "debugInfo": "URL_UNREACHABLE-UNREACHABLE_5xx. Original HTTP response code number = 500"
+      },
+      {
+        "kind": "AttemptStarted",
+        "at": 291561,
+        "status": null,
+        "debugInfo": null
+      },
+      {
+        "kind": "AttemptFinished",
+        "at": 291642,
+        "status": "INTERNAL",
+        "debugInfo": "URL_UNREACHABLE-UNREACHABLE_5xx. Original HTTP response code number = 500"
+      },
+      {
+        "kind": "AttemptStarted",
+        "at": 558988,
+        "status": null,
+        "debugInfo": null
+      },
+      {
+        "kind": "AttemptFinished",
+        "at": 559008,
+        "status": "INTERNAL",
+        "debugInfo": "URL_UNREACHABLE-UNREACHABLE_5xx. Original HTTP response code number = 500"
+      },
+      {
+        "kind": "AttemptStarted",
+        "at": 569405,
+        "status": null,
+        "debugInfo": null
+      },
+      {
+        "kind": "AttemptFinished",
+        "at": 569432,
+        "status": "INTERNAL",
+        "debugInfo": "URL_UNREACHABLE-UNREACHABLE_5xx. Original HTTP response code number = 500"
+      },
+      {
+        "kind": "AttemptStarted",
+        "at": 579343,
+        "status": null,
+        "debugInfo": null
+      },
+      {
+        "kind": "AttemptFinished",
+        "at": 579380,
+        "status": "INTERNAL",
+        "debugInfo": "URL_UNREACHABLE-UNREACHABLE_5xx. Original HTTP response code number = 500"
+      },
+      {
+        "kind": "AttemptStarted",
+        "at": 599349,
+        "status": null,
+        "debugInfo": null
+      },
+      {
+        "kind": "AttemptFinished",
+        "at": 599362,
+        "status": "INTERNAL",
+        "debugInfo": "URL_UNREACHABLE-UNREACHABLE_5xx. Original HTTP response code number = 500"
+      },
+      {
+        "kind": "AttemptStarted",
+        "at": 641592,
+        "status": null,
+        "debugInfo": null
+      },
+      {
+        "kind": "AttemptFinished",
+        "at": 641606,
+        "status": "INTERNAL",
+        "debugInfo": "URL_UNREACHABLE-UNREACHABLE_5xx. Original HTTP response code number = 500"
+      },
+      {
+        "kind": "AttemptStarted",
+        "at": 721580,
+        "status": null,
+        "debugInfo": null
+      },
+      {
+        "kind": "AttemptFinished",
+        "at": 721638,
+        "status": "INTERNAL",
+        "debugInfo": "URL_UNREACHABLE-UNREACHABLE_5xx. Original HTTP response code number = 500"
+      }
+    ]
+  }
+}

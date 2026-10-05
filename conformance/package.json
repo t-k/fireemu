@@ -17,7 +17,7 @@
     "pubsub-probe": "node src/pubsub-probe/run.mjs record",
     "pubsub-probe:check": "node src/pubsub-probe/run.mjs check",
     "corpus": "node src/list.mjs",
-    "selftest": "node src/selftest-tmpdir.mjs node --test src/*.test.mjs src/firestore-probe/*.test.mjs scheduled-functions/*.test.mjs scheduled-delivery/*.test.mjs scheduled-delivery/record/*.test.mjs",
+    "selftest": "node src/selftest-tmpdir.mjs node --test src/*.test.mjs src/firestore-probe/*.test.mjs scheduled-functions/*.test.mjs scheduled-delivery/*.test.mjs scheduled-delivery/record/*.test.mjs scheduled-delivery/local/*.test.mjs",
     "lint": "oxlint src functions",
     "fmt": "oxfmt .",
     "fmt:check": "oxfmt --check .",

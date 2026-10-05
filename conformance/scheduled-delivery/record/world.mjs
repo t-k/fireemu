@@ -44,6 +44,7 @@ export function createWorld({ hooks = {}, leaveOnDelete = [], failDeploy = false
     topics: new Set(),
     subs: new Map(),
     entries: [],
+    creates: [],
     cliRuns: [],
     insert: 0,
     services: new Set([
@@ -253,6 +254,7 @@ export function createWorld({ hooks = {}, leaveOnDelete = [], failDeploy = false
       if (path.endsWith("/jobs") && method === "GET") return page([...w.jobs.values()], "jobs");
       if (path.endsWith("/jobs") && method === "POST") {
         const id = body.name.split("/").at(-1);
+        w.creates.push(id);
         w.jobs.set(id, { ...body, state: "ENABLED", manualOnly: true });
         return reply(200, w.jobs.get(id));
       }

@@ -2928,28 +2928,48 @@ fn manifest_for_profile(
     manifest_json: &serde_json::Value,
 ) -> Result<fireemu_core_functions::manifest::FunctionManifest, String> {
     let mut manifest = parse_manifest(manifest_json)?;
-    check_scheduler_refusals_for(profile, &manifest)?;
+    check_scheduler_refusals_for(profile, &manifest, manifest_json)?;
     serve_blocking_events_for(profile, &mut manifest);
     Ok(manifest)
 }
 
 /// Refuses, under the strict profile, a scheduled function whose job production Cloud Scheduler refuses to create,
-/// with production's own message: `retryCount` 6 or more (HTTP 400 `INVALID_ARGUMENT`, recorded by the production
-/// deploy `e0ec2f416f5ea7e8`, 2026-10-05; 5 is unrecorded, pending the next delivery recording, and is not refused). The official emulator never creates a Scheduler job and reads no retry
-/// configuration of a schedule trigger, so the emulator profile refuses nothing here.
+/// with production's own message (HTTP 400 `INVALID_ARGUMENT`): `retryCount` 6 or more (run `e0ec2f416f5ea7e8`;
+/// 0 to 5 are recorded as accepted, the latter by run `156715222b86ea44`) and a fractional `maxRetrySeconds`
+/// (`retryConfig.max_retry_duration.nanos cannot be set`, run `156715222b86ea44`). The official emulator never creates
+/// a Scheduler job and reads no retry configuration of a schedule trigger, so the emulator profile refuses nothing
+/// here. Per function the retry count is judged first (production's order is not recorded).
 fn check_scheduler_refusals_for(
     profile: CompatibilityProfile,
     manifest: &fireemu_core_functions::manifest::FunctionManifest,
+    manifest_json: &serde_json::Value,
 ) -> Result<(), String> {
     if !refuses_scheduler_limits(profile) {
         return Ok(());
     }
-    match manifest.scheduler_refusals().first() {
-        None => Ok(()),
-        Some((function, why)) => Err(format!(
-            "manifest: function {function:?}: Cloud Scheduler refuses this schedule's job (HTTP 400 INVALID_ARGUMENT): {why}"
-        )),
+    let fractional = fireemu_adapter_functions::manifest_json::scheduler_fractional_retry_refusals(
+        manifest_json,
+    );
+    for function in &manifest.functions {
+        let why = match &function.trigger {
+            fireemu_core_functions::manifest::Trigger::Schedule { retry, .. } => {
+                retry.scheduler_refusal().or_else(|| {
+                    fractional
+                        .iter()
+                        .find(|(name, _)| *name == function.name)
+                        .map(|(_, why)| *why)
+                })
+            }
+            _ => None,
+        };
+        if let Some(why) = why {
+            return Err(format!(
+                "manifest: function {:?}: Cloud Scheduler refuses this schedule's job (HTTP 400 INVALID_ARGUMENT): {why}",
+                function.name
+            ));
+        }
     }
+    Ok(())
 }
 
 /// Whether `profile` refuses what production Cloud Scheduler refuses: the strict profile does, as production does.
@@ -6711,56 +6731,65 @@ mod tests {
         assert!(error.contains("missing"), "{error}");
     }
 
+    /// The refusal check over a manifest document: parse it, then ask the profile.
+    fn scheduler_check(
+        profile: super::CompatibilityProfile,
+        document: &serde_json::Value,
+    ) -> Result<(), String> {
+        let manifest = parse_manifest(document).unwrap();
+        super::check_scheduler_refusals_for(profile, &manifest, document)
+    }
+
+    const COUNT_TEXT: &str = "invalid retry count. The retry_count must be a positive integer less than 5: invalid argument";
+    const NANOS_TEXT: &str = "retryConfig.max_retry_duration.nanos cannot be set: invalid argument";
+
+    fn scheduled_with(retry_config: serde_json::Value) -> serde_json::Value {
+        json!({"functions": [
+            {"name": "job", "trigger": {"type": "schedule", "schedule": "every 1 minutes", "retryConfig": retry_config}},
+        ]})
+    }
+
     /// The production refusal of a Cloud Scheduler job whose `retryCount` is 6 or more (run
     /// `e0ec2f416f5ea7e8`, HTTP 400 `INVALID_ARGUMENT`): the strict profile refuses with production's
     /// text, the emulator profile (the official emulator creates no Scheduler job) refuses nothing.
     #[test]
     fn strict_refuses_a_schedule_whose_retry_count_cloud_scheduler_refuses() {
-        const TEXT: &str = "invalid retry count. The retry_count must be a positive integer less than 5: invalid argument";
         // The declaration of the recorded run, with its refused count of 6, for each generation.
         for generation in [1, 2] {
-            let manifest = parse_manifest(&json!({"functions": [
+            let document = json!({"functions": [
                 {"name": "ok", "generation": generation, "trigger": {"type": "schedule", "schedule": "every 1 minutes"}},
                 {"name": "schedRetryV2", "generation": generation, "trigger": {"type": "schedule", "schedule": "every 5 minutes", "timeZone": "Asia/Tokyo",
                     "retryConfig": {"retryCount": 6, "minBackoffSeconds": 4, "maxBackoffSeconds": 50, "maxDoublings": 2}}},
-            ]}))
-            .unwrap();
+            ]});
             assert_eq!(
-                super::check_scheduler_refusals_for(super::CompatibilityProfile::Strict, &manifest),
+                scheduler_check(super::CompatibilityProfile::Strict, &document),
                 Err(format!(
-                    "manifest: function \"schedRetryV2\": Cloud Scheduler refuses this schedule's job (HTTP 400 INVALID_ARGUMENT): {TEXT}"
+                    "manifest: function \"schedRetryV2\": Cloud Scheduler refuses this schedule's job (HTTP 400 INVALID_ARGUMENT): {COUNT_TEXT}"
                 )),
                 "generation {generation}"
             );
             assert_eq!(
-                super::check_scheduler_refusals_for(
-                    super::CompatibilityProfile::Emulator,
-                    &manifest
-                ),
+                scheduler_check(super::CompatibilityProfile::Emulator, &document),
                 Ok(()),
                 "the emulator profile completes what the official emulator completes"
             );
         }
     }
 
-    /// Near misses: counts below the recorded 6 (including the unrecorded 5, which the next delivery
-    /// recording will observe), no retry configuration, zero and other triggers are accepted by both
-    /// profiles; 6 and above are refused by strict.
+    /// Recorded boundary: 0 (run `e0ec2f416f5ea7e8`, `schedSlowV2`) through 5 (run `156715222b86ea44`, the
+    /// `retry5` job answered 200) are accepted by both profiles; 6 and above are refused by strict only.
     #[test]
     fn the_scheduler_retry_count_boundary_is_the_recorded_six() {
-        let with = |count: serde_json::Value| {
-            parse_manifest(&json!({"functions": [
-                {"name": "job", "trigger": {"type": "schedule", "schedule": "every 1 minutes", "retryConfig": {"retryCount": count}}},
-            ]}))
-            .unwrap()
-        };
         for profile in [
             super::CompatibilityProfile::Strict,
             super::CompatibilityProfile::Emulator,
         ] {
             for count in [json!(0), json!(1), json!(4), json!(5)] {
                 assert_eq!(
-                    super::check_scheduler_refusals_for(profile, &with(count.clone())),
+                    scheduler_check(
+                        profile,
+                        &scheduled_with(json!({"retryCount": count.clone()}))
+                    ),
                     Ok(()),
                     "{count}"
                 );
@@ -6768,34 +6797,115 @@ mod tests {
         }
         for count in [json!(6), json!(7), json!(1000)] {
             assert!(
-                super::check_scheduler_refusals_for(
+                scheduler_check(
                     super::CompatibilityProfile::Strict,
-                    &with(count.clone())
+                    &scheduled_with(json!({"retryCount": count.clone()}))
                 )
                 .is_err(),
                 "{count}"
             );
             assert!(
-                super::check_scheduler_refusals_for(
+                scheduler_check(
                     super::CompatibilityProfile::Emulator,
-                    &with(count.clone())
+                    &scheduled_with(json!({"retryCount": count.clone()}))
                 )
                 .is_ok(),
                 "{count}"
             );
         }
-        let other = parse_manifest(&json!({"functions": [
+        let other = json!({"functions": [
             {"name": "h", "trigger": {"type": "http"}},
             {"name": "plain", "trigger": {"type": "schedule", "schedule": "every 1 minutes"}},
-        ]}))
-        .unwrap();
+        ]});
         assert_eq!(
-            super::check_scheduler_refusals_for(super::CompatibilityProfile::Strict, &other),
+            scheduler_check(super::CompatibilityProfile::Strict, &other),
             Ok(())
         );
     }
 
-    /// The manifest a profile serves is where the refusal is applied: strict fails with production's text, emulator
+    /// Recorded in run `156715222b86ea44`: a retry configuration whose `maxRetryDuration` is `20.5s` was refused
+    /// (HTTP 400 `INVALID_ARGUMENT`); firebase-tools writes `maxRetrySeconds` as `${seconds}s`, so a fractional
+    /// `maxRetrySeconds` is refused by strict with that text and accepted by the emulator profile.
+    #[test]
+    fn strict_refuses_a_fractional_max_retry_duration_and_the_emulator_profile_does_not() {
+        let recorded = json!({"retryCount": 3, "maxRetrySeconds": 20.5, "minBackoffSeconds": 2.5, "maxBackoffSeconds": 20, "maxDoublings": 1});
+        assert_eq!(
+            scheduler_check(
+                super::CompatibilityProfile::Strict,
+                &scheduled_with(recorded.clone())
+            ),
+            Err(format!(
+                "manifest: function \"job\": Cloud Scheduler refuses this schedule's job (HTTP 400 INVALID_ARGUMENT): {NANOS_TEXT}"
+            ))
+        );
+        assert_eq!(
+            scheduler_check(
+                super::CompatibilityProfile::Emulator,
+                &scheduled_with(recorded)
+            ),
+            Ok(())
+        );
+        // Both generations; any fraction, large or small.
+        for generation in [1, 2] {
+            for seconds in [json!(0.5), json!(30.25), json!(1e-3)] {
+                let document = json!({"functions": [
+                    {"name": "job", "generation": generation, "trigger": {"type": "schedule", "schedule": "every 1 minutes", "retryConfig": {"maxRetrySeconds": seconds.clone()}}},
+                ]});
+                assert!(
+                    scheduler_check(super::CompatibilityProfile::Strict, &document)
+                        .unwrap_err()
+                        .ends_with(NANOS_TEXT),
+                    "{generation} {seconds}"
+                );
+            }
+        }
+    }
+
+    /// Near misses of the fractional rule: whole seconds (written with or without a fraction), zero, a
+    /// fractional minimum or maximum backoff (not claimed: the recorded message names only `maxRetryDuration`),
+    /// a fractional value on a function that is not scheduled, and a count refusal that wins for its function.
+    #[test]
+    fn the_fractional_refusal_claims_only_max_retry_seconds_of_a_schedule() {
+        for retry in [
+            json!({"maxRetrySeconds": 30}),
+            json!({"maxRetrySeconds": 30.0}),
+            json!({"maxRetrySeconds": 0}),
+            json!({"maxBackoffSeconds": 20.5}),
+            json!({"minBackoffSeconds": 2.5}),
+            json!({"maxDoublings": 1, "retryCount": 5}),
+        ] {
+            assert_eq!(
+                scheduler_check(
+                    super::CompatibilityProfile::Strict,
+                    &scheduled_with(retry.clone())
+                ),
+                Ok(()),
+                "{retry}"
+            );
+        }
+        let unscheduled = json!({"functions": [
+            {"name": "h", "trigger": {"type": "http", "retryConfig": {"maxRetrySeconds": 20.5}}},
+        ]});
+        assert_eq!(
+            scheduler_check(super::CompatibilityProfile::Strict, &unscheduled),
+            Ok(())
+        );
+        let both = scheduled_with(json!({"retryCount": 6, "maxRetrySeconds": 20.5}));
+        assert!(scheduler_check(super::CompatibilityProfile::Strict, &both)
+            .unwrap_err()
+            .ends_with(COUNT_TEXT));
+        let second = json!({"functions": [
+            {"name": "a", "trigger": {"type": "schedule", "schedule": "every 1 minutes", "retryConfig": {"maxRetrySeconds": 20.5}}},
+            {"name": "b", "trigger": {"type": "schedule", "schedule": "every 1 minutes", "retryConfig": {"retryCount": 6}}},
+        ]});
+        let error = scheduler_check(super::CompatibilityProfile::Strict, &second).unwrap_err();
+        assert!(
+            error.contains("\"a\"") && error.ends_with(NANOS_TEXT),
+            "{error}"
+        );
+    }
+
+    /// The served manifest is where the refusals are applied: strict fails with production's text, emulator
     /// parses the same declaration, and the blocking-function handling of each profile is unchanged.
     #[test]
     fn the_served_manifest_applies_the_scheduler_refusal_by_profile() {
@@ -6806,11 +6916,12 @@ mod tests {
         let error = super::manifest_for_profile(super::CompatibilityProfile::Strict, &declared)
             .unwrap_err();
         assert!(error.contains("schedRetryV2"), "{error}");
+        assert!(error.contains(COUNT_TEXT), "{error}");
+        let nanos = scheduled_with(json!({"maxRetrySeconds": 20.5}));
         assert!(
-            error.contains(
-                "invalid retry count. The retry_count must be a positive integer less than 5"
-            ),
-            "{error}"
+            super::manifest_for_profile(super::CompatibilityProfile::Strict, &nanos)
+                .unwrap_err()
+                .contains(NANOS_TEXT)
         );
         let emulator =
             super::manifest_for_profile(super::CompatibilityProfile::Emulator, &declared).unwrap();
@@ -6834,6 +6945,76 @@ mod tests {
             2,
             "strict serves the send-blocking function"
         );
+    }
+
+    /// The startup path itself: `start_codebase` applies the profile to the manifest it reads (here a configured
+    /// manifest file, with the fake runner), so a strict run refuses to start on a schedule production refuses and
+    /// the emulator profile starts the same codebase.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn start_codebase_applies_the_scheduler_refusals_by_profile() {
+        let script = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../fireemu-adapter-functions/tests/fake_runner.py");
+        let dir = std::env::temp_dir().join(format!(
+            "fireemu-start-codebase-scheduler-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        let source = dir.join("src");
+        std::fs::create_dir_all(&source).unwrap();
+        let manifest_path = dir.join("manifest.json");
+        let codebase = crate::config::FunctionsCodebase {
+            codebase: "default".to_owned(),
+            source: source.display().to_string(),
+            runtime: None,
+            ignore: Vec::new(),
+        };
+        let hosts = super::EmulatorHosts {
+            firestore: None,
+            auth: None,
+            storage: None,
+            functions: None,
+            eventarc: None,
+            tasks: None,
+            logging: None,
+            pubsub: None,
+            hub: None,
+        };
+        let cache = Arc::new(NodeProbeCache::default());
+        for (retry, refused_text) in [
+            (json!({"retryCount": 6}), Some(COUNT_TEXT)),
+            (json!({"maxRetrySeconds": 20.5}), Some(NANOS_TEXT)),
+            (json!({"retryCount": 5, "maxRetrySeconds": 20}), None),
+        ] {
+            std::fs::write(&manifest_path, scheduled_with(retry.clone()).to_string()).unwrap();
+            for profile in [
+                super::CompatibilityProfile::Strict,
+                super::CompatibilityProfile::Emulator,
+            ] {
+                let cfg = crate::config::RuntimeConfig {
+                    profile,
+                    functions_runner: Some(vec![
+                        "python3".to_owned(),
+                        script.display().to_string(),
+                    ]),
+                    functions_manifest: Some(manifest_path.display().to_string()),
+                    ..crate::config::RuntimeConfig::default()
+                };
+                let started =
+                    super::start_codebase(&cfg, &codebase, &hosts, "test-secret", false, &cache)
+                        .await;
+                match (profile, refused_text) {
+                    (super::CompatibilityProfile::Strict, Some(text)) => {
+                        let error = started.err().unwrap();
+                        assert!(error.contains(text), "{retry}: {error}");
+                    }
+                    _ => {
+                        let spec = started.unwrap_or_else(|e| panic!("{retry} {profile:?}: {e}"));
+                        spec.runner.kill_now();
+                    }
+                }
+            }
+        }
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// The profile switch itself: only strict refuses what Cloud Scheduler refuses.

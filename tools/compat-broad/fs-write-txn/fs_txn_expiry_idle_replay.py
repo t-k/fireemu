@@ -44,20 +44,13 @@ def _tool_files(directory):
 
 
 def ensure_replay_tools(source=HERE, destination=OVERLAY):
-    """The sibling copy of the tool directory with the replay table. An existing copy must be exactly what this would build: every file
-    equal to the tool directory's, except the case table, which has the replay waits (bytecode caches are not compared)."""
+    """The sibling copy of the tool directory with the replay table, rebuilt every run: any copy that is there (it is runner-built and untracked) is replaced, so a stale
+    module can never be imported. Every file equals the tool directory's except the case table, which has the replay waits (bytecode caches are not copied)."""
     source, destination = Path(source), Path(destination)
     expected = replay_cases_text((source / "txn_expiry_cases.py").read_text())
-    if destination.exists() and _tool_files(destination):
-        have, want = _tool_files(destination), _tool_files(source)
-        if sorted(have) != sorted(want):
-            raise ValueError("the replay copy differs from the tool directory: its files are not the same")
-        for name, path in want.items():
-            current = have[name].read_text()
-            if current != (expected if name == "txn_expiry_cases.py" else path.read_text()):
-                raise ValueError(f"the replay copy differs from the tool directory in {name}")
-        return destination
-    shutil.copytree(source, destination, ignore=shutil.ignore_patterns("__pycache__"), dirs_exist_ok=True)   # an existing directory with no files (only caches) is filled
+    if destination.exists():
+        shutil.rmtree(destination)
+    shutil.copytree(source, destination, ignore=shutil.ignore_patterns("__pycache__"))
     (destination / "txn_expiry_cases.py").write_text(expected)
     return destination
 

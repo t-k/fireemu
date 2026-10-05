@@ -376,7 +376,7 @@ for (const form of ['endpoint', 'legacy']) {
     const data = { oldValue: { fields: { x: { integerValue: '1' } } }, value: { fields: { x: { integerValue: '2' } } } };
     const event = { id: 'evt', type: 'google.cloud.firestore.document.v1.updated', time: '2026-01-01T00:00:00Z', source, params: { id: '日本語' }, data };
     assert.equal((await f.invoke('onDocument', 'firestore', event)).ok, true);
-    assert.deepEqual(await f.calls(), [{ name: 'onDocument', data, context: { eventId: 'evt-0', timestamp: event.time, eventType: 'providers/cloud.firestore/eventTypes/document.update', resource: source, params: event.params } }]);
+    assert.deepEqual(await f.calls(), [{ name: 'onDocument', data, context: { eventId: 'evt-0', timestamp: event.time, eventType: 'providers/cloud.firestore/eventTypes/document.update', resource: source, params: event.params, notSupported: {} } }]);
   });
 
   test(`v1 ${form}: a Firestore legacy event id is the event id plus the trigger index suffix`, { timeout: 10000 }, async t => {
@@ -414,6 +414,37 @@ for (const form of ['endpoint', 'legacy']) {
     assert.deepEqual(calls.map(call => call.context.eventId), events.map(() => id));
     // Storage prints its legacy timestamp with exactly three fraction digits (observed 2026-10-01).
     assert.deepEqual(calls.map(call => call.context.timestamp), ['2026-09-30T12:03:18.846Z', time, time]);
+  });
+
+  test(`v1 ${form}: a Firestore and an Auth legacy context carry the empty notSupported member production sends, Storage and Pub/Sub do not`, { timeout: 10000 }, async t => {
+    // Production (formal record functions-events-formal-20261004T182904Z-a9621bfae74fe9bc, production-run.json `frames`): every
+    // Gen1 Firestore frame (fsCreatedV1 frame 1, fsWrittenV1 4, fsDeletedV1 7, fsUpdatedV1 29: 60 of 60) and every Gen1 Auth frame
+    // (authCreatedV1 frame 55, authDeletedV1 66: 28 of 28) has `notSupported` among its context keys, an empty object; the 48
+    // Gen1 Storage and Pub/Sub frames (storageFinalizedV1 79, storageDeletedV1 81, storageMetadataUpdatedV1 95, storageArchivedV1
+    // 115, pubsubPublishedV1 133) have none.
+    const time = '2026-09-30T12:03:18.846431Z';
+    const kinds = { created: 'create', updated: 'update', deleted: 'delete', written: 'write' };
+    const f = await start(t, [
+      ...Object.values(kinds).map(kind => fsEntry(`on_${kind}`, 'projects/demo/databases/(default)/documents/orders/{id}', form, kind)),
+      stEntry('onFinalize', 'projects/_/buckets/assets.example', form),
+      entry('onPublish', 'google.pubsub.topic.publish', 'projects/demo/topics/t', form),
+      entry('onUserCreate', 'providers/firebase.auth/eventTypes/user.create', 'projects/demo', form),
+      entry('onUserDelete', 'providers/firebase.auth/eventTypes/user.delete', 'projects/demo', form),
+    ]);
+    const events = [
+      ...Object.entries(kinds).map(([type, kind]) => [`on_${kind}`, 'firestore', { id: 'dc880941-8bb2-410f-9b10-51c47560a33a', type: `google.cloud.firestore.document.v1.${type}`, time, source: 'projects/demo/databases/(default)/documents/orders/1', params: { id: '1' }, data: {} }, true]),
+      ['onFinalize', 'storage', { id: 'e1', type: 'google.cloud.storage.object.v1.finalized', time, source: '//storage.googleapis.com/projects/_/buckets/assets.example', data: { bucket: 'assets.example', name: 'a.txt' } }, false],
+      ['onPublish', 'pubsub', { id: 'e2', type: 'google.cloud.pubsub.topic.v1.messagePublished', time, source: '//pubsub.googleapis.com/projects/demo/topics/t', data: { message: { data: '', attributes: {}, messageId: 'm1' } } }, false],
+      ['onUserCreate', 'auth', { id: 'e3', type: 'google.firebase.auth.user.v1.created', time, source: '//firebaseauth.googleapis.com/projects/demo', data: { uid: 'u1' } }, true],
+      ['onUserDelete', 'auth', { id: 'e4', type: 'google.firebase.auth.user.v1.deleted', time, source: '//firebaseauth.googleapis.com/projects/demo', data: { uid: 'u1' } }, true],
+    ];
+    for (const [name, trigger, event] of events) assert.equal((await f.invoke(name, trigger, event)).ok, true, name);
+    const calls = await f.calls();
+    assert.equal(calls.length, events.length);
+    events.forEach(([name, , , carries], index) => {
+      if (carries) assert.deepEqual(calls[index].context.notSupported, {}, name);
+      else assert.equal(Object.hasOwn(calls[index].context, 'notSupported'), false, name);
+    });
   });
 
   test(`v1 ${form}: a Storage legacy context has the members and forms of the recorded production context`, { timeout: 10000 }, async t => {
@@ -498,4 +529,76 @@ test('v2 explicit database/document and bucket filters are not interpreted as v1
   assert.equal(f.manifest.functions[0].trigger.document, document);
   assert.equal(f.manifest.functions[1].trigger.bucket, 'assets.example');
   assert.equal(f.manifest.functions.every(x => x.generation === 2), true);
+});
+
+// Storage event shapes of the FE v5 production recording (run functions-events-formal-20261004T182904Z-a9621bfae74fe9bc,
+// 2026-10-04): the handler prints what it receives, so the member order is the order the handler was handed.
+const v5Storage = JSON.parse(await readFile(new URL('../../crates/fireemu-adapter-functions/tests/fixtures/production-storage-v5-frames.json', import.meta.url), 'utf8'));
+const v5Frame = insertId => v5Storage.frames.find(f => f.insertId === insertId);
+const alphabetical = value => Object.fromEntries(Object.entries(value).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)));
+
+test('v1: a Storage legacy context lists its resource members in the order production hands them over: name, service, type (v5 frame 6ac29fb70006ad918ea2a73d)', { timeout: 10000 }, async t => {
+  const recorded = v5Frame('6ac29fb70006ad918ea2a73d').frame;
+  assert.deepEqual(Object.keys(recorded.context.resource), ['name', 'service', 'type']);
+  const bucket = recorded.data.bucket;
+  const f = await start(t, [stEntry('onFinalize', `projects/_/buckets/${bucket}`, 'endpoint')]);
+  const event = { id: '22252774326123787', type: 'google.cloud.storage.object.v1.finalized', time: '2026-10-04T18:49:25.459311Z', source: `//storage.googleapis.com/projects/_/buckets/${bucket}`, data: alphabetical(recorded.data) };
+  assert.equal((await f.invoke('onFinalize', 'storage', event, { admittedAt: '2026-10-04T18:49:25.526Z' })).ok, true);
+  const [call] = await f.calls();
+  assert.deepEqual(Object.keys(call.context.resource), ['name', 'service', 'type']);
+  assert.deepEqual(call.context.resource, { ...recorded.context.resource, name: call.context.resource.name });
+  assert.equal(call.context.resource.name, `projects/_/buckets/${bucket}/objects/${recorded.data.name}`);
+});
+
+for (const [handler, insertId, eventType] of [
+  ['storageFinalizedV2', '6ac29fb7000987a59af4b7f6', 'finalized'],
+  ['storageDeletedV2', '6ac29fd70001a0e4d85cfd12', 'deleted'],
+  ['storageMetadataUpdatedV2', '6ac2a0a80000b3d27b4b1db3', 'metadataUpdated'],
+]) {
+  test(`v2: a Storage ${eventType} handler is handed the object members in the recorded order (v5 frame ${insertId})`, { timeout: 10000 }, async t => {
+    const recorded = v5Frame(insertId).frame;
+    assert.equal(v5Frame(insertId).handler, handler);
+    const bucket = recorded.data.bucket;
+    const f = await start(t, [{ name: 'object', __endpoint: { platform: 'gcfv2', eventTrigger: { eventType: `google.cloud.storage.object.v1.${eventType}`, eventFilters: { bucket } } } }]);
+    // The runtime's JSON has its members sorted by name; the handler must see the recorded order.
+    const event = { id: recorded.id, type: recorded.type, time: recorded.time, source: recorded.source, subject: recorded.subject, specversion: '1.0', bucket, data: alphabetical(recorded.data) };
+    assert.equal((await f.invoke('object', 'storage', event)).ok, true);
+    const [call] = await f.calls();
+    assert.deepEqual(Object.keys(call.data.data), Object.keys(recorded.data));
+    assert.deepEqual(call.data.data, recorded.data);
+    // The envelope is not reordered or reshaped.
+    assert.deepEqual(Object.keys(call.data).filter(key => key !== 'data').sort(), Object.keys(event).filter(key => key !== 'data').sort());
+  });
+}
+
+test('v2: members of a Storage object that the recordings never showed follow the recorded ones in name order, and an unknown member is kept', { timeout: 10000 }, async t => {
+  const recorded = v5Frame('6ac29fb7000987a59af4b7f6').frame;
+  const bucket = recorded.data.bucket;
+  const f = await start(t, [{ name: 'object', __endpoint: { platform: 'gcfv2', eventTrigger: { eventType: 'google.cloud.storage.object.v1.finalized', eventFilters: { bucket } } } }]);
+  const extras = { cacheControl: 'no-cache', contentEncoding: 'gzip', zzz: 1, aaa: 2 };
+  // The extras arrive in reverse name order: the rule is name order, not arrival order.
+  const reversed = Object.fromEntries(Object.entries(alphabetical({ ...recorded.data, ...extras })).reverse());
+  const event = { id: recorded.id, type: recorded.type, time: recorded.time, source: recorded.source, subject: recorded.subject, specversion: '1.0', bucket, data: reversed };
+  assert.equal((await f.invoke('object', 'storage', event)).ok, true);
+  const [call] = await f.calls();
+  assert.deepEqual(Object.keys(call.data.data), [...Object.keys(recorded.data), 'aaa', 'cacheControl', 'contentEncoding', 'zzz']);
+});
+
+const v5Orders = JSON.parse(await readFile(new URL('../../crates/fireemu-adapter-functions/tests/fixtures/production-storage-v5-v2-member-orders.json', import.meta.url), 'utf8'));
+
+test('v2: every one of the 44 recorded Storage frames is handed over in its recorded member order (FE v5, finalize, delete, metadataUpdate and archive, with timeDeleted and metadata)', { timeout: 30000 }, async t => {
+  assert.equal(v5Orders.frames.length, 44);
+  const bucket = 'fireemu-oracle-events.firebasestorage.app';
+  const f = await start(t, [{ name: 'object', __endpoint: { platform: 'gcfv2', eventTrigger: { eventType: 'google.cloud.storage.object.v1.finalized', eventFilters: { bucket } } } }]);
+  for (const { insertId, members } of v5Orders.frames) {
+    // The runtime's JSON lists members by name, whatever production's order was.
+    const data = Object.fromEntries([...members].sort().map(key => [key, key === 'metadata' ? { marker: 'm' } : 'x']));
+    const event = { id: '1', type: 'google.cloud.storage.object.v1.finalized', time: '2026-10-04T18:49:25.459311Z', source: `//storage.googleapis.com/projects/_/buckets/${bucket}`, subject: 'objects/o', specversion: '1.0', bucket, data };
+    assert.equal((await f.invoke('object', 'storage', event)).ok, true, insertId);
+  }
+  const calls = await f.calls();
+  assert.equal(calls.length, 44);
+  calls.forEach((call, index) => {
+    assert.deepEqual(Object.keys(call.data.data), v5Orders.frames[index].members, v5Orders.frames[index].insertId);
+  });
 });

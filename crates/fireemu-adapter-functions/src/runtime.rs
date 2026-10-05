@@ -19,9 +19,7 @@ use fireemu_core_events::outbox::Outbox;
 use fireemu_core_events::retry::RetryPolicy;
 use fireemu_core_events::state::{EventState, FailureOutcome};
 use fireemu_core_functions::cron::{RunCount, Schedule};
-use fireemu_core_functions::manifest::{
-    AuthEvent, FunctionManifest, FunctionSpec, ObjectEvent, Trigger,
-};
+use fireemu_core_functions::manifest::{AuthEvent, FunctionManifest, FunctionSpec, Trigger};
 use fireemu_core_session::clock::VirtualClock;
 use fireemu_core_storage::store::StorageEvent;
 use fireemu_core_types::determinism::Clock;
@@ -2061,12 +2059,11 @@ impl FunctionsRuntime {
         if !self.background_triggers_enabled() {
             return Ok(self.empty_event_reservation());
         }
-        let (kind, object) = match event {
-            StorageEvent::Finalized(m) => (ObjectEvent::Finalized, m),
-            StorageEvent::Deleted(m) => (ObjectEvent::Deleted, m),
-            StorageEvent::MetadataUpdated(m) => (ObjectEvent::MetadataUpdated, m),
-        };
+        let parts = crate::events::storage_event_parts(event);
+        let (kind, object, time_deleted) = (parts.kind, parts.object, parts.time_deleted);
         let time = self.now();
+        // The payload's own instant; the delivery keeps the admission instant.
+        let event_time = parts.at.unwrap_or(time);
         let mut inner = self
             .inner
             .lock()
@@ -2083,7 +2080,7 @@ impl FunctionsRuntime {
                 .and_then(|next| next.checked_add(1))
                 .ok_or(SourceEventAdmissionError::Capacity)?;
             let id = format!("{}-{next}", self.config.session.value());
-            let payload = storage_event(&id, kind, object, time);
+            let payload = storage_event(&id, kind, object, event_time, time_deleted);
             let event_type = kind.event_type().to_owned();
             let subject = format!("objects/{}", object.name.as_str());
             let copies = self.delivery_copies(&f.name, &event_type);
@@ -6762,5 +6759,221 @@ mod schedule_capacity_tests {
         );
         assert!(!pending(&runtime));
         finish(&runtime).await;
+    }
+}
+
+/// The instant a Storage payload is stamped with is chosen by the runtime, not by the payload
+/// builder: `reserve_storage_event` passes the core event's own instant (`at`) when it has one and
+/// the admission instant otherwise. These tests drive the runtime itself, so a change to that
+/// choice shows here and not only in a test's own copy of the rule.
+#[cfg(test)]
+mod storage_event_instant_tests {
+    use super::{FunctionsConfig, FunctionsRuntime};
+    use crate::manifest_json::parse_manifest;
+    use crate::runner::{Runner, SpawnSpec};
+    use fireemu_core_functions::manifest::{ObjectEvent, Trigger};
+    use fireemu_core_session::clock::VirtualClock;
+    use fireemu_core_storage::name::{BucketName, ObjectName};
+    use fireemu_core_storage::store::{NewMetadata, Precondition, StorageEvent, StorageState};
+    use fireemu_core_types::ids::SessionId;
+    use fireemu_core_types::time::{LogicalDuration, LogicalInstant};
+    use serde_json::Value;
+    use std::sync::{Arc, Mutex};
+    use std::time::Duration;
+
+    const START: i64 = 1_788_004_860;
+
+    /// A runtime whose manifest has one Storage function per event kind on the default bucket.
+    async fn runtime() -> (Arc<FunctionsRuntime>, Arc<Mutex<VirtualClock>>) {
+        let spec = SpawnSpec {
+            command: vec![
+                "python3".to_owned(),
+                concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fake_runner.py").to_owned(),
+            ],
+            cwd: None,
+            env: Vec::new(),
+            hello_timeout: Duration::from_secs(60),
+        };
+        let runner = Runner::spawn_spec(&spec).await.unwrap();
+        let mut manifest = parse_manifest(runner.hello().manifest.as_ref().unwrap()).unwrap();
+        let template = manifest.get("echo").unwrap().clone();
+        manifest
+            .functions
+            .retain(|f| !matches!(f.trigger, Trigger::Storage { .. }));
+        for (name, event) in [
+            ("onFinalized", ObjectEvent::Finalized),
+            ("onDeleted", ObjectEvent::Deleted),
+            ("onArchived", ObjectEvent::Archived),
+        ] {
+            let mut function = template.clone();
+            function.name = name.to_owned();
+            function.entry_point = name.to_owned();
+            function.trigger = Trigger::Storage {
+                event,
+                bucket: None,
+            };
+            manifest.functions.push(function);
+        }
+        let clock = Arc::new(Mutex::new(VirtualClock::new(
+            LogicalInstant::from_unix_seconds(START),
+        )));
+        let runtime = FunctionsRuntime::new(
+            manifest,
+            FunctionsConfig {
+                project: "demo-app".to_owned(),
+                default_bucket: "demo-app.appspot.com".to_owned(),
+                location: "nam5".to_owned(),
+                session: SessionId::new(7),
+                max_running: 4,
+                debug_mode: false,
+                retry_attempts: 1,
+                max_catch_up_runs: 1,
+                runner_secret: "test-secret".to_owned(),
+                overlap: super::OverlapPolicy::Allow,
+                catch_up: super::CatchUpPolicy::All,
+                functions_host: Some("127.0.0.1:5001".to_owned()),
+            },
+            clock.clone(),
+            Arc::new(runner),
+            Some(spec),
+        );
+        (runtime, clock)
+    }
+
+    fn put(store: &mut StorageState, at: i64) -> fireemu_core_storage::store::ObjectMetadata {
+        store
+            .put(
+                &BucketName::try_new("demo-app.appspot.com").unwrap(),
+                &ObjectName::try_new("o.txt").unwrap(),
+                b"x".to_vec(),
+                NewMetadata::default(),
+                Precondition::default(),
+                LogicalInstant::from_unix_seconds(START + at),
+            )
+            .unwrap()
+    }
+
+    /// The payloads the runtime built for `event`, by event type, without publishing them (a
+    /// published delivery may already have been taken by the runner).
+    fn payloads(runtime: &Arc<FunctionsRuntime>, event: &StorageEvent) -> Vec<(String, Value)> {
+        // Dropping the reservation unpublished gives its capacity back.
+        let reservation = runtime.reserve_storage_event(event).unwrap();
+        reservation
+            .deliveries
+            .as_ref()
+            .unwrap()
+            .iter()
+            .map(|d| {
+                (
+                    d.event.event_type.as_str().to_owned(),
+                    (*d.payload.payload).clone(),
+                )
+            })
+            .collect()
+    }
+
+    /// An unversioned overwrite announces the replaced generation as deleted, stamped with the
+    /// creation instant of the new generation (RECORDED, FE v5: the same microsecond as the
+    /// Finalized event of the new generation). The runtime admits the events much later, so a
+    /// payload stamped with the admission instant would differ.
+    #[tokio::test]
+    async fn the_deleted_event_of_an_overwrite_takes_the_replacement_instant_not_the_admission_instant(
+    ) {
+        let (runtime, clock) = runtime().await;
+        let mut store = StorageState::new(1);
+        put(&mut store, 1);
+        let _ = store.drain_events();
+        put(&mut store, 5);
+        let events = store.drain_events();
+        clock
+            .lock()
+            .unwrap()
+            .advance(LogicalDuration::from_seconds(600))
+            .unwrap();
+        assert!(matches!(
+            events.as_slice(),
+            [StorageEvent::Deleted { .. }, StorageEvent::Finalized(_)]
+        ));
+        let deleted = payloads(&runtime, &events[0]);
+        let finalized = payloads(&runtime, &events[1]);
+        assert_eq!(deleted.len(), 1, "{deleted:?}");
+        assert_eq!(finalized.len(), 1, "{finalized:?}");
+        assert_eq!(deleted[0].0, "google.cloud.storage.object.v1.deleted");
+        assert_eq!(deleted[0].1["time"], finalized[0].1["time"]);
+        // The admission instant is 600 s later than the replacement: it is not what was stamped.
+        assert!(
+            !deleted[0].1["time"]
+                .as_str()
+                .unwrap()
+                .starts_with("2026-08-29T12:11"),
+            "{}",
+            deleted[0].1["time"]
+        );
+        // The Deleted event of an overwrite carries no `timeDeleted`.
+        assert!(deleted[0].1["data"].get("timeDeleted").is_none());
+        runtime.shutdown().await;
+    }
+
+    /// The Archived event and the Deleted event of a noncurrent generation carry the instant the
+    /// generation stopped being live as `timeDeleted`; the Archived `time` is that instant too,
+    /// and the noncurrent Deleted `time` is the admission instant, as recorded.
+    #[tokio::test]
+    async fn archived_and_noncurrent_deleted_events_carry_time_deleted_from_the_core_event() {
+        let (runtime, clock) = runtime().await;
+        let mut store = StorageState::new(1);
+        let bucket = BucketName::try_new("demo-app.appspot.com").unwrap();
+        store.set_versioning(&bucket, true);
+        let first = put(&mut store, 1);
+        let second = put(&mut store, 5);
+        let events = store.drain_events();
+        clock
+            .lock()
+            .unwrap()
+            .advance(LogicalDuration::from_seconds(600))
+            .unwrap();
+        let archived_event = events
+            .iter()
+            .find(|e| matches!(e, StorageEvent::Archived { .. }))
+            .unwrap();
+        let archived = payloads(&runtime, archived_event);
+        assert_eq!(archived.len(), 1, "{archived:?}");
+        assert_eq!(
+            archived[0].1["data"]["generation"],
+            first.generation.to_string()
+        );
+        let time_deleted = archived[0].1["data"]["timeDeleted"].as_str().unwrap();
+        assert!(
+            time_deleted.starts_with("2026-08-29T12:01:05"),
+            "{time_deleted}"
+        );
+        assert_eq!(
+            archived[0].1["time"]
+                .as_str()
+                .unwrap()
+                .trim_end_matches('Z')[..19],
+            time_deleted.trim_end_matches('Z')[..19]
+        );
+        // Deleting the noncurrent generation by number.
+        let name = ObjectName::try_new("o.txt").unwrap();
+        store
+            .delete_generation(&bucket, &name, first.generation, Precondition::default())
+            .unwrap();
+        let deleted_event = store.drain_events().remove(0);
+        let deleted = payloads(&runtime, &deleted_event);
+        assert_eq!(deleted.len(), 1, "{deleted:?}");
+        assert_eq!(
+            deleted[0].1["data"]["timeDeleted"],
+            archived[0].1["data"]["timeDeleted"]
+        );
+        assert!(
+            deleted[0].1["time"]
+                .as_str()
+                .unwrap()
+                .starts_with("2026-08-29T12:11"),
+            "the deletion instant is the admission instant: {}",
+            deleted[0].1["time"]
+        );
+        let _ = second;
+        runtime.shutdown().await;
     }
 }

@@ -1005,6 +1005,7 @@ proptest! {
                             &bucket(),
                             &object(UNIVERSE[*name]),
                             Precondition::default(),
+                            now,
                         );
                         prop_assert_eq!(result.err(), Some(StorageError::NotFound));
                         continue;
@@ -1012,7 +1013,7 @@ proptest! {
                     let pre = precondition(*guard, Some(&current));
                     let expected = verdict(&pre, Some(&current));
                     let result = store
-                        .delete(&bucket(), &object(UNIVERSE[*name]), pre)
+                        .delete(&bucket(), &object(UNIVERSE[*name]), pre, now)
                         .map(|_| ());
                     prop_assert_eq!(classify(&result), expected, "{:?}", op);
                     if expected == Verdict::Applies {

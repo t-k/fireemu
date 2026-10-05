@@ -11919,7 +11919,8 @@ fn admin_batch_delete(store: &mut AuthStore, body: &Value, strict: bool) -> Json
             continue;
         }
         let (uid, email) = (user.local_id.clone(), user.email.clone());
-        if store.delete_user_by_id(id).is_ok() && strict {
+        // No lifecycle event: production does not fire the v1 `onDelete` trigger for `deleteUsers`.
+        if store.delete_user_by_id_without_event(id).is_ok() && strict {
             store.void_oob_codes_of(&uid, email.as_deref());
         }
     }

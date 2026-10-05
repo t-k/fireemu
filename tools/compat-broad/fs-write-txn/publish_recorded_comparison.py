@@ -25,8 +25,9 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, os.environ.get("SMOKE_TOOLS", str(HERE)))
 
-SAME = ("commit", "binary_sha256", "profile", "compareToolSha256", "clock")
-ROW_SECTIONS = ("cases", "reads", "commitTimes", "skipped", "idleCandidates")
+SAME = ("commit", "binary_sha256", "profile", "compareToolSha256", "clock", "clock_start", "advance_seconds", "advance_after")
+# `orders` (was a writer held beside its anchor release) and `clock` (does every update time lie within the request's own window) are the rows of a frozen-clock replay.
+ROW_SECTIONS = ("cases", "reads", "commitTimes", "skipped", "idleCandidates", "orders", "clock")
 OBSERVATION_LIMITS = [
     "Raw REST bodyBytes, content-length and member-order layout were not retained; the record proves decoded response semantics, not wire layout.",
     "The closure review and the final-artifact regression are separate conditions and stay open.",
@@ -59,6 +60,18 @@ def as_recorded_entry(repo, path, commit, used):
     return {"path": path, "commit": commit, "blob": blob, "sha256": hashlib.sha256(committed).hexdigest()}
 
 
+def _frozen_replay(meta):
+    """What a frozen-clock replay was given: the clock's start, and the advance (seconds and the step it followed) when there was one. A frozen replay names its start, and an advance
+    is both of its parts or neither, so the replay can be reproduced; any other clock carries none of these."""
+    if meta.get("clock") != "frozen":
+        if any(meta.get(name) is not None for name in ("clock_start", "advance_seconds", "advance_after")):
+            raise ValueError("a replay that is not on a frozen clock names a clock start or an advance")
+        return None
+    if not meta.get("clock_start") or (meta.get("advance_seconds") is None) != (meta.get("advance_after") is None):
+        raise ValueError("a frozen-clock replay names no clock start, or half an advance")
+    return {"clockStart": meta["clock_start"], **({"advanceSeconds": meta["advance_seconds"], "advanceAfter": meta["advance_after"]} if meta.get("advance_seconds") is not None else {})}
+
+
 def build(*, program, key, conditions, recordings, results, projections, identities, table=None, limits=(), as_recorded=()):
     """The observations and comparison records, or ValueError when the inputs cannot be vouched for."""
     if len(recordings) != 2 or len(results) != 2 or len(projections) != 2:
@@ -74,6 +87,7 @@ def build(*, program, key, conditions, recordings, results, projections, identit
             raise ValueError("the replays differ in artifact, tool, profile or clock")
         if meta.get("planCorpusDigest") != meta.get("productionCorpusDigest"):
             raise ValueError("a replay's plan is not the recording's corpus")
+    replay = _frozen_replay(first)
     for result in results:
         ages = result.get("tokenAges")
         if result["metadata"].get("clock") == "virtual" and ages is None:
@@ -94,7 +108,7 @@ def build(*, program, key, conditions, recordings, results, projections, identit
         "schemaVersion": 1, "kind": "fs-transaction-recorded-comparison-v1", "parent": "FS-TRANSACTION", "program": program, "condition": list(conditions),
         "coverage": "PARTIAL", "authorizesProduction": False, "productionRequests": 0, "profile": first["profile"],
         "artifact": {"sourceCommit": first["commit"], "binarySha256": first["binary_sha256"]},
-        "comparer": {"sha256": first["compareToolSha256"], "replayClock": first["clock"]},
+        "comparer": {"sha256": first["compareToolSha256"], "replayClock": first["clock"], **({"replay": replay} if replay else {})},
         # a table file replayed as it was when recorded is named by its asRecorded entry (commit, blob, digest); naming today's file beside it would pair a path with a digest it does not have
         **({"table": table} if table and not any(entry["path"] == table["path"] for entry in as_recorded) else {}),
         **({"asRecorded": list(as_recorded)} if as_recorded else {}),

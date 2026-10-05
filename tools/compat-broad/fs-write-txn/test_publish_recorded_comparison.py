@@ -248,3 +248,71 @@ def test_an_age_row_without_a_match_flag_is_refused_too(tmp_path):
     unflagged = [{"site": "late-read", "production": 284.0, "emulator": 284.0, "difference": 0.0}]
     with pytest.raises(ValueError, match="age"):
         build(tmp_path, results=[result(paths[0], tokenAges=unflagged), result(paths[1])], paths=paths)
+
+
+# ---- a frozen-clock replay (P14): the order and clock rows, and the clock the replay was given ------------------------------------------------------------------
+
+FROZEN = {"clock": "frozen", "clock_start": "2026-10-04T00:00:00Z", "advance_seconds": "3700", "advance_after": "grpc/tv/rollback-unknown"}
+
+
+def frozen(path, **changes):
+    value = result(path, orders=[{"site": "rest/w/writer-ab", "production": "after-anchor", "local": "after-anchor", "match": True}],
+                   clock=[{"site": "rest/w/writer-bc", "production": True, "local": True, "match": True}])
+    value["metadata"] = {**value["metadata"], **FROZEN, **changes}
+    return value
+
+
+def test_the_order_and_clock_rows_of_a_frozen_replay_are_published_and_counted(tmp_path):
+    paths = [write(tmp_path, 1), write(tmp_path, 2)]
+    _observations, comparison = build(tmp_path, results=[frozen(paths[0]), frozen(paths[1])], paths=paths)
+    assert comparison["summary"]["rows"] == 2 * (2 + 1 + 1)
+    for entry in comparison["recordings"]:
+        assert entry["orders"][0]["site"] == "rest/w/writer-ab" and entry["clock"][0]["site"] == "rest/w/writer-bc"
+    assert comparison["comparer"]["replayClock"] == "frozen"
+    assert comparison["comparer"]["replay"] == {"clockStart": "2026-10-04T00:00:00Z", "advanceSeconds": "3700", "advanceAfter": "grpc/tv/rollback-unknown"}
+
+
+@pytest.mark.parametrize("key", ["clock_start", "advance_seconds", "advance_after"])
+def test_the_clock_a_frozen_replay_was_given_must_be_the_same_for_both_recordings(tmp_path, key):
+    paths = [write(tmp_path, 1), write(tmp_path, 2)]
+    with pytest.raises(ValueError, match="clock"):
+        build(tmp_path, results=[frozen(paths[0]), frozen(paths[1], **{key: "other"})], paths=paths)
+
+
+def test_a_replay_without_a_frozen_clock_publishes_no_replay_block(tmp_path):
+    _observations, comparison = build(tmp_path)
+    assert comparison["comparer"] == {"sha256": "3" * 64, "replayClock": "real"}
+    assert all("orders" not in entry and "clock" not in entry for entry in comparison["recordings"])
+
+
+def without(value, *keys):
+    value["metadata"] = {name: item for name, item in value["metadata"].items() if name not in keys}
+    return value
+
+
+def test_a_frozen_replay_names_its_start_and_advances_by_a_pair_or_not_at_all(tmp_path):
+    paths = [write(tmp_path, 1), write(tmp_path, 2)]
+    # no start: not a frozen replay anyone can reproduce
+    with pytest.raises(ValueError, match="clock"):
+        build(tmp_path, results=[without(frozen(paths[0]), "clock_start"), without(frozen(paths[1]), "clock_start")], paths=paths)
+    # an advance with no step to follow, or a step with no advance, is half a description
+    for key in ("advance_seconds", "advance_after"):
+        with pytest.raises(ValueError, match="clock"):
+            build(tmp_path, results=[without(frozen(paths[0]), key), without(frozen(paths[1]), key)], paths=paths)
+    # a frozen replay that never advanced the clock publishes its start alone
+    both = [without(frozen(path), "advance_seconds", "advance_after") for path in paths]
+    _observations, comparison = build(tmp_path, results=both, paths=paths)
+    assert comparison["comparer"]["replay"] == {"clockStart": "2026-10-04T00:00:00Z"}
+
+
+@pytest.mark.parametrize("clock", ["real", "virtual"])
+def test_a_replay_on_another_clock_that_names_a_frozen_start_or_advance_is_refused(tmp_path, clock):
+    paths = [write(tmp_path, 1), write(tmp_path, 2)]
+    for extra in ({"clock_start": "2026-10-04T00:00:00Z"}, {"advance_seconds": "3700"}, {"advance_after": "x"}):
+        both = [result(path) for path in paths]
+        for entry in both:
+            entry["metadata"] = {**entry["metadata"], "clock": clock, **extra}
+            if clock == "virtual":
+                entry["tokenAges"] = []
+        with pytest.raises(ValueError, match="frozen"):
+            build(tmp_path, results=both, paths=paths)

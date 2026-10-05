@@ -1276,3 +1276,54 @@ fn every_outcome_of_an_object_delete_answers_204_with_a_zero_content_length() {
         let _ = second;
     }
 }
+
+/// Production names the owner of an object it copied or rewrote (recorded: the `owner.entity` of
+/// every `copyTo` and `rewriteTo` resource); the strict profile answers it, also when the source
+/// is a noncurrent generation, and the emulator profile does not (the official emulator has no
+/// such member).
+#[test]
+fn a_copy_or_rewrite_names_its_owner_in_strict_only() {
+    for (acceptance, strict) in [
+        (TokenAcceptance::Verified, true),
+        (TokenAcceptance::EmulatorMock, false),
+    ] {
+        let (s, _) = state(acceptance);
+        set_versioning(&s, true);
+        let first = upload(&s, "o.txt", "1");
+        upload(&s, "o.txt", "22");
+        let owner = |r: &StorageResponse| {
+            assert_eq!(r.status, 200, "{}", String::from_utf8_lossy(&r.body));
+            let b = body(r);
+            let resource = if b["kind"] == "storage#rewriteResponse" {
+                b["resource"].clone()
+            } else {
+                b
+            };
+            resource.get("owner").cloned()
+        };
+        let expected = strict.then(|| json!({"entity": "user-fireemu"}));
+        for (verb, target) in [("copyTo", "c.txt"), ("rewriteTo", "r.txt")] {
+            let plain = call(
+                &s,
+                "POST",
+                &format!("/storage/v1/b/{BUCKET}/o/o.txt/{verb}/b/{BUCKET}/o/{target}"),
+                b"{}",
+            );
+            assert_eq!(owner(&plain), expected, "{verb} strict={strict}");
+            let noncurrent = call(
+                &s,
+                "POST",
+                &format!(
+                    "/storage/v1/b/{BUCKET}/o/o.txt/{verb}/b/{BUCKET}/o/n-{target}?sourceGeneration={}",
+                    gen(&first)
+                ),
+                b"{}",
+            );
+            assert_eq!(
+                owner(&noncurrent),
+                expected,
+                "{verb} noncurrent strict={strict}"
+            );
+        }
+    }
+}

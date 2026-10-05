@@ -1,10 +1,10 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { test } from "node:test";
+import { tempDir } from "./test-tmpdir.mjs";
 
 import {
   ANSWER_KINDS,
@@ -320,7 +320,7 @@ test("a row of a program that errored is unfinished, not an answer", () => {
 const CLI = fileURLToPath(new URL("./fs-listen/resume-answers.mjs", import.meta.url));
 
 function runCli(files, args) {
-  const dir = mkdtempSync(join(tmpdir(), "fs-listen-answers-"));
+  const dir = tempDir("fs-listen-answers-");
   const made = Object.fromEntries(
     Object.entries(files).map(([name, value]) => {
       const file = join(dir, name);

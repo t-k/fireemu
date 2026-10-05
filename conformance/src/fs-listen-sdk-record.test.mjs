@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
 import { test } from "node:test";
+import { tempDir } from "./test-tmpdir.mjs";
 
 import { sdkCases } from "./fs-listen/sdk-cases.mjs";
 
@@ -919,10 +920,9 @@ test("both preflight reads are plain GETs that do not follow a redirect and have
 });
 
 test("loadApiKey on a real file: the owner-only file is read as text, a group-readable one is refused", async () => {
-  const { chmod, mkdtemp, writeFile } = await import("node:fs/promises");
-  const { tmpdir } = await import("node:os");
+  const { chmod, writeFile } = await import("node:fs/promises");
   const { join } = await import("node:path");
-  const dir = await mkdtemp(join(tmpdir(), "fs-listen-key-"));
+  const dir = tempDir("fs-listen-key-");
   const file = join(dir, "key");
   await writeFile(file, `${KEY}\n`);
   await chmod(file, 0o600);

@@ -78,16 +78,57 @@ fn a_retry_window_with_no_count_retries_until_the_window_ends() {
     let policy = schedule_retry_policy(&config(0, 30, 4, 10, 5), FunctionGeneration::Second);
     // 4, 8, then 10 (the cap): 0, 4, 12, 22; the next would be at 32, past the 30 s window.
     assert_eq!(attempt_offsets(&policy), vec![0, 4, 12, 22]);
-    assert_eq!(policy.max_attempts(), u32::MAX);
+    // no count: the window alone decides, and the count is one attempt
+    assert_eq!(policy.max_attempts(), 1);
 }
 
+/// Run `f123d4fa2d61c5f5`, the REST job `count`: `retryCount 3`, `maxRetryDuration 20s`, `minBackoff 4s`, `maxBackoff 10s`.
+/// Production attempted it four times in both passes, at 0, 4.65, 13.26, 23.88 s and 0, 4.5, 13.02, 23.68 s, so the window
+/// of 20 s did not stop the fourth attempt: the retries went on until the count and the window were both used up (Cloud
+/// Scheduler's documentation says the same: with both set "the job will be retried until both limits are reached"). The
+/// same run's control, the window alone (30 s, same backoff), made four attempts too.
 #[test]
-fn a_count_and_a_window_together_stop_at_whichever_comes_first() {
-    // Not recorded (production refused that combination's job); both limits apply.
-    let by_count = schedule_retry_policy(&config(2, 600, 4, 50, 5), FunctionGeneration::Second);
-    assert_eq!(attempt_offsets(&by_count), vec![0, 4, 12]);
-    let by_window = schedule_retry_policy(&config(10, 10, 4, 50, 5), FunctionGeneration::Second);
-    assert_eq!(attempt_offsets(&by_window), vec![0, 4]);
+fn a_count_and_a_window_retry_until_both_are_used_up_as_recorded() {
+    let count = schedule_retry_policy(&config(3, 20, 4, 10, 5), FunctionGeneration::Second);
+    // 4, 8, then 10 (the cap): the fourth attempt, at 22, is past the window and uses the count up
+    assert_eq!(attempt_offsets(&count), vec![0, 4, 12, 22]);
+    let control = schedule_retry_policy(&config(0, 30, 4, 10, 5), FunctionGeneration::Second);
+    assert_eq!(attempt_offsets(&control), vec![0, 4, 12, 22]);
+}
+
+/// Not recorded, and read from the same documentation: a count that is used up inside the window does not end the
+/// chain while the next attempt still fits the window, and a window that is used up does not end it while the count has
+/// retries left. A count of 1 with a window of 30 s: the second attempt uses the count up, the later ones fit the window.
+#[test]
+fn each_limit_alone_keeps_the_chain_going_until_the_other_is_used_up() {
+    let count_runs_out_inside_the_window =
+        schedule_retry_policy(&config(1, 30, 4, 10, 5), FunctionGeneration::Second);
+    assert_eq!(
+        attempt_offsets(&count_runs_out_inside_the_window),
+        vec![0, 4, 12, 22]
+    );
+    // the window is used up after the first retry, the count still has one: the third attempt is made, a fourth is not
+    let window_runs_out_first =
+        schedule_retry_policy(&config(2, 5, 4, 50, 5), FunctionGeneration::Second);
+    assert_eq!(attempt_offsets(&window_runs_out_first), vec![0, 4, 12]);
+}
+
+/// Run `f123d4fa2d61c5f5`, the REST job `zerobackoff`: `minBackoff 0s`, `maxBackoff 0s`, window 10 s. Cloud Scheduler stored
+/// `minBackoffDuration 5s` and `maxBackoffDuration 3600s` and the chain was two attempts, 5.62 s apart, in both passes: a
+/// zero minimum and maximum together are the defaults (only that pair was recorded).
+#[test]
+fn a_zero_minimum_and_maximum_backoff_together_are_the_defaults() {
+    let policy = schedule_retry_policy(&config(0, 10, 0, 0, 5), FunctionGeneration::Second);
+    assert_eq!(policy.base_backoff(), LogicalDuration::from_seconds(5));
+    assert_eq!(policy.max_backoff(), LogicalDuration::from_seconds(3_600));
+    assert_eq!(attempt_offsets(&policy), vec![0, 5]);
+    // one of the two alone is not the recorded pair: it is kept as declared
+    let only_min = schedule_retry_policy(&config(2, 0, 0, 100, 5), FunctionGeneration::Second);
+    assert_eq!(only_min.base_backoff(), LogicalDuration::from_seconds(0));
+    assert_eq!(only_min.max_backoff(), LogicalDuration::from_seconds(100));
+    let only_max = schedule_retry_policy(&config(2, 0, 3, 0, 5), FunctionGeneration::Second);
+    assert_eq!(only_max.base_backoff(), LogicalDuration::from_seconds(3));
+    assert_eq!(only_max.max_backoff(), LogicalDuration::from_seconds(3));
 }
 
 #[test]
@@ -98,7 +139,8 @@ fn a_maximum_backoff_below_the_minimum_is_raised_to_it() {
 }
 
 proptest! {
-    /// A positive count means exactly count + 1 attempts with no window, and never more with one.
+    /// A positive count means exactly count + 1 attempts with no window, and at least that many with one (the window
+    /// keeps the chain going after the count is used up while the next attempt fits it).
     #[test]
     fn a_positive_count_bounds_the_attempts(
         count in 1u32..30,
@@ -110,7 +152,7 @@ proptest! {
         let policy = schedule_retry_policy(&config(count, window, min, max, doublings), FunctionGeneration::Second);
         prop_assert_eq!(policy.max_attempts(), count + 1);
         let attempts = attempt_offsets(&policy).len();
-        prop_assert!(attempts <= count as usize + 1);
+        prop_assert!(attempts >= count as usize + 1);
         if window == 0 {
             prop_assert_eq!(attempts, count as usize + 1);
         }
@@ -136,6 +178,62 @@ proptest! {
     fn neither_count_nor_window_is_one_attempt(min in 0u64..50, max in 0u64..500, doublings in 0u32..10) {
         let policy = schedule_retry_policy(&config(0, 0, min, max, doublings), FunctionGeneration::Second);
         prop_assert_eq!(attempt_offsets(&policy), vec![0]);
+    }
+}
+
+/// The chain a handler that always fails makes, written out from the rule rather than from the policy: after attempt `k`
+/// (1-based) there is a next one when the count has retries left (`k <= count`) or the window is set and the next attempt
+/// fits it (`elapsed + gap <= window`); the gap after attempt `k` doubles `min` for `doublings` steps, then grows by
+/// `min * 2^doublings` per step, never above `max`.
+fn reference_offsets(count: u32, window: u64, min: u64, max: u64, doublings: u32) -> Vec<i64> {
+    let (min, max) = if min == 0 && max == 0 {
+        (5, 3_600)
+    } else {
+        (min, max.max(min))
+    };
+    let gap = |k: u32| -> u64 {
+        let steps = k - 1;
+        let doubled = steps.min(doublings);
+        let linear = u64::from(steps - doubled) + 1;
+        min.saturating_mul(1u64 << doubled.min(40))
+            .saturating_mul(linear)
+            .min(max)
+    };
+    let mut offsets = vec![0u64];
+    let mut elapsed = 0u64;
+    let mut k = 1u32;
+    while k < 64 {
+        let next = elapsed + gap(k);
+        let by_count = k <= count;
+        let by_window = window > 0 && next <= window;
+        if !(by_count || by_window) {
+            break;
+        }
+        elapsed = next;
+        k += 1;
+        offsets.push(elapsed);
+    }
+    offsets
+        .into_iter()
+        .map(|o| i64::try_from(o).unwrap())
+        .collect()
+}
+
+proptest! {
+    /// The policy makes exactly the chain the rule describes, for any count, window, backoff and doubling count.
+    #[test]
+    fn the_second_generation_chain_follows_the_rule(
+        count in 0u32..12,
+        window in 0u64..400,
+        min in 0u64..30,
+        max in 0u64..300,
+        doublings in 0u32..8,
+    ) {
+        let policy = schedule_retry_policy(&config(count, window, min, max, doublings), FunctionGeneration::Second);
+        prop_assert_eq!(
+            attempt_offsets(&policy),
+            reference_offsets(count, window, min, max, doublings)
+        );
     }
 }
 

@@ -121,13 +121,18 @@ impl RetryPolicy {
         attempt < self.max_attempts
     }
 
-    /// Whether the retry after `attempt` fits both the attempt and elapsed-time limits.
+    /// Whether a retry follows the failure of `attempt` (1-based) at `elapsed` after the first attempt. With only an
+    /// attempt limit it is [`Self::allows_retry_after`]; with only a window, the next attempt must fit it. With both
+    /// the chain goes on until **both** are used up: it continues while the attempt limit has retries left, and after
+    /// that while the next attempt still fits the window. Cloud Scheduler retried a job with a count of 3 and a window of
+    /// 20 s four times, the fourth past the window (run `f123d4fa2d61c5f5`), as its documentation says: "the job will be
+    /// retried until both limits are reached".
     #[must_use]
     pub fn allows_retry_after_elapsed(&self, attempt: u32, elapsed: LogicalDuration) -> bool {
-        if !self.allows_retry_after(attempt) {
-            return false;
+        if self.allows_retry_after(attempt) {
+            return true;
         }
-        self.max_retry_duration.is_none_or(|limit| {
+        self.max_retry_duration.is_some_and(|limit| {
             elapsed
                 .checked_add(self.backoff_for_attempt(attempt))
                 .is_some_and(|next| next <= limit)

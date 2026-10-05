@@ -127,6 +127,8 @@ export function productionChains(digest) {
       zero: "retryZero",
       duration: "retryDuration",
       retry5: "retryFive",
+      count: "retryCountWindow",
+      zerobackoff: "retryZeroBackoff",
     }[job];
     // A job's longest chain: a retried failure is the recording of its retry rule (a lone attempt is not one).
     if (name && (chains[name]?.length ?? 0) < offsets.length) chains[name] = offsets;
@@ -673,8 +675,20 @@ export function rows(production, local) {
     ["retryFive", "retryCount 5, defaults", "retryCount-boundary"],
     ["retryZero", "retryCount 0", "zero-no-retry"],
     ["retryDuration", "maxRetryDuration 30s, min 4s, max 10s, no count", "duration-only"],
+    // run f123d4fa2d61c5f5 only: a recording without these chains has no such rows
+    [
+      "retryCountWindow",
+      "retryCount 3 and maxRetryDuration 20s, min 4s, max 10s: four attempts, the fourth past the window",
+      "count-and-duration-interaction",
+    ],
+    [
+      "retryZeroBackoff",
+      "min 0s and max 0s with maxRetryDuration 10s: stored as 5s and 3600s, two attempts",
+      "zero-min-backoff",
+    ],
   ]) {
     const p = pChains[name];
+    if (p === undefined && ["retryCountWindow", "retryZeroBackoff"].includes(name)) continue;
     const l = lChains[name] ?? [];
     const sameCount = p && l.length === p.length;
     // Production's offsets carry dispatch latency (about half a second per attempt) that a logical clock does not:

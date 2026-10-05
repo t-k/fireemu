@@ -173,12 +173,15 @@ pub struct BlockingAuthTarget {
 }
 
 /// The retry policy of a scheduled function: `retryCount` further attempts after the first, spaced by Cloud
-/// Scheduler's bounded exponential backoff, and `maxRetrySeconds` as the window the chain must end inside.
+/// Scheduler's bounded exponential backoff, and `maxRetrySeconds` as the window the next attempt must fit.
 ///
 /// A window with no count (`retryCount` 0, `maxRetrySeconds` positive) retries until the window ends: production
 /// attempted a job with `maxRetryDuration: 30s` and no count four times, at 0, 4.6, 13.2 and 23.7 seconds, the next
-/// attempt being past the window (second delivery recording, run `156715222b86ea44`). With both a count and a window
-/// (not recorded: production refused that job) the chain stops at whichever limit comes first. Neither is one attempt.
+/// attempt being past the window (second delivery recording, run `156715222b86ea44`). With both a count and a window the
+/// chain goes on until both are used up: a job with `retryCount: 3` and a window of 20 s was attempted four times, the
+/// fourth at about 23.9 s, past the window (third recording, run `f123d4fa2d61c5f5`); that a count used up inside the
+/// window leaves the chain going while the next attempt fits is the documented reading and is not recorded. Neither is
+/// one attempt.
 ///
 /// A first-generation schedule is one attempt, whatever it declares. Its job targets Pub/Sub, so Cloud Scheduler's
 /// retry covers the publish and never the handler: in the same recording `schedFailV1`'s handler threw at each of its 4
@@ -198,12 +201,24 @@ pub fn schedule_retry_policy(
 ) -> RetryPolicy {
     let seconds =
         |value: u64| LogicalDuration::from_seconds(i64::try_from(value).unwrap_or(i64::MAX));
-    let minimum = seconds(retry.min_backoff_seconds);
-    let maximum = seconds(retry.max_backoff_seconds.max(retry.min_backoff_seconds));
+    // A zero minimum and a zero maximum backoff together are stored as the defaults, 5 s and 3600 s (run
+    // `f123d4fa2d61c5f5`, the job asked for `0s` and `0s`: Cloud Scheduler read back `5s` and `3600s`); only that pair
+    // was recorded, so either alone is kept as declared.
+    let (min_seconds, max_seconds) =
+        if retry.min_backoff_seconds == 0 && retry.max_backoff_seconds == 0 {
+            (5, 3_600)
+        } else {
+            (
+                retry.min_backoff_seconds,
+                retry.max_backoff_seconds.max(retry.min_backoff_seconds),
+            )
+        };
+    let minimum = seconds(min_seconds);
+    let maximum = seconds(max_seconds);
+    // The count is `retryCount` further attempts; a window with no count is the policy's window alone (the policy goes on
+    // while the next attempt fits it), so the count is just the first attempt.
     let attempts = if generation == fireemu_core_functions::manifest::FunctionGeneration::First {
         1
-    } else if retry.retry_count == 0 && retry.max_retry_seconds > 0 {
-        u32::MAX
     } else {
         retry.retry_count.saturating_add(1)
     };
@@ -212,7 +227,10 @@ pub fn schedule_retry_policy(
         minimum,
         maximum,
         retry.max_doublings,
-        (retry.max_retry_seconds > 0).then(|| seconds(retry.max_retry_seconds)),
+        // a first-generation schedule's handler is never retried, so no window can keep its chain going
+        (retry.max_retry_seconds > 0
+            && generation != fireemu_core_functions::manifest::FunctionGeneration::First)
+            .then(|| seconds(retry.max_retry_seconds)),
     )
     .unwrap_or_else(|_| {
         // Unreachable for a validated manifest (`minimum <= maximum`, attempts >= 1); one attempt is the safe answer.

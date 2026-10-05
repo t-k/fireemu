@@ -2141,3 +2141,88 @@ test("the recording has no schedRetryV1 frame: that row is not made", () => {
   const without = { ...p, frames: p.frames.filter((f) => f.handler !== "schedRetryV1") };
   assert.equal(rowOf(without, localWithMessages(), "v1.retry-declaration-no-retry"), undefined);
 });
+
+// ---- run f123d4fa2d61c5f5's count-and-window and zero-backoff chains ----
+
+/** The synthetic recording with the two chains run 3 added (frames of the REST jobs `count` and `zerobackoff`). */
+function productionWithRun3Chains() {
+  const p = production();
+  let base = 40_000_000;
+  const frames = [];
+  for (const [key, offsets] of [
+    ["count", [0, 4.65, 13.26, 23.88]],
+    ["zerobackoff", [0, 5.62]],
+  ]) {
+    base += 1_000_000;
+    for (const o of offsets)
+      frames.push(
+        prodV2(
+          "schedRetryV2",
+          base + Math.round(o * 1000),
+          "2026-12-31T16:00:00-08:00",
+          `fe-sd-0123456789abcdef-${key}`,
+        ),
+      );
+  }
+  return { ...p, frames: [...p.frames, ...frames] };
+}
+function localWithRun3Chains(over = {}) {
+  const l = local();
+  const chains = { retryCountWindow: [0, 4, 12, 22], retryZeroBackoff: [0, 5], ...over };
+  const probe = [...l.probe.lines];
+  let at = 5_000_000;
+  for (const [name, offsets] of Object.entries(chains)) {
+    at += 100_000;
+    for (const o of offsets)
+      probe.push({ at: instant(T0 + at + o * 1000), kind: "PROBE", value: { handler: name } });
+  }
+  return { ...l, probe: { ...l.probe, lines: probe } };
+}
+
+test("the count-and-window and zero-backoff chains match a local chain of the recorded attempts, and diverge from any other", () => {
+  const p = productionWithRun3Chains();
+  const v = verdicts(p, localWithRun3Chains());
+  assert.equal(v["retry.retryCountWindow"], "MATCH");
+  assert.equal(v["retry.retryZeroBackoff"], "MATCH");
+  // the first-limit model stopped the count job at three attempts
+  assert.equal(
+    verdicts(p, localWithRun3Chains({ retryCountWindow: [0, 4, 12] }))["retry.retryCountWindow"],
+    "DIVERGES",
+  );
+  // a fifth attempt
+  assert.equal(
+    verdicts(p, localWithRun3Chains({ retryCountWindow: [0, 4, 12, 22, 32] }))[
+      "retry.retryCountWindow"
+    ],
+    "DIVERGES",
+  );
+  // zero backoff as a hot loop (a retry every clock move), or no retry at all
+  assert.equal(
+    verdicts(p, localWithRun3Chains({ retryZeroBackoff: [0, 1, 2, 3, 4, 5] }))[
+      "retry.retryZeroBackoff"
+    ],
+    "DIVERGES",
+  );
+  assert.equal(
+    verdicts(p, localWithRun3Chains({ retryZeroBackoff: [0] }))["retry.retryZeroBackoff"],
+    "DIVERGES",
+  );
+  // a gap the recording does not allow: the second attempt of the zero-backoff chain 9 s after the first
+  assert.equal(
+    verdicts(p, localWithRun3Chains({ retryZeroBackoff: [0, 9] }))["retry.retryZeroBackoff"],
+    "DIVERGES",
+  );
+  // a local run without the probe functions has no chain: it diverges, it does not match vacuously
+  assert.equal(verdicts(p, local())["retry.retryCountWindow"], "DIVERGES");
+});
+
+test("the run 3 chain rows exist only for a recording that has those chains", () => {
+  const v = verdicts(production(), local());
+  assert.equal("retry.retryCountWindow" in v, false);
+  assert.equal("retry.retryZeroBackoff" in v, false);
+  assert.deepEqual(
+    productionChains(productionWithRun3Chains()).retryCountWindow,
+    [0, 4.65, 13.26, 23.88],
+  );
+  assert.deepEqual(productionChains(productionWithRun3Chains()).retryZeroBackoff, [0, 5.62]);
+});

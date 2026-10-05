@@ -1333,6 +1333,99 @@ fn assert_refused(s: &mut FirestoreState, writes: &[Write], what: &str) {
     );
 }
 
+/// What a transaction's `state == "in"` query over `rg` locks, against a model: a write is
+/// refused exactly when the document it replaces or the document it leaves behind is in the
+/// queried range, whatever the write is and wherever the document stood before.
+mod range_lock_model {
+    use super::*;
+    use fireemu_core_firestore::query::{Query, QueryScope};
+    use fireemu_core_types::ids::CollectionId;
+    use proptest::prelude::*;
+
+    #[derive(Debug, Clone, Copy)]
+    enum Stored {
+        Absent,
+        State(bool),
+        NoState,
+    }
+
+    impl Stored {
+        fn in_range(self) -> bool {
+            matches!(self, Self::State(true))
+        }
+    }
+
+    fn stored() -> impl Strategy<Value = Stored> {
+        prop_oneof![
+            Just(Stored::Absent),
+            any::<bool>().prop_map(Stored::State),
+            Just(Stored::NoState),
+        ]
+    }
+
+    fn write_of(name: &str, after: Stored) -> Write {
+        let path = format!("rg/{name}");
+        match after {
+            Stored::Absent => delete_write(&path),
+            Stored::State(inside) => set(
+                &path,
+                &[(
+                    "state",
+                    Value::String(if inside { "in" } else { "out" }.into()),
+                )],
+            ),
+            Stored::NoState => set(&path, &[("other", Value::Integer(1))]),
+        }
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(256))]
+
+        #[test]
+        fn a_write_is_refused_exactly_when_the_range_covers_what_it_replaces_or_leaves(
+            before in proptest::collection::vec(stored(), 4),
+            after in proptest::collection::vec(stored(), 4),
+            order in proptest::collection::vec(0_usize..4, 1..4),
+        ) {
+            let mut s = FirestoreState::new();
+            let names = ["d0", "d1", "d2", "d3"];
+            let seed: Vec<Write> = names
+                .iter()
+                .zip(&before)
+                .filter(|(_, b)| !matches!(b, Stored::Absent))
+                .map(|(n, b)| write_of(n, *b))
+                .collect();
+            if !seed.is_empty() {
+                s.commit(&seed, None, t(0)).unwrap();
+            }
+            let q = Query::new(QueryScope::collection(None, CollectionId::try_new("rg").unwrap()))
+                .with_filter(state_is("in"))
+                .canonicalize()
+                .unwrap();
+            let txn = s.begin_transaction(false, t(1)).unwrap();
+            let seen = s.run_query_in_transaction(&txn, &q).unwrap().len();
+            prop_assert_eq!(seen, before.iter().filter(|b| b.in_range()).count());
+            // every writer is a separate plain commit against the lock; only a refused one leaves the store as it was
+            let mut current = before.clone();
+            for index in order {
+                let write = write_of(names[index], after[index]);
+                let locked = current[index].in_range() || after[index].in_range();
+                let outcome = s.commit(&[write], None, t(2));
+                if locked {
+                    let refused = outcome.unwrap_err();
+                    prop_assert!(
+                        matches!(&refused, FirestoreError::Aborted(m) if m == TOO_MUCH_CONTENTION),
+                        "{refused}"
+                    );
+                } else {
+                    prop_assert!(outcome.is_ok(), "{outcome:?}");
+                    current[index] = after[index];
+                }
+            }
+        }
+    }
+}
+
 #[test]
 fn a_filtered_query_locks_only_the_documents_that_match_its_filter() {
     let (mut s, _txn) = filtered_range_lock();

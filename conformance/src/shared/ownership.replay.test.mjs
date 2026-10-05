@@ -131,7 +131,12 @@ describe("replays of recorded production answers", () => {
     const plain = replay(fx.ops);
     const resumed = replay(fx.ops, { reopenEvery: 7 });
     assert.deepEqual(resumed.tally, plain.tally);
-    assert.deepEqual(resumed.report, plain.report);
+    // The two replays ran at different real times, so compare the reports without the times.
+    const untimed = (report) => ({
+      ...report,
+      details: report.details.map(({ name, action, reason }) => ({ name, action, reason })),
+    });
+    assert.deepEqual(untimed(resumed.report), untimed(plain.report));
   });
 
   it("Cloud Scheduler: the delete of a paused job answered 409, so the job and the calendar topic stay owned", () => {

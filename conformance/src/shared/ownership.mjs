@@ -24,6 +24,9 @@ import { dirname } from "node:path";
 
 export const LEDGER_VERSION = 1;
 
+/** How long after an unknown answer a GET that finds nothing may settle it (the owner's A2: 10 minutes). */
+export const SETTLE_ABSENT_AFTER_MS = 10 * 60 * 1000;
+
 /** The answer classes of a create or delete. */
 export const ANSWER_CLASSES = Object.freeze(["ok", "conflict", "notFound", "refused", "unknown"]);
 
@@ -154,14 +157,24 @@ function applyAnswer(state, row) {
       st.created = true;
       st.via = "create";
     } else if (klass === "unknown") {
-      st.unsettled = { action: "create", ticket: row.ticket, reason: row.reason ?? "unknown" };
+      st.unsettled = {
+        action: "create",
+        ticket: row.ticket,
+        reason: row.reason ?? "unknown",
+        since: Date.parse(row.at),
+      };
     }
     return;
   }
   if (klass === "ok" || klass === "notFound") {
     st.owned = false;
   } else if (klass === "unknown") {
-    st.unsettled = { action: "delete", ticket: row.ticket, reason: row.reason ?? "unknown" };
+    st.unsettled = {
+      action: "delete",
+      ticket: row.ticket,
+      reason: row.reason ?? "unknown",
+      since: Date.parse(row.at),
+    };
     st.deleteUnknown = true;
     state.unknownDeletes += 1;
   }
@@ -172,6 +185,11 @@ function applyRead(state, row) {
   if (!st || !st.unsettled) return;
   if (row.observed === "unknown") return;
   const settled = st.unsettled;
+  // Only positive evidence settles an answer at once: a GET that shows the name. A GET that finds
+  // nothing settles only after the settle delay: until then the request may still take effect
+  // (a late create) or the read may be stale, so absence alone proves nothing.
+  if (row.observed === "absent" && Date.parse(row.at) - settled.since < state.settleAbsentAfterMs)
+    return;
   st.unsettled = null;
   if (settled.action === "create") {
     if (row.observed === "present") {
@@ -241,6 +259,9 @@ function parseRows(text, runId) {
     ) {
       throw new OwnershipError("corrupt-ledger", `ledger line ${index + 1} is not a ledger row`);
     }
+    if (typeof row.at !== "string" || Number.isNaN(Date.parse(row.at))) {
+      throw new OwnershipError("corrupt-ledger", `ledger line ${index + 1} has no valid time`);
+    }
     if (row.runId !== runId) {
       throw new OwnershipError(
         "foreign-run",
@@ -278,7 +299,13 @@ function newState(runId, now, io) {
  * Opens (or resumes) the ledger of one run. An existing ledger is replayed; a row of another run
  * is refused. An intent with no answer (the process died after sending) becomes an unknown answer.
  */
-export function openOwnership({ path, runId, now = Date.now, io = { writeSync, fsyncSync } }) {
+export function openOwnership({
+  path,
+  runId,
+  now = Date.now,
+  io = { writeSync, fsyncSync },
+  settleAbsentAfterMs = SETTLE_ABSENT_AFTER_MS,
+}) {
   if (typeof path !== "string" || path === "")
     throw new OwnershipError("bad-path", "a ledger path is required");
   if (typeof runId !== "string" || !/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/u.test(runId)) {
@@ -287,7 +314,11 @@ export function openOwnership({ path, runId, now = Date.now, io = { writeSync, f
       "a run id is 1 to 64 characters of letters, digits, dot, underscore and hyphen",
     );
   }
+  if (!Number.isSafeInteger(settleAbsentAfterMs) || settleAbsentAfterMs < 0) {
+    throw new OwnershipError("bad-settle-delay", "settleAbsentAfterMs is a non-negative integer");
+  }
   const state = newState(runId, now, io);
+  state.settleAbsentAfterMs = settleAbsentAfterMs;
   let dropped = 0;
   const existed = existsSync(path);
   if (existed) {
@@ -407,8 +438,7 @@ export function recordAnswer(state, ticket, answer) {
     status: classified.status ?? null,
     ...(classified.reason ? { reason: classified.reason } : {}),
   };
-  append(state, row);
-  applyAnswer(state, row);
+  applyAnswer(state, append(state, row));
   return classified;
 }
 
@@ -437,8 +467,7 @@ export function recordRead(state, { name, transport, answer }) {
     observed: read.observed,
     ...(read.reason ? { reason: read.reason } : {}),
   };
-  append(state, row);
-  applyRead(state, row);
+  applyRead(state, append(state, row));
   return read.observed;
 }
 
@@ -473,7 +502,12 @@ export function unsettledNames(state) {
 function unsettledDetails(state) {
   return [...state.names]
     .filter(([, st]) => st.unsettled)
-    .map(([name, st]) => ({ name, action: st.unsettled.action, reason: st.unsettled.reason }))
+    .map(([name, st]) => ({
+      name,
+      action: st.unsettled.action,
+      reason: st.unsettled.reason,
+      absentSettlesAt: new Date(st.unsettled.since + state.settleAbsentAfterMs).toISOString(),
+    }))
     .toSorted((a, b) => (a.name < b.name ? -1 : 1)); // names are unique, so no pair is equal
 }
 

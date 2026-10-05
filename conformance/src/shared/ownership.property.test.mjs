@@ -26,7 +26,10 @@ import {
 const BASE_SEED = 0x5eed_0835;
 const CASES = 600;
 const NAMES = ["n0", "n1", "n2", "n3"];
-const NOW = () => 1_788_000_000_000;
+const BASE_TIME = 1_788_000_000_000;
+const SETTLE = 10 * 60 * 1000;
+let clock = BASE_TIME;
+const NOW = () => clock;
 
 /** mulberry32: a small deterministic generator. */
 function prng(seed) {
@@ -99,19 +102,21 @@ function reference(history) {
       if (event.klass === "ok") {
         owned = true;
         created = true;
-      } else if (event.klass === "unknown") pending = "create";
+      } else if (event.klass === "unknown") pending = { action: "create", since: event.t };
     } else if (event.kind === "delete") {
       if (event.klass === "ok" || event.klass === "notFound") owned = false;
       else if (event.klass === "unknown") {
-        pending = "delete";
+        pending = { action: "delete", since: event.t };
         noResend = true;
       }
     } else if (event.kind === "read" && pending && event.observed !== "unknown") {
-      if (pending === "create" && event.observed === "present") {
+      // Presence settles at once; absence only SETTLE after the unknown answer.
+      if (event.observed === "absent" && event.t - pending.since < SETTLE) continue;
+      if (pending.action === "create" && event.observed === "present") {
         owned = true;
         created = true;
       }
-      if (pending === "delete" && event.observed === "absent") owned = false;
+      if (pending.action === "delete" && event.observed === "absent") owned = false;
       pending = null;
     }
   }
@@ -172,6 +177,7 @@ function runCase(index) {
   const io = spyIo(events, index % 20 === 0);
   const history = new Map(NAMES.map((name) => [name, []]));
   let unknownDeleteSeen = false;
+  clock = BASE_TIME;
   const where = `case ${index} (seed ${seed}${collisions ? ", collisions" : ""})`;
 
   let state = openOwnership({ path, runId: "prop", io, now: NOW });
@@ -235,6 +241,9 @@ function runCase(index) {
 
   const steps = 6 + rng.int(28);
   for (let step = 0; step < steps; step += 1) {
+    // Time passes between requests: often a little, sometimes the whole settle delay, now and then
+    // one millisecond short of it.
+    clock += rng.pick([0, 5, 1000, SETTLE - 1, SETTLE, SETTLE + 1, 2 * SETTLE]);
     const name = rng.pick(NAMES);
     const w = world.names.get(name);
     const op = rng.pick(["create", "create", "delete", "delete", "read", "read", "noise", "crash"]);
@@ -265,7 +274,7 @@ function runCase(index) {
           if (action === "create" && !w.exists && rng.chance(0.5))
             Object.assign(w, { exists: true, creator: "run" });
           if (action === "delete" && w.exists && rng.chance(0.5)) w.exists = false;
-          history.get(name).push({ kind: action, klass: "unknown" });
+          history.get(name).push({ kind: action, klass: "unknown", t: clock });
           if (action === "delete") unknownDeleteSeen = true;
         }
       }
@@ -286,7 +295,7 @@ function runCase(index) {
       const observed = recordRead(state, { name, transport: "rest", answer });
       checkDurable("read", "read");
       assert.equal(observed, observedOf(answer), where);
-      history.get(name).push({ kind: "read", observed });
+      history.get(name).push({ kind: "read", observed, t: clock });
       events.length = 0;
       check(step);
       continue;
@@ -328,7 +337,7 @@ function runCase(index) {
       const klass = recordAnswer(state, ticket, answer).class;
       checkDurable("create answer", "answer");
       assert.equal(klass, classOf(answer), where);
-      history.get(name).push({ kind: "create", klass });
+      history.get(name).push({ kind: "create", klass, t: clock });
       events.length = 0;
       check(step);
       continue;
@@ -370,7 +379,7 @@ function runCase(index) {
     const klass = recordAnswer(state, ticket, answer).class;
     checkDurable("delete answer", "answer");
     assert.equal(klass, classOf(answer), where);
-    history.get(name).push({ kind: "delete", klass });
+    history.get(name).push({ kind: "delete", klass, t: clock });
     if (klass === "unknown") unknownDeleteSeen = true;
     events.length = 0;
     check(step);

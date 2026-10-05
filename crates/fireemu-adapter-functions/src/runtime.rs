@@ -172,6 +172,44 @@ pub struct BlockingAuthTarget {
     owner: usize,
 }
 
+/// The retry policy of a scheduled function: `retryCount` further attempts after the first, spaced by Cloud
+/// Scheduler's bounded exponential backoff, and `maxRetrySeconds` as the window the chain must end inside.
+///
+/// A window with no count (`retryCount` 0, `maxRetrySeconds` positive) retries until the window ends: production
+/// attempted a job with `maxRetryDuration: 30s` and no count four times, at 0, 4.6, 13.2 and 23.7 seconds, the next
+/// attempt being past the window (second delivery recording, run `156715222b86ea44`). With both a count and a window
+/// (not recorded: production refused that job) the chain stops at whichever limit comes first. Neither is one attempt.
+#[must_use]
+pub fn schedule_retry_policy(
+    retry: &fireemu_core_functions::manifest::ScheduleRetryConfig,
+) -> RetryPolicy {
+    let seconds =
+        |value: u64| LogicalDuration::from_seconds(i64::try_from(value).unwrap_or(i64::MAX));
+    let minimum = seconds(retry.min_backoff_seconds);
+    let maximum = seconds(retry.max_backoff_seconds.max(retry.min_backoff_seconds));
+    let attempts = if retry.retry_count == 0 && retry.max_retry_seconds > 0 {
+        u32::MAX
+    } else {
+        retry.retry_count.saturating_add(1)
+    };
+    RetryPolicy::try_with_limits(
+        attempts,
+        minimum,
+        maximum,
+        retry.max_doublings,
+        (retry.max_retry_seconds > 0).then(|| seconds(retry.max_retry_seconds)),
+    )
+    .unwrap_or_else(|_| {
+        // Unreachable for a validated manifest (`minimum <= maximum`, attempts >= 1); one attempt is the safe answer.
+        RetryPolicy::try_new(
+            1,
+            LogicalDuration::from_seconds(0),
+            LogicalDuration::from_seconds(0),
+        )
+        .expect("one attempt with no backoff is a valid policy")
+    })
+}
+
 /// Static runtime configuration.
 #[derive(Clone)]
 pub struct FunctionsConfig {
@@ -4836,20 +4874,7 @@ impl FunctionsRuntime {
             let policy = if retry {
                 self.manifest.get(function).map_or(self.retry, |spec| {
                     if let Trigger::Schedule { retry, .. } = &spec.trigger {
-                        let seconds = |value: u64| {
-                            LogicalDuration::from_seconds(i64::try_from(value).unwrap_or(i64::MAX))
-                        };
-                        let minimum = seconds(retry.min_backoff_seconds);
-                        let maximum =
-                            seconds(retry.max_backoff_seconds.max(retry.min_backoff_seconds));
-                        RetryPolicy::try_with_limits(
-                            retry.retry_count.saturating_add(1),
-                            minimum,
-                            maximum,
-                            retry.max_doublings,
-                            (retry.max_retry_seconds > 0).then(|| seconds(retry.max_retry_seconds)),
-                        )
-                        .unwrap_or(self.retry)
+                        schedule_retry_policy(retry)
                     } else {
                         self.retry
                     }

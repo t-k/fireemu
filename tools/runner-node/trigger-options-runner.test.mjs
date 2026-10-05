@@ -254,6 +254,15 @@ test('zero schedule retry expression is false and null/reset numeric options rem
   assert.deepEqual(f.spec('subject')?.trigger.retryConfig,{retryCount:0,maxRetrySeconds:null,minBackoffSeconds:null});
 });
 
+test('a schedule with a retry window and no retry count retries (recorded: run 156715222b86ea44, maxRetryDuration 30s retried until the window ended)',async t=>{
+  const f=await start(t,`define('window','gcfv2',{scheduleTrigger:{schedule:'every 5 minutes',retryConfig:{retryCount:0,maxRetrySeconds:30,minBackoffSeconds:4,maxBackoffSeconds:10}}});define('windowOnly','gcfv2',{scheduleTrigger:{schedule:'every 5 minutes',retryConfig:{maxRetrySeconds:30}}});define('zeroWindow','gcfv2',{scheduleTrigger:{schedule:'every 5 minutes',retryConfig:{retryCount:0,maxRetrySeconds:0}}});define('nullWindow','gcfv2',{scheduleTrigger:{schedule:'every 5 minutes',retryConfig:{retryCount:0,maxRetrySeconds:null}}});define('counted','gcfv2',{scheduleTrigger:{schedule:'every 5 minutes',retryConfig:{retryCount:2,maxRetrySeconds:30}}});`);
+  assert.equal(f.spec('window')?.retry,true);
+  assert.equal(f.spec('windowOnly')?.retry,true);
+  assert.equal(f.spec('zeroWindow')?.retry,false);
+  assert.equal(f.spec('nullWindow')?.retry,false);
+  assert.equal(f.spec('counted')?.retry,true);
+});
+
 test('schedule/task retry metadata is detached and cannot replace its JSON envelope',async t=>{
   const f=await start(t,`const retry={retryCount:3};define('subject','gcfv2',{scheduleTrigger:{schedule:'every 5 minutes',retryConfig:retry}});const later=define('later','gcfv2',{taskQueueTrigger:{}});Object.defineProperty(later.__endpoint,'omit',{get(){retry.retryCount=0;return false;}});`);
   assert.equal(f.spec('subject')?.retry,true);assert.equal(f.spec('subject')?.trigger.retryConfig.retryCount,3);

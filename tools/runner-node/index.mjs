@@ -620,7 +620,10 @@ function describeSchedule(base, value) {
     SCHEDULE_RETRY_FIELDS, base.generation === 1 ? V1_SCHEDULE_DURATIONS : undefined);
   return {
     ...base,
-    retry: (retryConfig.retryCount ?? 0) > 0,
+    // Production retries a job with a retry window and no count until the window ends (a job with
+    // `maxRetryDuration: 30s` and no `retryCount` was attempted four times in run 156715222b86ea44), so a window
+    // alone is a retry declaration too.
+    retry: (retryConfig.retryCount ?? 0) > 0 || (retryConfig.maxRetrySeconds ?? 0) > 0,
     trigger: { type: "schedule", schedule, timeZone, retryConfig },
   };
 }

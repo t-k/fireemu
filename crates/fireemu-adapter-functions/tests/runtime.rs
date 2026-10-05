@@ -2505,6 +2505,86 @@ async fn schedule_retry_options_control_attempts_and_logical_backoff() {
     runtime.runner().shutdown().await;
 }
 
+/// Recorded (run `156715222b86ea44`): a job with `maxRetryDuration: 30s`, no retry count, `minBackoff 4s` and
+/// `maxBackoff 10s` was attempted at 0, 4.6, 13.2 and 23.7 seconds and then stopped, the next attempt being past the
+/// window. The logical clock has no dispatch latency, so the attempts are at 0, 4, 12 and 22.
+#[tokio::test]
+async fn a_retry_window_without_a_count_retries_until_the_window_ends() {
+    use fireemu_core_functions::manifest::{ScheduleRetryConfig, Trigger};
+    let (runtime, clock) = start_runtime(
+        fireemu_adapter_functions::runtime::OverlapPolicy::Allow,
+        fireemu_adapter_functions::runtime::CatchUpPolicy::All,
+        4,
+        false,
+        Vec::new(),
+        1000,
+        |manifest| {
+            let spec = manifest
+                .functions
+                .iter_mut()
+                .find(|f| f.name == "failSchedule")
+                .unwrap();
+            let Trigger::Schedule {
+                schedule,
+                time_zone,
+                ..
+            } = spec.trigger.clone()
+            else {
+                panic!("failSchedule is scheduled");
+            };
+            spec.trigger = Trigger::Schedule {
+                schedule,
+                time_zone,
+                retry: ScheduleRetryConfig {
+                    retry_count: 0,
+                    max_retry_seconds: 30,
+                    max_backoff_seconds: 10,
+                    max_doublings: 5,
+                    min_backoff_seconds: 4,
+                },
+            };
+            spec.retry = true;
+        },
+    )
+    .await;
+    let attempts = |runtime: &FunctionsRuntime| -> Vec<u32> {
+        runtime
+            .history()
+            .iter()
+            .filter(|record| record.function == "failSchedule")
+            .map(|record| record.attempt)
+            .collect()
+    };
+    runtime.run_schedule("failSchedule").unwrap();
+    let _ = runtime.await_idle(Duration::from_millis(300)).await;
+    assert_eq!(attempts(&runtime), vec![1]);
+    // 4, 8 and then the 10 s cap: attempts 2, 3 and 4 at 4, 12 and 22 seconds.
+    for (advance, expected) in [(3, 1), (1, 2), (7, 2), (1, 3), (9, 3), (1, 4)] {
+        clock
+            .lock()
+            .unwrap()
+            .advance(LogicalDuration::from_seconds(advance))
+            .unwrap();
+        runtime.on_clock_changed();
+        let _ = runtime.await_idle(Duration::from_millis(300)).await;
+        assert_eq!(attempts(&runtime).len(), expected, "after +{advance}s");
+    }
+    // The fifth attempt would be at 32 seconds, past the 30 second window: none, however far the clock goes.
+    clock
+        .lock()
+        .unwrap()
+        .advance(LogicalDuration::from_seconds(600))
+        .unwrap();
+    runtime.on_clock_changed();
+    let _ = runtime.await_idle(Duration::from_millis(300)).await;
+    assert_eq!(attempts(&runtime), vec![1, 2, 3, 4]);
+    assert!(runtime
+        .dead_letters()
+        .iter()
+        .any(|record| record.function == "failSchedule" && record.attempt == 4));
+    runtime.runner().shutdown().await;
+}
+
 #[test]
 fn manifest_json_round_trips_and_rejects_bad_input() {
     let v = json!({"functions": [

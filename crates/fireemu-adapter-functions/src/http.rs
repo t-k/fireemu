@@ -1177,19 +1177,26 @@ fn eventarc_mutation_response(result: Result<(), String>) -> Response<OutBody> {
     }
 }
 
-/// A fresh 16-hex ID for the answers that carry a `requestId`: the clock and a counter, mixed.
+/// The 16 hex digits of a `requestId`: ten for the seconds (their low 40 bits) and six for the counter
+/// (its low 24 bits), so two requests of one process never share one.
+fn format_request_id(seconds: u64, counter: u64) -> String {
+    format!(
+        "{:010x}{:06x}",
+        seconds & 0xff_ffff_ffff,
+        counter & 0xff_ffff
+    )
+}
+
+/// A fresh 16-hex ID for the answers that carry a `requestId`.
 fn request_id() -> String {
     static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-    let nanos = std::time::SystemTime::now()
+    let seconds = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
-        .map_or(0, |elapsed| elapsed.as_nanos());
-    let mut state = u64::try_from(nanos & u128::from(u64::MAX)).unwrap_or(0)
-        ^ COUNTER
-            .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
-            .wrapping_mul(0x9E37_79B9_7F4A_7C15);
-    state = (state ^ (state >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
-    state = (state ^ (state >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
-    format!("{:016x}", state ^ (state >> 31))
+        .map_or(0, |elapsed| elapsed.as_secs());
+    format_request_id(
+        seconds,
+        COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
+    )
 }
 
 /// Whether a request carries `Authorization: Bearer <token>` with a token. The token is not verified:
@@ -2210,7 +2217,7 @@ mod streaming_tests {
 
 #[cfg(test)]
 mod strict_eventarc_tests {
-    use super::{has_bearer_credential, request_id};
+    use super::{format_request_id, has_bearer_credential, request_id};
     use hyper::header::{HeaderMap, HeaderValue, AUTHORIZATION};
 
     fn headers(value: Option<&str>) -> HeaderMap {
@@ -2260,23 +2267,48 @@ mod strict_eventarc_tests {
     }
 
     #[test]
-    fn a_request_id_is_sixteen_lower_case_hex_digits_and_each_is_new() {
-        let ids: Vec<String> = (0..2000).map(|_| request_id()).collect();
+    fn a_request_id_is_ten_digits_of_the_time_and_six_of_a_counter() {
+        assert_eq!(format_request_id(0, 0), "0000000000000000");
+        assert_eq!(
+            format_request_id(0x12_3456_789a, 0xbc_def0),
+            "123456789abcdef0"
+        );
+        assert_eq!(format_request_id(1, 2), "0000000001000002");
+        // Only the low 40 bits of the seconds and the low 24 bits of the counter are kept.
+        assert_eq!(
+            format_request_id(0x100_0000_0000, 0x100_0000),
+            "0000000000000000"
+        );
+        assert_eq!(format_request_id(u64::MAX, u64::MAX), "ffffffffffffffff");
+    }
+
+    #[test]
+    fn a_request_id_is_sixteen_lower_case_hex_digits_dated_now_and_each_is_new() {
+        let now = || {
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_secs()
+        };
+        let before = now();
+        let ids: Vec<String> = (0..50).map(|_| request_id()).collect();
+        let after = now();
         for id in &ids {
             assert_eq!(id.len(), 16, "{id}");
             assert!(
                 id.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f')),
                 "{id}"
             );
+            let seconds = u64::from_str_radix(&id[..10], 16).unwrap();
+            assert!((before..=after).contains(&seconds), "{id}");
         }
-        let mut unique = ids.clone();
-        unique.sort();
-        unique.dedup();
-        assert_eq!(unique.len(), ids.len(), "no two ids are alike");
-        assert!(
-            ids.iter()
-                .any(|id| id.as_bytes()[0] != ids[0].as_bytes()[0]),
-            "the high digits move too"
-        );
+        let counters: Vec<u64> = ids
+            .iter()
+            .map(|id| u64::from_str_radix(&id[10..], 16).unwrap())
+            .collect();
+        for pair in counters.windows(2) {
+            // Another test may take a number in between, so "later" rather than "next".
+            assert!(pair[1] > pair[0], "the counter only moves forward");
+        }
     }
 }

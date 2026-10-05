@@ -513,13 +513,12 @@ impl Attribute {
             }
             Self::Text(length) | Self::Bytes(length) => field_len(*length),
             Self::Timestamp { seconds, nanos } => {
-                let seconds_len = if *seconds == 0 {
-                    0
-                } else {
-                    1 + if *seconds < 0 {
-                        10
-                    } else {
-                        varint_len(u64::try_from(*seconds).unwrap_or(0))
+                // A negative int64 is ten bytes on the wire; zero is not written at all.
+                let seconds_len = match seconds.cmp(&0) {
+                    std::cmp::Ordering::Less => 1 + 10,
+                    std::cmp::Ordering::Equal => 0,
+                    std::cmp::Ordering::Greater => {
+                        1 + varint_len(u64::try_from(*seconds).unwrap_or(0))
                     }
                 };
                 let nanos_len = if *nanos == 0 {

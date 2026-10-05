@@ -206,3 +206,16 @@ def test_the_transport_prefers_the_per_request_timeout_from_the_plan():
         }
     )
     assert response["complete"] is False
+
+
+def test_the_runtime_binding_keeps_the_full_inputs_unless_the_narrower_set_is_selected(monkeypatch):
+    from evidence_common import BINARY_INPUTS_SCHEME, binary_inputs, runtime_inputs
+
+    root = Path(__file__).resolve().parents[3]
+    full = shadow.runtime_binding(Path(__file__), root)
+    assert full["runtimeInputCount"] == len(runtime_inputs(root)) and "runtimeInputsScheme" not in full
+    monkeypatch.setattr(shadow, "RUNTIME_INPUTS", binary_inputs)
+    narrow = shadow.runtime_binding(Path(__file__), root)
+    assert narrow["runtimeInputCount"] == len(binary_inputs(root)) < full["runtimeInputCount"]
+    assert narrow["runtimeInputsDigest"] != full["runtimeInputsDigest"]
+    assert narrow["runtimeInputsScheme"] == BINARY_INPUTS_SCHEME

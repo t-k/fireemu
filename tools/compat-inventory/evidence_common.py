@@ -156,6 +156,54 @@ def runtime_inputs_at_commit(commit: str, root: Path = ROOT) -> dict:
     return result
 
 
+#: The definition of `binary_inputs`, recorded beside a digest of them so a reader knows which set it describes.
+BINARY_INPUTS_SCHEME = "binary-v1"
+
+#: Directories directly under a crate that no build of the crate's library or binary reads: integration tests (and their
+#: fixtures), benchmarks, examples and proptest regression files.
+_TEST_ONLY_TREES = ("tests", "benches", "examples", "proptest-regressions")
+_TEST_ONLY_PATH = re.compile(r"^crates/[^/]+/(?:" + "|".join(_TEST_ONLY_TREES) + r")/")
+_INCLUDING = re.compile(
+    r"include_str!|include_bytes!|include!|#\[\s*path\s*=|#\[\s*cfg_attr\([^\]]*path\s*="
+)
+
+
+def _binary_input(name: str) -> bool:
+    return _TEST_ONLY_PATH.match(name) is None
+
+
+def binary_inputs(root: Path) -> dict:
+    """What a debug build of `fireemu` is made from: the runtime inputs without the test-only trees of the crates (see
+    `_TEST_ONLY_TREES`). A change to an integration test cannot change the binary, so it must not move this set; any other
+    change to the crates, the manifests, the lock, the toolchain or `.cargo` does. `source_files_including_test_only_trees`
+    proves that no source file reaches into the excluded trees."""
+    return {name: value for name, value in runtime_inputs(root).items() if _binary_input(name)}
+
+
+def binary_inputs_at_commit(commit: str, root: Path = ROOT) -> dict:
+    return {name: value for name, value in runtime_inputs_at_commit(commit, root).items() if _binary_input(name)}
+
+
+def source_files_including_test_only_trees(root: Path) -> list:
+    """The source files and build scripts of the crates that name a test-only tree in an include macro or a module path: the
+    only ways a file of an excluded tree could enter a build. A module path under a `cfg(...)` attribute that names `test`
+    is a test build's own and is not reported."""
+    found = []
+    for name in sorted(runtime_inputs(root)):
+        if not _binary_input(name) or not name.endswith(".rs"):
+            continue
+        lines = (root / name).read_text(errors="replace").splitlines()
+        for index, line in enumerate(lines):
+            if not _INCLUDING.search(line) or not any(re.search(rf"(?:^|[/\"]){tree}[/\"]", line) for tree in _TEST_ONLY_TREES):
+                continue
+            gate = [other.strip() for other in lines[max(0, index - 3):index] if other.strip().startswith("#[cfg(")]
+            if line.lstrip().startswith("#[") and gate and re.search(r"\btest\b", gate[-1]):
+                continue
+            found.append(name)
+            break
+    return found
+
+
 def _current_commit(root: Path) -> str:
     return subprocess.check_output(
         ["git", "rev-parse", "HEAD"], cwd=root, text=True

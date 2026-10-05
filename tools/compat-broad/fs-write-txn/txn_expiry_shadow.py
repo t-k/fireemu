@@ -37,10 +37,14 @@ import txn_expiry_collector as collector
 import txn_expiry_comparison as comparison
 import txn_expiry_plan as plan_module
 from broad_contract import digest
-from evidence_common import runtime_inputs
+from evidence_common import BINARY_INPUTS_SCHEME, binary_inputs, runtime_inputs
 from owned_runner import local_addresses
 import txn_wire
 import txn_sandbox_runtime as python_runtime
+
+#: The function that lists the source inputs a build is bound to. The recorded E04 comparison binds the narrower `binary_inputs` (the driver
+#: that makes it sets this); every other use keeps the full runtime inputs.
+RUNTIME_INPUTS = runtime_inputs
 
 CONTRACT = "txn-expiry-local-shadow-v1"
 PROJECT = "demo-local-shadow"
@@ -143,7 +147,7 @@ def runtime_binding(artifact, root):
         cwd=root,
         text=True,
     ).strip()
-    inputs = runtime_inputs(Path(root))
+    inputs = RUNTIME_INPUTS(Path(root))
     return {
         "artifactSha256": hashlib.sha256(artifact.read_bytes()).hexdigest(),
         "sourceCommit": commit,
@@ -154,6 +158,7 @@ def runtime_binding(artifact, root):
         "sourceRoot": REPOSITORY_ROOT_MARKER,
         "runtimeInputsDigest": digest(inputs),
         "runtimeInputCount": len(inputs),
+        **({"runtimeInputsScheme": BINARY_INPUTS_SCHEME} if RUNTIME_INPUTS is binary_inputs else {}),
         "runtimeInputsClean": dirty == "",
         "pythonRuntime": python_runtime.public_evidence(),
     }

@@ -1618,7 +1618,7 @@
               "precision": "documented-divergence"
             },
             {
-              "behaviour": "the strict profile refuses list filters it cannot apply (matchGlob, startOffset, endOffset and includeTrailingDelimiter=true) with 400, lists every generation for versions=true (object versioning is implemented, see the versioning entry), and refuses unsatisfiable media ranges with 416 and Content-Range; a nonzero suffix on an empty object is accepted as RFC 9110 section 14.1.1 specifies; the emulator profile retains the official emulator's behavior; https://cloud.google.com/storage/docs/json_api/v1/objects/list, https://cloud.google.com/storage/docs/json_api/v1/status-codes, https://www.rfc-editor.org/rfc/rfc9110.html#section-14.1.1",
+              "behaviour": "the strict profile applies the list filters startOffset (inclusive), endOffset (exclusive) and matchGlob to object names, as recorded (lean-v5), and refuses includeTrailingDelimiter=true with 400 (not recorded); versions=true lists every generation (object versioning is implemented, see the versioning entry) and the same three filters apply to every generation it lists (a versions listing with a filter was not recorded: the documented JSON API semantics are followed, not a refusal); the strict profile also refuses unsatisfiable media ranges with 416 and Content-Range; a nonzero suffix on an empty object is accepted as RFC 9110 section 14.1.1 specifies; the emulator profile retains the official emulator's behavior; https://cloud.google.com/storage/docs/json_api/v1/objects/list, https://cloud.google.com/storage/docs/json_api/v1/status-codes, https://www.rfc-editor.org/rfc/rfc9110.html#section-14.1.1",
               "precision": "conservative"
             }
           ],

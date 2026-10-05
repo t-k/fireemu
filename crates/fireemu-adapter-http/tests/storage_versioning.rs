@@ -903,3 +903,312 @@ fn an_empty_bucket_a_registered_session_project_declared_exists() {
         assert_eq!(get(BUCKET).status, 200);
     }
 }
+
+// ---------------------------------------------------------------------------------------------
+// `versions=true` with the list filters. Strict honours `startOffset` (inclusive), `endOffset`
+// (exclusive) and `matchGlob` on the names of every generation, as a plain listing does (recorded
+// for a plain listing, lean-v5; a versions listing with a filter was not recorded, so the
+// documented JSON API semantics are followed). The emulator profile ignores all three, as the
+// official emulator does.
+// ---------------------------------------------------------------------------------------------
+
+/// Uploads two generations of every name in `names` (the last generation is live).
+fn upload_twice(s: &StorageState, names: &[&str]) -> BTreeMap<String, Vec<u64>> {
+    let mut generations: BTreeMap<String, Vec<u64>> = BTreeMap::new();
+    for round in ["1", "22"] {
+        for name in names {
+            let item = upload(s, name, round);
+            generations
+                .entry((*name).to_owned())
+                .or_default()
+                .push(gen(&item));
+        }
+    }
+    generations
+}
+
+/// The `(name, generation)` pairs of every page of a versions listing with `extra` parameters.
+fn versions_listing(s: &StorageState, extra: &str) -> (Vec<(String, u64)>, Vec<String>) {
+    let mut items = Vec::new();
+    let mut prefixes = Vec::new();
+    let mut token: Option<String> = None;
+    for _ in 0..200 {
+        let paging = token
+            .as_ref()
+            .map_or(String::new(), |t| format!("&pageToken={t}"));
+        let r = call(
+            s,
+            "GET",
+            &format!("/storage/v1/b/{BUCKET}/o?versions=true{extra}{paging}"),
+            b"",
+        );
+        assert_eq!(r.status, 200, "{}", String::from_utf8_lossy(&r.body));
+        let page = body(&r);
+        for item in page["items"].as_array().cloned().unwrap_or_default() {
+            items.push((item["name"].as_str().unwrap().to_owned(), gen(&item)));
+        }
+        for prefix in page["prefixes"].as_array().cloned().unwrap_or_default() {
+            prefixes.push(prefix.as_str().unwrap().to_owned());
+        }
+        token = page["nextPageToken"].as_str().map(str::to_owned);
+        if token.is_none() {
+            return (items, prefixes);
+        }
+    }
+    panic!("a versions listing did not end");
+}
+
+const FILTER_NAMES: [&str; 6] = [
+    "a.txt",
+    "b.txt",
+    "dir/c.txt",
+    "dir/d.txt",
+    "dir2/e.txt",
+    "zz.txt",
+];
+
+fn expected_versions(
+    generations: &BTreeMap<String, Vec<u64>>,
+    keep: impl Fn(&str) -> bool,
+) -> Vec<(String, u64)> {
+    generations
+        .iter()
+        .filter(|(name, _)| keep(name))
+        .flat_map(|(name, gens)| gens.iter().map(|g| (name.clone(), *g)))
+        .collect()
+}
+
+#[test]
+fn strict_versions_listing_honours_start_offset_end_offset_and_match_glob_on_every_generation() {
+    let (s, _) = state(TokenAcceptance::Verified);
+    set_versioning(&s, true);
+    let generations = upload_twice(&s, &FILTER_NAMES);
+    // Every filter, alone and together, on one page and on pages of two.
+    for paging in ["", "&maxResults=2", "&maxResults=1"] {
+        let listing = |extra: &str| versions_listing(&s, &format!("{extra}{paging}")).0;
+        assert_eq!(
+            listing("&startOffset=b.txt"),
+            expected_versions(&generations, |n| n >= "b.txt"),
+            "startOffset{paging}"
+        );
+        assert_eq!(
+            listing("&endOffset=dir/d.txt"),
+            expected_versions(&generations, |n| n < "dir/d.txt"),
+            "endOffset{paging}"
+        );
+        assert_eq!(
+            listing("&startOffset=b.txt&endOffset=zz.txt"),
+            expected_versions(&generations, |n| n >= "b.txt" && n < "zz.txt"),
+            "both offsets{paging}"
+        );
+        assert_eq!(
+            listing("&matchGlob=dir/*"),
+            expected_versions(&generations, |n| n == "dir/c.txt" || n == "dir/d.txt"),
+            "matchGlob{paging}"
+        );
+        assert_eq!(
+            listing("&matchGlob=**.txt&startOffset=b&endOffset=dir2/"),
+            expected_versions(&generations, |n| n >= "b" && n < "dir2/"),
+            "glob and offsets{paging}"
+        );
+    }
+    // The delimiter folds the names that passed the filters, and only those.
+    let (items, prefixes) = versions_listing(&s, "&delimiter=/&matchGlob=dir/*");
+    assert!(items.is_empty(), "{items:?}");
+    assert_eq!(prefixes, vec!["dir/".to_owned()]);
+    let (items, prefixes) = versions_listing(&s, "&delimiter=/&startOffset=dir2/");
+    assert_eq!(prefixes, vec!["dir2/".to_owned()]);
+    assert_eq!(
+        items,
+        expected_versions(&generations, |n| n == "zz.txt"),
+        "{items:?}"
+    );
+}
+
+#[test]
+fn the_emulator_profile_ignores_the_filters_of_a_versions_listing() {
+    let (s, _) = state(TokenAcceptance::EmulatorMock);
+    set_versioning(&s, true);
+    let generations = upload_twice(&s, &FILTER_NAMES);
+    let all = expected_versions(&generations, |_| true);
+    for extra in [
+        "&startOffset=b.txt",
+        "&endOffset=dir/d.txt",
+        "&matchGlob=dir/*",
+        "&matchGlob=dir/*&startOffset=zz&endOffset=zzz&maxResults=3",
+    ] {
+        assert_eq!(versions_listing(&s, extra).0, all, "{extra}");
+    }
+}
+
+#[test]
+fn a_filtered_versions_page_token_resumes_inside_the_filtered_listing() {
+    let (s, _) = state(TokenAcceptance::Verified);
+    set_versioning(&s, true);
+    let generations = upload_twice(&s, &FILTER_NAMES);
+    let first = body(&call(
+        &s,
+        "GET",
+        &format!("/storage/v1/b/{BUCKET}/o?versions=true&matchGlob=dir/*&maxResults=1"),
+        b"",
+    ));
+    let c = &generations["dir/c.txt"];
+    assert_eq!(gen(&first["items"][0]), c[0]);
+    let token = first["nextPageToken"].as_str().unwrap().to_owned();
+    // The token names the second generation of `dir/c.txt`, so a page that follows it starts there.
+    let second = body(&call(
+        &s,
+        "GET",
+        &format!("/storage/v1/b/{BUCKET}/o?versions=true&matchGlob=dir/*&maxResults=1&pageToken={token}"),
+        b"",
+    ));
+    assert_eq!(gen(&second["items"][0]), c[1]);
+}
+
+#[test]
+fn a_noncurrent_item_of_a_strict_versions_listing_carries_the_production_etag_of_its_generation() {
+    use fireemu_core_storage::etag::production_etag;
+    for (acceptance, strict) in [
+        (TokenAcceptance::Verified, true),
+        (TokenAcceptance::EmulatorMock, false),
+    ] {
+        let (s, _) = state(acceptance);
+        set_versioning(&s, true);
+        upload(&s, "o.txt", "1");
+        upload(&s, "o.txt", "22");
+        let listing = body(&call(
+            &s,
+            "GET",
+            &format!("/storage/v1/b/{BUCKET}/o?versions=true"),
+            b"",
+        ));
+        let items = listing["items"].as_array().unwrap();
+        assert_eq!(items.len(), 2);
+        assert!(items[0].get("timeDeleted").is_some(), "{listing}");
+        for item in items {
+            let metageneration: u64 = item["metageneration"].as_str().unwrap().parse().unwrap();
+            let production = production_etag(gen(item), metageneration);
+            assert_eq!(
+                item["etag"].as_str().unwrap() == production,
+                strict,
+                "strict={strict}: {item}"
+            );
+        }
+        // The etag of two generations of one object differ.
+        assert_ne!(items[0]["etag"], items[1]["etag"]);
+    }
+}
+
+mod listing_properties {
+    use super::*;
+    use proptest::prelude::*;
+
+    const POOL: [&str; 8] = [
+        "a.txt",
+        "ab.txt",
+        "b.txt",
+        "dir/c.txt",
+        "dir/d.txt",
+        "dir/sub/e.txt",
+        "dir2/f.txt",
+        "z.txt",
+    ];
+
+    /// Glob patterns with a reference matcher written independently of the implementation:
+    /// `*` stops at `/`, `**` does not.
+    const GLOBS: [(&str, fn(&str) -> bool); 6] = [
+        ("*", |n| !n.contains('/')),
+        ("**", |_| true),
+        ("a*", |n| n.starts_with('a') && !n.contains('/')),
+        ("dir/*", |n| {
+            n.strip_prefix("dir/").is_some_and(|r| !r.contains('/'))
+        }),
+        ("dir/**", |n| n.starts_with("dir/")),
+        ("*.txt", |n| n.ends_with(".txt") && !n.contains('/')),
+    ];
+
+    #[derive(Debug, Clone)]
+    struct Case {
+        /// How many generations each pool name has (0 = absent).
+        generations: Vec<u8>,
+        start: Option<usize>,
+        end: Option<usize>,
+        glob: Option<usize>,
+        folded: bool,
+        page: usize,
+    }
+
+    fn case() -> impl Strategy<Value = Case> {
+        (
+            proptest::collection::vec(0u8..=3, POOL.len()),
+            proptest::option::of(0..POOL.len()),
+            proptest::option::of(0..POOL.len()),
+            proptest::option::of(0..GLOBS.len()),
+            any::<bool>(),
+            1usize..=5,
+        )
+            .prop_map(|(generations, start, end, glob, folded, page)| Case {
+                generations,
+                start,
+                end,
+                glob,
+                folded,
+                page,
+            })
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(48))]
+
+        /// The strict versions listing equals the reference: the generations of the names that pass
+        /// the offsets and the glob, in name then generation order, folded at the delimiter, however
+        /// the pages are cut. The emulator profile returns the whole listing.
+        #[test]
+        fn a_filtered_versions_listing_equals_the_reference_whatever_the_page_size(case in case()) {
+            let (strict, _) = state(TokenAcceptance::Verified);
+            let (emulator, _) = state(TokenAcceptance::EmulatorMock);
+            // Each profile draws its own generation numbers, so each has its own model.
+            let build = |s: &StorageState| {
+                set_versioning(s, true);
+                let mut model: BTreeMap<&str, Vec<u64>> = BTreeMap::new();
+                for round in 0..3u8 {
+                    for (index, name) in POOL.iter().enumerate() {
+                        if case.generations[index] > round {
+                            let item = upload(s, name, &round.to_string());
+                            model.entry(name).or_default().push(gen(&item));
+                        }
+                    }
+                }
+                model
+            };
+            let (strict_model, emulator_model) = (build(&strict), build(&emulator));
+            let mut extra = format!("&maxResults={}", case.page);
+            if let Some(i) = case.start { extra += &format!("&startOffset={}", POOL[i]); }
+            if let Some(i) = case.end { extra += &format!("&endOffset={}", POOL[i]); }
+            if let Some(i) = case.glob { extra += &format!("&matchGlob={}", GLOBS[i].0.replace('*', "%2A")); }
+            if case.folded { extra += "&delimiter=/"; }
+            let reference = |model: &BTreeMap<&str, Vec<u64>>, filtered: bool| {
+                let mut items = Vec::new();
+                let mut prefixes: Vec<String> = Vec::new();
+                for (name, gens) in model {
+                    let passes = !filtered
+                        || (case.start.is_none_or(|i| *name >= POOL[i])
+                            && case.end.is_none_or(|i| *name < POOL[i])
+                            && case.glob.is_none_or(|i| (GLOBS[i].1)(name)));
+                    if !passes { continue; }
+                    match name.find('/').filter(|_| case.folded) {
+                        Some(at) => {
+                            let prefix = name[..=at].to_owned();
+                            if prefixes.last() != Some(&prefix) { prefixes.push(prefix); }
+                        }
+                        None => items.extend(gens.iter().map(|g| ((*name).to_owned(), *g))),
+                    }
+                }
+                (items, prefixes)
+            };
+            prop_assert_eq!(versions_listing(&strict, &extra), reference(&strict_model, true), "strict {}", extra);
+            // The emulator profile (the official emulator) ignores the three filters.
+            prop_assert_eq!(versions_listing(&emulator, &extra), reference(&emulator_model, false), "emulator {}", extra);
+        }
+    }
+}

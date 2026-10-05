@@ -1044,3 +1044,134 @@ fn versioning_is_a_tri_state_per_bucket() {
     store.clear();
     assert_eq!(store.versioning_state(&other), None);
 }
+
+proptest! {
+    /// `version_keys_from` (the batch a filtered listing reads outside the store lock) is the
+    /// `list_versions` sequence from `from` on, cut to `max`, for any prefix; walking the keys in
+    /// batches of any size, each resuming just after the last key, yields every key once.
+    #[test]
+    fn version_keys_in_batches_equal_the_versions_listing(
+        writes in proptest::collection::vec((0u8..6, 0u8..3), 1..30),
+        prefix_len in 0usize..2,
+        from in proptest::option::of((0u8..6, 0u64..4)),
+        size in 1usize..7,
+    ) {
+        let mut store = StorageState::new(5);
+        let b = bucket();
+        store.set_versioning(&b, true);
+        let names = ["a", "a/x", "a/y", "b", "b/z/w", "c"];
+        for (step, (n, kind)) in writes.into_iter().enumerate() {
+            let key = names[usize::from(n)];
+            let now = t(i64::try_from(step).unwrap() + 1);
+            if kind == 0 {
+                let _ = store.delete(&b, &name(key), Precondition::default(), now);
+            } else {
+                store
+                    .put(&b, &name(key), vec![b'x'; usize::from(kind)], NewMetadata::default(), Precondition::default(), now)
+                    .unwrap();
+            }
+        }
+        let prefix = &"abc"[..prefix_len];
+        let all: Vec<(String, u64)> = store
+            .list_versions(&b, prefix)
+            .iter()
+            .map(|e| (e.object.name.as_str().to_owned(), e.object.generation))
+            .collect();
+        // From the start in one batch: everything.
+        prop_assert_eq!(store.version_keys_from(&b, prefix, None, usize::MAX), all.clone());
+        // From a key (which need not exist), inclusive: the keys at or after it.
+        if let Some((n, generation)) = from {
+            let start = (names[usize::from(n)], generation);
+            let expected: Vec<(String, u64)> = all
+                .iter()
+                .filter(|(name, g)| (name.as_str(), *g) >= start)
+                .take(size)
+                .cloned()
+                .collect();
+            prop_assert_eq!(store.version_keys_from(&b, prefix, Some(start), size), expected);
+        }
+        // Batches of `size`, each resuming after the last key: the whole sequence, once.
+        let mut walked = Vec::new();
+        let mut resume: Option<(String, u64)> = None;
+        loop {
+            let batch = store.version_keys_from(
+                &b,
+                prefix,
+                resume.as_ref().map(|(name, g)| (name.as_str(), *g)),
+                size,
+            );
+            let Some((last, generation)) = batch.last().cloned() else { break };
+            walked.extend(batch);
+            resume = Some((last, generation + 1));
+        }
+        prop_assert_eq!(walked, all);
+    }
+}
+
+proptest! {
+    /// Under the strict profile's identities (generations are microsecond timestamps) every write
+    /// path that archives draws from the one allocator: puts, copies, copies from a noncurrent
+    /// generation and resumable finalizes, however many land on the same instant, issue strictly
+    /// increasing generations, so live and noncurrent generations never collide and their order
+    /// is the order of the writes.
+    #[test]
+    fn every_archiving_write_path_draws_strictly_increasing_generations(
+        steps in proptest::collection::vec((0u8..4, 0u8..2, 0i64..2), 1..24),
+    ) {
+        let mut store = StorageState::new(7);
+        store.set_production_order(true);
+        let b = bucket();
+        store.set_versioning(&b, true);
+        let targets = [name("x.txt"), name("y.txt")];
+        let mut issued: Vec<u64> = Vec::new();
+        let mut now = 1i64;
+        for (path, target, advance) in steps {
+            now += advance;
+            let at = t(now);
+            let dst = &targets[usize::from(target)];
+            let written = match path {
+                0 => Some(store.put(&b, dst, b"p".to_vec(), NewMetadata::default(), Precondition::default(), at).unwrap()),
+                1 => store
+                    .copy((&b, &targets[usize::from(1 - target)]), (&b, dst), None, Precondition::default(), at)
+                    .ok(),
+                2 => {
+                    // Restore the oldest noncurrent generation of the other object, when there is one.
+                    let other = &targets[usize::from(1 - target)];
+                    let oldest = store.noncurrent_versions(&b, other).first().map(|v| v.object.generation);
+                    oldest.and_then(|g| {
+                        store
+                            .copy_generation_with_admission((&b, other, Some(g)), (&b, dst), None, Precondition::default(), at, |_| Ok(()))
+                            .ok()
+                            .map(|(m, ())| m)
+                    })
+                }
+                _ => {
+                    let id = store
+                        .begin_upload(&b, dst, NewMetadata::default(), Precondition::default(), None, at)
+                        .unwrap();
+                    store.append_upload(&id, 0, b"r", at).unwrap();
+                    Some(store.finalize_upload(&id, at).unwrap())
+                }
+            };
+            if let Some(object) = written {
+                issued.push(object.generation);
+            }
+        }
+        prop_assert!(issued.windows(2).all(|w| w[0] < w[1]), "{:?}", issued);
+        // Every generation the store holds, live or noncurrent, was issued once.
+        let mut held: Vec<u64> = targets
+            .iter()
+            .flat_map(|n| {
+                store
+                    .list_versions(&b, n.as_str())
+                    .iter()
+                    .map(|e| e.object.generation)
+                    .collect::<Vec<_>>()
+            })
+            .collect();
+        held.sort_unstable();
+        let mut unique = held.clone();
+        unique.dedup();
+        prop_assert_eq!(held, unique, "a generation is held twice");
+    }
+}

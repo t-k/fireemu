@@ -4,7 +4,7 @@
 //! Only structure is compared: key sets, the form of the time fields and which instants coincide.
 //! No identifier of the recording is copied.
 
-use fireemu_adapter_functions::events::{storage_event, storage_event_parts};
+use fireemu_adapter_functions::events::{firestore_time, storage_event, storage_event_parts};
 use fireemu_core_functions::manifest::ObjectEvent;
 use fireemu_core_storage::name::{BucketName, ObjectName};
 use fireemu_core_storage::store::{
@@ -80,6 +80,11 @@ fn expected(extra: &[&str]) -> Vec<String> {
     all
 }
 
+/// An RFC 3339 instant, whatever the number of fractional digits.
+fn parse_instant(text: &str) -> LogicalInstant {
+    LogicalInstant::parse_rfc3339(text).unwrap()
+}
+
 fn millis_form(value: &Value) -> bool {
     let s = value.as_str().unwrap();
     // 2026-10-04T18:36:46.701Z
@@ -140,7 +145,14 @@ fn deleting_a_noncurrent_generation_delivers_time_deleted_and_the_deletion_insta
         overwrite["data"]["timeCreated"]
     );
     assert!(millis_form(&noncurrent["data"]["timeDeleted"]));
-    assert_ne!(noncurrent["time"], noncurrent["data"]["timeDeleted"]);
+    // The `time` is the deletion instant (`t(30)`, the instant the runtime admitted the event), in
+    // the CloudEvent form with microseconds; it is not the archive instant. The two strings are in
+    // different forms, so they are compared as instants.
+    assert_eq!(noncurrent["time"], firestore_time(t(30)));
+    assert_ne!(
+        parse_instant(noncurrent["time"].as_str().unwrap()),
+        parse_instant(noncurrent["data"]["timeDeleted"].as_str().unwrap()),
+    );
     // The live generation deleted by number has no `timeDeleted`.
     store
         .delete_generation(&bucket, &name, second.generation, Precondition::default())

@@ -24,16 +24,34 @@ pub const SPAN: u64 = 10_000_000_000_000;
 /// coprime to [`SPAN`]: the ids of `SPAN` consecutive counters are all different.
 const STEP: u64 = 6_180_339_887_499;
 
-/// The id of the message that is `counter`th (counting from 1) in the state.
+/// The counters the Pub/Sub broker draws: `1..=BROKER_SPAN`, half of the `SPAN` counters whose ids
+/// are all different. The other half, `BROKER_SPAN + 1..=SPAN`, belongs to the Functions runtime's
+/// own publish path ([`runtime_message_id`]), so a message published through the control route and
+/// one published through the broker can never share an id, whatever the order they arrive in. Two
+/// messages of one topic with one id would make a handler that deduplicates by event id drop a
+/// real message.
+pub const BROKER_SPAN: u64 = SPAN / 2;
+
+/// The id of the message that is `counter`th (counting from 1) in the broker's state. The broker
+/// refuses to publish past `BROKER_SPAN` messages.
 #[must_use]
 pub fn pubsub_message_id(counter: u64) -> String {
     let offset = (u128::from(counter) * u128::from(STEP)) % u128::from(SPAN);
     (u128::from(FIRST) + offset).to_string()
 }
 
+/// The id of a message the Functions runtime publishes itself (the control route, with no broker
+/// involved), `counter`th from 1: in the half of the id space the broker never uses. The runtime
+/// cannot refuse a publish, so after `BROKER_SPAN` of them (5 * 10^12) its ids start again.
+#[must_use]
+pub fn runtime_message_id(counter: u64) -> String {
+    let own = (counter.max(1) - 1) % BROKER_SPAN + 1;
+    pubsub_message_id(BROKER_SPAN + own)
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{pubsub_message_id, SPAN};
+    use super::{pubsub_message_id, runtime_message_id, BROKER_SPAN, SPAN};
     use proptest::prelude::*;
     use std::collections::HashSet;
 
@@ -91,6 +109,41 @@ mod tests {
         assert_eq!(ids.len(), 100_000);
     }
 
+    #[test]
+    fn the_runtimes_ids_are_in_the_other_half_and_have_the_same_form() {
+        assert_eq!(BROKER_SPAN * 2, SPAN);
+        for counter in [
+            0,
+            1,
+            2,
+            3,
+            1_000,
+            BROKER_SPAN - 1,
+            BROKER_SPAN,
+            BROKER_SPAN + 1,
+            u64::MAX,
+        ] {
+            assert!(
+                in_the_recorded_range(&runtime_message_id(counter)),
+                "{counter}"
+            );
+        }
+        // A fixed function of the counter, counting from 1 (0 is treated as 1, which no caller uses).
+        assert_eq!(runtime_message_id(1), pubsub_message_id(BROKER_SPAN + 1));
+        assert_eq!(runtime_message_id(0), runtime_message_id(1));
+        assert_eq!(runtime_message_id(BROKER_SPAN), pubsub_message_id(SPAN));
+        // After BROKER_SPAN publishes the runtime's ids start again; it cannot refuse a publish.
+        assert_eq!(runtime_message_id(BROKER_SPAN + 1), runtime_message_id(1));
+        // The first ids of both paths, both counting from 1, differ (the collision this prevents).
+        for counter in 1..=1000 {
+            assert_ne!(
+                pubsub_message_id(counter),
+                runtime_message_id(counter),
+                "{counter}"
+            );
+        }
+    }
+
     proptest! {
         #[test]
         fn every_id_is_seventeen_digits_in_the_range(counter in 1_u64..u64::MAX) {
@@ -100,6 +153,34 @@ mod tests {
         #[test]
         fn counters_less_than_the_span_apart_never_share_an_id(first in 1_u64..1_000_000_000_000_000, gap in 1_u64..SPAN) {
             prop_assert_ne!(pubsub_message_id(first), pubsub_message_id(first + gap));
+        }
+
+        /// Whatever the order of publishes through the broker and through the runtime, and however
+        /// many other events the runtime counts in between, no two messages share an id.
+        #[test]
+        fn interleaved_publishes_of_the_broker_and_the_runtime_never_share_an_id(
+            steps in proptest::collection::vec((any::<bool>(), 1_u64..4), 1..400),
+        ) {
+            let mut broker = 0_u64;
+            let mut runtime = 0_u64;
+            let mut seen = HashSet::new();
+            for (through_broker, skipped) in steps {
+                let id = if through_broker {
+                    broker += 1;
+                    pubsub_message_id(broker)
+                } else {
+                    // Other events of the runtime advance its counter too: some counters are never an id.
+                    runtime += skipped;
+                    runtime_message_id(runtime)
+                };
+                prop_assert!(in_the_recorded_range(&id), "{id}");
+                prop_assert!(seen.insert(id.clone()), "{id} was given twice");
+            }
+        }
+
+        #[test]
+        fn a_broker_id_never_equals_a_runtime_id(broker in 1_u64..=BROKER_SPAN, runtime in 1_u64..u64::MAX) {
+            prop_assert_ne!(pubsub_message_id(broker), runtime_message_id(runtime));
         }
     }
 }

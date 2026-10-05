@@ -623,10 +623,12 @@ for (const form of ['endpoint', 'legacy']) {
 
 // The 8 recorded 1st gen Pub/Sub frames of FE v5 (run functions-events-formal-20261004T182904Z-a9621bfae74fe9bc, frames 133, 135, 270, 272)
 // and FE v7 (run functions-events-formal-20261005T041505Z-d3fd3faa3e0dc702, frames 135, 137, 274, 276), each next to the 2nd gen frame of the
-// same message (the following index). The handler prints the context it receives, so the member order is the order it was handed.
+// same message (the following index). The recorded handler prints the context through the recorder's own report.js `v1Context()`, which builds a
+// new object with its members in a fixed order: the order of the five members is the recorder's, not evidence of production's. What is evidence is
+// the values, the member set, and the order inside `resource` (an object the recorder passes through: name, service, type).
 const pubsubFrames = JSON.parse(await readFile(new URL('../../crates/fireemu-adapter-functions/tests/fixtures/production-pubsub-v5-v7-frames.json', import.meta.url), 'utf8')).frames;
 for (const form of ['endpoint', 'legacy']) {
-  test(`v1 ${form}: every recorded production Pub/Sub context is what the runner hands a handler, member for member and in order`, { timeout: 10000 }, async t => {
+  test(`v1 ${form}: every recorded production Pub/Sub context is what the runner hands a handler: the same members and values, and the resource members in production's order`, { timeout: 10000 }, async t => {
     const topic = 'projects/fireemu-oracle-events/topics/fe-events-primary';
     const f = await start(t, [entry('onPublish', 'google.pubsub.topic.publish', topic, form)]);
     const pairs = pubsubFrames.filter(x => x.handler === 'pubsubPublishedV1').map(v1 => [v1, pubsubFrames.find(x => x.run === v1.run && x.index === v1.index + 1)]);
@@ -638,7 +640,8 @@ for (const form of ['endpoint', 'legacy']) {
       assert.equal((await f.invoke('onPublish', 'pubsub', event)).ok, true, label);
       const call = (await f.calls()).at(-1);
       const recorded = v1.event.context;
-      // The five members production hands over, in its order, and nothing else (no notSupported).
+      // The five members production hands over, and nothing else (no notSupported). Their order here is the runner's own choice,
+      // kept as the recorder prints it; the order inside `resource` below is recorded.
       const handed = ['eventId', 'timestamp', 'eventType', 'resource', 'params'];
       assert.deepEqual(Object.keys(call.context), handed, label);
       assert.deepEqual(Object.keys(call.context).map(key => recorded[key] !== undefined), handed.map(() => true), label);

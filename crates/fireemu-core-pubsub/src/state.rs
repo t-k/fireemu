@@ -1067,7 +1067,7 @@ impl PubSubState {
         let mut next_message_counter = initial_message_counter;
         let mut published = Vec::with_capacity(messages.len());
         for message in messages {
-            // The ids repeat after `SPAN` messages, so the space ends there.
+            // The broker owns half of the id space (the runtime's own publishes the other half), and the ids repeat after it, so its space ends there.
             next_message_counter = next_message_counter
                 .checked_add(1)
                 .filter(|counter| *counter <= crate::MESSAGE_ID_SPAN)

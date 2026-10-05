@@ -6240,6 +6240,50 @@ mod tests {
         (runtime, clock)
     }
 
+    /// A message published through the control route (the runtime's own path) and one published
+    /// through the broker are different messages on one topic, so they must not share a message id
+    /// or a `CloudEvent` id: a handler that deduplicates by event id would drop a real message. Both
+    /// paths start at their first message here, in a fresh daemon, as they do after a reset.
+    #[tokio::test(flavor = "current_thread")]
+    async fn a_control_route_publish_and_a_broker_publish_never_give_two_messages_one_id() {
+        use fireemu_core_pubsub::{PubSubState, PubsubMessage, TopicName};
+        let runtime = runtime_with_blocking_auth_targets(&[]).await;
+        let mut broker = PubSubState::new(1);
+        let topic = TopicName::new("demo-app", "jobs").unwrap();
+        broker.create_topic(topic.clone(), BTreeMap::new()).unwrap();
+        let now = fireemu_core_types::time::LogicalInstant::from_unix_seconds(1_788_004_860);
+        let mut ids: Vec<String> = Vec::new();
+        for round in 0..60_u32 {
+            // Interleave the two paths, with a different number of messages per round.
+            for _ in 0..=(round % 3) {
+                let message = PubsubMessage {
+                    data: vec![1],
+                    ..PubsubMessage::default()
+                };
+                let stored = broker.publish_shared(&topic, vec![message], now).unwrap();
+                ids.extend(stored.iter().map(|stored| stored.message_id.clone()));
+            }
+            for _ in 0..=(round % 2) {
+                ids.extend(runtime.publish("jobs", &[json!({"data": "YQ=="})]));
+            }
+        }
+        assert!(ids.len() > 100, "{}", ids.len());
+        for id in &ids {
+            assert!(
+                id.len() == 17 && id.bytes().all(|byte| byte.is_ascii_digit()),
+                "{id}"
+            );
+        }
+        let mut distinct = ids.clone();
+        distinct.sort();
+        distinct.dedup();
+        assert_eq!(
+            distinct.len(),
+            ids.len(),
+            "two messages share an id: {ids:?}"
+        );
+    }
+
     /// Identity Platform's email and SMS events are served by the strict profile's bridge only
     /// (the official Auth emulator registers `beforeCreate` and `beforeSignIn` only), and
     /// `beforeSendSms` is listed but never run (AUTH-TENANT-BLOCKING recording 2026-09-28).

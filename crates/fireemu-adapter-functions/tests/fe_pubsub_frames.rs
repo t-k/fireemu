@@ -163,8 +163,9 @@ fn the_runtime_event_has_the_wire_members_of_every_recorded_v2_frame() {
             "{label}"
         );
         assert!(built.get("datacontenttype").is_none(), "{label}: {built}");
-        // The message: id, publish time as time, and the members production lists (the SDK adds
-        // `json` and `toJSON`).
+        // The message: id, publish time as time, and the members of the SDK's `Message` (it adds
+        // `json` and `toJSON`). The frames show the message as the SDK's `toJSON` prints it, so this
+        // is the handler-visible form; production's wire form of the message is not itself recorded.
         let mut message_members = names(&recorded["extensionAttributes"]["message"]["keys"]);
         message_members.retain(|key| !["json", "toJSON"].contains(&key.as_str()));
         assert_eq!(

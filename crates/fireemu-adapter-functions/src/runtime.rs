@@ -2213,8 +2213,10 @@ impl FunctionsRuntime {
         let deliver = self.background_triggers_enabled();
         for message in messages {
             inner.next_event += 1;
+            // The broker draws its ids from the other half of the id space, so this message's id
+            // cannot equal one the broker gives.
             let message_id =
-                fireemu_core_types::pubsub_message_id::pubsub_message_id(inner.next_event);
+                fireemu_core_types::pubsub_message_id::runtime_message_id(inner.next_event);
             ids.push(message_id.clone());
             if !deliver {
                 continue; // the message is accepted and dropped, as Pub/Sub does without a subscriber

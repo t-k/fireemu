@@ -308,7 +308,7 @@ test("with pull topics it subscribes before the clock moves and pulls once after
     });
     assert.deepEqual(pubsub.calls[2].body, { maxMessages: 1000 });
     // the subscriptions exist before the first step, and the pull comes after the last
-    const order = [...calls.map((c) => c.path.split("/").at(-1))];
+    const order = calls.map((c) => c.path.split("/").at(-1));
     assert.deepEqual(order, ["clock:advanceTo", "clock:advanceTo", "functions"]);
     assert.deepEqual(lines(output, "SUBSCRIBED "), [
       `SUBSCRIBED ${topicA} 200`,

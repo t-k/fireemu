@@ -123,7 +123,7 @@ export function extract(runDir) {
   const published = [];
   const seenMessages = new Set();
   for (const pull of rows.filter(
-    (r) => r.state === "response-persisted" && r.status === 200 && /^pull-/.test(String(r.id)),
+    (r) => r.state === "response-persisted" && r.status === 200 && String(r.id).startsWith("pull-"),
   )) {
     for (const received of body(pull)?.receivedMessages ?? []) {
       const message = received.message ?? {};

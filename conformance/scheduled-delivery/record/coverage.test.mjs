@@ -4,7 +4,6 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
-import { functionName, scheduleId } from "./plan.mjs";
 import {
   CLEANUP_CEILING,
   FINAL_LOG_WAIT_MS,
@@ -26,9 +25,7 @@ const golden = JSON.parse(
 const error = (code, status) => reply(code, { error: { code, message: "x", status } });
 const P = "/v1/projects/fireemu-oracle-sbx";
 const JOBS = "cloudscheduler.googleapis.com" + P + "/locations/us-central1/jobs";
-const GCF1 = "cloudfunctions.googleapis.com/v1/projects/fireemu-oracle-sbx/locations/-/functions";
 const GCF2 = "cloudfunctions.googleapis.com/v2/projects/fireemu-oracle-sbx/locations/-/functions";
-const RUNS = "run.googleapis.com/v2/projects/fireemu-oracle-sbx/locations/-/services";
 const empty = (w) =>
   w.jobs.size +
     w.topics.size +
@@ -37,7 +34,6 @@ const empty = (w) =>
     w.functionsV2.size +
     w.runServices.size ===
   0;
-const afterDelete = (w) => w.cliRuns.includes("delete");
 
 async function go(worldOptions = {}, options = {}, setup = () => {}) {
   const world = createWorld(worldOptions);

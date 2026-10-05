@@ -1074,6 +1074,18 @@ test("the divergence registers name rows of the recorded production run, quote w
       "native/target-protocol/missing-index",
     ],
   );
+  // The extra filter on resume-token/current is accepted on two conditions the entry states.
+  for (const register of [strict, emulator]) {
+    const { reason } = register["native/resume-token/current"];
+    assert.match(reason, /ruling of 2026-10-05 on two conditions/);
+    assert.match(reason, /count is always correct/);
+    assert.match(
+      reason,
+      /the_filter_of_a_resume_leaves_the_client_with_nothing_to_repair_unless_a_held_document_left/,
+    );
+    assert.match(reason, /next native packet recording more resume variants/);
+    assert.match(reason, /l1b-resume-variants/);
+  }
   // The four existence-filter rows are declared for the emulator profile only: it keeps the
   // official emulator's behaviour (no ExistenceFilter), cited from the jar; strict reproduces them.
   for (const id of REQUIRED_ROWS) {

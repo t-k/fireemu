@@ -744,14 +744,19 @@ fn recorded_body(value: &Value) -> String {
 /// publication that production accepted is not refused.
 #[tokio::test]
 async fn the_emulator_profile_has_no_channel_api_and_accepts_every_recorded_publication_production_accepts() {
-    let rows: Vec<Value> = serde_json::from_slice(
-        &std::fs::read(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/tests/fixtures/eventarc-stage-b/rows.json"
-        ))
-        .expect("the fixture exists"),
-    )
-    .expect("JSON");
+    // Both recordings: stage B (233 rows) and stage C (424 rows, the second record of its cases and the new ones).
+    let mut rows: Vec<Value> = Vec::new();
+    for fixture in ["eventarc-stage-b", "eventarc-stage-c"] {
+        let more: Vec<Value> = serde_json::from_slice(
+            &std::fs::read(format!(
+                "{}/tests/fixtures/{fixture}/rows.json",
+                env!("CARGO_MANIFEST_DIR")
+            ))
+            .expect("the fixture exists"),
+        )
+        .expect("JSON");
+        rows.extend(more);
+    }
     let server = start(Some(FunctionsHttpProfile::Emulator)).await;
     let mut accepted_by_production = 0;
     let mut refused: Vec<(u64, u16, String)> = Vec::new();

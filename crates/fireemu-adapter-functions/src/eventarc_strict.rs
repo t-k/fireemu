@@ -2,30 +2,36 @@
 //!
 //! Sources, all of `fireemu-oracle-idp` on 2026-10-05: the two stage A recordings (no channel was ever
 //! created in them: the recorder's create body had no `name`, which production refused with
-//! `channel.name is empty`; `tests/fixtures/eventarc-stage-a/rows.json` replays the second one) and the
-//! stage B recording (the first with channels: creation, reads, lists, deletion, the publication to a
-//! channel that exists, the credential variants; `tests/fixtures/eventarc-stage-b/rows.json`, replayed
-//! row by row by `tests/eventarc_strict_stage_b.rs`). For each decision this module says whether it is
-//! recorded or an inference:
+//! `channel.name is empty`; `tests/fixtures/eventarc-stage-a/rows.json` replays the second one), the stage B
+//! recording (the first with channels: creation, reads, lists, deletion, the publication to a channel that
+//! exists, the credential variants; 233 rows) and the stage C recording (the second record of those cases,
+//! and the answers of a channel while its operation runs, a list of eleven channels, page sizes, the edges of
+//! a channel ID, locations, an operation never issued, the exact limits of an event; 424 rows). Both are
+//! replayed row by row (`tests/eventarc_strict_stage_b.rs`, `tests/eventarc_strict_stage_c.rs`, through
+//! `tests/eventarc_replay`). For each decision this module says whether it is recorded or an inference:
 //!
 //! - recorded: authentication (a missing credential, an invalid value, a JWT in shape), the consumer check
-//!   of a project the caller cannot use, a location that does not exist (create and read) and the
-//!   locations that exist (`us-central1`, `europe-west1`), the creation of a channel and its operation,
-//!   the channel resource, the list and its page token, the conflict of a second creation, the channel IDs
-//!   Eventarc refused and accepted, the deletion and its operation, the answer for a channel that is gone,
-//!   and every check `PublishEvents` makes (the parse, the count of 100, the size, the channel lookup, the
-//!   required attributes, the content type, the data, the attribute quotas).
-//! - inferred (marked `INFERRED`): the set of locations beyond the two probed, the DNS-label rule for the
-//!   channel IDs not probed, the order of a list (production's is neither the name nor the time), the page
-//!   size when none is given, the boundaries of the attribute quotas, the order between checks that were
-//!   recorded one at a time, the method names in the missing-credential detail beyond the list, the
-//!   creation and the publication, and the consumer check for the creation and the publication.
-//! - not served: every state production was not observed in (a channel whose creation or deletion has not
-//!   finished, an operation this server did not start, a creation whose name is not the path's, a page
-//!   size that is not a positive number, the deletion of a channel a function declares). These answer
+//!   of a project the caller cannot use, a location that does not exist (create, read and list) and the
+//!   locations that exist, the creation of a channel and its operation (the channelId of the path names the
+//!   channel, whatever the body's name says), the channel resource in each state it was seen in, the list
+//!   and its page token (a page size below zero, zero, above the cap; a token carried to another
+//!   location), the conflict of a second creation, the channel IDs Eventarc refused and accepted, the
+//!   deletion and its operation, the answers for a channel being created or deleted, for a channel that is
+//!   gone and for an operation that was never issued, and every check `PublishEvents` makes (the parse, the
+//!   count of 100, the size, the channel lookup, the required attributes, the content type, the data, the
+//!   attribute quotas and the order of those checks).
+//! - inferred (marked `INFERRED`): the locations beyond the seven probed (the documented regions), the page
+//!   size when none is given and the cap above which a page is clamped, the order of a list (production's is
+//!   stable but follows no rule the recordings reveal: fireemu lists in the order of creation), the method
+//!   names in the missing-credential detail beyond the list, the consumer check for the creation and the
+//!   publication, a creation of a channel being deleted, and a deletion that arrives early in a creation.
+//! - not served: a creation without a channelId (not recorded: the stage C recorder never sends it), a page
+//!   size that is not a number, the deletion of a channel a function declares. These answer
 //!   `501 UNIMPLEMENTED` and say so, rather than invent a shape.
-//! - not reproduced, because they are Google's state: whether a `ya29.` token is valid, what its scopes
-//!   are, and the project number (a path that names the project by number).
+//! - not reproduced, because they are Google's state or not deterministic: whether a `ya29.` token is valid,
+//!   what its scopes are, the project number (a path that names the project by number), and the seconds
+//!   after a creation during which a publication to the channel answers `404 Associated channel does not
+//!   exist.` although the channel reads as ACTIVE.
 //!
 //! A channel "exists" here when the API created it and its operation is done, or when a loaded function
 //! declares it: a deployed custom-event function is what makes firebase-tools create its channel in
@@ -635,8 +641,10 @@ pub fn evaluate(input: &Input<'_>, world: &World<'_>) -> Outcome {
             adopt(world, &name);
             match world.channels.lookup(&name, world.now) {
                 Lookup::Absent => resource_not_found(&name),
-                Lookup::Ready(view) => answer(200, view.to_json(false)),
-                Lookup::Busy => unobserved("a channel whose creation or deletion is not finished"),
+                // A channel being created or deleted reads too (stage C): see `eventarc_channels`.
+                Lookup::Ready(view) | Lookup::Creating(view) | Lookup::Deleting(view) => {
+                    answer(200, view.to_json(false))
+                }
             }
         }
         Route::ListChannels(place) => list_channels(route, place, input.query, world),
@@ -651,7 +659,6 @@ pub fn evaluate(input: &Input<'_>, world: &World<'_>) -> Outcome {
             }
             match world.channels.delete(&name, world.now) {
                 Deleted::Absent => resource_not_found(&name),
-                Deleted::Busy => unobserved("a channel whose creation or deletion is not finished"),
                 Deleted::Started(started) => {
                     answer(200, world.channels.started(&started, world.now))
                 }
@@ -665,8 +672,9 @@ pub fn evaluate(input: &Input<'_>, world: &World<'_>) -> Outcome {
                 "projects/{}/locations/{}/operations/{operation}",
                 place.project, place.location
             );
+            // An operation that was never issued is `404` (stage C: `operation-0-0-0-0` and `x`, in two locations).
             world.channels.operation(&name, world.now).map_or_else(
-                || unobserved("an operation this server did not start"),
+                || resource_not_found(&name),
                 |body| answer(200, body),
             )
         }
@@ -700,6 +708,38 @@ fn invalid_page_token() -> Outcome {
     )
 }
 
+fn invalid_pagination_token() -> Outcome {
+    error(
+        400,
+        "INVALID_ARGUMENT",
+        "The request was invalid: invalid pagination token",
+        vec![bad_request_detail(&[(
+            Some("pageToken"),
+            Some("invalid pagination token"),
+        )])],
+    )
+}
+
+/// `500 INTERNAL`, as production answered a page token carried to another location (stage C, row 124): the
+/// message names an identifier of the failure, here the request's.
+fn internal_error(world: &World<'_>) -> Outcome {
+    let id = world.request_id;
+    let uuid = format!(
+        "{}-{}-{}-{}-{}",
+        id.get(0..8).unwrap_or("00000000"),
+        id.get(8..12).unwrap_or("0000"),
+        id.get(12..16).unwrap_or("0000"),
+        id.get(0..4).unwrap_or("0000"),
+        id.get(4..16).unwrap_or("000000000000"),
+    );
+    error(
+        500,
+        "INTERNAL",
+        &format!("An internal error has occurred ({uuid})"),
+        Vec::new(),
+    )
+}
+
 fn list_channels(
     route: &Route,
     place: &Place,
@@ -713,10 +753,16 @@ fn list_channels(
     let after = match query_value(query, "pageToken").filter(|token| !token.is_empty()) {
         None => None,
         Some(token) => match Position::parse(token) {
-            Some(position)
-                if position.project_number == project_number(project)
-                    && (location == "-" || position.location == *location) =>
-            {
+            Some(position) if position.project_number == project_number(project) => {
+                if position.location != *location {
+                    // A token carried to another location (stage C, one observation each): a concrete location
+                    // answers `500 INTERNAL`, the aggregated one `400 invalid pagination token`.
+                    return if location == "-" {
+                        invalid_pagination_token()
+                    } else {
+                        internal_error(world)
+                    };
+                }
                 Some(position)
             }
             _ => return invalid_page_token(),
@@ -725,9 +771,12 @@ fn list_channels(
     let limit = match query_value(query, "pageSize").filter(|size| !size.is_empty()) {
         None => DEFAULT_PAGE_SIZE,
         Some(size) => match size.parse::<i64>() {
+            // `0` is the default (stage C, row 119).
             Ok(0) => DEFAULT_PAGE_SIZE,
             Ok(size) if size > 0 => usize::try_from(size).map_or(MAX_PAGE_SIZE, |size| size.min(MAX_PAGE_SIZE)),
-            _ => return unobserved("a page size that is not a positive number"),
+            // Recorded for `-1` (stage C, row 120).
+            Ok(_) => return error(400, "INVALID_ARGUMENT", "Invalid argument: 'page_size'", Vec::new()),
+            Err(_) => return unobserved("a page size that is not a number"),
         },
     };
     for name in (world.declared_in)(project, location) {
@@ -739,9 +788,6 @@ fn list_channels(
     if listing.unknown_position {
         return invalid_page_token();
     }
-    if listing.busy {
-        return unobserved("a list while a channel is being created or deleted");
-    }
     let Some(last) = listing.items.last() else {
         return answer(200, Ordered::Object(Vec::new()));
     };
@@ -751,12 +797,7 @@ fn list_channels(
     )];
     if listing.more {
         let position = Position {
-            location: last
-                .name
-                .split('/')
-                .nth(3)
-                .unwrap_or_default()
-                .to_owned(),
+            location: location.clone(),
             project_number: project_number(project),
             id: last.name.rsplit('/').next().unwrap_or_default().to_owned(),
             uid: last.uid.clone(),
@@ -766,16 +807,17 @@ fn list_channels(
     answer(200, Ordered::Object(members))
 }
 
-/// Whether a channel ID is valid. Recorded: `a4`, `goog-...` and the run-prefixed IDs are accepted; an
-/// upper-case letter, a leading digit, an underscore and 64 characters are refused. INFERRED, the DNS
-/// label rule for the rest: a lower-case letter first, then lower-case letters, digits and hyphens, no
-/// final hyphen, at most 63 characters.
+/// Whether a channel ID is valid. Recorded: `a4`, `goog-...` and the run-prefixed IDs (63 characters
+/// included) are accepted; an upper-case letter, a leading digit, an underscore, 64 characters, one
+/// character, a leading hyphen and a final hyphen are refused. The rule is the DNS label's: a lower-case
+/// letter first, then lower-case letters, digits and hyphens, no final hyphen, 2 to 63 characters.
 fn valid_channel_id(id: &str) -> bool {
     let bytes = id.as_bytes();
     let (Some(first), Some(last)) = (bytes.first(), bytes.last()) else {
         return false;
     };
-    bytes.len() <= 63
+    // Recorded (stage C): one character, a leading hyphen and a final hyphen are refused; 63 characters pass.
+    (2..=63).contains(&bytes.len())
         && first.is_ascii_lowercase()
         && *last != b'-'
         && bytes
@@ -815,10 +857,10 @@ fn create_channel(
     let Some(id) = query_value(input.query, "channelId").filter(|id| !id.is_empty()) else {
         return unobserved("a creation without a channelId");
     };
+    // The channelId of the path names the channel; the name of the body is not used when it names another
+    // channel (stage C: a body naming `...-mm-b` under `channelId=...-mm-a` created `...-mm-a`).
     let name = channel_name(place, id);
-    if body_name != name {
-        return unobserved("a creation whose name is not the parent and the channelId");
-    }
+    let _ = body_name;
     if !valid_channel_id(id) {
         // Recorded: the violation and the request info are written twice.
         let violation = bad_request_detail(&[(Some("channel.name"), None)]);
@@ -845,7 +887,6 @@ fn create_channel(
                 ("resourceName", text(&name)),
             ])],
         ),
-        Created::Busy => unobserved("a channel whose creation or deletion is not finished"),
         Created::Started(started) => answer(200, world.channels.started(&started, world.now)),
     }
 }
@@ -1029,16 +1070,14 @@ fn publish(place: &Place, channel: &str, body: &[u8], world: &World<'_>) -> Outc
     }
     adopt(world, &name);
     match world.channels.lookup(&name, world.now) {
-        Lookup::Absent => {
+        // A channel being created or deleted is not publishable yet or any more (stage C, rows 131 and 145).
+        Lookup::Absent | Lookup::Creating(_) | Lookup::Deleting(_) => {
             return error(
                 404,
                 "NOT_FOUND",
                 "Associated channel does not exist.",
                 Vec::new(),
             );
-        }
-        Lookup::Busy => {
-            return unobserved("a publication to a channel whose creation or deletion is not finished");
         }
         Lookup::Ready(_) => {}
     }
@@ -1938,7 +1977,7 @@ mod tests {
 
     #[test]
     fn a_creation_needs_a_name() {
-        let target = "/v1/projects/demo/locations/us-central1/channels?channelId=c";
+        let target = "/v1/projects/demo/locations/us-central1/channels?channelId=cc";
         for body in [
             "{}",
             r#"{"name":""}"#,
@@ -1976,22 +2015,27 @@ mod tests {
             "POST",
             target,
             true,
-            r#"{"name":"projects/demo/locations/us-central1/channels/c"}"#,
+            r#"{"name":"projects/demo/locations/us-central1/channels/cc"}"#,
             &[],
         );
         assert_eq!(status_and_message(&named).0, 200);
-        for (target, body) in [
-            (
-                target,
-                r#"{"name":"projects/demo/locations/us-central1/channels/other"}"#,
-            ),
-            (
-                "/v1/projects/demo/locations/us-central1/channels",
-                r#"{"name":"projects/demo/locations/us-central1/channels/c"}"#,
-            ),
-        ] {
-            assert_eq!(status_and_message(&run("POST", target, true, body, &[])).0, 501);
-        }
+        // A body that names another channel creates the channel of the path (stage C); no channelId is not served.
+        let mismatch = run(
+            "POST",
+            "/v1/projects/demo/locations/us-central1/channels?channelId=dd",
+            true,
+            r#"{"name":"projects/demo/locations/us-central1/channels/other"}"#,
+            &[],
+        );
+        assert_eq!(status_and_message(&mismatch).0, 200);
+        let bare = run(
+            "POST",
+            "/v1/projects/demo/locations/us-central1/channels",
+            true,
+            r#"{"name":"projects/demo/locations/us-central1/channels/cc"}"#,
+            &[],
+        );
+        assert_eq!(status_and_message(&bare).0, 501);
         for body in ["", "[]", "not json", "5"] {
             let (status, message) = status_and_message(&run("POST", target, true, body, &[]));
             assert_eq!(

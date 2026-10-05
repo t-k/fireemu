@@ -225,53 +225,119 @@ fn a_channel_is_created_through_an_operation_read_listed_and_deleted_as_producti
 }
 
 #[test]
-fn the_states_production_was_not_observed_in_answer_501_and_say_which() {
+fn the_states_of_a_channel_while_its_operation_runs_are_the_recorded_ones() {
+    // Stage C, rows 128 to 148 (one observation each).
     let server = Server::declaring(&[&format!("{PARENT}/channels/declared")]);
     let created = server.create("us-central1", "busy");
     assert_eq!(created.status, 200);
-    let operation = created.body["name"].as_str().unwrap().to_owned();
-    // While a creation runs: a read, a list, a second creation, a deletion and a publication.
-    let event = delivered_event("e1");
-    let publish = json!({ "events": [event] }).to_string();
-    for (reply, what) in [
-        (server.call("GET", &format!("/v1/{PARENT}/channels/busy"), ""), "read"),
-        (server.call("GET", &format!("/v1/{PARENT}/channels"), ""), "list"),
-        (server.create("us-central1", "busy"), "creation"),
-        (server.call("DELETE", &format!("/v1/{PARENT}/channels/busy"), ""), "deletion"),
-        (
-            server.call("POST", &format!("/v1/{PARENT}/channels/busy:publishEvents"), &publish),
-            "publication",
-        ),
-    ] {
-        assert_eq!(reply.status, 501, "{what}: {}", reply.text);
-        assert_eq!(reply.body["error"]["status"], "UNIMPLEMENTED", "{what}");
-        assert!(message(&reply).contains("not finished") || message(&reply).contains("is being"), "{what}: {}", message(&reply));
-    }
-    // A creation whose name is not the path's, and one without a channelId.
-    let other = json!({ "name": format!("{PARENT}/channels/other") }).to_string();
-    assert_eq!(
-        server.call("POST", &format!("/v1/{PARENT}/channels?channelId=x"), &other).status,
-        501
-    );
-    assert_eq!(
-        server.call("POST", &format!("/v1/{PARENT}/channels"), &other).status,
-        501
-    );
-    // An operation this server did not start, a page size that is not a positive number, the deletion of
-    // a channel a function declares.
-    let stranger = server.call("GET", &format!("/v1/{PARENT}/operations/operation-1-2-3-4"), "");
-    assert_eq!(stranger.status, 501);
+    let creation = created.body["name"].as_str().unwrap().to_owned();
+    // While a creation runs: a read and a list show the channel without a `state` and with an empty topic, a
+    // second creation is a conflict, a publication is a 404.
+    let publish = json!({ "events": [delivered_event("e1")] }).to_string();
+    let read = server.call("GET", &format!("/v1/{PARENT}/channels/busy"), "");
+    assert_eq!(read.status, 200);
+    assert!(read.body.get("state").is_none());
+    assert_eq!(read.body["pubsubTopic"], "");
+    assert_eq!(read.body["updateTime"], read.body["createTime"]);
+    let list = server.call("GET", &format!("/v1/{PARENT}/channels"), "");
+    assert_eq!(list.status, 200);
+    let listed = list.body["channels"].as_array().unwrap();
+    assert!(listed.iter().any(|c| c["name"].as_str().unwrap().ends_with("/busy") && c.get("state").is_none()));
+    assert_eq!(server.create("us-central1", "busy").status, 409);
+    let early = server.call("POST", &format!("/v1/{PARENT}/channels/busy:publishEvents"), &publish);
+    assert_eq!((early.status, message(&early)), (404, "Associated channel does not exist."));
+    // A deletion is accepted, and its operation ends a deletion after the creation's end.
+    let deletion = server.call("DELETE", &format!("/v1/{PARENT}/channels/busy"), "");
+    assert_eq!(deletion.status, 200);
+    let deletion_name = deletion.body["name"].as_str().unwrap().to_owned();
     server.advance(6);
-    for size in ["-1", "x", "1.5"] {
+    let finished = server.call("GET", &format!("/v1/{creation}"), "");
+    assert_eq!(finished.body["done"], true);
+    // While the deletion runs the channel reads as ACTIVE, a second deletion is a 404, a publication a 404.
+    let reading = server.call("GET", &format!("/v1/{PARENT}/channels/busy"), "");
+    assert_eq!((reading.status, reading.body["state"].as_str()), (200, Some("ACTIVE")));
+    let again = server.call("DELETE", &format!("/v1/{PARENT}/channels/busy"), "");
+    assert_eq!(again.status, 404);
+    let publishing = server.call("POST", &format!("/v1/{PARENT}/channels/busy:publishEvents"), &publish);
+    assert_eq!(publishing.status, 404);
+    server.advance(6);
+    assert_eq!(server.call("GET", &format!("/v1/{deletion_name}"), "").body["done"], true);
+    assert_eq!(server.call("GET", &format!("/v1/{PARENT}/channels/busy"), "").status, 404);
+    // What is still not served: a creation without a channelId, a page size that is not a number, the
+    // deletion of a channel a function declares.
+    let other = json!({ "name": format!("{PARENT}/channels/other") }).to_string();
+    assert_eq!(server.call("POST", &format!("/v1/{PARENT}/channels"), &other).status, 501);
+    for size in ["x", "1.5"] {
         let reply = server.call("GET", &format!("/v1/{PARENT}/channels?pageSize={size}"), "");
         assert_eq!(reply.status, 501, "{size}");
     }
     let declared = server.call("DELETE", &format!("/v1/{PARENT}/channels/declared"), "");
     assert_eq!(declared.status, 501);
     assert!(message(&declared).contains("declares"));
-    // Once its operation is done the channel answers as any other.
-    assert_eq!(server.call("GET", &format!("/v1/{operation}"), "").status, 200);
-    assert_eq!(server.call("GET", &format!("/v1/{PARENT}/channels/busy"), "").status, 200);
+}
+
+#[test]
+fn a_creation_whose_body_names_another_channel_creates_the_channel_of_the_path() {
+    // Stage C, row 158: the body named `...-mm-b` under `channelId=...-mm-a`, and `...-mm-a` was created.
+    let server = Server::new();
+    let other = json!({ "name": format!("{PARENT}/channels/mm-b") }).to_string();
+    let created = server.call("POST", &format!("/v1/{PARENT}/channels?channelId=mm-a"), &other);
+    assert_eq!(created.status, 200);
+    server.advance(6);
+    assert_eq!(server.call("GET", &format!("/v1/{PARENT}/channels/mm-a"), "").status, 200);
+    assert_eq!(server.call("GET", &format!("/v1/{PARENT}/channels/mm-b"), "").status, 404);
+    let operation = server.call("GET", &format!("/v1/{}", created.body["name"].as_str().unwrap()), "");
+    assert_eq!(operation.body["response"]["name"], format!("{PARENT}/channels/mm-a"));
+}
+
+#[test]
+fn a_page_size_below_zero_is_the_recorded_400_and_zero_is_the_default() {
+    let server = Server::new();
+    server.ready("aa");
+    let negative = server.call("GET", &format!("/v1/{PARENT}/channels?pageSize=-1"), "");
+    assert_eq!(negative.status, 400);
+    assert_eq!(negative.text, "{\n  \"error\": {\n    \"code\": 400,\n    \"message\": \"Invalid argument: 'page_size'\",\n    \"status\": \"INVALID_ARGUMENT\"\n  }\n}\n");
+    for query in ["?pageSize=0", "?pageSize=1001", "?pageSize=100000"] {
+        let reply = server.call("GET", &format!("/v1/{PARENT}/channels{query}"), "");
+        assert_eq!(reply.status, 200, "{query}");
+        assert_eq!(reply.body["channels"].as_array().unwrap().len(), 1, "{query}");
+    }
+}
+
+#[test]
+fn an_operation_that_was_never_issued_is_a_404_in_every_served_location() {
+    let server = Server::new();
+    for target in [
+        format!("/v1/{PARENT}/operations/operation-0-0-0-0"),
+        format!("/v1/projects/{PROJECT}/locations/europe-west1/operations/operation-0-0-0-0"),
+        format!("/v1/{PARENT}/operations/x"),
+    ] {
+        let reply = server.call("GET", &target, "");
+        assert_eq!(reply.status, 404, "{target}");
+        assert_eq!(reply.body["error"]["status"], "NOT_FOUND");
+        assert_eq!(
+            reply.body["error"]["details"][0]["resourceName"],
+            target.trim_start_matches("/v1/")
+        );
+    }
+}
+
+#[test]
+fn a_token_that_names_another_project_number_is_not_valid_for_this_project() {
+    use fireemu_adapter_functions::eventarc_channels::{project_number, Position};
+    let server = Server::new();
+    server.ready("aa");
+    server.ready("bb");
+    let first = server.call("GET", &format!("/v1/{PARENT}/channels?pageSize=1"), "");
+    let own = first.body["nextPageToken"].as_str().unwrap().to_owned();
+    // The token of this project continues; the same position with another project number is refused.
+    let parsed = Position::parse(&own).expect("a token of this implementation");
+    assert_eq!(parsed.project_number, project_number(PROJECT));
+    assert_eq!(server.call("GET", &format!("/v1/{PARENT}/channels?pageToken={own}"), "").status, 200);
+    let foreign = Position { project_number: parsed.project_number + 1, ..parsed }.token();
+    let reply = server.call("GET", &format!("/v1/{PARENT}/channels?pageToken={foreign}"), "");
+    assert_eq!(reply.status, 400);
+    assert_eq!(message(&reply), "The request was invalid: invalid page token");
 }
 
 // --- identifiers and locations -----------------------------------------------------------------------
@@ -280,8 +346,7 @@ fn the_states_production_was_not_observed_in_answer_501_and_say_which() {
 /// in for what was not observed.
 fn reference_valid(id: &str) -> bool {
     let bytes = id.as_bytes();
-    !bytes.is_empty()
-        && bytes.len() <= 63
+    (2..=63).contains(&bytes.len())
         && bytes[0].is_ascii_lowercase()
         && bytes[bytes.len() - 1] != b'-'
         && bytes
@@ -336,7 +401,7 @@ proptest! {
 fn a_location_exists_when_eventarc_serves_it_and_a_list_of_every_location_gathers_them() {
     let server = Server::new();
     for location in ["us-central1", "europe-west1", "asia-east1"] {
-        assert_eq!(server.create(location, "c").status, 200, "{location}");
+        assert_eq!(server.create(location, "cc").status, 200, "{location}");
     }
     server.advance(6);
     let all = server.call("GET", &format!("/v1/projects/{PROJECT}/locations/-/channels"), "");
@@ -358,7 +423,7 @@ fn a_location_exists_when_eventarc_serves_it_and_a_list_of_every_location_gather
         assert_eq!(reply.status, 403, "{method} {path}");
         assert_eq!(message(&reply), "Location us-east99 is not found or access is unauthorized.");
     }
-    let create = server.create("us-east99", "c");
+    let create = server.create("us-east99", "cc");
     assert_eq!(create.status, 403);
     assert_eq!(create.body["error"]["details"][0]["reason"], "LOCATION_POLICY_VIOLATED");
 }
@@ -368,7 +433,7 @@ fn a_location_exists_when_eventarc_serves_it_and_a_list_of_every_location_gather
 #[test]
 fn a_list_pages_through_tokens_and_refuses_a_token_that_is_not_its_own() {
     let server = Server::new();
-    for id in ["a", "b", "c", "d", "e"] {
+    for id in ["aa", "bb", "cc", "dd", "ee"] {
         server.create("us-central1", id);
         server.advance(1);
     }
@@ -395,7 +460,7 @@ fn a_list_pages_through_tokens_and_refuses_a_token_that_is_not_its_own() {
     assert_eq!((pages, seen.len()), (3, 5));
     let mut sorted = seen.clone();
     sorted.sort();
-    assert_eq!(sorted, ["a", "b", "c", "d", "e"], "every channel once");
+    assert_eq!(sorted, ["aa", "bb", "cc", "dd", "ee"], "every channel once");
     // `pageSize=0` and no size give the default page: all five.
     for query in ["", "?pageSize=0", "?pageSize=100000"] {
         let all = server.call("GET", &format!("/v1/{PARENT}/channels{query}"), "");
@@ -405,8 +470,20 @@ fn a_list_pages_through_tokens_and_refuses_a_token_that_is_not_its_own() {
     // A token belongs to its location and its project, and is refused anywhere else, and when altered.
     let first = server.call("GET", &format!("/v1/{PARENT}/channels?pageSize=1"), "");
     let token = first.body["nextPageToken"].as_str().unwrap();
+    // Stage C (one observation each): a token carried to another concrete location is a 500, and to the
+    // aggregated one a 400 with its own wording.
+    let elsewhere = server.call(
+        "GET",
+        &format!("/v1/projects/{PROJECT}/locations/europe-west1/channels?pageToken={token}"),
+        "",
+    );
+    assert_eq!(elsewhere.status, 500);
+    assert_eq!(elsewhere.body["error"]["status"], "INTERNAL");
+    assert!(message(&elsewhere).starts_with("An internal error has occurred ("));
+    let everywhere = server.call("GET", &format!("/v1/projects/{PROJECT}/locations/-/channels?pageToken={token}"), "");
+    assert_eq!(everywhere.status, 400);
+    assert_eq!(message(&everywhere), "The request was invalid: invalid pagination token");
     for target in [
-        format!("/v1/projects/{PROJECT}/locations/europe-west1/channels?pageToken={token}"),
         format!("/v1/{PARENT}/channels?pageToken={token}x"),
         format!("/v1/{PARENT}/channels?pageToken={}", &token[1..]),
         format!("/v1/{PARENT}/channels?pageToken=garbage"),
@@ -415,8 +492,16 @@ fn a_list_pages_through_tokens_and_refuses_a_token_that_is_not_its_own() {
         assert_eq!(reply.status, 400, "{target}");
         assert_eq!(message(&reply), "The request was invalid: invalid page token");
     }
-    let everywhere = server.call("GET", &format!("/v1/projects/{PROJECT}/locations/-/channels?pageToken={token}"), "");
-    assert_eq!(everywhere.status, 200, "a token of a location continues an aggregated list");
+    // A token of an aggregated list continues that list, and only that one.
+    let other = server.create("europe-west1", "ee");
+    assert_eq!(other.status, 200);
+    server.advance(6);
+    let first = server.call("GET", &format!("/v1/projects/{PROJECT}/locations/-/channels?pageSize=1"), "");
+    let token = first.body["nextPageToken"].as_str().unwrap();
+    let second = server.call("GET", &format!("/v1/projects/{PROJECT}/locations/-/channels?pageSize=1&pageToken={token}"), "");
+    assert_eq!(second.status, 200, "a token of an aggregated list continues it");
+    let wrong = server.call("GET", &format!("/v1/{PARENT}/channels?pageToken={token}"), "");
+    assert_eq!(wrong.status, 500, "and is a token of another location anywhere else");
 }
 
 // --- the publication to a channel that exists --------------------------------------------------------
@@ -463,7 +548,7 @@ fn field_violations(reply: &Reply) -> Vec<(String, String)> {
 #[test]
 fn a_valid_publication_to_a_channel_the_api_created_is_accepted_and_goes_nowhere() {
     let server = Server::new();
-    let channel = server.ready("c");
+    let channel = server.ready("cc");
     let reply = publish(&server, &channel, &[delivered_event("a"), delivered_event("b")]);
     assert_eq!((reply.status, reply.text.as_str()), (200, "{}\n"));
     // The same id twice in two requests is fine; in one request it is not.
@@ -501,7 +586,7 @@ const TEXT_FORMAT: &str =
 #[test]
 fn the_events_an_existing_channel_accepts_are_the_recorded_ones() {
     let server = Server::new();
-    let channel = server.ready("c");
+    let channel = server.ready("cc");
     let no_time = changed(|e| {
         e["attributes"].as_object_mut().unwrap().remove("time");
     });
@@ -631,7 +716,7 @@ fn refusals() -> Vec<Case<'static>> {
 #[test]
 fn every_refusal_of_an_existing_channel_answers_as_production_did() {
     let server = Server::new();
-    let channel = server.ready("c");
+    let channel = server.ready("cc");
     for (what, event, status, wanted_message, violations) in refusals() {
         let reply = publish(&server, &channel, std::slice::from_ref(&event));
         assert_eq!(reply.status, status, "{what}: {}", reply.text);
@@ -674,7 +759,7 @@ fn every_refusal_of_an_existing_channel_answers_as_production_did() {
 #[test]
 fn the_limits_of_a_publication_are_the_recorded_ones() {
     let server = Server::new();
-    let channel = server.ready("c");
+    let channel = server.ready("cc");
     let many = |n: usize| -> Vec<Value> { (0..n).map(|i| delivered_event(&format!("e{i}"))).collect() };
     // Recorded: 8, 69 and 100 events pass, 101 and 115 and 255 do not.
     for n in [1, 8, 69, 100] {
@@ -805,9 +890,9 @@ fn the_operation_of_a_project_the_caller_cannot_use_is_refused_before_it_is_look
 #[test]
 fn the_bytes_of_a_channel_resource_are_the_recorded_layout() {
     let server = Server::new();
-    server.create("us-central1", "c");
+    server.create("us-central1", "cc");
     server.advance(6);
-    let read = server.call("GET", &format!("/v1/{PARENT}/channels/c"), "");
+    let read = server.call("GET", &format!("/v1/{PARENT}/channels/cc"), "");
     let members: Vec<&str> = read.ordered.members().unwrap().iter().map(|(k, _)| k.as_str()).collect();
     assert_eq!(
         members,
@@ -839,7 +924,7 @@ proptest! {
     #[test]
     fn a_publication_of_n_events_is_accepted_exactly_up_to_a_hundred(n in 1usize..=150) {
         let server = Server::new();
-        let channel = server.ready("c");
+        let channel = server.ready("cc");
         let events: Vec<Value> = (0..n).map(|i| delivered_event(&format!("e{i}"))).collect();
         prop_assert_eq!(accepted(&server, &channel, &events), n <= 100);
     }
@@ -847,7 +932,7 @@ proptest! {
     #[test]
     fn an_event_is_accepted_exactly_while_its_attributes_and_the_four_required_ones_are_at_most_a_hundred(extra in 0usize..=120) {
         let server = Server::new();
-        let channel = server.ready("c");
+        let channel = server.ready("cc");
         let event = changed(|e| {
             for i in 0..extra {
                 e["attributes"][format!("ext{i}")] = json!({"ceString": "v"});
@@ -860,7 +945,7 @@ proptest! {
     #[test]
     fn an_attribute_is_accepted_exactly_while_ce_and_its_name_are_at_most_256_bytes(length in 1usize..=300) {
         let server = Server::new();
-        let channel = server.ready("c");
+        let channel = server.ready("cc");
         let name = format!("n{}", "a".repeat(length - 1));
         let event = changed(|e| e["attributes"][name.as_str()] = json!({"ceString": "v"}));
         prop_assert_eq!(accepted(&server, &channel, &[event]), 3 + length <= 256);
@@ -869,7 +954,7 @@ proptest! {
     #[test]
     fn the_first_missing_required_attribute_is_the_one_reported(missing in prop::sample::subsequence(vec!["id", "source", "specVersion", "type"], 1..=4)) {
         let server = Server::new();
-        let channel = server.ready("c");
+        let channel = server.ready("cc");
         let event = changed(|e| {
             for member in &missing {
                 e.as_object_mut().unwrap().remove(*member);
@@ -902,7 +987,7 @@ proptest! {
         ],
     ) {
         let server = Server::new();
-        let channel = server.ready("c");
+        let channel = server.ready("cc");
         let event = changed(|e| {
             e["textData"] = json!(text);
             e["attributes"]["datacontenttype"] = json!({"ceString": content_type});
@@ -914,7 +999,7 @@ proptest! {
     #[test]
     fn the_size_limit_is_one_boundary_that_a_longer_text_never_goes_back_across(a in 520_000usize..=530_000, b in 520_000usize..=530_000) {
         let server = Server::new();
-        let channel = server.ready("c");
+        let channel = server.ready("cc");
         let sized = |length: usize| {
             let text = serde_json::to_string(&"x".repeat(length - 2)).unwrap();
             changed(|e| e["textData"] = json!(text))

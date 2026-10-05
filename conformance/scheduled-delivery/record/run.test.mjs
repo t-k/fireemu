@@ -161,6 +161,86 @@ for (const [label, worldSetup, because] of [
   });
 }
 
+test("a project whose App Engine location is another region stops before any CLI action", async () => {
+  for (const locationId of ["europe-west", "us-east1", "asia-northeast"]) {
+    const { world, result } = await go({
+      hooks: {
+        "GET firebase.googleapis.com/v1beta1/projects/fireemu-oracle-sbx/adminSdkConfig":
+          async () => reply(200, { projectId: "fireemu-oracle-sbx", locationId }),
+      },
+    });
+    assert.equal(result.stoppedBecause, "app-engine-location", locationId);
+    assert.deepEqual(world.cliRuns, []);
+  }
+  for (const locationId of ["us-central", "us-central1", undefined, ""]) {
+    const { result } = await go({
+      hooks: {
+        "GET firebase.googleapis.com/v1beta1/projects/fireemu-oracle-sbx/adminSdkConfig":
+          async () =>
+            reply(200, {
+              projectId: "fireemu-oracle-sbx",
+              ...(locationId === undefined ? {} : { locationId }),
+            }),
+      },
+    });
+    assert.equal(result.outcome, "calendar-delivery-recorded", String(locationId));
+  }
+});
+
+test("a function of one of the names in another region stops preflight, and one left there is not closed", async () => {
+  const strayName = "projects/fireemu-oracle-sbx/locations/us-east1/functions/schedOkV2";
+  const before = createWorld();
+  before.functionsV2.set(strayName, { name: strayName, state: "ACTIVE", environment: "GEN_2" });
+  const journal = [];
+  const stopped = await record({
+    runId: RUN,
+    projectNumber: NUMBER,
+    accessToken: "test-token",
+    save: async (r) => journal.push(r),
+    send: before.send,
+    runCli: (o) => before.runCli(o),
+    clock: () => before.now,
+    sleep: async (ms) => before.advance(ms),
+  });
+  assert.equal(stopped.stoppedBecause, "namespace");
+  assert.deepEqual(before.cliRuns, []);
+  // Left behind by the deploy (not ours to delete): the run cleans what it owns and says it is not clean.
+  const { result, world } = await go({
+    hooks: {
+      "DELETE cloudfunctions.googleapis.com/v2/projects/fireemu-oracle-sbx/locations/us-central1/functions/schedOkV2":
+        async () => undefined,
+    },
+  });
+  assert.equal(result.cleanup.verified, true);
+  const late = createWorld();
+  const lateResult = await record({
+    runId: RUN,
+    projectNumber: NUMBER,
+    accessToken: "test-token",
+    save: async () => {},
+    send: late.send,
+    runCli: async (o) => {
+      const r = await late.runCli(o);
+      if (o.action === "deploy")
+        late.functionsV2.set(strayName, { name: strayName, state: "ACTIVE", environment: "GEN_2" });
+      return r;
+    },
+    clock: () => late.now,
+    sleep: async (ms) => late.advance(ms),
+  });
+  assert.equal(
+    lateResult.cleanup.verified,
+    false,
+    "a function in another region is reported, not deleted",
+  );
+  assert.equal(lateResult.outcome, "calendar-delivery-needs-recovery");
+  assert.equal(
+    late.calls.some((c) => c.startsWith("DELETE cloudfunctions") && c.includes("us-east1")),
+    false,
+  );
+  assert.ok(world);
+});
+
 test("a wrong identity or a list that cannot be read stops before any CLI action", async () => {
   const wrong = await go({
     hooks: {

@@ -184,17 +184,17 @@ export async function record({
   const lists = async (prefix) => ({
     v1: await list(
       prefix + "-functions-v1",
-      GCF + "v1/projects/" + PROJECT + "/locations/" + REGION + "/functions",
+      GCF + "v1/projects/" + PROJECT + "/locations/-/functions",
       "functions",
     ),
     v2: await list(
       prefix + "-functions-v2",
-      GCF + "v2/projects/" + PROJECT + "/locations/" + REGION + "/functions",
+      GCF + "v2/projects/" + PROJECT + "/locations/-/functions",
       "functions",
     ),
     run: await list(
       prefix + "-run-services",
-      "https://run.googleapis.com/v2/projects/" + PROJECT + "/locations/" + REGION + "/services",
+      "https://run.googleapis.com/v2/projects/" + PROJECT + "/locations/-/services",
       "services",
     ),
   });
@@ -340,6 +340,13 @@ export async function record({
       { observe: true },
     );
     out.adminSdkConfig = { status: sdk?.status ?? null, locationId: sdk?.json?.locationId ?? null };
+    // Where firebase-tools puts a v1 scheduled job: the App Engine location the project names, "us-central" becoming
+    // "us-central1" (`functionsConfig.js` getAppEngineLocation), or us-central1 when the project names none.
+    const named = sdk?.json?.locationId;
+    if (typeof named === "string" && named.length > 0) {
+      out.appEngineLocation = /\d$/.test(named) ? named : named + "1";
+      if (out.appEngineLocation !== REGION) return "app-engine-location";
+    }
     const app = await read(
       {
         id: "appengine-app",

@@ -357,9 +357,14 @@ export function summarize({ v1, v2, run }) {
   const out = {};
   for (const fn of ALL_FUNCTIONS) {
     const name = functionName(fn);
+    // A function of this id in another region is not ours to delete: it is reported so that the run stops
+    // (preflight) or is left for recovery (cleanup).
+    const stray = [...f1.keys(), ...f2.keys()].some(
+      (n) => n !== name && n.split("/").at(-1) === fn,
+    );
     if (FUNCTIONS.v1.includes(fn)) {
       const item = f1.get(name);
-      out[fn] = { present: item !== undefined, active: item?.status === "ACTIVE" };
+      out[fn] = { present: item !== undefined, active: item?.status === "ACTIVE", stray };
     } else {
       const item = f2.get(name);
       const service = services.has(runServiceId(fn));
@@ -367,6 +372,7 @@ export function summarize({ v1, v2, run }) {
         present: item !== undefined,
         active: item?.state === "ACTIVE" && service,
         runService: service,
+        stray,
       };
     }
   }
@@ -374,4 +380,9 @@ export function summarize({ v1, v2, run }) {
 }
 export const allActive = (summary) => ALL_FUNCTIONS.every((fn) => summary[fn]?.active === true);
 export const nonePresent = (summary) =>
-  ALL_FUNCTIONS.every((fn) => summary[fn]?.present === false && summary[fn]?.runService !== true);
+  ALL_FUNCTIONS.every(
+    (fn) =>
+      summary[fn]?.present === false &&
+      summary[fn]?.runService !== true &&
+      summary[fn]?.stray !== true,
+  );

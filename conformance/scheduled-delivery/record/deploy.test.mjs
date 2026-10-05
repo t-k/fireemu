@@ -401,10 +401,59 @@ test("readiness reads names case-exact for functions and lower-case for Cloud Ru
     v2: { functions: [fn2("schedOkV2", "FAILED")] },
     run: { services: [] },
   });
-  assert.deepEqual(odd.schedOkV1, { present: true, active: false });
-  assert.deepEqual(odd.schedFailV1, { present: false, active: false });
+  assert.deepEqual(odd.schedOkV1, { present: true, active: false, stray: false });
+  assert.deepEqual(odd.schedFailV1, { present: false, active: false, stray: false });
   assert.equal(odd.schedOkV2.present, true);
   assert.equal(odd.schedOkV2.active, false);
+});
+
+test("a function of one of the names in another region is a stray, and a stray is not an empty project", () => {
+  const stray = summarize({
+    v1: {},
+    v2: {
+      functions: [
+        {
+          name: "projects/fireemu-oracle-sbx/locations/us-east1/functions/schedOkV2",
+          state: "ACTIVE",
+        },
+      ],
+    },
+    run: {},
+  });
+  assert.equal(stray.schedOkV2.stray, true);
+  assert.equal(stray.schedOkV2.present, false, "it is not the function this run deploys");
+  assert.equal(nonePresent(stray), false);
+  const v1stray = summarize({
+    v1: {
+      functions: [
+        {
+          name: "projects/fireemu-oracle-sbx/locations/us-east1/functions/schedOkV1",
+          status: "ACTIVE",
+        },
+      ],
+    },
+    v2: {},
+    run: {},
+  });
+  assert.equal(v1stray.schedOkV1.stray, true);
+  assert.equal(nonePresent(v1stray), false);
+  assert.equal(summarize({ v1: {}, v2: {}, run: {} }).schedOkV2.stray, false);
+  // A function with another id in another region is another function.
+  assert.equal(
+    summarize({
+      v1: {},
+      v2: {
+        functions: [
+          {
+            name: "projects/fireemu-oracle-sbx/locations/us-east1/functions/other",
+            state: "ACTIVE",
+          },
+        ],
+      },
+      run: {},
+    }).schedOkV2.stray,
+    false,
+  );
 });
 
 test("nothing is left only when no function and no Run service remains", () => {

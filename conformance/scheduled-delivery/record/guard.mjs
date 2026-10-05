@@ -81,7 +81,7 @@ export function rules(runId, projectNumber) {
     [
       "GET",
       gcf,
-      `^/v1/projects/${P}/locations/${R}/functions$`,
+      `^/v1/projects/${P}/locations/(?:${R}|-)/functions$`,
       q({ pageToken: token }),
       nothing,
       false,
@@ -89,7 +89,7 @@ export function rules(runId, projectNumber) {
     [
       "GET",
       gcf,
-      `^/v2/projects/${P}/locations/${R}/functions$`,
+      `^/v2/projects/${P}/locations/(?:${R}|-)/functions$`,
       q({ pageToken: token }),
       nothing,
       false,
@@ -125,7 +125,7 @@ export function rules(runId, projectNumber) {
     [
       "GET",
       "run.googleapis.com",
-      `^/v2/projects/${P}/locations/${R}/services$`,
+      `^/v2/projects/${P}/locations/(?:${R}|-)/services$`,
       q({ pageToken: token }),
       nothing,
       false,

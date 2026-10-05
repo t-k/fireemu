@@ -85,6 +85,11 @@ test("the reads of the project's own state are allowed", () => {
 test("the function reads and the exact-case deletes are allowed, and nothing else about functions", () => {
   yes(spec("GET", GCF + "/v1" + FN));
   yes(spec("GET", GCF + "/v2" + FN + "?pageToken=abc"));
+  yes(spec("GET", GCF + "/v1/projects/" + P + "/locations/-/functions"));
+  yes(spec("GET", GCF + "/v2/projects/" + P + "/locations/-/functions?pageToken=abc"));
+  yes(spec("GET", "https://run.googleapis.com/v2/projects/" + P + "/locations/-/services"));
+  no(spec("GET", GCF + "/v2/projects/" + P + "/locations/europe-west1/functions"));
+  no(spec("DELETE", GCF + "/v2/projects/" + P + "/locations/-/functions/schedOkV2"));
   yes(spec("GET", GCF + "/v2" + FN + "/schedOkV2"));
   yes(spec("GET", GCF + "/v1" + FN + "/schedFailV1"));
   yes(spec("DELETE", GCF + "/v2" + FN + "/schedRetryV2"));

@@ -2879,9 +2879,7 @@ async fn start_codebase(
         if let Some(tz) = &cfg.scheduler_default_time_zone {
             apply_default_time_zone(&mut manifest_json, tz);
         }
-        let mut manifest = parse_manifest(&manifest_json)?;
-        check_scheduler_refusals_for(cfg.profile, &manifest)?;
-        serve_blocking_events_for(cfg.profile, &mut manifest);
+        let manifest = manifest_for_profile(cfg.profile, &manifest_json)?;
         // Before anything is served: every export the runner could not serve is either named in a
         // refusal or printed, one line each.
         let policy = UnservedTriggers::parse(&cfg.functions_unserved_triggers).unwrap_or_default();
@@ -2921,6 +2919,18 @@ async fn start_codebase(
         runner.kill_now();
     }
     configured
+}
+
+/// The manifest `profile` serves: the parsed manifest, refused when the strict profile finds a schedule production
+/// Cloud Scheduler refuses, with the blocking functions the profile does not serve set aside.
+fn manifest_for_profile(
+    profile: CompatibilityProfile,
+    manifest_json: &serde_json::Value,
+) -> Result<fireemu_core_functions::manifest::FunctionManifest, String> {
+    let mut manifest = parse_manifest(manifest_json)?;
+    check_scheduler_refusals_for(profile, &manifest)?;
+    serve_blocking_events_for(profile, &mut manifest);
+    Ok(manifest)
 }
 
 /// Refuses, under the strict profile, a scheduled function whose job production Cloud Scheduler refuses to create,
@@ -6781,6 +6791,47 @@ mod tests {
         assert_eq!(
             super::check_scheduler_refusals_for(super::CompatibilityProfile::Strict, &other),
             Ok(())
+        );
+    }
+
+    /// The manifest a profile serves is where the refusal is applied: strict fails with production's text, emulator
+    /// parses the same declaration, and the blocking-function handling of each profile is unchanged.
+    #[test]
+    fn the_served_manifest_applies_the_scheduler_refusal_by_profile() {
+        let declared = json!({"functions": [
+            {"name": "schedRetryV2", "generation": 2, "trigger": {"type": "schedule", "schedule": "every 5 minutes", "retryConfig": {"retryCount": 6}}},
+            {"name": "mail", "trigger": {"type": "blockingAuth", "eventType": "providers/cloud.auth/eventTypes/user.beforeSendEmail"}},
+        ]});
+        let error = super::manifest_for_profile(super::CompatibilityProfile::Strict, &declared)
+            .unwrap_err();
+        assert!(error.contains("schedRetryV2"), "{error}");
+        assert!(
+            error.contains(
+                "invalid retry count. The retry_count must be a positive integer less than 5"
+            ),
+            "{error}"
+        );
+        let emulator =
+            super::manifest_for_profile(super::CompatibilityProfile::Emulator, &declared).unwrap();
+        assert_eq!(
+            emulator
+                .functions
+                .iter()
+                .map(|f| f.name.as_str())
+                .collect::<Vec<_>>(),
+            ["schedRetryV2"],
+            "the emulator profile keeps the schedule and sets the send-blocking function aside"
+        );
+        let accepted = json!({"functions": [
+            {"name": "ok", "trigger": {"type": "schedule", "schedule": "every 5 minutes", "retryConfig": {"retryCount": 4}}},
+            {"name": "mail", "trigger": {"type": "blockingAuth", "eventType": "providers/cloud.auth/eventTypes/user.beforeSendEmail"}},
+        ]});
+        let strict =
+            super::manifest_for_profile(super::CompatibilityProfile::Strict, &accepted).unwrap();
+        assert_eq!(
+            strict.functions.len(),
+            2,
+            "strict serves the send-blocking function"
         );
     }
 

@@ -112,6 +112,7 @@ export async function recordBrowser({
   let accounts = {};
   let outcome;
   let diagnostics = [];
+  let journaledNames;
   const root = `projects/${target.project}/databases/(default)/documents`;
   try {
     // Ledger 330: conf_listen reads as empty before the run; if it is not, stop without deleting.
@@ -126,14 +127,14 @@ export async function recordBrowser({
     }
     accounts = await session.create(["a", "b"]);
     log("accounts created");
-    journal.append({
-      type: "names",
-      phase: "before",
-      names: namesOf({ project: target.project, run, modes, accounts }).map((name) => ({
-        name,
-        op: "create",
-      })),
-    });
+    // Names the cases may write: marked `maybe` so that the A2 read-back does not read the missing
+    // answer line as an unknown create. A run whose writes turn out not to be known gets its
+    // answer line (unknown) below.
+    journaledNames = namesOf({ project: target.project, run, modes, accounts }).map((name) => ({
+      name,
+      op: "create",
+    }));
+    journal.append({ type: "names", phase: "before", maybe: true, names: journaledNames });
     const config = {
       mode: production ? "production" : "local",
       wireCap: WIRE_CAP,
@@ -212,6 +213,10 @@ export async function recordBrowser({
     if (!receipt.cleanup?.complete) sdkCleanupComplete = false;
     perMode[mode] = { run: result.run, transport: result.transport };
   }
+  // A write that threw, a mode that failed or a driver that left no result has an unknown outcome:
+  // the names the cases may have written are then unknown creates, which absence at A2 cannot settle.
+  if (journaledNames && !writesKnown)
+    journal.append({ type: "names", phase: "after", outcome: "unknown", names: journaledNames });
   const total = productionRequests();
   journal.append({ type: "end", productionRequests: total });
   return {

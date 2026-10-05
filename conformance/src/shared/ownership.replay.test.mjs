@@ -253,7 +253,9 @@ describe("replays of recorded production answers", () => {
     // The real run left exactly these behind (the paused job, and the calendar topic it kept).
     assert.deepEqual(result.report.owned, ["jobs/shape", "topics/calendar"]);
     assert.equal(result.report.closureReady, false);
+    // Production deleted the six calendar jobs with 200; that run read back only the shape names.
     assert.deepEqual(result.report.reasons, [
+      ...["c01", "c02", "c03", "c04", "c05", "c06"].map((id) => `deleted-unverified:jobs/${id}`),
       "owned-not-deleted:jobs/shape",
       "owned-not-deleted:topics/calendar",
     ]);
@@ -276,8 +278,28 @@ describe("replays of recorded production answers", () => {
       assert.equal(op.action, "delete");
       assert.equal(op.status, 404);
     }
-    assert.equal(result.report.closureReady, true);
-    assert.deepEqual(result.report.reasons, []);
+    // FE v5 did not read its deletes back, so under the 2xx-then-404 rule none of them is settled.
+    const deleted = new Set(
+      fx.ops.filter((op) => op.action === "delete" && op.status < 300).map((op) => op.name),
+    );
+    assert.equal(deleted.size > 0, true);
+    assert.equal(result.report.closureReady, false);
+    assert.deepEqual(result.report.deletedUnverified, [...deleted].toSorted());
+    assert.ok(result.report.reasons.every((reason) => reason.startsWith("deleted-unverified:")));
+    // The read-back the envelope now requires settles them all.
+    const kept = replay(fx.ops, { keep: true });
+    try {
+      for (const name of kept.report.deletedUnverified) {
+        recordRead(kept.state, {
+          name,
+          transport: "rest",
+          answer: { status: 404, bodyReadable: true },
+        });
+      }
+      assert.equal(closureReport(kept.state).closureReady, true);
+    } finally {
+      kept.close();
+    }
   });
 
   it("every fixture names its sources by digest and size and holds no project id or number", () => {

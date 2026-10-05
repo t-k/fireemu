@@ -16,6 +16,7 @@ import * as fs from "node:fs";
 import {
   MAX_SETTLE_DELAY_MS,
   SETTLE_ABSENT_AFTER_MS as SETTLE_CONST,
+  acceptUnconfirmed,
   ANSWER_CLASSES,
   beginCreate,
   beginDelete,
@@ -455,6 +456,8 @@ describe("the delete guard", () => {
     assert.equal(isOwned(state, "topics/a"), false, "nothing of ours is left");
     assert.deepEqual(mayDelete(state, "topics/a"), { allowed: true, reason: "create" });
     assert.equal(remove("topics/a", NOT_FOUND).class, "notFound");
+    assert.equal(closureReport(state).closureReady, false, "its own delete is not read back yet");
+    read("topics/a", NOT_FOUND);
     assert.equal(closureReport(state).closureReady, true);
   });
 
@@ -506,6 +509,7 @@ describe("the delete guard", () => {
     assert.equal(isOwned(state, "topics/a"), true);
     assert.deepEqual(mayDelete(state, "topics/a"), { allowed: true, reason: "settled-read" });
     assert.equal(remove("topics/a", NO_CONTENT).class, "ok");
+    read("topics/a", NOT_FOUND);
     assert.equal(closureReport(state).closureReady, true);
   });
 
@@ -600,14 +604,62 @@ describe("the delete guard", () => {
     assert.equal(isOwned(state, "jobs/a"), true);
     assert.equal(closureReport(state).closureReady, false);
     assert.equal(remove("jobs/a", OK).class, "ok");
+    read("jobs/a", NOT_FOUND);
     assert.equal(closureReport(state).closureReady, true);
   });
 
-  it("treats a delete that answered 404 as gone", () => {
+  it("does not treat a 404 for a confirmed create as gone: it stays open until the A2 read-back", () => {
     create("topics/a", OK);
     assert.equal(remove("topics/a", NOT_FOUND).class, "notFound");
-    assert.equal(isOwned(state, "topics/a"), false);
-    assert.equal(closureReport(state).closureReady, true);
+    assert.equal(isOwned(state, "topics/a"), true);
+    let report = closureReport(state);
+    assert.equal(report.closureReady, false);
+    assert.deepEqual(report.reasons, [
+      "owned-not-deleted:topics/a",
+      "confirmed-create-reads-404:topics/a",
+    ]);
+    assert.deepEqual(report.confirmedReadsMissing, ["topics/a"]);
+    // The same for a GET that reads 404, in the run and long after.
+    create("topics/b", OK);
+    assert.equal(read("topics/b", NOT_FOUND), "absent");
+    advance(10 * SETTLE);
+    read("topics/b", NOT_FOUND);
+    report = closureReport(state);
+    assert.deepEqual(report.confirmedReadsMissing, ["topics/a", "topics/b"]);
+    assert.equal(report.closureReady, false);
+    // The run's own DELETE answered 2xx, then a 404 read, is the normal settlement.
+    assert.equal(remove("topics/b", NO_CONTENT).class, "ok");
+    read("topics/b", NOT_FOUND);
+    remove("topics/a", NO_CONTENT);
+    read("topics/a", NOT_FOUND);
+    report = closureReport(state);
+    assert.deepEqual(report.confirmedReadsMissing, []);
+    assert.equal(report.closureReady, true);
+  });
+
+  it("starts a new confirmed create with no 404 against it", () => {
+    create("topics/a", OK);
+    read("topics/a", NOT_FOUND);
+    assert.deepEqual(closureReport(state).confirmedReadsMissing, ["topics/a"]);
+    remove("topics/a", OK);
+    assert.deepEqual(closureReport(state).confirmedReadsMissing, [], "a 2xx delete resets it");
+    read("topics/a", NOT_FOUND);
+    create("topics/a", OK);
+    const report = closureReport(state);
+    assert.deepEqual(report.confirmedReadsMissing, []);
+    assert.deepEqual(report.reasons, ["owned-not-deleted:topics/a"]);
+    // Also when the delete was never read back before the re-create.
+    read("topics/a", NOT_FOUND);
+    remove("topics/a", OK);
+    create("topics/a", OK);
+    assert.deepEqual(closureReport(state).reasons, ["owned-not-deleted:topics/a"]);
+  });
+
+  it("keeps a 404 read of a name this run does not own out of the evidence", () => {
+    read("topics/never", NOT_FOUND);
+    create("topics/c", CONFLICT);
+    read("topics/c", NOT_FOUND);
+    assert.deepEqual(closureReport(state).confirmedReadsMissing, []);
   });
 
   it("lets a deleted name be created and owned again", () => {
@@ -635,19 +687,50 @@ describe("unknown deletes", () => {
     assert.equal(closureReport(state).closureReady, false);
   });
 
-  it("forces closureReady false for any unknown delete, even one a GET settled as gone", () => {
+  it("forces closureReady false for any unknown delete, even after a GET found nothing past the delay", () => {
     create("topics/a", OK);
     remove("topics/a", { status: 503, bodyReadable: true });
     advance(SETTLE);
     assert.equal(read("topics/a", NOT_FOUND), "absent");
-    assert.equal(isOwned(state, "topics/a"), false);
+    assert.equal(isOwned(state, "topics/a"), true, "the delete's effect was never seen");
     const report = closureReport(state);
     assert.equal(report.closureReady, false);
     assert.equal(report.unknownDeletes, 1);
-    assert.deepEqual(report.reasons, ["unknown-delete-answers:1"]);
+    assert.deepEqual(report.reasons, [
+      "unsettled-delete:topics/a",
+      "owned-not-deleted:topics/a",
+      "unknown-delete-answers:1",
+    ]);
     // Nothing the run does afterwards clears it.
     create("topics/b", OK);
     remove("topics/b", OK);
+    read("topics/b", NOT_FOUND);
+    assert.equal(closureReport(state).closureReady, false);
+  });
+
+  it("refuses a delete whose operation never reads done, and keeps closure false", () => {
+    create("topics/a", OK);
+    const pending = { ...OK, operationPending: true };
+    assert.equal(remove("topics/a", pending).reason, "operation-pending");
+    assert.equal(
+      refusal(() => beginDelete(state, { name: "topics/a", transport: "rest" })),
+      "unsettled",
+    );
+    advance(10 * SETTLE);
+    read("topics/a", NOT_FOUND);
+    read("topics/a", NOT_FOUND);
+    assert.equal(
+      refusal(() => beginDelete(state, { name: "topics/a", transport: "rest" })),
+      "unsettled",
+    );
+    assert.equal(closureReport(state).closureReady, false);
+    assert.equal(closureReport(state).unknownDeletes, 1);
+    // Even once an own GET shows the name, the delete is not sent again.
+    read("topics/a", OK);
+    assert.equal(
+      refusal(() => beginDelete(state, { name: "topics/a", transport: "rest" })),
+      "unknown-delete-not-resent",
+    );
     assert.equal(closureReport(state).closureReady, false);
   });
 
@@ -681,12 +764,20 @@ describe("closure", () => {
     create("b", OK);
     remove("a", OK);
     remove("b", NO_CONTENT);
+    read("a", NOT_FOUND);
+    read("b", NOT_FOUND);
     assert.deepEqual(closureReport(state), {
       closureReady: true,
       reasons: [],
       unknownDeletes: 0,
       owned: [],
       unsettled: [],
+      confirmedReadsMissing: [],
+      deletedUnverified: [],
+      deletedButPresent: [],
+      accepted: [],
+      lastRequestAt: new Date(START).toISOString(),
+      a2NotBefore: new Date(START + SETTLE).toISOString(),
       details: [],
       unknownAnswers: [],
       a2Required: false,
@@ -928,6 +1019,7 @@ describe("what the answer classes, errors and reports expose", () => {
       settled: false,
       settledBy: null,
       settledAt: null,
+      acceptedBy: null,
       eligibleForA2At: a2,
       requiresA2: true,
       absentReads: [],
@@ -1169,6 +1261,8 @@ describe("settling: presence settles an unknown answer at once, absence never se
       );
       assert.equal(closureReport(state).closureReady, false, "created, not yet deleted");
       assert.equal(remove("a", NO_CONTENT).class, "ok");
+      assert.equal(closureReport(state).closureReady, false, "its delete is not read back yet");
+      read("a", NOT_FOUND);
       const done = closureReport(state);
       assert.equal(done.closureReady, true);
       assert.equal(
@@ -1205,7 +1299,7 @@ describe("settling: presence settles an unknown answer at once, absence never se
     assert.equal(isOwned(state, "a"), true);
   });
 
-  it("settles an unknown delete at once when a GET shows the name, and by absence only after the delay", () => {
+  it("settles an unknown delete at once when a GET shows the name, and never by absence", () => {
     create("a", OK);
     remove("a", TIMEOUT);
     advance(SETTLE - 1);
@@ -1214,13 +1308,19 @@ describe("settling: presence settles an unknown answer at once, absence never se
     assert.equal(isOwned(state, "a"), true, "unsettled: still counted as ours");
     advance(1);
     read("a", NOT_FOUND);
-    assert.deepEqual(unsettledNames(state), []);
-    assert.equal(isOwned(state, "a"), false);
-    assert.equal(entryOf("a").settledBy, "absent-after-delay");
+    advance(10 * SETTLE);
+    read("a", NOT_FOUND);
+    stillUnsettled("a");
+    assert.equal(isOwned(state, "a"), true);
+    const record = entryOf("a");
+    assert.deepEqual(
+      [record.settled, record.settledBy, record.state, record.absentReads.map((r) => r.afterDelay)],
+      [false, null, "unknown-delete-absent-in-run", [false, true, true]],
+    );
     create("b", OK);
     remove("b", TIMEOUT);
     read("b", OK);
-    assert.deepEqual(unsettledNames(state), []);
+    stillUnsettled("a");
     assert.equal(isOwned(state, "b"), true);
     assert.equal(entryOf("b").settledBy, "present");
   });
@@ -1267,16 +1367,23 @@ describe("settling: presence settles an unknown answer at once, absence never se
       report.unknownAnswers.map((e) => [e.name, e.action, e.state, e.settledBy, e.requiresA2]),
       [
         ["c", "create", "settled-present", "present", true],
-        ["d", "delete", "settled-absent-after-delay", "absent-after-delay", true],
+        ["d", "delete", "unknown-delete-absent-in-run", null, true],
       ],
     );
     assert.equal(
       report.unknownAnswers[1].eligibleForA2At,
       new Date(START + 1000 + SETTLE).toISOString(),
     );
-    assert.equal(report.unknownAnswers[1].settledAt, new Date(START + 1000 + SETTLE).toISOString());
+    assert.equal(report.unknownAnswers[1].settledAt, null);
     assert.equal(report.unknownAnswers[0].settledAt, new Date(START + 1005 + SETTLE).toISOString());
-    assert.deepEqual(report.details, [], "settled names are not in the unsettled details");
+    assert.deepEqual(
+      report.details.map((d) => d.name),
+      ["d"],
+      "only the unsettled answer is in the unsettled details",
+    );
+    // The A2 read-back starts the delay after the last request, not after an earlier answer.
+    assert.equal(report.lastRequestAt, new Date(START + 1005 + SETTLE).toISOString());
+    assert.equal(report.a2NotBefore, new Date(START + 1005 + 2 * SETTLE).toISOString());
     assert.equal(report.a2Required, true);
     // The same list after a resume, with the same times.
     closeOwnership(state);
@@ -1284,7 +1391,7 @@ describe("settling: presence settles an unknown answer at once, absence never se
     assert.deepEqual(closureReport(state).unknownAnswers, report.unknownAnswers);
   });
 
-  it("keeps an unknown DELETE in the report after an absent GET past the delay, and closure false across a resume", () => {
+  it("keeps an unknown DELETE open in the report after an absent GET past the delay, across a resume", () => {
     create("a", OK);
     remove("a", TIMEOUT);
     advance(SETTLE);
@@ -1292,7 +1399,11 @@ describe("settling: presence settles an unknown answer at once, absence never se
     const check = () => {
       const report = closureReport(state);
       assert.equal(report.closureReady, false);
-      assert.deepEqual(report.reasons, ["unknown-delete-answers:1"]);
+      assert.deepEqual(report.reasons, [
+        "unsettled-delete:a",
+        "owned-not-deleted:a",
+        "unknown-delete-answers:1",
+      ]);
       assert.equal(report.a2Required, true);
       const [entry] = report.unknownAnswers;
       assert.deepEqual(
@@ -1300,7 +1411,8 @@ describe("settling: presence settles an unknown answer at once, absence never se
         ["a", "delete", "transport-error", new Date(START).toISOString(), true],
       );
       assert.equal(entry.eligibleForA2At, new Date(START + SETTLE).toISOString());
-      assert.equal(entry.state, "settled-absent-after-delay");
+      assert.equal(entry.state, "unknown-delete-absent-in-run");
+      assert.equal(entry.settled, false);
     };
     check();
     closeOwnership(state);
@@ -1350,7 +1462,11 @@ describe("the settle delay is a recorded, immutable, floored setting", () => {
     create("a", OK);
     remove("a", TIMEOUT);
     read("a", NOT_FOUND);
-    assert.deepEqual(unsettledNames(state), [], "the short delay is used by an unknown delete");
+    assert.equal(
+      closureReport(state).unknownAnswers[0].absentReads[0].afterDelay,
+      true,
+      "the short delay is the one that counts a read as late",
+    );
   });
 
   it("refuses values that are not a safe integer, with or without the flag", () => {
@@ -1408,13 +1524,12 @@ describe("the settle delay is a recorded, immutable, floored setting", () => {
     );
     advance(2 * SETTLE);
     read("a", NOT_FOUND);
-    stillUnsettled();
     advance(SETTLE);
     read("a", NOT_FOUND);
-    assert.deepEqual(unsettledNames(state), []);
-    function stillUnsettled() {
-      assert.deepEqual(unsettledNames(state), ["a"]);
-    }
+    assert.deepEqual(
+      closureReport(state).unknownAnswers[0].absentReads.map((r) => r.afterDelay),
+      [false, true],
+    );
   });
 
   it("refuses a resume with a different delay, and accepts the same one", () => {
@@ -1456,7 +1571,7 @@ describe("the settle delay is a recorded, immutable, floored setting", () => {
     remove("a", TIMEOUT);
     advance(5);
     read("a", NOT_FOUND);
-    assert.deepEqual(unsettledNames(state), []);
+    assert.equal(closureReport(state).unknownAnswers[0].absentReads[0].afterDelay, true);
   });
 
   it("refuses a ledger whose first row is not a valid open row, or that has a second one", () => {
@@ -1697,5 +1812,335 @@ describe("one writer at a time", () => {
     );
     assert.equal(existsSync(lockPath()), false);
     state = open("fresh.jsonl");
+  });
+});
+
+describe("a delete of ours settles only when an own GET reads the name as 404", () => {
+  const reasons = () => closureReport(state).reasons;
+
+  it("keeps a name open after a 2xx delete until it is read back", () => {
+    create("a", OK);
+    remove("a", NO_CONTENT);
+    const report = closureReport(state);
+    assert.equal(report.closureReady, false);
+    assert.deepEqual(report.reasons, ["deleted-unverified:a"]);
+    assert.deepEqual(report.deletedUnverified, ["a"]);
+    assert.equal(isOwned(state, "a"), false, "it is no longer counted as owned");
+    read("a", NOT_FOUND);
+    assert.equal(closureReport(state).closureReady, true);
+    assert.deepEqual(closureReport(state).deletedUnverified, []);
+  });
+
+  it("counts a delete whose operation was read done like a 2xx delete", () => {
+    create("a", { ...OK, operationPending: true });
+    read("a", OK); // settled as created by the own read
+    // The operation of the delete was polled to done: the recorder reports a plain 200.
+    remove("a", OK);
+    assert.deepEqual(reasons(), ["deleted-unverified:a"]);
+    read("a", NOT_FOUND);
+    assert.equal(closureReport(state).closureReady, true);
+  });
+
+  it("keeps a name open when a read-back shows it again, and settles on a later 404", () => {
+    create("a", OK);
+    remove("a", OK);
+    assert.equal(read("a", OK), "present");
+    assert.deepEqual(reasons(), ["deleted-but-present:a"]);
+    assert.deepEqual(closureReport(state).deletedButPresent, ["a"]);
+    read("a", NOT_FOUND);
+    assert.equal(closureReport(state).closureReady, true);
+    read("a", OK);
+    assert.equal(closureReport(state).closureReady, false, "the last read counts");
+    assert.deepEqual(reasons(), ["deleted-but-present:a"]);
+  });
+
+  it("does not count a read before the delete, an unreadable read, or a probe delete", () => {
+    create("a", OK);
+    read("a", NOT_FOUND); // before the delete: a lag can hide a live resource
+    remove("a", OK);
+    assert.deepEqual(reasons(), ["deleted-unverified:a"]);
+    recordRead(state, { name: "a", transport: "rest", answer: NOT_FOUND_UNREADABLE });
+    assert.equal(read("a", TIMEOUT), "unknown");
+    assert.equal(
+      recordRead(state, { name: "a", transport: "rest", answer: { status: 404 } }),
+      "unknown",
+    );
+    assert.deepEqual(reasons(), ["deleted-unverified:a"]);
+    assert.equal(remove("a", NOT_FOUND).class, "notFound", "a probe delete answered 404");
+    assert.deepEqual(reasons(), ["deleted-unverified:a"], "a delete answer is not a read-back");
+  });
+
+  it("starts again when the name is created again, and after a second delete", () => {
+    create("a", OK);
+    remove("a", OK);
+    read("a", NOT_FOUND);
+    create("a", OK);
+    assert.deepEqual(reasons(), ["owned-not-deleted:a"]);
+    remove("a", OK);
+    assert.deepEqual(reasons(), ["deleted-unverified:a"]);
+    read("a", NOT_FOUND);
+    assert.equal(closureReport(state).closureReady, true);
+  });
+
+  it("keeps the same state across a resume", () => {
+    create("a", OK);
+    create("b", OK);
+    remove("a", OK);
+    remove("b", OK);
+    read("b", OK);
+    const before = closureReport(state);
+    closeOwnership(state);
+    state = open();
+    assert.deepEqual(closureReport(state), before);
+    assert.deepEqual(reasons(), ["deleted-unverified:a", "deleted-but-present:b"]);
+  });
+});
+
+const NOT_FOUND_UNREADABLE = { status: 404, bodyReadable: false };
+
+describe("an unknown DELETE is never followed by a create, and a refusal changes nothing", () => {
+  it("refuses a create of a name with an unknown delete, settled by a present read or not", () => {
+    create("a", OK);
+    remove("a", TIMEOUT);
+    assert.equal(
+      refusal(() => beginCreate(state, { name: "a", transport: "rest" })),
+      "unknown-delete-not-reused",
+    );
+    advance(SETTLE);
+    read("a", NOT_FOUND);
+    assert.equal(
+      refusal(() => beginCreate(state, { name: "a", transport: "rest" })),
+      "unknown-delete-not-reused",
+    );
+    read("a", OK);
+    assert.equal(
+      refusal(() => beginCreate(state, { name: "a", transport: "rest" })),
+      "unknown-delete-not-reused",
+    );
+  });
+
+  it("changes neither the ledger nor the unknown record when a request is refused", () => {
+    create("u", TIMEOUT);
+    create("d", OK);
+    remove("d", TIMEOUT);
+    const ledger = () => readFileSync(join(dir, "ledger.jsonl"), "utf8");
+    const before = [ledger(), JSON.stringify(closureReport(state).unknownAnswers)];
+    for (const call of [
+      () => beginCreate(state, { name: "u", transport: "rest" }),
+      () => beginCreate(state, { name: "d", transport: "rest" }),
+      () =>
+        recordAnswer(
+          state,
+          { ticket: 1, action: "create", name: "u", transport: "rest" },
+          CONFLICT,
+        ),
+      () =>
+        recordAnswer(
+          state,
+          { ticket: 3, action: "delete", name: "d", transport: "rest" },
+          CONFLICT,
+        ),
+    ]) {
+      assert.ok(["unsettled", "unknown-delete-not-reused", "stale-ticket"].includes(refusal(call)));
+    }
+    assert.deepEqual([ledger(), JSON.stringify(closureReport(state).unknownAnswers)], before);
+    // A conflict on another name never touches them.
+    create("x", OK);
+    create("x", CONFLICT);
+    assert.deepEqual(
+      closureReport(state).unknownAnswers.map((e) => [e.name, e.settled]),
+      [
+        ["u", false],
+        ["d", false],
+      ],
+    );
+  });
+});
+
+describe("the A2 read-back starts after the last request", () => {
+  it("is null until a request is made, then the delay after the last intent, answer or read", () => {
+    assert.equal(closureReport(state).lastRequestAt, null);
+    assert.equal(closureReport(state).a2NotBefore, null);
+    create("a", TIMEOUT);
+    advance(1000);
+    const ticket = beginCreate(state, { name: "b", transport: "rest" });
+    assert.equal(closureReport(state).lastRequestAt, new Date(START + 1000).toISOString());
+    advance(2000);
+    recordAnswer(state, ticket, OK);
+    assert.equal(closureReport(state).lastRequestAt, new Date(START + 3000).toISOString());
+    advance(5000);
+    read("a", NOT_FOUND);
+    const report = closureReport(state);
+    assert.equal(report.lastRequestAt, new Date(START + 8000).toISOString());
+    assert.equal(report.a2NotBefore, new Date(START + 8000 + SETTLE).toISOString());
+    assert.ok(report.a2NotBefore > report.unknownAnswers[0].eligibleForA2At);
+  });
+
+  it("is not moved by an audit row, a resume or a synthetic answer", () => {
+    create("a", OK);
+    beginCreate(state, { name: "b", transport: "rest" });
+    advance(10_000);
+    refusal(() => beginDelete(state, { name: "never", transport: "rest" }));
+    closeOwnership(state);
+    advance(20_000);
+    state = open();
+    const report = closureReport(state);
+    assert.equal(report.lastRequestAt, new Date(START).toISOString());
+    assert.equal(report.unknownAnswers[0].answeredAt, new Date(START + 30_000).toISOString());
+  });
+});
+
+describe("accepting an unconfirmed create", () => {
+  const ask = (name, ref) => acceptUnconfirmed(state, name, ref);
+  const lateAbsent = (name) => {
+    advance(SETTLE);
+    read(name, NOT_FOUND);
+  };
+
+  it("refuses an empty or unusable reference and writes nothing", () => {
+    create("a", TIMEOUT);
+    lateAbsent("a");
+    const before = readFileSync(join(dir, "ledger.jsonl"), "utf8");
+    for (const ref of [
+      "",
+      "   ",
+      "\n",
+      undefined,
+      null,
+      5,
+      {},
+      "x\u0000y",
+      "a\nb",
+      "x".repeat(1025),
+    ]) {
+      assert.equal(
+        refusal(() => ask("a", ref)),
+        "bad-ledger-ref",
+        JSON.stringify(ref),
+      );
+    }
+    assert.equal(readFileSync(join(dir, "ledger.jsonl"), "utf8"), before);
+    assert.equal(closureReport(state).closureReady, false);
+  });
+
+  it("refuses a name that is not an unsettled unknown create, or has no late absent read", () => {
+    create("owned", OK);
+    create("del", OK);
+    remove("del", TIMEOUT);
+    create("fresh", TIMEOUT);
+    create("early", TIMEOUT);
+    advance(SETTLE - 1);
+    read("early", NOT_FOUND);
+    advance(SETTLE);
+    read("del", NOT_FOUND);
+    for (const name of ["owned", "del", "never"]) {
+      assert.equal(
+        refusal(() => ask(name, "ledger 900")),
+        "not-unconfirmed",
+        name,
+      );
+    }
+    assert.equal(
+      refusal(() => ask("fresh", "ledger 900")),
+      "absent-read-required",
+      "no read at all",
+    );
+    assert.equal(
+      refusal(() => ask("early", "ledger 900")),
+      "absent-read-required",
+      "only a read before the delay",
+    );
+    assert.equal(
+      refusal(() => ask("", "ledger 900")),
+      "bad-name",
+    );
+  });
+
+  it("lets closureReady drop only that name, records the reference, and the name is never created again", () => {
+    create("a", TIMEOUT);
+    create("b", TIMEOUT);
+    lateAbsent("a");
+    read("b", NOT_FOUND);
+    ask("a", " owner ledger 901: run r, name a, reads 7 and 9 ");
+    let report = closureReport(state);
+    assert.equal(report.closureReady, false, "b is still unconfirmed");
+    assert.deepEqual(report.unsettled, ["b"]);
+    assert.deepEqual(report.absentUnconfirmed, ["b"]);
+    assert.deepEqual(report.reasons, ["unsettled-create:b", "unknown-create-absent-unconfirmed:b"]);
+    assert.deepEqual(report.accepted, [
+      {
+        name: "a",
+        ledgerRef: " owner ledger 901: run r, name a, reads 7 and 9 ",
+        at: new Date(START + SETTLE).toISOString(),
+      },
+    ]);
+    const entry = report.unknownAnswers.find((e) => e.name === "a");
+    assert.deepEqual(
+      [entry.settled, entry.settledBy, entry.state, entry.acceptedBy],
+      [true, "accepted", "settled-accepted", " owner ledger 901: run r, name a, reads 7 and 9 "],
+    );
+    assert.equal(isOwned(state, "a"), false);
+    assert.equal(
+      refusal(() => beginCreate(state, { name: "a", transport: "rest" })),
+      "accepted-unconfirmed-not-reused",
+    );
+    assert.equal(
+      refusal(() => beginDelete(state, { name: "a", transport: "rest" })),
+      "not-owned",
+    );
+    assert.equal(
+      refusal(() => ask("a", "ledger 902")),
+      "not-unconfirmed",
+      "a name is accepted once",
+    );
+    lateAbsent("b");
+    ask("b", "ledger 901");
+    report = closureReport(state);
+    assert.equal(report.closureReady, true);
+    assert.equal(report.a2Required, true, "an acceptance does not replace the A2 read-back");
+    assert.deepEqual(report.absentUnconfirmed, []);
+    assert.equal(report.coordinatorNote, null);
+  });
+
+  it("is a ledger row that a resume replays, and a stray acceptance row corrupts the ledger", () => {
+    create("a", TIMEOUT);
+    lateAbsent("a");
+    ask("a", "ledger 901");
+    const rows = readLedger(join(dir, "ledger.jsonl"), "run1").rows;
+    const row = rows.at(-1);
+    assert.deepEqual(
+      [row.phase, row.name, row.ledgerRef, row.ticket],
+      ["accept", "a", "ledger 901", 1],
+    );
+    const before = closureReport(state);
+    closeOwnership(state);
+    state = open();
+    assert.deepEqual(closureReport(state), before);
+    assert.equal(
+      refusal(() => beginCreate(state, { name: "a", transport: "rest" })),
+      "accepted-unconfirmed-not-reused",
+    );
+    closeOwnership(state);
+    const path = ledgerFile("stray.jsonl", [
+      intent(1, "create", "a"),
+      answerRow(1, "create", "a"),
+      { phase: "accept", name: "a", ticket: 1, ledgerRef: "x" },
+    ]);
+    assert.throws(
+      () => openOwnership({ path, runId: "run1" }),
+      (error) => error.code === "corrupt-ledger" && /acceptance of a/u.test(error.message),
+    );
+    state = open("fresh.jsonl");
+  });
+
+  it("is refused by a closed or failed state", () => {
+    create("a", TIMEOUT);
+    lateAbsent("a");
+    closeOwnership(state);
+    assert.equal(
+      refusal(() => ask("a", "ledger 901")),
+      "closed",
+    );
+    state = open("second.jsonl");
   });
 });

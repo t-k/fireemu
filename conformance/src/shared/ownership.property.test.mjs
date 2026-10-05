@@ -118,32 +118,39 @@ function reference(history) {
   let created = false; // this run's own create answered 2xx, or a GET settled it as present
   let pending = null;
   let noResend = false;
+  let phase = null; // after our own 2xx delete: unverified, verified (an own GET read 404) or present
   for (const event of history) {
     if (event.kind === "create") {
       if (event.klass === "ok") {
         owned = true;
         created = true;
+        phase = null;
       } else if (event.klass === "unknown") pending = { action: "create", since: event.t };
     } else if (event.kind === "delete") {
-      if (event.klass === "ok" || event.klass === "notFound") owned = false;
-      else if (event.klass === "unknown") {
+      if (event.klass === "ok") {
+        owned = false;
+        phase = "unverified";
+      } else if (event.klass === "unknown") {
         pending = { action: "delete", since: event.t };
         noResend = true;
       }
-    } else if (event.kind === "read" && pending && event.observed !== "unknown") {
-      // Presence settles at once. Absence never settles an unknown create; it settles an unknown
-      // delete only SETTLE after the unknown answer.
-      if (event.observed === "absent") {
-        if (pending.action === "create" || event.t - pending.since < SETTLE) continue;
-        owned = false;
-      } else if (pending.action === "create") {
+    } else if (event.kind === "read" && event.observed !== "unknown") {
+      if (!pending) {
+        // Our own delete is settled by an own GET that reads 404; the last read counts.
+        if (phase !== null) phase = event.observed === "present" ? "present" : "verified";
+        continue;
+      }
+      // Presence settles an unknown answer at once. Absence settles none, however late.
+      if (event.observed === "absent") continue;
+      if (pending.action === "create") {
         owned = true;
         created = true;
+        phase = null;
       }
       pending = null;
     }
   }
-  return { owned, created, pending, noResend };
+  return { owned, created, pending, noResend, phase };
 }
 
 function classOf(answer) {
@@ -254,7 +261,7 @@ function runCase(index) {
     const wantReady =
       NAMES.every((name) => {
         const r = reference(history.get(name));
-        return !r.owned && !r.pending;
+        return !r.owned && !r.pending && (r.phase === null || r.phase === "verified");
       }) && !unknownDeleteSeen;
     assert.equal(
       report.closureReady,
@@ -308,8 +315,8 @@ function runCase(index) {
       const inFlight = rng.chance(0.6);
       if (inFlight) {
         const action = w.exists || rng.chance(0.5) ? "delete" : "create";
-        const allowed =
-          action === "create" ? !reference(history.get(name)).pending : expectedAllowed(name);
+        const ref = reference(history.get(name));
+        const allowed = action === "create" ? !ref.pending && !ref.noResend : expectedAllowed(name);
         if (allowed) {
           const ticket =
             action === "create"
@@ -364,10 +371,12 @@ function runCase(index) {
     if (op === "create") {
       const r = reference(history.get(name));
       events.length = 0;
-      if (r.pending) {
+      if (r.pending || r.noResend) {
         assert.throws(
           () => beginCreate(state, { name, transport: "rest" }),
-          (e) => e instanceof OwnershipError && e.code === "unsettled",
+          (e) =>
+            e instanceof OwnershipError &&
+            e.code === (r.noResend ? "unknown-delete-not-reused" : "unsettled"),
           where,
         );
         events.length = 0;

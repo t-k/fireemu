@@ -10,9 +10,10 @@
 //   3. Unknown answers: a transport error, an unreadable body, a status below 200, a 3xx, a 5xx,
 //      a 408, a 499 or a pending operation on a create or delete is unknown. An unknown create is
 //      settled only by a direct GET whose body shows the name; a GET that finds nothing never
-//      settles it, however late, and the name stays in the report for the coordinator. An unknown
-//      delete is settled in this run only by such a GET, or by a GET that finds nothing once the
-//      A2 delay has passed, and it keeps closureReady false either way.
+//      settles it, however late, and the name stays in the report for the coordinator (who may
+//      accept it with acceptUnconfirmed). An unknown delete is sticky: a GET that finds nothing is
+//      only evidence, and it keeps closureReady false. A name this run deleted with a 2xx settles
+//      only when an own GET reads it as 404.
 
 import {
   closeSync,
@@ -134,6 +135,13 @@ function blankName() {
     open: null,
     unsettled: null,
     deleteUnknown: false,
+    // Reads or delete answers of 404 for a create this run confirmed and did not delete.
+    missingReads: 0,
+    // After this run's own DELETE answered 2xx: null (none), "unverified" (no own GET read it back
+    // yet), "verified" (the last own GET answered 404) or "present" (the last own GET showed it).
+    deletePhase: null,
+    // The coordinator accepted an unconfirmed create of this name (ledger reference recorded).
+    accepted: false,
   };
 }
 
@@ -153,6 +161,14 @@ function applyIntent(state, row) {
   if (st.open)
     throw new OwnershipError("in-flight", `${row.action} of ${row.name} is already in flight`);
   st.open = { ticket: row.ticket, action: row.action, name: row.name, transport: row.transport };
+  touch(state, row);
+}
+
+/** The time of the last request (an intent, a real answer or a read), for the A2 read-back. */
+function touch(state, row) {
+  if (row.synthetic === true) return;
+  const at = Date.parse(row.at);
+  if (state.lastRequestAt === null || at > state.lastRequestAt) state.lastRequestAt = at;
 }
 
 function applyAnswer(state, row) {
@@ -164,19 +180,29 @@ function applyAnswer(state, row) {
     );
   }
   st.open = null;
+  touch(state, row);
   const klass = row.class;
   if (row.action === "create") {
     if (klass === "ok") {
       st.owned = true;
       st.created = true;
       st.via = "create";
+      st.missingReads = 0; // a new confirmed create starts with no 404 against it
+      st.deletePhase = null;
     } else if (klass === "unknown") {
       st.unsettled = unknownAnswer(state, row);
     }
     return;
   }
-  if (klass === "ok" || klass === "notFound") {
+  if (klass === "ok") {
+    // Gone as far as the answer says; it counts as settled only after an own GET reads 404.
     st.owned = false;
+    st.missingReads = 0;
+    st.deletePhase = "unverified";
+  } else if (klass === "notFound") {
+    // A 404 for a create this run confirmed is not a settlement (a read-after-write lag can hide a
+    // live resource): only this run's own DELETE answered 2xx, or the coordinator's A2, settles it.
+    if (st.owned) st.missingReads += 1;
   } else if (klass === "unknown") {
     st.unsettled = unknownAnswer(state, row);
     st.deleteUnknown = true;
@@ -205,26 +231,35 @@ function unknownAnswer(state, row) {
 
 function applyRead(state, row) {
   const st = state.names.get(row.name);
-  if (!st || !st.unsettled) return;
-  if (row.observed === "unknown") return;
+  touch(state, row);
+  if (!st || row.observed === "unknown") return;
+  if (!st.unsettled) {
+    if (row.observed === "absent") {
+      // A create this run confirmed that reads 404 stays open (a lag can hide a live resource); a
+      // name this run deleted with a 2xx is read back by this 404.
+      if (st.owned) st.missingReads += 1;
+      else if (st.deletePhase !== null) st.deletePhase = "verified";
+    } else if (st.deletePhase !== null) {
+      st.deletePhase = "present";
+    }
+    return;
+  }
   const record = st.unsettled;
   if (row.observed === "absent") {
     const afterDelay = Date.parse(row.at) - record.since >= state.settleAbsentAfterMs;
     record.absentReads.push({ at: row.at, afterDelay });
-    // Absence alone never settles an unknown create: the request may still take effect (a timed-out
-    // create was seen 40 minutes later), so only the coordinator can accept the name. An unknown
-    // delete is settled by absence once the delay has passed; it still keeps closure false.
-    if (record.action === "create" || !afterDelay) return;
-    settle(st, record, "absent-after-delay", row.at);
-    st.owned = false;
+    // Absence alone settles no unknown answer, however late: a timed-out create was seen 40
+    // minutes later, and the answer to an unknown delete was never seen. Only the coordinator's
+    // A2 read-back, or an acceptance of the name, closes it. The read is kept as evidence.
     return;
   }
-  // Only positive evidence settles an answer at once: a GET whose body shows the name.
+  // Only positive evidence settles an answer: a GET whose body shows the name.
   settle(st, record, "present", row.at);
   if (record.action === "create") {
     st.owned = true;
     st.created = true;
     st.via = "settled-read";
+    st.deletePhase = null;
   }
 }
 
@@ -235,10 +270,25 @@ function settle(st, record, by, at) {
   st.unsettled = null;
 }
 
+function applyAccept(state, row) {
+  const st = state.names.get(row.name);
+  const record = st?.unsettled;
+  if (!record || record.action !== "create") {
+    throw new OwnershipError(
+      "corrupt-ledger",
+      `an acceptance of ${row.name} has no unknown create`,
+    );
+  }
+  record.acceptedBy = row.ledgerRef;
+  settle(st, record, "accepted", row.at);
+  st.accepted = true;
+}
+
 function apply(state, row) {
   if (row.phase === "intent") applyIntent(state, row);
   else if (row.phase === "answer") applyAnswer(state, row);
   else if (row.phase === "read") applyRead(state, row);
+  else if (row.phase === "accept") applyAccept(state, row);
 }
 
 // ---- the ledger file ----
@@ -368,7 +418,7 @@ function releaseLock(lockPath) {
   }
 }
 
-const ROW_PHASES = new Set(["open", "intent", "answer", "read", "guard", "resume"]);
+const ROW_PHASES = new Set(["open", "intent", "answer", "read", "guard", "resume", "accept"]);
 
 function parseRows(text, runId) {
   const lines = text.split("\n");
@@ -433,6 +483,7 @@ function newState(runId, now, io) {
     names: new Map(),
     unknownDeletes: 0,
     unknownAnswers: [],
+    lastRequestAt: null,
     settleAbsentAfterMs: SETTLE_ABSENT_AFTER_MS,
     lockPath: null,
     closed: false,
@@ -567,6 +618,20 @@ function intent(state, action, { name, transport }) {
   const st = state.names.get(name);
   if (st?.open)
     throw new OwnershipError("in-flight", `${st.open.action} of ${name} is already in flight`);
+  if (action === "create" && st?.deleteUnknown) {
+    // Its delete may still take effect and remove the new resource, and every answer on the name
+    // would be ambiguous.
+    throw new OwnershipError(
+      "unknown-delete-not-reused",
+      `${name} has an unknown delete answer; it is never created again in this run`,
+    );
+  }
+  if (action === "create" && st?.accepted) {
+    throw new OwnershipError(
+      "accepted-unconfirmed-not-reused",
+      `${name} was accepted as an unconfirmed create; it is never created again in this run`,
+    );
+  }
   if (st?.unsettled) {
     throw new OwnershipError(
       "unsettled",
@@ -575,8 +640,7 @@ function intent(state, action, { name, transport }) {
   }
   state.ticket += 1;
   const row = { phase: "intent", ticket: state.ticket, action, name, transport };
-  append(state, row);
-  applyIntent(state, row);
+  applyIntent(state, append(state, row));
   return Object.freeze({ ticket: row.ticket, action, name, transport });
 }
 
@@ -676,6 +740,41 @@ export function recordRead(state, { name, transport, answer }) {
   return read.observed;
 }
 
+/**
+ * Records that the coordinator accepted an unconfirmed create: an unknown create of `name` that no
+ * own GET showed, with at least one GET that found nothing after the settle delay. `ledgerRef` is
+ * the owner-ledger line (or recovery packet) naming the run, the name and the reads; it is required.
+ * The name leaves the unsettled set and closureReady no longer waits for it; every other name is
+ * untouched, and the name is never created again in this run.
+ */
+export function acceptUnconfirmed(state, name, ledgerRef) {
+  ensureWritable(state);
+  checkName(name);
+  if (
+    typeof ledgerRef !== "string" ||
+    ledgerRef.trim() === "" ||
+    ledgerRef.length > NAME_LIMIT ||
+    hasControl(ledgerRef)
+  ) {
+    throw new OwnershipError(
+      "bad-ledger-ref",
+      "an acceptance names the owner-ledger line or recovery packet that accepted it",
+    );
+  }
+  const record = state.names.get(name)?.unsettled;
+  if (!record || record.action !== "create") {
+    throw new OwnershipError("not-unconfirmed", `${name} has no unsettled unknown create`);
+  }
+  if (!record.absentReads.some((read) => read.afterDelay)) {
+    throw new OwnershipError(
+      "absent-read-required",
+      `${name} has no GET that found nothing after the settle delay`,
+    );
+  }
+  const row = append(state, { phase: "accept", name, ticket: record.ticket, ledgerRef });
+  applyAccept(state, row);
+}
+
 // ---- queries ----
 
 /** The delete guard: `{ allowed, reason }`, without writing anything. */
@@ -704,12 +803,20 @@ export function unsettledNames(state) {
     .toSorted();
 }
 
+function namesWhere(state, test) {
+  return [...state.names]
+    .filter(([, st]) => test(st))
+    .map(([name]) => name)
+    .toSorted();
+}
+
 /** What the report says about one unknown answer. */
 function describeUnknown(state, record) {
   let stateName;
   if (record.settled) stateName = `settled-${record.settledBy}`;
   else if (record.action === "create" && record.absentReads.length > 0)
     stateName = "unknown-create-absent-unconfirmed";
+  else if (record.absentReads.length > 0) stateName = "unknown-delete-absent-in-run";
   else stateName = `unknown-${record.action}-unsettled`;
   return {
     name: record.name,
@@ -722,6 +829,7 @@ function describeUnknown(state, record) {
     settled: record.settled,
     settledBy: record.settledBy,
     settledAt: record.settledAt,
+    acceptedBy: record.acceptedBy ?? null,
     // Every unknown create or delete needs the separate read-back (A2) at least this long after
     // the answer before any close row.
     eligibleForA2At: new Date(record.since + state.settleAbsentAfterMs).toISOString(),
@@ -747,6 +855,10 @@ export function closureReport(state) {
     if (st.unsettled?.action === "create" && st.unsettled.absentReads.length > 0)
       reasons.push(`unknown-create-absent-unconfirmed:${name}`);
     if (st.owned) reasons.push(`owned-not-deleted:${name}`);
+    if (st.owned && st.missingReads > 0) reasons.push(`confirmed-create-reads-404:${name}`);
+    // Our own DELETE answered 2xx; it settles only once an own GET reads the name as 404.
+    if (st.deletePhase === "unverified") reasons.push(`deleted-unverified:${name}`);
+    if (st.deletePhase === "present") reasons.push(`deleted-but-present:${name}`);
   }
   if (state.unknownDeletes > 0) reasons.push(`unknown-delete-answers:${state.unknownDeletes}`);
   const unknownAnswers = state.unknownAnswers.map((record) => describeUnknown(state, record));
@@ -763,6 +875,23 @@ export function closureReport(state) {
       .map(([name]) => name)
       .toSorted(),
     unsettled: unsettledNames(state),
+    deletedUnverified: namesWhere(state, (st) => st.deletePhase === "unverified"),
+    deletedButPresent: namesWhere(state, (st) => st.deletePhase === "present"),
+    accepted: state.unknownAnswers
+      .filter((record) => record.settledBy === "accepted")
+      .map((record) => ({ name: record.name, ledgerRef: record.acceptedBy, at: record.settledAt })),
+    // The time of the last request, and the earliest the A2 read-back may start: the delay after it.
+    lastRequestAt:
+      state.lastRequestAt === null ? null : new Date(state.lastRequestAt).toISOString(),
+    a2NotBefore:
+      state.lastRequestAt === null
+        ? null
+        : new Date(state.lastRequestAt + state.settleAbsentAfterMs).toISOString(),
+    // Created names that read 404 before this run deleted them: open until the A2 read-back.
+    confirmedReadsMissing: [...state.names]
+      .filter(([, st]) => st.owned && st.missingReads > 0)
+      .map(([name]) => name)
+      .toSorted(),
     // What each unsettled name is waiting for, and why it is unknown.
     details: unsettledNames(state).map((name) =>
       describeUnknown(state, state.names.get(name).unsettled),

@@ -231,18 +231,39 @@ def advancing(base, clock, seconds, after):
 #: Real seconds a concurrent outside writer is given to reach the emulator (its worker starts a process and connects) before the replay moves the frozen clock: a clock that
 #: moves faster than the writer arrives would release the holder before the writer ever met its locks.
 CONCURRENT_SETTLE_SECONDS = 5.0
+#: Real seconds given to a writer still in flight after each slice of a frozen wait: a refusal comes when the emulator's clock passes the writer's contention bound, and the
+#: server notices within its poll, so a wait that runs through in milliseconds would send the next request before the refusal was answered.
+SLICE_YIELD_SECONDS = 0.1
 
 
-def settling(base, seconds=CONCURRENT_SETTLE_SECONDS, sleep=time.sleep):
-    """`base` (a collector class) that, right after it sends a concurrent writer, waits `seconds` of real time (the emulator's clock is frozen: nothing ages) before it goes on."""
-    if not seconds:
+def settling(base, seconds=CONCURRENT_SETTLE_SECONDS, sleep=time.sleep, slice_yield=SLICE_YIELD_SECONDS):
+    """`base` (a collector class) that, right after it sends a concurrent writer, waits `seconds` of real time (the emulator's clock is frozen: nothing ages) before it goes on,
+    and that gives a writer still in flight `slice_yield` real seconds after each slice of a wait (the writer's answer lands at the moment of the clock it was bound by)."""
+    if not seconds and not slice_yield:
         return base
 
     class Settling(base):
         def _start_concurrent(self, step):
             result = super()._start_concurrent(step)
-            sleep(seconds)
+            if seconds:
+                sleep(seconds)
             return result
+
+        def _wait(self, step):
+            if not slice_yield or getattr(self, "started", None) is None:
+                return super()._wait(step)
+            moved = self.sleep
+
+            def slice_then_yield(duration):
+                moved(duration)
+                if getattr(self, "started", None) is not None and self.started["thread"].is_alive():
+                    sleep(slice_yield)
+
+            self.sleep = slice_then_yield
+            try:
+                return super()._wait(step)
+            finally:
+                self.sleep = moved
 
     return Settling
 

@@ -495,4 +495,46 @@ def test_a_collector_that_settles_for_no_time_is_the_base_itself():
     class Base:
         pass
 
-    assert clock.settling(Base, 0) is Base
+    assert clock.settling(Base, 0, slice_yield=0) is Base
+
+
+def test_a_wait_gives_a_writer_in_flight_real_time_after_each_slice_and_one_with_no_writer_none():
+    events = []
+
+    class Thread:
+        def __init__(self, alive):
+            self.alive = alive
+
+        def is_alive(self):
+            return self.alive
+
+    class Base:
+        started = None
+
+        def __init__(self):
+            self.sleep = lambda seconds: events.append(("advance", seconds))
+
+        def _wait(self, step):
+            for _slice in range(3):
+                self.sleep(1)
+                if _slice == 1 and self.started is not None:
+                    self.started["thread"].alive = False   # the writer answers while the second slice is being advanced
+
+    collector = clock.settling(Base, 0, sleep=lambda seconds: events.append(("real", seconds)), slice_yield=0.25)()
+    collector.started = {"thread": Thread(True)}
+    collector._wait({})
+    assert events == [("advance", 1), ("real", 0.25), ("advance", 1), ("real", 0.25), ("advance", 1)]
+    assert collector.sleep.__name__ != "slice_then_yield"   # the wait restores the collector's own sleep
+
+    events.clear()
+    other = clock.settling(Base, 0, sleep=lambda seconds: events.append(("real", seconds)), slice_yield=0.25)()
+    other.started = None
+    other._wait({})
+    assert [event for event in events if event[0] == "real"] == []
+
+
+def test_a_collector_with_no_settle_and_no_yield_is_the_base_itself():
+    class Base:
+        pass
+
+    assert clock.settling(Base, 0, slice_yield=0) is Base

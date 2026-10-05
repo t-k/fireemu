@@ -84,6 +84,43 @@ const operations = ({ usageProject, publishPrefix }) => ({
       ledger: { action: "create", name },
     };
   },
+  // The two creations that deviate from the official request on purpose (stage C), each a named variant that
+  // is the official request but for one thing. `name-mismatch`: the path's `channelId` is `channelId` and the
+  // body names `otherId`; `no-channel-id`: the path has no `channelId` and the body names `channelId`. Every
+  // name the request might create is owned (or a registered probe) and is ledgered, so that a creation of
+  // either is settled and removed like any other.
+  createChannelVariant: (project, location, variant, channelId, otherId, ...rest) => {
+    const named = (id) => `projects/${project}/locations/${location}/channels/${id}`;
+    const parent = `projects/${project}/locations/${location}/channels`;
+    if (variant === "name-mismatch") {
+      if (typeof otherId !== "string") throw new Error("name-mismatch needs the other channel ID");
+      if (rest.length > 0) throw new Error("createChannelVariant takes no more arguments");
+      const names = [named(channelId), named(otherId)];
+      return {
+        host: "eventarc",
+        op: "createChannel",
+        method: "POST",
+        path: `/v1/${parent}?channelId=${encodeURIComponent(channelId)}`,
+        body: { name: named(otherId) },
+        changes: names,
+        ledger: names.map((name) => ({ action: "create", name })),
+      };
+    }
+    if (variant === "no-channel-id") {
+      if (otherId !== undefined || rest.length > 0)
+        throw new Error("no-channel-id takes no other channel ID: it takes no other argument");
+      return {
+        host: "eventarc",
+        op: "createChannel",
+        method: "POST",
+        path: `/v1/${parent}`,
+        body: { name: named(channelId) },
+        changes: [named(channelId)],
+        ledger: [{ action: "create", name: named(channelId) }],
+      };
+    }
+    throw new Error(`unknown createChannel variant ${String(variant)}`);
+  },
   getChannel: (name) => ({ host: "eventarc", method: "GET", path: `/v1/${encodeName(name)}` }),
   listChannels: (project, location, page) => ({
     host: "eventarc",
@@ -130,13 +167,14 @@ export function createClient({
     const label = { case: caseId, step: String(step).padStart(2, "0") };
     // The ledger line is written before the request is sent: a run that dies in the middle of it still
     // names the channel that may have been created or deleted.
-    const entry = spec.ledger && { ...spec.ledger, transport: "rest" };
-    if (entry) ledger.sent(entry);
+    const entries = [spec.ledger ?? []].flat().map((item) => ({ ...item, transport: "rest" }));
+    for (const entry of entries) ledger.sent(entry);
     let reply;
     try {
       reply = await transport.request({
         label,
-        op: operation,
+        // A variant is the same operation as the creation it deviates from: the capture names it so.
+        op: spec.op ?? operation,
         method: spec.method,
         path: spec.path,
         body: spec.body,
@@ -145,8 +183,8 @@ export function createClient({
     } catch (error) {
       // A request that was refused before it was sent (the case's ceiling, the run's budget, a credential
       // that could not be had) never left: it is not an unknown answer, so nothing is left to settle.
-      if (entry && (error?.unsent === true || error?.name === "BudgetExceeded"))
-        ledger.answered({ ...entry, kind: "unsent" });
+      if (error?.unsent === true || error?.name === "BudgetExceeded")
+        for (const entry of entries) ledger.answered({ ...entry, kind: "unsent" });
       throw error;
     }
     const code = restCode(reply.status, reply.body);
@@ -157,7 +195,7 @@ export function createClient({
       ok: code === "OK" && reply.unknown !== true,
       step: label.step,
     };
-    if (entry) ledger.answered({ ...entry, kind: kindOfAnswer(result) });
+    for (const entry of entries) ledger.answered({ ...entry, kind: kindOfAnswer(result) });
     return result;
   };
   const methods = (options) =>

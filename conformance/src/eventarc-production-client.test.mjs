@@ -101,6 +101,13 @@ test("every operation is the request the API documents, on its host", async () =
       "/v1/projects/demo-project/locations/us-central1/channels?channelId=fe0123456789ab-c",
       { name: "projects/demo-project/locations/us-central1/channels/fe0123456789ab-c" },
     ],
+    createChannelVariant: [
+      ["demo-project", "us-central1", "name-mismatch", "fe0123456789ab-c", "fe0123456789ab-d"],
+      "eventarc",
+      "POST",
+      "/v1/projects/demo-project/locations/us-central1/channels?channelId=fe0123456789ab-c",
+      { name: "projects/demo-project/locations/us-central1/channels/fe0123456789ab-d" },
+    ],
     getChannel: [[channel], "eventarc", "GET", `/v1/${channel}`, undefined],
     listChannels: [
       ["demo-project", "-", { pageSize: 5, pageToken: "a b" }],
@@ -130,7 +137,16 @@ test("every operation is the request the API documents, on its host", async () =
     const reply = await client[operation](...args);
     assert.deepEqual(
       calls,
-      [{ host, label: { case: "c", step: "01" }, op: operation, method, path, body }],
+      [
+        {
+          host,
+          label: { case: "c", step: "01" },
+          op: operation === "createChannelVariant" ? "createChannel" : operation,
+          method,
+          path,
+          body,
+        },
+      ],
       operation,
     );
     assert.deepEqual([reply.ok, reply.code, reply.step], [true, "OK", "01"], operation);

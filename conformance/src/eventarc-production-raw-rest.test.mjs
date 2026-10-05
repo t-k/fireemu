@@ -189,8 +189,8 @@ test("the budget is counted before the request is sent and a spent budget sends 
   assert.equal(s.seen.length, 1);
 });
 
-test("status 1xx/3xx/5xx (other than 501) are unknown; 501 and 4xx are answers", async (t) => {
-  const statuses = [301, 500, 503, 501, 404, 200];
+test("status 1xx/3xx/5xx (other than 501) are unknown at their edges too; 501 and 4xx are answers", async (t) => {
+  const statuses = [300, 301, 399, 500, 503, 501, 404, 200];
   const s = await server((_, response, n) => {
     response.statusCode = statuses[n - 1];
     response.end("{}");
@@ -199,5 +199,67 @@ test("status 1xx/3xx/5xx (other than 501) are unknown; 501 and 4xx are answers",
   const { rest } = transport(s.base, { max: 10 });
   const unknown = [];
   for (let i = 0; i < statuses.length; i += 1) unknown.push((await get(rest)).unknown);
-  assert.deepEqual(unknown, [true, true, true, false, false, false]);
+  assert.deepEqual(unknown, [true, true, true, true, true, false, false, false]);
+});
+
+test("a body is sent as JSON with its content type, and a request without a body carries none", async (t) => {
+  const s = await server((_, response) => response.end("{}"));
+  t.after(s.close);
+  const { rest } = transport(s.base);
+  await rest.request({ label: {}, op: "x", method: "POST", path: "/v1/x", body: { a: 1 } });
+  await get(rest);
+  assert.equal(s.seen[0].headers["content-type"], "application/json");
+  assert.equal(s.seen[1].headers["content-type"], undefined);
+  assert.equal(s.seen[1].body.length, 0);
+});
+
+test("the base must be an origin: a path, a missing scheme and a non-string are refused", () => {
+  const make = (base) => () =>
+    createRawRest({ base, budget: createBudget(1), capture: createCapture({ journal: { write() {} } }) });
+  for (const base of ["http://127.0.0.1:1/path", "127.0.0.1:1", "ftp://host", "", undefined, 5, null])
+    assert.throws(make(base), /must be an origin/, String(base));
+  assert.doesNotThrow(make("https://eventarc.googleapis.com"));
+  assert.doesNotThrow(make("http://127.0.0.1:1"));
+});
+
+test("a labelled bearer needs a label of 1 to 40 lower-case characters, digits and dashes, and a non-empty bearer", async (t) => {
+  const s = await server((_, response) => response.end("{}"));
+  t.after(s.close);
+  const { rest, budget } = transport(s.base, { max: 50 });
+  for (const label of ["a", "a".repeat(40), "wrong-scope", "x1-2"])
+    await get(rest, { token: { label, bearer: "ya29.value-of-the-token" } });
+  const used = budget.used();
+  for (const label of ["", "a".repeat(41), "Upper", "has space", "under_score", undefined, 5])
+    await assert.rejects(
+      () => get(rest, { token: { label, bearer: "ya29.value-of-the-token" } }),
+      /unknown credential mode/,
+      String(label),
+    );
+  await assert.rejects(() => get(rest, { token: { label: "ok", bearer: "" } }), /unknown credential mode/);
+  await assert.rejects(() => get(rest, { token: { label: "ok", bearer: 5 } }), /unknown credential mode/);
+  await assert.rejects(() => get(rest, { token: null }), /unknown credential mode/);
+  assert.equal(budget.used(), used, "a refused mode never touches the budget");
+});
+
+test("the elapsed time of a request is recorded, and an unknown answer is counted by the capture", async (t) => {
+  const s = await server((_, response, n) => {
+    response.statusCode = n === 1 ? 503 : 200;
+    response.end("{}");
+  });
+  t.after(s.close);
+  const lines = [];
+  const capture = createCapture({ journal: { write: (line) => lines.push(line) } });
+  let clock = 1000;
+  const rest = createRawRest({
+    base: s.base,
+    budget: createBudget(5),
+    capture,
+    now: () => (clock += 7),
+  });
+  await get(rest);
+  await get(rest);
+  assert.deepEqual(lines.map((line) => line.ms), [7, 7]);
+  assert.equal(capture.unknownCount(), 1, "only the 503 is unknown");
+  assert.equal(lines[0].unknown, true);
+  assert.equal(lines[1].unknown, undefined);
 });

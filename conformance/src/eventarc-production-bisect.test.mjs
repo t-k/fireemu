@@ -144,3 +144,18 @@ test("bracket: values must rise above the start", async () => {
   await assert.rejects(() => bracket({ start: 0, values: [3, 2], accepts: async () => true }), /rise/);
   await assert.rejects(() => bracket({ start: 0, values: [], accepts: async () => true }), /rise/);
 });
+
+test("boundaries of the guards: one step is allowed, a 300 is not a 2xx, equal ladder values do not rise", async () => {
+  const one = await bisect({ low: 0, high: 2, maxSteps: 1, accepts: async () => true });
+  assert.deepEqual(one, { accepted: 1, refused: 2, steps: 1, unknown: false });
+  assert.equal(acceptance({ status: 299, unknown: false }), true);
+  assert.equal(acceptance({ status: 300, unknown: false }), null);
+  assert.equal(acceptance({ status: 399, unknown: false }), null);
+  assert.equal(acceptance({ status: 400, unknown: false }), false);
+  assert.equal(acceptance({ status: 499, unknown: false }), false);
+  assert.equal(acceptance({ status: 500, unknown: false }), null);
+  await assert.rejects(() => bracket({ start: 0, values: [3, 3], accepts: async () => true }), /rise/);
+  await assert.rejects(() => bracket({ start: 0, values: [1, 3, 3], accepts: async () => true }), /rise/);
+  const ok = await bracket({ start: 0, values: [1, 2], accepts: async () => true });
+  assert.deepEqual(ok, { low: 2, high: null, unknown: false });
+});

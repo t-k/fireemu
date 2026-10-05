@@ -829,3 +829,163 @@ test("a case that publishes waits for its channel to read ACTIVE (a few reads, t
     ["PENDING"],
   );
 });
+
+const listPathsOf = (service, caseId) =>
+  service.calls.filter((call) => call.op === "listChannels" && call.caseId === caseId).map((call) => call.path);
+
+test("the lifecycle follows the pages of a list one token at a time and stops after three pages", async () => {
+  // Two channels of the run: the page of one has a token, the second page has none.
+  const two = createWorld({ project: PROJECT });
+  await run(two);
+  const pages = listPathsOf(two, "channel-lifecycle").filter((path) => /pageSize=1(&|$)/.test(path));
+  assert.equal(pages.length, 2);
+  assert.ok(pages[0].endsWith("channels?pageSize=1"), "the first page carries no token");
+  assert.match(pages[1], /channels\?pageSize=1&pageToken=[A-Za-z0-9_-]+$/);
+  // Many channels: never more than three pages, and each token is the one the page before returned.
+  const existing = Array.from({ length: 8 }, (_, i) => nameOf(`other-${i}`));
+  const many = createWorld({ project: PROJECT, existing });
+  await run(many);
+  const long = listPathsOf(many, "channel-lifecycle").filter((path) => /pageSize=1(&|$)/.test(path));
+  assert.equal(long.length, 3, "three pages at most");
+  const tokens = long.slice(1).map((path) => new URL(`http://x${path}`).searchParams.get("pageToken"));
+  assert.equal(new Set(tokens).size, 2, "each page asks for a different token");
+  // A token that is not a non-empty string ends the list.
+  const odd = channelService();
+  const handler = odd.request.bind(odd);
+  for (const token of ["", 5, null]) {
+    odd.calls.length = 0;
+    odd.request = async (call) => {
+      const answer = await handler(call);
+      return call.op === "listChannels" && call.path.includes("pageSize=1")
+        ? { status: 200, body: { nextPageToken: token }, unknown: false }
+        : answer;
+    };
+    await run(odd);
+    assert.equal(listPathsOf(odd, "channel-lifecycle").filter((path) => /pageSize=1(&|$)/.test(path)).length, 1, String(token));
+  }
+  // A page that is not a 2xx ends the list too, whatever its body says.
+  odd.request = async (call) => {
+    const answer = await handler(call);
+    return call.op === "listChannels" && call.path.includes("pageSize=1")
+      ? { status: 503, body: { nextPageToken: "x" }, unknown: true }
+      : answer;
+  };
+  odd.calls.length = 0;
+  await run(odd);
+  assert.equal(listPathsOf(odd, "channel-lifecycle").filter((path) => /pageSize=1(&|$)/.test(path)).length, 1);
+});
+
+test("a probe is created only after the recorded 404 or a 400, never after another refusal or an unknown read", async () => {
+  const id = `1-${RUN}`;
+  for (const [label, reply, created] of [
+    ["the recorded 404", NOT_FOUND, true],
+    ["a 400", { status: 400, body: { error: { status: "INVALID_ARGUMENT" } }, unknown: false }, true],
+    ["a 403", { status: 403, body: { error: { status: "PERMISSION_DENIED" } }, unknown: false }, false],
+    ["a 500", { status: 500, body: { error: { status: "INTERNAL" } }, unknown: false }, false],
+    ["an unknown 400", { status: 400, body: {}, unknown: true }, false],
+    ["an unknown 503", { status: 503, body: {}, unknown: true }, false],
+  ]) {
+    const service = channelService();
+    const handler = service.request.bind(service);
+    service.request = async (call) =>
+      call.op === "getChannel" && call.path.endsWith(`/${id}`) ? reply : handler(call);
+    const { notes } = await run(service);
+    const sent = service.calls.some((call) => call.op === "createChannel" && call.path.includes(`channelId=${id}`));
+    assert.equal(sent, created, label);
+    if (!created) assert.ok(notes.some((n) => n.note === "probe-read-unclear" && n.name === nameOf(id)), label);
+  }
+});
+
+test("the number path is not read when no number was given, and the paths never name a missing number", async () => {
+  const service = channelService();
+  await run(service);
+  assert.equal(
+    service.calls.some((call) => /\/projects\/(null|undefined|\d+)\//.test(call.path)),
+    false,
+  );
+  const listsOfTheProject = service.calls.filter(
+    (call) => call.op === "listChannels" && call.caseId === "channel-lifecycle" && call.path.startsWith(`/v1/projects/${PROJECT}/`),
+  );
+  assert.ok(listsOfTheProject.length >= 6);
+});
+
+test("the create probe's list is a page of one, and a refused creation leaves its note", async () => {
+  const service = channelService();
+  await run(service, { cases: [createProbe] });
+  const lists = listPathsOf(service, "create-probe");
+  assert.equal(lists.length, 2);
+  assert.ok(lists[0].endsWith("/channels"), "the first list has no page size");
+  assert.ok(lists[1].endsWith("/channels?pageSize=1"));
+  const refused = channelService({ refuse: new Set([P1]) });
+  const { notes } = await run(refused, { cases: [createProbe] });
+  assert.ok(notes.some((n) => n.note === "create-probe-refused" && n.status === 400));
+});
+
+test("the preconditions note the state they read, and a channel's state is only a state when the read answered", async () => {
+  const service = {
+    request: async (call) =>
+      call.op === "getService"
+        ? { status: 200, body: { state: "ENABLED" }, unknown: false }
+        : NOT_FOUND,
+  };
+  const { notes } = await run(service, { cases: [preconditions] });
+  assert.ok(notes.some((n) => n.note === "service-state" && n.state === "ENABLED"));
+  // A read that is not a 2xx but whose body has a `state` is no state: one read, nothing waited for.
+  const flaky = channelService();
+  const handler = flaky.request.bind(flaky);
+  flaky.request = async (call) =>
+    call.op === "getChannel" && call.caseId === undefined && call.label?.case === "publish-envelope"
+      ? { status: 503, body: { state: "PENDING" }, unknown: true }
+      : handler(call);
+  const sleeps = [];
+  const result = await run(flaky, { cases: [publishEnvelope], sleep: async (ms) => sleeps.push(ms) });
+  assert.deepEqual(sleeps, []);
+  assert.deepEqual(
+    result.notes.filter((n) => n.note === "channel-state").map((n) => n.state),
+    [null],
+  );
+});
+
+test("the ladders send the values the plan names, in order, and the searches use their step bounds", async () => {
+  const KiB = 1024;
+  const sizes = (service) =>
+    service.calls
+      .filter((call) => call.op === "publishEvents" && call.body.events.length === 1)
+      .map((call) => call.body.events[0].textData?.length)
+      .filter((length) => length > 1000);
+  // Limits far above every ladder value: three accepted sizes, nothing to bisect.
+  const wide = createWorld({ project: PROJECT, textLimit: 100 * KiB * KiB });
+  await run(wide, { cases: [publishLimits] });
+  assert.deepEqual(sizes(wide).slice(0, 3), [256 * KiB, KiB * KiB, 4 * KiB * KiB]);
+  assert.equal(sizes(wide).filter((length) => length >= 4 * KiB * KiB).length, 1, "no search above the last value");
+  // A limit between 256 KiB and 1 MiB: the bisection takes at most ten steps and no more.
+  const mid = createWorld({ project: PROJECT, textLimit: 600_000 });
+  await run(mid, { cases: [publishLimits] });
+  assert.equal(sizes(mid).length, 2 + 10 + 0, "two bracket values, then ten bisection steps (the first value above 1 MiB is not sent)");
+  // A count limit of one: the first ladder value is refused and the search starts from one event.
+  const tiny = createWorld({ project: PROJECT, eventLimit: 1, textLimit: 1 });
+  const { notes } = await run(tiny, { cases: [publishLimits] });
+  const count = notes.find((n) => n.note === "limit-boundary" && n.name === "event-count");
+  assert.deepEqual([count.accepted, count.refused], [1, 2]);
+  const size = notes.find((n) => n.note === "limit-boundary" && n.name === "event-text-length");
+  assert.ok(size.accepted >= 1 && size.accepted <= 1 + 1, "the text-length search starts from one character");
+  assert.equal(size.refused - size.accepted <= 1 + Math.ceil(262144 / 1024), true);
+});
+
+test("the extension attributes of the envelope case carry the values the plan names", async () => {
+  const service = channelService();
+  await run(service, { cases: [publishEnvelope] });
+  const event = published(service)
+    .flat()
+    .find((candidate) => candidate.attributes?.flag !== undefined);
+  assert.deepEqual(
+    Object.fromEntries(Object.entries(event.attributes).filter(([key]) => key !== "time" && key !== "datacontenttype")),
+    {
+      flag: { ceBoolean: true },
+      count: { ceInteger: 1 },
+      link: { ceUri: "https://example.com/x" },
+      relative: { ceUriRef: "/x" },
+      bytes: { ceBytes: "AAE=" },
+    },
+  );
+});

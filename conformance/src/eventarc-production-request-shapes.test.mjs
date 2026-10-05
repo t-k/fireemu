@@ -47,23 +47,35 @@ test("the model refuses a creation whose name is missing, empty, not a string, o
   const path = `/v1/projects/${PROJECT}/locations/us-central1/channels?channelId=fe${RUN}-x`;
   const full = `projects/${PROJECT}/locations/us-central1/channels/fe${RUN}-x`;
   const bodies = [
-    undefined,
-    null,
-    [],
-    {},
-    { name: "" },
-    { name: 5 },
-    { name: null },
-    { provider: "projects/p/locations/l/providers/x" },
-    { name: `${full}-other` },
-    { name: `projects/${PROJECT}/locations/europe-west1/channels/fe${RUN}-x` },
+    [undefined, "create-no-body"],
+    [null, "create-no-body"],
+    [[], "create-no-body"],
+    [{}, "create-no-name"],
+    [{ name: "" }, "create-no-name"],
+    [{ name: 5 }, "create-no-name"],
+    [{ name: null }, "create-no-name"],
+    [{ provider: "projects/p/locations/l/providers/x" }, "create-no-name"],
+    [{ name: `${full}-other` }, "create-name-mismatch"],
+    [{ name: `projects/${PROJECT}/locations/europe-west1/channels/fe${RUN}-x` }, "create-name-mismatch"],
   ];
-  for (const body of bodies) {
+  for (const [body, kind] of bodies) {
     const answer = await world.request({ op: "createChannel", method: "POST", path, body });
     assert.equal(answer.status, 400, JSON.stringify(body));
+    // The first seven are the recorded 400 itself, byte for byte; the mismatch is a modelled wording.
+    if (kind !== "create-name-mismatch") assert.deepEqual(answer.body, recorded("createChannel-no-name").body);
+    assert.equal(world.refusals.at(-1).kind, kind, JSON.stringify(body));
   }
   assert.equal(world.channels.size, 0);
   assert.equal(world.refusals.length, bodies.length);
+  // A path without a channelId is refused for its shape too, whatever the name says.
+  const noId = await world.request({
+    op: "createChannel",
+    method: "POST",
+    path: `/v1/projects/${PROJECT}/locations/us-central1/channels`,
+    body: { name: full },
+  });
+  assert.equal(noId.status, 400);
+  assert.equal(world.refusals.at(-1).kind, "create-name-mismatch");
   const accepted = await world.request({
     op: "createChannel",
     method: "POST",
@@ -222,4 +234,27 @@ test("differential: the creation, the read and the deletion are the requests fir
       full,
     );
   }
+});
+
+test("the model names the operation of a creation and of a deletion under the location, and lists with pages", async () => {
+  const world = createWorld({ project: PROJECT });
+  const { client, ownership } = clientOn(world);
+  const names = ["a", "b", "c"].map((key) => ownership.channel("us-central1", key));
+  const created = [];
+  for (const name of names) created.push(await client.createChannel(PROJECT, "us-central1", name.split("/").at(-1)));
+  for (const answer of created)
+    assert.match(answer.body.name, new RegExp(`^projects/${PROJECT}/locations/us-central1/operations/operation-\\d+$`));
+  const deleted = await client.deleteChannel(names[0]);
+  assert.match(deleted.body.name, new RegExp(`^projects/${PROJECT}/locations/us-central1/operations/operation-\\d+$`));
+  const seen = [];
+  let token;
+  for (let page = 0; page < 5; page += 1) {
+    const answer = await client.listChannels(PROJECT, "us-central1", { pageSize: 1, ...(token ? { pageToken: token } : {}) });
+    seen.push(...(answer.body.channels ?? []).map((channel) => channel.name));
+    token = answer.body.nextPageToken;
+    if (!token) break;
+  }
+  assert.deepEqual(seen, names.slice(1), "every channel once, in order, the deleted one gone");
+  const empty = await client.listChannels(PROJECT, "us-central1", { pageSize: 5, pageToken: Buffer.from(names[2]).toString("base64url") });
+  assert.deepEqual(empty.body, {});
 });

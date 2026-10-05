@@ -1,4 +1,7 @@
 import assert from "node:assert/strict";
+import { chmodSync, mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import test from "node:test";
 import { createScopedToken } from "./eventarc-production/scoped-token.mjs";
 
@@ -33,4 +36,21 @@ test("a scope that is not a Google OAuth scope URL is refused before gcloud is r
   const scoped = createScopedToken({ execFile: async () => assert.fail("run") });
   for (const scope of ["", "cloud-platform", "https://example.com/auth/x", `${SCOPE} extra`, `${SCOPE},other`, "--flag", `${SCOPE}\n`])
     await assert.rejects(() => scoped(scope), /not an OAuth scope/, scope);
+});
+
+test("the default runner executes the command without a shell, passes the arguments as they are, and a failing command is no token", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "scoped-token-"));
+  const script = (name, body) => {
+    const path = join(dir, name);
+    writeFileSync(path, `#!/bin/sh\n${body}\n`);
+    chmodSync(path, 0o755);
+    return path;
+  };
+  // Prints its arguments joined, so that the test sees exactly what gcloud would have been given.
+  const echo = script("echo-args", 'printf "ya29.%s" "$(echo "$@" | tr -c "A-Za-z0-9\n" "x")"');
+  const token = await createScopedToken({ command: echo })(SCOPE);
+  assert.match(token, /^ya29\.authxapplicationxdefaultxprintxaccessxtokenxxxscopesxhttpsxxxwwwxgoogleapisxcomxauthxuserinfoxemail$/);
+  const failing = script("fails", "echo ya29.should-not-be-used-0000000000 ; exit 3");
+  assert.equal(await createScopedToken({ command: failing })(SCOPE), null);
+  assert.equal(await createScopedToken({ command: join(dir, "does-not-exist") })(SCOPE), null);
 });

@@ -505,7 +505,7 @@ async fn rest_call(
     // would hold one of the few slots for the whole wait); the slot is released, this task
     // waits for a transaction to finish, then runs the request again.
     let request = Arc::new(request);
-    let deadline = std::time::Instant::now() + state.local.contention_wait();
+    let deadline = state.local.contention_deadline();
     let mut permit = permit;
     let response = loop {
         let attempt_permit = permit;
@@ -519,10 +519,10 @@ async fn rest_call(
         })
         .await
         .map_err(|error| std::io::Error::other(format!("Firestore REST task failed: {error}")))?;
-        if !contended || std::time::Instant::now() >= deadline {
+        if !contended || deadline.expired() {
             break response;
         }
-        state.local.await_any_release(seen, deadline).await;
+        state.local.await_any_release_until(seen, &deadline).await;
         // Re-admitted for the retry; an exhausted pool answers the retry as it answers a new
         // request.
         match try_admit_rest_work(rest_work_limiter()) {

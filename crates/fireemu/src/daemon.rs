@@ -1501,13 +1501,26 @@ pub(super) fn run(options: Options, exec: Option<ExecPlan>) -> ExitCode {
             },
             indexes: default_indexes,
         };
+        // A writer held behind a read lock is refused after the bound production showed (strict: 20 s, counted on the virtual clock as well as the wall clock); the emulator
+        // profile keeps the 15 s wall-clock wait it has always had.
+        let strict = cfg.profile == crate::config::CompatibilityProfile::Strict;
+        let contention_wait = if strict {
+            fireemu_adapter_grpc::local::STRICT_CONTENTION_WAIT
+        } else {
+            fireemu_adapter_grpc::local::DEFAULT_CONTENTION_WAIT
+        };
         let backend = if cfg.clock_start_pinned {
             LocalBackend::new(gateway.clone(), clock.clone(), cfg.seed)
-                .with_contention_wait(fireemu_adapter_grpc::local::DEFAULT_CONTENTION_WAIT)
+                .with_contention_wait(contention_wait)
         } else {
             LocalBackend::new(gateway.clone(), clock.clone(), cfg.seed)
-                .with_contention_wait(fireemu_adapter_grpc::local::DEFAULT_CONTENTION_WAIT)
+                .with_contention_wait(contention_wait)
                 .with_wall_clock_write_time()
+        };
+        let backend = if strict {
+            backend.with_virtual_contention_wait()
+        } else {
+            backend
         }
         // A database the configuration names exists before anything writes to it. Under the
         // strict profile every other named database is refused until a create path (an import

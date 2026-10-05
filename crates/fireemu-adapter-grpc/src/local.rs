@@ -302,6 +302,8 @@ pub struct LocalBackend {
     /// transaction holds on what it read before it is refused with `ABORTED` (production:
     /// "Too much contention on these documents"). Zero refuses at once.
     contention_wait: std::time::Duration,
+    /// Whether the contention wait also runs on the virtual clock (the strict profile).
+    virtual_contention: bool,
     /// How long (wall clock) a transaction may keep writers blocked before it is rolled back
     /// the way production expires an idle transaction (see [`DEFAULT_LOCK_LEASE`]).
     lock_lease: std::time::Duration,
@@ -700,6 +702,57 @@ impl CommitPublication for NoopCommitPublication {
 /// transactions/lifecycle#out-of-band-write); the official emulator answers "Transaction lock
 /// timeout." on the same shape. fireemu waits this long.
 pub const DEFAULT_CONTENTION_WAIT: std::time::Duration = std::time::Duration::from_secs(15);
+
+/// The strict profile's contention wait. A writer held behind another transaction's read lock was refused with `ABORTED`, "Too much contention on these documents.
+/// Please try again.", after 20.59 to 20.66 s in four rows of the P14 recordings (REST and gRPC, two recordings) and 20.84 and 21.03 s in P06 (rest and gRPC),
+/// measured from the request's dispatch to its answer. Each row includes the worker's own start-up, about 1.04 to 1.16 s (a writer that is not held takes that long to
+/// answer), so the server held the writer for about 19.5 to 19.9 s; fireemu waits 20 s. The wait is measured on the virtual clock as well as on the wall clock (see
+/// [`ContentionDeadline`]), the way the replay of a recording moves time.
+pub const STRICT_CONTENTION_WAIT: std::time::Duration = std::time::Duration::from_secs(20);
+
+/// How often a wait that follows the virtual clock looks at it: a clock moved through the control API wakes nobody.
+const VIRTUAL_CLOCK_POLL: std::time::Duration = std::time::Duration::from_millis(20);
+
+/// Whether a contention wait of `wait` is over: the wall clock has run `wait`, or, when the wait follows the virtual clock, the virtual clock has moved `wait`.
+#[must_use]
+pub fn contention_expired(
+    wall_elapsed: std::time::Duration,
+    virtual_elapsed: Option<std::time::Duration>,
+    wait: std::time::Duration,
+) -> bool {
+    wall_elapsed >= wait || virtual_elapsed.is_some_and(|elapsed| elapsed >= wait)
+}
+
+/// The end of one contended writer's wait. It always runs on the wall clock; under the strict profile it also runs on the virtual clock, so a recording replayed by
+/// moving the clock reaches the production bound without sleeping through it.
+#[derive(Clone)]
+pub struct ContentionDeadline {
+    started: std::time::Instant,
+    wait: std::time::Duration,
+    virtual_clock: Option<(Arc<Mutex<VirtualClock>>, fireemu_core_types::time::LogicalInstant)>,
+}
+
+impl ContentionDeadline {
+    /// Whether the wait is over.
+    #[must_use]
+    pub fn expired(&self) -> bool {
+        let virtual_elapsed = self.virtual_clock.as_ref().map(|(clock, start)| {
+            let now = clock.lock().map_or(*start, |clock| clock.now());
+            std::time::Duration::from_nanos(u64::try_from((now.as_nanos() - start.as_nanos()).max(0)).unwrap_or(u64::MAX))
+        });
+        contention_expired(self.started.elapsed(), virtual_elapsed, self.wait)
+    }
+
+    /// The instant a blocking wait for a release should stop at: the end of the wall wait, or, when the virtual clock counts too, a short poll later.
+    fn wake_at(&self) -> std::time::Instant {
+        let end = self.started + self.wait;
+        if self.virtual_clock.is_some() {
+            end.min(std::time::Instant::now() + VIRTUAL_CLOCK_POLL)
+        } else {
+            end
+        }
+    }
+}
 
 /// How long (wall clock) a transaction may keep other writers blocked on its locks before it
 /// is rolled back: production expires an idle transaction, which is what releases a lock a
@@ -1749,6 +1802,7 @@ impl LocalBackend {
         Self {
             created_at,
             contention_wait: std::time::Duration::ZERO,
+            virtual_contention: false,
             lock_lease: DEFAULT_LOCK_LEASE,
             gateway,
             indexes,
@@ -1816,10 +1870,30 @@ impl LocalBackend {
         self
     }
 
+    /// Makes the contention wait run on the virtual clock as well as the wall clock (the strict profile; see [`STRICT_CONTENTION_WAIT`]).
+    #[must_use]
+    pub const fn with_virtual_contention_wait(mut self) -> Self {
+        self.virtual_contention = true;
+        self
+    }
+
     /// The configured lock contention wait.
     #[must_use]
     pub const fn contention_wait(&self) -> std::time::Duration {
         self.contention_wait
+    }
+
+    /// The end of a wait that starts now.
+    #[must_use]
+    pub fn contention_deadline(&self) -> ContentionDeadline {
+        ContentionDeadline {
+            started: std::time::Instant::now(),
+            wait: self.contention_wait,
+            virtual_clock: self.virtual_contention.then(|| {
+                let start = self.clock.lock().map_or(fireemu_core_types::time::LogicalInstant::UNIX_EPOCH, |clock| clock.now());
+                (Arc::clone(&self.clock), start)
+            }),
+        }
     }
 
     /// How long a transaction may keep writers blocked before it is rolled back.
@@ -5014,7 +5088,7 @@ impl LocalBackend {
         lease_writes: &[Write],
         mut attempt: impl FnMut() -> Result<T, Status>,
     ) -> Result<T, Status> {
-        let deadline = std::time::Instant::now() + self.contention_wait;
+        let deadline = self.contention_deadline();
         loop {
             let handle = self.database_handle(parent)?;
             let marker = handle.release_marker();
@@ -5029,11 +5103,11 @@ impl LocalBackend {
                         }
                         return Err(status);
                     }
-                    if !Self::should_wait_for_release(&handle, own, deadline) {
+                    if !Self::should_wait_for_release(&handle, own, &deadline) {
                         return Err(status);
                     }
                     if !released {
-                        handle.wait_for_release(marker, deadline);
+                        handle.wait_for_release(marker, deadline.wake_at());
                     }
                 }
                 outcome => return outcome,
@@ -5064,6 +5138,12 @@ impl LocalBackend {
     pub async fn await_any_release(&self, seen: u64, deadline: std::time::Instant) -> bool {
         self.await_any_release_after_registration(seen, deadline, || {})
             .await
+    }
+
+    /// [`Self::await_any_release`] for a contention deadline: it also returns when the virtual clock may have moved (a short poll), and the caller looks at the
+    /// deadline again.
+    pub async fn await_any_release_until(&self, seen: u64, deadline: &ContentionDeadline) -> bool {
+        self.await_any_release(seen, deadline.wake_at()).await
     }
 
     /// Waits for a release while registering the notification before checking the generation.
@@ -5101,20 +5181,21 @@ impl LocalBackend {
         lease_writes: &[Write],
         mut attempt: impl FnMut() -> Result<T, Status>,
     ) -> Result<T, Status> {
-        let deadline = std::time::Instant::now() + self.contention_wait;
+        let deadline = self.contention_deadline();
         loop {
             let handle = self.database_handle(parent)?;
             let marker = handle.release_marker();
             match attempt() {
                 Err(status) if Self::is_contention(&status) => {
                     let released = self.expire_lock_leases(&handle, lease_writes, own);
-                    if !Self::should_wait_for_release(&handle, own, deadline) {
+                    if !Self::should_wait_for_release(&handle, own, &deadline) {
                         return Err(status);
                     }
                     if !released {
                         let waiter = handle.clone();
+                        let wake_at = deadline.wake_at();
                         let _ = tokio::task::spawn_blocking(move || {
-                            waiter.wait_for_release(marker, deadline)
+                            waiter.wait_for_release(marker, wake_at)
                         })
                         .await;
                     }
@@ -5130,9 +5211,9 @@ impl LocalBackend {
     fn should_wait_for_release(
         handle: &DatabaseHandle,
         own: Option<&TransactionId>,
-        deadline: std::time::Instant,
+        deadline: &ContentionDeadline,
     ) -> bool {
-        if std::time::Instant::now() >= deadline {
+        if deadline.expired() {
             return false;
         }
         own.is_none_or(|txn| {
@@ -6741,6 +6822,179 @@ mod lock_tests {
             result.is_ok(),
             "an already-idle holder must be expired: {result:?}"
         );
+    }
+
+    #[test]
+    fn a_contention_wait_is_over_when_either_clock_has_run_it() {
+        let wait = Duration::from_secs(20);
+        assert!(!contention_expired(Duration::from_secs(19), None, wait));
+        assert!(contention_expired(Duration::from_secs(20), None, wait));
+        // the virtual clock counts only when the wait follows it
+        assert!(!contention_expired(Duration::ZERO, None, wait));
+        assert!(!contention_expired(Duration::ZERO, Some(Duration::from_millis(19_999)), wait));
+        assert!(contention_expired(Duration::ZERO, Some(wait), wait));
+        assert!(contention_expired(Duration::from_secs(21), Some(Duration::ZERO), wait));
+    }
+
+    proptest::proptest! {
+        #[test]
+        fn the_contention_rule_is_either_elapsed_time_reaching_the_wait(
+            wait_ms in 1u64..60_000,
+            wall_ms in 0u64..120_000,
+            virtual_ms in proptest::option::of(0u64..120_000),
+        ) {
+            let expected = wall_ms >= wait_ms || virtual_ms.is_some_and(|v| v >= wait_ms);
+            proptest::prop_assert_eq!(
+                contention_expired(
+                    Duration::from_millis(wall_ms),
+                    virtual_ms.map(Duration::from_millis),
+                    Duration::from_millis(wait_ms),
+                ),
+                expected
+            );
+        }
+    }
+
+    fn contention_backend(clock: &Arc<Mutex<VirtualClock>>, strict: bool) -> Arc<LocalBackend> {
+        let backend = LocalBackend::new(backend().gateway.clone(), Arc::clone(clock), 7)
+            .with_contention_wait(Duration::from_secs(20));
+        Arc::new(if strict {
+            backend.with_virtual_contention_wait()
+        } else {
+            backend
+        })
+    }
+
+    fn pinned_clock() -> Arc<Mutex<VirtualClock>> {
+        Arc::new(Mutex::new(VirtualClock::new(LogicalInstant::from_unix_seconds(1_788_004_860))))
+    }
+
+    fn move_clock(clock: &Arc<Mutex<VirtualClock>>, seconds: i64) {
+        clock
+            .lock()
+            .unwrap()
+            .advance(fireemu_core_types::time::LogicalDuration::from_seconds(seconds))
+            .unwrap();
+    }
+
+    #[test]
+    fn a_strict_deadline_follows_the_virtual_clock_and_an_emulator_one_does_not() {
+        for (strict, expired_after_moving) in [(true, true), (false, false)] {
+            let clock = pinned_clock();
+            let deadline = contention_backend(&clock, strict).contention_deadline();
+            assert!(!deadline.expired());
+            move_clock(&clock, 19);
+            assert!(!deadline.expired());
+            move_clock(&clock, 100);
+            assert_eq!(deadline.expired(), expired_after_moving, "strict: {strict}");
+        }
+    }
+
+    const CONTENTION_DATABASE: &str = "projects/demo-app/databases/(default)";
+
+    /// A transaction that holds the read lock on `contended/doc`, and a thread that writes that document and reports how its commit ended.
+    fn hold_and_write(
+        backend: &Arc<LocalBackend>,
+    ) -> (
+        Vec<u8>,
+        std::sync::mpsc::Receiver<Result<(), Status>>,
+    ) {
+        let document = format!("{CONTENTION_DATABASE}/documents/contended/doc");
+        let transaction = backend
+            .begin_transaction(&pb::BeginTransactionRequest {
+                database: CONTENTION_DATABASE.to_owned(),
+                ..Default::default()
+            })
+            .unwrap();
+        backend
+            .get_document(
+                &pb::GetDocumentRequest {
+                    name: document.clone(),
+                    consistency_selector: Some(pb::get_document_request::ConsistencySelector::Transaction(
+                        transaction.clone(),
+                    )),
+                    ..Default::default()
+                },
+                &crate::rules::allow_all_reads,
+            )
+            .unwrap_err();
+        let (sender, receiver) = std::sync::mpsc::channel();
+        let writer = Arc::clone(backend);
+        std::thread::spawn(move || {
+            let result = writer
+                .commit(&pb::CommitRequest {
+                    database: CONTENTION_DATABASE.to_owned(),
+                    writes: vec![pb::Write {
+                        operation: Some(pb::write::Operation::Update(pb::Document {
+                            name: document,
+                            ..Default::default()
+                        })),
+                        ..Default::default()
+                    }],
+                    ..Default::default()
+                })
+                .map(|_| ());
+            let _ = sender.send(result);
+        });
+        (transaction, receiver)
+    }
+
+    #[test]
+    fn a_held_writer_is_refused_once_the_virtual_clock_moves_the_strict_wait() {
+        let clock = pinned_clock();
+        let backend = contention_backend(&clock, true);
+        let (_holder, writer) = hold_and_write(&backend);
+        // still held while the clock has moved less than the wait
+        std::thread::sleep(Duration::from_millis(100));
+        move_clock(&clock, 19);
+        assert!(writer.recv_timeout(Duration::from_millis(300)).is_err(), "held");
+        move_clock(&clock, 2);
+        let status = writer
+            .recv_timeout(Duration::from_secs(5))
+            .expect("the writer answers")
+            .unwrap_err();
+        assert!(LocalBackend::is_contention(&status), "{status:?}");
+    }
+
+    #[test]
+    fn a_held_writer_under_the_emulator_profile_waits_for_the_release_whatever_the_virtual_clock_does() {
+        let clock = pinned_clock();
+        let backend = contention_backend(&clock, false);
+        let (holder, writer) = hold_and_write(&backend);
+        std::thread::sleep(Duration::from_millis(100));
+        move_clock(&clock, 100);
+        assert!(writer.recv_timeout(Duration::from_millis(400)).is_err(), "still held");
+        backend
+            .rollback(&pb::RollbackRequest {
+                database: CONTENTION_DATABASE.to_owned(),
+                transaction: holder,
+                ..Default::default()
+            })
+            .unwrap();
+        writer
+            .recv_timeout(Duration::from_secs(5))
+            .expect("the writer answers")
+            .expect("the release lets it commit");
+    }
+
+    #[test]
+    fn a_strict_writer_is_released_by_the_holder_before_the_wait_is_over() {
+        let clock = pinned_clock();
+        let backend = contention_backend(&clock, true);
+        let (holder, writer) = hold_and_write(&backend);
+        std::thread::sleep(Duration::from_millis(100));
+        move_clock(&clock, 10);
+        backend
+            .rollback(&pb::RollbackRequest {
+                database: CONTENTION_DATABASE.to_owned(),
+                transaction: holder,
+                ..Default::default()
+            })
+            .unwrap();
+        writer
+            .recv_timeout(Duration::from_secs(5))
+            .expect("the writer answers")
+            .expect("committed after the release");
     }
 
     fn collection_ids_request_with_token(backend: &LocalBackend) -> pb::ListCollectionIdsRequest {

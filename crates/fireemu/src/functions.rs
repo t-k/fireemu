@@ -2568,8 +2568,7 @@ pub async fn start(
         retry_attempts: cfg.events_max_attempts,
         max_catch_up_runs: cfg.scheduler_max_catch_up_runs,
         runner_secret: runner_secret.to_owned(),
-        overlap: fireemu_adapter_functions::runtime::OverlapPolicy::parse(&cfg.scheduler_overlap)
-            .unwrap_or_default(),
+        overlap: overlap_policy_for(cfg.profile, cfg.scheduler_overlap.as_deref()),
         catch_up: fireemu_adapter_functions::runtime::CatchUpPolicy::parse(&cfg.scheduler_catch_up)
             .unwrap_or_default(),
         functions_host: hosts.functions.clone(),
@@ -3015,6 +3014,22 @@ fn apply_first_generation_default_time_zone(manifest: &mut serde_json::Value) {
         {
             trigger["timeZone"] = serde_json::Value::String("America/Los_Angeles".to_owned());
         }
+    }
+}
+
+/// The overlap policy of schedules: the configured `scheduler.overlap` when set, else the profile's own. The strict
+/// profile skips an occurrence while a run of the job is in flight, as production does (the `every 1 minutes` job whose
+/// handler ran 100 s started only every 2 to 3 minutes, run `156715222b86ea44`); the emulator profile allows overlap, and
+/// the official emulator (firebase-tools 15.28.2) never schedules or skips a run.
+pub(crate) fn overlap_policy_for(
+    profile: CompatibilityProfile,
+    configured: Option<&str>,
+) -> fireemu_adapter_functions::runtime::OverlapPolicy {
+    use fireemu_adapter_functions::runtime::OverlapPolicy;
+    match configured {
+        Some(text) => OverlapPolicy::parse(text).unwrap_or_default(),
+        None if uses_production_scheduler_defaults(profile) => OverlapPolicy::SkipInFlight,
+        None => OverlapPolicy::Allow,
     }
 }
 
@@ -7129,6 +7144,34 @@ mod tests {
         assert!(!super::uses_production_scheduler_defaults(
             super::CompatibilityProfile::Emulator
         ));
+    }
+
+    /// Recorded (run `156715222b86ea44`): production starts no occurrence of a job while a run of it is in flight. The
+    /// strict profile follows; the emulator profile keeps allowing overlap (the official emulator never schedules, so
+    /// nothing it completes is dropped). An explicit `scheduler.overlap` wins in both.
+    #[test]
+    fn the_overlap_policy_defaults_by_profile_and_an_explicit_one_wins() {
+        use super::CompatibilityProfile::{Emulator, Strict};
+        use fireemu_adapter_functions::runtime::OverlapPolicy::{
+            Allow, Queue, Reject, Skip, SkipInFlight,
+        };
+        assert_eq!(super::overlap_policy_for(Strict, None), SkipInFlight);
+        assert_eq!(super::overlap_policy_for(Emulator, None), Allow);
+        for (text, policy) in [
+            ("allow", Allow),
+            ("skip", Skip),
+            ("queue", Queue),
+            ("reject", Reject),
+            ("skip-in-flight", SkipInFlight),
+        ] {
+            for profile in [Strict, Emulator] {
+                assert_eq!(
+                    super::overlap_policy_for(profile, Some(text)),
+                    policy,
+                    "{profile:?} {text}"
+                );
+            }
+        }
     }
 
     #[test]

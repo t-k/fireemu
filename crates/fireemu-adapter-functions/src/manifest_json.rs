@@ -63,7 +63,9 @@ fn non_negative_u64(n: f64) -> u64 {
 /// `retryCount: 3`, `maxDoublings: 1`) was refused with this message; `maxRetryDuration: "30s"` was accepted.
 /// firebase-tools writes a schedule's `maxRetrySeconds` as `` `${seconds}s` ``, so a fractional `maxRetrySeconds`
 /// reaches production in the same shape. Only `maxRetryDuration` is claimed: the message names it alone, and a
-/// fractional minimum or maximum backoff was not sent separately.
+/// fractional minimum or maximum backoff was not sent separately. A value whose JavaScript text uses exponent
+/// notation (`1e-7`) reaches firebase-tools as `"1e-7s"`, which production would likely answer with a parse error
+/// rather than this text; the refusal still gives this text for it (such a value is not a plausible declaration).
 pub const SCHEDULER_MAX_RETRY_NANOS_REFUSAL: &str =
     "retryConfig.max_retry_duration.nanos cannot be set: invalid argument";
 

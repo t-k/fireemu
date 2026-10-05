@@ -1208,8 +1208,10 @@ pub struct RuntimeConfig {
     pub scheduler_default_time_zone: Option<String>,
     /// Catch-up policy of schedules (`scheduler.catchUp`: all, latest, none).
     pub scheduler_catch_up: String,
-    /// Overlap policy of schedules (`scheduler.overlap`).
-    pub scheduler_overlap: String,
+    /// Overlap policy of schedules (`scheduler.overlap`: allow, skip, queue, reject, skip-in-flight). Unset, the
+    /// strict profile skips an occurrence while a run of the function is in flight, as production does, and the
+    /// emulator profile allows overlap.
+    pub scheduler_overlap: Option<String>,
     /// ID token signing (`auth.idTokenSigning`): `unsigned-emulator` or `session-rsa`.
     pub id_token_signing: fireemu_core_auth::jwt::SigningMode,
     /// Service accounts whose signed custom tokens are accepted, each with its public JWK set
@@ -1448,7 +1450,7 @@ impl Default for RuntimeConfig {
                 fireemu_core_pubsub::subscription::DEFAULT_PUSH_MINIMUM_REDELIVERY_INTERVAL_MILLIS,
             scheduler_max_catch_up_runs: 1000,
             scheduler_default_time_zone: None,
-            scheduler_overlap: "allow".to_owned(),
+            scheduler_overlap: None,
             scheduler_catch_up: "all".to_owned(),
             id_token_signing: fireemu_core_auth::jwt::SigningMode::UnsignedEmulator,
             auth_custom_token_signers: None,
@@ -3168,12 +3170,13 @@ impl RuntimeConfig {
         }
         if let Some(v) = s.get("overlap") {
             let text = v.as_str().unwrap_or("");
-            if !["allow", "skip", "queue", "reject"].contains(&text) {
+            if !["allow", "skip", "queue", "reject", "skip-in-flight"].contains(&text) {
                 return Err(ConfigError(
-                    "scheduler.overlap must be one of allow, skip, queue, reject".into(),
+                    "scheduler.overlap must be one of allow, skip, queue, reject, skip-in-flight"
+                        .into(),
                 ));
             }
-            text.clone_into(&mut cfg.scheduler_overlap);
+            cfg.scheduler_overlap = Some(text.to_owned());
         }
         if let Some(v) = s.get("catchUp") {
             let text = v.as_str().unwrap_or("");
@@ -4277,7 +4280,8 @@ mod tests {
         };
         let default = parse(json!({})).unwrap();
         assert_eq!(default.scheduler_catch_up, "all");
-        assert_eq!(default.scheduler_overlap, "allow");
+        // not set: each profile picks its own (strict follows production, the emulator profile allows overlap)
+        assert_eq!(default.scheduler_overlap, None);
         assert_eq!(default.scheduler_max_catch_up_runs, 1000);
         for policy in ["all", "latest", "none"] {
             assert_eq!(
@@ -4287,10 +4291,13 @@ mod tests {
                 policy
             );
         }
-        for policy in ["allow", "skip", "queue", "reject"] {
+        for policy in ["allow", "skip", "queue", "reject", "skip-in-flight"] {
             assert_eq!(
-                parse(json!({"overlap": policy})).unwrap().scheduler_overlap,
-                policy
+                parse(json!({"overlap": policy}))
+                    .unwrap()
+                    .scheduler_overlap
+                    .as_deref(),
+                Some(policy)
             );
         }
         for bad in [json!("some"), json!(""), json!(1), json!(null)] {

@@ -54,7 +54,7 @@
   ],
   "digests": {
     ".github/workflows/quint.yml": "3322397d1feaaea0a163de7b8a289a33d071650d51f4674c4a4556df6b45e972",
-    "crates/fireemu-adapter-functions/src/runtime.rs": "ae7c8cb31cdb859a590e868f3d17f2a5ad62bdb0accc5e2cf6b8cec276f352b9",
+    "crates/fireemu-adapter-functions/src/runtime.rs": "7b094fce77707fee16821bdf2d2ac0bc523bc3909dedd387d73894546b163ebe",
     "crates/fireemu-adapter-grpc/src/local.rs": "4f4b9e59e2ab9a8e315d3c2fa16b9b33f0d5158f77f60ae2360aee04bcdb236e",
     "crates/fireemu-core-firestore/src/store.rs": "bf4a3941055ef3d6e93ef7c4642ded88d4f4404ffd2f9a4367e02049193f7c49",
     "crates/fireemu-core-firestore/src/value.rs": "f8630eacab922b0c90467fe37b44dc4e80af30cfb0e942e21b6e05abce0b2c07",
@@ -71,7 +71,7 @@
     "verification/quint/pnpm-lock.yaml": "c46de8feb983d78945bf816a5a4d54d505d3840c88f1ebe19772a08acd9f0556",
     "verification/quint/run-verification.sh": "57eeb07ba39d042eea571b8a939e35ab05dd37218a30aa559785788d2aa81b7f",
     "verification/quint/specs/AtomicCommitOutbox.qnt": "0d9f3dfb9a57238d506d2f224de24e49576ad695f8e134f2451041be097c21b2",
-    "verification/quint/src/atomic_commit_outbox.rs": "e0aabdb23ec43250d5cfb7a7ba39c8e78efd9571160f37d5400fc388f5165584",
+    "verification/quint/src/atomic_commit_outbox.rs": "f03e7ec63545cab3afa1943e63b6716aa81c88f0a6cee60a6ad390e67d94f601",
     "verification/quint/src/cargo_authority.rs": "2c67dbd90419daa38f42f44b5f62c87388d5a15637ced48a2110b252dcbbd33a",
     "verification/quint/src/evidence.rs": "2fcf95169ee6ae80bb768c874430e3869d2a29dadf4c87f7cae2794c64dbf4be",
     "verification/quint/src/lib.rs": "2addd005fe8bee74c693854dc7ccb19dde14153b408f3d3e7335c5a8abbe929f",

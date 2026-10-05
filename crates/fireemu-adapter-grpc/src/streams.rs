@@ -390,6 +390,8 @@ enum Resume {
     Invalid,
 }
 
+// The flags are independent facts of one target (once, server-assigned id, count filter, current).
+#[allow(clippy::struct_excessive_bools)]
 struct TargetState {
     kind: TargetKind,
     target_hash: u64,
@@ -400,6 +402,9 @@ struct TargetState {
     once: bool,
     /// The server picked this target's id (the request said 0).
     assigned: bool,
+    /// A strict resume of a query target that gave no expected count: its replay ends with a
+    /// count-only existence filter and leaves the removals to the count (see `count_only_filter`).
+    count_filter: bool,
     /// Reached its first consistent snapshot (`CURRENT` was sent).
     current: bool,
     /// Responses produced by the last refresh, drained by the caller.
@@ -755,6 +760,7 @@ fn handle_listen_request(
                 target: target_hash,
             };
             let resume = resume_of(target, &binding);
+            let count_filter = wants_count_filter(ctx, target, &kind);
             targets.insert(
                 id,
                 TargetState {
@@ -765,6 +771,7 @@ fn handle_listen_request(
                     resume,
                     once: target.once,
                     assigned,
+                    count_filter,
                     current: false,
                     pending: Vec::new(),
                 },
@@ -1166,7 +1173,8 @@ fn refresh_target_full(
     read_time: prost_types::Timestamp,
     boundary: &TokenBinding,
 ) -> Result<(), Status> {
-    if let Some(from) = resolve_resume(db, id, state)? {
+    let resumed = resolve_resume(db, id, state)?;
+    if let Some(from) = resumed {
         state.pending.push(target_change(
             pb::target_change::TargetChangeType::NoChange,
             vec![],
@@ -1174,6 +1182,8 @@ fn refresh_target_full(
             Some(read_time),
         ));
     }
+    // A resume that production answers with the count: see `wants_count_filter`.
+    let count_filter = state.count_filter && resumed.is_some();
     let current: Vec<Document> = match &state.kind {
         TargetKind::Documents(paths) => paths
             .iter()
@@ -1194,10 +1204,58 @@ fn refresh_target_full(
         if next_known.contains_key(path) {
             continue;
         }
-        out_removal(db, path, id, read_time, &mut state.pending);
+        // With the count filter the client finds the removals by the count, as production leaves
+        // them to it (`native/existence-filter/without-expected-count`, both runs).
+        if !count_filter {
+            out_removal(db, path, id, read_time, &mut state.pending);
+        }
+    }
+    if count_filter {
+        state.pending.push(count_only_filter(id, current.len()));
     }
     state.known = next_known;
     Ok(())
+}
+
+/// Whether a target is answered with the count: a strict resume by token of a query target that
+/// gave no expected count. Production ended such a replay with an existence filter and sent no
+/// message for a document that left, in four rows of both L1 runs (`native/resume-token/older`,
+/// `native/resume-token/other-query`, `native/existence-filter/without-expected-count`,
+/// `native/resume-token-expired/expired`); it answered others with a boundary after each
+/// replayed commit and no filter (`native/resume-token/current`, and
+/// `native/existence-filter/with-expected-count`, which gave an expected count). What decides
+/// between the two is not recorded; the rule is the one the four rows share. The official
+/// emulator never sends an existence filter (it resets the target on a resume), so the emulator
+/// profile does not. A client that gives an expected count (the SDKs do) is not affected.
+fn wants_count_filter(ctx: &StreamContext, target: &pb::Target, kind: &TargetKind) -> bool {
+    ctx.gateway.production_refusals()
+        && matches!(kind, TargetKind::Query(_))
+        && target.expected_count.is_none()
+        && matches!(
+            &target.resume_type,
+            Some(pb::target::ResumeType::ResumeToken(bytes)) if is_token_shaped(bytes)
+        )
+}
+
+/// The recorded count-only existence filter: the target, the number of documents it matches and
+/// an empty bloom filter (hash count 0, no bitmap, no padding), as production sent it in the rows
+/// above.
+fn count_only_filter(id: i32, count: usize) -> pb::ListenResponse {
+    pb::ListenResponse {
+        response_type: Some(pb::listen_response::ResponseType::Filter(
+            pb::ExistenceFilter {
+                target_id: id,
+                count: i32::try_from(count).unwrap_or(i32::MAX),
+                unchanged_names: Some(pb::BloomFilter {
+                    bits: Some(pb::BitSequence {
+                        bitmap: Vec::new(),
+                        padding: 0,
+                    }),
+                    hash_count: 0,
+                }),
+            },
+        )),
+    }
 }
 
 /// Applies one complete changed-path set to a target. Returns `false` when the query shape
@@ -1737,6 +1795,7 @@ mod refresh_tests {
                 resume: None,
                 once: false,
                 assigned: false,
+                count_filter: false,
                 current: true,
                 pending: Vec::new(),
             },
@@ -1901,6 +1960,7 @@ mod refresh_tests {
             resume: None,
             once: false,
             assigned: false,
+            count_filter: false,
             current: true,
             pending: Vec::new(),
         };
@@ -1986,6 +2046,7 @@ mod refresh_tests {
                 resume: None,
                 once: false,
                 assigned: false,
+                count_filter: false,
                 current: true,
                 pending: Vec::new(),
             };

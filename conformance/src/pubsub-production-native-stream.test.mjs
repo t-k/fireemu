@@ -1,9 +1,12 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { createHash } from "node:crypto";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import grpc from "@grpc/grpc-js";
 import { protos } from "@google-cloud/pubsub";
-import { createBudget, createCapture } from "./pubsub-production/capture.mjs";
+import { createBudget, createCapture, createFileJournal } from "./pubsub-production/capture.mjs";
 import { createGrpc } from "./pubsub-production/grpc.mjs";
 
 const Request = protos.google.pubsub.v1.StreamingPullRequest;
@@ -26,7 +29,7 @@ async function server(handler) {
         responseStream: true,
         requestSerialize: (value) => encode(Request, value),
         requestDeserialize: (bytes) => Request.toObject(Request.decode(bytes), { longs: String }),
-        responseSerialize: (value) => encode(Response, value),
+        responseSerialize: (value) => (Buffer.isBuffer(value) ? value : encode(Response, value)),
         responseDeserialize: (bytes) => Response.decode(bytes),
       },
     },
@@ -47,15 +50,29 @@ async function server(handler) {
 }
 function setup(t, target, max = 2) {
   const lines = [];
+  const dir = mkdtempSync(join(tmpdir(), "pubsub-native-frames-"));
+  const journal = createFileJournal(join(dir, "capture.jsonl"));
+  t.after(() => {
+    journal.close();
+    rmSync(dir, { recursive: true, force: true });
+  });
   const budget = createBudget(max);
   const transport = createGrpc({
     target,
     secure: false,
     budget,
-    capture: createCapture({ journal: { write: (line) => lines.push(line) } }),
+    capture: createCapture({
+      journal: {
+        write: (line) => {
+          journal.write(line);
+          lines.push(line);
+        },
+        writeFrame: journal.writeFrame,
+      },
+    }),
   });
   t.after(transport.close);
-  return { transport, lines, budget };
+  return { transport, lines, budget, rawFrame: (line) => readFileSync(join(dir, line.blob)) };
 }
 const call = (transport, extra = {}) =>
   transport.stream({
@@ -225,4 +242,58 @@ test("native deadline followup never fabricates an ACK when no message arrived",
   const reply = await call(transport, { afterReceive: { modifyDeadlineSeconds: 601 } });
   assert.equal(reply.followUpSent, false);
   assert.equal(reply.outboundFrames, 1);
+});
+
+test("native raw frames round-trip long ACK bytes and unknown protobuf fields without re-encoding", async (t) => {
+  const ackId = "actual-ack-".repeat(500);
+  const known = encode(Response, {
+    receivedMessages: [{ ackId, message: { data: Buffer.alloc(5000, 0xff) } }],
+  });
+  const inbound = Buffer.concat([Buffer.from([0xf8, 0x07, 0x96, 0x01]), known]);
+  let n = 0;
+  const s = await server((stream) =>
+    stream.on("data", () => {
+      n += 1;
+      if (n === 1) stream.write(inbound);
+      else stream.end();
+    }),
+  );
+  t.after(s.close);
+  const { transport, lines, rawFrame } = setup(t, s.target);
+  const reply = await call(transport, { afterReceive: { modifyDeadlineSeconds: 601 } });
+  assert.equal(reply.code, "OK");
+  assert.equal(reply.followUpSent, true);
+  const recorded = lines.filter((line) => line.note === "stream-frame");
+  assert.deepEqual(rawFrame(recorded[0]), encode(Request, frame));
+  assert.deepEqual(rawFrame(recorded[1]), inbound);
+  assert.notDeepEqual(
+    rawFrame(recorded[1]),
+    known,
+    "unknown field and original field order survive",
+  );
+  assert.deepEqual(
+    rawFrame(recorded[2]),
+    encode(Request, { modifyDeadlineAckIds: [ackId], modifyDeadlineSeconds: [601] }),
+  );
+  assert.equal(recorded[1].body.receivedMessages[0].ackId.omitted.length, ackId.length);
+  assert.equal(recorded[2].body.modifyDeadlineAckIds[0].omitted.length, ackId.length);
+  for (const line of recorded) {
+    const bytes = rawFrame(line);
+    assert.equal(line.bodyBytes, bytes.length);
+    assert.equal(line.sha256, createHash("sha256").update(bytes).digest("hex"));
+  }
+});
+
+test("native unreadable bounded protobuf frame remains replayable and unknown", async (t) => {
+  const malformed = Buffer.from([0x0a, 0xff]);
+  const s = await server((stream) => stream.once("data", () => stream.write(malformed)));
+  t.after(s.close);
+  const { transport, lines, rawFrame } = setup(t, s.target);
+  const reply = await call(transport);
+  assert.equal(reply.unknown, true);
+  assert.equal(reply.reason, "unreadable-frame");
+  assert.equal(reply.inboundFrames, 1);
+  const line = lines.find((entry) => entry.note === "stream-frame" && entry.direction === "in");
+  assert.equal(line.unreadable, true);
+  assert.deepEqual(rawFrame(line), malformed);
 });

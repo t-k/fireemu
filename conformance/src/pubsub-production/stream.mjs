@@ -1,7 +1,6 @@
 // One native bidirectional RPC per observation. No SDK subscriber, reconnect, lease extension or retry.
 import grpcLib from "@grpc/grpc-js";
 import { protos as pubsubProtos } from "@google-cloud/pubsub";
-import { createHash } from "node:crypto";
 
 export const STREAM_BOUNDS = Object.freeze({
   outboundFrames: 2,
@@ -20,7 +19,6 @@ const unsure = new Set([
 const names = Object.fromEntries(
   Object.entries(grpcLib.status).map(([name, code]) => [code, name]),
 );
-const digest = (bytes) => createHash("sha256").update(bytes).digest("hex");
 
 export function createStreamingPull({
   target,
@@ -132,6 +130,7 @@ export function createStreamingPull({
             rpc.cancel();
             return;
           }
+          inboundFrames += 1;
           let body;
           try {
             body = Response.toObject(Response.decode(bytes), {
@@ -140,19 +139,23 @@ export function createStreamingPull({
               bytes: String,
             });
           } catch {
+            capture.frame(
+              { ...label, direction: "in", frame: inboundFrames, unreadable: true },
+              bytes,
+            );
             reason = "unreadable-frame";
             rpc.cancel();
             return;
           }
-          inboundFrames += 1;
-          capture.note("stream-frame", {
-            ...label,
-            direction: "in",
-            frame: inboundFrames,
-            bodyBytes: bytes.length,
-            sha256: digest(bytes),
-            body,
-          });
+          capture.frame(
+            {
+              ...label,
+              direction: "in",
+              frame: inboundFrames,
+              body,
+            },
+            bytes,
+          );
           const ackId = body.receivedMessages?.[0]?.ackId;
           if (
             afterReceive !== undefined &&
@@ -173,29 +176,31 @@ export function createStreamingPull({
             rpc.write(wire);
             outboundFrames += 1;
             followUpSent = true;
-            capture.note("stream-frame", {
-              ...label,
-              direction: "out",
-              frame: outboundFrames,
-              causedByInboundFrame: inboundFrames,
-              bodyBytes: wire.length,
-              sha256: digest(wire),
-              body: followup,
-            });
+            capture.frame(
+              {
+                ...label,
+                direction: "out",
+                frame: outboundFrames,
+                causedByInboundFrame: inboundFrames,
+                body: followup,
+              },
+              wire,
+            );
             rpc.end();
           }
         });
         encoded.forEach((bytes, index) => {
           rpc.write(bytes);
           outboundFrames += 1;
-          capture.note("stream-frame", {
-            ...label,
-            direction: "out",
-            frame: outboundFrames,
-            bodyBytes: bytes.length,
-            sha256: digest(bytes),
-            body: frames[index],
-          });
+          capture.frame(
+            {
+              ...label,
+              direction: "out",
+              frame: outboundFrames,
+              body: frames[index],
+            },
+            bytes,
+          );
         });
         if (afterReceive === undefined) rpc.end();
       });

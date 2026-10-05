@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
+import { productionCounters } from "./functions-events/resource-id.mjs";
 import {
   advanceLocalClock,
   createLiveDriver,
@@ -132,7 +133,7 @@ test("the local Pub/Sub scenarios publish what the production script publishes",
   }
 });
 
-test("each local Pub/Sub message gets its own id, counted like the production script's", async () => {
+test("each local Pub/Sub message gets its own random id, with the counter its scenario has in the production script", async () => {
   const capture = { barrier: async () => ({ cursor: 0 }) };
   const pubsub = fakePubsub();
   for (let i = 0; i < 3; i += 1)
@@ -143,7 +144,6 @@ test("each local Pub/Sub message gets its own id, counted like the production sc
     });
   const texts = pubsub.published.map((message) => message.data.toString("utf8"));
   assert.equal(new Set(texts).size, 3);
-  const counters = texts.map((text) => Number(text.match(/m(\d+)$/)[1]));
-  assert.equal(counters[1], counters[0] + 1);
-  assert.equal(counters[2], counters[1] + 1);
+  const counter = productionCounters().get("pubsub-publish/subject");
+  for (const text of texts) assert.match(text, new RegExp(`^e[0-9a-f]{24}m${counter}$`));
 });

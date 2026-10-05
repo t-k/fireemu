@@ -287,7 +287,9 @@ export const RUNS = [
           "--profile",
           "strict",
         ],
-        env: {},
+        // The request timeout of the production recording (run.mjs): the replay must outwait the
+        // strict contention wait, or a held writer's answer is cut to "no-response".
+        env: { FIRESTORE_PROBE_TIMEOUT_MS: "60000" },
         expectedExitCodes: [0],
       },
     ],

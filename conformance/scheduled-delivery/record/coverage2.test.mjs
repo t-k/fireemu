@@ -411,6 +411,7 @@ writeFileSync(${JSON.stringify(join(dir, "pg.json"))}, JSON.stringify({ pid: pro
 // ---- the command line -----------------------------------------------------------------------------
 
 const COMMIT = "a".repeat(40);
+const ENV = { HOME: "/home/test", PATH: "/usr/bin" };
 const ARGS = (command, run, extra = []) => [
   command,
   "--run-dir",
@@ -432,6 +433,7 @@ const fakeDeps = (overrides = {}) => ({
   firebaseToolsVersion: () => "15.28.2",
   gitHead: () => COMMIT,
   gitDirty: () => false,
+  adcExists: () => true,
   token: () => "test-token",
   send: createWorld().send,
   runCli: async () => ({}),
@@ -456,15 +458,15 @@ const io = () => {
 test("the packet digest of known contents is pinned", () => {
   assert.equal(
     packetDigest((name) => Buffer.from("content of " + name)),
-    "33ab50c5c0016adc7d6083faa612899f36490e62b2abfa3c0ae9355a1e5bf905",
+    "c40420cfb325d979f1fcda1791a827f20bd1d7a9f4854ad0f94e66d3dc320fc0",
   );
-  assert.equal(PACKET_FILES.length, 9);
+  assert.equal(PACKET_FILES.length, 11);
 });
 
 test("a project number is twelve or thirteen digits and a commit is forty hexadecimal digits, zeros included", () => {
   const base = parseArgs(ARGS("check", "/r")).values;
   const run = (values) =>
-    localChecks({ values: { ...base, ...values }, env: {}, deps: fakeDeps() });
+    localChecks({ values: { ...base, ...values }, env: ENV, deps: fakeDeps() });
   assert.deepEqual(run({}), []);
   assert.deepEqual(run({ "project-number": "1".repeat(12) }), []);
   assert.deepEqual(run({ "project-number": "1".repeat(13) }), []);
@@ -482,14 +484,18 @@ test("the real git readings agree with git", () => {
 
 test("a bad command or a malformed argument is refused with its message and code 2", async () => {
   const bad = io();
-  assert.equal(await main(["check", "stray"], { env: {}, deps: fakeDeps(), ...bad }), 2);
+  assert.equal(await main(["check", "stray"], { env: ENV, deps: fakeDeps(), ...bad }), 2);
   assert.deepEqual(bad.lines, [["err", "unexpected argument stray"]]);
   const other = io();
   assert.equal(
-    await main(["bogus", ...ARGS("check", "/r").slice(1)], { env: {}, deps: fakeDeps(), ...other }),
+    await main(["bogus", ...ARGS("check", "/r").slice(1)], {
+      env: ENV,
+      deps: fakeDeps(),
+      ...other,
+    }),
     2,
   );
-  assert.deepEqual(other.lines, [["err", "the command is check or record"]]);
+  assert.deepEqual(other.lines, [["err", "the command is check, record or readback"]]);
 });
 
 test("the first line says what is about to run, indented by two, and a failed check names each problem", async () => {
@@ -497,7 +503,7 @@ test("the first line says what is about to run, indented by two, and a failed ch
   try {
     const failing = io();
     const code = await main(ARGS("check", run), {
-      env: {},
+      env: ENV,
       deps: fakeDeps({ gitDirty: () => true, nodeVersion: () => "1" }),
       digest: "d".repeat(64),
       ...failing,
@@ -518,7 +524,7 @@ test("the first line says what is about to run, indented by two, and a failed ch
     const source = io();
     assert.equal(
       await main(ARGS("check", join(run, "x")), {
-        env: {},
+        env: ENV,
         deps: fakeDeps({ sourceProblems: () => ["p1", "p2"] }),
         ...source,
       }),
@@ -535,7 +541,7 @@ test("record without the approved digest says what the digest is", async () => {
   try {
     const refused = io();
     const code = await main(ARGS("record", run, ["--send", "--expect-digest", "e".repeat(64)]), {
-      env: {},
+      env: ENV,
       deps: fakeDeps(),
       digest: "d".repeat(64),
       ...refused,
@@ -564,7 +570,7 @@ test("the files and the summary a send leaves are indented by two, and a thrown 
     const done = io();
     assert.equal(
       await main(ARGS("record", run, ["--send", "--expect-digest", digest]), {
-        env: {},
+        env: ENV,
         deps: fakeDeps({ record: async () => result }),
         digest,
         ...done,
@@ -594,7 +600,7 @@ test("the files and the summary a send leaves are indented by two, and a thrown 
     const thrown = io();
     assert.equal(
       await main(ARGS("record", run2, ["--send", "--expect-digest", digest]), {
-        env: {},
+        env: ENV,
         deps: fakeDeps({
           record: async () => {
             throw new Error("boom");

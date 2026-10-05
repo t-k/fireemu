@@ -1,5 +1,5 @@
 {
-  "provenance": "Real bodies: the FE formal v5 recording (lists of Cloud Functions v1 and v2 and of Cloud Run services, events project, 2026-10-04), the calendar v5 recording (Cloud Scheduler, sandbox, 2026-10-01) and the calendar shape run (Pub/Sub, sandbox, 2026-09-30). Project numbers are replaced.",
+  "provenance": "Real bodies and names: the FE formal v5 recording (lists of Cloud Functions v1 and v2 and of Cloud Run services, events project, 2026-10-04), the calendar v5 recording (Cloud Scheduler, sandbox, 2026-10-01) and the calendar shape run (Pub/Sub and the 409 of a job delete right after a pause, sandbox, 2026-09-30) and the Gen1 operation names of the FE v5 deploy output. Project numbers are replaced.",
   "trimmed": {
     "gcfV1List": "each function reduced to name and status",
     "gcfV2List": "each function reduced to name, state and environment",
@@ -328,6 +328,28 @@
         },
         "state": "ACTIVE"
       }
+    },
+    "schedulerBusy409": {
+      "status": 409,
+      "recordedBytes": 336,
+      "body": {
+        "error": {
+          "code": 409,
+          "message": "sync mutate calls cannot be queued",
+          "status": "ABORTED",
+          "details": [
+            {
+              "@type": "type.googleapis.com/google.rpc.ResourceInfo",
+              "resourceName": "projects/fireemu-oracle-sbx/locations/us-central1/jobs/fe-scheduled-shape-96db1cb7ca5fcb35"
+            }
+          ]
+        }
+      }
     }
-  }
+  },
+  "gcfV1OperationNames": [
+    "cHJvamVjdHMvZmlyZWVtdS1vcmFjbGUtZXZlbnRzL2xvY2F0aW9ucy91cy1jZW50cmFsMS9vcGVyYXRpb25zL29wZXJhdGlvbi0xNzkxMTM4NjE2NDA1LTY1ZDA3ZjRmOTZlNmYtODhiMmNkNjUtYzhmOGEyZWU",
+    "cHJvamVjdHMvZmlyZWVtdS1vcmFjbGUtZXZlbnRzL2xvY2F0aW9ucy91cy1jZW50cmFsMS9vcGVyYXRpb25zL29wZXJhdGlvbi0xNzkxMTM4NjU2OTU0LTY1ZDA3Zjc2NDI4M2EtOTcwZWExMGItZjNlMWUyZTM",
+    "cHJvamVjdHMvZmlyZWVtdS1vcmFjbGUtZXZlbnRzL2xvY2F0aW9ucy91cy1jZW50cmFsMS9vcGVyYXRpb25zL29wZXJhdGlvbi0xNzkxMTM4NjU2OTczLTY1ZDA3Zjc2NDcxZTItMjIxNjdkNGEtM2EzYjgxM2U"
+  ]
 }

@@ -4,15 +4,20 @@
 //
 //   node bin.mjs check  --run-dir <dir> --project-number <n> --source-commit <sha> --deps-dir <node_modules>
 //                       --node <node 22> --firebase-js <firebase-tools bin>
-//   node bin.mjs record <the same> --expect-digest <hex>
+//   node bin.mjs record <the same> --send --expect-digest <hex>
+//   node bin.mjs readback --run-dir <dir> --project-number <n> --run-id <16 hex> --send --expect-digest <hex>
 //
-// Exit codes: 0 only for a recording that may be closed; 2 for bad arguments or a failed check; 3 when the
-// answers need review, a read-back or a recovery; 4 when the recorder stopped on an exception.
+// `readback` is read-only (every mutation is refused by the allowlist): the separate read, at least ten minutes
+// after the last request of a run, that an unknown answer needs before a close row.
+//
+// Exit codes: 0 only for a recording (or a read-back) that may be closed; 2 for bad arguments or a failed check; 3
+// when the answers need review, a read-back or a recovery; 4 when the recorder stopped on an exception.
 import { createHash, randomBytes } from "node:crypto";
 import { execFileSync } from "node:child_process";
 import {
   closeSync,
   fsyncSync,
+  existsSync,
   mkdirSync,
   openSync,
   readFileSync,
@@ -21,9 +26,11 @@ import {
 } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { FIREBASE_TOOLS_VERSION, NODE_VERSION, PROJECT } from "./plan.mjs";
+import { FIREBASE_TOOLS_VERSION, NODE_VERSION, PROJECT, RUN_ID } from "./plan.mjs";
 import { cliPlan, prepareSource, runCli as realRunCli, sourceProblems } from "./deploy.mjs";
 import { MAX_REQUESTS, record } from "./run.mjs";
+import { READBACK_MAX_REQUESTS, SETTLE_MS, readbackRun } from "./readback.mjs";
+import { createTokenSource } from "./token.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 export const PACKET_FILES = [
@@ -32,6 +39,8 @@ export const PACKET_FILES = [
   "record/logs.mjs",
   "record/deploy.mjs",
   "record/run.mjs",
+  "record/token.mjs",
+  "record/readback.mjs",
   "capture.mjs",
   "fixture/index.js",
   "fixture/package.json",
@@ -85,6 +94,7 @@ const REQUIRED = ["run-dir", "project-number", "source-commit", "deps-dir", "nod
 export function localChecks({ values, env, deps }) {
   const problems = [...envProblems(env)];
   for (const key of REQUIRED) if (!values[key]) problems.push("--" + key + " is required");
+  if (!env.HOME) problems.push("HOME is not set");
   if (problems.length) return problems;
   if (!/^\d{12,13}$/.test(values["project-number"]))
     problems.push("--project-number is 12 or 13 digits");
@@ -99,6 +109,10 @@ export function localChecks({ values, env, deps }) {
   const head = deps.gitHead();
   if (head !== values["source-commit"]) problems.push("HEAD is not the source commit");
   if (deps.gitDirty()) problems.push("the working tree is not clean");
+  // Existence only, never read: the CLI authenticates with the owner's application-default credential, which it
+  // finds under the real HOME (gcloud's well-known file).
+  if (!deps.adcExists(env.HOME))
+    problems.push("the application-default credential file is missing under HOME");
   return problems;
 }
 
@@ -113,6 +127,11 @@ export const realDeps = {
       encoding: "utf8",
       cwd: here,
     }).trim() !== "",
+  adcExists: (home) =>
+    existsSync(join(home, ".config/gcloud/application_default_credentials.json")),
+  signals: (handler) => {
+    for (const name of ["SIGINT", "SIGTERM", "SIGHUP"]) process.on(name, () => handler(name));
+  },
   token: () =>
     execFileSync("gcloud", ["auth", "application-default", "print-access-token"], {
       encoding: "utf8",
@@ -123,9 +142,112 @@ export const realDeps = {
   prepareSource,
   sourceProblems,
   record,
+  readback: readbackRun,
   repoRoot: () =>
     execFileSync("git", ["rev-parse", "--show-toplevel"], { encoding: "utf8", cwd: here }).trim(),
 };
+
+/** The latest time a run's journal records (a request dispatched or answered), or `null` for no journal. */
+export function lastActivity(path) {
+  let text;
+  try {
+    text = readFileSync(path, "utf8");
+  } catch {
+    return null;
+  }
+  let last = null;
+  for (const line of text.split("\n")) {
+    if (!line) continue;
+    let row;
+    try {
+      row = JSON.parse(line);
+    } catch {
+      continue;
+    }
+    for (const stamp of [row.dispatchAt, row.responseAt]) {
+      const at = Date.parse(stamp ?? "");
+      if (Number.isFinite(at) && (last === null || at > last)) last = at;
+    }
+  }
+  return last;
+}
+
+/** The read-only read-back of a run, at least ten minutes after its last request. */
+async function readbackCommand({ values, env, deps, out, err, digest }) {
+  const problems = envProblems(env);
+  for (const key of ["run-dir", "project-number", "run-id"])
+    if (!values[key]) problems.push("--" + key + " is required");
+  if (!env.HOME) problems.push("HOME is not set");
+  if (values["project-number"] && !/^\d{12,13}$/.test(values["project-number"]))
+    problems.push("--project-number is 12 or 13 digits");
+  if (values["run-id"] && !RUN_ID.test(values["run-id"]))
+    problems.push("--run-id is 16 hexadecimal digits");
+  if (problems.length) {
+    err("check failed:\n" + problems.map((p) => "- " + p).join("\n"));
+    return 2;
+  }
+  if (!values.send || values["expect-digest"] !== digest) {
+    err(
+      "readback needs --send and the approved --expect-digest; this packet's digest is " + digest,
+    );
+    return 2;
+  }
+  const runDir = values["run-dir"];
+  const runId = values["run-id"];
+  const last = lastActivity(join(runDir, "journal-" + runId + ".jsonl"));
+  if (last === null) {
+    err("there is no journal of run " + runId + " in the run directory");
+    return 2;
+  }
+  const waited = (deps.now ?? Date.now)() - last;
+  if (waited < SETTLE_MS) {
+    err(
+      "the last request of run " +
+        runId +
+        " was " +
+        Math.floor(waited / 1000) +
+        " seconds ago; wait until ten minutes have passed",
+    );
+    return 2;
+  }
+  const stamp = String((deps.now ?? Date.now)());
+  const journal = openSync(join(runDir, "readback-" + runId + "-" + stamp + ".jsonl"), "wx", 0o600);
+  try {
+    const result = await deps.readback({
+      runId,
+      projectNumber: values["project-number"],
+      accessToken: deps.token(),
+      save: async (row) => {
+        writeSync(journal, JSON.stringify(row) + "\n");
+        fsyncSync(journal);
+      },
+      send: deps.send,
+    });
+    writeFileSync(
+      join(runDir, "readback-result-" + runId + "-" + stamp + ".json"),
+      JSON.stringify(result, null, 2) + "\n",
+      { mode: 0o600 },
+    );
+    out(
+      JSON.stringify(
+        {
+          runId,
+          allAbsent: result.allAbsent,
+          attempted: result.attempted,
+          unknown: result.unknown,
+        },
+        null,
+        2,
+      ),
+    );
+    return result.allAbsent ? 0 : 3;
+  } catch (error) {
+    err("the read-back stopped: " + String(error?.message));
+    return 4;
+  } finally {
+    closeSync(journal);
+  }
+}
 
 export async function main(
   argv,
@@ -138,11 +260,21 @@ export async function main(
   } = {},
 ) {
   const parsed = parseArgs(argv);
-  if (parsed.error || !["check", "record"].includes(parsed.command)) {
-    err(parsed.error ?? "the command is check or record");
+  if (parsed.error || !["check", "record", "readback"].includes(parsed.command)) {
+    err(parsed.error ?? "the command is check, record or readback");
     return 2;
   }
   const { command, values } = parsed;
+  if (command === "readback") {
+    out(
+      JSON.stringify(
+        { project: PROJECT, command, maxRequests: READBACK_MAX_REQUESTS, packetDigest: digest },
+        null,
+        2,
+      ),
+    );
+    return readbackCommand({ values, env, deps, out, err, digest });
+  }
   out(
     JSON.stringify(
       { project: PROJECT, command, maxRequests: MAX_REQUESTS, packetDigest: digest },
@@ -183,7 +315,30 @@ export async function main(
   }
   const runId = randomBytes(8).toString("hex");
   const journal = openSync(join(runDir, "journal-" + runId + ".jsonl"), "a", 0o600);
-  const accessToken = deps.token();
+  // The token is asked for again when it is about 40 minutes old (at most twice): a run can outlast one token.
+  const tokenSource = createTokenSource({ printToken: deps.token, now: deps.now });
+  const accessToken = await tokenSource();
+  const send = async (request) => {
+    const current = await tokenSource();
+    const response = await deps.send({
+      ...request,
+      headers: { ...request.headers, authorization: "Bearer " + current },
+    });
+    if (current === accessToken) return response;
+    // The capture checks answers against the first token only: a refreshed one is checked here.
+    const bytes = Buffer.from(await response.arrayBuffer());
+    if (bytes.toString("utf8").includes(current))
+      throw new Error("response reflected a credential; capture stopped");
+    return { status: response.status, headers: response.headers, arrayBuffer: async () => bytes };
+  };
+  const signal = { aborted: false };
+  deps.signals?.((name) => {
+    if (signal.aborted) err(name + ": a stop is already under way; wait for the cleanup");
+    else {
+      signal.aborted = true;
+      err(name + ": stopping at the next request; the cleanup runs, do not kill the recorder");
+    }
+  });
   const configHome = join(runDir, "cli-config");
   mkdirSync(configHome, { recursive: true, mode: 0o700 });
   const runCli = ({ action }) =>
@@ -193,14 +348,13 @@ export async function main(
         configHome,
         configPath: prepared.configPath,
         workDir: dirname(prepared.configPath),
-        home: join(runDir, "cli-home"),
-        path: dirname(values.node),
+        home: env.HOME,
+        path: dirname(values.node) + ":" + (env.PATH ?? ""),
       }),
       firebaseJs: values["firebase-js"],
       node: values.node,
       directory: join(runDir, "cli"),
     });
-  mkdirSync(join(runDir, "cli-home"), { recursive: true, mode: 0o700 });
   let result;
   try {
     result = await deps.record({
@@ -211,8 +365,9 @@ export async function main(
         writeSync(journal, JSON.stringify(row) + "\n");
         fsyncSync(journal);
       },
-      send: deps.send,
+      send,
       runCli,
+      signal,
     });
   } catch (error) {
     closeSync(journal);

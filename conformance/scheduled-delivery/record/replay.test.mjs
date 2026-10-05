@@ -137,14 +137,14 @@ test("IAM changes are the members added and removed between two policy reads", (
       ],
     },
     {
-      role: "roles/run.invoker",
+      role: "roles/test.addedByTheTest",
       members: ["serviceAccount:1-compute@developer.gserviceaccount.com"],
     },
   ]);
   assert.deepEqual(iamChanges(a, b), {
     added: [
       "roles/editor|serviceAccount:2@x.iam.gserviceaccount.com",
-      "roles/run.invoker|serviceAccount:1-compute@developer.gserviceaccount.com",
+      "roles/test.addedByTheTest|serviceAccount:1-compute@developer.gserviceaccount.com",
     ],
     removed: [],
   });
@@ -154,4 +154,96 @@ test("IAM changes are the members added and removed between two policy reads", (
   assert.equal(iamChanges(null, a), null);
   assert.equal(iamChanges(a, { status: 500, json: {} }), null);
   assert.deepEqual(iamChanges(policy([]), policy([{ role: "r" }])), { added: [], removed: [] });
+});
+
+// ---- the review's replay gaps (S3) ------------------------------------------------------------------
+
+const fixture = JSON.parse(
+  readFileSync(new URL("../fixtures/delivery-recorded.json", import.meta.url), "utf8"),
+);
+const prepared = JSON.parse(
+  readFileSync(new URL("../fixtures/prepare-recorded.json", import.meta.url), "utf8"),
+).answers;
+
+test("the recorded 409 of a job delete right after a pause is the busy answer, and no other 409 is", () => {
+  const busy = answer(recorded.schedulerBusy409);
+  assert.equal(recorded.schedulerBusy409.status, 409);
+  assert.equal(recorded.schedulerBusy409.recordedBytes, 336);
+  assert.equal(isBusy(busy), true);
+  assert.equal(isBusy({ ...busy, status: 400 }), false);
+  assert.equal(
+    isBusy({ ...busy, json: { error: { ...busy.json.error, status: "ALREADY_EXISTS" } } }),
+    false,
+  );
+  assert.equal(
+    isBusy({ ...busy, json: { error: { ...busy.json.error, message: "other" } } }),
+    false,
+  );
+  assert.equal(isBusy({ status: 409, json: null, bodyUnknown: true }), false);
+});
+
+test("the recorded Gen1 operation names pass the allowlist and are polled under /v1/operations", async () => {
+  const { createGuard } = await import("./guard.mjs");
+  const { createWorld, NUMBER, reply } = await import("./world.mjs");
+  const { record } = await import("./run.mjs");
+  const names = fixture.gcfV1OperationNames;
+  assert.ok(names.length >= 1 && names.every((n) => /^[A-Za-z0-9._-]+$/.test(n)));
+  const guard = createGuard("0123456789abcdef", NUMBER);
+  for (const name of names)
+    assert.equal(
+      guard.allow({
+        id: "t",
+        method: "GET",
+        url: "https://cloudfunctions.googleapis.com/v1/operations/" + name,
+      }),
+      true,
+    );
+  const world = createWorld({
+    leaveOnDelete: ["schedOkV1"],
+    hooks: {
+      "DELETE cloudfunctions.googleapis.com/v1/projects/fireemu-oracle-sbx/locations/us-central1/functions/schedOkV1":
+        async ({ w }) => {
+          w.functionsV1.delete(functionName("schedOkV1"));
+          return reply(200, { name: "operations/" + names[0], done: false });
+        },
+    },
+  });
+  const result = await record({
+    runId: "0123456789abcdef",
+    projectNumber: NUMBER,
+    accessToken: "test-token",
+    save: async () => {},
+    send: world.send,
+    runCli: (o) => world.runCli(o),
+    clock: () => world.now,
+    sleep: async (ms) => world.advance(ms),
+    passes: 1,
+    naturalWindowMs: 60_000,
+  });
+  assert.equal(result.cleanup.errors, undefined, "no step was refused");
+  assert.ok(world.calls.includes("GET cloudfunctions.googleapis.com/v1/operations/" + names[0]));
+});
+
+test("the recorded IAM policy of the sandbox gives no change when read twice, and a new agent is an addition", () => {
+  const policy = { status: 200, json: prepared.iamPolicy.body };
+  assert.deepEqual(iamChanges(policy, policy), { added: [], removed: [] });
+  const grown = {
+    status: 200,
+    json: {
+      ...prepared.iamPolicy.body,
+      bindings: [
+        ...prepared.iamPolicy.body.bindings,
+        {
+          role: "roles/test.addedByTheTest",
+          members: ["serviceAccount:123456789012-compute@developer.gserviceaccount.com"],
+        },
+      ],
+    },
+  };
+  assert.deepEqual(iamChanges(policy, grown), {
+    added: [
+      "roles/test.addedByTheTest|serviceAccount:123456789012-compute@developer.gserviceaccount.com",
+    ],
+    removed: [],
+  });
 });

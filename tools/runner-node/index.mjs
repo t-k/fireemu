@@ -22,6 +22,7 @@ import { blockingResult } from "./blocking-response.mjs";
 import { boundLogMessage, createInvocationLogger } from "./log-context.mjs";
 import { invocationFailure } from "./invocation-error.mjs";
 import { InvocationBudget, readFrames } from "./protocol.mjs";
+import { deliverSchedule, v1ScheduleContext } from "./schedule-delivery.mjs";
 import { collectFunctions, exportNamespace } from "./discovery.mjs";
 import { FrameWriter } from "./output.mjs";
 import { installDiagnosticOutput } from "./diagnostic-output.mjs";
@@ -1063,6 +1064,9 @@ function millisecondTimestamp(time) {
   return Number.isNaN(parsed.getTime()) ? time : parsed.toISOString();
 }
 
+/** Whether the daemon runs the strict profile (production's behaviour where the official emulator differs). */
+const strictProfile = () => process.env.FIREEMU_HTTP_PROFILE === "strict";
+
 function v1Context(msg) {
   const event = msg.event;
   switch (msg.trigger) {
@@ -1120,6 +1124,9 @@ function v1Context(msg) {
       };
     }
     case "schedule":
+      // The strict profile hands a Gen1 handler the context of the Pub/Sub message production's Scheduler
+      // published (run 156715222b86ea44): see schedule-delivery.mjs.
+      if (strictProfile()) return v1ScheduleContext(event);
       return {
         eventId: event.id,
         timestamp: event.time,
@@ -1436,6 +1443,13 @@ async function invoke(functions, manifest, msg) {
       }
       switch (msg.trigger) {
         case "schedule": {
+          // The strict profile calls the function the way production's Scheduler does, through its HTTP wrapper,
+          // so the SDK builds the event from the scheduler headers (job id, Los Angeles time, `context` getter)
+          // and its own error handling runs. A bare handler (no separate wrapper) is called directly.
+          if (strictProfile() && typeof fn.run === "function" && fn.run !== fn) {
+            await deliverSchedule(fn, msg.event.data);
+            return;
+          }
           const run = fn.run || fn;
           await run(msg.event.data);
           return;

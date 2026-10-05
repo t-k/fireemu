@@ -2927,7 +2927,16 @@ fn manifest_for_profile(
     profile: CompatibilityProfile,
     manifest_json: &serde_json::Value,
 ) -> Result<fireemu_core_functions::manifest::FunctionManifest, String> {
-    let mut manifest = parse_manifest(manifest_json)?;
+    let defaulted;
+    let document = if uses_production_scheduler_defaults(profile) {
+        let mut copy = manifest_json.clone();
+        apply_first_generation_default_time_zone(&mut copy);
+        defaulted = copy;
+        &defaulted
+    } else {
+        manifest_json
+    };
+    let mut manifest = parse_manifest(document)?;
     check_scheduler_refusals_for(profile, &manifest, manifest_json)?;
     serve_blocking_events_for(profile, &mut manifest);
     Ok(manifest)
@@ -2970,6 +2979,43 @@ fn check_scheduler_refusals_for(
         }
     }
     Ok(())
+}
+
+/// Whether `profile` gives a schedule the time zone production's deploy gives it when none is declared: the strict
+/// profile does, as production does; the emulator profile keeps the daemon's own default (UTC unless configured).
+pub(crate) const fn uses_production_scheduler_defaults(profile: CompatibilityProfile) -> bool {
+    matches!(profile, CompatibilityProfile::Strict)
+}
+
+/// Gives a first-generation schedule that names no time zone (absent or `null`) `America/Los_Angeles`, the zone the
+/// Firebase CLI writes into its Cloud Scheduler job (`DEFAULT_TIME_ZONE_V1`; read back from production for
+/// `schedFailV1` in run `156715222b86ea44`, while the second-generation default, UTC, read back for `schedOkV2`).
+/// An explicit zone, and the configured `scheduler.defaultTimeZone` (applied before this), win; a second-generation
+/// schedule keeps no zone, which evaluates in UTC.
+fn apply_first_generation_default_time_zone(manifest: &mut serde_json::Value) {
+    let Some(functions) = manifest
+        .get_mut("functions")
+        .and_then(serde_json::Value::as_array_mut)
+    else {
+        return;
+    };
+    for function in functions {
+        let first_generation = match function.get("generation") {
+            None | Some(serde_json::Value::Null) => true,
+            Some(generation) => generation.as_u64() == Some(1),
+        };
+        let Some(trigger) = function.get_mut("trigger") else {
+            continue;
+        };
+        if first_generation
+            && trigger.get("type").and_then(serde_json::Value::as_str) == Some("schedule")
+            && trigger
+                .get("timeZone")
+                .is_none_or(serde_json::Value::is_null)
+        {
+            trigger["timeZone"] = serde_json::Value::String("America/Los_Angeles".to_owned());
+        }
+    }
 }
 
 /// Whether `profile` refuses what production Cloud Scheduler refuses: the strict profile does, as production does.
@@ -7016,7 +7062,75 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// The time zone of a schedule that names none: the strict profile gives a first-generation one Los Angeles (read
+    /// back from production for `schedFailV1`), a second-generation one stays zoneless (UTC); an explicit zone and
+    /// the configured default win; the emulator profile changes nothing.
+    #[test]
+    fn strict_gives_a_first_generation_schedule_the_los_angeles_zone() {
+        let document = json!({"functions": [
+            {"name": "v1none", "trigger": {"type": "schedule", "schedule": "0 9 * * *"}},
+            {"name": "v1null", "generation": 1, "trigger": {"type": "schedule", "schedule": "0 9 * * *", "timeZone": null}},
+            {"name": "v1tokyo", "generation": 1, "trigger": {"type": "schedule", "schedule": "0 9 * * *", "timeZone": "Asia/Tokyo"}},
+            {"name": "v2none", "generation": 2, "trigger": {"type": "schedule", "schedule": "0 9 * * *"}},
+            {"name": "v2utc", "generation": 2, "trigger": {"type": "schedule", "schedule": "0 9 * * *", "timeZone": "UTC"}},
+            {"name": "http", "generation": 1, "trigger": {"type": "http"}},
+        ]});
+        let zones = |profile| {
+            let manifest = super::manifest_for_profile(profile, &document).unwrap();
+            manifest
+                .scheduled()
+                .map(|(function, _, zone)| (function.name.clone(), zone.map(str::to_owned)))
+                .collect::<Vec<_>>()
+        };
+        let la = Some("America/Los_Angeles".to_owned());
+        assert_eq!(
+            zones(super::CompatibilityProfile::Strict),
+            vec![
+                ("v1none".to_owned(), la.clone()),
+                ("v1null".to_owned(), la),
+                ("v1tokyo".to_owned(), Some("Asia/Tokyo".to_owned())),
+                ("v2none".to_owned(), None),
+                ("v2utc".to_owned(), Some("UTC".to_owned())),
+            ]
+        );
+        let emulator = zones(super::CompatibilityProfile::Emulator);
+        assert_eq!(emulator[0].1, None, "the emulator profile keeps no zone");
+        assert_eq!(emulator[1].1, None);
+        // The configured default is applied first and wins over the generation default.
+        let mut configured = document.clone();
+        super::apply_default_time_zone(&mut configured, "Europe/Paris");
+        let manifest =
+            super::manifest_for_profile(super::CompatibilityProfile::Strict, &configured).unwrap();
+        assert!(manifest
+            .scheduled()
+            .all(|(_, _, zone)| matches!(zone, Some("Europe/Paris" | "Asia/Tokyo" | "UTC"))));
+        // The first run of a Gen1 `0 9 * * *` is 09:00 in Los Angeles: 16:00Z in October (PDT).
+        let strict =
+            super::manifest_for_profile(super::CompatibilityProfile::Strict, &document).unwrap();
+        let (_, schedule, zone) = strict.scheduled().next().unwrap();
+        let rules = fireemu_adapter_functions::zone::resolve(zone).unwrap();
+        let now = fireemu_core_types::time::LogicalInstant::parse_rfc3339("2026-10-05T08:00:00Z")
+            .unwrap();
+        assert_eq!(
+            schedule.next_after_in(now, &*rules),
+            Some(
+                fireemu_core_types::time::LogicalInstant::parse_rfc3339("2026-10-05T16:00:00Z")
+                    .unwrap()
+            )
+        );
+    }
+
     /// The profile switch itself: only strict refuses what Cloud Scheduler refuses.
+    #[test]
+    fn only_the_strict_profile_uses_production_scheduler_defaults() {
+        assert!(super::uses_production_scheduler_defaults(
+            super::CompatibilityProfile::Strict
+        ));
+        assert!(!super::uses_production_scheduler_defaults(
+            super::CompatibilityProfile::Emulator
+        ));
+    }
+
     #[test]
     fn only_the_strict_profile_refuses_scheduler_limits() {
         assert!(super::refuses_scheduler_limits(

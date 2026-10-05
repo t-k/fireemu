@@ -47,6 +47,7 @@ export const RUNNER_FILES = [
   "http-lifecycle.mjs",
   "http-admission.mjs",
   "invocation-error.mjs",
+  "schedule-delivery.mjs",
 ];
 
 function parseArgs(argv) {

@@ -4929,8 +4929,9 @@ struct VersionsQuery<'a> {
 ///
 /// The filters of the strict profile (`startOffset`, `endOffset`, `matchGlob`) apply to the names
 /// of the generations before they are folded at the delimiter, as they do for a plain listing.
-/// Without a filter the page is made under one acquisition of the store; with one, by
-/// [`versions_scan`], which tests the names outside the lock.
+/// Under strict the page is always made by [`versions_scan`] (with or without a filter), which
+/// reads the store in batches and tests the names outside the lock; the emulator profile has no
+/// filter and makes the page under one acquisition of the store.
 fn list_versions_page(
     state: &StorageState,
     bucket: &BucketName,
@@ -4942,8 +4943,9 @@ fn list_versions_page(
         .filter(|token| !token.is_empty())
         .map(versions_cursor)
         .transpose()?;
-    // The filters exist only under strict (`glob` and the offsets are unset otherwise), so the
-    // emulator profile keeps the single read of the store.
+    // The filters exist only under strict (`glob` and the offsets are unset otherwise), so only
+    // strict needs the batched scan, which it takes even when no filter is present; the emulator
+    // profile keeps the single read of the store.
     let (entries, next) = if state.is_strict() {
         let scan = versions_scan(state, bucket, query, from.as_ref())?;
         let next = scan.get(query.max).cloned();

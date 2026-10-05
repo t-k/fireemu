@@ -5188,6 +5188,14 @@ mod task_completion_tests {
                 ("service_account", Some("owner")),
                 production("unknown", Some("owner")),
             ),
+            // A credential that carries an identity (an email) is named by it.
+            (
+                (
+                    "service_account",
+                    Some("ops@demo-project.iam.gserviceaccount.com"),
+                ),
+                production("unknown", Some("ops@demo-project.iam.gserviceaccount.com")),
+            ),
             // Near miss: a principal production was not recorded with keeps its own name.
             (
                 ("unauthenticated", None),

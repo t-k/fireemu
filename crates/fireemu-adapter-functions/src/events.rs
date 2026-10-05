@@ -207,7 +207,9 @@ pub const OFFICIAL_AUTH_ID: &str = "fake-auth-id@gmail.com";
 
 /// The `(authtype, authid)` an event names for the actor `(auth_type, auth_id)` of a commit.
 /// Under [`AuthContextNaming::Production`] an `app_user` is `api_key` and a `service_account` is
-/// `unknown`, each keeping its id; the principals production was not recorded with (`unauthenticated`
+/// `unknown`, each keeping its id (so a credential that carries an identity, such as the email of a
+/// service account, is named by it; the local `owner` bearer has none and stays `owner`, the
+/// declared difference of the comparison against production's operator email); the principals production was not recorded with (`unauthenticated`
 /// and `system`) are named as they are.
 #[must_use]
 pub fn auth_context_for<'a>(

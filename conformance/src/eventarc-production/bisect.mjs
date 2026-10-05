@@ -56,6 +56,32 @@ export const isSizeRefusal = (reply) =>
   );
 
 /**
+ * The recorded answer that refuses the number of attributes (stage B, row 148): a 400 `INVALID_ARGUMENT`,
+ * "There are too many attributes in the request. The request contains N attributes, but the maximum
+ * allowed is M. Refer to ...".
+ */
+export const isAttributeCountRefusal = (reply) =>
+  reply?.unknown !== true &&
+  reply?.status === 400 &&
+  errorOf(reply)?.status === "INVALID_ARGUMENT" &&
+  /^There are too many attributes in the request\. The request contains \d+ attributes, but the maximum allowed is \d+\. /.test(
+    errorOf(reply)?.message ?? "",
+  );
+
+/**
+ * The recorded answer that refuses the size of an attribute's key (stage B, row 149): a 400
+ * `INVALID_ARGUMENT`, `The attribute "<key>" in the request has a key that is too large. The size is N
+ * bytes, but the maximum allowed is M. Refer to ...`.
+ */
+export const isAttributeKeyRefusal = (reply) =>
+  reply?.unknown !== true &&
+  reply?.status === 400 &&
+  errorOf(reply)?.status === "INVALID_ARGUMENT" &&
+  /^The attribute ".*" in the request has a key that is too large\. The size is \d+ bytes, but the maximum allowed is \d+\. /s.test(
+    errorOf(reply)?.message ?? "",
+  );
+
+/**
  * Whether the answer to a publish accepted the value: true for a 2xx, false only for `isRefusal`, the
  * recorded answer of the limit under search, and null for anything else (an unknown answer, a 3xx, a 5xx,
  * a missing channel, a permission error, any other 4xx): such an answer says nothing about the value and

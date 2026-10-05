@@ -90,11 +90,27 @@ export function createWorld({
   pendingReads = 0,
   stuckPending = false,
   withState = false,
+  /**
+   * The most attributes in one event counting the four required ones (`ce-id`, `ce-source`, `ce-spec_version`,
+   * `ce-type`) and the longest key (`ce-` and the name), as stage B recorded them (rows 148 and 149; a model
+   * of the wording only, never evidence of the boundary).
+   */
+  attributeLimit = Infinity,
+  keyLimit = Infinity,
+  /**
+   * Operations that are still running (stage C): off by default (a channel is ready, and gone, at once).
+   * With `reject` or `accept` a channel being created or deleted stays in that phase until its operation is
+   * read done (`doneAfter` reads): it is visible to a read and a list, a publish to a channel being created
+   * is a 404, a creation of the same name is refused as a duplicate, and a deletion while an operation runs
+   * is a 409 (`reject`) or starts an operation of its own (`accept`). A flow model, never evidence.
+   */
+  busy = "off",
   /** Every ID is accepted, so that every ID probe creates a channel (the most requests a run can send). */
   acceptAnyId = false,
 } = {}) {
   const channels = new Map(existing.map((name) => [name, { createTime: "2026-01-01T00:00:00Z" }]));
   const operations = new Map();
+  const phases = new Map();
   const refusals = [];
   const calls = [];
   let counter = 0;
@@ -145,7 +161,11 @@ export function createWorld({
     if (createAnswer === "unknown-absent") return { status: 503, body: {}, unknown: true };
     if (createAnswer !== "invisible") channels.set(name, { createTime: "2026-10-05T00:00:00Z" });
     if (createAnswer === "unknown-appears") return { status: 503, body: {}, unknown: true };
-    return reply(200, operation(`projects/${parent[1]}/locations/${parent[2]}`, {}));
+    const parentName = `projects/${parent[1]}/locations/${parent[2]}`;
+    if (busy === "off" || createAnswer === "invisible")
+      return reply(200, operation(parentName, {}));
+    phases.set(name, "creating");
+    return reply(200, operation(parentName, { onDone: () => phases.delete(name) }));
   };
   const publish = (call, name) => {
     const events = call.body?.events;
@@ -167,14 +187,44 @@ export function createWorld({
         ...recorded("publishEvents-event-too-large"),
         unknown: false,
       });
-    if (!channels.has(name))
+    for (const event of events) {
+      const keys = Object.keys(event?.attributes ?? {});
+      const attributes = keys.length + 4;
+      if (attributes > attributeLimit)
+        return limited(
+          call,
+          "publish-too-many-attributes",
+          invalid(
+            `There are too many attributes in the request. The request contains ${attributes} attributes, but the maximum allowed is ${attributeLimit}. Refer to https://cloud.google.com/pubsub/quotas for more information.`,
+          ),
+        );
+      const key = keys.find((name) => `ce-${name}`.length > keyLimit);
+      if (key !== undefined)
+        return limited(
+          call,
+          "publish-key-too-large",
+          invalid(
+            `The attribute "ce-${key}" in the request has a key that is too large. The size is ${`ce-${key}`.length} bytes, but the maximum allowed is ${keyLimit}. Refer to https://cloud.google.com/pubsub/quotas for more information.`,
+          ),
+        );
+    }
+    if (!channels.has(name) || phases.get(name) === "creating")
       return reply(404, {
         error: { code: 404, status: "NOT_FOUND", message: "Associated channel does not exist." },
       });
     return reply(200, {});
   };
   const list = (parent, url) => {
-    const size = Number(url.searchParams.get("pageSize") ?? 50);
+    const location = parent.split("/")[3];
+    if (location !== "-" && !locations.includes(location))
+      return reply(403, {
+        error: { code: 403, status: "PERMISSION_DENIED", message: "Location is not supported" },
+      });
+    const asked = url.searchParams.get("pageSize");
+    if (asked !== null && !/^-?\d+$/.test(asked))
+      return invalid("The request was invalid: invalid page size");
+    if (Number(asked ?? 50) < 0) return invalid("The request was invalid: page size is negative");
+    const size = Math.min(Number(asked ?? 0) || 50, 1000);
     const after = url.searchParams.get("pageToken");
     const names = [...channels.keys()]
       .filter((n) => n.startsWith(`${parent}/channels/`))
@@ -214,6 +264,7 @@ export function createWorld({
         if (state === undefined) return notFound(bare);
         state.reads += 1;
         const done = state.reads >= doneAfter;
+        if (done) state.onDone?.();
         return reply(200, {
           name: bare,
           ...(done
@@ -234,6 +285,27 @@ export function createWorld({
       if (call.op === "deleteChannel") {
         if (!CHANNEL_PATH.test(bare) || !channels.has(bare)) return notFound(bare);
         if (deleteAnswer === "unknown-noeffect") return { status: 503, body: {}, unknown: true };
+        if (busy !== "off" && deleteAnswer === "ok") {
+          const parentName = bare.replace(/\/channels\/[^/]+$/, "");
+          if (phases.has(bare) && busy === "reject")
+            return reply(409, {
+              error: {
+                code: 409,
+                status: "FAILED_PRECONDITION",
+                message: "an operation is running",
+              },
+            });
+          phases.set(bare, "deleting");
+          return reply(
+            200,
+            operation(parentName, {
+              onDone: () => {
+                phases.delete(bare);
+                channels.delete(bare);
+              },
+            }),
+          );
+        }
         channels.delete(bare);
         if (deleteAnswer === "unknown-effective") return { status: 503, body: {}, unknown: true };
         return reply(200, operation(bare.replace(/\/channels\/[^/]+$/, ""), {}));

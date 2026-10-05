@@ -1,178 +1,216 @@
 {
- "source": "EVENTARC stage A recording r2 (run 9e560c404162), capture rows by n; the answers are production's",
- "rows": {
-  "createChannel-no-name": {
-   "n": 4,
-   "request": {
-    "method": "POST",
-    "path": "/v1/projects/fireemu-oracle-idp/locations/us-central1/channels?channelId=fe9e560c404162-cl-c1",
-    "body": {}
-   },
-   "response": {
-    "status": 400,
-    "body": {
-     "error": {
-      "code": 400,
-      "message": "The request was invalid: channel.name is empty",
-      "status": "INVALID_ARGUMENT",
-      "details": [
-       {
-        "@type": "type.googleapis.com/google.rpc.BadRequest",
-        "fieldViolations": [
-         {
-          "field": "channel.name"
-         }
-        ]
-       },
-       {
-        "@type": "type.googleapis.com/google.rpc.RequestInfo",
-        "requestId": "5f67a4c3b18aff11"
-       }
-      ]
-     }
+  "source": "EVENTARC stage A recording r2 (run 9e560c404162), capture rows by n; the answers are production's. The two rows marked stage B are from the stage B recording (run 43a83839852f), by capture row n.",
+  "rows": {
+    "createChannel-no-name": {
+      "n": 4,
+      "request": {
+        "method": "POST",
+        "path": "/v1/projects/fireemu-oracle-idp/locations/us-central1/channels?channelId=fe9e560c404162-cl-c1",
+        "body": {}
+      },
+      "response": {
+        "status": 400,
+        "body": {
+          "error": {
+            "code": 400,
+            "message": "The request was invalid: channel.name is empty",
+            "status": "INVALID_ARGUMENT",
+            "details": [
+              {
+                "@type": "type.googleapis.com/google.rpc.BadRequest",
+                "fieldViolations": [
+                  {
+                    "field": "channel.name"
+                  }
+                ]
+              },
+              {
+                "@type": "type.googleapis.com/google.rpc.RequestInfo",
+                "requestId": "5f67a4c3b18aff11"
+              }
+            ]
+          }
+        }
+      }
+    },
+    "getChannel-missing": {
+      "n": 5,
+      "request": {
+        "method": "GET",
+        "path": "/v1/projects/fireemu-oracle-idp/locations/us-central1/channels/fe9e560c404162-cl-c1"
+      },
+      "response": {
+        "status": 404,
+        "body": {
+          "error": {
+            "code": 404,
+            "message": "Resource 'projects/fireemu-oracle-idp/locations/us-central1/channels/fe9e560c404162-cl-c1' was not found",
+            "status": "NOT_FOUND",
+            "details": [
+              {
+                "@type": "type.googleapis.com/google.rpc.ResourceInfo",
+                "resourceName": "projects/fireemu-oracle-idp/locations/us-central1/channels/fe9e560c404162-cl-c1"
+              }
+            ]
+          }
+        }
+      }
+    },
+    "publishEvents-empty-list": {
+      "n": 28,
+      "request": {
+        "method": "POST",
+        "path": "/v1/projects/fireemu-oracle-idp/locations/us-central1/channels/fe9e560c404162-pe-env-absent:publishEvents",
+        "body": {
+          "events": []
+        }
+      },
+      "response": {
+        "status": 400,
+        "body": {
+          "error": {
+            "code": 400,
+            "message": "No events provided.",
+            "status": "INVALID_ARGUMENT",
+            "details": [
+              {
+                "@type": "type.googleapis.com/google.rpc.BadRequest",
+                "fieldViolations": [
+                  {
+                    "field": "events",
+                    "description": "No events provided."
+                  }
+                ]
+              }
+            ]
+          }
+        }
+      }
+    },
+    "publishEvents-no-events-member": {
+      "n": 29,
+      "request": {
+        "method": "POST",
+        "path": "/v1/projects/fireemu-oracle-idp/locations/us-central1/channels/fe9e560c404162-pe-env-absent:publishEvents",
+        "body": {}
+      },
+      "response": {
+        "status": 400,
+        "body": {
+          "error": {
+            "code": 400,
+            "message": "No events provided.",
+            "status": "INVALID_ARGUMENT",
+            "details": [
+              {
+                "@type": "type.googleapis.com/google.rpc.BadRequest",
+                "fieldViolations": [
+                  {
+                    "field": "events",
+                    "description": "No events provided."
+                  }
+                ]
+              }
+            ]
+          }
+        }
+      }
+    },
+    "publishEvents-too-many-events": {
+      "n": 59,
+      "request": {
+        "method": "POST",
+        "path": "/v1/projects/fireemu-oracle-idp/locations/us-central1/channels/fe9e560c404162-pl-limits-absent:publishEvents",
+        "events": 256
+      },
+      "response": {
+        "status": 400,
+        "body": {
+          "error": {
+            "code": 400,
+            "message": "Too many events.",
+            "status": "OUT_OF_RANGE",
+            "details": [
+              {
+                "@type": "type.googleapis.com/google.rpc.BadRequest",
+                "fieldViolations": [
+                  {
+                    "field": "events",
+                    "description": "Too many events."
+                  }
+                ]
+              }
+            ]
+          }
+        }
+      }
+    },
+    "publishEvents-event-too-large": {
+      "n": 63,
+      "request": {
+        "method": "POST",
+        "path": "/v1/projects/fireemu-oracle-idp/locations/us-central1/channels/fe9e560c404162-pl-limits-absent:publishEvents",
+        "events": 1
+      },
+      "response": {
+        "status": 400,
+        "body": {
+          "error": {
+            "code": 400,
+            "message": "The event size (1048883 bytes) is too large. The maximum size is 524288 bytes.",
+            "status": "INVALID_ARGUMENT",
+            "details": [
+              {
+                "@type": "type.googleapis.com/google.rpc.BadRequest",
+                "fieldViolations": [
+                  {
+                    "field": "events[0]",
+                    "description": "The event size (1048883 bytes) is too large. The maximum size is 524288 bytes."
+                  }
+                ]
+              }
+            ]
+          }
+        }
+      }
+    },
+    "publishEvents-too-many-attributes": {
+      "n": 148,
+      "stage": "B",
+      "request": {
+        "method": "POST",
+        "path": "/v1/projects/fireemu-oracle-idp/locations/us-central1/channels/fe43a83839852f-pl-limits:publishEvents",
+        "events": 1
+      },
+      "response": {
+        "status": 400,
+        "body": {
+          "error": {
+            "code": 400,
+            "message": "There are too many attributes in the request. The request contains 106 attributes, but the maximum allowed is 100. Refer to https://cloud.google.com/pubsub/quotas for more information.",
+            "status": "INVALID_ARGUMENT"
+          }
+        }
+      }
+    },
+    "publishEvents-key-too-large": {
+      "n": 149,
+      "stage": "B",
+      "request": {
+        "method": "POST",
+        "path": "/v1/projects/fireemu-oracle-idp/locations/us-central1/channels/fe43a83839852f-pl-limits:publishEvents",
+        "events": 1
+      },
+      "response": {
+        "status": 400,
+        "body": {
+          "error": {
+            "code": 400,
+            "message": "The attribute \"ce-naaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\" in the request has a key that is too large. The size is 259 bytes, but the maximum allowed is 256. Refer to https://cloud.google.com/pubsub/quotas for more information.",
+            "status": "INVALID_ARGUMENT"
+          }
+        }
+      }
     }
-   }
-  },
-  "getChannel-missing": {
-   "n": 5,
-   "request": {
-    "method": "GET",
-    "path": "/v1/projects/fireemu-oracle-idp/locations/us-central1/channels/fe9e560c404162-cl-c1"
-   },
-   "response": {
-    "status": 404,
-    "body": {
-     "error": {
-      "code": 404,
-      "message": "Resource 'projects/fireemu-oracle-idp/locations/us-central1/channels/fe9e560c404162-cl-c1' was not found",
-      "status": "NOT_FOUND",
-      "details": [
-       {
-        "@type": "type.googleapis.com/google.rpc.ResourceInfo",
-        "resourceName": "projects/fireemu-oracle-idp/locations/us-central1/channels/fe9e560c404162-cl-c1"
-       }
-      ]
-     }
-    }
-   }
-  },
-  "publishEvents-empty-list": {
-   "n": 28,
-   "request": {
-    "method": "POST",
-    "path": "/v1/projects/fireemu-oracle-idp/locations/us-central1/channels/fe9e560c404162-pe-env-absent:publishEvents",
-    "body": {
-     "events": []
-    }
-   },
-   "response": {
-    "status": 400,
-    "body": {
-     "error": {
-      "code": 400,
-      "message": "No events provided.",
-      "status": "INVALID_ARGUMENT",
-      "details": [
-       {
-        "@type": "type.googleapis.com/google.rpc.BadRequest",
-        "fieldViolations": [
-         {
-          "field": "events",
-          "description": "No events provided."
-         }
-        ]
-       }
-      ]
-     }
-    }
-   }
-  },
-  "publishEvents-no-events-member": {
-   "n": 29,
-   "request": {
-    "method": "POST",
-    "path": "/v1/projects/fireemu-oracle-idp/locations/us-central1/channels/fe9e560c404162-pe-env-absent:publishEvents",
-    "body": {}
-   },
-   "response": {
-    "status": 400,
-    "body": {
-     "error": {
-      "code": 400,
-      "message": "No events provided.",
-      "status": "INVALID_ARGUMENT",
-      "details": [
-       {
-        "@type": "type.googleapis.com/google.rpc.BadRequest",
-        "fieldViolations": [
-         {
-          "field": "events",
-          "description": "No events provided."
-         }
-        ]
-       }
-      ]
-     }
-    }
-   }
-  },
-  "publishEvents-too-many-events": {
-   "n": 59,
-   "request": {
-    "method": "POST",
-    "path": "/v1/projects/fireemu-oracle-idp/locations/us-central1/channels/fe9e560c404162-pl-limits-absent:publishEvents",
-    "events": 256
-   },
-   "response": {
-    "status": 400,
-    "body": {
-     "error": {
-      "code": 400,
-      "message": "Too many events.",
-      "status": "OUT_OF_RANGE",
-      "details": [
-       {
-        "@type": "type.googleapis.com/google.rpc.BadRequest",
-        "fieldViolations": [
-         {
-          "field": "events",
-          "description": "Too many events."
-         }
-        ]
-       }
-      ]
-     }
-    }
-   }
-  },
-  "publishEvents-event-too-large": {
-   "n": 63,
-   "request": {
-    "method": "POST",
-    "path": "/v1/projects/fireemu-oracle-idp/locations/us-central1/channels/fe9e560c404162-pl-limits-absent:publishEvents",
-    "events": 1
-   },
-   "response": {
-    "status": 400,
-    "body": {
-     "error": {
-      "code": 400,
-      "message": "The event size (1048883 bytes) is too large. The maximum size is 524288 bytes.",
-      "status": "INVALID_ARGUMENT",
-      "details": [
-       {
-        "@type": "type.googleapis.com/google.rpc.BadRequest",
-        "fieldViolations": [
-         {
-          "field": "events[0]",
-          "description": "The event size (1048883 bytes) is too large. The maximum size is 524288 bytes."
-         }
-        ]
-       }
-      ]
-     }
-    }
-   }
   }
- }
 }

@@ -8,6 +8,10 @@ Each release is a Git tag; the binaries and the npm packages are built from that
 
 ## [Unreleased]
 
+### Changed
+
+- Strict profile: a scheduled function (either generation) whose `retryCount` is 5 or more is refused at startup with Cloud Scheduler's own message, `invalid retry count. The retry_count must be a positive integer less than 5: invalid argument` (HTTP 400 `INVALID_ARGUMENT`). Recorded on 2026-10-05: production refused the job of a function declared with `retryCount: 6`; the boundary at 5 is the message's own statement and was not itself recorded. The emulator profile still accepts any count, as the official emulator does (it creates no Scheduler job and reads no retry configuration of a schedule trigger).
+
 ## [0.11.0] - 2026-10-05
 
 Cloud Storage object operations (STORAGE-OBJECT) and Cloud Storage Security Rules (STORAGE-RULES) are now `COMPAT_VERIFIED`: the strict profile's answers were compared with recordings made against a real Firebase project, and an independent review approved each closure on 2026-10-05. Items that cite a recording with a date come from those runs. Each item names the profiles it affects.

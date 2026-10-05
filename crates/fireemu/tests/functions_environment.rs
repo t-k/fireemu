@@ -892,6 +892,90 @@ const assert = require('node:assert/strict');
     std::fs::remove_dir_all(dir).unwrap();
 }
 
+/// The strict profile names a 2nd gen Pub/Sub function's subscription as Eventarc does, in the
+/// broker's listing and in the event's `data.subscription`; the emulator profile keeps the official
+/// emulator's `emulator-sub-<topic>` in both. A 1st gen function has `emulator-sub-<topic>` in both.
+#[test]
+#[ignore = "requires tools/sdk-smoke dependencies; the manual SDK workflow runs this test"]
+fn the_profile_names_a_pubsub_functions_subscription_in_the_listing_and_in_the_event() {
+    assert!(
+        have_sdk(),
+        "install tools/sdk-smoke dependencies before running this test"
+    );
+    for profile in ["strict", "emulator"] {
+        let dir = scratch_codebase(&format!("pubsub-subscription-naming-{profile}"));
+        write(
+            &dir,
+            "index.js",
+            r"
+const { onRequest } = require('firebase-functions/v2/https');
+const { onMessagePublished } = require('firebase-functions/v2/pubsub');
+const v1 = require('firebase-functions/v1');
+const { PubSub } = require('@google-cloud/pubsub');
+let eventSubscription = null;
+exports.fxReceive = onMessagePublished('naming-topic', (event) => {
+  eventSubscription = event.data.subscription;
+});
+exports.fxLegacy = v1.pubsub.topic('naming-topic').onPublish(() => {});
+exports.fxNaming = onRequest(async (req, res) => {
+  const client = new PubSub({ projectId: process.env.GCLOUD_PROJECT });
+  try {
+    if (req.method === 'POST') await client.topic('naming-topic').publishMessage({ json: { n: 1 } });
+    const [subscriptions] = await client.topic('naming-topic').getSubscriptions();
+    res.json({ eventSubscription, listed: subscriptions.map((s) => s.name).sort() });
+  } finally { await client.close(); }
+});
+",
+        );
+        write(
+            &dir,
+            "fireemu-profile.json",
+            &format!(
+                r#"{{"schemaVersion":1,"profile":"{profile}","firestore":{{"edition":"standard","apiMode":"native"}}}}"#
+            ),
+        );
+        let output = fireemu_exec(&dir, "demo-subscription-naming")
+            .args(["--config", dir.join("fireemu-profile.json").to_str().unwrap()])
+            .args(["--only", "functions,pubsub", "--pubsub-port", "0", "--", "node", "-e", r"
+const assert = require('node:assert/strict');
+(async () => {
+  const profile = process.argv[1];
+  const url = `http://${process.env.FIREEMU_FUNCTIONS_HOST}/demo-subscription-naming/us-central1/fxNaming`;
+  const get = async (method) => { const r = await fetch(url, { method }); assert.equal(r.status, 200); return r.json(); };
+  const listed = (await get('GET')).listed.map((name) => name.replace('projects/demo-subscription-naming/subscriptions/', ''));
+  const eventarc = /^eventarc-us-central1-fxreceive-\d{6}-sub-\d{3}$/;
+  if (profile === 'strict') {
+    assert.equal(listed.length, 2, JSON.stringify(listed));
+    assert.ok(listed.includes('emulator-sub-naming-topic'), JSON.stringify(listed));
+    assert.equal(listed.filter((name) => eventarc.test(name)).length, 1, JSON.stringify(listed));
+  } else {
+    assert.deepEqual(listed, ['emulator-sub-naming-topic']);
+  }
+  await get('POST');
+  const deadline = Date.now() + 10000;
+  let seen = null;
+  while (Date.now() < deadline && !seen) {
+    seen = (await get('GET')).eventSubscription;
+    if (!seen) await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  assert.ok(seen, 'the published message did not reach the function');
+  const named = seen.replace('projects/demo-subscription-naming/subscriptions/', '');
+  assert.ok(listed.includes(named), `${named} is not among ${JSON.stringify(listed)}`);
+  assert.equal(eventarc.test(named), profile === 'strict', named);
+})().catch((error) => { console.error(error); process.exitCode = 1; });
+", profile])
+            .stdin(Stdio::null())
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{profile}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+}
+
 #[test]
 #[ignore = "requires tools/sdk-smoke dependencies; the manual SDK workflow runs this test"]
 fn unbound_pubsub_and_hub_are_absent_from_the_runner() {

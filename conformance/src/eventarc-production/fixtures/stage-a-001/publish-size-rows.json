@@ -1,0 +1,1077 @@
+[
+ {
+  "n": 74,
+  "at": "2026-10-05T05:13:38.067Z",
+  "case": "publish-limits",
+  "step": "06",
+  "transport": "rest",
+  "op": "publishEvents",
+  "request": {
+   "method": "POST",
+   "path": "/v1/projects/fireemu-oracle-idp/locations/us-central1/channels/fed011709742b6-pl-limits-absent:publishEvents",
+   "body": {
+    "events": [
+     {
+      "@type": "type.googleapis.com/io.cloudevents.v1.CloudEvent",
+      "id": "fed011709742b6-evt-1548",
+      "source": "//fireemu/recorder/d011709742b6",
+      "specVersion": "1.0",
+      "type": "fireemu.recorder.v1.probe",
+      "attributes": {
+       "time": {
+        "ceTimestamp": "2026-10-05T05:13:32.082Z"
+       },
+       "datacontenttype": {
+        "ceString": "application/json"
+       }
+      },
+      "textData": {
+       "omitted": {
+        "length": 1048576,
+        "sha256": "9a0a2a51df0699027c0a68f2854ed250e4005dc0cfbe0ecfb6bff016dbd26b06"
+       }
+      }
+     }
+    ]
+   }
+  },
+  "response": {
+   "status": 400,
+   "body": {
+    "error": {
+     "code": 400,
+     "message": "The event size (1048882 bytes) is too large. The maximum size is 524288 bytes.",
+     "status": "INVALID_ARGUMENT",
+     "details": [
+      {
+       "@type": "type.googleapis.com/google.rpc.BadRequest",
+       "fieldViolations": [
+        {
+         "field": "events[0]",
+         "description": "The event size (1048882 bytes) is too large. The maximum size is 524288 bytes."
+        }
+       ]
+      }
+     ]
+    }
+   }
+  },
+  "ms": 5985,
+  "recording": "r1"
+ },
+ {
+  "n": 75,
+  "at": "2026-10-05T05:14:01.599Z",
+  "case": "publish-limits",
+  "step": "07",
+  "transport": "rest",
+  "op": "publishEvents",
+  "request": {
+   "method": "POST",
+   "path": "/v1/projects/fireemu-oracle-idp/locations/us-central1/channels/fed011709742b6-pl-limits-absent:publishEvents",
+   "body": {
+    "events": [
+     {
+      "@type": "type.googleapis.com/io.cloudevents.v1.CloudEvent",
+      "id": "fed011709742b6-evt-1549",
+      "source": "//fireemu/recorder/d011709742b6",
+      "specVersion": "1.0",
+      "type": "fireemu.recorder.v1.probe",
+      "attributes": {
+       "time": {
+        "ceTimestamp": "2026-10-05T05:13:38.080Z"
+       },
+       "datacontenttype": {
+        "ceString": "application/json"
+       }
+      },
+      "textData": {
+       "omitted": {
+        "length": 4194304,
+        "sha256": "0d0185c357a7bf84cb1c36a28fb7f5e13e2b4a1125a56685ded7fc03072dc6c4"
+       }
+      }
+     }
+    ]
+   }
+  },
+  "response": {
+   "status": 400,
+   "body": {
+    "error": {
+     "code": 400,
+     "message": "The event size (4194613 bytes) is too large. The maximum size is 524288 bytes.",
+     "status": "INVALID_ARGUMENT",
+     "details": [
+      {
+       "@type": "type.googleapis.com/google.rpc.BadRequest",
+       "fieldViolations": [
+        {
+         "field": "events[0]",
+         "description": "The event size (4194613 bytes) is too large. The maximum size is 524288 bytes."
+        }
+       ]
+      }
+     ]
+    }
+   }
+  },
+  "ms": 23519,
+  "recording": "r1"
+ },
+ {
+  "n": 76,
+  "at": "2026-10-05T05:14:54.855Z",
+  "case": "publish-limits",
+  "step": "08",
+  "transport": "rest",
+  "op": "publishEvents",
+  "request": {
+   "method": "POST",
+   "path": "/v1/projects/fireemu-oracle-idp/locations/us-central1/channels/fed011709742b6-pl-limits-absent:publishEvents",
+   "body": {
+    "events": [
+     {
+      "@type": "type.googleapis.com/io.cloudevents.v1.CloudEvent",
+      "id": "fed011709742b6-evt-1550",
+      "source": "//fireemu/recorder/d011709742b6",
+      "specVersion": "1.0",
+      "type": "fireemu.recorder.v1.probe",
+      "attributes": {
+       "time": {
+        "ceTimestamp": "2026-10-05T05:14:01.616Z"
+       },
+       "datacontenttype": {
+        "ceString": "application/json"
+       }
+      },
+      "textData": {
+       "omitted": {
+        "length": 10485760,
+        "sha256": "0c2055ce39d7e1b19f14fac6a47268a2293992ae3b62c1a3359df888e6421422"
+       }
+      }
+     }
+    ]
+   }
+  },
+  "response": {
+   "status": 400,
+   "body": {
+    "error": {
+     "code": 400,
+     "message": "The event size (10486070 bytes) is too large. The maximum size is 524288 bytes.",
+     "status": "INVALID_ARGUMENT",
+     "details": [
+      {
+       "@type": "type.googleapis.com/google.rpc.BadRequest",
+       "fieldViolations": [
+        {
+         "field": "events[0]",
+         "description": "The event size (10486070 bytes) is too large. The maximum size is 524288 bytes."
+        }
+       ]
+      }
+     ]
+    }
+   }
+  },
+  "ms": 53239,
+  "recording": "r1"
+ },
+ {
+  "n": 78,
+  "at": "2026-10-05T05:15:42.712Z",
+  "case": "publish-limits",
+  "step": "10",
+  "transport": "rest",
+  "op": "publishEvents",
+  "request": {
+   "method": "POST",
+   "path": "/v1/projects/fireemu-oracle-idp/locations/us-central1/channels/fed011709742b6-pl-limits-absent:publishEvents",
+   "body": {
+    "events": [
+     {
+      "@type": "type.googleapis.com/io.cloudevents.v1.CloudEvent",
+      "id": "fed011709742b6-evt-1559",
+      "source": "//fireemu/recorder/d011709742b6",
+      "specVersion": "1.0",
+      "type": "fireemu.recorder.v1.probe",
+      "attributes": {
+       "time": {
+        "ceTimestamp": "2026-10-05T05:15:00.489Z"
+       },
+       "datacontenttype": {
+        "ceString": "application/json"
+       }
+      },
+      "textData": {
+       "omitted": {
+        "length": 1048576,
+        "sha256": "9a0a2a51df0699027c0a68f2854ed250e4005dc0cfbe0ecfb6bff016dbd26b06"
+       }
+      }
+     },
+     {
+      "@type": "type.googleapis.com/io.cloudevents.v1.CloudEvent",
+      "id": "fed011709742b6-evt-1560",
+      "source": "//fireemu/recorder/d011709742b6",
+      "specVersion": "1.0",
+      "type": "fireemu.recorder.v1.probe",
+      "attributes": {
+       "time": {
+        "ceTimestamp": "2026-10-05T05:15:00.491Z"
+       },
+       "datacontenttype": {
+        "ceString": "application/json"
+       }
+      },
+      "textData": {
+       "omitted": {
+        "length": 1048576,
+        "sha256": "9a0a2a51df0699027c0a68f2854ed250e4005dc0cfbe0ecfb6bff016dbd26b06"
+       }
+      }
+     },
+     {
+      "@type": "type.googleapis.com/io.cloudevents.v1.CloudEvent",
+      "id": "fed011709742b6-evt-1561",
+      "source": "//fireemu/recorder/d011709742b6",
+      "specVersion": "1.0",
+      "type": "fireemu.recorder.v1.probe",
+      "attributes": {
+       "time": {
+        "ceTimestamp": "2026-10-05T05:15:00.491Z"
+       },
+       "datacontenttype": {
+        "ceString": "application/json"
+       }
+      },
+      "textData": {
+       "omitted": {
+        "length": 1048576,
+        "sha256": "9a0a2a51df0699027c0a68f2854ed250e4005dc0cfbe0ecfb6bff016dbd26b06"
+       }
+      }
+     },
+     {
+      "@type": "type.googleapis.com/io.cloudevents.v1.CloudEvent",
+      "id": "fed011709742b6-evt-1562",
+      "source": "//fireemu/recorder/d011709742b6",
+      "specVersion": "1.0",
+      "type": "fireemu.recorder.v1.probe",
+      "attributes": {
+       "time": {
+        "ceTimestamp": "2026-10-05T05:15:00.492Z"
+       },
+       "datacontenttype": {
+        "ceString": "application/json"
+       }
+      },
+      "textData": {
+       "omitted": {
+        "length": 1048576,
+        "sha256": "9a0a2a51df0699027c0a68f2854ed250e4005dc0cfbe0ecfb6bff016dbd26b06"
+       }
+      }
+     },
+     {
+      "@type": "type.googleapis.com/io.cloudevents.v1.CloudEvent",
+      "id": "fed011709742b6-evt-1563",
+      "source": "//fireemu/recorder/d011709742b6",
+      "specVersion": "1.0",
+      "type": "fireemu.recorder.v1.probe",
+      "attributes": {
+       "time": {
+        "ceTimestamp": "2026-10-05T05:15:00.493Z"
+       },
+       "datacontenttype": {
+        "ceString": "application/json"
+       }
+      },
+      "textData": {
+       "omitted": {
+        "length": 1048576,
+        "sha256": "9a0a2a51df0699027c0a68f2854ed250e4005dc0cfbe0ecfb6bff016dbd26b06"
+       }
+      }
+     },
+     {
+      "@type": "type.googleapis.com/io.cloudevents.v1.CloudEvent",
+      "id": "fed011709742b6-evt-1564",
+      "source": "//fireemu/recorder/d011709742b6",
+      "specVersion": "1.0",
+      "type": "fireemu.recorder.v1.probe",
+      "attributes": {
+       "time": {
+        "ceTimestamp": "2026-10-05T05:15:00.494Z"
+       },
+       "datacontenttype": {
+        "ceString": "application/json"
+       }
+      },
+      "textData": {
+       "omitted": {
+        "length": 1048576,
+        "sha256": "9a0a2a51df0699027c0a68f2854ed250e4005dc0cfbe0ecfb6bff016dbd26b06"
+       }
+      }
+     },
+     {
+      "@type": "type.googleapis.com/io.cloudevents.v1.CloudEvent",
+      "id": "fed011709742b6-evt-1565",
+      "source": "//fireemu/recorder/d011709742b6",
+      "specVersion": "1.0",
+      "type": "fireemu.recorder.v1.probe",
+      "attributes": {
+       "time": {
+        "ceTimestamp": "2026-10-05T05:15:00.495Z"
+       },
+       "datacontenttype": {
+        "ceString": "application/json"
+       }
+      },
+      "textData": {
+       "omitted": {
+        "length": 1048576,
+        "sha256": "9a0a2a51df0699027c0a68f2854ed250e4005dc0cfbe0ecfb6bff016dbd26b06"
+       }
+      }
+     },
+     {
+      "@type": "type.googleapis.com/io.cloudevents.v1.CloudEvent",
+      "id": "fed011709742b6-evt-1566",
+      "source": "//fireemu/recorder/d011709742b6",
+      "specVersion": "1.0",
+      "type": "fireemu.recorder.v1.probe",
+      "attributes": {
+       "time": {
+        "ceTimestamp": "2026-10-05T05:15:00.496Z"
+       },
+       "datacontenttype": {
+        "ceString": "application/json"
+       }
+      },
+      "textData": {
+       "omitted": {
+        "length": 1048576,
+        "sha256": "9a0a2a51df0699027c0a68f2854ed250e4005dc0cfbe0ecfb6bff016dbd26b06"
+       }
+      }
+     }
+    ]
+   }
+  },
+  "response": {
+   "status": 400,
+   "body": {
+    "error": {
+     "code": 400,
+     "message": "The event size (8390420 bytes) is too large. The maximum size is 524288 bytes.",
+     "status": "INVALID_ARGUMENT",
+     "details": [
+      {
+       "@type": "type.googleapis.com/google.rpc.BadRequest",
+       "fieldViolations": [
+        {
+         "field": "events[0]",
+         "description": "The event size (8390420 bytes) is too large. The maximum size is 524288 bytes."
+        },
+        {
+         "field": "events[1]",
+         "description": "The event size (8390420 bytes) is too large. The maximum size is 524288 bytes."
+        },
+        {
+         "field": "events[2]",
+         "description": "The event size (8390420 bytes) is too large. The maximum size is 524288 bytes."
+        },
+        {
+         "field": "events[3]",
+         "description": "The event size (8390420 bytes) is too large. The maximum size is 524288 bytes."
+        },
+        {
+         "field": "events[4]",
+         "description": "The event size (8390420 bytes) is too large. The maximum size is 524288 bytes."
+        },
+        {
+         "field": "events[5]",
+         "description": "The event size (8390420 bytes) is too large. The maximum size is 524288 bytes."
+        },
+        {
+         "field": "events[6]",
+         "description": "The event size (8390420 bytes) is too large. The maximum size is 524288 bytes."
+        },
+        {
+         "field": "events[7]",
+         "description": "The event size (8390420 bytes) is too large. The maximum size is 524288 bytes."
+        }
+       ]
+      }
+     ]
+    }
+   }
+  },
+  "ms": 42216,
+  "recording": "r1"
+ },
+ {
+  "n": 62,
+  "at": "2026-10-05T06:17:50.874Z",
+  "case": "publish-limits",
+  "step": "05",
+  "transport": "rest",
+  "op": "publishEvents",
+  "request": {
+   "method": "POST",
+   "path": "/v1/projects/fireemu-oracle-idp/locations/us-central1/channels/fe9e560c404162-pl-limits-absent:publishEvents",
+   "body": {
+    "events": [
+     {
+      "@type": "type.googleapis.com/io.cloudevents.v1.CloudEvent",
+      "id": "fe9e560c404162-evt-1545",
+      "source": "//fireemu/recorder/9e560c404162",
+      "specVersion": "1.0",
+      "type": "fireemu.recorder.v1.probe",
+      "attributes": {
+       "time": {
+        "ceTimestamp": "2026-10-05T06:17:48.679Z"
+       },
+       "datacontenttype": {
+        "ceString": "application/json"
+       }
+      },
+      "textData": {
+       "omitted": {
+        "length": 262144,
+        "sha256": "932b4f73150e66f729e02758780d5891a07712d208a9151fe7ea69363260e419"
+       }
+      }
+     }
+    ]
+   }
+  },
+  "response": {
+   "status": 404,
+   "body": {
+    "error": {
+     "code": 404,
+     "message": "Associated channel does not exist.",
+     "status": "NOT_FOUND"
+    }
+   }
+  },
+  "ms": 2195,
+  "recording": "r2"
+ },
+ {
+  "n": 63,
+  "at": "2026-10-05T06:17:56.910Z",
+  "case": "publish-limits",
+  "step": "06",
+  "transport": "rest",
+  "op": "publishEvents",
+  "request": {
+   "method": "POST",
+   "path": "/v1/projects/fireemu-oracle-idp/locations/us-central1/channels/fe9e560c404162-pl-limits-absent:publishEvents",
+   "body": {
+    "events": [
+     {
+      "@type": "type.googleapis.com/io.cloudevents.v1.CloudEvent",
+      "id": "fe9e560c404162-evt-1546",
+      "source": "//fireemu/recorder/9e560c404162",
+      "specVersion": "1.0",
+      "type": "fireemu.recorder.v1.probe",
+      "attributes": {
+       "time": {
+        "ceTimestamp": "2026-10-05T06:17:50.896Z"
+       },
+       "datacontenttype": {
+        "ceString": "application/json"
+       }
+      },
+      "textData": {
+       "omitted": {
+        "length": 1048576,
+        "sha256": "9a0a2a51df0699027c0a68f2854ed250e4005dc0cfbe0ecfb6bff016dbd26b06"
+       }
+      }
+     }
+    ]
+   }
+  },
+  "response": {
+   "status": 400,
+   "body": {
+    "error": {
+     "code": 400,
+     "message": "The event size (1048883 bytes) is too large. The maximum size is 524288 bytes.",
+     "status": "INVALID_ARGUMENT",
+     "details": [
+      {
+       "@type": "type.googleapis.com/google.rpc.BadRequest",
+       "fieldViolations": [
+        {
+         "field": "events[0]",
+         "description": "The event size (1048883 bytes) is too large. The maximum size is 524288 bytes."
+        }
+       ]
+      }
+     ]
+    }
+   }
+  },
+  "ms": 6014,
+  "recording": "r2"
+ },
+ {
+  "n": 64,
+  "at": "2026-10-05T06:18:18.361Z",
+  "case": "publish-limits",
+  "step": "07",
+  "transport": "rest",
+  "op": "publishEvents",
+  "request": {
+   "method": "POST",
+   "path": "/v1/projects/fireemu-oracle-idp/locations/us-central1/channels/fe9e560c404162-pl-limits-absent:publishEvents",
+   "body": {
+    "events": [
+     {
+      "@type": "type.googleapis.com/io.cloudevents.v1.CloudEvent",
+      "id": "fe9e560c404162-evt-1547",
+      "source": "//fireemu/recorder/9e560c404162",
+      "specVersion": "1.0",
+      "type": "fireemu.recorder.v1.probe",
+      "attributes": {
+       "time": {
+        "ceTimestamp": "2026-10-05T06:17:56.927Z"
+       },
+       "datacontenttype": {
+        "ceString": "application/json"
+       }
+      },
+      "textData": {
+       "omitted": {
+        "length": 4194304,
+        "sha256": "0d0185c357a7bf84cb1c36a28fb7f5e13e2b4a1125a56685ded7fc03072dc6c4"
+       }
+      }
+     }
+    ]
+   }
+  },
+  "response": {
+   "status": 400,
+   "body": {
+    "error": {
+     "code": 400,
+     "message": "The event size (4194614 bytes) is too large. The maximum size is 524288 bytes.",
+     "status": "INVALID_ARGUMENT",
+     "details": [
+      {
+       "@type": "type.googleapis.com/google.rpc.BadRequest",
+       "fieldViolations": [
+        {
+         "field": "events[0]",
+         "description": "The event size (4194614 bytes) is too large. The maximum size is 524288 bytes."
+        }
+       ]
+      }
+     ]
+    }
+   }
+  },
+  "ms": 21434,
+  "recording": "r2"
+ },
+ {
+  "n": 65,
+  "at": "2026-10-05T06:19:07.391Z",
+  "case": "publish-limits",
+  "step": "08",
+  "transport": "rest",
+  "op": "publishEvents",
+  "request": {
+   "method": "POST",
+   "path": "/v1/projects/fireemu-oracle-idp/locations/us-central1/channels/fe9e560c404162-pl-limits-absent:publishEvents",
+   "body": {
+    "events": [
+     {
+      "@type": "type.googleapis.com/io.cloudevents.v1.CloudEvent",
+      "id": "fe9e560c404162-evt-1548",
+      "source": "//fireemu/recorder/9e560c404162",
+      "specVersion": "1.0",
+      "type": "fireemu.recorder.v1.probe",
+      "attributes": {
+       "time": {
+        "ceTimestamp": "2026-10-05T06:18:18.398Z"
+       },
+       "datacontenttype": {
+        "ceString": "application/json"
+       }
+      },
+      "textData": {
+       "omitted": {
+        "length": 10485760,
+        "sha256": "0c2055ce39d7e1b19f14fac6a47268a2293992ae3b62c1a3359df888e6421422"
+       }
+      }
+     }
+    ]
+   }
+  },
+  "response": {
+   "status": 400,
+   "body": {
+    "error": {
+     "code": 400,
+     "message": "The event size (10486070 bytes) is too large. The maximum size is 524288 bytes.",
+     "status": "INVALID_ARGUMENT",
+     "details": [
+      {
+       "@type": "type.googleapis.com/google.rpc.BadRequest",
+       "fieldViolations": [
+        {
+         "field": "events[0]",
+         "description": "The event size (10486070 bytes) is too large. The maximum size is 524288 bytes."
+        }
+       ]
+      }
+     ]
+    }
+   }
+  },
+  "ms": 48993,
+  "recording": "r2"
+ },
+ {
+  "n": 66,
+  "at": "2026-10-05T06:19:12.911Z",
+  "case": "publish-limits",
+  "step": "09",
+  "transport": "rest",
+  "op": "publishEvents",
+  "request": {
+   "method": "POST",
+   "path": "/v1/projects/fireemu-oracle-idp/locations/us-central1/channels/fe9e560c404162-pl-limits-absent:publishEvents",
+   "body": {
+    "events": [
+     {
+      "@type": "type.googleapis.com/io.cloudevents.v1.CloudEvent",
+      "id": "fe9e560c404162-evt-1549",
+      "source": "//fireemu/recorder/9e560c404162",
+      "specVersion": "1.0",
+      "type": "fireemu.recorder.v1.probe",
+      "attributes": {
+       "time": {
+        "ceTimestamp": "2026-10-05T06:19:07.409Z"
+       },
+       "datacontenttype": {
+        "ceString": "application/json"
+       }
+      },
+      "textData": {
+       "omitted": {
+        "length": 131072,
+        "sha256": "27dd208701abee92a42a0dcfb3d8cafc4ba2a91c2e549c6edd788642708ed09b"
+       }
+      }
+     },
+     {
+      "@type": "type.googleapis.com/io.cloudevents.v1.CloudEvent",
+      "id": "fe9e560c404162-evt-1550",
+      "source": "//fireemu/recorder/9e560c404162",
+      "specVersion": "1.0",
+      "type": "fireemu.recorder.v1.probe",
+      "attributes": {
+       "time": {
+        "ceTimestamp": "2026-10-05T06:19:07.409Z"
+       },
+       "datacontenttype": {
+        "ceString": "application/json"
+       }
+      },
+      "textData": {
+       "omitted": {
+        "length": 131072,
+        "sha256": "27dd208701abee92a42a0dcfb3d8cafc4ba2a91c2e549c6edd788642708ed09b"
+       }
+      }
+     },
+     {
+      "@type": "type.googleapis.com/io.cloudevents.v1.CloudEvent",
+      "id": "fe9e560c404162-evt-1551",
+      "source": "//fireemu/recorder/9e560c404162",
+      "specVersion": "1.0",
+      "type": "fireemu.recorder.v1.probe",
+      "attributes": {
+       "time": {
+        "ceTimestamp": "2026-10-05T06:19:07.409Z"
+       },
+       "datacontenttype": {
+        "ceString": "application/json"
+       }
+      },
+      "textData": {
+       "omitted": {
+        "length": 131072,
+        "sha256": "27dd208701abee92a42a0dcfb3d8cafc4ba2a91c2e549c6edd788642708ed09b"
+       }
+      }
+     },
+     {
+      "@type": "type.googleapis.com/io.cloudevents.v1.CloudEvent",
+      "id": "fe9e560c404162-evt-1552",
+      "source": "//fireemu/recorder/9e560c404162",
+      "specVersion": "1.0",
+      "type": "fireemu.recorder.v1.probe",
+      "attributes": {
+       "time": {
+        "ceTimestamp": "2026-10-05T06:19:07.410Z"
+       },
+       "datacontenttype": {
+        "ceString": "application/json"
+       }
+      },
+      "textData": {
+       "omitted": {
+        "length": 131072,
+        "sha256": "27dd208701abee92a42a0dcfb3d8cafc4ba2a91c2e549c6edd788642708ed09b"
+       }
+      }
+     },
+     {
+      "@type": "type.googleapis.com/io.cloudevents.v1.CloudEvent",
+      "id": "fe9e560c404162-evt-1553",
+      "source": "//fireemu/recorder/9e560c404162",
+      "specVersion": "1.0",
+      "type": "fireemu.recorder.v1.probe",
+      "attributes": {
+       "time": {
+        "ceTimestamp": "2026-10-05T06:19:07.410Z"
+       },
+       "datacontenttype": {
+        "ceString": "application/json"
+       }
+      },
+      "textData": {
+       "omitted": {
+        "length": 131072,
+        "sha256": "27dd208701abee92a42a0dcfb3d8cafc4ba2a91c2e549c6edd788642708ed09b"
+       }
+      }
+     },
+     {
+      "@type": "type.googleapis.com/io.cloudevents.v1.CloudEvent",
+      "id": "fe9e560c404162-evt-1554",
+      "source": "//fireemu/recorder/9e560c404162",
+      "specVersion": "1.0",
+      "type": "fireemu.recorder.v1.probe",
+      "attributes": {
+       "time": {
+        "ceTimestamp": "2026-10-05T06:19:07.410Z"
+       },
+       "datacontenttype": {
+        "ceString": "application/json"
+       }
+      },
+      "textData": {
+       "omitted": {
+        "length": 131072,
+        "sha256": "27dd208701abee92a42a0dcfb3d8cafc4ba2a91c2e549c6edd788642708ed09b"
+       }
+      }
+     },
+     {
+      "@type": "type.googleapis.com/io.cloudevents.v1.CloudEvent",
+      "id": "fe9e560c404162-evt-1555",
+      "source": "//fireemu/recorder/9e560c404162",
+      "specVersion": "1.0",
+      "type": "fireemu.recorder.v1.probe",
+      "attributes": {
+       "time": {
+        "ceTimestamp": "2026-10-05T06:19:07.410Z"
+       },
+       "datacontenttype": {
+        "ceString": "application/json"
+       }
+      },
+      "textData": {
+       "omitted": {
+        "length": 131072,
+        "sha256": "27dd208701abee92a42a0dcfb3d8cafc4ba2a91c2e549c6edd788642708ed09b"
+       }
+      }
+     },
+     {
+      "@type": "type.googleapis.com/io.cloudevents.v1.CloudEvent",
+      "id": "fe9e560c404162-evt-1556",
+      "source": "//fireemu/recorder/9e560c404162",
+      "specVersion": "1.0",
+      "type": "fireemu.recorder.v1.probe",
+      "attributes": {
+       "time": {
+        "ceTimestamp": "2026-10-05T06:19:07.410Z"
+       },
+       "datacontenttype": {
+        "ceString": "application/json"
+       }
+      },
+      "textData": {
+       "omitted": {
+        "length": 131072,
+        "sha256": "27dd208701abee92a42a0dcfb3d8cafc4ba2a91c2e549c6edd788642708ed09b"
+       }
+      }
+     }
+    ]
+   }
+  },
+  "response": {
+   "status": 404,
+   "body": {
+    "error": {
+     "code": 404,
+     "message": "Associated channel does not exist.",
+     "status": "NOT_FOUND"
+    }
+   }
+  },
+  "ms": 5501,
+  "recording": "r2"
+ },
+ {
+  "n": 67,
+  "at": "2026-10-05T06:19:58.969Z",
+  "case": "publish-limits",
+  "step": "10",
+  "transport": "rest",
+  "op": "publishEvents",
+  "request": {
+   "method": "POST",
+   "path": "/v1/projects/fireemu-oracle-idp/locations/us-central1/channels/fe9e560c404162-pl-limits-absent:publishEvents",
+   "body": {
+    "events": [
+     {
+      "@type": "type.googleapis.com/io.cloudevents.v1.CloudEvent",
+      "id": "fe9e560c404162-evt-1557",
+      "source": "//fireemu/recorder/9e560c404162",
+      "specVersion": "1.0",
+      "type": "fireemu.recorder.v1.probe",
+      "attributes": {
+       "time": {
+        "ceTimestamp": "2026-10-05T06:19:12.931Z"
+       },
+       "datacontenttype": {
+        "ceString": "application/json"
+       }
+      },
+      "textData": {
+       "omitted": {
+        "length": 1048576,
+        "sha256": "9a0a2a51df0699027c0a68f2854ed250e4005dc0cfbe0ecfb6bff016dbd26b06"
+       }
+      }
+     },
+     {
+      "@type": "type.googleapis.com/io.cloudevents.v1.CloudEvent",
+      "id": "fe9e560c404162-evt-1558",
+      "source": "//fireemu/recorder/9e560c404162",
+      "specVersion": "1.0",
+      "type": "fireemu.recorder.v1.probe",
+      "attributes": {
+       "time": {
+        "ceTimestamp": "2026-10-05T06:19:12.932Z"
+       },
+       "datacontenttype": {
+        "ceString": "application/json"
+       }
+      },
+      "textData": {
+       "omitted": {
+        "length": 1048576,
+        "sha256": "9a0a2a51df0699027c0a68f2854ed250e4005dc0cfbe0ecfb6bff016dbd26b06"
+       }
+      }
+     },
+     {
+      "@type": "type.googleapis.com/io.cloudevents.v1.CloudEvent",
+      "id": "fe9e560c404162-evt-1559",
+      "source": "//fireemu/recorder/9e560c404162",
+      "specVersion": "1.0",
+      "type": "fireemu.recorder.v1.probe",
+      "attributes": {
+       "time": {
+        "ceTimestamp": "2026-10-05T06:19:12.932Z"
+       },
+       "datacontenttype": {
+        "ceString": "application/json"
+       }
+      },
+      "textData": {
+       "omitted": {
+        "length": 1048576,
+        "sha256": "9a0a2a51df0699027c0a68f2854ed250e4005dc0cfbe0ecfb6bff016dbd26b06"
+       }
+      }
+     },
+     {
+      "@type": "type.googleapis.com/io.cloudevents.v1.CloudEvent",
+      "id": "fe9e560c404162-evt-1560",
+      "source": "//fireemu/recorder/9e560c404162",
+      "specVersion": "1.0",
+      "type": "fireemu.recorder.v1.probe",
+      "attributes": {
+       "time": {
+        "ceTimestamp": "2026-10-05T06:19:12.933Z"
+       },
+       "datacontenttype": {
+        "ceString": "application/json"
+       }
+      },
+      "textData": {
+       "omitted": {
+        "length": 1048576,
+        "sha256": "9a0a2a51df0699027c0a68f2854ed250e4005dc0cfbe0ecfb6bff016dbd26b06"
+       }
+      }
+     },
+     {
+      "@type": "type.googleapis.com/io.cloudevents.v1.CloudEvent",
+      "id": "fe9e560c404162-evt-1561",
+      "source": "//fireemu/recorder/9e560c404162",
+      "specVersion": "1.0",
+      "type": "fireemu.recorder.v1.probe",
+      "attributes": {
+       "time": {
+        "ceTimestamp": "2026-10-05T06:19:12.933Z"
+       },
+       "datacontenttype": {
+        "ceString": "application/json"
+       }
+      },
+      "textData": {
+       "omitted": {
+        "length": 1048576,
+        "sha256": "9a0a2a51df0699027c0a68f2854ed250e4005dc0cfbe0ecfb6bff016dbd26b06"
+       }
+      }
+     },
+     {
+      "@type": "type.googleapis.com/io.cloudevents.v1.CloudEvent",
+      "id": "fe9e560c404162-evt-1562",
+      "source": "//fireemu/recorder/9e560c404162",
+      "specVersion": "1.0",
+      "type": "fireemu.recorder.v1.probe",
+      "attributes": {
+       "time": {
+        "ceTimestamp": "2026-10-05T06:19:12.934Z"
+       },
+       "datacontenttype": {
+        "ceString": "application/json"
+       }
+      },
+      "textData": {
+       "omitted": {
+        "length": 1048576,
+        "sha256": "9a0a2a51df0699027c0a68f2854ed250e4005dc0cfbe0ecfb6bff016dbd26b06"
+       }
+      }
+     },
+     {
+      "@type": "type.googleapis.com/io.cloudevents.v1.CloudEvent",
+      "id": "fe9e560c404162-evt-1563",
+      "source": "//fireemu/recorder/9e560c404162",
+      "specVersion": "1.0",
+      "type": "fireemu.recorder.v1.probe",
+      "attributes": {
+       "time": {
+        "ceTimestamp": "2026-10-05T06:19:12.934Z"
+       },
+       "datacontenttype": {
+        "ceString": "application/json"
+       }
+      },
+      "textData": {
+       "omitted": {
+        "length": 1048576,
+        "sha256": "9a0a2a51df0699027c0a68f2854ed250e4005dc0cfbe0ecfb6bff016dbd26b06"
+       }
+      }
+     },
+     {
+      "@type": "type.googleapis.com/io.cloudevents.v1.CloudEvent",
+      "id": "fe9e560c404162-evt-1564",
+      "source": "//fireemu/recorder/9e560c404162",
+      "specVersion": "1.0",
+      "type": "fireemu.recorder.v1.probe",
+      "attributes": {
+       "time": {
+        "ceTimestamp": "2026-10-05T06:19:12.935Z"
+       },
+       "datacontenttype": {
+        "ceString": "application/json"
+       }
+      },
+      "textData": {
+       "omitted": {
+        "length": 1048576,
+        "sha256": "9a0a2a51df0699027c0a68f2854ed250e4005dc0cfbe0ecfb6bff016dbd26b06"
+       }
+      }
+     }
+    ]
+   }
+  },
+  "response": {
+   "status": 400,
+   "body": {
+    "error": {
+     "code": 400,
+     "message": "The event size (8390420 bytes) is too large. The maximum size is 524288 bytes.",
+     "status": "INVALID_ARGUMENT",
+     "details": [
+      {
+       "@type": "type.googleapis.com/google.rpc.BadRequest",
+       "fieldViolations": [
+        {
+         "field": "events[0]",
+         "description": "The event size (8390420 bytes) is too large. The maximum size is 524288 bytes."
+        },
+        {
+         "field": "events[1]",
+         "description": "The event size (8390420 bytes) is too large. The maximum size is 524288 bytes."
+        },
+        {
+         "field": "events[2]",
+         "description": "The event size (8390420 bytes) is too large. The maximum size is 524288 bytes."
+        },
+        {
+         "field": "events[3]",
+         "description": "The event size (8390420 bytes) is too large. The maximum size is 524288 bytes."
+        },
+        {
+         "field": "events[4]",
+         "description": "The event size (8390420 bytes) is too large. The maximum size is 524288 bytes."
+        },
+        {
+         "field": "events[5]",
+         "description": "The event size (8390420 bytes) is too large. The maximum size is 524288 bytes."
+        },
+        {
+         "field": "events[6]",
+         "description": "The event size (8390420 bytes) is too large. The maximum size is 524288 bytes."
+        },
+        {
+         "field": "events[7]",
+         "description": "The event size (8390420 bytes) is too large. The maximum size is 524288 bytes."
+        }
+       ]
+      }
+     ]
+    }
+   }
+  },
+  "ms": 46034,
+  "recording": "r2"
+ }
+]

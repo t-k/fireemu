@@ -2992,10 +2992,35 @@ async fn recorded_opaque_ack_ids_roundtrip_across_both_wires_and_profiles() {
             })
             .await
             .unwrap();
+        assert_eq!(
+            rest_request(
+                address,
+                "POST",
+                &format!("/v1/{subscription}:modifyAckDeadline"),
+                json!({"ackIds":[renewed],"ackDeadlineSeconds":0})
+            )
+            .await
+            .0,
+            200
+        );
+        let (code, third) = rest_request(
+            address,
+            "POST",
+            &format!("/v1/{subscription}:pull"),
+            json!({"maxMessages":1}),
+        )
+        .await;
+        assert_eq!(code, 200);
+        assert_eq!(
+            third["receivedMessages"][0]["message"]["messageId"],
+            first[0].message.as_ref().unwrap().message_id
+        );
+        let current = third["receivedMessages"][0]["ackId"].as_str().unwrap();
+        assert_ne!(current, renewed);
         subscriber
             .acknowledge(pb::AcknowledgeRequest {
                 subscription: subscription.to_owned(),
-                ack_ids: vec![renewed.to_owned()],
+                ack_ids: vec![current.to_owned()],
             })
             .await
             .unwrap();
@@ -3066,5 +3091,51 @@ async fn emulator_push_attributes_roundtrip_through_create_get_and_list_on_both_
     assert_eq!(list["subscriptions"].as_array().unwrap().len(), 2);
     for item in list["subscriptions"].as_array().unwrap() {
         assert_eq!(item["pushConfig"]["attributes"]["x-goog-version"], "v1");
+    }
+}
+
+#[tokio::test]
+async fn recorded_unknown_get_routes_return_html_only_in_strict() {
+    for policy in [
+        fireemu_adapter_pubsub::PagingPolicy::Strict,
+        fireemu_adapter_pubsub::PagingPolicy::Emulator,
+    ] {
+        let address = start_policy(policy).await;
+        for (path, expected) in [
+            (
+                "/v1/projects/demo-app/topic/x",
+                include_bytes!("fixtures/missing-topic-route.html").as_slice(),
+            ),
+            (
+                "/v1/topics/x",
+                include_bytes!("fixtures/missing-project-route.html").as_slice(),
+            ),
+        ] {
+            let (status, body) = rest_request_raw(address, "GET", path, json!({})).await;
+            assert_eq!(status, 404);
+            if policy == fireemu_adapter_pubsub::PagingPolicy::Strict {
+                assert_eq!(body, expected);
+            } else {
+                assert_eq!(
+                    serde_json::from_slice::<Value>(&body).unwrap()["error"]["status"],
+                    "NOT_FOUND"
+                );
+            }
+        }
+        let (status, body) = rest_request(
+            address,
+            "GET",
+            "/v1/projects/demo-app/topics/absent",
+            json!({}),
+        )
+        .await;
+        assert_eq!(status, 404);
+        assert_eq!(
+            body["error"]["message"],
+            "Resource not found (resource=absent)."
+        );
+        let (status, body) = rest_request(address, "POST", "/v1/topics/x", json!({})).await;
+        assert_eq!(status, 404);
+        assert_eq!(body["error"]["status"], "NOT_FOUND");
     }
 }

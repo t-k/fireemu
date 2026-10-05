@@ -151,8 +151,44 @@ pub(crate) async fn handle(request: Request<Body>, handle: PubSubHandle) -> Resp
 
     match dispatch(&method, &path, &query, &value, &handle) {
         Ok((status, response)) => json_response(status, response),
+        Err(error)
+            if handle.paging_policy == crate::PagingPolicy::Strict
+                && method == Method::GET
+                && matches!(
+                    error.message.as_str(),
+                    "Pub/Sub REST paths must start with /v1/"
+                        | "invalid Pub/Sub REST resource path"
+                        | "unknown Pub/Sub REST resource"
+                ) =>
+        {
+            route_not_found_response(&path)
+        }
         Err(error) => error_response(error),
     }
+}
+
+fn escape_html_path(path: &str) -> String {
+    path.chars()
+        .map(|character| match character {
+            '&' => "&amp;".to_owned(),
+            '<' => "&lt;".to_owned(),
+            '>' => "&gt;".to_owned(),
+            '"' => "&quot;".to_owned(),
+            '\'' => "&#39;".to_owned(),
+            _ => character.to_string(),
+        })
+        .collect()
+}
+
+fn route_not_found_response(path: &str) -> Response {
+    let body = include_str!("route_not_found.html").replace("{{PATH}}", &escape_html_path(path));
+    let mut response = Response::new(Body::from(body));
+    *response.status_mut() = StatusCode::NOT_FOUND;
+    response.headers_mut().insert(
+        axum::http::header::CONTENT_TYPE,
+        axum::http::HeaderValue::from_static("text/html; charset=UTF-8"),
+    );
+    response
 }
 
 fn dispatch(
@@ -1686,6 +1722,22 @@ mod production_shape_tests {
                 )),
                 format!("2023-11-14T22:13:20{suffix}")
             );
+        }
+    }
+}
+
+#[cfg(test)]
+mod route_error_tests {
+    use super::escape_html_path;
+    use proptest::prelude::*;
+
+    proptest! {
+        #[test]
+        fn route_path_escaping_preserves_text_and_never_injects_markup(path in ".{0,200}") {
+            let escaped = escape_html_path(&path);
+            prop_assert!(!escaped.contains(['<', '>', '\'', '"']));
+            let decoded = escaped.replace("&lt;", "<").replace("&gt;", ">").replace("&quot;", "\"").replace("&#39;", "'").replace("&amp;", "&");
+            prop_assert_eq!(decoded, path);
         }
     }
 }

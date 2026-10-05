@@ -1,4 +1,4 @@
-// The delivery fixture, offline: the SDK's own discovery finds exactly the five functions, every one
+// The delivery fixture, offline: the SDK's own discovery finds exactly the six functions, every one
 // pinned to us-central1, with the schedules and retry options the packet declares; and the handlers
 // print the frame the recorder reads.
 import assert from "node:assert/strict";
@@ -25,6 +25,7 @@ const maybe = present ? test : test.skip;
 const EXPECTED = [
   "schedOkV1",
   "schedFailV1",
+  "schedRetryV1",
   "schedOkV2",
   "schedRetryV2",
   "schedSlowV2",
@@ -60,7 +61,7 @@ function discover(dir) {
   return JSON.parse(readFileSync(manifest, "utf8"));
 }
 
-maybe("the SDK discovers exactly the five functions, all pinned to us-central1", () => {
+maybe("the SDK discovers exactly the six functions, all pinned to us-central1", () => {
   const dir = source();
   try {
     const manifest = discover(dir);
@@ -73,6 +74,7 @@ maybe("the SDK discovers exactly the five functions, all pinned to us-central1",
     assert.equal(manifest.endpoints.schedSlowV2.platform, "gcfv2");
     assert.equal(manifest.endpoints.schedOkV1.platform, "gcfv1");
     assert.equal(manifest.endpoints.schedFailV1.platform, "gcfv1");
+    assert.equal(manifest.endpoints.schedRetryV1.platform, "gcfv1");
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -101,6 +103,16 @@ maybe("the declared schedules, time zones and retry options are what the packet 
     assert.equal(e.schedFailV1.scheduleTrigger.schedule, "every 5 minutes");
     assert.ok(!e.schedFailV1.scheduleTrigger.timeZone);
     assert.ok(!e.schedFailV1.failurePolicy && !e.schedOkV1.failurePolicy, "no failure policy");
+    // the Gen1 retry probe: a count of 1 on the Scheduler job, still no failure policy on the function
+    assert.equal(e.schedRetryV1.scheduleTrigger.schedule, "every 5 minutes");
+    assert.deepEqual(e.schedRetryV1.scheduleTrigger.retryConfig, {
+      retryCount: 1,
+      maxBackoffDuration: null,
+      maxDoublings: null,
+      maxRetryDuration: null,
+      minBackoffDuration: null,
+    });
+    assert.ok(!e.schedRetryV1.failurePolicy, "no failure policy");
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

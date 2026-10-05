@@ -323,7 +323,14 @@ test("two unknown creates in one run are both listed", async () => {
   });
   assert.deepEqual(
     extras.result.unconfirmedCreates.map((c) => c.id),
-    ["create-extra-zero", "create-extra-duration", "create-extra-count", "create-extra-retry5"],
+    [
+      "create-extra-zero",
+      "create-extra-duration",
+      "create-extra-count",
+      "create-extra-fraction",
+      "create-extra-zerobackoff",
+      "create-extra-retry5",
+    ],
   );
 });
 

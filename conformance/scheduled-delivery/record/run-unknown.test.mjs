@@ -3,7 +3,7 @@
 // run issued, nothing is sent after a refused credential, and a close means the project is as it was.
 import assert from "node:assert/strict";
 import test from "node:test";
-import { ALL_FUNCTIONS, FUNCTIONS, extraJobId, scheduleId } from "./plan.mjs";
+import { ALL_FUNCTIONS, EXTRA_JOBS, FUNCTIONS, extraJobId, scheduleId } from "./plan.mjs";
 import { NUMBER, createWorld, reply } from "./world.mjs";
 import { record } from "./run.mjs";
 
@@ -139,7 +139,7 @@ test("generated: the run keeps its safety rules over any mix of answer classes",
     // Only issued names are deleted.
     const allowed = new Set([
       ...ALL_FUNCTIONS.map(scheduleId),
-      ...["zero", "duration", "count", "retry5"].map((k) => extraJobId(RUN, k)),
+      ...EXTRA_JOBS.map((job) => extraJobId(RUN, job.key)),
       ...FUNCTIONS.v1.map((f) => "fe-sd-" + RUN + "-pull-" + f.toLowerCase()),
       ...ALL_FUNCTIONS,
     ]);

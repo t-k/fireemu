@@ -154,3 +154,15 @@ exports.schedFailV1 = functionsV1
     frameV1("schedFailV1", args, { failing: true });
     throw new Error("deliberate failure of a scheduled v1 handler");
   });
+
+// The Gen1 retry probe: always fails, and declares retryCount 1. Run 2's schedFailV1 declared no count and ran once
+// per occurrence; the question here is whether a declared count makes Cloud Scheduler or Pub/Sub deliver the message of
+// a failed handler again (a repeated message id would show it).
+exports.schedRetryV1 = functionsV1
+  .region(REGION)
+  .pubsub.schedule("every 5 minutes")
+  .retryConfig({ retryCount: 1 })
+  .onRun(async (...args) => {
+    frameV1("schedRetryV1", args, { failing: true });
+    throw new Error("deliberate failure of a scheduled v1 handler with a retry count");
+  });

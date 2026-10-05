@@ -66,7 +66,7 @@ test("a real v2 function name and its lower-case Cloud Run service: only the cas
   );
   assert.equal(runServiceId("schedOkV2"), "schedokv2");
   assert.equal(functionName("schedOkV2").endsWith("/schedOkV2"), true);
-  assert.equal(ALL_FUNCTIONS.length, 5);
+  assert.equal(ALL_FUNCTIONS.length, 6);
 });
 
 test("an absence is a direct read of 404 NOT_FOUND, in either recorded Scheduler layout and the Pub/Sub one", () => {

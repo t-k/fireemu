@@ -113,6 +113,32 @@ impl RestError {
     }
 }
 
+pub(crate) fn unauthenticated(method: &Method, path: &str) -> Response {
+    let details = recorded_auth_method(method, path).map(|method| {
+        json!([{"@type":"type.googleapis.com/google.rpc.ErrorInfo","reason":"CREDENTIALS_MISSING","metadata":{"method":format!("google.pubsub.v1.Publisher.{method}"),"service":"pubsub.googleapis.com"}}])
+    });
+    error_response(RestError {
+        status: StatusCode::UNAUTHORIZED,
+        code: "UNAUTHENTICATED",
+        message: crate::authentication::INVALID_CREDENTIAL_MESSAGE.to_owned(),
+        details,
+    })
+}
+
+fn recorded_auth_method(method: &Method, path: &str) -> Option<&'static str> {
+    let (project, resource) = path.strip_prefix("/v1/projects/")?.split_once('/')?;
+    let leaf = resource.strip_prefix("topics/")?;
+    if project.is_empty() || leaf.is_empty() || leaf.contains('/') {
+        return None;
+    }
+    match (method, leaf.split_once(':')) {
+        (&Method::GET, None) => Some("GetTopic"),
+        (&Method::PUT, None) => Some("CreateTopic"),
+        (&Method::POST, Some((topic, "publish"))) if !topic.is_empty() => Some("Publish"),
+        _ => None,
+    }
+}
+
 /// Handles one HTTP/JSON request that was not matched by a gRPC service route.
 pub(crate) async fn handle(request: Request<Body>, handle: PubSubHandle) -> Response {
     let method = request.method().clone();
@@ -1682,6 +1708,28 @@ mod production_shape_tests {
     }
 
     proptest! {
+        #[test]
+        fn authentication_method_details_match_only_recorded_route_classes(project in "[a-z]{1,20}", leaf in "[a-z]{1,30}") {
+            let resource = format!("/v1/projects/{project}/topics/{leaf}");
+            prop_assert_eq!(recorded_auth_method(&Method::GET, &resource), Some("GetTopic"));
+            prop_assert_eq!(recorded_auth_method(&Method::PUT, &resource), Some("CreateTopic"));
+            prop_assert_eq!(recorded_auth_method(&Method::POST, &format!("{resource}:publish")), Some("Publish"));
+            for (method, path) in [
+                (Method::DELETE, resource.clone()),
+                (Method::POST, resource.clone()),
+                (Method::POST, format!("{resource}:other")),
+                (Method::GET, format!("{resource}:publish")),
+                (Method::GET, format!("{resource}/child")),
+                (Method::GET, format!("/v1/projects//topics/{leaf}")),
+                (Method::GET, format!("/v1/projects/{project}/subscriptions/{leaf}")),
+                (Method::GET, format!("/projects/{project}/topics/{leaf}")),
+                (Method::GET, format!("/v1/projects/{project}/topics/")),
+                (Method::POST, format!("/v1/projects/{project}/topics/:publish")),
+            ] {
+                prop_assert_eq!(recorded_auth_method(&method, &path), None);
+            }
+        }
+
         #[test]
         fn strict_rest_default_retention_matches_ttl_reference(ttl in 86_400i64..=2_678_400, explicit in any::<bool>()) {
             let handle = local_handle(crate::PagingPolicy::Strict);

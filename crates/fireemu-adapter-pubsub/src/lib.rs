@@ -8,7 +8,8 @@
 //! # Security posture
 //!
 //! The daemon binds the listener to loopback (`127.0.0.1`) only, exactly like the official
-//! emulator and the other fireemu services, and no credential is required on loopback. Message
+//! emulator and the other fireemu services. Missing credentials are accepted for SDK emulator
+//! connections; strict rejects every presented credential without a trusted OAuth verifier. Message
 //! sizes are bounded at the gRPC codec (10 MiB decode / encode), and the core state machine
 //! bounds topics, subscriptions and retained messages so a client cannot exhaust memory.
 //!
@@ -20,6 +21,7 @@
 
 mod ack_token;
 mod admission;
+mod authentication;
 mod convert;
 mod publisher;
 mod push;
@@ -1161,6 +1163,10 @@ pub async fn serve_pubsub(
         let handle = rest_handle.clone();
         async move { rest::handle(request, handle).await }
     });
+    prepared_router = prepared_router.layer(axum::middleware::from_fn_with_state(
+        handle.paging_policy,
+        authentication::authenticate,
+    ));
     if handle.paging_policy == PagingPolicy::Strict {
         prepared_router =
             prepared_router.layer(axum::middleware::from_fn(recorded_grpc_error_headers));

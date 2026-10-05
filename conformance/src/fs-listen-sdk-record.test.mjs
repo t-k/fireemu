@@ -1578,3 +1578,36 @@ test("any thrown value that is not null makes the writes unknown, the empty stri
   });
   assert.equal(recording.errors["sdk/driver"], "");
 });
+
+test("rowsFromReceipt keeps what a record says, skips a record that is not one, and fills in nothing it was not told", () => {
+  const rows = rowsFromReceipt({
+    cases: [
+      {
+        caseId: "FS-LISTEN-SDK-101",
+        comparedFields: null,
+        observed: [{ a: 1 }],
+        failures: ["step-timeout"],
+        invariantViolations: ["order"],
+      },
+      { caseId: "FS-LISTEN-SDK-102" },
+      null,
+      { observed: [] },
+      { caseId: 7 },
+    ],
+  });
+  assert.deepEqual(Object.keys(rows), ["sdk/101", "sdk/102"]);
+  assert.deepEqual(rows["sdk/101"].invariantViolations, ["order"]);
+  assert.deepEqual(rows["sdk/101"].failures, ["step-timeout"]);
+  assert.deepEqual(rows["sdk/101"].observed, [{ a: 1 }]);
+  assert.equal(rows["sdk/101"].timedOut, true);
+  assert.deepEqual(rows["sdk/102"], {
+    conditions: rows["sdk/102"].conditions,
+    observed: [],
+    failures: [],
+    invariantViolations: [],
+    end: null,
+    timedOut: false,
+  });
+  assert.deepEqual(rowsFromReceipt({}), {});
+  assert.deepEqual(rowsFromReceipt(undefined), {});
+});

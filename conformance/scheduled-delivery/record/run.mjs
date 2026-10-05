@@ -420,6 +420,9 @@ export async function record({
         }
         token = answer.json.nextPageToken ?? "";
         if (!token) break;
+        // The fifth page still has more: the rest of this window is not read. Said so, never left as a short count.
+        if (page === 4)
+          incompleteReads.push({ id: `logs-${label}-${kind}`, class: "more-than-five-pages" });
       }
     }
     if (!final) polledUntil = end;

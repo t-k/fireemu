@@ -17,6 +17,7 @@ import {
   MODE_SUFFIX,
   modeRun,
 } from "./fs-listen/browser-modes.mjs";
+import { sdkCases } from "./fs-listen/sdk-cases.mjs";
 
 const PROD = {
   kind: "production",
@@ -82,13 +83,18 @@ const modeReceipt = (extra = {}) => ({
   cleanup: { complete: true },
   cleanupPasses: [],
   budget: {},
-  cases: [caseRecord("FS-LISTEN-SDK-101"), caseRecord("FS-LISTEN-SDK-104C")],
+  // One record per case of the catalog, as a complete browser receipt carries.
+  cases: sdkCases().map((c) => caseRecord(c.caseId)),
   teardown: [
     { client: "primary", closed: true },
     { client: "witness", closed: true },
   ],
   ...extra,
 });
+/** The row ids a complete receipt gives one mode: one `sdk/<id>` per case of the catalog. */
+const catalogRows = (prefix) =>
+  sdkCases().map((c) => `${prefix}/sdk/${c.caseId.replace("FS-LISTEN-SDK-", "")}`);
+
 const transport = (mode, extra = {}) => ({
   requests: 10,
   listenChannel: 5,
@@ -108,10 +114,7 @@ test("browserRows prefixes each row with its transport and skips a mode with no 
     "long-polling": modeResult("long-polling", "r"),
     streaming: { mode: "streaming", error: "x" },
   });
-  assert.deepEqual(Object.keys(rows), [
-    "browser-long-polling/sdk/101",
-    "browser-long-polling/sdk/104C",
-  ]);
+  assert.deepEqual(Object.keys(rows), catalogRows("browser-long-polling"));
   assert.deepEqual(rows["browser-long-polling/sdk/101"].conditions, [
     "FS-LISTEN-SDK/document-event-order",
   ]);
@@ -207,7 +210,7 @@ test("a clean production recording: rows of both modes, bounded driver, prefligh
   assert.deepEqual(recording.modes, MODES);
   assert.equal(recording.cleanup.complete, true);
   assert.deepEqual(recording.errors, {});
-  assert.equal(Object.keys(recording.rows).length, 4);
+  assert.equal(Object.keys(recording.rows).length, 2 * sdkCases().length);
   assert.equal(recording.requests, 100);
   assert.equal(recording.connections, 7);
   // preflight 2 + accounts (2 creates, 2 deletes, 2 lookups) 6 + native 11 + wire 100.
@@ -258,10 +261,7 @@ test("one mode only: its row prefix, its sweep and its transport", async () => {
       },
     }),
   });
-  assert.deepEqual(Object.keys(recording.rows), [
-    "browser-streaming/sdk/101",
-    "browser-streaming/sdk/104C",
-  ]);
+  assert.deepEqual(Object.keys(recording.rows), catalogRows("browser-streaming"));
   assert.deepEqual(Object.keys(recording.cleanup.documents.modes), ["streaming"]);
   assert.ok(swept.every((prefix) => prefix === "r1s"));
   assert.equal(recording.cleanup.complete, true);
@@ -307,7 +307,7 @@ test("a mode that failed, or has no result, is an error and an incomplete cleanu
     );
     assert.equal(
       Object.keys(recording.rows).filter((k) => k.startsWith("browser-long-polling")).length,
-      2,
+      sdkCases().length,
     );
   }
 });
@@ -735,20 +735,29 @@ const browserA2 = async (lines) => {
   });
 };
 
-test("a browser run whose writes are all known marks its may-exist names maybe and settles at A2 when they are absent", async () => {
+test("a browser run whose writes are all known closes its may-exist names with a known line and settles at A2 when they are absent; cut after the maybe line it is unconfirmed", async () => {
   const lines = [];
   await record(PROD, { journal: { append: (entry) => lines.push(entry), close() {} } });
-  const names = lines.find((line) => line.type === "names");
-  assert.equal(names.maybe, true);
-  assert.equal(lines.filter((l) => l.type === "names" && l.phase === "after").length, 0);
+  const before = lines.find((line) => line.type === "names" && line.phase === "before");
+  assert.equal(before.maybe, true);
+  const closing = lines.filter((l) => l.type === "names" && l.phase === "after");
+  assert.equal(closing.length, 1);
+  assert.equal(closing[0].outcome, "known");
+  assert.deepEqual(closing[0].names, before.names);
+  assert.ok(lines.indexOf(closing[0]) < lines.findIndex((l) => l.type === "end"));
   const report = await browserA2(lines);
   assert.equal(report.clean, true);
   assert.deepEqual(report.unconfirmed, []);
+  // The recorder killed while the driver ran: the journal ends at the maybe line.
+  const crashed = await browserA2(lines.slice(0, lines.indexOf(before) + 1));
+  assert.equal(crashed.clean, false);
+  assert.equal(crashed.unconfirmed.length, 12);
 });
 
-test("a browser run whose writes are not known (a mode failed, no result, or a step threw) journals an unknown answer for its names, so absence at A2 does not settle them", async () => {
+test("a browser run whose writes are not known (a mode failed or had no result, a step threw, the receipt threw or lost a case record, the driver died) closes its names unknown, so absence at A2 does not settle them", async () => {
   const threw = modeReceipt();
-  threw.cases = [{ ...threw.cases[0], failures: ["step-threw:unavailable"] }];
+  threw.cases[0] = { ...threw.cases[0], failures: ["step-threw:unavailable"] };
+  const lostRecord = modeReceipt({ cases: modeReceipt().cases.slice(1) });
   for (const modes of [
     {
       "long-polling": modeResult("long-polling", "r1"),
@@ -758,6 +767,18 @@ test("a browser run whose writes are not known (a mode failed, no result, or a s
     {
       "long-polling": modeResult("long-polling", "r1", threw),
       streaming: modeResult("streaming", "r1"),
+    },
+    {
+      "long-polling": modeResult(
+        "long-polling",
+        "r1",
+        modeReceipt({ thrown: "unsubscribe-failed" }),
+      ),
+      streaming: modeResult("streaming", "r1"),
+    },
+    {
+      "long-polling": modeResult("long-polling", "r1"),
+      streaming: modeResult("streaming", "r1", lostRecord),
     },
   ]) {
     const lines = [];
@@ -784,5 +805,6 @@ test("a browser run whose writes are not known (a mode failed, no result, or a s
     },
   });
   assert.equal(lines.filter((l) => l.type === "names" && l.phase === "after").length, 1);
+  assert.equal(lines.findLast((l) => l.type === "names").outcome, "unknown");
   assert.equal((await browserA2(lines)).clean, false);
 });

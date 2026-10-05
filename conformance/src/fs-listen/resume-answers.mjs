@@ -16,7 +16,10 @@
 //   removed      the target was removed
 //   unfinished   the wait ran out, the stream hit its cap or ended without a status, or no ADD/CURRENT
 
-import { isUnfinished } from "./compare.mjs";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+
+import { isUnfinished, recordingProblems } from "./compare.mjs";
 
 export const ANSWER_KINDS = [
   "empty",
@@ -31,7 +34,9 @@ export const ANSWER_KINDS = [
 ];
 
 const isDocument = (item) =>
-  item.kind === "documentChange" || item.kind === "documentDelete" || item.kind === "documentRemove";
+  item.kind === "documentChange" ||
+  item.kind === "documentDelete" ||
+  item.kind === "documentRemove";
 
 /** The answer kind of one recorded row. */
 export function answerKind(row) {
@@ -61,12 +66,15 @@ export function answerKind(row) {
 
 const VARIANT_ROW = /^native\/resume-(?:grid-[a-z0-9]+|kinds|age)\//;
 
-/** The answer kind of each resume-variant row of a recording, by row id. */
+/** The answer kind of each resume-variant row of a recording, by row id (a program that errored answers nothing). */
 export function answerTable(recording) {
   return Object.fromEntries(
     Object.entries(recording.rows ?? {})
       .filter(([id]) => VARIANT_ROW.test(id))
-      .map(([id, row]) => [id, answerKind(row)]),
+      .map(([id, row]) => [
+        id,
+        Object.hasOwn(recording.errors ?? {}, row.program) ? "unfinished" : answerKind(row),
+      ]),
   );
 }
 
@@ -82,7 +90,17 @@ export function answerAgreement(first, second) {
 }
 
 const GRIDS = ["g0", "tc", "gc"];
-const GRID_ROWS = ["first", "k0", "k1", "k1-repeat", "k1-expected", "k2", "k2-expected", "k2-wrong", "k3"];
+const GRID_ROWS = [
+  "first",
+  "k0",
+  "k1",
+  "k1-repeat",
+  "k1-expected",
+  "k2",
+  "k2-expected",
+  "k2-wrong",
+  "k3",
+];
 
 /** A markdown table: the grids as row against token kind, the other programs row by row. */
 export function renderAnswerTable(first, second) {
@@ -97,7 +115,8 @@ export function renderAnswerTable(first, second) {
     `| row | ${GRIDS.join(" | ")} |`,
     `|---|${GRIDS.map(() => "---").join("|")}|`,
     ...GRID_ROWS.map(
-      (name) => `| ${name} | ${GRIDS.map((g) => cell(`native/resume-grid-${g}/${name}`)).join(" | ")} |`,
+      (name) =>
+        `| ${name} | ${GRIDS.map((g) => cell(`native/resume-grid-${g}/${name}`)).join(" | ")} |`,
     ),
     "",
     "| row | answer |",
@@ -107,4 +126,24 @@ export function renderAnswerTable(first, second) {
       .map((id) => `| ${id} | ${cell(id)} |`),
   ];
   return lines.join("\n");
+}
+
+function main(argv) {
+  if (argv.length < 1 || argv.length > 2)
+    throw new Error("usage: resume-answers.mjs <recording.json> [<second recording.json>]");
+  const recordings = argv.map((file) => JSON.parse(readFileSync(file, "utf8")));
+  for (const recording of recordings) {
+    const problems = recordingProblems(recording);
+    if (problems.length) throw new Error(`a recording is not clean: ${problems.join("; ")}`);
+  }
+  console.log(renderAnswerTable(recordings[0], recordings[1] ?? recordings[0]));
+}
+
+if (process.argv[1] === fileURLToPath(import.meta.url)) {
+  try {
+    main(process.argv.slice(2));
+  } catch (error) {
+    console.error(error.message);
+    process.exitCode = 2;
+  }
 }

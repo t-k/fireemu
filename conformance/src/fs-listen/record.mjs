@@ -89,12 +89,16 @@ export const newRunId = (now = Date.now()) => `n${now.toString(36)}`;
 export function programsFor(options) {
   if (options.programs !== undefined) {
     if (options.programs !== "resume-variants")
-      throw new Error(`--programs must be resume-variants, not ${JSON.stringify(options.programs)}`);
+      throw new Error(
+        `--programs must be resume-variants, not ${JSON.stringify(options.programs)}`,
+      );
     if (options["include-long"] === "yes")
       throw new Error("--programs resume-variants cannot be combined with --include-long yes");
     return RESUME_VARIANT_PROGRAMS;
   }
-  return options["include-long"] === "yes" ? [...NATIVE_PROGRAMS, ...LONG_PROGRAMS] : NATIVE_PROGRAMS;
+  return options["include-long"] === "yes"
+    ? [...NATIVE_PROGRAMS, ...LONG_PROGRAMS]
+    : NATIVE_PROGRAMS;
 }
 
 /** The request ceiling a program set is held to (none for the L1 default, which the runner sets). */

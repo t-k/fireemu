@@ -1,5 +1,9 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { test } from "node:test";
 
 import {
@@ -288,4 +292,72 @@ test("renderAnswerTable prints the grids as k by token and the other programs by
   assert.match(text, /\| k1 \| replay \| diff\+filter \/ replay \(runs differ\) \|/);
   assert.match(text, /native\/resume-kinds\/modify \| replay/);
   assert.equal(text.includes("undefined"), false);
+});
+
+test("a row of a program that errored is unfinished, not an answer", () => {
+  const rows = {
+    ...named("native/resume-grid-g0/k1", {
+      ...row([add, bnd, doc("a"), bnd, current, bnd]),
+      program: "native/resume-grid-g0",
+    }),
+    ...named("native/resume-kinds/modify", {
+      ...row([add, bnd, doc("a"), bnd, current, bnd]),
+      program: "native/resume-kinds",
+    }),
+  };
+  assert.deepEqual(answerTable({ rows, errors: { "native/resume-grid-g0": "boom" } }), {
+    "native/resume-grid-g0/k1": "unfinished",
+    "native/resume-kinds/modify": "replay",
+  });
+  assert.deepEqual(answerTable({ rows, errors: {} }), {
+    "native/resume-grid-g0/k1": "replay",
+    "native/resume-kinds/modify": "replay",
+  });
+});
+
+const CLI = fileURLToPath(new URL("./fs-listen/resume-answers.mjs", import.meta.url));
+
+function runCli(files, args) {
+  const dir = mkdtempSync(join(tmpdir(), "fs-listen-answers-"));
+  const made = Object.fromEntries(
+    Object.entries(files).map(([name, value]) => {
+      const file = join(dir, name);
+      writeFileSync(file, JSON.stringify(value));
+      return [name, file];
+    }),
+  );
+  const out = spawnSync(process.execPath, [CLI, ...args(made)], {
+    encoding: "utf8",
+    env: { ...process.env, NODE_OPTIONS: "" },
+  });
+  return { code: out.status, stdout: out.stdout, stderr: out.stderr };
+}
+
+const clean = (rows) => ({
+  version: 1,
+  kind: "native",
+  cleanup: { complete: true },
+  errors: {},
+  rows,
+});
+
+test("the command prints the table of two runs, of one run twice when given one, and refuses an unclean recording or no argument", () => {
+  const a = clean(named("native/resume-grid-g0/k1", row([add, bnd, doc("a"), bnd, current, bnd])));
+  const b = clean(
+    named("native/resume-grid-g0/k1", row([add, bnd, doc("a"), doc("b"), filter(2), current, bnd])),
+  );
+  const two = runCli({ a, b }, (f) => [f.a, f.b]);
+  assert.equal(two.code, 0, two.stderr);
+  assert.match(two.stdout, /\| k1 \| replay \/ diff\+filter \(runs differ\) \| - \| - \|/);
+  const one = runCli({ a }, (f) => [f.a]);
+  assert.equal(one.code, 0, one.stderr);
+  assert.match(one.stdout, /\| k1 \| replay \| - \| - \|/);
+  const dirty = runCli({ a, d: { ...a, cleanup: { complete: false } } }, (f) => [f.a, f.d]);
+  assert.equal(dirty.code, 2);
+  assert.match(dirty.stderr, /cleanup was not complete/);
+  const none = runCli({}, () => []);
+  assert.equal(none.code, 2);
+  assert.match(none.stderr, /usage/);
+  const three = runCli({ a }, (f) => [f.a, f.a, f.a]);
+  assert.equal(three.code, 2);
 });

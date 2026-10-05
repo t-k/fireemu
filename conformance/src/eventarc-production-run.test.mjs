@@ -158,8 +158,8 @@ test("bad arguments are refused, and the numbers have their values", () => {
   assert.equal(parseArgs([...base, "--max-requests", "1"]).maxRequests, 1);
   assert.equal(parseArgs([...base, "--project-number", "1".repeat(20)]).usageProject.length, 20);
   assert.throws(() => parseArgs([...base, "--project-number", "1".repeat(21)]), /digits/);
-  assert.equal(DEFAULT_MAX_REQUESTS, 400);
-  assert.equal(CLEANUP_BUDGET, 450);
+  assert.equal(DEFAULT_MAX_REQUESTS, 700);
+  assert.equal(CLEANUP_BUDGET, 850);
 });
 
 test("the cases are unique, start with the preconditions and the create probe, and fit the default budget", () => {
@@ -522,11 +522,12 @@ for (const [label, extra] of [
     );
     assert.equal(code, 0);
     assert.equal(summary.closureReady, true);
-    // The model refused no creation for its shape, and no publish except the two probes that send no
-    // events on purpose (an empty list and a body without the member).
+    // The model refused no creation for its shape except the two deliberate variants of channel-ids (a
+    // body that names another channel, a path without a channelId), and no publish except the two probes
+    // that send no events on purpose (an empty list and a body without the member).
     assert.deepEqual(
       world.refusals.map((refusal) => refusal.kind),
-      ["publish-no-events", "publish-no-events"],
+      ["create-name-mismatch", "create-name-mismatch", "publish-no-events", "publish-no-events"],
     );
     // Nothing of the run is left, and every case stayed inside its ceiling.
     assert.deepEqual(
@@ -555,16 +556,27 @@ for (const [label, extra] of [
         (l) => l.note === "sdk-outcome" && l.name === "missing-source" && l.requests === 0,
       ),
     );
-    // The create probe came first and every creation carried its channel's name.
+    // The create probe came first and every creation carried its channel's name, except the two variants
+    // of channel-ids that deviate on purpose (a body that names another channel, a path without a
+    // channelId): exactly those two, in that case, and nothing else.
     const creates = lines.filter((l) => l.op === "createChannel");
     assert.ok(creates.length > 5);
+    const deviating = [];
     for (const line of creates) {
-      const [, parent, id] = /^(.*)\/channels\?channelId=(.*)$/.exec(
-        line.request.path.replace(/^\/v1\//, ""),
-      );
-      if (line.tokenMode === "default")
-        assert.equal(line.request.body.name, `${parent}/channels/${id}`);
+      const path = line.request.path.replace(/^\/v1\//, "");
+      const found = /^(.*)\/channels\?channelId=(.*)$/.exec(path);
+      if (found === null || line.request.body.name !== `${found[1]}/channels/${found[2]}`)
+        deviating.push(line);
+      else if (line.tokenMode === "default")
+        assert.equal(line.request.body.name, `${found[1]}/channels/${found[2]}`);
     }
+    assert.deepEqual(
+      deviating.map((line) => [line.case, line.request.path.includes("channelId=")]),
+      [
+        ["channel-ids", true],
+        ["channel-ids", false],
+      ],
+    );
   });
 }
 

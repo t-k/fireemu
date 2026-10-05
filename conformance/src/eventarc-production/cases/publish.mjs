@@ -140,7 +140,7 @@ const SIZE_BISECT_STEPS = 10;
 export const publishLimits = {
   id: "publish-limits",
   short: "pl",
-  requests: 40,
+  requests: 42,
   async run(ctx) {
     const c = ctx.client;
     const channel = await requireReadyChannel(ctx, "limits");

@@ -142,3 +142,73 @@ export async function defaultChannelAbsent(ctx) {
   );
   return isRecordedNotFound(reply);
 }
+
+/**
+ * A name the service may refuse, sent as a probe: derived from the run where the rule under test allows
+ * it, registered before anything is sent, and read first. It is created only after the read says it
+ * cannot be there (the recorded 404, or the 400 of a name that cannot exist); a name that exists is not
+ * the run's and is never created or ledgered. The creation is then followed to the end of its
+ * operation, so that a 2xx alone never proves that the run created it.
+ */
+export async function probeCreate(ctx, id, options = {}) {
+  const name = ctx.probe(id, options);
+  const read = await ctx.client.getChannel(name);
+  const cannotExist = isRecordedNotFound(read) || (read.status === 400 && !read.unknown);
+  if (!cannotExist) {
+    ctx.note(read.ok ? "probe-exists" : "probe-read-unclear", { name });
+    return null;
+  }
+  const outcome = await createAndWait(ctx, name);
+  return { name, ...outcome };
+}
+
+/**
+ * The pages of a list, followed through `nextPageToken` for at most `pages` requests. Returns the tokens
+ * the answers carried, in order (the first one belongs to the first page).
+ */
+export async function listPages(ctx, project, location, pageSize, pages) {
+  const tokens = [];
+  let pageToken;
+  for (let page = 0; page < pages; page += 1) {
+    const reply = await ctx.client.listChannels(project, location, {
+      pageSize,
+      ...(pageToken === undefined ? {} : { pageToken }),
+    });
+    pageToken = reply.ok ? reply.body?.nextPageToken : undefined;
+    if (typeof pageToken !== "string" || pageToken === "") return tokens;
+    tokens.push(pageToken);
+  }
+  return tokens;
+}
+
+/**
+ * Waits for the operation a creation named and settles each name the creation may have made: the first with
+ * the wait itself, the others with the same last read (a request that names two channels is settled for
+ * both by its own operation, and by nothing else).
+ */
+export async function settleCreation(ctx, reply, names) {
+  const [first, ...rest] = names;
+  const last = await waitOperation(ctx, "eventarc", reply, {
+    settle: { name: first, action: "create" },
+  });
+  if (reply?.ok && typeof reply.body?.name === "string")
+    for (const name of rest) ctx.client.settleOperation(name, "create", last, reply.body.name);
+  return last;
+}
+
+/** The names a location lists, in pages of 100 for at most `pages` requests (a location with more channels than that is not checked); null when a list did not answer. */
+export async function listNames(ctx, location, pages = 3) {
+  const names = [];
+  let pageToken;
+  for (let page = 0; page < pages; page += 1) {
+    const reply = await ctx.client.listChannels(ctx.project, location, {
+      pageSize: 100,
+      ...(pageToken === undefined ? {} : { pageToken }),
+    });
+    if (!reply.ok) return null;
+    for (const item of reply.body?.channels ?? []) names.push(item.name);
+    pageToken = reply.body?.nextPageToken;
+    if (typeof pageToken !== "string" || pageToken === "") return names;
+  }
+  return null;
+}

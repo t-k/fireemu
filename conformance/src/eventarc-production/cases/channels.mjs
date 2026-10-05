@@ -1,42 +1,11 @@
 import {
   cloudEvent,
-  createAndWait,
   isRecordedNotFound,
+  listPages,
+  probeCreate,
   requireChannel,
   waitOperation,
 } from "./support.mjs";
-
-/**
- * A name the service may refuse, sent as a probe: derived from the run where the rule under test allows
- * it, registered before anything is sent, and read first. It is created only after the read says it
- * cannot be there (the recorded 404, or the 400 of a name that cannot exist); a name that exists is not
- * the run's and is never created or ledgered. The creation is then followed to the end of its
- * operation, so that a 2xx alone never proves that the run created it.
- */
-async function probeCreate(ctx, id, options = {}) {
-  const name = ctx.probe(id, options);
-  const read = await ctx.client.getChannel(name);
-  const cannotExist = isRecordedNotFound(read) || (read.status === 400 && !read.unknown);
-  if (!cannotExist) {
-    ctx.note(read.ok ? "probe-exists" : "probe-read-unclear", { name });
-    return null;
-  }
-  const outcome = await createAndWait(ctx, name);
-  return { name, ...outcome };
-}
-
-/** The pages of a list, followed through `nextPageToken` for at most `pages` requests. */
-async function listPages(ctx, project, location, pageSize, pages) {
-  let pageToken;
-  for (let page = 0; page < pages; page += 1) {
-    const reply = await ctx.client.listChannels(project, location, {
-      pageSize,
-      ...(pageToken === undefined ? {} : { pageToken }),
-    });
-    pageToken = reply.ok ? reply.body?.nextPageToken : undefined;
-    if (typeof pageToken !== "string" || pageToken === "") return;
-  }
-}
 
 // What a created channel looks like to the read calls, and the rules for its name. Every step needs the
 // channels of the case: a creation that is refused stops the case (`requireChannel`).

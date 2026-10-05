@@ -105,6 +105,12 @@ export function createWorld({
    * is a 409 (`reject`) or starts an operation of its own (`accept`). A flow model, never evidence.
    */
   busy = "off",
+  /**
+   * The two deliberate variants of a creation (a body that names another channel than the path's ID, a path
+   * with no `channelId`) are accepted and create the channel the body names, with an operation (the most
+   * requests a run can send), instead of being refused.
+   */
+  acceptVariants = false,
   /** Every ID is accepted, so that every ID probe creates a channel (the most requests a run can send). */
   acceptAnyId = false,
 } = {}) {
@@ -142,9 +148,11 @@ export function createWorld({
         error: { code: 403, status: "PERMISSION_DENIED", message: "Location is not supported" },
       });
     const shape = createShapeRefusal(call);
-    if (shape !== null) return refuse(call, shape.kind, shape.answer);
-    const name = `${parent[0]}/${id}`;
-    if (!acceptAnyId && (!CHANNEL_ID.test(id) || id.startsWith("goog")))
+    const variant = shape?.kind === "create-name-mismatch" && acceptVariants;
+    if (shape !== null && !variant) return refuse(call, shape.kind, shape.answer);
+    const name = variant ? call.body.name : `${parent[0]}/${id}`;
+    const named = name.split("/").at(-1);
+    if (!acceptAnyId && (!CHANNEL_ID.test(named) || named.startsWith("goog")))
       return invalid("The request was invalid: invalid channel ID");
     if (channels.has(name)) {
       if (duplicate === "409")
@@ -243,6 +251,8 @@ export function createWorld({
   };
   return {
     channels,
+    /** Every operation a request started, with how many times it was read (done at `doneAfter` reads). */
+    operations,
     refusals,
     /** The publishes the model refused for a limit (not for a missing required field). */
     limits,

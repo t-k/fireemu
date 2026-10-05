@@ -36,6 +36,49 @@ const MODES = {
     ),
   },
   "fast operations, every ID probe accepted": { acceptAnyId: true },
+  "the limits at the recorded brackets, so that every search runs to its end": {
+    doneAfter: OPERATION_READS_MAX,
+    withState: true,
+    pendingReads: READY_READS - 1,
+    textLimit: 524_500,
+    attributeLimit: 100,
+    keyLimit: 256,
+    eventLimit: 100,
+  },
+  "every deliberate variant of a creation accepted, with slow operations": {
+    doneAfter: OPERATION_READS_MAX,
+    acceptAnyId: true,
+    acceptVariants: true,
+    existing: Array.from(
+      { length: 250 },
+      (_, i) => `projects/${PROJECT}/locations/us-central1/channels/other-${i}`,
+    ),
+  },
+  "a location with 250 other channels (three pages of 100), slow operations, every ID probe accepted":
+    {
+      doneAfter: OPERATION_READS_MAX,
+      acceptAnyId: true,
+      existing: Array.from(
+        { length: 250 },
+        (_, i) => `projects/${PROJECT}/locations/us-central1/channels/other-${i}`,
+      ),
+    },
+  "operations still running when the next request is sent, a second deletion refused": {
+    doneAfter: OPERATION_READS_MAX,
+    busy: "reject",
+    duplicate: "409",
+    acceptAnyId: true,
+  },
+  "operations still running, a second deletion started, and many channels to page through": {
+    doneAfter: OPERATION_READS_MAX,
+    busy: "accept",
+    duplicate: "409",
+    acceptAnyId: true,
+    existing: Array.from(
+      { length: 12 },
+      (_, i) => `projects/${PROJECT}/locations/us-central1/channels/other-${i}`,
+    ),
+  },
   "duplicate creates answered 409, limits in the middle of the ladders": {
     duplicate: "409",
     eventLimit: 100,
@@ -184,9 +227,12 @@ test("the ceilings fit the run's budget, and the cleanup's budget covers every n
 });
 
 test("the cleanup budget is derived from the bounds: every name a run can ledger, at the cleanup's own worst per name", () => {
-  // The names a run can ledger: the run's channels (p1, c1, c2, d1, d2, env, content, limits, sdk, auth)
-  // and the ID probes (six, and the location that cannot exist).
-  const names = 10 + 6 + 1;
+  // The names a run can ledger: the run's channels (stage B: p1, c1, c2, d1, d2, env, content, limits, sdk,
+  // auth; stage C: six of channel-order, two of channel-busy, five of channel-ids (a final hyphen, 63
+  // characters, the two of the mismatch, the one of the creation without a channelId) and one of
+  // publish-boundaries) and the ID probes (six; the one-character one and the leading-hyphen one; and the
+  // location that cannot exist).
+  const names = 10 + 6 + 2 + 5 + 1 + (6 + 2 + 1);
   // Per name, at most: 4 reads of a pending creation's operation, 1 read by name, 1 deletion, 15 polls of
   // its operation and 3 read-backs; and two lists of a location.
   const perName = 4 + 1 + 1 + 15 + 3;

@@ -583,3 +583,134 @@ test("the command prints the analysis of a digest file, one space of indentation
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test("a run directory whose Gen1 handler logged four frames reads as four invocations, one per message id (run f123d4fa2d61c5f5)", async () => {
+  // The reading went wrong once because the frame parser of the branch did not know `schedRetryV1`: its frames were
+  // dropped from the digest and the probe read as zero invocations. This runs the whole path, a journal to the digest to
+  // the analysis, with the frames the closed run logged for that function (a Cloud Functions v1 log entry each).
+  const { mkdtempSync, rmSync, writeFileSync } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const { join } = await import("node:path");
+  const { extract } = await import("./extract-production.mjs");
+  const ids = [
+    ["21339796619509982", "2026-10-05T13:40:39.703Z"],
+    ["22262342631436333", "2026-10-05T13:45:11.390Z"],
+    ["21350732571106222", "2026-10-05T13:48:27.040Z"],
+    ["21339949440159039", "2026-10-05T13:53:03.319Z"],
+  ];
+  const entry = ([eventId, receivedAt], n) => ({
+    insertId: "v1-" + n,
+    timestamp: receivedAt,
+    logName: "projects/fireemu-oracle-sbx/logs/cloudfunctions.googleapis.com%2Fcloud-functions",
+    resource: {
+      type: "cloud_function",
+      labels: {
+        function_name: "schedRetryV1",
+        region: "us-central1",
+        project_id: "fireemu-oracle-sbx",
+      },
+    },
+    textPayload:
+      "SCHED_DELIVERY_FRAME " +
+      JSON.stringify({
+        receivedAt,
+        handler: "schedRetryV1",
+        generation: 1,
+        argumentCount: 1,
+        arguments: [{ eventId }],
+        context: {
+          eventId,
+          eventType: "google.pubsub.topic.publish",
+          resource: {
+            name: "projects/fireemu-oracle-sbx/topics/firebase-schedule-schedRetryV1-us-central1",
+            service: "pubsub.googleapis.com",
+            type: "type.googleapis.com/google.pubsub.v1.PubsubMessage",
+          },
+          timestamp: receivedAt,
+          params: {},
+        },
+        failing: true,
+      }),
+  });
+  const v2 = {
+    insertId: "v2-1",
+    timestamp: "2026-10-05T13:40:20.000Z",
+    logName: "projects/fireemu-oracle-sbx/logs/run.googleapis.com%2Fstdout",
+    resource: {
+      type: "cloud_run_revision",
+      labels: { service_name: "schedokv2", location: "us-central1" },
+    },
+    textPayload:
+      "SCHED_DELIVERY_FRAME " +
+      JSON.stringify({
+        receivedAt: "2026-10-05T13:40:20.000Z",
+        handler: "schedOkV2",
+        generation: 2,
+        request: {
+          method: "POST",
+          url: "/",
+          headers: {},
+          rawBodyLength: null,
+          rawBody: null,
+          body: null,
+        },
+        event: { jobName: "j", scheduleTime: "t" },
+        eventKeys: ["jobName", "scheduleTime"],
+        contextProperty: null,
+        context: null,
+      }),
+  };
+  const scheduler = (kind, at) => ({
+    insertId: `s-${kind}-${at}`,
+    timestamp: at,
+    resource: {
+      type: "cloud_scheduler_job",
+      labels: { job_id: "firebase-schedule-schedRetryV1-us-central1" },
+    },
+    jsonPayload: {
+      "@type": `type.googleapis.com/google.cloud.scheduler.logging.${kind}`,
+      targetType: "PUBSUB_TOPIC",
+    },
+  });
+  const answer = (entries) => ({
+    state: "response-persisted",
+    status: 200,
+    bodyBase64: Buffer.from(JSON.stringify({ entries })).toString("base64"),
+  });
+  const dir = mkdtempSync(join(tmpdir(), "run3-gen1-"));
+  try {
+    const journal = [
+      { id: "logs-pass1-1-frames", ...answer([v2, ...ids.map(entry)]) },
+      {
+        id: "logs-pass1-1-scheduler",
+        ...answer(ids.flatMap(([, at]) => [scheduler("AttemptStarted", at)])),
+      },
+    ];
+    writeFileSync(
+      join(dir, `journal-${RUN}.jsonl`),
+      journal.map((r) => JSON.stringify(r)).join("\n") + "\n",
+    );
+    writeFileSync(
+      join(dir, `result-${RUN}.json`),
+      JSON.stringify({
+        runId: RUN,
+        jobs: {},
+        extraAnswers: {},
+        passes: [],
+        frames: { schedOkV2: 1, schedRetryV1: 4 },
+      }),
+    );
+    const digest = extract(dir);
+    assert.equal(digest.frames.filter((f) => f.handler === "schedRetryV1").length, 4);
+    assert.deepEqual(analyzeRun3(digest).gen1Probe, {
+      invocations: 4,
+      messageIds: 4,
+      maxPerMessageId: 1,
+      repeatedMessage: false,
+      schedulerAttempts: 4,
+      finishedWithError: 0,
+    });
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

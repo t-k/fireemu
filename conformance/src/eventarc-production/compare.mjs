@@ -251,7 +251,8 @@ const ERROR_INFO = "type.googleapis.com/google.rpc.ErrorInfo";
 
 /** Whether two objects have the same members with the same values, in any order. */
 function sameMembers(a, b) {
-  if (a === null || b === null || typeof a !== "object" || typeof b !== "object") return a === b;
+  const plain = (value) => value !== null && typeof value === "object" && !Array.isArray(value);
+  if (!plain(a) || !plain(b)) return sameJson(a, b);
   const keys = Object.keys(a);
   return (
     keys.length === Object.keys(b).length &&

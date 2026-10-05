@@ -615,6 +615,7 @@ impl SubscriptionState {
             .map(|d| d.max_delivery_attempts);
         let ordered = self.config.enable_message_ordering;
         let mut blocked_keys = BTreeSet::new();
+        let mut emitted_keys = BTreeSet::new();
 
         for i in self.first_unacked..self.entries.len() {
             if out.received.len() >= max {
@@ -624,21 +625,37 @@ impl SubscriptionState {
                 continue;
             }
             let ordering_key = self.entries[i].stored.message.ordering_key.clone();
-            if ordered && !ordering_key.is_empty() && !blocked_keys.insert(ordering_key.clone()) {
+            if ordered && !ordering_key.is_empty() && blocked_keys.contains(&ordering_key) {
                 continue;
             }
             if !matches!(&self.entries[i].state, Delivery::Available { available_at } if *available_at <= now)
             {
+                if ordered && !ordering_key.is_empty() {
+                    blocked_keys.insert(ordering_key.clone());
+                }
                 continue;
             }
             // Dead-letter: a message that already used its whole attempt budget is forwarded
             // rather than delivered again.
             if let Some(limit) = max_attempts {
                 if self.entries[i].delivery_attempt >= limit {
+                    if ordered && !ordering_key.is_empty() {
+                        blocked_keys.insert(ordering_key.clone());
+                        if emitted_keys.contains(&ordering_key) {
+                            continue;
+                        }
+                    }
                     self.entries[i].state = Delivery::ForwardPending;
                     out.dead_lettered.push(Arc::clone(&self.entries[i].stored));
                     continue;
                 }
+            }
+            if ordered && !ordering_key.is_empty() {
+                // Push sends one message at a time; unsent successors must not use an attempt.
+                if self.config.is_push() {
+                    blocked_keys.insert(ordering_key.clone());
+                }
+                emitted_keys.insert(ordering_key);
             }
             let ack_id = next_ack_id();
             let entry = &mut self.entries[i];
@@ -901,6 +918,7 @@ impl SubscriptionState {
 mod tests {
     use super::*;
     use crate::message::PubsubMessage;
+    use proptest::prelude::*;
     use std::cell::Cell;
 
     fn cfg() -> SubscriptionConfig {
@@ -1308,6 +1326,74 @@ mod tests {
     }
 
     #[test]
+    fn ordered_pull_batches_same_key_and_blocks_later_batches_until_ack() {
+        let mut config = cfg();
+        config.enable_message_ordering = true;
+        let mut sub = SubscriptionState::new(config);
+        let now = LogicalInstant::from_unix_seconds(100);
+        for index in 1..=3 {
+            let mut message = stored(&index.to_string(), b"data", 100);
+            message.message.ordering_key = "same-key".to_owned();
+            sub.enqueue(message, now).unwrap();
+        }
+        let mut ids = counter();
+        let first = sub.pull(2, now, &mut ids).received;
+        assert_eq!(first.len(), 2);
+        assert_eq!(first[0].message.message_id, "1");
+        assert_eq!(first[1].message.message_id, "2");
+        assert!(sub.pull(2, now, &mut ids).received.is_empty());
+        sub.acknowledge(&[first[0].ack_id.clone()]);
+        assert!(sub.pull(2, now, &mut ids).received.is_empty());
+        sub.acknowledge(&[first[1].ack_id.clone()]);
+        assert_eq!(
+            sub.pull(2, now, &mut ids).received[0].message.message_id,
+            "3"
+        );
+    }
+
+    proptest! {
+        #[test]
+        fn ordered_pull_traces_match_reference_model(push in any::<bool>(), keys in proptest::collection::vec(0u8..4,1..16), commands in proptest::collection::vec((0u8..4,1usize..9),1..80)) {
+            let mut config = cfg();config.enable_message_ordering = true;
+            if push { config.push_config.push_endpoint = "http://127.0.0.1:8181/push".to_owned(); }
+            let mut sub = SubscriptionState::new(config);
+            let now = LogicalInstant::from_unix_seconds(100);
+            for (index,key) in keys.iter().enumerate() {
+                let mut message = stored(&index.to_string(),b"data",100);
+                message.message.ordering_key = if *key==0 {String::new()} else {key.to_string()};
+                sub.enqueue(message,now).unwrap();
+            }
+            // 0: available, 1: outstanding, 2: acknowledged. IDs remain bound to entries.
+            let mut reference = vec![0u8;keys.len()];
+            let mut acknowledgements = vec![String::new();keys.len()];
+            let mut ids = counter();
+            for (kind,limit) in commands {
+                if kind==0 {
+                    let mut blocked = BTreeSet::new();let mut expected = Vec::new();
+                    for (index,key) in keys.iter().enumerate() {
+                        if reference[index]==2 {continue;}
+                        if *key!=0 && blocked.contains(key) {continue;}
+                        if reference[index]==1 {if *key!=0 {blocked.insert(*key);} continue;}
+                        if expected.len()==limit {break;}
+                        expected.push(index.to_string());reference[index]=1;
+                        if push && *key!=0 {blocked.insert(*key);}
+                    }
+                    let actual = sub.pull(limit,now,&mut ids).received;
+                    let actual_ids: Vec<_> = actual.iter().map(|message|message.message.message_id.clone()).collect();
+                    prop_assert_eq!(actual_ids,expected);
+                    for message in actual {let index: usize=message.message.message_id.parse().unwrap();acknowledgements[index]=message.ack_id;}
+                } else {
+                    let selected: Vec<_> = reference.iter().enumerate().filter_map(|(index,state)|(*state==1 && index%3==usize::from(kind-1)).then_some(index)).collect();
+                    let ids: Vec<_> = selected.iter().map(|index|acknowledgements[*index].clone()).collect();
+                    prop_assert_eq!(sub.acknowledge(&ids),selected.len());
+                    for index in selected {reference[index]=2;}
+                }
+                prop_assert_eq!(sub.outstanding_count(),reference.iter().filter(|state|**state==1).count());
+            }
+        }
+    }
+
+    #[test]
     fn ordering_holds_key_until_ack() {
         let mut c = cfg();
         c.enable_message_ordering = true;
@@ -1320,8 +1406,8 @@ mod tests {
         s.enqueue(m1, now).unwrap();
         s.enqueue(m2, now).unwrap();
         let mut ids = counter();
-        // Only the first message of the key is delivered.
-        let out = s.pull(10, now, &mut ids);
+        // A one-message request leaves the next batch blocked until this batch is acknowledged.
+        let out = s.pull(1, now, &mut ids);
         assert_eq!(out.received.len(), 1);
         assert_eq!(out.received[0].message.message_id, "1");
         let ack = out.received[0].ack_id.clone();

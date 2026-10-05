@@ -56,8 +56,9 @@ export function orderIgnoredFor(row, scenario) {
 //    reproduce in format, so a 28-character alphanumeric id is masked to `<uid>` and any other value is left alone (it stays a
 //    DIFF against production's `<uid>`). Value-only, as the coordinator ruled on 2026-10-05; the format of an ID-token write's id
 //    is not masked.
+const SUBSCRIPTION_NUMBERS = /-\d{6}-sub-\d{3}$/;
 const maskSubscription = (value) =>
-  value.replace(/-\d{6}-sub-\d{3}$/, "-<6 digits>-sub-<3 digits>");
+  value.replace(SUBSCRIPTION_NUMBERS, "-<6 digits>-sub-<3 digits>");
 const UID_28 = /^[A-Za-z0-9]{28}$/;
 const AUTH_TYPE_PATH = "$.frame.event.authType";
 export const maskAuthId = (value, observation) => {
@@ -66,26 +67,89 @@ export const maskAuthId = (value, observation) => {
   return value.length > 0 ? "<present>" : value;
 };
 
-/** The declared masks of a row: `{ path, mask }` entries (see above), or none. */
+/**
+ * The declared masks and the id of the scope decision in the closure record that declares each (FUNCTIONS-EVENTS.json: E10 the
+ * authId, E11 the subscription numbers, E12 the unordered Gen2 Firestore field maps of owner ledger 840). The comparison records
+ * every mask a row used, with this reason id, and the promotion refuses a comparison that used a mask its record does not declare.
+ */
+export const DECLARED_MASK_REASONS = Object.freeze({
+  "authId-unknown-present": "E10",
+  "authId-api_key-uid": "E10",
+  "pubsub-subscription-numbers": "E11",
+  "firestore-field-maps-unordered": "E12",
+});
+
+// The id of the declared mask that changed a value, or none when the mask left the value as it was.
+const subscriptionMaskId = (value) =>
+  SUBSCRIPTION_NUMBERS.test(value) ? "pubsub-subscription-numbers" : null;
+const authIdMaskId = (value, observation) => {
+  if (observation.get(AUTH_TYPE_PATH)?.value === "api_key")
+    return UID_28.test(value) ? "authId-api_key-uid" : null;
+  return value.length > 0 ? "authId-unknown-present" : null;
+};
+
+/** The declared masks of a row: `{ path, mask, id }` entries (see above), or none. */
 export function declaredMasksFor(row, scenario) {
   const masks = [];
   if (row.generation === 2 && scenario.source === "pubsub")
-    masks.push({ path: "$.frame.event.data.subscription", mask: maskSubscription });
+    masks.push({
+      path: "$.frame.event.data.subscription",
+      mask: maskSubscription,
+      id: subscriptionMaskId,
+    });
   if (row.recipeId === "functions-events/firestore/auth-context" && scenario.source === "firestore")
-    masks.push({ path: "$.frame.event.authId", mask: maskAuthId });
+    masks.push({ path: "$.frame.event.authId", mask: maskAuthId, id: authIdMaskId });
   return masks;
 }
 
-/** A copy of a flattened observation with the declared masks applied to the string values at their paths. */
-export function applyDeclaredMasks(observation, masks) {
+/**
+ * A copy of a flattened observation with the declared masks applied to the string values at their paths. When `applied` is
+ * given, each mask that changed a value is recorded in it as `{ mask, path, reason }`.
+ */
+export function applyDeclaredMasks(observation, masks, applied) {
   const masked = new Map(observation);
-  for (const { path, mask } of masks) {
+  for (const { path, mask, id } of masks) {
     const leaf = masked.get(path);
-    if (leaf?.type === "string")
-      masked.set(path, { ...leaf, value: mask(leaf.value, observation) });
+    if (leaf?.type !== "string") continue;
+    const maskId = id?.(leaf.value, observation);
+    if (applied && maskId)
+      applied.push({ mask: maskId, path, reason: DECLARED_MASK_REASONS[maskId] });
+    masked.set(path, { ...leaf, value: mask(leaf.value, observation) });
   }
   return masked;
 }
+
+/** The paths of the unordered field maps (ledger 840) a row's observation holds, as the roots, or none. */
+function unorderedRootsUsed(row, scenario, observation) {
+  if (row.generation !== 2 || scenario.source !== "firestore") return [];
+  const roots =
+    row.recipeId === RETRY_RECIPE ? RETRY_FIRESTORE_FIELD_MAPS : GEN2_FIRESTORE_FIELD_MAPS;
+  return roots.filter((root) =>
+    [...observation.keys()].some(
+      (path) => path === root || path.startsWith(`${root}.`) || path.startsWith(`${root}[`),
+    ),
+  );
+}
+
+/** Every declared mask the comparison used, with its reason id and the number of rows that used it. */
+const summarizeMasks = (rows) => {
+  const used = new Map();
+  for (const row of rows)
+    for (const { mask, reason } of row.declaredMasks ?? []) {
+      const entry = used.get(mask) ?? { mask, reason, rows: new Set() };
+      entry.rows.add(row.row);
+      used.set(mask, entry);
+    }
+  return [...used.values()]
+    .map(({ mask, reason, rows: users }) => ({ mask, reason, rows: users.size }))
+    .toSorted((a, b) => byText(a.mask, b.mask));
+};
+
+/** The distinct `{ mask, path, reason }` entries of a list, in a fixed order. */
+const distinctMasks = (entries) =>
+  [
+    ...new Map(entries.map((entry) => [`${entry.mask}\u0000${entry.path}`, entry])).values(),
+  ].toSorted((a, b) => byText(a.mask, b.mask) || byText(a.path, b.path));
 
 const NEGATIVE = "none-in-window";
 const RETRY = "failed-then-succeeded-same-event";
@@ -488,18 +552,25 @@ export function compareRuns({
       if (observed.status !== "OK") note(PROFILES[index], observed.status, observed.reasons);
     });
     let productionOnly = {};
+    const appliedMasks = [];
     if (passes.every(({ status }) => status === "OK")) {
       productionOnly = mergeListings(passes.flatMap(({ listings }) => listings ?? []));
       const masks = declaredMasksFor(row, scenario);
-      const reference = applyDeclaredMasks(flatten(passes[0].observation), masks);
+      const reference = applyDeclaredMasks(flatten(passes[0].observation), masks, appliedMasks);
       const orderIgnored = orderIgnoredFor(row, scenario);
       const { disagreements, volatile } = deriveVolatile(
         reference,
-        applyDeclaredMasks(flatten(passes[1].observation), masks),
+        applyDeclaredMasks(flatten(passes[1].observation), masks, appliedMasks),
         {
           orderIgnored,
         },
       );
+      for (const root of unorderedRootsUsed(row, scenario, flatten(passes[0].observation)))
+        appliedMasks.push({
+          mask: "firestore-field-maps-unordered",
+          path: root,
+          reason: DECLARED_MASK_REASONS["firestore-field-maps-unordered"],
+        });
       volatilePaths[`${handler}/${scenario.id}`] = plainVolatile(volatile);
       if (disagreements.length > 0) {
         note(
@@ -513,7 +584,7 @@ export function compareRuns({
           const found = compareObservation(
             reference,
             volatile,
-            applyDeclaredMasks(flatten(localResults[index].observation), masks),
+            applyDeclaredMasks(flatten(localResults[index].observation), masks, appliedMasks),
             profile,
             { orderIgnored },
           );
@@ -548,6 +619,7 @@ export function compareRuns({
       production: productionSide,
       profiles,
       ...(Object.keys(productionOnly).length > 0 ? { productionOnly } : {}),
+      ...(appliedMasks.length > 0 ? { declaredMasks: distinctMasks(appliedMasks) } : {}),
     };
   });
 
@@ -566,6 +638,7 @@ export function compareRuns({
       match: count("MATCH"),
       diff: count("DIFF"),
       incomplete: count("INCOMPLETE"),
+      declaredMasks: summarizeMasks(rows),
     },
     volatilePaths: Object.fromEntries(
       Object.entries(volatilePaths).sort(([a], [b]) => byText(a, b)),

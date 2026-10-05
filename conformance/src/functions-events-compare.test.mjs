@@ -6,6 +6,7 @@ import {
   RETRY_FIRESTORE_FIELD_MAPS,
   applyDeclaredMasks,
   compareRuns,
+  DECLARED_MASK_REASONS,
   declaredMasksFor,
   orderIgnoredFor,
 } from "./functions-events/compare/compare.mjs";
@@ -60,6 +61,7 @@ test("rows cover every frozen case id once, named recipe#case#vN for the closure
     match: result.rows.filter(({ status }) => status === "MATCH").length,
     diff: result.rows.filter(({ status }) => status === "DIFF").length,
     incomplete: result.rows.filter(({ status }) => status === "INCOMPLETE").length,
+    declaredMasks: result.summary.declaredMasks,
   });
 });
 
@@ -999,4 +1001,88 @@ test("the id behind an auth-context write is masked as present for unknown and c
     masksFor({ ...row, recipeId: "functions-events/firestore/create" }, FIRESTORE),
     [],
   );
+});
+
+// ---- the comparison records the declared masks it used (review M-B2 (a)) ----------------------------------------------------
+
+test("every declared mask has a reason id, and applying one records it with its path and reason only when it changed a value", () => {
+  assert.deepEqual(DECLARED_MASK_REASONS, {
+    "authId-unknown-present": "E10",
+    "authId-api_key-uid": "E10",
+    "pubsub-subscription-numbers": "E11",
+    "firestore-field-maps-unordered": "E12",
+  });
+  const auth = { generation: 2, recipeId: "functions-events/firestore/auth-context" };
+  const authMasks = declaredMasksFor(auth, { source: "firestore" });
+  const used = (observation, masks) => {
+    const applied = [];
+    applyDeclaredMasks(observation, masks, applied);
+    return applied;
+  };
+  const authObservation = (authType, authId) => flatten({ frame: { event: { authType, authId } } });
+  const AUTH = "$.frame.event.authId";
+  assert.deepEqual(used(authObservation("unknown", "operator@example.test"), authMasks), [
+    { mask: "authId-unknown-present", path: AUTH, reason: "E10" },
+  ]);
+  assert.deepEqual(used(authObservation("api_key", "Mw39BUiBmgXKwPUHFjsCEJSwPws2"), authMasks), [
+    { mask: "authId-api_key-uid", path: AUTH, reason: "E10" },
+  ]);
+  // Near misses: nothing was masked, so nothing is recorded (an api_key id that is not a uid, an empty id, a missing one).
+  assert.deepEqual(used(authObservation("api_key", "alice"), authMasks), []);
+  assert.deepEqual(used(authObservation("unknown", ""), authMasks), []);
+  assert.deepEqual(used(flatten({ frame: { event: { authType: "unknown" } } }), authMasks), []);
+  const pubsub = declaredMasksFor({ generation: 2 }, { source: "pubsub" });
+  assert.deepEqual(
+    used(subscriptionObservation("eventarc-us-central1-pubsubpublishedv2-293232-sub-576"), pubsub),
+    [{ mask: "pubsub-subscription-numbers", path: SUBSCRIPTION, reason: "E11" }],
+  );
+  assert.deepEqual(used(subscriptionObservation("emulator-sub-jobs"), pubsub), []);
+  assert.deepEqual(
+    used(subscriptionObservation("eventarc-us-central1-pubsubpublishedv2-29323-sub-576"), pubsub),
+    [],
+  );
+  // Without a collector the masked observation is the same.
+  assert.equal(
+    applyDeclaredMasks(authObservation("unknown", "x@y.z"), authMasks).get(AUTH).value,
+    "<present>",
+  );
+});
+
+test("a comparison lists the masks of each row and, in its summary, every mask used with its reason and its number of rows", () => {
+  const result = compare(world());
+  const usedByRows = new Map();
+  for (const row of result.rows) {
+    if (row.declaredMasks === undefined) continue;
+    assert.ok(row.declaredMasks.length > 0, row.row);
+    for (const entry of row.declaredMasks) {
+      assert.equal(entry.reason, DECLARED_MASK_REASONS[entry.mask], `${row.row}: ${entry.mask}`);
+      assert.equal(typeof entry.path, "string");
+      usedByRows.set(entry.mask, (usedByRows.get(entry.mask) ?? new Set()).add(row.row));
+    }
+  }
+  assert.ok(
+    usedByRows.has("firestore-field-maps-unordered"),
+    "the Gen2 Firestore rows use ledger 840",
+  );
+  assert.deepEqual(
+    result.summary.declaredMasks,
+    [...usedByRows.keys()]
+      .toSorted()
+      .map((mask) => ({
+        mask,
+        reason: DECLARED_MASK_REASONS[mask],
+        rows: usedByRows.get(mask).size,
+      })),
+  );
+  // A Gen1 row compares its maps in order, so it records no mask; the Gen2 create row records the three roots it holds.
+  const gen1 = rowById(result, "functions-events/firestore/create#new-document#v1");
+  assert.equal(gen1.declaredMasks, undefined);
+  const gen2 = rowById(result, "functions-events/firestore/create#new-document#v2");
+  assert.deepEqual(
+    gen2.declaredMasks.map(({ path }) => path),
+    GEN2_FIRESTORE_FIELD_MAPS.filter((path) => gen2.declaredMasks.some((m) => m.path === path)),
+  );
+  assert.ok(gen2.declaredMasks.every(({ mask }) => mask === "firestore-field-maps-unordered"));
+  // The recording is deterministic: a second comparison of the same inputs gives the same masks.
+  assert.deepEqual(compare(world()).summary.declaredMasks, result.summary.declaredMasks);
 });

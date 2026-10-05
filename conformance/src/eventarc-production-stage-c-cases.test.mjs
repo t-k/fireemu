@@ -288,6 +288,9 @@ test("locations: only reads are sent, to real and invented locations, and the op
   );
 });
 
+const noteOf = (notes, kind, name) =>
+  notes.find((line) => line.note === kind && line.name === name);
+
 test("publish-boundaries: each limit is searched between its recorded bracket and the boundary is noted", async () => {
   const { summary, notes } = await runOne(publishBoundaries, {
     textLimit: 524_500,
@@ -299,25 +302,50 @@ test("publish-boundaries: each limit is searched between its recorded bracket an
     summary.cases.map((entry) => entry.outcome),
     ["completed"],
   );
-  const boundary = (name) =>
-    notes
-      .map((line) => JSON.parse(JSON.stringify(line)))
-      .find(
-        (line) =>
-          JSON.stringify(line).includes("limit-boundary") && JSON.stringify(line).includes(name),
+  const found = (name) => {
+    const note = noteOf(notes, "limit-boundary", name);
+    assert.ok(note, name);
+    return [note.accepted, note.refused, note.unknown];
+  };
+  assert.deepEqual(found("event-text-length"), [524_500, 524_501, false]);
+  assert.deepEqual(found("extra-attributes"), [94, 95, false]);
+  assert.deepEqual(found("attribute-name-length"), [253, 254, false]);
+});
+
+// Model-based: for any limit inside the recorded bracket the search finds it exactly, in at most the steps
+// its interval needs, and the case stays inside its ceiling.
+test("property: for any limits inside the recorded brackets every search pins its boundary exactly and the case fits its ceiling", async () => {
+  let seed = 424242;
+  const next = (low, high) => {
+    seed = (seed * 1103515245 + 12345) & 0x7fffffff;
+    return low + (seed % (high - low + 1));
+  };
+  for (let round = 0; round < 25; round += 1) {
+    const textLimit = next(524_032, 524_799);
+    const attributeLimit = next(7, 105);
+    const keyLimit = next(4, 258);
+    const { summary, notes, inCase } = await runOne(publishBoundaries, {
+      textLimit,
+      attributeLimit,
+      keyLimit,
+      doneAfter: 3,
+    });
+    const label = JSON.stringify({ textLimit, attributeLimit, keyLimit });
+    assert.equal(summary.cases[0].outcome, "completed", label);
+    assert.ok(inCase.length <= publishBoundaries.requests, `${label}: ${inCase.length}`);
+    for (const [name, accepted] of [
+      ["event-text-length", textLimit],
+      ["extra-attributes", attributeLimit - 6],
+      ["attribute-name-length", keyLimit - 3],
+    ]) {
+      const note = noteOf(notes, "limit-boundary", name);
+      assert.deepEqual(
+        [note?.accepted, note?.refused],
+        [accepted, accepted + 1],
+        `${name} ${label}`,
       );
-  assert.ok(boundary("event-text-length"));
-  const text = JSON.stringify(boundary("event-text-length"));
-  assert.match(text, /"accepted":524500/);
-  assert.match(text, /"refused":524501/);
-  assert.match(
-    JSON.stringify(boundary("extra-attributes")),
-    /"accepted":94.*"refused":95|"refused":95.*"accepted":94/,
-  );
-  assert.match(
-    JSON.stringify(boundary("attribute-name-length")),
-    /"accepted":253.*"refused":254|"refused":254.*"accepted":253/,
-  );
+    }
+  }
 });
 
 test("publish-boundaries: a bracket that moved ends only its own search, and the case goes on", async () => {
@@ -330,13 +358,7 @@ test("publish-boundaries: a bracket that moved ends only its own search, and the
     summary.cases.map((entry) => entry.outcome),
     ["completed"],
   );
-  assert.ok(
-    notes.some(
-      (line) =>
-        JSON.stringify(line).includes("bracket-moved") &&
-        JSON.stringify(line).includes("event-text-length"),
-    ),
-  );
+  assert.ok(noteOf(notes, "bracket-moved", "event-text-length"));
   assert.ok(
     inCase.filter((call) => call.op === "publishEvents").length > 20,
     "the other searches and the order pairs still ran",
@@ -368,4 +390,48 @@ test("publish-boundaries: the order-of-checks pairs each carry exactly the two n
     "time is a string + xml",
   ])
     assert.ok(single.includes(pair), pair);
+});
+
+// Model-based: whatever the service does while an operation runs (nothing, a refusal, a second operation),
+// the case completes without touching a name that is not the run's, and when every deletion answers, the
+// cleanup leaves none of the run's channels behind.
+test("property: channel-busy and channel-order complete in every mode of the model and leave nothing of the run behind when deletions answer", async () => {
+  for (const busy of ["off", "reject", "accept"])
+    for (const doneAfter of [1, 2, 3, 5, 10])
+      for (const item of [channelBusy, channelOrder, channelIds]) {
+        const label = `${item.id} busy=${busy} doneAfter=${doneAfter}`;
+        const { summary, world } = await runOne(item, {
+          busy,
+          doneAfter,
+          duplicate: "409",
+          acceptAnyId: true,
+          acceptVariants: doneAfter % 2 === 0,
+        });
+        assert.equal(summary.cases[0].outcome, "completed", label);
+        assert.deepEqual(summary.cleanup.errors, [], label);
+        assert.deepEqual(summary.cleanup.leftover, [], label);
+        assert.deepEqual(
+          [...world.channels.keys()].filter((name) => name.includes(`/fe${RUN}-`)),
+          [],
+          label,
+        );
+      }
+});
+
+test("property: an unknown deletion is never re-sent, whatever else the service does", async () => {
+  for (const deleteAnswer of ["unknown-effective", "unknown-noeffect"])
+    for (const busy of ["off", "reject", "accept"]) {
+      const { inCase, summary } = await runOne(channelBusy, {
+        busy,
+        deleteAnswer,
+        duplicate: "409",
+      });
+      const label = `${deleteAnswer} ${busy}`;
+      assert.equal(summary.cases[0].outcome, "completed", label);
+      // Per name, one deletion in the case: the one that answered unknown is not sent again.
+      const perName = new Map();
+      for (const call of inCase.filter((c) => c.op === "deleteChannel"))
+        perName.set(call.path, (perName.get(call.path) ?? 0) + 1);
+      for (const [path, count] of perName) assert.equal(count, 1, `${label} ${path}`);
+    }
 });

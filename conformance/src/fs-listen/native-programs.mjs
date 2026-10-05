@@ -353,7 +353,7 @@ export const NATIVE_PROGRAMS = [
 export const LONG_PROGRAMS = [resumeTokenExpired];
 
 /** The kinds of token a `save` step can ask for (see native-run.mjs). */
-const SAVE_KINDS = ["current", "global"];
+const SAVE_KINDS = new Set(["current", "global"]);
 
 /** Checks a program list is well formed; returns the problems (empty when it is). */
 export function programProblems(programs) {
@@ -409,7 +409,7 @@ export function programProblems(programs) {
           break;
         case "save":
           usesStream(step.stream);
-          if (step.kind !== undefined && !SAVE_KINDS.includes(step.kind))
+          if (step.kind !== undefined && !SAVE_KINDS.has(step.kind))
             problems.push(`${here}: unknown save kind ${step.kind}`);
           tokens.add(step.token);
           tokens.add(step.time);

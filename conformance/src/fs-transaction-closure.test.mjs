@@ -55,7 +55,7 @@ const recordedConditions = new Map([
   ["FS-TRANSACTION/total-lifetime-expiry", ["P11", "P12", "P13A"]],
 ]);
 
-test("FS-TRANSACTION published records cover eight conditions and promote none", () => {
+test("FS-TRANSACTION published records verify eight conditions and not the parent", () => {
   const closure = JSON.parse(readFileSync(closureUrl, "utf8"));
   const root = new URL("../../", import.meta.url);
   for (const condition of closure.conditions) {
@@ -64,7 +64,7 @@ test("FS-TRANSACTION published records cover eight conditions and promote none",
       assert.equal(condition.recordedComparison, undefined, condition.conditionId);
       continue;
     }
-    assert.equal(condition.status, "PRODUCTION_RECORDED", condition.conditionId);
+    assert.equal(condition.status, "VERIFIED", condition.conditionId);
     assert.equal(condition.productionObservation, "RECORDED_TWICE_STRICT_COMPARED");
     const recorded = condition.recordedComparison;
     assert.equal(recorded.profile, "strict");
@@ -95,6 +95,25 @@ test("FS-TRANSACTION published records cover eight conditions and promote none",
     }
     if (["FS-TRANSACTION/idle-expiry", "FS-TRANSACTION/total-lifetime-expiry"].includes(condition.conditionId))
       assert.match(recorded.boundaryRuling, /110\.70, 122\.96.*298\.7, 302\.2/);
+    // the evidence block names the recordings, the one artifact and exactly the records above
+    const { evidence } = condition;
+    assert.deepEqual(
+      evidence.productionRecordings.map(({ program }) => program),
+      recorded.programs.map(({ program }) => program),
+    );
+    for (const run of evidence.productionRecordings) {
+      assert.equal(run.recordings, 2, run.program);
+      assert.match(run.project, /^fireemu-oracle-(sbx|txn)$/, run.program);
+    }
+    assert.deepEqual(evidence.comparisonPaths, recorded.programs.map(({ comparisonPath }) => comparisonPath));
+    assert.deepEqual(evidence.rows, { MATCH: recorded.programs.reduce((sum, { rows }) => sum + rows, 0) });
+    assert.match(evidence.finalArtifactSha256, /^[0-9a-f]{64}$/);
+    assert.match(evidence.sourceCommit, /^[0-9a-f]{40}$/);
+    for (const entry of recorded.programs) {
+      const { artifact } = JSON.parse(readFileSync(new URL(entry.comparisonPath, root), "utf8"));
+      assert.equal(artifact.binarySha256, evidence.finalArtifactSha256, entry.program);
+      assert.equal(artifact.sourceCommit, evidence.sourceCommit, entry.program);
+    }
     assert.match(condition.note, /not COMPAT_VERIFIED/);
     assert.doesNotMatch(condition.note, /not a published redacted record yet/i);
   }
@@ -112,7 +131,7 @@ test("FS-TRANSACTION published records cover eight conditions and promote none",
   assert.equal(artifacts.size, 1);
 });
 
-test("FS-TRANSACTION recorded REST subset leaves every frozen condition open", () => {
+test("FS-TRANSACTION recorded REST subset leaves the other frozen conditions open", () => {
   const closure = JSON.parse(readFileSync(closureUrl, "utf8"));
   const partial = new Map([
     ["FS-TRANSACTION/idle-expiry", 5],
@@ -123,9 +142,9 @@ test("FS-TRANSACTION recorded REST subset leaves every frozen condition open", (
     "spec/compatibility/broad-runs/fs-transaction-expiry-retry-04-recorded-comparison-v1.json";
   const observed = [];
   for (const condition of closure.conditions) {
-    assert.notEqual(condition.status, "VERIFIED");
+    assert.equal(condition.status === "VERIFIED", recordedConditions.has(condition.conditionId), condition.conditionId);
     if (partial.has(condition.conditionId)) {
-      assert.equal(condition.status, "PRODUCTION_RECORDED");
+      assert.equal(condition.status, "VERIFIED");
       assert.equal(condition.partialEvidence.coverage, "PARTIAL");
       assert.equal(condition.partialEvidence.reference, reference);
       assert.equal(condition.partialEvidence.transport, "rest");
@@ -254,4 +273,51 @@ test("FS-TRANSACTION proposal names every acceptance boundary without claiming c
     closure.conditions.every(({ status }) => status === "VERIFIED") &&
       closure.closureReview.decision === "APPROVED",
   );
+});
+
+test("FS-TRANSACTION notes of VERIFIED conditions do not call the condition open", () => {
+  const closure = JSON.parse(readFileSync(closureUrl, "utf8"));
+  const stale = /remains open|remain required|no status change|gRPC is not recorded|until local shadow v5|older strict/i;
+  for (const condition of closure.conditions.filter(({ status }) => status === "VERIFIED")) {
+    assert.doesNotMatch(condition.note, stale, condition.conditionId);
+    for (const item of condition.partialEvidence?.remainingBoundaries ?? [])
+      assert.doesNotMatch(item, stale, condition.conditionId);
+  }
+});
+
+test("FS-TRANSACTION E04 rows of the verified conditions are replayed on the release binary, the idle cases at 121 s of idle", () => {
+  const closure = JSON.parse(readFileSync(closureUrl, "utf8"));
+  const root = new URL("../../", import.meta.url);
+  const prefixes = new Map([
+    ["FS-TRANSACTION/idle-expiry", "idle-expiry/"],
+    ["FS-TRANSACTION/failed-commit-and-rollback", "finished-token/"],
+    ["FS-TRANSACTION/retry-token-lifecycle", "retry-token/"],
+  ]);
+  for (const [id, prefix] of prefixes) {
+    const condition = closure.conditions.find(({ conditionId }) => conditionId === id);
+    assert.equal(condition.status, "VERIFIED", id);
+    const { releaseReplay } = condition.partialEvidence;
+    assert.deepEqual(condition.evidence.e04ReleaseReplay, releaseReplay, id);
+    const record = JSON.parse(readFileSync(new URL(releaseReplay.path, root), "utf8"));
+    assert.equal(record.kind, "fs-transaction-expiry-retry-04-release-replay-v1");
+    assert.equal(record.artifact.binarySha256, condition.evidence.finalArtifactSha256, id);
+    assert.equal(record.artifact.sourceCommit, condition.evidence.sourceCommit, id);
+    assert.equal(record.summary.mismatches, 0);
+    const rows = record.recordings.flatMap((entry) => entry.rows).filter((row) => row.caseId.startsWith(prefix));
+    assert.equal(releaseReplay.rows.MATCH, rows.length, id);
+    assert.ok(rows.every((row) => row.match), id);
+    for (const caseId of condition.partialEvidence.caseIds) {
+      assert.ok(rows.some((row) => row.caseId === caseId), `${id}: ${caseId} is replayed`);
+      if (id === "FS-TRANSACTION/idle-expiry" && record.replay.idleCases.includes(caseId))
+        assert.ok(rows.some((row) => row.caseId === `${caseId}#postState`), `${id}: ${caseId} post state is replayed`);
+    }
+  }
+  // the idle observations ran at 121 s of idle on the control clock, inside the interval production narrowed for the idle threshold (the commit and the rollback were recorded at 120.35 to 121.15 s;
+  // the lock release at 124.7 to 125.2 s, which strict refuses as it refuses every idle above 120 s)
+  const record = JSON.parse(
+    readFileSync(new URL("spec/compatibility/broad-runs/fs-transaction-expiry-retry-04-release-replay-v1.json", root), "utf8"),
+  );
+  assert.equal(record.replay.idleCases.length, 3);
+  const idles = Object.values(record.replay.localIdleSeconds);
+  assert.ok(idles.length >= 3 && idles.every((idle) => idle >= 110.7 && idle < 122.96 || idle === 20));
 });

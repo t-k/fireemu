@@ -32,6 +32,13 @@ from txn_program_program import RequestBudget, compile_plan  # noqa: E402
 
 DEFAULT_PROJECT = "fireemu-oracle-sbx"
 
+# A replay is refused when the age of a token of at least TOKEN_AGE_MINIMUM seconds, as the emulator saw it, differs from the recorded age by more than TOKEN_AGE_TOLERANCE
+# seconds, or lies on the other side of one of strict's limits (120 s idle, 270 s lifetime, 300 s memory) than the recorded one: a boundary row can sit well inside the
+# tolerance (P10-C's refused 120 s Commit was recorded at 120.54 to 120.58 s, 0.54 s from the limit), so the side counts, not the distance. The tolerance only has to
+# cover the steps the replay does not pace (about 2 s per chain) and the begin's own production duration (about 1.2 s).
+TOKEN_AGE_MINIMUM = 100.0
+TOKEN_AGE_TOLERANCE = 4.0
+
 
 def table_project(table):
     """The sandbox project a table was recorded in; a table that names none was recorded in the shared project."""
@@ -186,10 +193,11 @@ def main():
         # the waits advance the emulator's virtual clock and reproduce the production token ages (see txn_replay_clock)
         from txn_replay_clock import PacedCollector, VirtualClock, production_age_steps
 
-        clock = VirtualClock(os.environ["FIREEMU_CONTROL_URL"], os.environ["FIREEMU_CONTROL_TOKEN"])
+        clock = VirtualClock(os.environ["FIREEMU_CONTROL_URL"], os.environ["FIREEMU_CONTROL_TOKEN"], frozen=True)
         steps = production_age_steps(source["steps"]) if recorded else {}
-        receipt = PacedCollector(plan, table, RequestBudget(plan, table), wire, "owner", save=lambda _state: None, production_steps=steps,
-                                 monotonic=clock.now, utc=clock.utc, sleep=clock.sleep).run()
+        paced = PacedCollector(plan, table, RequestBudget(plan, table), wire, "owner", save=lambda _state: None, production_steps=steps, emulator_clock=clock.emulator_now,
+                               monotonic=clock.now, utc=clock.utc, sleep=clock.sleep)
+        receipt = paced.run()
     else:
         receipt = Collector(plan, table, RequestBudget(plan, table), wire, "owner", save=lambda _state: None).run()
     production = projection(source, table) if recorded else source["projection"]
@@ -210,6 +218,17 @@ def main():
         result["clock"] = clock_rows(source["steps"], receipt["steps"]) if recorded else None
         rows = result["cases"] + result["reads"] + (result["commitTimes"] or []) + (result["orders"] or []) + (result["clock"] or [])
         result["mismatches"] = sum(not row["match"] for row in rows)
+        if os.environ.get("COMPARE_CLOCK") == "virtual" and recorded:
+            # what each wait reached beside what the recording had: the record shows the boundary rows were compared at the recorded ages
+            from txn_replay_clock import achieved_ages, dispatch_gaps
+
+            waited = {step["id"] for step in plan["steps"] if "waitSeconds" in step}
+            result["achievedAges"] = achieved_ages(dispatch_gaps(source["steps"], waited), dispatch_gaps(receipt["steps"], waited))
+            # the age the emulator itself saw at every request of a long-lived token, beside the recorded one: a replay whose emulator-side age is off is refused
+            from txn_replay_clock import apply_age_rows, judge_token_ages, production_token_ages, token_ages
+
+            apply_age_rows(result, judge_token_ages(production_token_ages(plan["steps"], source["steps"]), token_ages(plan["steps"], paced.marks.before_times, paced.marks.after_times),
+                                                    tolerance=TOKEN_AGE_TOLERANCE, minimum=TOKEN_AGE_MINIMUM))
     out.write_text(json.dumps(result, indent=1))
     print("complete", receipt["complete"], receipt["failureType"], "mismatches", result.get("mismatches"))
     for row in (result["cases"] or []) + (result["reads"] or []) + (result["commitTimes"] or []) + (result.get("orders") or []) + (result.get("clock") or []):

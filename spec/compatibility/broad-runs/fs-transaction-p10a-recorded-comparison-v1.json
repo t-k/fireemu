@@ -11,11 +11,11 @@
   "productionRequests": 0,
   "profile": "strict",
   "artifact": {
-    "sourceCommit": "da9480d7842b4600d064da7f1d8cef2914664ecf",
-    "binarySha256": "852816f997d99beaa82ef8f8c10253af4b04c536bf612725a76a06e08fde70cb"
+    "sourceCommit": "774a9f24c62abdd7381c66797d6202ed03f24666",
+    "binarySha256": "d0d8d43726a808b600f702f1f6be26c4863fc48dd7b4971a519adcae9ce01888"
   },
   "comparer": {
-    "sha256": "cd788ad83279453792d9518aaa73e1a898c3ef7433c6ed9ed50cf0baef203eab",
+    "sha256": "e9b9e3b40d29e2ca87c1002ca6abae5852a66d89344b737c0b813bd7e90a150e",
     "replayClock": "virtual"
   },
   "recordings": [
@@ -394,7 +394,34 @@
           },
           "match": true
         }
-      ]
+      ],
+      "achievedAges": [
+        {
+          "site": "live/commit",
+          "production": 55.43151512509212,
+          "local": 55.4320000000298,
+          "difference": 0.0
+        },
+        {
+          "site": "expired/commit",
+          "production": 65.4212901671417,
+          "local": 65.42199999978766,
+          "difference": 0.001
+        },
+        {
+          "site": "rollback-first/rollback",
+          "production": 65.45797316683456,
+          "local": 65.45800000010058,
+          "difference": 0.0
+        },
+        {
+          "site": "get-first/expired-read",
+          "production": 65.41514516668394,
+          "local": 65.4159999997355,
+          "difference": 0.001
+        }
+      ],
+      "tokenAges": []
     },
     {
       "recording": 2,
@@ -771,7 +798,34 @@
           },
           "match": true
         }
-      ]
+      ],
+      "achievedAges": [
+        {
+          "site": "live/commit",
+          "production": 55.41688908310607,
+          "local": 55.41699999989942,
+          "difference": 0.0
+        },
+        {
+          "site": "expired/commit",
+          "production": 65.45075808279216,
+          "local": 65.45099999988452,
+          "difference": 0.0
+        },
+        {
+          "site": "rollback-first/rollback",
+          "production": 65.46266591595486,
+          "local": 65.46299999998882,
+          "difference": 0.0
+        },
+        {
+          "site": "get-first/expired-read",
+          "production": 65.4406768749468,
+          "local": 65.44099999964237,
+          "difference": 0.0
+        }
+      ],
+      "tokenAges": []
     }
   ],
   "summary": {
@@ -783,6 +837,6 @@
     "Raw REST bodyBytes, content-length and member-order layout were not retained; the record proves decoded response semantics, not wire layout.",
     "The closure review and the final-artifact regression are separate conditions and stay open.",
     "The artifact is the strict profile of the commit named; a later source change needs a new replay.",
-    "Idle and lifetime boundaries are judged by the intervals production narrowed: the idle threshold lies in [110.70, 122.96) s and the age at which an expired token is forgotten in (298.7, 302.2] s; strict's values (a 120 s idle limit, a 270 s total lifetime, 300 s of memory) lie inside them. The replay runs on the emulator's virtual clock and reproduces each recorded idle (the least the production token idled before the request) and each recorded token age, so a row at a boundary is compared at the measured production value, not at the nominal wait."
+    "Idle and lifetime boundaries: the idle threshold is judged by the interval production narrowed, [110.70, 122.96) s (ledger 809 (5)), and strict's 120 s idle limit lies inside it; the age at which an expired token is forgotten is judged by (298.7, 302.2] s, which holds strict's 300 s of memory. Strict's 270 s total lifetime is supported by the rows themselves, not by an interval: live reads at token ages up to 253.3 s answered 0 and the first refusals came at 280.4 s, so production's lifetime lies in about (253.3, 280.4] s and 270 s lies inside it. The replay runs on the emulator's virtual clock, advanced by exactly each wait, and reproduces each recorded idle (the least the production token idled before the request) and each recorded token age; the idle or age each wait reached is published beside the recorded one (achievedAges), so a row at a boundary is compared at the measured production value, not at the nominal wait."
   ]
 }

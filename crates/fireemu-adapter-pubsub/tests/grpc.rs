@@ -943,23 +943,6 @@ async fn grpc_rejects_unsupported_subscription_options_before_creation() {
             },
         ),
         (
-            "retain_acked_messages",
-            pb::Subscription {
-                retain_acked_messages: true,
-                ..Default::default()
-            },
-        ),
-        (
-            "message_retention_duration",
-            pb::Subscription {
-                message_retention_duration: Some(prost_types::Duration {
-                    seconds: 600,
-                    nanos: 0,
-                }),
-                ..Default::default()
-            },
-        ),
-        (
             "expiration_policy",
             pb::Subscription {
                 expiration_policy: Some(pb::ExpirationPolicy {

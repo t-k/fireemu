@@ -1085,7 +1085,11 @@ function v1Context(msg) {
         eventType: legacy,
         // A string: firebase-functions rewrites a legacy event type's resource into
         // { service, name } itself (makeCloudFunction); an object here would be nested.
-        resource: event.source,
+        resource: [event.project, event.database, event.document].every(
+          value => typeof value === "string" && value.length > 0,
+        )
+          ? `projects/${event.project}/databases/${event.database}/documents/${event.document}`
+          : event.source,
         params: event.params || {},
       };
     }
@@ -1358,6 +1362,54 @@ async function makeHttpServer(functions, manifest) {
   });
 }
 
+let writtenFirestoreCodec;
+
+function firestoreProtoTimestamp(value) {
+  if (typeof value !== "string") return value;
+  const match = /^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})(?:\.(\d{1,9}))?(Z|[+-]\d{2}:\d{2})$/.exec(value);
+  if (!match) throw new Error("invalid Firestore protobuf timestamp");
+  const milliseconds = Date.parse(`${match[1]}${match[3]}`);
+  if (!Number.isFinite(milliseconds)) throw new Error("invalid Firestore protobuf timestamp");
+  return { seconds: Math.floor(milliseconds / 1000), nanos: Number((match[2] ?? "").padEnd(9, "0")) };
+}
+
+function firestoreProtoFields(fields) {
+  return Object.fromEntries(Object.entries(fields ?? {}).map(([key, value]) => {
+    const converted = { ...value };
+    if (value.timestampValue !== undefined) converted.timestampValue = firestoreProtoTimestamp(value.timestampValue);
+    if (value.mapValue !== undefined) converted.mapValue = { fields: firestoreProtoFields(value.mapValue.fields) };
+    if (value.arrayValue !== undefined) {
+      converted.arrayValue = { values: (value.arrayValue.values ?? []).map(item => firestoreProtoFields({ item }).item) };
+    }
+    return [key, converted];
+  }));
+}
+
+function writtenFirestoreEvent(event) {
+  if (!["google.cloud.firestore.document.v1.written", "google.cloud.firestore.document.v1.written.withAuthContext"].includes(event.type) ||
+      !event.datacontenttype?.includes("application/json")) return event;
+  // The SDK's protobuf decoder derives missing snapshot paths from typed metadata,
+  // independently of the canonical database source. Reuse the codebase's shipped codec.
+  if (!writtenFirestoreCodec) {
+    const require = createRequire(join(sourceDir, "package.json"));
+    const { root } = firebaseFunctionsPackage(require);
+    writtenFirestoreCodec = require(join(root, "protos/compiledFirestore.js")).google.events.cloud.firestore.v1.DocumentEventData;
+  }
+  const data = { ...event.data };
+  for (const side of ["value", "oldValue"]) {
+    if (data[side] === undefined || data[side] === null) continue;
+    const document = { ...data[side], fields: firestoreProtoFields(data[side].fields) };
+    for (const time of ["createTime", "updateTime"]) {
+      if (document[time] !== undefined) document[time] = firestoreProtoTimestamp(document[time]);
+    }
+    data[side] = document;
+  }
+  const message = writtenFirestoreCodec.fromObject(data);
+  const invalid = writtenFirestoreCodec.verify(message);
+  if (invalid) throw new Error(`invalid Firestore protobuf event: ${invalid}`);
+  return { ...event, datacontenttype: "application/protobuf", data: Buffer.from(writtenFirestoreCodec.encode(message).finish()) };
+}
+
 async function invoke(functions, manifest, msg) {
   const spec = manifest.functions.find((f) => f.name === msg.function);
   if (!spec) throw new Error("unknown function");
@@ -1389,6 +1441,8 @@ async function invoke(functions, manifest, msg) {
           return;
         }
         case "firestore":
+          await fn(writtenFirestoreEvent(msg.event));
+          return;
         case "storage":
         case "pubsub":
         // A custom event reaches the handler as the CloudEvent itself, exactly as the official

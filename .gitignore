@@ -39,3 +39,6 @@ node_modules
 __pycache__/
 tools/bench/exec_engine
 .bench-output/
+
+# Runner-built copies of the fs-write-txn tool directory (tools/compat-broad/fs-write-txn/runall.py and fs_txn_expiry_idle_replay.py): never tracked
+tools/compat-broad/fs-write-txn-overlay-*/

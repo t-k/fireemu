@@ -681,6 +681,10 @@ pub struct StorageState {
     next_upload: u64,
     rng: SplitMix64,
     events: Vec<StorageEvent>,
+    /// Production's identities and ordering (the strict profile): generations are microsecond
+    /// timestamps and a minted download token is listed first. Off, generations count from 1
+    /// and tokens are appended, as before.
+    production_order: bool,
 }
 
 fn blob_bytes(blobs: &BTreeMap<BlobId, Arc<Vec<u8>>>) -> u64 {
@@ -741,7 +745,17 @@ impl StorageState {
             next_upload: 0,
             rng: SplitMix64::new(seed),
             events: Vec::new(),
+            production_order: false,
         }
+    }
+
+    /// Selects production's identities and ordering: generations drawn as microsecond
+    /// timestamps of the commit (never below the previous generation plus one) and minted
+    /// download tokens listed newest first (recorded, lean-v5: a generation is the creation time
+    /// in microseconds, 16 digits; `downloadTokens` reads `<newest>,<older>`). The official
+    /// emulator draws epoch milliseconds; the default counter is kept for the emulator profile.
+    pub fn set_production_order(&mut self, on: bool) {
+        self.production_order = on;
     }
 
     fn upload_bytes(uploads: &BTreeMap<UploadId, UploadSession>) -> u64 {
@@ -926,6 +940,7 @@ impl StorageState {
             next_upload: self.next_upload,
             rng: self.rng.clone(),
             events: Vec::new(),
+            production_order: self.production_order,
         }
     }
 
@@ -1092,9 +1107,18 @@ impl StorageState {
     /// The generation the next commit will draw, for the `request.resource` a rules
     /// evaluation sees before the commit exists (the official emulator builds the whole
     /// prospective object, generation included, before its rules run).
-    pub fn next_generation_preview(&self) -> Result<u64, StorageError> {
-        self.next_generation
+    pub fn next_generation_preview(&self, now: LogicalInstant) -> Result<u64, StorageError> {
+        let successor = self
+            .next_generation
             .checked_add(1)
+            .ok_or(StorageError::IdentityExhausted)?;
+        let drawn = if self.production_order {
+            let micros = u64::try_from(now.as_nanos().div_euclid(1_000)).unwrap_or(0);
+            successor.max(micros)
+        } else {
+            successor
+        };
+        Some(drawn)
             .filter(|generation| *generation <= MAX_PERSISTED_IDENTITY)
             .ok_or(StorageError::IdentityExhausted)
     }
@@ -1250,7 +1274,7 @@ impl StorageState {
             .next_blob
             .checked_add(1)
             .ok_or(StorageError::IdentityExhausted)?;
-        let next_generation = self.next_generation_preview()?;
+        let next_generation = self.next_generation_preview(now)?;
         let blob = BlobId(next_blob);
         let meta = ObjectMetadata {
             bucket: bucket.clone(),
@@ -1382,7 +1406,11 @@ impl StorageState {
         let mut next_rng = self.rng.clone();
         let token = Self::token_from(&mut next_rng);
         let mut updated = meta.clone();
-        updated.download_tokens.push(token);
+        if self.production_order {
+            updated.download_tokens.insert(0, token);
+        } else {
+            updated.download_tokens.push(token);
+        }
         updated.metageneration = next_metageneration;
         updated.updated = now;
         let event = StorageEvent::MetadataUpdated(updated.clone());
@@ -1569,6 +1597,56 @@ impl StorageState {
         page_token: Option<&str>,
         max_results: Option<usize>,
     ) -> ListPage {
+        self.list_matching(bucket, prefix, delimiter, page_token, max_results, &|_| {
+            true
+        })
+    }
+
+    /// Up to `limit` names of the objects under `prefix`, in name order, from `start` on. A caller
+    /// that has to run a costly test over the names reads them in batches, taking the lock for
+    /// one batch at a time and testing the batch after the lock is released.
+    #[must_use]
+    pub fn object_names_from(
+        &self,
+        bucket: &BucketName,
+        prefix: &str,
+        start: std::ops::Bound<&str>,
+        limit: usize,
+    ) -> Vec<String> {
+        use std::ops::Bound;
+        let lower = match start {
+            Bound::Unbounded => Bound::Included((bucket.clone(), ObjectName::range_start(prefix))),
+            Bound::Included(name) => {
+                Bound::Included((bucket.clone(), ObjectName::range_start(name.max(prefix))))
+            }
+            Bound::Excluded(name) => {
+                Bound::Excluded((bucket.clone(), ObjectName::range_start(name)))
+            }
+        };
+        self.objects
+            .range((lower, Bound::Unbounded))
+            .take_while(|((candidate_bucket, name), _)| {
+                candidate_bucket == bucket && name.as_str().starts_with(prefix)
+            })
+            .take(limit)
+            .map(|((_, name), _)| name.as_str().to_owned())
+            .collect()
+    }
+
+    /// [`Self::list`] over the objects whose names `matches` accepts (the JSON API's
+    /// `startOffset`, `endOffset` and `matchGlob` filters): the filter applies to object names
+    /// before they are folded at the delimiter, so a prefix appears exactly when a matching
+    /// object lies under it.
+    #[must_use]
+    pub fn list_matching(
+        &self,
+        bucket: &BucketName,
+        prefix: &str,
+        delimiter: Option<&str>,
+        page_token: Option<&str>,
+        max_results: Option<usize>,
+        matches: &dyn Fn(&str) -> bool,
+    ) -> ListPage {
         let max = max_results
             .unwrap_or(DEFAULT_LIST_PAGE_SIZE)
             .min(DEFAULT_LIST_PAGE_SIZE);
@@ -1584,7 +1662,7 @@ impl StorageState {
                     .get(&(bucket.clone(), ObjectName::range_start(token)))
                     .is_some_and(|metadata| {
                         let name = metadata.name.as_str();
-                        name.starts_with(prefix) && fold(name).is_none()
+                        name.starts_with(prefix) && matches(name) && fold(name).is_none()
                     })
             });
             let item_start = page_token.filter(|_| token_is_item).unwrap_or(prefix);
@@ -1593,6 +1671,9 @@ impl StorageState {
             for ((candidate_bucket, name), _) in self.objects.range(lower..) {
                 if candidate_bucket != bucket || !name.as_str().starts_with(prefix) {
                     break;
+                }
+                if !matches(name.as_str()) {
+                    continue;
                 }
                 if let Some(folded) = fold(name.as_str()) {
                     if prefixes.last() != Some(&folded) {
@@ -1614,6 +1695,7 @@ impl StorageState {
                 .take_while(|((candidate_bucket, name), _)| {
                     candidate_bucket == bucket && name.as_str().starts_with(prefix)
                 })
+                .filter(|((_, name), _)| matches(name.as_str()))
                 .any(|((_, name), _)| {
                     let folded = fold(name.as_str());
                     folded.as_deref().unwrap_or(name.as_str()) == token
@@ -1626,6 +1708,9 @@ impl StorageState {
         for ((candidate_bucket, name), meta) in self.objects.range(lower..) {
             if candidate_bucket != bucket || !name.as_str().starts_with(prefix) {
                 break;
+            }
+            if !matches(name.as_str()) {
+                continue;
             }
             let folded = fold(name.as_str());
             let entry_name = folded.as_deref().unwrap_or(name.as_str());
@@ -1934,6 +2019,17 @@ impl StorageState {
             UploadState::Denied(received) => (*received, None),
             UploadState::Receiving | UploadState::Aborted => (u.received.len() as u64, None),
         })
+    }
+
+    /// The CRC32C and MD5 of the bytes an upload session holds so far, for the JSON API's
+    /// `x-goog-running-hash` and `x-range-md5` headers on a 308.
+    pub fn upload_running_hashes(
+        &mut self,
+        id: &UploadId,
+        now: LogicalInstant,
+    ) -> Result<(u32, [u8; 16]), StorageError> {
+        let u = self.upload_mut(id, now)?;
+        Ok((crc32c(&u.received), md5(&u.received)))
     }
 
     /// The full lifecycle phase of an upload, for the status queries the protocols answer.

@@ -11,11 +11,11 @@
   "productionRequests": 0,
   "profile": "strict",
   "artifact": {
-    "sourceCommit": "da9480d7842b4600d064da7f1d8cef2914664ecf",
-    "binarySha256": "852816f997d99beaa82ef8f8c10253af4b04c536bf612725a76a06e08fde70cb"
+    "sourceCommit": "774a9f24c62abdd7381c66797d6202ed03f24666",
+    "binarySha256": "d0d8d43726a808b600f702f1f6be26c4863fc48dd7b4971a519adcae9ce01888"
   },
   "comparer": {
-    "sha256": "3313d77fb70da7695817d36b0485ed7cfcacabcd5beddf5201c74d2278d598f5",
+    "sha256": "7b360afde62c053ae359bc786812b65578b5ef544ef8c521e21f3cf41eb4de8c",
     "replayClock": "virtual"
   },
   "table": {
@@ -556,6 +556,268 @@
           },
           "match": true
         }
+      ],
+      "achievedAges": [
+        {
+          "site": "rest/keepalive-1",
+          "production": 25.84889966621995,
+          "local": 25.84899999992922,
+          "difference": 0.0
+        },
+        {
+          "site": "rest/keepalive-2",
+          "production": 26.98909716680646,
+          "local": 26.990000000223517,
+          "difference": 0.001
+        },
+        {
+          "site": "rest/keepalive-3",
+          "production": 26.233417000155896,
+          "local": 26.233999999705702,
+          "difference": 0.001
+        },
+        {
+          "site": "rest/keepalive-4",
+          "production": 25.873331042006612,
+          "local": 25.87400000030175,
+          "difference": 0.001
+        },
+        {
+          "site": "rest/keepalive-5",
+          "production": 26.213107999879867,
+          "local": 26.213999999687076,
+          "difference": 0.001
+        },
+        {
+          "site": "rest/keepalive-6",
+          "production": 26.093725541140884,
+          "local": 26.094000000040978,
+          "difference": 0.0
+        },
+        {
+          "site": "rest/keepalive-7",
+          "production": 26.202781083993614,
+          "local": 26.20300000021234,
+          "difference": 0.0
+        },
+        {
+          "site": "rest/keepalive-8",
+          "production": 26.46097349980846,
+          "local": 26.46100000012666,
+          "difference": 0.0
+        },
+        {
+          "site": "rest/keepalive-9",
+          "production": 26.070402250159532,
+          "local": 26.070999999996275,
+          "difference": 0.001
+        },
+        {
+          "site": "rest/live-read",
+          "production": 13.923267957754433,
+          "local": 13.923999999649823,
+          "difference": 0.001
+        },
+        {
+          "site": "rest/expiry-read",
+          "production": 34.201165582984686,
+          "local": 34.20200000004843,
+          "difference": 0.001
+        },
+        {
+          "site": "grpc/keepalive-1",
+          "production": 25.75250812480226,
+          "local": 25.753000000026077,
+          "difference": 0.0
+        },
+        {
+          "site": "grpc/keepalive-2",
+          "production": 25.811714500188828,
+          "local": 25.811999999918044,
+          "difference": 0.0
+        },
+        {
+          "site": "grpc/keepalive-3",
+          "production": 25.87349708378315,
+          "local": 25.87400000030175,
+          "difference": 0.001
+        },
+        {
+          "site": "grpc/keepalive-4",
+          "production": 26.35176325030625,
+          "local": 26.351999999955297,
+          "difference": 0.0
+        },
+        {
+          "site": "grpc/keepalive-5",
+          "production": 25.986735082697123,
+          "local": 25.98699999973178,
+          "difference": 0.0
+        },
+        {
+          "site": "grpc/keepalive-6",
+          "production": 25.985760750249028,
+          "local": 25.986000000033528,
+          "difference": 0.0
+        },
+        {
+          "site": "grpc/keepalive-7",
+          "production": 25.874772832728922,
+          "local": 25.875,
+          "difference": 0.0
+        },
+        {
+          "site": "grpc/keepalive-8",
+          "production": 26.18643370922655,
+          "local": 26.186999999918044,
+          "difference": 0.001
+        },
+        {
+          "site": "grpc/keepalive-9",
+          "production": 26.012540082912892,
+          "local": 26.01300000026822,
+          "difference": 0.0
+        },
+        {
+          "site": "grpc/live-read",
+          "production": 14.259705542121083,
+          "local": 14.259999999776483,
+          "difference": 0.0
+        },
+        {
+          "site": "grpc/expiry-read",
+          "production": 34.17808937514201,
+          "local": 34.179000000003725,
+          "difference": 0.001
+        }
+      ],
+      "tokenAges": [
+        {
+          "site": "rest/keepalive-4",
+          "production": 105.6019772500731,
+          "emulator": 106.80800008773804,
+          "difference": 1.206,
+          "match": true
+        },
+        {
+          "site": "rest/keepalive-5",
+          "production": 131.81508524995297,
+          "emulator": 133.0220000743866,
+          "difference": 1.207,
+          "match": true
+        },
+        {
+          "site": "rest/keepalive-6",
+          "production": 157.90881079109386,
+          "emulator": 159.11600017547607,
+          "difference": 1.207,
+          "match": true
+        },
+        {
+          "site": "rest/keepalive-7",
+          "production": 184.11159187508747,
+          "emulator": 185.31900000572205,
+          "difference": 1.207,
+          "match": true
+        },
+        {
+          "site": "rest/keepalive-8",
+          "production": 210.57256537489593,
+          "emulator": 211.78000020980835,
+          "difference": 1.207,
+          "match": true
+        },
+        {
+          "site": "rest/keepalive-9",
+          "production": 236.64296762505546,
+          "emulator": 237.8510000705719,
+          "difference": 1.208,
+          "match": true
+        },
+        {
+          "site": "rest/live-read",
+          "production": 250.5662355828099,
+          "emulator": 251.77500009536743,
+          "difference": 1.209,
+          "match": true
+        },
+        {
+          "site": "rest/expiry-read",
+          "production": 284.7674011657946,
+          "emulator": 285.97699999809265,
+          "difference": 1.21,
+          "match": true
+        },
+        {
+          "site": "rest/expiry-commit",
+          "production": 287.3585607497953,
+          "emulator": 288.5680000782013,
+          "difference": 1.209,
+          "match": true
+        },
+        {
+          "site": "grpc/keepalive-4",
+          "production": 104.44646624987945,
+          "emulator": 105.6560001373291,
+          "difference": 1.21,
+          "match": true
+        },
+        {
+          "site": "grpc/keepalive-5",
+          "production": 130.43320133257657,
+          "emulator": 131.643000125885,
+          "difference": 1.21,
+          "match": true
+        },
+        {
+          "site": "grpc/keepalive-6",
+          "production": 156.4189620828256,
+          "emulator": 157.62900018692017,
+          "difference": 1.21,
+          "match": true
+        },
+        {
+          "site": "grpc/keepalive-7",
+          "production": 182.29373491555452,
+          "emulator": 183.50400018692017,
+          "difference": 1.21,
+          "match": true
+        },
+        {
+          "site": "grpc/keepalive-8",
+          "production": 208.48016862478107,
+          "emulator": 209.6909999847412,
+          "difference": 1.211,
+          "match": true
+        },
+        {
+          "site": "grpc/keepalive-9",
+          "production": 234.49270870769396,
+          "emulator": 235.7039999961853,
+          "difference": 1.211,
+          "match": true
+        },
+        {
+          "site": "grpc/live-read",
+          "production": 248.75241424981505,
+          "emulator": 249.96399998664856,
+          "difference": 1.212,
+          "match": true
+        },
+        {
+          "site": "grpc/expiry-read",
+          "production": 282.93050362495705,
+          "emulator": 284.143000125885,
+          "difference": 1.212,
+          "match": true
+        },
+        {
+          "site": "grpc/expiry-commit",
+          "production": 285.04653124976903,
+          "emulator": 286.2590000629425,
+          "difference": 1.212,
+          "match": true
+        }
       ]
     },
     {
@@ -1091,6 +1353,268 @@
           },
           "match": true
         }
+      ],
+      "achievedAges": [
+        {
+          "site": "rest/keepalive-1",
+          "production": 25.68090141704306,
+          "local": 25.68100000033155,
+          "difference": 0.0
+        },
+        {
+          "site": "rest/keepalive-2",
+          "production": 25.682545082643628,
+          "local": 25.682999999728054,
+          "difference": 0.0
+        },
+        {
+          "site": "rest/keepalive-3",
+          "production": 25.799993542023003,
+          "local": 25.800000000279397,
+          "difference": 0.0
+        },
+        {
+          "site": "rest/keepalive-4",
+          "production": 25.763806708157063,
+          "local": 25.763999999966472,
+          "difference": 0.0
+        },
+        {
+          "site": "rest/keepalive-5",
+          "production": 25.881247874815017,
+          "local": 25.881999999750406,
+          "difference": 0.001
+        },
+        {
+          "site": "rest/keepalive-6",
+          "production": 25.847226167097688,
+          "local": 25.848000000230968,
+          "difference": 0.001
+        },
+        {
+          "site": "rest/keepalive-7",
+          "production": 26.52248812513426,
+          "local": 26.523000000044703,
+          "difference": 0.001
+        },
+        {
+          "site": "rest/keepalive-8",
+          "production": 26.37417170777917,
+          "local": 26.375,
+          "difference": 0.001
+        },
+        {
+          "site": "rest/keepalive-9",
+          "production": 25.840287417173386,
+          "local": 25.8410000000149,
+          "difference": 0.001
+        },
+        {
+          "site": "rest/live-read",
+          "production": 14.216872833203524,
+          "local": 14.216999999713153,
+          "difference": 0.0
+        },
+        {
+          "site": "rest/expiry-read",
+          "production": 34.34045979194343,
+          "local": 34.3410000000149,
+          "difference": 0.001
+        },
+        {
+          "site": "grpc/keepalive-1",
+          "production": 25.825465333182365,
+          "local": 25.825999999884516,
+          "difference": 0.001
+        },
+        {
+          "site": "grpc/keepalive-2",
+          "production": 25.764093583915383,
+          "local": 25.765000000130385,
+          "difference": 0.001
+        },
+        {
+          "site": "grpc/keepalive-3",
+          "production": 25.834531540982425,
+          "local": 25.834999999962747,
+          "difference": 0.0
+        },
+        {
+          "site": "grpc/keepalive-4",
+          "production": 25.950632208958268,
+          "local": 25.950999999884516,
+          "difference": 0.0
+        },
+        {
+          "site": "grpc/keepalive-5",
+          "production": 25.813692457973957,
+          "local": 25.813999999780208,
+          "difference": 0.0
+        },
+        {
+          "site": "grpc/keepalive-6",
+          "production": 25.82491625007242,
+          "local": 25.825000000186265,
+          "difference": 0.0
+        },
+        {
+          "site": "grpc/keepalive-7",
+          "production": 25.842494832817465,
+          "local": 25.842999999877065,
+          "difference": 0.001
+        },
+        {
+          "site": "grpc/keepalive-8",
+          "production": 25.832564583979547,
+          "local": 25.833000000100583,
+          "difference": 0.0
+        },
+        {
+          "site": "grpc/keepalive-9",
+          "production": 25.910876625217497,
+          "local": 25.910999999847263,
+          "difference": 0.0
+        },
+        {
+          "site": "grpc/live-read",
+          "production": 14.077302541118115,
+          "local": 14.078000000212342,
+          "difference": 0.001
+        },
+        {
+          "site": "grpc/expiry-read",
+          "production": 33.17387512512505,
+          "local": 33.174000000115484,
+          "difference": 0.0
+        }
+      ],
+      "tokenAges": [
+        {
+          "site": "rest/keepalive-4",
+          "production": 103.54149766685441,
+          "emulator": 103.94700002670288,
+          "difference": 0.406,
+          "match": true
+        },
+        {
+          "site": "rest/keepalive-5",
+          "production": 129.42274554166943,
+          "emulator": 129.8289999961853,
+          "difference": 0.406,
+          "match": true
+        },
+        {
+          "site": "rest/keepalive-6",
+          "production": 155.26997170876712,
+          "emulator": 155.67700004577637,
+          "difference": 0.407,
+          "match": true
+        },
+        {
+          "site": "rest/keepalive-7",
+          "production": 181.79245983390138,
+          "emulator": 182.20000004768372,
+          "difference": 0.408,
+          "match": true
+        },
+        {
+          "site": "rest/keepalive-8",
+          "production": 208.16663154168054,
+          "emulator": 208.57500004768372,
+          "difference": 0.408,
+          "match": true
+        },
+        {
+          "site": "rest/keepalive-9",
+          "production": 234.00691895885393,
+          "emulator": 234.41600012779236,
+          "difference": 0.409,
+          "match": true
+        },
+        {
+          "site": "rest/live-read",
+          "production": 248.22379179205745,
+          "emulator": 248.63300013542175,
+          "difference": 0.409,
+          "match": true
+        },
+        {
+          "site": "rest/expiry-read",
+          "production": 282.5642515840009,
+          "emulator": 282.9740002155304,
+          "difference": 0.41,
+          "match": true
+        },
+        {
+          "site": "rest/expiry-commit",
+          "production": 284.4278782918118,
+          "emulator": 284.8380000591278,
+          "difference": 0.41,
+          "match": true
+        },
+        {
+          "site": "grpc/keepalive-4",
+          "production": 104.01854433398694,
+          "emulator": 105.13100004196167,
+          "difference": 1.112,
+          "match": true
+        },
+        {
+          "site": "grpc/keepalive-5",
+          "production": 129.8322367919609,
+          "emulator": 130.9449999332428,
+          "difference": 1.113,
+          "match": true
+        },
+        {
+          "site": "grpc/keepalive-6",
+          "production": 155.65715304203331,
+          "emulator": 156.7699999809265,
+          "difference": 1.113,
+          "match": true
+        },
+        {
+          "site": "grpc/keepalive-7",
+          "production": 181.49964787485078,
+          "emulator": 182.61299991607666,
+          "difference": 1.113,
+          "match": true
+        },
+        {
+          "site": "grpc/keepalive-8",
+          "production": 207.33221245883033,
+          "emulator": 208.44600009918213,
+          "difference": 1.114,
+          "match": true
+        },
+        {
+          "site": "grpc/keepalive-9",
+          "production": 233.24308908404782,
+          "emulator": 234.35700011253357,
+          "difference": 1.114,
+          "match": true
+        },
+        {
+          "site": "grpc/live-read",
+          "production": 247.32039162516594,
+          "emulator": 248.43499994277954,
+          "difference": 1.115,
+          "match": true
+        },
+        {
+          "site": "grpc/expiry-read",
+          "production": 280.494266750291,
+          "emulator": 281.6089999675751,
+          "difference": 1.115,
+          "match": true
+        },
+        {
+          "site": "grpc/expiry-commit",
+          "production": 282.7025118339807,
+          "emulator": 283.81699991226196,
+          "difference": 1.114,
+          "match": true
+        }
       ]
     }
   ],
@@ -1103,6 +1627,6 @@
     "Raw REST bodyBytes, content-length and member-order layout were not retained; the record proves decoded response semantics, not wire layout.",
     "The closure review and the final-artifact regression are separate conditions and stay open.",
     "The artifact is the strict profile of the commit named; a later source change needs a new replay.",
-    "Idle and lifetime boundaries are judged by the intervals production narrowed: the idle threshold lies in [110.70, 122.96) s and the age at which an expired token is forgotten in (298.7, 302.2] s; strict's values (a 120 s idle limit, a 270 s total lifetime, 300 s of memory) lie inside them. The replay runs on the emulator's virtual clock and reproduces each recorded idle (the least the production token idled before the request) and each recorded token age, so a row at a boundary is compared at the measured production value, not at the nominal wait."
+    "Idle and lifetime boundaries: the idle threshold is judged by the interval production narrowed, [110.70, 122.96) s (ledger 809 (5)), and strict's 120 s idle limit lies inside it; the age at which an expired token is forgotten is judged by (298.7, 302.2] s, which holds strict's 300 s of memory. Strict's 270 s total lifetime is supported by the rows themselves, not by an interval: live reads at token ages up to 253.3 s answered 0 and the first refusals came at 280.4 s, so production's lifetime lies in about (253.3, 280.4] s and 270 s lies inside it. The replay runs on the emulator's virtual clock, advanced by exactly each wait, and reproduces each recorded idle (the least the production token idled before the request) and each recorded token age; the idle or age each wait reached is published beside the recorded one (achievedAges), so a row at a boundary is compared at the measured production value, not at the nominal wait."
   ]
 }

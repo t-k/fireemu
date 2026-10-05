@@ -191,11 +191,6 @@ pub fn firestore_event(
     if let Some((auth_type, auth_id)) = auth {
         with_auth_context(&mut attrs, auth_type, auth_id);
     }
-    // `firebase-functions` decodes JSON payloads with `createSnapshotFromJson(data, source,
-    // ...)`, which uses `source` as the document name when a side of the change is absent;
-    // it therefore has to be the full document resource name (the protobuf path derives the
-    // same name from the `document` attribute).
-    let source = format!("projects/{project}/databases/{database}/documents/{document_path}");
     let mut data = Map::new();
     if let Some(a) = after {
         data.insert("value".into(), document_to_json(&encode_document(a)));
@@ -212,7 +207,7 @@ pub fn firestore_event(
     let mut event = json!({
         "specversion": "1.0",
         "id": event_id_uuid(id),
-        "source": source,
+        "source": attrs.source,
         "subject": attrs.subject,
         "type": attrs.event_type,
         "time": firestore_time(time),

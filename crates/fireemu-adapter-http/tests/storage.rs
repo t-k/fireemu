@@ -22,6 +22,7 @@ use fireemu_core_storage::store::StorageState as ObjectStore;
 use fireemu_core_storage::store::{NewMetadata, Precondition, StorageEvent};
 use fireemu_core_types::determinism::SplitMix64;
 use fireemu_core_types::time::LogicalInstant;
+use proptest::prelude::Strategy as _;
 use serde_json::{json, Value};
 
 const START: LogicalInstant = LogicalInstant::from_unix_seconds(1_788_004_860);
@@ -264,7 +265,9 @@ fn firebase_protocol_upload_download_list_update_delete() {
         &s,
         req("GET", &format!("/v0/b/{BUCKET}/o/{enc}"), &owner, b""),
     );
-    assert_eq!(json_body(&r)["generation"], "1");
+    // Under strict a generation is the commit's microsecond timestamp (the virtual clock's start
+    // here), 16 digits as production's are.
+    assert_eq!(json_body(&r)["generation"], "1788004860000000");
     let r = handle(
         &s,
         req(
@@ -330,7 +333,7 @@ fn firebase_protocol_upload_download_list_update_delete() {
             patched["generation"].as_str(),
             patched["metageneration"].as_str()
         ),
-        (Some("1"), Some("2"))
+        (Some("1788004860000000"), Some("2"))
     );
     assert_eq!(patched["cacheControl"], "public, max-age=60");
     assert!(patched["metadata"].get("k").is_none());
@@ -485,7 +488,7 @@ fn event_admission_refusal_returns_429_without_publishing_the_object() {
             &body,
         ),
     );
-    assert_eq!(json_body(&accepted)["generation"], "1");
+    assert_eq!(json_body(&accepted)["generation"], "1788004860000000");
     let control = state(None);
     let expected = handle(
         &control,
@@ -962,7 +965,7 @@ fn json_api_dialect_for_the_admin_sdk() {
 }
 
 #[test]
-fn strict_json_list_rejects_filters_it_cannot_apply() {
+fn strict_json_list_rejects_the_filter_it_cannot_apply() {
     // https://cloud.google.com/storage/docs/json_api/v1/objects/list
     let strict = state(None);
     let emulator = state_with(None, TokenAcceptance::EmulatorMock);
@@ -976,18 +979,14 @@ fn strict_json_list_rejects_filters_it_cannot_apply() {
         ),
     );
     assert_eq!(uploaded.status, 200);
-    for filter in [
-        "matchGlob=*.txt",
-        "startOffset=b",
-        "endOffset=z",
-        "includeTrailingDelimiter=true",
-    ] {
-        let path = format!("/storage/v1/b/{BUCKET}/o?{filter}");
-        let rejected = handle(&strict, req("GET", &path, &[], b""));
-        assert_eq!(rejected.status, 400, "{filter}");
-        let compatible = handle(&emulator, req("GET", &path, &[], b""));
-        assert_eq!(compatible.status, 200, "{filter}");
-    }
+    // `includeTrailingDelimiter=true` was not recorded; the offsets and the glob are honoured
+    // (see `strict_json_list_filters_follow_the_recorded_rows`).
+    let filter = "includeTrailingDelimiter=true";
+    let path = format!("/storage/v1/b/{BUCKET}/o?{filter}");
+    let rejected = handle(&strict, req("GET", &path, &[], b""));
+    assert_eq!(rejected.status, 400, "{filter}");
+    let compatible = handle(&emulator, req("GET", &path, &[], b""));
+    assert_eq!(compatible.status, 200, "{filter}");
     for filter in [
         "versions=false",
         "versions=true",
@@ -2911,12 +2910,17 @@ fn strict_frames_json_answers_as_production_does_and_the_emulator_profile_as_the
         ),
     );
     assert_eq!(status.status, 308);
-    assert!(header(&status, "content-type").is_none());
-    assert!(present.body.starts_with(b"{"));
-    assert!(
-        !present.body.starts_with(b"{\n"),
-        "an object resource is not an error layout"
+    // Production types the 308 `text/plain` (recorded, lean-v5).
+    assert_eq!(
+        header(&status, "content-type"),
+        Some("text/plain; charset=utf-8")
     );
+    // An object resource is laid out too, in its own member order, with the JSON API's final line
+    // feed (the layout and order are pinned against recorded rows in `storage_production`).
+    assert!(present
+        .body
+        .starts_with(b"{\n  \"kind\": \"storage#object\",\n  \"id\""));
+    assert!(present.body.ends_with(b"}\n"));
 
     let (absent, present, firebase, deleted) = probe(TokenAcceptance::EmulatorMock);
     for response in [&absent, &present, &firebase] {
@@ -3598,7 +3602,13 @@ fn media_headers_follow_production_only_under_strict() {
                 Some("crc32c=mnG7TA==, md5=XUFAKrxLKna5cZ2REBfFkg==")
             );
             assert_eq!(header(&gcs, "content-disposition"), Some("attachment"));
-            assert_eq!(header(&gcs, "vary"), Some("Origin, X-Origin"));
+            let varies: Vec<&str> = gcs
+                .headers
+                .iter()
+                .filter(|(name, _)| name == "vary")
+                .map(|(_, value)| value.as_str())
+                .collect();
+            assert_eq!(varies, ["Origin", "X-Origin"]);
             assert!(header(&gcs, "accept-ranges").is_none());
             assert_eq!(
                 header(&gcs, "x-goog-hash"),
@@ -5601,7 +5611,9 @@ async fn a_stored_object_always_answers_media_with_its_bytes() {
 
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
-    let shared = Arc::new(state(None));
+    // The emulator profile: the server stamps its CORS and `nosniff` headers on every answer; the
+    // strict profile's framed answers carry production's header set instead (see the next test).
+    let shared = Arc::new(state_with(None, TokenAcceptance::EmulatorMock));
     let server = tokio::spawn(serve_storage_with_budget(listener, shared, &BUDGET));
 
     // Upload an object with a full set of ordinary metadata fields.
@@ -6329,9 +6341,17 @@ service firebase.storage {
                 let stale = upload(&expired);
                 assert_eq!((stale.status, r.status), (401, 401));
                 assert_eq!(r.headers, stale.headers);
+                // The strict Firebase dialect writes its JSON bodies in the two-space layout without a
+                // final line feed (`storage_production.rs`, taken from the lean-v5 rows of the other
+                // Firebase-dialect answers). NO recorded production row covers a future-dated, or any
+                // invalid, ID token on a `/v0` Storage route: this body, its layout and its message
+                // ("invalid ID token: malformed token", the fail-closed text of the clock-rewind
+                // issue) are UNRECORDED. They are asserted as the strict profile writes them, not as
+                // production's. Follow-up:
+                // docs.local/issues/open/storage-strict-firebase-401-body-for-an-invalid-token-is-unrecorded.md.
                 assert_eq!(
                     String::from_utf8_lossy(&r.body),
-                    r#"{"error":{"code":401,"message":"invalid ID token: malformed token","status":"UNAUTHENTICATED"}}"#
+                    "{\n  \"error\": {\n    \"code\": 401,\n    \"message\": \"invalid ID token: malformed token\",\n    \"status\": \"UNAUTHENTICATED\"\n  }\n}"
                 );
             }
             TokenAcceptance::EmulatorMock => {
@@ -6607,4 +6627,2483 @@ fn copies_rewrites_and_form_uploads_past_the_stored_byte_limit_are_402() {
     assert_eq!(header(&refused, "retry-after"), None);
     let store = s.store.lock().unwrap();
     assert_eq!(store.retained_blob_bytes(), 5);
+}
+
+// ------------------------------------------------------------------------------------------
+// the strict profile's production framing (headers, layout, order) and the answers around it
+// ------------------------------------------------------------------------------------------
+
+fn header_names(r: &fireemu_adapter_http::storage::StorageResponse) -> Vec<String> {
+    let mut names: Vec<String> = r.headers.iter().map(|(k, _)| k.clone()).collect();
+    names.sort();
+    names.dedup();
+    names
+}
+
+/// A strict state and an emulator state, each holding `g.bin` ("hello") uploaded through the JSON
+/// API with a stored `cacheControl`.
+fn seeded_pair() -> [(TokenAcceptance, StorageState); 2] {
+    [TokenAcceptance::Verified, TokenAcceptance::EmulatorMock].map(|acceptance| {
+        let s = state_with(Some(ALLOW_ALL_RULES), acceptance);
+        let upload = handle(
+            &s,
+            req(
+                "POST",
+                &format!("/upload/storage/v1/b/{BUCKET}/o?uploadType=media&name=g.bin"),
+                &[
+                    ("authorization", "Bearer owner"),
+                    ("content-type", "application/octet-stream"),
+                ],
+                b"hello",
+            ),
+        );
+        assert_eq!(upload.status, 200);
+        (acceptance, s)
+    })
+}
+
+/// The header sets of lean-v5 for the JSON API, end to end through `handle` (the sets of every
+/// request shape are pinned against the recordings in `storage_production`'s own tests).
+#[test]
+fn strict_json_api_answers_carry_exactly_the_recorded_header_names() {
+    let (_, strict) = &seeded_pair()[0];
+    let owner = [("authorization", "Bearer owner")];
+    let object = format!("/storage/v1/b/{BUCKET}/o/g.bin");
+    let read = handle(strict, req("GET", &object, &owner, b""));
+    assert_eq!(
+        header_names(&read),
+        ["cache-control", "content-type", "etag", "expires", "vary"]
+    );
+    assert_eq!(
+        header(&read, "expires"),
+        Some("Sat, 29 Aug 2026 12:01:00 GMT")
+    );
+    let media = handle(
+        strict,
+        req("GET", &format!("{object}?alt=media"), &owner, b""),
+    );
+    assert_eq!(
+        header_names(&media),
+        [
+            "cache-control",
+            "content-disposition",
+            "content-type",
+            "etag",
+            "expires",
+            "last-modified",
+            "pragma",
+            "vary",
+            "x-goog-generation",
+            "x-goog-hash",
+            "x-goog-metageneration",
+            "x-goog-storage-class",
+            "x-goog-stored-content-encoding",
+            "x-goog-stored-content-length"
+        ]
+    );
+    assert_eq!(header(&media, "content-disposition"), Some("attachment"));
+    assert_eq!(
+        header(&media, "expires"),
+        Some("Mon, 01 Jan 1990 00:00:00 GMT")
+    );
+    let missing = handle(
+        strict,
+        req(
+            "GET",
+            &format!("/storage/v1/b/{BUCKET}/o/absent.bin?alt=media"),
+            &owner,
+            b"",
+        ),
+    );
+    assert_eq!(missing.status, 404);
+    assert_eq!(
+        header_names(&missing),
+        ["cache-control", "content-type", "expires", "vary"]
+    );
+    assert_eq!(
+        header(&missing, "cache-control"),
+        Some("private, max-age=0")
+    );
+    let delete = handle(strict, req("DELETE", &object, &owner, b""));
+    assert_eq!(delete.status, 204);
+    // `content-length: 0` is in the stage 3 v9 recordings of this delete (recipes c and d); the
+    // STORAGE-OBJECT lean-v5 captures list no content length for any answer, so they cannot show it.
+    assert_eq!(
+        header_names(&delete),
+        [
+            "cache-control",
+            "content-length",
+            "content-type",
+            "expires",
+            "pragma",
+            "vary"
+        ]
+    );
+}
+
+#[test]
+fn strict_firebase_answers_carry_exactly_the_recorded_header_names() {
+    let (_, strict) = &seeded_pair()[0];
+    let owner = [("authorization", "Bearer owner")];
+    let object = format!("/v0/b/{BUCKET}/o/g.bin");
+    let read = handle(strict, req("GET", &object, &owner, b""));
+    assert_eq!(
+        header_names(&read),
+        [
+            "access-control-allow-origin",
+            "access-control-expose-headers",
+            "cache-control",
+            "content-type",
+            "expires",
+            "x-content-type-options"
+        ]
+    );
+    let media = handle(
+        strict,
+        req("GET", &format!("{object}?alt=media"), &owner, b""),
+    );
+    assert_eq!(
+        header_names(&media),
+        [
+            "accept-ranges",
+            "cache-control",
+            "content-type",
+            "etag",
+            "expires",
+            "last-modified",
+            "pragma",
+            "x-goog-generation",
+            "x-goog-hash",
+            "x-goog-meta-firebasestoragedownloadtokens",
+            "x-goog-metageneration",
+            "x-goog-storage-class",
+            "x-goog-stored-content-encoding",
+            "x-goog-stored-content-length"
+        ]
+    );
+    // The v0 validator is the quoted MD5 of "hello" in hex.
+    assert_eq!(
+        header(&media, "etag"),
+        Some("\"5d41402abc4b2a76b9719d911017c592\"")
+    );
+    let range = handle(
+        strict,
+        req(
+            "GET",
+            &format!("{object}?alt=media"),
+            &[("authorization", "Bearer owner"), ("range", "bytes=50-60")],
+            b"",
+        ),
+    );
+    assert_eq!(range.status, 416);
+    assert_eq!(header(&range, "cache-control"), Some("private, max-age=0"));
+    assert_eq!(header(&range, "pragma"), None);
+    assert!(header(&range, "etag").is_some() && header(&range, "x-goog-hash").is_some());
+    assert_eq!(header(&range, "content-disposition"), None);
+}
+
+/// The emulator profile keeps the official emulator's headers, so none of the framing applies.
+#[test]
+fn the_emulator_profile_keeps_the_official_headers() {
+    let (_, emulator) = &seeded_pair()[1];
+    let owner = [("authorization", "Bearer owner")];
+    let read = handle(
+        emulator,
+        req(
+            "GET",
+            &format!("/storage/v1/b/{BUCKET}/o/g.bin"),
+            &owner,
+            b"",
+        ),
+    );
+    assert_eq!(header(&read, "cache-control"), None);
+    assert_eq!(header(&read, "expires"), None);
+    assert_eq!(header(&read, "etag"), None);
+    assert!(read.body.starts_with(b"{\""), "compact body");
+}
+
+/// Reads of a name over the limit are 404s on both dialects, in both profiles (recorded, lean-v5;
+/// the official emulator answers 404 too, measured with 1,100 characters).
+#[test]
+fn a_read_of_an_over_long_name_is_not_found() {
+    let long = "x".repeat(1025);
+    for (acceptance, s) in seeded_pair() {
+        let owner = [("authorization", "Bearer owner")];
+        for path in [
+            format!("/v0/b/{BUCKET}/o/{long}"),
+            format!("/v0/b/{BUCKET}/o/{long}?alt=media"),
+            format!("/storage/v1/b/{BUCKET}/o/{long}"),
+            format!("/storage/v1/b/{BUCKET}/o/{long}?alt=media"),
+        ] {
+            let r = handle(&s, req("GET", &path, &owner, b""));
+            assert_eq!(r.status, 404, "{acceptance:?} {}", &path[..40]);
+        }
+    }
+}
+
+/// A `PUT` clears the header-like fields it omits (recorded: `cacheControl`) and keeps the
+/// content type it names.
+#[test]
+fn a_put_clears_the_cache_control_it_omits() {
+    for (acceptance, s) in seeded_pair() {
+        let owner = [
+            ("authorization", "Bearer owner"),
+            ("content-type", "application/json"),
+        ];
+        let object = format!("/storage/v1/b/{BUCKET}/o/g.bin");
+        let patched = handle(
+            &s,
+            req(
+                "PATCH",
+                &object,
+                &owner,
+                br#"{"cacheControl":"private, max-age=0"}"#,
+            ),
+        );
+        assert_eq!(
+            json_body(&patched)["cacheControl"],
+            "private, max-age=0",
+            "{acceptance:?}"
+        );
+        let put = handle(
+            &s,
+            req(
+                "PUT",
+                &object,
+                &owner,
+                br#"{"contentType":"text/plain","metadata":{"marker":"second"}}"#,
+            ),
+        );
+        let body = json_body(&put);
+        assert_eq!(body.get("cacheControl"), None, "{acceptance:?}");
+        assert_eq!(body["contentType"], "text/plain");
+        assert_eq!(body["metadata"], json!({"marker": "second"}));
+    }
+}
+
+/// `copyTo` and `rewriteTo` name an owner under strict (recorded: `owner.entity`).
+#[test]
+fn a_copied_object_names_an_owner_only_under_strict() {
+    for (acceptance, s) in seeded_pair() {
+        let owner = [("authorization", "Bearer owner")];
+        let copy = handle(
+            &s,
+            req(
+                "POST",
+                &format!("/storage/v1/b/{BUCKET}/o/g.bin/copyTo/b/{BUCKET}/o/h.bin"),
+                &owner,
+                b"",
+            ),
+        );
+        assert_eq!(copy.status, 200, "{acceptance:?}");
+        let strict = acceptance == TokenAcceptance::Verified;
+        assert_eq!(json_body(&copy)["owner"]["entity"].is_string(), strict);
+        let rewrite = handle(
+            &s,
+            req(
+                "POST",
+                &format!("/storage/v1/b/{BUCKET}/o/g.bin/rewriteTo/b/{BUCKET}/o/i.bin"),
+                &owner,
+                b"",
+            ),
+        );
+        assert_eq!(
+            json_body(&rewrite)["resource"]["owner"]["entity"].is_string(),
+            strict
+        );
+    }
+}
+
+/// The JSON API refuses an upload name production refuses with the recorded bytes: a JSON error
+/// served as `text/html`, 432 bytes for the recorded line-feed name and 504 for the 1,025-byte one.
+#[test]
+fn strict_json_api_upload_names_are_refused_with_the_recorded_bytes() {
+    let strict = state_with(Some(ALLOW_ALL_RULES), TokenAcceptance::Verified);
+    let scope = "storage-object/9d4b0726ac89c07f3d89/errors/object-name/gcs-";
+    let long = format!("{scope}{}", "x".repeat(1025 - scope.len()));
+    let refused = |name: &str| {
+        handle(
+            &strict,
+            req(
+                "POST",
+                &format!(
+                    "/upload/storage/v1/b/{BUCKET}/o?uploadType=media&name={}",
+                    name.replace('\n', "%0A")
+                ),
+                &[("authorization", "Bearer owner")],
+                b"x",
+            ),
+        )
+    };
+    let line_feed = refused(&format!("{scope}line\nbreak.bin"));
+    assert_eq!(line_feed.status, 400);
+    assert_eq!(line_feed.body.len(), 432);
+    assert_eq!(
+        header(&line_feed, "content-type"),
+        Some("text/html; charset=UTF-8")
+    );
+    assert!(String::from_utf8_lossy(&line_feed.body)
+        .contains("Disallowed unicode characters present in object name"));
+    let oversized = refused(&long);
+    assert_eq!(oversized.status, 400);
+    assert_eq!(oversized.body.len(), 504);
+    let text = String::from_utf8_lossy(&oversized.body).into_owned();
+    assert!(text.contains(
+        "The maximum object length is 1024 characters, but got a name with 1025 characters: '"
+    ));
+    assert!(text.contains(&format!("{}...'", &long[..77])));
+}
+
+/// Declared checksums: strict refuses a mismatch with production's words; the emulator profile
+/// accepts it as the official emulator does (measured: a wrong declared MD5 is a 200).
+#[test]
+fn declared_checksums_are_verified_only_under_strict() {
+    for (acceptance, _) in seeded_pair() {
+        let s = state_with(Some(ALLOW_ALL_RULES), acceptance);
+        let upload = |hash: &str| {
+            handle(
+                &s,
+                req(
+                    "POST",
+                    &format!("/upload/storage/v1/b/{BUCKET}/o?uploadType=media&name=c.bin"),
+                    &[
+                        ("authorization", "Bearer owner"),
+                        ("content-type", "text/plain"),
+                        ("x-goog-hash", hash),
+                    ],
+                    b"hello",
+                ),
+            )
+        };
+        let wrong = upload("md5=AAAAAAAAAAAAAAAAAAAAAA==");
+        if acceptance == TokenAcceptance::Verified {
+            assert_eq!(wrong.status, 400);
+            assert!(json_body(&wrong)["error"]["message"]
+                .as_str()
+                .unwrap()
+                .starts_with("Provided MD5 hash \"AAAAAAAAAAAAAAAAAAAAAA==\" doesn't match calculated MD5 hash \""));
+            let crc = upload("crc32c=AAAAAA==");
+            assert!(json_body(&crc)["error"]["message"]
+                .as_str()
+                .unwrap()
+                .starts_with("Provided CRC32C \"AAAAAA==\" doesn't match calculated CRC32C \""));
+            let malformed = upload("md5=!not-base64!");
+            assert_eq!(
+                json_body(&malformed)["error"]["message"],
+                "Provided value (!not-base64!) is not a base64-encoded 128-bit MD5 hash."
+            );
+            assert_eq!(
+                json_body(&upload("crc32c=AAA"))["error"]["message"],
+                "Invalid argument."
+            );
+        } else {
+            assert_eq!(wrong.status, 200, "the official emulator verifies nothing");
+            assert_eq!(upload("crc32c=AAAAAA==").status, 200);
+        }
+    }
+}
+
+/// Declared checksums on resumable uploads, in both dialects: strict refuses a wrong or a
+/// malformed one in production's words; the emulator profile completes the upload as the official
+/// emulator does (firebase-tools 15.28.2 compares no declared checksum on any path).
+#[test]
+#[allow(clippy::too_many_lines)]
+fn resumable_uploads_verify_declared_checksums_only_under_strict() {
+    const WRONG: &str = "AAAAAAAAAAAAAAAAAAAAAA==";
+    for (acceptance, _) in seeded_pair() {
+        let strict = acceptance == TokenAcceptance::Verified;
+        // Firebase dialect: a wrong md5Hash in the start metadata is found at finalize.
+        let s = state_with(Some(ALLOW_ALL_RULES), acceptance);
+        let owner = [
+            ("authorization", "Bearer owner"),
+            ("x-goog-upload-protocol", "resumable"),
+        ];
+        let v0_start = |name: &str, metadata: &str| {
+            handle(
+                &s,
+                req(
+                    "POST",
+                    &format!("/v0/b/{BUCKET}/o?name={name}"),
+                    &[
+                        owner[0],
+                        owner[1],
+                        ("x-goog-upload-command", "start"),
+                        ("content-type", "application/json"),
+                    ],
+                    metadata.as_bytes(),
+                ),
+            )
+        };
+        let wrong = v0_start(
+            "w.bin",
+            &format!(r#"{{"name":"w.bin","md5Hash":"{WRONG}"}}"#),
+        );
+        assert_eq!(wrong.status, 200, "{acceptance:?} start");
+        let url = header(&wrong, "x-goog-upload-url").unwrap().to_owned();
+        let session = url
+            .split_once("/v0/")
+            .map(|(_, rest)| format!("/v0/{rest}"))
+            .unwrap();
+        let finalize = handle(
+            &s,
+            req(
+                "POST",
+                &session,
+                &[
+                    owner[0],
+                    owner[1],
+                    ("x-goog-upload-command", "upload, finalize"),
+                    ("x-goog-upload-offset", "0"),
+                ],
+                b"hello",
+            ),
+        );
+        assert_eq!(
+            finalize.status,
+            if strict { 400 } else { 200 },
+            "{acceptance:?} finalize"
+        );
+        let crc = v0_start("c.bin", r#"{"name":"c.bin","crc32c":"AAA"}"#);
+        assert_eq!(
+            crc.status,
+            if strict { 400 } else { 200 },
+            "{acceptance:?} malformed crc32c"
+        );
+        let md5 = v0_start("m.bin", r#"{"name":"m.bin","md5Hash":"!not-base64!"}"#);
+        assert_eq!(
+            md5.status,
+            if strict { 400 } else { 200 },
+            "{acceptance:?} malformed md5Hash"
+        );
+
+        // JSON API: the same declarations in the start metadata, found at the last chunk.
+        let start = |metadata: &str| {
+            handle(
+                &s,
+                req(
+                    "POST",
+                    &format!("/upload/storage/v1/b/{BUCKET}/o?uploadType=resumable&name=j.bin"),
+                    &[
+                        ("authorization", "Bearer owner"),
+                        ("content-type", "application/json"),
+                    ],
+                    metadata.as_bytes(),
+                ),
+            )
+        };
+        let started = start(&format!(r#"{{"md5Hash":"{WRONG}"}}"#));
+        assert_eq!(started.status, 200, "{acceptance:?} JSON API start");
+        let location = header(&started, "location")
+            .unwrap()
+            .strip_prefix("http://127.0.0.1:9199")
+            .unwrap()
+            .to_owned();
+        let put = handle(
+            &s,
+            req(
+                "PUT",
+                &location,
+                &[("authorization", "Bearer owner")],
+                b"hello",
+            ),
+        );
+        assert_eq!(
+            put.status,
+            if strict { 400 } else { 200 },
+            "{acceptance:?} JSON API put"
+        );
+        assert_eq!(
+            start(r#"{"crc32c":"AAA"}"#).status,
+            if strict { 400 } else { 200 },
+            "{acceptance:?} JSON API malformed crc32c"
+        );
+    }
+}
+
+/// A browser sends an `Origin`, and every recording was made without one. Under strict an answer to
+/// such a request keeps production's headers and adds what a browser needs to read it: the origin
+/// reflected and the official emulator's list of exposed headers (which names the `X-Goog-Upload-*`
+/// headers the Firebase SDK reads). Without an `Origin` the recorded sets stay exactly as recorded.
+#[test]
+#[allow(clippy::too_many_lines)]
+fn strict_answers_to_a_browser_origin_carry_the_reflection_and_the_exposed_headers() {
+    const ORIGIN: &str = "http://localhost:5173";
+    let s = state_with(Some(ALLOW_ALL_RULES), TokenAcceptance::Verified);
+    let call = |origin: bool, method: &str, path: &str, extra: &[(&str, &str)], body: &[u8]| {
+        let mut headers = vec![("authorization", "Bearer owner")];
+        if origin {
+            headers.push(("origin", ORIGIN));
+        }
+        headers.extend_from_slice(extra);
+        handle(&s, req(method, path, &headers, body))
+    };
+    let reflected = |response: &fireemu_adapter_http::storage::StorageResponse, what: &str| {
+        assert_eq!(
+            header(response, "access-control-allow-origin"),
+            Some(ORIGIN),
+            "{what}"
+        );
+        let exposed = header(response, "access-control-expose-headers")
+            .unwrap_or_default()
+            .to_ascii_lowercase();
+        for name in [
+            "x-goog-upload-status",
+            "x-goog-upload-url",
+            "x-goog-upload-size-received",
+            "x-goog-upload-chunk-granularity",
+        ] {
+            assert!(exposed.contains(name), "{what}: {name} in {exposed}");
+        }
+        let vary: Vec<_> = response
+            .headers
+            .iter()
+            .filter(|(name, _)| name == "vary")
+            .collect();
+        assert!(!vary.is_empty(), "{what}: the reflection varies on Origin");
+    };
+    let v0_headers = |command: &'static str| -> Vec<(&'static str, &'static str)> {
+        vec![
+            ("x-goog-upload-protocol", "resumable"),
+            ("x-goog-upload-command", command),
+            ("content-type", "application/json"),
+        ]
+    };
+    for origin in [true, false] {
+        let start = call(
+            origin,
+            "POST",
+            &format!("/v0/b/{BUCKET}/o?name=cors.bin"),
+            &v0_headers("start"),
+            br#"{"name":"cors.bin","contentType":"application/octet-stream"}"#,
+        );
+        assert_eq!(start.status, 200);
+        let url = header(&start, "x-goog-upload-url").unwrap().to_owned();
+        let session = url
+            .split_once("/v0/")
+            .map(|(_, rest)| format!("/v0/{rest}"))
+            .unwrap();
+        let query = call(origin, "POST", &session, &v0_headers("query"), b"");
+        let chunk = call(
+            origin,
+            "POST",
+            &session,
+            &[
+                ("x-goog-upload-protocol", "resumable"),
+                ("x-goog-upload-command", "upload"),
+                ("x-goog-upload-offset", "0"),
+            ],
+            b"ab",
+        );
+        assert_eq!(chunk.status, 200);
+        let finalize = call(
+            origin,
+            "POST",
+            &session,
+            &[
+                ("x-goog-upload-protocol", "resumable"),
+                ("x-goog-upload-command", "upload, finalize"),
+                ("x-goog-upload-offset", "2"),
+            ],
+            b"",
+        );
+        assert_eq!(
+            finalize.status,
+            200,
+            "{}",
+            String::from_utf8_lossy(&finalize.body)
+        );
+        let download = call(
+            origin,
+            "GET",
+            &format!("/v0/b/{BUCKET}/o/cors.bin?alt=media"),
+            &[],
+            b"",
+        );
+        assert_eq!(download.status, 200);
+        let metadata = call(
+            origin,
+            "GET",
+            &format!("/v0/b/{BUCKET}/o/cors.bin"),
+            &[],
+            b"",
+        );
+        let json_start = call(
+            origin,
+            "POST",
+            &format!("/upload/storage/v1/b/{BUCKET}/o?uploadType=resumable&name=j.bin"),
+            &[("content-type", "application/json")],
+            b"{}",
+        );
+        let location = header(&json_start, "location")
+            .unwrap()
+            .strip_prefix("http://127.0.0.1:9199")
+            .unwrap()
+            .to_owned();
+        let incomplete = call(
+            origin,
+            "PUT",
+            &location,
+            &[("content-range", "bytes 0-2/6")],
+            b"abc",
+        );
+        assert_eq!(incomplete.status, 308);
+        let json_api = call(
+            origin,
+            "GET",
+            &format!("/storage/v1/b/{BUCKET}/o/cors.bin"),
+            &[],
+            b"",
+        );
+        let answers = [
+            ("v0 start", &start),
+            ("v0 query", &query),
+            ("v0 upload chunk", &chunk),
+            ("v0 finalize", &finalize),
+            ("v0 media", &download),
+            ("v0 metadata", &metadata),
+            ("JSON API resumable start", &json_start),
+            ("JSON API 308", &incomplete),
+            ("JSON API metadata", &json_api),
+        ];
+        for (what, response) in answers {
+            if origin {
+                reflected(response, what);
+            } else {
+                // The recorded sets: the text answers carry no CORS, the v0 JSON answers carry
+                // the wildcard and the two exposed headers of the recording.
+                let wildcard = header(response, "access-control-allow-origin");
+                match what {
+                    "v0 finalize" | "v0 metadata" => {
+                        assert_eq!(wildcard, Some("*"), "{what}");
+                        assert_eq!(
+                            header(response, "access-control-expose-headers"),
+                            Some("Content-Range, X-Firebase-Storage-XSRF"),
+                            "{what}"
+                        );
+                    }
+                    _ => assert_eq!(wildcard, None, "{what}"),
+                }
+            }
+        }
+    }
+}
+
+/// The Firebase resumable protocol under strict (recorded, lean-v5): granularity 262144, a control
+/// URL equal to the session URL, no `x-gupload-uploadid`, empty bodies, a cancel that says
+/// `cancelled` and the wrong-offset text.
+#[test]
+fn strict_firebase_resumable_answers_follow_the_recording() {
+    for (acceptance, _) in seeded_pair() {
+        let s = state_with(Some(ALLOW_ALL_RULES), acceptance);
+        let strict = acceptance == TokenAcceptance::Verified;
+        let owner = [
+            ("authorization", "Bearer owner"),
+            ("x-goog-upload-protocol", "resumable"),
+        ];
+        let route = format!("/v0/b/{BUCKET}/o?name=r.bin");
+        let start = handle(
+            &s,
+            req(
+                "POST",
+                &route,
+                &[
+                    owner[0],
+                    owner[1],
+                    ("x-goog-upload-command", "start"),
+                    ("content-type", "application/json"),
+                ],
+                br#"{"name":"r.bin","contentType":"application/octet-stream"}"#,
+            ),
+        );
+        assert_eq!(start.status, 200, "{acceptance:?}");
+        assert!(start.body.is_empty());
+        let url = header(&start, "x-goog-upload-url").unwrap().to_owned();
+        assert_eq!(header(&start, "x-gupload-uploadid").is_none(), strict);
+        if strict {
+            assert_eq!(
+                header(&start, "x-goog-upload-chunk-granularity"),
+                Some("262144")
+            );
+            assert_eq!(
+                header(&start, "x-goog-upload-control-url"),
+                Some(url.as_str())
+            );
+        } else {
+            assert_eq!(
+                header(&start, "x-goog-upload-chunk-granularity"),
+                Some("10000")
+            );
+        }
+        let session = url
+            .split_once("/v0/")
+            .map(|(_, rest)| format!("/v0/{rest}"))
+            .unwrap();
+        let query = handle(
+            &s,
+            req(
+                "POST",
+                &session,
+                &[owner[0], owner[1], ("x-goog-upload-command", "query")],
+                b"",
+            ),
+        );
+        assert_eq!(header(&query, "x-goog-upload-status"), Some("active"));
+        assert_eq!(
+            header(&query, "x-goog-upload-chunk-granularity").is_some(),
+            strict
+        );
+        assert_eq!(query.body.is_empty(), strict);
+        let wrong = handle(
+            &s,
+            req(
+                "POST",
+                &session,
+                &[
+                    owner[0],
+                    owner[1],
+                    ("x-goog-upload-command", "upload"),
+                    ("x-goog-upload-offset", "1"),
+                ],
+                b"x",
+            ),
+        );
+        assert_eq!(wrong.status, 400, "{acceptance:?}");
+        if strict {
+            assert_eq!(
+                String::from_utf8_lossy(&wrong.body),
+                "Client uploaded to the wrong offset (1 instead of 0)."
+            );
+            assert_eq!(
+                header(&wrong, "content-type"),
+                Some("text/plain; charset=utf-8")
+            );
+        }
+        let cancel = handle(
+            &s,
+            req(
+                "POST",
+                &session,
+                &[owner[0], owner[1], ("x-goog-upload-command", "cancel")],
+                b"",
+            ),
+        );
+        assert_eq!(cancel.status, 200);
+        assert_eq!(header(&cancel, "x-goog-upload-status").is_some(), strict);
+        assert_eq!(cancel.body.is_empty(), strict);
+    }
+}
+
+/// Multipart on the Firebase dialect: strict types the object by its data part when the metadata
+/// names no type, and answers the two refusals with production's bodies (recorded, lean-v5).
+#[test]
+fn strict_firebase_multipart_follows_the_recording() {
+    for (acceptance, _) in seeded_pair() {
+        let s = state_with(Some(ALLOW_ALL_RULES), acceptance);
+        let strict = acceptance == TokenAcceptance::Verified;
+        let (content_type, body) = multipart(&json!({"name": "m.txt"}), "text/plain", b"hello");
+        let uploaded = handle(
+            &s,
+            req(
+                "POST",
+                &format!("/v0/b/{BUCKET}/o?name=m.txt&uploadType=multipart"),
+                &[
+                    ("authorization", "Bearer owner"),
+                    ("x-goog-upload-protocol", "multipart"),
+                    ("content-type", &content_type),
+                ],
+                &body,
+            ),
+        );
+        assert_eq!(uploaded.status, 200, "{acceptance:?}");
+        assert_eq!(
+            json_body(&uploaded)["contentType"],
+            if strict {
+                "text/plain"
+            } else {
+                "application/octet-stream"
+            }
+        );
+        let not_two_parts = handle(
+            &s,
+            req(
+                "POST",
+                &format!("/v0/b/{BUCKET}/o?name=n.txt"),
+                &[
+                    ("authorization", "Bearer owner"),
+                    ("x-goog-upload-protocol", "multipart"),
+                    ("content-type", "multipart/related; boundary=b"),
+                ],
+                b"--b\r\nContent-Type: application/json\r\n\r\n{}\r\n--b--",
+            ),
+        );
+        assert_eq!(not_two_parts.status, 400, "{acceptance:?}");
+        if strict {
+            assert_eq!(
+                String::from_utf8_lossy(&not_two_parts.body),
+                "Multipart body does not contain 2 or 3 parts."
+            );
+            assert_eq!(
+                header(&not_two_parts, "content-type"),
+                Some("text/plain; charset=utf-8")
+            );
+        }
+    }
+}
+
+/// The strict profile through the real server: a framed JSON API answer carries production's set
+/// (no `nosniff`, the origin reflected) and a Firebase v0 JSON answer its own CORS header.
+#[tokio::test]
+async fn the_strict_server_sends_production_headers_on_framed_answers() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    static BUDGET: BodyBudget = BodyBudget::new(1_572_864);
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let server = tokio::spawn(serve_storage_with_budget(
+        listener,
+        Arc::new(state(None)),
+        &BUDGET,
+    ));
+    let get_with = |path: &'static str, origin: &'static str| async move {
+        let mut stream = tokio::net::TcpStream::connect(addr).await.unwrap();
+        stream
+            .write_all(
+                format!("GET {path} HTTP/1.1\r\nHost: 127.0.0.1\r\n{origin}Authorization: Bearer owner\r\nConnection: close\r\n\r\n").as_bytes(),
+            )
+            .await
+            .unwrap();
+        let mut raw = Vec::new();
+        stream.read_to_end(&mut raw).await.unwrap();
+        String::from_utf8_lossy(&raw).to_lowercase()
+    };
+    let get = |path: &'static str| get_with(path, "Origin: http://localhost:5173\r\n");
+    let json_api = get("/storage/v1/b/demo-app.appspot.com/o/absent.bin").await;
+    assert!(json_api.starts_with("http/1.1 404"), "{json_api}");
+    assert!(
+        json_api.contains("access-control-allow-origin: http://localhost:5173"),
+        "{json_api}"
+    );
+    assert!(
+        json_api.contains("vary: origin\r\nvary: x-origin"),
+        "{json_api}"
+    );
+    assert!(!json_api.contains("x-content-type-options"), "{json_api}");
+    // A browser's request is answered with what it needs to read the answer (the origin reflected,
+    // the official emulator's exposed headers), on both dialects; the recorded wildcard of the
+    // v0 JSON answers is for requests without an `Origin`.
+    assert!(
+        json_api.contains("access-control-expose-headers: content-type,x-firebase-storage-version"),
+        "{json_api}"
+    );
+    let firebase = get("/v0/b/demo-app.appspot.com/o/absent.bin").await;
+    assert!(
+        firebase.contains("access-control-allow-origin: http://localhost:5173"),
+        "{firebase}"
+    );
+    assert!(
+        firebase.contains("access-control-expose-headers: content-type,x-firebase-storage-version"),
+        "{firebase}"
+    );
+    assert!(
+        firebase.contains("x-content-type-options: nosniff"),
+        "{firebase}"
+    );
+    // Without an `Origin` the recorded set stays: the wildcard and its two exposed headers on the
+    // v0 JSON answer, no CORS on the JSON API.
+    let recorded = get_with("/v0/b/demo-app.appspot.com/o/absent.bin", "").await;
+    assert!(
+        recorded.contains("access-control-allow-origin: *"),
+        "{recorded}"
+    );
+    assert!(
+        recorded.contains("access-control-expose-headers: content-range, x-firebase-storage-xsrf"),
+        "{recorded}"
+    );
+    let recorded_json = get_with("/storage/v1/b/demo-app.appspot.com/o/absent.bin", "").await;
+    assert!(
+        !recorded_json.contains("access-control-"),
+        "{recorded_json}"
+    );
+    // A shape the recordings do not cover keeps the official emulator's stamps.
+    let unframed = get("/b").await;
+    assert!(
+        unframed.contains("access-control-expose-headers: content-type,x-firebase-storage-version"),
+        "{unframed}"
+    );
+    server.abort();
+}
+
+/// The remaining strict answers of the lean-v5 recording: `Bad Request.` for a v0 upload name
+/// production refuses, no `x-goog-upload-status` on a refused simple upload, the `.txt` type
+/// inference of a v0 upload and the recorded malformed metadata part on the JSON API.
+#[test]
+fn strict_answers_that_follow_single_recorded_rows() {
+    for (acceptance, _) in seeded_pair() {
+        let strict = acceptance == TokenAcceptance::Verified;
+        let s = state_with(Some(ALLOW_ALL_RULES), acceptance);
+        let owner = [("authorization", "Bearer owner")];
+        // A v0 upload name with a line feed.
+        let refused = handle(
+            &s,
+            req(
+                "POST",
+                &format!("/v0/b/{BUCKET}/o?name=a%0Ab.bin"),
+                &owner,
+                b"x",
+            ),
+        );
+        assert_eq!(refused.status, 400, "{acceptance:?}");
+        if strict {
+            assert_eq!(
+                String::from_utf8_lossy(&refused.body),
+                "{\n  \"error\": {\n    \"code\": 400,\n    \"message\": \"Bad Request.\"\n  }\n}"
+            );
+        }
+        // A `.txt` object uploaded as `application/octet-stream`.
+        let uploaded = handle(
+            &s,
+            req(
+                "POST",
+                &format!("/v0/b/{BUCKET}/o?name=a.txt"),
+                &[owner[0], ("content-type", "application/octet-stream")],
+                b"hello",
+            ),
+        );
+        assert_eq!(
+            json_body(&uploaded)["contentType"],
+            if strict {
+                "text/plain"
+            } else {
+                "application/octet-stream"
+            },
+            "{acceptance:?}"
+        );
+        let binary = handle(
+            &s,
+            req(
+                "POST",
+                &format!("/v0/b/{BUCKET}/o?name=a.bin"),
+                &[owner[0], ("content-type", "application/octet-stream")],
+                b"hello",
+            ),
+        );
+        assert_eq!(
+            json_body(&binary)["contentType"],
+            "application/octet-stream"
+        );
+        // A refused simple upload under a denying rule carries no upload-status header in strict.
+        let denying = state_with(
+            Some("rules_version = '2'; service firebase.storage { match /b/{bucket}/o { match /{path=**} { allow read: if true; } } }"),
+            TokenAcceptance::Verified,
+        );
+        let denied = handle(
+            &denying,
+            req(
+                "POST",
+                &format!("/v0/b/{BUCKET}/o?name=d.bin"),
+                &[("content-type", "application/octet-stream")],
+                b"x",
+            ),
+        );
+        assert_eq!(denied.status, 403);
+        assert!(
+            header(&denied, "x-goog-upload-status").is_none(),
+            "{acceptance:?}"
+        );
+        // The recorded malformed metadata part of the JSON API.
+        let (content_type, body) = {
+            let boundary = "b";
+            let mut body = Vec::new();
+            body.extend_from_slice(
+                format!("--{boundary}\r\nContent-Type: application/json\r\n\r\n{{invalid-json\r\n--{boundary}\r\nContent-Type: text/plain\r\n\r\nhello\r\n--{boundary}--").as_bytes(),
+            );
+            (format!("multipart/related; boundary={boundary}"), body)
+        };
+        let bad = handle(
+            &s,
+            req(
+                "POST",
+                &format!("/upload/storage/v1/b/{BUCKET}/o?uploadType=multipart&name=m.bin"),
+                &[owner[0], ("content-type", &content_type)],
+                &body,
+            ),
+        );
+        assert_eq!(bad.status, 400, "{acceptance:?}");
+        if strict {
+            assert_eq!(
+                header(&bad, "content-type"),
+                Some("text/html; charset=UTF-8")
+            );
+            assert!(String::from_utf8_lossy(&bad.body).contains(
+                "Parse Error: Unexpected end of string. Expected : between key:value pair.\\ninvalid-json\\n            ^"
+            ));
+        }
+    }
+}
+
+// ------------------------------------------------------------------------------------------
+// properties of the Firebase list over the handler
+// ------------------------------------------------------------------------------------------
+
+mod list_properties {
+    use super::*;
+    use proptest::prelude::*;
+
+    const SEGMENTS: &[&str] = &["a", "b", "c", "dir", "dir2", "x"];
+
+    /// The standard base64 (with padding) of an entry name, as production writes the page token.
+    fn token_of(entry: &str) -> String {
+        fireemu_core_storage::hash::base64(entry.as_bytes())
+    }
+
+    fn percent(text: &str) -> String {
+        text.bytes()
+            .map(|b| match b {
+                b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                    char::from(b).to_string()
+                }
+                other => format!("%{other:02X}"),
+            })
+            .collect()
+    }
+
+    proptest! {
+        /// Following `nextPageToken` through the Firebase list of both profiles gives the
+        /// single-page listing: items and prefixes in one name order, none twice, none missing,
+        /// at most `maxResults` per page, and every token the base64 of the last entry returned.
+        #[test]
+        fn firebase_list_pages_follow_their_tokens(
+            names in proptest::collection::btree_set(
+                proptest::collection::vec(proptest::sample::select(SEGMENTS), 1..=3)
+                    .prop_map(|segments| segments.join("/")),
+                0..=16,
+            ),
+            prefix in proptest::sample::select(&["", "a/", "dir/"][..]),
+            delimiter in proptest::sample::select(&["", "/"][..]),
+            max in 1usize..=4,
+            strict in any::<bool>(),
+        ) {
+            let acceptance = if strict { TokenAcceptance::Verified } else { TokenAcceptance::EmulatorMock };
+            let s = state_with(Some(ALLOW_ALL_RULES), acceptance);
+            let owner = [("authorization", "Bearer owner")];
+            for name in &names {
+                let uploaded = handle(
+                    &s,
+                    req(
+                        "POST",
+                        &format!("/upload/storage/v1/b/{BUCKET}/o?uploadType=media&name={}", percent(name)),
+                        &owner,
+                        b"x",
+                    ),
+                );
+                prop_assert_eq!(uploaded.status, 200);
+            }
+            let mut expected: Vec<String> = Vec::new();
+            {
+                let mut entries = std::collections::BTreeSet::new();
+                for name in &names {
+                    let Some(rest) = name.strip_prefix(prefix) else { continue };
+                    match (delimiter.is_empty(), rest.find(delimiter)) {
+                        (false, Some(i)) => { entries.insert(format!("{prefix}{}{delimiter}", &rest[..i])); }
+                        _ => { entries.insert(name.clone()); }
+                    }
+                }
+                expected.extend(entries);
+            }
+            let mut seen: Vec<String> = Vec::new();
+            let mut token: Option<String> = None;
+            for _ in 0..expected.len() + 2 {
+                let route = format!(
+                    "/v0/b/{BUCKET}/o?maxResults={max}{}{}{}",
+                    if prefix.is_empty() { String::new() } else { format!("&prefix={}", percent(prefix)) },
+                    if delimiter.is_empty() { String::new() } else { format!("&delimiter={}", percent(delimiter)) },
+                    token.as_ref().map_or_else(String::new, |t| format!("&pageToken={}", percent(t))),
+                );
+                let page = handle(&s, req("GET", &route, &owner, b""));
+                prop_assert_eq!(page.status, 200);
+                let body = json_body(&page);
+                let mut page_entries: Vec<String> = body["items"].as_array().unwrap_or(&Vec::new()).iter()
+                    .map(|item| item["name"].as_str().unwrap().to_owned())
+                    .chain(body["prefixes"].as_array().unwrap_or(&Vec::new()).iter().map(|p| p.as_str().unwrap().to_owned()))
+                    .collect();
+                page_entries.sort();
+                prop_assert!(page_entries.len() <= max);
+                seen.extend(page_entries.clone());
+                if let Some(next) = body["nextPageToken"].as_str() {
+                    prop_assert_eq!(page_entries.len(), max);
+                    prop_assert_eq!(next, token_of(page_entries.last().unwrap()));
+                    token = Some(next.to_owned());
+                } else {
+                    prop_assert_eq!(seen, expected);
+                    return Ok(());
+                }
+            }
+            prop_assert!(false, "the walk did not end");
+        }
+    }
+}
+
+/// Puts `names` straight into the object store of `state`.
+fn put_names(state: &StorageState, names: &[String]) {
+    let mut store = state.store.lock().unwrap();
+    for name in names {
+        store
+            .put(
+                &BucketName::try_new(BUCKET).unwrap(),
+                &ObjectName::try_new(name).unwrap(),
+                vec![1],
+                NewMetadata::default(),
+                Precondition::default(),
+                START,
+            )
+            .unwrap();
+    }
+}
+
+/// A glob page read in batches and cut when it is complete is the page the whole listing filtered
+/// by the glob gives, token after token, for patterns, delimiters, prefixes, offsets and sizes,
+/// with a token that names no entry starting the listing over.
+#[test]
+#[allow(clippy::too_many_lines)]
+fn a_glob_listing_in_batches_equals_the_filtered_listing_page_by_page() {
+    let state = state_with(Some(ALLOW_ALL_RULES), TokenAcceptance::Verified);
+    let mut names: Vec<String> = Vec::new();
+    for dir in ["a", "b", "dir", "dir2", "z"] {
+        for leaf in 0..40 {
+            names.push(format!("{dir}/f{leaf:02}.txt"));
+            if leaf % 7 == 0 {
+                names.push(format!("{dir}/sub/g{leaf:02}.bin"));
+            }
+        }
+    }
+    names.extend([
+        "top.txt".to_owned(),
+        "top2.bin".to_owned(),
+        "Z.txt".to_owned(),
+    ]);
+    put_names(&state, &names);
+    let encode = |text: &str| -> String {
+        text.bytes().fold(String::new(), |mut out, byte| {
+            use std::fmt::Write as _;
+            let _ = write!(out, "%{byte:02X}");
+            out
+        })
+    };
+    let bucket = BucketName::try_new(BUCKET).unwrap();
+    for (glob, prefix, delimiter, start, end) in [
+        ("**", "", "", "", ""),
+        ("**", "", "/", "", ""),
+        ("dir/*", "", "", "", ""),
+        ("*/f0[0-3].txt", "", "/", "", ""),
+        ("{a,b}/**", "", "/", "", ""),
+        ("**.bin", "dir", "/", "", ""),
+        ("dir/**", "dir/", "/", "", ""),
+        ("**/f1?.txt", "", "", "b/", "dir2"),
+        ("nothing*", "", "/", "", ""),
+        ("*", "", "/", "", ""),
+    ] {
+        for max in [1usize, 2, 3, 7, 50, 1000] {
+            let filter = |name: &str| {
+                fireemu_core_storage::glob::glob_matches(glob, name)
+                    && (start.is_empty() || name >= start)
+                    && (end.is_empty() || name < end)
+            };
+            let mut token: Option<String> = None;
+            for round in 0..300 {
+                let expected = state.store.lock().unwrap().list_matching(
+                    &bucket,
+                    prefix,
+                    Some(delimiter),
+                    token.as_deref(),
+                    Some(max),
+                    &filter,
+                );
+                let mut query = format!(
+                    "matchGlob={}&maxResults={max}&prefix={}&delimiter={}",
+                    encode(glob),
+                    encode(prefix),
+                    encode(delimiter)
+                );
+                if !start.is_empty() {
+                    query = format!("{query}&startOffset={}", encode(start));
+                }
+                if !end.is_empty() {
+                    query = format!("{query}&endOffset={}", encode(end));
+                }
+                if let Some(token) = &token {
+                    query = format!("{query}&pageToken={}", encode(token));
+                }
+                let answered = handle(
+                    &state,
+                    req(
+                        "GET",
+                        &format!("/storage/v1/b/{BUCKET}/o?{query}"),
+                        &[("authorization", "Bearer owner")],
+                        b"",
+                    ),
+                );
+                assert_eq!(
+                    answered.status, 200,
+                    "{glob} {prefix} {delimiter} {max} {round}"
+                );
+                let body = json_body(&answered);
+                let got_items: Vec<&str> = body["items"]
+                    .as_array()
+                    .map(|items| items.iter().map(|i| i["name"].as_str().unwrap()).collect())
+                    .unwrap_or_default();
+                let want_items: Vec<&str> =
+                    expected.items.iter().map(|m| m.name.as_str()).collect();
+                let got_prefixes: Vec<&str> = body["prefixes"]
+                    .as_array()
+                    .map(|p| p.iter().map(|v| v.as_str().unwrap()).collect())
+                    .unwrap_or_default();
+                let context = format!("{glob} {prefix:?} {delimiter:?} max {max} round {round}");
+                assert_eq!(got_items, want_items, "{context}");
+                assert_eq!(got_prefixes, expected.prefixes, "{context}");
+                assert_eq!(
+                    body["nextPageToken"].as_str().map(str::to_owned),
+                    expected.next_page_token,
+                    "{context}"
+                );
+                token = expected.next_page_token;
+                if token.is_none() {
+                    break;
+                }
+            }
+        }
+    }
+    // A token that names no entry starts the listing over, with or without a glob.
+    let listed = |query: &str| {
+        json_body(&handle(
+            &state,
+            req(
+                "GET",
+                &format!("/storage/v1/b/{BUCKET}/o?{query}"),
+                &[("authorization", "Bearer owner")],
+                b"",
+            ),
+        ))
+    };
+    let with_glob = listed(&format!(
+        "matchGlob={}&maxResults=2&pageToken=nope",
+        encode("**")
+    ));
+    let without_token = listed(&format!("matchGlob={}&maxResults=2", encode("**")));
+    assert_eq!(with_glob, without_token);
+}
+
+/// A page reflects names as they are when it is read: a name deleted while the page is being made
+/// leaves the page, and nothing else does. The listing never ends early (a next-page token stays
+/// while matching names remain after the page), and a prefix stays listed while any name under it
+/// exists, even when the one name that stood for it is deleted. A writer deletes and re-creates one
+/// name of the first page while a reader lists that page again and again.
+#[test]
+fn a_glob_listing_keeps_its_token_and_prefixes_while_a_name_of_the_page_is_deleted_and_recreated() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    let bucket = BucketName::try_new(BUCKET).unwrap();
+    for (delimiter, victim) in [("", "a/00005.txt"), ("/", "d00/f0")] {
+        let state = Arc::new(state_with(Some(ALLOW_ALL_RULES), TokenAcceptance::Verified));
+        let names: Vec<String> = if delimiter.is_empty() {
+            (0..1_500).map(|n| format!("a/{n:05}.txt")).collect()
+        } else {
+            (0..120)
+                .flat_map(|d| (0..3).map(move |f| format!("d{d:02}/f{f}")))
+                .collect()
+        };
+        put_names(&state, &names);
+        let stop = Arc::new(AtomicBool::new(false));
+        let writer = {
+            let (state, stop, bucket) = (Arc::clone(&state), Arc::clone(&stop), bucket.clone());
+            let victim = ObjectName::try_new(victim).unwrap();
+            std::thread::spawn(move || {
+                while !stop.load(Ordering::Relaxed) {
+                    let _ = state.store.lock().unwrap().delete(
+                        &bucket,
+                        &victim,
+                        Precondition::default(),
+                    );
+                    std::thread::yield_now();
+                    put_names(&state, &[victim.as_str().to_owned()]);
+                    std::thread::yield_now();
+                }
+            })
+        };
+        let (mut without_token, mut without_prefix) = (0, 0);
+        for _ in 0..1_000 {
+            let answered = handle(
+                &state,
+                req(
+                    "GET",
+                    &format!(
+                        "/storage/v1/b/{BUCKET}/o?matchGlob=%2A%2A&maxResults=10&delimiter={}",
+                        if delimiter.is_empty() { "" } else { "%2F" }
+                    ),
+                    &[("authorization", "Bearer owner")],
+                    b"",
+                ),
+            );
+            let body = json_body(&answered);
+            without_token += usize::from(body.get("nextPageToken").is_none());
+            if !delimiter.is_empty() {
+                without_prefix += usize::from(
+                    !body["prefixes"]
+                        .as_array()
+                        .is_some_and(|p| p.iter().any(|v| v == "d00/")),
+                );
+            }
+        }
+        stop.store(true, Ordering::Relaxed);
+        writer.join().unwrap();
+        assert_eq!(
+            without_token, 0,
+            "pages that lost the token ({delimiter:?})"
+        );
+        assert_eq!(without_prefix, 0, "pages that lost d00/ ({delimiter:?})");
+    }
+}
+
+/// Deletes `names` from the bucket of `state` (what a client does between the scan of a glob listing
+/// and the page it makes).
+fn delete_names(state: &StorageState, names: &[&str]) {
+    let bucket = BucketName::try_new(BUCKET).unwrap();
+    for name in names {
+        let _ = state.store.lock().unwrap().delete(
+            &bucket,
+            &ObjectName::try_new(*name).unwrap(),
+            Precondition::default(),
+        );
+    }
+}
+
+/// The page of a glob listing with `delete` run between the scan and the page.
+fn glob_page_after(
+    state: &StorageState,
+    glob: &str,
+    delimiter: &str,
+    max: usize,
+    delete: &[&str],
+) -> fireemu_core_storage::store::ListPage {
+    use fireemu_adapter_http::storage::{glob_page, GlobQuery};
+    let bucket = BucketName::try_new(BUCKET).unwrap();
+    let glob = fireemu_core_storage::glob::Glob::new(glob);
+    let anything = |_: &str| true;
+    glob_page(
+        state,
+        &bucket,
+        &GlobQuery {
+            prefix: "",
+            delimiter,
+            token: None,
+            max,
+            glob: &glob,
+            in_offsets: &anything,
+        },
+        &|| delete_names(state, delete),
+    )
+    .unwrap()
+}
+
+/// The three ways a deletion between the scan and the page used to end a listing early (found by
+/// the reviews of round 3): the name that stood for a folded prefix, the entry after the page, and
+/// an item of the page itself.
+#[test]
+fn a_name_deleted_between_the_scan_and_the_page_neither_ends_the_listing_nor_hides_a_prefix() {
+    let state = state_with(Some(ALLOW_ALL_RULES), TokenAcceptance::Verified);
+    let mut names: Vec<String> = (0..300).map(|n| format!("a/{n:03}")).collect();
+    names.push("z".to_owned());
+    put_names(&state, &names);
+    // `a/000` stood for the prefix `a/`; its 299 siblings remain.
+    let page = glob_page_after(&state, "**", "/", 1, &["a/000"]);
+    assert_eq!(page.prefixes, ["a/"]);
+    assert_eq!(page.next_page_token.as_deref(), Some("z"));
+
+    let state = state_with(Some(ALLOW_ALL_RULES), TokenAcceptance::Verified);
+    put_names(&state, &["a".to_owned(), "b".to_owned(), "c".to_owned()]);
+    // `b` was the entry after the page of one: it leaves nothing behind, and `c` is still next.
+    let page = glob_page_after(&state, "**", "", 1, &["b"]);
+    assert_eq!(
+        page.items
+            .iter()
+            .map(|m| m.name.as_str())
+            .collect::<Vec<_>>(),
+        ["a"]
+    );
+    assert_eq!(page.next_page_token.as_deref(), Some("b"));
+
+    let state = state_with(Some(ALLOW_ALL_RULES), TokenAcceptance::Verified);
+    let names: Vec<String> = (0..2_000).map(|n| format!("a/{n:05}.txt")).collect();
+    put_names(&state, &names);
+    // An item of the page itself is gone: the page shows the nine that remain and the token stays.
+    let page = glob_page_after(&state, "**", "", 10, &["a/00005.txt"]);
+    assert_eq!(page.items.len(), 9);
+    assert!(page.items.iter().all(|m| m.name.as_str() != "a/00005.txt"));
+    assert_eq!(page.next_page_token.as_deref(), Some("a/00010.txt"));
+}
+
+proptest::proptest! {
+    #![proptest_config(proptest::prelude::ProptestConfig::with_cases(200))]
+
+
+    /// For any names, glob, delimiter and page size, a page made while a subset of its names is
+    /// deleted is the page of the store before the deletion minus the deleted items: the same
+    /// prefixes and the same next-page token, whatever was deleted.
+    #[test]
+    fn a_glob_page_made_during_deletions_is_the_page_before_them_minus_the_deleted_items(
+        leaves in proptest::collection::btree_set(
+            proptest::collection::vec(proptest::sample::select(vec!["a", "b", "c", "x.txt", "y.bin"]), 1..=3)
+                .prop_map(|parts| parts.join("/")),
+            1..=30,
+        ),
+        glob in proptest::sample::select(vec!["**", "*", "a/**", "**.txt", "{a,b}/*", "*/*"]),
+        delimiter in proptest::sample::select(vec!["", "/"]),
+        max in 1usize..=4,
+        doomed in proptest::collection::vec(0usize..30, 0..=8),
+    ) {
+        // A name cannot be both an object and a prefix of another in the listing's folding, but the
+        // store allows it; the reference below uses the same store, so it holds either way.
+        let state = state_with(Some(ALLOW_ALL_RULES), TokenAcceptance::Verified);
+        let names: Vec<String> = leaves.iter().cloned().collect();
+        put_names(&state, &names);
+        let bucket = BucketName::try_new(BUCKET).unwrap();
+        let matcher = fireemu_core_storage::glob::Glob::new(glob);
+        let expected = state.store.lock().unwrap().list_matching(
+            &bucket, "", Some(delimiter), None, Some(max), &|name| matcher.matches(name),
+        );
+        let deleted: Vec<&str> = doomed.iter().filter_map(|i| names.get(*i).map(String::as_str)).collect();
+        let page = glob_page_after(&state, glob, delimiter, max, &deleted);
+        proptest::prop_assert_eq!(&page.prefixes, &expected.prefixes);
+        proptest::prop_assert_eq!(&page.next_page_token, &expected.next_page_token);
+        let want: Vec<&str> = expected.items.iter().map(|m| m.name.as_str()).filter(|n| !deleted.contains(n)).collect();
+        let got: Vec<&str> = page.items.iter().map(|m| m.name.as_str()).collect();
+        proptest::prop_assert_eq!(got, want);
+    }
+}
+
+/// Only a list that evaluates a glob goes through the slots of its own: strict, the Google-fronted
+/// list route, a GET that carries `matchGlob`. The emulator profile ignores the parameter, and a
+/// read or a Firebase list that carries it evaluates nothing.
+#[test]
+fn only_a_strict_json_api_list_with_a_match_glob_is_admitted_through_the_glob_slots() {
+    use fireemu_adapter_http::storage::uses_match_glob;
+    let list = format!("/storage/v1/b/{BUCKET}/o");
+    assert!(uses_match_glob(true, "GET", &list, "matchGlob=%2A%2A"));
+    assert!(uses_match_glob(
+        true,
+        "GET",
+        &format!("/b/{BUCKET}/o"),
+        "prefix=a&matchGlob=a"
+    ));
+    assert!(!uses_match_glob(false, "GET", &list, "matchGlob=%2A%2A"));
+    assert!(!uses_match_glob(true, "GET", &list, "prefix=a"));
+    assert!(!uses_match_glob(true, "POST", &list, "matchGlob=a"));
+    assert!(!uses_match_glob(
+        true,
+        "GET",
+        &format!("/v0/b/{BUCKET}/o"),
+        "matchGlob=a"
+    ));
+    assert!(!uses_match_glob(
+        true,
+        "GET",
+        &format!("{list}/object.txt"),
+        "matchGlob=a"
+    ));
+    assert!(!uses_match_glob(
+        true,
+        "GET",
+        &format!("/storage/v1/b/{BUCKET}"),
+        "matchGlob=a"
+    ));
+}
+
+/// How much of a large bucket a glob page reads and keeps: the names kept are one per entry of the
+/// page (and the one past it), not one per name that matched, and the scan stops after the batch
+/// that completes the page instead of walking the bucket.
+#[test]
+fn a_glob_page_reads_and_keeps_a_bounded_part_of_a_large_bucket() {
+    use fireemu_adapter_http::storage::{glob_scan, GlobQuery, GLOB_BATCH};
+    let state = state_with(Some(ALLOW_ALL_RULES), TokenAcceptance::Verified);
+    let names: Vec<String> = (0..20_000).map(|n| format!("a/{n:05}.txt")).collect();
+    put_names(&state, &names);
+    let bucket = BucketName::try_new(BUCKET).unwrap();
+    let all = fireemu_core_storage::glob::Glob::new("**");
+    let none = fireemu_core_storage::glob::Glob::new("nothing*");
+    let anything = |_: &str| true;
+    let query = |delimiter, token, glob| GlobQuery {
+        prefix: "",
+        delimiter,
+        token,
+        max: 10,
+        glob,
+        in_offsets: &anything,
+    };
+
+    // A page of 10 items: 11 entries kept, and the scan ends inside the first batch.
+    let scan = glob_scan(&state, &bucket, &query("", None, &all), None).unwrap();
+    assert_eq!(scan.entries.len(), 11);
+    assert_eq!(scan.until.as_deref(), Some(names[GLOB_BATCH - 1].as_str()));
+
+    // With a delimiter every name folds into one entry: one entry kept for 20,000 matches, and the
+    // scan has to read them all to know there is no second entry.
+    let scan = glob_scan(&state, &bucket, &query("/", None, &all), None).unwrap();
+    assert_eq!(scan.entries.len(), 1);
+    assert_eq!(
+        (scan.entries[0].key.as_str(), scan.entries[0].is_item),
+        ("a/", false)
+    );
+    assert_eq!(scan.until.as_deref(), Some(names[19_999].as_str()));
+
+    // From a token the scan starts there: the first entry it finds is the token's.
+    let token = names[10_000].clone();
+    let scan = glob_scan(
+        &state,
+        &bucket,
+        &query("", Some(&token), &all),
+        Some(&token),
+    )
+    .unwrap();
+    assert_eq!(
+        scan.entries.first().map(|e| e.key.as_str()),
+        Some(token.as_str())
+    );
+    assert_eq!(scan.entries.len(), 11);
+    assert_eq!(
+        scan.until.as_deref(),
+        Some(names[10_000 + GLOB_BATCH - 1].as_str())
+    );
+
+    // A glob nothing matches keeps nothing, whatever the bucket size.
+    let scan = glob_scan(&state, &bucket, &query("", None, &none), None).unwrap();
+    assert!(scan.entries.is_empty());
+}
+
+/// A flood of list requests that carry an expensive `matchGlob` (more than the handler slots, each
+/// working through many long names) leaves the other requests their slots: a plain read answers
+/// promptly while they run, and they wait for their own two slots without holding a thread.
+#[tokio::test]
+async fn a_flood_of_expensive_glob_lists_leaves_the_handler_slots_to_other_requests() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    static BUDGET: BodyBudget = BodyBudget::new(1_572_864);
+    let state = state_with(Some(ALLOW_ALL_RULES), TokenAcceptance::Verified);
+    let mut names: Vec<String> = (0..40)
+        .map(|n| format!("{n:03}{}", "x".repeat(990)))
+        .collect();
+    names.push("plain.txt".to_owned());
+    put_names(&state, &names);
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let server = tokio::spawn(serve_storage_with_budget(
+        listener,
+        Arc::new(state),
+        &BUDGET,
+    ));
+    // Every byte of the pattern percent-encoded: about 18,000 characters of query.
+    let pattern: String =
+        format!("{}z", "*{,}".repeat(1_500))
+            .bytes()
+            .fold(String::new(), |mut out, byte| {
+                use std::fmt::Write as _;
+                let _ = write!(out, "%{byte:02X}");
+                out
+            });
+    let mut flood = Vec::new();
+    for _ in 0..24 {
+        let mut stream = tokio::net::TcpStream::connect(addr).await.unwrap();
+        stream
+            .write_all(
+                format!("GET /storage/v1/b/{BUCKET}/o?matchGlob={pattern} HTTP/1.1\r\nHost: 127.0.0.1\r\nAuthorization: Bearer owner\r\nConnection: close\r\n\r\n").as_bytes(),
+            )
+            .await
+            .unwrap();
+        flood.push(stream);
+    }
+    // Let the flood reach the server and start working.
+    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+    let started = std::time::Instant::now();
+    let mut stream = tokio::net::TcpStream::connect(addr).await.unwrap();
+    stream
+        .write_all(
+            format!("GET /storage/v1/b/{BUCKET}/o/plain.txt HTTP/1.1\r\nHost: 127.0.0.1\r\nAuthorization: Bearer owner\r\nConnection: close\r\n\r\n").as_bytes(),
+        )
+        .await
+        .unwrap();
+    let mut raw = Vec::new();
+    tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        stream.read_to_end(&mut raw),
+    )
+    .await
+    .expect("a plain read waited for the flood")
+    .unwrap();
+    assert!(String::from_utf8_lossy(&raw).starts_with("HTTP/1.1 200"));
+    assert!(started.elapsed() < std::time::Duration::from_secs(5));
+    drop(flood);
+    server.abort();
+}
+
+/// A glob list whose client has gone stops at the next name and gives its slot back: with both glob
+/// slots held by expensive lists, a short glob list that waits behind them is answered soon after
+/// the two clients disconnect, not when the abandoned scans would have ended.
+#[tokio::test]
+async fn an_abandoned_glob_scan_gives_its_slot_back_when_its_client_has_gone() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    static BUDGET: BodyBudget = BodyBudget::new(1_572_864);
+    let state = state_with(Some(ALLOW_ALL_RULES), TokenAcceptance::Verified);
+    let mut names: Vec<String> = (0..12)
+        .map(|n| format!("{n:03}{}", "x".repeat(990)))
+        .collect();
+    names.push("plain.txt".to_owned());
+    put_names(&state, &names);
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let server = tokio::spawn(serve_storage_with_budget(
+        listener,
+        Arc::new(state),
+        &BUDGET,
+    ));
+    let pattern: String =
+        format!("{}z", "*{,}".repeat(3_000))
+            .bytes()
+            .fold(String::new(), |mut out, byte| {
+                use std::fmt::Write as _;
+                let _ = write!(out, "%{byte:02X}");
+                out
+            });
+    // A browser keeps its connection alive: the server learns of its going from the closed socket.
+    let send = |query: String, close: &'static str| async move {
+        let mut stream = tokio::net::TcpStream::connect(addr).await.unwrap();
+        stream
+            .write_all(
+                format!("GET /storage/v1/b/{BUCKET}/o?{query} HTTP/1.1\r\nHost: 127.0.0.1\r\nAuthorization: Bearer owner\r\n{close}\r\n").as_bytes(),
+            )
+            .await
+            .unwrap();
+        stream
+    };
+    let hostile = vec![
+        send(format!("matchGlob={pattern}"), "").await,
+        send(format!("matchGlob={pattern}"), "").await,
+    ];
+    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+    let mut waiting = send("matchGlob=plain.%2A".to_owned(), "Connection: close\r\n").await;
+    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    let started = std::time::Instant::now();
+    drop(hostile);
+    let mut raw = Vec::new();
+    tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        waiting.read_to_end(&mut raw),
+    )
+    .await
+    .expect("the glob list waited for scans whose clients had gone")
+    .unwrap();
+    let text = String::from_utf8_lossy(&raw).into_owned();
+    assert!(text.starts_with("HTTP/1.1 200"), "{text}");
+    assert!(text.contains("plain.txt"), "{text}");
+    println!("answered {:?} after the clients left", started.elapsed());
+    server.abort();
+}
+
+/// Production answers a JSON API object delete with `204` and `Content-Length: 0` (recorded in both
+/// stage 3 v9 recordings, recipes c and d, and compared byte for byte by the management comparison).
+/// hyper drops a content length from a `204` unless the body reports a known length, so this is
+/// judged on the bytes of the wire. Both profiles send it (it is a header that production sends and
+/// refuses nothing). The official emulator's `res.sendStatus(204)` sends none. Every other `204` is
+/// not recorded and stays as it was: the Firebase dialect's object delete has no content length.
+#[tokio::test]
+async fn a_json_api_object_delete_sends_content_length_zero_on_the_wire_and_other_204s_do_not() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    static BUDGET: BodyBudget = BodyBudget::new(1_572_864);
+    for acceptance in BOTH_PROFILES {
+        let state = state_with(Some(ALLOW_ALL_RULES), acceptance);
+        put_names(
+            &state,
+            &[
+                "gone.txt".to_owned(),
+                "gone2.txt".to_owned(),
+                "kept.txt".to_owned(),
+            ],
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = tokio::spawn(serve_storage_with_budget(
+            listener,
+            Arc::new(state),
+            &BUDGET,
+        ));
+        let wire = |request: String| async move {
+            let mut stream = tokio::net::TcpStream::connect(addr).await.unwrap();
+            stream.write_all(request.as_bytes()).await.unwrap();
+            let mut raw = Vec::new();
+            stream.read_to_end(&mut raw).await.unwrap();
+            String::from_utf8_lossy(&raw).into_owned()
+        };
+        let delete = |path: String| {
+            wire(format!(
+                "DELETE {path} HTTP/1.1\r\nHost: 127.0.0.1\r\nAuthorization: Bearer owner\r\nConnection: close\r\n\r\n"
+            ))
+        };
+        let head_of = |raw: &str| {
+            raw.split("\r\n\r\n")
+                .next()
+                .unwrap_or("")
+                .to_ascii_lowercase()
+        };
+        // The value of the `content-length` header line, whatever else the head says (the exposed
+        // headers name `x-goog-upload-header-content-length`).
+        let length_of = |head: &str| {
+            head.split("\r\n")
+                .find_map(|line| line.strip_prefix("content-length:"))
+                .map(|value| value.trim().to_owned())
+        };
+        // The JSON API object delete, in both spellings of the route: 204, a zero length, no body.
+        for path in [
+            format!("/storage/v1/b/{BUCKET}/o/gone.txt"),
+            format!("/b/{BUCKET}/o/gone2.txt"),
+        ] {
+            let raw = delete(path.clone()).await;
+            let head = head_of(&raw);
+            assert!(
+                head.starts_with("http/1.1 204"),
+                "{acceptance:?} {path}: {raw}"
+            );
+            assert!(
+                head.contains("content-length: 0"),
+                "{acceptance:?} {path}: {raw}"
+            );
+            assert!(
+                raw.ends_with("\r\n\r\n"),
+                "{acceptance:?} {path}: a body followed: {raw}"
+            );
+        }
+        // Near misses: the Firebase dialect's delete of an object is a 204 without a length; a delete
+        // of an object that is not there is the ordinary 404 with its own length and body.
+        let firebase = delete(format!("/v0/b/{BUCKET}/o/kept.txt")).await;
+        let head = head_of(&firebase);
+        assert!(
+            head.starts_with("http/1.1 204"),
+            "{acceptance:?} {firebase}"
+        );
+        assert_eq!(length_of(&head), None, "{acceptance:?} {firebase}");
+        let missing = delete(format!("/storage/v1/b/{BUCKET}/o/not-there.txt")).await;
+        let head = head_of(&missing);
+        assert!(head.starts_with("http/1.1 404"), "{acceptance:?} {missing}");
+        assert_ne!(
+            length_of(&head).as_deref(),
+            Some("0"),
+            "{acceptance:?} {missing}"
+        );
+        server.abort();
+    }
+}
+
+/// An unauthenticated list can carry any `matchGlob`: a pathological one is answered on a thread
+/// with a blocking-pool sized stack, and a second request is not held up while it is evaluated.
+#[test]
+fn a_pathological_match_glob_neither_overflows_the_stack_nor_blocks_other_requests() {
+    let s = state_with(Some(ALLOW_ALL_RULES), TokenAcceptance::Verified);
+    for name in ["a.txt", "b.txt", "dir/c.txt"] {
+        let uploaded = handle(
+            &s,
+            req(
+                "POST",
+                &format!(
+                    "/upload/storage/v1/b/{BUCKET}/o?uploadType=media&name={}",
+                    name.replace('/', "%2F")
+                ),
+                &[("authorization", "Bearer owner")],
+                b"x",
+            ),
+        );
+        assert_eq!(uploaded.status, 200);
+    }
+    let encode = |pattern: &str| -> String {
+        pattern.bytes().fold(String::new(), |mut out, byte| {
+            use std::fmt::Write as _;
+            let _ = write!(out, "%{byte:02X}");
+            out
+        })
+    };
+    let patterns = [
+        "{".repeat(40),
+        format!("{}z", "{,}".repeat(2_000)),
+        format!("**{}", "*a".repeat(2_000)),
+        "{a,".repeat(30_000),
+        format!("{}x{}", "{a,".repeat(30_000), "}".repeat(30_000)),
+        "[".repeat(30_000),
+    ];
+    let listing = |pattern: &str| {
+        handle(
+            &s,
+            req(
+                "GET",
+                &format!("/storage/v1/b/{BUCKET}/o?matchGlob={}", encode(pattern)),
+                &[("authorization", "Bearer owner")],
+                b"",
+            ),
+        )
+    };
+    std::thread::scope(|scope| {
+        let hostile = std::thread::Builder::new()
+            .stack_size(2 * 1024 * 1024)
+            .spawn_scoped(scope, || {
+                for pattern in &patterns {
+                    assert_eq!(listing(pattern).status, 200);
+                }
+            })
+            .unwrap();
+        while !hostile.is_finished() {
+            let started = std::time::Instant::now();
+            let read = handle(
+                &s,
+                req(
+                    "GET",
+                    &format!("/storage/v1/b/{BUCKET}/o/a.txt"),
+                    &[("authorization", "Bearer owner")],
+                    b"",
+                ),
+            );
+            assert_eq!(read.status, 200);
+            assert!(started.elapsed() < std::time::Duration::from_secs(2));
+        }
+        hostile.join().unwrap();
+    });
+}
+
+/// The three list filters under strict, as lean-v5 recorded them (`startOffset=b.txt` with
+/// `endOffset=zz.txt`, and the glob `dir/*`); the emulator profile and the official emulator
+/// ignore all of them (measured: the whole listing).
+#[test]
+fn strict_json_list_filters_follow_the_recorded_rows() {
+    let names = [
+        "a.txt",
+        "b.txt",
+        "dir/c.txt",
+        "dir/d.txt",
+        "dir2/e.txt",
+        "zz.txt",
+    ];
+    for acceptance in BOTH_PROFILES {
+        let s = state_with(Some(ALLOW_ALL_RULES), acceptance);
+        for name in names {
+            let uploaded = handle(
+                &s,
+                req(
+                    "POST",
+                    &format!(
+                        "/upload/storage/v1/b/{BUCKET}/o?uploadType=media&name={}",
+                        name.replace('/', "%2F")
+                    ),
+                    &[("authorization", "Bearer owner")],
+                    b"x",
+                ),
+            );
+            assert_eq!(uploaded.status, 200);
+        }
+        let listed = |query: &str| -> Vec<String> {
+            let r = handle(
+                &s,
+                req(
+                    "GET",
+                    &format!("/storage/v1/b/{BUCKET}/o?{query}"),
+                    &[("authorization", "Bearer owner")],
+                    b"",
+                ),
+            );
+            assert_eq!(r.status, 200, "{acceptance:?} {query}");
+            json_body(&r)["items"]
+                .as_array()
+                .map(|items| {
+                    items
+                        .iter()
+                        .map(|i| i["name"].as_str().unwrap().to_owned())
+                        .collect()
+                })
+                .unwrap_or_default()
+        };
+        let all: Vec<String> = names.iter().map(|n| (*n).to_owned()).collect();
+        let strict = acceptance == TokenAcceptance::Verified;
+        let expect = |filtered: &[&str]| -> Vec<String> {
+            if strict {
+                filtered.iter().map(|n| (*n).to_owned()).collect()
+            } else {
+                all.clone()
+            }
+        };
+        assert_eq!(
+            listed("startOffset=b.txt&endOffset=zz.txt"),
+            expect(&["b.txt", "dir/c.txt", "dir/d.txt", "dir2/e.txt"]),
+            "{acceptance:?}"
+        );
+        assert_eq!(
+            listed("matchGlob=dir%2F*"),
+            expect(&["dir/c.txt", "dir/d.txt"]),
+            "{acceptance:?}"
+        );
+        assert_eq!(listed("matchGlob=**.txt"), all, "{acceptance:?}");
+        assert_eq!(
+            listed("matchGlob=*.txt"),
+            expect(&["a.txt", "b.txt", "zz.txt"])
+        );
+        // A prefix appears only when a matching object lies under it.
+        let r = handle(
+            &s,
+            req(
+                "GET",
+                &format!("/storage/v1/b/{BUCKET}/o?delimiter=%2F&matchGlob=dir2%2F*"),
+                &[("authorization", "Bearer owner")],
+                b"",
+            ),
+        );
+        assert_eq!(
+            json_body(&r)["prefixes"],
+            if strict {
+                json!(["dir2/"])
+            } else {
+                json!(["dir/", "dir2/"])
+            }
+        );
+    }
+}
+
+/// Production numbers: strict draws generations as microsecond timestamps that never repeat, never
+/// run backwards and give the production etag; a minted token is listed first; the emulator profile
+/// keeps counting from 1 and appending (the official emulator draws epoch milliseconds).
+#[test]
+fn strict_generations_are_timestamps_and_tokens_are_newest_first() {
+    for (acceptance, s) in seeded_pair() {
+        let strict = acceptance == TokenAcceptance::Verified;
+        let owner = [("authorization", "Bearer owner")];
+        let first = json_body(&handle(
+            &s,
+            req(
+                "GET",
+                &format!("/storage/v1/b/{BUCKET}/o/g.bin"),
+                &owner,
+                b"",
+            ),
+        ));
+        let again = handle(
+            &s,
+            req(
+                "POST",
+                &format!("/upload/storage/v1/b/{BUCKET}/o?uploadType=media&name=g.bin"),
+                &[owner[0], ("content-type", "text/plain")],
+                b"second",
+            ),
+        );
+        let second = json_body(&again);
+        let (g1, g2) = (
+            first["generation"]
+                .as_str()
+                .unwrap()
+                .parse::<u64>()
+                .unwrap(),
+            second["generation"]
+                .as_str()
+                .unwrap()
+                .parse::<u64>()
+                .unwrap(),
+        );
+        assert!(g2 > g1, "{acceptance:?}: {g1} then {g2}");
+        if strict {
+            assert!(g1 >= 1_788_004_860_000_000, "a microsecond timestamp: {g1}");
+            assert_eq!(second["etag"], production_etag_text(g2, 1));
+        } else {
+            assert!(g1 < 1_000, "a counter: {g1}");
+        }
+        // Two minted tokens: the newer one first under strict.
+        let mint = |n: u8| {
+            let _ = n;
+            handle(
+                &s,
+                req(
+                    "POST",
+                    &format!("/v0/b/{BUCKET}/o/g.bin?create_token=true"),
+                    &owner,
+                    b"",
+                ),
+            )
+        };
+        let first_token = json_body(&mint(1))["downloadTokens"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        let tokens = json_body(&mint(2))["downloadTokens"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        let listed: Vec<&str> = tokens.split(',').collect();
+        assert_eq!(listed.len(), 2, "{acceptance:?}");
+        if strict {
+            assert_eq!(listed[1], first_token, "the older token is last");
+        } else {
+            assert_eq!(listed[0], first_token, "the older token stays first");
+        }
+    }
+}
+
+/// The recorded checksums of a JSON API 308 under strict: `x-goog-running-hash` and `x-range-md5`
+/// of the bytes the session holds (lean-v5: 262,144 bytes of 0x5A give md5 `fc47c91a...` and crc32c
+/// `PjCw/w==`).
+#[test]
+fn strict_resumable_308_carries_the_running_checksums() {
+    let s = state_with(Some(ALLOW_ALL_RULES), TokenAcceptance::Verified);
+    let owner = [("authorization", "Bearer owner")];
+    let start = handle(
+        &s,
+        req(
+            "POST",
+            &format!("/upload/storage/v1/b/{BUCKET}/o?uploadType=resumable&name=r.bin"),
+            &[owner[0], ("content-type", "application/json")],
+            b"{}",
+        ),
+    );
+    let session = header(&start, "location")
+        .unwrap()
+        .strip_prefix("http://127.0.0.1:9199")
+        .unwrap()
+        .to_owned();
+    let chunk = vec![90u8; 262_144];
+    let sent = handle(
+        &s,
+        req(
+            "PUT",
+            &session,
+            &[owner[0], ("content-range", "bytes 0-262143/262147")],
+            &chunk,
+        ),
+    );
+    assert_eq!(sent.status, 308);
+    assert_eq!(header(&sent, "range"), Some("bytes=0-262143"));
+    assert_eq!(
+        header(&sent, "x-range-md5"),
+        Some("fc47c91acf3074fb684c73ef7584605f")
+    );
+    assert_eq!(
+        header(&sent, "x-goog-running-hash"),
+        Some("crc32c=PjCw/w==")
+    );
+    let query = handle(
+        &s,
+        req(
+            "PUT",
+            &session,
+            &[owner[0], ("content-range", "bytes */262147")],
+            b"",
+        ),
+    );
+    assert_eq!(
+        header(&query, "x-range-md5"),
+        Some("fc47c91acf3074fb684c73ef7584605f")
+    );
+}
+
+/// Production's etag text, computed here from the recorded vectors rather than by the code under
+/// test: the protobuf of generation and metageneration in base64 (the recorded
+/// `CNGTm8DplpcDEAI=` is checked in the module's own tests; this one uses a small value).
+fn production_etag_text(generation: u64, metageneration: u64) -> String {
+    let mut bytes = vec![0x08];
+    let mut value = generation;
+    while value >= 0x80 {
+        bytes.push(u8::try_from(value & 0x7f).unwrap() | 0x80);
+        value >>= 7;
+    }
+    bytes.push(u8::try_from(value).unwrap());
+    bytes.push(0x10);
+    bytes.push(u8::try_from(metageneration).unwrap());
+    fireemu_core_storage::hash::base64(&bytes)
+}
+
+// ------------------------------------------------------------------------------------------
+// the rows mutation testing showed the first tests did not pin
+// ------------------------------------------------------------------------------------------
+
+/// Reads that production serves to an end user are private; the owner's are not; lists carry their
+/// own header sets (recorded, lean-v5).
+#[test]
+fn strict_header_sets_follow_the_kind_of_read() {
+    let (_, strict) = &seeded_pair()[0];
+    let owner = [("authorization", "Bearer owner")];
+    // A JSON API list and a Firebase list.
+    let list = handle(
+        strict,
+        req("GET", &format!("/storage/v1/b/{BUCKET}/o"), &owner, b""),
+    );
+    assert_eq!(
+        header_names(&list),
+        ["cache-control", "content-type", "expires", "vary"]
+    );
+    assert_eq!(
+        header(&list, "cache-control"),
+        Some("private, max-age=0, must-revalidate, no-transform")
+    );
+    let v0_list = handle(
+        strict,
+        req("GET", &format!("/v0/b/{BUCKET}/o"), &owner, b""),
+    );
+    assert_eq!(
+        header(&v0_list, "cache-control"),
+        Some("private, max-age=0")
+    );
+    assert_eq!(header(&v0_list, "access-control-allow-origin"), Some("*"));
+    // A v0 media read: the owner's is no-cache, a download-token read is private.
+    let object = format!("/v0/b/{BUCKET}/o/g.bin");
+    let meta = json_body(&handle(strict, req("GET", &object, &owner, b"")));
+    let token = meta["downloadTokens"].as_str().unwrap().to_owned();
+    let by_owner = handle(
+        strict,
+        req("GET", &format!("{object}?alt=media"), &owner, b""),
+    );
+    assert_eq!(
+        header(&by_owner, "cache-control"),
+        Some("no-cache, no-store, max-age=0, must-revalidate")
+    );
+    assert!(header(&by_owner, "pragma").is_some());
+    let by_token = handle(
+        strict,
+        req(
+            "GET",
+            &format!("{object}?alt=media&token={token}"),
+            &[],
+            b"",
+        ),
+    );
+    assert_eq!(by_token.status, 200);
+    assert_eq!(
+        header(&by_token, "cache-control"),
+        Some("private, max-age=0")
+    );
+    assert_eq!(header(&by_token, "pragma"), None);
+    // A media read of an absent v0 object is a JSON 404 with CORS and a private cache.
+    let absent = handle(
+        strict,
+        req(
+            "GET",
+            &format!("/v0/b/{BUCKET}/o/absent.bin?alt=media"),
+            &owner,
+            b"",
+        ),
+    );
+    assert_eq!(absent.status, 404);
+    assert_eq!(header(&absent, "access-control-allow-origin"), Some("*"));
+    assert_eq!(header(&absent, "cache-control"), Some("private, max-age=0"));
+}
+
+/// Partial JSON API answers carry no checksum of the whole object, the empty one the checksum of
+/// no bytes alone, and the Firebase dialect keeps its checksum (recorded, lean-v5).
+#[test]
+fn strict_partial_answers_carry_the_recorded_checksums() {
+    let (_, strict) = &seeded_pair()[0];
+    let owner = [("authorization", "Bearer owner")];
+    let partial = handle(
+        strict,
+        req(
+            "GET",
+            &format!("/storage/v1/b/{BUCKET}/o/g.bin?alt=media"),
+            &[owner[0], ("range", "bytes=0-2")],
+            b"",
+        ),
+    );
+    assert_eq!(partial.status, 206);
+    assert_eq!(header(&partial, "content-range"), Some("bytes 0-2/5"));
+    assert_eq!(header(&partial, "x-goog-hash"), None);
+    let v0 = handle(
+        strict,
+        req(
+            "GET",
+            &format!("/v0/b/{BUCKET}/o/g.bin?alt=media"),
+            &[owner[0], ("range", "bytes=0-2")],
+            b"",
+        ),
+    );
+    assert_eq!(v0.status, 206);
+    assert!(header(&v0, "x-goog-hash").unwrap().contains(", md5="));
+    // The empty object and a nonzero suffix.
+    let empty = handle(
+        strict,
+        req(
+            "POST",
+            &format!("/upload/storage/v1/b/{BUCKET}/o?uploadType=media&name=e.bin"),
+            &owner,
+            b"",
+        ),
+    );
+    assert_eq!(empty.status, 200);
+    let suffix = handle(
+        strict,
+        req(
+            "GET",
+            &format!("/storage/v1/b/{BUCKET}/o/e.bin?alt=media"),
+            &[owner[0], ("range", "bytes=-2")],
+            b"",
+        ),
+    );
+    assert_eq!(suffix.status, 206);
+    assert_eq!(header(&suffix, "x-goog-hash"), Some("crc32c=AAAAAA=="));
+}
+
+/// The name length limit is 1,024 bytes: such a name uploads and reads back on every route and in
+/// both profiles; one byte more is refused on upload (strict: production's words) and a 404 on read.
+#[test]
+fn a_name_of_exactly_the_limit_is_an_ordinary_object() {
+    let name = "n".repeat(1024);
+    for (acceptance, s) in seeded_pair() {
+        let owner = [("authorization", "Bearer owner")];
+        let uploaded = handle(
+            &s,
+            req(
+                "POST",
+                &format!("/upload/storage/v1/b/{BUCKET}/o?uploadType=media&name={name}"),
+                &owner,
+                b"x",
+            ),
+        );
+        assert_eq!(uploaded.status, 200, "{acceptance:?}");
+        for path in [
+            format!("/storage/v1/b/{BUCKET}/o/{name}"),
+            format!("/storage/v1/b/{BUCKET}/o/{name}?alt=media"),
+            format!("/v0/b/{BUCKET}/o/{name}"),
+            format!("/v0/b/{BUCKET}/o/{name}?alt=media"),
+        ] {
+            let read = handle(&s, req("GET", &path, &owner, b""));
+            assert_eq!(
+                read.status,
+                200,
+                "{acceptance:?} {}",
+                &path[path.len() - 20..]
+            );
+        }
+        let too_long = format!("{name}n");
+        let refused = handle(
+            &s,
+            req(
+                "POST",
+                &format!("/upload/storage/v1/b/{BUCKET}/o?uploadType=media&name={too_long}"),
+                &owner,
+                b"x",
+            ),
+        );
+        assert_eq!(refused.status, 400, "{acceptance:?}");
+    }
+}
+
+/// A multipart boundary of 70 characters is accepted and one of 71 refused, on both dialects.
+#[test]
+fn a_multipart_boundary_is_limited_to_seventy_characters() {
+    for (acceptance, s) in seeded_pair() {
+        let owner = [("authorization", "Bearer owner")];
+        let send = |boundary: &str, route: String, protocol: Option<&str>| {
+            let body = format!(
+                "--{boundary}\r\nContent-Type: application/json\r\n\r\n{{}}\r\n--{boundary}\r\nContent-Type: text/plain\r\n\r\nhello\r\n--{boundary}--"
+            );
+            let content_type = format!("multipart/related; boundary={boundary}");
+            let mut headers = vec![owner[0], ("content-type", content_type.as_str())];
+            if let Some(protocol) = protocol {
+                headers.push(("x-goog-upload-protocol", protocol));
+            }
+            handle(&s, req("POST", &route, &headers, body.as_bytes())).status
+        };
+        let ok = "b".repeat(70);
+        let long = "b".repeat(71);
+        for (route, protocol) in [
+            (
+                format!("/v0/b/{BUCKET}/o?name=m70.txt&uploadType=multipart"),
+                Some("multipart"),
+            ),
+            (
+                format!("/upload/storage/v1/b/{BUCKET}/o?uploadType=multipart&name=m70.txt"),
+                None,
+            ),
+        ] {
+            assert_eq!(
+                send(&ok, route.clone(), protocol),
+                200,
+                "{acceptance:?} {route}"
+            );
+            assert_eq!(
+                send(&long, route.clone(), protocol),
+                400,
+                "{acceptance:?} {route}"
+            );
+        }
+    }
+}
+
+/// The JSON API's refusals of a multipart body: strict says `invalidPayloadSize` with the part
+/// count, and the one recorded malformed metadata part has its parser message; the emulator
+/// profile answers the official emulator's own JSON for both.
+#[test]
+fn json_api_multipart_refusals_differ_between_the_profiles() {
+    for (acceptance, s) in seeded_pair() {
+        let strict = acceptance == TokenAcceptance::Verified;
+        let owner = [("authorization", "Bearer owner")];
+        let route = format!("/upload/storage/v1/b/{BUCKET}/o?uploadType=multipart&name=m.bin");
+        let send = |metadata: &str| {
+            let body = format!(
+                "--b\r\nContent-Type: application/json\r\n\r\n{metadata}\r\n--b\r\nContent-Type: text/plain\r\n\r\nhello\r\n--b--"
+            );
+            handle(
+                &s,
+                req(
+                    "POST",
+                    &route,
+                    &[owner[0], ("content-type", "multipart/related; boundary=b")],
+                    body.as_bytes(),
+                ),
+            )
+        };
+        // One part only.
+        let one_part = handle(
+            &s,
+            req(
+                "POST",
+                &route,
+                &[owner[0], ("content-type", "multipart/related; boundary=b")],
+                b"--b\r\nContent-Type: application/json\r\n\r\n{}\r\n--b--",
+            ),
+        );
+        assert_eq!(one_part.status, 400, "{acceptance:?}");
+        let message = json_body(&one_part)["error"]["message"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        if strict {
+            assert_eq!(
+                message,
+                "Payload size invalid. Expected 2-3 payloads. Actual size: 1"
+            );
+            assert_eq!(
+                json_body(&one_part)["error"]["errors"][0]["reason"],
+                "invalidPayloadSize"
+            );
+        } else {
+            assert_eq!(message, "Unexpected number of parts in request body");
+        }
+        // The recorded malformed metadata part.
+        let recorded = send("{invalid-json");
+        assert_eq!(recorded.status, 400);
+        assert_eq!(
+            header(&recorded, "content-type") == Some("text/html; charset=UTF-8"),
+            strict,
+            "{acceptance:?}"
+        );
+        // Shapes that were not recorded keep the generic answer in both profiles.
+        for other in ["{", "{a b", "{\"a\":", "{a\"b", "[1"] {
+            let generic = send(other);
+            assert_eq!(generic.status, 400);
+            assert!(
+                !String::from_utf8_lossy(&generic.body).contains("between key:value pair"),
+                "{acceptance:?} {other}"
+            );
+        }
+        // A word with an underscore and digits is a bare word too (strict only).
+        let wordy = send("{a_b-1");
+        assert_eq!(
+            String::from_utf8_lossy(&wordy.body).contains(r"a_b-1\n"),
+            strict,
+            "{acceptance:?}"
+        );
+    }
+}
+
+/// A chunk at the wrong offset: strict says production's text, the emulator profile the official
+/// emulator's JSON error; the 308 of a JSON API session names its running checksums only under
+/// strict and only once a byte is held.
+#[test]
+fn resumable_offsets_and_308_checksums_differ_between_the_profiles() {
+    for (acceptance, s) in seeded_pair() {
+        let strict = acceptance == TokenAcceptance::Verified;
+        let owner = [("authorization", "Bearer owner")];
+        // Firebase dialect: a chunk at offset 1 of an empty session.
+        let start = handle(
+            &s,
+            req(
+                "POST",
+                &format!("/v0/b/{BUCKET}/o?name=o.bin"),
+                &[
+                    owner[0],
+                    ("x-goog-upload-protocol", "resumable"),
+                    ("x-goog-upload-command", "start"),
+                    ("content-type", "application/json"),
+                ],
+                br#"{"name":"o.bin"}"#,
+            ),
+        );
+        let url = header(&start, "x-goog-upload-url").unwrap().to_owned();
+        let session = url
+            .split_once("/v0/")
+            .map(|(_, rest)| format!("/v0/{rest}"))
+            .unwrap();
+        let wrong = handle(
+            &s,
+            req(
+                "POST",
+                &session,
+                &[
+                    owner[0],
+                    ("x-goog-upload-protocol", "resumable"),
+                    ("x-goog-upload-command", "upload"),
+                    ("x-goog-upload-offset", "1"),
+                ],
+                b"x",
+            ),
+        );
+        assert_eq!(wrong.status, 400);
+        assert_eq!(
+            header(&wrong, "content-type") == Some("text/plain; charset=utf-8"),
+            strict,
+            "{acceptance:?}"
+        );
+        // JSON API session: a status query before any chunk, then after one.
+        let gstart = handle(
+            &s,
+            req(
+                "POST",
+                &format!("/upload/storage/v1/b/{BUCKET}/o?uploadType=resumable&name=q.bin"),
+                &[owner[0], ("content-type", "application/json")],
+                b"{}",
+            ),
+        );
+        let gsession = header(&gstart, "location")
+            .unwrap()
+            .strip_prefix("http://127.0.0.1:9199")
+            .unwrap()
+            .to_owned();
+        let before = handle(
+            &s,
+            req(
+                "PUT",
+                &gsession,
+                &[owner[0], ("content-range", "bytes */10")],
+                b"",
+            ),
+        );
+        assert_eq!(before.status, 308);
+        assert_eq!(
+            header(&before, "x-range-md5"),
+            None,
+            "{acceptance:?}: nothing is held yet"
+        );
+        assert_eq!(header(&before, "range"), None);
+        let chunk = handle(
+            &s,
+            req(
+                "PUT",
+                &gsession,
+                &[owner[0], ("content-range", "bytes 0-4/10")],
+                b"hello",
+            ),
+        );
+        assert_eq!(chunk.status, 308);
+        assert_eq!(
+            header(&chunk, "x-range-md5").is_some(),
+            strict,
+            "{acceptance:?}"
+        );
+        assert_eq!(
+            header(&chunk, "x-goog-running-hash").is_some(),
+            strict,
+            "{acceptance:?}"
+        );
+    }
 }

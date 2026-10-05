@@ -4942,7 +4942,9 @@ fn list_versions_page(
         .filter(|token| !token.is_empty())
         .map(versions_cursor)
         .transpose()?;
-    let (entries, next) = if query.glob.is_some() || state.is_strict() {
+    // The filters exist only under strict (`glob` and the offsets are unset otherwise), so the
+    // emulator profile keeps the single read of the store.
+    let (entries, next) = if state.is_strict() {
         let scan = versions_scan(state, bucket, query, from.as_ref())?;
         let next = scan.get(query.max).cloned();
         let shown = scan[..scan.len().min(query.max)].to_vec();

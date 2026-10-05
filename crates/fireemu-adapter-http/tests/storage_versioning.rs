@@ -1221,3 +1221,58 @@ mod listing_properties {
         }
     }
 }
+
+/// Production's object delete is a `204` with an explicit `Content-Length: 0` (recorded), and so
+/// is every outcome of the delete of a versioned bucket: a generation by number, a live object
+/// that is archived, and a live object removed from a bucket that is not versioned.
+#[test]
+fn every_outcome_of_an_object_delete_answers_204_with_a_zero_content_length() {
+    for acceptance in PROFILES {
+        let (s, _) = state(acceptance);
+        let zero = |r: &StorageResponse, what: &str| {
+            assert_eq!(r.status, 204, "{what}");
+            assert!(r.body.is_empty(), "{what}");
+            assert!(
+                r.headers
+                    .iter()
+                    .any(|(k, v)| k.eq_ignore_ascii_case("content-length") && v == "0"),
+                "{what}: {:?}",
+                r.headers
+            );
+        };
+        // Not versioned: the live object is removed.
+        upload(&s, "plain.txt", "1");
+        zero(
+            &call(
+                &s,
+                "DELETE",
+                &format!("/storage/v1/b/{BUCKET}/o/plain.txt"),
+                b"",
+            ),
+            "removed",
+        );
+        // Versioned: the live object is archived, then a generation is deleted by number.
+        set_versioning(&s, true);
+        let first = upload(&s, "o.txt", "1");
+        let second = upload(&s, "o.txt", "22");
+        zero(
+            &call(
+                &s,
+                "DELETE",
+                &format!("/storage/v1/b/{BUCKET}/o/o.txt?generation={}", gen(&first)),
+                b"",
+            ),
+            "by generation",
+        );
+        zero(
+            &call(
+                &s,
+                "DELETE",
+                &format!("/storage/v1/b/{BUCKET}/o/o.txt"),
+                b"",
+            ),
+            "archived",
+        );
+        let _ = second;
+    }
+}

@@ -143,14 +143,19 @@ test("a run's own job, topic or subscription in a list keeps the read-back from 
   assert.equal(fns.result.allAbsent, false);
 });
 
-test("a foreign item in a list does not matter, only the run's own names do", async () => {
+test("a foreign job or topic in a list does not matter, only the run's own names do; any subscription does", async () => {
   const { result } = await readback({}, (w) => {
     w.jobs.set("other-job", { name: "projects/x/locations/y/jobs/other-job" });
     w.topics.add("other-topic");
-    w.subs.set("projects/fireemu-oracle-sbx/subscriptions/other-sub", { topic: "t", queue: [] });
   });
   assert.equal(result.allAbsent, true);
   assert.deepEqual(result.lists.jobs, []);
+  // Preflight proved the subscriptions list empty and the run holds the lock: the whole list must be empty again.
+  const withSub = await readback({}, (w) => {
+    w.subs.set("projects/fireemu-oracle-sbx/subscriptions/other-sub", { topic: "t", queue: [] });
+  });
+  assert.deepEqual(withSub.result.lists.subscriptions, ["other-sub"]);
+  assert.equal(withSub.result.allAbsent, false);
 });
 
 test("a list that cannot be read, or runs over five pages, is incomplete and nothing closes", async () => {

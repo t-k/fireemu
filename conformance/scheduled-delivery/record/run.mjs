@@ -185,6 +185,7 @@ export async function record({
   const pendingCreates = new Map(); // label -> an unknown REST create answer
   const cliLabels = new Map(); // label -> name, for the names the CLI deploy makes
   let deployUnknown = null; // why the CLI deploy's effect is unknown, if it is
+  let deployWrites = []; // CLI writes answered 5xx, 3xx or below 200 (a clean failure can hide such a create)
   let created = false;
   let stopped = null;
   const startedAt = clock();
@@ -275,6 +276,21 @@ export async function record({
           .filter(([label]) => !confirmed.has(label))
           .map(([label, name]) => ({ label, id: "cli-deploy", name, class: deployUnknown }))
       : []),
+    // A CLI write answered 5xx (or 3xx, or below 200) may have created a name of its kind even though the CLI
+    // reported the function errored and failed cleanly: every name of that kind no own 2xx read showed is open.
+    ...(deployUnknown
+      ? []
+      : [...cliLabels]
+          .filter(([label]) => !confirmed.has(label))
+          .flatMap(([label, name]) => {
+            const host = label.startsWith("function-")
+              ? "cloudfunctions"
+              : label.startsWith("job-")
+                ? "cloudscheduler"
+                : "pubsub";
+            const write = deployWrites.find((w) => w.host === host);
+            return write ? [{ label, id: "cli-deploy", name, class: "cli-" + write.status }] : [];
+          })),
   ];
   /** Confirmed names that ended absent without this run's own 2xx delete: only the read-back can settle them. */
   const vanishedAfterCreate = () => {
@@ -563,6 +579,7 @@ export async function record({
       });
     created = true;
     out.cli.deploy = await cli("deploy");
+    deployWrites = out.cli.deploy?.unknownWrites ?? [];
     await save({
       id: "cli-deploy",
       state: "cli-result",
@@ -782,12 +799,14 @@ export async function record({
             url: GCF + v + "/" + functionName(fn),
             cleanup: true,
           });
-          if (answerClass(answer) === "2xx") ownDeleted.add("function-" + fn);
-          if (
-            answerClass(answer) === "2xx" &&
-            typeof answer.json?.name === "string" &&
-            !answer.json.done
-          ) {
+          if (answerClass(answer) !== "2xx") return;
+          // A 2xx settles the delete only as a finished operation without an error: the operation of this DELETE
+          // read done, or the answer itself done. An operation that never reads done (or reads done with an error)
+          // is an unknown DELETE, sticky until the read-back; a later 404 of the function does not settle it.
+          const finished = (op) => op?.json?.done === true && !op.json.error;
+          let settledBy = finished(answer);
+          let pending = "operation-pending";
+          if (!settledBy && typeof answer.json?.name === "string" && !answer.json.done) {
             const operation = answer.json.name.startsWith("operations/")
               ? GCF + "v1/" + answer.json.name
               : GCF + "v2/" + answer.json.name;
@@ -802,9 +821,15 @@ export async function record({
                 },
                 { observe: true },
               );
-              if (op?.json?.done === true) break;
+              if (op?.json?.done === true) {
+                settledBy = finished(op);
+                if (!settledBy) pending = "operation-error";
+                break;
+              }
             }
-          }
+          } else if (!settledBy && answer.json?.done === true) pending = "operation-error";
+          if (settledBy) ownDeleted.add("function-" + fn);
+          else unknownMutations.push({ id: "leftover-delete-" + fn, class: pending });
         });
       }
       await step("after-leftovers", async () => {

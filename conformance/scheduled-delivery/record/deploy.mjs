@@ -262,6 +262,25 @@ export function erroredFunctions(text) {
   return matches.length === 0 ? null : Number(matches.at(-1)[1]);
 }
 
+/**
+ * The writes to Cloud Functions, Cloud Scheduler or Pub/Sub that the CLI's `--debug` output shows answered with a
+ * status that does not say whether the write happened: a 5xx, a 3xx or a status below 200 (the line
+ * `<<< [apiv2][status] POST <url> 500`, with or without a prefix). firebase-tools retries only some statuses, so a
+ * create answered 500 is reported as an errored function and the CLI exits non-zero: a clean failure that may still
+ * have created the name. A write that got no answer at all prints no such line and is not seen here.
+ */
+export function unknownWrites(text) {
+  const found = [];
+  for (const m of String(text).matchAll(
+    /<<< \[apiv2\]\[status\] (POST|PUT|PATCH) https:\/\/(cloudfunctions|cloudscheduler|pubsub)\.googleapis\.com\/\S* (\d{3})[ \t]*$/gm,
+  )) {
+    const status = Number(m[3]);
+    if (status < 200 || (status >= 300 && status < 400) || status >= 500)
+      found.push({ method: m[1], host: m[2], status });
+  }
+  return found;
+}
+
 /** Whether a CLI result is a failure: a non-zero exit, a timeout, an error, or any function errored. */
 export const cliFailed = (result) =>
   result?.exitCode !== 0 ||
@@ -305,10 +324,11 @@ export function runCli({
       closeSync(out);
       closeSync(err);
       let errored = null;
+      let unknown = [];
       try {
-        errored = erroredFunctions(
-          readFileSync(join(directory, `cli-${action}-stdout.txt`), "utf8").slice(-65_536),
-        );
+        const text = readFileSync(join(directory, `cli-${action}-stdout.txt`), "utf8");
+        errored = erroredFunctions(text.slice(-65_536));
+        unknown = unknownWrites(text);
       } catch {
         // the output cannot be read: no count
       }
@@ -319,6 +339,7 @@ export function runCli({
         timedOut,
         error: error?.message ?? null,
         errored,
+        unknownWrites: unknown,
         durationMs: Date.now() - startedAt,
       });
     };

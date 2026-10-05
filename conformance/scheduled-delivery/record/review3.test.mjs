@@ -883,31 +883,25 @@ test("a subscription on a v1 schedule topic that the run did not name is reporte
   }
 });
 
-test("near miss: a subscription on another topic is not the run's business, and the run's own is still seen", async () => {
-  const other = await readbackWith((w) =>
-    w.subs.set("projects/fireemu-oracle-sbx/subscriptions/someone-else", {
-      topic: "projects/fireemu-oracle-sbx/topics/unrelated",
-      queue: [],
-    }),
-  );
-  assert.deepEqual(other.lists.subscriptions, []);
-  assert.equal(other.allAbsent, true);
+test("the whole subscriptions list must be empty: whatever its topic says, any subscription is reported (r4: no match on an unrecorded field)", async () => {
+  for (const topic of [
+    "projects/fireemu-oracle-sbx/topics/unrelated",
+    "_deleted-topic_",
+    topicName(scheduleId("schedOkV1")) + "-2",
+    undefined,
+  ]) {
+    const result = await readbackWith((w) =>
+      w.subs.set("projects/fireemu-oracle-sbx/subscriptions/someone-else", { topic, queue: [] }),
+    );
+    assert.deepEqual(result.lists.subscriptions, ["someone-else"], String(topic));
+    assert.equal(result.allAbsent, false, String(topic));
+  }
   const own = await readbackWith((w) =>
-    w.subs.set(subscriptionName(SUB1), {
-      topic: "projects/fireemu-oracle-sbx/topics/unrelated",
-      queue: [],
-    }),
+    w.subs.set(subscriptionName(SUB1), { topic: "_deleted-topic_", queue: [] }),
   );
   assert.deepEqual(own.lists.subscriptions, [SUB1]);
   assert.equal(own.allAbsent, false);
-});
-
-test("a v2 schedule has no topic: a subscription on a topic named like one is not matched by a prefix", async () => {
-  const result = await readbackWith((w) =>
-    w.subs.set("projects/fireemu-oracle-sbx/subscriptions/near", {
-      topic: topicName(scheduleId("schedOkV1")) + "-2",
-      queue: [],
-    }),
-  );
-  assert.deepEqual(result.lists.subscriptions, []);
+  const empty = await readbackWith(() => {});
+  assert.deepEqual(empty.lists.subscriptions, []);
+  assert.equal(empty.allAbsent, true);
 });

@@ -17,7 +17,6 @@ import {
   functionName,
   pullSubscriptionId,
   scheduleId,
-  topicName,
 } from "./plan.mjs";
 import { absent } from "./run.mjs";
 
@@ -134,18 +133,11 @@ export async function readbackRun({
     ];
     out.lists.jobs = jobs ? own(jobs.jobs, jobIds) : null;
     out.lists.topics = topics ? own(topics.topics, FUNCTIONS.v1.map(scheduleId)) : null;
-    // The run's own pull subscriptions, and every subscription on a v1 schedule topic: Google puts a push
-    // subscription on each (the GCF-managed ones), and the run's own final list requires them gone too.
-    const ownSubscriptions = FUNCTIONS.v1.map((fn) => pullSubscriptionId(runId, fn));
-    const scheduleTopics = FUNCTIONS.v1.map((fn) => topicName(scheduleId(fn)));
+    // The whole subscriptions list, as the run's own final list requires: preflight proved it empty and the run holds
+    // the exclusive lock, so any subscription (the run's own pull ones, or the push ones Google manages on the v1
+    // schedule topics, whatever their `topic` says) is a leftover. Nothing is matched on an unrecorded field.
     out.lists.subscriptions = subs
-      ? subs.subscriptions
-          .filter(
-            (item) =>
-              ownSubscriptions.includes(String(item.name).split("/").at(-1)) ||
-              scheduleTopics.includes(item.topic),
-          )
-          .map((item) => String(item.name).split("/").at(-1))
+      ? subs.subscriptions.map((item) => String(item.name).split("/").at(-1))
       : null;
   } catch (error) {
     if (!(error instanceof AuthStop)) throw error;

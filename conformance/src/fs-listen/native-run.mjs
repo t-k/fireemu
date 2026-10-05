@@ -277,6 +277,7 @@ export async function runNative(
               .filter(({ change }) => step.kind === undefined || ofKind[step.kind](change))
               .findLast(({ change }) => change.resumeToken);
             if (withToken) saved.token = asBuffer(withToken.change.resumeToken);
+            const firstCurrent = covering.find(({ change }) => ofKind.current(change))?.index;
             const withTime = covering.findLast(({ change }) => change.readTime);
             if (withTime) saved.readTime = withTime.change.readTime;
             // Which frame each saved value came from: a recording that varies the kind of token
@@ -311,6 +312,15 @@ export async function runNative(
               documentChangesBefore: withToken
                 ? frames.filter((f, i) => f.kind === "documentChange" && i < withToken.index).length
                 : null,
+              // The documents delivered after the target's CURRENT and before the token: the ones
+              // of the initial snapshot are not counted (a token taken at the initial snapshot has 0).
+              documentChangesAfterCurrent:
+                withToken && firstCurrent !== undefined
+                  ? frames.filter(
+                      (f, i) =>
+                        f.kind === "documentChange" && i > firstCurrent && i < withToken.index,
+                    ).length
+                  : null,
             };
             saves.push(provenance);
             for (const name of [step.token, step.time])

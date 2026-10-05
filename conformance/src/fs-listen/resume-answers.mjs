@@ -134,11 +134,11 @@ export function renderAnswerTable(first, second) {
  * one came from (`saves`). The grids differ only in the kind of token, so a recording whose tokens
  * are not of the kind the design names would be read as a variant it is not. What each program's
  * saves must be:
- *   resume-grid-g0   T: a global boundary before any document change
- *   resume-grid-tc   T: the target's CURRENT frame, before any document change
- *   resume-grid-gc   T: a global boundary after a document change
+ *   resume-grid-g0   T: a global boundary of the initial snapshot (no document change after CURRENT)
+ *   resume-grid-tc   T: the target's CURRENT frame
+ *   resume-grid-gc   T: a global boundary after a document change that came after CURRENT
  *   resume-kinds     T0..T3: global boundaries
- *   resume-age       Ta, Tb, Tc: global boundaries before any document change
+ *   resume-age       Ta, Tb, Tc: global boundaries of the initial snapshot
  */
 const TOKEN_SPEC = {
   "native/resume-grid-g0": { T: { frame: "global", before: "none" } },
@@ -188,13 +188,17 @@ export function tokenProblems(recording) {
         problems.push(
           `${where}: not the target's CURRENT frame (asked ${entry.kind}, frame ${entry.token.type})`,
         );
-      if (want.before === "none" && entry.documentChangesBefore !== 0)
+      if (want.before && typeof entry.documentChangesAfterCurrent !== "number") {
+        problems.push(`${where}: the recording does not count the document changes after CURRENT`);
+        continue;
+      }
+      if (want.before === "none" && entry.documentChangesAfterCurrent !== 0)
         problems.push(
-          `${where}: ${entry.documentChangesBefore} document changes before the token, expected none (a token before any document change)`,
+          `${where}: ${entry.documentChangesAfterCurrent} document changes after the initial snapshot before the token, expected none (a token of the initial snapshot)`,
         );
-      if (want.before === "some" && !(entry.documentChangesBefore > 0))
+      if (want.before === "some" && !(entry.documentChangesAfterCurrent > 0))
         problems.push(
-          `${where}: no document change before the token, expected one (a token after a document change)`,
+          `${where}: no document change after the initial snapshot before the token, expected one (a token after a document change)`,
         );
     }
   return problems;
@@ -205,8 +209,8 @@ export function renderTokenTable(recording) {
   if (!Array.isArray(recording.saves)) return "no saved tokens recorded";
   const cell = (value) => (value === null || value === undefined ? "-" : String(value));
   return [
-    "| program | save | asked | frame | type | target ids | documents before |",
-    "|---|---|---|---|---|---|---|",
+    "| program | save | asked | frame | type | target ids | documents before | after CURRENT |",
+    "|---|---|---|---|---|---|---|---|",
     ...recording.saves.map((e) =>
       [
         e.program,
@@ -216,6 +220,7 @@ export function renderTokenTable(recording) {
         cell(e.token?.type),
         e.token === null ? "-" : e.token.targetIds.length ? e.token.targetIds.join(",") : "-",
         cell(e.documentChangesBefore),
+        cell(e.documentChangesAfterCurrent),
       ].reduce((line, value) => `${line} ${value} |`, "|"),
     ),
   ].join("\n");

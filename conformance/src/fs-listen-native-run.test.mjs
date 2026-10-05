@@ -1250,15 +1250,24 @@ test("a save states which frame its token came from: the index, the kind, the ta
     change("ADD", [1]),
     change("NO_CHANGE", [], { resumeToken: Buffer.from("B1") }),
     docChange,
-    change("CURRENT", [1], { resumeToken: Buffer.from("TC"), readTime: { seconds: "7", nanos: 1 } }),
-    change("NO_CHANGE", [], { resumeToken: Buffer.from("TG"), readTime: { seconds: "8", nanos: 2 } }),
+    change("CURRENT", [1], {
+      resumeToken: Buffer.from("TC"),
+      readTime: { seconds: "7", nanos: 1 },
+    }),
+    change("NO_CHANGE", [], {
+      resumeToken: Buffer.from("TG"),
+      readTime: { seconds: "8", nanos: 2 },
+    }),
     docChange,
     change("NO_CHANGE", [], { resumeToken: Buffer.from("G2") }),
     change("CURRENT", [2], { resumeToken: Buffer.from("OTHER") }),
   ];
   const run = async (save) => {
     const { out } = await runSteps(
-      [{ do: "open", stream: "s", targets: [{ id: 1, doc: "a" }] }, { do: "save", stream: "s", id: 1, ...save }],
+      [
+        { do: "open", stream: "s", targets: [{ id: 1, doc: "a" }] },
+        { do: "save", stream: "s", id: 1, ...save },
+      ],
       { 0: frames },
     );
     return out.saves;
@@ -1276,6 +1285,7 @@ test("a save states which frame its token came from: the index, the kind, the ta
       token: token({ frameIndex: 3, type: "CURRENT", targetIds: [1], sha256: sha("TC") }),
       readTime: { frameIndex: 5 - 1, type: "NO_CHANGE", targetIds: [], seconds: "8", nanos: 2 },
       documentChangesBefore: 1,
+      documentChangesAfterCurrent: 0,
     },
   ]);
   assert.deepEqual(await run({ token: "t", kind: "global" }), [
@@ -1290,6 +1300,7 @@ test("a save states which frame its token came from: the index, the kind, the ta
       token: token({ frameIndex: 6, type: "NO_CHANGE", targetIds: [], sha256: sha("G2") }),
       readTime: { frameIndex: 4, type: "NO_CHANGE", targetIds: [], seconds: "8", nanos: 2 },
       documentChangesBefore: 2,
+      documentChangesAfterCurrent: 1,
     },
   ]);
   // Without a kind: the latest that covers the target (the global boundary at index 6).
@@ -1308,6 +1319,23 @@ test("a save states which frame its token came from: the index, the kind, the ta
   assert.equal(none.out.saves[0].token, null);
   assert.equal(none.out.saves[0].readTime, null);
   assert.equal(none.out.saves[0].documentChangesBefore, null);
+  assert.equal(none.out.saves[0].documentChangesAfterCurrent, null);
+  // A token saved before the target is CURRENT has no documents after CURRENT to count.
+  const early = await runSteps(
+    [
+      { do: "open", stream: "s", targets: [{ id: 1, doc: "a" }] },
+      { do: "save", stream: "s", id: 1, token: "t" },
+    ],
+    {
+      0: [
+        change("ADD", [1]),
+        change("NO_CHANGE", [], { resumeToken: Buffer.from("B1") }),
+        docChange,
+      ],
+    },
+  );
+  assert.equal(early.out.saves[0].token.frameIndex, 1);
+  assert.equal(early.out.saves[0].documentChangesAfterCurrent, null);
 });
 
 test("a row of a stream opened with a saved token says where the token came from; other rows say nothing", async () => {
@@ -1332,6 +1360,13 @@ test("a row of a stream opened with a saved token says where the token came from
   assert.equal(out.rows["native/t/first"].resumedFrom, undefined);
   assert.equal(out.rows["native/t/fresh"].resumedFrom, undefined);
   assert.deepEqual(out.rows["native/t/resumed"].resumedFrom, [
-    { name: "t", kind: "current", frameIndex: 2, type: "CURRENT", targetIds: [1], sha256: sha("TC") },
+    {
+      name: "t",
+      kind: "current",
+      frameIndex: 2,
+      type: "CURRENT",
+      targetIds: [1],
+      sha256: sha("TC"),
+    },
   ]);
 });

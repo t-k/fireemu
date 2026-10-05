@@ -36,13 +36,19 @@ export function deadlineWithLag(baseMs, lagMs, capMs = 10_000) {
   return {limit: baseMs + Math.min(wanted, capMs), tooLoaded: wanted > capMs};
 }
 
+/** Reads a small text file (the default reader of /proc/<pid>/stat). */
+export function readText(path) {
+  return readFileSync(path, 'utf8');
+}
+
 function procCpuTicks(pid, readProc) {
   try {
-    const text = readProc(`/proc/${pid}/stat`);
-    // comm (field 2) may hold spaces and parentheses: the fields that follow start after the last ')'.
-    const fields = text.slice(text.lastIndexOf(')') + 1).trim().split(/\s+/);
-    const [utime, stime] = [fields[11], fields[12]];
-    if (text.lastIndexOf(')') < 0 || !/^\d+$/.test(utime ?? '') || !/^\d+$/.test(stime ?? '')) return null;
+    // "pid (comm) state ppid ...": comm may hold spaces and parentheses, so the fields that follow
+    // start after the last ')'; utime and stime are fields 14 and 15, the 12th and 13th after comm.
+    const match = /^\d+ \(.*\) ([^)]*)$/s.exec(readProc(`/proc/${pid}/stat`));
+    if (!match) return null;
+    const [utime, stime] = [match[1].trim().split(/\s+/)[11], match[1].trim().split(/\s+/)[12]];
+    if (!/^\d+$/.test(utime ?? '') || !/^\d+$/.test(stime ?? '')) return null;
     return String(Number(utime) + Number(stime));
   } catch {
     return null;
@@ -59,7 +65,7 @@ function psCpuTime(pid) {
  * CPU time a process has used: utime plus stime in clock ticks from /proc/<pid>/stat where that
  * exists (Linux, finer than a second), else what `ps` prints; null when it is gone or unreadable.
  */
-export function childCpuTime(pid, {readProc = path => readFileSync(path, 'utf8'), ps = psCpuTime} = {}) {
+export function childCpuTime(pid, {readProc = readText, ps = psCpuTime} = {}) {
   return procCpuTicks(pid, readProc) ?? ps(pid);
 }
 
@@ -115,8 +121,6 @@ export async function untilExit({
   end, result, progress = () => null, label, stallMs = STALL_MS, sleepMs = 50,
   maxMs = MAX_WAIT_MS, now = () => performance.now(), sleep = delay,
 }) {
-  let exit = result();
-  if (exit) return exit;
   let ended = false;
   end.then(() => { ended = true; }, () => { ended = true; });
   await waitUntil({check: () => ended || result(), progress, label: `${label} (waiting for exit)`, stallMs, pollMs: sleepMs, maxMs, now, sleep});

@@ -1,9 +1,10 @@
 // Tests of the load-independent wait helper, on a virtual clock: nothing here depends on how busy the
 // machine is. The helper is what http-admission-runner and input-limits-runner wait with.
 import assert from 'node:assert/strict';
+import {fileURLToPath} from 'node:url';
 import test from 'node:test';
 import {
-  STALL_MS, MAX_WAIT_MS, HARD_BACKSTOP_MS, childCpuTime, deadlineWithLag, quietStallMs, sampled, untilExit, waitUntil,
+  STALL_MS, MAX_WAIT_MS, HARD_BACKSTOP_MS, childCpuTime, deadlineWithLag, quietStallMs, readText, sampled, untilExit, waitUntil,
 } from './load-independent-wait.mjs';
 import {MAX_INPUT_FRAME_WAIT_MS} from './protocol.mjs';
 
@@ -145,7 +146,7 @@ test('sampled reads at most once per window and keeps the last value between rea
   assert.equal(reads2, 2);
 });
 
-test('a wait that always shows progress still ends at the absolute ceiling, with a named error', async () => {
+test('a wait that always shows progress still ends at the absolute ceiling, with a named error', {timeout: 20_000}, async () => {
   assert.ok(MAX_WAIT_MS >= 10 * STALL_MS && MAX_WAIT_MS < HARD_BACKSTOP_MS);
   const c = clock();
   let n = 0;
@@ -164,7 +165,7 @@ test('a wait that always shows progress still ends at the absolute ceiling, with
 // The designed quiet period: a child that is meant to say nothing and use no visible CPU for a whole
 // product deadline, and then exits a few milliseconds after it. On Linux `ps` shows CPU time in whole
 // seconds, so for such a child the stall window is the only thing that decides.
-test('a wait that covers a designed quiet period needs a window longer than the period', async () => {
+test('a wait that covers a designed quiet period needs a window longer than the period', {timeout: 20_000}, async () => {
   const exitAt = MAX_INPUT_FRAME_WAIT_MS + 3;
   const exit = {code: 2, signal: null};
   const run = (stallMs, c) => untilExit({
@@ -185,8 +186,13 @@ test('quietStallMs is the quiet period plus a margin, and is always longer than 
   assert.equal(quietStallMs(30_000, 5_000), 35_000);
   assert.ok(quietStallMs(MAX_INPUT_FRAME_WAIT_MS) >= MAX_INPUT_FRAME_WAIT_MS + STALL_MS);
   assert.equal(quietStallMs(0), STALL_MS);
-  for (const bad of [-1, 1.5, NaN, '30000', undefined]) assert.throws(() => quietStallMs(bad), /quiet period/);
-  for (const bad of [0, -1, NaN]) assert.throws(() => quietStallMs(1000, bad), /margin/);
+  assert.equal(quietStallMs(1000, 1), 1001, 'a margin of one millisecond is allowed');
+  for (const bad of [-1, 1.5, NaN, '30000', undefined]) {
+    assert.throws(() => quietStallMs(bad), {message: 'a quiet period is a non-negative integer of milliseconds'});
+  }
+  for (const bad of [0, -1, NaN, 1.5]) {
+    assert.throws(() => quietStallMs(1000, bad), {message: 'the margin after a quiet period is a positive integer of milliseconds'});
+  }
 });
 
 test('childCpuTime reads utime and stime from /proc/<pid>/stat when it exists, and falls back to ps', () => {
@@ -198,6 +204,11 @@ test('childCpuTime reads utime and stime from /proc/<pid>/stat when it exists, a
   assert.deepEqual(calls, ['/proc/4242/stat']);
   assert.equal(childCpuTime(1, {readProc: () => { throw Object.assign(new Error('no proc'), {code: 'ENOENT'}); }, ps: () => '00:01.5'}), '00:01.5');
   assert.equal(childCpuTime(1, {readProc: () => 'garbage with no paren', ps: () => '00:02'}), '00:02');
+  assert.equal(childCpuTime(1, {readProc: () => '1 a b c d e f g h i j k 7 5', ps: () => '00:02'}), '00:02', 'no (comm): not a stat line');
+  assert.equal(childCpuTime(1, {readProc: () => ') S 1 1 1 0 -1 0 0 0 0 0 7 5', ps: () => '00:02'}), '00:02', 'no pid and comm in front');
+  assert.equal(childCpuTime(1, {readProc: () => '1 (x) S 1 1 1 0 -1 0 0 0 0 0 7 x', ps: () => '00:05'}), '00:05', 'a bad stime');
+  assert.equal(childCpuTime(1, {readProc: () => '1 (x) S 1 1 1 0 -1 0 0 0 0 0 x 5', ps: () => '00:06'}), '00:06', 'a bad utime');
+  assert.equal(childCpuTime(1, {readProc: () => '1 (x) S 1 1 1 0 -1 0 0 0 0 0 7 5', ps: () => '00:07'}), '12', 'a minimal valid line');
   assert.equal(childCpuTime(1, {readProc: () => '1 (x) S 1 2', ps: () => '00:03'}), '00:03', 'a short stat line is not trusted');
   assert.equal(childCpuTime(1, {readProc: () => '1 (x) S 1 1 1 0 -1 0 0 0 0 0 a b 0', ps: () => '00:04'}), '00:04', 'non-numeric ticks are not trusted');
   assert.equal(childCpuTime(1, {readProc: () => { throw new Error('x'); }, ps: () => null}), null);
@@ -211,4 +222,10 @@ test('deadlineWithLag adds twice the worst event-loop stall, capped, and says wh
   assert.deepEqual(deadlineWithLag(35_000, 4999), {limit: 44_998, tooLoaded: false});
   assert.deepEqual(deadlineWithLag(35_000, 9000, 2000), {limit: 37_000, tooLoaded: true}, 'a lower cap');
   assert.deepEqual(deadlineWithLag(35_000, 1000, 2000), {limit: 37_000, tooLoaded: false}, 'exactly at the cap is not over it');
+});
+
+test('readText reads a file as UTF-8 text', () => {
+  const text = readText(fileURLToPath(import.meta.url));
+  assert.equal(typeof text, 'string');
+  assert.ok(text.startsWith('// Tests of the load-independent wait helper'));
 });

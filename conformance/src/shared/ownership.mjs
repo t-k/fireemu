@@ -474,7 +474,7 @@ function unsettledDetails(state) {
   return [...state.names]
     .filter(([, st]) => st.unsettled)
     .map(([name, st]) => ({ name, action: st.unsettled.action, reason: st.unsettled.reason }))
-    .toSorted((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
+    .toSorted((a, b) => (a.name < b.name ? -1 : 1)); // names are unique, so no pair is equal
 }
 
 /**
@@ -484,7 +484,8 @@ function unsettledDetails(state) {
  */
 export function closureReport(state) {
   const reasons = [];
-  for (const [name, st] of [...state.names].toSorted(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))) {
+  // Names are unique, so no pair of them compares equal.
+  for (const [name, st] of [...state.names].toSorted(([a], [b]) => (a < b ? -1 : 1))) {
     if (st.open) reasons.push(`in-flight:${name}`);
     if (st.unsettled) reasons.push(`unsettled-${st.unsettled.action}:${name}`);
     if (st.owned) reasons.push(`owned-not-deleted:${name}`);

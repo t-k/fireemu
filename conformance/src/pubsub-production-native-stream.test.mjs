@@ -162,8 +162,10 @@ test("native stream rejects frame counts, encoded bytes and time bounds before d
     { frames: [{ ackIds: ["x".repeat(16384)] }] },
     { timeoutMs: 0 },
     { timeoutMs: 30001 },
-    { afterReceive: { modifyDeadlineSeconds: 602 } },
-    { frames: [frame, frame], afterReceive: { modifyDeadlineSeconds: 601 } },
+    ...[-2, 0, 1, 600, 601, 602].map((modifyDeadlineSeconds) => ({
+      afterReceive: { modifyDeadlineSeconds },
+    })),
+    { frames: [frame, frame], afterReceive: { modifyDeadlineSeconds: -1 } },
   ])
     await assert.rejects(call(transport, extra), /stream.*bound/);
   assert.equal(budget.used(), 0);
@@ -205,7 +207,7 @@ test("native oversized response is unreadable and unknown even with RESOURCE_EXH
   );
 });
 
-test("native deadline followup uses only the ACK actually received on this stream", async (t) => {
+test("native deadline followup sends the documented negative value with an ACK actually received on this stream", async (t) => {
   const seen = [];
   const s = await server((stream) =>
     stream.on("data", (request) => {
@@ -219,7 +221,7 @@ test("native deadline followup uses only the ACK actually received on this strea
   );
   t.after(s.close);
   const { transport, lines } = setup(t, s.target);
-  const reply = await call(transport, { afterReceive: { modifyDeadlineSeconds: 601 } });
+  const reply = await call(transport, { afterReceive: { modifyDeadlineSeconds: -1 } });
   assert.equal(reply.followUpSent, true);
   assert.equal(
     lines.find(
@@ -228,7 +230,7 @@ test("native deadline followup uses only the ACK actually received on this strea
     1,
   );
   assert.deepEqual(seen[1].modifyDeadlineAckIds, ["actual-wire-ack"]);
-  assert.deepEqual(seen[1].modifyDeadlineSeconds, [601]);
+  assert.deepEqual(seen[1].modifyDeadlineSeconds, [-1]);
   assert.equal(
     lines.filter((line) => line.note === "stream-frame" && line.direction === "out").length,
     2,
@@ -239,7 +241,7 @@ test("native deadline followup never fabricates an ACK when no message arrived",
   const s = await server((stream) => stream.on("data", () => stream.end()));
   t.after(s.close);
   const { transport } = setup(t, s.target);
-  const reply = await call(transport, { afterReceive: { modifyDeadlineSeconds: 601 } });
+  const reply = await call(transport, { afterReceive: { modifyDeadlineSeconds: -1 } });
   assert.equal(reply.followUpSent, false);
   assert.equal(reply.outboundFrames, 1);
 });
@@ -260,7 +262,7 @@ test("native raw frames round-trip long ACK bytes and unknown protobuf fields wi
   );
   t.after(s.close);
   const { transport, lines, rawFrame } = setup(t, s.target);
-  const reply = await call(transport, { afterReceive: { modifyDeadlineSeconds: 601 } });
+  const reply = await call(transport, { afterReceive: { modifyDeadlineSeconds: -1 } });
   assert.equal(reply.code, "OK");
   assert.equal(reply.followUpSent, true);
   const recorded = lines.filter((line) => line.note === "stream-frame");
@@ -273,7 +275,7 @@ test("native raw frames round-trip long ACK bytes and unknown protobuf fields wi
   );
   assert.deepEqual(
     rawFrame(recorded[2]),
-    encode(Request, { modifyDeadlineAckIds: [ackId], modifyDeadlineSeconds: [601] }),
+    encode(Request, { modifyDeadlineAckIds: [ackId], modifyDeadlineSeconds: [-1] }),
   );
   assert.equal(recorded[1].body.receivedMessages[0].ackId.omitted.length, ackId.length);
   assert.equal(recorded[2].body.modifyDeadlineAckIds[0].omitted.length, ackId.length);

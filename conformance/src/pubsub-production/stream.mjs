@@ -61,7 +61,7 @@ export function createStreamingPull({
       if (
         afterReceive !== undefined &&
         (frames.length !== 1 ||
-          afterReceive.modifyDeadlineSeconds !== 601 ||
+          afterReceive.modifyDeadlineSeconds !== -1 ||
           Object.keys(afterReceive).length !== 1)
       )
         throw new Error("stream followup bound exceeded before dispatch");

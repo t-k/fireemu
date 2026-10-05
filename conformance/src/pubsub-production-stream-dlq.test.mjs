@@ -229,7 +229,7 @@ test("four native stream cases keep their exact invalid frames and never publish
   );
   assert.ok(result.streams[0].frames[0].subscription.includes("stream"));
   assert.deepEqual(result.streams[1].frames[1], { ackIds: ["invalid-ack-for-stream-observation"] });
-  assert.deepEqual(result.streams[2].afterReceive, { modifyDeadlineSeconds: 601 });
+  assert.deepEqual(result.streams[2].afterReceive, { modifyDeadlineSeconds: -1 });
   assert.equal(result.streams[3].frames[0].streamAckDeadlineSeconds, 0);
   const publishes = result.requests.filter((request) => request.path.endsWith(":publish"));
   assert.equal(publishes.length, 1);

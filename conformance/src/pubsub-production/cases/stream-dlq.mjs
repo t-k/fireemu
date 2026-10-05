@@ -51,7 +51,7 @@ const streamCase = (id, short, mode) => ({
       subscription,
       frames,
       STREAM_BOUNDS.timeoutMs,
-      mode === "deadline" ? { modifyDeadlineSeconds: 601 } : undefined,
+      mode === "deadline" ? { modifyDeadlineSeconds: -1 } : undefined,
     );
     ctx.note("stream-result", { mode, ...result });
     if (mode === "deadline" && !result.followUpSent)

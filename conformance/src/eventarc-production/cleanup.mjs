@@ -157,13 +157,11 @@ const locationOf = (name) => name.split("/")[3];
 const channelTail = (name) => name.split("/").slice(2).join("/");
 
 /**
- * Whether a read is an exact own 2xx read that shows the channel `name`: the answer names a channel
+ * Whether the body of a 2xx read shows the channel `name`: the answer names a channel
  * with the same location and ID (the project may be spelled by number).
  */
-const showsChannel = (read, name) =>
-  read.ok &&
-  typeof read.body?.name === "string" &&
-  channelTail(read.body.name) === channelTail(name);
+const showsChannel = (body, name) =>
+  typeof body?.name === "string" && channelTail(body.name) === channelTail(name);
 
 export async function cleanup({
   client,
@@ -251,7 +249,7 @@ export async function cleanup({
             );
             continue;
           }
-          if (facts.createPending && !showsChannel(read, name)) {
+          if (facts.createPending && !showsChannel(read.body, name)) {
             report.errors.push(`getChannel ${name}: a 2xx read that does not show the channel`);
             continue;
           }

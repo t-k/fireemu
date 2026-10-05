@@ -22,7 +22,8 @@ export const runServiceId = (fn) => fn.toLowerCase();
 export const scheduleId = (fn) => "firebase-schedule-" + fn + "-" + REGION;
 export const jobName = (id) => "projects/" + PROJECT + "/locations/" + REGION + "/jobs/" + id;
 export const topicName = (id) => "projects/" + PROJECT + "/topics/" + id;
-export const functionName = (fn) => "projects/" + PROJECT + "/locations/" + REGION + "/functions/" + fn;
+export const functionName = (fn) =>
+  "projects/" + PROJECT + "/locations/" + REGION + "/functions/" + fn;
 
 /** What the fixture declares, as the SDK discovery must report it (the offline check pins these). */
 export const DECLARED = Object.freeze({
@@ -88,3 +89,9 @@ export const subscriptionName = (id) => "projects/" + PROJECT + "/subscriptions/
 
 /** The marker the fixture prints before each frame. */
 export const FRAME_MARK = "SCHED_DELIVERY_FRAME";
+
+/** The ids of the Scheduler jobs the recorder may touch: the five the CLI creates and the extra ones. */
+export const jobIds = (runId) => [
+  ...ALL_FUNCTIONS.map(scheduleId),
+  ...EXTRA_JOBS.map((job) => extraJobId(runId, job.key)),
+];

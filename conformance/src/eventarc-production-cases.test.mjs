@@ -594,14 +594,14 @@ test("the case ceilings are the ones the plan was measured against, in the order
     CASES.map(({ id, requests }) => [id, requests]),
     [
       ["preconditions", 3],
-      ["create-probe", 20],
-      ["channel-lifecycle", 60],
-      ["channel-delete", 20],
-      ["publish-envelope", 44],
-      ["publish-content", 24],
+      ["create-probe", 31],
+      ["channel-lifecycle", 134],
+      ["channel-delete", 41],
+      ["publish-envelope", 42],
+      ["publish-content", 31],
       ["publish-limits", 40],
-      ["admin-sdk-publish", 24],
-      ["auth-errors", 30],
+      ["admin-sdk-publish", 31],
+      ["auth-errors", 36],
     ],
   );
 });
@@ -988,4 +988,20 @@ test("the extension attributes of the envelope case carry the values the plan na
       bytes: { ceBytes: "AAE=" },
     },
   );
+});
+
+test("a limit search ends on an answer that is not the recorded limit answer: a 404 or a 403 is not a boundary", async () => {
+  for (const answer of [
+    { status: 404, body: { error: { code: 404, status: "NOT_FOUND", message: "Associated channel does not exist." } }, unknown: false },
+    { status: 403, body: { error: { code: 403, status: "PERMISSION_DENIED", message: "denied" } }, unknown: false },
+    { status: 400, body: { error: { code: 400, status: "INVALID_ARGUMENT", message: "some other problem" } }, unknown: false },
+  ]) {
+    const world = createWorld({ project: PROJECT });
+    const odd = async (call) =>
+      call.op === "publishEvents" && call.body.events.length === 255 ? answer : world.request(call);
+    const { notes } = await run({ request: odd, calls: world.calls, live: new Set() }, { cases: [publishLimits] });
+    const bracket = notes.find((n) => n.note === "limit-bracket" && n.name === "event-count");
+    assert.deepEqual([bracket.low, bracket.high, bracket.unknown], [8, null, true], JSON.stringify(answer.status));
+    assert.equal(notes.some((n) => n.note === "limit-boundary" && n.name === "event-count"), false);
+  }
 });

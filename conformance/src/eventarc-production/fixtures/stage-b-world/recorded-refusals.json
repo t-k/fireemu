@@ -115,6 +115,64 @@
      }
     }
    }
+  },
+  "publishEvents-too-many-events": {
+   "n": 59,
+   "request": {
+    "method": "POST",
+    "path": "/v1/projects/fireemu-oracle-idp/locations/us-central1/channels/fe9e560c404162-pl-limits-absent:publishEvents",
+    "events": 256
+   },
+   "response": {
+    "status": 400,
+    "body": {
+     "error": {
+      "code": 400,
+      "message": "Too many events.",
+      "status": "OUT_OF_RANGE",
+      "details": [
+       {
+        "@type": "type.googleapis.com/google.rpc.BadRequest",
+        "fieldViolations": [
+         {
+          "field": "events",
+          "description": "Too many events."
+         }
+        ]
+       }
+      ]
+     }
+    }
+   }
+  },
+  "publishEvents-event-too-large": {
+   "n": 63,
+   "request": {
+    "method": "POST",
+    "path": "/v1/projects/fireemu-oracle-idp/locations/us-central1/channels/fe9e560c404162-pl-limits-absent:publishEvents",
+    "events": 1
+   },
+   "response": {
+    "status": 400,
+    "body": {
+     "error": {
+      "code": 400,
+      "message": "The event size (1048883 bytes) is too large. The maximum size is 524288 bytes.",
+      "status": "INVALID_ARGUMENT",
+      "details": [
+       {
+        "@type": "type.googleapis.com/google.rpc.BadRequest",
+        "fieldViolations": [
+         {
+          "field": "events[0]",
+          "description": "The event size (1048883 bytes) is too large. The maximum size is 524288 bytes."
+         }
+        ]
+       }
+      ]
+     }
+    }
+   }
   }
  }
 }

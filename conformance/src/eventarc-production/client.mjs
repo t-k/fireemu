@@ -132,14 +132,23 @@ export function createClient({
     // names the channel that may have been created or deleted.
     const entry = spec.ledger && { ...spec.ledger, transport: "rest" };
     if (entry) ledger.sent(entry);
-    const reply = await transport.request({
-      label,
-      op: operation,
-      method: spec.method,
-      path: spec.path,
-      body: spec.body,
-      ...options,
-    });
+    let reply;
+    try {
+      reply = await transport.request({
+        label,
+        op: operation,
+        method: spec.method,
+        path: spec.path,
+        body: spec.body,
+        ...options,
+      });
+    } catch (error) {
+      // A request that was refused before it was sent (the case's ceiling, the run's budget, a credential
+      // that could not be had) never left: it is not an unknown answer, so nothing is left to settle.
+      if (entry && (error?.unsent === true || error?.name === "BudgetExceeded"))
+        ledger.answered({ ...entry, kind: "unsent" });
+      throw error;
+    }
     const code = restCode(reply.status, reply.body);
     // A 2xx whose body cannot be read does not say what was done, so it is not a success.
     const result = {

@@ -1,4 +1,4 @@
-import { acceptance, bisect, bracket } from "../bisect.mjs";
+import { acceptance, bisect, bracket, isCountRefusal, isSizeRefusal } from "../bisect.mjs";
 import {
   baseAttributes,
   CE_TYPE,
@@ -14,7 +14,7 @@ import {
 export const publishEnvelope = {
   id: "publish-envelope",
   short: "pe",
-  requests: 44,
+  requests: 42,
   async run(ctx) {
     const c = ctx.client;
     const channel = await requireReadyChannel(ctx, "env");
@@ -84,7 +84,7 @@ export const publishEnvelope = {
 export const publishContent = {
   id: "publish-content",
   short: "pc",
-  requests: 24,
+  requests: 31,
   async run(ctx) {
     const c = ctx.client;
     const channel = await requireReadyChannel(ctx, "content");
@@ -146,8 +146,8 @@ export const publishLimits = {
     const channel = await requireReadyChannel(ctx, "limits");
     const many = (n) => Array.from({ length: n }, () => cloudEvent(ctx, { textData: "1" }));
     const big = c.with({ timeoutMs: 120_000 });
-    const search = async (name, start, ladder, steps, send) => {
-      const accepts = async (value) => acceptance(await send(value));
+    const search = async (name, start, ladder, steps, isRefusal, send) => {
+      const accepts = async (value) => acceptance(await send(value), isRefusal);
       const bracketed = await bracket({ start, values: ladder, accepts });
       ctx.note("limit-bracket", { name, ...bracketed });
       if (bracketed.unknown || bracketed.high === null) return;
@@ -155,11 +155,11 @@ export const publishLimits = {
       ctx.note("limit-boundary", { name, ...found });
     };
     // The count of events in one request: one event is accepted (the envelope case), 256 was refused.
-    await search("event-count", 1, COUNT_LADDER, COUNT_BISECT_STEPS, (n) =>
+    await search("event-count", 1, COUNT_LADDER, COUNT_BISECT_STEPS, isCountRefusal, (n) =>
       c.publishEvents(channel, { events: many(n) }),
     );
     // The size of one event, by the length of its text (the request is a little larger: see requestBytes).
-    await search("event-text-length", 1, SIZE_LADDER, SIZE_BISECT_STEPS, (size) =>
+    await search("event-text-length", 1, SIZE_LADDER, SIZE_BISECT_STEPS, isSizeRefusal, (size) =>
       big.publishEvents(channel, {
         events: [cloudEvent(ctx, { textData: JSON.stringify("x".repeat(size - 2)) })],
       }),

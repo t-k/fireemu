@@ -10,7 +10,7 @@ import { StopClean, createAndWait, isRecordedNotFound, waitOperation } from "./s
 export const createProbe = {
   id: "create-probe",
   short: "cp",
-  requests: 20,
+  requests: 31,
   async run(ctx) {
     const c = ctx.client;
     const name = ctx.channel("p1");

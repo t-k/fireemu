@@ -158,8 +158,8 @@ test("bad arguments are refused, and the numbers have their values", () => {
   assert.equal(parseArgs([...base, "--max-requests", "1"]).maxRequests, 1);
   assert.equal(parseArgs([...base, "--project-number", "1".repeat(20)]).usageProject.length, 20);
   assert.throws(() => parseArgs([...base, "--project-number", "1".repeat(21)]), /digits/);
-  assert.equal(DEFAULT_MAX_REQUESTS, 280);
-  assert.equal(CLEANUP_BUDGET, 300);
+  assert.equal(DEFAULT_MAX_REQUESTS, 400);
+  assert.equal(CLEANUP_BUDGET, 450);
 });
 
 test("the cases are unique, start with the preconditions and the create probe, and fit the default budget", () => {
@@ -530,7 +530,13 @@ for (const [label, extra] of [
     // The raw bytes of every answer are in the capture.
     const exchanges = lines.filter((l) => l.response?.status !== undefined);
     assert.ok(exchanges.length > 100);
-    assert.ok(exchanges.every((l) => typeof l.response.bodyBase64 === "string"));
+    assert.ok(
+      exchanges.every(
+        (l) =>
+          typeof l.response.bodyBase64 === "string" || Array.isArray(l.response.bodyBase64Parts),
+      ),
+    );
+    assert.ok(exchanges.every((l) => /^[0-9a-f]{64}$/.test(l.response.bodySha256)));
     assert.ok(lines.some((l) => l.op === "sdk.publishEvents" && l.response.status === 200));
     assert.ok(
       lines.some((l) => l.note === "sdk-outcome" && l.name === "missing-source" && l.requests === 0),

@@ -11,7 +11,7 @@ const NARROW_SCOPE = "https://www.googleapis.com/auth/userinfo.email";
 export const authErrors = {
   id: "auth-errors",
   short: "ae",
-  requests: 30,
+  requests: 36,
   async run(ctx) {
     const c = ctx.client;
     const channel = await requireReadyChannel(ctx, "auth");

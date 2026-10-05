@@ -32,18 +32,40 @@ export async function bisect({ low, high, accepts, maxSteps }) {
   return { accepted, refused, steps, unknown: false };
 }
 
+const errorOf = (reply) => reply?.body?.error;
+
 /**
- * Whether the answer to a publish accepted the value: true for a 2xx, false for a refusal (a 4xx other
- * than a request timeout or a rate limit, which say nothing about the value), null for anything that
- * does not say (an unknown answer, a 3xx, a 5xx, a missing answer).
+ * The recorded answer that refuses an event count (stage A r2 rows 59 to 61): a 400 `OUT_OF_RANGE`,
+ * "Too many events.".
  */
-export function acceptance(reply) {
+export const isCountRefusal = (reply) =>
+  reply?.status === 400 &&
+  errorOf(reply)?.status === "OUT_OF_RANGE" &&
+  errorOf(reply)?.message === "Too many events.";
+
+/**
+ * The recorded answer that refuses an event's size (r2 rows 63 to 65): a 400 `INVALID_ARGUMENT`, "The event
+ * size (N bytes) is too large. The maximum size is M bytes.".
+ */
+export const isSizeRefusal = (reply) =>
+  reply?.status === 400 &&
+  errorOf(reply)?.status === "INVALID_ARGUMENT" &&
+  /^The event size \(\d+ bytes\) is too large\. The maximum size is \d+ bytes\.$/.test(
+    errorOf(reply)?.message ?? "",
+  );
+
+/**
+ * Whether the answer to a publish accepted the value: true for a 2xx, false only for `isRefusal`, the
+ * recorded answer of the limit under search, and null for anything else (an unknown answer, a 3xx, a 5xx,
+ * a missing channel, a permission error, any other 4xx): such an answer says nothing about the value and
+ * ends the search.
+ */
+export function acceptance(reply, isRefusal) {
   if (reply === undefined || reply === null || reply.unknown === true) return null;
   const { status } = reply;
   if (!Number.isInteger(status)) return null;
   if (status >= 200 && status < 300) return true;
-  if (status >= 400 && status < 500 && status !== 408 && status !== 429) return false;
-  return null;
+  return isRefusal(reply) ? false : null;
 }
 
 /**

@@ -29,8 +29,8 @@ const PRODUCTION = {
   publishing: "https://eventarcpublishing.googleapis.com",
   usage: "https://serviceusage.googleapis.com",
 };
-export const DEFAULT_MAX_REQUESTS = 280;
-export const CLEANUP_BUDGET = 300;
+export const DEFAULT_MAX_REQUESTS = 400;
+export const CLEANUP_BUDGET = 450;
 /** The later --cleanup-only run starts at least this long after the recording's last line. */
 export const MIN_A2_WAIT_MS = 10 * 60 * 1000;
 

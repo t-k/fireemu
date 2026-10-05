@@ -43,7 +43,7 @@ async function listPages(ctx, project, location, pageSize, pages) {
 export const channelLifecycle = {
   id: "channel-lifecycle",
   short: "cl",
-  requests: 60,
+  requests: 134,
   async run(ctx) {
     const c = ctx.client;
     const name = await requireChannel(ctx, "c1");
@@ -97,7 +97,7 @@ export const channelLifecycle = {
 export const channelDelete = {
   id: "channel-delete",
   short: "cd",
-  requests: 20,
+  requests: 41,
   async run(ctx) {
     const c = ctx.client;
     const name = await requireChannel(ctx, "d1");

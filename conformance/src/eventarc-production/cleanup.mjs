@@ -80,11 +80,14 @@ const parseKind = (kind) => {
 
 const DEFINITE = new Set(["ok", "conflict", "error"]);
 
+/** The kind of a request that was refused before it was sent: it left nothing to settle. */
+const UNSENT = "unsent";
+
 /** The creations of an item as parsed kinds; a creation still open is an unknown creation. */
 const createsOf = (item) =>
-  [...item.creates, ...item.open.filter((action) => action === "create").map(() => "unknown")].map(
-    parseKind,
-  );
+  [...item.creates, ...item.open.filter((action) => action === "create").map(() => "unknown")]
+    .map(parseKind)
+    .filter(({ base }) => base !== UNSENT);
 
 /** The operations a creation named that no read settled, in the order they were named. */
 function unsettledOperations(parsed) {
@@ -130,7 +133,9 @@ export function ledgerFacts(item) {
   const deletes = [
     ...item.deletes,
     ...item.open.filter((action) => action === "delete").map(() => "unknown"),
-  ].map((kind) => parseKind(kind).base);
+  ]
+    .map((kind) => parseKind(kind).base)
+    .filter((base) => base !== UNSENT);
   const confirmed = creates.some(({ base }) => base === "confirmed");
   const createdOk = confirmed || creates.some(({ base }) => base === "ok");
   const createPending =

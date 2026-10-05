@@ -3,6 +3,7 @@
 // token-format probes without ever writing a token into the capture.
 
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { createServer } from "node:http";
 import test from "node:test";
 import { createBudget, createCapture } from "./pubsub-production/capture.mjs";
@@ -262,4 +263,40 @@ test("the elapsed time of a request is recorded, and an unknown answer is counte
   assert.equal(capture.unknownCount(), 1, "only the 503 is unknown");
   assert.equal(lines[0].unknown, true);
   assert.equal(lines[1].unknown, undefined);
+});
+
+test("a body over 4 KiB is captured whole, in parts, with its length and SHA-256: the byte layout is never truncated", async (t) => {
+  const items = Array.from({ length: 200 }, (_, i) => ({ name: `projects/p/locations/l/channels/c${i}`, state: "ACTIVE" }));
+  const raw = Buffer.from(`${JSON.stringify({ channels: items }, null, 2)}\n`, "utf8");
+  assert.ok(raw.length > 8000);
+  const s = await server((_, response) => {
+    response.setHeader("content-length", String(raw.length));
+    response.end(raw);
+  });
+  t.after(s.close);
+  const { rest, lines } = transport(s.base);
+  await get(rest);
+  const entry = lines[0].response;
+  assert.equal(entry.bodyBase64, undefined);
+  assert.ok(Array.isArray(entry.bodyBase64Parts) && entry.bodyBase64Parts.length > 1);
+  assert.ok(entry.bodyBase64Parts.every((part) => typeof part === "string" && part.length <= 4096));
+  assert.equal(Buffer.from(entry.bodyBase64Parts.join(""), "base64").equals(raw), true);
+  assert.equal(entry.bodyBytes, raw.length);
+  assert.equal(entry.bodySha256, createHash("sha256").update(raw).digest("hex"));
+  // A small body keeps one string, and carries its digest too.
+  const small = await server((_, response) => response.end("{}\n"));
+  t.after(small.close);
+  const again = transport(small.base);
+  await get(again.rest);
+  assert.equal(again.lines[0].response.bodyBase64, Buffer.from("{}\n").toString("base64"));
+  assert.equal(again.lines[0].response.bodyBase64Parts, undefined);
+  assert.equal(again.lines[0].response.bodySha256, createHash("sha256").update("{}\n").digest("hex"));
+  // The edge: exactly 4096 base64 characters stay one string, one more becomes parts.
+  for (const [bytes, parts] of [[3072, false], [3073, true]]) {
+    const edge = await server((_, response) => response.end(Buffer.alloc(bytes, 65)));
+    t.after(edge.close);
+    const run = transport(edge.base);
+    await get(run.rest);
+    assert.equal(run.lines[0].response.bodyBase64Parts !== undefined, parts, String(bytes));
+  }
 });

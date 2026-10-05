@@ -1,7 +1,7 @@
 // The REST transport of the Eventarc recordings. It is the transport of the Pub/Sub recordings with three
 // additions that stage A lacked:
 //
-// - the raw bytes of every answer (`bodyBase64`, `bodyBytes`) and its headers are captured, so that the
+// - the raw bytes of every answer (`bodyBase64`, or `bodyBase64Parts` over 4 KiB; `bodyBytes`, `bodySha256`) and its headers are captured, so that the
 //   layout of an answer (indentation, member order, final newline, content length) is recorded and not
 //   only the parsed JSON. The request asks for the identity encoding, so that `content-length` is the
 //   length of the bytes that were read;
@@ -13,6 +13,7 @@
 // One attempt for each request, counted against the budget before it is sent. A transport error or a
 // timeout is an unknown answer and is never retried.
 
+import { createHash } from "node:crypto";
 import { parseBody } from "../pubsub-production/rest.mjs";
 
 const b64url = (value) => Buffer.from(JSON.stringify(value)).toString("base64url");
@@ -24,6 +25,9 @@ export const TOKEN_MODES = Object.freeze({
   "jwt-garbage": `${b64url({ alg: "RS256", typ: "JWT" })}.${b64url({ iss: "fireemu-recorder", sub: "x" })}.fireemu-recorder-not-a-signature`,
   "jwt-expired-unsigned": `${b64url({ alg: "RS256", typ: "JWT" })}.${b64url({ iss: "https://accounts.google.com", aud: "fireemu-recorder", iat: 0, exp: 1 })}.fireemu-recorder-not-a-signature`,
 });
+
+/** The longest string the capture keeps as it is (`sanitize` in the shared capture). */
+const PART = 4096;
 
 const DEFAULT_MODES = new Set(["default", "none"]);
 
@@ -41,7 +45,7 @@ function resolveToken(token) {
     token.bearer !== ""
   )
     return { mode: token.label, bearer: token.bearer };
-  throw new Error("unknown credential mode");
+  throw Object.assign(new Error("unknown credential mode"), { unsent: true });
 }
 
 export function createRawRest({
@@ -69,12 +73,18 @@ export function createRawRest({
       timeoutMs = defaultTimeoutMs,
     }) {
       const credential = resolveToken(token);
-      budget.consume();
       const headers = { "accept-encoding": "identity" };
       if (body !== undefined) headers["content-type"] = "application/json";
+      // A credential that cannot be had stops the request before the budget is touched: nothing is sent.
       if (credential.bearer !== null) headers.authorization = `Bearer ${credential.bearer}`;
-      else if (credential.mode === "default" && getToken !== null)
-        headers.authorization = `Bearer ${await getToken()}`;
+      else if (credential.mode === "default" && getToken !== null) {
+        try {
+          headers.authorization = `Bearer ${await getToken()}`;
+        } catch (error) {
+          throw Object.assign(error, { unsent: true });
+        }
+      }
+      budget.consume();
       const sendsQuota = quota !== null && credential.mode !== "none";
       if (sendsQuota) headers["x-goog-user-project"] = quota;
       const payload = body === undefined ? undefined : JSON.stringify(body);
@@ -102,11 +112,17 @@ export function createRawRest({
         const received = Object.fromEntries(
           [...reply.headers.entries()].filter(([name]) => name !== "set-cookie"),
         );
+        // The raw bytes are kept whole. The capture replaces a string over 4096 characters by its length and
+        // digest, so a longer body is stored in parts of at most 4096 characters (join them to decode).
+        const base64 = raw.toString("base64");
         response = {
           status: reply.status,
           body: parsed,
-          bodyBase64: raw.toString("base64"),
+          ...(base64.length <= PART
+            ? { bodyBase64: base64 }
+            : { bodyBase64Parts: base64.match(new RegExp(`.{1,${PART}}`, "gs")) }),
           bodyBytes: raw.length,
+          bodySha256: createHash("sha256").update(raw).digest("hex"),
           headers: received,
         };
         // A status below 200, a redirect, a server error (other than 501, which says the method is not

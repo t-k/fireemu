@@ -5,7 +5,7 @@ import { defaultChannelAbsent, requireReadyChannel } from "./support.mjs";
 export const adminSdkPublish = {
   id: "admin-sdk-publish",
   short: "sd",
-  requests: 24,
+  requests: 31,
   async run(ctx) {
     const channel = await requireReadyChannel(ctx, "sdk");
     const relative = channel.replace(`projects/${ctx.project}/`, "");

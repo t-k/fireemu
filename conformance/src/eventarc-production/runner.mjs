@@ -22,6 +22,8 @@ export class CaseLimit extends Error {
   constructor(limit) {
     super(`the case reached its limit of ${limit} requests`);
     this.name = "CaseLimit";
+    /** Refused before anything was sent. */
+    this.unsent = true;
   }
 }
 

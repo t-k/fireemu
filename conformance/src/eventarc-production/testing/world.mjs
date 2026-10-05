@@ -85,6 +85,8 @@ export function createWorld({
   pendingReads = 0,
   stuckPending = false,
   withState = false,
+  /** Every ID is accepted, so that every ID probe creates a channel (the most requests a run can send). */
+  acceptAnyId = false,
 } = {}) {
   const channels = new Map(existing.map((name) => [name, { createTime: "2026-01-01T00:00:00Z" }]));
   const operations = new Map();
@@ -114,7 +116,7 @@ export function createWorld({
     const shape = createShapeRefusal(call);
     if (shape !== null) return refuse(call, shape.kind, shape.answer);
     const name = `${parent[0]}/${id}`;
-    if (!CHANNEL_ID.test(id) || id.startsWith("goog"))
+    if (!acceptAnyId && (!CHANNEL_ID.test(id) || id.startsWith("goog")))
       return invalid("The request was invalid: invalid channel ID");
     if (channels.has(name)) {
       if (duplicate === "409")
@@ -131,9 +133,9 @@ export function createWorld({
     if (!Array.isArray(events) || events.length === 0)
       return refuse(call, "publish-no-events", recorded(Array.isArray(events) ? "publishEvents-empty-list" : "publishEvents-no-events-member"));
     if (events.length > eventLimit)
-      return limited(call, "publish-too-many", reply(400, { error: { code: 400, status: "OUT_OF_RANGE", message: "Too many events." } }));
+      return limited(call, "publish-too-many", { ...recorded("publishEvents-too-many-events"), unknown: false });
     if (events.some((event) => (event?.textData?.length ?? 0) > textLimit))
-      return limited(call, "publish-too-large", reply(400, { error: { code: 400, status: "INVALID_ARGUMENT", message: "Event too large." } }));
+      return limited(call, "publish-too-large", { ...recorded("publishEvents-event-too-large"), unknown: false });
     if (!channels.has(name))
       return reply(404, { error: { code: 404, status: "NOT_FOUND", message: "Associated channel does not exist." } });
     return reply(200, {});

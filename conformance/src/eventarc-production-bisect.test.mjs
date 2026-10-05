@@ -4,7 +4,8 @@
 
 import assert from "node:assert/strict";
 import test from "node:test";
-import { acceptance, bisect, bracket, stepsNeeded } from "./eventarc-production/bisect.mjs";
+import { acceptance, bisect, bracket, isCountRefusal, isSizeRefusal, stepsNeeded } from "./eventarc-production/bisect.mjs";
+import { recorded } from "./eventarc-production/testing/world.mjs";
 
 function random(seed) {
   let state = seed;
@@ -88,14 +89,40 @@ test("stepsNeeded is the number of halvings of an interval", () => {
   assert.equal(stepsNeeded(786_432), 20);
 });
 
-test("acceptance: only a 2xx is accepted, a 4xx other than a rate or time limit is refused, anything else is not an answer", () => {
-  assert.equal(acceptance({ status: 200, unknown: false }), true);
-  assert.equal(acceptance({ status: 204, unknown: false }), true);
-  for (const status of [400, 404, 413, 422, 403, 401]) assert.equal(acceptance({ status, unknown: false }), false, String(status));
-  for (const status of [408, 429, 500, 503, 301, 100, 501, null]) assert.equal(acceptance({ status, unknown: false }), null, String(status));
-  assert.equal(acceptance({ status: 200, unknown: true }), null);
-  assert.equal(acceptance({ status: 400, unknown: true }), null);
-  assert.equal(acceptance(undefined), null);
+const recordedRefusal = (key) => ({ ...recorded(key), unknown: false });
+
+test("acceptance: a 2xx is accepted, only the recorded limit answer is a refusal, anything else does not say", () => {
+  const countLimit = recordedRefusal("publishEvents-too-many-events");
+  const sizeLimit = recordedRefusal("publishEvents-event-too-large");
+  assert.equal(acceptance({ status: 200, unknown: false }, isCountRefusal), true);
+  assert.equal(acceptance({ status: 204, unknown: false }, isCountRefusal), true);
+  assert.equal(acceptance({ status: 299, unknown: false }, isSizeRefusal), true);
+  // The recorded answers (r2 rows 59 and 63) refuse the value, each for its own limit only.
+  assert.equal(acceptance(countLimit, isCountRefusal), false);
+  assert.equal(acceptance(sizeLimit, isSizeRefusal), false);
+  assert.equal(acceptance(countLimit, isSizeRefusal), null);
+  assert.equal(acceptance(sizeLimit, isCountRefusal), null);
+  // Any other 4xx is not the limit: it ends the search (a missing channel, a permission, a malformed event).
+  for (const status of [400, 401, 403, 404, 409, 413, 422])
+    assert.equal(acceptance({ status, body: { error: { status: "NOT_FOUND", message: "Associated channel does not exist." } }, unknown: false }, isCountRefusal), null, String(status));
+  // The limit's status and message must both match, with the recorded status code.
+  const wrongStatus = structuredClone(countLimit);
+  wrongStatus.status = 404;
+  assert.equal(acceptance(wrongStatus, isCountRefusal), null);
+  const wrongCode = structuredClone(countLimit);
+  wrongCode.body.error.status = "INVALID_ARGUMENT";
+  assert.equal(acceptance(wrongCode, isCountRefusal), null);
+  const wrongMessage = structuredClone(countLimit);
+  wrongMessage.body.error.message = "No events provided.";
+  assert.equal(acceptance(wrongMessage, isCountRefusal), null);
+  const wrongSize = structuredClone(sizeLimit);
+  wrongSize.body.error.message = "The event size is too large.";
+  assert.equal(acceptance(wrongSize, isSizeRefusal), null);
+  for (const status of [408, 429, 500, 503, 301, 100, 501, null]) assert.equal(acceptance({ status, unknown: false }, isCountRefusal), null, String(status));
+  assert.equal(acceptance({ status: 200, unknown: true }, isCountRefusal), null);
+  assert.equal(acceptance({ ...countLimit, unknown: true }, isCountRefusal), null);
+  assert.equal(acceptance(undefined, isCountRefusal), null);
+  assert.equal(acceptance({ status: 400, body: null, unknown: false }, isCountRefusal), null);
 });
 
 test("bracket: the ladder stops at the first refused value and names the last accepted one before it", async () => {
@@ -145,15 +172,11 @@ test("bracket: values must rise above the start", async () => {
   await assert.rejects(() => bracket({ start: 0, values: [], accepts: async () => true }), /rise/);
 });
 
-test("boundaries of the guards: one step is allowed, a 300 is not a 2xx, equal ladder values do not rise", async () => {
+test("boundaries of the guards: one step is allowed, equal ladder values do not rise", async () => {
   const one = await bisect({ low: 0, high: 2, maxSteps: 1, accepts: async () => true });
   assert.deepEqual(one, { accepted: 1, refused: 2, steps: 1, unknown: false });
-  assert.equal(acceptance({ status: 299, unknown: false }), true);
-  assert.equal(acceptance({ status: 300, unknown: false }), null);
-  assert.equal(acceptance({ status: 399, unknown: false }), null);
-  assert.equal(acceptance({ status: 400, unknown: false }), false);
-  assert.equal(acceptance({ status: 499, unknown: false }), false);
-  assert.equal(acceptance({ status: 500, unknown: false }), null);
+  assert.equal(acceptance({ status: 299, unknown: false }, isCountRefusal), true);
+  assert.equal(acceptance({ status: 300, unknown: false }, isCountRefusal), null);
   await assert.rejects(() => bracket({ start: 0, values: [3, 3], accepts: async () => true }), /rise/);
   await assert.rejects(() => bracket({ start: 0, values: [1, 3, 3], accepts: async () => true }), /rise/);
   const ok = await bracket({ start: 0, values: [1, 2], accepts: async () => true });

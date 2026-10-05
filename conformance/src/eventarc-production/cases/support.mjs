@@ -52,7 +52,10 @@ export const withoutAttribute = (event, name) => ({
  * (`{ name, action }`), the result is written into the ledger as what the operation says of that
  * channel: the 2xx that started it does not prove that the run created (or removed) it.
  */
-export async function waitOperation(ctx, host, reply, { attempts = 10, settle } = {}) {
+/** The reads of one operation: the bound every case ceiling is derived from (with `READY_READS`). */
+export const OPERATION_READS_MAX = 10;
+
+export async function waitOperation(ctx, host, reply, { attempts = OPERATION_READS_MAX, settle } = {}) {
   const name = reply?.body?.name;
   let last = reply;
   const finished = () => !last?.ok || last.body?.done === true;
@@ -105,8 +108,8 @@ export async function requireChannel(ctx, key) {
 }
 
 /** The reads of the channel's state before a publish: the first, and at most four more, three seconds apart. */
-const READY_READS = 5;
-const READY_WAIT_MS = 3000;
+export const READY_READS = 5;
+export const READY_WAIT_MS = 3000;
 
 /**
  * Creates an owned channel (see `requireChannel`) and reads it until its `state` says ACTIVE, so that the

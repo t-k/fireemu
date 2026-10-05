@@ -177,11 +177,15 @@ pub struct BlockingAuthTarget {
 ///
 /// A window with no count (`retryCount` 0, `maxRetrySeconds` positive) retries until the window ends: production
 /// attempted a job with `maxRetryDuration: 30s` and no count four times, at 0, 4.6, 13.2 and 23.7 seconds, the next
-/// attempt being past the window (second delivery recording, run `156715222b86ea44`). That job targeted HTTP, which is
-/// what a second-generation schedule is; a first-generation schedule's job targets Pub/Sub, so Cloud Scheduler's retry
-/// covers the publish and not the handler, no handler retry was recorded for it, and a window alone is one attempt
-/// there. With both a count and a window (not recorded: production refused that job) the chain stops at whichever
-/// limit comes first. Neither is one attempt.
+/// attempt being past the window (second delivery recording, run `156715222b86ea44`). With both a count and a window
+/// (not recorded: production refused that job) the chain stops at whichever limit comes first. Neither is one attempt.
+///
+/// A first-generation schedule is one attempt, whatever it declares. Its job targets Pub/Sub, so Cloud Scheduler's
+/// retry covers the publish and never the handler: in the same recording `schedFailV1`'s handler threw at each of its 4
+/// occurrences and ran exactly once per occurrence (4 frames, 4 message ids), and every Scheduler attempt of its job
+/// finished without an error although the handler had failed. (That job declared no `retryCount`; a Gen1 job with a
+/// count has not been recorded, but a failed handler never marks an attempt failed, so there is nothing to retry.) The
+/// official emulator never retries a scheduled function.
 #[must_use]
 pub fn schedule_retry_policy(
     retry: &fireemu_core_functions::manifest::ScheduleRetryConfig,
@@ -191,10 +195,9 @@ pub fn schedule_retry_policy(
         |value: u64| LogicalDuration::from_seconds(i64::try_from(value).unwrap_or(i64::MAX));
     let minimum = seconds(retry.min_backoff_seconds);
     let maximum = seconds(retry.max_backoff_seconds.max(retry.min_backoff_seconds));
-    let window_only = retry.retry_count == 0
-        && retry.max_retry_seconds > 0
-        && generation == fireemu_core_functions::manifest::FunctionGeneration::Second;
-    let attempts = if window_only {
+    let attempts = if generation == fireemu_core_functions::manifest::FunctionGeneration::First {
+        1
+    } else if retry.retry_count == 0 && retry.max_retry_seconds > 0 {
         u32::MAX
     } else {
         retry.retry_count.saturating_add(1)

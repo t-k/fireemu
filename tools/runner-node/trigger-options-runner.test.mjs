@@ -238,7 +238,7 @@ for (const form of ['gcfv1','gcfv2','legacy']) {
     const definition=form==='legacy'?`{eventTrigger:{eventType:'google.pubsub.topic.publish',resource:'unused'},schedule:${schedule}}`:`{scheduleTrigger:${schedule}}`;
     const f=await start(t,`define('subject','${form}',${definition});`);
     assert.deepEqual(f.spec('subject')?.trigger,{type:'schedule',schedule:'every 5 minutes',timeZone:'Asia/Tokyo',retryConfig:{retryCount:3,maxRetrySeconds:300,minBackoffSeconds:0,maxBackoffSeconds:60,maxDoublings:2}});
-    assert.equal(f.spec('subject').retry,true);assert.equal((await f.invoke('subject','schedule')).ok,true);
+    assert.equal(f.spec('subject').retry,form==='gcfv2');assert.equal((await f.invoke('subject','schedule')).ok,true);
     assert.equal((await f.called()).argc,form==='gcfv2'?1:2);assert.deepEqual((await f.called()).seen.json,{});
   });
   test(`${form} Tasks: resolve retry and rate parameters, preserve null/zero/fractions`,async t=>{
@@ -263,16 +263,17 @@ test('a schedule with a retry window and no retry count retries (recorded: run 1
   assert.equal(f.spec('counted')?.retry,true);
 });
 
-test('a first-generation schedule with only a retry window does not retry its handler (its job targets Pub/Sub; nothing recorded)',async t=>{
+test('a first-generation schedule never retries its handler, with a window or a count (its job targets Pub/Sub; schedFailV1 ran once per occurrence)',async t=>{
   const f=await start(t,`define('v1Window','gcfv1',{scheduleTrigger:{schedule:'every 5 minutes',retryConfig:{retryCount:0,maxRetrySeconds:30,minBackoffSeconds:4,maxBackoffSeconds:10}}});define('v1WindowOnly','gcfv1',{scheduleTrigger:{schedule:'every 5 minutes',retryConfig:{maxRetrySeconds:30}}});define('legacyWindow','legacy',{eventTrigger:{eventType:'google.pubsub.topic.publish'},schedule:{schedule:'every 5 minutes',retryConfig:{maxRetryDuration:'30s'}}});define('v1Counted','gcfv1',{scheduleTrigger:{schedule:'every 5 minutes',retryConfig:{retryCount:2,maxRetrySeconds:30}}});define('v2Window','gcfv2',{scheduleTrigger:{schedule:'every 5 minutes',retryConfig:{maxRetrySeconds:30}}});define('v1None','gcfv1',{scheduleTrigger:{schedule:'every 5 minutes'}});define('v1ZeroCount','gcfv1',{scheduleTrigger:{schedule:'every 5 minutes',retryConfig:{retryCount:0}}});define('v2None','gcfv2',{scheduleTrigger:{schedule:'every 5 minutes'}});define('v2ZeroCount','gcfv2',{scheduleTrigger:{schedule:'every 5 minutes',retryConfig:{retryCount:0}}});define('v2OneRetry','gcfv2',{scheduleTrigger:{schedule:'every 5 minutes',retryConfig:{retryCount:1}}});define('v2OneSecond','gcfv2',{scheduleTrigger:{schedule:'every 5 minutes',retryConfig:{maxRetrySeconds:1}}});define('v1OneRetry','gcfv1',{scheduleTrigger:{schedule:'every 5 minutes',retryConfig:{retryCount:1}}});define('v2BackoffOnly','gcfv2',{scheduleTrigger:{schedule:'every 5 minutes',retryConfig:{minBackoffSeconds:3,maxBackoffSeconds:30}}});`);
   assert.equal(f.spec('v1Window')?.retry,false);
   assert.equal(f.spec('v1WindowOnly')?.retry,false);
   assert.equal(f.spec('legacyWindow')?.retry,false);
-  // the count rule is shared by both generations and out of this change's scope
-  assert.equal(f.spec('v1Counted')?.retry,true);
+  // a Gen1 count does not retry the handler either: its job's retry covers the publish (schedFailV1 ran once per occurrence)
+  assert.equal(f.spec('v1Counted')?.retry,false);
   assert.equal(f.spec('v2Window')?.retry,true);
-  // the smallest declarations count: one retry, one second of window (a Gen1 count still counts, a Gen1 window does not)
-  for (const name of ['v2OneRetry','v2OneSecond','v1OneRetry']) assert.equal(f.spec(name)?.retry,true,name);
+  // the smallest declarations count: one retry, one second of window (a Gen1 schedule never retries its handler)
+  for (const name of ['v2OneRetry','v2OneSecond']) assert.equal(f.spec(name)?.retry,true,name);
+  assert.equal(f.spec('v1OneRetry')?.retry,false);
   // no declaration, a zero count alone, a backoff alone: nothing to retry
   for (const name of ['v1None','v1ZeroCount','v2None','v2ZeroCount','v2BackoffOnly']) assert.equal(f.spec(name)?.retry,false,name);
 });

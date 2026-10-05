@@ -148,26 +148,31 @@ fn a_first_generation_window_alone_is_one_attempt() {
 }
 
 #[test]
-fn a_first_generation_count_is_unchanged_by_the_generation_split() {
-    // Out of the window rule's scope: the count rule is shared by both generations (an open question for the
-    // first-generation retry recording).
-    for generation in [FunctionGeneration::First, FunctionGeneration::Second] {
-        let policy = schedule_retry_policy(&config(4, 0, 4, 50, 2), generation);
-        assert_eq!(policy.max_attempts(), 5, "{generation:?}");
-        assert_eq!(attempt_offsets(&policy).len(), 5, "{generation:?}");
+fn a_first_generation_count_is_one_attempt_too() {
+    // Recorded (run `156715222b86ea44`): schedFailV1's handler threw at every occurrence and ran once per occurrence,
+    // and every Scheduler attempt of its job finished without an error: the job's retry covers the publish, never the
+    // handler, whatever the declared count.
+    for count in [1, 4, 5] {
+        let policy = schedule_retry_policy(&config(count, 0, 4, 50, 2), FunctionGeneration::First);
+        assert_eq!(policy.max_attempts(), 1, "count {count}");
+        assert_eq!(attempt_offsets(&policy), vec![0], "count {count}");
     }
+    // the second generation keeps its count
+    let second = schedule_retry_policy(&config(4, 0, 4, 50, 2), FunctionGeneration::Second);
+    assert_eq!(second.max_attempts(), 5);
 }
 
 proptest! {
-    /// Whatever the window and backoff, a first-generation schedule with no count is one attempt.
+    /// Whatever the count, window and backoff, a first-generation schedule is one attempt.
     #[test]
-    fn a_first_generation_schedule_without_a_count_is_one_attempt(
+    fn a_first_generation_schedule_is_one_attempt(
+        count in 0u32..30,
         window in 0u64..10_000,
         min in 0u64..50,
         max in 0u64..500,
         doublings in 0u32..10,
     ) {
-        let policy = schedule_retry_policy(&config(0, window, min, max, doublings), FunctionGeneration::First);
+        let policy = schedule_retry_policy(&config(count, window, min, max, doublings), FunctionGeneration::First);
         prop_assert_eq!(attempt_offsets(&policy), vec![0]);
     }
 }

@@ -620,6 +620,45 @@ mod tests {
 
     proptest! {
         #[test]
+        fn strict_push_admission_distinguishes_remote_http_https_and_loopback(host in "[a-z]{1,12}", path in "[a-z]{1,12}") {
+            for (endpoint, strict_ok) in [(format!("http://{host}.example/{path}"), false), (format!("https://{host}.example/{path}"), true), (format!("http://127.0.0.1:1/{path}"), true)] {
+                let push = pb::PushConfig { push_endpoint: endpoint, ..Default::default() };
+                prop_assert_eq!(push_config_from_proto(Some(&push), crate::PagingPolicy::Strict).is_ok(), strict_ok);
+                prop_assert!(push_config_from_proto(Some(&push), crate::PagingPolicy::Emulator).is_ok());
+            }
+        }
+        #[test]
+        fn strict_native_default_retention_matches_ttl_reference(ttl in 86_400i64..=2_678_400, explicit in any::<bool>()) {
+            let input = pb::Subscription {
+                name: "projects/demo-app/subscriptions/ttl-property".to_owned(), topic: "projects/demo-app/topics/ttl-property".to_owned(),
+                expiration_policy: Some(pb::ExpirationPolicy { ttl: Some(prost_types::Duration { seconds: ttl, nanos: 0 }) }),
+                message_retention_duration: explicit.then_some(prost_types::Duration { seconds: 600, nanos: 0 }), ..Default::default()
+            };
+            let strict = subscription_from_proto_with_policy(&input, crate::PagingPolicy::Strict).unwrap();
+            prop_assert_eq!(strict.resolved_retention(), LogicalDuration::from_seconds(if explicit { 600 } else { ttl.min(604_800) }));
+            let emulator = subscription_from_proto_with_policy(&input, crate::PagingPolicy::Emulator).unwrap();
+            prop_assert_eq!(emulator.message_retention_duration.is_some(), explicit);
+        }
+        #[test]
+        fn subscription_update_path_error_classes_are_distinct(path in prop::sample::select(vec!["name", "topic", "enable_message_ordering", "filter", "no_such_field", "pushConfig", "enable_exactly_once_delivery", "labels", "push_config"])) {
+            let result = validate_subscription_update_paths(&[path]);
+            if ["labels", "push_config"].contains(&path) { prop_assert!(result.is_ok()); }
+            else {
+                let error = result.unwrap_err();
+                if ["name", "topic", "enable_message_ordering", "filter"].contains(&path) {
+                    prop_assert_eq!(error.code(), Code::InvalidArgument);
+                    prop_assert_eq!(error.message(), format!("Invalid update_mask provided in the UpdateSubscriptionRequest: the '{path}' field in the Subscription is not mutable."));
+                } else if path == "enable_exactly_once_delivery" { prop_assert_eq!(error.code(), Code::Unimplemented); }
+                else {
+                    prop_assert_eq!(error.code(), Code::InvalidArgument);
+                    prop_assert!(error.message().contains("not a known Subscription field"));
+                }
+            }
+        }
+    }
+
+    proptest! {
+        #[test]
         fn resource_errors_preserve_leaf_and_unrelated_diagnostics(leaf in "[a-z][a-z0-9-]{2,30}", kind in prop_oneof![Just("topic"), Just("subscription"), Just("snapshot"),Just("dead-letter topic")]) {
             let error = fireemu_core_pubsub::PubSubError::not_found(format!("{kind} projects/demo-app/resources/{leaf} not found"));
             prop_assert_eq!(super::wire_error_message(&error),format!("Resource not found (resource={leaf})."));

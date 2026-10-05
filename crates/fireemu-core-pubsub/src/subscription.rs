@@ -938,6 +938,33 @@ mod tests {
         }
     }
 
+    proptest! {
+        #[test]
+        fn strict_ttl_and_retention_relation_matches_reference(ttl in 86_399i64..604_802, delta in -1i64..=1, never in any::<bool>()) {
+            let mut config = cfg();
+            config.expiration_policy = Some(ExpirationPolicy { ttl: (!never).then(|| LogicalDuration::from_seconds(ttl)) });
+            config.message_retention_duration = Some(LogicalDuration::from_seconds(ttl + delta));
+            prop_assert_eq!(config.validate_production_configuration().is_ok(), never || (ttl >= 86_400 && delta <= 0));
+        }
+    }
+
+    #[test]
+    fn strict_ttl_and_retention_exact_boundaries() {
+        for (ttl, retention, accepted) in [
+            (86_399, 600, false),
+            (86_400, 600, true),
+            (86_400, 86_400, true),
+            (86_400, 86_401, false),
+        ] {
+            let mut config = cfg();
+            config.expiration_policy = Some(ExpirationPolicy {
+                ttl: Some(LogicalDuration::from_seconds(ttl)),
+            });
+            config.message_retention_duration = Some(LogicalDuration::from_seconds(retention));
+            assert_eq!(config.validate_production_configuration().is_ok(), accepted);
+        }
+    }
+
     #[test]
     fn the_retention_window_is_bounded_to_ten_minutes_through_thirty_one_days() {
         const DAY: i64 = 24 * 60 * 60;

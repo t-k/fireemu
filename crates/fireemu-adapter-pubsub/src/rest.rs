@@ -387,14 +387,19 @@ fn paged_collection_json(
     let mut token = String::new();
     for pair in query.split('&').filter(|pair| !pair.is_empty()) {
         let (key, value) = pair.split_once('=').unwrap_or((pair, ""));
-        let key = decode_query(key)?;
-        let value = decode_query(value)?;
+        let decoded =
+            decode_query(key).and_then(|key| decode_query(value).map(|value| (key, value)));
+        let (key, value) = match decoded {
+            Ok(pair) => pair,
+            Err(_) if handle.paging_policy == crate::PagingPolicy::Emulator => continue,
+            Err(error) => return Err(error),
+        };
         match key.as_str() {
-            "pageSize" | "page_size" => {
-                size = value
-                    .parse()
-                    .map_err(|_| RestError::invalid("pageSize must be an integer"))?;
-            }
+            "pageSize" | "page_size" => match value.parse::<i32>() {
+                Ok(parsed) => size = parsed,
+                Err(_) if handle.paging_policy == crate::PagingPolicy::Emulator => {}
+                Err(_) => return Err(RestError::invalid("pageSize must be an integer")),
+            },
             "pageToken" | "page_token" => token = value,
             _ => {}
         }
@@ -1662,6 +1667,90 @@ fn error_response(error: RestError) -> Response {
 mod production_shape_tests {
     use super::*;
     use proptest::prelude::*;
+
+    fn local_handle(policy: crate::PagingPolicy) -> PubSubHandle {
+        PubSubHandle::new(
+            std::sync::Arc::new(std::sync::Mutex::new(PubSubState::new(1))),
+            std::sync::Arc::new(std::sync::Mutex::new(
+                fireemu_core_session::clock::VirtualClock::new(LogicalInstant::from_unix_seconds(
+                    0,
+                )),
+            )),
+            None,
+        )
+        .with_paging_policy(policy)
+    }
+
+    proptest! {
+        #[test]
+        fn strict_rest_default_retention_matches_ttl_reference(ttl in 86_400i64..=2_678_400, explicit in any::<bool>()) {
+            let handle = local_handle(crate::PagingPolicy::Strict);
+            let topic = TopicName::new("demo-app", "ttl-property").unwrap();
+            handle.state().create_topic(topic.clone(), BTreeMap::new()).unwrap();
+            let mut body = json!({"topic":topic.to_full(), "expirationPolicy":{"ttl":format!("{ttl}s")}});
+            if explicit { body["messageRetentionDuration"] = json!("600s"); }
+            let subscription = SubscriptionName::new("demo-app", "ttl-property").unwrap();
+            let (_, response) = create_subscription(&subscription, &body, &handle).unwrap();
+            let expected = format!("{}s", if explicit {600} else {ttl.min(604_800)});
+            prop_assert_eq!(response["messageRetentionDuration"].as_str(), Some(expected.as_str()));
+        }
+        #[test]
+        fn rest_snapshot_and_topic_labels_are_present_exactly_when_nonempty(labels in prop::collection::btree_map("[a-z]{1,8}","[a-z0-9]{0,8}",0..4)) {
+            let topic = TopicName::new("demo-app", "label-property").unwrap();
+            let config = crate::convert::subscription_from_proto(&pb::Subscription { name:"projects/demo-app/subscriptions/label-property".into(), topic:topic.to_full(), ..Default::default() }).unwrap();
+            let mut state = PubSubState::new(1);
+            state.create_topic(topic.clone(), labels.clone()).unwrap();
+            state.create_subscription(config.clone()).unwrap();
+            let snapshot = state.create_snapshot("projects/demo-app/snapshots/label-property", &config.name, labels.clone(), LogicalInstant::from_unix_seconds(0)).unwrap();
+            for rendered in [topic_json(&topic, &labels, None), snapshot_json(&snapshot)] {
+                prop_assert_eq!(rendered.get("labels").is_some(), !labels.is_empty());
+                if !labels.is_empty() { prop_assert_eq!(&rendered["labels"], &json!(labels)); }
+            }
+        }
+        #[test]
+        fn rest_delivery_attempt_presence_matches_policy_and_dead_letter_model(attempt in 1u32..100, dead_letter in any::<bool>()) {
+            for policy in [crate::PagingPolicy::Strict, crate::PagingPolicy::Emulator] {
+                let handle = local_handle(policy);
+                let topic = TopicName::new("demo-app", "attempt-property").unwrap();
+                let subscription = SubscriptionName::new("demo-app", "attempt-property").unwrap();
+                let input = pb::Subscription { name:subscription.to_full(), topic:topic.to_full(), dead_letter_policy:dead_letter.then(|| pb::DeadLetterPolicy {dead_letter_topic:"projects/demo-app/topics/attempt-sink".into(),max_delivery_attempts:100}), ..Default::default() };
+                let config = crate::convert::subscription_from_proto_with_policy(&input, policy).unwrap();
+                handle.state().create_topic(topic.clone(), BTreeMap::new()).unwrap();
+                if dead_letter {
+                    handle.state().create_topic(TopicName::new("demo-app", "attempt-sink").unwrap(), BTreeMap::new()).unwrap();
+                }
+                handle.state().create_subscription(config).unwrap();
+                handle.state().publish(&topic, vec![PubsubMessage {data:vec![b'x'], ..Default::default()}], LogicalInstant::from_unix_seconds(0)).unwrap();
+                let (_, response) = pull(subscription, &json!({"maxMessages":1}), &handle).unwrap();
+                let report = policy == crate::PagingPolicy::Emulator || dead_letter;
+                prop_assert_eq!(response["receivedMessages"][0].get("deliveryAttempt").is_some(), report);
+                if report { prop_assert_eq!(&response["receivedMessages"][0]["deliveryAttempt"], &json!(1)); }
+                let received = ReceivedMessage {ack_id:"ack-0000000000000001".into(),message:std::sync::Arc::new(StoredMessage { message:PubsubMessage::default(),message_id:"22254029608272384".into(),publish_time:LogicalInstant::from_unix_seconds(0)}), delivery_attempt:attempt};
+                let rendered = received_json(&received, report, policy);
+                prop_assert_eq!(rendered.get("deliveryAttempt").is_some(), report);
+                if report { prop_assert_eq!(&rendered["deliveryAttempt"], &json!(attempt)); }
+            }
+        }
+    }
+
+    proptest! {
+        #[test]
+        fn emulator_invalid_query_pairs_match_absent_pair_reference(size in 1i32..8, count in 2usize..12, invalid in prop::sample::select(vec!["pageSize=abc", "pageSize=99999999999", "pageSize=-99999999999", "pageSize=%", "pageSize=%0", "pageSize=%gg", "pageSize=%FF", "pageToken=%zz", "pageToken=%FF", "%FF=1", "%gg=1"])) {
+            let handle = PubSubHandle::new(
+                std::sync::Arc::new(std::sync::Mutex::new(PubSubState::new(1))),
+                std::sync::Arc::new(std::sync::Mutex::new(fireemu_core_session::clock::VirtualClock::new(LogicalInstant::from_unix_seconds(0)))),
+                None,
+            ).with_paging_policy(crate::PagingPolicy::Emulator);
+            let resources: Vec<_> = (0..count).map(|i| json!({"name":format!("projects/p/topics/query-{i:03}")})).collect();
+            let valid = format!("pageSize={size}&pageToken=projects%2Fp%2Ftopics%2Fquery-001");
+            let expected = paged_collection_json("topics", resources.clone(), &valid, &handle).unwrap();
+            for query in [format!("{valid}&{invalid}"), format!("{invalid}&{valid}")] {
+                let result = paged_collection_json("topics", resources.clone(), &query, &handle);
+                prop_assert!(result.is_ok(), "{}", query);
+                prop_assert_eq!(result.unwrap(), expected.clone());
+            }
+        }
+    }
 
     #[test]
     fn emulator_rest_push_get_preserves_version_attributes() {

@@ -75,6 +75,37 @@ async fn start() -> Harness {
     start_with_bridge(None).await
 }
 
+#[tokio::test]
+async fn unobserved_larger_native_publish_retains_the_local_decoder_boundary() {
+    use prost::Message as _;
+    let harness = start().await;
+    let mut publisher = harness
+        .publisher()
+        .await
+        .max_encoding_message_size(12 * 1024 * 1024);
+    for encoded_size in [10_485_762, 11 * 1024 * 1024] {
+        let mut request = pb::PublishRequest {
+            topic: "projects/demo-app/topics/decoder-boundary".to_owned(),
+            messages: vec![pb::PubsubMessage {
+                data: vec![b'x'; encoded_size - 100],
+                ..Default::default()
+            }],
+        };
+        let overhead = request.encoded_len() - request.messages[0].data.len();
+        request.messages[0]
+            .data
+            .resize(encoded_size - overhead, b'x');
+        assert_eq!(request.encoded_len(), encoded_size);
+        let error = publisher.publish(request).await.unwrap_err();
+        assert_eq!(error.code(), tonic::Code::OutOfRange);
+        assert!(
+            error.message().contains("decoded message length too large"),
+            "{error}"
+        );
+    }
+    harness.shutdown().await;
+}
+
 async fn start_with_bridge(bridge: Option<Arc<dyn TopicDelivery>>) -> Harness {
     let clock = Arc::new(Mutex::new(VirtualClock::new(
         LogicalInstant::from_unix_seconds(1_700_000_000),

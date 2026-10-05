@@ -76,6 +76,37 @@ mod tests {
     use proptest::prelude::*;
     proptest! {
         #[test]
+        fn unobserved_unicode_label_classes_retain_the_local_approximation(suffix in "[a-z0-9_-]{0,12}") {
+            // These representatives are local debt, not observed production admission.
+            for (class, first) in [("Ll", '\u{00e9}'), ("Lo", '\u{4e2d}'), ("Lt", '\u{01c5}'), ("Lm", '\u{02b0}'), ("Nl", '\u{2160}'), ("Mn", '\u{0345}')] {
+                let key = format!("{first}{suffix}");
+                let expected = first.is_alphabetic() && !first.is_uppercase();
+                prop_assert_eq!(validate_labels(&[(key, String::new())].into()).is_ok(), expected, "Unicode class {}", class);
+            }
+        }
+    }
+
+    #[test]
+    fn label_key_and_value_bounds_are_exact() {
+        for (key_length, value_length, accepted) in [(63, 63, true), (64, 0, false), (1, 64, false)]
+        {
+            assert_eq!(
+                validate_labels(&[("a".repeat(key_length), "b".repeat(value_length))].into())
+                    .is_ok(),
+                accepted
+            );
+        }
+    }
+
+    #[test]
+    fn unobserved_later_invalid_label_keys_keep_the_local_diagnostic() {
+        for key in ["a.b".to_owned(), "aB".to_owned(), "a".repeat(64)] {
+            let error = validate_labels(&[(key.clone(), String::new())].into()).unwrap_err();
+            assert_eq!(error.message(), format!("Invalid label key: {key}."));
+        }
+    }
+    proptest! {
+        #[test]
         fn retention_admission_matches_reference_interval(nanos in -1_i128..=2_678_401_000_000_000_i128) {
             prop_assert_eq!(validate_retention(LogicalDuration::from_nanos(nanos)).is_ok(),(600_000_000_000..=2_678_400_000_000_000).contains(&nanos));
         }

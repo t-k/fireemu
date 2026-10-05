@@ -64,7 +64,7 @@ pub(crate) fn snapshot_creation_error(
     policy: crate::PagingPolicy,
 ) -> PubSubError {
     if policy == crate::PagingPolicy::Strict
-        && error.message() == "snapshot id must not start with the reserved prefix 'goog'"
+        && error.message() == fireemu_core_pubsub::name::SNAPSHOT_RESERVED_PREFIX_DIAGNOSTIC
     {
         fireemu_core_pubsub::name::invalid_resource_name(name)
     } else {

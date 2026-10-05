@@ -17,6 +17,10 @@ pub const MAX_ID_LEN: usize = 255;
 /// Inclusive maximum length of a project ID.
 pub const MAX_PROJECT_LEN: usize = 255;
 
+/// Shared core diagnostic for a reserved snapshot ID; adapters map it by profile.
+pub const SNAPSHOT_RESERVED_PREFIX_DIAGNOSTIC: &str =
+    "snapshot id must not start with the reserved prefix 'goog'";
+
 /// Validates a project ID: non-empty, `<= MAX_PROJECT_LEN`, no `/`, no control characters.
 pub fn validate_project(project: &str) -> Result<()> {
     if project.is_empty() {
@@ -60,6 +64,11 @@ pub fn validate_resource_id(id: &str, kind: &str) -> Result<()> {
         )));
     }
     if id.starts_with("goog") {
+        if kind == "snapshot" {
+            return Err(PubSubError::invalid_argument(
+                SNAPSHOT_RESERVED_PREFIX_DIAGNOSTIC,
+            ));
+        }
         return Err(PubSubError::invalid_argument(format!(
             "{kind} id must not start with the reserved prefix 'goog'"
         )));
@@ -209,6 +218,16 @@ mod tests {
     use super::*;
 
     proptest::proptest! {
+        #[test]
+        fn reserved_prefix_diagnostics_share_snapshot_constant_without_changing_other_kinds(suffix in "[a-z]{0,30}") {
+            for kind in ["topic", "subscription", "snapshot", "other"] {
+                let error = validate_resource_id(&format!("goog{suffix}"), kind).unwrap_err();
+                proptest::prop_assert_eq!(error.message(), format!("{kind} id must not start with the reserved prefix 'goog'"));
+                if kind == "snapshot" {
+                    proptest::prop_assert_eq!(error.message(), SNAPSHOT_RESERVED_PREFIX_DIAGNOSTIC);
+                }
+            }
+        }
         #[test]
         fn invalid_resource_diagnostics_preserve_full_request_name(id in proptest::prop_oneof![proptest::strategy::Just("ab".to_owned()),"goog[a-z]{0,30}","[0-9][a-z]{1,30}"]) {
             for kind in ["topics","subscriptions"] {

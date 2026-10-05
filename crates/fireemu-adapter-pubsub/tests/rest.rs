@@ -107,6 +107,182 @@ async fn recorded_rest_bootstrap_empty_lists_omit_default_fields() {
     }
 }
 
+#[tokio::test]
+async fn paging_query_invalid_pairs_preserve_valid_siblings_by_profile() {
+    use fireemu_adapter_pubsub::PagingPolicy;
+    for policy in [PagingPolicy::Strict, PagingPolicy::Emulator] {
+        let address = start_policy(policy).await;
+        for leaf in ["query-alpha", "query-beta", "query-gamma"] {
+            let (status, _) = rest_request(
+                address,
+                "PUT",
+                &format!("/v1/projects/demo-app/topics/{leaf}"),
+                json!({}),
+            )
+            .await;
+            assert_eq!(status, 200);
+        }
+        for invalid in [
+            "pageSize=abc",
+            "pageSize=99999999999",
+            "pageSize=%zz",
+            "pageSize=%FF",
+            "pageToken=%zz",
+            "pageToken=%FF",
+            "%zz=1",
+            "%FF=1",
+        ] {
+            let (status, body) = rest_request(
+                address,
+                "GET",
+                &format!("/v1/projects/demo-app/topics?pageSize=1&{invalid}"),
+                json!({}),
+            )
+            .await;
+            if policy == PagingPolicy::Emulator {
+                assert_eq!(status, 200, "{invalid}: {body}");
+                assert_eq!(body["topics"].as_array().unwrap().len(), 1, "{invalid}");
+                assert!(body["nextPageToken"].is_string());
+            } else {
+                assert_eq!(status, 400, "{invalid}: {body}");
+                assert_eq!(body["error"]["status"], "INVALID_ARGUMENT");
+            }
+        }
+    }
+}
+
+#[tokio::test]
+async fn missing_topic_lists_preserve_profile_refusals_on_both_transports() {
+    use fireemu_adapter_pubsub::PagingPolicy;
+    for policy in [PagingPolicy::Strict, PagingPolicy::Emulator] {
+        let address = start_policy(policy).await;
+        let mut publisher = PublisherClient::new(grpc_channel(address).await);
+        let topic = "projects/demo-app/topics/missing-matrix";
+        for collection in ["subscriptions", "snapshots"] {
+            let (status, body) = rest_request(
+                address,
+                "GET",
+                &format!("/v1/{topic}/{collection}"),
+                json!({}),
+            )
+            .await;
+            if policy == PagingPolicy::Strict {
+                assert_eq!(status, 404);
+                assert_eq!(
+                    body["error"]["message"],
+                    "Resource not found (resource=missing-matrix)."
+                );
+            } else {
+                assert_eq!(status, 200);
+                assert_eq!(body, json!({}));
+            }
+        }
+        let subscriptions = publisher
+            .list_topic_subscriptions(pb::ListTopicSubscriptionsRequest {
+                topic: topic.into(),
+                ..Default::default()
+            })
+            .await;
+        let snapshots = publisher
+            .list_topic_snapshots(pb::ListTopicSnapshotsRequest {
+                topic: topic.into(),
+                ..Default::default()
+            })
+            .await;
+        if policy == PagingPolicy::Strict {
+            for error in [subscriptions.unwrap_err(), snapshots.unwrap_err()] {
+                assert_eq!(error.code(), tonic::Code::NotFound);
+                assert_eq!(
+                    error.message(),
+                    "Resource not found (resource=missing-matrix)."
+                );
+            }
+        } else {
+            let subscriptions = subscriptions.unwrap().into_inner();
+            let snapshots = snapshots.unwrap().into_inner();
+            assert!(
+                subscriptions.subscriptions.is_empty() && subscriptions.next_page_token.is_empty()
+            );
+            assert!(snapshots.snapshots.is_empty() && snapshots.next_page_token.is_empty());
+        }
+    }
+}
+
+#[tokio::test]
+async fn native_push_create_version_and_unary_pull_are_profile_scoped() {
+    use fireemu_adapter_pubsub::PagingPolicy;
+    for policy in [PagingPolicy::Strict, PagingPolicy::Emulator] {
+        let address = start_policy(policy).await;
+        let topic = "projects/demo-app/topics/native-push-version";
+        assert_eq!(
+            rest_request(address, "PUT", &format!("/v1/{topic}"), json!({}))
+                .await
+                .0,
+            200
+        );
+        let mut subscriber = SubscriberClient::new(grpc_channel(address).await);
+        let name = "projects/demo-app/subscriptions/native-push-version";
+        let created = subscriber
+            .create_subscription(pb::Subscription {
+                name: name.into(),
+                topic: topic.into(),
+                push_config: Some(pb::PushConfig {
+                    push_endpoint: "https://example.com/push".into(),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            })
+            .await
+            .unwrap()
+            .into_inner();
+        let attributes = created.push_config.unwrap().attributes;
+        if policy == PagingPolicy::Strict {
+            assert_eq!(
+                attributes.get("x-goog-version").map(String::as_str),
+                Some("v1")
+            );
+        } else {
+            assert!(attributes.is_empty());
+        }
+        let fetched = subscriber
+            .get_subscription(pb::GetSubscriptionRequest {
+                subscription: name.into(),
+            })
+            .await
+            .unwrap()
+            .into_inner();
+        assert!(fetched.push_config.unwrap().attributes.is_empty());
+        let native = subscriber
+            .pull(pb::PullRequest {
+                subscription: name.into(),
+                max_messages: 1,
+                ..Default::default()
+            })
+            .await;
+        let (status, body) = rest_request(
+            address,
+            "POST",
+            &format!("/v1/{name}:pull"),
+            json!({"maxMessages":1}),
+        )
+        .await;
+        if policy == PagingPolicy::Strict {
+            let error = native.unwrap_err();
+            assert_eq!(error.code(), tonic::Code::FailedPrecondition);
+            assert_eq!(
+                error.message(),
+                "This method is not supported for this subscription type."
+            );
+            assert_eq!(status, 400);
+            assert_eq!(body["error"]["message"], error.message());
+        } else {
+            assert!(native.unwrap().into_inner().received_messages.is_empty());
+            assert_eq!(status, 200);
+            assert_eq!(body, json!({}));
+        }
+    }
+}
+
 /// The exact defaults are the recorded production REST response of a created pull subscription: see
 /// `subscription_json` in `src/rest.rs` for the captures (run shape-001-6a666e3ffa9444cc80de18944b38ae36
 /// on fireemu-oracle-idp, and the fireemu-oracle-sbx recorded-shape-responses). Capture-only evidence.

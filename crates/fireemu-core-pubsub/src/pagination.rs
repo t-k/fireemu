@@ -140,6 +140,19 @@ mod tests {
 
     proptest! {
         #[test]
+        fn unobserved_deleted_cursor_currently_refuses_strict_but_uses_emulator_name_boundary(count in 2usize..30, index in 0usize..28) {
+            let mut resources = names(count);
+            let index = index.min(count - 2);
+            let deleted = resources[index].clone();
+            let cursor = paginate(resources.clone(), i32::try_from(index + 1).unwrap(), "", PagingPolicy::Strict, Clone::clone).unwrap().next_page_token;
+            resources.remove(index);
+            let error = paginate(resources.clone(), 1, &cursor, PagingPolicy::Strict, Clone::clone).unwrap_err();
+            prop_assert_eq!(error.message(), format!("Invalid page token given (token={cursor})."));
+            let page = paginate(resources.clone(), 0, &deleted, PagingPolicy::Emulator, Clone::clone).unwrap();
+            let expected: Vec<_> = resources.into_iter().filter(|name| name >= &deleted).collect();
+            prop_assert_eq!(page.resources, expected);
+        }
+        #[test]
         fn opaque_cursor_format_is_stable_for_arbitrary_names(name in ".{0,300}") {
             let token = super::opaque_token(&name);
             prop_assert_eq!(token.len(), 26);

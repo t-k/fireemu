@@ -6856,8 +6856,12 @@ mod lock_tests {
     }
 
     fn contention_backend(clock: &Arc<Mutex<VirtualClock>>, strict: bool) -> Arc<LocalBackend> {
+        contention_backend_waiting(clock, strict, Duration::from_secs(20))
+    }
+
+    fn contention_backend_waiting(clock: &Arc<Mutex<VirtualClock>>, strict: bool, wait: Duration) -> Arc<LocalBackend> {
         let backend = LocalBackend::new(backend().gateway.clone(), Arc::clone(clock), 7)
-            .with_contention_wait(Duration::from_secs(20));
+            .with_contention_wait(wait);
         Arc::new(if strict {
             backend.with_virtual_contention_wait()
         } else {
@@ -6888,6 +6892,92 @@ mod lock_tests {
             move_clock(&clock, 100);
             assert_eq!(deadline.expired(), expired_after_moving, "strict: {strict}");
         }
+    }
+
+    #[test]
+    fn a_wall_deadline_wakes_at_its_end_and_a_virtual_one_a_short_poll_from_now() {
+        let clock = pinned_clock();
+        let wall = contention_backend(&clock, false).contention_deadline();
+        assert_eq!(wall.wake_at(), wall.started + wall.wait);
+        let virtual_deadline = contention_backend(&clock, true).contention_deadline();
+        let before = std::time::Instant::now();
+        let wake = virtual_deadline.wake_at();
+        let after = std::time::Instant::now();
+        assert!(wake >= before + VIRTUAL_CLOCK_POLL && wake <= after + VIRTUAL_CLOCK_POLL, "a poll from now");
+        assert!(wake < virtual_deadline.started + virtual_deadline.wait);
+        // near the end of the wall wait the wake never goes past it
+        let mut late = virtual_deadline.clone();
+        late.wait = Duration::from_millis(5);
+        assert!(late.wake_at() <= late.started + late.wait);
+    }
+
+    fn contention_parent() -> Parent {
+        crate::decode::parse_parent("projects/demo-app/databases/(default)/documents").unwrap()
+    }
+
+    async fn contended_attempt(backend: &Arc<LocalBackend>) -> tokio::task::JoinHandle<Result<(), Status>> {
+        let waiting = Arc::clone(backend);
+        tokio::spawn(async move {
+            waiting
+                .retry_on_contention_async(&contention_parent(), None, &[], || {
+                    Err::<(), Status>(Status::aborted(fireemu_core_firestore::store::TOO_MUCH_CONTENTION))
+                })
+                .await
+        })
+    }
+
+    #[tokio::test]
+    async fn the_async_wait_for_a_contended_writer_ends_on_the_strict_virtual_bound_and_not_before() {
+        let clock = pinned_clock();
+        let backend = contention_backend(&clock, true);
+        let attempt = contended_attempt(&backend).await;
+        tokio::time::sleep(Duration::from_millis(150)).await;
+        move_clock(&clock, 19);
+        tokio::time::sleep(Duration::from_millis(150)).await;
+        assert!(!attempt.is_finished(), "held until the bound");
+        move_clock(&clock, 2);
+        let status = tokio::time::timeout(Duration::from_secs(5), attempt)
+            .await
+            .expect("answers once the bound passed")
+            .unwrap()
+            .unwrap_err();
+        assert!(LocalBackend::is_contention(&status));
+    }
+
+    #[tokio::test]
+    async fn the_async_wait_of_the_emulator_profile_ignores_the_virtual_clock() {
+        let clock = pinned_clock();
+        // a short wall wait, so the blocking wait ends soon after the test does; it is far longer than the 450 ms the test looks for an answer
+        let backend = contention_backend_waiting(&clock, false, Duration::from_millis(1500));
+        let attempt = contended_attempt(&backend).await;
+        tokio::time::sleep(Duration::from_millis(150)).await;
+        move_clock(&clock, 100);
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        assert!(!attempt.is_finished(), "still waiting on the wall clock");
+        attempt.abort();
+    }
+
+    #[tokio::test]
+    async fn waiting_for_any_release_until_a_deadline_reports_whether_one_happened() {
+        let clock = pinned_clock();
+        let backend = contention_backend(&clock, true);
+        let deadline = backend.contention_deadline();
+        // nothing finished: the wait ends at the poll and says so
+        let seen = backend.release_count();
+        let started = std::time::Instant::now();
+        assert!(!backend.await_any_release_until(seen, &deadline).await);
+        assert!(started.elapsed() < Duration::from_secs(2));
+        // a release after `seen` was read is reported at once
+        let (holder, _writer) = hold_and_write(&backend);
+        backend
+            .rollback(&pb::RollbackRequest {
+                database: CONTENTION_DATABASE.to_owned(),
+                transaction: holder,
+                ..Default::default()
+            })
+            .unwrap();
+        assert!(backend.release_count() != seen);
+        assert!(backend.await_any_release_until(seen, &deadline).await);
     }
 
     const CONTENTION_DATABASE: &str = "projects/demo-app/databases/(default)";

@@ -6744,9 +6744,11 @@ mod tests {
     const NANOS_TEXT: &str = "retryConfig.max_retry_duration.nanos cannot be set: invalid argument";
 
     fn scheduled_with(retry_config: serde_json::Value) -> serde_json::Value {
-        json!({"functions": [
-            {"name": "job", "trigger": {"type": "schedule", "schedule": "every 1 minutes", "retryConfig": retry_config}},
-        ]})
+        let mut document = json!({"functions": [
+            {"name": "job", "trigger": {"type": "schedule", "schedule": "every 1 minutes"}},
+        ]});
+        document["functions"][0]["trigger"]["retryConfig"] = retry_config;
+        document
     }
 
     /// The production refusal of a Cloud Scheduler job whose `retryCount` is 6 or more (run
@@ -7002,15 +7004,12 @@ mod tests {
                 let started =
                     super::start_codebase(&cfg, &codebase, &hosts, "test-secret", false, &cache)
                         .await;
-                match (profile, refused_text) {
-                    (super::CompatibilityProfile::Strict, Some(text)) => {
-                        let error = started.err().unwrap();
-                        assert!(error.contains(text), "{retry}: {error}");
-                    }
-                    _ => {
-                        let spec = started.unwrap_or_else(|e| panic!("{retry} {profile:?}: {e}"));
-                        spec.runner.kill_now();
-                    }
+                if let (super::CompatibilityProfile::Strict, Some(text)) = (profile, refused_text) {
+                    let error = started.err().unwrap();
+                    assert!(error.contains(text), "{retry}: {error}");
+                } else {
+                    let spec = started.unwrap_or_else(|e| panic!("{retry} {profile:?}: {e}"));
+                    spec.runner.kill_now();
                 }
             }
         }

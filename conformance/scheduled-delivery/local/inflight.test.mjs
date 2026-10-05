@@ -40,8 +40,16 @@ test("the patched handler lasts 100 logical seconds of the clock file, not real 
     await new Promise((resolve) => setTimeout(resolve, 50));
     assert.equal(finished, false, "99 s is not 100 s");
     writeFileSync(clockFile, "1100");
-    await running;
+    // a handler that never ends is a failure of the test, not a hang of the run
+    await Promise.race([
+      running,
+      new Promise((_, reject) =>
+        setTimeout(() => reject(new Error("the handler never ended")), 2000),
+      ),
+    ]);
     assert.equal(finished, true);
+    // and it stays ended: the poll is cleared, so a later change of the file starts nothing
+    writeFileSync(clockFile, "9999");
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

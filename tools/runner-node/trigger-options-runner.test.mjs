@@ -264,13 +264,15 @@ test('a schedule with a retry window and no retry count retries (recorded: run 1
 });
 
 test('a first-generation schedule with only a retry window does not retry its handler (its job targets Pub/Sub; nothing recorded)',async t=>{
-  const f=await start(t,`define('v1Window','gcfv1',{scheduleTrigger:{schedule:'every 5 minutes',retryConfig:{retryCount:0,maxRetrySeconds:30,minBackoffSeconds:4,maxBackoffSeconds:10}}});define('v1WindowOnly','gcfv1',{scheduleTrigger:{schedule:'every 5 minutes',retryConfig:{maxRetrySeconds:30}}});define('legacyWindow','legacy',{eventTrigger:{eventType:'google.pubsub.topic.publish'},schedule:{schedule:'every 5 minutes',retryConfig:{maxRetryDuration:'30s'}}});define('v1Counted','gcfv1',{scheduleTrigger:{schedule:'every 5 minutes',retryConfig:{retryCount:2,maxRetrySeconds:30}}});define('v2Window','gcfv2',{scheduleTrigger:{schedule:'every 5 minutes',retryConfig:{maxRetrySeconds:30}}});`);
+  const f=await start(t,`define('v1Window','gcfv1',{scheduleTrigger:{schedule:'every 5 minutes',retryConfig:{retryCount:0,maxRetrySeconds:30,minBackoffSeconds:4,maxBackoffSeconds:10}}});define('v1WindowOnly','gcfv1',{scheduleTrigger:{schedule:'every 5 minutes',retryConfig:{maxRetrySeconds:30}}});define('legacyWindow','legacy',{eventTrigger:{eventType:'google.pubsub.topic.publish'},schedule:{schedule:'every 5 minutes',retryConfig:{maxRetryDuration:'30s'}}});define('v1Counted','gcfv1',{scheduleTrigger:{schedule:'every 5 minutes',retryConfig:{retryCount:2,maxRetrySeconds:30}}});define('v2Window','gcfv2',{scheduleTrigger:{schedule:'every 5 minutes',retryConfig:{maxRetrySeconds:30}}});define('v1None','gcfv1',{scheduleTrigger:{schedule:'every 5 minutes'}});define('v1ZeroCount','gcfv1',{scheduleTrigger:{schedule:'every 5 minutes',retryConfig:{retryCount:0}}});define('v2None','gcfv2',{scheduleTrigger:{schedule:'every 5 minutes'}});define('v2ZeroCount','gcfv2',{scheduleTrigger:{schedule:'every 5 minutes',retryConfig:{retryCount:0}}});define('v2BackoffOnly','gcfv2',{scheduleTrigger:{schedule:'every 5 minutes',retryConfig:{minBackoffSeconds:3,maxBackoffSeconds:30}}});`);
   assert.equal(f.spec('v1Window')?.retry,false);
   assert.equal(f.spec('v1WindowOnly')?.retry,false);
   assert.equal(f.spec('legacyWindow')?.retry,false);
   // the count rule is shared by both generations and out of this change's scope
   assert.equal(f.spec('v1Counted')?.retry,true);
   assert.equal(f.spec('v2Window')?.retry,true);
+  // no declaration, a zero count alone, a backoff alone: nothing to retry
+  for (const name of ['v1None','v1ZeroCount','v2None','v2ZeroCount','v2BackoffOnly']) assert.equal(f.spec(name)?.retry,false,name);
 });
 
 test('schedule/task retry metadata is detached and cannot replace its JSON envelope',async t=>{

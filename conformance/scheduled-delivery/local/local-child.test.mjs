@@ -11,6 +11,14 @@ import { fileURLToPath } from "node:url";
 
 const here = dirname(fileURLToPath(import.meta.url));
 
+const readClock = (path) => {
+  try {
+    return readFileSync(path, "utf8");
+  } catch {
+    return null;
+  }
+};
+
 /** Runs the child against a fake control API; resolves with its output and the calls the API saw. */
 async function runChild(env, { clockFile } = {}) {
   const calls = [];
@@ -23,7 +31,8 @@ async function runChild(env, { clockFile } = {}) {
         path: request.url,
         authorization: request.headers.authorization,
         body: body ? JSON.parse(body) : null,
-        clock: clockFile ? readFileSync(clockFile, "utf8") : null,
+        // the file may not exist yet: that is what a call made before the first write sees
+        clock: clockFile ? readClock(clockFile) : null,
       });
       response.setHeader("content-type", "application/json");
       response.end(JSON.stringify(request.method === "GET" ? { functions: [] } : { ok: true }));
@@ -43,7 +52,10 @@ async function runChild(env, { clockFile } = {}) {
   let output = "";
   child.stdout.on("data", (d) => (output += d));
   child.stderr.on("data", (d) => (output += d));
+  // a child that never exits is a failure of the test, not a hang of the run
+  const killer = setTimeout(() => child.kill("SIGKILL"), 20_000);
   const code = await new Promise((resolve) => child.on("exit", resolve));
+  clearTimeout(killer);
   server.close();
   server.closeAllConnections();
   return { code, output, calls };

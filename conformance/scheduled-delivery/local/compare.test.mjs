@@ -1446,3 +1446,192 @@ test("the cadence rows order times across the November change: -07:00 and -08:00
   assert.deepEqual(alignment.production, ["five-minute boundary"]);
   assert.equal(alignment.verdict, "MATCH");
 });
+
+// ---- what the in-flight row reads, and how: the survivors of the first mutation pass ----
+
+/** `production()` with its slow job's frames and forced requests replaced. */
+const withSlow = (runs, forced) => {
+  const p = production();
+  p.frames = p.frames.filter((f) => f.handler !== "schedSlowV2");
+  for (const [start, end] of runs) {
+    const scheduleTime = la(T0 + start * 1000, ".352477");
+    p.frames.push({ ...prodV2("schedSlowV2", start * 1000, scheduleTime), phase: "start" });
+    p.frames.push({ ...prodV2("schedSlowV2", end * 1000, scheduleTime), phase: "end" });
+  }
+  p.forced = forced.map((atMs) => ({ pass: 1, job: jobId("schedSlowV2"), atMs }));
+  return p;
+};
+const slowFacts = (p, runs, manual = []) => {
+  const l = local({
+    inflight: slowLocal(runs),
+    manual: manual.map((at) => ({ name: "schedSlowV2", at: instant(T0 + at * 1000) })),
+  });
+  return value(rows(p, l), "cadence.in-flight-skip");
+};
+
+test("inFlightFacts: the forced requests are matched in time order, whatever order they come in", () => {
+  const f = (start, end) => [
+    { phase: "start", at: start },
+    { phase: "end", at: end },
+  ];
+  // requests at 6 and 11 each claim a start inside their window; the one at 11 could take the start at 10 that the
+  // one at 6 needs, so the order they are matched in decides whether both runs are forced
+  const runs = [...f(10, 100), ...f(16, 110)];
+  const both = { naturalStartsInFlight: 0, occurrencesSkipped: false, forcedStartsInFlight: true };
+  assert.deepEqual(inFlightFacts(runs, [11, 6], 60), both);
+  assert.deepEqual(inFlightFacts(runs, [6, 11], 60), both);
+});
+
+test("cadence.in-flight-skip: times are read in seconds, to the edge of the forced-request window", () => {
+  // a start 1 s before its request (the window's lower edge) and 5 s after it (the upper edge) are both claimed
+  // a long first run, so that a start at startS that is not claimed as forced is a natural start inside it
+  const naturalCount = (requestMs, startS) =>
+    slowFacts(
+      withSlow(
+        [
+          [0, 300],
+          [startS, startS + 100],
+        ],
+        [requestMs],
+      ),
+      [],
+    ).production.naturalStartsInFlight;
+  assert.equal(naturalCount(151_000, 150), 0, "request 1 s after the start: claimed");
+  assert.equal(naturalCount(145_000, 150), 0, "request 5 s before the start: claimed");
+  assert.equal(naturalCount(151_100, 150), 1, "request 1.1 s after the start: not claimed");
+  assert.equal(naturalCount(144_900, 150), 1, "request 5.1 s before the start: not claimed");
+});
+
+test("cadence.in-flight-skip: a skipped occurrence is a gap beyond one and a half cadences of 60 s, on both sides", () => {
+  // production 91 s apart (skipped), local 89 s apart (not): the row sees the difference only at a cadence of 60 s
+  const p = withSlow(
+    [
+      [0, 10],
+      [91, 101],
+    ],
+    [],
+  );
+  const row = slowFacts(p, [
+    [0, 10],
+    [89, 99],
+  ]);
+  assert.equal(row.production.occurrencesSkipped, true);
+  assert.equal(row.local.occurrencesSkipped, false);
+  assert.equal(row.verdict, "DIVERGES");
+  // and the reverse: production 89 s apart, local 91 s apart
+  const q = withSlow(
+    [
+      [0, 10],
+      [89, 99],
+    ],
+    [],
+  );
+  const reverse = slowFacts(q, [
+    [0, 10],
+    [91, 101],
+  ]);
+  assert.equal(reverse.production.occurrencesSkipped, false);
+  assert.equal(reverse.local.occurrencesSkipped, true);
+  assert.equal(reverse.verdict, "DIVERGES");
+});
+
+test("cadence.in-flight-skip reads the slow job's start and end frames only, from production and from the local run", () => {
+  const base = slowFacts(
+    production(),
+    [
+      [0, 100],
+      [120, 220],
+      [150, 250],
+      [300, 400],
+      [420, 520],
+    ],
+    [149],
+  );
+  assert.equal(base.verdict, "MATCH");
+  // another handler's frame carrying a phase does not become a run of the slow job
+  const p = production();
+  p.frames.push({ ...prodV2("schedOkV2", 130_000, la(T0 + 130_000, ".416739")), phase: "start" });
+  const noisy = local();
+  noisy.inflight.lines.push(
+    localV2("schedOkV2", instant(T0 + 130_000), la(T0 + 130_000, ".416739"), { phase: "start" }),
+  );
+  const row = value(rows(p, noisy), "cadence.in-flight-skip");
+  assert.deepEqual(row.production, recorded);
+  assert.deepEqual(row.local, recorded);
+  // nor does a line of another kind with the slow job's name
+  const probe = local();
+  probe.inflight.lines.push({
+    at: instant(T0 + 130_000),
+    kind: "PROBE",
+    value: { handler: "schedSlowV2", phase: "start" },
+  });
+  assert.deepEqual(value(rows(production(), probe), "cadence.in-flight-skip").local, recorded);
+});
+
+// ---- the forms and names rows with one form, one name, or none ----
+
+test("one recorded form against one produced form matches, and a recording with no deployed job's frame matches nothing", () => {
+  const onlyOk = (list, pick) => list.filter(pick);
+  const p = production();
+  p.frames = onlyOk(p.frames, (f) => f.generation === 1 || f.handler === "schedOkV2");
+  const l = local();
+  l.natural.lines = l.natural.lines.filter(
+    (x) => x.value.generation === 1 || x.value.handler === "schedOkV2",
+  );
+  const table = rows(p, l);
+  assert.equal(value(table, "v2.request.headers").verdict, "MATCH");
+  assert.equal(value(table, "v2.event.scheduleTime-form").verdict, "MATCH");
+  assert.equal(value(table, "v2.request.headers").local.length, 1);
+  assert.equal(value(table, "v2.event.scheduleTime-form").local.length, 1);
+  // only the probe jobs in the recording (no deployed job) and nothing local: no row compares nothing and matches
+  const probeOnly = production();
+  probeOnly.frames = probeOnly.frames.filter(
+    (f) =>
+      f.generation === 1 || !f.headers["x-cloudscheduler-jobname"].startsWith("firebase-schedule-"),
+  );
+  const empty = local();
+  empty.natural.lines = empty.natural.lines.filter((x) => x.value.generation === 1);
+  const none = rows(probeOnly, empty);
+  assert.equal(value(none, "v2.request.headers").verdict, "DIVERGES");
+  assert.equal(value(none, "v2.event.scheduleTime-form").verdict, "DIVERGES");
+});
+
+test("header names: one name each matches, and neither side having any is not a match; nothing local is unexpected even when production's set is all unreproducible", () => {
+  const names = (productionNames, localNames) => {
+    const p = production();
+    p.frames = p.frames.map((f) =>
+      f.generation === 2 ? { ...f, headerNames: productionNames } : f,
+    );
+    const l = local();
+    l.natural.lines = l.natural.lines.map((x) =>
+      x.value.generation === 2
+        ? {
+            ...x,
+            value: {
+              ...x.value,
+              request: {
+                ...x.value.request,
+                headers: Object.fromEntries(localNames.map((n) => [n, "x"])),
+              },
+            },
+          }
+        : x,
+    );
+    return value(rows(p, l), "v2.request.header-names");
+  };
+  const one = names(["host"], ["host"]);
+  assert.equal(one.verdict, "MATCH");
+  assert.equal(one.note, "");
+  // no name on either side: nothing was compared
+  const empty = names([], []);
+  assert.equal(empty.verdict, "DIVERGES");
+  assert.match(empty.note, /^UNEXPECTED: missing none; extra none$/);
+  // production sent only a header nothing here can reproduce, and local sent none: the difference is the declared
+  // one in size, but with no local request at all it is not excused
+  const nothing = names(["authorization"], []);
+  assert.equal(nothing.verdict, "DIVERGES");
+  assert.match(nothing.note, /^UNEXPECTED/);
+  // with one local name and only the declared one missing: declared
+  const declared = names(["authorization", "host"], ["host"]);
+  assert.match(declared.note, /^declared: not reproduced authorization /);
+});

@@ -5315,8 +5315,28 @@ exports.archivedV2=v2.onObjectArchived({bucket:'versioned-bucket'},(event)=>seen
             "the real SDK decodes the Archived event"
         );
     }
-    let observations: Vec<serde_json::Value> = bytes
-        .unwrap()
+    let text = bytes.unwrap();
+    // The 2nd gen handler sees the members of an Archived event's data in the order production
+    // sends them (RECORDED, FE v5, 44 v2 frames: `timeDeleted` follows `updated`). The order of a
+    // 1st gen `object` was not recorded and is the runner's input order. `serde_json` sorts keys,
+    // so the order is read from the text of the observation.
+    for line in text.lines().filter(|line| line.contains("\"archivedV2\"")) {
+        let object = &line[line.find("\"object\":").unwrap()..];
+        let at = |member: &str| object.find(&format!("\"{member}\":")).unwrap();
+        assert!(
+            at("timeCreated") < at("updated")
+                && at("updated") < at("timeDeleted")
+                && at("timeDeleted") < at("storageClass"),
+            "{line}"
+        );
+    }
+    assert_eq!(
+        text.lines()
+            .filter(|l| l.contains("\"archivedV2\""))
+            .count(),
+        1
+    );
+    let observations: Vec<serde_json::Value> = text
         .lines()
         .map(|line| serde_json::from_str(line).unwrap())
         .collect();

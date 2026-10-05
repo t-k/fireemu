@@ -1093,7 +1093,8 @@ proptest! {
         // Batches of `size`, each resuming after the last key: the whole sequence, once.
         let mut walked = Vec::new();
         let mut resume: Option<(String, u64)> = None;
-        loop {
+        // A bound, so that a batch that never advances fails the test and does not hang it.
+        for _ in 0..=all.len() {
             let batch = store.version_keys_from(
                 &b,
                 prefix,

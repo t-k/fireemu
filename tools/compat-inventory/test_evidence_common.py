@@ -280,3 +280,9 @@ def test_a_dependency_info_file_with_continuation_lines_lists_all_of_its_files(t
     root = repo(tmp_path)
     info = f"{root}/target/debug/fireemu: {root}/crates/a/src/lib.rs \\\n  {root}/crates/a/tests/it.rs \\\n  {root}/crates/b/src/main.rs\n"
     assert dependency_info_paths(info, root) == ["crates/a/src/lib.rs", "crates/a/tests/it.rs", "crates/b/src/main.rs"]
+
+
+def test_a_raw_string_that_ends_in_a_backslash_does_not_hide_the_include_after_it(tmp_path):
+    # in a raw string a backslash is a character, so `r"\"` is a complete string: the include that follows is code
+    source = 'const S: &str = r"\\";\nconst D: &str = include_str!("../tests/y");\n'
+    assert guard(tmp_path, {"crates/a/src/lib.rs": source}) == ["crates/a/src/lib.rs"]

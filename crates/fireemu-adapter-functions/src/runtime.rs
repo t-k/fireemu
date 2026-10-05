@@ -2540,6 +2540,22 @@ impl FunctionsRuntime {
             .map_err(|_| EventarcPublishError::Unavailable)
     }
 
+    /// Whether a loaded function declares the channel (the full resource name).
+    #[must_use]
+    pub fn eventarc_channel_declared(&self, channel: &str) -> bool {
+        self.eventarc_registry
+            .lock()
+            .is_ok_and(|registry| registry.declares_channel(channel))
+    }
+
+    /// Whether a loaded function declares any channel of `project` in `location` (`-` is every location).
+    #[must_use]
+    pub fn eventarc_channels_declared_in(&self, project: &str, location: &str) -> bool {
+        self.eventarc_registry
+            .lock()
+            .is_ok_and(|registry| registry.declares_channel_in(project, location))
+    }
+
     /// Registers one parsed Eventarc trigger against the exact current Functions key.
     pub fn register_eventarc_trigger(
         &self,

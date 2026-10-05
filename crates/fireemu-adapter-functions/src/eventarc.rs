@@ -321,6 +321,31 @@ impl TriggerRegistry {
         Value::Object(events)
     }
 
+    /// Whether a registered trigger names this channel (the full resource name). A channel that
+    /// custom-event functions declare is the channel production creates for them when they are
+    /// deployed, so it is the one a strict publication may reach.
+    #[must_use]
+    pub fn declares_channel(&self, channel: &str) -> bool {
+        self.events
+            .values()
+            .flatten()
+            .any(|registration| registration.match_channel == channel)
+    }
+
+    /// Whether a trigger of `project` declares any channel in `location` (`-` is every location).
+    #[must_use]
+    pub fn declares_channel_in(&self, project: &str, location: &str) -> bool {
+        let prefix = if location == "-" {
+            format!("projects/{project}/locations/")
+        } else {
+            format!("projects/{project}/locations/{location}/channels/")
+        };
+        self.events
+            .values()
+            .flatten()
+            .any(|registration| registration.match_channel.starts_with(&prefix))
+    }
+
     /// Resolves matching registrations to their local function names.
     pub fn matching_functions(
         &self,
@@ -791,6 +816,63 @@ mod tests {
             },
             "textData": "{\"n\":3}"
         })
+    }
+
+    #[test]
+    fn a_channel_is_declared_by_the_triggers_that_name_it() {
+        let mut registry = TriggerRegistry::default();
+        let body = |channel: &str| {
+            format!(r#"{{"eventTrigger":{{"eventType":"x.y","channel":"{channel}"}}}}"#)
+        };
+        registry
+            .register(
+                "p",
+                "t1",
+                body("locations/us-central1/channels/c1").as_bytes(),
+                Some("f"),
+            )
+            .unwrap();
+        registry
+            .register(
+                "q",
+                "t2",
+                body("projects/q/locations/europe-west1/channels/c2").as_bytes(),
+                Some("g"),
+            )
+            .unwrap();
+        // A trigger without a channel is on the sentinel channel, which is not a channel of any project.
+        registry
+            .register(
+                "p",
+                "t3",
+                br#"{"eventTrigger":{"eventType":"z"}}"#,
+                Some("h"),
+            )
+            .unwrap();
+        assert!(registry.declares_channel("projects/p/locations/us-central1/channels/c1"));
+        assert!(registry.declares_channel("projects/q/locations/europe-west1/channels/c2"));
+        for missing in [
+            "projects/p/locations/us-central1/channels/c2",
+            "projects/p/locations/us-central1/channels/c",
+            "projects/p/locations/europe-west1/channels/c1",
+            "projects/q/locations/us-central1/channels/c1",
+            "locations/us-central1/channels/c1",
+            "",
+        ] {
+            assert!(!registry.declares_channel(missing), "{missing}");
+        }
+        assert!(registry.declares_channel_in("p", "us-central1"));
+        assert!(registry.declares_channel_in("p", "-"));
+        assert!(registry.declares_channel_in("q", "europe-west1"));
+        assert!(registry.declares_channel_in("q", "-"));
+        assert!(!registry.declares_channel_in("p", "europe-west1"));
+        assert!(!registry.declares_channel_in("q", "us-central1"));
+        assert!(!registry.declares_channel_in("r", "-"));
+        assert!(
+            !registry.declares_channel_in("p", "us-central"),
+            "a location is a whole path segment"
+        );
+        assert!(!TriggerRegistry::default().declares_channel_in("p", "-"));
     }
 
     #[test]

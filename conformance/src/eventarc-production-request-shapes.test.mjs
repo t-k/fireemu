@@ -116,3 +116,38 @@ test("property: for any location and channel ID the builder produces a body the 
     assert.deepEqual(world.refusals, []);
   }
 });
+
+test("replay on the recorded 400: the client reads it as a refusal of the request, and the ledger writes it as an error, never as a creation", async () => {
+  const ownership = createOwnership({ project: PROJECT, runId: RUN });
+  const ledger = createLedger();
+  const answer = { ...recorded("createChannel-no-name"), unknown: false };
+  const client = createClient({
+    transports: { eventarc: { name: "rest", request: async () => answer } },
+    ownership,
+    caseId: "shape",
+    usageProject: PROJECT,
+    ledger,
+  });
+  const id = `fe${RUN}-cl-c1`;
+  const result = await client.createChannel(PROJECT, "us-central1", id);
+  assert.equal(result.ok, false);
+  assert.equal(result.code, "INVALID_ARGUMENT");
+  const name = `projects/${PROJECT}/locations/us-central1/channels/${id}`;
+  assert.deepEqual(ledger.state().get(name).creates, ["error"]);
+});
+
+test("every write the recorder can build is checked: the creation's body is the model's required shape, a deletion has no body, a publish carries the events member", async () => {
+  const world = createWorld({ project: PROJECT });
+  const { client, ownership } = clientOn(world);
+  const name = ownership.channel("us-central1", "k");
+  await client.createChannel(PROJECT, "us-central1", name.split("/").at(-1));
+  await client.deleteChannel(name);
+  assert.deepEqual(
+    world.calls.map((call) => [call.op, call.body === undefined ? "no body" : Object.keys(call.body)]),
+    [
+      ["createChannel", ["name"]],
+      ["deleteChannel", "no body"],
+    ],
+  );
+  assert.deepEqual(world.refusals, []);
+});

@@ -57,7 +57,15 @@ function channelService({
     shapeRefusals,
     async request(call) {
       const { method, path, op } = call;
-      calls.push({ method, path, op, caseId: call.label?.case, body: call.body });
+      calls.push({
+        method,
+        path,
+        op,
+        caseId: call.label?.case,
+        body: call.body,
+        token: call.token,
+        quotaProject: call.quotaProject,
+      });
       const bare = decodeURIComponent(path.split("?")[0].replace(/^\/v1\//, ""));
       if (op === "getOperation") {
         const state = operations.get(bare) ?? { reads: 0, error: undefined };
@@ -138,7 +146,10 @@ function channelService({
   };
 }
 
-async function run(service, { runId = RUN, cases = [channelLifecycle], makeSdk = null } = {}) {
+async function run(
+  service,
+  { runId = RUN, cases = [channelLifecycle], makeSdk = null, usageProject = PROJECT, scopedToken } = {},
+) {
   const ownership = createOwnership({ project: PROJECT, runId });
   const ledger = createLedger();
   const notes = [];
@@ -160,12 +171,13 @@ async function run(service, { runId = RUN, cases = [channelLifecycle], makeSdk =
     options: {
       production: false,
       location: "us-central1",
-      usageProject: PROJECT,
+      usageProject,
       publishPrefix: "/v1",
     },
     sleep: async () => {},
     ledger,
     makeSdk,
+    ...(scopedToken === undefined ? {} : { scopedToken }),
   });
   return { summary, ledger, notes, ownership };
 }
@@ -686,4 +698,57 @@ test("the limits are searched, not assumed: against a model with any limit the b
       assert.ok(size.refused - size.accepted <= Math.ceil((high - low) / 1024), "ten halvings");
     }
   }
+});
+
+test("the project number is used in a path only when the run was given one, for reads only, and the case never writes it anywhere else", async () => {
+  const none = channelService();
+  await run(none);
+  assert.equal(
+    none.calls.some((call) => /\/projects\/\d+\//.test(call.path)),
+    false,
+  );
+  const given = channelService();
+  await run(given, { usageProject: "123456789012" });
+  const numbered = given.calls.filter((call) => /\/projects\/123456789012\//.test(call.path));
+  assert.deepEqual(
+    numbered.map((call) => [call.method, call.op]),
+    [
+      ["GET", "listChannels"],
+      ["GET", "getChannel"],
+    ],
+    "one list and one read, nothing that changes anything",
+  );
+});
+
+test("the credential probes: each token mode and the quota project of one call reach the transport by name, and a wrong-scope token only when one can be had", async () => {
+  const modes = async (scopedToken) => {
+    const service = channelService();
+    const { notes } = await run(service, { cases: [authErrors], scopedToken });
+    return { calls: service.calls, notes };
+  };
+  const calls = (await modes(async () => null)).calls;
+  const sent = (call) => call.token ?? "default";
+  const tokenCalls = calls.filter((call) => call.caseId === "auth-errors" && ["listChannels", "publishEvents"].includes(call.op));
+  assert.deepEqual(
+    [...new Set(tokenCalls.map(sent))].filter((mode) => mode !== "default"),
+    ["none", "invalid", "ya29-garbage", "jwt-garbage", "jwt-expired-unsigned"],
+  );
+  const stub = await modes(async (scope) => {
+    assert.equal(scope, "https://www.googleapis.com/auth/userinfo.email");
+    return "ya29.stub-token-of-the-narrow-scope";
+  });
+  assert.ok(stub.calls.some((call) => call.token?.label === "wrong-scope"));
+  const quota = stub.calls.filter((call) => call.quotaProject !== undefined);
+  assert.deepEqual(
+    quota.map((call) => [call.op, call.quotaProject]),
+    [
+      ["listChannels", "fireemu-no-such-project-0"],
+      ["publishEvents", "fireemu-no-such-project-0"],
+    ],
+  );
+  assert.equal(
+    stub.notes.some((n) => n.note === "wrong-scope-skipped"),
+    false,
+  );
+  assert.ok((await modes(async () => null)).notes.some((n) => n.note === "wrong-scope-skipped"));
 });

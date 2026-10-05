@@ -139,7 +139,7 @@ test("generated: the run keeps its safety rules over any mix of answer classes",
     // Only issued names are deleted.
     const allowed = new Set([
       ...ALL_FUNCTIONS.map(scheduleId),
-      ...["zero", "duration", "count"].map((k) => extraJobId(RUN, k)),
+      ...["zero", "duration", "count", "retry5"].map((k) => extraJobId(RUN, k)),
       ...FUNCTIONS.v1.map((f) => "fe-sd-" + RUN + "-pull-" + f.toLowerCase()),
       ...ALL_FUNCTIONS,
     ]);

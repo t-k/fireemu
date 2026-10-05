@@ -194,6 +194,7 @@ test("the extra jobs and the subscription name are exactly what the packet state
           maxDoublings: 1,
         },
       ],
+      ["retry5", { retryCount: 5 }],
     ],
   );
   assert.equal(subscriptionName("x"), "projects/fireemu-oracle-sbx/subscriptions/x");

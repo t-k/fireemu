@@ -755,6 +755,15 @@ export async function record({
             : {}),
         },
       });
+      // What production answered to each extra create, in the result (a refusal is a recorded answer, e.g. the
+      // retry-count boundary probe `retry5`).
+      (out.extraAnswers ??= {})[job.key] = {
+        status: answer?.status ?? null,
+        class: answerClass(answer),
+        message: readable(answer)
+          ? String(answer.json.error?.message ?? "").slice(0, 300) || null
+          : null,
+      };
       if (answerClass(answer) === "2xx") {
         extraCreated.push(job.key);
         confirmed.add("job-" + id);

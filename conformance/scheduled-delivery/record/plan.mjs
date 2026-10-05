@@ -73,6 +73,15 @@ export const EXTRA_JOBS = Object.freeze([
       maxDoublings: 1,
     },
   },
+  // The boundary probe: Cloud Scheduler's message says "less than 5" and it refused 6 (run e0ec2f41), but 5 was
+  // never sent. A 2xx is deleted and read back; a 400 is the recorded refusal. Until it is recorded, 5 is unrecorded.
+  {
+    key: "retry5",
+    cases: ["retry-count-five"],
+    schedule: "0 0 1 1 *",
+    timeZone: "UTC",
+    retryConfig: { retryCount: 5 },
+  },
 ]);
 
 export const RUN_ID = /^[a-f0-9]{16}$/;

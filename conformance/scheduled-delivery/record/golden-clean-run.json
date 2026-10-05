@@ -35,6 +35,7 @@
     "create-extra-zero",
     "create-extra-duration",
     "create-extra-count",
+    "create-extra-retry5",
     "run-1-schedOkV2-us-central1",
     "run-1-schedRetryV2-us-central1",
     "run-1-schedSlowV2-us-central1",
@@ -43,6 +44,7 @@
     "run-1-fe-sd-run-zero",
     "run-1-fe-sd-run-duration",
     "run-1-fe-sd-run-count",
+    "run-1-fe-sd-run-retry5",
     "pull-pass1-1-schedOkV1",
     "ack-pass1-1-schedOkV1",
     "pull-pass1-1-schedFailV1",
@@ -83,6 +85,7 @@
     "run-2-fe-sd-run-zero",
     "run-2-fe-sd-run-duration",
     "run-2-fe-sd-run-count",
+    "run-2-fe-sd-run-retry5",
     "pull-pass2-1-schedOkV1",
     "ack-pass2-1-schedOkV1",
     "pull-pass2-1-schedFailV1",
@@ -123,6 +126,7 @@
     "pause-fe-sd-run-zero",
     "pause-fe-sd-run-duration",
     "pause-fe-sd-run-count",
+    "pause-fe-sd-run-retry5",
     "cleanup-1-functions-v1",
     "cleanup-1-functions-v2",
     "cleanup-1-run-services",
@@ -133,6 +137,7 @@
     "delete-job-0-fe-sd-run-zero",
     "delete-job-0-fe-sd-run-duration",
     "delete-job-0-fe-sd-run-count",
+    "delete-job-0-fe-sd-run-retry5",
     "delete-subscription-schedOkV1",
     "delete-subscription-schedFailV1",
     "topic-present-schedOkV1",
@@ -150,6 +155,7 @@
     "readback-gone-job-fe-sd-run-zero",
     "readback-gone-job-fe-sd-run-duration",
     "readback-gone-job-fe-sd-run-count",
+    "readback-gone-job-fe-sd-run-retry5",
     "readback-gone-topic-schedOkV1",
     "readback-gone-topic-schedFailV1",
     "readback-gone-subscription-schedOkV1",
@@ -183,13 +189,14 @@
     "issue-subscription-schedFailV1",
     "issue-extra-zero",
     "issue-extra-duration",
-    "issue-extra-count"
+    "issue-extra-count",
+    "issue-extra-retry5"
   ],
   "sleeps": [
-    60000, 3000, 3000, 3000, 3000, 3000, 3000, 3000, 3000, 60000, 60000, 60000, 60000, 60000, 60000,
-    3000, 3000, 3000, 3000, 3000, 3000, 3000, 3000, 60000, 60000, 60000, 60000, 60000, 60000, 60000,
-    120000
+    60000, 3000, 3000, 3000, 3000, 3000, 3000, 3000, 3000, 3000, 60000, 60000, 60000, 60000, 60000,
+    60000, 3000, 3000, 3000, 3000, 3000, 3000, 3000, 3000, 3000, 60000, 60000, 60000, 60000, 60000,
+    60000, 60000, 120000
   ],
-  "attempted": 165,
+  "attempted": 171,
   "note": "The request ids, the issued names and the sleeps of a clean run of the recorder against the in-memory world (two passes, six minutes of natural fires each). A reviewer can read it as the recording's plan; the test compares a fresh run with it."
 }

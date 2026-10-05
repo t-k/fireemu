@@ -303,9 +303,14 @@ test("the Cloud Build rule allows one GET of a build id in this project and regi
 test("every retry count the packet declares is one Cloud Scheduler accepts (it refused 6 in run e0ec2f41)", () => {
   const counts = [
     DECLARED.schedRetryV2.retryConfig.retryCount,
-    ...EXTRA_JOBS.map((job) => job.retryConfig.retryCount),
+    ...EXTRA_JOBS.filter((job) => job.key !== "retry5").map((job) => job.retryConfig.retryCount),
   ].filter((n) => n !== undefined);
   assert.ok(counts.length >= 3);
+  // the one boundary probe: 5 is sent once, on purpose, to learn what production does with it
+  assert.deepEqual(
+    EXTRA_JOBS.filter((job) => job.retryConfig.retryCount === 5).map((job) => job.key),
+    ["retry5"],
+  );
   for (const count of counts) assert.ok(count < 5, String(count));
   assert.equal(
     DECLARED.schedRetryV2.retryConfig.retryCount,

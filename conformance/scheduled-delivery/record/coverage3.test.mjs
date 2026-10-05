@@ -347,7 +347,7 @@ test("a failed extra job create is settled by a read that may answer 403", async
   const settle = row(journal, "settle-extra-duration");
   assert.equal(settle.url, "https://" + JOBS + "/fe-sd-" + RUN + "-duration");
   assert.notEqual(result.outcome, "calendar-delivery-auth-stop");
-  assert.equal(ids(journal).filter((id) => id.startsWith("run-1-fe-sd-run-")).length, 2);
+  assert.equal(ids(journal).filter((id) => id.startsWith("run-1-fe-sd-run-")).length, 3);
 });
 
 test("a forced run that was refused is recorded with its class and status", async () => {

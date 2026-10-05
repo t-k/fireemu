@@ -142,16 +142,23 @@ function endsRemoved(row) {
   return removed.every((id) => added.has(id));
 }
 
-/** MATCH, DIFFER or INDETERMINATE for two rows. */
-export function classifyRow(a, b) {
-  // A row is unfinished when its wait ran out, its stream hit the frame cap or ended with no
-  // status, or its program threw (the rest of that program never ran).
-  const unfinished = (row) =>
+/**
+ * A row is unfinished when its wait ran out (unless the target was removed with a cause: that is
+ * the answer), its stream hit the frame cap or ended with no status, or its program threw (the
+ * rest of that program never ran).
+ */
+function isUnfinished(row) {
+  return (
     (row.timedOut === true && !endsRemoved(row)) ||
     row.programError === true ||
     row.end?.reason === "frame-cap" ||
-    row.end?.reason === "ended-without-status";
-  if (unfinished(a) || unfinished(b)) return "INDETERMINATE";
+    row.end?.reason === "ended-without-status"
+  );
+}
+
+/** MATCH, DIFFER or INDETERMINATE for two rows. */
+export function classifyRow(a, b) {
+  if (isUnfinished(a) || isUnfinished(b)) return "INDETERMINATE";
   if (!isDeepStrictEqual(canonicalRow(a), canonicalRow(b))) return "DIFFER";
   // Filters are optional, but two that came must say the same.
   const [keysA, keysB] = [filterKeys(a), filterKeys(b)];
@@ -242,12 +249,7 @@ function divergenceOf(entry) {
  * run sent is a difference.
  */
 export function classifyLocal(first, second, local) {
-  const unfinished = (row) =>
-    (row.timedOut === true && !endsRemoved(row)) ||
-    row.programError === true ||
-    row.end?.reason === "frame-cap" ||
-    row.end?.reason === "ended-without-status";
-  if (unfinished(first) || unfinished(second) || unfinished(local)) return "INDETERMINATE";
+  if (isUnfinished(first) || isUnfinished(second) || isUnfinished(local)) return "INDETERMINATE";
   if (!isDeepStrictEqual(canonicalRow(first), canonicalRow(local))) return "DIFFER";
   const [keysFirst, keysSecond, keysLocal] = [first, second, local].map(filterKeys);
   const required = keysFirst.filter((key) => keysSecond.includes(key));

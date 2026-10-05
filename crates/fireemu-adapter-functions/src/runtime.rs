@@ -7130,6 +7130,8 @@ mod schedule_capacity_tests {
                 "26360020468532905",
             ),
             (7, 1_000_000_000_000, "23003000000000007"),
+            // the largest session: the arithmetic must not overflow
+            (u128::MAX, 1, "28743655615004458"),
         ] {
             assert_eq!(
                 super::schedule_message_id(SessionId::new(session), ordinal),

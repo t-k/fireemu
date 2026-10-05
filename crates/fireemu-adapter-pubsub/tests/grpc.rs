@@ -1047,7 +1047,19 @@ async fn grpc_rejects_unsupported_subscription_options_before_creation() {
         ),
     ];
 
-    for (index, (field, mut subscription)) in options.into_iter().enumerate() {
+    for (index, (field, mut subscription)) in options
+        .into_iter()
+        .filter(|(field, _)| {
+            ![
+                "expiration_policy",
+                "labels",
+                "state",
+                "push_config.attributes",
+            ]
+            .contains(field)
+        })
+        .enumerate()
+    {
         let name = format!("projects/demo-app/subscriptions/unsupported-{index}");
         subscription.name = name.clone();
         subscription.topic = topic.to_owned();
@@ -1126,7 +1138,10 @@ async fn modify_push_config_rejects_unsupported_options_without_mutating_the_end
             },
         ),
     ];
-    for (field, push_config) in options {
+    for (field, push_config) in options
+        .into_iter()
+        .filter(|(field, _)| *field != "push_config.attributes")
+    {
         let error = subc
             .modify_push_config(pb::ModifyPushConfigRequest {
                 subscription: subscription.to_owned(),
@@ -1566,6 +1581,12 @@ async fn push_subscription_delivers_json_and_acknowledges_the_message() {
     assert!(body.contains("\"data\":\"cHVzaC1tZQ==\""));
     assert!(body.contains(subscription));
 
+    subc.modify_push_config(pb::ModifyPushConfigRequest {
+        subscription: subscription.to_owned(),
+        push_config: Some(pb::PushConfig::default()),
+    })
+    .await
+    .unwrap();
     let pulled = subc
         .pull(pb::PullRequest {
             subscription: subscription.to_owned(),
@@ -1618,6 +1639,12 @@ async fn push_subscription_retries_after_failures_without_a_new_publish() {
     // each failed attempt holds the subscription until the virtual clock reaches its wait.
     await_push_count_releasing_backoff(&h, &bodies, 4).await;
     assert_eq!(bodies.lock().unwrap().len(), 4);
+    subc.modify_push_config(pb::ModifyPushConfigRequest {
+        subscription: subscription.to_owned(),
+        push_config: Some(pb::PushConfig::default()),
+    })
+    .await
+    .unwrap();
     let pulled = subc
         .pull(pb::PullRequest {
             subscription: subscription.to_owned(),
@@ -2451,6 +2478,12 @@ async fn deleting_and_recreating_a_subscription_invalidates_the_old_push_generat
     }
     assert_eq!(old_bodies.lock().unwrap().len(), 1);
     assert_eq!(new_bodies.lock().unwrap().len(), 1);
+    subc.modify_push_config(pb::ModifyPushConfigRequest {
+        subscription: subscription.to_owned(),
+        push_config: Some(pb::PushConfig::default()),
+    })
+    .await
+    .unwrap();
     let pulled = subc
         .pull(pb::PullRequest {
             subscription: subscription.to_owned(),

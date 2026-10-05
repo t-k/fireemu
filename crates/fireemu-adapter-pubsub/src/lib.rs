@@ -765,8 +765,10 @@ impl PubSubHandle {
         let subscriptions = self.state().push_subscriptions(topic);
         let now = self.now();
         let mut dispatch = self.push_dispatch.lock().expect("push dispatch lock");
-        for (subscription, _) in subscriptions {
-            dispatch.enqueue(subscription, now);
+        for (subscription, endpoint) in subscriptions {
+            if push::validate_endpoint(&endpoint).is_ok() {
+                dispatch.enqueue(subscription, now);
+            }
         }
         drop(dispatch);
         self.push_ready_notify.notify_one();
@@ -1685,6 +1687,8 @@ mod dispatch_tests {
             state.create_topic(topic.clone(), BTreeMap::new()).unwrap();
             state
                 .create_subscription(SubscriptionConfig {
+                    labels: std::collections::BTreeMap::new(),
+                    expiration_policy: None,
                     retain_acked_messages: false,
                     message_retention_duration: None,
                     name: subscription,
@@ -1695,6 +1699,7 @@ mod dispatch_tests {
                     dead_letter_policy: None,
                     retry_policy: None,
                     push_config: PushConfig {
+                        attributes: std::collections::BTreeMap::new(),
                         push_endpoint: "http://127.0.0.1:1/push".to_owned(),
                     },
                 })
@@ -1765,6 +1770,8 @@ mod dispatch_tests {
             state.create_topic(topic.clone(), BTreeMap::new()).unwrap();
             state
                 .create_subscription(SubscriptionConfig {
+                    labels: std::collections::BTreeMap::new(),
+                    expiration_policy: None,
                     retain_acked_messages: false,
                     message_retention_duration: None,
                     name: subscription.clone(),
@@ -1778,6 +1785,7 @@ mod dispatch_tests {
                         maximum_backoff: LogicalDuration::from_seconds(10),
                     }),
                     push_config: PushConfig {
+                        attributes: std::collections::BTreeMap::new(),
                         push_endpoint: "http://127.0.0.1:1/push".to_owned(),
                     },
                 })
@@ -1840,6 +1848,8 @@ mod dispatch_tests {
         let topic = TopicName::new("demo-project", "reset-topic").unwrap();
         let subscription = SubscriptionName::new("demo-project", "reset-subscription").unwrap();
         let config = || SubscriptionConfig {
+            labels: std::collections::BTreeMap::new(),
+            expiration_policy: None,
             retain_acked_messages: false,
             message_retention_duration: None,
             name: subscription.clone(),
@@ -1850,6 +1860,7 @@ mod dispatch_tests {
             dead_letter_policy: None,
             retry_policy: None,
             push_config: PushConfig {
+                attributes: std::collections::BTreeMap::new(),
                 push_endpoint: "http://127.0.0.1:1/push".to_owned(),
             },
         };
@@ -1959,6 +1970,8 @@ mod dispatch_tests {
                 .unwrap();
             state
                 .create_subscription(SubscriptionConfig {
+                    labels: std::collections::BTreeMap::new(),
+                    expiration_policy: None,
                     retain_acked_messages: false,
                     message_retention_duration: None,
                     name: source_subscription.clone(),
@@ -2156,6 +2169,59 @@ mod publication_gate_tests {
             ))),
             None,
         )
+    }
+
+    #[tokio::test]
+    async fn accepted_remote_push_configuration_never_queues_network_delivery() {
+        let handle = handle();
+        let topic = fireemu_core_pubsub::TopicName::new("demo-guard", "events").unwrap();
+        let name = fireemu_core_pubsub::SubscriptionName::new("demo-guard", "configured").unwrap();
+        handle
+            .state()
+            .create_topic(topic.clone(), std::collections::BTreeMap::new())
+            .unwrap();
+        let config = crate::convert::subscription_from_proto_with_policy(
+            &fireemu_proto_pubsub::google::pubsub::v1::Subscription {
+                name: name.to_full(),
+                topic: topic.to_full(),
+                push_config: Some(fireemu_proto_pubsub::google::pubsub::v1::PushConfig {
+                    push_endpoint: "https://example.com/probe".into(),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            },
+            super::PagingPolicy::Strict,
+        )
+        .unwrap();
+        handle.state().create_subscription(config).unwrap();
+        handle.schedule_push(&topic);
+        handle.start_push_dispatcher();
+        handle
+            .publish(
+                &topic,
+                vec![fireemu_core_pubsub::PubsubMessage {
+                    data: b"guarded".to_vec(),
+                    ..Default::default()
+                }],
+            )
+            .unwrap();
+        tokio::task::yield_now().await;
+        {
+            let dispatch = handle.push_dispatch.lock().unwrap();
+            assert!(dispatch.ready.is_empty());
+            assert!(dispatch.active.is_empty());
+            assert_eq!(dispatch.spawned, 0);
+        }
+        assert_eq!(
+            handle
+                .state()
+                .subscription_config(&name)
+                .unwrap()
+                .push_config
+                .push_endpoint,
+            "https://example.com/probe"
+        );
+        handle.shutdown_push_dispatcher().await;
     }
 
     /// PUBGATE-1: the publication gate is held across the control-plane transitions that

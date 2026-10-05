@@ -67,6 +67,12 @@ pub fn validate_resource_id(id: &str, kind: &str) -> Result<()> {
     Ok(())
 }
 
+/// The service diagnostic for a syntactically invalid resource reference.
+#[must_use]
+pub fn invalid_resource_name(full: &str) -> PubSubError {
+    PubSubError::invalid_argument(format!("Invalid resource name given (name={full}). Refer to https://cloud.google.com/pubsub/docs/pubsub-basics#resource_names for more information."))
+}
+
 /// The Pub/Sub resource-name alphabet after the mandatory leading letter.
 const fn is_id_byte(b: u8) -> bool {
     b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'~' | b'%' | b'+' | b'-')
@@ -91,8 +97,10 @@ impl TopicName {
     pub fn new(project: impl Into<String>, topic: impl Into<String>) -> Result<Self> {
         let project = project.into();
         let topic = topic.into();
-        validate_project(&project)?;
-        validate_resource_id(&topic, "topic")?;
+        let full = format!("projects/{project}/topics/{topic}");
+        validate_project(&project)
+            .and_then(|()| validate_resource_id(&topic, "topic"))
+            .map_err(|_| invalid_resource_name(&full))?;
         Ok(Self { project, topic })
     }
 
@@ -105,9 +113,8 @@ impl TopicName {
                 topic: DELETED_TOPIC.to_owned(),
             });
         }
-        let (project, topic) = split_two(full, "topics").ok_or_else(|| {
-            PubSubError::invalid_argument("topic name must be projects/{p}/topics/{t}")
-        })?;
+        let (project, topic) =
+            split_two(full, "topics").ok_or_else(|| invalid_resource_name(full))?;
         Self::new(project, topic)
     }
 
@@ -144,8 +151,10 @@ impl SubscriptionName {
     pub fn new(project: impl Into<String>, subscription: impl Into<String>) -> Result<Self> {
         let project = project.into();
         let subscription = subscription.into();
-        validate_project(&project)?;
-        validate_resource_id(&subscription, "subscription")?;
+        let full = format!("projects/{project}/subscriptions/{subscription}");
+        validate_project(&project)
+            .and_then(|()| validate_resource_id(&subscription, "subscription"))
+            .map_err(|_| invalid_resource_name(&full))?;
         Ok(Self {
             project,
             subscription,
@@ -154,11 +163,8 @@ impl SubscriptionName {
 
     /// Parses `projects/{project}/subscriptions/{subscription}`.
     pub fn parse(full: &str) -> Result<Self> {
-        let (project, subscription) = split_two(full, "subscriptions").ok_or_else(|| {
-            PubSubError::invalid_argument(
-                "subscription name must be projects/{p}/subscriptions/{s}",
-            )
-        })?;
+        let (project, subscription) =
+            split_two(full, "subscriptions").ok_or_else(|| invalid_resource_name(full))?;
         Self::new(project, subscription)
     }
 
@@ -201,6 +207,25 @@ fn split_two<'a>(full: &'a str, collection: &str) -> Option<(&'a str, &'a str)> 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    proptest::proptest! {
+        #[test]
+        fn invalid_resource_diagnostics_preserve_full_request_name(id in proptest::prop_oneof![proptest::strategy::Just("ab".to_owned()),"goog[a-z]{0,30}","[0-9][a-z]{1,30}"]) {
+            for kind in ["topics","subscriptions"] {
+                let full=format!("projects/demo-name/{kind}/{id}");
+                let error=if kind=="topics" {TopicName::parse(&full).unwrap_err()} else {SubscriptionName::parse(&full).unwrap_err()};
+                proptest::prop_assert_eq!(error.message(),format!("Invalid resource name given (name={full}). Refer to https://cloud.google.com/pubsub/docs/pubsub-basics#resource_names for more information."));
+            }
+        }
+        #[test]
+        fn valid_resource_names_roundtrip(id in "[a-z][a-z0-9_-]{2,60}") {
+            proptest::prop_assume!(!id.starts_with("goog"));
+            let topic=TopicName::new("demo-name",&id).unwrap();
+            let subscription=SubscriptionName::new("demo-name",&id).unwrap();
+            proptest::prop_assert_eq!(TopicName::parse(&topic.to_full()).unwrap(),topic);
+            proptest::prop_assert_eq!(SubscriptionName::parse(&subscription.to_full()).unwrap(),subscription);
+        }
+    }
 
     #[test]
     fn accepts_a_plain_topic() {

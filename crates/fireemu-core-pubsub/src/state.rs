@@ -113,6 +113,7 @@ struct TopicEntry {
     name: TopicName,
     labels: BTreeMap<String, String>,
     incarnation: u64,
+    message_retention_duration: Option<LogicalDuration>,
 }
 
 /// The whole Pub/Sub state for one daemon (all projects share one registry; names are
@@ -368,6 +369,19 @@ impl PubSubState {
         name: TopicName,
         labels: BTreeMap<String, String>,
     ) -> Result<()> {
+        self.create_topic_with_retention(name, labels, None)
+    }
+
+    /// Creates a topic with persisted retention configuration; this does not enforce replay expiry.
+    pub fn create_topic_with_retention(
+        &mut self,
+        name: TopicName,
+        labels: BTreeMap<String, String>,
+        message_retention_duration: Option<LogicalDuration>,
+    ) -> Result<()> {
+        if let Some(duration) = message_retention_duration {
+            crate::configuration::validate_retention(duration)?;
+        }
         let key = name.to_full();
         if self.topics.contains_key(&key) {
             return Err(PubSubError::already_exists(format!(
@@ -390,6 +404,7 @@ impl PubSubState {
                 name,
                 labels,
                 incarnation: self.topic_counter,
+                message_retention_duration,
             },
         );
         Ok(())
@@ -406,6 +421,14 @@ impl PubSubState {
         self.topics
             .get(&name.to_full())
             .map(|t| &t.labels)
+            .ok_or_else(|| PubSubError::not_found(format!("topic {} not found", name.to_full())))
+    }
+
+    /// The explicitly requested topic retention configuration, or `NOT_FOUND`.
+    pub fn topic_retention(&self, name: &TopicName) -> Result<Option<LogicalDuration>> {
+        self.topics
+            .get(&name.to_full())
+            .map(|topic| topic.message_retention_duration)
             .ok_or_else(|| PubSubError::not_found(format!("topic {} not found", name.to_full())))
     }
 
@@ -592,22 +615,54 @@ impl PubSubState {
         ack_deadline_seconds: Option<u32>,
         push_config: Option<PushConfig>,
     ) -> Result<()> {
+        self.update_subscription_configuration(
+            name,
+            crate::SubscriptionUpdate {
+                ack_deadline_seconds,
+                push_config,
+                ..Default::default()
+            },
+            true,
+        )
+    }
+
+    /// Validates all selected fields on a candidate, then commits them together.
+    pub fn update_subscription_configuration(
+        &mut self,
+        name: &SubscriptionName,
+        update: crate::SubscriptionUpdate,
+        strict: bool,
+    ) -> Result<()> {
         let mut candidate = self.subscription_config(name)?.clone();
-        if let Some(seconds) = ack_deadline_seconds {
-            candidate.ack_deadline_seconds = seconds;
+        if let Some(value) = update.ack_deadline_seconds {
+            candidate.ack_deadline_seconds = value;
         }
-        if let Some(push_config) = &push_config {
-            candidate.push_config = push_config.clone();
+        if let Some(value) = update.labels {
+            candidate.labels = value;
+        }
+        if let Some(value) = update.retain_acked_messages {
+            candidate.retain_acked_messages = value;
+        }
+        if let Some(value) = update.message_retention_duration {
+            candidate.message_retention_duration = value;
+        }
+        if let Some(value) = update.expiration_policy {
+            candidate.expiration_policy = value;
+        }
+        if let Some(value) = update.retry_policy {
+            candidate.retry_policy = value;
+        }
+        if let Some(value) = update.dead_letter_policy {
+            candidate.dead_letter_policy = value;
+        }
+        if let Some(value) = update.push_config {
+            candidate.push_config = value;
         }
         candidate.validate()?;
-
-        let subscription = self.sub_mut(name)?;
-        if let Some(seconds) = ack_deadline_seconds {
-            subscription.set_ack_deadline(seconds);
+        if strict {
+            candidate.validate_production_configuration()?;
         }
-        if let Some(push_config) = push_config {
-            subscription.set_push_config(push_config);
-        }
+        self.sub_mut(name)?.replace_config(candidate);
         Ok(())
     }
 
@@ -1455,6 +1510,8 @@ mod tests {
 
     fn sub_cfg(p: &str, s: &str, t: &str, filter: Filter) -> SubscriptionConfig {
         SubscriptionConfig {
+            labels: std::collections::BTreeMap::new(),
+            expiration_policy: None,
             retain_acked_messages: false,
             message_retention_duration: None,
             name: SubscriptionName::new(p, s).unwrap(),
@@ -1465,6 +1522,62 @@ mod tests {
             dead_letter_policy: None,
             retry_policy: None,
             push_config: PushConfig::default(),
+        }
+    }
+
+    proptest::proptest! {
+        #[test]
+        fn configuration_updates_match_reference_model(steps in proptest::collection::vec((0_u8..5,0_u32..=601,proptest::bool::ANY,"[a-z]{1,12}",600_i64..=2_678_401,0_i64..=2_678_401),1..40)) {
+            let mut state=PubSubState::new(42);
+            let topic=topic("demo-model","events");
+            state.create_topic(topic.clone(),BTreeMap::new()).unwrap();
+            let mut expected=sub_cfg("demo-model","configured","events",Filter::always());
+            expected.message_retention_duration=Some(LogicalDuration::from_seconds(604_800));
+            let name=expected.name.clone();
+            state.create_subscription(expected.clone()).unwrap();
+            let now=LogicalInstant::from_unix_seconds(1_700_000_000);
+            state.publish(&topic,vec![data(b"preserved")],now).unwrap();
+            for (operation,ack,retain,label,retention,ttl) in steps {
+                if operation==4 {
+                    state.delete_subscription(&name).unwrap();
+                    expected=sub_cfg("demo-model","configured","events",Filter::always());
+                    expected.message_retention_duration=Some(LogicalDuration::from_seconds(604_800));
+                    state.create_subscription(expected.clone()).unwrap();
+                    state.publish(&topic,vec![data(b"preserved")],now).unwrap();
+                    continue;
+                }
+                let mut update=crate::SubscriptionUpdate::default();
+                let mut candidate=expected.clone();
+                match operation {
+                    0 => { let labels=BTreeMap::from([("env".to_owned(),label)]);candidate.labels=labels.clone(); update.labels=Some(labels); }
+                    1 => { candidate.ack_deadline_seconds=ack; candidate.labels=BTreeMap::from([("atomic".to_owned(),label)]); update.ack_deadline_seconds=Some(ack);update.labels=Some(candidate.labels.clone()); }
+                    2 => { let policy=crate::ExpirationPolicy {ttl:if retain {None} else {Some(LogicalDuration::from_seconds(ttl))}};candidate.expiration_policy=Some(policy);update.expiration_policy=Some(Some(policy)); }
+                    _ => { candidate.retain_acked_messages=retain;candidate.message_retention_duration=Some(LogicalDuration::from_seconds(retention));update.retain_acked_messages=Some(retain);update.message_retention_duration=Some(candidate.message_retention_duration); }
+                }
+                let ttl=candidate.expiration_policy.map_or(Some(2_678_400_i128*1_000_000_000),|policy|policy.ttl.map(LogicalDuration::as_nanos));
+                let retention=candidate.message_retention_duration.unwrap().as_nanos();
+                let admitted=(10..=600).contains(&candidate.ack_deadline_seconds) && (600_000_000_000..=2_678_400_000_000_000).contains(&retention) && ttl.is_none_or(|ttl|ttl>=86_400_000_000_000 && retention<=ttl);
+                proptest::prop_assert_eq!(state.update_subscription_configuration(&name,update,true).is_ok(),admitted);
+                if admitted {expected=candidate;}
+                proptest::prop_assert_eq!(state.subscription_config(&name).unwrap(),&expected);
+            }
+            let messages=state.pull(&name,10,now).unwrap();
+            proptest::prop_assert_eq!(messages.len(),1);
+            proptest::prop_assert_eq!(&messages[0].message.message.data,b"preserved");
+        }
+
+        #[test]
+        fn topic_retention_lifecycle_matches_reference_model(nanos in 600_000_000_000_i128..=2_678_400_000_000_000_i128) {
+            let mut state=PubSubState::new(42);
+            let name=topic("demo-model","retained");
+            let duration=LogicalDuration::from_nanos(nanos);
+            state.create_topic_with_retention(name.clone(),BTreeMap::new(),Some(duration)).unwrap();
+            proptest::prop_assert_eq!(state.topic_retention(&name).unwrap(),Some(duration));
+            proptest::prop_assert!(state.create_topic_with_retention(name.clone(),BTreeMap::new(),None).is_err());
+            proptest::prop_assert_eq!(state.topic_retention(&name).unwrap(),Some(duration));
+            state.delete_topic(&name).unwrap();
+            state.create_topic(name.clone(),BTreeMap::new()).unwrap();
+            proptest::prop_assert_eq!(state.topic_retention(&name).unwrap(),None);
         }
     }
 
@@ -1506,6 +1619,7 @@ mod tests {
                 &name,
                 Some(30),
                 Some(PushConfig {
+                    attributes: std::collections::BTreeMap::new(),
                     push_endpoint: "http://127.0.0.1:1/push".into(),
                 }),
             )
@@ -1796,6 +1910,7 @@ mod tests {
                 &subscription,
                 Some(1),
                 Some(PushConfig {
+                    attributes: std::collections::BTreeMap::new(),
                     push_endpoint: "http://127.0.0.1:8080/candidate".to_owned(),
                 }),
             )
@@ -2642,6 +2757,7 @@ mod tests {
         let now = LogicalInstant::from_unix_seconds(1000);
         let interval = LogicalDuration::from_millis(250);
         let push_config = || PushConfig {
+            attributes: std::collections::BTreeMap::new(),
             push_endpoint: "http://127.0.0.1:1/push".to_owned(),
         };
         state
@@ -2687,6 +2803,7 @@ mod tests {
             .unwrap();
         let mut config = sub_cfg("demo-app", "after-reset", "push", Filter::always());
         config.push_config = PushConfig {
+            attributes: std::collections::BTreeMap::new(),
             push_endpoint: "http://127.0.0.1:1/push".to_owned(),
         };
         state.create_subscription(config).unwrap();
@@ -2722,6 +2839,7 @@ mod tests {
             .unwrap();
         let mut config = sub_cfg("demo-app", "immediate", "push", Filter::always());
         config.push_config = PushConfig {
+            attributes: std::collections::BTreeMap::new(),
             push_endpoint: "http://127.0.0.1:1/push".to_owned(),
         };
         state.create_subscription(config).unwrap();

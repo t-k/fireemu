@@ -72,6 +72,37 @@ pub struct RetryPolicy {
 pub struct PushConfig {
     /// The endpoint messages are delivered to by HTTP POST; empty means this is a pull subscription.
     pub push_endpoint: String,
+    /// Push protocol attributes, retained independently from delivery transport admission.
+    pub attributes: BTreeMap<String, String>,
+}
+
+/// Subscription idle-expiration configuration. An absent policy uses the service default;
+/// a policy with no TTL requests no expiration. Wall-clock idle expiry is outside this model.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ExpirationPolicy {
+    /// Requested lifetime since the last subscription activity.
+    pub ttl: Option<LogicalDuration>,
+}
+
+/// A field-mask-selected update. Nested options distinguish clearing a field from preserving it.
+#[derive(Debug, Clone, Default)]
+pub struct SubscriptionUpdate {
+    /// Replaces the ack deadline when selected.
+    pub ack_deadline_seconds: Option<u32>,
+    /// Replaces the complete labels map when selected.
+    pub labels: Option<BTreeMap<String, String>>,
+    /// Replaces acknowledged-message retention when selected.
+    pub retain_acked_messages: Option<bool>,
+    /// Replaces or resets the message-retention window when selected.
+    pub message_retention_duration: Option<Option<LogicalDuration>>,
+    /// Replaces or resets the idle-expiration policy when selected.
+    pub expiration_policy: Option<Option<ExpirationPolicy>>,
+    /// Replaces or clears the retry policy when selected.
+    pub retry_policy: Option<Option<RetryPolicy>>,
+    /// Replaces or clears the dead-letter policy when selected.
+    pub dead_letter_policy: Option<Option<DeadLetterPolicy>>,
+    /// Replaces the complete push configuration when selected.
+    pub push_config: Option<PushConfig>,
 }
 
 /// Validated subscription configuration.
@@ -83,6 +114,10 @@ pub struct SubscriptionConfig {
     pub topic: TopicName,
     /// Ack deadline, in seconds.
     pub ack_deadline_seconds: u32,
+    /// User-defined resource labels.
+    pub labels: BTreeMap<String, String>,
+    /// Idle-expiration configuration; absence preserves the default policy.
+    pub expiration_policy: Option<ExpirationPolicy>,
     /// Whether acknowledged-message retention was requested. Configuration only; the retention window and replay behavior are not enforced by the delivery state machine yet.
     pub retain_acked_messages: bool,
     /// The explicitly requested retention window; `None` preserves an omitted request without synthesizing a resolved production default. Expiry enforcement is not implemented yet.
@@ -102,47 +137,70 @@ pub struct SubscriptionConfig {
 impl SubscriptionConfig {
     /// Validates the numeric fields of the configuration.
     pub fn validate(&self) -> Result<()> {
-        if self.ack_deadline_seconds < MIN_ACK_DEADLINE_SECONDS
-            || self.ack_deadline_seconds > MAX_ACK_DEADLINE_SECONDS
-        {
+        if self.ack_deadline_seconds == 0 || self.ack_deadline_seconds > MAX_ACK_DEADLINE_SECONDS {
             return Err(PubSubError::invalid_argument(format!(
-                "ackDeadlineSeconds must be {MIN_ACK_DEADLINE_SECONDS}..={MAX_ACK_DEADLINE_SECONDS}"
+                "ackDeadlineSeconds must be 1..={MAX_ACK_DEADLINE_SECONDS}"
             )));
         }
-        // The Subscription API schema bounds the requested window to 10 minutes through 31 days.
         if let Some(duration) = self.message_retention_duration {
-            if duration < LogicalDuration::from_seconds(600)
-                || duration > LogicalDuration::from_seconds(31 * 24 * 60 * 60)
-            {
-                return Err(PubSubError::invalid_argument(
-                    "messageRetentionDuration must be between 600 and 2678400 seconds",
-                ));
-            }
+            crate::configuration::validate_retention(duration)?;
         }
         if let Some(dl) = &self.dead_letter_policy {
-            if dl.max_delivery_attempts < MIN_DEAD_LETTER_ATTEMPTS
-                || dl.max_delivery_attempts > MAX_DEAD_LETTER_ATTEMPTS
-            {
-                return Err(PubSubError::invalid_argument(format!(
-                    "maxDeliveryAttempts must be {MIN_DEAD_LETTER_ATTEMPTS}..={MAX_DEAD_LETTER_ATTEMPTS}"
-                )));
+            if dl.max_delivery_attempts < MIN_DEAD_LETTER_ATTEMPTS {
+                return Err(PubSubError::invalid_argument(format!("The value for max_delivery_attempts is too small. You passed {} in the request, but the minimum value is {MIN_DEAD_LETTER_ATTEMPTS}.",dl.max_delivery_attempts)));
+            }
+            if dl.max_delivery_attempts > MAX_DEAD_LETTER_ATTEMPTS {
+                return Err(PubSubError::invalid_argument(format!("The value for max_delivery_attempts is too large. You passed {} in the request, but the maximum value is {MAX_DEAD_LETTER_ATTEMPTS}.",dl.max_delivery_attempts)));
             }
         }
         if let Some(rp) = &self.retry_policy {
             let maximum = LogicalDuration::from_seconds(MAX_RETRY_BACKOFF_SECONDS);
-            if rp.minimum_backoff.as_nanos() < 0
-                || rp.maximum_backoff.as_nanos() < 0
-                || rp.minimum_backoff > maximum
-                || rp.maximum_backoff > maximum
-            {
-                return Err(PubSubError::invalid_argument(
-                    "retry policy backoff must be between 0 and 600 seconds",
-                ));
+            for (value, field) in [
+                (rp.minimum_backoff, "minimum_backoff"),
+                (rp.maximum_backoff, "maximum_backoff"),
+            ] {
+                if value < LogicalDuration::ZERO || value > maximum {
+                    return Err(PubSubError::invalid_argument(format!("The value for {field} is out of bounds. You passed {} in the request, but the value must be between 0 and 10m.",crate::configuration::human_duration(value))));
+                }
             }
             if rp.minimum_backoff > rp.maximum_backoff {
-                return Err(PubSubError::invalid_argument(
-                    "retry policy minimumBackoff must not exceed maximumBackoff",
-                ));
+                return Err(PubSubError::invalid_argument(format!(
+                    "The specified maximum_backoff {} cannot be smaller than minimum_backoff {}.",
+                    crate::configuration::human_duration(rp.maximum_backoff),
+                    crate::configuration::human_duration(rp.minimum_backoff)
+                )));
+            }
+        }
+        Ok(())
+    }
+
+    /// The production-resolved retention window, independent of expiry enforcement.
+    #[must_use]
+    pub fn resolved_retention(&self) -> LogicalDuration {
+        self.message_retention_duration
+            .unwrap_or_else(|| LogicalDuration::from_seconds(604_800))
+    }
+
+    /// Validates the production expiration and retention relationship before state mutation.
+    pub fn validate_production_configuration(&self) -> Result<()> {
+        if !(MIN_ACK_DEADLINE_SECONDS..=MAX_ACK_DEADLINE_SECONDS)
+            .contains(&self.ack_deadline_seconds)
+        {
+            return Err(PubSubError::invalid_argument(format!("Invalid ack deadline given (ack_deadline={}). The ack deadline must be between 10 and 600 seconds.",self.ack_deadline_seconds)));
+        }
+        crate::configuration::validate_labels(&self.labels)?;
+        let ttl = self
+            .expiration_policy
+            .map_or(Some(LogicalDuration::from_seconds(2_678_400)), |policy| {
+                policy.ttl
+            });
+        if let Some(ttl) = ttl {
+            if ttl < LogicalDuration::from_seconds(86_400) {
+                return Err(PubSubError::invalid_argument(format!("The value for expiration duration is too small. You passed {} in the request, but the minimum value is 24h.", crate::configuration::human_duration(ttl))));
+            }
+            let retention = self.resolved_retention();
+            if retention > ttl {
+                return Err(PubSubError::invalid_argument(format!("The subscription's message retention duration ({} seconds) cannot be greater than the TTL in the subscription's expiration policy ({} seconds), since messages cannot be retained past subscription expiration.", retention.as_nanos() / 1_000_000_000, ttl.as_nanos() / 1_000_000_000)));
             }
         }
         Ok(())
@@ -292,6 +350,11 @@ impl SubscriptionState {
     /// Sets the push configuration (used by `ModifyPushConfig`).
     pub fn set_push_config(&mut self, push: PushConfig) {
         self.config.push_config = push;
+    }
+
+    /// Commits a fully validated replacement without changing retained-message state.
+    pub(crate) fn replace_config(&mut self, config: SubscriptionConfig) {
+        self.config = config;
     }
 
     /// Permanently detaches this subscription from a deleted topic incarnation.
@@ -842,6 +905,8 @@ mod tests {
 
     fn cfg() -> SubscriptionConfig {
         SubscriptionConfig {
+            labels: std::collections::BTreeMap::new(),
+            expiration_policy: None,
             retain_acked_messages: false,
             message_retention_duration: None,
             name: SubscriptionName::new("demo-app", "sub-one").unwrap(),
@@ -879,6 +944,29 @@ mod tests {
             .is_err());
         // An unset window is not validated against the bounds.
         assert!(cfg().validate().is_ok());
+    }
+
+    #[test]
+    fn recorded_policy_refusal_diagnostics() {
+        let mut config = cfg();
+        config.retry_policy = Some(RetryPolicy {
+            minimum_backoff: LogicalDuration::from_seconds(100),
+            maximum_backoff: LogicalDuration::from_seconds(50),
+        });
+        assert_eq!(
+            config.validate().unwrap_err().message(),
+            "The specified maximum_backoff 50s cannot be smaller than minimum_backoff 1m40s."
+        );
+        config.retry_policy = Some(RetryPolicy {
+            minimum_backoff: LogicalDuration::from_seconds(10),
+            maximum_backoff: LogicalDuration::from_seconds(601),
+        });
+        assert_eq!(config.validate().unwrap_err().message(),"The value for maximum_backoff is out of bounds. You passed 10m1s in the request, but the value must be between 0 and 10m.");
+        config.retry_policy = None;
+        for (attempts,description) in [(4,"The value for max_delivery_attempts is too small. You passed 4 in the request, but the minimum value is 5."),(101,"The value for max_delivery_attempts is too large. You passed 101 in the request, but the maximum value is 100.")] {
+            config.dead_letter_policy=Some(DeadLetterPolicy {dead_letter_topic:TopicName::new("demo-test","dead").unwrap(),max_delivery_attempts:attempts});
+            assert_eq!(config.validate().unwrap_err().message(),description);
+        }
     }
 
     fn stored(id: &str, data: &[u8], t: i64) -> StoredMessage {
@@ -1293,6 +1381,7 @@ mod tests {
     fn push_cfg() -> SubscriptionConfig {
         let mut config = cfg();
         config.push_config = PushConfig {
+            attributes: std::collections::BTreeMap::new(),
             push_endpoint: "http://127.0.0.1:1/push".to_owned(),
         };
         config
@@ -1467,6 +1556,7 @@ mod tests {
             CONFIGURED_INTERVAL_MILLIS,
         ));
         s.set_push_config(PushConfig {
+            attributes: std::collections::BTreeMap::new(),
             push_endpoint: "http://127.0.0.1:1/push".to_owned(),
         });
         let now = LogicalInstant::from_unix_seconds(100);

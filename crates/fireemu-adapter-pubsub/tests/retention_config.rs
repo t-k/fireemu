@@ -26,11 +26,15 @@ impl Drop for Harness {
 
 impl Harness {
     async fn new() -> Self {
+        Self::with_policy(fireemu_adapter_pubsub::PagingPolicy::Emulator).await
+    }
+
+    async fn with_policy(policy: fireemu_adapter_pubsub::PagingPolicy) -> Self {
         let clock = Arc::new(Mutex::new(VirtualClock::new(
             LogicalInstant::from_unix_seconds(1_700_000_000),
         )));
         let state = Arc::new(Mutex::new(PubSubState::new(99)));
-        let handle = PubSubHandle::new(state, clock, None);
+        let handle = PubSubHandle::new(state, clock, None).with_paging_policy(policy);
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
         let server_handle = handle.clone();
@@ -294,7 +298,7 @@ async fn retention_config_invalid_input_is_atomic_and_aliases_are_checked() {
     // A malformed duration (a negative second count, nanos outside 0..1e9) is refused as such; a
     // well-formed one outside ten minutes through thirty-one days is refused with the range.
     let malformed = "non-negative canonical";
-    let out_of_range = "between 600 and 2678400 seconds";
+    let out_of_range = "between 10m and 744h";
     for (invalid, expected) in [
         (duration(600, -1), malformed),
         (duration(600, 1_000_000_000), malformed),
@@ -356,10 +360,9 @@ async fn retention_config_invalid_input_is_atomic_and_aliases_are_checked() {
                 json!({"subscription": {"name": name}, "updateMask": field}),
             )
             .await;
-        assert_eq!(status, 501, "{body}");
+        assert_eq!(status, 200, "{body}");
     }
-    h.assert_config("demo-a", "invalid", true, Some(duration(2_678_400, 0)), 10)
-        .await;
+    h.assert_config("demo-a", "invalid", false, None, 10).await;
     h.shutdown().await;
 }
 
@@ -408,5 +411,248 @@ async fn retention_config_duration_codec_preserves_canonical_fraction_precision(
         assert_eq!(from_grpc.message_retention_duration, Some(expected));
         assert_eq!(from_grpc.retain_acked_messages, index % 2 == 0);
     }
+    h.shutdown().await;
+}
+
+#[tokio::test]
+async fn recorded_configuration_roundtrips_and_atomic_updates() {
+    let h = Harness::with_policy(fireemu_adapter_pubsub::PagingPolicy::Strict).await;
+    h.topic("demo-config").await;
+    let name = "projects/demo-config/subscriptions/configured";
+    let (status, created) = h.rest("PUT", &format!("/v1/{name}"), json!({"topic":"projects/demo-config/topics/events","labels":{"env":"test"},"expirationPolicy":{}})).await;
+    assert_eq!(status, 200, "{created}");
+    assert_eq!(created["labels"], json!({"env":"test"}));
+    assert_eq!(created["expirationPolicy"], json!({}));
+    let mut grpc = h.grpc().await;
+    let updated = grpc
+        .update_subscription(pb::UpdateSubscriptionRequest {
+            subscription: Some(pb::Subscription {
+                name: name.into(),
+                ack_deadline_seconds: 30,
+                labels: [("a".into(), "b".into())].into(),
+                retain_acked_messages: true,
+                ..Default::default()
+            }),
+            update_mask: Some(prost_types::FieldMask {
+                paths: vec![
+                    "ack_deadline_seconds".into(),
+                    "labels".into(),
+                    "retain_acked_messages".into(),
+                ],
+            }),
+        })
+        .await
+        .unwrap()
+        .into_inner();
+    assert_eq!(updated.ack_deadline_seconds, 30);
+    assert_eq!(updated.labels.get("a").map(String::as_str), Some("b"));
+    assert!(updated.retain_acked_messages);
+    assert_eq!(
+        updated.expiration_policy,
+        Some(pb::ExpirationPolicy { ttl: None })
+    );
+    let before = grpc
+        .get_subscription(pb::GetSubscriptionRequest {
+            subscription: name.into(),
+        })
+        .await
+        .unwrap()
+        .into_inner();
+    let error = grpc
+        .update_subscription(pb::UpdateSubscriptionRequest {
+            subscription: Some(pb::Subscription {
+                name: name.into(),
+                ack_deadline_seconds: 40,
+                expiration_policy: Some(pb::ExpirationPolicy {
+                    ttl: Some(duration(3600, 0)),
+                }),
+                ..Default::default()
+            }),
+            update_mask: Some(prost_types::FieldMask {
+                paths: vec!["ack_deadline_seconds".into(), "expiration_policy".into()],
+            }),
+        })
+        .await
+        .unwrap_err();
+    assert_eq!(error.code(), tonic::Code::InvalidArgument);
+    assert_eq!(error.message(), "The value for expiration duration is too small. You passed 1h in the request, but the minimum value is 24h.");
+    assert_eq!(
+        grpc.get_subscription(pb::GetSubscriptionRequest {
+            subscription: name.into()
+        })
+        .await
+        .unwrap()
+        .into_inner(),
+        before
+    );
+    let error = grpc
+        .update_subscription(pb::UpdateSubscriptionRequest {
+            subscription: Some(pb::Subscription {
+                name: name.into(),
+                enable_message_ordering: true,
+                ..Default::default()
+            }),
+            update_mask: Some(prost_types::FieldMask {
+                paths: vec!["enable_message_ordering".into()],
+            }),
+        })
+        .await
+        .unwrap_err();
+    assert_eq!(error.message(), "Invalid update_mask provided in the UpdateSubscriptionRequest: the 'enable_message_ordering' field in the Subscription is not mutable.");
+    h.shutdown().await;
+}
+
+#[tokio::test]
+async fn recorded_https_push_configuration_keeps_delivery_guard() {
+    let h = Harness::with_policy(fireemu_adapter_pubsub::PagingPolicy::Strict).await;
+    h.topic("demo-push-config").await;
+    let name = "projects/demo-push-config/subscriptions/configured";
+    let (status, created) = h.rest("PUT", &format!("/v1/{name}"), json!({"topic":"projects/demo-push-config/topics/events","pushConfig":{"pushEndpoint":"https://example.com/probe","attributes":{"x-goog-version":"v1"}}})).await;
+    assert_eq!(status, 200, "{created}");
+    assert_eq!(
+        created["pushConfig"],
+        json!({"pushEndpoint":"https://example.com/probe","attributes":{"x-goog-version":"v1"}})
+    );
+    let (_, get) = h.rest("GET", &format!("/v1/{name}"), json!({})).await;
+    assert_eq!(
+        get["pushConfig"],
+        json!({"pushEndpoint":"https://example.com/probe"})
+    );
+    let mut grpc = h.grpc().await;
+    let error = grpc
+        .pull(pb::PullRequest {
+            subscription: name.into(),
+            max_messages: 1,
+            ..Default::default()
+        })
+        .await
+        .unwrap_err();
+    assert_eq!(error.code(), tonic::Code::FailedPrecondition);
+    assert_eq!(
+        error.message(),
+        "This method is not supported for this subscription type."
+    );
+    grpc.modify_push_config(pb::ModifyPushConfigRequest {
+        subscription: name.into(),
+        push_config: Some(pb::PushConfig::default()),
+    })
+    .await
+    .unwrap();
+    let (_, get) = h.rest("GET", &format!("/v1/{name}"), json!({})).await;
+    assert_eq!(get["pushConfig"], json!({}));
+    h.shutdown().await;
+}
+
+#[tokio::test]
+async fn recorded_topic_retention_is_persisted_and_bounded() {
+    let h = Harness::with_policy(fireemu_adapter_pubsub::PagingPolicy::Strict).await;
+    let name = "projects/demo-topic-config/topics/retained";
+    let (status, created) = h
+        .rest(
+            "PUT",
+            &format!("/v1/{name}"),
+            json!({"messageRetentionDuration":"600.500s"}),
+        )
+        .await;
+    assert_eq!(status, 200, "{created}");
+    assert_eq!(created["messageRetentionDuration"], "600.500s");
+    let (_, get) = h.rest("GET", &format!("/v1/{name}"), json!({})).await;
+    assert_eq!(get, created);
+    let (status, error) = h
+        .rest(
+            "PUT",
+            "/v1/projects/demo-topic-config/topics/too-short",
+            json!({"messageRetentionDuration":"599s"}),
+        )
+        .await;
+    assert_eq!(status, 400, "{error}");
+    assert_eq!(error["error"]["message"],"The value for message retention duration is out of bounds. You passed 9m59s in the request, but the value must be between 10m and 744h.");
+    h.shutdown().await;
+}
+
+#[tokio::test]
+async fn recorded_resource_names_and_label_refusals() {
+    let h = Harness::with_policy(fireemu_adapter_pubsub::PagingPolicy::Strict).await;
+    for id in ["ab", "goog-probe", "1-leading-digit", "bad$character"] {
+        let name = format!("projects/demo-names/topics/{id}");
+        let (status, error) = h.rest("PUT", &format!("/v1/{name}"), json!({})).await;
+        assert_eq!(status, 400, "{error}");
+        assert_eq!(error["error"]["message"],format!("Invalid resource name given (name={name}). Refer to https://cloud.google.com/pubsub/docs/pubsub-basics#resource_names for more information."));
+    }
+    h.shutdown().await;
+}
+
+#[tokio::test]
+async fn recorded_label_refusals() {
+    let h = Harness::with_policy(fireemu_adapter_pubsub::PagingPolicy::Strict).await;
+    let (status, error) = h
+        .rest(
+            "PUT",
+            "/v1/projects/demo-names/topics/upper-label",
+            json!({"labels":{"Upper":"x"}}),
+        )
+        .await;
+    assert_eq!(status, 400, "{error}");
+    assert_eq!(
+        error["error"]["message"],
+        r#"You have passed an invalid argument to the service (argument=Invalid labels: Invalid field "labels"; key "Upper" does not conform to regular expression "[\p{Ll}\p{Lo}][\p{Ll}\p{Lo}\p{N}_-]{0,62}"; first character "U" is not a non-uppercased letter (Unicode character class Ll or Lo))."#
+    );
+    h.shutdown().await;
+}
+
+#[tokio::test]
+async fn official_emulator_ack_deadline_admission_preserves_completed_inputs() {
+    for policy in [
+        fireemu_adapter_pubsub::PagingPolicy::Strict,
+        fireemu_adapter_pubsub::PagingPolicy::Emulator,
+    ] {
+        let h = Harness::with_policy(policy).await;
+        h.topic("demo-profile").await;
+        let (status,body)=h.rest("PUT","/v1/projects/demo-profile/subscriptions/short-ack",json!({"topic":"projects/demo-profile/topics/events","ackDeadlineSeconds":9,"labels":{"Upper":"x"},"expirationPolicy":{"ttl":"3600s"}})).await;
+        if policy == fireemu_adapter_pubsub::PagingPolicy::Emulator {
+            assert_eq!(status, 200, "{body}");
+            assert_eq!(body["ackDeadlineSeconds"], 9);
+        } else {
+            assert_eq!(status, 400, "{body}");
+        }
+        h.shutdown().await;
+    }
+}
+
+#[tokio::test]
+async fn recorded_rest_schema_errors_preserve_structured_details() {
+    let h = Harness::with_policy(fireemu_adapter_pubsub::PagingPolicy::Strict).await;
+    let (status, error) = h
+        .rest(
+            "PUT",
+            "/v1/projects/demo-schema/topics/unknown",
+            json!({"noSuchField":true}),
+        )
+        .await;
+    assert_eq!(status, 400);
+    let description =
+        "Invalid JSON payload received. Unknown name \"noSuchField\": Cannot find field.";
+    assert_eq!(error["error"]["message"], description);
+    assert_eq!(
+        error["error"]["details"],
+        json!([{"@type":"type.googleapis.com/google.rpc.BadRequest","fieldViolations":[{"description":description}]}])
+    );
+    h.topic("demo-schema").await;
+    let name = "projects/demo-schema/subscriptions/configured";
+    h.rest(
+        "PUT",
+        &format!("/v1/{name}"),
+        json!({"topic":"projects/demo-schema/topics/events"}),
+    )
+    .await;
+    let (status, error) = h
+        .rest(
+            "PATCH",
+            &format!("/v1/{name}"),
+            json!({"subscription":{"name":name},"updateMask":""}),
+        )
+        .await;
+    assert_eq!(status, 400);
+    assert_eq!(error["error"]["message"],"The update_mask in the UpdateSubscriptionRequest must be set, and must contain a non-empty paths list.");
     h.shutdown().await;
 }

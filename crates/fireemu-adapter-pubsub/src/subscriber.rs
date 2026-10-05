@@ -15,8 +15,8 @@ use fireemu_proto_pubsub::google::pubsub::v1 as pb;
 use pb::subscriber_server::Subscriber;
 
 use crate::convert::{
-    from_timestamp, received_to_proto, snapshot_to_proto, status, subscription_from_proto,
-    subscription_to_proto, validate_push_config_options,
+    duration_from_proto, from_timestamp, push_config_from_proto, received_to_proto,
+    snapshot_to_proto, status, subscription_to_proto,
 };
 use crate::PubSubHandle;
 
@@ -55,6 +55,8 @@ fn project_of(resource: &str) -> Result<&str, Status> {
 }
 
 fn validate_update_paths(paths: &[String]) -> Result<(), Status> {
+    let empty = [String::new()];
+    let paths = if paths.is_empty() { &empty } else { paths };
     crate::convert::validate_subscription_update_paths(paths).map_err(|error| status(&error))
 }
 
@@ -76,21 +78,13 @@ fn update_ack_deadline(paths: &[String], sub: &pb::Subscription) -> Result<Optio
 fn update_push_config(
     paths: &[String],
     sub: &pb::Subscription,
+    policy: crate::PagingPolicy,
 ) -> Result<Option<PushConfig>, Status> {
     paths
         .iter()
         .any(|path| path == "push_config")
         .then(|| {
-            validate_push_config_options(sub.push_config.as_ref())
-                .map_err(|error| status(&error))?;
-            let endpoint = sub
-                .push_config
-                .as_ref()
-                .map_or_else(String::new, |config| config.push_endpoint.clone());
-            crate::push::validate_endpoint(&endpoint).map_err(Status::invalid_argument)?;
-            Ok(PushConfig {
-                push_endpoint: endpoint,
-            })
+            push_config_from_proto(sub.push_config.as_ref(), policy).map_err(|error| status(&error))
         })
         .transpose()
 }
@@ -123,7 +117,9 @@ impl Subscriber for SubscriberService {
         request: Request<pb::Subscription>,
     ) -> Result<Response<pb::Subscription>, Status> {
         let sub = request.into_inner();
-        let config = subscription_from_proto(&sub).map_err(|e| status(&e))?;
+        let config =
+            crate::convert::subscription_from_proto_with_policy(&sub, self.handle.paging_policy)
+                .map_err(|e| status(&e))?;
         let name = config.name.clone();
         let topic = config.topic.clone();
         self.handle
@@ -132,7 +128,21 @@ impl Subscriber for SubscriberService {
             .map_err(|e| status(&e))?;
         self.handle.retry_pending_dead_letters();
         self.handle.schedule_push(&topic);
-        Ok(Response::new(self.subscription_proto(&name)?))
+        let mut response = self.subscription_proto(&name)?;
+        if self.handle.paging_policy == crate::PagingPolicy::Strict
+            && !response
+                .push_config
+                .as_ref()
+                .is_none_or(|push| push.push_endpoint.is_empty())
+        {
+            response
+                .push_config
+                .as_mut()
+                .expect("push configuration")
+                .attributes
+                .insert("x-goog-version".into(), "v1".into());
+        }
+        Ok(Response::new(response))
     }
 
     async fn get_subscription(
@@ -157,15 +167,78 @@ impl Subscriber for SubscriberService {
             .update_mask
             .ok_or_else(|| Status::invalid_argument("update_mask is required"))?
             .paths;
-        if paths.is_empty() {
-            return Err(Status::invalid_argument("update_mask must not be empty"));
-        }
         validate_update_paths(&paths)?;
         let ack_deadline_seconds = update_ack_deadline(&paths, &sub)?;
-        let push_config = update_push_config(&paths, &sub)?;
+        let strict = self.handle.paging_policy == crate::PagingPolicy::Strict;
+        if strict && paths.iter().any(|path| path == "ack_deadline_seconds") {
+            crate::convert::validate_strict_ack_deadline(sub.ack_deadline_seconds)
+                .map_err(|error| status(&error))?;
+        }
+        let push_config = update_push_config(&paths, &sub, self.handle.paging_policy)?;
+        let selected = |path: &str| paths.iter().any(|value| value == path);
+        let retention = selected("message_retention_duration")
+            .then(|| {
+                sub.message_retention_duration
+                    .as_ref()
+                    .map(duration_from_proto)
+                    .transpose()
+            })
+            .transpose()
+            .map_err(|error| status(&error))?;
+        let expiration = selected("expiration_policy")
+            .then(|| {
+                sub.expiration_policy
+                    .as_ref()
+                    .map(|policy| {
+                        Ok::<_, fireemu_core_pubsub::PubSubError>(
+                            fireemu_core_pubsub::ExpirationPolicy {
+                                ttl: policy.ttl.as_ref().map(duration_from_proto).transpose()?,
+                            },
+                        )
+                    })
+                    .transpose()
+            })
+            .transpose()
+            .map_err(|error| status(&error))?;
+        // Parse only mask-selected policies; invalid values outside the mask are ignored.
+        let parsed_policies = crate::convert::subscription_from_proto(&pb::Subscription {
+            name: sub.name.clone(),
+            topic: self
+                .handle
+                .state()
+                .subscription_config(&name)
+                .map_err(|error| status(&error))?
+                .topic
+                .to_full(),
+            retry_policy: selected("retry_policy")
+                .then_some(sub.retry_policy)
+                .flatten(),
+            dead_letter_policy: selected("dead_letter_policy")
+                .then(|| sub.dead_letter_policy.clone())
+                .flatten(),
+            ..Default::default()
+        })
+        .map_err(|error| status(&error))?;
+        let update = fireemu_core_pubsub::SubscriptionUpdate {
+            ack_deadline_seconds,
+            push_config,
+            labels: selected("labels").then(|| {
+                sub.labels
+                    .iter()
+                    .map(|(key, value)| (key.clone(), value.clone()))
+                    .collect()
+            }),
+            retain_acked_messages: selected("retain_acked_messages")
+                .then_some(sub.retain_acked_messages),
+            message_retention_duration: retention,
+            expiration_policy: expiration,
+            retry_policy: selected("retry_policy").then_some(parsed_policies.retry_policy),
+            dead_letter_policy: selected("dead_letter_policy")
+                .then_some(parsed_policies.dead_letter_policy),
+        };
         self.handle
             .state()
-            .update_subscription(&name, ack_deadline_seconds, push_config)
+            .update_subscription_configuration(&name, update, strict)
             .map_err(|e| status(&e))?;
         let topic = self
             .handle
@@ -175,7 +248,15 @@ impl Subscriber for SubscriberService {
             .topic
             .clone();
         self.handle.schedule_push(&topic);
-        Ok(Response::new(self.subscription_proto(&name)?))
+        let mut response = self.subscription_proto(&name)?;
+        if strict {
+            response
+                .push_config
+                .get_or_insert_with(Default::default)
+                .attributes
+                .insert("x-goog-version".into(), "v1".into());
+        }
+        Ok(Response::new(response))
     }
 
     async fn list_subscriptions(
@@ -267,6 +348,18 @@ impl Subscriber for SubscriberService {
     ) -> Result<Response<pb::PullResponse>, Status> {
         let req = request.into_inner();
         let name = SubscriptionName::parse(&req.subscription).map_err(|e| status(&e))?;
+        if self.handle.paging_policy == crate::PagingPolicy::Strict
+            && self
+                .handle
+                .state()
+                .subscription_config(&name)
+                .map_err(|error| status(&error))?
+                .is_push()
+        {
+            return Err(Status::failed_precondition(
+                "This method is not supported for this subscription type.",
+            ));
+        }
         let max = if self.handle.paging_policy == crate::PagingPolicy::Strict {
             crate::admission::max_messages(i64::from(req.max_messages))
                 .map_err(|error| status(&error))?
@@ -365,16 +458,12 @@ impl Subscriber for SubscriberService {
     ) -> Result<Response<()>, Status> {
         let req = request.into_inner();
         let name = SubscriptionName::parse(&req.subscription).map_err(|e| status(&e))?;
-        validate_push_config_options(req.push_config.as_ref()).map_err(|e| status(&e))?;
-        let push_endpoint = req
-            .push_config
-            .as_ref()
-            .map_or_else(String::new, |config| config.push_endpoint.clone());
-        crate::push::validate_endpoint(&push_endpoint).map_err(Status::invalid_argument)?;
+        let push = push_config_from_proto(req.push_config.as_ref(), self.handle.paging_policy)
+            .map_err(|error| status(&error))?;
         self.handle
             .state()
-            .update_push_config(&name, PushConfig { push_endpoint })
-            .map_err(|e| status(&e))?;
+            .update_push_config(&name, push)
+            .map_err(|error| status(&error))?;
         let topic = self
             .handle
             .state()

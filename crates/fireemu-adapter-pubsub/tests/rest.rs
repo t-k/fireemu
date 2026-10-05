@@ -356,7 +356,10 @@ async fn rest_rejects_each_non_default_topic_option() {
         ),
         ("tags", json!({"tags": {"env": "test"}}), "tags"),
     ];
-    for (id, options, field) in cases {
+    for (id, options, field) in cases
+        .into_iter()
+        .filter(|(_, _, field)| *field != "message_retention_duration")
+    {
         let path = format!("/v1/projects/demo-app/topics/rest-rejected-{id}");
         let (status, error) = rest_request(address, "PUT", &path, options).await;
         assert_eq!(status, 501, "{id}: {error}");
@@ -475,7 +478,7 @@ async fn a_rejected_rest_subscription_update_keeps_the_previous_configuration() 
             "subscription": {
                 "name": "projects/demo-app/subscriptions/events-sub",
                 "ackDeadlineSeconds": 20,
-                "pushConfig": {"pushEndpoint": "https://example.com/not-loopback"}
+                "pushConfig": {"pushEndpoint": "not a url"}
             },
             "updateMask": "ackDeadlineSeconds,pushConfig"
         }),
@@ -702,10 +705,10 @@ async fn rest_update_mask_is_atomic_scoped_and_rejects_unsupported_fields() {
         ),
         (
             json!({
-                "subscription": {"retryPolicy": {"minimumBackoff": "1s"}},
+                "subscription": {"retryPolicy": {"minimumBackoff": "601s"}},
                 "updateMask": "retryPolicy"
             }),
-            501,
+            400,
         ),
         (
             json!({
@@ -728,7 +731,7 @@ async fn rest_update_mask_is_atomic_scoped_and_rejects_unsupported_fields() {
                 name: "projects/demo-app/subscriptions/update-wire".to_owned(),
                 ack_deadline_seconds: 30,
                 push_config: Some(pb::PushConfig {
-                    push_endpoint: "https://example.com/rejected".to_owned(),
+                    push_endpoint: "not a url".to_owned(),
                     ..Default::default()
                 }),
                 ..Default::default()
@@ -908,7 +911,10 @@ async fn rest_and_grpc_masks_reset_ack_deadline_and_push_config_to_defaults() {
     .await;
     assert_eq!(status, 200, "{reset}");
     assert_eq!(reset["ackDeadlineSeconds"], 10);
-    assert_eq!(reset["pushConfig"], json!({}));
+    assert_eq!(
+        reset["pushConfig"],
+        json!({"attributes":{"x-goog-version":"v1"}})
+    );
 
     let mut subscriber = SubscriberClient::new(grpc_channel(address).await);
     let reset = subscriber
@@ -925,7 +931,13 @@ async fn rest_and_grpc_masks_reset_ack_deadline_and_push_config_to_defaults() {
         .unwrap()
         .into_inner();
     assert_eq!(reset.ack_deadline_seconds, 10);
-    assert_eq!(reset.push_config, Some(pb::PushConfig::default()));
+    assert_eq!(
+        reset.push_config,
+        Some(pb::PushConfig {
+            attributes: [("x-goog-version".into(), "v1".into())].into(),
+            ..Default::default()
+        })
+    );
 }
 
 #[tokio::test]
@@ -1145,7 +1157,14 @@ async fn both_transports_refuse_every_declared_but_unsupported_subscription_opti
     for (index, (json_field, proto_field, value, set)) in unsupported_subscription_options()
         .into_iter()
         .filter(|(_, field, _, _)| {
-            !["retain_acked_messages", "message_retention_duration"].contains(field)
+            ![
+                "retain_acked_messages",
+                "message_retention_duration",
+                "labels",
+                "expiration_policy",
+                "state",
+            ]
+            .contains(field)
         })
         .enumerate()
     {
@@ -1240,7 +1259,18 @@ async fn both_transports_refuse_every_declared_but_unsupported_update_mask_path(
     assert_eq!(status, 200);
     let mut subscriber = SubscriberClient::new(grpc_channel(address).await);
 
-    for (json_field, proto_field, value, set) in unsupported_subscription_options() {
+    for (json_field, proto_field, value, set) in unsupported_subscription_options()
+        .into_iter()
+        .filter(|(_, field, _, _)| {
+            ![
+                "retain_acked_messages",
+                "message_retention_duration",
+                "labels",
+                "expiration_policy",
+            ]
+            .contains(field)
+        })
+    {
         let (status, error) = rest_request(
             address,
             "PATCH",
@@ -1693,8 +1723,10 @@ async fn both_transports_refuse_every_declared_but_unsupported_topic_option_on_c
     let address = start().await;
     let mut publisher = PublisherClient::new(grpc_channel(address).await);
 
-    for (index, (json_field, proto_field, value, set)) in
-        unsupported_topic_options().into_iter().enumerate()
+    for (index, (json_field, proto_field, value, set)) in unsupported_topic_options()
+        .into_iter()
+        .filter(|(_, field, _, _)| *field != "message_retention_duration")
+        .enumerate()
     {
         let rest_path = format!("/v1/projects/demo-app/topics/topic-matrix-rest-{index}");
         let (status, error) =
@@ -2025,7 +2057,7 @@ async fn a_nested_update_mask_path_is_refused_under_its_protobuf_name_on_both_tr
         json!({"subscription": {}, "updateMask": "pushConfig.oidcToken"}),
     )
     .await;
-    assert_eq!(status, 501, "{error}");
+    assert_eq!(status, 400, "{error}");
     let message = error["error"]["message"].as_str().unwrap().to_owned();
     assert!(message.contains("push_config.oidc_token"), "{message}");
 
@@ -2042,7 +2074,7 @@ async fn a_nested_update_mask_path_is_refused_under_its_protobuf_name_on_both_tr
         })
         .await
         .unwrap_err();
-    assert_eq!(grpc_error.code(), tonic::Code::Unimplemented);
+    assert_eq!(grpc_error.code(), tonic::Code::InvalidArgument);
     assert_eq!(grpc_error.message(), message);
 }
 

@@ -46,18 +46,37 @@ impl Publisher for PublisherService {
         validate_topic_options(&topic).map_err(|e| status(&e))?;
         let name = TopicName::parse(&topic.name).map_err(|e| status(&e))?;
         let labels = topic.labels.into_iter().collect();
+        if self.handle.paging_policy == crate::PagingPolicy::Strict {
+            fireemu_core_pubsub::configuration::validate_labels(&labels)
+                .map_err(|error| status(&error))?;
+        }
         self.handle
             .state()
-            .create_topic(name.clone(), labels)
+            .create_topic_with_retention(
+                name.clone(),
+                labels,
+                topic
+                    .message_retention_duration
+                    .as_ref()
+                    .map(crate::convert::duration_from_proto)
+                    .transpose()
+                    .map_err(|error| status(&error))?,
+            )
             .map_err(|e| status(&e))?;
         self.handle.retry_pending_dead_letters();
-        let created = topic_to_proto(
+        let mut created = topic_to_proto(
             &name,
             self.handle
                 .state()
                 .topic_labels(&name)
                 .map_err(|e| status(&e))?,
         );
+        created.message_retention_duration = self
+            .handle
+            .state()
+            .topic_retention(&name)
+            .map_err(|error| status(&error))?
+            .map(crate::convert::duration_to_proto);
         Ok(Response::new(created))
     }
 
@@ -103,7 +122,12 @@ impl Publisher for PublisherService {
         let name = TopicName::parse(&request.into_inner().topic).map_err(|e| status(&e))?;
         let state = self.handle.state();
         let labels = state.topic_labels(&name).map_err(|e| status(&e))?;
-        Ok(Response::new(topic_to_proto(&name, labels)))
+        let mut topic = topic_to_proto(&name, labels);
+        topic.message_retention_duration = state
+            .topic_retention(&name)
+            .map_err(|error| status(&error))?
+            .map(crate::convert::duration_to_proto);
+        Ok(Response::new(topic))
     }
 
     async fn list_topics(
@@ -118,7 +142,12 @@ impl Publisher for PublisherService {
             .iter()
             .map(|n| {
                 let labels = state.topic_labels(n).cloned().unwrap_or_default();
-                topic_to_proto(n, &labels)
+                let mut topic = topic_to_proto(n, &labels);
+                topic.message_retention_duration = state
+                    .topic_retention(n)
+                    .unwrap_or_default()
+                    .map(crate::convert::duration_to_proto);
+                topic
             })
             .collect();
         let page = paginate(

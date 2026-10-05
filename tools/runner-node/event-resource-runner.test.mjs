@@ -292,7 +292,7 @@ for (const form of ['endpoint', 'legacy']) {
     const source='//pubsub.googleapis.com/projects/demo-app/topics/t';
     const event={...base,source,project:'demo-app',database:'(default)',document:'items/one',type:'google.cloud.pubsub.topic.v1.messagePublished',data:{message:{data:'',messageId:'m1'}}};
     assert.equal((await f.invoke('topic','pubsub',event)).ok,true);
-    assert.deepEqual((await f.calls()).at(-1).context.resource,{service:'pubsub.googleapis.com',name:'projects/demo-app/topics/t'},'Firestore source projection must not apply to PubSub');
+    assert.deepEqual((await f.calls()).at(-1).context.resource,{service:'pubsub.googleapis.com',name:'projects/demo-app/topics/t',type:'type.googleapis.com/google.pubsub.v1.PubsubMessage'},'Firestore source projection must not apply to PubSub');
   });
 
   test(`v1 ${form}: typed Firestore metadata projects the document resource independently of Gen2 source`, { timeout: 10000 }, async t => {
@@ -413,7 +413,7 @@ for (const form of ['endpoint', 'legacy']) {
     assert.deepEqual(calls.map(call => call.name), events.map(([name]) => name));
     assert.deepEqual(calls.map(call => call.context.eventId), events.map(() => id));
     // Storage prints its legacy timestamp with exactly three fraction digits (observed 2026-10-01).
-    assert.deepEqual(calls.map(call => call.context.timestamp), ['2026-09-30T12:03:18.846Z', time, time]);
+    assert.deepEqual(calls.map(call => call.context.timestamp), ['2026-09-30T12:03:18.846Z', '2026-09-30T12:03:18.846Z', time]);
   });
 
   test(`v1 ${form}: a Firestore and an Auth legacy context carry the empty notSupported member production sends, Storage and Pub/Sub do not`, { timeout: 10000 }, async t => {
@@ -602,3 +602,56 @@ test('v2: every one of the 44 recorded Storage frames is handed over in its reco
     assert.deepEqual(Object.keys(call.data.data), v5Orders.frames[index].members, v5Orders.frames[index].insertId);
   });
 });
+for (const form of ['endpoint', 'legacy']) {
+  test(`v1 ${form}: a Pub/Sub legacy context has the members and forms of the recorded production context`, { timeout: 10000 }, async t => {
+    // Production (functions-events-formal run a9621bfae74fe9bc, transport/responses/0282-capture.list.json, handler
+    // pubsubPublishedV1): eventId is the message id (seventeen decimals), the timestamp has exactly three fraction
+    // digits, and the resource carries the message type next to the topic and the service.
+    const f = await start(t, [entry('onPublish', 'google.pubsub.topic.publish', 'projects/fireemu-oracle-events/topics/fe-events-primary', form)]);
+    const event = { id: '22255693239595822', type: 'google.cloud.pubsub.topic.v1.messagePublished', time: '2026-10-04T19:48:48.931482Z', source: '//pubsub.googleapis.com/projects/fireemu-oracle-events/topics/fe-events-primary', data: { message: { data: '', attributes: {}, messageId: '22255693239595822' } } };
+    assert.equal((await f.invoke('onPublish', 'pubsub', event)).ok, true);
+    const context = (await f.calls()).at(-1).context;
+    assert.equal(context.eventId, '22255693239595822');
+    assert.equal(context.timestamp, '2026-10-04T19:48:48.931Z');
+    assert.equal(context.eventType, 'google.pubsub.topic.publish');
+    assert.deepEqual(context.resource, { name: 'projects/fireemu-oracle-events/topics/fe-events-primary', service: 'pubsub.googleapis.com', type: 'type.googleapis.com/google.pubsub.v1.PubsubMessage' });
+    // The timestamp is the publish instant of the message, not the admission instant a Storage event carries.
+    assert.equal((await f.invoke('onPublish', 'pubsub', event, { admittedAt: '2030-01-01T00:00:00.123Z' })).ok, true);
+    assert.equal((await f.calls()).at(-1).context.timestamp, '2026-10-04T19:48:48.931Z');
+  });
+}
+
+// The 8 recorded 1st gen Pub/Sub frames of FE v5 (run functions-events-formal-20261004T182904Z-a9621bfae74fe9bc, frames 133, 135, 270, 272)
+// and FE v7 (run functions-events-formal-20261005T041505Z-d3fd3faa3e0dc702, frames 135, 137, 274, 276), each next to the 2nd gen frame of the
+// same message (the following index). The recorded handler prints the context through the recorder's own report.js `v1Context()`, which builds a
+// new object with its members in a fixed order: the order of the five members is the recorder's, not evidence of production's. What is evidence is
+// the values, the member set, and the order inside `resource` (an object the recorder passes through: name, service, type).
+const pubsubFrames = JSON.parse(await readFile(new URL('../../crates/fireemu-adapter-functions/tests/fixtures/production-pubsub-v5-v7-frames.json', import.meta.url), 'utf8')).frames;
+for (const form of ['endpoint', 'legacy']) {
+  test(`v1 ${form}: every recorded production Pub/Sub context is what the runner hands a handler: the same members and values, and the resource members in production's order`, { timeout: 10000 }, async t => {
+    const topic = 'projects/fireemu-oracle-events/topics/fe-events-primary';
+    const f = await start(t, [entry('onPublish', 'google.pubsub.topic.publish', topic, form)]);
+    const pairs = pubsubFrames.filter(x => x.handler === 'pubsubPublishedV1').map(v1 => [v1, pubsubFrames.find(x => x.run === v1.run && x.index === v1.index + 1)]);
+    assert.equal(pairs.length, 8);
+    for (const [v1, v2] of pairs) {
+      const label = `${v1.run} frame ${v1.index}`;
+      // The runtime hands the runner the CloudEvent it builds: the 2nd gen frame's event, which carries the same id and instant.
+      const event = { id: v2.event.id, type: v2.event.type, time: v2.event.time, source: v2.event.source, data: { message: v2.event.data.message } };
+      assert.equal((await f.invoke('onPublish', 'pubsub', event)).ok, true, label);
+      const call = (await f.calls()).at(-1);
+      const recorded = v1.event.context;
+      // The five members production hands over, and nothing else (no notSupported). Their order here is the runner's own choice,
+      // kept as the recorder prints it; the order inside `resource` below is recorded.
+      const handed = ['eventId', 'timestamp', 'eventType', 'resource', 'params'];
+      assert.deepEqual(Object.keys(call.context), handed, label);
+      assert.deepEqual(Object.keys(call.context).map(key => recorded[key] !== undefined), handed.map(() => true), label);
+      assert.deepEqual(call.context, Object.fromEntries(handed.map(key => [key, recorded[key]])), label);
+      assert.match(call.context.eventId, /^\d{17}$/, label);
+      assert.match(call.context.timestamp, /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z$/, label);
+      assert.deepEqual(Object.keys(call.context.resource), ['name', 'service', 'type'], label);
+      // The SDK's own Message prints only data and attributes (its toJSON); what the runner hands it carries both.
+      assert.equal(call.data.data, v1.event.data.data, label);
+      assert.deepEqual(call.data.attributes, v1.event.data.attributes, label);
+    }
+  });
+}

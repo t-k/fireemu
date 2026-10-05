@@ -11,7 +11,9 @@ use fireemu_core_functions::event::{
     auth_attributes, firestore_attributes, pubsub_attributes, schedule_attributes,
     storage_attributes, with_auth_context,
 };
-use fireemu_core_functions::manifest::{AuthEvent, DocumentEvent, ObjectEvent};
+use fireemu_core_functions::manifest::{
+    AuthEvent, DocumentEvent, FunctionGeneration, FunctionSpec, ObjectEvent, Trigger,
+};
 use fireemu_core_storage::etag::production_etag;
 use fireemu_core_storage::store::{ObjectMetadata, StorageEvent};
 use fireemu_core_types::time::LogicalInstant;
@@ -368,20 +370,51 @@ pub fn storage_event(
 
 /// A Pub/Sub message event (`MessagePublishedData` of `onMessagePublished`): `message` is
 /// the published message (`data` base64, `attributes`, `orderingKey`).
+///
+/// The shape is the recorded production one (FUNCTIONS-EVENTS formal record, 2026-10-04, run
+/// `a9621bfae74fe9bc`, frame `6ac2a47f0000967f445e8b09`): `id` is the message id, `time` and
+/// `message.publishTime` are the publish instant with exactly three fractional digits (cut, not
+/// rounded), and the event has no `datacontenttype` (the frame's `event.datacontenttype` is
+/// null). The subscription is Eventarc's own one for the function, named as production names it
+/// (see [`eventarc_subscription_id`]).
 #[must_use]
 pub fn pubsub_event(
     id: &str,
     project: &str,
+    region: &str,
+    function: &str,
+    topic: &str,
+    message: &Value,
+    time: LogicalInstant,
+) -> Value {
+    pubsub_event_with_subscription(
+        id,
+        project,
+        &eventarc_subscription_id(project, region, function),
+        topic,
+        message,
+        time,
+    )
+}
+
+/// [`pubsub_event`] with the subscription id the event names given: the provisioned
+/// subscription of the function (see [`function_subscription_id`]).
+#[must_use]
+pub fn pubsub_event_with_subscription(
+    id: &str,
+    project: &str,
+    subscription_id: &str,
     topic: &str,
     message: &Value,
     time: LogicalInstant,
 ) -> Value {
     let attrs = pubsub_attributes(project, topic);
+    let published = object_time(time);
     let mut msg = json!({
         "messageId": id,
         "data": message.get("data").cloned().unwrap_or(Value::String(String::new())),
         "attributes": message.get("attributes").cloned().unwrap_or_else(|| json!({})),
-        "publishTime": rfc3339(time),
+        "publishTime": published,
     });
     if let Some(key) = message.get("orderingKey").and_then(Value::as_str) {
         msg["orderingKey"] = Value::String(key.to_owned());
@@ -391,13 +424,85 @@ pub fn pubsub_event(
         "id": id,
         "source": attrs.source,
         "type": attrs.event_type,
-        "time": rfc3339(time),
-        "datacontenttype": "application/json",
+        "time": published,
         "data": {
             "message": msg,
-            "subscription": format!("projects/{project}/subscriptions/emulator-sub-{topic}"),
+            "subscription": format!("projects/{project}/subscriptions/{subscription_id}"),
         },
     })
+}
+
+/// How the subscription of a Pub/Sub function is named: by profile.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum SubscriptionNaming {
+    /// Production's name for a 2nd gen Pub/Sub function, `eventarc-<region>-<function
+    /// lowercased>-<6 digits>-sub-<3 digits>` (the strict profile). One subscription per function.
+    #[default]
+    Eventarc,
+    /// The official emulator's `emulator-sub-<topic>` (the emulator profile), one per topic.
+    EmulatorTopic,
+}
+
+/// The id of the subscription provisioned for `function` on `topic`, and named by the events of
+/// that function. A 2nd gen Pub/Sub function takes Eventarc's name under
+/// [`SubscriptionNaming::Eventarc`] (recorded for 2nd gen only: FE v5 and v7); every other
+/// function (a scheduled one included), and every function under
+/// [`SubscriptionNaming::EmulatorTopic`], takes
+/// `emulator-sub-<topic>`. The numbers of the Eventarc name are derived from the project, the
+/// region and the function, so a deployment keeps its name across runs.
+#[must_use]
+pub fn function_subscription_id(
+    naming: SubscriptionNaming,
+    project: &str,
+    function: &FunctionSpec,
+    topic: &str,
+) -> String {
+    match naming {
+        SubscriptionNaming::Eventarc
+            if function.generation == FunctionGeneration::Second
+                && matches!(function.trigger, Trigger::PubSub { .. }) =>
+        {
+            eventarc_subscription_id(project, &function.region, &function.name)
+        }
+        _ => format!("emulator-sub-{topic}"),
+    }
+}
+
+/// The id of the subscription Eventarc creates for a 2nd gen Pub/Sub function.
+///
+/// Production names it `eventarc-<region>-<function id, lowercased>-<6 digits>-sub-<3 digits>`
+/// (14 samples of the FUNCTIONS-EVENTS formal record, run `a9621bfae74fe9bc` among them:
+/// `eventarc-us-central1-pubsubpublishedv2-834054-sub-834`). The two numbers are drawn at random
+/// per deployment and are independent of each other. The emulator derives both from a stable
+/// hash of (project, region, function id), so a function keeps its name across runs and two
+/// functions do not share one. A comparison with production must mask the two numbers and still
+/// check the shape: 6 and 3 digits, the lowercased function id, the region.
+#[must_use]
+pub fn eventarc_subscription_id(project: &str, region: &str, function: &str) -> String {
+    let (function_number, subscription_number) =
+        subscription_numbers(stable_hash(&[project, region, function]));
+    format!(
+        "eventarc-{region}-{}-{function_number:06}-sub-{subscription_number:03}",
+        function.to_lowercase()
+    )
+}
+
+/// FNV-1a over the parts, each followed by a zero byte so that `("ab", "c")` and `("a", "bc")`
+/// differ.
+fn stable_hash(parts: &[&str]) -> u64 {
+    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+    for part in parts {
+        for byte in part.bytes().chain(std::iter::once(0)) {
+            hash ^= u64::from(byte);
+            hash = hash.wrapping_mul(0x0100_0000_01b3);
+        }
+    }
+    hash
+}
+
+/// The 6-digit and the 3-digit number of an Eventarc subscription id, from one hash.
+fn subscription_numbers(hash: u64) -> (u64, u64) {
+    (hash % 1_000_000, hash / 1_000_000 % 1_000)
 }
 
 /// An Auth wire timestamp as production prints it: RFC 3339 UTC cut to the whole second, with
@@ -555,7 +660,8 @@ pub fn schedule_event(
 #[cfg(test)]
 mod tests {
     use super::{
-        event_id_uuid, firestore_time, object_json, storage_event, storage_event_id, storage_time,
+        event_id_uuid, eventarc_subscription_id, firestore_time, object_json, pubsub_event,
+        stable_hash, storage_event, storage_event_id, storage_time, subscription_numbers,
     };
     use fireemu_core_functions::manifest::ObjectEvent;
     use fireemu_core_storage::name::{BucketName, ObjectName};
@@ -949,7 +1055,9 @@ mod tests {
     }
     mod properties {
         use super::{object_created_at, SECOND};
-        use crate::events::{firestore_time, object_json, storage_event_id, storage_time};
+        use crate::events::{
+            eventarc_subscription_id, firestore_time, object_json, storage_event_id, storage_time,
+        };
         use fireemu_core_functions::manifest::ObjectEvent;
         use fireemu_core_types::time::LogicalInstant;
         use proptest::prelude::*;
@@ -962,6 +1070,22 @@ mod tests {
                 prop_assert!(id.bytes().all(|b| b.is_ascii_digit()));
                 prop_assert!(!id.starts_with('0'));
                 prop_assert_eq!(storage_event_id(&seed), id);
+            }
+
+            #[test]
+            fn an_eventarc_subscription_id_always_has_the_production_shape(
+                project in "[a-z][a-z0-9-]{4,20}",
+                region in "[a-z]{2,10}-[a-z]{2,10}[0-9]",
+                function in "[a-zA-Z][a-zA-Z0-9]{0,30}",
+            ) {
+                let id = eventarc_subscription_id(&project, &region, &function);
+                prop_assert_eq!(&id, &eventarc_subscription_id(&project, &region, &function));
+                let rest = id.strip_prefix(&format!("eventarc-{region}-{}-", function.to_lowercase()));
+                prop_assert!(rest.is_some(), "{}", id);
+                let rest = rest.unwrap();
+                let (first, second) = rest.split_once("-sub-").unwrap();
+                prop_assert!(first.len() == 6 && first.bytes().all(|b| b.is_ascii_digit()));
+                prop_assert!(second.len() == 3 && second.bytes().all(|b| b.is_ascii_digit()));
             }
 
             #[test]
@@ -1019,6 +1143,207 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// The Pub/Sub event of the FUNCTIONS-EVENTS formal record of 2026-10-04 (run
+    /// `a9621bfae74fe9bc`): the 2nd gen frame `6ac2a47f0000967f445e8b09` and the 1st gen frame
+    /// `6ac2a47e0006b2dd7f2584d4` of the same message. `time` and `publishTime` are the publish
+    /// instant with exactly three fractional digits, `id` is the message id, and the event has no
+    /// `datacontenttype` (the frame's `event.datacontenttype` is null).
+    #[test]
+    fn a_pubsub_event_has_the_shape_of_the_recorded_production_event() {
+        let published = at(1_791_140_986, 102_437_891);
+        let message = serde_json::json!({
+            "data": "ZWNmNTBhODZhMTQzMzY0ZmQ1NGZjZTUxNm0yNg==",
+            "attributes": {"probe": "ecf50a86a143364fd54fce516m26"},
+        });
+        let event = pubsub_event(
+            "22254343790642112",
+            "fireemu-oracle-events",
+            "us-central1",
+            "pubsubPublishedV2",
+            "fe-events-primary",
+            &message,
+            published,
+        );
+        assert_eq!(event["id"], "22254343790642112");
+        assert_eq!(event["time"], "2026-10-04T19:09:46.102Z");
+        assert_eq!(
+            event["data"]["message"]["publishTime"],
+            "2026-10-04T19:09:46.102Z"
+        );
+        assert_eq!(event["data"]["message"]["messageId"], "22254343790642112");
+        assert_eq!(event["specversion"], "1.0");
+        assert_eq!(
+            event["type"],
+            "google.cloud.pubsub.topic.v1.messagePublished"
+        );
+        assert_eq!(
+            event["source"],
+            "//pubsub.googleapis.com/projects/fireemu-oracle-events/topics/fe-events-primary"
+        );
+        assert!(
+            event.get("datacontenttype").is_none(),
+            "production's event carries no datacontenttype: {event}"
+        );
+    }
+
+    #[test]
+    fn a_pubsub_event_time_is_cut_not_rounded_and_equals_the_publish_time() {
+        for (nanos, expected) in [
+            (102_999_999, "2026-10-04T19:09:46.102Z"),
+            (102_000_000, "2026-10-04T19:09:46.102Z"),
+            (999_999_999, "2026-10-04T19:09:46.999Z"),
+            (5_000_000, "2026-10-04T19:09:46.005Z"),
+            (0, "2026-10-04T19:09:46.000Z"),
+        ] {
+            let event = pubsub_event(
+                "1",
+                "p",
+                "us-central1",
+                "f",
+                "t",
+                &serde_json::json!({}),
+                at(1_791_140_986, nanos),
+            );
+            assert_eq!(event["time"], expected, "time at {nanos}");
+            assert_eq!(
+                event["data"]["message"]["publishTime"], expected,
+                "publishTime at {nanos}"
+            );
+        }
+    }
+
+    /// The shape of every production sample of the formal record (run `a9621bfae74fe9bc` and the
+    /// other deployments of the same run): the two numbers are random per deployment, so a
+    /// comparison masks their values and checks the rest. This is that check.
+    fn masked_subscription_shape(id: &str) -> Option<String> {
+        let rest = id.strip_prefix("eventarc-")?;
+        let (head, sub) = rest.rsplit_once("-sub-")?;
+        let (head, function_number) = head.rsplit_once('-')?;
+        let digits = |text: &str, len: usize| {
+            text.len() == len && text.bytes().all(|byte| byte.is_ascii_digit())
+        };
+        if !digits(function_number, 6) || !digits(sub, 3) {
+            return None;
+        }
+        Some(format!("eventarc-{head}-<6 digits>-sub-<3 digits>"))
+    }
+
+    #[test]
+    fn the_subscription_masks_to_the_shape_of_the_production_samples() {
+        // Production samples (run a9621bfae74fe9bc and its deployments): masked, they all
+        // have the shape the emulator's name has.
+        for (sample, masked) in [
+            (
+                "eventarc-us-central1-pubsubpublishedv2-834054-sub-834",
+                "eventarc-us-central1-pubsubpublishedv2-<6 digits>-sub-<3 digits>",
+            ),
+            (
+                "eventarc-us-central1-fscreatedv2-302901-sub-783",
+                "eventarc-us-central1-fscreatedv2-<6 digits>-sub-<3 digits>",
+            ),
+            (
+                "eventarc-us-central1-storagearchivedv2-494903-sub-488",
+                "eventarc-us-central1-storagearchivedv2-<6 digits>-sub-<3 digits>",
+            ),
+        ] {
+            assert_eq!(masked_subscription_shape(sample).as_deref(), Some(masked));
+        }
+        assert_eq!(
+            masked_subscription_shape(&eventarc_subscription_id(
+                "fireemu-oracle-events",
+                "us-central1",
+                "pubsubPublishedV2"
+            ))
+            .as_deref(),
+            Some("eventarc-us-central1-pubsubpublishedv2-<6 digits>-sub-<3 digits>")
+        );
+        // The mask does not hide a format: a wrong number of digits is not a name.
+        for wrong in [
+            "eventarc-us-central1-f-83405-sub-834",
+            "eventarc-us-central1-f-8340545-sub-834",
+            "eventarc-us-central1-f-834054-sub-83",
+            "eventarc-us-central1-f-834054-sub-8341",
+            "eventarc-us-central1-f-83405a-sub-834",
+            "emulator-sub-jobs",
+        ] {
+            assert_eq!(masked_subscription_shape(wrong), None, "{wrong}");
+        }
+    }
+
+    #[test]
+    fn the_subscription_numbers_are_zero_padded_and_independent() {
+        assert_eq!(subscription_numbers(0), (0, 0));
+        assert_eq!(subscription_numbers(7), (7, 0));
+        assert_eq!(subscription_numbers(1_000_005), (5, 1));
+        assert_eq!(subscription_numbers(834_054_834_000_000), (0, 834));
+        assert_eq!(subscription_numbers(u64::MAX), (551_615, 709));
+    }
+
+    #[test]
+    fn the_subscription_id_is_stable_and_names_the_function_the_project_and_the_region() {
+        let id = eventarc_subscription_id("demo-app", "us-central1", "onJob");
+        assert_eq!(
+            id,
+            eventarc_subscription_id("demo-app", "us-central1", "onJob")
+        );
+        assert!(id.starts_with("eventarc-us-central1-onjob-"), "{id}");
+        // Another function, region or project is another subscription.
+        assert_ne!(
+            id,
+            eventarc_subscription_id("demo-app", "us-central1", "onJob2")
+        );
+        assert_ne!(
+            id,
+            eventarc_subscription_id("demo-app", "europe-west1", "onJob")
+        );
+        assert_ne!(
+            id,
+            eventarc_subscription_id("other-app", "us-central1", "onJob")
+        );
+        // The parts are separated: moving a character between them changes the hash.
+        assert_ne!(stable_hash(&["ab", "c"]), stable_hash(&["a", "bc"]));
+    }
+
+    #[test]
+    fn the_subscription_ids_are_pinned_so_that_a_deployment_keeps_its_name_across_releases() {
+        // FNV-1a over the parts, each followed by a zero byte: these values are the algorithm.
+        assert_eq!(
+            stable_hash(&["demo-app", "us-central1", "onJob"]),
+            7_612_220_917_531_147_373
+        );
+        assert_eq!(stable_hash(&["ab", "c"]), 12_475_682_555_102_643_973);
+        assert_eq!(stable_hash(&["a", "bc"]), 4_618_443_601_942_399_609);
+        assert_eq!(stable_hash(&[""]), 12_638_153_115_695_167_455);
+        assert_eq!(
+            eventarc_subscription_id("demo-app", "us-central1", "onJob"),
+            "eventarc-us-central1-onjob-147373-sub-531"
+        );
+        assert_eq!(
+            eventarc_subscription_id("fireemu-oracle-events", "us-central1", "pubsubPublishedV2"),
+            "eventarc-us-central1-pubsubpublishedv2-147205-sub-779"
+        );
+    }
+
+    #[test]
+    fn a_pubsub_event_names_eventarcs_subscription_for_the_function() {
+        let event = pubsub_event(
+            "1",
+            "demo-app",
+            "europe-west1",
+            "workerTwo",
+            "shared-jobs",
+            &serde_json::json!({}),
+            at(0, 0),
+        );
+        assert_eq!(
+            event["data"]["subscription"],
+            format!(
+                "projects/demo-app/subscriptions/{}",
+                eventarc_subscription_id("demo-app", "europe-west1", "workerTwo")
+            )
+        );
     }
 }
 

@@ -62,6 +62,7 @@ fn functions_config_debug_redacts_runner_secret() {
         overlap: fireemu_adapter_functions::runtime::OverlapPolicy::Allow,
         catch_up: fireemu_adapter_functions::runtime::CatchUpPolicy::All,
         functions_host: None,
+        subscription_naming: fireemu_adapter_functions::events::SubscriptionNaming::default(),
     };
 
     let config_debug = format!("{config:?}");
@@ -261,6 +262,7 @@ async fn start_runtime(
             overlap,
             catch_up,
             functions_host: None,
+            subscription_naming: fireemu_adapter_functions::events::SubscriptionNaming::default(),
         },
         clock.clone(),
         Arc::new(runner),
@@ -671,6 +673,7 @@ async fn start_task_runtime_with_policy_and_env(
             overlap: fireemu_adapter_functions::runtime::OverlapPolicy::Allow,
             catch_up: fireemu_adapter_functions::runtime::CatchUpPolicy::All,
             functions_host: Some("127.0.0.1:5001".into()),
+            subscription_naming: fireemu_adapter_functions::events::SubscriptionNaming::default(),
         },
         Arc::new(Mutex::new(VirtualClock::new(START))),
         Arc::new(runner),
@@ -1099,6 +1102,7 @@ async fn multi_codebase_runtime_exposes_and_stops_every_current_runner() {
             overlap: fireemu_adapter_functions::runtime::OverlapPolicy::Allow,
             catch_up: fireemu_adapter_functions::runtime::CatchUpPolicy::All,
             functions_host: None,
+            subscription_naming: fireemu_adapter_functions::events::SubscriptionNaming::default(),
         },
         Arc::new(Mutex::new(VirtualClock::new(START))),
     )
@@ -1573,6 +1577,7 @@ async fn failed_blocking_auth_respawn_releases_recovery_ownership() {
             overlap: fireemu_adapter_functions::runtime::OverlapPolicy::Allow,
             catch_up: fireemu_adapter_functions::runtime::CatchUpPolicy::All,
             functions_host: None,
+            subscription_naming: fireemu_adapter_functions::events::SubscriptionNaming::default(),
         },
         Arc::new(Mutex::new(VirtualClock::new(START))),
         runner,
@@ -1730,6 +1735,7 @@ async fn a_blocking_restart_cannot_replace_a_newer_hot_reload_generation() {
             overlap: fireemu_adapter_functions::runtime::OverlapPolicy::Allow,
             catch_up: fireemu_adapter_functions::runtime::CatchUpPolicy::All,
             functions_host: None,
+            subscription_naming: fireemu_adapter_functions::events::SubscriptionNaming::default(),
         },
         Arc::new(Mutex::new(VirtualClock::new(START))),
         Arc::new(initial),
@@ -2233,6 +2239,7 @@ async fn a_spontaneous_recovery_cannot_replace_a_newer_reload() {
             overlap: fireemu_adapter_functions::runtime::OverlapPolicy::Allow,
             catch_up: fireemu_adapter_functions::runtime::CatchUpPolicy::All,
             functions_host: None,
+            subscription_naming: fireemu_adapter_functions::events::SubscriptionNaming::default(),
         },
         Arc::new(Mutex::new(VirtualClock::new(START))),
         initial.clone(),
@@ -2368,6 +2375,7 @@ async fn reload_generation_wins_over_an_older_reset_respawn() {
             overlap: fireemu_adapter_functions::runtime::OverlapPolicy::Allow,
             catch_up: fireemu_adapter_functions::runtime::CatchUpPolicy::All,
             functions_host: None,
+            subscription_naming: fireemu_adapter_functions::events::SubscriptionNaming::default(),
         },
         clock,
         Arc::new(initial),
@@ -2421,6 +2429,7 @@ async fn a_crash_fault_still_kills_a_runner_that_cannot_be_respawned() {
             overlap: fireemu_adapter_functions::runtime::OverlapPolicy::Allow,
             catch_up: fireemu_adapter_functions::runtime::CatchUpPolicy::All,
             functions_host: None,
+            subscription_naming: fireemu_adapter_functions::events::SubscriptionNaming::default(),
         },
         Arc::new(Mutex::new(VirtualClock::new(START))),
         Arc::new(runner),
@@ -3197,6 +3206,8 @@ exports.customV2=require(join(SDK,'lib/v2/providers/eventarc.js')).onCustomEvent
     let mut topic = fireemu_adapter_functions::events::pubsub_event(
         "topic-source",
         "demo-app",
+        "us-central1",
+        "topicFn",
         "t",
         &json!({"data":"aGVsbG8=","attributes":{"key":"value"}}),
         START,
@@ -3664,7 +3675,15 @@ fn pubsub_and_auth_events_carry_the_shapes_the_sdk_decodes() {
     use fireemu_core_functions::manifest::{AuthEvent, DocumentEvent};
     use fireemu_core_types::determinism::SplitMix64;
     let msg = serde_json::json!({"data": "aGVsbG8=", "attributes": {"k": "v"}, "orderingKey": "o"});
-    let e = pubsub_event("m1", "demo-app", "jobs", &msg, START);
+    let e = pubsub_event(
+        "m1",
+        "demo-app",
+        "us-central1",
+        "onJob",
+        "jobs",
+        &msg,
+        START,
+    );
     assert_eq!(e["type"], "google.cloud.pubsub.topic.v1.messagePublished");
     assert_eq!(
         e["source"],
@@ -3674,9 +3693,20 @@ fn pubsub_and_auth_events_carry_the_shapes_the_sdk_decodes() {
     assert_eq!(e["data"]["message"]["data"], "aGVsbG8=");
     assert_eq!(e["data"]["message"]["attributes"]["k"], "v");
     assert_eq!(e["data"]["message"]["orderingKey"], "o");
+    // Eventarc's own subscription for the function, in the form production names it.
+    let subscription = e["data"]["subscription"].as_str().unwrap();
+    let id = subscription
+        .strip_prefix("projects/demo-app/subscriptions/")
+        .unwrap();
+    assert!(id.starts_with("eventarc-us-central1-onjob-"), "{id}");
+    assert!(id.ends_with(|c: char| c.is_ascii_digit()), "{id}");
     assert_eq!(
-        e["data"]["subscription"],
-        "projects/demo-app/subscriptions/emulator-sub-jobs"
+        id,
+        fireemu_adapter_functions::events::eventarc_subscription_id(
+            "demo-app",
+            "us-central1",
+            "onJob"
+        )
     );
     let mut store = AuthStore::new("demo-app", SplitMix64::new(1), TotpPolicy::default());
     let uid = store
@@ -4556,6 +4586,50 @@ fn the_bounded_run_window_matches_enumeration_in_iana_zones() {
             }
         }
     }
+}
+
+#[tokio::test]
+async fn messages_published_through_the_runtime_get_seventeen_digit_decimal_ids() {
+    // Production's message ids are seventeen-digit decimal strings, not counts or session
+    // strings (FUNCTIONS-EVENTS formal record 2026-10-04, `messageId` of the 2nd gen frames
+    // 6ac2a47f0000967f445e8b09 and 6ac2a51c000844422b7986d1).
+    let (runtime, _clock) = start().await;
+    let ids = runtime.publish(
+        "jobs",
+        &[
+            serde_json::json!({"data": "YQ=="}),
+            serde_json::json!({"data": "Yg=="}),
+        ],
+    );
+    let silent = runtime.publish("nobody", &[serde_json::json!({"data": ""})]);
+    let mut all: Vec<String> = ids.into_iter().chain(silent).collect();
+    for id in &all {
+        assert_eq!(id.len(), 17, "{id}");
+        assert!(id.bytes().all(|byte| byte.is_ascii_digit()), "{id}");
+    }
+    all.sort();
+    all.dedup();
+    assert_eq!(all.len(), 3, "the ids are all different");
+    assert!(runtime.await_idle(Duration::from_secs(5)).await.is_ok());
+}
+
+#[tokio::test]
+async fn messages_published_to_a_topic_nobody_listens_to_still_get_different_ids() {
+    // Pub/Sub assigns ids even when nothing is subscribed; no delivery advances the counter here,
+    // so the publish itself must.
+    let (runtime, _clock) = start().await;
+    let ids = runtime.publish(
+        "nobody",
+        &[
+            serde_json::json!({"data": "YQ=="}),
+            serde_json::json!({"data": "Yg=="}),
+            serde_json::json!({"data": "Yw=="}),
+        ],
+    );
+    let mut distinct = ids.clone();
+    distinct.sort();
+    distinct.dedup();
+    assert_eq!(distinct.len(), 3, "{ids:?}");
 }
 
 #[tokio::test]

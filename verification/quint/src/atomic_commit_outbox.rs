@@ -687,6 +687,7 @@ fn build_functions_runtime(executor: &tokio::runtime::Runtime) -> Arc<FunctionsR
             overlap: OverlapPolicy::Allow,
             catch_up: CatchUpPolicy::All,
             functions_host: None,
+            subscription_naming: fireemu_adapter_functions::events::SubscriptionNaming::default(),
         },
         clock,
         Arc::new(runner),

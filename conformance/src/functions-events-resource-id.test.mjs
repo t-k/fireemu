@@ -115,3 +115,14 @@ test("the local drivers build each family's ids with it, under the script's role
   for (const source of [live, storage])
     assert.equal(source.includes('randomUUID().replaceAll("-", "")'), false);
 });
+
+test("the counters are the ones of the first pass of the FE v5 production run (fs-create f1, storage-upload o9, auth-admin-create u19, pubsub-publish m26)", () => {
+  const counters = productionCounters();
+  assert.equal(counters.get("fs-create/subject"), 1);
+  assert.equal(counters.get("storage-upload/subject"), 9);
+  assert.equal(counters.get("auth-admin-create/subject"), 19);
+  assert.equal(counters.get("auth-bulk-delete/subject"), 22);
+  assert.equal(counters.get("pubsub-publish/subject"), 26);
+  assert.match(resourceId("fs-create", "fs"), /^e[0-9a-f]{24}f1$/);
+  assert.match(resourceId("storage-upload", "obj"), /^e[0-9a-f]{24}o9$/);
+});

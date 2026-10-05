@@ -11,7 +11,10 @@ import { MIN_A2_WAIT_MS, main } from "./eventarc-production/record.mjs";
 
 const RUN = "0123456789ab";
 const PROJECT = "demo-fireemu-eventarc";
-const T0 = Date.parse("2026-10-05T10:00:00.000Z");
+// The synthetic recordings are a year ahead of the wall clock, so that they are always newer than the
+// captures a real recording writes in the same test, whatever the date the suite runs on. A fixed date
+// made four tests fail once the wall clock passed it (aged-clock control, 2026-10-05).
+const T0 = Date.now() + 365 * 24 * 60 * 60 * 1000;
 const channel = (id, location = "us-central1") =>
   `projects/${PROJECT}/locations/${location}/channels/${id}`;
 const mine = (key) => channel(`fe${RUN}-${key}`);

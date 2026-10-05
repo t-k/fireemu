@@ -152,7 +152,7 @@ proptest! {
         let policy = schedule_retry_policy(&config(count, window, min, max, doublings), FunctionGeneration::Second);
         prop_assert_eq!(policy.max_attempts(), count + 1);
         let attempts = attempt_offsets(&policy).len();
-        prop_assert!(attempts >= count as usize + 1);
+        prop_assert!(attempts > count as usize);
         if window == 0 {
             prop_assert_eq!(attempts, count as usize + 1);
         }

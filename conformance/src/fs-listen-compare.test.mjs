@@ -1054,3 +1054,37 @@ test("the divergence registers name rows of the recorded production run and give
   for (const id of Object.keys(emulator).filter((i) => !(i in strict)))
     assert.match(emulator[id], /official emulator/, id);
 });
+
+test("only the boundaries a dropped filter left side by side merge, however many rows follow it", () => {
+  const doc = {
+    kind: "documentChange",
+    doc: "a",
+    fields: {},
+    targetIds: [1],
+    removedTargetIds: [],
+  };
+  // A filter early in the row must not make later adjacent boundaries merge.
+  assert.deepEqual(canonicalRow(fr([flt(1), doc, bnd(false), bnd(true)])).rows, [
+    doc,
+    bnd(false),
+    bnd(true),
+  ]);
+  assert.deepEqual(canonicalRow(fr([bnd(true), flt(1), doc, bnd(false), bnd(true)])).rows, [
+    bnd(true),
+    doc,
+    bnd(false),
+    bnd(true),
+  ]);
+});
+
+test("a REMOVE after a CURRENT does not settle a wait that ran out", () => {
+  const add = {
+    kind: "targetChange",
+    type: "ADD",
+    targetIds: [1],
+    cause: null,
+    resumeToken: false,
+  };
+  const odd = fr([add, current, removed(9)], { timedOut: true });
+  assert.equal(classifyRow(odd, structuredClone(odd)), "INDETERMINATE");
+});

@@ -11,7 +11,26 @@ import { MIN_A2_WAIT_MS, main } from "./eventarc-production/record.mjs";
 
 const RUN = "0123456789ab";
 const PROJECT = "demo-fireemu-eventarc";
-const T0 = Date.parse("2026-10-05T10:00:00.000Z");
+// The test's own virtual clock: `Date` is replaced by one that only the test moves. The captures a real
+// recording and a later run write are stamped by it, and the later run's clock is the `now` the test gives
+// it (`deps`), so no decision here reads the wall clock. (A fixed date failed four tests once the wall
+// clock passed it.)
+const T0 = Date.parse("2030-01-01T00:00:00.000Z");
+const clock = (() => {
+  const Real = globalThis.Date;
+  let current = T0;
+  class VirtualDate extends Real {
+    constructor(...args) {
+      if (args.length === 0) super(current);
+      else super(...args);
+    }
+    static now() {
+      return current;
+    }
+  }
+  globalThis.Date = VirtualDate;
+  return { set: (instant) => (current = instant) };
+})();
 const channel = (id, location = "us-central1") =>
   `projects/${PROJECT}/locations/${location}/channels/${id}`;
 const mine = (key) => channel(`fe${RUN}-${key}`);
@@ -109,6 +128,7 @@ async function service({ live = [], stuck = [], pendingOperations = false }) {
 }
 
 function recording(rows) {
+  clock.set(T0);
   const dir = mkdtempSync(join(tmpdir(), "eventarc-a2-"));
   writeFileSync(
     join(dir, `capture-${RUN}.jsonl`),
@@ -128,7 +148,18 @@ const io = (errors = [], out = []) => ({
   stdout: { write: (text) => (out.push(text), true) },
   stderr: { write: (text) => errors.push(text) },
 });
-const deps = (extra = {}) => ({ now: () => T0 + MIN_A2_WAIT_MS, sleep: async () => {}, ...extra });
+const deps = (extra = {}) => {
+  const given = { now: () => T0 + MIN_A2_WAIT_MS, sleep: async () => {}, ...extra };
+  return {
+    ...given,
+    // The later run's clock is also the clock that stamps what it writes.
+    now: () => {
+      const instant = given.now();
+      clock.set(instant);
+      return instant;
+    },
+  };
+};
 const a2 = (dir, host, out = dir) => [
   "--target",
   "emulator",

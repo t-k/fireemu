@@ -1,7 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
@@ -13,6 +12,7 @@ import {
   filtersBeforeCurrent,
   renderComparison,
 } from "./fs-listen/resume-compare.mjs";
+import { tempDir } from "./test-tmpdir.mjs";
 
 const add = { kind: "targetChange", type: "ADD", targetIds: [1], cause: null, resumeToken: false };
 const current = {
@@ -328,7 +328,7 @@ const run = (...args) =>
   });
 
 test("the command builds the answers of two runs and compares a local recording with them", () => {
-  const dir = mkdtempSync(join(tmpdir(), "resume-compare-"));
+  const dir = tempDir("resume-compare-");
   const write = (name, value) => {
     const file = join(dir, name);
     writeFileSync(file, JSON.stringify(value));

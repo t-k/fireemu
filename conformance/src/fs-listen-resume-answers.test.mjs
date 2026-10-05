@@ -575,3 +575,76 @@ test("the command prints the token table after the answers and exits 1 when a to
   assert.match(flagged.stdout, /token problems/);
   assert.match(flagged.stdout, /native\/resume-grid-gc T: .*after a document change/);
 });
+
+test("tokenProblems: every saved token of every program is held to its kind, one at a time", () => {
+  const saves = goodSaves();
+  saves.forEach((entry, index) => {
+    const where = `${entry.program} ${entry.name}`;
+    const problemsFor = (patch) => {
+      const copy = goodSaves();
+      Object.assign(copy[index], patch);
+      return tokenProblems({ saves: copy });
+    };
+    const wrongFrame =
+      entry.token.type === "CURRENT"
+        ? { token: { ...entry.token, type: "NO_CHANGE", targetIds: [] }, kind: "global" }
+        : { token: { ...entry.token, type: "CURRENT", targetIds: [1] }, kind: "current" };
+    assert.ok(
+      problemsFor(wrongFrame).some((p) => p.startsWith(`${where}:`)),
+      `${where}: the other kind of frame`,
+    );
+    assert.ok(
+      problemsFor({ kind: entry.kind === "current" ? "global" : "current" }).some((p) =>
+        p.startsWith(`${where}:`),
+      ),
+      `${where}: asked for the other kind`,
+    );
+    const before = entry.program === "native/resume-grid-gc" ? 0 : 3;
+    const expectsBefore = [
+      "native/resume-grid-g0",
+      "native/resume-grid-tc",
+      "native/resume-grid-gc",
+      "native/resume-age",
+    ].includes(entry.program);
+    assert.equal(
+      problemsFor({ documentChangesBefore: before }).some((p) => p.startsWith(`${where}:`)),
+      expectsBefore,
+      `${where}: documents before the token`,
+    );
+  });
+  // A frame is a global boundary only if it is NO_CHANGE and names no target, the target's CURRENT only if it names one.
+  const problemsOf = (index, token) => {
+    const copy = goodSaves();
+    copy[index] = { ...copy[index], token: { ...copy[index].token, ...token } };
+    return tokenProblems({ saves: copy });
+  };
+  assert.equal(problemsOf(0, { type: "CURRENT", targetIds: [] }).length, 1);
+  assert.equal(problemsOf(0, { type: "NO_CHANGE", targetIds: [1] }).length, 1);
+  assert.equal(problemsOf(1, { type: "CURRENT", targetIds: [] }).length, 1);
+  assert.equal(problemsOf(1, { type: "NO_CHANGE", targetIds: [1] }).length, 1);
+  assert.equal(problemsOf(1, { type: "CURRENT", targetIds: [1, 2] }).length, 0);
+  // Zero and one document change before the token are told apart.
+  const one = goodSaves();
+  one[2].documentChangesBefore = 1;
+  assert.deepEqual(tokenProblems({ saves: one }), []);
+});
+
+test("renderTokenTable joins several target ids with a comma", () => {
+  const entry = save("native/resume-grid-tc", "T", "current", "CURRENT", [1, 2], 0, 2);
+  assert.match(renderTokenTable({ saves: [entry] }), /\| CURRENT \| 1,2 \| 0 \|/);
+});
+
+test("the command numbers the runs and separates its tables with blank lines", () => {
+  const withSaves = (saves) => ({ ...clean({}), saves });
+  const bad = goodSaves();
+  bad[2] = { ...bad[2], documentChangesBefore: 0 };
+  const out = runCli({ a: withSaves(goodSaves()), b: withSaves(bad) }, (f) => [f.a, f.b]);
+  assert.equal(out.code, 1);
+  assert.ok(out.stdout.includes("\n\ntokens of run 1:\n| program | save |"), out.stdout);
+  assert.ok(out.stdout.includes("\n\ntokens of run 2:\n| program | save |"), out.stdout);
+  assert.ok(
+    out.stdout.includes("\n\ntoken problems in run 2:\n- native/resume-grid-gc T:"),
+    out.stdout,
+  );
+  assert.equal(out.stdout.includes("token problems in run 1"), false);
+});

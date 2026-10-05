@@ -1050,9 +1050,10 @@ fn session_route(state: &ControlState, method: &str, path: &str, body: &Value) -
     if action.starts_with("clock:") {
         // Moving the shared clock and compacting every Firestore database is one admission
         // transition. No read, write or listener can enter after the new time is visible but
-        // before all retention floors have advanced.
+        // before all retention floors have advanced. It starts no new epoch: a request that began
+        // before the move (a writer waiting for a lock) keeps its credentials and intent.
         let (response, now) = {
-            let _exclusive = state.barrier.as_ref().map(|barrier| barrier.exclusive());
+            let _exclusive = state.barrier.as_ref().map(|barrier| barrier.pause());
             let response = clock_route(state, session, method, action, body);
             let now = if response.status == 200 {
                 let now = state.clock.lock().ok().map(|clock| clock.now());

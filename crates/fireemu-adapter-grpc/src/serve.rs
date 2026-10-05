@@ -505,7 +505,7 @@ async fn rest_call(
     // would hold one of the few slots for the whole wait); the slot is released, this task
     // waits for a transaction to finish, then runs the request again.
     let request = Arc::new(request);
-    let deadline = std::time::Instant::now() + state.local.contention_wait();
+    let deadline = state.local.contention_deadline();
     let mut permit = permit;
     let response = loop {
         let attempt_permit = permit;
@@ -519,10 +519,15 @@ async fn rest_call(
         })
         .await
         .map_err(|error| std::io::Error::other(format!("Firestore REST task failed: {error}")))?;
-        if !contended || std::time::Instant::now() >= deadline {
+        if !contended || deadline.expired() {
             break response;
         }
-        state.local.await_any_release(seen, deadline).await;
+        if !state.local.await_any_release_until(seen, &deadline).await {
+            // The bound passed and nothing was released: the refusal already in hand is the
+            // answer. Running the request again would only be a chance to be turned away at
+            // the pool instead.
+            break response;
+        }
         // Re-admitted for the retry; an exhausted pool answers the retry as it answers a new
         // request.
         match try_admit_rest_work(rest_work_limiter()) {
@@ -2880,6 +2885,93 @@ mod document_not_found_layout_tests {
             drop(held);
             assert_eq!(limiter.available_permits(), units);
         }
+    }
+
+    /// A held REST commit waits without being turned away at the pool: the pool is exhausted
+    /// while it waits, and it is still answered `ABORTED` at the strict bound, not with the
+    /// pool's refusal. Only a release gives it another chance at the pool.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_held_strict_commit_is_not_turned_away_at_the_pool_while_it_waits() {
+        use fireemu_proto_firestore::google::firestore::v1 as pb;
+        const DATABASE: &str = "projects/demo-app/databases/(default)";
+        let document = format!("{DATABASE}/documents/contended/doc");
+        let gateway = crate::gateway::Gateway {
+            enforce_limits: true,
+            ctx: PlanningContext {
+                edition: FirestoreEdition::Standard,
+                api_mode: FirestoreApiMode::Native,
+                policy: IndexValidationPolicy::Production,
+            },
+            indexes: IndexSet::default(),
+        };
+        let clock = Arc::new(Mutex::new(VirtualClock::new(
+            LogicalInstant::from_unix_seconds(1_788_004_860),
+        )));
+        let local = Arc::new(
+            crate::local::LocalBackend::new(gateway.clone(), Arc::clone(&clock), 7)
+                .with_contention_wait(crate::local::STRICT_CONTENTION_WAIT)
+                .with_virtual_contention_wait(),
+        );
+        let state = Arc::new(RestState {
+            local: Arc::clone(&local),
+            gateway: Arc::new(gateway),
+            rules: None,
+            control_token: None,
+            app_check: None,
+        });
+        let transaction = local
+            .begin_transaction(&pb::BeginTransactionRequest {
+                database: DATABASE.to_owned(),
+                ..Default::default()
+            })
+            .unwrap();
+        local
+            .get_document(
+                &pb::GetDocumentRequest {
+                    name: document.clone(),
+                    consistency_selector: Some(
+                        pb::get_document_request::ConsistencySelector::Transaction(transaction),
+                    ),
+                    ..Default::default()
+                },
+                &crate::rules::allow_all_reads,
+            )
+            .unwrap_err();
+        let body = format!(
+            r#"{{"writes":[{{"update":{{"name":"{document}","fields":{{"v":{{"integerValue":"1"}}}}}}}}]}}"#
+        );
+        let writer = tokio::spawn(wire_request(
+            state,
+            "POST",
+            "/v1/projects/demo-app/databases/(default)/documents:commit",
+            body.into_bytes().leak(),
+        ));
+        tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+        assert!(!writer.is_finished(), "held behind the transaction");
+        let held = Arc::clone(rest_work_limiter())
+            .try_acquire_many_owned(u32::try_from(MAX_BLOCKING_REST_REQUESTS).unwrap())
+            .expect("the held writer keeps no slot while it waits");
+        tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+        assert!(
+            !writer.is_finished(),
+            "an exhausted pool does not answer a writer that is only waiting"
+        );
+        clock
+            .lock()
+            .unwrap()
+            .advance(fireemu_core_types::time::LogicalDuration::from_seconds(21))
+            .unwrap();
+        let (headers, bytes) = tokio::time::timeout(std::time::Duration::from_secs(5), writer)
+            .await
+            .expect("answers once the bound passed")
+            .unwrap();
+        drop(held);
+        assert!(headers.starts_with("HTTP/1.1 409 "), "{headers}");
+        assert!(
+            String::from_utf8_lossy(&bytes).contains("Too much contention"),
+            "{}",
+            String::from_utf8_lossy(&bytes)
+        );
     }
 
     fn check_transport_projection(

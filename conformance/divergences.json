@@ -2414,14 +2414,14 @@
     },
     "storage-probe/gcs-checksums#mismatching-md5": {
       "documents": "README.md, \"Storage\"; capability manifest ST-OBJ-1 (crates/fireemu/src/capabilities.json)",
-      "reason": "A declared md5Hash / X-Goog-Hash is verified against the received bytes before the commit, as production verifies it; a mismatch is 400 and nothing is published. The official emulator ignores declared checksums and was measured to store the corrupt payload.",
+      "reason": "In fireemu, the JSON API object resource carries timeFinalized, as production writes it (equal to timeCreated in all 735 recorded resources). The declared checksum is no longer verified in the emulator profile, as the official emulator does not verify it (measured, firebase-tools 15.28.2: the wrong checksum is accepted and the object is stored); the strict profile verifies it as production does (recorded, lean-v4).",
       "authority": {
         "kind": "production-spec",
         "sourceUrls": [
           "https://cloud.google.com/storage/docs/data-validation",
           "https://github.com/firebase/firebase-tools/tree/v15.28.2"
         ],
-        "checkedOn": "2026-09-05",
+        "checkedOn": "2026-10-01",
         "officialBaseline": {
           "package": "firebase-tools",
           "version": "15.28.2"
@@ -2432,14 +2432,14 @@
     },
     "storage-probe/gcs-checksums#mismatching-md5-not-published": {
       "documents": "README.md, \"Storage\"; capability manifest ST-OBJ-1 (crates/fireemu/src/capabilities.json)",
-      "reason": "The consequence: the refused upload does not exist under fireemu (404); the official emulator serves the object it should have refused.",
+      "reason": "In fireemu, the JSON API object resource carries timeFinalized, as production writes it (equal to timeCreated in all 735 recorded resources). The declared checksum is no longer verified in the emulator profile, as the official emulator does not verify it (measured, firebase-tools 15.28.2: the wrong checksum is accepted and the object is stored); the strict profile verifies it as production does (recorded, lean-v4).",
       "authority": {
         "kind": "production-spec",
         "sourceUrls": [
           "https://cloud.google.com/storage/docs/data-validation",
           "https://github.com/firebase/firebase-tools/tree/v15.28.2"
         ],
-        "checkedOn": "2026-09-05",
+        "checkedOn": "2026-10-01",
         "officialBaseline": {
           "package": "firebase-tools",
           "version": "15.28.2"
@@ -2450,14 +2450,14 @@
     },
     "storage-probe/gcs-checksums#mismatching-crc32c-in-metadata": {
       "documents": "README.md, \"Storage\"; capability manifest ST-OBJ-1 (crates/fireemu/src/capabilities.json)",
-      "reason": "The same verification for a crc32c declared in the metadata document of a multipart upload.",
+      "reason": "In fireemu, the JSON API object resource carries timeFinalized, as production writes it (equal to timeCreated in all 735 recorded resources). The declared checksum is no longer verified in the emulator profile, as the official emulator does not verify it (measured, firebase-tools 15.28.2: the wrong checksum is accepted and the object is stored); the strict profile verifies it as production does (recorded, lean-v4).",
       "authority": {
         "kind": "production-spec",
         "sourceUrls": [
           "https://cloud.google.com/storage/docs/data-validation",
           "https://github.com/firebase/firebase-tools/tree/v15.28.2"
         ],
-        "checkedOn": "2026-09-05",
+        "checkedOn": "2026-10-01",
         "officialBaseline": {
           "package": "firebase-tools",
           "version": "15.28.2"
@@ -2468,7 +2468,7 @@
     },
     "storage-probe/triggers#finalize-on-firebase-media-upload": {
       "documents": "README.md, \"Storage\"; capability manifest FN-EVT-1 (crates/fireemu/src/capabilities.json)",
-      "reason": "fireemu's Storage events carry the production CloudEvent envelope (source names the bucket, subject names the object, the bucket extension attribute is set; datacontenttype is set too, where production's 2nd gen frame of 2026-10-01 and the official emulator carry none) and the production selfLink / mediaLink hosts inside the object payload. The official emulator writes the object path into source, sets no subject, no bucket attribute and no datacontenttype, and links to its own emulator host. The object payload is otherwise identical field for field.",
+      "reason": "fireemu's Storage events carry the production CloudEvent envelope (source names the bucket, subject names the object, the bucket extension attribute is set, and no datacontenttype, as in production's 2nd gen frame of 2026-10-01 and the official emulator) and the production selfLink / mediaLink hosts inside the object payload. The official emulator writes the object path into source, sets no subject, no bucket attribute and no datacontenttype, and links to its own emulator host. The object payload is otherwise identical field for field.",
       "authority": {
         "kind": "production-spec",
         "sourceUrls": [

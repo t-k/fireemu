@@ -120,6 +120,8 @@ pub fn provision_function_pubsub_resources(
         if state.subscription_config(&resource.subscription).is_err() {
             state
                 .create_subscription(SubscriptionConfig {
+                    retain_acked_messages: false,
+                    message_retention_duration: None,
                     name: resource.subscription.clone(),
                     topic: resource.topic.clone(),
                     ack_deadline_seconds: DEFAULT_ACK_DEADLINE_SECONDS,
@@ -2875,24 +2877,7 @@ async fn start_codebase(
         };
         let mut manifest_json = manifest_json;
         if let Some(tz) = &cfg.scheduler_default_time_zone {
-            // Schedules without a zone use the configured default.
-            if let Some(functions) = manifest_json
-                .get_mut("functions")
-                .and_then(serde_json::Value::as_array_mut)
-            {
-                for f in functions {
-                    if let Some(trigger) = f.get_mut("trigger") {
-                        if trigger.get("type").and_then(serde_json::Value::as_str)
-                            == Some("schedule")
-                            && trigger
-                                .get("timeZone")
-                                .is_none_or(serde_json::Value::is_null)
-                        {
-                            trigger["timeZone"] = serde_json::Value::String(tz.clone());
-                        }
-                    }
-                }
-            }
+            apply_default_time_zone(&mut manifest_json, tz);
         }
         let mut manifest = parse_manifest(&manifest_json)?;
         serve_blocking_events_for(cfg.profile, &mut manifest);
@@ -3294,9 +3279,10 @@ impl fireemu_adapter_http::storage::AtomicStorageEventSink for FunctionsStorageS
     > {
         use fireemu_core_storage::store::StorageEvent;
         let bucket = match event {
-            StorageEvent::Finalized(m)
-            | StorageEvent::Deleted(m)
-            | StorageEvent::MetadataUpdated(m) => m.bucket.as_str(),
+            StorageEvent::Finalized(m) | StorageEvent::MetadataUpdated(m) => m.bucket.as_str(),
+            StorageEvent::Deleted { object, .. } | StorageEvent::Archived { object, .. } => {
+                object.bucket.as_str()
+            }
         };
         // The runtime belongs to the default session: other sessions' buckets do not
         // trigger its functions.
@@ -4830,6 +4816,30 @@ impl fireemu_adapter_http::identity_toolkit::AuthBlockingHook for BlockingAuthBr
             return Ok(None);
         }
         self.invoke_for_namespace(project, None, event, None, context)
+    }
+}
+
+/// Gives every schedule trigger that names no time zone (absent or `null`) the configured
+/// default (`scheduler.defaultTimeZone`). An explicit zone wins, and nothing but a schedule
+/// trigger is touched.
+fn apply_default_time_zone(manifest: &mut serde_json::Value, zone: &str) {
+    let Some(functions) = manifest
+        .get_mut("functions")
+        .and_then(serde_json::Value::as_array_mut)
+    else {
+        return;
+    };
+    for function in functions {
+        let Some(trigger) = function.get_mut("trigger") else {
+            continue;
+        };
+        if trigger.get("type").and_then(serde_json::Value::as_str) == Some("schedule")
+            && trigger
+                .get("timeZone")
+                .is_none_or(serde_json::Value::is_null)
+        {
+            trigger["timeZone"] = serde_json::Value::String(zone.to_owned());
+        }
     }
 }
 
@@ -8494,6 +8504,8 @@ mod tests {
             state.create_topic(topic.clone(), BTreeMap::new()).unwrap();
             state
                 .create_subscription(SubscriptionConfig {
+                    retain_acked_messages: false,
+                    message_retention_duration: None,
                     name: subscription.clone(),
                     topic: topic.clone(),
                     ack_deadline_seconds: 10,
@@ -8603,6 +8615,8 @@ mod tests {
                 .unwrap();
             state
                 .create_subscription(SubscriptionConfig {
+                    retain_acked_messages: false,
+                    message_retention_duration: None,
                     name: source_subscription.clone(),
                     topic: source_topic.clone(),
                     ack_deadline_seconds: 10,
@@ -8618,6 +8632,8 @@ mod tests {
                 .unwrap();
             state
                 .create_subscription(SubscriptionConfig {
+                    retain_acked_messages: false,
+                    message_retention_duration: None,
                     name: destination_subscription.clone(),
                     topic: destination_topic.clone(),
                     ack_deadline_seconds: 10,
@@ -8729,6 +8745,8 @@ mod tests {
             .unwrap();
         conflicting
             .create_subscription(SubscriptionConfig {
+                retain_acked_messages: false,
+                message_retention_duration: None,
                 name: SubscriptionName::new("demo-app", "emulator-sub-shared-jobs").unwrap(),
                 topic: other_topic,
                 ack_deadline_seconds:
@@ -9197,6 +9215,85 @@ mod tests {
             Some(root.join("tools/runner-node/index.mjs").as_path()),
         );
         std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn the_default_time_zone_goes_only_to_schedules_that_name_none() {
+        use serde_json::json;
+        let mut manifest = json!({"functions": [
+            {"name": "a", "trigger": {"type": "schedule", "schedule": "0 9 * * *"}},
+            {"name": "b", "trigger": {"type": "schedule", "schedule": "0 9 * * *", "timeZone": "UTC"}},
+            {"name": "c", "trigger": {"type": "schedule", "schedule": "0 9 * * *", "timeZone": null}},
+            {"name": "d", "trigger": {"type": "http"}},
+            {"name": "e"},
+        ]});
+        super::apply_default_time_zone(&mut manifest, "Asia/Tokyo");
+        let trigger = |i: usize| &manifest["functions"][i]["trigger"];
+        assert_eq!(
+            trigger(0)["timeZone"],
+            "Asia/Tokyo",
+            "a schedule without a zone"
+        );
+        assert_eq!(trigger(1)["timeZone"], "UTC", "an explicit zone wins");
+        assert_eq!(
+            trigger(2)["timeZone"],
+            "Asia/Tokyo",
+            "a null zone is no zone"
+        );
+        assert!(
+            trigger(3).get("timeZone").is_none(),
+            "an http trigger is untouched"
+        );
+        assert!(manifest["functions"][4].get("trigger").is_none());
+        let mut without_functions = json!({"endpoints": {}});
+        let before = without_functions.clone();
+        super::apply_default_time_zone(&mut without_functions, "Asia/Tokyo");
+        assert_eq!(without_functions, before);
+    }
+
+    #[test]
+    fn a_configured_default_time_zone_moves_the_occurrences_of_a_schedule_that_names_none() {
+        use fireemu_core_types::time::LogicalInstant;
+        const MIDNIGHT_UTC: i64 = 1_791_158_400; // 2026-10-05T00:00:00Z
+        let occurrence = |default: Option<&str>| {
+            let mut manifest = json!({"functions": [
+                {"name": "daily", "generation": 2, "trigger": {"type": "schedule", "schedule": "0 9 * * *"}},
+                {"name": "pinned", "generation": 2, "trigger": {"type": "schedule", "schedule": "0 9 * * *", "timeZone": "UTC"}},
+            ]});
+            if let Some(zone) = default {
+                super::apply_default_time_zone(&mut manifest, zone);
+            }
+            let manifest = parse_manifest(&manifest).unwrap();
+            let after = LogicalInstant::from_unix_seconds(MIDNIGHT_UTC - 1);
+            manifest
+                .scheduled()
+                .map(|(function, schedule, zone)| {
+                    let zone = fireemu_adapter_functions::zone::resolve(zone).unwrap();
+                    (
+                        function.name.clone(),
+                        schedule.next_after_in(after, &*zone).unwrap(),
+                    )
+                })
+                .collect::<Vec<_>>()
+        };
+        let at = |seconds: i64| LogicalInstant::from_unix_seconds(MIDNIGHT_UTC + seconds);
+        // 09:00 in Tokyo (UTC+9) is 00:00 UTC; 09:00 UTC is nine hours later.
+        assert_eq!(
+            occurrence(Some("Asia/Tokyo")),
+            [
+                ("daily".to_owned(), at(0)),
+                ("pinned".to_owned(), at(9 * 3600))
+            ],
+            "the configured default moves a schedule that names no zone and leaves a named one",
+        );
+        assert_eq!(
+            occurrence(None),
+            [
+                ("daily".to_owned(), at(9 * 3600)),
+                ("pinned".to_owned(), at(9 * 3600))
+            ],
+            "without a configured default a v2 schedule that names no zone runs in UTC (production's v2 default)",
+        );
     }
 
     #[test]

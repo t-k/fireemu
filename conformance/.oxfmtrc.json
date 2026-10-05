@@ -61,6 +61,8 @@
     "src/storage-rules/local-equivalence.mjs",
     "src/storage-rules/local-smoke.mjs",
     "src/storage-rules/locked-run.mjs",
+    "src/storage-rules/management-compare.mjs",
+    "src/storage-rules/management-local.mjs",
     "src/storage-rules/management_programs.mjs",
     "src/storage-rules/manifest.mjs",
     "src/storage-rules/pins.mjs",

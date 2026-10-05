@@ -178,7 +178,12 @@ impl StorageGenerationDriver {
     /// Deletes the current object without rewinding the allocator.
     pub fn delete(&mut self) -> Result {
         self.store
-            .delete(&self.bucket, &self.object, Precondition::default())
+            .delete(
+                &self.bucket,
+                &self.object,
+                Precondition::default(),
+                LogicalInstant::UNIX_EPOCH,
+            )
             .map_err(|error| invalid_data(&format!("delete failed: {error}")))?;
         self.record_action("Delete")
     }
@@ -269,7 +274,7 @@ impl StorageGenerationDriver {
 
     fn high_water(&self) -> Result<u64> {
         self.store
-            .next_generation_preview()
+            .next_generation_preview(LogicalInstant::UNIX_EPOCH)
             .map(|next| next - 1)
             .map_err(|error| invalid_data(&format!("cannot observe generation allocator: {error}")))
     }

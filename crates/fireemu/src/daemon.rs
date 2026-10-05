@@ -325,6 +325,23 @@ fn blocking_auth_selection(
     }
 }
 
+/// How long a writer held behind a read lock waits before it is refused, and whether the wait
+/// also runs on the virtual clock. Strict follows what production showed (20 s, counted on the
+/// virtual clock as well as the wall clock: see `STRICT_CONTENTION_WAIT`); the emulator profile
+/// keeps the 15 s wall-clock wait it has always had.
+const fn contention_for(
+    profile: crate::config::CompatibilityProfile,
+) -> (std::time::Duration, bool) {
+    match profile {
+        crate::config::CompatibilityProfile::Strict => {
+            (fireemu_adapter_grpc::local::STRICT_CONTENTION_WAIT, true)
+        }
+        crate::config::CompatibilityProfile::Emulator => {
+            (fireemu_adapter_grpc::local::DEFAULT_CONTENTION_WAIT, false)
+        }
+    }
+}
+
 /// How `signInWithIdp` assertions are verified (AUTH-FEDERATION owner decision O4). Strict
 /// verifies signed OIDC ID tokens with the `auth.idpSigners` keys, and refuses every `IdP`
 /// sign-in without them; the emulator profile keeps the fixture `IdP` and ignores the keys.
@@ -1501,13 +1518,19 @@ pub(super) fn run(options: Options, exec: Option<ExecPlan>) -> ExitCode {
             },
             indexes: default_indexes,
         };
+        let (contention_wait, virtual_contention) = contention_for(cfg.profile);
         let backend = if cfg.clock_start_pinned {
             LocalBackend::new(gateway.clone(), clock.clone(), cfg.seed)
-                .with_contention_wait(fireemu_adapter_grpc::local::DEFAULT_CONTENTION_WAIT)
+                .with_contention_wait(contention_wait)
         } else {
             LocalBackend::new(gateway.clone(), clock.clone(), cfg.seed)
-                .with_contention_wait(fireemu_adapter_grpc::local::DEFAULT_CONTENTION_WAIT)
+                .with_contention_wait(contention_wait)
                 .with_wall_clock_write_time()
+        };
+        let backend = if virtual_contention {
+            backend.with_virtual_contention_wait()
+        } else {
+            backend
         }
         // A database the configuration names exists before anything writes to it. Under the
         // strict profile every other named database is refused until a create path (an import
@@ -1844,6 +1867,21 @@ pub(super) fn run(options: Options, exec: Option<ExecPlan>) -> ExitCode {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn the_strict_profile_waits_20_s_on_both_clocks_and_the_emulator_profile_15_s_on_the_wall_clock(
+    ) {
+        use crate::config::CompatibilityProfile::{Emulator, Strict};
+
+        assert_eq!(
+            super::contention_for(Strict),
+            (std::time::Duration::from_secs(20), true)
+        );
+        assert_eq!(
+            super::contention_for(Emulator),
+            (std::time::Duration::from_secs(15), false)
+        );
+    }
+
     use std::sync::{Arc, Mutex};
 
     use fireemu_adapter_logging::wire::build_bundle;

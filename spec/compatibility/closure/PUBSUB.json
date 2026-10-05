@@ -1,0 +1,352 @@
+{
+  "schemaVersion": 1,
+  "parent": "PUBSUB",
+  "parentStatus": "IMPLEMENTING",
+  "inventoryStatus": "FROZEN",
+  "frozenOn": "2026-09-30",
+  "freezeAuthority": "docs.local/instructions/owner-decisions.md (2026-09-30 PUBSUB and EVENTARC scope: coordinator rulings)",
+  "oracleTrack": "disposable-sandbox",
+  "oracle": {
+    "project": "fireemu-oracle-idp",
+    "region": "us-central1"
+  },
+  "closureReview": {
+    "decision": "PENDING"
+  },
+  "scopeDecisions": [
+    {
+      "id": "P1",
+      "decision": "Include unary REST v1 and native google.pubsub.v1 gRPC plus StreamingPull. Latency, throughput, fleet failover, scaling and billing behavior are outside this parent.",
+      "rationale": "Both wire protocols and streaming are existing supported claims; bounded semantic observations are distinct from performance promises.",
+      "status": "FROZEN",
+      "decidedBy": "coordinator (delegated by owner)",
+      "decidedOn": "2026-09-30",
+      "decisionRef": "docs.local/instructions/owner-decisions.md (2026-09-30 PUBSUB and EVENTARC scope: coordinator rulings)"
+    },
+    {
+      "id": "P2",
+      "decision": "Include retention configuration and retained-message replay. Multi-day wall-clock expiration and subscription idle expiration are outside the bounded production campaign.",
+      "rationale": "Retention configuration is required even though the current emulator subset rejects it; logical-clock regressions cover changes to expiry scheduling.",
+      "status": "FROZEN",
+      "decidedBy": "coordinator (delegated by owner)",
+      "decidedOn": "2026-09-30",
+      "decisionRef": "docs.local/instructions/owner-decisions.md (2026-09-30 PUBSUB and EVENTARC scope: coordinator rulings)"
+    },
+    {
+      "id": "P3",
+      "decision": "Include snapshots and seek. UpdateTopic, DetachSubscription, unsupported UpdateSnapshot mutations, schemas, transforms, BigQuery/Cloud Storage export delivery, exactly-once, cross-project resources and managed IAM administration are outside this parent.",
+      "rationale": "Snapshots and seek are already claimed; managed features beyond the supported broker subset need separately declared scope.",
+      "status": "FROZEN",
+      "decidedBy": "coordinator (delegated by owner)",
+      "decidedOn": "2026-09-30",
+      "decisionRef": "docs.local/instructions/owner-decisions.md (2026-09-30 PUBSUB and EVENTARC scope: coordinator rulings)"
+    },
+    {
+      "id": "P4",
+      "decision": "Include the push subscription configuration API: create with pushConfig, get, modifyPushConfig and refusal shapes. Push delivery is outside this parent. Never publish to a topic that has a push subscription during configuration observation.",
+      "rationale": "Observe the API without causing a request to its endpoint; loopback-only local push remains a documented local boundary.",
+      "status": "FROZEN",
+      "decidedBy": "coordinator (delegated by owner)",
+      "decidedOn": "2026-09-30",
+      "decisionRef": "docs.local/instructions/owner-decisions.md (2026-09-30 PUBSUB and EVENTARC scope: coordinator rulings)"
+    },
+    {
+      "id": "P5",
+      "decision": "Include missing/invalid-token authentication refusal. IAM permission refusal is outside this parent; do not create a restricted principal.",
+      "rationale": "The coordinator explicitly excludes IAM permission refusal while keeping transport authentication errors observable.",
+      "status": "FROZEN",
+      "decidedBy": "coordinator (delegated by owner)",
+      "decidedOn": "2026-09-30",
+      "decisionRef": "docs.local/instructions/owner-decisions.md (2026-09-30 PUBSUB and EVENTARC scope: coordinator rulings)"
+    },
+    {
+      "id": "P6",
+      "decision": "Pub/Sub-to-Functions delivery belongs to FUNCTIONS-EVENTS; custom Eventarc belongs to EVENTARC and scheduled functions belong to SCHEDULED-FUNCTIONS.",
+      "rationale": "The parent observes the Pub/Sub broker API without duplicating other parent delivery obligations.",
+      "status": "FROZEN",
+      "decidedBy": "coordinator (delegated by owner)",
+      "decidedOn": "2026-09-30",
+      "decisionRef": "docs.local/instructions/owner-decisions.md (2026-09-30 PUBSUB and EVENTARC scope: coordinator rulings)"
+    }
+  ],
+  "conditions": [
+    {
+      "conditionId": "PUBSUB/topic-lifecycle",
+      "source": "spec/compatibility/contract.json#PUBSUB-CLAIM-WIRE",
+      "recipeIds": ["pubsub/topics/lifecycle"],
+      "cases": [
+        "create-get-list-delete",
+        "labels",
+        "duplicate-create",
+        "missing-get-delete",
+        "list-topic-subscriptions",
+        "delete-topic-with-subscription"
+      ],
+      "transports": ["rest", "grpc"],
+      "status": "PENDING_CORPUS"
+    },
+    {
+      "conditionId": "PUBSUB/resource-names",
+      "source": "spec/compatibility/contract.json#PUBSUB-CLAIM-WIRE",
+      "recipeIds": ["pubsub/names"],
+      "cases": [
+        "valid-name",
+        "invalid-name",
+        "length-boundary",
+        "reserved-prefix",
+        "path-body-mismatch",
+        "invalid-resource-path"
+      ],
+      "transports": ["rest", "grpc"],
+      "status": "PENDING_CORPUS"
+    },
+    {
+      "conditionId": "PUBSUB/list-pagination",
+      "source": "spec/compatibility/contract.json#PUBSUB-CLAIM-WIRE",
+      "recipeIds": ["pubsub/lists"],
+      "cases": ["page-traversal", "invalid-page-token", "owned-resources-only"],
+      "transports": ["rest", "grpc"],
+      "status": "PENDING_CORPUS"
+    },
+    {
+      "conditionId": "PUBSUB/subscription-lifecycle",
+      "source": "spec/compatibility/contract.json#PUBSUB-CLAIM-WIRE",
+      "recipeIds": ["pubsub/subscriptions/lifecycle"],
+      "cases": [
+        "create-get-list-delete",
+        "default-ack-deadline",
+        "explicit-ack-deadline",
+        "missing-topic",
+        "duplicate-create",
+        "missing-subscription"
+      ],
+      "transports": ["rest", "grpc"],
+      "status": "PENDING_CORPUS"
+    },
+    {
+      "conditionId": "PUBSUB/subscription-configuration",
+      "source": "spec/compatibility/contract.json#PUBSUB-CLAIM-WIRE",
+      "recipeIds": ["pubsub/subscriptions/config"],
+      "cases": [
+        "message-retention-duration",
+        "retain-acked-messages",
+        "filter",
+        "dead-letter-policy",
+        "retry-policy",
+        "enable-message-ordering",
+        "create-get-round-trip",
+        "atomic-field-mask-update",
+        "omitted-field-preservation",
+        "immutable-field-update",
+        "duration-boundaries",
+        "ack-deadline-boundaries"
+      ],
+      "transports": ["rest", "grpc"],
+      "status": "PENDING_CORPUS"
+    },
+    {
+      "conditionId": "PUBSUB/push-configuration",
+      "source": "spec/compatibility/contract.json#PUBSUB-CLAIM-WIRE",
+      "recipeIds": ["pubsub/subscriptions/push-config"],
+      "cases": [
+        "create-push-config",
+        "get-push-config",
+        "modify-push-config",
+        "switch-to-pull",
+        "invalid-push-config",
+        "no-publications"
+      ],
+      "transports": ["rest", "grpc"],
+      "status": "PENDING_CORPUS"
+    },
+    {
+      "conditionId": "PUBSUB/publish-wire",
+      "source": "spec/compatibility/contract.json#PUBSUB-CLAIM-WIRE",
+      "recipeIds": ["pubsub/publish/wire"],
+      "cases": [
+        "binary-data",
+        "attributes-only",
+        "data-only",
+        "ordering-key",
+        "mixed-batch",
+        "empty-message",
+        "invalid-base64",
+        "nonempty-unique-message-ids",
+        "publish-pull-id-correlation"
+      ],
+      "transports": ["rest", "grpc"],
+      "status": "PENDING_CORPUS"
+    },
+    {
+      "conditionId": "PUBSUB/publish-limits",
+      "source": "spec/compatibility/contract.json#PUBSUB-CLAIM-WIRE",
+      "recipeIds": ["pubsub/publish/limits"],
+      "cases": [
+        "request-bytes-boundary",
+        "batch-count-boundary",
+        "message-bytes-boundary",
+        "attribute-count-boundary",
+        "attribute-size-boundary",
+        "ordering-key-bytes-boundary"
+      ],
+      "transports": ["rest", "grpc"],
+      "status": "PENDING_CORPUS"
+    },
+    {
+      "conditionId": "PUBSUB/pull-ack",
+      "source": "spec/compatibility/contract.json#PUBSUB-CLAIM-WIRE",
+      "recipeIds": ["pubsub/delivery/unary"],
+      "cases": [
+        "empty-pull",
+        "max-messages-validity",
+        "publish-pull-ack",
+        "multiple-subscriptions",
+        "acked-not-redelivered",
+        "unknown-ack-id",
+        "repeated-ack-id",
+        "stale-ack-id"
+      ],
+      "transports": ["rest", "grpc"],
+      "status": "PENDING_CORPUS"
+    },
+    {
+      "conditionId": "PUBSUB/nack-deadline-redelivery",
+      "source": "spec/compatibility/contract.json#PUBSUB-CLAIM-WIRE",
+      "recipeIds": ["pubsub/delivery/deadlines"],
+      "cases": [
+        "nack-zero",
+        "deadline-extension",
+        "invalid-deadline",
+        "deadline-expiry",
+        "redelivery-id-correlation",
+        "cancel-without-ack"
+      ],
+      "transports": ["rest", "grpc"],
+      "status": "PENDING_CORPUS"
+    },
+    {
+      "conditionId": "PUBSUB/filter-evaluation",
+      "source": "spec/compatibility/contract.json#PUBSUB-CLAIM-WIRE",
+      "recipeIds": ["pubsub/delivery/filters"],
+      "cases": [
+        "match",
+        "nonmatch",
+        "missing-attribute",
+        "attribute-exists",
+        "inequality",
+        "conjunction",
+        "disjunction",
+        "negation",
+        "invalid-filter",
+        "filter-update-refusal"
+      ],
+      "transports": ["rest", "grpc"],
+      "status": "PENDING_CORPUS"
+    },
+    {
+      "conditionId": "PUBSUB/ordering",
+      "source": "spec/compatibility/contract.json#PUBSUB-CLAIM-WIRE",
+      "recipeIds": ["pubsub/delivery/ordering"],
+      "cases": [
+        "single-key-sequence",
+        "separate-keys",
+        "ordering-disabled",
+        "nack-blocks-key",
+        "ack-unblocks-key"
+      ],
+      "transports": ["rest", "grpc"],
+      "status": "PENDING_CORPUS"
+    },
+    {
+      "conditionId": "PUBSUB/retry-dead-letter",
+      "source": "spec/compatibility/contract.json#PUBSUB-CLAIM-WIRE",
+      "recipeIds": ["pubsub/delivery/dead-letter"],
+      "cases": [
+        "policy-round-trip",
+        "delivery-attempt-without-policy",
+        "delivery-attempt-with-policy",
+        "eventual-forwarding",
+        "forwarded-payload-identity",
+        "invalid-policy"
+      ],
+      "transports": ["rest", "grpc"],
+      "status": "PENDING_CORPUS"
+    },
+    {
+      "conditionId": "PUBSUB/streaming-pull",
+      "source": "spec/compatibility/contract.json#PUBSUB-CLAIM-WIRE",
+      "recipeIds": ["pubsub/delivery/stream"],
+      "cases": [
+        "opening-frame",
+        "future-publications",
+        "in-stream-ack",
+        "in-stream-nack",
+        "in-stream-deadline-update",
+        "flow-control",
+        "client-cancel",
+        "half-close",
+        "missing-subscription",
+        "invalid-opening-frame",
+        "invalid-update-frame"
+      ],
+      "transports": ["grpc"],
+      "status": "PENDING_CORPUS"
+    },
+    {
+      "conditionId": "PUBSUB/snapshot-seek",
+      "source": "spec/compatibility/contract.json#PUBSUB-CLAIM-WIRE",
+      "recipeIds": ["pubsub/replay"],
+      "cases": [
+        "snapshot-lifecycle",
+        "snapshot-labels",
+        "snapshot-topic-relationship",
+        "backlog-replay",
+        "post-snapshot-publication",
+        "seek-time-retain-true",
+        "seek-time-retain-false",
+        "wrong-topic-target",
+        "missing-snapshot",
+        "snapshot-lifetime-shape"
+      ],
+      "transports": ["rest", "grpc"],
+      "status": "PENDING_CORPUS"
+    },
+    {
+      "conditionId": "PUBSUB/errors-authentication",
+      "source": "spec/compatibility/contract.json#PUBSUB-CLAIM-WIRE",
+      "recipeIds": ["pubsub/errors"],
+      "cases": [
+        "missing-resource",
+        "invalid-argument",
+        "duplicate-resource",
+        "no-token",
+        "invalid-token",
+        "canonical-error-shape"
+      ],
+      "transports": ["rest", "grpc"],
+      "status": "PENDING_CORPUS"
+    },
+    {
+      "conditionId": "PUBSUB/final-artifact-regression",
+      "source": "spec/compatibility/contract.json#PUBSUB-CLAIM-WIRE",
+      "recipeIds": ["pubsub/final"],
+      "cases": [
+        "strict-production",
+        "emulator-official",
+        "complete-case-set",
+        "clean-source-build",
+        "same-final-artifact"
+      ],
+      "transports": ["artifact"],
+      "status": "PENDING_CORPUS"
+    },
+    {
+      "conditionId": "PUBSUB/closure-review",
+      "source": "spec/compatibility/contract.json#PUBSUB-CLAIM-WIRE",
+      "recipeIds": ["pubsub/closure"],
+      "cases": ["independent-approval"],
+      "transports": ["artifact"],
+      "status": "PENDING_CORPUS"
+    }
+  ]
+}

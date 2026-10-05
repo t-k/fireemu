@@ -1,0 +1,1884 @@
+{
+  "schemaVersion": 1,
+  "kind": "fs-transaction-recorded-comparison-v1",
+  "parent": "FS-TRANSACTION",
+  "program": "FS-TRANSACTION-P13A-INFERRED-ANSWERS",
+  "condition": [
+    "FS-TRANSACTION/idle-expiry",
+    "FS-TRANSACTION/total-lifetime-expiry"
+  ],
+  "coverage": "PARTIAL",
+  "authorizesProduction": false,
+  "productionRequests": 0,
+  "profile": "strict",
+  "artifact": {
+    "sourceCommit": "774a9f24c62abdd7381c66797d6202ed03f24666",
+    "binarySha256": "d0d8d43726a808b600f702f1f6be26c4863fc48dd7b4971a519adcae9ce01888"
+  },
+  "comparer": {
+    "sha256": "7b360afde62c053ae359bc786812b65578b5ef544ef8c521e21f3cf41eb4de8c",
+    "replayClock": "virtual"
+  },
+  "asRecorded": [
+    {
+      "path": "tools/compat-broad/fs-write-txn/fs_txn_table_p13a.py",
+      "commit": "ab3f8f6c642871cffafd49fcbb67e04fe2b4d8d6",
+      "blob": "7fd66c9d7718f0ca97238e811cfd9325f3e9a004",
+      "sha256": "c476dacd79f7067eb8c33276d10901a3a678dfd7e408c7bac089ab85283bbfec"
+    }
+  ],
+  "recordings": [
+    {
+      "recording": 1,
+      "productionFileSha256": "75f590e6aaa41ed07942c08772b15ccfbc15570a752df76d66e69af0f43842f2",
+      "mismatches": 0,
+      "cases": [
+        {
+          "caseId": "rest/uc-first-commit",
+          "production": {
+            "code": 10,
+            "details": "The referenced transaction has expired or is no longer valid."
+          },
+          "local": {
+            "code": 10,
+            "details": "The referenced transaction has expired or is no longer valid."
+          },
+          "match": true
+        },
+        {
+          "caseId": "rest/ur-first-rollback",
+          "production": {
+            "code": 10,
+            "details": "The referenced transaction has expired or is no longer valid."
+          },
+          "local": {
+            "code": 10,
+            "details": "The referenced transaction has expired or is no longer valid."
+          },
+          "match": true
+        },
+        {
+          "caseId": "rest/ur-read-after",
+          "production": {
+            "code": 10,
+            "details": "The referenced transaction has expired or is no longer valid."
+          },
+          "local": {
+            "code": 10,
+            "details": "The referenced transaction has expired or is no longer valid."
+          },
+          "match": true
+        },
+        {
+          "caseId": "rest/i1-idle-read",
+          "production": {
+            "code": 10,
+            "details": "The referenced transaction has expired or is no longer valid."
+          },
+          "local": {
+            "code": 10,
+            "details": "The referenced transaction has expired or is no longer valid."
+          },
+          "match": true
+        },
+        {
+          "caseId": "rest/i1-memory-read",
+          "production": {
+            "code": 10,
+            "details": "The referenced transaction has expired or is no longer valid."
+          },
+          "local": {
+            "code": 10,
+            "details": "The referenced transaction has expired or is no longer valid."
+          },
+          "match": true
+        },
+        {
+          "caseId": "rest/i1-late-rollback",
+          "production": {
+            "code": 10,
+            "details": "The referenced transaction has expired or is no longer valid."
+          },
+          "local": {
+            "code": 10,
+            "details": "The referenced transaction has expired or is no longer valid."
+          },
+          "match": true
+        },
+        {
+          "caseId": "rest/i1-read-after",
+          "production": {
+            "code": 10,
+            "details": "The referenced transaction has expired or is no longer valid."
+          },
+          "local": {
+            "code": 10,
+            "details": "The referenced transaction has expired or is no longer valid."
+          },
+          "match": true
+        },
+        {
+          "caseId": "rest/i2-idle-read",
+          "production": {
+            "code": 10,
+            "details": "The referenced transaction has expired or is no longer valid."
+          },
+          "local": {
+            "code": 10,
+            "details": "The referenced transaction has expired or is no longer valid."
+          },
+          "match": true
+        },
+        {
+          "caseId": "rest/i2-late-read",
+          "production": {
+            "code": 3,
+            "details": "Invalid transaction."
+          },
+          "local": {
+            "code": 3,
+            "details": "Invalid transaction."
+          },
+          "match": true
+        }
+      ],
+      "reads": [
+        {
+          "site": "setup/absence-a",
+          "production": {
+            "code": 5,
+            "state": null,
+            "documents": null
+          },
+          "local": {
+            "code": 5,
+            "state": null,
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "rest/uc/read-a",
+          "production": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "local": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "rest/uc/keepalive-1",
+          "production": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "local": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "rest/uc/keepalive-2",
+          "production": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "local": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "rest/uc/keepalive-3",
+          "production": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "local": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "rest/uc/keepalive-4",
+          "production": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "local": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "rest/uc/keepalive-5",
+          "production": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "local": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "rest/uc/keepalive-6",
+          "production": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "local": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "rest/uc/keepalive-7",
+          "production": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "local": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "rest/uc/keepalive-8",
+          "production": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "local": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "rest/uc/keepalive-9",
+          "production": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "local": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "rest/uc/live-read",
+          "production": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "local": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "rest/uc/post-read-a",
+          "production": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "local": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "rest/ur/read-a",
+          "production": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "local": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "rest/ur/keepalive-1",
+          "production": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "local": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "rest/ur/keepalive-2",
+          "production": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "local": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "rest/ur/keepalive-3",
+          "production": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "local": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "rest/ur/keepalive-4",
+          "production": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "local": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "rest/ur/keepalive-5",
+          "production": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "local": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "rest/ur/keepalive-6",
+          "production": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "local": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "rest/ur/keepalive-7",
+          "production": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "local": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "rest/ur/keepalive-8",
+          "production": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "local": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "rest/ur/keepalive-9",
+          "production": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "local": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "rest/ur/live-read",
+          "production": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "local": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "rest/ur/read-after",
+          "production": {
+            "code": 10,
+            "state": null,
+            "documents": null
+          },
+          "local": {
+            "code": 10,
+            "state": null,
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "rest/i1/read-a",
+          "production": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "local": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "rest/i1/idle-read",
+          "production": {
+            "code": 10,
+            "state": null,
+            "documents": null
+          },
+          "local": {
+            "code": 10,
+            "state": null,
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "rest/i1/memory-read",
+          "production": {
+            "code": 10,
+            "state": null,
+            "documents": null
+          },
+          "local": {
+            "code": 10,
+            "state": null,
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "rest/i1/read-after",
+          "production": {
+            "code": 10,
+            "state": null,
+            "documents": null
+          },
+          "local": {
+            "code": 10,
+            "state": null,
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "rest/i2/read-a",
+          "production": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "local": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "rest/i2/idle-read",
+          "production": {
+            "code": 10,
+            "state": null,
+            "documents": null
+          },
+          "local": {
+            "code": 10,
+            "state": null,
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "rest/i2/late-read",
+          "production": {
+            "code": 3,
+            "state": null,
+            "documents": null
+          },
+          "local": {
+            "code": 3,
+            "state": null,
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "final/post-read-a",
+          "production": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "local": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "match": true
+        }
+      ],
+      "commitTimes": [
+        {
+          "site": "setup/create-a",
+          "production": {
+            "commitTime": true,
+            "relation": null
+          },
+          "local": {
+            "commitTime": true,
+            "relation": null
+          },
+          "match": true
+        }
+      ],
+      "achievedAges": [
+        {
+          "site": "rest/uc/keepalive-1",
+          "production": 25.809826541226357,
+          "local": 25.81000000005588,
+          "difference": 0.0
+        },
+        {
+          "site": "rest/uc/keepalive-2",
+          "production": 25.946114708669484,
+          "local": 25.947000000160187,
+          "difference": 0.001
+        },
+        {
+          "site": "rest/uc/keepalive-3",
+          "production": 25.927188833244145,
+          "local": 25.927999999839813,
+          "difference": 0.001
+        },
+        {
+          "site": "rest/uc/keepalive-4",
+          "production": 26.218496874906123,
+          "local": 26.219000000040978,
+          "difference": 0.001
+        },
+        {
+          "site": "rest/uc/keepalive-5",
+          "production": 25.77724187495187,
+          "local": 25.777999999932945,
+          "difference": 0.001
+        },
+        {
+          "site": "rest/uc/keepalive-6",
+          "production": 25.957234249915928,
+          "local": 25.958000000100583,
+          "difference": 0.001
+        },
+        {
+          "site": "rest/uc/keepalive-7",
+          "production": 25.856046500150114,
+          "local": 25.856999999843538,
+          "difference": 0.001
+        },
+        {
+          "site": "rest/uc/keepalive-8",
+          "production": 25.856741500087082,
+          "local": 25.8570000003092,
+          "difference": 0.0
+        },
+        {
+          "site": "rest/uc/keepalive-9",
+          "production": 25.89881758298725,
+          "local": 25.898999999742955,
+          "difference": 0.0
+        },
+        {
+          "site": "rest/uc/live-read",
+          "production": 13.906230624765158,
+          "local": 13.907000000122935,
+          "difference": 0.001
+        },
+        {
+          "site": "rest/uc/first-commit",
+          "production": 34.01510583423078,
+          "local": 34.01599999982864,
+          "difference": 0.001
+        },
+        {
+          "site": "rest/ur/keepalive-1",
+          "production": 25.798026875127107,
+          "local": 25.799000000115484,
+          "difference": 0.001
+        },
+        {
+          "site": "rest/ur/keepalive-2",
+          "production": 25.77851599967107,
+          "local": 25.779000000096858,
+          "difference": 0.0
+        },
+        {
+          "site": "rest/ur/keepalive-3",
+          "production": 25.874888374935836,
+          "local": 25.875,
+          "difference": 0.0
+        },
+        {
+          "site": "rest/ur/keepalive-4",
+          "production": 25.91994291730225,
+          "local": 25.919999999925494,
+          "difference": 0.0
+        },
+        {
+          "site": "rest/ur/keepalive-5",
+          "production": 25.894613583106548,
+          "local": 25.895000000018626,
+          "difference": 0.0
+        },
+        {
+          "site": "rest/ur/keepalive-6",
+          "production": 25.858229791745543,
+          "local": 25.858999999705702,
+          "difference": 0.001
+        },
+        {
+          "site": "rest/ur/keepalive-7",
+          "production": 26.070964667014778,
+          "local": 26.070999999996275,
+          "difference": 0.0
+        },
+        {
+          "site": "rest/ur/keepalive-8",
+          "production": 26.01632724981755,
+          "local": 26.01699999999255,
+          "difference": 0.001
+        },
+        {
+          "site": "rest/ur/keepalive-9",
+          "production": 25.819584333337843,
+          "local": 25.820000000298023,
+          "difference": 0.0
+        },
+        {
+          "site": "rest/ur/live-read",
+          "production": 13.906486582942307,
+          "local": 13.906999999657273,
+          "difference": 0.001
+        },
+        {
+          "site": "rest/ur/first-rollback",
+          "production": 33.867658583913,
+          "local": 33.868000000249594,
+          "difference": 0.0
+        },
+        {
+          "site": "rest/i1/idle-read",
+          "production": 131.73350633261725,
+          "local": 131.7339999997057,
+          "difference": 0.0
+        },
+        {
+          "site": "rest/i1/memory-read",
+          "production": 101.8590312502347,
+          "local": 101.85999999986961,
+          "difference": 0.001
+        },
+        {
+          "site": "rest/i1/late-rollback",
+          "production": 51.88598291715607,
+          "local": 51.88600000040606,
+          "difference": 0.0
+        },
+        {
+          "site": "rest/i2/idle-read",
+          "production": 131.82588812476024,
+          "local": 131.82599999988452,
+          "difference": 0.0
+        },
+        {
+          "site": "rest/i2/late-read",
+          "production": 176.85309458291158,
+          "local": 176.85400000028312,
+          "difference": 0.001
+        }
+      ],
+      "tokenAges": [
+        {
+          "site": "rest/uc/keepalive-4",
+          "production": 104.5254702498205,
+          "emulator": 105.60899996757507,
+          "difference": 1.084,
+          "match": true
+        },
+        {
+          "site": "rest/uc/keepalive-5",
+          "production": 130.30271212477237,
+          "emulator": 131.38699984550476,
+          "difference": 1.084,
+          "match": true
+        },
+        {
+          "site": "rest/uc/keepalive-6",
+          "production": 156.2599463746883,
+          "emulator": 157.34500002861023,
+          "difference": 1.085,
+          "match": true
+        },
+        {
+          "site": "rest/uc/keepalive-7",
+          "production": 182.1159928748384,
+          "emulator": 183.20199990272522,
+          "difference": 1.086,
+          "match": true
+        },
+        {
+          "site": "rest/uc/keepalive-8",
+          "production": 207.9727343749255,
+          "emulator": 209.0590000152588,
+          "difference": 1.086,
+          "match": true
+        },
+        {
+          "site": "rest/uc/keepalive-9",
+          "production": 233.87155195791274,
+          "emulator": 234.9579999446869,
+          "difference": 1.086,
+          "match": true
+        },
+        {
+          "site": "rest/uc/live-read",
+          "production": 247.7777825826779,
+          "emulator": 248.86500000953674,
+          "difference": 1.087,
+          "match": true
+        },
+        {
+          "site": "rest/uc/first-commit",
+          "production": 281.7928884169087,
+          "emulator": 282.8809998035431,
+          "difference": 1.088,
+          "match": true
+        },
+        {
+          "site": "rest/ur/keepalive-4",
+          "production": 104.01282537495717,
+          "emulator": 105.11700010299683,
+          "difference": 1.104,
+          "match": true
+        },
+        {
+          "site": "rest/ur/keepalive-5",
+          "production": 129.90743895806372,
+          "emulator": 131.01200008392334,
+          "difference": 1.105,
+          "match": true
+        },
+        {
+          "site": "rest/ur/keepalive-6",
+          "production": 155.76566874980927,
+          "emulator": 156.8710000514984,
+          "difference": 1.105,
+          "match": true
+        },
+        {
+          "site": "rest/ur/keepalive-7",
+          "production": 181.83663341682404,
+          "emulator": 182.94199991226196,
+          "difference": 1.105,
+          "match": true
+        },
+        {
+          "site": "rest/ur/keepalive-8",
+          "production": 207.8529606666416,
+          "emulator": 208.95900011062622,
+          "difference": 1.106,
+          "match": true
+        },
+        {
+          "site": "rest/ur/keepalive-9",
+          "production": 233.67254499997944,
+          "emulator": 234.77900004386902,
+          "difference": 1.106,
+          "match": true
+        },
+        {
+          "site": "rest/ur/live-read",
+          "production": 247.57903158292174,
+          "emulator": 248.68600010871887,
+          "difference": 1.107,
+          "match": true
+        },
+        {
+          "site": "rest/ur/first-rollback",
+          "production": 281.44669016683474,
+          "emulator": 282.55399990081787,
+          "difference": 1.107,
+          "match": true
+        },
+        {
+          "site": "rest/ur/read-after",
+          "production": 283.21996833290905,
+          "emulator": 284.3269999027252,
+          "difference": 1.107,
+          "match": true
+        },
+        {
+          "site": "rest/i1/idle-read",
+          "production": 132.36626179190353,
+          "emulator": 133.80799984931946,
+          "difference": 1.442,
+          "match": true
+        },
+        {
+          "site": "rest/i1/memory-read",
+          "production": 234.22529304213822,
+          "emulator": 235.66799998283386,
+          "difference": 1.443,
+          "match": true
+        },
+        {
+          "site": "rest/i1/late-rollback",
+          "production": 286.1112759592943,
+          "emulator": 287.55399990081787,
+          "difference": 1.443,
+          "match": true
+        },
+        {
+          "site": "rest/i1/read-after",
+          "production": 288.00805604225025,
+          "emulator": 289.45099997520447,
+          "difference": 1.443,
+          "match": true
+        },
+        {
+          "site": "rest/i2/idle-read",
+          "production": 132.44848900008947,
+          "emulator": 133.5699999332428,
+          "difference": 1.122,
+          "match": true
+        },
+        {
+          "site": "rest/i2/late-read",
+          "production": 309.30158358300105,
+          "emulator": 310.42400002479553,
+          "difference": 1.122,
+          "match": true
+        }
+      ]
+    },
+    {
+      "recording": 2,
+      "productionFileSha256": "1f45127faa57e36591f5afd242cba821dec056536f239e922eb9e5d0c3b4c4b9",
+      "mismatches": 0,
+      "cases": [
+        {
+          "caseId": "rest/uc-first-commit",
+          "production": {
+            "code": 10,
+            "details": "The referenced transaction has expired or is no longer valid."
+          },
+          "local": {
+            "code": 10,
+            "details": "The referenced transaction has expired or is no longer valid."
+          },
+          "match": true
+        },
+        {
+          "caseId": "rest/ur-first-rollback",
+          "production": {
+            "code": 10,
+            "details": "The referenced transaction has expired or is no longer valid."
+          },
+          "local": {
+            "code": 10,
+            "details": "The referenced transaction has expired or is no longer valid."
+          },
+          "match": true
+        },
+        {
+          "caseId": "rest/ur-read-after",
+          "production": {
+            "code": 10,
+            "details": "The referenced transaction has expired or is no longer valid."
+          },
+          "local": {
+            "code": 10,
+            "details": "The referenced transaction has expired or is no longer valid."
+          },
+          "match": true
+        },
+        {
+          "caseId": "rest/i1-idle-read",
+          "production": {
+            "code": 10,
+            "details": "The referenced transaction has expired or is no longer valid."
+          },
+          "local": {
+            "code": 10,
+            "details": "The referenced transaction has expired or is no longer valid."
+          },
+          "match": true
+        },
+        {
+          "caseId": "rest/i1-memory-read",
+          "production": {
+            "code": 10,
+            "details": "The referenced transaction has expired or is no longer valid."
+          },
+          "local": {
+            "code": 10,
+            "details": "The referenced transaction has expired or is no longer valid."
+          },
+          "match": true
+        },
+        {
+          "caseId": "rest/i1-late-rollback",
+          "production": {
+            "code": 10,
+            "details": "The referenced transaction has expired or is no longer valid."
+          },
+          "local": {
+            "code": 10,
+            "details": "The referenced transaction has expired or is no longer valid."
+          },
+          "match": true
+        },
+        {
+          "caseId": "rest/i1-read-after",
+          "production": {
+            "code": 10,
+            "details": "The referenced transaction has expired or is no longer valid."
+          },
+          "local": {
+            "code": 10,
+            "details": "The referenced transaction has expired or is no longer valid."
+          },
+          "match": true
+        },
+        {
+          "caseId": "rest/i2-idle-read",
+          "production": {
+            "code": 10,
+            "details": "The referenced transaction has expired or is no longer valid."
+          },
+          "local": {
+            "code": 10,
+            "details": "The referenced transaction has expired or is no longer valid."
+          },
+          "match": true
+        },
+        {
+          "caseId": "rest/i2-late-read",
+          "production": {
+            "code": 3,
+            "details": "Invalid transaction."
+          },
+          "local": {
+            "code": 3,
+            "details": "Invalid transaction."
+          },
+          "match": true
+        }
+      ],
+      "reads": [
+        {
+          "site": "setup/absence-a",
+          "production": {
+            "code": 5,
+            "state": null,
+            "documents": null
+          },
+          "local": {
+            "code": 5,
+            "state": null,
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "rest/uc/read-a",
+          "production": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "local": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "rest/uc/keepalive-1",
+          "production": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "local": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "rest/uc/keepalive-2",
+          "production": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "local": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "rest/uc/keepalive-3",
+          "production": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "local": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "rest/uc/keepalive-4",
+          "production": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "local": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "rest/uc/keepalive-5",
+          "production": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "local": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "rest/uc/keepalive-6",
+          "production": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "local": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "rest/uc/keepalive-7",
+          "production": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "local": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "rest/uc/keepalive-8",
+          "production": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "local": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "rest/uc/keepalive-9",
+          "production": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "local": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "rest/uc/live-read",
+          "production": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "local": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "rest/uc/post-read-a",
+          "production": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "local": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "rest/ur/read-a",
+          "production": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "local": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "rest/ur/keepalive-1",
+          "production": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "local": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "rest/ur/keepalive-2",
+          "production": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "local": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "rest/ur/keepalive-3",
+          "production": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "local": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "rest/ur/keepalive-4",
+          "production": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "local": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "rest/ur/keepalive-5",
+          "production": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "local": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "rest/ur/keepalive-6",
+          "production": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "local": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "rest/ur/keepalive-7",
+          "production": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "local": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "rest/ur/keepalive-8",
+          "production": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "local": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "rest/ur/keepalive-9",
+          "production": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "local": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "rest/ur/live-read",
+          "production": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "local": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "rest/ur/read-after",
+          "production": {
+            "code": 10,
+            "state": null,
+            "documents": null
+          },
+          "local": {
+            "code": 10,
+            "state": null,
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "rest/i1/read-a",
+          "production": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "local": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "rest/i1/idle-read",
+          "production": {
+            "code": 10,
+            "state": null,
+            "documents": null
+          },
+          "local": {
+            "code": 10,
+            "state": null,
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "rest/i1/memory-read",
+          "production": {
+            "code": 10,
+            "state": null,
+            "documents": null
+          },
+          "local": {
+            "code": 10,
+            "state": null,
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "rest/i1/read-after",
+          "production": {
+            "code": 10,
+            "state": null,
+            "documents": null
+          },
+          "local": {
+            "code": 10,
+            "state": null,
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "rest/i2/read-a",
+          "production": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "local": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "rest/i2/idle-read",
+          "production": {
+            "code": 10,
+            "state": null,
+            "documents": null
+          },
+          "local": {
+            "code": 10,
+            "state": null,
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "rest/i2/late-read",
+          "production": {
+            "code": 3,
+            "state": null,
+            "documents": null
+          },
+          "local": {
+            "code": 3,
+            "state": null,
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "final/post-read-a",
+          "production": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "local": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "match": true
+        }
+      ],
+      "commitTimes": [
+        {
+          "site": "setup/create-a",
+          "production": {
+            "commitTime": true,
+            "relation": null
+          },
+          "local": {
+            "commitTime": true,
+            "relation": null
+          },
+          "match": true
+        }
+      ],
+      "achievedAges": [
+        {
+          "site": "rest/uc/keepalive-1",
+          "production": 25.801032707560807,
+          "local": 25.8019999996759,
+          "difference": 0.001
+        },
+        {
+          "site": "rest/uc/keepalive-2",
+          "production": 25.785998709034175,
+          "local": 25.786000000312924,
+          "difference": 0.0
+        },
+        {
+          "site": "rest/uc/keepalive-3",
+          "production": 25.796115166042,
+          "local": 25.79699999978766,
+          "difference": 0.001
+        },
+        {
+          "site": "rest/uc/keepalive-4",
+          "production": 25.861129167024046,
+          "local": 25.86200000019744,
+          "difference": 0.001
+        },
+        {
+          "site": "rest/uc/keepalive-5",
+          "production": 26.357698667328805,
+          "local": 26.35800000000745,
+          "difference": 0.0
+        },
+        {
+          "site": "rest/uc/keepalive-6",
+          "production": 25.96148445783183,
+          "local": 25.96199999982491,
+          "difference": 0.001
+        },
+        {
+          "site": "rest/uc/keepalive-7",
+          "production": 25.73987695807591,
+          "local": 25.739999999757856,
+          "difference": 0.0
+        },
+        {
+          "site": "rest/uc/keepalive-8",
+          "production": 26.064495499711484,
+          "local": 26.065000000409782,
+          "difference": 0.001
+        },
+        {
+          "site": "rest/uc/keepalive-9",
+          "production": 25.85543395904824,
+          "local": 25.855999999679625,
+          "difference": 0.001
+        },
+        {
+          "site": "rest/uc/live-read",
+          "production": 13.825318250339478,
+          "local": 13.826000000350177,
+          "difference": 0.001
+        },
+        {
+          "site": "rest/uc/first-commit",
+          "production": 33.83638499956578,
+          "local": 33.83699999982491,
+          "difference": 0.001
+        },
+        {
+          "site": "rest/ur/keepalive-1",
+          "production": 25.850622416939586,
+          "local": 25.850999999791384,
+          "difference": 0.0
+        },
+        {
+          "site": "rest/ur/keepalive-2",
+          "production": 25.882124582771212,
+          "local": 25.88300000037998,
+          "difference": 0.001
+        },
+        {
+          "site": "rest/ur/keepalive-3",
+          "production": 25.239725292194635,
+          "local": 25.239999999757856,
+          "difference": 0.0
+        },
+        {
+          "site": "rest/ur/keepalive-4",
+          "production": 25.844852457754314,
+          "local": 25.84500000020489,
+          "difference": 0.0
+        },
+        {
+          "site": "rest/ur/keepalive-5",
+          "production": 25.92654462531209,
+          "local": 25.9269999996759,
+          "difference": 0.0
+        },
+        {
+          "site": "rest/ur/keepalive-6",
+          "production": 25.814672583714128,
+          "local": 25.815000000409782,
+          "difference": 0.0
+        },
+        {
+          "site": "rest/ur/keepalive-7",
+          "production": 25.93926450004801,
+          "local": 25.93999999994412,
+          "difference": 0.001
+        },
+        {
+          "site": "rest/ur/keepalive-8",
+          "production": 25.93706616619602,
+          "local": 25.938000000081956,
+          "difference": 0.001
+        },
+        {
+          "site": "rest/ur/keepalive-9",
+          "production": 25.702513166703284,
+          "local": 25.70299999974668,
+          "difference": 0.0
+        },
+        {
+          "site": "rest/ur/live-read",
+          "production": 13.84249895811081,
+          "local": 13.842999999877065,
+          "difference": 0.001
+        },
+        {
+          "site": "rest/ur/first-rollback",
+          "production": 33.79739774996415,
+          "local": 33.79799999995157,
+          "difference": 0.001
+        },
+        {
+          "site": "rest/i1/idle-read",
+          "production": 131.75949141709134,
+          "local": 131.76000000024214,
+          "difference": 0.001
+        },
+        {
+          "site": "rest/i1/memory-read",
+          "production": 102.35105883330107,
+          "local": 102.3519999999553,
+          "difference": 0.001
+        },
+        {
+          "site": "rest/i1/late-rollback",
+          "production": 51.82106329174712,
+          "local": 51.821999999694526,
+          "difference": 0.001
+        },
+        {
+          "site": "rest/i2/idle-read",
+          "production": 132.04051758442074,
+          "local": 132.04100000020117,
+          "difference": 0.0
+        },
+        {
+          "site": "rest/i2/late-read",
+          "production": 176.89093941589817,
+          "local": 176.89099999982864,
+          "difference": 0.0
+        }
+      ],
+      "tokenAges": [
+        {
+          "site": "rest/uc/keepalive-4",
+          "production": 103.89603395806625,
+          "emulator": 104.98499989509583,
+          "difference": 1.089,
+          "match": true
+        },
+        {
+          "site": "rest/uc/keepalive-5",
+          "production": 130.25373262539506,
+          "emulator": 131.34299993515015,
+          "difference": 1.089,
+          "match": true
+        },
+        {
+          "site": "rest/uc/keepalive-6",
+          "production": 156.2152170832269,
+          "emulator": 157.30499982833862,
+          "difference": 1.09,
+          "match": true
+        },
+        {
+          "site": "rest/uc/keepalive-7",
+          "production": 181.9550940413028,
+          "emulator": 183.04499983787537,
+          "difference": 1.09,
+          "match": true
+        },
+        {
+          "site": "rest/uc/keepalive-8",
+          "production": 208.01958954101428,
+          "emulator": 209.10999989509583,
+          "difference": 1.09,
+          "match": true
+        },
+        {
+          "site": "rest/uc/keepalive-9",
+          "production": 233.87502350006253,
+          "emulator": 234.96599984169006,
+          "difference": 1.091,
+          "match": true
+        },
+        {
+          "site": "rest/uc/live-read",
+          "production": 247.700341750402,
+          "emulator": 248.79199981689453,
+          "difference": 1.092,
+          "match": true
+        },
+        {
+          "site": "rest/uc/first-commit",
+          "production": 281.5367267499678,
+          "emulator": 282.6289999485016,
+          "difference": 1.092,
+          "match": true
+        },
+        {
+          "site": "rest/ur/keepalive-4",
+          "production": 103.44425662467256,
+          "emulator": 104.60500001907349,
+          "difference": 1.161,
+          "match": true
+        },
+        {
+          "site": "rest/ur/keepalive-5",
+          "production": 129.37080124998465,
+          "emulator": 130.53200006484985,
+          "difference": 1.161,
+          "match": true
+        },
+        {
+          "site": "rest/ur/keepalive-6",
+          "production": 155.18547383369878,
+          "emulator": 156.3470001220703,
+          "difference": 1.162,
+          "match": true
+        },
+        {
+          "site": "rest/ur/keepalive-7",
+          "production": 181.1247383337468,
+          "emulator": 182.28700017929077,
+          "difference": 1.162,
+          "match": true
+        },
+        {
+          "site": "rest/ur/keepalive-8",
+          "production": 207.0618044999428,
+          "emulator": 208.22500014305115,
+          "difference": 1.163,
+          "match": true
+        },
+        {
+          "site": "rest/ur/keepalive-9",
+          "production": 232.7643176666461,
+          "emulator": 233.9280002117157,
+          "difference": 1.164,
+          "match": true
+        },
+        {
+          "site": "rest/ur/live-read",
+          "production": 246.6068166247569,
+          "emulator": 247.77100014686584,
+          "difference": 1.164,
+          "match": true
+        },
+        {
+          "site": "rest/ur/first-rollback",
+          "production": 280.40421437472105,
+          "emulator": 281.56900000572205,
+          "difference": 1.165,
+          "match": true
+        },
+        {
+          "site": "rest/ur/read-after",
+          "production": 282.6073037497699,
+          "emulator": 283.7720000743866,
+          "difference": 1.165,
+          "match": true
+        },
+        {
+          "site": "rest/i1/idle-read",
+          "production": 132.37546154204756,
+          "emulator": 133.4409999847412,
+          "difference": 1.066,
+          "match": true
+        },
+        {
+          "site": "rest/i1/memory-read",
+          "production": 234.72652037534863,
+          "emulator": 235.79299998283386,
+          "difference": 1.066,
+          "match": true
+        },
+        {
+          "site": "rest/i1/late-rollback",
+          "production": 286.54758366709575,
+          "emulator": 287.61500000953674,
+          "difference": 1.067,
+          "match": true
+        },
+        {
+          "site": "rest/i1/read-after",
+          "production": 288.79285325016826,
+          "emulator": 289.8600001335144,
+          "difference": 1.067,
+          "match": true
+        },
+        {
+          "site": "rest/i2/idle-read",
+          "production": 132.6747666252777,
+          "emulator": 133.76900005340576,
+          "difference": 1.094,
+          "match": true
+        },
+        {
+          "site": "rest/i2/late-read",
+          "production": 309.5657060411759,
+          "emulator": 310.6600000858307,
+          "difference": 1.094,
+          "match": true
+        }
+      ]
+    }
+  ],
+  "summary": {
+    "recordings": 2,
+    "rows": 86,
+    "mismatches": 0
+  },
+  "remainingBoundaries": [
+    "Raw REST bodyBytes, content-length and member-order layout were not retained; the record proves decoded response semantics, not wire layout.",
+    "The closure review and the final-artifact regression are separate conditions and stay open.",
+    "The artifact is the strict profile of the commit named; a later source change needs a new replay.",
+    "Idle and lifetime boundaries: the idle threshold is judged by the interval production narrowed, [110.70, 122.96) s (ledger 809 (5)), and strict's 120 s idle limit lies inside it; the age at which an expired token is forgotten is judged by (298.7, 302.2] s, which holds strict's 300 s of memory. Strict's 270 s total lifetime is supported by the rows themselves, not by an interval: live reads at token ages up to 253.3 s answered 0 and the first refusals came at 280.4 s, so production's lifetime lies in about (253.3, 280.4] s and 270 s lies inside it. The replay runs on the emulator's virtual clock, advanced by exactly each wait, and reproduces each recorded idle (the least the production token idled before the request) and each recorded token age; the idle or age each wait reached is published beside the recorded one (achievedAges), so a row at a boundary is compared at the measured production value, not at the nominal wait.",
+    "Replayed with the files named in asRecorded as they were when the recording was made (git show <commit>:<path>); the files in the repository today differ from them."
+  ]
+}

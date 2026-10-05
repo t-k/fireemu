@@ -438,6 +438,34 @@ fn an_inherited_deny_delete_does_not_break_the_stage_or_its_publication() {
     assert!(leftovers.is_empty(), "{leftovers:?}");
 }
 
+/// How a step that depends on the machine (a disk image tool that can be busy) is attempted: a bounded
+/// number of tries, with a growing wait between them. `sleep` is injected so the policy can be tested
+/// without waiting.
+const ENVIRONMENT_ATTEMPTS: u32 = 6;
+const ENVIRONMENT_BACKOFF_STEP: std::time::Duration = std::time::Duration::from_millis(250);
+
+/// Runs `attempt` until it succeeds or `attempts` tries have failed; between two tries it waits
+/// `step * (number of failures so far)`. The error is every failure message, in order, so that an
+/// environment that never recovers is reported with what it said each time.
+fn retry_with_backoff<T>(
+    attempts: u32,
+    step: std::time::Duration,
+    mut sleep: impl FnMut(std::time::Duration),
+    mut attempt: impl FnMut() -> Result<T, String>,
+) -> Result<T, Vec<String>> {
+    let mut failures = Vec::new();
+    for tried in 1..=attempts {
+        match attempt() {
+            Ok(value) => return Ok(value),
+            Err(message) => failures.push(message),
+        }
+        if tried < attempts {
+            sleep(step * tried);
+        }
+    }
+    Err(failures)
+}
+
 /// A disk image mounted below `dir` (a stand-in for a USB stick, an SD card or an external drive),
 /// detached on drop. `owners` is `hdiutil attach -owners`: off mounts the volume with ownership
 /// ignored (`MNT_IGNORE_OWNERSHIP`), which is what exFAT and a "no ownership" external APFS volume are.
@@ -454,40 +482,64 @@ impl Volume {
 
         let image = dir.join("volume.dmg");
         let mount = dir.join("volume");
-        let created = match Command::new("hdiutil")
-            .args(["create", "-size", "16m", "-fs", fs, "-volname", "FIREEMU"])
-            .arg(&image)
-            .output()
-        {
-            Ok(output) => output,
-            Err(error) => {
-                eprintln!("SKIPPED: hdiutil cannot be run ({error}); the {fs} case is not tested");
-                return None;
-            }
+        // `hdiutil` can answer "Resource busy" on a shared runner whose disk image subsystem is
+        // occupied; that says nothing about the product, so the step is tried again a bounded number
+        // of times, and a failure that stays is reported as an environment failure with every answer.
+        let hdiutil = |what: &str, args: &[&std::ffi::OsStr], before_retry: &dyn Fn()| {
+            retry_with_backoff(
+                ENVIRONMENT_ATTEMPTS,
+                ENVIRONMENT_BACKOFF_STEP,
+                std::thread::sleep,
+                || {
+                    before_retry();
+                    match Command::new("hdiutil").args(args).output() {
+                        Ok(output) if output.status.success() => Ok(()),
+                        Ok(output) => Err(String::from_utf8_lossy(&output.stderr).trim().to_owned()),
+                        Err(error) => Err(format!("cannot run hdiutil: {error}")),
+                    }
+                },
+            )
+            .map_err(|failures| {
+                format!(
+                    "hdiutil {what} failed {} times; this is an environment failure, not a product failure: {failures:?}",
+                    failures.len()
+                )
+            })
         };
-        assert!(
-            created.status.success(),
-            "hdiutil create: {}",
-            String::from_utf8_lossy(&created.stderr)
-        );
+        if let Err(error) = Command::new("hdiutil").arg("help").output() {
+            eprintln!("SKIPPED: hdiutil cannot be run ({error}); the {fs} case is not tested");
+            return None;
+        }
+        let size = std::ffi::OsStr::new("16m");
+        let create_args: Vec<&std::ffi::OsStr> = vec![
+            "create".as_ref(),
+            "-size".as_ref(),
+            size,
+            "-fs".as_ref(),
+            fs.as_ref(),
+            "-volname".as_ref(),
+            "FIREEMU".as_ref(),
+            image.as_os_str(),
+        ];
+        // A failed create can leave a half-written image behind, which the next try would refuse.
+        if let Err(error) = hdiutil("create", &create_args, &|| {
+            let _ = std::fs::remove_file(&image);
+        }) {
+            panic!("{error}");
+        }
         create_private_dir(&mount);
-        let attached = Command::new("hdiutil")
-            .args([
-                "attach",
-                "-nobrowse",
-                "-owners",
-                if owners { "on" } else { "off" },
-            ])
-            .arg("-mountpoint")
-            .arg(&mount)
-            .arg(&image)
-            .output()
-            .expect("run hdiutil attach");
-        assert!(
-            attached.status.success(),
-            "hdiutil attach: {}",
-            String::from_utf8_lossy(&attached.stderr)
-        );
+        let attach_args: Vec<&std::ffi::OsStr> = vec![
+            "attach".as_ref(),
+            "-nobrowse".as_ref(),
+            "-owners".as_ref(),
+            if owners { "on" } else { "off" }.as_ref(),
+            "-mountpoint".as_ref(),
+            mount.as_os_str(),
+            image.as_os_str(),
+        ];
+        if let Err(error) = hdiutil("attach", &attach_args, &|| {}) {
+            panic!("{error}");
+        }
         Some(Self { mount })
     }
 }
@@ -495,10 +547,26 @@ impl Volume {
 #[cfg(target_os = "macos")]
 impl Drop for Volume {
     fn drop(&mut self) {
-        let _ = std::process::Command::new("hdiutil")
-            .args(["detach", "-force"])
-            .arg(&self.mount)
-            .output();
+        // A detach can meet the same busy subsystem as the attach did; it is tried again a bounded
+        // number of times, and a mount that stays is left to the runner (the image is in the test's
+        // own temporary directory).
+        let _ = retry_with_backoff(
+            ENVIRONMENT_ATTEMPTS,
+            ENVIRONMENT_BACKOFF_STEP,
+            std::thread::sleep,
+            || {
+                let output = std::process::Command::new("hdiutil")
+                    .args(["detach", "-force"])
+                    .arg(&self.mount)
+                    .output()
+                    .map_err(|error| error.to_string())?;
+                if output.status.success() {
+                    Ok(())
+                } else {
+                    Err(String::from_utf8_lossy(&output.stderr).trim().to_owned())
+                }
+            },
+        );
     }
 }
 
@@ -787,4 +855,88 @@ fn a_bare_relative_target_is_resolved_against_the_working_directory() {
             .expect("the published marker is readable"),
         "published"
     );
+}
+
+#[test]
+fn a_step_that_succeeds_at_once_is_tried_once_and_never_waits() {
+    let mut calls = 0;
+    let mut waits = Vec::new();
+    let result = retry_with_backoff(
+        ENVIRONMENT_ATTEMPTS,
+        ENVIRONMENT_BACKOFF_STEP,
+        |wait| waits.push(wait),
+        || {
+            calls += 1;
+            Ok::<_, String>(7)
+        },
+    );
+    assert_eq!(result, Ok(7));
+    assert_eq!(calls, 1);
+    assert!(waits.is_empty(), "{waits:?}");
+}
+
+#[test]
+fn a_step_that_recovers_is_retried_with_growing_waits_and_then_succeeds() {
+    let mut calls = 0;
+    let mut waits = Vec::new();
+    let result = retry_with_backoff(
+        ENVIRONMENT_ATTEMPTS,
+        ENVIRONMENT_BACKOFF_STEP,
+        |wait| waits.push(wait),
+        || {
+            calls += 1;
+            if calls < 3 {
+                Err(format!("busy {calls}"))
+            } else {
+                Ok(calls)
+            }
+        },
+    );
+    assert_eq!(result, Ok(3));
+    assert_eq!(calls, 3);
+    assert_eq!(
+        waits,
+        vec![ENVIRONMENT_BACKOFF_STEP, ENVIRONMENT_BACKOFF_STEP * 2]
+    );
+}
+
+#[test]
+fn a_step_that_never_recovers_fails_after_the_bound_with_every_message() {
+    let mut calls = 0_u32;
+    let mut waits = Vec::new();
+    let result: Result<(), Vec<String>> = retry_with_backoff(
+        ENVIRONMENT_ATTEMPTS,
+        ENVIRONMENT_BACKOFF_STEP,
+        |wait| waits.push(wait),
+        || {
+            calls += 1;
+            Err(format!("Resource busy {calls}"))
+        },
+    );
+    let failures = result.unwrap_err();
+    assert_eq!(calls, ENVIRONMENT_ATTEMPTS);
+    assert_eq!(failures.len(), ENVIRONMENT_ATTEMPTS as usize);
+    assert_eq!(
+        failures.first().map(String::as_str),
+        Some("Resource busy 1")
+    );
+    assert_eq!(failures.last().map(String::as_str), Some("Resource busy 6"));
+    // One wait between two tries, none after the last: the wait never exceeds the bound it advertises.
+    assert_eq!(waits.len(), ENVIRONMENT_ATTEMPTS as usize - 1);
+    let total: std::time::Duration = waits.iter().sum();
+    assert!(total <= std::time::Duration::from_secs(10), "{total:?}");
+    assert!(total >= std::time::Duration::from_secs(1), "{total:?}");
+}
+
+#[test]
+fn a_single_attempt_is_not_retried() {
+    let mut waits = 0;
+    let result: Result<(), Vec<String>> = retry_with_backoff(
+        1,
+        ENVIRONMENT_BACKOFF_STEP,
+        |_| waits += 1,
+        || Err("busy".to_owned()),
+    );
+    assert_eq!(result.unwrap_err(), vec!["busy".to_owned()]);
+    assert_eq!(waits, 0);
 }

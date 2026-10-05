@@ -1,19 +1,30 @@
 {
   "schemaVersion": 1,
   "parent": "STORAGE-RULES",
-  "parentStatus": "IMPLEMENTING",
+  "parentStatus": "COMPAT_VERIFIED",
   "oracleTrack": "disposable-sandbox",
   "inventoryState": "FROZEN",
   "closureReview": {
     "decision": "APPROVED",
-    "decidedOn": "2026-10-01",
-    "reviewer": "independent clean-context closure review of the merged code and closure (REVISE, then three delta reviews: 284ecbd79 CHANGES REQUIRED, 85dc8890f APPROVE, fba79bd2d APPROVE)",
-    "reviewedCommit": "fba79bd2d25125554067e639d13907f09bf1aa16",
-    "finalArtifactSha256": "075593e8e7f528b2f318fd121f67bf539b4a1f7cf039b3fb9e980b49c9a936f7",
-    "sourceCommit": "7adbae1a274dd4d2ed1446876be8e8efdae42d27",
-    "reviewRecord": "docs.local/reviews/2026-10-01-storage-rules-closure-review.md and the sections \"Delta 85dc8890f\" and \"Delta fba79bd2d\" of docs.local/reviews/2026-10-01-storage-rules-closure-delta-review.md",
-    "ownerRulings": "owner ledger \"STORAGE-RULES local parity: per-profile rulings\" (line 707), \"Rules emulator-profile signed-token verification\" and \"STORAGE-RULES media 404 content type\" (line 721)",
-    "note": "The reviewer re-derived all 3641 strict rows against the recording, rebuilt the binding to the release binary and checked the 388 Quint digests. Approval does not promote the parent: storage-service-compile, release-switch and no-release stay PRODUCTION_RECORDED because no local row comparison covers the management programs, so parentStatus stays IMPLEMENTING. Rebound 2026-10-01 to the release binary built from the merge of work/storage-rules-closure and work/storage-rules-recorded-shapes over integration f52e30f61 (the recorded-shapes branch has its own static review, docs.local/reviews/2026-10-01-storage-rules-recorded-shapes-review.md, approved at 64b39a09d with a wording-only follow-up): the 3641-row strict comparison and the 8 decided emulator-profile rows are unchanged, so the review's approval stands."
+    "decidedOn": "2026-10-05",
+    "reviewer": "independent clean-context Opus closure review of the final binary d0d8d437 (sr-closure-review, verdict APPROVE, Must 0, Should 5)",
+    "reviewedCommit": "8247f7df42e6998ad2df60d637ebf5464fa90b61",
+    "finalArtifactSha256": "d0d8d43726a808b600f702f1f6be26c4863fc48dd7b4971a519adcae9ce01888",
+    "sourceCommit": "774a9f24c62abdd7381c66797d6202ed03f24666",
+    "previousApproval": {
+      "decision": "APPROVED",
+      "decidedOn": "2026-10-01",
+      "reviewer": "independent clean-context closure review of the merged code and closure (REVISE, then three delta reviews: 284ecbd79 CHANGES REQUIRED, 85dc8890f APPROVE, fba79bd2d APPROVE)",
+      "reviewedCommit": "fba79bd2d25125554067e639d13907f09bf1aa16",
+      "finalArtifactSha256": "075593e8e7f528b2f318fd121f67bf539b4a1f7cf039b3fb9e980b49c9a936f7",
+      "sourceCommit": "7adbae1a274dd4d2ed1446876be8e8efdae42d27",
+      "reviewRecord": "docs.local/reviews/2026-10-01-storage-rules-closure-review.md and the sections \"Delta 85dc8890f\" and \"Delta fba79bd2d\" of docs.local/reviews/2026-10-01-storage-rules-closure-delta-review.md",
+      "ownerRulings": "owner ledger \"STORAGE-RULES local parity: per-profile rulings\" (line 707), \"Rules emulator-profile signed-token verification\" and \"STORAGE-RULES media 404 content type\" (line 721)",
+      "note": "The reviewer re-derived all 3641 strict rows against the recording, rebuilt the binding to the release binary and checked the 388 Quint digests. Approval does not promote the parent: storage-service-compile, release-switch and no-release stay PRODUCTION_RECORDED because no local row comparison covers the management programs, so parentStatus stays IMPLEMENTING. Rebound 2026-10-01 to the release binary built from the merge of work/storage-rules-closure and work/storage-rules-recorded-shapes over integration f52e30f61 (the recorded-shapes branch has its own static review, docs.local/reviews/2026-10-01-storage-rules-recorded-shapes-review.md, approved at 64b39a09d with a wording-only follow-up): the 3641-row strict comparison and the 8 decided emulator-profile rows are unchanged, so the review's approval stands."
+    },
+    "note": "Independent delta review of the final binary, the management comparison for recordings c and d, the three promoted conditions and the rebinding of the 21 others approved.",
+    "reviewRecord": "docs.local/reviews/2026-10-05-storage-rules-closure-review.md",
+    "reviewRecordSha256": "f0e4e61f68e8f4a481071651aa2d8914b55ab243fba4061633cfc71b03cc9170"
   },
   "observationContract": {
     "project": "fireemu-oracle-query",
@@ -99,7 +110,7 @@
         "For existing and absent objects, read/write aliases and get/list/create/update/delete grants and denials select the production operation; refused writes leave bytes and metadata unchanged."
       ],
       "status": "VERIFIED",
-      "note": "Strict profile, local Auth tokens, recording stage3-20260930c compared with stage3-20260930d identical after masking; every row of the recipe matches production by status, content type and masked body (error bodies byte for byte). RECORDED_DIVERGENCE rows are the Firestore adapter's JSON content type (firestore-adapter-content-type), recorded in the contract.",
+      "note": "Strict profile, local Auth tokens, both production recordings (stage3-20260930c and stage3-20260930d, identical after masking): every row of the recipe matches production by status, content type and masked body against each recording (error bodies byte for byte).",
       "evidence": {
         "productionRecordings": [
           {
@@ -115,8 +126,8 @@
             "project": "fireemu-oracle-query"
           }
         ],
-        "finalArtifactSha256": "075593e8e7f528b2f318fd121f67bf539b4a1f7cf039b3fb9e980b49c9a936f7",
-        "sourceCommit": "7adbae1a274dd4d2ed1446876be8e8efdae42d27",
+        "finalArtifactSha256": "d0d8d43726a808b600f702f1f6be26c4863fc48dd7b4971a519adcae9ce01888",
+        "sourceCommit": "774a9f24c62abdd7381c66797d6202ed03f24666",
         "comparisonPath": "spec/compatibility/closure/evidence/STORAGE-RULES-comparison.json",
         "rows": {
           "MATCH": 882
@@ -133,7 +144,7 @@
         "List versus get is separated under Rules v2, and the v1 list boundary follows production; denied listing reveals no names."
       ],
       "status": "VERIFIED",
-      "note": "Strict profile, local Auth tokens, recording stage3-20260930c compared with stage3-20260930d identical after masking; every row of the recipe matches production by status, content type and masked body (error bodies byte for byte). RECORDED_DIVERGENCE rows are the Firestore adapter's JSON content type (firestore-adapter-content-type), recorded in the contract.",
+      "note": "Strict profile, local Auth tokens, both production recordings (stage3-20260930c and stage3-20260930d, identical after masking): every row of the recipe matches production by status, content type and masked body against each recording (error bodies byte for byte).",
       "evidence": {
         "productionRecordings": [
           {
@@ -149,8 +160,8 @@
             "project": "fireemu-oracle-query"
           }
         ],
-        "finalArtifactSha256": "075593e8e7f528b2f318fd121f67bf539b4a1f7cf039b3fb9e980b49c9a936f7",
-        "sourceCommit": "7adbae1a274dd4d2ed1446876be8e8efdae42d27",
+        "finalArtifactSha256": "d0d8d43726a808b600f702f1f6be26c4863fc48dd7b4971a519adcae9ce01888",
+        "sourceCommit": "774a9f24c62abdd7381c66797d6202ed03f24666",
         "comparisonPath": "spec/compatibility/closure/evidence/STORAGE-RULES-comparison.json",
         "rows": {
           "MATCH": 168
@@ -167,7 +178,7 @@
         "An unauthenticated request has null request.auth; a same-project Firebase ID token exposes the expected uid and authorizes only its own path."
       ],
       "status": "VERIFIED",
-      "note": "Strict profile, local Auth tokens, recording stage3-20260930c compared with stage3-20260930d identical after masking; every row of the recipe matches production by status, content type and masked body (error bodies byte for byte). RECORDED_DIVERGENCE rows are the Firestore adapter's JSON content type (firestore-adapter-content-type), recorded in the contract.",
+      "note": "Strict profile, local Auth tokens, both production recordings (stage3-20260930c and stage3-20260930d, identical after masking): every row of the recipe matches production by status, content type and masked body against each recording (error bodies byte for byte).",
       "evidence": {
         "productionRecordings": [
           {
@@ -183,8 +194,8 @@
             "project": "fireemu-oracle-query"
           }
         ],
-        "finalArtifactSha256": "075593e8e7f528b2f318fd121f67bf539b4a1f7cf039b3fb9e980b49c9a936f7",
-        "sourceCommit": "7adbae1a274dd4d2ed1446876be8e8efdae42d27",
+        "finalArtifactSha256": "d0d8d43726a808b600f702f1f6be26c4863fc48dd7b4971a519adcae9ce01888",
+        "sourceCommit": "774a9f24c62abdd7381c66797d6202ed03f24666",
         "comparisonPath": "spec/compatibility/closure/evidence/STORAGE-RULES-comparison.json",
         "rows": {
           "MATCH": 164
@@ -201,7 +212,7 @@
         "Standard token fields and a deliberately minted custom claim are visible under request.auth.token; mismatched claims deny and publish no object."
       ],
       "status": "VERIFIED",
-      "note": "Strict profile, local Auth tokens, recording stage3-20260930c compared with stage3-20260930d identical after masking; every row of the recipe matches production by status, content type and masked body (error bodies byte for byte). RECORDED_DIVERGENCE rows are the Firestore adapter's JSON content type (firestore-adapter-content-type), recorded in the contract.",
+      "note": "Strict profile, local Auth tokens, both production recordings (stage3-20260930c and stage3-20260930d, identical after masking): every row of the recipe matches production by status, content type and masked body against each recording (error bodies byte for byte).",
       "evidence": {
         "productionRecordings": [
           {
@@ -217,8 +228,8 @@
             "project": "fireemu-oracle-query"
           }
         ],
-        "finalArtifactSha256": "075593e8e7f528b2f318fd121f67bf539b4a1f7cf039b3fb9e980b49c9a936f7",
-        "sourceCommit": "7adbae1a274dd4d2ed1446876be8e8efdae42d27",
+        "finalArtifactSha256": "d0d8d43726a808b600f702f1f6be26c4863fc48dd7b4971a519adcae9ce01888",
+        "sourceCommit": "774a9f24c62abdd7381c66797d6202ed03f24666",
         "comparisonPath": "spec/compatibility/closure/evidence/STORAGE-RULES-comparison.json",
         "rows": {
           "MATCH": 193
@@ -235,7 +246,7 @@
         "Missing, malformed, foreign-project, revoked and valid same-project tokens produce the production authentication-versus-Rules refusal boundary without disclosing token bytes. The S7 expired-token scope limit remains unobserved."
       ],
       "status": "VERIFIED",
-      "note": "Strict profile, local Auth tokens, recording stage3-20260930c compared with stage3-20260930d identical after masking; every row of the recipe matches production by status, content type and masked body (error bodies byte for byte). RECORDED_DIVERGENCE rows are the Firestore adapter's JSON content type (firestore-adapter-content-type), recorded in the contract.",
+      "note": "Strict profile, local Auth tokens, both production recordings (stage3-20260930c and stage3-20260930d, identical after masking): every row of the recipe matches production by status, content type and masked body against each recording (error bodies byte for byte).",
       "evidence": {
         "productionRecordings": [
           {
@@ -251,8 +262,8 @@
             "project": "fireemu-oracle-query"
           }
         ],
-        "finalArtifactSha256": "075593e8e7f528b2f318fd121f67bf539b4a1f7cf039b3fb9e980b49c9a936f7",
-        "sourceCommit": "7adbae1a274dd4d2ed1446876be8e8efdae42d27",
+        "finalArtifactSha256": "d0d8d43726a808b600f702f1f6be26c4863fc48dd7b4971a519adcae9ce01888",
+        "sourceCommit": "774a9f24c62abdd7381c66797d6202ed03f24666",
         "comparisonPath": "spec/compatibility/closure/evidence/STORAGE-RULES-comparison.json",
         "rows": {
           "MATCH": 60
@@ -269,7 +280,7 @@
         "Simple, multipart and resumable finalization evaluate actual received size, contentType, name and custom metadata; accepted bytes persist and rejected bytes do not."
       ],
       "status": "VERIFIED",
-      "note": "Strict profile, local Auth tokens, recording stage3-20260930c compared with stage3-20260930d identical after masking; every row of the recipe matches production by status, content type and masked body (error bodies byte for byte). RECORDED_DIVERGENCE rows are the Firestore adapter's JSON content type (firestore-adapter-content-type), recorded in the contract.",
+      "note": "Strict profile, local Auth tokens, both production recordings (stage3-20260930c and stage3-20260930d, identical after masking): every row of the recipe matches production by status, content type and masked body against each recording (error bodies byte for byte).",
       "evidence": {
         "productionRecordings": [
           {
@@ -285,8 +296,8 @@
             "project": "fireemu-oracle-query"
           }
         ],
-        "finalArtifactSha256": "075593e8e7f528b2f318fd121f67bf539b4a1f7cf039b3fb9e980b49c9a936f7",
-        "sourceCommit": "7adbae1a274dd4d2ed1446876be8e8efdae42d27",
+        "finalArtifactSha256": "d0d8d43726a808b600f702f1f6be26c4863fc48dd7b4971a519adcae9ce01888",
+        "sourceCommit": "774a9f24c62abdd7381c66797d6202ed03f24666",
         "comparisonPath": "spec/compatibility/closure/evidence/STORAGE-RULES-comparison.json",
         "rows": {
           "MATCH": 239
@@ -303,7 +314,7 @@
         "Metadata update evaluates the proposed object fields and custom metadata while preserving bytes; denial leaves the old metadata and metageneration intact."
       ],
       "status": "VERIFIED",
-      "note": "Strict profile, local Auth tokens, recording stage3-20260930c compared with stage3-20260930d identical after masking; every row of the recipe matches production by status, content type and masked body (error bodies byte for byte). RECORDED_DIVERGENCE rows are the Firestore adapter's JSON content type (firestore-adapter-content-type), recorded in the contract.",
+      "note": "Strict profile, local Auth tokens, both production recordings (stage3-20260930c and stage3-20260930d, identical after masking): every row of the recipe matches production by status, content type and masked body against each recording (error bodies byte for byte).",
       "evidence": {
         "productionRecordings": [
           {
@@ -319,8 +330,8 @@
             "project": "fireemu-oracle-query"
           }
         ],
-        "finalArtifactSha256": "075593e8e7f528b2f318fd121f67bf539b4a1f7cf039b3fb9e980b49c9a936f7",
-        "sourceCommit": "7adbae1a274dd4d2ed1446876be8e8efdae42d27",
+        "finalArtifactSha256": "d0d8d43726a808b600f702f1f6be26c4863fc48dd7b4971a519adcae9ce01888",
+        "sourceCommit": "774a9f24c62abdd7381c66797d6202ed03f24666",
         "comparisonPath": "spec/compatibility/closure/evidence/STORAGE-RULES-comparison.json",
         "rows": {
           "MATCH": 96
@@ -337,7 +348,7 @@
         "Read, update and delete can inspect the existing object's name, size, contentType and metadata; an absent object has the production resource value."
       ],
       "status": "VERIFIED",
-      "note": "Strict profile, local Auth tokens, recording stage3-20260930c compared with stage3-20260930d identical after masking; every row of the recipe matches production by status, content type and masked body (error bodies byte for byte). RECORDED_DIVERGENCE rows are the Firestore adapter's JSON content type (firestore-adapter-content-type), recorded in the contract.",
+      "note": "Strict profile, local Auth tokens, both production recordings (stage3-20260930c and stage3-20260930d, identical after masking): every row of the recipe matches production by status, content type and masked body against each recording (error bodies byte for byte).",
       "evidence": {
         "productionRecordings": [
           {
@@ -353,8 +364,8 @@
             "project": "fireemu-oracle-query"
           }
         ],
-        "finalArtifactSha256": "075593e8e7f528b2f318fd121f67bf539b4a1f7cf039b3fb9e980b49c9a936f7",
-        "sourceCommit": "7adbae1a274dd4d2ed1446876be8e8efdae42d27",
+        "finalArtifactSha256": "d0d8d43726a808b600f702f1f6be26c4863fc48dd7b4971a519adcae9ce01888",
+        "sourceCommit": "774a9f24c62abdd7381c66797d6202ed03f24666",
         "comparisonPath": "spec/compatibility/closure/evidence/STORAGE-RULES-comparison.json",
         "rows": {
           "MATCH": 668
@@ -371,7 +382,7 @@
         "Overwrite is evaluated as production create or update, delete has the production request.resource value, and each allowed or refused transition has matching read-back state."
       ],
       "status": "VERIFIED",
-      "note": "Strict profile, local Auth tokens, recording stage3-20260930c compared with stage3-20260930d identical after masking; every row of the recipe matches production by status, content type and masked body (error bodies byte for byte). RECORDED_DIVERGENCE rows are the Firestore adapter's JSON content type (firestore-adapter-content-type), recorded in the contract.",
+      "note": "Strict profile, local Auth tokens, both production recordings (stage3-20260930c and stage3-20260930d, identical after masking): every row of the recipe matches production by status, content type and masked body against each recording (error bodies byte for byte).",
       "evidence": {
         "productionRecordings": [
           {
@@ -387,8 +398,8 @@
             "project": "fireemu-oracle-query"
           }
         ],
-        "finalArtifactSha256": "075593e8e7f528b2f318fd121f67bf539b4a1f7cf039b3fb9e980b49c9a936f7",
-        "sourceCommit": "7adbae1a274dd4d2ed1446876be8e8efdae42d27",
+        "finalArtifactSha256": "d0d8d43726a808b600f702f1f6be26c4863fc48dd7b4971a519adcae9ce01888",
+        "sourceCommit": "774a9f24c62abdd7381c66797d6202ed03f24666",
         "comparisonPath": "spec/compatibility/closure/evidence/STORAGE-RULES-comparison.json",
         "rows": {
           "MATCH": 84
@@ -405,7 +416,7 @@
         "A bounded time predicate on request.time has both an allowed and a denied observation, with server-time uncertainty recorded rather than masked as a match."
       ],
       "status": "VERIFIED",
-      "note": "Strict profile, local Auth tokens, recording stage3-20260930c compared with stage3-20260930d identical after masking; every row of the recipe matches production by status, content type and masked body (error bodies byte for byte). RECORDED_DIVERGENCE rows are the Firestore adapter's JSON content type (firestore-adapter-content-type), recorded in the contract.",
+      "note": "Strict profile, local Auth tokens, both production recordings (stage3-20260930c and stage3-20260930d, identical after masking): every row of the recipe matches production by status, content type and masked body against each recording (error bodies byte for byte).",
       "evidence": {
         "productionRecordings": [
           {
@@ -421,8 +432,8 @@
             "project": "fireemu-oracle-query"
           }
         ],
-        "finalArtifactSha256": "075593e8e7f528b2f318fd121f67bf539b4a1f7cf039b3fb9e980b49c9a936f7",
-        "sourceCommit": "7adbae1a274dd4d2ed1446876be8e8efdae42d27",
+        "finalArtifactSha256": "d0d8d43726a808b600f702f1f6be26c4863fc48dd7b4971a519adcae9ce01888",
+        "sourceCommit": "774a9f24c62abdd7381c66797d6202ed03f24666",
         "comparisonPath": "spec/compatibility/closure/evidence/STORAGE-RULES-comparison.json",
         "rows": {
           "MATCH": 43
@@ -439,7 +450,7 @@
         "Bucket and object path captures distinguish matching, nonmatching and sibling paths without leaking a denied object."
       ],
       "status": "VERIFIED",
-      "note": "Strict profile, local Auth tokens, recording stage3-20260930c compared with stage3-20260930d identical after masking; every row of the recipe matches production by status, content type and masked body (error bodies byte for byte). RECORDED_DIVERGENCE rows are the Firestore adapter's JSON content type (firestore-adapter-content-type), recorded in the contract.",
+      "note": "Strict profile, local Auth tokens, both production recordings (stage3-20260930c and stage3-20260930d, identical after masking): every row of the recipe matches production by status, content type and masked body against each recording (error bodies byte for byte).",
       "evidence": {
         "productionRecordings": [
           {
@@ -455,8 +466,8 @@
             "project": "fireemu-oracle-query"
           }
         ],
-        "finalArtifactSha256": "075593e8e7f528b2f318fd121f67bf539b4a1f7cf039b3fb9e980b49c9a936f7",
-        "sourceCommit": "7adbae1a274dd4d2ed1446876be8e8efdae42d27",
+        "finalArtifactSha256": "d0d8d43726a808b600f702f1f6be26c4863fc48dd7b4971a519adcae9ce01888",
+        "sourceCommit": "774a9f24c62abdd7381c66797d6202ed03f24666",
         "comparisonPath": "spec/compatibility/closure/evidence/STORAGE-RULES-comparison.json",
         "rows": {
           "MATCH": 67
@@ -473,7 +484,7 @@
         "A {name=**} path in Rules v2 and a valid v1 control match production at zero, one and multiple object segments."
       ],
       "status": "VERIFIED",
-      "note": "Strict profile, local Auth tokens, recording stage3-20260930c compared with stage3-20260930d identical after masking; every row of the recipe matches production by status, content type and masked body (error bodies byte for byte). RECORDED_DIVERGENCE rows are the Firestore adapter's JSON content type (firestore-adapter-content-type), recorded in the contract.",
+      "note": "Strict profile, local Auth tokens, both production recordings (stage3-20260930c and stage3-20260930d, identical after masking): every row of the recipe matches production by status, content type and masked body against each recording (error bodies byte for byte).",
       "evidence": {
         "productionRecordings": [
           {
@@ -489,8 +500,8 @@
             "project": "fireemu-oracle-query"
           }
         ],
-        "finalArtifactSha256": "075593e8e7f528b2f318fd121f67bf539b4a1f7cf039b3fb9e980b49c9a936f7",
-        "sourceCommit": "7adbae1a274dd4d2ed1446876be8e8efdae42d27",
+        "finalArtifactSha256": "d0d8d43726a808b600f702f1f6be26c4863fc48dd7b4971a519adcae9ce01888",
+        "sourceCommit": "774a9f24c62abdd7381c66797d6202ed03f24666",
         "comparisonPath": "spec/compatibility/closure/evidence/STORAGE-RULES-comparison.json",
         "rows": {
           "MATCH": 72
@@ -506,20 +517,8 @@
       "checks": [
         "The Storage service declaration and Storage-specific method or wildcard rules used by this corpus have production compile acceptance; a deliberately invalid Storage rule is refused without changing the effective release."
       ],
-      "status": "PRODUCTION_RECORDED",
-      "note": "Recorded in production by the two stage 3 v9 recordings (and the 2c-pre/2c-post publication runs). The Firebase Rules API is outside this parent (S4) and fireemu serves rules by replacement, so there is no local row comparison; the condition stays PRODUCTION_RECORDED until one covers the effect of a publication."
-    },
-    {
-      "conditionId": "STORAGE-RULES/firestore-get",
-      "source": "https://firebase.google.com/docs/storage/security/rules-conditions",
-      "recipeIds": [
-        "storage-rules/firestore-get"
-      ],
-      "checks": [
-        "A same-project default-database document field can allow or deny Storage access; missing and changed documents have the production decision and refused requests do not mutate objects."
-      ],
       "status": "VERIFIED",
-      "note": "Strict profile, local Auth tokens, recording stage3-20260930c compared with stage3-20260930d identical after masking; every row of the recipe matches production by status, content type and masked body (error bodies byte for byte). RECORDED_DIVERGENCE rows are the Firestore adapter's JSON content type (firestore-adapter-content-type), recorded in the contract.",
+      "note": "Production recordings c and d against the local management programs on the final binary: paired effects match, 0 mismatches in both. The refusal of the deliberately invalid rule leaving the effective release unchanged is observed in recording c (release read 404 before, the invalid :test answers 200 with an ERROR issue at storage.rules, release read 404 after) and is accepted as observed by owner-delegated ruling 809(4); no installed-identity witness is required.",
       "evidence": {
         "productionRecordings": [
           {
@@ -535,12 +534,47 @@
             "project": "fireemu-oracle-query"
           }
         ],
-        "finalArtifactSha256": "075593e8e7f528b2f318fd121f67bf539b4a1f7cf039b3fb9e980b49c9a936f7",
-        "sourceCommit": "7adbae1a274dd4d2ed1446876be8e8efdae42d27",
+        "finalArtifactSha256": "d0d8d43726a808b600f702f1f6be26c4863fc48dd7b4971a519adcae9ce01888",
+        "sourceCommit": "774a9f24c62abdd7381c66797d6202ed03f24666",
+        "comparisonPath": "spec/compatibility/closure/evidence/STORAGE-RULES-management-comparison.json",
+        "rows": {
+          "SOURCES_ACCEPTED_BOTH_SIDES": 338,
+          "INVALID_REFUSED": 1,
+          "MANAGEMENT_RECORDINGS_MATCHED": 2
+        }
+      }
+    },
+    {
+      "conditionId": "STORAGE-RULES/firestore-get",
+      "source": "https://firebase.google.com/docs/storage/security/rules-conditions",
+      "recipeIds": [
+        "storage-rules/firestore-get"
+      ],
+      "checks": [
+        "A same-project default-database document field can allow or deny Storage access; missing and changed documents have the production decision and refused requests do not mutate objects."
+      ],
+      "status": "VERIFIED",
+      "note": "Strict profile, local Auth tokens, both production recordings (stage3-20260930c and stage3-20260930d, identical after masking): every row of the recipe matches production by status, content type and masked body against each recording (error bodies byte for byte).",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-30T10:58:15.000Z",
+            "gitSha": "5c48b355f7f13b2136697086dcf2a5f5c269329d",
+            "runId": "stage3-20260930c",
+            "project": "fireemu-oracle-query"
+          },
+          {
+            "recordedAt": "2026-09-30T12:05:55.000Z",
+            "gitSha": "5c48b355f7f13b2136697086dcf2a5f5c269329d",
+            "runId": "stage3-20260930d",
+            "project": "fireemu-oracle-query"
+          }
+        ],
+        "finalArtifactSha256": "d0d8d43726a808b600f702f1f6be26c4863fc48dd7b4971a519adcae9ce01888",
+        "sourceCommit": "774a9f24c62abdd7381c66797d6202ed03f24666",
         "comparisonPath": "spec/compatibility/closure/evidence/STORAGE-RULES-comparison.json",
         "rows": {
-          "RECORDED_DIVERGENCE": 9,
-          "MATCH": 25
+          "MATCH": 34
         }
       }
     },
@@ -554,7 +588,7 @@
         "An interpolated fully qualified document path allows when the owned default-database document exists and denies after verified deletion."
       ],
       "status": "VERIFIED",
-      "note": "Strict profile, local Auth tokens, recording stage3-20260930c compared with stage3-20260930d identical after masking; every row of the recipe matches production by status, content type and masked body (error bodies byte for byte). RECORDED_DIVERGENCE rows are the Firestore adapter's JSON content type (firestore-adapter-content-type), recorded in the contract.",
+      "note": "Strict profile, local Auth tokens, both production recordings (stage3-20260930c and stage3-20260930d, identical after masking): every row of the recipe matches production by status, content type and masked body against each recording (error bodies byte for byte).",
       "evidence": {
         "productionRecordings": [
           {
@@ -570,12 +604,11 @@
             "project": "fireemu-oracle-query"
           }
         ],
-        "finalArtifactSha256": "075593e8e7f528b2f318fd121f67bf539b4a1f7cf039b3fb9e980b49c9a936f7",
-        "sourceCommit": "7adbae1a274dd4d2ed1446876be8e8efdae42d27",
+        "finalArtifactSha256": "d0d8d43726a808b600f702f1f6be26c4863fc48dd7b4971a519adcae9ce01888",
+        "sourceCommit": "774a9f24c62abdd7381c66797d6202ed03f24666",
         "comparisonPath": "spec/compatibility/closure/evidence/STORAGE-RULES-comparison.json",
         "rows": {
-          "RECORDED_DIVERGENCE": 7,
-          "MATCH": 15
+          "MATCH": 22
         }
       }
     },
@@ -589,7 +622,7 @@
         "The two-document access boundary, a distinct third access and a repeated-document access have production decisions and error shapes."
       ],
       "status": "VERIFIED",
-      "note": "Strict profile, local Auth tokens, recording stage3-20260930c compared with stage3-20260930d identical after masking; every row of the recipe matches production by status, content type and masked body (error bodies byte for byte). RECORDED_DIVERGENCE rows are the Firestore adapter's JSON content type (firestore-adapter-content-type), recorded in the contract.",
+      "note": "Strict profile, local Auth tokens, both production recordings (stage3-20260930c and stage3-20260930d, identical after masking): every row of the recipe matches production by status, content type and masked body against each recording (error bodies byte for byte).",
       "evidence": {
         "productionRecordings": [
           {
@@ -605,12 +638,11 @@
             "project": "fireemu-oracle-query"
           }
         ],
-        "finalArtifactSha256": "075593e8e7f528b2f318fd121f67bf539b4a1f7cf039b3fb9e980b49c9a936f7",
-        "sourceCommit": "7adbae1a274dd4d2ed1446876be8e8efdae42d27",
+        "finalArtifactSha256": "d0d8d43726a808b600f702f1f6be26c4863fc48dd7b4971a519adcae9ce01888",
+        "sourceCommit": "774a9f24c62abdd7381c66797d6202ed03f24666",
         "comparisonPath": "spec/compatibility/closure/evidence/STORAGE-RULES-comparison.json",
         "rows": {
-          "RECORDED_DIVERGENCE": 42,
-          "MATCH": 36
+          "MATCH": 78
         }
       }
     },
@@ -624,7 +656,7 @@
         "Firebase get, list, upload, metadata update and delete denials match production status, stable headers and body, with no unauthorized bytes or object mutation."
       ],
       "status": "VERIFIED",
-      "note": "Strict profile, local Auth tokens, recording stage3-20260930c compared with stage3-20260930d identical after masking; every row of the recipe matches production by status, content type and masked body (error bodies byte for byte). RECORDED_DIVERGENCE rows are the Firestore adapter's JSON content type (firestore-adapter-content-type), recorded in the contract.",
+      "note": "Strict profile, local Auth tokens, both production recordings (stage3-20260930c and stage3-20260930d, identical after masking): every row of the recipe matches production by status, content type and masked body against each recording (error bodies byte for byte).",
       "evidence": {
         "productionRecordings": [
           {
@@ -640,8 +672,8 @@
             "project": "fireemu-oracle-query"
           }
         ],
-        "finalArtifactSha256": "075593e8e7f528b2f318fd121f67bf539b4a1f7cf039b3fb9e980b49c9a936f7",
-        "sourceCommit": "7adbae1a274dd4d2ed1446876be8e8efdae42d27",
+        "finalArtifactSha256": "d0d8d43726a808b600f702f1f6be26c4863fc48dd7b4971a519adcae9ce01888",
+        "sourceCommit": "774a9f24c62abdd7381c66797d6202ed03f24666",
         "comparisonPath": "spec/compatibility/closure/evidence/STORAGE-RULES-comparison.json",
         "rows": {
           "MATCH": 126
@@ -658,7 +690,7 @@
         "For absent and present objects, malformed input and invalid credentials, compare which refusal wins between authentication, Rules, validation and existence checks in both Firebase and GCS JSON APIs."
       ],
       "status": "VERIFIED",
-      "note": "Strict profile, local Auth tokens, recording stage3-20260930c compared with stage3-20260930d identical after masking; every row of the recipe matches production by status, content type and masked body (error bodies byte for byte). RECORDED_DIVERGENCE rows are the Firestore adapter's JSON content type (firestore-adapter-content-type), recorded in the contract.",
+      "note": "Strict profile, local Auth tokens, both production recordings (stage3-20260930c and stage3-20260930d, identical after masking): every row of the recipe matches production by status, content type and masked body against each recording (error bodies byte for byte).",
       "evidence": {
         "productionRecordings": [
           {
@@ -674,8 +706,8 @@
             "project": "fireemu-oracle-query"
           }
         ],
-        "finalArtifactSha256": "075593e8e7f528b2f318fd121f67bf539b4a1f7cf039b3fb9e980b49c9a936f7",
-        "sourceCommit": "7adbae1a274dd4d2ed1446876be8e8efdae42d27",
+        "finalArtifactSha256": "d0d8d43726a808b600f702f1f6be26c4863fc48dd7b4971a519adcae9ce01888",
+        "sourceCommit": "774a9f24c62abdd7381c66797d6202ed03f24666",
         "comparisonPath": "spec/compatibility/closure/evidence/STORAGE-RULES-comparison.json",
         "rows": {
           "MATCH": 252
@@ -692,7 +724,7 @@
         "A fixed deny release blocks Firebase end users while authenticated GCS JSON and Admin controls follow production bypass behavior; read-back confirms the boundary. The S7 IAM-denied principal scope limit remains unobserved."
       ],
       "status": "VERIFIED",
-      "note": "Strict profile, local Auth tokens, recording stage3-20260930c compared with stage3-20260930d identical after masking; every row of the recipe matches production by status, content type and masked body (error bodies byte for byte). RECORDED_DIVERGENCE rows are the Firestore adapter's JSON content type (firestore-adapter-content-type), recorded in the contract.",
+      "note": "Strict profile, local Auth tokens, both production recordings (stage3-20260930c and stage3-20260930d, identical after masking): every row of the recipe matches production by status, content type and masked body against each recording (error bodies byte for byte).",
       "evidence": {
         "productionRecordings": [
           {
@@ -708,8 +740,8 @@
             "project": "fireemu-oracle-query"
           }
         ],
-        "finalArtifactSha256": "075593e8e7f528b2f318fd121f67bf539b4a1f7cf039b3fb9e980b49c9a936f7",
-        "sourceCommit": "7adbae1a274dd4d2ed1446876be8e8efdae42d27",
+        "finalArtifactSha256": "d0d8d43726a808b600f702f1f6be26c4863fc48dd7b4971a519adcae9ce01888",
+        "sourceCommit": "774a9f24c62abdd7381c66797d6202ed03f24666",
         "comparisonPath": "spec/compatibility/closure/evidence/STORAGE-RULES-comparison.json",
         "rows": {
           "MATCH": 378
@@ -726,7 +758,7 @@
         "A token-bearing Firebase download and the same request without that token have the production Rules decision and bytes, while token values remain private."
       ],
       "status": "VERIFIED",
-      "note": "Strict profile, local Auth tokens, recording stage3-20260930c compared with stage3-20260930d identical after masking; every row of the recipe matches production by status, content type and masked body (error bodies byte for byte). RECORDED_DIVERGENCE rows are the Firestore adapter's JSON content type (firestore-adapter-content-type), recorded in the contract.",
+      "note": "Strict profile, local Auth tokens, both production recordings (stage3-20260930c and stage3-20260930d, identical after masking): every row of the recipe matches production by status, content type and masked body against each recording (error bodies byte for byte).",
       "evidence": {
         "productionRecordings": [
           {
@@ -742,8 +774,8 @@
             "project": "fireemu-oracle-query"
           }
         ],
-        "finalArtifactSha256": "075593e8e7f528b2f318fd121f67bf539b4a1f7cf039b3fb9e980b49c9a936f7",
-        "sourceCommit": "7adbae1a274dd4d2ed1446876be8e8efdae42d27",
+        "finalArtifactSha256": "d0d8d43726a808b600f702f1f6be26c4863fc48dd7b4971a519adcae9ce01888",
+        "sourceCommit": "774a9f24c62abdd7381c66797d6202ed03f24666",
         "comparisonPath": "spec/compatibility/closure/evidence/STORAGE-RULES-comparison.json",
         "rows": {
           "MATCH": 15
@@ -759,8 +791,33 @@
       "checks": [
         "After a cloud.storage release switch has settled, the old allow becomes deny and the new allow becomes effective for the same request; release identities and settle checks are recorded."
       ],
-      "status": "PRODUCTION_RECORDED",
-      "note": "Recorded in production by the two stage 3 v9 recordings (and the 2c-pre/2c-post publication runs). The Firebase Rules API is outside this parent (S4) and fireemu serves rules by replacement, so there is no local row comparison; the condition stays PRODUCTION_RECORDED until one covers the effect of a publication."
+      "status": "VERIFIED",
+      "note": "Compared after the release has settled (S4: propagation delay is a known difference): production recordings c and d against the local management programs on the final binary, paired effects match with 0 mismatches in both. The switch decisions are 200, 403, 403, 200 on both sides with the Admin object state unchanged around each, and the release identities and settle checks are in the recordings.",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-30T10:58:15.000Z",
+            "gitSha": "5c48b355f7f13b2136697086dcf2a5f5c269329d",
+            "runId": "stage3-20260930c",
+            "project": "fireemu-oracle-query"
+          },
+          {
+            "recordedAt": "2026-09-30T12:05:55.000Z",
+            "gitSha": "5c48b355f7f13b2136697086dcf2a5f5c269329d",
+            "runId": "stage3-20260930d",
+            "project": "fireemu-oracle-query"
+          }
+        ],
+        "finalArtifactSha256": "d0d8d43726a808b600f702f1f6be26c4863fc48dd7b4971a519adcae9ce01888",
+        "sourceCommit": "774a9f24c62abdd7381c66797d6202ed03f24666",
+        "comparisonPath": "spec/compatibility/closure/evidence/STORAGE-RULES-management-comparison.json",
+        "rows": {
+          "DECISIONS_MATCHED": 4,
+          "RELEASE_IDENTITIES": 2,
+          "STORAGE_STEPS_COMPARED": 30,
+          "MANAGEMENT_RECORDINGS_MATCHED": 2
+        }
+      }
     },
     {
       "conditionId": "STORAGE-RULES/no-release",
@@ -771,8 +828,33 @@
       "checks": [
         "A project without an effective Storage release follows production denial behavior while Admin cleanup remains possible."
       ],
-      "status": "PRODUCTION_RECORDED",
-      "note": "Recorded in production by both stage 3 v9 recordings: a bucket without a release answers 400 \"Your bucket has not been set up properly for Firebase Storage…\" (the strict profile answers those bytes; the emulator profile keeps its own fail-closed 403 because the official emulator has no such state, recorded in the contract). No local row comparison covers the management programs yet, so the condition stays PRODUCTION_RECORDED until one does."
+      "status": "VERIFIED",
+      "note": "Strict answers production's 400 for a bucket without a release and Admin cleanup stays available; recordings c and d against the local management programs on the final binary: paired effects match, 0 mismatches in both. The emulator profile's own fail-closed 403 is the documented difference (the official emulator has no such state; owner ledger 811 takes official-emulator-only remnants out of this parent).",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-30T10:58:15.000Z",
+            "gitSha": "5c48b355f7f13b2136697086dcf2a5f5c269329d",
+            "runId": "stage3-20260930c",
+            "project": "fireemu-oracle-query"
+          },
+          {
+            "recordedAt": "2026-09-30T12:05:55.000Z",
+            "gitSha": "5c48b355f7f13b2136697086dcf2a5f5c269329d",
+            "runId": "stage3-20260930d",
+            "project": "fireemu-oracle-query"
+          }
+        ],
+        "finalArtifactSha256": "d0d8d43726a808b600f702f1f6be26c4863fc48dd7b4971a519adcae9ce01888",
+        "sourceCommit": "774a9f24c62abdd7381c66797d6202ed03f24666",
+        "comparisonPath": "spec/compatibility/closure/evidence/STORAGE-RULES-management-comparison.json",
+        "rows": {
+          "NO_RELEASE_SUBJECTS": 2,
+          "ADMIN_CLEANUPS": 3,
+          "STORAGE_STEPS_COMPARED": 30,
+          "MANAGEMENT_RECORDINGS_MATCHED": 2
+        }
+      }
     },
     {
       "conditionId": "STORAGE-RULES/final-artifact-regression",
@@ -800,12 +882,13 @@
             "project": "fireemu-oracle-query"
           }
         ],
-        "finalArtifactSha256": "075593e8e7f528b2f318fd121f67bf539b4a1f7cf039b3fb9e980b49c9a936f7",
-        "sourceCommit": "7adbae1a274dd4d2ed1446876be8e8efdae42d27",
+        "finalArtifactSha256": "d0d8d43726a808b600f702f1f6be26c4863fc48dd7b4971a519adcae9ce01888",
+        "sourceCommit": "774a9f24c62abdd7381c66797d6202ed03f24666",
         "comparisonPath": "spec/compatibility/closure/evidence/STORAGE-RULES-official-regression.json",
         "rows": {
           "GATED_STEPS_PASSED": 234
-        }
+        },
+        "buildReceiptPath": "spec/compatibility/closure/evidence/STORAGE-RULES-release-artifact.json"
       }
     },
     {
@@ -818,7 +901,7 @@
         "An independent reviewer approves every condition, scope decision, two production recordings, cleanup and final-artifact binding before COMPAT_VERIFIED."
       ],
       "status": "VERIFIED",
-      "note": "Independent closure review approved fba79bd2d (see closureReview): every condition, the scope decisions, the two production recordings, the cleanup and the final-artifact binding were checked. The parent is not promoted while three conditions are PRODUCTION_RECORDED.",
+      "note": "Independent closure review approved 8247f7df4 (see closureReview): every condition, the scope decisions, the two production recordings, the cleanup and the final-artifact binding were checked.",
       "evidence": {
         "productionRecordings": [
           {
@@ -834,13 +917,46 @@
             "project": "fireemu-oracle-query"
           }
         ],
-        "finalArtifactSha256": "075593e8e7f528b2f318fd121f67bf539b4a1f7cf039b3fb9e980b49c9a936f7",
-        "sourceCommit": "7adbae1a274dd4d2ed1446876be8e8efdae42d27",
+        "finalArtifactSha256": "d0d8d43726a808b600f702f1f6be26c4863fc48dd7b4971a519adcae9ce01888",
+        "sourceCommit": "774a9f24c62abdd7381c66797d6202ed03f24666",
         "comparisonPath": "spec/compatibility/closure/evidence/STORAGE-RULES-comparison.json",
         "rows": {
           "REVIEWED_ROWS": 3641
         }
       }
     }
-  ]
+  ],
+  "note": "No official-emulator-only remnant of this parent is open (owner ledger 811, 2026-10-04). The principle that the emulator profile refuses no more than the official emulator is unchanged, apart from the owner-ruled exceptions recorded in the contract (ledger 713, `rules.idTokenVerification`).",
+  "integratedRegression": {
+    "release": "closure-base-774a9f24c",
+    "integrationCommit": "774a9f24c62abdd7381c66797d6202ed03f24666",
+    "releaseBinarySha256": "d0d8d43726a808b600f702f1f6be26c4863fc48dd7b4971a519adcae9ce01888",
+    "buildReceiptPath": "spec/compatibility/closure/evidence/STORAGE-RULES-release-artifact.json",
+    "buildReceiptSha256": "f98346a713accd1e08377530adbefab8c134211c25789fb32dc9437aa5668b2f",
+    "comparisons": [
+      {
+        "path": "spec/compatibility/closure/evidence/STORAGE-RULES-comparison.json",
+        "sha256": "de9ece3550b1578f2fcfb857842fd36db2c19c920db421ac2e637aa91b80907c",
+        "rows": 3641,
+        "summary": {
+          "MATCH": 3641
+        },
+        "laneComparisonPath": "spec/compatibility/closure/evidence/STORAGE-RULES-comparison.json",
+        "laneComparisonSha256": "de9ece3550b1578f2fcfb857842fd36db2c19c920db421ac2e637aa91b80907c",
+        "identicalRows": 3641,
+        "changedRows": []
+      },
+      {
+        "path": "spec/compatibility/closure/evidence/STORAGE-RULES-management-comparison.json",
+        "sha256": "698c69b730fe6949f0774234ccde11d444487928626fd9e03c30aeb20cf04b29",
+        "rows": 406,
+        "laneComparisonPath": "spec/compatibility/closure/evidence/STORAGE-RULES-management-comparison.json",
+        "laneComparisonSha256": "698c69b730fe6949f0774234ccde11d444487928626fd9e03c30aeb20cf04b29",
+        "identicalRows": 406,
+        "changedRows": []
+      }
+    ],
+    "result": "IDENTICAL_TO_LANE",
+    "productionRequests": 0
+  }
 }

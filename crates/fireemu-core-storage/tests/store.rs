@@ -5,7 +5,7 @@ use std::collections::BTreeMap;
 use fireemu_core_storage::hash::{base64, crc32c, hex, md5};
 use fireemu_core_storage::name::{BucketName, NameError, ObjectName};
 use fireemu_core_storage::store::{
-    MetadataPatch, NewMetadata, Precondition, StorageError, StorageEvent, StorageState,
+    MetadataPatch, NewMetadata, Precondition, StorageError, StorageEvent, StorageState, UploadId,
 };
 use fireemu_core_types::time::LogicalInstant;
 
@@ -62,6 +62,7 @@ fn object_names_are_opaque_utf8_and_never_normalized() {
     );
 }
 
+#[allow(clippy::too_many_lines)]
 #[test]
 fn generations_metagenerations_and_preconditions() {
     let mut s = StorageState::new(1);
@@ -153,10 +154,10 @@ fn generations_metagenerations_and_preconditions() {
         ),
         Err(StorageError::PreconditionFailed(_))
     ));
-    let deleted = s.delete(&b, &n, Precondition::default()).unwrap();
+    let deleted = s.delete(&b, &n, Precondition::default(), t(0)).unwrap();
     assert_eq!(deleted.generation, 2);
     assert_eq!(
-        s.delete(&b, &n, Precondition::default()),
+        s.delete(&b, &n, Precondition::default(), t(0)),
         Err(StorageError::NotFound)
     );
     let events: Vec<&str> = s
@@ -165,12 +166,15 @@ fn generations_metagenerations_and_preconditions() {
         .map(|e| match e {
             StorageEvent::Finalized(_) => "finalized",
             StorageEvent::MetadataUpdated(_) => "metadata",
-            StorageEvent::Deleted(_) => "deleted",
+            StorageEvent::Deleted { .. } => "deleted",
+            StorageEvent::Archived { .. } => "archived",
         })
         .collect();
+    // The overwrite announces the replaced generation as deleted before the new one is
+    // finalized (documented, unrecorded; see `put_events`).
     assert_eq!(
         events,
-        vec!["finalized", "metadata", "finalized", "deleted"]
+        vec!["finalized", "metadata", "deleted", "finalized", "deleted"]
     );
 }
 
@@ -192,7 +196,7 @@ fn event_admission_refusal_keeps_storage_mutations_private() {
         .unwrap();
     let _ = store.drain_events();
 
-    let refused = |_: &StorageEvent| {
+    let refused = |_: &[StorageEvent]| {
         Err::<(), _>(StorageError::EventAdmission(
             fireemu_core_types::admission::EventAdmissionError::Capacity("outbox full".to_owned()),
         ))
@@ -251,7 +255,7 @@ fn event_admission_refusal_keeps_storage_mutations_private() {
     assert!(store.get(&b, &destination).is_none());
 
     assert!(matches!(
-        store.delete_with_admission(&b, &source, Precondition::default(), refused),
+        store.delete_with_admission(&b, &source, Precondition::default(), t(0), refused),
         Err(StorageError::EventAdmission(_))
     ));
     assert_eq!(store.get(&b, &source), Some(&source_meta));
@@ -347,6 +351,42 @@ fn listing_uses_the_namespace_with_prefix_and_delimiter() {
     let names: Vec<&str> = page2.items.iter().map(|m| m.name.as_str()).collect();
     assert_eq!(names, vec!["dir/z.txt", "dirty.txt"]);
     assert!(page2.next_page_token.is_none());
+}
+
+/// The checksums of the bytes a session holds (the JSON API's `x-goog-running-hash` and
+/// `x-range-md5`) are the CRC32C and MD5 of exactly those bytes, whatever the chunking.
+#[test]
+fn a_session_reports_the_checksums_of_the_bytes_it_holds() {
+    let mut s = StorageState::new(3);
+    let id = s
+        .begin_upload(
+            &bucket(),
+            &name("hashes.bin"),
+            NewMetadata::default(),
+            Precondition::default(),
+            None,
+            t(0),
+        )
+        .unwrap();
+    assert_eq!(
+        s.upload_running_hashes(&id, t(0)).unwrap(),
+        (crc32c(b""), md5(b""))
+    );
+    s.upload_chunk(&id, 0, b"123456789", false, t(1)).unwrap();
+    // The recorded check value of CRC32C and the RFC 1321 digest of the same bytes.
+    assert_eq!(
+        s.upload_running_hashes(&id, t(1)).unwrap(),
+        (0xE306_9283, md5(b"123456789"))
+    );
+    s.upload_chunk(&id, 9, b"abc", false, t(2)).unwrap();
+    assert_eq!(
+        s.upload_running_hashes(&id, t(2)).unwrap(),
+        (crc32c(b"123456789abc"), md5(b"123456789abc"))
+    );
+    assert_eq!(
+        s.upload_running_hashes(&UploadId::from_str_unchecked("nope"), t(2)),
+        Err(StorageError::UploadNotFound)
+    );
 }
 
 #[test]
@@ -604,7 +644,7 @@ fn not_match_preconditions_and_patch_apply() {
         ..Precondition::default()
     };
     assert!(matches!(
-        s.delete(&b, &n, not_current),
+        s.delete(&b, &n, not_current, t(0)),
         Err(StorageError::NotModified(_))
     ));
     let other = Precondition {
@@ -990,7 +1030,7 @@ fn preconditions_check_both_directions_of_each_field() {
         assert_eq!(r.is_ok(), ok, "{pre:?}");
         if ok {
             // Restore the metageneration expectation for the next case.
-            s.delete(&b, &n, Precondition::default()).unwrap();
+            s.delete(&b, &n, Precondition::default(), t(0)).unwrap();
             let again = s
                 .put(
                     &b,

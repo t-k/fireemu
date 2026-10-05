@@ -83,6 +83,10 @@ pub struct SubscriptionConfig {
     pub topic: TopicName,
     /// Ack deadline, in seconds.
     pub ack_deadline_seconds: u32,
+    /// Whether acknowledged-message retention was requested. Configuration only; the retention window and replay behavior are not enforced by the delivery state machine yet.
+    pub retain_acked_messages: bool,
+    /// The explicitly requested retention window; `None` preserves an omitted request without synthesizing a resolved production default. Expiry enforcement is not implemented yet.
+    pub message_retention_duration: Option<LogicalDuration>,
     /// Whether ordering keys are honoured.
     pub enable_message_ordering: bool,
     /// The attribute filter; [`Filter::always`] when unset.
@@ -104,6 +108,16 @@ impl SubscriptionConfig {
             return Err(PubSubError::invalid_argument(format!(
                 "ackDeadlineSeconds must be {MIN_ACK_DEADLINE_SECONDS}..={MAX_ACK_DEADLINE_SECONDS}"
             )));
+        }
+        // The Subscription API schema bounds the requested window to 10 minutes through 31 days.
+        if let Some(duration) = self.message_retention_duration {
+            if duration < LogicalDuration::from_seconds(600)
+                || duration > LogicalDuration::from_seconds(31 * 24 * 60 * 60)
+            {
+                return Err(PubSubError::invalid_argument(
+                    "messageRetentionDuration must be between 600 and 2678400 seconds",
+                ));
+            }
         }
         if let Some(dl) = &self.dead_letter_policy {
             if dl.max_delivery_attempts < MIN_DEAD_LETTER_ATTEMPTS
@@ -828,6 +842,8 @@ mod tests {
 
     fn cfg() -> SubscriptionConfig {
         SubscriptionConfig {
+            retain_acked_messages: false,
+            message_retention_duration: None,
             name: SubscriptionName::new("demo-app", "sub-one").unwrap(),
             topic: TopicName::new("demo-app", "topic-one").unwrap(),
             ack_deadline_seconds: DEFAULT_ACK_DEADLINE_SECONDS,
@@ -837,6 +853,32 @@ mod tests {
             retry_policy: None,
             push_config: PushConfig::default(),
         }
+    }
+
+    #[test]
+    fn the_retention_window_is_bounded_to_ten_minutes_through_thirty_one_days() {
+        const DAY: i64 = 24 * 60 * 60;
+        let with = |window: LogicalDuration| SubscriptionConfig {
+            message_retention_duration: Some(window),
+            ..cfg()
+        };
+        let seconds = LogicalDuration::from_seconds;
+        for inside in [600, 601, DAY, 31 * DAY] {
+            assert!(with(seconds(inside)).validate().is_ok(), "{inside} s");
+        }
+        for outside in [0, 1, 599, 31 * DAY + 1, 365 * DAY] {
+            assert!(with(seconds(outside)).validate().is_err(), "{outside} s");
+        }
+        // One nanosecond either side of the bounds.
+        let nanos = |value: i128| LogicalDuration::from_nanos(value);
+        assert!(with(nanos(600_000_000_000 - 1)).validate().is_err());
+        assert!(with(nanos(600_000_000_000)).validate().is_ok());
+        assert!(with(nanos(31 * 86_400 * 1_000_000_000)).validate().is_ok());
+        assert!(with(nanos(31 * 86_400 * 1_000_000_000 + 1))
+            .validate()
+            .is_err());
+        // An unset window is not validated against the bounds.
+        assert!(cfg().validate().is_ok());
     }
 
     fn stored(id: &str, data: &[u8], t: i64) -> StoredMessage {

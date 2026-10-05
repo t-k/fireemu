@@ -61,7 +61,7 @@ fn observable(s: &StorageState) -> (Vec<String>, u64, u64) {
     (
         objects,
         s.retained_blob_bytes(),
-        s.next_generation_preview().unwrap(),
+        s.next_generation_preview(t(0)).unwrap(),
     )
 }
 
@@ -105,7 +105,7 @@ fn a_replacement_is_charged_only_its_difference() {
     assert_eq!(s.retained_blob_bytes(), 6);
     assert_eq!(put(&mut s, "a", 7), Err(StorageError::StoredBytesLimit));
     put(&mut s, "a", 6).unwrap();
-    s.delete(&bucket(), &name("b"), Precondition::default())
+    s.delete(&bucket(), &name("b"), Precondition::default(), t(0))
         .unwrap();
     put(&mut s, "a", 10).unwrap();
     assert_eq!(s.retained_blob_bytes(), 10);
@@ -160,7 +160,7 @@ fn a_refused_final_chunk_keeps_the_session_and_its_offset() {
     assert_eq!(s.upload_phase(&id, t(3)).unwrap(), UploadPhase::Active(3));
 
     // Once there is room, the same chunk finishes the upload with the right bytes.
-    s.delete(&bucket(), &name("a"), Precondition::default())
+    s.delete(&bucket(), &name("a"), Precondition::default(), t(0))
         .unwrap();
     let done = s.upload_chunk(&id, 3, b"de", true, t(4)).unwrap();
     assert_eq!(done.committed.map(|meta| meta.size), Some(5));
@@ -295,7 +295,7 @@ proptest! {
                     )
                     .err(),
                 Op::Delete(o) => s
-                    .delete(&bucket(), &name(&format!("o{o}")), Precondition::default())
+                    .delete(&bucket(), &name(&format!("o{o}")), Precondition::default(), t(0))
                     .err(),
                 Op::Upload(o, first, last) => {
                     let id = s

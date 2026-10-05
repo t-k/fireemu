@@ -19,6 +19,7 @@ use fireemu_core_functions::manifest::{
 };
 use fireemu_core_functions::manifest::{DocumentEvent, FunctionGeneration, ObjectEvent};
 use fireemu_core_session::clock::VirtualClock;
+use fireemu_core_storage::etag::production_etag;
 use fireemu_core_storage::name::{BucketName, ObjectName};
 use fireemu_core_storage::store::{NewMetadata, Precondition, StorageEvent, StorageState};
 use fireemu_core_types::ids::SessionId;
@@ -850,6 +851,31 @@ async fn shutdown_cancels_pending_tasks_and_closes_admission() {
     assert!(refusal.body.contains("shutting down"));
     assert!(!probe.exists());
     let _ = std::fs::remove_dir_all(dir);
+}
+
+#[tokio::test]
+async fn shutdown_closes_the_manual_and_the_clock_driven_schedule_paths() {
+    use fireemu_adapter_functions::runtime::ScheduleRunError;
+    let (runtime, clock) = start().await;
+    runtime.shutdown().await;
+    assert!(runtime.is_idle());
+
+    // A manual run is refused like every other admission after shutdown began.
+    let refused = runtime.run_schedule("tick");
+    assert!(
+        matches!(&refused, Err(ScheduleRunError::Refused(m)) if m.contains("shutting down")),
+        "{refused:?}"
+    );
+
+    // A clock change enqueues no schedule run into a dispatcher that has stopped.
+    clock
+        .lock()
+        .unwrap()
+        .advance(LogicalDuration::from_seconds(15 * 60))
+        .unwrap();
+    runtime.on_clock_changed();
+    assert!(runtime.is_idle(), "{}", runtime.status());
+    assert!(runtime.history().is_empty());
 }
 
 #[tokio::test]
@@ -2669,7 +2695,7 @@ fn firestore_events_carry_the_production_id_and_time_forms() {
 
 /// The frames a production 1st and 2nd gen Firestore onCreate handler printed for one document
 /// create (recorded 2026-09-30). Each field of the `CloudEvent` the runtime builds for the same
-/// commit is compared with the recorded one; the `source` difference is a known divergence.
+/// commit is compared with the recorded one, including the database `source`.
 #[test]
 fn a_firestore_create_event_matches_the_recorded_production_delivery() {
     let fixture: serde_json::Value = serde_json::from_str(include_str!(
@@ -2714,22 +2740,21 @@ fn a_firestore_create_event_matches_the_recorded_production_delivery() {
     assert_eq!(shape(event["id"].as_str().unwrap()), shape(production_id));
     let local_id = event["id"].as_str().unwrap();
     assert_eq!(&local_id[14..15], &production_id[14..15], "version nibble");
-    // Known divergence (FN-CLAIM-EVENTS): production's `source` names the database, the local
-    // one the document, because the JSON path of firebase-functions reads the name from it.
+    // Created snapshots carry their document name in the payload; source names the database.
     assert_eq!(
         gen2["source"],
         "//firestore.googleapis.com/projects/demo-project/databases/(default)"
     );
     assert_eq!(
         event["source"],
-        "projects/demo-project/databases/(default)/documents/fe_events_primary/fe011probe0001"
+        "//firestore.googleapis.com/projects/demo-project/databases/(default)"
     );
 }
 
 /// The frames a production 1st and 2nd gen Cloud Storage onFinalize handler printed for one object
 /// create (recorded 2026-10-01). Each field of the `CloudEvent` the runtime builds for an object
 /// with the same bytes, name and times is compared with the recorded one; the `etag` and the
-/// `generation` forms are known divergences of the Storage surface, pinned here.
+/// `generation` forms are the known divergences of the Storage surface, pinned here.
 #[test]
 fn a_storage_finalize_event_matches_the_recorded_production_delivery() {
     let fixture: serde_json::Value = serde_json::from_str(include_str!(
@@ -2756,15 +2781,14 @@ fn a_storage_finalize_event_matches_the_recorded_production_delivery() {
             created,
         )
         .unwrap();
-    let event = storage_event("42-1", ObjectEvent::Finalized, &meta, delivered);
+    let event = storage_event("42-1", ObjectEvent::Finalized, &meta, delivered, None);
     // The attributes production and the runtime agree on, the bucket extension included.
     for key in ["type", "subject", "source", "specversion"] {
         assert_eq!(event[key], gen2[key], "{key}");
     }
     // The CloudEvent carries the recorded members: the framework adds `context` and `object` on
-    // the way to a handler. Two known divergences: the delivery's `traceparent` (the runtime
-    // sends none) and `datacontenttype` (the runtime sets `application/json`; production's
-    // Storage event carries none, as the recorded `eventKeys` and the null member show).
+    // the way to a handler. One known divergence: the delivery's `traceparent` (the runtime sends
+    // none). Production's Storage event carries no `datacontenttype`, nor does the runtime's.
     let mut recorded_keys: Vec<String> = gen2["eventKeys"]
         .as_array()
         .unwrap()
@@ -2772,13 +2796,12 @@ fn a_storage_finalize_event_matches_the_recorded_production_delivery() {
         .map(|key| key.as_str().unwrap().to_owned())
         .filter(|key| !["context", "object", "traceparent"].contains(&key.as_str()))
         .collect();
-    recorded_keys.push("datacontenttype".to_owned());
     recorded_keys.sort();
     let mut local_keys: Vec<String> = event.as_object().unwrap().keys().cloned().collect();
     local_keys.sort();
     assert_eq!(local_keys, recorded_keys);
     assert!(gen2["datacontenttype"].is_null());
-    assert_eq!(event["datacontenttype"], "application/json");
+    assert!(event.get("datacontenttype").is_none());
     assert_eq!(event["bucket"], gen2["extensionAttributes"]["bucket"]);
     // The event time is the object's creation instant with the microseconds production prints,
     // not the moment the runtime admitted the event.
@@ -2835,10 +2858,15 @@ fn a_storage_finalize_event_matches_the_recorded_production_delivery() {
         .as_str()
         .unwrap()
         .contains(&format!("generation={}", meta.generation)));
-    // Known divergence: production's etag is the base64 of the protobuf of the generation and
-    // the metageneration (`CLuI7vG3mJcDEAE=`); the local one is the quoted `<generation>-<n>`.
+    // Production's etag is the base64 of the protobuf of the generation and the metageneration
+    // (`CLuI7vG3mJcDEAE=`); the runtime encodes the same two numbers, its own generation here.
     assert_eq!(recorded["etag"], "CLuI7vG3mJcDEAE=");
-    assert_eq!(local["etag"], format!("\"{}-1\"", meta.generation));
+    let recorded_generation: u64 = recorded["generation"].as_str().unwrap().parse().unwrap();
+    assert_eq!(production_etag(recorded_generation, 1), recorded["etag"]);
+    assert_eq!(
+        local["etag"],
+        production_etag(meta.generation, meta.metageneration)
+    );
 }
 
 /// A Storage delivery's runner frame carries the instant the runtime admitted the event as
@@ -2913,7 +2941,7 @@ fn cloudevents_carry_the_shapes_the_sdk_decodes() {
     assert_eq!(e["type"], "google.cloud.firestore.document.v1.updated");
     assert_eq!(
         e["source"],
-        "projects/demo-app/databases/(default)/documents/todos/t1"
+        "//firestore.googleapis.com/projects/demo-app/databases/(default)"
     );
     assert_eq!(e["subject"], "documents/todos/t1");
     assert_eq!(e["document"], "todos/t1");
@@ -2947,7 +2975,7 @@ fn cloudevents_carry_the_shapes_the_sdk_decodes() {
             START,
         )
         .unwrap();
-    let s = storage_event("e3", ObjectEvent::Finalized, &meta, START);
+    let s = storage_event("e3", ObjectEvent::Finalized, &meta, START, None);
     assert_eq!(s["type"], "google.cloud.storage.object.v1.finalized");
     assert_eq!(s["bucket"], "demo-app.appspot.com");
     assert_eq!(s["subject"], "objects/dir/a.txt");
@@ -2957,6 +2985,446 @@ fn cloudevents_carry_the_shapes_the_sdk_decodes() {
         .as_str()
         .unwrap()
         .ends_with("/o/dir%2Fa.txt"));
+}
+
+#[test]
+fn gen2_firestore_source_is_database_for_all_document_events() {
+    let before = doc("documents/one/databases/two", 1);
+    let after = doc("documents/one/databases/two", 2);
+    for (kind, old, new) in [
+        (DocumentEvent::Created, None, Some(&after)),
+        (DocumentEvent::Updated, Some(&before), Some(&after)),
+        (DocumentEvent::Deleted, Some(&before), None),
+        (DocumentEvent::Written, None, Some(&after)),
+        (DocumentEvent::Written, Some(&before), None),
+        (DocumentEvent::Written, Some(&before), Some(&after)),
+    ] {
+        let event = firestore_event(
+            "source-gate",
+            "documents",
+            "databases",
+            "nam5",
+            "documents/one/databases/two",
+            kind,
+            old,
+            new,
+            START,
+            Some(("system", Some("u1"))),
+        );
+        assert_eq!(
+            event["source"], "//firestore.googleapis.com/projects/documents/databases/databases",
+            "Gen2 source must identify only the database"
+        );
+        assert_eq!(event["subject"], "documents/documents/one/databases/two");
+        assert_eq!(event["authtype"], "system");
+        assert_eq!(event["authid"], "u1");
+        assert_eq!(
+            event["time"],
+            fireemu_adapter_functions::events::firestore_time(START)
+        );
+    }
+}
+
+/// The real cached SDK is required: absence or version drift fails this adoption gate.
+#[tokio::test]
+#[allow(clippy::too_many_lines)]
+async fn real_sdk_rust_builder_framed_runner_handler_source_gate() {
+    struct Fixture(std::path::PathBuf);
+    impl Drop for Fixture {
+        fn drop(&mut self) {
+            std::fs::remove_dir_all(&self.0).unwrap();
+        }
+    }
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap();
+    let sdk = std::env::var("FE_SOURCE_SDK_ROOT").unwrap_or_else(|_| {
+        root.join("conformance/node_modules/firebase-functions")
+            .to_string_lossy()
+            .into_owned()
+    });
+    let package: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(Path::new(&sdk).join("package.json"))
+            .expect("cached real firebase-functions is required"),
+    )
+    .unwrap();
+    assert_eq!(package["version"], "7.3.2");
+    let dir =
+        Fixture(std::env::temp_dir().join(format!("fireemu-source-sdk-{}", std::process::id())));
+    std::fs::create_dir(&dir.0).unwrap();
+    std::fs::write(
+        dir.0.join("package.json"),
+        r#"{"private":true,"main":"index.cjs"}"#,
+    )
+    .unwrap();
+    let fixture = r"
+const {appendFileSync}=require('node:fs');
+const {join}=require('node:path');
+const v1=require(join(SDK,'lib/v1/index.js'));
+const v2=require(join(SDK,'lib/v2/providers/firestore.js'));
+const snap=s=>({path:s.ref.path,id:s.id,exists:s.exists,data:s.data()??null,createTime:s.createTime?.toDate().toISOString()??null,updateTime:s.updateTime?.toDate().toISOString()??null});
+const report=(name,d,e)=>{appendFileSync(join(__dirname,'observations.jsonl'),JSON.stringify({name,data:d.before?{before:snap(d.before),after:snap(d.after)}:snap(d),event:e,emulator:process.env.FUNCTIONS_EMULATOR})+'\n');return Promise.resolve();};
+for(const [kind,method]of Object.entries({created:'onCreate',updated:'onUpdate',deleted:'onDelete',written:'onWrite'})){
+ exports[kind+'V1']=v1.firestore.document('items/{id}')[method]((d,c)=>report(kind+'V1',d,c));
+ exports[kind+'V2']=v2[{created:'onDocumentCreated',updated:'onDocumentUpdated',deleted:'onDocumentDeleted',written:'onDocumentWritten'}[kind]]('items/{id}',e=>report(kind+'V2',e.data,{...e,data:undefined}));
+}
+exports.authV2=v2.onDocumentCreatedWithAuthContext('items/{id}',e=>report('authV2',e.data,{...e,data:undefined}));
+exports.authWrittenV2=v2.onDocumentWrittenWithAuthContext('items/{id}',e=>report('authWrittenV2',e.data,{...e,data:undefined}));
+let wire;
+const rich=v2.onDocumentWritten('items/{id}',e=>{
+ appendFileSync(join(__dirname,'observations.jsonl'),JSON.stringify({name:'richV2',wire,data:{before:snap(e.data.before),after:snap(e.data.after)},event:{...e,data:undefined}})+'\n');
+});
+exports.richV2=Object.assign(async e=>{
+ if(!Buffer.isBuffer(e.data))throw Error('expected actual protobuf bytes');
+ const codec=require(join(SDK,'protos/compiledFirestore.js')).google.events.cloud.firestore.v1.DocumentEventData;
+ wire=codec.toObject(codec.decode(e.data),{longs:String,bytes:String});
+ return rich(e);
+},rich);
+let retried=false;
+exports.retryV2=v2.onDocumentCreated({document:'items/{id}',retry:true},async e=>{
+ await report('retryV2',e.data,{...e,data:undefined});
+ if(!retried){retried=true;throw Error('intentional local retry');}
+});
+const raw=(name,e)=>{appendFileSync(join(__dirname,'observations.jsonl'),JSON.stringify({name,event:e,emulator:process.env.FUNCTIONS_EMULATOR})+'\n');return Promise.resolve();};
+exports.topicV2=require(join(SDK,'lib/v2/providers/pubsub.js')).onMessagePublished('t',e=>raw('topicV2',e));
+exports.customV2=require(join(SDK,'lib/v2/providers/eventarc.js')).onCustomEventPublished({eventType:'example.custom',channel:'locations/us-central1/channels/firebase'},e=>raw('customV2',e));
+";
+    std::fs::write(
+        dir.0.join("index.cjs"),
+        format!("const SDK={};\n{fixture}", json!(sdk)),
+    )
+    .unwrap();
+    let mut command: Vec<String> = std::env::var("FE_SOURCE_RUNNER_PREFIX").map_or_else(
+        |_| vec!["node".to_owned()],
+        |s| serde_json::from_str(&s).unwrap(),
+    );
+    command.extend([
+        root.join("tools/runner-node/index.mjs")
+            .to_string_lossy()
+            .into_owned(),
+        "--source".into(),
+        dir.0.to_string_lossy().into_owned(),
+    ]);
+    let mut env = vec![
+        ("GCLOUD_PROJECT".into(), "demo-app".into()),
+        (
+            "NODE_PATH".into(),
+            Path::new(&sdk)
+                .parent()
+                .unwrap()
+                .to_string_lossy()
+                .into_owned(),
+        ),
+    ];
+    if let Ok(receipts) = std::env::var("FE_SOURCE_RECEIPTS") {
+        env.push(("FE_SOURCE_RECEIPTS".into(), receipts));
+    }
+    let runner = Runner::spawn_spec(&SpawnSpec {
+        command,
+        cwd: Some(dir.0.to_string_lossy().into_owned()),
+        env,
+        hello_timeout: RUNNER_HELLO_TIMEOUT,
+    })
+    .await
+    .unwrap();
+    let before = doc("items/one", 1);
+    let after = doc("items/one", 2);
+    let cases = [
+        (DocumentEvent::Created, "created", None, Some(&after)),
+        (
+            DocumentEvent::Updated,
+            "updated",
+            Some(&before),
+            Some(&after),
+        ),
+        (DocumentEvent::Deleted, "deleted", Some(&before), None),
+        (DocumentEvent::Written, "written", None, Some(&after)),
+        (DocumentEvent::Written, "written", Some(&before), None),
+        (
+            DocumentEvent::Written,
+            "written",
+            Some(&before),
+            Some(&after),
+        ),
+    ];
+    let mut deliveries = Vec::new();
+    for (kind, name, old, new) in cases {
+        let mut event = firestore_event(
+            "real-source",
+            "demo-app",
+            "(default)",
+            "nam5",
+            "items/one",
+            kind,
+            old,
+            new,
+            START,
+            None,
+        );
+        event["params"] = json!({"id":"one"});
+        for generation in [1, 2] {
+            let function = format!("{name}V{generation}");
+            let invocation = runner.invoke(json!({"type":"invoke","invocationId":format!("source-{}",deliveries.len()),"function":function,"entryPoint":function,"trigger":"firestore","event":event}), Duration::from_secs(10)).await;
+            deliveries.push((
+                invocation.outcome,
+                generation,
+                kind,
+                old.map(|_| 1),
+                new.map(|_| 2),
+                event.clone(),
+            ));
+        }
+    }
+    let mut auth = firestore_event(
+        "auth-source",
+        "demo-app",
+        "(default)",
+        "nam5",
+        "items/one",
+        DocumentEvent::Created,
+        None,
+        Some(&after),
+        START,
+        Some(("system", Some("principal"))),
+    );
+    auth["params"] = json!({"id":"one"});
+    let auth_outcome = runner.invoke(json!({"type":"invoke","invocationId":"auth-source","function":"authV2","entryPoint":"authV2","trigger":"firestore","event":auth}), Duration::from_secs(10)).await.outcome;
+    // Replay the same immutable producer payload; this is not a production retry recording.
+    let replay = &deliveries[0].5;
+    let replay_outcome = runner.invoke(json!({"type":"invoke","invocationId":"source-replay","function":"createdV2","entryPoint":"createdV2","trigger":"firestore","event":replay}), Duration::from_secs(10)).await.outcome;
+    let mut topic = fireemu_adapter_functions::events::pubsub_event(
+        "topic-source",
+        "demo-app",
+        "t",
+        &json!({"data":"aGVsbG8=","attributes":{"key":"value"}}),
+        START,
+    );
+    // Typed Firestore-like extensions must not change another product's source.
+    for key in ["project", "database", "document"] {
+        topic[key] = replay[key].clone();
+    }
+    let custom = json!({"specversion":"1.0","id":"custom-id","type":"example.custom","source":"//example/custom-source","subject":"custom-subject","time":replay["time"],"data":{"v":3},"project":"demo-app","database":"(default)","document":"items/one"});
+    let mut other_outcomes = Vec::new();
+    for (function, trigger, event) in [
+        ("topicV2", "pubsub", &topic),
+        ("customV2", "eventarc", &custom),
+    ] {
+        other_outcomes.push(runner.invoke(json!({"type":"invoke","invocationId":function,"function":function,"entryPoint":function,"trigger":trigger,"event":event}), Duration::from_secs(10)).await.outcome);
+    }
+    let mut retry_outcomes = Vec::new();
+    for attempt in [1, 2] {
+        retry_outcomes.push(runner.invoke(json!({"type":"invoke","invocationId":format!("retry-{attempt}"),"function":"retryV2","entryPoint":"retryV2","trigger":"firestore","event":replay}), Duration::from_secs(10)).await.outcome);
+    }
+    let mut rich = after.clone();
+    let nanosecond =
+        fireemu_core_firestore::value::Timestamp::new(1_790_769_798, 846_431_123).unwrap();
+    rich.fields
+        .insert("large".into(), FsValue::Integer(i64::MAX));
+    rich.fields
+        .insert("small".into(), FsValue::Integer(i64::MIN));
+    rich.fields
+        .insert("bytes".into(), FsValue::Bytes(vec![0, 1, 255]));
+    rich.fields.insert(
+        "nested".into(),
+        FsValue::Map(
+            [(
+                "arr".into(),
+                FsValue::Array(vec![
+                    FsValue::Timestamp(nanosecond),
+                    FsValue::Bytes(vec![0, 1, 255]),
+                ]),
+            )]
+            .into_iter()
+            .collect(),
+        ),
+    );
+    let mut rich_event = firestore_event(
+        "rich",
+        "demo-app",
+        "(default)",
+        "nam5",
+        "items/one",
+        DocumentEvent::Written,
+        None,
+        Some(&rich),
+        START,
+        None,
+    );
+    rich_event["params"] = json!({"id":"one"});
+    let rich_outcome = runner.invoke(json!({"type":"invoke","invocationId":"rich","function":"richV2","entryPoint":"richV2","trigger":"firestore","event":rich_event}), Duration::from_secs(10)).await.outcome;
+    let mut written_auth = firestore_event(
+        "written-auth",
+        "demo-app",
+        "(default)",
+        "nam5",
+        "items/one",
+        DocumentEvent::Written,
+        Some(&rich),
+        None,
+        START,
+        Some(("system", Some("principal"))),
+    );
+    written_auth["params"] = json!({"id":"one"});
+    let written_auth_outcome = runner.invoke(json!({"type":"invoke","invocationId":"written-auth","function":"authWrittenV2","entryPoint":"authWrittenV2","trigger":"firestore","event":written_auth}), Duration::from_secs(10)).await.outcome;
+    let bytes = std::fs::read_to_string(dir.0.join("observations.jsonl"));
+    runner.shutdown().await;
+    assert!(!runner.is_alive());
+    for (outcome, ..) in &deliveries {
+        assert_eq!(
+            outcome,
+            &fireemu_adapter_functions::runner::InvokeOutcome::Ok,
+            "actual SDK decode must succeed"
+        );
+    }
+    assert_eq!(
+        auth_outcome,
+        fireemu_adapter_functions::runner::InvokeOutcome::Ok
+    );
+    assert_eq!(
+        replay_outcome,
+        fireemu_adapter_functions::runner::InvokeOutcome::Ok
+    );
+    for outcome in other_outcomes {
+        assert_eq!(
+            outcome,
+            fireemu_adapter_functions::runner::InvokeOutcome::Ok
+        );
+    }
+    let observations: Vec<serde_json::Value> = bytes
+        .unwrap()
+        .lines()
+        .map(|s| serde_json::from_str(s).unwrap())
+        .collect();
+    assert!(
+        matches!(&retry_outcomes[0], fireemu_adapter_functions::runner::InvokeOutcome::Failed(message) if message.contains("intentional local retry")),
+        "actual retry outcomes: {retry_outcomes:?}"
+    );
+    assert_eq!(
+        retry_outcomes[1],
+        fireemu_adapter_functions::runner::InvokeOutcome::Ok
+    );
+    assert_eq!(
+        rich_outcome,
+        fireemu_adapter_functions::runner::InvokeOutcome::Ok
+    );
+    assert_eq!(
+        written_auth_outcome,
+        fireemu_adapter_functions::runner::InvokeOutcome::Ok
+    );
+    assert_eq!(observations.len(), 20);
+    let document = "projects/demo-app/databases/(default)/documents/items/one";
+    let database = "//firestore.googleapis.com/projects/demo-app/databases/(default)";
+    for (observation, (_, generation, kind, old, new, event)) in
+        observations.iter().zip(&deliveries)
+    {
+        let expected = |n: Option<i32>| json!({"path":"items/one","id":"one","exists":n.is_some(),"data":n.map(|v|json!({"v":v})),"createTime":n.map(|_|"2026-08-29T12:01:00.000Z"),"updateTime":n.map(|_|"2026-08-29T12:01:00.000Z")});
+        let data = if matches!(kind, DocumentEvent::Updated | DocumentEvent::Written) {
+            json!({"before":expected(*old),"after":expected(*new)})
+        } else {
+            expected(if *kind == DocumentEvent::Deleted {
+                *old
+            } else {
+                *new
+            })
+        };
+        assert_eq!(
+            observation["data"], data,
+            "snapshot path, values and timestamps"
+        );
+        assert_eq!(observation["event"]["params"], json!({"id":"one"}));
+        assert_eq!(observation["emulator"], "true");
+        if *generation == 1 {
+            assert_eq!(
+                observation["event"]["resource"],
+                json!({"service":"firestore.googleapis.com","name":document}),
+                "Gen1 typed document resource"
+            );
+            assert_eq!(
+                observation["event"]["eventId"],
+                format!("{}-0", event["id"].as_str().unwrap())
+            );
+            assert_eq!(observation["event"]["timestamp"], event["time"]);
+        } else {
+            assert_eq!(
+                observation["event"]["source"], database,
+                "Gen2 canonical database source for every document event"
+            );
+            for key in [
+                "id", "subject", "time", "type", "project", "database", "document",
+            ] {
+                assert_eq!(observation["event"][key], event[key], "{key}");
+            }
+        }
+    }
+    assert_eq!(observations[12]["event"]["authType"], "system");
+    assert_eq!(observations[12]["event"]["authId"], "principal");
+    assert_eq!(
+        observations[13]["event"], observations[1]["event"],
+        "replay preserves the same identity and envelope"
+    );
+    assert_eq!(observations[13]["data"], observations[1]["data"]);
+    assert_eq!(
+        observations[14]["event"]["source"], topic["source"],
+        "PubSub source remains the topic"
+    );
+    assert_eq!(
+        observations[14]["event"]["data"]["message"]["data"],
+        "aGVsbG8="
+    );
+    assert_eq!(
+        observations[15]["event"], custom,
+        "Eventarc retains the entire custom envelope"
+    );
+    assert_eq!(
+        observations[16], observations[17],
+        "actual failing and successful SDK retry callbacks retain identity and data"
+    );
+    let wire = &observations[18]["wire"];
+    assert!(
+        wire.get("oldValue").is_none(),
+        "missing before stays omitted"
+    );
+    assert_eq!(
+        wire["value"]["fields"]["large"]["integerValue"],
+        i64::MAX.to_string()
+    );
+    assert_eq!(
+        wire["value"]["fields"]["small"]["integerValue"],
+        i64::MIN.to_string()
+    );
+    assert_eq!(wire["value"]["fields"]["bytes"]["bytesValue"], "AAH/");
+    assert_eq!(
+        wire["value"]["fields"]["nested"]["mapValue"]["fields"]["arr"]["arrayValue"]["values"][0]
+            ["timestampValue"],
+        json!({"seconds":"1790769798","nanos":846_431_123})
+    );
+    assert_eq!(observations[18]["data"]["before"]["exists"], false);
+    assert_eq!(observations[18]["data"]["after"]["path"], "items/one");
+    assert_eq!(observations[18]["event"]["source"], database);
+    assert_eq!(observations[19]["data"]["after"]["exists"], false);
+    assert_eq!(observations[19]["data"]["after"]["id"], "one");
+    assert_eq!(observations[19]["event"]["authType"], "system");
+    assert_eq!(observations[19]["event"]["authId"], "principal");
+    assert_eq!(observations[19]["event"]["source"], database);
+}
+
+proptest::proptest! {
+    #[test]
+    fn firestore_source_projection_obeys_the_product_model(
+        project in "[a-z][a-z0-9]{0,12}", database in "[a-z][a-z0-9]{0,12}",
+        collection in "[a-z][a-z0-9]{0,12}", id in "[a-z][a-z0-9]{0,12}",
+        kind in 0u8..4,
+    ) {
+        let path = format!("{collection}/{id}");
+        let kinds = [DocumentEvent::Created, DocumentEvent::Updated, DocumentEvent::Deleted, DocumentEvent::Written];
+        let event = firestore_event("property", &project, &database, "nam5", &path, kinds[usize::from(kind)], None, None, START, None);
+        let expected = format!("//firestore.googleapis.com/projects/{project}/databases/{database}");
+        proptest::prop_assert_eq!(&event["source"], &json!(expected));
+        proptest::prop_assert_eq!(&event["subject"], &json!(format!("documents/{path}")));
+        proptest::prop_assert_eq!(&event["data"], &json!({}));
+    }
 }
 
 #[test]
@@ -3077,6 +3545,66 @@ async fn overlap_policies_skip_queue_or_reject_concurrent_schedule_runs() {
         2
     );
     runtime.runner().shutdown().await;
+}
+
+/// A handler that is really still running (it never answers) makes its function busy, so
+/// under `skip` and `reject` both a manual run and a clock-driven occurrence meet the policy.
+#[tokio::test]
+async fn a_really_running_handler_makes_skip_and_reject_refuse_the_next_run() {
+    use fireemu_adapter_functions::runtime::{CatchUpPolicy, OverlapPolicy};
+    for overlap in [OverlapPolicy::Skip, OverlapPolicy::Reject] {
+        let (runtime, clock) = start_with_policies_and_manifest(overlap, CatchUpPolicy::All, |m| {
+            let mut slow = parse_manifest(&json!({"functions": [{
+                "name": "slowTick",
+                "generation": 2,
+                "trigger": {"type": "schedule", "schedule": "every 5 minutes"}
+            }]}))
+            .unwrap();
+            m.functions.append(&mut slow.functions);
+        })
+        .await;
+        runtime.run_schedule("slowTick").unwrap();
+        for _ in 0..100 {
+            if runtime.status()["running"].as_u64() >= Some(1) {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        assert_eq!(
+            runtime.status()["running"],
+            1,
+            "{overlap:?}: the handler runs"
+        );
+        let refused = |runtime: &FunctionsRuntime| -> usize {
+            let tag = match overlap {
+                OverlapPolicy::Skip => "skipped: overlap",
+                _ => "rejected: overlap",
+            };
+            runtime
+                .history()
+                .iter()
+                .chain(runtime.dead_letters().iter())
+                .filter(|r| r.function == "slowTick" && r.outcome == tag)
+                .count()
+        };
+        // A manual run while the handler runs is refused and recorded.
+        assert!(runtime.run_schedule("slowTick").is_err(), "{overlap:?}");
+        assert_eq!(refused(&runtime), 1, "{overlap:?}: manual run");
+        // So is the occurrence a clock move brings due.
+        clock
+            .lock()
+            .unwrap()
+            .advance(fireemu_core_types::time::LogicalDuration::from_seconds(300))
+            .unwrap();
+        runtime.on_clock_changed();
+        assert_eq!(refused(&runtime), 2, "{overlap:?}: clock-driven occurrence");
+        assert_eq!(
+            runtime.status()["running"],
+            1,
+            "{overlap:?}: still one handler"
+        );
+        runtime.shutdown().await;
+    }
 }
 
 #[tokio::test]
@@ -4416,5 +4944,415 @@ fn a_schedule_run_refusal_displays_its_message() {
     assert_eq!(
         ScheduleRunError::Refused("function \"ok\" is not scheduled".to_owned()).to_string(),
         "function \"ok\" is not scheduled"
+    );
+}
+
+// ---------------------------------------------------------------------------------------------
+// Manual schedule runs and the schedule across lifecycle boundaries.
+// ---------------------------------------------------------------------------------------------
+
+#[tokio::test]
+async fn a_manual_run_of_an_unknown_or_unscheduled_function_is_refused_and_changes_nothing() {
+    use fireemu_adapter_functions::runtime::ScheduleRunError;
+    let (runtime, _clock) = start().await;
+    assert_eq!(
+        runtime.run_schedule("noSuchJob"),
+        Err(ScheduleRunError::Refused(
+            "unknown function \"noSuchJob\"".to_owned()
+        ))
+    );
+    // `ok` is a registered function, but not a scheduled one.
+    let unscheduled = runtime.run_schedule("ok");
+    assert!(
+        matches!(&unscheduled, Err(ScheduleRunError::Refused(m)) if m.contains("is not scheduled")),
+        "{unscheduled:?}"
+    );
+    assert!(runtime.is_idle(), "nothing was enqueued");
+    assert!(runtime.history().is_empty());
+    assert_eq!(runtime.status()["pending"], 0);
+    runtime.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_schedule_run_queued_while_the_runner_is_stopped_survives_a_reload_and_runs_once() {
+    let (runtime, clock) = start().await;
+    let guard = runtime
+        .stop_runner_for_fixed_inspector_reload("default")
+        .await
+        .unwrap();
+    clock
+        .lock()
+        .unwrap()
+        .advance(LogicalDuration::from_seconds(5 * 60))
+        .unwrap();
+    runtime.on_clock_changed();
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert!(!runtime.is_idle(), "the 12:05 run waits for a runner");
+    assert!(runtime.history().is_empty());
+    let spec = SpawnSpec {
+        command: vec![
+            "python3".to_owned(),
+            concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fake_runner.py").to_owned(),
+        ],
+        cwd: None,
+        env: Vec::new(),
+        hello_timeout: RUNNER_HELLO_TIMEOUT,
+    };
+    let replacement = Arc::new(Runner::spawn_spec(&spec).await.unwrap());
+    runtime
+        .reload_codebase(CodebaseSpec {
+            name: "default".to_owned(),
+            manifest: runtime.manifest().clone(),
+            runner: replacement,
+            spawn: Some(spec),
+            cleanup_dir: None,
+        })
+        .unwrap();
+    drop(guard);
+    runtime.await_idle(Duration::from_secs(3)).await.unwrap();
+    let ticks = |runtime: &FunctionsRuntime| {
+        runtime
+            .history()
+            .iter()
+            .filter(|r| r.function == "tick" && r.outcome == "ok")
+            .count()
+    };
+    assert_eq!(ticks(&runtime), 1, "the queued run was delivered once");
+    // The reload kept the schedule's cursor: 12:05 is not run again, 12:10 is.
+    clock
+        .lock()
+        .unwrap()
+        .advance(LogicalDuration::from_seconds(5 * 60))
+        .unwrap();
+    runtime.on_clock_changed();
+    runtime.await_idle(Duration::from_secs(3)).await.unwrap();
+    assert_eq!(ticks(&runtime), 2);
+    runtime.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_schedule_run_is_delivered_once_after_the_runner_died_before_it() {
+    let (runtime, clock) = start().await;
+    runtime.runner().kill_now();
+    clock
+        .lock()
+        .unwrap()
+        .advance(LogicalDuration::from_seconds(5 * 60))
+        .unwrap();
+    runtime.on_clock_changed();
+    runtime.await_idle(Duration::from_secs(5)).await.unwrap();
+    let ticks = runtime
+        .history()
+        .iter()
+        .filter(|r| r.function == "tick" && r.outcome == "ok")
+        .count();
+    assert_eq!(ticks, 1);
+    runtime.shutdown().await;
+}
+
+#[tokio::test]
+async fn queue_runs_one_scheduled_invocation_at_a_time_where_allow_runs_several() {
+    use fireemu_adapter_functions::runtime::{CatchUpPolicy, OverlapPolicy};
+    for (overlap, running) in [(OverlapPolicy::Queue, 1u64), (OverlapPolicy::Allow, 2)] {
+        let (runtime, _clock) =
+            start_with_policies_and_manifest(overlap, CatchUpPolicy::All, |m| {
+                // A function whose name contains "slow" never answers, so what runs at once is
+                // exactly what dispatch admitted.
+                let mut slow = parse_manifest(&json!({"functions": [{
+                    "name": "slowTick",
+                    "generation": 2,
+                    "concurrency": 5,
+                    "trigger": {"type": "schedule", "schedule": "every 5 minutes"}
+                }]}))
+                .unwrap();
+                m.functions.append(&mut slow.functions);
+            })
+            .await;
+        runtime.run_schedule("slowTick").unwrap();
+        runtime.run_schedule("slowTick").unwrap();
+        for _ in 0..100 {
+            if runtime.status()["running"].as_u64() >= Some(running) {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        // Let a second invocation start if the policy allows one.
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        let status = runtime.status();
+        assert_eq!(status["running"], running, "{overlap:?}: {status}");
+        assert_eq!(status["pending"], 2 - running, "{overlap:?}: {status}");
+        runtime.shutdown().await;
+    }
+}
+
+/// An Archived event (a generation of a versioned bucket became noncurrent) carries the time it
+/// stopped being live: as `timeDeleted` in the object resource and as the `CloudEvent` time. The
+/// shape is RECORDED (FE v5); the Archived event and the Deleted event of a noncurrent generation
+/// are the only ones that carry `timeDeleted`.
+#[test]
+fn an_archived_event_carries_the_time_the_generation_stopped_being_live() {
+    let mut store = StorageState::new(1);
+    let bucket = BucketName::try_new("versioned-bucket").unwrap();
+    store.set_versioning(&bucket, true);
+    let put = |store: &mut StorageState, at: LogicalInstant| {
+        store
+            .put(
+                &bucket,
+                &ObjectName::try_new("o.txt").unwrap(),
+                b"x".to_vec(),
+                NewMetadata::default(),
+                Precondition::default(),
+                at,
+            )
+            .unwrap()
+    };
+    let first = put(&mut store, START);
+    let deleted = START.checked_add(LogicalDuration::from_seconds(5)).unwrap();
+    let second = put(&mut store, deleted);
+    let archived = storage_event("e9", ObjectEvent::Archived, &first, START, Some(deleted));
+    assert_eq!(archived["type"], "google.cloud.storage.object.v1.archived");
+    assert_eq!(archived["subject"], "objects/o.txt");
+    assert_eq!(archived["data"]["generation"], first.generation.to_string());
+    // The instant the generation stopped being live is the instant of the overwrite: the
+    // creation time of the generation that replaced it, in both places it is printed.
+    let finalized = storage_event("e9", ObjectEvent::Finalized, &second, START, None);
+    assert_eq!(archived["time"], finalized["time"]);
+    assert_eq!(
+        archived["data"]["timeDeleted"],
+        finalized["data"]["timeCreated"]
+    );
+    // No other event carries timeDeleted, and the data otherwise is the object resource.
+    assert!(finalized["data"].get("timeDeleted").is_none());
+    let mut without = archived["data"].clone();
+    without.as_object_mut().unwrap().remove("timeDeleted");
+    assert_eq!(
+        without,
+        storage_event("e9", ObjectEvent::Finalized, &first, START, None)["data"]
+    );
+}
+
+/// Archived events reach the functions that subscribed to them and only those; the Finalized
+/// events of the same overwrite reach the finalize ones. The overwrite announces Finalized first
+/// (the observed order, FE v5).
+#[tokio::test]
+async fn archived_events_reach_archived_functions_and_finalized_events_finalized_ones() {
+    let (runtime, _clock) = start_with_policies_and_manifest(
+        fireemu_adapter_functions::runtime::OverlapPolicy::Allow,
+        fireemu_adapter_functions::runtime::CatchUpPolicy::All,
+        |manifest| {
+            manifest.functions.extend(
+                parse_manifest(&json!({"functions": [
+                    {"name": "archivedObserver", "generation": 2, "trigger": {"type": "storage", "eventType": "google.cloud.storage.object.v1.archived", "bucket": "versioned-bucket"}},
+                    {"name": "finalizedObserver", "generation": 2, "trigger": {"type": "storage", "eventType": "google.cloud.storage.object.v1.finalized", "bucket": "versioned-bucket"}},
+                    {"name": "otherBucketArchived", "generation": 2, "trigger": {"type": "storage", "eventType": "google.cloud.storage.object.v1.archived", "bucket": "elsewhere"}},
+                ]}))
+                .unwrap()
+                .functions,
+            );
+        },
+    )
+    .await;
+    let mut store = StorageState::new(1);
+    let bucket = BucketName::try_new("versioned-bucket").unwrap();
+    store.set_versioning(&bucket, true);
+    for (data, at) in [(&b"one"[..], START), (&b"two"[..], START)] {
+        store
+            .put(
+                &bucket,
+                &ObjectName::try_new("o.txt").unwrap(),
+                data.to_vec(),
+                NewMetadata::default(),
+                Precondition::default(),
+                at,
+            )
+            .unwrap();
+    }
+    let events = store.drain_events();
+    assert_eq!(events.len(), 3, "{events:?}");
+    for event in &events {
+        runtime.on_storage_event(event);
+    }
+    assert!(runtime.await_idle(Duration::from_secs(10)).await.is_ok());
+    let ran = |function: &str| {
+        runtime
+            .history()
+            .iter()
+            .filter(|record| record.function == function && record.outcome == "ok")
+            .count()
+    };
+    assert_eq!(ran("archivedObserver"), 1, "one generation was archived");
+    assert_eq!(
+        ran("finalizedObserver"),
+        2,
+        "two generations were finalized"
+    );
+    assert_eq!(ran("otherBucketArchived"), 0, "another bucket's trigger");
+    runtime.runner().shutdown().await;
+}
+
+/// The real `firebase-functions` 7.3.2 SDK's `onArchive` (v1) and `onObjectArchived` (v2) handlers
+/// receive an Archived event with the object resource, `timeDeleted` included. The Archived event
+/// shape is RECORDED in FE v5; this pins what the local runtime delivers to the real handlers.
+#[tokio::test]
+#[allow(clippy::too_many_lines)]
+async fn real_sdk_archived_handlers_receive_the_archived_event() {
+    struct Fixture(std::path::PathBuf);
+    impl Drop for Fixture {
+        fn drop(&mut self) {
+            std::fs::remove_dir_all(&self.0).unwrap();
+        }
+    }
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap();
+    let sdk = std::env::var("FE_SOURCE_SDK_ROOT").unwrap_or_else(|_| {
+        root.join("conformance/node_modules/firebase-functions")
+            .to_string_lossy()
+            .into_owned()
+    });
+    let package: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(Path::new(&sdk).join("package.json"))
+            .expect("cached real firebase-functions is required"),
+    )
+    .unwrap();
+    assert_eq!(package["version"], "7.3.2");
+    let dir =
+        Fixture(std::env::temp_dir().join(format!("fireemu-archived-sdk-{}", std::process::id())));
+    std::fs::create_dir(&dir.0).unwrap();
+    std::fs::write(
+        dir.0.join("package.json"),
+        r#"{"private":true,"main":"index.cjs"}"#,
+    )
+    .unwrap();
+    let fixture = r"
+const {appendFileSync}=require('node:fs');
+const {join}=require('node:path');
+const v1=require(join(SDK,'lib/v1/index.js'));
+const v2=require(join(SDK,'lib/v2/providers/storage.js'));
+const seen=(name,object,event)=>{appendFileSync(join(__dirname,'observations.jsonl'),JSON.stringify({name,object,event})+'\n');return Promise.resolve();};
+exports.archivedV1=v1.storage.bucket('versioned-bucket').object().onArchive((object,context)=>seen('archivedV1',object,context));
+exports.archivedV2=v2.onObjectArchived({bucket:'versioned-bucket'},(event)=>seen('archivedV2',event.data,{...event,data:undefined}));
+";
+    std::fs::write(
+        dir.0.join("index.cjs"),
+        format!("const SDK={};\n{fixture}", json!(sdk)),
+    )
+    .unwrap();
+    let mut command: Vec<String> = std::env::var("FE_SOURCE_RUNNER_PREFIX").map_or_else(
+        |_| vec!["node".to_owned()],
+        |s| serde_json::from_str(&s).unwrap(),
+    );
+    command.extend([
+        root.join("tools/runner-node/index.mjs")
+            .to_string_lossy()
+            .into_owned(),
+        "--source".into(),
+        dir.0.to_string_lossy().into_owned(),
+    ]);
+    let runner = Runner::spawn_spec(&SpawnSpec {
+        command,
+        cwd: Some(dir.0.to_string_lossy().into_owned()),
+        env: vec![
+            ("GCLOUD_PROJECT".into(), "demo-app".into()),
+            (
+                "NODE_PATH".into(),
+                Path::new(&sdk)
+                    .parent()
+                    .unwrap()
+                    .to_string_lossy()
+                    .into_owned(),
+            ),
+        ],
+        hello_timeout: RUNNER_HELLO_TIMEOUT,
+    })
+    .await
+    .unwrap();
+    let mut store = StorageState::new(1);
+    let bucket = BucketName::try_new("versioned-bucket").unwrap();
+    store.set_versioning(&bucket, true);
+    let put = |store: &mut StorageState, data: &[u8], at: LogicalInstant| {
+        store
+            .put(
+                &bucket,
+                &ObjectName::try_new("dir/o.txt").unwrap(),
+                data.to_vec(),
+                NewMetadata::default(),
+                Precondition::default(),
+                at,
+            )
+            .unwrap()
+    };
+    let first = put(&mut store, b"one", START);
+    let deleted = START.checked_add(LogicalDuration::from_seconds(5)).unwrap();
+    put(&mut store, b"two", deleted);
+    let event = storage_event(
+        "77-1",
+        ObjectEvent::Archived,
+        &first,
+        deleted,
+        Some(deleted),
+    );
+    let mut outcomes = Vec::new();
+    for (id, function) in [("v1", "archivedV1"), ("v2", "archivedV2")] {
+        outcomes.push(
+            runner
+                .invoke(
+                    json!({"type":"invoke","invocationId":format!("archived-{id}"),"function":function,"entryPoint":function,"trigger":"storage","event":event}),
+                    Duration::from_secs(10),
+                )
+                .await
+                .outcome,
+        );
+    }
+    let bytes = std::fs::read_to_string(dir.0.join("observations.jsonl"));
+    runner.shutdown().await;
+    for outcome in &outcomes {
+        assert_eq!(
+            outcome,
+            &fireemu_adapter_functions::runner::InvokeOutcome::Ok,
+            "the real SDK decodes the Archived event"
+        );
+    }
+    let text = bytes.unwrap();
+    // The 2nd gen handler sees the members of an Archived event's data in the order production
+    // sends them (RECORDED, FE v5, 44 v2 frames: `timeDeleted` follows `updated`). The order of a
+    // 1st gen `object` was not recorded and is the runner's input order. `serde_json` sorts keys,
+    // so the order is read from the text of the observation.
+    for line in text.lines().filter(|line| line.contains("\"archivedV2\"")) {
+        let object = &line[line.find("\"object\":").unwrap()..];
+        let at = |member: &str| object.find(&format!("\"{member}\":")).unwrap();
+        assert!(
+            at("timeCreated") < at("updated")
+                && at("updated") < at("timeDeleted")
+                && at("timeDeleted") < at("storageClass"),
+            "{line}"
+        );
+    }
+    assert_eq!(
+        text.lines()
+            .filter(|l| l.contains("\"archivedV2\""))
+            .count(),
+        1
+    );
+    let observations: Vec<serde_json::Value> = text
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    assert_eq!(observations.len(), 2);
+    for observation in &observations {
+        let object = &observation["object"];
+        assert_eq!(object["name"], "dir/o.txt");
+        assert_eq!(object["bucket"], "versioned-bucket");
+        assert_eq!(object["generation"], first.generation.to_string());
+        assert_eq!(
+            object["timeDeleted"], event["data"]["timeDeleted"],
+            "{observation}"
+        );
+    }
+    assert_eq!(
+        observations[1]["event"]["type"],
+        "google.cloud.storage.object.v1.archived"
     );
 }

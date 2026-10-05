@@ -82,6 +82,14 @@ assert(
   release_test_runs.include?("cargo nextest run -p fireemu --test leak_fixture --profile pr"),
   "release test job must run the process leak fixture in isolation"
 )
+# v0.11.0's first tag failed here: the Functions runtime tests need the real SDK from the
+# conformance install, which ci.yml installed and the release test job did not.
+release_sdk_install = release_test_runs.index("pnpm -C conformance install --frozen-lockfile")
+release_workspace_suite = release_test_runs.index("cargo nextest run --workspace")
+assert(
+  release_sdk_install && release_workspace_suite && release_sdk_install < release_workspace_suite,
+  "release test job must install the conformance SDK before the workspace suite"
+)
 strict = release.dig("jobs", "strict-production")
 assert(strict, "release must compare the strict profile of the installed artifact with the committed production recordings")
 assert(strict.fetch("needs").include?("build"), "strict-production must test the built platform package")

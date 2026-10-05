@@ -86,6 +86,14 @@ impl RestError {
             message: error.message().to_owned(),
         }
     }
+
+    fn from_resource_get(error: PubSubError, leaf: &str) -> Self {
+        if error.code() == Code::NotFound {
+            Self::not_found(format!("Resource not found (resource={leaf})."))
+        } else {
+            Self::from_core(error)
+        }
+    }
 }
 
 /// Handles one HTTP/JSON request that was not matched by a gRPC service route.
@@ -97,7 +105,7 @@ pub(crate) async fn handle(request: Request<Body>, handle: PubSubHandle) -> Resp
         Err(error) => {
             return error_response(RestError::invalid(format!(
                 "request body is too large: {error}"
-            )))
+            )));
         }
     };
     let value = if body.is_empty() {
@@ -108,7 +116,7 @@ pub(crate) async fn handle(request: Request<Body>, handle: PubSubHandle) -> Resp
             Err(error) => {
                 return error_response(RestError::invalid(format!(
                     "request body is not JSON: {error}"
-                )))
+                )));
             }
         }
     };
@@ -166,10 +174,7 @@ fn dispatch_topic(
                 topic_json(&name, &labels)
             })
             .collect::<Vec<_>>();
-        return Ok((
-            StatusCode::OK,
-            json!({"topics": topics, "nextPageToken": ""}),
-        ));
+        return Ok((StatusCode::OK, collection_json("topics", topics)));
     }
     if parts.len() != 1 {
         return Err(RestError::not_found("invalid topic resource path"));
@@ -200,7 +205,7 @@ fn dispatch_topic(
             let labels = state
                 .topic_labels(&topic)
                 .cloned()
-                .map_err(RestError::from_core)?;
+                .map_err(|error| RestError::from_resource_get(error, topic.topic()))?;
             Ok((StatusCode::OK, topic_json(&topic, &labels)))
         }
         (&Method::DELETE, None) => {
@@ -214,6 +219,14 @@ fn dispatch_topic(
         (&Method::POST, Some("publish")) => publish(topic, body, handle),
         _ => Err(RestError::method_not_allowed()),
     }
+}
+
+fn collection_json(field: &str, resources: Vec<Value>) -> Value {
+    let mut response = Map::new();
+    if !resources.is_empty() {
+        response.insert(field.to_owned(), Value::Array(resources));
+    }
+    Value::Object(response)
 }
 
 fn update_topic(topic: &TopicName, body: &Value) -> Result<(StatusCode, Value), RestError> {
@@ -255,7 +268,7 @@ fn dispatch_subscription(
             .collect::<Vec<_>>();
         return Ok((
             StatusCode::OK,
-            json!({"subscriptions": subscriptions, "nextPageToken": ""}),
+            collection_json("subscriptions", subscriptions),
         ));
     }
     if parts.len() != 1 {
@@ -461,7 +474,20 @@ fn create_subscription(
     let retry_policy = field(body, "retryPolicy")
         .map(parse_retry_policy)
         .transpose()?;
+    let retain_acked_messages = field(body, "retainAckedMessages")
+        .map(|value| {
+            value
+                .as_bool()
+                .ok_or_else(|| RestError::invalid("retainAckedMessages must be a boolean"))
+        })
+        .transpose()?
+        .unwrap_or(false);
+    let message_retention_duration = field(body, "messageRetentionDuration")
+        .map(parse_duration)
+        .transpose()?;
     let config = SubscriptionConfig {
+        retain_acked_messages,
+        message_retention_duration,
         name: subscription.clone(),
         topic: topic.clone(),
         ack_deadline_seconds,
@@ -494,7 +520,7 @@ fn get_subscription(
     let state = handle.state();
     let config = state
         .subscription_config(&subscription)
-        .map_err(RestError::from_core)?;
+        .map_err(|error| RestError::from_resource_get(error, subscription.subscription()))?;
     Ok((StatusCode::OK, subscription_json(&state, config)))
 }
 
@@ -750,7 +776,7 @@ fn seek(
 ) -> Result<(StatusCode, Value), RestError> {
     match (field(body, "snapshot"), field(body, "time")) {
         (Some(_), Some(_)) => {
-            return Err(RestError::invalid("seek takes either a time or a snapshot"))
+            return Err(RestError::invalid("seek takes either a time or a snapshot"));
         }
         (Some(snapshot), None) => {
             let snapshot = snapshot
@@ -1006,12 +1032,32 @@ fn subscription_json(state: &PubSubState, config: &SubscriptionConfig) -> Value 
     let topic = state
         .reported_topic(&config.name)
         .unwrap_or_else(|| config.topic.to_full());
+    // The defaults below are the recorded production REST response of a created pull subscription
+    // (capture-only evidence, not closure evidence): fireemu-oracle-idp run
+    // shape-001-6a666e3ffa9444cc80de18944b38ae36, subscription-create.json and subscription-get.json
+    // (recorded 2026-09-30T13:13:53Z, status 200, 372 bytes, sha256
+    // e744f1e67909fc9abd1931ae547e8eb3aecf15dd98184542b884cd8ed086bf8f; docs.local/runs/codex-lane7/),
+    // and fireemu-oracle-sbx, docs.local/runs/codex-lane8/recorded-shape-responses/create-subscription.json
+    // (resource fe-scheduled-shape-96db1cb7ca5fcb35, the same defaults). They apply when the request set
+    // no retention, ordering, retain-acked or push configuration; explicit values override them below.
     let mut value = json!({
         "name": config.name.to_full(),
         "topic": topic,
         "ackDeadlineSeconds": config.ack_deadline_seconds,
-        "enableMessageOrdering": config.enable_message_ordering,
+        "pushConfig": {},
+        "messageRetentionDuration": "604800s",
+        "expirationPolicy": {"ttl": "2678400s"},
+        "state": "ACTIVE",
     });
+    if config.enable_message_ordering {
+        value["enableMessageOrdering"] = json!(true);
+    }
+    if config.retain_acked_messages {
+        value["retainAckedMessages"] = json!(true);
+    }
+    if let Some(duration) = config.message_retention_duration {
+        value["messageRetentionDuration"] = json!(duration_json(duration));
+    }
     if !config.push_config.push_endpoint.is_empty() {
         value["pushConfig"] = json!({"pushEndpoint": config.push_config.push_endpoint});
     }

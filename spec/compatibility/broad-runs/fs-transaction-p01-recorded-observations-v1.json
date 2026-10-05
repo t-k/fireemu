@@ -1,0 +1,340 @@
+{
+  "schemaVersion": 1,
+  "kind": "fs-transaction-recorded-observations-v1",
+  "parent": "FS-TRANSACTION",
+  "condition": [
+    "FS-TRANSACTION/read-write-lifecycle"
+  ],
+  "coverage": "PARTIAL",
+  "authorizesProduction": false,
+  "decodedSemanticsValidated": true,
+  "rawRestWireLayoutValidated": false,
+  "normalization": "Only the declared run identities (nonce, owner marker, issued token values, project number) are replaced by roles; codes, diagnostics, read states, token ends and cleanup are the program's own projection.",
+  "remainingBoundaries": [
+    "Raw REST bodyBytes, content-length and member-order layout were not retained; the record proves decoded response semantics, not wire layout.",
+    "The closure review and the final-artifact regression are separate conditions and stay open."
+  ],
+  "corpora": [
+    {
+      "program": "FS-TRANSACTION-P01-LIFECYCLE",
+      "packetName": "p01-lifecycle",
+      "corpusDigest": "fd2f32cffc300d46b697dcc359ec76d9e1759e522b17f3fefa3d8506dfab7889",
+      "recordings": 2,
+      "agree": true,
+      "productionFileSha256": [
+        "82395ae3806774df6ec35bf781f5b978a59528c6cf02433c899b576479acf559",
+        "63d8a1725b9202929f22343823e597ae98b9e811bff4772379ae8cf1b88185d7"
+      ],
+      "projection": {
+        "program": "FS-TRANSACTION-P01-LIFECYCLE",
+        "packetName": "p01-lifecycle",
+        "corpusDigest": "fd2f32cffc300d46b697dcc359ec76d9e1759e522b17f3fefa3d8506dfab7889",
+        "cases": [
+          {
+            "caseId": "rest/l-batch",
+            "transport": "rest",
+            "rpc": "BatchGetDocuments",
+            "code": 0,
+            "outcomeClass": "OK",
+            "details": ""
+          },
+          {
+            "caseId": "rest/l-commit",
+            "transport": "rest",
+            "rpc": "Commit",
+            "code": 0,
+            "outcomeClass": "OK",
+            "details": ""
+          },
+          {
+            "caseId": "rest/l-commit-again",
+            "transport": "rest",
+            "rpc": "Commit",
+            "code": 10,
+            "outcomeClass": "REFUSED",
+            "details": "The referenced transaction has expired or is no longer valid."
+          },
+          {
+            "caseId": "rest/l-get-after-commit",
+            "transport": "rest",
+            "rpc": "GetDocument",
+            "code": 10,
+            "outcomeClass": "REFUSED",
+            "details": "The referenced transaction has expired or is no longer valid."
+          },
+          {
+            "caseId": "rest/l-batch-after-commit",
+            "transport": "rest",
+            "rpc": "BatchGetDocuments",
+            "code": 10,
+            "outcomeClass": "REFUSED",
+            "details": "The referenced transaction has expired or is no longer valid."
+          },
+          {
+            "caseId": "rest/l-rollback-after-commit",
+            "transport": "rest",
+            "rpc": "Rollback",
+            "code": 10,
+            "outcomeClass": "REFUSED",
+            "details": "The referenced transaction has expired or is no longer valid."
+          },
+          {
+            "caseId": "rest/e-empty-commit",
+            "transport": "rest",
+            "rpc": "Commit",
+            "code": 0,
+            "outcomeClass": "OK",
+            "details": ""
+          },
+          {
+            "caseId": "rest/e-commit-after-empty",
+            "transport": "rest",
+            "rpc": "Commit",
+            "code": 10,
+            "outcomeClass": "REFUSED",
+            "details": "The referenced transaction has expired or is no longer valid."
+          },
+          {
+            "caseId": "rest/e-get-after-empty",
+            "transport": "rest",
+            "rpc": "GetDocument",
+            "code": 10,
+            "outcomeClass": "REFUSED",
+            "details": "The referenced transaction has expired or is no longer valid."
+          },
+          {
+            "caseId": "rest/r-rollback",
+            "transport": "rest",
+            "rpc": "Rollback",
+            "code": 0,
+            "outcomeClass": "OK",
+            "details": ""
+          },
+          {
+            "caseId": "rest/r-commit-after-rollback",
+            "transport": "rest",
+            "rpc": "Commit",
+            "code": 10,
+            "outcomeClass": "REFUSED",
+            "details": "The referenced transaction has expired or is no longer valid."
+          },
+          {
+            "caseId": "rest/r-get-after-rollback",
+            "transport": "rest",
+            "rpc": "GetDocument",
+            "code": 10,
+            "outcomeClass": "REFUSED",
+            "details": "The referenced transaction has expired or is no longer valid."
+          },
+          {
+            "caseId": "rest/r-batch-after-rollback",
+            "transport": "rest",
+            "rpc": "BatchGetDocuments",
+            "code": 10,
+            "outcomeClass": "REFUSED",
+            "details": "The referenced transaction has expired or is no longer valid."
+          },
+          {
+            "caseId": "grpc/l-batch",
+            "transport": "grpc",
+            "rpc": "BatchGetDocuments",
+            "code": 0,
+            "outcomeClass": "OK",
+            "details": ""
+          },
+          {
+            "caseId": "grpc/l-commit",
+            "transport": "grpc",
+            "rpc": "Commit",
+            "code": 0,
+            "outcomeClass": "OK",
+            "details": ""
+          },
+          {
+            "caseId": "grpc/l-commit-again",
+            "transport": "grpc",
+            "rpc": "Commit",
+            "code": 10,
+            "outcomeClass": "REFUSED",
+            "details": "The referenced transaction has expired or is no longer valid."
+          },
+          {
+            "caseId": "grpc/l-get-after-commit",
+            "transport": "grpc",
+            "rpc": "GetDocument",
+            "code": 10,
+            "outcomeClass": "REFUSED",
+            "details": "The referenced transaction has expired or is no longer valid."
+          },
+          {
+            "caseId": "grpc/e-empty-commit",
+            "transport": "grpc",
+            "rpc": "Commit",
+            "code": 0,
+            "outcomeClass": "OK",
+            "details": ""
+          },
+          {
+            "caseId": "grpc/e-commit-after-empty",
+            "transport": "grpc",
+            "rpc": "Commit",
+            "code": 10,
+            "outcomeClass": "REFUSED",
+            "details": "The referenced transaction has expired or is no longer valid."
+          },
+          {
+            "caseId": "grpc/r-rollback",
+            "transport": "grpc",
+            "rpc": "Rollback",
+            "code": 0,
+            "outcomeClass": "OK",
+            "details": ""
+          },
+          {
+            "caseId": "grpc/r-commit-after-rollback",
+            "transport": "grpc",
+            "rpc": "Commit",
+            "code": 10,
+            "outcomeClass": "REFUSED",
+            "details": "The referenced transaction has expired or is no longer valid."
+          }
+        ],
+        "reads": [
+          {
+            "site": "setup/absence-a",
+            "code": 5,
+            "state": null
+          },
+          {
+            "site": "setup/absence-m",
+            "code": 5,
+            "state": null
+          },
+          {
+            "site": "rest/l/read-a",
+            "code": 0,
+            "state": "created"
+          },
+          {
+            "site": "rest/l/batch",
+            "code": 0,
+            "documents": {
+              "a": "created",
+              "m": null
+            }
+          },
+          {
+            "site": "rest/l/get-after-commit",
+            "code": 10,
+            "state": null
+          },
+          {
+            "site": "rest/l/batch-after-commit",
+            "code": 10,
+            "documents": null
+          },
+          {
+            "site": "rest/l/post-read-a",
+            "code": 0,
+            "state": "rest-l-commit"
+          },
+          {
+            "site": "rest/e/read-a",
+            "code": 0,
+            "state": "rest-l-commit"
+          },
+          {
+            "site": "rest/e/get-after-empty",
+            "code": 10,
+            "state": null
+          },
+          {
+            "site": "rest/e/post-read-a",
+            "code": 0,
+            "state": "rest-l-commit"
+          },
+          {
+            "site": "rest/r/read-a",
+            "code": 0,
+            "state": "rest-l-commit"
+          },
+          {
+            "site": "rest/r/get-after-rollback",
+            "code": 10,
+            "state": null
+          },
+          {
+            "site": "rest/r/batch-after-rollback",
+            "code": 10,
+            "documents": null
+          },
+          {
+            "site": "rest/r/post-read-a",
+            "code": 0,
+            "state": "rest-l-commit"
+          },
+          {
+            "site": "grpc/l/batch",
+            "code": 0,
+            "documents": {
+              "a": "rest-l-commit",
+              "m": null
+            }
+          },
+          {
+            "site": "grpc/l/get-after-commit",
+            "code": 10,
+            "state": null
+          },
+          {
+            "site": "grpc/l/post-read-a",
+            "code": 0,
+            "state": "grpc-l-commit"
+          },
+          {
+            "site": "grpc/e/post-read-a",
+            "code": 0,
+            "state": "grpc-l-commit"
+          },
+          {
+            "site": "grpc/r/post-read-a",
+            "code": 0,
+            "state": "grpc-l-commit"
+          }
+        ],
+        "tokens": {
+          "rest-l": {
+            "transport": "rest",
+            "state": "committed"
+          },
+          "rest-e": {
+            "transport": "rest",
+            "state": "committed"
+          },
+          "rest-r": {
+            "transport": "rest",
+            "state": "rolled-back"
+          },
+          "grpc-l": {
+            "transport": "grpc",
+            "state": "committed"
+          },
+          "grpc-e": {
+            "transport": "grpc",
+            "state": "committed"
+          },
+          "grpc-r": {
+            "transport": "grpc",
+            "state": "rolled-back"
+          }
+        },
+        "expectedStates": {
+          "a": "grpc-l-commit"
+        },
+        "cleanup": {
+          "absent": true
+        }
+      }
+    }
+  ]
+}

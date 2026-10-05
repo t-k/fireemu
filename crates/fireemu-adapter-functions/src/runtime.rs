@@ -19,9 +19,7 @@ use fireemu_core_events::outbox::Outbox;
 use fireemu_core_events::retry::RetryPolicy;
 use fireemu_core_events::state::{EventState, FailureOutcome};
 use fireemu_core_functions::cron::{RunCount, Schedule};
-use fireemu_core_functions::manifest::{
-    AuthEvent, FunctionManifest, FunctionSpec, ObjectEvent, Trigger,
-};
+use fireemu_core_functions::manifest::{AuthEvent, FunctionManifest, FunctionSpec, Trigger};
 use fireemu_core_session::clock::VirtualClock;
 use fireemu_core_storage::store::StorageEvent;
 use fireemu_core_types::determinism::Clock;
@@ -2061,12 +2059,11 @@ impl FunctionsRuntime {
         if !self.background_triggers_enabled() {
             return Ok(self.empty_event_reservation());
         }
-        let (kind, object) = match event {
-            StorageEvent::Finalized(m) => (ObjectEvent::Finalized, m),
-            StorageEvent::Deleted(m) => (ObjectEvent::Deleted, m),
-            StorageEvent::MetadataUpdated(m) => (ObjectEvent::MetadataUpdated, m),
-        };
+        let parts = crate::events::storage_event_parts(event);
+        let (kind, object, time_deleted) = (parts.kind, parts.object, parts.time_deleted);
         let time = self.now();
+        // The payload's own instant; the delivery keeps the admission instant.
+        let event_time = parts.at.unwrap_or(time);
         let mut inner = self
             .inner
             .lock()
@@ -2083,7 +2080,7 @@ impl FunctionsRuntime {
                 .and_then(|next| next.checked_add(1))
                 .ok_or(SourceEventAdmissionError::Capacity)?;
             let id = format!("{}-{next}", self.config.session.value());
-            let payload = storage_event(&id, kind, object, time);
+            let payload = storage_event(&id, kind, object, event_time, time_deleted);
             let event_type = kind.event_type().to_owned();
             let subject = format!("objects/{}", object.name.as_str());
             let copies = self.delivery_copies(&f.name, &event_type);
@@ -2731,6 +2728,12 @@ impl FunctionsRuntime {
         let Ok(mut inner) = self.inner.lock() else {
             return;
         };
+        // Once shutdown began the dispatcher is stopping: a run enqueued now would never be
+        // delivered and would keep the session busy. `begin_shutdown` sets the flag under this
+        // lock, so the check is made under it too.
+        if self.shutting_down.load(std::sync::atomic::Ordering::SeqCst) {
+            return;
+        }
         let mut enqueued = false;
         let policy = self.config.catch_up;
         let cap = self.config.max_catch_up_runs.max(1);
@@ -2988,6 +2991,11 @@ impl FunctionsRuntime {
         let Ok(mut inner) = self.inner.lock() else {
             return Err(ScheduleRunError::Refused("runtime poisoned".into()));
         };
+        if self.shutting_down.load(std::sync::atomic::Ordering::SeqCst) {
+            return Err(ScheduleRunError::Refused(
+                "the functions runtime is shutting down".into(),
+            ));
+        }
         if !self.admit_scheduled_run(&mut inner, function) {
             return Err(ScheduleRunError::Refused(format!(
                 "a run of {function:?} is already queued or running (scheduler.overlap = {:?})",
@@ -3010,10 +3018,15 @@ impl FunctionsRuntime {
     /// reset session) and restarted from its spec, every non-terminal event is discarded,
     /// and schedules restart from now. Dispatch resumes when the new runner is up.
     pub fn reset(self: &Arc<Self>) {
+        self.reset_at(self.now());
+    }
+
+    /// [`Self::reset`] with the schedules restarting from `now` instead of the clock's current
+    /// time, for a restore that must not depend on whether the clock was put back first.
+    pub fn reset_at(self: &Arc<Self>, now: LogicalInstant) {
         if self.shutting_down.load(std::sync::atomic::Ordering::SeqCst) {
             return;
         }
-        let now = self.now();
         let (retired_attempts, generation) = {
             // The supervisor is locked before queue state for both dispatch and lifecycle
             // transitions. No dispatch can be removed from the scheduler without being added
@@ -5533,6 +5546,17 @@ mod schedule_capacity_tests {
     type Clock = Arc<Mutex<VirtualClock>>;
 
     async fn runtime(catch_up: CatchUpPolicy) -> (Arc<FunctionsRuntime>, Clock) {
+        // Large enough that the catch-up cap never limits these tests: only event admission
+        // does.
+        runtime_with(catch_up, super::OverlapPolicy::Allow, 100_000, START).await
+    }
+
+    async fn runtime_with(
+        catch_up: CatchUpPolicy,
+        overlap: super::OverlapPolicy,
+        max_catch_up_runs: usize,
+        start: i64,
+    ) -> (Arc<FunctionsRuntime>, Clock) {
         let spec = SpawnSpec {
             command: vec![
                 "python3".to_owned(),
@@ -5545,7 +5569,7 @@ mod schedule_capacity_tests {
         let runner = Runner::spawn_spec(&spec).await.unwrap();
         let manifest = parse_manifest(runner.hello().manifest.as_ref().unwrap()).unwrap();
         let clock = Arc::new(Mutex::new(VirtualClock::new(
-            LogicalInstant::from_unix_seconds(START),
+            LogicalInstant::from_unix_seconds(start),
         )));
         let runtime = FunctionsRuntime::new(
             manifest,
@@ -5557,11 +5581,9 @@ mod schedule_capacity_tests {
                 max_running: 4,
                 debug_mode: false,
                 retry_attempts: 1,
-                // Large enough that the catch-up cap never limits these tests: only event
-                // admission does.
-                max_catch_up_runs: 100_000,
+                max_catch_up_runs,
                 runner_secret: "test-secret".to_owned(),
-                overlap: super::OverlapPolicy::Allow,
+                overlap,
                 catch_up,
                 functions_host: Some("127.0.0.1:5001".to_owned()),
             },
@@ -5988,5 +6010,970 @@ mod schedule_capacity_tests {
                 Ok(())
             })?;
         }
+    }
+
+    fn t(text: &str) -> LogicalInstant {
+        LogicalInstant::parse_rfc3339(text).unwrap()
+    }
+
+    fn advance_to(clock: &Clock, instant: &str) {
+        clock.lock().unwrap().advance_to(t(instant)).unwrap();
+    }
+
+    /// The outcomes the history holds for `function`, oldest first.
+    fn outcomes(runtime: &FunctionsRuntime, function: &str) -> Vec<String> {
+        runtime
+            .history()
+            .iter()
+            .filter(|r| r.function == function)
+            .map(|r| r.outcome.clone())
+            .collect()
+    }
+
+    fn times_of(admitted: &[(String, String)], function: &str) -> Vec<String> {
+        admitted
+            .iter()
+            .filter(|(f, _)| f == function)
+            .map(|(_, time)| time.clone())
+            .collect()
+    }
+
+    // ----- catch-up: what a clock jump produces ---------------------------------------------
+
+    #[tokio::test]
+    async fn latest_keeps_the_newest_due_occurrence_and_records_what_it_dropped() {
+        let (runtime, clock) = runtime(CatchUpPolicy::Latest).await;
+        advance(&clock, 15 * 60);
+        runtime.on_clock_changed();
+        assert_eq!(
+            admitted(&runtime),
+            vec![run("tick", "2026-08-29T12:15:00Z")],
+            "the run it keeps is the most recent of the three due ones"
+        );
+        assert_eq!(
+            outcomes(&runtime, "tick"),
+            vec!["skipped: catch-up latest (2 runs)".to_owned()]
+        );
+        finish(&runtime).await;
+    }
+
+    #[tokio::test]
+    async fn none_records_one_summary_and_a_repeated_notification_adds_none() {
+        let (runtime, clock) = runtime(CatchUpPolicy::None).await;
+        advance(&clock, 15 * 60);
+        runtime.on_clock_changed();
+        runtime.on_clock_changed();
+        assert!(admitted(&runtime).is_empty());
+        assert_eq!(
+            outcomes(&runtime, "tick"),
+            vec!["skipped: catch-up none (3 runs)".to_owned()],
+            "a second notification at the same instant drops nothing more"
+        );
+        finish(&runtime).await;
+    }
+
+    #[tokio::test]
+    async fn all_after_a_long_jump_admits_at_most_the_cap_per_job_and_keeps_the_rest_due() {
+        use super::OverlapPolicy;
+        let (runtime, clock) =
+            runtime_with(CatchUpPolicy::All, OverlapPolicy::Allow, 5, START).await;
+        // Ten years: more than a million occurrences of `tick`.
+        advance(&clock, 3_652 * 86_400);
+        runtime.on_clock_changed();
+        let admitted = admitted(&runtime);
+        assert_eq!(
+            times_of(&admitted, "tick"),
+            vec![
+                "2026-08-29T12:05:00Z",
+                "2026-08-29T12:10:00Z",
+                "2026-08-29T12:15:00Z",
+                "2026-08-29T12:20:00Z",
+                "2026-08-29T12:25:00Z",
+            ],
+            "the cap's worth of the oldest runs, not a sample of the jump"
+        );
+        assert_eq!(times_of(&admitted, "nightly").len(), 5);
+        assert_eq!(times_of(&admitted, "failSchedule").len(), 5);
+        assert!(pending(&runtime), "the rest of the backlog stays due");
+        assert!(
+            outcomes(&runtime, "tick").is_empty(),
+            "`all` drops nothing, so it records no summary"
+        );
+        finish(&runtime).await;
+    }
+
+    #[tokio::test]
+    async fn a_cap_filled_exactly_leaves_no_backlog_and_one_more_run_leaves_one() {
+        use super::OverlapPolicy;
+        // Cap 3, three runs of `tick` due (12:05, 12:10, 12:15): exactly the room, so nothing
+        // stays due and the cursor moves on to the current time.
+        let (runtime, clock) =
+            runtime_with(CatchUpPolicy::All, OverlapPolicy::Allow, 3, START).await;
+        advance(&clock, 15 * 60);
+        runtime.on_clock_changed();
+        assert_eq!(times_of(&admitted(&runtime), "tick").len(), 3);
+        assert!(!pending(&runtime), "nothing is left over");
+        finish(&runtime).await;
+        // A fourth run (12:20) does not fit: it stays due.
+        let (runtime, clock) =
+            runtime_with(CatchUpPolicy::All, OverlapPolicy::Allow, 3, START).await;
+        advance(&clock, 20 * 60);
+        runtime.on_clock_changed();
+        assert_eq!(times_of(&admitted(&runtime), "tick").len(), 3);
+        assert!(pending(&runtime), "12:20 stays due");
+        finish(&runtime).await;
+    }
+
+    #[tokio::test]
+    async fn latest_and_none_also_answer_a_schedule_written_as_cron_fields() {
+        // `nightly` and `failSchedule` are `0 3 * * *`: three occurrences (08-30, 08-31, 09-01)
+        // lie in the window, counted exactly.
+        let (latest, latest_clock) = runtime(CatchUpPolicy::Latest).await;
+        advance_to(&latest_clock, "2026-09-01T04:00:00Z");
+        latest.on_clock_changed();
+        let admitted_runs = admitted(&latest);
+        assert_eq!(
+            times_of(&admitted_runs, "nightly"),
+            vec!["2026-09-01T03:00:00Z"]
+        );
+        assert_eq!(
+            times_of(&admitted_runs, "failSchedule"),
+            vec!["2026-09-01T03:00:00Z"]
+        );
+        assert_eq!(
+            outcomes(&latest, "nightly"),
+            vec!["skipped: catch-up latest (2 runs)".to_owned()]
+        );
+        finish(&latest).await;
+        let (none, none_clock) = runtime(CatchUpPolicy::None).await;
+        advance_to(&none_clock, "2026-09-01T04:00:00Z");
+        none.on_clock_changed();
+        assert!(times_of(&admitted(&none), "nightly").is_empty());
+        assert_eq!(
+            outcomes(&none, "nightly"),
+            vec!["skipped: catch-up none (3 runs)".to_owned()]
+        );
+        finish(&none).await;
+    }
+
+    #[tokio::test]
+    async fn a_small_cap_applies_per_job_so_one_backlog_cannot_starve_another() {
+        use super::OverlapPolicy;
+        let (runtime, clock) =
+            runtime_with(CatchUpPolicy::All, OverlapPolicy::Allow, 2, START).await;
+        // 03:05 the next day: 181 runs of `tick`, one each of the 03:00 jobs.
+        advance(&clock, 15 * 3600 + 4 * 60);
+        runtime.on_clock_changed();
+        let admitted = admitted(&runtime);
+        assert_eq!(
+            times_of(&admitted, "tick"),
+            vec!["2026-08-29T12:05:00Z", "2026-08-29T12:10:00Z"]
+        );
+        assert_eq!(
+            times_of(&admitted, "nightly"),
+            vec!["2026-08-30T03:00:00Z"],
+            "the busy job does not hold the others back"
+        );
+        assert_eq!(
+            times_of(&admitted, "failSchedule"),
+            vec!["2026-08-30T03:00:00Z"]
+        );
+        assert!(pending(&runtime), "the rest of the tick backlog stays due");
+        finish(&runtime).await;
+    }
+
+    // ----- clock moves and boundaries -------------------------------------------------------
+
+    #[tokio::test]
+    async fn a_forward_move_to_an_instant_produces_exactly_the_occurrences_up_to_it() {
+        let (runtime, clock) = runtime(CatchUpPolicy::All).await;
+        advance_to(&clock, "2026-08-29T12:10:00Z");
+        runtime.on_clock_changed();
+        assert_eq!(
+            admitted(&runtime),
+            vec![
+                run("tick", "2026-08-29T12:05:00Z"),
+                run("tick", "2026-08-29T12:10:00Z")
+            ],
+            "advanceTo lands on 12:10 and that occurrence is included"
+        );
+        clock
+            .lock()
+            .unwrap()
+            .set(t("2026-08-29T12:15:00Z"))
+            .unwrap();
+        runtime.on_clock_changed();
+        assert_eq!(admitted(&runtime).len(), 3, "a forward set adds 12:15");
+        clock
+            .lock()
+            .unwrap()
+            .set(t("2026-08-29T12:15:00Z"))
+            .unwrap();
+        runtime.on_clock_changed();
+        assert_eq!(
+            admitted(&runtime).len(),
+            3,
+            "a set to the same instant adds nothing"
+        );
+        assert!(!pending(&runtime));
+        finish(&runtime).await;
+    }
+
+    #[tokio::test]
+    async fn an_occurrence_runs_at_its_instant_and_not_a_nanosecond_before() {
+        for policy in [
+            CatchUpPolicy::All,
+            CatchUpPolicy::Latest,
+            CatchUpPolicy::None,
+        ] {
+            let (runtime, clock) = runtime(policy).await;
+            advance_to(&clock, "2026-08-29T12:04:59.999999999Z");
+            runtime.on_clock_changed();
+            assert!(admitted(&runtime).is_empty(), "{policy:?}: one ns early");
+            assert!(
+                outcomes(&runtime, "tick").is_empty(),
+                "{policy:?}: nothing dropped yet"
+            );
+
+            advance_to(&clock, "2026-08-29T12:05:00Z");
+            runtime.on_clock_changed();
+            let expected = if policy == CatchUpPolicy::None {
+                Vec::new()
+            } else {
+                vec![run("tick", "2026-08-29T12:05:00Z")]
+            };
+            assert_eq!(admitted(&runtime), expected, "{policy:?}: at the instant");
+            let dropped = outcomes(&runtime, "tick");
+            if policy == CatchUpPolicy::None {
+                assert_eq!(dropped, vec!["skipped: catch-up none (1 run)".to_owned()]);
+            } else {
+                assert!(dropped.is_empty(), "{policy:?}: {dropped:?}");
+            }
+
+            advance(&clock, 0);
+            clock
+                .lock()
+                .unwrap()
+                .advance(LogicalDuration::from_nanos(1))
+                .unwrap();
+            runtime.on_clock_changed();
+            advance_to(&clock, "2026-08-29T12:09:59.999999999Z");
+            runtime.on_clock_changed();
+            assert_eq!(
+                admitted(&runtime),
+                expected,
+                "{policy:?}: the next one is not due"
+            );
+            assert_eq!(
+                outcomes(&runtime, "tick"),
+                dropped,
+                "{policy:?}: no new summary"
+            );
+            finish(&runtime).await;
+        }
+    }
+
+    #[tokio::test]
+    async fn an_occurrence_at_the_start_instant_is_not_run() {
+        // The runtime starts at 12:05:00, exactly on an occurrence of `tick`: due runs are those
+        // strictly after the start, so that one never runs.
+        let (runtime, clock) = runtime_with(
+            CatchUpPolicy::All,
+            super::OverlapPolicy::Allow,
+            100_000,
+            START + 240,
+        )
+        .await;
+        advance(&clock, 1);
+        runtime.on_clock_changed();
+        assert!(admitted(&runtime).is_empty());
+        advance(&clock, 299);
+        runtime.on_clock_changed();
+        assert_eq!(
+            admitted(&runtime),
+            vec![run("tick", "2026-08-29T12:10:00Z")]
+        );
+        finish(&runtime).await;
+    }
+
+    // ----- a rewind ---------------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn a_rewind_replays_nothing_until_the_clock_passes_the_old_cursor() {
+        for policy in [CatchUpPolicy::All, CatchUpPolicy::None] {
+            let (runtime, clock) = runtime(policy).await;
+            advance(&clock, 10 * 60);
+            runtime.on_clock_changed();
+            let first = admitted(&runtime);
+            let summaries = outcomes(&runtime, "tick");
+
+            clock
+                .lock()
+                .unwrap()
+                .set_allow_backwards(t("2026-08-29T12:01:00Z"));
+            runtime.on_clock_changed();
+            advance_to(&clock, "2026-08-29T12:11:00Z");
+            runtime.on_clock_changed();
+            assert_eq!(
+                admitted(&runtime),
+                first,
+                "{policy:?}: 12:05 and 12:10 are not replayed"
+            );
+            assert_eq!(
+                outcomes(&runtime, "tick"),
+                summaries,
+                "{policy:?}: no new summary"
+            );
+
+            advance_to(&clock, "2026-08-29T12:15:00Z");
+            runtime.on_clock_changed();
+            let expected = if policy == CatchUpPolicy::All {
+                vec![
+                    run("tick", "2026-08-29T12:05:00Z"),
+                    run("tick", "2026-08-29T12:10:00Z"),
+                    run("tick", "2026-08-29T12:15:00Z"),
+                ]
+            } else {
+                Vec::new()
+            };
+            assert_eq!(
+                admitted(&runtime),
+                expected,
+                "{policy:?}: the schedule resumes at 12:15"
+            );
+            finish(&runtime).await;
+        }
+    }
+
+    #[tokio::test]
+    async fn a_reset_after_a_rewind_restarts_the_schedule_from_the_rewound_time() {
+        // The one path on which a rewound clock replays occurrences: a session reset sets
+        // every cursor to the current virtual time.
+        let (runtime, clock) = runtime(CatchUpPolicy::All).await;
+        advance(&clock, 10 * 60);
+        runtime.on_clock_changed();
+        clock
+            .lock()
+            .unwrap()
+            .set_allow_backwards(t("2026-08-29T12:01:00Z"));
+        runtime.reset();
+        assert!(
+            admitted(&runtime).is_empty(),
+            "the reset dropped the queued runs"
+        );
+        advance_to(&clock, "2026-08-29T12:11:00Z");
+        runtime.on_clock_changed();
+        assert_eq!(
+            admitted(&runtime),
+            vec![
+                run("tick", "2026-08-29T12:05:00Z"),
+                run("tick", "2026-08-29T12:10:00Z")
+            ]
+        );
+        finish(&runtime).await;
+    }
+
+    // ----- manual runs ------------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn a_manual_run_carries_the_current_virtual_time_and_the_job_name() {
+        let (runtime, clock) = runtime(CatchUpPolicy::All).await;
+        advance(&clock, 7 * 60);
+        runtime.run_schedule("tick").unwrap();
+        let region = runtime.manifest.get("tick").unwrap().region.clone();
+        {
+            let inner = runtime.inner.lock().unwrap();
+            let queued = inner.payloads.values().next().unwrap();
+            assert!(matches!(queued.source, super::EventSource::Manual));
+            assert_eq!(queued.payload["time"], "2026-08-29T12:08:00Z");
+            assert_eq!(
+                queued.payload["data"]["scheduleTime"],
+                "2026-08-29T12:08:00Z"
+            );
+            assert_eq!(
+                queued.payload["data"]["jobName"],
+                format!(
+                    "projects/demo-app/locations/{region}/jobs/firebase-schedule-tick-{region}"
+                )
+            );
+        }
+        // At an occurrence's own instant a manual run and the scheduler's are the same event.
+        advance(&clock, 2 * 60);
+        runtime.on_clock_changed();
+        runtime.run_schedule("tick").unwrap();
+        let shapes = |manual: bool| {
+            let inner = runtime.inner.lock().unwrap();
+            let mut found: Vec<serde_json::Value> = inner
+                .payloads
+                .values()
+                .filter(|q| q.payload["time"] == "2026-08-29T12:10:00Z")
+                .filter(|q| matches!(q.source, super::EventSource::Manual) == manual)
+                .map(|q| {
+                    let mut payload = (*q.payload).clone();
+                    payload.as_object_mut().unwrap().remove("id");
+                    payload
+                })
+                .collect();
+            assert_eq!(found.len(), 1, "manual={manual}");
+            found.remove(0)
+        };
+        assert_eq!(
+            shapes(true),
+            shapes(false),
+            "same type, source, time and data"
+        );
+        finish(&runtime).await;
+    }
+
+    #[tokio::test]
+    async fn a_manual_run_leaves_the_next_natural_occurrence_alone() {
+        let (runtime, clock) = runtime(CatchUpPolicy::All).await;
+        advance(&clock, 2 * 60);
+        runtime.run_schedule("tick").unwrap();
+        advance(&clock, 2 * 60);
+        runtime.on_clock_changed();
+        assert_eq!(
+            admitted(&runtime),
+            vec![
+                run("tick", "2026-08-29T12:03:00Z"),
+                run("tick", "2026-08-29T12:05:00Z")
+            ],
+            "the manual run at 12:03 did not consume the 12:05 occurrence"
+        );
+        assert!(!pending(&runtime));
+        finish(&runtime).await;
+    }
+
+    // ----- overlap on the clock-driven path -------------------------------------------------
+
+    #[tokio::test]
+    async fn skip_drops_a_run_that_overlaps_a_queued_one_for_good() {
+        use super::OverlapPolicy;
+        let (runtime, clock) =
+            runtime_with(CatchUpPolicy::All, OverlapPolicy::Skip, 100_000, START).await;
+        advance(&clock, 5 * 60);
+        runtime.on_clock_changed();
+        advance(&clock, 5 * 60);
+        runtime.on_clock_changed();
+        assert_eq!(
+            admitted(&runtime),
+            vec![run("tick", "2026-08-29T12:05:00Z")]
+        );
+        assert_eq!(
+            outcomes(&runtime, "tick"),
+            vec!["skipped: overlap".to_owned()]
+        );
+        assert!(!pending(&runtime), "a skipped run is dropped, not kept due");
+        // Once the queued run is gone the next occurrence runs: the schedule kept moving.
+        runtime.inner.lock().unwrap().payloads.clear();
+        advance(&clock, 5 * 60);
+        runtime.on_clock_changed();
+        assert_eq!(
+            admitted(&runtime),
+            vec![run("tick", "2026-08-29T12:15:00Z")]
+        );
+        finish(&runtime).await;
+    }
+
+    #[tokio::test]
+    async fn a_clock_move_that_waits_for_the_lock_while_shutdown_begins_enqueues_nothing() {
+        use super::OverlapPolicy;
+        let (runtime, clock) =
+            runtime_with(CatchUpPolicy::All, OverlapPolicy::Allow, 100_000, START).await;
+        advance(&clock, 5 * 60);
+        // The clock hook starts while the lock is held, so it is past any check made before the
+        // lock when shutdown begins, which sets the flag under the same lock.
+        let guard = runtime.inner.lock().unwrap();
+        let hook = {
+            let runtime = Arc::clone(&runtime);
+            std::thread::spawn(move || runtime.on_clock_changed())
+        };
+        std::thread::sleep(Duration::from_millis(300));
+        runtime
+            .shutting_down
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+        drop(guard);
+        hook.join().unwrap();
+        assert!(
+            admitted(&runtime).is_empty(),
+            "a run enqueued after shutdown began would never be delivered"
+        );
+        finish(&runtime).await;
+    }
+
+    #[tokio::test]
+    async fn reject_counts_an_overlapping_scheduler_run_as_a_dead_letter() {
+        use super::OverlapPolicy;
+        let (runtime, clock) =
+            runtime_with(CatchUpPolicy::All, OverlapPolicy::Reject, 100_000, START).await;
+        advance(&clock, 5 * 60);
+        runtime.on_clock_changed();
+        advance(&clock, 5 * 60);
+        runtime.on_clock_changed();
+        assert_eq!(
+            admitted(&runtime),
+            vec![run("tick", "2026-08-29T12:05:00Z")]
+        );
+        assert_eq!(runtime.status()["overlapRejected"], 1);
+        assert!(runtime
+            .dead_letters()
+            .iter()
+            .any(|r| r.function == "tick" && r.outcome == "rejected: overlap"));
+        finish(&runtime).await;
+    }
+
+    #[tokio::test]
+    async fn allow_and_queue_admit_overlapping_scheduler_runs() {
+        use super::OverlapPolicy;
+        for overlap in [OverlapPolicy::Allow, OverlapPolicy::Queue] {
+            let (runtime, clock) = runtime_with(CatchUpPolicy::All, overlap, 100_000, START).await;
+            advance(&clock, 5 * 60);
+            runtime.on_clock_changed();
+            advance(&clock, 5 * 60);
+            runtime.on_clock_changed();
+            assert_eq!(
+                admitted(&runtime),
+                vec![
+                    run("tick", "2026-08-29T12:05:00Z"),
+                    run("tick", "2026-08-29T12:10:00Z")
+                ],
+                "{overlap:?}"
+            );
+            assert!(outcomes(&runtime, "tick").is_empty(), "{overlap:?}");
+            assert_eq!(runtime.status()["overlapRejected"], 0, "{overlap:?}");
+            finish(&runtime).await;
+        }
+    }
+
+    /// Pins today's behaviour, which is not necessarily the intended one: with `catchUp = all`
+    /// one clock jump over several occurrences of a job overlaps itself inside one sweep, so
+    /// `skip` keeps only the oldest run and `reject` counts the later ones as rejections.
+    #[tokio::test]
+    async fn one_jump_over_several_occurrences_overlaps_itself_under_skip_and_reject() {
+        use super::OverlapPolicy;
+        let (runtime, clock) =
+            runtime_with(CatchUpPolicy::All, OverlapPolicy::Skip, 100_000, START).await;
+        advance(&clock, 15 * 60);
+        runtime.on_clock_changed();
+        assert_eq!(
+            admitted(&runtime),
+            vec![run("tick", "2026-08-29T12:05:00Z")]
+        );
+        assert_eq!(
+            outcomes(&runtime, "tick"),
+            vec!["skipped: overlap".to_owned(), "skipped: overlap".to_owned()]
+        );
+        finish(&runtime).await;
+
+        let (runtime, clock) =
+            runtime_with(CatchUpPolicy::All, OverlapPolicy::Reject, 100_000, START).await;
+        advance(&clock, 15 * 60);
+        runtime.on_clock_changed();
+        assert_eq!(
+            admitted(&runtime),
+            vec![run("tick", "2026-08-29T12:05:00Z")]
+        );
+        assert_eq!(runtime.status()["overlapRejected"], 2);
+        assert_eq!(runtime.dead_letters().len(), 2);
+        finish(&runtime).await;
+    }
+
+    #[tokio::test]
+    async fn a_manual_run_follows_the_overlap_policy_against_a_scheduler_run() {
+        use super::{OverlapPolicy, ScheduleRunError};
+        for (overlap, refused) in [
+            (OverlapPolicy::Skip, true),
+            (OverlapPolicy::Reject, true),
+            (OverlapPolicy::Allow, false),
+            (OverlapPolicy::Queue, false),
+        ] {
+            let (runtime, clock) = runtime_with(CatchUpPolicy::All, overlap, 100_000, START).await;
+            advance(&clock, 5 * 60);
+            runtime.on_clock_changed();
+            let manual = runtime.run_schedule("tick");
+            if refused {
+                assert!(
+                    matches!(&manual, Err(ScheduleRunError::Refused(m)) if m.contains("already queued or running")),
+                    "{overlap:?}: {manual:?}"
+                );
+                assert_eq!(admitted(&runtime).len(), 1, "{overlap:?}");
+            } else {
+                assert_eq!(manual, Ok(()), "{overlap:?}");
+                assert_eq!(admitted(&runtime).len(), 2, "{overlap:?}");
+            }
+            assert_eq!(
+                runtime.status()["overlapRejected"],
+                u64::from(overlap == OverlapPolicy::Reject),
+                "{overlap:?}"
+            );
+            finish(&runtime).await;
+        }
+    }
+
+    #[tokio::test]
+    async fn a_handler_that_is_still_running_makes_its_function_busy() {
+        use super::OverlapPolicy;
+        // The payload is gone but the handler has not returned (a timed-out handler keeps its
+        // slot): the next due run overlaps it.
+        for overlap in [OverlapPolicy::Skip, OverlapPolicy::Reject] {
+            let (runtime, clock) = runtime_with(CatchUpPolicy::All, overlap, 100_000, START).await;
+            runtime
+                .inner
+                .lock()
+                .unwrap()
+                .running
+                .insert("7-900".to_owned(), "tick".to_owned());
+            advance(&clock, 5 * 60);
+            runtime.on_clock_changed();
+            assert!(admitted(&runtime).is_empty(), "{overlap:?}");
+            match overlap {
+                OverlapPolicy::Skip => {
+                    assert_eq!(
+                        outcomes(&runtime, "tick"),
+                        vec!["skipped: overlap".to_owned()]
+                    );
+                }
+                _ => assert_eq!(runtime.status()["overlapRejected"], 1),
+            }
+            runtime.inner.lock().unwrap().running.clear();
+            advance(&clock, 5 * 60);
+            runtime.on_clock_changed();
+            assert_eq!(
+                admitted(&runtime),
+                vec![run("tick", "2026-08-29T12:10:00Z")],
+                "{overlap:?}: the handler returned"
+            );
+            finish(&runtime).await;
+        }
+    }
+
+    // ----- lifecycle --------------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn a_reset_restarts_every_schedule_from_now_and_drops_the_backlog() {
+        let (runtime, clock) = runtime(CatchUpPolicy::All).await;
+        set_room(&runtime, 0);
+        advance(&clock, 10 * 60);
+        runtime.on_clock_changed();
+        assert!(
+            pending(&runtime),
+            "12:05 and 12:10 are refused and held due"
+        );
+        runtime.reset();
+        assert!(!pending(&runtime), "the reset cleared the backlog flag");
+        assert!(admitted(&runtime).is_empty());
+        assert!(runtime.is_idle());
+        set_room(&runtime, 10);
+        runtime.on_clock_changed();
+        assert!(
+            admitted(&runtime).is_empty(),
+            "the held runs are not replayed"
+        );
+        advance(&clock, 5 * 60);
+        runtime.on_clock_changed();
+        assert_eq!(
+            admitted(&runtime),
+            vec![run("tick", "2026-08-29T12:15:00Z")],
+            "the next occurrence after the reset runs, once"
+        );
+        finish(&runtime).await;
+    }
+
+    #[tokio::test]
+    async fn real_time_passing_without_a_clock_move_produces_no_run() {
+        // The scheduler is driven by the virtual clock alone: starting at 12:04:59 with 12:05
+        // one second ahead, real time passing makes nothing due.
+        let (runtime, _clock) = runtime_with(
+            CatchUpPolicy::All,
+            super::OverlapPolicy::Allow,
+            100_000,
+            START + 238,
+        )
+        .await;
+        tokio::time::sleep(Duration::from_millis(1_500)).await;
+        runtime.on_clock_changed();
+        assert!(admitted(&runtime).is_empty());
+        assert!(runtime.is_idle());
+        finish(&runtime).await;
+    }
+
+    #[tokio::test]
+    async fn a_run_held_for_capacity_survives_a_reload_and_is_admitted_once() {
+        use super::CodebaseSpec;
+        let (runtime, clock) = runtime(CatchUpPolicy::All).await;
+        set_room(&runtime, 0);
+        advance(&clock, 5 * 60);
+        runtime.on_clock_changed();
+        assert!(pending(&runtime), "12:05 is refused and held due");
+        let spec = SpawnSpec {
+            command: vec![
+                "python3".to_owned(),
+                concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fake_runner.py").to_owned(),
+            ],
+            cwd: None,
+            env: Vec::new(),
+            hello_timeout: Duration::from_secs(60),
+        };
+        let replacement = Arc::new(Runner::spawn_spec(&spec).await.unwrap());
+        runtime
+            .reload_codebase(CodebaseSpec {
+                name: "default".to_owned(),
+                manifest: runtime.manifest().clone(),
+                runner: replacement,
+                spawn: Some(spec),
+                cleanup_dir: None,
+            })
+            .unwrap();
+        assert!(pending(&runtime), "the reload keeps the backlog");
+        assert!(admitted(&runtime).is_empty());
+        set_room(&runtime, 10);
+        runtime.on_clock_changed();
+        runtime.on_clock_changed();
+        assert_eq!(
+            admitted(&runtime),
+            vec![run("tick", "2026-08-29T12:05:00Z")],
+            "admitted once, after the reload"
+        );
+        finish(&runtime).await;
+    }
+
+    #[tokio::test]
+    async fn the_session_is_not_idle_while_only_the_backlog_remains() {
+        let (runtime, clock) = runtime(CatchUpPolicy::All).await;
+        set_room(&runtime, 0);
+        advance(&clock, 5 * 60);
+        runtime.on_clock_changed();
+        assert!(admitted(&runtime).is_empty(), "nothing is queued");
+        assert!(pending(&runtime));
+        assert!(!runtime.is_idle(), "a due run is still owed");
+        assert_eq!(runtime.status()["catchUpPending"], true);
+        assert!(runtime
+            .await_idle(Duration::from_millis(200))
+            .await
+            .is_err());
+        set_room(&runtime, 10);
+        runtime.on_clock_changed();
+        assert_eq!(
+            admitted(&runtime),
+            vec![run("tick", "2026-08-29T12:05:00Z")]
+        );
+        assert!(!pending(&runtime));
+        finish(&runtime).await;
+    }
+}
+
+/// The instant a Storage payload is stamped with is chosen by the runtime, not by the payload
+/// builder: `reserve_storage_event` passes the core event's own instant (`at`) when it has one and
+/// the admission instant otherwise. These tests drive the runtime itself, so a change to that
+/// choice shows here and not only in a test's own copy of the rule.
+#[cfg(test)]
+mod storage_event_instant_tests {
+    use super::{FunctionsConfig, FunctionsRuntime};
+    use crate::manifest_json::parse_manifest;
+    use crate::runner::{Runner, SpawnSpec};
+    use fireemu_core_functions::manifest::{ObjectEvent, Trigger};
+    use fireemu_core_session::clock::VirtualClock;
+    use fireemu_core_storage::name::{BucketName, ObjectName};
+    use fireemu_core_storage::store::{NewMetadata, Precondition, StorageEvent, StorageState};
+    use fireemu_core_types::ids::SessionId;
+    use fireemu_core_types::time::{LogicalDuration, LogicalInstant};
+    use serde_json::Value;
+    use std::sync::{Arc, Mutex};
+    use std::time::Duration;
+
+    const START: i64 = 1_788_004_860;
+
+    /// A runtime whose manifest has one Storage function per event kind on the default bucket.
+    async fn runtime() -> (Arc<FunctionsRuntime>, Arc<Mutex<VirtualClock>>) {
+        let spec = SpawnSpec {
+            command: vec![
+                "python3".to_owned(),
+                concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fake_runner.py").to_owned(),
+            ],
+            cwd: None,
+            env: Vec::new(),
+            hello_timeout: Duration::from_secs(60),
+        };
+        let runner = Runner::spawn_spec(&spec).await.unwrap();
+        let mut manifest = parse_manifest(runner.hello().manifest.as_ref().unwrap()).unwrap();
+        let template = manifest.get("echo").unwrap().clone();
+        manifest
+            .functions
+            .retain(|f| !matches!(f.trigger, Trigger::Storage { .. }));
+        for (name, event) in [
+            ("onFinalized", ObjectEvent::Finalized),
+            ("onDeleted", ObjectEvent::Deleted),
+            ("onArchived", ObjectEvent::Archived),
+        ] {
+            let mut function = template.clone();
+            function.name = name.to_owned();
+            function.entry_point = name.to_owned();
+            function.trigger = Trigger::Storage {
+                event,
+                bucket: None,
+            };
+            manifest.functions.push(function);
+        }
+        let clock = Arc::new(Mutex::new(VirtualClock::new(
+            LogicalInstant::from_unix_seconds(START),
+        )));
+        let runtime = FunctionsRuntime::new(
+            manifest,
+            FunctionsConfig {
+                project: "demo-app".to_owned(),
+                default_bucket: "demo-app.appspot.com".to_owned(),
+                location: "nam5".to_owned(),
+                session: SessionId::new(7),
+                max_running: 4,
+                debug_mode: false,
+                retry_attempts: 1,
+                max_catch_up_runs: 1,
+                runner_secret: "test-secret".to_owned(),
+                overlap: super::OverlapPolicy::Allow,
+                catch_up: super::CatchUpPolicy::All,
+                functions_host: Some("127.0.0.1:5001".to_owned()),
+            },
+            clock.clone(),
+            Arc::new(runner),
+            Some(spec),
+        );
+        (runtime, clock)
+    }
+
+    fn put(store: &mut StorageState, at: i64) -> fireemu_core_storage::store::ObjectMetadata {
+        store
+            .put(
+                &BucketName::try_new("demo-app.appspot.com").unwrap(),
+                &ObjectName::try_new("o.txt").unwrap(),
+                b"x".to_vec(),
+                NewMetadata::default(),
+                Precondition::default(),
+                LogicalInstant::from_unix_seconds(START + at),
+            )
+            .unwrap()
+    }
+
+    /// The payloads the runtime built for `event`, by event type, without publishing them (a
+    /// published delivery may already have been taken by the runner).
+    fn payloads(runtime: &Arc<FunctionsRuntime>, event: &StorageEvent) -> Vec<(String, Value)> {
+        // Dropping the reservation unpublished gives its capacity back.
+        let reservation = runtime.reserve_storage_event(event).unwrap();
+        reservation
+            .deliveries
+            .as_ref()
+            .unwrap()
+            .iter()
+            .map(|d| {
+                (
+                    d.event.event_type.as_str().to_owned(),
+                    (*d.payload.payload).clone(),
+                )
+            })
+            .collect()
+    }
+
+    /// An unversioned overwrite announces the replaced generation as deleted, stamped with the
+    /// creation instant of the new generation (RECORDED, FE v5: the same microsecond as the
+    /// Finalized event of the new generation). The runtime admits the events much later, so a
+    /// payload stamped with the admission instant would differ.
+    #[tokio::test]
+    async fn the_deleted_event_of_an_overwrite_takes_the_replacement_instant_not_the_admission_instant(
+    ) {
+        let (runtime, clock) = runtime().await;
+        let mut store = StorageState::new(1);
+        put(&mut store, 1);
+        let _ = store.drain_events();
+        put(&mut store, 5);
+        let events = store.drain_events();
+        clock
+            .lock()
+            .unwrap()
+            .advance(LogicalDuration::from_seconds(600))
+            .unwrap();
+        assert!(matches!(
+            events.as_slice(),
+            [StorageEvent::Deleted { .. }, StorageEvent::Finalized(_)]
+        ));
+        let deleted = payloads(&runtime, &events[0]);
+        let finalized = payloads(&runtime, &events[1]);
+        assert_eq!(deleted.len(), 1, "{deleted:?}");
+        assert_eq!(finalized.len(), 1, "{finalized:?}");
+        assert_eq!(deleted[0].0, "google.cloud.storage.object.v1.deleted");
+        assert_eq!(deleted[0].1["time"], finalized[0].1["time"]);
+        // The admission instant is 600 s later than the replacement: it is not what was stamped.
+        assert!(
+            !deleted[0].1["time"]
+                .as_str()
+                .unwrap()
+                .starts_with("2026-08-29T12:11"),
+            "{}",
+            deleted[0].1["time"]
+        );
+        // The Deleted event of an overwrite carries no `timeDeleted`.
+        assert!(deleted[0].1["data"].get("timeDeleted").is_none());
+        runtime.shutdown().await;
+    }
+
+    /// The Archived event and the Deleted event of a noncurrent generation carry the instant the
+    /// generation stopped being live as `timeDeleted`; the Archived `time` is that instant too,
+    /// and the noncurrent Deleted `time` is the admission instant, as recorded.
+    #[tokio::test]
+    async fn archived_and_noncurrent_deleted_events_carry_time_deleted_from_the_core_event() {
+        let (runtime, clock) = runtime().await;
+        let mut store = StorageState::new(1);
+        let bucket = BucketName::try_new("demo-app.appspot.com").unwrap();
+        store.set_versioning(&bucket, true);
+        let first = put(&mut store, 1);
+        let second = put(&mut store, 5);
+        let events = store.drain_events();
+        clock
+            .lock()
+            .unwrap()
+            .advance(LogicalDuration::from_seconds(600))
+            .unwrap();
+        let archived_event = events
+            .iter()
+            .find(|e| matches!(e, StorageEvent::Archived { .. }))
+            .unwrap();
+        let archived = payloads(&runtime, archived_event);
+        assert_eq!(archived.len(), 1, "{archived:?}");
+        assert_eq!(
+            archived[0].1["data"]["generation"],
+            first.generation.to_string()
+        );
+        let time_deleted = archived[0].1["data"]["timeDeleted"].as_str().unwrap();
+        assert!(
+            time_deleted.starts_with("2026-08-29T12:01:05"),
+            "{time_deleted}"
+        );
+        assert_eq!(
+            archived[0].1["time"]
+                .as_str()
+                .unwrap()
+                .trim_end_matches('Z')[..19],
+            time_deleted.trim_end_matches('Z')[..19]
+        );
+        // Deleting the noncurrent generation by number.
+        let name = ObjectName::try_new("o.txt").unwrap();
+        store
+            .delete_generation(&bucket, &name, first.generation, Precondition::default())
+            .unwrap();
+        let deleted_event = store.drain_events().remove(0);
+        let deleted = payloads(&runtime, &deleted_event);
+        assert_eq!(deleted.len(), 1, "{deleted:?}");
+        assert_eq!(
+            deleted[0].1["data"]["timeDeleted"],
+            archived[0].1["data"]["timeDeleted"]
+        );
+        assert!(
+            deleted[0].1["time"]
+                .as_str()
+                .unwrap()
+                .starts_with("2026-08-29T12:11"),
+            "the deletion instant is the admission instant: {}",
+            deleted[0].1["time"]
+        );
+        let _ = second;
+        runtime.shutdown().await;
     }
 }

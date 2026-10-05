@@ -1,0 +1,409 @@
+{
+ "_comment": "Storage event frames of the FE v5 production recording (run functions-events-formal-20261004T182904Z-a9621bfae74fe9bc, project fireemu-oracle-events, 2026-10-04): the handler prints the event it receives (frame.event), members in the order the SDK handed them over. Used by the tests of the Storage event shape (member order of data and context.resource, etag, datacontenttype). Frame ids are the Cloud Logging insertIds of the run.",
+ "run": "functions-events-formal-20261004T182904Z-a9621bfae74fe9bc",
+ "frames": [
+  {
+   "insertId": "6ac29fb70006ad918ea2a73d",
+   "handler": "storageFinalizedV1",
+   "generation": 1,
+   "frame": {
+    "context": {
+     "eventId": "22252774326123787",
+     "timestamp": "2026-10-04T18:49:25.526Z",
+     "eventType": "google.storage.object.finalize",
+     "resource": {
+      "name": "projects/_/buckets/fireemu-oracle-events.firebasestorage.app/objects/fe-events/e893ed7dc92e824b9ac1c6c8ao9.txt",
+      "service": "storage.googleapis.com",
+      "type": "storage#object"
+     },
+     "params": {},
+     "authType": null,
+     "authId": null,
+     "contextKeys": [
+      "eventId",
+      "eventType",
+      "params",
+      "resource",
+      "timestamp"
+     ],
+     "contextExtras": {}
+    },
+    "data": {
+     "bucket": "fireemu-oracle-events.firebasestorage.app",
+     "contentType": "text/plain",
+     "crc32c": "MnnT1Q==",
+     "etag": "CNW62MuDoZcDEAE=",
+     "generation": "1791139765427541",
+     "id": "fireemu-oracle-events.firebasestorage.app/fe-events/e893ed7dc92e824b9ac1c6c8ao9.txt/1791139765427541",
+     "kind": "storage#object",
+     "md5Hash": "4vpTiGfDgwqFmlsXqyRkSw==",
+     "mediaLink": "https://storage.googleapis.com/download/storage/v1/b/fireemu-oracle-events.firebasestorage.app/o/fe-events%2Fe893ed7dc92e824b9ac1c6c8ao9.txt?generation=1791139765427541&alt=media",
+     "metageneration": "1",
+     "name": "fe-events/e893ed7dc92e824b9ac1c6c8ao9.txt",
+     "selfLink": "https://www.googleapis.com/storage/v1/b/fireemu-oracle-events.firebasestorage.app/o/fe-events%2Fe893ed7dc92e824b9ac1c6c8ao9.txt",
+     "size": "7",
+     "storageClass": "STANDARD",
+     "timeCreated": "2026-10-04T18:49:25.459Z",
+     "timeStorageClassUpdated": "2026-10-04T18:49:25.459Z",
+     "updated": "2026-10-04T18:49:25.459Z"
+    }
+   }
+  },
+  {
+   "insertId": "6ac29fb7000987a59af4b7f6",
+   "handler": "storageFinalizedV2",
+   "generation": 2,
+   "frame": {
+    "id": "22253126686311696",
+    "time": "2026-10-04T18:49:25.459311Z",
+    "type": "google.cloud.storage.object.v1.finalized",
+    "source": "//storage.googleapis.com/projects/_/buckets/fireemu-oracle-events.firebasestorage.app",
+    "subject": "objects/fe-events/e893ed7dc92e824b9ac1c6c8ao9.txt",
+    "specversion": "1.0",
+    "datacontenttype": null,
+    "params": null,
+    "authType": null,
+    "authId": null,
+    "data": {
+     "kind": "storage#object",
+     "id": "fireemu-oracle-events.firebasestorage.app/fe-events/e893ed7dc92e824b9ac1c6c8ao9.txt/1791139765427541",
+     "selfLink": "https://www.googleapis.com/storage/v1/b/fireemu-oracle-events.firebasestorage.app/o/fe-events%2Fe893ed7dc92e824b9ac1c6c8ao9.txt",
+     "name": "fe-events/e893ed7dc92e824b9ac1c6c8ao9.txt",
+     "bucket": "fireemu-oracle-events.firebasestorage.app",
+     "generation": "1791139765427541",
+     "metageneration": "1",
+     "contentType": "text/plain",
+     "timeCreated": "2026-10-04T18:49:25.459Z",
+     "updated": "2026-10-04T18:49:25.459Z",
+     "storageClass": "STANDARD",
+     "timeStorageClassUpdated": "2026-10-04T18:49:25.459Z",
+     "size": "7",
+     "md5Hash": "4vpTiGfDgwqFmlsXqyRkSw==",
+     "mediaLink": "https://storage.googleapis.com/download/storage/v1/b/fireemu-oracle-events.firebasestorage.app/o/fe-events%2Fe893ed7dc92e824b9ac1c6c8ao9.txt?generation=1791139765427541&alt=media",
+     "crc32c": "MnnT1Q==",
+     "etag": "CNW62MuDoZcDEAE="
+    },
+    "eventKeys": [
+     "bucket",
+     "context",
+     "data",
+     "id",
+     "object",
+     "source",
+     "specversion",
+     "subject",
+     "time",
+     "traceparent",
+     "type"
+    ],
+    "extensionAttributes": {
+     "bucket": "fireemu-oracle-events.firebasestorage.app",
+     "context": {
+      "type": "object",
+      "keys": [
+       "eventId",
+       "eventType",
+       "params",
+       "resource",
+       "timestamp"
+      ]
+     },
+     "object": {
+      "type": "object",
+      "keys": [
+       "bucket",
+       "contentType",
+       "crc32c",
+       "etag",
+       "generation",
+       "id",
+       "kind",
+       "md5Hash",
+       "mediaLink",
+       "metageneration",
+       "name",
+       "selfLink",
+       "size",
+       "storageClass",
+       "timeCreated",
+       "timeStorageClassUpdated",
+       "updated"
+      ]
+     },
+     "traceparent": "00-573e91ab9ede049eb5dc0140e7568e91-e29628d19958c6c4-01"
+    }
+   }
+  },
+  {
+   "insertId": "6ac29fd4000ab84d12c07670",
+   "handler": "storageDeletedV1",
+   "generation": 1,
+   "frame": {
+    "context": {
+     "eventId": "22254008998678881",
+     "timestamp": "2026-10-04T18:49:56.078Z",
+     "eventType": "google.storage.object.delete",
+     "resource": {
+      "name": "projects/_/buckets/fireemu-oracle-events.firebasestorage.app/objects/fe-events/e893ed7dc92e824b9ac1c6c8ao9.txt",
+      "service": "storage.googleapis.com",
+      "type": "storage#object"
+     },
+     "params": {},
+     "authType": null,
+     "authId": null,
+     "contextKeys": [
+      "eventId",
+      "eventType",
+      "params",
+      "resource",
+      "timestamp"
+     ],
+     "contextExtras": {}
+    },
+    "data": {
+     "bucket": "fireemu-oracle-events.firebasestorage.app",
+     "contentType": "text/plain",
+     "crc32c": "MnnT1Q==",
+     "etag": "CNW62MuDoZcDEAE=",
+     "generation": "1791139765427541",
+     "id": "fireemu-oracle-events.firebasestorage.app/fe-events/e893ed7dc92e824b9ac1c6c8ao9.txt/1791139765427541",
+     "kind": "storage#object",
+     "md5Hash": "4vpTiGfDgwqFmlsXqyRkSw==",
+     "mediaLink": "https://storage.googleapis.com/download/storage/v1/b/fireemu-oracle-events.firebasestorage.app/o/fe-events%2Fe893ed7dc92e824b9ac1c6c8ao9.txt?generation=1791139765427541&alt=media",
+     "metageneration": "1",
+     "name": "fe-events/e893ed7dc92e824b9ac1c6c8ao9.txt",
+     "selfLink": "https://www.googleapis.com/storage/v1/b/fireemu-oracle-events.firebasestorage.app/o/fe-events%2Fe893ed7dc92e824b9ac1c6c8ao9.txt",
+     "size": "7",
+     "storageClass": "STANDARD",
+     "timeCreated": "2026-10-04T18:49:25.459Z",
+     "timeStorageClassUpdated": "2026-10-04T18:49:25.459Z",
+     "updated": "2026-10-04T18:49:25.459Z"
+    }
+   }
+  },
+  {
+   "insertId": "6ac29fd70001a0e4d85cfd12",
+   "handler": "storageDeletedV2",
+   "generation": 2,
+   "frame": {
+    "id": "21323402630993137",
+    "time": "2026-10-04T18:49:56.001947Z",
+    "type": "google.cloud.storage.object.v1.deleted",
+    "source": "//storage.googleapis.com/projects/_/buckets/fireemu-oracle-events.firebasestorage.app",
+    "subject": "objects/fe-events/e893ed7dc92e824b9ac1c6c8ao9.txt",
+    "specversion": "1.0",
+    "datacontenttype": null,
+    "params": null,
+    "authType": null,
+    "authId": null,
+    "data": {
+     "kind": "storage#object",
+     "id": "fireemu-oracle-events.firebasestorage.app/fe-events/e893ed7dc92e824b9ac1c6c8ao9.txt/1791139765427541",
+     "selfLink": "https://www.googleapis.com/storage/v1/b/fireemu-oracle-events.firebasestorage.app/o/fe-events%2Fe893ed7dc92e824b9ac1c6c8ao9.txt",
+     "name": "fe-events/e893ed7dc92e824b9ac1c6c8ao9.txt",
+     "bucket": "fireemu-oracle-events.firebasestorage.app",
+     "generation": "1791139765427541",
+     "metageneration": "1",
+     "contentType": "text/plain",
+     "timeCreated": "2026-10-04T18:49:25.459Z",
+     "updated": "2026-10-04T18:49:25.459Z",
+     "storageClass": "STANDARD",
+     "timeStorageClassUpdated": "2026-10-04T18:49:25.459Z",
+     "size": "7",
+     "md5Hash": "4vpTiGfDgwqFmlsXqyRkSw==",
+     "mediaLink": "https://storage.googleapis.com/download/storage/v1/b/fireemu-oracle-events.firebasestorage.app/o/fe-events%2Fe893ed7dc92e824b9ac1c6c8ao9.txt?generation=1791139765427541&alt=media",
+     "crc32c": "MnnT1Q==",
+     "etag": "CNW62MuDoZcDEAE="
+    },
+    "eventKeys": [
+     "bucket",
+     "context",
+     "data",
+     "id",
+     "object",
+     "source",
+     "specversion",
+     "subject",
+     "time",
+     "traceparent",
+     "type"
+    ],
+    "extensionAttributes": {
+     "bucket": "fireemu-oracle-events.firebasestorage.app",
+     "context": {
+      "type": "object",
+      "keys": [
+       "eventId",
+       "eventType",
+       "params",
+       "resource",
+       "timestamp"
+      ]
+     },
+     "object": {
+      "type": "object",
+      "keys": [
+       "bucket",
+       "contentType",
+       "crc32c",
+       "etag",
+       "generation",
+       "id",
+       "kind",
+       "md5Hash",
+       "mediaLink",
+       "metageneration",
+       "name",
+       "selfLink",
+       "size",
+       "storageClass",
+       "timeCreated",
+       "timeStorageClassUpdated",
+       "updated"
+      ]
+     },
+     "traceparent": "00-e495e2a5475b85f92a0389dc0f0d2921-5f4b345744b81d36-01"
+    }
+   }
+  },
+  {
+   "insertId": "6ac2a0a5000bcc0133349055",
+   "handler": "storageMetadataUpdatedV1",
+   "generation": 1,
+   "frame": {
+    "context": {
+     "eventId": "22250906127444431",
+     "timestamp": "2026-10-04T18:53:25.686Z",
+     "eventType": "google.storage.object.metadataUpdate",
+     "resource": {
+      "name": "projects/_/buckets/fireemu-oracle-events.firebasestorage.app/objects/fe-events/ed5c2f9498d2e5f3305d3613co12.txt",
+      "service": "storage.googleapis.com",
+      "type": "storage#object"
+     },
+     "params": {},
+     "authType": null,
+     "authId": null,
+     "contextKeys": [
+      "eventId",
+      "eventType",
+      "params",
+      "resource",
+      "timestamp"
+     ],
+     "contextExtras": {}
+    },
+    "data": {
+     "bucket": "fireemu-oracle-events.firebasestorage.app",
+     "contentType": "text/plain",
+     "crc32c": "7ZaEog==",
+     "etag": "COPyxbSEoZcDEAI=",
+     "generation": "1791139985324387",
+     "id": "fireemu-oracle-events.firebasestorage.app/fe-events/ed5c2f9498d2e5f3305d3613co12.txt/1791139985324387",
+     "kind": "storage#object",
+     "md5Hash": "L0RBdWe8EjvXxg3owqK0RA==",
+     "mediaLink": "https://storage.googleapis.com/download/storage/v1/b/fireemu-oracle-events.firebasestorage.app/o/fe-events%2Fed5c2f9498d2e5f3305d3613co12.txt?generation=1791139985324387&alt=media",
+     "metadata": {
+      "fixtureMarker": "updated"
+     },
+     "metageneration": "2",
+     "name": "fe-events/ed5c2f9498d2e5f3305d3613co12.txt",
+     "selfLink": "https://www.googleapis.com/storage/v1/b/fireemu-oracle-events.firebasestorage.app/o/fe-events%2Fed5c2f9498d2e5f3305d3613co12.txt",
+     "size": "6",
+     "storageClass": "STANDARD",
+     "timeCreated": "2026-10-04T18:53:05.330Z",
+     "timeStorageClassUpdated": "2026-10-04T18:53:05.330Z",
+     "updated": "2026-10-04T18:53:25.623Z"
+    }
+   }
+  },
+  {
+   "insertId": "6ac2a0a80000b3d27b4b1db3",
+   "handler": "storageMetadataUpdatedV2",
+   "generation": 2,
+   "frame": {
+    "id": "22252050920672038",
+    "time": "2026-10-04T18:53:25.623487Z",
+    "type": "google.cloud.storage.object.v1.metadataUpdated",
+    "source": "//storage.googleapis.com/projects/_/buckets/fireemu-oracle-events.firebasestorage.app",
+    "subject": "objects/fe-events/ed5c2f9498d2e5f3305d3613co12.txt",
+    "specversion": "1.0",
+    "datacontenttype": null,
+    "params": null,
+    "authType": null,
+    "authId": null,
+    "data": {
+     "kind": "storage#object",
+     "id": "fireemu-oracle-events.firebasestorage.app/fe-events/ed5c2f9498d2e5f3305d3613co12.txt/1791139985324387",
+     "selfLink": "https://www.googleapis.com/storage/v1/b/fireemu-oracle-events.firebasestorage.app/o/fe-events%2Fed5c2f9498d2e5f3305d3613co12.txt",
+     "name": "fe-events/ed5c2f9498d2e5f3305d3613co12.txt",
+     "bucket": "fireemu-oracle-events.firebasestorage.app",
+     "generation": "1791139985324387",
+     "metageneration": "2",
+     "contentType": "text/plain",
+     "timeCreated": "2026-10-04T18:53:05.330Z",
+     "updated": "2026-10-04T18:53:25.623Z",
+     "storageClass": "STANDARD",
+     "timeStorageClassUpdated": "2026-10-04T18:53:05.330Z",
+     "size": "6",
+     "md5Hash": "L0RBdWe8EjvXxg3owqK0RA==",
+     "mediaLink": "https://storage.googleapis.com/download/storage/v1/b/fireemu-oracle-events.firebasestorage.app/o/fe-events%2Fed5c2f9498d2e5f3305d3613co12.txt?generation=1791139985324387&alt=media",
+     "metadata": {
+      "fixtureMarker": "updated"
+     },
+     "crc32c": "7ZaEog==",
+     "etag": "COPyxbSEoZcDEAI="
+    },
+    "eventKeys": [
+     "bucket",
+     "context",
+     "data",
+     "id",
+     "object",
+     "source",
+     "specversion",
+     "subject",
+     "time",
+     "traceparent",
+     "type"
+    ],
+    "extensionAttributes": {
+     "bucket": "fireemu-oracle-events.firebasestorage.app",
+     "context": {
+      "type": "object",
+      "keys": [
+       "eventId",
+       "eventType",
+       "params",
+       "resource",
+       "timestamp"
+      ]
+     },
+     "object": {
+      "type": "object",
+      "keys": [
+       "bucket",
+       "contentType",
+       "crc32c",
+       "etag",
+       "generation",
+       "id",
+       "kind",
+       "md5Hash",
+       "mediaLink",
+       "metadata",
+       "metageneration",
+       "name",
+       "selfLink",
+       "size",
+       "storageClass",
+       "timeCreated",
+       "timeStorageClassUpdated",
+       "updated"
+      ]
+     },
+     "traceparent": "00-b53c0bbec98ba7f51b5fc1d1dbfab3bf-fc019d4c5000ecec-01"
+    }
+   }
+  }
+ ]
+}

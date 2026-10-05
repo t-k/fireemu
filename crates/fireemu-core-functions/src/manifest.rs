@@ -587,27 +587,28 @@ impl Default for ScheduleRetryConfig {
 }
 
 /// What production Cloud Scheduler answers (HTTP 400, status `INVALID_ARGUMENT`) when a job is created with a
-/// `retryCount` of 5 or more.
+/// `retryCount` of 6 or more.
 ///
 /// Recorded: the production deploy `e0ec2f416f5ea7e8` (2026-10-05, SCHEDULED-FUNCTIONS delivery recording)
-/// created the job of a function declared with `retryCount: 6`; Cloud Scheduler refused it with this message.
-/// Only 6 was observed. The rule "less than 5" is the message's own statement, so 5 is refused here too, but 5 itself
-/// was not recorded.
+/// created the job of a function declared with `retryCount: 6`; Cloud Scheduler refused it with this message. Only 6
+/// was observed. The message itself says "less than 5", which would also refuse 5, but 5 is **unrecorded**: the next
+/// delivery recording creates one job with `retryCount: 5` (`fe-sd-<runId>-retry5`) to learn the boundary, and until
+/// it is recorded nothing here refuses 5.
 pub const SCHEDULER_RETRY_COUNT_REFUSAL: &str =
     "invalid retry count. The retry_count must be a positive integer less than 5: invalid argument";
 
-/// The largest `retryCount` the message above allows.
-pub const SCHEDULER_MAX_RETRY_COUNT: u32 = 4;
+/// The smallest `retryCount` recorded as refused. Counts below it are accepted here, including the unrecorded 5.
+pub const SCHEDULER_RECORDED_REFUSED_RETRY_COUNT: u32 = 6;
 
 impl ScheduleRetryConfig {
     /// Why production Cloud Scheduler would refuse a job with this retry configuration, or `None`.
     ///
-    /// Only the retry count is judged. A count of 0 is what a job without a retry configuration has, so it is not
-    /// refused even though the message says "positive" (the delivery recorder's `retryCount: 0` job will show
-    /// production's answer).
+    /// Only the retry count is judged, and only from the recorded value up. A count of 0 is what a job without a retry
+    /// configuration has, so it is not refused even though the message says "positive" (the delivery recording's
+    /// `retryCount: 0` job will show production's answer), and 5 is not refused until it is recorded.
     #[must_use]
     pub const fn scheduler_refusal(&self) -> Option<&'static str> {
-        if self.retry_count > SCHEDULER_MAX_RETRY_COUNT {
+        if self.retry_count >= SCHEDULER_RECORDED_REFUSED_RETRY_COUNT {
             Some(SCHEDULER_RETRY_COUNT_REFUSAL)
         } else {
             None

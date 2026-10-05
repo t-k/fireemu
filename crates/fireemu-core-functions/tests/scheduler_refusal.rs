@@ -1,14 +1,15 @@
-//! Cloud Scheduler's refusal of a job whose `retryCount` is 5 or more.
+//! Cloud Scheduler's refusal of a job whose `retryCount` is 6 or more (5 is unrecorded).
 //!
 //! Source: the production deploy `e0ec2f416f5ea7e8` (SCHEDULED-FUNCTIONS delivery recording, 2026-10-05) created the
 //! job of a function declared with `retryCount: 6`; Cloud Scheduler answered HTTP 400 `INVALID_ARGUMENT` with the
-//! message pinned here. Only the count 6 was observed; the boundary at 5 is the message's own statement.
+//! message pinned here. Only the count 6 was observed. The message says "less than 5", but 5 itself is unrecorded until the next
+//! delivery recording sends it, so it is accepted here.
 
 use fireemu_core_functions::cron::Schedule;
 use fireemu_core_functions::manifest::{
     ConsumeAppCheckToken, FunctionGeneration, FunctionManifest, FunctionSpec, PlatformOptions,
     ScheduleRetryConfig, Trigger, DEFAULT_REGION, DEFAULT_TIMEOUT_SECONDS,
-    SCHEDULER_MAX_RETRY_COUNT, SCHEDULER_RETRY_COUNT_REFUSAL,
+    SCHEDULER_RECORDED_REFUSED_RETRY_COUNT, SCHEDULER_RETRY_COUNT_REFUSAL,
 };
 use proptest::prelude::*;
 
@@ -25,15 +26,15 @@ fn with_count(retry_count: u32) -> ScheduleRetryConfig {
 #[test]
 fn the_message_is_the_recorded_text_byte_for_byte() {
     assert_eq!(SCHEDULER_RETRY_COUNT_REFUSAL, RECORDED);
-    assert_eq!(SCHEDULER_MAX_RETRY_COUNT, 4);
+    assert_eq!(SCHEDULER_RECORDED_REFUSED_RETRY_COUNT, 6);
 }
 
 #[test]
-fn counts_up_to_four_are_accepted_and_five_or_more_are_refused() {
-    for count in 0..=4 {
+fn counts_below_the_recorded_six_are_accepted_including_the_unrecorded_five() {
+    for count in 0..=5 {
         assert_eq!(with_count(count).scheduler_refusal(), None, "{count}");
     }
-    for count in [5, 6, 7, 100, u32::MAX] {
+    for count in [6, 7, 100, u32::MAX] {
         assert_eq!(
             with_count(count).scheduler_refusal(),
             Some(RECORDED),
@@ -58,7 +59,7 @@ fn the_recorded_declaration_is_refused_and_the_default_is_not() {
 proptest! {
     /// Only the count decides; every other field is irrelevant to this refusal.
     #[test]
-    fn refusal_iff_the_count_exceeds_four(
+    fn refusal_iff_the_count_reaches_the_recorded_six(
         retry_count in any::<u32>(),
         max_retry_seconds in any::<u64>(),
         max_backoff_seconds in any::<u64>(),
@@ -74,7 +75,7 @@ proptest! {
         };
         prop_assert_eq!(
             config.scheduler_refusal().is_some(),
-            retry_count > SCHEDULER_MAX_RETRY_COUNT
+            retry_count >= SCHEDULER_RECORDED_REFUSED_RETRY_COUNT
         );
         if let Some(why) = config.scheduler_refusal() {
             prop_assert_eq!(why, RECORDED);
@@ -120,11 +121,11 @@ fn scheduled(name: &str, generation: FunctionGeneration, retry_count: u32) -> Fu
 fn a_manifest_lists_each_refused_schedule_by_name_in_order_for_both_generations() {
     let manifest = FunctionManifest {
         functions: vec![
-            scheduled("accepted", FunctionGeneration::Second, 4),
+            scheduled("accepted", FunctionGeneration::Second, 5),
             scheduled("refusedSecond", FunctionGeneration::Second, 6),
             function("other", FunctionGeneration::First, http(false)),
             scheduled("zero", FunctionGeneration::First, 0),
-            scheduled("refusedFirst", FunctionGeneration::First, 5),
+            scheduled("refusedFirst", FunctionGeneration::First, 7),
         ],
         ignored: vec![],
     };
@@ -138,7 +139,7 @@ fn a_manifest_lists_each_refused_schedule_by_name_in_order_for_both_generations(
 fn a_manifest_of_accepted_schedules_and_other_triggers_has_no_refusal() {
     let manifest = FunctionManifest {
         functions: vec![
-            scheduled("a", FunctionGeneration::Second, 4),
+            scheduled("a", FunctionGeneration::Second, 5),
             scheduled("b", FunctionGeneration::First, 0),
             function("c", FunctionGeneration::Second, http(true)),
         ],

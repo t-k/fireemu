@@ -2934,8 +2934,8 @@ fn manifest_for_profile(
 }
 
 /// Refuses, under the strict profile, a scheduled function whose job production Cloud Scheduler refuses to create,
-/// with production's own message: `retryCount` 5 or more (HTTP 400 `INVALID_ARGUMENT`, recorded by the production
-/// deploy `e0ec2f416f5ea7e8`, 2026-10-05). The official emulator never creates a Scheduler job and reads no retry
+/// with production's own message: `retryCount` 6 or more (HTTP 400 `INVALID_ARGUMENT`, recorded by the production
+/// deploy `e0ec2f416f5ea7e8`, 2026-10-05; 5 is unrecorded, pending the next delivery recording, and is not refused). The official emulator never creates a Scheduler job and reads no retry
 /// configuration of a schedule trigger, so the emulator profile refuses nothing here.
 fn check_scheduler_refusals_for(
     profile: CompatibilityProfile,
@@ -6711,7 +6711,7 @@ mod tests {
         assert!(error.contains("missing"), "{error}");
     }
 
-    /// The production refusal of a Cloud Scheduler job whose `retryCount` is 5 or more (run
+    /// The production refusal of a Cloud Scheduler job whose `retryCount` is 6 or more (run
     /// `e0ec2f416f5ea7e8`, HTTP 400 `INVALID_ARGUMENT`): the strict profile refuses with production's
     /// text, the emulator profile (the official emulator creates no Scheduler job) refuses nothing.
     #[test]
@@ -6743,10 +6743,11 @@ mod tests {
         }
     }
 
-    /// Near misses: the largest accepted count, no retry configuration, a count of zero and other
-    /// triggers are accepted by both profiles; the message's own boundary (5) is refused by strict.
+    /// Near misses: counts below the recorded 6 (including the unrecorded 5, which the next delivery
+    /// recording will observe), no retry configuration, zero and other triggers are accepted by both
+    /// profiles; 6 and above are refused by strict.
     #[test]
-    fn the_scheduler_retry_count_boundary_is_four() {
+    fn the_scheduler_retry_count_boundary_is_the_recorded_six() {
         let with = |count: serde_json::Value| {
             parse_manifest(&json!({"functions": [
                 {"name": "job", "trigger": {"type": "schedule", "schedule": "every 1 minutes", "retryConfig": {"retryCount": count}}},
@@ -6757,7 +6758,7 @@ mod tests {
             super::CompatibilityProfile::Strict,
             super::CompatibilityProfile::Emulator,
         ] {
-            for count in [json!(0), json!(1), json!(4)] {
+            for count in [json!(0), json!(1), json!(4), json!(5)] {
                 assert_eq!(
                     super::check_scheduler_refusals_for(profile, &with(count.clone())),
                     Ok(()),
@@ -6765,7 +6766,7 @@ mod tests {
                 );
             }
         }
-        for count in [json!(5), json!(6), json!(1000)] {
+        for count in [json!(6), json!(7), json!(1000)] {
             assert!(
                 super::check_scheduler_refusals_for(
                     super::CompatibilityProfile::Strict,
@@ -6823,7 +6824,7 @@ mod tests {
             "the emulator profile keeps the schedule and sets the send-blocking function aside"
         );
         let accepted = json!({"functions": [
-            {"name": "ok", "trigger": {"type": "schedule", "schedule": "every 5 minutes", "retryConfig": {"retryCount": 4}}},
+            {"name": "ok", "trigger": {"type": "schedule", "schedule": "every 5 minutes", "retryConfig": {"retryCount": 5}}},
             {"name": "mail", "trigger": {"type": "blockingAuth", "eventType": "providers/cloud.auth/eventTypes/user.beforeSendEmail"}},
         ]});
         let strict =

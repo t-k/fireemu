@@ -10,7 +10,7 @@ Each release is a Git tag; the binaries and the npm packages are built from that
 
 ### Changed
 
-- Strict profile: a scheduled function (either generation) whose `retryCount` is 5 or more is refused at startup with Cloud Scheduler's own message, `invalid retry count. The retry_count must be a positive integer less than 5: invalid argument` (HTTP 400 `INVALID_ARGUMENT`). Recorded on 2026-10-05: production refused the job of a function declared with `retryCount: 6`; the boundary at 5 is the message's own statement and was not itself recorded. The emulator profile still accepts any count, as the official emulator does (it creates no Scheduler job and reads no retry configuration of a schedule trigger).
+- Strict profile: a scheduled function (either generation) whose `retryCount` is 6 or more is refused at startup with Cloud Scheduler's own message, `invalid retry count. The retry_count must be a positive integer less than 5: invalid argument` (HTTP 400 `INVALID_ARGUMENT`). Recorded on 2026-10-05: production refused the job of a function declared with `retryCount: 6`. A count of 5 is **unrecorded**, pending the next delivery recording, which sends it once: the message says "less than 5", the Cloud Scheduler reference says only values greater than 5 are disallowed, so 5 is accepted until it is recorded. The emulator profile accepts any count, as the official emulator does (it creates no Scheduler job and reads no retry configuration of a schedule trigger).
 
 ## [0.11.0] - 2026-10-05
 

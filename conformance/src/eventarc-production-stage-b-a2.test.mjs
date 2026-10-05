@@ -292,3 +292,27 @@ test("end to end: a case that reaches its ceiling at a creation leaves a run tha
   assert.equal(world.channels.has(unsentName("ti-x")), false);
   void t;
 });
+
+test("only a request refused before it was sent is unsent: a read leaves no ledger line, any other failure leaves the request open, and a credential mode that does not exist is unsent", async () => {
+  const ownership = createOwnership({ project: PROJECT, runId: UNSENT_RUN });
+  const refusing = (error) => ({ name: "rest", request: () => { throw error; } });
+  const clientOf = (transport, ledger) =>
+    createClient({ transports: { eventarc: transport }, ownership, caseId: "k", usageProject: PROJECT, ledger });
+  // A read refused by the ceiling: nothing is ledgered, and the refusal is raised unchanged.
+  const reads = createLedger();
+  const refused = Object.assign(new Error("limit"), { name: "CaseLimit", unsent: true });
+  await assert.rejects(() => clientOf(refusing(refused), reads).getChannel(unsentName("r")), { name: "CaseLimit" });
+  assert.equal(reads.state().size, 0);
+  // Any other failure of a creation (it may have been sent): the request stays open, so it is unknown.
+  const other = createLedger();
+  await assert.rejects(() => clientOf(refusing(new TypeError("boom")), other).createChannel(PROJECT, "us-central1", `fe${UNSENT_RUN}-f`), TypeError);
+  assert.deepEqual([other.state().get(unsentName("f")).open, other.state().get(unsentName("f")).creates], [["create"], []]);
+  assert.equal(ledgerFacts(other.state().get(unsentName("f"))).createPending, true);
+  // A credential mode that does not exist stops the request before the budget: unsent.
+  const modes = createLedger();
+  const budget = createBudget(5);
+  const rest = createRawRest({ base: "http://127.0.0.1:9", budget, capture: createCapture({ journal: { write() {} } }), fetchImpl: async () => new Response("{}") });
+  await assert.rejects(() => clientOf(rest, modes).with({ token: "no-such-mode" }).createChannel(PROJECT, "us-central1", `fe${UNSENT_RUN}-g`), /unknown credential mode/);
+  assert.deepEqual(modes.state().get(unsentName("g")).creates, ["unsent"]);
+  assert.equal(budget.used(), 0);
+});

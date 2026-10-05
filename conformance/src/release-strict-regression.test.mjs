@@ -1721,3 +1721,41 @@ test("R11 generated proof combinations agree with an independent six-condition m
     );
   }
 });
+
+// The historical FS-DATA-WRITE replay (R11) sends the recorded transaction-lifecycle program to
+// the strict binary. Its `out-of-band-write` step is a writer held behind a read-write
+// transaction's lock; production answered it 409 ABORTED "Too much contention on these
+// documents. Please try again." (conformance/firestore-production-matrix.json,
+// transactions/lifecycle#out-of-band-write). Strict holds such a writer for
+// STRICT_CONTENTION_WAIT before it answers, and the probe session abandons any request after
+// FIRESTORE_PROBE_TIMEOUT_MS (20 s unless set), which turned the answer into "no-response" (an
+// indeterminate row) once the wait reached 20 s. Production was recorded with the timeout of
+// run.mjs (`recordProduction`), so the replay uses that value.
+test("the historical FS-DATA-WRITE replay waits for a held writer longer than strict holds it, as the production recording did", () => {
+  const root = fileURLToPath(new URL("../..", import.meta.url));
+  const localSource = readFileSync(
+    join(root, "crates/fireemu-adapter-grpc/src/local.rs"),
+    "utf8",
+  );
+  const strictWait = /STRICT_CONTENTION_WAIT: std::time::Duration =\s*std::time::Duration::from_secs\((\d+)\)/.exec(
+    localSource,
+  );
+  assert.ok(strictWait, "the strict contention wait is a whole number of seconds");
+  const strictWaitMs = Number(strictWait[1]) * 1000;
+  const probeSource = readFileSync(join(root, "conformance/src/firestore-probe/run.mjs"), "utf8");
+  const recorded = /FIRESTORE_PROBE_TARGET: "production"[\s\S]*?FIRESTORE_PROBE_TIMEOUT_MS: "(\d+)"/.exec(
+    probeSource,
+  );
+  assert.ok(recorded, "the production recording names its request timeout");
+  const r11 = RUNS.find((run) => run.id === "R11");
+  assert.ok(r11, "R11 is the historical FS-DATA-WRITE replay");
+  for (const command of r11.commands) {
+    const timeout = Number(command.env.FIRESTORE_PROBE_TIMEOUT_MS);
+    assert.equal(
+      command.env.FIRESTORE_PROBE_TIMEOUT_MS,
+      recorded[1],
+      `${command.mode}: the replay's request timeout is the recording's`,
+    );
+    assert.ok(timeout > strictWaitMs + 10_000, `${command.mode}: ${timeout} ms is not above ${strictWaitMs} ms`);
+  }
+});

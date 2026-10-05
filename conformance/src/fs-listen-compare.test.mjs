@@ -948,7 +948,7 @@ test("L1 production, native: the two recordings agree on every row once optional
 
 test("L1 production, native: exactly seven rows carry a filter in one recording and not (or elsewhere) in the other (the evidence for the rule)", () => {
   const [a, b] = [L1["native-1"], L1["native-2"]];
-  const shape = (row) => JSON.stringify(row.rows.map((item) => item.kind));
+  const shape = (entry) => JSON.stringify(entry.rows.map((item) => item.kind));
   const ids = Object.keys(a.rows).filter((id) => shape(a.rows[id]) !== shape(b.rows[id]));
   assert.deepEqual(ids.toSorted(), [
     "native/existence-filter/no-change",

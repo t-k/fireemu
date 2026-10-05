@@ -143,6 +143,11 @@ test("near misses: active functions, foreign functions, entries with no build, a
   );
   const foreign = await go((w) => {
     w.afterDeploy = () => {
+      // one of ours is not active (so the diagnosis runs) and has no build; the foreign function has one
+      w.functionsV1.set(functionName("schedOkV1"), {
+        name: functionName("schedOkV1"),
+        status: "OFFLINE",
+      });
       w.functionsV1.set("projects/fireemu-oracle-sbx/locations/us-central1/functions/other", {
         name: "projects/fireemu-oracle-sbx/locations/us-central1/functions/other",
         status: "OFFLINE",
@@ -150,7 +155,12 @@ test("near misses: active functions, foreign functions, entries with no build, a
       });
     };
   });
-  assert.deepEqual(foreign.result.buildDiagnostics ?? [], []);
+  assert.deepEqual(foreign.result.buildDiagnostics, [{ function: "schedOkV1", buildId: null }]);
+  assert.equal(
+    sent(foreign.journal).some((id) => id.startsWith("diagnose-")),
+    false,
+    "the foreign function's build is not read",
+  );
   const nobuild = await go((w) => {
     w.afterDeploy = () => {
       const name = functionName("schedOkV1");
@@ -185,7 +195,6 @@ test("a build that answers 404 or 403 is data, not a stop", async () => {
   assert.equal(missing.result.cleanup.verified, true);
   const denied = await go((w) => {
     failedGen1(w);
-    w.send0 = w.send;
     const original = w.send;
     w.send = async (request) =>
       request.url.includes("cloudbuild.googleapis.com")
@@ -195,6 +204,71 @@ test("a build that answers 404 or 403 is data, not a stop", async () => {
   assert.equal(denied.result.buildDiagnostics[0].buildStatus, 403);
   assert.equal(denied.result.authStop, undefined);
   assert.equal(denied.result.cleanup.verified, true);
+  // the log read is an observation too: a 403 there is data
+  const noLogs = await go((w) => {
+    failedGen1(w);
+    const original = w.send;
+    w.send = async (request) =>
+      request.url.includes("entries:list") && String(request.body).includes("build_id")
+        ? reply(403, { error: { code: 403, message: "x", status: "PERMISSION_DENIED" } })
+        : original(request);
+  });
+  assert.equal(noLogs.result.buildDiagnostics[0].logsStatus, 403);
+  assert.equal(noLogs.result.buildDiagnostics[0].logEntries, null);
+  assert.equal(noLogs.result.buildDiagnostics[0].status, "FAILURE", "the build itself was read");
+  assert.equal(noLogs.result.authStop, undefined);
+});
+
+test("only a 200 answer is read for the build's fields and the log entries, whatever the body of another status says", async () => {
+  const { result } = await go((w) => {
+    failedGen1(w);
+    const original = w.send;
+    w.send = async (request) => {
+      if (request.url.includes("cloudbuild.googleapis.com"))
+        return reply(404, {
+          status: "FAILURE",
+          statusDetail: "x",
+          failureInfo: { type: "x" },
+          steps: [{}],
+        });
+      if (request.url.includes("entries:list") && String(request.body).includes("build_id"))
+        return reply(404, { entries: [{}, {}] });
+      return original(request);
+    };
+  });
+  const d = result.buildDiagnostics[0];
+  assert.deepEqual(
+    [d.buildStatus, d.status, d.statusDetail, d.failureInfo, d.steps, d.logsStatus, d.logEntries],
+    [404, null, null, null, null, 404, null],
+  );
+});
+
+test("a build id with a zero in every group is read, found in the function's entry, and allowed", async () => {
+  const zeros = "00000000-0000-0000-0000-000000000000";
+  const { result, journal } = await go((w) => {
+    w.afterDeploy = () => {
+      const name = functionName("schedOkV1");
+      w.functionsV1.set(name, {
+        name,
+        status: "OFFLINE",
+        buildName: `projects/${NUMBER}/locations/${REGION}/builds/${zeros}`,
+      });
+    };
+    w.builds.set(zeros, { id: zeros, status: "FAILURE" });
+  });
+  assert.equal(result.buildDiagnostics[0].buildId, zeros);
+  assert.equal(result.buildDiagnostics[0].status, "FAILURE");
+  assert.ok(
+    journal.some((r) => r.id === "diagnose-build-schedOkV1" && r.state === "response-persisted"),
+  );
+  const guard = createGuard(RUN, NUMBER);
+  assert.equal(
+    guard.allow({
+      method: "GET",
+      url: `https://cloudbuild.googleapis.com/v1/projects/${NUMBER}/locations/${REGION}/builds/${zeros}`,
+    }),
+    true,
+  );
 });
 
 // ---- the allowlist -----------------------------------------------------------------------------------------------

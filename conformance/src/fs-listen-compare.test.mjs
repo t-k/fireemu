@@ -1065,11 +1065,23 @@ test("the divergence registers name rows of the recorded production run, quote w
       .filter((id) => !(id in strict))
       .toSorted(),
     [
+      "native/existence-filter/without-expected-count",
+      "native/resume-token-expired/expired",
       "native/resume-token/invalid",
+      "native/resume-token/older",
+      "native/resume-token/other-query",
       "native/target-protocol/id-after-assigned",
       "native/target-protocol/missing-index",
     ],
   );
+  // The four existence-filter rows are declared for the emulator profile only: it keeps the
+  // official emulator's behaviour (no ExistenceFilter), cited from the jar; strict reproduces them.
+  for (const id of REQUIRED_ROWS) {
+    assert.ok(!(id in strict), id);
+    assert.match(emulator[id].reason, /cloud-firestore-emulator-v1\.22\.0\.jar/, id);
+    assert.match(emulator[id].reason, /nmuuicyas/, id);
+    assert.match(emulator[id].reason, /nmuukwo6n/, id);
+  }
   for (const id of Object.keys(emulator).filter((i) => !(i in strict)))
     assert.match(emulator[id].reason, /official emulator/, id);
   // The strict ones quote what production recorded (generated from the fixture, not typed): both
@@ -1091,14 +1103,18 @@ test("the divergence registers name rows of the recorded production run, quote w
     assert.equal(entry.coversLocalTimeout, undefined, id);
     assert.equal(classifyRow(first, second), "MATCH", id);
   }
-  // Every row on which both production runs sent an existence filter is declared, since fireemu
-  // sends none (the filter both runs sent is required of a local row).
+  // A row whose informative existence filter both production runs sent in the same place is one
+  // strict reproduces (it sends the recorded count-only filter), so none of them is declared.
+  const informativeOf = (entry) =>
+    filterSites(entry)
+      .filter((site) => !site.redundant)
+      .map((site) => `${site.place}#${site.key}`);
   const required = Object.keys(L1["native-1"].rows).filter((id) => {
     const [first, second] = prodRows(id);
-    return filterKeys(first).some((key) => filterKeys(second).includes(key));
+    return informativeOf(first).some((site) => informativeOf(second).includes(site));
   });
-  for (const id of required)
-    assert.ok(id in strict, `${id} has a filter in both runs and no declaration`);
+  assert.deepEqual(required.toSorted(), REQUIRED_ROWS.toSorted());
+  for (const id of required) assert.ok(!(id in strict), `${id} is reproduced, not declared`);
 });
 
 test("only the boundaries a dropped filter left side by side merge, however many rows follow it", () => {

@@ -420,6 +420,25 @@ test("nameStates: what each name's answers leave of its create", () => {
     ["n/a"],
   );
   assert.deepEqual(unconfirmed(states(before(A), after("unknown", A), before(A))), ["n/a"]);
+  // An unknown delete forgets nothing (the name may still exist, as confirmed).
+  assert.deepEqual(
+    unconfirmed(
+      states(
+        before(A),
+        after("ok", A),
+        before(D),
+        after("unknown", D),
+        before(A),
+        after("unknown", A),
+      ),
+    ),
+    [],
+  );
+  // An answer of a value the journal does not define is an unknown answer, never a confirmation.
+  assert.deepEqual(unconfirmed(states(before(A), after("timeout", A))), ["n/a"]);
+  assert.deepEqual(unconfirmed(states(before(A), after(undefined, A))), ["n/a"]);
+  // The create left open when the same name is opened again still counts when the second one is refused.
+  assert.deepEqual(unconfirmed(states(before(A), before(A), after("refused", A))), ["n/a"]);
   // A line that is not JSON is refused here as it is by issuedFromJournal.
   assert.throws(() => nameStates("{broken"), /cannot be read/);
   // A maybe name is in the answer, as not unconfirmed.

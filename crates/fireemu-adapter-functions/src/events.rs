@@ -11,7 +11,9 @@ use fireemu_core_functions::event::{
     auth_attributes, firestore_attributes, pubsub_attributes, schedule_attributes,
     storage_attributes, with_auth_context,
 };
-use fireemu_core_functions::manifest::{AuthEvent, DocumentEvent, ObjectEvent};
+use fireemu_core_functions::manifest::{
+    AuthEvent, DocumentEvent, FunctionGeneration, FunctionSpec, ObjectEvent, Trigger,
+};
 use fireemu_core_storage::etag::production_etag;
 use fireemu_core_storage::store::{ObjectMetadata, StorageEvent};
 use fireemu_core_types::time::LogicalInstant;
@@ -385,6 +387,27 @@ pub fn pubsub_event(
     message: &Value,
     time: LogicalInstant,
 ) -> Value {
+    pubsub_event_with_subscription(
+        id,
+        project,
+        &eventarc_subscription_id(project, region, function),
+        topic,
+        message,
+        time,
+    )
+}
+
+/// [`pubsub_event`] with the subscription id the event names given: the provisioned
+/// subscription of the function (see [`function_subscription_id`]).
+#[must_use]
+pub fn pubsub_event_with_subscription(
+    id: &str,
+    project: &str,
+    subscription_id: &str,
+    topic: &str,
+    message: &Value,
+    time: LogicalInstant,
+) -> Value {
     let attrs = pubsub_attributes(project, topic);
     let published = object_time(time);
     let mut msg = json!({
@@ -404,12 +427,45 @@ pub fn pubsub_event(
         "time": published,
         "data": {
             "message": msg,
-            "subscription": format!(
-                "projects/{project}/subscriptions/{}",
-                eventarc_subscription_id(project, region, function)
-            ),
+            "subscription": format!("projects/{project}/subscriptions/{subscription_id}"),
         },
     })
+}
+
+/// How the subscription of a Pub/Sub function is named: by profile.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum SubscriptionNaming {
+    /// Production's name for a 2nd gen Pub/Sub function, `eventarc-<region>-<function
+    /// lowercased>-<6 digits>-sub-<3 digits>` (the strict profile). One subscription per function.
+    #[default]
+    Eventarc,
+    /// The official emulator's `emulator-sub-<topic>` (the emulator profile), one per topic.
+    EmulatorTopic,
+}
+
+/// The id of the subscription provisioned for `function` on `topic`, and named by the events of
+/// that function. A 2nd gen Pub/Sub function takes Eventarc's name under
+/// [`SubscriptionNaming::Eventarc`] (recorded for 2nd gen only: FE v5 and v7); every other
+/// function (a scheduled one included), and every function under
+/// [`SubscriptionNaming::EmulatorTopic`], takes
+/// `emulator-sub-<topic>`. The numbers of the Eventarc name are derived from the project, the
+/// region and the function, so a deployment keeps its name across runs.
+#[must_use]
+pub fn function_subscription_id(
+    naming: SubscriptionNaming,
+    project: &str,
+    function: &FunctionSpec,
+    topic: &str,
+) -> String {
+    match naming {
+        SubscriptionNaming::Eventarc
+            if function.generation == FunctionGeneration::Second
+                && matches!(function.trigger, Trigger::PubSub { .. }) =>
+        {
+            eventarc_subscription_id(project, &function.region, &function.name)
+        }
+        _ => format!("emulator-sub-{topic}"),
+    }
 }
 
 /// The id of the subscription Eventarc creates for a 2nd gen Pub/Sub function.

@@ -116,10 +116,18 @@ try {
   const jobs = pubsub.topic("jobs");
   const [jobsExists] = await jobs.exists();
   check("the Functions manifest provisions its Pub/Sub topic before exec", jobsExists);
-  const [jobSubscriptionExists] = await pubsub.subscription("emulator-sub-jobs").exists();
+  // The strict profile names a 2nd gen function's subscription as Eventarc does
+  // (eventarc-<region>-<function lowercased>-<6 digits>-sub-<3 digits>) and a 1st gen one
+  // emulator-sub-<topic>; the emulator profile names every one emulator-sub-<topic>.
+  const [jobSubscriptions] = await jobs.getSubscriptions();
+  const jobSubscriptionNames = jobSubscriptions.map((subscription) => subscription.name);
   check(
-    "the Functions manifest provisions its emulator subscription before exec",
-    jobSubscriptionExists,
+    "the Functions manifest provisions its subscriptions before exec",
+    jobSubscriptionNames.length > 0 &&
+      jobSubscriptionNames.every((name) =>
+        /\/subscriptions\/(emulator-sub-jobs|eventarc-[a-z0-9-]+-\d{6}-sub-\d{3})$/u.test(name),
+      ),
+    jobSubscriptionNames,
   );
   const [scheduleTopicExists] = await pubsub.topic("firebase-schedule-tick").exists();
   const [scheduleSubscriptionExists] = await pubsub

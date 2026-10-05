@@ -32,7 +32,8 @@ use serde_json::{json, Value};
 use tokio::sync::{Mutex as AsyncMutex, Notify, OwnedMutexGuard};
 
 use crate::events::{
-    auth_event, change_kind, firestore_event, pubsub_event, schedule_event, storage_event,
+    auth_event, change_kind, firestore_event, function_subscription_id,
+    pubsub_event_with_subscription, schedule_event, storage_event,
 };
 use crate::http::{
     forward, forward_stream, FunctionsHttpProfile, ProxiedResponse, ProxiedStreamResponse,
@@ -199,6 +200,8 @@ pub struct FunctionsConfig {
     /// `defaultUri` is the function's public URL, so the runtime has to know its own address
     /// to build one and to recognise a task that named it explicitly.
     pub functions_host: Option<String>,
+    /// How the subscription of a Pub/Sub function is named (and which the events name): by profile.
+    pub subscription_naming: crate::events::SubscriptionNaming,
 }
 
 impl std::fmt::Debug for FunctionsConfig {
@@ -216,6 +219,7 @@ impl std::fmt::Debug for FunctionsConfig {
             .field("overlap", &self.overlap)
             .field("catch_up", &self.catch_up)
             .field("functions_host", &self.functions_host)
+            .field("subscription_naming", &self.subscription_naming)
             .finish()
     }
 }
@@ -2122,6 +2126,31 @@ impl FunctionsRuntime {
         }
     }
 
+    /// The `CloudEvent` `function` receives for a message published on `topic`. It names the
+    /// subscription provisioned for that function (see [`function_subscription_id`]), by profile.
+    fn pubsub_payload(
+        &self,
+        function: &fireemu_core_functions::manifest::FunctionSpec,
+        message_id: &str,
+        topic: &str,
+        message: &Value,
+        time: LogicalInstant,
+    ) -> Value {
+        pubsub_event_with_subscription(
+            message_id,
+            &self.config.project,
+            &function_subscription_id(
+                self.config.subscription_naming,
+                &self.config.project,
+                function,
+                topic,
+            ),
+            topic,
+            message,
+            time,
+        )
+    }
+
     /// Reserves the complete Pub/Sub topic-trigger fan-out for broker messages that already have
     /// stable Pub/Sub message ids. The returned reservation is committed only after the broker
     /// publication becomes visible, so capacity refusal cannot lose a broker event.
@@ -2146,15 +2175,8 @@ impl FunctionsRuntime {
                 .filter(|id| !id.is_empty())
                 .ok_or(SourceEventAdmissionError::InvalidEvent)?;
             for function in self.manifest.pubsub_matches(topic) {
-                let payload = Arc::new(pubsub_event(
-                    message_id,
-                    &self.config.project,
-                    &function.region,
-                    &function.name,
-                    topic,
-                    message,
-                    time,
-                ));
+                let payload =
+                    Arc::new(self.pubsub_payload(function, message_id, topic, message, time));
                 let copies = self.delivery_copies(
                     &function.name,
                     "google.cloud.pubsub.topic.v1.messagePublished",
@@ -2198,15 +2220,7 @@ impl FunctionsRuntime {
                 continue; // the message is accepted and dropped, as Pub/Sub does without a subscriber
             }
             for f in self.manifest.pubsub_matches(topic) {
-                let payload = pubsub_event(
-                    &message_id,
-                    &self.config.project,
-                    &f.region,
-                    &f.name,
-                    topic,
-                    message,
-                    time,
-                );
+                let payload = self.pubsub_payload(f, &message_id, topic, message, time);
                 self.enqueue_delivery(
                     &mut inner,
                     EventSource::PubSub,
@@ -5085,6 +5099,7 @@ mod task_completion_tests {
                 overlap: super::OverlapPolicy::Allow,
                 catch_up: super::CatchUpPolicy::All,
                 functions_host: Some("127.0.0.1:5001".to_owned()),
+                subscription_naming: crate::events::SubscriptionNaming::default(),
             },
             Arc::new(Mutex::new(VirtualClock::new(
                 LogicalInstant::from_unix_seconds(1_788_004_860),
@@ -5092,6 +5107,73 @@ mod task_completion_tests {
             Arc::new(runner),
             Some(spec),
         )
+    }
+
+    #[tokio::test]
+    async fn a_pubsub_event_names_the_subscription_provisioned_for_its_function_by_profile() {
+        use crate::events::{function_subscription_id, SubscriptionNaming};
+        use fireemu_core_functions::manifest::FunctionGeneration;
+        let runtime = runtime().await;
+        let mut second_gen = runtime.manifest.get("echo").unwrap().clone();
+        second_gen.name = "onMessageV2".to_owned();
+        second_gen.region = "europe-west1".to_owned();
+        second_gen.generation = FunctionGeneration::Second;
+        second_gen.trigger = Trigger::PubSub {
+            topic: "jobs".to_owned(),
+        };
+        let mut first_gen = second_gen.clone();
+        first_gen.name = "onMessageV1".to_owned();
+        first_gen.generation = FunctionGeneration::First;
+        let message = json!({"data": "YQ=="});
+        let time = LogicalInstant::from_unix_seconds(1_788_004_860);
+        let named = |runtime: &FunctionsRuntime, spec: &_| {
+            runtime.pubsub_payload(spec, "22254343790642112", "jobs", &message, time)["data"]
+                ["subscription"]
+                .as_str()
+                .unwrap()
+                .to_owned()
+        };
+        // The strict profile: Eventarc's name for a 2nd gen function, the topic's for a 1st gen one,
+        // each the id the provisioning derives from the same function.
+        let strict = named(&runtime, &second_gen);
+        assert_eq!(
+            strict,
+            format!(
+                "projects/demo-app/subscriptions/{}",
+                function_subscription_id(
+                    SubscriptionNaming::Eventarc,
+                    "demo-app",
+                    &second_gen,
+                    "jobs"
+                )
+            )
+        );
+        assert!(
+            strict.contains("/eventarc-europe-west1-onmessagev2-"),
+            "{strict}"
+        );
+        assert_eq!(
+            named(&runtime, &first_gen),
+            "projects/demo-app/subscriptions/emulator-sub-jobs"
+        );
+        // The emulator profile: the official emulator's name for both.
+        let mut emulator = runtime.config.clone();
+        emulator.subscription_naming = SubscriptionNaming::EmulatorTopic;
+        let emulator_runtime = FunctionsRuntime::new(
+            runtime.manifest.clone(),
+            emulator,
+            Arc::new(Mutex::new(VirtualClock::new(time))),
+            runtime.runner(),
+            None,
+        );
+        assert_eq!(
+            named(&emulator_runtime, &second_gen),
+            "projects/demo-app/subscriptions/emulator-sub-jobs"
+        );
+        assert_eq!(
+            named(&emulator_runtime, &first_gen),
+            "projects/demo-app/subscriptions/emulator-sub-jobs"
+        );
     }
 
     #[tokio::test]
@@ -5597,6 +5679,7 @@ mod schedule_capacity_tests {
                 overlap,
                 catch_up,
                 functions_host: Some("127.0.0.1:5001".to_owned()),
+                subscription_naming: crate::events::SubscriptionNaming::default(),
             },
             clock.clone(),
             Arc::new(runner),
@@ -6843,6 +6926,7 @@ mod storage_event_instant_tests {
                 overlap: super::OverlapPolicy::Allow,
                 catch_up: super::CatchUpPolicy::All,
                 functions_host: Some("127.0.0.1:5001".to_owned()),
+                subscription_naming: crate::events::SubscriptionNaming::default(),
             },
             clock.clone(),
             Arc::new(runner),

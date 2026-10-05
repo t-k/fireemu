@@ -3654,7 +3654,12 @@ mod reset_pubsub_tests {
             ]}),
         )
         .expect("the manifest parses");
-        functions::function_pubsub_resources(project, &manifest).expect("the resources resolve")
+        functions::function_pubsub_resources(
+            project,
+            &manifest,
+            fireemu_adapter_functions::events::SubscriptionNaming::default(),
+        )
+        .expect("the resources resolve")
     }
 
     /// RSTPS-2: topics are a daemon-wide budget that any project can fill, so recreating the

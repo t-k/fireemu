@@ -34,41 +34,58 @@ pub struct FunctionPubSubResource {
     pub subscription: fireemu_core_pubsub::SubscriptionName,
 }
 
-/// Derives the unique Pub/Sub resources required by Pub/Sub and scheduled functions.
+/// How the strict and the emulator profile name the subscription of a Pub/Sub function: the strict
+/// profile as production does (Eventarc's name, one per 2nd gen function), the emulator profile
+/// as the official emulator does (`emulator-sub-<topic>`).
+#[must_use]
+pub fn subscription_naming(
+    profile: CompatibilityProfile,
+) -> fireemu_adapter_functions::events::SubscriptionNaming {
+    use fireemu_adapter_functions::events::SubscriptionNaming;
+    match profile {
+        CompatibilityProfile::Strict => SubscriptionNaming::Eventarc,
+        CompatibilityProfile::Emulator => SubscriptionNaming::EmulatorTopic,
+    }
+}
+
+/// Derives the unique Pub/Sub resources required by Pub/Sub and scheduled functions. Under
+/// [`SubscriptionNaming::Eventarc`] every 2nd gen Pub/Sub function gets its own subscription, so
+/// two functions on one topic give two resources; otherwise a topic gets one `emulator-sub-<topic>`.
 pub fn function_pubsub_resources(
     project: &str,
     manifest: &fireemu_core_functions::manifest::FunctionManifest,
+    naming: fireemu_adapter_functions::events::SubscriptionNaming,
 ) -> Result<Vec<FunctionPubSubResource>, String> {
+    use fireemu_adapter_functions::events::function_subscription_id;
     use fireemu_core_functions::manifest::Trigger;
 
-    let mut topics: BTreeSet<(String, String)> = BTreeSet::new();
+    // (topic, subscription) -> the function that requires it, for diagnostics.
+    let mut wanted: BTreeMap<(String, String), String> = BTreeMap::new();
     for function in &manifest.functions {
         match &function.trigger {
             Trigger::PubSub { topic } => {
-                topics.insert((topic.clone(), format!("function {:?}", function.name)));
+                let subscription = function_subscription_id(naming, project, function, topic);
+                wanted
+                    .entry((topic.clone(), subscription))
+                    .or_insert_with(|| format!("function {:?}", function.name));
             }
             Trigger::Schedule { .. } => {
-                topics.insert((
-                    format!("firebase-schedule-{}", function.name),
-                    format!("scheduled function {:?}", function.name),
-                ));
+                let topic = format!("firebase-schedule-{}", function.name);
+                let subscription = format!("emulator-sub-{topic}");
+                wanted
+                    .entry((topic, subscription))
+                    .or_insert_with(|| format!("scheduled function {:?}", function.name));
             }
             _ => {}
         }
     }
 
-    // The same topic may be declared by more than one function. Resource names, not the
-    // diagnostics attached to them, define uniqueness.
-    let mut seen = BTreeSet::new();
+    // Resource names, not the diagnostics attached to them, define uniqueness.
     let mut resources = Vec::new();
-    for (topic_id, owner) in topics {
-        if !seen.insert(topic_id.clone()) {
-            continue;
-        }
+    for ((topic_id, subscription_id), owner) in wanted {
         let topic = fireemu_core_pubsub::TopicName::new(project, &topic_id).map_err(|error| {
             format!("{owner} requires invalid Pub/Sub topic {topic_id:?}: {error}")
         })?;
-        let subscription_id = format!("emulator-sub-{topic_id}");
         let subscription = fireemu_core_pubsub::SubscriptionName::new(project, &subscription_id)
             .map_err(|error| {
                 format!(
@@ -2573,6 +2590,7 @@ pub async fn start(
         catch_up: fireemu_adapter_functions::runtime::CatchUpPolicy::parse(&cfg.scheduler_catch_up)
             .unwrap_or_default(),
         functions_host: hosts.functions.clone(),
+        subscription_naming: subscription_naming(cfg.profile),
     };
     // A function name two codebases both export is fatal here. The runners it collided
     // between are killed rather than left behind a daemon that refuses to serve them.
@@ -6212,6 +6230,8 @@ mod tests {
                 overlap: fireemu_adapter_functions::runtime::OverlapPolicy::Allow,
                 catch_up: fireemu_adapter_functions::runtime::CatchUpPolicy::All,
                 functions_host: None,
+                subscription_naming: fireemu_adapter_functions::events::SubscriptionNaming::default(
+                ),
             },
             clock.clone(),
             Arc::new(runner),
@@ -7023,6 +7043,8 @@ mod tests {
                 overlap: fireemu_adapter_functions::runtime::OverlapPolicy::Allow,
                 catch_up: fireemu_adapter_functions::runtime::CatchUpPolicy::All,
                 functions_host: None,
+                subscription_naming: fireemu_adapter_functions::events::SubscriptionNaming::default(
+                ),
             },
             Arc::new(Mutex::new(VirtualClock::new(
                 LogicalInstant::from_unix_seconds(1_788_004_860),
@@ -7083,6 +7105,8 @@ mod tests {
                 overlap: fireemu_adapter_functions::runtime::OverlapPolicy::Allow,
                 catch_up: fireemu_adapter_functions::runtime::CatchUpPolicy::All,
                 functions_host: None,
+                subscription_naming: fireemu_adapter_functions::events::SubscriptionNaming::default(
+                ),
             },
             Arc::new(Mutex::new(VirtualClock::new(
                 LogicalInstant::from_unix_seconds(1_788_004_860),
@@ -7292,6 +7316,8 @@ mod tests {
                 overlap: fireemu_adapter_functions::runtime::OverlapPolicy::Allow,
                 catch_up: fireemu_adapter_functions::runtime::CatchUpPolicy::All,
                 functions_host: None,
+                subscription_naming: fireemu_adapter_functions::events::SubscriptionNaming::default(
+                ),
             },
             Arc::new(Mutex::new(VirtualClock::new(now))),
             Arc::new(runner),
@@ -8422,7 +8448,12 @@ mod tests {
             {"name": "health", "trigger": {"type": "http"}}
         ]})).unwrap();
 
-        let resources = function_pubsub_resources("demo-app", &manifest).unwrap();
+        let resources = function_pubsub_resources(
+            "demo-app",
+            &manifest,
+            fireemu_adapter_functions::events::SubscriptionNaming::EmulatorTopic,
+        )
+        .unwrap();
         let actual: Vec<(String, String)> = resources
             .iter()
             .map(|resource| (resource.topic.to_full(), resource.subscription.to_full()))
@@ -8441,6 +8472,204 @@ mod tests {
                 ),
             ]
         );
+    }
+
+    /// `eventarc-<region>-<function lowercased>-<6 digits>-sub-<3 digits>` with the two numbers masked.
+    fn masked_eventarc_subscription(id: &str) -> Option<String> {
+        let rest = id.strip_prefix("eventarc-")?;
+        let (head, sub) = rest.rsplit_once("-sub-")?;
+        let (head, function_number) = head.rsplit_once('-')?;
+        let digits = |text: &str, len: usize| {
+            text.len() == len && text.bytes().all(|byte| byte.is_ascii_digit())
+        };
+        (digits(function_number, 6) && digits(sub, 3))
+            .then(|| format!("eventarc-{head}-<6 digits>-sub-<3 digits>"))
+    }
+
+    fn mixed_generation_manifest() -> fireemu_core_functions::manifest::FunctionManifest {
+        parse_manifest(&json!({"functions": [
+            {"name": "workerOne", "generation": 2, "trigger": {"type": "pubsub", "topic": "shared-jobs"}},
+            {"name": "workerTwo", "generation": 2, "trigger": {"type": "pubsub", "topic": "shared-jobs"}, "region": "europe-west1"},
+            {"name": "legacyWorker", "trigger": {"type": "pubsub", "topic": "shared-jobs"}},
+            {"name": "dailyReport", "generation": 2, "trigger": {"type": "schedule", "schedule": "0 0 * * *"}},
+            {"name": "health", "trigger": {"type": "http"}}
+        ]}))
+        .unwrap()
+    }
+
+    #[test]
+    fn the_profile_chooses_how_a_pubsub_functions_subscription_is_named() {
+        use crate::config::CompatibilityProfile;
+        use fireemu_adapter_functions::events::SubscriptionNaming;
+        assert_eq!(
+            super::subscription_naming(CompatibilityProfile::Strict),
+            SubscriptionNaming::Eventarc
+        );
+        assert_eq!(
+            super::subscription_naming(CompatibilityProfile::Emulator),
+            SubscriptionNaming::EmulatorTopic
+        );
+    }
+
+    #[test]
+    fn strict_gives_each_second_generation_pubsub_function_its_own_eventarc_subscription() {
+        use fireemu_adapter_functions::events::{function_subscription_id, SubscriptionNaming};
+        let manifest = mixed_generation_manifest();
+        let resources =
+            function_pubsub_resources("demo-app", &manifest, SubscriptionNaming::Eventarc).unwrap();
+        let actual: Vec<(String, String)> = resources
+            .iter()
+            .map(|resource| (resource.topic.to_full(), resource.subscription.to_full()))
+            .collect();
+        // Every second generation Pub/Sub function has a subscription of its own, derived from
+        // the function the way the event names it; the first generation function and the
+        // schedule keep the topic's name (unrecorded, so unchanged).
+        let derived = |name: &str| {
+            let function = manifest.get(name).unwrap();
+            format!(
+                "projects/demo-app/subscriptions/{}",
+                function_subscription_id(
+                    SubscriptionNaming::Eventarc,
+                    "demo-app",
+                    function,
+                    "shared-jobs"
+                )
+            )
+        };
+        let shared = "projects/demo-app/topics/shared-jobs".to_owned();
+        let mut expected = vec![
+            (
+                "projects/demo-app/topics/firebase-schedule-dailyReport".to_owned(),
+                "projects/demo-app/subscriptions/emulator-sub-firebase-schedule-dailyReport"
+                    .to_owned(),
+            ),
+            (
+                shared.clone(),
+                "projects/demo-app/subscriptions/emulator-sub-shared-jobs".to_owned(),
+            ),
+            (shared.clone(), derived("workerOne")),
+            (shared, derived("workerTwo")),
+        ];
+        expected.sort();
+        assert_eq!(actual, expected);
+        assert!(derived("workerOne").contains("/eventarc-us-central1-workerone-"));
+        assert!(derived("workerTwo").contains("/eventarc-europe-west1-workertwo-"));
+        // A deployment keeps its names across runs, and a second call derives the same ones.
+        let again =
+            function_pubsub_resources("demo-app", &manifest, SubscriptionNaming::Eventarc).unwrap();
+        assert_eq!(resources.len(), again.len());
+        for (a, b) in resources.iter().zip(&again) {
+            assert_eq!(a.subscription.to_full(), b.subscription.to_full());
+        }
+    }
+
+    #[test]
+    fn the_emulator_profile_keeps_one_topic_subscription_whatever_the_generation() {
+        use fireemu_adapter_functions::events::SubscriptionNaming;
+        let resources = function_pubsub_resources(
+            "demo-app",
+            &mixed_generation_manifest(),
+            SubscriptionNaming::EmulatorTopic,
+        )
+        .unwrap();
+        let names: Vec<String> = resources
+            .iter()
+            .map(|resource| resource.subscription.to_full())
+            .collect();
+        assert_eq!(
+            names,
+            vec![
+                "projects/demo-app/subscriptions/emulator-sub-firebase-schedule-dailyReport",
+                "projects/demo-app/subscriptions/emulator-sub-shared-jobs",
+            ]
+        );
+    }
+
+    /// The two recorded names (FE v5 `a9621bfae74fe9bc` frames 134 to 273 and FE v7
+    /// `d3fd61c5b`... `d3fd3faa3e0dc702` frames 136 to 277) have the shape the strict name has: the
+    /// numbers are per deployment, so only the shape is compared.
+    #[test]
+    fn the_strict_subscription_has_the_masked_shape_of_both_recorded_names() {
+        use fireemu_adapter_functions::events::{function_subscription_id, SubscriptionNaming};
+        let manifest = parse_manifest(&json!({"functions": [
+            {"name": "pubsubPublishedV2", "generation": 2, "trigger": {"type": "pubsub", "topic": "fe-events-primary"}}
+        ]}))
+        .unwrap();
+        let ours = function_subscription_id(
+            SubscriptionNaming::Eventarc,
+            "fireemu-oracle-events",
+            manifest.get("pubsubPublishedV2").unwrap(),
+            "fe-events-primary",
+        );
+        let masked = masked_eventarc_subscription(&ours);
+        assert_eq!(
+            masked.as_deref(),
+            Some("eventarc-us-central1-pubsubpublishedv2-<6 digits>-sub-<3 digits>")
+        );
+        for recorded in [
+            "eventarc-us-central1-pubsubpublishedv2-834054-sub-834",
+            "eventarc-us-central1-pubsubpublishedv2-293232-sub-576",
+        ] {
+            assert_eq!(masked_eventarc_subscription(recorded), masked, "{recorded}");
+            assert_ne!(
+                ours, recorded,
+                "the numbers are derived, not copied from one deployment"
+            );
+        }
+        assert_eq!(
+            masked_eventarc_subscription("emulator-sub-fe-events-primary"),
+            None
+        );
+    }
+
+    #[test]
+    fn eventarc_subscriptions_are_provisioned_listed_deleted_and_reprovisioned_by_name() {
+        use fireemu_adapter_functions::events::SubscriptionNaming;
+        let resources = function_pubsub_resources(
+            "demo-app",
+            &mixed_generation_manifest(),
+            SubscriptionNaming::Eventarc,
+        )
+        .unwrap();
+        let mut state = PubSubState::new(7);
+        provision_function_pubsub_resources(&mut state, &resources).unwrap();
+        // Listing shows every resource once, the Eventarc names among them.
+        let listed: Vec<String> = state
+            .list_subscriptions("demo-app")
+            .iter()
+            .map(|subscription| subscription.name.to_full())
+            .collect();
+        for resource in &resources {
+            assert!(
+                listed.contains(&resource.subscription.to_full()),
+                "{listed:?}"
+            );
+        }
+        assert_eq!(listed.len(), resources.len());
+        assert_eq!(state.list_topics("demo-app").len(), 2);
+        // Provisioning again changes nothing; a message published on the topic is not retained by a
+        // function's subscription (the Functions bridge delivers it), whatever the subscription's name.
+        provision_function_pubsub_resources(&mut state, &resources).unwrap();
+        assert_eq!(state.list_subscriptions("demo-app").len(), resources.len());
+        // Deleting one function's subscription leaves the others, and provisioning brings it back
+        // under the same name.
+        let victim = resources
+            .iter()
+            .find(|resource| {
+                resource
+                    .subscription
+                    .to_full()
+                    .contains("eventarc-europe-west1-workertwo-")
+            })
+            .unwrap();
+        state.delete_subscription(&victim.subscription).unwrap();
+        assert_eq!(
+            state.list_subscriptions("demo-app").len(),
+            resources.len() - 1
+        );
+        provision_function_pubsub_resources(&mut state, &resources).unwrap();
+        assert!(state.subscription_config(&victim.subscription).is_ok());
+        assert_eq!(state.list_subscriptions("demo-app").len(), resources.len());
     }
 
     #[test]
@@ -8491,6 +8720,8 @@ mod tests {
                 overlap: fireemu_adapter_functions::runtime::OverlapPolicy::Allow,
                 catch_up: fireemu_adapter_functions::runtime::CatchUpPolicy::All,
                 functions_host: None,
+                subscription_naming: fireemu_adapter_functions::events::SubscriptionNaming::default(
+                ),
             },
             clock.clone(),
             Arc::new(runner),
@@ -8594,6 +8825,8 @@ mod tests {
                 overlap: fireemu_adapter_functions::runtime::OverlapPolicy::Allow,
                 catch_up: fireemu_adapter_functions::runtime::CatchUpPolicy::All,
                 functions_host: None,
+                subscription_naming: fireemu_adapter_functions::events::SubscriptionNaming::default(
+                ),
             },
             clock.clone(),
             Arc::new(runner),
@@ -8726,7 +8959,12 @@ mod tests {
             {"name": "worker", "trigger": {"type": "pubsub", "topic": "shared-jobs"}}
         ]}))
         .unwrap();
-        let resources = function_pubsub_resources("demo-app", &manifest).unwrap();
+        let resources = function_pubsub_resources(
+            "demo-app",
+            &manifest,
+            fireemu_adapter_functions::events::SubscriptionNaming::EmulatorTopic,
+        )
+        .unwrap();
         let mut state = PubSubState::new(7);
 
         provision_function_pubsub_resources(&mut state, &resources).unwrap();

@@ -547,8 +547,11 @@ fn assemble_adapters(bound: BoundStartup) -> Result<ServiceAssembly, String> {
     }
     let pubsub_resources = if pubsub_listener.is_some() {
         if let Some(runtime) = &functions_runtime {
-            let resources =
-                functions::function_pubsub_resources(runtime.project(), runtime.manifest())?;
+            let resources = functions::function_pubsub_resources(
+                runtime.project(),
+                runtime.manifest(),
+                functions::subscription_naming(cfg.profile),
+            )?;
             let mut state = pubsub_state
                 .lock()
                 .map_err(|_| "the Pub/Sub state lock is poisoned".to_owned())?;

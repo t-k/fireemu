@@ -6,6 +6,7 @@
 
 import grpcLib from "@grpc/grpc-js";
 import { protos as pubsubProtos } from "@google-cloud/pubsub";
+import { createStreamingPull } from "./stream.mjs";
 
 const DURATION_FIELDS = new Set([
   "messageRetentionDuration",
@@ -153,9 +154,24 @@ export function createGrpc({
     target,
     secure ? grpc.credentials.createSsl() : grpc.credentials.createInsecure(),
   );
+  const streaming = createStreamingPull({
+    target,
+    secure,
+    budget,
+    capture,
+    getToken,
+    quotaProject,
+    grpc,
+    protos,
+    now,
+  });
   return Object.freeze({
     name: "grpc",
-    close: () => client.close(),
+    close: () => {
+      client.close();
+      streaming.close();
+    },
+    stream: streaming.stream,
     /** Sends one unary call. `request` is in the REST form; `token` is "default", "none" or "invalid". */
     async call({
       label,

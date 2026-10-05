@@ -26,6 +26,8 @@ import { createOwnership, isRunId, newRunId } from "./names.mjs";
 import { createRest } from "./rest.mjs";
 import { assertBudgetCovers, exitCodeOf, runCases, selectCases } from "./runner.mjs";
 import { createTokenProvider } from "./token.mjs";
+import { createPhaseLimit } from "./limits.mjs";
+import { IAM_PREREQUISITE } from "./cases/stream-dlq.mjs";
 
 const PRODUCTION = { rest: "https://pubsub.googleapis.com", grpc: "pubsub.googleapis.com:443" };
 export const DEFAULT_MAX_REQUESTS = 1026;
@@ -39,6 +41,7 @@ export function parseArgs(argv, env = {}) {
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
     if (arg === "--cleanup-only") options.cleanupOnly = true;
+    else if (arg === "--prepare") options.prepare = true;
     else if (arg.startsWith("--")) {
       const value = argv[i + 1];
       if (value === undefined || value.startsWith("--")) throw new Error(`${arg} needs a value`);
@@ -77,6 +80,11 @@ export function parseArgs(argv, env = {}) {
     options.serviceAgent = `serviceAccount:service-${agent}@gcp-sa-pubsub.iam.gserviceaccount.com`;
   }
   options.quotaProject = take("quota-project");
+  options.suite = take("suite") ?? "unary";
+  if (options.suite !== "unary" && options.suite !== "stream-dlq")
+    throw new Error("--suite must be unary or stream-dlq");
+  if (options.prepare && options.cleanupOnly)
+    throw new Error("--prepare does not perform A2 recovery");
   options.fromCapture = take("from-capture");
   options.runId = take("run-id") ?? (options.cleanupOnly ? undefined : newRunId());
   if (options.runId === undefined || !isRunId(options.runId))
@@ -148,8 +156,20 @@ export async function main(
   try {
     options = parseArgs(argv, env);
     if (!options.cleanupOnly) {
-      cases = selectCases(options.only);
+      cases = selectCases(options.only, options.suite);
+      createOwnership({ project: options.project, runId: options.runId });
+      if (
+        options.suite === "stream-dlq" &&
+        cases.some((item) => item.transports.some((name) => !options.transports.includes(name)))
+      )
+        throw new Error("the selected stream-dlq cases need every required transport");
       assertBudgetCovers(cases, options.transports, options.maxRequests);
+      if (options.prepare) {
+        io.stdout.write(
+          `${JSON.stringify({ noWire: true, suite: options.suite, cases: cases.map(({ id, requests, transports, resources, timeoutMs }) => ({ id, requests, transports, resources, timeoutMs })), requests: cases.reduce((sum, item) => sum + item.requests * options.transports.filter((name) => item.transports === undefined || item.transports.includes(name)).length, 0), cleanupRequests: CLEANUP_BUDGET, a2Requests: CLEANUP_BUDGET, iamFiniteUpperBoundMs: IAM_PREREQUISITE.finiteUpperBoundMs })}\n`,
+        );
+        return 0;
+      }
     } else {
       // The later run reads the names the recording issued, and waits for the service to settle.
       issued = readLedger(options.ledgerPath, {});
@@ -191,6 +211,7 @@ export async function main(
     io.stderr.write(`${error.message}\n`);
     return 2;
   }
+  if (deps.noWire === true) throw new Error("no-wire test guard refused the actual recorder path");
   mkdirSync(options.out, { recursive: true, mode: 0o700 });
   const journal = createFileJournal(join(options.out, `capture-${options.runId}${suffix}.jsonl`));
   const capture = createCapture({ journal });
@@ -211,7 +232,11 @@ export async function main(
   const rest = options.production ? PRODUCTION.rest : `http://${options.host}`;
   const grpcTarget = options.production ? PRODUCTION.grpc : options.host;
   const transports = { rest: createRest({ base: rest, budget, ...common }) };
-  const cleanupRestTransport = createRest({ base: rest, budget: cleanupBudget, ...common });
+  const cleanupPhase =
+    options.suite === "stream-dlq" ? createPhaseLimit(600_000, deps.monotonicNow) : null;
+  const cleanupRawTransport = createRest({ base: rest, budget: cleanupBudget, ...common });
+  const cleanupRestTransport =
+    cleanupPhase === null ? cleanupRawTransport : cleanupPhase.transport(cleanupRawTransport);
   const grpc = createGrpc({ target: grpcTarget, secure: options.production, budget, ...common });
   transports.grpc = grpc;
   const ownership = createOwnership({ project: options.project, runId: options.runId });
@@ -250,7 +275,7 @@ export async function main(
           ownership,
           project: options.project,
           ledger,
-          sleep: wait,
+          sleep: cleanupPhase === null ? wait : cleanupPhase.sleep(wait),
           a2ElapsedMs,
         }),
       };
@@ -267,6 +292,7 @@ export async function main(
         sleep: wait,
         ledger,
         isStopping: () => stopping,
+        cleanupSleep: cleanupPhase === null ? wait : cleanupPhase.sleep(wait),
       });
   } finally {
     grpc.close();

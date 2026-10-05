@@ -9,6 +9,8 @@ import { CaseAbort, StopClean } from "./cases/support.mjs";
 import { cleanup } from "./cleanup.mjs";
 import { createClient } from "./client.mjs";
 import { createLedger } from "./ledger.mjs";
+import { STREAM_DLQ_CASES } from "./cases/stream-dlq.mjs";
+import { createPhaseLimit } from "./limits.mjs";
 
 const REST_AND_GRPC = ["rest", "grpc"];
 
@@ -31,15 +33,18 @@ function limited(transport, meter, limit) {
     ...transport,
     ...(transport.request ? { request: wrap(transport.request) } : {}),
     ...(transport.call ? { call: wrap(transport.call) } : {}),
+    ...(transport.stream ? { stream: wrap(transport.stream) } : {}),
   };
 }
 
-export function selectCases(only) {
-  if (only === undefined) return CASES;
+export function selectCases(only, suite = "unary") {
+  if (suite !== "unary" && suite !== "stream-dlq") throw new Error(`unknown suite ${suite}`);
+  const available = suite === "stream-dlq" ? STREAM_DLQ_CASES : CASES;
+  if (only === undefined) return available;
   const wanted = new Set(only);
-  const known = new Set(CASES.map((item) => item.id));
+  const known = new Set(available.map((item) => item.id));
   for (const id of wanted) if (!known.has(id)) throw new Error(`unknown case ${id}`);
-  return CASES.filter((item) => wanted.has(item.id));
+  return available.filter((item) => wanted.has(item.id));
 }
 
 /** The context a case gets: its clients, names that carry the run's prefix, and the notes it may add. */
@@ -55,16 +60,26 @@ function createContext({
   ledger,
 }) {
   const meter = { used: 0 };
+  const phase =
+    item.timeoutMs === undefined ? null : createPhaseLimit(item.timeoutMs, options.monotonicNow);
   const guarded = Object.fromEntries(
     Object.entries(transports).map(([name, transport]) => [
       name,
-      limited(transport, meter, item.requests),
+      limited(phase === null ? transport : phase.transport(transport), meter, item.requests),
     ]),
   );
   const tag = `${item.short}-${transportName === "rest" ? "r" : "g"}-`;
   const caseId = `${item.id}/${transportName}`;
   const clientOf = (transport, id) =>
     createClient({ transport, ownership, pushState, caseId: id, ledger });
+  const allocated = new Set();
+  const name = (kind, key) => {
+    const value = `${kind}/${key}`;
+    if (item.resources !== undefined && !allocated.has(value) && allocated.size >= item.resources)
+      throw new CaseLimit(item.resources);
+    allocated.add(value);
+    return ownership.resource(kind, `${tag}${key}`);
+  };
   return {
     transport: transportName,
     project: ownership.project,
@@ -75,13 +90,28 @@ function createContext({
     // IAM is only available over REST, whichever transport the case is recording.
     rest: clientOf(guarded.rest, `${caseId}/rest`),
     maxKeyLength: 255 - (ownership.prefix.length + tag.length),
-    name: (kind, key) => ownership.resource(kind, `${tag}${key}`),
+    name,
+    stream: (subscription, frames, timeoutMs, afterReceive) => {
+      ownership.assertOwned(subscription);
+      if (
+        frames.some(
+          (frame) => frame.subscription !== undefined && frame.subscription !== subscription,
+        )
+      )
+        throw new Error("stream frame names a foreign subscription");
+      return guarded.grpc.stream({
+        label: { case: caseId, step: "stream" },
+        frames,
+        timeoutMs,
+        afterReceive,
+      });
+    },
     /** A name sent on purpose that cannot carry the prefix; `id` may differ by transport. */
     probe: (kind, id) =>
       ownership.registerProbe(
         `projects/${ownership.project}/${kind}/${typeof id === "string" ? `${id}-${transportName === "rest" ? "r" : "g"}` : id[transportName]}`,
       ),
-    sleep,
+    sleep: phase === null ? sleep : phase.sleep(sleep),
     note: (kind, data) => capture.note(kind, { case: caseId, ...data }),
   };
 }
@@ -98,6 +128,7 @@ export async function runCases({
   sleep,
   ledger = createLedger(),
   isStopping = () => false,
+  cleanupSleep = sleep,
 }) {
   const summary = { cases: [], stopped: null, limited: [], cleanup: null };
   const stoppable = async (ms) => {
@@ -106,6 +137,7 @@ export async function runCases({
   };
   outer: for (const item of cases) {
     for (const transportName of transportNames) {
+      if (item.transports !== undefined && !item.transports.includes(transportName)) continue;
       if (isStopping()) {
         summary.stopped = "signal";
         break outer;
@@ -158,14 +190,22 @@ export async function runCases({
     ownership,
     project: ownership.project,
     ledger,
-    sleep,
+    sleep: cleanupSleep,
   });
   return summary;
 }
 
 /** The requests the selected cases may send: each case declares its own ceiling, once for each transport. */
 export function plannedRequests(cases, transportNames = REST_AND_GRPC) {
-  return cases.reduce((sum, item) => sum + item.requests * transportNames.length, 0);
+  return cases.reduce(
+    (sum, item) =>
+      sum +
+      item.requests *
+        transportNames.filter(
+          (name) => item.transports === undefined || item.transports.includes(name),
+        ).length,
+    0,
+  );
 }
 
 /** A run that would stop on its budget is not started. */

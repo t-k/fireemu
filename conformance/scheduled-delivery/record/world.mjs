@@ -33,7 +33,14 @@ const SCHEDULES = {
   schedFailV1: 300_000,
 };
 
-export function createWorld({ hooks = {}, leaveOnDelete = [], failDeploy = false } = {}) {
+export function createWorld({
+  hooks = {},
+  leaveOnDelete = [],
+  failDeploy = false,
+  listPageSize = 0,
+  logPageSize = 0,
+  v1Operations = false,
+} = {}) {
   const w = {
     now: START,
     calls: [],
@@ -193,7 +200,17 @@ export function createWorld({ hooks = {}, leaveOnDelete = [], failDeploy = false
     };
   };
 
-  const page = (items, key) => reply(200, items.length ? { [key]: items } : {});
+  const page = (items, key, url) => {
+    if (!listPageSize || !url) return reply(200, items.length ? { [key]: items } : {});
+    const start = Number(url.searchParams.get("pageToken") ?? 0);
+    const slice = items.slice(start, start + listPageSize);
+    return reply(200, {
+      ...(slice.length ? { [key]: slice } : {}),
+      ...(start + listPageSize < items.length
+        ? { nextPageToken: String(start + listPageSize) }
+        : {}),
+    });
+  };
   w.send = async (request) => {
     const url = new URL(request.url);
     const method = request.method;
@@ -228,7 +245,7 @@ export function createWorld({ hooks = {}, leaveOnDelete = [], failDeploy = false
       const v = path.startsWith("/v1/") ? w.functionsV1 : w.functionsV2;
       if (path.includes("/operations/"))
         return reply(200, { name: path.split("/").slice(-1)[0], done: true });
-      if (path.endsWith("/functions")) return page([...v.values()], "functions");
+      if (path.endsWith("/functions")) return page([...v.values()], "functions", url);
       const name = path.slice(path.indexOf("/projects/") + 1);
       if (method === "GET") return v.has(name) ? reply(200, v.get(name)) : notFound(name);
       if (method === "DELETE") {
@@ -237,7 +254,10 @@ export function createWorld({ hooks = {}, leaveOnDelete = [], failDeploy = false
         const fn = name.split("/").at(-1);
         w.runServices.delete(runServiceId(fn));
         return reply(200, {
-          name: "projects/" + PROJECT + "/locations/" + REGION + "/operations/del-" + ++w.insert,
+          name:
+            v1Operations && path.startsWith("/v1/")
+              ? "operations/del-" + ++w.insert
+              : "projects/" + PROJECT + "/locations/" + REGION + "/operations/del-" + ++w.insert,
           done: false,
         });
       }
@@ -248,10 +268,12 @@ export function createWorld({ hooks = {}, leaveOnDelete = [], failDeploy = false
           name: "projects/" + PROJECT + "/locations/" + REGION + "/services/" + id,
         })),
         "services",
+        url,
       );
     if (url.hostname === "artifactregistry.googleapis.com") return reply(200, {});
     if (url.hostname === "cloudscheduler.googleapis.com") {
-      if (path.endsWith("/jobs") && method === "GET") return page([...w.jobs.values()], "jobs");
+      if (path.endsWith("/jobs") && method === "GET")
+        return page([...w.jobs.values()], "jobs", url);
       if (path.endsWith("/jobs") && method === "POST") {
         const id = body.name.split("/").at(-1);
         w.creates.push(id);
@@ -280,11 +302,13 @@ export function createWorld({ hooks = {}, leaveOnDelete = [], failDeploy = false
         return page(
           [...w.topics].map((id) => ({ name: topicName(id) })),
           "topics",
+          url,
         );
       if (path.endsWith("/subscriptions"))
         return page(
           [...w.subs.keys()].map((n) => ({ name: n })),
           "subscriptions",
+          url,
         );
       const topic = /\/topics\/([^/:]+)$/.exec(path);
       if (topic) {
@@ -329,12 +353,11 @@ export function createWorld({ hooks = {}, leaveOnDelete = [], failDeploy = false
           : e.resource.type !== "cloud_scheduler_job";
       });
       const start = body.pageToken ? Number(body.pageToken) : 0;
-      const slice = hits.slice(start, start + body.pageSize);
+      const size = logPageSize || body.pageSize;
+      const slice = hits.slice(start, start + size);
       return reply(200, {
         ...(slice.length ? { entries: slice } : {}),
-        ...(start + body.pageSize < hits.length
-          ? { nextPageToken: String(start + body.pageSize) }
-          : {}),
+        ...(start + size < hits.length ? { nextPageToken: String(start + size) } : {}),
       });
     }
     throw new Error("world: unexpected " + key);

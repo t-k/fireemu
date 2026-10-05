@@ -12,8 +12,8 @@
 //   17-digit message id as `eventId`, the topic as `resource.name`, `resource.type` the PubsubMessage type, and the
 //   message's publish time (milliseconds at most, trailing zeros dropped) as `timestamp`.
 //
-// The Authorization (OIDC) header, trace headers and client addresses of the recording are not reproduced: nothing
-// here can sign a token for Google, and no handler that does not read them can tell.
+// The Authorization (OIDC) header, trace headers, `forwarded` and `x-forwarded-for` of the recording are not
+// reproduced: nothing here can sign a token for Google, and the others carry a trace id and a client address.
 import { createHash } from "node:crypto";
 
 const INSTANT = /^(\d{4})-(\d\d)-(\d\d)T(\d\d):(\d\d):(\d\d)(?:\.(\d{1,9}))?Z$/;
@@ -76,14 +76,33 @@ export function schedulerJobId(jobName) {
   return jobName.split("/").at(-1);
 }
 
+const NAME = /^[A-Za-z0-9-]+$/;
+
+/**
+ * The public host of a function: `<region>-<project>.cloudfunctions.net`, from the project and location of a job's
+ * resource name (recorded: `us-central1-<project>.cloudfunctions.net` in all 150 Gen2 frames). A job id alone names
+ * neither, and then no host is invented.
+ */
+function functionHost(jobName) {
+  const match = /^projects\/([^/]*)\/locations\/([^/]*)\/jobs\//.exec(String(jobName));
+  return match && NAME.test(match[1]) && NAME.test(match[2])
+    ? `${match[2]}-${match[1]}.cloudfunctions.net`
+    : undefined;
+}
+
 /** The request production's Cloud Scheduler sends a Gen2 function, as an Express-like object. */
 export function schedulerRequest({ jobName, scheduleTime }) {
+  const host = functionHost(jobName);
   const headers = {
     "x-cloudscheduler": "true",
     "x-cloudscheduler-jobname": schedulerJobId(jobName),
     "x-cloudscheduler-scheduletime": schedulerTimestamp(scheduleTime),
     "user-agent": "Google-Cloud-Scheduler",
     "content-length": "0",
+    // constant in every recorded frame: the front end's encodings and protocol
+    "accept-encoding": "gzip, deflate, br",
+    "x-forwarded-proto": "https",
+    ...(host ? { host } : {}),
   };
   const header = (name) => headers[String(name).toLowerCase()];
   return {

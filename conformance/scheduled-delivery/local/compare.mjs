@@ -223,7 +223,7 @@ export function rows(production, local) {
     "the five headers a handler can depend on; the job id is compared by value",
   );
   // Every name production sent, against every name fireemu sends, in both directions: only the headers nothing here
-  // can reproduce (the OIDC credential, the trace and the forwarding headers) are expected to be missing.
+  // can reproduce (the OIDC credential, the trace headers, `forwarded` and `x-forwarded-for`) are expected to be missing.
   const UNREPRODUCIBLE = [
     "authorization",
     "forwarded",
@@ -251,7 +251,7 @@ export function rows(production, local) {
     missing.length === 0 && extra.length === 0 && lNames.length > 0
       ? ""
       : declared
-        ? `declared: not reproduced ${missing.join(", ")} (the OIDC credential, trace and forwarding headers; nothing here can sign for Google)`
+        ? `declared: not reproduced ${missing.join(", ")} (the OIDC credential, trace headers, forwarded and x-forwarded-for; nothing here can sign for Google)`
         : `UNEXPECTED: missing ${missing.join(", ") || "none"}; extra ${extra.join(", ") || "none"}`,
   );
   const pLengths = unique(pv2.map((f) => f.rawBodyLength));

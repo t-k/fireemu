@@ -30,7 +30,7 @@ A manual run (`functions/{name}:run`) is Fireemu control, not Cloud Scheduler's 
 
 ## What still differs
 
-Unreproducible: the OIDC `authorization` header and the trace and forwarding headers. Not determined by the recording:
+Unreproducible: the OIDC `authorization` header, the trace headers (`traceparent`, `x-cloud-trace-context`), `forwarded` and `x-forwarded-for` (a trace id and a client address); the constant `accept-encoding`, `x-forwarded-proto` and `host` are sent. Not determined by the recording:
 
 - The **phase of an interval schedule**. The first natural occurrence of the `every 1 minutes` job `schedOkV2` was on the minute (the `scheduleTime` of the create response), and every later one carried the same fraction of a second (`.416739` across 15 occurrences); the jobs' phases (`:01.416739`, `:03.352477`, `:01.751605`) do not follow their creation instants (`userUpdateTime` 08:40:31.496745, 08:40:32.682527, 08:40:33.554275), so the anchor is not the creation second or its fraction, and nothing in the recording says what it is. fireemu runs an interval on the minute.
 - The **alignment of an `every 5 minutes` job** after forced runs: the occurrence after a forced run moved (the 01:45:00 occurrence was not run naturally and the next was 01:48:01.75), while the forced run of the `every 1 minutes` job did not displace its natural occurrence (01:43:01.416739 was delivered twice). fireemu runs the job on the five-minute boundary.

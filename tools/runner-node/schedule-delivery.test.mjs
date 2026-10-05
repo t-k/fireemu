@@ -69,6 +69,10 @@ test("the request is the recorded one: POST /, the scheduler headers, an empty b
     "x-cloudscheduler-scheduletime": "2026-10-05T01:45:00-07:00",
     "user-agent": "Google-Cloud-Scheduler",
     "content-length": "0",
+    // constant in all 150 recorded Gen2 frames (host: the function's public host, <region>-<project>.cloudfunctions.net)
+    "accept-encoding": "gzip, deflate, br",
+    "x-forwarded-proto": "https",
+    host: "us-central1-demo-app.cloudfunctions.net",
   });
   assert.equal(req.header("X-CloudScheduler-JobName"), "firebase-schedule-schedOkV2-us-central1");
   assert.equal(req.header("X-CloudScheduler-ScheduleTime"), "2026-10-05T01:45:00-07:00");
@@ -211,4 +215,30 @@ withSdk("the real onSchedule failing is a failed delivery, and the SDK's own han
   });
   await assert.rejects(deliverSchedule(fn, { jobName: JOB, scheduleTime: "2026-10-05T08:45:00Z" }), /answered 500/);
   assert.equal(ran, 1);
+});
+
+test("the host is the function's public host from the job's project and region, and is left out when the job name carries neither", () => {
+  const host = (jobName) =>
+    schedulerRequest({ jobName, scheduleTime: "2026-10-05T08:45:00Z" }).headers.host;
+  assert.equal(host(JOB), "us-central1-demo-app.cloudfunctions.net");
+  assert.equal(
+    host("projects/other-app/locations/asia-northeast1/jobs/firebase-schedule-x-asia-northeast1"),
+    "asia-northeast1-other-app.cloudfunctions.net",
+  );
+  // a bare job id names no project or region: no host is invented
+  assert.equal(host("firebase-schedule-x-us-central1"), undefined);
+  assert.equal(
+    "host" in
+      schedulerRequest({ jobName: "firebase-schedule-x-us-central1", scheduleTime: "2026-10-05T08:45:00Z" })
+        .headers,
+    false,
+  );
+  // a project or region segment that is not a plain name is not put into a host
+  for (const bad of [
+    "projects//locations/us-central1/jobs/x",
+    "projects/p/locations//jobs/x",
+    "projects/p.q/locations/us-central1/jobs/x",
+    "projects/p/locations/us central1/jobs/x",
+  ])
+    assert.equal(host(bad), undefined, bad);
 });

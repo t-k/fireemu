@@ -201,9 +201,17 @@ fn same_layout(a: &Ordered, b: &Ordered) -> bool {
 fn same_set(a: &Ordered, b: &Ordered) -> bool {
     match (a, b) {
         (Ordered::Object(x), Ordered::Object(y)) => {
+            // As multisets: a repeated member counts as often as it is written, so that a map with a
+            // duplicate key never equals one without.
+            let count = |members: &[(String, Ordered)], key: &str, value: &Ordered| {
+                members
+                    .iter()
+                    .filter(|(k, v)| k == key && v == value)
+                    .count()
+            };
             x.len() == y.len()
                 && x.iter()
-                    .all(|(key, value)| y.iter().any(|(k, v)| k == key && v == value))
+                    .all(|(key, value)| count(x, key, value) == count(y, key, value))
         }
         (x, y) => x == y,
     }
@@ -288,6 +296,31 @@ fn the_comparison_checks_member_order_except_inside_an_error_infos_metadata() {
     let one = info(r#"{"a":"1","b":"2"}"#);
     // The metadata of an ErrorInfo is a map: any order is the same.
     assert!(same_layout(&one, &info(r#"{"b":"2","a":"1"}"#)));
+    // A repeated member is counted: duplicates are the same only with the same multiplicity.
+    assert!(same_layout(
+        &info(r#"{"a":"1","a":"2"}"#),
+        &info(r#"{"a":"2","a":"1"}"#)
+    ));
+    assert!(same_layout(
+        &info(r#"{"a":"1","a":"1"}"#),
+        &info(r#"{"a":"1","a":"1"}"#)
+    ));
+    assert!(!same_layout(
+        &info(r#"{"a":"1","a":"1"}"#),
+        &info(r#"{"a":"1","b":"2"}"#)
+    ));
+    assert!(!same_layout(
+        &info(r#"{"a":"1","b":"2"}"#),
+        &info(r#"{"a":"1","a":"1"}"#)
+    ));
+    assert!(!same_layout(
+        &info(r#"{"a":"1","a":"1","b":"2"}"#),
+        &info(r#"{"a":"1","b":"2","b":"2"}"#)
+    ));
+    assert!(!same_layout(
+        &info(r#"{"a":"1","a":"1"}"#),
+        &info(r#"{"a":"1","a":"2"}"#)
+    ));
     // But not a different member, a missing one, or a different value.
     assert!(!same_layout(&one, &info(r#"{"a":"1","c":"2"}"#)));
     assert!(!same_layout(&one, &info(r#"{"a":"1"}"#)));

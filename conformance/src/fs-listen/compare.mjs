@@ -42,10 +42,45 @@ function sortDocumentRuns(rows) {
   return out;
 }
 
+/**
+ * Production sends an ExistenceFilter (with a bloom filter of unchanged names) unprompted, and not
+ * every time: two recordings of the same native program differ only by a `filter` row, and by the
+ * boundary run it splits, in 7 rows (FS-LISTEN-SDK L1, runs nmuuicyas and nmuukwo6n:
+ * existence-filter/no-change, resume-token-expired/first, resume-token/first, fresh-control,
+ * unchanged, other-query, target-protocol/equality-only-query). Its presence is therefore not
+ * compared; its content is (see `filterKeys`). Removing it leaves the boundaries around it side by
+ * side, and those merge into one, as the recorder merges a run of boundaries.
+ */
+function withoutFilters(rows) {
+  const out = [];
+  let dropped = false;
+  for (const row of rows) {
+    if (row.kind === "filter") {
+      dropped = true;
+      continue;
+    }
+    const last = out.at(-1);
+    // Only the boundaries a dropped filter left side by side merge; others stay as recorded.
+    if (dropped && row.kind === "boundary" && last?.kind === "boundary")
+      out[out.length - 1] = { ...last, resumeToken: last.resumeToken || row.resumeToken };
+    else out.push(row);
+    dropped = false;
+  }
+  return out;
+}
+
+/** The existence filters of a row, as the sorted set of `targetId:count`. */
+export function filterKeys(row) {
+  const keys = (row.rows ?? [])
+    .filter((item) => item.kind === "filter")
+    .map((item) => `${item.targetId}:${item.count}`);
+  return [...new Set(keys)].toSorted();
+}
+
 /** What a row says when compared: no conditions, no timings, document runs as sets. */
 export function canonicalRow(row) {
   return {
-    ...(row.rows ? { rows: sortDocumentRuns(row.rows) } : {}),
+    ...(row.rows ? { rows: sortDocumentRuns(withoutFilters(row.rows)) } : {}),
     ...(row.groups ? { groups: row.groups.map((g) => ({ ...g, docs: g.docs.toSorted() })) } : {}),
     ...(row.observed ? { observed: row.observed } : {}),
     ...(row.failures ? { failures: row.failures } : {}),
@@ -54,17 +89,37 @@ export function canonicalRow(row) {
   };
 }
 
+/**
+ * Whether the last thing a row recorded is a REMOVE of the target(s) it added, with no CURRENT
+ * after it: a wait for CURRENT then ran out because the target is gone, which is the answer, not
+ * a missing one.
+ */
+function endsRemoved(row) {
+  const changes = (row.rows ?? []).filter((item) => item.kind === "targetChange");
+  const last = changes.at(-1);
+  return (
+    last?.type === "REMOVE" &&
+    last.cause !== null &&
+    !changes.some((item) => item.type === "CURRENT") &&
+    row.rows.at(-1) === last
+  );
+}
+
 /** MATCH, DIFFER or INDETERMINATE for two rows. */
 export function classifyRow(a, b) {
   // A row is unfinished when its wait ran out, its stream hit the frame cap or ended with no
   // status, or its program threw (the rest of that program never ran).
   const unfinished = (row) =>
-    row.timedOut === true ||
+    (row.timedOut === true && !endsRemoved(row)) ||
     row.programError === true ||
     row.end?.reason === "frame-cap" ||
     row.end?.reason === "ended-without-status";
   if (unfinished(a) || unfinished(b)) return "INDETERMINATE";
-  return isDeepStrictEqual(canonicalRow(a), canonicalRow(b)) ? "MATCH" : "DIFFER";
+  if (!isDeepStrictEqual(canonicalRow(a), canonicalRow(b))) return "DIFFER";
+  // Filters are optional, but two that came must say the same.
+  const [keysA, keysB] = [filterKeys(a), filterKeys(b)];
+  const comparable = keysA.length > 0 && keysB.length > 0;
+  return comparable && !isDeepStrictEqual(keysA, keysB) ? "DIFFER" : "MATCH";
 }
 
 const SETTLEMENT_MIN_AGE_MS = 10 * 60_000;

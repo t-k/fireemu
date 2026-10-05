@@ -3970,33 +3970,54 @@ impl FirestoreState {
         Ok(())
     }
 
-    /// Whether the locks `holder` took cover `write`: a document it read, or a document in the
-    /// range of a query it ran (see [`Self::range_covers_write`]).
-    fn holder_locks_write(&self, holder: &Transaction, write: &Write) -> bool {
-        holder.read_set.contains_key(write.op.path())
+    /// Whether the locks `holder` took cover a commit of `writes`: a document it read, or a
+    /// document in the range of a query it ran (see [`Self::range_covers_writes`]).
+    fn holder_locks_writes(&self, holder: &Transaction, writes: &[Write]) -> bool {
+        writes
+            .iter()
+            .any(|write| holder.read_set.contains_key(write.op.path()))
             || holder
                 .queries
                 .iter()
-                .any(|entry| self.range_covers_write(&entry.query, write))
+                .any(|entry| self.range_covers_writes(&entry.query, writes))
     }
 
-    /// Whether a query's lock covers `write`. Production locks the index range a query scans, so
-    /// a write that touches no document of that range does not wait: a write is covered when it
-    /// targets a document in the query's scope whose stored version, or the version the write
-    /// would store, passes the query's filter (a phantom entering the range, a member changed or
-    /// leaving it, a member deleted). A query without a filter locks its whole scope. The range
-    /// is judged by the filter alone: ordering, cursors, offset and limit are ignored, so the
-    /// lock is never narrower than the scan; a write whose result depends on a transform, or a
-    /// filter that cannot be evaluated, is covered too.
-    fn range_covers_write(&self, query: &Query, write: &Write) -> bool {
-        let path = write.op.path();
+    /// Whether a query's lock covers a commit of `writes`. Production locks the index range a
+    /// query scans, so a commit that touches no document of that range does not wait: a
+    /// document is covered when it is in the query's scope and its stored version, or the
+    /// version the commit would leave of it, passes the query's filter (a phantom entering the
+    /// range, a member changed or leaving it, a member deleted). The version left is the
+    /// result of all the writes of the commit to that document in order, because several
+    /// writes to one document can compose a result none of them has alone. A query without a
+    /// filter locks its whole scope. The range is judged by the filter alone: ordering,
+    /// cursors, offset and limit are ignored, so the lock is never narrower than the scan; a
+    /// document whose result depends on a transform, or a filter that cannot be evaluated, is
+    /// covered too.
+    fn range_covers_writes(&self, query: &Query, writes: &[Write]) -> bool {
+        let mut seen: Vec<&DocumentPath> = Vec::new();
+        for write in writes {
+            let path = write.op.path();
+            if seen.contains(&path) {
+                continue;
+            }
+            seen.push(path);
+            if self.range_covers_document(query, path, writes) {
+                return true;
+            }
+        }
+        false
+    }
+
+    /// [`Self::range_covers_writes`] for the one document `path`.
+    fn range_covers_document(&self, query: &Query, path: &DocumentPath, writes: &[Write]) -> bool {
         if !path_in_scope(path, &query.scope) {
             return false;
         }
         let Some(filter) = query.filter.as_ref() else {
             return true;
         };
-        if !write.transforms.is_empty() {
+        let own = || writes.iter().filter(|write| write.op.path() == path);
+        if own().any(|write| !write.transforms.is_empty()) {
             return true;
         }
         let passes = |document: &Document| eval_filter(filter, document).unwrap_or(true);
@@ -4004,10 +4025,14 @@ impl FirestoreState {
         if before.is_some_and(passes) {
             return true;
         }
-        match Self::preview_from(before, write, LogicalInstant::UNIX_EPOCH) {
-            Ok(after) => after.is_some_and(|document| passes(&document)),
-            Err(_) => true,
+        let mut current = before.cloned();
+        for write in own() {
+            match Self::preview_from(current.as_ref(), write, LogicalInstant::UNIX_EPOCH) {
+                Ok(next) => current = next,
+                Err(_) => return true,
+            }
         }
+        current.as_ref().is_some_and(passes)
     }
 
     /// Pessimistic locking, as production runs it (`concurrencyMode: PESSIMISTIC`, measured
@@ -4043,9 +4068,7 @@ impl FirestoreState {
                     && !holder.read_only
                     && holder.read_version >= floor
                     && own != Some(*id)
-                    && writes
-                        .iter()
-                        .any(|write| self.holder_locks_write(holder, write))
+                    && self.holder_locks_writes(holder, writes)
             })
             .map(|(_, holder)| holder.waiting_to_commit)
             .collect();
@@ -4077,9 +4100,7 @@ impl FirestoreState {
                     && !holder.read_only
                     && holder.read_version >= self.compaction_floor
                     && own != Some(*id)
-                    && writes
-                        .iter()
-                        .any(|write| self.holder_locks_write(holder, write))
+                    && self.holder_locks_writes(holder, writes)
             })
             .map(|(id, _)| id.clone())
             .collect()

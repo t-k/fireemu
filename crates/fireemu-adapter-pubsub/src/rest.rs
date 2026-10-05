@@ -596,7 +596,13 @@ fn dispatch_snapshot(
                     object_strings(body, "labels")?,
                     handle.now(),
                 )
-                .map_err(RestError::from_core)?;
+                .map_err(|error| {
+                    RestError::from_core(crate::admission::snapshot_creation_error(
+                        &name,
+                        error,
+                        handle.paging_policy,
+                    ))
+                })?;
             Ok((StatusCode::OK, snapshot_json(&snapshot)))
         }
         (&Method::GET, None) => {
@@ -1185,6 +1191,14 @@ fn seek(
 ) -> Result<(StatusCode, Value), RestError> {
     match (field(body, "snapshot"), field(body, "time")) {
         (Some(_), Some(_)) => {
+            if handle.paging_policy == crate::PagingPolicy::Strict {
+                let descriptions = ["Invalid value (oneof), oneof field 'target' is already set. Cannot set 'time'", "Invalid JSON payload received. Unknown name \"subscription\": Root element must be a message."];
+                let mut error = RestError::invalid(descriptions.join("\n"));
+                error.details = Some(
+                    json!([{"@type":"type.googleapis.com/google.rpc.BadRequest","fieldViolations":descriptions.map(|description|json!({"description":description}))}]),
+                );
+                return Err(error);
+            }
             return Err(RestError::invalid("seek takes either a time or a snapshot"));
         }
         (Some(snapshot), None) => {
@@ -1206,7 +1220,9 @@ fn seek(
                 .map_err(RestError::from_core)?;
         }
         (None, None) => {
-            return Err(RestError::invalid("seek requires a time or a snapshot"));
+            return Err(RestError::invalid(crate::admission::missing_seek_target(
+                handle.paging_policy,
+            )));
         }
     }
     Ok((StatusCode::OK, json!({})))

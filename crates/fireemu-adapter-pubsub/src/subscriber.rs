@@ -540,7 +540,13 @@ impl Subscriber for SubscriberService {
                 req.labels.into_iter().collect::<BTreeMap<_, _>>(),
                 self.handle.now(),
             )
-            .map_err(|e| status(&e))?;
+            .map_err(|e| {
+                status(&crate::admission::snapshot_creation_error(
+                    &req.name,
+                    e,
+                    self.handle.paging_policy,
+                ))
+            })?;
         Ok(Response::new(snapshot_to_proto(&snapshot)))
     }
 
@@ -610,7 +616,7 @@ impl Subscriber for SubscriberService {
                 Ok(Response::new(pb::SeekResponse::default()))
             }
             None => Err(Status::invalid_argument(
-                "seek requires a time or a snapshot",
+                crate::admission::missing_seek_target(self.handle.paging_policy),
             )),
         }
     }

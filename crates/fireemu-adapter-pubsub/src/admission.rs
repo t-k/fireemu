@@ -58,10 +58,48 @@ pub(crate) fn publish_request_size(value: usize) -> Result<()> {
     Ok(())
 }
 
+pub(crate) fn snapshot_creation_error(
+    name: &str,
+    error: PubSubError,
+    policy: crate::PagingPolicy,
+) -> PubSubError {
+    if policy == crate::PagingPolicy::Strict
+        && error.message() == "snapshot id must not start with the reserved prefix 'goog'"
+    {
+        fireemu_core_pubsub::name::invalid_resource_name(name)
+    } else {
+        error
+    }
+}
+
+pub(crate) const fn missing_seek_target(policy: crate::PagingPolicy) -> &'static str {
+    match policy {
+        crate::PagingPolicy::Strict => {
+            "No target was specified in the SeekRequest. Must specify either a time or a snapshot."
+        }
+        crate::PagingPolicy::Emulator => "seek requires a time or a snapshot",
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use proptest::prelude::*;
+
+    proptest! {
+        #[test]
+        fn snapshot_error_mapping_preserves_profile_and_full_name(id in "goog[a-z]{1,40}", strict in any::<bool>()) {
+            let name = format!("projects/demo-app/snapshots/{id}");
+            let policy = if strict {crate::PagingPolicy::Strict} else {crate::PagingPolicy::Emulator};
+            let original = "snapshot id must not start with the reserved prefix 'goog'";
+            let error = snapshot_creation_error(&name, PubSubError::invalid_argument(original), policy);
+            let expected = if strict {fireemu_core_pubsub::name::invalid_resource_name(&name).message().to_owned()} else {original.to_owned()};
+            prop_assert_eq!(error.message(),expected);
+            let other = snapshot_creation_error(&name,PubSubError::invalid_argument("unobserved diagnostic"),policy);
+            prop_assert_eq!(other.message(),"unobserved diagnostic");
+            prop_assert_eq!(missing_seek_target(policy), if strict {"No target was specified in the SeekRequest. Must specify either a time or a snapshot."}else{"seek requires a time or a snapshot"});
+        }
+    }
 
     proptest! {
         #[test]

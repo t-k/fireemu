@@ -3247,3 +3247,102 @@ async fn native_error_headers_preserve_recorded_anchors_and_missing_list_leaf() 
         }
     }
 }
+
+#[tokio::test]
+async fn recorded_snapshot_and_seek_refusals_preserve_profile_diagnostics() {
+    for policy in [
+        fireemu_adapter_pubsub::PagingPolicy::Strict,
+        fireemu_adapter_pubsub::PagingPolicy::Emulator,
+    ] {
+        let address = start_policy(policy).await;
+        let topic = "projects/demo-app/topics/snapshot-errors";
+        let sub = "projects/demo-app/subscriptions/snapshot-errors";
+        assert_eq!(
+            rest_request(address, "PUT", &format!("/v1/{topic}"), json!({}))
+                .await
+                .0,
+            200
+        );
+        assert_eq!(
+            rest_request(
+                address,
+                "PUT",
+                &format!("/v1/{sub}"),
+                json!({"topic":topic})
+            )
+            .await
+            .0,
+            200
+        );
+        let snapshot = "projects/demo-app/snapshots/goog-probe";
+        let (_, body) = rest_request(
+            address,
+            "PUT",
+            &format!("/v1/{snapshot}"),
+            json!({"subscription":sub}),
+        )
+        .await;
+        let expected_name = if policy == fireemu_adapter_pubsub::PagingPolicy::Strict {
+            format!("Invalid resource name given (name={snapshot}). Refer to https://cloud.google.com/pubsub/docs/pubsub-basics#resource_names for more information.")
+        } else {
+            "snapshot id must not start with the reserved prefix 'goog'".to_owned()
+        };
+        assert_eq!(body["error"]["message"], expected_name);
+        let mut native = SubscriberClient::new(grpc_channel(address).await);
+        let error = native
+            .create_snapshot(pb::CreateSnapshotRequest {
+                name: snapshot.into(),
+                subscription: sub.into(),
+                ..Default::default()
+            })
+            .await
+            .unwrap_err();
+        assert_eq!(error.message(), expected_name);
+        let expected_seek = if policy == fireemu_adapter_pubsub::PagingPolicy::Strict {
+            "No target was specified in the SeekRequest. Must specify either a time or a snapshot."
+        } else {
+            "seek requires a time or a snapshot"
+        };
+        let (_, body) = rest_request(address, "POST", &format!("/v1/{sub}:seek"), json!({})).await;
+        assert_eq!(body["error"]["message"], expected_seek);
+        let error = native
+            .seek(pb::SeekRequest {
+                subscription: sub.into(),
+                ..Default::default()
+            })
+            .await
+            .unwrap_err();
+        assert_eq!(error.message(), expected_seek);
+        let (_, body) = rest_request(
+            address,
+            "POST",
+            &format!("/v1/{sub}:seek"),
+            json!({"snapshot":"projects/demo-app/snapshots/absent","time":"2000-01-01T00:00:00Z"}),
+        )
+        .await;
+        if policy == fireemu_adapter_pubsub::PagingPolicy::Strict {
+            let descriptions = ["Invalid value (oneof), oneof field 'target' is already set. Cannot set 'time'", "Invalid JSON payload received. Unknown name \"subscription\": Root element must be a message."];
+            assert_eq!(body["error"]["message"], descriptions.join("\n"));
+            assert_eq!(
+                body["error"]["details"],
+                json!([{"@type":"type.googleapis.com/google.rpc.BadRequest","fieldViolations":descriptions.map(|description|json!({"description":description}))}])
+            );
+        } else {
+            assert_eq!(
+                body["error"]["message"],
+                "seek takes either a time or a snapshot"
+            );
+        }
+        assert_eq!(
+            rest_request(
+                address,
+                "POST",
+                &format!("/v1/{sub}:pull"),
+                json!({"maxMessages":1})
+            )
+            .await
+            .1,
+            json!({})
+        );
+    }
+}

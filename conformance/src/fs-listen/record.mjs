@@ -22,7 +22,7 @@
 
 import { execFile, spawn } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -384,32 +384,63 @@ export async function withOfficialEmulator({ script, args, rules, auth = false }
   return new Promise((resolve) => child.once("exit", resolve));
 }
 
-/** Runs `command` of this file inside a fireemu session and returns the recording it wrote. */
+const SOURCE_PATHS = ["crates", "Cargo.toml", "Cargo.lock"];
+const REPO = join(dirname(HERE), "../../..");
+
+const gitOut = async (...args) => (await execFileAsync("git", args, { cwd: REPO })).stdout.trim();
+
 /**
- * What a local recording was made with, so a later comparison can say which build it compared:
- * the source commit of the recorder's tree and the sha256 of the fireemu binary (none for the
- * official emulator, which is firebase-tools' own).
+ * What a local recording was made with, so a later comparison can say which build it compared.
+ * The recorder cannot know the commit a binary was built from, so it records what the tree holds
+ * and whether the binary can be of it: the source commit, the tree hash of `crates/` and the digest
+ * of `Cargo.lock` (the inputs of the build), whether those paths have uncommitted changes, the
+ * sha256 of the binary and whether the binary is newer than the last commit that changed them.
+ * None for the official emulator, which is firebase-tools' own.
  */
 export async function localProvenance({
   target,
   binaryPath,
   readBytes = readFile,
-  headOf = async () =>
-    (await execFileAsync("git", ["rev-parse", "HEAD"], { cwd: dirname(HERE) })).stdout.trim(),
+  git = gitOut,
+  mtimeSecondsOf = async (path) => Math.floor((await stat(path)).mtimeMs / 1000),
+  lockPath = join(REPO, "Cargo.lock"),
 }) {
-  let sourceCommit = null;
+  const ask = async (...args) => {
+    try {
+      return await git(...args);
+    } catch {
+      // Outside a git tree there is nothing to name.
+      return null;
+    }
+  };
+  const sourceCommit = await ask("rev-parse", "HEAD");
+  const cratesTree = await ask("rev-parse", "HEAD:crates");
+  const status = await ask("status", "--porcelain", "--", ...SOURCE_PATHS);
+  const lastChange = await ask("log", "-1", "--format=%ct", "--", ...SOURCE_PATHS);
+  const digestOf = async (path) =>
+    createHash("sha256")
+      .update(await readBytes(path))
+      .digest("hex");
+  const official = target === "official";
+  const binarySha256 = official ? null : await digestOf(binaryPath);
+  let cargoLockSha256 = null;
   try {
-    sourceCommit = await headOf();
+    cargoLockSha256 = await digestOf(lockPath);
   } catch {
-    // Outside a git tree there is no commit to name.
+    // No lock file beside this tree.
   }
-  const binarySha256 =
-    target === "official"
+  const changedAt = Number(lastChange);
+  const builtAfter =
+    official || lastChange === null || !Number.isFinite(changedAt)
       ? null
-      : createHash("sha256")
-          .update(await readBytes(binaryPath))
-          .digest("hex");
-  return { sourceCommit, binarySha256, target };
+      : (await mtimeSecondsOf(binaryPath)) >= changedAt;
+  return {
+    target,
+    sourceCommit,
+    buildInputs: { cratesTree, cargoLockSha256, dirty: status === null ? null : status !== "" },
+    binarySha256,
+    binaryBuiltAfterSource: builtAfter,
+  };
 }
 
 async function inFireemu(options, command, { rules } = {}) {

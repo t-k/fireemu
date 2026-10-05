@@ -312,11 +312,14 @@ test("settling an operation writes what it says, with the operation's name when 
   client.settleOperation(name, "create", read({ done: true }));
   client.settleOperation(name, "delete", read({ done: true, error: { code: 13 } }), op);
   client.settleOperation(name, "delete", read({}, false));
+  // An operation name that is not a string is no name: the kind stays plain.
+  client.settleOperation(name, "delete", read({ done: true }), 5);
+  client.settleOperation(name, "delete", read({ done: true }), null);
   assert.deepEqual(ledger.state().get(name).creates, [
     `ok@${op}`,
     `conflict@${op}`,
     `unknown@${op}`,
     "ok",
   ]);
-  assert.deepEqual(ledger.state().get(name).deletes, [`error@${op}`, "unknown"]);
+  assert.deepEqual(ledger.state().get(name).deletes, [`error@${op}`, "unknown", "ok", "ok"]);
 });

@@ -277,7 +277,12 @@ test("a channel a fresh list shows confirms its pending creation too", async () 
 });
 
 test("a read that is 2xx but does not show the channel confirms nothing: it is an error and nothing is deleted", async () => {
-  for (const readBody of [() => ({}), () => ({ name: mine("other") }), () => ({ raw: "<html>" })]) {
+  for (const readBody of [
+    () => ({}),
+    () => ({ name: mine("other") }),
+    () => ({ name: mine("plain").replace("us-central1", "europe-west1") }),
+    () => ({ raw: "<html>" }),
+  ]) {
     ledger = createLedger();
     const name = mine("plain");
     issue(name, "unknown");

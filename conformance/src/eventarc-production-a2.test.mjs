@@ -122,8 +122,8 @@ function recording(rows) {
   );
   return dir;
 }
-const io = (errors = []) => ({
-  stdout: { write: () => true },
+const io = (errors = [], out = []) => ({
+  stdout: { write: (text) => (out.push(text), true) },
   stderr: { write: (text) => errors.push(text) },
 });
 const deps = (extra = {}) => ({ now: () => T0 + MIN_A2_WAIT_MS, sleep: async () => {}, ...extra });
@@ -372,7 +372,14 @@ test("S3-v2: the later run reads a pending creation's operation first; absence a
   // An unknown creation with no operation to read, absent: not closable, reported as unconfirmed.
   const second = recording([[plain, "create", "unknown"]]);
   // The exit code says nothing was left or refused; the summary says it is not closable.
-  assert.equal(await main(a2(second, empty.host), {}, io(), deps()), 0);
+  const printed = [];
+  assert.equal(await main(a2(second, empty.host), {}, io([], printed), deps()), 0);
+  const line = JSON.parse(printed.join(""));
+  assert.deepEqual(
+    [line.closureReady, line.cleanup.unsettled, line.cleanup.unconfirmed],
+    [false, [plain], [plain]],
+    "the line the operator reads names the unconfirmed creation",
+  );
   const summary = summaryOf(second);
   assert.deepEqual(
     [summary.closureReady, summary.cleanup.unsettled, summary.cleanup.unconfirmed],

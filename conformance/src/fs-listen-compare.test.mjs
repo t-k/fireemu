@@ -1410,6 +1410,9 @@ test("describeRow quotes every kind of frame, its target ids, cause and token, a
     "ADD[1], boundary+token, CURRENT[1]+token | filters 1:1:12:4:7 1:2:12:4:7",
   );
   assert.equal(text([flt(3)]), " | filters 1:3:12:4:7");
+  // A filter without a bloom filter stays a frame of the row (it is compared there).
+  assert.equal(text([current, bare(2)]), "CURRENT[1]+token, filter(1,2)");
+  assert.equal(text([bare(2), flt(2)]), "filter(1,2) | filters 1:2:12:4:7");
   assert.equal(describeRow({}), "");
 });
 

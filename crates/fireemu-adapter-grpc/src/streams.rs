@@ -865,8 +865,10 @@ fn decode_refusal(id: i32, error: &Status) -> Vec<pb::ListenResponse> {
 }
 
 /// Bytes that are not a token at all: production removes the target with `INVALID_ARGUMENT` and
-/// sends no ADD (`native/resume-token/invalid`). The official emulator ignores the token and
-/// replays everything, so only strict refuses; the emulator profile resets.
+/// sends no ADD (`native/resume-token/invalid`, recorded with 11 bytes). The official emulator
+/// ignores the token and replays everything, so only strict refuses; the emulator profile resets.
+/// An empty token is not the recorded shape (production probably reads it as no token), so it is
+/// not refused and keeps the reset.
 fn malformed_token_refusal(
     ctx: &StreamContext,
     target: &pb::Target,
@@ -874,7 +876,8 @@ fn malformed_token_refusal(
 ) -> Option<pb::ListenResponse> {
     let malformed = matches!(
         &target.resume_type,
-        Some(pb::target::ResumeType::ResumeToken(bytes)) if !is_token_shaped(bytes)
+        Some(pb::target::ResumeType::ResumeToken(bytes))
+            if !bytes.is_empty() && !is_token_shaped(bytes)
     );
     (ctx.gateway.production_refusals() && malformed)
         .then(|| removed_with_cause(id, &Status::invalid_argument("bad resume token")))

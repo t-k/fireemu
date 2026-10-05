@@ -2906,6 +2906,27 @@ async fn target_zero_is_assigned_the_smallest_free_id_in_both_profiles() {
         tx.send(add_query_target(0, "open")).await.unwrap();
         let second = next_until(&mut responses, "NO_CHANGE[]").await;
         assert_eq!(second.first().map(String::as_str), Some("ADD[2]"));
+        handle.abort();
+    }
+}
+
+/// Unrecorded: production shows only ADD[1] and then ADD[2], which a counter would also give; the
+/// official emulator counts up and never reuses an id. Here the smallest free id is assigned, so
+/// a removed target's id comes round again. Not a refusal; kept apart from the recorded sequence.
+#[tokio::test]
+async fn unrecorded_a_freed_target_id_is_assigned_again() {
+    for profile in [Profile::Strict, Profile::Emulator] {
+        let (mut client, handle) = start_profile(profile).await;
+        let (tx, rx) = mpsc::channel(8);
+        let mut responses = client
+            .listen(ReceiverStream::new(rx))
+            .await
+            .unwrap()
+            .into_inner();
+        tx.send(add_query_target(0, "open")).await.unwrap();
+        next_until(&mut responses, "NO_CHANGE[]").await;
+        tx.send(add_query_target(0, "open")).await.unwrap();
+        next_until(&mut responses, "NO_CHANGE[]").await;
         // An id that was assigned is an id like any other: removing it removes that target.
         tx.send(pb::ListenRequest {
             database: DB.to_owned(),
@@ -2918,7 +2939,6 @@ async fn target_zero_is_assigned_the_smallest_free_id_in_both_profiles() {
             next_until(&mut responses, "REMOVE[1]").await,
             vec!["REMOVE[1]"]
         );
-        // The freed id is the next one assigned.
         tx.send(add_query_target(0, "open")).await.unwrap();
         let third = next_until(&mut responses, "NO_CHANGE[]").await;
         assert_eq!(third.first().map(String::as_str), Some("ADD[1]"));
@@ -3222,6 +3242,30 @@ async fn a_commit_is_followed_by_one_global_boundary_and_no_per_target_no_change
             next_until(&mut responses, "NO_CHANGE[]").await,
             vec!["DELETE a", "NO_CHANGE[]"]
         );
+        handle.abort();
+    }
+}
+
+/// Unrecorded: a `resume_token` that is present and empty. Production recorded 11 junk bytes; an
+/// empty token is probably read as no token there. Strict does not refuse it (the refusal is for
+/// the recorded shape: non-empty bytes that are not a token) and it keeps the reset, in both profiles.
+#[tokio::test]
+async fn unrecorded_an_empty_resume_token_is_not_refused() {
+    for profile in [Profile::Strict, Profile::Emulator] {
+        let (mut client, handle) = start_profile(profile).await;
+        let (tx, rx) = mpsc::channel(8);
+        let mut responses = client
+            .listen(ReceiverStream::new(rx))
+            .await
+            .unwrap()
+            .into_inner();
+        let mut request = add_query_target(1, "open");
+        if let Some(pb::listen_request::TargetChange::AddTarget(t)) = &mut request.target_change {
+            t.resume_type = Some(pb::target::ResumeType::ResumeToken(Vec::new()));
+        }
+        tx.send(request).await.unwrap();
+        let trace = next_until(&mut responses, "NO_CHANGE[]").await;
+        assert_eq!(trace[..2], ["ADD[1]", "RESET[1]"]);
         handle.abort();
     }
 }

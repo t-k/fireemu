@@ -5138,6 +5138,93 @@ mod task_completion_tests {
         }
     }
 
+    /// The delivered payload, not only the mapping function, names the writer by profile: a call
+    /// site that passed the commit's actor through raw would fail here (the live-daemon test of the
+    /// same behaviour is ignored by default).
+    #[tokio::test]
+    async fn the_reserved_payload_of_an_auth_context_event_names_its_writer_by_profile() {
+        use crate::events::{AuthContextNaming, OFFICIAL_AUTH_ID};
+        let base = runtime().await;
+        let commit_by = |auth_type: &str, auth_id: Option<&str>| {
+            let mut commit = created_commit();
+            commit.actor = Actor {
+                auth_type: auth_type.to_owned(),
+                auth_id: auth_id.map(str::to_owned),
+            };
+            // The fake runner's `withAuth` function listens on `audited/{id}`.
+            let path = DocumentPath::parse(
+                &ProjectId::try_new("demo-app").unwrap(),
+                &DatabaseId::try_new("(default)").unwrap(),
+                "audited/reserved",
+            )
+            .unwrap();
+            let mut change = commit.changes[0].clone();
+            change.path = path.clone();
+            if let Some(after) = change.after.as_mut() {
+                Arc::make_mut(after).path = path;
+            }
+            commit.changes = Arc::from([change]);
+            commit
+        };
+        let named = |runtime: &Arc<FunctionsRuntime>, commit: &CommitEvent| {
+            let reservation = runtime.reserve_commit_events(commit).unwrap();
+            let deliveries = reservation.deliveries.as_ref().unwrap();
+            assert_eq!(deliveries.len(), 1, "only the withAuth function listens");
+            let payload = &deliveries[0].payload.payload;
+            (
+                payload["authtype"].as_str().map(str::to_owned),
+                payload["authid"].as_str().map(str::to_owned),
+            )
+        };
+        let production =
+            |kind: &str, id: Option<&str>| (Some(kind.to_owned()), id.map(str::to_owned));
+        // Strict (the default): production's names.
+        for (actor, expected) in [
+            (
+                ("app_user", Some("alice")),
+                production("api_key", Some("alice")),
+            ),
+            (
+                ("service_account", Some("owner")),
+                production("unknown", Some("owner")),
+            ),
+            // Near miss: a principal production was not recorded with keeps its own name.
+            (
+                ("unauthenticated", None),
+                (Some("unauthenticated".to_owned()), None),
+            ),
+        ] {
+            assert_eq!(
+                named(&base, &commit_by(actor.0, actor.1)),
+                expected,
+                "{actor:?}"
+            );
+        }
+        // The emulator profile: the official emulator's constants for every writer.
+        let mut config = base.config.clone();
+        config.auth_context = AuthContextNaming::Official;
+        let official = FunctionsRuntime::new(
+            base.manifest.clone(),
+            config,
+            Arc::new(Mutex::new(VirtualClock::new(
+                LogicalInstant::from_unix_seconds(1_788_004_860),
+            ))),
+            base.runner(),
+            None,
+        );
+        for actor in [
+            ("app_user", Some("alice")),
+            ("service_account", Some("owner")),
+            ("unauthenticated", None),
+        ] {
+            assert_eq!(
+                named(&official, &commit_by(actor.0, actor.1)),
+                production("unknown", Some(OFFICIAL_AUTH_ID)),
+                "{actor:?}"
+            );
+        }
+    }
+
     #[tokio::test]
     async fn queued_event_retries_after_restart_budget_window_expires() {
         let runtime = runtime().await;

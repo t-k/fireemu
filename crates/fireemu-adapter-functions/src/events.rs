@@ -187,8 +187,13 @@ fn update_mask(before: &Document, after: &Document) -> Vec<String> {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum AuthContextNaming {
     /// Production's naming (the strict profile), recorded in FE v5 and v7: a write with a Firebase
-    /// ID token is `api_key` with the user's uid; a write with a service credential (the owner
-    /// principal here) is `unknown` with the credential's own id.
+    /// ID token is `api_key` with the user's uid; a write with the recorder's user credential (an
+    /// operator's OAuth login, which the owner principal stands for here) is `unknown` with the
+    /// credential's own id. What was recorded is narrower than what this maps: the ID-token
+    /// writes were email-and-password users (anonymous, custom-token and other provider tokens
+    /// were not recorded, and also map to `api_key`), and a write by a real service account, which
+    /// production documents as `service_account` with the account's email, was not recorded at all
+    /// (UNRECORDED; the owner principal still maps to the one recorded `unknown`).
     #[default]
     Production,
     /// The official emulator's (the emulator profile): its Firestore emulator

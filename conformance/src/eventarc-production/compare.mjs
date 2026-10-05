@@ -211,7 +211,7 @@ export function maskSizes(value) {
 }
 
 /** The byte counts a text names. */
-const sizesIn = (value) => JSON.stringify(value).match(/\((\d+) bytes\)/g) ?? [];
+const sizesIn = (value) => (JSON.stringify(value) ?? "").match(/\((\d+) bytes\)/g) ?? [];
 
 /** Whether every byte count in an answer is the serialized size of the request it answers. */
 export function sizesFollowRequest(row) {

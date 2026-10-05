@@ -1,9 +1,11 @@
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import { createServer } from "node:http";
 import { createHash } from "node:crypto";
 import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import test from "node:test";
 import {
   answerFamily,
@@ -362,6 +364,7 @@ async function listener(handler) {
       method: request.method,
       url: request.url,
       authorization: request.headers.authorization,
+      contentType: request.headers["content-type"],
       body,
     });
     const answer = handler(seen.at(-1));
@@ -520,4 +523,190 @@ test("the command line pairs two captures and replays one, and refuses a call wi
   assert.equal(replayed.profile, "strict");
   assert.deepEqual(replayed.total, { match: 1 });
   assert.equal(printed, "");
+});
+
+test("a length field grows a byte at 128, 16384 and 2097152, and an epoch second grows at 2^28", () => {
+  const event = { id: "a", source: "b", specVersion: "1.0", type: "t" };
+  const base = cloudEventSize(event) - 3;
+  for (const [length, prefix] of [
+    [127, 1],
+    [128, 2],
+    [16_383, 2],
+    [16_384, 3],
+    [2_097_151, 3],
+    [2_097_152, 4],
+  ])
+    assert.equal(
+      cloudEventSize({ ...event, id: "a".repeat(length) }),
+      base + 1 + prefix + length,
+      length,
+    );
+  // 2^28 seconds is the first value that needs five bytes: 1978-07-04T21:24:16Z.
+  const at = (text) => cloudEventSize({ ...event, attributes: { t: { ceTimestamp: text } } });
+  assert.equal(at("1978-07-04T21:24:15Z") + 1, at("1978-07-04T21:24:16Z"));
+  assert.equal(
+    cloudEventSize({ id: "a", source: "b", specVersion: "1.0" }),
+    11,
+    "a member that is absent counts nothing",
+  );
+  assert.equal(
+    cloudEventSize({ ...event, type: "" }),
+    11,
+    "and an empty one counts nothing either",
+  );
+});
+
+test("a byte count follows its request only for a publish whose body is known", () => {
+  const sized = {
+    request: {
+      method: "POST",
+      path: "/v1/projects/p/locations/l/channels/c:publishEvents",
+      body: { events: [] },
+    },
+    response: answered(400, { error: { message: "The event size (12 bytes) is too large." } }),
+  };
+  assert.equal(sizesFollowRequest(sized), false, "12 is not the size of this request");
+  assert.equal(
+    sizesFollowRequest({
+      ...sized,
+      request: { ...sized.request, path: "/v1/projects/p/locations/l/channels/c" },
+    }),
+    false,
+    "not a publish",
+  );
+  assert.equal(
+    sizesFollowRequest({ ...sized, request: { method: "POST", path: sized.request.path } }),
+    false,
+    "no body",
+  );
+  const rebuilt = {
+    ...sized,
+    request: {
+      ...sized.request,
+      body: { events: [{ textData: { omitted: { length: 5, sha256: "0".repeat(64) } } }] },
+    },
+  };
+  assert.equal(sizesFollowRequest(rebuilt), false, "a body that cannot be rebuilt");
+  const none = {
+    request: { method: "GET", path: "/v1/projects/p/locations/l/channels" },
+    response: answered(404, { error: { message: "no count" } }),
+  };
+  assert.equal(sizesFollowRequest(none), true, "no byte count to check");
+  assert.equal(sizesFollowRequest({ ...none, response: undefined }), true);
+  const right = structuredClone(sized);
+  right.response.body.error.message = `The event size (${publishRequestSize("projects/p/locations/l/channels/c", [])} bytes) is too large.`;
+  assert.equal(sizesFollowRequest(right), true);
+  const one = structuredClone(right);
+  one.response.body.error.message = `${right.response.body.error.message} and (${publishRequestSize("projects/p/locations/l/channels/c", [])} bytes)`;
+  assert.equal(sizesFollowRequest(one), true, "every count in the answer is checked");
+  one.response.body.error.message += " and (3 bytes)";
+  assert.equal(sizesFollowRequest(one), false);
+});
+
+test("JSON of different kinds is never the same, and the path of a difference is the point where the kinds part", () => {
+  for (const [a, b] of [
+    [null, {}],
+    [{}, null],
+    ["x", {}],
+    [{}, "x"],
+    [1, 2],
+    [[], null],
+    [null, []],
+    [{ a: 1 }, "x"],
+    ["x", { a: 1 }],
+    [{ a: 1 }, null],
+  ])
+    assert.equal(sameJson(a, b), false, `${JSON.stringify(a)} ${JSON.stringify(b)}`);
+  for (const [a, b] of [
+    [null, { a: 1 }],
+    [{ a: 1 }, null],
+    ["x", { a: 1 }],
+    [{ a: 1 }, "x"],
+    ["x", "y"],
+    [1, 2],
+    [[], {}],
+  ])
+    assert.deepEqual(diffPaths(a, b), ["$"], `${JSON.stringify(a)} ${JSON.stringify(b)}`);
+  assert.deepEqual(diffPaths({ a: 1 }, { a: 1 }), []);
+});
+
+test("an answer family cuts the message at 70 characters, and a summary names its rows", () => {
+  const message = "a".repeat(100);
+  assert.equal(
+    answerFamily(answered(400, { error: { status: "X", message } })),
+    `400 X ${"a".repeat(70)}`,
+  );
+  assert.equal(answerFamily(answered(400, { error: { status: "X" } })), "400 X");
+  const results = [
+    { n: 1, family: "f", verdict: "match" },
+    { n: 2, family: "f", verdict: "diverge" },
+    { n: 3, family: "g", verdict: "skipped" },
+  ];
+  assert.deepEqual(summarize(results), {
+    total: { match: 1, diverge: 1, skipped: 1 },
+    families: {
+      f: { match: 1, diverge: 1, skipped: 0, rows: [1, 2] },
+      g: { match: 0, diverge: 0, skipped: 1, rows: [3] },
+    },
+  });
+});
+
+test("a replay sends a content type only with a body, and keeps at most 4096 characters of an answer that is not JSON", async (t) => {
+  const server = await listener(({ method }) => ({
+    status: 200,
+    text: method === "GET" ? "x".repeat(5000) : "{}",
+  }));
+  t.after(server.close);
+  const post = entry({ request: { method: "POST", path: "/p", body: {} } });
+  const get = entry({ request: { method: "GET", path: "/g" } });
+  const results = await replay([get, post], { base: server.base });
+  assert.deepEqual(
+    server.seen.map((item) => item.contentType),
+    [undefined, "application/json"],
+  );
+  assert.equal(results[0].actual.body.raw.length, 4096);
+});
+
+test("the command line refuses each missing argument of a replay and says what it takes", async () => {
+  let printed = "";
+  const io = {
+    stdout: { write: (text) => (printed += text) },
+    stderr: { write: (text) => (printed += text) },
+  };
+  for (const args of [
+    ["--base", "http://x", "--profile", "p"],
+    ["--capture", "c", "--profile", "p"],
+    ["--capture", "c", "--base", "http://x"],
+  ]) {
+    printed = "";
+    assert.equal(await main(["replay", ...args], io), 2, args.join(" "));
+    assert.match(printed, /replay needs --capture, --base and --profile/);
+  }
+  printed = "";
+  assert.equal(await main(["other"], io), 2);
+  assert.equal(printed, "usage: compare.mjs pair|replay ...\n");
+  printed = "";
+  assert.equal(await main(["pair", "--b", "x"], io), 2);
+  assert.match(printed, /pair needs --a and --b/);
+});
+
+test("run as a program, the tool takes its command from the first argument", () => {
+  const dir = mkdtempSync(join(tmpdir(), "eventarc-compare-cli-"));
+  const capture = (runId) => {
+    const path = join(dir, `capture-${runId}.jsonl`);
+    const lines = [{ at: "x", note: "run-start", runId }, entry({})];
+    writeFileSync(path, `${lines.map((line) => JSON.stringify(line)).join("\n")}\n`);
+    return path;
+  };
+  const program = fileURLToPath(new URL("./eventarc-production/compare.mjs", import.meta.url));
+  const done = spawnSync(
+    process.execPath,
+    [program, "pair", "--a", capture("aaaaaaaaaaaa"), "--b", capture("bbbbbbbbbbbb")],
+    { encoding: "utf8" },
+  );
+  assert.equal(done.status, 0, done.stderr);
+  assert.deepEqual(JSON.parse(done.stdout).counts, { identical: 1 });
+  const refused = spawnSync(process.execPath, [program], { encoding: "utf8" });
+  assert.equal(refused.status, 2);
+  assert.match(refused.stderr, /usage: compare.mjs pair\|replay/);
 });

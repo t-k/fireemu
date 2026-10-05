@@ -135,3 +135,20 @@ test("a clean run stays far inside the request ceiling with the probe (171 reque
   assert.ok(result.attempted < NORMAL_CEILING / 1.5);
   assert.equal(journal.filter((r) => r.state === "issued").length, 18);
 });
+
+test("a long refusal message is kept to 300 characters in the result (the journal has it whole)", async () => {
+  const long = "m".repeat(450);
+  const { result, journal } = await go({
+    hooks: {
+      ["POST " + JOBS]: async ({ body }) =>
+        body.name.endsWith(RETRY5)
+          ? reply(400, { error: { code: 400, message: long, status: "INVALID_ARGUMENT" } })
+          : undefined,
+    },
+  });
+  assert.equal(result.extraAnswers.retry5.message, "m".repeat(300));
+  const row = journal.find(
+    (r) => r.id === "create-extra-retry5" && r.state === "response-persisted",
+  );
+  assert.ok(Buffer.from(row.bodyBase64, "base64").toString().includes(long));
+});

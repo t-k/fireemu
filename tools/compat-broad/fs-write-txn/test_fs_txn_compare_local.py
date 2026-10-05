@@ -273,6 +273,20 @@ def test_a_retention_read_row_is_judged_by_class_and_by_state_only_when_both_sid
     assert row["production"]["code"] == 3 and row["local"]["code"] == 9 and row["class"] == {"production": "refused", "local": "refused"}
 
 
+def test_a_retention_batch_of_missing_documents_is_not_a_document_the_other_side_must_match():
+    sites = frozenset({"rest/ret/get-59"})
+    judge = lambda production, local: tool.compare(production, local, None, {}, retention=sites)[1][0]   # noqa: E731
+    # the database was younger than the read time on one side: its batch answered code 0 with the documents missing
+    assert judge(read_projection(0, None, {"a": None}), read_projection(0, None, {"a": "v1"}))["match"] is True
+    assert judge(read_projection(0, None, {"a": "v1"}), read_projection(0, None, {"a": None}))["match"] is True
+    assert judge(read_projection(0, None, {"a": None}), read_projection(0, None, {"a": None}))["match"] is True
+    # a batch that found a document on both sides still agrees on every document
+    assert judge(read_projection(0, None, {"a": "v1", "b": None}), read_projection(0, None, {"a": "v1", "b": None}))["match"] is True
+    assert judge(read_projection(0, None, {"a": "v1", "b": None}), read_projection(0, None, {"a": "v1", "b": "v2"}))["match"] is False
+    # a refusal against missing documents is still a class mismatch
+    assert judge(read_projection(9), read_projection(0, None, {"a": None}))["match"] is False
+
+
 def test_a_read_that_is_not_a_retention_read_still_compares_code_and_state():
     row = tool.compare(read_projection(3), read_projection(9), None, {}, retention=frozenset({"x"}))[1][0]
     assert row["match"] is False and "class" not in row

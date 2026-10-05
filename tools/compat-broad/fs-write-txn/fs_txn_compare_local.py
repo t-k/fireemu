@@ -136,6 +136,12 @@ def compare_clock(production, local):
             for site in sorted(set(production) | set(local))]
 
 
+def found_a_document(read):
+    """Whether a read answered with a document: a get with code 0 does, a batch get does when at least one of its documents exists (a batch of missing documents is code 0 as well)."""
+    documents = read.get("documents")
+    return read["code"] == 0 and (documents is None or any(state is not None for state in documents.values()))
+
+
 def compare(production, local, production_relations, local_relations, project=DEFAULT_PROJECT, retention=frozenset()):
     cases, reads, times = [], [], []
     by_case = {case["caseId"]: case for case in local["cases"]}
@@ -156,9 +162,9 @@ def compare(production, local, production_relations, local_relations, project=DE
         other = by_site.get(read["site"])
         row = lambda value: None if value is None else {"code": value["code"], "state": value.get("state"), "documents": value.get("documents")}  # noqa: E731
         if read["site"] in retention:
-            # a read at a time ago: both sides accepted the read time or both refused it, and when both found the document its state agrees as well
+            # a read at a time ago: both sides accepted the read time or both refused it, and when both found a document its state agrees as well
             classes = {"production": outcome_class(read["code"]), "local": None if other is None else outcome_class(other["code"])}
-            same = classes["production"] == classes["local"] and (read["code"] != 0 or other["code"] != 0 or row(read) == row(other))
+            same = classes["production"] == classes["local"] and (not found_a_document(read) or not found_a_document(other) or row(read) == row(other))
             reads.append({"site": read["site"], "production": row(read), "local": row(other), "match": same, "class": classes})
             continue
         reads.append({"site": read["site"], "production": row(read), "local": row(other), "match": row(read) == row(other)})

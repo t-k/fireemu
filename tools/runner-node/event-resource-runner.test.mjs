@@ -513,5 +513,8 @@ for (const form of ['endpoint', 'legacy']) {
     assert.equal(context.timestamp, '2026-10-04T19:48:48.931Z');
     assert.equal(context.eventType, 'google.pubsub.topic.publish');
     assert.deepEqual(context.resource, { name: 'projects/fireemu-oracle-events/topics/fe-events-primary', service: 'pubsub.googleapis.com', type: 'type.googleapis.com/google.pubsub.v1.PubsubMessage' });
+    // The timestamp is the publish instant of the message, not the admission instant a Storage event carries.
+    assert.equal((await f.invoke('onPublish', 'pubsub', event, { admittedAt: '2030-01-01T00:00:00.123Z' })).ok, true);
+    assert.equal((await f.calls()).at(-1).context.timestamp, '2026-10-04T19:48:48.931Z');
   });
 }

@@ -4605,6 +4605,25 @@ async fn messages_published_through_the_runtime_get_seventeen_digit_decimal_ids(
 }
 
 #[tokio::test]
+async fn messages_published_to_a_topic_nobody_listens_to_still_get_different_ids() {
+    // Pub/Sub assigns ids even when nothing is subscribed; no delivery advances the counter here,
+    // so the publish itself must.
+    let (runtime, _clock) = start().await;
+    let ids = runtime.publish(
+        "nobody",
+        &[
+            serde_json::json!({"data": "YQ=="}),
+            serde_json::json!({"data": "Yg=="}),
+            serde_json::json!({"data": "Yw=="}),
+        ],
+    );
+    let mut distinct = ids.clone();
+    distinct.sort();
+    distinct.dedup();
+    assert_eq!(distinct.len(), 3, "{ids:?}");
+}
+
+#[tokio::test]
 async fn diagnostic_retention_is_bounded_and_counters_survive_eviction() {
     // FN-RET-01 / 03 / 04: completing twice the retention budget leaves a bounded window in
     // the order the records were made, while the cumulative counters keep every outcome.

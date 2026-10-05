@@ -1020,6 +1020,30 @@ fn epoch_millis() -> u64 {
         .map_or(0, |d| u64::try_from(d.as_millis()).unwrap_or(u64::MAX))
 }
 
+/// Where the message of a first-generation schedule goes. In production Cloud Scheduler publishes one message to the
+/// job's Pub/Sub topic for every occurrence and every forced run, and the function's handler is the topic's subscriber:
+/// the message carries the attribute `scheduled: "true"` and no data (runs `156715222b86ea44` and `f123d4fa2d61c5f5`), and
+/// the handler's context reports the message's id as `eventId` and its publish time as `timestamp`. A profile that
+/// reproduces this installs a publisher; the runtime still delivers the schedule event to the handler itself, and
+/// tells the publisher to publish the message the handler's context names.
+pub trait ScheduleTopicPublisher: Send + Sync {
+    /// Publishes the message of one occurrence to `topic` (the topic's id, `firebase-schedule-<name>-<region>`) with the
+    /// identifier `message_id` and the publish time `at`.
+    fn publish(&self, topic: &str, message_id: &str, at: LogicalInstant);
+}
+
+/// The Pub/Sub message id of the `ordinal`-th event of a session: 17 digits, the first a 2, the form of the ids the
+/// recordings show. Distinct ordinals of one session give distinct ids (the map is a bijection modulo 10^16 on the
+/// ordinals below it: its multiplier is coprime to 10).
+#[must_use]
+pub fn schedule_message_id(session: SessionId, ordinal: u64) -> String {
+    const MODULUS: u128 = 10_000_000_000_000_000;
+    const MULTIPLIER: u128 = 6_364_136_223_846_793_003;
+    let offset = session.value() % MODULUS;
+    let digits = (u128::from(ordinal) * MULTIPLIER + offset) % MODULUS;
+    format!("2{digits:016}")
+}
+
 /// The runtime.
 ///
 /// A project may declare several Functions codebases (`functions` as an array in
@@ -1028,6 +1052,9 @@ fn epoch_millis() -> u64 {
 /// are unioned so that every trigger match, schedule, retry and HTTP route is decided once,
 /// and each function is invoked on the runner of the codebase that exported it.
 pub struct FunctionsRuntime {
+    /// Where a first-generation schedule's message goes, when the profile materialises it (see
+    /// [`ScheduleTopicPublisher`]).
+    schedule_publisher: std::sync::RwLock<Option<Arc<dyn ScheduleTopicPublisher>>>,
     /// The union of every codebase's manifest.
     manifest: FunctionManifest,
     config: FunctionsConfig,
@@ -1293,6 +1320,7 @@ impl FunctionsRuntime {
             faults: Mutex::new(None),
             callable_trust: std::sync::RwLock::new(None),
             callable_auth_verifier: std::sync::RwLock::new(None),
+            schedule_publisher: std::sync::RwLock::new(None),
             background_triggers: std::sync::atomic::AtomicBool::new(true),
             trigger_generation: std::sync::atomic::AtomicU64::new(0),
             shutting_down: std::sync::atomic::AtomicBool::new(false),
@@ -1583,6 +1611,28 @@ impl FunctionsRuntime {
     #[must_use]
     pub fn callable_trust(&self) -> Option<Arc<crate::callable::CallableTrust>> {
         self.callable_trust.read().ok().and_then(|t| t.clone())
+    }
+
+    /// Installs the publisher of first-generation schedule messages (see [`ScheduleTopicPublisher`]). Without one, a
+    /// schedule publishes nothing and its event carries no message id.
+    pub fn set_schedule_topic_publisher(&self, publisher: Arc<dyn ScheduleTopicPublisher>) {
+        if let Ok(mut slot) = self.schedule_publisher.write() {
+            *slot = Some(publisher);
+        }
+    }
+
+    fn schedule_topic_publisher(&self) -> Option<Arc<dyn ScheduleTopicPublisher>> {
+        self.schedule_publisher
+            .read()
+            .ok()
+            .and_then(|slot| slot.clone())
+    }
+
+    /// The topic a schedule run of `function` publishes to, when a publisher is installed and the function is a
+    /// first-generation schedule.
+    fn schedule_message_topic(&self, function: &str) -> Option<String> {
+        self.schedule_topic_publisher()?;
+        self.manifest.get(function)?.schedule_topic()
     }
 
     /// Installs the Auth verifier used by strict callable ingress.
@@ -2894,6 +2944,8 @@ impl FunctionsRuntime {
         // The handlers executing before this sweep: under `skip-in-flight` only these suppress an occurrence, never a
         // run this same sweep admitted (a jump over several occurrences runs each, as each would have run when it came).
         let executing: BTreeSet<String> = inner.running.values().cloned().collect();
+        // The messages of the first-generation runs this sweep admits: published after the lock is released.
+        let mut messages: Vec<(String, String, LogicalInstant)> = Vec::new();
         for (index, (function, region, at)) in runs.iter().enumerate() {
             if self.config.overlap == OverlapPolicy::SkipInFlight && executing.contains(function) {
                 inner.record_invocation(InvocationRecord {
@@ -2907,8 +2959,14 @@ impl FunctionsRuntime {
             if !self.admit_scheduled_run(&mut inner, function) {
                 continue;
             }
-            let id = format!("{}-{}", self.config.session.value(), inner.next_event + 1);
-            let payload = schedule_event(&id, &self.config.project, region, function, *at);
+            let ordinal = inner.next_event + 1;
+            let id = format!("{}-{}", self.config.session.value(), ordinal);
+            let mut payload = schedule_event(&id, &self.config.project, region, function, *at);
+            let message = self.schedule_message_topic(function).map(|topic| {
+                let message_id = schedule_message_id(self.config.session, ordinal);
+                payload["data"]["messageId"] = Value::String(message_id.clone());
+                (topic, message_id, *at)
+            });
             if self.enqueue_schedule_run(
                 &mut inner,
                 EventSource::Scheduler,
@@ -2917,6 +2975,7 @@ impl FunctionsRuntime {
                 &payload,
             ) {
                 enqueued = true;
+                messages.extend(message);
                 continue;
             }
             // Refused for capacity: move back the cursor of every job with a run not admitted
@@ -2945,8 +3004,23 @@ impl FunctionsRuntime {
             }
         }
         drop(inner);
+        self.publish_schedule_messages(&messages);
         if enqueued {
             self.wake.notify_one();
+        }
+    }
+
+    /// Publishes the messages of admitted first-generation schedule runs, outside the runtime's lock (the broker may
+    /// call back into the runtime to deliver to a subscribed function).
+    fn publish_schedule_messages(&self, messages: &[(String, String, LogicalInstant)]) {
+        if messages.is_empty() {
+            return;
+        }
+        let Some(publisher) = self.schedule_topic_publisher() else {
+            return;
+        };
+        for (topic, message_id, at) in messages {
+            publisher.publish(topic, message_id, *at);
         }
     }
 
@@ -3077,14 +3151,21 @@ impl FunctionsRuntime {
                 self.config.overlap
             )));
         }
-        let id = format!("{}-{}", self.config.session.value(), inner.next_event + 1);
-        let payload = schedule_event(&id, &self.config.project, &f.region, function, now);
+        let ordinal = inner.next_event + 1;
+        let id = format!("{}-{}", self.config.session.value(), ordinal);
+        let mut payload = schedule_event(&id, &self.config.project, &f.region, function, now);
+        let message = self.schedule_message_topic(function).map(|topic| {
+            let message_id = schedule_message_id(self.config.session, ordinal);
+            payload["data"]["messageId"] = Value::String(message_id.clone());
+            (topic, message_id, now)
+        });
         if !self.enqueue_schedule_run(&mut inner, EventSource::Manual, function, now, &payload) {
             return Err(ScheduleRunError::Capacity(format!(
                 "the functions event queue is at capacity; the run of {function:?} was not enqueued"
             )));
         }
         drop(inner);
+        self.publish_schedule_messages(&message.into_iter().collect::<Vec<_>>());
         self.wake.notify_one();
         Ok(())
     }
@@ -5598,6 +5679,7 @@ mod schedule_capacity_tests {
     use fireemu_core_types::ids::SessionId;
     use fireemu_core_types::time::{LogicalDuration, LogicalInstant};
     use proptest::strategy::Strategy as _;
+    use serde_json::json;
     use std::sync::{Arc, Mutex};
     use std::time::Duration;
 
@@ -6833,6 +6915,219 @@ mod schedule_capacity_tests {
             assert!(outcomes(&runtime, "tick").is_empty(), "{overlap:?}");
             assert_eq!(runtime.status()["overlapRejected"], 0, "{overlap:?}");
             finish(&runtime).await;
+        }
+    }
+
+    /// Records what a first-generation schedule publishes: (topic, message id, publish time).
+    #[derive(Default)]
+    struct Recorder(Mutex<Vec<(String, String, LogicalInstant)>>);
+
+    impl super::ScheduleTopicPublisher for Recorder {
+        fn publish(&self, topic: &str, message_id: &str, at: LogicalInstant) {
+            self.0
+                .lock()
+                .unwrap()
+                .push((topic.to_owned(), message_id.to_owned(), at));
+        }
+    }
+
+    fn recorded(recorder: &Recorder) -> Vec<(String, String, LogicalInstant)> {
+        recorder.0.lock().unwrap().clone()
+    }
+
+    /// The `data.messageId` of each queued schedule run, in admission order.
+    fn queued_message_ids(runtime: &FunctionsRuntime) -> Vec<Option<String>> {
+        let inner = runtime.inner.lock().unwrap();
+        inner
+            .payloads
+            .values()
+            .map(|queued| {
+                queued.payload["data"]["messageId"]
+                    .as_str()
+                    .map(str::to_owned)
+            })
+            .collect()
+    }
+
+    fn is_message_id(id: &str) -> bool {
+        id.len() == 17 && id.starts_with('2') && id.bytes().all(|b| b.is_ascii_digit())
+    }
+
+    /// Cloud Scheduler publishes a message to the job's topic for every occurrence of a first-generation schedule (runs
+    /// `156715222b86ea44` and `f123d4fa2d61c5f5`): the message has the id the handler's context reports and the time of
+    /// the occurrence, and each occurrence has its own id.
+    #[tokio::test]
+    async fn a_first_generation_schedule_publishes_its_message_at_each_occurrence() {
+        let (runtime, clock) = runtime_with(
+            CatchUpPolicy::All,
+            super::OverlapPolicy::Allow,
+            100_000,
+            START,
+        )
+        .await;
+        let recorder = Arc::new(Recorder::default());
+        runtime.set_schedule_topic_publisher(recorder.clone());
+        advance(&clock, 5 * 60);
+        runtime.on_clock_changed();
+        advance(&clock, 5 * 60);
+        runtime.on_clock_changed();
+        let published = recorded(&recorder);
+        assert_eq!(published.len(), 2);
+        for (topic, id, _) in &published {
+            assert_eq!(topic, "firebase-schedule-tick-us-central1");
+            assert!(is_message_id(id), "{id}");
+        }
+        assert_ne!(published[0].1, published[1].1);
+        assert_eq!(
+            published[0].2,
+            LogicalInstant::from_unix_seconds(1_788_004_860 + 300 - (1_788_004_860 % 300))
+        );
+        assert_eq!(
+            published[1].2.as_nanos() - published[0].2.as_nanos(),
+            300_000_000_000
+        );
+        // the queued event carries the same id, so the handler's context and the message agree
+        assert_eq!(
+            queued_message_ids(&runtime),
+            published
+                .iter()
+                .map(|p| Some(p.1.clone()))
+                .collect::<Vec<_>>()
+        );
+        finish(&runtime).await;
+    }
+
+    /// A second-generation schedule has no topic in production (its job calls the function's URL): a publisher is
+    /// never asked, and the event has no message id, whatever else is scheduled.
+    #[tokio::test]
+    async fn a_second_generation_schedule_publishes_nothing() {
+        let spec = SpawnSpec {
+            command: vec![
+                "python3".to_owned(),
+                concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fake_runner.py").to_owned(),
+            ],
+            cwd: None,
+            env: Vec::new(),
+            hello_timeout: Duration::from_secs(60),
+        };
+        let runner = Runner::spawn_spec(&spec).await.unwrap();
+        let manifest = parse_manifest(&json!({"functions": [
+            {"name": "tickV2", "generation": 2, "trigger": {"type": "schedule", "schedule": "every 5 minutes"}}
+        ]}))
+        .unwrap();
+        let clock = Arc::new(Mutex::new(VirtualClock::new(
+            LogicalInstant::from_unix_seconds(START),
+        )));
+        let runtime = FunctionsRuntime::new(
+            manifest,
+            FunctionsConfig {
+                project: "demo-app".to_owned(),
+                default_bucket: "demo-app.appspot.com".to_owned(),
+                location: "nam5".to_owned(),
+                session: SessionId::new(7),
+                max_running: 4,
+                debug_mode: false,
+                retry_attempts: 1,
+                max_catch_up_runs: 100_000,
+                runner_secret: "test-secret".to_owned(),
+                overlap: super::OverlapPolicy::Allow,
+                catch_up: CatchUpPolicy::All,
+                functions_host: Some("127.0.0.1:5001".to_owned()),
+            },
+            clock.clone(),
+            Arc::new(runner),
+            Some(spec),
+        );
+        let recorder = Arc::new(Recorder::default());
+        runtime.set_schedule_topic_publisher(recorder.clone());
+        advance(&clock, 5 * 60);
+        runtime.on_clock_changed();
+        runtime.run_schedule("tickV2").unwrap();
+        assert!(recorded(&recorder).is_empty());
+        assert_eq!(queued_message_ids(&runtime), vec![None, None]);
+        finish(&runtime).await;
+    }
+
+    /// Nothing changes without a publisher (the emulator profile): no message, and the event has no `messageId`.
+    #[tokio::test]
+    async fn without_a_publisher_a_schedule_publishes_nothing_and_carries_no_message_id() {
+        let (runtime, clock) = runtime(CatchUpPolicy::All).await;
+        advance(&clock, 5 * 60);
+        runtime.on_clock_changed();
+        assert_eq!(queued_message_ids(&runtime), vec![None]);
+        finish(&runtime).await;
+    }
+
+    /// A manual run (Cloud Scheduler's run-now) publishes too: the forced runs of the recordings did.
+    #[tokio::test]
+    async fn a_manual_run_of_a_first_generation_schedule_publishes_its_message() {
+        let (runtime, clock) = runtime(CatchUpPolicy::All).await;
+        let recorder = Arc::new(Recorder::default());
+        runtime.set_schedule_topic_publisher(recorder.clone());
+        advance(&clock, 17);
+        runtime.run_schedule("tick").unwrap();
+        let published = recorded(&recorder);
+        assert_eq!(published.len(), 1);
+        assert_eq!(published[0].0, "firebase-schedule-tick-us-central1");
+        assert!(is_message_id(&published[0].1));
+        assert_eq!(
+            published[0].2,
+            LogicalInstant::from_unix_seconds(START + 17)
+        );
+        assert_eq!(
+            queued_message_ids(&runtime),
+            vec![Some(published[0].1.clone())]
+        );
+        finish(&runtime).await;
+    }
+
+    /// An occurrence that is not admitted publishes nothing: skipped or rejected for overlap, or refused for capacity (it
+    /// publishes once, when it is admitted later).
+    #[tokio::test]
+    async fn an_occurrence_that_is_not_admitted_publishes_nothing_until_it_is() {
+        use super::OverlapPolicy;
+        let (first, first_clock) =
+            runtime_with(CatchUpPolicy::All, OverlapPolicy::Skip, 100_000, START).await;
+        let recorder = Arc::new(Recorder::default());
+        first.set_schedule_topic_publisher(recorder.clone());
+        advance(&first_clock, 5 * 60);
+        first.on_clock_changed();
+        advance(&first_clock, 5 * 60);
+        first.on_clock_changed();
+        assert_eq!(recorded(&recorder).len(), 1, "the second was skipped");
+        finish(&first).await;
+
+        let (second, second_clock) = runtime(CatchUpPolicy::All).await;
+        let recorder = Arc::new(Recorder::default());
+        second.set_schedule_topic_publisher(recorder.clone());
+        set_room(&second, 0);
+        advance(&second_clock, 5 * 60);
+        second.on_clock_changed();
+        assert!(recorded(&recorder).is_empty(), "refused for capacity");
+        second.inner.lock().unwrap().reserved_event_records = 0;
+        second.on_clock_changed();
+        let published = recorded(&recorder);
+        assert_eq!(published.len(), 1, "published once it was admitted");
+        assert_eq!(
+            published[0].2,
+            LogicalInstant::from_unix_seconds(1_788_004_860 + 300 - (1_788_004_860 % 300))
+        );
+        finish(&second).await;
+    }
+
+    proptest::proptest! {
+        /// A message id is 17 digits starting with 2, and no two events of one session share one.
+        #[test]
+        fn schedule_message_ids_are_well_formed_and_distinct(
+            session in proptest::num::u128::ANY,
+            first in 0_u64..1_000_000_000_000,
+            gap in 1_u64..1_000_000,
+        ) {
+            let a = super::schedule_message_id(SessionId::new(session), first);
+            let b = super::schedule_message_id(SessionId::new(session), first + gap);
+            proptest::prop_assert!(is_message_id(&a), "{}", a);
+            proptest::prop_assert!(is_message_id(&b), "{}", b);
+            proptest::prop_assert_ne!(a, b);
         }
     }
 

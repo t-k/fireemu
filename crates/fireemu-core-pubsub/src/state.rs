@@ -1047,6 +1047,43 @@ impl PubSubState {
         messages: Vec<PubsubMessage>,
         now: LogicalInstant,
     ) -> Result<PreparedPublication> {
+        self.prepare_publish_numbered(
+            topic,
+            messages.into_iter().map(|m| (m, None)).collect(),
+            now,
+        )
+    }
+
+    /// Like [`Self::prepare_publish`], but every message carries the identifier the caller chose (the one a service that
+    /// publishes on its own behalf, such as Cloud Scheduler for a first-generation schedule, stamps on its message). The
+    /// counter that numbers ordinary publishes is not used, so it does not move.
+    pub fn prepare_publish_with_message_ids(
+        &mut self,
+        topic: &TopicName,
+        messages: Vec<(PubsubMessage, String)>,
+        now: LogicalInstant,
+    ) -> Result<PreparedPublication> {
+        let mut seen = BTreeSet::new();
+        for (_, id) in &messages {
+            if id.is_empty() || !seen.insert(id.as_str()) {
+                return Err(PubSubError::invalid_argument(
+                    "a message identifier must be non-empty and unique within one publication",
+                ));
+            }
+        }
+        self.prepare_publish_numbered(
+            topic,
+            messages.into_iter().map(|(m, id)| (m, Some(id))).collect(),
+            now,
+        )
+    }
+
+    fn prepare_publish_numbered(
+        &mut self,
+        topic: &TopicName,
+        messages: Vec<(PubsubMessage, Option<String>)>,
+        now: LogicalInstant,
+    ) -> Result<PreparedPublication> {
         let topic_key = topic.to_full();
         let topic_incarnation = self
             .topics
@@ -1058,7 +1095,7 @@ impl PubSubState {
                 "a publish request carries at most {MAX_MESSAGES_PER_PUBLISH} messages"
             )));
         }
-        for message in &messages {
+        for (message, _) in &messages {
             message.validate()?;
         }
         self.remove_expired_snapshots(now);
@@ -1066,11 +1103,15 @@ impl PubSubState {
         let initial_message_counter = self.message_counter;
         let mut next_message_counter = initial_message_counter;
         let mut published = Vec::with_capacity(messages.len());
-        for message in messages {
-            next_message_counter = next_message_counter.checked_add(1).ok_or_else(|| {
-                PubSubError::resource_exhausted("Pub/Sub message identifier space exhausted")
-            })?;
-            let message_id = next_message_counter.to_string();
+        for (message, chosen) in messages {
+            let message_id = if let Some(id) = chosen {
+                id
+            } else {
+                next_message_counter = next_message_counter.checked_add(1).ok_or_else(|| {
+                    PubSubError::resource_exhausted("Pub/Sub message identifier space exhausted")
+                })?;
+                next_message_counter.to_string()
+            };
             published.push(Arc::new(StoredMessage {
                 message_id,
                 publish_time: now,
@@ -1241,6 +1282,18 @@ impl PubSubState {
                 .map(|message| message.message_id.clone())
                 .collect()
         })
+    }
+
+    /// Publishes messages that carry the identifier the caller chose, at `now`, fanning them out like
+    /// [`Self::publish`]. The ordinary message counter is left alone.
+    pub fn publish_with_message_ids(
+        &mut self,
+        topic: &TopicName,
+        messages: Vec<(PubsubMessage, String)>,
+        now: LogicalInstant,
+    ) -> Result<Vec<Arc<StoredMessage>>> {
+        let prepared = self.prepare_publish_with_message_ids(topic, messages, now)?;
+        self.commit_prepared(prepared, now)
     }
 
     /// Publishes messages and returns the shared stored records used by every subscription.
@@ -1561,11 +1614,126 @@ mod tests {
         }
     }
 
+    proptest::proptest! {
+        /// Whatever the interleaving of ordinary publishes and publishes with chosen identifiers, the ordinary ones are
+        /// numbered 1, 2, 3 ... in order (the chosen ones never use up a number) and a chosen identifier is kept.
+        #[test]
+        fn chosen_identifiers_never_disturb_the_ordinary_numbering(
+            steps in proptest::collection::vec(proptest::bool::ANY, 1..40)
+        ) {
+            let mut s = PubSubState::new(7);
+            let now = LogicalInstant::from_unix_seconds(10);
+            s.create_topic(topic("demo-app", "jobs"), BTreeMap::new()).unwrap();
+            let mut ordinary = 0_u64;
+            for (index, chosen) in steps.into_iter().enumerate() {
+                if chosen {
+                    let id = format!("2{:016}", index as u64 * 7919);
+                    let message = PubsubMessage {
+                        attributes: BTreeMap::from([("scheduled".to_owned(), "true".to_owned())]),
+                        ..PubsubMessage::default()
+                    };
+                    let published = s
+                        .publish_with_message_ids(&topic("demo-app", "jobs"), vec![(message, id.clone())], now)
+                        .unwrap();
+                    proptest::prop_assert_eq!(&published[0].message_id, &id);
+                } else {
+                    ordinary += 1;
+                    let ids = s.publish(&topic("demo-app", "jobs"), vec![data(b"x")], now).unwrap();
+                    proptest::prop_assert_eq!(ids, vec![ordinary.to_string()]);
+                }
+            }
+        }
+    }
+
     fn data(d: &[u8]) -> PubsubMessage {
         PubsubMessage {
             data: d.to_vec(),
             ..PubsubMessage::default()
         }
+    }
+
+    /// A message published with a caller-chosen id (the one Cloud Scheduler's Gen1 publish carries) keeps that id and
+    /// the given publish time, is seen by every subscription, and leaves the counter that numbers ordinary publishes
+    /// alone, so the next ordinary message still gets the next number.
+    #[test]
+    fn publish_with_message_ids_keeps_the_id_and_the_time_and_leaves_the_counter() {
+        let mut s = PubSubState::new(42);
+        let at = LogicalInstant::from_unix_seconds(1000);
+        s.create_topic(topic("demo-app", "jobs"), BTreeMap::new())
+            .unwrap();
+        s.create_subscription(sub_cfg("demo-app", "jobs-sub", "jobs", Filter::always()))
+            .unwrap();
+        let attributes = BTreeMap::from([("scheduled".to_owned(), "true".to_owned())]);
+        let message = PubsubMessage {
+            attributes: attributes.clone(),
+            ..PubsubMessage::default()
+        };
+        let published = s
+            .publish_with_message_ids(
+                &topic("demo-app", "jobs"),
+                vec![(message, "21339796619509982".to_owned())],
+                at,
+            )
+            .unwrap();
+        assert_eq!(published.len(), 1);
+        assert_eq!(published[0].message_id, "21339796619509982");
+        assert_eq!(published[0].publish_time, at);
+        let subscription = SubscriptionName::new("demo-app", "jobs-sub").unwrap();
+        let later = LogicalInstant::from_unix_seconds(2000);
+        let pulled = s.pull(&subscription, 10, later).unwrap();
+        assert_eq!(pulled.len(), 1);
+        assert_eq!(pulled[0].message.message_id, "21339796619509982");
+        assert_eq!(pulled[0].message.publish_time, at);
+        assert!(pulled[0].message.message.data.is_empty());
+        assert_eq!(pulled[0].message.message.attributes, attributes);
+        // the counter of ordinary publishes did not move
+        let ids = s
+            .publish(&topic("demo-app", "jobs"), vec![data(b"x")], later)
+            .unwrap();
+        assert_eq!(ids, vec!["1".to_owned()]);
+    }
+
+    /// An explicit id is refused when it is empty or already names a message the topic's snapshots or subscriptions may
+    /// hold (a duplicate within one call), and an unknown topic is still not found: nothing is published then.
+    #[test]
+    fn publish_with_message_ids_refuses_what_publish_refuses_and_a_bad_id() {
+        let mut s = PubSubState::new(42);
+        let at = LogicalInstant::from_unix_seconds(1000);
+        let attrs = || PubsubMessage {
+            attributes: BTreeMap::from([("scheduled".to_owned(), "true".to_owned())]),
+            ..PubsubMessage::default()
+        };
+        assert!(s
+            .publish_with_message_ids(
+                &topic("demo-app", "missing"),
+                vec![(attrs(), "2111".to_owned())],
+                at
+            )
+            .is_err());
+        s.create_topic(topic("demo-app", "jobs"), BTreeMap::new())
+            .unwrap();
+        assert!(s
+            .publish_with_message_ids(
+                &topic("demo-app", "jobs"),
+                vec![(attrs(), String::new())],
+                at
+            )
+            .is_err());
+        assert!(s
+            .publish_with_message_ids(
+                &topic("demo-app", "jobs"),
+                vec![(attrs(), "2111".to_owned()), (attrs(), "2111".to_owned())],
+                at
+            )
+            .is_err());
+        // a message with neither data nor attributes is refused as in an ordinary publish
+        assert!(s
+            .publish_with_message_ids(
+                &topic("demo-app", "jobs"),
+                vec![(PubsubMessage::default(), "2111".to_owned())],
+                at
+            )
+            .is_err());
     }
 
     #[test]

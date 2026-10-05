@@ -526,8 +526,23 @@ impl PubSubHandle {
         messages: Vec<PubsubMessage>,
     ) -> Result<Vec<Arc<StoredMessage>>, PubSubError> {
         let now = self.now();
+        self.publish_prepared(topic, now, |state| {
+            state.prepare_publish(topic, messages, now)
+        })
+    }
+
+    /// Admits and commits one publication that `prepare` builds against the locked state, at `now`, through the broker and
+    /// every configured topic delivery bridge.
+    fn publish_prepared(
+        &self,
+        topic: &TopicName,
+        now: LogicalInstant,
+        prepare: impl FnOnce(
+            &mut PubSubState,
+        ) -> Result<fireemu_core_pubsub::PreparedPublication, PubSubError>,
+    ) -> Result<Vec<Arc<StoredMessage>>, PubSubError> {
         let mut state = self.state();
-        let prepared = state.prepare_publish(topic, messages, now)?;
+        let prepared = prepare(&mut state)?;
         let bridge_reservation = self
             .bridge
             .as_ref()
@@ -561,6 +576,22 @@ impl PubSubHandle {
     ) -> Result<Vec<Arc<StoredMessage>>, PubSubError> {
         let _publication = self.lock_publication();
         self.publish_locked(topic, messages)
+    }
+
+    /// Publishes messages that carry the identifier the caller chose, stamped with the publish time `at` (the instant of
+    /// the occurrence that caused them), through the same admission and bridges as [`Self::publish`]. Cloud Scheduler's
+    /// publish for a first-generation schedule is one: the message id and the publish time are the ones the handler's
+    /// context reports.
+    pub fn publish_with_message_ids(
+        &self,
+        topic: &TopicName,
+        messages: Vec<(PubsubMessage, String)>,
+        at: LogicalInstant,
+    ) -> Result<Vec<Arc<StoredMessage>>, PubSubError> {
+        let _publication = self.lock_publication();
+        self.publish_prepared(topic, at, |state| {
+            state.prepare_publish_with_message_ids(topic, messages, at)
+        })
     }
 
     /// Pulls from the broker and routes exhausted messages through the same publication
@@ -2140,6 +2171,101 @@ mod publication_gate_tests {
             ))),
             None,
         )
+    }
+
+    /// A publication with chosen identifiers reaches the subscriptions with that identifier and that publish time, and
+    /// reaches the topic-delivery bridge once, like any other publication.
+    #[test]
+    fn a_publication_with_chosen_identifiers_reaches_subscriptions_and_the_bridge() {
+        use fireemu_core_pubsub::{
+            Filter, PubsubMessage, SubscriptionConfig, SubscriptionName, TopicName,
+        };
+        use std::collections::BTreeMap;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        use super::{BridgeMessage, TopicDelivery, TopicDeliveryError, TopicDeliveryReservation};
+
+        struct Counting(Arc<AtomicUsize>, Arc<Mutex<Vec<(String, String)>>>);
+        struct Commit;
+        impl TopicDeliveryReservation for Commit {
+            fn commit(self: Box<Self>) {}
+        }
+        impl TopicDelivery for Counting {
+            fn reserve(
+                &self,
+                topic: &str,
+                messages: &[BridgeMessage],
+            ) -> Result<Box<dyn TopicDeliveryReservation>, TopicDeliveryError> {
+                self.0.fetch_add(1, Ordering::SeqCst);
+                for m in messages {
+                    self.1
+                        .lock()
+                        .unwrap()
+                        .push((topic.to_owned(), m.message.message_id.clone()));
+                }
+                Ok(Box::new(Commit))
+            }
+        }
+        let reserved = Arc::new(AtomicUsize::new(0));
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let state = Arc::new(Mutex::new(PubSubState::new(5)));
+        let handle = PubSubHandle::new(
+            state.clone(),
+            Arc::new(Mutex::new(VirtualClock::new(
+                LogicalInstant::from_unix_seconds(1_788_004_860),
+            ))),
+            Some(Arc::new(Counting(reserved.clone(), seen.clone()))),
+        );
+        let topic = TopicName::new("demo-app", "firebase-schedule-tick-us-central1").unwrap();
+        let subscription = SubscriptionName::new("demo-app", "watch").unwrap();
+        {
+            let mut state = state.lock().unwrap();
+            state.create_topic(topic.clone(), BTreeMap::new()).unwrap();
+            state
+                .create_subscription(SubscriptionConfig {
+                    retain_acked_messages: false,
+                    message_retention_duration: None,
+                    name: subscription.clone(),
+                    topic: topic.clone(),
+                    ack_deadline_seconds: 10,
+                    enable_message_ordering: false,
+                    filter: Filter::always(),
+                    dead_letter_policy: None,
+                    retry_policy: None,
+                    push_config: fireemu_core_pubsub::PushConfig::default(),
+                })
+                .unwrap();
+        }
+        let at = LogicalInstant::from_unix_seconds(1_788_004_800);
+        let message = PubsubMessage {
+            attributes: BTreeMap::from([("scheduled".to_owned(), "true".to_owned())]),
+            ..PubsubMessage::default()
+        };
+        let published = handle
+            .publish_with_message_ids(&topic, vec![(message, "21339796619509982".to_owned())], at)
+            .unwrap();
+        assert_eq!(published[0].message_id, "21339796619509982");
+        assert_eq!(published[0].publish_time, at);
+        assert_eq!(reserved.load(Ordering::SeqCst), 1);
+        assert_eq!(
+            seen.lock().unwrap().as_slice(),
+            [(topic.to_full(), "21339796619509982".to_owned())]
+        );
+        let pulled = handle.pull(&subscription, 10).unwrap();
+        assert_eq!(pulled.len(), 1);
+        assert_eq!(pulled[0].message.message_id, "21339796619509982");
+        assert_eq!(pulled[0].message.publish_time, at);
+        assert!(pulled[0].message.message.data.is_empty());
+        // an unknown topic publishes nothing and reserves nothing more
+        let other = TopicName::new("demo-app", "nope").unwrap();
+        assert!(handle
+            .publish_with_message_ids(
+                &other,
+                vec![(PubsubMessage::default(), "2000".to_owned())],
+                at
+            )
+            .is_err());
+        assert_eq!(reserved.load(Ordering::SeqCst), 1);
     }
 
     /// PUBGATE-1: the publication gate is held across the control-plane transitions that

@@ -547,8 +547,11 @@ fn assemble_adapters(bound: BoundStartup) -> Result<ServiceAssembly, String> {
     }
     let pubsub_resources = if pubsub_listener.is_some() {
         if let Some(runtime) = &functions_runtime {
-            let resources =
-                functions::function_pubsub_resources(runtime.project(), runtime.manifest())?;
+            let resources = functions::function_pubsub_resources(
+                runtime.project(),
+                runtime.manifest(),
+                cfg.profile,
+            )?;
             let mut state = pubsub_state
                 .lock()
                 .map_err(|_| "the Pub/Sub state lock is poisoned".to_owned())?;
@@ -570,6 +573,15 @@ fn assemble_adapters(bound: BoundStartup) -> Result<ServiceAssembly, String> {
         clock.clone(),
         pubsub_bridge,
     );
+    // Under the strict profile a first-generation schedule's occurrence also puts its message on the job's topic, as Cloud
+    // Scheduler does; without a Pub/Sub listener there is no topic and nothing to publish to.
+    if pubsub_listener.is_some() && functions::uses_production_scheduler_defaults(cfg.profile) {
+        if let Some(runtime) = &functions_runtime {
+            runtime.set_schedule_topic_publisher(Arc::new(
+                functions::PubSubSchedulePublisher::new(pubsub_handle.clone(), runtime.project()),
+            ));
+        }
+    }
     let auth_policy = service_admission(
         app_check_gate.as_ref(),
         "auth",

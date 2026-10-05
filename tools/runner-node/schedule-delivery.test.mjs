@@ -154,6 +154,17 @@ test("the Gen1 context names the topic and the message, as recorded for pubsub.s
   assert.throws(() => v1ScheduleContext({ ...event, data: { jobName: "" } }), /job name/);
 });
 
+test("the Gen1 context reports the id of the message the runtime published when the event names one", () => {
+  const data = { jobName: "projects/demo-app/locations/us-central1/jobs/firebase-schedule-schedOkV1-us-central1", scheduleTime: "2026-10-05T08:41:00Z" };
+  const event = { id: "42-3", time: "2026-10-05T08:41:00Z", data: { ...data, messageId: "21339796619509982" } };
+  assert.equal(v1ScheduleContext(event).eventId, "21339796619509982");
+  // an event without one (the runtime published nothing) keeps the id derived from the event id
+  assert.equal(v1ScheduleContext({ ...event, data }).eventId, pubsubMessageId("42-3"));
+  // a message id that is not 17 digits starting with 2 is not trusted
+  for (const bad of ["", "1", "2133979661950998", "213397966195099821", "3133979661950998x", 21339796619509982, null])
+    assert.equal(v1ScheduleContext({ ...event, data: { ...data, messageId: bad } }).eventId, pubsubMessageId("42-3"), String(bad));
+});
+
 test("the instant check: nine fractional digits at most, the calendar must agree, and the message names the value", () => {
   assert.equal(schedulerTimestamp("2026-10-05T08:42:01.123456789Z"), "2026-10-05T01:42:01.123456789-07:00");
   assert.throws(() => schedulerTimestamp("2026-10-05T08:42:01.1234567890Z"), /scheduled time/);

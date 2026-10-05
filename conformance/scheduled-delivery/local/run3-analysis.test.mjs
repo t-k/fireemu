@@ -452,6 +452,11 @@ test("count: the window parsed from the answer, its absence, one pass, no chain 
     count2: chain("count", 800, [0, 4.6, 13.2, 23.7]),
   });
   assert.equal(same.reading, "limits coincide (first-limit and both-limits agree)");
+  const one = count(countJob({ maxRetryDuration: "30s" }), {
+    count: chain("count", 200, [0, 4.6, 13.2, 23.7]),
+    count2: [],
+  });
+  assert.equal(one.reading, "limits coincide (first-limit and both-limits agree)", "one pass");
   // four attempts where only the first-limit reading would predict three
   assert.equal(
     count(countJob({ maxRetryDuration: "30s" })).reading,

@@ -28,8 +28,6 @@ pub const MAX_REGISTERED_TRIGGERS: usize = 4096;
 pub const MAX_REGISTERED_TRIGGER_BYTES: usize = 16 * 1024 * 1024;
 /// Maximum expanded JSON definition accepted for one trigger.
 pub const MAX_TRIGGER_DEFINITION_BYTES: usize = 256 * 1024;
-/// Maximum `CloudEvents` accepted in one publish request before any matching work begins.
-pub const MAX_EVENTS_PER_PUBLISH: usize = 256;
 /// Firebase project IDs cannot exceed 63 bytes.
 pub const MAX_PROJECT_ID_BYTES: usize = 63;
 const MAX_TRIGGER_NAME_BYTES: usize = 8 * 1024;
@@ -344,6 +342,27 @@ impl TriggerRegistry {
             .values()
             .flatten()
             .any(|registration| registration.match_channel.starts_with(&prefix))
+    }
+
+    /// The channels the triggers of `project` declare in `location` (`-` is every location), by full
+    /// resource name, each once.
+    #[must_use]
+    pub fn declared_channels_in(&self, project: &str, location: &str) -> Vec<String> {
+        let prefix = if location == "-" {
+            format!("projects/{project}/locations/")
+        } else {
+            format!("projects/{project}/locations/{location}/channels/")
+        };
+        let mut names: Vec<String> = self
+            .events
+            .values()
+            .flatten()
+            .map(|registration| registration.match_channel.clone())
+            .filter(|channel| channel.starts_with(&prefix))
+            .collect();
+        names.sort();
+        names.dedup();
+        names
     }
 
     /// Resolves matching registrations to their local function names.
@@ -688,6 +707,22 @@ pub fn convert(proto: &Value) -> Result<PublishedEvent, String> {
     })
 }
 
+/// The sentence for an event the official publication handler refuses, or `None`: `if (!event.type)
+/// res.sendStatus(400)` refuses a missing `type` and a JavaScript-falsy one (`null`, `false`, `0`, `""`; a JSON
+/// body cannot hold `NaN`). Any other value passes the handler, a number, `true`, an object or an array
+/// included; what the conversion cannot use is logged and not delivered.
+#[must_use]
+pub fn missing_type(event: &Value) -> Option<String> {
+    let falsy = match event.get("type") {
+        None | Some(Value::Null) => true,
+        Some(Value::Bool(value)) => !value,
+        Some(Value::Number(number)) => number.as_f64().is_some_and(|value| value == 0.0),
+        Some(Value::String(text)) => text.is_empty(),
+        Some(Value::Array(_) | Value::Object(_)) => false,
+    };
+    falsy.then(|| "CloudEvent 'type' is required.".to_owned())
+}
+
 /// One event published on the `google` channel, which the emulator forwards verbatim.
 ///
 /// `triggerEventFunction` converts only for a custom channel
@@ -873,6 +908,26 @@ mod tests {
             "a location is a whole path segment"
         );
         assert!(!TriggerRegistry::default().declares_channel_in("p", "-"));
+        // The same question, answered with the names: sorted, each once, only the project's, and a
+        // location is a whole path segment.
+        assert_eq!(
+            registry.declared_channels_in("p", "us-central1"),
+            ["projects/p/locations/us-central1/channels/c1"]
+        );
+        assert_eq!(
+            registry.declared_channels_in("q", "-"),
+            ["projects/q/locations/europe-west1/channels/c2"]
+        );
+        assert_eq!(
+            registry.declared_channels_in("p", "-"),
+            registry.declared_channels_in("p", "us-central1")
+        );
+        assert!(registry.declared_channels_in("p", "europe-west1").is_empty());
+        assert!(registry.declared_channels_in("p", "us-central").is_empty());
+        assert!(registry.declared_channels_in("r", "-").is_empty());
+        assert!(TriggerRegistry::default()
+            .declared_channels_in("p", "-")
+            .is_empty());
     }
 
     #[test]

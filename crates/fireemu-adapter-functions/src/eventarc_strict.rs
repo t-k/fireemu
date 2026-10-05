@@ -1,36 +1,52 @@
 //! The strict profile's Eventarc surface: what production answered, as recorded.
 //!
-//! Source of every answer here is the EVENTARC stage A recordings (2026-10-05, two recordings of
-//! `fireemu-oracle-idp`; `tests/fixtures/eventarc-stage-a/rows.json` replays the second one). Those
-//! recordings never created a channel (the recorder's create body had no `name`, which production
-//! refused with `channel.name is empty`), so what production does with an existing channel is not
-//! observed. This module therefore says, for each decision, whether it is recorded or an inference:
+//! Sources, all of `fireemu-oracle-idp` on 2026-10-05: the two stage A recordings (no channel was ever
+//! created in them: the recorder's create body had no `name`, which production refused with
+//! `channel.name is empty`; `tests/fixtures/eventarc-stage-a/rows.json` replays the second one) and the
+//! stage B recording (the first with channels: creation, reads, lists, deletion, the publication to a
+//! channel that exists, the credential variants; `tests/fixtures/eventarc-stage-b/rows.json`, replayed
+//! row by row by `tests/eventarc_strict_stage_b.rs`). For each decision this module says whether it is
+//! recorded or an inference:
 //!
-//! - recorded: authentication (a missing credential), the consumer check of a project the caller cannot
-//!   use, a location that does not exist (create and read), `GetChannel` and `ListChannels` of a project
-//!   that has no channel, the page-token refusal, the refused creation without a name, and every
-//!   refusal of `PublishEvents` that happens before the channel is looked up (the JSON-to-proto
-//!   parse, the count, the size) followed by `Associated channel does not exist.`.
-//! - inferred (marked `INFERRED`): the same consumer check for the creation and the publication, the
-//!   method name of `GetChannel` in the missing-credential detail, the location rule (the shape of a
-//!   region ID), the largest event count (the recordings only show that 8 pass and 256 are refused),
-//!   which size the 524288-byte limit is compared with (an event of 262,355 bytes passes and one of
-//!   1,048,787 is refused), the message of a type error in an attribute, and the empty `{}` answer of a
-//!   delivered publication.
-//! - not served: anything about a channel that exists (its resource, a list that has one, a creation
-//!   with a name). These answer `501 UNIMPLEMENTED` and say so, rather than invent a shape.
+//! - recorded: authentication (a missing credential, an invalid value, a JWT in shape), the consumer check
+//!   of a project the caller cannot use, a location that does not exist (create and read) and the
+//!   locations that exist (`us-central1`, `europe-west1`), the creation of a channel and its operation,
+//!   the channel resource, the list and its page token, the conflict of a second creation, the channel IDs
+//!   Eventarc refused and accepted, the deletion and its operation, the answer for a channel that is gone,
+//!   and every check `PublishEvents` makes (the parse, the count of 100, the size, the channel lookup, the
+//!   required attributes, the content type, the data, the attribute quotas).
+//! - inferred (marked `INFERRED`): the set of locations beyond the two probed, the DNS-label rule for the
+//!   channel IDs not probed, the order of a list (production's is neither the name nor the time), the page
+//!   size when none is given, the boundaries of the attribute quotas, the order between checks that were
+//!   recorded one at a time, the method names in the missing-credential detail beyond the list, the
+//!   creation and the publication, and the consumer check for the creation and the publication.
+//! - not served: every state production was not observed in (a channel whose creation or deletion has not
+//!   finished, an operation this server did not start, a creation whose name is not the path's, a page
+//!   size that is not a positive number, the deletion of a channel a function declares). These answer
+//!   `501 UNIMPLEMENTED` and say so, rather than invent a shape.
+//! - not reproduced, because they are Google's state: whether a `ya29.` token is valid, what its scopes
+//!   are, and the project number (a path that names the project by number).
 //!
-//! A channel "exists" here when a loaded function declares it: a deployed custom-event function is what
-//! makes firebase-tools create its channel in production, and the Functions emulator registers the same
-//! channel in its trigger table.
+//! A channel "exists" here when the API created it and its operation is done, or when a loaded function
+//! declares it: a deployed custom-event function is what makes firebase-tools create its channel in
+//! production, and the Functions emulator registers the same channel in its trigger table.
 
 use serde_json::Value;
 
+use crate::eventarc_channels::{
+    project_number, ChannelStore, Created, Deleted, Lookup, Nanos, Position,
+};
 use crate::ordered_json::{parse, Ordered};
 
-/// The largest number of events a publication may carry. INFERRED: 8 events pass and 256 are refused in
-/// the recordings; this is the largest count that keeps every recorded pass.
-pub const MAX_EVENTS: usize = 255;
+/// The largest number of events a publication may carry. Recorded (stage B): 100 events pass, 101 are
+/// refused with `OUT_OF_RANGE` "Too many events." (stage A had only 8 passing and 256 refused).
+pub const MAX_EVENTS: usize = 100;
+/// The most attributes a request may carry once the four required ones are counted (the recording: 106
+/// refused, with "the maximum allowed is 100"; the Pub/Sub quota).
+pub const MAX_ATTRIBUTES: usize = 100;
+/// The longest key of an attribute, `ce-` and the name included (259 bytes refused, "the maximum allowed
+/// is 256").
+pub const MAX_ATTRIBUTE_KEY_BYTES: usize = 256;
 /// The limit production names for one event.
 pub const MAX_EVENT_BYTES: usize = 524_288;
 /// The type URL production accepts for an event.
@@ -91,6 +107,20 @@ pub enum Route {
     ListChannels(Place),
     /// `POST .../channels`
     CreateChannel(Place),
+    /// `DELETE .../channels/{channel}`
+    DeleteChannel {
+        /// Project and location.
+        place: Place,
+        /// The channel ID.
+        channel: String,
+    },
+    /// `GET .../operations/{operation}`
+    GetOperation {
+        /// Project and location.
+        place: Place,
+        /// The operation ID.
+        operation: String,
+    },
 }
 
 impl Route {
@@ -98,6 +128,8 @@ impl Route {
         match self {
             Self::Publish { place, .. }
             | Self::GetChannel { place, .. }
+            | Self::DeleteChannel { place, .. }
+            | Self::GetOperation { place, .. }
             | Self::ListChannels(place)
             | Self::CreateChannel(place) => place,
         }
@@ -125,6 +157,8 @@ impl Route {
             Self::GetChannel { .. } => "google.cloud.eventarc.v1.Eventarc.GetChannel",
             Self::ListChannels(_) => "google.cloud.eventarc.v1.Eventarc.ListChannels",
             Self::CreateChannel(_) => "google.cloud.eventarc.v1.Eventarc.CreateChannel",
+            Self::DeleteChannel { .. } => "google.cloud.eventarc.v1.Eventarc.DeleteChannel",
+            Self::GetOperation { .. } => "google.longrunning.Operations.GetOperation",
         }
     }
 }
@@ -136,7 +170,7 @@ pub fn route(method: &str, path: &str) -> Option<Route> {
     let path = path.strip_prefix("/v1").unwrap_or(path);
     let rest = path.strip_prefix("/projects/")?;
     let (project, rest) = rest.split_once("/locations/")?;
-    let (location, rest) = rest.split_once("/channels")?;
+    let (location, rest) = rest.split_once('/')?;
     if project.is_empty() || project.contains('/') || location.is_empty() || location.contains('/')
     {
         return None;
@@ -145,6 +179,14 @@ pub fn route(method: &str, path: &str) -> Option<Route> {
         project: project.to_owned(),
         location: location.to_owned(),
     };
+    if let Some(operation) = rest.strip_prefix("operations/") {
+        return (method == "GET" && !operation.is_empty() && !operation.contains(['/', ':']))
+            .then(|| Route::GetOperation {
+                place,
+                operation: operation.to_owned(),
+            });
+    }
+    let rest = rest.strip_prefix("channels")?;
     match (method, rest) {
         ("GET", "") => Some(Route::ListChannels(place)),
         ("POST", "") => Some(Route::CreateChannel(place)),
@@ -161,6 +203,10 @@ pub fn route(method: &str, path: &str) -> Option<Route> {
                     })
                 }
                 ("GET", None) if !channel.contains([':', '/']) => Some(Route::GetChannel {
+                    place,
+                    channel: channel.to_owned(),
+                }),
+                ("DELETE", None) if !channel.contains([':', '/']) => Some(Route::DeleteChannel {
                     place,
                     channel: channel.to_owned(),
                 }),
@@ -190,8 +236,13 @@ pub struct World<'a> {
     pub request_id: &'a str,
     /// Whether a loaded function declares the channel (the full resource name).
     pub declared_channel: &'a dyn Fn(&str) -> bool,
-    /// Whether a loaded function declares any channel in the project and location (`-` is every location).
-    pub declared_in: &'a dyn Fn(&str, &str) -> bool,
+    /// The channels a loaded function declares in the project and location (`-` is every location), by
+    /// full resource name.
+    pub declared_in: &'a dyn Fn(&str, &str) -> Vec<String>,
+    /// The channels created through the API, and their operations.
+    pub channels: &'a ChannelStore,
+    /// The instant of the request.
+    pub now: Nanos,
 }
 
 /// What to do with a request.
@@ -295,18 +346,23 @@ fn echo(text: &str) -> String {
 
 /// The credential of a request.
 ///
-/// An OAuth access token that Google issues starts with `ya29.`, and a token a Firebase client holds is a
-/// JWT; production refuses a bearer value that is neither with "invalid authentication credentials". Whether
-/// a well-formed token is valid is Google's state, which a local listener does not have, so it is accepted.
-/// INFERRED: the boundary (`ya29.` and the three-part JWT) is the shape of the recorded invalid token
-/// (`invalid-token-for-the-recording`) against the shapes a real client sends; stage B probes it.
+/// An OAuth access token that Google issues starts with `ya29.`. Production refused, with "invalid
+/// authentication credentials", a bearer value that was neither (the recorded `invalid-token-for-the-
+/// recording`, stage A) and also a JWT-shaped one, garbage and expired alike (stage B rows 174 to 177:
+/// the answer has no `details`, unlike the one for a value of no known shape). It also refused a
+/// `ya29.`-prefixed garbage token (row 172, `ACCESS_TOKEN_TYPE_UNSUPPORTED`) and a real token of
+/// another scope (row 179, `ACCESS_TOKEN_SCOPE_INSUFFICIENT`): whether a well-formed token is valid, and
+/// what it may do, is Google's state, which a local listener does not have, so a `ya29.` token is
+/// accepted here and those two answers are not reproduced.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Credential {
     /// No `Authorization: Bearer` header, or an empty token.
     Missing,
     /// A bearer value that is neither an access token nor a JWT in shape.
     Malformed,
-    /// A bearer value in the shape of an access token or a JWT.
+    /// A JWT in shape (three base64url parts): refused by production, as garbage or as expired.
+    Jwt,
+    /// A bearer value in the shape of an access token.
     WellFormed,
 }
 
@@ -319,6 +375,9 @@ pub fn classify_token(token: Option<&str>) -> Credential {
     let access_token = token
         .strip_prefix("ya29.")
         .is_some_and(|rest| !rest.is_empty() && rest.bytes().all(|b| b.is_ascii_graphic()));
+    if access_token {
+        return Credential::WellFormed;
+    }
     let base64url = |part: &str| {
         !part.is_empty()
             && part
@@ -326,15 +385,23 @@ pub fn classify_token(token: Option<&str>) -> Credential {
                 .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_' || b == b'=')
     };
     let parts: Vec<&str> = token.split('.').collect();
-    let jwt = parts.len() == 3 && parts.iter().all(|part| base64url(part));
-    if access_token || jwt {
-        Credential::WellFormed
+    if parts.len() == 3 && parts.iter().all(|part| base64url(part)) {
+        Credential::Jwt
     } else {
         Credential::Malformed
     }
 }
 
 fn credential_refusal(route: &Route, credential: Credential) -> Outcome {
+    if credential == Credential::Jwt {
+        // Recorded (stage B): no details at all.
+        return error(
+            401,
+            "UNAUTHENTICATED",
+            "Request had invalid authentication credentials. Expected OAuth 2 access token, login cookie or other valid authentication credential. See https://developers.google.com/identity/sign-in/web/devconsole-project.",
+            Vec::new(),
+        );
+    }
     // Recorded: the missing credential names the service first; the invalid one has no `domain`.
     let (message, info) = if credential == Credential::Missing {
         (
@@ -419,26 +486,56 @@ fn localized_message(message: &str) -> Ordered {
     ])
 }
 
-/// Whether a location can exist. INFERRED: only the shape of a region ID (`us-central1`,
-/// `northamerica-northeast2`) or `global` is checked; the recordings name one location that exists and
-/// one that does not (`no-such-location1`).
+/// The locations Eventarc serves. Recorded: `us-central1` and `europe-west1` exist, `us-east99` and
+/// `no-such-location1` do not (the shape of a region ID is not enough: `us-east99` is refused). The rest
+/// of the list is INFERRED from the regions Google Cloud documents for Eventarc and has not been probed.
+const LOCATIONS: &[&str] = &[
+    "africa-south1",
+    "asia-east1",
+    "asia-east2",
+    "asia-northeast1",
+    "asia-northeast2",
+    "asia-northeast3",
+    "asia-south1",
+    "asia-south2",
+    "asia-southeast1",
+    "asia-southeast2",
+    "australia-southeast1",
+    "australia-southeast2",
+    "europe-central2",
+    "europe-north1",
+    "europe-southwest1",
+    "europe-west1",
+    "europe-west10",
+    "europe-west12",
+    "europe-west2",
+    "europe-west3",
+    "europe-west4",
+    "europe-west6",
+    "europe-west8",
+    "europe-west9",
+    "global",
+    "me-central1",
+    "me-central2",
+    "me-west1",
+    "northamerica-northeast1",
+    "northamerica-northeast2",
+    "southamerica-east1",
+    "southamerica-west1",
+    "us-central1",
+    "us-east1",
+    "us-east4",
+    "us-east5",
+    "us-south1",
+    "us-west1",
+    "us-west2",
+    "us-west3",
+    "us-west4",
+];
+
+/// Whether a location exists.
 fn plausible_location(location: &str) -> bool {
-    if location == "global" {
-        return true;
-    }
-    let Some((geography, direction)) = location.split_once('-') else {
-        return false;
-    };
-    let Some(digits_at) = direction.find(|c: char| c.is_ascii_digit()) else {
-        return false;
-    };
-    let (direction, number) = direction.split_at(digits_at);
-    !geography.is_empty()
-        && geography.bytes().all(|b| b.is_ascii_lowercase())
-        && !direction.is_empty()
-        && direction.bytes().all(|b| b.is_ascii_lowercase())
-        && !number.is_empty()
-        && number.bytes().all(|b| b.is_ascii_digit())
+    LOCATIONS.contains(&location)
 }
 
 fn location_not_found(route: &Route) -> Outcome {
@@ -489,6 +586,34 @@ fn unobserved(what: &str) -> Outcome {
     )
 }
 
+/// The full resource name of a channel.
+fn channel_name(place: &Place, channel: &str) -> String {
+    format!(
+        "projects/{}/locations/{}/channels/{channel}",
+        place.project, place.location
+    )
+}
+
+/// `404` for a resource that does not exist (recorded for a channel: `GetChannel` and `DeleteChannel`).
+fn resource_not_found(name: &str) -> Outcome {
+    error(
+        404,
+        "NOT_FOUND",
+        &format!("Resource '{name}' was not found"),
+        vec![Ordered::object([
+            ("@type", text("type.googleapis.com/google.rpc.ResourceInfo")),
+            ("resourceName", text(name)),
+        ])],
+    )
+}
+
+/// A channel a loaded function declares exists from the first request that names it.
+fn adopt(world: &World<'_>, name: &str) {
+    if (world.declared_channel)(name) {
+        world.channels.declare(name, world.now);
+    }
+}
+
 /// Answers one request.
 #[must_use]
 pub fn evaluate(input: &Input<'_>, world: &World<'_>) -> Outcome {
@@ -503,84 +628,233 @@ pub fn evaluate(input: &Input<'_>, world: &World<'_>) -> Outcome {
     match route {
         Route::Publish { place, channel } => publish(place, channel, input.body, world),
         Route::GetChannel { place, channel } => {
-            let Place { project, location } = place;
-            if !plausible_location(location) {
+            if !plausible_location(&place.location) {
                 return location_not_found(route);
             }
-            let name = format!("projects/{project}/locations/{location}/channels/{channel}");
-            if (world.declared_channel)(&name) {
-                return unobserved("the resource of an existing channel");
+            let name = channel_name(place, channel);
+            adopt(world, &name);
+            match world.channels.lookup(&name, world.now) {
+                Lookup::Absent => resource_not_found(&name),
+                Lookup::Ready(view) => answer(200, view.to_json(false)),
+                Lookup::Busy => unobserved("a channel whose creation or deletion is not finished"),
             }
-            error(
-                404,
-                "NOT_FOUND",
-                &format!("Resource '{name}' was not found"),
-                vec![Ordered::object([
-                    ("@type", text("type.googleapis.com/google.rpc.ResourceInfo")),
-                    ("resourceName", text(&name)),
-                ])],
+        }
+        Route::ListChannels(place) => list_channels(route, place, input.query, world),
+        Route::CreateChannel(place) => create_channel(route, place, input, world),
+        Route::DeleteChannel { place, channel } => {
+            if !plausible_location(&place.location) {
+                return location_not_found(route);
+            }
+            let name = channel_name(place, channel);
+            if (world.declared_channel)(&name) {
+                return unobserved("the deletion of a channel that a loaded function declares");
+            }
+            match world.channels.delete(&name, world.now) {
+                Deleted::Absent => resource_not_found(&name),
+                Deleted::Busy => unobserved("a channel whose creation or deletion is not finished"),
+                Deleted::Started(started) => {
+                    answer(200, world.channels.started(&started, world.now))
+                }
+            }
+        }
+        Route::GetOperation { place, operation } => {
+            if !plausible_location(&place.location) {
+                return location_not_found(route);
+            }
+            let name = format!(
+                "projects/{}/locations/{}/operations/{operation}",
+                place.project, place.location
+            );
+            world.channels.operation(&name, world.now).map_or_else(
+                || unobserved("an operation this server did not start"),
+                |body| answer(200, body),
             )
         }
-        Route::ListChannels(Place { project, location }) => {
-            if location != "-" && !plausible_location(location) {
-                return location_not_found(route);
-            }
-            if has_value(input.query, "pageToken") {
-                return error(
-                    400,
-                    "INVALID_ARGUMENT",
-                    "The request was invalid: invalid page token",
-                    vec![bad_request_detail(&[(
-                        Some("pageToken"),
-                        Some("invalid page token"),
-                    )])],
-                );
-            }
-            if (world.declared_in)(project, location) {
-                return unobserved("a list of existing channels");
-            }
-            answer(200, Ordered::Object(Vec::new()))
-        }
-        Route::CreateChannel(_) => create_channel(route, input, world),
     }
 }
 
-fn has_value(query: Option<&str>, name: &str) -> bool {
-    query.is_some_and(|query| {
-        query
-            .split('&')
-            .filter_map(|pair| pair.split_once('='))
-            .any(|(key, value)| key == name && !value.is_empty())
-    })
+/// The value of a query parameter (not percent-decoded: the values this surface reads are IDs and tokens
+/// whose alphabet needs no escaping).
+fn query_value<'a>(query: Option<&'a str>, name: &str) -> Option<&'a str> {
+    query?
+        .split('&')
+        .filter_map(|pair| pair.split_once('='))
+        .find(|(key, _)| *key == name)
+        .map(|(_, value)| value)
 }
 
-fn create_channel(route: &Route, input: &Input<'_>, world: &World<'_>) -> Outcome {
-    if !plausible_location(route.location()) {
+/// The page size when none is asked for. INFERRED: the recordings never exceeded one page of ten.
+const DEFAULT_PAGE_SIZE: usize = 100;
+/// The largest page. INFERRED.
+const MAX_PAGE_SIZE: usize = 1000;
+
+fn invalid_page_token() -> Outcome {
+    error(
+        400,
+        "INVALID_ARGUMENT",
+        "The request was invalid: invalid page token",
+        vec![bad_request_detail(&[(
+            Some("pageToken"),
+            Some("invalid page token"),
+        )])],
+    )
+}
+
+fn list_channels(
+    route: &Route,
+    place: &Place,
+    query: Option<&str>,
+    world: &World<'_>,
+) -> Outcome {
+    let Place { project, location } = place;
+    if location != "-" && !plausible_location(location) {
         return location_not_found(route);
     }
-    let named = match parse(input.body) {
-        Ok(Ordered::Object(members)) => members.iter().any(|(name, value)| {
-            name == "name" && matches!(value, Ordered::String(text) if !text.is_empty())
+    let after = match query_value(query, "pageToken").filter(|token| !token.is_empty()) {
+        None => None,
+        Some(token) => match Position::parse(token) {
+            Some(position)
+                if position.project_number == project_number(project)
+                    && (location == "-" || position.location == *location) =>
+            {
+                Some(position)
+            }
+            _ => return invalid_page_token(),
+        },
+    };
+    let limit = match query_value(query, "pageSize").filter(|size| !size.is_empty()) {
+        None => DEFAULT_PAGE_SIZE,
+        Some(size) => match size.parse::<i64>() {
+            Ok(0) => DEFAULT_PAGE_SIZE,
+            Ok(size) if size > 0 => usize::try_from(size).map_or(MAX_PAGE_SIZE, |size| size.min(MAX_PAGE_SIZE)),
+            _ => return unobserved("a page size that is not a positive number"),
+        },
+    };
+    for name in (world.declared_in)(project, location) {
+        world.channels.declare(&name, world.now);
+    }
+    let listing = world
+        .channels
+        .list(project, location, after.as_ref(), limit, world.now);
+    if listing.unknown_position {
+        return invalid_page_token();
+    }
+    if listing.busy {
+        return unobserved("a list while a channel is being created or deleted");
+    }
+    let Some(last) = listing.items.last() else {
+        return answer(200, Ordered::Object(Vec::new()));
+    };
+    let mut members = vec![(
+        "channels".to_owned(),
+        Ordered::Array(listing.items.iter().map(|view| view.to_json(false)).collect()),
+    )];
+    if listing.more {
+        let position = Position {
+            location: last
+                .name
+                .split('/')
+                .nth(3)
+                .unwrap_or_default()
+                .to_owned(),
+            project_number: project_number(project),
+            id: last.name.rsplit('/').next().unwrap_or_default().to_owned(),
+            uid: last.uid.clone(),
+        };
+        members.push(("nextPageToken".to_owned(), Ordered::text(position.token())));
+    }
+    answer(200, Ordered::Object(members))
+}
+
+/// Whether a channel ID is valid. Recorded: `a4`, `goog-...` and the run-prefixed IDs are accepted; an
+/// upper-case letter, a leading digit, an underscore and 64 characters are refused. INFERRED, the DNS
+/// label rule for the rest: a lower-case letter first, then lower-case letters, digits and hyphens, no
+/// final hyphen, at most 63 characters.
+fn valid_channel_id(id: &str) -> bool {
+    let bytes = id.as_bytes();
+    let (Some(first), Some(last)) = (bytes.first(), bytes.last()) else {
+        return false;
+    };
+    bytes.len() <= 63
+        && first.is_ascii_lowercase()
+        && *last != b'-'
+        && bytes
+            .iter()
+            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || *byte == b'-')
+}
+
+fn create_channel(
+    route: &Route,
+    place: &Place,
+    input: &Input<'_>,
+    world: &World<'_>,
+) -> Outcome {
+    if !plausible_location(&place.location) {
+        return location_not_found(route);
+    }
+    let body_name = match parse(input.body) {
+        Ok(Ordered::Object(members)) => members.iter().find_map(|(name, value)| match value {
+            Ordered::String(text) if name == "name" && !text.is_empty() => Some(text.clone()),
+            _ => None,
         }),
         Ok(_) | Err(_) => {
             return invalid_argument("Invalid JSON payload received.", None);
         }
     };
-    if !named {
+    let Some(body_name) = body_name else {
         return error(
             400,
             "INVALID_ARGUMENT",
             "The request was invalid: channel.name is empty",
             vec![
                 bad_request_detail(&[(Some("channel.name"), None)]),
-                Ordered::object([
-                    ("@type", text("type.googleapis.com/google.rpc.RequestInfo")),
-                    ("requestId", text(world.request_id)),
-                ]),
+                request_info(world.request_id),
+            ],
+        );
+    };
+    let Some(id) = query_value(input.query, "channelId").filter(|id| !id.is_empty()) else {
+        return unobserved("a creation without a channelId");
+    };
+    let name = channel_name(place, id);
+    if body_name != name {
+        return unobserved("a creation whose name is not the parent and the channelId");
+    }
+    if !valid_channel_id(id) {
+        // Recorded: the violation and the request info are written twice.
+        let violation = bad_request_detail(&[(Some("channel.name"), None)]);
+        return error(
+            400,
+            "INVALID_ARGUMENT",
+            &format!("The request was invalid: invalid resource id: {}", echo(id)),
+            vec![
+                violation.clone(),
+                request_info(world.request_id),
+                violation,
+                request_info(world.request_id),
             ],
         );
     }
-    unobserved("the creation of a channel")
+    adopt(world, &name);
+    match world.channels.create(&name, world.now) {
+        Created::Exists => error(
+            409,
+            "ALREADY_EXISTS",
+            &format!("Resource '{name}' already exists"),
+            vec![Ordered::object([
+                ("@type", text("type.googleapis.com/google.rpc.ResourceInfo")),
+                ("resourceName", text(&name)),
+            ])],
+        ),
+        Created::Busy => unobserved("a channel whose creation or deletion is not finished"),
+        Created::Started(started) => answer(200, world.channels.started(&started, world.now)),
+    }
+}
+
+fn request_info(request_id: &str) -> Ordered {
+    Ordered::object([
+        ("@type", text("type.googleapis.com/google.rpc.RequestInfo")),
+        ("requestId", text(request_id)),
+    ])
 }
 
 // --- publishing ------------------------------------------------------------------------------------
@@ -607,7 +881,10 @@ pub const fn field_len(payload: usize) -> usize {
 enum Attribute {
     Boolean,
     Integer(i32),
+    /// A `ceUri` or a `ceUriRef`: only its length matters.
     Text(usize),
+    /// A `ceString` with its value (the content type is one).
+    String(String),
     Bytes(usize),
     Timestamp { seconds: i64, nanos: u32 },
 }
@@ -624,6 +901,7 @@ impl Attribute {
                 }
             }
             Self::Text(length) | Self::Bytes(length) => field_len(*length),
+            Self::String(value) => field_len(value.len()),
             Self::Timestamp { seconds, nanos } => {
                 // A negative int64 is ten bytes on the wire; zero is not written at all.
                 let seconds_len = match seconds.cmp(&0) {
@@ -651,6 +929,26 @@ pub struct ParsedEvent {
     pub json: Value,
     /// The serialized size of the `CloudEvent` message.
     pub inner_size: usize,
+    fields: Fields,
+}
+
+/// What the semantic checks of an existing channel read from an event.
+#[derive(Debug, Clone, PartialEq, Default)]
+struct Fields {
+    id: String,
+    source: String,
+    spec_version: String,
+    event_type: String,
+    attributes: Vec<(String, Attribute)>,
+    data: Data,
+}
+
+#[derive(Debug, Clone, PartialEq, Default)]
+enum Data {
+    #[default]
+    None,
+    Text(String),
+    Binary,
 }
 
 impl ParsedEvent {
@@ -672,12 +970,14 @@ pub fn request_size(channel: &str, events: &[ParsedEvent]) -> usize {
 }
 
 fn publish(place: &Place, channel: &str, body: &[u8], world: &World<'_>) -> Outcome {
-    let Place { project, location } = place;
-    let name = format!("projects/{project}/locations/{location}/channels/{channel}");
-    let events = match parse_publish(body) {
+    let name = channel_name(place, channel);
+    let mut events = match parse_publish(body) {
         Ok(events) => events,
         Err(refusal) => return refusal,
     };
+    // An event with nothing in it is not an event: a request that holds only such events is empty.
+    // INFERRED from one recorded case (a request of one bare event answered "No events provided.").
+    events.retain(|event| event.inner_size != 0);
     if events.is_empty() {
         return error(
             400,
@@ -727,18 +1027,160 @@ fn publish(place: &Place, channel: &str, body: &[u8], world: &World<'_>) -> Outc
             vec![bad_request_detail(&violations)],
         );
     }
-    if !(world.declared_channel)(&name) {
-        return error(
+    adopt(world, &name);
+    match world.channels.lookup(&name, world.now) {
+        Lookup::Absent => {
+            return error(
+                404,
+                "NOT_FOUND",
+                "Associated channel does not exist.",
+                Vec::new(),
+            );
+        }
+        Lookup::Busy => {
+            return unobserved("a publication to a channel whose creation or deletion is not finished");
+        }
+        Lookup::Ready(_) => {}
+    }
+    if let Some(refusal) = validate_events(&events) {
+        return refusal;
+    }
+    if (world.declared_channel)(&name) {
+        return Outcome::Deliver {
+            channel: name,
+            events: events.into_iter().map(|event| event.json).collect(),
+        };
+    }
+    // A channel created through the API has no trigger: the publication is accepted and goes nowhere.
+    answer(200, Ordered::Object(Vec::new()))
+}
+
+/// What production checks of the events once the channel is known to exist (stage B, rows 85 to 119 and
+/// 148 to 150). The order between the checks is INFERRED: each was recorded alone.
+fn validate_events(events: &[ParsedEvent]) -> Option<Outcome> {
+    for (index, event) in events.iter().enumerate() {
+        if let Some(refusal) = validate_event(index, &event.fields) {
+            return Some(refusal);
+        }
+    }
+    let mut seen: Vec<(&str, &str)> = Vec::with_capacity(events.len());
+    for (index, event) in events.iter().enumerate() {
+        let key = (event.fields.source.as_str(), event.fields.id.as_str());
+        if seen.contains(&key) {
+            let message = "The source + id pair needs to be unique in a batch call";
+            return Some(error(
+                400,
+                "INVALID_ARGUMENT",
+                message,
+                vec![bad_request_detail(&[(
+                    Some(&format!("events[{index}]")),
+                    Some(message),
+                )])],
+            ));
+        }
+        seen.push(key);
+    }
+    None
+}
+
+fn validate_event(index: usize, fields: &Fields) -> Option<Outcome> {
+    let at = format!("events[{index}]");
+    for (name, value) in [
+        ("id", &fields.id),
+        ("source", &fields.source),
+        ("spec_version", &fields.spec_version),
+        ("type", &fields.event_type),
+    ] {
+        if value.is_empty() {
+            let message = format!("Attribute '{name}' cannot be empty.");
+            return Some(error(
+                400,
+                "INVALID_ARGUMENT",
+                &message,
+                vec![bad_request_detail(&[(Some(&at), Some(&message))])],
+            ));
+        }
+    }
+    // The four required attributes count with the extension ones against the quota of the transport.
+    let attributes = fields.attributes.len() + 4;
+    if attributes > MAX_ATTRIBUTES {
+        return Some(error(
+            400,
+            "INVALID_ARGUMENT",
+            &format!(
+                "There are too many attributes in the request. The request contains {attributes} attributes, but the maximum allowed is {MAX_ATTRIBUTES}. Refer to https://cloud.google.com/pubsub/quotas for more information."
+            ),
+            Vec::new(),
+        ));
+    }
+    for (name, _) in &fields.attributes {
+        let key = 3 + name.len();
+        if key > MAX_ATTRIBUTE_KEY_BYTES {
+            return Some(error(
+                400,
+                "INVALID_ARGUMENT",
+                &format!(
+                    "The attribute \"ce-{name}\" in the request has a key that is too large. The size is {key} bytes, but the maximum allowed is {MAX_ATTRIBUTE_KEY_BYTES}. Refer to https://cloud.google.com/pubsub/quotas for more information."
+                ),
+                Vec::new(),
+            ));
+        }
+    }
+    let attribute = |wanted: &str| {
+        fields
+            .attributes
+            .iter()
+            .find(|(name, _)| name == wanted)
+            .map(|(_, value)| value)
+    };
+    if matches!(attribute("time"), Some(value) if !matches!(value, Attribute::Timestamp { .. })) {
+        let message = "The type for the attribute 'time' is not valid.";
+        return Some(error(
+            400,
+            "INVALID_ARGUMENT",
+            message,
+            vec![bad_request_detail(&[(Some(&at), Some(message))])],
+        ));
+    }
+    let Some(content_type) = attribute("datacontenttype") else {
+        let message = "The attribute 'datacontenttype' has not been defined in the CloudEvent attributes.";
+        return Some(error(
             404,
             "NOT_FOUND",
-            "Associated channel does not exist.",
-            Vec::new(),
-        );
+            message,
+            vec![bad_request_detail(&[(Some(&at), Some(message))])],
+        ));
+    };
+    // Both checks of the data are reported together when both fail (recorded for a text/plain text).
+    let mut violations: Vec<(String, &str)> = Vec::new();
+    if !matches!(content_type, Attribute::String(value) if value == "application/json") {
+        violations.push((
+            format!("{at}.datacontenttype"),
+            "CloudEvent attribute `datacontenttype' must have mime-type `application/json'.",
+        ));
     }
-    Outcome::Deliver {
-        channel: name,
-        events: events.into_iter().map(|event| event.json).collect(),
+    match &fields.data {
+        Data::Text(text) if serde_json::from_str::<Value>(text).is_ok() => {}
+        Data::Text(_) => violations.push((
+            at.clone(),
+            "Provided CloudEvent data is not a valid json object.",
+        )),
+        Data::Binary | Data::None => violations.push((
+            at.clone(),
+            "The provided data needs to be in text format. Please set `text_data` in the CloudEvent.",
+        )),
     }
+    let first = violations.first()?.1;
+    let listed: Vec<(Option<&str>, Option<&str>)> = violations
+        .iter()
+        .map(|(field, message)| (Some(field.as_str()), Some(*message)))
+        .collect();
+    Some(error(
+        400,
+        "INVALID_ARGUMENT",
+        first,
+        vec![bad_request_detail(&listed)],
+    ))
 }
 
 fn parse_publish(body: &[u8]) -> Result<Vec<ParsedEvent>, Outcome> {
@@ -832,6 +1274,7 @@ fn parse_event(index: usize, event: &Ordered) -> Result<ParsedEvent, Outcome> {
         ));
     }
     let mut inner = 0usize;
+    let mut fields = Fields::default();
     let mut data_member: Option<&str> = None;
     for (name, value) in members {
         match name.as_str() {
@@ -843,8 +1286,18 @@ fn parse_event(index: usize, event: &Ordered) -> Result<ParsedEvent, Outcome> {
                 if !text.is_empty() {
                     inner += field_len(text.len());
                 }
+                match snake(name) {
+                    "id" => fields.id.clone_from(text),
+                    "source" => fields.source.clone_from(text),
+                    "spec_version" => fields.spec_version.clone_from(text),
+                    _ => fields.event_type.clone_from(text),
+                }
             }
-            "attributes" => inner += parse_attributes(value)?,
+            "attributes" => {
+                let (size, attributes) = parse_attributes(value)?;
+                inner += size;
+                fields.attributes = attributes;
+            }
             "binaryData" | "binary_data" | "textData" | "text_data" | "protoData"
             | "proto_data" => {
                 if let Some(first) = data_member {
@@ -870,12 +1323,14 @@ fn parse_event(index: usize, event: &Ordered) -> Result<ParsedEvent, Outcome> {
                             ));
                         };
                         inner += field_len(length);
+                        fields.data = Data::Binary;
                     }
                     "text_data" => {
                         let Ordered::String(text) = value else {
                             return Err(wrong_type("text_data", "TYPE_STRING", value));
                         };
                         inner += field_len(text.len());
+                        fields.data = Data::Text(text.clone());
                     }
                     _ => return Err(unobserved("an event with proto data")),
                 }
@@ -886,11 +1341,12 @@ fn parse_event(index: usize, event: &Ordered) -> Result<ParsedEvent, Outcome> {
     Ok(ParsedEvent {
         json: event.to_value(),
         inner_size: inner,
+        fields,
     })
 }
 
-/// The map of attributes of one event; returns the serialized size of its entries.
-fn parse_attributes(value: &Ordered) -> Result<usize, Outcome> {
+/// The map of attributes of one event; returns the serialized size of its entries and the entries.
+fn parse_attributes(value: &Ordered) -> Result<(usize, Vec<(String, Attribute)>), Outcome> {
     let Ordered::Object(entries) = value else {
         return Err(invalid_argument(
             "Invalid JSON payload received.",
@@ -898,13 +1354,15 @@ fn parse_attributes(value: &Ordered) -> Result<usize, Outcome> {
         ));
     };
     let mut size = 0;
+    let mut parsed_entries = Vec::with_capacity(entries.len());
     for (index, (key, attribute)) in entries.iter().enumerate() {
         let path = format!("attributes[{index}].value");
         let parsed = parse_attribute(&path, attribute)?;
         let entry = field_len(key.len()) + field_len(parsed.size());
         size += field_len(entry);
+        parsed_entries.push((key.clone(), parsed));
     }
-    Ok(size)
+    Ok((size, parsed_entries))
 }
 
 fn parse_attribute(path: &str, value: &Ordered) -> Result<Attribute, Outcome> {
@@ -945,9 +1403,8 @@ fn parse_attribute(path: &str, value: &Ordered) -> Result<Attribute, Outcome> {
                 Attribute::Integer(integer)
             }
             ("ce_integer", other) => return Err(wrong_type(&at, "TYPE_INT32", other)),
-            ("ce_string" | "ce_uri" | "ce_uri_ref", Ordered::String(text)) => {
-                Attribute::Text(text.len())
-            }
+            ("ce_string", Ordered::String(text)) => Attribute::String(text.clone()),
+            ("ce_uri" | "ce_uri_ref", Ordered::String(text)) => Attribute::Text(text.len()),
             ("ce_string" | "ce_uri" | "ce_uri_ref", other) => {
                 return Err(wrong_type(&at, "TYPE_STRING", other));
             }
@@ -1036,13 +1493,16 @@ mod tests {
 
     fn world<'a>(
         declared: &'a dyn Fn(&str) -> bool,
-        declared_in: &'a dyn Fn(&str, &str) -> bool,
+        declared_in: &'a dyn Fn(&str, &str) -> Vec<String>,
+        channels: &'a ChannelStore,
     ) -> World<'a> {
         World {
             project: PROJECT,
             request_id: "0123456789abcdef",
             declared_channel: declared,
             declared_in,
+            channels,
+            now: 1_791_000_000_000_000_000,
         }
     }
 
@@ -1053,12 +1513,17 @@ mod tests {
         let route = route(method, path).expect("a route");
         let declared: Vec<String> = declared.iter().map(|name| (*name).to_owned()).collect();
         let declared_channel = |name: &str| declared.iter().any(|d| d == name);
-        let declared_in = |project: &str, location: &str| {
-            declared.iter().any(|d| {
-                d.starts_with(&format!("projects/{project}/locations/"))
-                    && (location == "-" || d.contains(&format!("/locations/{location}/")))
-            })
+        let declared_in = |project: &str, location: &str| -> Vec<String> {
+            declared
+                .iter()
+                .filter(|d| {
+                    d.starts_with(&format!("projects/{project}/locations/"))
+                        && (location == "-" || d.contains(&format!("/locations/{location}/")))
+                })
+                .cloned()
+                .collect()
         };
+        let channels = ChannelStore::default();
         evaluate(
             &Input {
                 route: &route,
@@ -1066,7 +1531,7 @@ mod tests {
                 bearer: authorized.then_some("ya29.a-token"),
                 body: body.as_bytes(),
             },
-            &world(&declared_channel, &declared_in),
+            &world(&declared_channel, &declared_in, &channels),
         )
     }
 
@@ -1086,6 +1551,13 @@ mod tests {
     fn event_json(extra: &str) -> String {
         format!(
             r#"{{"@type":"{CLOUD_EVENT_TYPE_URL}","id":"i","source":"s","specVersion":"1.0","type":"t","attributes":{{"time":{{"ceTimestamp":"2026-10-05T06:17:17.731Z"}}}},"textData":"x"{extra}}}"#
+        )
+    }
+
+    /// An event that an existing channel accepts: the content type is JSON and the data is a JSON text.
+    fn delivered_event(id: &str) -> String {
+        format!(
+            r#"{{"@type":"{CLOUD_EVENT_TYPE_URL}","id":"{id}","source":"s","specVersion":"1.0","type":"t","attributes":{{"time":{{"ceTimestamp":"2026-10-05T06:17:17.731Z"}},"datacontenttype":{{"ceString":"application/json"}}}},"textData":"{{}}"}}"#
         )
     }
 
@@ -1136,9 +1608,28 @@ mod tests {
             route("GET", "/v1/projects/p/locations/-/channels"),
             Some(Route::ListChannels(place("p", "-")))
         );
+        assert_eq!(
+            route("DELETE", "/v1/projects/p/locations/l/channels/c"),
+            Some(Route::DeleteChannel {
+                place: place("p", "l"),
+                channel: "c".to_owned()
+            })
+        );
+        assert_eq!(
+            route("GET", "/v1/projects/p/locations/l/operations/operation-1-2-3-4"),
+            Some(Route::GetOperation {
+                place: place("p", "l"),
+                operation: "operation-1-2-3-4".to_owned()
+            })
+        );
         for (method, path) in [
-            ("DELETE", "/v1/projects/p/locations/l/channels/c"),
             ("PATCH", "/v1/projects/p/locations/l/channels/c"),
+            ("DELETE", "/v1/projects/p/locations/l/channels"),
+            ("DELETE", "/v1/projects/p/locations/l/channels/a/b"),
+            ("POST", "/v1/projects/p/locations/l/operations/o"),
+            ("GET", "/v1/projects/p/locations/l/operations/"),
+            ("GET", "/v1/projects/p/locations/l/operations/a/b"),
+            ("GET", "/v1/projects/p/locations/l/operations/a:b"),
             ("GET", "/v1/projects/p/locations/l/channels/c:publishEvents"),
             ("POST", "/v1/projects/p/locations/l/channels/c"),
             ("POST", "/v1/projects/p/locations/l/channels/:publishEvents"),
@@ -1167,9 +1658,10 @@ mod tests {
     }
 
     #[test]
-    fn a_region_id_is_a_geography_a_direction_and_a_number() {
+    fn a_location_exists_when_eventarc_serves_it() {
         for fine in [
             "us-central1",
+            "europe-west1",
             "europe-west12",
             "northamerica-northeast2",
             "global",
@@ -1178,6 +1670,8 @@ mod tests {
             assert!(plausible_location(fine), "{fine}");
         }
         for odd in [
+            // The shape of a region ID is not enough: production refused `us-east99` (stage B).
+            "us-east99",
             "no-such-location1",
             "",
             "us",
@@ -1272,14 +1766,12 @@ mod tests {
         for missing in [None, Some(""), Some("   ")] {
             assert_eq!(classify_token(missing), Credential::Missing, "{missing:?}");
         }
-        for fine in [
-            "ya29.A",
-            "ya29.a0AfH6SMBx_y-z",
-            "ya29.c.b0Aaek~x/y+z=",
-            "a.b.c",
-            "eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiJ4In0.c2ln-_=",
-        ] {
+        for fine in ["ya29.A", "ya29.a0AfH6SMBx_y-z", "ya29.c.b0Aaek~x/y+z="] {
             assert_eq!(classify_token(Some(fine)), Credential::WellFormed, "{fine}");
+        }
+        // A JWT in shape was refused in the stage B recording, as garbage and as expired.
+        for jwt in ["a.b.c", "eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiJ4In0.c2ln-_="] {
+            assert_eq!(classify_token(Some(jwt)), Credential::Jwt, "{jwt}");
         }
         for malformed in [
             "invalid-token-for-the-recording",
@@ -1409,22 +1901,20 @@ mod tests {
                 "{query}"
             );
         }
+        // A channel a loaded function declares is listed, in its location and in `-`, and read.
         let declared = ["projects/demo/locations/us-central1/channels/c"];
-        assert_eq!(
-            status_and_message(&run("GET", base, true, "", &declared)).0,
-            501
-        );
-        assert_eq!(
-            status_and_message(&run(
-                "GET",
-                "/v1/projects/demo/locations/-/channels",
-                true,
-                "",
-                &declared
-            ))
-            .0,
-            501
-        );
+        for target in [base, "/v1/projects/demo/locations/-/channels"] {
+            let Outcome::Answer(Answer { status, body }) = run("GET", target, true, "", &declared)
+            else {
+                panic!()
+            };
+            assert_eq!(status, 200, "{target}");
+            assert_eq!(
+                body["channels"][0]["name"],
+                "projects/demo/locations/us-central1/channels/c"
+            );
+            assert_eq!(body["channels"][0]["state"], "ACTIVE");
+        }
         assert_eq!(
             status_and_message(&run(
                 "GET",
@@ -1438,7 +1928,7 @@ mod tests {
         );
         assert_eq!(
             status_and_message(&run("GET", &format!("{base}/c"), true, "", &declared)).0,
-            501
+            200
         );
         assert_eq!(
             status_and_message(&run("GET", &format!("{base}/d"), true, "", &declared)).0,
@@ -1447,7 +1937,7 @@ mod tests {
     }
 
     #[test]
-    fn a_creation_needs_a_name_and_is_not_served_with_one() {
+    fn a_creation_needs_a_name() {
         let target = "/v1/projects/demo/locations/us-central1/channels?channelId=c";
         for body in [
             "{}",
@@ -1480,6 +1970,8 @@ mod tests {
                 "0123456789abcdef"
             );
         }
+        // With the name of the path the creation starts an operation (the replay of the stage B recording
+        // pins its shape); a name that is not the path's, or no channelId, is not served.
         let named = run(
             "POST",
             target,
@@ -1487,7 +1979,19 @@ mod tests {
             r#"{"name":"projects/demo/locations/us-central1/channels/c"}"#,
             &[],
         );
-        assert_eq!(status_and_message(&named).0, 501);
+        assert_eq!(status_and_message(&named).0, 200);
+        for (target, body) in [
+            (
+                target,
+                r#"{"name":"projects/demo/locations/us-central1/channels/other"}"#,
+            ),
+            (
+                "/v1/projects/demo/locations/us-central1/channels",
+                r#"{"name":"projects/demo/locations/us-central1/channels/c"}"#,
+            ),
+        ] {
+            assert_eq!(status_and_message(&run("POST", target, true, body, &[])).0, 501);
+        }
         for body in ["", "[]", "not json", "5"] {
             let (status, message) = status_and_message(&run("POST", target, true, body, &[]));
             assert_eq!(
@@ -1534,7 +2038,7 @@ mod tests {
             );
         }
         // A parse error in a later event comes before the count and before the channel.
-        let many: Vec<String> = (0..256).map(|_| event_json("")).collect();
+        let many: Vec<String> = (0..=MAX_EVENTS).map(|_| event_json("")).collect();
         assert_eq!(
             status_and_message(&publish(&many, &[])),
             (400, "Too many events.".to_owned())
@@ -1545,9 +2049,9 @@ mod tests {
             status_and_message(&publish(&broken, &[])).1,
             "Invalid JSON payload received. Unknown name \"zzz\": Cannot find field."
         );
-        // 255 events are the most accepted.
+        // 100 events are the most accepted (stage B: 100 pass, 101 are refused).
         assert_eq!(
-            status_and_message(&publish(&many[..255], &[])),
+            status_and_message(&publish(&many[..MAX_EVENTS], &[])),
             (404, "Associated channel does not exist.".to_owned())
         );
         let Outcome::Answer(Answer { body, .. }) = publish(&many, &[]) else {
@@ -1636,7 +2140,7 @@ mod tests {
         let events = [event_json(""), event_json(r#","extra":null"#)];
         // A member production does not know is refused before delivery.
         assert_eq!(status_and_message(&publish(&events, &declared)).0, 400);
-        let events = [event_json(""), event_json("")];
+        let events = [delivered_event("a"), delivered_event("b")];
         let Outcome::Deliver {
             channel,
             events: handed,
@@ -1646,7 +2150,7 @@ mod tests {
         };
         assert_eq!(channel, "projects/demo/locations/us-central1/channels/c");
         assert_eq!(handed.len(), 2);
-        assert_eq!(handed[0]["id"], "i");
+        assert_eq!(handed[0]["id"], "a");
         assert_eq!(
             handed[0]["attributes"]["time"]["ceTimestamp"],
             "2026-10-05T06:17:17.731Z"
@@ -1669,8 +2173,8 @@ mod tests {
         let message = |text: &str| (400, text.to_owned());
         assert_eq!(
             check(any("")),
-            (404, "Associated channel does not exist.".to_owned()),
-            "an empty event parses"
+            message("No events provided."),
+            "a bare event is not an event"
         );
         assert_eq!(
             check(r#"{"id":"i"}"#.to_owned()),

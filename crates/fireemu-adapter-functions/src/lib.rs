@@ -9,6 +9,7 @@
 
 pub mod callable;
 pub mod eventarc;
+pub mod eventarc_channels;
 pub mod eventarc_strict;
 pub mod events;
 pub mod http;

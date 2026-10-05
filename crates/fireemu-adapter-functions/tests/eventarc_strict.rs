@@ -14,6 +14,7 @@
 
 use std::collections::BTreeMap;
 
+use fireemu_adapter_functions::eventarc_channels::ChannelStore;
 use fireemu_adapter_functions::eventarc_strict::{evaluate, route, Input, Outcome, World};
 use fireemu_adapter_functions::ordered_json::{parse, Ordered};
 
@@ -227,7 +228,8 @@ fn answer_of(row: &Row, declared: &dyn Fn(&str) -> bool) -> (u16, Ordered) {
         });
     let route = route(&row.method, path).unwrap_or_else(|| panic!("row {} has a route", row.n));
     let body = row.body.clone().unwrap_or_default().into_bytes();
-    let nothing = |_: &str, _: &str| false;
+    let nothing = |_: &str, _: &str| Vec::new();
+    let channels = ChannelStore::default();
     // The credential of each row: none, the recorder's invalid token, or the shape a real client sends.
     let bearer = match row.token.as_str() {
         "none" => None,
@@ -245,6 +247,8 @@ fn answer_of(row: &Row, declared: &dyn Fn(&str) -> bool) -> (u16, Ordered) {
         request_id: "0123456789abcdef",
         declared_channel: declared,
         declared_in: &nothing,
+        channels: &channels,
+        now: 0,
     };
     match evaluate(&input, &world) {
         Outcome::Answer(answer) => (answer.status, answer.body),
@@ -372,7 +376,8 @@ fn the_bytes_of_the_two_raw_production_bodies_are_reproduced_exactly() {
             .map_or((path, None), |(path, query)| (path, Some(query)));
         let route = route(method, path).expect("a route");
         let nothing = |_: &str| false;
-        let nowhere = |_: &str, _: &str| false;
+        let nowhere = |_: &str, _: &str| Vec::new();
+        let channels = ChannelStore::default();
         let input = Input {
             route: &route,
             query,
@@ -384,6 +389,8 @@ fn the_bytes_of_the_two_raw_production_bodies_are_reproduced_exactly() {
             request_id: "0123456789abcdef",
             declared_channel: &nothing,
             declared_in: &nowhere,
+            channels: &channels,
+            now: 0,
         };
         match evaluate(&input, &world) {
             Outcome::Answer(answer) => (answer.status, answer.text()),

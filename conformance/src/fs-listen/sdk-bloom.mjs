@@ -40,8 +40,7 @@ export function bloomSource(text) {
 }
 
 /** The SDK's `BloomFilter` and its md5 helper, from the bundle of the installed package. */
-export function loadSdkBloom() {
-  const root = dirname(require.resolve("@firebase/firestore/package.json"));
+export function loadSdkBloom(root = dirname(require.resolve("@firebase/firestore/package.json"))) {
   checkSdkVersion(JSON.parse(readFileSync(join(root, "package.json"), "utf8")).version);
   const dist = join(root, "dist");
   const file = findBundle(readdirSync(dist), (name) => readFileSync(join(dist, name), "utf8"));

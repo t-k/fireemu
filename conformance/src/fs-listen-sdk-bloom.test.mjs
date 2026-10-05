@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { test } from "node:test";
 
 import {
@@ -85,4 +87,31 @@ test("the extraction refuses another SDK version, a package without the bundle a
     /not where it was/,
   );
   assert.throws(() => bloomSource(`${marker}\nno class`), /not where it was/);
+});
+
+test("loading the SDK bloom from a package root refuses another version and a package without the bundle", () => {
+  const fake = (version, files = {}) => {
+    const root = mkdtempSync(join(tmpdir(), "sdk-bloom-"));
+    writeFileSync(join(root, "package.json"), JSON.stringify({ version }));
+    mkdirSync(join(root, "dist"));
+    for (const [name, text] of Object.entries(files)) writeFileSync(join(root, "dist", name), text);
+    return root;
+  };
+  assert.throws(() => loadSdkBloom(fake("9.9.9")), /9\.9\.9 is not 4\.17\.1/);
+  assert.throws(() => loadSdkBloom(fake("4.17.1")), /bundle with the bloom filter was not found/);
+  assert.throws(
+    () =>
+      loadSdkBloom(
+        fake("4.17.1", {
+          "common-x.node.cjs.js": "// Hash a string using md5 hashing algorithm.\n",
+        }),
+      ),
+    /not where it was/,
+  );
+});
+
+test("the source may begin at the very start of the bundle", () => {
+  const marker = "// Hash a string using md5 hashing algorithm.";
+  const text = `${marker}\nclass BloomFilterError extends Error {\n}\n`;
+  assert.equal(bloomSource(text), text);
 });

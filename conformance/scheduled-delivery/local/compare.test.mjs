@@ -1753,7 +1753,7 @@ test("cadence.in-flight-skip: a queueing model that starts each due occurrence w
   assert.equal(row.production.startsOnTime, true);
 });
 
-test("inFlightFacts: starts are on time when their lag against their own schedule time varies by under five seconds", () => {
+test("inFlightFacts: starts are on time when their lag against their own schedule time varies by 20 seconds or less", () => {
   const f = (start, end, sched) => [
     { phase: "start", at: start, scheduled: sched },
     { phase: "end", at: end, scheduled: sched },
@@ -1762,10 +1762,12 @@ test("inFlightFacts: starts are on time when their lag against their own schedul
   // a constant lag of any size is on time (the timeline's origin is not the schedule's)
   assert.equal(on([...f(10, 110, 0), ...f(130, 230, 120), ...f(250, 350, 240)]), true);
   assert.equal(on([...f(10, 110, 0), ...f(134, 234, 120)]), true, "4 s of jitter");
-  assert.equal(on([...f(10, 110, 0), ...f(135, 235, 120)]), true, "exactly 5 s");
-  assert.equal(on([...f(10, 110, 0), ...f(135.01, 235, 120)]), false, "just over 5 s");
-  assert.equal(on([...f(10, 110, 0), ...f(125, 225, 120)]), true, "early by 5 s");
-  assert.equal(on([...f(10, 110, 0), ...f(124.9, 224.9, 120)]), false, "early by over 5 s");
+  // run f123d4fa2d61c5f5's slow job lagged by up to about 12.6 s from one start to another (cold starts)
+  assert.equal(on([...f(10, 110, 0), ...f(142.6, 242.6, 120)]), true, "12.6 s");
+  assert.equal(on([...f(10, 110, 0), ...f(150, 250, 120)]), true, "exactly 20 s");
+  assert.equal(on([...f(10, 110, 0), ...f(150.01, 250, 120)]), false, "just over 20 s");
+  assert.equal(on([...f(10, 110, 0), ...f(110, 210, 120)]), true, "early by 20 s");
+  assert.equal(on([...f(10, 110, 0), ...f(109.9, 209.9, 120)]), false, "early by over 20 s");
   // one late start among on-time ones
   assert.equal(on([...f(10, 110, 0), ...f(130, 230, 120), ...f(300, 400, 240)]), false);
   // a start with no schedule time is not on time; no starts, or one, is vacuously on time
@@ -1807,4 +1809,227 @@ test("cadence.in-flight-skip: a forced run in flight suppresses a natural occurr
     inFlightFacts([...f(0, 100), ...f(150, 250), ...f(260, 360)], [149], 60).naturalStartsInFlight,
     0,
   );
+});
+
+// ---- Gen1: the message published to the job's topic (run f123d4fa2d61c5f5) ----
+
+const msg = (fn, id, publishTime, over = {}) => ({
+  function: fn,
+  messageId: id,
+  publishTime,
+  atMs: Date.parse(publishTime) - T0,
+  attributes: { scheduled: "true" },
+  hasData: false,
+  ...over,
+});
+/** A recording of the Gen1 handlers and of the messages pulled from their topics: ids and times agree. */
+function productionWithMessages() {
+  const p = production();
+  // two schedOkV1 occurrences (the first two frames), one schedFailV1 pair, and a schedRetryV1 pair
+  const frames = [
+    prodV1("schedOkV1", 5000, "22257109111563910", "2026-10-05T08:41:02.5Z"),
+    prodV1("schedRetryV1", 6000, "21339796619509982", "2026-10-05T08:41:03.993Z"),
+    prodV1("schedRetryV1", 306_000, "21339949440159039", "2026-10-05T08:46:03.319Z"),
+  ];
+  return {
+    ...p,
+    frames: [...p.frames, ...frames],
+    published: [
+      msg("schedOkV1", "22257109111563910", "2026-10-05T08:41:02.5Z"),
+      msg("schedOkV1", "22257109111563907", "2026-10-05T08:41:01.359Z"),
+      msg("schedFailV1", "22256732696405721", "2026-10-05T08:42:50.384Z"),
+      msg("schedRetryV1", "21339796619509982", "2026-10-05T08:41:03.993Z"),
+      msg("schedRetryV1", "21339949440159039", "2026-10-05T08:46:03.319Z"),
+    ],
+  };
+}
+/** The local run: the same Gen1 frames, and the messages a pull subscription held on each topic. */
+function localWithMessages(over = {}) {
+  const l = local();
+  const lines = [
+    ...l.natural.lines,
+    localV1("schedOkV1", instant(T0 + 5000), "27440000000000001", "2026-10-05T08:41:02.5Z"),
+    localV1("schedRetryV1", instant(T0 + 6000), "27440000000000002", "2026-10-05T08:41:03.993Z"),
+    localV1("schedRetryV1", instant(T0 + 306_000), "27440000000000003", "2026-10-05T08:46:03.319Z"),
+  ];
+  const message = (id, publishTime, extra = {}) => ({
+    messageId: id,
+    publishTime,
+    attributes: { scheduled: "true" },
+    ...extra,
+  });
+  const pulled = over.pulled ?? [
+    {
+      topic: jobId("schedOkV1"),
+      status: 200,
+      messages: [
+        message("21060470636220959", "2026-10-05T08:41:01.359Z"),
+        message("27440000000000001", "2026-10-05T08:41:02.5Z"),
+      ],
+    },
+    {
+      topic: jobId("schedFailV1"),
+      status: 200,
+      messages: [
+        message("27203228007418468", "2026-10-05T08:42:50.384Z"),
+        message("27777684328644704", "2026-10-05T08:47:05.447Z"),
+      ],
+    },
+    {
+      topic: jobId("schedRetryV1"),
+      status: 200,
+      messages: [
+        message("27440000000000002", "2026-10-05T08:41:03.993Z"),
+        message("27440000000000003", "2026-10-05T08:46:03.319Z"),
+      ],
+    },
+  ];
+  return { ...l, natural: { ...l.natural, lines: over.lines ?? lines, pulled } };
+}
+const PUBLISHED_ROWS = [
+  "v1.published.topic",
+  "v1.published.data",
+  "v1.published.attributes",
+  "v1.published.messageId",
+  "v1.published.publishTime",
+];
+
+test("the published-message rows exist only for a recording that pulled messages, and match a local run built like it", () => {
+  assert.equal(
+    Object.keys(verdicts(production(), local())).some((id) => id.startsWith("v1.published.")),
+    false,
+    "run 2's digest holds no messages",
+  );
+  const v = verdicts(productionWithMessages(), localWithMessages());
+  for (const id of PUBLISHED_ROWS) assert.equal(v[id], "MATCH", id);
+  assert.equal(v["v1.retry-declaration-no-retry"], "MATCH");
+});
+
+test("v1.published.topic: a topic the local broker has no subscription for, or that held nothing, diverges", () => {
+  const p = productionWithMessages();
+  for (const pulled of [
+    // no such topic (the subscribe was refused)
+    localWithMessages().natural.pulled.map((t) =>
+      t.topic === jobId("schedRetryV1") ? { ...t, status: 404, messages: [] } : t,
+    ),
+    // the topic exists and holds nothing
+    localWithMessages().natural.pulled.map((t) =>
+      t.topic === jobId("schedRetryV1") ? { ...t, messages: [] } : t,
+    ),
+    // no pulled topic at all
+    [],
+  ]) {
+    const v = verdicts(p, localWithMessages({ pulled }));
+    assert.equal(v["v1.published.topic"], "DIVERGES");
+  }
+  // a topic named like the official emulator's (no region) is not the job's topic
+  const official = localWithMessages().natural.pulled.map((t) => ({
+    ...t,
+    topic: t.topic.replace("-us-central1", ""),
+  }));
+  assert.equal(
+    verdicts(p, localWithMessages({ pulled: official }))["v1.published.topic"],
+    "DIVERGES",
+  );
+});
+
+test("v1.published.data and .attributes: data on a message, or another attribute set, diverges", () => {
+  const p = productionWithMessages();
+  const change = (edit) =>
+    localWithMessages().natural.pulled.map((t, i) =>
+      i === 0 ? { ...t, messages: t.messages.map((m) => edit(m)) } : t,
+    );
+  const withData = verdicts(
+    p,
+    localWithMessages({ pulled: change((m) => ({ ...m, data: "YQ==" })) }),
+  );
+  assert.equal(withData["v1.published.data"], "DIVERGES");
+  assert.equal(withData["v1.published.attributes"], "MATCH");
+  for (const attributes of [{}, { scheduled: "false" }, { scheduled: "true", extra: "1" }]) {
+    const v = verdicts(p, localWithMessages({ pulled: change((m) => ({ ...m, attributes })) }));
+    assert.equal(v["v1.published.attributes"], "DIVERGES", JSON.stringify(attributes));
+    assert.equal(v["v1.published.data"], "MATCH");
+  }
+});
+
+test("v1.published.messageId: an id of another form, or one no handler frame carries, diverges", () => {
+  const p = productionWithMessages();
+  const one = (id) =>
+    localWithMessages().natural.pulled.map((t, i) =>
+      i === 0
+        ? { ...t, messages: t.messages.map((m, j) => (j === 0 ? { ...m, messageId: id } : m)) }
+        : t,
+    );
+  // another form: a counter (what the broker numbers an ordinary publish with)
+  assert.equal(
+    verdicts(p, localWithMessages({ pulled: one("1") }))["v1.published.messageId"],
+    "DIVERGES",
+  );
+  // 17 digits, but the handler's context named another message
+  assert.equal(
+    verdicts(p, localWithMessages({ pulled: one("29999999999999999") }))["v1.published.messageId"],
+    "DIVERGES",
+  );
+});
+
+test("v1.published.publishTime: a publish time that is not the handler's context time diverges, at any digit", () => {
+  const p = productionWithMessages();
+  const shifted = (time) =>
+    localWithMessages().natural.pulled.map((t, i) =>
+      i === 2
+        ? { ...t, messages: t.messages.map((m, j) => (j === 0 ? { ...m, publishTime: time } : m)) }
+        : t,
+    );
+  for (const time of [
+    "2026-10-05T08:41:03.994Z",
+    "2026-10-05T08:41:04.993Z",
+    "2026-10-05T08:41:03.993001Z",
+  ])
+    assert.equal(
+      verdicts(p, localWithMessages({ pulled: shifted(time) }))["v1.published.publishTime"],
+      "DIVERGES",
+      time,
+    );
+  // the same instant written with more digits is the same time
+  assert.equal(
+    verdicts(p, localWithMessages({ pulled: shifted("2026-10-05T08:41:03.993000000Z") }))[
+      "v1.published.publishTime"
+    ],
+    "MATCH",
+  );
+});
+
+test("v1.retry-declaration-no-retry: a second attempt of a schedRetryV1 occurrence diverges, and so does a run without any", () => {
+  const p = productionWithMessages();
+  const l = localWithMessages();
+  const dup = [
+    ...l.natural.lines,
+    localV1("schedRetryV1", instant(T0 + 12_000), "27440000000000002", "2026-10-05T08:41:03.993Z"),
+  ];
+  assert.equal(
+    verdicts(p, localWithMessages({ lines: dup }))["v1.retry-declaration-no-retry"],
+    "DIVERGES",
+  );
+  const without = l.natural.lines.filter((x) => x.value.handler !== "schedRetryV1");
+  assert.equal(
+    verdicts(p, localWithMessages({ lines: without, pulled: l.natural.pulled.slice(0, 2) }))[
+      "v1.retry-declaration-no-retry"
+    ],
+    "DIVERGES",
+  );
+});
+
+test("the emulator profile has no job topic: every published-message row diverges there, and the strict row is its own", () => {
+  const table = compareProfiles(productionWithMessages(), localWithMessages(), {
+    ...localWithMessages(),
+    natural: {
+      ...localWithMessages().natural,
+      pulled: localWithMessages().natural.pulled.map((t) => ({ ...t, status: 404, messages: [] })),
+    },
+  });
+  for (const id of PUBLISHED_ROWS) {
+    const row = table.find((r) => r.id === id);
+    assert.equal(row.strict.verdict, "MATCH", id);
+    assert.equal(row.emulator.verdict, "DIVERGES", id);
+  }
 });

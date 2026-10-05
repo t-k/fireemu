@@ -50,8 +50,13 @@ export const secondsOf = (instant) => {
 /** Seconds a forced run's first frame may trail (or, by a clock step, lead) the request that forced it. */
 const FORCED_FRAME_WINDOW = [-1, 5];
 
-/** The seconds the lag of a natural start against its own schedule time may vary by (production's varied by 0.8 s). */
-const ON_TIME_SPREAD = 5;
+/**
+ * The seconds the lag of a natural start against its own schedule time may vary by. Production's varied by 0.8 s in run
+ * `156715222b86ea44` and by up to about 12.6 s in run `f123d4fa2d61c5f5` (the slow job's revision started cold); a queue
+ * starts each occurrence after the run it waited for, so with a 100 s handler on a 60 s cadence its lag grows by 40 s or
+ * more from one start to the next. 20 s separates the two: it is above what production did and below what a queue does.
+ */
+const ON_TIME_SPREAD = 20;
 
 /**
  * What a job whose handler outlasts its cadence did about overlap, from its `start` and `end` frames (`at` in
@@ -64,9 +69,9 @@ const ON_TIME_SPREAD = 5;
  * - `occurrencesSkipped`: whether two consecutive natural starts are more than one and a half cadences apart, so that
  *   an occurrence in between never started;
  * - `forcedStartsInFlight`: whether a forced run began while another run was in flight (production: yes);
- * - `startsOnTime`: whether every natural start came when its own occurrence was due, to within a few seconds of the
- *   others' lag. A queue also leaves two starts a cadence or more apart and none inside a run, but it starts each
- *   occurrence late, after the run it waited for; a skip never delays one (production: no start more than 0.8 s off
+ * - `startsOnTime`: whether every natural start came when its own occurrence was due, to within `ON_TIME_SPREAD` seconds
+ *   of the others' lag. A queue also leaves two starts a cadence or more apart and none inside a run, but it starts each
+ *   occurrence late, after the run it waited for; a skip never delays one (production: no start more than 12.6 s off
  *   the others' lag). A start with no schedule time is not on time.
  */
 export function inFlightFacts(frames, forcedAt, cadenceSeconds) {
@@ -414,6 +419,104 @@ export function rows(production, local) {
       JSON.stringify(unique(lv1.map((f) => Object.keys(f.context).toSorted()))),
   );
 
+  // ---- Gen1: the message published to the job's topic ----
+  // Cloud Scheduler publishes one message to the job's topic for each occurrence (and each forced run); the handler's
+  // context names that message. The recording holds what pull subscriptions on the topics held (`published`), the local
+  // run what the same kind of subscription held on the broker (`natural.pulled`). A recording without any (run 2) has
+  // no such rows.
+  const published = production.published ?? [];
+  if (published.length > 0) {
+    const TOPIC = /^firebase-schedule-(.+)-us-central1$/;
+    const asMessage = (fn, m) => ({
+      fn,
+      id: String(m.messageId),
+      time: String(m.publishTime),
+      hasData: Boolean(m.data ?? m.hasData),
+      attributes: m.attributes ?? {},
+    });
+    const pMsgs = published.map((m) => asMessage(m.function, m));
+    // only a topic of the job's own id (the official emulator's has no region) that answered and held messages counts
+    const lMsgs = (local.natural.pulled ?? []).flatMap((t) => {
+      const fn = TOPIC.exec(String(t.topic))?.[1];
+      return t.status === 200 && fn ? (t.messages ?? []).map((m) => asMessage(fn, m)) : [];
+    });
+    const same = (p, l) => p.length > 0 && JSON.stringify(p) === JSON.stringify(l);
+    const pTopics = unique(pMsgs.map((m) => m.fn));
+    const lTopics = unique(lMsgs.map((m) => m.fn));
+    add(
+      "v1.published.topic",
+      "v1-pubsub-delivery",
+      "context-resource-topic-versus-job",
+      pTopics,
+      lTopics,
+      same(pTopics, lTopics),
+      "each first-generation function's topic has the job's id (`firebase-schedule-<name>-<region>`) and holds its messages",
+    );
+    const pData = unique(pMsgs.map((m) => m.hasData));
+    const lData = unique(lMsgs.map((m) => m.hasData));
+    add(
+      "v1.published.data",
+      "v1-pubsub-delivery",
+      "published-data",
+      pData,
+      lData,
+      same(pData, lData),
+      "the published message has no data",
+    );
+    const attributesOf = (m) => Object.fromEntries(Object.entries(m.attributes).toSorted());
+    const pAttributes = unique(pMsgs.map(attributesOf));
+    const lAttributes = unique(lMsgs.map(attributesOf));
+    add(
+      "v1.published.attributes",
+      "v1-pubsub-delivery",
+      "published-attributes",
+      pAttributes,
+      lAttributes,
+      same(pAttributes, lAttributes),
+      'the published message\'s only attribute is `scheduled: "true"`',
+    );
+    // the handler frame that reports a message: the one of the same function whose context event id is the message id
+    const frameOf = (frames) => (m) =>
+      frames.find((f) => f.handler === m.fn && f.context?.eventId === m.id);
+    const pFrame = frameOf(pv1);
+    const lFrame = frameOf(lv1);
+    const idFacts = (frame) => (m) => ({
+      form: /^\d{17}$/.test(m.id) ? "<17 digits>" : "<other>",
+      namedByAHandler: frame(m) !== undefined,
+    });
+    const pIds = unique(pMsgs.map(idFacts(pFrame)));
+    const lIds = unique(lMsgs.map(idFacts(lFrame)));
+    add(
+      "v1.published.messageId",
+      "v1-pubsub-delivery",
+      "message-id-presence",
+      pIds,
+      lIds,
+      same(pIds, lIds),
+      "the message id is a Pub/Sub message id and is the event id of the handler's context",
+    );
+    // an instant to the nanosecond, written however many digits: seconds and the fraction without trailing zeros
+    const exact = (instant) => {
+      const m = /^(.*?)(?:\.(\d+))?Z$/.exec(String(instant));
+      return m ? `${Date.parse(m[1] + "Z") / 1000}.${(m[2] ?? "").replace(/0+$/, "")}` : null;
+    };
+    const timeFacts = (frame) => (m) => {
+      const f = frame(m);
+      return f ? exact(f.context.timestamp) === exact(m.time) : "no handler reports it";
+    };
+    const pTimes = unique(pMsgs.map(timeFacts(pFrame)));
+    const lTimes = unique(lMsgs.map(timeFacts(lFrame)));
+    add(
+      "v1.published.publishTime",
+      "v1-pubsub-delivery",
+      "publishTime",
+      pTimes,
+      lTimes,
+      same(pTimes, lTimes),
+      "the handler's context time is the publish time of its message",
+    );
+  }
+
   // ---- failure handling ----
   // An occurrence is told by its message id, which a redelivery keeps: a retry some seconds later is the same one.
   const perOccurrence = (frames, key) => {
@@ -438,6 +541,26 @@ export function rows(production, local) {
     JSON.stringify(pFail) === JSON.stringify(lFail),
     "a Gen1 handler that throws is attempted once per occurrence",
   );
+
+  if (pv1.some((f) => f.handler === "schedRetryV1")) {
+    const pRetry = perOccurrence(
+      pv1.filter((f) => f.handler === "schedRetryV1"),
+      (f) => f.context.eventId,
+    );
+    const lRetry = perOccurrence(
+      handlerLines(local.natural, "schedRetryV1"),
+      (line) => line.value.context.eventId,
+    );
+    add(
+      "v1.retry-declaration-no-retry",
+      "v1-two-stage-retry",
+      "handler-retry-declaration",
+      pRetry,
+      lRetry,
+      JSON.stringify(pRetry) === JSON.stringify(lRetry),
+      "a Gen1 function declared with `retryCount` 1 whose handler throws is attempted once per occurrence: its job's retry covers the publish, never the handler",
+    );
+  }
 
   // ---- cadence ----
   const natural = (frames, handler, timeOf) =>

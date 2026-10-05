@@ -2,7 +2,11 @@
 // recording. Loopback only; needs a fireemu binary (build it with RUSTC_WRAPPER= so that no compiler cache is
 // involved), a Node 22 binary and a node_modules holding firebase-functions 7.3.2.
 //
-//   node run-compare.mjs --fireemu <bin> --node <node22> --deps <node_modules> [--out <file>]
+//   node run-compare.mjs --fireemu <bin> --node <node22> --deps <node_modules> [--out <file>] [--production <digest>]
+//
+// `--production` names the recording's public digest (default `production-run2.json`; `production-run3.json` is the
+// third delivery recording, which also holds the messages pulled from the Gen1 topics: the comparison then puts a pull
+// subscription on each Gen1 function's topic in the local run and adds the published-message rows).
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -19,7 +23,11 @@ const args = Object.fromEntries(
 for (const key of ["fireemu", "node", "deps"])
   if (!args[key]) throw new Error(`--${key} is required`);
 
-const production = loadDigest(join(here, "production-run2.json"));
+const production = loadDigest(join(here, args.production ?? "production-run2.json"));
+// The Gen1 functions' topics in the recording (the jobs' ids): the local run subscribes to the same ones.
+const pullTopics = [...new Set((production.published ?? []).map((m) => m.function))]
+  .toSorted()
+  .map((fn) => `firebase-schedule-${fn}-us-central1`);
 // The recorded fixture's slow handler sleeps 100 real seconds, which would stall a logical clock; the copy sleeps 100 ms.
 const patch = (source) =>
   source.replace("setTimeout(resolve, 100_000)", "setTimeout(resolve, 100)");
@@ -41,6 +49,7 @@ else
         profile,
         fixtureDir: join(here, "..", "fixture"),
         seconds: 700,
+        pullTopics,
         patch,
       }),
       // The slow job's handler lasts 100 logical seconds, so an occurrence can fall inside a running handler.

@@ -25,7 +25,18 @@ export function parseTimeline(output) {
   const lines = [];
   const state = [];
   const manual = [];
+  const pulled = [];
   for (const line of String(output).split("\n")) {
+    // `PULLED <json>`: what a pull subscription held after the last step (a line the daemon cut is not one)
+    const held = /^PULLED (\{.*)$/.exec(line);
+    if (held) {
+      try {
+        pulled.push(JSON.parse(held[1]));
+      } catch {
+        // a line cut short: not recorded
+      }
+      continue;
+    }
     // `MANUAL <name> <instant> <answer>`: a run made by hand, at the logical instant the child printed
     const hand = /^MANUAL (\S+) (\S+) (\{.*)$/.exec(line);
     if (hand) {
@@ -54,7 +65,7 @@ export function parseTimeline(output) {
     }
     if (line.startsWith("STATE ")) state.push(JSON.parse(line.slice(6)));
   }
-  return { lines, unplaced: pending.length, state: state.at(-1) ?? null, manual };
+  return { lines, unplaced: pending.length, state: state.at(-1) ?? null, manual, pulled };
 }
 
 const freePort = () =>
@@ -77,6 +88,8 @@ const freePort = () =>
  * @param {string[]} [options.manual] functions to run by hand before the clock moves
  * @param {{name: string, afterSeconds: number}[]} [options.manualAt] functions to run by hand right after a step
  * @param {boolean} [options.clockFile] keep the logical epoch seconds in a file for a handler that lasts logical time
+ * @param {string[]} [options.pullTopics] Pub/Sub topic ids to put a pull subscription on (the broker is then served) and
+ *   to pull once after the last step; what they held is in the result's `pulled`
  * @param {boolean} [options.awaitIdle] wait for the runtime to be idle after each step
  * @param {number} [options.pauseMs] real milliseconds to wait after each step
  * @param {(source: string, context: {clockFile?: string}) => string} [options.patch] a rewrite of the copied `index.js`
@@ -94,6 +107,7 @@ export async function runLocal({
   clockFile = false,
   awaitIdle = true,
   pauseMs = 40,
+  pullTopics = [],
   patch = (source, _context) => source,
 }) {
   const work = mkdtempSync(join(tmpdir(), "fireemu-local-delivery-"));
@@ -114,7 +128,7 @@ export async function runLocal({
       "--project",
       "demo-sched",
       "--only",
-      "functions",
+      pullTopics.length ? "functions,pubsub" : "functions",
       "--config",
       join(work, "fireemu.json"),
       "--functions",
@@ -148,6 +162,9 @@ export async function runLocal({
         ? { LOCAL_MANUAL_AT: manualAt.map((m) => `${m.name}@${m.afterSeconds}`).join(",") }
         : {}),
       ...(clockPath ? { LOCAL_CLOCK_FILE: clockPath } : {}),
+      ...(pullTopics.length
+        ? { LOCAL_PROJECT: "demo-sched", LOCAL_PULL_TOPICS: pullTopics.join(",") }
+        : {}),
     };
     const child = spawn(fireemu, args, { env, stdio: ["ignore", "pipe", "pipe"] });
     let output = "";

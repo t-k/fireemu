@@ -118,6 +118,28 @@ export function extract(runDir) {
       effective: answered?.status === 200 ? (answer?.retryConfig ?? null) : null,
     };
   }
+  // The messages pulled from the Gen1 functions' topics (the recorder's pull subscriptions): once each, whichever pull
+  // saw them, without the ack id (a credential-like token). `atMs` is on the frames' timeline.
+  const published = [];
+  const seenMessages = new Set();
+  for (const pull of rows.filter(
+    (r) => r.state === "response-persisted" && r.status === 200 && /^pull-/.test(String(r.id)),
+  )) {
+    for (const received of body(pull)?.receivedMessages ?? []) {
+      const message = received.message ?? {};
+      if (seenMessages.has(message.messageId)) continue;
+      seenMessages.add(message.messageId);
+      published.push({
+        function: String(pull.id).split("-").at(-1),
+        messageId: message.messageId,
+        publishTime: message.publishTime,
+        atMs: Date.parse(message.publishTime) - origin,
+        attributes: message.attributes ?? {},
+        hasData: Boolean(message.data),
+      });
+    }
+  }
+  published.sort((a, b) => a.atMs - b.atMs);
   const digest = {
     schemaVersion: 1,
     run: {
@@ -151,6 +173,7 @@ export function extract(runDir) {
     schedulerEntryTypes: types,
     frameCounts: result.frames,
     frames: handled,
+    published,
     attempts,
   };
   const text = JSON.stringify(digest);

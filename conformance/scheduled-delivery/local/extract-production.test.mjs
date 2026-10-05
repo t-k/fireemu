@@ -391,3 +391,72 @@ test("a run with no extra job create has an empty extraJobs, and the recording d
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test("the messages pulled from a Gen1 topic are kept once each, without their ack ids, in publish order", () => {
+  const dir = runDir();
+  const message = (messageId, publishTime, extra = {}) => ({
+    ackId: "secret-ack-" + messageId,
+    message: { attributes: { scheduled: "true" }, messageId, publishTime, ...extra },
+  });
+  const pulls = [
+    row("pull-pass1-2-schedOkV1", {
+      receivedMessages: [
+        message("22256340823546561", "2026-10-05T08:41:31.286Z"),
+        message("22257391512846670", "2026-10-05T08:41:10.855Z"),
+      ],
+    }),
+    // a later pull redelivers one of them (an unacknowledged message is delivered again)
+    row("pull-pass2-1-schedOkV1", {
+      receivedMessages: [message("22256340823546561", "2026-10-05T08:41:31.286Z")],
+    }),
+    row("pull-pass1-2-schedRetryV1", {
+      receivedMessages: [
+        message("21339796619509982", "2026-10-05T08:41:38.993Z", { data: "YQ==" }),
+      ],
+    }),
+    // an empty answer, an answer that is not a 200, and an acknowledge are not messages
+    row("pull-pass1-3-schedFailV1", {}),
+    { ...row("pull-pass1-4-schedFailV1", { error: { code: 503 } }), status: 503 },
+    row("ack-pass1-2-schedOkV1", {}),
+  ];
+  const journalFile = join(dir, `journal-${RUN}.jsonl`);
+  writeFileSync(
+    journalFile,
+    readFileSync(journalFile, "utf8") + pulls.map((r) => JSON.stringify(r)).join("\n") + "\n",
+  );
+  const digest = extract(dir);
+  assert.deepEqual(digest.published, [
+    {
+      function: "schedOkV1",
+      messageId: "22257391512846670",
+      publishTime: "2026-10-05T08:41:10.855Z",
+      atMs: 6746,
+      attributes: { scheduled: "true" },
+      hasData: false,
+    },
+    {
+      function: "schedOkV1",
+      messageId: "22256340823546561",
+      publishTime: "2026-10-05T08:41:31.286Z",
+      atMs: 27177,
+      attributes: { scheduled: "true" },
+      hasData: false,
+    },
+    {
+      function: "schedRetryV1",
+      messageId: "21339796619509982",
+      publishTime: "2026-10-05T08:41:38.993Z",
+      atMs: 34884,
+      attributes: { scheduled: "true" },
+      hasData: true,
+    },
+  ]);
+  assert.ok(!JSON.stringify(digest).includes("secret-ack"));
+  rmSync(dir, { recursive: true, force: true });
+});
+
+test("a run with no pulled message has an empty published list", () => {
+  const dir = runDir();
+  assert.deepEqual(extract(dir).published, []);
+  rmSync(dir, { recursive: true, force: true });
+});

@@ -39,7 +39,11 @@ impl SubscriberService {
         let reported = state
             .reported_topic(name)
             .unwrap_or_else(|| config.topic.to_full());
-        Ok(subscription_to_proto(config, &reported))
+        Ok(subscription_to_proto(
+            config,
+            &reported,
+            self.handle.paging_policy,
+        ))
     }
 }
 
@@ -188,7 +192,7 @@ impl Subscriber for SubscriberService {
                 let reported = state
                     .reported_topic(&c.name)
                     .unwrap_or_else(|| c.topic.to_full());
-                subscription_to_proto(c, &reported)
+                subscription_to_proto(c, &reported, self.handle.paging_policy)
             })
             .collect();
         let page = paginate(
@@ -226,8 +230,14 @@ impl Subscriber for SubscriberService {
     ) -> Result<Response<()>, Status> {
         let req = request.into_inner();
         let name = SubscriptionName::parse(&req.subscription).map_err(|e| status(&e))?;
-        let secs = u32::try_from(req.ack_deadline_seconds)
-            .map_err(|_| Status::invalid_argument("ackDeadlineSeconds must be non-negative"))?;
+        let secs = if self.handle.paging_policy == crate::PagingPolicy::Strict {
+            crate::admission::ack_ids(&req.ack_ids).map_err(|error| status(&error))?;
+            crate::admission::ack_deadline(i64::from(req.ack_deadline_seconds))
+                .map_err(|error| status(&error))?
+        } else {
+            u32::try_from(req.ack_deadline_seconds)
+                .map_err(|_| Status::invalid_argument("ackDeadlineSeconds must be non-negative"))?
+        };
         let now = self.handle.now();
         self.handle
             .state()
@@ -242,6 +252,9 @@ impl Subscriber for SubscriberService {
     ) -> Result<Response<()>, Status> {
         let req = request.into_inner();
         let name = SubscriptionName::parse(&req.subscription).map_err(|e| status(&e))?;
+        if self.handle.paging_policy == crate::PagingPolicy::Strict {
+            crate::admission::ack_ids(&req.ack_ids).map_err(|error| status(&error))?;
+        }
         self.handle
             .acknowledge(&name, &req.ack_ids)
             .map_err(|e| status(&e))?;
@@ -254,10 +267,26 @@ impl Subscriber for SubscriberService {
     ) -> Result<Response<pb::PullResponse>, Status> {
         let req = request.into_inner();
         let name = SubscriptionName::parse(&req.subscription).map_err(|e| status(&e))?;
-        let max = usize::try_from(req.max_messages.max(0)).unwrap_or(0);
+        let max = if self.handle.paging_policy == crate::PagingPolicy::Strict {
+            crate::admission::max_messages(i64::from(req.max_messages))
+                .map_err(|error| status(&error))?
+        } else {
+            usize::try_from(req.max_messages.max(0)).unwrap_or(0)
+        };
+        let report_attempt = self.handle.paging_policy == crate::PagingPolicy::Emulator
+            || self
+                .handle
+                .state()
+                .subscription_config(&name)
+                .map_err(|error| status(&error))?
+                .dead_letter_policy
+                .is_some();
         let received = self.handle.pull(&name, max).map_err(|e| status(&e))?;
         Ok(Response::new(pb::PullResponse {
-            received_messages: received.iter().map(received_to_proto).collect(),
+            received_messages: received
+                .iter()
+                .map(|message| received_to_proto(message, report_attempt))
+                .collect(),
         }))
     }
 
@@ -275,10 +304,14 @@ impl Subscriber for SubscriberService {
             .ok_or_else(|| Status::invalid_argument("streaming pull opened with no request"))?;
         let name = SubscriptionName::parse(&first.subscription).map_err(|e| status(&e))?;
         // Fail fast if the subscription does not exist.
-        self.handle
-            .state()
-            .subscription_config(&name)
-            .map_err(|e| status(&e))?;
+        let report_attempt = self.handle.paging_policy == crate::PagingPolicy::Emulator
+            || self
+                .handle
+                .state()
+                .subscription_config(&name)
+                .map_err(|error| status(&error))?
+                .dead_letter_policy
+                .is_some();
 
         let handle = self.handle.clone();
         let (tx, rx) = tokio::sync::mpsc::channel::<Result<pb::StreamingPullResponse, Status>>(16);
@@ -306,7 +339,7 @@ impl Subscriber for SubscriberService {
                         match pulled {
                             Ok(msgs) if !msgs.is_empty() => {
                                 let resp = pb::StreamingPullResponse {
-                                    received_messages: msgs.iter().map(received_to_proto).collect(),
+                                    received_messages: msgs.iter().map(|message|received_to_proto(message,report_attempt)).collect(),
                                     ..pb::StreamingPullResponse::default()
                                 };
                                 if tx.send(Ok(resp)).await.is_err() {

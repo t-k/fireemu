@@ -18,6 +18,7 @@
 //! redelivery therefore advance only when the control API advances the clock, and message /
 //! ack ids come from the daemon seed, so a run reproduces and `await-idle` stays deterministic.
 
+mod admission;
 mod convert;
 mod publisher;
 mod push;
@@ -1139,7 +1140,11 @@ pub async fn serve_pubsub(
     handle.start_dead_letter_dispatcher();
     let _dispatcher_cancellation = PushDispatcherCancellationGuard(handle.clone());
     let publisher = PublisherServer::new(PublisherService::new(handle.clone()))
-        .max_decoding_message_size(MAX_MESSAGE_BYTES)
+        .max_decoding_message_size(if handle.paging_policy == PagingPolicy::Strict {
+            MAX_MESSAGE_BYTES + 1
+        } else {
+            MAX_MESSAGE_BYTES
+        })
         .max_encoding_message_size(MAX_MESSAGE_BYTES);
     let subscriber = SubscriberServer::new(SubscriberService::new(handle.clone()))
         .max_decoding_message_size(MAX_MESSAGE_BYTES)

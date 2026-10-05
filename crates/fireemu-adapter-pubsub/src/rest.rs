@@ -84,7 +84,7 @@ impl RestError {
         Self {
             status,
             code,
-            message: error.message().to_owned(),
+            message: crate::convert::wire_error_message(&error),
         }
     }
 
@@ -102,12 +102,22 @@ pub(crate) async fn handle(request: Request<Body>, handle: PubSubHandle) -> Resp
     let method = request.method().clone();
     let path = request.uri().path().to_owned();
     let query = request.uri().query().unwrap_or_default().to_owned();
-    let body = match to_bytes(request.into_body(), MAX_JSON_BYTES).await {
+    let limit = if handle.paging_policy == crate::PagingPolicy::Strict {
+        MAX_MESSAGE_BYTES
+    } else {
+        MAX_JSON_BYTES
+    };
+    let body = match to_bytes(request.into_body(), limit).await {
         Ok(body) => body,
         Err(error) => {
-            return error_response(RestError::invalid(format!(
-                "request body is too large: {error}"
-            )));
+            let message = if handle.paging_policy == crate::PagingPolicy::Strict
+                && error.to_string() == "length limit exceeded"
+            {
+                "Request payload size exceeds the limit: 10485760 bytes.".to_owned()
+            } else {
+                format!("request body is too large: {error}")
+            };
+            return error_response(RestError::invalid(message));
         }
     };
     let value = if body.is_empty() {
@@ -500,6 +510,9 @@ fn publish(
         .iter()
         .map(message_from_json)
         .collect::<Result<Vec<_>, _>>()?;
+    if handle.paging_policy == crate::PagingPolicy::Strict {
+        crate::admission::message_count(messages.len()).map_err(RestError::from_core)?;
+    }
     let published = handle
         .publish(&topic, messages)
         .map_err(RestError::from_core)?;
@@ -821,19 +834,35 @@ fn pull(
     body: &Value,
     handle: &PubSubHandle,
 ) -> Result<(StatusCode, Value), RestError> {
-    let max = field(body, "maxMessages")
-        .map(parse_usize)
-        .transpose()?
-        .unwrap_or(100);
+    let max = if handle.paging_policy == crate::PagingPolicy::Strict {
+        let value = field(body, "maxMessages")
+            .map_or(Some(0), Value::as_i64)
+            .ok_or_else(|| RestError::invalid("maxMessages must be an integer"))?;
+        crate::admission::max_messages(value).map_err(RestError::from_core)?
+    } else {
+        field(body, "maxMessages")
+            .map(parse_usize)
+            .transpose()?
+            .unwrap_or(100)
+    };
+    let report_attempt = handle.paging_policy == crate::PagingPolicy::Emulator
+        || handle
+            .state()
+            .subscription_config(&subscription)
+            .map_err(RestError::from_core)?
+            .dead_letter_policy
+            .is_some();
     let received = handle
         .pull(&subscription, max)
         .map_err(RestError::from_core)?;
-    Ok((
-        StatusCode::OK,
-        json!({
-            "receivedMessages": received.iter().map(received_json).collect::<Vec<_>>()
-        }),
-    ))
+    let mut body = json!({});
+    if !received.is_empty() {
+        body["receivedMessages"] = json!(received
+            .iter()
+            .map(|message| received_json(message, report_attempt))
+            .collect::<Vec<_>>());
+    }
+    Ok((StatusCode::OK, body))
 }
 
 #[allow(clippy::needless_pass_by_value)]
@@ -843,6 +872,9 @@ fn acknowledge(
     handle: &PubSubHandle,
 ) -> Result<(StatusCode, Value), RestError> {
     let ack_ids = string_array(body, "ackIds")?;
+    if handle.paging_policy == crate::PagingPolicy::Strict {
+        crate::admission::ack_ids(&ack_ids).map_err(RestError::from_core)?;
+    }
     handle
         .acknowledge(&subscription, &ack_ids)
         .map_err(RestError::from_core)?;
@@ -856,10 +888,18 @@ fn modify_ack_deadline(
     handle: &PubSubHandle,
 ) -> Result<(StatusCode, Value), RestError> {
     let ack_ids = string_array(body, "ackIds")?;
-    let seconds = parse_u32(
-        field(body, "ackDeadlineSeconds")
-            .ok_or_else(|| RestError::invalid("modifyAckDeadline requires ackDeadlineSeconds"))?,
-    )?;
+    let seconds =
+        if handle.paging_policy == crate::PagingPolicy::Strict {
+            crate::admission::ack_ids(&ack_ids).map_err(RestError::from_core)?;
+            let value = field(body, "ackDeadlineSeconds")
+                .map_or(Some(0), Value::as_i64)
+                .ok_or_else(|| RestError::invalid("ackDeadlineSeconds must be an integer"))?;
+            crate::admission::ack_deadline(value).map_err(RestError::from_core)?
+        } else {
+            parse_u32(field(body, "ackDeadlineSeconds").ok_or_else(|| {
+                RestError::invalid("modifyAckDeadline requires ackDeadlineSeconds")
+            })?)?
+        };
     handle
         .state()
         .modify_ack_deadline(&subscription, &ack_ids, seconds, handle.now())
@@ -999,7 +1039,11 @@ fn message_from_json(value: &Value) -> Result<PubsubMessage, RestError> {
 }
 
 fn topic_json(name: &TopicName, labels: &BTreeMap<String, String>) -> Value {
-    json!({"name": name.to_full(), "labels": labels})
+    let mut value = json!({"name": name.to_full()});
+    if !labels.is_empty() {
+        value["labels"] = json!(labels);
+    }
+    value
 }
 
 fn topic_from_json(topic: &TopicName, body: &Value) -> Result<pb::Topic, RestError> {
@@ -1196,30 +1240,41 @@ fn duration_json(duration: LogicalDuration) -> String {
 }
 
 fn snapshot_json(snapshot: &Snapshot) -> Value {
-    json!({
+    let mut value = json!({
         "name": snapshot.name,
         "topic": snapshot.topic.to_full(),
         "expireTime": timestamp_json(snapshot.expire_at),
-        "labels": snapshot.labels,
-    })
+    });
+    if !snapshot.labels.is_empty() {
+        value["labels"] = json!(snapshot.labels);
+    }
+    value
 }
 
-fn received_json(received: &ReceivedMessage) -> Value {
-    json!({
-        "ackId": received.ack_id,
-        "message": stored_message_json(&received.message),
-        "deliveryAttempt": received.delivery_attempt,
-    })
+fn received_json(received: &ReceivedMessage, report_attempt: bool) -> Value {
+    let mut value =
+        json!({"ackId":received.ack_id,"message":stored_message_json(&received.message)});
+    if report_attempt {
+        value["deliveryAttempt"] = json!(received.delivery_attempt);
+    }
+    value
 }
 
 fn stored_message_json(message: &StoredMessage) -> Value {
-    json!({
-        "data": BASE64.encode(&message.message.data),
-        "attributes": message.message.attributes,
+    let mut value = json!({
         "messageId": message.message_id,
         "publishTime": timestamp_json(message.publish_time),
-        "orderingKey": message.message.ordering_key,
-    })
+    });
+    if !message.message.data.is_empty() {
+        value["data"] = json!(BASE64.encode(&message.message.data));
+    }
+    if !message.message.attributes.is_empty() {
+        value["attributes"] = json!(message.message.attributes);
+    }
+    if !message.message.ordering_key.is_empty() {
+        value["orderingKey"] = json!(message.message.ordering_key);
+    }
+    value
 }
 
 fn timestamp_json(instant: LogicalInstant) -> String {
@@ -1247,7 +1302,17 @@ fn timestamp_json(instant: LogicalInstant) -> String {
     if fraction == 0 {
         format!("{year:04}-{month:02}-{day:02}T{hour:02}:{minute:02}:{second:02}Z")
     } else {
-        format!("{year:04}-{month:02}-{day:02}T{hour:02}:{minute:02}:{second:02}.{fraction:09}Z")
+        let (divisor, width) = if fraction % 1_000_000 == 0 {
+            (1_000_000, 3)
+        } else if fraction % 1_000 == 0 {
+            (1_000, 6)
+        } else {
+            (1, 9)
+        };
+        format!(
+            "{year:04}-{month:02}-{day:02}T{hour:02}:{minute:02}:{second:02}.{:0width$}Z",
+            fraction / divisor
+        )
     }
 }
 
@@ -1273,4 +1338,62 @@ fn error_response(error: RestError) -> Response {
             }
         }),
     )
+}
+
+#[cfg(test)]
+mod production_shape_tests {
+    use super::*;
+    use proptest::prelude::*;
+
+    proptest! {
+        #[test]
+        fn canonical_timestamp_round_trips_nanos(seconds in -2_208_988_800i64..4_102_444_800, fraction in 0i128..1_000_000_000) {
+            let instant = LogicalInstant::from_nanos(i128::from(seconds)*1_000_000_000+fraction);
+            let rendered = timestamp_json(instant);
+            prop_assert_eq!(LogicalInstant::parse_rfc3339(&rendered).unwrap(), instant);
+            let width = rendered.split_once('.').map_or(0, |(_,rest)|rest.len()-1);
+            let expected = if fraction == 0 {0} else if fraction % 1_000_000 == 0 {3} else if fraction % 1_000 == 0 {6} else {9};
+            prop_assert_eq!(width, expected);
+        }
+
+        #[test]
+        fn optional_message_fields_round_trip(data in proptest::collection::vec(any::<u8>(),0..100), attributes in proptest::collection::btree_map("[a-z]{1,10}","[a-z0-9]{0,10}",0..5), ordering_key in "[a-z0-9]{0,10}") {
+            let message = PubsubMessage {data,attributes,ordering_key};
+            let stored = StoredMessage {message:message.clone(),message_id:"22254029608272384".to_owned(),publish_time:LogicalInstant::from_unix_seconds(0)};
+            let rendered = stored_message_json(&stored);
+            prop_assert_eq!(rendered.get("data").is_some(),!message.data.is_empty());
+            prop_assert_eq!(rendered.get("attributes").is_some(),!message.attributes.is_empty());
+            prop_assert_eq!(rendered.get("orderingKey").is_some(),!message.ordering_key.is_empty());
+            prop_assert_eq!(message_from_json(&rendered).unwrap(),message);
+        }
+    }
+
+    #[test]
+    fn recorded_json_omits_empty_message_members_and_uses_canonical_timestamp_precision() {
+        let stored = StoredMessage {
+            message: PubsubMessage {
+                data: vec![0, 255],
+                ..Default::default()
+            },
+            message_id: "22254029608272384".to_owned(),
+            publish_time: LogicalInstant::from_nanos(1_700_000_000_123_000_000),
+        };
+        assert_eq!(
+            stored_message_json(&stored),
+            json!({"data":"AP8=","messageId":"22254029608272384","publishTime":"2023-11-14T22:13:20.123Z"})
+        );
+        for (fraction, suffix) in [
+            (0, "Z"),
+            (123_000_000, ".123Z"),
+            (123_456_000, ".123456Z"),
+            (123_456_789, ".123456789Z"),
+        ] {
+            assert_eq!(
+                timestamp_json(LogicalInstant::from_nanos(
+                    1_700_000_000_000_000_000 + fraction
+                )),
+                format!("2023-11-14T22:13:20{suffix}")
+            );
+        }
+    }
 }

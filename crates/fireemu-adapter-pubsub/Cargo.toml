@@ -23,6 +23,7 @@ tokio = { version = "1", features = ["rt-multi-thread", "net", "macros", "sync",
 tokio-stream = { version = "0.1", features = ["net", "sync"] }
 
 [dev-dependencies]
+proptest = "1"
 tokio = { version = "1", features = ["rt-multi-thread", "net", "macros", "sync", "time", "io-util"] }
 
 [lints]

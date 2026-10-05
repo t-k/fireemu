@@ -1242,7 +1242,7 @@ async fn redelivery_after_ack_deadline_on_virtual_clock() {
         .into_inner()
         .received_messages;
     assert_eq!(first.len(), 1);
-    assert_eq!(first[0].delivery_attempt, 1);
+    assert_eq!(first[0].delivery_attempt, 0);
 
     // The message is not redelivered without ack until the deadline passes.
     let none = subc
@@ -1274,7 +1274,7 @@ async fn redelivery_after_ack_deadline_on_virtual_clock() {
         .into_inner()
         .received_messages;
     assert_eq!(second.len(), 1);
-    assert_eq!(second[0].delivery_attempt, 2);
+    assert_eq!(second[0].delivery_attempt, 0);
 }
 
 #[tokio::test]

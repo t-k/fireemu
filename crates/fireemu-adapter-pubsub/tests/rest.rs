@@ -925,7 +925,7 @@ async fn rest_and_grpc_masks_reset_ack_deadline_and_push_config_to_defaults() {
         .unwrap()
         .into_inner();
     assert_eq!(reset.ack_deadline_seconds, 10);
-    assert_eq!(reset.push_config, None);
+    assert_eq!(reset.push_config, Some(pb::PushConfig::default()));
 }
 
 #[tokio::test]
@@ -1586,9 +1586,28 @@ async fn assert_subscription_matrix(
         "{id}"
     );
     assert!(!grpc_get.retain_acked_messages, "{id}");
-    assert!(grpc_get.message_retention_duration.is_none(), "{id}");
+    assert_eq!(
+        grpc_get
+            .message_retention_duration
+            .as_ref()
+            .unwrap()
+            .seconds,
+        604_800,
+        "{id}"
+    );
     assert!(grpc_get.labels.is_empty(), "{id}");
-    assert!(grpc_get.expiration_policy.is_none(), "{id}");
+    assert_eq!(
+        grpc_get
+            .expiration_policy
+            .as_ref()
+            .unwrap()
+            .ttl
+            .as_ref()
+            .unwrap()
+            .seconds,
+        2_678_400,
+        "{id}"
+    );
     assert!(!grpc_get.detached, "{id}");
     assert!(!grpc_get.enable_exactly_once_delivery, "{id}");
     assert!(grpc_get.bigquery_config.is_none(), "{id}");
@@ -1596,7 +1615,11 @@ async fn assert_subscription_matrix(
     assert!(grpc_get.bigtable_config.is_none(), "{id}");
     assert!(grpc_get.message_transforms.is_empty(), "{id}");
     assert!(grpc_get.tags.is_empty(), "{id}");
-    assert_eq!(grpc_get.state, 0, "{id}");
+    assert_eq!(
+        grpc_get.state,
+        pb::subscription::State::Active as i32,
+        "{id}"
+    );
     let push = grpc_get.push_config.as_ref().unwrap();
     assert!(push.attributes.is_empty(), "{id}");
     assert!(push.authentication_method.is_none(), "{id}");
@@ -2576,4 +2599,271 @@ async fn both_profiles_page_all_five_lists_and_preserve_deleted_topic_marker() {
             .into_inner();
         assert!(detached.subscriptions.is_empty());
     }
+}
+
+/// Production runs148026092d56/a8ed1cce53f0: plain topic and subscription responses.
+#[tokio::test]
+async fn recorded_both_transports_omit_empty_labels_and_return_subscription_defaults() {
+    for policy in [
+        fireemu_adapter_pubsub::PagingPolicy::Strict,
+        fireemu_adapter_pubsub::PagingPolicy::Emulator,
+    ] {
+        let address = start_policy(policy).await;
+        let topic = "projects/demo-app/topics/recorded-defaults";
+        let subscription = "projects/demo-app/subscriptions/recorded-defaults";
+        let (code, created) =
+            rest_request(address, "PUT", &format!("/v1/{topic}"), json!({})).await;
+        assert_eq!(code, 200);
+        assert_eq!(created, json!({"name":topic}));
+        let (code, created) = rest_request(
+            address,
+            "PUT",
+            &format!("/v1/{subscription}"),
+            json!({"topic":topic,"ackDeadlineSeconds":10}),
+        )
+        .await;
+        assert_eq!(code, 200);
+        assert_eq!(created["pushConfig"], json!({}));
+        let mut subscriber = SubscriberClient::new(grpc_channel(address).await);
+        let got = subscriber
+            .get_subscription(pb::GetSubscriptionRequest {
+                subscription: subscription.to_owned(),
+            })
+            .await
+            .unwrap()
+            .into_inner();
+        if policy == fireemu_adapter_pubsub::PagingPolicy::Strict {
+            assert_eq!(got.push_config, Some(pb::PushConfig::default()));
+            assert_eq!(got.message_retention_duration.unwrap().seconds, 604_800);
+            assert_eq!(
+                got.expiration_policy.unwrap().ttl.unwrap().seconds,
+                2_678_400
+            );
+            assert_eq!(got.state, pb::subscription::State::Active as i32);
+        } else {
+            assert!(got.push_config.is_none());
+            assert!(got.message_retention_duration.is_none());
+            assert!(got.expiration_policy.is_none());
+        }
+    }
+}
+
+#[tokio::test]
+async fn recorded_grpc_missing_and_duplicate_resources_use_production_diagnostics() {
+    let address = start().await;
+    let mut publisher = PublisherClient::new(grpc_channel(address).await);
+    let name = "projects/demo-app/topics/recorded-diagnostics";
+    let error = publisher
+        .get_topic(pb::GetTopicRequest {
+            topic: name.to_owned(),
+        })
+        .await
+        .unwrap_err();
+    assert_eq!(
+        error.message(),
+        "Resource not found (resource=recorded-diagnostics)."
+    );
+    publisher
+        .create_topic(pb::Topic {
+            name: name.to_owned(),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    let error = publisher
+        .create_topic(pb::Topic {
+            name: name.to_owned(),
+            ..Default::default()
+        })
+        .await
+        .unwrap_err();
+    assert_eq!(
+        error.message(),
+        "Resource already exists in the project (resource=recorded-diagnostics)."
+    );
+    let (status, body) = rest_request(address, "PUT", &format!("/v1/{name}"), json!({})).await;
+    assert_eq!(status, 409);
+    assert_eq!(body["error"]["message"], error.message());
+}
+
+#[tokio::test]
+async fn recorded_strict_unary_refusals_preserve_emulator_inputs() {
+    for policy in [
+        fireemu_adapter_pubsub::PagingPolicy::Strict,
+        fireemu_adapter_pubsub::PagingPolicy::Emulator,
+    ] {
+        let address = start_policy(policy).await;
+        let topic = "projects/demo-app/topics/recorded-admission";
+        let sub = "projects/demo-app/subscriptions/recorded-admission";
+        rest_request(address, "PUT", &format!("/v1/{topic}"), json!({})).await;
+        rest_request(
+            address,
+            "PUT",
+            &format!("/v1/{sub}"),
+            json!({"topic":topic}),
+        )
+        .await;
+        for (resource, verb, body) in [
+            (sub, "pull", json!({"maxMessages":0})),
+            (sub, "acknowledge", json!({"ackIds":[]})),
+            (
+                sub,
+                "modifyAckDeadline",
+                json!({"ackIds":["ack-0123456789abcdef"],"ackDeadlineSeconds":601}),
+            ),
+            (topic, "publish", json!({"messages":[]})),
+        ] {
+            let (code, _) =
+                rest_request(address, "POST", &format!("/v1/{resource}:{verb}"), body).await;
+            assert_eq!(
+                code,
+                if policy == fireemu_adapter_pubsub::PagingPolicy::Strict {
+                    400
+                } else {
+                    200
+                },
+                "{verb}"
+            );
+        }
+        let mut subscriber = SubscriberClient::new(grpc_channel(address).await);
+        let pulled = subscriber
+            .pull(pb::PullRequest {
+                subscription: sub.to_owned(),
+                max_messages: 0,
+                ..Default::default()
+            })
+            .await;
+        let ack = subscriber
+            .acknowledge(pb::AcknowledgeRequest {
+                subscription: sub.to_owned(),
+                ack_ids: vec![],
+            })
+            .await;
+        let deadline = subscriber
+            .modify_ack_deadline(pb::ModifyAckDeadlineRequest {
+                subscription: sub.to_owned(),
+                ack_ids: vec!["ack-0123456789abcdef".to_owned()],
+                ack_deadline_seconds: 601,
+            })
+            .await;
+        let mut publisher = PublisherClient::new(grpc_channel(address).await);
+        let publish = publisher
+            .publish(pb::PublishRequest {
+                topic: topic.to_owned(),
+                messages: vec![],
+            })
+            .await;
+        assert_eq!(
+            pulled.is_err(),
+            policy == fireemu_adapter_pubsub::PagingPolicy::Strict
+        );
+        assert_eq!(
+            ack.is_err(),
+            policy == fireemu_adapter_pubsub::PagingPolicy::Strict
+        );
+        assert_eq!(
+            deadline.is_err(),
+            policy == fireemu_adapter_pubsub::PagingPolicy::Strict
+        );
+        assert_eq!(
+            publish.is_err(),
+            policy == fireemu_adapter_pubsub::PagingPolicy::Strict
+        );
+    }
+}
+
+#[tokio::test]
+async fn strict_mixed_invalid_ack_is_atomic_and_stale_issued_ack_is_accepted() {
+    let address = start().await;
+    let mut publisher = PublisherClient::new(grpc_channel(address).await);
+    let mut subscriber = SubscriberClient::new(grpc_channel(address).await);
+    let topic = "projects/demo-app/topics/atomic-ack";
+    let sub = "projects/demo-app/subscriptions/atomic-ack";
+    publisher
+        .create_topic(pb::Topic {
+            name: topic.to_owned(),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    subscriber
+        .create_subscription(pb::Subscription {
+            name: sub.to_owned(),
+            topic: topic.to_owned(),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    publisher
+        .publish(pb::PublishRequest {
+            topic: topic.to_owned(),
+            messages: vec![pb::PubsubMessage {
+                data: vec![1],
+                ..Default::default()
+            }],
+        })
+        .await
+        .unwrap();
+    let received = subscriber
+        .pull(pb::PullRequest {
+            subscription: sub.to_owned(),
+            max_messages: 1,
+            ..Default::default()
+        })
+        .await
+        .unwrap()
+        .into_inner()
+        .received_messages;
+    let issued = received[0].ack_id.clone();
+    let error = subscriber
+        .acknowledge(pb::AcknowledgeRequest {
+            subscription: sub.to_owned(),
+            ack_ids: vec![issued.clone(), "not-an-ack-id".to_owned()],
+        })
+        .await
+        .unwrap_err();
+    assert_eq!(error.code(), tonic::Code::InvalidArgument);
+    subscriber
+        .modify_ack_deadline(pb::ModifyAckDeadlineRequest {
+            subscription: sub.to_owned(),
+            ack_ids: vec![issued.clone()],
+            ack_deadline_seconds: 0,
+        })
+        .await
+        .unwrap();
+    let redelivered = subscriber
+        .pull(pb::PullRequest {
+            subscription: sub.to_owned(),
+            max_messages: 1,
+            ..Default::default()
+        })
+        .await
+        .unwrap()
+        .into_inner()
+        .received_messages;
+    assert_eq!(redelivered.len(), 1);
+    assert_eq!(redelivered[0].message, received[0].message);
+    subscriber
+        .acknowledge(pb::AcknowledgeRequest {
+            subscription: sub.to_owned(),
+            ack_ids: vec![issued],
+        })
+        .await
+        .unwrap();
+    subscriber
+        .acknowledge(pb::AcknowledgeRequest {
+            subscription: sub.to_owned(),
+            ack_ids: vec![redelivered[0].ack_id.clone()],
+        })
+        .await
+        .unwrap();
+    let (code, empty) = rest_request(
+        address,
+        "POST",
+        &format!("/v1/{sub}:pull"),
+        json!({"maxMessages":1}),
+    )
+    .await;
+    assert_eq!(code, 200);
+    assert_eq!(empty, json!({}));
 }

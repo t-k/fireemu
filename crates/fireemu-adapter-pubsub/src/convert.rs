@@ -26,7 +26,28 @@ pub fn status(err: &PubSubError) -> tonic::Status {
         Code::ResourceExhausted => tonic::Code::ResourceExhausted,
         Code::Unimplemented => tonic::Code::Unimplemented,
     };
-    tonic::Status::new(code, err.message().to_owned())
+    tonic::Status::new(code, wire_error_message(err))
+}
+
+/// Renders the production leaf-resource diagnostics without changing the core error class.
+pub(crate) fn wire_error_message(err: &PubSubError) -> String {
+    let prefix = match err.code() {
+        Code::NotFound => "Resource not found",
+        Code::AlreadyExists => "Resource already exists in the project",
+        _ => return err.message().to_owned(),
+    };
+    let suffix = match err.code() {
+        Code::NotFound => " not found",
+        _ => " already exists",
+    };
+    let resource = ["topic ", "subscription ", "snapshot "]
+        .iter()
+        .find_map(|kind| err.message().strip_prefix(kind))
+        .and_then(|message| message.strip_suffix(suffix));
+    resource.and_then(|name| name.rsplit_once('/')).map_or_else(
+        || err.message().to_owned(),
+        |(_, leaf)| format!("{prefix} (resource={leaf})."),
+    )
 }
 
 const NANOS_PER_SEC: i128 = 1_000_000_000;
@@ -78,11 +99,15 @@ pub fn message_to_proto(stored: &StoredMessage) -> pb::PubsubMessage {
 
 /// Renders a delivered message as a wire `ReceivedMessage`.
 #[must_use]
-pub fn received_to_proto(r: &ReceivedMessage) -> pb::ReceivedMessage {
+pub fn received_to_proto(r: &ReceivedMessage, report_attempt: bool) -> pb::ReceivedMessage {
     pb::ReceivedMessage {
         ack_id: r.ack_id.clone(),
         message: Some(message_to_proto(&r.message)),
-        delivery_attempt: i32::try_from(r.delivery_attempt).unwrap_or(i32::MAX),
+        delivery_attempt: if report_attempt {
+            i32::try_from(r.delivery_attempt).unwrap_or(i32::MAX)
+        } else {
+            0
+        },
     }
 }
 
@@ -389,6 +414,7 @@ pub fn subscription_from_proto(sub: &pb::Subscription) -> Result<SubscriptionCon
 pub fn subscription_to_proto(
     config: &SubscriptionConfig,
     reported_topic: &str,
+    policy: crate::PagingPolicy,
 ) -> pb::Subscription {
     pb::Subscription {
         name: config.name.to_full(),
@@ -396,7 +422,28 @@ pub fn subscription_to_proto(
         ack_deadline_seconds: i32::try_from(config.ack_deadline_seconds).unwrap_or(10),
         enable_message_ordering: config.enable_message_ordering,
         retain_acked_messages: config.retain_acked_messages,
-        message_retention_duration: config.message_retention_duration.map(duration_to_proto),
+        message_retention_duration: config
+            .message_retention_duration
+            .map(duration_to_proto)
+            .or_else(|| {
+                (policy == crate::PagingPolicy::Strict).then_some(prost_types::Duration {
+                    seconds: 604_800,
+                    nanos: 0,
+                })
+            }),
+        expiration_policy: (policy == crate::PagingPolicy::Strict).then_some(
+            pb::ExpirationPolicy {
+                ttl: Some(prost_types::Duration {
+                    seconds: 2_678_400,
+                    nanos: 0,
+                }),
+            },
+        ),
+        state: if policy == crate::PagingPolicy::Strict {
+            pb::subscription::State::Active as i32
+        } else {
+            0
+        },
         filter: config.filter.as_str().to_owned(),
         dead_letter_policy: config
             .dead_letter_policy
@@ -409,7 +456,7 @@ pub fn subscription_to_proto(
             minimum_backoff: Some(duration_to_proto(rp.minimum_backoff)),
             maximum_backoff: Some(duration_to_proto(rp.maximum_backoff)),
         }),
-        push_config: if config.is_push() {
+        push_config: if config.is_push() || policy == crate::PagingPolicy::Strict {
             Some(pb::PushConfig {
                 push_endpoint: config.push_config.push_endpoint.clone(),
                 ..pb::PushConfig::default()
@@ -451,6 +498,19 @@ mod tests {
     use std::collections::HashMap;
 
     use super::{validate_topic_options, validate_topic_update_options};
+    use proptest::prelude::*;
+
+    proptest! {
+        #[test]
+        fn resource_errors_preserve_leaf_and_unrelated_diagnostics(leaf in "[a-z][a-z0-9-]{2,30}", kind in prop_oneof![Just("topic"), Just("subscription"), Just("snapshot")]) {
+            let error = fireemu_core_pubsub::PubSubError::not_found(format!("{kind} projects/demo-app/resources/{leaf} not found"));
+            prop_assert_eq!(super::wire_error_message(&error),format!("Resource not found (resource={leaf})."));
+            let error = fireemu_core_pubsub::PubSubError::already_exists(format!("{kind} projects/demo-app/resources/{leaf} already exists"));
+            prop_assert_eq!(super::wire_error_message(&error),format!("Resource already exists in the project (resource={leaf})."));
+            let error = fireemu_core_pubsub::PubSubError::invalid_argument(leaf.clone());
+            prop_assert_eq!(super::wire_error_message(&error),leaf);
+        }
+    }
     use fireemu_core_pubsub::Code;
 
     use super::pb;

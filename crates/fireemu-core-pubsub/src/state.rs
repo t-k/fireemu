@@ -149,7 +149,9 @@ impl PubSubState {
             topic_snapshots: BTreeMap::new(),
             snapshot_message_refs: BTreeMap::new(),
             topic_counter: 0,
-            message_counter: 0,
+            // Both frozen production recordings use 17 decimal digits for assigned IDs.
+            // Keep the counter injective; values themselves are intentionally local.
+            message_counter: 10_000_000_000_000_000,
             // Mix a fixed tag so ack ids never coincide with any other seeded stream.
             ack_rng: SplitMix64::new(seed ^ 0x5053_5542_4143_4b5f),
             snapshot_counter: 0,
@@ -1568,6 +1570,21 @@ mod tests {
         }
     }
 
+    proptest::proptest! {
+        #[test]
+        fn produced_message_ids_preserve_recorded_decimal_format_and_counter_model(count in 1usize..64, seed in proptest::prelude::any::<u64>()) {
+            let mut state = PubSubState::new(seed);
+            let name = topic("demo-app","production-ids");
+            state.create_topic(name.clone(),BTreeMap::new()).unwrap();
+            let published = state.publish_shared(&name,vec![data(b"x");count],LogicalInstant::from_unix_seconds(0)).unwrap();
+            for (index,message) in published.iter().enumerate() {
+                proptest::prop_assert_eq!(message.message_id.len(),17);
+                proptest::prop_assert!(message.message_id.bytes().all(|byte|byte.is_ascii_digit()));
+                proptest::prop_assert_eq!(message.message_id.parse::<u64>().unwrap(),10_000_000_000_000_000+u64::try_from(index).unwrap()+1);
+            }
+        }
+    }
+
     #[test]
     fn publish_then_pull_delivers() {
         let mut s = PubSubState::new(42);
@@ -2420,7 +2437,7 @@ mod tests {
         let published = state
             .publish_shared(&topic_name, vec![data(b"accepted")], now)
             .unwrap();
-        assert_eq!(published[0].message_id, "2");
+        assert_eq!(published[0].message_id, "10000000000000002");
         for observer in &observers {
             let received = state.pull(observer, 10, now).unwrap();
             assert_eq!(received.len(), 1);

@@ -1,6 +1,7 @@
 //! The `google.pubsub.v1.Publisher` service implementation.
 #![allow(clippy::result_large_err)] // tonic::Status is large by design
 
+use prost::Message;
 use tonic::{Request, Response, Status};
 
 use fireemu_core_pubsub::pagination::paginate;
@@ -77,6 +78,11 @@ impl Publisher for PublisherService {
     ) -> Result<Response<pb::PublishResponse>, Status> {
         let req = request.into_inner();
         let topic = TopicName::parse(&req.topic).map_err(|e| status(&e))?;
+        if self.handle.paging_policy == crate::PagingPolicy::Strict {
+            crate::admission::publish_request_size(req.encoded_len())
+                .map_err(|error| status(&error))?;
+            crate::admission::message_count(req.messages.len()).map_err(|error| status(&error))?;
+        }
         let messages = req.messages.into_iter().map(message_from_proto).collect();
         let published = self.handle.publish(&topic, messages);
         if published.is_ok() {

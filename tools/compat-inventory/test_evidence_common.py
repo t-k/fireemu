@@ -88,7 +88,7 @@ FILES = {
     "crates/b/src/main.rs": "binary",
     "crates/b/tests/other.rs": "integration test of b",
 }
-TEST_ONLY = {path for path in FILES if "/tests/" in path or "/benches/" in path or "/examples/" in path or "/proptest-regressions/" in path}
+TEST_ONLY = {path for path in FILES if path.split("/")[0] == "crates" and path.split("/")[2] in ("tests", "benches", "examples", "proptest-regressions")}   # the directories directly under a crate
 
 
 def repo(tmp_path, files=FILES):

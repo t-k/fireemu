@@ -307,7 +307,7 @@ test("every retry count the packet declares is one Cloud Scheduler accepts (it r
     DECLARED.schedRetryV2.retryConfig.retryCount,
     ...EXTRA_JOBS.map((job) => job.retryConfig.retryCount),
   ].filter((n) => n !== undefined);
-  assert.ok(counts.length >= 5);
+  assert.ok(counts.length >= 4);
   // 5 is the largest value production accepted (recorded as accepted), 6 the smallest it refused
   for (const count of counts)
     assert.ok(Number.isInteger(count) && count >= 0 && count <= 5, String(count));

@@ -98,10 +98,10 @@ test("the drift of each round: a PATCH body and its updateMask that name the sam
     }
 });
 
-test("the extra jobs: whole seconds, counts to 5, one aimed at the interaction and three at the backoff formula", () => {
+test("the extra jobs: whole seconds, counts to 5, three aimed at the backoff formula", () => {
   assert.deepEqual(
     EXTRA_JOBS.map((job) => job.key),
-    ["count", "double0", "double1", "double3"],
+    ["double0", "double1", "double3"],
   );
   for (const job of EXTRA_JOBS) {
     for (const [k, v] of Object.entries(job.retryConfig)) {
@@ -110,12 +110,6 @@ test("the extra jobs: whole seconds, counts to 5, one aimed at the interaction a
     assert.ok(job.retryConfig.retryCount >= 1 && job.retryConfig.retryCount <= 5, job.key);
   }
   const by = Object.fromEntries(EXTRA_JOBS.map((j) => [j.key, j.retryConfig]));
-  assert.deepEqual(by.count, {
-    retryCount: 3,
-    maxRetryDuration: "20s",
-    minBackoffDuration: "4s",
-    maxBackoffDuration: "10s",
-  });
   // no window on the probes, and a cap that no gap reaches within six attempts
   for (const key of ["double0", "double1", "double3"]) {
     assert.ok(!("maxRetryDuration" in by[key]));
@@ -300,7 +294,7 @@ test("a clean run: the drift is a PATCH of each declaration job, the redeploy a 
     }
   // the order: the passes, then round 2 (drift, deploy, readback), then round 3, then the pause
   const at = (id) => sent.indexOf(id);
-  assert.ok(at("run-1-fe-sd-run-count") < at("drift-2-declNullV2"));
+  assert.ok(at("run-1-fe-sd-run-double0") < at("drift-2-declNullV2"));
   assert.ok(at("drift-2-declTimeoutV2") < at("round-2-job-declNullV2"));
   assert.ok(at("round-2-job-declTimeoutV2") < at("drift-3-declNullV2"));
   assert.ok(at("round-3-job-declTimeoutV2") < at("pause-declNullV2-us-central1"));

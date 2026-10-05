@@ -347,7 +347,7 @@ test("a failed extra job create is settled by a read that may answer 403", async
   const settle = row(journal, "settle-extra-double1");
   assert.equal(settle.url, "https://" + JOBS + "/fe-sd-" + RUN + "-double1");
   assert.notEqual(result.outcome, "calendar-delivery-auth-stop");
-  assert.equal(ids(journal).filter((id) => id.startsWith("run-1-fe-sd-run-")).length, 3);
+  assert.equal(ids(journal).filter((id) => id.startsWith("run-1-fe-sd-run-")).length, 2);
 });
 
 test("a forced run that was refused is recorded with its class and status", async () => {
@@ -486,7 +486,7 @@ test("a leftover operation read that answers 403 is data", async () => {
 });
 
 test("a job delete that is busy is tried four times with a minute between; any other refusal stops at one", async () => {
-  const id = "fe-sd-" + RUN + "-count";
+  const id = "fe-sd-" + RUN + "-double0";
   const busy = () =>
     reply(409, {
       error: { code: 409, status: "ABORTED", message: "sync mutate calls cannot be queued" },
@@ -494,12 +494,12 @@ test("a job delete that is busy is tried four times with a minute between; any o
   const four = await go({ hooks: { ["DELETE " + JOBS + "/" + id]: async () => busy() } });
   assert.equal(four.world.calls.filter((c) => c === "DELETE " + JOBS + "/" + id).length, 4);
   assert.deepEqual(
-    ids(four.journal).filter((i) => i.startsWith("delete-job-") && i.endsWith("count")),
+    ids(four.journal).filter((i) => i.startsWith("delete-job-") && i.endsWith("double0")),
     [
-      "delete-job-0-fe-sd-run-count",
-      "delete-job-1-fe-sd-run-count",
-      "delete-job-2-fe-sd-run-count",
-      "delete-job-3-fe-sd-run-count",
+      "delete-job-0-fe-sd-run-double0",
+      "delete-job-1-fe-sd-run-double0",
+      "delete-job-2-fe-sd-run-double0",
+      "delete-job-3-fe-sd-run-double0",
     ],
   );
   assert.equal(four.sleeps.filter((ms) => ms === 60_000).length >= 4 + 4, true);

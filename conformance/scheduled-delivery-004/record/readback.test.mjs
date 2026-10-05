@@ -42,9 +42,9 @@ test("the constants are ten minutes and sixty requests", () => {
   assert.equal(READBACK_MAX_REQUESTS, 60);
 });
 
-test("every name of the run is read directly: six functions, ten jobs, two topics, two subscriptions", () => {
+test("every name of the run is read directly: six functions, nine jobs, two topics, two subscriptions", () => {
   const names = readbackNames(RUN);
-  assert.equal(names.length, 20);
+  assert.equal(names.length, 19);
   assert.deepEqual(
     names.slice(0, 6).map(([label]) => label),
     [
@@ -61,17 +61,17 @@ test("every name of the run is read directly: six functions, ten jobs, two topic
     names[4][1].includes("/v1/projects/") && names[4][1].endsWith(functionName("schedFailV1")),
   );
   assert.deepEqual(
-    names.slice(12, 16).map(([label]) => label),
-    ["job-count", "job-double0", "job-double1", "job-double3"],
+    names.slice(12, 15).map(([label]) => label),
+    ["job-double0", "job-double1", "job-double3"],
   );
-  assert.ok(names[12][1].endsWith("/jobs/fe-sd-" + RUN + "-count"));
+  assert.ok(names[12][1].endsWith("/jobs/fe-sd-" + RUN + "-double0"));
   assert.ok(names.at(-1)[1].endsWith("/subscriptions/fe-sd-" + RUN + "-pull-schedretryv1"));
 });
 
 test("an empty project reads as all absent, with only GETs and every name and list read", async () => {
   const { result, rows, world } = await readback();
   assert.equal(result.allAbsent, true);
-  assert.equal(Object.keys(result.names).length, 20);
+  assert.equal(Object.keys(result.names).length, 19);
   assert.ok(Object.values(result.names).every((n) => n.status === 404 && n.absent === true));
   assert.deepEqual(result.incompleteReads, []);
   assert.equal(result.authStop, null);
@@ -83,7 +83,7 @@ test("an empty project reads as all absent, with only GETs and every name and li
   assert.deepEqual(
     sent(rows)
       .map((r) => r.id)
-      .slice(20),
+      .slice(19),
     [
       "list-functions-v1",
       "list-functions-v2",
@@ -93,7 +93,7 @@ test("an empty project reads as all absent, with only GETs and every name and li
       "list-subscriptions",
     ],
   );
-  assert.equal(result.attempted, 26);
+  assert.equal(result.attempted, 25);
 });
 
 test("a name that still reads 200, or any answer but 404 NOT_FOUND, is not absent, and so nothing closes", async () => {
@@ -408,7 +408,7 @@ test("the command reads, writes its own journal and result, and exits 0 only whe
     assert.equal(
       sink.lines.at(-1)[1],
       JSON.stringify(
-        { runId: RUN, allAbsent: true, attempted: 26, unknown: 0, unconfirmedCreates: [] },
+        { runId: RUN, allAbsent: true, attempted: 25, unknown: 0, unconfirmedCreates: [] },
         null,
         2,
       ),

@@ -89,7 +89,7 @@ const TABLE = [
   ["POST", `${SCHED}/${JOB}:run`, {}, true],
   ["POST", `${SCHED}/${JOB}:pause`, {}, true],
   ["DELETE", `${SCHED}/${JOB}`, undefined, true],
-  ["POST", SCHED, { name: `projects/${P}/locations/us-central1/jobs/fe-sd-${RUN}-count` }, true],
+  ["POST", SCHED, { name: `projects/${P}/locations/us-central1/jobs/fe-sd-${RUN}-double0` }, true],
   ["GET", `${PUBSUB}/topics?pageSize=1000`, undefined, false],
   ["GET", `${PUBSUB}/subscriptions?pageSize=1000`, undefined, false],
   ["GET", `${PUBSUB}/topics/firebase-schedule-schedFailV1-us-central1`, undefined, false],
@@ -179,15 +179,6 @@ test("the extra jobs and the subscription name are exactly what the packet state
   assert.deepEqual(
     EXTRA_JOBS.map((j) => [j.key, j.retryConfig]),
     [
-      [
-        "count",
-        {
-          retryCount: 3,
-          maxRetryDuration: "20s",
-          minBackoffDuration: "4s",
-          maxBackoffDuration: "10s",
-        },
-      ],
       [
         "double0",
         { retryCount: 5, minBackoffDuration: "3s", maxBackoffDuration: "100s", maxDoublings: 0 },

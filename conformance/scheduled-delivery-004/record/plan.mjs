@@ -120,28 +120,13 @@ export const DRIFT = Object.freeze({
  * The extra Scheduler jobs the recorder itself creates (never deployed), each aimed at the `schedRetryV2` function
  * so that a retry rule is observed without deploying another function. Their names carry the run id. The target
  * (uri and OIDC account) is copied from the deployed job's readback at run time, so these differ from it only in the
- * retry rule and the schedule. Every field and value form below was accepted by production in run
- * 156715222b86ea44 (whole seconds, `retryCount` 0 to 5, `maxDoublings` 1 to 5); `maxDoublings 0` and the combination
- * of a count with a window were not recorded: an answer of 400 to either is the observation.
+ * retry rule and the schedule. Every field and value form below was accepted by production in runs
+ * 156715222b86ea44 and f123d4fa2d61c5f5 (whole seconds, `retryCount` 0 to 5, `maxDoublings` 1 to 5, a count with a
+ * window); `maxDoublings 0` was not recorded: an answer of 400 to it is the observation. The count-and-window
+ * interaction and the fractional window were answered by run f123d4fa2d61c5f5 (four attempts at 0, 4.6, 13.2 and
+ * 23.8 s with a window of 20 s; the fractional window refused with 400), so neither is asked again.
  */
 export const EXTRA_JOBS = Object.freeze([
-  // The interaction of a count and a window, with whole seconds only (run 156715222b86ea44 sent a fractional window
-  // here and was refused). The backoff is the recorded one of the `duration` job (min 4 s, max 10 s: gaps of about
-  // 4, 8 and 10 s, attempts at 0, 4.6, 13.2 and 23.7 s). A count of 3 allows four attempts and a window of 20 s allows
-  // three (the fourth would be at about 23.7 s): three means the chain stops at the first limit reached, four that
-  // retries continue until both limits are used up.
-  {
-    key: "count",
-    cases: ["count-and-duration-interaction"],
-    schedule: "0 0 1 1 *",
-    timeZone: "UTC",
-    retryConfig: {
-      retryCount: 3,
-      maxRetryDuration: "20s",
-      minBackoffDuration: "4s",
-      maxBackoffDuration: "10s",
-    },
-  },
   // The linear step after the doublings. The deployed `schedRetryV2` is the control (min 4 s, max 50 s, 2 doublings,
   // count 4: gaps of about 4, 8, 16 and 18.5 s in both earlier runs, where the documented rule gives 32). These three
   // use the largest count Cloud Scheduler accepts (5, six attempts) and a cap (100 s) no gap reaches: no doublings,

@@ -45,9 +45,9 @@ test("the filters name every origin and the window, and the request passes the g
   for (const name of [
     "schedFailV1",
     "schedRetryV1",
-    "schedRetryV1",
-    "declnullv2",
     "schedretryv2",
+    "declnullv2",
+    "declomitv2",
     "decltimeoutv2",
   ])
     assert.ok(filter.includes('"' + name + '"'), name);
@@ -63,7 +63,7 @@ test("the filters name every origin and the window, and the request passes the g
   assert.equal(guard.allow(listRequest({ id: "x", filter, pageToken: "abc" })), true);
   const sched = schedulerFilter({ runId: RUN, start, end });
   assert.ok(sched.startsWith('resource.type="cloud_scheduler_job" AND ('));
-  assert.equal((sched.match(/job_id=/g) ?? []).length, 10);
+  assert.equal((sched.match(/job_id=/g) ?? []).length, 9);
   assert.equal(guard.allow(listRequest({ id: "y", filter: sched })), true);
   assert.throws(() => frameFilter({ start: "yesterday", end }), /RFC 3339/);
   assert.throws(() => schedulerFilter({ runId: RUN, start, end: "x" }), /RFC 3339/);

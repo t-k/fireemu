@@ -1,10 +1,8 @@
-// r6.1 (coordinator ruling 2026-10-05, option (a) of the r6 presend review): the count job must not re-send the body
-// production refused in run 156715222b86ea44, so `count-and-duration-interaction` gets its first observation; the
-// refused fractional body gets its own job (`-fraction`, one POST, an expected 400); the test double answers what
-// production answered; and one build is read once, however many functions and lists name it.
+// The test double answers what production answered (the refused fractional window and the refused retry count of 6),
+// and one build is read once, however many functions and lists name it.
 import assert from "node:assert/strict";
 import test from "node:test";
-import { EXTRA_JOBS, FUNCTIONS, REGION, functionName } from "./plan.mjs";
+import { FUNCTIONS, REGION, functionName } from "./plan.mjs";
 import { record } from "./run.mjs";
 import { NUMBER, createWorld } from "./world.mjs";
 
@@ -48,32 +46,6 @@ const post = (world, retryConfig, id = "fe-sd-0123456789abcdef-probe") =>
       retryConfig,
     }),
   });
-
-test("the count and the window stop the chain at different attempts under the recorded backoff", () => {
-  // Recorded gaps (run 156715222b86ea44): min 4 s, max 10 s, no count: attempts at 0, 4.6, 13.2, 23.7 s (gaps of
-  // about 4, 8 and 10 s: doubled from the minimum, then held at the maximum, plus about half a second of dispatch
-  // latency each). The count job uses the same backoff.
-  const { retryCount, maxRetryDuration } = EXTRA_JOBS.find((j) => j.key === "count").retryConfig;
-  const window = Number.parseInt(maxRetryDuration, 10);
-  const gaps = [4, 8, 10, 10, 10];
-  const offsets = [0];
-  for (const gap of gaps) offsets.push(offsets.at(-1) + gap);
-  const byWindow = offsets.filter((offset) => offset <= window).length;
-  const byCount = retryCount + 1;
-  assert.equal(
-    byWindow,
-    3,
-    "the window of 20 s allows attempts at 0, 4 and 12 s (the next is at 22 s)",
-  );
-  assert.equal(byCount, 4);
-  assert.notEqual(
-    byWindow,
-    byCount,
-    "an observed chain of 3 shows the window binds, one of 4 the count",
-  );
-  // with the recorded latency the third attempt is still inside the window and the fourth is not (23.7 s)
-  assert.ok(13.2 < window && 23.7 > window);
-});
 
 test("production's refusal of a fractional window is answered by the double: 158 bytes, no job", async () => {
   const world = createWorld();

@@ -298,26 +298,26 @@ test("a subscription whose create was unknown is created only when the settling 
 });
 
 test("an extra job whose create was unknown is run and deleted only when the settling read says 200", async () => {
-  const count = "fe-sd-" + RUN + "-count";
+  const count = "fe-sd-" + RUN + "-double0";
   const post = "POST " + JOBS;
   const lost = await go(
     {
       hooks: {
         [post]: async ({ body }) =>
-          body.name.endsWith("-count") ? error(503, "UNAVAILABLE") : undefined,
+          body.name.endsWith("-double0") ? error(503, "UNAVAILABLE") : undefined,
       },
     },
     SHORT,
   );
   assert.equal(
-    ids(lost.journal).some((id) => id.includes("run-1-") && id.endsWith("-count")),
+    ids(lost.journal).some((id) => id.includes("run-1-") && id.endsWith("-double0")),
     false,
   );
   const took = await go(
     {
       hooks: {
         [post]: async ({ w, body }) => {
-          if (!body.name.endsWith("-count")) return undefined;
+          if (!body.name.endsWith("-double0")) return undefined;
           w.jobs.set(count, { ...body, state: "ENABLED", manualOnly: true });
           return error(503, "UNAVAILABLE");
         },
@@ -326,8 +326,8 @@ test("an extra job whose create was unknown is run and deleted only when the set
     SHORT,
   );
   assert.equal(
-    ids(took.journal).includes("run-1-run-count".replace("run-count", "fe-sd-run-count")) ||
-      ids(took.journal).some((id) => id.startsWith("run-1-") && id.endsWith("-count")),
+    ids(took.journal).includes("run-1-run-double0".replace("run-double0", "fe-sd-run-double0")) ||
+      ids(took.journal).some((id) => id.startsWith("run-1-") && id.endsWith("-double0")),
     true,
   );
   assert.equal(took.result.cleanup.verified, true);

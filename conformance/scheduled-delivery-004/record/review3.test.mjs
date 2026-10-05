@@ -84,7 +84,7 @@ test("near miss: the same subscription deleted with a 2xx closes the run", async
 });
 
 test("a confirmed extra job missing from the cleanup list, never deleted, reading 404, stays unsettled (probe B)", async () => {
-  const extra = extraJobId(RUN, "count");
+  const extra = extraJobId(RUN, "double0");
   const { result, world } = await go({
     hooks: {
       ["GET " + JOBS]: async ({ w }) => {
@@ -112,7 +112,7 @@ test("a confirmed extra job missing from the cleanup list, never deleted, readin
 
 test("near miss: a confirmed extra job that the list holds and the run deletes with a 2xx closes", async () => {
   const { result, world } = await go();
-  assert.ok(world.creates.includes(extraJobId(RUN, "count")));
+  assert.ok(world.creates.includes(extraJobId(RUN, "double0")));
   assert.deepEqual(result.vanishedAfterCreate, []);
   assert.equal(result.closureReady, true);
 });
@@ -323,7 +323,7 @@ test("two unknown creates in one run are both listed", async () => {
   });
   assert.deepEqual(
     extras.result.unconfirmedCreates.map((c) => c.id),
-    ["create-extra-count", "create-extra-double0", "create-extra-double1", "create-extra-double3"],
+    ["create-extra-double0", "create-extra-double1", "create-extra-double3"],
   );
 });
 
@@ -351,7 +351,7 @@ test("a CLI deploy that cannot even be run leaves every CLI-made name unconfirme
 });
 
 test("a name that a list showed before the run issued it is no evidence about its create", async () => {
-  const extra = extraJobId(RUN, "count");
+  const extra = extraJobId(RUN, "double0");
   const real =
     "cloudscheduler.googleapis.com/v1/projects/fireemu-oracle-sbx/locations/us-central1/jobs/";
   const { result } = await go(

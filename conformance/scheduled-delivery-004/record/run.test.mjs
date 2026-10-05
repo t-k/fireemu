@@ -68,7 +68,7 @@ test("a clean run records, cleans up and may close", async () => {
   );
   assert.equal(result.cleanup.verified, true);
   assert.equal(result.passes.length, 2);
-  assert.ok(result.passes.every((p) => p.complete && p.forced.length === 10));
+  assert.ok(result.passes.every((p) => p.complete && p.forced.length === 9));
   assert.equal(
     world.jobs.size +
       world.topics.size +
@@ -102,7 +102,7 @@ test("every name that is created is journaled as issued before the request that 
   const { journal } = await go();
   const issued = journal.filter((r) => r.state === "issued");
   assert.equal(issued.filter((r) => r.kind === "function").length, 6);
-  assert.equal(issued.filter((r) => r.kind === "job").length, 10);
+  assert.equal(issued.filter((r) => r.kind === "job").length, 9);
   assert.equal(issued.filter((r) => r.kind === "topic").length, 2);
   assert.equal(issued.filter((r) => r.kind === "subscription").length, 2);
   for (const row of issued.filter((r) => r.transport === "rest")) {
@@ -415,13 +415,13 @@ test("a job DELETE answered with the recorded 409 is repeated after sixty second
     leaveOnDelete: ALL_FUNCTIONS.slice(0, 0),
     hooks: {
       ["DELETE /v1/projects/fireemu-oracle-sbx/locations/us-central1/jobs/" +
-      extraJobId(RUN, "count")]: async () => (first ? ((first = false), busy()) : undefined),
+      extraJobId(RUN, "double0")]: async () => (first ? ((first = false), busy()) : undefined),
     },
   });
   assert.ok(sleeps.includes(60_000));
   assert.equal(
     world.calls.filter(
-      (c) => c.endsWith("jobs/" + extraJobId(RUN, "count")) && c.startsWith("DELETE"),
+      (c) => c.endsWith("jobs/" + extraJobId(RUN, "double0")) && c.startsWith("DELETE"),
     ).length,
     2,
   );
@@ -517,7 +517,7 @@ test("the extra jobs copy the deployed retry job's target and differ only in the
   const creates = journal.filter(
     (r) => r.state === "before-send" && r.id.startsWith("create-extra-"),
   );
-  assert.equal(creates.length, 4);
+  assert.equal(creates.length, 3);
   for (const row of creates) {
     assert.deepEqual(row.json.httpTarget, {
       uri: "https://schedretryv2-abc-uc.a.run.app",
@@ -529,7 +529,6 @@ test("the extra jobs copy the deployed retry job's target and differ only in the
   assert.deepEqual(
     creates.map((r) => Object.keys(r.json.retryConfig)),
     [
-      ["retryCount", "maxRetryDuration", "minBackoffDuration", "maxBackoffDuration"],
       ["retryCount", "minBackoffDuration", "maxBackoffDuration", "maxDoublings"],
       ["retryCount", "minBackoffDuration", "maxBackoffDuration", "maxDoublings"],
       ["retryCount", "minBackoffDuration", "maxBackoffDuration", "maxDoublings"],

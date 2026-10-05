@@ -23,8 +23,8 @@ const FN = "/projects/" + P + "/locations/us-central1/functions";
 const yes = (r) => assert.equal(guard.allow(r), true, r.method + " " + r.url);
 const no = (r) => assert.equal(guard.allow(r), false, r.method + " " + r.url);
 
-test("the ids the recorder may touch: six deployed jobs, four extra jobs, two pull subscriptions", () => {
-  assert.equal(jobIds(RUN).length, 10);
+test("the ids the recorder may touch: six deployed jobs, three extra jobs, two pull subscriptions", () => {
+  assert.equal(jobIds(RUN).length, 9);
   assert.deepEqual(
     jobIds(RUN)
       .slice(0, 6)
@@ -170,9 +170,9 @@ test("Cloud Run and Artifact Registry are read only", () => {
     no(r);
 });
 
-test("Cloud Scheduler: the ten jobs, the run, the pause, the delete and the create of the extra jobs", () => {
+test("Cloud Scheduler: the nine jobs, the run, the pause, the delete and the create of the extra jobs", () => {
   const deployed = scheduleId("schedRetryV2");
-  const extra = extraJobId(RUN, "count");
+  const extra = extraJobId(RUN, "double0");
   yes(spec("GET", SCHED + "?pageSize=500"));
   for (const id of [deployed, extra]) {
     yes(spec("GET", SCHED + "/" + id));
@@ -193,7 +193,7 @@ test("Cloud Scheduler: the ten jobs, the run, the pause, the delete and the crea
     spec("POST", SCHED + "/" + deployed + ":resume", {}),
     spec("PATCH", SCHED + "/" + deployed, {}),
     spec("DELETE", SCHED + "/" + deployed + "x"),
-    spec("DELETE", SCHED + "/" + extraJobId("fedcba9876543210", "count")),
+    spec("DELETE", SCHED + "/" + extraJobId("fedcba9876543210", "double0")),
     spec("POST", SCHED + "/" + deployed + ":run", { force: true }),
     spec("GET", SCHED + "?pageSize=100"),
     spec(
@@ -365,5 +365,5 @@ test("mutations are the writes and the pull; reads are not", () => {
     false,
   );
   assert.equal(m(spec("GET", "https://example.com/")), false);
-  assert.equal(EXTRA_JOBS.length, 4);
+  assert.equal(EXTRA_JOBS.length, 3);
 });

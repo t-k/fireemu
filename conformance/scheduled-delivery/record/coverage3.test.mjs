@@ -268,7 +268,9 @@ test("readiness needs all three lists in one poll, and gives up after forty", as
   });
   assert.equal(count(flaky.journal, /^ready-\d+-functions-v1$/), 3);
   assert.equal(flaky.sleeps.filter((ms) => ms === 30_000).length, 2);
-  assert.equal(flaky.result.outcome, "calendar-delivery-recorded");
+  // An unreadable list is an open question (`incompleteReads`): the run cannot close, so it is not "recorded".
+  assert.equal(flaky.result.outcome, "calendar-delivery-needs-review");
+  assert.equal(flaky.result.closureReady, false);
   const never = await go({
     hooks: {
       ["GET " + LISTR]: async ({ w }) =>

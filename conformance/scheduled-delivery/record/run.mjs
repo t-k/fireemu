@@ -9,6 +9,13 @@
 // re-sent and never closed; a 401, or a 403 on a write, stops the run; the CLI runs at most once per action;
 // Gen2 names are compared case-exact; a leftover function is deleted through REST once, after a complete
 // fresh list shows it, with no resend.
+//
+// Settlement (coordinator rulings of 2026-10-05): an unknown CREATE is settled only by an own 2xx read showing the
+// name (a direct read, or a 2xx list naming it); a 404 never settles it, so it is listed as unconfirmed and the run
+// cannot close. A create confirmed by a 2xx that later reads 404, or whose own DELETE answers 404, or that is
+// missing from a list, is not settled in the run either (read-after-write lag): only the read-back at least ten
+// minutes later settles it as gone. The one exception is the run's own DELETE that answered 2xx (or a clean CLI
+// delete, for the names the CLI made), after which a 404 is the normal end.
 import { AuthStop, answerClass, createCapture, isUnknownClass, readable } from "../capture.mjs";
 import {
   cliFailed,
@@ -122,6 +129,7 @@ export async function record({
   naturalWindowMs = NATURAL_WINDOW_MS,
   normalCeiling = NORMAL_CEILING,
   signal = { aborted: false },
+  prepareRequest = null,
 }) {
   const guard = createGuard(runId, projectNumber);
   const SERVICES_URL =
@@ -156,6 +164,27 @@ export async function record({
   };
   const unknownMutations = [];
   const incompleteReads = [];
+  // Every name this run may create, by label (the labels of the cleanup's read-back), and the evidence about it.
+  const NAMES = new Map([
+    ...ALL_FUNCTIONS.map((fn) => ["function-" + fn, functionName(fn)]),
+    ...ALL_FUNCTIONS.map((fn) => ["job-" + scheduleId(fn), jobName(scheduleId(fn))]),
+    ...FUNCTIONS.v1.map((fn) => ["topic-" + fn, topicName(scheduleId(fn))]),
+    ...EXTRA_JOBS.map((job) => [
+      "job-" + extraJobId(runId, job.key),
+      jobName(extraJobId(runId, job.key)),
+    ]),
+    ...FUNCTIONS.v1.map((fn) => [
+      "subscription-" + fn,
+      subscriptionName(pullSubscriptionId(runId, fn)),
+    ]),
+  ]);
+  const labelOf = new Map([...NAMES].map(([label, name]) => [name, label]));
+  const issued = new Set(); // labels whose name was journaled as issued
+  const confirmed = new Set(); // issued labels an own 2xx showed (a create answer, a direct read or a list)
+  const ownDeleted = new Set(); // labels this run's own DELETE answered 2xx for
+  const pendingCreates = new Map(); // label -> an unknown REST create answer
+  const cliLabels = new Map(); // label -> name, for the names the CLI deploy makes
+  let deployUnknown = null; // why the CLI deploy's effect is unknown, if it is
   let created = false;
   let stopped = null;
   const startedAt = clock();
@@ -171,12 +200,28 @@ export async function record({
     if (signal.aborted && !spec.cleanup) throw new BudgetError("stopped by a signal");
     if (counts().attempted >= normalCeiling && !spec.cleanup)
       throw new BudgetError("the normal request ceiling is reached");
+    // Before the request is journaled: a token refresh that fails stops a request that was never sent, and leaves
+    // no row that would read as an unknown answer.
+    await prepareRequest?.(spec);
     return capture(spec);
+  };
+  /** An own 2xx read (a direct read, or a list page) that names an issued name confirms that it exists. */
+  const noteSeen = (answer) => {
+    if (!(answer?.status === 200 && readable(answer))) return;
+    const names = [answer.json.name];
+    for (const key of ["functions", "jobs", "topics", "subscriptions"])
+      if (Array.isArray(answer.json[key]))
+        names.push(...answer.json[key].map((item) => item?.name));
+    for (const name of names) {
+      const label = labelOf.get(name);
+      if (label && issued.has(label)) confirmed.add(label);
+    }
   };
   const read = async (spec, { observe: observed = false } = {}) => {
     const answer = await normal(observed ? { ...spec, observe: true } : spec);
     if (isUnknownClass(answer) || (answer.status >= 400 && !observed))
       incompleteReads.push({ id: spec.id, class: answerClass(answer) });
+    noteSeen(answer);
     return answer;
   };
   const mutate = async (spec) => {
@@ -199,11 +244,51 @@ export async function record({
       result = await runCli({ action });
     } catch (error) {
       unknownMutations.push({ id: "cli-" + action, class: "cli-error" });
+      if (action === "deploy") deployUnknown = "cli-error";
+      // The end of the CLI counts for the read-back's ten-minute guard even when it could not be run.
+      try {
+        await save({
+          id: "cli-" + action,
+          state: "cli-result",
+          result: { action, error: String(error?.message) },
+          responseAt: iso(clock()),
+        });
+      } catch {
+        // the journal is the thing that failed; the error below is what matters
+      }
       throw error;
     }
     const why = cliUnknownClass(result);
-    if (why) unknownMutations.push({ id: "cli-" + action, class: why });
+    if (why) {
+      unknownMutations.push({ id: "cli-" + action, class: why });
+      if (action === "deploy") deployUnknown = why;
+    }
     return result;
+  };
+  /** A clean CLI delete (exit 0, nothing errored, no timeout or signal) is the run's own delete of the CLI's names. */
+  const cliDeleteClean = () =>
+    Boolean(out.cli.delete) && !cliFailed(out.cli.delete) && !cliUnknownClass(out.cli.delete);
+  const unconfirmedCreates = () => [
+    ...[...pendingCreates.values()].filter((create) => !confirmed.has(create.label)),
+    ...(deployUnknown
+      ? [...cliLabels]
+          .filter(([label]) => !confirmed.has(label))
+          .map(([label, name]) => ({ label, id: "cli-deploy", name, class: deployUnknown }))
+      : []),
+  ];
+  /** Confirmed names that ended absent without this run's own 2xx delete: only the read-back can settle them. */
+  const vanishedAfterCreate = () => {
+    const gone = out.cleanup.readBack;
+    if (!gone) return [];
+    return [...confirmed]
+      .filter(
+        (label) =>
+          gone[label] === true &&
+          !ownDeleted.has(label) &&
+          !(cliLabels.has(label) && cliDeleteClean()),
+      )
+      .toSorted()
+      .map((label) => ({ label, name: NAMES.get(label), class: "vanished-after-create" }));
   };
   const list = async (id, url, key) => {
     const items = [];
@@ -243,9 +328,27 @@ export async function record({
     ),
   });
 
+  /** Everything that keeps a run from closing in the run itself (the read-back may settle some of it). */
+  const open = () => {
+    const known = counts();
+    const unconfirmed = unconfirmedCreates();
+    const vanished = vanishedAfterCreate();
+    return {
+      unconfirmed,
+      vanished,
+      blocked:
+        authStop() !== null ||
+        known.unknown > 0 ||
+        unknownMutations.length > 0 ||
+        incompleteReads.length > 0 ||
+        unconfirmed.length > 0 ||
+        vanished.length > 0,
+    };
+  };
   const summary = (stage, closureReady) => {
     const known = counts();
     const stop = authStop();
+    const { unconfirmed, vanished, blocked } = open();
     return {
       ...out,
       stage,
@@ -253,15 +356,16 @@ export async function record({
       ...known,
       unknownMutations: unknownMutations.length,
       unknownMutationList: unknownMutations,
+      unconfirmedCreates: unconfirmed,
+      vanishedAfterCreate: vanished,
       incompleteReads,
-      readBackRequired: unknownMutations.length > 0 || stop !== null,
+      readBackRequired:
+        unknownMutations.length > 0 ||
+        stop !== null ||
+        unconfirmed.length > 0 ||
+        vanished.length > 0,
       ...(stop ? { authStop: stop } : {}),
-      closureReady:
-        closureReady &&
-        stop === null &&
-        known.unknown === 0 &&
-        unknownMutations.length === 0 &&
-        incompleteReads.length === 0,
+      closureReady: closureReady && !blocked,
     };
   };
 
@@ -426,6 +530,10 @@ export async function record({
 
   async function deploy() {
     for (const fn of ALL_FUNCTIONS) {
+      for (const label of ["function-" + fn, "job-" + scheduleId(fn)]) {
+        issued.add(label);
+        cliLabels.set(label, NAMES.get(label));
+      }
       await save({
         id: "issue-function-" + fn,
         state: "issued",
@@ -441,6 +549,10 @@ export async function record({
         transport: "cli",
       });
     }
+    for (const fn of FUNCTIONS.v1) {
+      issued.add("topic-" + fn);
+      cliLabels.set("topic-" + fn, NAMES.get("topic-" + fn));
+    }
     for (const fn of FUNCTIONS.v1)
       await save({
         id: "issue-topic-" + fn,
@@ -451,7 +563,12 @@ export async function record({
       });
     created = true;
     out.cli.deploy = await cli("deploy");
-    await save({ id: "cli-deploy", state: "cli-result", result: out.cli.deploy });
+    await save({
+      id: "cli-deploy",
+      state: "cli-result",
+      result: out.cli.deploy,
+      responseAt: iso(clock()),
+    });
     const polls = cliFailed(out.cli.deploy) ? 2 : READY_MAX_POLLS;
     for (let poll = 1; poll <= polls; poll++) {
       const found = await lists("ready-" + poll);
@@ -491,6 +608,7 @@ export async function record({
   async function setup() {
     for (const fn of FUNCTIONS.v1) {
       const id = pullSubscriptionId(runId, fn);
+      issued.add("subscription-" + fn);
       await save({
         id: "issue-subscription-" + fn,
         state: "issued",
@@ -504,8 +622,18 @@ export async function record({
         url: PUBSUB + "/subscriptions/" + id,
         json: { topic: topicName(scheduleId(fn)), ackDeadlineSeconds: 10 },
       });
-      if (answerClass(answer) === "2xx") subsCreated.push(fn);
-      else {
+      if (answerClass(answer) === "2xx") {
+        subsCreated.push(fn);
+        confirmed.add("subscription-" + fn);
+      } else {
+        // An unknown create stays unconfirmed until an own 2xx read shows the name; a 404 never settles it.
+        if (isUnknownClass(answer))
+          pendingCreates.set("subscription-" + fn, {
+            label: "subscription-" + fn,
+            id: "create-subscription-" + fn,
+            name: NAMES.get("subscription-" + fn),
+            class: answerClass(answer),
+          });
         // An unknown or refused create: settle by a direct read of the name.
         const read1 = await read(
           { id: "settle-subscription-" + fn, method: "GET", url: PUBSUB + "/subscriptions/" + id },
@@ -527,6 +655,7 @@ export async function record({
     }
     for (const job of EXTRA_JOBS) {
       const id = extraJobId(runId, job.key);
+      issued.add("job-" + id);
       await save({
         id: "issue-extra-" + job.key,
         state: "issued",
@@ -549,8 +678,17 @@ export async function record({
             : {}),
         },
       });
-      if (answerClass(answer) === "2xx") extraCreated.push(job.key);
-      else {
+      if (answerClass(answer) === "2xx") {
+        extraCreated.push(job.key);
+        confirmed.add("job-" + id);
+      } else {
+        if (isUnknownClass(answer))
+          pendingCreates.set("job-" + id, {
+            label: "job-" + id,
+            id: "create-extra-" + job.key,
+            name: NAMES.get("job-" + id),
+            class: answerClass(answer),
+          });
         const settled = await read(
           { id: "settle-extra-" + job.key, method: "GET", url: SCHEDULER + "/" + id },
           { observe: true },
@@ -599,7 +737,12 @@ export async function record({
     if (cliDeleteStarted) return;
     cliDeleteStarted = true;
     out.cli.delete = await cli("delete");
-    await save({ id: "cli-delete", state: "cli-result", result: out.cli.delete });
+    await save({
+      id: "cli-delete",
+      state: "cli-result",
+      result: out.cli.delete,
+      responseAt: iso(clock()),
+    });
   }
 
   async function cleanup() {
@@ -639,6 +782,7 @@ export async function record({
             url: GCF + v + "/" + functionName(fn),
             cleanup: true,
           });
+          if (answerClass(answer) === "2xx") ownDeleted.add("function-" + fn);
           if (
             answerClass(answer) === "2xx" &&
             typeof answer.json?.name === "string" &&
@@ -688,21 +832,24 @@ export async function record({
             url: SCHEDULER + "/" + id,
             cleanup: true,
           });
-          if (answerClass(answer) === "2xx") deleted = true;
-          else if (isBusy(answer)) await sleep(60_000);
+          if (answerClass(answer) === "2xx") {
+            deleted = true;
+            ownDeleted.add("job-" + id);
+          } else if (isBusy(answer)) await sleep(60_000);
           else break;
         }
       });
     }
     for (const fn of subsCreated) {
-      await step("subscription-" + fn, () =>
-        mutate({
+      await step("subscription-" + fn, async () => {
+        const answer = await mutate({
           id: "delete-subscription-" + fn,
           method: "DELETE",
           url: PUBSUB + "/subscriptions/" + pullSubscriptionId(runId, fn),
           cleanup: true,
-        }),
-      );
+        });
+        if (answerClass(answer) === "2xx") ownDeleted.add("subscription-" + fn);
+      });
     }
     if (out.cleanup.functionsGone) {
       for (const fn of FUNCTIONS.v1) {
@@ -716,13 +863,15 @@ export async function record({
             },
             { observe: true },
           );
-          if (topic?.status === 200)
-            await mutate({
+          if (topic?.status === 200) {
+            const answer = await mutate({
               id: "delete-topic-" + fn,
               method: "DELETE",
               url: PUBSUB + "/topics/" + scheduleId(fn),
               cleanup: true,
             });
+            if (answerClass(answer) === "2xx") ownDeleted.add("topic-" + fn);
+          }
         });
       }
     }
@@ -852,7 +1001,12 @@ export async function record({
     }
     out.stage = "dry-run";
     out.cli.dryRun = await cli("dry-run");
-    await save({ id: "cli-dry-run", state: "cli-result", result: out.cli.dryRun });
+    await save({
+      id: "cli-dry-run",
+      state: "cli-result",
+      result: out.cli.dryRun,
+      responseAt: iso(clock()),
+    });
     if (cliFailed(out.cli.dryRun)) {
       out.outcome = "calendar-delivery-stopped-clean";
       out.stoppedBecause = "the CLI dry run failed";
@@ -894,13 +1048,17 @@ export async function record({
   out.pulledMessages = pulledMessages.length;
   const complete =
     out.passes.length === passes && out.passes.every((p) => p.complete) && !out.stoppedBecause;
+  // `recorded` and `incomplete-clean` both say "nothing is left open": a run with an unknown answer, an
+  // unconfirmed or vanished create, an unreadable answer or a failed cleanup step is `needs-review`.
   out.outcome = !created
     ? "calendar-delivery-stopped-clean"
-    : out.cleanup.verified
-      ? complete
-        ? "calendar-delivery-recorded"
-        : "calendar-delivery-incomplete-clean"
-      : "calendar-delivery-needs-recovery";
+    : !out.cleanup.verified
+      ? "calendar-delivery-needs-recovery"
+      : open().blocked || out.cleanup.errors
+        ? "calendar-delivery-needs-review"
+        : complete
+          ? "calendar-delivery-recorded"
+          : "calendar-delivery-incomplete-clean";
   out.stage = "done";
   return summary("done", out.cleanup.verified && complete && !out.cleanup.errors);
 }

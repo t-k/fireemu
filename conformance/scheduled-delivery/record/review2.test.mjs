@@ -210,6 +210,7 @@ test("the read-back command's own arguments are refused each by themselves", asy
   try {
     const journal = join(run, "journal-" + RUN + ".jsonl");
     writeFileSync(journal, JSON.stringify({ responseAt: new Date(START).toISOString() }) + "\n");
+    writeFileSync(join(run, "result-" + RUN + ".json"), JSON.stringify({ unconfirmedCreates: [] }));
     assert.equal((await attempt(argv(run, ["--send", "--expect-digest", DIGEST]))).code, 0);
     assert.equal((await attempt(argv(run, ["--expect-digest", DIGEST]))).code, 2, "no --send");
     assert.equal(

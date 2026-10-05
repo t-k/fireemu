@@ -74,3 +74,32 @@ test("a refresh that fails leaves the token in use and is tried again on the nex
   await assert.rejects(get(), /gcloud failed/);
   assert.equal(await get(), "token-number-3", "the failed attempt counted as a refresh");
 });
+
+test("current() gives the token in use without running the command, and nothing before the first call", async () => {
+  let runs = 0;
+  const tokens = createTokenSource({
+    printToken: async () => "token-number-" + ++runs,
+    now: () => 0,
+  });
+  assert.equal(tokens.current(), null);
+  await tokens();
+  assert.equal(tokens.current(), "token-number-1");
+  assert.equal(tokens.current(), "token-number-1");
+  assert.equal(runs, 1);
+});
+
+test("current() keeps the token in use when a refresh fails", async () => {
+  let at = 0;
+  let runs = 0;
+  const tokens = createTokenSource({
+    printToken: async () => {
+      if (++runs === 2) throw new Error("gcloud failed");
+      return "token-number-" + runs;
+    },
+    now: () => at,
+  });
+  await tokens();
+  at = 40 * 60 * 1000;
+  await assert.rejects(tokens(), /gcloud failed/);
+  assert.equal(tokens.current(), "token-number-1");
+});

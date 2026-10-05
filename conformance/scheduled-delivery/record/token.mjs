@@ -2,7 +2,9 @@
 // `gcloud auth application-default print-access-token`. The recorder never reads the credential file, the refresh
 // token or the client secret; it asks the same command again when the token in use is old enough to be near its
 // end (about 60 minutes), at most `maxRefreshes` times (so at most three invocations in all). `printToken()` runs the
-// command and returns its output; a string that does not look like a token is refused.
+// command and returns its output; a string that does not look like a token is refused. The source is called
+// before a request is journaled, so that a refresh that fails stops a request that was never sent; `current()`
+// then gives the token in use without running anything.
 
 export const TOKEN_LIFETIME_MS = 40 * 60 * 1000;
 export const MAX_REFRESHES = 2;
@@ -17,7 +19,7 @@ export function createTokenSource({
   let token = null;
   let issuedAt = 0;
   let refreshes = 0;
-  return async () => {
+  const source = async () => {
     if (token !== null) {
       if (now() - issuedAt < lifetimeMs || refreshes >= maxRefreshes) return token;
       refreshes++;
@@ -29,4 +31,6 @@ export function createTokenSource({
     issuedAt = now();
     return token;
   };
+  source.current = () => token;
+  return source;
 }

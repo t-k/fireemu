@@ -93,6 +93,8 @@ const journalAt = (run, ms) =>
       responseAt: new Date(ms).toISOString(),
     }) + "\n",
   );
+const cleanResult = (run) =>
+  writeFileSync(join(run, "result-" + RUN + ".json"), JSON.stringify({ unconfirmedCreates: [] }));
 const args = (run) => [
   "readback",
   "--run-dir",
@@ -111,6 +113,7 @@ test("the command exits 3, not 0, for a name held by a list but 404 on its direc
     const run = tmp();
     try {
       journalAt(run, START);
+      cleanResult(run);
       const world = createWorld({ hooks: near.hook });
       near.setup(world);
       const lines = [];
@@ -142,6 +145,7 @@ test("the ten-minute guard is exact: one millisecond short refuses without readi
     const run = tmp();
     try {
       journalAt(run, START);
+      cleanResult(run);
       const world = createWorld();
       const code = await main(args(run), {
         env: ENV,
@@ -157,7 +161,11 @@ test("the ten-minute guard is exact: one millisecond short refuses without readi
       });
       assert.equal(code, expected);
       assert.equal(world.calls.length > 0, expected === 0);
-      assert.equal(readdirSync(run).length, expected === 0 ? 3 : 1);
+      assert.equal(
+        readdirSync(run).length,
+        expected === 0 ? 4 : 2,
+        "journal, run result, and the read-back's two files",
+      );
     } finally {
       rmSync(run, { recursive: true, force: true });
     }
@@ -179,6 +187,7 @@ test("the guard counts from the latest request of the run, not the first, and no
         )
         .join("\n") + "\n",
     );
+    cleanResult(run);
     const world = createWorld();
     const attempt = (now) =>
       main(args(run), {

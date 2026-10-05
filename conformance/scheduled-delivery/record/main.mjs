@@ -8,10 +8,14 @@
 //   node bin.mjs readback --run-dir <dir> --project-number <n> --run-id <16 hex> --send --expect-digest <hex>
 //
 // `readback` is read-only (every mutation is refused by the allowlist): the separate read, at least ten minutes
-// after the last request of a run, that an unknown answer needs before a close row.
+// after the last request of a run, that an unknown DELETE or a create that vanished needs before a close row.
 //
-// Exit codes: 0 only for a recording (or a read-back) that may be closed; 2 for bad arguments or a failed check; 3
-// when the answers need review, a read-back or a recovery; 4 when the recorder stopped on an exception.
+// Exit codes: for a recording, 0 only when nothing is left open (A1 still applies); for a read-back, 0 only when
+// every name reads 404 NOT_FOUND, no list holds a name of the run, nothing is unknown, and the run's own result
+// lists no unconfirmed create. A read-back never closes an unknown CREATE: a 404 does not say whether the create
+// happened, so a run with an unconfirmed create (or no readable result) exits 3 however the names read. 2 is for
+// bad arguments or a failed check; 3 when the answers need review, a read-back or a recovery; 4 when the recorder
+// stopped on an exception.
 import { createHash, randomBytes } from "node:crypto";
 import { execFileSync } from "node:child_process";
 import {
@@ -172,6 +176,25 @@ export function lastActivity(path) {
   return last;
 }
 
+/**
+ * The creates a run left unconfirmed, from its own result file: the issued names whose create answer was unknown and
+ * that no own 2xx read showed. A result that is missing, unreadable or without the list cannot be judged.
+ */
+export function unconfirmedCreatesOf(path) {
+  let result;
+  try {
+    result = JSON.parse(readFileSync(path, "utf8"));
+  } catch (error) {
+    return {
+      ok: false,
+      why: "the run's result file cannot be read (" + (error?.code ?? "not JSON") + ")",
+    };
+  }
+  if (!Array.isArray(result?.unconfirmedCreates))
+    return { ok: false, why: "the run's result has no list of unconfirmed creates" };
+  return { ok: true, creates: result.unconfirmedCreates };
+}
+
 /** The read-only read-back of a run, at least ten minutes after its last request. */
 async function readbackCommand({ values, env, deps, out, err, digest }) {
   const problems = envProblems(env);
@@ -210,6 +233,7 @@ async function readbackCommand({ values, env, deps, out, err, digest }) {
     );
     return 2;
   }
+  const judged = unconfirmedCreatesOf(join(runDir, "result-" + runId + ".json"));
   const stamp = String((deps.now ?? Date.now)());
   const journal = openSync(join(runDir, "readback-" + runId + "-" + stamp + ".jsonl"), "wx", 0o600);
   try {
@@ -223,9 +247,11 @@ async function readbackCommand({ values, env, deps, out, err, digest }) {
       },
       send: deps.send,
     });
+    const unconfirmed = judged.ok ? judged.creates : [];
     writeFileSync(
       join(runDir, "readback-result-" + runId + "-" + stamp + ".json"),
-      JSON.stringify(result, null, 2) + "\n",
+      JSON.stringify({ ...result, unconfirmedCreates: unconfirmed, judged: judged.ok }, null, 2) +
+        "\n",
       { mode: 0o600 },
     );
     out(
@@ -235,11 +261,24 @@ async function readbackCommand({ values, env, deps, out, err, digest }) {
           allAbsent: result.allAbsent,
           attempted: result.attempted,
           unknown: result.unknown,
+          unconfirmedCreates: unconfirmed,
         },
         null,
         2,
       ),
     );
+    if (!judged.ok) {
+      err("the run's creates cannot be judged: " + judged.why + "; this read-back closes nothing");
+      return 3;
+    }
+    if (unconfirmed.length > 0) {
+      err(
+        "unconfirmed creates remain (a 404 never settles an unknown create, here or in the run): " +
+          unconfirmed.map((c) => c.name ?? c.label).join(", ") +
+          "; take them to the coordinator or the owner, or to a recovery packet",
+      );
+      return 3;
+    }
     return result.allAbsent ? 0 : 3;
   } catch (error) {
     err("the read-back stopped: " + String(error?.message));
@@ -319,7 +358,8 @@ export async function main(
   const tokenSource = createTokenSource({ printToken: deps.token, now: deps.now });
   const accessToken = await tokenSource();
   const send = async (request) => {
-    const current = await tokenSource();
+    // `prepareRequest` (below) has already refreshed the token if it needed it; nothing here can fail to send.
+    const current = tokenSource.current();
     const response = await deps.send({
       ...request,
       headers: { ...request.headers, authorization: "Bearer " + current },
@@ -368,6 +408,7 @@ export async function main(
       send,
       runCli,
       signal,
+      prepareRequest: () => tokenSource(),
     });
   } catch (error) {
     closeSync(journal);

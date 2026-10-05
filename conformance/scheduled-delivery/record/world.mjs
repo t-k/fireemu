@@ -306,7 +306,7 @@ export function createWorld({
         );
       if (path.endsWith("/subscriptions"))
         return page(
-          [...w.subs.keys()].map((n) => ({ name: n })),
+          [...w.subs].map(([n, s]) => ({ name: n, topic: s.topic })),
           "subscriptions",
           url,
         );

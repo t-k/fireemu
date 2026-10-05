@@ -1,7 +1,9 @@
 // The read-only read-back of a finished (or interrupted) run: every name the run may have created, read directly,
 // and every list, with the same allowlist as the recording and every mutation refused. It sends nothing but GETs.
 // It is the separate, later read (at least ten minutes after the run's last request) that an unknown answer needs
-// before a close row. It judges only absence: a direct read that answers 404 NOT_FOUND.
+// before a close row. It judges only absence: a direct read that answers 404 NOT_FOUND. It never settles an unknown
+// CREATE (a 404 proves nothing about whether the create happened); the command that runs it reads the run's own
+// result for the unconfirmed creates and refuses to close while any exist.
 import { AuthStop, createCapture, readable } from "../capture.mjs";
 import { nonePresent, summarize } from "./deploy.mjs";
 import { createGuard } from "./guard.mjs";
@@ -15,6 +17,7 @@ import {
   functionName,
   pullSubscriptionId,
   scheduleId,
+  topicName,
 } from "./plan.mjs";
 import { absent } from "./run.mjs";
 
@@ -131,11 +134,18 @@ export async function readbackRun({
     ];
     out.lists.jobs = jobs ? own(jobs.jobs, jobIds) : null;
     out.lists.topics = topics ? own(topics.topics, FUNCTIONS.v1.map(scheduleId)) : null;
+    // The run's own pull subscriptions, and every subscription on a v1 schedule topic: Google puts a push
+    // subscription on each (the GCF-managed ones), and the run's own final list requires them gone too.
+    const ownSubscriptions = FUNCTIONS.v1.map((fn) => pullSubscriptionId(runId, fn));
+    const scheduleTopics = FUNCTIONS.v1.map((fn) => topicName(scheduleId(fn)));
     out.lists.subscriptions = subs
-      ? own(
-          subs.subscriptions,
-          FUNCTIONS.v1.map((fn) => pullSubscriptionId(runId, fn)),
-        )
+      ? subs.subscriptions
+          .filter(
+            (item) =>
+              ownSubscriptions.includes(String(item.name).split("/").at(-1)) ||
+              scheduleTopics.includes(item.topic),
+          )
+          .map((item) => String(item.name).split("/").at(-1))
       : null;
   } catch (error) {
     if (!(error instanceof AuthStop)) throw error;

@@ -363,6 +363,7 @@ test("the command reads, writes its own journal and result, and exits 0 only whe
   const run = tmp();
   try {
     journalAt(run, START);
+    writeFileSync(join(run, "result-" + RUN + ".json"), JSON.stringify({ unconfirmedCreates: [] }));
     const world = createWorld();
     const sink = io();
     const code = await main(ARGS(run, ["--send", "--expect-digest", DIGEST]), {
@@ -400,7 +401,11 @@ test("the command reads, writes its own journal and result, and exits 0 only whe
     );
     assert.equal(
       sink.lines.at(-1)[1],
-      JSON.stringify({ runId: RUN, allAbsent: true, attempted: 23, unknown: 0 }, null, 2),
+      JSON.stringify(
+        { runId: RUN, allAbsent: true, attempted: 23, unknown: 0, unconfirmedCreates: [] },
+        null,
+        2,
+      ),
     );
     world.topics.add(scheduleId("schedOkV1"));
     const again = io();

@@ -647,4 +647,13 @@ test("the command numbers the runs and separates its tables with blank lines", (
     out.stdout,
   );
   assert.equal(out.stdout.includes("token problems in run 1"), false);
+  // Several problems are one per line.
+  const worse = goodSaves();
+  worse[2] = { ...worse[2], documentChangesBefore: 0 };
+  worse[0] = { ...worse[0], documentChangesBefore: 4 };
+  const two = runCli({ a: withSaves(worse) }, (f) => [f.a]);
+  assert.match(
+    two.stdout,
+    /token problems in run 1:\n- native\/resume-grid-g0 T: [^\n]*\n- native\/resume-grid-gc T: /,
+  );
 });

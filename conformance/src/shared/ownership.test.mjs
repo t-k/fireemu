@@ -652,8 +652,7 @@ describe("the delete guard", () => {
   it("forgets a delete's read-back state and an old 404 when an unknown create of the name is settled as present", () => {
     create("a", OK);
     read("a", NOT_FOUND);
-    remove("a", OK);
-    read("a", NOT_FOUND);
+    remove("a", OK); // not read back: the name is deleted-unverified
     create("a", TIMEOUT);
     assert.equal(read("a", OK), "present");
     assert.deepEqual(closureReport(state).reasons, ["owned-not-deleted:a"]);

@@ -14,6 +14,7 @@ import { afterEach, beforeEach, describe, it } from "node:test";
 import * as fs from "node:fs";
 
 import {
+  MAX_SETTLE_DELAY_MS,
   SETTLE_ABSENT_AFTER_MS as SETTLE_CONST,
   ANSWER_CLASSES,
   beginCreate,
@@ -345,6 +346,46 @@ describe("the issued-names ledger", () => {
       "closed",
     );
     closeOwnership(state);
+    state = open("second.jsonl");
+  });
+
+  it("says the state is closed before it judges anything else about a call", () => {
+    create("u", TIMEOUT);
+    create("o", OK);
+    beginCreate(state, { name: "f", transport: "rest" });
+    closeOwnership(state);
+    const calls = [
+      () => beginCreate(state, { name: "", transport: "rest" }),
+      () => beginCreate(state, { name: "u", transport: "rest" }),
+      () => beginCreate(state, { name: "f", transport: "rest" }),
+      () => beginCreate(state, { name: "new", transport: "bad transport" }),
+      () => beginDelete(state, { name: "", transport: "rest" }),
+      () => beginDelete(state, { name: "never", transport: "rest" }),
+      () => beginDelete(state, { name: "o", transport: "rest" }),
+      () => recordRead(state, { name: "", transport: "rest", answer: OK }),
+      () => recordRead(state, { name: "f", transport: "rest", answer: OK }),
+      () => recordAnswer(state, { ticket: 3, action: "create", name: "f", transport: "rest" }, OK),
+      () =>
+        recordAnswer(state, { ticket: 99, action: "create", name: "zz", transport: "rest" }, OK),
+    ];
+    for (const call of calls) assert.equal(refusal(call), "closed");
+    state = open("second.jsonl");
+  });
+
+  it("closes once: a second close touches neither a reused descriptor nor another writer's lock", () => {
+    closeOwnership(state);
+    const path = join(dir, "twice.jsonl");
+    const first = openOwnership({ path, runId: "run1" });
+    closeOwnership(first);
+    // The descriptor number is free now and a new file is likely to get it.
+    const other = fs.openSync(join(dir, "other-file"), "w");
+    // Another writer holds the lock now (a process that is alive).
+    writeFileSync(`${path}.lock`, `${process.ppid}\n`);
+    closeOwnership(first);
+    assert.doesNotThrow(() => fs.fstatSync(other), "the other file's descriptor is still open");
+    assert.equal(readFileSync(`${path}.lock`, "utf8"), `${process.ppid}\n`, "the other lock stays");
+    fs.closeSync(other);
+    rmSync(`${path}.lock`);
     state = open("second.jsonl");
   });
 
@@ -713,6 +754,15 @@ describe("resuming a ledger", () => {
       ],
     );
     assert.equal(rows.find((r) => r.phase === "resume").droppedTailBytes, 0);
+    const unknownAnswers = closureReport(state).unknownAnswers;
+    assert.deepEqual(
+      unknownAnswers.map((e) => [e.name, e.reason, e.synthetic]),
+      [
+        ["a", "no-answer", true],
+        ["b", "no-answer", true],
+      ],
+      "the report says which answers were never seen",
+    );
     // The settled name is ours again after a GET, as for any unknown create.
     read("a", OK);
     assert.equal(isOwned(state, "a"), true);
@@ -1305,7 +1355,16 @@ describe("the settle delay is a recorded, immutable, floored setting", () => {
 
   it("refuses values that are not a safe integer, with or without the flag", () => {
     closeOwnership(state);
-    for (const bad of [-1, 1.5, "10", Number.NaN, Infinity, null, 2 ** 60, 2 ** 52]) {
+    for (const bad of [
+      -1,
+      1.5,
+      "10",
+      Number.NaN,
+      Infinity,
+      null,
+      2 ** 60,
+      MAX_SETTLE_DELAY_MS + 1,
+    ]) {
       for (const flag of [false, true]) {
         assert.throws(
           () =>
@@ -1319,6 +1378,17 @@ describe("the settle delay is a recorded, immutable, floored setting", () => {
       }
     }
     state = open("fresh.jsonl");
+  });
+
+  it("accepts the longest delay, whose A2 time is still a date", () => {
+    closeOwnership(state);
+    assert.equal(MAX_SETTLE_DELAY_MS, 2 ** 51);
+    state = openWith({ settleAbsentAfterMs: MAX_SETTLE_DELAY_MS });
+    create("a", TIMEOUT);
+    assert.equal(
+      closureReport(state).details[0].eligibleForA2At,
+      new Date(START + MAX_SETTLE_DELAY_MS).toISOString(),
+    );
   });
 
   it("accepts a longer delay, records it, and uses it when the ledger is resumed without an option", () => {
@@ -1412,11 +1482,17 @@ describe("the settle delay is a recorded, immutable, floored setting", () => {
         { phase: "open", settleAbsentAfterMs: SETTLE },
       ],
     };
+    const message = {
+      none: /first ledger row is not the open row/u,
+      "bad delay": /no valid settle delay/u,
+      "missing delay": /no valid settle delay/u,
+      second: /line 2 is a second open row/u,
+    };
     for (const [label, rows] of Object.entries(cases)) {
       writeFileSync(path(), text(rows));
       assert.throws(
         () => openWith(),
-        (error) => error.code === "corrupt-ledger",
+        (error) => error.code === "corrupt-ledger" && message[label].test(error.message),
         label,
       );
       assert.equal(existsSync(`${path()}.lock`), false, label);
@@ -1554,6 +1630,55 @@ describe("one writer at a time", () => {
     rmSync(lockPath());
     state = open("fresh.jsonl");
   });
+
+  it("refuses a lock held by a process that is alive but not ours to signal, and an unreadable lock", () => {
+    closeOwnership(state);
+    writeFileSync(lockPath(), "1\n"); // pid 1 exists, and a signal to it is not permitted (EPERM)
+    assert.throws(
+      () => openAt(),
+      (error) => error.code === "ledger-locked",
+    );
+    rmSync(lockPath());
+    fs.mkdirSync(lockPath()); // a lock that cannot be read as a file
+    assert.throws(
+      () => openAt(),
+      (error) => error.code === "ledger-locked",
+    );
+    rmSync(lockPath(), { recursive: true });
+    state = open("fresh.jsonl");
+  });
+
+  it("passes on an error that is not a held lock", () => {
+    closeOwnership(state);
+    assert.throws(
+      () => openOwnership({ path: join(dir, "no", "such", "dir", "x.jsonl"), runId: "run1" }),
+      (error) => error.code === "ENOENT",
+    );
+    state = open("fresh.jsonl");
+  });
+
+  it(
+    "reports a takeover it cannot do",
+    { skip: process.getuid?.() === 0 && "root ignores directory permissions" },
+    () => {
+      closeOwnership(state);
+      // A lock of a gone writer in a directory this process may not change.
+      const guarded = join(dir, "guarded");
+      fs.mkdirSync(guarded);
+      const dead = spawnSync(process.execPath, ["-e", ""]).pid;
+      writeFileSync(join(guarded, "x.jsonl.lock"), `${dead}\n`);
+      fs.chmodSync(guarded, 0o555);
+      try {
+        assert.throws(
+          () => openOwnership({ path: join(guarded, "x.jsonl"), runId: "run1" }),
+          (error) => error.code === "ledger-locked" && /taken over/u.test(error.message),
+        );
+      } finally {
+        fs.chmodSync(guarded, 0o755);
+      }
+      state = open("fresh.jsonl");
+    },
+  );
 
   it("releases the lock when the open itself fails", () => {
     closeOwnership(state);

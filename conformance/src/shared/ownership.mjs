@@ -34,6 +34,9 @@ export const LEDGER_VERSION = 1;
  */
 export const SETTLE_ABSENT_AFTER_MS = 10 * 60 * 1000;
 
+/** The longest settle delay: an answer time plus the delay must still be a date (about 71,000 years). */
+export const MAX_SETTLE_DELAY_MS = 2 ** 51;
+
 /** The answer classes of a create or delete. */
 export const ANSWER_CLASSES = Object.freeze(["ok", "conflict", "notFound", "refused", "unknown"]);
 
@@ -282,8 +285,12 @@ function append(state, row) {
   return full;
 }
 
-/** Closes the descriptor and releases the writer lock. Safe to call twice. */
+/**
+ * Closes the descriptor and releases the writer lock, once. A second call must do nothing: the
+ * descriptor number may belong to another file by then, and the lock to another writer.
+ */
 function shutdown(state) {
+  if (state.closed) return;
   state.closed = true;
   if (state.fd !== null) {
     try {
@@ -291,63 +298,69 @@ function shutdown(state) {
     } catch {
       // the descriptor is already gone
     }
-    state.fd = null;
   }
   releaseLock(state.lockPath);
-  state.lockPath = null;
 }
 
 // ---- the single-writer lock ----
 
 function holderAlive(pid) {
-  if (!Number.isInteger(pid) || pid <= 0) return true; // not a pid: treat the lock as held
+  if (!Number.isSafeInteger(pid) || pid <= 0) return true; // not a pid: treat the lock as held
   try {
     process.kill(pid, 0);
     return true;
   } catch (error) {
-    return error.code === "EPERM";
+    return error.code === "EPERM"; // alive, but another user's
   }
+}
+
+function createLock(lockPath) {
+  const fd = openSync(lockPath, "wx");
+  try {
+    writeSync(fd, `${process.pid}\n`);
+  } finally {
+    closeSync(fd);
+  }
+  return lockPath;
 }
 
 /**
  * Takes `<path>.lock` exclusively (the pid of the holder inside). A lock whose holder process is
- * gone is taken over (a crashed run is resumed); a lock whose holder runs, or whose content is not
- * a pid, refuses the open. Same host only; a recycled pid keeps a dead holder's lock alive.
+ * gone is taken over (a crashed run is resumed); a lock whose holder runs, or whose content cannot
+ * be read as a pid, refuses the open, and so does a takeover that loses a race. Same host only; a
+ * recycled pid keeps a dead holder's lock alive.
  */
 function acquireLock(path) {
   const lockPath = `${path}.lock`;
-  for (let attempt = 0; attempt < 2; attempt += 1) {
-    try {
-      const fd = openSync(lockPath, "wx");
-      try {
-        writeSync(fd, `${process.pid}\n`);
-      } finally {
-        closeSync(fd);
-      }
-      return lockPath;
-    } catch (error) {
-      if (error.code !== "EEXIST") throw error;
-      let holder;
-      try {
-        holder = Number.parseInt(readFileSync(lockPath, "utf8"), 10);
-      } catch (readError) {
-        if (readError.code === "ENOENT") continue; // released meanwhile: try again
-        throw readError;
-      }
-      if (holderAlive(holder)) {
-        throw new OwnershipError(
-          "ledger-locked",
-          `${path} is open in another writer (${lockPath}); remove the lock only if no recorder holds it`,
-        );
-      }
-      unlinkSync(lockPath); // the holder is gone
-    }
+  try {
+    return createLock(lockPath);
+  } catch (error) {
+    if (error.code !== "EEXIST") throw error;
   }
-  throw new OwnershipError("ledger-locked", `${path} could not be locked (${lockPath})`);
+  let holder;
+  try {
+    holder = Number.parseInt(readFileSync(lockPath, "utf8"), 10);
+  } catch {
+    holder = Number.NaN; // unreadable: not ours to take
+  }
+  if (holderAlive(holder)) {
+    throw new OwnershipError(
+      "ledger-locked",
+      `${path} is open in another writer (${lockPath}); remove the lock only if no recorder holds it`,
+    );
+  }
+  try {
+    unlinkSync(lockPath); // the holder is gone
+    return createLock(lockPath);
+  } catch {
+    throw new OwnershipError(
+      "ledger-locked",
+      `${lockPath} of a gone writer could not be taken over`,
+    );
+  }
 }
 
 function releaseLock(lockPath) {
-  if (lockPath === null) return;
   try {
     unlinkSync(lockPath);
   } catch {
@@ -431,7 +444,7 @@ function checkSettleDelay(value, allowShort) {
   if (
     !Number.isSafeInteger(value) ||
     value < 0 ||
-    value > Number.MAX_SAFE_INTEGER / 4 ||
+    value > MAX_SETTLE_DELAY_MS ||
     (value < SETTLE_ABSENT_AFTER_MS && !allowShort)
   ) {
     throw new OwnershipError(
@@ -461,8 +474,9 @@ export function openOwnership({
       "a run id is 1 to 64 characters of letters, digits, dot, underscore and hyphen",
     );
   }
-  if (settleAbsentAfterMs !== undefined)
+  if (settleAbsentAfterMs !== undefined) {
     checkSettleDelay(settleAbsentAfterMs, testOnlyAllowShortSettleDelay);
+  }
   const state = newState(runId, now, io);
   state.lockPath = acquireLock(path);
   try {
@@ -541,7 +555,6 @@ function openLocked(state, path, requestedDelay, allowShort) {
 }
 
 export function closeOwnership(state) {
-  if (state.closed) return;
   shutdown(state);
 }
 
@@ -751,9 +764,9 @@ export function closureReport(state) {
       .toSorted(),
     unsettled: unsettledNames(state),
     // What each unsettled name is waiting for, and why it is unknown.
-    details: unknownAnswers
-      .filter((item) => !item.settled)
-      .toSorted((a, b) => (a.name < b.name ? -1 : 1)), // one unsettled answer per name
+    details: unsettledNames(state).map((name) =>
+      describeUnknown(state, state.names.get(name).unsettled),
+    ),
     unknownAnswers,
     a2Required: unknownAnswers.length > 0,
     absentUnconfirmed,

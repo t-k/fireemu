@@ -50,11 +50,15 @@ export function sdkFilter({ hashCount, bytes, padding }, names) {
 
 const ROOT = "projects/vectors/databases/(default)/documents";
 
-/** The sizes production sent for 1, 2 and 3 documents, and a few others that exercise the arithmetic. */
+/**
+ * The sizes production sent for 1, 2 and 3 documents (12 hashes in 3 bytes with 7 padding bits, 13 in 6
+ * with 3, 14 in 9 with 5: the recordings state the bitmap by the length of its base64 text, 4, 8 and 12),
+ * and a few others that exercise the arithmetic.
+ */
 const SIZES = [
-  { hashCount: 12, bytes: 4, padding: 7 },
-  { hashCount: 13, bytes: 8, padding: 3 },
-  { hashCount: 14, bytes: 12, padding: 5 },
+  { hashCount: 12, bytes: 3, padding: 7 },
+  { hashCount: 13, bytes: 6, padding: 3 },
+  { hashCount: 14, bytes: 9, padding: 5 },
   { hashCount: 1, bytes: 1, padding: 0 },
   { hashCount: 7, bytes: 2, padding: 3 },
   { hashCount: 20, bytes: 16, padding: 0 },

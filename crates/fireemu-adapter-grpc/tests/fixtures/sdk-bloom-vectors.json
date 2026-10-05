@@ -3,12 +3,12 @@
  "vectors": [
   {
    "hashCount": 12,
-   "bytes": 4,
+   "bytes": 3,
    "padding": 7,
    "names": [
     "projects/vectors/databases/(default)/documents/r/a"
    ],
-   "bitmap": "1cc76100",
+   "bitmap": "3e3e00",
    "probes": [
     [
      "projects/vectors/databases/(default)/documents/r/a",
@@ -16,7 +16,7 @@
     ],
     [
      "projects/vectors/databases/(default)/documents/r/b",
-     false
+     true
     ],
     [
      "projects/vectors/databases/(default)/documents/r/c",
@@ -78,13 +78,13 @@
   },
   {
    "hashCount": 12,
-   "bytes": 4,
+   "bytes": 3,
    "padding": 7,
    "names": [
     "projects/vectors/databases/(default)/documents/r/a",
     "projects/vectors/databases/(default)/documents/r/b"
    ],
-   "bitmap": "7ed76b00",
+   "bitmap": "3e3e00",
    "probes": [
     [
      "projects/vectors/databases/(default)/documents/r/a",
@@ -128,7 +128,7 @@
     ],
     [
      "projects/vectors/databases/(default)/documents/probe/3",
-     true
+     false
     ],
     [
      "projects/vectors/databases/(default)/documents/probe/4",
@@ -154,14 +154,14 @@
   },
   {
    "hashCount": 12,
-   "bytes": 4,
+   "bytes": 3,
    "padding": 7,
    "names": [
     "projects/vectors/databases/(default)/documents/r/a",
     "projects/vectors/databases/(default)/documents/r/b",
     "projects/vectors/databases/(default)/documents/r/c"
    ],
-   "bitmap": "7edf7f01",
+   "bitmap": "7fff00",
    "probes": [
     [
      "projects/vectors/databases/(default)/documents/r/a",
@@ -189,7 +189,7 @@
     ],
     [
      "projects/vectors/databases/(default)/documents/users/ü/posts/日本語",
-     true
+     false
     ],
     [
      "projects/vectors/databases/(default)/documents/probe/0",
@@ -201,7 +201,7 @@
     ],
     [
      "projects/vectors/databases/(default)/documents/probe/2",
-     true
+     false
     ],
     [
      "projects/vectors/databases/(default)/documents/probe/3",
@@ -221,7 +221,7 @@
     ],
     [
      "projects/vectors/databases/(default)/documents/probe/7",
-     true
+     false
     ],
     [
      "projects/vectors/databases/(default)/documents/probe/8",
@@ -231,22 +231,22 @@
   },
   {
    "hashCount": 12,
-   "bytes": 4,
+   "bytes": 3,
    "padding": 7,
    "names": [
     "projects/vectors/databases/(default)/documents/lsn_native/nmuv70w0y-g0-a",
     "projects/vectors/databases/(default)/documents/lsn_native/nmuv70w0y-g0-b",
     "projects/vectors/databases/(default)/documents/lsn_native/nmuv70w0y-g0-c"
    ],
-   "bitmap": "d5e57f01",
+   "bitmap": "fffe01",
    "probes": [
     [
      "projects/vectors/databases/(default)/documents/r/a",
-     false
+     true
     ],
     [
      "projects/vectors/databases/(default)/documents/r/b",
-     false
+     true
     ],
     [
      "projects/vectors/databases/(default)/documents/r/c",
@@ -258,19 +258,19 @@
     ],
     [
      "projects/vectors/databases/(default)/documents/r/zz",
-     false
+     true
     ],
     [
      "projects/vectors/databases/(default)/documents/lsn_native/nmuv70w0y-g0-d",
-     false
+     true
     ],
     [
      "projects/vectors/databases/(default)/documents/users/ü/posts/日本語",
-     false
+     true
     ],
     [
      "projects/vectors/databases/(default)/documents/probe/0",
-     false
+     true
     ],
     [
      "projects/vectors/databases/(default)/documents/probe/1",
@@ -290,7 +290,7 @@
     ],
     [
      "projects/vectors/databases/(default)/documents/probe/5",
-     false
+     true
     ],
     [
      "projects/vectors/databases/(default)/documents/probe/6",
@@ -298,44 +298,44 @@
     ],
     [
      "projects/vectors/databases/(default)/documents/probe/7",
-     false
+     true
     ],
     [
      "projects/vectors/databases/(default)/documents/probe/8",
-     false
+     true
     ]
    ]
   },
   {
    "hashCount": 12,
-   "bytes": 4,
+   "bytes": 3,
    "padding": 7,
    "names": [
     "projects/vectors/databases/(default)/documents/users/ü/posts/日本語",
     "projects/vectors/databases/(default)/documents/users/ü/posts/x y",
     "projects/vectors/databases/(default)/documents/a/b"
    ],
-   "bitmap": "f6fbed01",
+   "bitmap": "ffff01",
    "probes": [
     [
      "projects/vectors/databases/(default)/documents/r/a",
-     false
+     true
     ],
     [
      "projects/vectors/databases/(default)/documents/r/b",
-     false
+     true
     ],
     [
      "projects/vectors/databases/(default)/documents/r/c",
-     false
+     true
     ],
     [
      "projects/vectors/databases/(default)/documents/r/d",
-     false
+     true
     ],
     [
      "projects/vectors/databases/(default)/documents/r/zz",
-     false
+     true
     ],
     [
      "projects/vectors/databases/(default)/documents/lsn_native/nmuv70w0y-g0-d",
@@ -347,11 +347,11 @@
     ],
     [
      "projects/vectors/databases/(default)/documents/probe/0",
-     false
+     true
     ],
     [
      "projects/vectors/databases/(default)/documents/probe/1",
-     false
+     true
     ],
     [
      "projects/vectors/databases/(default)/documents/probe/2",
@@ -363,15 +363,15 @@
     ],
     [
      "projects/vectors/databases/(default)/documents/probe/4",
-     false
+     true
     ],
     [
      "projects/vectors/databases/(default)/documents/probe/5",
-     false
+     true
     ],
     [
      "projects/vectors/databases/(default)/documents/probe/6",
-     false
+     true
     ],
     [
      "projects/vectors/databases/(default)/documents/probe/7",
@@ -379,13 +379,13 @@
     ],
     [
      "projects/vectors/databases/(default)/documents/probe/8",
-     false
+     true
     ]
    ]
   },
   {
    "hashCount": 12,
-   "bytes": 4,
+   "bytes": 3,
    "padding": 7,
    "names": [
     "projects/vectors/databases/(default)/documents/x/1",
@@ -395,11 +395,11 @@
     "projects/vectors/databases/(default)/documents/x/5",
     "projects/vectors/databases/(default)/documents/x/6"
    ],
-   "bitmap": "f7ffff01",
+   "bitmap": "ffff01",
    "probes": [
     [
      "projects/vectors/databases/(default)/documents/r/a",
-     false
+     true
     ],
     [
      "projects/vectors/databases/(default)/documents/r/b",
@@ -431,7 +431,7 @@
     ],
     [
      "projects/vectors/databases/(default)/documents/probe/1",
-     false
+     true
     ],
     [
      "projects/vectors/databases/(default)/documents/probe/2",
@@ -443,11 +443,11 @@
     ],
     [
      "projects/vectors/databases/(default)/documents/probe/4",
-     false
+     true
     ],
     [
      "projects/vectors/databases/(default)/documents/probe/5",
-     false
+     true
     ],
     [
      "projects/vectors/databases/(default)/documents/probe/6",
@@ -465,10 +465,10 @@
   },
   {
    "hashCount": 12,
-   "bytes": 4,
+   "bytes": 3,
    "padding": 7,
    "names": [],
-   "bitmap": "00000000",
+   "bitmap": "000000",
    "probes": [
     [
      "projects/vectors/databases/(default)/documents/r/a",
@@ -538,12 +538,12 @@
   },
   {
    "hashCount": 13,
-   "bytes": 8,
+   "bytes": 6,
    "padding": 3,
    "names": [
     "projects/vectors/databases/(default)/documents/r/a"
    ],
-   "bitmap": "048c90012240040c",
+   "bitmap": "240924092409",
    "probes": [
     [
      "projects/vectors/databases/(default)/documents/r/a",
@@ -613,13 +613,13 @@
   },
   {
    "hashCount": 13,
-   "bytes": 8,
+   "bytes": 6,
    "padding": 3,
    "names": [
     "projects/vectors/databases/(default)/documents/r/a",
     "projects/vectors/databases/(default)/documents/r/b"
    ],
-   "bitmap": "16ccb4116240950c",
+   "bitmap": "649b6c9b2c0b",
    "probes": [
     [
      "projects/vectors/databases/(default)/documents/r/a",
@@ -689,14 +689,14 @@
   },
   {
    "hashCount": 13,
-   "bytes": 8,
+   "bytes": 6,
    "padding": 3,
    "names": [
     "projects/vectors/databases/(default)/documents/r/a",
     "projects/vectors/databases/(default)/documents/r/b",
     "projects/vectors/databases/(default)/documents/r/c"
    ],
-   "bitmap": "16ccbcd36260bd0e",
+   "bitmap": "759b6cbb2e0b",
    "probes": [
     [
      "projects/vectors/databases/(default)/documents/r/a",
@@ -766,14 +766,14 @@
   },
   {
    "hashCount": 13,
-   "bytes": 8,
+   "bytes": 6,
    "padding": 3,
    "names": [
     "projects/vectors/databases/(default)/documents/lsn_native/nmuv70w0y-g0-a",
     "projects/vectors/databases/(default)/documents/lsn_native/nmuv70w0y-g0-b",
     "projects/vectors/databases/(default)/documents/lsn_native/nmuv70w0y-g0-c"
    ],
-   "bitmap": "7c8463e3521f950a",
+   "bitmap": "d23825eeb813",
    "probes": [
     [
      "projects/vectors/databases/(default)/documents/r/a",
@@ -843,14 +843,14 @@
   },
   {
    "hashCount": 13,
-   "bytes": 8,
+   "bytes": 6,
    "padding": 3,
    "names": [
     "projects/vectors/databases/(default)/documents/users/ü/posts/日本語",
     "projects/vectors/databases/(default)/documents/users/ü/posts/x y",
     "projects/vectors/databases/(default)/documents/a/b"
    ],
-   "bitmap": "a89747ac5039ed0a",
+   "bitmap": "8a4ef1a39e1e",
    "probes": [
     [
      "projects/vectors/databases/(default)/documents/r/a",
@@ -890,7 +890,7 @@
     ],
     [
      "projects/vectors/databases/(default)/documents/probe/2",
-     false
+     true
     ],
     [
      "projects/vectors/databases/(default)/documents/probe/3",
@@ -920,7 +920,7 @@
   },
   {
    "hashCount": 13,
-   "bytes": 8,
+   "bytes": 6,
    "padding": 3,
    "names": [
     "projects/vectors/databases/(default)/documents/x/1",
@@ -930,11 +930,11 @@
     "projects/vectors/databases/(default)/documents/x/5",
     "projects/vectors/databases/(default)/documents/x/6"
    ],
-   "bitmap": "2f3fbdec3da74d15",
+   "bitmap": "e7ff7edd7f1f",
    "probes": [
     [
      "projects/vectors/databases/(default)/documents/r/a",
-     false
+     true
     ],
     [
      "projects/vectors/databases/(default)/documents/r/b",
@@ -970,11 +970,11 @@
     ],
     [
      "projects/vectors/databases/(default)/documents/probe/2",
-     false
+     true
     ],
     [
      "projects/vectors/databases/(default)/documents/probe/3",
-     false
+     true
     ],
     [
      "projects/vectors/databases/(default)/documents/probe/4",
@@ -1000,10 +1000,10 @@
   },
   {
    "hashCount": 13,
-   "bytes": 8,
+   "bytes": 6,
    "padding": 3,
    "names": [],
-   "bitmap": "0000000000000000",
+   "bitmap": "000000000000",
    "probes": [
     [
      "projects/vectors/databases/(default)/documents/r/a",
@@ -1073,12 +1073,12 @@
   },
   {
    "hashCount": 14,
-   "bytes": 12,
+   "bytes": 9,
    "padding": 5,
    "names": [
     "projects/vectors/databases/(default)/documents/r/a"
    ],
-   "bitmap": "180064009001400600190000",
+   "bitmap": "181c00040f00810300",
    "probes": [
     [
      "projects/vectors/databases/(default)/documents/r/a",
@@ -1148,13 +1148,13 @@
   },
   {
    "hashCount": 14,
-   "bytes": 12,
+   "bytes": 9,
    "padding": 5,
    "names": [
     "projects/vectors/databases/(default)/documents/r/a",
     "projects/vectors/databases/(default)/documents/r/b"
    ],
-   "bitmap": "1a907420b401490742191002",
+   "bitmap": "1a1e40061f92811302",
    "probes": [
     [
      "projects/vectors/databases/(default)/documents/r/a",
@@ -1224,14 +1224,14 @@
   },
   {
    "hashCount": 14,
-   "bytes": 12,
+   "bytes": 9,
    "padding": 5,
    "names": [
     "projects/vectors/databases/(default)/documents/r/a",
     "projects/vectors/databases/(default)/documents/r/b",
     "projects/vectors/databases/(default)/documents/r/c"
    ],
-   "bitmap": "3ad07426b4c16907421d3002",
+   "bitmap": "1fbe42561fbac11302",
    "probes": [
     [
      "projects/vectors/databases/(default)/documents/r/a",
@@ -1301,14 +1301,14 @@
   },
   {
    "hashCount": 14,
-   "bytes": 12,
+   "bytes": 9,
    "padding": 5,
    "names": [
     "projects/vectors/databases/(default)/documents/lsn_native/nmuv70w0y-g0-a",
     "projects/vectors/databases/(default)/documents/lsn_native/nmuv70w0y-g0-b",
     "projects/vectors/databases/(default)/documents/lsn_native/nmuv70w0y-g0-c"
    ],
-   "bitmap": "04fcffc2f91c8600801f0000",
+   "bitmap": "9a60193125a2764406",
    "probes": [
     [
      "projects/vectors/databases/(default)/documents/r/a",
@@ -1356,7 +1356,7 @@
     ],
     [
      "projects/vectors/databases/(default)/documents/probe/4",
-     true
+     false
     ],
     [
      "projects/vectors/databases/(default)/documents/probe/5",
@@ -1378,14 +1378,14 @@
   },
   {
    "hashCount": 14,
-   "bytes": 12,
+   "bytes": 9,
    "padding": 5,
    "names": [
     "projects/vectors/databases/(default)/documents/users/ü/posts/日本語",
     "projects/vectors/databases/(default)/documents/users/ü/posts/x y",
     "projects/vectors/databases/(default)/documents/a/b"
    ],
-   "bitmap": "309442faff0b219562280404",
+   "bitmap": "710e1ba59846a7d304",
    "probes": [
     [
      "projects/vectors/databases/(default)/documents/r/a",
@@ -1455,7 +1455,7 @@
   },
   {
    "hashCount": 14,
-   "bytes": 12,
+   "bytes": 9,
    "padding": 5,
    "names": [
     "projects/vectors/databases/(default)/documents/x/1",
@@ -1465,11 +1465,11 @@
     "projects/vectors/databases/(default)/documents/x/5",
     "projects/vectors/databases/(default)/documents/x/6"
    ],
-   "bitmap": "f9bf40fa1339f7b47af7fa07",
+   "bitmap": "9f5c25e75fb5edaf07",
    "probes": [
     [
      "projects/vectors/databases/(default)/documents/r/a",
-     false
+     true
     ],
     [
      "projects/vectors/databases/(default)/documents/r/b",
@@ -1513,7 +1513,7 @@
     ],
     [
      "projects/vectors/databases/(default)/documents/probe/4",
-     true
+     false
     ],
     [
      "projects/vectors/databases/(default)/documents/probe/5",
@@ -1535,10 +1535,10 @@
   },
   {
    "hashCount": 14,
-   "bytes": 12,
+   "bytes": 9,
    "padding": 5,
    "names": [],
-   "bitmap": "000000000000000000000000",
+   "bitmap": "000000000000000000",
    "probes": [
     [
      "projects/vectors/databases/(default)/documents/r/a",

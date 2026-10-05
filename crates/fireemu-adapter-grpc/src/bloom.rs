@@ -13,15 +13,17 @@
 //! `tests/fixtures/sdk-bloom-vectors.json` are produced by the SDK's own class
 //! (`conformance/src/fs-listen/sdk-bloom.mjs`) and the tests below require this module to equal them.
 //!
-//! The sizes are those production recorded: 12 hashes in 4 bytes with 7 padding bits for one
-//! document, 13 in 8 with 3 for two, 14 in 12 with 5 for three. Nothing is recorded for another
+//! The sizes are those production recorded: 12 hashes in 3 bytes with 7 padding bits (17 bits) for
+//! one document, 13 in 6 with 3 (45 bits) for two, 14 in 9 with 5 (67 bits) for three. (The L1 and
+//! L1b recordings state the bitmap as the length of its base64 text, 4, 8 and 12, which is 3, 6
+//! and 9 bytes: the recorder's `Buffer.from` of the string the client library decodes it to.) Nothing is recorded for another
 //! count, so `for_documents` has no filter for it and the caller sends none.
 
 use fireemu_proto_firestore::google::firestore::v1 as pb;
 use md5::{Digest, Md5};
 
 /// The documents a filter is recorded for, with the hash count, bitmap bytes and padding.
-const RECORDED: [(usize, i32, usize, i32); 3] = [(1, 12, 4, 7), (2, 13, 8, 3), (3, 14, 12, 5)];
+const RECORDED: [(usize, i32, usize, i32); 3] = [(1, 12, 3, 7), (2, 13, 6, 3), (3, 14, 9, 5)];
 
 /// A bloom filter over document resource names.
 #[derive(Debug, Clone, PartialEq, Eq)]

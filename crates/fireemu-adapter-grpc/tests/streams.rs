@@ -4070,7 +4070,7 @@ mod l1b_resume_answers {
 
     /// The recorded size for each count: (hash count, bitmap bytes, padding).
     fn recorded(count: usize) -> (i32, usize, i32) {
-        [(12, 4, 7), (13, 8, 3), (14, 12, 5)][count - 1]
+        [(12, 3, 7), (13, 6, 3), (14, 9, 5)][count - 1]
     }
 
     #[tokio::test]

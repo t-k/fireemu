@@ -1733,19 +1733,18 @@ test("R11 generated proof combinations agree with an independent six-condition m
 // run.mjs (`recordProduction`), so the replay uses that value.
 test("the historical FS-DATA-WRITE replay waits for a held writer longer than strict holds it, as the production recording did", () => {
   const root = fileURLToPath(new URL("../..", import.meta.url));
-  const localSource = readFileSync(
-    join(root, "crates/fireemu-adapter-grpc/src/local.rs"),
-    "utf8",
-  );
-  const strictWait = /STRICT_CONTENTION_WAIT: std::time::Duration =\s*std::time::Duration::from_secs\((\d+)\)/.exec(
-    localSource,
-  );
+  const localSource = readFileSync(join(root, "crates/fireemu-adapter-grpc/src/local.rs"), "utf8");
+  const strictWait =
+    /STRICT_CONTENTION_WAIT: std::time::Duration =\s*std::time::Duration::from_secs\((\d+)\)/.exec(
+      localSource,
+    );
   assert.ok(strictWait, "the strict contention wait is a whole number of seconds");
   const strictWaitMs = Number(strictWait[1]) * 1000;
   const probeSource = readFileSync(join(root, "conformance/src/firestore-probe/run.mjs"), "utf8");
-  const recorded = /FIRESTORE_PROBE_TARGET: "production"[\s\S]*?FIRESTORE_PROBE_TIMEOUT_MS: "(\d+)"/.exec(
-    probeSource,
-  );
+  const recorded =
+    /FIRESTORE_PROBE_TARGET: "production"[\s\S]*?FIRESTORE_PROBE_TIMEOUT_MS: "(\d+)"/.exec(
+      probeSource,
+    );
   assert.ok(recorded, "the production recording names its request timeout");
   const r11 = RUNS.find((run) => run.id === "R11");
   assert.ok(r11, "R11 is the historical FS-DATA-WRITE replay");
@@ -1756,6 +1755,9 @@ test("the historical FS-DATA-WRITE replay waits for a held writer longer than st
       recorded[1],
       `${command.mode}: the replay's request timeout is the recording's`,
     );
-    assert.ok(timeout > strictWaitMs + 10_000, `${command.mode}: ${timeout} ms is not above ${strictWaitMs} ms`);
+    assert.ok(
+      timeout > strictWaitMs + 10_000,
+      `${command.mode}: ${timeout} ms is not above ${strictWaitMs} ms`,
+    );
   }
 });

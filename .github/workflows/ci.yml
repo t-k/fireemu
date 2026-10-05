@@ -209,6 +209,9 @@ jobs:
     name: runner node tests (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
+    env:
+      # The SDK inventory tests skip without the sdk-smoke install; here they must fail instead.
+      FIREEMU_REQUIRE_SDK: "1"
     strategy:
       fail-fast: false
       matrix:
@@ -223,6 +226,10 @@ jobs:
           node-version: 24
       - name: the pinned real SDK for the runner tests
         run: pnpm -C conformance install --frozen-lockfile
+      # tools/sdk-smoke pins the same firebase-functions 7.3.2 as the conformance install; the SDK
+      # inventory tests (docs/functions-export-inventory.md) read it from here.
+      - name: the SDK fixture for the inventory tests
+        run: npm ci --prefix tools/sdk-smoke --ignore-scripts
       - name: Functions runner Node tests
         run: node --test tools/runner-node/*.test.mjs
 

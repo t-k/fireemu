@@ -7,7 +7,8 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { monitorEventLoopDelay } from 'node:perf_hooks';
-import { HARD_BACKSTOP_MS, childCpuTime, sampled, untilExit, waitUntil } from './load-independent-wait.mjs';
+import { HARD_BACKSTOP_MS, childCpuTime, deadlineWithLag, quietStallMs, sampled, untilExit, waitUntil } from './load-independent-wait.mjs';
+import { MAX_INPUT_FRAME_WAIT_MS } from './protocol.mjs';
 import test from 'node:test';
 
 const runner=process.env.FIREEMU_TEST_RUNNER || fileURLToPath(new URL('./index.mjs',import.meta.url));
@@ -75,8 +76,9 @@ async function start(t,{secrets=false}={}) {
     try{size=(await stat(join(dir,'calls.jsonl'))).size;}catch(e){if(e.code!=='ENOENT')throw e;}
     return `${size}|${messages.length}|${stderr.length}|${cpu()}`;
   }
-  async function exited(){
-    return untilExit({end,result:()=>result,progress,label:'child'});
+  // `options.stallMs` is for a child that is meant to be quiet for a whole product deadline.
+  async function exited(options={}){
+    return untilExit({end,result:()=>result,progress,label:'child',...options});
   }
   async function wait(check,label){
     return waitUntil({check,progress,label:`waiting for ${label}`,failFast:()=>{
@@ -112,10 +114,15 @@ test('real 30-second policy: stalled header and slow body expire; idle/invoked r
     body.child.stdin.write(`${MAX_FRAME}\n{"PRIVATE_INPUT_MARKER":`);
     const drip=setInterval(()=>{if(!body.result)body.child.stdin.write(' ',()=>{});},150);
     t.after(()=>clearInterval(drip));
-    const outcomes=await Promise.all([header.exited(),body.exited()]);
+    // Both children are meant to be silent until the product's input deadline, and exit just after it;
+    // CPU time shows no progress at the one-second resolution Linux reports, so the window has to be
+    // longer than the deadline, not equal to it.
+    const quiet={stallMs:quietStallMs(MAX_INPUT_FRAME_WAIT_MS)};
+    const outcomes=await Promise.all([header.exited(quiet),body.exited(quiet)]);
     clearInterval(drip);const elapsed=performance.now()-began;lag.disable();
-    const allowance=2*lag.max/1e6;
-    assert.ok(elapsed>=27_000&&elapsed<35_000+allowance,`observed interval ${elapsed} (event-loop allowance ${allowance})`);
+    const {limit,tooLoaded}=deadlineWithLag(35_000,lag.max/1e6);
+    assert.ok(!tooLoaded,`the machine is too loaded to judge the 30 s policy (event-loop stall ${lag.max/1e6} ms)`);
+    assert.ok(elapsed>=27_000&&elapsed<limit,`observed interval ${elapsed} (limit ${limit})`);
     for(const [f,outcome] of [[header,outcomes[0]],[body,outcomes[1]]]){
       assert.equal(outcome.code,2);assert.equal(outcome.signal,null);
       assert.match(f.stderr,/input frame deadline/);assert.equal(f.stderr.includes('PRIVATE_INPUT_MARKER'),false);

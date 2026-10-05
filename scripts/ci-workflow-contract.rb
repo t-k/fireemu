@@ -241,6 +241,25 @@ runner_tests = runner_runs.index("node --test tools/runner-node/*.test.mjs")
 assert(runner_install && runner_tests && runner_install < runner_tests, "the runner Node tests must run after the pinned real SDK install")
 assert(runner_node["runs-on"] == "${{ matrix.os }}", "the runner Node tests must run on the matrix operating system")
 assert(runner_steps.any? { |step| step["uses"]&.start_with?("actions/setup-node@") && step.dig("with", "node-version").to_s == "24" }, "the runner Node tests must run on Node 24")
+# The SDK inventory tests need the sdk-smoke install, and must fail rather than skip without it.
+runner_sdk_install = runner_runs.index("npm ci --prefix tools/sdk-smoke --ignore-scripts")
+assert(runner_sdk_install && runner_sdk_install < runner_tests, "the runner Node tests must run after the sdk-smoke install")
+assert(runner_node["env"] == { "FIREEMU_REQUIRE_SDK" => "1" }, "the runner Node job must require the SDK, so the inventory tests cannot skip")
+# Nothing may make the gate fail open: no continue-on-error, no step-level if, no other working
+# directory, no cache, no defaults. The steps that install and test carry exactly a name and a command.
+assert((runner_node.keys - %w[name runs-on timeout-minutes strategy env steps]).empty?, "the runner Node job may carry only name, runs-on, timeout-minutes, strategy, env and steps")
+assert((runner_node.fetch("strategy").keys - %w[fail-fast matrix]).empty?, "the runner Node strategy may carry only fail-fast and matrix")
+runner_steps.each do |step|
+  if step["run"]
+    assert(step.keys.sort == %w[name run], "runner Node run steps carry exactly a name and a run: #{step['name']}")
+  elsif step["uses"]&.start_with?("actions/setup-node@")
+    assert(step.keys.sort == %w[uses with] && step["with"].keys == %w[node-version], "the runner Node setup-node step sets only node-version (no cache)")
+  elsif step["uses"]&.start_with?("pnpm/action-setup@")
+    assert(step.keys.sort == %w[uses with] && step["with"].keys == %w[version], "the runner Node pnpm step sets only the version")
+  else
+    assert(step.keys == %w[uses] && step["uses"].start_with?("actions/checkout@"), "the runner Node job uses only checkout, pnpm, setup-node and run steps")
+  end
+end
 
 # The full suite runs on every trigger: pull requests, pushes to main and manual dispatch.
 %w[lint test verify platforms package ui runner-node].each do |name|

@@ -6,9 +6,10 @@
 //       request), different because of the state of the project (the publishing API enabled or not), or
 //       different.
 //   node compare.mjs replay --capture <capture.jsonl> --base <http://host:port> --profile <label>
-//                           [--out <report.json>]
+//                           [--strip-v1] [--out <report.json>]
 //       sends every replayable row of a recording to a local listener and compares the answer with the
-//       recorded one, row by row, with the same masks.
+//       recorded one, row by row, with the same masks. `--strip-v1` drops the `/v1` of the path, as the Admin SDK
+//       does against an emulator host.
 //
 // Nothing here sends anything to production: the recordings are read from disk and the replay goes to the
 // listener it is given. The Service Usage rows (the state of the publishing API, its enabling and the
@@ -26,8 +27,12 @@ export const SERVICE_USAGE_OPS = new Set([
   "getOperation",
 ]);
 
-/** The credentials of the first five requests of the auth-errors case, which the capture does not record. */
-const AUTH_ERRORS_TOKENS = ["none", "none", "invalid", "invalid", "none"];
+/**
+ * The credentials of the first six requests of the auth-errors case, which the capture does not record: the
+ * case creates its own channel with the default credential, then lists and publishes with none and with an
+ * invalid one, then creates with none.
+ */
+const AUTH_ERRORS_TOKENS = ["default", "none", "none", "invalid", "invalid", "none"];
 const INVALID_TOKEN = "invalid-token-for-the-recording";
 const DEFAULT_TOKEN = "replay-token";
 const REQUEST_ID = /^[0-9a-f]{16}$/;
@@ -53,7 +58,7 @@ export function runIdOf(path) {
   throw new Error(`${path} has no run-start note`);
 }
 
-/** The credential each row was sent with: none or invalid for the first rows of auth-errors, otherwise default. */
+/** The credential each row was sent with: see `AUTH_ERRORS_TOKENS` for the first rows of auth-errors, otherwise default. */
 export function tokenModes(rows) {
   let seen = 0;
   return rows.map((row) => {
@@ -366,18 +371,21 @@ export function comparePair(rowsA, rowsB, runA, runB) {
 // --- replay --------------------------------------------------------------------------------------------
 
 /** Sends one recorded row to `base` and returns the status and the parsed body ({raw} for a text). */
-export async function replayRow(row, token, { base, fetchImpl = fetch }) {
+export async function replayRow(row, token, { base, stripV1 = false, fetchImpl = fetch }) {
   const headers = {};
   const body = requestBody(row);
   if (body !== undefined) headers["content-type"] = "application/json";
   if (token === "invalid") headers.authorization = `Bearer ${INVALID_TOKEN}`;
   else if (token === "default") headers.authorization = `Bearer ${DEFAULT_TOKEN}`;
-  const reply = await fetchImpl(`${base}${row.request.path}`, {
-    method: row.request.method,
-    headers,
-    body: body === undefined ? undefined : JSON.stringify(body),
-    signal: AbortSignal.timeout(30_000),
-  });
+  const reply = await fetchImpl(
+    `${base}${stripV1 ? row.request.path.replace(/^\/v1\//, "/") : row.request.path}`,
+    {
+      method: row.request.method,
+      headers,
+      body: body === undefined ? undefined : JSON.stringify(body),
+      signal: AbortSignal.timeout(30_000),
+    },
+  );
   const text = await reply.text();
   let parsed;
   if (text === "") parsed = null;
@@ -493,7 +501,7 @@ export async function main(argv, io = { stdout: process.stdout, stderr: process.
       io.stderr.write("replay needs --capture, --base and --profile\n");
       return 2;
     }
-    const results = await replay(loadRows(capture), { base });
+    const results = await replay(loadRows(capture), { base, stripV1: args.includes("--strip-v1") });
     report = { command, capture, profile, ...summarize(results), results };
   } else {
     io.stderr.write("usage: compare.mjs pair|replay ...\n");

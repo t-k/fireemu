@@ -138,13 +138,14 @@ test("omitted text is rebuilt from its length and refused unless it matches the 
   assert.equal(requestBody({ request: { body: { a: [1, { b: "c" }] } } }).a[1].b, "c");
 });
 
-test("the credential of the first five requests of auth-errors is none, none, invalid, invalid, none; every other request has the default", () => {
+test("the credential of the first six requests of auth-errors is default, none, none, invalid, invalid, none; every other request has the default", () => {
   const rows = [
     { case: "service-state" },
-    ...Array.from({ length: 7 }, () => ({ case: "auth-errors" })),
+    ...Array.from({ length: 8 }, () => ({ case: "auth-errors" })),
     { case: "cleanup" },
   ];
   assert.deepEqual(tokenModes(rows), [
+    "default",
     "default",
     "none",
     "none",
@@ -386,36 +387,22 @@ test("a replay sends each row with its credential, skips what a local listener d
       request: { method: "GET", path: "/v1/s" },
       response: answered(200, {}),
     },
-    {
-      n: 2,
+    ...[2, 3, 4, 5, 6, 7].map((n) => ({
+      n,
       case: "auth-errors",
       op: "listChannels",
       request: { method: "GET", path: "/v1/projects/p/locations/l/channels" },
       response: answered(401, null),
-    },
+    })),
     {
-      n: 3,
-      case: "auth-errors",
-      op: "listChannels",
-      request: { method: "GET", path: "/v1/projects/p/locations/l/channels" },
-      response: answered(401, null),
-    },
-    {
-      n: 4,
-      case: "auth-errors",
-      op: "listChannels",
-      request: { method: "GET", path: "/v1/projects/p/locations/l/channels" },
-      response: answered(401, null),
-    },
-    {
-      n: 5,
+      n: 8,
       case: "channel-lifecycle",
       op: "getChannel",
       request: { method: "GET", path: "/v1/projects/p/locations/l/channels/x" },
       response: answered(404, { error: { code: 404 } }),
     },
     {
-      n: 6,
+      n: 9,
       case: "channel-lifecycle",
       op: "createChannel",
       request: {
@@ -434,16 +421,22 @@ test("a replay sends each row with its credential, skips what a local listener d
       [2, "diverge", "status"],
       [3, "diverge", "status"],
       [4, "diverge", "status"],
-      [5, "match", ""],
+      [5, "diverge", "status"],
       [6, "diverge", "status"],
+      [7, "diverge", "status"],
+      [8, "match", ""],
+      [9, "diverge", "status"],
     ],
   );
   assert.deepEqual(
     server.seen.map((item) => item.authorization),
     [
+      "Bearer replay-token",
       undefined,
       undefined,
       "Bearer invalid-token-for-the-recording",
+      "Bearer invalid-token-for-the-recording",
+      undefined,
       "Bearer replay-token",
       "Bearer replay-token",
     ],
@@ -452,10 +445,26 @@ test("a replay sends each row with its credential, skips what a local listener d
   assert.equal(server.seen[0].body, "");
   assert.deepEqual(results[1].actual, { status: 200, body: { raw: "OK" } });
   const summary = summarize(results);
-  assert.deepEqual(summary.total, { skipped: 1, diverge: 4, match: 1 });
-  assert.equal(summary.families["401"].diverge, 3);
-  const dead = await replay([rows[4]], { base: "http://127.0.0.1:1" });
+  assert.deepEqual(summary.total, { skipped: 1, diverge: 7, match: 1 });
+  assert.equal(summary.families["401"].diverge, 6);
+  const dead = await replay([rows[7]], { base: "http://127.0.0.1:1" });
   assert.match(dead[0].reason, /^transport: /);
+});
+
+test("a replay can drop the /v1 of the path, as the Admin SDK does against an emulator host", async (t) => {
+  const server = await listener(() => ({ status: 200, text: "OK" }));
+  t.after(server.close);
+  const rows = [entry({ request: { method: "GET", path: "/v1/projects/p/locations/l/channels" } })];
+  await replay(rows, { base: server.base });
+  await replay(rows, { base: server.base, stripV1: true });
+  await replay([entry({ request: { method: "GET", path: "/v10/projects/p" } })], {
+    base: server.base,
+    stripV1: true,
+  });
+  assert.deepEqual(
+    server.seen.map((item) => item.url),
+    ["/v1/projects/p/locations/l/channels", "/projects/p/locations/l/channels", "/v10/projects/p"],
+  );
 });
 
 test("the command line pairs two captures and replays one, and refuses a call without its arguments", async (t) => {

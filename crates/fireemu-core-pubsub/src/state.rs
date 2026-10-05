@@ -2469,6 +2469,12 @@ mod tests {
             .create_topic(topic_name.clone(), BTreeMap::default())
             .unwrap();
         let now = LogicalInstant::from_unix_seconds(10);
+        // The broker owns the first half of the id space; the Functions runtime's own publish path
+        // draws from the second half, so the two never share an id.
+        assert_eq!(
+            crate::MESSAGE_ID_SPAN,
+            fireemu_core_types::pubsub_message_id::SPAN / 2
+        );
         state.message_counter = crate::MESSAGE_ID_SPAN - 1;
         let last = state
             .publish_shared(&topic_name, vec![data(b"a")], now)

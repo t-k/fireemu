@@ -6,9 +6,15 @@
 //! `a9621bfae74fe9bc`, frames `6ac2a47f0000967f445e8b09`, `6ac2a51c000844422b7986d1`,
 //! `6ac2ad01000c911a5d434439` and `6ac2ada10008c5a7380c87c6`, the `id` of a 2nd gen `CloudEvent`,
 //! which is also the `messageId`) are `22254343790642112`, `22256683947060623`,
-//! `22254564432090315` and `22255693239595822`: all in `2225e13..2226e13`. The counter of the
-//! emulator's state is mapped into the same range by a fixed permutation, so a recorded run replays
-//! with the same ids and two messages of one counter never share an id.
+//! `22254564432090315` and `22255693239595822`: all in `2225e13..2226e13`. The FE v7 record of
+//! 2026-10-05 (run `d3fd3faa3e0dc702`, frames 136, 138, 275 and 277 of its `production-run.json`)
+//! gave `22257004445426262`, `22257876454937131`, `22256735573081501` and `22256872578522983`, in
+//! the same range. What production guarantees is the form: a decimal of seventeen digits. The 2080
+//! ids of the PUBSUB record of 2026-10-05 (run `148026092d56`, over REST and gRPC, another project)
+//! are all seventeen digits too but range over `2131e13..2226e13`, so the range below is where the
+//! FE frames fell, not a property production states. The counter of the emulator's state is mapped
+//! into that range by a fixed permutation, so a recorded run replays with the same ids and two
+//! messages of one counter never share an id.
 
 /// The first id of the range: `22250000000000000`, seventeen digits.
 const FIRST: u64 = 22_250_000_000_000_000;
@@ -31,12 +37,16 @@ mod tests {
     use proptest::prelude::*;
     use std::collections::HashSet;
 
-    /// The ids production gave in the 2026-10-04 formal record (frames cited in the module docs).
-    const PRODUCTION_IDS: [&str; 4] = [
+    /// The ids production gave in the FE v5 and v7 formal records (frames cited in the module docs).
+    const PRODUCTION_IDS: [&str; 8] = [
         "22254343790642112",
         "22256683947060623",
         "22254564432090315",
         "22255693239595822",
+        "22257004445426262",
+        "22257876454937131",
+        "22256735573081501",
+        "22256872578522983",
     ];
 
     fn in_the_recorded_range(id: &str) -> bool {

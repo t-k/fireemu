@@ -1163,9 +1163,10 @@ function v1Context(msg) {
         eventId: event.id,
         timestamp: millisecondTimestamp(event.time),
         eventType: "google.pubsub.topic.publish",
+        // Members in the order of the recorded frames (FE v5 and v7: name, service, type).
         resource: {
-          service: "pubsub.googleapis.com",
           name: topic,
+          service: "pubsub.googleapis.com",
           type: "type.googleapis.com/google.pubsub.v1.PubsubMessage",
         },
         params: {},

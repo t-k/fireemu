@@ -7115,8 +7115,8 @@ mod schedule_capacity_tests {
         finish(&second).await;
     }
 
-    /// The ids are pinned, computed independently of the implementation: `2` followed by `(ordinal * 6364136223846793003
-    /// + session) mod 10^16` in sixteen digits.
+    /// The ids are pinned, computed independently of the implementation: a 2 followed by sixteen digits of
+    /// (ordinal x 6364136223846793003 + session) modulo 10^16.
     #[test]
     fn schedule_message_ids_have_the_pinned_values() {
         for (session, ordinal, expected) in [

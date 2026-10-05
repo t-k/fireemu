@@ -23,6 +23,8 @@ const TEXT_LOW = 524_032;
 const TEXT_HIGH = 524_800;
 const EXTRAS_HIGH = 100;
 const NAME_HIGH = 256;
+/** The batch sizes asked: the recorded limit and its neighbours, the old emulator limit of 256 and a thousand. */
+const BATCH_SIZES = [100, 101, 256, 257, 1000];
 
 const extras = (count, name = (index) => `ext${index}`) =>
   Object.fromEntries(Array.from({ length: count }, (_, index) => [name(index), { ceString: "v" }]));
@@ -30,7 +32,7 @@ const extras = (count, name = (index) => `ext${index}`) =>
 export const publishBoundaries = {
   id: "publish-boundaries",
   short: "pb",
-  requests: 54,
+  requests: 61,
   async run(ctx) {
     const c = ctx.client;
     const channel = await requireReadyChannel(ctx, "b");
@@ -133,6 +135,20 @@ export const publishBoundaries = {
           }),
           "id",
         ),
+      ],
+    });
+    // The batch size, asked directly (the exact limit of stage B was one record: 100 passed, 101 was refused):
+    // distinct tiny events, so that only their number is in question.
+    for (const count of BATCH_SIZES)
+      await c.publishEvents(channel, {
+        events: Array.from({ length: count }, () => cloudEvent(ctx, { textData: "1" })),
+      });
+    // The two shapes production accepted in stage B that the official emulator's conversion cannot make (no
+    // `time` attribute; an attribute of the kind `ceBytes`): recorded again, so that each has two records.
+    await c.publishEvents(channel, { events: [withoutAttribute(event(), "time")] });
+    await c.publishEvents(channel, {
+      events: [
+        cloudEvent(ctx, { attributes: { ...baseAttributes(), convbytes: { ceBytes: "AAE=" } } }),
       ],
     });
     // The same source and id twice, the second without a content type: the duplicate or the defect first?

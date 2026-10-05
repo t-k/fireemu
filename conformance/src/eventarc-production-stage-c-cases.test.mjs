@@ -612,6 +612,8 @@ test("channel-ids: a variant the service accepts is settled for both names by it
   }
 });
 
+const BATCH_SIZES = [100, 101, 256, 257, 1000];
+
 /** The values a search asks for, by an independent bisection: the ends first, then the middle of what is left. */
 function reference(low, high, limit, { askLow }) {
   const asked = askLow ? [low, high] : [high];
@@ -660,12 +662,18 @@ test("publish-boundaries: the exact values every search asks for, in order, and 
     reference(524_032, 524_800, 524_500, { askLow: true }).length +
       wanted.length +
       wantedNames.length +
-      8,
+      8 +
+      BATCH_SIZES.length +
+      2,
   );
   // 101 events, each without a type.
   const many = bodies.find((events) => events.length === 101);
   assert.ok(many && many.every((event) => event.type === undefined));
-  assert.equal(bodies.filter((events) => events.length > 100).length, 1);
+  // Only that one batch of the order pairs has no type: the batch sizes are asked with types.
+  assert.equal(
+    bodies.filter((events) => events.length > 100 && events[0].type === undefined).length,
+    1,
+  );
 });
 
 test("publish-boundaries: a high end answered with no verdict (a 503) ends that search with the note, and an accepted one too", async () => {
@@ -690,4 +698,54 @@ test("publish-boundaries: a high end answered with no verdict (a 503) ends that 
     assert.deepEqual([moved.lowAccepted, moved.highAccepted], [true, expected]);
     assert.equal(noteOf(notes, "limit-boundary", "event-text-length"), undefined);
   }
+});
+
+test("publish-boundaries: the batch sizes asked, each of distinct tiny events, and the two shapes the emulator cannot convert", async () => {
+  const { inCase } = await runOne(publishBoundaries, {
+    eventLimit: 100,
+    attributeLimit: 100,
+    keyLimit: 256,
+    textLimit: 524_500,
+  });
+  const bodies = inCase
+    .filter((call) => call.op === "publishEvents")
+    .map((call) => call.body.events);
+  const batches = bodies.filter(
+    (events) =>
+      BATCH_SIZES.includes(events.length) && events.every((event) => event.type !== undefined),
+  );
+  assert.deepEqual(
+    batches.map((events) => events.length),
+    BATCH_SIZES,
+    "in order, once each (the 101-event batch without a type of the order pairs is not one of them)",
+  );
+  for (const events of batches) {
+    assert.equal(
+      new Set(events.map((event) => event.id)).size,
+      events.length,
+      "distinct ids: a duplicate would be refused for itself",
+    );
+    assert.ok(
+      events.every((event) => event.textData === "1" && Object.keys(event.attributes).length === 2),
+    );
+  }
+  // The two shapes production accepted in stage B and the official emulator's conversion cannot make.
+  const single = bodies.filter((events) => events.length === 1).map((events) => events[0]);
+  const noTime = single.filter(
+    (event) =>
+      event.attributes?.time === undefined &&
+      event.attributes?.datacontenttype !== undefined &&
+      event.id !== undefined &&
+      event.type !== undefined &&
+      event.source !== undefined &&
+      event.specVersion !== undefined,
+  );
+  const bytes = single.filter((event) => event.attributes?.convbytes?.ceBytes !== undefined);
+  assert.equal(noTime.length, 1);
+  assert.equal(bytes.length, 1);
+  assert.deepEqual(Object.keys(bytes[0].attributes).toSorted(), [
+    "convbytes",
+    "datacontenttype",
+    "time",
+  ]);
 });

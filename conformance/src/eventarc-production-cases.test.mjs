@@ -638,7 +638,7 @@ test("the case ceilings are the ones the plan was measured against, in the order
       ["publish-envelope", 42],
       ["publish-content", 31],
       ["publish-limits", 42],
-      ["publish-boundaries", 54],
+      ["publish-boundaries", 61],
       ["admin-sdk-publish", 31],
       ["auth-errors", 36],
     ],

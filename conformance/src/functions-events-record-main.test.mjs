@@ -267,6 +267,39 @@ test("check refuses without the approval lines", async () => {
   assert.ok(result.problems.some((p) => p.includes("no approval line")));
 });
 
+test("v7: each CLI run gets the timeout of its own action, a single deploy 20 minutes, and its own files and config home", async () => {
+  const { deps, argv } = arrange();
+  const seen = [];
+  const runCli = deps.runCli;
+  deps.runCli = async (call) => {
+    seen.push({
+      action: call.action,
+      timeoutMs: call.timeoutMs,
+      cwd: call.plan.cwd,
+      configHome: call.plan.env.XDG_CONFIG_HOME,
+    });
+    return runCli(call);
+  };
+  const result = await main(argv("record"), deps);
+  assert.equal(result.outcome, "recorded", JSON.stringify(result));
+  const min = 60_000;
+  assert.deepEqual(
+    seen.map(({ action, timeoutMs }) => [action, timeoutMs]),
+    [
+      ["dry-run", 10 * min],
+      ["deploy", 40 * min],
+      ["deploy-storageFinalizedV1", 20 * min],
+      ["deploy-storageDeletedV1", 20 * min],
+      ["deploy-storageMetadataUpdatedV1", 20 * min],
+      ["deploy-storageArchivedV1", 20 * min],
+      ["delete", 20 * min],
+    ],
+  );
+  // one work directory and one config home for each CLI run: the seven never share files
+  assert.equal(new Set(seen.map((s) => s.cwd)).size, 7);
+  assert.equal(new Set(seen.map((s) => s.configHome)).size, 7);
+});
+
 test("record runs end to end: lock, started line, the run, SHA256SUMS, finished line, lock released", async () => {
   const { deps, argv, cliCalls, ledgerPath, dir } = arrange();
   const result = await main(argv("record"), deps);

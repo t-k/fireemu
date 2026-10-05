@@ -528,6 +528,19 @@ test("v7: each list gates its own generation: an incomplete v1 list sends no Gen
     lists: { v1: { ...v1, complete: false }, v2: { ...v2, complete: false } },
   });
   assert.deepEqual(sent, []);
+  // a Gen2 name that shows in the v1 list is not deleted through /v1 (and a Gen1 name in the v2 list not through /v2)
+  await restDeleteLeftovers({
+    request,
+    sleep: async () => {},
+    lists: {
+      v1: {
+        items: [{ name: "projects/p/locations/us-central1/functions/storageDeletedV2" }],
+        complete: true,
+      },
+      v2: { items: [], complete: true },
+    },
+  });
+  assert.deepEqual(sent, [], "a Gen2 name in the v1 list is left alone");
   // a name that is not one of the run's 22, in either list, is not deleted
   await restDeleteLeftovers({
     request,

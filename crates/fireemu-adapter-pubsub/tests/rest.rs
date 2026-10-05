@@ -3139,3 +3139,111 @@ async fn recorded_unknown_get_routes_return_html_only_in_strict() {
         assert_eq!(body["error"]["status"], "NOT_FOUND");
     }
 }
+
+#[tokio::test]
+async fn recorded_push_pull_and_filter_refusals_have_exact_rest_shapes() {
+    let address = start().await;
+    let topic = "projects/demo-app/topics/diagnostic-shapes";
+    let sub = "projects/demo-app/subscriptions/diagnostic-shapes";
+    assert_eq!(
+        rest_request(address, "PUT", &format!("/v1/{topic}"), json!({}))
+            .await
+            .0,
+        200
+    );
+    assert_eq!(
+        rest_request(
+            address,
+            "PUT",
+            &format!("/v1/{sub}"),
+            json!({"topic":topic,"pushConfig":{"pushEndpoint":"https://example.com/push"}})
+        )
+        .await
+        .0,
+        200
+    );
+    let (status, body) = rest_request(
+        address,
+        "POST",
+        &format!("/v1/{sub}:pull"),
+        json!({"maxMessages":1}),
+    )
+    .await;
+    assert_eq!(status, 400);
+    assert_eq!(
+        body,
+        json!({"error":{"code":400,"message":"This method is not supported for this subscription type.","status":"FAILED_PRECONDITION"}})
+    );
+    let (status, body) = rest_request(
+        address,
+        "PUT",
+        "/v1/projects/demo-app/subscriptions/invalid-filter",
+        json!({"topic":topic,"filter":"attributes.color == \"red\""}),
+    )
+    .await;
+    assert_eq!(status, 400);
+    assert_eq!(
+        body["error"]["details"],
+        json!([{"@type":"type.googleapis.com/google.rpc.ErrorInfo","reason":"FILTER_EXPRESSION_FAILED_TO_PARSE","domain":"pubsub.googleapis.com","metadata":{"column":"19","line":"1","token":"=","message":"syntax error"}}])
+    );
+}
+
+#[tokio::test]
+async fn native_error_headers_preserve_recorded_anchors_and_missing_list_leaf() {
+    use prost::Message as _;
+    use tonic::codegen::Service as _;
+    for policy in [
+        fireemu_adapter_pubsub::PagingPolicy::Strict,
+        fireemu_adapter_pubsub::PagingPolicy::Emulator,
+    ] {
+        let address = start_policy(policy).await;
+        let mut channel = grpc_channel(address).await;
+        let encoded = pb::GetTopicRequest {
+            topic: "projects/demo-app/topics/goog-probe".to_owned(),
+        }
+        .encode_to_vec();
+        let mut frame = vec![0];
+        frame.extend_from_slice(&u32::try_from(encoded.len()).unwrap().to_be_bytes());
+        frame.extend(encoded);
+        let request = axum::http::Request::builder()
+            .method("POST")
+            .uri(format!(
+                "http://{address}/google.pubsub.v1.Publisher/GetTopic"
+            ))
+            .header("content-type", "application/grpc")
+            .header("te", "trailers")
+            .body(tonic::body::Body::new(axum::body::Body::from(frame)))
+            .unwrap();
+        std::future::poll_fn(|context| channel.poll_ready(context))
+            .await
+            .unwrap();
+        let response = channel.call(request).await.unwrap();
+        let message = response.headers()["grpc-message"].to_str().unwrap();
+        if policy == fireemu_adapter_pubsub::PagingPolicy::Strict {
+            assert!(
+                message.contains("pubsub-basics#resource_names"),
+                "{message}"
+            );
+        } else {
+            assert!(
+                message.contains("pubsub-basics%23resource_names"),
+                "{message}"
+            );
+        }
+        if policy == fireemu_adapter_pubsub::PagingPolicy::Strict {
+            let mut publisher = PublisherClient::new(grpc_channel(address).await);
+            let error = publisher
+                .list_topic_subscriptions(pb::ListTopicSubscriptionsRequest {
+                    topic: "projects/demo-app/topics/absent-list".to_owned(),
+                    ..Default::default()
+                })
+                .await
+                .unwrap_err();
+            assert_eq!(error.code(), tonic::Code::NotFound);
+            assert_eq!(
+                error.message(),
+                "Resource not found (resource=absent-list)."
+            );
+        }
+    }
+}

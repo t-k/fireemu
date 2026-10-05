@@ -92,6 +92,8 @@ mod tests {
 
     #[test]
     fn recorded_large_publish_refusals_have_exact_messages() {
+        assert!(publish_request_size(10_000_000).is_ok());
+        assert!(publish_request_size(10_000_001).is_err());
         assert_eq!(publish_request_size(10_000_068).unwrap_err().message(),"The value for request_size is too large. You passed 10000068 in the request, but the maximum value is 10000000.");
         assert_eq!(
             publish_request_size(10_485_761).unwrap_err().message(),

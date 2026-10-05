@@ -629,6 +629,12 @@ mod tests {
             prop_assert_eq!(super::wire_error_message(&error),leaf);
         }
     }
+    proptest! {
+        #[test]
+        fn strict_creation_ack_deadline_matches_recorded_bounds(value in -100i32..700) {
+            prop_assert_eq!(validate_strict_ack_deadline(value).is_ok(),value==0 || (10..=600).contains(&value));
+        }
+    }
     use fireemu_core_pubsub::Code;
 
     use super::pb;

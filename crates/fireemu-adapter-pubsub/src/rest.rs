@@ -92,7 +92,7 @@ impl RestError {
             Code::InvalidArgument => (StatusCode::BAD_REQUEST, "INVALID_ARGUMENT"),
             Code::NotFound => (StatusCode::NOT_FOUND, "NOT_FOUND"),
             Code::AlreadyExists => (StatusCode::CONFLICT, "ALREADY_EXISTS"),
-            Code::FailedPrecondition => (StatusCode::PRECONDITION_FAILED, "FAILED_PRECONDITION"),
+            Code::FailedPrecondition => (StatusCode::BAD_REQUEST, "FAILED_PRECONDITION"),
             Code::ResourceExhausted => (StatusCode::TOO_MANY_REQUESTS, "RESOURCE_EXHAUSTED"),
             Code::Unimplemented => (StatusCode::NOT_IMPLEMENTED, "UNIMPLEMENTED"),
         };
@@ -163,8 +163,26 @@ pub(crate) async fn handle(request: Request<Body>, handle: PubSubHandle) -> Resp
         {
             route_not_found_response(&path)
         }
-        Err(error) => error_response(error),
+        Err(mut error) => {
+            if handle.paging_policy == crate::PagingPolicy::Strict && error.details.is_none() {
+                error.details = filter_error_details(&error.message);
+            }
+            error_response(error)
+        }
     }
+}
+
+fn filter_error_details(message: &str) -> Option<Value> {
+    let suffix = message
+        .strip_prefix("Invalid filter expression: failed to parse (syntax error at line ")?;
+    let (line, suffix) = suffix.split_once(", column ")?;
+    let (column, suffix) = suffix.split_once(", token '")?;
+    let token = suffix.strip_suffix("').")?;
+    line.parse::<usize>().ok()?;
+    column.parse::<usize>().ok()?;
+    Some(
+        json!([{"@type":"type.googleapis.com/google.rpc.ErrorInfo","reason":"FILTER_EXPRESSION_FAILED_TO_PARSE","domain":"pubsub.googleapis.com","metadata":{"column":column,"line":line,"token":token,"message":"syntax error"}}]),
+    )
 }
 
 fn escape_html_path(path: &str) -> String {
@@ -1729,6 +1747,17 @@ mod production_shape_tests {
 #[cfg(test)]
 mod route_error_tests {
     use super::escape_html_path;
+
+    #[tokio::test]
+    async fn route_response_escapes_markup_in_the_inserted_path() {
+        let response = super::route_not_found_response("/v1/topics/<&\"'>");
+        let body = axum::body::to_bytes(response.into_body(), 10000)
+            .await
+            .unwrap();
+        let text = std::str::from_utf8(&body).unwrap();
+        assert!(text.contains("<code>/v1/topics/&lt;&amp;&quot;&#39;&gt;</code>"));
+    }
+
     use proptest::prelude::*;
 
     proptest! {
@@ -1738,6 +1767,24 @@ mod route_error_tests {
             prop_assert!(!escaped.contains(['<', '>', '\'', '"']));
             let decoded = escaped.replace("&lt;", "<").replace("&gt;", ">").replace("&quot;", "\"").replace("&#39;", "'").replace("&amp;", "&");
             prop_assert_eq!(decoded, path);
+        }
+    }
+}
+
+#[cfg(test)]
+mod filter_error_tests {
+    use super::filter_error_details;
+    use proptest::prelude::*;
+    proptest! {
+        #[test]
+        fn syntax_metadata_preserves_parser_location(line in 1usize..200,column in 1usize..200,token in "[a-z=]{1,12}") {
+            let message=format!("Invalid filter expression: failed to parse (syntax error at line {line}, column {column}, token '{token}').");
+            let details=filter_error_details(&message).unwrap();
+            let line_text=line.to_string();let column_text=column.to_string();
+            prop_assert_eq!(details[0]["metadata"]["line"].as_str(),Some(line_text.as_str()));
+            prop_assert_eq!(details[0]["metadata"]["column"].as_str(),Some(column_text.as_str()));
+            prop_assert_eq!(details[0]["metadata"]["token"].as_str(),Some(token.as_str()));
+            let unrelated=format!("unrelated {message}");prop_assert!(filter_error_details(&unrelated).is_none());
         }
     }
 }

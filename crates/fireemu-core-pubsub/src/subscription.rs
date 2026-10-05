@@ -1326,6 +1326,47 @@ mod tests {
     }
 
     #[test]
+    fn ordered_exhausted_successor_waits_for_the_emitted_predecessor() {
+        let mut config = cfg();
+        config.enable_message_ordering = true;
+        config.dead_letter_policy = Some(DeadLetterPolicy {
+            dead_letter_topic: TopicName::new("demo-app", "dead-letters").unwrap(),
+            max_delivery_attempts: MIN_DEAD_LETTER_ATTEMPTS,
+        });
+        let mut sub = SubscriptionState::new(config);
+        let now = LogicalInstant::from_unix_seconds(100);
+        for (id, key) in [("1", "same"), ("2", "same"), ("3", "other")] {
+            let mut message = stored(id, b"data", 100);
+            message.message.ordering_key = key.to_owned();
+            sub.enqueue(message, now).unwrap();
+        }
+        // Seed a retained entry at the budget boundary; this is a local state-safety check.
+        sub.entries[1].delivery_attempt = MIN_DEAD_LETTER_ATTEMPTS;
+        let mut ids = counter();
+        let first = sub.pull(3, now, &mut ids);
+        assert_eq!(
+            first
+                .received
+                .iter()
+                .map(|item| item.message.message_id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["1", "3"]
+        );
+        assert!(first.dead_lettered.is_empty());
+        sub.acknowledge(&[first.received[0].ack_id.clone()]);
+        let second = sub.pull(3, now, &mut ids);
+        assert!(second.received.is_empty());
+        assert_eq!(
+            second
+                .dead_lettered
+                .iter()
+                .map(|item| item.message_id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["2"]
+        );
+    }
+
+    #[test]
     fn ordered_pull_batches_same_key_and_blocks_later_batches_until_ack() {
         let mut config = cfg();
         config.enable_message_ordering = true;

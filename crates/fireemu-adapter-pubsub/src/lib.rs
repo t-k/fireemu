@@ -1161,6 +1161,10 @@ pub async fn serve_pubsub(
         let handle = rest_handle.clone();
         async move { rest::handle(request, handle).await }
     });
+    if handle.paging_policy == PagingPolicy::Strict {
+        prepared_router =
+            prepared_router.layer(axum::middleware::from_fn(recorded_grpc_error_headers));
+    }
     let result = tonic::transport::Server::builder()
         .accept_http1(true)
         .serve_with_incoming(
@@ -2251,5 +2255,56 @@ mod publication_gate_tests {
             .expect_err("a poisoned gate must be reported");
         assert!(refusal.contains("publication gate"), "{refusal}");
         assert!(refusal.contains("poisoned"), "{refusal}");
+    }
+}
+
+fn canonical_recorded_grpc_message(message: &str) -> String {
+    message
+        .replace(
+            "pubsub-basics%23resource_names",
+            "pubsub-basics#resource_names",
+        )
+        .replace("subscriber%23create", "subscriber#create")
+}
+
+async fn recorded_grpc_error_headers(
+    request: axum::http::Request<axum::body::Body>,
+    next: axum::middleware::Next,
+) -> axum::response::Response {
+    let mut response = next.run(request).await;
+    if let Some(message) = response
+        .headers()
+        .get("grpc-message")
+        .and_then(|value| value.to_str().ok())
+    {
+        let canonical = canonical_recorded_grpc_message(message);
+        if let Ok(value) = axum::http::HeaderValue::from_str(&canonical) {
+            response.headers_mut().insert("grpc-message", value);
+        }
+    }
+    response
+}
+
+#[cfg(test)]
+mod grpc_error_header_tests {
+    use super::canonical_recorded_grpc_message;
+    use proptest::prelude::*;
+    proptest! {
+        #[test]
+        fn recorded_anchors_roundtrip_and_literal_percent_sequences_stay_encoded(text in "[a-z0-9 #?%]{0,100}") {
+            for anchor in ["https://cloud.google.com/pubsub/docs/pubsub-basics#resource_names","https://cloud.google.com/pubsub/subscriber#create"] {
+                let message=format!("{text} {anchor}");
+                let status=tonic::Status::invalid_argument(&message);
+                let mut headers=axum::http::HeaderMap::new();status.add_header(&mut headers).unwrap();
+                let encoded=headers["grpc-message"].to_str().unwrap();
+                let canonical=canonical_recorded_grpc_message(encoded);
+                prop_assert!(canonical.contains(anchor));
+                prop_assert!(!canonical.contains("%23resource_names") && !canonical.contains("%23create"));
+                prop_assert_eq!(canonical_recorded_grpc_message(&canonical),canonical);
+            }
+            let mut encoded=axum::http::HeaderMap::new();tonic::Status::invalid_argument("pubsub-basics%23resource_names").add_header(&mut encoded).unwrap();
+            let value=encoded["grpc-message"].to_str().unwrap();
+            prop_assert_eq!(canonical_recorded_grpc_message(value),value);
+        }
     }
 }

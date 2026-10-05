@@ -173,8 +173,8 @@ impl Publisher for PublisherService {
         let state = self.handle.state();
         if !state.topic_exists(&name) && self.handle.paging_policy == crate::PagingPolicy::Strict {
             return Err(Status::not_found(format!(
-                "topic {} not found",
-                name.to_full()
+                "Resource not found (resource={}).",
+                name.topic()
             )));
         }
         let page = paginate(

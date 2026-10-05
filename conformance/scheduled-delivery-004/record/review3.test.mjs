@@ -29,7 +29,7 @@ const SHORT = { passes: 1, naturalWindowMs: 60_000 };
 const PUBSUB = "pubsub.googleapis.com/v1/projects/fireemu-oracle-sbx";
 const JOBS =
   "cloudscheduler.googleapis.com/v1/projects/fireemu-oracle-sbx/locations/us-central1/jobs";
-const SUB1 = pullSubscriptionId(RUN, "schedOkV1");
+const SUB1 = pullSubscriptionId(RUN, "schedFailV1");
 const SUB1_URL = `${PUBSUB}/subscriptions/${SUB1}`;
 const notFound = (what) =>
   reply(404, { error: { code: 404, message: what + " not found", status: "NOT_FOUND" } });
@@ -65,7 +65,7 @@ test("a confirmed subscription whose own DELETE answers 404 and then reads 404 s
       },
     },
   });
-  assert.deepEqual(labels(result.vanishedAfterCreate), ["subscription-schedOkV1"]);
+  assert.deepEqual(labels(result.vanishedAfterCreate), ["subscription-schedFailV1"]);
   assert.equal(result.vanishedAfterCreate[0].class, "vanished-after-create");
   assert.equal(result.closureReady, false);
   assert.equal(result.readBackRequired, true);
@@ -84,7 +84,7 @@ test("near miss: the same subscription deleted with a 2xx closes the run", async
 });
 
 test("a confirmed extra job missing from the cleanup list, never deleted, reading 404, stays unsettled (probe B)", async () => {
-  const extra = extraJobId(RUN, "zero");
+  const extra = extraJobId(RUN, "count");
   const { result, world } = await go({
     hooks: {
       ["GET " + JOBS]: async ({ w }) => {
@@ -112,7 +112,7 @@ test("a confirmed extra job missing from the cleanup list, never deleted, readin
 
 test("near miss: a confirmed extra job that the list holds and the run deletes with a 2xx closes", async () => {
   const { result, world } = await go();
-  assert.ok(world.creates.includes(extraJobId(RUN, "zero")));
+  assert.ok(world.creates.includes(extraJobId(RUN, "count")));
   assert.deepEqual(result.vanishedAfterCreate, []);
   assert.equal(result.closureReady, true);
 });
@@ -143,22 +143,22 @@ test("a leftover function deleted through REST with a 2xx is the run's own delet
   const dirtyDelete = async (o, w) => {
     const real = await w.runCli(o);
     if (o.action !== "delete") return real;
-    w.functionsV2.set(functionName("schedOkV2"), {
-      name: functionName("schedOkV2"),
+    w.functionsV2.set(functionName("declNullV2"), {
+      name: functionName("declNullV2"),
       state: "ACTIVE",
       environment: "GEN_2",
     });
-    w.runServices.add("schedokv2");
+    w.runServices.add("declnullv2");
     return { ...real, exitCode: 1, errored: 1 };
   };
   const { result } = await go({}, {}, dirtyDelete);
   const names = labels(result.vanishedAfterCreate);
-  assert.equal(names.includes("function-schedOkV2"), false);
+  assert.equal(names.includes("function-declNullV2"), false);
   assert.ok(names.includes("function-schedRetryV2"));
 });
 
 test("a v1 topic the CLI delete left and the run deleted with a 2xx is the run's own delete; a 404 answer to that DELETE is not", async () => {
-  const topic = scheduleId("schedOkV1");
+  const topic = scheduleId("schedFailV1");
   const leaveTopic = async (o, w) => {
     const real = await w.runCli(o);
     if (o.action !== "delete") return real;
@@ -166,8 +166,8 @@ test("a v1 topic the CLI delete left and the run deleted with a 2xx is the run's
     return { ...real, exitCode: 1, errored: 1 };
   };
   const own = await go({}, {}, leaveTopic);
-  assert.equal(labels(own.result.vanishedAfterCreate).includes("topic-schedOkV1"), false);
-  assert.ok(labels(own.result.vanishedAfterCreate).includes("topic-schedFailV1"));
+  assert.equal(labels(own.result.vanishedAfterCreate).includes("topic-schedFailV1"), false);
+  assert.ok(labels(own.result.vanishedAfterCreate).includes("topic-schedRetryV1"));
   const gone = await go(
     {
       hooks: {
@@ -180,7 +180,7 @@ test("a v1 topic the CLI delete left and the run deleted with a 2xx is the run's
     {},
     leaveTopic,
   );
-  assert.ok(labels(gone.result.vanishedAfterCreate).includes("topic-schedOkV1"));
+  assert.ok(labels(gone.result.vanishedAfterCreate).includes("topic-schedFailV1"));
 });
 
 // ---- M2-r2: unconfirmed unknown creates ---------------------------------------------------------------------
@@ -189,8 +189,8 @@ test("a subscription PUT that answers 503 and whose settle read answers 404 is u
   const { result } = await go({ hooks: { ["PUT " + SUB1_URL]: async () => unavailable() } });
   assert.deepEqual(result.unconfirmedCreates, [
     {
-      label: "subscription-schedOkV1",
-      id: "create-subscription-schedOkV1",
+      label: "subscription-schedFailV1",
+      id: "create-subscription-schedFailV1",
       name: subscriptionName(SUB1),
       class: "unknown-status",
     },
@@ -224,7 +224,7 @@ test("a 200 settle read that names something else does not confirm", async () =>
         reply(200, { name: "projects/fireemu-oracle-sbx/subscriptions/other" }),
     },
   });
-  assert.deepEqual(labels(result.unconfirmedCreates), ["subscription-schedOkV1"]);
+  assert.deepEqual(labels(result.unconfirmedCreates), ["subscription-schedFailV1"]);
 });
 
 test("a refused create (400) is neither unknown nor unconfirmed", async () => {
@@ -240,7 +240,7 @@ test("a refused create (400) is neither unknown nor unconfirmed", async () => {
 });
 
 test("an extra job POST that answers 503 and reads 404 is unconfirmed; a later 2xx list naming it confirms it", async () => {
-  const extra = extraJobId(RUN, "duration");
+  const extra = extraJobId(RUN, "double1");
   const key = "POST " + JOBS;
   const unconfirmed = await go({
     hooks: {
@@ -250,7 +250,7 @@ test("an extra job POST that answers 503 and reads 404 is unconfirmed; a later 2
   assert.deepEqual(unconfirmed.result.unconfirmedCreates, [
     {
       label: "job-" + extra,
-      id: "create-extra-duration",
+      id: "create-extra-double1",
       name: jobName(extra),
       class: "unknown-status",
     },
@@ -307,7 +307,7 @@ test("a timed-out deploy leaves unconfirmed exactly the CLI names no own 2xx rea
 });
 
 test("two unknown creates in one run are both listed", async () => {
-  const sub2 = pullSubscriptionId(RUN, "schedFailV1");
+  const sub2 = pullSubscriptionId(RUN, "schedRetryV1");
   const { result } = await go({
     hooks: {
       ["PUT " + SUB1_URL]: async () => unavailable(),
@@ -316,21 +316,14 @@ test("two unknown creates in one run are both listed", async () => {
   });
   assert.deepEqual(labels(result.unconfirmedCreates), [
     "subscription-schedFailV1",
-    "subscription-schedOkV1",
+    "subscription-schedRetryV1",
   ]);
   const extras = await go({
     hooks: { ["POST " + JOBS]: async () => unavailable() },
   });
   assert.deepEqual(
     extras.result.unconfirmedCreates.map((c) => c.id),
-    [
-      "create-extra-zero",
-      "create-extra-duration",
-      "create-extra-count",
-      "create-extra-fraction",
-      "create-extra-zerobackoff",
-      "create-extra-retry5",
-    ],
+    ["create-extra-count", "create-extra-double0", "create-extra-double1", "create-extra-double3"],
   );
 });
 
@@ -448,8 +441,8 @@ async function readbackExit(run, world = createWorld()) {
   return { code, text: lines.join("\n"), world };
 }
 const CREATE = {
-  label: "subscription-schedOkV1",
-  id: "create-subscription-schedOkV1",
+  label: "subscription-schedFailV1",
+  id: "create-subscription-schedFailV1",
   name: subscriptionName(SUB1),
   class: "unknown-status",
 };
@@ -520,7 +513,7 @@ test("a name present still exits 3 when no create is unconfirmed", async () => {
   try {
     runFiles(run, { unconfirmedCreates: [] });
     const world = createWorld();
-    world.topics.add(scheduleId("schedOkV1"));
+    world.topics.add(scheduleId("schedFailV1"));
     const { code } = await readbackExit(run, world);
     assert.equal(code, 3);
   } finally {
@@ -629,16 +622,17 @@ async function recordThenReadback(intercept) {
   }
 }
 
-const isOkV1Pull = (request) => request.method === "PUT" && request.url.includes("-pull-schedokv1");
+const isOkV1Pull = (request) =>
+  request.method === "PUT" && request.url.includes("-pull-schedfailv1");
 
 test("end to end: a recording with an unconfirmed create makes the read-back exit 3; a confirmed one lets it exit 0", async () => {
   const unconfirmed = await recordThenReadback(async (request) =>
     isOkV1Pull(request) ? unavailable() : undefined,
   );
   assert.equal(unconfirmed.recorded, 3);
-  assert.deepEqual(labels(unconfirmed.result.unconfirmedCreates), ["subscription-schedOkV1"]);
+  assert.deepEqual(labels(unconfirmed.result.unconfirmedCreates), ["subscription-schedFailV1"]);
   assert.equal(unconfirmed.read, 3);
-  assert.ok(unconfirmed.text.includes("-pull-schedokv1"));
+  assert.ok(unconfirmed.text.includes("-pull-schedfailv1"));
   const confirmed = await recordThenReadback(async (request, world) => {
     if (!isOkV1Pull(request)) return undefined;
     world.subs.set(
@@ -661,14 +655,14 @@ test("a request whose token refresh fails is neither journaled nor an unknown an
     {},
     {
       prepareRequest: async (spec) => {
-        if (spec.id === "delete-subscription-schedOkV1" && failed++ === 0)
+        if (spec.id === "delete-subscription-schedFailV1" && failed++ === 0)
           throw new Error("gcloud failed");
       },
     },
   );
   assert.equal(failed, 1);
   assert.equal(
-    journal.some((r) => r.id === "delete-subscription-schedOkV1"),
+    journal.some((r) => r.id === "delete-subscription-schedFailV1"),
     false,
     "no row for a request that never left",
   );
@@ -679,7 +673,7 @@ test("a request whose token refresh fails is neither journaled nor an unknown an
   assert.equal(result.unknownMutations, 0);
   assert.deepEqual(
     result.cleanup.errors.map((e) => e.step),
-    ["subscription-schedOkV1"],
+    ["subscription-schedFailV1"],
   );
   assert.match(result.cleanup.errors[0].message, /gcloud failed/);
   assert.equal(result.closureReady, false);
@@ -754,7 +748,7 @@ test("every CLI result row carries the time the CLI ended", async () => {
   const rows = journal.filter((r) => r.state === "cli-result");
   assert.deepEqual(
     rows.map((r) => r.id),
-    ["cli-dry-run", "cli-deploy", "cli-delete"],
+    ["cli-dry-run", "cli-deploy", "cli-deploy-r2", "cli-deploy-r3", "cli-delete"],
   );
   for (const row of rows) assert.match(row.responseAt, /^\d{4}-\d\d-\d\dT.*Z$/);
   const del = rows.at(-1);
@@ -820,7 +814,7 @@ test("an unknown answer to a non-resource mutation, with everything else clean, 
   const { result } = await go({
     hooks: {
       ["POST cloudscheduler.googleapis.com/v1/projects/fireemu-oracle-sbx/locations/us-central1/jobs/" +
-      scheduleId("schedOkV2") +
+      scheduleId("declNullV2") +
       ":pause"]: async () => unavailable(),
     },
   });
@@ -894,7 +888,7 @@ test("the whole subscriptions list must be empty: whatever its topic says, any s
   for (const topic of [
     "projects/fireemu-oracle-sbx/topics/unrelated",
     "_deleted-topic_",
-    topicName(scheduleId("schedOkV1")) + "-2",
+    topicName(scheduleId("schedFailV1")) + "-2",
     undefined,
   ]) {
     const result = await readbackWith((w) =>

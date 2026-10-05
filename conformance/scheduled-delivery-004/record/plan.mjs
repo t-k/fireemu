@@ -10,8 +10,8 @@ export const FIREBASE_FUNCTIONS_VERSION = "7.3.2";
 
 /** The six deployed functions, case-exact, by generation. */
 export const FUNCTIONS = Object.freeze({
-  v2: Object.freeze(["schedOkV2", "schedRetryV2", "schedSlowV2"]),
-  v1: Object.freeze(["schedOkV1", "schedFailV1", "schedRetryV1"]),
+  v2: Object.freeze(["schedRetryV2", "declNullV2", "declOmitV2", "declTimeoutV2"]),
+  v1: Object.freeze(["schedFailV1", "schedRetryV1"]),
 });
 export const ALL_FUNCTIONS = Object.freeze([...FUNCTIONS.v2, ...FUNCTIONS.v1]);
 
@@ -27,21 +27,19 @@ export const functionName = (fn) =>
 
 /** What the fixture declares, as the SDK discovery must report it (the offline check pins these). */
 export const DECLARED = Object.freeze({
-  schedOkV2: { platform: "gcfv2", schedule: "every 1 minutes", timeZone: undefined },
   schedRetryV2: {
     platform: "gcfv2",
     schedule: "every 5 minutes",
     timeZone: "Asia/Tokyo",
     retryConfig: { retryCount: 4, minBackoffSeconds: 4, maxBackoffSeconds: 50, maxDoublings: 2 },
   },
-  schedSlowV2: { platform: "gcfv2", schedule: "every 1 minutes", timeoutSeconds: 90 },
-  schedOkV1: { platform: "gcfv1", schedule: "every 1 minutes", timeZone: "Asia/Tokyo" },
-  schedFailV1: { platform: "gcfv1", schedule: "every 5 minutes" },
-  // The Gen1 retry probe (packet r6): run 2's schedFailV1 declared no count; this one declares retryCount 1.
-  // A Gen1 schedule's discovered retryConfig lists the options it does not set as null (the SDK's v1 builder).
+  schedFailV1: { platform: "gcfv1", schedule: "every 5 minutes", timeZone: undefined },
+  // The Gen1 retry probe: schedFailV1 declares no count; this one declares retryCount 1. A Gen1 schedule's discovered
+  // retryConfig lists the options it does not set as null (the SDK's v1 builder).
   schedRetryV1: {
     platform: "gcfv1",
     schedule: "every 5 minutes",
+    timeZone: undefined,
     retryConfig: {
       retryCount: 1,
       minBackoffDuration: null,
@@ -50,34 +48,88 @@ export const DECLARED = Object.freeze({
       maxRetryDuration: null,
     },
   },
+  // The declaration probes (never run on their schedule, 1 January): every optional setting reset with RESET_VALUE
+  // (null in the manifest), the same settings omitted (an empty retryConfig and no time zone), and a function
+  // timeout of 540 s, which the CLI turns into the job's attemptDeadline.
+  declNullV2: {
+    platform: "gcfv2",
+    schedule: "0 0 1 1 *",
+    timeZone: undefined,
+    retryConfig: {
+      retryCount: null,
+      maxDoublings: null,
+      maxRetrySeconds: null,
+      minBackoffSeconds: null,
+      maxBackoffSeconds: null,
+    },
+  },
+  declOmitV2: {
+    platform: "gcfv2",
+    schedule: "0 0 1 1 *",
+    timeZone: undefined,
+    retryConfig: {},
+  },
+  declTimeoutV2: {
+    platform: "gcfv2",
+    schedule: "0 0 1 1 *",
+    timeZone: undefined,
+    retryConfig: {},
+    timeoutSeconds: 540,
+  },
 });
 
 /**
- * The extra Scheduler jobs the recorder itself creates (never deployed), up to six, each aimed at the
- * `schedRetryV2` function so that a retry rule is observed without deploying another function. Their
- * names carry the run id. The target (uri and OIDC account) is copied from the deployed job's readback
- * at run time, so these differ from it only in the retry rule and the schedule.
+ * The deploys. Round 1 deploys every function. Rounds 2 and 3 redeploy only the declaration functions, after the
+ * recorder has changed their Scheduler jobs from outside (`DRIFT`): firebase-tools (15.28.2, `cloudscheduler.js`)
+ * leaves a job alone unless its schedule, time zone, attemptDeadline or a retryConfig field it sends differs, so what
+ * the redeploy resets and what it keeps is what the omitted-versus-null case asks. The source of each redeploy differs
+ * by the `ROUND` number in the fixture, because the CLI skips a function whose source is unchanged.
+ */
+export const ROUND_FUNCTIONS = Object.freeze(["declNullV2", "declOmitV2", "declTimeoutV2"]);
+export const ROUNDS = 3;
+const RETRY_DRIFT = (count, doublings, max, zone) => ({
+  timeZone: zone,
+  retryConfig: {
+    retryCount: count,
+    minBackoffDuration: "4s",
+    maxBackoffDuration: max,
+    maxDoublings: doublings,
+  },
+});
+/** The change made to each job from outside before the redeploy of round 2 or 3: the PATCH body and its `updateMask`. */
+export const DRIFT = Object.freeze({
+  2: Object.freeze({
+    declNullV2: { mask: "timeZone,retryConfig", body: RETRY_DRIFT(2, 1, "30s", "Asia/Tokyo") },
+    declOmitV2: { mask: "timeZone,retryConfig", body: RETRY_DRIFT(2, 1, "30s", "Asia/Tokyo") },
+    declTimeoutV2: { mask: "attemptDeadline", body: { attemptDeadline: "300s" } },
+  }),
+  3: Object.freeze({
+    declNullV2: {
+      mask: "timeZone,retryConfig",
+      body: RETRY_DRIFT(3, 2, "60s", "America/New_York"),
+    },
+    declOmitV2: {
+      mask: "timeZone,retryConfig",
+      body: RETRY_DRIFT(3, 2, "60s", "America/New_York"),
+    },
+    declTimeoutV2: { mask: "attemptDeadline", body: { attemptDeadline: "240s" } },
+  }),
+});
+
+/**
+ * The extra Scheduler jobs the recorder itself creates (never deployed), each aimed at the `schedRetryV2` function
+ * so that a retry rule is observed without deploying another function. Their names carry the run id. The target
+ * (uri and OIDC account) is copied from the deployed job's readback at run time, so these differ from it only in the
+ * retry rule and the schedule. Every field and value form below was accepted by production in run
+ * 156715222b86ea44 (whole seconds, `retryCount` 0 to 5, `maxDoublings` 1 to 5); `maxDoublings 0` and the combination
+ * of a count with a window were not recorded: an answer of 400 to either is the observation.
  */
 export const EXTRA_JOBS = Object.freeze([
-  {
-    key: "zero",
-    cases: ["zero-no-retry"],
-    schedule: "0 0 1 1 *",
-    timeZone: "UTC",
-    retryConfig: { retryCount: 0 },
-  },
-  {
-    key: "duration",
-    cases: ["duration-only"],
-    schedule: "0 0 1 1 *",
-    timeZone: "UTC",
-    retryConfig: { maxRetryDuration: "30s", minBackoffDuration: "4s", maxBackoffDuration: "10s" },
-  },
   // The interaction of a count and a window, with whole seconds only (run 156715222b86ea44 sent a fractional window
-  // here and was refused, so the interaction was never observed). The backoff is the recorded one of the `duration`
-  // job (min 4 s, max 10 s: gaps of about 4, 8 and 10 s, attempts at 0, 4.6, 13.2 and 23.7 s). A count of 3 allows four
-  // attempts and a window of 20 s allows three (the fourth would be at about 23.7 s), so an observed chain of three
-  // shows the window binds and one of four shows the count does. Never accepted by production before.
+  // here and was refused). The backoff is the recorded one of the `duration` job (min 4 s, max 10 s: gaps of about
+  // 4, 8 and 10 s, attempts at 0, 4.6, 13.2 and 23.7 s). A count of 3 allows four attempts and a window of 20 s allows
+  // three (the fourth would be at about 23.7 s): three means the chain stops at the first limit reached, four that
+  // retries continue until both limits are used up.
   {
     key: "count",
     cases: ["count-and-duration-interaction"],
@@ -90,45 +142,45 @@ export const EXTRA_JOBS = Object.freeze([
       maxBackoffDuration: "10s",
     },
   },
-  // The refused body of run 156715222b86ea44, sent once more: one POST, an expected 400
-  // (`retryConfig.max_retry_duration.nanos cannot be set`, 158 bytes) and nothing else. A 2xx would be a surprise and
-  // is handled as any created extra job.
+  // The linear step after the doublings. The deployed `schedRetryV2` is the control (min 4 s, max 50 s, 2 doublings,
+  // count 4: gaps of about 4, 8, 16 and 18.5 s in both earlier runs, where the documented rule gives 32). These three
+  // use the largest count Cloud Scheduler accepts (5, six attempts) and a cap (100 s) no gap reaches: no doublings,
+  // one, and three, at two minima, so the gap after the doublings can be read as a function of both.
   {
-    key: "fraction",
-    cases: ["fractional-retry-duration"],
+    key: "double0",
+    cases: ["linear-after-doublings"],
     schedule: "0 0 1 1 *",
     timeZone: "UTC",
     retryConfig: {
-      retryCount: 3,
-      maxRetryDuration: "20.5s",
-      minBackoffDuration: "2.5s",
-      maxBackoffDuration: "20s",
+      retryCount: 5,
+      minBackoffDuration: "3s",
+      maxBackoffDuration: "100s",
+      maxDoublings: 0,
+    },
+  },
+  {
+    key: "double1",
+    cases: ["linear-after-doublings"],
+    schedule: "0 0 1 1 *",
+    timeZone: "UTC",
+    retryConfig: {
+      retryCount: 5,
+      minBackoffDuration: "4s",
+      maxBackoffDuration: "100s",
       maxDoublings: 1,
     },
   },
-  // What Cloud Scheduler does with a zero minimum backoff (the local model releases one retry per clock change;
-  // production's answer was never recorded: a refusal, or a chain with no gap). The window is the shortest the packet
-  // sends, so a chain with no gap is bounded to ten seconds whatever production does. The handler fails for every
-  // attempt of a forced run (its schedule time is in the future).
   {
-    key: "zerobackoff",
-    cases: ["zero-min-backoff"],
+    key: "double3",
+    cases: ["linear-after-doublings"],
     schedule: "0 0 1 1 *",
     timeZone: "UTC",
     retryConfig: {
-      maxRetryDuration: "10s",
-      minBackoffDuration: "0s",
-      maxBackoffDuration: "0s",
+      retryCount: 5,
+      minBackoffDuration: "2s",
+      maxBackoffDuration: "100s",
+      maxDoublings: 3,
     },
-  },
-  // The boundary probe: Cloud Scheduler's message says "less than 5" and it refused 6 (run e0ec2f41), but 5 was
-  // never sent. A 2xx is deleted and read back; a 400 is the recorded refusal. Until it is recorded, 5 is unrecorded.
-  {
-    key: "retry5",
-    cases: ["retry-count-five"],
-    schedule: "0 0 1 1 *",
-    timeZone: "UTC",
-    retryConfig: { retryCount: 5 },
   },
 ]);
 

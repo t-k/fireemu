@@ -35,8 +35,11 @@ import {
 } from "./logs.mjs";
 import {
   ALL_FUNCTIONS,
+  DRIFT,
   EXTRA_JOBS,
   FUNCTIONS,
+  ROUNDS,
+  ROUND_FUNCTIONS,
   PROJECT,
   REGION,
   extraJobId,
@@ -154,6 +157,7 @@ export async function record({
     cli: {},
     ready: null,
     passes: [],
+    rounds: [],
     frames: {},
     framesIgnored: {},
     schedulerEntries: 0,
@@ -239,17 +243,20 @@ export async function record({
         : result?.signal
           ? "cli-signal"
           : null;
-  const cli = async (action) => {
+  // `round` is 2 or 3 for the redeploy of the declaration functions: those functions and their jobs already exist,
+  // so an unknown result is an unknown mutation (the A2 read-back lists it), never an unconfirmed create.
+  const cli = async (action, { round, names } = {}) => {
+    const tag = round ? `${action}-r${round}` : action;
     let result;
     try {
-      result = await runCli({ action });
+      result = await runCli({ action, ...(round ? { round, names, label: tag } : {}) });
     } catch (error) {
-      unknownMutations.push({ id: "cli-" + action, class: "cli-error" });
-      if (action === "deploy") deployUnknown = "cli-error";
+      unknownMutations.push({ id: "cli-" + tag, class: "cli-error" });
+      if (action === "deploy" && !round) deployUnknown = "cli-error";
       // The end of the CLI counts for the read-back's ten-minute guard even when it could not be run.
       try {
         await save({
-          id: "cli-" + action,
+          id: "cli-" + tag,
           state: "cli-result",
           result: { action, error: String(error?.message) },
           responseAt: iso(clock()),
@@ -261,8 +268,8 @@ export async function record({
     }
     const why = cliUnknownClass(result);
     if (why) {
-      unknownMutations.push({ id: "cli-" + action, class: why });
-      if (action === "deploy") deployUnknown = why;
+      unknownMutations.push({ id: "cli-" + tag, class: why });
+      if (action === "deploy" && !round) deployUnknown = why;
     }
     return result;
   };
@@ -796,6 +803,86 @@ export async function record({
     }
   }
 
+  /**
+   * Rounds 2 and 3 (omitted-versus-null-reset, SDK-attemptDeadline-versus-CLI-timeout): change each declaration job from
+   * outside (a PATCH, journaled and answered like any write), redeploy only the declaration functions with a source
+   * that differs by its round number, and read the jobs back. firebase-tools updates a job only when its schedule, time
+   * zone, attemptDeadline or a retryConfig field it sends differs, so what the redeploy resets and what it leaves is the
+   * observation. A refused PATCH is a recorded answer; the redeploy and the readback still run. A CLI deploy that timed
+   * out or was killed ends the rounds (its effect is unknown); one that failed cleanly ends only its own round.
+   */
+  async function rounds() {
+    for (let round = 2; round <= ROUNDS; round++) {
+      const entry = {
+        round,
+        drift: [],
+        driftJobs: {},
+        cli: null,
+        ready: null,
+        jobs: {},
+        ok: false,
+      };
+      out.rounds.push(entry);
+      for (const fn of ROUND_FUNCTIONS) {
+        const id = scheduleId(fn);
+        const { mask, body } = DRIFT[round][fn];
+        const answer = await mutate({
+          id: `drift-${round}-${fn}`,
+          method: "PATCH",
+          url: `${SCHEDULER}/${id}?updateMask=${mask}`,
+          json: { name: jobName(id), ...body },
+        });
+        entry.drift.push({
+          fn,
+          status: answer?.status ?? null,
+          class: answerClass(answer),
+          message: readable(answer)
+            ? String(answer.json.error?.message ?? "").slice(0, 300) || null
+            : null,
+        });
+        const job = await read({
+          id: `drift-read-${round}-${fn}`,
+          method: "GET",
+          url: SCHEDULER + "/" + id,
+        });
+        if (job?.status === 200 && readable(job)) entry.driftJobs[fn] = jobSummary(job.json);
+      }
+      entry.cli = await cli("deploy", { round, names: [...ROUND_FUNCTIONS] });
+      await save({
+        id: `cli-deploy-r${round}`,
+        state: "cli-result",
+        result: entry.cli,
+        responseAt: iso(clock()),
+      });
+      // Unknown writes of the CLI (a PATCH answered 5xx) are unknown mutations of existing names, listed for the read-back.
+      for (const write of entry.cli?.unknownWrites ?? [])
+        unknownMutations.push({
+          id: `cli-deploy-r${round}`,
+          class: `cli-${write.status}`,
+        });
+      if (cliUnknownClass(entry.cli)) return;
+      if (cliFailed(entry.cli)) continue;
+      for (let poll = 1; poll <= 4; poll++) {
+        const found = await lists(`round-${round}-ready-${poll}`);
+        const summary_ = found.v1 && found.v2 && found.run ? summarize(found) : null;
+        entry.ready = Boolean(summary_ && ROUND_FUNCTIONS.every((fn) => summary_[fn]?.active));
+        if (entry.ready) break;
+        if (poll < 4) await sleep(READY_POLL_SECONDS * 1000);
+      }
+      await sleep(PROPAGATION_WAIT_MS);
+      for (const fn of ROUND_FUNCTIONS) {
+        const job = await read({
+          id: `round-${round}-job-${fn}`,
+          method: "GET",
+          url: SCHEDULER + "/" + scheduleId(fn),
+        });
+        if (job?.status === 200 && readable(job)) entry.jobs[fn] = jobSummary(job.json);
+      }
+      entry.ok =
+        entry.ready === true && ROUND_FUNCTIONS.every((fn) => entry.jobs[fn] !== undefined);
+    }
+  }
+
   async function runPass(number) {
     const record_ = { number, forced: [], complete: false };
     const targets = [...deployedJobIds, ...extraCreated.map((key) => extraJobId(runId, key))];
@@ -1129,6 +1216,9 @@ export async function record({
         out.stage = "pass-" + number;
         await runPass(number);
       }
+      out.stage = "rounds";
+      // Not after a deploy whose effect is unknown: nothing more is changed in the project but the cleanup.
+      if (!deployUnknown) await rounds();
       out.stage = "pause";
       await pauseAll();
     }
@@ -1153,7 +1243,11 @@ export async function record({
   out.schedulerEntries = allSchedulerEntries.length;
   out.pulledMessages = pulledMessages.length;
   const complete =
-    out.passes.length === passes && out.passes.every((p) => p.complete) && !out.stoppedBecause;
+    out.passes.length === passes &&
+    out.passes.every((p) => p.complete) &&
+    out.rounds.length === ROUNDS - 1 &&
+    out.rounds.every((r) => r.ok) &&
+    !out.stoppedBecause;
   // `recorded` and `incomplete-clean` both say "nothing is left open": a run with an unknown answer, an
   // unconfirmed or vanished create, an unreadable answer or a failed cleanup step is `needs-review`.
   out.outcome = !created

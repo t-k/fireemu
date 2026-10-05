@@ -51,17 +51,17 @@ test("a refused request in one cleanup step does not skip the later steps (M3)",
   // The leftover's delete answers with an operation name the allowlist refuses; the cleanup still goes on.
   const { result, world, journal } = await go(
     {
-      leaveOnDelete: ["schedOkV1"],
+      leaveOnDelete: ["schedFailV1"],
       hooks: {
-        ["DELETE " + FN("v1", "schedOkV1")]: async ({ w }) => {
-          w.functionsV1.delete(functionName("schedOkV1"));
+        ["DELETE " + FN("v1", "schedFailV1")]: async ({ w }) => {
+          w.functionsV1.delete(functionName("schedFailV1"));
           return reply(200, { name: "operations/a+b", done: false });
         },
       },
     },
     SHORT,
   );
-  assert.deepEqual(stepsFailed(result), ["leftover-schedOkV1"]);
+  assert.deepEqual(stepsFailed(result), ["leftover-schedFailV1"]);
   assert.match(result.cleanup.error, /request not allowed/);
   assert.ok(ids(journal).includes("final-jobs") && ids(journal).includes("iam-after"));
   assert.ok(empty(world));
@@ -92,14 +92,14 @@ test("a failed write of one journal row skips only its own step (M3)", async () 
   let failed = false;
   const rows = [];
   const { result, world } = await go(
-    { leaveOnDelete: ["schedOkV2"] },
+    { leaveOnDelete: ["declNullV2"] },
     {
       ...SHORT,
       save: async (row) => {
         if (
           !failed &&
           row.state === "before-send" &&
-          row.id === "delete-job-0-schedOkV2-us-central1"
+          row.id === "delete-job-0-declNullV2-us-central1"
         ) {
           failed = true;
           throw new Error("disk");
@@ -108,7 +108,7 @@ test("a failed write of one journal row skips only its own step (M3)", async () 
       },
     },
   );
-  assert.deepEqual(stepsFailed(result), ["job-firebase-schedule-schedOkV2-us-central1"]);
+  assert.deepEqual(stepsFailed(result), ["job-firebase-schedule-declNullV2-us-central1"]);
   assert.equal(world.jobs.size, 1, "that job stays; the CLI delete had removed the others");
   assert.ok(ids(rows).includes("final-jobs"), "the later steps ran");
   assert.equal(result.cleanup.verified, false);
@@ -163,20 +163,20 @@ test("a timed-out CLI delete is a sticky unknown DELETE (S1)", async () => {
 
 test("lists that read empty do not settle a name that a direct read still shows (S2a)", async () => {
   for (const answer of [
-    () => reply(200, { name: functionName("schedOkV2") }),
+    () => reply(200, { name: functionName("declNullV2") }),
     () => error(503, "UNAVAILABLE"),
   ]) {
     const { result } = await go(
       {
         hooks: {
-          ["GET " + FN("v2", "schedOkV2")]: async ({ w }) =>
+          ["GET " + FN("v2", "declNullV2")]: async ({ w }) =>
             w.cliRuns.includes("delete") ? answer() : undefined,
         },
       },
       SHORT,
     );
     assert.equal(result.cleanup.listsEmpty, true);
-    assert.equal(result.cleanup.readBack["function-schedOkV2"], false);
+    assert.equal(result.cleanup.readBack["function-declNullV2"], false);
     assert.equal(result.cleanup.verified, false);
     assert.equal(result.outcome, "calendar-delivery-needs-recovery");
   }
@@ -215,7 +215,7 @@ test("a cleanup read-back that cannot be sent leaves the name unread, which is n
         if (
           !failed &&
           row.state === "before-send" &&
-          row.id === "readback-gone-function-schedFailV1"
+          row.id === "readback-gone-function-schedRetryV1"
         ) {
           failed = true;
           throw new Error("disk");
@@ -223,9 +223,9 @@ test("a cleanup read-back that cannot be sent leaves the name unread, which is n
       },
     },
   );
-  assert.equal(result.cleanup.readBack["function-schedFailV1"], false);
+  assert.equal(result.cleanup.readBack["function-schedRetryV1"], false);
   assert.equal(result.cleanup.verified, false);
-  assert.deepEqual(stepsFailed(result), ["readback-function-schedFailV1"]);
+  assert.deepEqual(stepsFailed(result), ["readback-function-schedRetryV1"]);
 });
 
 test("an unreadable adminSdkConfig of any kind stops at preflight (S4)", async () => {
@@ -308,7 +308,7 @@ test("a rejected credential before any deploy runs no CLI at all; after one it r
   const late = await go(
     {
       hooks: {
-        ["GET " + JOBS + "/" + scheduleId("schedOkV2")]: async ({ w }) =>
+        ["GET " + JOBS + "/" + scheduleId("declNullV2")]: async ({ w }) =>
           w.cliRuns.includes("deploy") ? error(401, "UNAUTHENTICATED") : undefined,
       },
     },
@@ -326,7 +326,7 @@ test("a rejected credential before any deploy runs no CLI at all; after one it r
   });
   assert.deepEqual(
     inCleanup.world.cliRuns,
-    ["dry-run", "deploy", "delete"],
+    ["dry-run", "deploy", "deploy", "deploy", "delete"],
     "the delete is not repeated",
   );
 });
@@ -335,7 +335,7 @@ test("a CLI delete that throws after a rejected credential is recorded and ends 
   const { result, world } = await go(
     {
       hooks: {
-        ["GET " + JOBS + "/" + scheduleId("schedOkV2")]: async ({ w }) =>
+        ["GET " + JOBS + "/" + scheduleId("declNullV2")]: async ({ w }) =>
           w.cliRuns.includes("deploy") ? error(401, "UNAUTHENTICATED") : undefined,
       },
     },

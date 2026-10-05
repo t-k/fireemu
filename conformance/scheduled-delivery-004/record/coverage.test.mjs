@@ -230,21 +230,23 @@ test("the ceiling is exact, and the cleanup that follows is not counted against 
 });
 
 test("with the ceiling already reached, leftover deletes and operation reads still run", async () => {
-  const opts = { leaveOnDelete: ["schedOkV2", "schedOkV1"], v1Operations: true };
+  const opts = { leaveOnDelete: ["declNullV2", "schedFailV1"], v1Operations: true };
   const start = ids((await go(opts)).journal).indexOf("cleanup-1-functions-v1");
   const { result, world, journal } = await go(opts, { normalCeiling: start });
   assert.equal(result.cleanup.error, undefined);
   assert.equal(result.cleanup.verified, true);
   assert.ok(empty(world));
   const all = ids(journal);
-  assert.ok(all.includes("leftover-delete-schedOkV2") && all.includes("leftover-delete-schedOkV1"));
-  assert.ok(all.some((id) => id.startsWith("leftover-operation-schedOkV1-")));
+  assert.ok(
+    all.includes("leftover-delete-declNullV2") && all.includes("leftover-delete-schedFailV1"),
+  );
+  assert.ok(all.some((id) => id.startsWith("leftover-operation-schedFailV1-")));
 });
 
 // ---- observation reads may answer 403 --------------------------------------------------------
 
 test("a 403 on an observation read is data, not a stop", async () => {
-  const sub = "fe-sd-" + RUN + "-pull-schedokv1";
+  const sub = "fe-sd-" + RUN + "-pull-schedfailv1";
   let reads = 0;
   const hooks = {
     ["PUT pubsub.googleapis.com" + P + "/subscriptions/" + sub]: async () =>
@@ -261,7 +263,7 @@ test("a 403 on an observation read is data, not a stop", async () => {
 });
 
 test("a subscription whose create was unknown is created only when the settling read says 200", async () => {
-  const sub = "fe-sd-" + RUN + "-pull-schedokv1";
+  const sub = "fe-sd-" + RUN + "-pull-schedfailv1";
   const key = "PUT pubsub.googleapis.com" + P + "/subscriptions/" + sub;
   const lost = await go({ hooks: { [key]: async () => error(503, "UNAVAILABLE") } }, SHORT);
   assert.equal(
@@ -296,27 +298,27 @@ test("a subscription whose create was unknown is created only when the settling 
 });
 
 test("an extra job whose create was unknown is run and deleted only when the settling read says 200", async () => {
-  const zero = "fe-sd-" + RUN + "-zero";
+  const count = "fe-sd-" + RUN + "-count";
   const post = "POST " + JOBS;
   const lost = await go(
     {
       hooks: {
         [post]: async ({ body }) =>
-          body.name.endsWith("-zero") ? error(503, "UNAVAILABLE") : undefined,
+          body.name.endsWith("-count") ? error(503, "UNAVAILABLE") : undefined,
       },
     },
     SHORT,
   );
   assert.equal(
-    ids(lost.journal).some((id) => id.includes("run-1-") && id.endsWith("-zero")),
+    ids(lost.journal).some((id) => id.includes("run-1-") && id.endsWith("-count")),
     false,
   );
   const took = await go(
     {
       hooks: {
         [post]: async ({ w, body }) => {
-          if (!body.name.endsWith("-zero")) return undefined;
-          w.jobs.set(zero, { ...body, state: "ENABLED", manualOnly: true });
+          if (!body.name.endsWith("-count")) return undefined;
+          w.jobs.set(count, { ...body, state: "ENABLED", manualOnly: true });
           return error(503, "UNAVAILABLE");
         },
       },
@@ -324,8 +326,8 @@ test("an extra job whose create was unknown is run and deleted only when the set
     SHORT,
   );
   assert.equal(
-    ids(took.journal).includes("run-1-run-zero".replace("run-zero", "fe-sd-run-zero")) ||
-      ids(took.journal).some((id) => id.startsWith("run-1-") && id.endsWith("-zero")),
+    ids(took.journal).includes("run-1-run-count".replace("run-count", "fe-sd-run-count")) ||
+      ids(took.journal).some((id) => id.startsWith("run-1-") && id.endsWith("-count")),
     true,
   );
   assert.equal(took.result.cleanup.verified, true);

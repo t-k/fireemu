@@ -108,10 +108,15 @@ test("generated: the run keeps its safety rules over any mix of answer classes",
       // The only exceptions allowed are the guard's refusal of a request the recorder must never build.
       assert.fail(label + ": " + error.message);
     }
-    for (const action of ["dry-run", "deploy", "delete"])
+    // The first deploy and each of the two round deploys run at most once; the other actions at most once.
+    for (const [action, most] of [
+      ["dry-run", 1],
+      ["deploy", 3],
+      ["delete", 1],
+    ])
       assert.ok(
-        world.cliRuns.filter((a) => a === action).length <= 1,
-        label + ": " + action + " at most once",
+        world.cliRuns.filter((a) => a === action).length <= most,
+        label + ": " + action + " at most " + most + " times",
       );
     // Nothing is sent twice that is a mutation (no resend after any answer).
     const mutations = world.calls.filter(
@@ -133,8 +138,12 @@ test("generated: the run keeps its safety rules over any mix of answer classes",
       world.creates.length,
       label + ": a job name is created once",
     );
+    // A declaration job is PATCHed once in each of the two rounds (two different bodies); nothing else is sent twice.
     for (const [call, n] of counts)
-      assert.equal(n, 1, label + ": " + call + " sent " + n + " times");
+      assert.ok(
+        n <= (call.startsWith("PATCH ") ? 2 : 1),
+        label + ": " + call + " sent " + n + " times",
+      );
     assert.ok(busyRetries.length <= 8 * 4, label);
     // Only issued names are deleted.
     const allowed = new Set([

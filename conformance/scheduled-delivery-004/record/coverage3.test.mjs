@@ -17,7 +17,7 @@ const FN = (v, name) =>
 const LIST1 = "cloudfunctions.googleapis.com/v1/projects/fireemu-oracle-sbx/locations/-/functions";
 const LIST2 = "cloudfunctions.googleapis.com/v2/projects/fireemu-oracle-sbx/locations/-/functions";
 const LISTR = "run.googleapis.com/v2/projects/fireemu-oracle-sbx/locations/-/services";
-const SUB = "fe-sd-" + RUN + "-pull-schedokv1";
+const SUB = "fe-sd-" + RUN + "-pull-schedfailv1";
 const empty = (w) =>
   w.jobs.size +
     w.topics.size +
@@ -66,8 +66,8 @@ test("a clean run reports no cleanup flag in its summary, an empty IAM change an
     services: { added: [], removed: [] },
   });
   assert.deepEqual(result.framesIgnored, { notFrame: 0, unparsed: 0, foreignOrigin: 0 });
-  assert.equal(result.jobs.schedOkV2.target, "http");
-  assert.equal(result.jobs.schedOkV1.target, "pubsub");
+  assert.equal(result.jobs.declNullV2.target, "http");
+  assert.equal(result.jobs.schedFailV1.target, "pubsub");
   assert.equal(
     row(journal, "inventory-packages").url,
     "https://artifactregistry.googleapis.com/v1/projects/fireemu-oracle-sbx/locations/us-central1/repositories/gcf-artifacts/packages?pageSize=100",
@@ -141,7 +141,7 @@ test("ignored log entries are added up over the polls", async () => {
     logName: "projects/fireemu-oracle-sbx/logs/run.googleapis.com%2Fstdout",
     resource: {
       type: "cloud_run_revision",
-      labels: { service_name: "schedokv2", location: "us-central1" },
+      labels: { service_name: "declnullv2", location: "us-central1" },
     },
   };
   const { result } = await go({}, { passes: 1, naturalWindowMs: 120_000 }, (w) => {
@@ -169,9 +169,9 @@ test("a pull that is not a 200 delivers nothing even if its body carries message
     },
     SHORT,
   );
-  assert.equal(result.pulled.schedOkV1, undefined);
+  assert.equal(result.pulled.schedFailV1, undefined);
   assert.equal(
-    ids(journal).some((id) => id.startsWith("ack-") && id.endsWith("schedOkV1")),
+    ids(journal).some((id) => id.startsWith("ack-") && id.endsWith("schedFailV1")),
     false,
   );
 });
@@ -290,20 +290,20 @@ test("a job readback that is not a 200 is not summarized, whatever its body", as
   const { result } = await go(
     {
       hooks: {
-        ["GET " + JOBS + "/firebase-schedule-schedOkV1-us-central1"]: async ({ w }) =>
+        ["GET " + JOBS + "/firebase-schedule-schedFailV1-us-central1"]: async ({ w }) =>
           w.cliRuns.includes("deploy") && ++n === 1 ? error(404, "NOT_FOUND") : undefined,
       },
     },
     SHORT,
   );
-  assert.equal(result.jobs.schedOkV1, undefined);
-  assert.equal(result.jobs.schedFailV1.target, "pubsub");
+  assert.equal(result.jobs.schedFailV1, undefined);
+  assert.equal(result.jobs.schedRetryV1.target, "pubsub");
 });
 
 test("a failed subscription create is settled by a read that may answer 403, and only a 200 counts it as created", async () => {
   const key = "PUT " + PUBSUB + "/subscriptions/" + SUB;
   const lost = await go({ hooks: { [key]: async () => error(503, "UNAVAILABLE") } }, SHORT);
-  const settle = row(lost.journal, "settle-subscription-schedOkV1");
+  const settle = row(lost.journal, "settle-subscription-schedFailV1");
   assert.equal(settle.url, "https://" + PUBSUB + "/subscriptions/" + SUB);
   assert.equal(settle.method, "GET");
   const denied = await go(
@@ -324,7 +324,7 @@ test("a failed subscription create is settled by a read that may answer 403, and
       hooks: {
         [key]: async ({ w }) => {
           w.subs.set("projects/fireemu-oracle-sbx/subscriptions/" + SUB, {
-            topic: "projects/fireemu-oracle-sbx/topics/firebase-schedule-schedOkV1-us-central1",
+            topic: "projects/fireemu-oracle-sbx/topics/firebase-schedule-schedFailV1-us-central1",
             queue: [],
           });
           return reply(201, {});
@@ -340,28 +340,28 @@ test("a failed extra job create is settled by a read that may answer 403", async
   const post = "POST " + JOBS;
   const hooks = {
     [post]: async ({ body }) =>
-      body.name.endsWith("-duration") ? error(503, "UNAVAILABLE") : undefined,
-    ["GET " + JOBS + "/fe-sd-" + RUN + "-duration"]: async () => error(403, "PERMISSION_DENIED"),
+      body.name.endsWith("-double1") ? error(503, "UNAVAILABLE") : undefined,
+    ["GET " + JOBS + "/fe-sd-" + RUN + "-double1"]: async () => error(403, "PERMISSION_DENIED"),
   };
   const { result, journal } = await go({ hooks }, SHORT);
-  const settle = row(journal, "settle-extra-duration");
-  assert.equal(settle.url, "https://" + JOBS + "/fe-sd-" + RUN + "-duration");
+  const settle = row(journal, "settle-extra-double1");
+  assert.equal(settle.url, "https://" + JOBS + "/fe-sd-" + RUN + "-double1");
   assert.notEqual(result.outcome, "calendar-delivery-auth-stop");
-  assert.equal(ids(journal).filter((id) => id.startsWith("run-1-fe-sd-run-")).length, 4);
+  assert.equal(ids(journal).filter((id) => id.startsWith("run-1-fe-sd-run-")).length, 3);
 });
 
 test("a forced run that was refused is recorded with its class and status", async () => {
   const { result } = await go(
     {
       hooks: {
-        ["POST " + JOBS + "/firebase-schedule-schedOkV2-us-central1:run"]: async () =>
+        ["POST " + JOBS + "/firebase-schedule-schedRetryV2-us-central1:run"]: async () =>
           error(400, "FAILED_PRECONDITION"),
       },
     },
     SHORT,
   );
   assert.deepEqual(result.passes[0].forced[0], {
-    id: "firebase-schedule-schedOkV2-us-central1",
+    id: "firebase-schedule-schedRetryV2-us-central1",
     class: "4xx",
     status: 400,
   });
@@ -371,9 +371,9 @@ test("a forced run that was refused is recorded with its class and status", asyn
 
 test("the cleanup waits for the project to be empty: six polls, then the leftovers, then four more", async () => {
   const stuck = await go({
-    leaveOnDelete: ["schedOkV2"],
+    leaveOnDelete: ["declNullV2"],
     hooks: {
-      ["DELETE " + FN("v2", "schedOkV2")]: async () =>
+      ["DELETE " + FN("v2", "declNullV2")]: async () =>
         reply(200, { name: "projects/x/operations/y", done: true }),
     },
   });
@@ -386,7 +386,7 @@ test("the cleanup waits for the project to be empty: six polls, then the leftove
 test("a project list that cannot be read in full during cleanup deletes no leftover and keeps polling", async () => {
   for (const list of [LIST1, LIST2, LISTR]) {
     const half = await go({
-      leaveOnDelete: ["schedOkV2"],
+      leaveOnDelete: ["declNullV2"],
       hooks: {
         ["GET " + list]: async ({ w }) =>
           w.cliRuns.includes("delete") ? error(500, "INTERNAL") : undefined,
@@ -406,11 +406,11 @@ test("a project list that cannot be read in full during cleanup deletes no lefto
 const OP = "projects/fireemu-oracle-sbx/locations/us-central1/operations/op-1";
 const OPKEY = "GET cloudfunctions.googleapis.com/v2/" + OP;
 const leftoverWith = (opAnswer) => ({
-  leaveOnDelete: ["schedOkV2"],
+  leaveOnDelete: ["declNullV2"],
   hooks: {
-    ["DELETE " + FN("v2", "schedOkV2")]: async ({ w }) => {
-      w.functionsV2.delete(functionName("schedOkV2"));
-      w.runServices.delete("schedokv2");
+    ["DELETE " + FN("v2", "declNullV2")]: async ({ w }) => {
+      w.functionsV2.delete(functionName("declNullV2"));
+      w.runServices.delete("declnullv2");
       return reply(200, { name: OP, done: false });
     },
     [OPKEY]: opAnswer,
@@ -426,8 +426,8 @@ test("a leftover's delete operation is polled until done, at most twelve times, 
   const never = await go(leftoverWith(async () => reply(200, { name: OP, done: false })));
   const operations = ids(never.journal).filter((id) => id.startsWith("leftover-operation-"));
   assert.equal(operations.length, 12);
-  assert.equal(operations[0], "leftover-operation-schedOkV2-1");
-  assert.equal(operations.at(-1), "leftover-operation-schedOkV2-12");
+  assert.equal(operations[0], "leftover-operation-declNullV2-1");
+  assert.equal(operations.at(-1), "leftover-operation-declNullV2-12");
   assert.equal(
     row(never.journal, operations[0]).url,
     "https://cloudfunctions.googleapis.com/v2/" + OP,
@@ -438,7 +438,7 @@ test("a leftover's delete operation is polled until done, at most twelve times, 
     12,
     "only the boolean true ends the polling",
   );
-  const v1 = await go({ leaveOnDelete: ["schedOkV1"], v1Operations: true });
+  const v1 = await go({ leaveOnDelete: ["schedFailV1"], v1Operations: true });
   assert.ok(
     v1.world.calls.some((c) =>
       c.startsWith("GET cloudfunctions.googleapis.com/v1/operations/del-"),
@@ -449,7 +449,7 @@ test("a leftover's delete operation is polled until done, at most twelve times, 
       c.includes("/v2/projects/fireemu-oracle-sbx/locations/us-central1/operations/"),
     ),
   );
-  const v2 = await go({ leaveOnDelete: ["schedOkV2"] });
+  const v2 = await go({ leaveOnDelete: ["declNullV2"] });
   assert.ok(
     v2.world.calls.some((c) =>
       c.includes("/v2/projects/fireemu-oracle-sbx/locations/us-central1/operations/del-"),
@@ -459,10 +459,10 @@ test("a leftover's delete operation is polled until done, at most twelve times, 
 });
 
 test("a leftover delete that returns no operation, a finished one or a refusal is not polled", async () => {
-  const key = "DELETE " + FN("v2", "schedOkV2");
+  const key = "DELETE " + FN("v2", "declNullV2");
   const gone = (w) => {
-    w.functionsV2.delete(functionName("schedOkV2"));
-    w.runServices.delete("schedokv2");
+    w.functionsV2.delete(functionName("declNullV2"));
+    w.runServices.delete("declnullv2");
   };
   for (const answer of [
     (w) => (gone(w), reply(200, {})),
@@ -471,7 +471,7 @@ test("a leftover delete that returns no operation, a finished one or a refusal i
     () => reply(200, { name: 5 }),
   ]) {
     const { world } = await go({
-      leaveOnDelete: ["schedOkV2"],
+      leaveOnDelete: ["declNullV2"],
       hooks: { [key]: async ({ w }) => answer(w) },
     });
     assert.equal(world.calls.filter((c) => c.includes("/operations/")).length, 0);
@@ -520,7 +520,7 @@ test("a job delete that is busy is tried four times with a minute between; any o
 });
 
 test("a v1 topic that is still there once its function is gone is deleted, and one that is not is left alone", async () => {
-  const topic = "firebase-schedule-schedOkV1-us-central1";
+  const topic = "firebase-schedule-schedFailV1-us-central1";
   const { world, journal, result } = await go({}, SHORT, () => {});
   assert.equal(
     ids(journal).some((id) => id.startsWith("delete-topic-")),
@@ -544,8 +544,8 @@ test("a v1 topic that is still there once its function is gone is deleted, and o
     sleep: async (ms) => w2.advance(ms),
     ...SHORT,
   });
-  assert.ok(ids(journal2).includes("delete-topic-schedOkV1"));
-  assert.ok(row(journal2, "delete-topic-schedOkV1").url.endsWith("/topics/" + topic));
+  assert.ok(ids(journal2).includes("delete-topic-schedFailV1"));
+  assert.ok(row(journal2, "delete-topic-schedFailV1").url.endsWith("/topics/" + topic));
   assert.equal(result2.cleanup.verified, true);
   assert.equal(result.cleanup.verified, true);
   assert.equal(empty(w2), true);

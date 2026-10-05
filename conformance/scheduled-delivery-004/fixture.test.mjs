@@ -23,12 +23,12 @@ const present = existsSync(join(sdkRoot, "package.json"));
 const maybe = present ? test : test.skip;
 
 const EXPECTED = [
-  "schedOkV1",
   "schedFailV1",
   "schedRetryV1",
-  "schedOkV2",
   "schedRetryV2",
-  "schedSlowV2",
+  "declNullV2",
+  "declOmitV2",
+  "declTimeoutV2",
 ].toSorted();
 
 /** A copy of the fixture with the SDK reachable, as the recorder's source copy has it. */
@@ -69,12 +69,10 @@ maybe("the SDK discovers exactly the six functions, all pinned to us-central1", 
     assert.deepEqual(names, EXPECTED);
     for (const [name, endpoint] of Object.entries(manifest.endpoints))
       assert.deepEqual(endpoint.region, ["us-central1"], name + " is pinned");
-    assert.equal(manifest.endpoints.schedOkV2.platform, "gcfv2");
-    assert.equal(manifest.endpoints.schedRetryV2.platform, "gcfv2");
-    assert.equal(manifest.endpoints.schedSlowV2.platform, "gcfv2");
-    assert.equal(manifest.endpoints.schedOkV1.platform, "gcfv1");
-    assert.equal(manifest.endpoints.schedFailV1.platform, "gcfv1");
-    assert.equal(manifest.endpoints.schedRetryV1.platform, "gcfv1");
+    for (const name of ["declNullV2", "declOmitV2", "declTimeoutV2", "schedRetryV2"])
+      assert.equal(manifest.endpoints[name].platform, "gcfv2", name);
+    for (const name of ["schedFailV1", "schedRetryV1"])
+      assert.equal(manifest.endpoints[name].platform, "gcfv1", name);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -84,10 +82,6 @@ maybe("the declared schedules, time zones and retry options are what the packet 
   const dir = source();
   try {
     const e = discover(dir).endpoints;
-    assert.equal(e.schedOkV2.scheduleTrigger.schedule, "every 1 minutes");
-    assert.ok(
-      !("timeZone" in e.schedOkV2.scheduleTrigger) || e.schedOkV2.scheduleTrigger.timeZone == null,
-    );
     assert.equal(e.schedRetryV2.scheduleTrigger.schedule, "every 5 minutes");
     assert.equal(e.schedRetryV2.scheduleTrigger.timeZone, "Asia/Tokyo");
     assert.deepEqual(e.schedRetryV2.scheduleTrigger.retryConfig, {
@@ -96,14 +90,29 @@ maybe("the declared schedules, time zones and retry options are what the packet 
       maxBackoffSeconds: 50,
       maxDoublings: 2,
     });
-    assert.equal(e.schedSlowV2.timeoutSeconds, 90);
-    assert.equal(e.schedSlowV2.scheduleTrigger.retryConfig.retryCount, 0);
-    assert.equal(e.schedOkV1.scheduleTrigger.schedule, "every 1 minutes");
-    assert.equal(e.schedOkV1.scheduleTrigger.timeZone, "Asia/Tokyo");
+    // the declaration functions: reset (null), omitted ({}), and a timeout of 540 s; none runs on its own schedule
+    for (const name of ["declNullV2", "declOmitV2", "declTimeoutV2"])
+      assert.equal(e[name].scheduleTrigger.schedule, "0 0 1 1 *", name);
+    assert.deepEqual(e.declNullV2.scheduleTrigger.retryConfig, {
+      retryCount: null,
+      maxDoublings: null,
+      maxRetrySeconds: null,
+      minBackoffSeconds: null,
+      maxBackoffSeconds: null,
+    });
+    assert.equal(
+      e.declNullV2.scheduleTrigger.timeZone,
+      null,
+      "RESET_VALUE is null in the manifest",
+    );
+    assert.deepEqual(e.declOmitV2.scheduleTrigger.retryConfig, {});
+    assert.ok(!("timeZone" in e.declOmitV2.scheduleTrigger));
+    assert.deepEqual(e.declTimeoutV2.scheduleTrigger.retryConfig, {});
+    assert.equal(e.declTimeoutV2.timeoutSeconds, 540);
+    // Gen1: no failure policy on either, the probe's count of 1 on the Scheduler job
     assert.equal(e.schedFailV1.scheduleTrigger.schedule, "every 5 minutes");
     assert.ok(!e.schedFailV1.scheduleTrigger.timeZone);
-    assert.ok(!e.schedFailV1.failurePolicy && !e.schedOkV1.failurePolicy, "no failure policy");
-    // the Gen1 retry probe: a count of 1 on the Scheduler job, still no failure policy on the function
+    assert.ok(!e.schedRetryV1.failurePolicy && !e.schedFailV1.failurePolicy, "no failure policy");
     assert.equal(e.schedRetryV1.scheduleTrigger.schedule, "every 5 minutes");
     assert.deepEqual(e.schedRetryV1.scheduleTrigger.retryConfig, {
       retryCount: 1,
@@ -112,7 +121,6 @@ maybe("the declared schedules, time zones and retry options are what the packet 
       maxRetryDuration: null,
       minBackoffDuration: null,
     });
-    assert.ok(!e.schedRetryV1.failurePolicy, "no failure policy");
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -148,7 +156,7 @@ maybe(
           authorization: "Bearer secret-token-value",
           "user-agent": "Google-Cloud-Scheduler",
           "x-cloudscheduler": "true",
-          "x-cloudscheduler-jobname": "firebase-schedule-schedOkV2-us-central1",
+          "x-cloudscheduler-jobname": "firebase-schedule-declNullV2-us-central1",
           "x-cloudscheduler-scheduletime": "2026-10-06T00:01:00Z",
         },
         rawBody: Buffer.from(""),
@@ -165,15 +173,15 @@ maybe(
           return this;
         },
       };
-      const out = await frames(() => fixture.schedOkV2(req, res));
+      const out = await frames(() => fixture.declNullV2(req, res));
       assert.equal(out.length, 1);
       const [frame] = out;
-      assert.equal(frame.handler, "schedOkV2");
+      assert.equal(frame.handler, "declNullV2");
       assert.equal(frame.generation, 2);
       assert.equal(frame.request.method, "POST");
       assert.equal(
         frame.request.headers["x-cloudscheduler-jobname"],
-        "firebase-schedule-schedOkV2-us-central1",
+        "firebase-schedule-declNullV2-us-central1",
       );
       assert.equal(
         frame.request.headers.authorization,
@@ -181,7 +189,7 @@ maybe(
         "the credential is not printed",
       );
       assert.ok(!JSON.stringify(frame).includes("secret-token-value"));
-      assert.equal(frame.event.jobName, "firebase-schedule-schedOkV2-us-central1");
+      assert.equal(frame.event.jobName, "firebase-schedule-declNullV2-us-central1");
       assert.equal(frame.event.scheduleTime, "2026-10-06T00:01:00Z");
       assert.deepEqual(frame.eventKeys, ["jobName", "scheduleTime"]);
       assert.deepEqual(frame.contextProperty, {
@@ -234,35 +242,74 @@ maybe(
   },
 );
 
-maybe("the v1 handlers print the context; the failing one throws", async () => {
+maybe(
+  "the v1 handlers print the context and both throw; the declaration functions print the round",
+  async () => {
+    const dir = source();
+    try {
+      const fixture = createRequire(join(dir, "fixture/index.js"))("./index.js");
+      const context = {
+        eventId: "e1",
+        timestamp: "2026-10-06T00:01:00Z",
+        eventType: "google.pubsub.topic.publish",
+        resource: {
+          service: "pubsub.googleapis.com",
+          name: "projects/p/topics/firebase-schedule-schedFailV1-us-central1",
+        },
+      };
+      for (const name of ["schedFailV1", "schedRetryV1"]) {
+        let thrown = null;
+        const lines = await frames(async () => {
+          try {
+            await fixture[name].run(context);
+          } catch (error) {
+            thrown = error;
+          }
+        });
+        assert.match(thrown.message, /deliberate failure/, name);
+        assert.equal(lines[0].handler, name);
+        assert.equal(lines[0].generation, 1);
+        assert.equal(lines[0].failing, true);
+        assert.equal(lines[0].argumentCount, 1, "a context-only handler");
+        assert.deepEqual(lines[0].arguments, [context]);
+        assert.equal(lines[0].context.eventId, "e1");
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  },
+);
+
+maybe("a declaration function prints one frame carrying the ROUND of its source", async () => {
   const dir = source();
   try {
     const fixture = createRequire(join(dir, "fixture/index.js"))("./index.js");
-    const context = {
-      eventId: "e1",
-      timestamp: "2026-10-06T00:01:00Z",
-      eventType: "google.pubsub.topic.publish",
-      resource: {
-        service: "pubsub.googleapis.com",
-        name: "projects/p/topics/firebase-schedule-schedOkV1-us-central1",
+    const req = {
+      method: "POST",
+      headers: {
+        "x-cloudscheduler-jobname": "j",
+        "x-cloudscheduler-scheduletime": "2027-01-01T00:00:00Z",
+      },
+      rawBody: Buffer.from(""),
+      body: {},
+      header(name) {
+        return this.headers[name.toLowerCase()];
       },
     };
-    const ok = await frames(() => fixture.schedOkV1.run(context));
-    assert.equal(ok[0].handler, "schedOkV1");
-    assert.equal(ok[0].generation, 1);
-    assert.equal(ok[0].context.eventId, "e1");
-    assert.equal(ok[0].argumentCount, 1, "a context-only handler");
-    assert.deepEqual(ok[0].arguments, [context]);
-    let thrown = null;
-    const lines = await frames(async () => {
-      try {
-        await fixture.schedFailV1.run(context);
-      } catch (error) {
-        thrown = error;
-      }
-    });
-    assert.match(thrown.message, /deliberate failure/);
-    assert.equal(lines[0].failing, true);
+    const res = {
+      status() {
+        return this;
+      },
+      send() {
+        return this;
+      },
+    };
+    for (const name of ["declNullV2", "declOmitV2", "declTimeoutV2"]) {
+      const out = await frames(() => fixture[name](req, res));
+      assert.equal(out.length, 1, name);
+      assert.equal(out[0].handler, name);
+      assert.equal(out[0].round, 1);
+    }
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

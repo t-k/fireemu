@@ -2,8 +2,10 @@
 // refused before it is journaled or sent. Each rule pins the method, the host, the path (case-exact
 // names), the allowed query keys, and the body, and says whether it is a mutation.
 import {
+  DRIFT,
   EXTRA_JOBS,
   FUNCTIONS,
+  ROUND_FUNCTIONS,
   PROJECT,
   REGION,
   extraJobId,
@@ -16,6 +18,31 @@ const esc = (text) => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 const alt = (names) => "(?:" + names.map(esc).join("|") + ")";
 
 export { jobIds };
+
+/** Stable JSON: the keys of every object in order, so that two equal values compare equal as text. */
+const canonical = (value) =>
+  JSON.stringify(value, (key, v) =>
+    v && typeof v === "object" && !Array.isArray(v)
+      ? Object.fromEntries(Object.entries(v).toSorted(([a], [b]) => (a < b ? -1 : 1)))
+      : v,
+  );
+
+/**
+ * Whether a PATCH of a declaration job is exactly the drift of one round: the job named by the path, the body its
+ * own name plus the round's fields, and the `updateMask` of that round (nothing else in the query).
+ */
+const driftPatchOk = (json, url) => {
+  const fn = ROUND_FUNCTIONS.find((name) => url.pathname.split("/").at(-1) === scheduleId(name));
+  if (!fn || typeof json?.name !== "string") return false;
+  if (json.name !== `projects/${PROJECT}/locations/${REGION}/jobs/${scheduleId(fn)}`) return false;
+  const { name, ...fields } = json;
+  return Object.values(DRIFT).some(
+    (round) =>
+      round[fn].mask === url.searchParams.get("updateMask") &&
+      canonical(round[fn].body) === canonical(fields) &&
+      typeof name === "string",
+  );
+};
 export const pullIds = (runId) => FUNCTIONS.v1.map((fn) => pullSubscriptionId(runId, fn));
 export const v1TopicIds = () => FUNCTIONS.v1.map(scheduleId);
 
@@ -41,6 +68,7 @@ export function rules(runId, projectNumber) {
   const empty = (json) => json === undefined || (json && Object.keys(json).length === 0);
   const nothing = (json) => json === undefined;
   const sched = "cloudscheduler.googleapis.com";
+  const declJobs = alt(ROUND_FUNCTIONS.map(scheduleId));
   const pubsub = "pubsub.googleapis.com";
   const gcf = "cloudfunctions.googleapis.com";
   return [
@@ -178,6 +206,15 @@ export function rules(runId, projectNumber) {
     ["POST", sched, `^/v1/projects/${P}/locations/${R}/jobs/${jobs}:run$`, q({}), empty, true],
     ["POST", sched, `^/v1/projects/${P}/locations/${R}/jobs/${jobs}:pause$`, q({}), empty, true],
     ["DELETE", sched, `^/v1/projects/${P}/locations/${R}/jobs/${jobs}$`, q({}), nothing, true],
+    // the drift of a round: a declaration job changed from outside, then redeployed (the mask is checked with the body)
+    [
+      "PATCH",
+      sched,
+      `^/v1/projects/${P}/locations/${R}/jobs/${declJobs}$`,
+      q({ updateMask: (v) => /^[A-Za-z,]+$/.test(v) }),
+      driftPatchOk,
+      true,
+    ],
     [
       "POST",
       sched,
@@ -290,7 +327,7 @@ export function matchRule(spec, ruleList) {
     const keys = [...url.searchParams.keys()];
     if (new Set(keys).size !== keys.length) continue;
     if (!keys.every((key) => rule.query[key]?.(url.searchParams.get(key)) === true)) continue;
-    if (!rule.body(spec.json)) continue;
+    if (!rule.body(spec.json, url)) continue;
     return rule;
   }
   return null;

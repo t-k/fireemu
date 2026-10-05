@@ -1,4 +1,6 @@
-// The fixture of the SCHEDULED-FUNCTIONS delivery recording: three v2 and two v1 scheduled functions.
+// The fixture of the fourth SCHEDULED-FUNCTIONS delivery recording (packet delivery-004): four v2 and two v1 scheduled
+// functions. The three `decl*` functions exist for their declarations (read back from the Scheduler job after a deploy,
+// and again after two redeploys of a job changed from outside); the others are the retry targets and probes.
 // Each invocation prints one line, `SCHED_DELIVERY_FRAME {json}`, that says what the function was
 // handed: the HTTP request a v2 function received (method, every header but the credential, the raw
 // body), the event the SDK built from it, and for v1 the context. The recorder reads these lines from
@@ -9,8 +11,12 @@
 const { AsyncLocalStorage } = require("node:async_hooks");
 const functionsV1 = require("firebase-functions/v1");
 const { setGlobalOptions } = require("firebase-functions/v2");
+const { RESET_VALUE } = require("firebase-functions/v2/options");
 const { onSchedule } = require("firebase-functions/v2/scheduler");
 
+// The recorder rewrites this number before each redeploy so that the source differs and the CLI updates the functions
+// (it skips an unchanged one); nothing reads it.
+const ROUND = 1;
 const MARK = "SCHED_DELIVERY_FRAME";
 const REGION = "us-central1";
 // The v2 string form of onSchedule takes no options; this is what puts it in the pinned region.
@@ -80,13 +86,6 @@ const frameV2 = (handler, event, extra = {}) =>
     ...extra,
   });
 
-// The string form of onSchedule (no options, no time zone: the default applies).
-exports.schedOkV2 = observed(
-  onSchedule("every 1 minutes", async (event) => {
-    frameV2("schedOkV2", event);
-  }),
-);
-
 // Fails while the attempt is within twenty seconds of the scheduled time, so a retry chain fails a few
 // times and then succeeds. Retry declared with every option the SDK has but maxRetrySeconds. retryCount is 4, the
 // largest value Cloud Scheduler accepts: it refused 6 (run e0ec2f41, 400 "invalid retry count. The retry_count must be
@@ -111,18 +110,6 @@ exports.schedRetryV2 = observed(
   ),
 );
 
-// Runs longer than its own timeout, across the next occurrence, with no retry.
-exports.schedSlowV2 = observed(
-  onSchedule(
-    { schedule: "every 1 minutes", region: REGION, timeoutSeconds: 90, retryCount: 0 },
-    async (event) => {
-      frameV2("schedSlowV2", event, { phase: "start" });
-      await new Promise((resolve) => setTimeout(resolve, 100_000));
-      frameV2("schedSlowV2", event, { phase: "end" });
-    },
-  ),
-);
-
 // ---- v1: the message the Scheduler published and the context the SDK builds --------------------------
 
 // Every argument the handler was called with is printed: the SDK documents a context-only handler, and
@@ -135,15 +122,6 @@ const frameV1 = (handler, args, extra = {}) =>
     arguments: args.map((a) => JSON.parse(JSON.stringify(a ?? null))),
     context: JSON.parse(JSON.stringify(args[args.length - 1] ?? null)),
     ...extra,
-  });
-
-// A context-only handler, an explicit time zone.
-exports.schedOkV1 = functionsV1
-  .region(REGION)
-  .pubsub.schedule("every 1 minutes")
-  .timeZone("Asia/Tokyo")
-  .onRun(async (...args) => {
-    frameV1("schedOkV1", args);
   });
 
 // Always fails; no failure policy, so the subscriber does not retry. The time zone is omitted.
@@ -166,3 +144,41 @@ exports.schedRetryV1 = functionsV1
     frameV1("schedRetryV1", args, { failing: true });
     throw new Error("deliberate failure of a scheduled v1 handler with a retry count");
   });
+
+// ---- v2: declarations read back from the Scheduler job --------------------------------------------------------
+//
+// None of these runs on its schedule (1 January, 00:00 UTC); the recorder forces each once per pass.
+
+// Every optional setting explicitly reset (RESET_VALUE is null in the manifest).
+exports.declNullV2 = observed(
+  onSchedule(
+    {
+      schedule: "0 0 1 1 *",
+      region: REGION,
+      timeZone: RESET_VALUE,
+      retryCount: RESET_VALUE,
+      maxRetrySeconds: RESET_VALUE,
+      minBackoffSeconds: RESET_VALUE,
+      maxBackoffSeconds: RESET_VALUE,
+      maxDoublings: RESET_VALUE,
+    },
+    async (event) => {
+      frameV2("declNullV2", event, { round: ROUND });
+    },
+  ),
+);
+
+// The same settings omitted.
+exports.declOmitV2 = observed(
+  onSchedule({ schedule: "0 0 1 1 *", region: REGION }, async (event) => {
+    frameV2("declOmitV2", event, { round: ROUND });
+  }),
+);
+
+// A function timeout between the Scheduler's default attempt deadline (180 s) and its maximum (1800 s): the CLI turns it
+// into the job's attemptDeadline.
+exports.declTimeoutV2 = observed(
+  onSchedule({ schedule: "0 0 1 1 *", region: REGION, timeoutSeconds: 540 }, async (event) => {
+    frameV2("declTimeoutV2", event, { round: ROUND });
+  }),
+);

@@ -45,9 +45,12 @@ const argv = (command, run, extra = []) => [
 ];
 const goodDeps = (world, overrides = {}) => {
   const plans = [];
+  const rounds = [];
   return {
     plans,
+    rounds,
     deps: {
+      setRound: (dir, round) => rounds.push([dir, round]),
       nodeVersion: () => "22.22.1",
       firebaseToolsVersion: () => "15.28.2",
       gitHead: () => COMMIT,
@@ -55,9 +58,9 @@ const goodDeps = (world, overrides = {}) => {
       adcExists: () => true,
       token: () => "test-token",
       send: world.send,
-      runCli: async ({ action, plan }) => {
-        plans.push({ action, plan });
-        return world.runCli({ action });
+      runCli: async ({ action, plan, label, ...rest }) => {
+        plans.push({ action, plan, label });
+        return world.runCli({ action, ...rest });
       },
       prepareSource: ({ target }) => ({
         configPath: join(target, "firebase.json"),
@@ -217,10 +220,10 @@ test("record refuses without --send, with another digest, and with bad arguments
   rmSync(run, { recursive: true, force: true });
 });
 
-test("a clean send exits 0, runs the CLI three times with the planned argv, and writes private files", async () => {
+test("a clean send exits 0, runs the CLI five times with the planned argv (the dry run, the deploy, two round deploys, the delete), and writes private files", async () => {
   const run = tmp();
   const world = createWorld();
-  const { deps, plans } = goodDeps(world);
+  const { deps, plans, rounds } = goodDeps(world);
   const digest = "d".repeat(64);
   const io = quiet();
   const code = await main(argv("record", run, ["--send", "--expect-digest", digest]), {
@@ -232,8 +235,24 @@ test("a clean send exits 0, runs the CLI three times with the planned argv, and 
   assert.equal(code, 0, io.lines.join("\n"));
   assert.deepEqual(
     plans.map((p) => p.action),
-    ["dry-run", "deploy", "delete"],
+    ["dry-run", "deploy", "deploy", "deploy", "delete"],
   );
+  // the round deploys name only the three declaration functions, carry their own label, and follow setRound of their round
+  assert.deepEqual(
+    plans.map((p) => p.label),
+    [undefined, undefined, "deploy-r2", "deploy-r3", undefined],
+  );
+  assert.deepEqual(rounds, [
+    [join(run, "source", "fixture"), 2],
+    [join(run, "source", "fixture"), 3],
+  ]);
+  const only = (p) => p.plan.args[p.plan.args.indexOf("--only") + 1].split(",");
+  assert.equal(only(plans[1]).length, 6);
+  for (const i of [2, 3])
+    assert.deepEqual(
+      only(plans[i]),
+      ["declNullV2", "declOmitV2", "declTimeoutV2"].map((n) => "functions:scheduled-delivery:" + n),
+    );
   assert.ok(plans[0].plan.args.includes("--dry-run") && !plans[1].plan.args.includes("--dry-run"));
   assert.equal(plans[0].plan.env.PATH, "/node22/bin:/usr/bin");
   assert.equal(
@@ -267,7 +286,7 @@ test("answers that need review exit 3; an exception exits 4 and says so in a res
   const run = tmp();
   const world = createWorld({
     hooks: {
-      ["POST /v1/projects/fireemu-oracle-sbx/locations/us-central1/jobs/firebase-schedule-schedOkV2-us-central1:run"]:
+      ["POST /v1/projects/fireemu-oracle-sbx/locations/us-central1/jobs/firebase-schedule-declNullV2-us-central1:run"]:
         async () => reply(503, { error: { code: 503, status: "UNAVAILABLE", message: "x" } }),
     },
   });
@@ -321,8 +340,8 @@ test("the REST token is asked for again after 40 minutes, at most twice again, a
       used.push(request.headers.authorization);
       return world.send(request);
     },
-    runCli: async ({ action }) => {
-      const result = await world.runCli({ action });
+    runCli: async (call) => {
+      const result = await world.runCli(call);
       world.advance(45 * 60_000);
       return result;
     },
@@ -374,13 +393,17 @@ test("an answer that reflects a refreshed token is never kept (M2)", async () =>
     now: () => world.now,
     token: () => "token-number-" + ++issued,
     send: async (request) => {
-      if (request.url.includes("/topics?") && request.headers.authorization.endsWith("-2"))
-        return new Response(JSON.stringify({ echo: "token-number-2" }), { status: 200 });
+      // The two round deploys also move the clock, so the token in use when the topics are listed is a later one.
+      if (request.url.includes("/topics?") && !request.headers.authorization.endsWith("-1"))
+        return new Response(
+          JSON.stringify({ echo: request.headers.authorization.slice("Bearer ".length) }),
+          { status: 200 },
+        );
       return world.send(request);
     },
-    runCli: async ({ action }) => {
-      const result = await world.runCli({ action });
-      if (action === "deploy") world.advance(45 * 60_000);
+    runCli: async (call) => {
+      const result = await world.runCli(call);
+      if (call.action === "deploy") world.advance(45 * 60_000);
       return result;
     },
   });
@@ -393,7 +416,7 @@ test("an answer that reflects a refreshed token is never kept (M2)", async () =>
   });
   const journalName = readdirSync(run).find((f) => f.startsWith("journal-"));
   const journal = readFileSync(join(run, journalName), "utf8");
-  assert.equal(journal.includes("token-number-2"), false);
+  for (const n of [2, 3, 4]) assert.equal(journal.includes("token-number-" + n), false);
   assert.ok(journal.includes("transport-unknown"));
   rmSync(run, { recursive: true, force: true });
 });

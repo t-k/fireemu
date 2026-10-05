@@ -8,6 +8,7 @@ import {
   FUNCTIONS,
   PROJECT,
   REGION,
+  ROUND_FUNCTIONS,
   functionName,
   jobName,
   runServiceId,
@@ -25,11 +26,9 @@ const notFound = (what) =>
   reply(404, { error: { code: 404, message: what + " not found", status: "NOT_FOUND" } });
 const iso = (ms) => new Date(ms).toISOString();
 
+// Natural fires of the run's functions on the virtual clock. The declaration functions run on 1 January only.
 const SCHEDULES = {
-  schedOkV2: 60_000,
   schedRetryV2: 300_000,
-  schedSlowV2: 60_000,
-  schedOkV1: 60_000,
   schedFailV1: 300_000,
   schedRetryV1: 300_000,
 };
@@ -51,6 +50,7 @@ export function createWorld({
     builds: new Map(),
     buildLogs: new Map(),
     jobs: new Map(),
+    cliCalls: [],
     topics: new Set(),
     subs: new Map(),
     entries: [],
@@ -153,7 +153,11 @@ export function createWorld({
       w.jobs.set(id, {
         name: jobName(id),
         state: "ENABLED",
-        schedule: "every 1 minutes",
+        schedule: ROUND_FUNCTIONS.includes(fn) ? "0 0 1 1 *" : "every 1 minutes",
+        timeZone: FUNCTIONS.v1.includes(fn) ? "America/Los_Angeles" : "UTC",
+        ...(ROUND_FUNCTIONS.includes(fn)
+          ? { attemptDeadline: fn === "declTimeoutV2" ? "540s" : "180s" }
+          : {}),
         ...(FUNCTIONS.v2.includes(fn)
           ? {
               httpTarget: {
@@ -181,13 +185,40 @@ export function createWorld({
   };
 
   /** The fake CLI: returns what `runCli` returns. */
-  w.runCli = async ({ action }) => {
+  const DEFAULT_RETRY = {
+    maxRetryDuration: "0s",
+    minBackoffDuration: "5s",
+    maxBackoffDuration: "3600s",
+    maxDoublings: 5,
+  };
+  /**
+   * The redeploy of a round, as firebase-tools 15.28.2 does it (`cloudscheduler.js`): the time zone is its default
+   * unless the function names one, a retryConfig the function sets to null is reset, an omitted one (an empty
+   * retryConfig is not sent) is left as it is, and the attemptDeadline follows the function timeout.
+   */
+  const redeploy = (names) => {
+    for (const fn of names) {
+      const job = w.jobs.get(scheduleId(fn));
+      if (!job) continue;
+      job.timeZone = "UTC";
+      if (fn === "declNullV2") job.retryConfig = { ...DEFAULT_RETRY };
+      if (fn === "declTimeoutV2") job.attemptDeadline = "540s";
+      if (fn === "declNullV2" || fn === "declOmitV2") job.attemptDeadline = "180s";
+    }
+  };
+  w.runCli = async ({ action, round, names }) => {
     w.cliRuns.push(action);
+    w.cliCalls.push({ action, round: round ?? 1, names: names ?? null });
     if (action === "deploy") {
       if (failDeploy)
         return { action, exitCode: 1, timedOut: false, error: null, errored: 5, durationMs: 1 };
-      createDeployed();
-      w.advance(110_000);
+      if (round > 1) {
+        redeploy(names);
+        w.advance(60_000);
+      } else {
+        createDeployed();
+        w.advance(110_000);
+      }
     } else if (action === "delete") {
       deleteDeployed();
       w.advance(30_000);
@@ -334,6 +365,14 @@ export function createWorld({
         return reply(200, job);
       }
       if (method === "GET") return reply(200, job);
+      if (method === "PATCH") {
+        // A change from outside: the fields of the mask are replaced by the body's (absent in the body: cleared).
+        for (const field of (url.searchParams.get("updateMask") ?? "").split(",").filter(Boolean)) {
+          if (field in body) job[field] = body[field];
+          else delete job[field];
+        }
+        return reply(200, job);
+      }
       if (method === "DELETE") {
         w.jobs.delete(m[1]);
         return reply(200, {});

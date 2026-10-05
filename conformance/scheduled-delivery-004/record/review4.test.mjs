@@ -15,7 +15,7 @@ import { NUMBER, createWorld, reply } from "./world.mjs";
 
 const RUN = "0123456789abcdef";
 const SHORT = { passes: 1, naturalWindowMs: 60_000 };
-const FN2 = functionName("schedOkV2");
+const FN2 = functionName("declNullV2");
 const DELETE_KEY = "DELETE cloudfunctions.googleapis.com/v2/" + FN2;
 const OP = "projects/fireemu-oracle-sbx/locations/us-central1/operations/op-1";
 const OP_KEY = "GET cloudfunctions.googleapis.com/v2/" + OP;
@@ -41,13 +41,13 @@ const labels = (list) => list.map((c) => c.label).toSorted();
 
 // ---- M1-r3: a delete whose operation never reads done ---------------------------------------------------------
 
-/** A world whose CLI delete leaves schedOkV2 and whose REST DELETE of it answers `deleteAnswer`, removing it. */
+/** A world whose CLI delete leaves declNullV2 and whose REST DELETE of it answers `deleteAnswer`, removing it. */
 const leftover = (deleteAnswer, operationAnswer) => ({
-  leaveOnDelete: ["schedOkV2"],
+  leaveOnDelete: ["declNullV2"],
   hooks: {
     [DELETE_KEY]: async ({ w }) => {
       w.functionsV2.delete(FN2);
-      w.runServices.delete("schedokv2");
+      w.runServices.delete("declnullv2");
       return deleteAnswer;
     },
     ...(operationAnswer ? { [OP_KEY]: operationAnswer } : {}),
@@ -61,8 +61,8 @@ test("probe D: twelve polls of done:false and then the function reads absent is 
   const { result, world } = await go(leftover(pending(), stillRunning(polls)));
   assert.equal(polls.length, 12);
   assert.deepEqual(
-    result.unknownMutationList.filter((u) => u.id === "leftover-delete-schedOkV2"),
-    [{ id: "leftover-delete-schedOkV2", class: "operation-pending" }],
+    result.unknownMutationList.filter((u) => u.id === "leftover-delete-declNullV2"),
+    [{ id: "leftover-delete-declNullV2", class: "operation-pending" }],
   );
   assert.equal(result.readBackRequired, true);
   assert.equal(result.closureReady, false);
@@ -87,7 +87,7 @@ test("near miss: the third poll reads done:true, and the later 404 settles it", 
   );
   assert.equal(n, 3, "polling stops at the first done");
   assert.equal(
-    result.unknownMutationList.some((u) => u.id === "leftover-delete-schedOkV2"),
+    result.unknownMutationList.some((u) => u.id === "leftover-delete-declNullV2"),
     false,
   );
   assert.equal(result.closureReady, true);
@@ -99,8 +99,8 @@ test("an operation done with an error is an unknown DELETE (operation-error)", a
     reply(200, { name: OP, done: true, error: { code: 13, message: "internal" } });
   const { result } = await go(leftover(pending(), failed));
   assert.deepEqual(
-    result.unknownMutationList.filter((u) => u.id === "leftover-delete-schedOkV2"),
-    [{ id: "leftover-delete-schedOkV2", class: "operation-error" }],
+    result.unknownMutationList.filter((u) => u.id === "leftover-delete-declNullV2"),
+    [{ id: "leftover-delete-declNullV2", class: "operation-error" }],
   );
   assert.equal(result.closureReady, false);
   assert.equal(result.outcome, "calendar-delivery-needs-review");
@@ -111,8 +111,8 @@ test("operation reads that answer 503 never settle it, however many", async () =
     reply(503, { error: { code: 503, message: "x", status: "UNAVAILABLE" } });
   const { result } = await go(leftover(pending(), unavailable));
   assert.deepEqual(
-    result.unknownMutationList.filter((u) => u.id === "leftover-delete-schedOkV2"),
-    [{ id: "leftover-delete-schedOkV2", class: "operation-pending" }],
+    result.unknownMutationList.filter((u) => u.id === "leftover-delete-declNullV2"),
+    [{ id: "leftover-delete-declNullV2", class: "operation-pending" }],
   );
   assert.equal(result.closureReady, false);
 });
@@ -142,7 +142,7 @@ test("a refused leftover DELETE (4xx) is neither unknown nor settled by the func
     leftover(reply(400, { error: { code: 400, message: "x", status: "INVALID_ARGUMENT" } })),
   );
   assert.equal(
-    result.unknownMutationList.some((u) => u.id === "leftover-delete-schedOkV2"),
+    result.unknownMutationList.some((u) => u.id === "leftover-delete-declNullV2"),
     false,
   );
 });
@@ -151,11 +151,11 @@ test("a v1 leftover whose operation is a v1 operation is polled and judged the s
   const op = "operations/del-77";
   const polls = [];
   const world = {
-    leaveOnDelete: ["schedOkV1"],
+    leaveOnDelete: ["schedFailV1"],
     v1Operations: true,
     hooks: {
-      ["DELETE cloudfunctions.googleapis.com/v1/" + functionName("schedOkV1")]: async ({ w }) => {
-        w.functionsV1.delete(functionName("schedOkV1"));
+      ["DELETE cloudfunctions.googleapis.com/v1/" + functionName("schedFailV1")]: async ({ w }) => {
+        w.functionsV1.delete(functionName("schedFailV1"));
         return reply(200, { name: op, done: false });
       },
       ["GET cloudfunctions.googleapis.com/v1/" + op]: async () => (
@@ -167,8 +167,8 @@ test("a v1 leftover whose operation is a v1 operation is polled and judged the s
   const { result } = await go(world);
   assert.equal(polls.length, 12);
   assert.deepEqual(
-    result.unknownMutationList.filter((u) => u.id === "leftover-delete-schedOkV1"),
-    [{ id: "leftover-delete-schedOkV1", class: "operation-pending" }],
+    result.unknownMutationList.filter((u) => u.id === "leftover-delete-schedFailV1"),
+    [{ id: "leftover-delete-schedFailV1", class: "operation-pending" }],
   );
 });
 

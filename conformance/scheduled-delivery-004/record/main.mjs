@@ -31,7 +31,13 @@ import {
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { FIREBASE_TOOLS_VERSION, NODE_VERSION, PROJECT, RUN_ID } from "./plan.mjs";
-import { cliPlan, prepareSource, runCli as realRunCli, sourceProblems } from "./deploy.mjs";
+import {
+  cliPlan,
+  prepareSource,
+  runCli as realRunCli,
+  setRound as realSetRound,
+  sourceProblems,
+} from "./deploy.mjs";
 import { MAX_REQUESTS, record } from "./run.mjs";
 import { READBACK_MAX_REQUESTS, SETTLE_MS, readbackRun } from "./readback.mjs";
 import { createTokenSource } from "./token.mjs";
@@ -143,6 +149,7 @@ export const realDeps = {
     }).trim(),
   send: (request) => fetch(request.url, request),
   runCli: realRunCli,
+  setRound: realSetRound,
   prepareSource,
   sourceProblems,
   record,
@@ -381,20 +388,26 @@ export async function main(
   });
   const configHome = join(runDir, "cli-config");
   mkdirSync(configHome, { recursive: true, mode: 0o700 });
-  const runCli = ({ action }) =>
-    deps.runCli({
+  // A round (2 or 3) redeploys the declaration functions: the source copy gets the round number first, so that its
+  // source differs and the CLI updates the functions instead of skipping them.
+  const runCli = ({ action, round, names, label }) => {
+    if (round !== undefined) deps.setRound(prepared.fixtureDir, round);
+    return deps.runCli({
       action,
+      ...(label ? { label } : {}),
       plan: cliPlan(action, {
         configHome,
         configPath: prepared.configPath,
         workDir: dirname(prepared.configPath),
         home: env.HOME,
         path: dirname(values.node) + ":" + (env.PATH ?? ""),
+        ...(names ? { names } : {}),
       }),
       firebaseJs: values["firebase-js"],
       node: values.node,
       directory: join(runDir, "cli"),
     });
+  };
   let result;
   try {
     result = await deps.record({

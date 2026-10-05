@@ -28,10 +28,10 @@ const entryFor = (handler, body, extra = {}) => {
 };
 
 test("a v1 function's origin is the Cloud Functions log with its case-exact name, a v2's the Run stdout with the lower-case service", () => {
-  assert.deepEqual(frameOrigin("schedOkV1"), {
+  assert.deepEqual(frameOrigin("schedFailV1"), {
     logName: "projects/fireemu-oracle-sbx/logs/cloudfunctions.googleapis.com%2Fcloud-functions",
     resourceType: "cloud_function",
-    labels: { function_name: "schedOkV1", region: "us-central1" },
+    labels: { function_name: "schedFailV1", region: "us-central1" },
   });
   assert.deepEqual(frameOrigin("schedRetryV2"), {
     logName: "projects/fireemu-oracle-sbx/logs/run.googleapis.com%2Fstdout",
@@ -43,12 +43,12 @@ test("a v1 function's origin is the Cloud Functions log with its case-exact name
 test("the filters name every origin and the window, and the request passes the guard", () => {
   const filter = frameFilter({ start, end });
   for (const name of [
-    "schedOkV1",
     "schedFailV1",
     "schedRetryV1",
-    "schedokv2",
+    "schedRetryV1",
+    "declnullv2",
     "schedretryv2",
-    "schedslowv2",
+    "decltimeoutv2",
   ])
     assert.ok(filter.includes('"' + name + '"'), name);
   assert.ok(
@@ -63,7 +63,7 @@ test("the filters name every origin and the window, and the request passes the g
   assert.equal(guard.allow(listRequest({ id: "x", filter, pageToken: "abc" })), true);
   const sched = schedulerFilter({ runId: RUN, start, end });
   assert.ok(sched.startsWith('resource.type="cloud_scheduler_job" AND ('));
-  assert.equal((sched.match(/job_id=/g) ?? []).length, 12);
+  assert.equal((sched.match(/job_id=/g) ?? []).length, 10);
   assert.equal(guard.allow(listRequest({ id: "y", filter: sched })), true);
   assert.throws(() => frameFilter({ start: "yesterday", end }), /RFC 3339/);
   assert.throws(() => schedulerFilter({ runId: RUN, start, end: "x" }), /RFC 3339/);
@@ -72,10 +72,10 @@ test("the filters name every origin and the window, and the request passes the g
 
 test("frames come from a text payload or a JSON message, once per insert id", () => {
   const seen = new Set();
-  const a = entryFor("schedOkV2", frameText({ handler: "schedOkV2", n: 1 }));
-  const b = entryFor("schedOkV2", undefined, {
+  const a = entryFor("declNullV2", frameText({ handler: "declNullV2", n: 1 }));
+  const b = entryFor("declNullV2", undefined, {
     textPayload: undefined,
-    jsonPayload: { message: "prefix " + frameText({ handler: "schedOkV2", n: 2 }) },
+    jsonPayload: { message: "prefix " + frameText({ handler: "declNullV2", n: 2 }) },
   });
   const out = parseFrames([a, b, a], seen);
   assert.deepEqual(
@@ -88,13 +88,13 @@ test("frames come from a text payload or a JSON message, once per insert id", ()
 
 test("what is not a usable frame is counted, never thrown", () => {
   const bad = [
-    entryFor("schedOkV2", "an ordinary line"),
-    entryFor("schedOkV2", FRAME_MARK + " {not json"),
-    entryFor("schedOkV2", frameText({ handler: "someoneElse" })),
-    entryFor("schedOkV2", frameText({ nothandler: 1 })),
-    entryFor("schedOkV2", frameText({ handler: "schedFailV1" })), // a v1 frame from a Run origin
+    entryFor("declNullV2", "an ordinary line"),
+    entryFor("declNullV2", FRAME_MARK + " {not json"),
+    entryFor("declNullV2", frameText({ handler: "someoneElse" })),
+    entryFor("declNullV2", frameText({ nothandler: 1 })),
+    entryFor("declNullV2", frameText({ handler: "schedRetryV1" })), // a v1 frame from a Run origin
     {
-      ...entryFor("schedOkV2", frameText({ handler: "schedOkV2" })),
+      ...entryFor("declNullV2", frameText({ handler: "declNullV2" })),
       resource: {
         type: "cloud_run_revision",
         labels: { service_name: "other", location: "us-central1" },
@@ -117,7 +117,7 @@ test("what is not a usable frame is counted, never thrown", () => {
 });
 
 test("a v1 frame is accepted from the Cloud Functions origin only", () => {
-  const good = entryFor("schedOkV1", frameText({ handler: "schedOkV1", generation: 1 }));
+  const good = entryFor("schedFailV1", frameText({ handler: "schedFailV1", generation: 1 }));
   assert.equal(parseFrames([good]).frames.length, 1);
   const wrong = {
     ...good,

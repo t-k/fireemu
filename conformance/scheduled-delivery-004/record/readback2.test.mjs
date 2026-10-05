@@ -20,44 +20,44 @@ const NEAR_MISSES = [
   {
     label: "a job",
     setup: (w) =>
-      w.jobs.set(scheduleId("schedOkV2"), {
-        name: "projects/x/locations/y/jobs/" + scheduleId("schedOkV2"),
+      w.jobs.set(scheduleId("declNullV2"), {
+        name: "projects/x/locations/y/jobs/" + scheduleId("declNullV2"),
       }),
     hook: {
       ["GET cloudscheduler.googleapis.com/v1/projects/fireemu-oracle-sbx/locations/us-central1/jobs/" +
-      scheduleId("schedOkV2")]: async () => notFound("Job not found."),
+      scheduleId("declNullV2")]: async () => notFound("Job not found."),
     },
   },
   {
     label: "a topic",
-    setup: (w) => w.topics.add(scheduleId("schedOkV1")),
+    setup: (w) => w.topics.add(scheduleId("schedFailV1")),
     hook: {
       ["GET pubsub.googleapis.com/v1/projects/fireemu-oracle-sbx/topics/" +
-      scheduleId("schedOkV1")]: async () => notFound("topic"),
+      scheduleId("schedFailV1")]: async () => notFound("topic"),
     },
   },
   {
     label: "a subscription",
     setup: (w) =>
-      w.subs.set("projects/fireemu-oracle-sbx/subscriptions/fe-sd-" + RUN + "-pull-schedokv1", {
+      w.subs.set("projects/fireemu-oracle-sbx/subscriptions/fe-sd-" + RUN + "-pull-schedfailv1", {
         topic: "t",
         queue: [],
       }),
     hook: {
       ["GET pubsub.googleapis.com/v1/projects/fireemu-oracle-sbx/subscriptions/fe-sd-" +
       RUN +
-      "-pull-schedokv1"]: async () => notFound("subscription"),
+      "-pull-schedfailv1"]: async () => notFound("subscription"),
     },
   },
   {
     label: "a function",
     setup: (w) =>
-      w.functionsV2.set(functionName("schedOkV2"), {
-        name: functionName("schedOkV2"),
+      w.functionsV2.set(functionName("declNullV2"), {
+        name: functionName("declNullV2"),
         state: "ACTIVE",
       }),
     hook: {
-      ["GET cloudfunctions.googleapis.com/v2/" + functionName("schedOkV2")]: async () =>
+      ["GET cloudfunctions.googleapis.com/v2/" + functionName("declNullV2")]: async () =>
         notFound("function"),
     },
   },

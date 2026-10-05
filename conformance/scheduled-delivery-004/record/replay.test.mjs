@@ -64,8 +64,8 @@ test("a real v2 function name and its lower-case Cloud Run service: only the cas
     !recorded.runServicesList.body.services.some((s) => s.name.endsWith("/" + short)),
     "never the cased id",
   );
-  assert.equal(runServiceId("schedOkV2"), "schedokv2");
-  assert.equal(functionName("schedOkV2").endsWith("/schedOkV2"), true);
+  assert.equal(runServiceId("declNullV2"), "declnullv2");
+  assert.equal(functionName("declNullV2").endsWith("/declNullV2"), true);
   assert.equal(ALL_FUNCTIONS.length, 6);
 });
 
@@ -199,11 +199,11 @@ test("the recorded Gen1 operation names pass the allowlist and are polled under 
       true,
     );
   const world = createWorld({
-    leaveOnDelete: ["schedOkV1"],
+    leaveOnDelete: ["schedFailV1"],
     hooks: {
-      "DELETE cloudfunctions.googleapis.com/v1/projects/fireemu-oracle-sbx/locations/us-central1/functions/schedOkV1":
+      "DELETE cloudfunctions.googleapis.com/v1/projects/fireemu-oracle-sbx/locations/us-central1/functions/schedFailV1":
         async ({ w }) => {
-          w.functionsV1.delete(functionName("schedOkV1"));
+          w.functionsV1.delete(functionName("schedFailV1"));
           return reply(200, { name: "operations/" + names[0], done: false });
         },
     },

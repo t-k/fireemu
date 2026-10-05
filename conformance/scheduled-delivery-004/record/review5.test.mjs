@@ -53,10 +53,10 @@ const buildUrl = (id) =>
   `cloudbuild.googleapis.com/v1/projects/${NUMBER}/locations/${REGION}/builds/${id}`;
 const sent = (journal) => journal.filter((r) => r.state === "before-send").map((r) => r.id);
 
-/** schedOkV1 ends OFFLINE with a failed build, as in the recorded run. */
+/** schedFailV1 ends OFFLINE with a failed build, as in the recorded run. */
 const failedGen1 = (w) => {
   w.afterDeploy = () => {
-    const name = functionName("schedOkV1");
+    const name = functionName("schedFailV1");
     w.functionsV1.set(name, {
       name,
       status: "OFFLINE",
@@ -81,7 +81,7 @@ test("a function that did not become active has its build and the build's log li
   const { result, journal } = await go(failedGen1);
   assert.deepEqual(result.buildDiagnostics, [
     {
-      function: "schedOkV1",
+      function: "schedFailV1",
       buildId: BUILD,
       buildStatus: 200,
       status: "FAILURE",
@@ -98,14 +98,16 @@ test("a function that did not become active has its build and the build's log li
   assert.equal(sent(journal).filter((id) => id.startsWith("diagnose-")).length, 2);
   assert.deepEqual(
     sent(journal).filter((id) => id.startsWith("diagnose-")),
-    ["diagnose-build-schedOkV1", "diagnose-build-logs-schedOkV1"],
+    ["diagnose-build-schedFailV1", "diagnose-build-logs-schedFailV1"],
   );
   const logs = journal.find(
-    (r) => r.id === "diagnose-build-logs-schedOkV1" && r.state === "before-send",
+    (r) => r.id === "diagnose-build-logs-schedFailV1" && r.state === "before-send",
   );
   assert.deepEqual(logs.json.resourceNames, ["projects/" + PROJECT]);
   assert.equal(logs.json.filter, `resource.type="build" AND resource.labels.build_id="${BUILD}"`);
-  const get = journal.find((r) => r.id === "diagnose-build-schedOkV1" && r.state === "before-send");
+  const get = journal.find(
+    (r) => r.id === "diagnose-build-schedFailV1" && r.state === "before-send",
+  );
   assert.equal(get.method, "GET");
   assert.equal(get.url, "https://" + buildUrl(BUILD));
   // the reads judge nothing: the run is as it would be without them (the deploy was incomplete, nothing is left)
@@ -117,7 +119,7 @@ test("a function that did not become active has its build and the build's log li
 test("a Gen2 function that did not become active is diagnosed through its buildConfig.build", async () => {
   const { result } = await go((w) => {
     w.afterDeploy = () => {
-      const name = functionName("schedSlowV2");
+      const name = functionName("declTimeoutV2");
       w.functionsV2.set(name, {
         name,
         state: "FAILED",
@@ -127,7 +129,7 @@ test("a Gen2 function that did not become active is diagnosed through its buildC
     w.builds.set(BUILD2, { id: BUILD2, status: "TIMEOUT" });
   });
   assert.equal(result.buildDiagnostics.length, 1);
-  assert.equal(result.buildDiagnostics[0].function, "schedSlowV2");
+  assert.equal(result.buildDiagnostics[0].function, "declTimeoutV2");
   assert.equal(result.buildDiagnostics[0].buildId, BUILD2);
   assert.equal(result.buildDiagnostics[0].status, "TIMEOUT");
   assert.equal(result.buildDiagnostics[0].steps, null);
@@ -144,8 +146,8 @@ test("near misses: active functions, foreign functions, entries with no build, a
   const foreign = await go((w) => {
     w.afterDeploy = () => {
       // one of ours is not active (so the diagnosis runs) and has no build; the foreign function has one
-      w.functionsV1.set(functionName("schedOkV1"), {
-        name: functionName("schedOkV1"),
+      w.functionsV1.set(functionName("schedFailV1"), {
+        name: functionName("schedFailV1"),
         status: "OFFLINE",
       });
       w.functionsV1.set("projects/fireemu-oracle-sbx/locations/us-central1/functions/other", {
@@ -155,7 +157,7 @@ test("near misses: active functions, foreign functions, entries with no build, a
       });
     };
   });
-  assert.deepEqual(foreign.result.buildDiagnostics, [{ function: "schedOkV1", buildId: null }]);
+  assert.deepEqual(foreign.result.buildDiagnostics, [{ function: "schedFailV1", buildId: null }]);
   assert.equal(
     sent(foreign.journal).some((id) => id.startsWith("diagnose-")),
     false,
@@ -163,18 +165,18 @@ test("near misses: active functions, foreign functions, entries with no build, a
   );
   const nobuild = await go((w) => {
     w.afterDeploy = () => {
-      const name = functionName("schedOkV1");
+      const name = functionName("schedFailV1");
       w.functionsV1.set(name, { name, status: "OFFLINE" });
     };
   });
-  assert.deepEqual(nobuild.result.buildDiagnostics, [{ function: "schedOkV1", buildId: null }]);
+  assert.deepEqual(nobuild.result.buildDiagnostics, [{ function: "schedFailV1", buildId: null }]);
   assert.equal(
     sent(nobuild.journal).some((id) => id.startsWith("diagnose-")),
     false,
   );
   const odd = await go((w) => {
     w.afterDeploy = () => {
-      const name = functionName("schedOkV1");
+      const name = functionName("schedFailV1");
       w.functionsV1.set(name, {
         name,
         status: "OFFLINE",
@@ -182,7 +184,7 @@ test("near misses: active functions, foreign functions, entries with no build, a
       });
     };
   });
-  assert.deepEqual(odd.result.buildDiagnostics, [{ function: "schedOkV1", buildId: null }]);
+  assert.deepEqual(odd.result.buildDiagnostics, [{ function: "schedFailV1", buildId: null }]);
 });
 
 test("a build that answers 404 or 403 is data, not a stop", async () => {
@@ -247,7 +249,7 @@ test("a build id with a zero in every group is read, found in the function's ent
   const zeros = "00000000-0000-0000-0000-000000000000";
   const { result, journal } = await go((w) => {
     w.afterDeploy = () => {
-      const name = functionName("schedOkV1");
+      const name = functionName("schedFailV1");
       w.functionsV1.set(name, {
         name,
         status: "OFFLINE",
@@ -259,7 +261,7 @@ test("a build id with a zero in every group is read, found in the function's ent
   assert.equal(result.buildDiagnostics[0].buildId, zeros);
   assert.equal(result.buildDiagnostics[0].status, "FAILURE");
   assert.ok(
-    journal.some((r) => r.id === "diagnose-build-schedOkV1" && r.state === "response-persisted"),
+    journal.some((r) => r.id === "diagnose-build-schedFailV1" && r.state === "response-persisted"),
   );
   const guard = createGuard(RUN, NUMBER);
   assert.equal(
@@ -300,22 +302,19 @@ test("the Cloud Build rule allows one GET of a build id in this project and regi
 
 // ---- the fixture's retry count -----------------------------------------------------------------------------------
 
-test("every retry count the packet declares is one Cloud Scheduler accepts (it refused 6 in run e0ec2f41)", () => {
+test("every retry count the packet declares is one Cloud Scheduler accepts (it refused 6 in run e0ec2f41, accepted 0 to 5 in run 156715222b86ea44)", () => {
   const counts = [
     DECLARED.schedRetryV2.retryConfig.retryCount,
-    ...EXTRA_JOBS.filter((job) => job.key !== "retry5").map((job) => job.retryConfig.retryCount),
+    ...EXTRA_JOBS.map((job) => job.retryConfig.retryCount),
   ].filter((n) => n !== undefined);
-  assert.ok(counts.length >= 3);
-  // the one boundary probe: 5 is sent once, on purpose, to learn what production does with it
-  assert.deepEqual(
-    EXTRA_JOBS.filter((job) => job.retryConfig.retryCount === 5).map((job) => job.key),
-    ["retry5"],
-  );
-  for (const count of counts) assert.ok(count < 5, String(count));
+  assert.ok(counts.length >= 5);
+  // 5 is the largest value production accepted (recorded as accepted), 6 the smallest it refused
+  for (const count of counts)
+    assert.ok(Number.isInteger(count) && count >= 0 && count <= 5, String(count));
   assert.equal(
     DECLARED.schedRetryV2.retryConfig.retryCount,
     4,
-    "the largest value production's text allows",
+    "the deployed control keeps the value of the earlier runs",
   );
   const source = readFileSync(join(here, "../fixture/index.js"), "utf8");
   assert.match(

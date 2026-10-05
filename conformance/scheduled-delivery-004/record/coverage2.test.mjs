@@ -47,8 +47,8 @@ const PUBSUB = `https://pubsub.googleapis.com/v1/projects/${P}`;
 const GCF = "https://cloudfunctions.googleapis.com";
 const FN = `/projects/${P}/locations/us-central1/functions`;
 const AR = `https://artifactregistry.googleapis.com/v1/projects/${P}/locations/us-central1/repositories`;
-const JOB = "firebase-schedule-schedOkV2-us-central1";
-const SUB = "fe-sd-" + RUN + "-pull-schedokv1";
+const JOB = "firebase-schedule-declNullV2-us-central1";
+const SUB = "fe-sd-" + RUN + "-pull-schedfailv1";
 const spec = (method, url, json) => ({
   id: "t",
   method,
@@ -74,10 +74,10 @@ const TABLE = [
   ["GET", `https://appengine.googleapis.com/v1/apps/${P}`, undefined, false],
   ["GET", `${GCF}/v1/projects/${P}/locations/-/functions`, undefined, false],
   ["GET", `${GCF}/v2/projects/${P}/locations/us-central1/functions`, undefined, false],
-  ["GET", `${GCF}/v1${FN}/schedOkV1`, undefined, false],
-  ["GET", `${GCF}/v2${FN}/schedOkV2`, undefined, false],
-  ["DELETE", `${GCF}/v1${FN}/schedOkV1`, undefined, true],
-  ["DELETE", `${GCF}/v2${FN}/schedOkV2`, undefined, true],
+  ["GET", `${GCF}/v1${FN}/schedFailV1`, undefined, false],
+  ["GET", `${GCF}/v2${FN}/declNullV2`, undefined, false],
+  ["DELETE", `${GCF}/v1${FN}/schedFailV1`, undefined, true],
+  ["DELETE", `${GCF}/v2${FN}/declNullV2`, undefined, true],
   ["GET", `${GCF}/v1/operations/del-1`, undefined, false],
   ["GET", `${GCF}/v2/projects/${P}/locations/us-central1/operations/del-1`, undefined, false],
   ["GET", `https://run.googleapis.com/v2/projects/${P}/locations/-/services`, undefined, false],
@@ -89,16 +89,16 @@ const TABLE = [
   ["POST", `${SCHED}/${JOB}:run`, {}, true],
   ["POST", `${SCHED}/${JOB}:pause`, {}, true],
   ["DELETE", `${SCHED}/${JOB}`, undefined, true],
-  ["POST", SCHED, { name: `projects/${P}/locations/us-central1/jobs/fe-sd-${RUN}-zero` }, true],
+  ["POST", SCHED, { name: `projects/${P}/locations/us-central1/jobs/fe-sd-${RUN}-count` }, true],
   ["GET", `${PUBSUB}/topics?pageSize=1000`, undefined, false],
   ["GET", `${PUBSUB}/subscriptions?pageSize=1000`, undefined, false],
-  ["GET", `${PUBSUB}/topics/firebase-schedule-schedOkV1-us-central1`, undefined, false],
-  ["DELETE", `${PUBSUB}/topics/firebase-schedule-schedOkV1-us-central1`, undefined, true],
+  ["GET", `${PUBSUB}/topics/firebase-schedule-schedFailV1-us-central1`, undefined, false],
+  ["DELETE", `${PUBSUB}/topics/firebase-schedule-schedFailV1-us-central1`, undefined, true],
   [
     "PUT",
     `${PUBSUB}/subscriptions/${SUB}`,
     {
-      topic: `projects/${P}/topics/firebase-schedule-schedOkV1-us-central1`,
+      topic: `projects/${P}/topics/firebase-schedule-schedFailV1-us-central1`,
       ackDeadlineSeconds: 10,
     },
     true,
@@ -179,11 +179,6 @@ test("the extra jobs and the subscription name are exactly what the packet state
   assert.deepEqual(
     EXTRA_JOBS.map((j) => [j.key, j.retryConfig]),
     [
-      ["zero", { retryCount: 0 }],
-      [
-        "duration",
-        { maxRetryDuration: "30s", minBackoffDuration: "4s", maxBackoffDuration: "10s" },
-      ],
       [
         "count",
         {
@@ -194,20 +189,17 @@ test("the extra jobs and the subscription name are exactly what the packet state
         },
       ],
       [
-        "fraction",
-        {
-          retryCount: 3,
-          maxRetryDuration: "20.5s",
-          minBackoffDuration: "2.5s",
-          maxBackoffDuration: "20s",
-          maxDoublings: 1,
-        },
+        "double0",
+        { retryCount: 5, minBackoffDuration: "3s", maxBackoffDuration: "100s", maxDoublings: 0 },
       ],
       [
-        "zerobackoff",
-        { maxRetryDuration: "10s", minBackoffDuration: "0s", maxBackoffDuration: "0s" },
+        "double1",
+        { retryCount: 5, minBackoffDuration: "4s", maxBackoffDuration: "100s", maxDoublings: 1 },
       ],
-      ["retry5", { retryCount: 5 }],
+      [
+        "double3",
+        { retryCount: 5, minBackoffDuration: "2s", maxBackoffDuration: "100s", maxDoublings: 3 },
+      ],
     ],
   );
   assert.equal(subscriptionName("x"), "projects/fireemu-oracle-sbx/subscriptions/x");

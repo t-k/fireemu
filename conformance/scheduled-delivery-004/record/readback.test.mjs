@@ -42,36 +42,36 @@ test("the constants are ten minutes and sixty requests", () => {
   assert.equal(READBACK_MAX_REQUESTS, 60);
 });
 
-test("every name of the run is read directly: six functions, twelve jobs, three topics, three subscriptions", () => {
+test("every name of the run is read directly: six functions, ten jobs, two topics, two subscriptions", () => {
   const names = readbackNames(RUN);
-  assert.equal(names.length, 24);
+  assert.equal(names.length, 20);
   assert.deepEqual(
     names.slice(0, 6).map(([label]) => label),
     [
-      "function-schedOkV2",
       "function-schedRetryV2",
-      "function-schedSlowV2",
-      "function-schedOkV1",
+      "function-declNullV2",
+      "function-declOmitV2",
+      "function-declTimeoutV2",
       "function-schedFailV1",
       "function-schedRetryV1",
     ],
   );
-  assert.ok(names[0][1].endsWith("/v2/" + functionName("schedOkV2")));
+  assert.ok(names[1][1].endsWith("/v2/" + functionName("declNullV2")));
   assert.ok(
-    names[3][1].includes("/v1/projects/") && names[3][1].endsWith(functionName("schedOkV1")),
+    names[4][1].includes("/v1/projects/") && names[4][1].endsWith(functionName("schedFailV1")),
   );
   assert.deepEqual(
-    names.slice(12, 18).map(([label]) => label),
-    ["job-zero", "job-duration", "job-count", "job-fraction", "job-zerobackoff", "job-retry5"],
+    names.slice(12, 16).map(([label]) => label),
+    ["job-count", "job-double0", "job-double1", "job-double3"],
   );
-  assert.ok(names[12][1].endsWith("/jobs/fe-sd-" + RUN + "-zero"));
+  assert.ok(names[12][1].endsWith("/jobs/fe-sd-" + RUN + "-count"));
   assert.ok(names.at(-1)[1].endsWith("/subscriptions/fe-sd-" + RUN + "-pull-schedretryv1"));
 });
 
 test("an empty project reads as all absent, with only GETs and every name and list read", async () => {
   const { result, rows, world } = await readback();
   assert.equal(result.allAbsent, true);
-  assert.equal(Object.keys(result.names).length, 24);
+  assert.equal(Object.keys(result.names).length, 20);
   assert.ok(Object.values(result.names).every((n) => n.status === 404 && n.absent === true));
   assert.deepEqual(result.incompleteReads, []);
   assert.equal(result.authStop, null);
@@ -83,7 +83,7 @@ test("an empty project reads as all absent, with only GETs and every name and li
   assert.deepEqual(
     sent(rows)
       .map((r) => r.id)
-      .slice(24),
+      .slice(20),
     [
       "list-functions-v1",
       "list-functions-v2",
@@ -93,20 +93,20 @@ test("an empty project reads as all absent, with only GETs and every name and li
       "list-subscriptions",
     ],
   );
-  assert.equal(result.attempted, 30);
+  assert.equal(result.attempted, 26);
 });
 
 test("a name that still reads 200, or any answer but 404 NOT_FOUND, is not absent, and so nothing closes", async () => {
   for (const [hook, label] of [
-    [() => reply(200, { name: "x" }), "function-schedOkV2"],
-    [() => error(503, "UNAVAILABLE"), "function-schedOkV2"],
-    [() => error(404, "OTHER"), "function-schedOkV2"],
-    [() => reply(404, {}), "function-schedOkV2"],
+    [() => reply(200, { name: "x" }), "function-declNullV2"],
+    [() => error(503, "UNAVAILABLE"), "function-declNullV2"],
+    [() => error(404, "OTHER"), "function-declNullV2"],
+    [() => reply(404, {}), "function-declNullV2"],
   ]) {
     const { result } = await readback({
       hooks: {
         ["GET " +
-        "cloudfunctions.googleapis.com/v2/projects/fireemu-oracle-sbx/locations/us-central1/functions/schedOkV2"]:
+        "cloudfunctions.googleapis.com/v2/projects/fireemu-oracle-sbx/locations/us-central1/functions/declNullV2"]:
           async () => hook(),
       },
     });
@@ -117,26 +117,26 @@ test("a name that still reads 200, or any answer but 404 NOT_FOUND, is not absen
 
 test("a run's own job, topic or subscription in a list keeps the read-back from closing", async () => {
   const jobs = await readback({}, (w) =>
-    w.jobs.set(scheduleId("schedOkV2"), {
-      name: "projects/x/locations/y/jobs/" + scheduleId("schedOkV2"),
+    w.jobs.set(scheduleId("declNullV2"), {
+      name: "projects/x/locations/y/jobs/" + scheduleId("declNullV2"),
     }),
   );
-  assert.deepEqual(jobs.result.lists.jobs, [scheduleId("schedOkV2")]);
+  assert.deepEqual(jobs.result.lists.jobs, [scheduleId("declNullV2")]);
   assert.equal(jobs.result.allAbsent, false);
-  const topics = await readback({}, (w) => w.topics.add(scheduleId("schedFailV1")));
-  assert.deepEqual(topics.result.lists.topics, [scheduleId("schedFailV1")]);
+  const topics = await readback({}, (w) => w.topics.add(scheduleId("schedRetryV1")));
+  assert.deepEqual(topics.result.lists.topics, [scheduleId("schedRetryV1")]);
   assert.equal(topics.result.allAbsent, false);
   const subs = await readback({}, (w) =>
-    w.subs.set("projects/fireemu-oracle-sbx/subscriptions/fe-sd-" + RUN + "-pull-schedokv1", {
+    w.subs.set("projects/fireemu-oracle-sbx/subscriptions/fe-sd-" + RUN + "-pull-schedfailv1", {
       topic: "t",
       queue: [],
     }),
   );
-  assert.deepEqual(subs.result.lists.subscriptions, ["fe-sd-" + RUN + "-pull-schedokv1"]);
+  assert.deepEqual(subs.result.lists.subscriptions, ["fe-sd-" + RUN + "-pull-schedfailv1"]);
   assert.equal(subs.result.allAbsent, false);
   const fns = await readback({}, (w) =>
-    w.functionsV2.set(functionName("schedOkV2"), {
-      name: functionName("schedOkV2"),
+    w.functionsV2.set(functionName("declNullV2"), {
+      name: functionName("declNullV2"),
       state: "ACTIVE",
     }),
   );
@@ -182,15 +182,15 @@ test("a list that cannot be read, or runs over five pages, is incomplete and not
 test("a rejected credential ends the read-back and nothing closes", async () => {
   const { result, rows } = await readback({
     hooks: {
-      "GET pubsub.googleapis.com/v1/projects/fireemu-oracle-sbx/topics/firebase-schedule-schedOkV1-us-central1":
+      "GET pubsub.googleapis.com/v1/projects/fireemu-oracle-sbx/topics/firebase-schedule-schedFailV1-us-central1":
         async () => error(403, "PERMISSION_DENIED"),
     },
   });
-  assert.deepEqual(result.authStop, { id: "readback-topic-schedOkV1", status: 403 });
+  assert.deepEqual(result.authStop, { id: "readback-topic-schedFailV1", status: 403 });
   assert.equal(result.allAbsent, false);
   assert.equal(
     sent(rows).at(-1).id,
-    "readback-topic-schedOkV1",
+    "readback-topic-schedFailV1",
     "nothing after the refused request",
   );
 });
@@ -199,11 +199,11 @@ test("a lost answer is unknown and keeps the read-back from closing", async () =
   const { result } = await readback({
     hooks: {
       ["GET cloudscheduler.googleapis.com/v1/projects/fireemu-oracle-sbx/locations/us-central1/jobs/" +
-      scheduleId("schedOkV2")]: async () => "throw",
+      scheduleId("declNullV2")]: async () => "throw",
     },
   });
   assert.equal(result.unknown, 1);
-  assert.equal(result.names["job-schedOkV2"].status, null);
+  assert.equal(result.names["job-declNullV2"].status, null);
   assert.equal(result.allAbsent, false);
 });
 
@@ -211,7 +211,7 @@ test("the read-back's allowlist lets reads of the run's names through and refuse
   const allow = readbackAllow(RUN, NUMBER);
   const base =
     "https://cloudscheduler.googleapis.com/v1/projects/fireemu-oracle-sbx/locations/us-central1/jobs/";
-  const job = scheduleId("schedOkV2");
+  const job = scheduleId("declNullV2");
   const spec = (method, url, json) => ({
     id: "t",
     method,
@@ -228,20 +228,20 @@ test("the read-back's allowlist lets reads of the run's names through and refuse
       "POST",
       "https://pubsub.googleapis.com/v1/projects/fireemu-oracle-sbx/subscriptions/fe-sd-" +
         RUN +
-        "-pull-schedokv1:pull",
+        "-pull-schedfailv1:pull",
       { maxMessages: 1 },
     ),
     spec(
       "PUT",
       "https://pubsub.googleapis.com/v1/projects/fireemu-oracle-sbx/subscriptions/fe-sd-" +
         RUN +
-        "-pull-schedokv1",
+        "-pull-schedfailv1",
       {
-        topic: "projects/fireemu-oracle-sbx/topics/" + scheduleId("schedOkV1"),
+        topic: "projects/fireemu-oracle-sbx/topics/" + scheduleId("schedFailV1"),
         ackDeadlineSeconds: 10,
       },
     ),
-    spec("DELETE", "https://cloudfunctions.googleapis.com/v2/" + functionName("schedOkV2")),
+    spec("DELETE", "https://cloudfunctions.googleapis.com/v2/" + functionName("declNullV2")),
     spec("POST", "https://logging.googleapis.com/v2/entries:list", {
       resourceNames: ["projects/fireemu-oracle-sbx"],
       filter: "x",
@@ -408,12 +408,12 @@ test("the command reads, writes its own journal and result, and exits 0 only whe
     assert.equal(
       sink.lines.at(-1)[1],
       JSON.stringify(
-        { runId: RUN, allAbsent: true, attempted: 30, unknown: 0, unconfirmedCreates: [] },
+        { runId: RUN, allAbsent: true, attempted: 26, unknown: 0, unconfirmedCreates: [] },
         null,
         2,
       ),
     );
-    world.topics.add(scheduleId("schedOkV1"));
+    world.topics.add(scheduleId("schedFailV1"));
     const again = io();
     const second = await main(ARGS(run, ["--send", "--expect-digest", DIGEST]), {
       env: ENV,

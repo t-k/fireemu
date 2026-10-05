@@ -62,10 +62,10 @@ test("the result of the CLI delete is journaled as its own row", async () => {
 });
 
 test("a leftover delete that returns no usable operation is not an error of its step", async () => {
-  const key = "DELETE " + FN2("schedOkV2");
+  const key = "DELETE " + FN2("declNullV2");
   const gone = (w) => {
-    w.functionsV2.delete(functionName("schedOkV2"));
-    w.runServices.delete("schedokv2");
+    w.functionsV2.delete(functionName("declNullV2"));
+    w.runServices.delete("declnullv2");
   };
   for (const answer of [
     (w) => (gone(w), reply(200, {})),
@@ -75,7 +75,7 @@ test("a leftover delete that returns no usable operation is not an error of its 
     (w) => (gone(w), reply(200, { done: false })),
   ]) {
     const { result } = await go({
-      leaveOnDelete: ["schedOkV2"],
+      leaveOnDelete: ["declNullV2"],
       hooks: { [key]: async ({ w }) => answer(w) },
     });
     assert.equal(result.cleanup.errors, undefined);
@@ -84,20 +84,24 @@ test("a leftover delete that returns no usable operation is not an error of its 
 });
 
 test("a failure is recorded under the name of the step that failed", async () => {
-  const sub = await go({}, { ...SHORT, save: failOnce("delete-subscription-schedOkV1") });
+  const sub = await go({}, { ...SHORT, save: failOnce("delete-subscription-schedFailV1") });
   assert.deepEqual(
     sub.result.cleanup.errors.map((e) => e.step),
-    ["subscription-schedOkV1"],
+    ["subscription-schedFailV1"],
   );
   const topicAdded = async (o, w) => {
     const real = await w.runCli(o);
-    if (o.action === "delete") w.topics.add("firebase-schedule-schedFailV1-us-central1");
+    if (o.action === "delete") w.topics.add("firebase-schedule-schedRetryV1-us-central1");
     return real;
   };
-  const topic = await go({}, { ...SHORT, save: failOnce("topic-present-schedFailV1") }, topicAdded);
+  const topic = await go(
+    {},
+    { ...SHORT, save: failOnce("topic-present-schedRetryV1") },
+    topicAdded,
+  );
   assert.deepEqual(
     topic.result.cleanup.errors.map((e) => e.step),
-    ["topic-schedFailV1"],
+    ["topic-schedRetryV1"],
   );
 });
 
@@ -141,9 +145,9 @@ test("a final list that cannot be read is an answer, not a thrown error, in each
 
 test("a cleanup that never settles sleeps half a minute after every poll that found something", async () => {
   const { sleeps } = await go({
-    leaveOnDelete: ["schedOkV2"],
+    leaveOnDelete: ["declNullV2"],
     hooks: {
-      ["DELETE " + FN2("schedOkV2")]: async () =>
+      ["DELETE " + FN2("declNullV2")]: async () =>
         reply(200, { name: "projects/x/operations/y", done: true }),
     },
   });

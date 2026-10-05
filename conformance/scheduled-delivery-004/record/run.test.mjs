@@ -61,10 +61,14 @@ test("a clean run records, cleans up and may close", async () => {
   assert.equal(result.readBackRequired, false);
   assert.equal(result.unknownMutations, 0);
   assert.deepEqual(result.incompleteReads, []);
-  assert.deepEqual(world.cliRuns, ["dry-run", "deploy", "delete"], "each CLI action once");
+  assert.deepEqual(
+    world.cliRuns,
+    ["dry-run", "deploy", "deploy", "deploy", "delete"],
+    "the dry run, the first deploy, the two round deploys and the delete, each once",
+  );
   assert.equal(result.cleanup.verified, true);
   assert.equal(result.passes.length, 2);
-  assert.ok(result.passes.every((p) => p.complete && p.forced.length === 11));
+  assert.ok(result.passes.every((p) => p.complete && p.forced.length === 10));
   assert.equal(
     world.jobs.size +
       world.topics.size +
@@ -74,7 +78,7 @@ test("a clean run records, cleans up and may close", async () => {
       world.runServices.size,
     0,
   );
-  assert.ok(result.frames.schedOkV2 > 0 && result.frames.schedOkV1 > 0);
+  assert.ok(result.frames.declNullV2 > 0 && result.frames.schedFailV1 > 0);
   assert.ok(result.pulledMessages > 0);
   assert.ok(result.schedulerEntries > 0);
   assert.equal(result.attempted <= 420, true);
@@ -84,13 +88,13 @@ test("a clean run records, cleans up and may close", async () => {
   const at = (needle) => states.findIndex((s) => s.startsWith(needle));
   assert.ok(
     at("identity") < at("cli-dry-run") &&
-      at("cli-dry-run") < at("issue-function-schedOkV2") &&
-      at("issue-function-schedOkV2") < at("cli-deploy"),
+      at("cli-dry-run") < at("issue-function-declNullV2") &&
+      at("issue-function-declNullV2") < at("cli-deploy"),
   );
-  assert.ok(at("cli-deploy") < at("create-subscription-schedOkV1"));
+  assert.ok(at("cli-deploy") < at("create-subscription-schedFailV1"));
   assert.ok(
-    ids(journal).indexOf("create-subscription-schedOkV1") <
-      ids(journal).indexOf("run-1-schedOkV2-us-central1"),
+    ids(journal).indexOf("create-subscription-schedFailV1") <
+      ids(journal).indexOf("run-1-declNullV2-us-central1"),
   );
 });
 
@@ -98,9 +102,9 @@ test("every name that is created is journaled as issued before the request that 
   const { journal } = await go();
   const issued = journal.filter((r) => r.state === "issued");
   assert.equal(issued.filter((r) => r.kind === "function").length, 6);
-  assert.equal(issued.filter((r) => r.kind === "job").length, 12);
-  assert.equal(issued.filter((r) => r.kind === "topic").length, 3);
-  assert.equal(issued.filter((r) => r.kind === "subscription").length, 3);
+  assert.equal(issued.filter((r) => r.kind === "job").length, 10);
+  assert.equal(issued.filter((r) => r.kind === "topic").length, 2);
+  assert.equal(issued.filter((r) => r.kind === "subscription").length, 2);
   for (const row of issued.filter((r) => r.transport === "rest")) {
     const issuedAt = journal.indexOf(row);
     const createdAt = journal.findIndex(
@@ -126,8 +130,8 @@ for (const [label, worldSetup, because] of [
   [
     "a function of this name already exists",
     (w) =>
-      w.functionsV2.set(functionName("schedOkV2"), {
-        name: functionName("schedOkV2"),
+      w.functionsV2.set(functionName("declNullV2"), {
+        name: functionName("declNullV2"),
         state: "ACTIVE",
       }),
     "namespace",
@@ -136,7 +140,7 @@ for (const [label, worldSetup, because] of [
   ["a Pub/Sub topic exists", (w) => w.topics.add("other"), "namespace"],
   [
     "a Cloud Run service of one of the names exists",
-    (w) => w.runServices.add("schedokv2"),
+    (w) => w.runServices.add("declnullv2"),
     "namespace",
   ],
 ]) {
@@ -189,7 +193,7 @@ test("a project whose App Engine location is another region stops before any CLI
 });
 
 test("a function of one of the names in another region stops preflight, and one left there is not closed", async () => {
-  const strayName = "projects/fireemu-oracle-sbx/locations/us-east1/functions/schedOkV2";
+  const strayName = "projects/fireemu-oracle-sbx/locations/us-east1/functions/declNullV2";
   const before = createWorld();
   before.functionsV2.set(strayName, { name: strayName, state: "ACTIVE", environment: "GEN_2" });
   const journal = [];
@@ -208,7 +212,7 @@ test("a function of one of the names in another region stops preflight, and one 
   // Left behind by the deploy (not ours to delete): the run cleans what it owns and says it is not clean.
   const { result, world } = await go({
     hooks: {
-      "DELETE cloudfunctions.googleapis.com/v2/projects/fireemu-oracle-sbx/locations/us-central1/functions/schedOkV2":
+      "DELETE cloudfunctions.googleapis.com/v2/projects/fireemu-oracle-sbx/locations/us-central1/functions/declNullV2":
         async () => undefined,
     },
   });
@@ -303,7 +307,7 @@ test("a forced run answered 503 is an unknown mutation: the run still cleans up 
     hooks: {
       ["POST " +
       "/v1/projects/fireemu-oracle-sbx/locations/us-central1/jobs/" +
-      scheduleId("schedOkV2") +
+      scheduleId("declNullV2") +
       ":run"]: async () => error(503, "UNAVAILABLE"),
     },
   });
@@ -341,7 +345,7 @@ test("a 401 anywhere stops the REST requests at once, and the one CLI delete sti
 test("a 403 on a write stops the run, and a 403 on the optional reads is data", async () => {
   const stopped = await go({
     hooks: {
-      ["PUT /v1/projects/fireemu-oracle-sbx/subscriptions/fe-sd-" + RUN + "-pull-schedokv1"]:
+      ["PUT /v1/projects/fireemu-oracle-sbx/subscriptions/fe-sd-" + RUN + "-pull-schedfailv1"]:
         async () => error(403, "PERMISSION_DENIED"),
     },
   });
@@ -369,11 +373,11 @@ test("a 403 on a write stops the run, and a 403 on the optional reads is data", 
 // ---- cleanup -------------------------------------------------------------------------------------
 
 test("a leftover function is deleted once through REST, case-exact, after a fresh complete list shows it", async () => {
-  const { world, result } = await go({ leaveOnDelete: ["schedOkV2", "schedOkV1"] });
+  const { world, result } = await go({ leaveOnDelete: ["declNullV2", "schedFailV1"] });
   const deletes = world.calls.filter((c) => c.startsWith("DELETE cloudfunctions.googleapis.com"));
   assert.deepEqual(deletes, [
-    "DELETE cloudfunctions.googleapis.com/v2/projects/fireemu-oracle-sbx/locations/us-central1/functions/schedOkV2",
-    "DELETE cloudfunctions.googleapis.com/v1/projects/fireemu-oracle-sbx/locations/us-central1/functions/schedOkV1",
+    "DELETE cloudfunctions.googleapis.com/v2/projects/fireemu-oracle-sbx/locations/us-central1/functions/declNullV2",
+    "DELETE cloudfunctions.googleapis.com/v1/projects/fireemu-oracle-sbx/locations/us-central1/functions/schedFailV1",
   ]);
   assert.equal(result.cleanup.verified, true);
   assert.equal(result.outcome, "calendar-delivery-recorded");
@@ -381,9 +385,9 @@ test("a leftover function is deleted once through REST, case-exact, after a fres
 
 test("a leftover that the REST delete cannot remove is not re-sent and leaves the run needing recovery", async () => {
   const { world, result } = await go({
-    leaveOnDelete: ["schedOkV1"],
+    leaveOnDelete: ["schedFailV1"],
     hooks: {
-      "DELETE cloudfunctions.googleapis.com/v1/projects/fireemu-oracle-sbx/locations/us-central1/functions/schedOkV1":
+      "DELETE cloudfunctions.googleapis.com/v1/projects/fireemu-oracle-sbx/locations/us-central1/functions/schedFailV1":
         async () => error(503, "UNAVAILABLE"),
     },
   });
@@ -411,13 +415,13 @@ test("a job DELETE answered with the recorded 409 is repeated after sixty second
     leaveOnDelete: ALL_FUNCTIONS.slice(0, 0),
     hooks: {
       ["DELETE /v1/projects/fireemu-oracle-sbx/locations/us-central1/jobs/" +
-      extraJobId(RUN, "zero")]: async () => (first ? ((first = false), busy()) : undefined),
+      extraJobId(RUN, "count")]: async () => (first ? ((first = false), busy()) : undefined),
     },
   });
   assert.ok(sleeps.includes(60_000));
   assert.equal(
     world.calls.filter(
-      (c) => c.endsWith("jobs/" + extraJobId(RUN, "zero")) && c.startsWith("DELETE"),
+      (c) => c.endsWith("jobs/" + extraJobId(RUN, "count")) && c.startsWith("DELETE"),
     ).length,
     2,
   );
@@ -434,7 +438,7 @@ test("a job DELETE answered with the recorded 409 is repeated after sixty second
 });
 
 test("a job DELETE with an unknown answer is not re-sent, and the direct read decides", async () => {
-  const id = extraJobId(RUN, "duration");
+  const id = extraJobId(RUN, "double1");
   const { world, result } = await go({
     hooks: {
       ["DELETE /v1/projects/fireemu-oracle-sbx/locations/us-central1/jobs/" + id]: async () =>
@@ -451,7 +455,7 @@ test("a job DELETE with an unknown answer is not re-sent, and the direct read de
 });
 
 test("only issued names are ever deleted, and no DELETE precedes its function's CLI delete", async () => {
-  const { world } = await go({ leaveOnDelete: ["schedFailV1"] });
+  const { world } = await go({ leaveOnDelete: ["schedRetryV1"] });
   const allowed = new Set([
     ...ALL_FUNCTIONS.map(scheduleId),
     ...EXTRA_JOBS.map((job) => extraJobId(RUN, job.key)),
@@ -513,7 +517,7 @@ test("the extra jobs copy the deployed retry job's target and differ only in the
   const creates = journal.filter(
     (r) => r.state === "before-send" && r.id.startsWith("create-extra-"),
   );
-  assert.equal(creates.length, 6);
+  assert.equal(creates.length, 4);
   for (const row of creates) {
     assert.deepEqual(row.json.httpTarget, {
       uri: "https://schedretryv2-abc-uc.a.run.app",
@@ -525,18 +529,10 @@ test("the extra jobs copy the deployed retry job's target and differ only in the
   assert.deepEqual(
     creates.map((r) => Object.keys(r.json.retryConfig)),
     [
-      ["retryCount"],
-      ["maxRetryDuration", "minBackoffDuration", "maxBackoffDuration"],
       ["retryCount", "maxRetryDuration", "minBackoffDuration", "maxBackoffDuration"],
-      [
-        "retryCount",
-        "maxRetryDuration",
-        "minBackoffDuration",
-        "maxBackoffDuration",
-        "maxDoublings",
-      ],
-      ["maxRetryDuration", "minBackoffDuration", "maxBackoffDuration"],
-      ["retryCount"],
+      ["retryCount", "minBackoffDuration", "maxBackoffDuration", "maxDoublings"],
+      ["retryCount", "minBackoffDuration", "maxBackoffDuration", "maxDoublings"],
+      ["retryCount", "minBackoffDuration", "maxBackoffDuration", "maxDoublings"],
     ],
   );
 });

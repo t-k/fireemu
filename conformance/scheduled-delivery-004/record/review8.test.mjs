@@ -4,8 +4,7 @@
 // production answered; and one build is read once, however many functions and lists name it.
 import assert from "node:assert/strict";
 import test from "node:test";
-import { createGuard } from "./guard.mjs";
-import { EXTRA_JOBS, REGION, extraJobId, functionName } from "./plan.mjs";
+import { EXTRA_JOBS, FUNCTIONS, REGION, functionName } from "./plan.mjs";
 import { record } from "./run.mjs";
 import { NUMBER, createWorld } from "./world.mjs";
 
@@ -13,8 +12,6 @@ const RUN = "0123456789abcdef";
 const SHORT = { passes: 1, naturalWindowMs: 60_000 };
 const JOBS =
   "cloudscheduler.googleapis.com/v1/projects/fireemu-oracle-sbx/locations/us-central1/jobs";
-const FRACTION = extraJobId(RUN, "fraction");
-const COUNT = extraJobId(RUN, "count");
 // run 156715222b86ea44: the 400 of the fractional body, 158 bytes, as production wrote it
 const NANOS = "retryConfig.max_retry_duration.nanos cannot be set: invalid argument";
 const COUNT_REFUSAL =
@@ -51,37 +48,6 @@ const post = (world, retryConfig, id = "fe-sd-0123456789abcdef-probe") =>
       retryConfig,
     }),
   });
-
-test("the extra jobs: the count job is integer-valued with a window, the fraction job has the refused body", () => {
-  assert.deepEqual(
-    EXTRA_JOBS.map((job) => job.key),
-    ["zero", "duration", "count", "fraction", "zerobackoff", "retry5"],
-  );
-  const by = Object.fromEntries(EXTRA_JOBS.map((job) => [job.key, job]));
-  assert.deepEqual(by.count.retryConfig, {
-    retryCount: 3,
-    maxRetryDuration: "20s",
-    minBackoffDuration: "4s",
-    maxBackoffDuration: "10s",
-  });
-  assert.deepEqual(by.count.cases, ["count-and-duration-interaction"]);
-  // run 156715222b86ea44's refused body, unchanged
-  assert.deepEqual(by.fraction.retryConfig, {
-    retryCount: 3,
-    maxRetryDuration: "20.5s",
-    minBackoffDuration: "2.5s",
-    maxBackoffDuration: "20s",
-    maxDoublings: 1,
-  });
-  assert.deepEqual(by.fraction.cases, ["fractional-retry-duration"]);
-  // nothing fractional is left in the count job, whatever it carries
-  for (const value of Object.values(by.count.retryConfig))
-    assert.ok(!/\./.test(String(value)), String(value));
-  for (const key of ["zero", "duration", "retry5"]) {
-    assert.deepEqual(by[key].schedule, "0 0 1 1 *");
-    assert.equal(by[key].timeZone, "UTC");
-  }
-});
 
 test("the count and the window stop the chain at different attempts under the recorded backoff", () => {
   // Recorded gaps (run 156715222b86ea44): min 4 s, max 10 s, no count: attempts at 0, 4.6, 13.2, 23.7 s (gaps of
@@ -146,65 +112,10 @@ test("production's refusal of a retry count of 6 or more is answered by the doub
     );
 });
 
-test("a clean run: the count job is created, run, paused and deleted; the fraction job gets one refused POST and nothing else", async () => {
-  const { result, world, journal } = await go();
-  assert.deepEqual(result.extraAnswers.fraction, { status: 400, class: "4xx", message: NANOS });
-  assert.deepEqual(result.extraAnswers.count, { status: 200, class: "2xx", message: null });
-  assert.equal(world.jobs.has(FRACTION), false);
-  assert.equal(world.creates.includes(COUNT), true);
-  const mine = journal.filter(
-    (r) => r.state === "before-send" && String(r.id).includes("fraction"),
-  );
-  // the refused POST, its own direct read (the recorded absence) and the read-back at the end: no run, pause or delete
-  assert.deepEqual(
-    mine.map((r) => r.id),
-    ["create-extra-fraction", "settle-extra-fraction", "readback-gone-job-fe-sd-run-fraction"],
-  );
-  assert.equal(
-    journal.some(
-      (r) => String(r.id).includes("fraction") && /^(run-|pause-|delete-job-)/.test(r.id),
-    ),
-    false,
-  );
-  assert.ok(
-    journal.some(
-      (r) => r.id.startsWith("run-1-fe-sd-run-count") && r.state === "response-persisted",
-    ),
-  );
-  assert.equal(result.cleanup.readBack["job-" + FRACTION], true);
-  assert.equal(result.unknownMutations, 0);
-  assert.equal(result.closureReady, true);
-  assert.equal(result.outcome, "calendar-delivery-recorded");
-  assert.equal(
-    result.passes.every((p) => p.forced.length === 11),
-    true,
-  );
-});
-
-test("the allowlist lets the fraction job be created and nothing near its name", () => {
-  const guard = createGuard(RUN, NUMBER);
-  const create = (name) => ({
-    method: "POST",
-    url: "https://" + JOBS,
-    json: { name: "projects/fireemu-oracle-sbx/locations/us-central1/jobs/" + name },
-  });
-  assert.equal(guard.allow(create(FRACTION)), true);
-  assert.equal(guard.isMutation(create(FRACTION)), true);
-  for (const bad of [
-    "fe-sd-" + RUN + "-fractions",
-    "fe-sd-" + RUN + "-fract",
-    "fe-sd-fedcba9876543210-fraction",
-    "fe-sd-" + RUN + "-Fraction",
-  ])
-    assert.equal(guard.allow(create(bad)), false, bad);
-});
-
-// ---- S2: a build is read once ----
-
 const BUILD = "2e6013b5-c892-477d-b683-2e716972055b";
 const failedGen1Sharing = (w) => {
   w.afterDeploy = () => {
-    for (const fn of ["schedOkV1", "schedFailV1", "schedRetryV1"]) {
+    for (const fn of FUNCTIONS.v1) {
       const name = functionName(fn);
       w.functionsV1.set(name, {
         name,
@@ -218,7 +129,7 @@ const failedGen1Sharing = (w) => {
   w.buildLogs.set(BUILD, [{ insertId: "l1" }]);
 };
 
-test("three Gen1 functions of one failed build, each listed by both function lists, read that build and its log once", async () => {
+test("two Gen1 functions of one failed build, each listed by both function lists, read that build and its log once", async () => {
   const { result, journal } = await go({}, {}, failedGen1Sharing);
   const diagnose = journal.filter((r) => r.state === "before-send" && r.id.startsWith("diagnose-"));
   assert.equal(diagnose.length, 2, diagnose.map((r) => r.id).join());
@@ -226,7 +137,6 @@ test("three Gen1 functions of one failed build, each listed by both function lis
   // every function still has its own diagnostic row, with the one build's answer
   assert.deepEqual(result.buildDiagnostics.map((d) => d.function).toSorted(), [
     "schedFailV1",
-    "schedOkV1",
     "schedRetryV1",
   ]);
   assert.ok(result.buildDiagnostics.every((d) => d.buildId === BUILD && d.status === "FAILURE"));
@@ -234,7 +144,7 @@ test("three Gen1 functions of one failed build, each listed by both function lis
 
 test("the double lists a Gen1 function in the v2 list as production does (environment GEN_1)", async () => {
   const world = createWorld();
-  const name = functionName("schedOkV1");
+  const name = functionName("schedFailV1");
   world.functionsV1.set(name, {
     name,
     status: "ACTIVE",

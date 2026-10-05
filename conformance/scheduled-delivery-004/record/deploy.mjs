@@ -11,6 +11,7 @@ import {
   readdirSync,
   readFileSync,
   realpathSync,
+  writeFileSync,
 } from "node:fs";
 import { createRequire } from "node:module";
 import { dirname, isAbsolute, join } from "node:path";
@@ -106,7 +107,25 @@ export function prepareSource({ repoRoot, commit, target, depsDir }) {
       recursive: true,
       verbatimSymlinks: true,
     });
-  return { configPath: join(target, "conformance/scheduled-delivery-004/firebase.json"), fixtureDir };
+  return {
+    configPath: join(target, "conformance/scheduled-delivery-004/firebase.json"),
+    fixtureDir,
+  };
+}
+
+/**
+ * Writes the round number into the source copy (`const ROUND = <n>;` in the fixture's index.js) so that the source of a
+ * redeploy differs from the last one: the CLI skips a function whose source is unchanged, and so would leave its
+ * Scheduler job alone whatever it has become. Rounds are 2 and 3 (round 1 is the copy as archived).
+ */
+export function setRound(fixtureDir, round) {
+  if (![2, 3].includes(round)) throw new Error("the round must be 2 or 3");
+  const file = join(fixtureDir, "index.js");
+  const text = readFileSync(file, "utf8");
+  const marker = /^const ROUND = (\d+);$/gm;
+  if ((text.match(marker) ?? []).length !== 1)
+    throw new Error("the fixture must hold exactly one `const ROUND = <n>;` line");
+  writeFileSync(file, text.replace(marker, `const ROUND = ${round};`));
 }
 
 /** The SDK's own discovery of the fixture, offline, in the deploy's environment: the manifest's endpoints. */
@@ -209,7 +228,19 @@ const requireAbsolute = (options, keys) => {
 export function cliPlan(action, options) {
   if (!["deploy", "dry-run", "delete"].includes(action)) throw new Error("unknown CLI action");
   requireAbsolute(options, ["configHome", "configPath", "workDir", "home"]);
-  const only = ALL_FUNCTIONS.map((name) => `functions:${CODEBASE}:${name}`).join(",");
+  // A round redeploys a subset of the functions. The delete is always of every function: a partial delete is not part
+  // of this packet.
+  const names = options.names ?? ALL_FUNCTIONS;
+  if (
+    !Array.isArray(names) ||
+    names.length === 0 ||
+    new Set(names).size !== names.length ||
+    !names.every((name) => ALL_FUNCTIONS.includes(name))
+  )
+    throw new Error("the CLI plan's names must be distinct functions of the packet");
+  if (action === "delete" && options.names !== undefined)
+    throw new Error("a partial delete is not part of this packet");
+  const only = names.map((name) => `functions:${CODEBASE}:${name}`).join(",");
   const args =
     action === "delete"
       ? [
@@ -294,6 +325,7 @@ export const cliFailed = (result) =>
  */
 export function runCli({
   action,
+  label = action,
   plan,
   firebaseJs,
   node,
@@ -303,8 +335,8 @@ export function runCli({
   killGraceMs = 60_000,
 }) {
   mkdirSync(directory, { recursive: true, mode: 0o700 });
-  const out = openSync(join(directory, `cli-${action}-stdout.txt`), "wx", 0o600);
-  const err = openSync(join(directory, `cli-${action}-stderr.txt`), "wx", 0o600);
+  const out = openSync(join(directory, `cli-${label}-stdout.txt`), "wx", 0o600);
+  const err = openSync(join(directory, `cli-${label}-stderr.txt`), "wx", 0o600);
   return new Promise((resolve) => {
     const startedAt = Date.now();
     const child = spawnFn(node, [firebaseJs, ...plan.args], {
@@ -326,7 +358,7 @@ export function runCli({
       let errored = null;
       let unknown = [];
       try {
-        const text = readFileSync(join(directory, `cli-${action}-stdout.txt`), "utf8");
+        const text = readFileSync(join(directory, `cli-${label}-stdout.txt`), "utf8");
         errored = erroredFunctions(text.slice(-65_536));
         unknown = unknownWrites(text);
       } catch {

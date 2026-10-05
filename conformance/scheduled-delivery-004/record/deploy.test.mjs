@@ -204,10 +204,24 @@ test("the regions: every function must pin us-central1", () => {
 });
 
 const declared = () => ({
-  schedOkV2: {
+  declNullV2: {
     platform: "gcfv2",
     region: ["us-central1"],
-    scheduleTrigger: { schedule: "every 1 minutes" },
+    scheduleTrigger: {
+      schedule: "0 0 1 1 *",
+      retryConfig: {
+        retryCount: null,
+        maxDoublings: null,
+        maxRetrySeconds: null,
+        minBackoffSeconds: null,
+        maxBackoffSeconds: null,
+      },
+    },
+  },
+  declOmitV2: {
+    platform: "gcfv2",
+    region: ["us-central1"],
+    scheduleTrigger: { schedule: "0 0 1 1 *", retryConfig: {} },
   },
   schedRetryV2: {
     platform: "gcfv2",
@@ -218,16 +232,11 @@ const declared = () => ({
       retryConfig: { retryCount: 4, minBackoffSeconds: 4, maxBackoffSeconds: 50, maxDoublings: 2 },
     },
   },
-  schedSlowV2: {
+  declTimeoutV2: {
     platform: "gcfv2",
     region: ["us-central1"],
-    timeoutSeconds: 90,
-    scheduleTrigger: { schedule: "every 1 minutes" },
-  },
-  schedOkV1: {
-    platform: "gcfv1",
-    region: ["us-central1"],
-    scheduleTrigger: { schedule: "every 1 minutes", timeZone: "Asia/Tokyo" },
+    timeoutSeconds: 540,
+    scheduleTrigger: { schedule: "0 0 1 1 *", retryConfig: {} },
   },
   schedFailV1: {
     platform: "gcfv1",
@@ -254,28 +263,31 @@ test("the declarations are the ones the packet states, and each departure is nam
   assert.deepEqual(declarationProblems(declared()), []);
   const variants = [
     (e) => {
-      delete e.schedOkV2;
+      delete e.declNullV2;
     },
     (e) => {
-      e.extra = e.schedOkV2;
+      e.extra = e.declNullV2;
     },
     (e) => {
-      e.schedOkV2.platform = "gcfv1";
+      e.declNullV2.platform = "gcfv1";
     },
     (e) => {
-      e.schedOkV2.scheduleTrigger.schedule = "every 2 minutes";
+      e.declNullV2.scheduleTrigger.schedule = "every 2 minutes";
+    },
+    (e) => {
+      e.declOmitV2.scheduleTrigger.retryConfig = { retryCount: 1 };
     },
     (e) => {
       e.schedRetryV2.scheduleTrigger.timeZone = "UTC";
     },
     (e) => {
-      e.schedOkV1.scheduleTrigger.timeZone = undefined;
+      e.schedFailV1.scheduleTrigger.timeZone = "Asia/Tokyo";
     },
     (e) => {
       e.schedRetryV2.scheduleTrigger.retryConfig.retryCount = 6;
     },
     (e) => {
-      e.schedSlowV2.timeoutSeconds = 60;
+      e.declTimeoutV2.timeoutSeconds = 60;
     },
     (e) => {
       e.schedRetryV1.scheduleTrigger.retryConfig.retryCount = 2;
@@ -293,7 +305,7 @@ test("the declarations are the ones the packet states, and each departure is nam
     assert.ok(declarationProblems(e).length > 0, "variant " + index);
   }
   const zoned = declared();
-  zoned.schedOkV2.scheduleTrigger.timeZone = "Asia/Tokyo";
+  zoned.declNullV2.scheduleTrigger.timeZone = "Asia/Tokyo";
   assert.equal(
     declarationProblems(zoned).length,
     1,
@@ -389,51 +401,67 @@ test("readiness reads names case-exact for functions and lower-case for Cloud Ru
   const all = summarize({
     v1: {
       functions: [
-        fn1("schedOkV1", "ACTIVE"),
         fn1("schedFailV1", "ACTIVE"),
+        fn1("schedRetryV1", "ACTIVE"),
         fn1("schedRetryV1", "ACTIVE"),
       ],
     },
     v2: {
       functions: [
-        fn2("schedOkV2", "ACTIVE"),
+        fn2("declNullV2", "ACTIVE"),
+        fn2("declOmitV2", "ACTIVE"),
         fn2("schedRetryV2", "ACTIVE"),
-        fn2("schedSlowV2", "ACTIVE"),
+        fn2("declTimeoutV2", "ACTIVE"),
       ],
     },
-    run: { services: [service("schedokv2"), service("schedretryv2"), service("schedslowv2")] },
+    run: {
+      services: [
+        service("declnullv2"),
+        service("declomitv2"),
+        service("schedretryv2"),
+        service("decltimeoutv2"),
+      ],
+    },
   });
   assert.equal(allActive(all), true);
   assert.equal(nonePresent(all), false);
   // A v2 function that is ACTIVE with no Run service is not ready; a Run service under the cased name does not count.
   const noRun = summarize({
-    v1: { functions: [fn1("schedOkV1", "ACTIVE"), fn1("schedFailV1", "ACTIVE")] },
+    v1: { functions: [fn1("schedFailV1", "ACTIVE"), fn1("schedRetryV1", "ACTIVE")] },
     v2: {
       functions: [
-        fn2("schedOkV2", "ACTIVE"),
+        fn2("declNullV2", "ACTIVE"),
+        fn2("declOmitV2", "ACTIVE"),
         fn2("schedRetryV2", "ACTIVE"),
-        fn2("schedSlowV2", "ACTIVE"),
+        fn2("declTimeoutV2", "ACTIVE"),
       ],
     },
-    run: { services: [service("schedOkV2"), service("schedretryv2"), service("schedslowv2")] },
+    run: {
+      services: [
+        service("declNullV2"),
+        service("declomitv2"),
+        service("schedretryv2"),
+        service("decltimeoutv2"),
+      ],
+    },
   });
-  assert.equal(noRun.schedOkV2.active, false);
+  assert.equal(noRun.declNullV2.active, false);
   assert.equal(allActive(noRun), false);
   // Another state, another status, the wrong case of a function: not active, not present.
   const odd = summarize({
     v1: {
       functions: [
-        fn1("schedOkV1", "DEPLOYING"),
-        { name: functionName("schedokv1"), status: "ACTIVE" },
+        fn1("schedFailV1", "DEPLOYING"),
+        { name: functionName("schedfailv1"), status: "ACTIVE" },
       ],
     },
-    v2: { functions: [fn2("schedOkV2", "FAILED")] },
+    v2: { functions: [fn2("declNullV2", "FAILED")] },
     run: { services: [] },
   });
-  assert.deepEqual(odd.schedOkV1, { present: true, active: false, stray: false });
-  assert.deepEqual(odd.schedFailV1, { present: false, active: false, stray: false });
-  assert.equal(odd.schedOkV2.present, true);
-  assert.equal(odd.schedOkV2.active, false);
+  assert.deepEqual(odd.schedFailV1, { present: true, active: false, stray: false });
+  assert.deepEqual(odd.schedRetryV1, { present: false, active: false, stray: false });
+  assert.equal(odd.declNullV2.present, true);
+  assert.equal(odd.declNullV2.active, false);
 });
 
 test("a function of one of the names in another region is a stray, and a stray is not an empty project", () => {
@@ -442,21 +470,21 @@ test("a function of one of the names in another region is a stray, and a stray i
     v2: {
       functions: [
         {
-          name: "projects/fireemu-oracle-sbx/locations/us-east1/functions/schedOkV2",
+          name: "projects/fireemu-oracle-sbx/locations/us-east1/functions/declNullV2",
           state: "ACTIVE",
         },
       ],
     },
     run: {},
   });
-  assert.equal(stray.schedOkV2.stray, true);
-  assert.equal(stray.schedOkV2.present, false, "it is not the function this run deploys");
+  assert.equal(stray.declNullV2.stray, true);
+  assert.equal(stray.declNullV2.present, false, "it is not the function this run deploys");
   assert.equal(nonePresent(stray), false);
   const v1stray = summarize({
     v1: {
       functions: [
         {
-          name: "projects/fireemu-oracle-sbx/locations/us-east1/functions/schedOkV1",
+          name: "projects/fireemu-oracle-sbx/locations/us-east1/functions/schedFailV1",
           status: "ACTIVE",
         },
       ],
@@ -464,9 +492,9 @@ test("a function of one of the names in another region is a stray, and a stray i
     v2: {},
     run: {},
   });
-  assert.equal(v1stray.schedOkV1.stray, true);
+  assert.equal(v1stray.schedFailV1.stray, true);
   assert.equal(nonePresent(v1stray), false);
-  assert.equal(summarize({ v1: {}, v2: {}, run: {} }).schedOkV2.stray, false);
+  assert.equal(summarize({ v1: {}, v2: {}, run: {} }).declNullV2.stray, false);
   // A function with another id in another region is another function.
   assert.equal(
     summarize({
@@ -480,7 +508,7 @@ test("a function of one of the names in another region is a stray, and a stray i
         ],
       },
       run: {},
-    }).schedOkV2.stray,
+    }).declNullV2.stray,
     false,
   );
 });
@@ -490,12 +518,12 @@ test("nothing is left only when no function and no Run service remains", () => {
   assert.equal(nonePresent(empty), true);
   assert.equal(allActive(empty), false);
   assert.equal(
-    nonePresent(summarize({ v1: {}, v2: {}, run: { services: [service("schedokv2")] } })),
+    nonePresent(summarize({ v1: {}, v2: {}, run: { services: [service("declnullv2")] } })),
     false,
   );
   assert.equal(
     nonePresent(
-      summarize({ v1: { functions: [fn1("schedOkV1", "DELETE_IN_PROGRESS")] }, v2: {}, run: {} }),
+      summarize({ v1: { functions: [fn1("schedFailV1", "DELETE_IN_PROGRESS")] }, v2: {}, run: {} }),
     ),
     false,
   );

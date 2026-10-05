@@ -23,28 +23,26 @@ const FN = "/projects/" + P + "/locations/us-central1/functions";
 const yes = (r) => assert.equal(guard.allow(r), true, r.method + " " + r.url);
 const no = (r) => assert.equal(guard.allow(r), false, r.method + " " + r.url);
 
-test("the ids the recorder may touch: six deployed jobs, six extra jobs, three pull subscriptions", () => {
-  assert.equal(jobIds(RUN).length, 12);
+test("the ids the recorder may touch: six deployed jobs, four extra jobs, two pull subscriptions", () => {
+  assert.equal(jobIds(RUN).length, 10);
   assert.deepEqual(
     jobIds(RUN)
       .slice(0, 6)
       .map((id) => id.replace(/-us-central1$/, "")),
     [
-      "firebase-schedule-schedOkV2",
       "firebase-schedule-schedRetryV2",
-      "firebase-schedule-schedSlowV2",
-      "firebase-schedule-schedOkV1",
+      "firebase-schedule-declNullV2",
+      "firebase-schedule-declOmitV2",
+      "firebase-schedule-declTimeoutV2",
       "firebase-schedule-schedFailV1",
       "firebase-schedule-schedRetryV1",
     ],
   );
   assert.deepEqual(pullIds(RUN), [
-    "fe-sd-" + RUN + "-pull-schedokv1",
     "fe-sd-" + RUN + "-pull-schedfailv1",
     "fe-sd-" + RUN + "-pull-schedretryv1",
   ]);
   assert.deepEqual(v1TopicIds(), [
-    "firebase-schedule-schedOkV1-us-central1",
     "firebase-schedule-schedFailV1-us-central1",
     "firebase-schedule-schedRetryV1-us-central1",
   ]);
@@ -92,24 +90,24 @@ test("the function reads and the exact-case deletes are allowed, and nothing els
   yes(spec("GET", GCF + "/v2/projects/" + P + "/locations/-/functions?pageToken=abc"));
   yes(spec("GET", "https://run.googleapis.com/v2/projects/" + P + "/locations/-/services"));
   no(spec("GET", GCF + "/v2/projects/" + P + "/locations/europe-west1/functions"));
-  no(spec("DELETE", GCF + "/v2/projects/" + P + "/locations/-/functions/schedOkV2"));
-  yes(spec("GET", GCF + "/v2" + FN + "/schedOkV2"));
-  yes(spec("GET", GCF + "/v1" + FN + "/schedFailV1"));
+  no(spec("DELETE", GCF + "/v2/projects/" + P + "/locations/-/functions/declNullV2"));
+  yes(spec("GET", GCF + "/v2" + FN + "/declNullV2"));
+  yes(spec("GET", GCF + "/v1" + FN + "/schedRetryV1"));
   yes(spec("DELETE", GCF + "/v2" + FN + "/schedRetryV2"));
-  yes(spec("DELETE", GCF + "/v1" + FN + "/schedOkV1"));
+  yes(spec("DELETE", GCF + "/v1" + FN + "/schedFailV1"));
   yes(spec("GET", GCF + "/v2/projects/" + P + "/locations/us-central1/operations/operation-1-abc"));
   yes(spec("GET", GCF + "/v1/operations/operation-1-abc"));
   for (const r of [
-    spec("DELETE", GCF + "/v2" + FN + "/schedokv2"), // lower case
-    spec("DELETE", GCF + "/v2" + FN + "/schedOkV1"), // a v1 name on the v2 API
-    spec("DELETE", GCF + "/v1" + FN + "/schedOkV2"), // a v2 name on the v1 API
-    spec("DELETE", GCF + "/v2" + FN + "/schedOkV2x"),
-    spec("DELETE", GCF + "/v2" + FN + "/schedOkV2/"),
-    spec("DELETE", GCF + "/v2" + FN + "/schedOkV2?force=true"),
-    spec("DELETE", GCF + "/v2/projects/" + P + "/locations/us-east1/functions/schedOkV2"),
+    spec("DELETE", GCF + "/v2" + FN + "/declnullv2"), // lower case
+    spec("DELETE", GCF + "/v2" + FN + "/schedFailV1"), // a v1 name on the v2 API
+    spec("DELETE", GCF + "/v1" + FN + "/declNullV2"), // a v2 name on the v1 API
+    spec("DELETE", GCF + "/v2" + FN + "/declNullV2x"),
+    spec("DELETE", GCF + "/v2" + FN + "/declNullV2/"),
+    spec("DELETE", GCF + "/v2" + FN + "/declNullV2?force=true"),
+    spec("DELETE", GCF + "/v2/projects/" + P + "/locations/us-east1/functions/declNullV2"),
     spec("DELETE", GCF + "/v2" + FN),
     spec("POST", GCF + "/v2" + FN, {}),
-    spec("PATCH", GCF + "/v2" + FN + "/schedOkV2", {}),
+    spec("PATCH", GCF + "/v2" + FN + "/declNullV2", {}),
     spec("GET", GCF + "/v2/projects/other/locations/us-central1/functions"),
     spec("GET", GCF + "/v2/projects/" + P + "/locations/us-east1/functions"),
     spec("GET", GCF + "/v2" + FN + "?other=1"),
@@ -148,7 +146,7 @@ test("Cloud Run and Artifact Registry are read only", () => {
   for (const r of [
     spec(
       "DELETE",
-      "https://run.googleapis.com/v2/projects/" + P + "/locations/us-central1/services/schedokv2",
+      "https://run.googleapis.com/v2/projects/" + P + "/locations/us-central1/services/declnullv2",
     ),
     spec(
       "DELETE",
@@ -172,9 +170,9 @@ test("Cloud Run and Artifact Registry are read only", () => {
     no(r);
 });
 
-test("Cloud Scheduler: the eight jobs, the run, the pause, the delete and the create of the extra jobs", () => {
+test("Cloud Scheduler: the ten jobs, the run, the pause, the delete and the create of the extra jobs", () => {
   const deployed = scheduleId("schedRetryV2");
-  const extra = extraJobId(RUN, "zero");
+  const extra = extraJobId(RUN, "count");
   yes(spec("GET", SCHED + "?pageSize=500"));
   for (const id of [deployed, extra]) {
     yes(spec("GET", SCHED + "/" + id));
@@ -195,7 +193,7 @@ test("Cloud Scheduler: the eight jobs, the run, the pause, the delete and the cr
     spec("POST", SCHED + "/" + deployed + ":resume", {}),
     spec("PATCH", SCHED + "/" + deployed, {}),
     spec("DELETE", SCHED + "/" + deployed + "x"),
-    spec("DELETE", SCHED + "/" + extraJobId("fedcba9876543210", "zero")),
+    spec("DELETE", SCHED + "/" + extraJobId("fedcba9876543210", "count")),
     spec("POST", SCHED + "/" + deployed + ":run", { force: true }),
     spec("GET", SCHED + "?pageSize=100"),
     spec(
@@ -210,7 +208,7 @@ test("Cloud Scheduler: the eight jobs, the run, the pause, the delete and the cr
 
 test("Pub/Sub: the two v1 topics, the two pull subscriptions, pull and acknowledge", () => {
   const topic = v1TopicIds()[0];
-  const sub = pullSubscriptionId(RUN, "schedOkV1");
+  const sub = pullSubscriptionId(RUN, "schedFailV1");
   yes(spec("GET", PUBSUB + "/topics?pageSize=1000"));
   yes(spec("GET", PUBSUB + "/subscriptions?pageSize=1000"));
   yes(spec("GET", PUBSUB + "/topics/" + topic));
@@ -326,11 +324,11 @@ test("a request that is not plain https to a named host and exact path is refuse
 });
 
 test("mutations are the writes and the pull; reads are not", () => {
-  const sub = pullSubscriptionId(RUN, "schedOkV1");
+  const sub = pullSubscriptionId(RUN, "schedFailV1");
   const m = (r) => guard.isMutation(r);
-  assert.equal(m(spec("POST", SCHED + "/" + scheduleId("schedOkV2") + ":run", {})), true);
-  assert.equal(m(spec("DELETE", SCHED + "/" + scheduleId("schedOkV2"))), true);
-  assert.equal(m(spec("DELETE", GCF + "/v2" + FN + "/schedOkV2")), true);
+  assert.equal(m(spec("POST", SCHED + "/" + scheduleId("declNullV2") + ":run", {})), true);
+  assert.equal(m(spec("DELETE", SCHED + "/" + scheduleId("declNullV2"))), true);
+  assert.equal(m(spec("DELETE", GCF + "/v2" + FN + "/declNullV2")), true);
   assert.equal(
     m(
       spec("PUT", PUBSUB + "/subscriptions/" + sub, {
@@ -367,5 +365,5 @@ test("mutations are the writes and the pull; reads are not", () => {
     false,
   );
   assert.equal(m(spec("GET", "https://example.com/")), false);
-  assert.equal(EXTRA_JOBS.length, 6);
+  assert.equal(EXTRA_JOBS.length, 4);
 });

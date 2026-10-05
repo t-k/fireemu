@@ -1365,3 +1365,78 @@ test("classifyLocal: the frames decide; a filter both production runs sent is re
   ])
     assert.equal(classifyLocal(a, b, c), "INDETERMINATE");
 });
+
+test("describeRow quotes every kind of frame, its target ids, cause and token, and the filters of the row", () => {
+  const target = (type, extra = {}) => ({
+    kind: "targetChange",
+    type,
+    targetIds: [1],
+    cause: null,
+    resumeToken: false,
+    ...extra,
+  });
+  const change = (extra = {}) => ({
+    kind: "documentChange",
+    doc: "a",
+    fields: {},
+    targetIds: [1],
+    removedTargetIds: [],
+    ...extra,
+  });
+  const text = (rows) => describeRow(fr(rows));
+  assert.equal(text([]), "");
+  assert.equal(text([target("ADD")]), "ADD[1]");
+  assert.equal(text([target("ADD", { targetIds: [] })]), "ADD");
+  assert.equal(text([target("CURRENT", { resumeToken: true })]), "CURRENT[1]+token");
+  assert.equal(text([target("REMOVE", { cause: { code: 9, message: "m" } })]), "REMOVE[1](code 9)");
+  assert.equal(text([bnd(true)]), "boundary+token");
+  assert.equal(text([bnd(false)]), "boundary");
+  assert.equal(text([change()]), "change a");
+  assert.equal(
+    text([change({ targetIds: [], removedTargetIds: [1] })]),
+    "change a (removed target ids)",
+  );
+  assert.equal(
+    text([{ kind: "documentDelete", doc: "b", removedTargetIds: [1] }]),
+    "documentDelete b",
+  );
+  assert.equal(
+    text([{ kind: "documentRemove", doc: "b", removedTargetIds: [1] }]),
+    "documentRemove b",
+  );
+  assert.equal(text([{ kind: "mystery" }]), "mystery");
+  assert.equal(
+    text([target("ADD"), bnd(true), flt(2), flt(1), flt(2), current]),
+    "ADD[1], boundary+token, CURRENT[1]+token | filters 1:1:12:4:7 1:2:12:4:7",
+  );
+  assert.equal(text([flt(3)]), " | filters 1:3:12:4:7");
+  assert.equal(describeRow({}), "");
+});
+
+test("classifyLocal: a program that threw, a stream that ended with no status and a frame cap are unfinished, whichever side", () => {
+  const ok = fr([current]);
+  for (const bad of [
+    fr([current], { programError: true }),
+    fr([current], { end: { reason: "ended-without-status", code: null } }),
+    fr([current], { end: { reason: "frame-cap" } }),
+  ])
+    for (const [a, b, c] of [
+      [bad, ok, ok],
+      [ok, bad, ok],
+      [ok, ok, bad],
+    ])
+      assert.equal(classifyLocal(a, b, c), "INDETERMINATE");
+  assert.equal(
+    classifyLocal(ok, ok, fr([current], { end: { reason: "ended", code: 0 } })),
+    "DIFFER",
+  );
+});
+
+test("a production pair that is unfinished stays INDETERMINATE even when no local row exists", () => {
+  const waiting = fr([current], { timedOut: true });
+  const out = compareRecordings({
+    productions: [recording({ r: waiting }), recording({ r: waiting })],
+    local: recording({}),
+  });
+  assert.equal(out.rows.r.status, "INDETERMINATE");
+});

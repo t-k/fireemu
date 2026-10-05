@@ -965,3 +965,20 @@ test("localProvenance names the source commit and the digest of the binary, and 
   assert.equal(outside.sourceCommit, null);
   assert.equal(outside.binarySha256, expected);
 });
+
+test("localProvenance asks git for the commit of this tree, and the digest is of the bytes read", async () => {
+  const { execFile } = await import("node:child_process");
+  const { promisify } = await import("node:util");
+  const expected = (
+    await promisify(execFile)("git", ["rev-parse", "HEAD"], {
+      cwd: new URL(".", import.meta.url).pathname,
+    })
+  ).stdout.trim();
+  const out = await localProvenance({
+    target: "local",
+    binaryPath: "/b/fireemu",
+    readBytes: async () => Buffer.from("x"),
+  });
+  assert.match(out.sourceCommit, /^[0-9a-f]{40}$/);
+  assert.equal(out.sourceCommit, expected);
+});

@@ -7,9 +7,12 @@
 //      sent, and its answer is a second row, fsynced after the answer.
 //   2. Delete guard: a name may be deleted only if this run's own create of it answered 2xx, or
 //      answered unknown and a later direct GET showed the name.
-//   3. Unknown answers: a transport error, an unreadable body, a status below 200, a 3xx or a 5xx
-//      on a create or delete is unknown. Only a direct GET of that name settles it, and any
-//      unknown DELETE keeps closureReady false.
+//   3. Unknown answers: a transport error, an unreadable body, a status below 200, a 3xx, a 5xx,
+//      a 408, a 499 or a pending operation on a create or delete is unknown. An unknown create is
+//      settled only by a direct GET whose body shows the name; a GET that finds nothing never
+//      settles it, however late, and the name stays in the report for the coordinator. An unknown
+//      delete is settled in this run only by such a GET, or by a GET that finds nothing once the
+//      A2 delay has passed, and it keeps closureReady false either way.
 
 import {
   closeSync,
@@ -17,6 +20,7 @@ import {
   ftruncateSync,
   openSync,
   readFileSync,
+  unlinkSync,
   writeSync,
   existsSync,
 } from "node:fs";
@@ -24,7 +28,10 @@ import { dirname } from "node:path";
 
 export const LEDGER_VERSION = 1;
 
-/** How long after an unknown answer a GET that finds nothing may settle it (the owner's A2: 10 minutes). */
+/**
+ * The A2 read-back delay (10 minutes): how long after an unknown answer a GET that finds nothing
+ * counts as late. It is the default and the floor of the setting recorded in the ledger.
+ */
 export const SETTLE_ABSENT_AFTER_MS = 10 * 60 * 1000;
 
 /** The answer classes of a create or delete. */
@@ -97,6 +104,10 @@ export function classifyAnswer(answer) {
   if (status < 200) return unknown("status-below-200");
   if (status < 300) return { class: "ok", status };
   if (status < 400) return unknown("redirect");
+  // A server or client timeout, and a call cancelled after it left (gRPC CANCELLED is 499): the
+  // request may have been applied, so the answer was lost.
+  if (status === 408) return unknown("request-timeout");
+  if (status === 499) return unknown("cancelled");
   if (status === 409) return { class: "conflict", status };
   if (status === 404) return { class: "notFound", status };
   if (status < 500) return { class: "refused", status };
@@ -157,52 +168,68 @@ function applyAnswer(state, row) {
       st.created = true;
       st.via = "create";
     } else if (klass === "unknown") {
-      st.unsettled = {
-        action: "create",
-        ticket: row.ticket,
-        reason: row.reason ?? "unknown",
-        since: Date.parse(row.at),
-      };
+      st.unsettled = unknownAnswer(state, row);
     }
     return;
   }
   if (klass === "ok" || klass === "notFound") {
     st.owned = false;
   } else if (klass === "unknown") {
-    st.unsettled = {
-      action: "delete",
-      ticket: row.ticket,
-      reason: row.reason ?? "unknown",
-      since: Date.parse(row.at),
-    };
+    st.unsettled = unknownAnswer(state, row);
     st.deleteUnknown = true;
     state.unknownDeletes += 1;
   }
+}
+
+/** Starts the sticky record of an unknown answer: it stays in the report for the whole run. */
+function unknownAnswer(state, row) {
+  const record = {
+    name: row.name,
+    action: row.action,
+    ticket: row.ticket,
+    reason: row.reason ?? "unknown",
+    answeredAt: row.at,
+    since: Date.parse(row.at),
+    synthetic: row.synthetic === true,
+    settled: false,
+    settledBy: null,
+    settledAt: null,
+    absentReads: [],
+  };
+  state.unknownAnswers.push(record);
+  return record;
 }
 
 function applyRead(state, row) {
   const st = state.names.get(row.name);
   if (!st || !st.unsettled) return;
   if (row.observed === "unknown") return;
-  const settled = st.unsettled;
-  // Only positive evidence settles an answer at once: a GET that shows the name. A GET that finds
-  // nothing settles only after the settle delay: until then the request may still take effect
-  // (a late create) or the read may be stale, so absence alone proves nothing.
-  if (row.observed === "absent" && Date.parse(row.at) - settled.since < state.settleAbsentAfterMs)
-    return;
-  st.unsettled = null;
-  if (settled.action === "create") {
-    if (row.observed === "present") {
-      st.owned = true;
-      st.created = true;
-      st.via = "settled-read";
-    }
-    return;
-  }
-  // An unknown delete: the name is still there (still ours) or it is gone.
+  const record = st.unsettled;
   if (row.observed === "absent") {
+    const afterDelay = Date.parse(row.at) - record.since >= state.settleAbsentAfterMs;
+    record.absentReads.push({ at: row.at, afterDelay });
+    // Absence alone never settles an unknown create: the request may still take effect (a timed-out
+    // create was seen 40 minutes later), so only the coordinator can accept the name. An unknown
+    // delete is settled by absence once the delay has passed; it still keeps closure false.
+    if (record.action === "create" || !afterDelay) return;
+    settle(st, record, "absent-after-delay", row.at);
     st.owned = false;
+    return;
   }
+  // Only positive evidence settles an answer at once: a GET whose body shows the name.
+  settle(st, record, "present", row.at);
+  if (record.action === "create") {
+    st.owned = true;
+    st.created = true;
+    st.via = "settled-read";
+  }
+}
+
+function settle(st, record, by, at) {
+  record.settled = true;
+  record.settledBy = by;
+  record.settledAt = at;
+  st.unsettled = null;
 }
 
 function apply(state, row) {
@@ -223,8 +250,16 @@ function writeAll(io, fd, text) {
   }
 }
 
+/** Every operation that would write starts here: a closed or failed state writes nothing. */
+function ensureWritable(state) {
+  if (!state.closed) return;
+  throw state.failed
+    ? new OwnershipError("ledger-failed", "a ledger write failed: the state is closed, resume it")
+    : new OwnershipError("closed", "the ownership ledger is closed");
+}
+
 function append(state, row) {
-  if (state.closed) throw new OwnershipError("closed", "the ownership ledger is closed");
+  ensureWritable(state);
   state.rowSeq += 1;
   const full = {
     v: LEDGER_VERSION,
@@ -233,12 +268,94 @@ function append(state, row) {
     at: new Date(state.now()).toISOString(),
     ...row,
   };
-  writeAll(state.io, state.fd, `${JSON.stringify(full)}\n`);
-  state.io.fsyncSync(state.fd);
+  try {
+    writeAll(state.io, state.fd, `${JSON.stringify(full)}\n`);
+    state.io.fsyncSync(state.fd);
+  } catch (error) {
+    // The disk may hold a half row or a row that was never flushed, and the in-memory state was not
+    // advanced. Going on would write a second intent for a name or bytes after a partial line, so
+    // the state stops here; a resume of the file decides what the half-written row meant.
+    state.failed = true;
+    shutdown(state);
+    throw error;
+  }
   return full;
 }
 
-const ROW_PHASES = new Set(["intent", "answer", "read", "guard", "resume"]);
+/** Closes the descriptor and releases the writer lock. Safe to call twice. */
+function shutdown(state) {
+  state.closed = true;
+  if (state.fd !== null) {
+    try {
+      closeSync(state.fd);
+    } catch {
+      // the descriptor is already gone
+    }
+    state.fd = null;
+  }
+  releaseLock(state.lockPath);
+  state.lockPath = null;
+}
+
+// ---- the single-writer lock ----
+
+function holderAlive(pid) {
+  if (!Number.isInteger(pid) || pid <= 0) return true; // not a pid: treat the lock as held
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return error.code === "EPERM";
+  }
+}
+
+/**
+ * Takes `<path>.lock` exclusively (the pid of the holder inside). A lock whose holder process is
+ * gone is taken over (a crashed run is resumed); a lock whose holder runs, or whose content is not
+ * a pid, refuses the open. Same host only; a recycled pid keeps a dead holder's lock alive.
+ */
+function acquireLock(path) {
+  const lockPath = `${path}.lock`;
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    try {
+      const fd = openSync(lockPath, "wx");
+      try {
+        writeSync(fd, `${process.pid}\n`);
+      } finally {
+        closeSync(fd);
+      }
+      return lockPath;
+    } catch (error) {
+      if (error.code !== "EEXIST") throw error;
+      let holder;
+      try {
+        holder = Number.parseInt(readFileSync(lockPath, "utf8"), 10);
+      } catch (readError) {
+        if (readError.code === "ENOENT") continue; // released meanwhile: try again
+        throw readError;
+      }
+      if (holderAlive(holder)) {
+        throw new OwnershipError(
+          "ledger-locked",
+          `${path} is open in another writer (${lockPath}); remove the lock only if no recorder holds it`,
+        );
+      }
+      unlinkSync(lockPath); // the holder is gone
+    }
+  }
+  throw new OwnershipError("ledger-locked", `${path} could not be locked (${lockPath})`);
+}
+
+function releaseLock(lockPath) {
+  if (lockPath === null) return;
+  try {
+    unlinkSync(lockPath);
+  } catch {
+    // already removed
+  }
+}
+
+const ROW_PHASES = new Set(["open", "intent", "answer", "read", "guard", "resume"]);
 
 function parseRows(text, runId) {
   const lines = text.split("\n");
@@ -274,6 +391,17 @@ function parseRows(text, runId) {
         `ledger line ${index + 1} has sequence ${String(row.seq)}`,
       );
     }
+    if ((index === 0) !== (row.phase === "open")) {
+      throw new OwnershipError(
+        "corrupt-ledger",
+        index === 0
+          ? "the first ledger row is not the open row"
+          : `ledger line ${index + 1} is a second open row`,
+      );
+    }
+    if (row.phase === "open" && !Number.isSafeInteger(row.settleAbsentAfterMs)) {
+      throw new OwnershipError("corrupt-ledger", "the open row has no valid settle delay");
+    }
     rows.push(row);
   }
   // Bytes after the last newline are a write that never finished: its fsync did not return, so
@@ -291,8 +419,26 @@ function newState(runId, now, io) {
     ticket: 0,
     names: new Map(),
     unknownDeletes: 0,
+    unknownAnswers: [],
+    settleAbsentAfterMs: SETTLE_ABSENT_AFTER_MS,
+    lockPath: null,
     closed: false,
+    failed: false,
   };
+}
+
+function checkSettleDelay(value, allowShort) {
+  if (
+    !Number.isSafeInteger(value) ||
+    value < 0 ||
+    value > Number.MAX_SAFE_INTEGER / 4 ||
+    (value < SETTLE_ABSENT_AFTER_MS && !allowShort)
+  ) {
+    throw new OwnershipError(
+      "bad-settle-delay",
+      `settleAbsentAfterMs is an integer of at least ${SETTLE_ABSENT_AFTER_MS} (the A2 read-back)`,
+    );
+  }
 }
 
 /**
@@ -304,7 +450,8 @@ export function openOwnership({
   runId,
   now = Date.now,
   io = { writeSync, fsyncSync },
-  settleAbsentAfterMs = SETTLE_ABSENT_AFTER_MS,
+  settleAbsentAfterMs,
+  testOnlyAllowShortSettleDelay = false,
 }) {
   if (typeof path !== "string" || path === "")
     throw new OwnershipError("bad-path", "a ledger path is required");
@@ -314,27 +461,51 @@ export function openOwnership({
       "a run id is 1 to 64 characters of letters, digits, dot, underscore and hyphen",
     );
   }
-  if (!Number.isSafeInteger(settleAbsentAfterMs) || settleAbsentAfterMs < 0) {
-    throw new OwnershipError("bad-settle-delay", "settleAbsentAfterMs is a non-negative integer");
-  }
+  if (settleAbsentAfterMs !== undefined)
+    checkSettleDelay(settleAbsentAfterMs, testOnlyAllowShortSettleDelay);
   const state = newState(runId, now, io);
-  state.settleAbsentAfterMs = settleAbsentAfterMs;
+  state.lockPath = acquireLock(path);
+  try {
+    return openLocked(state, path, settleAbsentAfterMs, testOnlyAllowShortSettleDelay);
+  } catch (error) {
+    shutdown(state);
+    throw error;
+  }
+}
+
+function openLocked(state, path, requestedDelay, allowShort) {
   let dropped = 0;
+  let rows = [];
   const existed = existsSync(path);
   if (existed) {
-    const parsed = parseRows(readFileSync(path, "utf8"), runId);
+    const parsed = parseRows(readFileSync(path, "utf8"), state.runId);
     dropped = parsed.droppedTailBytes;
-    for (const row of parsed.rows) {
-      apply(state, row);
-      state.rowSeq = row.seq;
-      if (row.phase === "intent") state.ticket = Math.max(state.ticket, row.ticket);
+    rows = parsed.rows;
+  }
+  if (rows.length > 0) {
+    // The delay is a fact of the run: it is read from the ledger, and a resume cannot change it.
+    const recorded = rows[0].settleAbsentAfterMs;
+    if (requestedDelay !== undefined && requestedDelay !== recorded) {
+      throw new OwnershipError(
+        "settle-delay-mismatch",
+        `the ledger records settleAbsentAfterMs ${recorded}; a resume cannot use ${requestedDelay}`,
+      );
     }
+    checkSettleDelay(recorded, allowShort);
+    state.settleAbsentAfterMs = recorded;
+  } else {
+    state.settleAbsentAfterMs = requestedDelay ?? SETTLE_ABSENT_AFTER_MS;
+  }
+  for (const row of rows) {
+    apply(state, row);
+    state.rowSeq = row.seq;
+    if (row.phase === "intent") state.ticket = Math.max(state.ticket, row.ticket);
   }
   state.fd = openSync(path, "a");
   if (!existed) {
     const parent = openSync(dirname(path), "r");
     try {
-      io.fsyncSync(parent);
+      state.io.fsyncSync(parent);
     } finally {
       closeSync(parent);
     }
@@ -342,39 +513,42 @@ export function openOwnership({
     // Cut the unfinished row off so the next row starts on a line of its own.
     const keep = readFileSync(path).length - dropped;
     ftruncateSync(state.fd, keep);
-    io.fsyncSync(state.fd);
+    state.io.fsyncSync(state.fd);
   }
-  if (existed) {
-    append(state, { phase: "resume", droppedTailBytes: dropped });
-    for (const st of state.names.values()) {
-      if (!st.open) continue;
-      const open = st.open;
-      const row = append(state, {
-        phase: "answer",
-        ticket: open.ticket,
-        action: open.action,
-        name: open.name,
-        transport: open.transport,
-        class: "unknown",
-        status: null,
-        reason: "no-answer",
-        synthetic: true,
-      });
-      applyAnswer(state, row);
-    }
+  if (rows.length === 0) {
+    // A new ledger (or one that held only an unfinished first row) starts with the settings of the run.
+    append(state, { phase: "open", settleAbsentAfterMs: state.settleAbsentAfterMs });
+    return state;
+  }
+  append(state, { phase: "resume", droppedTailBytes: dropped });
+  for (const st of state.names.values()) {
+    if (!st.open) continue;
+    const open = st.open;
+    const row = append(state, {
+      phase: "answer",
+      ticket: open.ticket,
+      action: open.action,
+      name: open.name,
+      transport: open.transport,
+      class: "unknown",
+      status: null,
+      reason: "no-answer",
+      synthetic: true,
+    });
+    applyAnswer(state, row);
   }
   return state;
 }
 
 export function closeOwnership(state) {
   if (state.closed) return;
-  state.closed = true;
-  closeSync(state.fd);
+  shutdown(state);
 }
 
 // ---- the three operations a recorder performs ----
 
 function intent(state, action, { name, transport }) {
+  ensureWritable(state);
   checkName(name);
   checkTransport(transport);
   const st = state.names.get(name);
@@ -404,6 +578,7 @@ export function beginCreate(state, spec) {
  * returns.
  */
 export function beginDelete(state, spec) {
+  ensureWritable(state);
   checkName(spec?.name);
   const verdict = mayDelete(state, spec.name);
   if (!verdict.allowed) {
@@ -423,6 +598,7 @@ export function beginDelete(state, spec) {
 
 /** Call with what came back for a ticket. Returns the answer class. */
 export function recordAnswer(state, ticket, answer) {
+  ensureWritable(state);
   const st = state.names.get(ticket?.name);
   if (!st?.open || st.open.ticket !== ticket.ticket) {
     throw new OwnershipError("stale-ticket", "the ticket is not the open request of its name");
@@ -443,19 +619,35 @@ export function recordAnswer(state, ticket, answer) {
 }
 
 /**
- * Call with the answer of a direct GET of exactly `name`. Settles an unknown answer of that name
- * when the GET is conclusive (present or absent); it never makes a name owned by itself.
- * `answer.bodyName`, when given, must equal `name`: a body about another name is unknown.
+ * Call with the answer of a direct GET of exactly `name` (never a list: a name missing from a list
+ * is not a 404). A GET counts as present only when `answer.bodyName` is given and equals `name`;
+ * a 2xx with no `bodyName`, or with another, is unknown. A present GET settles an unknown answer of
+ * that name at once. A GET that finds nothing is recorded as evidence; it settles an unknown delete
+ * once the settle delay has passed, and never settles an unknown create. A GET never makes a name
+ * owned by itself.
  */
 export function recordRead(state, { name, transport, answer }) {
+  ensureWritable(state);
   checkName(name);
   checkTransport(transport);
   const st = state.names.get(name);
   if (st?.open)
     throw new OwnershipError("in-flight", `${st.open.action} of ${name} is still in flight`);
   let read = classifyRead(answer);
-  if (read.observed !== "unknown" && answer.bodyName !== undefined && answer.bodyName !== name) {
-    read = { class: "unknown", status: read.status, reason: "name-mismatch", observed: "unknown" };
+  const unusable = (reason) => ({
+    class: "unknown",
+    status: read.status,
+    reason,
+    observed: "unknown",
+  });
+  if (read.observed === "present" && answer.bodyName === undefined) {
+    read = unusable("missing-body-name");
+  } else if (
+    read.observed !== "unknown" &&
+    answer.bodyName !== undefined &&
+    answer.bodyName !== name
+  ) {
+    read = unusable("name-mismatch");
   }
   const row = {
     phase: "read",
@@ -479,7 +671,7 @@ export function mayDelete(state, name) {
   if (st?.open) return { allowed: false, reason: "in-flight" };
   if (st?.unsettled) return { allowed: false, reason: "unsettled" };
   // A DELETE is never sent again after an unknown answer, whatever a GET then showed: the name
-  // stays owned and undeleted, and a later cleanup run settles it.
+  // stays owned and undeleted, and only the coordinator's separate A2 read-back closes it.
   if (st?.deleteUnknown) return { allowed: false, reason: "unknown-delete-not-resent" };
   // Ownership is a fact about how the name came to exist, so it outlives this run's own delete:
   // deleting again is harmless (a 404) and is how a recorder probes a deleted name.
@@ -499,22 +691,39 @@ export function unsettledNames(state) {
     .toSorted();
 }
 
-function unsettledDetails(state) {
-  return [...state.names]
-    .filter(([, st]) => st.unsettled)
-    .map(([name, st]) => ({
-      name,
-      action: st.unsettled.action,
-      reason: st.unsettled.reason,
-      absentSettlesAt: new Date(st.unsettled.since + state.settleAbsentAfterMs).toISOString(),
-    }))
-    .toSorted((a, b) => (a.name < b.name ? -1 : 1)); // names are unique, so no pair is equal
+/** What the report says about one unknown answer. */
+function describeUnknown(state, record) {
+  let stateName;
+  if (record.settled) stateName = `settled-${record.settledBy}`;
+  else if (record.action === "create" && record.absentReads.length > 0)
+    stateName = "unknown-create-absent-unconfirmed";
+  else stateName = `unknown-${record.action}-unsettled`;
+  return {
+    name: record.name,
+    action: record.action,
+    ticket: record.ticket,
+    reason: record.reason,
+    answeredAt: record.answeredAt,
+    synthetic: record.synthetic,
+    state: stateName,
+    settled: record.settled,
+    settledBy: record.settledBy,
+    settledAt: record.settledAt,
+    // Every unknown create or delete needs the separate read-back (A2) at least this long after
+    // the answer before any close row.
+    eligibleForA2At: new Date(record.since + state.settleAbsentAfterMs).toISOString(),
+    requiresA2: true,
+    absentReads: record.absentReads.map((read) => ({ ...read })),
+  };
 }
 
 /**
  * Whether the run may be called closed on ownership grounds: nothing in flight, nothing unsettled,
  * nothing created and not yet deleted, and no unknown DELETE answer ever (a settled one counts:
- * its answer was never seen).
+ * its answer was never seen). `unknownAnswers` lists every unknown answer of the run, settled or
+ * not, so the coordinator's A2 read-back and close row can name them; `details` is the unsettled
+ * part. A create that stays unknown after a GET found nothing is `absentUnconfirmed`: absence
+ * alone never settles it, so the coordinator must accept the name or run a recovery.
  */
 export function closureReport(state) {
   const reasons = [];
@@ -522,9 +731,16 @@ export function closureReport(state) {
   for (const [name, st] of [...state.names].toSorted(([a], [b]) => (a < b ? -1 : 1))) {
     if (st.open) reasons.push(`in-flight:${name}`);
     if (st.unsettled) reasons.push(`unsettled-${st.unsettled.action}:${name}`);
+    if (st.unsettled?.action === "create" && st.unsettled.absentReads.length > 0)
+      reasons.push(`unknown-create-absent-unconfirmed:${name}`);
     if (st.owned) reasons.push(`owned-not-deleted:${name}`);
   }
   if (state.unknownDeletes > 0) reasons.push(`unknown-delete-answers:${state.unknownDeletes}`);
+  const unknownAnswers = state.unknownAnswers.map((record) => describeUnknown(state, record));
+  const absentUnconfirmed = unknownAnswers
+    .filter((item) => item.state === "unknown-create-absent-unconfirmed")
+    .map((item) => item.name)
+    .toSorted();
   return {
     closureReady: reasons.length === 0,
     reasons,
@@ -535,7 +751,16 @@ export function closureReport(state) {
       .toSorted(),
     unsettled: unsettledNames(state),
     // What each unsettled name is waiting for, and why it is unknown.
-    details: unsettledDetails(state),
+    details: unknownAnswers
+      .filter((item) => !item.settled)
+      .toSorted((a, b) => (a.name < b.name ? -1 : 1)), // one unsettled answer per name
+    unknownAnswers,
+    a2Required: unknownAnswers.length > 0,
+    absentUnconfirmed,
+    coordinatorNote:
+      absentUnconfirmed.length === 0
+        ? null
+        : `${absentUnconfirmed.join(", ")}: a create with an unknown answer that no own GET has shown; absence alone never settles it, so the coordinator must accept the name or run a recovery`,
   };
 }
 

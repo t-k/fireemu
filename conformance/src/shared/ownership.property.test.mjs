@@ -66,6 +66,8 @@ const UNKNOWN_ANSWERS = [
   { status: 404, bodyReadable: false },
   { status: 409, bodyReadable: false },
   { status: 200, bodyReadable: true, operationPending: true },
+  { status: 408, bodyReadable: true },
+  { status: 499, bodyReadable: true },
 ];
 const REFUSALS = [
   { status: 400, bodyReadable: true },
@@ -85,9 +87,28 @@ const NOT_FOUND = { status: 404, bodyReadable: true };
 function newWorld(rng, collisions) {
   const world = new Map();
   for (const name of NAMES) {
-    world.set(name, { exists: rng.chance(0.3), creator: "foreign" });
+    // `late` is a create the run sent whose effect has not happened yet: it takes effect at `late.at`
+    // if the name is still free then (a timed-out create can appear 40 minutes after it was sent).
+    world.set(name, { exists: rng.chance(0.3), creator: "foreign", late: null });
   }
   return { names: world, collisions };
+}
+
+const LATE_DELAYS = [1000, SETTLE - 1, SETTLE + 1, 2 * SETTLE, 5 * SETTLE];
+
+/** Lets the late effects whose time has come take effect. */
+function materialize(world, now) {
+  const fired = [];
+  for (const [name, w] of world.names) {
+    if (w.late && now >= w.late.at) {
+      if (!w.exists) {
+        Object.assign(w, { exists: true, creator: "run" });
+        fired.push(name);
+      }
+      w.late = null;
+    }
+  }
+  return fired;
 }
 
 // ---- the reference: an independent fold over the history of each name ----
@@ -110,13 +131,15 @@ function reference(history) {
         noResend = true;
       }
     } else if (event.kind === "read" && pending && event.observed !== "unknown") {
-      // Presence settles at once; absence only SETTLE after the unknown answer.
-      if (event.observed === "absent" && event.t - pending.since < SETTLE) continue;
-      if (pending.action === "create" && event.observed === "present") {
+      // Presence settles at once. Absence never settles an unknown create; it settles an unknown
+      // delete only SETTLE after the unknown answer.
+      if (event.observed === "absent") {
+        if (pending.action === "create" || event.t - pending.since < SETTLE) continue;
+        owned = false;
+      } else if (pending.action === "create") {
         owned = true;
         created = true;
       }
-      if (pending.action === "delete" && event.observed === "absent") owned = false;
       pending = null;
     }
   }
@@ -129,15 +152,19 @@ function classOf(answer) {
   if (status < 200) return "unknown";
   if (status < 300) return "ok";
   if (status < 400) return "unknown";
+  if (status === 408 || status === 499) return "unknown";
   if (status === 409) return "conflict";
   if (status === 404) return "notFound";
   if (status < 500) return "refused";
   return "unknown";
 }
 
-function observedOf(answer) {
+/** A present answer counts only when its body names the name asked for. */
+function observedOf(answer, name) {
   const klass = classOf(answer);
-  return klass === "ok" ? "present" : klass === "notFound" ? "absent" : "unknown";
+  if (klass === "ok") return answer.bodyName === name ? "present" : "unknown";
+  if (klass === "notFound") return "absent";
+  return "unknown";
 }
 
 // ---- one generated case ----
@@ -150,7 +177,7 @@ function spyIo(events, real) {
     },
     fsyncSync(fd) {
       events.push("fsync");
-      // The ordering is what the test checks; the disk flush itself is real in every 20th case.
+      // The ordering is what the test checks; the disk flush itself is real in every 50th case.
       if (real) fs.fsyncSync(fd);
     },
   };
@@ -174,9 +201,12 @@ function runCase(index) {
   const dir = mkdtempSync(join(tmpdir(), "ownership-prop-"));
   const path = join(dir, "ledger.jsonl");
   const events = [];
-  const io = spyIo(events, index % 20 === 0);
+  const io = spyIo(events, index % 50 === 0);
   const history = new Map(NAMES.map((name) => [name, []]));
   let unknownDeleteSeen = false;
+  // Corner counters, so the test can show the generator reaches a late create after an absent read.
+  const corners = { absentAfterDelay: 0, lateAfterAbsent: 0, lateAfterAbsentCreated: 0 };
+  const absentAfterDelayOn = new Set();
   clock = BASE_TIME;
   const where = `case ${index} (seed ${seed}${collisions ? ", collisions" : ""})`;
 
@@ -237,6 +267,17 @@ function runCase(index) {
         false,
         `${where}: step ${step}: an unknown delete keeps closure false`,
       );
+    // World safety: when the library says the run may close, no resource this run created exists
+    // or can still appear. Without name collisions this must hold in every world, late effects
+    // included; with a collision a foreign resource can carry the name, which the README states.
+    if (report.closureReady && !collisions) {
+      for (const [name, w] of world.names) {
+        assert.ok(
+          !(w.exists && w.creator === "run") && w.late === null,
+          `${where}: step ${step}: closureReady, yet ${name} is ${JSON.stringify(w)}`,
+        );
+      }
+    }
   };
 
   const steps = 6 + rng.int(28);
@@ -244,6 +285,12 @@ function runCase(index) {
     // Time passes between requests: often a little, sometimes the whole settle delay, now and then
     // one millisecond short of it.
     clock += rng.pick([0, 5, 1000, SETTLE - 1, SETTLE, SETTLE + 1, 2 * SETTLE]);
+    for (const fired of materialize(world, clock)) {
+      if (absentAfterDelayOn.has(fired)) {
+        corners.lateAfterAbsent += 1;
+        if (!collisions) corners.lateAfterAbsentCreated += 1;
+      }
+    }
     const name = rng.pick(NAMES);
     const w = world.names.get(name);
     const op = rng.pick(["create", "create", "delete", "delete", "read", "read", "noise", "crash"]);
@@ -270,9 +317,12 @@ function runCase(index) {
               : beginDelete(state, { name, transport: "rest" });
           assert.ok(ticket, where);
           checkDurable("crash intent", "intent");
-          // The request went out; the effect may or may not have happened.
-          if (action === "create" && !w.exists && rng.chance(0.5))
-            Object.assign(w, { exists: true, creator: "run" });
+          // The request went out; the effect may have happened, may come later, or may never.
+          if (action === "create" && !w.exists) {
+            const effect = rng.pick(["now", "later", "never"]);
+            if (effect === "now") Object.assign(w, { exists: true, creator: "run" });
+            if (effect === "later") w.late = { at: clock + rng.pick(LATE_DELAYS) };
+          }
           if (action === "delete" && w.exists && rng.chance(0.5)) w.exists = false;
           history.get(name).push({ kind: action, klass: "unknown", t: clock });
           if (action === "delete") unknownDeleteSeen = true;
@@ -286,15 +336,26 @@ function runCase(index) {
     }
     if (op === "read") {
       const unknown = rng.chance(0.25);
+      // A present answer shows the name in its body, mostly: sometimes it shows none or another.
+      const shown = rng.pick([name, name, name, name, undefined, "other"]);
       const answer = unknown
         ? rng.pick(UNKNOWN_ANSWERS)
         : w.exists
-          ? rng.pick(SUCCESSES)
+          ? { ...rng.pick(SUCCESSES), ...(shown === undefined ? {} : { bodyName: shown }) }
           : NOT_FOUND;
       events.length = 0;
+      const pendingBefore = reference(history.get(name)).pending;
       const observed = recordRead(state, { name, transport: "rest", answer });
       checkDurable("read", "read");
-      assert.equal(observed, observedOf(answer), where);
+      assert.equal(observed, observedOf(answer, name), where);
+      if (
+        observed === "absent" &&
+        pendingBefore?.action === "create" &&
+        clock - pendingBefore.since >= SETTLE
+      ) {
+        corners.absentAfterDelay += 1;
+        absentAfterDelayOn.add(name);
+      }
       history.get(name).push({ kind: "read", observed, t: clock });
       events.length = 0;
       check(step);
@@ -328,8 +389,13 @@ function runCase(index) {
       } else {
         const applied = rng.chance(0.6);
         if (applied) {
-          Object.assign(w, { exists: true, creator: "run" });
           answer = rng.chance(0.7) ? rng.pick(SUCCESSES) : rng.pick(UNKNOWN_ANSWERS);
+          // A create whose answer is lost may take effect later, even after the settle delay.
+          if (classOf(answer) !== "ok" && rng.chance(0.5)) {
+            w.late = { at: clock + rng.pick(LATE_DELAYS) };
+          } else {
+            Object.assign(w, { exists: true, creator: "run" });
+          }
         } else {
           answer = rng.chance(0.5) ? rng.pick(REFUSALS) : rng.pick(UNKNOWN_ANSWERS);
         }
@@ -404,7 +470,7 @@ function runCase(index) {
   assert.ok(lines(path).length >= writes, where);
   closeOwnership(state);
   rmSync(dir, { recursive: true, force: true });
-  return { steps, unknownDeleteSeen, collisions };
+  return { steps, unknownDeleteSeen, collisions, corners };
 }
 
 describe("generated scripts against a simulated world", () => {
@@ -412,9 +478,11 @@ describe("generated scripts against a simulated world", () => {
     let unknownDeletes = 0;
     let collisionCases = 0;
     let total = 0;
+    const corners = { absentAfterDelay: 0, lateAfterAbsent: 0, lateAfterAbsentCreated: 0 };
     for (let index = 0; index < CASES; index += 1) {
       const result = runCase(index);
       total += result.steps;
+      for (const key of Object.keys(corners)) corners[key] += result.corners[key];
       if (result.unknownDeleteSeen) unknownDeletes += 1;
       if (result.collisions) collisionCases += 1;
     }
@@ -429,6 +497,11 @@ describe("generated scripts against a simulated world", () => {
       `${collisionCases} collision cases`,
     );
     assert.ok(total > CASES * 6, `${total} steps`);
+    // The late-effect world is reached: an unknown create read as absent past the settle delay,
+    // whose resource then appeared. The library must still not have called the run closed.
+    assert.ok(corners.absentAfterDelay > CASES / 10, JSON.stringify(corners));
+    assert.ok(corners.lateAfterAbsent >= 5, JSON.stringify(corners));
+    assert.ok(corners.lateAfterAbsentCreated >= 5, JSON.stringify(corners));
   });
 
   it("is deterministic: the same case twice gives the same result", () => {

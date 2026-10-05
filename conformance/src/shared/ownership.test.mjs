@@ -1,5 +1,13 @@
 import assert from "node:assert/strict";
-import { appendFileSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import {
+  appendFileSync,
+  existsSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, it } from "node:test";
@@ -68,8 +76,14 @@ function remove(name, answer, transport = "rest") {
   return recordAnswer(state, ticket, answer);
 }
 
+/** A direct GET of `name`. A present answer carries the name its body shows, as a recorder reads it. */
 function read(name, answer, transport = "rest") {
-  return recordRead(state, { name, transport, answer });
+  const shown = answer.status >= 200 && answer.status < 300 && !("bodyName" in answer);
+  return recordRead(state, {
+    name,
+    transport,
+    answer: shown ? { ...answer, bodyName: name } : answer,
+  });
 }
 
 function refusal(fn) {
@@ -106,7 +120,11 @@ describe("answer classes", () => {
     [{ status: 400, bodyReadable: true }, "refused", undefined],
     [{ status: 403, bodyReadable: true }, "refused", undefined],
     [{ status: 429, bodyReadable: true }, "refused", undefined],
-    [{ status: 499, bodyReadable: true }, "refused", undefined],
+    [{ status: 499, bodyReadable: true }, "unknown", "cancelled"],
+    [{ status: 408, bodyReadable: true }, "unknown", "request-timeout"],
+    [{ status: 498, bodyReadable: true }, "refused", undefined],
+    [{ status: 407, bodyReadable: true }, "refused", undefined],
+    [{ status: 499, bodyReadable: false }, "unknown", "unreadable-body"],
     [{ status: 199, bodyReadable: true }, "unknown", "status-below-200"],
     [{ status: 100, bodyReadable: true }, "unknown", "status-below-200"],
     [{ status: 0, bodyReadable: true }, "unknown", "status-below-200"],
@@ -183,13 +201,13 @@ describe("the issued-names ledger", () => {
       .trim()
       .split("\n")
       .map((l) => JSON.parse(l));
-    assert.equal(afterIntent.length, 1);
+    assert.equal(afterIntent.length, 2, "the open row, then the intent");
     assert.deepEqual(
       {
-        phase: afterIntent[0].phase,
-        action: afterIntent[0].action,
-        name: afterIntent[0].name,
-        transport: afterIntent[0].transport,
+        phase: afterIntent[1].phase,
+        action: afterIntent[1].action,
+        name: afterIntent[1].name,
+        transport: afterIntent[1].transport,
       },
       { phase: "intent", action: "create", name: "topics/a", transport: "rest" },
     );
@@ -200,12 +218,12 @@ describe("the issued-names ledger", () => {
     const rows = readLedger(join(dir, "ledger.jsonl"), "run1").rows;
     assert.deepEqual(
       rows.map((r) => r.phase),
-      ["intent", "answer"],
+      ["open", "intent", "answer"],
     );
-    assert.equal(rows[1].class, "ok");
-    assert.equal(rows[1].status, 200);
-    assert.equal(rows[1].transport, "rest");
-    assert.equal(rows[1].name, "topics/a");
+    assert.equal(rows[2].class, "ok");
+    assert.equal(rows[2].status, 200);
+    assert.equal(rows[2].transport, "rest");
+    assert.equal(rows[2].name, "topics/a");
   });
 
   it("fsyncs a delete intent and its answer, a read and a refused delete too", () => {
@@ -224,7 +242,7 @@ describe("the issued-names ledger", () => {
     const rows = readLedger(join(dir, "ledger.jsonl"), "run1").rows;
     assert.deepEqual(
       rows.map((r) => r.phase),
-      ["intent", "answer", "intent", "answer", "read", "guard"],
+      ["open", "intent", "answer", "intent", "answer", "read", "guard"],
     );
     assert.equal(rows.at(-1).allowed, false);
     assert.equal(rows.at(-1).reason, "not-owned");
@@ -235,7 +253,7 @@ describe("the issued-names ledger", () => {
     const rows = readLedger(join(dir, "ledger.jsonl"), "run1").rows;
     assert.deepEqual(
       rows.map((r) => r.seq),
-      [1, 2],
+      [1, 2, 3],
     );
     assert.ok(rows.every((r) => r.runId === "run1" && r.v === 1));
     assert.ok(rows.every((r) => r.at === new Date(START).toISOString()));
@@ -274,7 +292,11 @@ describe("the issued-names ledger", () => {
         JSON.stringify(transport),
       );
     }
-    assert.equal(readFileSync(join(dir, "ledger.jsonl"), "utf8"), "", "nothing was written");
+    assert.deepEqual(
+      readLedger(join(dir, "ledger.jsonl"), "run1").rows.map((r) => r.phase),
+      ["open"],
+      "nothing was written but the open row",
+    );
     assert.doesNotThrow(() =>
       beginCreate(state, { name: "x".repeat(1024), transport: "a".repeat(32) }),
     );
@@ -328,14 +350,34 @@ describe("the issued-names ledger", () => {
 
   it("a failed or short write is an error, never a silent success", () => {
     closeOwnership(state);
+    let broken = false;
     state = openOwnership({
       path: join(dir, "broken.jsonl"),
       runId: "run1",
-      io: { writeSync: () => 0, fsyncSync: () => {} },
+      io: {
+        writeSync: (fd, buffer, offset, length) =>
+          broken ? 0 : fs.writeSync(fd, buffer, offset, length),
+        fsyncSync: () => {},
+      },
     });
+    broken = true;
     assert.equal(
       refusal(() => beginCreate(state, { name: "a", transport: "rest" })),
       "ledger-write",
+    );
+    assert.equal(
+      refusal(() => beginCreate(state, { name: "b", transport: "rest" })),
+      "ledger-failed",
+    );
+    assert.throws(
+      () =>
+        openOwnership({
+          path: join(dir, "broken2.jsonl"),
+          runId: "run1",
+          io: { writeSync: () => 0, fsyncSync: () => {} },
+        }),
+      (error) => error.code === "ledger-write",
+      "a new ledger whose first row cannot be written",
     );
   });
 
@@ -351,7 +393,7 @@ describe("the issued-names ledger", () => {
       },
     });
     create("topics/a", OK);
-    assert.equal(readLedger(join(dir, "chunks.jsonl"), "run1").rows.length, 2);
+    assert.equal(readLedger(join(dir, "chunks.jsonl"), "run1").rows.length, 3);
   });
 });
 
@@ -426,17 +468,22 @@ describe("the delete guard", () => {
     assert.equal(closureReport(state).closureReady, true);
   });
 
-  it("does not own an unknown create when a GET, after the settle delay, finds nothing", () => {
+  it("does not own an unknown create when a GET, after the settle delay, finds nothing, and does not settle it either", () => {
     create("topics/a", TIMEOUT);
     advance(SETTLE);
     assert.equal(read("topics/a", NOT_FOUND), "absent");
     assert.equal(isOwned(state, "topics/a"), false);
-    assert.deepEqual(unsettledNames(state), []);
+    assert.deepEqual(unsettledNames(state), ["topics/a"], "absence alone never settles a create");
     assert.equal(
       refusal(() => beginDelete(state, { name: "topics/a", transport: "rest" })),
-      "not-owned",
+      "unsettled",
     );
-    assert.equal(closureReport(state).closureReady, true, "nothing of ours is left");
+    const report = closureReport(state);
+    assert.equal(report.closureReady, false, "a timed-out create may still appear");
+    assert.deepEqual(report.reasons, [
+      "unsettled-create:topics/a",
+      "unknown-create-absent-unconfirmed:topics/a",
+    ]);
   });
 
   it("leaves an unknown create unsettled when the GET is itself unknown", () => {
@@ -493,9 +540,15 @@ describe("the delete guard", () => {
     );
     advance(SETTLE);
     read("topics/a", NOT_FOUND);
+    assert.equal(
+      refusal(() => beginCreate(state, { name: "topics/a", transport: "rest" })),
+      "unsettled",
+      "a 404 does not settle a create, however late",
+    );
+    read("topics/a", OK);
     assert.doesNotThrow(
-      () => create("topics/a", OK),
-      "settled absent: the name may be created again",
+      () => create("topics/a", CONFLICT),
+      "settled present: the name may be created again",
     );
     assert.equal(isOwned(state, "topics/a"), true);
   });
@@ -577,7 +630,7 @@ describe("unknown deletes", () => {
     advance(SETTLE);
     read("topics/a", NOT_FOUND);
     assert.equal(closureReport(state).unknownDeletes, 0);
-    assert.equal(closureReport(state).closureReady, true);
+    assert.equal(closureReport(state).closureReady, false, "it stays an unsettled create");
   });
 });
 
@@ -594,6 +647,10 @@ describe("closure", () => {
       owned: [],
       unsettled: [],
       details: [],
+      unknownAnswers: [],
+      a2Required: false,
+      absentUnconfirmed: [],
+      coordinatorNote: null,
     });
   });
 
@@ -676,12 +733,12 @@ describe("resuming a ledger", () => {
     const rows = readLedger(path(), "run1").rows;
     assert.deepEqual(
       rows.map((r) => r.phase),
-      ["intent", "answer", "resume"],
+      ["open", "intent", "answer", "resume"],
     );
-    assert.equal(rows[2].droppedTailBytes, Buffer.byteLength(torn));
+    assert.equal(rows[3].droppedTailBytes, Buffer.byteLength(torn));
     assert.equal(readFileSync(path(), "utf8").endsWith("\n"), true);
     create("b", OK);
-    assert.equal(readLedger(path(), "run1").rows.length, 5);
+    assert.equal(readLedger(path(), "run1").rows.length, 6);
   });
 
   it("refuses another run, a corrupt row and a gap, and adopts nothing", () => {
@@ -748,7 +805,7 @@ describe("resuming a ledger", () => {
 /** Writes a ledger file from rows, as a crashed or damaged run might have left it. */
 function ledgerFile(name, rows, runId = "run1") {
   const path = join(dir, name);
-  const text = rows
+  const text = [{ phase: "open", settleAbsentAfterMs: SETTLE }, ...rows]
     .map((row, index) =>
       JSON.stringify({ v: 1, runId, seq: index + 1, at: "2026-09-06T10:40:00.000Z", ...row }),
     )
@@ -804,15 +861,31 @@ describe("what the answer classes, errors and reports expose", () => {
   });
 
   it("says what each unsettled name waits for and why", () => {
-    const settlesAt = new Date(START + SETTLE).toISOString();
+    const at = new Date(START).toISOString();
+    const a2 = new Date(START + SETTLE).toISOString();
     create("b", { status: 503, bodyReadable: true });
     create("a", TIMEOUT);
     create("d", OK);
     remove("d", { status: 200, bodyReadable: false });
+    const entry = (name, action, reason, ticket) => ({
+      name,
+      action,
+      ticket,
+      reason,
+      answeredAt: at,
+      synthetic: false,
+      state: `unknown-${action}-unsettled`,
+      settled: false,
+      settledBy: null,
+      settledAt: null,
+      eligibleForA2At: a2,
+      requiresA2: true,
+      absentReads: [],
+    });
     assert.deepEqual(closureReport(state).details, [
-      { name: "a", action: "create", reason: "transport-error", absentSettlesAt: settlesAt },
-      { name: "b", action: "create", reason: "server-error", absentSettlesAt: settlesAt },
-      { name: "d", action: "delete", reason: "unreadable-body", absentSettlesAt: settlesAt },
+      entry("a", "create", "transport-error", 2),
+      entry("b", "create", "server-error", 1),
+      entry("d", "delete", "unreadable-body", 4),
     ]);
   });
 
@@ -927,7 +1000,7 @@ describe("a damaged ledger", () => {
     );
     writeFileSync(
       path,
-      '{"v":1,"runId":"run1","seq":1,"at":"2026-09-06T10:40:00.000Z","phase":"intent"}\n{broken\n',
+      '{"v":1,"runId":"run1","seq":1,"at":"2026-09-06T10:40:00.000Z","phase":"open","settleAbsentAfterMs":600000}\n{broken\n',
     );
     assert.throws(
       () => openOwnership({ path, runId: "run1" }),
@@ -947,20 +1020,13 @@ describe("a damaged ledger", () => {
       answerRow(3, "delete", "b", { class: "unknown", status: null }),
     ]);
     state = openOwnership({ path, runId: "run1" });
-    assert.deepEqual(closureReport(state).details, [
-      {
-        name: "a",
-        action: "create",
-        reason: "unknown",
-        absentSettlesAt: "2026-09-06T10:50:00.000Z",
-      },
-      {
-        name: "b",
-        action: "delete",
-        reason: "unknown",
-        absentSettlesAt: "2026-09-06T10:50:00.000Z",
-      },
-    ]);
+    assert.deepEqual(
+      closureReport(state).details.map((d) => [d.name, d.action, d.reason, d.eligibleForA2At]),
+      [
+        ["a", "create", "unknown", "2026-09-06T10:50:00.000Z"],
+        ["b", "delete", "unknown", "2026-09-06T10:50:00.000Z"],
+      ],
+    );
     assert.equal(closureReport(state).unknownDeletes, 1);
   });
 });
@@ -972,7 +1038,11 @@ describe("the files and descriptors it uses", () => {
     closeOwnership(state);
     events = [];
     state = open("fresh-dir.jsonl");
-    assert.deepEqual(events, ["fsync"], "the new file's directory entry is made durable");
+    assert.deepEqual(
+      events,
+      ["fsync", "write", "fsync"],
+      "the new file's directory entry is made durable, then the open row",
+    );
     create("a", OK);
     closeOwnership(state);
     fs.appendFileSync(join(dir, "fresh-dir.jsonl"), '{"torn');
@@ -985,38 +1055,81 @@ describe("the files and descriptors it uses", () => {
     closeOwnership(state);
     const before = openFds();
     const fresh = open("fds.jsonl");
+    const fd = fresh.fd;
     closeOwnership(fresh);
     assert.equal(openFds(), before, "no descriptor is left open after a close");
     assert.throws(
-      () => fs.writeSync(fresh.fd, "x"),
+      () => fs.writeSync(fd, "x"),
       (error) => error.code === "EBADF",
     );
     state = open("fds2.jsonl");
   });
 });
 
-describe("settling by absence needs time; settling by presence does not", () => {
+describe("settling: presence settles an unknown answer at once, absence never settles a create", () => {
   const stillUnsettled = (name) => assert.deepEqual(unsettledNames(state), [name]);
+  const entryOf = (name) => closureReport(state).unknownAnswers.find((e) => e.name === name);
 
-  it("keeps an unknown create unsettled when the GET finds nothing too early", () => {
-    create("a", TIMEOUT);
-    advance(SETTLE - 1);
-    assert.equal(read("a", NOT_FOUND), "absent");
-    stillUnsettled("a");
-    assert.equal(
-      refusal(() => beginCreate(state, { name: "a", transport: "rest" })),
-      "unsettled",
-    );
-    assert.equal(closureReport(state).closureReady, false);
-    // The row is kept, and says what it saw.
-    const row = readLedger(join(dir, "ledger.jsonl"), "run1").rows.at(-1);
-    assert.deepEqual([row.phase, row.observed], ["read", "absent"]);
-    // Exactly at the delay it settles.
-    advance(1);
-    assert.equal(read("a", NOT_FOUND), "absent");
-    assert.deepEqual(unsettledNames(state), []);
-    assert.equal(closureReport(state).closureReady, true);
-  });
+  for (const [label, answer] of [
+    ["a transport error", TIMEOUT],
+    ["a pending operation", { ...OK, operationPending: true }],
+    ["a 503", { status: 503, bodyReadable: true }],
+    ["a cancelled call", { status: 499, bodyReadable: true }],
+  ]) {
+    it(`keeps a create answered with ${label} unsettled whenever the GET finds nothing, however late`, () => {
+      create("a", answer);
+      const afterDelay = [];
+      for (const wait of [0, SETTLE - 1, 1, SETTLE, SETTLE]) {
+        advance(wait);
+        assert.equal(read("a", NOT_FOUND), "absent");
+        stillUnsettled("a");
+        assert.equal(isOwned(state, "a"), false);
+        assert.equal(
+          refusal(() => beginCreate(state, { name: "a", transport: "rest" })),
+          "unsettled",
+        );
+        assert.equal(
+          refusal(() => beginDelete(state, { name: "a", transport: "rest" })),
+          "unsettled",
+        );
+        const report = closureReport(state);
+        assert.equal(report.closureReady, false, `after ${wait} ms more`);
+        assert.deepEqual(report.reasons, [
+          "unsettled-create:a",
+          "unknown-create-absent-unconfirmed:a",
+        ]);
+        afterDelay.push(entryOf("a").absentReads.at(-1).afterDelay);
+      }
+      assert.deepEqual(afterDelay, [false, false, true, true, true]);
+      const report = closureReport(state);
+      assert.deepEqual(report.absentUnconfirmed, ["a"]);
+      assert.equal(report.a2Required, true);
+      assert.match(report.coordinatorNote, /accept/u);
+      assert.match(report.coordinatorNote, /recovery/u);
+      assert.equal(entryOf("a").state, "unknown-create-absent-unconfirmed");
+      assert.equal(entryOf("a").settled, false);
+      // Nothing but a present GET changes that, and then the name is ours to delete.
+      assert.equal(read("a", OK), "present");
+      assert.deepEqual(unsettledNames(state), []);
+      assert.equal(isOwned(state, "a"), true);
+      const settled = entryOf("a");
+      assert.deepEqual(
+        [settled.settled, settled.settledBy, settled.state, settled.absentReads.length],
+        [true, "present", "settled-present", 5],
+      );
+      assert.equal(closureReport(state).closureReady, false, "created, not yet deleted");
+      assert.equal(remove("a", NO_CONTENT).class, "ok");
+      const done = closureReport(state);
+      assert.equal(done.closureReady, true);
+      assert.equal(
+        done.a2Required,
+        true,
+        "the unknown answer is part of the report for the whole run",
+      );
+      assert.equal(done.coordinatorNote, null);
+      assert.deepEqual(done.absentUnconfirmed, []);
+    });
+  }
 
   it("measures the delay from the unknown answer, not from the intent or the first GET", () => {
     const ticket = beginCreate(state, { name: "a", transport: "rest" });
@@ -1024,10 +1137,15 @@ describe("settling by absence needs time; settling by presence does not", () => 
     recordAnswer(state, ticket, TIMEOUT);
     advance(SETTLE - 1);
     read("a", NOT_FOUND);
-    stillUnsettled("a");
     advance(1);
     read("a", NOT_FOUND);
-    assert.deepEqual(unsettledNames(state), []);
+    assert.deepEqual(
+      entryOf("a").absentReads.map((r) => r.afterDelay),
+      [false, true],
+    );
+    assert.equal(entryOf("a").answeredAt, new Date(START + SETTLE * 5).toISOString());
+    assert.equal(entryOf("a").eligibleForA2At, new Date(START + SETTLE * 6).toISOString());
+    stillUnsettled("a");
   });
 
   it("settles an unknown create at once when a GET shows the name", () => {
@@ -1048,66 +1166,411 @@ describe("settling by absence needs time; settling by presence does not", () => 
     read("a", NOT_FOUND);
     assert.deepEqual(unsettledNames(state), []);
     assert.equal(isOwned(state, "a"), false);
+    assert.equal(entryOf("a").settledBy, "absent-after-delay");
     create("b", OK);
     remove("b", TIMEOUT);
     read("b", OK);
     assert.deepEqual(unsettledNames(state), []);
     assert.equal(isOwned(state, "b"), true);
+    assert.equal(entryOf("b").settledBy, "present");
   });
 
-  it("takes the delay as an option, and refuses one it cannot use", () => {
-    closeOwnership(state);
-    state = openOwnership({
-      path: join(dir, "zero.jsonl"),
-      runId: "run1",
-      now: () => clock,
-      settleAbsentAfterMs: 0,
-    });
+  it("counts a GET as an own read only when its body names the name asked for (exact own read)", () => {
     create("a", TIMEOUT);
-    read("a", NOT_FOUND);
-    assert.deepEqual(unsettledNames(state), [], "no delay: absence settles at once");
+    const ask = (answer) => recordRead(state, { name: "a", transport: "rest", answer });
+    assert.equal(ask({ ...OK }), "unknown", "a 2xx with no bodyName shows nothing");
+    stillUnsettled("a");
+    assert.equal(ask({ ...OK, bodyName: "b" }), "unknown");
+    assert.equal(ask({ ...OK, bodyName: "" }), "unknown");
+    stillUnsettled("a");
+    assert.equal(isOwned(state, "a"), false);
+    const reasons = readLedger(join(dir, "ledger.jsonl"), "run1")
+      .rows.filter((r) => r.phase === "read")
+      .map((r) => [r.observed, r.reason]);
+    assert.deepEqual(reasons, [
+      ["unknown", "missing-body-name"],
+      ["unknown", "name-mismatch"],
+      ["unknown", "name-mismatch"],
+    ]);
+    assert.equal(ask({ ...OK, bodyName: "a" }), "present");
+    assert.equal(isOwned(state, "a"), true);
+    // An unknown delete is settled as still there by the same exact read, not by a bare 2xx.
+    create("d", OK);
+    remove("d", TIMEOUT);
+    recordRead(state, { name: "d", transport: "rest", answer: { ...OK } });
+    stillUnsettled("d");
+    recordRead(state, { name: "d", transport: "rest", answer: { ...OK, bodyName: "d" } });
+    assert.deepEqual(unsettledNames(state), []);
+  });
+
+  it("keeps every unknown answer per name for the whole run, settled or not, with its A2 eligibility", () => {
+    create("c", TIMEOUT);
+    create("d", OK);
+    advance(1000);
+    remove("d", { status: 503, bodyReadable: true });
+    advance(SETTLE);
+    assert.equal(read("d", NOT_FOUND), "absent");
+    advance(5);
+    read("c", OK);
+    const report = closureReport(state);
+    assert.deepEqual(
+      report.unknownAnswers.map((e) => [e.name, e.action, e.state, e.settledBy, e.requiresA2]),
+      [
+        ["c", "create", "settled-present", "present", true],
+        ["d", "delete", "settled-absent-after-delay", "absent-after-delay", true],
+      ],
+    );
+    assert.equal(
+      report.unknownAnswers[1].eligibleForA2At,
+      new Date(START + 1000 + SETTLE).toISOString(),
+    );
+    assert.equal(report.unknownAnswers[1].settledAt, new Date(START + 1000 + SETTLE).toISOString());
+    assert.equal(report.unknownAnswers[0].settledAt, new Date(START + 1005 + SETTLE).toISOString());
+    assert.deepEqual(report.details, [], "settled names are not in the unsettled details");
+    assert.equal(report.a2Required, true);
+    // The same list after a resume, with the same times.
     closeOwnership(state);
-    for (const bad of [-1, 1.5, "10", Number.NaN, Infinity]) {
-      assert.throws(
-        () =>
-          openOwnership({ path: join(dir, "bad.jsonl"), runId: "run1", settleAbsentAfterMs: bad }),
-        (error) => error.code === "bad-settle-delay",
-        String(bad),
+    state = open();
+    assert.deepEqual(closureReport(state).unknownAnswers, report.unknownAnswers);
+  });
+
+  it("keeps an unknown DELETE in the report after an absent GET past the delay, and closure false across a resume", () => {
+    create("a", OK);
+    remove("a", TIMEOUT);
+    advance(SETTLE);
+    assert.equal(read("a", NOT_FOUND), "absent");
+    const check = () => {
+      const report = closureReport(state);
+      assert.equal(report.closureReady, false);
+      assert.deepEqual(report.reasons, ["unknown-delete-answers:1"]);
+      assert.equal(report.a2Required, true);
+      const [entry] = report.unknownAnswers;
+      assert.deepEqual(
+        [entry.name, entry.action, entry.reason, entry.answeredAt, entry.requiresA2],
+        ["a", "delete", "transport-error", new Date(START).toISOString(), true],
       );
+      assert.equal(entry.eligibleForA2At, new Date(START + SETTLE).toISOString());
+      assert.equal(entry.state, "settled-absent-after-delay");
+    };
+    check();
+    closeOwnership(state);
+    state = open();
+    check();
+    closeOwnership(state);
+    state = open();
+    check();
+  });
+
+  it("takes an unknown answer of 408 or 499 on a create or a delete as unknown, not a refusal", () => {
+    for (const status of [408, 499]) {
+      assert.equal(create(`c${status}`, { status, bodyReadable: true }).class, "unknown");
+      create(`d${status}`, OK);
+      assert.equal(remove(`d${status}`, { status, bodyReadable: true }).class, "unknown");
+    }
+    assert.equal(closureReport(state).unknownDeletes, 2);
+    assert.deepEqual(unsettledNames(state), ["c408", "c499", "d408", "d499"]);
+  });
+});
+
+describe("the settle delay is a recorded, immutable, floored setting", () => {
+  const path = () => join(dir, "delay.jsonl");
+  const openWith = (extra = {}) =>
+    openOwnership({ path: path(), runId: "run1", now: () => clock, ...extra });
+
+  it("is written in the first row, and defaults to the 10 minutes of the A2 read-back", () => {
+    closeOwnership(state);
+    state = openWith();
+    const [first] = readLedger(path(), "run1").rows;
+    assert.deepEqual([first.phase, first.seq, first.settleAbsentAfterMs], ["open", 1, SETTLE]);
+    assert.equal(SETTLE_CONST, SETTLE);
+  });
+
+  it("refuses a delay below the floor, unless the test-only flag is given", () => {
+    closeOwnership(state);
+    for (const short of [0, 1, SETTLE - 1]) {
+      assert.throws(
+        () => openWith({ settleAbsentAfterMs: short }),
+        (error) => error.code === "bad-settle-delay",
+        String(short),
+      );
+    }
+    assert.equal(existsSync(path()), false, "nothing was created by a refused open");
+    assert.equal(existsSync(`${path()}.lock`), false);
+    state = openWith({ settleAbsentAfterMs: 0, testOnlyAllowShortSettleDelay: true });
+    create("a", OK);
+    remove("a", TIMEOUT);
+    read("a", NOT_FOUND);
+    assert.deepEqual(unsettledNames(state), [], "the short delay is used by an unknown delete");
+  });
+
+  it("refuses values that are not a safe integer, with or without the flag", () => {
+    closeOwnership(state);
+    for (const bad of [-1, 1.5, "10", Number.NaN, Infinity, null, 2 ** 60]) {
+      for (const flag of [false, true]) {
+        assert.throws(
+          () =>
+            openWith({
+              settleAbsentAfterMs: bad,
+              testOnlyAllowShortSettleDelay: flag,
+            }),
+          (error) => error.code === "bad-settle-delay",
+          `${String(bad)} ${flag}`,
+        );
+      }
     }
     state = open("fresh.jsonl");
   });
 
-  it("replays the same settlement, because the rows carry their times", () => {
-    create("a", TIMEOUT);
-    advance(SETTLE - 1);
-    read("a", NOT_FOUND);
-    create("b", TIMEOUT);
-    advance(SETTLE);
-    read("b", NOT_FOUND);
+  it("accepts a longer delay, records it, and uses it when the ledger is resumed without an option", () => {
     closeOwnership(state);
-    state = open();
-    assert.deepEqual(unsettledNames(state), ["a"]);
-    assert.equal(SETTLE_CONST, SETTLE);
+    state = openWith({ settleAbsentAfterMs: 3 * SETTLE });
+    create("a", OK);
+    remove("a", TIMEOUT);
+    assert.equal(
+      closureReport(state).details[0].eligibleForA2At,
+      new Date(START + 3 * SETTLE).toISOString(),
+    );
+    closeOwnership(state);
+    state = openWith();
+    assert.equal(
+      closureReport(state).details[0].eligibleForA2At,
+      new Date(START + 3 * SETTLE).toISOString(),
+    );
+    advance(2 * SETTLE);
+    read("a", NOT_FOUND);
+    stillUnsettled();
+    advance(SETTLE);
+    read("a", NOT_FOUND);
+    assert.deepEqual(unsettledNames(state), []);
+    function stillUnsettled() {
+      assert.deepEqual(unsettledNames(state), ["a"]);
+    }
   });
 
-  it("refuses a ledger row without a valid time", () => {
+  it("refuses a resume with a different delay, and accepts the same one", () => {
     closeOwnership(state);
-    const path = ledgerFile("notime.jsonl", [intent(1, "create", "a")]);
-    const text = readFileSync(path, "utf8");
-    for (const at of ['"at":"never"', '"at":5']) {
-      writeFileSync(path, text.replace('"at":"2026-09-06T10:40:00.000Z"', at));
+    state = openWith();
+    create("a", TIMEOUT);
+    closeOwnership(state);
+    for (const other of [2 * SETTLE, SETTLE + 1]) {
       assert.throws(
-        () => openOwnership({ path, runId: "run1" }),
-        (error) => error.code === "corrupt-ledger" && /valid time/u.test(error.message),
-        at,
+        () => openWith({ settleAbsentAfterMs: other }),
+        (error) => error.code === "settle-delay-mismatch",
+        String(other),
       );
     }
-    writeFileSync(path, text.replace(',"at":"2026-09-06T10:40:00.000Z"', ""));
     assert.throws(
-      () => openOwnership({ path, runId: "run1" }),
-      (error) => error.code === "corrupt-ledger",
+      () => openWith({ settleAbsentAfterMs: 0, testOnlyAllowShortSettleDelay: true }),
+      (error) => error.code === "settle-delay-mismatch",
     );
+    state = openWith({ settleAbsentAfterMs: SETTLE });
+    assert.deepEqual(unsettledNames(state), ["a"]);
+    assert.equal(
+      readLedger(path(), "run1").rows.filter((r) => r.phase === "open").length,
+      1,
+      "a resume does not write another open row",
+    );
+  });
+
+  it("refuses a resume of a short-delay ledger without the flag", () => {
+    closeOwnership(state);
+    state = openWith({ settleAbsentAfterMs: 5, testOnlyAllowShortSettleDelay: true });
+    closeOwnership(state);
+    assert.throws(
+      () => openWith(),
+      (error) => error.code === "bad-settle-delay",
+    );
+    state = openWith({ testOnlyAllowShortSettleDelay: true });
+    advance(5);
+    create("a", OK);
+    remove("a", TIMEOUT);
+    advance(5);
+    read("a", NOT_FOUND);
+    assert.deepEqual(unsettledNames(state), []);
+  });
+
+  it("refuses a ledger whose first row is not a valid open row, or that has a second one", () => {
+    closeOwnership(state);
+    const text = (rows) =>
+      rows
+        .map((row, i) =>
+          JSON.stringify({
+            v: 1,
+            runId: "run1",
+            seq: i + 1,
+            at: "2026-09-06T10:40:00.000Z",
+            ...row,
+          }),
+        )
+        .join("\n") + "\n";
+    const cases = {
+      none: [intent(1, "create", "a")],
+      "bad delay": [{ phase: "open", settleAbsentAfterMs: "600000" }],
+      "missing delay": [{ phase: "open" }],
+      second: [
+        { phase: "open", settleAbsentAfterMs: SETTLE },
+        { phase: "open", settleAbsentAfterMs: SETTLE },
+      ],
+    };
+    for (const [label, rows] of Object.entries(cases)) {
+      writeFileSync(path(), text(rows));
+      assert.throws(
+        () => openWith(),
+        (error) => error.code === "corrupt-ledger",
+        label,
+      );
+      assert.equal(existsSync(`${path()}.lock`), false, label);
+    }
+    state = open("fresh.jsonl");
+  });
+
+  it("treats a ledger that holds only an unfinished first row as new", () => {
+    closeOwnership(state);
+    writeFileSync(path(), '{"v":1,"runId":"run1","seq":1,"phase":"op');
+    state = openWith();
+    assert.deepEqual(
+      readLedger(path(), "run1").rows.map((r) => r.phase),
+      ["open"],
+    );
+  });
+});
+
+describe("a failed write poisons the state", () => {
+  const path = () => join(dir, "flaky.jsonl");
+  /** An io whose write or fsync fails once it is armed; a failed write lands half a row first. */
+  function flakyIo(mode) {
+    const io = {
+      armed: false,
+      writeSync(fd, buffer, offset, length) {
+        if (io.armed && mode === "write") {
+          fs.writeSync(fd, buffer, offset, Math.floor(length / 2));
+          throw new Error("EIO on write");
+        }
+        return fs.writeSync(fd, buffer, offset, length);
+      },
+      fsyncSync(fd) {
+        if (io.armed && mode === "fsync") throw new Error("EIO on fsync");
+        return fs.fsyncSync(fd);
+      },
+    };
+    return io;
+  }
+  const openFlaky = (io) => openOwnership({ path: path(), runId: "run1", io, now: () => clock });
+
+  for (const mode of ["write", "fsync"]) {
+    it(`closes the state when a ${mode} fails: every later call raises, nothing is written, the lock is released`, () => {
+      closeOwnership(state);
+      const io = flakyIo(mode);
+      state = openFlaky(io);
+      create("a", OK);
+      io.armed = true;
+      assert.throws(
+        () => beginCreate(state, { name: "b", transport: "rest" }),
+        (error) => error.message === `EIO on ${mode}`,
+      );
+      io.armed = false;
+      const size = readFileSync(path()).length;
+      const calls = [
+        () => beginCreate(state, { name: "c", transport: "rest" }),
+        () => beginDelete(state, { name: "a", transport: "rest" }),
+        () => beginDelete(state, { name: "never", transport: "rest" }),
+        () => recordRead(state, { name: "a", transport: "rest", answer: NOT_FOUND }),
+        () =>
+          recordAnswer(state, { ticket: 2, action: "create", name: "b", transport: "rest" }, OK),
+      ];
+      for (const call of calls) assert.equal(refusal(call), "ledger-failed");
+      assert.equal(readFileSync(path()).length, size, "no row after the failure");
+      assert.equal(existsSync(`${path()}.lock`), false, "the writer lock is released");
+      closeOwnership(state); // idempotent
+      // The resume never has two intents for one name.
+      state = openFlaky(spyIo());
+      const rows = readLedger(path(), "run1").rows;
+      const intents = rows.filter((r) => r.phase === "intent" && r.name === "b");
+      if (mode === "write") {
+        assert.equal(intents.length, 0, "a half row is dropped");
+        assert.ok(rows.find((r) => r.phase === "resume").droppedTailBytes > 0);
+        assert.deepEqual(unsettledNames(state), []);
+      } else {
+        assert.equal(intents.length, 1);
+        assert.deepEqual(unsettledNames(state), ["b"], "a whole intent with no answer is unknown");
+        const synthetic = rows.find((r) => r.synthetic);
+        assert.deepEqual([synthetic.name, synthetic.reason], ["b", "no-answer"]);
+      }
+    });
+  }
+
+  it("also fails closed when the first row of a new ledger cannot be written", () => {
+    closeOwnership(state);
+    const io = flakyIo("fsync");
+    io.armed = true;
+    assert.throws(() => openFlaky(io));
+    assert.equal(existsSync(`${path()}.lock`), false);
+    state = open("fresh.jsonl");
+  });
+});
+
+describe("one writer at a time", () => {
+  const path = () => join(dir, "single.jsonl");
+  const lockPath = () => `${path()}.lock`;
+  const openAt = (extra = {}) =>
+    openOwnership({ path: path(), runId: "run1", now: () => clock, ...extra });
+
+  it("refuses a second open of a ledger that is open, and allows it after the close", () => {
+    closeOwnership(state);
+    state = openAt();
+    assert.equal(existsSync(lockPath()), true);
+    assert.throws(
+      () => openAt(),
+      (error) => error.code === "ledger-locked",
+    );
+    assert.equal(existsSync(lockPath()), true, "the refused open leaves the holder's lock alone");
+    create("a", OK);
+    closeOwnership(state);
+    assert.equal(existsSync(lockPath()), false);
+    state = openAt();
+    assert.equal(isOwned(state, "a"), true);
+  });
+
+  it("takes over a lock whose holder is gone, and keeps one whose holder runs", () => {
+    closeOwnership(state);
+    const dead = spawnSync(process.execPath, ["-e", ""]).pid;
+    writeFileSync(lockPath(), `${dead}\n`);
+    state = openAt();
+    assert.equal(readFileSync(lockPath(), "utf8").trim(), String(process.pid));
+    closeOwnership(state);
+    writeFileSync(lockPath(), `${process.ppid}\n`);
+    assert.throws(
+      () => openAt(),
+      (error) => error.code === "ledger-locked",
+    );
+    for (const junk of ["", "not a pid\n", "0\n", "-5\n"]) {
+      writeFileSync(lockPath(), junk);
+      assert.throws(
+        () => openAt(),
+        (error) => error.code === "ledger-locked",
+        JSON.stringify(junk),
+      );
+    }
+    rmSync(lockPath());
+    state = open("fresh.jsonl");
+  });
+
+  it("releases the lock when the open itself fails", () => {
+    closeOwnership(state);
+    writeFileSync(
+      path(),
+      '{"v":1,"runId":"other","seq":1,"at":"2026-09-06T10:40:00.000Z","phase":"open","settleAbsentAfterMs":600000}\n',
+    );
+    assert.throws(
+      () => openAt(),
+      (error) => error.code === "foreign-run",
+    );
+    assert.equal(existsSync(lockPath()), false);
+    assert.throws(
+      () => openAt({ settleAbsentAfterMs: 1 }),
+      (error) => error.code === "bad-settle-delay",
+    );
+    assert.equal(existsSync(lockPath()), false);
     state = open("fresh.jsonl");
   });
 });

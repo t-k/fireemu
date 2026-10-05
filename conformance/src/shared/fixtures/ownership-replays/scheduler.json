@@ -2,11 +2,15 @@
  "sources": [
   {
    "path": "codex-lane8/shape-96db1cb7ca5fcb35/requests.jsonl",
-   "sha256": "29437c274dc3d28582a89a1496f140e334154e62e9f078bfe0e922193a34ce61"
+   "sha256": "29437c274dc3d28582a89a1496f140e334154e62e9f078bfe0e922193a34ce61",
+   "bytes": 353302,
+   "lines": 96
   },
   {
    "path": "codex-lane8/calendar-5a73ba99b7014cfd/requests.jsonl",
-   "sha256": "21cad742112eb327ce16706ee3463039a8cb057ead3e212473437c318e2503d5"
+   "sha256": "21cad742112eb327ce16706ee3463039a8cb057ead3e212473437c318e2503d5",
+   "bytes": 155875,
+   "lines": 162
   }
  ],
  "note": "Scheduled shape run (delete of a paused job answered 409) and calendar v5 (two creates answered 400).",
@@ -65,7 +69,8 @@
    "transport": "rest",
    "name": "jobs/shape",
    "status": 200,
-   "bodyReadable": true
+   "bodyReadable": true,
+   "bodyName": "jobs/shape"
   },
   {
    "action": "delete",

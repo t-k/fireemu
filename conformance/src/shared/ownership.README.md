@@ -2,7 +2,7 @@
 
 `ownership.mjs` is a small Node library for any recorder that creates and deletes resources in a shared project. It answers three questions and nothing else: which names did this run issue, which may it delete, and which answers are still unknown. It has no framework and no transport code. The caller sends the requests and reports what came back. Existing recorders are not migrated; new ones use it.
 
-Plain ESM, `node:fs` only. The ledger is JSONL, one file per run.
+Plain ESM, `node:fs` only. The ledger is JSONL, one file per run. Names must be unique to the run (put the run id in them): that is a precondition, not a courtesy.
 
 ## The contract
 
@@ -21,24 +21,53 @@ recordAnswer(state, ticket, { status, bodyReadable, transportError, operationPen
 const t = beginDelete(state, { name, transport: "rest" });
 recordAnswer(state, t, answer);
 
-// 3. An unknown answer is settled only by a direct GET of that exact name.
+// 3. An unknown answer is settled only by a direct GET of that exact name that shows it.
 recordRead(state, { name, transport: "rest", answer: { status, bodyReadable, bodyName } });
 
 // At the end of the run.
-const { closureReady, reasons, details } = closureReport(state); // details: what each unsettled name waits for, and why
+const report = closureReport(state); // closureReady, reasons, unknownAnswers, absentUnconfirmed, coordinatorNote
+closeOwnership(state);
 ```
 
-Report every answer with what you observed: `status` (HTTP; map a gRPC code to its HTTP equivalent: OK 200, ALREADY_EXISTS 409, NOT_FOUND 404, INVALID_ARGUMENT 400, UNAVAILABLE 503, DEADLINE_EXCEEDED 504), `bodyReadable: true` only when the body was read (an empty body is readable; leave it out and the answer is unknown), `transportError` for a timeout, reset or refused connection, and `operationPending: true` for a long-running operation you have not read as done. `bodyName`, when given on a GET, must equal the name asked for.
+## How to report what you saw
+
+- `status` is the HTTP status. Map a gRPC code to its HTTP equivalent: OK 200, ALREADY_EXISTS 409, NOT_FOUND 404, INVALID_ARGUMENT 400, PERMISSION_DENIED 403, UNAUTHENTICATED 401, UNAVAILABLE 503, DEADLINE_EXCEEDED 504, **CANCELLED 499**. A 408 and a 499 are unknown, not refusals: the call may have been applied after it left.
+- `bodyReadable: true` only when the body was read (an empty body is readable; leave it out and the answer is unknown).
+- `transportError` for a timeout, reset or refused connection.
+- `operationPending: true` only when you stop polling a long-running operation that is not done.
+- A GET counts as **present** only when `bodyName` is given and equals the name asked for. A 2xx without `bodyName`, or with another, is unknown.
+
+### A 2xx means "this run created it" only when the request cannot overwrite
+
+The library takes a create that answered 2xx as made by this run. That holds when a second create of the same name fails: Pub/Sub topic and subscription PUT, Cloud Scheduler, Eventarc (409 on exists), a GCS upload with `ifGenerationMatch=0`. It does not hold for a plain PUT, a Firestore `set`, or a GCS upload without a precondition: those overwrite, and a 2xx would then claim a resource this run did not create. For such a request, send the create-only precondition, or report the answer as unknown and settle it with an own GET.
+
+### Long-running operations
+
+Keep the ticket open while you poll the operation. When it is done, call `recordAnswer` once: with status 200 if it finished without error, or with `operation.error.code` mapped to HTTP (ALREADY_EXISTS 409, and so on). Use `operationPending: true` only when you stop polling before it finishes: the effect on the name is then unknown, and the name is settled only by an own GET.
+
+### One request that makes several names
+
+A deploy, a CLI call or a batch may create several names at once (a function, its schedule job, a topic, a service). Call `beginCreate` for every name it will derive before you start it, then `recordAnswer` once per name, from what you can read for that name. An exit code of 0 is not a 2xx for each name: report `unknown` (a transport error, or `operationPending`) for any name you did not read.
+
+### Lists are never a 404
+
+A name missing from a list, or from page N of one, is not an absent GET and must never be passed to `recordRead`. A list may find candidates (the real PUBSUB cleanup found a timed-out topic that way); each candidate then gets a direct GET of its own, and that goes through `recordRead`.
 
 ## What the library decides
 
-- **Issued names.** Each create or delete is two rows: the intent, fsynced before the request is sent, and the answer, fsynced after it, each with the name, the transport and the answer class (`ok`, `conflict`, `notFound`, `refused`, `unknown`). A direct GET is a row too, and a refused delete is an audit row. A process that dies between the two rows leaves an intent with no answer; `openOwnership` on the same file turns it into an unknown answer (`no-answer`) and writes that down. A ledger row of another run makes `openOwnership` refuse: a run never adopts another run's names. A torn last line is dropped and counted.
-- **Delete guard.** A name may be deleted only if this run's own create of it answered 2xx, or answered unknown and a later direct GET showed the name. A 409, a 404 or another 4xx on a create never makes a name ours, and a GET alone never does. The fact outlives this run's own delete, so deleting a deleted name again (a 404 probe) is allowed. A delete is never sent again after an unknown answer, even if a GET then shows the name (`unknown-delete-not-resent`): the name stays owned and a later cleanup run settles it.
-- **Unknown answers.** A transport error, an unreadable body, a status below 200, a 3xx, a 5xx or a pending operation, on a create or delete, is unknown. Until a direct GET settles the name, `beginCreate` and `beginDelete` refuse it (`unsettled`). Only positive evidence settles at once: a GET showing the name settles an unknown create as ours, and an unknown delete as still there. A GET that finds nothing settles only after `settleAbsentAfterMs` (default 10 minutes, the owner's A2 read-back) from the unknown answer, because until then the request may still take effect or the read may be stale; an earlier absent GET is recorded and changes nothing (`closureReport().details` names the time it can settle). A GET that is itself unknown settles nothing.
-- **Closure.** `closureReady` is false while any request is in flight, any unknown answer is unsettled, any name this run created is not yet deleted (a delete that answered 2xx or 404), or **any DELETE ever answered unknown, even one a GET settled**. The last rule is the owner's: the answer to that delete was never seen.
+- **Issued names.** Each create or delete is two rows: the intent, fsynced before the request is sent, and the answer, fsynced after it, each with the name, the transport and the answer class (`ok`, `conflict`, `notFound`, `refused`, `unknown`). A direct GET is a row too, and a refused delete is an audit row. The first row of a ledger is `open`: it records the settle delay. A process that dies between the intent and the answer leaves an intent with no answer; `openOwnership` on the same file turns it into an unknown answer (`no-answer`) and writes that down. A ledger row of another run makes `openOwnership` refuse: a run never adopts another run's names. A torn last line is dropped and counted.
+- **Delete guard.** A name may be deleted only if this run's own create of it answered 2xx, or answered unknown and a later own GET showed it. A 409, a 404 or another 4xx on a create never makes a name ours, and a GET alone never does. The fact outlives this run's own delete, so deleting a deleted name again (a 404 probe) is allowed. A delete is never sent again after an unknown answer, even if a GET then shows the name (`unknown-delete-not-resent`): the name stays owned.
+- **Unknown answers.** A transport error, an unreadable body, a status below 200, a 3xx, a 5xx, a 408, a 499 or a pending operation, on a create or delete, is unknown. Until it is settled, `beginCreate` and `beginDelete` refuse the name (`unsettled`).
+  - **An unknown create** is settled only by an own GET that shows the name; the name is then ours. **A GET that finds nothing never settles it, however late.** The request may still take effect (production showed a create that timed out still present 40 minutes later). The absent reads are kept as evidence, the name is reported as `unknown-create-absent-unconfirmed`, and `closureReady` stays false. `report.coordinatorNote` then says the coordinator must accept the name or run a recovery.
+  - **An unknown delete** is settled in the run by an own GET that shows the name (still there), or by a GET that finds nothing once `settleAbsentAfterMs` has passed since the answer. Either way `closureReady` stays false: the answer to that delete was never seen. The only thing that closes it is the coordinator's separate A2 read-back, at least 10 minutes later and outside this library; a later run on the same ledger cannot.
+  - Every unknown answer stays in `report.unknownAnswers` for the whole run, settled or not: name, action, ticket, reason, answer time, how it was settled, the absent reads (each marked `afterDelay` or not), `eligibleForA2At` (answer time plus the delay) and `requiresA2`. `details` is the unsettled part.
+- **Closure.** `closureReady` is false while any request is in flight, any unknown answer is unsettled, any name this run created is not yet deleted (a delete that answered 2xx or 404), or any DELETE ever answered unknown, even one a GET settled. A settled unknown create does not block closure, but `a2Required` is true whenever the run had any unknown answer: the A2 read-back precedes any close row.
+- **The settle delay** is `settleAbsentAfterMs`, 10 minutes by default (the A2 read-back) and never less (`testOnlyAllowShortSettleDelay` exists for tests). It is written in the `open` row. A resume cannot change it: a different value is refused (`settle-delay-mismatch`), and with no value the ledger is resumed with the recorded one.
+- **A failed write stops the state.** If a write or its fsync throws, the state is closed (`ledger-failed` for every later call), so a retry cannot write a second intent or bytes after a half row. Resume the file: a half row is dropped, and a whole intent with no answer becomes an unknown answer.
+- **One writer.** `openOwnership` takes `<path>.lock` (the holder's pid) and refuses a second open (`ledger-locked`) while the holder runs. A lock whose process is gone is taken over, which is how a crashed run is resumed. Same host only; a lock whose content is not a pid is never taken over.
 
 ## What it does not do
 
-Names must be unique to the run (put the run id in them); the library cannot tell a foreign resource that happens to carry the name of one whose create timed out. A deliberate probe of a name this run never created (a "delete of a missing object" scenario) is not a cleanup: issue it outside the ledger, with a name that cannot exist. Retries, backoff, list-based cleanup and the cost budget stay with the recorder.
+The library cannot tell a foreign resource that happens to carry the name of one whose create timed out; hence unique names. A deliberate probe of a name this run never created (a "delete of a missing object" scenario) is not a cleanup: issue it outside the ledger, with a name that cannot exist. On macOS `fsync` does not issue `F_FULLFSYNC`, so power-loss durability is not claimed. Retries, backoff, list-based cleanup, the cost budget and the A2 read-back stay with the recorder and the coordinator.
 
-Tests: `ownership.test.mjs` (rules), `ownership.property.test.mjs` (600 fixed-seed generated scripts over answer classes, effects and noise), `ownership.replay.test.mjs` (real recorded answers from PUBSUB, Cloud Scheduler and FE v5; `fixtures/ownership-replays/extract.py` derives the fixtures).
+Tests: `ownership.test.mjs` (rules), `ownership.property.test.mjs` (600 fixed-seed generated scripts over answer classes, effects, late effects and noise, with a reference model and a world-safety property), `ownership.replay.test.mjs` (real recorded answers from PUBSUB, Cloud Scheduler and FE v5; `fixtures/ownership-replays/extract.py` derives the fixtures byte for byte, and the test checks the source digests when the private run records are present).

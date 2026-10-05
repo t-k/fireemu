@@ -14,7 +14,6 @@ export const HARD_BACKSTOP_MS = 600_000;
 
 /** CPU time a process has used, as `ps` prints it, or null when it is gone or cannot be read. */
 export function childCpuTime(pid) {
-  if (!Number.isInteger(pid) || pid <= 0) return null;
   const run = spawnSync('ps', ['-o', 'time=', '-p', String(pid)], {encoding: 'utf8', timeout: 5000});
   const text = run.status === 0 ? run.stdout.trim() : '';
   return text === '' ? null : text;
@@ -66,11 +65,14 @@ export async function waitUntil({
  * Waits for a child's exit: `end` resolves with the exit and `result()` is it once known. Fails only
  * after `stallMs` without a change of `progress`.
  */
-export async function untilExit({end, result, progress = () => null, label, stallMs = STALL_MS, sleepMs = 50}) {
+export async function untilExit({
+  end, result, progress = () => null, label, stallMs = STALL_MS, sleepMs = 50,
+  now = () => performance.now(), sleep = delay,
+}) {
   let exit = result();
   if (exit) return exit;
   let ended = false;
   end.then(() => { ended = true; }, () => { ended = true; });
-  await waitUntil({check: () => ended || result(), progress, label: `${label} (waiting for exit)`, stallMs, pollMs: sleepMs});
+  await waitUntil({check: () => ended || result(), progress, label: `${label} (waiting for exit)`, stallMs, pollMs: sleepMs, now, sleep});
   return end;
 }

@@ -6,7 +6,11 @@ import {STALL_MS, HARD_BACKSTOP_MS, childCpuTime, sampled, untilExit, waitUntil}
 
 /** A virtual clock: sleep(ms) advances it, so a wait of any length takes no real time. */
 function clock() {
-  const c = {t: 0, sleeps: 0, now: () => c.t, sleep: async ms => { c.t += ms; c.sleeps += 1; }};
+  const c = {t: 0, sleeps: 0, now: () => c.t, sleep: async ms => {
+    c.t += ms;
+    // A wait that never ends must fail the test instead of spinning the event loop.
+    if ((c.sleeps += 1) > 2_000_000) throw new Error('runaway wait');
+  }};
   return c;
 }
 
@@ -39,7 +43,7 @@ test('gives up after one stall window with no progress, naming the label and the
     waitUntil({check: () => false, progress: () => 7, stallMs: 1000, label: 'the child', ...c}),
     error => /the child/.test(error.message) && /1000 ms/.test(error.message),
   );
-  assert.ok(c.t >= 1000 && c.t < 1000 + 200, `gave up at ${c.t}`);
+  assert.equal(c.t, 1000, 'it polls every 10 ms by default and gives up at the window');
 });
 
 test('a window restarts when progress changes after a pause', async () => {
@@ -72,7 +76,27 @@ test('an async check and an async progress are awaited', async () => {
   assert.equal(value, true);
 });
 
-test('untilExit resolves with the exit, or rejects only after a stall', async () => {
+test('untilExit returns the known result at once, and polls every 50 ms by default', async () => {
+  const known = {code: 7, signal: null};
+  assert.equal(await untilExit({end: Promise.resolve({code: 0}), result: () => known, label: 'known'}), known);
+  const c = clock();
+  await assert.rejects(
+    untilExit({end: new Promise(() => {}), result: () => null, progress: () => 1, label: 'quiet', stallMs: 1000, ...c}),
+    /quiet/,
+  );
+  assert.equal(c.t, 1000);
+});
+
+test('untilExit takes a resolved end whose result is not recorded yet, and passes on a rejected end', async () => {
+  const c = clock();
+  assert.deepEqual(await untilExit({end: Promise.resolve({code: 1}), result: () => null, label: 'late record', ...c}), {code: 1});
+  await assert.rejects(
+    untilExit({end: Promise.reject(new Error('spawn failed')), result: () => null, label: 'spawn', stallMs: 300, sleepMs: 10}),
+    /spawn failed/,
+  );
+});
+
+test('untilExit resolves with the exit, or rejects only after a stall', {timeout: 20_000}, async () => {
   const c = clock();
   let result = null;
   const end = new Promise(resolve => setTimeout(() => resolve((result = {code: 2, signal: null})), 20));
@@ -93,10 +117,11 @@ test('untilExit resolves with the exit, or rejects only after a stall', async ()
 });
 
 test('childCpuTime reads a running process and is null for one that is gone', async () => {
-  assert.equal(typeof childCpuTime(process.pid), 'string');
+  assert.match(childCpuTime(process.pid), /^[\d:.-]+$/, 'only the time, without a header');
   assert.equal(childCpuTime(2 ** 22 + 12345), null);
   assert.equal(childCpuTime(0), null);
   assert.equal(childCpuTime(undefined), null);
+  assert.equal(childCpuTime(-5), null);
 });
 
 test('sampled reads at most once per window and keeps the last value between reads', () => {
@@ -108,5 +133,11 @@ test('sampled reads at most once per window and keeps the last value between rea
   t = 1000; assert.equal(read(), 2);
   t = 1999; assert.equal(read(), 2);
   t = 2000; assert.equal(read(), 3);
-  assert.equal(sampled(() => 'x')(), 'x', 'the default window and clock work');
+  assert.equal(sampled(() => 'x')(), 'x', 'the default clock works');
+  let u = 0, reads2 = 0;
+  const byDefault = sampled(() => ++reads2, undefined, () => u);
+  byDefault(); u = 999; byDefault();
+  assert.equal(reads2, 1, 'the default window is one second');
+  u = 1000; byDefault();
+  assert.equal(reads2, 2);
 });

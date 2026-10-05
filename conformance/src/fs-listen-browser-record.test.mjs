@@ -142,12 +142,13 @@ const emptyNative = (extra = {}) => ({
 });
 
 /** Runs recordBrowser with the account routes answered by a stub fetch. */
-async function record(target, { driver, native, preflight, journal, modes } = {}) {
+async function record(target, { driver, native, preflight, journal, modes, log } = {}) {
   const fetched = [];
+  const nativeOptions = [];
   const realFetch = globalThis.fetch;
   globalThis.fetch = async (url, init) => {
     const body = JSON.parse(init.body);
-    fetched.push({ url, body });
+    fetched.push({ url, body, headers: init.headers });
     return {
       status: 200,
       json: async () => (url.endsWith("/accounts") ? { localId: `u-${body.email}` } : {}),
@@ -161,6 +162,7 @@ async function record(target, { driver, native, preflight, journal, modes } = {}
       run: "r1",
       modes,
       journal,
+      log,
       preflightImpl: async (request) => {
         preflights.push(request);
         request.onRequest?.();
@@ -185,9 +187,12 @@ async function record(target, { driver, native, preflight, journal, modes } = {}
           }
         );
       },
-      makeNative: () => native ?? emptyNative(),
+      makeNative: (options) => {
+        nativeOptions.push(options);
+        return native ?? emptyNative();
+      },
     });
-    return { recording, fetched, driven, preflights };
+    return { recording, fetched, driven, preflights, nativeOptions };
   } finally {
     globalThis.fetch = realFetch;
   }
@@ -469,4 +474,246 @@ test("a driver that dies reports what it saw: its wire count and its diagnostics
 test("the bounds of a browser recording are the ones the packet states", () => {
   assert.equal(WIRE_CAP, 3000, "browser wire requests per mode (measured locally: 940 and 447)");
   assert.equal(CONNECTION_CAP, 300, "connections (measured locally: 14 per mode)");
+});
+
+test("the account calls go to the target's Identity Toolkit with the target's credentials", async () => {
+  const prod = await record(PROD);
+  assert.equal(prod.fetched.length, 6);
+  for (const { url, headers } of prod.fetched) {
+    assert.match(
+      url,
+      /^https:\/\/identitytoolkit\.googleapis\.com\/v1\/projects\/fireemu-oracle-query\/accounts/,
+    );
+    assert.equal(headers.authorization, "Bearer TOK");
+    assert.equal(headers["x-goog-user-project"], "fireemu-oracle-query");
+  }
+  assert.deepEqual(
+    prod.fetched.slice(0, 2).map((f) => f.body.email),
+    ["fsl-r1-a@example.com", "fsl-r1-b@example.com"],
+  );
+  const local = await record(LOCAL);
+  for (const { url, headers } of local.fetched) {
+    assert.match(
+      url,
+      /^http:\/\/127\.0\.0\.1:9099\/identitytoolkit\.googleapis\.com\/v1\/projects\/demo\/accounts/,
+    );
+    assert.equal(headers.authorization, "Bearer owner");
+    assert.equal("x-goog-user-project" in headers, false);
+  }
+});
+
+test("the native client is made for the target: production over TLS with the token, local on the emulator's port", async () => {
+  const prod = await record(PROD);
+  assert.deepEqual(prod.nativeOptions, [
+    { project: "fireemu-oracle-query", target: { kind: "production" }, token: "TOK" },
+  ]);
+  const local = await record(LOCAL);
+  assert.deepEqual(local.nativeOptions, [
+    { project: "demo", target: { kind: "local", host: "127.0.0.1", port: 8080 }, token: undefined },
+  ]);
+});
+
+test("the driver's local configuration: a fake key for a local page, the emulators' addresses, nothing of them for production", async () => {
+  const local = await record(LOCAL);
+  assert.deepEqual(local.driven[0].config.web, {
+    apiKey: "fake-api-key",
+    projectId: "demo",
+    authDomain: "localhost",
+  });
+  assert.equal(local.driven[0].config.authEmulator, "http://127.0.0.1:9099");
+  const prod = await record(PROD);
+  assert.equal("authEmulator" in prod.driven[0].config, false);
+  assert.equal("firestoreEmulator" in prod.driven[0].config, false);
+});
+
+test("the run says when the accounts exist, and the recording carries its version, SDK and counts", async () => {
+  const logs = [];
+  const { recording } = await record(LOCAL, { log: (line) => logs.push(line) });
+  assert.deepEqual(logs, ["accounts created"]);
+  assert.equal(recording.version, 1);
+  assert.equal(recording.sdk, "firebase 12.18.0");
+  assert.equal(recording.connections, 7);
+  const noVersion = await record(LOCAL, {
+    driver: { receipt: { modes: {} }, wire: 0 },
+  });
+  assert.equal(
+    noVersion.recording.sdk,
+    "firebase 12.18.0",
+    "the pinned version when the receipt names none",
+  );
+  assert.equal(noVersion.recording.connections, 0);
+  const named = await record(LOCAL, {
+    driver: { receipt: { sdkVersion: "12.99.0", modes: {} }, wire: 0, connections: 2 },
+  });
+  assert.equal(named.recording.sdk, "firebase 12.99.0");
+  assert.equal(named.recording.connections, 2);
+});
+
+test("request counts: a native client without a counter adds none, a driver result without a wire count adds none", async () => {
+  const { recording } = await record(PROD, {
+    driver: { receipt: { modes: {} }, connections: 0 },
+    native: emptyNative(),
+  });
+  assert.equal(recording.requests, 0);
+  assert.equal(recording.productionRequests, 2 + 6);
+});
+
+test("a thrown value that is not an Error is reported as text, with the wire count it carried or none", async () => {
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = async (url, init) => ({
+    status: 200,
+    json: async () =>
+      url.endsWith("/accounts") ? { localId: `u-${JSON.parse(init.body).email}` } : {},
+  });
+  try {
+    for (const [thrown, wire] of [
+      ["plain text", 0],
+      [{ wire: 9 }, 9],
+    ]) {
+      const out = await recordBrowser({
+        target: LOCAL,
+        run: "r1",
+        runDriverImpl: async () => {
+          throw thrown;
+        },
+        makeNative: () => emptyNative(),
+      });
+      assert.equal(
+        out.errors["browser/run"],
+        typeof thrown === "string" ? "plain text" : "[object Object]",
+      );
+      assert.equal(out.requests, wire);
+      assert.deepEqual(out.diagnostics, []);
+    }
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+});
+
+test("a sweep that finds a stray, or fails, makes the cleanup incomplete and says why; the native client is closed either way", async () => {
+  let closed = 0;
+  const stray = await record(LOCAL, {
+    native: emptyNative({
+      close: () => (closed += 1),
+      listIds: async ({ prefix }) =>
+        prefix === "r1l"
+          ? [`projects/demo/databases/(default)/documents/conf_listen/r1l-stray`]
+          : [],
+    }),
+  });
+  assert.equal(stray.recording.cleanup.documents.complete, false);
+  assert.equal(stray.recording.cleanup.documents.modes["long-polling"].complete, false);
+  assert.equal(stray.recording.cleanup.documents.modes.streaming.complete, true);
+  assert.equal(stray.recording.cleanup.complete, false);
+  assert.equal(closed, 1);
+  const failing = await record(LOCAL, {
+    native: emptyNative({
+      close: () => (closed += 1),
+      missing: async () => {
+        throw new Error("read failed");
+      },
+    }),
+  });
+  assert.equal(failing.recording.cleanup.documents.complete, false);
+  assert.equal(failing.recording.cleanup.documents.error, "read failed");
+  assert.equal(failing.recording.cleanup.complete, false);
+  assert.equal(closed, 2);
+  const nonError = await record(LOCAL, {
+    native: emptyNative({
+      missing: async () => {
+        throw "bare text";
+      },
+    }),
+  });
+  assert.equal(nonError.recording.cleanup.documents.error, "bare text");
+});
+
+test("an account cleanup that throws is reported, with the message or the value", async () => {
+  for (const [thrown, expected] of [
+    [new Error("journal full"), "journal full"],
+    ["bare", "bare"],
+  ]) {
+    const out = await record(LOCAL, {
+      journal: {
+        append(entry) {
+          if (entry.type === "account-delete") throw thrown;
+        },
+        close() {},
+      },
+    });
+    assert.equal(out.recording.cleanup.accounts.complete, false);
+    assert.equal(out.recording.cleanup.accounts.error, expected);
+    assert.equal(out.recording.cleanup.complete, false);
+  }
+});
+
+test("a mode result is usable only with a receipt and no error: an error beside a receipt, and a missing receipt, are both errors", async () => {
+  const withBoth = { ...modeResult("streaming", "r1"), error: "page crashed" };
+  const noReceipt = { mode: "streaming", run: "r1s" };
+  for (const [result, message] of [
+    [withBoth, "page crashed"],
+    [noReceipt, "no result for this mode"],
+  ]) {
+    const { recording } = await record(LOCAL, {
+      driver: {
+        receipt: { modes: { "long-polling": modeResult("long-polling", "r1"), streaming: result } },
+        wire: 1,
+        connections: 1,
+      },
+    });
+    assert.equal(recording.errors["browser/streaming"], message);
+    assert.equal(recording.cleanup.sdk.complete, false);
+    assert.equal(recording.cleanup.complete, false);
+  }
+});
+
+test("two transport problems of a mode are both kept", async () => {
+  const { recording } = await record(PROD, {
+    driver: {
+      receipt: {
+        modes: {
+          "long-polling": modeResult(
+            "long-polling",
+            "r1",
+            modeReceipt(),
+            transport("long-polling", { ci: { 0: 2, 7: 1 } }),
+          ),
+          streaming: modeResult("streaming", "r1"),
+        },
+      },
+      wire: 1,
+      connections: 1,
+    },
+  });
+  assert.equal(
+    recording.errors["browser/long-polling/transport"],
+    "long-polling: no Listen channel request with CI=1; long-polling: a Listen channel request carried CI=0; long-polling: a Listen channel request carried CI=7",
+  );
+});
+
+test("runBrowserDriver starts the browser driver with the recording's timeout and passes the caller's options through", async () => {
+  const { runBrowserDriver } = await import("./fs-listen/browser-record.mjs");
+  const { EventEmitter } = await import("node:events");
+  const { PassThrough } = await import("node:stream");
+  const child = new EventEmitter();
+  child.stdout = new PassThrough();
+  child.stdin = new PassThrough();
+  child.kill = () => {};
+  let seen;
+  const pending = runBrowserDriver({
+    config: { c: 1 },
+    input: { i: 1 },
+    spawnImpl: (cmd, args, options) => {
+      seen = { cmd, args, options };
+      return child;
+    },
+  });
+  child.stdout.write(JSON.stringify({ event: "receipt", receipt: { ok: true } }) + "\n");
+  await new Promise((resolve) => setTimeout(resolve, 5));
+  child.emit("close", 0);
+  const out = await pending;
+  assert.equal(seen.cmd, process.execPath);
+  assert.match(seen.args[0], /\/fs-listen\/browser-driver\.mjs$/);
+  assert.deepEqual(JSON.parse(seen.options.env.AFC_SDK_CONFIG), { c: 1 });
+  assert.deepEqual(out.receipt, { ok: true });
 });

@@ -595,6 +595,10 @@ function argDeps(order) {
         seen.sdk = args;
         return {};
       },
+      recordBrowser: async (args) => {
+        seen.browser = args;
+        return {};
+      },
     },
   };
 }
@@ -1399,4 +1403,12 @@ test("readback of a browser journal looks accounts up like an SDK journal", asyn
   );
   assert.equal(report.clean, true);
   assert.deepEqual(looked, ["fireemu-oracle-query"]);
+});
+
+test("browser production checks the project as a browser recording and reads the key file it was given", async () => {
+  const { d, seen } = argDeps([]);
+  await browserProduction(BROWSER_OPTIONS, d);
+  assert.deepEqual(seen.checked, ["browser", "fireemu-oracle-query"]);
+  assert.equal(seen.keyPath, "K");
+  assert.deepEqual(seen.journal, ["o.json", "browser", "rid"]);
 });

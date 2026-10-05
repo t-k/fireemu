@@ -290,6 +290,9 @@ export async function recordSdk({
     journal.append({
       type: "names",
       phase: "before",
+      // Names the cases may write: no answer line follows, and the A2 read-back must not read the
+      // missing one as an unknown create.
+      maybe: true,
       names: issuedSdkNames({ project: target.project, run, accounts }).map((name) => ({
         name,
         op: "create",

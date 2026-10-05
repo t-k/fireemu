@@ -1237,4 +1237,7 @@ test("the journaled names are marked as to be created, before the driver, with t
   const names = lines.find((line) => line.type === "names");
   assert.equal(names.phase, "before");
   assert.ok(names.names.every((entry) => entry.op === "create"));
+  // These are names the SDK cases may write, not creates the recorder sent: the A2 read-back
+  // must not read a missing answer line as an unknown create.
+  assert.equal(names.maybe, true);
 });

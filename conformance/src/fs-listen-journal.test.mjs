@@ -8,6 +8,7 @@ import {
   NULL_JOURNAL,
   createJournal,
   issuedFromJournal,
+  nameStates,
   readbackJournal,
 } from "./fs-listen/journal.mjs";
 
@@ -99,6 +100,41 @@ test("issuedFromJournal refuses a journal without a run line or with an unreadab
   assert.throws(() => issuedFromJournal(`${sample}\n{broken`), /cannot be read/);
 });
 
+/** The journal of a run whose every create was confirmed (a complete 2xx) or definitively refused. */
+const settledSample = [
+  { type: "run", runId: "r1", kind: "sdk", project: "p", envelopeId: "E" },
+  {
+    type: "names",
+    phase: "before",
+    names: [
+      { name: "n/b", op: "create" },
+      { name: "n/a", op: "create" },
+    ],
+  },
+  {
+    type: "names",
+    phase: "after",
+    outcome: "ok",
+    names: [
+      { name: "n/b", op: "create" },
+      { name: "n/a", op: "create" },
+    ],
+  },
+  { type: "account", phase: "before", name: "a", email: "a@example.com" },
+  {
+    type: "account",
+    phase: "after",
+    name: "a",
+    email: "a@example.com",
+    state: "created",
+    uid: "u1",
+  },
+  { type: "account", phase: "before", name: "b", email: "b@example.com" },
+  { type: "account", phase: "after", name: "b", email: "b@example.com", state: "refused" },
+]
+  .map((r) => JSON.stringify(r))
+  .join("\n");
+
 test("readback reads every name and looks up every account by uid and by email; it deletes nothing", async () => {
   const calls = [];
   const client = {
@@ -113,8 +149,10 @@ test("readback reads every name and looks up every account by uid and by email; 
       return [];
     },
   };
-  const out = await readbackJournal({ text: sample, client, accountClient });
+  const out = await readbackJournal({ text: settledSample, client, accountClient });
   assert.equal(out.clean, true);
+  assert.deepEqual(out.unconfirmed, []);
+  assert.deepEqual(out.present, []);
   assert.equal(out.run, "r1");
   assert.deepEqual(calls, [
     ["missing", ["n/a", "n/b"]],
@@ -190,4 +228,245 @@ test("readback of a journal with no names reads no names, and a uid found alone 
   });
   assert.equal(clean.clean, true);
   assert.equal(clean.readAt, "2026-10-05T10:00:00.000Z");
+});
+
+// ---- the A2 read-back and an unknown create (checklist section 3) ----
+
+const journalOf = (...records) =>
+  [{ type: "run", runId: "r1", kind: "native", project: "p", envelopeId: "E" }, ...records]
+    .map((r) => JSON.stringify(r))
+    .join("\n");
+const before = (...ops) => ({
+  type: "names",
+  phase: "before",
+  names: ops.map(([name, op]) => ({ name, op })),
+});
+const after = (outcome, ...ops) => ({
+  type: "names",
+  phase: "after",
+  outcome,
+  names: ops.map(([name, op]) => ({ name, op })),
+});
+const reads = (present = []) => ({
+  missing: async (names) => names.map((name) => ({ name, exists: present.includes(name) })),
+});
+const noAccounts = { lookup: async () => [] };
+const A = ["n/a", "create"];
+const D = ["n/a", "delete"];
+
+test("an unknown create that reads 404 at A2 is unconfirmed and blocks clean; absence never settles it", async () => {
+  const text = journalOf(before(A), after("unknown", A));
+  const report = await readbackJournal({ text, client: reads(), accountClient: noAccounts });
+  assert.equal(report.clean, false);
+  assert.deepEqual(report.unconfirmed, ["n/a"]);
+  assert.deepEqual(report.present, []);
+  assert.deepEqual(report.names, [{ name: "n/a", exists: false }]);
+});
+
+test("an unknown create that reads present at A2 is reported present, is not clean, and nothing is deleted", async () => {
+  const text = journalOf(before(A), after("unknown", A));
+  const calls = [];
+  const client = {
+    ...reads(["n/a"]),
+    commit: async () => calls.push("commit"),
+    delete: async () => calls.push("delete"),
+  };
+  const report = await readbackJournal({ text, client, accountClient: noAccounts });
+  assert.equal(report.clean, false);
+  assert.deepEqual(report.present, ["n/a"]);
+  assert.deepEqual(report.unconfirmed, [], "a name that reads present is present, not unconfirmed");
+  assert.deepEqual(calls, []);
+});
+
+test("a confirmed create that reads 404 at A2 settles, and so does an unknown delete that reads 404", async () => {
+  const confirmed = journalOf(before(A), after("ok", A));
+  const one = await readbackJournal({
+    text: confirmed,
+    client: reads(),
+    accountClient: noAccounts,
+  });
+  assert.equal(one.clean, true);
+  assert.deepEqual(one.unconfirmed, []);
+  const unknownDelete = journalOf(before(A), after("ok", A), before(D), after("unknown", D));
+  const two = await readbackJournal({
+    text: unknownDelete,
+    client: reads(),
+    accountClient: noAccounts,
+  });
+  assert.equal(two.clean, true);
+  assert.deepEqual(two.unconfirmed, []);
+  // The same unknown delete that still reads present is not clean.
+  const three = await readbackJournal({
+    text: unknownDelete,
+    client: reads(["n/a"]),
+    accountClient: noAccounts,
+  });
+  assert.equal(three.clean, false);
+  assert.deepEqual(three.present, ["n/a"]);
+});
+
+test("a name journaled before and never answered (a crash in the Commit) is an unknown create", async () => {
+  const text = journalOf(before(A));
+  const report = await readbackJournal({ text, client: reads(), accountClient: noAccounts });
+  assert.equal(report.clean, false);
+  assert.deepEqual(report.unconfirmed, ["n/a"]);
+});
+
+test("an account whose create was unknown, or never answered, and that no lookup found is unconfirmed", async () => {
+  const unknown = journalOf(
+    { type: "account", phase: "before", name: "a", email: "a@example.com" },
+    { type: "account", phase: "after", name: "a", email: "a@example.com", state: "unknown" },
+  );
+  const report = await readbackJournal({
+    text: unknown,
+    client: reads(),
+    accountClient: noAccounts,
+  });
+  assert.equal(report.clean, false);
+  assert.deepEqual(report.unconfirmed, ["account:a@example.com"]);
+  const pending = journalOf({
+    type: "account",
+    phase: "before",
+    name: "a",
+    email: "a@example.com",
+  });
+  const second = await readbackJournal({
+    text: pending,
+    client: reads(),
+    accountClient: noAccounts,
+  });
+  assert.equal(second.clean, false);
+  assert.deepEqual(second.unconfirmed, ["account:a@example.com"]);
+  // Found at A2: present (not clean), not unconfirmed.
+  const found = await readbackJournal({
+    text: unknown,
+    client: reads(),
+    accountClient: { lookup: async (s) => (s.email ? ["u9"] : []) },
+  });
+  assert.equal(found.clean, false);
+  assert.deepEqual(found.unconfirmed, []);
+  // A created account (with its uid), a refused one and one found by email settle when absent.
+  for (const state of [
+    { state: "created", uid: "u1" },
+    { state: "refused" },
+    { state: "found-by-email", uid: "u1" },
+  ]) {
+    const text = journalOf(
+      { type: "account", phase: "before", name: "a", email: "a@example.com" },
+      { type: "account", phase: "after", name: "a", email: "a@example.com", ...state },
+    );
+    const done = await readbackJournal({ text, client: reads(), accountClient: noAccounts });
+    assert.equal(done.clean, true, JSON.stringify(state));
+    assert.deepEqual(done.unconfirmed, []);
+  }
+});
+
+test("nameStates: what each name's answers leave of its create", () => {
+  const states = (...records) => nameStates(journalOf(...records));
+  const unconfirmed = (map) => [...map].filter(([, s]) => s.unconfirmed).map(([name]) => name);
+  // Refused creates apply nothing.
+  assert.deepEqual(unconfirmed(states(before(A), after("refused", A))), []);
+  // A later confirmed create confirms a name an earlier create left unknown.
+  assert.deepEqual(
+    unconfirmed(states(before(A), after("unknown", A), before(A), after("ok", A))),
+    [],
+  );
+  // An unknown update of a confirmed name leaves it confirmed.
+  assert.deepEqual(
+    unconfirmed(states(before(A), after("ok", A), before(A), after("unknown", A))),
+    [],
+  );
+  // A delete that the cleanup sent after reading the name present settles an unknown create.
+  assert.deepEqual(
+    unconfirmed(states(before(A), after("unknown", A), before(D), after("ok", D))),
+    [],
+  );
+  assert.deepEqual(unconfirmed(states(before(A), after("unknown", A), before(D))), []);
+  // A confirmed delete forgets the confirmation: an unknown create after it is unknown again.
+  assert.deepEqual(
+    unconfirmed(
+      states(before(A), after("ok", A), before(D), after("ok", D), before(A), after("unknown", A)),
+    ),
+    ["n/a"],
+  );
+  // A before that is followed by another before of the same name without an answer is unknown.
+  assert.deepEqual(unconfirmed(states(before(A), before(A), after("ok", A))), []);
+  assert.deepEqual(unconfirmed(states(before(A), before(A))), ["n/a"]);
+  // An after that names only some of the names of its before leaves the rest unanswered.
+  const B = ["n/b", "create"];
+  assert.deepEqual(unconfirmed(states(before(A, B), after("ok", A))), ["n/b"]);
+  assert.deepEqual(unconfirmed(states(before(A, B), after("unknown", A, B))), ["n/a", "n/b"]);
+  // Names the SDK marks `maybe` are names that may exist, not creates the recorder sent.
+  assert.deepEqual(unconfirmed(states({ ...before(A), maybe: true })), []);
+  assert.deepEqual(unconfirmed(states(before(A), { ...before(B), maybe: true })), ["n/a"]);
+  // A real create left open and then listed as maybe is still an unknown create.
+  assert.deepEqual(unconfirmed(states(before(B), { ...before(B), maybe: true })), ["n/b"]);
+  // A maybe name answered by a confirmed create is confirmed, and a maybe after changes nothing.
+  assert.deepEqual(unconfirmed(states({ ...before(B), maybe: true }, after("ok", B))), []);
+  assert.deepEqual(unconfirmed(states(before(B), { ...after("unknown", B), maybe: true })), [
+    "n/b",
+  ]);
+});
+
+test("nameStates over random journals agrees with an event-by-event oracle", () => {
+  let seed = 99;
+  const next = (n) => {
+    seed = (seed * 1103515245 + 12345) % 2147483648;
+    return seed % n;
+  };
+  for (let round = 0; round < 400; round += 1) {
+    const records = [];
+    // The oracle works on one name; the other name is only noise, answered ok.
+    let confirmed = false;
+    let unknownCreate = false;
+    for (let i = 0, n = 1 + next(6); i < n; i += 1) {
+      const op = next(3) === 0 ? "delete" : "create";
+      const outcome = ["ok", "unknown", "refused", "none"][next(4)];
+      const entry = ["n/x", op];
+      records.push(before(entry, ["n/y", "create"]));
+      if (outcome !== "none") records.push(after(outcome, entry), after("ok", ["n/y", "create"]));
+      else records.push(after("ok", ["n/y", "create"]));
+      const answer = outcome === "none" ? "unknown" : outcome;
+      if (op === "create") {
+        if (answer === "ok") {
+          confirmed = true;
+          unknownCreate = false;
+        } else if (answer === "unknown" && !confirmed) unknownCreate = true;
+      } else if (answer !== "refused") {
+        unknownCreate = false;
+        if (answer === "ok") confirmed = false;
+      }
+    }
+    const got = nameStates(journalOf(...records));
+    assert.equal(got.get("n/x").unconfirmed, unknownCreate, JSON.stringify(records));
+    assert.equal(got.get("n/y").unconfirmed, false);
+  }
+});
+
+test("the journal of an SDK run settles at A2 when the names it may have written read absent and its accounts are gone", async () => {
+  const text = journalOf(
+    { ...before(["n/a", "create"], ["n/b", "create"]), maybe: true },
+    { type: "account", phase: "before", name: "a", email: "a@example.com" },
+    {
+      type: "account",
+      phase: "after",
+      name: "a",
+      email: "a@example.com",
+      state: "created",
+      uid: "u1",
+    },
+    { type: "account-delete", phase: "before", uid: "u1" },
+    { type: "account-delete", phase: "after", uid: "u1", outcome: "answered", settled: true },
+  );
+  const report = await readbackJournal({ text, client: reads(), accountClient: noAccounts });
+  assert.equal(report.clean, true);
+  assert.deepEqual(report.unconfirmed, []);
+  // The same journal without the marker reads as unknown creates (a native crash looks like this).
+  const unmarked = text.replace(',"maybe":true', "");
+  const second = await readbackJournal({
+    text: unmarked,
+    client: reads(),
+    accountClient: noAccounts,
+  });
+  assert.deepEqual(second.unconfirmed, ["n/a", "n/b"]);
 });

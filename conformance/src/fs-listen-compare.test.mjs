@@ -722,6 +722,8 @@ const readback = (extra = {}) => ({
   run: "r1",
   readAt: "2026-10-05T10:10:00.000Z",
   clean: true,
+  unconfirmed: [],
+  present: [],
   names: [
     { name: "n/a", exists: false },
     { name: "n/b", exists: false },
@@ -783,6 +785,19 @@ test("an A2 read-back that is for another run, too early, not clean or incomplet
     /account a@example.com absent/,
   );
   assert.match(problems(undefined), /no A2 read-back/);
+  // A create the journal leaves unknown (a name or an account) is not settled by absence, whatever `clean` says.
+  assert.match(
+    problems(readback({ unconfirmed: ["n/a"] })),
+    /unconfirmed creates: n\/a/,
+  );
+  assert.match(
+    problems(readback({ unconfirmed: ["account:a@example.com", "n/b"] })),
+    /unconfirmed creates: account:a@example.com, n\/b/,
+  );
+  // A read-back that does not say which creates are unconfirmed (one made by older code) settles nothing.
+  const { unconfirmed, ...old } = readback();
+  assert.match(problems(old), /does not say which creates are unconfirmed/);
+  assert.match(problems(readback({ unconfirmed: "none" })), /does not say which creates are unconfirmed/);
   assert.match(problems(readback(), { issued: undefined }), /lists no issued names/);
   assert.match(problems(readback(), { run: undefined }), /another run/);
 });

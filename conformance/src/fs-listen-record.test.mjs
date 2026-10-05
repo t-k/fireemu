@@ -447,6 +447,7 @@ test("readback: a native journal is read through the client and nothing is delet
     [
       { type: "run", runId: "r1", kind: "native", project: "fireemu-oracle-txn" },
       { type: "names", phase: "before", names: [{ name: "n/a", op: "create" }] },
+      { type: "names", phase: "after", outcome: "ok", names: [{ name: "n/a", op: "create" }] },
     ]
       .map((r) => JSON.stringify(r))
       .join("\n"),
@@ -466,6 +467,21 @@ test("readback: a native journal is read through the client and nothing is delet
   const report = await readbackProduction({ journal, project: "fireemu-oracle-txn" }, d);
   assert.equal(report.clean, true);
   assert.deepEqual(calls, [["missing", ["n/a"]], ["close"]]);
+  assert.deepEqual(report.unconfirmed, []);
+  // The same journal with no answer line (a crash in the Commit) is an unknown create: absence does not settle it.
+  const crashed = join(dir, "crashed.jsonl");
+  writeFileSync(
+    crashed,
+    [
+      { type: "run", runId: "r1", kind: "native", project: "fireemu-oracle-txn" },
+      { type: "names", phase: "before", names: [{ name: "n/a", op: "create" }] },
+    ]
+      .map((r) => JSON.stringify(r))
+      .join("\n"),
+  );
+  const open = await readbackProduction({ journal: crashed, project: "fireemu-oracle-txn" }, d);
+  assert.equal(open.clean, false);
+  assert.deepEqual(open.unconfirmed, ["n/a"]);
   // The journal's own project and kind decide: another project is refused before any token.
   let tokenAsked = false;
   await assert.rejects(
@@ -734,7 +750,7 @@ test("readback waits for the read before it closes the client, asks with the tok
   const sdkJournal = journalOf(
     { type: "run", runId: "r", kind: "sdk", project: "fireemu-oracle-query" },
     [
-      { type: "names", phase: "before", names: [{ name: "n/a", op: "create" }] },
+      { type: "names", phase: "before", maybe: true, names: [{ name: "n/a", op: "create" }] },
       {
         type: "account",
         phase: "after",

@@ -1374,7 +1374,7 @@ test("readback of a browser journal looks accounts up like an SDK journal", asyn
   const path = journalOf(
     { type: "run", runId: "r", kind: "browser", project: "fireemu-oracle-query" },
     [
-      { type: "names", phase: "before", names: [{ name: "n/a", op: "create" }] },
+      { type: "names", phase: "before", maybe: true, names: [{ name: "n/a", op: "create" }] },
       {
         type: "account",
         phase: "after",

@@ -717,3 +717,72 @@ test("runBrowserDriver starts the browser driver with the recording's timeout an
   assert.deepEqual(JSON.parse(seen.options.env.AFC_SDK_CONFIG), { c: 1 });
   assert.deepEqual(out.receipt, { ok: true });
 });
+
+// ---- the A2 read-back of a browser run whose writes are not known (the same rule as the SDK part) ----
+
+const browserA2 = async (lines) => {
+  const { readbackJournal } = await import("./fs-listen/journal.mjs");
+  const text = [
+    { type: "run", runId: "r1", kind: "browser", project: "fireemu-oracle-query" },
+    ...lines,
+  ]
+    .map((line) => JSON.stringify(line))
+    .join("\n");
+  return readbackJournal({
+    text,
+    client: { missing: async (names) => names.map((name) => ({ name, exists: false })) },
+    accountClient: { lookup: async () => [] },
+  });
+};
+
+test("a browser run whose writes are all known marks its may-exist names maybe and settles at A2 when they are absent", async () => {
+  const lines = [];
+  await record(PROD, { journal: { append: (entry) => lines.push(entry), close() {} } });
+  const names = lines.find((line) => line.type === "names");
+  assert.equal(names.maybe, true);
+  assert.equal(lines.filter((l) => l.type === "names" && l.phase === "after").length, 0);
+  const report = await browserA2(lines);
+  assert.equal(report.clean, true);
+  assert.deepEqual(report.unconfirmed, []);
+});
+
+test("a browser run whose writes are not known (a mode failed, no result, or a step threw) journals an unknown answer for its names, so absence at A2 does not settle them", async () => {
+  const threw = modeReceipt();
+  threw.cases = [{ ...threw.cases[0], failures: ["step-threw:unavailable"] }];
+  for (const modes of [
+    {
+      "long-polling": modeResult("long-polling", "r1"),
+      streaming: { mode: "streaming", error: "browser run exceeded its deadline" },
+    },
+    { "long-polling": modeResult("long-polling", "r1") },
+    {
+      "long-polling": modeResult("long-polling", "r1", threw),
+      streaming: modeResult("streaming", "r1"),
+    },
+  ]) {
+    const lines = [];
+    await record(PROD, {
+      journal: { append: (entry) => lines.push(entry), close() {} },
+      driver: { receipt: { modes }, wire: 3, connections: 1 },
+    });
+    const before = lines.find((l) => l.type === "names" && l.phase === "before");
+    const after = lines.find((l) => l.type === "names" && l.phase === "after");
+    assert.equal(after.outcome, "unknown");
+    assert.notEqual(after.maybe, true);
+    assert.deepEqual(after.names, before.names);
+    assert.ok(lines.indexOf(after) < lines.findIndex((l) => l.type === "end"));
+    const report = await browserA2(lines);
+    assert.equal(report.clean, false);
+    assert.equal(report.unconfirmed.length, 12);
+  }
+  // A driver that threw leaves no receipt at all: the same.
+  const lines = [];
+  await record(PROD, {
+    journal: { append: (entry) => lines.push(entry), close() {} },
+    driver: async () => {
+      throw new Error("browser died");
+    },
+  });
+  assert.equal(lines.filter((l) => l.type === "names" && l.phase === "after").length, 1);
+  assert.equal((await browserA2(lines)).clean, false);
+});

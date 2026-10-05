@@ -465,3 +465,8 @@ test("a driver that dies reports what it saw: its wire count and its diagnostics
     globalThis.fetch = realFetch;
   }
 });
+
+test("the bounds of a browser recording are the ones the packet states", () => {
+  assert.equal(WIRE_CAP, 3000, "browser wire requests per mode (measured locally: 940 and 447)");
+  assert.equal(CONNECTION_CAP, 300, "connections (measured locally: 14 per mode)");
+});

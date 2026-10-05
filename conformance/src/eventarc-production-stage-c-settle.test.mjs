@@ -11,7 +11,7 @@ import { settleCreation } from "./eventarc-production/cases/support.mjs";
 const PROJECT = "demo-project";
 const PARENT = `projects/${PROJECT}/locations/us-central1`;
 
-function settleSetup(answer, response = {}, error = undefined) {
+function settleSetup(answer, response = {}, error = undefined, done = true) {
   const ownership = createOwnership({ project: PROJECT, runId: "0123456789ab" });
   const ledger = createLedger();
   const requests = [];
@@ -24,7 +24,7 @@ function settleSetup(answer, response = {}, error = undefined) {
           return call.op === "getOperation"
             ? {
                 status: 200,
-                body: { name: answer.body.name, done: true, ...(error ? { error } : { response }) },
+                body: { name: answer.body.name, done, ...(error ? { error } : {}), response },
                 unknown: false,
               }
             : answer;
@@ -115,19 +115,31 @@ test("settleCreation: a response that names neither channel, or none, settles bo
   }
 });
 
-test("settleCreation: an operation that ended with an error settles both names as its error, whatever its response says", async () => {
+test("settleCreation: an operation that ended with an error, or is not done, never makes a name created, whatever its response says", async () => {
   const operation = `${PARENT}/operations/operation-10`;
-  const { client, ledger, names, ctx } = settleSetup(
-    { status: 200, body: { name: operation, done: false }, unknown: false },
-    {},
-    { code: 3, message: "invalid" },
-  );
-  const [a, b] = names.map((name) => name.split("/").at(-1));
-  const reply = await client.createChannelVariant(PROJECT, "us-central1", "name-mismatch", a, b);
-  await settleCreation(ctx, reply, names);
-  for (const name of names)
-    assert.deepEqual(ledger.state().get(name).creates, [
-      `unknown@${operation}`,
-      `error@${operation}`,
-    ]);
+  for (const [error, done, expected] of [
+    [{ code: 3, message: "invalid" }, true, "error@"],
+    [undefined, false, "unknown@"],
+  ]) {
+    const probe = settleSetup({
+      status: 200,
+      body: { name: operation, done: false },
+      unknown: false,
+    });
+    const [a, b] = probe.names.map((name) => name.split("/").at(-1));
+    // The response names the second channel: it must not be taken as evidence of a creation.
+    const { client, ledger, names, ctx } = settleSetup(
+      { status: 200, body: { name: operation, done: false }, unknown: false },
+      { name: probe.names[1] },
+      error,
+      done,
+    );
+    const reply = await client.createChannelVariant(PROJECT, "us-central1", "name-mismatch", a, b);
+    await settleCreation(ctx, reply, names);
+    for (const name of names)
+      assert.deepEqual(ledger.state().get(name).creates, [
+        `unknown@${operation}`,
+        `${expected}${operation}`,
+      ]);
+  }
 });

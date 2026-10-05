@@ -11,6 +11,7 @@ import {
   nativeProduction,
   newRunId,
   openJournal,
+  localProvenance,
   parseArgs,
   readbackProduction,
   recordNative,
@@ -63,12 +64,19 @@ function fakeClock() {
 function failingClient(code = 3) {
   failingClient.code = code;
   const calls = [];
+  // The documents the client holds: a Commit that succeeded leaves them, a delete removes them.
+  const held = new Set();
   return {
     calls,
+    held,
     async commit({ writes }) {
       calls.push(["commit", writes.length]);
       if (calls.filter(([name]) => name === "commit").length === 1)
         throw Object.assign(new Error("boom"), { code: failingClient.code });
+      for (const write of writes) {
+        if (write.delete) held.delete(write.delete);
+        else held.add(write.update.name);
+      }
     },
     async beginTransaction() {
       return Buffer.from("t");
@@ -78,7 +86,7 @@ function failingClient(code = 3) {
     },
     async missing(names) {
       calls.push(["missing", names.length]);
-      return names.map((name) => ({ name, exists: false }));
+      return names.map((name) => ({ name, exists: held.has(name) }));
     },
     async listIds() {
       calls.push(["list"]);
@@ -142,7 +150,7 @@ test("newRunId: the same moment gives the same id, and the default is now", () =
   assert.match(newRunId(), /^n[0-9a-z]{8,}$/);
 });
 
-test("recordNative returns a recording with its facts and a clean cleanup on a client that holds nothing", async () => {
+test("recordNative returns a recording with its facts and a clean cleanup: what the programs left is deleted and read back", async () => {
   const client = failingClient();
   const before = Date.now();
   const recording = await recordNative({ client, project: "p", run: "r1", clock: fakeClock() });
@@ -151,7 +159,9 @@ test("recordNative returns a recording with its facts and a clean cleanup on a c
   assert.equal(typeof recording.requests, "number");
   assert.ok(recording.requests > 0);
   assert.deepEqual(recording.cleanup.stillPresent, []);
-  assert.equal(recording.cleanup.deleted, 0);
+  assert.equal(recording.cleanup.complete, true);
+  assert.ok(recording.cleanup.deleted > 0);
+  assert.equal(client.held.size, 0);
   assert.ok(recording.cleanup.checked > 0);
   assert.ok(
     client.calls.some(([name]) => name === "list"),
@@ -777,4 +787,42 @@ test("a native journal lists no accounts: one that does is refused, not looked u
     readbackProduction({ journal: bad, project: "fireemu-oracle-txn" }, d),
     /lists no accounts/,
   );
+});
+
+test("localProvenance names the source commit and the digest of the binary, and none for the official emulator", async () => {
+  const { createHash } = await import("node:crypto");
+  const bytes = Buffer.from("binary bytes");
+  const expected = createHash("sha256").update(bytes).digest("hex");
+  const read = [];
+  const fireemu = await localProvenance({
+    target: "local",
+    binaryPath: "/b/fireemu",
+    readBytes: async (path) => {
+      read.push(path);
+      return bytes;
+    },
+    headOf: async () => "abc123",
+  });
+  assert.deepEqual(fireemu, { sourceCommit: "abc123", binarySha256: expected, target: "local" });
+  assert.deepEqual(read, ["/b/fireemu"]);
+  const official = await localProvenance({
+    target: "official",
+    binaryPath: null,
+    readBytes: async () => {
+      throw new Error("must not read");
+    },
+    headOf: async () => "abc123",
+  });
+  assert.deepEqual(official, { sourceCommit: "abc123", binarySha256: null, target: "official" });
+  // Outside a git tree the commit is null, and the digest is still taken.
+  const outside = await localProvenance({
+    target: "local",
+    binaryPath: "/b/fireemu",
+    readBytes: async () => bytes,
+    headOf: async () => {
+      throw new Error("not a git tree");
+    },
+  });
+  assert.equal(outside.sourceCommit, null);
+  assert.equal(outside.binarySha256, expected);
 });

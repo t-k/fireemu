@@ -21,6 +21,7 @@
 // `--target local` starts fireemu itself (`fireemu exec`) and runs the same programs inside it.
 
 import { execFile, spawn } from "node:child_process";
+import { createHash } from "node:crypto";
 import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -384,6 +385,33 @@ export async function withOfficialEmulator({ script, args, rules, auth = false }
 }
 
 /** Runs `command` of this file inside a fireemu session and returns the recording it wrote. */
+/**
+ * What a local recording was made with, so a later comparison can say which build it compared:
+ * the source commit of the recorder's tree and the sha256 of the fireemu binary (none for the
+ * official emulator, which is firebase-tools' own).
+ */
+export async function localProvenance({
+  target,
+  binaryPath,
+  readBytes = readFile,
+  headOf = async () =>
+    (await execFileAsync("git", ["rev-parse", "HEAD"], { cwd: dirname(HERE) })).stdout.trim(),
+}) {
+  let sourceCommit = null;
+  try {
+    sourceCommit = await headOf();
+  } catch {
+    // Outside a git tree there is no commit to name.
+  }
+  const binarySha256 =
+    target === "official"
+      ? null
+      : createHash("sha256")
+          .update(await readBytes(binaryPath))
+          .digest("hex");
+  return { sourceCommit, binarySha256, target };
+}
+
 async function inFireemu(options, command, { rules } = {}) {
   const tmp = join(await mkdtemp(join(tmpdir(), "fs-listen-out-")), "recording.json");
   const args = [
@@ -402,7 +430,12 @@ async function inFireemu(options, command, { rules } = {}) {
   } catch {
     throw new Error(`fireemu session exited ${code} without a recording`);
   }
-  return JSON.parse(text);
+  const recording = JSON.parse(text);
+  const provenance = await localProvenance({
+    target: options.target,
+    binaryPath: options.target === "official" ? null : resolveFireemuBinary(),
+  });
+  return { ...recording, provenance: { ...provenance, profile: options.profile ?? null } };
 }
 
 async function main(argv) {

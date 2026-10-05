@@ -207,7 +207,7 @@ export async function sweepDocuments({ client, project, run, accounts }) {
   const ledger = createLedger();
   ledger.answered(
     issuedSdkNames({ project, run, accounts }).map((name) => ({ update: { name } })),
-    "ok",
+    "maybe",
   );
   return settleNames({ issued: ledger.entries(), client, root, run });
 }

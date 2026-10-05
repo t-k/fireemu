@@ -43,6 +43,9 @@ export function createLedger({ journal = NULL_JOURNAL } = {}) {
         const isDelete = write.delete !== undefined;
         const state = entry(isDelete ? write.delete : write.update.name);
         if (outcome === "ok") state.present = !isDelete;
+        // "maybe": the name may exist (an SDK case may have written it); a read that finds it makes
+        // it ours, and one that does not is no anomaly.
+        else if (outcome === "maybe") state.present = isDelete ? false : "maybe";
         else if (outcome === "unknown") {
           state.present = "unknown";
           if (isDelete) state.unknownDelete = true;
@@ -76,7 +79,10 @@ export async function settleNames({ issued, client, root, run, journal = NULL_JO
     const found = before.get(name) === true;
     if (found && present === false) unexpectedPresent.push(name);
     else if (found) toDelete.push(name);
-    else if (present === "unknown") unsettled.push(name);
+    // An unknown create that reads missing settles nothing, and neither does a confirmed create
+    // that reads missing (read-after-write lag can hide a live resource): only the A2 read-back,
+    // at least ten minutes later, settles either (coordinator rulings 2026-10-05).
+    else if (present === "unknown" || present === true) unsettled.push(name);
   }
   const unknownDeletes = new Set(issued.filter(([, s]) => s.unknownDelete).map(([name]) => name));
   for (let i = 0; i < toDelete.length; i += 100) {

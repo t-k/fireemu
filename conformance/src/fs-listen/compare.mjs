@@ -99,19 +99,47 @@ export function canonicalRow(row) {
 }
 
 /**
- * Whether the last thing a row recorded is a REMOVE of the target(s) it added, with no CURRENT
- * after it: a wait for CURRENT then ran out because the target is gone, which is the answer, not
- * a missing one.
+ * A row as one line: its frames in order (documents as a set where the comparer treats them so)
+ * and the existence filters it carries (target, count, shape of the bloom filter). Used to quote
+ * what a run recorded.
+ */
+export function describeRow(row) {
+  const frames = (canonicalRow(row).rows ?? []).map((item) => {
+    if (item.kind === "targetChange") {
+      const ids = item.targetIds.length ? `[${item.targetIds}]` : "";
+      const cause = item.cause ? `(code ${item.cause.code})` : "";
+      return `${item.type}${ids}${cause}${item.resumeToken ? "+token" : ""}`;
+    }
+    if (item.kind === "boundary") return item.resumeToken ? "boundary+token" : "boundary";
+    if (item.kind === "documentChange")
+      return `change ${item.doc}${item.removedTargetIds.length ? " (removed target ids)" : ""}`;
+    if (item.kind === "filter") return `filter(${item.targetId},${item.count})`;
+    return item.doc === undefined ? item.kind : `${item.kind} ${item.doc}`;
+  });
+  const filters = filterKeys(row);
+  return `${frames.join(", ")}${filters.length ? ` | filters ${filters.join(" ")}` : ""}`;
+}
+
+/**
+ * Whether the last thing a row recorded is a REMOVE, with a cause that carries a status code, of
+ * targets the row added (or the row's only target change), and no CURRENT after it: a wait for CURRENT then ran out because the
+ * target is gone, which is the answer, not a missing one.
  */
 function endsRemoved(row) {
   const changes = (row.rows ?? []).filter((item) => item.kind === "targetChange");
   const last = changes.at(-1);
-  return (
-    last?.type === "REMOVE" &&
-    last.cause !== null &&
-    !changes.some((item) => item.type === "CURRENT") &&
-    row.rows.at(-1) === last
+  if (last?.type !== "REMOVE" || row.rows.at(-1) !== last) return false;
+  if (typeof last.cause?.code !== "number") return false;
+  if (changes.some((item) => item.type === "CURRENT")) return false;
+  const added = new Set(
+    changes.filter((item) => item.type === "ADD").flatMap((item) => item.targetIds ?? []),
   );
+  const removed = last.targetIds ?? [];
+  if (removed.length === 0) return false;
+  // Production removes a target whose token is junk without acknowledging it first: a REMOVE
+  // that is the row's only target change (resume-token/invalid, both runs).
+  if (added.size === 0) return changes.length === 1;
+  return removed.every((id) => added.has(id));
 }
 
 /** MATCH, DIFFER or INDETERMINATE for two rows. */
@@ -197,14 +225,47 @@ function withProgramErrors(recording) {
 }
 
 /**
- * Whether a declared divergence may cover this row: it differs, or the local wait ran out for an
- * answer that production gave (the production rows are finished, the local stream is a loopback
- * port, and the rows differ), which the divergence's reason then has to explain.
+ * A divergence entry is a reason, or `{ reason, coversLocalTimeout: true }`. Only the second form
+ * may cover a local wait that ran out (see `isKnownDivergence`).
  */
-function isKnownDivergence(verdict, production, local) {
+function divergenceOf(entry) {
+  return typeof entry === "string"
+    ? { reason: entry, coversLocalTimeout: false }
+    : { reason: entry.reason, coversLocalTimeout: entry.coversLocalTimeout === true };
+}
+
+/**
+ * MATCH, DIFFER or INDETERMINATE for a local row against the two production rows of the same id
+ * (which agree, `classifyRow`). The frames compare as in `classifyRow`. An existence filter that
+ * both production runs sent is required of the local row: it carries what the client acts on,
+ * and a filter only one run sent is optional. A filter the local row sends that neither production
+ * run sent is a difference.
+ */
+export function classifyLocal(first, second, local) {
+  const unfinished = (row) =>
+    (row.timedOut === true && !endsRemoved(row)) ||
+    row.programError === true ||
+    row.end?.reason === "frame-cap" ||
+    row.end?.reason === "ended-without-status";
+  if (unfinished(first) || unfinished(second) || unfinished(local)) return "INDETERMINATE";
+  if (!isDeepStrictEqual(canonicalRow(first), canonicalRow(local))) return "DIFFER";
+  const [keysFirst, keysSecond, keysLocal] = [first, second, local].map(filterKeys);
+  const required = keysFirst.filter((key) => keysSecond.includes(key));
+  const allowed = new Set([...keysFirst, ...keysSecond]);
+  const complete = required.every((key) => keysLocal.includes(key));
+  return complete && keysLocal.every((key) => allowed.has(key)) ? "MATCH" : "DIFFER";
+}
+
+/**
+ * Whether a declared divergence may cover this row: the rows differ, or (only for an entry that
+ * says `coversLocalTimeout`) the local wait ran out for an answer that production gave: the
+ * production rows are finished, the local stream is a loopback port, and the rows differ.
+ */
+function isKnownDivergence(verdict, production, local, entry) {
   if (verdict === "DIFFER") return true;
   return (
     verdict === "INDETERMINATE" &&
+    entry.coversLocalTimeout &&
     local.timedOut === true &&
     !isDeepStrictEqual(canonicalRow(production), canonicalRow(local))
   );
@@ -225,9 +286,11 @@ export function compareRecordings({ productions, local, divergences = {}, settle
     if (problems.length)
       throw new Error(`a production recording is not clean: ${problems.join("; ")}`);
   }
-  for (const [id, reason] of Object.entries(divergences))
+  for (const [id, entry] of Object.entries(divergences)) {
+    const reason = typeof entry === "string" ? entry : entry?.reason;
     if (typeof reason !== "string" || reason.trim() === "")
       throw new Error(`divergence ${id} needs a reason`);
+  }
   const [firstRows, secondRows, localRows] = [...productions, local].map(withProgramErrors);
   const ids = new Set([
     ...Object.keys(firstRows),
@@ -248,9 +311,10 @@ export function compareRecordings({ productions, local, divergences = {}, settle
     else if (pair === "DIFFER") rows[id] = { status: "NONDETERMINISTIC" };
     else if (!l) rows[id] = { status: "MISSING" };
     else {
-      const verdict = classifyRow(p1, l);
-      if (isKnownDivergence(verdict, p1, l) && Object.hasOwn(divergences, id))
-        rows[id] = { status: "KNOWN_DIVERGENCE", reason: divergences[id] };
+      const verdict = classifyLocal(p1, p2, l);
+      const entry = Object.hasOwn(divergences, id) ? divergenceOf(divergences[id]) : undefined;
+      if (entry && isKnownDivergence(verdict, p1, l, entry))
+        rows[id] = { status: "KNOWN_DIVERGENCE", reason: entry.reason };
       else rows[id] = { status: verdict === "DIFFER" ? "MISMATCH" : verdict };
     }
   }

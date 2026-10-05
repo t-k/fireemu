@@ -222,11 +222,18 @@ pub fn schedule_retry_policy(
     } else {
         retry.retry_count.saturating_add(1)
     };
+    // A doubling count of 0 is stored as the default 5 (run `ecef353d18975246`: the REST job asked for `maxDoublings 0`, the
+    // create answer read 5, and its chain doubled every time).
+    let doublings = if retry.max_doublings == 0 {
+        5
+    } else {
+        retry.max_doublings
+    };
     RetryPolicy::try_with_limits(
         attempts,
         minimum,
         maximum,
-        retry.max_doublings,
+        doublings,
         // a first-generation schedule's handler is never retried, so no window can keep its chain going
         (retry.max_retry_seconds > 0
             && generation != fireemu_core_functions::manifest::FunctionGeneration::First)

@@ -123,13 +123,46 @@ fn scheduler_backoff_becomes_linear_and_obeys_the_retry_window() {
         Some(LogicalDuration::from_seconds(10)),
     )
     .unwrap();
+    // base 1 s, two doublings: 1, 2, 4, then 2 s more each time (run `ecef353d18975246`: the step after the doublings
+    // was 2 s in every parameter set)
     assert_eq!(p.backoff_for_attempt(1), LogicalDuration::from_seconds(1));
     assert_eq!(p.backoff_for_attempt(2), LogicalDuration::from_seconds(2));
     assert_eq!(p.backoff_for_attempt(3), LogicalDuration::from_seconds(4));
-    assert_eq!(p.backoff_for_attempt(4), LogicalDuration::from_seconds(8));
-    assert_eq!(p.backoff_for_attempt(5), LogicalDuration::from_seconds(12));
+    assert_eq!(p.backoff_for_attempt(4), LogicalDuration::from_seconds(6));
+    assert_eq!(p.backoff_for_attempt(5), LogicalDuration::from_seconds(8));
     assert!(p.allows_retry_after_elapsed(3, LogicalDuration::from_seconds(6)));
     assert!(!p.allows_retry_after_elapsed(3, LogicalDuration::from_seconds(7)));
+}
+
+/// Run `ecef353d18975246`, the gaps between attempts of failing jobs (seconds, the dispatch latency of about 0.55 s per
+/// attempt taken off): min 4 s with one doubling: 4, 8, 10, 12, 14; min 2 s with three doublings: 2, 4, 8, 16, 18; min 4 s
+/// with two doublings (and a cap of 50 s): 4, 8, 16, 18; min 3 s with five doublings: 3, 6, 12, 24, 48. After the
+/// doublings the gap grows by 2 s per step, whatever the minimum or the doubling count, and never passes the cap.
+#[test]
+fn after_the_doublings_the_gap_grows_by_two_seconds_as_recorded() {
+    let gaps = |min: i64, max: i64, doublings: u32, n: u32| -> Vec<i64> {
+        let p = RetryPolicy::try_with_limits(
+            100,
+            LogicalDuration::from_seconds(min),
+            LogicalDuration::from_seconds(max),
+            doublings,
+            None,
+        )
+        .unwrap();
+        (1..=n)
+            .map(|attempt| {
+                i64::try_from(p.backoff_for_attempt(attempt).as_nanos() / 1_000_000_000).unwrap()
+            })
+            .collect()
+    };
+    assert_eq!(gaps(4, 100, 1, 5), vec![4, 8, 10, 12, 14]);
+    assert_eq!(gaps(2, 100, 3, 5), vec![2, 4, 8, 16, 18]);
+    assert_eq!(gaps(4, 50, 2, 4), vec![4, 8, 16, 18]);
+    assert_eq!(gaps(3, 100, 5, 5), vec![3, 6, 12, 24, 48]);
+    // no doubling at all: the step is the whole growth (an unrecorded shape: Cloud Scheduler stores 0 as 5)
+    assert_eq!(gaps(4, 100, 0, 4), vec![4, 6, 8, 10]);
+    // the cap holds in the linear phase
+    assert_eq!(gaps(4, 11, 1, 5), vec![4, 8, 10, 11, 11]);
 }
 
 /// With both a count and a window the chain goes on until both are used up (run `f123d4fa2d61c5f5`: `retryCount 3`, a

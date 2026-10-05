@@ -55,9 +55,24 @@ fn a_retry_count_alone_makes_that_many_retries_with_the_recorded_first_gaps() {
     assert_eq!(policy.max_attempts(), 5);
     let offsets = attempt_offsets(&policy);
     assert_eq!(offsets.len(), 5, "{offsets:?}");
-    // The first three gaps are the recorded 4, 8 and 16 seconds; the fourth gap production showed (about 18) is not
-    // claimed here.
-    assert_eq!(&offsets[..4], &[0, 4, 12, 28]);
+    // 4, 8, 16, then 18: the recorded gaps (the fourth, 18, is the first step after the two doublings: 2 s more)
+    assert_eq!(offsets, vec![0, 4, 12, 28, 46]);
+}
+
+/// Run `ecef353d18975246`, the REST jobs `double1` (min 4 s, one doubling), `double3` (min 2 s, three) and `double0` (min
+/// 3 s, asked for no doublings): attempt offsets, latency taken off.
+#[test]
+fn the_recorded_double_chains() {
+    let double1 = schedule_retry_policy(&config(5, 0, 4, 100, 1), FunctionGeneration::Second);
+    assert_eq!(attempt_offsets(&double1), vec![0, 4, 12, 22, 34, 48]);
+    let double3 = schedule_retry_policy(&config(5, 0, 2, 100, 3), FunctionGeneration::Second);
+    assert_eq!(attempt_offsets(&double3), vec![0, 2, 6, 14, 30, 48]);
+    // A doubling count of 0 is stored by Cloud Scheduler as the default 5 (the create answer of `double0` read
+    // `maxDoublings 5`): the chain doubles every time.
+    let double0 = schedule_retry_policy(&config(5, 0, 3, 100, 0), FunctionGeneration::Second);
+    assert_eq!(attempt_offsets(&double0), vec![0, 3, 9, 21, 45, 93]);
+    let five = schedule_retry_policy(&config(5, 0, 3, 100, 5), FunctionGeneration::Second);
+    assert_eq!(attempt_offsets(&five), attempt_offsets(&double0));
 }
 
 #[test]
@@ -183,20 +198,22 @@ proptest! {
 
 /// The chain a handler that always fails makes, written out from the rule rather than from the policy: after attempt `k`
 /// (1-based) there is a next one when the count has retries left (`k <= count`) or the window is set and the next attempt
-/// fits it (`elapsed + gap <= window`); the gap after attempt `k` doubles `min` for `doublings` steps, then grows by
-/// `min * 2^doublings` per step, never above `max`.
+/// fits it (`elapsed + gap <= window`); the gap after attempt `k` doubles `min` for `doublings` steps (a count of 0 is
+/// 5), then grows by 2 s per step, never above `max`.
 fn reference_offsets(count: u32, window: u64, min: u64, max: u64, doublings: u32) -> Vec<i64> {
     let (min, max) = if min == 0 && max == 0 {
         (5, 3_600)
     } else {
         (min, max.max(min))
     };
+    // a doubling count of 0 is stored as 5; after the doublings the gap grows by 2 s a step
+    let doublings = if doublings == 0 { 5 } else { doublings };
     let gap = |k: u32| -> u64 {
         let steps = k - 1;
         let doubled = steps.min(doublings);
-        let linear = u64::from(steps - doubled) + 1;
+        let linear = u64::from(steps - doubled);
         min.saturating_mul(1u64 << doubled.min(40))
-            .saturating_mul(linear)
+            .saturating_add(2 * linear)
             .min(max)
     };
     let mut offsets = vec![0u64];

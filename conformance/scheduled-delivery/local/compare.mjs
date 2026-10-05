@@ -129,6 +129,9 @@ export function productionChains(digest) {
       retry5: "retryFive",
       count: "retryCountWindow",
       zerobackoff: "retryZeroBackoff",
+      double0: "retryDouble0",
+      double1: "retryDouble1",
+      double3: "retryDouble3",
     }[job];
     // A job's longest chain: a retried failure is the recording of its retry rule (a lone attempt is not one).
     if (name && (chains[name]?.length ?? 0) < offsets.length) chains[name] = offsets;
@@ -156,8 +159,21 @@ export function localChains(timeline) {
 
 const verdict = (match) => (match ? "MATCH" : "DIVERGES");
 
-/** The rows for one profile. */
-export function rows(production, local) {
+/** The chains only some recordings hold (the extra REST jobs of later runs): no recording of them, no row. */
+const OPTIONAL_CHAINS = new Set([
+  "retryCountWindow",
+  "retryZeroBackoff",
+  "retryDouble0",
+  "retryDouble1",
+  "retryDouble3",
+]);
+
+/**
+ * The rows for one profile. `alsoRecorded` lists other recordings whose optional retry chains (the extra REST jobs of a
+ * later run) are compared as well, when `production` has none of its own: run `ecef353d18975246` ran a different fixture,
+ * so only its chains join the comparison, not its cadence or frames.
+ */
+export function rows(production, local, alsoRecorded = []) {
   const out = [];
   const add = (id, area, condition, p, l, match, note = "") =>
     out.push({
@@ -669,6 +685,9 @@ export function rows(production, local) {
 
   // ---- retry chains ----
   const pChains = productionChains(production);
+  for (const other of alsoRecorded)
+    for (const [name, offsets] of Object.entries(productionChains(other)))
+      if (OPTIONAL_CHAINS.has(name) && pChains[name] === undefined) pChains[name] = offsets;
   const lChains = localChains(local.probe);
   for (const [name, label, expected] of [
     ["retryFour", "retryCount 4, min 4s, max 50s, 2 doublings", "finite-retry-count"],
@@ -686,9 +705,25 @@ export function rows(production, local) {
       "min 0s and max 0s with maxRetryDuration 10s: stored as 5s and 3600s, two attempts",
       "zero-min-backoff",
     ],
+    // run ecef353d18975246 only: the gap grows by 2 s after the doublings, and `maxDoublings 0` is stored as 5
+    [
+      "retryDouble0",
+      "retryCount 5, min 3s, max 100s, maxDoublings 0 (stored as 5): every gap doubles",
+      "exponential-doubling",
+    ],
+    [
+      "retryDouble1",
+      "retryCount 5, min 4s, max 100s, 1 doubling: 4, 8, then 2 s more each time",
+      "linear-after-doublings",
+    ],
+    [
+      "retryDouble3",
+      "retryCount 5, min 2s, max 100s, 3 doublings: 2, 4, 8, 16, then 18",
+      "linear-after-doublings",
+    ],
   ]) {
     const p = pChains[name];
-    if (p === undefined && ["retryCountWindow", "retryZeroBackoff"].includes(name)) continue;
+    if (p === undefined && OPTIONAL_CHAINS.has(name)) continue;
     const l = lChains[name] ?? [];
     const sameCount = p && l.length === p.length;
     // Production's offsets carry dispatch latency (about half a second per attempt) that a logical clock does not:
@@ -709,9 +744,9 @@ export function rows(production, local) {
 }
 
 /** The two profiles' rows side by side (a row's verdict per profile). */
-export function compareProfiles(production, strict, emulator) {
-  const s = rows(production, strict);
-  const e = rows(production, emulator);
+export function compareProfiles(production, strict, emulator, alsoRecorded = []) {
+  const s = rows(production, strict, alsoRecorded);
+  const e = rows(production, emulator, alsoRecorded);
   return s.map((row, i) => ({
     id: row.id,
     area: row.area,

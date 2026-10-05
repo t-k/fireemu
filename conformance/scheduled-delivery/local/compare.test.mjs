@@ -2226,3 +2226,106 @@ test("the run 3 chain rows exist only for a recording that has those chains", ()
   );
   assert.deepEqual(productionChains(productionWithRun3Chains()).retryZeroBackoff, [0, 5.62]);
 });
+
+// ---- run ecef353d18975246's double chains ----
+
+const cumulative = (gaps) =>
+  gaps.reduce((offsets, gap) => [...offsets, +(offsets.at(-1) + gap).toFixed(2)], [0]);
+const DOUBLES = {
+  double0: cumulative([3.69, 6.53, 12.67, 24.52, 48.57]),
+  double1: cumulative([4.64, 8.63, 10.91, 12.63, 14.69]),
+  double3: cumulative([2.54, 4.64, 8.54, 16.48, 18.62]),
+};
+function productionWithDoubles() {
+  const p = production();
+  let base = 60_000_000;
+  const frames = [];
+  for (const [key, offsets] of Object.entries(DOUBLES)) {
+    base += 1_000_000;
+    for (const o of offsets)
+      frames.push(
+        prodV2(
+          "schedRetryV2",
+          base + Math.round(o * 1000),
+          "2026-12-31T16:00:00-08:00",
+          `fe-sd-0123456789abcdef-${key}`,
+        ),
+      );
+  }
+  return { ...p, frames: [...p.frames, ...frames] };
+}
+function localWithDoubles(over = {}) {
+  const l = local();
+  const chains = {
+    retryDouble0: [0, 3, 9, 21, 45, 93],
+    retryDouble1: [0, 4, 12, 22, 34, 48],
+    retryDouble3: [0, 2, 6, 14, 30, 48],
+    ...over,
+  };
+  const probe = [...l.probe.lines];
+  let at = 7_000_000;
+  for (const [name, offsets] of Object.entries(chains)) {
+    at += 100_000;
+    for (const o of offsets)
+      probe.push({ at: instant(T0 + at + o * 1000), kind: "PROBE", value: { handler: name } });
+  }
+  return { ...l, probe: { ...l.probe, lines: probe } };
+}
+
+test("the double chains match the local chains of the recorded gaps, and diverge from the old linear step", () => {
+  const p = productionWithDoubles();
+  const v = verdicts(p, localWithDoubles());
+  for (const id of ["retry.retryDouble0", "retry.retryDouble1", "retry.retryDouble3"])
+    assert.equal(v[id], "MATCH", id);
+  // the documented step (min * 2^doublings after the doublings) instead of 2 s
+  assert.equal(
+    verdicts(p, localWithDoubles({ retryDouble1: [0, 4, 12, 28, 52, 84] }))["retry.retryDouble1"],
+    "DIVERGES",
+  );
+  assert.equal(
+    verdicts(p, localWithDoubles({ retryDouble3: [0, 2, 6, 14, 30, 62] }))["retry.retryDouble3"],
+    "DIVERGES",
+  );
+  // a zero doubling count taken as zero doublings (the step from the first gap on) instead of the stored 5
+  assert.equal(
+    verdicts(p, localWithDoubles({ retryDouble0: [0, 3, 6, 9, 12, 15] }))["retry.retryDouble0"],
+    "DIVERGES",
+  );
+  // a chain of another length
+  assert.equal(
+    verdicts(p, localWithDoubles({ retryDouble1: [0, 4, 12, 22, 34] }))["retry.retryDouble1"],
+    "DIVERGES",
+  );
+  // no chain locally: not a vacuous match
+  assert.equal(verdicts(p, local())["retry.retryDouble0"], "DIVERGES");
+});
+
+test("the double rows exist only for a recording that has those chains", () => {
+  const v = verdicts(production(), local());
+  for (const id of ["retry.retryDouble0", "retry.retryDouble1", "retry.retryDouble3"])
+    assert.equal(id in v, false, id);
+  const chains = productionChains(productionWithDoubles());
+  assert.deepEqual(chains.retryDouble1, DOUBLES.double1);
+  assert.deepEqual(chains.retryDouble3, DOUBLES.double3);
+  assert.deepEqual(chains.retryDouble0, DOUBLES.double0);
+});
+
+test("another recording's extra chains join the rows when the main recording has none of its own", () => {
+  const main = production();
+  const also = productionWithDoubles();
+  const v = Object.fromEntries(
+    rows(main, localWithDoubles(), [also]).map((r) => [r.id, r.verdict]),
+  );
+  for (const id of ["retry.retryDouble0", "retry.retryDouble1", "retry.retryDouble3"])
+    assert.equal(v[id], "MATCH", id);
+  // the other recording's deployed job and cadence are not joined: the main recording's rows are unchanged
+  const without = Object.fromEntries(rows(main, localWithDoubles()).map((r) => [r.id, r.verdict]));
+  for (const [id, verdict] of Object.entries(without)) assert.equal(v[id], verdict, id);
+  // a chain the main recording has is not replaced by the other's
+  const both = productionWithRun3Chains();
+  const rowsBoth = rows(both, localWithRun3Chains(), [{ ...also, frames: [...also.frames] }]);
+  assert.equal(rowsBoth.find((r) => r.id === "retry.retryCountWindow").verdict, "MATCH");
+  // compareProfiles passes them on
+  const table = compareProfiles(main, localWithDoubles(), localWithDoubles(), [also]);
+  assert.equal(table.find((r) => r.id === "retry.retryDouble1").strict.verdict, "MATCH");
+});

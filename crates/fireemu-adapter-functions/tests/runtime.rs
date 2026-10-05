@@ -2687,6 +2687,92 @@ async fn a_second_generation_count_and_window_retry_until_both_are_used_up() {
     runtime.runner().shutdown().await;
 }
 
+/// Recorded (run `ecef353d18975246`, the REST job `double1`): `retryCount 5`, `minBackoff 4s`, `maxBackoff 100s`,
+/// `maxDoublings 1` was attempted six times, the gaps 4, 8, 10, 12 and 14 s (latency taken off): one doubling, then 2 s more
+/// each time. On the logical clock the attempts are at 0, 4, 12, 22, 34 and 48.
+#[tokio::test]
+async fn a_second_generation_chain_grows_by_two_seconds_after_its_doublings() {
+    use fireemu_core_functions::manifest::{ScheduleRetryConfig, Trigger};
+    let (runtime, clock) = start_runtime(
+        fireemu_adapter_functions::runtime::OverlapPolicy::Allow,
+        fireemu_adapter_functions::runtime::CatchUpPolicy::All,
+        4,
+        false,
+        Vec::new(),
+        1000,
+        |manifest| {
+            let spec = manifest
+                .functions
+                .iter_mut()
+                .find(|f| f.name == "failSchedule")
+                .unwrap();
+            let Trigger::Schedule {
+                schedule,
+                time_zone,
+                ..
+            } = spec.trigger.clone()
+            else {
+                panic!("failSchedule is scheduled");
+            };
+            spec.trigger = Trigger::Schedule {
+                schedule,
+                time_zone,
+                retry: ScheduleRetryConfig {
+                    retry_count: 5,
+                    max_retry_seconds: 0,
+                    max_backoff_seconds: 100,
+                    max_doublings: 1,
+                    min_backoff_seconds: 4,
+                },
+            };
+            spec.retry = true;
+            spec.generation = FunctionGeneration::Second;
+        },
+    )
+    .await;
+    let attempts = |runtime: &FunctionsRuntime| -> usize {
+        runtime
+            .history()
+            .iter()
+            .filter(|record| record.function == "failSchedule")
+            .count()
+    };
+    runtime.run_schedule("failSchedule").unwrap();
+    let _ = runtime.await_idle(Duration::from_millis(300)).await;
+    assert_eq!(attempts(&runtime), 1);
+    // the attempts are due at 4, 12, 22, 34 and 48 seconds: move to one second before each, then onto it
+    let mut at = 0;
+    for (index, due) in [4, 12, 22, 34, 48].into_iter().enumerate() {
+        clock
+            .lock()
+            .unwrap()
+            .advance(LogicalDuration::from_seconds(due - 1 - at))
+            .unwrap();
+        runtime.on_clock_changed();
+        let _ = runtime.await_idle(Duration::from_millis(300)).await;
+        assert_eq!(attempts(&runtime), index + 1, "one second before {due} s");
+        clock
+            .lock()
+            .unwrap()
+            .advance(LogicalDuration::from_seconds(1))
+            .unwrap();
+        runtime.on_clock_changed();
+        let _ = runtime.await_idle(Duration::from_millis(300)).await;
+        assert_eq!(attempts(&runtime), index + 2, "at {due} s");
+        at = due;
+    }
+    // the count is used up: no seventh attempt
+    clock
+        .lock()
+        .unwrap()
+        .advance(LogicalDuration::from_seconds(600))
+        .unwrap();
+    runtime.on_clock_changed();
+    let _ = runtime.await_idle(Duration::from_millis(300)).await;
+    assert_eq!(attempts(&runtime), 6);
+    runtime.runner().shutdown().await;
+}
+
 /// A zero minimum and maximum backoff together are stored by Cloud Scheduler as 5 s and 3600 s (run `f123d4fa2d61c5f5`,
 /// the job asked for `0s` and `0s` with a window of 10 s: two attempts, 5.62 s apart, in both passes). With a window of 5 s
 /// the first retry is at 5 s, inside it, and the second would be at 15 s: two attempts, however far the clock goes.

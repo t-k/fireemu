@@ -3,10 +3,13 @@
 // involved), a Node 22 binary and a node_modules holding firebase-functions 7.3.2.
 //
 //   node run-compare.mjs --fireemu <bin> --node <node22> --deps <node_modules> [--out <file>] [--production <digest>]
+//                        [--also <digest>,...]
 //
 // `--production` names the recording's public digest (default `production-run2.json`; `production-run3.json` is the
 // third delivery recording, which also holds the messages pulled from the Gen1 topics: the comparison then puts a pull
-// subscription on each Gen1 function's topic in the local run and adds the published-message rows).
+// subscription on each Gen1 function's topic in the local run and adds the published-message rows). `--also` names
+// further recordings (comma-separated) whose extra REST jobs' retry chains join the retry rows (`production-run4.json`:
+// the doubling chains of run `ecef353d18975246`, which ran another fixture).
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -72,7 +75,11 @@ else
     };
   }
 if (args.cache && !existsSync(args.cache)) writeFileSync(args.cache, JSON.stringify(results));
-const table = compareProfiles(production, results.strict, results.emulator);
+const also = (args.also ?? "")
+  .split(",")
+  .filter(Boolean)
+  .map((name) => loadDigest(join(here, name)));
+const table = compareProfiles(production, results.strict, results.emulator, also);
 const summary = (profile) =>
   table.reduce((n, r) => ({ ...n, [r[profile].verdict]: (n[r[profile].verdict] ?? 0) + 1 }), {});
 const output = {

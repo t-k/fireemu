@@ -49,6 +49,37 @@ exports.retryCountWindow = onSchedule(
   },
   failing("retryCountWindow"),
 );
+// run ecef353d18975246's REST jobs `double0` (asked for no doublings: stored as 5), `double1` and `double3`
+exports.retryDouble0 = onSchedule(
+  {
+    schedule: "every 5 minutes",
+    retryCount: 5,
+    minBackoffSeconds: 3,
+    maxBackoffSeconds: 100,
+    maxDoublings: 0,
+  },
+  failing("retryDouble0"),
+);
+exports.retryDouble1 = onSchedule(
+  {
+    schedule: "every 5 minutes",
+    retryCount: 5,
+    minBackoffSeconds: 4,
+    maxBackoffSeconds: 100,
+    maxDoublings: 1,
+  },
+  failing("retryDouble1"),
+);
+exports.retryDouble3 = onSchedule(
+  {
+    schedule: "every 5 minutes",
+    retryCount: 5,
+    minBackoffSeconds: 2,
+    maxBackoffSeconds: 100,
+    maxDoublings: 3,
+  },
+  failing("retryDouble3"),
+);
 exports.retryZeroBackoff = onSchedule(
   { schedule: "every 5 minutes", maxRetrySeconds: 10, minBackoffSeconds: 0, maxBackoffSeconds: 0 },
   failing("retryZeroBackoff"),

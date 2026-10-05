@@ -1,13 +1,12 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { readFileSync } from "node:fs";
 import test from "node:test";
 
 import { compareRuns } from "./functions-events/compare/compare.mjs";
 import { createTransport } from "./functions-events/record/rest.mjs";
 import { record } from "./functions-events/record/run.mjs";
 import { createWorld } from "./functions-events-record-world.mjs";
+import { tempDir } from "./test-tmpdir.mjs";
 
 const read = (path) => JSON.parse(readFileSync(new URL(path, import.meta.url), "utf8"));
 const corpus = read("../functions-events/corpus.json");
@@ -17,7 +16,7 @@ async function recordedRun() {
   const clock = { t: Date.UTC(2026, 9, 4) };
   const world = createWorld({ now: () => clock.t });
   const transport = createTransport({
-    directory: mkdtempSync(join(tmpdir(), "fe-rc-")),
+    directory: tempDir("fe-rc-"),
     ceiling: 1000,
     token: async () => "t",
     apiKey: "k",

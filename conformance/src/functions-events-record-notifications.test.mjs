@@ -4,8 +4,7 @@
 // bucket: {kind, items[1]}; a bucket without any: {kind}), committed with the tenant ids replaced.
 
 import assert from "node:assert/strict";
-import { existsSync, mkdtempSync, readFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import test from "node:test";
 
@@ -21,6 +20,7 @@ import { createTransport } from "./functions-events/record/rest.mjs";
 import { record } from "./functions-events/record/run.mjs";
 import { PRIMARY_BUCKET } from "./functions-events/record/script.mjs";
 import { createWorld, healthy } from "./functions-events-record-world.mjs";
+import { tempDir } from "./test-tmpdir.mjs";
 
 const recorded = (name) =>
   JSON.parse(
@@ -172,7 +172,7 @@ function cleanupSetup({ before, after }) {
   const world = createWorld({ now: () => Date.UTC(2026, 9, 5) });
   world.notificationConfigs = after;
   const transport = createTransport({
-    directory: mkdtempSync(join(tmpdir(), "fe-notif-")),
+    directory: tempDir("fe-notif-"),
     ceiling: 1000,
     token: async () => "t",
     apiKey: "k",
@@ -262,7 +262,7 @@ function runSetup(configs) {
   const world = createWorld({ now: () => clock.t });
   world.notificationConfigs = configs;
   const transport = createTransport({
-    directory: mkdtempSync(join(tmpdir(), "fe-notif-run-")),
+    directory: tempDir("fe-notif-run-"),
     ceiling: 1000,
     token: async () => "t",
     apiKey: "k",

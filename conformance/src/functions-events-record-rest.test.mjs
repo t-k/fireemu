@@ -1,6 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync, readdirSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import test from "node:test";
 
@@ -14,6 +13,7 @@ import {
   resolveText,
 } from "./functions-events/record/rest.mjs";
 import { PROJECT } from "./functions-events/record/script.mjs";
+import { tempDir } from "./test-tmpdir.mjs";
 
 const doc = (tail = "/fe_events_primary/e1") =>
   `https://firestore.googleapis.com/v1/projects/${PROJECT}/databases/(default)/documents${tail}`;
@@ -22,7 +22,7 @@ const fakeResponse = (status, body) => ({
   arrayBuffer: async () => Buffer.from(typeof body === "string" ? body : JSON.stringify(body)),
 });
 function setup({ replies, ceiling = 10 }) {
-  const directory = mkdtempSync(join(tmpdir(), "fe-rest-"));
+  const directory = tempDir("fe-rest-");
   const calls = [];
   const queue = [...replies];
   const transport = createTransport({
@@ -198,7 +198,7 @@ test("a 4xx whose body is not JSON is unknown, never a refusal", async () => {
 });
 
 test("a failing credential command stops before anything is sent, with its own error type", async () => {
-  const directory = mkdtempSync(join(tmpdir(), "fe-rest-"));
+  const directory = tempDir("fe-rest-");
   let sent = 0;
   const transport = createTransport({
     directory,
@@ -218,7 +218,7 @@ test("a failing credential command stops before anything is sent, with its own e
 });
 
 test("the ceiling is checked after the credential arrives, so nothing can pass it on the way", async () => {
-  const directory = mkdtempSync(join(tmpdir(), "fe-rest-"));
+  const directory = tempDir("fe-rest-");
   let sent = 0;
   let transport;
   transport = createTransport({

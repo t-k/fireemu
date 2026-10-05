@@ -3,8 +3,7 @@
 // replaced (record/recorded/v4-run), and over the real 153 responses when the shared docs.local is visible.
 
 import assert from "node:assert/strict";
-import { existsSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { existsSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import test from "node:test";
 
@@ -17,6 +16,7 @@ import {
 } from "./functions-events/record/deploy.mjs";
 import { RULES, destination } from "./functions-events/record/guard.mjs";
 import { HANDLERS } from "./functions-events/record/logs.mjs";
+import { tempDir } from "./test-tmpdir.mjs";
 
 const recorded = (name) =>
   readFileSync(
@@ -150,7 +150,7 @@ test("runCli reports the errored count from the output file it wrote", async () 
     ["cli-delete-tail.txt", 1],
     ["cli-deploy-tail.txt", 0],
   ]) {
-    const directory = mkdtempSync(join(tmpdir(), "fe-cli-"));
+    const directory = tempDir("fe-cli-");
     const script = join(directory, "print.js");
     writeFileSync(script, `process.stdout.write(${JSON.stringify(recorded(file))});`);
     const result = await runCli({
@@ -164,7 +164,7 @@ test("runCli reports the errored count from the output file it wrote", async () 
     assert.equal(result.errored, expected, file);
     assert.equal(cliFailed(result), expected > 0, file);
   }
-  const directory = mkdtempSync(join(tmpdir(), "fe-cli-"));
+  const directory = tempDir("fe-cli-");
   const script = join(directory, "quiet.js");
   writeFileSync(script, 'process.stdout.write("Deploy complete!\\n");');
   const quiet = await runCli({
@@ -397,20 +397,20 @@ test("sourceProblems on the working-tree fixture is empty, and on the v4 fixture
     sourceProblems({
       fixtureDir,
       node: process.execPath,
-      directory: mkdtempSync(join(tmpdir(), "fe-disc-")),
+      directory: tempDir("fe-disc-"),
     }),
     [],
   );
   const copy = prepareSource({
     repoRoot: root,
     commit: "4af75c8fa7997adb48ede9403248775cacb0577d",
-    target: mkdtempSync(join(tmpdir(), "fe-v4-")),
+    target: tempDir("fe-v4-"),
     depsDir: join(fixtureDir, "node_modules"),
   });
   const problems = sourceProblems({
     fixtureDir: copy.fixtureDir,
     node: process.execPath,
-    directory: mkdtempSync(join(tmpdir(), "fe-disc-")),
+    directory: tempDir("fe-disc-"),
   });
   assert.equal(problems.length, 1, JSON.stringify(problems));
   assert.match(problems[0], /^pubsubPublishedV2: no region is set/);
@@ -428,7 +428,7 @@ test("a region of null is no region, and the summary is read from the end of a l
     }).length,
     1,
   );
-  const directory = mkdtempSync(join(tmpdir(), "fe-cli-"));
+  const directory = tempDir("fe-cli-");
   const script = join(directory, "long.js");
   writeFileSync(
     script,

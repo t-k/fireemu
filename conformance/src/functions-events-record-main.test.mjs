@@ -4,7 +4,6 @@ import {
   appendFileSync,
   existsSync,
   mkdirSync,
-  mkdtempSync,
   readFileSync,
   readdirSync,
   rmSync,
@@ -12,7 +11,6 @@ import {
   symlinkSync,
   writeFileSync,
 } from "node:fs";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
@@ -27,6 +25,7 @@ import {
 } from "./functions-events/record/main.mjs";
 import { ENVELOPE_TOPIC, TOPIC } from "./functions-events/record/sandbox.mjs";
 import { createWorld } from "./functions-events-record-world.mjs";
+import { tempDir } from "./test-tmpdir.mjs";
 
 const root = execFileSync("git", ["rev-parse", "--show-toplevel"], {
   cwd: new URL(".", import.meta.url).pathname,
@@ -93,7 +92,7 @@ test("the harness digest covers the recorder, the fixture and the dotenv, and is
 });
 
 function arrange({ approve = true } = {}) {
-  const dir = mkdtempSync(join(tmpdir(), "fe-main-"));
+  const dir = tempDir("fe-main-");
   const packet = join(dir, "packet.md");
   writeFileSync(packet, "the packet text");
   const keyFile = join(dir, "key.json");
@@ -211,17 +210,17 @@ function quietRun(runs, { mutation = false } = {}) {
 test("check does not wait out the spacing after a run that wrote nothing, and does after one that did", async () => {
   const quiet = arrange();
   // the runs directory is not the ledger's directory
-  quiet.deps.runsDir = mkdtempSync(join(tmpdir(), "fe-runs-"));
+  quiet.deps.runsDir = tempDir("fe-runs-");
   appendFileSync(quiet.ledgerPath, `${quietRun(quiet.deps.runsDir)}\n`);
   const ok = await main(quiet.argv("check"), quiet.deps);
   assert.deepEqual(ok.problems, []);
   const wrote = arrange();
-  wrote.deps.runsDir = mkdtempSync(join(tmpdir(), "fe-runs-"));
+  wrote.deps.runsDir = tempDir("fe-runs-");
   appendFileSync(wrote.ledgerPath, `${quietRun(wrote.deps.runsDir, { mutation: true })}\n`);
   const refused = await main(wrote.argv("check"), wrote.deps);
   assert.ok(refused.problems.some((p) => p.includes("30 minutes")));
   const gone = arrange();
-  gone.deps.runsDir = mkdtempSync(join(tmpdir(), "fe-runs-"));
+  gone.deps.runsDir = tempDir("fe-runs-");
   appendFileSync(gone.ledgerPath, `${quietRun(gone.deps.runsDir)}\n`);
   rmSync(join(gone.deps.runsDir, "quiet", "transport"), { recursive: true });
   const unreadable = await main(gone.argv("check"), gone.deps);

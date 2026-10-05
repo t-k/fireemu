@@ -1,17 +1,11 @@
 import assert from "node:assert/strict";
-import {
-  existsSync,
-  mkdirSync,
-  mkdtempSync,
-  readFileSync,
-  symlinkSync,
-  writeFileSync,
-} from "node:fs";
+import { existsSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
 import * as sandbox from "./functions-events/record/sandbox.mjs";
+import { tempDir } from "./test-tmpdir.mjs";
 
 const row = (over) =>
   JSON.stringify({
@@ -301,7 +295,7 @@ test("a packet whose run already started cannot start again", () => {
 });
 
 test("the lock is exclusive, private, refused beside the legacy lock, and released only by its owner", () => {
-  const dir = mkdtempSync(join(tmpdir(), "fe-lock-"));
+  const dir = tempDir("fe-lock-");
   const lockDir = join(dir, "locks");
   const legacyLock = join(dir, "ledger.lock");
   const lock = sandbox.acquireLock({ lockDir, legacyLock, body: { pid: process.pid } });
@@ -340,7 +334,7 @@ test("the ledger lines carry the packet, the envelope and the reserve; a kept lo
     lockRetained: true,
   });
   assert.equal(finished.lockRetained, true);
-  const path = join(mkdtempSync(join(tmpdir(), "fe-led-")), "ledger.jsonl");
+  const path = join(tempDir("fe-led-"), "ledger.jsonl");
   sandbox.appendLedger(path, started);
   sandbox.appendLedger(path, finished);
   assert.equal(readFileSync(path, "utf8").trim().split("\n").length, 2);
@@ -635,7 +629,7 @@ test("the journal facts count what was sent, what could be a change and what has
 });
 
 test("the journal is read only from a plain file under the runs directory", () => {
-  const runs = mkdtempSync(join(tmpdir(), "fe-spacing-"));
+  const runs = tempDir("fe-spacing-");
   const dir = join(runs, "run-1");
   mkdirSync(join(dir, "transport"), { recursive: true });
   writeFileSync(join(dir, "transport", "journal.jsonl"), journal(2));
@@ -647,7 +641,7 @@ test("the journal is read only from a plain file under the runs directory", () =
   mkdirSync(join(linked, "transport"), { recursive: true });
   symlinkSync(join(dir, "transport", "journal.jsonl"), join(linked, "transport", "journal.jsonl"));
   assert.throws(() => sandbox.readRunJournal(runs, linked), /plain file/);
-  const away = mkdtempSync(join(tmpdir(), "fe-away-"));
+  const away = tempDir("fe-away-");
   symlinkSync(away, join(runs, "run-3"));
   assert.throws(() => sandbox.readRunJournal(runs, join(runs, "run-3")), /outside/);
 });

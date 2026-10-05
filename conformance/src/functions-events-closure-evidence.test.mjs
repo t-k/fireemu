@@ -23,6 +23,7 @@ import {
   recordingsFromRun,
   reportText,
 } from "./functions-events/compare/closure-evidence.mjs";
+import { tempDir } from "./test-tmpdir.mjs";
 
 const repo = (path) => fileURLToPath(new URL(`../../${path}`, import.meta.url));
 const CLOSURE_PATH = "spec/compatibility/closure/FUNCTIONS-EVENTS.json";
@@ -978,9 +979,8 @@ test(
 
 test("the command line reports, writes with --write, and says what is wrong with an exit code 1", async () => {
   const { spawnSync } = await import("node:child_process");
-  const { mkdtempSync, mkdirSync, writeFileSync } = await import("node:fs");
-  const { tmpdir } = await import("node:os");
-  const dir = mkdtempSync(join(tmpdir(), "fe-ce-"));
+  const { mkdirSync, writeFileSync } = await import("node:fs");
+  const dir = tempDir("fe-ce-");
   const put = (name, text) => {
     mkdirSync(join(dir, name, ".."), { recursive: true });
     writeFileSync(join(dir, name), typeof text === "string" ? text : JSON.stringify(text));

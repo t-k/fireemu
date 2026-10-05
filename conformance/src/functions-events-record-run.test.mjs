@@ -1,18 +1,16 @@
 import assert from "node:assert/strict";
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import test from "node:test";
 
 import { createTransport } from "./functions-events/record/rest.mjs";
 import { CLEANUP_CEILING, NORMAL_CEILING, record } from "./functions-events/record/run.mjs";
 import { SCENARIO_ORDER, passSummary, buildPass } from "./functions-events/record/script.mjs";
 import { createWorld } from "./functions-events-record-world.mjs";
+import { tempDir } from "./test-tmpdir.mjs";
 
 function setup({ ceiling = 1000, world: worldOptions = {} } = {}) {
   const clock = { t: Date.UTC(2026, 9, 4, 0, 0, 0) };
   const world = createWorld({ now: () => clock.t, ...worldOptions });
-  const directory = mkdtempSync(join(tmpdir(), "fe-run-"));
+  const directory = tempDir("fe-run-");
   const transport = createTransport({
     directory,
     ceiling,

@@ -1,13 +1,5 @@
 import assert from "node:assert/strict";
-import {
-  existsSync,
-  mkdirSync,
-  mkdtempSync,
-  readFileSync,
-  symlinkSync,
-  writeFileSync,
-} from "node:fs";
-import { tmpdir } from "node:os";
+import { existsSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import test from "node:test";
 import { execFileSync } from "node:child_process";
@@ -30,6 +22,7 @@ import {
 } from "./functions-events/record/deploy.mjs";
 import { createWorld } from "./functions-events-record-world.mjs";
 import { formalHandlers } from "./functions-events/canary-cli.mjs";
+import { tempDir } from "./test-tmpdir.mjs";
 
 const repoRoot = execFileSync("git", ["rev-parse", "--show-toplevel"], {
   cwd: new URL(".", import.meta.url).pathname,
@@ -83,7 +76,7 @@ test("runCli arms the timeout of its own action unless one is given", async () =
       ["dry-run", 123_456, 123_456],
     ]) {
       delays.length = 0;
-      const directory = mkdtempSync(join(tmpdir(), "fe-cli-"));
+      const directory = tempDir("fe-cli-");
       const result = await runCli({
         action,
         plan: { args: [], cwd: directory, env: {} },
@@ -141,7 +134,7 @@ test("the deploy carries --force, the dry run is the same command with --dry-run
 
 test("the source copy comes from the pinned commit and carries the dotenv, nothing untracked", () => {
   const commit = execFileSync("git", ["-C", repoRoot, "rev-parse", "HEAD"]).toString().trim();
-  const target = mkdtempSync(join(tmpdir(), "fe-src-"));
+  const target = tempDir("fe-src-");
   const { configPath, fixtureDir } = prepareSource({ repoRoot, commit, target });
   assert.ok(existsSync(configPath));
   assert.equal(readFileSync(join(fixtureDir, ".env.fireemu-oracle-events"), "utf8"), dotenvText());
@@ -151,7 +144,7 @@ test("the source copy comes from the pinned commit and carries the dotenv, nothi
 });
 
 function worldTransport(world) {
-  const directory = mkdtempSync(join(tmpdir(), "fe-dep-"));
+  const directory = tempDir("fe-dep-");
   return createTransport({
     directory,
     ceiling: 1000,
@@ -209,10 +202,10 @@ test(
   { skip: !haveDeps && "the fixture dependencies are not installed here" },
   () => {
     const commit = execFileSync("git", ["-C", repoRoot, "rev-parse", "HEAD"]).toString().trim();
-    const target = mkdtempSync(join(tmpdir(), "fe-src-"));
+    const target = tempDir("fe-src-");
     const { fixtureDir } = prepareSource({ repoRoot, commit, target, depsDir });
     assert.deepEqual(dependencyProblems(fixtureDir), []);
-    const directory = mkdtempSync(join(tmpdir(), "fe-disc-"));
+    const directory = tempDir("fe-disc-");
     assert.deepEqual(sourceProblems({ fixtureDir, node: process.execPath, directory }), []);
     assert.deepEqual(
       discoverEndpoints({ fixtureDir, node: process.execPath, directory }).toSorted(),
@@ -223,17 +216,17 @@ test(
 
 test("a copy without dependencies, with the wrong version or with a link out of the tree is a problem", () => {
   const commit = execFileSync("git", ["-C", repoRoot, "rev-parse", "HEAD"]).toString().trim();
-  const bare = prepareSource({ repoRoot, commit, target: mkdtempSync(join(tmpdir(), "fe-src-")) });
+  const bare = prepareSource({ repoRoot, commit, target: tempDir("fe-src-") });
   assert.ok(dependencyProblems(bare.fixtureDir).some((p) => p.includes("cannot be resolved")));
   assert.ok(
     sourceProblems({
       fixtureDir: bare.fixtureDir,
       node: process.execPath,
-      directory: mkdtempSync(join(tmpdir(), "fe-disc-")),
+      directory: tempDir("fe-disc-"),
     }).length > 0,
   );
   // a tree with the right names and the wrong version, and one with a link to the outside
-  const fake = mkdtempSync(join(tmpdir(), "fe-fake-"));
+  const fake = tempDir("fe-fake-");
   mkdirSync(join(fake, "node_modules"), { recursive: true });
   writeFileSync(join(fake, "package.json"), "{}");
   for (const name of Object.keys(PINNED_DEPENDENCIES)) {
@@ -254,7 +247,7 @@ test("a copy without dependencies, with the wrong version or with a link out of 
 });
 
 test("a CLI that ignores SIGTERM is killed after the grace period and the run goes on", async () => {
-  const directory = mkdtempSync(join(tmpdir(), "fe-cli-"));
+  const directory = tempDir("fe-cli-");
   const script = join(directory, "stubborn.js");
   writeFileSync(script, 'process.on("SIGTERM", () => {}); setInterval(() => {}, 1000);');
   const result = await runCli({

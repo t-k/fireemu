@@ -1,7 +1,4 @@
 import assert from "node:assert/strict";
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import test from "node:test";
 
 import { runCleanup } from "./functions-events/record/cleanup.mjs";
@@ -9,11 +6,12 @@ import { HANDLERS } from "./functions-events/record/logs.mjs";
 import { createTransport } from "./functions-events/record/rest.mjs";
 import { CONTROL_BUCKET, PRIMARY_BUCKET } from "./functions-events/record/script.mjs";
 import { createWorld } from "./functions-events-record-world.mjs";
+import { tempDir } from "./test-tmpdir.mjs";
 
 function setup() {
   let t = Date.UTC(2026, 9, 4);
   const world = createWorld({ now: () => t });
-  const directory = mkdtempSync(join(tmpdir(), "fe-clean-"));
+  const directory = tempDir("fe-clean-");
   const transport = createTransport({
     directory,
     ceiling: 1000,
@@ -279,7 +277,7 @@ test("a topic list with a second page cannot show the topics gone", async () => 
     return original(url, init);
   };
   const t2 = createTransport({
-    directory: mkdtempSync(join(tmpdir(), "fe-clean-")),
+    directory: tempDir("fe-clean-"),
     ceiling: 1000,
     token: async () => "t",
     apiKey: "k",

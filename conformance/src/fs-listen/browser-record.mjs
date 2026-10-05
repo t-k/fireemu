@@ -15,7 +15,7 @@ import {
   rowsFromReceipt,
   runDriver,
   sweepDocuments,
-  unknownWrites,
+  writesAreKnown,
 } from "./sdk-record.mjs";
 import { PUBLIC_COLLECTION } from "./sdk-deps-core.mjs";
 
@@ -209,14 +209,21 @@ export async function recordBrowser({
     if (transportIssues.length > 0)
       errors[`browser/${mode}/transport`] = transportIssues.join("; ");
     if (!receipt.teardown.every((t) => t.closed)) clientsClosed = false;
-    if (unknownWrites(receipt)) writesKnown = false;
+    if (!writesAreKnown(receipt)) writesKnown = false;
     if (!receipt.cleanup?.complete) sdkCleanupComplete = false;
     perMode[mode] = { run: result.run, transport: result.transport };
   }
-  // A write that threw, a mode that failed or a driver that left no result has an unknown outcome:
-  // the names the cases may have written are then unknown creates, which absence at A2 cannot settle.
-  if (journaledNames && !writesKnown)
-    journal.append({ type: "names", phase: "after", outcome: "unknown", names: journaledNames });
+  // A write that threw, a mode that failed, a driver that threw or left no result or lost a case
+  // record has an unknown outcome. The names the cases may have written are closed with `known`
+  // when no write is of unknown outcome and with `unknown` otherwise; a journal that ends without
+  // either leaves them unconfirmed at A2.
+  if (journaledNames)
+    journal.append({
+      type: "names",
+      phase: "after",
+      outcome: writesKnown ? "known" : "unknown",
+      names: journaledNames,
+    });
   const total = productionRequests();
   journal.append({ type: "end", productionRequests: total });
   return {

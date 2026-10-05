@@ -629,7 +629,7 @@ mod tests {
 
     const SECOND: i128 = 1_790_844_566 * 1_000_000_000;
 
-    /// A Storage CloudEvent carries no `datacontenttype`, in either profile (FE v5 production run
+    /// A Storage `CloudEvent` carries no `datacontenttype`, in either profile (FE v5 production run
     /// functions-events-formal-20261004T182904Z-a9621bfae74fe9bc, frames 6ac29fb7000987a59af4b7f6,
     /// 6ac29fd70001a0e4d85cfd12 and 6ac2a0a80000b3d27b4b1db3: the recorded `eventKeys` lack it and
     /// the printed member is null). The Firestore SDK path needs one, so the other events keep it.

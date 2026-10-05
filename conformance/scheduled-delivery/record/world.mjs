@@ -31,6 +31,7 @@ const SCHEDULES = {
   schedSlowV2: 60_000,
   schedOkV1: 60_000,
   schedFailV1: 300_000,
+  schedRetryV1: 300_000,
 };
 
 export function createWorld({

@@ -8,10 +8,10 @@ export const NODE_VERSION = "22.22.1";
 export const FIREBASE_TOOLS_VERSION = "15.28.2";
 export const FIREBASE_FUNCTIONS_VERSION = "7.3.2";
 
-/** The five deployed functions, case-exact, by generation. */
+/** The six deployed functions, case-exact, by generation. */
 export const FUNCTIONS = Object.freeze({
   v2: Object.freeze(["schedOkV2", "schedRetryV2", "schedSlowV2"]),
-  v1: Object.freeze(["schedOkV1", "schedFailV1"]),
+  v1: Object.freeze(["schedOkV1", "schedFailV1", "schedRetryV1"]),
 });
 export const ALL_FUNCTIONS = Object.freeze([...FUNCTIONS.v2, ...FUNCTIONS.v1]);
 
@@ -37,6 +37,19 @@ export const DECLARED = Object.freeze({
   schedSlowV2: { platform: "gcfv2", schedule: "every 1 minutes", timeoutSeconds: 90 },
   schedOkV1: { platform: "gcfv1", schedule: "every 1 minutes", timeZone: "Asia/Tokyo" },
   schedFailV1: { platform: "gcfv1", schedule: "every 5 minutes" },
+  // The Gen1 retry probe (packet r6): run 2's schedFailV1 declared no count; this one declares retryCount 1.
+  // A Gen1 schedule's discovered retryConfig lists the options it does not set as null (the SDK's v1 builder).
+  schedRetryV1: {
+    platform: "gcfv1",
+    schedule: "every 5 minutes",
+    retryConfig: {
+      retryCount: 1,
+      minBackoffDuration: null,
+      maxBackoffDuration: null,
+      maxDoublings: null,
+      maxRetryDuration: null,
+    },
+  },
 });
 
 /**
@@ -99,7 +112,7 @@ export const subscriptionName = (id) => "projects/" + PROJECT + "/subscriptions/
 /** The marker the fixture prints before each frame. */
 export const FRAME_MARK = "SCHED_DELIVERY_FRAME";
 
-/** The ids of the Scheduler jobs the recorder may touch: the five the CLI creates and the extra ones. */
+/** The ids of the Scheduler jobs the recorder may touch: the six the CLI creates and the extra ones. */
 export const jobIds = (runId) => [
   ...ALL_FUNCTIONS.map(scheduleId),
   ...EXTRA_JOBS.map((job) => extraJobId(runId, job.key)),

@@ -63,7 +63,7 @@ test("a clean run records, cleans up and may close", async () => {
   assert.deepEqual(world.cliRuns, ["dry-run", "deploy", "delete"], "each CLI action once");
   assert.equal(result.cleanup.verified, true);
   assert.equal(result.passes.length, 2);
-  assert.ok(result.passes.every((p) => p.complete && p.forced.length === 9));
+  assert.ok(result.passes.every((p) => p.complete && p.forced.length === 10));
   assert.equal(
     world.jobs.size +
       world.topics.size +
@@ -96,10 +96,10 @@ test("a clean run records, cleans up and may close", async () => {
 test("every name that is created is journaled as issued before the request that creates it", async () => {
   const { journal } = await go();
   const issued = journal.filter((r) => r.state === "issued");
-  assert.equal(issued.filter((r) => r.kind === "function").length, 5);
-  assert.equal(issued.filter((r) => r.kind === "job").length, 9);
-  assert.equal(issued.filter((r) => r.kind === "topic").length, 2);
-  assert.equal(issued.filter((r) => r.kind === "subscription").length, 2);
+  assert.equal(issued.filter((r) => r.kind === "function").length, 6);
+  assert.equal(issued.filter((r) => r.kind === "job").length, 10);
+  assert.equal(issued.filter((r) => r.kind === "topic").length, 3);
+  assert.equal(issued.filter((r) => r.kind === "subscription").length, 3);
   for (const row of issued.filter((r) => r.transport === "rest")) {
     const issuedAt = journal.indexOf(row);
     const createdAt = journal.findIndex(

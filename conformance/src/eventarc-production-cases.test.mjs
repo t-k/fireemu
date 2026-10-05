@@ -752,3 +752,39 @@ test("the credential probes: each token mode and the quota project of one call r
   );
   assert.ok((await modes(async () => null)).notes.some((n) => n.note === "wrong-scope-skipped"));
 });
+
+test("the count ladder pins the recorded boundary exactly: 255 events accepted, 256 refused, in two requests beyond the first", async () => {
+  const world = createWorld({ project: PROJECT });
+  const { notes } = await run(world, { cases: [publishLimits] });
+  const boundary = notes.find((n) => n.note === "limit-boundary" && n.name === "event-count");
+  assert.deepEqual(
+    [boundary.accepted, boundary.refused, boundary.steps, boundary.unknown],
+    [255, 256, 0, false],
+  );
+  const counts = world.calls
+    .filter((call) => call.op === "publishEvents")
+    .map((call) => call.body.events.length);
+  assert.deepEqual(counts.slice(0, 3), [8, 255, 256], "the ladder, in order, and nothing else");
+});
+
+test("a limit search that gets an answer that does not say stops there and sends nothing again", async () => {
+  const world = createWorld({ project: PROJECT });
+  const unreadable = async (call) => {
+    const answer = await world.request(call);
+    return call.op === "publishEvents" && call.body.events.length === 255
+      ? { status: 503, body: {}, unknown: true }
+      : answer;
+  };
+  const { notes } = await run({ request: unreadable, calls: world.calls, live: new Set() }, { cases: [publishLimits] });
+  const bracket = notes.find((n) => n.note === "limit-bracket" && n.name === "event-count");
+  assert.deepEqual([bracket.low, bracket.high, bracket.unknown], [8, null, true]);
+  assert.equal(
+    notes.some((n) => n.note === "limit-boundary" && n.name === "event-count"),
+    false,
+  );
+  const sent = world.calls
+    .filter((call) => call.op === "publishEvents")
+    .map((call) => call.body.events.length);
+  assert.equal(sent.filter((count) => count === 255).length, 1, "the 255 is not asked twice");
+  assert.equal(sent.includes(256), false);
+});

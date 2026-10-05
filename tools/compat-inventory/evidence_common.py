@@ -181,7 +181,7 @@ def binary_inputs_at_commit(commit: str, root: Path = ROOT) -> dict:
 
 _TREE_WORDS = "|".join(re.escape(tree) for tree in _TEST_ONLY_TREES)
 #: A path or a string that names one of the excluded trees as a path segment (also inside `concat!(env!(...), "/tests/x.rs")` or `"$CARGO_MANIFEST_DIR/tests"`).
-_NAMES_TREE = re.compile(rf"(?:^|[/\"'\s$}}])(?:{_TREE_WORDS})(?:[/\"'\s]|$)")
+_NAMES_TREE = re.compile(rf"(?:^|[/\"'\s])(?:{_TREE_WORDS})(?:[/\"'\s]|$)")
 #: An invocation that reads a file or a directory into a build.
 _EMBEDDING = re.compile(r"\b(?:include_str|include_bytes|include|include_dir|include_flate|embed_dir|embed_file|embed_str)\s*!\s*[(\[{]")
 _PAIRS = {"(": ")", "[": "]", "{": "}"}
@@ -341,7 +341,7 @@ def source_files_including_test_only_trees(root: Path) -> list:
             continue
         text = (root / name).read_text(errors="replace")
         if name.endswith("/build.rs"):
-            if _NAMES_TREE.search(text) or _reaches_test_tree(text):
+            if _NAMES_TREE.search(text):
                 found.append(name)
         elif name.endswith(".rs"):
             if _reaches_test_tree(text):
@@ -356,7 +356,7 @@ def dependency_info_paths(info: str, root: Path) -> list:
     """The files under `root` that a cargo dependency-info file (`target/debug/fireemu.d`) lists, relative and normalized, sorted: what a build actually read."""
     import posixpath
 
-    listed = info.replace("\\\n", " ").split(": ", 1)[-1]
+    listed = info.split(": ", 1)[-1]
     prefix = str(root).rstrip("/") + "/"
     found = set()
     for token in re.split(r"(?<!\\)\s+", listed.strip()):

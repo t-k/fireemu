@@ -235,3 +235,48 @@ def test_a_built_user_interface_bundle_is_noticed(tmp_path):
 
 def test_no_source_file_of_this_repository_includes_a_test_only_tree():
     assert source_files_including_test_only_trees(ROOT) == []
+
+
+def test_an_include_with_a_space_before_its_bang_and_one_with_other_brackets_is_reported(tmp_path):
+    assert guard(tmp_path / "space", {"crates/a/src/lib.rs": 'const D: &str = include_str !("../tests/x");'}) == ["crates/a/src/lib.rs"]
+    assert guard(tmp_path / "square", {"crates/a/src/lib.rs": 'const D: &str = include_str![ "../tests/x" ];'}) == ["crates/a/src/lib.rs"]
+    assert guard(tmp_path / "curly", {"crates/a/src/lib.rs": 'const D: &str = include_str!{ "../tests/x" };'}) == ["crates/a/src/lib.rs"]
+
+
+def test_only_a_gate_that_is_exactly_test_excuses_a_module_path(tmp_path):
+    path = '#[path = "../../../tests/support/helper.rs"]\npub(crate) mod helper;'
+    for gate in ("#[cfg(testing)]", "#[cfg(test_support)]", '#[cfg(feature = "test")]'):
+        assert guard(tmp_path / gate, {"crates/a/src/lib.rs": f"{gate}\n{path}"}) == ["crates/a/src/lib.rs"], gate
+
+
+def test_a_test_gate_on_the_item_before_does_not_excuse_a_module_path_after_it(tmp_path):
+    source = '#[cfg(test)]\nfn helper() {}\n#[path = "../../../tests/support/helper.rs"]\npub(crate) mod helper;'
+    assert guard(tmp_path, {"crates/a/src/lib.rs": source}) == ["crates/a/src/lib.rs"]
+    gated = '#[cfg(test)]\n#[allow(dead_code)]\n#[path = "../../../tests/support/helper.rs"]\npub(crate) mod helper;'
+    assert guard(tmp_path / "ok", {"crates/a/src/lib.rs": gated}) == []   # attributes stacked on the same item
+
+
+def test_an_include_right_after_a_test_module_is_outside_it(tmp_path):
+    source = '#[cfg(test)]\nmod tests {}include_str!("../tests/y");'
+    assert guard(tmp_path, {"crates/a/src/lib.rs": source}) == ["crates/a/src/lib.rs"]
+
+
+def test_a_raw_string_with_braces_and_quotes_does_not_end_a_test_module_early(tmp_path):
+    body = '#[cfg(test)]\nmod tests {\n    const S: &str = r#"} "quoted" {"#;\n    fn f() {\n        let _ = include_str!("../../../tests/a");\n    }\n}\n'
+    assert guard(tmp_path, {"crates/a/src/lib.rs": body}) == []
+
+
+def test_a_manifest_that_does_not_parse_is_reported(tmp_path):
+    assert guard(tmp_path, {"crates/a/Cargo.toml": "[package\nname = = broken"}) == ["crates/a/Cargo.toml"]
+
+
+def test_a_build_script_that_names_a_test_only_tree_only_in_a_gated_module_is_still_reported(tmp_path):
+    # a build script is never a test build: the gate does not excuse it
+    script = '#[cfg(test)]\nmod tests { const P: &str = include_str!("../tests/x"); }\nfn main() {}\n'
+    assert guard(tmp_path, {"crates/a/build.rs": script}) == ["crates/a/build.rs"]
+
+
+def test_a_dependency_info_file_with_continuation_lines_lists_all_of_its_files(tmp_path):
+    root = repo(tmp_path)
+    info = f"{root}/target/debug/fireemu: {root}/crates/a/src/lib.rs \\\n  {root}/crates/a/tests/it.rs \\\n  {root}/crates/b/src/main.rs\n"
+    assert dependency_info_paths(info, root) == ["crates/a/src/lib.rs", "crates/a/tests/it.rs", "crates/b/src/main.rs"]

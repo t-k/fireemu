@@ -292,7 +292,12 @@ fn describe(r: &pb::ListenResponse) -> String {
             format!("{kind}{:?}{cause}", t.target_ids)
         }
         Some(R::DocumentChange(d)) => format!(
-            "CHANGE {}",
+            "{} {}",
+            if d.target_ids.is_empty() && !d.removed_target_ids.is_empty() {
+                "LEAVE"
+            } else {
+                "CHANGE"
+            },
             d.document
                 .as_ref()
                 .map(|d| d.name.rsplit('/').next().unwrap_or("").to_owned())
@@ -723,10 +728,7 @@ async fn listen_delivers_snapshot_then_live_diffs() {
         .await
         .unwrap();
     let diff = next_until(&mut responses, "NO_CHANGE[]").await;
-    assert_eq!(
-        diff,
-        vec!["CHANGE a", "CHANGE b", "NO_CHANGE[1]", "NO_CHANGE[]"]
-    );
+    assert_eq!(diff, vec!["CHANGE a", "CHANGE b", "NO_CHANGE[]"]);
 
     // Deleting a document is reported as DELETE; a no-op write reports nothing new.
     client
@@ -738,7 +740,7 @@ async fn listen_delivers_snapshot_then_live_diffs() {
         .await
         .unwrap();
     let diff = next_until(&mut responses, "NO_CHANGE[]").await;
-    assert_eq!(diff, vec!["DELETE b", "NO_CHANGE[1]", "NO_CHANGE[]"]);
+    assert_eq!(diff, vec!["DELETE b", "NO_CHANGE[]"]);
 
     // Document targets for a missing document become CURRENT without a change.
     tx.send(add_documents_target(2, &["open/missing"]))
@@ -747,7 +749,7 @@ async fn listen_delivers_snapshot_then_live_diffs() {
     let initial = next_until(&mut responses, "NO_CHANGE[]").await;
     assert_eq!(
         initial,
-        vec!["ADD[2]", "CURRENT[2]", "NO_CHANGE[1]", "NO_CHANGE[]"],
+        vec!["ADD[2]", "CURRENT[2]", "NO_CHANGE[]"],
         "every active target reaches the same snapshot before the global boundary"
     );
 
@@ -797,10 +799,7 @@ async fn incremental_listen_preserves_enter_update_remove_and_delete() {
             set_write("delta/a", &[("state", s("included")), ("revision", s("2"))]),
             "CHANGE a",
         ),
-        (
-            set_write("delta/a", &[("state", s("excluded"))]),
-            "REMOVE a",
-        ),
+        (set_write("delta/a", &[("state", s("excluded"))]), "LEAVE a"),
         (
             set_write("delta/a", &[("state", s("included"))]),
             "CHANGE a",
@@ -817,7 +816,7 @@ async fn incremental_listen_preserves_enter_update_remove_and_delete() {
             .unwrap();
         assert_eq!(
             next_until(&mut responses, "NO_CHANGE[]").await,
-            vec![expected, "NO_CHANGE[1]", "NO_CHANGE[]"]
+            vec![expected, "NO_CHANGE[]"]
         );
     }
     handle.abort();
@@ -861,7 +860,7 @@ async fn limited_listen_recomputes_the_boundary_after_an_update() {
         .unwrap();
     assert_eq!(
         next_until(&mut responses, "NO_CHANGE[]").await,
-        vec!["CHANGE b", "REMOVE a", "NO_CHANGE[1]", "NO_CHANGE[]"]
+        vec!["CHANGE b", "LEAVE a", "NO_CHANGE[]"]
     );
     handle.abort();
     handle.await.unwrap_err();
@@ -1220,7 +1219,7 @@ async fn write_stream_accepts_pipelined_acknowledgements_and_once_targets_are_re
     let mut once = add_query_target(3, "open");
     if let Some(pb::listen_request::TargetChange::AddTarget(t)) = &mut once.target_change {
         t.once = true;
-        t.resume_type = Some(pb::target::ResumeType::ResumeToken(vec![1, 2, 3]));
+        t.resume_type = Some(pb::target::ResumeType::ResumeToken(vec![0; 32]));
     }
     ltx.send(once).await.unwrap();
     let trace = next_until(&mut listen, "REMOVE[3]").await;
@@ -1633,7 +1632,7 @@ async fn a_removed_target_id_can_be_reused_without_delivering_the_old_query() {
         .unwrap();
     assert_eq!(
         next_until(&mut responses, "NO_CHANGE[]").await,
-        vec!["CHANGE c", "NO_CHANGE[1]", "NO_CHANGE[]"]
+        vec!["CHANGE c", "NO_CHANGE[]"]
     );
     handle.abort();
 }
@@ -1858,12 +1857,12 @@ async fn resumed_targets_replay_only_what_changed_since_the_token() {
     let early = next_until(&mut listen, "NO_CHANGE[]").await;
     assert_eq!(early, vec!["ADD[3]", "NO_CHANGE[]"]);
     let trace = next_until(&mut listen, "NO_CHANGE[]").await;
-    assert_eq!(trace, vec!["CURRENT[3]", "NO_CHANGE[2]", "NO_CHANGE[]"]);
-    // A token from the future (or garbage) resets.
+    assert_eq!(trace, vec!["CURRENT[3]", "NO_CHANGE[]"]);
+    // A token this daemon did not issue (here: a version from the future, of no known epoch) resets.
     let mut future = add_query_target(4, "r");
     if let Some(pb::listen_request::TargetChange::AddTarget(t)) = &mut future.target_change {
         t.resume_type = Some(pb::target::ResumeType::ResumeToken(
-            u64::MAX.to_be_bytes().to_vec(),
+            [u64::MAX.to_be_bytes().to_vec(), vec![0; 24]].concat(),
         ));
     }
     ltx.send(future).await.unwrap();
@@ -2671,10 +2670,17 @@ async fn a_missing_index_removes_only_its_own_target_and_the_stream_keeps_listen
     let covered = next_until(&mut responses, "NO_CHANGE[]").await;
     assert_eq!(covered, vec!["ADD[21]", "CURRENT[21]", "NO_CHANGE[]"]);
 
-    // The undeclared one is refused, and the refusal names the target.
+    // The undeclared one is acknowledged with an ADD and then removed with its cause, and the
+    // refusal names the target.
     tx.send(add_owner_ordered_target(22, "updatedAt"))
         .await
         .unwrap();
+    let added = tokio::time::timeout(std::time::Duration::from_secs(5), responses.next())
+        .await
+        .expect("a response within 5 s")
+        .expect("the stream is still open")
+        .expect("an acknowledgement");
+    assert_eq!(describe(&added), "ADD[22]");
     let rejected = tokio::time::timeout(std::time::Duration::from_secs(5), responses.next())
         .await
         .expect("a response within 5 s")
@@ -2710,7 +2716,7 @@ async fn a_missing_index_removes_only_its_own_target_and_the_stream_keeps_listen
     let diff = next_until(&mut responses, "NO_CHANGE[]").await;
     assert_eq!(
         diff,
-        vec!["CHANGE t1", "NO_CHANGE[21]", "NO_CHANGE[]"],
+        vec!["CHANGE t1", "NO_CHANGE[]"],
         "target 21 stayed active after target 22 was refused"
     );
     handle.abort();
@@ -2832,59 +2838,100 @@ async fn an_edited_partition_token_version_is_refused() {
     handle.abort();
 }
 
+/// Which profile a Listen test runs under.
+#[derive(Clone, Copy)]
+enum Profile {
+    Strict,
+    Emulator,
+}
 
-/// The official emulator accepts a target with id 0 and assigns it an id (the API documents
-/// that the server assigns one); the emulator profile may not refuse what it completes. Strict
-/// keeps its refusal until a production recording settles it (FS-LISTEN-SDK packet L1).
+async fn start_profile(
+    profile: Profile,
+) -> (
+    FirestoreClient<tonic::transport::Channel>,
+    tokio::task::JoinHandle<()>,
+) {
+    match profile {
+        Profile::Strict => start(false).await,
+        Profile::Emulator => start_configured(None, IndexValidationPolicy::Emulator).await,
+    }
+}
+
+/// The status a stream ends with.
+async fn stream_error<S>(responses: &mut S) -> tonic::Status
+where
+    S: tokio_stream::Stream<Item = Result<pb::ListenResponse, tonic::Status>> + Unpin,
+{
+    loop {
+        match tokio::time::timeout(std::time::Duration::from_secs(5), responses.next())
+            .await
+            .expect("a response within 5 s")
+        {
+            Some(Err(status)) => return status,
+            Some(Ok(_)) => {}
+            None => panic!("the stream ended without a status"),
+        }
+    }
+}
+
+/// Production accepts a target with id 0 and assigns it an id (FS-LISTEN-SDK L1, runs nmuuicyas
+/// and nmuukwo6n: `native/target-protocol/server-assigned-id` and `second-zero-id`: ADD[1] and
+/// ADD[2]); the official emulator does too. Both profiles assign the smallest free positive id.
 #[tokio::test]
-async fn emulator_profile_assigns_an_id_to_target_zero() {
-    let (mut client, handle) = start_configured(None, IndexValidationPolicy::Emulator).await;
-    client
-        .commit(pb::CommitRequest {
+async fn target_zero_is_assigned_the_smallest_free_id_in_both_profiles() {
+    for profile in [Profile::Strict, Profile::Emulator] {
+        let (mut client, handle) = start_profile(profile).await;
+        client
+            .commit(pb::CommitRequest {
+                database: DB.to_owned(),
+                writes: vec![set_write("open/a", &[("v", s("1"))])],
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        let (tx, rx) = mpsc::channel(8);
+        let mut responses = client
+            .listen(ReceiverStream::new(rx))
+            .await
+            .unwrap()
+            .into_inner();
+        tx.send(add_query_target(0, "open")).await.unwrap();
+        let first = next_until(&mut responses, "NO_CHANGE[]").await;
+        assert_eq!(
+            first,
+            vec!["ADD[1]", "CHANGE a", "CURRENT[1]", "NO_CHANGE[]"],
+            "the first server-assigned id is 1"
+        );
+        // A second id-0 target gets the next free id, not one already in use.
+        tx.send(add_query_target(0, "open")).await.unwrap();
+        let second = next_until(&mut responses, "NO_CHANGE[]").await;
+        assert_eq!(second.first().map(String::as_str), Some("ADD[2]"));
+        // An id that was assigned is an id like any other: removing it removes that target.
+        tx.send(pb::ListenRequest {
             database: DB.to_owned(),
-            writes: vec![set_write("open/a", &[("v", s("1"))])],
+            target_change: Some(pb::listen_request::TargetChange::RemoveTarget(1)),
             ..Default::default()
         })
         .await
         .unwrap();
-    let (tx, rx) = mpsc::channel(8);
-    let mut responses = client
-        .listen(ReceiverStream::new(rx))
-        .await
-        .unwrap()
-        .into_inner();
-    tx.send(add_query_target(0, "open")).await.unwrap();
-    let first = next_until(&mut responses, "NO_CHANGE[]").await;
-    assert_eq!(
-        first,
-        vec!["ADD[1]", "CHANGE a", "CURRENT[1]", "NO_CHANGE[]"],
-        "the first server-assigned id is 1"
-    );
-    // A second id-0 target gets the next free id, not one already in use.
-    tx.send(add_query_target(0, "open")).await.unwrap();
-    let second = next_until(&mut responses, "NO_CHANGE[]").await;
-    assert_eq!(second.first().map(String::as_str), Some("ADD[2]"));
-    // An id that was assigned is an id like any other: removing it removes that target.
-    tx.send(pb::ListenRequest {
-        database: DB.to_owned(),
-        target_change: Some(pb::listen_request::TargetChange::RemoveTarget(1)),
-        ..Default::default()
-    })
-    .await
-    .unwrap();
-    assert_eq!(next_until(&mut responses, "REMOVE[1]").await, vec!["REMOVE[1]"]);
-    // The freed id is the next one assigned.
-    tx.send(add_query_target(0, "open")).await.unwrap();
-    let third = next_until(&mut responses, "NO_CHANGE[]").await;
-    assert_eq!(third.first().map(String::as_str), Some("ADD[1]"));
-    handle.abort();
+        assert_eq!(
+            next_until(&mut responses, "REMOVE[1]").await,
+            vec!["REMOVE[1]"]
+        );
+        // The freed id is the next one assigned.
+        tx.send(add_query_target(0, "open")).await.unwrap();
+        let third = next_until(&mut responses, "NO_CHANGE[]").await;
+        assert_eq!(third.first().map(String::as_str), Some("ADD[1]"));
+        handle.abort();
+    }
 }
 
-/// Near miss of the emulator profile's id 0: an explicit id already in use is still refused (as
-/// the official emulator does).
+/// Production ends the stream (`INVALID_ARGUMENT`, `native/target-protocol/id-after-assigned`) when
+/// an explicit id follows a server-assigned one. The official emulator accepts it, so the
+/// emulator profile keeps accepting.
 #[tokio::test]
-async fn emulator_profile_still_refuses_an_active_target_id() {
-    let (mut client, handle) = start_configured(None, IndexValidationPolicy::Emulator).await;
+async fn an_explicit_id_after_a_server_assigned_one_ends_a_strict_stream_only() {
+    let (mut client, handle) = start_profile(Profile::Strict).await;
     let (tx, rx) = mpsc::channel(8);
     let mut responses = client
         .listen(ReceiverStream::new(rx))
@@ -2893,22 +2940,14 @@ async fn emulator_profile_still_refuses_an_active_target_id() {
         .into_inner();
     tx.send(add_query_target(0, "open")).await.unwrap();
     next_until(&mut responses, "NO_CHANGE[]").await;
-    tx.send(add_query_target(1, "open")).await.unwrap();
-    let refused = loop {
-        match responses.next().await {
-            Some(Err(status)) => break status,
-            Some(Ok(_)) => {}
-            None => panic!("the stream ended without a status"),
-        }
-    };
-    assert_eq!(refused.code(), tonic::Code::InvalidArgument);
-    assert!(refused.message().contains("already active"), "{}", refused.message());
+    tx.send(add_query_target(7, "open")).await.unwrap();
+    assert_eq!(
+        stream_error(&mut responses).await.code(),
+        tonic::Code::InvalidArgument
+    );
     handle.abort();
-}
 
-#[tokio::test]
-async fn strict_profile_still_refuses_target_zero() {
-    let (mut client, handle) = start(false).await;
+    let (mut client, handle) = start_profile(Profile::Emulator).await;
     let (tx, rx) = mpsc::channel(8);
     let mut responses = client
         .listen(ReceiverStream::new(rx))
@@ -2916,8 +2955,273 @@ async fn strict_profile_still_refuses_target_zero() {
         .unwrap()
         .into_inner();
     tx.send(add_query_target(0, "open")).await.unwrap();
-    let refused = responses.next().await.unwrap().unwrap_err();
-    assert_eq!(refused.code(), tonic::Code::InvalidArgument);
-    assert_eq!(refused.message(), "target_id must be non-zero");
+    next_until(&mut responses, "NO_CHANGE[]").await;
+    tx.send(add_query_target(7, "open")).await.unwrap();
+    let accepted = next_until(&mut responses, "NO_CHANGE[]").await;
+    assert_eq!(accepted.first().map(String::as_str), Some("ADD[7]"));
     handle.abort();
+}
+
+/// Near miss: explicit ids on their own, before any server-assigned one, are always fine.
+#[tokio::test]
+async fn explicit_ids_without_a_server_assigned_one_are_accepted_in_both_profiles() {
+    for profile in [Profile::Strict, Profile::Emulator] {
+        let (mut client, handle) = start_profile(profile).await;
+        let (tx, rx) = mpsc::channel(8);
+        let mut responses = client
+            .listen(ReceiverStream::new(rx))
+            .await
+            .unwrap()
+            .into_inner();
+        tx.send(add_query_target(7, "open")).await.unwrap();
+        next_until(&mut responses, "NO_CHANGE[]").await;
+        tx.send(add_query_target(9, "open")).await.unwrap();
+        let second = next_until(&mut responses, "NO_CHANGE[]").await;
+        assert_eq!(second.first().map(String::as_str), Some("ADD[9]"));
+        handle.abort();
+    }
+}
+
+/// A negative id ends the stream with `INVALID_ARGUMENT` in production
+/// (`native/target-protocol/negative-id`) and in the official emulator: both profiles refuse.
+#[tokio::test]
+async fn a_negative_target_id_ends_the_stream_in_both_profiles() {
+    for profile in [Profile::Strict, Profile::Emulator] {
+        let (mut client, handle) = start_profile(profile).await;
+        let (tx, rx) = mpsc::channel(8);
+        let mut responses = client
+            .listen(ReceiverStream::new(rx))
+            .await
+            .unwrap()
+            .into_inner();
+        tx.send(add_query_target(-1, "open")).await.unwrap();
+        assert_eq!(
+            stream_error(&mut responses).await.code(),
+            tonic::Code::InvalidArgument
+        );
+        handle.abort();
+    }
+}
+
+/// A target id already active on the stream: production removes the new target with
+/// `ALREADY_EXISTS` "Target ID already exists: 1" and keeps the stream open
+/// (`native/target-protocol/duplicate-id`); the official emulator ends the stream, so following
+/// production refuses nothing it completes. The first target stays active.
+#[tokio::test]
+async fn a_duplicate_target_id_is_removed_with_already_exists_and_the_stream_keeps_listening() {
+    for profile in [Profile::Strict, Profile::Emulator] {
+        let (mut client, handle) = start_profile(profile).await;
+        let (tx, rx) = mpsc::channel(8);
+        let mut responses = client
+            .listen(ReceiverStream::new(rx))
+            .await
+            .unwrap()
+            .into_inner();
+        tx.send(add_query_target(1, "open")).await.unwrap();
+        next_until(&mut responses, "NO_CHANGE[]").await;
+        tx.send(add_query_target(1, "open")).await.unwrap();
+        let refused = tokio::time::timeout(std::time::Duration::from_secs(5), responses.next())
+            .await
+            .expect("a response within 5 s")
+            .expect("the stream is still open")
+            .expect("a target removal, not a stream error");
+        assert_eq!(describe(&refused), "REMOVE[1] cause=6");
+        let cause = match &refused.response_type {
+            Some(pb::listen_response::ResponseType::TargetChange(t)) => t.cause.clone().unwrap(),
+            other => panic!("expected a target change: {other:?}"),
+        };
+        assert_eq!(cause.message, "Target ID already exists: 1");
+        // The first target is still active: a commit reaches it.
+        client
+            .commit(pb::CommitRequest {
+                database: DB.to_owned(),
+                writes: vec![set_write("open/a", &[("v", s("1"))])],
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        let diff = next_until(&mut responses, "NO_CHANGE[]").await;
+        assert_eq!(diff, vec!["CHANGE a", "NO_CHANGE[]"]);
+        handle.abort();
+    }
+}
+
+/// Bytes that are not a resume token: production removes the target with `INVALID_ARGUMENT` "bad
+/// resume token" and no ADD (`native/resume-token/invalid`); the official emulator ignores the
+/// token and replays everything, so the emulator profile keeps its RESET.
+#[tokio::test]
+async fn a_malformed_resume_token_removes_the_target_in_strict_and_resets_in_the_emulator_profile()
+{
+    let junk = |id| {
+        let mut request = add_query_target(id, "open");
+        if let Some(pb::listen_request::TargetChange::AddTarget(t)) = &mut request.target_change {
+            t.resume_type = Some(pb::target::ResumeType::ResumeToken(b"not-a-token".to_vec()));
+        }
+        request
+    };
+    let (mut client, handle) = start_profile(Profile::Strict).await;
+    let (tx, rx) = mpsc::channel(8);
+    let mut responses = client
+        .listen(ReceiverStream::new(rx))
+        .await
+        .unwrap()
+        .into_inner();
+    tx.send(junk(1)).await.unwrap();
+    let first = tokio::time::timeout(std::time::Duration::from_secs(5), responses.next())
+        .await
+        .expect("a response within 5 s")
+        .expect("the stream is still open")
+        .expect("a target removal, not a stream error");
+    assert_eq!(describe(&first), "REMOVE[1] cause=3", "no ADD comes first");
+    let cause = match &first.response_type {
+        Some(pb::listen_response::ResponseType::TargetChange(t)) => t.cause.clone().unwrap(),
+        other => panic!("expected a target change: {other:?}"),
+    };
+    assert_eq!(cause.message, "bad resume token");
+    // The stream keeps listening: the id is free again.
+    tx.send(add_query_target(1, "open")).await.unwrap();
+    let ok = next_until(&mut responses, "NO_CHANGE[]").await;
+    assert_eq!(ok.first().map(String::as_str), Some("ADD[1]"));
+    handle.abort();
+
+    let (mut client, handle) = start_profile(Profile::Emulator).await;
+    let (tx, rx) = mpsc::channel(8);
+    let mut responses = client
+        .listen(ReceiverStream::new(rx))
+        .await
+        .unwrap()
+        .into_inner();
+    tx.send(junk(1)).await.unwrap();
+    let trace = next_until(&mut responses, "NO_CHANGE[]").await;
+    assert_eq!(trace[..2], ["ADD[1]", "RESET[1]"]);
+    handle.abort();
+}
+
+/// A query that needs an index: production sends ADD[1] and then REMOVE[1] with `FAILED_PRECONDITION`
+/// (`native/target-protocol/missing-index`). The emulator profile needs no index (the official
+/// emulator ignores them) and refuses nothing.
+#[tokio::test]
+async fn a_strict_missing_index_is_acknowledged_with_an_add_before_its_removal() {
+    let (mut client, handle) = start_with_indexes(declared_task_index()).await;
+    let (tx, rx) = mpsc::channel(8);
+    let mut responses = client
+        .listen(ReceiverStream::new(rx))
+        .await
+        .unwrap()
+        .into_inner();
+    tx.send(add_owner_ordered_target(22, "updatedAt"))
+        .await
+        .unwrap();
+    let mut seen = Vec::new();
+    for _ in 0..2 {
+        let item = tokio::time::timeout(std::time::Duration::from_secs(5), responses.next())
+            .await
+            .expect("a response within 5 s")
+            .expect("the stream is still open")
+            .expect("a target removal, not a stream error");
+        seen.push(describe(&item));
+    }
+    assert_eq!(seen, vec!["ADD[22]", "REMOVE[22] cause=9"]);
+    handle.abort();
+}
+
+/// A document that stops matching a query is sent as a document change that names the target in
+/// `removed_target_ids` (the recorded resume replay of `native/existence-filter/with-expected-count`
+/// shows it as `documentChange` with removed ids and no target ids), not as a `DocumentRemove`;
+/// a deleted document is a `DocumentDelete`.
+#[tokio::test]
+async fn a_document_that_leaves_the_query_is_a_change_with_removed_target_ids() {
+    for profile in [Profile::Strict, Profile::Emulator] {
+        let (mut client, handle) = start_profile(profile).await;
+        client
+            .commit(pb::CommitRequest {
+                database: DB.to_owned(),
+                writes: vec![
+                    set_write("g/a", &[("state", s("included"))]),
+                    set_write("g/b", &[("state", s("included"))]),
+                ],
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        let (tx, rx) = mpsc::channel(8);
+        let mut responses = client
+            .listen(ReceiverStream::new(rx))
+            .await
+            .unwrap()
+            .into_inner();
+        tx.send(add_filtered_query_target(1, "g")).await.unwrap();
+        next_until(&mut responses, "NO_CHANGE[]").await;
+        client
+            .commit(pb::CommitRequest {
+                database: DB.to_owned(),
+                writes: vec![set_write("g/a", &[("state", s("excluded"))])],
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        let mut leaving = None;
+        loop {
+            let item = tokio::time::timeout(std::time::Duration::from_secs(5), responses.next())
+                .await
+                .expect("a response within 5 s")
+                .expect("stream open")
+                .unwrap();
+            if let Some(pb::listen_response::ResponseType::DocumentChange(change)) =
+                &item.response_type
+            {
+                leaving = Some(change.clone());
+            }
+            if describe(&item) == "NO_CHANGE[]" {
+                break;
+            }
+        }
+        let change = leaving.expect("a document change for the document that left");
+        assert!(change.target_ids.is_empty());
+        assert_eq!(change.removed_target_ids, vec![1]);
+        assert!(change.document.unwrap().name.ends_with("/g/a"));
+        handle.abort();
+    }
+}
+
+/// A live update and a delete carry one global boundary and no per-target `NO_CHANGE`: production
+/// (`native/target-lifecycle/update`, `delete`) and the official emulator send none.
+#[tokio::test]
+async fn a_commit_is_followed_by_one_global_boundary_and_no_per_target_no_change() {
+    for profile in [Profile::Strict, Profile::Emulator] {
+        let (mut client, handle) = start_profile(profile).await;
+        let (tx, rx) = mpsc::channel(8);
+        let mut responses = client
+            .listen(ReceiverStream::new(rx))
+            .await
+            .unwrap()
+            .into_inner();
+        tx.send(add_query_target(1, "open")).await.unwrap();
+        next_until(&mut responses, "NO_CHANGE[]").await;
+        client
+            .commit(pb::CommitRequest {
+                database: DB.to_owned(),
+                writes: vec![set_write("open/a", &[("v", s("1"))])],
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        assert_eq!(
+            next_until(&mut responses, "NO_CHANGE[]").await,
+            vec!["CHANGE a", "NO_CHANGE[]"]
+        );
+        client
+            .commit(pb::CommitRequest {
+                database: DB.to_owned(),
+                writes: vec![delete_write("open/a")],
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        assert_eq!(
+            next_until(&mut responses, "NO_CHANGE[]").await,
+            vec!["DELETE a", "NO_CHANGE[]"]
+        );
+        handle.abort();
+    }
 }

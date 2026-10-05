@@ -398,6 +398,8 @@ struct TargetState {
     /// Pending resume, resolved on the first refresh (it needs the snapshot).
     resume: Option<Resume>,
     once: bool,
+    /// The server picked this target's id (the request said 0).
+    assigned: bool,
     /// Reached its first consistent snapshot (`CURRENT` was sent).
     current: bool,
     /// Responses produced by the last refresh, drained by the caller.
@@ -696,11 +698,15 @@ fn handle_listen_request(
     };
     match &req.target_change {
         Some(pb::listen_request::TargetChange::AddTarget(target)) => {
-            let id = listen_target_id(ctx, target, targets)?;
+            let (id, assigned) = listen_target_id(ctx, target, targets)?;
             if targets.contains_key(&id) {
-                return Err(Status::invalid_argument(format!(
-                    "target {id} is already active on this stream"
-                )));
+                // Production removes the new target and keeps the stream (and the first target)
+                // listening: `native/target-protocol/duplicate-id`.
+                out.push(removed_with_cause(
+                    id,
+                    &Status::already_exists(format!("Target ID already exists: {id}")),
+                ));
+                return Ok(());
             }
             if targets.len() >= MAX_LISTEN_TARGETS {
                 return Err(Status::resource_exhausted(format!(
@@ -718,10 +724,14 @@ fn handle_listen_request(
             let kind = match decode_target(ctx, parent, target) {
                 Ok(kind) => kind,
                 Err(e) => {
-                    out.push(removed_with_cause(id, &e));
+                    out.extend(decode_refusal(id, &e));
                     return Ok(());
                 }
             };
+            if let Some(refusal) = malformed_token_refusal(ctx, target, id) {
+                out.push(refusal);
+                return Ok(());
+            }
             let target_hash = target_hash(&kind);
             let database_hash = synchronize_database_generation(
                 parent,
@@ -744,15 +754,7 @@ fn handle_listen_request(
                 database: database_hash,
                 target: target_hash,
             };
-            let resume = match &target.resume_type {
-                None => None,
-                Some(pb::target::ResumeType::ResumeToken(bytes)) => {
-                    Some(parse_resume_token(bytes, &binding))
-                }
-                Some(pb::target::ResumeType::ReadTime(t)) => {
-                    Some(Resume::ReadTime(decode_instant(t)))
-                }
-            };
+            let resume = resume_of(target, &binding);
             targets.insert(
                 id,
                 TargetState {
@@ -762,6 +764,7 @@ fn handle_listen_request(
                     known: BTreeMap::new(),
                     resume,
                     once: target.once,
+                    assigned,
                     current: false,
                     pending: Vec::new(),
                 },
@@ -792,24 +795,94 @@ fn handle_listen_request(
     Ok(())
 }
 
-/// The id a target is added under: its own, or for id 0 the one the server assigns.
+/// The id a target is added under, and whether the server picked it.
 ///
-/// The API documents that the server assigns an id to a target sent with id 0, and the official
-/// emulator does; the emulator profile may not refuse what it completes. Strict keeps its refusal
-/// until a production recording settles it (FS-LISTEN-SDK packet L1,
-/// `native/target-protocol/server-assigned-id`).
+/// Production assigns the smallest free positive id to a target sent with id 0 (FS-LISTEN-SDK L1,
+/// `native/target-protocol/server-assigned-id` and `second-zero-id`), as the API documents and
+/// the official emulator does. A negative id ends the stream with `INVALID_ARGUMENT` in production
+/// (`negative-id`) and in the official emulator. Production also ends the stream when an explicit
+/// id follows a server-assigned one (`id-after-assigned`); the official emulator accepts it, so
+/// only strict refuses.
 fn listen_target_id(
     ctx: &StreamContext,
     target: &pb::Target,
     targets: &BTreeMap<i32, TargetState>,
-) -> Result<i32, Status> {
-    if target.target_id != 0 {
-        return Ok(target.target_id);
+) -> Result<(i32, bool), Status> {
+    choose_target_id(
+        target.target_id,
+        &targets.keys().copied().collect(),
+        targets.values().any(|t| t.assigned),
+        ctx.gateway.production_refusals(),
+    )
+    .map_err(Status::invalid_argument)
+}
+
+/// The decision of `listen_target_id`, without the stream: `requested` is the id on the wire,
+/// `used` the ids active on the stream, `assigned_before` whether one of them was server-assigned
+/// and `strict` whether production's refusals apply.
+fn choose_target_id(
+    requested: i32,
+    used: &BTreeSet<i32>,
+    assigned_before: bool,
+    strict: bool,
+) -> Result<(i32, bool), &'static str> {
+    match requested {
+        id if id < 0 => Err("target_id must not be negative"),
+        0 => Ok((first_free_target_id(used), true)),
+        _ if strict && assigned_before => {
+            Err("an explicit target_id cannot follow a server-assigned one on this stream")
+        }
+        id => Ok((id, false)),
     }
-    if ctx.gateway.production_refusals() {
-        return Err(Status::invalid_argument("target_id must be non-zero"));
+}
+
+/// Where an added target resumes from, if it names a token or a read time.
+fn resume_of(target: &pb::Target, binding: &TokenBinding) -> Option<Resume> {
+    match &target.resume_type {
+        None => None,
+        Some(pb::target::ResumeType::ResumeToken(bytes)) => {
+            Some(parse_resume_token(bytes, binding))
+        }
+        Some(pb::target::ResumeType::ReadTime(t)) => Some(Resume::ReadTime(decode_instant(t))),
     }
-    Ok(first_free_target_id(&targets.keys().copied().collect()))
+}
+
+/// The answer to a target that cannot be decoded. A refused index is acknowledged first and
+/// removed after, as production does (`native/target-protocol/missing-index`: ADD[1], then
+/// REMOVE[1] with code 9); any other refusal is a removal alone.
+fn decode_refusal(id: i32, error: &Status) -> Vec<pb::ListenResponse> {
+    let mut out = Vec::new();
+    if error.code() == tonic::Code::FailedPrecondition {
+        out.push(target_change(
+            pb::target_change::TargetChangeType::Add,
+            vec![id],
+            None,
+            None,
+        ));
+    }
+    out.push(removed_with_cause(id, error));
+    out
+}
+
+/// Bytes that are not a token at all: production removes the target with `INVALID_ARGUMENT` and
+/// sends no ADD (`native/resume-token/invalid`). The official emulator ignores the token and
+/// replays everything, so only strict refuses; the emulator profile resets.
+fn malformed_token_refusal(
+    ctx: &StreamContext,
+    target: &pb::Target,
+    id: i32,
+) -> Option<pb::ListenResponse> {
+    let malformed = matches!(
+        &target.resume_type,
+        Some(pb::target::ResumeType::ResumeToken(bytes)) if !is_token_shaped(bytes)
+    );
+    (ctx.gateway.production_refusals() && malformed)
+        .then(|| removed_with_cause(id, &Status::invalid_argument("bad resume token")))
+}
+
+/// Whether `bytes` have the shape of a token this daemon issues (32 bytes).
+fn is_token_shaped(bytes: &[u8]) -> bool {
+    <[u8; 32]>::try_from(bytes).is_ok()
 }
 
 /// The smallest positive id not in `used`: what the server assigns to a target sent with id 0.
@@ -960,7 +1033,6 @@ fn refresh_all(
             let token = resume_token(version, &binding);
             let delta_paths = complete_delta_paths(&input, version);
             let mut removed = Vec::new();
-            let mut made_current = BTreeSet::new();
             for (id, state) in targets.iter_mut() {
                 let refreshed = authorize_target(ctx, &principal, db, state).and_then(|()| {
                     if state.current && state.resume.is_none() {
@@ -977,7 +1049,6 @@ fn refresh_all(
                         out.append(&mut state.pending);
                         if !state.current {
                             state.current = true;
-                            made_current.insert(*id);
                             let bound = TokenBinding {
                                 target: state.target_hash,
                                 ..binding
@@ -997,10 +1068,9 @@ fn refresh_all(
                     }
                 }
             }
-            Ok((read_time, token, removed, version, binding, made_current))
+            Ok((read_time, token, removed, version))
         });
-    let (read_time, token, removed, version, binding, made_current) = match snapshot.and_then(|r| r)
-    {
+    let (read_time, token, removed, version) = match snapshot.and_then(|r| r) {
         Ok(s) => s,
         Err(e) => {
             for id in targets.keys() {
@@ -1017,20 +1087,10 @@ fn refresh_all(
     if targets.is_empty() {
         return Ok(());
     }
-    // A target that became current in this snapshot got its token with CURRENT: no NO_CHANGE
-    // follows it, as production and the official emulator frame it (AUTH-FS-CROSS stage 2).
-    for (id, state) in targets.iter().filter(|(id, _)| !made_current.contains(*id)) {
-        let bound = TokenBinding {
-            target: state.target_hash,
-            ..binding
-        };
-        out.push(target_change(
-            pb::target_change::TargetChangeType::NoChange,
-            vec![*id],
-            Some(resume_token(version, &bound)),
-            Some(read_time),
-        ));
-    }
+    // One global boundary closes the snapshot. The token it carries applies to every target
+    // (production and the official emulator send no per-target NO_CHANGE after a change:
+    // FS-LISTEN-SDK L1, `native/target-lifecycle/update` and `delete`); a target that became
+    // current in this snapshot got its own token with CURRENT.
     out.push(target_change(
         pb::target_change::TargetChangeType::NoChange,
         vec![],
@@ -1208,6 +1268,10 @@ fn complete_delta_paths(
     }
 }
 
+/// A document that left the target. One that still exists (it stopped matching) goes as a
+/// document change that names the target in `removed_target_ids`, as production sends it
+/// (`native/existence-filter/with-expected-count`: a change with removed ids and no target ids);
+/// a deleted one goes as a `DocumentDelete`.
 fn out_removal(
     db: &fireemu_core_firestore::store::FirestoreState,
     path: &DocumentPath,
@@ -1215,11 +1279,11 @@ fn out_removal(
     read_time: prost_types::Timestamp,
     out: &mut Vec<pb::ListenResponse>,
 ) {
-    let response_type = if db.get(path).is_some() {
-        pb::listen_response::ResponseType::DocumentRemove(pb::DocumentRemove {
-            document: path.resource_name(),
+    let response_type = if let Some(document) = db.get(path) {
+        pb::listen_response::ResponseType::DocumentChange(pb::DocumentChange {
+            document: Some(encode_document(document)),
+            target_ids: vec![],
             removed_target_ids: vec![id],
-            read_time: Some(read_time),
         })
     } else {
         pb::listen_response::ResponseType::DocumentDelete(pb::DocumentDelete {
@@ -1669,6 +1733,7 @@ mod refresh_tests {
                 known: BTreeMap::from([(path("restored/a"), CommitVersion::from_value(1))]),
                 resume: None,
                 once: false,
+                assigned: false,
                 current: true,
                 pending: Vec::new(),
             },
@@ -1832,6 +1897,7 @@ mod refresh_tests {
             known: BTreeMap::from([(document.path.clone(), document.version)]),
             resume: None,
             once: false,
+            assigned: false,
             current: true,
             pending: Vec::new(),
         };
@@ -1916,6 +1982,7 @@ mod refresh_tests {
                 known: BTreeMap::new(),
                 resume: None,
                 once: false,
+                assigned: false,
                 current: true,
                 pending: Vec::new(),
             };
@@ -2082,9 +2149,30 @@ mod empty_write_tests {
 
 #[cfg(test)]
 mod assigned_target_id_tests {
-    use super::first_free_target_id;
+    use super::{choose_target_id, first_free_target_id, is_token_shaped};
     use proptest::prelude::*;
     use std::collections::BTreeSet;
+
+    #[test]
+    fn the_decision_table_of_a_requested_id() {
+        let used = BTreeSet::from([1, 2]);
+        assert_eq!(choose_target_id(0, &used, false, true), Ok((3, true)));
+        assert_eq!(choose_target_id(0, &used, true, true), Ok((3, true)));
+        assert_eq!(choose_target_id(7, &used, false, true), Ok((7, false)));
+        assert!(choose_target_id(7, &used, true, true).is_err());
+        assert_eq!(choose_target_id(7, &used, true, false), Ok((7, false)));
+        assert!(choose_target_id(-1, &used, false, false).is_err());
+        assert!(choose_target_id(-1, &used, false, true).is_err());
+        assert!(choose_target_id(i32::MIN, &used, false, true).is_err());
+    }
+
+    #[test]
+    fn a_token_has_the_shape_of_exactly_thirty_two_bytes() {
+        assert!(is_token_shaped(&[0; 32]));
+        assert!(!is_token_shaped(&[0; 31]));
+        assert!(!is_token_shaped(&[0; 33]));
+        assert!(!is_token_shaped(&[]));
+    }
 
     #[test]
     fn the_first_id_is_one_and_a_gap_is_filled_before_the_end() {
@@ -2108,6 +2196,32 @@ mod assigned_target_id_tests {
             for smaller in 1..id {
                 prop_assert!(used.contains(&smaller));
             }
+        }
+
+        #[test]
+        fn a_requested_id_is_decided_by_sign_and_by_what_the_stream_holds(
+            requested in -5_i32..50,
+            used in proptest::collection::btree_set(-3_i32..40, 0..30),
+            assigned_before in any::<bool>(),
+            strict in any::<bool>(),
+        ) {
+            let decided = choose_target_id(requested, &used, assigned_before, strict);
+            if requested < 0 {
+                prop_assert!(decided.is_err());
+            } else if requested == 0 {
+                let (id, assigned) = decided.unwrap();
+                prop_assert!(assigned);
+                prop_assert_eq!(id, first_free_target_id(&used));
+            } else if strict && assigned_before {
+                prop_assert!(decided.is_err());
+            } else {
+                prop_assert_eq!(decided, Ok((requested, false)));
+            }
+        }
+
+        #[test]
+        fn only_thirty_two_bytes_are_token_shaped(len in 0_usize..70) {
+            prop_assert_eq!(is_token_shaped(&vec![7; len]), len == 32);
         }
     }
 }

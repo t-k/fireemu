@@ -861,7 +861,7 @@ test("a filter does not hide another difference, and two filters must agree", ()
   assert.equal(classifyRow(fr([current, flt(2)]), fr([current, flt(2, 2)])), "DIFFER");
   assert.equal(classifyRow(fr([current, flt(2)]), fr([current, bnd(), flt(2)])), "DIFFER");
   assert.equal(classifyRow(fr([current, flt(2), flt(2)]), fr([current, flt(2)])), "MATCH");
-  assert.deepEqual(filterKeys(fr([flt(2), flt(1), flt(2), current])), ["1:1", "1:2"]);
+  assert.deepEqual(filterKeys(fr([flt(2), flt(1), flt(2), current])), ["1:1:12:4:7", "1:2:12:4:7"]);
   assert.deepEqual(filterKeys(fr([current])), []);
   assert.deepEqual(filterKeys({}), []);
 });
@@ -1037,7 +1037,7 @@ test("the divergence registers name rows of the recorded production run and give
     for (const [id, reason] of Object.entries(register)) {
       assert.ok(rows.has(id), `${id} is not a row of the recorded production run`);
       assert.ok(reason.length > 80, id);
-      assert.match(reason, /nmuuicyas|official emulator|Production/, id);
+      assert.match(reason, /nmuuicyas|official emulator/, id);
     }
   // The emulator profile has every strict divergence and the ones the official emulator causes.
   for (const id of Object.keys(strict)) assert.ok(id in emulator, id);
@@ -1053,6 +1053,17 @@ test("the divergence registers name rows of the recorded production run and give
   );
   for (const id of Object.keys(emulator).filter((i) => !(i in strict)))
     assert.match(emulator[id], /official emulator/, id);
+  // The strict ones say whether production was consistent, cite both runs and name the client effect.
+  for (const [id, reason] of Object.entries(strict)) {
+    assert.match(reason, /consistent across the two runs/, id);
+    assert.match(reason, /nmuuicyas/, id);
+    assert.match(reason, /nmuukwo6n/, id);
+    assert.match(reason, /Native-gRPC client effect/, id);
+    assert.match(reason, /fs-listen-resume-replay-boundaries/, id);
+  }
+  // Each strict divergence is a row on which the two production runs agree.
+  for (const id of Object.keys(strict))
+    assert.equal(classifyRow(L1["native-1"].rows[id], L1["native-2"].rows[id]), "MATCH", id);
 });
 
 test("only the boundaries a dropped filter left side by side merge, however many rows follow it", () => {
@@ -1087,4 +1098,62 @@ test("a REMOVE after a CURRENT does not settle a wait that ran out", () => {
   };
   const odd = fr([add, current, removed(9)], { timedOut: true });
   assert.equal(classifyRow(odd, structuredClone(odd)), "INDETERMINATE");
+});
+
+const bare = (count, extra = {}) => ({
+  kind: "filter",
+  targetId: 1,
+  count,
+  unchangedNames: null,
+  ...extra,
+});
+
+test("near miss: a filter without the bloom filter of unchanged names is not optional and is compared", () => {
+  assert.equal(classifyRow(fr([current, bare(2)]), fr([current])), "DIFFER");
+  assert.equal(classifyRow(fr([current]), fr([current, bare(2)])), "DIFFER");
+  assert.equal(classifyRow(fr([current, bare(2)]), fr([current, bare(2)])), "MATCH");
+  assert.equal(classifyRow(fr([current, bare(2)]), fr([current, bare(3)])), "DIFFER");
+  // A filter without the field at all is the same.
+  const missing = { kind: "filter", targetId: 1, count: 2 };
+  assert.equal(classifyRow(fr([current, missing]), fr([current])), "DIFFER");
+  // It stays in the canonical row, and does not merge the boundaries around it.
+  assert.deepEqual(canonicalRow(fr([bnd(false), bare(1), bnd(true)])).rows, [
+    bnd(false),
+    bare(1),
+    bnd(true),
+  ]);
+  assert.deepEqual(filterKeys(fr([bare(2), current])), []);
+  // A bare filter beside an optional one: the optional one is still optional.
+  assert.equal(classifyRow(fr([current, bare(2), flt(2)]), fr([current, bare(2)])), "MATCH");
+});
+
+test("near miss: filters that both sides sent must agree on the target, the count and the bloom shape", () => {
+  const shaped = (extra) => ({
+    ...flt(2),
+    unchangedNames: { hashCount: 12, bitmapBytes: 4, padding: 7, ...extra },
+  });
+  assert.equal(classifyRow(fr([current, shaped({})]), fr([current, shaped({})])), "MATCH");
+  for (const change of [{ hashCount: 13 }, { bitmapBytes: 5 }, { padding: 6 }])
+    assert.equal(classifyRow(fr([current, shaped({})]), fr([current, shaped(change)])), "DIFFER");
+});
+
+test("near miss: a wait that ran out with no REMOVE carrying a cause is a failure, whatever else the row holds", () => {
+  const add = {
+    kind: "targetChange",
+    type: "ADD",
+    targetIds: [1],
+    cause: null,
+    resumeToken: false,
+  };
+  const noCause = { ...removed(), cause: null };
+  for (const rows of [[add], [add, current], [add, noCause], [removed(), add], []]) {
+    const waited = fr(rows, { timedOut: true });
+    assert.equal(
+      classifyRow(waited, structuredClone(waited)),
+      "INDETERMINATE",
+      JSON.stringify(rows),
+    );
+  }
+  // The same rows, finished, are compared in the ordinary way.
+  assert.equal(classifyRow(fr([add, noCause]), fr([add, noCause])), "MATCH");
 });

@@ -51,11 +51,13 @@ function sortDocumentRuns(rows) {
  * compared; its content is (see `filterKeys`). Removing it leaves the boundaries around it side by
  * side, and those merge into one, as the recorder merges a run of boundaries.
  */
+const isOptionalFilter = (row) => row.kind === "filter" && row.unchangedNames != null;
+
 function withoutFilters(rows) {
   const out = [];
   let dropped = false;
   for (const row of rows) {
-    if (row.kind === "filter") {
+    if (isOptionalFilter(row)) {
       dropped = true;
       continue;
     }
@@ -69,11 +71,18 @@ function withoutFilters(rows) {
   return out;
 }
 
-/** The existence filters of a row, as the sorted set of `targetId:count`. */
+/**
+ * The optional existence filters of a row, as the sorted set of what they say: the target, the
+ * count and the shape of the bloom filter of unchanged names. A filter without that bloom filter
+ * is not optional: it stays in the row and is compared with it.
+ */
 export function filterKeys(row) {
   const keys = (row.rows ?? [])
-    .filter((item) => item.kind === "filter")
-    .map((item) => `${item.targetId}:${item.count}`);
+    .filter(isOptionalFilter)
+    .map(
+      ({ targetId, count, unchangedNames: bloom }) =>
+        `${targetId}:${count}:${bloom.hashCount}:${bloom.bitmapBytes}:${bloom.padding}`,
+    );
   return [...new Set(keys)].toSorted();
 }
 

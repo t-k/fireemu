@@ -1,6 +1,14 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { mkdirSync, mkdtempSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  statSync,
+  utimesSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -1069,5 +1077,45 @@ test("localProvenance asks the real git of this tree for the same answers the co
     assert.equal(out.buildInputs.cratesTree, tree);
     assert.equal(out.binaryBuiltAfterSource, true);
     assert.equal(typeof out.buildInputs.dirty, "boolean");
+  }
+});
+
+test("localProvenance with its own defaults reads the binary, the lock file of this tree and the modification time exactly", async () => {
+  const { execFile } = await import("node:child_process");
+  const { promisify } = await import("node:util");
+  const root = new URL("../../", import.meta.url).pathname;
+  const dir = mkdtempSync(join(tmpdir(), "provenance-defaults-"));
+  const binary = join(dir, "fireemu");
+  writeFileSync(binary, "binary bytes");
+  const lock = join(root, "Cargo.lock");
+  const defaults = await localProvenance({ target: "local", binaryPath: binary });
+  assert.equal(defaults.binarySha256, createHashHex("binary bytes"));
+  assert.equal(
+    defaults.buildInputs.cargoLockSha256,
+    existsSync(lock) ? createHashHex(readFileSync(lock)) : null,
+  );
+  let changedAt = null;
+  try {
+    const out = await promisify(execFile)(
+      "git",
+      ["log", "-1", "--format=%ct", "--", "crates", "Cargo.toml", "Cargo.lock"],
+      { cwd: root },
+    );
+    changedAt = Number(out.stdout.trim());
+  } catch {
+    // Not a git tree (the mutation harness runs a copy): the time is not compared.
+  }
+  if (Number.isFinite(changedAt) && changedAt > 0) {
+    // A binary written 0.5 s after the last change is built after it; 0.5 s before it is not.
+    utimesSync(binary, changedAt + 0.5, changedAt + 0.5);
+    assert.equal(
+      (await localProvenance({ target: "local", binaryPath: binary })).binaryBuiltAfterSource,
+      true,
+    );
+    utimesSync(binary, changedAt - 0.5, changedAt - 0.5);
+    assert.equal(
+      (await localProvenance({ target: "local", binaryPath: binary })).binaryBuiltAfterSource,
+      false,
+    );
   }
 });

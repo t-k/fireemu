@@ -657,3 +657,22 @@ test("every deployed function is read back at its own version", async () => {
     );
   }
 });
+
+test("the last poll of an observation window is as short as the window's remainder", async () => {
+  const { sleeps } = await go({}, { passes: 1, naturalWindowMs: 90_000 });
+  const start = sleeps.indexOf(60_000, sleeps.indexOf(3000));
+  assert.deepEqual(sleeps.slice(start - 0, start + 2), [60_000, 30_000]);
+});
+
+test("while one of the readiness lists cannot be read the run is not ready and records no readiness summary", async () => {
+  const never = await go({
+    hooks: {
+      ["GET " + LIST1]: async ({ w }) =>
+        w.cliRuns.includes("deploy") && !w.cliRuns.includes("delete")
+          ? error(500, "INTERNAL")
+          : undefined,
+    },
+  });
+  assert.equal(never.result.ready, null);
+  assert.deepEqual(never.result.passes, []);
+});

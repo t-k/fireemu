@@ -50,9 +50,10 @@ export function answerKind(row) {
     (item) => item.kind === "targetChange" && item.type === "CURRENT",
   );
   if (addAt < 0 || currentAt < addAt) return "unfinished";
-  const segment = frames.slice(addAt + 1, currentAt);
-  if (segment[0]?.kind === "boundary") segment.shift();
-  const letters = segment
+  // The boundary right after the ADD is a boundary before any document; the reading below looks
+  // from the first document on, so it needs no special case.
+  const letters = frames
+    .slice(addAt + 1, currentAt)
     .map((item) => (isDocument(item) ? "D" : item.kind === "boundary" ? "B" : "F"))
     .join("");
   const hasFilter = letters.includes("F");

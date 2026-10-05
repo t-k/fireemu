@@ -412,6 +412,7 @@ test("renderAnswerTable prints exactly this table", () => {
       "native/resume-grid-tc/k0": replayRow,
       "native/resume-grid-gc/k3": diffRow,
       "native/resume-age/age-30s-k1": replayRow,
+      "native/resume-age/age-5m-k1": replayRow,
     }),
   );
   assert.equal(
@@ -432,6 +433,7 @@ test("renderAnswerTable prints exactly this table", () => {
       "| row | answer |",
       "|---|---|",
       "| native/resume-age/age-30s-k1 | replay |",
+      "| native/resume-age/age-5m-k1 | - / replay (runs differ) |",
       "| native/resume-kinds/leave | diff+filter / - (runs differ) |",
     ].join("\n"),
   );

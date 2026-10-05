@@ -436,6 +436,13 @@ test("each variant resumes what its name says: the commits since the token, the 
     maxRequests: RESUME_VARIANT_REQUEST_CEILING,
   });
   assert.deepEqual(out.errors, {});
+  // Every wait of every row held: no row is a wait that ran out.
+  assert.deepEqual(
+    Object.entries(out.rows)
+      .filter(([, row]) => row.timedOut)
+      .map(([id]) => id),
+    [],
+  );
   // The i-th stream opened is the i-th open step of the programs, in run order.
   const openSteps = RESUME_VARIANT_PROGRAMS.flatMap((program) =>
     program.steps
@@ -502,6 +509,17 @@ test("each variant resumes what its name says: the commits since the token, the 
       [0, 1, 1, 1, 2, 2, 2, 3],
       name,
     );
+  // Every listen of a program is of its own group, the first of them an initial snapshot of the 3 documents.
+  for (const [program, stream, g] of [
+    ["native/resume-kinds", "first", "kinds"],
+    ["native/resume-age", "f1", "age"],
+    ["native/resume-age", "f2", "age"],
+    ["native/resume-age", "f3", "age"],
+  ]) {
+    assert.equal(seen(program, stream).g, g, `${program}:${stream}`);
+    assert.equal(seen(program, stream).from, null, `${program}:${stream}`);
+    assert.equal(seen(program, stream).matchesNow, 3, `${program}:${stream}`);
+  }
   // Each kind of change, one at a time from the token of the stream before.
   const kinds = (stream) => seen("native/resume-kinds", stream);
   assert.deepEqual(shape(kinds("modify")), [1, 0, 0]);
@@ -560,4 +578,20 @@ test("the streams of each program are named as the design names them", () => {
       .map((s) => s.ms),
     [30_000, 270_000],
   );
+});
+
+test("each program's documents are named with its own tag, so a leftover is found by the run id and the program", () => {
+  const tags = {
+    "native/resume-grid-g0": "g0",
+    "native/resume-grid-tc": "tc",
+    "native/resume-grid-gc": "gc",
+    "native/resume-kinds": "kinds",
+    "native/resume-age": "age",
+  };
+  for (const [id, tag] of Object.entries(tags))
+    assert.deepEqual(
+      byId(id).docs,
+      Object.fromEntries(["a", "b", "c", "d"].map((d) => [d, `lsn_native/{run}-${tag}-${d}`])),
+      id,
+    );
 });

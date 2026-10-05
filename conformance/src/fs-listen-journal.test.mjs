@@ -595,4 +595,11 @@ test("nameStates: a known closing line is not a confirmation and does not touch 
   );
   // Names are independent.
   assert.deepEqual(unconfirmed({ ...before(A, B), maybe: true }, after("known", B)), ["n/a"]);
+  // A name that is already confirmed is not opened again as a may-exist name.
+  assert.deepEqual(unconfirmed(before(A), after("ok", A), { ...before(A), maybe: true }), []);
+  // A name no answer touched is in the result, not unconfirmed.
+  assert.deepEqual(
+    [...nameStates(journalOf(before(A), after("refused", A)))],
+    [["n/a", { unconfirmed: false }]],
+  );
 });

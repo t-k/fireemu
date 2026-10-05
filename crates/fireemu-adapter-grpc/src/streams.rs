@@ -1267,6 +1267,9 @@ fn refresh_target_full(
 ///   most L1b rows; the one-commit departure is the exception (`refresh_target_full`). Some
 ///   one-commit modifications were replayed instead, in some runs and not in others (the L1b
 ///   reading): this answer is one of the two production gave, so strict keeps it.
+///   "One commit" is database-wide (the token's version + 1 is the snapshot version): an unrelated
+///   commit in between makes a departure fall back to this answer, narrower than one commit on the
+///   target and enough for the recorded shape.
 /// - `BloomWhenUnchanged`: an expected count. The diff ends with a bloom filter of the documents
 ///   the target matches (see `bloom`) when no document left; a departure keeps the removal
 ///   messages and no filter (L1's `with-expected-count`).

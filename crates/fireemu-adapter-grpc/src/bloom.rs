@@ -13,17 +13,22 @@
 //! `tests/fixtures/sdk-bloom-vectors.json` are produced by the SDK's own class
 //! (`conformance/src/fs-listen/sdk-bloom.mjs`) and the tests below require this module to equal them.
 //!
-//! The sizes are those production recorded: 12 hashes in 3 bytes with 7 padding bits (17 bits) for
-//! one document, 13 in 6 with 3 (45 bits) for two, 14 in 9 with 5 (67 bits) for three. (The L1 and
-//! L1b recordings state the bitmap as the length of its base64 text, 4, 8 and 12, which is 3, 6
-//! and 9 bytes: the recorder's `Buffer.from` of the string the client library decodes it to.) Nothing is recorded for another
-//! count, so `for_documents` has no filter for it and the caller sends none.
+//! The sizes are derived from the recordings, not read from them. The L1 and L1b recordings state
+//! the bitmap only as the length of its base64 text (4, 8 and 12 characters, which allow 1 to 3,
+//! 4 to 6 and 7 to 9 bytes), with the padding (7, 3 and 5) and the hash count (12, 13 and 14) for
+//! one, two and three documents. A bloom filter's hash count is the rounded optimum
+//! `k = bits / n * ln 2`, and for each count exactly one candidate size gives the recorded `k`:
+//! 3 bytes (17 bits, 11.8 rounds to 12), 5 bytes (37 bits, 12.8 rounds to 13) and 8 bytes (59 bits,
+//! 13.6 rounds to 14). The 6 and 9 bytes the base64 length also allows would give 16 and 15 hashes.
+//! The test `the_sizes_are_the_only_ones_that_fit_the_recorded_hash_counts_and_base64_lengths`
+//! encodes that relation. Nothing is recorded for another count, so `for_documents` has no filter
+//! for it and the caller sends none.
 
 use fireemu_proto_firestore::google::firestore::v1 as pb;
 use md5::{Digest, Md5};
 
 /// The documents a filter is recorded for, with the hash count, bitmap bytes and padding.
-const RECORDED: [(usize, i32, usize, i32); 3] = [(1, 12, 3, 7), (2, 13, 6, 3), (3, 14, 9, 5)];
+const RECORDED: [(usize, i32, usize, i32); 3] = [(1, 12, 3, 7), (2, 13, 5, 3), (3, 14, 8, 5)];
 
 /// A bloom filter over document resource names.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -174,6 +179,36 @@ mod tests {
         assert_eq!(Bloom::for_documents(&names(0)), None);
         assert_eq!(Bloom::for_documents(&names(4)), None);
         assert_eq!(Bloom::for_documents(&names(40)), None);
+    }
+
+    /// The relation the sizes are derived from: for each recorded count the chosen byte count is
+    /// the only candidate whose bit count gives the recorded hash count under `round(bits / n *
+    /// ln 2)`, and its base64 text has the recorded length (4, 8 and 12 characters).
+    #[test]
+    fn the_sizes_are_the_only_ones_that_fit_the_recorded_hash_counts_and_base64_lengths() {
+        // round(bits / n * ln 2) in integers, with ln 2 as 693147 / 1_000_000.
+        let hashes = |bytes: usize, padding: i32, documents: usize| -> i32 {
+            let bits = u64::try_from(bytes * 8).unwrap() - u64::try_from(padding).unwrap();
+            let n = u64::try_from(documents).unwrap();
+            i32::try_from((bits * 693_147 + n * 500_000) / (n * 1_000_000)).unwrap()
+        };
+        let base64_length = |bytes: usize| bytes.div_ceil(3) * 4;
+        for ((documents, hash_count, bytes, padding), text) in RECORDED.into_iter().zip([4, 8, 12])
+        {
+            assert_eq!(hashes(bytes, padding, documents), hash_count);
+            assert_eq!(base64_length(bytes), text);
+            // The other sizes with the same base64 length, at the recorded padding, do not fit.
+            let fits: Vec<usize> = (1..=9)
+                .filter(|candidate| {
+                    base64_length(*candidate) == text
+                        && hashes(*candidate, padding, documents) == hash_count
+                })
+                .collect();
+            assert_eq!(fits, vec![bytes], "{documents} documents");
+        }
+        // The near misses named by the review: 6 and 9 bytes give 16 and 15 hashes.
+        assert_eq!(hashes(6, 3, 2), 16);
+        assert_eq!(hashes(9, 5, 3), 15);
     }
 
     #[test]

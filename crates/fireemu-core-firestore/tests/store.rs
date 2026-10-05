@@ -1511,6 +1511,25 @@ fn an_unfiltered_query_and_an_unsupported_filter_still_lock_the_whole_collection
 }
 
 #[test]
+fn a_write_with_a_transform_stays_covered_whatever_the_document_holds_now() {
+    // The transform's result is not known before it runs, so a write that carries one is
+    // locked even when the document it names is outside the queried range.
+    let (mut s, _txn) = filtered_range_lock();
+    let transformed = Write {
+        transforms: vec![FieldTransform {
+            field: FieldPath::parse("count").unwrap(),
+            kind: TransformKind::Increment(Value::Integer(1)),
+        }],
+        ..set("rg/outside", &[("state", Value::String("out".into()))])
+    };
+    assert_refused(
+        &mut s,
+        &[transformed],
+        "a transform on a document outside the range",
+    );
+}
+
+#[test]
 fn a_disjunction_locks_every_document_matching_either_side() {
     use fireemu_core_firestore::query::{FilterExpr, Query, QueryScope};
     use fireemu_core_types::ids::CollectionId;

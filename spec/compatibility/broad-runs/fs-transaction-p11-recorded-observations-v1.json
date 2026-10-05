@@ -1,0 +1,372 @@
+{
+  "schemaVersion": 1,
+  "kind": "fs-transaction-recorded-observations-v1",
+  "parent": "FS-TRANSACTION",
+  "condition": [
+    "FS-TRANSACTION/total-lifetime-expiry"
+  ],
+  "coverage": "PARTIAL",
+  "authorizesProduction": false,
+  "decodedSemanticsValidated": true,
+  "rawRestWireLayoutValidated": false,
+  "normalization": "Only the declared run identities (nonce, owner marker, issued token values, project number) are replaced by roles; codes, diagnostics, read states, token ends and cleanup are the program's own projection.",
+  "remainingBoundaries": [
+    "Raw REST bodyBytes, content-length and member-order layout were not retained; the record proves decoded response semantics, not wire layout.",
+    "The closure review and the final-artifact regression are separate conditions and stay open.",
+    "Idle and lifetime boundaries: the idle threshold is judged by the interval production narrowed, [110.70, 122.96) s (ledger 809 (5)), and strict's 120 s idle limit lies inside it; the age at which an expired token is forgotten is judged by (298.7, 302.2] s, which holds strict's 300 s of memory. Strict's 270 s total lifetime is supported by the rows themselves, not by an interval: live reads at token ages up to 253.3 s answered 0 and the first refusals came at 280.4 s, so production's lifetime lies in about (253.3, 280.4] s and 270 s lies inside it. The replay runs on the emulator's virtual clock, advanced by exactly each wait, and reproduces each recorded idle (the least the production token idled before the request) and each recorded token age; the idle or age each wait reached is published beside the recorded one (achievedAges), so a row at a boundary is compared at the measured production value, not at the nominal wait."
+  ],
+  "corpora": [
+    {
+      "program": "FS-TRANSACTION-P11-LIFETIME",
+      "packetName": "p11-lifetime",
+      "corpusDigest": "c0a0857c152271b104dd6ae30b81cff924b855bc29753a28f9519b465e676b97",
+      "recordings": 2,
+      "agree": true,
+      "productionFileSha256": [
+        "2673bc8bdb57c1aee6825e53ac9c444bf88943dcdd2ad5586a0ebb85652921b9",
+        "51cd84c1b0f29f4ec8bfe882e2b0de0710e2807d2083f0094492c409effe5487"
+      ],
+      "projection": {
+        "program": "FS-TRANSACTION-P11-LIFETIME",
+        "packetName": "p11-lifetime",
+        "corpusDigest": "c0a0857c152271b104dd6ae30b81cff924b855bc29753a28f9519b465e676b97",
+        "cases": [
+          {
+            "caseId": "rest/live-read",
+            "transport": "rest",
+            "rpc": "GetDocument",
+            "code": 0,
+            "outcomeClass": "OK",
+            "details": ""
+          },
+          {
+            "caseId": "rest/expiry-read",
+            "transport": "rest",
+            "rpc": "GetDocument",
+            "code": 10,
+            "outcomeClass": "REFUSED",
+            "details": "The referenced transaction has expired or is no longer valid."
+          },
+          {
+            "caseId": "rest/expiry-commit",
+            "transport": "rest",
+            "rpc": "Commit",
+            "code": 10,
+            "outcomeClass": "REFUSED",
+            "details": "The referenced transaction has expired or is no longer valid."
+          },
+          {
+            "caseId": "rest/writer",
+            "transport": "rest",
+            "rpc": "Commit",
+            "code": 0,
+            "outcomeClass": "OK",
+            "details": ""
+          },
+          {
+            "caseId": "grpc/live-read",
+            "transport": "grpc",
+            "rpc": "GetDocument",
+            "code": 0,
+            "outcomeClass": "OK",
+            "details": ""
+          },
+          {
+            "caseId": "grpc/expiry-read",
+            "transport": "grpc",
+            "rpc": "GetDocument",
+            "code": 10,
+            "outcomeClass": "REFUSED",
+            "details": "The referenced transaction has expired or is no longer valid."
+          },
+          {
+            "caseId": "grpc/expiry-commit",
+            "transport": "grpc",
+            "rpc": "Commit",
+            "code": 10,
+            "outcomeClass": "REFUSED",
+            "details": "The referenced transaction has expired or is no longer valid."
+          },
+          {
+            "caseId": "grpc/writer",
+            "transport": "grpc",
+            "rpc": "Commit",
+            "code": 0,
+            "outcomeClass": "OK",
+            "details": ""
+          }
+        ],
+        "reads": [
+          {
+            "site": "setup/absence-a",
+            "code": 5,
+            "state": null
+          },
+          {
+            "site": "setup/absence-m",
+            "code": 5,
+            "state": null
+          },
+          {
+            "site": "rest/read-a",
+            "code": 0,
+            "state": "created"
+          },
+          {
+            "site": "rest/keepalive-1",
+            "code": 0,
+            "state": "created"
+          },
+          {
+            "site": "rest/keepalive-2",
+            "code": 0,
+            "state": "created"
+          },
+          {
+            "site": "rest/keepalive-3",
+            "code": 0,
+            "state": "created"
+          },
+          {
+            "site": "rest/keepalive-4",
+            "code": 0,
+            "state": "created"
+          },
+          {
+            "site": "rest/keepalive-5",
+            "code": 0,
+            "state": "created"
+          },
+          {
+            "site": "rest/keepalive-6",
+            "code": 0,
+            "state": "created"
+          },
+          {
+            "site": "rest/keepalive-7",
+            "code": 0,
+            "state": "created"
+          },
+          {
+            "site": "rest/keepalive-8",
+            "code": 0,
+            "state": "created"
+          },
+          {
+            "site": "rest/keepalive-9",
+            "code": 0,
+            "state": "created"
+          },
+          {
+            "site": "rest/live-read",
+            "code": 0,
+            "state": "created"
+          },
+          {
+            "site": "rest/expiry-read",
+            "code": 10,
+            "state": null
+          },
+          {
+            "site": "rest/post-read-a",
+            "code": 0,
+            "state": "rest-writer"
+          },
+          {
+            "site": "grpc/read-a",
+            "code": 0,
+            "state": "rest-writer"
+          },
+          {
+            "site": "grpc/keepalive-1",
+            "code": 0,
+            "state": "rest-writer"
+          },
+          {
+            "site": "grpc/keepalive-2",
+            "code": 0,
+            "state": "rest-writer"
+          },
+          {
+            "site": "grpc/keepalive-3",
+            "code": 0,
+            "state": "rest-writer"
+          },
+          {
+            "site": "grpc/keepalive-4",
+            "code": 0,
+            "state": "rest-writer"
+          },
+          {
+            "site": "grpc/keepalive-5",
+            "code": 0,
+            "state": "rest-writer"
+          },
+          {
+            "site": "grpc/keepalive-6",
+            "code": 0,
+            "state": "rest-writer"
+          },
+          {
+            "site": "grpc/keepalive-7",
+            "code": 0,
+            "state": "rest-writer"
+          },
+          {
+            "site": "grpc/keepalive-8",
+            "code": 0,
+            "state": "rest-writer"
+          },
+          {
+            "site": "grpc/keepalive-9",
+            "code": 0,
+            "state": "rest-writer"
+          },
+          {
+            "site": "grpc/live-read",
+            "code": 0,
+            "state": "rest-writer"
+          },
+          {
+            "site": "grpc/expiry-read",
+            "code": 10,
+            "state": null
+          },
+          {
+            "site": "grpc/post-read-a",
+            "code": 0,
+            "state": "grpc-writer"
+          }
+        ],
+        "tokens": {
+          "rest-k": {
+            "transport": "rest",
+            "state": "released-refused"
+          },
+          "grpc-k": {
+            "transport": "grpc",
+            "state": "released-refused"
+          }
+        },
+        "expectedStates": {
+          "a": "grpc-writer"
+        },
+        "cleanup": {
+          "absent": true
+        },
+        "waits": [
+          {
+            "site": "rest/keepalive-1",
+            "seconds": 24,
+            "ageClass": "BEFORE"
+          },
+          {
+            "site": "rest/keepalive-2",
+            "seconds": 24,
+            "ageClass": "BEFORE"
+          },
+          {
+            "site": "rest/keepalive-3",
+            "seconds": 24,
+            "ageClass": "BEFORE"
+          },
+          {
+            "site": "rest/keepalive-4",
+            "seconds": 24,
+            "ageClass": "BEFORE"
+          },
+          {
+            "site": "rest/keepalive-5",
+            "seconds": 24,
+            "ageClass": "BEFORE"
+          },
+          {
+            "site": "rest/keepalive-6",
+            "seconds": 24,
+            "ageClass": "BEFORE"
+          },
+          {
+            "site": "rest/keepalive-7",
+            "seconds": 24,
+            "ageClass": "BEFORE"
+          },
+          {
+            "site": "rest/keepalive-8",
+            "seconds": 24,
+            "ageClass": "BEFORE"
+          },
+          {
+            "site": "rest/keepalive-9",
+            "seconds": 24,
+            "ageClass": "BEFORE"
+          },
+          {
+            "site": "rest/live-read",
+            "seconds": 12,
+            "ageClass": "BEFORE"
+          },
+          {
+            "site": "rest/expiry-read",
+            "seconds": 32,
+            "ageClass": "AFTER"
+          },
+          {
+            "site": "grpc/keepalive-1",
+            "seconds": 24,
+            "ageClass": "BEFORE"
+          },
+          {
+            "site": "grpc/keepalive-2",
+            "seconds": 24,
+            "ageClass": "BEFORE"
+          },
+          {
+            "site": "grpc/keepalive-3",
+            "seconds": 24,
+            "ageClass": "BEFORE"
+          },
+          {
+            "site": "grpc/keepalive-4",
+            "seconds": 24,
+            "ageClass": "BEFORE"
+          },
+          {
+            "site": "grpc/keepalive-5",
+            "seconds": 24,
+            "ageClass": "BEFORE"
+          },
+          {
+            "site": "grpc/keepalive-6",
+            "seconds": 24,
+            "ageClass": "BEFORE"
+          },
+          {
+            "site": "grpc/keepalive-7",
+            "seconds": 24,
+            "ageClass": "BEFORE"
+          },
+          {
+            "site": "grpc/keepalive-8",
+            "seconds": 24,
+            "ageClass": "BEFORE"
+          },
+          {
+            "site": "grpc/keepalive-9",
+            "seconds": 24,
+            "ageClass": "BEFORE"
+          },
+          {
+            "site": "grpc/live-read",
+            "seconds": 12,
+            "ageClass": "BEFORE"
+          },
+          {
+            "site": "grpc/expiry-read",
+            "seconds": 32,
+            "ageClass": "AFTER"
+          }
+        ]
+      }
+    }
+  ]
+}

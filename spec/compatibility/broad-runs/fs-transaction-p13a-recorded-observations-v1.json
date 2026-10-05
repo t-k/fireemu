@@ -1,0 +1,440 @@
+{
+  "schemaVersion": 1,
+  "kind": "fs-transaction-recorded-observations-v1",
+  "parent": "FS-TRANSACTION",
+  "condition": [
+    "FS-TRANSACTION/idle-expiry",
+    "FS-TRANSACTION/total-lifetime-expiry"
+  ],
+  "coverage": "PARTIAL",
+  "authorizesProduction": false,
+  "decodedSemanticsValidated": true,
+  "rawRestWireLayoutValidated": false,
+  "normalization": "Only the declared run identities (nonce, owner marker, issued token values, project number) are replaced by roles; codes, diagnostics, read states, token ends and cleanup are the program's own projection.",
+  "remainingBoundaries": [
+    "Raw REST bodyBytes, content-length and member-order layout were not retained; the record proves decoded response semantics, not wire layout.",
+    "The closure review and the final-artifact regression are separate conditions and stay open.",
+    "Idle and lifetime boundaries: the idle threshold is judged by the interval production narrowed, [110.70, 122.96) s (ledger 809 (5)), and strict's 120 s idle limit lies inside it; the age at which an expired token is forgotten is judged by (298.7, 302.2] s, which holds strict's 300 s of memory. Strict's 270 s total lifetime is supported by the rows themselves, not by an interval: live reads at token ages up to 253.3 s answered 0 and the first refusals came at 280.4 s, so production's lifetime lies in about (253.3, 280.4] s and 270 s lies inside it. The replay runs on the emulator's virtual clock, advanced by exactly each wait, and reproduces each recorded idle (the least the production token idled before the request) and each recorded token age; the idle or age each wait reached is published beside the recorded one (achievedAges), so a row at a boundary is compared at the measured production value, not at the nominal wait.",
+    "Replayed with the files named in asRecorded as they were when the recording was made (git show <commit>:<path>); the files in the repository today differ from them."
+  ],
+  "corpora": [
+    {
+      "program": "FS-TRANSACTION-P13A-INFERRED-ANSWERS",
+      "packetName": "p13a-inferred-answers",
+      "corpusDigest": "8ef5cfc17df36c81844790b92d1439654d12e084f8b9323342eec3a6273be77e",
+      "recordings": 2,
+      "agree": true,
+      "productionFileSha256": [
+        "75f590e6aaa41ed07942c08772b15ccfbc15570a752df76d66e69af0f43842f2",
+        "1f45127faa57e36591f5afd242cba821dec056536f239e922eb9e5d0c3b4c4b9"
+      ],
+      "projection": {
+        "program": "FS-TRANSACTION-P13A-INFERRED-ANSWERS",
+        "packetName": "p13a-inferred-answers",
+        "corpusDigest": "8ef5cfc17df36c81844790b92d1439654d12e084f8b9323342eec3a6273be77e",
+        "cases": [
+          {
+            "caseId": "rest/uc-first-commit",
+            "transport": "rest",
+            "rpc": "Commit",
+            "code": 10,
+            "outcomeClass": "REFUSED",
+            "details": "The referenced transaction has expired or is no longer valid."
+          },
+          {
+            "caseId": "rest/ur-first-rollback",
+            "transport": "rest",
+            "rpc": "Rollback",
+            "code": 10,
+            "outcomeClass": "REFUSED",
+            "details": "The referenced transaction has expired or is no longer valid."
+          },
+          {
+            "caseId": "rest/ur-read-after",
+            "transport": "rest",
+            "rpc": "GetDocument",
+            "code": 10,
+            "outcomeClass": "REFUSED",
+            "details": "The referenced transaction has expired or is no longer valid."
+          },
+          {
+            "caseId": "rest/i1-idle-read",
+            "transport": "rest",
+            "rpc": "GetDocument",
+            "code": 10,
+            "outcomeClass": "REFUSED",
+            "details": "The referenced transaction has expired or is no longer valid."
+          },
+          {
+            "caseId": "rest/i1-memory-read",
+            "transport": "rest",
+            "rpc": "GetDocument",
+            "code": 10,
+            "outcomeClass": "REFUSED",
+            "details": "The referenced transaction has expired or is no longer valid."
+          },
+          {
+            "caseId": "rest/i1-late-rollback",
+            "transport": "rest",
+            "rpc": "Rollback",
+            "code": 10,
+            "outcomeClass": "REFUSED",
+            "details": "The referenced transaction has expired or is no longer valid."
+          },
+          {
+            "caseId": "rest/i1-read-after",
+            "transport": "rest",
+            "rpc": "GetDocument",
+            "code": 10,
+            "outcomeClass": "REFUSED",
+            "details": "The referenced transaction has expired or is no longer valid."
+          },
+          {
+            "caseId": "rest/i2-idle-read",
+            "transport": "rest",
+            "rpc": "GetDocument",
+            "code": 10,
+            "outcomeClass": "REFUSED",
+            "details": "The referenced transaction has expired or is no longer valid."
+          },
+          {
+            "caseId": "rest/i2-late-read",
+            "transport": "rest",
+            "rpc": "GetDocument",
+            "code": 3,
+            "outcomeClass": "REFUSED",
+            "details": "Invalid transaction."
+          }
+        ],
+        "reads": [
+          {
+            "site": "setup/absence-a",
+            "code": 5,
+            "state": null
+          },
+          {
+            "site": "rest/uc/read-a",
+            "code": 0,
+            "state": "created"
+          },
+          {
+            "site": "rest/uc/keepalive-1",
+            "code": 0,
+            "state": "created"
+          },
+          {
+            "site": "rest/uc/keepalive-2",
+            "code": 0,
+            "state": "created"
+          },
+          {
+            "site": "rest/uc/keepalive-3",
+            "code": 0,
+            "state": "created"
+          },
+          {
+            "site": "rest/uc/keepalive-4",
+            "code": 0,
+            "state": "created"
+          },
+          {
+            "site": "rest/uc/keepalive-5",
+            "code": 0,
+            "state": "created"
+          },
+          {
+            "site": "rest/uc/keepalive-6",
+            "code": 0,
+            "state": "created"
+          },
+          {
+            "site": "rest/uc/keepalive-7",
+            "code": 0,
+            "state": "created"
+          },
+          {
+            "site": "rest/uc/keepalive-8",
+            "code": 0,
+            "state": "created"
+          },
+          {
+            "site": "rest/uc/keepalive-9",
+            "code": 0,
+            "state": "created"
+          },
+          {
+            "site": "rest/uc/live-read",
+            "code": 0,
+            "state": "created"
+          },
+          {
+            "site": "rest/uc/post-read-a",
+            "code": 0,
+            "state": "created"
+          },
+          {
+            "site": "rest/ur/read-a",
+            "code": 0,
+            "state": "created"
+          },
+          {
+            "site": "rest/ur/keepalive-1",
+            "code": 0,
+            "state": "created"
+          },
+          {
+            "site": "rest/ur/keepalive-2",
+            "code": 0,
+            "state": "created"
+          },
+          {
+            "site": "rest/ur/keepalive-3",
+            "code": 0,
+            "state": "created"
+          },
+          {
+            "site": "rest/ur/keepalive-4",
+            "code": 0,
+            "state": "created"
+          },
+          {
+            "site": "rest/ur/keepalive-5",
+            "code": 0,
+            "state": "created"
+          },
+          {
+            "site": "rest/ur/keepalive-6",
+            "code": 0,
+            "state": "created"
+          },
+          {
+            "site": "rest/ur/keepalive-7",
+            "code": 0,
+            "state": "created"
+          },
+          {
+            "site": "rest/ur/keepalive-8",
+            "code": 0,
+            "state": "created"
+          },
+          {
+            "site": "rest/ur/keepalive-9",
+            "code": 0,
+            "state": "created"
+          },
+          {
+            "site": "rest/ur/live-read",
+            "code": 0,
+            "state": "created"
+          },
+          {
+            "site": "rest/ur/read-after",
+            "code": 10,
+            "state": null
+          },
+          {
+            "site": "rest/i1/read-a",
+            "code": 0,
+            "state": "created"
+          },
+          {
+            "site": "rest/i1/idle-read",
+            "code": 10,
+            "state": null
+          },
+          {
+            "site": "rest/i1/memory-read",
+            "code": 10,
+            "state": null
+          },
+          {
+            "site": "rest/i1/read-after",
+            "code": 10,
+            "state": null
+          },
+          {
+            "site": "rest/i2/read-a",
+            "code": 0,
+            "state": "created"
+          },
+          {
+            "site": "rest/i2/idle-read",
+            "code": 10,
+            "state": null
+          },
+          {
+            "site": "rest/i2/late-read",
+            "code": 3,
+            "state": null
+          },
+          {
+            "site": "final/post-read-a",
+            "code": 0,
+            "state": "created"
+          }
+        ],
+        "tokens": {
+          "rest-uc": {
+            "transport": "rest",
+            "state": "released-refused"
+          },
+          "rest-ur": {
+            "transport": "rest",
+            "state": "released-refused"
+          },
+          "rest-i1": {
+            "transport": "rest",
+            "state": "released-refused"
+          },
+          "rest-i2": {
+            "transport": "rest",
+            "state": "released-refused"
+          }
+        },
+        "expectedStates": {
+          "a": "created"
+        },
+        "cleanup": {
+          "absent": true
+        },
+        "waits": [
+          {
+            "site": "rest/uc/keepalive-1",
+            "seconds": 24,
+            "ageClass": "BEFORE"
+          },
+          {
+            "site": "rest/uc/keepalive-2",
+            "seconds": 24,
+            "ageClass": "BEFORE"
+          },
+          {
+            "site": "rest/uc/keepalive-3",
+            "seconds": 24,
+            "ageClass": "BEFORE"
+          },
+          {
+            "site": "rest/uc/keepalive-4",
+            "seconds": 24,
+            "ageClass": "BEFORE"
+          },
+          {
+            "site": "rest/uc/keepalive-5",
+            "seconds": 24,
+            "ageClass": "BEFORE"
+          },
+          {
+            "site": "rest/uc/keepalive-6",
+            "seconds": 24,
+            "ageClass": "BEFORE"
+          },
+          {
+            "site": "rest/uc/keepalive-7",
+            "seconds": 24,
+            "ageClass": "BEFORE"
+          },
+          {
+            "site": "rest/uc/keepalive-8",
+            "seconds": 24,
+            "ageClass": "BEFORE"
+          },
+          {
+            "site": "rest/uc/keepalive-9",
+            "seconds": 24,
+            "ageClass": "BEFORE"
+          },
+          {
+            "site": "rest/uc/live-read",
+            "seconds": 12,
+            "ageClass": "BEFORE"
+          },
+          {
+            "site": "rest/uc/first-commit",
+            "seconds": 32,
+            "ageClass": "AFTER"
+          },
+          {
+            "site": "rest/ur/keepalive-1",
+            "seconds": 24,
+            "ageClass": "BEFORE"
+          },
+          {
+            "site": "rest/ur/keepalive-2",
+            "seconds": 24,
+            "ageClass": "BEFORE"
+          },
+          {
+            "site": "rest/ur/keepalive-3",
+            "seconds": 24,
+            "ageClass": "BEFORE"
+          },
+          {
+            "site": "rest/ur/keepalive-4",
+            "seconds": 24,
+            "ageClass": "BEFORE"
+          },
+          {
+            "site": "rest/ur/keepalive-5",
+            "seconds": 24,
+            "ageClass": "BEFORE"
+          },
+          {
+            "site": "rest/ur/keepalive-6",
+            "seconds": 24,
+            "ageClass": "BEFORE"
+          },
+          {
+            "site": "rest/ur/keepalive-7",
+            "seconds": 24,
+            "ageClass": "BEFORE"
+          },
+          {
+            "site": "rest/ur/keepalive-8",
+            "seconds": 24,
+            "ageClass": "BEFORE"
+          },
+          {
+            "site": "rest/ur/keepalive-9",
+            "seconds": 24,
+            "ageClass": "BEFORE"
+          },
+          {
+            "site": "rest/ur/live-read",
+            "seconds": 12,
+            "ageClass": "BEFORE"
+          },
+          {
+            "site": "rest/ur/first-rollback",
+            "seconds": 32,
+            "ageClass": "AFTER"
+          },
+          {
+            "site": "rest/i1/idle-read",
+            "seconds": 130,
+            "ageClass": "BEFORE"
+          },
+          {
+            "site": "rest/i1/memory-read",
+            "seconds": 100,
+            "ageClass": "BEFORE"
+          },
+          {
+            "site": "rest/i1/late-rollback",
+            "seconds": 50,
+            "ageClass": "AFTER"
+          },
+          {
+            "site": "rest/i2/idle-read",
+            "seconds": 130,
+            "ageClass": "BEFORE"
+          },
+          {
+            "site": "rest/i2/late-read",
+            "seconds": 175,
+            "ageClass": "AFTER"
+          }
+        ]
+      }
+    }
+  ]
+}

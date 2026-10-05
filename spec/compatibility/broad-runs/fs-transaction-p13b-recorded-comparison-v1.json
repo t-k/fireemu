@@ -1,0 +1,1081 @@
+{
+  "schemaVersion": 1,
+  "kind": "fs-transaction-recorded-comparison-v1",
+  "parent": "FS-TRANSACTION",
+  "program": "FS-TRANSACTION-P13B-RETRY-ANSWERS",
+  "condition": [
+    "FS-TRANSACTION/retry-token-lifecycle"
+  ],
+  "coverage": "PARTIAL",
+  "authorizesProduction": false,
+  "productionRequests": 0,
+  "profile": "strict",
+  "artifact": {
+    "sourceCommit": "774a9f24c62abdd7381c66797d6202ed03f24666",
+    "binarySha256": "d0d8d43726a808b600f702f1f6be26c4863fc48dd7b4971a519adcae9ce01888"
+  },
+  "comparer": {
+    "sha256": "7b360afde62c053ae359bc786812b65578b5ef544ef8c521e21f3cf41eb4de8c",
+    "replayClock": "virtual"
+  },
+  "asRecorded": [
+    {
+      "path": "tools/compat-broad/fs-write-txn/fs_txn_table_p13b.py",
+      "commit": "a04d5215568cd37f1adf60a23280325048e45659",
+      "blob": "c8ae99c81767870c533ecd0af85958aaedf958d9",
+      "sha256": "6716e049745af5532b837e7c9c06c199f92c8f253c2cb7341dbf7b4a299ce468"
+    }
+  ],
+  "recordings": [
+    {
+      "recording": 1,
+      "productionFileSha256": "0c3d167857686716f8d2ecb0b65e37cd82e3fab04676e8c8ebe0c2fc2b5d22d5",
+      "mismatches": 0,
+      "cases": [
+        {
+          "caseId": "rest/rt1-rollback",
+          "production": {
+            "code": 0,
+            "details": ""
+          },
+          "local": {
+            "code": 0,
+            "details": ""
+          },
+          "match": true
+        },
+        {
+          "caseId": "rest/rt1-writer",
+          "production": {
+            "code": 0,
+            "details": ""
+          },
+          "local": {
+            "code": 0,
+            "details": ""
+          },
+          "match": true
+        },
+        {
+          "caseId": "rest/rt1-first-read",
+          "production": {
+            "code": 0,
+            "details": ""
+          },
+          "local": {
+            "code": 0,
+            "details": ""
+          },
+          "match": true
+        },
+        {
+          "caseId": "rest/rt1-commit",
+          "production": {
+            "code": 0,
+            "details": ""
+          },
+          "local": {
+            "code": 0,
+            "details": ""
+          },
+          "match": true
+        },
+        {
+          "caseId": "rest/rt2-retry-idle",
+          "production": {
+            "code": 0,
+            "details": ""
+          },
+          "local": {
+            "code": 0,
+            "details": ""
+          },
+          "match": true
+        },
+        {
+          "caseId": "rest/rt3-rollback-idle",
+          "production": {
+            "code": 0,
+            "details": ""
+          },
+          "local": {
+            "code": 0,
+            "details": ""
+          },
+          "match": true
+        },
+        {
+          "caseId": "rest/rt3-retry-after-rollback",
+          "production": {
+            "code": 0,
+            "details": ""
+          },
+          "local": {
+            "code": 0,
+            "details": ""
+          },
+          "match": true
+        },
+        {
+          "caseId": "rest/rt4-retry-lifetime",
+          "production": {
+            "code": 0,
+            "details": ""
+          },
+          "local": {
+            "code": 0,
+            "details": ""
+          },
+          "match": true
+        }
+      ],
+      "reads": [
+        {
+          "site": "setup/absence-a",
+          "production": {
+            "code": 5,
+            "state": null,
+            "documents": null
+          },
+          "local": {
+            "code": 5,
+            "state": null,
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "rest/rt1/read-a",
+          "production": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "local": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "rest/rt1/first-read",
+          "production": {
+            "code": 0,
+            "state": "rest-rt1-writer",
+            "documents": null
+          },
+          "local": {
+            "code": 0,
+            "state": "rest-rt1-writer",
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "rest/rt2/read-a",
+          "production": {
+            "code": 0,
+            "state": "rest-rt1-commit",
+            "documents": null
+          },
+          "local": {
+            "code": 0,
+            "state": "rest-rt1-commit",
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "rest/rt3/read-a",
+          "production": {
+            "code": 0,
+            "state": "rest-rt1-commit",
+            "documents": null
+          },
+          "local": {
+            "code": 0,
+            "state": "rest-rt1-commit",
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "rest/rt4/read-a",
+          "production": {
+            "code": 0,
+            "state": "rest-rt1-commit",
+            "documents": null
+          },
+          "local": {
+            "code": 0,
+            "state": "rest-rt1-commit",
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "rest/rt4/keepalive-1",
+          "production": {
+            "code": 0,
+            "state": "rest-rt1-commit",
+            "documents": null
+          },
+          "local": {
+            "code": 0,
+            "state": "rest-rt1-commit",
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "rest/rt4/keepalive-2",
+          "production": {
+            "code": 0,
+            "state": "rest-rt1-commit",
+            "documents": null
+          },
+          "local": {
+            "code": 0,
+            "state": "rest-rt1-commit",
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "rest/rt4/keepalive-3",
+          "production": {
+            "code": 0,
+            "state": "rest-rt1-commit",
+            "documents": null
+          },
+          "local": {
+            "code": 0,
+            "state": "rest-rt1-commit",
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "rest/rt4/keepalive-4",
+          "production": {
+            "code": 0,
+            "state": "rest-rt1-commit",
+            "documents": null
+          },
+          "local": {
+            "code": 0,
+            "state": "rest-rt1-commit",
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "rest/rt4/keepalive-5",
+          "production": {
+            "code": 0,
+            "state": "rest-rt1-commit",
+            "documents": null
+          },
+          "local": {
+            "code": 0,
+            "state": "rest-rt1-commit",
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "rest/rt4/keepalive-6",
+          "production": {
+            "code": 0,
+            "state": "rest-rt1-commit",
+            "documents": null
+          },
+          "local": {
+            "code": 0,
+            "state": "rest-rt1-commit",
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "rest/rt4/keepalive-7",
+          "production": {
+            "code": 0,
+            "state": "rest-rt1-commit",
+            "documents": null
+          },
+          "local": {
+            "code": 0,
+            "state": "rest-rt1-commit",
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "rest/rt4/keepalive-8",
+          "production": {
+            "code": 0,
+            "state": "rest-rt1-commit",
+            "documents": null
+          },
+          "local": {
+            "code": 0,
+            "state": "rest-rt1-commit",
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "rest/rt4/keepalive-9",
+          "production": {
+            "code": 0,
+            "state": "rest-rt1-commit",
+            "documents": null
+          },
+          "local": {
+            "code": 0,
+            "state": "rest-rt1-commit",
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "rest/rt4/live-read",
+          "production": {
+            "code": 0,
+            "state": "rest-rt1-commit",
+            "documents": null
+          },
+          "local": {
+            "code": 0,
+            "state": "rest-rt1-commit",
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "final/post-read-a",
+          "production": {
+            "code": 0,
+            "state": "rest-rt1-commit",
+            "documents": null
+          },
+          "local": {
+            "code": 0,
+            "state": "rest-rt1-commit",
+            "documents": null
+          },
+          "match": true
+        }
+      ],
+      "commitTimes": [
+        {
+          "site": "setup/create-a",
+          "production": {
+            "commitTime": true,
+            "relation": null
+          },
+          "local": {
+            "commitTime": true,
+            "relation": null
+          },
+          "match": true
+        },
+        {
+          "site": "rest/rt1/writer",
+          "production": {
+            "commitTime": true,
+            "relation": null
+          },
+          "local": {
+            "commitTime": true,
+            "relation": null
+          },
+          "match": true
+        },
+        {
+          "site": "rest/rt1/commit",
+          "production": {
+            "commitTime": true,
+            "relation": null
+          },
+          "local": {
+            "commitTime": true,
+            "relation": null
+          },
+          "match": true
+        }
+      ],
+      "achievedAges": [
+        {
+          "site": "rest/rt2/retry-idle",
+          "production": 131.64170062495396,
+          "local": 131.64199999999255,
+          "difference": 0.0
+        },
+        {
+          "site": "rest/rt3/rollback-idle",
+          "production": 131.70157079212368,
+          "local": 131.70200000004843,
+          "difference": 0.0
+        },
+        {
+          "site": "rest/rt4/keepalive-1",
+          "production": 25.824159792158753,
+          "local": 25.825000000186265,
+          "difference": 0.001
+        },
+        {
+          "site": "rest/rt4/keepalive-2",
+          "production": 25.771247749682516,
+          "local": 25.77199999988079,
+          "difference": 0.001
+        },
+        {
+          "site": "rest/rt4/keepalive-3",
+          "production": 25.833163166884333,
+          "local": 25.834000000264496,
+          "difference": 0.001
+        },
+        {
+          "site": "rest/rt4/keepalive-4",
+          "production": 25.663481916300952,
+          "local": 25.66399999987334,
+          "difference": 0.001
+        },
+        {
+          "site": "rest/rt4/keepalive-5",
+          "production": 26.141047624871135,
+          "local": 26.14199999999255,
+          "difference": 0.001
+        },
+        {
+          "site": "rest/rt4/keepalive-6",
+          "production": 25.644244167022407,
+          "local": 25.645000000018626,
+          "difference": 0.001
+        },
+        {
+          "site": "rest/rt4/keepalive-7",
+          "production": 25.835530375130475,
+          "local": 25.83600000012666,
+          "difference": 0.0
+        },
+        {
+          "site": "rest/rt4/keepalive-8",
+          "production": 25.628448207862675,
+          "local": 25.62899999972433,
+          "difference": 0.001
+        },
+        {
+          "site": "rest/rt4/keepalive-9",
+          "production": 25.727305416949093,
+          "local": 25.72800000011921,
+          "difference": 0.001
+        },
+        {
+          "site": "rest/rt4/live-read",
+          "production": 13.860568957868963,
+          "local": 13.861000000033528,
+          "difference": 0.0
+        },
+        {
+          "site": "rest/rt4/retry-lifetime",
+          "production": 33.74179341737181,
+          "local": 33.74200000008568,
+          "difference": 0.0
+        }
+      ],
+      "tokenAges": [
+        {
+          "site": "rest/rt3/rollback-idle",
+          "production": 132.30436287494376,
+          "emulator": 133.4119999408722,
+          "difference": 1.108,
+          "match": true
+        },
+        {
+          "site": "rest/rt4/keepalive-4",
+          "production": 103.69799879100174,
+          "emulator": 104.8140001296997,
+          "difference": 1.116,
+          "match": true
+        },
+        {
+          "site": "rest/rt4/keepalive-5",
+          "production": 129.83904641587287,
+          "emulator": 130.95600008964539,
+          "difference": 1.117,
+          "match": true
+        },
+        {
+          "site": "rest/rt4/keepalive-6",
+          "production": 155.48329058289528,
+          "emulator": 156.6010000705719,
+          "difference": 1.118,
+          "match": true
+        },
+        {
+          "site": "rest/rt4/keepalive-7",
+          "production": 181.31882095802575,
+          "emulator": 182.43700003623962,
+          "difference": 1.118,
+          "match": true
+        },
+        {
+          "site": "rest/rt4/keepalive-8",
+          "production": 206.94726916588843,
+          "emulator": 208.0659999847412,
+          "difference": 1.119,
+          "match": true
+        },
+        {
+          "site": "rest/rt4/keepalive-9",
+          "production": 232.67457458283752,
+          "emulator": 233.79399991035461,
+          "difference": 1.119,
+          "match": true
+        },
+        {
+          "site": "rest/rt4/live-read",
+          "production": 246.53514354070649,
+          "emulator": 247.65499997138977,
+          "difference": 1.12,
+          "match": true
+        }
+      ]
+    },
+    {
+      "recording": 2,
+      "productionFileSha256": "1621e5c5822245d65da750d139d879c6c07a1d41e187790341ff5232de6be8cd",
+      "mismatches": 0,
+      "cases": [
+        {
+          "caseId": "rest/rt1-rollback",
+          "production": {
+            "code": 0,
+            "details": ""
+          },
+          "local": {
+            "code": 0,
+            "details": ""
+          },
+          "match": true
+        },
+        {
+          "caseId": "rest/rt1-writer",
+          "production": {
+            "code": 0,
+            "details": ""
+          },
+          "local": {
+            "code": 0,
+            "details": ""
+          },
+          "match": true
+        },
+        {
+          "caseId": "rest/rt1-first-read",
+          "production": {
+            "code": 0,
+            "details": ""
+          },
+          "local": {
+            "code": 0,
+            "details": ""
+          },
+          "match": true
+        },
+        {
+          "caseId": "rest/rt1-commit",
+          "production": {
+            "code": 0,
+            "details": ""
+          },
+          "local": {
+            "code": 0,
+            "details": ""
+          },
+          "match": true
+        },
+        {
+          "caseId": "rest/rt2-retry-idle",
+          "production": {
+            "code": 0,
+            "details": ""
+          },
+          "local": {
+            "code": 0,
+            "details": ""
+          },
+          "match": true
+        },
+        {
+          "caseId": "rest/rt3-rollback-idle",
+          "production": {
+            "code": 0,
+            "details": ""
+          },
+          "local": {
+            "code": 0,
+            "details": ""
+          },
+          "match": true
+        },
+        {
+          "caseId": "rest/rt3-retry-after-rollback",
+          "production": {
+            "code": 0,
+            "details": ""
+          },
+          "local": {
+            "code": 0,
+            "details": ""
+          },
+          "match": true
+        },
+        {
+          "caseId": "rest/rt4-retry-lifetime",
+          "production": {
+            "code": 0,
+            "details": ""
+          },
+          "local": {
+            "code": 0,
+            "details": ""
+          },
+          "match": true
+        }
+      ],
+      "reads": [
+        {
+          "site": "setup/absence-a",
+          "production": {
+            "code": 5,
+            "state": null,
+            "documents": null
+          },
+          "local": {
+            "code": 5,
+            "state": null,
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "rest/rt1/read-a",
+          "production": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "local": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "rest/rt1/first-read",
+          "production": {
+            "code": 0,
+            "state": "rest-rt1-writer",
+            "documents": null
+          },
+          "local": {
+            "code": 0,
+            "state": "rest-rt1-writer",
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "rest/rt2/read-a",
+          "production": {
+            "code": 0,
+            "state": "rest-rt1-commit",
+            "documents": null
+          },
+          "local": {
+            "code": 0,
+            "state": "rest-rt1-commit",
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "rest/rt3/read-a",
+          "production": {
+            "code": 0,
+            "state": "rest-rt1-commit",
+            "documents": null
+          },
+          "local": {
+            "code": 0,
+            "state": "rest-rt1-commit",
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "rest/rt4/read-a",
+          "production": {
+            "code": 0,
+            "state": "rest-rt1-commit",
+            "documents": null
+          },
+          "local": {
+            "code": 0,
+            "state": "rest-rt1-commit",
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "rest/rt4/keepalive-1",
+          "production": {
+            "code": 0,
+            "state": "rest-rt1-commit",
+            "documents": null
+          },
+          "local": {
+            "code": 0,
+            "state": "rest-rt1-commit",
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "rest/rt4/keepalive-2",
+          "production": {
+            "code": 0,
+            "state": "rest-rt1-commit",
+            "documents": null
+          },
+          "local": {
+            "code": 0,
+            "state": "rest-rt1-commit",
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "rest/rt4/keepalive-3",
+          "production": {
+            "code": 0,
+            "state": "rest-rt1-commit",
+            "documents": null
+          },
+          "local": {
+            "code": 0,
+            "state": "rest-rt1-commit",
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "rest/rt4/keepalive-4",
+          "production": {
+            "code": 0,
+            "state": "rest-rt1-commit",
+            "documents": null
+          },
+          "local": {
+            "code": 0,
+            "state": "rest-rt1-commit",
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "rest/rt4/keepalive-5",
+          "production": {
+            "code": 0,
+            "state": "rest-rt1-commit",
+            "documents": null
+          },
+          "local": {
+            "code": 0,
+            "state": "rest-rt1-commit",
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "rest/rt4/keepalive-6",
+          "production": {
+            "code": 0,
+            "state": "rest-rt1-commit",
+            "documents": null
+          },
+          "local": {
+            "code": 0,
+            "state": "rest-rt1-commit",
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "rest/rt4/keepalive-7",
+          "production": {
+            "code": 0,
+            "state": "rest-rt1-commit",
+            "documents": null
+          },
+          "local": {
+            "code": 0,
+            "state": "rest-rt1-commit",
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "rest/rt4/keepalive-8",
+          "production": {
+            "code": 0,
+            "state": "rest-rt1-commit",
+            "documents": null
+          },
+          "local": {
+            "code": 0,
+            "state": "rest-rt1-commit",
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "rest/rt4/keepalive-9",
+          "production": {
+            "code": 0,
+            "state": "rest-rt1-commit",
+            "documents": null
+          },
+          "local": {
+            "code": 0,
+            "state": "rest-rt1-commit",
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "rest/rt4/live-read",
+          "production": {
+            "code": 0,
+            "state": "rest-rt1-commit",
+            "documents": null
+          },
+          "local": {
+            "code": 0,
+            "state": "rest-rt1-commit",
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "final/post-read-a",
+          "production": {
+            "code": 0,
+            "state": "rest-rt1-commit",
+            "documents": null
+          },
+          "local": {
+            "code": 0,
+            "state": "rest-rt1-commit",
+            "documents": null
+          },
+          "match": true
+        }
+      ],
+      "commitTimes": [
+        {
+          "site": "setup/create-a",
+          "production": {
+            "commitTime": true,
+            "relation": null
+          },
+          "local": {
+            "commitTime": true,
+            "relation": null
+          },
+          "match": true
+        },
+        {
+          "site": "rest/rt1/writer",
+          "production": {
+            "commitTime": true,
+            "relation": null
+          },
+          "local": {
+            "commitTime": true,
+            "relation": null
+          },
+          "match": true
+        },
+        {
+          "site": "rest/rt1/commit",
+          "production": {
+            "commitTime": true,
+            "relation": null
+          },
+          "local": {
+            "commitTime": true,
+            "relation": null
+          },
+          "match": true
+        }
+      ],
+      "achievedAges": [
+        {
+          "site": "rest/rt2/retry-idle",
+          "production": 131.76126716611907,
+          "local": 131.7620000001043,
+          "difference": 0.001
+        },
+        {
+          "site": "rest/rt3/rollback-idle",
+          "production": 131.75968629214913,
+          "local": 131.75999999977648,
+          "difference": 0.0
+        },
+        {
+          "site": "rest/rt4/keepalive-1",
+          "production": 25.79050000011921,
+          "local": 25.791000000201166,
+          "difference": 0.001
+        },
+        {
+          "site": "rest/rt4/keepalive-2",
+          "production": 25.67910191603005,
+          "local": 25.679999999701977,
+          "difference": 0.001
+        },
+        {
+          "site": "rest/rt4/keepalive-3",
+          "production": 25.722948874812573,
+          "local": 25.723000000230968,
+          "difference": 0.0
+        },
+        {
+          "site": "rest/rt4/keepalive-4",
+          "production": 25.76536991726607,
+          "local": 25.765999999828637,
+          "difference": 0.001
+        },
+        {
+          "site": "rest/rt4/keepalive-5",
+          "production": 25.749527957756072,
+          "local": 25.75,
+          "difference": 0.0
+        },
+        {
+          "site": "rest/rt4/keepalive-6",
+          "production": 25.827978500165045,
+          "local": 25.82800000021234,
+          "difference": 0.0
+        },
+        {
+          "site": "rest/rt4/keepalive-7",
+          "production": 26.17462958395481,
+          "local": 26.174999999813735,
+          "difference": 0.0
+        },
+        {
+          "site": "rest/rt4/keepalive-8",
+          "production": 25.782634625211358,
+          "local": 25.783000000286847,
+          "difference": 0.0
+        },
+        {
+          "site": "rest/rt4/keepalive-9",
+          "production": 25.705689415801316,
+          "local": 25.705999999772757,
+          "difference": 0.0
+        },
+        {
+          "site": "rest/rt4/live-read",
+          "production": 13.030635166913271,
+          "local": 13.030999999959022,
+          "difference": 0.0
+        },
+        {
+          "site": "rest/rt4/retry-lifetime",
+          "production": 33.81448600022122,
+          "local": 33.81499999994412,
+          "difference": 0.001
+        }
+      ],
+      "tokenAges": [
+        {
+          "site": "rest/rt3/rollback-idle",
+          "production": 132.36066233320162,
+          "emulator": 134.0059998035431,
+          "difference": 1.645,
+          "match": true
+        },
+        {
+          "site": "rest/rt4/keepalive-4",
+          "production": 103.5813248748891,
+          "emulator": 105.07800006866455,
+          "difference": 1.497,
+          "match": true
+        },
+        {
+          "site": "rest/rt4/keepalive-5",
+          "production": 129.33085283264518,
+          "emulator": 130.82800006866455,
+          "difference": 1.497,
+          "match": true
+        },
+        {
+          "site": "rest/rt4/keepalive-6",
+          "production": 155.15883133281022,
+          "emulator": 156.6560001373291,
+          "difference": 1.497,
+          "match": true
+        },
+        {
+          "site": "rest/rt4/keepalive-7",
+          "production": 181.33346091676503,
+          "emulator": 182.83100008964539,
+          "difference": 1.498,
+          "match": true
+        },
+        {
+          "site": "rest/rt4/keepalive-8",
+          "production": 207.1160955419764,
+          "emulator": 208.614000082016,
+          "difference": 1.498,
+          "match": true
+        },
+        {
+          "site": "rest/rt4/keepalive-9",
+          "production": 232.8217849577777,
+          "emulator": 234.3199999332428,
+          "difference": 1.498,
+          "match": true
+        },
+        {
+          "site": "rest/rt4/live-read",
+          "production": 245.85242012469098,
+          "emulator": 247.3510000705719,
+          "difference": 1.499,
+          "match": true
+        }
+      ]
+    }
+  ],
+  "summary": {
+    "recordings": 2,
+    "rows": 56,
+    "mismatches": 0
+  },
+  "remainingBoundaries": [
+    "Raw REST bodyBytes, content-length and member-order layout were not retained; the record proves decoded response semantics, not wire layout.",
+    "The closure review and the final-artifact regression are separate conditions and stay open.",
+    "The artifact is the strict profile of the commit named; a later source change needs a new replay.",
+    "Idle and lifetime boundaries: the idle threshold is judged by the interval production narrowed, [110.70, 122.96) s (ledger 809 (5)), and strict's 120 s idle limit lies inside it; the age at which an expired token is forgotten is judged by (298.7, 302.2] s, which holds strict's 300 s of memory. Strict's 270 s total lifetime is supported by the rows themselves, not by an interval: live reads at token ages up to 253.3 s answered 0 and the first refusals came at 280.4 s, so production's lifetime lies in about (253.3, 280.4] s and 270 s lies inside it. The replay runs on the emulator's virtual clock, advanced by exactly each wait, and reproduces each recorded idle (the least the production token idled before the request) and each recorded token age; the idle or age each wait reached is published beside the recorded one (achievedAges), so a row at a boundary is compared at the measured production value, not at the nominal wait.",
+    "Replayed with the files named in asRecorded as they were when the recording was made (git show <commit>:<path>); the files in the repository today differ from them."
+  ]
+}

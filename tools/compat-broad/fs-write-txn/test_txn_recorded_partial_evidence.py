@@ -159,16 +159,19 @@ def test_partial_recordings_do_not_promote_unobserved_conditions_or_official_emu
     assert set(mapped) == {row["caseId"] for row in value["cases"]}
     assert len(closure["conditions"]) == 18
     assert closure["parentStatus"] == "IMPLEMENTING" and closure["closureReview"]["decision"] == "PENDING"
-    assert closure["profileComparison"]["emulatorCompatibilityCheck"] == "PENDING_LOCAL_OBSERVATION"
+    assert closure["profileComparison"]["emulatorCompatibilityCheck"] == "SEPARATE_TRACK"
     for condition in closure["conditions"]:
-        assert condition["status"] != "VERIFIED"
         if condition["conditionId"] in counts:
-            assert condition["status"] == "PRODUCTION_RECORDED"
+            # the published recordedComparison records verify these on the strict profile; the 13-case subset stays partial evidence beside them
+            assert condition["status"] == "VERIFIED"
             partial = condition["partialEvidence"]
             assert partial["coverage"] == "PARTIAL" and partial["remainingBoundaries"]
             assert partial["caseIds"] == value["conditionMap"][condition["conditionId"]]
             assert partial["reference"] == str(PATH.relative_to(ROOT))
+        elif "recordedComparison" in condition:
+            assert condition["status"] == "VERIFIED"
         else:
+            assert condition["status"] != "VERIFIED"
             assert condition["productionObservation"] == "UNOBSERVED_BY_RECORDED_CORPUS"
 
 

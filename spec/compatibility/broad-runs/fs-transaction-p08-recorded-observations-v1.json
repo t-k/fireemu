@@ -1,0 +1,359 @@
+{
+  "schemaVersion": 1,
+  "kind": "fs-transaction-recorded-observations-v1",
+  "parent": "FS-TRANSACTION",
+  "condition": [
+    "FS-TRANSACTION/failed-commit-and-rollback"
+  ],
+  "coverage": "PARTIAL",
+  "authorizesProduction": false,
+  "decodedSemanticsValidated": true,
+  "rawRestWireLayoutValidated": false,
+  "normalization": "Only the declared run identities (nonce, owner marker, issued token values, project number) are replaced by roles; codes, diagnostics, read states, token ends and cleanup are the program's own projection.",
+  "remainingBoundaries": [
+    "Raw REST bodyBytes, content-length and member-order layout were not retained; the record proves decoded response semantics, not wire layout.",
+    "The closure review and the final-artifact regression are separate conditions and stay open."
+  ],
+  "corpora": [
+    {
+      "program": "FS-TRANSACTION-P08-FAILED-COMMIT",
+      "packetName": "p08-failed-commit",
+      "corpusDigest": "1dc1d44eca4b99a23d8f3b480eb9b8d71aec4ef0894509b149fa12354c9d92bc",
+      "recordings": 2,
+      "agree": true,
+      "productionFileSha256": [
+        "c9d1dc8f081c1f18f9fc7872729b7f21a6c79e95c83938425ff9112c9de99214",
+        "40fe3fe74e6dd11c98fe1a1950f8ec46ebab9b29c703d67530a105196b576bf6"
+      ],
+      "projection": {
+        "program": "FS-TRANSACTION-P08-FAILED-COMMIT",
+        "packetName": "p08-failed-commit",
+        "corpusDigest": "1dc1d44eca4b99a23d8f3b480eb9b8d71aec4ef0894509b149fa12354c9d92bc",
+        "cases": [
+          {
+            "caseId": "rest/a-fail-commit",
+            "transport": "rest",
+            "rpc": "Commit",
+            "code": 5,
+            "outcomeClass": "REFUSED",
+            "details": "No document to update: projects/fireemu-oracle-sbx/databases/(default)/documents/oracle/<nonce>/txn-p08/m"
+          },
+          {
+            "caseId": "rest/a-plain-read",
+            "transport": "rest",
+            "rpc": "GetDocument",
+            "code": 0,
+            "outcomeClass": "OK",
+            "details": ""
+          },
+          {
+            "caseId": "rest/a-same-token-read",
+            "transport": "rest",
+            "rpc": "GetDocument",
+            "code": 3,
+            "outcomeClass": "REFUSED",
+            "details": "The referenced transaction has expired or is no longer valid."
+          },
+          {
+            "caseId": "rest/a-writer",
+            "transport": "rest",
+            "rpc": "Commit",
+            "code": 0,
+            "outcomeClass": "OK",
+            "details": ""
+          },
+          {
+            "caseId": "rest/a-corrected-commit",
+            "transport": "rest",
+            "rpc": "Commit",
+            "code": 3,
+            "outcomeClass": "REFUSED",
+            "details": "The referenced transaction has expired or is no longer valid."
+          },
+          {
+            "caseId": "rest/a-rollback",
+            "transport": "rest",
+            "rpc": "Rollback",
+            "code": 0,
+            "outcomeClass": "OK",
+            "details": ""
+          },
+          {
+            "caseId": "rest/a-rollback-again",
+            "transport": "rest",
+            "rpc": "Rollback",
+            "code": 0,
+            "outcomeClass": "OK",
+            "details": ""
+          },
+          {
+            "caseId": "rest/b-fail-commit",
+            "transport": "rest",
+            "rpc": "Commit",
+            "code": 5,
+            "outcomeClass": "REFUSED",
+            "details": "No document to update: projects/fireemu-oracle-sbx/databases/(default)/documents/oracle/<nonce>/txn-p08/m"
+          },
+          {
+            "caseId": "rest/b-rollback",
+            "transport": "rest",
+            "rpc": "Rollback",
+            "code": 0,
+            "outcomeClass": "OK",
+            "details": ""
+          },
+          {
+            "caseId": "rest/b-writer",
+            "transport": "rest",
+            "rpc": "Commit",
+            "code": 0,
+            "outcomeClass": "OK",
+            "details": ""
+          },
+          {
+            "caseId": "rest/b-rollback-again",
+            "transport": "rest",
+            "rpc": "Rollback",
+            "code": 0,
+            "outcomeClass": "OK",
+            "details": ""
+          },
+          {
+            "caseId": "rest/c-commit",
+            "transport": "rest",
+            "rpc": "Commit",
+            "code": 0,
+            "outcomeClass": "OK",
+            "details": ""
+          },
+          {
+            "caseId": "rest/c-rollback-after-commit",
+            "transport": "rest",
+            "rpc": "Rollback",
+            "code": 10,
+            "outcomeClass": "REFUSED",
+            "details": "The referenced transaction has expired or is no longer valid."
+          },
+          {
+            "caseId": "grpc/a-fail-commit",
+            "transport": "grpc",
+            "rpc": "Commit",
+            "code": 5,
+            "outcomeClass": "REFUSED",
+            "details": "No document to update: projects/fireemu-oracle-sbx/databases/(default)/documents/oracle/<nonce>/txn-p08/m"
+          },
+          {
+            "caseId": "grpc/a-plain-read",
+            "transport": "grpc",
+            "rpc": "GetDocument",
+            "code": 0,
+            "outcomeClass": "OK",
+            "details": ""
+          },
+          {
+            "caseId": "grpc/a-same-token-read",
+            "transport": "grpc",
+            "rpc": "GetDocument",
+            "code": 3,
+            "outcomeClass": "REFUSED",
+            "details": "The referenced transaction has expired or is no longer valid."
+          },
+          {
+            "caseId": "grpc/a-writer",
+            "transport": "grpc",
+            "rpc": "Commit",
+            "code": 0,
+            "outcomeClass": "OK",
+            "details": ""
+          },
+          {
+            "caseId": "grpc/a-corrected-commit",
+            "transport": "grpc",
+            "rpc": "Commit",
+            "code": 3,
+            "outcomeClass": "REFUSED",
+            "details": "The referenced transaction has expired or is no longer valid."
+          },
+          {
+            "caseId": "grpc/a-rollback",
+            "transport": "grpc",
+            "rpc": "Rollback",
+            "code": 0,
+            "outcomeClass": "OK",
+            "details": ""
+          },
+          {
+            "caseId": "grpc/a-rollback-again",
+            "transport": "grpc",
+            "rpc": "Rollback",
+            "code": 0,
+            "outcomeClass": "OK",
+            "details": ""
+          },
+          {
+            "caseId": "grpc/b-fail-commit",
+            "transport": "grpc",
+            "rpc": "Commit",
+            "code": 5,
+            "outcomeClass": "REFUSED",
+            "details": "No document to update: projects/fireemu-oracle-sbx/databases/(default)/documents/oracle/<nonce>/txn-p08/m"
+          },
+          {
+            "caseId": "grpc/b-rollback",
+            "transport": "grpc",
+            "rpc": "Rollback",
+            "code": 0,
+            "outcomeClass": "OK",
+            "details": ""
+          },
+          {
+            "caseId": "grpc/b-writer",
+            "transport": "grpc",
+            "rpc": "Commit",
+            "code": 0,
+            "outcomeClass": "OK",
+            "details": ""
+          },
+          {
+            "caseId": "grpc/b-rollback-again",
+            "transport": "grpc",
+            "rpc": "Rollback",
+            "code": 0,
+            "outcomeClass": "OK",
+            "details": ""
+          },
+          {
+            "caseId": "grpc/c-commit",
+            "transport": "grpc",
+            "rpc": "Commit",
+            "code": 0,
+            "outcomeClass": "OK",
+            "details": ""
+          },
+          {
+            "caseId": "grpc/c-rollback-after-commit",
+            "transport": "grpc",
+            "rpc": "Rollback",
+            "code": 10,
+            "outcomeClass": "REFUSED",
+            "details": "The referenced transaction has expired or is no longer valid."
+          }
+        ],
+        "reads": [
+          {
+            "site": "setup/absence-a",
+            "code": 5,
+            "state": null
+          },
+          {
+            "site": "setup/absence-m",
+            "code": 5,
+            "state": null
+          },
+          {
+            "site": "rest/a/read-a",
+            "code": 0,
+            "state": "created"
+          },
+          {
+            "site": "rest/a/plain-read-a",
+            "code": 0,
+            "state": "created"
+          },
+          {
+            "site": "rest/a/same-token-read-a",
+            "code": 3,
+            "state": null
+          },
+          {
+            "site": "rest/a/post-read-a",
+            "code": 0,
+            "state": "rest-a-writer"
+          },
+          {
+            "site": "rest/b/read-a",
+            "code": 0,
+            "state": "rest-a-writer"
+          },
+          {
+            "site": "rest/b/post-read-a",
+            "code": 0,
+            "state": "rest-b-writer"
+          },
+          {
+            "site": "rest/c/read-a",
+            "code": 0,
+            "state": "rest-b-writer"
+          },
+          {
+            "site": "grpc/a/read-a",
+            "code": 0,
+            "state": "rest-c-commit"
+          },
+          {
+            "site": "grpc/a/plain-read-a",
+            "code": 0,
+            "state": "rest-c-commit"
+          },
+          {
+            "site": "grpc/a/same-token-read-a",
+            "code": 3,
+            "state": null
+          },
+          {
+            "site": "grpc/a/post-read-a",
+            "code": 0,
+            "state": "grpc-a-writer"
+          },
+          {
+            "site": "grpc/b/read-a",
+            "code": 0,
+            "state": "grpc-a-writer"
+          },
+          {
+            "site": "grpc/b/post-read-a",
+            "code": 0,
+            "state": "grpc-b-writer"
+          },
+          {
+            "site": "grpc/c/read-a",
+            "code": 0,
+            "state": "grpc-b-writer"
+          }
+        ],
+        "tokens": {
+          "rest-a": {
+            "transport": "rest",
+            "state": "rolled-back"
+          },
+          "rest-b": {
+            "transport": "rest",
+            "state": "rolled-back"
+          },
+          "rest-c": {
+            "transport": "rest",
+            "state": "committed"
+          },
+          "grpc-a": {
+            "transport": "grpc",
+            "state": "rolled-back"
+          },
+          "grpc-b": {
+            "transport": "grpc",
+            "state": "rolled-back"
+          },
+          "grpc-c": {
+            "transport": "grpc",
+            "state": "committed"
+          }
+        },
+        "expectedStates": {
+          "a": "grpc-c-commit"
+        },
+        "cleanup": {
+          "absent": true
+        }
+      }
+    }
+  ]
+}

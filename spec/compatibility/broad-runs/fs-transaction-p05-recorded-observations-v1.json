@@ -1,0 +1,264 @@
+{
+  "schemaVersion": 1,
+  "kind": "fs-transaction-recorded-observations-v1",
+  "parent": "FS-TRANSACTION",
+  "condition": [
+    "FS-TRANSACTION/read-set-conflict"
+  ],
+  "coverage": "PARTIAL",
+  "authorizesProduction": false,
+  "decodedSemanticsValidated": true,
+  "rawRestWireLayoutValidated": false,
+  "normalization": "Only the declared run identities (nonce, owner marker, issued token values, project number) are replaced by roles; codes, diagnostics, read states, token ends and cleanup are the program's own projection.",
+  "remainingBoundaries": [
+    "Raw REST bodyBytes, content-length and member-order layout were not retained; the record proves decoded response semantics, not wire layout.",
+    "The closure review and the final-artifact regression are separate conditions and stay open."
+  ],
+  "corpora": [
+    {
+      "program": "FS-TRANSACTION-P05-READLOCK",
+      "packetName": "p05-readlock",
+      "corpusDigest": "97e0a0dbe4089029fdecc9483b67102bd5f445bed4112a96d171657176a76f3d",
+      "recordings": 2,
+      "agree": true,
+      "productionFileSha256": [
+        "101667ad79498a33eca1cee6e4b8fa82fed33f6a436596cbfeb9235db6a233e9",
+        "3ade56ca7ebb3526cae596a89e4a7b3d6c4ee1c49024810cb10eca4b05677822"
+      ],
+      "projection": {
+        "program": "FS-TRANSACTION-P05-READLOCK",
+        "packetName": "p05-readlock",
+        "corpusDigest": "97e0a0dbe4089029fdecc9483b67102bd5f445bed4112a96d171657176a76f3d",
+        "cases": [
+          {
+            "caseId": "rest/c-writer-b",
+            "transport": "rest",
+            "rpc": "Commit",
+            "code": 0,
+            "outcomeClass": "OK",
+            "details": ""
+          },
+          {
+            "caseId": "rest/c-commit",
+            "transport": "rest",
+            "rpc": "Commit",
+            "code": 0,
+            "outcomeClass": "OK",
+            "details": ""
+          },
+          {
+            "caseId": "rest/c-writer-a",
+            "transport": "rest",
+            "rpc": "Commit",
+            "code": 0,
+            "outcomeClass": "OK",
+            "details": ""
+          },
+          {
+            "caseId": "rest/c-writer-after-commit",
+            "transport": "rest",
+            "rpc": "Commit",
+            "code": 0,
+            "outcomeClass": "OK",
+            "details": ""
+          },
+          {
+            "caseId": "rest/r-rollback",
+            "transport": "rest",
+            "rpc": "Rollback",
+            "code": 0,
+            "outcomeClass": "OK",
+            "details": ""
+          },
+          {
+            "caseId": "rest/r-writer-a",
+            "transport": "rest",
+            "rpc": "Commit",
+            "code": 0,
+            "outcomeClass": "OK",
+            "details": ""
+          },
+          {
+            "caseId": "rest/r-writer-after-rollback",
+            "transport": "rest",
+            "rpc": "Commit",
+            "code": 0,
+            "outcomeClass": "OK",
+            "details": ""
+          },
+          {
+            "caseId": "grpc/c-writer-b",
+            "transport": "grpc",
+            "rpc": "Commit",
+            "code": 0,
+            "outcomeClass": "OK",
+            "details": ""
+          },
+          {
+            "caseId": "grpc/c-commit",
+            "transport": "grpc",
+            "rpc": "Commit",
+            "code": 0,
+            "outcomeClass": "OK",
+            "details": ""
+          },
+          {
+            "caseId": "grpc/c-writer-a",
+            "transport": "grpc",
+            "rpc": "Commit",
+            "code": 0,
+            "outcomeClass": "OK",
+            "details": ""
+          },
+          {
+            "caseId": "grpc/c-writer-after-commit",
+            "transport": "grpc",
+            "rpc": "Commit",
+            "code": 0,
+            "outcomeClass": "OK",
+            "details": ""
+          },
+          {
+            "caseId": "grpc/r-rollback",
+            "transport": "grpc",
+            "rpc": "Rollback",
+            "code": 0,
+            "outcomeClass": "OK",
+            "details": ""
+          },
+          {
+            "caseId": "grpc/r-writer-a",
+            "transport": "grpc",
+            "rpc": "Commit",
+            "code": 0,
+            "outcomeClass": "OK",
+            "details": ""
+          },
+          {
+            "caseId": "grpc/r-writer-after-rollback",
+            "transport": "grpc",
+            "rpc": "Commit",
+            "code": 0,
+            "outcomeClass": "OK",
+            "details": ""
+          }
+        ],
+        "reads": [
+          {
+            "site": "setup/absence-a",
+            "code": 5,
+            "state": null
+          },
+          {
+            "site": "setup/absence-b",
+            "code": 5,
+            "state": null
+          },
+          {
+            "site": "rest/c/read-a",
+            "code": 0,
+            "state": "created"
+          },
+          {
+            "site": "rest/c/read-after-pair",
+            "code": 0,
+            "state": "rest-c-conflict"
+          },
+          {
+            "site": "rest/c/post-read-a",
+            "code": 0,
+            "state": "rest-c-after"
+          },
+          {
+            "site": "rest/c/post-read-b",
+            "code": 0,
+            "state": "rest-c-unrelated"
+          },
+          {
+            "site": "rest/r/read-a",
+            "code": 0,
+            "state": "rest-c-after"
+          },
+          {
+            "site": "rest/r/post-read-a",
+            "code": 0,
+            "state": "rest-r-after"
+          },
+          {
+            "site": "grpc/c/read-a",
+            "code": 0,
+            "state": "rest-r-after"
+          },
+          {
+            "site": "grpc/c/read-after-pair",
+            "code": 0,
+            "state": "grpc-c-conflict"
+          },
+          {
+            "site": "grpc/c/post-read-a",
+            "code": 0,
+            "state": "grpc-c-after"
+          },
+          {
+            "site": "grpc/c/post-read-b",
+            "code": 0,
+            "state": "grpc-c-unrelated"
+          },
+          {
+            "site": "grpc/r/read-a",
+            "code": 0,
+            "state": "grpc-c-after"
+          },
+          {
+            "site": "grpc/r/post-read-a",
+            "code": 0,
+            "state": "grpc-r-after"
+          }
+        ],
+        "tokens": {
+          "rest-c": {
+            "transport": "rest",
+            "state": "committed"
+          },
+          "rest-r": {
+            "transport": "rest",
+            "state": "rolled-back"
+          },
+          "grpc-c": {
+            "transport": "grpc",
+            "state": "committed"
+          },
+          "grpc-r": {
+            "transport": "grpc",
+            "state": "rolled-back"
+          }
+        },
+        "expectedStates": {
+          "a": "grpc-r-after",
+          "b": "grpc-c-unrelated"
+        },
+        "cleanup": {
+          "absent": true
+        },
+        "waits": [
+          {
+            "site": "rest/c/commit",
+            "seconds": 5
+          },
+          {
+            "site": "rest/r/rollback",
+            "seconds": 5
+          },
+          {
+            "site": "grpc/c/commit",
+            "seconds": 5
+          },
+          {
+            "site": "grpc/r/rollback",
+            "seconds": 5
+          }
+        ]
+      }
+    }
+  ]
+}

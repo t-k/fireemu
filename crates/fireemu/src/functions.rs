@@ -49,7 +49,7 @@ pub fn subscription_naming(
 }
 
 /// Derives the unique Pub/Sub resources required by Pub/Sub and scheduled functions. Under
-/// [`SubscriptionNaming::Eventarc`] every 2nd gen Pub/Sub function gets its own subscription, so
+/// `SubscriptionNaming::Eventarc` every 2nd gen Pub/Sub function gets its own subscription, so
 /// two functions on one topic give two resources; otherwise a topic gets one `emulator-sub-<topic>`.
 pub fn function_pubsub_resources(
     project: &str,

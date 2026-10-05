@@ -103,6 +103,46 @@ test("a round deploy or a CLI delete that times out is an unknown mutation of ex
   });
   assert.ok(del.result.unknownMutations >= 1);
   assert.deepEqual(del.result.unconfirmedCreates, []);
+  // A name of the first deploy that no own read has shown (its job reads 404) is still not listed as an unconfirmed
+  // create when the later round deploy or the delete is the one that timed out: only the first deploy can leave
+  // names whose creation is unknown.
+  const hooks = {
+    ["GET " + SCHED + "/" + scheduleId("declNullV2")]: async () =>
+      reply(404, { error: { code: 404, message: "x", status: "NOT_FOUND" } }),
+    ["GET " + SCHED]: async ({ w }) =>
+      reply(200, {
+        jobs: [...w.jobs.values()].filter((job) => !job.name.endsWith(scheduleId("declNullV2"))),
+      }),
+  };
+  const unseenRound = await go({ hooks }, {}, (w) => {
+    const real = w.runCli;
+    w.runCli = async (o) =>
+      o.action === "deploy" && o.round === 2 ? { action: "deploy", ...timedOut } : real(o);
+  });
+  assert.ok(unseenRound.result.unknownMutations >= 1);
+  assert.deepEqual(unseenRound.result.unconfirmedCreates, []);
+  const unseenDelete = await go({ hooks }, {}, (w) => {
+    const real = w.runCli;
+    w.runCli = async (o) => (o.action === "delete" ? { action: "delete", ...timedOut } : real(o));
+  });
+  assert.deepEqual(unseenDelete.result.unconfirmedCreates, []);
+  // the same when the CLI could not even be run
+  const threwRound = await go({ hooks }, {}, (w) => {
+    const real = w.runCli;
+    w.runCli = async (o) => {
+      if (o.action === "deploy" && o.round === 2) throw new Error("spawn failed");
+      return real(o);
+    };
+  });
+  assert.deepEqual(threwRound.result.unconfirmedCreates, []);
+  const threwDelete = await go({ hooks }, {}, (w) => {
+    const real = w.runCli;
+    w.runCli = async (o) => {
+      if (o.action === "delete") throw new Error("spawn failed");
+      return real(o);
+    };
+  });
+  assert.deepEqual(threwDelete.result.unconfirmedCreates, []);
   const dry = await go({}, {}, (w) => {
     const real = w.runCli;
     w.runCli = async (o) => (o.action === "dry-run" ? { action: "dry-run", ...timedOut } : real(o));

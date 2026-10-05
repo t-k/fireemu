@@ -447,7 +447,41 @@ export async function withOfficialEmulator({ script, args, rules, auth = false }
   return new Promise((resolve) => child.once("exit", resolve));
 }
 
-const SOURCE_PATHS = ["crates", "Cargo.toml", "Cargo.lock"];
+const SOURCE_PATHS = ["crates", "Cargo.toml", "Cargo.lock", "rust-toolchain.toml", ".cargo"];
+
+/** Names the set `buildInputsDigest` describes, recorded beside it. */
+export const BUILD_INPUTS_SCHEME = "crates-without-test-trees-v1";
+
+/** The directories directly under a crate that no build of its library or binary reads. */
+const TEST_ONLY_TREES = ["tests", "benches", "examples", "proptest-regressions"];
+const TEST_ONLY_PATH = new RegExp(`^crates/[^/]+/(?:${TEST_ONLY_TREES.join("|")})/`);
+
+/** Whether `path` is an input of a build of fireemu (not an integration test, bench, example or regression file). */
+export const isBuildInput = (path) => !TEST_ONLY_PATH.test(path);
+
+/** The pathspecs that leave the test-only trees out of a `git status` or `git log`. */
+const NOT_TEST_ONLY = TEST_ONLY_TREES.map((tree) => `:(exclude,glob)crates/*/${tree}/**`);
+
+/**
+ * A digest of what a build of fireemu is made from: the blob ids and paths that `git ls-tree -r`
+ * lists for the sources, manifests, lock file and toolchain files, without the test-only trees of
+ * the crates. A test-only commit therefore does not move it; any other change to those paths does.
+ * Null when there is no listing (outside a git tree).
+ */
+export function buildInputsDigest(lsTree) {
+  if (lsTree === null) return null;
+  const lines = lsTree
+    .split("\n")
+    .filter((line) => line !== "")
+    .map((line) => {
+      const [meta, path] = line.split("\t");
+      return { blob: meta.split(" ")[2], path };
+    })
+    .filter(({ path }) => isBuildInput(path))
+    .map(({ blob, path }) => `${blob} ${path}`)
+    .toSorted();
+  return lines.length === 0 ? null : createHash("sha256").update(lines.join("\n")).digest("hex");
+}
 const REPO = join(dirname(HERE), "../../..");
 
 const gitOut = async (...args) => (await execFileAsync("git", args, { cwd: REPO })).stdout.trim();
@@ -455,9 +489,11 @@ const gitOut = async (...args) => (await execFileAsync("git", args, { cwd: REPO 
 /**
  * What a local recording was made with, so a later comparison can say which build it compared.
  * The recorder cannot know the commit a binary was built from, so it records what the tree holds
- * and whether the binary can be of it: the source commit, the tree hash of `crates/` and the digest
- * of `Cargo.lock` (the inputs of the build), whether those paths have uncommitted changes, the
- * sha256 of the binary and whether the binary is newer than the last commit that changed them.
+ * and whether the binary can be of it: the source commit, a digest of the build inputs (the crates'
+ * sources and manifests, the lock file and the toolchain files, without the test-only trees, so a
+ * test-only commit does not move it) and the digest of `Cargo.lock`, whether those inputs have
+ * uncommitted changes, the sha256 of the binary and whether the binary is newer than the last
+ * commit that changed them.
  * None for the official emulator, which is firebase-tools' own.
  */
 export async function localProvenance({
@@ -477,9 +513,17 @@ export async function localProvenance({
     }
   };
   const sourceCommit = await ask("rev-parse", "HEAD");
-  const cratesTree = await ask("rev-parse", "HEAD:crates");
-  const status = await ask("status", "--porcelain", "--", ...SOURCE_PATHS);
-  const lastChange = await ask("log", "-1", "--format=%ct", "--", ...SOURCE_PATHS);
+  const inputsSha256 = buildInputsDigest(await ask("ls-tree", "-r", "HEAD", "--", ...SOURCE_PATHS));
+  // An uncommitted change counts only when it is to a build input (a test file does not move the binary).
+  const status = await ask("status", "--porcelain", "--", ...SOURCE_PATHS, ...NOT_TEST_ONLY);
+  const lastChange = await ask(
+    "log",
+    "-1",
+    "--format=%ct",
+    "--",
+    ...SOURCE_PATHS,
+    ...NOT_TEST_ONLY,
+  );
   const digestOf = async (path) =>
     createHash("sha256")
       .update(await readBytes(path))
@@ -500,7 +544,12 @@ export async function localProvenance({
   return {
     target,
     sourceCommit,
-    buildInputs: { cratesTree, cargoLockSha256, dirty: status === null ? null : status !== "" },
+    buildInputs: {
+      scheme: BUILD_INPUTS_SCHEME,
+      inputsSha256,
+      cargoLockSha256,
+      dirty: status === null ? null : status !== "",
+    },
     binarySha256,
     binaryBuiltAfterSource: builtAfter,
   };

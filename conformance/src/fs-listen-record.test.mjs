@@ -22,6 +22,9 @@ import {
   newRunId,
   openJournal,
   localProvenance,
+  buildInputsDigest,
+  BUILD_INPUTS_SCHEME,
+  isBuildInput,
   originPortOf,
   parseArgs,
   readbackProduction,
@@ -947,11 +950,24 @@ const fakeGit =
     if (value instanceof Error) throw value;
     return value;
   };
+const SOURCES = "crates Cargo.toml Cargo.lock rust-toolchain.toml .cargo";
+const NOT_TEST_ONLY = [
+  ":(exclude,glob)crates/*/tests/**",
+  ":(exclude,glob)crates/*/benches/**",
+  ":(exclude,glob)crates/*/examples/**",
+  ":(exclude,glob)crates/*/proptest-regressions/**",
+].join(" ");
+const LS_TREE = [
+  "100644 blob aaa111\tCargo.lock",
+  "100644 blob bbb222\tCargo.toml",
+  "100644 blob ccc333\tcrates/x/src/lib.rs",
+  "100644 blob ddd444\tcrates/x/tests/it.rs",
+].join("\n");
 const GIT = {
   "rev-parse HEAD": "abc123",
-  "rev-parse HEAD:crates": "tree456",
-  "status --porcelain -- crates Cargo.toml Cargo.lock": "",
-  "log -1 --format=%ct -- crates Cargo.toml Cargo.lock": "1000",
+  [`ls-tree -r HEAD -- ${SOURCES}`]: LS_TREE,
+  [`status --porcelain -- ${SOURCES} ${NOT_TEST_ONLY}`]: "",
+  [`log -1 --format=%ct -- ${SOURCES} ${NOT_TEST_ONLY}`]: "1000",
 };
 
 test("localProvenance binds a binary to the inputs of its build: the commit, the tree of crates, the lock file, whether they are clean, and whether the binary is newer than their last change", async () => {
@@ -973,7 +989,8 @@ test("localProvenance binds a binary to the inputs of its build: the commit, the
     target: "local",
     sourceCommit: "abc123",
     buildInputs: {
-      cratesTree: "tree456",
+      scheme: BUILD_INPUTS_SCHEME,
+      inputsSha256: buildInputsDigest(LS_TREE),
       cargoLockSha256: sha(bytes["/r/Cargo.lock"]),
       dirty: false,
     },
@@ -990,7 +1007,7 @@ test("localProvenance binds a binary to the inputs of its build: the commit, the
     readBytes: async (path) => bytes[path],
     git: fakeGit({
       ...GIT,
-      "status --porcelain -- crates Cargo.toml Cargo.lock": " M crates/x.rs",
+      [`status --porcelain -- ${SOURCES} ${NOT_TEST_ONLY}`]: " M crates/x/src/lib.rs",
     }),
     mtimeSecondsOf: async () => 999,
   });
@@ -1040,7 +1057,8 @@ test("localProvenance for the official emulator has no binary, and outside a git
     mtimeSecondsOf: async () => 5,
   });
   assert.deepEqual(outside.buildInputs, {
-    cratesTree: null,
+    scheme: BUILD_INPUTS_SCHEME,
+    inputsSha256: null,
     cargoLockSha256: createHashHex("x"),
     dirty: null,
   });
@@ -1071,10 +1089,25 @@ test("localProvenance asks the real git of this tree for the same answers the co
   });
   assert.equal(out.sourceCommit, head);
   if (head !== null) {
-    const tree = (
-      await promisify(execFile)("git", ["rev-parse", "HEAD:crates"], { cwd: root })
+    const listing = (
+      await promisify(execFile)(
+        "git",
+        [
+          "ls-tree",
+          "-r",
+          "HEAD",
+          "--",
+          "crates",
+          "Cargo.toml",
+          "Cargo.lock",
+          "rust-toolchain.toml",
+          ".cargo",
+        ],
+        { cwd: root },
+      )
     ).stdout.trim();
-    assert.equal(out.buildInputs.cratesTree, tree);
+    assert.match(out.buildInputs.inputsSha256, /^[0-9a-f]{64}$/);
+    assert.equal(out.buildInputs.inputsSha256, buildInputsDigest(listing));
     assert.equal(out.binaryBuiltAfterSource, true);
     assert.equal(typeof out.buildInputs.dirty, "boolean");
   }
@@ -1098,7 +1131,7 @@ test("localProvenance with its own defaults reads the binary, the lock file of t
   try {
     const out = await promisify(execFile)(
       "git",
-      ["log", "-1", "--format=%ct", "--", "crates", "Cargo.toml", "Cargo.lock"],
+      ["log", "-1", "--format=%ct", "--", ...SOURCES.split(" "), ...NOT_TEST_ONLY.split(" ")],
       { cwd: root },
     );
     changedAt = Number(out.stdout.trim());
@@ -1117,5 +1150,111 @@ test("localProvenance with its own defaults reads the binary, the lock file of t
       (await localProvenance({ target: "local", binaryPath: binary })).binaryBuiltAfterSource,
       false,
     );
+  }
+});
+
+test("isBuildInput: only the test-only trees directly under a crate are left out", () => {
+  for (const path of [
+    "crates/x/src/lib.rs",
+    "crates/x/Cargo.toml",
+    "crates/x/build.rs",
+    "crates/x/src/tests/mod.rs",
+    "crates/x/src/tests.rs",
+    "crates/x/tests.rs",
+    "crates/x/tests",
+    "crates/tests/src/lib.rs",
+    "crates/x/y/tests/it.rs",
+    "Cargo.lock",
+    "Cargo.toml",
+    "rust-toolchain.toml",
+    ".cargo/config.toml",
+    "docs/crates/x/tests/it.rs",
+  ])
+    assert.equal(isBuildInput(path), true, path);
+  for (const path of [
+    "crates/x/tests/it.rs",
+    "crates/x/tests/fixtures/a.json",
+    "crates/x/benches/b.rs",
+    "crates/x/examples/e.rs",
+    "crates/x/proptest-regressions/p.txt",
+    "crates/fireemu-adapter-grpc/tests/streams.proptest-regressions",
+  ])
+    assert.equal(isBuildInput(path), false, path);
+});
+
+test("buildInputsDigest: a test-only change does not move it, any other change, a rename or a manifest does, order does not", () => {
+  const entry = (blob, path) => `100644 blob ${blob}\t${path}`;
+  const base = [
+    entry("a1", "Cargo.lock"),
+    entry("b2", "Cargo.toml"),
+    entry("c3", "crates/x/src/lib.rs"),
+    entry("d4", "crates/x/Cargo.toml"),
+    entry("e5", "crates/x/tests/it.rs"),
+  ];
+  const digest = (lines) => buildInputsDigest(lines.join("\n"));
+  const reference = digest(base);
+  assert.match(reference, /^[0-9a-f]{64}$/);
+  // Test-only: changed, added, removed.
+  assert.equal(
+    digest(base.map((l) => (l.includes("tests/") ? entry("zz", "crates/x/tests/it.rs") : l))),
+    reference,
+  );
+  assert.equal(
+    digest([...base, entry("f6", "crates/x/benches/b.rs"), entry("g7", "crates/y/examples/e.rs")]),
+    reference,
+  );
+  assert.equal(digest(base.filter((l) => !l.includes("tests/"))), reference);
+  // Order does not matter.
+  assert.equal(digest([...base].reverse()), reference);
+  // A source, a manifest, the lock, a rename or a removed or added input does.
+  for (const changed of [
+    base.map((l) => (l.includes("lib.rs") ? entry("zz", "crates/x/src/lib.rs") : l)),
+    base.map((l) => (l.includes("crates/x/Cargo.toml") ? entry("zz", "crates/x/Cargo.toml") : l)),
+    base.map((l) => (l.includes("Cargo.lock") ? entry("zz", "Cargo.lock") : l)),
+    base.map((l) => (l.includes("lib.rs") ? entry("c3", "crates/x/src/main.rs") : l)),
+    base.filter((l) => !l.includes("lib.rs")),
+    [...base, entry("h8", "crates/x/src/new.rs")],
+    [...base, entry("h8", "crates/x/src/tests/mod.rs")],
+  ])
+    assert.notEqual(digest(changed), reference);
+  // Nothing listed: no digest.
+  assert.equal(buildInputsDigest(null), null);
+  assert.equal(buildInputsDigest(""), null);
+  assert.equal(digest([entry("e5", "crates/x/tests/it.rs")]), null);
+});
+
+test("buildInputsDigest is invariant under any order and any test-only noise, over random listings", () => {
+  let seed = 12345;
+  const next = (n) => {
+    seed = (seed * 1103515245 + 12345) % 2147483648;
+    return seed % n;
+  };
+  const paths = [
+    "Cargo.lock",
+    "crates/a/src/lib.rs",
+    "crates/b/src/main.rs",
+    "crates/b/Cargo.toml",
+    ".cargo/config.toml",
+  ];
+  const noise = [
+    "crates/a/tests/t.rs",
+    "crates/b/benches/x.rs",
+    "crates/a/examples/e.rs",
+    "crates/b/proptest-regressions/r",
+  ];
+  for (let round = 0; round < 200; round += 1) {
+    const inputs = paths
+      .filter(() => next(3) !== 0)
+      .map((path) => `100644 blob ${next(1000)}\t${path}`);
+    if (inputs.length === 0) continue;
+    const extra = noise
+      .filter(() => next(2) === 0)
+      .map((path) => `100644 blob ${next(1000)}\t${path}`);
+    const shuffled = [...inputs, ...extra].toSorted(() => next(3) - 1);
+    assert.equal(buildInputsDigest(shuffled.join("\n")), buildInputsDigest(inputs.join("\n")));
+    const touched = inputs.map((line, index) =>
+      index === 0 ? line.replace(/blob \d+/, "blob changed") : line,
+    );
+    assert.notEqual(buildInputsDigest(touched.join("\n")), buildInputsDigest(inputs.join("\n")));
   }
 });

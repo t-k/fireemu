@@ -1776,3 +1776,35 @@ test("inFlightFacts: starts are on time when their lag against their own schedul
   const forced = [...f(10, 110, 0), ...f(50, 150, 500), ...f(130, 230, 120)];
   assert.equal(inFlightFacts(forced, [49], 60).startsOnTime, true);
 });
+
+test("cadence.in-flight-skip: a forced run in flight suppresses a natural occurrence too; one that starts inside it and inside no natural run diverges", () => {
+  // production's 01:51:03 occurrence fell inside the forced run only and was skipped; a local run that starts it
+  // (the forced run does not count as in flight) has a natural start inside a forced run and inside no natural one
+  const runs = [
+    [0, 100],
+    [150, 250],
+    [200, 300],
+  ];
+  const l = local({
+    inflight: slowLocal(runs),
+    manual: [{ name: "schedSlowV2", at: instant(T0 + 149_000) }],
+  });
+  const row = inflightRow(l);
+  assert.equal(row.local.naturalStartsInFlight, 1);
+  assert.equal(row.local.forcedStartsInFlight, false, "the forced run began inside no run");
+  assert.equal(row.verdict, "DIVERGES");
+  // the same frames at the facts level: the natural start at 200 is inside the forced run [150, 250] alone
+  const f = (start, end) => [
+    { phase: "start", at: start, scheduled: start },
+    { phase: "end", at: end, scheduled: start },
+  ];
+  assert.equal(
+    inFlightFacts([...f(0, 100), ...f(150, 250), ...f(200, 300)], [149], 60).naturalStartsInFlight,
+    1,
+  );
+  // and a forced run that ended before the next natural start suppresses nothing
+  assert.equal(
+    inFlightFacts([...f(0, 100), ...f(150, 250), ...f(260, 360)], [149], 60).naturalStartsInFlight,
+    0,
+  );
+});

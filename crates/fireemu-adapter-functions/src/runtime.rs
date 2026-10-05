@@ -186,6 +186,11 @@ pub struct BlockingAuthTarget {
 /// finished without an error although the handler had failed. (That job declared no `retryCount`; a Gen1 job with a
 /// count has not been recorded, but a failed handler never marks an attempt failed, so there is nothing to retry.) The
 /// official emulator never retries a scheduled function.
+///
+/// The strongest reason does not depend on a recording: firebase-tools 15.28.2 deploys a first-generation schedule as
+/// a GCF v1 function with only an `eventTrigger` on the job's topic (no `failurePolicy`; `cloudfunctions.js` sets none
+/// for a schedule trigger) and a Scheduler job with a `pubsubTarget` carrying the retry configuration, so a failed
+/// handler has no redelivery to wait for and the job's retry has nothing to retry once the publish is acknowledged.
 #[must_use]
 pub fn schedule_retry_policy(
     retry: &fireemu_core_functions::manifest::ScheduleRetryConfig,

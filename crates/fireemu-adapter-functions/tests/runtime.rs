@@ -2739,10 +2739,10 @@ async fn a_first_generation_retry_window_without_a_count_is_one_attempt() {
     runtime.runner().shutdown().await;
 }
 
-/// A first-generation schedule's job targets Pub/Sub, so Cloud Scheduler's retry covers the publish, not the handler:
-/// no handler retry was recorded for it (the window was recorded for an HTTP target only). A window alone is one
-/// attempt, however far the clock goes, with a window or with a count: schedFailV1's handler ran once per occurrence
-/// and its Scheduler attempts all finished without an error although the handler threw.
+/// A first-generation schedule's job targets Pub/Sub, so Cloud Scheduler's retry covers the publish, not the handler.
+/// A count alone (here 3, no window) is one attempt, however far the clock goes: schedFailV1's handler ran once per
+/// occurrence and its Scheduler attempts all finished without an error although the handler threw. (The window-only
+/// case is `a_first_generation_retry_window_without_a_count_is_one_attempt`.)
 #[tokio::test]
 async fn a_first_generation_retry_count_is_one_attempt() {
     use fireemu_core_functions::manifest::{ScheduleRetryConfig, Trigger};

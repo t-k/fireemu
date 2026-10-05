@@ -23,6 +23,7 @@ const PROJECT = "demo-fireemu-pubsub";
 const T0 = Date.parse("2026-10-05T10:00:00.000Z");
 const topic = (id) => `projects/${PROJECT}/topics/${id}`;
 const mine = (key) => topic(`fe${RUN}-${key}`);
+const historical = ({ creates, deletes, open }) => ({ creates, deletes, open });
 
 test("the kind of an answer, the ledger lines written before and after a request, and a request that was never answered", () => {
   assert.equal(kindOf({ ok: true }), "ok");
@@ -45,12 +46,12 @@ test("the kind of an answer, the ledger lines written before and after a request
   ledger.sent({ name: "a", action: "create", transport: "grpc" });
   ledger.answered({ name: "a", action: "create", transport: "rest", kind: "conflict" });
   assert.deepEqual(
-    ledger.state().get("a"),
+    historical(ledger.state().get("a")),
     { creates: ["conflict"], deletes: [], open: ["create"] },
     "the other request is still open",
   );
   ledger.answered({ name: "a", action: "create", transport: "grpc", kind: "conflict" });
-  assert.deepEqual(ledger.state().get("a"), {
+  assert.deepEqual(historical(ledger.state().get("a")), {
     creates: ["conflict", "conflict"],
     deletes: [],
     open: [],
@@ -64,6 +65,7 @@ test("the kind of an answer, the ledger lines written before and after a request
     action: "create",
     transport: "rest",
     kind: "conflict",
+    requestId: "a#1",
   });
   ledger.sent({ name: "a", action: "delete", transport: "rest" });
   assert.equal(maybeDeleting(ledger.state().get("a")), true);
@@ -92,9 +94,9 @@ test("a ledger file is read back with a request that was sent and never answered
     ].join("\n"),
   );
   const state = readLedger(path).state();
-  assert.deepEqual(state.get("a"), { creates: ["ok"], deletes: [], open: [] });
-  assert.deepEqual(state.get("b"), { creates: ["unknown"], deletes: [], open: [] });
-  assert.deepEqual(state.get("c"), { creates: [], deletes: ["unknown"], open: [] });
+  assert.deepEqual(historical(state.get("a")), { creates: ["ok"], deletes: [], open: [] });
+  assert.deepEqual(historical(state.get("b")), { creates: ["unknown"], deletes: [], open: [] });
+  assert.deepEqual(historical(state.get("c")), { creates: [], deletes: ["unknown"], open: [] });
   assert.equal(maybeCreated(state.get("d")), false);
   assert.equal(maybeCreated(state.get("b")), true);
   assert.equal(maybeDeleting(state.get("c")), true);
@@ -334,7 +336,7 @@ test("the later run refuses to start before ten minutes, and without the ledger 
   assert.equal(MIN_A2_WAIT_MS, 600_000);
 });
 
-test("the later run works in the recording's own directory and settles by name: an unknown create that is absent, one that exists, an unknown delete, and a refused probe", async (t) => {
+test("the later run preserves an absent unknown creation while settling confirmed and positively read names", async (t) => {
   const absent = mine("unknown-absent");
   const present = mine("unknown-present");
   const created = mine("created");
@@ -357,7 +359,7 @@ test("the later run works in the recording's own directory and settles by name: 
     now: () => T0 + MIN_A2_WAIT_MS,
     sleep: async () => {},
   });
-  assert.equal(code, 0);
+  assert.equal(code, 1);
   const summary = summaryOf(dir);
   assert.deepEqual(
     [
@@ -366,10 +368,10 @@ test("the later run works in the recording's own directory and settles by name: 
       summary.cleanup.leftover,
       summary.cleanup.errors,
     ],
-    [true, [], [], []],
+    [false, [absent], [], []],
   );
   assert.deepEqual(summary.cleanup.deleted.toSorted(), [created, present, probeOk].toSorted());
-  assert.deepEqual(summary.cleanup.alreadyGone.toSorted(), [absent, deleting].toSorted());
+  assert.deepEqual(summary.cleanup.alreadyGone.toSorted(), [deleting].toSorted());
   assert.equal(
     readFileSync(join(dir, `capture-${RUN}.jsonl`), "utf8"),
     before,

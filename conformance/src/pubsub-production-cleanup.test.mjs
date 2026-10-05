@@ -158,18 +158,19 @@ test("a probe is touched only when the run's own creation of it answered 2xx or 
   });
   const report = await run(service);
   assert.deepEqual(report.deleted.toSorted(), [created, unknownPresent].toSorted());
-  assert.deepEqual(report.alreadyGone, [unknownAbsent]);
+  assert.deepEqual(report.alreadyGone, []);
   const touched = (name) =>
     service.calls.some((call) => call.endsWith(`/${name.split("/").at(-1)}`));
   assert.equal(touched(conflict), false, "a probe that answered 409 is not ours: not even read");
   assert.equal(touched(refused), false);
   assert.equal(touched(neverIssued), false);
   assert.equal(service.live.has(conflict), true);
-  assert.deepEqual(report.unsettled, []);
-  assert.equal(report.settled.length, 3);
+  assert.deepEqual(report.unsettled, [unknownAbsent]);
+  assert.deepEqual(report.unconfirmed, [unknownAbsent]);
+  assert.equal(report.settled.length, 2);
 });
 
-test("a creation that was sent and never answered is unknown, and a probe name the service refuses as invalid is settled by INVALID_ARGUMENT", async () => {
+test("a creation that was sent and never answered remains unconfirmed when its probe read is INVALID_ARGUMENT", async () => {
   const probe = own.registerProbe("projects/demo-project/topics/goog-probe-g");
   ledger.sent({ name: probe, action: "create", transport: "grpc" });
   const invalid = { status: 400, body: { error: { status: "INVALID_ARGUMENT" } }, unknown: false };
@@ -195,11 +196,11 @@ test("a creation that was sent and never answered is unknown, and a probe name t
   const report = await cleanup({ client, ownership: own, project: "demo-project", ledger, sleep });
   assert.deepEqual(
     [report.alreadyGone, report.settled, report.errors, report.unsettled],
-    [[probe], [{ name: probe, how: "absent" }], [], []],
+    [[], [], [`getTopic ${probe}: INVALID_ARGUMENT`], [probe]],
   );
 });
 
-test("an unknown deletion is not sent again, and it is settled only by the read-back", async () => {
+test("an unknown deletion stays open in-run and settles only on the separate aged A2 read-back", async () => {
   const name = mine("topics", "flaky");
   const service = fakeService({
     resources: [name],
@@ -222,11 +223,16 @@ test("an unknown deletion is not sent again, and it is settled only by the read-
   });
   const settled = await run(gone);
   assert.equal(deletes(gone).length, 1);
-  assert.deepEqual([settled.leftover, settled.errors, settled.unsettled], [[], [], []]);
+  const lateName = mine("topics", "late");
   assert.deepEqual(
-    settled.settled.map((item) => item.how),
-    ["deleted"],
+    [settled.leftover, settled.errors, settled.unsettled],
+    [[lateName], [], [lateName]],
   );
+  assert.deepEqual(settled.settled, []);
+  const aged = await run(gone, { a2ElapsedMs: 600_000 });
+  assert.deepEqual([aged.leftover, aged.errors, aged.unsettled], [[], [], []]);
+  assert.equal(deletes(gone).length, 1, "the original unknown deletion is never re-sent");
+  assert.deepEqual(aged.settled, [{ name: lateName, how: "absent" }]);
 });
 
 test("a deletion that fails with a code other than NOT_FOUND is an error and is not read back; a name already gone is not an error", async () => {

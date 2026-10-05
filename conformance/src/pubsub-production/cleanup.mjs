@@ -1,15 +1,5 @@
-// The cleanup of a recording, and the same code for the later --cleanup-only run. The names it works on
-// are the union of a fresh successful listing (what carries the run's prefix) and the ledger (every name
-// whose creation, or whose deletion, may have happened: a 2xx or an unknown answer, or a request that was
-// sent and never answered). A listing alone settles nothing: it can be late after an unknown answer, and
-// a list whose items do not match the prefix would leave resources silently. A name from the ledger that
-// the listing did not show is read by name first. A probe name enters the set only when the run's own
-// creation of it was a 2xx or unknown; a conflict means it is not ours, and a name that never was a
-// creation of this run is never touched. Snapshots come first, then subscriptions, then topics. Every
-// deletion is sent once (an unknown answer is not re-sent) and read back until the resource answers
-// NOT_FOUND. A name is settled only by an own complete 404 (or, for a probe name that is invalid, the
-// INVALID_ARGUMENT that says it cannot exist).
-
+// Cleanup joins fresh listings with issued names. Every proof is a complete own read, never list absence.
+// Unknown creations need exact-name positive confirmation. Unknown deletions are never resubmitted.
 import { BudgetExceeded } from "./capture.mjs";
 import { createLedger, maybeCreated, maybeDeleting } from "./ledger.mjs";
 
@@ -18,8 +8,8 @@ const KINDS = [
   ["subscriptions", "listSubscriptions", "getSubscription", "deleteSubscription"],
   ["topics", "listTopics", "getTopic", "deleteTopic"],
 ];
-const LIST_KEY = { snapshots: "snapshots", subscriptions: "subscriptions", topics: "topics" };
 export const PAGE_LIMIT = 50;
+const object = (value) => value !== null && typeof value === "object" && !Array.isArray(value);
 
 async function listOwned({ client, ownership, project, kind, list, report }) {
   const found = new Set();
@@ -29,25 +19,39 @@ async function listOwned({ client, ownership, project, kind, list, report }) {
       pageSize: 100,
       ...(pageToken ? { pageToken } : {}),
     });
-    if (!reply.ok) {
-      report.errors.push(`${list}: ${reply.unknown ? "unknown answer" : reply.code}`);
+    if (
+      !reply.ok ||
+      !object(reply.body) ||
+      (reply.body[kind] !== undefined && !Array.isArray(reply.body[kind])) ||
+      (reply.body.nextPageToken !== undefined && typeof reply.body.nextPageToken !== "string")
+    ) {
+      report.errors.push(
+        `${list}: ${reply.unknown ? "unknown answer" : reply.ok ? "unreadable list" : reply.code}`,
+      );
       return found;
     }
-    for (const item of reply.body?.[LIST_KEY[kind]] ?? [])
+    for (const item of reply.body[kind] ?? []) {
+      if (!object(item) || typeof item.name !== "string") {
+        report.errors.push(`${list}: unreadable list item`);
+        return found;
+      }
       if (ownership.prefixPattern.test(item.name)) found.add(item.name);
-    pageToken = reply.body?.nextPageToken;
+    }
+    pageToken = reply.body.nextPageToken;
     if (!pageToken) return found;
   }
   report.errors.push(`${list}: more than ${PAGE_LIMIT} pages`);
   return found;
 }
 
-/** The names of the ledger this run may be answerable for, by kind of resource. */
 export function ledgerTargets(ledger, ownership) {
-  const targets = new Set();
-  for (const [name, item] of ledger.state())
-    if (ownership.isOwned(name) && (maybeCreated(item) || maybeDeleting(item))) targets.add(name);
-  return targets;
+  return new Set(
+    [...ledger.state()]
+      .filter(
+        ([name, item]) => ownership.isOwned(name) && (maybeCreated(item) || maybeDeleting(item)),
+      )
+      .map(([name]) => name),
+  );
 }
 
 export async function cleanup({
@@ -57,6 +61,7 @@ export async function cleanup({
   ledger = createLedger(),
   sleep,
   readBackAttempts = 3,
+  a2ElapsedMs,
 }) {
   const report = {
     deleted: [],
@@ -65,41 +70,53 @@ export async function cleanup({
     errors: [],
     settled: [],
     unsettled: [],
+    unconfirmed: [],
+    outstandingActions: [],
     budgetSpent: false,
   };
-  const probes = new Set(ownership.probes());
-  // A probe name the service refuses as invalid cannot exist: it answers INVALID_ARGUMENT to a read and
-  // to a deletion, which is as gone as NOT_FOUND.
-  const goneCodes = (name) =>
-    probes.has(name) ? ["NOT_FOUND", "INVALID_ARGUMENT"] : ["NOT_FOUND"];
-  const kindOf = (name) => name.split("/")[2];
   const targets = ledgerTargets(ledger, ownership);
+  const a2EligibleRequestIds = new Set(
+    [...ledger.state().values()].flatMap((item) => item.requests.map((request) => request.id)),
+  );
   const settled = new Set();
   const everything = new Set(targets);
+  const isAbsent = (reply) => reply.unknown !== true && reply.code === "NOT_FOUND";
+  const settle = (name, reply, how) => {
+    if (!ledger.settleAbsent(name, reply, { a2ElapsedMs, a2EligibleRequestIds })) return false;
+    settled.add(name);
+    report.settled.push({ name, how });
+    return true;
+  };
   try {
     for (const [kind, list, get, remove] of KINDS) {
       const found = await listOwned({ client, ownership, project, kind, list, report });
       const names = new Set(found);
       for (const name of found) everything.add(name);
-      for (const name of targets) if (kindOf(name) === kind) names.add(name);
+      for (const name of targets) if (name.split("/")[2] === kind) names.add(name);
       for (const name of names) {
-        if (!found.has(name)) {
-          // Not shown by the listing: read it by name before anything is sent to delete it.
+        // The own read also confirms unknown creation requests, if and only if the body names this resource.
+        if (!found.has(name) || ledger.unconfirmed(name) || ledger.deleting(name)) {
           const read = await client[get](name);
-          if (goneCodes(name).includes(read.code)) {
-            report.alreadyGone.push(name);
-            settled.add(name);
-            report.settled.push({ name, how: "absent" });
+          if (isAbsent(read)) {
+            if (settle(name, read, "absent")) report.alreadyGone.push(name);
             continue;
           }
           if (!read.ok) {
             report.errors.push(`${get} ${name}: ${read.unknown ? "unknown answer" : read.code}`);
             continue;
           }
+          if (!ledger.observeRead(name, read)) {
+            report.errors.push(`${get} ${name}: unreadable resource name`);
+            continue;
+          }
+        }
+        if (ledger.unconfirmed(name) || ledger.deleting(name)) {
+          report.leftover.push(name);
+          continue;
         }
         const reply = await client[remove](name);
         if (reply.ok) report.deleted.push(name);
-        else if (goneCodes(name).includes(reply.code)) report.alreadyGone.push(name);
+        else if (isAbsent(reply)) report.alreadyGone.push(name);
         else if (!reply.unknown) {
           report.errors.push(`${remove} ${name}: ${reply.code}`);
           continue;
@@ -107,12 +124,14 @@ export async function cleanup({
         let gone = false;
         for (let attempt = 0; attempt < readBackAttempts && !gone; attempt += 1) {
           if (attempt > 0) await sleep(2000);
-          gone = goneCodes(name).includes((await client[get](name)).code);
+          const read = await client[get](name);
+          if (isAbsent(read)) {
+            gone = settle(name, read, "deleted");
+            // Unknown DELETE is sticky in this run; another in-run absence cannot improve its proof.
+            if (!gone) break;
+          }
         }
-        if (gone) {
-          settled.add(name);
-          report.settled.push({ name, how: "deleted" });
-        } else report.leftover.push(name);
+        if (!gone) report.leftover.push(name);
       }
     }
   } catch (error) {
@@ -121,5 +140,7 @@ export async function cleanup({
     report.errors.push(`the cleanup budget is spent: ${error.message}`);
   }
   report.unsettled = [...everything].filter((name) => !settled.has(name));
+  report.unconfirmed = [...everything].filter((name) => ledger.unconfirmed(name));
+  report.outstandingActions = ledger.outstanding();
   return report;
 }

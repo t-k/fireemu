@@ -244,7 +244,7 @@ export function createClient({ transport, ownership, pushState, caseId, ledger =
     // The ledger line is written before the request is sent: a run that dies in the middle of it still
     // names what may have been created or deleted.
     const entry = spec.ledger && { ...spec.ledger, transport: transport.name };
-    if (entry) ledger.sent(entry);
+    if (entry) entry.requestId = ledger.sent(entry);
     let reply;
     if (transport.name === "rest") {
       const [method, path, body] = spec.rest;
@@ -260,7 +260,23 @@ export function createClient({ transport, ownership, pushState, caseId, ledger =
       ok: reply.code === "OK" && reply.unknown !== true,
       step: label.step,
     };
-    if (entry) ledger.answered({ ...entry, kind: kindOf(result) });
+    if (entry) {
+      let kind = kindOf(result);
+      if (
+        kind === "ok" &&
+        result.body?.done === true &&
+        entry.action === "create" &&
+        result.body.response?.name !== entry.name
+      )
+        kind = "unknown";
+      ledger.answered({ ...entry, kind, operation: result.body?.name });
+      if (kind === "pending" || kind === "unknown") {
+        result.unknown = true;
+        result.ok = false;
+      }
+    } else if (/^get(?:Topic|Subscription|Snapshot)$/.test(operation)) {
+      ledger.observeRead(args[0], result);
+    }
     return result;
   };
   const methods = (options) =>

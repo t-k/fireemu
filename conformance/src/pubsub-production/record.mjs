@@ -15,17 +15,23 @@ import { createBudget, createCapture, createFileJournal } from "./capture.mjs";
 import { cleanup } from "./cleanup.mjs";
 import { createClient, newPushState } from "./client.mjs";
 import { createGrpc } from "./grpc.mjs";
-import { createLedger, maybeCreated, maybeDeleting, readLedger } from "./ledger.mjs";
+import {
+  MIN_ABSENCE_WAIT_MS,
+  createLedger,
+  maybeCreated,
+  maybeDeleting,
+  readLedger,
+} from "./ledger.mjs";
 import { createOwnership, isRunId, newRunId } from "./names.mjs";
 import { createRest } from "./rest.mjs";
 import { assertBudgetCovers, exitCodeOf, runCases, selectCases } from "./runner.mjs";
 import { createTokenProvider } from "./token.mjs";
 
 const PRODUCTION = { rest: "https://pubsub.googleapis.com", grpc: "pubsub.googleapis.com:443" };
-export const DEFAULT_MAX_REQUESTS = 1010;
+export const DEFAULT_MAX_REQUESTS = 1026;
 export const CLEANUP_BUDGET = 600;
 /** The later --cleanup-only run starts at least this long after the recording's last line. */
-export const MIN_A2_WAIT_MS = 10 * 60 * 1000;
+export const MIN_A2_WAIT_MS = MIN_ABSENCE_WAIT_MS;
 
 export function parseArgs(argv, env = {}) {
   const options = { transports: ["rest", "grpc"], maxRequests: DEFAULT_MAX_REQUESTS };
@@ -100,14 +106,14 @@ export function summarize({ options, capture, summary }) {
     requests: capture.count(),
     unknownAnswers: capture.unknownCount(),
     unknowns: capture.unknowns(),
-    // An unknown answer to a creation or a deletion is only settled by a separate read-back later.
+    // Historical unknown counts stay intact; closure uses outstanding request resolutions.
     closureReady:
-      capture.unknownCount() === 0 &&
       summary.stopped === null &&
       (summary.limited ?? []).length === 0 &&
       summary.cleanup.leftover.length === 0 &&
       summary.cleanup.errors.length === 0 &&
-      summary.cleanup.unsettled.length === 0,
+      summary.cleanup.unsettled.length === 0 &&
+      (summary.cleanup.outstandingActions ?? []).length === 0,
     perCase: capture.perCase(),
     ...summary,
   };
@@ -138,6 +144,7 @@ export async function main(
   let cases = [];
   let issued = null;
   let suffix = "";
+  let a2ElapsedMs;
   try {
     options = parseArgs(argv, env);
     if (!options.cleanupOnly) {
@@ -151,6 +158,7 @@ export async function main(
         throw new Error(
           `--cleanup-only runs at least ${MIN_A2_WAIT_MS / 60000} minutes after the recording (${Math.ceil(waited / 1000)} s so far)`,
         );
+      a2ElapsedMs = waited;
       suffix = `-a2-${stamp(deps.now())}`;
     }
   } catch (error) {
@@ -217,6 +225,7 @@ export async function main(
           project: options.project,
           ledger,
           sleep: wait,
+          a2ElapsedMs,
         }),
       };
     else

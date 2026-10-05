@@ -178,7 +178,12 @@ export function assertBudgetCovers(cases, transportNames, maxRequests) {
 }
 
 export function exitCodeOf(summary) {
-  if (summary.cleanup.leftover.length > 0 || summary.cleanup.errors.length > 0) return 1;
+  if (
+    summary.cleanup.leftover.length > 0 ||
+    summary.cleanup.errors.length > 0 ||
+    (summary.cleanup.unsettled ?? []).length > 0
+  )
+    return 1;
   if (summary.stopped !== null) return summary.stopped.includes("budget") ? 4 : 3;
   return 0;
 }

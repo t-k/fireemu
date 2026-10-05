@@ -27,7 +27,7 @@ test("the arguments: an emulator target needs a host, a production target a proj
   assert.equal(emulator.production, false);
   assert.equal(emulator.host, "127.0.0.1:8085");
   assert.match(emulator.runId, /^[0-9a-f]{12}$/);
-  assert.equal(emulator.maxRequests, 1010);
+  assert.equal(emulator.maxRequests, 1026);
   assert.deepEqual(emulator.transports, ["rest", "grpc"]);
   assert.throws(() => parseArgs(["--target", "emulator", "--out", "o"], {}), /emulator-host/);
   assert.throws(() => parseArgs(["--target", "production", "--out", "o"]), /--project is required/);
@@ -204,7 +204,12 @@ test("a case runs once for each transport, with names that carry the prefix and 
   assert.equal(transports.rest.calls.length, 1);
   assert.equal(transports.grpc.calls.length, 1);
   assert.equal(summary.stopped, null);
-  assert.equal(exitCodeOf(summary), 0);
+  assert.equal(exitCodeOf(summary), 1);
+  assert.equal(
+    summary.cleanup.unsettled.length,
+    2,
+    "confirmed creations missing without a successful delete stay open",
+  );
 });
 
 test("a probe name is registered before it is sent and differs by transport", async () => {
@@ -370,7 +375,7 @@ test("the dead-letter case stops clean on production without a service agent, be
   assert.equal(transports.rest.calls.length, 0);
 });
 
-test("a run is closable only with no unknown answer, no stop and a clean cleanup; the unknown ones are listed", () => {
+test("a run keeps raw unknown answers and closes only with no stop and no outstanding cleanup obligations", () => {
   const journal = { write() {} };
   const clean = {
     stopped: null,
@@ -387,7 +392,11 @@ test("a run is closable only with no unknown answer, no stop and a clean cleanup
   some.record({ case: "a/rest", step: "01", op: "createTopic", unknown: true });
   some.record({ case: "a/grpc", step: "02", op: "publish", unknown: true });
   const unsettled = summarize({ options, capture: some, summary: clean });
-  assert.equal(unsettled.closureReady, false);
+  assert.equal(
+    unsettled.closureReady,
+    true,
+    "historical unknown counts do not overwrite settlement state",
+  );
   assert.deepEqual(unsettled.unknowns, [
     { n: 1, case: "a/rest", step: "01", op: "createTopic" },
     { n: 2, case: "a/grpc", step: "02", op: "publish" },
@@ -396,6 +405,10 @@ test("a run is closable only with no unknown answer, no stop and a clean cleanup
     { ...clean, stopped: "x" },
     { ...clean, cleanup: { ...clean.cleanup, leftover: ["x"] } },
     { ...clean, cleanup: { ...clean.cleanup, errors: ["x"] } },
+    {
+      ...clean,
+      cleanup: { ...clean.cleanup, outstandingActions: [{ name: "x", action: "create" }] },
+    },
   ])
     assert.equal(summarize({ options, capture: none, summary }).closureReady, false);
   // The list is bounded, the count is not.

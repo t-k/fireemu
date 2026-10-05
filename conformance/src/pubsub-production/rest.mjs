@@ -62,17 +62,36 @@ export function createRest({
           headers,
           body: body === undefined ? undefined : JSON.stringify(body),
           signal: AbortSignal.timeout(timeoutMs),
+          redirect: "manual",
         });
-        const parsed = parseBody(await reply.text());
-        response = { status: reply.status, body: parsed };
-        // A status below 200, a redirect, a server error (other than 501, which says the method is not
-        // implemented and so was not applied), and a success whose body is not JSON do not
-        // say what was done.
+        const bytes =
+          typeof reply.arrayBuffer === "function"
+            ? Buffer.from(await reply.arrayBuffer())
+            : Buffer.from(await reply.text(), "utf8");
+        const text = bytes.toString("utf8");
+        const parsed = parseBody(text);
+        const contentLength = reply.headers?.get("content-length");
+        response = {
+          status: reply.status,
+          body: parsed,
+          bodyBytes: bytes.length,
+          ...(contentLength == null ? {} : { contentLength }),
+        };
+        let readable = text === "";
+        if (text !== "") {
+          try {
+            const json = JSON.parse(text);
+            readable = json !== null && typeof json === "object" && !Array.isArray(json);
+          } catch {
+            readable = false;
+          }
+        }
         if (
           reply.status < 200 ||
           (reply.status >= 300 && reply.status < 400) ||
-          (reply.status >= 500 && reply.status !== 501) ||
-          (reply.status < 300 && parsed !== null && typeof parsed.raw === "string")
+          reply.status >= 500 ||
+          reply.status === 499 ||
+          !readable
         )
           response.unknown = true;
       } catch (error) {

@@ -121,7 +121,7 @@ test("the token is cached for 40 minutes, gcloud is given a bounded output, and 
 });
 
 test("the budgets and the options have their numbers", () => {
-  assert.equal(DEFAULT_MAX_REQUESTS, 1010);
+  assert.equal(DEFAULT_MAX_REQUESTS, 1026);
   assert.equal(CLEANUP_BUDGET, 600);
   const base = ["--target", "production", "--project", "sandbox-project", "--out", "o"];
   assert.equal(parseArgs([...base, "--max-requests", "1"]).maxRequests, 1);
@@ -274,7 +274,7 @@ test("main: a usage error exits 2 on stderr and creates nothing", async () => {
   assert.throws(() => readdirSync(out));
 });
 
-test("main: a case run goes over both transports and cleans up; a refusal of every step aborts each case, nothing more", async (t) => {
+test("main: definite REST refusal aborts; gRPC transport ambiguity stays unconfirmed after cleanup", async (t) => {
   const service = await emptyServer();
   t.after(service.close);
   const out = join(mkdtempSync(join(tmpdir(), "pubsub-main-")), "o");
@@ -303,7 +303,9 @@ test("main: a case run goes over both transports and cleans up; a refusal of eve
       ["grpc", "aborted"],
     ],
   );
-  assert.equal(code, 0);
+  assert.equal(code, 1);
+  assert.equal(summary.closureReady, false);
+  assert.equal(summary.cleanup.unconfirmed.length, 1);
   assert.equal(summary.stopped, null);
 });
 

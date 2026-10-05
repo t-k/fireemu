@@ -86,7 +86,7 @@ export const names = {
 export const paging = {
   id: "paging",
   short: "pg",
-  requests: 20,
+  requests: 28,
   async run(ctx) {
     const c = ctx.client;
     const topic = ctx.name("topics", "p");
@@ -129,5 +129,8 @@ export const paging = {
     await c.listTopicSnapshots(topic, { pageSize: 1 });
     await c.listTopicSubscriptions(ctx.name("topics", "never-created"));
     await c.listTopicSnapshots(ctx.name("topics", "never-created"));
+    // Keep all three subscriptions attached at deletion; recreation is one call without retry.
+    await c.deleteTopic(topic);
+    await c.with({ timeoutMs: 90_000 }).createTopic(topic);
   },
 };

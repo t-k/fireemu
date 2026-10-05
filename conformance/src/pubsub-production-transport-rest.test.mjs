@@ -69,7 +69,11 @@ test("a request carries the token and the quota project, is captured, and the to
     path: "/v1/projects/p/topics/t",
     body: { labels: { a: "b" } },
   });
-  assert.deepEqual(lines[0].response, { status: 200, body: { name: "projects/p/topics/t" } });
+  assert.deepEqual(lines[0].response, {
+    status: 200,
+    body: { name: "projects/p/topics/t" },
+    bodyBytes: 30,
+  });
   assert.equal(typeof lines[0].ms, "number");
   assert.equal(JSON.stringify(lines).includes(TOKEN), false);
   assert.equal(JSON.stringify(lines).includes("secretsecret"), false);
@@ -200,7 +204,7 @@ test("the token provider runs gcloud without a shell, caches the token, and an e
   );
 });
 
-test("which statuses say what was done: a 501 does (the method was not applied), other 5xx, redirects and a non-JSON success do not", async () => {
+test("complete success and client errors are definite; all 5xx, redirects, sub-200 and unreadable bodies are unknown", async () => {
   const classify = async (status, text) => {
     const capture = createCapture({ journal: { write() {} } });
     const rest = createRest({
@@ -216,7 +220,7 @@ test("which statuses say what was done: a 501 does (the method was not applied),
     [204, "", false],
     [400, '{"error":{"status":"INVALID_ARGUMENT"}}', false],
     [404, "{}", false],
-    [501, '{"error":{"status":"UNIMPLEMENTED"}}', false],
+    [501, '{"error":{"status":"UNIMPLEMENTED"}}', true],
     [500, "{}", true],
     [503, "{}", true],
     [302, "", true],
@@ -224,4 +228,63 @@ test("which statuses say what was done: a 501 does (the method was not applied),
     [200, "<html>", true],
   ])
     assert.equal(await classify(status, text), unknown, String(status));
+});
+
+test("all 5xx including 501, cancellation, unreadable error bodies and scalar JSON are unknown", async () => {
+  for (const [status, text] of [
+    [501, '{"error":{"status":"UNIMPLEMENTED"}}'],
+    [499, "{}"],
+    [404, "<html>"],
+    [200, "null"],
+    [200, "[]"],
+    [200, "true"],
+    [200, '"ok"'],
+  ]) {
+    const { rest } = setup("http://127.0.0.1:1", {
+      fetchImpl: async () => ({ status, text: async () => text }),
+    });
+    assert.equal(
+      (await rest.request({ label: {}, op: "x", method: "GET", path: "/x" })).unknown,
+      true,
+      `${status}/${text}`,
+    );
+  }
+});
+
+test("redirects remain one counted unknown response and never reach the redirected route", async (t) => {
+  const s = await server((request, response) => {
+    if (request.url === "/redirect") {
+      response.writeHead(302, { location: "/applied" });
+      response.end("{}");
+    } else response.end("{}");
+  });
+  t.after(s.close);
+  const { rest, budget, lines } = setup(s.base);
+  assert.equal(
+    (await rest.request({ label: {}, op: "x", method: "GET", path: "/redirect" })).unknown,
+    true,
+  );
+  assert.equal(s.seen.length, 1);
+  assert.equal(budget.used(), 1);
+  assert.equal(lines[0].response.status, 302);
+});
+
+test("REST captures the received UTF-8 body bytes and content length before compact JSON serialization", async (t) => {
+  const raw = '{\n  "name": "topic-東京"\n}\n';
+  const s = await server((_, response) => {
+    response.writeHead(200, {
+      "content-type": "application/json",
+      "content-length": Buffer.byteLength(raw),
+    });
+    response.end(raw);
+  });
+  t.after(s.close);
+  const { rest, lines } = setup(s.base);
+  await rest.request({ label: {}, op: "getTopic", method: "GET", path: "/x" });
+  assert.equal(lines[0].response.bodyBytes, Buffer.byteLength(raw));
+  assert.equal(lines[0].response.contentLength, String(Buffer.byteLength(raw)));
+  assert.notEqual(
+    lines[0].response.bodyBytes,
+    Buffer.byteLength(JSON.stringify(lines[0].response.body)),
+  );
 });

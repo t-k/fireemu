@@ -538,3 +538,43 @@ def test_a_collector_with_no_settle_and_no_yield_is_the_base_itself():
         pass
 
     assert clock.settling(Base, 0, slice_yield=0) is Base
+
+
+def test_default_settling_preserves_the_start_result_and_gives_a_live_writer_time_before_and_during_a_wait():
+    events = []
+    result = object()
+
+    class Thread:
+        def is_alive(self):
+            return True
+
+    class Base:
+        def __init__(self):
+            self.sleep = lambda seconds: events.append(("advance", seconds))
+
+        def _start_concurrent(self, step):
+            events.append(("start", step))
+            self.started = {"thread": Thread()}
+            return result
+
+        def _wait(self, step):
+            self.sleep(1)
+            self.sleep(0.5)
+
+    collector = clock.settling(Base, sleep=lambda seconds: events.append(("real", seconds)))()
+    assert collector._start_concurrent("writer") is result
+    collector._wait({})
+    assert events == [("start", "writer"), ("real", 5.0), ("advance", 1), ("real", 0.1), ("advance", 0.5), ("real", 0.1)]
+
+
+@pytest.mark.parametrize("has_started", [False, True])
+def test_a_wait_without_a_writer_needs_no_sleep_hook_and_preserves_the_base_result(has_started):
+    class Base:
+        def _wait(self, step):
+            return step
+
+    collector = clock.settling(Base)()
+    if has_started:
+        collector.started = None
+    step = {"id": "wait"}
+    assert collector._wait(step) is step

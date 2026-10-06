@@ -215,6 +215,22 @@ def test_a_commit_with_several_write_results_is_in_the_window_only_if_every_upda
     assert tool.clock_evidence([step]) == {"m": False}
 
 
+@pytest.mark.parametrize("transport, update", [("rest", "2026-10-05T10:00:10.500000Z"), ("grpc", {"seconds": "1791194410", "nanos": 500000000})])
+def test_clock_evidence_passes_the_recorded_transport_to_the_timestamp_parser(monkeypatch, transport, update):
+    calls = []
+    parse_time = tool.parse_time
+
+    def parse(value, wire_transport):
+        calls.append((value, wire_transport))
+        return parse_time(value, wire_transport)
+
+    monkeypatch.setattr(tool, "parse_time", parse)
+    step = rest_commit("m", "2026-10-05T10:00:10.000000Z", "2026-10-05T10:00:11.000000Z", update)
+    step["transport"] = transport
+    assert tool.clock_evidence([step]) == {"m": True}
+    assert calls == [(step["timing"]["dispatchUtc"], "rest"), (step["timing"]["responseUtc"], "rest"), (update, transport)]
+
+
 def test_only_acknowledged_commits_with_an_update_time_are_checked():
     refused = rest_commit("r", "2026-10-05T10:00:10.000000Z", "2026-10-05T10:00:11.000000Z", "2026-10-05T11:00:00.000000Z")
     refused["result"]["code"] = 10

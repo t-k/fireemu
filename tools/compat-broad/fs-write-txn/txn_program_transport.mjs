@@ -30,8 +30,8 @@ const CANONICAL_HTTP = { INVALID_ARGUMENT: 400, FAILED_PRECONDITION: 400, OUT_OF
   CANCELLED: 499, UNKNOWN: 500, INTERNAL: 500, DATA_LOSS: 500, UNIMPLEMENTED: 501, UNAVAILABLE: 503, DEADLINE_EXCEEDED: 504 };
 const STATUS_CODES = { OK: 0, CANCELLED: 1, UNKNOWN: 2, INVALID_ARGUMENT: 3, DEADLINE_EXCEEDED: 4, NOT_FOUND: 5, ALREADY_EXISTS: 6, PERMISSION_DENIED: 7, RESOURCE_EXHAUSTED: 8, FAILED_PRECONDITION: 9, ABORTED: 10, OUT_OF_RANGE: 11, UNIMPLEMENTED: 12, INTERNAL: 13, UNAVAILABLE: 14, DATA_LOSS: 15, UNAUTHENTICATED: 16 };
 const LABEL = /^[a-z0-9][a-z0-9-]{0,47}$/;
-// The sandbox projects a production call may name: the shared one and the one FS-TRANSACTION owns alone.
-export const SANDBOX_PROJECTS = Object.freeze(['fireemu-oracle-sbx', 'fireemu-oracle-txn']);
+// The sandbox projects a declared production database may name.
+export const SANDBOX_PROJECTS = Object.freeze(['fireemu-oracle-sbx', 'fireemu-oracle-txn', 'fireemu-oracle-query']);
 
 const plain = value => value !== null && typeof value === 'object' && !Array.isArray(value);
 function keys(value, required, optional = []) {
@@ -51,7 +51,7 @@ function timestamp(value) {
 }
 
 export function validateCall(spec) {
-  keys(spec, ['kind', 'transport', 'target', 'projectId', 'nonce', 'ownerId', 'slug', 'documents', 'states', 'method', 'request', 'bearer', 'deadlineMs'], ['cancelAfter']);
+  keys(spec, ['kind', 'transport', 'target', 'projectId', 'nonce', 'ownerId', 'slug', 'documents', 'states', 'method', 'request', 'bearer', 'deadlineMs'], ['cancelAfter', 'databases', 'placements']);
   // A native query stream the call cancels itself after N frames (N within the frame cap); nothing else may carry the key.
   if (spec.cancelAfter !== undefined && (spec.method !== 'RunQuery' || spec.transport !== 'grpc' || !Number.isInteger(spec.cancelAfter) || spec.cancelAfter < 1 || spec.cancelAfter > MAX_BATCH_FRAMES)) throw new Error('program cancel differs');
   if (spec.kind !== 'txn-program-call-v1' || !['rest', 'grpc'].includes(spec.transport) || !/^[a-f0-9]{32}$/.test(spec.nonce) || !/^[a-f0-9]{32}$/.test(spec.ownerId)) throw new Error('program identity differs');
@@ -69,9 +69,21 @@ export function validateCall(spec) {
   }
   if (!Object.hasOwn(RESPONSES, spec.method)) throw new Error('program RPC differs');
   if (spec.transport === 'rest' && !REST_METHODS.includes(spec.method)) throw new Error('program REST surface differs');
-  const database = `projects/${spec.projectId}/databases/(default)`;
+  const primary = `projects/${spec.projectId}/databases/(default)`;
+  const databases = Object.hasOwn(spec, 'databases') ? spec.databases : {};
+  const placements = Object.hasOwn(spec, 'placements') ? spec.placements : {};
+  if (!plain(databases) || !plain(placements)) throw new Error('program database declarations differ');
+  const allowedProjects = spec.target.kind === 'production' ? SANDBOX_PROJECTS : [spec.projectId, ...SANDBOX_PROJECTS.map(project => `demo-${project}`)];
+  for (const [alias, resource] of Object.entries(databases)) {
+    const match = typeof resource === 'string' && /^projects\/([^/]+)\/databases\/(\(default\)|[a-z][a-z0-9-]{2,61}[a-z0-9])$/.exec(resource);
+    if (!LABEL.test(alias) || alias === 'default' || !match || !allowedProjects.includes(match[1])) throw new Error('program declared database or project differs');
+  }
+  const declared = [primary, ...Object.values(databases)];
+  if (new Set(declared).size !== declared.length || Object.entries(placements).some(([role, alias]) => !spec.documents.includes(role) || typeof alias !== 'string' || !Object.hasOwn(databases, alias))) throw new Error('program placement differs');
+  const database = spec.request?.database ?? (spec.request?.name ?? spec.request?.parent ?? '').split('/documents/')[0];
+  if (!declared.includes(database)) throw new Error('program database differs');
   const prefix = `${database}/documents/oracle/${spec.nonce}/${spec.slug}/`;
-  const owned = name => typeof name === 'string' && name.startsWith(prefix) && spec.documents.includes(name.slice(prefix.length));
+  const owned = name => typeof name === 'string' && name.startsWith(prefix) && spec.documents.includes(name.slice(prefix.length)) && (Object.hasOwn(placements, name.slice(prefix.length)) ? databases[placements[name.slice(prefix.length)]] : primary) === database;
   const request = spec.request;
   switch (spec.method) {
     case 'BeginTransaction': {
@@ -188,8 +200,8 @@ export function rfc3339(time) {
 }
 
 export function restRequest(spec) {
-  const database = `projects/${spec.projectId}/databases/(default)`;
   const request = spec.request;
+  const database = request.database;
   switch (spec.method) {
     case 'BeginTransaction': {
       const options = request.options.readOnly?.readTime === undefined ? request.options : { readOnly: { readTime: rfc3339(request.options.readOnly.readTime) } };

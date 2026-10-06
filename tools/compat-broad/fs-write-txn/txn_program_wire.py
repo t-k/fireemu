@@ -183,7 +183,7 @@ class NodeWire:
             raise ValueError('program project differs')
         self.project = project
         self.runtime = copy.deepcopy(runtime)
-        if not isinstance(scope, dict) or set(scope) != {'slug', 'documents', 'states'}:
+        if not isinstance(scope, dict) or not {'slug', 'documents', 'states'} <= set(scope) <= {'slug', 'documents', 'states', 'databases', 'placements'}:
             raise ValueError('program scope differs')
         self.scope = copy.deepcopy(scope)
         self.target = copy.deepcopy(target or {'kind': 'production'})
@@ -266,19 +266,38 @@ class NodeWire:
             raise ValueError('program cancel belongs to a native query stream, within its frame cap')
         project = self.project
         body = copy.deepcopy(request)
+        scope = copy.deepcopy(self.scope)
+        rebases = {}
         if self.target.get('kind') == 'local':
             project = 'demo-program'
-            # Rebase only the declared database and document fields for local proof.
-            production = f'projects/{self.project}/databases/(default)'
-            local = f'projects/{project}/databases/(default)'
+            # Preserve database ids and keep foreign projects distinct in local proof.
+            declared = [f'projects/{self.project}/databases/(default)', *scope.get('databases', {}).values()]
+            for production in declared:
+                parts = production.split('/')
+                if len(parts) != 4 or parts[0] != 'projects' or parts[1] not in PROJECTS or parts[2] != 'databases':
+                    raise ValueError('program declared database differs')
+                local_project = project if parts[1] == self.project else f'demo-{parts[1]}'
+                rebases[production] = f'projects/{local_project}/databases/{parts[3]}'
             for key in ['database', 'name', 'parent']:
                 if key in body:
-                    body[key] = body[key].replace(production, local, 1)
+                    for production, local in rebases.items():
+                        if body[key] == production or body[key].startswith(production + '/documents/'):
+                            body[key] = local + body[key][len(production):]
+                            break
             for write in body.get('writes', []):
-                write['update']['name'] = write['update']['name'].replace(production, local, 1)
+                for production, local in rebases.items():
+                    if write['update']['name'].startswith(production + '/documents/'):
+                        write['update']['name'] = local + write['update']['name'][len(production):]
+                        break
             if 'documents' in body:
-                body['documents'] = [name.replace(production, local, 1) for name in body['documents']]
-        spec = {'kind': 'txn-program-call-v1', 'transport': transport, 'target': self.target, 'projectId': project, 'nonce': nonce, 'ownerId': owner_id, **copy.deepcopy(self.scope), 'method': method, 'request': body, 'bearer': bearer, 'deadlineMs': deadline_ms, **({'cancelAfter': cancel_after} if cancel_after is not None else {})}
+                for index, name in enumerate(body['documents']):
+                    for production, local in rebases.items():
+                        if name.startswith(production + '/documents/'):
+                            body['documents'][index] = local + name[len(production):]
+                            break
+            if 'databases' in scope:
+                scope['databases'] = {alias: rebases[resource] for alias, resource in scope['databases'].items()}
+        spec = {'kind': 'txn-program-call-v1', 'transport': transport, 'target': self.target, 'projectId': project, 'nonce': nonce, 'ownerId': owner_id, **scope, 'method': method, 'request': body, 'bearer': bearer, 'deadlineMs': deadline_ms, **({'cancelAfter': cancel_after} if cancel_after is not None else {})}
         receipt, lifecycle = self._child(spec, deadline_ms / 1000 + 5)
         required = {'kind', 'transport', 'complete', 'code', 'details', 'response', 'http', 'dispatchedRequests'}
         if not isinstance(receipt, dict) or set(receipt) != required or receipt['kind'] != 'txn-program-receipt-v1' or receipt['transport'] != transport or type(receipt['code']) is not int or not 0 <= receipt['code'] <= 16 or type(receipt['complete']) is not bool or type(receipt['dispatchedRequests']) is not int or receipt['dispatchedRequests'] != 1:
@@ -297,24 +316,21 @@ class NodeWire:
         if not lifecycle.get('childReaped'):
             raise ValueError('program worker remains live')
         result = {**receipt, **lifecycle}
-        if self.target.get('kind') == 'local' and method == 'BatchGetDocuments' and result['code'] == 0 and isinstance(result['response'], dict):
-            # Entries name their documents as the local wire did; the plan names them as production would.
-            local = 'projects/demo-program/databases/(default)'
-            production = f'projects/{self.project}/databases/(default)'
+        if self.target.get('kind') == 'local' and method in ('BatchGetDocuments', 'RunQuery') and result['code'] in (0, 1) and isinstance(result['response'], dict):
             result['localWireResponse'] = copy.deepcopy(result['response'])
             for entry in result['response'].get('responses', []):
-                if isinstance(entry.get('found'), dict) and isinstance(entry['found'].get('name'), str):
-                    entry['found']['name'] = entry['found']['name'].replace(local, production, 1)
-                if isinstance(entry.get('missing'), str):
-                    entry['missing'] = entry['missing'].replace(local, production, 1)
-        if self.target.get('kind') == 'local' and method == 'RunQuery' and result['code'] in (0, 1) and isinstance(result['response'], dict):
-            # Frames name their documents as the local wire did; the plan names them as production would.
-            local = 'projects/demo-program/databases/(default)'
-            production = f'projects/{self.project}/databases/(default)'
-            result['localWireResponse'] = copy.deepcopy(result['response'])
-            for entry in result['response'].get('responses', []):
-                if isinstance(entry.get('document'), dict) and isinstance(entry['document'].get('name'), str):
-                    entry['document']['name'] = entry['document']['name'].replace(local, production, 1)
+                for key in ('found', 'document', 'missing'):
+                    name = entry[key].get('name') if isinstance(entry.get(key), dict) else entry.get(key)
+                    if not isinstance(name, str):
+                        continue
+                    for production, local in rebases.items():
+                        if name.startswith(local + '/documents/'):
+                            restored = production + name[len(local):]
+                            if isinstance(entry[key], dict):
+                                entry[key]['name'] = restored
+                            else:
+                                entry[key] = restored
+                            break
         if self.target.get('kind') == 'local' and method == 'GetDocument' and result['code'] == 0 and isinstance(result['response'], dict):
             result['localWireResponse'] = copy.deepcopy(result['response'])
             result['localNameRebased'] = False

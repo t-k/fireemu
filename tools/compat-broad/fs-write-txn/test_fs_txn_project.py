@@ -1,4 +1,4 @@
-"""The sandbox project a program table targets: fireemu-oracle-sbx by default (every earlier digest unchanged), fireemu-oracle-txn on request, any other refused."""
+"""Program tables keep the shared project by default and admit the txn and query projects explicitly."""
 
 import pytest
 
@@ -21,20 +21,21 @@ def test_the_default_project_is_unchanged_and_its_digest_does_not_move():
     assert corpus_digest(with_project(p13a.TABLE, PROJECT)) == corpus_digest(p13a.TABLE) == "8ef5cfc17df36c81844790b92d1439654d12e084f8b9323342eec3a6273be77e"
 
 
-def test_the_txn_project_changes_the_plan_the_documents_and_the_digest():
-    table = with_project(p13a.TABLE, TXN)
+@pytest.mark.parametrize("project", [TXN, "fireemu-oracle-query"])
+def test_an_explicit_project_changes_the_plan_the_documents_and_the_digest(project):
+    table = with_project(p13a.TABLE, project)
     plan = compile_plan(table, NONCE, OWNER)
-    assert plan["project"] == TXN
-    assert plan["database"] == f"projects/{TXN}/databases/(default)"
-    assert all(name.startswith(f"projects/{TXN}/databases/(default)/documents/oracle/") for name in plan["documents"].values())
+    assert plan["project"] == project
+    assert plan["database"] == f"projects/{project}/databases/(default)"
+    assert all(name.startswith(f"projects/{project}/databases/(default)/documents/oracle/") for name in plan["documents"].values())
     assert corpus_digest(table) != corpus_digest(p13a.TABLE)
     # a request names the project's documents
     read = next(step for step in plan["steps"] if step["id"] == "rest/uc/read-a")
     request = request_for_step(plan, read, {"rest-uc": "aXNzdWVk"}, table)
-    assert request["name"].startswith(f"projects/{TXN}/")
+    assert request["name"].startswith(f"projects/{project}/")
 
 
-@pytest.mark.parametrize("project", ["fireemu-oracle-idp", "fireemu-oracle-query", "fireemu-35fe6", "demo-program", "", None, 7, "fireemu-oracle-txn ", "FIREEMU-ORACLE-TXN"])
+@pytest.mark.parametrize("project", ["fireemu-oracle-idp", "fireemu-oracle-query2", "fireemu-35fe6", "demo-program", "", None, 7, "fireemu-oracle-txn ", "FIREEMU-ORACLE-TXN"])
 def test_any_other_project_is_refused(project):
     with pytest.raises(ValueError, match="txn-program table"):
         compile_plan(with_project(p13a.TABLE, project), NONCE, OWNER)

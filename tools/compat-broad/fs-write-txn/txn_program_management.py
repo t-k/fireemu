@@ -14,6 +14,7 @@ from broad_contract import digest as body_digest   # on sys.path once txn_sandbo
 from txn_program_program import PROJECT
 
 TXN_PROJECT = "fireemu-oracle-txn"
+QUERY_PROJECT = "fireemu-oracle-query"
 TXN_PRE_SLOTS = ("oauth-tokeninfo", "project", "database", "rules-absent")
 preflight = management.preflight
 database_evidence = management.database_evidence
@@ -29,11 +30,18 @@ class MetadataSession(management.MetadataSession):
         if project == PROJECT:
             super().__init__(token, baseline, budget, request_fn=request_fn)
             return
-        if project != TXN_PROJECT:
+        if project not in (TXN_PROJECT, QUERY_PROJECT):
             raise ValueError("management session project differs")
         if not isinstance(token, str) or not 0 < len(token) <= 8192:
             raise ValueError("bounded OAuth credential required")
-        if not isinstance(baseline, dict) or set(baseline) != {"projectNumber", "databaseExpected", "credentialPrincipal"} or baseline["databaseExpected"] != EXPECTED_DATABASE:
+        if not isinstance(baseline, dict) or set(baseline) != {"projectNumber", "databaseExpected", "credentialPrincipal"}:
+            raise ValueError("frozen sandbox database identity and settings required")
+        expected = baseline["databaseExpected"]
+        if project == TXN_PROJECT and expected != EXPECTED_DATABASE or project == QUERY_PROJECT and (
+            not isinstance(expected, dict) or set(expected) != set(EXPECTED_DATABASE)
+            or expected.get("name") != f"projects/{project}/databases/(default)"
+            or any(not isinstance(value, str) or not value for value in expected.values())
+        ):
             raise ValueError("frozen sandbox database identity and settings required")
         preflight.validate_principal(baseline.get("credentialPrincipal"))
         preflight.validate_project_number(baseline.get("projectNumber"))
@@ -72,7 +80,7 @@ class MetadataSession(management.MetadataSession):
             preflight.verify_token(self._token, result, self.baseline["credentialPrincipal"], sent=sent, now=time.monotonic(), required_seconds=1600)
             return {"verified": True, "requiredSeconds": 1600}
         if slot == "database":
-            if any(body.get(key) != value for key, value in EXPECTED_DATABASE.items()):
+            if any(body.get(key) != value for key, value in self.baseline["databaseExpected"].items()):
                 raise ValueError("sandbox database must match PESSIMISTIC expected settings")
             projection = database_evidence(body)["projectionDigest"]
             # The two non-secret values the boundary of a read at a time ago depends on (read-time retention compares "configuration"): kept in the receipt, as reported or None.
@@ -91,7 +99,7 @@ class MetadataSession(management.MetadataSession):
     def preflight(self):
         if self.project == PROJECT:
             return super().preflight()
-        observed = {slot: self._read(slot) for slot in TXN_PRE_SLOTS}
+        observed = {slot: self._read(slot) for slot in (TXN_PRE_SLOTS if self.project == TXN_PROJECT else TXN_PRE_SLOTS[:-1])}
         observed["databaseSettings"] = dict(self._database_settings)
         self._ready = True
         return observed

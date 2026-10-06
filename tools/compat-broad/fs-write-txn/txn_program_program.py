@@ -16,13 +16,15 @@ import re
 from pathlib import Path
 
 PROJECT = "fireemu-oracle-sbx"
-# The sandbox projects a table may target: the shared one, and the one FS-TRANSACTION owns alone (free tier: no billing account, so no spend).
-PROJECTS = (PROJECT, "fireemu-oracle-txn")
+# The shared and query projects are billed; FS-TRANSACTION owns the free-tier txn project.
+PROJECTS = (PROJECT, "fireemu-oracle-txn", "fireemu-oracle-query")
 FREE_TIER_PROJECTS = ("fireemu-oracle-txn",)
 
 
 def budget_for(project):
     """(estimated US$ per recording, reserve US$) an envelope for this project carries: the free-tier project spends nothing."""
+    if project not in PROJECTS:
+        raise ValueError("program project differs")
     return (0.0, 0.0) if project in FREE_TIER_PROJECTS else (0.01, 0.04)
 DATABASE = "(default)"
 TRANSPORTS = ("rest", "grpc")
@@ -42,7 +44,7 @@ MAX_DOCUMENTS = 8
 MAX_WAIT_SECONDS = 600
 MAX_STATES = 32
 _STEP_KEYS = ("id", "transport", "rpc", "document", "tokenInput", "tokenOutput", "writes", "caseId", "role", "allow")
-_OPTIONAL_STEP_KEYS = ("deadlineMs", "documents", "mode", "readAt", "newTransaction", "waitSeconds", "sinceBegin", "concurrentWith", "retryOf", "tokenLiteral", "readAgoSeconds", "query", "cancelAfter")
+_OPTIONAL_STEP_KEYS = ("deadlineMs", "documents", "mode", "readAt", "newTransaction", "waitSeconds", "sinceBegin", "concurrentWith", "retryOf", "tokenLiteral", "readAgoSeconds", "query", "cancelAfter", "onDatabase")
 # A read may name a time this many seconds before it is sent: at most two hours, enough for the one-hour retention boundary.
 READ_AGO_MAX = 7200
 # Transaction tokens the table never issued. "malformed" does not decode as base64 (a REST request only: a gRPC client cannot send it); "unknown" decodes and
@@ -86,6 +88,8 @@ def _step(row):
     step["writes"] = [dict(write) for write in row["writes"]]
     step["allow"] = sorted(row["allow"]) if isinstance(row["allow"], (list, tuple)) and len(set(row["allow"])) == len(row["allow"]) else _bad("allowed codes repeat or are not a list")
     step["deadlineMs"] = row.get("deadlineMs", DEFAULT_DEADLINE_MS)
+    if "onDatabase" in row:
+        step["onDatabase"] = row["onDatabase"]
     if "mode" in row:
         step["mode"] = row["mode"]
     if "readAt" in row:
@@ -132,6 +136,22 @@ def _validate_table(table):
         _bad("the envelope id is not this program's next numbered one")
     if "project" in table and (not isinstance(table["project"], str) or table["project"] not in PROJECTS):
         _bad("the table names a project that is not one of the sandbox projects")
+    # Database aliases bind full resource templates; only the run nonce may be substituted.
+    databases = table.get("databases", {})
+    placements = table.get("placements", {})
+    if not isinstance(databases, dict) or not isinstance(placements, dict):
+        _bad("database declarations and placements must be mappings")
+    primary = f"projects/{table.get('project', PROJECT)}/databases/{DATABASE}"
+    for alias, resource in databases.items():
+        if not isinstance(alias, str) or not _LABEL.fullmatch(alias) or alias == "default" or not isinstance(resource, str):
+            _bad("database declaration is malformed")
+        rendered = resource.replace("{nonce}", "a" * 32)
+        if not re.fullmatch(r"projects/(" + "|".join(map(re.escape, PROJECTS)) + r")/databases/(\(default\)|[a-z][a-z0-9-]{2,61}[a-z0-9])", rendered):
+            _bad("database declaration names an invalid database or project")
+    if len(set(databases.values()) | {primary}) != len(databases) + 1:
+        _bad("database declarations repeat")
+    if any(role not in table["documents"] or not isinstance(alias, str) or alias not in databases for role, alias in placements.items()):
+        _bad("placement names an undeclared role or database")
     documents, states = tuple(table["documents"]), tuple(table["states"])
     if not documents or len(documents) > MAX_DOCUMENTS or len(set(documents)) != len(documents) or any(not isinstance(role, str) or not _LABEL.fullmatch(role) for role in documents):
         _bad("owned document roles are malformed")
@@ -187,6 +207,12 @@ def _validate_table(table):
                 _bad(f"{step['id']} has a case id that is misplaced or repeats")
             cases.add(step["caseId"])
         rpc = step["rpc"]
+        alias = step.get("onDatabase")
+        if "onDatabase" in step and (not isinstance(alias, str) or alias not in databases):
+            _bad(f"{step['id']} names an undeclared database")
+        targets = ([step["document"]] if step["document"] is not None else []) + list(step.get("documents", [])) + [write.get("document") for write in step["writes"]]
+        if any(placements.get(role) != alias for role in targets):
+            _bad(f"{step['id']} names a document in another database")
         if step["role"] == "control" and (step["allow"] != [0] and not (step["allow"] == [5] and rpc == "GetDocument")):
             _bad(f"{step['id']} is a control step that may be refused")
         if step["role"] == "post-state" and step["allow"] != [0]:
@@ -328,6 +354,9 @@ def corpus_digest(table):
         body["thresholds"] = dict(table["thresholds"])
     if table.get("project", PROJECT) != PROJECT:
         body["project"] = table["project"]   # bound only when it differs, so every table that targets the shared project keeps its digest
+    for key in ("databases", "placements"):
+        if key in table:
+            body[key] = dict(table[key])
     return hashlib.sha256(_canonical(body).encode()).hexdigest()
 
 
@@ -337,6 +366,9 @@ def compile_plan(table, nonce, owner_id):
     steps = _validate_table(table)
     project = table.get("project", PROJECT)
     database = f"projects/{project}/databases/{DATABASE}"
+    databases = {alias: resource.replace("{nonce}", nonce) for alias, resource in table.get("databases", {}).items()}
+    if len(set(databases.values()) | {database}) != len(databases) + 1:
+        _bad("resolved database declarations repeat")
     caps = dict(table["caps"])
     plan = {
         "kind": "txn-program-plan-v1",
@@ -346,7 +378,7 @@ def compile_plan(table, nonce, owner_id):
         "database": database,
         "nonce": nonce,
         "ownerId": owner_id,
-        "documents": {role: f"{database}/documents/oracle/{nonce}/{table['slug']}/{role}" for role in table["documents"]},
+        "documents": {role: f"{databases[table['placements'][role]] if role in table.get('placements', {}) else database}/documents/oracle/{nonce}/{table['slug']}/{role}" for role in table["documents"]},
         "states": list(table["states"]),
         "steps": steps,
         "cases": [step["caseId"] for step in steps if step["caseId"]],
@@ -366,6 +398,10 @@ def compile_plan(table, nonce, owner_id):
     }
     if table.get("thresholds"):
         plan["thresholds"] = dict(table["thresholds"])
+    if "databases" in table:
+        plan["databases"] = databases
+    if "placements" in table:
+        plan["placements"] = dict(table["placements"])
     return plan
 
 
@@ -446,6 +482,7 @@ def request_for_step(value, step, tokens, table, times=None, now=None):
             raise ValueError("step has no earlier issued token")
         token = canonical_token(tokens[step["tokenInput"]])
     rpc = step["rpc"]
+    database = value["databases"][step["onDatabase"]] if "onDatabase" in step else value["database"]
     read_time = None
     if "readAgoSeconds" in step:
         if not isinstance(now, (int, float)) or isinstance(now, bool):
@@ -459,23 +496,23 @@ def request_for_step(value, step, tokens, table, times=None, now=None):
     if rpc == "GetDocument":
         return {"name": value["documents"][step["document"]], **({"transaction": token} if token else {}), **({"readTime": read_time} if read_time else {})}
     if rpc == "BatchGetDocuments":
-        return {"database": value["database"], "documents": [value["documents"][role] for role in step["documents"]], **({"transaction": token} if token else {}), **({"readTime": read_time} if read_time else {}), **({"newTransaction": {step["newTransaction"]: {}}} if "newTransaction" in step else {})}
+        return {"database": database, "documents": [value["documents"][role] for role in step["documents"]], **({"transaction": token} if token else {}), **({"readTime": read_time} if read_time else {}), **({"newTransaction": {step["newTransaction"]: {}}} if "newTransaction" in step else {})}
     if rpc == "RunQuery":
         query = {"from": [{"collectionId": table["slug"]}]}
         if "stateEquals" in step["query"]:
             query["where"] = {"fieldFilter": {"field": {"fieldPath": "state"}, "op": "EQUAL", "value": {"stringValue": step["query"]["stateEquals"]}}}
-        return {"parent": f"{value['database']}/documents/oracle/{value['nonce']}", "structuredQuery": query, **({"transaction": token} if token else {})}
+        return {"parent": f"{database}/documents/oracle/{value['nonce']}", "structuredQuery": query, **({"transaction": token} if token else {})}
     if rpc == "Rollback":
-        return {"database": value["database"], "transaction": token}
+        return {"database": database, "transaction": token}
     if rpc == "BeginTransaction":
         mode = step.get("mode", "readWrite")
         if "retryOf" in step:
             if step["retryOf"] not in tokens:
                 raise ValueError("step retries a token that was never issued")
-            return {"database": value["database"], "options": {"readWrite": {"retryTransaction": canonical_token(tokens[step["retryOf"]])}}}
-        return {"database": value["database"], "options": {mode: {"readTime": read_time} if read_time else {}}}
+            return {"database": database, "options": {"readWrite": {"retryTransaction": canonical_token(tokens[step["retryOf"]])}}}
+        return {"database": database, "options": {mode: {"readTime": read_time} if read_time else {}}}
     writes = [{"update": {"name": value["documents"][write["document"]], "fields": marker_fields(value, write["document"], write["state"])}, "currentDocument": {"exists": write["exists"]}} for write in step["writes"]]
-    return {"database": value["database"], "writes": writes, **({"transaction": token} if token else {})}
+    return {"database": database, "writes": writes, **({"transaction": token} if token else {})}
 
 
 class GraphCursor:

@@ -181,3 +181,19 @@ def test_the_transports_in_the_scope_come_from_the_table():
     grpc_only = {**support.TABLE, "steps": tuple(step for step in support.TABLE["steps"] if step["transport"] == "grpc"), "caps": {**support.TABLE["caps"], "observation": 11}, "maxTokens": 1}
     assert authority.envelope_scope(grpc_only)["transports"] == "grpc"
     assert authority.envelope_scope(support.TABLE)["transports"] == "grpc+rest"
+
+
+def test_query_is_billed_and_authority_scope_binds_each_declared_database():
+    from txn_program_program import PROJECTS, budget_for
+    assert "fireemu-oracle-query" in PROJECTS
+    assert budget_for("fireemu-oracle-query") == (0.01, 0.04)
+    assert budget_for("fireemu-oracle-txn") == (0.0, 0.0)
+    table = {**support.TABLE, "project": "fireemu-oracle-query", "databases": {"foreign": "projects/fireemu-oracle-txn/databases/(default)", "named": "projects/fireemu-oracle-query/databases/txn-{nonce}"}}
+    scope = authority.envelope_scope(table)
+    assert scope["project"] == "fireemu-oracle-query/(default)+fireemu-oracle-query/txn-{nonce}+fireemu-oracle-txn/(default)"
+    pins = {**PINS, "project": "fireemu-oracle-query", "scope": scope}
+    assert authority.authorize(AUTHORITY + envelope_row(scope=scope) + APPROVE, pins) == (2 * REQUESTS, 0.04)
+    with pytest.raises(ValueError, match="scope"):
+        authority.authorize(AUTHORITY + envelope_row(scope={**scope, "project": "fireemu-oracle-query/(default)"}) + APPROVE, pins)
+    with pytest.raises(ValueError):
+        authority.authorize(DECISIONS, {**PINS, "project": "fireemu-oracle-idp"})

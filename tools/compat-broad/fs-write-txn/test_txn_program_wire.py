@@ -284,3 +284,29 @@ def test_the_frames_of_a_local_cancel_are_named_as_production_would(runtime, mon
     result = wire.send('grpc', 'RunQuery', QUERY, nonce=NONCE, owner_id=OWNER, bearer='private-credential', cancel_after=1)
     assert result['code'] == 1 and result['response']['responses'][0]['document']['name'] == f'{PARENT}/txn-toy/a'
     assert result['localWireResponse']['responses'][0]['document']['name'] == local_name
+
+
+@pytest.mark.parametrize("origin", ["projects/fireemu-oracle-query/databases/txn-" + NONCE, "projects/fireemu-oracle-txn/databases/(default)"])
+def test_each_declared_database_is_rebased_and_response_names_return_to_their_origin(runtime, monkeypatch, origin):
+    scope = {**SCOPE, "databases": {"other": origin}, "placements": {"a": "other"}}
+    wire = NodeWire(runtime, scope, project="fireemu-oracle-query", target={"kind": "local", "host": "127.0.0.1", "port": 12345})
+    local = origin.replace("fireemu-oracle-query", "demo-program").replace("fireemu-oracle-txn", "demo-fireemu-oracle-txn")
+    logical_name = f"{origin}/documents/oracle/{NONCE}/txn-toy/a"
+    local_name = logical_name.replace(origin, local, 1)
+    def child(spec, _timeout):
+        assert spec["request"] == {"database": local, "documents": [local_name]}
+        assert spec["databases"]["other"] == local
+        return receipt(response={"responses": [{"found": {"name": local_name, "fields": {}}}]}), {"childReaped": True}
+    monkeypatch.setattr(wire, "_child", child)
+    result = wire.send("grpc", "BatchGetDocuments", {"database": origin, "documents": [logical_name]}, nonce=NONCE, owner_id=OWNER, bearer="owner")
+    assert result["response"]["responses"][0]["found"]["name"] == logical_name
+    assert result["localWireResponse"]["responses"][0]["found"]["name"] == local_name
+
+
+def test_local_rebase_does_not_convert_undeclared_database_prefixes(runtime, monkeypatch):
+    wire = NodeWire(runtime, SCOPE, target={"kind": "local", "host": "127.0.0.1", "port": 12345})
+    foreign = DATABASE + "-near-miss"
+    seen = []
+    monkeypatch.setattr(wire, "_child", lambda spec, timeout: (seen.append(spec) or receipt(), {"childReaped": True}))
+    wire.send("grpc", "Rollback", {"database": foreign, "transaction": "aXNzdWVk"}, nonce=NONCE, owner_id=OWNER, bearer="owner")
+    assert seen[0]["request"]["database"] == foreign

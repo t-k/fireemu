@@ -227,12 +227,12 @@ test('production is the sandbox project alone, and a local target must be a demo
   assert.throws(() => validateCall({ ...spec('GetDocument', { name: name('a') }), bearer: 'not-owner' }));
 });
 
-test('production admits the two sandbox projects only, each with its own documents', async () => {
+test('production admits the sandbox allow-list only, each with its own documents', async () => {
   const { validateCall, SANDBOX_PROJECTS } = await module();
-  assert.deepEqual([...SANDBOX_PROJECTS], ['fireemu-oracle-sbx', 'fireemu-oracle-txn']);
+  assert.deepEqual([...SANDBOX_PROJECTS], ['fireemu-oracle-sbx', 'fireemu-oracle-txn', 'fireemu-oracle-query']);
   const production = (projectId, documentProject = projectId, transport = 'rest') => ({ ...spec('GetDocument', { name: `projects/${documentProject}/databases/(default)/documents/oracle/${nonce}/txn-toy/a` }, transport), target: { kind: 'production' }, projectId, bearer: 'ya29.token-value_1' });
   for (const transport of ['rest', 'grpc']) for (const projectId of SANDBOX_PROJECTS) validateCall(production(projectId, projectId, transport));
-  for (const projectId of ['fireemu-oracle-idp', 'fireemu-oracle-query', 'fireemu-35fe6', 'demo-toy', 'fireemu-oracle-txn2', '']) assert.throws(() => validateCall(production(projectId)), undefined, projectId);
+  for (const projectId of ['fireemu-oracle-idp', 'fireemu-oracle-query2', 'fireemu-35fe6', 'demo-toy', 'fireemu-oracle-txn2', '']) assert.throws(() => validateCall(production(projectId)), undefined, projectId);
   // a call for one project cannot name the other's documents
   assert.throws(() => validateCall(production('fireemu-oracle-txn', 'fireemu-oracle-sbx')));
   assert.throws(() => validateCall(production('fireemu-oracle-sbx', 'fireemu-oracle-txn')));
@@ -608,3 +608,34 @@ test('a cancel is a gRPC query call\'s alone and stays within the frame cap', as
   assert.throws(() => validateCall(spec('GetDocument', { name: name('a') }, 'grpc', { cancelAfter: 1 })));
   assert.throws(() => validateCall(spec('BatchGetDocuments', { database, documents: [name('a')] }, 'grpc', { cancelAfter: 1 })));
 });
+
+
+for (const transport of ['rest', 'grpc']) {
+  test(`${transport}: declared databases and projects are accepted, undeclared near misses are refused`, async () => {
+    const { validateCall, restRequest } = await module();
+    const primary = 'projects/fireemu-oracle-query/databases/(default)';
+    const named = `projects/fireemu-oracle-query/databases/txn-${nonce}`;
+    const foreign = 'projects/fireemu-oracle-txn/databases/(default)';
+    const extra = { target: { kind: 'production' }, projectId: 'fireemu-oracle-query', databases: { named, foreign }, placements: { a: 'named', m: 'foreign' }, bearer: 'synthetic-token' };
+    for (const db of [primary, named, foreign]) {
+      const call = spec('Rollback', { database: db, transaction: token }, transport, extra);
+      validateCall(call);
+      assert.equal(restRequest(call).path, `/v1/${db}/documents:rollback`);
+    }
+    const placed = (db, role) => `${db}/documents/oracle/${nonce}/txn-toy/${role}`;
+    validateCall(spec('GetDocument', { name: placed(named, 'a') }, transport, extra));
+    validateCall(spec('DeleteDocument', { name: placed(named, 'a'), currentDocument: { updateTime: { seconds: '1', nanos: 0 } } }, 'grpc', extra));
+    validateCall(spec('BatchGetDocuments', { database: foreign, documents: [placed(foreign, 'm')] }, transport, extra));
+    const update = { update: { name: placed(named, 'a'), fields: fields('a', 'held') }, currentDocument: { exists: true } };
+    validateCall(spec('Commit', { database: named, writes: [update], transaction: token }, transport, extra));
+    for (const db of [named + '-other', 'projects/fireemu-oracle-idp/databases/(default)']) {
+      assert.throws(() => validateCall(spec('Rollback', { database: db, transaction: token }, transport, extra)));
+      if (db.includes('fireemu-oracle-idp')) assert.throws(() => validateCall(spec('Rollback', { database: db, transaction: token }, transport, { ...extra, databases: { wrong: db }, placements: {} })));
+    }
+    assert.throws(() => validateCall(spec('GetDocument', { name: placed(primary, 'a') }, transport, extra)));
+    assert.throws(() => validateCall(spec('BatchGetDocuments', { database: named, documents: [placed(foreign, 'm')] }, transport, extra)));
+    assert.throws(() => validateCall(spec('Commit', { database: foreign, writes: [update] }, transport, extra)));
+    assert.throws(() => validateCall(spec('GetDocument', { name: placed(named, 'a') }, transport, { ...extra, placements: { a: 'undeclared' } })));
+    assert.throws(() => validateCall(spec('Rollback', { database: named, transaction: token }, transport, { ...extra, databases: undefined, placements: undefined })));
+  });
+}

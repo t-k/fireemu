@@ -198,7 +198,7 @@ class Ledger:
         return [role for role, entry in self.tokens.items() if self.last_use.get(role) == step["id"] and entry["state"] == "open"]
 
     def release_request(self, role):
-        return {"database": self.plan["database"], "transaction": self.tokens[role]["value"]}
+        return {"database": self.tokens[role].get("database", self.plan["database"]), "transaction": self.tokens[role]["value"]}
 
     def cleanup_request(self, kind, role):
         name = self.plan["documents"][role]
@@ -240,8 +240,8 @@ class Ledger:
             self.unknown_starts.add(site)
         elif method == "Rollback":
             role, entry = self._token_for(request["transaction"])
-            if entry is None:
-                self._probes.add(site)   # a literal token the table never issued: nothing of ours to release
+            if entry is None or request["database"] != entry.get("database", self.plan["database"]):
+                self._probes.add(site)   # A literal or foreign-database probe cannot release a token at its origin.
             elif entry["state"] == "open":
                 self.unknown_rollbacks.add(role)
                 entry["state"] = "unconfirmed-release"
@@ -292,7 +292,8 @@ class Ledger:
             # The token a request names, or the one a retry begin names: either was refused as expired, so a later "Invalid transaction." is its release.
             named = request.get("transaction") or (request.get("options") or {}).get("readWrite", {}).get("retryTransaction")
             gone_role, _entry = self._token_for(named)
-            if gone_role is not None:
+            database = request.get("database") or request.get("name", request.get("parent", "")).split("/documents/")[0]
+            if gone_role is not None and database == _entry.get("database", self.plan["database"]):
                 self.gone_seen.add(gone_role)
         if method == "BeginTransaction":
             # Validate before releasing the responsibility: a transaction may exist that no role owns yet.
@@ -300,7 +301,7 @@ class Ledger:
                 token = canonical_token(result["response"].get("transaction"))
                 if token in self.token_values().values():
                     raise ValueError("minted token is not fresh")
-                self.tokens[step["tokenOutput"]] = {"value": token, "state": "open", "transport": transport, "start": copy.deepcopy(timing), "lastUse": copy.deepcopy(timing)}
+                self.tokens[step["tokenOutput"]] = {"value": token, "state": "open", "transport": transport, "start": copy.deepcopy(timing), "lastUse": copy.deepcopy(timing), **({"database": request["database"]} if request["database"] != self.plan["database"] else {})}
                 self.modes[step["tokenOutput"]] = step.get("mode", "readWrite")
                 self.since[step["tokenOutput"]] = {role: len(states) for role, states in self.history.items()}
                 at = request["options"].get("readOnly", {}).get("readTime")
@@ -329,7 +330,7 @@ class Ledger:
                     self.versions[write["document"]].append((write["state"], stamp))
                     self.acked_at[f"{write['document']}@{site}"] = stamp
                 _role, entry = self._token_for(request.get("transaction"))
-                if entry is not None:
+                if entry is not None and request["database"] == entry.get("database", self.plan["database"]):
                     entry["state"] = "committed"
             else:
                 self.unknown_commits.discard(site)
@@ -426,7 +427,7 @@ class Ledger:
             if minted in self.token_values().values():
                 raise ValueError("the batch that begins a transaction minted no fresh transaction")
             # Own the transaction before the entries are judged: a stop from here on can still release it.
-            self.tokens[step["tokenOutput"]] = {"value": minted, "state": "open", "transport": transport, "start": copy.deepcopy(timing), "lastUse": copy.deepcopy(timing)}
+            self.tokens[step["tokenOutput"]] = {"value": minted, "state": "open", "transport": transport, "start": copy.deepcopy(timing), "lastUse": copy.deepcopy(timing), **({"database": request["database"]} if request["database"] != self.plan["database"] else {})}
             self.modes[step["tokenOutput"]] = step["newTransaction"]
             self.since[step["tokenOutput"]] = {role: len(states) for role, states in self.history.items()}
             if not _present(head, "found") and not _present(head, "missing"):

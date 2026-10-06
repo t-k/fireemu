@@ -395,7 +395,7 @@ test("a deploy that failed cleanly (non-zero exit, no timeout) leaves nothing un
 // ---- M2-r2: the read-back command ----------------------------------------------------------------------------
 
 const DIGEST = "d".repeat(64);
-const ENV = { HOME: "/home/test", PATH: "/usr/bin" };
+const ENV = { HOME: "/tmp/test", PATH: "/usr/bin" };
 const tmp = () => mkdtempSync(join(tmpdir(), "review3-"));
 const args = (run) => [
   "readback",

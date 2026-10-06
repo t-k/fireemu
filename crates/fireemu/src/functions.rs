@@ -3041,8 +3041,7 @@ async fn start_codebase(
     configured
 }
 
-/// The manifest `profile` serves: the parsed manifest, refused when the strict profile finds a schedule production
-/// Cloud Scheduler refuses, with the blocking functions the profile does not serve set aside.
+/// The manifest `profile` serves: the parsed manifest, refused when strict finds a declaration production refuses, with the blocking functions the profile does not serve set aside.
 #[allow(clippy::too_many_lines)] // Keep strict schedule normalization and validation together.
 fn manifest_for_profile(
     profile: CompatibilityProfile,
@@ -3088,6 +3087,19 @@ fn manifest_for_profile(
     let mut manifest = parse_manifest(document)?;
     if profile == CompatibilityProfile::Strict {
         for function in &mut manifest.functions {
+            if let fireemu_core_functions::manifest::Trigger::Eventarc { channel, filters, .. } =
+                &function.trigger
+            {
+                // EVENTARC packet H v4: only the exact source filter on a custom-event channel is recorded as refused.
+                if channel != fireemu_adapter_functions::eventarc::GOOGLE_CHANNEL
+                    && filters.contains_key("source")
+                {
+                    return Err(format!(
+                        "manifest: function {:?}: Cloud Functions refuses this Eventarc trigger (HTTP 400): Validation failed for trigger projects/<project>/locations/{}/triggers/<trigger-id>: The request was invalid: invalid filter 'source' in trigger.event_filters: filter 'source' is not allowed for this trigger",
+                        function.name, function.region
+                    ));
+                }
+            }
             let fireemu_core_functions::manifest::Trigger::Schedule {
                 schedule,
                 time_zone,
@@ -7135,6 +7147,80 @@ mod tests {
         let error =
             super::check_blocking_auth_selections(&manifest, &explicit("missing")).unwrap_err();
         assert!(error.contains("missing"), "{error}");
+    }
+
+    #[test]
+    fn strict_refuses_eventarc_source_filters_with_the_production_message() {
+        for channel in [
+            None,
+            Some("locations/us-central1/channels/custom"),
+            Some("projects/demo-test/locations/us-central1/channels/custom"),
+        ] {
+            let mut document = json!({"functions": [
+                {"name": "accepted", "generation": 2, "trigger": {"type": "http"}},
+                {"name": "customSource", "region": "us-central1", "generation": 2, "trigger": {
+                    "type": "eventarc", "eventType": "com.example.done",
+                    "filters": {"type": "com.example.done", "source": "urn:example:source"}
+                }}
+            ]});
+            if let Some(channel) = channel {
+                document["functions"][1]["trigger"]["channel"] = json!(channel);
+            }
+            let now = crate::config::RuntimeConfig::default().clock_start;
+            assert_eq!(
+                super::manifest_for_profile(CompatibilityProfile::Strict, &document, now)
+                    .unwrap_err(),
+                "manifest: function \"customSource\": Cloud Functions refuses this Eventarc trigger (HTTP 400): Validation failed for trigger projects/<project>/locations/us-central1/triggers/<trigger-id>: The request was invalid: invalid filter 'source' in trigger.event_filters: filter 'source' is not allowed for this trigger"
+            );
+            assert_eq!(
+                super::manifest_for_profile(CompatibilityProfile::Emulator, &document, now)
+                    .unwrap(),
+                parse_manifest(&document).unwrap()
+            );
+        }
+    }
+
+    #[test]
+    fn eventarc_type_only_and_unrecorded_filters_remain_accepted_by_both_profiles() {
+        for filters in [
+            json!({"type": "com.example.done"}),
+            json!({"type": "com.example.done", "sourcex": "urn:example:source"}),
+            json!({"type": "com.example.done", "Source": "urn:example:source"}),
+            json!({"type": "com.example.done", "subject": "example"}),
+        ] {
+            let document = json!({"functions": [{"name": "custom", "generation": 2,
+                "trigger": {"type": "eventarc", "eventType": "com.example.done", "filters": filters}
+            }]});
+            for profile in [CompatibilityProfile::Strict, CompatibilityProfile::Emulator] {
+                assert_eq!(
+                    super::manifest_for_profile(
+                        profile,
+                        &document,
+                        crate::config::RuntimeConfig::default().clock_start,
+                    )
+                    .unwrap(),
+                    parse_manifest(&document).unwrap(),
+                    "{profile:?}: {filters}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn eventarc_source_refusal_does_not_claim_google_channel_triggers() {
+        let document = json!({"functions": [{"name": "alert", "generation": 2,
+            "trigger": {"type": "eventarc", "eventType": "google.firebase.firebasealerts.alerts.v1.published",
+                "channel": "google", "filters": {"source": "urn:example:source"}}
+        }]});
+        assert_eq!(
+            super::manifest_for_profile(
+                CompatibilityProfile::Strict,
+                &document,
+                crate::config::RuntimeConfig::default().clock_start,
+            )
+            .unwrap(),
+            parse_manifest(&document).unwrap()
+        );
     }
 
     /// The refusal check over a manifest document: parse it, then ask the profile.

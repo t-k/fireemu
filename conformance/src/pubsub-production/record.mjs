@@ -154,12 +154,20 @@ const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 /** The time of the last line of a capture, which the later run waits from. */
 function lastLineTime(path) {
-  const lines = readFileSync(path, "utf8")
+  const rows = readFileSync(path, "utf8")
     .split("\n")
-    .filter((line) => line.trim() !== "");
-  const at = Date.parse(JSON.parse(lines.at(-1) ?? "{}").at);
-  if (Number.isNaN(at)) throw new Error("the capture has no readable last line");
-  return at;
+    .filter((line) => line.trim() !== "")
+    .map((line) => JSON.parse(line));
+  const at = Date.parse(rows.at(-1)?.at);
+  if (!Number.isFinite(at)) throw new Error("the capture has no readable last line");
+  let anchor = at;
+  for (const row of rows)
+    if (row.note === "request-dispatch") {
+      const deadline = Date.parse(row.requestDeadlineAt);
+      if (!Number.isFinite(deadline)) throw new Error("unreadable persisted request deadline");
+      anchor = Math.max(anchor, deadline);
+    }
+  return anchor;
 }
 
 const stamp = (ms) => new Date(ms).toISOString().replace(/[-:]/g, "").replace(/\.\d+/, "");
@@ -316,6 +324,7 @@ export async function main(
     capture,
     getToken: token === null ? null : () => token.get(),
     quotaProject: options.quotaProject ?? null,
+    journalDispatch: options.suite === "stream-dlq-v2",
   };
   const rest = options.production ? PRODUCTION.rest : `http://${options.host}`;
   const grpcTarget = options.production ? PRODUCTION.grpc : options.host;

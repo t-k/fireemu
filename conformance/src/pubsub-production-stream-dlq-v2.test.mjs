@@ -301,6 +301,7 @@ async function recordedWorld({ emptyLayout = false, ambiguousGrant = false, age 
   const capture = createCapture({ journal: { write: (line) => lines.push(line) } });
   const rest = createRest({
     base: "http://127.0.0.1:1",
+    journalDispatch: true,
     budget: createBudget(828),
     capture,
     fetchImpl: async (url, options) => {
@@ -464,7 +465,10 @@ test("actual v2 runner restores two policies before cleanup and emits physical l
   const wait = fixture.sleeps.find((item) => item.ms === 900_000);
   assert.equal(fixture.requests.find((call) => call.at > wait.at).at, wait.at + 900_000);
   const rows = fixture.lines.filter(
-    (line) => line.case === "rest-layout-routes/rest" && line.transport === "rest",
+    (line) =>
+      line.case === "rest-layout-routes/rest" &&
+      line.transport === "rest" &&
+      line.response !== undefined,
   );
   for (const op of ["createSubscription", "pull", "acknowledge", "seek"]) {
     const row = rows.find((item) => item.op === op);
@@ -1301,4 +1305,138 @@ test("v2 A2 binds original input directory so copied bytes cannot reuse the one-
     () => verifyRunOutput(authority, { ...options, fromCapture: undefined }),
     /input|directory/,
   );
+});
+
+test("REST dispatch intent persists a conservative deadline before an unanswered post-wait request", async () => {
+  const { createRest } = await import("./pubsub-production/rest.mjs");
+  const notes = [];
+  let sent = false;
+  const transport = createRest({
+    base: "http://127.0.0.1:1",
+    budget: { consume() {} },
+    journalDispatch: true,
+    now: () => 900_000,
+    capture: { note: (kind, data) => notes.push({ kind, ...data }), record() {} },
+    fetchImpl: async () => {
+      assert.equal(notes.length, 1);
+      sent = true;
+      throw new Error("unanswered");
+    },
+  });
+  const reply = await transport.request({
+    method: "POST",
+    path: "/v1/projects/demo-v2/topics/own:publish",
+    timeoutMs: 30_000,
+  });
+  assert.equal(sent, true);
+  assert.equal(reply.unknown, true);
+  assert.equal(notes[0].kind, "request-dispatch");
+  assert.equal(Date.parse(notes[0].requestDeadlineAt), 930_000);
+});
+
+test("v2 A2 ages from unanswered dispatch deadline rather than a pre-wait completed line", async () => {
+  const { mkdtempSync, writeFileSync, rmSync } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const { join } = await import("node:path");
+  const { main } = await import("./pubsub-production/record.mjs");
+  const out = mkdtempSync(join(tmpdir(), "v2-a2-age-"));
+  const runId = "0123456789ab";
+  const path = join(out, `capture-${runId}.jsonl`);
+  const now = Date.parse("2026-01-01T00:15:01Z");
+  const rows = [
+    {
+      at: "2026-01-01T00:00:00Z",
+      note: "run-start",
+      suite: "stream-dlq-v2",
+      project: "demo-v2",
+      runId,
+    },
+    {
+      at: "2026-01-01T00:15:00Z",
+      note: "request-dispatch",
+      requestDeadlineAt: "2026-01-01T00:15:30Z",
+    },
+  ];
+  writeFileSync(path, rows.map((row) => JSON.stringify(row)).join("\n") + "\n");
+  writeFileSync(join(out, `issued-${runId}.jsonl`), "");
+  writeFileSync(join(out, `iam-${runId}.jsonl`), "");
+  try {
+    for (const value of [now, Date.parse("2026-01-01T00:25:00Z")]) {
+      let error = "";
+      const code = await main(
+        [
+          "--target",
+          "production",
+          "--project",
+          "demo-v2",
+          "--out",
+          out,
+          "--suite",
+          "stream-dlq-v2",
+          "--cleanup-only",
+          "--run-id",
+          runId,
+          "--from-capture",
+          path,
+        ],
+        {},
+        { stdout: { write() {} }, stderr: { write: (text) => (error += text) } },
+        { now: () => value, noWire: true },
+      );
+      assert.equal(code, 2);
+      assert.match(error, /at least.*minutes/);
+    }
+  } finally {
+    rmSync(out, { recursive: true });
+  }
+});
+
+test("unary and native gRPC persist request deadline before dispatch", async () => {
+  const { createGrpc } = await import("./pubsub-production/grpc.mjs");
+  const { EventEmitter } = await import("node:events");
+  const grpcLib = (await import("@grpc/grpc-js")).default;
+  const notes = [];
+  let unary = false;
+  let native = false;
+  class Client {
+    close() {}
+    makeUnaryRequest(_path, _serialize, _deserialize, _body, _metadata, _options, callback) {
+      assert.equal(notes.at(-1).kind, "request-dispatch");
+      unary = true;
+      callback(null, {});
+    }
+    makeBidiStreamRequest() {
+      assert.equal(notes.at(-1).kind, "request-dispatch");
+      native = true;
+      const rpc = new EventEmitter();
+      rpc.write = () => {};
+      rpc.end = () => {};
+      rpc.cancel = () => {};
+      process.nextTick(() => rpc.emit("status", { code: grpcLib.status.OK }));
+      return rpc;
+    }
+  }
+  const transport = createGrpc({
+    target: "127.0.0.1:1",
+    secure: false,
+    grpc: { ...grpcLib, Client },
+    budget: { consume() {} },
+    capture: { note: (kind, data) => notes.push({ kind, ...data }), record() {}, frame() {} },
+    now: () => 900_000,
+    journalDispatch: true,
+  });
+  try {
+    await transport.call({
+      service: "Publisher",
+      method: "GetTopic",
+      request: { topic: "projects/demo-v2/topics/own" },
+    });
+    await transport.stream({ frames: [{ subscription: resource, streamAckDeadlineSeconds: 10 }] });
+    assert.equal(unary, true);
+    assert.equal(native, true);
+    assert.equal(notes.length, 2);
+    assert.ok(notes.every((row) => Date.parse(row.requestDeadlineAt) === 930_000));
+  } finally {
+    transport.close();
+  }
 });

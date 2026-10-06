@@ -140,6 +140,7 @@ export function createGrpc({
   budget,
   capture,
   getToken = null,
+  journalDispatch = false,
   quotaProject = null,
   grpc = grpcLib,
   protos = pubsubProtos,
@@ -160,6 +161,7 @@ export function createGrpc({
     budget,
     capture,
     getToken,
+    journalDispatch,
     quotaProject,
     grpc,
     protos,
@@ -205,6 +207,14 @@ export function createGrpc({
         metadata.add("x-goog-user-project", quotaProject);
       if (remainingTime) timeoutMs = Math.min(timeoutMs, remainingTime());
       const started = now();
+      if (journalDispatch)
+        capture.note("request-dispatch", {
+          ...label,
+          transport: "grpc",
+          op: op,
+          requestDeadlineAt: new Date(started + timeoutMs).toISOString(),
+        });
+      if (remainingTime) timeoutMs = Math.min(timeoutMs, remainingTime());
       const entry = {
         ...label,
         transport: "grpc",

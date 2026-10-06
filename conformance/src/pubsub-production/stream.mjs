@@ -26,6 +26,7 @@ export function createStreamingPull({
   budget,
   capture,
   getToken = null,
+  journalDispatch = false,
   quotaProject = null,
   grpc = grpcLib,
   protos = pubsubProtos,
@@ -82,6 +83,14 @@ export function createStreamingPull({
       if (quotaProject !== null) metadata.add("x-goog-user-project", quotaProject);
       if (remainingTime) timeoutMs = Math.min(timeoutMs, remainingTime());
       const started = now();
+      if (journalDispatch)
+        capture.note("request-dispatch", {
+          ...label,
+          transport: "grpc",
+          op: "streamingPull",
+          requestDeadlineAt: new Date(started + timeoutMs).toISOString(),
+        });
+      if (remainingTime) timeoutMs = Math.min(timeoutMs, remainingTime());
       let inboundFrames = 0;
       let outboundFrames = 0;
       let followUpSent = false;

@@ -19,6 +19,7 @@ export function createRest({
   budget,
   capture,
   getToken = null,
+  journalDispatch = false,
   quotaProject = null,
   fetchImpl = fetch,
   defaultTimeoutMs = 30_000,
@@ -52,6 +53,14 @@ export function createRest({
       if (quotaProject !== null && token !== "none") headers["x-goog-user-project"] = quotaProject;
       if (remainingTime) timeoutMs = Math.min(timeoutMs, remainingTime());
       const started = now();
+      if (journalDispatch)
+        capture.note("request-dispatch", {
+          ...label,
+          transport: "rest",
+          op: op,
+          requestDeadlineAt: new Date(started + timeoutMs).toISOString(),
+        });
+      if (remainingTime) timeoutMs = Math.min(timeoutMs, remainingTime());
       const entry = {
         ...label,
         transport: "rest",

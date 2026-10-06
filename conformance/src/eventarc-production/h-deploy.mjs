@@ -21,7 +21,8 @@ export function hDisposition({ create, deletion, read, mode = "run", ageMs = 0 }
   const later = mode === "a2" && ageMs >= 600_000;
   const pendingDelete = ["unknown", "pending"].includes(deletion);
   const closed =
-    create === "failed" || (confirmed && read === "absent" && (deletion === "confirmed" || later));
+    (create === "failed" && read === "absent") ||
+    (confirmed && read === "absent" && (deletion === "confirmed" || later));
   return {
     confirmed,
     closed,
@@ -39,8 +40,126 @@ import {
   realpathSync,
   readdirSync,
   lstatSync,
+  openSync,
+  appendFileSync,
+  fsyncSync,
+  closeSync,
 } from "node:fs";
-import { dirname, join } from "node:path";
+import { dirname, join, resolve } from "node:path";
+import https from "node:https";
+import { createRequire } from "node:module";
+import { Readable } from "node:stream";
+
+// Installed only in the owned CLI subprocess, before firebase-tools imports its HTTP client.
+if (process.env.EVENTARC_H_ISSUED_JOURNAL) {
+  const fd = openSync(process.env.EVENTARC_H_ISSUED_JOURNAL, "a", 0o600);
+  const append = (kind, value) => {
+    appendFileSync(fd, `${JSON.stringify({ at: Date.now(), kind, value })}\n`);
+    fsyncSync(fd);
+  };
+  const original = https.request;
+  let sequence = 0;
+  const hosts =
+    /^(cloudfunctions|storage|cloudresourcemanager|serviceusage|eventarc|artifactregistry|cloudbuild|run|pubsub)\.googleapis\.com$/;
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (url, options = {}) => {
+    const address = new URL(url);
+    if (
+      !hosts.test(address.hostname) ||
+      !["POST", "PUT", "PATCH", "DELETE"].includes(options.method)
+    )
+      return originalFetch(url, options);
+    const id = `${process.pid}-${++sequence}`;
+    append("cli-native-issued", {
+      id,
+      host: address.hostname,
+      method: options.method,
+      path: address.pathname,
+    });
+    try {
+      const reply = await originalFetch(url, options);
+      append("cli-native-answer", {
+        id,
+        status: reply.status,
+        bodyBase64: Buffer.from(await reply.clone().arrayBuffer()).toString("base64"),
+      });
+      return reply;
+    } catch (error) {
+      append("cli-native-answer", { id, unknown: true });
+      throw error;
+    }
+  };
+  if (!process.env.EVENTARC_H_FIREBASE_JS.startsWith("--")) {
+    const undici = createRequire(resolve(process.env.EVENTARC_H_FIREBASE_JS))("undici");
+    const request = undici.request;
+    undici.request = async (url, options = {}) => {
+      const address = new URL(url);
+      if (
+        !hosts.test(address.hostname) ||
+        !["POST", "PUT", "PATCH", "DELETE"].includes(options.method)
+      )
+        return request(url, options);
+      const id = `${process.pid}-${++sequence}`;
+      append("cli-native-issued", {
+        id,
+        host: address.hostname,
+        method: options.method,
+        path: address.pathname,
+      });
+      try {
+        const reply = await request(url, options);
+        const chunks = [];
+        for await (const chunk of reply.body) chunks.push(Buffer.from(chunk));
+        const bytes = Buffer.concat(chunks);
+        append("cli-native-answer", {
+          id,
+          status: reply.statusCode,
+          bodyBase64: bytes.toString("base64"),
+        });
+        return { ...reply, body: Readable.from([bytes]) };
+      } catch (error) {
+        append("cli-native-answer", { id, unknown: true });
+        throw error;
+      }
+    };
+  }
+  https.request = function (...args) {
+    const req = original.apply(this, args);
+    const host = req.host;
+    const method = req.method;
+    if (!["POST", "PUT", "PATCH", "DELETE"].includes(method) || !hosts.test(host)) return req;
+    const id = `${process.pid}-${++sequence}`;
+    let issued = false;
+    const send = () => {
+      if (!issued) {
+        append("cli-native-issued", { id, host, method, path: req.path.split("?")[0] });
+        issued = true;
+      }
+    };
+    for (const action of ["write", "end", "flushHeaders"]) {
+      const originalAction = req[action];
+      req[action] = function (...parts) {
+        send();
+        return originalAction.apply(this, parts);
+      };
+    }
+    req.prependOnceListener("response", (response) => {
+      const chunks = [];
+      response.on("data", (chunk) => chunks.push(Buffer.from(chunk)));
+      response.once("end", () =>
+        append("cli-native-answer", {
+          id,
+          status: response.statusCode,
+          bodyBase64: Buffer.concat(chunks).toString("base64"),
+        }),
+      );
+      response.once("aborted", () => append("cli-native-answer", { id, unknown: true }));
+    });
+    req.prependOnceListener("error", () => append("cli-native-answer", { id, unknown: true }));
+    return req;
+  };
+  process.once("exit", () => closeSync(fd));
+}
 
 export const H_FE_PIN = "773a37fc930d753b70e5bf14f9ed15b8fccc064f";
 
@@ -173,14 +292,31 @@ export function hCliFailed(result) {
 }
 
 /** FE process-group lifecycle and raw stdout/stderr capture; no retry or REST deploy fallback. */
-export async function runHCli({ node, firebaseJs, plan, save, spawnFn = spawn }) {
+export async function runHCli({
+  node,
+  firebaseJs,
+  plan,
+  save,
+  spawnFn = spawn,
+  signal,
+  issuedPath,
+}) {
   return new Promise((resolve) => {
-    const child = spawnFn(node, [firebaseJs, ...plan.args], {
-      cwd: plan.cwd,
-      env: plan.env,
-      detached: true,
-      stdio: ["ignore", "pipe", "pipe"],
-    });
+    const child = spawnFn(
+      node,
+      [...(issuedPath ? ["--import", import.meta.url] : []), firebaseJs, ...plan.args],
+      {
+        cwd: plan.cwd,
+        env: {
+          ...plan.env,
+          ...(issuedPath
+            ? { EVENTARC_H_ISSUED_JOURNAL: issuedPath, EVENTARC_H_FIREBASE_JS: firebaseJs }
+            : {}),
+        },
+        detached: true,
+        stdio: ["ignore", "pipe", "pipe"],
+      },
+    );
     let stdout = "";
     let stderr = "";
     let timedOut = false;
@@ -199,6 +335,12 @@ export async function runHCli({ node, firebaseJs, plan, save, spawnFn = spawn })
         return false;
       }
     };
+    const stop = () => {
+      terminate("SIGTERM");
+      killTimer ??= setTimeout(() => terminate("SIGKILL"), 60_000);
+    };
+    signal?.addEventListener("abort", stop, { once: true });
+    if (signal?.aborted) stop();
     const timeout = setTimeout(() => {
       timedOut = true;
       terminate("SIGTERM");
@@ -216,6 +358,7 @@ export async function runHCli({ node, firebaseJs, plan, save, spawnFn = spawn })
     const finish = (exitCode, error) => {
       if (finished) return;
       finished = true;
+      signal?.removeEventListener("abort", stop);
       clearTimeout(timeout);
       clearTimeout(killTimer);
       const answer = () =>

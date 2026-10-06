@@ -427,7 +427,7 @@ test("H settlement satisfies its independent specification for all bounded state
               create === "confirmed" ||
               (["pending", "unknown"].includes(create) && read === "present");
             const closed =
-              create === "failed" ||
+              (create === "failed" && read === "absent") ||
               (confirmed &&
                 read === "absent" &&
                 (deletion === "confirmed" || (mode === "a2" && ageMs >= 600000)));

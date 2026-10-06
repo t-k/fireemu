@@ -871,3 +871,51 @@ test("H Service Usage HTML escaping is calibrated by FE native byte counts", () 
     false,
   );
 });
+
+test("H IAM delta preserves baseline members and rejects extra, conditional and wrong-project grants", () => {
+  const manifest = { ...m, projectNumber: "123456789012" };
+  const policy = `https://cloudresourcemanager.googleapis.com/v1/projects/${m.project}`;
+  const existing = { role: "roles/viewer", members: ["user:baseline@example.com"] };
+  const grant = {
+    role: "roles/run.invoker",
+    members: ["serviceAccount:123456789012-compute@developer.gserviceaccount.com"],
+  };
+  for (const [after, complete] of [
+    [[existing, grant], true],
+    [[grant], false],
+    [[existing, { ...grant, members: [...grant.members, "user:extra@example.com"] }], false],
+    [[existing, { ...grant, condition: { expression: "true" } }], false],
+    [
+      [existing, { ...grant, members: [grant.members[0].replace("123456789012", "123456789013")] }],
+      false,
+    ],
+  ]) {
+    const stdout =
+      `[apiv2][query] POST https://cloudfunctions.googleapis.com/v2/projects/${m.project}/locations/us-central1/functions functionId=${m.observe}\n` +
+      `<<< [apiv2][body] POST ${policy}:getIamPolicy ${JSON.stringify({ bindings: [existing] })}\n` +
+      `[apiv2][query] POST ${policy}:setIamPolicy [none]\n` +
+      `>>> [apiv2][body] POST ${policy}:setIamPolicy ${JSON.stringify({ policy: { bindings: after } })}\n`;
+    assert.equal(hProductionEvidence.cliWrites({ stdout }, manifest, m.observe).complete, complete);
+  }
+});
+
+test("H IAM policy transcripts reject a second policy write after an approved grant", () => {
+  const manifest = { ...m, projectNumber: "123456789012" };
+  const policy = `https://cloudresourcemanager.googleapis.com/v1/projects/${m.project}`;
+  const write = `[apiv2][query] POST ${policy}:setIamPolicy [none]\n`;
+  const body = (bindings) =>
+    `>>> [apiv2][body] POST ${policy}:setIamPolicy ${JSON.stringify({ policy: { bindings } })}\n`;
+  const stdout =
+    `[apiv2][query] POST https://cloudfunctions.googleapis.com/v2/projects/${m.project}/locations/us-central1/functions functionId=${m.observe}\n` +
+    `<<< [apiv2][body] POST ${policy}:getIamPolicy {"bindings":[]}\n` +
+    write +
+    body([
+      {
+        role: "roles/run.invoker",
+        members: ["serviceAccount:123456789012-compute@developer.gserviceaccount.com"],
+      },
+    ]) +
+    write +
+    body([{ role: "roles/owner", members: ["user:extra@example.com"] }]);
+  assert.equal(hProductionEvidence.cliWrites({ stdout }, manifest, m.observe).complete, false);
+});

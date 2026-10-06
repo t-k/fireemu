@@ -231,6 +231,7 @@ export const hProductionEvidence = Object.freeze({
         return { complete: false, resources, reason: "H unreadable CLI write body" };
       }
     }
+    const policies = new Set();
     for (const [, method, address, tail] of queries) {
       const url = new URL(address);
       const path = url.pathname;
@@ -285,6 +286,9 @@ export const hProductionEvidence = Object.freeze({
           `/v1/projects/${m.projectNumber}:setIamPolicy`,
         ].includes(path)
       ) {
+        if (policies.has(path))
+          return { complete: false, resources, reason: "H repeated IAM policy write" };
+        policies.add(path);
         const before = bodies.find(
           (b) =>
             b.direction === "<<<" &&
@@ -296,8 +300,8 @@ export const hProductionEvidence = Object.freeze({
             b.direction === ">>>" && b.url.hostname === url.hostname && b.url.pathname === path,
         )?.body?.policy;
         if (
-          before?.bindings &&
-          after?.bindings &&
+          Array.isArray(before?.bindings) &&
+          Array.isArray(after?.bindings) &&
           before.bindings.every((binding) =>
             binding.members?.every((member) =>
               after.bindings.some(
@@ -317,7 +321,7 @@ export const hProductionEvidence = Object.freeze({
                     JSON.stringify(b.condition) === JSON.stringify(binding.condition) &&
                     b.members?.includes(member),
                 ) ||
-                (!binding.condition &&
+                (binding.condition === undefined &&
                   ((binding.role === "roles/iam.serviceAccountTokenCreator" &&
                     member ===
                       `serviceAccount:service-${m.projectNumber}@gcp-sa-pubsub.iam.gserviceaccount.com`) ||

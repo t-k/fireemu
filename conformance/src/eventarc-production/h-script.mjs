@@ -2,12 +2,12 @@ import { baseAttributes, CE_TYPE } from "./cases/support.mjs";
 import { randomBytes } from "node:crypto";
 
 export const H_LIMITS = Object.freeze({
-  preflight: 30,
-  readiness: 160,
+  preflight: 56,
+  readiness: 2035,
   publish: 48,
   capture: 120,
-  cleanup: 50,
-  a2: 40,
+  cleanup: 224,
+  a2: 62,
 });
 
 export function hManifest({ project, runId = randomBytes(6).toString("hex") }) {

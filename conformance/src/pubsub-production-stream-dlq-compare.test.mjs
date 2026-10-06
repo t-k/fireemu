@@ -44,7 +44,7 @@ test("body masks preserve user maps, timestamp precision and identifier width", 
           messageId: "12345",
           publishTime: "2026-10-05T00:00:00.123Z",
           data: "dGVzdA==",
-          attributes: { messageId: "user-value", publishTime: "literal" },
+          attributes: { messageId: "12345", publishTime: "literal" },
         },
       },
     ],
@@ -54,7 +54,7 @@ test("body masks preserve user maps, timestamp precision and identifier width", 
   changed.receivedMessages[0].ackId = "xyzABC_456";
   assert.equal(core.judgeRow(exchange(body), exchange(changed)).verdict, "MATCH");
   for (const mutate of [
-    (b) => (b.receivedMessages[0].message.attributes.messageId = "other"),
+    (b) => (b.receivedMessages[0].message.attributes.messageId = "98765"),
     (b) => (b.receivedMessages[0].message.publishTime += "x"),
     (b) => (b.receivedMessages[0].message.messageId += "1"),
     (b) => (b.receivedMessages[0].ackId += "!"),
@@ -130,6 +130,28 @@ test("causal bindings refuse missing, conflicting and ambiguous identities again
     { receivedMessages: [{ ackId: "local-ack", message: { messageId: "9", data: "MQ==" } }] },
   );
   assert.equal(binding.get("ack", "source-ack"), "local-ack");
+  const fresh = core.createBindings();
+  fresh.bind("message", "1", "9");
+  assert.throws(
+    () =>
+      fresh.linkReceive(
+        {
+          receivedMessages: [
+            { ackId: "fresh-source-ack", message: { messageId: "1", data: "MQ==" } },
+          ],
+        },
+        {
+          receivedMessages: [
+            { ackId: "fresh-local-ack", message: { messageId: "8", data: "MQ==" } },
+          ],
+        },
+      ),
+    /binding/,
+  );
+  assert.throws(
+    () => fresh.linkPublish({ messages: [] }, { messageIds: ["1"] }, { messageIds: ["9"] }),
+    /binding/,
+  );
   assert.deepEqual(
     binding.request({
       request: { body: { ackIds: ["source-ack"], attributes: { ackIds: "source-ack" } } },
@@ -184,6 +206,13 @@ test("list judgments ignore item order but cursor binding requires the identical
   actual.topics.reverse();
   binding.linkCursor(expected, actual);
   assert.equal(binding.get("cursor", "abcdefgh"), "ijklmnop");
+  const rewritten = binding.request({
+    request: { method: "GET", path: "/v1/projects/demo-v2/topics?pageToken=abcdefgh&pageSize=1" },
+  });
+  assert.equal(
+    new URL(rewritten.path, "http://127.0.0.1").searchParams.get("pageToken"),
+    "ijklmnop",
+  );
 });
 
 test("IAM recorded get/set routes remain structural needs-review without any local dispatch", async () => {
@@ -234,7 +263,7 @@ test("closed input verification rejects tampering before parsing any capture", (
   writeFileSync(path, text);
   const sha = createHash("sha256").update(text).digest("hex");
   assert.deepEqual(cli.readPinnedJsonl(path, sha), [{ note: "fixture" }]);
-  writeFileSync(path, "invalid changed JSON");
+  writeFileSync(path, '{"note":"tampered"}\n');
   assert.throws(() => cli.readPinnedJsonl(path, sha), /digest/);
   assert.throws(() => cli.readPinnedJsonl(path, "bad"), /SHA256/);
 });
@@ -260,6 +289,7 @@ test("runtime admission accepts only loopback endpoints and a strict release bui
     { rustcWrapper: "sccache" },
     { sha256: "bad" },
     { command: ["cargo", "check"] },
+    { command: ["cargo", "build"] },
   ])
     assert.throws(() => cli.validateRuntime({ ...pin, ...patch }, env), /release|pin|wrapper/);
   for (const patch of [
@@ -556,6 +586,7 @@ test("native raw initial request and causal followup must agree with their captu
     (data) => (data[0].sha256 = "a".repeat(64)),
     (data) => (data[2].body.modifyDeadlineAckIds = ["other-ack"]),
     (data) => (data[2].causedByInboundFrame = 2),
+    (data) => (data[2].body.modifyDeadlineSeconds = [0]),
   ]) {
     const near = structuredClone(frames);
     alter(near);
@@ -613,6 +644,7 @@ test(
 );
 
 test("unknown HTTP answers and omitted local responses remain not comparable", () => {
+  assert.equal(core.judgeRow(exchange({ raw: "HTML" }), exchange({})).verdict, "NOT_COMPARABLE");
   for (const status of [199, 302, 499, 500, null])
     assert.equal(
       core.judgeRow(exchange({}, { response: { status, body: {}, bodyBytes: 12 } }), exchange({}))

@@ -338,7 +338,7 @@ def test_run_once_passes_resolved_declarations_to_the_real_wire(tmp_path, monkey
     assert scopes[0]["placements"] == {}
 
 
-@pytest.mark.parametrize("unknown", [None, "create-database", "delete-database"])
+@pytest.mark.parametrize("unknown", [None, "create-database", "delete-database", "document-recovery"])
 def test_p16_real_runner_orders_management_and_keeps_unknown_mutations_open(tmp_path, monkeypatch, unknown):
     table = importlib.import_module("fs_txn_table_p16").TABLE
     from test_txn_program_management import BASELINE, ABSENT, answer
@@ -365,7 +365,7 @@ def test_p16_real_runner_orders_management_and_keeps_unknown_mutations_open(tmp_
             assert wire.scope["databases"] == plan["databases"]
             assert wire.scope["placements"] == table["placements"]
             calls.append("collector")
-        def run(self): return {"complete": True, "journalFailure": False}
+        def run(self): return {"complete": unknown != "document-recovery", "journalFailure": False}
     monkeypatch.setattr(runner, "request_once", request)
     monkeypatch.setattr(runner, "refresh", lambda *args, **kwargs: "owner")
     monkeypatch.setattr(runner, "Collector", Recording)
@@ -377,6 +377,9 @@ def test_p16_real_runner_orders_management_and_keeps_unknown_mutations_open(tmp_
     if unknown == "create-database":
         assert "collector" not in calls and "delete-database" not in calls
         assert receipt["namedDatabase"]["unknownCreate"] is True
+    elif unknown == "document-recovery":
+        assert "collector" in calls and "delete-database" not in calls
+        assert receipt["namedDatabase"]["createConfirmed"] is True
     else:
         assert calls.index("create-database") < calls.index("collector") < calls.index("delete-database")
         assert calls.count("delete-database") == 1

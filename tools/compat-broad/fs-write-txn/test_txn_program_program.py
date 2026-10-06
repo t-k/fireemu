@@ -288,6 +288,7 @@ def test_declared_databases_place_roles_and_route_steps(program, table):
     value = plan(program, changed)
     named = f"projects/fireemu-oracle-query/databases/txn-{NONCE}"
     assert value["databases"]["named"] == named
+    assert value["placements"] == changed["placements"]
     assert value["documents"]["a"].startswith(named + "/documents/")
     assert value["documents"]["m"].startswith(changed["databases"]["foreign"] + "/documents/")
     for row in value["steps"]:
@@ -347,4 +348,26 @@ def test_nonce_resolution_cannot_alias_two_declared_databases(program, table):
 def test_billed_secondary_projects_are_refused_before_a_plan_can_be_budgeted(program, table):
     changed = {**table, "project": "fireemu-oracle-txn", "databases": {"named": "projects/fireemu-oracle-query/databases/txn-{nonce}"}}
     with pytest.raises(ValueError, match="billed secondary"):
+        plan(program, changed)
+
+
+def test_budget_refuses_an_unregistered_project(program):
+    with pytest.raises(ValueError, match="project differs"):
+        program.budget_for("fireemu-oracle-idp")
+
+
+@pytest.mark.parametrize("change", ["duplicate", "default-alias", "unknown-role", "wrong-step-database"])
+def test_database_extensions_refuse_invalid_declarations_and_placements(program, change):
+    changed = copy.deepcopy(importlib.import_module("fs_txn_table_p16").TABLE)
+    if change == "duplicate":
+        changed["databases"]["duplicate"] = changed["databases"]["named"]
+    elif change == "default-alias":
+        changed["databases"]["default"] = "projects/fireemu-oracle-query/databases/other"
+    elif change == "unknown-role":
+        changed["placements"]["unknown"] = "named"
+    else:
+        changed["steps"][0]["onDatabase"] = "named"
+    with pytest.raises(ValueError, match="table"):
+        program.corpus_digest(changed)
+    with pytest.raises(ValueError, match="table"):
         plan(program, changed)

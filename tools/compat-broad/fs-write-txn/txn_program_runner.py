@@ -163,6 +163,9 @@ def record_twice(*, table, ledger_path, private_dir, pins, decisions, now, recor
         if pins.get('project', PROJECT) == PROJECT:
             metadata = [{key: receipt.get('metadata', {}).get(key) for key in ['rulesetName', 'rulesSourceSha256']} for receipt in receipts]
             rules_ok = all(metadata[0].values())
+        elif pins.get('project') == 'fireemu-oracle-query':
+            metadata = [{key: receipt.get('metadata', {}).get(key) for key in ['project', 'database', 'databaseSettings']} for receipt in receipts]
+            rules_ok = all(row['project'] and row['database'] and isinstance(row['databaseSettings'], dict) for row in metadata) and all(receipt.get('metadata', {}).get('oauth-tokeninfo', {}).get('verified') is True for receipt in receipts)
         else:
             # A project with no Rules release: the session proved the absence before each recording (the rules-absent slot).
             metadata = [{'rulesRelease': receipt.get('metadata', {}).get('rules-absent')} for receipt in receipts]

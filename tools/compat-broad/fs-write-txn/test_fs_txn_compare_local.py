@@ -346,3 +346,30 @@ def test_p16_foreign_token_cases_and_reads_are_compared_in_both_transports():
         changed = {**expected, "cases": [dict(row, code=0) if i == index else row for i, row in enumerate(cases)]}
         result = tool.compare(expected, changed, {}, {}, p16.TABLE["project"])
         assert sum(not row["match"] for section in result for row in section) == 1
+
+
+def test_comparison_main_passes_resolved_declarations_to_node_wire(tmp_path, monkeypatch):
+    import json
+    import sys
+    import txn_program_wire as wire_module
+    import fs_txn_table_p16 as p16
+    scopes = []
+    class Recording:
+        def __init__(self, plan, table, budget, wire, *args, **kwargs):
+            assert wire.scope["databases"] == plan["databases"]
+            assert wire.scope["placements"] == p16.TABLE["placements"]
+            assert "{nonce}" not in wire.scope["databases"]["named"]
+            scopes.append(wire.scope)
+        def run(self):
+            return {"complete": False, "failureType": "ValueError"}
+    source = tmp_path / "freeze.json"
+    source.write_text(json.dumps({"projection": {"corpusDigest": "synthetic-digest"}}))
+    monkeypatch.setattr(tool, "Collector", Recording)
+    monkeypatch.setattr(wire_module, "discover_runtime", lambda _: {})
+    monkeypatch.setattr(wire_module, "verify_runtime", lambda _: None)
+    monkeypatch.setenv("SMOKE_TABLE", "fs_txn_table_p16")
+    monkeypatch.setenv("FIRESTORE_EMULATOR_HOST", "127.0.0.1:12345")
+    monkeypatch.delenv("COMPARE_CLOCK", raising=False)
+    monkeypatch.setattr(sys, "argv", ["fs_txn_compare_local.py", str(source), str(tmp_path / "comparison.json")])
+    tool.main()
+    assert len(scopes) == 1

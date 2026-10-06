@@ -14,7 +14,7 @@ from urllib.parse import urlencode
 
 PROJECT = 'fireemu-oracle-sbx'
 # This file runs as an isolated script (`python -I -S`), so the sandbox projects are listed here and not imported.
-PROJECTS = ('fireemu-oracle-sbx', 'fireemu-oracle-txn')
+PROJECTS = ('fireemu-oracle-sbx', 'fireemu-oracle-txn', 'fireemu-oracle-query')
 SELF = Path(__file__).resolve()
 
 
@@ -40,26 +40,39 @@ def worker_call(value):
         headers['Content-Type'] = 'application/x-www-form-urlencoded'
     else:
         if not _secret(secret): raise ValueError('P10-A bounded bearer required')
-        if slot != 'ruleset-source' and resource is not None: raise ValueError('P10-A REST resource override refused')
+        if slot not in ('ruleset-source', 'named-database', 'create-database', 'delete-database', 'database-operation') and resource is not None: raise ValueError('P10-A REST resource override refused')
         if slot == 'oauth-tokeninfo':
             host, path = 'www.googleapis.com', '/oauth2/v1/tokeninfo?' + urlencode({'access_token': secret})
         elif slot == 'project':
             host, path = 'cloudresourcemanager.googleapis.com', f'/v1/projects/{project}'
         elif slot == 'database':
             host, path = 'firestore.googleapis.com', f'/v1/projects/{project}/databases/(default)'
+        elif slot in ('named-database', 'create-database', 'delete-database', 'database-operation'):
+            pattern = r'projects/fireemu-oracle-query/databases/txn-[a-f0-9]{32}'
+            if slot == 'database-operation': pattern += r'/operations/[A-Za-z0-9_-]+'
+            if project != 'fireemu-oracle-query' or not isinstance(resource, str) or not re.fullmatch(pattern, resource):
+                raise ValueError('S3 REST named database resource differs')
+            host, path = 'firestore.googleapis.com', f'/v1/{resource}'
+            if slot == 'create-database':
+                method = 'POST'
+                path = f'/v1/projects/{project}/databases?' + urlencode({'databaseId': resource.rsplit('/', 1)[1]})
+                body = json.dumps({'name': resource, 'locationId': 'eur3', 'type': 'FIRESTORE_NATIVE', 'databaseEdition': 'STANDARD'}, separators=(',', ':')).encode()
+                headers['Content-Type'] = 'application/json'
+            elif slot == 'delete-database':
+                method = 'DELETE'
         elif slot == 'rules-release':
             host, path = 'firebaserules.googleapis.com', f'/v1/projects/{project}/releases/cloud.firestore'
         elif slot == 'ruleset-source' and isinstance(resource, str) and re.fullmatch(rf'projects/{project}/rulesets/[A-Za-z0-9_-]+', resource):
             host, path = 'firebaserules.googleapis.com', f'/v1/{resource}'
         else:
             raise ValueError('P10-A REST slot or ruleset differs')
-        if slot != 'oauth-tokeninfo': headers = {'Authorization': 'Bearer ' + secret, 'x-goog-user-project': project}
+        if slot != 'oauth-tokeninfo': headers.update({'Authorization': 'Bearer ' + secret, 'x-goog-user-project': project})
     connection = http.client.HTTPSConnection(host, timeout=11)
     try:
         connection.request(method, path, body=body, headers=headers)
         response = connection.getresponse()
         raw = response.read(65537)
-        if len(raw) > 65536 or response.status != 200 or response.getheader('Content-Type').split(';', 1)[0].strip().lower() != 'application/json':
+        if len(raw) > 65536 or (response.status != 200 and not (slot == 'named-database' and response.status == 404)) or (response.getheader('Content-Type') or '').split(';', 1)[0].strip().lower() != 'application/json':
             return {'complete': False, 'status': response.status, 'body': None}
         decoded = json.loads(raw)
         return {'complete': isinstance(decoded, dict), 'status': response.status, 'body': decoded}

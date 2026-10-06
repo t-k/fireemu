@@ -159,3 +159,39 @@ def test_confirmed_create_then_404_only_closes_on_a2_readback(monkeypatch):
     assert session.named_database["closureReady"] is False
     monkeypatch.setattr("txn_program_management.time.time", lambda: 1600)
     assert session.readback_named_database(1600, saved.append)["closureReady"] is True
+
+
+def test_query_refuses_a_valid_baseline_with_different_readback_settings():
+    session, calls, saved = named_session([])
+    session.request = lambda *args: answer({**BASELINE["databaseExpected"], "concurrencyMode": "PESSIMISTIC"})
+    with pytest.raises(ValueError, match="expected settings"):
+        session._read("database")
+
+
+@pytest.mark.parametrize("change", ["operation", "created-name"])
+def test_create_refuses_foreign_operation_or_response_identity(change):
+    operation = OPERATION.replace(PROJECT, "fireemu-oracle-txn") if change == "operation" else OPERATION
+    created = NAMED + "-other" if change == "created-name" else NAMED
+    session, calls, saved = named_session([ABSENT, answer({"name": operation, "done": True, "response": {"name": created}}), answer({"name": NAMED})])
+    with pytest.raises(ValueError, match="differs"):
+        session.create_named_database(NAMED, saved.append)
+    assert session.named_database["unknownCreate"] is True
+    assert session.named_database["closureReady"] is False
+
+
+def test_confirmed_create_without_delete_cannot_close_on_an_immediate_absence():
+    session, calls, saved = named_session([ABSENT, answer({"name": OPERATION, "done": True, "response": {"name": NAMED}}), answer({"name": NAMED}), ABSENT])
+    session.create_named_database(NAMED, saved.append)
+    assert session.readback_named_database(None, saved.append)["closureReady"] is False
+
+
+def test_named_requests_charge_before_dispatch_and_refuse_exhausted_budget():
+    session, calls, saved = named_session([ABSENT, answer({"name": OPERATION, "done": True, "response": {"name": NAMED}}), answer({"name": NAMED})])
+    session.create_named_database(NAMED, saved.append)
+    assert session.budget.used["management"] == len(calls) == 3
+    for _ in range(29):
+        session.budget.charge("management")
+    before = len(calls)
+    with pytest.raises(ValueError, match="exhausted"):
+        session.readback_named_database(None, saved.append)
+    assert len(calls) == before

@@ -270,7 +270,9 @@ export function verifyLedgerProof(row, ledgerPath) {
   if (
     typeof line !== "string" ||
     sha256(line) !== row.ledgerLineSha256 ||
-    !line.includes(`| PUBSUB-STREAM-DLQ ${row.kind} |`) ||
+    !line.includes(
+      `| ${row.kind === "E" ? "PUBSUB-STREAM-DLQ envelope" : "PUBSUB-STREAM-DLQ"} |`,
+    ) ||
     !line.includes("decision=APPROVE;") ||
     !line.includes(`envelopeId=${row.envelopeId};`) ||
     !line.includes(`scopeSha256=${proofScopeDigest(row)} `)

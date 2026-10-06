@@ -461,6 +461,11 @@ test("actual v2 runner restores two policies before cleanup and emits physical l
   assert.equal(summary.iam.restored.length, 2);
   assert.deepEqual(summary.iam.unsettled, []);
   assert.deepEqual(summary.cleanup.errors, []);
+  assert.ok(
+    fixture.requests
+      .filter((call) => call.path.endsWith(":pull"))
+      .every((call) => call.body.returnImmediately === false),
+  );
   assert.ok(fixture.sleeps.some((item) => item.ms === 900_000));
   assert.equal(fixture.sleeps.find((item) => item.ms === 900_000).requests, 18);
   const wait = fixture.sleeps.find((item) => item.ms === 900_000);
@@ -832,7 +837,8 @@ test("authority binds actual E/V proofs to ledger scope and accepts unaudited B 
   const lines = ["# In-memory test ledger"];
   for (const kind of ["E", "V"]) {
     const proof = row(kind);
-    const line = `- 2026-10-06 | PUBSUB-STREAM-DLQ ${kind} | decision=APPROVE; envelopeId=${authority.envelopeId}; scopeSha256=${proofScopeDigest(proof)} | Coordinator | test`;
+    const topic = kind === "E" ? "PUBSUB-STREAM-DLQ envelope" : "PUBSUB-STREAM-DLQ";
+    const line = `- 2026-10-06 | ${topic} | decision=APPROVE; envelopeId=${authority.envelopeId}; scopeSha256=${proofScopeDigest(proof)} | Coordinator | test`;
     lines.push(line);
     authority[kind] = put(kind, {
       ...proof,
@@ -1013,7 +1019,7 @@ test("coordinator lock file binds the recorder pid envelope source and acquisiti
         assert.throws(() => verifyLiveLock({ path, expectedPath: path }, binding), /lock/);
       }
     }
-    writeFileSync(path, "A".repeat(1_048_577));
+    writeFileSync(path, JSON.stringify({ ...lock, padding: "A".repeat(1_048_576) }));
     assert.throws(() => verifyLiveLock({ path, expectedPath: path }, binding), /oversized/);
     writeFileSync(path, "null");
     assert.throws(() => verifyLiveLock({ path, expectedPath: path }, binding), /lock/);
@@ -1817,13 +1823,20 @@ test("signal during actual A wait restores both owned policies before cleanup wi
     },
   });
   try {
-    const summary = await runCases({
+    const running = runCases({
       ...fixture,
       cases: selectCases(["dlq-grant-window"], "stream-dlq-v2"),
       sleep: stopped.sleep,
       cleanupSleep: fixture.sleep,
       isStopping: stopped.isStopping,
     });
+    const { setTimeout } = await import("node:timers/promises");
+    const summary = await Promise.race([running, setTimeout(100).then(() => null)]);
+    if (summary === null) {
+      stopped.close();
+      await running;
+      assert.fail("signal did not interrupt actual IAM wait promptly");
+    }
     assert.match(summary.stopped, /signal/);
     assert.deepEqual(summary.iam.unsettled, []);
     assert.equal(summary.iam.restored.length, 2);

@@ -115,7 +115,8 @@ test("E/V exports bind a canonical ledger line hash and the complete approved sc
         a2Requests: 600,
         bInheritedGrants: "UNAUDITED",
       };
-      const line = `- 2026-10-06 | PUBSUB-STREAM-DLQ ${kind} | decision=APPROVE; envelopeId=${row.envelopeId}; scopeSha256=${proofScopeDigest(row)} | Coordinator | test`;
+      const topic = kind === "E" ? "PUBSUB-STREAM-DLQ envelope" : "PUBSUB-STREAM-DLQ";
+      const line = `- 2026-10-06 | ${topic} | decision=APPROVE; envelopeId=${row.envelopeId}; scopeSha256=${proofScopeDigest(row)} | Coordinator | test`;
       writeFileSync(path, `# Test-only ledger\n${line}\n`);
       row.ledgerLine = 2;
       row.ledgerLineSha256 = sha256(line);
@@ -124,6 +125,7 @@ test("E/V exports bind a canonical ledger line hash and the complete approved sc
         { ledgerLine: 1 },
         { ledgerLine: 3 },
         { ledgerLine: 1.2 },
+        { ledgerLine: "2" },
         { ledgerLine: 0 },
         { ledgerLineSha256: "d".repeat(64) },
         { sourceHead: "d".repeat(40) },
@@ -135,7 +137,7 @@ test("E/V exports bind a canonical ledger line hash and the complete approved sc
       }
       for (const changed of [
         line.replace("APPROVE", "REJECT"),
-        line.replace(` ${kind} |`, " X |"),
+        line.replace(`| ${topic} |`, "| OTHER |"),
         line.replace(row.envelopeId, "OTHER"),
         line.replace(proofScopeDigest(row), "d".repeat(64)),
       ]) {
@@ -192,4 +194,11 @@ test("closing signal sleep aborts pending waits and releases their timer", async
   stopped.close();
   assert.equal(signal.aborted, true);
   assert.ok((await promise) instanceof StopClean);
+});
+
+test("closed source list includes the dynamically loaded IAM evidence fixture", async () => {
+  const { SOURCE_FILES } = await import("./pubsub-production/admission.mjs");
+  assert.ok(
+    SOURCE_FILES.includes("conformance/src/pubsub-production/fixtures/recorded-v2-iam.json"),
+  );
 });

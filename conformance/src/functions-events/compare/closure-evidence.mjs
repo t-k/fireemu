@@ -7,7 +7,12 @@
 //        [--report-out <report.json>]
 //        [--write --out spec/compatibility/closure/evidence/FUNCTIONS-EVENTS-comparison.json
 //                 --comparison-path <the path the closure cites for --out>
-//                 --build-record-out <repo copy> --build-record-path <cited path>]
+//                 --build-record-out <repo copy> --build-record-path <cited path>
+//                 [--integrated-release <release name>]]
+//
+// --integrated-release (with --write) also writes the closure's `integratedRegression` block (the FS-DATA-WRITE and STORAGE-OBJECT
+// form): the comparison was made on the release binary of the integration commit, so the lane's comparison and the integrated one
+// are the same file (`result` IDENTICAL_TO_LANE). It is written only when the 20 conditions and the final-artifact gate are VERIFIED.
 //
 // The closure is judged on the strict profile against production (owner ledger 811): a condition is VERIFIED when every one of its
 // rows is MATCH in the strict profile (the worse of the production observation and the strict comparison, so a fault of the
@@ -437,6 +442,7 @@ export function applyClosure({
   comparisonPath,
   finalArtifact,
   workspace,
+  integrated,
 }) {
   if (typeof comparisonPath !== "string" || comparisonPath === "")
     refuse("the comparison path is empty");
@@ -477,6 +483,41 @@ export function applyClosure({
       comparisonPath,
       rows: { MATCH: entry.match, DIFF: 0, INCOMPLETE: 0 },
       ...(finalArtifact ? { sourceCommit: finalArtifact.sourceCommit } : {}),
+    };
+  }
+  if (integrated !== undefined) {
+    // The integrated regression says the comparison was made on the release binary of the integration commit; it is written only
+    // when every condition the comparison settles and the final-artifact gate reached VERIFIED (the closure review is a person's).
+    const open = copy.conditions.filter(
+      (condition) => gateOf(condition) !== "closure-review" && condition.status !== "VERIFIED",
+    );
+    if (open.length > 0 || finalArtifact === undefined)
+      refuse(
+        `the integrated regression needs every condition and the final-artifact gate VERIFIED: ${open
+          .map(({ conditionId }) => conditionId)
+          .join(", ")}`,
+      );
+    // The final-artifact gate is VERIFIED only when every row is a strict MATCH, so the comparison's rows all are.
+    copy.integratedRegression = {
+      release: integrated.release,
+      integrationCommit: finalArtifact.sourceCommit,
+      releaseBinarySha256: comparison.artifactSha256,
+      buildReceiptPath: integrated.buildReceiptPath,
+      buildReceiptSha256: integrated.buildReceiptSha256,
+      comparisons: [
+        {
+          path: comparisonPath,
+          sha256: integrated.comparisonSha256,
+          rows: comparison.rows.length,
+          summary: { MATCH: comparison.rows.length },
+          laneComparisonPath: comparisonPath,
+          laneComparisonSha256: integrated.comparisonSha256,
+          identicalRows: comparison.rows.length,
+          changedRows: [],
+        },
+      ],
+      result: "IDENTICAL_TO_LANE",
+      productionRequests: 0,
     };
   }
   return copy;
@@ -560,6 +601,11 @@ export function closureEvidenceCommand(
 ) {
   for (const name of ["comparison", "production-run", "closure", "corpus"])
     if (!options[name]) refuse(`--${name} is required`);
+  if (options["integrated-release"] !== undefined) {
+    if (options.write !== true) refuse("--integrated-release needs --write");
+    if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(options["integrated-release"]))
+      refuse("--integrated-release is not a plain release name");
+  }
   const comparison = checkComparison(JSON.parse(read(options.comparison)));
   const closureText = read(options.closure);
   const closure = JSON.parse(closureText);
@@ -604,6 +650,7 @@ export function closureEvidenceCommand(
     buildRecordPath: options["build-record-path"],
     buildRecordSha256: sha256(buildBytes),
   };
+  const evidenceText = `${JSON.stringify(evidence, null, 2)}\n`;
   const next = applyClosure({
     closure,
     mapping,
@@ -612,9 +659,18 @@ export function closureEvidenceCommand(
     comparisonPath: options["comparison-path"],
     finalArtifact,
     workspace,
+    integrated:
+      options["integrated-release"] === undefined
+        ? undefined
+        : {
+            release: options["integrated-release"],
+            buildReceiptPath: options["build-record-path"],
+            buildReceiptSha256: sha256(buildBytes),
+            comparisonSha256: sha256(evidenceText),
+          },
   });
   write(options["build-record-out"], buildBytes);
-  write(options.out, `${JSON.stringify(evidence, null, 2)}\n`);
+  write(options.out, evidenceText);
   write(options.closure, `${JSON.stringify(next, null, 2)}\n`);
   log(
     `closure evidence written: ${next.conditions.filter((c) => c.status === "VERIFIED").length} conditions VERIFIED`,

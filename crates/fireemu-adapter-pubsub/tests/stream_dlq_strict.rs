@@ -546,24 +546,27 @@ impl OwnedPushReceiver {
         (callback, address)
     }
 }
+async fn create_loopback_push_subscription(server: &Server, address: std::net::SocketAddr) {
+    SubscriberClient::new(server.channel().await)
+        .create_subscription(pb::Subscription {
+            name: format!("{SUB}-push"),
+            topic: TOPIC.into(),
+            push_config: Some(pb::PushConfig {
+                push_endpoint: format!("http://{address}/push"),
+                ..Default::default()
+            }),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+}
 #[tokio::test]
 async fn strict_native_publication_pull_and_loopback_push_share_one_wire_identity() {
     for profile in [PubSubProfile::Strict, PubSubProfile::Emulator] {
         let server = Server::new(profile).await;
         resources(&server).await;
         let (mut callback, address) = OwnedPushReceiver::new().await;
-        SubscriberClient::new(server.channel().await)
-            .create_subscription(pb::Subscription {
-                name: format!("{SUB}-push"),
-                topic: TOPIC.into(),
-                push_config: Some(pb::PushConfig {
-                    push_endpoint: format!("http://{address}/push"),
-                    ..Default::default()
-                }),
-                ..Default::default()
-            })
-            .await
-            .unwrap();
+        create_loopback_push_subscription(&server, address).await;
         let published = PublisherClient::new(server.channel().await)
             .publish(pb::PublishRequest {
                 topic: TOPIC.into(),
@@ -652,5 +655,64 @@ async fn strict_native_publication_pull_and_loopback_push_share_one_wire_identit
             .into_inner()
             .received_messages
             .is_empty());
+    }
+}
+
+#[tokio::test]
+async fn streaming_properties_follow_profile_and_subscription_configuration() {
+    // Exhaust the two profile and two ordering states; only unordered strict is a production claim.
+    for profile in [PubSubProfile::Strict, PubSubProfile::Emulator] {
+        for ordered in [false, true] {
+            let server = Server::new(profile).await;
+            resources(&server).await;
+            let name = format!("{SUB}-properties");
+            let mut client = SubscriberClient::new(server.channel().await);
+            client
+                .create_subscription(pb::Subscription {
+                    name: name.clone(),
+                    topic: TOPIC.into(),
+                    enable_message_ordering: ordered,
+                    ..Default::default()
+                })
+                .await
+                .unwrap();
+            PublisherClient::new(server.channel().await)
+                .publish(pb::PublishRequest {
+                    topic: TOPIC.into(),
+                    messages: vec![pb::PubsubMessage {
+                        data: b"x".to_vec(),
+                        ..Default::default()
+                    }],
+                })
+                .await
+                .unwrap();
+            let (tx, rx) = tokio::sync::mpsc::channel(1);
+            tx.send(pb::StreamingPullRequest {
+                subscription: name,
+                stream_ack_deadline_seconds: 10,
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+            let mut stream = client
+                .streaming_pull(tokio_stream::wrappers::ReceiverStream::new(rx))
+                .await
+                .unwrap()
+                .into_inner();
+            let response = tokio::time::timeout(Duration::from_secs(2), stream.message())
+                .await
+                .unwrap()
+                .unwrap()
+                .unwrap();
+            let expected = (profile == PubSubProfile::Strict).then_some(
+                pb::streaming_pull_response::SubscriptionProperties {
+                    exactly_once_delivery_enabled: false,
+                    message_ordering_enabled: ordered,
+                },
+            );
+            assert_eq!(response.subscription_properties, expected);
+            drop(stream);
+            drop(tx);
+        }
     }
 }

@@ -37,11 +37,8 @@
       ],
       "labels": {},
       "eventTrigger": {
-        "eventType": "fireemu.h.cafe60000001",
-        "eventFilters": {
-          "source": "//fireemu/handler/cafe60000001",
-          "tenant": "hcafe60000001"
-        },
+        "eventType": "fireemu.h.cafe60000001.filtered",
+        "eventFilters": {},
         "retry": false,
         "channel": "locations/us-central1/channels/firebase"
       },

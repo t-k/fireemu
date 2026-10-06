@@ -104,7 +104,10 @@ export function judgeH({ manifest: m, observations, capture }) {
           (e) =>
             e.id === frame.event.id &&
             e.source === frame.event.source &&
-            (e.type === undefined || e.type === frame.event.type),
+            (e.type === undefined ||
+              (e.type === frame.event.type &&
+                ((frame.handler === m.observe && e.type === m.type) ||
+                  (frame.handler === m.filtered && e.type === m.filteredType)))),
         ),
     );
     const received = (handler) => matching.filter((f) => f.frame.handler === handler);

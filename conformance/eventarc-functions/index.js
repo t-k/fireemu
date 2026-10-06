@@ -7,7 +7,6 @@ const run = process.env.EVENTARC_H_RUN_ID;
 if (!/^[a-f0-9]{12}$/.test(run || "")) throw new Error("EVENTARC_H_RUN_ID must be 12 hex digits");
 const type = `fireemu.h.${run}`;
 const source = `//fireemu/handler/${run}`;
-const tenant = `h${run}`;
 const observe = `fe${run}HObserve`;
 const filtered = `fe${run}HFiltered`;
 const options = { eventType: type, region: "us-central1", minInstances: 0, maxInstances: 2 };
@@ -52,6 +51,6 @@ exports[observe] = onCustomEventPublished({ ...options, retry: true }, async (ev
 });
 
 exports[filtered] = onCustomEventPublished(
-  { ...options, filters: { source, tenant }, retry: false },
+  { ...options, eventType: `${type}.filtered`, retry: false },
   (event) => report(filtered, event, "succeeded", randomUUID()),
 );

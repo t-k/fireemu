@@ -485,14 +485,7 @@ export async function recordH({
       if (!p.refused && !p.negativeHandlers?.length) {
         observation.expectedRecipients = (observation.body?.events ?? []).flatMap((e) => {
           const handlers =
-            e.type === m.type
-              ? [
-                  m.observe,
-                  ...(e.source === m.source && e.attributes?.tenant?.ceString === m.tenant
-                    ? [m.filtered]
-                    : []),
-                ]
-              : [];
+            e.type === m.type ? [m.observe] : e.type === m.filteredType ? [m.filtered] : [];
           return handlers.map((handler) => ({ handler, id: e.id, source: e.source }));
         });
       }
@@ -505,15 +498,17 @@ export async function recordH({
       const both = [m.observe, m.filtered];
       const receivedBoth = (o) =>
         both.every((handler) =>
-          o.candidates.some((e) =>
-            capture
-              .result()
-              .frames.some(
-                (f) =>
-                  f.frame.handler === handler &&
-                  f.frame.event.id === e.id &&
-                  f.frame.event.source === e.source,
-              ),
+          o.candidates.some(
+            (e) =>
+              e.type === (handler === m.observe ? m.type : m.filteredType) &&
+              capture
+                .result()
+                .frames.some(
+                  (f) =>
+                    f.frame.handler === handler &&
+                    f.frame.event.id === e.id &&
+                    f.frame.event.source === e.source,
+                ),
           ),
         );
       if (p.control && !receivedBoth(observation)) throw new Error("H control missing");
@@ -841,14 +836,15 @@ export async function hA2({
       if (name)
         names.set(name, { host, version: ["functions", "run"].includes(host) ? "v2" : "v1" });
   const facts = [];
+  let channelTopic;
   let requests = 0;
   const collections = new Map();
   const order = (name) =>
     name.includes("/functions/")
       ? 0
-      : name === recording.marker
+      : name === recording.manifest?.channel
         ? 2
-        : name === recording.manifest?.channel
+        : name === recording.marker
           ? 3
           : 1;
   for (const [name, { host, version }] of [...names].sort(([a], [b]) => order(a) - order(b))) {
@@ -902,6 +898,14 @@ export async function hA2({
               reply.body.name === name
             ? "present"
             : "unknown";
+      if (
+        name === recording.manifest?.channel &&
+        host === "eventarc" &&
+        read === "present" &&
+        typeof reply.body.pubsubTopic === "string" &&
+        reply.body.pubsubTopic.startsWith(`projects/${recording.manifest.project}/topics/`)
+      )
+        channelTopic = reply.body.pubsubTopic;
     }
     const creation = recording.writes.find((w) => w.name === name && w.action === "create");
     const deletion = recording.writes.find((w) => w.name === name && w.action === "delete");
@@ -924,12 +928,21 @@ export async function hA2({
       !collection &&
       read === "present" &&
       !deletion &&
-      facts.every((f) => f.closed) &&
+      facts.every(
+        (f) =>
+          f.closed ||
+          (name === recording.manifest?.channel && f.name === channelTopic && f.confirmed),
+      ) &&
       [...(recording.cleanup.unconfirmed ?? []), ...(recording.cleanup.unsettled ?? [])].every(
         (n) =>
           n === recording.marker ||
           n === recording.manifest?.channel ||
-          facts.some((f) => f.name === n && f.closed),
+          facts.some(
+            (f) =>
+              f.name === n &&
+              (f.closed ||
+                (name === recording.manifest?.channel && n === channelTopic && f.confirmed)),
+          ),
       ) &&
       ((host === "firestore" && name === recording.marker && creation?.state === "confirmed") ||
         (host === "eventarc" &&
@@ -1013,6 +1026,44 @@ export async function hA2({
           !hUnknown(absent) && evidence.notFound(absent, { host, method: "GET", path })
             ? "absent"
             : "unknown";
+        // The exact topic reported by the channel survives until its owner's DELETE.
+        const topicFact = facts.find((f) => f.name === channelTopic);
+        if (host === "eventarc" && topicFact) {
+          let topicRead = "unknown";
+          try {
+            const items = await hReadList(
+              {
+                request: async (spec) => {
+                  const reply = await transports.pubsub.request(spec);
+                  if (!evidence.readiness(reply, { ...spec, host: "pubsub" }))
+                    throw new Error("H A2 channel topic shape");
+                  return reply;
+                },
+              },
+              {
+                path: `/v1/projects/${recording.manifest.project}/topics?pageSize=100`,
+                key: "topics",
+                phase: "a2",
+              },
+              () => {
+                if (++requests > H_LIMITS.a2) throw new Error("H A2 ceiling");
+              },
+            );
+            topicRead = items.some((t) => t.name === channelTopic) ? "present" : "absent";
+          } catch {}
+          Object.assign(
+            topicFact,
+            { read: topicRead },
+            hDisposition({
+              create: topicFact.confirmed ? "confirmed" : "unknown",
+              deletion: write.state,
+              read: topicRead,
+              mode: "run",
+            }),
+          );
+          if (read !== "absent") topicFact.closed = false;
+          note("h-a2-read", topicFact);
+        }
       }
     }
     const latestDeletion = recording.writes.findLast(

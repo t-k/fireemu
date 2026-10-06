@@ -238,14 +238,13 @@ export function hManifestProblems(endpoints, m) {
   for (const name of [m.observe, m.filtered]) {
     const e = endpoints[name];
     const t = e.eventTrigger;
-    const filters = name === m.observe ? {} : { source: m.source, tenant: m.tenant };
     if (
       e.platform !== "gcfv2" ||
       JSON.stringify(e.region) !== '["us-central1"]' ||
-      t?.eventType !== m.type ||
+      t?.eventType !== (name === m.observe ? m.type : m.filteredType) ||
       t?.channel !== "locations/us-central1/channels/firebase" ||
       t?.retry !== (name === m.observe) ||
-      JSON.stringify(t?.eventFilters) !== JSON.stringify(filters) ||
+      JSON.stringify(t?.eventFilters) !== "{}" ||
       e.minInstances !== 0 ||
       e.maxInstances !== 2
     )

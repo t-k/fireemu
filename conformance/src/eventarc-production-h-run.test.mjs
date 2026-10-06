@@ -67,10 +67,10 @@ test("H manifest discovery refuses implicit regions and filter or endpoint drift
     minInstances: 0,
     maxInstances: 2,
     eventTrigger: {
-      eventType: m.type,
+      eventType: name === m.observe ? m.type : m.filteredType,
       channel: "locations/us-central1/channels/firebase",
       retry: name === m.observe,
-      eventFilters: name === m.observe ? {} : { source: m.source, tenant: m.tenant },
+      eventFilters: {},
     },
   });
   const endpoints = { [m.observe]: e(m.observe), [m.filtered]: e(m.filtered) };
@@ -258,7 +258,7 @@ function hWorld({
         trigger: `projects/${m.project}/locations/us-central1/triggers/${name.toLowerCase()}-actual`,
         triggerRegion: "us-central1",
         channel: m.channel,
-        eventType: m.type,
+        eventType: name === m.observe ? m.type : m.filteredType,
         retryPolicy: name === m.observe ? "RETRY_POLICY_RETRY" : "RETRY_POLICY_DO_NOT_RETRY",
       },
     };
@@ -267,15 +267,7 @@ function hWorld({
     name: f.eventTrigger.trigger,
     channel: m.channel,
     destination: { cloudFunction: f.name },
-    eventFilters: [
-      { attribute: "type", value: m.type },
-      ...(f.name.endsWith(m.filtered)
-        ? [
-            { attribute: "source", value: m.source },
-            { attribute: "tenant", value: m.tenant },
-          ]
-        : []),
-    ],
+    eventFilters: [{ attribute: "type", value: f.eventTrigger.eventType }],
     transport: {
       pubsub: {
         topic: `projects/${m.project}/topics/managed-${f.name.split("/").at(-1)}`,
@@ -456,7 +448,12 @@ function hWorld({
       const refused = events.length > 100 || events.some((e) => !e.type);
       if (refused) return { status: 400, body: { error: { status: "INVALID_ARGUMENT" } } };
       for (const e of events) {
-        if (e.type !== m.type || !e.attributes.time || e.attributes.convbytes) continue;
+        if (
+          ![m.type, m.filteredType].includes(e.type) ||
+          !e.attributes.time ||
+          e.attributes.convbytes
+        )
+          continue;
         const event = {
           id: e.id,
           source: e.source,
@@ -469,10 +466,7 @@ function hWorld({
         const caseId = /^fe[a-f0-9]{12}-h-(.+)-\d+$/.exec(e.id)?.[1] ?? event.data.case;
         const retry = caseId === "retry";
         if (retry) marker = true;
-        for (const handler of [
-          m.observe,
-          ...(e.source === m.source && event.tenant === m.tenant ? [m.filtered] : []),
-        ]) {
+        for (const handler of [e.type === m.type ? m.observe : m.filtered]) {
           for (const attempt of retry && handler === m.observe
             ? ["failed", "succeeded"]
             : ["succeeded"]) {
@@ -2022,4 +2016,290 @@ test("H partial deploy inventories managed children before their function DELETE
   const unreadable = hWorld({ partial: true, badChild: true });
   await recordH(unreadable.options);
   assert.equal(unreadable.deleted.includes(m.observe), true);
+});
+
+// Projection of H1 v4 summary.json and summary-a2-20261006T075832Z.json; no native secrets.
+const hV4Recording = {
+  manifest: {
+    project: "fireemu-oracle-events",
+    runId: "a4b6c8d0e2f4",
+    channel: "projects/fireemu-oracle-events/locations/us-central1/channels/firebase",
+  },
+  stopped: "H deploy failed; no redeploy",
+  cleanup: {
+    unconfirmed: [
+      "projects/fireemu-oracle-events/locations/us-central1/functions/fea4b6c8d0e2f4HFiltered",
+      "projects/fireemu-oracle-events/locations/us-central1/channels/firebase",
+    ],
+    unsettled: ["projects/fireemu-oracle-events/topics/eventarc-channel-us-central1-firebase-956"],
+  },
+  baseline: { status: 404 },
+  identities: [
+    {
+      function:
+        "projects/fireemu-oracle-events/locations/us-central1/functions/fea4b6c8d0e2f4HObserve",
+      service:
+        "projects/fireemu-oracle-events/locations/us-central1/services/fea4b6c8d0e2f4hobserve",
+      trigger:
+        "projects/fireemu-oracle-events/locations/us-central1/triggers/fea4b6c8d0e2f4hobserve-705370",
+      topic: "projects/fireemu-oracle-events/topics/eventarc-channel-us-central1-firebase-956",
+      subscription:
+        "projects/fireemu-oracle-events/subscriptions/eventarc-us-central1-fea4b6c8d0e2f4hobserve-705370-sub-863",
+    },
+  ],
+  writes: [
+    {
+      name: "projects/fireemu-oracle-events/locations/us-central1/functions/fea4b6c8d0e2f4HObserve",
+      host: "functions",
+      action: "create",
+      state: "confirmed",
+    },
+    {
+      name: "projects/fireemu-oracle-events/locations/us-central1/channels/firebase",
+      host: "eventarc",
+      action: "create",
+      state: "confirmed",
+    },
+    {
+      name: "projects/fireemu-oracle-events/locations/us-central1/functions/fea4b6c8d0e2f4HFiltered",
+      host: "functions",
+      action: "create",
+      state: "unknown",
+    },
+    {
+      name: "projects/fireemu-oracle-events/locations/us-central1/functions/fea4b6c8d0e2f4HObserve",
+      host: "functions",
+      action: "delete",
+      state: "confirmed",
+    },
+  ],
+  lastRequestAt: 0,
+};
+const hV4Facts = [
+  {
+    name: "projects/fireemu-oracle-events/locations/us-central1/functions/fea4b6c8d0e2f4HObserve",
+    read: "absent",
+    confirmed: true,
+    closed: true,
+    canDelete: false,
+    unconfirmed: false,
+  },
+  {
+    name: "projects/fireemu-oracle-events/locations/us-central1/functions/fea4b6c8d0e2f4HFiltered",
+    read: "absent",
+    confirmed: false,
+    closed: false,
+    canDelete: false,
+    unconfirmed: true,
+  },
+  {
+    name: "projects/fireemu-oracle-events/locations/us-central1/services/fea4b6c8d0e2f4hobserve",
+    read: "absent",
+    confirmed: true,
+    closed: true,
+    canDelete: false,
+    unconfirmed: false,
+  },
+  {
+    name: "projects/fireemu-oracle-events/locations/us-central1/triggers/fea4b6c8d0e2f4hobserve-705370",
+    read: "absent",
+    confirmed: true,
+    closed: true,
+    canDelete: false,
+    unconfirmed: false,
+  },
+  {
+    name: "projects/fireemu-oracle-events/topics/eventarc-channel-us-central1-firebase-956",
+    read: "present",
+    confirmed: true,
+    closed: false,
+    canDelete: false,
+    unconfirmed: false,
+  },
+  {
+    name: "projects/fireemu-oracle-events/subscriptions/eventarc-us-central1-fea4b6c8d0e2f4hobserve-705370-sub-863",
+    read: "absent",
+    confirmed: true,
+    closed: true,
+    canDelete: false,
+    unconfirmed: false,
+  },
+  {
+    name: "projects/fireemu-oracle-events/locations/us-central1/channels/firebase",
+    read: "present",
+    confirmed: true,
+    closed: false,
+    canDelete: true,
+    unconfirmed: false,
+  },
+];
+
+test("H A2 replays v4 channel topic dependency without accepting the refused unknown CREATE", async () => {
+  const { hA2 } = await import("./eventarc-production/h-record.mjs");
+  for (const scenario of [
+    "original",
+    "settled",
+    "settled-marker",
+    "unrelated-topic",
+    "topic-stays",
+    "unknown-delete",
+    "missing-topic",
+    "foreign-topic",
+    "dependent-trigger",
+    "preexisting-channel",
+  ]) {
+    const recording = structuredClone(hV4Recording);
+    const channel = recording.manifest.channel;
+    const topic = recording.identities[0].topic;
+    // Only the replay input models external settlement; production code never accepts unknown CREATE.
+    if (scenario !== "original")
+      recording.writes.find((w) => w.name.endsWith("HFiltered")).state = "failed";
+    if (scenario === "unrelated-topic") recording.cleanup.unsettled.push(`${topic}-unowned`);
+    if (scenario === "preexisting-channel") recording.baseline.status = 200;
+    if (scenario === "settled-marker") {
+      recording.marker =
+        "projects/fireemu-oracle-events/databases/(default)/documents/fe_h_a4b6c8d0e2f4/owned";
+      recording.writes.push({
+        name: recording.marker,
+        host: "firestore",
+        action: "create",
+        state: "confirmed",
+      });
+      recording.cleanup.unsettled.push(recording.marker);
+    }
+    let deleted = false;
+    let markerDeleted = false;
+    const calls = [];
+    const result = await hA2({
+      recording,
+      now: () => 600000,
+      note: () => {},
+      evidence: {
+        a2ListRuling: true,
+        readiness: () => true,
+        notFound: (r) => r.status === 404,
+        retention: async () => ({ complete: true, atBaseline: true }),
+      },
+      transports: Object.fromEntries(
+        ["functions", "run", "eventarc", "pubsub", "firestore"].map((host) => [
+          host,
+          {
+            request: async (spec) => {
+              calls.push({ host, ...spec });
+              if (host === "firestore") {
+                if (spec.method === "DELETE") {
+                  assert.equal(deleted, true);
+                  assert.equal(spec.path, `/v1/${recording.marker}`);
+                  markerDeleted = true;
+                  return { status: 200, body: {} };
+                }
+                return markerDeleted
+                  ? { status: 404, body: {} }
+                  : { status: 200, body: { name: recording.marker } };
+              }
+              if (spec.method === "DELETE") {
+                assert.equal(host, "eventarc");
+                assert.equal(spec.path, `/v1/${channel}`);
+                deleted = true;
+                return scenario === "unknown-delete"
+                  ? { status: 503, unknown: true, body: {} }
+                  : {
+                      status: 200,
+                      body: {
+                        name: "projects/fireemu-oracle-events/locations/us-central1/operations/delete-channel",
+                        metadata: { target: channel },
+                        done: true,
+                      },
+                    };
+              }
+              if (spec.path === `/v1/${channel}`)
+                return deleted
+                  ? { status: 404, body: {} }
+                  : {
+                      status: 200,
+                      body: {
+                        name: channel,
+                        ...(scenario === "missing-topic"
+                          ? {}
+                          : {
+                              pubsubTopic:
+                                scenario === "foreign-topic"
+                                  ? "projects/foreign-project/topics/foreign"
+                                  : topic,
+                            }),
+                      },
+                    };
+              const key = spec.path.split("?")[0].split("/").at(-1);
+              const items =
+                key === "topics" && (!deleted || scenario === "topic-stays")
+                  ? [{ name: topic }]
+                  : key === "triggers" && scenario === "dependent-trigger"
+                    ? [{ name: "dependent", channel }]
+                    : [];
+              return { status: 200, body: { [key]: items } };
+            },
+          },
+        ]),
+      ),
+    });
+    if (scenario === "original") {
+      assert.deepEqual(result.facts, hV4Facts);
+      assert.deepEqual(result.unresolvedInventory, [
+        ...recording.cleanup.unconfirmed,
+        ...recording.cleanup.unsettled,
+      ]);
+      assert.equal(recording.writes.find((w) => w.name.endsWith("HFiltered")).state, "unknown");
+    }
+    const shouldDelete = ["settled", "settled-marker", "topic-stays", "unknown-delete"].includes(
+      scenario,
+    );
+    assert.equal(deleted, shouldDelete, scenario);
+    assert.equal(result.cleanupReady, ["settled", "settled-marker"].includes(scenario), scenario);
+    if (shouldDelete) {
+      const deletionIndex = calls.findIndex((c) => c.method === "DELETE");
+      assert.equal(
+        calls
+          .slice(deletionIndex + 1)
+          .some((c) => c.host === "pubsub" && c.path.includes("/topics")),
+        true,
+        scenario,
+      );
+      assert.equal(
+        result.facts.find((f) => f.name === topic).read,
+        scenario === "topic-stays" ? "present" : "absent",
+        scenario,
+      );
+      assert.equal(
+        result.facts.find((f) => f.name === topic).closed,
+        ["settled", "settled-marker"].includes(scenario),
+        scenario,
+      );
+    }
+    assert.equal(result.closureReady, false, scenario);
+  }
+});
+
+test("H controls require a matching type receipt for each handler before continuing", async () => {
+  const world = hWorld();
+  const request = world.options.transports.logging.request;
+  world.options.transports.logging.request = async (spec) => {
+    const reply = await request(spec);
+    const entries = structuredClone(reply.body.entries ?? []);
+    const observed = entries
+      .map((e) => JSON.parse(e.textPayload.slice("FE_EVENTS_FRAME ".length)))
+      .find((f) => f.handler === m.observe);
+    for (const entry of entries) {
+      const frame = JSON.parse(entry.textPayload.slice("FE_EVENTS_FRAME ".length));
+      if (frame.handler !== m.filtered || !observed) continue;
+      frame.event = observed.event;
+      frame.correlation = observed.correlation;
+      frame.eventKeys = observed.eventKeys;
+      entry.textPayload = `FE_EVENTS_FRAME ${JSON.stringify(frame)}`;
+    }
+    return { ...reply, body: { ...reply.body, entries } };
+  };
+  const result = await recordH(world.options);
+  assert.equal(result.stopped, "H control missing");
+  assert.equal(result.publishes.length, 1);
+  assert.equal(result.closureReady, false);
 });

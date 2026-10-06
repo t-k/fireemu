@@ -261,8 +261,8 @@ test("H handler retains native event members and writes a fail-once marker only 
   assert.equal(Object.hasOwn(endpoints[0], "filters"), false);
   assert.equal(endpoints[0].minInstances, 0);
   assert.equal(endpoints[0].maxInstances, 2);
-  assert.equal(endpoints[1].filters.source, manifest.source);
-  assert.equal(endpoints[1].filters.tenant, manifest.tenant);
+  assert.equal(endpoints[1].eventType, manifest.filteredType);
+  assert.equal(Object.hasOwn(endpoints[1], "filters"), false);
   assert.equal(endpoints[1].retry, false);
   await exports[manifest.observe](event);
   assert.equal(transactions, 0);
@@ -599,4 +599,39 @@ test("H retry received after the window remains incomplete even with timely log 
     }).complete,
     false,
   );
+});
+
+test("H controls publish both exclusive types and keep source and tenant outside trigger filters", () => {
+  assert.equal(manifest.filteredType, `${manifest.type}.filtered`);
+  const plan = hPublishes(manifest);
+  for (const control of plan.filter((p) => p.control))
+    assert.deepEqual(
+      control.body.events.map((e) => e.type),
+      [manifest.type, manifest.filteredType],
+    );
+  const mixed = plan.find((p) => p.case === "multi").body.events;
+  assert.equal(mixed[0].type, manifest.filteredType);
+  assert.equal(mixed[1].type, manifest.type);
+  assert.equal(mixed[2].type, manifest.type);
+  for (const caseId of ["wrong-source", "wrong-tenant", "missing-tenant"])
+    assert.equal(plan.find((p) => p.case === caseId).body.events[0].type, manifest.type);
+});
+
+test("H refuses cross-type handler receipts even when matching receipts also exist", () => {
+  const candidate = { id: event.id, source: event.source, type: manifest.type };
+  const observation = { case: "object", candidates: [candidate], known: true, status: 200 };
+  const correct = { frame };
+  const unexpected = { frame: { ...frame, handler: manifest.filtered } };
+  const capture = { complete: true, finalRead: true, frames: [correct, unexpected] };
+  assert.equal(judgeH({ manifest, observations: [observation], capture }).complete, false);
+  const filteredEvent = { ...event, type: manifest.filteredType };
+  const filteredObservation = {
+    ...observation,
+    candidates: [{ ...candidate, type: manifest.filteredType }],
+    expectedRecipients: [{ ...candidate, handler: manifest.filtered }],
+  };
+  capture.frames = [{ frame: { ...frame, handler: manifest.filtered, event: filteredEvent } }];
+  assert.equal(judgeH({ manifest, observations: [filteredObservation], capture }).complete, true);
+  capture.frames.push({ frame: { ...frame, event: filteredEvent } });
+  assert.equal(judgeH({ manifest, observations: [filteredObservation], capture }).complete, false);
 });

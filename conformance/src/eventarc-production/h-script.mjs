@@ -21,6 +21,7 @@ export function hManifest({ project, runId = randomBytes(6).toString("hex") }) {
     observe: `fe${runId}HObserve`,
     filtered: `fe${runId}HFiltered`,
     type: `fireemu.h.${runId}`,
+    filteredType: `fireemu.h.${runId}.filtered`,
     source: `//fireemu/handler/${runId}`,
     tenant: `h${runId}`,
     channel: `projects/${project}/locations/us-central1/channels/firebase`,
@@ -49,7 +50,8 @@ export function hPublishes(m) {
   });
   const add = (caseId, events, extra = {}) =>
     requests.push({ case: caseId, body: { events }, ...extra });
-  const control = (caseId) => add(caseId, [event(caseId)], { control: true });
+  const control = (caseId) =>
+    add(caseId, [event(caseId), event(caseId, { type: m.filteredType })], { control: true });
   const bracket = (caseId, events, extra = {}) => {
     control(`${caseId}-before`);
     add(caseId, events, { windowMs: 120_000, ...extra });
@@ -68,7 +70,7 @@ export function hPublishes(m) {
   binary.attributes.datacontenttype = { ceString: "application/octet-stream" };
   add("binary", [binary]);
   const mixed = [
-    event("multi-match"),
+    event("multi-match", { type: m.filteredType }),
     event("multi-source-miss", { source: `${m.source}/miss` }),
     event("multi-tenant-miss"),
   ];

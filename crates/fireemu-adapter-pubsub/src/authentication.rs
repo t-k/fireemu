@@ -2,7 +2,7 @@
 
 use axum::body::Body;
 use axum::extract::State;
-use axum::http::{header::AUTHORIZATION, HeaderMap, Request};
+use axum::http::{header::AUTHORIZATION, HeaderMap, Request, Uri};
 use axum::middleware::Next;
 use axum::response::Response;
 
@@ -10,10 +10,19 @@ use crate::PagingPolicy;
 
 pub(crate) const INVALID_CREDENTIAL_MESSAGE: &str = "Request had invalid authentication credentials. Expected OAuth 2 access token, login cookie or other valid authentication credential. See https://developers.google.com/identity/sign-in/web/devconsole-project.";
 
-fn credential_rejected(policy: PagingPolicy, headers: &HeaderMap) -> bool {
+fn credential_rejected(policy: PagingPolicy, headers: &HeaderMap, uri: &Uri) -> bool {
     // There is no trusted Google OAuth verifier. A present credential is unsupported,
     // including empty, duplicated and undecodable values; it is never anonymous.
-    policy == PagingPolicy::Strict && headers.contains_key(AUTHORIZATION)
+    policy == PagingPolicy::Strict
+        && (headers.contains_key(AUTHORIZATION)
+            || headers.contains_key("x-goog-api-key")
+            || uri.query().is_some_and(|query| {
+                query.split('&').any(|pair| {
+                    let name = pair.split_once('=').map_or(pair, |(name, _)| name);
+                    crate::rest::decode_query(name)
+                        .is_ok_and(|name| matches!(name.as_str(), "access_token" | "key"))
+                })
+            }))
 }
 
 pub(crate) async fn authenticate(
@@ -21,11 +30,11 @@ pub(crate) async fn authenticate(
     request: Request<Body>,
     next: Next,
 ) -> Response {
-    if credential_rejected(policy, request.headers()) {
+    if credential_rejected(policy, request.headers(), request.uri()) {
         if native_request(request.uri().path()) {
             return tonic::Status::unauthenticated(INVALID_CREDENTIAL_MESSAGE).into_http::<Body>();
         }
-        return crate::rest::unauthenticated(request.method(), request.uri().path());
+        return crate::rest::unauthenticated(request.method(), request.uri().path(), policy);
     }
     next.run(request).await
 }
@@ -55,8 +64,20 @@ mod tests {
                 let value = value.iter().copied().filter(|byte| *byte != 0x7f).collect::<Vec<_>>();
                 headers.append(AUTHORIZATION, HeaderValue::from_bytes(&value).unwrap());
             }
-            prop_assert_eq!(credential_rejected(PagingPolicy::Strict, &headers), !values.is_empty());
-            prop_assert!(!credential_rejected(PagingPolicy::Emulator, &headers));
+            prop_assert_eq!(credential_rejected(PagingPolicy::Strict, &headers, &Uri::from_static("/")), !values.is_empty());
+            prop_assert!(!credential_rejected(PagingPolicy::Emulator, &headers, &Uri::from_static("/")));
+        }
+
+        #[test]
+        fn credential_carriers_match_presence_reference(
+            carrier in 0usize..12, value in "[a-zA-Z0-9%+._-]{0,32}", api_key in any::<bool>(),
+        ) {
+            let names = ["access_token", "key", "%61ccess_token", "%6bey", "access%5ftoken", "Access_token", "Key", "access-token", "key_suffix", "api_key", "access+token", "%ff"];
+            let uri: Uri = format!("/v1/projects/demo-app/topics/t?unrelated={value}&{}={value}", names[carrier]).parse().unwrap();
+            let mut headers = HeaderMap::new();
+            if api_key { headers.append("X-Goog-Api-Key", HeaderValue::from_static("")); }
+            prop_assert_eq!(credential_rejected(PagingPolicy::Strict, &headers, &uri), api_key || carrier < 5);
+            prop_assert!(!credential_rejected(PagingPolicy::Emulator, &headers, &uri));
         }
 
         #[test]

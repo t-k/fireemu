@@ -26,6 +26,7 @@ mod convert;
 mod publisher;
 mod push;
 mod rest;
+mod rest_json;
 mod subscriber;
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};

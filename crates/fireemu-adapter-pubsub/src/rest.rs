@@ -26,13 +26,14 @@ use crate::convert::{
     is_declared_subscription_field, is_declared_topic_field, validate_subscription_update_paths,
     validate_topic_options, SUPPORTED_SUBSCRIPTION_FIELDS,
 };
+use crate::rest_json::Schema;
 use crate::{PubSubHandle, MAX_MESSAGE_BYTES};
 use fireemu_proto_pubsub::google::pubsub::v1 as pb;
 
 const MAX_JSON_BYTES: usize = MAX_MESSAGE_BYTES + 1024 * 1024;
 
 #[derive(Debug)]
-struct RestError {
+pub(crate) struct RestError {
     status: StatusCode,
     code: &'static str,
     message: String,
@@ -113,16 +114,23 @@ impl RestError {
     }
 }
 
-pub(crate) fn unauthenticated(method: &Method, path: &str) -> Response {
+pub(crate) fn unauthenticated(
+    method: &Method,
+    path: &str,
+    policy: crate::PagingPolicy,
+) -> Response {
     let details = recorded_auth_method(method, path).map(|method| {
         json!([{"@type":"type.googleapis.com/google.rpc.ErrorInfo","reason":"CREDENTIALS_MISSING","metadata":{"method":format!("google.pubsub.v1.Publisher.{method}"),"service":"pubsub.googleapis.com"}}])
     });
-    error_response(RestError {
-        status: StatusCode::UNAUTHORIZED,
-        code: "UNAUTHENTICATED",
-        message: crate::authentication::INVALID_CREDENTIAL_MESSAGE.to_owned(),
-        details,
-    })
+    error_response(
+        RestError {
+            status: StatusCode::UNAUTHORIZED,
+            code: "UNAUTHENTICATED",
+            message: crate::authentication::INVALID_CREDENTIAL_MESSAGE.to_owned(),
+            details,
+        },
+        policy,
+    )
 }
 
 fn recorded_auth_method(method: &Method, path: &str) -> Option<&'static str> {
@@ -159,7 +167,7 @@ pub(crate) async fn handle(request: Request<Body>, handle: PubSubHandle) -> Resp
             } else {
                 format!("request body is too large: {error}")
             };
-            return error_response(RestError::invalid(message));
+            return error_response(RestError::invalid(message), handle.paging_policy);
         }
     };
     let value = if body.is_empty() {
@@ -168,15 +176,18 @@ pub(crate) async fn handle(request: Request<Body>, handle: PubSubHandle) -> Resp
         match serde_json::from_slice::<Value>(&body) {
             Ok(value) => value,
             Err(error) => {
-                return error_response(RestError::invalid(format!(
-                    "request body is not JSON: {error}"
-                )));
+                return error_response(
+                    RestError::invalid(format!("request body is not JSON: {error}")),
+                    handle.paging_policy,
+                );
             }
         }
     };
 
     match dispatch(&method, &path, &query, &value, &handle) {
-        Ok((status, response)) => json_response(status, response),
+        Ok((status, response, schema)) => {
+            json_response(status, response, handle.paging_policy, schema)
+        }
         Err(error)
             if handle.paging_policy == crate::PagingPolicy::Strict
                 && method == Method::GET
@@ -193,7 +204,7 @@ pub(crate) async fn handle(request: Request<Body>, handle: PubSubHandle) -> Resp
             if handle.paging_policy == crate::PagingPolicy::Strict && error.details.is_none() {
                 error.details = filter_error_details(&error.message);
             }
-            error_response(error)
+            error_response(error, handle.paging_policy)
         }
     }
 }
@@ -241,7 +252,7 @@ fn dispatch(
     query: &str,
     body: &Value,
     handle: &PubSubHandle,
-) -> Result<(StatusCode, Value), RestError> {
+) -> Result<(StatusCode, Value, Schema), RestError> {
     let parts = path
         .strip_prefix("/v1/")
         .ok_or_else(|| RestError::not_found("Pub/Sub REST paths must start with /v1/"))?
@@ -270,7 +281,7 @@ fn dispatch_topic(
     query: &str,
     body: &Value,
     handle: &PubSubHandle,
-) -> Result<(StatusCode, Value), RestError> {
+) -> Result<(StatusCode, Value, Schema), RestError> {
     if parts.is_empty() {
         if *method != Method::GET {
             return Err(RestError::method_not_allowed());
@@ -291,6 +302,7 @@ fn dispatch_topic(
         return Ok((
             StatusCode::OK,
             paged_collection_json("topics", topics, query, handle)?,
+            Schema::Topics,
         ));
     }
     if parts.len() == 2
@@ -321,6 +333,11 @@ fn dispatch_topic(
         return Ok((
             StatusCode::OK,
             paged_collection_json(parts[1], resources, query, handle)?,
+            if parts[1] == "subscriptions" {
+                Schema::Subscriptions
+            } else {
+                Schema::Snapshots
+            },
         ));
     }
     if parts.len() != 1 {
@@ -329,6 +346,11 @@ fn dispatch_topic(
 
     let (topic_id, operation) = split_operation(parts);
     let topic = TopicName::new(project, topic_id).map_err(RestError::from_core)?;
+    let schema = if operation == Some("publish") {
+        Schema::Publish
+    } else {
+        Schema::Topic
+    };
     match (method, operation) {
         (&Method::PUT, None) => create_topic(&topic, body, handle),
         (&Method::PATCH, None) => update_topic(&topic, body),
@@ -358,6 +380,7 @@ fn dispatch_topic(
         (&Method::POST, Some("publish")) => publish(topic, body, handle),
         _ => Err(RestError::method_not_allowed()),
     }
+    .map(|(status, value)| (status, value, schema))
 }
 
 fn create_topic(
@@ -448,7 +471,7 @@ fn paged_collection_json(
     Ok(response)
 }
 
-fn decode_query(value: &str) -> Result<String, RestError> {
+pub(crate) fn decode_query(value: &str) -> Result<String, RestError> {
     let mut decoded = Vec::with_capacity(value.len());
     let mut bytes = value.bytes();
     while let Some(byte) = bytes.next() {
@@ -495,7 +518,7 @@ fn dispatch_subscription(
     query: &str,
     body: &Value,
     handle: &PubSubHandle,
-) -> Result<(StatusCode, Value), RestError> {
+) -> Result<(StatusCode, Value, Schema), RestError> {
     if parts.is_empty() {
         if *method != Method::GET {
             return Err(RestError::method_not_allowed());
@@ -509,6 +532,7 @@ fn dispatch_subscription(
         return Ok((
             StatusCode::OK,
             paged_collection_json("subscriptions", subscriptions, query, handle)?,
+            Schema::Subscriptions,
         ));
     }
     if parts.len() != 1 {
@@ -518,6 +542,11 @@ fn dispatch_subscription(
     let (subscription_id, operation) = split_operation(parts);
     let subscription =
         SubscriptionName::new(project, subscription_id).map_err(RestError::from_core)?;
+    let schema = if operation == Some("pull") {
+        Schema::Pull
+    } else {
+        Schema::Subscription
+    };
     match (method, operation) {
         (&Method::PUT, None) => create_subscription(&subscription, body, handle),
         (&Method::GET, None) => get_subscription(subscription, handle),
@@ -557,6 +586,7 @@ fn dispatch_subscription(
         (&Method::POST, Some("seek")) => seek(subscription, body, handle),
         _ => Err(RestError::method_not_allowed()),
     }
+    .map(|(status, value)| (status, value, schema))
 }
 
 fn dispatch_snapshot(
@@ -566,7 +596,7 @@ fn dispatch_snapshot(
     query: &str,
     body: &Value,
     handle: &PubSubHandle,
-) -> Result<(StatusCode, Value), RestError> {
+) -> Result<(StatusCode, Value, Schema), RestError> {
     if parts.is_empty() {
         if *method != Method::GET {
             return Err(RestError::method_not_allowed());
@@ -580,6 +610,7 @@ fn dispatch_snapshot(
         return Ok((
             StatusCode::OK,
             paged_collection_json("snapshots", snapshots, query, handle)?,
+            Schema::Snapshots,
         ));
     }
     if parts.len() != 1 {
@@ -652,6 +683,7 @@ fn dispatch_snapshot(
         }
         _ => Err(RestError::method_not_allowed()),
     }
+    .map(|(status, value)| (status, value, Schema::Snapshot))
 }
 
 #[allow(clippy::needless_pass_by_value)]
@@ -1670,8 +1702,13 @@ fn timestamp_json(instant: LogicalInstant) -> String {
 }
 
 #[allow(clippy::needless_pass_by_value)]
-fn json_response(status: StatusCode, value: Value) -> Response {
-    let body = serde_json::to_vec(&value).unwrap_or_else(|_| b"{}".to_vec());
+fn json_response(
+    status: StatusCode,
+    value: Value,
+    policy: crate::PagingPolicy,
+    schema: Schema,
+) -> Response {
+    let body = crate::rest_json::encode(&value, policy, schema);
     Response::builder()
         .status(status)
         .header("content-type", "application/json")
@@ -1680,13 +1717,13 @@ fn json_response(status: StatusCode, value: Value) -> Response {
 }
 
 #[allow(clippy::needless_pass_by_value)]
-fn error_response(error: RestError) -> Response {
+fn error_response(error: RestError, policy: crate::PagingPolicy) -> Response {
     let mut body =
         json!({"error":{"code":error.status.as_u16(),"status":error.code,"message":error.message}});
     if let Some(details) = error.details {
         body["error"]["details"] = details;
     }
-    json_response(error.status, body)
+    json_response(error.status, body, policy, Schema::ErrorEnvelope)
 }
 
 #[cfg(test)]

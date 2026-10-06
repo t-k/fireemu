@@ -1346,6 +1346,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::too_many_lines)]
     fn a_token_is_accepted_only_when_every_part_of_its_structure_is_right() {
         let good = Token::good();
         let position = Position::parse(&good.text()).expect("the control parses");

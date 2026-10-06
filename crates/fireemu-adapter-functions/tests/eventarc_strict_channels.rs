@@ -654,6 +654,7 @@ fn the_events_an_existing_channel_accepts_are_the_recorded_ones() {
     }
 }
 
+#[allow(clippy::too_many_lines)]
 fn refusals() -> Vec<Case<'static>> {
     let mut cases: Vec<Case<'static>> = Vec::new();
     for (member, wanted) in [
@@ -853,7 +854,7 @@ fn the_limits_of_a_publication_are_the_recorded_ones() {
     // The key of an attribute is `ce-` and its name: 259 bytes were refused. INFERRED: the boundary.
     let named = |length: usize| {
         changed(|e| {
-            e["attributes"][format!("n{}", "a".repeat(length - 1))] = json!({"ceString": "v"})
+            e["attributes"][format!("n{}", "a".repeat(length - 1))] = json!({"ceString": "v"});
         })
     };
     assert_eq!(publish(&server, &channel, &[named(253)]).status, 200);

@@ -907,7 +907,7 @@ fn publish_events(runtime: &FunctionsRuntime, channel: &str, body: &[u8]) -> Res
         match converted {
             Ok(event) => published.push(event),
             Err(why) => {
-                eprintln!("[functions] eventarc: an event on {channel} was not delivered: {why}")
+                eprintln!("[functions] eventarc: an event on {channel} was not delivered: {why}");
             }
         }
     }
@@ -1250,7 +1250,7 @@ fn deliver_strict(
         match crate::eventarc::convert(event) {
             Ok(event) => published.push(event),
             Err(why) => {
-                eprintln!("[functions] eventarc: an event on {channel} was not delivered: {why}")
+                eprintln!("[functions] eventarc: an event on {channel} was not delivered: {why}");
             }
         }
     }

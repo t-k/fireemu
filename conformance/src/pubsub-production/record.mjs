@@ -177,6 +177,7 @@ export function createSignalSleep({ wait = sleep, signals = process } = {}) {
       }
     },
     close() {
+      controller.abort();
       for (const name of ["SIGINT", "SIGTERM"]) signals.removeListener(name, stop);
     },
   };

@@ -151,19 +151,45 @@ test("E/V exports bind a canonical ledger line hash and the complete approved sc
   }
 });
 
-test("signal interrupts a900second sleep promptly and removes handlers", async () => {
+test("signal interrupts a900second sleep promptly and removes handlers", async (t) => {
   const { createSignalSleep } = await import("./pubsub-production/record.mjs");
   assert.equal(typeof createSignalSleep, "function");
   for (const signal of ["SIGINT", "SIGTERM"]) {
     const signals = new EventEmitter();
     const stopped = createSignalSleep({ signals });
+    t.after(() => stopped.close());
     const wait = stopped.sleep(900_000);
     signals.emit(signal);
-    await assert.rejects(wait, StopClean);
+    const { setTimeout } = await import("node:timers/promises");
+    const result = await Promise.race([
+      wait.then(
+        () => null,
+        (error) => error,
+      ),
+      setTimeout(100).then(() => "not-interrupted"),
+    ]);
+    assert.ok(result instanceof StopClean, "signal must interrupt without waiting900seconds");
     assert.equal(stopped.isStopping(), true);
     await assert.rejects(stopped.sleep(1), StopClean);
     stopped.close();
     assert.equal(signals.listenerCount("SIGINT"), 0);
     assert.equal(signals.listenerCount("SIGTERM"), 0);
   }
+});
+
+test("closing signal sleep aborts pending waits and releases their timer", async () => {
+  const { createSignalSleep } = await import("./pubsub-production/record.mjs");
+  const signals = new EventEmitter();
+  let signal;
+  const stopped = createSignalSleep({
+    signals,
+    wait: (_, received) => {
+      signal = received;
+      return Promise.resolve();
+    },
+  });
+  const promise = stopped.sleep(900_000).catch((error) => error);
+  stopped.close();
+  assert.equal(signal.aborted, true);
+  assert.ok((await promise) instanceof StopClean);
 });

@@ -211,7 +211,9 @@ while True:
         "invocationId": msg["invocationId"],
         "functionName": name,
         "user": True,
-        "fields": {"code": 47, "nested": {"attempts": [1, 2]}},
+        "fields": {"code": 47, "nested": {"attempts": [1, 2]}, **(
+            {"location": msg["event"]["location"]} if name == "locationProbe" else {}
+        )},
     })
     if "fail" in name:
         send({"type": "result", "invocationId": msg["invocationId"], "ok": False, "error": f"{name} failed"})

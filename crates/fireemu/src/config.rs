@@ -973,6 +973,8 @@ pub struct RuntimeConfig {
     pub edition: FirestoreEdition,
     /// API mode.
     pub api_mode: FirestoreApiMode,
+    /// `firestore.location`: database location used by strict second-generation Firestore events. Defaults to `nam5`; the emulator profile keeps `nam5` regardless of this setting.
+    pub firestore_location: String,
     /// Index validation policy, derived from the profile (no key of its own).
     pub index_policy: IndexValidationPolicy,
     /// Whether a Standard query limit violation refuses the query
@@ -1365,6 +1367,7 @@ impl Default for RuntimeConfig {
             storage_addr: "127.0.0.1:9199".to_owned(),
             edition: FirestoreEdition::Standard,
             api_mode: FirestoreApiMode::Native,
+            firestore_location: "nam5".to_owned(),
             index_policy: profile.index_policy(),
             enforce_limits: profile.enforce_limits(),
             token_acceptance: profile.token_acceptance(),
@@ -3503,6 +3506,15 @@ impl RuntimeConfig {
             loopback_host(bind, "bind")?;
         }
         if let Some(fs) = obj.get("firestore").and_then(Value::as_object) {
+            if let Some(value) = fs.get("location") {
+                value
+                    .as_str()
+                    .filter(|location| !location.is_empty() && location.trim() == *location)
+                    .ok_or_else(|| {
+                        ConfigError("firestore.location must be a non-empty string without surrounding whitespace".to_owned())
+                    })?
+                    .clone_into(&mut cfg.firestore_location);
+            }
             if let Some(e) = fs.get("edition").and_then(Value::as_str) {
                 cfg.edition = FirestoreEdition::parse_config_str(e)
                     .ok_or_else(|| ConfigError(format!("unknown firestore.edition {e:?}")))?;
@@ -4000,6 +4012,29 @@ mod tests {
             base.insert(k, v);
         }
         RuntimeConfig::from_json(&json)
+    }
+
+    #[test]
+    fn firestore_event_location_defaults_to_nam5_and_accepts_configuration() {
+        for profile in ["strict", "emulator"] {
+            for (firestore, expected) in [
+                (json!({}), "nam5"),
+                (json!({"location": "us-central1"}), "us-central1"),
+            ] {
+                let cfg = RuntimeConfig::from_json(&json!({
+                    "schemaVersion": 1, "profile": profile, "firestore": firestore
+                }))
+                .unwrap();
+                assert_eq!(cfg.firestore_location, expected);
+            }
+        }
+        for bad in [json!(null), json!(1), json!(""), json!(" us-central1 ")] {
+            let error = RuntimeConfig::from_json(&json!({
+                "schemaVersion": 1, "firestore": {"location": bad}
+            }))
+            .unwrap_err();
+            assert!(error.0.contains("firestore.location"), "{error}");
+        }
     }
 
     #[test]

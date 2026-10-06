@@ -2668,7 +2668,10 @@ pub async fn start(
     let config = FunctionsConfig {
         project: cfg.auth_project.clone(),
         default_bucket: format!("{}.appspot.com", cfg.auth_project),
-        location: "nam5".to_owned(),
+        location: match cfg.profile {
+            CompatibilityProfile::Strict => cfg.firestore_location.clone(),
+            CompatibilityProfile::Emulator => "nam5".to_owned(),
+        },
         session: SessionId::new(u128::from(cfg.seed)),
         max_running: cfg.functions_max_running,
         debug_mode: cfg.functions_inspect_dynamic || cfg.functions_inspect_port.is_some(),
@@ -6175,6 +6178,105 @@ mod tests {
         let error = validate_functions_codebase_budget(&codebases).unwrap_err();
         assert!(error.contains("33 selected Functions codebases"), "{error}");
         assert!(error.contains("local safety budget of 32"), "{error}");
+    }
+
+    #[tokio::test]
+    async fn startup_delivers_the_configured_firestore_location_only_under_strict() {
+        use fireemu_adapter_grpc::gateway::Gateway;
+        use fireemu_adapter_grpc::local::{Actor, CommitEvent, LocalBackend};
+        use fireemu_core_firestore::index::{IndexSet, PlanningContext};
+        use fireemu_core_firestore::path::DocumentPath;
+        use fireemu_core_firestore::store::{CommitVersion, Document, DocumentChange};
+        use fireemu_core_types::ids::{DatabaseId, ProjectId};
+
+        let dir =
+            std::env::temp_dir().join(format!("fireemu-event-location-{}", std::process::id()));
+        let source = dir.join("src");
+        std::fs::create_dir_all(&source).unwrap();
+        let manifest_path = dir.join("manifest.json");
+        std::fs::write(&manifest_path, json!({"functions": [{
+            "name": "locationProbe", "generation": 2,
+            "trigger": {"type": "firestore", "eventType": "google.cloud.firestore.document.v1.created", "document": "items/{id}"}
+        }]}).to_string()).unwrap();
+        let script = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../fireemu-adapter-functions/tests/fake_runner.py");
+        let hosts = super::EmulatorHosts {
+            firestore: None,
+            auth: None,
+            storage: None,
+            functions: None,
+            eventarc: None,
+            tasks: None,
+            logging: None,
+            pubsub: None,
+            hub: None,
+        };
+        for (profile, firestore, expected) in [
+            ("strict", json!({}), "nam5"),
+            ("strict", json!({"location": "us-central1"}), "us-central1"),
+            ("emulator", json!({}), "nam5"),
+            ("emulator", json!({"location": "us-central1"}), "nam5"),
+        ] {
+            let mut cfg = crate::config::RuntimeConfig::from_json(&json!({
+                "schemaVersion": 1, "profile": profile, "firestore": firestore
+            }))
+            .unwrap();
+            cfg.functions_source = Some(source.display().to_string());
+            cfg.functions_runner = Some(vec!["python3".to_owned(), script.display().to_string()]);
+            cfg.functions_manifest = Some(manifest_path.display().to_string());
+            let clock = Arc::new(Mutex::new(VirtualClock::new(cfg.clock_start)));
+            let backend = Arc::new(LocalBackend::new(
+                Gateway {
+                    ctx: PlanningContext {
+                        edition: cfg.edition,
+                        api_mode: cfg.api_mode,
+                        policy: cfg.index_policy,
+                    },
+                    indexes: IndexSet::default(),
+                    enforce_limits: cfg.enforce_limits,
+                },
+                clock.clone(),
+                cfg.seed,
+            ));
+            let runtime = super::start(&cfg, &clock, &backend, &hosts, "test-secret", false)
+                .await
+                .unwrap();
+            let path = DocumentPath::parse(
+                &ProjectId::try_new("demo-app").unwrap(),
+                &DatabaseId::default_database(),
+                "items/one",
+            )
+            .unwrap();
+            runtime.on_commit(&CommitEvent {
+                actor: Actor::system(),
+                project: "demo-app".to_owned(),
+                database: DatabaseId::DEFAULT.to_owned(),
+                version: 1,
+                commit_time: Some(cfg.clock_start),
+                changes: Arc::from(vec![DocumentChange {
+                    path: path.clone(),
+                    before: None,
+                    after: Some(Arc::new(Document {
+                        path,
+                        fields: BTreeMap::new(),
+                        create_time: cfg.clock_start,
+                        update_time: cfg.clock_start,
+                        version: CommitVersion::default(),
+                    })),
+                }]),
+            });
+            let idle = runtime.await_idle(Duration::from_secs(5)).await;
+            let logs = runtime.runner().logs_since(None);
+            runtime.shutdown().await;
+            idle.unwrap();
+            let log = logs
+                .lines
+                .iter()
+                .find(|line| line.function() == Some("locationProbe"))
+                .expect("the event reached the runner");
+            assert_eq!(log.fields()["location"], expected, "{profile}: {firestore}");
+        }
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     fn claims_for(

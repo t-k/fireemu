@@ -344,7 +344,8 @@ export function recordingTimingDebts(capture) {
     try {
       const start = recordedRequestInstant(row);
       const boundary = capture.find(
-        (entry) => entry.note === "case-start" && entry.case === row.case,
+        (entry) =>
+          entry.note === "case-start" && entry.case?.split("/")[0] === row.case?.split("/")[0],
       );
       if (boundary && start < Date.parse(boundary.at))
         debts.push("case request time containment invalid");

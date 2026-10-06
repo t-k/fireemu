@@ -439,33 +439,36 @@ test("closed run boundaries and valid chronology gate replay and MATCH", async (
 });
 
 test("measured request duration must fit inside its case without inventing a dispatch tolerance", async () => {
-  for (const [dispatchSeconds, endSeconds, ms] of [
-    [10, 11, 5000],
-    [100, 101, 100000],
-  ]) {
-    const input = layoutInput();
-    const at = (seconds) => new Date(Date.UTC(2026, 9, 5) + seconds * 1000).toISOString();
-    input.capture.forEach((row) => {
-      row.at = at(endSeconds);
-    });
-    input.capture[0].at = at(0);
-    input.capture[1].at = at(10);
-    input.capture[2].at = at(dispatchSeconds);
-    input.capture[3].ms = ms;
-    input.issued.forEach((row) => {
-      row.at = at(endSeconds);
-    });
-    input.issued[0].at = at(dispatchSeconds);
-    const report = await core.compareRecording(input, { replay: echoReplay });
-    assert.equal(
-      report.cases.find((r) => r.case === "rest-layout-routes").verdict,
-      "NOT_COMPARABLE",
-    );
-    assert.match(
-      report.cases.find((r) => r.case === "rest-layout-routes").reasons.join(";"),
-      /case.*time/,
-    );
-  }
+  for (const boundarySuffix of ["/rest", ""])
+    for (const [dispatchSeconds, endSeconds, ms] of [
+      [10, 11, 5000],
+      [100, 101, 100000],
+    ]) {
+      const input = layoutInput();
+      const at = (seconds) => new Date(Date.UTC(2026, 9, 5) + seconds * 1000).toISOString();
+      input.capture.forEach((row) => {
+        row.at = at(endSeconds);
+      });
+      input.capture[0].at = at(0);
+      input.capture[1].at = at(10);
+      input.capture[1].case = `rest-layout-routes${boundarySuffix}`;
+      input.capture.at(-2).case = input.capture[1].case;
+      input.capture[2].at = at(dispatchSeconds);
+      input.capture[3].ms = ms;
+      input.issued.forEach((row) => {
+        row.at = at(endSeconds);
+      });
+      input.issued[0].at = at(dispatchSeconds);
+      const report = await core.compareRecording(input, { replay: echoReplay });
+      assert.equal(
+        report.cases.find((r) => r.case === "rest-layout-routes").verdict,
+        "NOT_COMPARABLE",
+      );
+      assert.match(
+        report.cases.find((r) => r.case === "rest-layout-routes").reasons.join(";"),
+        /case.*time/,
+      );
+    }
 });
 
 test("a delayed request retains its measured duration and replays its dispatch instant", async () => {

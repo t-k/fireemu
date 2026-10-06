@@ -343,6 +343,11 @@ export function recordingTimingDebts(capture) {
     if (row.request === undefined || row.response === undefined) continue;
     try {
       const start = recordedRequestInstant(row);
+      const boundary = capture.find(
+        (entry) => entry.note === "case-start" && entry.case === row.case,
+      );
+      if (boundary && start < Date.parse(boundary.at))
+        debts.push("case request time containment invalid");
       if (!Number.isFinite(previousRequestEnd) || start < previousRequestEnd)
         debts.push("recorded request start chronology invalid");
       previousRequestEnd = at;
@@ -511,7 +516,11 @@ export async function compareRecording(
           (!frames.length || frames.some((f) => !frameVerified(f)))
         )
           throw new Error("native raw frame provenance missing");
-        const actual = await replay(original, bindings.request(original), { bindings, frames });
+        const actual = await replay(original, bindings.request(original), {
+          bindings,
+          frames,
+          dispatch: dispatch[0],
+        });
         judgment = judgeRow(original, actual);
         if (original.op === "publish" && original.response.status === 200)
           bindings.linkPublish(original.request.body, original.response.body, actual.response.body);

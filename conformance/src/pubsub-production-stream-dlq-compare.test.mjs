@@ -438,7 +438,37 @@ test("closed run boundaries and valid chronology gate replay and MATCH", async (
   }
 });
 
-test("a delayed request replays its measured start without erasing its duration", async () => {
+test("measured request duration must fit inside its case without inventing a dispatch tolerance", async () => {
+  for (const [dispatchSeconds, endSeconds, ms] of [
+    [10, 11, 5000],
+    [100, 101, 100000],
+  ]) {
+    const input = layoutInput();
+    const at = (seconds) => new Date(Date.UTC(2026, 9, 5) + seconds * 1000).toISOString();
+    input.capture.forEach((row) => {
+      row.at = at(endSeconds);
+    });
+    input.capture[0].at = at(0);
+    input.capture[1].at = at(10);
+    input.capture[2].at = at(dispatchSeconds);
+    input.capture[3].ms = ms;
+    input.issued.forEach((row) => {
+      row.at = at(endSeconds);
+    });
+    input.issued[0].at = at(dispatchSeconds);
+    const report = await core.compareRecording(input, { replay: echoReplay });
+    assert.equal(
+      report.cases.find((r) => r.case === "rest-layout-routes").verdict,
+      "NOT_COMPARABLE",
+    );
+    assert.match(
+      report.cases.find((r) => r.case === "rest-layout-routes").reasons.join(";"),
+      /case.*time/,
+    );
+  }
+});
+
+test("a delayed request retains its measured duration and replays its dispatch instant", async () => {
   for (let seed = 0; seed < 64; seed++) {
     const start = Date.UTC(2026, 9, 5) + seed * 3_600_000;
     const duration = (seed * 37100) % 900_001;
@@ -715,6 +745,19 @@ test(
     assert.equal(report.runtime.pinnedExecParent, true);
     assert.equal(report.sourceEvidence, "fixture");
     assert.equal(report.compatibilityPromotion, false);
+    assert.equal(report.clock.basis, "recorded request-dispatch at");
+    for (const actual of report.clock.requests.filter((row) => row.n !== null)) {
+      const source = input.find((row) => row.n === actual.n);
+      const dispatch = input.find(
+        (row) =>
+          row.note === "request-dispatch" &&
+          row.case === source.case &&
+          row.step === source.step &&
+          row.op === source.op &&
+          row.transport === source.transport,
+      );
+      assert.equal(actual.instant, dispatch.at);
+    }
     const native = report.rows.filter((row) => row.op === "streamingPull");
     assert.equal(native.length, 4);
     assert.ok(
@@ -891,6 +934,7 @@ test("cleanup journal answers must agree with their captured exchange too", asyn
   input.capture.splice(-1, 0, {
     n: 8,
     at,
+    ms: 0,
     case: "cleanup",
     step: "01",
     op: "deleteTopic",
@@ -899,7 +943,10 @@ test("cleanup journal answers must agree with their captured exchange too", asyn
     response: { status: 200, body: {}, bodyBytes: 12 },
   });
   const entry = { at, name, action: "delete", transport: "rest", requestId: "cleanup#1" };
-  input.issued.push({ ...entry, phase: "sent" }, { ...entry, phase: "answered", kind: "error" });
+  input.issued.push({ ...entry, phase: "sent" }, { ...entry, phase: "answered", kind: "ok" });
+  const baseline = await core.compareRecording(input, { replay: echoReplay });
+  assert.equal(baseline.cases.find((row) => row.case === "rest-layout-routes").verdict, "MATCH");
+  input.issued.at(-1).kind = "error";
   const report = await core.compareRecording(input, { replay: echoReplay });
   assert.equal(
     report.cases.find((row) => row.case === "rest-layout-routes").verdict,

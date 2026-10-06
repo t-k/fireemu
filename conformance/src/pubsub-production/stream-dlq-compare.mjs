@@ -214,6 +214,7 @@ export async function replayLocal(input, environment, pin) {
   const rest = createRest({ base: `http://${target}`, budget, capture, getToken: localCredential });
   const grpc = createGrpc({ target, secure: false, budget, capture, getToken: localCredential });
   let logicalTime = -Infinity;
+  const clockRequests = [];
   async function advance(row) {
     const time = recordedRequestInstant(row);
     if (time < logicalTime) throw new Error("request logical time regressed");
@@ -233,12 +234,13 @@ export async function replayLocal(input, environment, pin) {
     );
     if (!response.ok) throw new Error("local clock advance refused");
     await response.arrayBuffer();
+    clockRequests.push({ n: row.n ?? null, instant: new Date(time).toISOString() });
   }
   try {
     await advance({ at: input.metadata.at, ms: 0 });
-    return await compareRecording(input, {
+    const report = await compareRecording(input, {
       frameVerified: (frame) => input.verifiedFrames.has(frame),
-      async replay(original, request, { bindings, frames }) {
+      async replay(original, request, { bindings, frames, dispatch }) {
         if (original.op === "streamingPull") validateStreamFrames(original, frames);
         const ownedFields = new Set([
           "name",
@@ -259,7 +261,8 @@ export async function replayLocal(input, environment, pin) {
         };
         check(request.body);
         check(request);
-        await advance(original);
+        if (!dispatch) throw new Error("recorded dispatch instant missing");
+        await advance({ n: original.n, at: dispatch.at, ms: 0 });
         const label = { case: original.case, step: original.step };
         const prior = captured.length,
           frameStart = wireFrames.length;
@@ -334,6 +337,7 @@ export async function replayLocal(input, environment, pin) {
         };
       },
     });
+    return { ...report, clock: { basis: "recorded request-dispatch at", requests: clockRequests } };
   } finally {
     grpc.close();
   }

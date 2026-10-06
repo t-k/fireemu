@@ -355,6 +355,12 @@ export const EXCLUDED_PARTS = [
  */
 export const EXCLUDED_KINDS = [
   {
+    kind: "functions-events-comparison",
+    reason:
+      "the comparison pairs the local answers of the Functions runner with frames of the two passes of one private production recording (FE v7) that is not published, made by a harness that drives a deployed Functions codebase through the Node runner and the Admin SDKs; the recordings must be published and the harness given a check and an export-comparison mode before the release job can rerun it; the rows were compared on the release binary of the integration commit named by the closure",
+    issue: "functions-events-comparison-needs-the-recordings-in-the-release-job.md",
+  },
+  {
     kind: "auth-fs-cross-stage2-comparison-v1",
     reason:
       "the stage-2 local window keeps production's timeline in real time (about 61 minutes on the v0.9.0 final artifact) and drives a browser client, which the 45-minute release job and its runner do not allow; the local tenant setup is no longer a reason (it runs outside the recorded harness), and the rows were compared on the final artifact",

@@ -83,11 +83,14 @@ test("functions that stay listed after the CLI delete get one REST delete each a
   assert.deepEqual(cliCalls, ["delete"], "no second CLI delete");
   assert.deepEqual(
     world.restDeletes.toSorted(),
-    HANDLERS.filter((h) => h.generation === 2)
-      .map((h) => h.name)
-      .toSorted(),
-    "one REST delete for each Gen2 function, none for Gen1",
+    HANDLERS.map((h) => h.name).toSorted(),
+    "v7: one REST delete for each of the 22 functions, Gen2 and Gen1",
   );
+  // the Gen2 functions go first, then the Gen1 ones, each in the order of its list
+  const sentOrder = world.restDeletes;
+  const firstGen1 = sentOrder.findIndex((name) => name.endsWith("V1"));
+  assert.ok(sentOrder.slice(0, firstGen1).every((name) => name.endsWith("V2")));
+  assert.ok(sentOrder.slice(firstGen1).every((name) => name.endsWith("V1")));
   assert.equal(
     slept.filter((s) => s === 30).length,
     5 + 3,
@@ -176,7 +179,7 @@ test("a REST delete with no usable answer is sent once and stops the other REST 
   assert.equal(result.steps.functions.rest[0].stopped, true);
 });
 
-test("a Gen1 function left behind and an unreadable list are not deleted by REST", async () => {
+test("v7: a Gen1 function left behind is deleted by REST like a Gen2 one; an unreadable list is not deleted from", async () => {
   const gen1 = setup();
   gen1.world.deploy();
   const first = await runCleanup({
@@ -188,12 +191,11 @@ test("a Gen1 function left behind and an unreadable list are not deleted by REST
     sleep: gen1.sleep,
     ran: { deployStarted: true },
   });
-  assert.equal(first.verified, false);
-  assert.deepEqual(gen1.world.restDeletes, []);
-  assert.equal(
-    gen1.slept.filter((x) => x === 30).length,
-    5,
-    "no REST delete, so no second round of list reads",
+  assert.equal(first.verified, true, JSON.stringify(first.problems));
+  assert.deepEqual(gen1.world.restDeletes, ["fsCreatedV1"]);
+  assert.deepEqual(
+    first.steps.functions.rest.map((r) => [r.name, r.generation, r.error]),
+    [["fsCreatedV1", 1, null]],
   );
   const unreadable = setup();
   unreadable.world.deploy();
@@ -388,4 +390,216 @@ test("a REST delete is sent only from a complete list, and a delete answer that 
     "one delete, no poll of a foreign operation, Gen1 and unknown names ignored",
   );
   assert.equal(done[0].polls, undefined);
+});
+
+// ---- v7: the Gen1 Storage functions the CLI delete left (v4's contention on the bucket's metadata) -------------------
+
+const gen1Storage = [
+  "storageFinalizedV1",
+  "storageDeletedV1",
+  "storageMetadataUpdatedV1",
+  "storageArchivedV1",
+];
+
+test("v7: the four Gen1 Storage functions the CLI delete left are deleted one at a time through /v1, each operation polled to done first", async () => {
+  const { world, transport, sleep } = setup();
+  world.deploy();
+  world.operationPolls = 2;
+  const cli = async (action) => {
+    world.undeploy({ stuck: gen1Storage });
+    return { action, exitCode: 0, errored: 4 };
+  };
+  const result = await runCleanup({ transport, cli, sleep, ran: { deployStarted: true } });
+  assert.equal(result.verified, true, JSON.stringify(result.problems));
+  assert.deepEqual(
+    world.restDeletes,
+    gen1Storage.toSorted((a, b) => gen1Order(a) - gen1Order(b)),
+  );
+  const sequence = world.requests
+    .filter(
+      (r) =>
+        r.url.includes("cloudfunctions.googleapis.com/v1/operations/") ||
+        (r.method === "DELETE" && r.url.includes("cloudfunctions.googleapis.com/v1/projects")),
+    )
+    .map((r) => `${r.method} ${r.url.includes("/operations/") ? "op" : r.url.split("/").at(-1)}`);
+  // DELETE a, op, op, op (two not done, one done), DELETE b, ...: the next delete only after the operation is done
+  const deletes = sequence.flatMap((entry, i) => (entry.startsWith("DELETE") ? [i] : []));
+  assert.equal(deletes.length, 4);
+  for (let i = 1; i < deletes.length; i += 1)
+    assert.equal(deletes[i] - deletes[i - 1], 4, sequence.join("\n"));
+  for (const entry of result.steps.functions.rest) {
+    assert.equal(entry.generation, 1);
+    assert.equal(entry.polls, 3);
+    assert.equal(entry.error, null);
+  }
+  assert.equal(result.steps.functions.cli.errored, 4);
+  assert.equal(result.steps.functions.summary.absent, true);
+});
+
+const gen1Order = (name) => gen1Storage.indexOf(name);
+
+test("v7: Gen1 and Gen2 leftovers together: Gen2 first, then Gen1, one at a time, and no second CLI delete", async () => {
+  const { world, transport, sleep } = setup();
+  world.deploy();
+  const cliCalls = [];
+  const cli = async (action) => {
+    cliCalls.push(action);
+    world.undeploy({ stuck: ["storageArchivedV2", "storageDeletedV1"] });
+    return { action, exitCode: 0, errored: 2 };
+  };
+  const result = await runCleanup({ transport, cli, sleep, ran: { deployStarted: true } });
+  assert.equal(result.verified, true, JSON.stringify(result.problems));
+  assert.deepEqual(cliCalls, ["delete"]);
+  assert.deepEqual(world.restDeletes, ["storageArchivedV2", "storageDeletedV1"]);
+});
+
+test("v7: a Gen1 REST delete whose operation ends in an error is sent once and leaves the run needs-recovery", async () => {
+  const { world, transport, sleep } = setup();
+  world.deploy();
+  world.restDeleteFails = true;
+  const cli = async (action) => {
+    world.undeploy({ stuck: ["storageArchivedV1"] });
+    return { action, exitCode: 0 };
+  };
+  const result = await runCleanup({ transport, cli, sleep, ran: { deployStarted: true } });
+  assert.equal(result.verified, false);
+  assert.deepEqual(world.restDeletes, ["storageArchivedV1"]);
+  assert.equal(result.steps.functions.rest[0].error.code, 13);
+  assert.ok(result.problems.some((p) => p.startsWith("functions:")));
+});
+
+test("v7: a Gen1 REST delete with no usable answer stops the other REST deletes, Gen1 and Gen2 alike, and is never re-sent", async () => {
+  const { world, transport, sleep } = setup();
+  world.deploy();
+  world.failures.push({
+    match: (method, url) =>
+      method === "DELETE" && url.includes("/v1/projects") && url.endsWith("storageFinalizedV1"),
+    status: 503,
+    times: 5,
+  });
+  const cli = async (action) => {
+    world.undeploy({ stuck: [...gen1Storage, "fsCreatedV2"] });
+    return { action, exitCode: 0 };
+  };
+  const result = await runCleanup({ transport, cli, sleep, ran: { deployStarted: true } });
+  assert.equal(result.verified, false);
+  const sent = world.requests
+    .filter((r) => r.method === "DELETE" && r.url.includes("/functions/"))
+    .map((r) => r.url.split("/").at(-1));
+  // fsCreatedV2 (Gen2) goes first and is done; storageFinalizedV1 has no usable answer; nothing after it is sent
+  assert.deepEqual(sent, ["fsCreatedV2", "storageFinalizedV1"]);
+  assert.equal(result.steps.functions.rest.at(-1).stopped, true);
+});
+
+test("v7: each list gates its own generation: an incomplete v1 list sends no Gen1 delete, an incomplete v2 list no Gen2 delete", async () => {
+  const { restDeleteLeftovers } = await import("./functions-events/record/cleanup.mjs");
+  const sent = [];
+  const request = async (spec) => {
+    sent.push(spec.id);
+    return { kind: "success", status: 200, json: {} };
+  };
+  const v1 = {
+    items: [{ name: "projects/p/locations/us-central1/functions/storageDeletedV1" }],
+    complete: true,
+  };
+  const v2 = {
+    items: [{ name: "projects/p/locations/us-central1/functions/storageDeletedV2" }],
+    complete: true,
+  };
+  await restDeleteLeftovers({
+    request,
+    sleep: async () => {},
+    lists: { v1: { ...v1, complete: false }, v2 },
+  });
+  assert.deepEqual(sent, ["cleanup.function-delete-storageDeletedV2"]);
+  sent.length = 0;
+  await restDeleteLeftovers({
+    request,
+    sleep: async () => {},
+    lists: { v1, v2: { ...v2, complete: false } },
+  });
+  assert.deepEqual(sent, ["cleanup.function-delete-storageDeletedV1"]);
+  sent.length = 0;
+  await restDeleteLeftovers({
+    request,
+    sleep: async () => {},
+    lists: { v1: { ...v1, complete: false }, v2: { ...v2, complete: false } },
+  });
+  assert.deepEqual(sent, []);
+  // a Gen2 name that shows in the v1 list is not deleted through /v1 (and a Gen1 name in the v2 list not through /v2)
+  await restDeleteLeftovers({
+    request,
+    sleep: async () => {},
+    lists: {
+      v1: {
+        items: [{ name: "projects/p/locations/us-central1/functions/storageDeletedV2" }],
+        complete: true,
+      },
+      v2: { items: [], complete: true },
+    },
+  });
+  assert.deepEqual(sent, [], "a Gen2 name in the v1 list is left alone");
+  // a name that is not one of the run's 22, in either list, is not deleted
+  await restDeleteLeftovers({
+    request,
+    sleep: async () => {},
+    lists: {
+      v1: {
+        items: [
+          { name: "projects/p/locations/us-central1/functions/someoneElsesV1" },
+          { name: "projects/p/locations/us-central1/functions/storagedeletedv1" },
+        ],
+        complete: true,
+      },
+      v2: {
+        items: [{ name: "projects/p/locations/us-central1/functions/storageDeletedV1" }],
+        complete: true,
+      },
+    },
+  });
+  assert.deepEqual(
+    sent,
+    [],
+    "unknown and lower-cased names, and a Gen1 name in the v2 list, are left alone",
+  );
+});
+
+test("v7: a Gen1 delete answer that names no operation, or another function's operation, is not polled", async () => {
+  const { restDeleteLeftovers } = await import("./functions-events/record/cleanup.mjs");
+  const item = { name: "projects/p/locations/us-central1/functions/storageDeletedV1" };
+  for (const json of [
+    {},
+    { name: "projects/fireemu-oracle-events/locations/us-central1/operations/x" },
+    {
+      name: "operations/abc",
+      metadata: {
+        target: "projects/fireemu-oracle-events/locations/us-central1/functions/fsCreatedV1",
+      },
+    },
+    {
+      name: "operations/",
+      metadata: {
+        target: "projects/fireemu-oracle-events/locations/us-central1/functions/storageDeletedV1",
+      },
+    },
+    {
+      name: "operations/a/b",
+      metadata: {
+        target: "projects/fireemu-oracle-events/locations/us-central1/functions/storageDeletedV1",
+      },
+    },
+  ]) {
+    const sent = [];
+    const request = async (spec) => {
+      sent.push(spec.id);
+      return { kind: "success", status: 200, json };
+    };
+    const done = await restDeleteLeftovers({
+      request,
+      sleep: async () => {},
+      lists: { v1: { items: [item], complete: true } },
+    });
+    assert.deepEqual(sent, ["cleanup.function-delete-storageDeletedV1"], JSON.stringify(json));
+    assert.equal(done[0].polls, undefined, JSON.stringify(json));
+  }
 });

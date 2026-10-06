@@ -52,12 +52,36 @@ export const formalHandlers = [
   "pubsubPublishedV2",
 ];
 
-const reviewedSets = [probeCanaries, formalHandlers];
-const isReviewedSet = (names) =>
+// v7: the four Gen1 Storage functions deploy one CLI command each, one after the other, in this order (storageFinalizedV1
+// first, then the order of the formal list): v6 deployed them with the other 18 in one command and three of the four failed
+// with "Failed to configure trigger providers/cloud.storage/eventTypes/object.change" (the triggers of one bucket created
+// at the same moment contend on its notification configuration; only the first, storageFinalizedV1, succeeded).
+export const gen1StorageDeployOrder = [
+  "storageFinalizedV1",
+  "storageDeletedV1",
+  "storageMetadataUpdatedV1",
+  "storageArchivedV1",
+];
+// The main deploy: every other function of the formal set, in the formal order.
+export const mainDeployHandlers = formalHandlers.filter(
+  (name) => !gen1StorageDeployOrder.includes(name),
+);
+
+const sameNames = (names, set) =>
   Array.isArray(names) &&
-  reviewedSets.some(
-    (set) => names.length === set.length && names.every((name, index) => name === set[index]),
-  );
+  names.length === set.length &&
+  names.every((name, index) => name === set[index]);
+// What each action may take: a deploy takes a whole reviewed set (the probe set, the formal set for the dry run, the main set) or
+// exactly one of the four Gen1 Storage functions; a delete takes the whole probe set or the whole formal set.
+const deploySets = [
+  probeCanaries,
+  formalHandlers,
+  mainDeployHandlers,
+  ...gen1StorageDeployOrder.map((name) => [name]),
+];
+const deleteSets = [probeCanaries, formalHandlers];
+const isReviewedSet = (names, action) =>
+  (action === "deploy" ? deploySets : deleteSets).some((set) => sameNames(names, set));
 
 function requireProject(projectId) {
   if (!/^[a-z][a-z0-9-]{4,28}[a-z0-9]$/.test(projectId)) {
@@ -102,7 +126,7 @@ function canaryEnvironment(projectId, options, captureMode) {
 // without it), and `--dry-run` appended last makes the same command prepare and validate without deploying.
 export function buildCanaryBatchCli(action, projectId, names, options) {
   requireProject(projectId);
-  if (!isReviewedSet(names)) {
+  if (!isReviewedSet(names, action)) {
     throw new Error("canary batch CLI takes exactly one reviewed set");
   }
   const captureMode = requireOptions(options);

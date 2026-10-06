@@ -323,6 +323,8 @@ export function checkWorkspaceReceipt(receipt, build) {
   if (receipt.command !== WORKSPACE_COMMAND)
     refuse(`the workspace regression receipt did not run ${WORKSPACE_COMMAND}`);
   if (receipt.exitCode !== 0) refuse("the workspace regression did not exit 0");
+  if (typeof receipt.source !== "string" || receipt.source.trim() === "")
+    refuse("the workspace regression receipt names no source (the run that made it)");
   const { passed, failed } = receipt.tests ?? {};
   if (!Number.isInteger(passed) || passed <= 0 || failed !== 0)
     refuse("the workspace regression receipt shows failed or no tests");
@@ -365,7 +367,10 @@ export function checkLedger(text, runDir) {
  * the repository's corpus all agree) and the production run (project, recordedAt and corpus digest). A comparison of another run
  * or another corpus is refused, never written as these recordings' evidence.
  */
-export function checkComparisonBinding(comparison, { run, corpusSha256, repoCorpusSha256 }) {
+export function checkComparisonBinding(
+  comparison,
+  { run, runSha256, corpusSha256, repoCorpusSha256 },
+) {
   if (!HEX64.test(comparison.corpusSha256 ?? "")) refuse("the comparison names no corpus digest");
   if (corpusSha256 !== repoCorpusSha256)
     refuse("--corpus is not the repository's conformance/functions-events/corpus.json");
@@ -383,6 +388,30 @@ export function checkComparisonBinding(comparison, { run, corpusSha256, repoCorp
     );
   if (recorded.corpusDigest !== run.corpusDigest)
     refuse("the comparison's production run names another corpus than --production-run");
+  if (!HEX64.test(recorded.sha256 ?? ""))
+    refuse("the comparison does not name the sha256 of its production run file");
+  if (recorded.sha256 !== runSha256)
+    refuse(
+      "the comparison is of another production run file than --production-run (sha256 differs)",
+    );
+}
+
+const COMPARATOR_DIR = "conformance/src/functions-events/compare";
+
+/** The comparator that judged the comparison: a commit and the tree of its directory at that commit, checked against git. */
+export function checkComparator(comparison, { git = defaultGit } = {}) {
+  const comparator = comparison.comparator;
+  if (
+    !plain(comparator) ||
+    !HEX40.test(comparator.commit ?? "") ||
+    !HEX40.test(comparator.tree ?? "")
+  )
+    refuse("the comparison does not name its comparator (a commit and the tree of its directory)");
+  const tree = String(git(["rev-parse", `${comparator.commit}:${COMPARATOR_DIR}`])).trim();
+  if (tree !== comparator.tree)
+    refuse(
+      "the comparator tree the comparison names is not the tree of that commit's comparator directory",
+    );
 }
 
 const defaultGit = (args) =>
@@ -469,6 +498,13 @@ export function applyClosure({
         sourceCommit: finalArtifact.sourceCommit,
         comparisonPath,
         rows: { MATCH: comparison.rows.length },
+        // The receipt itself is private; the record cites what it says and the run that made it.
+        workspaceRegression: {
+          sourceCommit: workspace.sourceCommit,
+          command: workspace.command,
+          tests: { passed: workspace.tests.passed, failed: workspace.tests.failed },
+          source: workspace.source,
+        },
       };
       continue;
     }
@@ -627,11 +663,13 @@ export function closureEvidenceCommand(
     "sandbox-ledger",
   ])
     if (!options[name]) refuse(`--${name} is required with --write`);
-  const run = JSON.parse(read(options["production-run"]));
+  const runText = read(options["production-run"]);
+  const run = JSON.parse(runText);
   const corpusSha256 = sha256(read(options.corpus));
   const recordings = recordingsFromRun(run, { corpusSha256 });
   checkComparisonBinding(comparison, {
     run,
+    runSha256: sha256(runText),
     corpusSha256,
     repoCorpusSha256: sha256(repoCorpus()),
   });
@@ -639,13 +677,18 @@ export function closureEvidenceCommand(
   const buildBytes = read(options["build-record"]);
   const finalArtifact = checkBuildRecord(JSON.parse(buildBytes), comparison);
   checkLocalBinary(comparison, finalArtifact, { git });
+  checkComparator(comparison, { git });
   const workspace = options["workspace-regression"]
     ? checkWorkspaceReceipt(JSON.parse(read(options["workspace-regression"])), finalArtifact)
     : undefined;
   const everyMatch = comparison.rows.every((row) => row.profiles.strict.status === "MATCH");
   const withGates = everyMatch && workspace !== undefined;
+  // The sessions' runner path is the absolute path of the checkout they ran from (someone's machine): it is judged above by the runner's
+  // digest and tree and is not published.
+  const { runnerPath: _runnerPath, ...publishedBinary } = comparison.localBinary;
   const evidence = {
     ...comparison,
+    localBinary: publishedBinary,
     rows: withGates ? [...comparison.rows, ...gateRows()] : comparison.rows,
     buildRecordPath: options["build-record-path"],
     buildRecordSha256: sha256(buildBytes),

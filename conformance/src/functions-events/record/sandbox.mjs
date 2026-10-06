@@ -21,10 +21,13 @@ import { isAbsolute, join, relative } from "node:path";
 
 export const TASK_ID = "FUNCTIONS-EVENTS-SANDBOX";
 export const PROJECT = "fireemu-oracle-events";
-export const TASK_CAP_USD = 34;
+// The task cap: US$34 until owner ledger 843 (US$40), then US$50 by the owner ledger line 856 (v6's three failed Gen1 Storage triggers
+// made the one-at-a-time v7 necessary): the counted 36.60 plus the v7 reserve of 4.00 is 40.60.
+export const TASK_CAP_USD = 50;
 export const RESERVE_USD = 4;
 export const MAX_REQUESTS = 520;
-export const CLI_MAX = 3;
+// Seven CLI runs (v7): the dry run of the 22, the main deploy of 18, one deploy for each of the four Gen1 Storage functions, the delete.
+export const CLI_MAX = 7;
 export const SPACING_MINUTES = 30;
 export const TOPIC = "FUNCTIONS-EVENTS formal";
 export const ENVELOPE_TOPIC = `${TOPIC} envelope`;

@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "parent": "FUNCTIONS-EVENTS",
-  "parentStatus": "IMPLEMENTING",
+  "parentStatus": "COMPAT_VERIFIED",
   "inventoryStatus": "FROZEN",
   "oracleTrack": "disposable-sandbox",
   "oracle": {
@@ -10,7 +10,22 @@
     "proposedRegion": "us-central1"
   },
   "closureReview": {
-    "decision": "PENDING"
+    "decision": "APPROVED",
+    "decidedOn": "2026-10-06",
+    "decider": "project coordinator (delegated by the owner)",
+    "reviewer": "independent read-only closure reviewer (Opus), clean context",
+    "reviewedCommit": "b415c359e8e7238e0b31df5233e8b8715d96c664",
+    "finalArtifactSha256": "c9d8b4d7b6f3035fd65ec80e3a6b3030720e5037a9ceef47d04d355c2a7d8f3f",
+    "reviews": [
+      {
+        "reviewer": "independent read-only closure reviewer (Opus)",
+        "scope": "b415c359e8e7238e0b31df5233e8b8715d96c664",
+        "reportPath": "docs.local/reviews/2026-10-06-fe-promotion-closure-review.md",
+        "reportSha256": "5d6c0340f455e7e29c1ffb78a3d8c8ffc8f2e58dca8ee92bb5345053bbecf22d",
+        "outcome": "APPROVE (Must Fix 0, Should Fix 0 open; delta review of b415c359e)"
+      }
+    ],
+    "followUps": "Compare the event listing members (contextKeys, contextExtras, eventKeys, extensionAttributes) locally: the fixture lists them in socket mode and the comparator compares the names and the values of location, project, database, namespace, document and bucket (closure review M1 option b; E13). Issues fe-events-traceparent-missing.md and fe-firestore-event-location-hardcoded.md (E13 b and c). The v0.12.0 tag must be cut from a commit with no diff from 8d5f9eb81 in crates, Cargo.*, rust-toolchain.toml, tools/runner-node and conformance/functions-events; otherwise re-run the FE comparison on the tag's build or rename integratedRegression.release (closure review M2)."
   },
   "scopeDecisions": [
     {
@@ -100,7 +115,7 @@
       "rationale": "The operator's email is environment state. Masking the value for unknown and not for api_key keeps a regression that sends the wrong id with an ID token a difference.",
       "reason": "Production's value is the operator's own credential identity; a local owner token carries none.",
       "evidence": "FE v5 (functions-events-formal-20261004T182904Z-a9621bfae74fe9bc) and FE v7 (functions-events-formal-20261005T041505Z-d3fd3faa3e0dc702): handler fsWrittenWithAuthContextV2, 16 frames over two runs, identical in both: an Admin write by the user credential is unknown with the operator's email, a client write with an ID token is api_key with the user's uid. Official emulator (firebase-tools 15.28.2, Firestore emulator jar 1.22.0): unknown and fake-auth-id@gmail.com for every writer, the emulator profile's value.",
-      "review": "PENDING (the closure review)",
+      "review": "APPROVED in the closure review 2026-10-06 (docs.local/reviews/2026-10-06-fe-promotion-closure-review.md, sha256 5d6c0340f455e7e29c1ffb78a3d8c8ffc8f2e58dca8ee92bb5345053bbecf22d)",
       "masks": [
         "authId-unknown-present",
         "authId-api_key-uid"
@@ -116,7 +131,7 @@
       "rationale": "Recorded nondeterminism between deployments: FE v5 834054 and 834, FE v7 293232 and 576, each fixed within a deployment, so the two passes of one run cannot show it varying.",
       "reason": "Per-deployment random numbers.",
       "evidence": "FE v5 (functions-events-formal-20261004T182904Z-a9621bfae74fe9bc) and FE v7 (functions-events-formal-20261005T041505Z-d3fd3faa3e0dc702): every v2 Pub/Sub frame of a run names the same subscription, the two runs differ in the numbers.",
-      "review": "PENDING (the closure review)",
+      "review": "APPROVED in the closure review 2026-10-06 (docs.local/reviews/2026-10-06-fe-promotion-closure-review.md, sha256 5d6c0340f455e7e29c1ffb78a3d8c8ffc8f2e58dca8ee92bb5345053bbecf22d)",
       "masks": [
         "pubsub-subscription-numbers"
       ],
@@ -131,7 +146,7 @@
       "rationale": "The protobuf map has no defined order, and production's REST answers swap the field order of one document between answers (FE v5 transport responses 0036 and 0037, 0043 to 0045).",
       "reason": "Ledger 840 (coordinator judgment, 2026-10-05): the member order of a Gen2 Firestore document map is not part of the contract.",
       "evidence": "Ledger line 840 of the owner-decisions ledger (FE v5 transport responses 0036, 0037, 0043 to 0045); the retry rows carry the same maps under the attempt that delivered them (FE v5 and FE v7 fsRetryV2, a Gen2 Firestore trigger).",
-      "review": "PENDING (the closure review)",
+      "review": "APPROVED in the closure review 2026-10-06 (docs.local/reviews/2026-10-06-fe-promotion-closure-review.md, sha256 5d6c0340f455e7e29c1ffb78a3d8c8ffc8f2e58dca8ee92bb5345053bbecf22d)",
       "masks": [
         "firestore-field-maps-unordered"
       ],
@@ -139,6 +154,18 @@
       "decidedBy": "coordinator (delegated)",
       "decidedOn": "2026-10-05",
       "decisionRef": "docs.local/instructions/owner-decisions.md (2026-10-05, FUNCTIONS-EVENTS Firestore Gen2 map member order, ledger line 840)"
+    },
+    {
+      "id": "E13",
+      "decision": "The comparison does not compare four members of the event listing, and two differences it hides are accepted. (a) Not compared: `contextKeys`, `contextExtras`, `eventKeys` and `extensionAttributes` are removed from both the production frames and the local frames before they are compared (the production-only paths of the comparator), because the local sessions never print them (the deployed fixture lists them only in its stdout capture mode, which the socket sessions do not use). So the CloudEvent extension attributes of a 2nd gen event and the extras of a 1st gen context are not judged by this closure; their names stay in the comparison as production-only listings, and no verdict depends on them. What covers them is Rust and runner tests, not production rows. (b) `traceparent`: every 2nd gen event of production carries it (142 of 142 frames in each of FE v5 and FE v7); fireemu sends none. (c) The `location` of a 2nd gen Firestore event: production reports the configured location of the database (us-central1 on the sandbox, 94 of 94 frames in each run); strict reports `nam5` (crates/fireemu/src/functions.rs, the Functions configuration), and fireemu cannot know the database's configured location. Nothing else is accepted by this decision: no comparator mask is involved, and the values of the other Firestore extensions (project, database, namespace, document) are not judged either.",
+      "rationale": "The closure comparison judges what the handler-visible fixture prints. The listing members that would show the two differences are absent from the local sessions, so they are declared here instead of compared. Comparing them is a follow-up (the fixture would list them in socket mode and the comparator would compare the names and the values of location, project, database, namespace, document and bucket).",
+      "reason": "The local sessions print no listing of the event's extension attributes; production's traceparent is not synthesized by fireemu, and fireemu has no way to read the database's configured location.",
+      "evidence": "FE v5 (functions-events-formal-20261004T182904Z-a9621bfae74fe9bc) and FE v7 (functions-events-formal-20261005T041505Z-d3fd3faa3e0dc702): traceparent is present in 142 of 142 2nd gen frames (Firestore, Storage and Pub/Sub) of each run, and the 2nd gen Firestore `location` is us-central1 in 94 of 94 frames of each run. fireemu: no traceparent anywhere in crates or tools/runner-node (the statements of the difference are test comments), and `location: \"nam5\"` in the Functions configuration of the daemon. Issues: fe-events-traceparent-missing.md (synthesize traceparent) and fe-firestore-event-location-hardcoded.md (make the Firestore event location configurable), both in docs.local/issues/open.",
+      "review": "APPROVED in the closure review 2026-10-06 (docs.local/reviews/2026-10-06-fe-promotion-closure-review.md, sha256 5d6c0340f455e7e29c1ffb78a3d8c8ffc8f2e58dca8ee92bb5345053bbecf22d)",
+      "status": "APPROVED",
+      "decidedBy": "coordinator (delegated)",
+      "decidedOn": "2026-10-06",
+      "decisionRef": "docs.local/runs/ownership-lane/coordinator-rulings.md (2026-10-06 08:50Z, ruling on M1) and the closure review docs.local/reviews/2026-10-06-fe-promotion-closure-review.md (M1)"
     }
   ],
   "conditions": [
@@ -153,12 +180,36 @@
         "before-absent",
         "after-present"
       ],
-      "status": "PENDING_CORPUS",
+      "status": "VERIFIED",
       "generations": [
         1,
         2
       ],
-      "note": "Accepted difference (scope decision E12, ledger line 840): the document field maps of a 2nd gen event are compared without regard to member order (`firestore-field-maps-unordered`); values are compared exactly."
+      "note": "Accepted difference (scope decision E12, ledger line 840): the document field maps of a 2nd gen event are compared without regard to member order (`firestore-field-maps-unordered`); values are compared exactly. Declared difference (scope decision E13): the closure comparison does not compare contextKeys, contextExtras, eventKeys and extensionAttributes, so the CloudEvent extension attributes and the 1st gen context extras of these events are judged by Rust and runner tests, not by production rows. Production sends traceparent on every 2nd gen event; fireemu sends none (accepted, E13 (b)). The 2nd gen Firestore location is the database's configured location in production (us-central1 on the sandbox) and nam5 in strict (accepted, E13 (c)).",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-10-05T04:29:28.498Z",
+            "project": "fireemu-oracle-events",
+            "corpusDigest": "003c76e1baac452946e7604d104e0f70aeb9bce967b3e31c20f6bf8b7b066f29",
+            "pass": 1
+          },
+          {
+            "recordedAt": "2026-10-05T05:06:13.645Z",
+            "project": "fireemu-oracle-events",
+            "corpusDigest": "003c76e1baac452946e7604d104e0f70aeb9bce967b3e31c20f6bf8b7b066f29",
+            "pass": 2
+          }
+        ],
+        "finalArtifactSha256": "c9d8b4d7b6f3035fd65ec80e3a6b3030720e5037a9ceef47d04d355c2a7d8f3f",
+        "comparisonPath": "spec/compatibility/closure/evidence/FUNCTIONS-EVENTS-comparison.json",
+        "rows": {
+          "MATCH": 6,
+          "DIFF": 0,
+          "INCOMPLETE": 0
+        },
+        "sourceCommit": "8d5f9eb8102447be91afe3f8a543288a2944812a"
+      }
     },
     {
       "conditionId": "FUNCTIONS-EVENTS/firestore-updated",
@@ -171,12 +222,36 @@
         "before-present",
         "after-present"
       ],
-      "status": "PENDING_CORPUS",
+      "status": "VERIFIED",
       "generations": [
         1,
         2
       ],
-      "note": "Accepted difference (scope decision E12, ledger line 840): the document field maps of a 2nd gen event are compared without regard to member order (`firestore-field-maps-unordered`); values are compared exactly."
+      "note": "Accepted difference (scope decision E12, ledger line 840): the document field maps of a 2nd gen event are compared without regard to member order (`firestore-field-maps-unordered`); values are compared exactly. Declared difference (scope decision E13): the closure comparison does not compare contextKeys, contextExtras, eventKeys and extensionAttributes, so the CloudEvent extension attributes and the 1st gen context extras of these events are judged by Rust and runner tests, not by production rows. Production sends traceparent on every 2nd gen event; fireemu sends none (accepted, E13 (b)). The 2nd gen Firestore location is the database's configured location in production (us-central1 on the sandbox) and nam5 in strict (accepted, E13 (c)).",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-10-05T04:29:28.498Z",
+            "project": "fireemu-oracle-events",
+            "corpusDigest": "003c76e1baac452946e7604d104e0f70aeb9bce967b3e31c20f6bf8b7b066f29",
+            "pass": 1
+          },
+          {
+            "recordedAt": "2026-10-05T05:06:13.645Z",
+            "project": "fireemu-oracle-events",
+            "corpusDigest": "003c76e1baac452946e7604d104e0f70aeb9bce967b3e31c20f6bf8b7b066f29",
+            "pass": 2
+          }
+        ],
+        "finalArtifactSha256": "c9d8b4d7b6f3035fd65ec80e3a6b3030720e5037a9ceef47d04d355c2a7d8f3f",
+        "comparisonPath": "spec/compatibility/closure/evidence/FUNCTIONS-EVENTS-comparison.json",
+        "rows": {
+          "MATCH": 6,
+          "DIFF": 0,
+          "INCOMPLETE": 0
+        },
+        "sourceCommit": "8d5f9eb8102447be91afe3f8a543288a2944812a"
+      }
     },
     {
       "conditionId": "FUNCTIONS-EVENTS/firestore-deleted",
@@ -189,12 +264,36 @@
         "before-present",
         "after-absent"
       ],
-      "status": "PENDING_CORPUS",
+      "status": "VERIFIED",
       "generations": [
         1,
         2
       ],
-      "note": "Accepted difference (scope decision E12, ledger line 840): the document field maps of a 2nd gen event are compared without regard to member order (`firestore-field-maps-unordered`); values are compared exactly."
+      "note": "Accepted difference (scope decision E12, ledger line 840): the document field maps of a 2nd gen event are compared without regard to member order (`firestore-field-maps-unordered`); values are compared exactly. Declared difference (scope decision E13): the closure comparison does not compare contextKeys, contextExtras, eventKeys and extensionAttributes, so the CloudEvent extension attributes and the 1st gen context extras of these events are judged by Rust and runner tests, not by production rows. Production sends traceparent on every 2nd gen event; fireemu sends none (accepted, E13 (b)). The 2nd gen Firestore location is the database's configured location in production (us-central1 on the sandbox) and nam5 in strict (accepted, E13 (c)).",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-10-05T04:29:28.498Z",
+            "project": "fireemu-oracle-events",
+            "corpusDigest": "003c76e1baac452946e7604d104e0f70aeb9bce967b3e31c20f6bf8b7b066f29",
+            "pass": 1
+          },
+          {
+            "recordedAt": "2026-10-05T05:06:13.645Z",
+            "project": "fireemu-oracle-events",
+            "corpusDigest": "003c76e1baac452946e7604d104e0f70aeb9bce967b3e31c20f6bf8b7b066f29",
+            "pass": 2
+          }
+        ],
+        "finalArtifactSha256": "c9d8b4d7b6f3035fd65ec80e3a6b3030720e5037a9ceef47d04d355c2a7d8f3f",
+        "comparisonPath": "spec/compatibility/closure/evidence/FUNCTIONS-EVENTS-comparison.json",
+        "rows": {
+          "MATCH": 6,
+          "DIFF": 0,
+          "INCOMPLETE": 0
+        },
+        "sourceCommit": "8d5f9eb8102447be91afe3f8a543288a2944812a"
+      }
     },
     {
       "conditionId": "FUNCTIONS-EVENTS/firestore-written",
@@ -207,12 +306,36 @@
         "update",
         "delete"
       ],
-      "status": "PENDING_CORPUS",
+      "status": "VERIFIED",
       "generations": [
         1,
         2
       ],
-      "note": "Accepted difference (scope decision E12, ledger line 840): the document field maps of a 2nd gen event are compared without regard to member order (`firestore-field-maps-unordered`); values are compared exactly."
+      "note": "Accepted difference (scope decision E12, ledger line 840): the document field maps of a 2nd gen event are compared without regard to member order (`firestore-field-maps-unordered`); values are compared exactly. Declared difference (scope decision E13): the closure comparison does not compare contextKeys, contextExtras, eventKeys and extensionAttributes, so the CloudEvent extension attributes and the 1st gen context extras of these events are judged by Rust and runner tests, not by production rows. Production sends traceparent on every 2nd gen event; fireemu sends none (accepted, E13 (b)). The 2nd gen Firestore location is the database's configured location in production (us-central1 on the sandbox) and nam5 in strict (accepted, E13 (c)).",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-10-05T04:29:28.498Z",
+            "project": "fireemu-oracle-events",
+            "corpusDigest": "003c76e1baac452946e7604d104e0f70aeb9bce967b3e31c20f6bf8b7b066f29",
+            "pass": 1
+          },
+          {
+            "recordedAt": "2026-10-05T05:06:13.645Z",
+            "project": "fireemu-oracle-events",
+            "corpusDigest": "003c76e1baac452946e7604d104e0f70aeb9bce967b3e31c20f6bf8b7b066f29",
+            "pass": 2
+          }
+        ],
+        "finalArtifactSha256": "c9d8b4d7b6f3035fd65ec80e3a6b3030720e5037a9ceef47d04d355c2a7d8f3f",
+        "comparisonPath": "spec/compatibility/closure/evidence/FUNCTIONS-EVENTS-comparison.json",
+        "rows": {
+          "MATCH": 6,
+          "DIFF": 0,
+          "INCOMPLETE": 0
+        },
+        "sourceCommit": "8d5f9eb8102447be91afe3f8a543288a2944812a"
+      }
     },
     {
       "conditionId": "FUNCTIONS-EVENTS/firestore-noop",
@@ -223,12 +346,36 @@
       "cases": [
         "same-value-write-no-event"
       ],
-      "status": "PENDING_CORPUS",
+      "status": "VERIFIED",
       "generations": [
         1,
         2
       ],
-      "note": "Accepted difference (scope decision E12, ledger line 840): the document field maps of a 2nd gen event are compared without regard to member order (`firestore-field-maps-unordered`); values are compared exactly."
+      "note": "Accepted difference (scope decision E12, ledger line 840): the document field maps of a 2nd gen event are compared without regard to member order (`firestore-field-maps-unordered`); values are compared exactly. Declared difference (scope decision E13): the closure comparison does not compare contextKeys, contextExtras, eventKeys and extensionAttributes, so the CloudEvent extension attributes and the 1st gen context extras of these events are judged by Rust and runner tests, not by production rows. Production sends traceparent on every 2nd gen event; fireemu sends none (accepted, E13 (b)). The 2nd gen Firestore location is the database's configured location in production (us-central1 on the sandbox) and nam5 in strict (accepted, E13 (c)).",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-10-05T04:29:28.498Z",
+            "project": "fireemu-oracle-events",
+            "corpusDigest": "003c76e1baac452946e7604d104e0f70aeb9bce967b3e31c20f6bf8b7b066f29",
+            "pass": 1
+          },
+          {
+            "recordedAt": "2026-10-05T05:06:13.645Z",
+            "project": "fireemu-oracle-events",
+            "corpusDigest": "003c76e1baac452946e7604d104e0f70aeb9bce967b3e31c20f6bf8b7b066f29",
+            "pass": 2
+          }
+        ],
+        "finalArtifactSha256": "c9d8b4d7b6f3035fd65ec80e3a6b3030720e5037a9ceef47d04d355c2a7d8f3f",
+        "comparisonPath": "spec/compatibility/closure/evidence/FUNCTIONS-EVENTS-comparison.json",
+        "rows": {
+          "MATCH": 2,
+          "DIFF": 0,
+          "INCOMPLETE": 0
+        },
+        "sourceCommit": "8d5f9eb8102447be91afe3f8a543288a2944812a"
+      }
     },
     {
       "conditionId": "FUNCTIONS-EVENTS/firestore-routing-params",
@@ -241,12 +388,36 @@
         "nonmatching-path",
         "wildcard-param"
       ],
-      "status": "PENDING_CORPUS",
+      "status": "VERIFIED",
       "generations": [
         1,
         2
       ],
-      "note": "Accepted difference (scope decision E12, ledger line 840): the document field maps of a 2nd gen event are compared without regard to member order (`firestore-field-maps-unordered`); values are compared exactly."
+      "note": "Accepted difference (scope decision E12, ledger line 840): the document field maps of a 2nd gen event are compared without regard to member order (`firestore-field-maps-unordered`); values are compared exactly. Declared difference (scope decision E13): the closure comparison does not compare contextKeys, contextExtras, eventKeys and extensionAttributes, so the CloudEvent extension attributes and the 1st gen context extras of these events are judged by Rust and runner tests, not by production rows. Production sends traceparent on every 2nd gen event; fireemu sends none (accepted, E13 (b)). The 2nd gen Firestore location is the database's configured location in production (us-central1 on the sandbox) and nam5 in strict (accepted, E13 (c)).",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-10-05T04:29:28.498Z",
+            "project": "fireemu-oracle-events",
+            "corpusDigest": "003c76e1baac452946e7604d104e0f70aeb9bce967b3e31c20f6bf8b7b066f29",
+            "pass": 1
+          },
+          {
+            "recordedAt": "2026-10-05T05:06:13.645Z",
+            "project": "fireemu-oracle-events",
+            "corpusDigest": "003c76e1baac452946e7604d104e0f70aeb9bce967b3e31c20f6bf8b7b066f29",
+            "pass": 2
+          }
+        ],
+        "finalArtifactSha256": "c9d8b4d7b6f3035fd65ec80e3a6b3030720e5037a9ceef47d04d355c2a7d8f3f",
+        "comparisonPath": "spec/compatibility/closure/evidence/FUNCTIONS-EVENTS-comparison.json",
+        "rows": {
+          "MATCH": 6,
+          "DIFF": 0,
+          "INCOMPLETE": 0
+        },
+        "sourceCommit": "8d5f9eb8102447be91afe3f8a543288a2944812a"
+      }
     },
     {
       "conditionId": "FUNCTIONS-EVENTS/firestore-payload",
@@ -261,12 +432,36 @@
         "update-time",
         "event-metadata"
       ],
-      "status": "PENDING_CORPUS",
+      "status": "VERIFIED",
       "generations": [
         1,
         2
       ],
-      "note": "Accepted difference (scope decision E12, ledger line 840): the document field maps of a 2nd gen event are compared without regard to member order (`firestore-field-maps-unordered`); values are compared exactly."
+      "note": "Accepted difference (scope decision E12, ledger line 840): the document field maps of a 2nd gen event are compared without regard to member order (`firestore-field-maps-unordered`); values are compared exactly. Declared difference (scope decision E13): the closure comparison does not compare contextKeys, contextExtras, eventKeys and extensionAttributes, so the CloudEvent extension attributes and the 1st gen context extras of these events are judged by Rust and runner tests, not by production rows. Production sends traceparent on every 2nd gen event; fireemu sends none (accepted, E13 (b)). The 2nd gen Firestore location is the database's configured location in production (us-central1 on the sandbox) and nam5 in strict (accepted, E13 (c)).",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-10-05T04:29:28.498Z",
+            "project": "fireemu-oracle-events",
+            "corpusDigest": "003c76e1baac452946e7604d104e0f70aeb9bce967b3e31c20f6bf8b7b066f29",
+            "pass": 1
+          },
+          {
+            "recordedAt": "2026-10-05T05:06:13.645Z",
+            "project": "fireemu-oracle-events",
+            "corpusDigest": "003c76e1baac452946e7604d104e0f70aeb9bce967b3e31c20f6bf8b7b066f29",
+            "pass": 2
+          }
+        ],
+        "finalArtifactSha256": "c9d8b4d7b6f3035fd65ec80e3a6b3030720e5037a9ceef47d04d355c2a7d8f3f",
+        "comparisonPath": "spec/compatibility/closure/evidence/FUNCTIONS-EVENTS-comparison.json",
+        "rows": {
+          "MATCH": 10,
+          "DIFF": 0,
+          "INCOMPLETE": 0
+        },
+        "sourceCommit": "8d5f9eb8102447be91afe3f8a543288a2944812a"
+      }
     },
     {
       "conditionId": "FUNCTIONS-EVENTS/firestore-auth-context",
@@ -279,11 +474,35 @@
         "admin-write",
         "auth-type-and-id"
       ],
-      "status": "PENDING_CORPUS",
+      "status": "VERIFIED",
       "generations": [
         2
       ],
-      "note": "Accepted difference (scope decision E10, coordinator rulings of 2026-10-05 15:12Z and 16:25Z). In an admin write, production's authId is the writing credential's own identity (the recorder operator's email; authType unknown), and the local owner principal has none and prints `owner`. Only its presence is compared for authType unknown (the value is masked as `authId-unknown-present`); authType is compared exactly, and an ID-token write (api_key) compares the user's uid by its 28-character shape (`authId-api_key-uid`), so a wrong id there is still a difference. The comparison records each mask it used and the promotion refuses an undeclared one."
+      "note": "Accepted difference (scope decision E10, coordinator rulings of 2026-10-05 15:12Z and 16:25Z). In an admin write, production's authId is the writing credential's own identity (the recorder operator's email; authType unknown), and the local owner principal has none and prints `owner`. Only its presence is compared for authType unknown (the value is masked as `authId-unknown-present`); authType is compared exactly, and an ID-token write (api_key) compares the user's uid by its 28-character shape (`authId-api_key-uid`), so a wrong id there is still a difference. The comparison records each mask it used and the promotion refuses an undeclared one. Declared difference (scope decision E13): the closure comparison does not compare contextKeys, contextExtras, eventKeys and extensionAttributes, so the CloudEvent extension attributes and the 1st gen context extras of these events are judged by Rust and runner tests, not by production rows. Production sends traceparent on every 2nd gen event; fireemu sends none (accepted, E13 (b)). The 2nd gen Firestore location is the database's configured location in production (us-central1 on the sandbox) and nam5 in strict (accepted, E13 (c)).",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-10-05T04:29:28.498Z",
+            "project": "fireemu-oracle-events",
+            "corpusDigest": "003c76e1baac452946e7604d104e0f70aeb9bce967b3e31c20f6bf8b7b066f29",
+            "pass": 1
+          },
+          {
+            "recordedAt": "2026-10-05T05:06:13.645Z",
+            "project": "fireemu-oracle-events",
+            "corpusDigest": "003c76e1baac452946e7604d104e0f70aeb9bce967b3e31c20f6bf8b7b066f29",
+            "pass": 2
+          }
+        ],
+        "finalArtifactSha256": "c9d8b4d7b6f3035fd65ec80e3a6b3030720e5037a9ceef47d04d355c2a7d8f3f",
+        "comparisonPath": "spec/compatibility/closure/evidence/FUNCTIONS-EVENTS-comparison.json",
+        "rows": {
+          "MATCH": 3,
+          "DIFF": 0,
+          "INCOMPLETE": 0
+        },
+        "sourceCommit": "8d5f9eb8102447be91afe3f8a543288a2944812a"
+      }
     },
     {
       "conditionId": "FUNCTIONS-EVENTS/storage-finalized",
@@ -296,11 +515,36 @@
         "overwritten-generation",
         "failed-upload-no-event"
       ],
-      "status": "PENDING_CORPUS",
+      "status": "VERIFIED",
       "generations": [
         1,
         2
-      ]
+      ],
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-10-05T04:29:28.498Z",
+            "project": "fireemu-oracle-events",
+            "corpusDigest": "003c76e1baac452946e7604d104e0f70aeb9bce967b3e31c20f6bf8b7b066f29",
+            "pass": 1
+          },
+          {
+            "recordedAt": "2026-10-05T05:06:13.645Z",
+            "project": "fireemu-oracle-events",
+            "corpusDigest": "003c76e1baac452946e7604d104e0f70aeb9bce967b3e31c20f6bf8b7b066f29",
+            "pass": 2
+          }
+        ],
+        "finalArtifactSha256": "c9d8b4d7b6f3035fd65ec80e3a6b3030720e5037a9ceef47d04d355c2a7d8f3f",
+        "comparisonPath": "spec/compatibility/closure/evidence/FUNCTIONS-EVENTS-comparison.json",
+        "rows": {
+          "MATCH": 6,
+          "DIFF": 0,
+          "INCOMPLETE": 0
+        },
+        "sourceCommit": "8d5f9eb8102447be91afe3f8a543288a2944812a"
+      },
+      "note": "Declared difference (scope decision E13): the closure comparison does not compare contextKeys, contextExtras, eventKeys and extensionAttributes, so the CloudEvent extension attributes and the 1st gen context extras of these events are judged by Rust and runner tests, not by production rows. Production sends traceparent on every 2nd gen event; fireemu sends none (accepted, E13 (b))."
     },
     {
       "conditionId": "FUNCTIONS-EVENTS/storage-deleted",
@@ -312,11 +556,36 @@
         "live-object-delete",
         "no-event-for-missing-object"
       ],
-      "status": "PENDING_CORPUS",
+      "status": "VERIFIED",
       "generations": [
         1,
         2
-      ]
+      ],
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-10-05T04:29:28.498Z",
+            "project": "fireemu-oracle-events",
+            "corpusDigest": "003c76e1baac452946e7604d104e0f70aeb9bce967b3e31c20f6bf8b7b066f29",
+            "pass": 1
+          },
+          {
+            "recordedAt": "2026-10-05T05:06:13.645Z",
+            "project": "fireemu-oracle-events",
+            "corpusDigest": "003c76e1baac452946e7604d104e0f70aeb9bce967b3e31c20f6bf8b7b066f29",
+            "pass": 2
+          }
+        ],
+        "finalArtifactSha256": "c9d8b4d7b6f3035fd65ec80e3a6b3030720e5037a9ceef47d04d355c2a7d8f3f",
+        "comparisonPath": "spec/compatibility/closure/evidence/FUNCTIONS-EVENTS-comparison.json",
+        "rows": {
+          "MATCH": 4,
+          "DIFF": 0,
+          "INCOMPLETE": 0
+        },
+        "sourceCommit": "8d5f9eb8102447be91afe3f8a543288a2944812a"
+      },
+      "note": "Declared difference (scope decision E13): the closure comparison does not compare contextKeys, contextExtras, eventKeys and extensionAttributes, so the CloudEvent extension attributes and the 1st gen context extras of these events are judged by Rust and runner tests, not by production rows. Production sends traceparent on every 2nd gen event; fireemu sends none (accepted, E13 (b))."
     },
     {
       "conditionId": "FUNCTIONS-EVENTS/storage-metadata-updated",
@@ -328,11 +597,36 @@
         "custom-metadata-change",
         "metageneration"
       ],
-      "status": "PENDING_CORPUS",
+      "status": "VERIFIED",
       "generations": [
         1,
         2
-      ]
+      ],
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-10-05T04:29:28.498Z",
+            "project": "fireemu-oracle-events",
+            "corpusDigest": "003c76e1baac452946e7604d104e0f70aeb9bce967b3e31c20f6bf8b7b066f29",
+            "pass": 1
+          },
+          {
+            "recordedAt": "2026-10-05T05:06:13.645Z",
+            "project": "fireemu-oracle-events",
+            "corpusDigest": "003c76e1baac452946e7604d104e0f70aeb9bce967b3e31c20f6bf8b7b066f29",
+            "pass": 2
+          }
+        ],
+        "finalArtifactSha256": "c9d8b4d7b6f3035fd65ec80e3a6b3030720e5037a9ceef47d04d355c2a7d8f3f",
+        "comparisonPath": "spec/compatibility/closure/evidence/FUNCTIONS-EVENTS-comparison.json",
+        "rows": {
+          "MATCH": 4,
+          "DIFF": 0,
+          "INCOMPLETE": 0
+        },
+        "sourceCommit": "8d5f9eb8102447be91afe3f8a543288a2944812a"
+      },
+      "note": "Declared difference (scope decision E13): the closure comparison does not compare contextKeys, contextExtras, eventKeys and extensionAttributes, so the CloudEvent extension attributes and the 1st gen context extras of these events are judged by Rust and runner tests, not by production rows. Production sends traceparent on every 2nd gen event; fireemu sends none (accepted, E13 (b))."
     },
     {
       "conditionId": "FUNCTIONS-EVENTS/storage-archived",
@@ -344,11 +638,36 @@
         "versioned-overwrite",
         "archived-generation"
       ],
-      "status": "PENDING_CORPUS",
+      "status": "VERIFIED",
       "generations": [
         1,
         2
-      ]
+      ],
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-10-05T04:29:28.498Z",
+            "project": "fireemu-oracle-events",
+            "corpusDigest": "003c76e1baac452946e7604d104e0f70aeb9bce967b3e31c20f6bf8b7b066f29",
+            "pass": 1
+          },
+          {
+            "recordedAt": "2026-10-05T05:06:13.645Z",
+            "project": "fireemu-oracle-events",
+            "corpusDigest": "003c76e1baac452946e7604d104e0f70aeb9bce967b3e31c20f6bf8b7b066f29",
+            "pass": 2
+          }
+        ],
+        "finalArtifactSha256": "c9d8b4d7b6f3035fd65ec80e3a6b3030720e5037a9ceef47d04d355c2a7d8f3f",
+        "comparisonPath": "spec/compatibility/closure/evidence/FUNCTIONS-EVENTS-comparison.json",
+        "rows": {
+          "MATCH": 4,
+          "DIFF": 0,
+          "INCOMPLETE": 0
+        },
+        "sourceCommit": "8d5f9eb8102447be91afe3f8a543288a2944812a"
+      },
+      "note": "Declared difference (scope decision E13): the closure comparison does not compare contextKeys, contextExtras, eventKeys and extensionAttributes, so the CloudEvent extension attributes and the 1st gen context extras of these events are judged by Rust and runner tests, not by production rows. Production sends traceparent on every 2nd gen event; fireemu sends none (accepted, E13 (b))."
     },
     {
       "conditionId": "FUNCTIONS-EVENTS/storage-payload",
@@ -363,11 +682,36 @@
         "content-type",
         "event-metadata"
       ],
-      "status": "PENDING_CORPUS",
+      "status": "VERIFIED",
       "generations": [
         1,
         2
-      ]
+      ],
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-10-05T04:29:28.498Z",
+            "project": "fireemu-oracle-events",
+            "corpusDigest": "003c76e1baac452946e7604d104e0f70aeb9bce967b3e31c20f6bf8b7b066f29",
+            "pass": 1
+          },
+          {
+            "recordedAt": "2026-10-05T05:06:13.645Z",
+            "project": "fireemu-oracle-events",
+            "corpusDigest": "003c76e1baac452946e7604d104e0f70aeb9bce967b3e31c20f6bf8b7b066f29",
+            "pass": 2
+          }
+        ],
+        "finalArtifactSha256": "c9d8b4d7b6f3035fd65ec80e3a6b3030720e5037a9ceef47d04d355c2a7d8f3f",
+        "comparisonPath": "spec/compatibility/closure/evidence/FUNCTIONS-EVENTS-comparison.json",
+        "rows": {
+          "MATCH": 10,
+          "DIFF": 0,
+          "INCOMPLETE": 0
+        },
+        "sourceCommit": "8d5f9eb8102447be91afe3f8a543288a2944812a"
+      },
+      "note": "Declared difference (scope decision E13): the closure comparison does not compare contextKeys, contextExtras, eventKeys and extensionAttributes, so the CloudEvent extension attributes and the 1st gen context extras of these events are judged by Rust and runner tests, not by production rows. Production sends traceparent on every 2nd gen event; fireemu sends none (accepted, E13 (b))."
     },
     {
       "conditionId": "FUNCTIONS-EVENTS/storage-bucket-routing",
@@ -380,11 +724,36 @@
         "nonmatching-bucket",
         "same-bucket-other-prefix-delivered"
       ],
-      "status": "PENDING_CORPUS",
+      "status": "VERIFIED",
       "generations": [
         1,
         2
-      ]
+      ],
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-10-05T04:29:28.498Z",
+            "project": "fireemu-oracle-events",
+            "corpusDigest": "003c76e1baac452946e7604d104e0f70aeb9bce967b3e31c20f6bf8b7b066f29",
+            "pass": 1
+          },
+          {
+            "recordedAt": "2026-10-05T05:06:13.645Z",
+            "project": "fireemu-oracle-events",
+            "corpusDigest": "003c76e1baac452946e7604d104e0f70aeb9bce967b3e31c20f6bf8b7b066f29",
+            "pass": 2
+          }
+        ],
+        "finalArtifactSha256": "c9d8b4d7b6f3035fd65ec80e3a6b3030720e5037a9ceef47d04d355c2a7d8f3f",
+        "comparisonPath": "spec/compatibility/closure/evidence/FUNCTIONS-EVENTS-comparison.json",
+        "rows": {
+          "MATCH": 6,
+          "DIFF": 0,
+          "INCOMPLETE": 0
+        },
+        "sourceCommit": "8d5f9eb8102447be91afe3f8a543288a2944812a"
+      },
+      "note": "Declared difference (scope decision E13): the closure comparison does not compare contextKeys, contextExtras, eventKeys and extensionAttributes, so the CloudEvent extension attributes and the 1st gen context extras of these events are judged by Rust and runner tests, not by production rows. Production sends traceparent on every 2nd gen event; fireemu sends none (accepted, E13 (b))."
     },
     {
       "conditionId": "FUNCTIONS-EVENTS/auth-created",
@@ -397,10 +766,35 @@
         "email-password-create",
         "repeat-sign-in-no-event"
       ],
-      "status": "PENDING_CORPUS",
+      "status": "VERIFIED",
       "generations": [
         1
-      ]
+      ],
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-10-05T04:29:28.498Z",
+            "project": "fireemu-oracle-events",
+            "corpusDigest": "003c76e1baac452946e7604d104e0f70aeb9bce967b3e31c20f6bf8b7b066f29",
+            "pass": 1
+          },
+          {
+            "recordedAt": "2026-10-05T05:06:13.645Z",
+            "project": "fireemu-oracle-events",
+            "corpusDigest": "003c76e1baac452946e7604d104e0f70aeb9bce967b3e31c20f6bf8b7b066f29",
+            "pass": 2
+          }
+        ],
+        "finalArtifactSha256": "c9d8b4d7b6f3035fd65ec80e3a6b3030720e5037a9ceef47d04d355c2a7d8f3f",
+        "comparisonPath": "spec/compatibility/closure/evidence/FUNCTIONS-EVENTS-comparison.json",
+        "rows": {
+          "MATCH": 3,
+          "DIFF": 0,
+          "INCOMPLETE": 0
+        },
+        "sourceCommit": "8d5f9eb8102447be91afe3f8a543288a2944812a"
+      },
+      "note": "Declared difference (scope decision E13): the closure comparison does not compare contextKeys, contextExtras, eventKeys and extensionAttributes, so the CloudEvent extension attributes and the 1st gen context extras of these events are judged by Rust and runner tests, not by production rows."
     },
     {
       "conditionId": "FUNCTIONS-EVENTS/auth-deleted",
@@ -412,10 +806,35 @@
         "single-user-delete",
         "bulk-delete-no-event"
       ],
-      "status": "PENDING_CORPUS",
+      "status": "VERIFIED",
       "generations": [
         1
-      ]
+      ],
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-10-05T04:29:28.498Z",
+            "project": "fireemu-oracle-events",
+            "corpusDigest": "003c76e1baac452946e7604d104e0f70aeb9bce967b3e31c20f6bf8b7b066f29",
+            "pass": 1
+          },
+          {
+            "recordedAt": "2026-10-05T05:06:13.645Z",
+            "project": "fireemu-oracle-events",
+            "corpusDigest": "003c76e1baac452946e7604d104e0f70aeb9bce967b3e31c20f6bf8b7b066f29",
+            "pass": 2
+          }
+        ],
+        "finalArtifactSha256": "c9d8b4d7b6f3035fd65ec80e3a6b3030720e5037a9ceef47d04d355c2a7d8f3f",
+        "comparisonPath": "spec/compatibility/closure/evidence/FUNCTIONS-EVENTS-comparison.json",
+        "rows": {
+          "MATCH": 2,
+          "DIFF": 0,
+          "INCOMPLETE": 0
+        },
+        "sourceCommit": "8d5f9eb8102447be91afe3f8a543288a2944812a"
+      },
+      "note": "Declared difference (scope decision E13): the closure comparison does not compare contextKeys, contextExtras, eventKeys and extensionAttributes, so the CloudEvent extension attributes and the 1st gen context extras of these events are judged by Rust and runner tests, not by production rows."
     },
     {
       "conditionId": "FUNCTIONS-EVENTS/auth-payload",
@@ -430,10 +849,35 @@
         "empty-provider-data",
         "event-metadata"
       ],
-      "status": "PENDING_CORPUS",
+      "status": "VERIFIED",
       "generations": [
         1
-      ]
+      ],
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-10-05T04:29:28.498Z",
+            "project": "fireemu-oracle-events",
+            "corpusDigest": "003c76e1baac452946e7604d104e0f70aeb9bce967b3e31c20f6bf8b7b066f29",
+            "pass": 1
+          },
+          {
+            "recordedAt": "2026-10-05T05:06:13.645Z",
+            "project": "fireemu-oracle-events",
+            "corpusDigest": "003c76e1baac452946e7604d104e0f70aeb9bce967b3e31c20f6bf8b7b066f29",
+            "pass": 2
+          }
+        ],
+        "finalArtifactSha256": "c9d8b4d7b6f3035fd65ec80e3a6b3030720e5037a9ceef47d04d355c2a7d8f3f",
+        "comparisonPath": "spec/compatibility/closure/evidence/FUNCTIONS-EVENTS-comparison.json",
+        "rows": {
+          "MATCH": 5,
+          "DIFF": 0,
+          "INCOMPLETE": 0
+        },
+        "sourceCommit": "8d5f9eb8102447be91afe3f8a543288a2944812a"
+      },
+      "note": "Declared difference (scope decision E13): the closure comparison does not compare contextKeys, contextExtras, eventKeys and extensionAttributes, so the CloudEvent extension attributes and the 1st gen context extras of these events are judged by Rust and runner tests, not by production rows."
     },
     {
       "conditionId": "FUNCTIONS-EVENTS/pubsub-published",
@@ -448,12 +892,36 @@
         "message-id",
         "publish-time"
       ],
-      "status": "PENDING_CORPUS",
+      "status": "VERIFIED",
       "generations": [
         1,
         2
       ],
-      "note": "Accepted difference (scope decision E11): the two per-deployment numbers of the Eventarc subscription name in data.subscription of a 2nd gen event are masked (`pubsub-subscription-numbers`); the rest of the name is compared."
+      "note": "Accepted difference (scope decision E11): the two per-deployment numbers of the Eventarc subscription name in data.subscription of a 2nd gen event are masked (`pubsub-subscription-numbers`); the rest of the name is compared. Declared difference (scope decision E13): the closure comparison does not compare contextKeys, contextExtras, eventKeys and extensionAttributes, so the CloudEvent extension attributes and the 1st gen context extras of these events are judged by Rust and runner tests, not by production rows. Production sends traceparent on every 2nd gen event; fireemu sends none (accepted, E13 (b)).",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-10-05T04:29:28.498Z",
+            "project": "fireemu-oracle-events",
+            "corpusDigest": "003c76e1baac452946e7604d104e0f70aeb9bce967b3e31c20f6bf8b7b066f29",
+            "pass": 1
+          },
+          {
+            "recordedAt": "2026-10-05T05:06:13.645Z",
+            "project": "fireemu-oracle-events",
+            "corpusDigest": "003c76e1baac452946e7604d104e0f70aeb9bce967b3e31c20f6bf8b7b066f29",
+            "pass": 2
+          }
+        ],
+        "finalArtifactSha256": "c9d8b4d7b6f3035fd65ec80e3a6b3030720e5037a9ceef47d04d355c2a7d8f3f",
+        "comparisonPath": "spec/compatibility/closure/evidence/FUNCTIONS-EVENTS-comparison.json",
+        "rows": {
+          "MATCH": 10,
+          "DIFF": 0,
+          "INCOMPLETE": 0
+        },
+        "sourceCommit": "8d5f9eb8102447be91afe3f8a543288a2944812a"
+      }
     },
     {
       "conditionId": "FUNCTIONS-EVENTS/pubsub-topic-routing",
@@ -466,12 +934,36 @@
         "nonmatching-topic",
         "ordering-key"
       ],
-      "status": "PENDING_CORPUS",
+      "status": "VERIFIED",
       "generations": [
         1,
         2
       ],
-      "note": "Accepted difference (scope decision E11): the two per-deployment numbers of the Eventarc subscription name in data.subscription of a 2nd gen event are masked (`pubsub-subscription-numbers`); the rest of the name is compared."
+      "note": "Accepted difference (scope decision E11): the two per-deployment numbers of the Eventarc subscription name in data.subscription of a 2nd gen event are masked (`pubsub-subscription-numbers`); the rest of the name is compared. Declared difference (scope decision E13): the closure comparison does not compare contextKeys, contextExtras, eventKeys and extensionAttributes, so the CloudEvent extension attributes and the 1st gen context extras of these events are judged by Rust and runner tests, not by production rows. Production sends traceparent on every 2nd gen event; fireemu sends none (accepted, E13 (b)).",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-10-05T04:29:28.498Z",
+            "project": "fireemu-oracle-events",
+            "corpusDigest": "003c76e1baac452946e7604d104e0f70aeb9bce967b3e31c20f6bf8b7b066f29",
+            "pass": 1
+          },
+          {
+            "recordedAt": "2026-10-05T05:06:13.645Z",
+            "project": "fireemu-oracle-events",
+            "corpusDigest": "003c76e1baac452946e7604d104e0f70aeb9bce967b3e31c20f6bf8b7b066f29",
+            "pass": 2
+          }
+        ],
+        "finalArtifactSha256": "c9d8b4d7b6f3035fd65ec80e3a6b3030720e5037a9ceef47d04d355c2a7d8f3f",
+        "comparisonPath": "spec/compatibility/closure/evidence/FUNCTIONS-EVENTS-comparison.json",
+        "rows": {
+          "MATCH": 6,
+          "DIFF": 0,
+          "INCOMPLETE": 0
+        },
+        "sourceCommit": "8d5f9eb8102447be91afe3f8a543288a2944812a"
+      }
     },
     {
       "conditionId": "FUNCTIONS-EVENTS/delivery-retry-identity",
@@ -485,14 +977,38 @@
         "retry-enabled",
         "event-id-across-attempts"
       ],
-      "status": "PENDING_CORPUS",
+      "status": "VERIFIED",
       "generations": [
         2
       ],
       "sources": [
         "firestore"
       ],
-      "note": "Accepted difference (scope decision E12, ledger line 840): the document field maps of the Gen2 Firestore retry events are compared without regard to member order (`firestore-field-maps-unordered`); values are compared exactly."
+      "note": "Accepted difference (scope decision E12, ledger line 840): the document field maps of the Gen2 Firestore retry events are compared without regard to member order (`firestore-field-maps-unordered`); values are compared exactly. Declared difference (scope decision E13): the closure comparison does not compare contextKeys, contextExtras, eventKeys and extensionAttributes, so the CloudEvent extension attributes and the 1st gen context extras of these events are judged by Rust and runner tests, not by production rows. Production sends traceparent on every 2nd gen event; fireemu sends none (accepted, E13 (b)). The 2nd gen Firestore location is the database's configured location in production (us-central1 on the sandbox) and nam5 in strict (accepted, E13 (c)).",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-10-05T04:29:28.498Z",
+            "project": "fireemu-oracle-events",
+            "corpusDigest": "003c76e1baac452946e7604d104e0f70aeb9bce967b3e31c20f6bf8b7b066f29",
+            "pass": 1
+          },
+          {
+            "recordedAt": "2026-10-05T05:06:13.645Z",
+            "project": "fireemu-oracle-events",
+            "corpusDigest": "003c76e1baac452946e7604d104e0f70aeb9bce967b3e31c20f6bf8b7b066f29",
+            "pass": 2
+          }
+        ],
+        "finalArtifactSha256": "c9d8b4d7b6f3035fd65ec80e3a6b3030720e5037a9ceef47d04d355c2a7d8f3f",
+        "comparisonPath": "spec/compatibility/closure/evidence/FUNCTIONS-EVENTS-comparison.json",
+        "rows": {
+          "MATCH": 4,
+          "DIFF": 0,
+          "INCOMPLETE": 0
+        },
+        "sourceCommit": "8d5f9eb8102447be91afe3f8a543288a2944812a"
+      }
     },
     {
       "conditionId": "FUNCTIONS-EVENTS/final-artifact-regression",
@@ -505,7 +1021,38 @@
         "same-source-final-artifact-comparison",
         "workspace-regression"
       ],
-      "status": "PENDING_CORPUS"
+      "status": "VERIFIED",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-10-05T04:29:28.498Z",
+            "project": "fireemu-oracle-events",
+            "corpusDigest": "003c76e1baac452946e7604d104e0f70aeb9bce967b3e31c20f6bf8b7b066f29",
+            "pass": 1
+          },
+          {
+            "recordedAt": "2026-10-05T05:06:13.645Z",
+            "project": "fireemu-oracle-events",
+            "corpusDigest": "003c76e1baac452946e7604d104e0f70aeb9bce967b3e31c20f6bf8b7b066f29",
+            "pass": 2
+          }
+        ],
+        "finalArtifactSha256": "c9d8b4d7b6f3035fd65ec80e3a6b3030720e5037a9ceef47d04d355c2a7d8f3f",
+        "sourceCommit": "8d5f9eb8102447be91afe3f8a543288a2944812a",
+        "comparisonPath": "spec/compatibility/closure/evidence/FUNCTIONS-EVENTS-comparison.json",
+        "rows": {
+          "MATCH": 112
+        },
+        "workspaceRegression": {
+          "sourceCommit": "8d5f9eb8102447be91afe3f8a543288a2944812a",
+          "command": "cargo nextest run --workspace --profile pr",
+          "tests": {
+            "passed": 5360,
+            "failed": 0
+          },
+          "source": "ci.yml run 37427941005 on 8d5f9eb8102447be91afe3f8a543288a2944812a, job test (ubuntu-latest): 5360 tests run, 5360 passed, 101 skipped; the macos-latest job of the same run: 5428 of 5428 passed, 101 skipped"
+        }
+      }
     },
     {
       "conditionId": "FUNCTIONS-EVENTS/closure-review",
@@ -516,9 +1063,38 @@
       "cases": [
         "independent-coordinator-approval"
       ],
-      "status": "PENDING_REVIEW"
+      "status": "VERIFIED",
+      "evidence": {
+        "reportPath": "docs.local/reviews/2026-10-06-fe-promotion-closure-review.md",
+        "reportSha256": "5d6c0340f455e7e29c1ffb78a3d8c8ffc8f2e58dca8ee92bb5345053bbecf22d",
+        "reviewedCommit": "b415c359e8e7238e0b31df5233e8b8715d96c664",
+        "finalArtifactSha256": "c9d8b4d7b6f3035fd65ec80e3a6b3030720e5037a9ceef47d04d355c2a7d8f3f"
+      }
     }
   ],
   "frozenOn": "2026-09-25",
-  "freezeAuthority": "docs.local/instructions/owner-decisions.md (2026-09-25 FUNCTIONS-EVENTS closure)"
+  "freezeAuthority": "docs.local/instructions/owner-decisions.md (2026-09-25 FUNCTIONS-EVENTS closure)",
+  "integratedRegression": {
+    "release": "closure-base-8d5f9eb81",
+    "integrationCommit": "8d5f9eb8102447be91afe3f8a543288a2944812a",
+    "releaseBinarySha256": "c9d8b4d7b6f3035fd65ec80e3a6b3030720e5037a9ceef47d04d355c2a7d8f3f",
+    "buildReceiptPath": "spec/compatibility/closure/evidence/FUNCTIONS-EVENTS-build.json",
+    "buildReceiptSha256": "d2cf20294a0acfb8e135cb734d8e6cad8c9d854549681cf316082d43c56b9aa4",
+    "comparisons": [
+      {
+        "path": "spec/compatibility/closure/evidence/FUNCTIONS-EVENTS-comparison.json",
+        "sha256": "6b6d0b8de46fae1d3dc75f94caf006ec1cef3d5d122841476b5e6ddfbd94a2d2",
+        "rows": 112,
+        "summary": {
+          "MATCH": 112
+        },
+        "laneComparisonPath": "spec/compatibility/closure/evidence/FUNCTIONS-EVENTS-comparison.json",
+        "laneComparisonSha256": "6b6d0b8de46fae1d3dc75f94caf006ec1cef3d5d122841476b5e6ddfbd94a2d2",
+        "identicalRows": 112,
+        "changedRows": []
+      }
+    ],
+    "result": "IDENTICAL_TO_LANE",
+    "productionRequests": 0
+  }
 }

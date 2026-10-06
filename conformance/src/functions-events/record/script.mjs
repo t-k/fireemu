@@ -2,8 +2,6 @@
 // corpus scenarios, as declared REST requests. A run plays the pass twice against one deploy. Nothing
 // here sends anything; the recorder sends exactly the requests built here and nothing else.
 
-import { createHash } from "node:crypto";
-
 export const PROJECT = "fireemu-oracle-events";
 export const REGION = "us-central1";
 export const PRIMARY_BUCKET = `${PROJECT}.firebasestorage.app`;
@@ -146,7 +144,6 @@ const fields = (data) =>
   );
 const documentData = (value, count = 1, kind = "ordinary") => ({ fixtureKind: kind, value, count });
 
-const md5 = (text) => createHash("md5").update(text).digest("base64");
 const PASSWORD = "fe-events-recording-password-1";
 
 class Builder {
@@ -339,13 +336,13 @@ const textUpload = (
   bucket,
   name,
   text,
-  { role, subject = false, precondition = true, expect = [200], capture } = {},
+  { role, subject = false, precondition = "0", expect = [200], capture } = {},
 ) =>
   b.add(
     role,
     {
       method: "POST",
-      url: uploadUrl(bucket, name, precondition ? "&ifGenerationMatch=0" : ""),
+      url: uploadUrl(bucket, name, precondition ? `&ifGenerationMatch=${precondition}` : ""),
       contentType: "text/plain",
       body: text,
       expect,
@@ -405,19 +402,19 @@ function storageStep(scenarioId, newId, prefix = scenarioId) {
       versionList(b, bucket, name);
       break;
     case "storage-failed-upload":
-      b.add(
-        "subject",
-        {
-          method: "POST",
-          url: uploadUrl(bucket, name),
-          contentType: "text/plain",
-          headers: { "x-goog-hash": `md5=${md5("hello")}` },
-          body: "hellp",
-          expect: [400],
-        },
-        { subject: true },
-      );
+      // An existing object, then a write with a precondition that cannot hold (a real generation is never 1): production
+      // answers 412, changes nothing and delivers no finalize event. (v5's invalid x-goog-hash upload was accepted with 200.)
+      textUpload(b, bucket, name, "before", { role: "setup" });
+      seed = true;
+      textUpload(b, bucket, name, "refused", {
+        role: "subject",
+        subject: true,
+        precondition: "1",
+        expect: [412],
+      });
+      objectGet(b, bucket, name);
       versionList(b, bucket, name);
+      objectDelete(b, bucket, name);
       sourceResult = "typed-refusal";
       settle = NEGATIVE_WINDOW_SECONDS;
       break;

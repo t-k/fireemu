@@ -1,0 +1,16 @@
+{
+  "name": "operations/cHJvamVjdHMvZmlyZWVtdS1vcmFjbGUtZXZlbnRzL2xvY2F0aW9ucy91cy1jZW50cmFsMS9vcGVyYXRpb25zL29wZXJhdGlvbi0xNzkxMTYwMDUyMzA0LTY1ZDBjZjJhNzQ5YWMtODg5YzEwMjQtY2E3ZjI1YmU",
+  "metadata": {
+    "@type": "type.googleapis.com/google.cloud.functions.v1.OperationMetadataV1",
+    "target": "projects/fireemu-oracle-events/locations/us-central1/functions/storageFinalizedV1",
+    "type": "DELETE_FUNCTION",
+    "request": {
+      "@type": "type.googleapis.com/google.cloud.functions.v1.CloudFunction",
+      "name": "projects/fireemu-oracle-events/locations/us-central1/functions/storageFinalizedV1",
+      "httpsTrigger": {},
+      "updateTime": "1970-01-01T00:00:00Z"
+    },
+    "updateTime": "2026-10-05T00:27:35.078963749Z"
+  },
+  "done": true
+}

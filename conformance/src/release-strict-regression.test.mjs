@@ -438,6 +438,7 @@ test("the excluded kinds are exactly the ones the release discloses", () => {
   assert.deepEqual(EXCLUDED_KINDS.map((exclusion) => exclusion.kind).toSorted(), [
     "auth-fs-cross-stage2-comparison-v1",
     "fs-listen-sdk-comparison-v1",
+    "functions-events-comparison",
     "storage-object-comparison-v1",
     "storage-rules-comparison-v2",
     "storage-rules-management-comparison-v1",

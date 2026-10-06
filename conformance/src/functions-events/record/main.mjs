@@ -16,7 +16,8 @@ import { tmpdir } from "node:os";
 import { dirname, join, relative } from "node:path";
 import { execFileSync } from "node:child_process";
 
-import { cliPlan, dotenvSha256, prepareSource, sourceProblems } from "./deploy.mjs";
+import { gen1StorageDeployOrder } from "../canary-cli.mjs";
+import { CLI_TIMEOUT_MS, cliPlan, dotenvSha256, prepareSource, sourceProblems } from "./deploy.mjs";
 import { createTransport } from "./rest.mjs";
 import { record as recordRun } from "./run.mjs";
 import * as sandbox from "./sandbox.mjs";
@@ -69,21 +70,38 @@ export function harnessDigest(root, { git } = {}) {
   return { digest: sha256(lines.join("\n")), lines };
 }
 
-/** The CLI is run at most once per action (dry run, deploy, delete); a second call is refused, never re-sent. */
+/**
+ * The CLI is run at most once per action (dry run, main deploy, delete) and at most once for each of the four Gen1 Storage
+ * functions (`deploy-one` with the function's name); a second call is refused, never re-sent. Seven runs in all.
+ */
 export function cliAttemptCounter() {
-  const attempts = { dryRun: 0, deploy: 0, delete: 0 };
+  const attempts = {
+    dryRun: 0,
+    deploy: 0,
+    ...Object.fromEntries(gen1StorageDeployOrder.map((name) => [`deploy${upperFirst(name)}`, 0])),
+    delete: 0,
+  };
   const keys = { "dry-run": "dryRun", deploy: "deploy", delete: "delete" };
   return {
     attempts,
-    count(action) {
-      const key = keys[action];
+    count(action, name) {
+      const key =
+        action === "deploy-one" && gen1StorageDeployOrder.includes(name)
+          ? `deploy${upperFirst(name)}`
+          : name === undefined
+            ? keys[action]
+            : undefined;
       if (key === undefined) throw new Error(`unknown CLI action ${action}`);
       if (attempts[key] >= 1)
-        throw new Error(`the CLI ${action} was already run once; never re-sent`);
+        throw new Error(
+          `the CLI ${action}${name ? ` ${name}` : ""} was already run once; never re-sent`,
+        );
       attempts[key] += 1;
     },
   };
 }
+
+const upperFirst = (text) => `${text[0].toUpperCase()}${text.slice(1)}`;
 
 export function parseArgs(argv) {
   const [command, ...rest] = argv;
@@ -294,24 +312,28 @@ export async function main(argv, deps) {
       now: deps.now,
     });
     const { attempts: cliAttempts, count: countCliAttempt } = cliAttemptCounter();
-    const cli = async (action) => {
-      countCliAttempt(action);
-      const configHome = join(runDir, `config-${action}`);
+    // `cli(action, name)`: `deploy-one` takes the Gen1 Storage function's name; its files are `cli-deploy-<name>-…`
+    const cli = async (action, name) => {
+      countCliAttempt(action, name);
+      const label = action === "deploy-one" ? `deploy-${name}` : action;
+      const configHome = join(runDir, `config-${label}`);
       mkdirSync(configHome, { mode: 0o700 });
       const plan = cliPlan(action, {
         configHome,
         configPath: source.configPath,
-        workDir: join(runDir, `work-${action}`),
+        workDir: join(runDir, `work-${label}`),
         home: env.HOME,
         path: `${deps.nodeDir ?? dirname(process.execPath)}:${env.PATH ?? ""}`,
+        name,
       });
       mkdirSync(plan.cwd, { recursive: true, mode: 0o700 });
       return deps.runCli({
-        action,
+        action: label,
         plan,
         firebaseJs: join(root, "conformance/node_modules/firebase-tools/lib/bin/firebase.js"),
         node: process.execPath,
         directory: join(runDir, "cli"),
+        timeoutMs: CLI_TIMEOUT_MS[action],
       });
     };
 

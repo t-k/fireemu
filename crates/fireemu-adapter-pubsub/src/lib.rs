@@ -1104,8 +1104,13 @@ impl PubSubHandle {
             else {
                 return PushAttemptOutcome::Invalidated;
             };
+            let mut wire_message = message.clone();
+            if self.profile == PubSubProfile::Strict {
+                Arc::make_mut(&mut wire_message.message).message_id =
+                    self.wire_message_id(&message.message.message_id);
+            }
             let delivered = tokio::select! {
-                result = push::deliver(&endpoint, subscription, message, report_delivery_attempt) => {
+                result = push::deliver(&endpoint, subscription, &wire_message, report_delivery_attempt) => {
                     result.is_ok()
                 }
                 () = self.wait_until_push_invalidated(key, generation) => {

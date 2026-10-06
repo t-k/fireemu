@@ -469,3 +469,102 @@ async fn strict_recorded_push_admission_rejects_unobserved_endpoint_and_auth_sha
         .unwrap_err();
     assert_eq!(status.code(), tonic::Code::Unimplemented);
 }
+
+struct OwnedPushReceiver(tokio::task::JoinHandle<Value>);
+impl Drop for OwnedPushReceiver {
+    fn drop(&mut self) {
+        self.0.abort();
+    }
+}
+#[tokio::test]
+async fn strict_native_publication_pull_and_loopback_push_share_one_wire_identity() {
+    for profile in [PubSubProfile::Strict, PubSubProfile::Emulator] {
+        let server = Server::new(profile).await;
+        resources(&server).await;
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let mut receiver = OwnedPushReceiver(tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut bytes = Vec::new();
+            let mut chunk = [0u8; 1024];
+            let (start, length) = loop {
+                let count = socket.read(&mut chunk).await.unwrap();
+                assert!(count > 0);
+                bytes.extend_from_slice(&chunk[..count]);
+                assert!(bytes.len() < 1_000_000);
+                if let Some(i) = bytes.windows(4).position(|w| w == b"\r\n\r\n") {
+                    let header = std::str::from_utf8(&bytes[..i]).unwrap();
+                    let len = header
+                        .lines()
+                        .find_map(|l| {
+                            l.split_once(':')
+                                .filter(|(key, _)| key.eq_ignore_ascii_case("content-length"))
+                                .map(|(_, v)| v.trim().parse::<usize>().unwrap())
+                        })
+                        .unwrap();
+                    break (i + 4, len);
+                }
+            };
+            while bytes.len() < start + length {
+                let count = socket.read(&mut chunk).await.unwrap();
+                assert!(count > 0);
+                bytes.extend_from_slice(&chunk[..count]);
+            }
+            let body = serde_json::from_slice(&bytes[start..start + length]).unwrap();
+            socket
+                .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
+                .await
+                .unwrap();
+            body
+        }));
+        SubscriberClient::new(server.channel().await)
+            .create_subscription(pb::Subscription {
+                name: format!("{SUB}-push"),
+                topic: TOPIC.into(),
+                push_config: Some(pb::PushConfig {
+                    push_endpoint: format!("http://{address}/push"),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        let published = PublisherClient::new(server.channel().await)
+            .publish(pb::PublishRequest {
+                topic: TOPIC.into(),
+                messages: vec![pb::PubsubMessage {
+                    data: b"x".to_vec(),
+                    ..Default::default()
+                }],
+            })
+            .await
+            .unwrap()
+            .into_inner();
+        let id = &published.message_ids[0];
+        assert_eq!(
+            id.len(),
+            if profile == PubSubProfile::Strict {
+                17
+            } else {
+                1
+            }
+        );
+        let pushed = tokio::time::timeout(Duration::from_secs(2), &mut receiver.0)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(pushed["message"]["messageId"], id.as_str());
+        let received = SubscriberClient::new(server.channel().await)
+            .pull(pb::PullRequest {
+                subscription: SUB.into(),
+                max_messages: 1,
+                ..Default::default()
+            })
+            .await
+            .unwrap()
+            .into_inner();
+        let message = received.received_messages[0].message.as_ref().unwrap();
+        assert_eq!(message.message_id, *id);
+        assert_eq!(message.data, b"x");
+    }
+}

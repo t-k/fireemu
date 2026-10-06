@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import test from "node:test";
+import test, { mock } from "node:test";
 import * as iam from "./pubsub-production/iam.mjs";
 import { plannedRequests, selectCases } from "./pubsub-production/runner.mjs";
 import { createPhaseLimit } from "./pubsub-production/limits.mjs";
@@ -795,7 +795,6 @@ test("authority checks actual proof hashes and full E/V scope before demanding a
     a2Requests: 600,
     serviceAgent: principal,
     lockPath: join(out, "copied-lock.json"),
-    lockFd: 17,
   };
   const row = (kind) => ({
     kind,
@@ -827,8 +826,52 @@ test("authority checks actual proof hashes and full E/V scope before demanding a
   try {
     assert.throws(
       () => verifyAuthority(authority, descriptor, digest, options, 0),
-      /canonical live lock FD/,
+      /canonical sandbox lock/,
     );
+    // Intercept only the canonical lock read: tests never access production lock files.
+    const fs = await import("node:fs");
+    const { syncBuiltinESMExports } = await import("node:module");
+    const { execFileSync } = await import("node:child_process");
+    const { dirname, resolve } = await import("node:path");
+    const common = execFileSync(
+      "git",
+      ["-C", process.cwd(), "rev-parse", "--path-format=absolute", "--git-common-dir"],
+      { encoding: "utf8" },
+    ).trim();
+    authority.lockPath = resolve(
+      dirname(common),
+      "docs.local/runs/sandbox-locks",
+      `${options.project}.lock`,
+    );
+    let lock = {
+      pid: process.pid,
+      envelopeId: authority.envelopeId,
+      sourceCommit: descriptor.head,
+      acquiredAt: "1970-01-01T00:00:00Z",
+    };
+    const originalRead = fs.default.readFileSync;
+    const intercept = mock.method(fs.default, "readFileSync", (path, ...args) =>
+      path === authority.lockPath ? Buffer.from(JSON.stringify(lock)) : originalRead(path, ...args),
+    );
+    syncBuiltinESMExports();
+    try {
+      assert.doesNotThrow(() => verifyAuthority(authority, descriptor, digest, options, 0));
+      assert.equal(verifyAuthority(authority, descriptor, digest, options, 0), authority);
+      for (const changes of [
+        { pid: process.pid + 1 },
+        { envelopeId: "OTHER" },
+        { sourceCommit: "c".repeat(40) },
+      ]) {
+        const originalLock = lock;
+        lock = { ...lock, ...changes };
+        assert.throws(() => verifyAuthority(authority, descriptor, digest, options, 0), /lock/);
+        lock = originalLock;
+      }
+    } finally {
+      intercept.mock.restore();
+      syncBuiltinESMExports();
+    }
+    authority.lockPath = join(out, "copied-lock.json");
     for (const changes of [
       { envelopeId: undefined },
       { expiresAt: "1970-01-01T00:00:00Z" },
@@ -921,50 +964,48 @@ test("IAM wait refuses a clock that becomes nonfinite after the initial sample",
   );
 });
 
-test("live lock proof reads the held inode and rejects copies symlinks and wrong envelopes", async () => {
-  const { mkdtempSync, writeFileSync, openSync, closeSync, rmSync, symlinkSync } =
-    await import("node:fs");
+test("coordinator lock file binds the recorder pid envelope source and acquisition time without FD or expiry", async () => {
+  const { mkdtempSync, writeFileSync, rmSync } = await import("node:fs");
   const { tmpdir } = await import("node:os");
   const { join } = await import("node:path");
   const { verifyLiveLock } = await import("./pubsub-production/admission.mjs");
-  const out = mkdtempSync(join(tmpdir(), "v2-held-inode-"));
-  const binding = {
-    project: "demo-v2",
-    taskId: "PUBSUB-STREAM-DLQ",
-    envelopeId: "PUBSUB-STREAM-DLQ-V2",
-  };
-  const path = join(out, "test-lock.json");
-  const copy = join(out, "copy.json");
-  const link = join(out, "link.json");
-  writeFileSync(path, JSON.stringify(binding), { flag: "wx" });
-  writeFileSync(copy, JSON.stringify(binding));
-  symlinkSync(path, link);
-  const fd = openSync(path, "r");
-  const other = openSync(copy, "r");
+  const out = mkdtempSync(join(tmpdir(), "v2-lock-file-"));
+  const path = join(out, "demo-v2.lock");
+  const binding = { envelopeId: "PUBSUB-STREAM-DLQ-V2", sourceCommit: "a".repeat(40) };
+  const lock = { pid: process.pid, ...binding, acquiredAt: "1970-01-01T00:00:00Z" };
+  writeFileSync(path, JSON.stringify(lock), { flag: "wx" });
   try {
-    for (let repeat = 0; repeat < 3; repeat += 1)
-      assert.deepEqual(verifyLiveLock({ path, fd, expectedPath: path }, binding), binding);
-    assert.throws(() => verifyLiveLock({ path, fd: other, expectedPath: path }, binding), /inode/);
+    assert.throws(() => writeFileSync(path, JSON.stringify(lock), { flag: "wx" }), {
+      code: "EEXIST",
+    });
+    assert.doesNotThrow(() => verifyLiveLock({ path, expectedPath: path }, binding));
+    assert.deepEqual(verifyLiveLock({ path, expectedPath: path }, binding), lock);
     assert.throws(
-      () => verifyLiveLock({ path: copy, fd: other, expectedPath: path }, binding),
+      () => verifyLiveLock({ path, expectedPath: join(out, "other.lock") }, binding),
       /canonical/,
     );
-    assert.throws(
-      () => verifyLiveLock({ path: link, fd, expectedPath: link }, binding),
-      /inode|symlink/,
-    );
-    assert.throws(
-      () =>
-        verifyLiveLock(
-          { path, fd, expectedPath: path },
-          { ...binding, envelopeId: "OTHER-ENVELOPE" },
-        ),
-      /authority/,
-    );
-    assert.throws(() => verifyLiveLock({ path, fd: 2, expectedPath: path }, binding), /canonical/);
+    for (let seed = 0; seed < 64; seed += 1) {
+      for (const changes of [
+        { pid: process.pid + seed + 1 },
+        { pid: 0 },
+        { pid: "1" },
+        { pid: undefined },
+        { envelopeId: `other-${seed}` },
+        { sourceCommit: "b".repeat(40) },
+        { sourceCommit: undefined },
+        { acquiredAt: undefined },
+        { acquiredAt: "bad" },
+        { acquiredAt: 0 },
+      ]) {
+        writeFileSync(path, JSON.stringify({ ...lock, ...changes }));
+        assert.throws(() => verifyLiveLock({ path, expectedPath: path }, binding), /lock/);
+      }
+    }
+    writeFileSync(path, "A".repeat(1_048_577));
+    assert.throws(() => verifyLiveLock({ path, expectedPath: path }, binding), /oversized/);
+    writeFileSync(path, "null");
+    assert.throws(() => verifyLiveLock({ path, expectedPath: path }, binding), /lock/);
   } finally {
-    closeSync(fd);
-    closeSync(other);
     rmSync(out, { recursive: true });
   }
 });

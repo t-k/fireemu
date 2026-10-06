@@ -5,9 +5,6 @@ import {
   readdirSync,
   statSync,
   realpathSync,
-  fstatSync,
-  lstatSync,
-  readSync,
   openSync,
   closeSync,
   writeFileSync,
@@ -176,31 +173,26 @@ export function verifyDescriptor(descriptor) {
   return actual;
 }
 
-// The coordinator must acquire this canonical v2 lock exclusively and inherit its still-held FD.
-// Inode identity checks bind that FD to the path; they do not prove acquisition provenance.
-export function verifyLiveLock({ path, fd, expectedPath }, binding) {
-  if (resolve(path ?? "") !== expectedPath || !Number.isSafeInteger(fd) || fd < 3)
-    throw new Error("canonical live lock FD required");
-  const held = fstatSync(fd);
-  const named = lstatSync(path);
-  if (
-    !held.isFile() ||
-    !named.isFile() ||
-    held.dev !== named.dev ||
-    held.ino !== named.ino ||
-    held.nlink !== 1 ||
-    held.size > 1_048_576
-  )
-    throw new Error("live sandbox lock inode mismatch");
-  const bytes = Buffer.alloc(held.size);
-  if (readSync(fd, bytes, 0, bytes.length, 0) !== bytes.length)
-    throw new Error("incomplete live sandbox lock");
-  const after = lstatSync(path);
-  if (after.dev !== held.dev || after.ino !== held.ino || !after.isFile())
-    throw new Error("live sandbox lock changed during read");
+// The coordinator creates the canonical file with O_EXCL immediately before launch.
+// It retains the file for recovery and releases it only after matching-envelope PID absence.
+export function verifyLiveLock({ path, expectedPath }, binding) {
+  if (typeof path !== "string" || resolve(path) !== expectedPath)
+    throw new Error("canonical sandbox lock required");
+  const bytes = readFileSync(path);
+  if (bytes.length > 1_048_576) throw new Error("oversized sandbox lock");
   const lock = JSON.parse(bytes);
-  if (Object.entries(binding).some(([key, value]) => lock[key] !== value))
-    throw new Error("actual sandbox lock does not match source authority");
+  if (
+    lock === null ||
+    typeof lock !== "object" ||
+    Array.isArray(lock) ||
+    lock.pid !== process.pid ||
+    lock.envelopeId !== binding.envelopeId ||
+    lock.sourceCommit !== binding.sourceCommit ||
+    typeof lock.acquiredAt !== "string" ||
+    !Number.isFinite(Date.parse(lock.acquiredAt))
+  )
+    throw new Error("actual sandbox lock does not match recorder source authority");
+  // acquiredAt is descriptive. The coordinator contract deliberately has no lock expiry.
   return lock;
 }
 
@@ -322,8 +314,8 @@ export function verifyAuthority(
     `${options.project}.lock`,
   );
   verifyLiveLock(
-    { path: authority.lockPath, fd: authority.lockFd, expectedPath: canonical },
-    { taskId: authority.taskId, envelopeId: authority.envelopeId, project: options.project },
+    { path: authority.lockPath, expectedPath: canonical },
+    { envelopeId: authority.envelopeId, sourceCommit: descriptor.head },
   );
   if (authority.runIds[1] === options.runId) {
     const prior = readJson(authority.previousAttempt?.path);

@@ -30,6 +30,7 @@ const SUBSCRIPTION: &str = "projects/demo-app/subscriptions/auth-source";
 
 struct Server {
     address: std::net::SocketAddr,
+    policy: PagingPolicy,
     task: tokio::task::JoinHandle<()>,
 }
 
@@ -54,7 +55,11 @@ impl Server {
         let task = tokio::spawn(async move {
             serve_pubsub(listener, handle).await.unwrap();
         });
-        Self { address, task }
+        Self {
+            address,
+            policy,
+            task,
+        }
     }
 
     async fn channel(&self) -> tonic::transport::Channel {
@@ -86,16 +91,52 @@ impl Server {
     }
 
     async fn rest(&self, method: &str, path: &str, headers: &[&str], body: &[u8]) -> (u16, Value) {
-        let mut stream = tokio::net::TcpStream::connect(self.address).await.unwrap();
         let mut authorization = String::new();
         for value in headers {
             write!(authorization, "Authorization: {value}\r\n").unwrap();
         }
-        let request = format!("{method} {path} HTTP/1.1\r\nHost: {}\r\nContent-Type: application/json\r\nContent-Length: {}\r\n{authorization}Connection: close\r\n\r\n", self.address, body.len());
+        self.rest_with_headers(method, path, &authorization, body)
+            .await
+    }
+
+    async fn rest_with_headers(
+        &self,
+        method: &str,
+        path: &str,
+        headers: &str,
+        body: &[u8],
+    ) -> (u16, Value) {
+        let mut stream = tokio::net::TcpStream::connect(self.address).await.unwrap();
+        let request = format!("{method} {path} HTTP/1.1\r\nHost: {}\r\nContent-Type: application/json\r\nContent-Length: {}\r\n{headers}Connection: close\r\n\r\n", self.address, body.len());
         stream.write_all(request.as_bytes()).await.unwrap();
         stream.write_all(body).await.unwrap();
         let mut response = Vec::new();
-        stream.read_to_end(&mut response).await.unwrap();
+        // Stop at the complete Content-Length frame. Reading past a completed refusal can
+        // observe a reset when the server closes with the rejected request body unread.
+        loop {
+            if let Some(separator) = response.windows(4).position(|part| part == b"\r\n\r\n") {
+                let headers = std::str::from_utf8(&response[..separator]).unwrap();
+                let length = headers
+                    .lines()
+                    .find_map(|line| {
+                        let (name, value) = line.split_once(':')?;
+                        name.eq_ignore_ascii_case("content-length")
+                            .then(|| value.trim().parse::<usize>().unwrap())
+                    })
+                    .expect("JSON response has an exact Content-Length");
+                if response.len() >= separator + 4 + length {
+                    assert_eq!(response.len(), separator + 4 + length);
+                    break;
+                }
+            }
+            let mut chunk = [0; 4096];
+            let count = stream
+                .read(&mut chunk)
+                .await
+                .expect("complete HTTP response frame");
+            assert_ne!(count, 0, "connection closed before a complete response");
+            response.extend_from_slice(&chunk[..count]);
+        }
         let separator = response
             .windows(4)
             .position(|part| part == b"\r\n\r\n")
@@ -110,10 +151,159 @@ impl Server {
             .unwrap()
             .parse()
             .unwrap();
+        let body = &response[separator + 4..];
+        if self.policy == PagingPolicy::Strict {
+            assert_eq!(
+                body.last(),
+                Some(&b'\n'),
+                "strict authentication responses keep the active profile"
+            );
+            assert_ne!(body.get(body.len() - 2), Some(&b'\n'));
+        } else {
+            let parsed: Value = serde_json::from_slice(body).unwrap();
+            assert_eq!(body, serde_json::to_vec(&parsed).unwrap());
+        }
         (
             status,
             serde_json::from_slice(&response[separator + 4..]).unwrap(),
         )
+    }
+}
+
+#[tokio::test]
+#[allow(clippy::too_many_lines)]
+async fn alternate_credential_carriers_are_present_even_when_empty_or_encoded() {
+    // These input carriers were not observed in production. The assigned local contract
+    // applies the recorded Publisher refusal envelope to each present credential.
+    let carriers = [
+        ("?access_token=unsupported", ""),
+        ("?access_token=", ""),
+        ("?access_token", ""),
+        ("?%61ccess_token=unsupported", ""),
+        ("?key=unsupported", ""),
+        ("?key=", ""),
+        ("?%6Bey=unsupported", ""),
+        ("?unrelated=%ff&key=unsupported", ""),
+        ("?key=first&key=second", ""),
+        ("", "X-Goog-Api-Key: unsupported\r\n"),
+        ("", "X-Goog-Api-Key: \r\n"),
+        ("", "x-goog-api-key: first\r\nX-Goog-Api-Key: second\r\n"),
+    ];
+    for policy in [PagingPolicy::Strict, PagingPolicy::Emulator] {
+        let server = Server::start(policy).await;
+        server.bootstrap().await;
+        let mut publisher = PublisherClient::new(server.channel().await);
+        for value in ["", "unsupported"] {
+            let mut request = tonic::Request::new(pb::GetTopicRequest {
+                topic: TOPIC.to_owned(),
+            });
+            request
+                .metadata_mut()
+                .insert("x-goog-api-key", value.parse().unwrap());
+            let result = publisher.get_topic(request).await;
+            if policy == PagingPolicy::Strict {
+                let error = result.unwrap_err();
+                assert_eq!(error.code(), tonic::Code::Unauthenticated);
+                assert_eq!(error.message(), MESSAGE);
+            } else {
+                assert!(result.is_ok());
+            }
+        }
+        for (query, headers) in carriers {
+            for (method, path, payload, rpc) in [
+                (
+                    "GET",
+                    format!("/v1/{TOPIC}{query}"),
+                    b"{}".as_slice(),
+                    "GetTopic",
+                ),
+                (
+                    "PUT",
+                    format!("/v1/projects/demo-app/topics/alternate-rejected{query}"),
+                    b"{}".as_slice(),
+                    "CreateTopic",
+                ),
+                (
+                    "POST",
+                    format!("/v1/{TOPIC}:publish{query}"),
+                    b"{\"messages\":[{\"data\":\"eA==\"}]}".as_slice(),
+                    "Publish",
+                ),
+            ] {
+                let (status, body) = server
+                    .rest_with_headers(method, &path, headers, payload)
+                    .await;
+                if policy == PagingPolicy::Strict {
+                    assert_eq!(status, 401, "{query:?}: {rpc}");
+                    assert_eq!(body, expected_rest(rpc));
+                } else {
+                    assert!(matches!(status, 200 | 409), "{query:?}: {rpc}: {body}");
+                }
+            }
+        }
+        let (status, _) = server
+            .rest(
+                "GET",
+                "/v1/projects/demo-app/topics/alternate-rejected",
+                &[],
+                b"{}",
+            )
+            .await;
+        assert_eq!(
+            status,
+            if policy == PagingPolicy::Strict {
+                404
+            } else {
+                200
+            }
+        );
+        let mut subscriber = SubscriberClient::new(server.channel().await);
+        let messages = subscriber
+            .pull(pull_request())
+            .await
+            .unwrap()
+            .into_inner()
+            .received_messages;
+        assert_eq!(
+            messages.len(),
+            if policy == PagingPolicy::Strict {
+                0
+            } else {
+                carriers.len()
+            }
+        );
+        for query in [
+            "?Access_token=x",
+            "?access-token=x",
+            "?key_suffix=x",
+            "?api_key=x",
+            "?value=access_token%3Dx",
+            "?access+token=x",
+        ] {
+            assert_eq!(
+                server
+                    .rest("GET", &format!("/v1/{TOPIC}{query}"), &[], b"{}")
+                    .await
+                    .0,
+                200
+            );
+        }
+        let (status, _) = server
+            .rest_with_headers(
+                "PUT",
+                "/v1/projects/demo-app/topics/invalid-alternate?access_token=",
+                "",
+                b"{",
+            )
+            .await;
+        assert_eq!(
+            status,
+            if policy == PagingPolicy::Strict {
+                401
+            } else {
+                400
+            }
+        );
     }
 }
 
@@ -349,6 +539,38 @@ proptest! {
                     let accepted = policy == PagingPolicy::Emulator || *count == 0;
                     assert_eq!(result.is_ok(), accepted);
                     if accepted { expected.push(payload.as_bytes().to_vec()); } else { assert_eq!(result.unwrap_err().code(), tonic::Code::Unauthenticated); }
+                }
+                let mut subscriber = SubscriberClient::new(server.channel().await);
+                let actual = subscriber.pull(pull_request()).await.unwrap().into_inner().received_messages.into_iter().map(|message| message.message.unwrap().data).collect::<Vec<_>>();
+                assert_eq!(actual, expected);
+            }
+        });
+    }
+
+    #[test]
+    fn credential_carrier_publications_match_presence_reference(trace in prop::collection::vec((0usize..8, "[a-z]{1,8}"), 1..12)) {
+        let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+        runtime.block_on(async {
+            for policy in [PagingPolicy::Strict, PagingPolicy::Emulator] {
+                let server = Server::start(policy).await;
+                server.bootstrap().await;
+                let mut expected = Vec::new();
+                for (carrier, payload) in &trace {
+                    let (query, headers) = match carrier {
+                        0 => ("", ""),
+                        1 => ("?access_token=x", ""),
+                        2 => ("?key=x", ""),
+                        3 => ("", "X-Goog-Api-Key: x\r\n"),
+                        4 => ("?%61ccess_token=x", ""),
+                        5 => ("?key=", ""),
+                        6 => ("?unrelated=x", ""),
+                        _ => ("", "X-Goog-Api-Key-Suffix: x\r\n"),
+                    };
+                    let body = serde_json::to_vec(&json!({"messages":[{"data":base64::Engine::encode(&base64::engine::general_purpose::STANDARD,payload.as_bytes())}]})).unwrap();
+                    let (status, response) = server.rest_with_headers("POST", &format!("/v1/{TOPIC}:publish{query}"), headers, &body).await;
+                    let accepted = policy == PagingPolicy::Emulator || matches!(carrier, 0 | 6 | 7);
+                    if accepted { assert_eq!(status, 200); expected.push(payload.as_bytes().to_vec()); }
+                    else { assert_eq!(status, 401); assert_eq!(response, expected_rest("Publish")); }
                 }
                 let mut subscriber = SubscriberClient::new(server.channel().await);
                 let actual = subscriber.pull(pull_request()).await.unwrap().into_inner().received_messages.into_iter().map(|message| message.message.unwrap().data).collect::<Vec<_>>();

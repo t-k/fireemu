@@ -92,6 +92,124 @@ async fn grpc_channel(address: std::net::SocketAddr) -> tonic::transport::Channe
 }
 
 #[tokio::test]
+#[allow(clippy::too_many_lines)]
+async fn strict_rest_layout_uses_proto_order_while_emulator_keeps_compact_json() {
+    use fireemu_adapter_pubsub::PagingPolicy;
+    for policy in [PagingPolicy::Strict, PagingPolicy::Emulator] {
+        let address = start_policy(policy).await;
+        let (_, empty) =
+            rest_request_raw(address, "GET", "/v1/projects/demo-app/topics", json!({})).await;
+        assert_eq!(
+            empty,
+            if policy == PagingPolicy::Strict {
+                b"{}\n".as_slice()
+            } else {
+                b"{}".as_slice()
+            }
+        );
+        rest_request(
+            address,
+            "PUT",
+            "/v1/projects/demo-app/topics/layout",
+            json!({}),
+        )
+        .await;
+        let (_, subscription) = rest_request_raw(
+            address,
+            "PUT",
+            "/v1/projects/demo-app/subscriptions/layout",
+            json!({"topic":"projects/demo-app/topics/layout"}),
+        )
+        .await;
+        let expected = concat!(
+            "{\n",
+            "  \"name\": \"projects/demo-app/subscriptions/layout\",\n",
+            "  \"topic\": \"projects/demo-app/topics/layout\",\n",
+            "  \"pushConfig\": {},\n",
+            "  \"ackDeadlineSeconds\": 10,\n",
+            "  \"messageRetentionDuration\": \"604800s\",\n",
+            "  \"expirationPolicy\": {\n",
+            "    \"ttl\": \"2678400s\"\n",
+            "  },\n",
+            "  \"state\": \"ACTIVE\"\n",
+            "}\n",
+        );
+        if policy == PagingPolicy::Strict {
+            assert_eq!(subscription, expected.as_bytes());
+        } else {
+            let parsed: Value = serde_json::from_slice(&subscription).unwrap();
+            assert_eq!(subscription, serde_json::to_vec(&parsed).unwrap());
+        }
+        let (_, collection) = rest_request_raw(
+            address,
+            "GET",
+            "/v1/projects/demo-app/subscriptions",
+            json!({}),
+        )
+        .await;
+        if policy == PagingPolicy::Strict {
+            let nested = expected.trim_end().replace('\n', "\n    ");
+            assert_eq!(
+                collection,
+                format!("{{\n  \"subscriptions\": [\n    {nested}\n  ]\n}}\n").as_bytes()
+            );
+        } else {
+            let parsed: Value = serde_json::from_slice(&collection).unwrap();
+            assert_eq!(collection, serde_json::to_vec(&parsed).unwrap());
+        }
+        rest_request(
+            address,
+            "PUT",
+            "/v1/projects/demo-app/subscriptions/layout-second",
+            json!({"topic":"projects/demo-app/topics/layout"}),
+        )
+        .await;
+        let (_, page) = rest_request_raw(
+            address,
+            "GET",
+            "/v1/projects/demo-app/subscriptions?pageSize=1",
+            json!({}),
+        )
+        .await;
+        if policy == PagingPolicy::Strict {
+            let text = std::str::from_utf8(&page).unwrap();
+            assert!(
+                text.find("\"subscriptions\"").unwrap() < text.find("\"nextPageToken\"").unwrap()
+            );
+        } else {
+            let parsed: Value = serde_json::from_slice(&page).unwrap();
+            assert_eq!(page, serde_json::to_vec(&parsed).unwrap());
+        }
+        let (status, error) = rest_request_raw(
+            address,
+            "GET",
+            "/v1/projects/demo-app/topics/missing-layout",
+            json!({}),
+        )
+        .await;
+        assert_eq!(status, 404);
+        if policy == PagingPolicy::Strict {
+            assert_eq!(
+                error,
+                concat!(
+                    "{\n",
+                    "  \"error\": {\n",
+                    "    \"code\": 404,\n",
+                    "    \"message\": \"Resource not found (resource=missing-layout).\",\n",
+                    "    \"status\": \"NOT_FOUND\"\n",
+                    "  }\n",
+                    "}\n"
+                )
+                .as_bytes()
+            );
+        } else {
+            let parsed: Value = serde_json::from_slice(&error).unwrap();
+            assert_eq!(error, serde_json::to_vec(&parsed).unwrap());
+        }
+    }
+}
+
+#[tokio::test]
 async fn recorded_rest_bootstrap_empty_lists_omit_default_fields() {
     let address = start().await;
     for collection in ["topics", "subscriptions"] {

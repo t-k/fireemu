@@ -705,9 +705,7 @@ mod tests {
     ) -> Arc<fireemu_adapter_functions::runtime::FunctionsRuntime> {
         use fireemu_adapter_functions::manifest_json::parse_manifest;
         use fireemu_adapter_functions::runner::{Runner, SpawnSpec};
-        use fireemu_adapter_functions::runtime::{
-            CatchUpPolicy, FunctionsConfig, FunctionsRuntime, OverlapPolicy,
-        };
+        use fireemu_adapter_functions::runtime::{FunctionsConfig, FunctionsRuntime};
         let spec = SpawnSpec {
             command: vec![
                 "python3".to_owned(),
@@ -727,21 +725,9 @@ mod tests {
         FunctionsRuntime::new(
             manifest,
             FunctionsConfig {
-                project: "demo-app".to_owned(),
-                default_bucket: "demo-app.appspot.com".to_owned(),
-                location: "nam5".to_owned(),
-                session: fireemu_core_types::ids::SessionId::new(7),
-                max_running: 4,
-                debug_mode: false,
                 retry_attempts: 1,
-                max_catch_up_runs: 1000,
-                runner_secret: "test-secret".to_owned(),
-                overlap: OverlapPolicy::Allow,
-                catch_up: CatchUpPolicy::All,
                 functions_host: Some("127.0.0.1:5001".to_owned()),
-                subscription_naming: fireemu_adapter_functions::events::SubscriptionNaming::default(
-                ),
-                auth_context: fireemu_adapter_functions::events::AuthContextNaming::default(),
+                ..FunctionsConfig::for_tests(1000, "test-secret".to_owned())
             },
             clock,
             Arc::new(runner),

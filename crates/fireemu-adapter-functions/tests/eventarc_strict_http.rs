@@ -16,7 +16,6 @@ use fireemu_adapter_functions::manifest_json::parse_manifest;
 use fireemu_adapter_functions::runner::{Runner, SpawnSpec};
 use fireemu_adapter_functions::runtime::{FunctionsConfig, FunctionsRuntime};
 use fireemu_core_session::clock::VirtualClock;
-use fireemu_core_types::ids::SessionId;
 use fireemu_core_types::time::LogicalInstant;
 use serde_json::{json, Value};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -84,19 +83,7 @@ async fn start_with(
         manifest,
         FunctionsConfig {
             project: project.into(),
-            default_bucket: "demo-app.appspot.com".into(),
-            location: "nam5".into(),
-            session: SessionId::new(7),
-            max_running: 4,
-            debug_mode: false,
-            retry_attempts: 4,
-            max_catch_up_runs: 1000,
-            runner_secret: "s".into(),
-            overlap: fireemu_adapter_functions::runtime::OverlapPolicy::Allow,
-            catch_up: fireemu_adapter_functions::runtime::CatchUpPolicy::All,
-            functions_host: None,
-            subscription_naming: fireemu_adapter_functions::events::SubscriptionNaming::default(),
-            auth_context: fireemu_adapter_functions::events::AuthContextNaming::default(),
+            ..FunctionsConfig::for_tests(1000, "s".into())
         },
         Arc::new(Mutex::new(VirtualClock::new(START))),
         Arc::new(runner),

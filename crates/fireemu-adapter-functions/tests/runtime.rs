@@ -22,7 +22,6 @@ use fireemu_core_session::clock::VirtualClock;
 use fireemu_core_storage::etag::production_etag;
 use fireemu_core_storage::name::{BucketName, ObjectName};
 use fireemu_core_storage::store::{NewMetadata, Precondition, StorageEvent, StorageState};
-use fireemu_core_types::ids::SessionId;
 use fireemu_core_types::time::{LogicalDuration, LogicalInstant};
 use serde_json::json;
 
@@ -50,20 +49,7 @@ fn spawn_spec_debug_redacts_environment_and_command_arguments() {
 #[test]
 fn functions_config_debug_redacts_runner_secret() {
     let config = FunctionsConfig {
-        project: "demo-app".to_owned(),
-        default_bucket: "demo-app.appspot.com".to_owned(),
-        location: "nam5".to_owned(),
-        session: SessionId::new(7),
-        max_running: 4,
-        debug_mode: false,
-        retry_attempts: 4,
-        max_catch_up_runs: 10,
-        runner_secret: "runtime-sentinel-49".to_owned(),
-        overlap: fireemu_adapter_functions::runtime::OverlapPolicy::Allow,
-        catch_up: fireemu_adapter_functions::runtime::CatchUpPolicy::All,
-        functions_host: None,
-        subscription_naming: fireemu_adapter_functions::events::SubscriptionNaming::default(),
-        auth_context: fireemu_adapter_functions::events::AuthContextNaming::default(),
+        ..FunctionsConfig::for_tests(10, "runtime-sentinel-49".to_owned())
     };
 
     let config_debug = format!("{config:?}");
@@ -251,20 +237,10 @@ async fn start_runtime(
     let runtime = FunctionsRuntime::new(
         manifest,
         FunctionsConfig {
-            project: "demo-app".into(),
-            default_bucket: "demo-app.appspot.com".into(),
-            location: "nam5".into(),
-            session: SessionId::new(7),
             max_running,
-            debug_mode: false,
-            retry_attempts: 4,
-            max_catch_up_runs,
-            runner_secret: "s".into(),
             overlap,
             catch_up,
-            functions_host: None,
-            subscription_naming: fireemu_adapter_functions::events::SubscriptionNaming::default(),
-            auth_context: fireemu_adapter_functions::events::AuthContextNaming::default(),
+            ..FunctionsConfig::for_tests(max_catch_up_runs, "s".into())
         },
         clock.clone(),
         Arc::new(runner),
@@ -663,20 +639,10 @@ async fn start_task_runtime_with_policy_and_env(
     let runtime = FunctionsRuntime::new(
         manifest,
         FunctionsConfig {
-            project: "demo-app".into(),
-            default_bucket: "demo-app.appspot.com".into(),
-            location: "nam5".into(),
-            session: SessionId::new(7),
             max_running,
-            debug_mode: false,
             retry_attempts: 1,
-            max_catch_up_runs: 1,
-            runner_secret: "s".into(),
-            overlap: fireemu_adapter_functions::runtime::OverlapPolicy::Allow,
-            catch_up: fireemu_adapter_functions::runtime::CatchUpPolicy::All,
             functions_host: Some("127.0.0.1:5001".into()),
-            subscription_naming: fireemu_adapter_functions::events::SubscriptionNaming::default(),
-            auth_context: fireemu_adapter_functions::events::AuthContextNaming::default(),
+            ..FunctionsConfig::for_tests(1, "s".into())
         },
         Arc::new(Mutex::new(VirtualClock::new(START))),
         Arc::new(runner),
@@ -1093,20 +1059,8 @@ async fn multi_codebase_runtime_exposes_and_stops_every_current_runner() {
             },
         ],
         FunctionsConfig {
-            project: "demo-app".into(),
-            default_bucket: "demo-app.appspot.com".into(),
-            location: "nam5".into(),
-            session: SessionId::new(7),
-            max_running: 4,
-            debug_mode: false,
             retry_attempts: 1,
-            max_catch_up_runs: 1,
-            runner_secret: "s".into(),
-            overlap: fireemu_adapter_functions::runtime::OverlapPolicy::Allow,
-            catch_up: fireemu_adapter_functions::runtime::CatchUpPolicy::All,
-            functions_host: None,
-            subscription_naming: fireemu_adapter_functions::events::SubscriptionNaming::default(),
-            auth_context: fireemu_adapter_functions::events::AuthContextNaming::default(),
+            ..FunctionsConfig::for_tests(1, "s".into())
         },
         Arc::new(Mutex::new(VirtualClock::new(START))),
     )
@@ -1569,20 +1523,7 @@ async fn failed_blocking_auth_respawn_releases_recovery_ownership() {
     let runtime = FunctionsRuntime::new(
         manifest,
         FunctionsConfig {
-            project: "demo-app".into(),
-            default_bucket: "demo-app.appspot.com".into(),
-            location: "nam5".into(),
-            session: SessionId::new(7),
-            max_running: 4,
-            debug_mode: false,
-            retry_attempts: 4,
-            max_catch_up_runs: 1000,
-            runner_secret: "s".into(),
-            overlap: fireemu_adapter_functions::runtime::OverlapPolicy::Allow,
-            catch_up: fireemu_adapter_functions::runtime::CatchUpPolicy::All,
-            functions_host: None,
-            subscription_naming: fireemu_adapter_functions::events::SubscriptionNaming::default(),
-            auth_context: fireemu_adapter_functions::events::AuthContextNaming::default(),
+            ..FunctionsConfig::for_tests(1000, "s".into())
         },
         Arc::new(Mutex::new(VirtualClock::new(START))),
         runner,
@@ -1728,20 +1669,9 @@ async fn a_blocking_restart_cannot_replace_a_newer_hot_reload_generation() {
     let runtime = FunctionsRuntime::new(
         manifest.clone(),
         FunctionsConfig {
-            project: "demo-app".into(),
-            default_bucket: "demo-app.appspot.com".into(),
-            location: "nam5".into(),
-            session: SessionId::new(7),
             max_running: 1,
-            debug_mode: false,
             retry_attempts: 1,
-            max_catch_up_runs: 1,
-            runner_secret: "s".into(),
-            overlap: fireemu_adapter_functions::runtime::OverlapPolicy::Allow,
-            catch_up: fireemu_adapter_functions::runtime::CatchUpPolicy::All,
-            functions_host: None,
-            subscription_naming: fireemu_adapter_functions::events::SubscriptionNaming::default(),
-            auth_context: fireemu_adapter_functions::events::AuthContextNaming::default(),
+            ..FunctionsConfig::for_tests(1, "s".into())
         },
         Arc::new(Mutex::new(VirtualClock::new(START))),
         Arc::new(initial),
@@ -2233,20 +2163,7 @@ async fn a_spontaneous_recovery_cannot_replace_a_newer_reload() {
     let runtime = FunctionsRuntime::new(
         manifest.clone(),
         FunctionsConfig {
-            project: "demo-app".into(),
-            default_bucket: "demo-app.appspot.com".into(),
-            location: "nam5".into(),
-            session: SessionId::new(7),
-            max_running: 4,
-            debug_mode: false,
-            retry_attempts: 4,
-            max_catch_up_runs: 1000,
-            runner_secret: "s".into(),
-            overlap: fireemu_adapter_functions::runtime::OverlapPolicy::Allow,
-            catch_up: fireemu_adapter_functions::runtime::CatchUpPolicy::All,
-            functions_host: None,
-            subscription_naming: fireemu_adapter_functions::events::SubscriptionNaming::default(),
-            auth_context: fireemu_adapter_functions::events::AuthContextNaming::default(),
+            ..FunctionsConfig::for_tests(1000, "s".into())
         },
         Arc::new(Mutex::new(VirtualClock::new(START))),
         initial.clone(),
@@ -2370,20 +2287,7 @@ async fn reload_generation_wins_over_an_older_reset_respawn() {
     let runtime = FunctionsRuntime::new(
         manifest.clone(),
         FunctionsConfig {
-            project: "demo-app".into(),
-            default_bucket: "demo-app.appspot.com".into(),
-            location: "nam5".into(),
-            session: SessionId::new(7),
-            max_running: 4,
-            debug_mode: false,
-            retry_attempts: 4,
-            max_catch_up_runs: 1000,
-            runner_secret: "s".into(),
-            overlap: fireemu_adapter_functions::runtime::OverlapPolicy::Allow,
-            catch_up: fireemu_adapter_functions::runtime::CatchUpPolicy::All,
-            functions_host: None,
-            subscription_naming: fireemu_adapter_functions::events::SubscriptionNaming::default(),
-            auth_context: fireemu_adapter_functions::events::AuthContextNaming::default(),
+            ..FunctionsConfig::for_tests(1000, "s".into())
         },
         clock,
         Arc::new(initial),
@@ -2425,20 +2329,7 @@ async fn a_crash_fault_still_kills_a_runner_that_cannot_be_respawned() {
     let runtime = FunctionsRuntime::new(
         manifest,
         FunctionsConfig {
-            project: "demo-app".into(),
-            default_bucket: "demo-app.appspot.com".into(),
-            location: "nam5".into(),
-            session: SessionId::new(7),
-            max_running: 4,
-            debug_mode: false,
-            retry_attempts: 4,
-            max_catch_up_runs: 1000,
-            runner_secret: "s".into(),
-            overlap: fireemu_adapter_functions::runtime::OverlapPolicy::Allow,
-            catch_up: fireemu_adapter_functions::runtime::CatchUpPolicy::All,
-            functions_host: None,
-            subscription_naming: fireemu_adapter_functions::events::SubscriptionNaming::default(),
-            auth_context: fireemu_adapter_functions::events::AuthContextNaming::default(),
+            ..FunctionsConfig::for_tests(1000, "s".into())
         },
         Arc::new(Mutex::new(VirtualClock::new(START))),
         Arc::new(runner),

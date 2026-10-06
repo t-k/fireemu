@@ -7,7 +7,7 @@
   "oracleTrack": "disposable-sandbox",
   "closureReview": {
     "decision": "PENDING",
-    "note": "The final source-bound release comparison and coordinator closure rulings are recorded; the additional boundary-token-relationship difference and independent Opus closure review remain open."
+    "note": "The final source-bound release comparison and coordinator closure rulings are recorded; independent Opus closure review remains pending."
   },
   "scopeDecisions": [
     {
@@ -156,7 +156,7 @@
       "note": "Every recorded row is MATCH or an approved declared difference under coordinator closure rulings 1-5 (2026-10-06 10:07Z). Approved differences retain their DIVERGES verdicts; variable production rows cite the matching production answer.",
       "evidence": {
         "comparisonPath": "spec/compatibility/closure/evidence/FS-LISTEN-SDK-comparison.json",
-        "comparisonSha256": "efcded8aae0070614191830a6f8749a7d766670602e7ba5f595c6a9b2c67880d",
+        "comparisonSha256": "9a1eddaed173144ac1d7dfe42ad40f4597f2b02cc6f0dcfaf6bb300b68748429",
         "finalArtifactSha256": "9c772a9896a7847b254b9223a4e33f9cbe6b7d873a06e615817df10aa33c6ec5",
         "sourceCommit": "6294e1e5d8b49e0abf5cf1365dc0234685aaa322",
         "runnerTreeSha256": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6",
@@ -214,7 +214,7 @@
       "note": "Every recorded row is MATCH or an approved declared difference under coordinator closure rulings 1-5 (2026-10-06 10:07Z). Approved differences retain their DIVERGES verdicts; variable production rows cite the matching production answer.",
       "evidence": {
         "comparisonPath": "spec/compatibility/closure/evidence/FS-LISTEN-SDK-comparison.json",
-        "comparisonSha256": "efcded8aae0070614191830a6f8749a7d766670602e7ba5f595c6a9b2c67880d",
+        "comparisonSha256": "9a1eddaed173144ac1d7dfe42ad40f4597f2b02cc6f0dcfaf6bb300b68748429",
         "finalArtifactSha256": "9c772a9896a7847b254b9223a4e33f9cbe6b7d873a06e615817df10aa33c6ec5",
         "sourceCommit": "6294e1e5d8b49e0abf5cf1365dc0234685aaa322",
         "runnerTreeSha256": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6",
@@ -272,7 +272,7 @@
       "note": "Every recorded row is MATCH or an approved declared difference under coordinator closure rulings 1-5 (2026-10-06 10:07Z). Approved differences retain their DIVERGES verdicts; variable production rows cite the matching production answer.",
       "evidence": {
         "comparisonPath": "spec/compatibility/closure/evidence/FS-LISTEN-SDK-comparison.json",
-        "comparisonSha256": "efcded8aae0070614191830a6f8749a7d766670602e7ba5f595c6a9b2c67880d",
+        "comparisonSha256": "9a1eddaed173144ac1d7dfe42ad40f4597f2b02cc6f0dcfaf6bb300b68748429",
         "finalArtifactSha256": "9c772a9896a7847b254b9223a4e33f9cbe6b7d873a06e615817df10aa33c6ec5",
         "sourceCommit": "6294e1e5d8b49e0abf5cf1365dc0234685aaa322",
         "runnerTreeSha256": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6",
@@ -330,7 +330,7 @@
       "note": "Every recorded row is MATCH or an approved declared difference under coordinator closure rulings 1-5 (2026-10-06 10:07Z). Approved differences retain their DIVERGES verdicts; variable production rows cite the matching production answer.",
       "evidence": {
         "comparisonPath": "spec/compatibility/closure/evidence/FS-LISTEN-SDK-comparison.json",
-        "comparisonSha256": "efcded8aae0070614191830a6f8749a7d766670602e7ba5f595c6a9b2c67880d",
+        "comparisonSha256": "9a1eddaed173144ac1d7dfe42ad40f4597f2b02cc6f0dcfaf6bb300b68748429",
         "finalArtifactSha256": "9c772a9896a7847b254b9223a4e33f9cbe6b7d873a06e615817df10aa33c6ec5",
         "sourceCommit": "6294e1e5d8b49e0abf5cf1365dc0234685aaa322",
         "runnerTreeSha256": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6",
@@ -388,7 +388,7 @@
       "note": "Every recorded row is MATCH or an approved declared difference under coordinator closure rulings 1-5 (2026-10-06 10:07Z). Approved differences retain their DIVERGES verdicts; variable production rows cite the matching production answer.",
       "evidence": {
         "comparisonPath": "spec/compatibility/closure/evidence/FS-LISTEN-SDK-comparison.json",
-        "comparisonSha256": "efcded8aae0070614191830a6f8749a7d766670602e7ba5f595c6a9b2c67880d",
+        "comparisonSha256": "9a1eddaed173144ac1d7dfe42ad40f4597f2b02cc6f0dcfaf6bb300b68748429",
         "finalArtifactSha256": "9c772a9896a7847b254b9223a4e33f9cbe6b7d873a06e615817df10aa33c6ec5",
         "sourceCommit": "6294e1e5d8b49e0abf5cf1365dc0234685aaa322",
         "runnerTreeSha256": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6",
@@ -456,7 +456,7 @@
       },
       "evidence": {
         "comparisonPath": "spec/compatibility/closure/evidence/FS-LISTEN-SDK-comparison.json",
-        "comparisonSha256": "efcded8aae0070614191830a6f8749a7d766670602e7ba5f595c6a9b2c67880d",
+        "comparisonSha256": "9a1eddaed173144ac1d7dfe42ad40f4597f2b02cc6f0dcfaf6bb300b68748429",
         "finalArtifactSha256": "9c772a9896a7847b254b9223a4e33f9cbe6b7d873a06e615817df10aa33c6ec5",
         "sourceCommit": "6294e1e5d8b49e0abf5cf1365dc0234685aaa322",
         "runnerTreeSha256": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6",
@@ -514,7 +514,7 @@
       "note": "Every recorded row is MATCH or an approved declared difference under coordinator closure rulings 1-5 (2026-10-06 10:07Z). Approved differences retain their DIVERGES verdicts; variable production rows cite the matching production answer.",
       "evidence": {
         "comparisonPath": "spec/compatibility/closure/evidence/FS-LISTEN-SDK-comparison.json",
-        "comparisonSha256": "efcded8aae0070614191830a6f8749a7d766670602e7ba5f595c6a9b2c67880d",
+        "comparisonSha256": "9a1eddaed173144ac1d7dfe42ad40f4597f2b02cc6f0dcfaf6bb300b68748429",
         "finalArtifactSha256": "9c772a9896a7847b254b9223a4e33f9cbe6b7d873a06e615817df10aa33c6ec5",
         "sourceCommit": "6294e1e5d8b49e0abf5cf1365dc0234685aaa322",
         "runnerTreeSha256": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6",
@@ -587,7 +587,7 @@
       },
       "evidence": {
         "comparisonPath": "spec/compatibility/closure/evidence/FS-LISTEN-SDK-comparison.json",
-        "comparisonSha256": "efcded8aae0070614191830a6f8749a7d766670602e7ba5f595c6a9b2c67880d",
+        "comparisonSha256": "9a1eddaed173144ac1d7dfe42ad40f4597f2b02cc6f0dcfaf6bb300b68748429",
         "finalArtifactSha256": "9c772a9896a7847b254b9223a4e33f9cbe6b7d873a06e615817df10aa33c6ec5",
         "sourceCommit": "6294e1e5d8b49e0abf5cf1365dc0234685aaa322",
         "runnerTreeSha256": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6",
@@ -648,7 +648,7 @@
       },
       "evidence": {
         "comparisonPath": "spec/compatibility/closure/evidence/FS-LISTEN-SDK-comparison.json",
-        "comparisonSha256": "efcded8aae0070614191830a6f8749a7d766670602e7ba5f595c6a9b2c67880d",
+        "comparisonSha256": "9a1eddaed173144ac1d7dfe42ad40f4597f2b02cc6f0dcfaf6bb300b68748429",
         "finalArtifactSha256": "9c772a9896a7847b254b9223a4e33f9cbe6b7d873a06e615817df10aa33c6ec5",
         "sourceCommit": "6294e1e5d8b49e0abf5cf1365dc0234685aaa322",
         "runnerTreeSha256": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6",
@@ -699,7 +699,7 @@
       "note": "Every recorded row is MATCH or an approved declared difference under coordinator closure rulings 1-5 (2026-10-06 10:07Z). Approved differences retain their DIVERGES verdicts; variable production rows cite the matching production answer. A single L3 recording is accepted by owner ledger 921 and ruling 4, with a per-row note. Terminate on tab close is UNOBSERVED (the browser sent none) and is not claimed.",
       "evidence": {
         "comparisonPath": "spec/compatibility/closure/evidence/FS-LISTEN-SDK-comparison.json",
-        "comparisonSha256": "efcded8aae0070614191830a6f8749a7d766670602e7ba5f595c6a9b2c67880d",
+        "comparisonSha256": "9a1eddaed173144ac1d7dfe42ad40f4597f2b02cc6f0dcfaf6bb300b68748429",
         "finalArtifactSha256": "9c772a9896a7847b254b9223a4e33f9cbe6b7d873a06e615817df10aa33c6ec5",
         "sourceCommit": "6294e1e5d8b49e0abf5cf1365dc0234685aaa322",
         "runnerTreeSha256": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6",
@@ -746,7 +746,7 @@
       "note": "Every recorded row is MATCH or an approved declared difference under coordinator closure rulings 1-5 (2026-10-06 10:07Z). Approved differences retain their DIVERGES verdicts; variable production rows cite the matching production answer.",
       "evidence": {
         "comparisonPath": "spec/compatibility/closure/evidence/FS-LISTEN-SDK-comparison.json",
-        "comparisonSha256": "efcded8aae0070614191830a6f8749a7d766670602e7ba5f595c6a9b2c67880d",
+        "comparisonSha256": "9a1eddaed173144ac1d7dfe42ad40f4597f2b02cc6f0dcfaf6bb300b68748429",
         "finalArtifactSha256": "9c772a9896a7847b254b9223a4e33f9cbe6b7d873a06e615817df10aa33c6ec5",
         "sourceCommit": "6294e1e5d8b49e0abf5cf1365dc0234685aaa322",
         "runnerTreeSha256": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6",
@@ -773,7 +773,7 @@
         "fs-listen-sdk/backend-cache-transitions"
       ],
       "recipeStatus": "PROPOSED",
-      "status": "MISMATCH",
+      "status": "VERIFIED",
       "observation": {
         "method": "Observe fromCache-to-server snapshot timing and a persistent-cache resume after browser restart: compare backend resume token and read-time response with a cold-cache control. SDK-internal-only cache behavior is excluded.",
         "transports": [
@@ -794,21 +794,23 @@
         ],
         "recordingsRequired": 2
       },
-      "note": "D4 and D5 are approved declared differences under coordinator closure ruling 3. All four 203/203C rows also show boundary-token-relationship: production CURRENT and the following NO_CHANGE share a token, while strict uses different tokens. This additional difference is named and retained as DIVERGES; no approval for it is claimed.",
+      "note": "The four 203/203C rows no longer show a boundary-token-relationship difference: strict CURRENT and the following NO_CHANGE carry the same global token under the 2026-10-06 11:11Z ruling. The three remaining DIVERGES rows name D4/D5 exactly and are approved declared differences under coordinator closure ruling 3.",
       "evidence": {
         "comparisonPath": "spec/compatibility/closure/evidence/FS-LISTEN-SDK-comparison.json",
-        "comparisonSha256": "efcded8aae0070614191830a6f8749a7d766670602e7ba5f595c6a9b2c67880d",
-        "finalArtifactSha256": "9c772a9896a7847b254b9223a4e33f9cbe6b7d873a06e615817df10aa33c6ec5",
-        "sourceCommit": "6294e1e5d8b49e0abf5cf1365dc0234685aaa322",
+        "comparisonSha256": "9a1eddaed173144ac1d7dfe42ad40f4597f2b02cc6f0dcfaf6bb300b68748429",
+        "finalArtifactSha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
+        "sourceCommit": "aad8cee2a2a44528962361a474debc2c366d5b9d",
         "runnerTreeSha256": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6",
         "rows": {
-          "MATCH": 0,
-          "DIVERGES": 4,
+          "MATCH": 1,
+          "DIVERGES": 3,
           "NOT_COMPARABLE": 0
         },
         "productionRuns": [
           "nmuw7z5c9"
-        ]
+        ],
+        "buildRecordPath": "spec/compatibility/closure/evidence/FS-LISTEN-SDK-build.json",
+        "buildRecordSha256": "f090807adc7742b6efb8794a64f6e6dd403c40e79b3bfecbae5afd1507d36c38"
       }
     },
     {
@@ -841,7 +843,7 @@
       "note": "Every recorded row is MATCH or an approved declared difference under coordinator closure rulings 1-5 (2026-10-06 10:07Z). Approved differences retain their DIVERGES verdicts; variable production rows cite the matching production answer.",
       "evidence": {
         "comparisonPath": "spec/compatibility/closure/evidence/FS-LISTEN-SDK-comparison.json",
-        "comparisonSha256": "efcded8aae0070614191830a6f8749a7d766670602e7ba5f595c6a9b2c67880d",
+        "comparisonSha256": "9a1eddaed173144ac1d7dfe42ad40f4597f2b02cc6f0dcfaf6bb300b68748429",
         "finalArtifactSha256": "9c772a9896a7847b254b9223a4e33f9cbe6b7d873a06e615817df10aa33c6ec5",
         "sourceCommit": "6294e1e5d8b49e0abf5cf1365dc0234685aaa322",
         "runnerTreeSha256": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6",
@@ -879,20 +881,20 @@
         ],
         "recordingsRequired": 0
       },
-      "note": "The complete final release replay is source-bound; verification remains pending because backend-cache-transitions has four unapproved boundary-token-relationship rows. The build record clean status covers runtime inputs only; the uncommitted generator and tests are test-side tools, not runtime inputs.",
+      "note": "The complete final release replay is source-bound. All observed differences are named and covered by coordinator closure rulings 1-4; independent closure review remains pending. The build record clean status covers runtime inputs only; the runner working tree is bound separately.",
       "evidence": {
         "comparisonPath": "spec/compatibility/closure/evidence/FS-LISTEN-SDK-comparison.json",
-        "comparisonSha256": "efcded8aae0070614191830a6f8749a7d766670602e7ba5f595c6a9b2c67880d",
-        "finalArtifactSha256": "9c772a9896a7847b254b9223a4e33f9cbe6b7d873a06e615817df10aa33c6ec5",
-        "sourceCommit": "6294e1e5d8b49e0abf5cf1365dc0234685aaa322",
+        "comparisonSha256": "9a1eddaed173144ac1d7dfe42ad40f4597f2b02cc6f0dcfaf6bb300b68748429",
+        "finalArtifactSha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
+        "sourceCommit": "aad8cee2a2a44528962361a474debc2c366d5b9d",
         "runnerTreeSha256": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6",
         "rows": {
-          "MATCH": 286,
-          "DIVERGES": 14,
+          "MATCH": 287,
+          "DIVERGES": 13,
           "NOT_COMPARABLE": 0
         },
         "buildRecordPath": "spec/compatibility/closure/evidence/FS-LISTEN-SDK-build.json",
-        "buildRecordSha256": "272a3d2c2340694eaf1a84104ce2b22fb20be1da0a08311c78206a35ceb1bc6e"
+        "buildRecordSha256": "f090807adc7742b6efb8794a64f6e6dd403c40e79b3bfecbae5afd1507d36c38"
       }
     },
     {
@@ -975,7 +977,7 @@
     "nativeProject": "fireemu-oracle-txn",
     "nativeProjectReason": "L7: native gRPC Listen with the owner access token needs no Rules and costs nothing on the unbilled txn project."
   },
-  "note": "Nine saved production recordings were compared offline with the strict release binary built from HEAD 6294e1e5d. Coordinator closure rulings 1-5 verify 12 conditions. The additional boundary-token-relationship difference keeps backend-cache-transitions and final-artifact verification open; independent closure review is pending. This task made zero production requests. Historical localEvidence and frozen inventory requirements are retained; the evidence and per-condition notes record the approved exceptions.",
+  "note": "Nine saved production recordings were compared offline with the strict release binary built from HEAD aad8cee2a. Coordinator closure rulings 1-5 cover the named declared differences. The boundary-token-relationship difference is resolved; independent closure review is pending. This task made zero production requests. Historical localEvidence and frozen inventory requirements are retained; the evidence and per-condition notes record the approved exceptions.",
   "profileComparison": {
     "profile": "strict",
     "localOutcome": "Strict revocation and tenant deletion listeners end on refresh; emulator profile listeners continue in focused local checks.",
@@ -1016,24 +1018,24 @@
   "amendment": "Owner ledger 824 (2026-10-05) and the coordinator: native gRPC Listen recordings run on fireemu-oracle-txn (L7) and the AUTH-FS-CROSS stage-2 fixture serves as Listen evidence for three behaviours (L8). The 15 conditions, the frozen catalog mapping and every other scope decision are unchanged.",
   "integratedRegression": {
     "release": "v0.13.0",
-    "integrationCommit": "6294e1e5d8b49e0abf5cf1365dc0234685aaa322",
-    "releaseBinarySha256": "9c772a9896a7847b254b9223a4e33f9cbe6b7d873a06e615817df10aa33c6ec5",
+    "integrationCommit": "aad8cee2a2a44528962361a474debc2c366d5b9d",
+    "releaseBinarySha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
     "buildReceiptPath": "spec/compatibility/closure/evidence/FS-LISTEN-SDK-build.json",
-    "buildReceiptSha256": "272a3d2c2340694eaf1a84104ce2b22fb20be1da0a08311c78206a35ceb1bc6e",
+    "buildReceiptSha256": "f090807adc7742b6efb8794a64f6e6dd403c40e79b3bfecbae5afd1507d36c38",
     "comparisons": [
       {
         "path": "spec/compatibility/closure/evidence/FS-LISTEN-SDK-comparison.json",
-        "sha256": "efcded8aae0070614191830a6f8749a7d766670602e7ba5f595c6a9b2c67880d",
+        "sha256": "9a1eddaed173144ac1d7dfe42ad40f4597f2b02cc6f0dcfaf6bb300b68748429",
         "rows": 300,
         "summary": {
-          "MATCH": 286,
-          "DIVERGES": 14,
+          "MATCH": 287,
+          "DIVERGES": 13,
           "NOT_COMPARABLE": 0
         }
       }
     ],
-    "result": "RECORDED_WITH_UNAPPROVED_DIFFERENCE",
+    "result": "RECORDED_WITH_APPROVED_DIFFERENCES",
     "productionRequests": 0,
-    "note": "Final release replay completed. Parent remains IMPLEMENTING; backend-cache-transitions and final-artifact verification remain open for the named boundary-token-relationship difference. The kind is disclosed in release-strict-regression EXCLUDED_KINDS because production recordings are private and the replay requires the real-time expired-token case and Chromium."
+    "note": "Final release replay completed from clean source commit aad8cee2a. The backend-cache-transitions boundary-token-relationship difference is resolved; three exact D4/D5 differences remain approved under coordinator closure ruling 3. Parent remains IMPLEMENTING and independent closure review is pending. This task made zero production requests."
   }
 }

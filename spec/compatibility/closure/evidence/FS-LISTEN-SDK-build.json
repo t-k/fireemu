@@ -1,7 +1,7 @@
 {
-  "sourceCommit": "6294e1e5d8b49e0abf5cf1365dc0234685aaa322",
+  "sourceCommit": "aad8cee2a2a44528962361a474debc2c366d5b9d",
   "gitStatusOutsideBuildOutput": [],
   "cargoVersion": "cargo 1.94.0 (85eff7c80 2026-01-15)",
   "locked": true,
-  "binarySha256": "9c772a9896a7847b254b9223a4e33f9cbe6b7d873a06e615817df10aa33c6ec5"
+  "binarySha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08"
 }

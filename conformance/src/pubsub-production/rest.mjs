@@ -40,14 +40,17 @@ export function createRest({
       body,
       token = "default",
       timeoutMs = defaultTimeoutMs,
+      remainingTime,
+      getCredential,
     }) {
       budget.consume();
       const headers = {};
       if (body !== undefined) headers["content-type"] = "application/json";
       if (token === "invalid") headers.authorization = `Bearer ${INVALID_TOKEN}`;
       else if (token === "default" && getToken !== null)
-        headers.authorization = `Bearer ${await getToken()}`;
+        headers.authorization = `Bearer ${await (getCredential ? getCredential(getToken) : getToken())}`;
       if (quotaProject !== null && token !== "none") headers["x-goog-user-project"] = quotaProject;
+      if (remainingTime) timeoutMs = Math.min(timeoutMs, remainingTime());
       const started = now();
       const entry = {
         ...label,

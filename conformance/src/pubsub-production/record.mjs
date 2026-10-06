@@ -27,7 +27,7 @@ import { createRest } from "./rest.mjs";
 import { assertBudgetCovers, exitCodeOf, runCases, selectCases } from "./runner.mjs";
 import { createTokenProvider } from "./token.mjs";
 import { createPhaseLimit } from "./limits.mjs";
-import { admitV2, sha256 } from "./admission.mjs";
+import { admitV2, sha256, claimSourceRun } from "./admission.mjs";
 import { createIamOwnership, IAM_WAIT_MS } from "./iam.mjs";
 import { IAM_PREREQUISITE } from "./cases/stream-dlq.mjs";
 
@@ -273,6 +273,14 @@ export async function main(
     return 2;
   }
   if (deps.noWire === true) throw new Error("no-wire test guard refused the actual recorder path");
+  if (options.production && options.suite === "stream-dlq-v2" && !options.cleanupOnly) {
+    try {
+      claimSourceRun(options);
+    } catch (error) {
+      io.stderr.write(`${error.message}\n`);
+      return 2;
+    }
+  }
   if (options.cleanupOnly) {
     // Keep the atomic one-use marker beside the original input even if output is written elsewhere.
     try {

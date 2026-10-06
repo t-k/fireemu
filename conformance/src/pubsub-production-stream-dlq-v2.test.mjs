@@ -764,7 +764,7 @@ test("authority checks actual proof hashes and full E/V scope before demanding a
   const descriptor = { head: "a".repeat(40) };
   const digest = "b".repeat(64);
   const packet = put("packet", { taskId: "PUBSUB-STREAM-DLQ", suite: "stream-dlq-v2" });
-  const options = { project: "demo-v2", runId: "0123456789ab", serviceAgent: principal };
+  const options = { project: "demo-v2", runId: "0123456789ab", serviceAgent: principal, out };
   const authority = {
     schema: 1,
     taskId: "PUBSUB-STREAM-DLQ",
@@ -776,6 +776,7 @@ test("authority checks actual proof hashes and full E/V scope before demanding a
     packetSha256: packet.sha256,
     project: options.project,
     runIds: [options.runId, "0123456789ac"],
+    runOutputs: { [options.runId]: out, "0123456789ac": join(out, "second") },
     expiresAt: "2099-01-01T00:00:00Z",
     iamWaitAfterGrantMs: 900_000,
     iamPhaseMs: 1_800_000,
@@ -797,6 +798,7 @@ test("authority checks actual proof hashes and full E/V scope before demanding a
     packetSha256: packet.sha256,
     project: authority.project,
     runIds: authority.runIds,
+    runOutputs: authority.runOutputs,
     expiresAt: authority.expiresAt,
     maxRequestsPerAttempt: 228,
     cleanupRequests: 600,
@@ -955,5 +957,189 @@ test("live lock proof reads the held inode and rejects copies symlinks and wrong
     closeSync(fd);
     closeSync(other);
     rmSync(out, { recursive: true });
+  }
+});
+
+test("phase refuses REST unary gRPC and native stream dispatch after credential latency", async () => {
+  const { createRest } = await import("./pubsub-production/rest.mjs");
+  const { createGrpc } = await import("./pubsub-production/grpc.mjs");
+  const grpcLib = (await import("@grpc/grpc-js")).default;
+  for (const mode of ["rest", "grpc", "stream"]) {
+    let now = 0;
+    let sent = 0;
+    const phase = createPhaseLimit(1_800_000, () => now);
+    phase.remaining();
+    now = 1_799_990;
+    const getToken = async () => {
+      now += 100;
+      return "synthetic-token";
+    };
+    const common = { budget: { consume() {} }, capture: { record() {}, frame() {} }, getToken };
+    let transport;
+    if (mode === "rest")
+      transport = createRest({
+        ...common,
+        base: "http://127.0.0.1:1",
+        fetchImpl: async () => {
+          sent += 1;
+          return new Response("{}");
+        },
+      });
+    else {
+      class Client {
+        close() {}
+        makeUnaryRequest(_path, _serialize, _deserialize, _body, _metadata, _options, callback) {
+          sent += 1;
+          callback(null, {});
+        }
+        makeBidiStreamRequest() {
+          sent += 1;
+          throw new Error("must not dispatch");
+        }
+      }
+      transport = createGrpc({
+        ...common,
+        target: "127.0.0.1:1",
+        secure: false,
+        grpc: { ...grpcLib, Client },
+      });
+    }
+    const guarded = phase.transport(transport);
+    try {
+      const call =
+        mode === "rest"
+          ? guarded.request({ method: "GET", path: "/v1/projects/demo-v2/topics/own" })
+          : mode === "grpc"
+            ? guarded.call({
+                service: "Publisher",
+                method: "GetTopic",
+                request: { topic: "projects/demo-v2/topics/own" },
+              })
+            : guarded.stream({
+                frames: [{ subscription: resource, streamAckDeadlineSeconds: 10 }],
+                timeoutMs: 30_000,
+              });
+      await assert.rejects(call, /phase time budget/);
+      assert.equal(sent, 0);
+    } finally {
+      transport.close?.();
+    }
+  }
+});
+
+test("v2 output binding rejects a run restart in a different directory and an atomic marker refuses reuse", async () => {
+  const { tempDir } = await import("./test-tmpdir.mjs");
+  const { join } = await import("node:path");
+  const { verifyRunOutput, claimSourceRun } = await import("./pubsub-production/admission.mjs");
+  const out = tempDir("v2-one-use-");
+  const runId = "0123456789ab";
+  const authority = { runOutputs: { [runId]: out } };
+  assert.doesNotThrow(() => verifyRunOutput(authority, { runId, out }));
+  assert.throws(() => verifyRunOutput(authority, { runId, out: join(out, "other") }), /output/);
+  claimSourceRun({ out, runId });
+  assert.throws(() => claimSourceRun({ out, runId }), /started|EEXIST/);
+  assert.throws(
+    () =>
+      verifyRunOutput(
+        { ...authority, cleanupRecovery: { out: join(out, "recovery") } },
+        { runId, out, cleanupOnly: true },
+      ),
+    /output/,
+  );
+});
+
+test("v2 runner enforces22distinct resources across cases and rechecks phase after final response", async () => {
+  const { runCases } = await import("./pubsub-production/runner.mjs");
+  const fixture = await recordedWorld();
+  const cases = [
+    {
+      id: "resource-limit",
+      short: "zz",
+      requests: 0,
+      transports: ["rest"],
+      async run(ctx) {
+        for (let n = 0; n < 23; n += 1) ctx.name("topics", `n${n}`);
+      },
+    },
+  ];
+  const limited = await runCases({ ...fixture, cases });
+  assert.equal(limited.cases[0].outcome, "limit");
+  const expired = await runCases({
+    ...(await recordedWorld()),
+    options: {
+      suite: "stream-dlq-v2",
+      monotonicNow: (() => {
+        let n = 0;
+        return () => (n++ === 0 ? 0 : 1_800_000);
+      })(),
+    },
+    cases: [
+      {
+        id: "final-late",
+        short: "zz",
+        requests: 0,
+        timeoutMs: 1_800_000,
+        transports: ["rest"],
+        async run() {},
+      },
+    ],
+  });
+  assert.equal(expired.cases[0].outcome, "budget");
+});
+
+test("phase bounds an unresolved credential and shortens the actual gRPC deadline after credential work", async () => {
+  const { createRest } = await import("./pubsub-production/rest.mjs");
+  const { createGrpc } = await import("./pubsub-production/grpc.mjs");
+  const grpcLib = (await import("@grpc/grpc-js")).default;
+  let sent = 0;
+  const rest = createRest({
+    base: "http://127.0.0.1:1",
+    budget: { consume() {} },
+    capture: { record() {} },
+    getToken: () => new Promise(() => {}),
+    fetchImpl: async () => {
+      sent += 1;
+      return new Response("{}");
+    },
+  });
+  await assert.rejects(
+    createPhaseLimit(25)
+      .transport(rest)
+      .request({ method: "GET", path: "/v1/projects/demo-v2/topics/own" }),
+    /phase time budget/,
+  );
+  assert.equal(sent, 0);
+  let now = 0;
+  let deadline;
+  class Client {
+    close() {}
+    makeUnaryRequest(_path, _serialize, _deserialize, _body, _metadata, options, callback) {
+      deadline = options.deadline.getTime();
+      callback(null, {});
+    }
+  }
+  const transport = createGrpc({
+    target: "127.0.0.1:1",
+    secure: false,
+    grpc: { ...grpcLib, Client },
+    budget: { consume() {} },
+    capture: { record() {} },
+    now: () => now,
+    getToken: async () => {
+      now += 40;
+      return "synthetic";
+    },
+  });
+  try {
+    await createPhaseLimit(100, () => now)
+      .transport(transport)
+      .call({
+        service: "Publisher",
+        method: "GetTopic",
+        request: { topic: "projects/demo-v2/topics/own" },
+      });
+    assert.equal(deadline, 100);
+  } finally {
+    transport.close();
   }
 });

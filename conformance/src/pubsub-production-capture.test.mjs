@@ -1,7 +1,7 @@
+import { tempDir } from "./test-tmpdir.mjs";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { mkdtempSync, readFileSync, readdirSync, rmSync, statSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { readFileSync, readdirSync, rmSync, statSync } from "node:fs";
 import { join } from "node:path";
 import test from "node:test";
 import {
@@ -75,7 +75,7 @@ test("the capture numbers the exchanges, counts them per case and writes them wi
 });
 
 test("the file journal is append-only, private, one JSON line each, and refuses an existing file", () => {
-  const dir = mkdtempSync(join(tmpdir(), "pubsub-capture-"));
+  const dir = tempDir("pubsub-capture-");
   const path = join(dir, "captures.jsonl");
   const journal = createFileJournal(path);
   journal.write({ a: 1 });
@@ -92,7 +92,7 @@ test("the file journal is append-only, private, one JSON line each, and refuses 
 });
 
 test("bounded raw frame sidecars preserve exact long bytes while ordinary notes stay sanitized", (t) => {
-  const dir = mkdtempSync(join(tmpdir(), "pubsub-frame-capture-"));
+  const dir = tempDir("pubsub-frame-capture-");
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   const path = join(dir, "capture.jsonl");
   const journal = createFileJournal(path);
@@ -118,7 +118,7 @@ test("bounded raw frame sidecars preserve exact long bytes while ordinary notes 
 });
 
 test("raw frame admission enforces bytes, frame count, direction and no overwrite before persistence", (t) => {
-  const dir = mkdtempSync(join(tmpdir(), "pubsub-frame-bounds-"));
+  const dir = tempDir("pubsub-frame-bounds-");
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   const journal = createFileJournal(join(dir, "capture.jsonl"));
   t.after(journal.close);

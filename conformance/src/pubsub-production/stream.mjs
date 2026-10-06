@@ -43,7 +43,14 @@ export function createStreamingPull({
   );
   return {
     close: () => client.close(),
-    async stream({ label, frames, afterReceive, timeoutMs = STREAM_BOUNDS.timeoutMs }) {
+    async stream({
+      label,
+      frames,
+      afterReceive,
+      timeoutMs = STREAM_BOUNDS.timeoutMs,
+      remainingTime,
+      getCredential,
+    }) {
       if (
         !Array.isArray(frames) ||
         frames.length < 1 ||
@@ -67,8 +74,13 @@ export function createStreamingPull({
         throw new Error("stream followup bound exceeded before dispatch");
       budget.consume();
       const metadata = new grpc.Metadata();
-      if (getToken !== null) metadata.add("authorization", `Bearer ${await getToken()}`);
+      if (getToken !== null)
+        metadata.add(
+          "authorization",
+          `Bearer ${await (getCredential ? getCredential(getToken) : getToken())}`,
+        );
       if (quotaProject !== null) metadata.add("x-goog-user-project", quotaProject);
+      if (remainingTime) timeoutMs = Math.min(timeoutMs, remainingTime());
       const started = now();
       let inboundFrames = 0;
       let outboundFrames = 0;

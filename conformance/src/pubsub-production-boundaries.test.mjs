@@ -1,8 +1,8 @@
+import { tempDir } from "./test-tmpdir.mjs";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { createServer } from "node:http";
-import { mkdtempSync, readFileSync, readdirSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import test from "node:test";
 import {
@@ -262,7 +262,7 @@ async function emptyServer({ onFirstRequest } = {}) {
 }
 
 test("main: a usage error exits 2 on stderr and creates nothing", async () => {
-  const out = join(mkdtempSync(join(tmpdir(), "pubsub-main-")), "o");
+  const out = join(tempDir("pubsub-main-"), "o");
   const written = [];
   const io = {
     stdout: { write: () => true },
@@ -277,7 +277,7 @@ test("main: a usage error exits 2 on stderr and creates nothing", async () => {
 test("main: definite REST refusal aborts; gRPC transport ambiguity stays unconfirmed after cleanup", async (t) => {
   const service = await emptyServer();
   t.after(service.close);
-  const out = join(mkdtempSync(join(tmpdir(), "pubsub-main-")), "o");
+  const out = join(tempDir("pubsub-main-"), "o");
   const io = { stdout: { write: () => true }, stderr: { write: () => true } };
   const code = await main(
     [
@@ -365,7 +365,7 @@ test("main: a signal during a case run stops it between cases, after which the c
     },
   });
   t.after(service.close);
-  const out = join(mkdtempSync(join(tmpdir(), "pubsub-main-")), "o");
+  const out = join(tempDir("pubsub-main-"), "o");
   const io = { stdout: { write: () => true }, stderr: { write: () => true } };
   await main(
     [

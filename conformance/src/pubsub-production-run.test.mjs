@@ -1,6 +1,6 @@
+import { tempDir } from "./test-tmpdir.mjs";
 import assert from "node:assert/strict";
-import { mkdtempSync, readdirSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { readdirSync } from "node:fs";
 import { join } from "node:path";
 import test from "node:test";
 import { createCapture } from "./pubsub-production/capture.mjs";
@@ -429,7 +429,7 @@ test("every case declares a ceiling, the whole set fits the default budget, and 
   assert.ok(plannedRequests(CASES) <= DEFAULT_MAX_REQUESTS);
   const errors = [];
   const io = { stdout: { write: () => true }, stderr: { write: (text) => errors.push(text) } };
-  const out = join(mkdtempSync(join(tmpdir(), "pubsub-plan-")), "o");
+  const out = join(tempDir("pubsub-plan-"), "o");
   const code = await main(
     [
       "--target",

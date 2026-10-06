@@ -93,6 +93,7 @@ function createContext({
   };
   return {
     transport: transportName,
+    assertWithinPhase: () => phase?.remaining(),
     project: ownership.project,
     runId: ownership.runId,
     production: options.production,
@@ -172,6 +173,7 @@ export async function runCases({
           ledger,
         });
         await item.run(ctx);
+        ctx.assertWithinPhase();
       } catch (error) {
         if (error instanceof CaseAbort) {
           entry.outcome = "aborted";

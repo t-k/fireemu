@@ -19,6 +19,21 @@ export function createPhaseLimit(ms, now = () => performance.now()) {
     if (left < 1) throw new TimeLimit();
     return left;
   };
+  const getCredential = async (getToken) => {
+    let timer;
+    try {
+      const value = await Promise.race([
+        getToken(),
+        new Promise((_, reject) => {
+          timer = setTimeout(() => reject(new TimeLimit()), remaining());
+        }),
+      ]);
+      remaining();
+      return value;
+    } finally {
+      clearTimeout(timer);
+    }
+  };
   return {
     remaining,
     transport(transport) {
@@ -26,6 +41,8 @@ export function createPhaseLimit(ms, now = () => performance.now()) {
         send.call(transport, {
           ...call,
           timeoutMs: Math.min(call.timeoutMs ?? 30_000, remaining()),
+          remainingTime: remaining,
+          getCredential,
         });
       return {
         ...transport,

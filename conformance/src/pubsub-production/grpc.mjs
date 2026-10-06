@@ -181,6 +181,8 @@ export function createGrpc({
       request,
       token = "default",
       timeoutMs = defaultTimeoutMs,
+      remainingTime,
+      getCredential,
     }) {
       const definition = SERVICES[service]?.methods[method];
       if (!definition) throw new Error(`unknown method ${service}/${method}`);
@@ -195,9 +197,13 @@ export function createGrpc({
       if (token === "invalid")
         metadata.add("authorization", "Bearer invalid-token-for-the-recording");
       else if (token === "default" && getToken !== null)
-        metadata.add("authorization", `Bearer ${await getToken()}`);
+        metadata.add(
+          "authorization",
+          `Bearer ${await (getCredential ? getCredential(getToken) : getToken())}`,
+        );
       if (quotaProject !== null && token !== "none")
         metadata.add("x-goog-user-project", quotaProject);
+      if (remainingTime) timeoutMs = Math.min(timeoutMs, remainingTime());
       const started = now();
       const entry = {
         ...label,

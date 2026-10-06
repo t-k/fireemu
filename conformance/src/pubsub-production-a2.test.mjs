@@ -1,7 +1,7 @@
+import { tempDir } from "./test-tmpdir.mjs";
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
-import { mkdirSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import test from "node:test";
 import { createClient, newPushState } from "./pubsub-production/client.mjs";
@@ -77,7 +77,7 @@ test("the kind of an answer, the ledger lines written before and after a request
 });
 
 test("a ledger file is read back with a request that was sent and never answered counted as unknown", () => {
-  const dir = mkdtempSync(join(tmpdir(), "pubsub-ledger-"));
+  const dir = tempDir("pubsub-ledger-");
   const path = join(dir, "issued.jsonl");
   const row = (phase, name, action, kind) =>
     JSON.stringify({ at: "x", phase, name, action, transport: "rest", ...(kind ? { kind } : {}) });
@@ -271,7 +271,7 @@ async function service({ live = [], stuck = [], unknownDeletes = false }) {
 
 /** The recording's output directory: a capture whose last line is at T0 and a ledger of the given rows. */
 function recording(rows) {
-  const dir = mkdtempSync(join(tmpdir(), "pubsub-a2-"));
+  const dir = tempDir("pubsub-a2-");
   writeFileSync(
     join(dir, `capture-${RUN}.jsonl`),
     `${JSON.stringify({ at: new Date(T0 - 1000).toISOString(), note: "run-start" })}\n${JSON.stringify({ at: new Date(T0).toISOString(), note: "run-end" })}\n`,
@@ -326,7 +326,7 @@ test("the later run refuses to start before ten minutes, and without the ledger 
     "nothing was written",
   );
   assert.equal(svc.seen.length, 0);
-  const empty = mkdtempSync(join(tmpdir(), "pubsub-a2-"));
+  const empty = tempDir("pubsub-a2-");
   writeFileSync(join(empty, `capture-${RUN}.jsonl`), "");
   const missing = [];
   assert.equal(
@@ -408,7 +408,7 @@ test("the later run is not closable while a name stays, and reports it", async (
   const svc = await service({ live: [stuck], stuck: [stuck] });
   t.after(svc.close);
   const dir = recording([[stuck, "create", "ok"]]);
-  const out = join(mkdtempSync(join(tmpdir(), "pubsub-a2-out-")), "a2");
+  const out = join(tempDir("pubsub-a2-out-"), "a2");
   mkdirSync(out, { recursive: true });
   const code = await main(a2(dir, svc.host, out), {}, io(), {
     now: () => T0 + MIN_A2_WAIT_MS,
@@ -428,7 +428,7 @@ test("a subsequent A2 fails closed before any wire call after the first A2's unk
     const svc = await service({ live: [name], stuck: remains ? [name] : [], unknownDeletes: true });
     t.after(svc.close);
     const dir = recording([[name, "create", "ok"]]);
-    const firstOut = mkdtempSync(join(tmpdir(), "pubsub-a2-first-"));
+    const firstOut = tempDir("pubsub-a2-first-");
     const first = await main(a2(dir, svc.host, firstOut), {}, io(), {
       now: () => T0 + MIN_A2_WAIT_MS,
       sleep: async () => {},
@@ -437,7 +437,7 @@ test("a subsequent A2 fails closed before any wire call after the first A2's unk
     assert.equal(summaryOf(firstOut).cleanup.outstandingActions.length, 1);
     const before = [...svc.seen];
     const errors = [];
-    const secondOut = mkdtempSync(join(tmpdir(), "pubsub-a2-second-"));
+    const secondOut = tempDir("pubsub-a2-second-");
     const second = await main(a2(dir, svc.host, secondOut), {}, io(errors), {
       now: () => T0 + MIN_A2_WAIT_MS + 1000,
       sleep: async () => {},

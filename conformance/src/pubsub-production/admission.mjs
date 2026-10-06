@@ -8,6 +8,11 @@ import {
   fstatSync,
   lstatSync,
   readSync,
+  openSync,
+  closeSync,
+  writeFileSync,
+  fsyncSync,
+  mkdirSync,
 } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -197,6 +202,28 @@ export function verifyLiveLock({ path, fd, expectedPath }, binding) {
   return lock;
 }
 
+export function verifyRunOutput(authority, options) {
+  const allowed = options.cleanupOnly
+    ? authority.cleanupRecovery?.out
+    : authority.runOutputs?.[options.runId];
+  if (
+    typeof allowed !== "string" ||
+    resolve(allowed) !== allowed ||
+    resolve(options.out ?? "") !== allowed
+  )
+    throw new Error("v2 source-bound output mismatch");
+}
+export function claimSourceRun({ out, runId }) {
+  mkdirSync(out, { recursive: true, mode: 0o700 });
+  const fd = openSync(resolve(out, `source-started-${runId}.json`), "wx", 0o600);
+  try {
+    writeFileSync(fd, `${JSON.stringify({ runId, startedAt: new Date().toISOString() })}\n`);
+    fsyncSync(fd);
+  } finally {
+    closeSync(fd);
+  }
+}
+
 export function verifyAuthority(
   authority,
   descriptor,
@@ -234,6 +261,14 @@ export function verifyAuthority(
     authority.inheritedGrantAudit?.noEffectiveGrantB !== true
   )
     throw new Error("source-bound coordinator authority missing or mismatched");
+  if (
+    !authority.runOutputs ||
+    JSON.stringify(Object.keys(authority.runOutputs).sort()) !==
+      JSON.stringify([...authority.runIds].sort()) ||
+    new Set(Object.values(authority.runOutputs)).size !== 2
+  )
+    throw new Error("v2 source-bound output identities missing");
+  verifyRunOutput(authority, options);
   const packet = readJson(authority.packetPath);
   if (packet.digest !== authority.packetSha256) throw new Error("packet digest mismatch");
   for (const kind of ["E", "V"]) {
@@ -253,7 +288,9 @@ export function verifyAuthority(
       row.expiresAt !== authority.expiresAt ||
       row.maxRequestsPerAttempt !== 228 ||
       row.cleanupRequests !== 600 ||
-      row.a2Requests !== 600
+      row.a2Requests !== 600 ||
+      JSON.stringify(row.runOutputs) !== JSON.stringify(authority.runOutputs) ||
+      JSON.stringify(row.cleanupRecovery) !== JSON.stringify(authority.cleanupRecovery)
     )
       throw new Error(`${kind} authority proof mismatch`);
   }

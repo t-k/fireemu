@@ -860,8 +860,7 @@ test(
           ["-ww", "-p", String(runtime.serverPid), "-o", "comm=,args="],
           { encoding: "utf8" },
         );
-        if (!identity.includes(`${pin.path} exec --config`))
-          throw new Error("cleanup exec identity changed");
+        assert.ok(identity.includes(`${pin.path} exec --config`), "cleanup exec identity changed");
         process.kill(runtime.serverPid, "SIGTERM");
         assert.ok(await until(() => !alive(runtime.serverPid) && !alive(runtime.workerPid), 12000));
       }

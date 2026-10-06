@@ -1,0 +1,8 @@
+{
+  "functions": {
+    "source": ".",
+    "codebase": "eventarc-h",
+    "runtime": "nodejs22",
+    "ignore": ["node_modules", ".git", "firebase-debug.log", "firebase-debug.*.log"]
+  }
+}

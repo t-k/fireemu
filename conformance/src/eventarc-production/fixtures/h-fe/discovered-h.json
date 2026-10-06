@@ -1,0 +1,59 @@
+{
+  "endpoints": {
+    "fecafe60000001HObserve": {
+      "availableMemoryMb": null,
+      "timeoutSeconds": null,
+      "minInstances": 0,
+      "maxInstances": 2,
+      "ingressSettings": null,
+      "concurrency": null,
+      "serviceAccountEmail": null,
+      "vpc": null,
+      "platform": "gcfv2",
+      "region": [
+        "us-central1"
+      ],
+      "labels": {},
+      "eventTrigger": {
+        "eventType": "fireemu.h.cafe60000001",
+        "eventFilters": {},
+        "retry": true,
+        "channel": "locations/us-central1/channels/firebase"
+      },
+      "entryPoint": "fecafe60000001HObserve"
+    },
+    "fecafe60000001HFiltered": {
+      "availableMemoryMb": null,
+      "timeoutSeconds": null,
+      "minInstances": 0,
+      "maxInstances": 2,
+      "ingressSettings": null,
+      "concurrency": null,
+      "serviceAccountEmail": null,
+      "vpc": null,
+      "platform": "gcfv2",
+      "region": [
+        "us-central1"
+      ],
+      "labels": {},
+      "eventTrigger": {
+        "eventType": "fireemu.h.cafe60000001",
+        "eventFilters": {
+          "source": "//fireemu/handler/cafe60000001",
+          "tenant": "hcafe60000001"
+        },
+        "retry": false,
+        "channel": "locations/us-central1/channels/firebase"
+      },
+      "entryPoint": "fecafe60000001HFiltered"
+    }
+  },
+  "specVersion": "v1alpha1",
+  "requiredAPIs": [
+    {
+      "api": "eventarcpublishing.googleapis.com",
+      "reason": "Needed for custom event functions"
+    }
+  ],
+  "extensions": {}
+}

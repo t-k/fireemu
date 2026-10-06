@@ -1925,3 +1925,39 @@ test("applyClosure writes the block only when it is given one, and refuses a blo
     /integrated regression.*VERIFIED/,
   );
 });
+
+// ---- no personal path in the published evidence (the publication-hygiene test refused the first evidence commit) --------------
+
+test("the evidence file does not publish the runner's absolute path, and says no more about the binary than its digests, commit and runner identity", () => {
+  const { io, written } = commandFiles();
+  closureEvidenceCommand(writing({ "integrated-release": RELEASE }), io);
+  const text = written.get("evidence.json");
+  const evidence = JSON.parse(text);
+  // The comparison carries the path of the checkout the sessions ran from (the runner's absolute path); the published record keeps
+  // the runner by its file digest and its tree, which is what the generator checks, and never a path of someone's machine.
+  assert.equal(evidence.localBinary.runnerPath, undefined);
+  assert.deepEqual(evidence.localBinary, {
+    sha256: ART,
+    sourceCommit: COMMIT,
+    dirty: false,
+    runnerSha256: sha256(RUNNER_BYTES),
+    runnerTree: RUNNER_TREE,
+  });
+  assert.doesNotMatch(text, /\/(Users|home)\//);
+  // The rest of the comparison is untouched.
+  const input = comparisonOf();
+  assert.equal(evidence.artifactSha256, input.artifactSha256);
+  assert.deepEqual(evidence.productionRun, input.productionRun);
+  assert.equal(evidence.rows.filter((row) => !row.row.includes("gate")).length > 0, true);
+  // The command still judged the sessions by the digests before the path was dropped: a runner of another tree is refused.
+  asRefusal(
+    () =>
+      closureEvidenceCommand(
+        writing(),
+        commandFiles({
+          comparison: comparisonOf({ localBinary: { ...LOCAL, runnerTree: "8".repeat(40) } }),
+        }).io,
+      ),
+    /runner tree/,
+  );
+});

@@ -644,8 +644,12 @@ export function closureEvidenceCommand(
     : undefined;
   const everyMatch = comparison.rows.every((row) => row.profiles.strict.status === "MATCH");
   const withGates = everyMatch && workspace !== undefined;
+  // The sessions' runner path is the absolute path of the checkout they ran from (someone's machine): it is judged above by the runner's
+  // digest and tree and is not published.
+  const { runnerPath: _runnerPath, ...publishedBinary } = comparison.localBinary;
   const evidence = {
     ...comparison,
+    localBinary: publishedBinary,
     rows: withGates ? [...comparison.rows, ...gateRows()] : comparison.rows,
     buildRecordPath: options["build-record-path"],
     buildRecordSha256: sha256(buildBytes),

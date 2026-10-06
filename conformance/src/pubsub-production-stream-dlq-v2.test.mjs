@@ -553,6 +553,7 @@ test("actual A2 v2 capture rejects omitted or wrong suite before a marker, crede
     JSON.stringify({
       at: "2026-01-01T00:00:00Z",
       note: "run-start",
+      target: "production",
       suite: "stream-dlq-v2",
       project: "demo-v2",
       runId,
@@ -714,6 +715,7 @@ test("v2 recovery validates IAM intent proofs before any authority or marker", a
     JSON.stringify({
       at: "2026-01-01T00:00:00Z",
       note: "run-start",
+      target: "production",
       suite: "stream-dlq-v2",
       project: "demo-v2",
       runId,
@@ -1347,6 +1349,7 @@ test("v2 A2 ages from unanswered dispatch deadline rather than a pre-wait comple
     {
       at: "2026-01-01T00:00:00Z",
       note: "run-start",
+      target: "production",
       suite: "stream-dlq-v2",
       project: "demo-v2",
       runId,
@@ -1596,5 +1599,65 @@ test("v2 deadlines consume synchronous journal time across all transports", asyn
     }
   } finally {
     AbortSignal.timeout = originalTimeout;
+  }
+});
+
+test("v2 A2 refuses changed or missing original targets before admission or marker creation", async () => {
+  const { mkdtempSync, writeFileSync, existsSync, rmSync } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const { join } = await import("node:path");
+  const { main } = await import("./pubsub-production/record.mjs");
+  const out = mkdtempSync(join(tmpdir(), "v2-a2-target-"));
+  const runId = "0123456789ab";
+  const path = join(out, `capture-${runId}.jsonl`);
+  writeFileSync(join(out, `issued-${runId}.jsonl`), "");
+  writeFileSync(join(out, `iam-${runId}.jsonl`), "");
+  try {
+    for (const [originalTarget, target] of [
+      ["production", "emulator"],
+      ["emulator", "production"],
+      [undefined, "production"],
+      ["unknown", "production"],
+    ]) {
+      writeFileSync(
+        path,
+        JSON.stringify({
+          at: "2026-01-01T00:00:00Z",
+          note: "run-start",
+          target: originalTarget,
+          suite: "stream-dlq-v2",
+          project: "demo-v2",
+          runId,
+        }) + "\n",
+      );
+      let error = "";
+      const code = await main(
+        [
+          "--target",
+          target,
+          "--emulator-host",
+          "127.0.0.1:1",
+          "--project",
+          "demo-v2",
+          "--out",
+          out,
+          "--suite",
+          "stream-dlq-v2",
+          "--cleanup-only",
+          "--run-id",
+          runId,
+          "--from-capture",
+          path,
+        ],
+        {},
+        { stdout: { write() {} }, stderr: { write: (text) => (error += text) } },
+        { now: () => Date.parse("2026-01-01T01:00:00Z"), noWire: true },
+      );
+      assert.equal(code, 2);
+      assert.match(error, /source identity mismatch/);
+      assert.equal(existsSync(join(out, `a2-started-${runId}.json`)), false);
+    }
+  } finally {
+    rmSync(out, { recursive: true });
   }
 });

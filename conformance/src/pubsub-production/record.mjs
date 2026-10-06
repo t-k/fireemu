@@ -217,6 +217,7 @@ export async function main(
       if (
         options.suite === "stream-dlq-v2" &&
         (start?.suite !== options.suite ||
+          start.target !== options.target ||
           start.project !== options.project ||
           start.runId !== options.runId)
       )

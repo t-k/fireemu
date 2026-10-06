@@ -191,6 +191,8 @@ class MetadataSession(management.MetadataSession):
             state["a2"] = True
         state["a2"] = a2_epoch is not None
         result = self._named_request("named-database", state["database"], save)
+        if a2_epoch is None and state.get("deleteAccepted") and (result.get("status") == 429 or type(result.get("status")) is int and 500 <= result["status"] < 600) and self.budget.used["management"] + 3 <= self.budget._caps["management"]:
+            result = self._named_request("named-database", state["database"], save)
         if state["a2"] and result.get("complete") is True and result.get("status") == 200 and (result.get("body") or {}).get("name") == state["database"]:
             state.update(createConfirmed=True, unknownCreate=False, createRefused=False)
         absent = result.get("complete") is True and result.get("status") == 404 and (result.get("body") or {}).get("error", {}).get("status") == "NOT_FOUND"

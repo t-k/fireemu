@@ -203,7 +203,7 @@ def test_query_is_billed_and_authority_scope_binds_each_declared_database():
 def test_initial_gates_check_every_project_in_envelope_scope(kind):
     pins = {**PINS, "scope": {**SCOPE, "project": "fireemu-oracle-sbx/(default)+fireemu-oracle-txn/(default)"}}
     decisions = AUTHORITY + envelope_row(scope=pins["scope"]) + approve_row()
-    row = {**LAST, "project": "fireemu-oracle-txn", "taskId": "OTHER"}
+    row = {**LAST, "project": "fireemu-oracle-txn", "taskId": authority.TASK_ID}
     if kind == "secondary-active": row["ts"] = "2026-09-28T04:59:00Z"
     else: row.update(outcome="reserved", attemptId="open-secondary")
     if kind == "multi-project-open": row.update(project="fireemu-oracle-query", projects=["fireemu-oracle-query", "fireemu-oracle-txn"])
@@ -241,3 +241,54 @@ def test_database_action_rejects_revocation_outside_its_approval_topic(identity)
     text = action_decisions() + f"- 2026-10-06 | Other authority | REVOKED {identity}={ACTION[identity]} | オーナー（直接） | unit\n"
     with pytest.raises(ValueError, match="revoked"):
         authority.authorize_database_action(text, ACTION)
+
+
+@pytest.mark.parametrize("source", ["fixture", "live"])
+def test_initial_gates_accept_real_project_history_read_only(source):
+    import json
+    from pathlib import Path
+    if source == "fixture":
+        path = Path(__file__).with_name("fixtures") / "p16-project-history-masked.jsonl"
+    else:
+        path = next((parent / "docs.local/runs/sandbox-ledger.jsonl" for parent in Path(__file__).resolve().parents if (parent / "docs.local/runs/sandbox-ledger.jsonl").is_file()), None)
+        if path is None:
+            pytest.skip("real sandbox ledger is absent")
+    original = path.read_bytes()
+    rows = [json.loads(line) for line in original.splitlines() if line.strip()]
+    scope = {**SCOPE, "project": "fireemu-oracle-query/(default)+fireemu-oracle-query/txn-{nonce}+fireemu-oracle-txn/(default)"}
+    pins = {**PINS, "project": "fireemu-oracle-query", "scope": scope}
+    decisions = AUTHORITY + envelope_row(scope=scope) + approve_row()
+    now = datetime(2026, 10, 7, tzinfo=timezone.utc)
+    assert authority.verify_initial_gates(rows, now, decisions, pins)
+    assert path.read_bytes() == original
+
+
+@pytest.mark.parametrize("project", ["fireemu-oracle-query", "fireemu-oracle-txn"])
+@pytest.mark.parametrize("identity", ["taskId", "task-alias", "packetId", "envelopeId"])
+def test_history_excludes_other_tasks_but_never_an_open_current_attempt(project, identity):
+    scope = {**SCOPE, "project": "fireemu-oracle-query/(default)+fireemu-oracle-txn/(default)"}
+    pins = {**PINS, "project": "fireemu-oracle-query", "scope": scope}
+    decisions = AUTHORITY + envelope_row(scope=scope) + approve_row()
+    row = {"ts": LAST["ts"], "project": project, "taskId": "OTHER", "event": "started", "run": "historical"}
+    assert authority.verify_initial_gates([row], NOW, decisions, pins) == (row["ts"] if project == "fireemu-oracle-query" else None)
+    if identity == "task-alias":
+        row["taskId"] = "FS-TRANSACTION"
+    else:
+        row[identity] = authority.TASK_ID if identity == "taskId" else pins[identity]
+    with pytest.raises(ValueError):
+        authority.verify_initial_gates([row], NOW, decisions, pins)
+
+
+@pytest.mark.parametrize("event,outcome", [("started", None), (None, "reserved"), (None, "recorded")])
+@pytest.mark.parametrize("seconds", [1799, 1800])
+def test_spacing_uses_last_project_row_of_any_task(event, outcome, seconds):
+    from datetime import timedelta
+    scope = {**SCOPE, "project": "fireemu-oracle-query/(default)+fireemu-oracle-txn/(default)"}
+    pins = {**PINS, "project": "fireemu-oracle-query", "scope": scope}
+    decisions = AUTHORITY + envelope_row(scope=scope) + approve_row()
+    row = {"ts": (NOW - timedelta(seconds=seconds)).isoformat(), "project": "fireemu-oracle-txn", "taskId": "OTHER", "event": event, "outcome": outcome}
+    if seconds == 1799:
+        with pytest.raises(ValueError, match="30 minutes"):
+            authority.verify_initial_gates([row], NOW, decisions, pins)
+    else:
+        authority.verify_initial_gates([row], NOW, decisions, pins)

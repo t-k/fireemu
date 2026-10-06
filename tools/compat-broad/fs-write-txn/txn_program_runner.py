@@ -104,8 +104,9 @@ def run_once(index, table, nonce, owner_id, directory, *, baseline, runtime, che
             raise ValueError('program journal failed; metadata postflight is forbidden')
         budget.begin_recovery()
         if table['name'] == 'p16-foreign-tokens':
-            if receipt.get('unrecovered') is not False:
-                raise ValueError('named database retained while resources are unrecovered')
+            named = plan['databases']['named']
+            if any(receipt.get('tokens', {}).get(role, {}).get('database', plan['database']) == named for role in receipt.get('openTokens', []) + receipt.get('unknownRollbacks', [])) or any(plan['documents'][role].split('/documents/')[0] == named and document['status'] in ('possibly-owned', 'created') for role, document in receipt.get('documents', {}).items()) or any(step['id'] in receipt.get('unknownStarts', []) + receipt.get('unknownCommits', []) and plan['databases'].get(step.get('onDatabase'), plan['database']) == named for step in plan['steps']):
+                raise ValueError('named database retained while its resources are unrecovered')
             if not metadata.delete_named_database(journal)['closureReady']:
                 raise ValueError('named database deletion requires A2 readback')
         receipt['postflight'] = metadata.postflight()
@@ -198,10 +199,10 @@ def recover_named_databases(command, table, runs, directory, *, baseline, check)
         nonce = run["nonce"]
         if not isinstance(nonce, str) or not re.fullmatch(r"[a-f0-9]{32}", nonce) or state.get("database") != "projects/fireemu-oracle-query/databases/txn-" + nonce or type(state.get("lastRequestEpoch")) not in (int, float) or not math.isfinite(state["lastRequestEpoch"]):
             raise ValueError("named database journal identity differs")
-        if command == "readback-a2" and not 600 <= epoch - state["lastRequestEpoch"] < float("inf"):
-            raise ValueError("A2 readback requires at least ten minutes after the last request")
-        if command == "recover-database" and (state.get("createConfirmed") is not True or state.get("unknownCreate") is not False or state.get("deleteAttempted") is not False or run["receipt"].get("unrecovered") is not False):
-            raise ValueError("recovery delete requires a confirmed database and recovered documents; unknown deletes are sticky")
+        if not 600 <= epoch - state["lastRequestEpoch"] < float("inf"):
+            raise ValueError("database action requires at least ten minutes after the last request")
+        if command == "recover-database" and (state.get("createConfirmed") is not True or state.get("unknownCreate") is not False or state.get("deleteAttempted") is not False):
+            raise ValueError("recovery delete requires a confirmed database; unknown deletes are sticky")
     check()
     directory = Path(directory)
     directory.mkdir(mode=0o700)
@@ -215,13 +216,14 @@ def recover_named_databases(command, table, runs, directory, *, baseline, check)
     budget._caps = {**budget._caps, "management": 5 + len(runs) * (2 if command == "recover-database" else 1), "credential": 1}
     budget._max = budget._caps["management"] + 1
     budget.begin_recovery()
-    result = {"command": command, "runs": [], "complete": False}
+    result = {"command": command, "runs": [], "complete": False, "settlesDocumentOrTokenObservations": False}
     metadata = None
     try:
         bearer = refresh(baseline, budget, before_send=check)
         metadata = MetadataSession(bearer, baseline, budget, project="fireemu-oracle-query", request_fn=functools.partial(request_once, project="fireemu-oracle-query"))
         result["preflight"] = metadata.preflight()
         for run in runs:
+            budget._caps["management"] = 5 + (len(result["runs"]) + 1) * (2 if command == "recover-database" else 1)
             metadata.named_database = copy.deepcopy(run["state"])
             state = metadata.readback_named_database(time.time(), journal) if command == "readback-a2" else metadata.delete_named_database(journal)
             result["runs"].append(state)

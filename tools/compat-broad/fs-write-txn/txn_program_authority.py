@@ -135,15 +135,15 @@ def verify_initial_gates(rows, now, decisions, pins):
         sandbox = [row for row in rows if row.get('project') == project or project in row.get('projects', [])]
         for index, row in enumerate(sandbox):
             shared._instant(row.get('ts'))
-            if row.get('outcome') == 'reserved' or row.get('event') == 'started':
+            own = row.get('taskId') in (TASK_ID, 'FS-TRANSACTION') or row.get('packetId') == pins['packetId'] or row.get('envelopeId') == pins['envelopeId']
+            if own and (row.get('outcome') == 'reserved' or row.get('event') == 'started'):
                 key = next((name for name in ('attemptId', 'runId', 'runDir') if row.get(name)), None)
                 if key is None or not shared._closed_attempt(row, key, sandbox[index + 1:]):
                     raise ValueError(f'{project} has an open attempt')
         task = [row for row in sandbox if row.get('taskId') == TASK_ID]
         if task and not shared._terminal(max(reversed(task), key=lambda row: shared._instant(row['ts']))):
             raise ValueError('FS-TRANSACTION requires recovery')
-        activity = [row for row in sandbox if row.get('event') not in ('note', 'started') and not str(row.get('outcome', '')).startswith('reserved') and row.get('outcome') != 'historical-unknown-hold']
-        latest = max(activity, key=lambda row: shared._instant(row['ts'])) if activity else None
+        latest = max(sandbox, key=lambda row: shared._instant(row['ts'])) if sandbox else None
         if latest and now - shared._instant(latest['ts']) < shared.IDLE_GAP:
             raise ValueError(f'{project} needs 30 minutes since last activity')
         if project == pins.get('project', PROJECT):

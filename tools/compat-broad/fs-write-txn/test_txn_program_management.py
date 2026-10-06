@@ -205,13 +205,13 @@ def test_named_requests_charge_before_dispatch_and_refuse_exhausted_budget():
 @pytest.mark.parametrize("status", [404, 429])
 def test_recorded_delete_layout_settles_only_with_own_not_found_readback(status):
     readback = ABSENT if status == 404 else copy.deepcopy(RECORDED_QUOTA)
-    session, calls, saved = named_session([ABSENT, copy.deepcopy(CREATE), answer(copy.deepcopy(RECORDED_DATABASE)), copy.deepcopy(DELETE), readback])
+    session, calls, saved = named_session([ABSENT, copy.deepcopy(CREATE), answer(copy.deepcopy(RECORDED_DATABASE)), copy.deepcopy(DELETE), readback] + ([copy.deepcopy(readback)] if status == 429 else []))
     session.create_named_database(NAMED, saved.append)
     state = session.delete_named_database(saved.append)
     assert state["closureReady"] is (status == 404)
     assert state["deleteConfirmed"] is (status == 404)
     assert state["unknownDelete"] is (status != 404)
-    assert [slot for slot, _ in calls] == ["named-database", "create-database", "named-database", "delete-database", "named-database"]
+    assert [slot for slot, _ in calls] == ["named-database", "create-database", "named-database", "delete-database", "named-database"] + (["named-database"] if status == 429 else [])
     with pytest.raises(ValueError): session.delete_named_database(saved.append)
 
 
@@ -328,3 +328,50 @@ def test_a2_absence_keeps_unknown_create_open_even_with_prior_delete_evidence(mo
     assert state["unknownCreate"] and state["unknownDelete"]
     assert not state["closureReady"] and not state["deleteConfirmed"]
     assert [slot for slot, _ in calls] == ["named-database"]
+
+
+@pytest.mark.parametrize("status", [429, 500, 503, 599, 408, 499, 600, 200, "503", None, 500.0])
+def test_post_delete_reread_is_bounded_and_only_for_transient_status(status):
+    retry = status == 429 or type(status) is int and 500 <= status < 600
+    session, calls, saved = named_session([ABSENT, copy.deepcopy(CREATE), answer(copy.deepcopy(RECORDED_DATABASE)), copy.deepcopy(DELETE), answer(None, status), ABSENT])
+    session.create_named_database(NAMED, saved.append)
+    state = session.delete_named_database(saved.append)
+    assert state["closureReady"] is retry
+    assert [slot for slot, _ in calls].count("delete-database") == 1
+    assert [slot for slot, _ in calls].count("named-database") == 3 + int(retry)
+    assert session.budget.used["management"] == 5 + int(retry)
+    if retry:
+        assert all(value["unknownDelete"] and not value["closureReady"] for value in saved[-3:-1])
+
+
+def test_post_delete_reread_stops_after_one_transient_answer():
+    session, calls, saved = named_session([ABSENT, copy.deepcopy(CREATE), answer(copy.deepcopy(RECORDED_DATABASE)), copy.deepcopy(DELETE), answer(None, 429), answer(None, 503), ABSENT])
+    session.create_named_database(NAMED, saved.append)
+    state = session.delete_named_database(saved.append)
+    assert state["unknownDelete"] and not state["closureReady"]
+    assert [slot for slot, _ in calls].count("named-database") == 4
+    assert len(calls) == 6
+
+
+def test_post_delete_reread_preserves_management_slots_for_postflight():
+    session, calls, saved = named_session([ABSENT, copy.deepcopy(CREATE), answer(copy.deepcopy(RECORDED_DATABASE)), copy.deepcopy(DELETE), answer(None, 429), ABSENT])
+    session.budget._caps["management"] = 7
+    session.create_named_database(NAMED, saved.append)
+    assert not session.delete_named_database(saved.append)["closureReady"]
+    assert len(calls) == 5
+
+
+def test_a2_does_not_reread_a_transient_response(monkeypatch):
+    session, calls, saved = named_session([answer(None, 429), ABSENT])
+    session.named_database = {"database": NAMED, "createConfirmed": True, "unknownCreate": False, "deleteAttempted": True, "deleteAccepted": True, "unknownDelete": True, "closureReady": False, "lastRequestEpoch": 1000}
+    monkeypatch.setattr("txn_program_management.time.time", lambda: 1600)
+    assert not session.readback_named_database(1600, saved.append)["closureReady"]
+    assert len(calls) == 1
+
+
+
+def test_plain_database_readback_does_not_reread_without_an_accepted_delete():
+    session, calls, saved = named_session([answer(None, 429), ABSENT])
+    session.named_database = {"database": NAMED, "createConfirmed": True, "unknownCreate": False, "deleteAttempted": False, "closureReady": False, "lastRequestEpoch": 1000}
+    assert not session.readback_named_database(None, saved.append)["closureReady"]
+    assert len(calls) == 1

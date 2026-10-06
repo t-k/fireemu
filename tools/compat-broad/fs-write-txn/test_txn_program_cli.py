@@ -486,3 +486,15 @@ def test_main_refuses_a_database_action_without_its_own_packet(packet, tmp_path,
     monkeypatch.setattr(cli, "database_action", lambda *args: pytest.fail("action without packet reached its runner"))
     argv = _argv(reviewed, digest, baseline, tmp_path); argv[0] = "readback-a2"
     with pytest.raises(ValueError, match="own packet"): cli.main(argv)
+
+
+
+def test_presend_generator_describes_the_finalized_query_baseline():
+    import ast
+    relative = Path("docs.local/agent-dags/fs-transaction-framework-20260930/mkpackets.py")
+    path = next((parent / relative for parent in Path(__file__).resolve().parents if (parent / relative).is_file()), None)
+    if path is None:
+        pytest.skip("private packet generator is absent")
+    strings = [node.value for node in ast.walk(ast.parse(path.read_text())) if isinstance(node, ast.Constant) and isinstance(node.value, str)]
+    descriptions = [value for value in strings if "query/(default) expectations" in value]
+    assert descriptions == ["Finalized recorded query/(default) expectations with field sources and a validated runtime schema; preflight checks every pinned identity and database setting"]

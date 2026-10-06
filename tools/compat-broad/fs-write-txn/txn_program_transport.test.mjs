@@ -636,6 +636,11 @@ for (const transport of ['rest', 'grpc']) {
     assert.throws(() => validateCall(spec('BatchGetDocuments', { database: named, documents: [placed(foreign, 'm')] }, transport, extra)));
     assert.throws(() => validateCall(spec('Commit', { database: foreign, writes: [update] }, transport, extra)));
     assert.throws(() => validateCall(spec('GetDocument', { name: placed(named, 'a') }, transport, { ...extra, placements: { a: 'undeclared' } })));
+    assert.throws(() => validateCall(spec('Rollback', { database: named, transaction: token }, transport, { ...extra, placements: { a: 'undeclared' } })));
+    assert.throws(() => validateCall(spec('Rollback', { database: named, transaction: token }, transport, { ...extra, databases: { ...extra.databases, duplicate: named } })));
+    assert.throws(() => validateCall(spec('Rollback', { database: named, transaction: token }, transport, { ...extra, placements: { unknown: 'named' } })));
+    assert.throws(() => validateCall(spec('Rollback', { database: named, transaction: token }, transport, { ...extra, placements: { a: 1 } })));
+    assert.throws(() => validateCall(spec('Rollback', { database: named, transaction: token }, transport, { ...extra, databases: { true: named, foreign }, placements: { a: true } })));
     assert.throws(() => validateCall(spec('Rollback', { database: named, transaction: token }, transport, { ...extra, databases: undefined, placements: undefined })));
   });
 }

@@ -1,0 +1,364 @@
+// Offline closure evidence: node closure-comparison.mjs --table <run-compare.json> --fireemu <binary> --out <json>
+// This records comparisons and proposal limitations; it never promotes closure conditions.
+import { createHash } from "node:crypto";
+import { execFileSync } from "node:child_process";
+import { readFileSync, mkdirSync, writeFileSync } from "node:fs";
+import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+import { loadDigest, productionChains, secondsOf } from "./compare.mjs";
+
+const root = fileURLToPath(new URL("../../../", import.meta.url));
+const sha = (bytes) => createHash("sha256").update(bytes).digest("hex");
+const proposal = "docs.local/proposals/2026-10-06-scheduled-functions-closure-proposal.md";
+// Only measurements actually present in run-compare are mapped. Missing measurements stay unjudged.
+const sources = {
+  "v2-http-delivery": {
+    "request-method": ["v2.request.method", "v2.request.url"],
+    "jobName-header": ["v2.request.headers", "v2.event.jobName"],
+    "scheduleTime-header": ["v2.request.headers", "v2.event.scheduleTime-form"],
+    body: ["v2.request.body"],
+    "SDK-ScheduledEvent": ["v2.event.keys"],
+    "SDK-context-getter": ["v2.event.context"],
+    "SDK-event-enumerability": ["v2.event.context", "v2.event.context-values"],
+  },
+  "v1-pubsub-delivery": {
+    "published-data": ["v1.published.data"],
+    "published-attributes": ["v1.published.attributes"],
+    "message-id-presence": ["v1.context.eventId", "v1.published.messageId"],
+    publishTime: ["v1.context.timestamp", "v1.published.publishTime"],
+    "v1-handler-context": ["v1.context.keys"],
+    "context-only-handler": ["v1.argumentCount"],
+    "context-resource-topic-versus-job": ["v1.context.resource", "v1.published.topic"],
+  },
+  "forced-and-natural-invocation": {
+    "natural-scheduled-run": ["cadence.every-1-minutes.spacing"],
+    "Cloud-Scheduler-run-now": ["forced-run"],
+    "success-next-occurrence": ["cadence.every-1-minutes.spacing"],
+    "retry-stable-occurrence-identity": ["retry.retryFour"],
+  },
+  "retry-config-validation": {},
+  "v2-retry-limits": {
+    "zero-no-retry": ["retry.retryZero"],
+    "finite-retry-count": ["retry.retryFour"],
+    "duration-only": ["retry.retryDuration"],
+    "count-and-duration-interaction": ["retry.retryCountWindow"],
+  },
+  "v2-backoff": {
+    "first-delay": ["retry.retryFour"],
+    "exponential-doubling": ["retry.retryDouble0"],
+    "linear-after-doublings": ["retry.retryDouble1", "retry.retryDouble3"],
+    "max-backoff-cap": ["retry.retryDuration"],
+    "stable-scheduleTime": ["retry.retryFour"],
+  },
+  "v1-two-stage-retry": {
+    "handler-no-retry": ["v1.failure-no-retry"],
+    "handler-retry-declaration": ["v1.retry-declaration-no-retry"],
+  },
+  "deadline-and-overlap": { "next-occurrence-during-work": ["cadence.in-flight-skip"] },
+  "declarations-v1-v2": {},
+};
+const resourceCases = new Set([
+  "attempt-deadline",
+  "omitted-versus-null-reset",
+  "SDK-attemptDeadline-versus-CLI-timeout",
+  "v1-App-Engine-job-location",
+  "v2-function-region-job-location",
+  "attemptDeadline-readback",
+  "attemptDeadline-boundary",
+]);
+const implicitFields = {
+  "handler-success-ack": [
+    "attempts.*.kind",
+    "attempts.*.status",
+    "attempts.*.debugInfo",
+    "frames.handler",
+  ],
+  "handler-throw-ack": [
+    "attempts.*.kind",
+    "attempts.*.status",
+    "attempts.*.debugInfo",
+    "frames.failing",
+    "frames.at",
+  ],
+  "success-stops-retry": [
+    "frames.failing",
+    "frames.at",
+    "frames.event.jobName",
+    "frames.event.scheduleTime",
+  ],
+  "next-schedule-after-failure": [
+    "frames.failing",
+    "frames.at",
+    "frames.event.scheduleTime",
+    "forced.job",
+    "forced.atMs",
+  ],
+  "retry-stable-occurrence-identity": [
+    "frames.headers.x-cloudscheduler-jobname",
+    "frames.headers.x-cloudscheduler-scheduletime",
+    "frames.event.jobName",
+    "frames.event.scheduleTime",
+    "retry.retryFour.production",
+    "retry.retryFour.strict.local",
+  ],
+};
+
+export function buildComparison({ report, recordings, artifactSha256, runnerTreeManifest }) {
+  if (report.fireemu?.binarySha256 && report.fireemu.binarySha256 !== artifactSha256)
+    throw new Error("comparison binary mismatch");
+  const primary = recordings.find((r) => r.data.run.id === report.run?.id);
+  if (!primary) throw new Error("comparison names an unknown recording");
+  const table = new Map();
+  for (const r of report.table) {
+    if (table.has(r.id)) throw new Error(`duplicate comparison id: ${r.id}`);
+    if (!["MATCH", "DIVERGES", "NOT_COMPARABLE"].includes(r.strict?.verdict))
+      throw new Error(`invalid verdict: ${r.id}`);
+    table.set(r.id, r);
+  }
+  const frames = primary.data.frames.filter(
+    (f) => f.handler === "schedRetryV2" && f.event?.jobName?.startsWith("firebase-schedule-"),
+  );
+  const groups = new Map();
+  for (const f of frames.toSorted((a, b) => a.at - b.at)) {
+    const key = `${f.headers["x-cloudscheduler-jobname"]}|${f.headers["x-cloudscheduler-scheduletime"]}`;
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(f);
+  }
+  const chains = [...groups.values()];
+  const successful = chains.filter((g) => g.some((f) => f.failing === false));
+  const repeated = chains.filter((g) => g.length > 1);
+  const finished = (handler) =>
+    (primary.data.attempts?.[`firebase-schedule-${handler}-us-central1`] ?? []).filter(
+      (a) => a.kind === "AttemptFinished",
+    );
+  const ok = finished("schedOkV2");
+  const failures = finished("schedRetryV2");
+  const observations = {
+    "handler-success-ack": ok.length
+      ? ok.every((a) => a.status === null && (a.debugInfo ?? "").endsWith("code number = 200"))
+      : null,
+    "handler-throw-ack":
+      failures.length && repeated.length
+        ? failures.some(
+            (a) => a.status !== null && (a.debugInfo ?? "").endsWith("code number = 500"),
+          ) && repeated.some((g) => g[0].failing === true)
+        : null,
+    "success-stops-retry": successful.length
+      ? successful.every((g) => g.findIndex((f) => f.failing === false) === g.length - 1)
+      : null,
+    "next-schedule-after-failure": chains.length
+      ? chains.some(
+          (g) =>
+            g.every((f) => f.failing === true) &&
+            chains.some(
+              (next) =>
+                next[0].at > g.at(-1).at &&
+                secondsOf(next[0].event.scheduleTime) > secondsOf(g[0].event.scheduleTime) &&
+                !(primary.data.forced ?? []).some(
+                  (f) => f.job === next[0].event.jobName && Math.abs(f.atMs - next[0].at) <= 5000,
+                ),
+            ),
+        )
+      : null,
+    "retry-stable-occurrence-identity": repeated.length
+      ? repeated.every((g) =>
+          g.every(
+            (f) =>
+              f.event.jobName === f.headers["x-cloudscheduler-jobname"] &&
+              f.event.scheduleTime === f.headers["x-cloudscheduler-scheduletime"],
+          ),
+        )
+      : null,
+  };
+  const closure = loadDigest(resolve(root, "spec/compatibility/closure/SCHEDULED-FUNCTIONS.json"));
+  const rows = [];
+  for (const c of closure.conditions.filter((condition) =>
+    Object.hasOwn(sources, condition.conditionId.split("/")[1]),
+  )) {
+    const area = c.conditionId.split("/")[1];
+    for (const caseId of c.cases) {
+      const ids = sources[area][caseId] ?? [];
+      const compared = ids.map((id) => table.get(id));
+      let status = compared.some((r) => r?.strict.verdict === "DIVERGES")
+        ? "DIVERGES"
+        : compared.length && compared.every((r) => r?.strict.verdict === "MATCH")
+          ? "MATCH"
+          : "NOT_COMPARABLE";
+      const used = new Set(ids.length ? [] : [resourceCases.has(caseId) ? recordings[2] : primary]);
+      for (const r of compared.filter(Boolean)) {
+        if (!r.id.startsWith("retry.")) {
+          used.add(primary);
+          continue;
+        }
+        const name = r.id.slice(6);
+        const recording = [primary, ...recordings].find(
+          (d) => productionChains(d.data)[name] !== undefined,
+        );
+        if (
+          !recording ||
+          JSON.stringify(productionChains(recording.data)[name]) !== JSON.stringify(r.production)
+        )
+          throw new Error(`retry row disagrees with recording: ${r.id}`);
+        used.add(recording);
+      }
+      if (!used.size || implicitFields[caseId]) used.add(primary);
+      if (caseId === "retry-stable-occurrence-identity" || caseId === "stable-scheduleTime") {
+        if (observations["retry-stable-occurrence-identity"] !== true)
+          status =
+            observations["retry-stable-occurrence-identity"] === false
+              ? "DIVERGES"
+              : "NOT_COMPARABLE";
+      }
+      const implicit = Object.hasOwn(implicitFields, caseId);
+      if (implicit && caseId !== "retry-stable-occurrence-identity") status = "NOT_COMPARABLE";
+      const section = resourceCases.has(caseId)
+        ? "3.5"
+        : caseId === "Cloud-Scheduler-run-now"
+          ? "3.4"
+          : caseId === "scheduler-attempt-versus-handler-instance"
+            ? "3.3"
+            : null;
+      if (section) status = "NOT_COMPARABLE";
+      rows.push({
+        row: `${c.conditionId}/${caseId}`,
+        conditionId: c.conditionId,
+        caseId,
+        frozenCase: true,
+        status,
+        recordings: [...used].map(({ path, sha256 }) => ({ path, sha256 })),
+        recordedFields: implicit
+          ? implicitFields[caseId]
+          : resourceCases.has(caseId)
+            ? ["jobs.*.attemptDeadline", "jobs.*.retryConfig", "jobs.*.name", "jobs.*.timeZone"]
+            : ids.map((id) => `table.${id}.production/strict.local`),
+        comparedRows: compared.filter(Boolean),
+        ...(implicit
+          ? {
+              observation: observations[caseId],
+              note:
+                caseId === "retry-stable-occurrence-identity"
+                  ? "Retry offsets are grouped by job and scheduleTime on both timelines; equal chain lengths require repeated identity."
+                  : "Production observation only: the table does not retain the corresponding local attempt outcomes or subsequent chains.",
+            }
+          : {}),
+        ...(section
+          ? {
+              proposalRef: `${proposal}#${section}`,
+              note:
+                section === "3.5"
+                  ? "S4: job readback has no local management API counterpart; approval is pending."
+                  : "Proposal limitation; approval is pending.",
+            }
+          : {}),
+        ...(!ids.length && !implicit && !section
+          ? {
+              note: "No measurement of this frozen case in the comparison table.",
+              recordedFields: ["jobs", "frames", "attempts"],
+            }
+          : {}),
+      });
+    }
+  }
+  for (const [caseId, section, id, note] of [
+    [
+      "header-names",
+      "3.1",
+      "v2.request.header-names",
+      "OIDC, trace and client-address header names are not reproduced.",
+    ],
+    [
+      "interval-phase-versus-creation-anchor",
+      "3.2",
+      "cadence.every-1-minutes.phase",
+      "The production phase is stable per job, not its creation anchor.",
+    ],
+    [
+      "in-flight-boundary",
+      "3.3",
+      null,
+      "The recording cannot distinguish the 504 boundary from the handler end.",
+    ],
+    [
+      "synchronized-window",
+      "3.6",
+      "cadence.every-5-minutes.alignment",
+      "The production synchronization rule is undetermined.",
+    ],
+    [
+      "user-publish-to-gen1-topic",
+      "3.7",
+      null,
+      "Strict stores a user publish without delivering the scheduled handler; not a frozen case.",
+    ],
+  ]) {
+    const r = table.get(id);
+    rows.push({
+      row: `declared/${caseId}`,
+      caseId,
+      frozenCase: false,
+      status: r?.strict.verdict === "DIVERGES" ? "DIVERGES" : "NOT_COMPARABLE",
+      proposalRef: `${proposal}#${section}`,
+      note,
+      recordings: [{ path: primary.path, sha256: primary.sha256 }],
+      recordedFields: id ? [`table.${id}.production/strict.local`] : ["frames", "attempts"],
+      comparedRows: r ? [r] : [],
+    });
+  }
+  const summary = {};
+  for (const r of rows) summary[r.status] = (summary[r.status] ?? 0) + 1;
+  return {
+    kind: "scheduled-functions-comparison-v1",
+    artifactSha256,
+    runnerSha256: sha(runnerTreeManifest),
+    runnerTreeManifest,
+    recordings: recordings.map(({ path, sha256 }) => ({ path, sha256 })),
+    runnerTreeManifestFormat:
+      "Tracked tools/runner-node files except *.test.mjs, sorted in ASCII order: UTF-8 path, TAB, lowercase SHA-256 of file bytes, LF; hash the concatenation.",
+    executionBinding: report.fireemu?.binarySha256 ? "report" : "unattested-table",
+    summary,
+    rows,
+  };
+}
+
+export function generateComparison({ reportPath, fireemu }) {
+  const bytes = readFileSync(reportPath);
+  const paths = execFileSync("git", ["ls-files", "tools/runner-node"], {
+    cwd: root,
+    encoding: "utf8",
+  })
+    .trim()
+    .split("\n")
+    .filter((p) => !p.endsWith(".test.mjs"))
+    .toSorted();
+  const runnerTreeManifest = paths
+    .map((p) => `${p}\t${sha(readFileSync(resolve(root, p)))}\n`)
+    .join("");
+  const recordings = [2, 3, 4].map((n) => {
+    const path = `conformance/scheduled-delivery/local/production-run${n}.json`;
+    const digest = readFileSync(resolve(root, path));
+    return { path, sha256: sha(digest), data: JSON.parse(digest) };
+  });
+  return {
+    ...buildComparison({
+      report: JSON.parse(bytes),
+      recordings,
+      artifactSha256: sha(readFileSync(fireemu)),
+      runnerTreeManifest,
+    }),
+    tableSha256: sha(bytes),
+  };
+}
+
+if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  const args = Object.fromEntries(
+    process.argv
+      .slice(2)
+      .flatMap((a, i, all) => (a.startsWith("--") ? [[a.slice(2), all[i + 1]]] : [])),
+  );
+  for (const key of ["table", "fireemu", "out"])
+    if (!args[key]) throw new Error(`--${key} is required`);
+  const result = generateComparison({ reportPath: args.table, fireemu: args.fireemu });
+  mkdirSync(dirname(args.out), { recursive: true });
+  writeFileSync(args.out, JSON.stringify(result, null, 1) + "\n");
+  console.log(JSON.stringify(result.summary));
+}

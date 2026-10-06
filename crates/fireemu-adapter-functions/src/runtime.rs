@@ -642,6 +642,7 @@ struct Inner {
     active_event_bytes: usize,
     reserved_event_records: usize,
     reserved_event_bytes: usize,
+    pending_schedule_publications: BTreeMap<EventId, String>,
     active_eventarc_records: usize,
     active_eventarc_bytes: usize,
     /// Invocations occupying a slot, keyed by invocation key (`<event>-<attempt>` or
@@ -664,6 +665,8 @@ struct Inner {
     dead_lettered_total: u64,
     /// Schedule runs became due beyond the catch-up cap and still have to be enqueued.
     catch_up_pending: bool,
+    /// A publication refusal requests a new sweep on the dispatcher, outside the current stack.
+    schedule_recheck_pending: bool,
     /// Schedule search steps taken by the `latest` / `none` catch-up policies since the
     /// runtime started; the deterministic work counter the complexity bound is asserted with.
     catch_up_steps: u64,
@@ -749,6 +752,7 @@ impl EventBatchReservation {
         release_event_reservation(&mut inner, deliveries.len(), self.retained_bytes);
         for delivery in deliveries {
             let id = delivery.event.event_id;
+            inner.pending_schedule_publications.remove(&id);
             inner.causality.register(
                 CausalEntry {
                     event_id: id.value(),
@@ -796,6 +800,11 @@ impl Drop for EventBatchReservation {
         let mut retry_schedule = false;
         if inner.epoch == self.epoch {
             release_event_reservation(&mut inner, deliveries.len(), self.retained_bytes);
+            for delivery in &deliveries {
+                inner
+                    .pending_schedule_publications
+                    .remove(&delivery.event.event_id);
+            }
             // The freed records may be what a refused schedule run waits for: re-enter the
             // sweep as a completion does, since no completion or clock change may follow.
             retry_schedule = inner.catch_up_pending;
@@ -1322,6 +1331,7 @@ impl FunctionsRuntime {
                 active_event_bytes: 0,
                 reserved_event_records: 0,
                 reserved_event_bytes: 0,
+                pending_schedule_publications: BTreeMap::new(),
                 active_eventarc_records: 0,
                 active_eventarc_bytes: 0,
                 running: BTreeMap::new(),
@@ -1334,6 +1344,7 @@ impl FunctionsRuntime {
                 succeeded_total: 0,
                 dead_lettered_total: 0,
                 catch_up_pending: false,
+                schedule_recheck_pending: false,
                 catch_up_steps: 0,
                 overlap_rejected: 0,
                 admission_refusals: BTreeMap::new(),
@@ -1791,6 +1802,13 @@ impl FunctionsRuntime {
         );
         if matches!(reservation, Err(SourceEventAdmissionError::Capacity)) {
             *inner.admission_refusals.entry("capacity").or_default() += 1;
+        }
+        if let Ok(reservation) = &reservation {
+            for delivery in reservation.deliveries.as_deref().unwrap_or_default() {
+                inner
+                    .pending_schedule_publications
+                    .insert(delivery.event.event_id, delivery.payload.function.clone());
+            }
         }
         reservation
     }
@@ -3096,6 +3114,7 @@ impl FunctionsRuntime {
                 let mut failed = Vec::new();
                 for delivery in deliveries {
                     let id = delivery.event.event_id;
+                    inner.pending_schedule_publications.remove(&id);
                     let function = delivery.payload.function;
                     inner.causality.register(
                         CausalEntry {
@@ -3208,6 +3227,10 @@ impl FunctionsRuntime {
     /// refuse while a run of the function is queued or running.
     fn admit_scheduled_run(&self, inner: &mut Inner, function: &str) -> bool {
         let busy = inner.running.values().any(|f| f == function)
+            || inner
+                .pending_schedule_publications
+                .values()
+                .any(|f| f == function)
             || inner
                 .payloads
                 .values()
@@ -3330,11 +3353,13 @@ impl FunctionsRuntime {
                 inner.active_event_bytes = 0;
                 inner.reserved_event_records = 0;
                 inner.reserved_event_bytes = 0;
+                inner.pending_schedule_publications.clear();
                 inner.active_eventarc_records = 0;
                 inner.active_eventarc_bytes = 0;
                 inner.running.clear();
                 inner.delayed.clear();
                 inner.catch_up_pending = false;
+                inner.schedule_recheck_pending = false;
                 // A task accepted before the reset must not reach the new session's handlers.
                 inner.task_scheduler.reset(std::time::Instant::now());
                 for job in &mut inner.jobs {
@@ -4722,6 +4747,14 @@ impl FunctionsRuntime {
             {
                 break;
             }
+            let recheck = self
+                .inner
+                .lock()
+                .map(|mut inner| std::mem::take(&mut inner.schedule_recheck_pending))
+                .unwrap_or(false);
+            if recheck {
+                self.on_clock_changed();
+            }
             self.dispatch_ready();
             let next_task_wake = self.dispatch_tasks_ready();
             match next_task_wake {
@@ -5075,7 +5108,6 @@ impl FunctionsRuntime {
         disposition: RunnerGoneDisposition,
     ) {
         let now = self.now();
-        let _ = key;
         if let Ok(mut inner) = self.inner.lock() {
             // ADR-011: the captured epoch is validated before any observable mutation. Work
             // that resolves after a reset belongs to a session that no longer exists, so it
@@ -5153,7 +5185,15 @@ impl FunctionsRuntime {
         let more_due = self
             .inner
             .lock()
-            .map(|i| i.catch_up_pending)
+            .map(|mut inner| {
+                // Publication refusals have no invocation slot and may complete inside a clock sweep.
+                if key.is_empty() {
+                    inner.schedule_recheck_pending |= inner.catch_up_pending;
+                    false
+                } else {
+                    inner.catch_up_pending
+                }
+            })
             .unwrap_or(false);
         if more_due {
             self.on_clock_changed();
@@ -7071,6 +7111,114 @@ mod schedule_capacity_tests {
 
     fn is_message_id(id: &str) -> bool {
         id.len() == 17 && id.starts_with('2') && id.bytes().all(|b| b.is_ascii_digit())
+    }
+
+    #[tokio::test]
+    async fn refused_publications_drain_all_catch_up_chunks_without_recursing() {
+        struct DeletedTopic(std::sync::atomic::AtomicUsize);
+        impl super::ScheduleTopicPublisher for DeletedTopic {
+            fn publish(&self, _: &str, _: &str, _: LogicalInstant) -> Result<(), String> {
+                self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                Err("topic not found: deleted topic".to_owned())
+            }
+        }
+        let (runtime, clock) =
+            runtime_with(CatchUpPolicy::All, super::OverlapPolicy::Allow, 1, START).await;
+        runtime
+            .inner
+            .lock()
+            .unwrap()
+            .jobs
+            .retain(|job| job.function == "tick");
+        let publisher = Arc::new(DeletedTopic(std::sync::atomic::AtomicUsize::new(0)));
+        runtime.set_schedule_topic_publisher(publisher.clone());
+        let occurrences = 4096;
+        advance(&clock, occurrences * 300);
+        let producing = runtime.clone();
+        std::thread::Builder::new()
+            .stack_size(128 * 1024)
+            .spawn(move || producing.on_clock_changed())
+            .unwrap()
+            .join()
+            .unwrap();
+        let dispatcher = tokio::spawn(runtime.clone().dispatch_loop());
+        let settled = runtime.await_idle(Duration::from_secs(10)).await;
+        runtime.shutdown().await;
+        dispatcher.await.unwrap();
+        settled.expect("every refused occurrence finishes without another clock change");
+        assert_eq!(
+            publisher.0.load(std::sync::atomic::Ordering::SeqCst),
+            usize::try_from(occurrences).unwrap()
+        );
+        assert_eq!(runtime.status()["deadLettered"], occurrences);
+        assert!(queued_message_ids(&runtime).is_empty());
+        assert!(runtime
+            .history()
+            .iter()
+            .all(|record| record.outcome == "failed: topic not found: deleted topic"));
+        assert!(runtime
+            .dead_letters()
+            .iter()
+            .all(|record| record.outcome == "failed: topic not found: deleted topic"));
+    }
+
+    #[tokio::test]
+    async fn a_manual_run_observes_overlap_while_publication_is_blocked() {
+        struct BlockedPublisher {
+            entered: std::sync::mpsc::Sender<()>,
+            release: Mutex<std::sync::mpsc::Receiver<()>>,
+            first: std::sync::atomic::AtomicBool,
+            recorder: Recorder,
+        }
+        impl super::ScheduleTopicPublisher for BlockedPublisher {
+            fn publish(&self, topic: &str, id: &str, at: LogicalInstant) -> Result<(), String> {
+                if self.first.swap(false, std::sync::atomic::Ordering::SeqCst) {
+                    self.entered.send(()).unwrap();
+                    self.release
+                        .lock()
+                        .unwrap()
+                        .recv_timeout(Duration::from_secs(10))
+                        .unwrap();
+                }
+                self.recorder.publish(topic, id, at)
+            }
+        }
+        for overlap in [super::OverlapPolicy::Skip, super::OverlapPolicy::Reject] {
+            for manual in [false, true] {
+                let (runtime, clock) = runtime_with(CatchUpPolicy::All, overlap, 1, START).await;
+                let (entered, waiting) = std::sync::mpsc::channel();
+                let (release, blocked) = std::sync::mpsc::channel();
+                let publisher = Arc::new(BlockedPublisher {
+                    entered,
+                    release: Mutex::new(blocked),
+                    first: std::sync::atomic::AtomicBool::new(true),
+                    recorder: Recorder::default(),
+                });
+                runtime.set_schedule_topic_publisher(publisher.clone());
+                advance(&clock, 300);
+                let producing = runtime.clone();
+                let publication = std::thread::spawn(move || {
+                    if manual {
+                        producing.run_schedule("tick").unwrap();
+                    } else {
+                        producing.on_clock_changed();
+                    }
+                });
+                waiting.recv_timeout(Duration::from_secs(10)).unwrap();
+                let second = runtime.run_schedule("tick");
+                release.send(()).unwrap();
+                publication.join().unwrap();
+                let publications = recorded(&publisher.recorder).len();
+                let rejected = runtime.status()["overlapRejected"].clone();
+                finish(&runtime).await;
+                assert!(
+                    matches!(second, Err(super::ScheduleRunError::Refused(_))),
+                    "{overlap:?}, manual={manual}: {second:?}"
+                );
+                assert_eq!(publications, 1);
+                assert_eq!(rejected, u64::from(overlap == super::OverlapPolicy::Reject));
+            }
+        }
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

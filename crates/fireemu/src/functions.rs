@@ -7978,7 +7978,14 @@ mod tests {
                 }
             }
         }
-        std::fs::remove_dir_all(&dir).unwrap();
+        // Windows keeps the directory busy for a moment after the fake runner exits (os error 32); the
+        // directory is a per-test temporary, so a failed removal is not a test failure.
+        for _ in 0..20 {
+            if std::fs::remove_dir_all(&dir).is_ok() || !dir.exists() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        }
     }
 
     /// The time zone of a schedule that names none: the strict profile gives a first-generation one Los Angeles (read

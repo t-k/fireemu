@@ -15,12 +15,12 @@ const descriptorClient = new FirestoreClient({ projectId: 'demo-descriptors' });
 const protos = descriptorClient._protos;
 const firestore = protos.google.firestore.v1;
 const empty = protos.google.protobuf.Empty;
-const RESPONSES = { BeginTransaction: firestore.BeginTransactionResponse, GetDocument: firestore.Document, BatchGetDocuments: firestore.BatchGetDocumentsResponse, Commit: firestore.CommitResponse, Rollback: empty, DeleteDocument: empty };
-const REST_METHODS = ['BeginTransaction', 'GetDocument', 'BatchGetDocuments', 'Commit', 'Rollback'];
+const RESPONSES = { BeginTransaction: firestore.BeginTransactionResponse, GetDocument: firestore.Document, BatchGetDocuments: firestore.BatchGetDocumentsResponse, Commit: firestore.CommitResponse, RunQuery: firestore.RunQueryResponse, Rollback: empty, DeleteDocument: empty };
+const REST_METHODS = ['BeginTransaction', 'GetDocument', 'BatchGetDocuments', 'Commit', 'Rollback', 'RunQuery'];
 export const MAX_BATCH_FRAMES = 16;
 export const CHANNEL_OPTIONS = Object.freeze({ 'grpc.enable_retries': 0, 'grpc.max_send_message_length': 16384, 'grpc.max_receive_message_length': 65536 });
 export const RECEIPT_KIND = 'txn-program-receipt-v1';
-export const MAX_DEADLINE_MS = 30000;
+export const MAX_DEADLINE_MS = 90000;
 export const DEFAULT_DEADLINE_MS = 10000;
 const UNKNOWN_CODES = [1, 2, 4, 13, 14];
 // google.rpc.Code by the `status` name a REST error carries.
@@ -37,7 +37,10 @@ const plain = value => value !== null && typeof value === 'object' && !Array.isA
 function keys(value, required, optional = []) {
   if (!plain(value) || required.some(key => !Object.hasOwn(value, key)) || Object.keys(value).some(key => ![...required, ...optional].includes(key))) throw new Error('program closed schema differs');
 }
-function bytes(value) {
+// The one transaction token that does not decode: a REST request may carry it (a native client cannot send bytes that do not decode); the retry token never may.
+export const MALFORMED_TOKEN_LITERAL = 'not base64!';
+function bytes(value, transport) {
+  if (value === MALFORMED_TOKEN_LITERAL && transport === 'rest') return;
   if (typeof value !== 'string' || !value.length || value.length > 2048 || !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(value)) throw new Error('program canonical token required');
   const decoded = Buffer.from(value, 'base64');
   if (!decoded.length || decoded.length > 1024 || decoded.toString('base64') !== value) throw new Error('program canonical token required');
@@ -48,11 +51,13 @@ function timestamp(value) {
 }
 
 export function validateCall(spec) {
-  keys(spec, ['kind', 'transport', 'target', 'projectId', 'nonce', 'ownerId', 'slug', 'documents', 'states', 'method', 'request', 'bearer', 'deadlineMs']);
+  keys(spec, ['kind', 'transport', 'target', 'projectId', 'nonce', 'ownerId', 'slug', 'documents', 'states', 'method', 'request', 'bearer', 'deadlineMs'], ['cancelAfter']);
+  // A native query stream the call cancels itself after N frames (N within the frame cap); nothing else may carry the key.
+  if (spec.cancelAfter !== undefined && (spec.method !== 'RunQuery' || spec.transport !== 'grpc' || !Number.isInteger(spec.cancelAfter) || spec.cancelAfter < 1 || spec.cancelAfter > MAX_BATCH_FRAMES)) throw new Error('program cancel differs');
   if (spec.kind !== 'txn-program-call-v1' || !['rest', 'grpc'].includes(spec.transport) || !/^[a-f0-9]{32}$/.test(spec.nonce) || !/^[a-f0-9]{32}$/.test(spec.ownerId)) throw new Error('program identity differs');
   if (typeof spec.slug !== 'string' || !LABEL.test(spec.slug) || !Array.isArray(spec.documents) || !spec.documents.length || spec.documents.length > 8 || spec.documents.some(role => typeof role !== 'string' || !LABEL.test(role)) || new Set(spec.documents).size !== spec.documents.length) throw new Error('program document scope differs');
   if (!Array.isArray(spec.states) || !spec.states.length || spec.states.length > 32 || spec.states.some(state => typeof state !== 'string' || !LABEL.test(state))) throw new Error('program states differ');
-  // Only an outside writer's commit (no transaction) may wait 30 s; every other call is capped at 10 s.
+  // Only an outside writer's commit (no transaction) may wait up to 90 s; every other call is capped at 10 s.
   const writer = spec.method === 'Commit' && plain(spec.request) && spec.request.transaction === undefined;
   if (!Number.isInteger(spec.deadlineMs) || spec.deadlineMs < 1 || spec.deadlineMs > (writer ? MAX_DEADLINE_MS : DEFAULT_DEADLINE_MS) || typeof spec.bearer !== 'string' || !/^[A-Za-z0-9._~+\/-]{1,8192}$/.test(spec.bearer)) throw new Error('program deadline or bearer differs');
   if (spec.target?.kind === 'production') {
@@ -91,7 +96,7 @@ export function validateCall(spec) {
       keys(request, ['name'], ['transaction', 'readTime']);
       if (!owned(request.name)) throw new Error('program document differs');
       if (request.transaction !== undefined && request.readTime !== undefined) throw new Error('program read names a transaction and a time');
-      if (request.transaction !== undefined) bytes(request.transaction);
+      if (request.transaction !== undefined) bytes(request.transaction, spec.transport);
       if (request.readTime !== undefined) timestamp(request.readTime);
       break;
     case 'BatchGetDocuments': {
@@ -103,19 +108,37 @@ export function validateCall(spec) {
         keys(request.newTransaction[Object.keys(request.newTransaction)[0]], []);
       }
       if (request.database !== database || !Array.isArray(request.documents) || !request.documents.length || request.documents.length > spec.documents.length || new Set(request.documents).size !== request.documents.length || !request.documents.every(owned)) throw new Error('program batch documents differ');
-      if (request.transaction !== undefined) bytes(request.transaction);
+      if (request.transaction !== undefined) bytes(request.transaction, spec.transport);
+      break;
+    }
+    case 'RunQuery': {
+      keys(request, ['parent', 'structuredQuery'], ['transaction']);
+      if (request.parent !== `${database}/documents/oracle/${spec.nonce}`) throw new Error('program query parent differs');
+      if (request.transaction !== undefined) bytes(request.transaction, spec.transport);
+      const query = request.structuredQuery;
+      keys(query, ['from'], ['where']);
+      if (!Array.isArray(query.from) || query.from.length !== 1) throw new Error('program query source differs');
+      keys(query.from[0], ['collectionId']);
+      if (query.from[0].collectionId !== spec.slug) throw new Error('program query collection differs');
+      if (query.where !== undefined) {
+        keys(query.where, ['fieldFilter']);
+        const filter = query.where.fieldFilter;
+        keys(filter, ['field', 'op', 'value']);
+        keys(filter.field, ['fieldPath']); keys(filter.value, ['stringValue']);
+        if (filter.field.fieldPath !== 'state' || filter.op !== 'EQUAL' || !spec.states.includes(filter.value.stringValue)) throw new Error('program query filter differs');
+      }
       break;
     }
     case 'Rollback':
       keys(request, ['database', 'transaction']);
       if (request.database !== database) throw new Error('program database differs');
-      bytes(request.transaction);
+      bytes(request.transaction, spec.transport);
       break;
     case 'Commit': {
       keys(request, ['database', 'writes'], ['transaction']);
       // An empty commit is a transaction's own: it must name the transaction.
       if (request.database !== database || !Array.isArray(request.writes) || request.writes.length > spec.documents.length || (!request.writes.length && request.transaction === undefined)) throw new Error('program writes differ');
-      if (request.transaction !== undefined) bytes(request.transaction);
+      if (request.transaction !== undefined) bytes(request.transaction, spec.transport);
       const seen = new Set();
       for (const write of request.writes) {
         keys(write, ['update', 'currentDocument']); keys(write.update, ['name', 'fields']); keys(write.currentDocument, ['exists']);
@@ -151,9 +174,9 @@ function normalize(value) {
   return value;
 }
 
-function receipt(spec, code, details, response, http = null) {
+function receipt(spec, code, details, response, http = null, definite = false) {
   const safeDetails = String(details ?? '').split(spec.bearer).join('[credential-redacted]').slice(0, 4096);
-  const result = { kind: RECEIPT_KIND, transport: spec.transport, complete: Number.isInteger(code) && !UNKNOWN_CODES.includes(code), code, details: safeDetails, response: response === undefined ? null : response, http, dispatchedRequests: 1 };
+  const result = { kind: RECEIPT_KIND, transport: spec.transport, complete: definite || (Number.isInteger(code) && !UNKNOWN_CODES.includes(code)), code, details: safeDetails, response: response === undefined ? null : response, http, dispatchedRequests: 1 };
   if (Buffer.byteLength(JSON.stringify(result)) > 65536) return { ...result, complete: false, response: null, details: 'response capacity exceeded' };
   return result;
 }
@@ -174,6 +197,7 @@ export function restRequest(spec) {
     }
     case 'Commit': return { method: 'POST', path: `/v1/${database}/documents:commit`, body: { writes: request.writes, ...(request.transaction === undefined ? {} : { transaction: request.transaction }) } };
     case 'Rollback': return { method: 'POST', path: `/v1/${database}/documents:rollback`, body: { transaction: request.transaction } };
+    case 'RunQuery': return { method: 'POST', path: `/v1/${request.parent}:runQuery`, body: { structuredQuery: request.structuredQuery, ...(request.transaction === undefined ? {} : { transaction: request.transaction }) } };
     case 'BatchGetDocuments': return { method: 'POST', path: `/v1/${database}/documents:batchGet`, body: { documents: request.documents, ...(request.transaction === undefined ? {} : { transaction: request.transaction }), ...(request.readTime === undefined ? {} : { readTime: rfc3339(request.readTime) }), ...(request.newTransaction === undefined ? {} : { newTransaction: request.newTransaction }) } };
     default: return { method: 'GET', path: `/v1/${request.name}${request.transaction === undefined ? '' : `?transaction=${encodeURIComponent(request.transaction)}`}${request.readTime === undefined ? '' : `?readTime=${encodeURIComponent(rfc3339(request.readTime))}`}`, body: undefined };
   }
@@ -219,7 +243,7 @@ async function runRest(spec, exchange) {
     if (answer.oversize) return receipt(spec, 2, 'response capacity exceeded', null, answer.status);
     let body;
     try { body = JSON.parse(answer.text); } catch { return receipt(spec, 2, 'REST answer is not JSON', null, answer.status); }
-    const batch = spec.method === 'BatchGetDocuments';
+    const batch = spec.method === 'BatchGetDocuments' || spec.method === 'RunQuery';
     // A batch answers with an array of entries; an error may arrive as the first entry.
     if (batch && Array.isArray(body) && body.length && plain(body[0]) && plain(body[0].error)) body = body[0];
     if (answer.status >= 200 && answer.status < 300) {
@@ -243,7 +267,7 @@ export function grpcMetadata(spec) {
   const metadata = new grpc.Metadata();
   metadata.set('authorization', `Bearer ${spec.bearer}`);
   if (spec.target.kind === 'production') metadata.set('x-goog-user-project', spec.projectId);
-  const routing = spec.request.database ? 'database' : 'name';
+  const routing = ['database', 'parent', 'name'].find(key => spec.request[key]);
   metadata.set('x-goog-request-params', `${routing}=${encodeURIComponent(spec.request[routing])}`);
   return metadata;
 }
@@ -258,19 +282,25 @@ async function runGrpc(spec, createClientOverride) {
   try {
     return await new Promise(resolve => {
       let settled = false;
-      const finish = (code, details, response) => {
+      const finish = (code, details, response, definite = false) => {
         if (settled) return;
         settled = true;
         clearTimeout(timer);
-        resolve(receipt(spec, code, details, response === undefined || response === null ? null : normalize(response)));
+        resolve(receipt(spec, code, details, response === undefined || response === null ? null : normalize(response), null, definite));
       };
       timer = setTimeout(() => { finish(4, 'worker deadline exceeded'); call?.cancel(); }, spec.deadlineMs + 25);
       try {
-        if (spec.method === 'BatchGetDocuments') {
+        if (spec.method === 'BatchGetDocuments' || spec.method === 'RunQuery') {
           // A server stream: collect a bounded number of entries; an error after entries is still the call's answer.
           call = client.makeServerStreamRequest(`/google.firestore.v1.Firestore/${spec.method}`, firestore[`${spec.method}Request`].serialize, RESPONSES[spec.method].deserialize, spec.request, metadata, { deadline: new Date(Date.now() + spec.deadlineMs) });
           const entries = [];
-          call.on('data', entry => { entries.push(entry); if (entries.length > MAX_BATCH_FRAMES) { finish(2, 'batch stream over the frame cap'); call.cancel(); } });
+          call.on('data', entry => {
+            if (settled) return;
+            entries.push(entry);
+            if (entries.length > MAX_BATCH_FRAMES) { finish(2, 'batch stream over the frame cap'); call.cancel(); return; }
+            // The call's own cancel of a query stream: a definite answer carrying the frames received so far.
+            if (spec.cancelAfter !== undefined && entries.length >= spec.cancelAfter) { finish(1, `cancelled by the client after ${entries.length} frame(s)`, { responses: entries.slice(0, spec.cancelAfter) }, true); call.cancel(); }
+          });
           // A batch that begins a transaction may already have handed it over: an error after entries is unknown.
           call.on('error', error => (entries.length && spec.request.newTransaction !== undefined) ? finish(2, 'batch stream failed after entries that may carry a new transaction') : finish(error?.code ?? 2, error?.details ?? ''));
           call.on('end', () => finish(0, '', { responses: entries }));

@@ -120,7 +120,7 @@ def _step_change(index, **fields):
         ("empty allow", lambda t: _broken(t, steps=_step_change(5, allow=()))),
         ("commit without writes outside a transaction", lambda t: _broken(t, steps=_step_change(7, writes=()))),
         ("writer with token", lambda t: _broken(t, steps=_step_change(7, tokenInput="rest-r"))),
-        ("writer over deadline", lambda t: _broken(t, steps=_step_change(7, deadlineMs=30001))),
+        ("writer over deadline", lambda t: _broken(t, steps=_step_change(7, deadlineMs=90001))),
         ("case on control", lambda t: _broken(t, steps=_step_change(4, caseId="x"))),
         ("duplicate case", lambda t: _broken(t, steps=_step_change(6, caseId="rest/fail-commit"))),
         ("caps not the step count", lambda t: _broken(t, caps={**t["caps"], "observation": 18})),
@@ -258,3 +258,9 @@ def test_transaction_bytes_are_capped_at_1024_decoded_bytes():
     assert program.canonical_token(base64.b64encode(b"x" * 1024).decode())
     with pytest.raises(ValueError, match="bounded"):
         program.canonical_token(base64.b64encode(b"x" * 1025).decode())
+
+
+def test_an_outside_writer_may_declare_a_deadline_up_to_90_seconds_and_a_reader_may_not(program, table):
+    program.compile_plan(_broken(table, steps=_step_change(7, deadlineMs=90000)), NONCE, OWNER)
+    with pytest.raises(ValueError, match="deadline"):
+        program.compile_plan(_broken(table, steps=_step_change(4, deadlineMs=30000)), NONCE, OWNER)

@@ -166,19 +166,25 @@ def paced_wait(declared, production_step, local_duration):
 
 
 class VirtualClock:
-    """Real time plus every second the waits advanced the emulator's virtual clock."""
+    """The emulator's virtual clock as a recording sees it. Without a start it is real time plus every second the waits advanced it. A fireemu started with
+    `daemon.clockStart` has a clock that only moves when it is advanced, so given that start the recording's clocks do too: UTC is the start plus what was advanced,
+    and monotonic is a fixed origin plus what the waits advanced."""
 
-    def __init__(self, control, token, frozen=False):
-        self.control, self.token, self.skew, self.frozen = control.rstrip("/"), token, 0.0, frozen
-        # a frozen clock reads real time once and then moves only by what was advanced: the emulator's own clock is frozen too
-        self._base, self._base_utc = time.monotonic(), datetime.datetime.now(datetime.timezone.utc)
+    def __init__(self, control, token, start=None, frozen=False):
+        self.control, self.token, self.start = control.rstrip("/"), token, start
+        # a frozen clock reads real time once (or takes the start it is given) and then moves only by what was advanced: the emulator's own clock is frozen too
+        self.frozen = frozen or start is not None
+        self._base = 1000.0 if start is not None else time.monotonic()
+        self._base_utc = start if start is not None else datetime.datetime.now(datetime.timezone.utc)
+        self.skew = 0.0       # what the recording's monotonic clock was moved by
+        self.utc_skew = 0.0   # what the time it writes as now was moved by (a hidden advance moves only this)
 
     def now(self):
         return (self._base if self.frozen else time.monotonic()) + self.skew
 
     def utc(self):
-        moment = (self._base_utc if self.frozen else datetime.datetime.now(datetime.timezone.utc)) + datetime.timedelta(seconds=self.skew)
-        return moment.strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+        base = self._base_utc if self.frozen else datetime.datetime.now(datetime.timezone.utc)
+        return (base + datetime.timedelta(seconds=self.utc_skew)).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
 
     def emulator_now(self):
         """The emulator's own clock, read from the control API (seconds since the epoch)."""
@@ -187,15 +193,79 @@ class VirtualClock:
         text = value["clock"] if isinstance(value, dict) else value
         return datetime.datetime.fromisoformat(text.replace("Z", "+00:00")).timestamp()
 
-    def sleep(self, seconds):
-        """Advance the emulator's clock by exactly this wait: the control API takes whole milliseconds, so a long program's token ages do not drift."""
+    def advance(self, seconds, *, hidden=False):
+        """Move the emulator's clock by exactly this many seconds (the control API takes whole milliseconds, so a long program's token ages do not drift). A hidden advance
+        leaves the recording's monotonic clock alone, so its own deadlines do not see it."""
         if seconds <= 0:
             return
         millis = max(1, int(round(seconds * 1000)))
         request = urllib.request.Request(self.control + "/sessions/default/clock:advance", data=json.dumps({"millis": millis}).encode(),
                                          method="POST", headers={"content-type": "application/json", "authorization": "Bearer " + self.token})
         urllib.request.urlopen(request, timeout=10).read()
-        self.skew += millis / 1000
+        self.utc_skew += millis / 1000
+        if not hidden:
+            self.skew += millis / 1000
+
+    def sleep(self, seconds):
+        self.advance(seconds)
+
+
+def advancing(base, clock, seconds, after):
+    """`base` (a collector class) that advances the emulator's clock once, hidden, right after the first answer of the step `after`; `base` itself when nothing is asked for."""
+    if not seconds or not after:
+        return base
+
+    class Advancing(base):
+        moved = False
+
+        def _rpc(self, site, *args, **kwargs):
+            result = super()._rpc(site, *args, **kwargs)
+            if site == after and not self.moved:
+                self.moved = True
+                clock.advance(seconds, hidden=True)
+            return result
+
+    return Advancing
+
+
+#: Real seconds a concurrent outside writer is given to reach the emulator (its worker starts a process and connects) before the replay moves the frozen clock: a clock that
+#: moves faster than the writer arrives would release the holder before the writer ever met its locks.
+CONCURRENT_SETTLE_SECONDS = 5.0
+#: Real seconds given to a writer still in flight after each slice of a frozen wait: a refusal comes when the emulator's clock passes the writer's contention bound, and the
+#: server notices within its poll, so a wait that runs through in milliseconds would send the next request before the refusal was answered.
+SLICE_YIELD_SECONDS = 0.1
+
+
+def settling(base, seconds=CONCURRENT_SETTLE_SECONDS, sleep=time.sleep, slice_yield=SLICE_YIELD_SECONDS):
+    """`base` (a collector class) that, right after it sends a concurrent writer, waits `seconds` of real time (the emulator's clock is frozen: nothing ages) before it goes on,
+    and that gives a writer still in flight `slice_yield` real seconds after each slice of a wait (the writer's answer lands at the moment of the clock it was bound by)."""
+    if not seconds and not slice_yield:
+        return base
+
+    class Settling(base):
+        def _start_concurrent(self, step):
+            result = super()._start_concurrent(step)
+            if seconds:
+                sleep(seconds)
+            return result
+
+        def _wait(self, step):
+            if not slice_yield or getattr(self, "started", None) is None:
+                return super()._wait(step)
+            moved = self.sleep
+
+            def slice_then_yield(duration):
+                moved(duration)
+                if getattr(self, "started", None) is not None and self.started["thread"].is_alive():
+                    sleep(slice_yield)
+
+            self.sleep = slice_then_yield
+            try:
+                return super()._wait(step)
+            finally:
+                self.sleep = moved
+
+    return Settling
 
 
 class PacedCollector(Collector):

@@ -1432,20 +1432,22 @@ async function main() {
         return false;
       }
       if (msg.type === 'clock:set' || msg.type === 'clock:runDue') {
-        try {
-          let status;
-          if (msg.type === 'clock:set') {
-            const revision = BigInt(msg.revision);
-            if (revision < clockRevision) throw new Error('stale clock revision');
-            status = runtimeClock.update(msg);
-            clockRevision = revision;
-          } else {
-            status = runtimeClock.runDue(msg.budget);
+        void (async () => {
+          try {
+            let status;
+            if (msg.type === 'clock:set') {
+              const revision = BigInt(msg.revision);
+              if (revision < clockRevision) throw new Error('stale clock revision');
+              status = runtimeClock.update(msg);
+              clockRevision = revision;
+            } else {
+              status = await runtimeClock.runDue(msg.budget);
+            }
+            send({type:'result',invocationId:msg.invocationId,ok:true,timers:status});
+          } catch (error) {
+            send({type:'result',invocationId:msg.invocationId,ok:false,error:invocationFailure(error).message});
           }
-          send({type:'result',invocationId:msg.invocationId,ok:true,timers:status});
-        } catch (error) {
-          send({type:'result',invocationId:msg.invocationId,ok:false,error:invocationFailure(error).message});
-        }
+        })();
         return;
       }
       if (!runnerReady) {

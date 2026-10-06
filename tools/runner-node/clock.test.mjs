@@ -33,6 +33,9 @@ test('virtual Date preserves construction, parsing, prototype and subclass seman
   assert.equal(Date.UTC(1970, 0, 1), 0);
   assert.ok(new Date() instanceof Date);
   assert.ok(new NativeDate() instanceof Date);
+  assert.equal(new Date().constructor, Date);
+  assert.equal(new Date().constructor.now(), 1000);
+  assert.equal(+new (new Date().constructor)(), 1000);
   class Child extends Date {}
   const child = new Child();
   assert.ok(child instanceof Child);
@@ -88,7 +91,7 @@ test('virtual callback timers cover globals and named builtin imports', () => ch
   assert.deepEqual(calls, []);
   clock.update({instantNanos:'1010000000'});
   assert.deepEqual(calls, []);
-  assert.equal(clock.runDue().executed, 3);
+  assert.equal((await clock.runDue()).executed, 3);
   assert.deepEqual(calls, [['global',1010],['module',1010],['named',1010]]);
 `, {timers:'virtual'}));
 
@@ -96,14 +99,14 @@ test('rewind does not consume or resurrect timers and fractional moves accumulat
   let calls = 0;
   setTimeout(() => calls++, 1);
   clock.update({instantNanos:'1000500000'});
-  assert.equal(clock.runDue().executed, 0);
+  assert.equal((await clock.runDue()).executed, 0);
   clock.update({instantNanos:'0'});
-  assert.equal(clock.runDue().executed, 0);
+  assert.equal((await clock.runDue()).executed, 0);
   clock.update({instantNanos:'500000'});
-  assert.equal(clock.runDue().executed, 1);
+  assert.equal((await clock.runDue()).executed, 1);
   clock.update({instantNanos:'0'});
   clock.update({instantNanos:'2000000'});
-  clock.runDue();
+  await clock.runDue();
   assert.equal(calls, 1);
 `, {timers:'virtual'}));
 
@@ -111,9 +114,9 @@ test('absolute elapsed snapshots do not lose coalesced advancement and rewinds',
   let calls = 0;
   setTimeout(() => calls++, 20);
   clock.update({instantNanos:'0', elapsedNanos:'20000000'});
-  assert.equal(clock.runDue().executed, 1);
+  assert.equal((await clock.runDue()).executed, 1);
   clock.update({instantNanos:'0', elapsedNanos:'20000000'});
-  assert.equal(clock.runDue().executed, 0);
+  assert.equal((await clock.runDue()).executed, 0);
   assert.equal(calls, 1);
 `, {timers:'virtual',elapsedNanos:'0'}));
 
@@ -129,13 +132,13 @@ test('timer handles support cancellation, refresh, references and reactivation',
   clock.update({instantNanos:'1005000000'});
   handle.refresh();
   clock.update({instantNanos:'1010000000'});
-  assert.equal(clock.runDue().executed, 0);
+  assert.equal((await clock.runDue()).executed, 0);
   clock.update({instantNanos:'1015000000'});
-  clock.runDue();
+  await clock.runDue();
   assert.equal(calls, 1);
   handle.refresh();
   clock.update({instantNanos:'1025000000'});
-  clock.runDue();
+  await clock.runDue();
   assert.equal(calls, 2);
   clearTimeout(handle);
 `, {timers:'virtual'}));
@@ -151,7 +154,7 @@ test('promise delays and intervals support named imports and AbortSignal', () =>
   const ticks = interval(10, 'tick');
   const next = ticks.next();
   clock.update({instantNanos:'1010000000'});
-  clock.runDue();
+  await clock.runDue();
   assert.equal(await timeout, 'value');
   assert.deepEqual(await next, {value:'tick',done:false});
   await ticks.return();
@@ -163,15 +166,15 @@ test('timer drain is bounded, stable and does not advance the Date', () => check
   const interval = setInterval(() => calls.push('interval'), 1);
   setTimeout(() => calls.push('once'), 2);
   clock.update({instantNanos:'1100000000'});
-  const first = clock.runDue(3);
+  const first = await clock.runDue(3);
   assert.equal(first.executed, 3);
   assert.equal(first.due, 1);
   assert.deepEqual(calls, ['interval','interval','once']);
   assert.equal(Date.now(), 1100);
-  assert.equal(clock.runDue(2).executed, 2);
+  assert.equal((await clock.runDue(2)).executed, 2);
   clearInterval(interval);
   assert.equal(clock.status().pending, 0);
-  assert.throws(() => clock.runDue(0), RangeError);
+  await assert.rejects(clock.runDue(0), RangeError);
 `, {timers:'virtual'}));
 
 test('virtual timers require virtual Date and reject invalid policy fields', () => {
@@ -184,3 +187,29 @@ test('virtual timers require virtual Date and reject invalid policy fields', () 
   const result = spawnSync(process.execPath, ['--input-type=module', '--eval', script], {encoding:'utf8'});
   assert.equal(result.status, 0, result.stderr);
 });
+
+test('timer callbacks yield to nested Promise continuations before the next timer', () => check(`
+  const calls = [];
+  setTimeout(async () => {
+    await Promise.resolve();
+    await Promise.resolve();
+    calls.push('first');
+    clearTimeout(second);
+  }, 5);
+  const second = setTimeout(() => calls.push('cancelled'), 10);
+  clock.update({instantNanos:'1010000000'});
+  await clock.runDue();
+  assert.deepEqual(calls, ['first']);
+`, {timers:'virtual'}));
+
+test('promise timer imports can cancel later callbacks without awaiting application promises', () => check(`
+  const {setTimeout: delay} = await import('node:timers/promises');
+  const calls = [];
+  delay(5).then(() => clearTimeout(cancelled));
+  const cancelled = setTimeout(() => calls.push('cancelled'), 10);
+  setTimeout(async () => { await delay(100); calls.push('future'); }, 5);
+  clock.update({instantNanos:'1010000000'});
+  await clock.runDue();
+  assert.deepEqual(calls, []);
+  assert.equal(clock.status().pending, 1);
+`, {timers:'virtual'}));

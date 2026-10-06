@@ -5,6 +5,8 @@ import { syncBuiltinESMExports } from 'node:module';
 import { promisify } from 'node:util';
 
 const NativeDate = Date;
+const dateConstructor = Object.getOwnPropertyDescriptor(NativeDate.prototype, 'constructor');
+const nativeImmediate = timers.setImmediate;
 const native = {
   setTimeout: timers.setTimeout, clearTimeout: timers.clearTimeout,
   setInterval: timers.setInterval, clearInterval: timers.clearInterval,
@@ -171,7 +173,10 @@ export function createRuntimeClock({date = 'real', timers: timerPolicy = 'real',
     install() {
       if (installed) return;
       installed = true;
-      if (date === 'virtual') globalThis.Date = VirtualDate;
+      if (date === 'virtual') {
+        globalThis.Date = VirtualDate;
+        Object.defineProperty(NativeDate.prototype, 'constructor', {...dateConstructor, value:VirtualDate});
+      }
       if (timerPolicy === 'virtual') {
         Object.assign(globalThis, virtual);
         Object.assign(timers, virtual);
@@ -183,7 +188,10 @@ export function createRuntimeClock({date = 'real', timers: timerPolicy = 'real',
     restore() {
       if (!installed) return;
       installed = false;
-      if (date === 'virtual') globalThis.Date = NativeDate;
+      if (date === 'virtual') {
+        globalThis.Date = NativeDate;
+        Object.defineProperty(NativeDate.prototype, 'constructor', dateConstructor);
+      }
       if (timerPolicy === 'virtual') {
         Object.assign(globalThis, native);
         Object.assign(timers, native);
@@ -205,7 +213,7 @@ export function createRuntimeClock({date = 'real', timers: timerPolicy = 'real',
       elapsed = nextElapsed;
       return status();
     },
-    runDue(budget = 1000) {
+    async runDue(budget = 1000) {
       if (!Number.isSafeInteger(budget) || budget < 1 || budget > maxDrain) throw new RangeError('invalid timer drain budget');
       if (draining) throw new Error('timer drain is already running');
       draining = true;
@@ -227,6 +235,9 @@ export function createRuntimeClock({date = 'real', timers: timerPolicy = 'real',
           }
           executed++;
           Reflect.apply(next.callback, next, next.args);
+          // Finish Promise and nextTick continuations, without waiting for the callback's
+          // returned promise (which may depend on a future virtual timer).
+          await new Promise(resolve => nativeImmediate(resolve));
         }
       } finally { draining = false; }
       return {executed,...status()};

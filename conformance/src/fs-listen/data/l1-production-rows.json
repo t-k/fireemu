@@ -1,4375 +1,3683 @@
 {
- "recordings": {
-  "native-1": {
-   "cleanup": {
-    "complete": true
-   },
-   "errors": {},
-   "kind": "native",
-   "rows": {
-    "native/commit-atomic-visibility/open": {
-     "conditions": [
-      "FS-TRANSACTION/commit-atomic-visibility"
-     ],
-     "end": null,
-     "program": "native/commit-atomic-visibility",
-     "rows": [
-      {
-       "cause": null,
-       "kind": "targetChange",
-       "resumeToken": false,
-       "targetIds": [
-        1
-       ],
-       "type": "ADD"
+  "recordings": {
+    "native-1": {
+      "cleanup": {
+        "complete": true
       },
-      {
-       "cause": null,
-       "kind": "targetChange",
-       "resumeToken": true,
-       "targetIds": [
-        1
-       ],
-       "type": "CURRENT"
+      "errors": {},
+      "kind": "native",
+      "rows": {
+        "native/commit-atomic-visibility/open": {
+          "conditions": ["FS-TRANSACTION/commit-atomic-visibility"],
+          "end": null,
+          "program": "native/commit-atomic-visibility",
+          "rows": [
+            {
+              "cause": null,
+              "kind": "targetChange",
+              "resumeToken": false,
+              "targetIds": [1],
+              "type": "ADD"
+            },
+            {
+              "cause": null,
+              "kind": "targetChange",
+              "resumeToken": true,
+              "targetIds": [1],
+              "type": "CURRENT"
+            },
+            {
+              "kind": "boundary",
+              "resumeToken": true
+            }
+          ],
+          "timedOut": false
+        },
+        "native/commit-atomic-visibility/separate-commits": {
+          "conditions": ["FS-TRANSACTION/commit-atomic-visibility"],
+          "end": null,
+          "groups": [
+            {
+              "docs": ["a"],
+              "sameUpdateTime": true
+            },
+            {
+              "docs": ["b"],
+              "sameUpdateTime": true
+            }
+          ],
+          "program": "native/commit-atomic-visibility",
+          "rows": [
+            {
+              "doc": "a",
+              "fields": {
+                "g": "atomic",
+                "n": 2
+              },
+              "kind": "documentChange",
+              "removedTargetIds": [],
+              "targetIds": [1]
+            },
+            {
+              "kind": "boundary",
+              "resumeToken": true
+            },
+            {
+              "doc": "b",
+              "fields": {
+                "g": "atomic",
+                "n": 2
+              },
+              "kind": "documentChange",
+              "removedTargetIds": [],
+              "targetIds": [1]
+            },
+            {
+              "kind": "boundary",
+              "resumeToken": true
+            }
+          ],
+          "timedOut": false
+        },
+        "native/commit-atomic-visibility/single-commit": {
+          "conditions": ["FS-TRANSACTION/commit-atomic-visibility"],
+          "end": null,
+          "groups": [
+            {
+              "docs": ["c", "d"],
+              "sameUpdateTime": true
+            }
+          ],
+          "program": "native/commit-atomic-visibility",
+          "rows": [
+            {
+              "doc": "c",
+              "fields": {
+                "g": "atomic",
+                "n": 1
+              },
+              "kind": "documentChange",
+              "removedTargetIds": [],
+              "targetIds": [1]
+            },
+            {
+              "doc": "d",
+              "fields": {
+                "g": "atomic",
+                "n": 1
+              },
+              "kind": "documentChange",
+              "removedTargetIds": [],
+              "targetIds": [1]
+            },
+            {
+              "kind": "boundary",
+              "resumeToken": true
+            }
+          ],
+          "timedOut": false
+        },
+        "native/commit-atomic-visibility/transaction": {
+          "conditions": ["FS-TRANSACTION/commit-atomic-visibility"],
+          "end": null,
+          "groups": [
+            {
+              "docs": ["a", "b"],
+              "sameUpdateTime": true
+            }
+          ],
+          "program": "native/commit-atomic-visibility",
+          "rows": [
+            {
+              "doc": "a",
+              "fields": {
+                "g": "atomic",
+                "n": 1
+              },
+              "kind": "documentChange",
+              "removedTargetIds": [],
+              "targetIds": [1]
+            },
+            {
+              "doc": "b",
+              "fields": {
+                "g": "atomic",
+                "n": 1
+              },
+              "kind": "documentChange",
+              "removedTargetIds": [],
+              "targetIds": [1]
+            },
+            {
+              "kind": "boundary",
+              "resumeToken": true
+            }
+          ],
+          "timedOut": false
+        },
+        "native/existence-filter/first": {
+          "conditions": ["FS-LISTEN-SDK/existence-filter-reconnect"],
+          "end": null,
+          "program": "native/existence-filter",
+          "rows": [
+            {
+              "cause": null,
+              "kind": "targetChange",
+              "resumeToken": false,
+              "targetIds": [1],
+              "type": "ADD"
+            },
+            {
+              "doc": "a",
+              "fields": {
+                "g": "filter",
+                "n": 1
+              },
+              "kind": "documentChange",
+              "removedTargetIds": [],
+              "targetIds": [1]
+            },
+            {
+              "doc": "b",
+              "fields": {
+                "g": "filter",
+                "n": 1
+              },
+              "kind": "documentChange",
+              "removedTargetIds": [],
+              "targetIds": [1]
+            },
+            {
+              "doc": "c",
+              "fields": {
+                "g": "filter",
+                "n": 1
+              },
+              "kind": "documentChange",
+              "removedTargetIds": [],
+              "targetIds": [1]
+            },
+            {
+              "cause": null,
+              "kind": "targetChange",
+              "resumeToken": true,
+              "targetIds": [1],
+              "type": "CURRENT"
+            },
+            {
+              "kind": "boundary",
+              "resumeToken": true
+            }
+          ],
+          "timedOut": false
+        },
+        "native/existence-filter/no-change": {
+          "conditions": ["FS-LISTEN-SDK/existence-filter-reconnect"],
+          "end": null,
+          "program": "native/existence-filter",
+          "rows": [
+            {
+              "cause": null,
+              "kind": "targetChange",
+              "resumeToken": false,
+              "targetIds": [1],
+              "type": "ADD"
+            },
+            {
+              "kind": "boundary",
+              "resumeToken": true
+            },
+            {
+              "cause": null,
+              "kind": "targetChange",
+              "resumeToken": true,
+              "targetIds": [1],
+              "type": "CURRENT"
+            },
+            {
+              "kind": "boundary",
+              "resumeToken": true
+            }
+          ],
+          "timedOut": false
+        },
+        "native/existence-filter/with-expected-count": {
+          "conditions": ["FS-LISTEN-SDK/existence-filter-reconnect"],
+          "end": null,
+          "program": "native/existence-filter",
+          "rows": [
+            {
+              "cause": null,
+              "kind": "targetChange",
+              "resumeToken": false,
+              "targetIds": [1],
+              "type": "ADD"
+            },
+            {
+              "kind": "boundary",
+              "resumeToken": true
+            },
+            {
+              "doc": "b",
+              "kind": "documentDelete",
+              "removedTargetIds": [1]
+            },
+            {
+              "kind": "boundary",
+              "resumeToken": true
+            },
+            {
+              "doc": "c",
+              "fields": {
+                "g": "filter-other",
+                "n": 2
+              },
+              "kind": "documentChange",
+              "removedTargetIds": [1],
+              "targetIds": []
+            },
+            {
+              "kind": "boundary",
+              "resumeToken": true
+            },
+            {
+              "cause": null,
+              "kind": "targetChange",
+              "resumeToken": true,
+              "targetIds": [1],
+              "type": "CURRENT"
+            },
+            {
+              "kind": "boundary",
+              "resumeToken": true
+            }
+          ],
+          "timedOut": false
+        },
+        "native/existence-filter/without-expected-count": {
+          "conditions": ["FS-LISTEN-SDK/existence-filter-reconnect"],
+          "end": null,
+          "program": "native/existence-filter",
+          "rows": [
+            {
+              "cause": null,
+              "kind": "targetChange",
+              "resumeToken": false,
+              "targetIds": [1],
+              "type": "ADD"
+            },
+            {
+              "kind": "boundary",
+              "resumeToken": true
+            },
+            {
+              "count": 1,
+              "kind": "filter",
+              "targetId": 1,
+              "unchangedNames": {
+                "bitmapBytes": 0,
+                "hashCount": 0,
+                "padding": 0
+              }
+            },
+            {
+              "cause": null,
+              "kind": "targetChange",
+              "resumeToken": true,
+              "targetIds": [1],
+              "type": "CURRENT"
+            },
+            {
+              "kind": "boundary",
+              "resumeToken": true
+            }
+          ],
+          "timedOut": false
+        },
+        "native/resume-token-expired/expired": {
+          "conditions": ["FS-LISTEN-SDK/raw-resume-token"],
+          "end": null,
+          "program": "native/resume-token-expired",
+          "rows": [
+            {
+              "cause": null,
+              "kind": "targetChange",
+              "resumeToken": false,
+              "targetIds": [1],
+              "type": "ADD"
+            },
+            {
+              "kind": "boundary",
+              "resumeToken": true
+            },
+            {
+              "doc": "a",
+              "fields": {
+                "g": "expired",
+                "n": 2
+              },
+              "kind": "documentChange",
+              "removedTargetIds": [],
+              "targetIds": [1]
+            },
+            {
+              "count": 1,
+              "kind": "filter",
+              "targetId": 1,
+              "unchangedNames": {
+                "bitmapBytes": 0,
+                "hashCount": 0,
+                "padding": 0
+              }
+            },
+            {
+              "cause": null,
+              "kind": "targetChange",
+              "resumeToken": true,
+              "targetIds": [1],
+              "type": "CURRENT"
+            },
+            {
+              "kind": "boundary",
+              "resumeToken": true
+            },
+            {
+              "count": 1,
+              "kind": "filter",
+              "targetId": 1,
+              "unchangedNames": {
+                "bitmapBytes": 4,
+                "hashCount": 12,
+                "padding": 7
+              }
+            },
+            {
+              "kind": "boundary",
+              "resumeToken": true
+            }
+          ],
+          "timedOut": false
+        },
+        "native/resume-token-expired/first": {
+          "conditions": ["FS-LISTEN-SDK/raw-resume-token"],
+          "end": null,
+          "program": "native/resume-token-expired",
+          "rows": [
+            {
+              "cause": null,
+              "kind": "targetChange",
+              "resumeToken": false,
+              "targetIds": [1],
+              "type": "ADD"
+            },
+            {
+              "doc": "a",
+              "fields": {
+                "g": "expired",
+                "n": 1
+              },
+              "kind": "documentChange",
+              "removedTargetIds": [],
+              "targetIds": [1]
+            },
+            {
+              "cause": null,
+              "kind": "targetChange",
+              "resumeToken": true,
+              "targetIds": [1],
+              "type": "CURRENT"
+            },
+            {
+              "kind": "boundary",
+              "resumeToken": true
+            },
+            {
+              "count": 1,
+              "kind": "filter",
+              "targetId": 1,
+              "unchangedNames": {
+                "bitmapBytes": 4,
+                "hashCount": 12,
+                "padding": 7
+              }
+            },
+            {
+              "kind": "boundary",
+              "resumeToken": true
+            }
+          ],
+          "timedOut": false
+        },
+        "native/resume-token-expired/fresh-control": {
+          "conditions": ["FS-LISTEN-SDK/raw-resume-token"],
+          "end": null,
+          "program": "native/resume-token-expired",
+          "rows": [
+            {
+              "cause": null,
+              "kind": "targetChange",
+              "resumeToken": false,
+              "targetIds": [1],
+              "type": "ADD"
+            },
+            {
+              "doc": "a",
+              "fields": {
+                "g": "expired",
+                "n": 2
+              },
+              "kind": "documentChange",
+              "removedTargetIds": [],
+              "targetIds": [1]
+            },
+            {
+              "cause": null,
+              "kind": "targetChange",
+              "resumeToken": true,
+              "targetIds": [1],
+              "type": "CURRENT"
+            },
+            {
+              "kind": "boundary",
+              "resumeToken": true
+            },
+            {
+              "count": 1,
+              "kind": "filter",
+              "targetId": 1,
+              "unchangedNames": {
+                "bitmapBytes": 4,
+                "hashCount": 12,
+                "padding": 7
+              }
+            },
+            {
+              "kind": "boundary",
+              "resumeToken": true
+            }
+          ],
+          "timedOut": false
+        },
+        "native/resume-token/current": {
+          "conditions": ["FS-LISTEN-SDK/raw-resume-token"],
+          "end": null,
+          "program": "native/resume-token",
+          "rows": [
+            {
+              "cause": null,
+              "kind": "targetChange",
+              "resumeToken": false,
+              "targetIds": [1],
+              "type": "ADD"
+            },
+            {
+              "kind": "boundary",
+              "resumeToken": true
+            },
+            {
+              "doc": "b",
+              "fields": {
+                "g": "resume",
+                "n": 2
+              },
+              "kind": "documentChange",
+              "removedTargetIds": [],
+              "targetIds": [1]
+            },
+            {
+              "kind": "boundary",
+              "resumeToken": true
+            },
+            {
+              "cause": null,
+              "kind": "targetChange",
+              "resumeToken": true,
+              "targetIds": [1],
+              "type": "CURRENT"
+            },
+            {
+              "kind": "boundary",
+              "resumeToken": true
+            }
+          ],
+          "timedOut": false
+        },
+        "native/resume-token/first": {
+          "conditions": ["FS-LISTEN-SDK/raw-resume-token"],
+          "end": null,
+          "program": "native/resume-token",
+          "rows": [
+            {
+              "cause": null,
+              "kind": "targetChange",
+              "resumeToken": false,
+              "targetIds": [1],
+              "type": "ADD"
+            },
+            {
+              "doc": "a",
+              "fields": {
+                "g": "resume",
+                "n": 1
+              },
+              "kind": "documentChange",
+              "removedTargetIds": [],
+              "targetIds": [1]
+            },
+            {
+              "doc": "b",
+              "fields": {
+                "g": "resume",
+                "n": 1
+              },
+              "kind": "documentChange",
+              "removedTargetIds": [],
+              "targetIds": [1]
+            },
+            {
+              "cause": null,
+              "kind": "targetChange",
+              "resumeToken": true,
+              "targetIds": [1],
+              "type": "CURRENT"
+            },
+            {
+              "kind": "boundary",
+              "resumeToken": true
+            },
+            {
+              "count": 2,
+              "kind": "filter",
+              "targetId": 1,
+              "unchangedNames": {
+                "bitmapBytes": 8,
+                "hashCount": 13,
+                "padding": 3
+              }
+            },
+            {
+              "kind": "boundary",
+              "resumeToken": true
+            }
+          ],
+          "timedOut": false
+        },
+        "native/resume-token/fresh-control": {
+          "conditions": ["FS-LISTEN-SDK/raw-resume-token"],
+          "end": null,
+          "program": "native/resume-token",
+          "rows": [
+            {
+              "cause": null,
+              "kind": "targetChange",
+              "resumeToken": false,
+              "targetIds": [1],
+              "type": "ADD"
+            },
+            {
+              "doc": "a",
+              "fields": {
+                "g": "resume",
+                "n": 2
+              },
+              "kind": "documentChange",
+              "removedTargetIds": [],
+              "targetIds": [1]
+            },
+            {
+              "doc": "b",
+              "fields": {
+                "g": "resume",
+                "n": 2
+              },
+              "kind": "documentChange",
+              "removedTargetIds": [],
+              "targetIds": [1]
+            },
+            {
+              "cause": null,
+              "kind": "targetChange",
+              "resumeToken": true,
+              "targetIds": [1],
+              "type": "CURRENT"
+            },
+            {
+              "kind": "boundary",
+              "resumeToken": true
+            },
+            {
+              "count": 2,
+              "kind": "filter",
+              "targetId": 1,
+              "unchangedNames": {
+                "bitmapBytes": 8,
+                "hashCount": 13,
+                "padding": 3
+              }
+            },
+            {
+              "kind": "boundary",
+              "resumeToken": true
+            }
+          ],
+          "timedOut": false
+        },
+        "native/resume-token/invalid": {
+          "conditions": ["FS-LISTEN-SDK/raw-resume-token"],
+          "end": null,
+          "program": "native/resume-token",
+          "rows": [
+            {
+              "cause": {
+                "code": 3,
+                "message": "bad resume token"
+              },
+              "kind": "targetChange",
+              "resumeToken": false,
+              "targetIds": [1],
+              "type": "REMOVE"
+            }
+          ],
+          "timedOut": true
+        },
+        "native/resume-token/older": {
+          "conditions": ["FS-LISTEN-SDK/raw-resume-token"],
+          "end": null,
+          "program": "native/resume-token",
+          "rows": [
+            {
+              "cause": null,
+              "kind": "targetChange",
+              "resumeToken": false,
+              "targetIds": [1],
+              "type": "ADD"
+            },
+            {
+              "kind": "boundary",
+              "resumeToken": true
+            },
+            {
+              "doc": "a",
+              "fields": {
+                "g": "resume",
+                "n": 2
+              },
+              "kind": "documentChange",
+              "removedTargetIds": [],
+              "targetIds": [1]
+            },
+            {
+              "doc": "b",
+              "fields": {
+                "g": "resume",
+                "n": 2
+              },
+              "kind": "documentChange",
+              "removedTargetIds": [],
+              "targetIds": [1]
+            },
+            {
+              "count": 2,
+              "kind": "filter",
+              "targetId": 1,
+              "unchangedNames": {
+                "bitmapBytes": 0,
+                "hashCount": 0,
+                "padding": 0
+              }
+            },
+            {
+              "cause": null,
+              "kind": "targetChange",
+              "resumeToken": true,
+              "targetIds": [1],
+              "type": "CURRENT"
+            },
+            {
+              "kind": "boundary",
+              "resumeToken": true
+            }
+          ],
+          "timedOut": false
+        },
+        "native/resume-token/other-query": {
+          "conditions": ["FS-LISTEN-SDK/raw-resume-token"],
+          "end": null,
+          "program": "native/resume-token",
+          "rows": [
+            {
+              "cause": null,
+              "kind": "targetChange",
+              "resumeToken": false,
+              "targetIds": [1],
+              "type": "ADD"
+            },
+            {
+              "kind": "boundary",
+              "resumeToken": true
+            },
+            {
+              "count": 0,
+              "kind": "filter",
+              "targetId": 1,
+              "unchangedNames": {
+                "bitmapBytes": 0,
+                "hashCount": 0,
+                "padding": 0
+              }
+            },
+            {
+              "cause": null,
+              "kind": "targetChange",
+              "resumeToken": true,
+              "targetIds": [1],
+              "type": "CURRENT"
+            },
+            {
+              "kind": "boundary",
+              "resumeToken": true
+            }
+          ],
+          "timedOut": false
+        },
+        "native/resume-token/unchanged": {
+          "conditions": ["FS-LISTEN-SDK/raw-resume-token"],
+          "end": null,
+          "program": "native/resume-token",
+          "rows": [
+            {
+              "cause": null,
+              "kind": "targetChange",
+              "resumeToken": false,
+              "targetIds": [1],
+              "type": "ADD"
+            },
+            {
+              "kind": "boundary",
+              "resumeToken": true
+            },
+            {
+              "cause": null,
+              "kind": "targetChange",
+              "resumeToken": true,
+              "targetIds": [1],
+              "type": "CURRENT"
+            },
+            {
+              "kind": "boundary",
+              "resumeToken": true
+            }
+          ],
+          "timedOut": false
+        },
+        "native/target-lifecycle/delete": {
+          "conditions": [
+            "FS-LISTEN-SDK/native-target-protocol",
+            "FS-LISTEN-SDK/default-subscription"
+          ],
+          "end": null,
+          "program": "native/target-lifecycle",
+          "rows": [
+            {
+              "doc": "a",
+              "kind": "documentDelete",
+              "removedTargetIds": [2]
+            },
+            {
+              "kind": "boundary",
+              "resumeToken": true
+            }
+          ],
+          "timedOut": false
+        },
+        "native/target-lifecycle/open": {
+          "conditions": [
+            "FS-LISTEN-SDK/native-target-protocol",
+            "FS-LISTEN-SDK/default-subscription"
+          ],
+          "end": null,
+          "program": "native/target-lifecycle",
+          "rows": [
+            {
+              "cause": null,
+              "kind": "targetChange",
+              "resumeToken": false,
+              "targetIds": [1],
+              "type": "ADD"
+            },
+            {
+              "doc": "a",
+              "fields": {
+                "n": 1
+              },
+              "kind": "documentChange",
+              "removedTargetIds": [],
+              "targetIds": [1]
+            },
+            {
+              "cause": null,
+              "kind": "targetChange",
+              "resumeToken": true,
+              "targetIds": [1],
+              "type": "CURRENT"
+            },
+            {
+              "kind": "boundary",
+              "resumeToken": true
+            }
+          ],
+          "timedOut": false
+        },
+        "native/target-lifecycle/readd": {
+          "conditions": [
+            "FS-LISTEN-SDK/native-target-protocol",
+            "FS-LISTEN-SDK/default-subscription"
+          ],
+          "end": null,
+          "program": "native/target-lifecycle",
+          "rows": [
+            {
+              "cause": null,
+              "kind": "targetChange",
+              "resumeToken": false,
+              "targetIds": [2],
+              "type": "ADD"
+            },
+            {
+              "doc": "a",
+              "fields": {
+                "n": 2
+              },
+              "kind": "documentChange",
+              "removedTargetIds": [],
+              "targetIds": [2]
+            },
+            {
+              "cause": null,
+              "kind": "targetChange",
+              "resumeToken": true,
+              "targetIds": [2],
+              "type": "CURRENT"
+            },
+            {
+              "kind": "boundary",
+              "resumeToken": true
+            }
+          ],
+          "timedOut": false
+        },
+        "native/target-lifecycle/remove": {
+          "conditions": [
+            "FS-LISTEN-SDK/native-target-protocol",
+            "FS-LISTEN-SDK/default-subscription"
+          ],
+          "end": null,
+          "program": "native/target-lifecycle",
+          "rows": [
+            {
+              "cause": null,
+              "kind": "targetChange",
+              "resumeToken": false,
+              "targetIds": [1],
+              "type": "REMOVE"
+            }
+          ],
+          "timedOut": false
+        },
+        "native/target-lifecycle/same-data": {
+          "conditions": [
+            "FS-LISTEN-SDK/native-target-protocol",
+            "FS-LISTEN-SDK/default-subscription"
+          ],
+          "end": null,
+          "program": "native/target-lifecycle",
+          "rows": [],
+          "timedOut": false
+        },
+        "native/target-lifecycle/update": {
+          "conditions": [
+            "FS-LISTEN-SDK/native-target-protocol",
+            "FS-LISTEN-SDK/default-subscription"
+          ],
+          "end": null,
+          "program": "native/target-lifecycle",
+          "rows": [
+            {
+              "doc": "a",
+              "fields": {
+                "n": 2
+              },
+              "kind": "documentChange",
+              "removedTargetIds": [],
+              "targetIds": [1]
+            },
+            {
+              "kind": "boundary",
+              "resumeToken": true
+            }
+          ],
+          "timedOut": false
+        },
+        "native/target-protocol/collection-group": {
+          "conditions": ["FS-LISTEN-SDK/native-target-protocol"],
+          "end": null,
+          "program": "native/target-protocol",
+          "rows": [
+            {
+              "cause": null,
+              "kind": "targetChange",
+              "resumeToken": false,
+              "targetIds": [1],
+              "type": "ADD"
+            },
+            {
+              "doc": "c1",
+              "fields": {
+                "n": 1
+              },
+              "kind": "documentChange",
+              "removedTargetIds": [],
+              "targetIds": [1]
+            },
+            {
+              "doc": "c2",
+              "fields": {
+                "n": 2
+              },
+              "kind": "documentChange",
+              "removedTargetIds": [],
+              "targetIds": [1]
+            },
+            {
+              "cause": null,
+              "kind": "targetChange",
+              "resumeToken": true,
+              "targetIds": [1],
+              "type": "CURRENT"
+            },
+            {
+              "kind": "boundary",
+              "resumeToken": true
+            },
+            {
+              "count": 2,
+              "kind": "filter",
+              "targetId": 1,
+              "unchangedNames": {
+                "bitmapBytes": 8,
+                "hashCount": 13,
+                "padding": 3
+              }
+            },
+            {
+              "kind": "boundary",
+              "resumeToken": true
+            }
+          ],
+          "timedOut": false
+        },
+        "native/target-protocol/duplicate-id": {
+          "conditions": ["FS-LISTEN-SDK/native-target-protocol"],
+          "end": null,
+          "program": "native/target-protocol",
+          "rows": [
+            {
+              "cause": null,
+              "kind": "targetChange",
+              "resumeToken": false,
+              "targetIds": [1],
+              "type": "ADD"
+            },
+            {
+              "doc": "a",
+              "fields": {
+                "g": "proto",
+                "n": 1
+              },
+              "kind": "documentChange",
+              "removedTargetIds": [],
+              "targetIds": [1]
+            },
+            {
+              "cause": null,
+              "kind": "targetChange",
+              "resumeToken": true,
+              "targetIds": [1],
+              "type": "CURRENT"
+            },
+            {
+              "kind": "boundary",
+              "resumeToken": true
+            },
+            {
+              "cause": {
+                "code": 6,
+                "message": "Target ID already exists: 1"
+              },
+              "kind": "targetChange",
+              "resumeToken": false,
+              "targetIds": [1],
+              "type": "REMOVE"
+            }
+          ],
+          "timedOut": false
+        },
+        "native/target-protocol/equality-only-query": {
+          "conditions": ["FS-LISTEN-SDK/native-target-protocol"],
+          "end": null,
+          "program": "native/target-protocol",
+          "rows": [
+            {
+              "cause": null,
+              "kind": "targetChange",
+              "resumeToken": false,
+              "targetIds": [1],
+              "type": "ADD"
+            },
+            {
+              "doc": "a",
+              "fields": {
+                "g": "proto",
+                "n": 5
+              },
+              "kind": "documentChange",
+              "removedTargetIds": [],
+              "targetIds": [1]
+            },
+            {
+              "doc": "b",
+              "fields": {
+                "g": "proto",
+                "n": 2
+              },
+              "kind": "documentChange",
+              "removedTargetIds": [],
+              "targetIds": [1]
+            },
+            {
+              "cause": null,
+              "kind": "targetChange",
+              "resumeToken": true,
+              "targetIds": [1],
+              "type": "CURRENT"
+            },
+            {
+              "kind": "boundary",
+              "resumeToken": true
+            }
+          ],
+          "timedOut": false
+        },
+        "native/target-protocol/id-after-assigned": {
+          "conditions": ["FS-LISTEN-SDK/native-target-protocol"],
+          "end": {
+            "code": 3,
+            "reason": "error"
+          },
+          "program": "native/target-protocol",
+          "rows": [],
+          "timedOut": false
+        },
+        "native/target-protocol/missing-index": {
+          "conditions": ["FS-LISTEN-SDK/native-target-protocol"],
+          "end": null,
+          "program": "native/target-protocol",
+          "rows": [
+            {
+              "cause": null,
+              "kind": "targetChange",
+              "resumeToken": false,
+              "targetIds": [1],
+              "type": "ADD"
+            },
+            {
+              "cause": {
+                "code": 9,
+                "message": "The query requires an index. You can create it here: https://console.firebase.google.com/v1/r/project/{project}/firestore/indexes?create_composite=<index>"
+              },
+              "kind": "targetChange",
+              "resumeToken": false,
+              "targetIds": [1],
+              "type": "REMOVE"
+            }
+          ],
+          "timedOut": false
+        },
+        "native/target-protocol/negative-id": {
+          "conditions": ["FS-LISTEN-SDK/native-target-protocol"],
+          "end": {
+            "code": 3,
+            "reason": "error"
+          },
+          "program": "native/target-protocol",
+          "rows": [],
+          "timedOut": false
+        },
+        "native/target-protocol/once": {
+          "conditions": ["FS-LISTEN-SDK/native-target-protocol"],
+          "end": null,
+          "program": "native/target-protocol",
+          "rows": [
+            {
+              "cause": null,
+              "kind": "targetChange",
+              "resumeToken": false,
+              "targetIds": [1],
+              "type": "ADD"
+            },
+            {
+              "doc": "a",
+              "fields": {
+                "g": "proto",
+                "n": 1
+              },
+              "kind": "documentChange",
+              "removedTargetIds": [],
+              "targetIds": [1]
+            },
+            {
+              "cause": null,
+              "kind": "targetChange",
+              "resumeToken": true,
+              "targetIds": [1],
+              "type": "CURRENT"
+            },
+            {
+              "kind": "boundary",
+              "resumeToken": true
+            },
+            {
+              "cause": null,
+              "kind": "targetChange",
+              "resumeToken": false,
+              "targetIds": [1],
+              "type": "REMOVE"
+            }
+          ],
+          "timedOut": false
+        },
+        "native/target-protocol/read-time-after-write": {
+          "conditions": ["FS-LISTEN-SDK/native-target-protocol"],
+          "end": null,
+          "program": "native/target-protocol",
+          "rows": [
+            {
+              "cause": null,
+              "kind": "targetChange",
+              "resumeToken": false,
+              "targetIds": [1],
+              "type": "ADD"
+            },
+            {
+              "kind": "boundary",
+              "resumeToken": true
+            },
+            {
+              "cause": null,
+              "kind": "targetChange",
+              "resumeToken": true,
+              "targetIds": [1],
+              "type": "CURRENT"
+            },
+            {
+              "kind": "boundary",
+              "resumeToken": true
+            }
+          ],
+          "timedOut": false
+        },
+        "native/target-protocol/read-time-before-write": {
+          "conditions": ["FS-LISTEN-SDK/native-target-protocol"],
+          "end": null,
+          "program": "native/target-protocol",
+          "rows": [
+            {
+              "cause": null,
+              "kind": "targetChange",
+              "resumeToken": false,
+              "targetIds": [1],
+              "type": "ADD"
+            },
+            {
+              "kind": "boundary",
+              "resumeToken": true
+            },
+            {
+              "doc": "a",
+              "fields": {
+                "g": "proto",
+                "n": 5
+              },
+              "kind": "documentChange",
+              "removedTargetIds": [],
+              "targetIds": [1]
+            },
+            {
+              "cause": null,
+              "kind": "targetChange",
+              "resumeToken": true,
+              "targetIds": [1],
+              "type": "CURRENT"
+            },
+            {
+              "kind": "boundary",
+              "resumeToken": true
+            }
+          ],
+          "timedOut": false
+        },
+        "native/target-protocol/second-zero-id": {
+          "conditions": ["FS-LISTEN-SDK/native-target-protocol"],
+          "end": null,
+          "program": "native/target-protocol",
+          "rows": [
+            {
+              "cause": null,
+              "kind": "targetChange",
+              "resumeToken": false,
+              "targetIds": [2],
+              "type": "ADD"
+            },
+            {
+              "doc": "b",
+              "fields": {
+                "g": "proto",
+                "n": 2
+              },
+              "kind": "documentChange",
+              "removedTargetIds": [],
+              "targetIds": [2]
+            },
+            {
+              "cause": null,
+              "kind": "targetChange",
+              "resumeToken": true,
+              "targetIds": [2],
+              "type": "CURRENT"
+            },
+            {
+              "kind": "boundary",
+              "resumeToken": true
+            }
+          ],
+          "timedOut": false
+        },
+        "native/target-protocol/server-assigned-id": {
+          "conditions": ["FS-LISTEN-SDK/native-target-protocol"],
+          "end": null,
+          "program": "native/target-protocol",
+          "rows": [
+            {
+              "cause": null,
+              "kind": "targetChange",
+              "resumeToken": false,
+              "targetIds": [1],
+              "type": "ADD"
+            },
+            {
+              "doc": "a",
+              "fields": {
+                "g": "proto",
+                "n": 1
+              },
+              "kind": "documentChange",
+              "removedTargetIds": [],
+              "targetIds": [1]
+            },
+            {
+              "cause": null,
+              "kind": "targetChange",
+              "resumeToken": true,
+              "targetIds": [1],
+              "type": "CURRENT"
+            },
+            {
+              "kind": "boundary",
+              "resumeToken": true
+            }
+          ],
+          "timedOut": false
+        }
       },
-      {
-       "kind": "boundary",
-       "resumeToken": true
-      }
-     ],
-     "timedOut": false
+      "run": "nmuuicyas",
+      "version": 1
     },
-    "native/commit-atomic-visibility/separate-commits": {
-     "conditions": [
-      "FS-TRANSACTION/commit-atomic-visibility"
-     ],
-     "end": null,
-     "groups": [
-      {
-       "docs": [
-        "a"
-       ],
-       "sameUpdateTime": true
+    "native-2": {
+      "cleanup": {
+        "complete": true
       },
-      {
-       "docs": [
-        "b"
-       ],
-       "sameUpdateTime": true
-      }
-     ],
-     "program": "native/commit-atomic-visibility",
-     "rows": [
-      {
-       "doc": "a",
-       "fields": {
-        "g": "atomic",
-        "n": 2
-       },
-       "kind": "documentChange",
-       "removedTargetIds": [],
-       "targetIds": [
-        1
-       ]
+      "errors": {},
+      "kind": "native",
+      "rows": {
+        "native/commit-atomic-visibility/open": {
+          "conditions": ["FS-TRANSACTION/commit-atomic-visibility"],
+          "end": null,
+          "program": "native/commit-atomic-visibility",
+          "rows": [
+            {
+              "cause": null,
+              "kind": "targetChange",
+              "resumeToken": false,
+              "targetIds": [1],
+              "type": "ADD"
+            },
+            {
+              "cause": null,
+              "kind": "targetChange",
+              "resumeToken": true,
+              "targetIds": [1],
+              "type": "CURRENT"
+            },
+            {
+              "kind": "boundary",
+              "resumeToken": true
+            }
+          ],
+          "timedOut": false
+        },
+        "native/commit-atomic-visibility/separate-commits": {
+          "conditions": ["FS-TRANSACTION/commit-atomic-visibility"],
+          "end": null,
+          "groups": [
+            {
+              "docs": ["a"],
+              "sameUpdateTime": true
+            },
+            {
+              "docs": ["b"],
+              "sameUpdateTime": true
+            }
+          ],
+          "program": "native/commit-atomic-visibility",
+          "rows": [
+            {
+              "doc": "a",
+              "fields": {
+                "g": "atomic",
+                "n": 2
+              },
+              "kind": "documentChange",
+              "removedTargetIds": [],
+              "targetIds": [1]
+            },
+            {
+              "kind": "boundary",
+              "resumeToken": true
+            },
+            {
+              "doc": "b",
+              "fields": {
+                "g": "atomic",
+                "n": 2
+              },
+              "kind": "documentChange",
+              "removedTargetIds": [],
+              "targetIds": [1]
+            },
+            {
+              "kind": "boundary",
+              "resumeToken": true
+            }
+          ],
+          "timedOut": false
+        },
+        "native/commit-atomic-visibility/single-commit": {
+          "conditions": ["FS-TRANSACTION/commit-atomic-visibility"],
+          "end": null,
+          "groups": [
+            {
+              "docs": ["c", "d"],
+              "sameUpdateTime": true
+            }
+          ],
+          "program": "native/commit-atomic-visibility",
+          "rows": [
+            {
+              "doc": "c",
+              "fields": {
+                "g": "atomic",
+                "n": 1
+              },
+              "kind": "documentChange",
+              "removedTargetIds": [],
+              "targetIds": [1]
+            },
+            {
+              "doc": "d",
+              "fields": {
+                "g": "atomic",
+                "n": 1
+              },
+              "kind": "documentChange",
+              "removedTargetIds": [],
+              "targetIds": [1]
+            },
+            {
+              "kind": "boundary",
+              "resumeToken": true
+            }
+          ],
+          "timedOut": false
+        },
+        "native/commit-atomic-visibility/transaction": {
+          "conditions": ["FS-TRANSACTION/commit-atomic-visibility"],
+          "end": null,
+          "groups": [
+            {
+              "docs": ["b", "a"],
+              "sameUpdateTime": true
+            }
+          ],
+          "program": "native/commit-atomic-visibility",
+          "rows": [
+            {
+              "doc": "b",
+              "fields": {
+                "g": "atomic",
+                "n": 1
+              },
+              "kind": "documentChange",
+              "removedTargetIds": [],
+              "targetIds": [1]
+            },
+            {
+              "doc": "a",
+              "fields": {
+                "g": "atomic",
+                "n": 1
+              },
+              "kind": "documentChange",
+              "removedTargetIds": [],
+              "targetIds": [1]
+            },
+            {
+              "kind": "boundary",
+              "resumeToken": true
+            }
+          ],
+          "timedOut": false
+        },
+        "native/existence-filter/first": {
+          "conditions": ["FS-LISTEN-SDK/existence-filter-reconnect"],
+          "end": null,
+          "program": "native/existence-filter",
+          "rows": [
+            {
+              "cause": null,
+              "kind": "targetChange",
+              "resumeToken": false,
+              "targetIds": [1],
+              "type": "ADD"
+            },
+            {
+              "doc": "a",
+              "fields": {
+                "g": "filter",
+                "n": 1
+              },
+              "kind": "documentChange",
+              "removedTargetIds": [],
+              "targetIds": [1]
+            },
+            {
+              "doc": "b",
+              "fields": {
+                "g": "filter",
+                "n": 1
+              },
+              "kind": "documentChange",
+              "removedTargetIds": [],
+              "targetIds": [1]
+            },
+            {
+              "doc": "c",
+              "fields": {
+                "g": "filter",
+                "n": 1
+              },
+              "kind": "documentChange",
+              "removedTargetIds": [],
+              "targetIds": [1]
+            },
+            {
+              "cause": null,
+              "kind": "targetChange",
+              "resumeToken": true,
+              "targetIds": [1],
+              "type": "CURRENT"
+            },
+            {
+              "kind": "boundary",
+              "resumeToken": true
+            }
+          ],
+          "timedOut": false
+        },
+        "native/existence-filter/no-change": {
+          "conditions": ["FS-LISTEN-SDK/existence-filter-reconnect"],
+          "end": null,
+          "program": "native/existence-filter",
+          "rows": [
+            {
+              "cause": null,
+              "kind": "targetChange",
+              "resumeToken": false,
+              "targetIds": [1],
+              "type": "ADD"
+            },
+            {
+              "kind": "boundary",
+              "resumeToken": true
+            },
+            {
+              "count": 3,
+              "kind": "filter",
+              "targetId": 1,
+              "unchangedNames": {
+                "bitmapBytes": 12,
+                "hashCount": 14,
+                "padding": 5
+              }
+            },
+            {
+              "cause": null,
+              "kind": "targetChange",
+              "resumeToken": true,
+              "targetIds": [1],
+              "type": "CURRENT"
+            },
+            {
+              "kind": "boundary",
+              "resumeToken": true
+            }
+          ],
+          "timedOut": false
+        },
+        "native/existence-filter/with-expected-count": {
+          "conditions": ["FS-LISTEN-SDK/existence-filter-reconnect"],
+          "end": null,
+          "program": "native/existence-filter",
+          "rows": [
+            {
+              "cause": null,
+              "kind": "targetChange",
+              "resumeToken": false,
+              "targetIds": [1],
+              "type": "ADD"
+            },
+            {
+              "kind": "boundary",
+              "resumeToken": true
+            },
+            {
+              "doc": "b",
+              "kind": "documentDelete",
+              "removedTargetIds": [1]
+            },
+            {
+              "kind": "boundary",
+              "resumeToken": true
+            },
+            {
+              "doc": "c",
+              "fields": {
+                "g": "filter-other",
+                "n": 2
+              },
+              "kind": "documentChange",
+              "removedTargetIds": [1],
+              "targetIds": []
+            },
+            {
+              "kind": "boundary",
+              "resumeToken": true
+            },
+            {
+              "cause": null,
+              "kind": "targetChange",
+              "resumeToken": true,
+              "targetIds": [1],
+              "type": "CURRENT"
+            },
+            {
+              "kind": "boundary",
+              "resumeToken": true
+            }
+          ],
+          "timedOut": false
+        },
+        "native/existence-filter/without-expected-count": {
+          "conditions": ["FS-LISTEN-SDK/existence-filter-reconnect"],
+          "end": null,
+          "program": "native/existence-filter",
+          "rows": [
+            {
+              "cause": null,
+              "kind": "targetChange",
+              "resumeToken": false,
+              "targetIds": [1],
+              "type": "ADD"
+            },
+            {
+              "kind": "boundary",
+              "resumeToken": true
+            },
+            {
+              "count": 1,
+              "kind": "filter",
+              "targetId": 1,
+              "unchangedNames": {
+                "bitmapBytes": 0,
+                "hashCount": 0,
+                "padding": 0
+              }
+            },
+            {
+              "cause": null,
+              "kind": "targetChange",
+              "resumeToken": true,
+              "targetIds": [1],
+              "type": "CURRENT"
+            },
+            {
+              "kind": "boundary",
+              "resumeToken": true
+            }
+          ],
+          "timedOut": false
+        },
+        "native/resume-token-expired/expired": {
+          "conditions": ["FS-LISTEN-SDK/raw-resume-token"],
+          "end": null,
+          "program": "native/resume-token-expired",
+          "rows": [
+            {
+              "cause": null,
+              "kind": "targetChange",
+              "resumeToken": false,
+              "targetIds": [1],
+              "type": "ADD"
+            },
+            {
+              "kind": "boundary",
+              "resumeToken": true
+            },
+            {
+              "doc": "a",
+              "fields": {
+                "g": "expired",
+                "n": 2
+              },
+              "kind": "documentChange",
+              "removedTargetIds": [],
+              "targetIds": [1]
+            },
+            {
+              "count": 1,
+              "kind": "filter",
+              "targetId": 1,
+              "unchangedNames": {
+                "bitmapBytes": 0,
+                "hashCount": 0,
+                "padding": 0
+              }
+            },
+            {
+              "cause": null,
+              "kind": "targetChange",
+              "resumeToken": true,
+              "targetIds": [1],
+              "type": "CURRENT"
+            },
+            {
+              "kind": "boundary",
+              "resumeToken": true
+            },
+            {
+              "count": 1,
+              "kind": "filter",
+              "targetId": 1,
+              "unchangedNames": {
+                "bitmapBytes": 4,
+                "hashCount": 12,
+                "padding": 7
+              }
+            },
+            {
+              "kind": "boundary",
+              "resumeToken": true
+            }
+          ],
+          "timedOut": false
+        },
+        "native/resume-token-expired/first": {
+          "conditions": ["FS-LISTEN-SDK/raw-resume-token"],
+          "end": null,
+          "program": "native/resume-token-expired",
+          "rows": [
+            {
+              "cause": null,
+              "kind": "targetChange",
+              "resumeToken": false,
+              "targetIds": [1],
+              "type": "ADD"
+            },
+            {
+              "doc": "a",
+              "fields": {
+                "g": "expired",
+                "n": 1
+              },
+              "kind": "documentChange",
+              "removedTargetIds": [],
+              "targetIds": [1]
+            },
+            {
+              "cause": null,
+              "kind": "targetChange",
+              "resumeToken": true,
+              "targetIds": [1],
+              "type": "CURRENT"
+            },
+            {
+              "kind": "boundary",
+              "resumeToken": true
+            }
+          ],
+          "timedOut": false
+        },
+        "native/resume-token-expired/fresh-control": {
+          "conditions": ["FS-LISTEN-SDK/raw-resume-token"],
+          "end": null,
+          "program": "native/resume-token-expired",
+          "rows": [
+            {
+              "cause": null,
+              "kind": "targetChange",
+              "resumeToken": false,
+              "targetIds": [1],
+              "type": "ADD"
+            },
+            {
+              "doc": "a",
+              "fields": {
+                "g": "expired",
+                "n": 2
+              },
+              "kind": "documentChange",
+              "removedTargetIds": [],
+              "targetIds": [1]
+            },
+            {
+              "cause": null,
+              "kind": "targetChange",
+              "resumeToken": true,
+              "targetIds": [1],
+              "type": "CURRENT"
+            },
+            {
+              "kind": "boundary",
+              "resumeToken": true
+            },
+            {
+              "count": 1,
+              "kind": "filter",
+              "targetId": 1,
+              "unchangedNames": {
+                "bitmapBytes": 4,
+                "hashCount": 12,
+                "padding": 7
+              }
+            },
+            {
+              "kind": "boundary",
+              "resumeToken": true
+            }
+          ],
+          "timedOut": false
+        },
+        "native/resume-token/current": {
+          "conditions": ["FS-LISTEN-SDK/raw-resume-token"],
+          "end": null,
+          "program": "native/resume-token",
+          "rows": [
+            {
+              "cause": null,
+              "kind": "targetChange",
+              "resumeToken": false,
+              "targetIds": [1],
+              "type": "ADD"
+            },
+            {
+              "kind": "boundary",
+              "resumeToken": true
+            },
+            {
+              "doc": "b",
+              "fields": {
+                "g": "resume",
+                "n": 2
+              },
+              "kind": "documentChange",
+              "removedTargetIds": [],
+              "targetIds": [1]
+            },
+            {
+              "kind": "boundary",
+              "resumeToken": true
+            },
+            {
+              "cause": null,
+              "kind": "targetChange",
+              "resumeToken": true,
+              "targetIds": [1],
+              "type": "CURRENT"
+            },
+            {
+              "kind": "boundary",
+              "resumeToken": true
+            }
+          ],
+          "timedOut": false
+        },
+        "native/resume-token/first": {
+          "conditions": ["FS-LISTEN-SDK/raw-resume-token"],
+          "end": null,
+          "program": "native/resume-token",
+          "rows": [
+            {
+              "cause": null,
+              "kind": "targetChange",
+              "resumeToken": false,
+              "targetIds": [1],
+              "type": "ADD"
+            },
+            {
+              "doc": "a",
+              "fields": {
+                "g": "resume",
+                "n": 1
+              },
+              "kind": "documentChange",
+              "removedTargetIds": [],
+              "targetIds": [1]
+            },
+            {
+              "doc": "b",
+              "fields": {
+                "g": "resume",
+                "n": 1
+              },
+              "kind": "documentChange",
+              "removedTargetIds": [],
+              "targetIds": [1]
+            },
+            {
+              "cause": null,
+              "kind": "targetChange",
+              "resumeToken": true,
+              "targetIds": [1],
+              "type": "CURRENT"
+            },
+            {
+              "kind": "boundary",
+              "resumeToken": true
+            }
+          ],
+          "timedOut": false
+        },
+        "native/resume-token/fresh-control": {
+          "conditions": ["FS-LISTEN-SDK/raw-resume-token"],
+          "end": null,
+          "program": "native/resume-token",
+          "rows": [
+            {
+              "cause": null,
+              "kind": "targetChange",
+              "resumeToken": false,
+              "targetIds": [1],
+              "type": "ADD"
+            },
+            {
+              "doc": "a",
+              "fields": {
+                "g": "resume",
+                "n": 2
+              },
+              "kind": "documentChange",
+              "removedTargetIds": [],
+              "targetIds": [1]
+            },
+            {
+              "doc": "b",
+              "fields": {
+                "g": "resume",
+                "n": 2
+              },
+              "kind": "documentChange",
+              "removedTargetIds": [],
+              "targetIds": [1]
+            },
+            {
+              "cause": null,
+              "kind": "targetChange",
+              "resumeToken": true,
+              "targetIds": [1],
+              "type": "CURRENT"
+            },
+            {
+              "kind": "boundary",
+              "resumeToken": true
+            }
+          ],
+          "timedOut": false
+        },
+        "native/resume-token/invalid": {
+          "conditions": ["FS-LISTEN-SDK/raw-resume-token"],
+          "end": null,
+          "program": "native/resume-token",
+          "rows": [
+            {
+              "cause": {
+                "code": 3,
+                "message": "bad resume token"
+              },
+              "kind": "targetChange",
+              "resumeToken": false,
+              "targetIds": [1],
+              "type": "REMOVE"
+            }
+          ],
+          "timedOut": true
+        },
+        "native/resume-token/older": {
+          "conditions": ["FS-LISTEN-SDK/raw-resume-token"],
+          "end": null,
+          "program": "native/resume-token",
+          "rows": [
+            {
+              "cause": null,
+              "kind": "targetChange",
+              "resumeToken": false,
+              "targetIds": [1],
+              "type": "ADD"
+            },
+            {
+              "kind": "boundary",
+              "resumeToken": true
+            },
+            {
+              "doc": "a",
+              "fields": {
+                "g": "resume",
+                "n": 2
+              },
+              "kind": "documentChange",
+              "removedTargetIds": [],
+              "targetIds": [1]
+            },
+            {
+              "doc": "b",
+              "fields": {
+                "g": "resume",
+                "n": 2
+              },
+              "kind": "documentChange",
+              "removedTargetIds": [],
+              "targetIds": [1]
+            },
+            {
+              "count": 2,
+              "kind": "filter",
+              "targetId": 1,
+              "unchangedNames": {
+                "bitmapBytes": 0,
+                "hashCount": 0,
+                "padding": 0
+              }
+            },
+            {
+              "cause": null,
+              "kind": "targetChange",
+              "resumeToken": true,
+              "targetIds": [1],
+              "type": "CURRENT"
+            },
+            {
+              "kind": "boundary",
+              "resumeToken": true
+            }
+          ],
+          "timedOut": false
+        },
+        "native/resume-token/other-query": {
+          "conditions": ["FS-LISTEN-SDK/raw-resume-token"],
+          "end": null,
+          "program": "native/resume-token",
+          "rows": [
+            {
+              "cause": null,
+              "kind": "targetChange",
+              "resumeToken": false,
+              "targetIds": [1],
+              "type": "ADD"
+            },
+            {
+              "kind": "boundary",
+              "resumeToken": true
+            },
+            {
+              "count": 0,
+              "kind": "filter",
+              "targetId": 1,
+              "unchangedNames": {
+                "bitmapBytes": 0,
+                "hashCount": 0,
+                "padding": 0
+              }
+            },
+            {
+              "cause": null,
+              "kind": "targetChange",
+              "resumeToken": true,
+              "targetIds": [1],
+              "type": "CURRENT"
+            },
+            {
+              "kind": "boundary",
+              "resumeToken": true
+            },
+            {
+              "count": 0,
+              "kind": "filter",
+              "targetId": 1,
+              "unchangedNames": {
+                "bitmapBytes": 0,
+                "hashCount": 0,
+                "padding": 0
+              }
+            },
+            {
+              "kind": "boundary",
+              "resumeToken": true
+            }
+          ],
+          "timedOut": false
+        },
+        "native/resume-token/unchanged": {
+          "conditions": ["FS-LISTEN-SDK/raw-resume-token"],
+          "end": null,
+          "program": "native/resume-token",
+          "rows": [
+            {
+              "cause": null,
+              "kind": "targetChange",
+              "resumeToken": false,
+              "targetIds": [1],
+              "type": "ADD"
+            },
+            {
+              "kind": "boundary",
+              "resumeToken": true
+            },
+            {
+              "count": 2,
+              "kind": "filter",
+              "targetId": 1,
+              "unchangedNames": {
+                "bitmapBytes": 0,
+                "hashCount": 0,
+                "padding": 0
+              }
+            },
+            {
+              "cause": null,
+              "kind": "targetChange",
+              "resumeToken": true,
+              "targetIds": [1],
+              "type": "CURRENT"
+            },
+            {
+              "kind": "boundary",
+              "resumeToken": true
+            }
+          ],
+          "timedOut": false
+        },
+        "native/target-lifecycle/delete": {
+          "conditions": [
+            "FS-LISTEN-SDK/native-target-protocol",
+            "FS-LISTEN-SDK/default-subscription"
+          ],
+          "end": null,
+          "program": "native/target-lifecycle",
+          "rows": [
+            {
+              "doc": "a",
+              "kind": "documentDelete",
+              "removedTargetIds": [2]
+            },
+            {
+              "kind": "boundary",
+              "resumeToken": true
+            }
+          ],
+          "timedOut": false
+        },
+        "native/target-lifecycle/open": {
+          "conditions": [
+            "FS-LISTEN-SDK/native-target-protocol",
+            "FS-LISTEN-SDK/default-subscription"
+          ],
+          "end": null,
+          "program": "native/target-lifecycle",
+          "rows": [
+            {
+              "cause": null,
+              "kind": "targetChange",
+              "resumeToken": false,
+              "targetIds": [1],
+              "type": "ADD"
+            },
+            {
+              "doc": "a",
+              "fields": {
+                "n": 1
+              },
+              "kind": "documentChange",
+              "removedTargetIds": [],
+              "targetIds": [1]
+            },
+            {
+              "cause": null,
+              "kind": "targetChange",
+              "resumeToken": true,
+              "targetIds": [1],
+              "type": "CURRENT"
+            },
+            {
+              "kind": "boundary",
+              "resumeToken": true
+            }
+          ],
+          "timedOut": false
+        },
+        "native/target-lifecycle/readd": {
+          "conditions": [
+            "FS-LISTEN-SDK/native-target-protocol",
+            "FS-LISTEN-SDK/default-subscription"
+          ],
+          "end": null,
+          "program": "native/target-lifecycle",
+          "rows": [
+            {
+              "cause": null,
+              "kind": "targetChange",
+              "resumeToken": false,
+              "targetIds": [2],
+              "type": "ADD"
+            },
+            {
+              "doc": "a",
+              "fields": {
+                "n": 2
+              },
+              "kind": "documentChange",
+              "removedTargetIds": [],
+              "targetIds": [2]
+            },
+            {
+              "cause": null,
+              "kind": "targetChange",
+              "resumeToken": true,
+              "targetIds": [2],
+              "type": "CURRENT"
+            },
+            {
+              "kind": "boundary",
+              "resumeToken": true
+            }
+          ],
+          "timedOut": false
+        },
+        "native/target-lifecycle/remove": {
+          "conditions": [
+            "FS-LISTEN-SDK/native-target-protocol",
+            "FS-LISTEN-SDK/default-subscription"
+          ],
+          "end": null,
+          "program": "native/target-lifecycle",
+          "rows": [
+            {
+              "cause": null,
+              "kind": "targetChange",
+              "resumeToken": false,
+              "targetIds": [1],
+              "type": "REMOVE"
+            }
+          ],
+          "timedOut": false
+        },
+        "native/target-lifecycle/same-data": {
+          "conditions": [
+            "FS-LISTEN-SDK/native-target-protocol",
+            "FS-LISTEN-SDK/default-subscription"
+          ],
+          "end": null,
+          "program": "native/target-lifecycle",
+          "rows": [],
+          "timedOut": false
+        },
+        "native/target-lifecycle/update": {
+          "conditions": [
+            "FS-LISTEN-SDK/native-target-protocol",
+            "FS-LISTEN-SDK/default-subscription"
+          ],
+          "end": null,
+          "program": "native/target-lifecycle",
+          "rows": [
+            {
+              "doc": "a",
+              "fields": {
+                "n": 2
+              },
+              "kind": "documentChange",
+              "removedTargetIds": [],
+              "targetIds": [1]
+            },
+            {
+              "kind": "boundary",
+              "resumeToken": true
+            }
+          ],
+          "timedOut": false
+        },
+        "native/target-protocol/collection-group": {
+          "conditions": ["FS-LISTEN-SDK/native-target-protocol"],
+          "end": null,
+          "program": "native/target-protocol",
+          "rows": [
+            {
+              "cause": null,
+              "kind": "targetChange",
+              "resumeToken": false,
+              "targetIds": [1],
+              "type": "ADD"
+            },
+            {
+              "doc": "c1",
+              "fields": {
+                "n": 1
+              },
+              "kind": "documentChange",
+              "removedTargetIds": [],
+              "targetIds": [1]
+            },
+            {
+              "doc": "c2",
+              "fields": {
+                "n": 2
+              },
+              "kind": "documentChange",
+              "removedTargetIds": [],
+              "targetIds": [1]
+            },
+            {
+              "cause": null,
+              "kind": "targetChange",
+              "resumeToken": true,
+              "targetIds": [1],
+              "type": "CURRENT"
+            },
+            {
+              "kind": "boundary",
+              "resumeToken": true
+            },
+            {
+              "count": 2,
+              "kind": "filter",
+              "targetId": 1,
+              "unchangedNames": {
+                "bitmapBytes": 8,
+                "hashCount": 13,
+                "padding": 3
+              }
+            },
+            {
+              "kind": "boundary",
+              "resumeToken": true
+            }
+          ],
+          "timedOut": false
+        },
+        "native/target-protocol/duplicate-id": {
+          "conditions": ["FS-LISTEN-SDK/native-target-protocol"],
+          "end": null,
+          "program": "native/target-protocol",
+          "rows": [
+            {
+              "cause": null,
+              "kind": "targetChange",
+              "resumeToken": false,
+              "targetIds": [1],
+              "type": "ADD"
+            },
+            {
+              "doc": "a",
+              "fields": {
+                "g": "proto",
+                "n": 1
+              },
+              "kind": "documentChange",
+              "removedTargetIds": [],
+              "targetIds": [1]
+            },
+            {
+              "cause": null,
+              "kind": "targetChange",
+              "resumeToken": true,
+              "targetIds": [1],
+              "type": "CURRENT"
+            },
+            {
+              "kind": "boundary",
+              "resumeToken": true
+            },
+            {
+              "cause": {
+                "code": 6,
+                "message": "Target ID already exists: 1"
+              },
+              "kind": "targetChange",
+              "resumeToken": false,
+              "targetIds": [1],
+              "type": "REMOVE"
+            }
+          ],
+          "timedOut": false
+        },
+        "native/target-protocol/equality-only-query": {
+          "conditions": ["FS-LISTEN-SDK/native-target-protocol"],
+          "end": null,
+          "program": "native/target-protocol",
+          "rows": [
+            {
+              "cause": null,
+              "kind": "targetChange",
+              "resumeToken": false,
+              "targetIds": [1],
+              "type": "ADD"
+            },
+            {
+              "doc": "a",
+              "fields": {
+                "g": "proto",
+                "n": 5
+              },
+              "kind": "documentChange",
+              "removedTargetIds": [],
+              "targetIds": [1]
+            },
+            {
+              "doc": "b",
+              "fields": {
+                "g": "proto",
+                "n": 2
+              },
+              "kind": "documentChange",
+              "removedTargetIds": [],
+              "targetIds": [1]
+            },
+            {
+              "cause": null,
+              "kind": "targetChange",
+              "resumeToken": true,
+              "targetIds": [1],
+              "type": "CURRENT"
+            },
+            {
+              "kind": "boundary",
+              "resumeToken": true
+            },
+            {
+              "count": 2,
+              "kind": "filter",
+              "targetId": 1,
+              "unchangedNames": {
+                "bitmapBytes": 8,
+                "hashCount": 13,
+                "padding": 3
+              }
+            },
+            {
+              "kind": "boundary",
+              "resumeToken": true
+            }
+          ],
+          "timedOut": false
+        },
+        "native/target-protocol/id-after-assigned": {
+          "conditions": ["FS-LISTEN-SDK/native-target-protocol"],
+          "end": {
+            "code": 3,
+            "reason": "error"
+          },
+          "program": "native/target-protocol",
+          "rows": [],
+          "timedOut": false
+        },
+        "native/target-protocol/missing-index": {
+          "conditions": ["FS-LISTEN-SDK/native-target-protocol"],
+          "end": null,
+          "program": "native/target-protocol",
+          "rows": [
+            {
+              "cause": null,
+              "kind": "targetChange",
+              "resumeToken": false,
+              "targetIds": [1],
+              "type": "ADD"
+            },
+            {
+              "cause": {
+                "code": 9,
+                "message": "The query requires an index. You can create it here: https://console.firebase.google.com/v1/r/project/{project}/firestore/indexes?create_composite=<index>"
+              },
+              "kind": "targetChange",
+              "resumeToken": false,
+              "targetIds": [1],
+              "type": "REMOVE"
+            }
+          ],
+          "timedOut": false
+        },
+        "native/target-protocol/negative-id": {
+          "conditions": ["FS-LISTEN-SDK/native-target-protocol"],
+          "end": {
+            "code": 3,
+            "reason": "error"
+          },
+          "program": "native/target-protocol",
+          "rows": [],
+          "timedOut": false
+        },
+        "native/target-protocol/once": {
+          "conditions": ["FS-LISTEN-SDK/native-target-protocol"],
+          "end": null,
+          "program": "native/target-protocol",
+          "rows": [
+            {
+              "cause": null,
+              "kind": "targetChange",
+              "resumeToken": false,
+              "targetIds": [1],
+              "type": "ADD"
+            },
+            {
+              "doc": "a",
+              "fields": {
+                "g": "proto",
+                "n": 1
+              },
+              "kind": "documentChange",
+              "removedTargetIds": [],
+              "targetIds": [1]
+            },
+            {
+              "cause": null,
+              "kind": "targetChange",
+              "resumeToken": true,
+              "targetIds": [1],
+              "type": "CURRENT"
+            },
+            {
+              "kind": "boundary",
+              "resumeToken": true
+            },
+            {
+              "cause": null,
+              "kind": "targetChange",
+              "resumeToken": false,
+              "targetIds": [1],
+              "type": "REMOVE"
+            }
+          ],
+          "timedOut": false
+        },
+        "native/target-protocol/read-time-after-write": {
+          "conditions": ["FS-LISTEN-SDK/native-target-protocol"],
+          "end": null,
+          "program": "native/target-protocol",
+          "rows": [
+            {
+              "cause": null,
+              "kind": "targetChange",
+              "resumeToken": false,
+              "targetIds": [1],
+              "type": "ADD"
+            },
+            {
+              "kind": "boundary",
+              "resumeToken": true
+            },
+            {
+              "cause": null,
+              "kind": "targetChange",
+              "resumeToken": true,
+              "targetIds": [1],
+              "type": "CURRENT"
+            },
+            {
+              "kind": "boundary",
+              "resumeToken": true
+            }
+          ],
+          "timedOut": false
+        },
+        "native/target-protocol/read-time-before-write": {
+          "conditions": ["FS-LISTEN-SDK/native-target-protocol"],
+          "end": null,
+          "program": "native/target-protocol",
+          "rows": [
+            {
+              "cause": null,
+              "kind": "targetChange",
+              "resumeToken": false,
+              "targetIds": [1],
+              "type": "ADD"
+            },
+            {
+              "kind": "boundary",
+              "resumeToken": true
+            },
+            {
+              "doc": "a",
+              "fields": {
+                "g": "proto",
+                "n": 5
+              },
+              "kind": "documentChange",
+              "removedTargetIds": [],
+              "targetIds": [1]
+            },
+            {
+              "cause": null,
+              "kind": "targetChange",
+              "resumeToken": true,
+              "targetIds": [1],
+              "type": "CURRENT"
+            },
+            {
+              "kind": "boundary",
+              "resumeToken": true
+            }
+          ],
+          "timedOut": false
+        },
+        "native/target-protocol/second-zero-id": {
+          "conditions": ["FS-LISTEN-SDK/native-target-protocol"],
+          "end": null,
+          "program": "native/target-protocol",
+          "rows": [
+            {
+              "cause": null,
+              "kind": "targetChange",
+              "resumeToken": false,
+              "targetIds": [2],
+              "type": "ADD"
+            },
+            {
+              "doc": "b",
+              "fields": {
+                "g": "proto",
+                "n": 2
+              },
+              "kind": "documentChange",
+              "removedTargetIds": [],
+              "targetIds": [2]
+            },
+            {
+              "cause": null,
+              "kind": "targetChange",
+              "resumeToken": true,
+              "targetIds": [2],
+              "type": "CURRENT"
+            },
+            {
+              "kind": "boundary",
+              "resumeToken": true
+            }
+          ],
+          "timedOut": false
+        },
+        "native/target-protocol/server-assigned-id": {
+          "conditions": ["FS-LISTEN-SDK/native-target-protocol"],
+          "end": null,
+          "program": "native/target-protocol",
+          "rows": [
+            {
+              "cause": null,
+              "kind": "targetChange",
+              "resumeToken": false,
+              "targetIds": [1],
+              "type": "ADD"
+            },
+            {
+              "doc": "a",
+              "fields": {
+                "g": "proto",
+                "n": 1
+              },
+              "kind": "documentChange",
+              "removedTargetIds": [],
+              "targetIds": [1]
+            },
+            {
+              "cause": null,
+              "kind": "targetChange",
+              "resumeToken": true,
+              "targetIds": [1],
+              "type": "CURRENT"
+            },
+            {
+              "kind": "boundary",
+              "resumeToken": true
+            }
+          ],
+          "timedOut": false
+        }
       },
-      {
-       "kind": "boundary",
-       "resumeToken": true
-      },
-      {
-       "doc": "b",
-       "fields": {
-        "g": "atomic",
-        "n": 2
-       },
-       "kind": "documentChange",
-       "removedTargetIds": [],
-       "targetIds": [
-        1
-       ]
-      },
-      {
-       "kind": "boundary",
-       "resumeToken": true
-      }
-     ],
-     "timedOut": false
+      "run": "nmuukwo6n",
+      "version": 1
     },
-    "native/commit-atomic-visibility/single-commit": {
-     "conditions": [
-      "FS-TRANSACTION/commit-atomic-visibility"
-     ],
-     "end": null,
-     "groups": [
-      {
-       "docs": [
-        "c",
-        "d"
-       ],
-       "sameUpdateTime": true
-      }
-     ],
-     "program": "native/commit-atomic-visibility",
-     "rows": [
-      {
-       "doc": "c",
-       "fields": {
-        "g": "atomic",
-        "n": 1
-       },
-       "kind": "documentChange",
-       "removedTargetIds": [],
-       "targetIds": [
-        1
-       ]
+    "sdk-1": {
+      "cleanup": {
+        "complete": true
       },
-      {
-       "doc": "d",
-       "fields": {
-        "g": "atomic",
-        "n": 1
-       },
-       "kind": "documentChange",
-       "removedTargetIds": [],
-       "targetIds": [
-        1
-       ]
+      "errors": {},
+      "kind": "sdk",
+      "rows": {
+        "sdk/101": {
+          "conditions": ["FS-LISTEN-SDK/document-event-order"],
+          "end": null,
+          "failures": [],
+          "invariantViolations": [],
+          "observed": [
+            {
+              "changes": [],
+              "docs": ["alpha"],
+              "error": null,
+              "exists": true,
+              "listener": "primary",
+              "snapshotKind": "initial"
+            }
+          ],
+          "timedOut": false
+        },
+        "sdk/101C": {
+          "conditions": ["FS-LISTEN-SDK/document-event-order"],
+          "end": null,
+          "failures": [],
+          "invariantViolations": [],
+          "observed": [
+            {
+              "changes": [],
+              "docs": [],
+              "error": null,
+              "exists": false,
+              "listener": "primary",
+              "snapshotKind": "initial"
+            }
+          ],
+          "timedOut": false
+        },
+        "sdk/102": {
+          "conditions": ["FS-LISTEN-SDK/pending-writes"],
+          "end": null,
+          "failures": [],
+          "invariantViolations": [],
+          "observed": [
+            {
+              "changes": [],
+              "docs": ["beta"],
+              "error": null,
+              "exists": true,
+              "fromCache": false,
+              "hasPendingWrites": true,
+              "listener": "primary",
+              "snapshotKind": "delta"
+            },
+            {
+              "changes": [],
+              "docs": ["beta"],
+              "error": null,
+              "exists": true,
+              "fromCache": false,
+              "hasPendingWrites": false,
+              "listener": "primary",
+              "snapshotKind": "delta"
+            }
+          ],
+          "timedOut": false
+        },
+        "sdk/102C": {
+          "conditions": ["FS-LISTEN-SDK/pending-writes"],
+          "end": null,
+          "failures": [],
+          "invariantViolations": [],
+          "observed": [
+            {
+              "changes": [],
+              "docs": ["beta"],
+              "error": null,
+              "exists": true,
+              "fromCache": false,
+              "hasPendingWrites": false,
+              "listener": "primary",
+              "snapshotKind": "delta"
+            }
+          ],
+          "timedOut": false
+        },
+        "sdk/103": {
+          "conditions": ["FS-LISTEN-SDK/query-change-order"],
+          "end": null,
+          "failures": [],
+          "invariantViolations": [],
+          "observed": [
+            {
+              "changes": [
+                {
+                  "doc": "beta",
+                  "newIndex": 0,
+                  "oldIndex": -1,
+                  "type": "added"
+                }
+              ],
+              "docs": ["beta", "alpha"],
+              "error": null,
+              "exists": null,
+              "fromCache": false,
+              "hasPendingWrites": false,
+              "listener": "primary",
+              "snapshotKind": "delta"
+            },
+            {
+              "changes": [
+                {
+                  "doc": "beta",
+                  "newIndex": 1,
+                  "oldIndex": 0,
+                  "type": "modified"
+                }
+              ],
+              "docs": ["alpha", "beta"],
+              "error": null,
+              "exists": null,
+              "fromCache": false,
+              "hasPendingWrites": false,
+              "listener": "primary",
+              "snapshotKind": "delta"
+            },
+            {
+              "changes": [
+                {
+                  "doc": "alpha",
+                  "newIndex": -1,
+                  "oldIndex": 0,
+                  "type": "removed"
+                }
+              ],
+              "docs": ["beta"],
+              "error": null,
+              "exists": null,
+              "fromCache": false,
+              "hasPendingWrites": false,
+              "listener": "primary",
+              "snapshotKind": "delta"
+            }
+          ],
+          "timedOut": false
+        },
+        "sdk/103C": {
+          "conditions": ["FS-LISTEN-SDK/query-change-order"],
+          "end": null,
+          "failures": [],
+          "invariantViolations": [],
+          "observed": [],
+          "timedOut": false
+        },
+        "sdk/103L": {
+          "conditions": ["FS-LISTEN-SDK/query-change-order"],
+          "end": null,
+          "failures": [],
+          "invariantViolations": [],
+          "observed": [
+            {
+              "changes": [
+                {
+                  "doc": "beta",
+                  "newIndex": 1,
+                  "oldIndex": 0,
+                  "type": "modified"
+                }
+              ],
+              "docs": ["gamma", "beta"],
+              "error": null,
+              "exists": null,
+              "listener": "primary",
+              "snapshotKind": "delta"
+            },
+            {
+              "changes": [
+                {
+                  "doc": "gamma",
+                  "newIndex": -1,
+                  "oldIndex": 0,
+                  "type": "removed"
+                },
+                {
+                  "doc": "delta",
+                  "newIndex": 1,
+                  "oldIndex": -1,
+                  "type": "added"
+                }
+              ],
+              "docs": ["beta", "delta"],
+              "error": null,
+              "exists": null,
+              "listener": "primary",
+              "snapshotKind": "delta"
+            }
+          ],
+          "timedOut": false
+        },
+        "sdk/103T": {
+          "conditions": ["FS-LISTEN-SDK/query-change-order"],
+          "end": null,
+          "failures": [],
+          "invariantViolations": [],
+          "observed": [
+            {
+              "changes": [
+                {
+                  "doc": "alpha",
+                  "newIndex": 0,
+                  "oldIndex": -1,
+                  "type": "added"
+                },
+                {
+                  "doc": "beta",
+                  "newIndex": 1,
+                  "oldIndex": -1,
+                  "type": "added"
+                }
+              ],
+              "docs": ["alpha", "beta"],
+              "error": null,
+              "exists": null,
+              "listener": "primary",
+              "snapshotKind": "delta"
+            },
+            {
+              "changes": [
+                {
+                  "doc": "gamma",
+                  "newIndex": 2,
+                  "oldIndex": -1,
+                  "type": "added"
+                }
+              ],
+              "docs": ["alpha", "beta", "gamma"],
+              "error": null,
+              "exists": null,
+              "listener": "primary",
+              "snapshotKind": "delta"
+            },
+            {
+              "changes": [
+                {
+                  "doc": "delta",
+                  "newIndex": 3,
+                  "oldIndex": -1,
+                  "type": "added"
+                }
+              ],
+              "docs": ["alpha", "beta", "gamma", "delta"],
+              "error": null,
+              "exists": null,
+              "listener": "primary",
+              "snapshotKind": "delta"
+            }
+          ],
+          "timedOut": false
+        },
+        "sdk/104": {
+          "conditions": ["FS-LISTEN-SDK/reconnect-resume"],
+          "end": null,
+          "failures": [],
+          "invariantViolations": [],
+          "observed": [
+            {
+              "changes": [
+                {
+                  "doc": "alpha",
+                  "newIndex": null,
+                  "oldIndex": null,
+                  "type": "modified"
+                },
+                {
+                  "doc": "gamma",
+                  "newIndex": null,
+                  "oldIndex": null,
+                  "type": "added"
+                }
+              ],
+              "docs": ["beta", "alpha", "gamma"],
+              "error": null,
+              "exists": null,
+              "fromCacheTransitions": [true, false],
+              "listener": "primary",
+              "snapshotKind": "aggregate"
+            }
+          ],
+          "timedOut": false
+        },
+        "sdk/104C": {
+          "conditions": ["FS-LISTEN-SDK/reconnect-resume"],
+          "end": null,
+          "failures": [],
+          "invariantViolations": [],
+          "observed": [
+            {
+              "changes": [
+                {
+                  "doc": "alpha",
+                  "newIndex": null,
+                  "oldIndex": null,
+                  "type": "modified"
+                },
+                {
+                  "doc": "gamma",
+                  "newIndex": null,
+                  "oldIndex": null,
+                  "type": "added"
+                }
+              ],
+              "docs": ["beta", "alpha", "gamma"],
+              "error": null,
+              "exists": null,
+              "fromCacheTransitions": [false],
+              "listener": "primary",
+              "snapshotKind": "aggregate"
+            }
+          ],
+          "timedOut": false
+        },
+        "sdk/105": {
+          "conditions": ["FS-LISTEN-SDK/unsubscribe"],
+          "end": null,
+          "failures": [],
+          "invariantViolations": [],
+          "observed": [
+            {
+              "changes": [],
+              "docs": ["alpha"],
+              "error": null,
+              "exists": true,
+              "listener": "witness",
+              "snapshotKind": "delta"
+            }
+          ],
+          "timedOut": false
+        },
+        "sdk/105C": {
+          "conditions": ["FS-LISTEN-SDK/unsubscribe"],
+          "end": null,
+          "failures": [],
+          "invariantViolations": [],
+          "observed": [
+            {
+              "changes": [],
+              "docs": ["alpha"],
+              "error": null,
+              "exists": true,
+              "listener": "primary",
+              "snapshotKind": "delta"
+            },
+            {
+              "changes": [],
+              "docs": ["alpha"],
+              "error": null,
+              "exists": true,
+              "listener": "witness",
+              "snapshotKind": "delta"
+            }
+          ],
+          "timedOut": false
+        },
+        "sdk/106N": {
+          "conditions": ["FS-LISTEN-SDK/initial-unauthenticated-refusal"],
+          "end": null,
+          "failures": [],
+          "invariantViolations": [],
+          "observed": [
+            {
+              "changes": [],
+              "docs": [],
+              "error": "permission-denied",
+              "exists": null,
+              "listener": "primary",
+              "snapshotKind": "error"
+            }
+          ],
+          "timedOut": false
+        },
+        "sdk/107": {
+          "conditions": ["FS-LISTEN-SDK/default-subscription"],
+          "end": null,
+          "failures": [],
+          "invariantViolations": [],
+          "observed": [
+            {
+              "changes": [],
+              "docs": ["alpha"],
+              "error": null,
+              "exists": true,
+              "listener": "primary",
+              "snapshotKind": "initial"
+            },
+            {
+              "changes": [],
+              "docs": ["alpha"],
+              "error": null,
+              "exists": true,
+              "listener": "primary",
+              "snapshotKind": "delta"
+            }
+          ],
+          "timedOut": false
+        },
+        "sdk/107C": {
+          "conditions": ["FS-LISTEN-SDK/default-subscription"],
+          "end": null,
+          "failures": [],
+          "invariantViolations": [],
+          "observed": [
+            {
+              "changes": [],
+              "docs": ["alpha"],
+              "error": null,
+              "exists": true,
+              "listener": "primary",
+              "snapshotKind": "initial"
+            }
+          ],
+          "timedOut": false
+        },
+        "sdk/108": {
+          "conditions": ["FS-LISTEN-SDK/cross-principal-rules"],
+          "end": null,
+          "failures": [],
+          "invariantViolations": [],
+          "observed": [
+            {
+              "changes": [],
+              "docs": [],
+              "error": "permission-denied",
+              "exists": null,
+              "listener": "primary",
+              "snapshotKind": "error"
+            }
+          ],
+          "timedOut": false
+        },
+        "sdk/108C": {
+          "conditions": ["FS-LISTEN-SDK/cross-principal-rules"],
+          "end": null,
+          "failures": [],
+          "invariantViolations": [],
+          "observed": [
+            {
+              "changes": [],
+              "docs": ["privateB"],
+              "error": null,
+              "exists": true,
+              "listener": "secondary",
+              "snapshotKind": "initial"
+            }
+          ],
+          "timedOut": false
+        },
+        "sdk/111": {
+          "conditions": ["FS-LISTEN-SDK/existence-filter-reconnect"],
+          "end": null,
+          "failures": [],
+          "invariantViolations": [],
+          "observed": [
+            {
+              "changes": [
+                {
+                  "doc": "beta",
+                  "newIndex": null,
+                  "oldIndex": null,
+                  "type": "removed"
+                },
+                {
+                  "doc": "gamma",
+                  "newIndex": null,
+                  "oldIndex": null,
+                  "type": "removed"
+                }
+              ],
+              "docs": ["alpha"],
+              "error": null,
+              "exists": null,
+              "fromCacheTransitions": [true, false],
+              "listener": "primary",
+              "snapshotKind": "aggregate"
+            }
+          ],
+          "timedOut": false
+        }
       },
-      {
-       "kind": "boundary",
-       "resumeToken": true
-      }
-     ],
-     "timedOut": false
+      "run": "nmuuj1wmw",
+      "version": 1
     },
-    "native/commit-atomic-visibility/transaction": {
-     "conditions": [
-      "FS-TRANSACTION/commit-atomic-visibility"
-     ],
-     "end": null,
-     "groups": [
-      {
-       "docs": [
-        "a",
-        "b"
-       ],
-       "sameUpdateTime": true
-      }
-     ],
-     "program": "native/commit-atomic-visibility",
-     "rows": [
-      {
-       "doc": "a",
-       "fields": {
-        "g": "atomic",
-        "n": 1
-       },
-       "kind": "documentChange",
-       "removedTargetIds": [],
-       "targetIds": [
-        1
-       ]
-      },
-      {
-       "doc": "b",
-       "fields": {
-        "g": "atomic",
-        "n": 1
-       },
-       "kind": "documentChange",
-       "removedTargetIds": [],
-       "targetIds": [
-        1
-       ]
-      },
-      {
-       "kind": "boundary",
-       "resumeToken": true
-      }
-     ],
-     "timedOut": false
-    },
-    "native/existence-filter/first": {
-     "conditions": [
-      "FS-LISTEN-SDK/existence-filter-reconnect"
-     ],
-     "end": null,
-     "program": "native/existence-filter",
-     "rows": [
-      {
-       "cause": null,
-       "kind": "targetChange",
-       "resumeToken": false,
-       "targetIds": [
-        1
-       ],
-       "type": "ADD"
-      },
-      {
-       "doc": "a",
-       "fields": {
-        "g": "filter",
-        "n": 1
-       },
-       "kind": "documentChange",
-       "removedTargetIds": [],
-       "targetIds": [
-        1
-       ]
-      },
-      {
-       "doc": "b",
-       "fields": {
-        "g": "filter",
-        "n": 1
-       },
-       "kind": "documentChange",
-       "removedTargetIds": [],
-       "targetIds": [
-        1
-       ]
-      },
-      {
-       "doc": "c",
-       "fields": {
-        "g": "filter",
-        "n": 1
-       },
-       "kind": "documentChange",
-       "removedTargetIds": [],
-       "targetIds": [
-        1
-       ]
-      },
-      {
-       "cause": null,
-       "kind": "targetChange",
-       "resumeToken": true,
-       "targetIds": [
-        1
-       ],
-       "type": "CURRENT"
-      },
-      {
-       "kind": "boundary",
-       "resumeToken": true
-      }
-     ],
-     "timedOut": false
-    },
-    "native/existence-filter/no-change": {
-     "conditions": [
-      "FS-LISTEN-SDK/existence-filter-reconnect"
-     ],
-     "end": null,
-     "program": "native/existence-filter",
-     "rows": [
-      {
-       "cause": null,
-       "kind": "targetChange",
-       "resumeToken": false,
-       "targetIds": [
-        1
-       ],
-       "type": "ADD"
-      },
-      {
-       "kind": "boundary",
-       "resumeToken": true
-      },
-      {
-       "cause": null,
-       "kind": "targetChange",
-       "resumeToken": true,
-       "targetIds": [
-        1
-       ],
-       "type": "CURRENT"
-      },
-      {
-       "kind": "boundary",
-       "resumeToken": true
-      }
-     ],
-     "timedOut": false
-    },
-    "native/existence-filter/with-expected-count": {
-     "conditions": [
-      "FS-LISTEN-SDK/existence-filter-reconnect"
-     ],
-     "end": null,
-     "program": "native/existence-filter",
-     "rows": [
-      {
-       "cause": null,
-       "kind": "targetChange",
-       "resumeToken": false,
-       "targetIds": [
-        1
-       ],
-       "type": "ADD"
-      },
-      {
-       "kind": "boundary",
-       "resumeToken": true
-      },
-      {
-       "doc": "b",
-       "kind": "documentDelete",
-       "removedTargetIds": [
-        1
-       ]
-      },
-      {
-       "kind": "boundary",
-       "resumeToken": true
-      },
-      {
-       "doc": "c",
-       "fields": {
-        "g": "filter-other",
-        "n": 2
-       },
-       "kind": "documentChange",
-       "removedTargetIds": [
-        1
-       ],
-       "targetIds": []
-      },
-      {
-       "kind": "boundary",
-       "resumeToken": true
-      },
-      {
-       "cause": null,
-       "kind": "targetChange",
-       "resumeToken": true,
-       "targetIds": [
-        1
-       ],
-       "type": "CURRENT"
-      },
-      {
-       "kind": "boundary",
-       "resumeToken": true
-      }
-     ],
-     "timedOut": false
-    },
-    "native/existence-filter/without-expected-count": {
-     "conditions": [
-      "FS-LISTEN-SDK/existence-filter-reconnect"
-     ],
-     "end": null,
-     "program": "native/existence-filter",
-     "rows": [
-      {
-       "cause": null,
-       "kind": "targetChange",
-       "resumeToken": false,
-       "targetIds": [
-        1
-       ],
-       "type": "ADD"
-      },
-      {
-       "kind": "boundary",
-       "resumeToken": true
-      },
-      {
-       "count": 1,
-       "kind": "filter",
-       "targetId": 1,
-       "unchangedNames": {
-        "bitmapBytes": 0,
-        "hashCount": 0,
-        "padding": 0
-       }
-      },
-      {
-       "cause": null,
-       "kind": "targetChange",
-       "resumeToken": true,
-       "targetIds": [
-        1
-       ],
-       "type": "CURRENT"
-      },
-      {
-       "kind": "boundary",
-       "resumeToken": true
-      }
-     ],
-     "timedOut": false
-    },
-    "native/resume-token-expired/expired": {
-     "conditions": [
-      "FS-LISTEN-SDK/raw-resume-token"
-     ],
-     "end": null,
-     "program": "native/resume-token-expired",
-     "rows": [
-      {
-       "cause": null,
-       "kind": "targetChange",
-       "resumeToken": false,
-       "targetIds": [
-        1
-       ],
-       "type": "ADD"
-      },
-      {
-       "kind": "boundary",
-       "resumeToken": true
-      },
-      {
-       "doc": "a",
-       "fields": {
-        "g": "expired",
-        "n": 2
-       },
-       "kind": "documentChange",
-       "removedTargetIds": [],
-       "targetIds": [
-        1
-       ]
-      },
-      {
-       "count": 1,
-       "kind": "filter",
-       "targetId": 1,
-       "unchangedNames": {
-        "bitmapBytes": 0,
-        "hashCount": 0,
-        "padding": 0
-       }
-      },
-      {
-       "cause": null,
-       "kind": "targetChange",
-       "resumeToken": true,
-       "targetIds": [
-        1
-       ],
-       "type": "CURRENT"
-      },
-      {
-       "kind": "boundary",
-       "resumeToken": true
-      },
-      {
-       "count": 1,
-       "kind": "filter",
-       "targetId": 1,
-       "unchangedNames": {
-        "bitmapBytes": 4,
-        "hashCount": 12,
-        "padding": 7
-       }
-      },
-      {
-       "kind": "boundary",
-       "resumeToken": true
-      }
-     ],
-     "timedOut": false
-    },
-    "native/resume-token-expired/first": {
-     "conditions": [
-      "FS-LISTEN-SDK/raw-resume-token"
-     ],
-     "end": null,
-     "program": "native/resume-token-expired",
-     "rows": [
-      {
-       "cause": null,
-       "kind": "targetChange",
-       "resumeToken": false,
-       "targetIds": [
-        1
-       ],
-       "type": "ADD"
-      },
-      {
-       "doc": "a",
-       "fields": {
-        "g": "expired",
-        "n": 1
-       },
-       "kind": "documentChange",
-       "removedTargetIds": [],
-       "targetIds": [
-        1
-       ]
-      },
-      {
-       "cause": null,
-       "kind": "targetChange",
-       "resumeToken": true,
-       "targetIds": [
-        1
-       ],
-       "type": "CURRENT"
-      },
-      {
-       "kind": "boundary",
-       "resumeToken": true
-      },
-      {
-       "count": 1,
-       "kind": "filter",
-       "targetId": 1,
-       "unchangedNames": {
-        "bitmapBytes": 4,
-        "hashCount": 12,
-        "padding": 7
-       }
-      },
-      {
-       "kind": "boundary",
-       "resumeToken": true
-      }
-     ],
-     "timedOut": false
-    },
-    "native/resume-token-expired/fresh-control": {
-     "conditions": [
-      "FS-LISTEN-SDK/raw-resume-token"
-     ],
-     "end": null,
-     "program": "native/resume-token-expired",
-     "rows": [
-      {
-       "cause": null,
-       "kind": "targetChange",
-       "resumeToken": false,
-       "targetIds": [
-        1
-       ],
-       "type": "ADD"
-      },
-      {
-       "doc": "a",
-       "fields": {
-        "g": "expired",
-        "n": 2
-       },
-       "kind": "documentChange",
-       "removedTargetIds": [],
-       "targetIds": [
-        1
-       ]
-      },
-      {
-       "cause": null,
-       "kind": "targetChange",
-       "resumeToken": true,
-       "targetIds": [
-        1
-       ],
-       "type": "CURRENT"
-      },
-      {
-       "kind": "boundary",
-       "resumeToken": true
-      },
-      {
-       "count": 1,
-       "kind": "filter",
-       "targetId": 1,
-       "unchangedNames": {
-        "bitmapBytes": 4,
-        "hashCount": 12,
-        "padding": 7
-       }
-      },
-      {
-       "kind": "boundary",
-       "resumeToken": true
-      }
-     ],
-     "timedOut": false
-    },
-    "native/resume-token/current": {
-     "conditions": [
-      "FS-LISTEN-SDK/raw-resume-token"
-     ],
-     "end": null,
-     "program": "native/resume-token",
-     "rows": [
-      {
-       "cause": null,
-       "kind": "targetChange",
-       "resumeToken": false,
-       "targetIds": [
-        1
-       ],
-       "type": "ADD"
-      },
-      {
-       "kind": "boundary",
-       "resumeToken": true
-      },
-      {
-       "doc": "b",
-       "fields": {
-        "g": "resume",
-        "n": 2
-       },
-       "kind": "documentChange",
-       "removedTargetIds": [],
-       "targetIds": [
-        1
-       ]
-      },
-      {
-       "kind": "boundary",
-       "resumeToken": true
-      },
-      {
-       "cause": null,
-       "kind": "targetChange",
-       "resumeToken": true,
-       "targetIds": [
-        1
-       ],
-       "type": "CURRENT"
-      },
-      {
-       "kind": "boundary",
-       "resumeToken": true
-      }
-     ],
-     "timedOut": false
-    },
-    "native/resume-token/first": {
-     "conditions": [
-      "FS-LISTEN-SDK/raw-resume-token"
-     ],
-     "end": null,
-     "program": "native/resume-token",
-     "rows": [
-      {
-       "cause": null,
-       "kind": "targetChange",
-       "resumeToken": false,
-       "targetIds": [
-        1
-       ],
-       "type": "ADD"
-      },
-      {
-       "doc": "a",
-       "fields": {
-        "g": "resume",
-        "n": 1
-       },
-       "kind": "documentChange",
-       "removedTargetIds": [],
-       "targetIds": [
-        1
-       ]
-      },
-      {
-       "doc": "b",
-       "fields": {
-        "g": "resume",
-        "n": 1
-       },
-       "kind": "documentChange",
-       "removedTargetIds": [],
-       "targetIds": [
-        1
-       ]
-      },
-      {
-       "cause": null,
-       "kind": "targetChange",
-       "resumeToken": true,
-       "targetIds": [
-        1
-       ],
-       "type": "CURRENT"
-      },
-      {
-       "kind": "boundary",
-       "resumeToken": true
-      },
-      {
-       "count": 2,
-       "kind": "filter",
-       "targetId": 1,
-       "unchangedNames": {
-        "bitmapBytes": 8,
-        "hashCount": 13,
-        "padding": 3
-       }
-      },
-      {
-       "kind": "boundary",
-       "resumeToken": true
-      }
-     ],
-     "timedOut": false
-    },
-    "native/resume-token/fresh-control": {
-     "conditions": [
-      "FS-LISTEN-SDK/raw-resume-token"
-     ],
-     "end": null,
-     "program": "native/resume-token",
-     "rows": [
-      {
-       "cause": null,
-       "kind": "targetChange",
-       "resumeToken": false,
-       "targetIds": [
-        1
-       ],
-       "type": "ADD"
-      },
-      {
-       "doc": "a",
-       "fields": {
-        "g": "resume",
-        "n": 2
-       },
-       "kind": "documentChange",
-       "removedTargetIds": [],
-       "targetIds": [
-        1
-       ]
-      },
-      {
-       "doc": "b",
-       "fields": {
-        "g": "resume",
-        "n": 2
-       },
-       "kind": "documentChange",
-       "removedTargetIds": [],
-       "targetIds": [
-        1
-       ]
-      },
-      {
-       "cause": null,
-       "kind": "targetChange",
-       "resumeToken": true,
-       "targetIds": [
-        1
-       ],
-       "type": "CURRENT"
-      },
-      {
-       "kind": "boundary",
-       "resumeToken": true
-      },
-      {
-       "count": 2,
-       "kind": "filter",
-       "targetId": 1,
-       "unchangedNames": {
-        "bitmapBytes": 8,
-        "hashCount": 13,
-        "padding": 3
-       }
-      },
-      {
-       "kind": "boundary",
-       "resumeToken": true
-      }
-     ],
-     "timedOut": false
-    },
-    "native/resume-token/invalid": {
-     "conditions": [
-      "FS-LISTEN-SDK/raw-resume-token"
-     ],
-     "end": null,
-     "program": "native/resume-token",
-     "rows": [
-      {
-       "cause": {
-        "code": 3,
-        "message": "bad resume token"
-       },
-       "kind": "targetChange",
-       "resumeToken": false,
-       "targetIds": [
-        1
-       ],
-       "type": "REMOVE"
-      }
-     ],
-     "timedOut": true
-    },
-    "native/resume-token/older": {
-     "conditions": [
-      "FS-LISTEN-SDK/raw-resume-token"
-     ],
-     "end": null,
-     "program": "native/resume-token",
-     "rows": [
-      {
-       "cause": null,
-       "kind": "targetChange",
-       "resumeToken": false,
-       "targetIds": [
-        1
-       ],
-       "type": "ADD"
-      },
-      {
-       "kind": "boundary",
-       "resumeToken": true
-      },
-      {
-       "doc": "a",
-       "fields": {
-        "g": "resume",
-        "n": 2
-       },
-       "kind": "documentChange",
-       "removedTargetIds": [],
-       "targetIds": [
-        1
-       ]
-      },
-      {
-       "doc": "b",
-       "fields": {
-        "g": "resume",
-        "n": 2
-       },
-       "kind": "documentChange",
-       "removedTargetIds": [],
-       "targetIds": [
-        1
-       ]
-      },
-      {
-       "count": 2,
-       "kind": "filter",
-       "targetId": 1,
-       "unchangedNames": {
-        "bitmapBytes": 0,
-        "hashCount": 0,
-        "padding": 0
-       }
-      },
-      {
-       "cause": null,
-       "kind": "targetChange",
-       "resumeToken": true,
-       "targetIds": [
-        1
-       ],
-       "type": "CURRENT"
-      },
-      {
-       "kind": "boundary",
-       "resumeToken": true
-      }
-     ],
-     "timedOut": false
-    },
-    "native/resume-token/other-query": {
-     "conditions": [
-      "FS-LISTEN-SDK/raw-resume-token"
-     ],
-     "end": null,
-     "program": "native/resume-token",
-     "rows": [
-      {
-       "cause": null,
-       "kind": "targetChange",
-       "resumeToken": false,
-       "targetIds": [
-        1
-       ],
-       "type": "ADD"
-      },
-      {
-       "kind": "boundary",
-       "resumeToken": true
-      },
-      {
-       "count": 0,
-       "kind": "filter",
-       "targetId": 1,
-       "unchangedNames": {
-        "bitmapBytes": 0,
-        "hashCount": 0,
-        "padding": 0
-       }
-      },
-      {
-       "cause": null,
-       "kind": "targetChange",
-       "resumeToken": true,
-       "targetIds": [
-        1
-       ],
-       "type": "CURRENT"
-      },
-      {
-       "kind": "boundary",
-       "resumeToken": true
-      }
-     ],
-     "timedOut": false
-    },
-    "native/resume-token/unchanged": {
-     "conditions": [
-      "FS-LISTEN-SDK/raw-resume-token"
-     ],
-     "end": null,
-     "program": "native/resume-token",
-     "rows": [
-      {
-       "cause": null,
-       "kind": "targetChange",
-       "resumeToken": false,
-       "targetIds": [
-        1
-       ],
-       "type": "ADD"
-      },
-      {
-       "kind": "boundary",
-       "resumeToken": true
-      },
-      {
-       "cause": null,
-       "kind": "targetChange",
-       "resumeToken": true,
-       "targetIds": [
-        1
-       ],
-       "type": "CURRENT"
-      },
-      {
-       "kind": "boundary",
-       "resumeToken": true
-      }
-     ],
-     "timedOut": false
-    },
-    "native/target-lifecycle/delete": {
-     "conditions": [
-      "FS-LISTEN-SDK/native-target-protocol",
-      "FS-LISTEN-SDK/default-subscription"
-     ],
-     "end": null,
-     "program": "native/target-lifecycle",
-     "rows": [
-      {
-       "doc": "a",
-       "kind": "documentDelete",
-       "removedTargetIds": [
-        2
-       ]
-      },
-      {
-       "kind": "boundary",
-       "resumeToken": true
-      }
-     ],
-     "timedOut": false
-    },
-    "native/target-lifecycle/open": {
-     "conditions": [
-      "FS-LISTEN-SDK/native-target-protocol",
-      "FS-LISTEN-SDK/default-subscription"
-     ],
-     "end": null,
-     "program": "native/target-lifecycle",
-     "rows": [
-      {
-       "cause": null,
-       "kind": "targetChange",
-       "resumeToken": false,
-       "targetIds": [
-        1
-       ],
-       "type": "ADD"
-      },
-      {
-       "doc": "a",
-       "fields": {
-        "n": 1
-       },
-       "kind": "documentChange",
-       "removedTargetIds": [],
-       "targetIds": [
-        1
-       ]
-      },
-      {
-       "cause": null,
-       "kind": "targetChange",
-       "resumeToken": true,
-       "targetIds": [
-        1
-       ],
-       "type": "CURRENT"
-      },
-      {
-       "kind": "boundary",
-       "resumeToken": true
-      }
-     ],
-     "timedOut": false
-    },
-    "native/target-lifecycle/readd": {
-     "conditions": [
-      "FS-LISTEN-SDK/native-target-protocol",
-      "FS-LISTEN-SDK/default-subscription"
-     ],
-     "end": null,
-     "program": "native/target-lifecycle",
-     "rows": [
-      {
-       "cause": null,
-       "kind": "targetChange",
-       "resumeToken": false,
-       "targetIds": [
-        2
-       ],
-       "type": "ADD"
-      },
-      {
-       "doc": "a",
-       "fields": {
-        "n": 2
-       },
-       "kind": "documentChange",
-       "removedTargetIds": [],
-       "targetIds": [
-        2
-       ]
-      },
-      {
-       "cause": null,
-       "kind": "targetChange",
-       "resumeToken": true,
-       "targetIds": [
-        2
-       ],
-       "type": "CURRENT"
-      },
-      {
-       "kind": "boundary",
-       "resumeToken": true
-      }
-     ],
-     "timedOut": false
-    },
-    "native/target-lifecycle/remove": {
-     "conditions": [
-      "FS-LISTEN-SDK/native-target-protocol",
-      "FS-LISTEN-SDK/default-subscription"
-     ],
-     "end": null,
-     "program": "native/target-lifecycle",
-     "rows": [
-      {
-       "cause": null,
-       "kind": "targetChange",
-       "resumeToken": false,
-       "targetIds": [
-        1
-       ],
-       "type": "REMOVE"
-      }
-     ],
-     "timedOut": false
-    },
-    "native/target-lifecycle/same-data": {
-     "conditions": [
-      "FS-LISTEN-SDK/native-target-protocol",
-      "FS-LISTEN-SDK/default-subscription"
-     ],
-     "end": null,
-     "program": "native/target-lifecycle",
-     "rows": [],
-     "timedOut": false
-    },
-    "native/target-lifecycle/update": {
-     "conditions": [
-      "FS-LISTEN-SDK/native-target-protocol",
-      "FS-LISTEN-SDK/default-subscription"
-     ],
-     "end": null,
-     "program": "native/target-lifecycle",
-     "rows": [
-      {
-       "doc": "a",
-       "fields": {
-        "n": 2
-       },
-       "kind": "documentChange",
-       "removedTargetIds": [],
-       "targetIds": [
-        1
-       ]
-      },
-      {
-       "kind": "boundary",
-       "resumeToken": true
-      }
-     ],
-     "timedOut": false
-    },
-    "native/target-protocol/collection-group": {
-     "conditions": [
-      "FS-LISTEN-SDK/native-target-protocol"
-     ],
-     "end": null,
-     "program": "native/target-protocol",
-     "rows": [
-      {
-       "cause": null,
-       "kind": "targetChange",
-       "resumeToken": false,
-       "targetIds": [
-        1
-       ],
-       "type": "ADD"
-      },
-      {
-       "doc": "c1",
-       "fields": {
-        "n": 1
-       },
-       "kind": "documentChange",
-       "removedTargetIds": [],
-       "targetIds": [
-        1
-       ]
-      },
-      {
-       "doc": "c2",
-       "fields": {
-        "n": 2
-       },
-       "kind": "documentChange",
-       "removedTargetIds": [],
-       "targetIds": [
-        1
-       ]
-      },
-      {
-       "cause": null,
-       "kind": "targetChange",
-       "resumeToken": true,
-       "targetIds": [
-        1
-       ],
-       "type": "CURRENT"
-      },
-      {
-       "kind": "boundary",
-       "resumeToken": true
-      },
-      {
-       "count": 2,
-       "kind": "filter",
-       "targetId": 1,
-       "unchangedNames": {
-        "bitmapBytes": 8,
-        "hashCount": 13,
-        "padding": 3
-       }
-      },
-      {
-       "kind": "boundary",
-       "resumeToken": true
-      }
-     ],
-     "timedOut": false
-    },
-    "native/target-protocol/duplicate-id": {
-     "conditions": [
-      "FS-LISTEN-SDK/native-target-protocol"
-     ],
-     "end": null,
-     "program": "native/target-protocol",
-     "rows": [
-      {
-       "cause": null,
-       "kind": "targetChange",
-       "resumeToken": false,
-       "targetIds": [
-        1
-       ],
-       "type": "ADD"
-      },
-      {
-       "doc": "a",
-       "fields": {
-        "g": "proto",
-        "n": 1
-       },
-       "kind": "documentChange",
-       "removedTargetIds": [],
-       "targetIds": [
-        1
-       ]
-      },
-      {
-       "cause": null,
-       "kind": "targetChange",
-       "resumeToken": true,
-       "targetIds": [
-        1
-       ],
-       "type": "CURRENT"
-      },
-      {
-       "kind": "boundary",
-       "resumeToken": true
-      },
-      {
-       "cause": {
-        "code": 6,
-        "message": "Target ID already exists: 1"
-       },
-       "kind": "targetChange",
-       "resumeToken": false,
-       "targetIds": [
-        1
-       ],
-       "type": "REMOVE"
-      }
-     ],
-     "timedOut": false
-    },
-    "native/target-protocol/equality-only-query": {
-     "conditions": [
-      "FS-LISTEN-SDK/native-target-protocol"
-     ],
-     "end": null,
-     "program": "native/target-protocol",
-     "rows": [
-      {
-       "cause": null,
-       "kind": "targetChange",
-       "resumeToken": false,
-       "targetIds": [
-        1
-       ],
-       "type": "ADD"
-      },
-      {
-       "doc": "a",
-       "fields": {
-        "g": "proto",
-        "n": 5
-       },
-       "kind": "documentChange",
-       "removedTargetIds": [],
-       "targetIds": [
-        1
-       ]
-      },
-      {
-       "doc": "b",
-       "fields": {
-        "g": "proto",
-        "n": 2
-       },
-       "kind": "documentChange",
-       "removedTargetIds": [],
-       "targetIds": [
-        1
-       ]
-      },
-      {
-       "cause": null,
-       "kind": "targetChange",
-       "resumeToken": true,
-       "targetIds": [
-        1
-       ],
-       "type": "CURRENT"
-      },
-      {
-       "kind": "boundary",
-       "resumeToken": true
-      }
-     ],
-     "timedOut": false
-    },
-    "native/target-protocol/id-after-assigned": {
-     "conditions": [
-      "FS-LISTEN-SDK/native-target-protocol"
-     ],
-     "end": {
-      "code": 3,
-      "reason": "error"
-     },
-     "program": "native/target-protocol",
-     "rows": [],
-     "timedOut": false
-    },
-    "native/target-protocol/missing-index": {
-     "conditions": [
-      "FS-LISTEN-SDK/native-target-protocol"
-     ],
-     "end": null,
-     "program": "native/target-protocol",
-     "rows": [
-      {
-       "cause": null,
-       "kind": "targetChange",
-       "resumeToken": false,
-       "targetIds": [
-        1
-       ],
-       "type": "ADD"
-      },
-      {
-       "cause": {
-        "code": 9,
-        "message": "The query requires an index. You can create it here: https://console.firebase.google.com/v1/r/project/{project}/firestore/indexes?create_composite=<index>"
-       },
-       "kind": "targetChange",
-       "resumeToken": false,
-       "targetIds": [
-        1
-       ],
-       "type": "REMOVE"
-      }
-     ],
-     "timedOut": false
-    },
-    "native/target-protocol/negative-id": {
-     "conditions": [
-      "FS-LISTEN-SDK/native-target-protocol"
-     ],
-     "end": {
-      "code": 3,
-      "reason": "error"
-     },
-     "program": "native/target-protocol",
-     "rows": [],
-     "timedOut": false
-    },
-    "native/target-protocol/once": {
-     "conditions": [
-      "FS-LISTEN-SDK/native-target-protocol"
-     ],
-     "end": null,
-     "program": "native/target-protocol",
-     "rows": [
-      {
-       "cause": null,
-       "kind": "targetChange",
-       "resumeToken": false,
-       "targetIds": [
-        1
-       ],
-       "type": "ADD"
-      },
-      {
-       "doc": "a",
-       "fields": {
-        "g": "proto",
-        "n": 1
-       },
-       "kind": "documentChange",
-       "removedTargetIds": [],
-       "targetIds": [
-        1
-       ]
-      },
-      {
-       "cause": null,
-       "kind": "targetChange",
-       "resumeToken": true,
-       "targetIds": [
-        1
-       ],
-       "type": "CURRENT"
-      },
-      {
-       "kind": "boundary",
-       "resumeToken": true
-      },
-      {
-       "cause": null,
-       "kind": "targetChange",
-       "resumeToken": false,
-       "targetIds": [
-        1
-       ],
-       "type": "REMOVE"
-      }
-     ],
-     "timedOut": false
-    },
-    "native/target-protocol/read-time-after-write": {
-     "conditions": [
-      "FS-LISTEN-SDK/native-target-protocol"
-     ],
-     "end": null,
-     "program": "native/target-protocol",
-     "rows": [
-      {
-       "cause": null,
-       "kind": "targetChange",
-       "resumeToken": false,
-       "targetIds": [
-        1
-       ],
-       "type": "ADD"
-      },
-      {
-       "kind": "boundary",
-       "resumeToken": true
-      },
-      {
-       "cause": null,
-       "kind": "targetChange",
-       "resumeToken": true,
-       "targetIds": [
-        1
-       ],
-       "type": "CURRENT"
-      },
-      {
-       "kind": "boundary",
-       "resumeToken": true
-      }
-     ],
-     "timedOut": false
-    },
-    "native/target-protocol/read-time-before-write": {
-     "conditions": [
-      "FS-LISTEN-SDK/native-target-protocol"
-     ],
-     "end": null,
-     "program": "native/target-protocol",
-     "rows": [
-      {
-       "cause": null,
-       "kind": "targetChange",
-       "resumeToken": false,
-       "targetIds": [
-        1
-       ],
-       "type": "ADD"
-      },
-      {
-       "kind": "boundary",
-       "resumeToken": true
-      },
-      {
-       "doc": "a",
-       "fields": {
-        "g": "proto",
-        "n": 5
-       },
-       "kind": "documentChange",
-       "removedTargetIds": [],
-       "targetIds": [
-        1
-       ]
-      },
-      {
-       "cause": null,
-       "kind": "targetChange",
-       "resumeToken": true,
-       "targetIds": [
-        1
-       ],
-       "type": "CURRENT"
-      },
-      {
-       "kind": "boundary",
-       "resumeToken": true
-      }
-     ],
-     "timedOut": false
-    },
-    "native/target-protocol/second-zero-id": {
-     "conditions": [
-      "FS-LISTEN-SDK/native-target-protocol"
-     ],
-     "end": null,
-     "program": "native/target-protocol",
-     "rows": [
-      {
-       "cause": null,
-       "kind": "targetChange",
-       "resumeToken": false,
-       "targetIds": [
-        2
-       ],
-       "type": "ADD"
-      },
-      {
-       "doc": "b",
-       "fields": {
-        "g": "proto",
-        "n": 2
-       },
-       "kind": "documentChange",
-       "removedTargetIds": [],
-       "targetIds": [
-        2
-       ]
-      },
-      {
-       "cause": null,
-       "kind": "targetChange",
-       "resumeToken": true,
-       "targetIds": [
-        2
-       ],
-       "type": "CURRENT"
-      },
-      {
-       "kind": "boundary",
-       "resumeToken": true
-      }
-     ],
-     "timedOut": false
-    },
-    "native/target-protocol/server-assigned-id": {
-     "conditions": [
-      "FS-LISTEN-SDK/native-target-protocol"
-     ],
-     "end": null,
-     "program": "native/target-protocol",
-     "rows": [
-      {
-       "cause": null,
-       "kind": "targetChange",
-       "resumeToken": false,
-       "targetIds": [
-        1
-       ],
-       "type": "ADD"
-      },
-      {
-       "doc": "a",
-       "fields": {
-        "g": "proto",
-        "n": 1
-       },
-       "kind": "documentChange",
-       "removedTargetIds": [],
-       "targetIds": [
-        1
-       ]
-      },
-      {
-       "cause": null,
-       "kind": "targetChange",
-       "resumeToken": true,
-       "targetIds": [
-        1
-       ],
-       "type": "CURRENT"
-      },
-      {
-       "kind": "boundary",
-       "resumeToken": true
-      }
-     ],
-     "timedOut": false
+    "sdk-2": {
+      "cleanup": {
+        "complete": true
+      },
+      "errors": {},
+      "kind": "sdk",
+      "rows": {
+        "sdk/101": {
+          "conditions": ["FS-LISTEN-SDK/document-event-order"],
+          "end": null,
+          "failures": [],
+          "invariantViolations": [],
+          "observed": [
+            {
+              "changes": [],
+              "docs": ["alpha"],
+              "error": null,
+              "exists": true,
+              "listener": "primary",
+              "snapshotKind": "initial"
+            }
+          ],
+          "timedOut": false
+        },
+        "sdk/101C": {
+          "conditions": ["FS-LISTEN-SDK/document-event-order"],
+          "end": null,
+          "failures": [],
+          "invariantViolations": [],
+          "observed": [
+            {
+              "changes": [],
+              "docs": [],
+              "error": null,
+              "exists": false,
+              "listener": "primary",
+              "snapshotKind": "initial"
+            }
+          ],
+          "timedOut": false
+        },
+        "sdk/102": {
+          "conditions": ["FS-LISTEN-SDK/pending-writes"],
+          "end": null,
+          "failures": [],
+          "invariantViolations": [],
+          "observed": [
+            {
+              "changes": [],
+              "docs": ["beta"],
+              "error": null,
+              "exists": true,
+              "fromCache": false,
+              "hasPendingWrites": true,
+              "listener": "primary",
+              "snapshotKind": "delta"
+            },
+            {
+              "changes": [],
+              "docs": ["beta"],
+              "error": null,
+              "exists": true,
+              "fromCache": false,
+              "hasPendingWrites": false,
+              "listener": "primary",
+              "snapshotKind": "delta"
+            }
+          ],
+          "timedOut": false
+        },
+        "sdk/102C": {
+          "conditions": ["FS-LISTEN-SDK/pending-writes"],
+          "end": null,
+          "failures": [],
+          "invariantViolations": [],
+          "observed": [
+            {
+              "changes": [],
+              "docs": ["beta"],
+              "error": null,
+              "exists": true,
+              "fromCache": false,
+              "hasPendingWrites": false,
+              "listener": "primary",
+              "snapshotKind": "delta"
+            }
+          ],
+          "timedOut": false
+        },
+        "sdk/103": {
+          "conditions": ["FS-LISTEN-SDK/query-change-order"],
+          "end": null,
+          "failures": [],
+          "invariantViolations": [],
+          "observed": [
+            {
+              "changes": [
+                {
+                  "doc": "beta",
+                  "newIndex": 0,
+                  "oldIndex": -1,
+                  "type": "added"
+                }
+              ],
+              "docs": ["beta", "alpha"],
+              "error": null,
+              "exists": null,
+              "fromCache": false,
+              "hasPendingWrites": false,
+              "listener": "primary",
+              "snapshotKind": "delta"
+            },
+            {
+              "changes": [
+                {
+                  "doc": "beta",
+                  "newIndex": 1,
+                  "oldIndex": 0,
+                  "type": "modified"
+                }
+              ],
+              "docs": ["alpha", "beta"],
+              "error": null,
+              "exists": null,
+              "fromCache": false,
+              "hasPendingWrites": false,
+              "listener": "primary",
+              "snapshotKind": "delta"
+            },
+            {
+              "changes": [
+                {
+                  "doc": "alpha",
+                  "newIndex": -1,
+                  "oldIndex": 0,
+                  "type": "removed"
+                }
+              ],
+              "docs": ["beta"],
+              "error": null,
+              "exists": null,
+              "fromCache": false,
+              "hasPendingWrites": false,
+              "listener": "primary",
+              "snapshotKind": "delta"
+            }
+          ],
+          "timedOut": false
+        },
+        "sdk/103C": {
+          "conditions": ["FS-LISTEN-SDK/query-change-order"],
+          "end": null,
+          "failures": [],
+          "invariantViolations": [],
+          "observed": [],
+          "timedOut": false
+        },
+        "sdk/103L": {
+          "conditions": ["FS-LISTEN-SDK/query-change-order"],
+          "end": null,
+          "failures": [],
+          "invariantViolations": [],
+          "observed": [
+            {
+              "changes": [
+                {
+                  "doc": "beta",
+                  "newIndex": 1,
+                  "oldIndex": 0,
+                  "type": "modified"
+                }
+              ],
+              "docs": ["gamma", "beta"],
+              "error": null,
+              "exists": null,
+              "listener": "primary",
+              "snapshotKind": "delta"
+            },
+            {
+              "changes": [
+                {
+                  "doc": "gamma",
+                  "newIndex": -1,
+                  "oldIndex": 0,
+                  "type": "removed"
+                },
+                {
+                  "doc": "delta",
+                  "newIndex": 1,
+                  "oldIndex": -1,
+                  "type": "added"
+                }
+              ],
+              "docs": ["beta", "delta"],
+              "error": null,
+              "exists": null,
+              "listener": "primary",
+              "snapshotKind": "delta"
+            }
+          ],
+          "timedOut": false
+        },
+        "sdk/103T": {
+          "conditions": ["FS-LISTEN-SDK/query-change-order"],
+          "end": null,
+          "failures": [],
+          "invariantViolations": [],
+          "observed": [
+            {
+              "changes": [
+                {
+                  "doc": "alpha",
+                  "newIndex": 0,
+                  "oldIndex": -1,
+                  "type": "added"
+                },
+                {
+                  "doc": "beta",
+                  "newIndex": 1,
+                  "oldIndex": -1,
+                  "type": "added"
+                }
+              ],
+              "docs": ["alpha", "beta"],
+              "error": null,
+              "exists": null,
+              "listener": "primary",
+              "snapshotKind": "delta"
+            },
+            {
+              "changes": [
+                {
+                  "doc": "gamma",
+                  "newIndex": 2,
+                  "oldIndex": -1,
+                  "type": "added"
+                }
+              ],
+              "docs": ["alpha", "beta", "gamma"],
+              "error": null,
+              "exists": null,
+              "listener": "primary",
+              "snapshotKind": "delta"
+            },
+            {
+              "changes": [
+                {
+                  "doc": "delta",
+                  "newIndex": 3,
+                  "oldIndex": -1,
+                  "type": "added"
+                }
+              ],
+              "docs": ["alpha", "beta", "gamma", "delta"],
+              "error": null,
+              "exists": null,
+              "listener": "primary",
+              "snapshotKind": "delta"
+            }
+          ],
+          "timedOut": false
+        },
+        "sdk/104": {
+          "conditions": ["FS-LISTEN-SDK/reconnect-resume"],
+          "end": null,
+          "failures": [],
+          "invariantViolations": [],
+          "observed": [
+            {
+              "changes": [
+                {
+                  "doc": "alpha",
+                  "newIndex": null,
+                  "oldIndex": null,
+                  "type": "modified"
+                },
+                {
+                  "doc": "gamma",
+                  "newIndex": null,
+                  "oldIndex": null,
+                  "type": "added"
+                }
+              ],
+              "docs": ["beta", "alpha", "gamma"],
+              "error": null,
+              "exists": null,
+              "fromCacheTransitions": [true, false],
+              "listener": "primary",
+              "snapshotKind": "aggregate"
+            }
+          ],
+          "timedOut": false
+        },
+        "sdk/104C": {
+          "conditions": ["FS-LISTEN-SDK/reconnect-resume"],
+          "end": null,
+          "failures": [],
+          "invariantViolations": [],
+          "observed": [
+            {
+              "changes": [
+                {
+                  "doc": "alpha",
+                  "newIndex": null,
+                  "oldIndex": null,
+                  "type": "modified"
+                },
+                {
+                  "doc": "gamma",
+                  "newIndex": null,
+                  "oldIndex": null,
+                  "type": "added"
+                }
+              ],
+              "docs": ["beta", "alpha", "gamma"],
+              "error": null,
+              "exists": null,
+              "fromCacheTransitions": [false],
+              "listener": "primary",
+              "snapshotKind": "aggregate"
+            }
+          ],
+          "timedOut": false
+        },
+        "sdk/105": {
+          "conditions": ["FS-LISTEN-SDK/unsubscribe"],
+          "end": null,
+          "failures": [],
+          "invariantViolations": [],
+          "observed": [
+            {
+              "changes": [],
+              "docs": ["alpha"],
+              "error": null,
+              "exists": true,
+              "listener": "witness",
+              "snapshotKind": "delta"
+            }
+          ],
+          "timedOut": false
+        },
+        "sdk/105C": {
+          "conditions": ["FS-LISTEN-SDK/unsubscribe"],
+          "end": null,
+          "failures": [],
+          "invariantViolations": [],
+          "observed": [
+            {
+              "changes": [],
+              "docs": ["alpha"],
+              "error": null,
+              "exists": true,
+              "listener": "primary",
+              "snapshotKind": "delta"
+            },
+            {
+              "changes": [],
+              "docs": ["alpha"],
+              "error": null,
+              "exists": true,
+              "listener": "witness",
+              "snapshotKind": "delta"
+            }
+          ],
+          "timedOut": false
+        },
+        "sdk/106N": {
+          "conditions": ["FS-LISTEN-SDK/initial-unauthenticated-refusal"],
+          "end": null,
+          "failures": [],
+          "invariantViolations": [],
+          "observed": [
+            {
+              "changes": [],
+              "docs": [],
+              "error": "permission-denied",
+              "exists": null,
+              "listener": "primary",
+              "snapshotKind": "error"
+            }
+          ],
+          "timedOut": false
+        },
+        "sdk/107": {
+          "conditions": ["FS-LISTEN-SDK/default-subscription"],
+          "end": null,
+          "failures": [],
+          "invariantViolations": [],
+          "observed": [
+            {
+              "changes": [],
+              "docs": ["alpha"],
+              "error": null,
+              "exists": true,
+              "listener": "primary",
+              "snapshotKind": "initial"
+            },
+            {
+              "changes": [],
+              "docs": ["alpha"],
+              "error": null,
+              "exists": true,
+              "listener": "primary",
+              "snapshotKind": "delta"
+            }
+          ],
+          "timedOut": false
+        },
+        "sdk/107C": {
+          "conditions": ["FS-LISTEN-SDK/default-subscription"],
+          "end": null,
+          "failures": [],
+          "invariantViolations": [],
+          "observed": [
+            {
+              "changes": [],
+              "docs": ["alpha"],
+              "error": null,
+              "exists": true,
+              "listener": "primary",
+              "snapshotKind": "initial"
+            }
+          ],
+          "timedOut": false
+        },
+        "sdk/108": {
+          "conditions": ["FS-LISTEN-SDK/cross-principal-rules"],
+          "end": null,
+          "failures": [],
+          "invariantViolations": [],
+          "observed": [
+            {
+              "changes": [],
+              "docs": [],
+              "error": "permission-denied",
+              "exists": null,
+              "listener": "primary",
+              "snapshotKind": "error"
+            }
+          ],
+          "timedOut": false
+        },
+        "sdk/108C": {
+          "conditions": ["FS-LISTEN-SDK/cross-principal-rules"],
+          "end": null,
+          "failures": [],
+          "invariantViolations": [],
+          "observed": [
+            {
+              "changes": [],
+              "docs": ["privateB"],
+              "error": null,
+              "exists": true,
+              "listener": "secondary",
+              "snapshotKind": "initial"
+            }
+          ],
+          "timedOut": false
+        },
+        "sdk/111": {
+          "conditions": ["FS-LISTEN-SDK/existence-filter-reconnect"],
+          "end": null,
+          "failures": [],
+          "invariantViolations": [],
+          "observed": [
+            {
+              "changes": [
+                {
+                  "doc": "beta",
+                  "newIndex": null,
+                  "oldIndex": null,
+                  "type": "removed"
+                },
+                {
+                  "doc": "gamma",
+                  "newIndex": null,
+                  "oldIndex": null,
+                  "type": "removed"
+                }
+              ],
+              "docs": ["alpha"],
+              "error": null,
+              "exists": null,
+              "fromCacheTransitions": [true, false],
+              "listener": "primary",
+              "snapshotKind": "aggregate"
+            }
+          ],
+          "timedOut": false
+        }
+      },
+      "run": "nmuukqlh3",
+      "version": 1
     }
-   },
-   "run": "nmuuicyas",
-   "version": 1
   },
-  "native-2": {
-   "cleanup": {
-    "complete": true
-   },
-   "errors": {},
-   "kind": "native",
-   "rows": {
-    "native/commit-atomic-visibility/open": {
-     "conditions": [
-      "FS-TRANSACTION/commit-atomic-visibility"
-     ],
-     "end": null,
-     "program": "native/commit-atomic-visibility",
-     "rows": [
-      {
-       "cause": null,
-       "kind": "targetChange",
-       "resumeToken": false,
-       "targetIds": [
-        1
-       ],
-       "type": "ADD"
-      },
-      {
-       "cause": null,
-       "kind": "targetChange",
-       "resumeToken": true,
-       "targetIds": [
-        1
-       ],
-       "type": "CURRENT"
-      },
-      {
-       "kind": "boundary",
-       "resumeToken": true
-      }
-     ],
-     "timedOut": false
-    },
-    "native/commit-atomic-visibility/separate-commits": {
-     "conditions": [
-      "FS-TRANSACTION/commit-atomic-visibility"
-     ],
-     "end": null,
-     "groups": [
-      {
-       "docs": [
-        "a"
-       ],
-       "sameUpdateTime": true
-      },
-      {
-       "docs": [
-        "b"
-       ],
-       "sameUpdateTime": true
-      }
-     ],
-     "program": "native/commit-atomic-visibility",
-     "rows": [
-      {
-       "doc": "a",
-       "fields": {
-        "g": "atomic",
-        "n": 2
-       },
-       "kind": "documentChange",
-       "removedTargetIds": [],
-       "targetIds": [
-        1
-       ]
-      },
-      {
-       "kind": "boundary",
-       "resumeToken": true
-      },
-      {
-       "doc": "b",
-       "fields": {
-        "g": "atomic",
-        "n": 2
-       },
-       "kind": "documentChange",
-       "removedTargetIds": [],
-       "targetIds": [
-        1
-       ]
-      },
-      {
-       "kind": "boundary",
-       "resumeToken": true
-      }
-     ],
-     "timedOut": false
-    },
-    "native/commit-atomic-visibility/single-commit": {
-     "conditions": [
-      "FS-TRANSACTION/commit-atomic-visibility"
-     ],
-     "end": null,
-     "groups": [
-      {
-       "docs": [
-        "c",
-        "d"
-       ],
-       "sameUpdateTime": true
-      }
-     ],
-     "program": "native/commit-atomic-visibility",
-     "rows": [
-      {
-       "doc": "c",
-       "fields": {
-        "g": "atomic",
-        "n": 1
-       },
-       "kind": "documentChange",
-       "removedTargetIds": [],
-       "targetIds": [
-        1
-       ]
-      },
-      {
-       "doc": "d",
-       "fields": {
-        "g": "atomic",
-        "n": 1
-       },
-       "kind": "documentChange",
-       "removedTargetIds": [],
-       "targetIds": [
-        1
-       ]
-      },
-      {
-       "kind": "boundary",
-       "resumeToken": true
-      }
-     ],
-     "timedOut": false
-    },
-    "native/commit-atomic-visibility/transaction": {
-     "conditions": [
-      "FS-TRANSACTION/commit-atomic-visibility"
-     ],
-     "end": null,
-     "groups": [
-      {
-       "docs": [
-        "b",
-        "a"
-       ],
-       "sameUpdateTime": true
-      }
-     ],
-     "program": "native/commit-atomic-visibility",
-     "rows": [
-      {
-       "doc": "b",
-       "fields": {
-        "g": "atomic",
-        "n": 1
-       },
-       "kind": "documentChange",
-       "removedTargetIds": [],
-       "targetIds": [
-        1
-       ]
-      },
-      {
-       "doc": "a",
-       "fields": {
-        "g": "atomic",
-        "n": 1
-       },
-       "kind": "documentChange",
-       "removedTargetIds": [],
-       "targetIds": [
-        1
-       ]
-      },
-      {
-       "kind": "boundary",
-       "resumeToken": true
-      }
-     ],
-     "timedOut": false
-    },
-    "native/existence-filter/first": {
-     "conditions": [
-      "FS-LISTEN-SDK/existence-filter-reconnect"
-     ],
-     "end": null,
-     "program": "native/existence-filter",
-     "rows": [
-      {
-       "cause": null,
-       "kind": "targetChange",
-       "resumeToken": false,
-       "targetIds": [
-        1
-       ],
-       "type": "ADD"
-      },
-      {
-       "doc": "a",
-       "fields": {
-        "g": "filter",
-        "n": 1
-       },
-       "kind": "documentChange",
-       "removedTargetIds": [],
-       "targetIds": [
-        1
-       ]
-      },
-      {
-       "doc": "b",
-       "fields": {
-        "g": "filter",
-        "n": 1
-       },
-       "kind": "documentChange",
-       "removedTargetIds": [],
-       "targetIds": [
-        1
-       ]
-      },
-      {
-       "doc": "c",
-       "fields": {
-        "g": "filter",
-        "n": 1
-       },
-       "kind": "documentChange",
-       "removedTargetIds": [],
-       "targetIds": [
-        1
-       ]
-      },
-      {
-       "cause": null,
-       "kind": "targetChange",
-       "resumeToken": true,
-       "targetIds": [
-        1
-       ],
-       "type": "CURRENT"
-      },
-      {
-       "kind": "boundary",
-       "resumeToken": true
-      }
-     ],
-     "timedOut": false
-    },
-    "native/existence-filter/no-change": {
-     "conditions": [
-      "FS-LISTEN-SDK/existence-filter-reconnect"
-     ],
-     "end": null,
-     "program": "native/existence-filter",
-     "rows": [
-      {
-       "cause": null,
-       "kind": "targetChange",
-       "resumeToken": false,
-       "targetIds": [
-        1
-       ],
-       "type": "ADD"
-      },
-      {
-       "kind": "boundary",
-       "resumeToken": true
-      },
-      {
-       "count": 3,
-       "kind": "filter",
-       "targetId": 1,
-       "unchangedNames": {
-        "bitmapBytes": 12,
-        "hashCount": 14,
-        "padding": 5
-       }
-      },
-      {
-       "cause": null,
-       "kind": "targetChange",
-       "resumeToken": true,
-       "targetIds": [
-        1
-       ],
-       "type": "CURRENT"
-      },
-      {
-       "kind": "boundary",
-       "resumeToken": true
-      }
-     ],
-     "timedOut": false
-    },
-    "native/existence-filter/with-expected-count": {
-     "conditions": [
-      "FS-LISTEN-SDK/existence-filter-reconnect"
-     ],
-     "end": null,
-     "program": "native/existence-filter",
-     "rows": [
-      {
-       "cause": null,
-       "kind": "targetChange",
-       "resumeToken": false,
-       "targetIds": [
-        1
-       ],
-       "type": "ADD"
-      },
-      {
-       "kind": "boundary",
-       "resumeToken": true
-      },
-      {
-       "doc": "b",
-       "kind": "documentDelete",
-       "removedTargetIds": [
-        1
-       ]
-      },
-      {
-       "kind": "boundary",
-       "resumeToken": true
-      },
-      {
-       "doc": "c",
-       "fields": {
-        "g": "filter-other",
-        "n": 2
-       },
-       "kind": "documentChange",
-       "removedTargetIds": [
-        1
-       ],
-       "targetIds": []
-      },
-      {
-       "kind": "boundary",
-       "resumeToken": true
-      },
-      {
-       "cause": null,
-       "kind": "targetChange",
-       "resumeToken": true,
-       "targetIds": [
-        1
-       ],
-       "type": "CURRENT"
-      },
-      {
-       "kind": "boundary",
-       "resumeToken": true
-      }
-     ],
-     "timedOut": false
-    },
-    "native/existence-filter/without-expected-count": {
-     "conditions": [
-      "FS-LISTEN-SDK/existence-filter-reconnect"
-     ],
-     "end": null,
-     "program": "native/existence-filter",
-     "rows": [
-      {
-       "cause": null,
-       "kind": "targetChange",
-       "resumeToken": false,
-       "targetIds": [
-        1
-       ],
-       "type": "ADD"
-      },
-      {
-       "kind": "boundary",
-       "resumeToken": true
-      },
-      {
-       "count": 1,
-       "kind": "filter",
-       "targetId": 1,
-       "unchangedNames": {
-        "bitmapBytes": 0,
-        "hashCount": 0,
-        "padding": 0
-       }
-      },
-      {
-       "cause": null,
-       "kind": "targetChange",
-       "resumeToken": true,
-       "targetIds": [
-        1
-       ],
-       "type": "CURRENT"
-      },
-      {
-       "kind": "boundary",
-       "resumeToken": true
-      }
-     ],
-     "timedOut": false
-    },
-    "native/resume-token-expired/expired": {
-     "conditions": [
-      "FS-LISTEN-SDK/raw-resume-token"
-     ],
-     "end": null,
-     "program": "native/resume-token-expired",
-     "rows": [
-      {
-       "cause": null,
-       "kind": "targetChange",
-       "resumeToken": false,
-       "targetIds": [
-        1
-       ],
-       "type": "ADD"
-      },
-      {
-       "kind": "boundary",
-       "resumeToken": true
-      },
-      {
-       "doc": "a",
-       "fields": {
-        "g": "expired",
-        "n": 2
-       },
-       "kind": "documentChange",
-       "removedTargetIds": [],
-       "targetIds": [
-        1
-       ]
-      },
-      {
-       "count": 1,
-       "kind": "filter",
-       "targetId": 1,
-       "unchangedNames": {
-        "bitmapBytes": 0,
-        "hashCount": 0,
-        "padding": 0
-       }
-      },
-      {
-       "cause": null,
-       "kind": "targetChange",
-       "resumeToken": true,
-       "targetIds": [
-        1
-       ],
-       "type": "CURRENT"
-      },
-      {
-       "kind": "boundary",
-       "resumeToken": true
-      },
-      {
-       "count": 1,
-       "kind": "filter",
-       "targetId": 1,
-       "unchangedNames": {
-        "bitmapBytes": 4,
-        "hashCount": 12,
-        "padding": 7
-       }
-      },
-      {
-       "kind": "boundary",
-       "resumeToken": true
-      }
-     ],
-     "timedOut": false
-    },
-    "native/resume-token-expired/first": {
-     "conditions": [
-      "FS-LISTEN-SDK/raw-resume-token"
-     ],
-     "end": null,
-     "program": "native/resume-token-expired",
-     "rows": [
-      {
-       "cause": null,
-       "kind": "targetChange",
-       "resumeToken": false,
-       "targetIds": [
-        1
-       ],
-       "type": "ADD"
-      },
-      {
-       "doc": "a",
-       "fields": {
-        "g": "expired",
-        "n": 1
-       },
-       "kind": "documentChange",
-       "removedTargetIds": [],
-       "targetIds": [
-        1
-       ]
-      },
-      {
-       "cause": null,
-       "kind": "targetChange",
-       "resumeToken": true,
-       "targetIds": [
-        1
-       ],
-       "type": "CURRENT"
-      },
-      {
-       "kind": "boundary",
-       "resumeToken": true
-      }
-     ],
-     "timedOut": false
-    },
-    "native/resume-token-expired/fresh-control": {
-     "conditions": [
-      "FS-LISTEN-SDK/raw-resume-token"
-     ],
-     "end": null,
-     "program": "native/resume-token-expired",
-     "rows": [
-      {
-       "cause": null,
-       "kind": "targetChange",
-       "resumeToken": false,
-       "targetIds": [
-        1
-       ],
-       "type": "ADD"
-      },
-      {
-       "doc": "a",
-       "fields": {
-        "g": "expired",
-        "n": 2
-       },
-       "kind": "documentChange",
-       "removedTargetIds": [],
-       "targetIds": [
-        1
-       ]
-      },
-      {
-       "cause": null,
-       "kind": "targetChange",
-       "resumeToken": true,
-       "targetIds": [
-        1
-       ],
-       "type": "CURRENT"
-      },
-      {
-       "kind": "boundary",
-       "resumeToken": true
-      },
-      {
-       "count": 1,
-       "kind": "filter",
-       "targetId": 1,
-       "unchangedNames": {
-        "bitmapBytes": 4,
-        "hashCount": 12,
-        "padding": 7
-       }
-      },
-      {
-       "kind": "boundary",
-       "resumeToken": true
-      }
-     ],
-     "timedOut": false
-    },
-    "native/resume-token/current": {
-     "conditions": [
-      "FS-LISTEN-SDK/raw-resume-token"
-     ],
-     "end": null,
-     "program": "native/resume-token",
-     "rows": [
-      {
-       "cause": null,
-       "kind": "targetChange",
-       "resumeToken": false,
-       "targetIds": [
-        1
-       ],
-       "type": "ADD"
-      },
-      {
-       "kind": "boundary",
-       "resumeToken": true
-      },
-      {
-       "doc": "b",
-       "fields": {
-        "g": "resume",
-        "n": 2
-       },
-       "kind": "documentChange",
-       "removedTargetIds": [],
-       "targetIds": [
-        1
-       ]
-      },
-      {
-       "kind": "boundary",
-       "resumeToken": true
-      },
-      {
-       "cause": null,
-       "kind": "targetChange",
-       "resumeToken": true,
-       "targetIds": [
-        1
-       ],
-       "type": "CURRENT"
-      },
-      {
-       "kind": "boundary",
-       "resumeToken": true
-      }
-     ],
-     "timedOut": false
-    },
-    "native/resume-token/first": {
-     "conditions": [
-      "FS-LISTEN-SDK/raw-resume-token"
-     ],
-     "end": null,
-     "program": "native/resume-token",
-     "rows": [
-      {
-       "cause": null,
-       "kind": "targetChange",
-       "resumeToken": false,
-       "targetIds": [
-        1
-       ],
-       "type": "ADD"
-      },
-      {
-       "doc": "a",
-       "fields": {
-        "g": "resume",
-        "n": 1
-       },
-       "kind": "documentChange",
-       "removedTargetIds": [],
-       "targetIds": [
-        1
-       ]
-      },
-      {
-       "doc": "b",
-       "fields": {
-        "g": "resume",
-        "n": 1
-       },
-       "kind": "documentChange",
-       "removedTargetIds": [],
-       "targetIds": [
-        1
-       ]
-      },
-      {
-       "cause": null,
-       "kind": "targetChange",
-       "resumeToken": true,
-       "targetIds": [
-        1
-       ],
-       "type": "CURRENT"
-      },
-      {
-       "kind": "boundary",
-       "resumeToken": true
-      }
-     ],
-     "timedOut": false
-    },
-    "native/resume-token/fresh-control": {
-     "conditions": [
-      "FS-LISTEN-SDK/raw-resume-token"
-     ],
-     "end": null,
-     "program": "native/resume-token",
-     "rows": [
-      {
-       "cause": null,
-       "kind": "targetChange",
-       "resumeToken": false,
-       "targetIds": [
-        1
-       ],
-       "type": "ADD"
-      },
-      {
-       "doc": "a",
-       "fields": {
-        "g": "resume",
-        "n": 2
-       },
-       "kind": "documentChange",
-       "removedTargetIds": [],
-       "targetIds": [
-        1
-       ]
-      },
-      {
-       "doc": "b",
-       "fields": {
-        "g": "resume",
-        "n": 2
-       },
-       "kind": "documentChange",
-       "removedTargetIds": [],
-       "targetIds": [
-        1
-       ]
-      },
-      {
-       "cause": null,
-       "kind": "targetChange",
-       "resumeToken": true,
-       "targetIds": [
-        1
-       ],
-       "type": "CURRENT"
-      },
-      {
-       "kind": "boundary",
-       "resumeToken": true
-      }
-     ],
-     "timedOut": false
-    },
-    "native/resume-token/invalid": {
-     "conditions": [
-      "FS-LISTEN-SDK/raw-resume-token"
-     ],
-     "end": null,
-     "program": "native/resume-token",
-     "rows": [
-      {
-       "cause": {
-        "code": 3,
-        "message": "bad resume token"
-       },
-       "kind": "targetChange",
-       "resumeToken": false,
-       "targetIds": [
-        1
-       ],
-       "type": "REMOVE"
-      }
-     ],
-     "timedOut": true
-    },
-    "native/resume-token/older": {
-     "conditions": [
-      "FS-LISTEN-SDK/raw-resume-token"
-     ],
-     "end": null,
-     "program": "native/resume-token",
-     "rows": [
-      {
-       "cause": null,
-       "kind": "targetChange",
-       "resumeToken": false,
-       "targetIds": [
-        1
-       ],
-       "type": "ADD"
-      },
-      {
-       "kind": "boundary",
-       "resumeToken": true
-      },
-      {
-       "doc": "a",
-       "fields": {
-        "g": "resume",
-        "n": 2
-       },
-       "kind": "documentChange",
-       "removedTargetIds": [],
-       "targetIds": [
-        1
-       ]
-      },
-      {
-       "doc": "b",
-       "fields": {
-        "g": "resume",
-        "n": 2
-       },
-       "kind": "documentChange",
-       "removedTargetIds": [],
-       "targetIds": [
-        1
-       ]
-      },
-      {
-       "count": 2,
-       "kind": "filter",
-       "targetId": 1,
-       "unchangedNames": {
-        "bitmapBytes": 0,
-        "hashCount": 0,
-        "padding": 0
-       }
-      },
-      {
-       "cause": null,
-       "kind": "targetChange",
-       "resumeToken": true,
-       "targetIds": [
-        1
-       ],
-       "type": "CURRENT"
-      },
-      {
-       "kind": "boundary",
-       "resumeToken": true
-      }
-     ],
-     "timedOut": false
-    },
-    "native/resume-token/other-query": {
-     "conditions": [
-      "FS-LISTEN-SDK/raw-resume-token"
-     ],
-     "end": null,
-     "program": "native/resume-token",
-     "rows": [
-      {
-       "cause": null,
-       "kind": "targetChange",
-       "resumeToken": false,
-       "targetIds": [
-        1
-       ],
-       "type": "ADD"
-      },
-      {
-       "kind": "boundary",
-       "resumeToken": true
-      },
-      {
-       "count": 0,
-       "kind": "filter",
-       "targetId": 1,
-       "unchangedNames": {
-        "bitmapBytes": 0,
-        "hashCount": 0,
-        "padding": 0
-       }
-      },
-      {
-       "cause": null,
-       "kind": "targetChange",
-       "resumeToken": true,
-       "targetIds": [
-        1
-       ],
-       "type": "CURRENT"
-      },
-      {
-       "kind": "boundary",
-       "resumeToken": true
-      },
-      {
-       "count": 0,
-       "kind": "filter",
-       "targetId": 1,
-       "unchangedNames": {
-        "bitmapBytes": 0,
-        "hashCount": 0,
-        "padding": 0
-       }
-      },
-      {
-       "kind": "boundary",
-       "resumeToken": true
-      }
-     ],
-     "timedOut": false
-    },
-    "native/resume-token/unchanged": {
-     "conditions": [
-      "FS-LISTEN-SDK/raw-resume-token"
-     ],
-     "end": null,
-     "program": "native/resume-token",
-     "rows": [
-      {
-       "cause": null,
-       "kind": "targetChange",
-       "resumeToken": false,
-       "targetIds": [
-        1
-       ],
-       "type": "ADD"
-      },
-      {
-       "kind": "boundary",
-       "resumeToken": true
-      },
-      {
-       "count": 2,
-       "kind": "filter",
-       "targetId": 1,
-       "unchangedNames": {
-        "bitmapBytes": 0,
-        "hashCount": 0,
-        "padding": 0
-       }
-      },
-      {
-       "cause": null,
-       "kind": "targetChange",
-       "resumeToken": true,
-       "targetIds": [
-        1
-       ],
-       "type": "CURRENT"
-      },
-      {
-       "kind": "boundary",
-       "resumeToken": true
-      }
-     ],
-     "timedOut": false
-    },
-    "native/target-lifecycle/delete": {
-     "conditions": [
-      "FS-LISTEN-SDK/native-target-protocol",
-      "FS-LISTEN-SDK/default-subscription"
-     ],
-     "end": null,
-     "program": "native/target-lifecycle",
-     "rows": [
-      {
-       "doc": "a",
-       "kind": "documentDelete",
-       "removedTargetIds": [
-        2
-       ]
-      },
-      {
-       "kind": "boundary",
-       "resumeToken": true
-      }
-     ],
-     "timedOut": false
-    },
-    "native/target-lifecycle/open": {
-     "conditions": [
-      "FS-LISTEN-SDK/native-target-protocol",
-      "FS-LISTEN-SDK/default-subscription"
-     ],
-     "end": null,
-     "program": "native/target-lifecycle",
-     "rows": [
-      {
-       "cause": null,
-       "kind": "targetChange",
-       "resumeToken": false,
-       "targetIds": [
-        1
-       ],
-       "type": "ADD"
-      },
-      {
-       "doc": "a",
-       "fields": {
-        "n": 1
-       },
-       "kind": "documentChange",
-       "removedTargetIds": [],
-       "targetIds": [
-        1
-       ]
-      },
-      {
-       "cause": null,
-       "kind": "targetChange",
-       "resumeToken": true,
-       "targetIds": [
-        1
-       ],
-       "type": "CURRENT"
-      },
-      {
-       "kind": "boundary",
-       "resumeToken": true
-      }
-     ],
-     "timedOut": false
-    },
-    "native/target-lifecycle/readd": {
-     "conditions": [
-      "FS-LISTEN-SDK/native-target-protocol",
-      "FS-LISTEN-SDK/default-subscription"
-     ],
-     "end": null,
-     "program": "native/target-lifecycle",
-     "rows": [
-      {
-       "cause": null,
-       "kind": "targetChange",
-       "resumeToken": false,
-       "targetIds": [
-        2
-       ],
-       "type": "ADD"
-      },
-      {
-       "doc": "a",
-       "fields": {
-        "n": 2
-       },
-       "kind": "documentChange",
-       "removedTargetIds": [],
-       "targetIds": [
-        2
-       ]
-      },
-      {
-       "cause": null,
-       "kind": "targetChange",
-       "resumeToken": true,
-       "targetIds": [
-        2
-       ],
-       "type": "CURRENT"
-      },
-      {
-       "kind": "boundary",
-       "resumeToken": true
-      }
-     ],
-     "timedOut": false
-    },
-    "native/target-lifecycle/remove": {
-     "conditions": [
-      "FS-LISTEN-SDK/native-target-protocol",
-      "FS-LISTEN-SDK/default-subscription"
-     ],
-     "end": null,
-     "program": "native/target-lifecycle",
-     "rows": [
-      {
-       "cause": null,
-       "kind": "targetChange",
-       "resumeToken": false,
-       "targetIds": [
-        1
-       ],
-       "type": "REMOVE"
-      }
-     ],
-     "timedOut": false
-    },
-    "native/target-lifecycle/same-data": {
-     "conditions": [
-      "FS-LISTEN-SDK/native-target-protocol",
-      "FS-LISTEN-SDK/default-subscription"
-     ],
-     "end": null,
-     "program": "native/target-lifecycle",
-     "rows": [],
-     "timedOut": false
-    },
-    "native/target-lifecycle/update": {
-     "conditions": [
-      "FS-LISTEN-SDK/native-target-protocol",
-      "FS-LISTEN-SDK/default-subscription"
-     ],
-     "end": null,
-     "program": "native/target-lifecycle",
-     "rows": [
-      {
-       "doc": "a",
-       "fields": {
-        "n": 2
-       },
-       "kind": "documentChange",
-       "removedTargetIds": [],
-       "targetIds": [
-        1
-       ]
-      },
-      {
-       "kind": "boundary",
-       "resumeToken": true
-      }
-     ],
-     "timedOut": false
-    },
-    "native/target-protocol/collection-group": {
-     "conditions": [
-      "FS-LISTEN-SDK/native-target-protocol"
-     ],
-     "end": null,
-     "program": "native/target-protocol",
-     "rows": [
-      {
-       "cause": null,
-       "kind": "targetChange",
-       "resumeToken": false,
-       "targetIds": [
-        1
-       ],
-       "type": "ADD"
-      },
-      {
-       "doc": "c1",
-       "fields": {
-        "n": 1
-       },
-       "kind": "documentChange",
-       "removedTargetIds": [],
-       "targetIds": [
-        1
-       ]
-      },
-      {
-       "doc": "c2",
-       "fields": {
-        "n": 2
-       },
-       "kind": "documentChange",
-       "removedTargetIds": [],
-       "targetIds": [
-        1
-       ]
-      },
-      {
-       "cause": null,
-       "kind": "targetChange",
-       "resumeToken": true,
-       "targetIds": [
-        1
-       ],
-       "type": "CURRENT"
-      },
-      {
-       "kind": "boundary",
-       "resumeToken": true
-      },
-      {
-       "count": 2,
-       "kind": "filter",
-       "targetId": 1,
-       "unchangedNames": {
-        "bitmapBytes": 8,
-        "hashCount": 13,
-        "padding": 3
-       }
-      },
-      {
-       "kind": "boundary",
-       "resumeToken": true
-      }
-     ],
-     "timedOut": false
-    },
-    "native/target-protocol/duplicate-id": {
-     "conditions": [
-      "FS-LISTEN-SDK/native-target-protocol"
-     ],
-     "end": null,
-     "program": "native/target-protocol",
-     "rows": [
-      {
-       "cause": null,
-       "kind": "targetChange",
-       "resumeToken": false,
-       "targetIds": [
-        1
-       ],
-       "type": "ADD"
-      },
-      {
-       "doc": "a",
-       "fields": {
-        "g": "proto",
-        "n": 1
-       },
-       "kind": "documentChange",
-       "removedTargetIds": [],
-       "targetIds": [
-        1
-       ]
-      },
-      {
-       "cause": null,
-       "kind": "targetChange",
-       "resumeToken": true,
-       "targetIds": [
-        1
-       ],
-       "type": "CURRENT"
-      },
-      {
-       "kind": "boundary",
-       "resumeToken": true
-      },
-      {
-       "cause": {
-        "code": 6,
-        "message": "Target ID already exists: 1"
-       },
-       "kind": "targetChange",
-       "resumeToken": false,
-       "targetIds": [
-        1
-       ],
-       "type": "REMOVE"
-      }
-     ],
-     "timedOut": false
-    },
-    "native/target-protocol/equality-only-query": {
-     "conditions": [
-      "FS-LISTEN-SDK/native-target-protocol"
-     ],
-     "end": null,
-     "program": "native/target-protocol",
-     "rows": [
-      {
-       "cause": null,
-       "kind": "targetChange",
-       "resumeToken": false,
-       "targetIds": [
-        1
-       ],
-       "type": "ADD"
-      },
-      {
-       "doc": "a",
-       "fields": {
-        "g": "proto",
-        "n": 5
-       },
-       "kind": "documentChange",
-       "removedTargetIds": [],
-       "targetIds": [
-        1
-       ]
-      },
-      {
-       "doc": "b",
-       "fields": {
-        "g": "proto",
-        "n": 2
-       },
-       "kind": "documentChange",
-       "removedTargetIds": [],
-       "targetIds": [
-        1
-       ]
-      },
-      {
-       "cause": null,
-       "kind": "targetChange",
-       "resumeToken": true,
-       "targetIds": [
-        1
-       ],
-       "type": "CURRENT"
-      },
-      {
-       "kind": "boundary",
-       "resumeToken": true
-      },
-      {
-       "count": 2,
-       "kind": "filter",
-       "targetId": 1,
-       "unchangedNames": {
-        "bitmapBytes": 8,
-        "hashCount": 13,
-        "padding": 3
-       }
-      },
-      {
-       "kind": "boundary",
-       "resumeToken": true
-      }
-     ],
-     "timedOut": false
-    },
-    "native/target-protocol/id-after-assigned": {
-     "conditions": [
-      "FS-LISTEN-SDK/native-target-protocol"
-     ],
-     "end": {
-      "code": 3,
-      "reason": "error"
-     },
-     "program": "native/target-protocol",
-     "rows": [],
-     "timedOut": false
-    },
-    "native/target-protocol/missing-index": {
-     "conditions": [
-      "FS-LISTEN-SDK/native-target-protocol"
-     ],
-     "end": null,
-     "program": "native/target-protocol",
-     "rows": [
-      {
-       "cause": null,
-       "kind": "targetChange",
-       "resumeToken": false,
-       "targetIds": [
-        1
-       ],
-       "type": "ADD"
-      },
-      {
-       "cause": {
-        "code": 9,
-        "message": "The query requires an index. You can create it here: https://console.firebase.google.com/v1/r/project/{project}/firestore/indexes?create_composite=<index>"
-       },
-       "kind": "targetChange",
-       "resumeToken": false,
-       "targetIds": [
-        1
-       ],
-       "type": "REMOVE"
-      }
-     ],
-     "timedOut": false
-    },
-    "native/target-protocol/negative-id": {
-     "conditions": [
-      "FS-LISTEN-SDK/native-target-protocol"
-     ],
-     "end": {
-      "code": 3,
-      "reason": "error"
-     },
-     "program": "native/target-protocol",
-     "rows": [],
-     "timedOut": false
-    },
-    "native/target-protocol/once": {
-     "conditions": [
-      "FS-LISTEN-SDK/native-target-protocol"
-     ],
-     "end": null,
-     "program": "native/target-protocol",
-     "rows": [
-      {
-       "cause": null,
-       "kind": "targetChange",
-       "resumeToken": false,
-       "targetIds": [
-        1
-       ],
-       "type": "ADD"
-      },
-      {
-       "doc": "a",
-       "fields": {
-        "g": "proto",
-        "n": 1
-       },
-       "kind": "documentChange",
-       "removedTargetIds": [],
-       "targetIds": [
-        1
-       ]
-      },
-      {
-       "cause": null,
-       "kind": "targetChange",
-       "resumeToken": true,
-       "targetIds": [
-        1
-       ],
-       "type": "CURRENT"
-      },
-      {
-       "kind": "boundary",
-       "resumeToken": true
-      },
-      {
-       "cause": null,
-       "kind": "targetChange",
-       "resumeToken": false,
-       "targetIds": [
-        1
-       ],
-       "type": "REMOVE"
-      }
-     ],
-     "timedOut": false
-    },
-    "native/target-protocol/read-time-after-write": {
-     "conditions": [
-      "FS-LISTEN-SDK/native-target-protocol"
-     ],
-     "end": null,
-     "program": "native/target-protocol",
-     "rows": [
-      {
-       "cause": null,
-       "kind": "targetChange",
-       "resumeToken": false,
-       "targetIds": [
-        1
-       ],
-       "type": "ADD"
-      },
-      {
-       "kind": "boundary",
-       "resumeToken": true
-      },
-      {
-       "cause": null,
-       "kind": "targetChange",
-       "resumeToken": true,
-       "targetIds": [
-        1
-       ],
-       "type": "CURRENT"
-      },
-      {
-       "kind": "boundary",
-       "resumeToken": true
-      }
-     ],
-     "timedOut": false
-    },
-    "native/target-protocol/read-time-before-write": {
-     "conditions": [
-      "FS-LISTEN-SDK/native-target-protocol"
-     ],
-     "end": null,
-     "program": "native/target-protocol",
-     "rows": [
-      {
-       "cause": null,
-       "kind": "targetChange",
-       "resumeToken": false,
-       "targetIds": [
-        1
-       ],
-       "type": "ADD"
-      },
-      {
-       "kind": "boundary",
-       "resumeToken": true
-      },
-      {
-       "doc": "a",
-       "fields": {
-        "g": "proto",
-        "n": 5
-       },
-       "kind": "documentChange",
-       "removedTargetIds": [],
-       "targetIds": [
-        1
-       ]
-      },
-      {
-       "cause": null,
-       "kind": "targetChange",
-       "resumeToken": true,
-       "targetIds": [
-        1
-       ],
-       "type": "CURRENT"
-      },
-      {
-       "kind": "boundary",
-       "resumeToken": true
-      }
-     ],
-     "timedOut": false
-    },
-    "native/target-protocol/second-zero-id": {
-     "conditions": [
-      "FS-LISTEN-SDK/native-target-protocol"
-     ],
-     "end": null,
-     "program": "native/target-protocol",
-     "rows": [
-      {
-       "cause": null,
-       "kind": "targetChange",
-       "resumeToken": false,
-       "targetIds": [
-        2
-       ],
-       "type": "ADD"
-      },
-      {
-       "doc": "b",
-       "fields": {
-        "g": "proto",
-        "n": 2
-       },
-       "kind": "documentChange",
-       "removedTargetIds": [],
-       "targetIds": [
-        2
-       ]
-      },
-      {
-       "cause": null,
-       "kind": "targetChange",
-       "resumeToken": true,
-       "targetIds": [
-        2
-       ],
-       "type": "CURRENT"
-      },
-      {
-       "kind": "boundary",
-       "resumeToken": true
-      }
-     ],
-     "timedOut": false
-    },
-    "native/target-protocol/server-assigned-id": {
-     "conditions": [
-      "FS-LISTEN-SDK/native-target-protocol"
-     ],
-     "end": null,
-     "program": "native/target-protocol",
-     "rows": [
-      {
-       "cause": null,
-       "kind": "targetChange",
-       "resumeToken": false,
-       "targetIds": [
-        1
-       ],
-       "type": "ADD"
-      },
-      {
-       "doc": "a",
-       "fields": {
-        "g": "proto",
-        "n": 1
-       },
-       "kind": "documentChange",
-       "removedTargetIds": [],
-       "targetIds": [
-        1
-       ]
-      },
-      {
-       "cause": null,
-       "kind": "targetChange",
-       "resumeToken": true,
-       "targetIds": [
-        1
-       ],
-       "type": "CURRENT"
-      },
-      {
-       "kind": "boundary",
-       "resumeToken": true
-      }
-     ],
-     "timedOut": false
-    }
-   },
-   "run": "nmuukwo6n",
-   "version": 1
-  },
-  "sdk-1": {
-   "cleanup": {
-    "complete": true
-   },
-   "errors": {},
-   "kind": "sdk",
-   "rows": {
-    "sdk/101": {
-     "conditions": [
-      "FS-LISTEN-SDK/document-event-order"
-     ],
-     "end": null,
-     "failures": [],
-     "invariantViolations": [],
-     "observed": [
-      {
-       "changes": [],
-       "docs": [
-        "alpha"
-       ],
-       "error": null,
-       "exists": true,
-       "listener": "primary",
-       "snapshotKind": "initial"
-      }
-     ],
-     "timedOut": false
-    },
-    "sdk/101C": {
-     "conditions": [
-      "FS-LISTEN-SDK/document-event-order"
-     ],
-     "end": null,
-     "failures": [],
-     "invariantViolations": [],
-     "observed": [
-      {
-       "changes": [],
-       "docs": [],
-       "error": null,
-       "exists": false,
-       "listener": "primary",
-       "snapshotKind": "initial"
-      }
-     ],
-     "timedOut": false
-    },
-    "sdk/102": {
-     "conditions": [
-      "FS-LISTEN-SDK/pending-writes"
-     ],
-     "end": null,
-     "failures": [],
-     "invariantViolations": [],
-     "observed": [
-      {
-       "changes": [],
-       "docs": [
-        "beta"
-       ],
-       "error": null,
-       "exists": true,
-       "fromCache": false,
-       "hasPendingWrites": true,
-       "listener": "primary",
-       "snapshotKind": "delta"
-      },
-      {
-       "changes": [],
-       "docs": [
-        "beta"
-       ],
-       "error": null,
-       "exists": true,
-       "fromCache": false,
-       "hasPendingWrites": false,
-       "listener": "primary",
-       "snapshotKind": "delta"
-      }
-     ],
-     "timedOut": false
-    },
-    "sdk/102C": {
-     "conditions": [
-      "FS-LISTEN-SDK/pending-writes"
-     ],
-     "end": null,
-     "failures": [],
-     "invariantViolations": [],
-     "observed": [
-      {
-       "changes": [],
-       "docs": [
-        "beta"
-       ],
-       "error": null,
-       "exists": true,
-       "fromCache": false,
-       "hasPendingWrites": false,
-       "listener": "primary",
-       "snapshotKind": "delta"
-      }
-     ],
-     "timedOut": false
-    },
-    "sdk/103": {
-     "conditions": [
-      "FS-LISTEN-SDK/query-change-order"
-     ],
-     "end": null,
-     "failures": [],
-     "invariantViolations": [],
-     "observed": [
-      {
-       "changes": [
-        {
-         "doc": "beta",
-         "newIndex": 0,
-         "oldIndex": -1,
-         "type": "added"
-        }
-       ],
-       "docs": [
-        "beta",
-        "alpha"
-       ],
-       "error": null,
-       "exists": null,
-       "fromCache": false,
-       "hasPendingWrites": false,
-       "listener": "primary",
-       "snapshotKind": "delta"
-      },
-      {
-       "changes": [
-        {
-         "doc": "beta",
-         "newIndex": 1,
-         "oldIndex": 0,
-         "type": "modified"
-        }
-       ],
-       "docs": [
-        "alpha",
-        "beta"
-       ],
-       "error": null,
-       "exists": null,
-       "fromCache": false,
-       "hasPendingWrites": false,
-       "listener": "primary",
-       "snapshotKind": "delta"
-      },
-      {
-       "changes": [
-        {
-         "doc": "alpha",
-         "newIndex": -1,
-         "oldIndex": 0,
-         "type": "removed"
-        }
-       ],
-       "docs": [
-        "beta"
-       ],
-       "error": null,
-       "exists": null,
-       "fromCache": false,
-       "hasPendingWrites": false,
-       "listener": "primary",
-       "snapshotKind": "delta"
-      }
-     ],
-     "timedOut": false
-    },
-    "sdk/103C": {
-     "conditions": [
-      "FS-LISTEN-SDK/query-change-order"
-     ],
-     "end": null,
-     "failures": [],
-     "invariantViolations": [],
-     "observed": [],
-     "timedOut": false
-    },
-    "sdk/103L": {
-     "conditions": [
-      "FS-LISTEN-SDK/query-change-order"
-     ],
-     "end": null,
-     "failures": [],
-     "invariantViolations": [],
-     "observed": [
-      {
-       "changes": [
-        {
-         "doc": "beta",
-         "newIndex": 1,
-         "oldIndex": 0,
-         "type": "modified"
-        }
-       ],
-       "docs": [
-        "gamma",
-        "beta"
-       ],
-       "error": null,
-       "exists": null,
-       "listener": "primary",
-       "snapshotKind": "delta"
-      },
-      {
-       "changes": [
-        {
-         "doc": "gamma",
-         "newIndex": -1,
-         "oldIndex": 0,
-         "type": "removed"
-        },
-        {
-         "doc": "delta",
-         "newIndex": 1,
-         "oldIndex": -1,
-         "type": "added"
-        }
-       ],
-       "docs": [
-        "beta",
-        "delta"
-       ],
-       "error": null,
-       "exists": null,
-       "listener": "primary",
-       "snapshotKind": "delta"
-      }
-     ],
-     "timedOut": false
-    },
-    "sdk/103T": {
-     "conditions": [
-      "FS-LISTEN-SDK/query-change-order"
-     ],
-     "end": null,
-     "failures": [],
-     "invariantViolations": [],
-     "observed": [
-      {
-       "changes": [
-        {
-         "doc": "alpha",
-         "newIndex": 0,
-         "oldIndex": -1,
-         "type": "added"
-        },
-        {
-         "doc": "beta",
-         "newIndex": 1,
-         "oldIndex": -1,
-         "type": "added"
-        }
-       ],
-       "docs": [
-        "alpha",
-        "beta"
-       ],
-       "error": null,
-       "exists": null,
-       "listener": "primary",
-       "snapshotKind": "delta"
-      },
-      {
-       "changes": [
-        {
-         "doc": "gamma",
-         "newIndex": 2,
-         "oldIndex": -1,
-         "type": "added"
-        }
-       ],
-       "docs": [
-        "alpha",
-        "beta",
-        "gamma"
-       ],
-       "error": null,
-       "exists": null,
-       "listener": "primary",
-       "snapshotKind": "delta"
-      },
-      {
-       "changes": [
-        {
-         "doc": "delta",
-         "newIndex": 3,
-         "oldIndex": -1,
-         "type": "added"
-        }
-       ],
-       "docs": [
-        "alpha",
-        "beta",
-        "gamma",
-        "delta"
-       ],
-       "error": null,
-       "exists": null,
-       "listener": "primary",
-       "snapshotKind": "delta"
-      }
-     ],
-     "timedOut": false
-    },
-    "sdk/104": {
-     "conditions": [
-      "FS-LISTEN-SDK/reconnect-resume"
-     ],
-     "end": null,
-     "failures": [],
-     "invariantViolations": [],
-     "observed": [
-      {
-       "changes": [
-        {
-         "doc": "alpha",
-         "newIndex": null,
-         "oldIndex": null,
-         "type": "modified"
-        },
-        {
-         "doc": "gamma",
-         "newIndex": null,
-         "oldIndex": null,
-         "type": "added"
-        }
-       ],
-       "docs": [
-        "beta",
-        "alpha",
-        "gamma"
-       ],
-       "error": null,
-       "exists": null,
-       "fromCacheTransitions": [
-        true,
-        false
-       ],
-       "listener": "primary",
-       "snapshotKind": "aggregate"
-      }
-     ],
-     "timedOut": false
-    },
-    "sdk/104C": {
-     "conditions": [
-      "FS-LISTEN-SDK/reconnect-resume"
-     ],
-     "end": null,
-     "failures": [],
-     "invariantViolations": [],
-     "observed": [
-      {
-       "changes": [
-        {
-         "doc": "alpha",
-         "newIndex": null,
-         "oldIndex": null,
-         "type": "modified"
-        },
-        {
-         "doc": "gamma",
-         "newIndex": null,
-         "oldIndex": null,
-         "type": "added"
-        }
-       ],
-       "docs": [
-        "beta",
-        "alpha",
-        "gamma"
-       ],
-       "error": null,
-       "exists": null,
-       "fromCacheTransitions": [
-        false
-       ],
-       "listener": "primary",
-       "snapshotKind": "aggregate"
-      }
-     ],
-     "timedOut": false
-    },
-    "sdk/105": {
-     "conditions": [
-      "FS-LISTEN-SDK/unsubscribe"
-     ],
-     "end": null,
-     "failures": [],
-     "invariantViolations": [],
-     "observed": [
-      {
-       "changes": [],
-       "docs": [
-        "alpha"
-       ],
-       "error": null,
-       "exists": true,
-       "listener": "witness",
-       "snapshotKind": "delta"
-      }
-     ],
-     "timedOut": false
-    },
-    "sdk/105C": {
-     "conditions": [
-      "FS-LISTEN-SDK/unsubscribe"
-     ],
-     "end": null,
-     "failures": [],
-     "invariantViolations": [],
-     "observed": [
-      {
-       "changes": [],
-       "docs": [
-        "alpha"
-       ],
-       "error": null,
-       "exists": true,
-       "listener": "primary",
-       "snapshotKind": "delta"
-      },
-      {
-       "changes": [],
-       "docs": [
-        "alpha"
-       ],
-       "error": null,
-       "exists": true,
-       "listener": "witness",
-       "snapshotKind": "delta"
-      }
-     ],
-     "timedOut": false
-    },
-    "sdk/106N": {
-     "conditions": [
-      "FS-LISTEN-SDK/initial-unauthenticated-refusal"
-     ],
-     "end": null,
-     "failures": [],
-     "invariantViolations": [],
-     "observed": [
-      {
-       "changes": [],
-       "docs": [],
-       "error": "permission-denied",
-       "exists": null,
-       "listener": "primary",
-       "snapshotKind": "error"
-      }
-     ],
-     "timedOut": false
-    },
-    "sdk/107": {
-     "conditions": [
-      "FS-LISTEN-SDK/default-subscription"
-     ],
-     "end": null,
-     "failures": [],
-     "invariantViolations": [],
-     "observed": [
-      {
-       "changes": [],
-       "docs": [
-        "alpha"
-       ],
-       "error": null,
-       "exists": true,
-       "listener": "primary",
-       "snapshotKind": "initial"
-      },
-      {
-       "changes": [],
-       "docs": [
-        "alpha"
-       ],
-       "error": null,
-       "exists": true,
-       "listener": "primary",
-       "snapshotKind": "delta"
-      }
-     ],
-     "timedOut": false
-    },
-    "sdk/107C": {
-     "conditions": [
-      "FS-LISTEN-SDK/default-subscription"
-     ],
-     "end": null,
-     "failures": [],
-     "invariantViolations": [],
-     "observed": [
-      {
-       "changes": [],
-       "docs": [
-        "alpha"
-       ],
-       "error": null,
-       "exists": true,
-       "listener": "primary",
-       "snapshotKind": "initial"
-      }
-     ],
-     "timedOut": false
-    },
-    "sdk/108": {
-     "conditions": [
-      "FS-LISTEN-SDK/cross-principal-rules"
-     ],
-     "end": null,
-     "failures": [],
-     "invariantViolations": [],
-     "observed": [
-      {
-       "changes": [],
-       "docs": [],
-       "error": "permission-denied",
-       "exists": null,
-       "listener": "primary",
-       "snapshotKind": "error"
-      }
-     ],
-     "timedOut": false
-    },
-    "sdk/108C": {
-     "conditions": [
-      "FS-LISTEN-SDK/cross-principal-rules"
-     ],
-     "end": null,
-     "failures": [],
-     "invariantViolations": [],
-     "observed": [
-      {
-       "changes": [],
-       "docs": [
-        "privateB"
-       ],
-       "error": null,
-       "exists": true,
-       "listener": "secondary",
-       "snapshotKind": "initial"
-      }
-     ],
-     "timedOut": false
-    },
-    "sdk/111": {
-     "conditions": [
-      "FS-LISTEN-SDK/existence-filter-reconnect"
-     ],
-     "end": null,
-     "failures": [],
-     "invariantViolations": [],
-     "observed": [
-      {
-       "changes": [
-        {
-         "doc": "beta",
-         "newIndex": null,
-         "oldIndex": null,
-         "type": "removed"
-        },
-        {
-         "doc": "gamma",
-         "newIndex": null,
-         "oldIndex": null,
-         "type": "removed"
-        }
-       ],
-       "docs": [
-        "alpha"
-       ],
-       "error": null,
-       "exists": null,
-       "fromCacheTransitions": [
-        true,
-        false
-       ],
-       "listener": "primary",
-       "snapshotKind": "aggregate"
-      }
-     ],
-     "timedOut": false
-    }
-   },
-   "run": "nmuuj1wmw",
-   "version": 1
-  },
-  "sdk-2": {
-   "cleanup": {
-    "complete": true
-   },
-   "errors": {},
-   "kind": "sdk",
-   "rows": {
-    "sdk/101": {
-     "conditions": [
-      "FS-LISTEN-SDK/document-event-order"
-     ],
-     "end": null,
-     "failures": [],
-     "invariantViolations": [],
-     "observed": [
-      {
-       "changes": [],
-       "docs": [
-        "alpha"
-       ],
-       "error": null,
-       "exists": true,
-       "listener": "primary",
-       "snapshotKind": "initial"
-      }
-     ],
-     "timedOut": false
-    },
-    "sdk/101C": {
-     "conditions": [
-      "FS-LISTEN-SDK/document-event-order"
-     ],
-     "end": null,
-     "failures": [],
-     "invariantViolations": [],
-     "observed": [
-      {
-       "changes": [],
-       "docs": [],
-       "error": null,
-       "exists": false,
-       "listener": "primary",
-       "snapshotKind": "initial"
-      }
-     ],
-     "timedOut": false
-    },
-    "sdk/102": {
-     "conditions": [
-      "FS-LISTEN-SDK/pending-writes"
-     ],
-     "end": null,
-     "failures": [],
-     "invariantViolations": [],
-     "observed": [
-      {
-       "changes": [],
-       "docs": [
-        "beta"
-       ],
-       "error": null,
-       "exists": true,
-       "fromCache": false,
-       "hasPendingWrites": true,
-       "listener": "primary",
-       "snapshotKind": "delta"
-      },
-      {
-       "changes": [],
-       "docs": [
-        "beta"
-       ],
-       "error": null,
-       "exists": true,
-       "fromCache": false,
-       "hasPendingWrites": false,
-       "listener": "primary",
-       "snapshotKind": "delta"
-      }
-     ],
-     "timedOut": false
-    },
-    "sdk/102C": {
-     "conditions": [
-      "FS-LISTEN-SDK/pending-writes"
-     ],
-     "end": null,
-     "failures": [],
-     "invariantViolations": [],
-     "observed": [
-      {
-       "changes": [],
-       "docs": [
-        "beta"
-       ],
-       "error": null,
-       "exists": true,
-       "fromCache": false,
-       "hasPendingWrites": false,
-       "listener": "primary",
-       "snapshotKind": "delta"
-      }
-     ],
-     "timedOut": false
-    },
-    "sdk/103": {
-     "conditions": [
-      "FS-LISTEN-SDK/query-change-order"
-     ],
-     "end": null,
-     "failures": [],
-     "invariantViolations": [],
-     "observed": [
-      {
-       "changes": [
-        {
-         "doc": "beta",
-         "newIndex": 0,
-         "oldIndex": -1,
-         "type": "added"
-        }
-       ],
-       "docs": [
-        "beta",
-        "alpha"
-       ],
-       "error": null,
-       "exists": null,
-       "fromCache": false,
-       "hasPendingWrites": false,
-       "listener": "primary",
-       "snapshotKind": "delta"
-      },
-      {
-       "changes": [
-        {
-         "doc": "beta",
-         "newIndex": 1,
-         "oldIndex": 0,
-         "type": "modified"
-        }
-       ],
-       "docs": [
-        "alpha",
-        "beta"
-       ],
-       "error": null,
-       "exists": null,
-       "fromCache": false,
-       "hasPendingWrites": false,
-       "listener": "primary",
-       "snapshotKind": "delta"
-      },
-      {
-       "changes": [
-        {
-         "doc": "alpha",
-         "newIndex": -1,
-         "oldIndex": 0,
-         "type": "removed"
-        }
-       ],
-       "docs": [
-        "beta"
-       ],
-       "error": null,
-       "exists": null,
-       "fromCache": false,
-       "hasPendingWrites": false,
-       "listener": "primary",
-       "snapshotKind": "delta"
-      }
-     ],
-     "timedOut": false
-    },
-    "sdk/103C": {
-     "conditions": [
-      "FS-LISTEN-SDK/query-change-order"
-     ],
-     "end": null,
-     "failures": [],
-     "invariantViolations": [],
-     "observed": [],
-     "timedOut": false
-    },
-    "sdk/103L": {
-     "conditions": [
-      "FS-LISTEN-SDK/query-change-order"
-     ],
-     "end": null,
-     "failures": [],
-     "invariantViolations": [],
-     "observed": [
-      {
-       "changes": [
-        {
-         "doc": "beta",
-         "newIndex": 1,
-         "oldIndex": 0,
-         "type": "modified"
-        }
-       ],
-       "docs": [
-        "gamma",
-        "beta"
-       ],
-       "error": null,
-       "exists": null,
-       "listener": "primary",
-       "snapshotKind": "delta"
-      },
-      {
-       "changes": [
-        {
-         "doc": "gamma",
-         "newIndex": -1,
-         "oldIndex": 0,
-         "type": "removed"
-        },
-        {
-         "doc": "delta",
-         "newIndex": 1,
-         "oldIndex": -1,
-         "type": "added"
-        }
-       ],
-       "docs": [
-        "beta",
-        "delta"
-       ],
-       "error": null,
-       "exists": null,
-       "listener": "primary",
-       "snapshotKind": "delta"
-      }
-     ],
-     "timedOut": false
-    },
-    "sdk/103T": {
-     "conditions": [
-      "FS-LISTEN-SDK/query-change-order"
-     ],
-     "end": null,
-     "failures": [],
-     "invariantViolations": [],
-     "observed": [
-      {
-       "changes": [
-        {
-         "doc": "alpha",
-         "newIndex": 0,
-         "oldIndex": -1,
-         "type": "added"
-        },
-        {
-         "doc": "beta",
-         "newIndex": 1,
-         "oldIndex": -1,
-         "type": "added"
-        }
-       ],
-       "docs": [
-        "alpha",
-        "beta"
-       ],
-       "error": null,
-       "exists": null,
-       "listener": "primary",
-       "snapshotKind": "delta"
-      },
-      {
-       "changes": [
-        {
-         "doc": "gamma",
-         "newIndex": 2,
-         "oldIndex": -1,
-         "type": "added"
-        }
-       ],
-       "docs": [
-        "alpha",
-        "beta",
-        "gamma"
-       ],
-       "error": null,
-       "exists": null,
-       "listener": "primary",
-       "snapshotKind": "delta"
-      },
-      {
-       "changes": [
-        {
-         "doc": "delta",
-         "newIndex": 3,
-         "oldIndex": -1,
-         "type": "added"
-        }
-       ],
-       "docs": [
-        "alpha",
-        "beta",
-        "gamma",
-        "delta"
-       ],
-       "error": null,
-       "exists": null,
-       "listener": "primary",
-       "snapshotKind": "delta"
-      }
-     ],
-     "timedOut": false
-    },
-    "sdk/104": {
-     "conditions": [
-      "FS-LISTEN-SDK/reconnect-resume"
-     ],
-     "end": null,
-     "failures": [],
-     "invariantViolations": [],
-     "observed": [
-      {
-       "changes": [
-        {
-         "doc": "alpha",
-         "newIndex": null,
-         "oldIndex": null,
-         "type": "modified"
-        },
-        {
-         "doc": "gamma",
-         "newIndex": null,
-         "oldIndex": null,
-         "type": "added"
-        }
-       ],
-       "docs": [
-        "beta",
-        "alpha",
-        "gamma"
-       ],
-       "error": null,
-       "exists": null,
-       "fromCacheTransitions": [
-        true,
-        false
-       ],
-       "listener": "primary",
-       "snapshotKind": "aggregate"
-      }
-     ],
-     "timedOut": false
-    },
-    "sdk/104C": {
-     "conditions": [
-      "FS-LISTEN-SDK/reconnect-resume"
-     ],
-     "end": null,
-     "failures": [],
-     "invariantViolations": [],
-     "observed": [
-      {
-       "changes": [
-        {
-         "doc": "alpha",
-         "newIndex": null,
-         "oldIndex": null,
-         "type": "modified"
-        },
-        {
-         "doc": "gamma",
-         "newIndex": null,
-         "oldIndex": null,
-         "type": "added"
-        }
-       ],
-       "docs": [
-        "beta",
-        "alpha",
-        "gamma"
-       ],
-       "error": null,
-       "exists": null,
-       "fromCacheTransitions": [
-        false
-       ],
-       "listener": "primary",
-       "snapshotKind": "aggregate"
-      }
-     ],
-     "timedOut": false
-    },
-    "sdk/105": {
-     "conditions": [
-      "FS-LISTEN-SDK/unsubscribe"
-     ],
-     "end": null,
-     "failures": [],
-     "invariantViolations": [],
-     "observed": [
-      {
-       "changes": [],
-       "docs": [
-        "alpha"
-       ],
-       "error": null,
-       "exists": true,
-       "listener": "witness",
-       "snapshotKind": "delta"
-      }
-     ],
-     "timedOut": false
-    },
-    "sdk/105C": {
-     "conditions": [
-      "FS-LISTEN-SDK/unsubscribe"
-     ],
-     "end": null,
-     "failures": [],
-     "invariantViolations": [],
-     "observed": [
-      {
-       "changes": [],
-       "docs": [
-        "alpha"
-       ],
-       "error": null,
-       "exists": true,
-       "listener": "primary",
-       "snapshotKind": "delta"
-      },
-      {
-       "changes": [],
-       "docs": [
-        "alpha"
-       ],
-       "error": null,
-       "exists": true,
-       "listener": "witness",
-       "snapshotKind": "delta"
-      }
-     ],
-     "timedOut": false
-    },
-    "sdk/106N": {
-     "conditions": [
-      "FS-LISTEN-SDK/initial-unauthenticated-refusal"
-     ],
-     "end": null,
-     "failures": [],
-     "invariantViolations": [],
-     "observed": [
-      {
-       "changes": [],
-       "docs": [],
-       "error": "permission-denied",
-       "exists": null,
-       "listener": "primary",
-       "snapshotKind": "error"
-      }
-     ],
-     "timedOut": false
-    },
-    "sdk/107": {
-     "conditions": [
-      "FS-LISTEN-SDK/default-subscription"
-     ],
-     "end": null,
-     "failures": [],
-     "invariantViolations": [],
-     "observed": [
-      {
-       "changes": [],
-       "docs": [
-        "alpha"
-       ],
-       "error": null,
-       "exists": true,
-       "listener": "primary",
-       "snapshotKind": "initial"
-      },
-      {
-       "changes": [],
-       "docs": [
-        "alpha"
-       ],
-       "error": null,
-       "exists": true,
-       "listener": "primary",
-       "snapshotKind": "delta"
-      }
-     ],
-     "timedOut": false
-    },
-    "sdk/107C": {
-     "conditions": [
-      "FS-LISTEN-SDK/default-subscription"
-     ],
-     "end": null,
-     "failures": [],
-     "invariantViolations": [],
-     "observed": [
-      {
-       "changes": [],
-       "docs": [
-        "alpha"
-       ],
-       "error": null,
-       "exists": true,
-       "listener": "primary",
-       "snapshotKind": "initial"
-      }
-     ],
-     "timedOut": false
-    },
-    "sdk/108": {
-     "conditions": [
-      "FS-LISTEN-SDK/cross-principal-rules"
-     ],
-     "end": null,
-     "failures": [],
-     "invariantViolations": [],
-     "observed": [
-      {
-       "changes": [],
-       "docs": [],
-       "error": "permission-denied",
-       "exists": null,
-       "listener": "primary",
-       "snapshotKind": "error"
-      }
-     ],
-     "timedOut": false
-    },
-    "sdk/108C": {
-     "conditions": [
-      "FS-LISTEN-SDK/cross-principal-rules"
-     ],
-     "end": null,
-     "failures": [],
-     "invariantViolations": [],
-     "observed": [
-      {
-       "changes": [],
-       "docs": [
-        "privateB"
-       ],
-       "error": null,
-       "exists": true,
-       "listener": "secondary",
-       "snapshotKind": "initial"
-      }
-     ],
-     "timedOut": false
-    },
-    "sdk/111": {
-     "conditions": [
-      "FS-LISTEN-SDK/existence-filter-reconnect"
-     ],
-     "end": null,
-     "failures": [],
-     "invariantViolations": [],
-     "observed": [
-      {
-       "changes": [
-        {
-         "doc": "beta",
-         "newIndex": null,
-         "oldIndex": null,
-         "type": "removed"
-        },
-        {
-         "doc": "gamma",
-         "newIndex": null,
-         "oldIndex": null,
-         "type": "removed"
-        }
-       ],
-       "docs": [
-        "alpha"
-       ],
-       "error": null,
-       "exists": null,
-       "fromCacheTransitions": [
-        true,
-        false
-       ],
-       "listener": "primary",
-       "snapshotKind": "aggregate"
-      }
-     ],
-     "timedOut": false
-    }
-   },
-   "run": "nmuukqlh3",
-   "version": 1
-  }
- },
- "source": "FS-LISTEN-SDK L1 production recordings (2026-10-05): rows only, masked by the recorder"
+  "source": "FS-LISTEN-SDK L1 production recordings (2026-10-05): rows only, masked by the recorder"
 }
